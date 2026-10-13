@@ -1234,8 +1234,10 @@ void EmitAssemblyHelper::RunCodegenPipeline(
     Error CodeGenError = runCodeGenPipeline(
         *TM, *TheModule, *OS, DwoOS, CGFT, !CodeGenOpts.VerifyModule,
         /*DisableSimplifyLibCalls=*/false, CI.getVirtualFileSystemPtr());
-    if (CodeGenError)
+    if (CodeGenError) {
+      consumeError(std::move(CodeGenError));
       Diags.Report(diag::err_fe_unable_to_interface_with_target);
+    }
   });
 }
 

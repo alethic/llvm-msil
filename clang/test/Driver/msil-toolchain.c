@@ -3,7 +3,8 @@
 // toolchain is used, the cc1 triple keeps the '-msil' suffix, -S (ILAsm text)
 // and bitcode output work, and the actions below that would write an object
 // file are errors until phase 2. Object-format-specific flags for ELF and COFF
-// are not passed.
+// are not passed, and clang-cl does not turn /GS on by default (section 12 row
+// 'D25 amended').
 
 // RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -S %s -o %t.il 2>&1 \
 // RUN:   | FileCheck --check-prefix=LNX --implicit-check-not=error: --implicit-check-not=warning: \
@@ -51,6 +52,27 @@
 // RUN: %clang -### --target=x86_64-pc-windows-msvc -S %s -o %t.s 2>&1 \
 // RUN:   | FileCheck --check-prefix=MS-VOLATILE --implicit-check-not=error: %s
 // MS-VOLATILE: "-fms-volatile"
+
+// clang-cl turns /GS (the stack protector) on by default, but not for MSIL
+// triples, which have no stack protector (decision D25; section 12 row 'D25
+// amended'). An explicit /GS is still passed, and MSILPrepareIR strips it with
+// a warning (CodeGen/MSIL/stack-protector-warning.ll). The native triple keeps
+// the default. /c is rejected for MSIL (below), so these runs use /clang:-S.
+// RUN: %clang_cl -### --target=x86_64-pc-windows-msvc-msil /clang:-S -- %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=CL --implicit-check-not=error: --implicit-check-not=warning: \
+// RUN:     --implicit-check-not=-stack-protector %s
+// RUN: %clang_cl -### --target=x86_64-pc-windows-msvc-msil /clang:-S /GS- -- %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=CL --implicit-check-not=error: --implicit-check-not=warning: \
+// RUN:     --implicit-check-not=-stack-protector %s
+// RUN: %clang_cl -### --target=x86_64-pc-windows-msvc-msil /clang:-S /GS -- %s 2>&1 \
+// RUN:   | FileCheck --check-prefixes=CL,CL-GS --implicit-check-not=error: --implicit-check-not=warning: %s
+// CL: "-cc1" "-triple" "x86_64-pc-windows-msvc{{[0-9.]*}}-msil"
+// CL-SAME: "-S"
+// CL-GS-SAME: "-stack-protector" "2"
+// RUN: %clang_cl -### --target=x86_64-pc-windows-msvc /clang:-S -- %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=CL-NATIVE --implicit-check-not=error: %s
+// CL-NATIVE: "-cc1" "-triple" "x86_64-pc-windows-msvc{{[0-9.]*}}"
+// CL-NATIVE-SAME: "-stack-protector" "2"
 
 // The MinGW toolchain passes -exception-model=seh for MSIL as it does for the
 // native triple; CodeGen, not the driver, leaves the exception model out of

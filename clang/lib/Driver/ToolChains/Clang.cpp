@@ -8925,9 +8925,12 @@ void Clang::AddClangCLArgs(const ArgList &Args, types::ID InputType,
     CmdArgs.push_back("-fno-rtti-data");
 
   // This controls whether or not we emit stack-protector instrumentation.
-  // In MSVC, Buffer Security Check (/GS) is on by default.
-  if (!isNVPTX && Args.hasFlag(options::OPT__SLASH_GS, options::OPT__SLASH_GS_,
-                               /*Default=*/true)) {
+  // In MSVC, Buffer Security Check (/GS) is on by default. Not by default for
+  // MSIL: the target has no stack protector, and MSILPrepareIR strips an
+  // explicit one with a warning.
+  if (!isNVPTX &&
+      Args.hasFlag(options::OPT__SLASH_GS, options::OPT__SLASH_GS_,
+                   !getToolChain().getTriple().isOSBinFormatMSIL())) {
     CmdArgs.push_back("-stack-protector");
     CmdArgs.push_back(Args.MakeArgString(Twine(LangOptions::SSPStrong)));
   }

@@ -41,7 +41,7 @@ set(MSIL_PEVERIFY_EXECUTABLE "${_msil_peverify}" CACHE FILEPATH
 # configuration (clang without LLVM_ENABLE_PROJECTS=clang, say) are left out
 # instead of breaking the configure step.
 set(MSIL_TEST_DEPS)
-foreach(_msil_dep clang llc FileCheck not count split-file llvm-config)
+foreach(_msil_dep clang llc opt FileCheck not count split-file llvm-config)
   if(TARGET ${_msil_dep})
     list(APPEND MSIL_TEST_DEPS ${_msil_dep})
   endif()

@@ -56,8 +56,12 @@ env:
   # The pinned IL tool versions (MsilILAsmVersion, MsilILVerifyVersion) are
   # set only in this project file; the steps below read them from it.
   MSIL_TOOLS_PROJ: msil/utils/tools/msil-tools.proj
-  # gtest filter of the unit-test step: every MSIL test plus the registry tests.
-  MSIL_GTEST_FILTER: '*MSIL*:TargetRegistry.*'
+  # gtest filter of the unit-test step: every MSIL test plus the registry tests,
+  # except TargetRegistry.MSILLookupWithoutTarget. That test is required to skip
+  # whenever the msil target is registered (M1.e), which from M2 on is always
+  # the case, and the step fails on any skipped test. This is the same exclusion
+  # as the M2 gate step 7 amendment (plan section 12).
+  MSIL_GTEST_FILTER: '*MSIL*:TargetRegistry.*:-TargetRegistry.MSILLookupWithoutTarget'
 
 jobs:
   linux:
