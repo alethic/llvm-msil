@@ -1,4 +1,4 @@
-//===-- MSILNullifyDebugValueLists.cpp - Nullify DBG_VALUE_LISTs ----------===//
+//=== MSILNullifyDebugValueLists.cpp - Nullify DBG_VALUE_LISTs   ----------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,16 +6,17 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// STUB: implemented in M3
+// Derived from
+// llvm/lib/Target/WebAssembly/WebAssemblyNullifyDebugValueLists.cpp at
+// d1e15b695381.
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// This file declares the pass that sets every DBG_VALUE_LIST undefined,
-/// because MSILDebugValueManager cannot handle them.
-///
-/// Until M3 it is a stub that changes nothing; M3 replaces it with a copy of
-/// WebAssemblyNullifyDebugValueLists.cpp.
+/// Nullify DBG_VALUE_LISTs instructions as a temporary measure before we
+/// implement DBG_VALUE_LIST handling in MSILDebugValueManager.
+/// See https://github.com/llvm/llvm-project/issues/49705.
+/// TODO Correctly handle DBG_VALUE_LISTs
 ///
 //===----------------------------------------------------------------------===//
 
@@ -31,15 +32,7 @@ class MSILNullifyDebugValueListsLegacy final : public MachineFunctionPass {
     return "MSIL Nullify DBG_VALUE_LISTs";
   }
 
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.setPreservesAll();
-    MachineFunctionPass::getAnalysisUsage(AU);
-  }
-
-  bool runOnMachineFunction(MachineFunction &MF) override {
-    // Stub: changes nothing until M3.
-    return false;
-  }
+  bool runOnMachineFunction(MachineFunction &MF) override;
 
 public:
   static char ID; // Pass identification, replacement for typeid
@@ -53,4 +46,28 @@ INITIALIZE_PASS(MSILNullifyDebugValueListsLegacy, DEBUG_TYPE,
 
 FunctionPass *llvm::createMSILNullifyDebugValueListsLegacyPass() {
   return new MSILNullifyDebugValueListsLegacy();
+}
+
+static bool nullifyDebugValueLists(MachineFunction &MF) {
+  LLVM_DEBUG(dbgs() << "********** Nullify DBG_VALUE_LISTs **********\n"
+                       "********** Function: "
+                    << MF.getName() << '\n');
+  bool Changed = false;
+  // Our backend, including MSILDebugValueManager, currently cannot
+  // handle DBG_VALUE_LISTs correctly. So this makes them undefined, which will
+  // appear as "optimized out".
+  for (auto &MBB : MF) {
+    for (auto &MI : MBB) {
+      if (MI.getOpcode() == TargetOpcode::DBG_VALUE_LIST) {
+        MI.setDebugValueUndef();
+        Changed = true;
+      }
+    }
+  }
+  return Changed;
+}
+
+bool MSILNullifyDebugValueListsLegacy::runOnMachineFunction(
+    MachineFunction &MF) {
+  return nullifyDebugValueLists(MF);
 }

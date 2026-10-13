@@ -21,11 +21,23 @@
 /// - The function entry instrumentation attributes (patchable function entry
 ///   and prefix, fentry calls) are removed, with a warning when one of them
 ///   asks for instrumentation.
+/// - The function padding attributes ("tail-pad-to-size", "tail-pad-value")
+///   are removed, with a warning when one of them asks for padding.
+/// - The "zero-call-used-regs" attribute is removed, with a warning when a
+///   compiled definition asks for registers to be zeroed.
+/// - The call graph section and the basic block address map are turned off,
+///   and !pcsections metadata is erased, with one warning each.
 /// - Pseudo probes (llvm.pseudoprobe calls and !llvm.pseudo_probe_desc) are
 ///   erased with a warning, before any pass runs (doInitialization).
+/// - A function definition with a garbage collection strategy is an error;
+///   its body and its strategy are deleted before any pass runs
+///   (doInitialization).
 /// - A function definition that is variadic, calls inline assembly, accesses
-///   a named register or uses a pointer in a non-zero address space is an
-///   error, and its body is deleted.
+///   a named register, records a stack map (stackmap, patchpoint, statepoint)
+///   or uses a pointer in a non-zero address space is an error, and its body
+///   is deleted.
+/// - A function definition or used declaration whose IL name is longer than
+///   ilasm accepts is an error; a definition loses its body.
 /// - An alias, an ifunc or a global variable in a non-zero address space is an
 ///   error; its uses become poison and it is erased.
 /// - A thread-local variable is an error; it becomes an ordinary global.
@@ -41,6 +53,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
+#include "MSILUtilities.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -262,6 +275,48 @@ static bool stripEntryInstrumentation(Function &F) {
   return Found;
 }
 
+/// Removes the function padding attributes of \p F ("tail-pad-to-size" and
+/// "tail-pad-value", which the DynamicDebugging pass adds), with a warning
+/// when it asks for padding, as for "patchable-function-entry": the
+/// AsmPrinter would print a native fill directive into the method body, even
+/// for "tail-pad-to-size"="0", so the attributes are always removed.
+static bool stripTailPadding(Function &F) {
+  static constexpr StringLiteral Kinds[] = {"tail-pad-to-size",
+                                            "tail-pad-value"};
+  bool Padded = F.getFnAttributeAsParsedInteger("tail-pad-to-size") != 0;
+  bool Found = false;
+  for (StringRef Kind : Kinds) {
+    if (!F.hasFnAttribute(Kind))
+      continue;
+    F.removeFnAttr(Kind);
+    Found = true;
+  }
+  if (Padded)
+    F.getContext().diagnose(DiagnosticInfoUnsupported(
+        F, "function padding is not supported for MSIL; attribute ignored",
+        DiagnosticLocation(F.getSubprogram()), DS_Warning));
+  return Found;
+}
+
+/// Removes the "zero-call-used-regs" attribute of \p F (-fzero-call-used-regs,
+/// __attribute__((zero_call_used_regs))), with a warning when a compiled
+/// definition asks for registers to be zeroed: a CIL method has no registers,
+/// and PEI would take the virtual registers that RETURN reads for physical
+/// ones. clang also puts the -fzero-call-used-regs value on declarations,
+/// which are not compiled, so they get no warning.
+static bool stripZeroCallUsedRegs(Function &F) {
+  Attribute Attr = F.getFnAttribute("zero-call-used-regs");
+  if (!Attr.isValid())
+    return false;
+  if (Attr.getValueAsString() != "skip" && !F.isDeclaration() &&
+      !F.hasAvailableExternallyLinkage())
+    F.getContext().diagnose(DiagnosticInfoUnsupported(
+        F, "zero-call-used-regs is not supported for MSIL; attribute ignored",
+        DiagnosticLocation(F.getSubprogram()), DS_Warning));
+  F.removeFnAttr("zero-call-used-regs");
+  return true;
+}
+
 /// Erases the pseudo probes of -fpseudo-probe-for-profiling, the
 /// llvm.pseudoprobe calls and the !llvm.pseudo_probe_desc descriptors, with
 /// a warning: MSIL has no pseudo probe sections for a profiler to read.
@@ -284,6 +339,99 @@ static bool stripPseudoProbes(Module &M) {
   }
   if (Desc)
     M.eraseNamedMetadata(Desc);
+  return true;
+}
+
+/// Reports every function definition with a garbage collection strategy and
+/// deletes its body, then removes the strategy. MSIL emits no stack maps or
+/// GC frame tables, so every strategy is an error: the AsmPrinter would print
+/// the native frame tables of "erlang" and "ocaml" or crash, and the other
+/// strategies ("shadow-stack", "statepoint-example", "coreclr") need a
+/// collector that walks native frames. An available_externally body is never
+/// compiled and is not reported, but GC lowering instantiates the strategy of
+/// every function that has a body, and the AsmPrinter then prints its
+/// tables, so it loses its strategy too.
+static bool diagnoseGCStrategies(Module &M) {
+  bool Changed = false;
+  for (Function &F : M) {
+    if (F.isDeclaration() || !F.hasGC())
+      continue;
+    if (!F.hasAvailableExternallyLinkage()) {
+      F.getContext().diagnose(DiagnosticInfoUnsupported(
+          F,
+          "garbage collection strategy '" + Twine(F.getGC()) +
+              "' is not supported for MSIL",
+          DiagnosticLocation(F.getSubprogram())));
+      F.deleteBody();
+      // A declaration may not be in a comdat.
+      F.setComdat(nullptr);
+    }
+    F.clearGC();
+    Changed = true;
+  }
+  return Changed;
+}
+
+/// Turns off the per-function metadata sections that the AsmPrinter writes
+/// to native sections, which MSIL does not have (the AsmPrinter asserts on
+/// the missing section): the call graph section (llc --call-graph-section,
+/// clang -fexperimental-call-graph-section), the basic block address map
+/// (llc --basic-block-address-map, clang -fbasic-block-sections=labels) and
+/// PC sections (!pcsections on functions and instructions). Each is ignored
+/// with one warning for the module. MachineFunction, BasicBlockSections,
+/// SelectionDAG and the AsmPrinter read the options and the metadata only
+/// when they compile a function, after this module pass has run.
+static bool disableMetadataSections(Module &M, TargetMachine &TM) {
+  LLVMContext &Ctx = M.getContext();
+  if (TM.Options.EmitCallGraphSection) {
+    Ctx.diagnose(DiagnosticInfoGeneric(
+        "call graph section is not supported for MSIL; ignored", DS_Warning));
+    TM.Options.EmitCallGraphSection = false;
+  }
+  if (TM.Options.BBAddrMap) {
+    Ctx.diagnose(DiagnosticInfoGeneric(
+        "basic block address map is not supported for MSIL; ignored",
+        DS_Warning));
+    TM.Options.BBAddrMap = false;
+  }
+
+  bool HasPCSections = false;
+  for (Function &F : M) {
+    HasPCSections |= F.eraseMetadata(LLVMContext::MD_pcsections);
+    for (Instruction &I : instructions(F)) {
+      if (!I.hasMetadata(LLVMContext::MD_pcsections))
+        continue;
+      I.setMetadata(LLVMContext::MD_pcsections, nullptr);
+      HasPCSections = true;
+    }
+  }
+  if (HasPCSections)
+    Ctx.diagnose(DiagnosticInfoGeneric(
+        "PC sections are not supported for MSIL; ignored", DS_Warning));
+  return HasPCSections;
+}
+
+/// The longest identifier ilasm accepts, in bytes: Framework 4.8 and NuGet
+/// ilasm 10.0.12 report 'name too long' for 1024 bytes or more, counting
+/// UTF-8 bytes after they decode the \' and octal escapes of
+/// MSIL::printQuotedName (decision D11).
+static constexpr size_t MaxILNameBytes = 1023;
+
+/// Reports \p F if its IL name is longer than ilasm accepts. The diagnostic
+/// names the function in full, so the message gives only the length.
+/// Returns true if it was reported.
+static bool diagnoseILNameLength(const Function &F, const TargetMachine &TM) {
+  // Unnamed functions get short generated names ('__unnamed_N').
+  if (!F.hasName())
+    return false;
+  size_t Size = MSIL::getILName(F, TM).size();
+  if (Size <= MaxILNameBytes)
+    return false;
+  F.getContext().diagnose(DiagnosticInfoUnsupported(
+      F,
+      "identifier of " + Twine(Size) + " bytes is longer than the " +
+          Twine(MaxILNameBytes) + " bytes ilasm accepts",
+      DiagnosticLocation(F.getSubprogram())));
   return true;
 }
 
@@ -322,6 +470,20 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &Finder) {
             F,
             Twine("named register access (") + Intrinsic::getBaseName(IID) +
                 ") is not supported for MSIL",
+            I.getDebugLoc()));
+        HasError = true;
+      } else if (IID == Intrinsic::experimental_stackmap ||
+                 IID == Intrinsic::experimental_patchpoint_void ||
+                 IID == Intrinsic::experimental_patchpoint ||
+                 IID == Intrinsic::experimental_gc_statepoint) {
+        // Stack maps describe native frames to a runtime that reads or
+        // patches machine code. A statepoint is valid only in a function
+        // with a gc (the IR verifier checks it), so diagnoseGCStrategies
+        // reports it first while every strategy is an error.
+        Ctx.diagnose(DiagnosticInfoUnsupported(
+            F,
+            Twine("stack maps (") + Intrinsic::getBaseName(IID) +
+                ") are not supported for MSIL",
             I.getDebugLoc()));
         HasError = true;
       }
@@ -443,12 +605,16 @@ static void dropModuleContents(Module &M) {
 
 // AsmPrinter::doInitialization creates a pseudo probe handler, which prints
 // .pseudoprobe directives into the method bodies, when the module has
-// !llvm.pseudo_probe_desc. runOnModule would be too late: the legacy pass
-// manager initializes every pass before it runs any. It initializes them in
-// pipeline order, so this module pass is initialized before the function pass
-// manager that holds the AsmPrinter.
+// !llvm.pseudo_probe_desc, and GC lowering's doInitialization instantiates
+// the strategy of every function with a gc, for which the AsmPrinter then
+// creates a GC metadata printer. runOnModule would be too late: the legacy
+// pass manager initializes every pass before it runs any. It initializes them
+// in pipeline order, so this module pass is initialized before the function
+// pass manager that holds GC lowering and the AsmPrinter.
 bool MSILPrepareIRLegacy::doInitialization(Module &M) {
-  return stripPseudoProbes(M);
+  bool Changed = stripPseudoProbes(M);
+  Changed |= diagnoseGCStrategies(M);
+  return Changed;
 }
 
 bool MSILPrepareIRLegacy::runOnModule(Module &M) {
@@ -457,7 +623,7 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
   // Check the TargetMachine, not the module: it decides what is compiled and
   // supplies the DataLayout, and its triple is the one that -march=msil
   // switched to the MSIL object format.
-  const auto &TM = getAnalysis<TargetPassConfig>().getTM<TargetMachine>();
+  auto &TM = getAnalysis<TargetPassConfig>().getTM<TargetMachine>();
   if (!isSupportedTarget(TM)) {
     Ctx.emitError("unsupported target triple '" + TM.getTargetTriple().str() +
                   "' for MSIL (Phase 1 supports x86_64 and aarch64 with "
@@ -467,16 +633,25 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
   }
 
   bool Changed = resetExceptionModel(M);
+  Changed |= disableMetadataSections(M, TM);
 
   AddrSpaceFinder Finder;
   for (Function &F : M) {
     Changed |= stripStackProtector(F);
     Changed |= stripEntryInstrumentation(F);
+    Changed |= stripTailPadding(F);
+    Changed |= stripZeroCallUsedRegs(F);
     // An available_externally body is never code-generated (see
-    // MachineFunctionPass::runOnFunction): only its declaration matters.
-    if (F.isDeclaration() || F.hasAvailableExternallyLinkage())
+    // MachineFunctionPass::runOnFunction): only its declaration matters. The
+    // name of a used declaration is printed in references to it.
+    if (F.isDeclaration() || F.hasAvailableExternallyLinkage()) {
+      if (!F.isIntrinsic() && !F.use_empty())
+        diagnoseILNameLength(F, TM);
       continue;
-    if (!diagnoseDefinition(F, Finder))
+    }
+    bool HasError = diagnoseILNameLength(F, TM);
+    HasError |= diagnoseDefinition(F, Finder);
+    if (!HasError)
       continue;
     F.deleteBody();
     // A declaration may not be in a comdat.

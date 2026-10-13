@@ -1,0 +1,277 @@
+# MSILStackCheck (ImplementationPlan.md M3.b, recon passes-frame.md 8.3) is
+# always on and turns every violation of the CIL evaluation-stack rules into an
+# internal error, 'MSIL stack check failed in '<function>': <why>: <MI>',
+# instead of IL that the JIT rejects with InvalidProgramException or, after a
+# bad join, hangs on (plan section 9). Its model: the stack is empty at every
+# block entry; each explicit register use pops, each explicit register def
+# pushes; KILL, IMPLICIT_DEF, debug and position instructions print nothing and
+# are skipped. All seven failure modes are checked here. The pass checks each
+# instruction in this order and reports the first failure:
+#   multi-push.mir      an instruction pushes more than one value (a call with
+#                       two results; CanLowerReturn allows at most one);
+#   underflow.mir       an instruction pops more than the stack holds;
+#   order.mir           the values on top of the stack are not the
+#                       instruction's register operands in operand order;
+#   ret-*.mir           'ret' with a depth other than the number of results:
+#                       extra values (ret-extra.mir: a value from a void
+#                       function; ret-two.mir: two values for one result) or
+#                       too few (ret-missing.mir: no value for one result);
+#   ret-ops.mir         'ret' at the right depth whose operands do not match
+#                       the method's results (one value on the stack, none
+#                       named by the RETURN);
+#   localloc-depth.mir  'localloc' with something beneath its size.
+# After the last instruction of each block it checks
+#   block-end.mir       a value left on the stack at the end of a block.
+# These are internal errors (report fatal), so the tests use 'not --crash'
+# (plan section 2).
+#
+# Stackified-register state is not serialized in MIR, so every case runs
+# MSILExplicitLocals first, which makes each register operand a stack slot.
+# ExplicitLocals keeps each ordinary instruction balanced by itself, so the
+# underflow, order, ret-ops, localloc and block-end cases use a KILL, which is
+# what ExpandPostRAPseudos makes of a COPY whose result is dead: ExplicitLocals
+# still materializes a KILL's register operands (it reads a use before it and
+# stores a def after it), while MSILStackCheck skips the KILL itself, so the
+# pushes and pops of those operands no longer pair up. balanced.mir runs the
+# same chain on well-formed input and must not fail.
+
+# RUN: split-file %s %t
+# DEFINE: %{check} = -run-pass=msil-explicit-locals,msil-stack-check -o /dev/null
+
+# RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/multi-push.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=PUSH
+# RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/multi-push.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=PUSH
+# PUSH: LLVM ERROR: MSIL stack check failed in 'multi_push': instruction pushes more than one value: {{.*}}CALL &msil_pair
+
+# RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/underflow.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=UNDER
+# RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/underflow.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=UNDER
+# UNDER: LLVM ERROR: MSIL stack check failed in 'underflow': evaluation stack underflow: {{.*}}LOCAL_SET_I32 0,
+
+# RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/order.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ORDER
+# RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/order.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ORDER
+# ORDER: LLVM ERROR: MSIL stack check failed in 'order': operands are not on top of the evaluation stack in operand order: {{.*}}LOCAL_SET_I32 0,
+
+# RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/ret-extra.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RET-EXTRA
+# RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/ret-extra.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RET-EXTRA
+# RET-EXTRA: LLVM ERROR: MSIL stack check failed in 'ret_extra': 'ret' with extra values on the evaluation stack: {{.*}}RETURN
+
+# RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/ret-missing.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RET-MISSING
+# RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/ret-missing.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RET-MISSING
+# RET-MISSING: LLVM ERROR: MSIL stack check failed in 'ret_missing': 'ret' with too few values on the evaluation stack: {{.*}}RETURN
+
+# RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/ret-two.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RET-TWO
+# RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/ret-two.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RET-TWO
+# RET-TWO: LLVM ERROR: MSIL stack check failed in 'ret_two': 'ret' with extra values on the evaluation stack: {{.*}}RETURN
+
+# RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/ret-ops.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RET-OPS
+# RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/ret-ops.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RET-OPS
+# RET-OPS: LLVM ERROR: MSIL stack check failed in 'ret_ops': 'ret' operands do not match the method's results: {{.*}}RETURN
+
+# RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/localloc-depth.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LOCALLOC
+# RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/localloc-depth.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LOCALLOC
+# LOCALLOC: LLVM ERROR: MSIL stack check failed in 'localloc_depth': 'localloc' with a non-empty evaluation stack: {{.*}}LOCALLOC
+
+# RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/block-end.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=END
+# RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/block-end.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=END
+# END: LLVM ERROR: MSIL stack check failed in 'block_end': evaluation stack not empty at end of {{.+}}
+
+# The well-formed control, and the inputs themselves: the machine verifier
+# accepts every input, so the failures above come from MSILStackCheck and not
+# from malformed MIR.
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=msil-explicit-locals,msil-stack-check \
+# RUN:   -verify-machineinstrs %t/balanced.mir -o - | FileCheck %s --check-prefix=OK
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -run-pass=msil-explicit-locals,msil-stack-check \
+# RUN:   -verify-machineinstrs %t/balanced.mir -o - | FileCheck %s --check-prefix=OK
+# OK-LABEL: name: balanced{{$}}
+# OK:       maxStack: 1{{$}}
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/multi-push.mir -o /dev/null
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/underflow.mir -o /dev/null
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/order.mir -o /dev/null
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/ret-extra.mir -o /dev/null
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/ret-missing.mir -o /dev/null
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/ret-two.mir -o /dev/null
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/ret-ops.mir -o /dev/null
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/localloc-depth.mir -o /dev/null
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/block-end.mir -o /dev/null
+
+#--- multi-push.mir
+# A call with two results: both are stored to locals, but the call itself
+# pushes two values.
+---
+name:            multi_push
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ ]
+body: |
+  bb.0:
+    %0:i32, %1:i32 = CALL &msil_pair, implicit-def dead $arguments
+    DROP_I32 %0, implicit-def dead $arguments
+    DROP_I32 %1, implicit-def dead $arguments
+    RETURN implicit-def dead $arguments
+...
+
+#--- underflow.mir
+# The value of a KILL that defines a register is stored to a local after the
+# KILL, but the KILL pushes nothing: the store pops an empty stack.
+---
+name:            underflow
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    %0:i32 = KILL
+    RETURN %0, implicit-def dead $arguments
+...
+
+#--- order.mir
+# The argument is read for the KILL and stays on the stack; the KILL's result
+# is stored to a local after it, so the store finds the argument, not the
+# KILL's result, on top of the stack.
+---
+name:            order
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i32 = KILL %0
+    RETURN %1, implicit-def dead $arguments
+...
+
+#--- ret-extra.mir
+# A void function returns a value.
+---
+name:            ret_extra
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    RETURN %0, implicit-def dead $arguments
+...
+
+#--- ret-missing.mir
+# A function with an int32 result returns without a value.
+---
+name:            ret_missing
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    RETURN implicit-def dead $arguments
+...
+
+#--- ret-two.mir
+# A function with one result returns two values.
+---
+name:            ret_two
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32, i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i32 = ARGUMENT_I32 1, implicit $arguments
+    RETURN %0, %1, implicit-def dead $arguments
+...
+
+#--- ret-ops.mir
+# The argument read for the KILL stays on the stack, so the depth at the
+# RETURN equals the number of results, but the RETURN names no value.
+---
+name:            ret_ops
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    KILL %0
+    RETURN implicit-def dead $arguments
+...
+
+#--- localloc-depth.mir
+# The argument read for the KILL stays on the stack, under the size of the
+# localloc.
+---
+name:            localloc_depth
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i64 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    KILL %0
+    %1:i64 = LOCALLOC %0, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+
+#--- block-end.mir
+# The argument read for the KILL is still on the stack when the first block
+# branches to the second.
+---
+name:            block_end
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ ]
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    KILL %0
+    BR %bb.1, implicit-def dead $arguments
+
+  bb.1:
+    RETURN implicit-def dead $arguments
+...
+
+#--- balanced.mir
+---
+name:            balanced
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i64 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i64 = LOCALLOC %0, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...

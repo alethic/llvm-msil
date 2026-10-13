@@ -108,6 +108,13 @@ MSILTargetMachine::MSILTargetMachine(const Target &T, const Triple &TT,
   // even for C, and that would otherwise turn into WinEH.
   this->Options.ExceptionModel = ExceptionHandling::None;
 
+  // CIL methods have no sections. Basic block sections are dropped silently,
+  // like the exception model (there is no LLVMContext to warn through), and
+  // here rather than in MSILPrepareIR: TargetPassConfig::addMachinePasses
+  // reads the option when it builds the pipeline, and a profile file adds
+  // passes that assert the List type.
+  this->Options.BBSections = BasicBlockSection::None;
+
   initAsmInfo();
 
   // MSIL does not run RegAllocFast; tied operands must be lowered by

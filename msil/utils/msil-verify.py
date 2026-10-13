@@ -75,6 +75,12 @@ directory:
     br.s, brtrue.s, ...    br, brtrue, ... (the rewritten code is longer)
     unaligned., volatile.  nop, before a rewritten instruction
 
+The copy also replaces each ldc.r4/ldc.r8 operand that ildasm prints in a
+form ilasm cannot parse ('inf', '-inf', 'nan', '-nan(ind)', 'nan(snan)', ...;
+other NaNs come out as bytes, which reassemble) with a float32(0x...) or
+float64(0x...) literal: the same infinity, or the default quiet NaN of the
+same sign. Verification needs only the type, so the payload is not kept.
+
 The '<msil-verify>' stubs are added to the copy ('ldnull; throw'). They take
 every address as native int, so ILVerify still rejects an int32, int64 or
 float64 address (it does not convert int32 to native int implicitly), and
@@ -417,6 +423,34 @@ CALLI_SIG_RE = re.compile(
     r"(?P<ret>[^()]+?)\s*\((?P<params>[^()]*)\)$"
 )
 CALLI_UNSUPPORTED_RE = re.compile(r"\b(?:vararg|instance|explicit)\b|\.\.\.")
+# An ldc.r4/ldc.r8 operand that ildasm prints with the C runtime's text for
+# an infinity or a NaN ('inf', '-inf', 'nan', '-nan', '-nan(ind)',
+# 'nan(snan)', '-nan(snan)': the .NET Framework 4.8 ildasm), which ilasm
+# cannot parse.
+NONFINITE_RE = re.compile(
+    r"(?P<sign>[-+]?)(?:(?P<inf>inf(?:inity)?)|nan(?:\(\w*\))?)", re.IGNORECASE
+)
+# Opcode -> (literal type, hex digits, infinity, default quiet NaN, sign bit).
+NONFINITE_BITS = {
+    "ldc.r4": ("float32", 8, 0x7F800000, 0x7FC00000, 0x80000000),
+    "ldc.r8": (
+        "float64",
+        16,
+        0x7FF0000000000000,
+        0x7FF8000000000000,
+        0x8000000000000000,
+    ),
+}
+
+
+def nonfinite_literal(op, operand):
+    """The ilasm literal for the infinity or NaN operand (NONFINITE_RE) of
+    op (ldc.r4 or ldc.r8): the same infinity, or the default quiet NaN of
+    the same sign (the copy needs only a constant of the right type)."""
+    m = NONFINITE_RE.fullmatch(operand)
+    typ, digits, inf, nan, sign = NONFINITE_BITS[op]
+    bits = (inf if m.group("inf") else nan) | (sign if m.group("sign") == "-" else 0)
+    return "%s(0x%0*X)" % (typ, digits, bits)
 
 
 class Listing:
@@ -551,6 +585,13 @@ def neutralize(text):
             pending_prefixes = []
             out.append(lead + op[:-2] + " " + rest)
             count("short branch")
+            continue
+        elif op in NONFINITE_BITS and NONFINITE_RE.fullmatch(rest):
+            # Not a neutralized construct: a constant ilasm could not read.
+            out.extend(l for _, l in pending_prefixes)
+            pending_prefixes = []
+            out.append(lead + op + " " + nonfinite_literal(op, rest))
+            count("%s %s" % (op, rest))
             continue
         if new is None:
             out.extend(l for _, l in pending_prefixes)

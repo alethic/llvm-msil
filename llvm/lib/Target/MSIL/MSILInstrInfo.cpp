@@ -18,6 +18,7 @@
 
 #include "MSILInstrInfo.h"
 #include "MCTargetDesc/MSILMCTargetDesc.h"
+#include "MSILDebugValueManager.h"
 #include "MSILMachineFunctionInfo.h"
 #include "MSILSubtarget.h"
 #include "MSILUtilities.h"
@@ -147,6 +148,14 @@ bool MSILInstrInfo::reverseBranchCondition(
   assert(Cond.size() == 2 && "Expected a flag and a condition expression");
   Cond.front() = MachineOperand::CreateImm(!Cond.front().getImm());
   return false;
+}
+
+ArrayRef<std::pair<int, const char *>>
+MSILInstrInfo::getSerializableTargetIndices() const {
+  static const std::pair<int, const char *> TargetIndices[] = {
+      {MSIL::TI_LOCAL, "msil-local"},
+      {MSIL::TI_LOCAL_INDIRECT, "msil-local-indirect"}};
+  return ArrayRef(TargetIndices);
 }
 
 const MachineOperand &

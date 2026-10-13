@@ -1,0 +1,248 @@
+# CIL has no implicit return at the end of a method: falling off the end
+# throws InvalidProgramException when the method is JIT-compiled, although
+# ilasm accepts it (recon passes-frame.md 5.2, experiment e3). TrapUnreachable
+# normally leaves a barrier at the end, and MSILStackCheck (ImplementationPlan.md
+# M3.b, passes-frame.md 8.3) is the safety net: when the last non-debug
+# instruction of the last block is not a barrier, it appends a TRAP (ldnull;
+# throw), whose extra stack slot counts towards .maxstack (StackPeakExtra 1).
+# Only the last block matters: any other block that falls through falls into
+# the next block.
+#
+# Stackified-register state is not serialized in MIR, so MSILStackCheck runs
+# after MSILExplicitLocals, which makes every register operand a stack slot.
+# IL prints a method that falls off the end and checks that the result
+# assembles.
+
+# RUN: split-file %s %t
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=msil-explicit-locals,msil-stack-check \
+# RUN:   -verify-machineinstrs %t/mir.mir -o - | FileCheck %s
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -run-pass=msil-explicit-locals,msil-stack-check \
+# RUN:   -verify-machineinstrs %t/mir.mir -o - | FileCheck %s
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -start-before=msil-explicit-locals -asm-verbose=false \
+# RUN:   -verify-machineinstrs %t/il.mir -o - | FileCheck %s --check-prefix=IL
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -start-before=msil-explicit-locals -asm-verbose=false \
+# RUN:   -verify-machineinstrs %t/il.mir -o - | FileCheck %s --check-prefix=IL
+# RUN: %if ilasm %{ llc -mtriple=x86_64-pc-windows-msvc-msil -start-before=msil-explicit-locals \
+# RUN:   %t/il.mir -o %t/il.il && %ilasm-verify -output=%t/il.dll %t/il.il %}
+
+#--- mir.mir
+# A function whose only block is empty gets a TRAP; .maxstack is 1 for the
+# ldnull of the trap.
+# CHECK-LABEL: name: empty_body{{$}}
+# CHECK:       maxStack: 1{{$}}
+# CHECK:       bb.0:
+# CHECK-NEXT:  {{^ +}}TRAP{{( |$)}}
+# CHECK-NOT:   {{TRAP|RETURN}}
+---
+name:            empty_body
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ ]
+body: |
+  bb.0:
+...
+
+# The last block ends with an ordinary instruction (the DROP of a dead value).
+# CHECK-LABEL: name: after_drop{{$}}
+# CHECK:       maxStack: 1{{$}}
+# CHECK:       body:
+# CHECK:       [[C:%[0-9]+]]:i32 = CONST_I32 1,
+# CHECK-NEXT:  DROP_I32 killed [[C]],
+# CHECK-NEXT:  {{^ +}}TRAP{{( |$)}}
+# CHECK-NOT:   {{TRAP|RETURN}}
+---
+name:            after_drop
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ ]
+body: |
+  bb.0:
+    dead %0:i32 = CONST_I32 1, implicit-def dead $arguments
+...
+
+# The last block ends with a conditional branch (a loop back-edge), the case
+# that ilasm accepts and the JIT rejects (passes-frame.md experiment e3). The
+# argument is read for the branch, and the TRAP follows the branch.
+# CHECK-LABEL: name: after_cond_branch{{$}}
+# CHECK:       maxStack: 1{{$}}
+# CHECK:       bb.1:
+# CHECK:       [[A:%[0-9]+]]:i32 = ARG_GET_I32 0,
+# CHECK-NEXT:  BR_IF %bb.1, [[A]],
+# CHECK-NEXT:  {{^ +}}TRAP{{( |$)}}
+# CHECK-NOT:   {{TRAP|RETURN}}
+---
+name:            after_cond_branch
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ ]
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+
+  bb.1:
+    successors: %bb.1
+    BR_IF %bb.1, %0, implicit-def dead $arguments
+...
+
+# A function that ends with 'ret' gets no TRAP. Without RegStackify (only
+# ExplicitLocals and MSILStackCheck run here) the constant is not stackified,
+# so ExplicitLocals stores it to local 0 right after its def and reloads it
+# right before the RETURN; the stack is never more than one deep, so .maxstack
+# is 1, for the return value.
+# CHECK-LABEL: name: ends_with_return{{$}}
+# CHECK:       maxStack: 1{{$}}
+# CHECK:       body:
+# CHECK:       [[C:%[0-9]+]]:i32 = CONST_I32 3,
+# CHECK-NEXT:  LOCAL_SET_I32 0, [[C]],
+# CHECK-NEXT:  [[G:%[0-9]+]]:i32 = LOCAL_GET_I32 0,
+# CHECK-NEXT:  RETURN [[G]],
+# CHECK-NOT:   TRAP
+---
+name:            ends_with_return
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    %0:i32 = CONST_I32 3, implicit-def dead $arguments
+    RETURN %0, implicit-def dead $arguments
+...
+
+# A void function that ends with 'ret': no TRAP, and .maxstack 0.
+# CHECK-LABEL: name: void_return{{$}}
+# CHECK:       maxStack: 0{{$}}
+# CHECK:       bb.0:
+# CHECK-NEXT:  RETURN implicit-def dead $arguments
+# CHECK-NOT:   TRAP
+---
+name:            void_return
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ ]
+body: |
+  bb.0:
+    RETURN implicit-def dead $arguments
+...
+
+# A function that already ends with a TRAP gets no second one.
+# CHECK-LABEL: name: ends_with_trap{{$}}
+# CHECK:       maxStack: 1{{$}}
+# CHECK:       bb.0:
+# CHECK-NEXT:  {{^ +}}TRAP{{( |$)}}
+# CHECK-NOT:   TRAP
+---
+name:            ends_with_trap
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ ]
+body: |
+  bb.0:
+    TRAP implicit-def dead $arguments
+...
+
+# The last block ends with an unconditional branch back to an earlier block, a
+# barrier: no TRAP.
+# CHECK-LABEL: name: ends_with_br{{$}}
+# CHECK:       maxStack: 0{{$}}
+# CHECK:       bb.1:
+# CHECK:       {{^ +}}BR %bb.1, implicit-def dead $arguments
+# CHECK-NOT:   TRAP
+---
+name:            ends_with_br
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ ]
+body: |
+  bb.0:
+    successors: %bb.1
+
+  bb.1:
+    successors: %bb.1
+    BR %bb.1, implicit-def dead $arguments
+...
+
+# A block that falls through into the next one is not the end of the method:
+# only the last block can fall off it.
+# CHECK-LABEL: name: falls_into_next{{$}}
+# CHECK:       maxStack: 1{{$}}
+# CHECK:       bb.0:
+# CHECK-NEXT:  successors: %bb.1
+# CHECK-NOT:   TRAP
+# CHECK:       bb.1:
+# CHECK-NOT:   TRAP
+# CHECK:       RETURN
+# CHECK-NOT:   TRAP
+---
+name:            falls_into_next
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    successors: %bb.1
+    dead %0:i32 = CONST_I32 1, implicit-def dead $arguments
+
+  bb.1:
+    %1:i32 = CONST_I32 2, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+
+#--- il.mir
+# The appended TRAP prints as ldnull; throw, two-space indented, before the end
+# of the method.
+# IL-LABEL: .method {{.*}}'falloff_il'(
+# IL-SAME:  ) cil managed{{$}}
+# IL-NEXT:  {{^\{$}}
+# IL-NEXT:  {{^}}  .maxstack 1{{$}}
+# IL-NEXT:  {{^}}  ldc.i4.1{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldnull{{$}}
+# IL-NEXT:  {{^}}  throw{{$}}
+# IL-NEXT:  {{^}}} // end of method 'falloff_il'{{$}}
+# IL-LABEL: .method {{.*}}'empty_il'(
+# IL-SAME:  ) cil managed{{$}}
+# IL-NEXT:  {{^\{$}}
+# IL-NEXT:  {{^}}  .maxstack 1{{$}}
+# IL-NEXT:  {{^}}  ldnull{{$}}
+# IL-NEXT:  {{^}}  throw{{$}}
+# IL-NEXT:  {{^}}} // end of method 'empty_il'{{$}}
+--- |
+  source_filename = "stack-check-falloff.c"
+
+  define void @falloff_il() {
+    ret void
+  }
+
+  define void @empty_il() {
+    ret void
+  }
+...
+---
+name:            falloff_il
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ ]
+body: |
+  bb.0:
+    dead %0:i32 = CONST_I32 1, implicit-def dead $arguments
+...
+---
+name:            empty_il
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ ]
+body: |
+  bb.0:
+...

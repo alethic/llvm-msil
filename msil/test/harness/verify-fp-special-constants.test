@@ -1,0 +1,18 @@
+# Infinities and NaNs must pass msil-verify. The backend loads them with
+# 'ldc.r4 float32(0x...)' and 'ldc.r8 float64(0x...)'; the .NET Framework 4.8
+# ildasm prints several back as 'inf', '-inf', 'nan', '-nan', '-nan(ind)',
+# 'nan(snan)' or '-nan(snan)', which ilasm cannot parse, so the neutralized
+# pass of msil-verify.py (pass 2, which needs ildasm) could not reassemble its
+# copy of a valid module. Inputs/fp-special-constants.il has one method per
+# constant (its header lists what ildasm prints for each): +inf and -inf of
+# both widths, -nan(ind) of both widths, float64 signaling NaNs of both
+# signs, float32 signaling NaNs (ilasm quiets them) and payload NaNs, some of
+# which ildasm prints as bytes that reassemble as they are. The modern ildasm
+# prints all of them as bytes. The module also force-JITs and runs: exit 42.
+# REQUIRES: msil-ilverify, msil-ildasm
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/fp-special-constants.il
+# RUN: %msil_verify %t.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.dll %}
+# RUN: %msil_exec --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "[exit 42]"

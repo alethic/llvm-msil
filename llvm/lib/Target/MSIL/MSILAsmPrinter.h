@@ -9,9 +9,10 @@
 /// \file
 /// This file declares the MSIL AsmPrinter, which writes a module as ILAsm text
 /// (llvm/docs/MSIL/ImplementationPlan.md section 5.1): the module header, one
-/// global method per function, and the module trailer. It also owns the
-/// module's table of CIL method signatures, so every method header, call site,
-/// 'ldftn', 'calli' and P/Invoke declaration spells a signature the same way.
+/// global method per function, and the module trailer with the entry point.
+/// It also owns the module's table of CIL method signatures, so every method
+/// header, call site, 'ldftn', 'calli' and P/Invoke declaration spells a
+/// signature the same way.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -53,6 +54,8 @@ private:
   /// The function being printed (set by runOnMachineFunction).
   const MSILSubtarget *Subtarget = nullptr;
   MSILFunctionInfo *MFI = nullptr;
+  /// True from the method header of that function to its closing brace.
+  bool InMethod = false;
 
   /// Owns every signature handed out by the services below. They outlive the
   /// MCInsts and MSILMemberRefExprs that point to them.
@@ -113,6 +116,10 @@ public:
   void emitEndOfAsmFile(Module &M) override;
   void emitLinkage(const GlobalValue *GV, MCSymbol *GVSym) const override;
   void emitConstantPool() override;
+  /// Closes the method. MSIL has no out-of-line jump tables, and this is the
+  /// last per-function hook that runs after the end-of-function label (which
+  /// -g adds) and before the '-- End function' comment and the blank line, so
+  /// the closing brace directly follows the body (decision D29).
   void emitJumpTableInfo() override;
   void emitGlobalVariable(const GlobalVariable *GV) override;
   void emitFunctionEntryLabel() override;
@@ -124,6 +131,13 @@ protected:
 
 private:
   void emitGlobalIFunc(Module &M, const GlobalIFunc &GI) override;
+
+  /// Closes the method of the function being printed.
+  void emitMethodEnd();
+
+  /// Emits '<msil>Main'(string[]), the .entrypoint method that calls the C
+  /// function \p Main (decision D27), or diagnoses an unsupported signature.
+  void emitEntryPoint(const Function &Main);
 };
 
 } // end namespace llvm

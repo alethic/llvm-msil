@@ -1,4 +1,4 @@
-//===-- MSILArgumentMove.cpp - Argument instruction moving pass -----------===//
+//===-- MSILArgumentMove.cpp - Argument instruction moving ----------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,42 +6,56 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// STUB: implemented in M3
+// Derived from llvm/lib/Target/WebAssembly/WebAssemblyArgumentMove.cpp at
+// d1e15b695381.
 //
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// This file declares the pass that moves ARGUMENT instructions back to the
-/// top of the entry block after instruction scheduling.
+/// This file moves ARGUMENT instructions after ScheduleDAG scheduling.
 ///
-/// Until M3 it is a stub that changes nothing; M3 replaces it with a copy of
-/// WebAssemblyArgumentMove.cpp.
+/// Arguments are really live-in registers, however, since we use virtual
+/// registers and LLVM doesn't support live-in virtual registers, we're
+/// currently making do with ARGUMENT instructions which are placed at the top
+/// of the entry block. The trick is to get them to *stay* at the top of the
+/// entry block.
+///
+/// The ARGUMENTS physical register keeps these instructions pinned in place
+/// during liveness-aware CodeGen passes, however one thing which does not
+/// respect this is the ScheduleDAG scheduler. This pass is therefore run
+/// immediately after that.
+///
+/// This is all hopefully a temporary solution until we find a better solution
+/// for describing the live-in nature of arguments.
 ///
 //===----------------------------------------------------------------------===//
 
+#include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "MSIL.h"
-#include "llvm/CodeGen/MachineFunctionPass.h"
+#include "MSILUtilities.h"
+#include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
+#include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/Passes.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "msil-argument-move"
 
 namespace {
 class MSILArgumentMoveLegacy final : public MachineFunctionPass {
-  StringRef getPassName() const override { return "MSIL Argument Move"; }
-
-  void getAnalysisUsage(AnalysisUsage &AU) const override {
-    AU.setPreservesAll();
-    MachineFunctionPass::getAnalysisUsage(AU);
-  }
-
-  bool runOnMachineFunction(MachineFunction &MF) override {
-    // Stub: changes nothing until M3.
-    return false;
-  }
-
 public:
   static char ID; // Pass identification, replacement for typeid
   MSILArgumentMoveLegacy() : MachineFunctionPass(ID) {}
+
+  StringRef getPassName() const override { return "MSIL Argument Move"; }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.setPreservesCFG();
+    MachineFunctionPass::getAnalysisUsage(AU);
+  }
+
+  bool runOnMachineFunction(MachineFunction &MF) override;
 };
 } // end anonymous namespace
 
@@ -51,4 +65,38 @@ INITIALIZE_PASS(MSILArgumentMoveLegacy, DEBUG_TYPE,
 
 FunctionPass *llvm::createMSILArgumentMoveLegacyPass() {
   return new MSILArgumentMoveLegacy();
+}
+
+static bool argumentMove(MachineFunction &MF) {
+  LLVM_DEBUG({
+    dbgs() << "********** Argument Move **********\n"
+           << "********** Function: " << MF.getName() << '\n';
+  });
+
+  bool Changed = false;
+  MachineBasicBlock &EntryMBB = MF.front();
+  MachineBasicBlock::iterator InsertPt = EntryMBB.end();
+
+  // Look for the first NonArg instruction.
+  for (MachineInstr &MI : EntryMBB) {
+    if (!MSIL::isArgument(MI.getOpcode())) {
+      InsertPt = MI;
+      break;
+    }
+  }
+
+  // Now move any argument instructions later in the block
+  // to before our first NonArg instruction.
+  for (MachineInstr &MI : llvm::make_range(InsertPt, EntryMBB.end())) {
+    if (MSIL::isArgument(MI.getOpcode())) {
+      EntryMBB.insert(InsertPt, MI.removeFromParent());
+      Changed = true;
+    }
+  }
+
+  return Changed;
+}
+
+bool MSILArgumentMoveLegacy::runOnMachineFunction(MachineFunction &MF) {
+  return argumentMove(MF);
 }

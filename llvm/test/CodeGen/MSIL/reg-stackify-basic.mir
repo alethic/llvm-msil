@@ -1,0 +1,591 @@
+# MSILRegStackify (ImplementationPlan.md M3.a, copied from WebAssembly; recon
+# passes-frame.md 5) turns single-use values into evaluation-stack slots by
+# moving each def next to its use, so that the operands of an instruction are
+# pushed in operand order (the last operand on top), clones cheap
+# rematerializable defs (constants) into the user's block, and keeps a value
+# with several uses in the same block on the stack once with a TEE_<RC> that
+# also writes it to a register. A stackified def and its user carry the
+# implicit VALUE_STACK def and use that keep them in order. ARGUMENT_<RC> defs
+# are never stackified, values never cross a block boundary on the stack (the
+# stack is empty at every block boundary, passes-frame.md 5.1), and an
+# IMPLICIT_DEF that is stackified becomes a constant 0 so that every push is an
+# explicit def. The LOCALLOC rule is in localloc-root.mir.
+#
+# RS checks the MIR after RegStackify alone; EL checks it after the
+# RegStackify, ExplicitLocals and MSILStackCheck chain, where a TEE becomes a
+# LOCAL_TEE_<RC> (dup; stloc, StackPeakExtra 1, plan 5.4) and maxStack is the
+# exact .maxstack (stackified-register state is not serialized in MIR, so
+# MSILStackCheck only runs chained after these passes). IL runs the pipeline
+# from RegStackify on (at llc's default -O2, so RegColoring runs too) and
+# prints the tee into an argument (ARG_TEE) and into a CIL local (LOCAL_TEE)
+# for every register class, at index 0-3, at a 'starg.s'/'stloc.s' index (4)
+# and at a long index (256; tee_wide_il, which tee-wide.py appends to il.mir).
+
+# RUN: split-file %s %t
+# RUN: %python %t/tee-wide.py >> %t/il.mir
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=msil-reg-stackify -verify-machineinstrs \
+# RUN:   %t/mir.mir -o - | FileCheck %s --check-prefix=RS
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -run-pass=msil-reg-stackify -verify-machineinstrs \
+# RUN:   %t/mir.mir -o - | FileCheck %s --check-prefix=RS
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs \
+# RUN:   -run-pass=msil-reg-stackify,msil-explicit-locals,msil-stack-check %t/mir.mir -o - \
+# RUN:   | FileCheck %s --check-prefix=EL
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs \
+# RUN:   -run-pass=msil-reg-stackify,msil-explicit-locals,msil-stack-check %t/mir.mir -o - \
+# RUN:   | FileCheck %s --check-prefix=EL
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -start-before=msil-reg-stackify -asm-verbose=false \
+# RUN:   -verify-machineinstrs %t/il.mir -o - | FileCheck %s --check-prefix=IL
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -start-before=msil-reg-stackify -asm-verbose=false \
+# RUN:   -verify-machineinstrs %t/il.mir -o - | FileCheck %s --check-prefix=IL
+# RUN: %if ilasm %{ llc -mtriple=x86_64-pc-windows-msvc-msil -start-before=msil-reg-stackify \
+# RUN:   %t/il.mir -o %t/il.il && %ilasm-verify -output=%t/il.dll %t/il.il %}
+
+#--- mir.mir
+# A single-use def is moved down to its use across an unrelated instruction and
+# stackified; the unrelated dead def stays where it is, in a register (it
+# becomes a DROP).
+# RS-LABEL:   name: move_single_use{{$}}
+# RS:         body:
+# RS:         {{^ +}}dead %1:i64 = CONST_I64 1, implicit-def dead $arguments{{$}}
+# RS-NEXT:    {{^ +}}%0:i32 = CONST_I32 42, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}RETURN %0, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# EL-LABEL:   name: move_single_use{{$}}
+# EL:         maxStack: 1{{$}}
+# EL:         body:
+# EL:         [[D:%[0-9]+]]:i64 = CONST_I64 1,
+# EL-NEXT:    DROP_I64 killed [[D]],
+# EL-NEXT:    %0:i32 = CONST_I32 42,
+# EL-NEXT:    RETURN %0,
+# EL-NOT:     LOCAL_
+---
+name:            move_single_use
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    %0:i32 = CONST_I32 42, implicit-def dead $arguments
+    dead %1:i64 = CONST_I64 1, implicit-def dead $arguments
+    RETURN %0, implicit-def dead $arguments
+...
+
+# Operand order: the defs of three operands, written in the wrong order, are
+# moved so that the first operand is pushed first and the last one last (LIFO;
+# isel.md 9: an instruction pops its uses in operand order, the last use on
+# top). The stack is three deep at the call.
+# RS-LABEL:   name: operand_order{{$}}
+# RS:         body:
+# RS:         {{^ +}}%2:i64 = CONST_I64 2, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}%0:i32 = CONST_I32 3, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}%1:f64 = CONST_F64 double 1.0{{0*}}e+00, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}CALL &msil_sink, %2, %0, %1, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}RETURN implicit-def dead $arguments{{$}}
+# EL-LABEL:   name: operand_order{{$}}
+# EL:         maxStack: 3{{$}}
+# EL:         body:
+# EL:         %2:i64 = CONST_I64 2,
+# EL-NEXT:    %0:i32 = CONST_I32 3,
+# EL-NEXT:    %1:f64 = CONST_F64 double 1.0{{0*}}e+00,
+# EL-NEXT:    CALL &msil_sink, %2, %0, %1,
+# EL-NEXT:    RETURN implicit-def dead $arguments
+# EL-NOT:     LOCAL_
+---
+name:            operand_order
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ ]
+body: |
+  bb.0:
+    %0:i32 = CONST_I32 3, implicit-def dead $arguments
+    %1:f64 = CONST_F64 double 1.0, implicit-def dead $arguments
+    %2:i64 = CONST_I64 2, implicit-def dead $arguments
+    CALL &msil_sink, %2, %0, %1, implicit-def dead $arguments
+    RETURN implicit-def dead $arguments
+...
+
+# A value with two uses in one block, whose def is not rematerializable (a
+# COPY_I32, unlike the constants), stays on the stack for its first use through
+# a TEE_I32, whose second def keeps it in a register for the second use. After
+# ExplicitLocals the TEE is LOCAL_TEE_I32 into local 0 (the parameter is
+# argument 0) and the second use reads local 0; the 'dup' of the tee makes the
+# stack two deep.
+# RS-LABEL:   name: tee{{$}}
+# RS:         body:
+# RS:         {{^ +}}[[DEF:%[0-9]+]]:i32 = COPY_I32 %0, {{.*}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}[[TEE:%[0-9]+]]:i32, %1:i32 = TEE_I32 [[DEF]], {{.*}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}DROP_I32 [[TEE]], {{.*}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}RETURN %1, implicit-def dead $arguments{{$}}
+# EL-LABEL:   name: tee{{$}}
+# EL:         maxStack: 2{{$}}
+# EL:         body:
+# EL:         [[A:%[0-9]+]]:i32 = ARG_GET_I32 0,
+# EL-NEXT:    [[T:%[0-9]+]]:i32 = LOCAL_TEE_I32 0, [[A]],
+# EL-NEXT:    DROP_I32 [[T]],
+# EL-NEXT:    [[L:%[0-9]+]]:i32 = LOCAL_GET_I32 0,
+# EL-NEXT:    RETURN [[L]],
+# EL-NOT:     {{TEE_I32|COPY_I32}}
+---
+name:            tee
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i32 = COPY_I32 %0, implicit-def dead $arguments
+    DROP_I32 %1, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+
+# A stackified IMPLICIT_DEF becomes CONST_<RC> 0 of its register class, so the
+# push is an explicit def (an IMPLICIT_DEF prints nothing). WebAssembly
+# rewrites the IMPLICIT_DEF in place, which leaves it without the implicit
+# ARGUMENTS def of a CONST built from scratch; either is fine.
+# RS-LABEL:   name: undef_i32{{$}}
+# RS:         {{^ +}}%0:i32 = CONST_I32 0, {{(implicit-def dead \$arguments, )?}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    RETURN %0,
+# EL-LABEL:   name: undef_i32{{$}}
+# EL:         maxStack: 1{{$}}
+# RS-LABEL:   name: undef_i64{{$}}
+# RS:         {{^ +}}%0:i64 = CONST_I64 0, {{(implicit-def dead \$arguments, )?}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    RETURN %0,
+# EL-LABEL:   name: undef_i64{{$}}
+# EL:         maxStack: 1{{$}}
+# RS-LABEL:   name: undef_f32{{$}}
+# RS:         {{^ +}}%0:f32 = CONST_F32 float 0.0{{0*}}e+00, {{(implicit-def dead \$arguments, )?}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    RETURN %0,
+# EL-LABEL:   name: undef_f32{{$}}
+# EL:         maxStack: 1{{$}}
+# RS-LABEL:   name: undef_f64{{$}}
+# RS:         {{^ +}}%0:f64 = CONST_F64 double 0.0{{0*}}e+00, {{(implicit-def dead \$arguments, )?}}implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    RETURN %0,
+# EL-LABEL:   name: undef_f64{{$}}
+# EL:         maxStack: 1{{$}}
+# EL-NOT:     IMPLICIT_DEF
+---
+name:            undef_i32
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    %0:i32 = IMPLICIT_DEF
+    RETURN %0, implicit-def dead $arguments
+...
+---
+name:            undef_i64
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ i64 ]
+body: |
+  bb.0:
+    %0:i64 = IMPLICIT_DEF
+    RETURN %0, implicit-def dead $arguments
+...
+---
+name:            undef_f32
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ f32 ]
+body: |
+  bb.0:
+    %0:f32 = IMPLICIT_DEF
+    RETURN %0, implicit-def dead $arguments
+...
+---
+name:            undef_f64
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ f64 ]
+body: |
+  bb.0:
+    %0:f64 = IMPLICIT_DEF
+    RETURN %0, implicit-def dead $arguments
+...
+
+# A constant used in another block is not carried across the block boundary on
+# the stack: it is rematerialized right before its use, and the original def,
+# now unused, is deleted.
+# RS-LABEL:   name: remat_cross_block{{$}}
+# RS:         bb.0:
+# RS-NOT:     CONST_I32
+# RS:         BR %bb.1,
+# RS:         bb.1:
+# RS:         {{^ +}}[[C:%[0-9]+]]:i32 = CONST_I32 5, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:    {{^ +}}RETURN [[C]], implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# EL-LABEL:   name: remat_cross_block{{$}}
+# EL:         maxStack: 1{{$}}
+# EL:         bb.0:
+# EL-NOT:     {{CONST_I32|LOCAL_}}
+# EL:         BR %bb.1,
+# EL:         bb.1:
+# EL:         [[C:%[0-9]+]]:i32 = CONST_I32 5,
+# EL-NEXT:    RETURN [[C]],
+# EL-NOT:     LOCAL_
+---
+name:            remat_cross_block
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    successors: %bb.1
+    %0:i32 = CONST_I32 5, implicit-def dead $arguments
+    BR %bb.1, implicit-def dead $arguments
+
+  bb.1:
+    RETURN %0, implicit-def dead $arguments
+...
+
+# A value that cannot be rematerialized and is used in another block stays in
+# a register (later a local): the stack is empty at every block boundary.
+# RS-LABEL:   name: copy_cross_block{{$}}
+# RS:         {{^ +}}%1:i32 = COPY_I32 %0, implicit-def dead $arguments{{$}}
+# RS-NEXT:    {{^ +}}BR %bb.1, implicit-def dead $arguments{{$}}
+# RS:         {{^ +}}RETURN %1, implicit-def dead $arguments{{$}}
+# EL-LABEL:   name: copy_cross_block{{$}}
+# EL:         maxStack: 1{{$}}
+# EL:         bb.0:
+# EL:         [[A:%[0-9]+]]:i32 = ARG_GET_I32 0,
+# EL-NEXT:    LOCAL_SET_I32 0, [[A]],
+# EL-NEXT:    BR %bb.1,
+# EL:         bb.1:
+# EL:         [[L:%[0-9]+]]:i32 = LOCAL_GET_I32 0,
+# EL-NEXT:    RETURN [[L]],
+---
+name:            copy_cross_block
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    successors: %bb.1
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i32 = COPY_I32 %0, implicit-def dead $arguments
+    BR %bb.1, implicit-def dead $arguments
+
+  bb.1:
+    RETURN %1, implicit-def dead $arguments
+...
+
+# ARGUMENT_<RC> defs represent incoming arguments, not instructions: they are
+# never stackified, and their uses read the argument (ldarg) in place.
+# RS-LABEL:   name: argument_not_stackified{{$}}
+# RS:         {{^ +}}%0:i32 = ARGUMENT_I32 0, implicit $arguments{{$}}
+# RS-NEXT:    {{^ +}}RETURN %0, implicit-def dead $arguments{{$}}
+# EL-LABEL:   name: argument_not_stackified{{$}}
+# EL:         maxStack: 1{{$}}
+# EL:         [[A:%[0-9]+]]:i32 = ARG_GET_I32 0,
+# EL-NEXT:    RETURN [[A]],
+---
+name:            argument_not_stackified
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    RETURN %0, implicit-def dead $arguments
+...
+
+#--- il.mir
+# The tee printed. This leg runs at llc's default -O2, so msil-reg-coloring
+# runs: the register def of the TEE_I32 and the argument vreg %0 do not
+# interfere (%0 is dead after the COPY_I32), so, as in WebAssemblyRegColoring,
+# the tee's register def gets the color of the argument (recon passes-frame.md
+# 7: a temporary colored like an argument vreg becomes starg). ExplicitLocals
+# then writes it with ARG_TEE_I32 0 ('dup; starg.s 0', plan 5.4) and reads it
+# with ARG_GET_I32 0: no CIL local, .maxstack 2 for the extra slot of the
+# 'dup'.
+# IL-LABEL: .method {{.*}}'tee_il'(
+# IL-SAME:  int32) cil managed{{$}}
+# IL-NEXT:  {{^\{$}}
+# IL-NEXT:  {{^}}  .maxstack 2{{$}}
+# IL-NEXT:  {{^}}  ldarg.0{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  starg.s 0{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg.0{{$}}
+# IL-NEXT:  {{^}}  ret{{$}}
+# IL-NEXT:  {{^}}} // end of method 'tee_il'{{$}}
+
+# The same tee, but the argument is read again (DROP_I32 %0) after the tee's
+# register def, so the two intervals overlap and coloring cannot merge them:
+# the tee's register def gets its own CIL local, written by LOCAL_TEE_I32 0
+# ('dup; stloc.0', plan 5.4) and read back with ldloc.0.
+# IL-LABEL: .method {{.*}}'tee_local_il'(
+# IL-SAME:  int32) cil managed{{$}}
+# IL-NEXT:  {{^\{$}}
+# IL-NEXT:  {{^}}  .maxstack 2{{$}}
+# IL-NEXT:  {{^}}  .locals (int32){{$}}
+# IL-NEXT:  {{^}}  ldarg.0{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  stloc.0{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg.0{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldloc.0{{$}}
+# IL-NEXT:  {{^}}  ret{{$}}
+# IL-NEXT:  {{^}}} // end of method 'tee_local_il'{{$}}
+
+# A moved single-use constant: no local, .maxstack 1.
+# IL-LABEL: .method {{.*}}'move_il'(
+# IL-SAME:  ) cil managed{{$}}
+# IL-NEXT:  {{^\{$}}
+# IL-NEXT:  {{^}}  .maxstack 1{{$}}
+# IL-NEXT:  {{^}}  {{ldc.i4.1|ldc.i4 1}}{{$}}
+# IL-NEXT:  {{^}}  conv.i{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldc.i4.s 42{{$}}
+# IL-NEXT:  {{^}}  ret{{$}}
+# IL-NEXT:  {{^}}} // end of method 'move_il'{{$}}
+
+# The tees of the other register classes (plan 5.4: a TEE_<RC> becomes
+# LOCAL_TEE_<RC> or ARG_TEE_<RC>, printed 'dup' and then the store). Each
+# COPY_<RC> is used right after its def and again at the end, so RegStackify
+# tees it at its first use. %3 and %4 start before the last reads of the
+# arguments they copy (the copies to %5 and %6), so they overlap them and get
+# the CIL locals 0 and 1 (I64 is native int, decision D2). %5, %6 and %7 start
+# where the last read of their argument ends, so RegColoring gives each the
+# color of its argument and the tee writes the argument: starg.s 0, 1 and 4
+# (4 is the first index whose ldarg has no .0-3 form).
+# IL-LABEL: .method {{.*}}'tee_classes_il'(
+# IL-SAME:  native int, float32, float64, float64, float64) cil managed{{$}}
+# IL-NEXT:  {{^\{$}}
+# IL-NEXT:  {{^}}  .maxstack 2{{$}}
+# IL-NEXT:  {{^}}  .locals (native int, float32){{$}}
+# IL-NEXT:  {{^}}  ldarg.0{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  stloc.0{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg.1{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  stloc.1{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg.0{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  starg.s 0{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg.1{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  starg.s 1{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg.s 4{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  starg.s 4{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldloc.0{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldloc.1{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg.0{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg.1{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg.s 4{{$}}
+# IL-NEXT:  {{^}}  ret{{$}}
+# IL-NEXT:  {{^}}} // end of method 'tee_classes_il'{{$}}
+
+# Tees at the long index, in tee_wide_il (257 float64 parameters), which
+# tee-wide.py appends to il.mir: 258 copies of argument 256, each used right
+# after its def and again at the end. The first 257 start before the last read
+# of argument 256 and are all live up to the reads at the end, so they overlap
+# it and each other and become the CIL locals 0 to 256, numbered in the order
+# they are first seen: 'dup' and then stloc.0-3, stloc.s 4 to 255 and
+# stloc 256. The last copy starts where argument 256 is read for the last time
+# and tees into argument 256 itself ('dup', starg 256). The reads at the end
+# use every ldloc form and pop the float64 values (DROP_F64).
+# IL-LABEL: .method {{.*}}'tee_wide_il'(
+# IL-SAME:  {{(float64, ){255}float64, float64}}) cil managed{{$}}
+# IL-NEXT:  {{^\{$}}
+# IL-NEXT:  {{^}}  .maxstack 2{{$}}
+# IL-NEXT:  {{^}}  .locals ({{(float64, ){255}float64, float64}}){{$}}
+# IL-NEXT:  {{^}}  ldarg 256{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  stloc.0{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg 256{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  stloc.1{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg 256{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  stloc.2{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg 256{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  stloc.3{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg 256{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  stloc.s 4{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg 256{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  stloc.s 5{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL:       {{^}}  stloc.s 255{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg 256{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  stloc 256{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg 256{{$}}
+# IL-NEXT:  {{^}}  dup{{$}}
+# IL-NEXT:  {{^}}  starg 256{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldloc.0{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldloc.1{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldloc.2{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldloc.3{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldloc.s 4{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldloc.s 5{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL:       {{^}}  ldloc.s 255{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldloc 256{{$}}
+# IL-NEXT:  {{^}}  pop{{$}}
+# IL-NEXT:  {{^}}  ldarg 256{{$}}
+# IL-NEXT:  {{^}}  ret{{$}}
+# IL-NEXT:  {{^}}} // end of method 'tee_wide_il'{{$}}
+--- |
+  source_filename = "reg-stackify-basic.c"
+
+  define i32 @tee_il(i32 %x) {
+    ret i32 %x
+  }
+
+  define i32 @tee_local_il(i32 %x) {
+    ret i32 %x
+  }
+
+  define i32 @move_il() {
+    ret i32 42
+  }
+
+  define double @tee_classes_il(i64 %a, float %b, double %c, double %d, double %e) {
+    ret double %e
+  }
+
+  define double @tee_wide_il(double %p0, double %p1, double %p2, double %p3, double %p4, double %p5, double %p6, double %p7, double %p8, double %p9, double %p10, double %p11, double %p12, double %p13, double %p14, double %p15, double %p16, double %p17, double %p18, double %p19, double %p20, double %p21, double %p22, double %p23, double %p24, double %p25, double %p26, double %p27, double %p28, double %p29, double %p30, double %p31, double %p32, double %p33, double %p34, double %p35, double %p36, double %p37, double %p38, double %p39, double %p40, double %p41, double %p42, double %p43, double %p44, double %p45, double %p46, double %p47, double %p48, double %p49, double %p50, double %p51, double %p52, double %p53, double %p54, double %p55, double %p56, double %p57, double %p58, double %p59, double %p60, double %p61, double %p62, double %p63, double %p64, double %p65, double %p66, double %p67, double %p68, double %p69, double %p70, double %p71, double %p72, double %p73, double %p74, double %p75, double %p76, double %p77, double %p78, double %p79, double %p80, double %p81, double %p82, double %p83, double %p84, double %p85, double %p86, double %p87, double %p88, double %p89, double %p90, double %p91, double %p92, double %p93, double %p94, double %p95, double %p96, double %p97, double %p98, double %p99, double %p100, double %p101, double %p102, double %p103, double %p104, double %p105, double %p106, double %p107, double %p108, double %p109, double %p110, double %p111, double %p112, double %p113, double %p114, double %p115, double %p116, double %p117, double %p118, double %p119, double %p120, double %p121, double %p122, double %p123, double %p124, double %p125, double %p126, double %p127, double %p128, double %p129, double %p130, double %p131, double %p132, double %p133, double %p134, double %p135, double %p136, double %p137, double %p138, double %p139, double %p140, double %p141, double %p142, double %p143, double %p144, double %p145, double %p146, double %p147, double %p148, double %p149, double %p150, double %p151, double %p152, double %p153, double %p154, double %p155, double %p156, double %p157, double %p158, double %p159, double %p160, double %p161, double %p162, double %p163, double %p164, double %p165, double %p166, double %p167, double %p168, double %p169, double %p170, double %p171, double %p172, double %p173, double %p174, double %p175, double %p176, double %p177, double %p178, double %p179, double %p180, double %p181, double %p182, double %p183, double %p184, double %p185, double %p186, double %p187, double %p188, double %p189, double %p190, double %p191, double %p192, double %p193, double %p194, double %p195, double %p196, double %p197, double %p198, double %p199, double %p200, double %p201, double %p202, double %p203, double %p204, double %p205, double %p206, double %p207, double %p208, double %p209, double %p210, double %p211, double %p212, double %p213, double %p214, double %p215, double %p216, double %p217, double %p218, double %p219, double %p220, double %p221, double %p222, double %p223, double %p224, double %p225, double %p226, double %p227, double %p228, double %p229, double %p230, double %p231, double %p232, double %p233, double %p234, double %p235, double %p236, double %p237, double %p238, double %p239, double %p240, double %p241, double %p242, double %p243, double %p244, double %p245, double %p246, double %p247, double %p248, double %p249, double %p250, double %p251, double %p252, double %p253, double %p254, double %p255, double %p256) {
+    ret double %p256
+  }
+...
+---
+name:            tee_il
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i32 = COPY_I32 %0, implicit-def dead $arguments
+    DROP_I32 %1, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+---
+name:            tee_local_il
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i32 = COPY_I32 %0, implicit-def dead $arguments
+    DROP_I32 %1, implicit-def dead $arguments
+    DROP_I32 %0, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+---
+name:            move_il
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    %0:i32 = CONST_I32 42, implicit-def dead $arguments
+    dead %1:i64 = CONST_I64 1, implicit-def dead $arguments
+    RETURN %0, implicit-def dead $arguments
+...
+---
+name:            tee_classes_il
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i64, f32, f64, f64, f64 ]
+  results: [ f64 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i64 = ARGUMENT_I64 0, implicit $arguments
+    %1:f32 = ARGUMENT_F32 1, implicit $arguments
+    %2:f64 = ARGUMENT_F64 4, implicit $arguments
+    %3:i64 = COPY_I64 %0, implicit-def dead $arguments
+    DROP_I64 %3, implicit-def dead $arguments
+    %4:f32 = COPY_F32 %1, implicit-def dead $arguments
+    DROP_F32 %4, implicit-def dead $arguments
+    %5:i64 = COPY_I64 %0, implicit-def dead $arguments
+    DROP_I64 %5, implicit-def dead $arguments
+    %6:f32 = COPY_F32 %1, implicit-def dead $arguments
+    DROP_F32 %6, implicit-def dead $arguments
+    %7:f64 = COPY_F64 %2, implicit-def dead $arguments
+    DROP_F64 %7, implicit-def dead $arguments
+    DROP_I64 %3, implicit-def dead $arguments
+    DROP_F32 %4, implicit-def dead $arguments
+    DROP_I64 %5, implicit-def dead $arguments
+    DROP_F32 %6, implicit-def dead $arguments
+    RETURN %7, implicit-def dead $arguments
+...
+
+#--- tee-wide.py
+# Prints the machine function of tee_wide_il (IR and checks in il.mir), which
+# the RUN lines append to il.mir: argument 256 is copied 258 times, and each
+# copy %1 to %258 is used right after its def and again at the end (%258 by
+# the RETURN).
+import sys
+
+n = 257
+dead = ", implicit-def dead $arguments"
+lines = [
+    "---",
+    "name:            tee_wide_il",
+    "tracksRegLiveness: true",
+    "machineFunctionInfo:",
+    "  params:  [ " + ", ".join(["f64"] * n) + " ]",
+    "  results: [ f64 ]",
+    "body: |",
+    "  bb.0:",
+    "    liveins: $arguments",
+    "    %0:f64 = ARGUMENT_F64 256, implicit $arguments",
+]
+for v in range(1, n + 2):
+    lines.append("    %%%d:f64 = COPY_F64 %%0%s" % (v, dead))
+    lines.append("    DROP_F64 %%%d%s" % (v, dead))
+for v in range(1, n + 1):
+    lines.append("    DROP_F64 %%%d%s" % (v, dead))
+lines.append("    RETURN %%%d%s" % (n + 1, dead))
+lines.append("...")
+sys.stdout.reconfigure(newline="\n")
+print("\n".join(lines))

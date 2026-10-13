@@ -11,34 +11,40 @@
 /// of machine-dependent LLVM code to ILAsm text.
 ///
 /// The module header comes from emitStartOfAsmFile, each function becomes a
-/// global method of '<Module>', and the module trailer (P/Invoke declarations,
-/// the data image, the address fields of globals, the module initializer and
-/// the entry point) comes from emitEndOfAsmFile. ILAsm resolves forward
-/// references to methods and fields, so code refers to globals symbolically
-/// and the trailer is laid out after the last function. Everything else the
-/// base AsmPrinter would print (sections, linkage and visibility directives,
-/// alignment, constant pools, jump tables) is suppressed here or by
-/// MSILMCAsmInfo.
+/// global method of '<Module>' (header, .maxstack, .locals, the instructions
+/// through MSILMCInstLower and MSILInstPrinter, and the closing brace), and
+/// the module trailer (P/Invoke declarations, the data image, the address
+/// fields of globals, the module initializer and the entry point) comes from
+/// emitEndOfAsmFile. ILAsm resolves forward references to methods and fields,
+/// so code refers to globals symbolically and the trailer is laid out after
+/// the last function. Everything else the base AsmPrinter would print
+/// (sections, linkage and visibility directives, alignment, constant pools,
+/// jump tables) is suppressed here or by MSILMCAsmInfo.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "MSILAsmPrinter.h"
+#include "MCTargetDesc/MSILMCExpr.h"
 #include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "MCTargetDesc/MSILTargetStreamer.h"
 #include "MSIL.h"
+#include "MSILMCInstLower.h"
 #include "MSILMachineFunctionInfo.h"
 #include "MSILSubtarget.h"
 #include "MSILUtilities.h"
 #include "TargetInfo/MSILTargetInfo.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalAlias.h"
@@ -46,6 +52,8 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
@@ -57,6 +65,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
+#include <algorithm>
 #include <cassert>
 #include <string>
 
@@ -91,6 +100,74 @@ static std::string getIRName(const GlobalValue &GV) {
   GV.printAsOperand(OS, /*PrintType=*/false);
   return Name;
 }
+
+/// The signature that \p MFI records (the parameters and results lowered by
+/// ISel), in CIL types. The method header prints MSILAsmPrinter::getSignature
+/// instead, which call sites share; the two must agree.
+[[maybe_unused]] static MSIL::Signature
+getFunctionInfoSignature(const MSILFunctionInfo &MFI,
+                         unsigned PointerSizeInBits) {
+  MSIL::Signature Sig;
+  for (MVT VT : MFI.getResults())
+    Sig.Results.push_back(MSIL::toValType(VT, PointerSizeInBits));
+  for (MVT VT : MFI.getParams())
+    Sig.Params.push_back(MSIL::toValType(VT, PointerSizeInBits));
+  return Sig;
+}
+
+/// ldarg, starg, ldloc and stloc take 16-bit indices, and ilasm silently
+/// truncates larger ones. Index 0xFFFF is avoided.
+static constexpr size_t MaxArgsOrLocals = 0xFFFF;
+
+/// The name of the generated entry point (decision D27). The '<msil>' prefix
+/// cannot be spelled in C.
+static constexpr StringRef EntryPointName = "<msil>Main";
+
+namespace {
+/// The body of a method that the printer writes itself ('<msil>Main', and the
+/// module initializer): CIL lines with their stack effects, so that the
+/// .maxstack of the method is computed, not guessed (the JIT rejects a method
+/// whose .maxstack is too small with InvalidProgramException).
+class SynthesizedBody {
+  SmallVector<std::string, 0> Lines;
+  unsigned Depth = 0;
+  unsigned MaxStack = 0;
+
+public:
+  /// One CIL instruction that pops \p Pops values and then pushes \p Pushes.
+  void addInst(const Twine &Text, unsigned Pops, unsigned Pushes) {
+    assert(Depth >= Pops && "synthesized code underflows the stack");
+    Depth = Depth - Pops + Pushes;
+    MaxStack = std::max(MaxStack, Depth);
+    Lines.push_back(("  " + Text).str());
+  }
+
+  /// A branch that pops \p Pops values. Synthesized code branches and joins
+  /// with an empty evaluation stack only, so every label has depth 0.
+  void addBranch(const Twine &Text, unsigned Pops) {
+    addInst(Text, Pops, 0);
+    assert(Depth == 0 && "synthesized code branches with a non-empty stack");
+  }
+
+  /// A branch target (see addBranch).
+  void addLabel(StringRef Name) {
+    assert(Depth == 0 && "synthesized code joins with a non-empty stack");
+    Lines.push_back((Name + ":").str());
+  }
+
+  /// Writes .maxstack, the .locals line for \p Locals (the comma-separated
+  /// types; nothing if empty) and the instructions.
+  void emit(MSILTargetStreamer &TS, StringRef Locals) const {
+    assert(Depth == 0 && "synthesized code falls off the end of the method");
+    TS.emitMaxStack(MaxStack);
+    // Never 'init' (decision D13): every local is written before it is read.
+    if (!Locals.empty())
+      TS.emitILLine("  .locals (" + Locals + ")");
+    for (const std::string &Line : Lines)
+      TS.emitILLine(Line);
+  }
+};
+} // end anonymous namespace
 
 //===----------------------------------------------------------------------===//
 // Signature services.
@@ -206,11 +283,14 @@ bool MSILAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   }
 
   AsmPrinter::runOnMachineFunction(MF);
-  // Close the method after everything the base class prints, including the
-  // end-of-function label that -g adds after emitFunctionBodyEnd (NVPTX does
-  // the same).
-  getTargetStreamer().emitMethodEnd(MSIL::getILName(F, TM));
+  assert(!InMethod && "emitJumpTableInfo closes every method");
   return false;
+}
+
+void MSILAsmPrinter::emitMethodEnd() {
+  assert(InMethod && "no method to close");
+  getTargetStreamer().emitMethodEnd(MSIL::getILName(MF->getFunction(), TM));
+  InMethod = false;
 }
 
 //===----------------------------------------------------------------------===//
@@ -235,9 +315,130 @@ void MSILAsmPrinter::emitStartOfAsmFile(Module &M) {
 }
 
 void MSILAsmPrinter::emitEndOfAsmFile(Module &M) {
-  // The module trailer comes with the features that need it: the entry point
-  // in M3, the P/Invoke declarations, the data image, the address fields and
-  // the module initializer in M8.
+  // The P/Invoke declarations, the data image, the address fields and the
+  // module initializer come with globals and P/Invoke in M8, before the entry
+  // point. An available_externally main has no method (no MachineFunction is
+  // emitted for it), so it gets no entry point either.
+  if (const Function *Main = M.getFunction("main");
+      Main && !Main->isDeclarationForLinker())
+    emitEntryPoint(*Main);
+}
+
+void MSILAsmPrinter::emitEntryPoint(const Function &Main) {
+  // C's two portable shapes of main, 'int main(void)' and
+  // 'int main(int, char **)' (decision D27).
+  const FunctionType *FTy = Main.getFunctionType();
+  LLVMContext &Ctx = Main.getContext();
+  bool HasArgs = FTy->getNumParams() == 2 &&
+                 FTy->getParamType(0)->isIntegerTy(32) &&
+                 FTy->getParamType(1) == PointerType::getUnqual(Ctx);
+  if (!FTy->getReturnType()->isIntegerTy(32) || FTy->isVarArg() ||
+      (FTy->getNumParams() != 0 && !HasArgs)) {
+    Ctx.diagnose(
+        DiagnosticInfoUnsupported(Main, "unsupported signature for main"));
+    return;
+  }
+
+  // The call spells main's signature exactly as its method header does.
+  const MSIL::Signature &Sig = getSignature(Main);
+  assert(Sig.Results.size() == 1 && Sig.Results.front() == MSIL::ValType::I32 &&
+         Sig.Params.size() == FTy->getNumParams() &&
+         "main's CIL signature does not match its IR type");
+  SmallString<64> Call;
+  raw_svector_ostream CallOS(Call);
+  CallOS << "call ";
+  MAI.printExpr(CallOS, *MSILMemberRefExpr::createMethod(
+                            MSIL::getILName(Main, TM), &Sig, OutContext));
+
+  SynthesizedBody Body;
+  SmallString<64> Locals;
+  if (HasArgs) {
+    // argc and a NULL-terminated argv as a native main gets them:
+    // Environment.GetCommandLineArgs() starts with the program (the .dll),
+    // and Marshal.StringToHGlobalAnsi converts to the native narrow encoding
+    // (UTF-8 on Unix, the ANSI code page on Windows). The strings and the
+    // array are never freed: they live as long as the program.
+    // Locals: 0 = the string[], 1 = argc, 2 = argv, 3 = i.
+    MSIL::ValType PtrType = Sig.Params[1];
+    Locals = "string[], int32, ";
+    Locals += MSIL::getValTypeName(PtrType);
+    Locals += ", int32";
+    std::string PtrSize =
+        ("ldc.i4." + Twine(Main.getDataLayout().getPointerSize())).str();
+    // Pushes the address of argv[<IndexLocal>].
+    auto AddArgvSlotAddress = [&](StringRef IndexLocal) {
+      Body.addInst("ldloc.2", 0, 1);
+      Body.addInst(IndexLocal, 0, 1);
+      Body.addInst("conv.i", 1, 1);
+      Body.addInst(PtrSize, 0, 1);
+      Body.addInst("mul", 2, 1);
+      Body.addInst("add", 2, 1);
+    };
+
+    Body.addInst(
+        "call string[] [mscorlib]System.Environment::GetCommandLineArgs()", 0,
+        1);
+    Body.addInst("stloc.0", 1, 0);
+    // argc = args.Length
+    Body.addInst("ldloc.0", 0, 1);
+    Body.addInst("ldlen", 1, 1);
+    Body.addInst("conv.i4", 1, 1);
+    Body.addInst("stloc.1", 1, 0);
+    // argv = AllocHGlobal((argc + 1) * sizeof(char *))
+    Body.addInst("ldloc.1", 0, 1);
+    Body.addInst("ldc.i4.1", 0, 1);
+    Body.addInst("add", 2, 1);
+    Body.addInst("conv.i", 1, 1);
+    Body.addInst(PtrSize, 0, 1);
+    Body.addInst("mul", 2, 1);
+    Body.addInst("call native int [mscorlib]System.Runtime.InteropServices."
+                 "Marshal::AllocHGlobal(native int)",
+                 1, 1);
+    Body.addInst("stloc.2", 1, 0);
+    // for (i = 0; i < argc; ++i) argv[i] = StringToHGlobalAnsi(args[i])
+    Body.addInst("ldc.i4.0", 0, 1);
+    Body.addInst("stloc.3", 1, 0);
+    Body.addBranch("br @argv_cond", 0);
+    Body.addLabel("@argv_loop");
+    AddArgvSlotAddress("ldloc.3");
+    Body.addInst("ldloc.0", 0, 1);
+    Body.addInst("ldloc.3", 0, 1);
+    Body.addInst("ldelem.ref", 2, 1);
+    Body.addInst("call native int [mscorlib]System.Runtime.InteropServices."
+                 "Marshal::StringToHGlobalAnsi(string)",
+                 1, 1);
+    Body.addInst("stind.i", 2, 0);
+    Body.addInst("ldloc.3", 0, 1);
+    Body.addInst("ldc.i4.1", 0, 1);
+    Body.addInst("add", 2, 1);
+    Body.addInst("stloc.3", 1, 0);
+    Body.addLabel("@argv_cond");
+    Body.addInst("ldloc.3", 0, 1);
+    Body.addInst("ldloc.1", 0, 1);
+    Body.addBranch("blt @argv_loop", 2);
+    // argv[argc] = NULL
+    AddArgvSlotAddress("ldloc.1");
+    Body.addInst("ldc.i4.0", 0, 1);
+    Body.addInst("conv.i", 1, 1);
+    Body.addInst("stind.i", 2, 0);
+    // return main(argc, argv)
+    Body.addInst("ldloc.1", 0, 1);
+    Body.addInst("ldloc.2", 0, 1);
+  }
+  Body.addInst(Call, Sig.Params.size(), 1);
+  Body.addInst("ret", 1, 0);
+
+  MSILTargetStreamer &TS = getTargetStreamer();
+  SmallString<64> Header;
+  raw_svector_ostream HeaderOS(Header);
+  HeaderOS << ".method private hidebysig static int32 ";
+  MSIL::printQuotedName(HeaderOS, EntryPointName);
+  HeaderOS << "(string[] args) cil managed";
+  TS.emitILLine(Header);
+  TS.emitILLine("{");
+  TS.emitEntryPoint();
+  Body.emit(TS, Locals);
+  TS.emitMethodEnd(EntryPointName);
 }
 
 void MSILAsmPrinter::emitLinkage(const GlobalValue *GV, MCSymbol *GVSym) const {
@@ -253,7 +454,15 @@ void MSILAsmPrinter::emitConstantPool() {
 }
 
 void MSILAsmPrinter::emitJumpTableInfo() {
-  // Nothing to do: BR_TABLE_I32 prints 'switch' with its targets inline.
+  // MSIL has no out-of-line jump tables (BR_TABLE_I32 prints 'switch' with its
+  // targets inline), so this hook closes the method: the brace must follow
+  // the body (plan 5.1, decision D29). AsmPrinter::emitFunctionBody calls it
+  // for every function, after the end-of-function label, which the base
+  // class prints after emitFunctionBodyEnd whenever the function has begin
+  // and end labels (always with -g), and before the post-function sections,
+  // the '-- End function' comment and the blank line. Closing here keeps that
+  // label inside the method and puts the brace on the very next line.
+  emitMethodEnd();
 }
 
 void MSILAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
@@ -291,18 +500,46 @@ void MSILAsmPrinter::emitGlobalIFunc(Module &M, const GlobalIFunc &GI) {
 }
 
 void MSILAsmPrinter::emitFunctionEntryLabel() {
-  // STUB: the method header (TS.emitMethodBegin) is implemented in M3.
-  reportFatalUsageError("MSIL: function bodies are implemented in M3");
+  // The method header takes the place of the entry label: CIL code never
+  // refers to a method by address, only by its name and signature.
+  const Function &F = MF->getFunction();
+  const MSIL::Signature &Sig = getSignature(F);
+  assert(getFunctionInfoSignature(
+             *MFI, F.getDataLayout().getPointerSizeInBits()) == Sig &&
+         "the method header and the lowered arguments and results disagree");
+  getTargetStreamer().emitMethodBegin(
+      {MSIL::getILName(F, TM), &Sig, /*Public=*/!F.hasLocalLinkage()});
+  InMethod = true;
 }
 
 void MSILAsmPrinter::emitFunctionBodyStart() {
-  // STUB: .maxstack and .locals are implemented in M3.
-  reportFatalUsageError("MSIL: function bodies are implemented in M3");
+  const Function &F = MF->getFunction();
+  if (MFI->getParams().size() > MaxArgsOrLocals ||
+      MFI->getLocals().size() > MaxArgsOrLocals)
+    F.getContext().diagnose(DiagnosticInfoUnsupported(
+        F, "a CIL method has at most " + Twine(MaxArgsOrLocals) +
+               " arguments and " + Twine(MaxArgsOrLocals) + " locals"));
+
+  // .maxstack comes from MSILStackCheck, the last machine pass.
+  MSILTargetStreamer &TS = getTargetStreamer();
+  TS.emitMaxStack(MFI->getMaxStack());
+  unsigned PointerSizeInBits = F.getDataLayout().getPointerSizeInBits();
+  SmallVector<MSIL::ValType, 16> Locals;
+  for (MVT VT : MFI->getLocals())
+    Locals.push_back(MSIL::toValType(VT, PointerSizeInBits));
+  TS.emitLocals(Locals);
 }
 
 void MSILAsmPrinter::emitInstruction(const MachineInstr *MI) {
-  // STUB: instruction emission through MSILMCInstLower is implemented in M3.
-  reportFatalUsageError("MSIL: function bodies are implemented in M3");
+  // The ARGUMENT_* pseudos only give the incoming arguments virtual
+  // registers; MSILExplicitLocals has turned their uses into ldarg.
+  if (MSIL::isArgument(MI->getOpcode()))
+    return;
+
+  MSILMCInstLower MCInstLowering(OutContext, *this);
+  MCInst TmpInst;
+  MCInstLowering.lower(MI, TmpInst);
+  EmitToStreamer(*OutStreamer, TmpInst);
 }
 
 char MSILAsmPrinter::ID = 0;

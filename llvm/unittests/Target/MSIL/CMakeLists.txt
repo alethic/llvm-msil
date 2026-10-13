@@ -19,6 +19,7 @@ set(LLVM_LINK_COMPONENTS
 
 add_llvm_target_unittest(MSILTests
   MSILNameQuotingTest.cpp
+  MSILStackEffectTest.cpp
   MSILTargetMachineTest.cpp
   MSILTargetStreamerTest.cpp
   MSILTypeUtilitiesTest.cpp

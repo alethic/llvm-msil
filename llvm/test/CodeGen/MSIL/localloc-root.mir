@@ -1,0 +1,166 @@
+# CIL 'localloc' throws InvalidProgramException unless its size is the only
+# value on the evaluation stack (ECMA-335 III.3.47; recon passes-frame.md 5.2
+# and 5.5). MSILRegStackify therefore never stackifies the def of a LOCALLOC
+# (ImplementationPlan.md M3.a, next to the ARGUMENT skip): a LOCALLOC is always
+# the root of its own expression tree, only its size operand is pushed in front
+# of it, and its result goes through a CIL local, even when it has a single use
+# right after it, where any other def would be stackified. MSILStackCheck
+# rejects a LOCALLOC that runs with a stack depth other than 1 (see
+# stack-check-errors.mir); chaining it after RegStackify and ExplicitLocals
+# proves that the shapes below satisfy it.
+#
+# RS checks the MIR after RegStackify alone (a stackified def and its user carry
+# an implicit VALUE_STACK def and use, a LOCALLOC never does); EL checks the
+# RegStackify, ExplicitLocals and MSILStackCheck chain; IL prints the
+# single-use case.
+
+# RUN: split-file %s %t
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=msil-reg-stackify -verify-machineinstrs \
+# RUN:   %t/mir.mir -o - | FileCheck %s --check-prefix=RS
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -run-pass=msil-reg-stackify -verify-machineinstrs \
+# RUN:   %t/mir.mir -o - | FileCheck %s --check-prefix=RS
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs \
+# RUN:   -run-pass=msil-reg-stackify,msil-explicit-locals,msil-stack-check %t/mir.mir -o - \
+# RUN:   | FileCheck %s --check-prefix=EL
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs \
+# RUN:   -run-pass=msil-reg-stackify,msil-explicit-locals,msil-stack-check %t/mir.mir -o - \
+# RUN:   | FileCheck %s --check-prefix=EL
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -start-before=msil-reg-stackify -asm-verbose=false \
+# RUN:   -verify-machineinstrs %t/il.mir -o - | FileCheck %s --check-prefix=IL
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -start-before=msil-reg-stackify -asm-verbose=false \
+# RUN:   -verify-machineinstrs %t/il.mir -o - | FileCheck %s --check-prefix=IL
+# RUN: %if ilasm %{ llc -mtriple=x86_64-unknown-linux-gnu-msil -start-before=msil-reg-stackify \
+# RUN:   %t/il.mir -o %t/il.il && %ilasm-verify -output=%t/il.dll %t/il.il %}
+
+#--- mir.mir
+# The LOCALLOC result is the second operand of a call whose first operand is a
+# constant. Stackifying it would evaluate the constant first and run the
+# localloc with the constant beneath its size. Instead the constant alone is
+# moved down to the call and stackified, and the localloc result is stored to
+# local 0 and read back after the constant, so the localloc runs at depth 1 and
+# the call sees both operands in order.
+# RS-LABEL:  name: second_operand{{$}}
+# RS:        body:
+# RS:        {{^ +}}%2:i64 = LOCALLOC %0, implicit-def dead $arguments{{$}}
+# RS-NEXT:   {{^ +}}%1:i32 = CONST_I32 7, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:   {{^ +}}CALL &msil_sink, %1, %2, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# EL-LABEL:  name: second_operand{{$}}
+# EL:        maxStack: 2{{$}}
+# EL:        body:
+# EL:        [[N:%[0-9]+]]:i32 = ARG_GET_I32 0,
+# EL-NEXT:   [[P:%[0-9]+]]:i64 = LOCALLOC [[N]],
+# EL-NEXT:   LOCAL_SET_I64 0, [[P]],
+# EL-NEXT:   [[C:%[0-9]+]]:i32 = CONST_I32 7,
+# EL-NEXT:   [[L:%[0-9]+]]:i64 = LOCAL_GET_I64 0,
+# EL-NEXT:   CALL &msil_sink, [[C]], [[L]],
+# EL-NEXT:   RETURN implicit-def dead $arguments
+---
+name:            second_operand
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i32 = CONST_I32 7, implicit-def dead $arguments
+    %2:i64 = LOCALLOC %0, implicit-def dead $arguments
+    CALL &msil_sink, %1, %2, implicit-def dead $arguments
+    RETURN implicit-def dead $arguments
+...
+
+# A LOCALLOC with a single use right after it is still not stackified, while
+# its size, a constant, is: the constant is the only value pushed for the
+# localloc, and the result goes through local 0.
+# RS-LABEL:  name: single_use{{$}}
+# RS:        body:
+# RS:        {{^ +}}%0:i32 = CONST_I32 64, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:   {{^ +}}%1:i64 = LOCALLOC %0, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:   {{^ +}}RETURN %1, implicit-def dead $arguments{{$}}
+# EL-LABEL:  name: single_use{{$}}
+# EL:        maxStack: 1{{$}}
+# EL:        body:
+# EL:        [[S:%[0-9]+]]:i32 = CONST_I32 64,
+# EL-NEXT:   [[P:%[0-9]+]]:i64 = LOCALLOC [[S]],
+# EL-NEXT:   LOCAL_SET_I64 0, [[P]],
+# EL-NEXT:   [[L:%[0-9]+]]:i64 = LOCAL_GET_I64 0,
+# EL-NEXT:   RETURN [[L]],
+---
+name:            single_use
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ ]
+  results: [ i64 ]
+body: |
+  bb.0:
+    %0:i32 = CONST_I32 64, implicit-def dead $arguments
+    %1:i64 = LOCALLOC %0, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+
+# The same with an argument as the size and the result used twice: neither a
+# stackified def nor a tee; every use reads local 0.
+# RS-LABEL:  name: two_uses{{$}}
+# RS:        body:
+# RS:        {{^ +}}%1:i64 = LOCALLOC %0, implicit-def dead $arguments{{$}}
+# RS-NEXT:   {{^ +}}DROP_I64 %1, implicit-def dead $arguments{{$}}
+# RS-NEXT:   {{^ +}}RETURN %1, implicit-def dead $arguments{{$}}
+# EL-LABEL:  name: two_uses{{$}}
+# EL:        maxStack: 1{{$}}
+# EL:        body:
+# EL:        [[N:%[0-9]+]]:i32 = ARG_GET_I32 0,
+# EL-NEXT:   [[P:%[0-9]+]]:i64 = LOCALLOC [[N]],
+# EL-NEXT:   LOCAL_SET_I64 0, [[P]],
+# EL-NEXT:   [[L:%[0-9]+]]:i64 = LOCAL_GET_I64 0,
+# EL-NEXT:   DROP_I64 [[L]],
+# EL-NEXT:   [[L:%[0-9]+]]:i64 = LOCAL_GET_I64 0,
+# EL-NEXT:   RETURN [[L]],
+# EL-NOT:    TEE
+---
+name:            two_uses
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i64 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i64 = LOCALLOC %0, implicit-def dead $arguments
+    DROP_I64 %1, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+
+#--- il.mir
+# IL-LABEL: .method {{.*}}'localloc_il'(
+# IL-SAME:  int32) cil managed{{$}}
+# IL-NEXT:  {{^\{$}}
+# IL-NEXT:  {{^}}  .maxstack 1{{$}}
+# IL-NEXT:  {{^}}  .locals (native int){{$}}
+# IL-NEXT:  {{^}}  ldarg.0{{$}}
+# IL-NEXT:  {{^}}  localloc{{$}}
+# IL-NEXT:  {{^}}  stloc.0{{$}}
+# IL-NEXT:  {{^}}  ldloc.0{{$}}
+# IL-NEXT:  {{^}}  ret{{$}}
+# IL-NEXT:  {{^}}} // end of method 'localloc_il'{{$}}
+--- |
+  source_filename = "localloc-root.c"
+
+  define ptr @localloc_il(i32 %n) {
+    ret ptr null
+  }
+...
+---
+name:            localloc_il
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i64 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i64 = LOCALLOC %0, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...

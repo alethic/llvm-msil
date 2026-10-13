@@ -8,13 +8,15 @@
 ; poison in all its uses and erased, a thread_local global becomes an ordinary
 ; global, and llvm.global_dtors is erased. Each case runs the whole pipeline on
 ; two triples, and once with -stop-after=msil-prepare-ir to check the
-; diagnostics of MSILPrepareIR alone and the IR it leaves behind.
+; diagnostics of MSILPrepareIR alone and the IR it leaves behind. M3 adds the
+; identifier length limit (D11 amended), garbage collection strategies and the
+; stack map intrinsics (amendment log 2026-10-13, fix-loop rows for fix-5).
 ;
-; Function bodies are implemented in M3 (the M2 lowering hooks are stubs), so
-; nothing here may leave a definition for instruction selection: functions that
-; use a diagnosed symbol are available_externally, which is never
-; code-generated but still has to be rewritten, and the resolver an ifunc needs
-; is a variadic definition, which loses its body.
+; Calls are implemented in M4 and global variables in M8, so no definition that
+; is compiled here may call a function or use a global: functions that use a
+; diagnosed symbol are available_externally, which is never code-generated but
+; still has to be rewritten, and the resolver an ifunc needs is a variadic
+; definition, which loses its body. Leaf definitions compile since M3.
 
 ; DEFINE: %{nocrash} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
 ; RUN: split-file %s %t
@@ -209,6 +211,139 @@
 ; RUN: FileCheck %s --check-prefix=NOCFI-AS1 --input-file=%t/nocfi-as1.err
 ; NOCFI-AS1: error: {{.*}}global variable @msil_nocfi_as1_global in address space 1 is not supported for MSIL
 ; NOCFI-AS1-IR: @msil_nocfi_as1_ref = global ptr addrspace(1) poison
+
+; IL identifiers are at most 1023 bytes (D11 and plan 5.1 amended): Framework
+; and NuGet ilasm reject a name of 1024 or more UTF-8 bytes ('name too long'),
+; counted after they decode the \' and \134 escapes. genname.py takes
+; KIND:BYTES arguments and prints, for each, a definition returning 1 whose
+; name has BYTES bytes: 'a' (ascii), U+00E9 and a final 'a' for an odd count
+; (e-acute), or a quote, a backslash and then 'a' (quote-backslash); or a
+; declaration named with 'b', called by an available_externally function
+; (used-decl); or a declaration named with 'c' and never used (unused-decl).
+; The well-formed '@ok' comes last. At 1023 bytes everything compiles silently
+; and assembles, and the declarations are not reported.
+; RUN: %python %t/genname.py ascii:1023 e-acute:1023 quote-backslash:1023 used-decl:1023 unused-decl:1024 \
+; RUN:   > %t/name-1023.ll
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/name-1023.ll \
+; RUN:   -o %t/name-1023.lnx.il 2>&1 | count 0
+; RUN: FileCheck %s --check-prefix=NAME-OK --input-file=%t/name-1023.lnx.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/name-1023.ll \
+; RUN:   -o %t/name-1023.win.il 2>&1 | count 0
+; RUN: FileCheck %s --check-prefix=NAME-OK --input-file=%t/name-1023.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/name-1023.lnx.dll %t/name-1023.lnx.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/name-1023.win.dll %t/name-1023.win.il %}
+
+; NAME-OK:      {{^}}.method public static int32 '{{a+}}'() cil managed{{$}}
+; NAME-OK-NEXT: {{^\{$}}
+; NAME-OK-NEXT: {{^}}  .maxstack 1{{$}}
+; NAME-OK-NEXT: {{^}}  ldc.i4.1{{$}}
+; NAME-OK-NEXT: {{^}}  ret{{$}}
+; NAME-OK-NEXT: {{^}}} // end of method '{{a+}}'{{$}}
+; NAME-OK:      {{^}}.method public static int32 '{{[^a']+}}a'() cil managed{{$}}
+; NAME-OK:      {{^}}.method public static int32 '\'\134{{a+}}'() cil managed{{$}}
+; NAME-OK:      {{^}}.method public static int32 'ok'() cil managed{{$}}
+
+; At 1024 bytes each definition and the used declaration is an error naming
+; the function in full, the definitions lose their bodies, and '@ok' still
+; compiles to IL that assembles. llc deletes its -o file after an error, so
+; that IL is taken from stdout.
+; RUN: %python %t/genname.py ascii:1024 e-acute:1024 quote-backslash:1024 used-decl:1024 > %t/name-1024.ll
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/name-1024.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=NAME-LONG --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/name-1024.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=NAME-LONG --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/name-1024.ll -o - 2>/dev/null \
+; RUN:   | FileCheck %s --check-prefix=NAME-LONG-IR
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/name-1024.ll \
+; RUN:   > %t/name-1024.win.il
+; RUN: FileCheck %s --check-prefix=NAME-LONG-IL --input-file=%t/name-1024.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/name-1024.dll %t/name-1024.win.il %}
+
+; NAME-LONG: error: {{.*}}in function {{a+}} i32 (): identifier of 1024 bytes is longer than the 1023 bytes ilasm accepts
+; NAME-LONG: error: {{.*}}in function {{[^a' ]+}} i32 (): identifier of 1024 bytes is longer than the 1023 bytes ilasm accepts
+; NAME-LONG: error: {{.*}}in function '\{{a+}} i32 (): identifier of 1024 bytes is longer than the 1023 bytes ilasm accepts
+; NAME-LONG: error: {{.*}}in function {{b+}} i32 (): identifier of 1024 bytes is longer than the 1023 bytes ilasm accepts
+
+; NAME-LONG-IR: declare i32 @{{a+}}(){{$}}
+; NAME-LONG-IR: declare i32 @"{{(\\C3\\A9)+}}"(){{$}}
+; NAME-LONG-IR: declare i32 @"'\\{{a+}}"(){{$}}
+; NAME-LONG-IR: declare i32 @{{b+}}(){{$}}
+; NAME-LONG-IR: define i32 @ok()
+
+; NAME-LONG-IL-NOT: .method
+; NAME-LONG-IL:     {{^}}.method public static int32 'ok'() cil managed{{$}}
+; NAME-LONG-IL-NOT: .method
+
+; Garbage collection strategies: MSIL emits no stack maps or GC frame tables,
+; so a definition with any gc is an error. It loses its body and its strategy
+; before GC lowering instantiates the strategy; otherwise the AsmPrinter would
+; print native frame tables ("erlang") or crash ("ocaml"), and the shadow stack
+; lowering would add a global ("shadow-stack"). An available_externally
+; definition is never compiled and only loses its strategy. The definition
+; without a gc still compiles, and the IL has no frame tables.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/gc.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=GC --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/gc.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=GC --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/gc.ll -o - 2>/dev/null \
+; RUN:   | FileCheck %s --check-prefix=GC-IR
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/gc.ll > %t/gc.lnx.il
+; RUN: FileCheck %s --check-prefix=GC-IL --input-file=%t/gc.lnx.il --implicit-check-not=.short --implicit-check-not=.p2align
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/gc.ll > %t/gc.win.il
+; RUN: FileCheck %s --check-prefix=GC-IL --input-file=%t/gc.win.il --implicit-check-not=.short --implicit-check-not=.p2align
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/gc.dll %t/gc.win.il %}
+
+; GC: error: {{.*}}in function msil_gc_erlang i32 (): garbage collection strategy 'erlang' is not supported for MSIL
+; GC: error: {{.*}}in function msil_gc_ocaml i32 (): garbage collection strategy 'ocaml' is not supported for MSIL
+; GC: error: {{.*}}in function msil_gc_shadow_stack i32 (): garbage collection strategy 'shadow-stack' is not supported for MSIL
+; GC: error: {{.*}}in function msil_gc_statepoint_example i32 (): garbage collection strategy 'statepoint-example' is not supported for MSIL
+; GC: error: {{.*}}in function msil_gc_coreclr i32 (): garbage collection strategy 'coreclr' is not supported for MSIL
+
+; GC-IR: declare i32 @msil_gc_erlang(){{$}}
+; GC-IR: declare i32 @msil_gc_ocaml(){{$}}
+; GC-IR: declare i32 @msil_gc_shadow_stack(){{$}}
+; GC-IR: declare i32 @msil_gc_statepoint_example(){{$}}
+; GC-IR: declare i32 @msil_gc_coreclr(){{$}}
+; GC-IR: define available_externally i32 @msil_gc_avail() {{\{$}}
+; GC-IR: define i32 @msil_gc_free() {{\{$}}
+
+; GC-IL-NOT: .method
+; GC-IL:     {{^}}.method public static int32 'msil_gc_free'() cil managed{{$}}
+; GC-IL-NOT: .method
+
+; Stack map intrinsics: llvm.experimental.stackmap and both forms of
+; llvm.experimental.patchpoint describe native frames to a runtime that reads
+; or patches machine code. Each call is an error and its function loses its
+; body. A statepoint needs a gc on its function (the IR verifier checks it), so
+; it is reported as a garbage collection strategy, before the others. The
+; definition without them still compiles.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/stackmap.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=STACKMAP --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/stackmap.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=STACKMAP --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/stackmap.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=STACKMAP --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/stackmap.ll -o - 2>/dev/null \
+; RUN:   | FileCheck %s --check-prefix=STACKMAP-IR --implicit-check-not="{{ call }}"
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/stackmap.ll \
+; RUN:   > %t/stackmap.il
+; RUN: FileCheck %s --check-prefix=STACKMAP-IL --input-file=%t/stackmap.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/stackmap.dll %t/stackmap.il %}
+
+; STACKMAP: error: {{.*}}in function msil_statepoint void (): garbage collection strategy 'statepoint-example' is not supported for MSIL
+; STACKMAP: error: {{.*}}in function msil_stackmap i32 (i32): stack maps (llvm.experimental.stackmap) are not supported for MSIL
+; STACKMAP: error: {{.*}}in function msil_patchpoint_void void (): stack maps (llvm.experimental.patchpoint.void) are not supported for MSIL
+; STACKMAP: error: {{.*}}in function msil_patchpoint i64 (i64): stack maps (llvm.experimental.patchpoint) are not supported for MSIL
+
+; STACKMAP-IR: declare void @msil_statepoint(){{$}}
+; STACKMAP-IR: declare i32 @msil_stackmap(i32){{$}}
+; STACKMAP-IR: declare void @msil_patchpoint_void(){{$}}
+; STACKMAP-IR: declare i64 @msil_patchpoint(i64){{$}}
+; STACKMAP-IR: define i32 @msil_stackmap_free() {{\{$}}
+
+; STACKMAP-IL-NOT: .method
+; STACKMAP-IL:     {{^}}.method public static int32 'msil_stackmap_free'() cil managed{{$}}
+; STACKMAP-IL-NOT: .method
 
 ; MIR input (functions shaped like the plan 5.4 sample): machineFunctionInfo
 ; params and results accept only i32, i64, f32 and f64. Any other entry is a
@@ -425,6 +560,106 @@ source_filename = "nocfi-as1.c"
 
 @msil_nocfi_as1_global = addrspace(1) global i32 1
 @msil_nocfi_as1_ref = global ptr addrspace(1) no_cfi @msil_nocfi_as1_global
+
+;--- genname.py
+import sys
+
+print('source_filename = "name.c"')
+for arg in sys.argv[1:]:
+    kind, size = arg.split(":")
+    size = int(size)
+    print()
+    if kind == "used-decl":
+        name = "b" * size
+        print('declare i32 @"%s"()' % name)
+        print()
+        print("define available_externally i32 @used_decl_user() {")
+        print('  %%r = call i32 @"%s"()' % name)
+        print("  ret i32 %r")
+        print("}")
+        continue
+    if kind == "unused-decl":
+        print('declare i32 @"%s"()' % ("c" * size))
+        continue
+    if kind == "ascii":
+        name = "a" * size
+    elif kind == "e-acute":
+        name = "\\C3\\A9" * (size // 2) + "a" * (size % 2)
+    elif kind == "quote-backslash":
+        name = "'\\5C" + "a" * (size - 2)
+    else:
+        sys.exit("unknown kind " + kind)
+    print('define i32 @"%s"() {' % name)
+    print("  ret i32 1")
+    print("}")
+print()
+print("define i32 @ok() {")
+print("  ret i32 3")
+print("}")
+
+;--- gc.ll
+source_filename = "gc-strategy.c"
+
+define i32 @msil_gc_erlang() gc "erlang" {
+  ret i32 1
+}
+
+define i32 @msil_gc_ocaml() gc "ocaml" {
+  ret i32 2
+}
+
+define i32 @msil_gc_shadow_stack() gc "shadow-stack" {
+  ret i32 3
+}
+
+define i32 @msil_gc_statepoint_example() gc "statepoint-example" {
+  ret i32 4
+}
+
+define i32 @msil_gc_coreclr() gc "coreclr" {
+  ret i32 5
+}
+
+define available_externally i32 @msil_gc_avail() gc "erlang" {
+  ret i32 6
+}
+
+define i32 @msil_gc_free() {
+  ret i32 7
+}
+
+;--- stackmap.ll
+source_filename = "stackmap.c"
+
+define void @msil_statepoint() gc "statepoint-example" {
+  %t = call token (i64, i32, ptr, i32, i32, ...) @llvm.experimental.gc.statepoint.p0(i64 1, i32 0, ptr elementtype(void ()) @msil_statepoint_target, i32 0, i32 0, i32 0, i32 0)
+  ret void
+}
+
+define i32 @msil_stackmap(i32 %x) {
+  call void (i64, i32, ...) @llvm.experimental.stackmap(i64 2, i32 0, i32 %x)
+  ret i32 %x
+}
+
+define void @msil_patchpoint_void() {
+  call void (i64, i32, ptr, i32, ...) @llvm.experimental.patchpoint.void(i64 3, i32 16, ptr null, i32 0)
+  ret void
+}
+
+define i64 @msil_patchpoint(i64 %x) {
+  %r = call i64 (i64, i32, ptr, i32, ...) @llvm.experimental.patchpoint.i64(i64 4, i32 16, ptr null, i32 0, i64 %x)
+  ret i64 %r
+}
+
+define i32 @msil_stackmap_free() {
+  ret i32 5
+}
+
+declare void @msil_statepoint_target()
+declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
+declare void @llvm.experimental.stackmap(i64, i32, ...)
+declare void @llvm.experimental.patchpoint.void(i64, i32, ptr, i32, ...)
+declare i64 @llvm.experimental.patchpoint.i64(i64, i32, ptr, i32, ...)
 
 ;--- mfi-bad-param.mir
 ---

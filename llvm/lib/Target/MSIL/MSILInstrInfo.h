@@ -61,6 +61,9 @@ public:
   bool
   reverseBranchCondition(SmallVectorImpl<MachineOperand> &Cond) const override;
 
+  ArrayRef<std::pair<int, const char *>>
+  getSerializableTargetIndices() const override;
+
   const MachineOperand &getCalleeOperand(const MachineInstr &MI) const override;
 
   /// Returns the extra evaluation-stack depth that the CIL text of \p Opc

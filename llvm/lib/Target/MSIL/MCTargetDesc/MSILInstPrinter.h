@@ -14,7 +14,9 @@
 ///
 /// \file
 /// This class prints an MSIL MCInst as ILAsm text: one CIL opcode per line
-/// with a two-space indent.
+/// with a two-space indent. Opcodes that take an argument index, a local index
+/// or an integer constant are printed in their shortest form (ldarg.0,
+/// ldloc.s 4, ldc.i4.m1, ...).
 ///
 /// MCInsts keep the operand positions of the MachineInstr: register operands
 /// are placeholders for values on the evaluation stack and print nothing, so
@@ -48,10 +50,11 @@ public:
   /// MSILMemberRefExprs) through MCAsmInfo::printExpr, nothing for registers.
   void printOperand(const MCInst *MI, unsigned OpNo, const MCSubtargetInfo &STI,
                     raw_ostream &O);
-  /// A CIL local index (ldloc, stloc).
+  /// A CIL local index (ldloc, stloc). printInst prints the local opcodes in
+  /// their short forms itself, so the generated printer never reaches this.
   void printLocalOperand(const MCInst *MI, unsigned OpNo,
                          const MCSubtargetInfo &STI, raw_ostream &O);
-  /// A CIL argument index (ldarg, starg).
+  /// A CIL argument index (ldarg, starg); as printLocalOperand.
   void printArgOperand(const MCInst *MI, unsigned OpNo,
                        const MCSubtargetInfo &STI, raw_ostream &O);
   /// The bit pattern of a float32 immediate: float32(0x7FC00000).

@@ -14,9 +14,10 @@
 ///
 /// \file
 /// Print MCInst instructions as ILAsm text. The TableGen'erated printer prints
-/// the asm strings of MSILInstrInfo.td; 'switch', 'call' and 'calli', whose
-/// operands are variadic, and the offset of a global address are printed
-/// here.
+/// the asm strings of MSILInstrInfo.td. Printed here instead: the short forms
+/// of the argument, local and constant opcodes, which depend on the value of
+/// the immediate; 'switch', 'call' and 'calli', whose operands are variadic;
+/// and the offset of a global address.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -43,6 +44,139 @@ using namespace llvm;
 
 #include "MSILGenAsmWriter.inc"
 
+namespace {
+/// The instructions whose CIL text depends on the value of an immediate
+/// operand (plan section 5.1). Every other instruction prints its asm string.
+enum class ShortFormKind : uint8_t {
+  None,
+  LdArg,    ///< ldarg.0-3, ldarg.s N (N < 256), ldarg N
+  StArg,    ///< starg.s N (N < 256), starg N
+  TeeArg,   ///< dup, then StArg
+  LdLoc,    ///< ldloc.0-3, ldloc.s N (N < 256), ldloc N
+  StLoc,    ///< stloc.0-3, stloc.s N (N < 256), stloc N
+  TeeLoc,   ///< dup, then StLoc
+  ConstI32, ///< ldc.i4.m1, ldc.i4.0-8, ldc.i4.s N (-128..127), ldc.i4 N
+  ConstI64, ///< ldc.i4 N (N fits in 32 bits) or ldc.i8 N, then conv.i (D2)
+};
+
+struct ShortForm {
+  ShortFormKind Kind = ShortFormKind::None;
+  /// The operand that holds the index or the constant (the operand lists of
+  /// plan section 5.4).
+  unsigned ImmOp = 0;
+};
+} // end anonymous namespace
+
+/// The one table of the instructions printed in a short form.
+static ShortForm getShortForm(unsigned Opcode) {
+  switch (Opcode) {
+  case MSIL::ARG_GET_I32:
+  case MSIL::ARG_GET_I64:
+  case MSIL::ARG_GET_F32:
+  case MSIL::ARG_GET_F64:
+    return {ShortFormKind::LdArg, 1};
+  case MSIL::ARG_SET_I32:
+  case MSIL::ARG_SET_I64:
+  case MSIL::ARG_SET_F32:
+  case MSIL::ARG_SET_F64:
+    return {ShortFormKind::StArg, 0};
+  case MSIL::ARG_TEE_I32:
+  case MSIL::ARG_TEE_I64:
+  case MSIL::ARG_TEE_F32:
+  case MSIL::ARG_TEE_F64:
+    return {ShortFormKind::TeeArg, 1};
+  case MSIL::LOCAL_GET_I32:
+  case MSIL::LOCAL_GET_I64:
+  case MSIL::LOCAL_GET_F32:
+  case MSIL::LOCAL_GET_F64:
+    return {ShortFormKind::LdLoc, 1};
+  case MSIL::LOCAL_SET_I32:
+  case MSIL::LOCAL_SET_I64:
+  case MSIL::LOCAL_SET_F32:
+  case MSIL::LOCAL_SET_F64:
+    return {ShortFormKind::StLoc, 0};
+  case MSIL::LOCAL_TEE_I32:
+  case MSIL::LOCAL_TEE_I64:
+  case MSIL::LOCAL_TEE_F32:
+  case MSIL::LOCAL_TEE_F64:
+    return {ShortFormKind::TeeLoc, 1};
+  case MSIL::CONST_I32:
+    return {ShortFormKind::ConstI32, 1};
+  case MSIL::CONST_I64:
+    return {ShortFormKind::ConstI64, 1};
+  default:
+    return {};
+  }
+}
+
+/// Print \p Opcode with the argument or local index \p Index in its shortest
+/// form: '<Opcode>.N' when N < NumImplicit (the opcodes with the index in the
+/// opcode), '<Opcode>.s N' when N fits in a byte, '<Opcode> N' otherwise.
+/// ilasm does not shorten opcodes itself.
+static void printIndexOpcode(raw_ostream &O, StringRef Opcode,
+                             int64_t NumImplicit, int64_t Index) {
+  assert(Index >= 0 && "argument and local indices are unsigned");
+  if (Index < NumImplicit)
+    O << Opcode << '.' << Index;
+  else if (isUInt<8>(Index))
+    O << Opcode << ".s " << Index;
+  else
+    O << Opcode << ' ' << Index;
+}
+
+/// Print 'ldc.i4' for \p Value in its shortest form.
+static void printLdcI4(raw_ostream &O, int32_t Value) {
+  if (Value == -1)
+    O << "ldc.i4.m1";
+  else if (Value >= 0 && Value <= 8)
+    O << "ldc.i4." << Value;
+  else if (isInt<8>(Value))
+    O << "ldc.i4.s " << Value;
+  else
+    O << "ldc.i4 " << Value;
+}
+
+static void printShortForm(const MCInst *MI, ShortForm Form, raw_ostream &O) {
+  int64_t Imm = MI->getOperand(Form.ImmOp).getImm();
+  switch (Form.Kind) {
+  case ShortFormKind::LdArg:
+    printIndexOpcode(O, "ldarg", 4, Imm);
+    return;
+  case ShortFormKind::TeeArg:
+    O << "dup\n  ";
+    [[fallthrough]];
+  case ShortFormKind::StArg:
+    printIndexOpcode(O, "starg", 0, Imm);
+    return;
+  case ShortFormKind::LdLoc:
+    printIndexOpcode(O, "ldloc", 4, Imm);
+    return;
+  case ShortFormKind::TeeLoc:
+    O << "dup\n  ";
+    [[fallthrough]];
+  case ShortFormKind::StLoc:
+    printIndexOpcode(O, "stloc", 4, Imm);
+    return;
+  case ShortFormKind::ConstI32:
+    // MachineOperands hold the constant sign-extended; MIR may spell it
+    // zero-extended.
+    assert((isInt<32>(Imm) || isUInt<32>(Imm)) && "CONST_I32 out of range");
+    printLdcI4(O, static_cast<int32_t>(Imm));
+    return;
+  case ShortFormKind::ConstI64:
+    // native int (decision D2): conv.i sign-extends the int32 of ldc.i4.
+    if (isInt<32>(Imm))
+      O << "ldc.i4 " << Imm;
+    else
+      O << "ldc.i8 " << Imm;
+    O << "\n  conv.i";
+    return;
+  case ShortFormKind::None:
+    break;
+  }
+  llvm_unreachable("not an instruction with a short form");
+}
+
 MSILInstPrinter::MSILInstPrinter(const MCAsmInfo &MAI, const MCInstrInfo &MII,
                                  const MCRegisterInfo &MRI)
     : MCInstPrinter(MAI, MII, MRI) {}
@@ -60,6 +194,12 @@ void MSILInstPrinter::printInst(const MCInst *MI, uint64_t Address,
   // One CIL opcode per line with a two-space indent; asm strings that print
   // several opcodes separate them with a newline and the same indent.
   OS << "  ";
+  if (ShortForm Form = getShortForm(MI->getOpcode());
+      Form.Kind != ShortFormKind::None) {
+    printShortForm(MI, Form, OS);
+    printAnnotation(OS, Annot);
+    return;
+  }
   switch (MI->getOpcode()) {
   case MSIL::BR_TABLE_I32:
     printBrTable(MI, STI, OS);

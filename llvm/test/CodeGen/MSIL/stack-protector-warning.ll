@@ -15,9 +15,18 @@
 ;   instrumentation, and erases pseudo probes (llvm.pseudoprobe calls and
 ;   !llvm.pseudo_probe_desc; clang -fpseudo-probe-for-profiling) with one
 ;   warning for the module (amendment log 2026-10-13, M2.a item (5) extended).
-; Every full llc run compiles declarations only, because function bodies are
-; implemented in M3; definitions are checked with
-; -stop-after=msil-prepare-ir.
+; - MSILPrepareIR strips the function padding attributes ("tail-pad-to-size",
+;   "tail-pad-value"; the DynamicDebugging pass) with a warning naming the
+;   function when it asks for padding, and turns off the call graph section
+;   (--call-graph-section, clang -fexperimental-call-graph-section), the basic
+;   block address map (--basic-block-address-map, clang
+;   -fbasic-block-sections=labels) and !pcsections metadata with one warning
+;   each for the module (amendment log 2026-10-13, M3 fix-loop rows for fix-5).
+; The stack protector, control flow guard and entry instrumentation cases were
+; written in M2, before function bodies could be compiled: their full llc runs
+; compile declarations, and definitions are checked with
+; -stop-after=msil-prepare-ir. The M3 cases compile leaf definitions through
+; the whole pipeline and check the IL.
 
 ; RUN: split-file %s %t
 
@@ -148,6 +157,126 @@
 
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/entry-instr-decl.dll %t/entry-decl-lnx.il %}
 
+; Function padding: one warning for the function that asks for 64 bytes, none
+; for "tail-pad-to-size"="0", exit code 0, and each method ends right after its
+; 'ret', with no native fill directive or label.
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/tail-pad.ll \
+; RUN:   -o %t/tail-pad-lnx.il 2>%t/tail-pad-lnx.err
+; RUN: FileCheck %s --check-prefix=TAILPAD --input-file=%t/tail-pad-lnx.err --implicit-check-not=warning: \
+; RUN:   --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+; RUN: FileCheck %s --check-prefix=TAILPAD-IL --input-file=%t/tail-pad-lnx.il --implicit-check-not=.zero \
+; RUN:   --implicit-check-not=tail_pad --implicit-check-not=func_begin
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/tail-pad.ll \
+; RUN:   -o %t/tail-pad-win.il 2>%t/tail-pad-win.err
+; RUN: FileCheck %s --check-prefix=TAILPAD --input-file=%t/tail-pad-win.err --implicit-check-not=warning: \
+; RUN:   --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+; RUN: FileCheck %s --check-prefix=TAILPAD-IL --input-file=%t/tail-pad-win.il --implicit-check-not=.zero \
+; RUN:   --implicit-check-not=tail_pad --implicit-check-not=func_begin
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/tail-pad.dll %t/tail-pad-win.il %}
+
+; TAILPAD: warning: {{.*}}in function msil_tail_pad i32 (): function padding is not supported for MSIL; attribute ignored
+
+; TAILPAD-IL-LABEL: {{^}}.method public static int32 'msil_tail_pad'() cil managed{{$}}
+; TAILPAD-IL-NEXT:  {{^\{$}}
+; TAILPAD-IL-NEXT:  {{^}}  .maxstack 1{{$}}
+; TAILPAD-IL-NEXT:  {{^}}  ldc.i4.7{{$}}
+; TAILPAD-IL-NEXT:  {{^}}  ret{{$}}
+; TAILPAD-IL-NEXT:  {{^}}} // end of method 'msil_tail_pad'{{$}}
+; TAILPAD-IL-LABEL: {{^}}.method public static int32 'msil_tail_pad_zero'() cil managed{{$}}
+; TAILPAD-IL-NEXT:  {{^\{$}}
+; TAILPAD-IL-NEXT:  {{^}}  .maxstack 1{{$}}
+; TAILPAD-IL-NEXT:  {{^}}  ldc.i4.8{{$}}
+; TAILPAD-IL-NEXT:  {{^}}  ret{{$}}
+; TAILPAD-IL-NEXT:  {{^}}} // end of method 'msil_tail_pad_zero'{{$}}
+; TAILPAD-IL-NOT:   {{.}}
+
+; The call graph section and the basic block address map: one warning each,
+; exit code 0, and the method alone, with none of the labels or sections they
+; would add.
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil --call-graph-section -asm-verbose=false -verify-machineinstrs \
+; RUN:   < %t/cg-map.ll -o %t/cg-lnx.il 2>%t/cg-lnx.err
+; RUN: FileCheck %s --check-prefix=CG --input-file=%t/cg-lnx.err --implicit-check-not=warning: \
+; RUN:   --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+; RUN: FileCheck %s --check-prefix=CG-MAP-IL --input-file=%t/cg-lnx.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil --call-graph-section -asm-verbose=false -verify-machineinstrs \
+; RUN:   < %t/cg-map.ll -o %t/cg-win.il 2>%t/cg-win.err
+; RUN: FileCheck %s --check-prefix=CG --input-file=%t/cg-win.err --implicit-check-not=warning: \
+; RUN:   --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+; RUN: FileCheck %s --check-prefix=CG-MAP-IL --input-file=%t/cg-win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/cg.dll %t/cg-win.il %}
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil --basic-block-address-map -asm-verbose=false -verify-machineinstrs \
+; RUN:   < %t/cg-map.ll -o %t/map-lnx.il 2>%t/map-lnx.err
+; RUN: FileCheck %s --check-prefix=MAP --input-file=%t/map-lnx.err --implicit-check-not=warning: \
+; RUN:   --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+; RUN: FileCheck %s --check-prefix=CG-MAP-IL --input-file=%t/map-lnx.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil --basic-block-address-map -asm-verbose=false -verify-machineinstrs \
+; RUN:   < %t/cg-map.ll -o %t/map-win.il 2>%t/map-win.err
+; RUN: FileCheck %s --check-prefix=MAP --input-file=%t/map-win.err --implicit-check-not=warning: \
+; RUN:   --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+; RUN: FileCheck %s --check-prefix=CG-MAP-IL --input-file=%t/map-win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/map.dll %t/map-lnx.il %}
+
+; CG: warning: call graph section is not supported for MSIL; ignored
+; MAP: warning: basic block address map is not supported for MSIL; ignored
+
+; CG-MAP-IL-LABEL: {{^}}.method public static int32 'msil_cg_map'(int32) cil managed{{$}}
+; CG-MAP-IL-NEXT:  {{^\{$}}
+; CG-MAP-IL-NEXT:  {{^}}  .maxstack 1{{$}}
+; CG-MAP-IL-NEXT:  {{^}}  ldarg.0{{$}}
+; CG-MAP-IL-NEXT:  {{^}}  ret{{$}}
+; CG-MAP-IL-NEXT:  {{^}}} // end of method 'msil_cg_map'{{$}}
+; CG-MAP-IL-NOT:   {{.}}
+
+; !pcsections on a function and on instructions (a value and a return): one
+; warning for the module, exit code 0 at -O2 and -O0, the metadata gone after
+; MSILPrepareIR, and methods with no PC section labels or sections.
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/pcsections.ll \
+; RUN:   -o %t/pcs-lnx.il 2>%t/pcs-lnx.err
+; RUN: FileCheck %s --check-prefix=PCS --input-file=%t/pcs-lnx.err --implicit-check-not=warning: \
+; RUN:   --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+; RUN: FileCheck %s --check-prefix=PCS-IL --input-file=%t/pcs-lnx.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/pcsections.ll \
+; RUN:   -o %t/pcs-win.il 2>%t/pcs-win.err
+; RUN: FileCheck %s --check-prefix=PCS --input-file=%t/pcs-win.err --implicit-check-not=warning: \
+; RUN:   --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+; RUN: FileCheck %s --check-prefix=PCS-IL --input-file=%t/pcs-win.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/pcsections.ll \
+; RUN:   -o %t/pcs-win-O0.il 2>%t/pcs-win-O0.err
+; RUN: FileCheck %s --check-prefix=PCS --input-file=%t/pcs-win-O0.err --implicit-check-not=warning: \
+; RUN:   --implicit-check-not=error: --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+; RUN: FileCheck %s --check-prefix=PCS-IL --input-file=%t/pcs-win-O0.il
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/pcsections.ll -o - 2>/dev/null \
+; RUN:   | FileCheck %s --check-prefix=PCS-IR --implicit-check-not=pcsections
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/pcs.dll %t/pcs-win.il %}
+
+; PCS: warning: PC sections are not supported for MSIL; ignored
+
+; PCS-IR:      define i32 @msil_pcs_function(i32 %a) {{\{$}}
+; PCS-IR:      define i32 @msil_pcs_instruction() {{\{$}}
+; PCS-IR-NEXT:   %v = freeze i32 7{{$}}
+; PCS-IR:      define i32 @msil_pcs_ret(i32 %a) {{\{$}}
+; PCS-IR-NEXT:   ret i32 %a{{$}}
+
+; PCS-IL-LABEL: {{^}}.method public static int32 'msil_pcs_function'(int32) cil managed{{$}}
+; PCS-IL-NEXT:  {{^\{$}}
+; PCS-IL-NEXT:  {{^}}  .maxstack 1{{$}}
+; PCS-IL-NEXT:  {{^}}  ldarg.0{{$}}
+; PCS-IL-NEXT:  {{^}}  ret{{$}}
+; PCS-IL-NEXT:  {{^}}} // end of method 'msil_pcs_function'{{$}}
+; PCS-IL-LABEL: {{^}}.method public static int32 'msil_pcs_instruction'() cil managed{{$}}
+; PCS-IL-NEXT:  {{^\{$}}
+; PCS-IL-NEXT:  {{^}}  .maxstack 1{{$}}
+; PCS-IL-NEXT:  {{^}}  ldc.i4.7{{$}}
+; PCS-IL-NEXT:  {{^}}  ret{{$}}
+; PCS-IL-NEXT:  {{^}}} // end of method 'msil_pcs_instruction'{{$}}
+; PCS-IL-LABEL: {{^}}.method public static int32 'msil_pcs_ret'(int32) cil managed{{$}}
+; PCS-IL-NEXT:  {{^\{$}}
+; PCS-IL-NEXT:  {{^}}  .maxstack 1{{$}}
+; PCS-IL-NEXT:  {{^}}  ldarg.0{{$}}
+; PCS-IL-NEXT:  {{^}}  ret{{$}}
+; PCS-IL-NEXT:  {{^}}} // end of method 'msil_pcs_ret'{{$}}
+; PCS-IL-NOT:   {{.}}
+
 ;--- protector.ll
 source_filename = "protector.c"
 
@@ -217,6 +346,45 @@ attributes #4 = { nounwind }
 
 !llvm.pseudo_probe_desc = !{!0}
 !0 = !{i64 6028998432455395745, i64 4294967295, !"msil_probed"}
+
+;--- tail-pad.ll
+source_filename = "tail-pad.c"
+
+define i32 @msil_tail_pad() #0 {
+  ret i32 7
+}
+
+define i32 @msil_tail_pad_zero() #1 {
+  ret i32 8
+}
+
+attributes #0 = { nounwind "tail-pad-to-size"="64" "tail-pad-value"="144" }
+attributes #1 = { nounwind "tail-pad-to-size"="0" }
+
+;--- cg-map.ll
+source_filename = "cg-map.c"
+
+define i32 @msil_cg_map(i32 %a) {
+  ret i32 %a
+}
+
+;--- pcsections.ll
+source_filename = "pcs.c"
+
+define i32 @msil_pcs_function(i32 %a) !pcsections !0 {
+  ret i32 %a
+}
+
+define i32 @msil_pcs_instruction() {
+  %v = freeze i32 7, !pcsections !0
+  ret i32 %v
+}
+
+define i32 @msil_pcs_ret(i32 %a) {
+  ret i32 %a, !pcsections !0
+}
+
+!0 = !{!"msil.pcs"}
 
 ;--- entry-instr-decl.ll
 source_filename = "entry-instr-decl.c"
