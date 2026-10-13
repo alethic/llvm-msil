@@ -1,6 +1,6 @@
 # Recon: clang support for MSIL triples (milestone 1)
 
-Key: `clang`. Author: recon agent. Date: 2026-10-12. Checkout: `msil-milestone1` @ `8da03434abcc`.
+Key: `clang`. Author: recon agent. Date: 2026-10-12. Checkout: `msil-milestone1` @ `2829ef573b08`.
 
 Scope: clang frontend `TargetInfo`, inline-asm rejection, CodeGen object-format
 dependencies, the driver, and tests, for `<native triple>-msil` triples

@@ -1,7 +1,7 @@
 # MSIL recon: post-ISel pass pipeline, frame lowering, locals and `.maxstack`
 
 - Key: `passes-frame`
-- Date: 2026-10-12. Checkout: branch `msil-milestone1` @ `8da03434abcc` (llvm-project, newer than most reference material; every API and line number below was checked against this tree).
+- Date: 2026-10-12. Checkout: branch `msil-milestone1` @ `2829ef573b08` (llvm-project, newer than most reference material; every API and line number below was checked against this tree).
 - Scope: Design.md sections 2.1, 2.2, 4.2 and 12 (milestone 1). The answers to the six task questions are in sections 3–9. Section 10 lists the experiments that back them.
 - Scratch experiments (IL sources and binaries): `C:\Users\JEROME~1\AppData\Local\Temp\claude\D--llvm-msil\fa776849-ce33-4cee-bcc7-05382d063d3e\scratchpad\recon\passes-frame\` (`e1_localloc.il` … `e11_verify.il`).
 

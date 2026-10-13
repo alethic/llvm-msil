@@ -1,7 +1,7 @@
 # MSIL recon: target selection and TargetMachine basics (`registry-tm`)
 
 Status: recon report, 2026-10-12. Read-only investigation of the checkout at
-`D:\llvm-msil` (branch `msil-milestone1`, HEAD `8da03434abcc`). No tracked file was
+`D:\llvm-msil` (branch `msil-milestone1`, HEAD `2829ef573b08`). No tracked file was
 modified. Line numbers refer to that HEAD.
 
 Scope: how a triple such as `x86_64-unknown-linux-gnu-msil` reaches an `msil`

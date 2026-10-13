@@ -1,7 +1,7 @@
 # MSIL recon: the WebAssembly target as a template (`wasm-inventory`)
 
 Status: recon report, 2026-10-12. Read-only investigation of `D:\llvm-msil`, branch
-`msil-milestone1`, HEAD `8da03434abcc`. No tracked file was modified. All line counts
+`msil-milestone1`, HEAD `2829ef573b08`. No tracked file was modified. All line counts
 are `wc -l` at that HEAD. Line numbers refer to that HEAD unless marked otherwise.
 
 Scope (from the task):
@@ -1023,12 +1023,12 @@ The new MCContext environment is owned by the triple work, not by this directory
 
 Procedure for each work package:
 1. Copy the file from the WebAssembly tree as of a recorded commit:
-   `git show 8da03434abcc:llvm/lib/Target/WebAssembly/WebAssemblyX.cpp > llvm/lib/Target/MSIL/MSILX.cpp`.
+   `git show 2829ef573b08:llvm/lib/Target/WebAssembly/WebAssemblyX.cpp > llvm/lib/Target/MSIL/MSILX.cpp`.
 2. Apply the `sed` from 4.1. Do not rename `#include "llvm/BinaryFormat/Wasm.h"` and the like:
    delete them.
 3. Trim as the note column of 2.2 says.
 4. Keep a provenance line in the file header, for example
-   `/// Derived from llvm/lib/Target/WebAssembly/WebAssemblyRegStackify.cpp at 8da03434abcc.`
+   `/// Derived from llvm/lib/Target/WebAssembly/WebAssemblyRegStackify.cpp at d1e15b695381.`
    That keeps future upstream fixes mergeable (Design risk 5).
 5. Do not copy a DEFER file before its phase.
 

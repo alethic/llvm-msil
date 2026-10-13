@@ -61,7 +61,7 @@ fi
 
 # One line per workflow: id, state and path, tab-separated. gh lists 50
 # workflows by default and upstream has more than that (58 files at
-# 8da03434abcc), so ask for up to 200 and stop if that might have truncated.
+# 2829ef573b08), so ask for up to 200 and stop if that might have truncated.
 limit=200
 listing=$(gh workflow list --repo "$repo" --all --limit "$limit" \
   --json id,state,path --jq '.[] | "\(.id)\t\(.state)\t\(.path)"')

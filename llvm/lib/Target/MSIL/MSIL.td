@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Derived from llvm/lib/Target/WebAssembly/WebAssembly.td at 8da03434abcc.
+// Derived from llvm/lib/Target/WebAssembly/WebAssembly.td at d1e15b695381.
 //
 //===----------------------------------------------------------------------===//
 ///

@@ -8,7 +8,7 @@
 //
 // Derived from
 // llvm/lib/Target/WebAssembly/MCTargetDesc/WebAssemblyMCTargetDesc.cpp at
-// 8da03434abcc.
+// d1e15b695381.
 //
 //===----------------------------------------------------------------------===//
 ///

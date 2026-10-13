@@ -29,7 +29,7 @@ on:
   #
   # push:
   #   branches:
-  #     - 'msil-main'
+  #     - 'msil'
   #     - 'msil-milestone*'
   # pull_request:
   #   branches:
