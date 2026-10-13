@@ -25,6 +25,7 @@
 #include "Targets/Lanai.h"
 #include "Targets/LoongArch.h"
 #include "Targets/M68k.h"
+#include "Targets/MSIL.h"
 #include "Targets/MSP430.h"
 #include "Targets/Mips.h"
 #include "Targets/NVPTX.h"
@@ -108,8 +109,69 @@ void addCygMingDefines(const LangOptions &Opts, MacroBuilder &Builder) {
 // Driver code
 //===----------------------------------------------------------------------===//
 
+/// Allocate the TargetInfo of an MSIL triple ("<native triple>-msil"): the
+/// native TargetInfo that AllocateTarget below would choose, wrapped in
+/// MSILTargetInfo. Only the platforms the MSIL target supports are mirrored:
+/// x86_64 and aarch64 on Linux with glibc or musl, and on Windows with MSVC or
+/// MinGW. Every other MSIL triple, Darwin and i686 included, gets nullptr and
+/// is reported as unknown. Keep the classes in sync with the native dispatch
+/// below.
+static std::unique_ptr<TargetInfo>
+AllocateMSILTarget(const llvm::Triple &Triple, const TargetOptions &Opts) {
+  // arm64e, arm64ec and LFI each have an ABI of their own.
+  if (Triple.isArm64e() || Triple.isArm64e_x1() || Triple.isWindowsArm64EC() ||
+      Triple.isLFI())
+    return nullptr;
+
+  // The environment must be explicit. Linux: glibc or musl, not Android, OHOS
+  // or x32. Windows: msvc or gnu, written as x86_64-pc-windows-msvc-msil or
+  // x86_64-w64-windows-gnu-msil (likewise aarch64). Vendor-less spellings such
+  // as x86_64-windows-msvc-msil normalize to x86_64-unknown-windows-msvc-msil
+  // and are accepted too. x86_64-pc-win32-msil and x86_64-pc-windows-msil are
+  // rejected on purpose: normalize() gives both as x86_64-pc-windows-msil,
+  // with no environment, and clang treats such a triple as only partly MSVC
+  // (no Visual C predefines, for example).
+  const llvm::Triple::EnvironmentType Env = Triple.getEnvironment();
+  const bool IsLinux = Triple.isOSLinux() &&
+                       (Env == llvm::Triple::GNU || Env == llvm::Triple::Musl);
+  const bool IsMSVC = Triple.isKnownWindowsMSVCEnvironment();
+  const bool IsMinGW = Triple.isWindowsGNUEnvironment();
+
+  switch (Triple.getArch()) {
+  case llvm::Triple::x86_64:
+    if (IsLinux)
+      return std::make_unique<
+          MSILTargetInfo<LinuxTargetInfo<X86_64TargetInfo>>>(Triple, Opts);
+    if (IsMSVC)
+      return std::make_unique<MSILTargetInfo<MicrosoftX86_64TargetInfo>>(Triple,
+                                                                         Opts);
+    if (IsMinGW)
+      return std::make_unique<MSILTargetInfo<MinGWX86_64TargetInfo>>(Triple,
+                                                                     Opts);
+    return nullptr;
+
+  case llvm::Triple::aarch64:
+    if (IsLinux)
+      return std::make_unique<
+          MSILTargetInfo<LinuxTargetInfo<AArch64leTargetInfo>>>(Triple, Opts);
+    if (IsMSVC)
+      return std::make_unique<MSILTargetInfo<MicrosoftARM64TargetInfo>>(Triple,
+                                                                        Opts);
+    if (IsMinGW)
+      return std::make_unique<MSILTargetInfo<MinGWARM64TargetInfo>>(Triple,
+                                                                    Opts);
+    return nullptr;
+
+  default:
+    return nullptr;
+  }
+}
+
 std::unique_ptr<TargetInfo> AllocateTarget(const llvm::Triple &Triple,
                                            const TargetOptions &Opts) {
+  if (Triple.isOSBinFormatMSIL())
+    return AllocateMSILTarget(Triple, Opts);
+
   llvm::Triple::OSType os = Triple.getOS();
 
   switch (Triple.getArch()) {

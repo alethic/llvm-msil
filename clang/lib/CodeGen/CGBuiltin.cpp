@@ -27,6 +27,7 @@
 #include "clang/AST/OSLog.h"
 #include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/DiagnosticFrontend.h"
+#include "clang/Basic/DiagnosticSema.h"
 #include "clang/Basic/TargetInfo.h"
 #include "llvm/ADT/APFloat.h"
 #include "llvm/IR/InlineAsm.h"
@@ -1727,8 +1728,10 @@ static llvm::Value *EmitBitTestIntrinsic(CodeGenFunction &CGF,
   BitTest BT = BitTest::decodeBitTestBuiltin(BuiltinID);
 
   // X86 has special BT, BTC, BTR, and BTS instructions that handle the array
-  // indexing operation internally. Use them if possible.
-  if (CGF.getTarget().getTriple().isX86())
+  // indexing operation internally. Use them if possible. MSIL triples have no
+  // inline assembly and use the generic code.
+  if (CGF.getTarget().getTriple().isX86() &&
+      !CGF.getTarget().getTriple().isOSBinFormatMSIL())
     return EmitX86BitTestIntrinsic(CGF, BT, E, BitBase, BitPos);
 
   // Otherwise, use generic code to load one byte and test the bit. Use all but
@@ -1991,6 +1994,16 @@ Value *CodeGenFunction::EmitMSVCBuiltinExpr(MSVCIntrin BuiltinID,
     return EmitAtomicIncrementValue(*this, E);
 
   case MSVCIntrin::__fastfail: {
+    // The native sequences below are inline assembly, which MSIL triples do
+    // not have, so this builtin has no lowering there. Diagnose the call as an
+    // unsupported builtin and emit llvm.trap in its place, so the IR stays
+    // well-formed and the rest of the function is still checked.
+    if (getTarget().getTriple().isOSBinFormatMSIL()) {
+      EmitScalarExpr(E->getArg(0));
+      CGM.getDiags().Report(E->getExprLoc(),
+                            diag::err_builtin_target_unsupported);
+      return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::trap));
+    }
     // Request immediate process termination from the kernel. The instruction
     // sequences to do this are documented on MSDN:
     // https://msdn.microsoft.com/en-us/library/dn774154.aspx

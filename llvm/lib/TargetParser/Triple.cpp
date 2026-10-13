@@ -427,6 +427,8 @@ StringRef Triple::getObjectFormatTypeName(ObjectFormatType Kind) {
     return "goff";
   case MachO:
     return "macho";
+  case MSIL:
+    return "msil";
   case Wasm:
     return "wasm";
   case XCOFF:
@@ -727,6 +729,7 @@ static Triple::ObjectFormatType parseFormat(StringRef EnvironmentName) {
       .EndsWith("elf", Triple::ELF)
       .EndsWith("goff", Triple::GOFF)
       .EndsWith("macho", Triple::MachO)
+      .EndsWith("msil", Triple::MSIL)
       .EndsWith("wasm", Triple::Wasm)
       .EndsWith("spirv", Triple::SPIRV)
       .Default(Triple::UnknownObjectFormat);
@@ -1045,6 +1048,23 @@ static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
   llvm_unreachable("unknown architecture");
 }
 
+Triple::ObjectFormatType Triple::getDefaultObjectFormat() const {
+  return getDefaultFormat(*this);
+}
+
+Triple Triple::getNativeFormatTriple() const {
+  if (!isOSBinFormatMSIL())
+    return *this;
+  // parseFormat() matched a trailing "msil" on the environment component,
+  // e.g. "gnu-msil", "msvc19.40.0-msil", or just "msil" (no environment).
+  StringRef Env = getEnvironmentName();
+  if (!Env.consume_back("-msil"))
+    Env.consume_back("msil");
+  if (Env.empty())
+    return Triple(getArchName(), getVendorName(), getOSName());
+  return Triple(getArchName(), getVendorName(), getOSName(), Env);
+}
+
 /// Construct a triple from the string representation provided.
 ///
 /// This stores the string representation and parses the various pieces into
@@ -1327,6 +1347,14 @@ std::string Triple::normalize(StringRef Str, CanonicalForm Form) {
       break;
     }
   }
+
+  // The permutation can push an msil object format component to position 4
+  // (x86_64-windows-msvc-msil), where it was never parsed. Pick it up so the
+  // Windows handling below keeps it. Only msil: native spellings such as
+  // x86_64-windows-msvc-elf keep normalizing as before.
+  if (ObjectFormat == UnknownObjectFormat && Components.size() > 4 &&
+      parseFormat(Components[4]) == Triple::MSIL)
+    ObjectFormat = Triple::MSIL;
 
   // If "none" is in the middle component in a three-component triple, treat it
   // as the OS (Components[2]) instead of the vendor (Components[1]).
@@ -2471,6 +2499,10 @@ bool Triple::isValidVersionForOS(OSType OSKind, const VersionTuple &Version) {
 }
 
 ExceptionHandling Triple::getDefaultExceptionHandling() const {
+  // MSIL has no native unwinder; managed exceptions are emitted explicitly.
+  if (isOSBinFormatMSIL())
+    return ExceptionHandling::None;
+
   if (isOSBinFormatCOFF()) {
     if (getArch() == Triple::x86 &&
         (isOSCygMing() || isWindowsItaniumEnvironment()))
@@ -2550,6 +2582,11 @@ FloatABI::ABIType Triple::getDefaultFloatABI(StringRef ABIName) const {
 ThreadModel Triple::getDefaultThreadModel() const { return ThreadModel::POSIX; }
 
 LongDoubleFormat Triple::getDefaultLongDoubleFormat() const {
+  // MSIL maps long double to double on every platform: CIL has no wider
+  // floating-point type.
+  if (isOSBinFormatMSIL())
+    return LongDoubleFormat::IEEEdouble;
+
   switch (getArch()) {
   case loongarch64:
   case riscv32:

@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "CGBuiltin.h"
+#include "clang/Basic/DiagnosticSema.h"
 #include "clang/Basic/TargetBuiltins.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IntrinsicsX86.h"
@@ -2920,6 +2921,15 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
 
   case X86::BI__cpuid:
   case X86::BI__cpuidex: {
+    // MSIL triples have no inline assembly, so this builtin has no lowering
+    // there. Diagnose the call as an unsupported builtin and emit llvm.trap in
+    // its place, so the IR stays well-formed and the rest of the function is
+    // still checked.
+    if (getTarget().getTriple().isOSBinFormatMSIL()) {
+      CGM.getDiags().Report(E->getExprLoc(),
+                            diag::err_builtin_target_unsupported);
+      return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::trap));
+    }
     Value *FuncId = EmitScalarExpr(E->getArg(1));
     Value *SubFuncId = BuiltinID == X86::BI__cpuidex
                            ? EmitScalarExpr(E->getArg(2))
@@ -3032,6 +3042,15 @@ Value *CodeGenFunction::EmitX86BuiltinExpr(unsigned BuiltinID,
     // llvm.trap makes a ud2a instruction on x86.
     return EmitTrapCall(Intrinsic::trap);
   case X86::BI__int2c: {
+    // MSIL triples have no inline assembly, so this builtin has no lowering
+    // there. Diagnose the call as an unsupported builtin and emit llvm.trap in
+    // its place, so the IR stays well-formed and the rest of the function is
+    // still checked.
+    if (getTarget().getTriple().isOSBinFormatMSIL()) {
+      CGM.getDiags().Report(E->getExprLoc(),
+                            diag::err_builtin_target_unsupported);
+      return Builder.CreateCall(CGM.getIntrinsic(Intrinsic::trap));
+    }
     // This syscall signals a driver assertion failure in x86 NT kernels.
     llvm::FunctionType *FTy = llvm::FunctionType::get(VoidTy, false);
     llvm::InlineAsm *IA =

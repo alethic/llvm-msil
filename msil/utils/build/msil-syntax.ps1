@@ -16,6 +16,11 @@
 #     -ExtraInclude llvm\lib\Target\MSIL,build\lib\Target\MSIL,<scratch>\tblgen llvm\lib\Target\MSIL\MSILInstrInfo.cpp
 # -FlagsFrom applies to every file without its own compile command (headers included); the
 # -ExtraInclude directories come first on the command line, so they win over borrowed ones.
+# Compiler warnings are printed after the OK line (also under -Quiet, which hides only the
+# 'note:' and 'OK' lines). -ExtraFlags appends compiler flags after the TU's own flags, so they
+# win; to make a missed enumerator (-Wswitch) a FAIL instead of a warning:
+#   pwsh -NoProfile -File msil-syntax.ps1 -ExtraFlags /clang:-Werror=switch llvm\lib\MC\MCContext.cpp
+# (-Werror is not the default: unrelated upstream TUs may warn.)
 # Exit code: 0 if every file passed, 1 otherwise.
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -25,7 +30,8 @@ param(
   [string[]]$ExtraInclude = @(),  # extra /I directories, comma- or semicolon-separated
   [switch]$NoPch,       # also drop the /FI of the PCH header (stricter: catches missing #includes)
   [switch]$Obj,         # do a real compile to a temp .obj instead of /Zs (for timing experiments)
-  [switch]$Quiet
+  [string]$ExtraFlags = '',   # appended after the TU's own flags, e.g. '/clang:-Werror=switch'
+  [switch]$Quiet        # hide the 'note:' and 'OK' lines; compiler warnings are still printed
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'msil-env.ps1')
@@ -102,12 +108,15 @@ foreach ($f in $Files) {
   $rest = $rest -creplace '\s-c(\s+--)?\s+\S+$', ''
   $mode = if ($Obj) { "/Fo`"$tmp\out.obj`" -c" } else { '/Zs' }   # /Zs: no -c (clang-cl warns)
   $rsp = Join-Path $tmp 'cmd.rsp'
-  Set-Content -LiteralPath $rsp -Value "$($incFlags.TrimStart()) $rest $mode `"$src`"" -Encoding ascii
+  Set-Content -LiteralPath $rsp -Value "$($incFlags.TrimStart()) $rest $ExtraFlags $mode `"$src`"" -Encoding ascii
   $sw = [Diagnostics.Stopwatch]::StartNew()
   Push-Location $entry.directory
   try { $out = & $exe "@$rsp" 2>&1 | Out-String; $rc = $LASTEXITCODE } finally { Pop-Location }
   $secs = [math]::Round($sw.Elapsed.TotalSeconds, 1)
-  if ($rc -eq 0) { if (-not $Quiet) { Write-Host "OK   $f (${secs}s)" } }
+  if ($rc -eq 0) {
+    if (-not $Quiet) { Write-Host "OK   $f (${secs}s)" }
+    if ("$out".Trim()) { Write-Host ("$out".TrimEnd()) }   # warnings (e.g. -Wswitch), even under -Quiet
+  }
   else {
     $failed++
     Write-Host "FAIL $f (${secs}s)"; Write-Host $out

@@ -4859,7 +4859,11 @@ void Sema::AddAlignedAttr(Decl *D, const AttributeCommonInfo &CI, Expr *E,
     return;
 
   uint64_t MaximumAlignment = Sema::MaximumAlignment;
-  if (Context.getTargetInfo().getTriple().isOSBinFormatCOFF())
+  // An MSIL triple keeps the alignment limit of its native (COFF) triple.
+  if (Context.getTargetInfo()
+          .getTriple()
+          .getNativeFormatTriple()
+          .isOSBinFormatCOFF())
     MaximumAlignment = std::min(MaximumAlignment, uint64_t(8192));
   if (Alignment > MaximumAlignment) {
     Diag(AttrLoc, diag::err_attribute_aligned_too_great)

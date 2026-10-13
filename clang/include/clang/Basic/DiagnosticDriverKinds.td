@@ -159,6 +159,9 @@ def warn_drv_unsupported_option_part_for_target : Warning<
   InGroup<OptionIgnored>;
 def err_drv_unsupported_option_part_for_target : Error<
   "'%0' in '%1' option is not currently supported for target '%2'">;
+def err_drv_msil_no_object_output : Error<
+  "emitting object files is not yet supported for MSIL target '%0'; use -S to "
+  "produce ILAsm text, or -emit-llvm or -flto to produce bitcode">;
 def warn_drv_invalid_argument_for_flang : Warning<
   "'%0' is not valid for Fortran">,
   InGroup<OptionIgnored>;

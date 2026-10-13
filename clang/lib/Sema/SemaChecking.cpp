@@ -3209,10 +3209,10 @@ Sema::CheckBuiltinFunctionCall(FunctionDecl *FDecl, unsigned BuiltinID,
     break;
   case Builtin::BI__builtin___CFStringMakeConstantString:
     // CFStringMakeConstantString is currently not implemented for GOFF (i.e.,
-    // on z/OS) and for XCOFF (i.e., on AIX). Emit unsupported
+    // on z/OS), MSIL and XCOFF (i.e., on AIX). Emit unsupported
     if (CheckBuiltinTargetNotInUnsupported(
             *this, BuiltinID, TheCall,
-            {llvm::Triple::GOFF, llvm::Triple::XCOFF}))
+            {llvm::Triple::GOFF, llvm::Triple::MSIL, llvm::Triple::XCOFF}))
       return ExprError();
     assert(TheCall->getNumArgs() == 1 &&
            "Wrong # arguments to builtin CFStringMakeConstantString");

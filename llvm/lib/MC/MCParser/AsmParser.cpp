@@ -805,6 +805,12 @@ AsmParser::AsmParser(SourceMgr &SM, MCContext &Ctx, MCStreamer &Out,
   case MCContext::IsDXContainer:
     report_fatal_error("DXContainer is not supported yet");
     break;
+  case MCContext::IsMSIL:
+    // Reached by llvm-mc or cc1as given an MSIL triple, and by inline asm in
+    // IR (bitcode from a stock clang, or a builtin that clang lowers to inline
+    // asm without a diagnostic) until MSILPrepareIR diagnoses it.
+    reportFatalUsageError("assembly parsing is not supported for MSIL");
+    break;
   }
 
   PlatformParser->Initialize(*this);

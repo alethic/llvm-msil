@@ -289,6 +289,7 @@ static bool asanUseGlobalsGC(const Triple &T, const CodeGenOptions &CGOpts) {
     llvm::report_fatal_error("ASan not implemented for XCOFF.");
   case Triple::Wasm:
   case Triple::DXContainer:
+  case Triple::MSIL:
   case Triple::SPIRV:
   case Triple::UnknownObjectFormat:
     break;

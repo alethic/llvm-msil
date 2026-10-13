@@ -6545,6 +6545,7 @@ bool ARMAsmParser::parsePrefix(ARM::Specifier &Spec) {
   case MCContext::IsSPIRV:
   case MCContext::IsXCOFF:
   case MCContext::IsDXContainer:
+  case MCContext::IsMSIL:
     llvm_unreachable("unexpected object format");
     break;
   }

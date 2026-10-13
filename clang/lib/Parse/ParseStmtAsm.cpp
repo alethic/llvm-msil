@@ -15,6 +15,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Parse/Parser.h"
 #include "clang/Parse/RAIIObjectsForParser.h"
+#include "clang/Sema/Lookup.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
@@ -348,6 +349,67 @@ static bool buildMSAsmString(Preprocessor &PP, SourceLocation AsmLoc,
   return false;
 }
 
+/// Mark the variables and functions named in an MS asm block referenced when
+/// the target skips the MC parse (MSIL). On native targets that parse looks up
+/// every operand name through Sema::LookupInlineAsmIdentifier; without it a
+/// variable used only in the block gets -Wunused-variable or
+/// -Wunused-but-set-variable. The lookups are made the same way, and their
+/// results are dropped because the statement keeps no operands.
+static void markMSAsmNamesReferenced(Sema &S, ArrayRef<Token> AsmToks) {
+  const auto *CurFD = dyn_cast<FunctionDecl>(S.CurContext);
+  bool IsNaked = CurFD && CurFD->hasAttr<NakedAttr>();
+  bool AtStatementStart = true;
+  for (unsigned I = 0, E = AsmToks.size(); I != E; ++I) {
+    const Token &Tok = AsmToks[I];
+    if (Tok.is(tok::kw_asm) || Tok.isAtStartOfLine())
+      AtStatementStart = true;
+    if (Tok.is(tok::kw_asm))
+      continue;
+    // The first token of a statement is a mnemonic, prefix, label or
+    // directive, and a name after '.' is a field or a directive; MC never
+    // looks either up as an ordinary name.
+    bool InOperand = !AtStatementStart && AsmToks[I - 1].isNot(tok::period);
+    AtStatementStart = false;
+    if (!InOperand || Tok.isNot(tok::identifier))
+      continue;
+
+    // Look up quietly first, so that registers, operators (PTR, DWORD, ...),
+    // type names and unknown names are never diagnosed.
+    IdentifierInfo *II = Tok.getIdentifierInfo();
+    LookupResult R(S, II, Tok.getLocation(), Sema::LookupOrdinaryName);
+    S.LookupName(R, S.getCurScope(), /*AllowBuiltinCreation=*/false);
+    R.suppressDiagnostics();
+    if (!R.isSingleResult())
+      continue;
+    // Keep variables and non-member functions. A naked function cannot refer
+    // to its parameters and never warns that they are unused, so they are
+    // skipped rather than diagnosed when a register or operator shares the
+    // name.
+    const NamedDecl *D = R.getFoundDecl();
+    bool IsVariable =
+        isa<VarDecl, BindingDecl>(D) && !(IsNaked && isa<ParmVarDecl>(D));
+    bool IsFunction = isa<FunctionDecl>(D) && !isa<CXXMethodDecl>(D);
+    if (!IsVariable && !IsFunction)
+      continue;
+
+    // TYPE, SIZE and LENGTH take an unevaluated operand, as in
+    // X86AsmParser::ParseIntelInlineAsmOperator.
+    const Token &Prev = AsmToks[I - 1];
+    bool IsUnevaluated =
+        Prev.is(tok::identifier) &&
+        llvm::is_contained({"TYPE", "type", "SIZE", "size", "LENGTH", "length"},
+                           Prev.getIdentifierInfo()->getName());
+    CXXScopeSpec SS;
+    UnqualifiedId Id;
+    Id.setIdentifier(II, Tok.getLocation());
+    (void)S.LookupInlineAsmIdentifier(SS, SourceLocation(), Id, IsUnevaluated);
+  }
+  // A reference to a variable usable in constant expressions waits in Sema's
+  // pending odr-use set until a full-expression ends. Nothing here ends one,
+  // and Sema asserts that the set is empty at the end of the function body.
+  S.CleanupVarDeclMarking();
+}
+
 bool Parser::isGCCAsmStatement(const Token &TokAfterAsm) const {
   return TokAfterAsm.is(tok::l_paren) || isGNUAsmQualifier(TokAfterAsm);
 }
@@ -510,7 +572,11 @@ StmtResult Parser::ParseMicrosoftAsmStatement(SourceLocation AsmLoc) {
   // We need an actual supported target.
   const llvm::Triple &TheTriple = Actions.Context.getTargetInfo().getTriple();
   const llvm::Target *TheTarget = nullptr;
-  if (!TheTriple.isX86()) {
+  if (TheTriple.isOSBinFormatMSIL()) {
+    // MSIL has no machine assembler. Build an opaque MSAsmStmt; CodeGen
+    // reports it only if the enclosing function is emitted.
+    markMSAsmNamesReferenced(Actions, AsmToks);
+  } else if (!TheTriple.isX86()) {
     Diag(AsmLoc, diag::err_msasm_unsupported_arch) << TheTriple.getArchName();
   } else {
     std::string Error;

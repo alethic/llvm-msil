@@ -90,6 +90,10 @@ MCStreamer *Target::createMCObjectStreamer(
     S = createDXContainerStreamer(Ctx, std::move(TAB), std::move(OW),
                                   std::move(Emitter));
     break;
+  case Triple::MSIL:
+    // The MSIL target emits ILAsm text only. It registers no MCCodeEmitter, so
+    // CodeGenTargetMachineImpl::createMCStreamer fails before it gets here.
+    reportFatalUsageError("MSIL object file emission is not implemented");
   }
   if (ObjectTargetStreamerCtorFn)
     ObjectTargetStreamerCtorFn(*S, STI);
@@ -121,6 +125,16 @@ iterator_range<TargetRegistry::iterator> TargetRegistry::targets() {
   return make_range(iterator(FirstTarget), iterator());
 }
 
+/// The MSIL target registers under this name. It never claims an architecture;
+/// it is selected by the triple's object format or by -march=msil.
+static constexpr StringLiteral MSILTargetName = "msil";
+
+static const Target *findTargetByName(StringRef Name) {
+  auto I = find_if(TargetRegistry::targets(),
+                   [&](const Target &T) { return Name == T.getName(); });
+  return I == TargetRegistry::targets().end() ? nullptr : &*I;
+}
+
 const Target *TargetRegistry::lookupTarget(StringRef ArchName,
                                            Triple &TheTriple,
                                            std::string &Error) {
@@ -129,15 +143,26 @@ const Target *TargetRegistry::lookupTarget(StringRef ArchName,
   // name, because it might be a backend that has no mapping to a target triple.
   const Target *TheTarget = nullptr;
   if (!ArchName.empty()) {
-    auto I = find_if(targets(),
-                     [&](const Target &T) { return ArchName == T.getName(); });
-
-    if (I == targets().end()) {
+    TheTarget = findTargetByName(ArchName);
+    if (!TheTarget) {
       Error = ("invalid target '" + ArchName + "'.").str();
       return nullptr;
     }
 
-    TheTarget = &*I;
+    if (ArchName == MSILTargetName) {
+      // -march=msil keeps the triple's architecture, OS and environment (they
+      // select the C ABI) and only switches the object format to MSIL.
+      if (!TheTriple.isOSBinFormatMSIL())
+        TheTriple.setObjectFormat(Triple::MSIL);
+      return TheTarget;
+    }
+    if (TheTriple.isOSBinFormatMSIL()) {
+      Error =
+          ("target '" + ArchName + "' cannot compile for the MSIL triple '" +
+           TheTriple.str() + "'; use -march=msil or a non-MSIL triple")
+              .str();
+      return nullptr;
+    }
 
     // Adjust the triple to match (if known), otherwise stick with the
     // given triple.
@@ -149,8 +174,12 @@ const Target *TargetRegistry::lookupTarget(StringRef ArchName,
     std::string TempError;
     TheTarget = TargetRegistry::lookupTarget(TheTriple, TempError);
     if (!TheTarget) {
-      Error = "unable to get target for '" + TheTriple.getTriple() +
-              "', see --version and --triple.";
+      // For an MSIL triple, keep the explanation of how to build the target.
+      if (TheTriple.isOSBinFormatMSIL())
+        Error = std::move(TempError);
+      else
+        Error = "unable to get target for '" + TheTriple.getTriple() +
+                "', see --version and --triple.";
       return nullptr;
     }
   }
@@ -165,6 +194,19 @@ const Target *TargetRegistry::lookupTarget(const Triple &TT,
     Error = "Unable to find target for this triple (no targets are registered)";
     return nullptr;
   }
+
+  // An MSIL triple (x86_64-unknown-linux-gnu-msil, ...) names a native
+  // architecture only to select the C ABI. It is always compiled by the MSIL
+  // target.
+  if (TT.isOSBinFormatMSIL()) {
+    if (const Target *T = findTargetByName(MSILTargetName))
+      return T;
+    Error = "No available targets are compatible with triple \"" + TT.str() +
+            "\" (the MSIL target is not built; configure LLVM with "
+            "-DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=MSIL)";
+    return nullptr;
+  }
+
   Triple::ArchType Arch = TT.getArch();
   auto ArchMatch = [&](const Target &T) { return T.ArchMatchFn(Arch); };
   auto I = find_if(targets(), ArchMatch);

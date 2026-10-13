@@ -27,6 +27,7 @@
 #include "llvm/MC/MCSectionDXContainer.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionGOFF.h"
+#include "llvm/MC/MCSectionMSIL.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCSectionSPIRV.h"
 #include "llvm/MC/MCSectionWasm.h"
@@ -112,6 +113,9 @@ MCContext::MCContext(const Triple &TheTriple, const MCAsmInfo &mai,
   case Triple::SPIRV:
     Env = IsSPIRV;
     break;
+  case Triple::MSIL:
+    Env = IsMSIL;
+    break;
   case Triple::UnknownObjectFormat:
     report_fatal_error("Cannot initialize MC for unknown object file format.");
     break;
@@ -151,6 +155,7 @@ void MCContext::reset() {
   ELFAllocator.DestroyAll();
   GOFFAllocator.DestroyAll();
   MachOAllocator.DestroyAll();
+  MSILAllocator.DestroyAll();
   WasmAllocator.DestroyAll();
   XCOFFAllocator.DestroyAll();
   MCInstAllocator.DestroyAll();
@@ -180,6 +185,7 @@ void MCContext::reset() {
   WasmUniquingMap.clear();
   XCOFFUniquingMap.clear();
   DXCUniquingMap.clear();
+  MSILUniquingMap.clear();
 
   RelSecNames.clear();
   MacroMap.clear();
@@ -305,6 +311,10 @@ MCSymbol *MCContext::createSymbolImpl(const MCSymbolTableEntry *Name,
   case MCContext::IsDXContainer:
     break;
   case MCContext::IsSPIRV:
+    return new (Name, *this) MCSymbol(Name, IsTemporary);
+  case MCContext::IsMSIL:
+    // A later phase may add MCSymbolMSIL (typed signatures, like
+    // MCSymbolWasm); that only touches this switch and a new header.
     return new (Name, *this) MCSymbol(Name, IsTemporary);
   }
   return new (Name, *this) MCSymbol(Name, IsTemporary);
@@ -946,6 +956,19 @@ MCSectionDXContainer *MCContext::getDXContainerSection(StringRef Section,
 
   // The first fragment will store the header
   return MapIt->second;
+}
+
+MCSectionMSIL *MCContext::getMSILSection(StringRef Section, SectionKind K) {
+  auto [It, Inserted] = MSILUniquingMap.try_emplace(Section);
+  if (!Inserted)
+    return It->second;
+
+  // The section keeps a StringRef to its name, so use the map's copy. There is
+  // no begin symbol (as for DXContainer and SPIR-V); an object writer can add
+  // one later with createRenamableSymbol(), as getWasmSection() does.
+  StringRef Name = It->first();
+  It->second = new (MSILAllocator.Allocate()) MCSectionMSIL(Name, K, nullptr);
+  return It->second;
 }
 
 MCSubtargetInfo &MCContext::getSubtargetCopy(const MCSubtargetInfo &STI) {

@@ -257,6 +257,11 @@ bool TargetMachine::shouldAssumeDSOLocal(const GlobalValue *GV) const {
   if (TT.isOSBinFormatGOFF())
     return true;
 
+  // MSIL: everything defined in the module lives in the same assembly and
+  // there is no GOT or PLT; declarations may be P/Invokes or other assemblies.
+  if (TT.isOSBinFormatMSIL())
+    return !GV->isDeclarationForLinker();
+
   if (TT.isOSBinFormatMachO()) {
     if (RM == Reloc::Static)
       return true;

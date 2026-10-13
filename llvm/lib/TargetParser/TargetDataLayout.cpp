@@ -590,6 +590,12 @@ static std::string computeVEDataLayout(const Triple &T) {
 }
 
 std::string Triple::computeDataLayout(StringRef ABIName) const {
+  // MSIL code keeps the exact data layout (including the symbol mangling
+  // component) of the native platform it targets, so C struct layout and
+  // bitcode produced by a stock clang for that platform match.
+  if (isOSBinFormatMSIL())
+    return getNativeFormatTriple().computeDataLayout(ABIName);
+
   switch (getArch()) {
   case Triple::arm:
   case Triple::armeb:

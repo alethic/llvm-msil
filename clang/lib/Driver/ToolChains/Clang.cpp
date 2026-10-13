@@ -5497,6 +5497,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         CmdArgs.push_back("-fdirectives-only");
     }
   } else if (isa<AssembleJobAction>(JA)) {
+    // The MSIL target emits ILAsm text only; there is no object writer yet.
+    if (Triple.isOSBinFormatMSIL())
+      D.Diag(diag::err_drv_msil_no_object_output) << TripleStr;
     CmdArgs.push_back("-emit-obj");
 
     CollectArgsForIntegratedAssembler(C, Args, CmdArgs, D);
@@ -5667,6 +5670,15 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     CopyProfArg->render(Args, CmdArgs);
     Args.AddLastArg(CmdArgs, options::OPT_fcopyprof_static_size_threshold_EQ);
   }
+
+  // The MSIL target has no object file section to embed bitcode in. Diagnose
+  // only the job that runs the backend, so that a compile the driver splits
+  // into two cc1 jobs for -fembed-bitcode is reported once.
+  if (Triple.isOSBinFormatMSIL() && D.embedBitcodeEnabled() &&
+      (isa<BackendJobAction>(JA) || isa<AssembleJobAction>(JA)))
+    if (const Arg *A = Args.getLastArg(options::OPT_fembed_bitcode_EQ))
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << A->getAsString(Args) << TripleStr;
 
   // Embed-bitcode option.
   // Only white-listed flags below are allowed to be embedded.
@@ -6362,8 +6374,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                        options::OPT_fno_auto_import);
   }
 
+  // Not by default for MSIL: CIL's 'volatile.' prefix (emitted for volatile
+  // accesses) already has acquire/release semantics (ECMA-335 I.12.6.7), so a
+  // plain volatile access keeps the /volatile:ms meaning, and the atomic loads
+  // and stores that -fms-volatile produces are not supported for MSIL yet.
   if (Args.hasFlag(options::OPT_fms_volatile, options::OPT_fno_ms_volatile,
-                   Triple.isX86() && IsWindowsMSVC))
+                   Triple.isX86() && IsWindowsMSVC &&
+                       !Triple.isOSBinFormatMSIL()))
     CmdArgs.push_back("-fms-volatile");
 
   // Non-PIC code defaults to -fdirect-access-external-data while PIC code
@@ -9270,6 +9287,10 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
   const llvm::Triple &Triple = getToolChain().getEffectiveTriple();
   const std::string &TripleStr = Triple.getTriple();
   const auto &D = getToolChain().getDriver();
+
+  // The MSIL target has no object writer yet (-save-temps -c, .s inputs).
+  if (Triple.isOSBinFormatMSIL())
+    D.Diag(diag::err_drv_msil_no_object_output) << TripleStr;
 
   // Don't warn about "clang -w -c foo.s"
   Args.ClaimAllArgs(options::OPT_w);

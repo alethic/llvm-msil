@@ -82,6 +82,23 @@ static void reportOptRecordError(Error E, DiagnosticsEngine &Diags,
       });
 }
 
+// MSIL has no module-level assembly; the rule matches Decl::FileScopeAsm in
+// CodeGenModule. IR input and linked bitcode modules can still carry it, so
+// diagnose any that is not just whitespace and drop it all before a pipeline
+// runs: ModuleSymbolTable (the bitcode writers under -flto) asserts that the
+// target has an MC asm parser whenever the module has module asm.
+static void removeMSILModuleAsm(llvm::Module &M, DiagnosticsEngine &Diags) {
+  if (!M.getTargetTriple().isOSBinFormatMSIL() || !M.hasModuleInlineAsm())
+    return;
+  if (llvm::any_of(M.getModuleInlineAsm(),
+                   [](const llvm::Module::GlobalAsmFragment &Fragment) {
+                     return !StringRef(Fragment.Asm).trim().empty();
+                   }))
+    Diags.Report(diag::err_msil_asm_unsupported)
+        << 2 << M.getTargetTriple().str();
+  M.removeModuleInlineAsm();
+}
+
 BackendConsumer::BackendConsumer(CompilerInstance &CI, BackendAction Action,
                                  IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS,
                                  LLVMContext &C,
@@ -264,6 +281,8 @@ void BackendConsumer::HandleTranslationUnit(ASTContext &C) {
   // Link each LinkModule into our module.
   if (!CodeGenOpts.LinkBitcodePostopt && LinkInModules(getModule()))
     return;
+
+  removeMSILModuleAsm(*getModule(), Diags);
 
   for (auto &F : getModule()->functions()) {
     if (const Decl *FD = Gen->GetDeclForMangledName(F.getName())) {
@@ -575,9 +594,12 @@ void CodeGenAction::ExecuteAction() {
     TheModule->setTargetTriple(Triple(TargetOpts.Triple));
   }
 
+  // MSIL emits no flag; see the matching guard in CodeGenModule::Release. The
+  // triple is checked after the override above.
   llvm::ExceptionHandling ExceptionModel =
       CodeGenOptions::toExceptionHandling(CodeGenOpts.getExceptionHandling());
-  if (ExceptionModel != llvm::ExceptionHandling::Default) {
+  if (ExceptionModel != llvm::ExceptionHandling::Default &&
+      !TheModule->getTargetTriple().isOSBinFormatMSIL()) {
     StringRef ModelName = llvm::getExceptionModelName(ExceptionModel);
     if (auto *Existing = cast_or_null<llvm::MDString>(
             TheModule->getModuleFlag("exception-model"))) {
@@ -616,6 +638,8 @@ void CodeGenAction::ExecuteAction() {
   // Link in each pending link module.
   if (!CodeGenOpts.LinkBitcodePostopt && Result.LinkInModules(&*TheModule))
     return;
+
+  removeMSILModuleAsm(*TheModule, Diagnostics);
 
   // Textual IR needs value names while parsing; discard new names afterwards.
   Ctx.setDiscardValueNames(CodeGenOpts.DiscardValueNames);

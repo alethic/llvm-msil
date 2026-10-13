@@ -2736,7 +2736,35 @@ public:
 
 } // namespace clang
 
+/// MSIL has no machine code to put assembly into. The only form accepted is
+/// an empty GNU asm statement (string empty after trimming; no outputs, inputs
+/// or labels; any clobbers; volatile or implicitly volatile), such as the
+/// barrier idiom `asm volatile("" ::: "memory")` or the spin-wait body
+/// `asm volatile("")`. It becomes a compiler-only fence followed by a call to
+/// llvm.sideeffect: the fence keeps native clang's opaque-memory semantics
+/// (memory is re-read around the statement, as for native `asm sideeffect ""`)
+/// and llvm.sideeffect keeps loops whose only side effect is the statement,
+/// which the fence alone does not. SelectionDAG and FastISel drop
+/// llvm.sideeffect. Any other GNU asm statement (including asm goto) and every
+/// Microsoft-style asm statement is an error. Only emitted functions get here,
+/// so unused asm in system headers (for example intrin.h) is accepted.
+static void emitMSILAsmStmt(CodeGenFunction &CGF, const AsmStmt &S) {
+  if (const auto *GS = dyn_cast<GCCAsmStmt>(&S);
+      GS && GS->getNumOutputs() == 0 && GS->getNumInputs() == 0 &&
+      GS->getNumLabels() == 0 && StringRef(GS->getAsmString()).trim().empty()) {
+    CGF.Builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                            llvm::SyncScope::SingleThread);
+    CGF.Builder.CreateCall(CGF.CGM.getIntrinsic(llvm::Intrinsic::sideeffect));
+    return;
+  }
+  CGF.CGM.getDiags().Report(S.getAsmLoc(), diag::err_msil_asm_unsupported)
+      << (isa<MSAsmStmt>(S) ? 1 : 0) << CGF.getTarget().getTriple().str();
+}
+
 void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
+  if (getTarget().getTriple().isOSBinFormatMSIL())
+    return emitMSILAsmStmt(*this, S);
+
   // Pop all cleanup blocks at the end of the asm statement.
   CodeGenFunction::RunCleanupsScope Cleanups(*this);
 

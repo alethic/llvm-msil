@@ -21,6 +21,7 @@
 #include "llvm/MC/MCSectionDXContainer.h"
 #include "llvm/MC/MCSectionELF.h"
 #include "llvm/MC/MCSectionGOFF.h"
+#include "llvm/MC/MCSectionMSIL.h"
 #include "llvm/MC/MCSectionMachO.h"
 #include "llvm/MC/MCSectionSPIRV.h"
 #include "llvm/MC/MCSectionWasm.h"
@@ -1176,6 +1177,17 @@ void MCObjectFileInfo::initDXContainerObjectFileInfo(const Triple &T) {
   TextSection = Ctx->getDXContainerSection("DXBC", SectionKind::getText());
 }
 
+void MCObjectFileInfo::initMSILMCObjectFileInfo(const Triple &T) {
+  // Logical sections of a .NET assembly. The MSIL target's
+  // TargetLoweringObjectFile maps every global to one of these.
+  TextSection = Ctx->getMSILSection(".text", SectionKind::getText());
+  DataSection = Ctx->getMSILSection(".data", SectionKind::getData());
+  BSSSection = Ctx->getMSILSection(".bss", SectionKind::getBSS());
+  ReadOnlySection = Ctx->getMSILSection(".rodata", SectionKind::getReadOnly());
+  // No DWARF, EH or TLS sections: there is no native unwinding, and debug
+  // information and thread-local storage take .NET-specific forms.
+}
+
 MCObjectFileInfo::~MCObjectFileInfo() = default;
 
 void MCObjectFileInfo::initMCObjectFileInfo(MCContext &MCCtx, bool PIC,
@@ -1225,6 +1237,9 @@ void MCObjectFileInfo::initMCObjectFileInfo(MCContext &MCCtx, bool PIC,
   case MCContext::IsDXContainer:
     initDXContainerObjectFileInfo(TheTriple);
     break;
+  case MCContext::IsMSIL:
+    initMSILMCObjectFileInfo(TheTriple);
+    break;
   }
 }
 
@@ -1243,6 +1258,7 @@ MCSection *MCObjectFileInfo::getDwarfComdatSection(const char *Name,
   case Triple::SPIRV:
   case Triple::XCOFF:
   case Triple::DXContainer:
+  case Triple::MSIL:
   case Triple::UnknownObjectFormat:
     report_fatal_error("Cannot get DWARF comdat section for this object file "
                        "format: not implemented.");

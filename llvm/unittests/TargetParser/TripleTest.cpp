@@ -1857,6 +1857,33 @@ TEST(TripleTest, DefaultLongDoubleFormat) {
             Triple("nvptx64-unknown-unknown").getDefaultLongDoubleFormat());
 }
 
+TEST(TripleTest, MSILLongDouble) {
+  // long double is double on every MSIL triple (Design.md section 3), even
+  // where the native triple uses x87 extended precision (x86_64 Linux and
+  // MinGW) or IEEE quad (AArch64 Linux).
+  for (const char *Str :
+       {"x86_64-unknown-linux-gnu-msil", "aarch64-unknown-linux-gnu-msil",
+        "x86_64-unknown-linux-musl-msil", "aarch64-unknown-linux-musl-msil",
+        "x86_64-pc-windows-msvc-msil", "aarch64-pc-windows-msvc-msil",
+        "x86_64-w64-windows-gnu-msil", "aarch64-apple-darwin-msil",
+        "i686-pc-windows-msvc-msil", "x86_64-pc-windows-msvc19.40.0-msil",
+        "arm64-apple-macosx14.0.0-msil"}) {
+    SCOPED_TRACE(Str);
+    EXPECT_EQ(LongDoubleFormat::IEEEdouble,
+              Triple(Str).getDefaultLongDoubleFormat());
+  }
+
+  // The native triples keep their own formats.
+  EXPECT_EQ(LongDoubleFormat::X87DoubleExtended,
+            Triple("x86_64-unknown-linux-gnu").getDefaultLongDoubleFormat());
+  EXPECT_EQ(LongDoubleFormat::X87DoubleExtended,
+            Triple("x86_64-w64-windows-gnu").getDefaultLongDoubleFormat());
+  EXPECT_EQ(LongDoubleFormat::IEEEquad,
+            Triple("aarch64-unknown-linux-gnu").getDefaultLongDoubleFormat());
+  EXPECT_EQ(LongDoubleFormat::IEEEquad,
+            Triple("aarch64-unknown-linux-musl").getDefaultLongDoubleFormat());
+}
+
 TEST(TripleTest, Normalization) {
 
   EXPECT_EQ("unknown", Triple::normalize(""));
@@ -3280,6 +3307,26 @@ TEST(TripleTest, FileFormat) {
   EXPECT_EQ(Triple::SPIRV, T.getObjectFormat());
   EXPECT_EQ("spirv", Triple::getObjectFormatTypeName(T.getObjectFormat()));
 
+  T.setObjectFormat(Triple::MSIL);
+  EXPECT_EQ(Triple::MSIL, T.getObjectFormat());
+  EXPECT_EQ("msil", Triple::getObjectFormatTypeName(T.getObjectFormat()));
+
+  EXPECT_EQ(Triple::MSIL,
+            Triple("x86_64-unknown-linux-gnu-msil").getObjectFormat());
+  EXPECT_EQ(Triple::MSIL,
+            Triple("aarch64-unknown-linux-musl-msil").getObjectFormat());
+  EXPECT_EQ(Triple::MSIL,
+            Triple("x86_64-pc-windows-msvc-msil").getObjectFormat());
+  EXPECT_EQ(Triple::MSIL,
+            Triple("x86_64-w64-windows-gnu-msil").getObjectFormat());
+  EXPECT_EQ(Triple::MSIL,
+            Triple("aarch64-apple-darwin-msil").getObjectFormat());
+  Triple MSVCMSILNormalized(Triple::normalize("x86_64-pc-windows-msvc-msil"));
+  EXPECT_EQ(Triple::MSIL, MSVCMSILNormalized.getObjectFormat());
+  Triple GNUWindowsMSILNormalized(
+      Triple::normalize("x86_64-w64-windows-gnu-msil"));
+  EXPECT_EQ(Triple::MSIL, GNUWindowsMSILNormalized.getObjectFormat());
+
   EXPECT_EQ(Triple::ELF, Triple("amdgcn-apple-macosx").getObjectFormat());
   EXPECT_EQ(Triple::ELF, Triple("amdgpu-apple-macosx").getObjectFormat());
   EXPECT_EQ(Triple::ELF, Triple("r600-apple-macosx").getObjectFormat());
@@ -3287,6 +3334,283 @@ TEST(TripleTest, FileFormat) {
   EXPECT_EQ(Triple::SPIRV, Triple("spirv32-apple-macosx").getObjectFormat());
   EXPECT_EQ(Triple::SPIRV, Triple("spirv64-apple-macosx").getObjectFormat());
   EXPECT_EQ(Triple::DXContainer, Triple("dxil-apple-macosx").getObjectFormat());
+}
+
+// An MSIL triple (llvm/docs/MSIL/Design.md section 3) is a native triple plus
+// an "msil" object-format suffix: "this exact native platform and ABI, but emit
+// CIL". Everything that selects the C ABI (arch, vendor, OS, environment and
+// the data layout) keeps its native value; only the object format changes.
+TEST(TripleTest, MSILObjectFormat) {
+  const char *X86_64ELFLayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-"
+                                "i128:128-f80:128-n8:16:32:64-S128";
+  const char *X86_64WinLayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-"
+                                "i128:128-f80:128-n8:16:32:64-S128";
+  const char *AArch64ELFLayout =
+      "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-"
+      "i128:128-n32:64-S128-Fn32";
+  const char *AArch64WinLayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-p:64:"
+                                 "64-i32:32-i64:64-i128:128-n32:64-S128-Fn32";
+  const char *AArch64MachOLayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:"
+                                   "64-i128:128-n32:64-S128-Fn32";
+
+  struct {
+    const char *Str;
+    Triple::ArchType Arch;
+    Triple::VendorType Vendor;
+    Triple::OSType OS;
+    Triple::EnvironmentType Env;
+    const char *Native;
+    Triple::ObjectFormatType NativeFormat;
+    const char *DataLayout;
+    unsigned WCharSize;
+  } Cases[] = {
+      {"x86_64-unknown-linux-gnu-msil", Triple::x86_64, Triple::UnknownVendor,
+       Triple::Linux, Triple::GNU, "x86_64-unknown-linux-gnu", Triple::ELF,
+       X86_64ELFLayout, 4},
+      {"aarch64-unknown-linux-gnu-msil", Triple::aarch64, Triple::UnknownVendor,
+       Triple::Linux, Triple::GNU, "aarch64-unknown-linux-gnu", Triple::ELF,
+       AArch64ELFLayout, 4},
+      {"x86_64-unknown-linux-musl-msil", Triple::x86_64, Triple::UnknownVendor,
+       Triple::Linux, Triple::Musl, "x86_64-unknown-linux-musl", Triple::ELF,
+       X86_64ELFLayout, 4},
+      {"aarch64-unknown-linux-musl-msil", Triple::aarch64,
+       Triple::UnknownVendor, Triple::Linux, Triple::Musl,
+       "aarch64-unknown-linux-musl", Triple::ELF, AArch64ELFLayout, 4},
+      {"x86_64-pc-windows-msvc-msil", Triple::x86_64, Triple::PC, Triple::Win32,
+       Triple::MSVC, "x86_64-pc-windows-msvc", Triple::COFF, X86_64WinLayout,
+       2},
+      {"aarch64-pc-windows-msvc-msil", Triple::aarch64, Triple::PC,
+       Triple::Win32, Triple::MSVC, "aarch64-pc-windows-msvc", Triple::COFF,
+       AArch64WinLayout, 2},
+      // "w64" is not a known vendor, for the native triple too.
+      {"x86_64-w64-windows-gnu-msil", Triple::x86_64, Triple::UnknownVendor,
+       Triple::Win32, Triple::GNU, "x86_64-w64-windows-gnu", Triple::COFF,
+       X86_64WinLayout, 2},
+      // Darwin has no environment component, so "msil" sits in its slot.
+      {"aarch64-apple-darwin-msil", Triple::aarch64, Triple::Apple,
+       Triple::Darwin, Triple::UnknownEnvironment, "aarch64-apple-darwin",
+       Triple::MachO, AArch64MachOLayout, 4},
+  };
+
+  for (const auto &C : Cases) {
+    SCOPED_TRACE(C.Str);
+    Triple T(C.Str);
+    Triple N(C.Native);
+
+    EXPECT_EQ(C.Arch, T.getArch());
+    EXPECT_EQ(C.Vendor, T.getVendor());
+    EXPECT_EQ(C.OS, T.getOS());
+    EXPECT_EQ(C.Env, T.getEnvironment());
+    EXPECT_EQ(Triple::MSIL, T.getObjectFormat());
+    EXPECT_TRUE(T.isOSBinFormatMSIL());
+    EXPECT_FALSE(T.isOSBinFormatELF());
+    EXPECT_FALSE(T.isOSBinFormatCOFF());
+    EXPECT_FALSE(T.isOSBinFormatMachO());
+
+    // The native triple has the same components and its default format.
+    EXPECT_EQ(N.getArch(), T.getArch());
+    EXPECT_EQ(N.getSubArch(), T.getSubArch());
+    EXPECT_EQ(N.getVendor(), T.getVendor());
+    EXPECT_EQ(N.getOS(), T.getOS());
+    EXPECT_EQ(N.getEnvironment(), T.getEnvironment());
+    EXPECT_EQ(C.NativeFormat, N.getObjectFormat());
+    EXPECT_FALSE(N.isOSBinFormatMSIL());
+
+    // str() and normalize() round-trip: these spellings are canonical.
+    EXPECT_EQ(C.Str, T.str());
+    EXPECT_EQ(C.Str, Triple::normalize(C.Str));
+    Triple R(Triple::normalize(C.Str));
+    EXPECT_EQ(C.Str, R.str());
+    EXPECT_EQ(Triple::MSIL, R.getObjectFormat());
+    EXPECT_EQ(C.Env, R.getEnvironment());
+
+    // getNativeFormatTriple() drops the suffix and nothing else, and
+    // getDefaultObjectFormat() is the format the arch and OS imply.
+    Triple NF = T.getNativeFormatTriple();
+    EXPECT_EQ(C.Native, NF.str());
+    EXPECT_EQ(C.NativeFormat, NF.getObjectFormat());
+    EXPECT_FALSE(NF.isOSBinFormatMSIL());
+    EXPECT_EQ(C.NativeFormat, T.getDefaultObjectFormat());
+    EXPECT_EQ(C.NativeFormat, N.getDefaultObjectFormat());
+
+    // The data layout is the native one byte for byte, including the
+    // mangling component (m:e, m:w, m:o).
+    EXPECT_EQ(C.DataLayout, N.computeDataLayout());
+    EXPECT_EQ(C.DataLayout, T.computeDataLayout());
+
+    // CIL has its own exception model; LLVM-level unwinding is never used.
+    EXPECT_EQ(ExceptionHandling::None, T.getDefaultExceptionHandling());
+
+    // Comdats stay available on every MSIL triple; the backend ignores them.
+    EXPECT_TRUE(T.supportsCOMDAT());
+
+    // The suffix is not an environment version.
+    EXPECT_TRUE(T.getEnvironmentVersion().empty());
+
+    // Everything that describes the platform keeps its native answer.
+    EXPECT_EQ(N.isOSLinux(), T.isOSLinux());
+    EXPECT_EQ(N.isOSWindows(), T.isOSWindows());
+    EXPECT_EQ(N.isOSDarwin(), T.isOSDarwin());
+    EXPECT_EQ(N.isMusl(), T.isMusl());
+    EXPECT_EQ(N.isOSGlibc(), T.isOSGlibc());
+    EXPECT_EQ(N.isWindowsMSVCEnvironment(), T.isWindowsMSVCEnvironment());
+    EXPECT_EQ(N.isWindowsGNUEnvironment(), T.isWindowsGNUEnvironment());
+    EXPECT_TRUE(T.isArch64Bit());
+    EXPECT_TRUE(T.isLittleEndian());
+    EXPECT_EQ(C.WCharSize, N.getDefaultWCharSize());
+    EXPECT_EQ(C.WCharSize, T.getDefaultWCharSize());
+  }
+
+  EXPECT_EQ("msil", Triple::getObjectFormatTypeName(Triple::MSIL));
+  // "msil" names a target (-march=msil), never an architecture: -march=msil
+  // must keep the triple's architecture.
+  EXPECT_EQ(Triple::UnknownArch, Triple::getArchTypeForLLVMName("msil"));
+
+  // Darwin: "msil" fills the environment slot but is not an environment.
+  Triple D("aarch64-apple-darwin-msil");
+  EXPECT_TRUE(D.hasEnvironment());
+  EXPECT_EQ("msil", D.getEnvironmentName());
+  EXPECT_EQ(Triple::UnknownEnvironment, D.getEnvironment());
+  EXPECT_TRUE(D.isOSDarwin());
+  EXPECT_TRUE(D.isMacOSX());
+
+  // Comdat support follows the object format, not the platform: Mach-O has no
+  // comdats, but Darwin-MSIL keeps them (the backend ignores them).
+  EXPECT_FALSE(Triple("aarch64-apple-darwin").supportsCOMDAT());
+  EXPECT_TRUE(Triple("aarch64-apple-darwin-msil").supportsCOMDAT());
+
+  // Other spellings of MSIL triples: the native triple and the data layout
+  // follow the components, whatever the spelling.
+  struct {
+    const char *Str;
+    const char *Native;
+  } Spellings[] = {
+      // What the MSVC toolchain produces (an environment version).
+      {"x86_64-pc-windows-msvc19.40.0-msil", "x86_64-pc-windows-msvc19.40.0"},
+      // What the Darwin toolchain produces (an OS version).
+      {"arm64-apple-macosx14.0.0-msil", "arm64-apple-macosx14.0.0"},
+      // A bare "msil" in the environment slot of a 4-component triple.
+      {"x86_64-unknown-linux-msil", "x86_64-unknown-linux"},
+      {"x86_64-pc-windows-msil", "x86_64-pc-windows"},
+      // 32-bit Windows (a later phase in the backend; the triple parses).
+      {"i686-pc-windows-msvc-msil", "i686-pc-windows-msvc"},
+  };
+  for (const auto &S : Spellings) {
+    SCOPED_TRACE(S.Str);
+    Triple T(S.Str);
+    Triple N(S.Native);
+    EXPECT_TRUE(T.isOSBinFormatMSIL());
+    EXPECT_EQ(N.getArch(), T.getArch());
+    EXPECT_EQ(N.getVendor(), T.getVendor());
+    EXPECT_EQ(N.getOS(), T.getOS());
+    EXPECT_EQ(N.getEnvironment(), T.getEnvironment());
+    EXPECT_EQ(N.getOSVersion(), T.getOSVersion());
+    EXPECT_EQ(N.getEnvironmentVersion(), T.getEnvironmentVersion());
+    EXPECT_EQ(S.Native, T.getNativeFormatTriple().str());
+    EXPECT_EQ(N.getObjectFormat(), T.getDefaultObjectFormat());
+    EXPECT_EQ(N.computeDataLayout(), T.computeDataLayout());
+    EXPECT_EQ(ExceptionHandling::None, T.getDefaultExceptionHandling());
+  }
+  EXPECT_EQ("x86_64-pc-windows-msvc19.40.0-msil",
+            Triple::normalize("x86_64-pc-windows-msvc19.40.0-msil"));
+  EXPECT_EQ(
+      VersionTuple(19, 40, 0),
+      Triple("x86_64-pc-windows-msvc19.40.0-msil").getEnvironmentVersion());
+  EXPECT_EQ("arm64-apple-macosx14.0.0-msil",
+            Triple::normalize("arm64-apple-macosx14.0.0-msil"));
+  EXPECT_EQ(VersionTuple(14, 0, 0),
+            Triple("arm64-apple-macosx14.0.0-msil").getOSVersion());
+  EXPECT_EQ("x86_64-unknown-linux-gnu-msil",
+            Triple::normalize("x86_64-linux-gnu-msil"));
+  EXPECT_EQ("e-m:x-p:32:32-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-"
+            "f80:128-n8:16:32-a:0:32-S32",
+            Triple("i686-pc-windows-msvc-msil").computeDataLayout());
+
+  // Mutators keep or add the suffix.
+  Triple W("x86_64-pc-windows-msvc");
+  W.setObjectFormat(Triple::MSIL);
+  EXPECT_EQ("x86_64-pc-windows-msvc-msil", W.str());
+  EXPECT_TRUE(W.isOSBinFormatMSIL());
+  W.setEnvironment(Triple::GNU);
+  EXPECT_EQ("x86_64-pc-windows-gnu-msil", W.str());
+  EXPECT_TRUE(W.isOSBinFormatMSIL());
+  W.setArch(Triple::aarch64);
+  EXPECT_EQ("aarch64-pc-windows-gnu-msil", W.str());
+  EXPECT_TRUE(W.isOSBinFormatMSIL());
+
+  Triple L("x86_64-unknown-linux-gnu");
+  L.setObjectFormat(Triple::MSIL);
+  EXPECT_EQ("x86_64-unknown-linux-gnu-msil", L.str());
+  EXPECT_EQ(Triple::GNU, L.getEnvironment());
+
+  Triple M("aarch64-apple-darwin");
+  M.setObjectFormat(Triple::MSIL);
+  EXPECT_EQ("aarch64-apple-darwin-msil", M.str());
+  EXPECT_EQ(Triple::UnknownEnvironment, M.getEnvironment());
+  EXPECT_TRUE(M.isOSBinFormatMSIL());
+
+  Triple A("x86_64-unknown-linux-gnu-msil");
+  A.setArch(Triple::aarch64);
+  EXPECT_EQ("aarch64-unknown-linux-gnu-msil", A.str());
+  EXPECT_TRUE(A.isOSBinFormatMSIL());
+  EXPECT_EQ(
+      "i386-unknown-linux-gnu-msil",
+      Triple("x86_64-unknown-linux-gnu-msil").get32BitArchVariant().str());
+  EXPECT_EQ("x86_64-unknown-linux-gnu-msil",
+            Triple("i386-unknown-linux-gnu-msil").get64BitArchVariant().str());
+
+  Triple E(Triple::x86_64, Triple::NoSubArch, Triple::UnknownVendor,
+           Triple::Linux, Triple::GNU, Triple::MSIL);
+  EXPECT_EQ("x86_64-unknown-linux-gnu-msil", E.str());
+  EXPECT_TRUE(E.isOSBinFormatMSIL());
+
+  // Triples that are not MSIL are returned unchanged by
+  // getNativeFormatTriple(), and getDefaultObjectFormat() ignores an explicit
+  // format.
+  EXPECT_EQ("x86_64-unknown-linux-gnu",
+            Triple("x86_64-unknown-linux-gnu").getNativeFormatTriple().str());
+  EXPECT_EQ("x86_64-pc-windows-msvc",
+            Triple("x86_64-pc-windows-msvc").getNativeFormatTriple().str());
+  EXPECT_EQ("i686-pc-windows-msvc-elf",
+            Triple("i686-pc-windows-msvc-elf").getNativeFormatTriple().str());
+  EXPECT_EQ(Triple::COFF,
+            Triple("i686-pc-windows-msvc-elf").getDefaultObjectFormat());
+  EXPECT_EQ(Triple::ELF,
+            Triple("x86_64-unknown-linux-gnu").getDefaultObjectFormat());
+  EXPECT_EQ(Triple::MachO,
+            Triple("arm64-apple-macosx").getDefaultObjectFormat());
+  EXPECT_EQ(Triple::Wasm,
+            Triple("wasm32-unknown-unknown").getDefaultObjectFormat());
+
+  // Native triples keep their own exception model and data layout.
+  EXPECT_EQ(ExceptionHandling::DwarfCFI,
+            Triple("x86_64-unknown-linux-gnu").getDefaultExceptionHandling());
+  EXPECT_EQ(ExceptionHandling::WinEH,
+            Triple("x86_64-pc-windows-msvc").getDefaultExceptionHandling());
+  EXPECT_EQ(X86_64WinLayout,
+            Triple("x86_64-pc-windows-msvc").computeDataLayout());
+
+  // merge() has no MSIL preference: apart from the Apple OS-version rule and
+  // AMDGCN subarchitectures it returns its argument, whether or not that is
+  // the MSIL triple. IRMover sets the destination module's triple to
+  // SrcTriple.merge(DstTriple), so it keeps the destination's triple, and
+  // linking an MSIL module into a native one gives a native triple: msil-ld
+  // must rewrite the input triples before IRMover runs
+  // (recon/triple-objfmt.md P4).
+  EXPECT_EQ("x86_64-unknown-linux-gnu-msil",
+            Triple("x86_64-unknown-linux-gnu")
+                .merge(Triple("x86_64-unknown-linux-gnu-msil")));
+  EXPECT_EQ("x86_64-unknown-linux-gnu",
+            Triple("x86_64-unknown-linux-gnu-msil")
+                .merge(Triple("x86_64-unknown-linux-gnu")));
+  // Apple vendor: the triple with the newer OS version wins in both
+  // directions, so the msil format is lost here too.
+  EXPECT_EQ("aarch64-apple-macosx14.0.0",
+            Triple("aarch64-apple-macosx14.0.0")
+                .merge(Triple("aarch64-apple-darwin-msil")));
+  EXPECT_EQ("aarch64-apple-macosx14.0.0",
+            Triple("aarch64-apple-darwin-msil")
+                .merge(Triple("aarch64-apple-macosx14.0.0")));
 }
 
 TEST(TripleTest, SupportsDebugEntryValues) {
@@ -3470,6 +3794,28 @@ TEST(TripleTest, DefaultExceptionHandling) {
             Triple("aarch64-pc-windows-msvc").getDefaultExceptionHandling());
   EXPECT_EQ(ExceptionHandling::DwarfCFI,
             Triple("aarch64-pc-windows-elf").getDefaultExceptionHandling());
+
+  // MSIL triples have no LLVM-level exception model, whatever the native
+  // triple uses (DwarfCFI, WinEH).
+  EXPECT_EQ(
+      ExceptionHandling::None,
+      Triple("x86_64-unknown-linux-gnu-msil").getDefaultExceptionHandling());
+  EXPECT_EQ(
+      ExceptionHandling::None,
+      Triple("aarch64-unknown-linux-gnu-msil").getDefaultExceptionHandling());
+  EXPECT_EQ(
+      ExceptionHandling::None,
+      Triple("x86_64-pc-windows-msvc-msil").getDefaultExceptionHandling());
+  EXPECT_EQ(
+      ExceptionHandling::None,
+      Triple("aarch64-pc-windows-msvc-msil").getDefaultExceptionHandling());
+  EXPECT_EQ(
+      ExceptionHandling::None,
+      Triple("x86_64-w64-windows-gnu-msil").getDefaultExceptionHandling());
+  EXPECT_EQ(ExceptionHandling::None,
+            Triple("i686-pc-windows-msvc-msil").getDefaultExceptionHandling());
+  EXPECT_EQ(ExceptionHandling::None,
+            Triple("aarch64-apple-darwin-msil").getDefaultExceptionHandling());
 }
 
 TEST(TripleTest, NormalizeWindows) {
@@ -3527,6 +3873,61 @@ TEST(TripleTest, NormalizeWindows) {
   EXPECT_TRUE(Triple(Triple::normalize("mipsel-windows-msvccoff")).isOSBinFormatCOFF());
   EXPECT_TRUE(Triple(Triple::normalize("mipsel-windows-msvc")).isOSBinFormatCOFF());
   EXPECT_TRUE(Triple(Triple::normalize("mipsel-windows-gnu")).isOSBinFormatCOFF());
+
+  // The msil suffix survives normalization of Windows triples.
+  EXPECT_EQ("x86_64-pc-windows-msvc-msil",
+            Triple::normalize("x86_64-pc-windows-msvc-msil"));
+  EXPECT_EQ("aarch64-pc-windows-msvc-msil",
+            Triple::normalize("aarch64-pc-windows-msvc-msil"));
+  EXPECT_EQ("i686-pc-windows-msvc-msil",
+            Triple::normalize("i686-pc-windows-msvc-msil"));
+  EXPECT_EQ("x86_64-w64-windows-gnu-msil",
+            Triple::normalize("x86_64-w64-windows-gnu-msil"));
+  // The spelling the MSVC toolchain produces keeps its version.
+  EXPECT_EQ("x86_64-pc-windows-msvc19.40.0-msil",
+            Triple::normalize("x86_64-pc-windows-msvc19.40.0-msil"));
+  // Like -elf and -macho above, win32 normalizes to windows and no msvc
+  // environment is inserted.
+  EXPECT_EQ("x86_64-pc-windows-msil",
+            Triple::normalize("x86_64-pc-win32-msil"));
+  EXPECT_EQ("x86_64-unknown-windows-msil",
+            Triple::normalize("x86_64-win32-msil"));
+  EXPECT_EQ("x86_64-w64-windows-gnu-msil",
+            Triple::normalize("x86_64-w64-mingw32-msil"));
+  Triple Win32MSIL(Triple::normalize("x86_64-pc-win32-msil"));
+  EXPECT_TRUE(Win32MSIL.isOSBinFormatMSIL());
+  EXPECT_TRUE(Win32MSIL.isWindowsMSVCEnvironment());
+
+  // Vendor-less Windows spellings: normalize() inserts the vendor, and the
+  // msil format that the permutation moves into the fourth component is kept
+  // (ImplementationPlan.md section 12, "D3 amended").
+  struct {
+    const char *Str;
+    const char *Normalized;
+    Triple::ArchType Arch;
+    Triple::EnvironmentType Env;
+  } VendorLess[] = {
+      {"x86_64-windows-msvc-msil", "x86_64-unknown-windows-msvc-msil",
+       Triple::x86_64, Triple::MSVC},
+      {"x86_64-windows-gnu-msil", "x86_64-unknown-windows-gnu-msil",
+       Triple::x86_64, Triple::GNU},
+      {"aarch64-windows-msvc-msil", "aarch64-unknown-windows-msvc-msil",
+       Triple::aarch64, Triple::MSVC},
+  };
+  for (const auto &C : VendorLess) {
+    SCOPED_TRACE(C.Str);
+    EXPECT_EQ(C.Normalized, Triple::normalize(C.Str));
+    Triple T(Triple::normalize(C.Str));
+    EXPECT_TRUE(T.isOSBinFormatMSIL());
+    EXPECT_EQ(C.Arch, T.getArch());
+    EXPECT_EQ(Triple::UnknownVendor, T.getVendor());
+    EXPECT_EQ(Triple::Win32, T.getOS());
+    EXPECT_EQ(C.Env, T.getEnvironment());
+  }
+  // Only the msil format is kept: a native format in the same position is
+  // dropped as before.
+  EXPECT_EQ("x86_64-unknown-windows-msvc",
+            Triple::normalize("x86_64-windows-msvc-elf"));
 }
 
 TEST(TripleTest, NormalizeAndroid) {
@@ -3797,6 +4198,11 @@ TEST(TripleTest, isCompatibleWith) {
       {"x86_64-unknown-linux-gnu", "x86_64h-unknown-linux-gnu", true},
       {"x86_64-pc-windows-gnu", "x86_64-pc-windows-msvc", false},
       {"x86_64-pc-windows-msvc", "x86_64-pc-windows-msvc-elf", false},
+      {"x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu-msil", false},
+      {"x86_64-pc-windows-msvc", "x86_64-pc-windows-msvc-msil", false},
+      {"aarch64-unknown-linux-gnu", "aarch64-unknown-linux-gnu-msil", false},
+      {"x86_64-unknown-linux-gnu-msil", "x86_64-unknown-linux-gnu-msil", true},
+      {"x86_64-pc-windows-msvc-msil", "x86_64-pc-windows-gnu-msil", false},
       {"i686-w64-windows-gnu", "i386-w64-windows-gnu", true},
       {"x86_64-w64-windows-gnu", "x86_64-pc-windows-gnu", true},
       {"armv7-w64-windows-gnu", "thumbv7-pc-windows-gnu", true},

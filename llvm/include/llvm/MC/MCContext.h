@@ -56,6 +56,7 @@ class MCSectionCOFF;
 class MCSectionDXContainer;
 class MCSectionELF;
 class MCSectionMachO;
+class MCSectionMSIL;
 class MCSectionSPIRV;
 class MCSectionWasm;
 class MCSectionXCOFF;
@@ -94,7 +95,8 @@ public:
     IsSPIRV,
     IsWasm,
     IsXCOFF,
-    IsDXContainer
+    IsDXContainer,
+    IsMSIL
   };
 
 private:
@@ -143,6 +145,7 @@ private:
   SpecificBumpPtrAllocator<MCSectionDXContainer> DXCAllocator;
   SpecificBumpPtrAllocator<MCSectionELF> ELFAllocator;
   SpecificBumpPtrAllocator<MCSectionMachO> MachOAllocator;
+  SpecificBumpPtrAllocator<MCSectionMSIL> MSILAllocator;
   SpecificBumpPtrAllocator<MCSectionGOFF> GOFFAllocator;
   SpecificBumpPtrAllocator<MCSectionSPIRV> SPIRVAllocator;
   SpecificBumpPtrAllocator<MCSectionWasm> WasmAllocator;
@@ -319,6 +322,7 @@ private:
   std::map<WasmSectionKey, MCSectionWasm *> WasmUniquingMap;
   std::map<XCOFFSectionKey, MCSectionXCOFF *> XCOFFUniquingMap;
   StringMap<MCSectionDXContainer *> DXCUniquingMap;
+  StringMap<MCSectionMSIL *> MSILUniquingMap;
   StringMap<bool> RelSecNames;
 
   SpecificBumpPtrAllocator<MCSubtargetInfo> MCSubtargetAllocator;
@@ -652,6 +656,11 @@ public:
   /// Get the section for the provided Section name
   LLVM_ABI MCSectionDXContainer *getDXContainerSection(StringRef Section,
                                                        SectionKind K);
+
+  /// Get (or create) the MSIL section with the given name. MSIL sections are
+  /// logical groupings inside a .NET assembly (code, data, bss, read-only
+  /// data); they have no begin symbol.
+  LLVM_ABI MCSectionMSIL *getMSILSection(StringRef Section, SectionKind K);
 
   LLVM_ABI bool hasXCOFFSection(StringRef Section,
                                 XCOFF::CsectProperties CsectProp) const;

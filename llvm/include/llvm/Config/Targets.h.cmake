@@ -51,6 +51,9 @@
 /* Define if the Mips target is built in */
 #cmakedefine01 LLVM_HAS_MIPS_TARGET
 
+/* Define if the MSIL target is built in */
+#cmakedefine01 LLVM_HAS_MSIL_TARGET
+
 /* Define if the MSP430 target is built in */
 #cmakedefine01 LLVM_HAS_MSP430_TARGET
 

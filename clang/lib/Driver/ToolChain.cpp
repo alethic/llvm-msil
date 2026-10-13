@@ -733,6 +733,16 @@ Tool *ToolChain::buildStaticLibTool() const {
 }
 
 Tool *ToolChain::getAssemble() const {
+  // The MSIL target has no object writer yet, and no external assembler can
+  // consume ILAsm text. This is the only route to the external assembler
+  // (-fno-integrated-as), so report the error the integrated-assembler path
+  // reports (Clang::ConstructJob, ClangAs) and build no assemble job.
+  if (getTriple().isOSBinFormatMSIL()) {
+    D.Diag(clang::diag::err_drv_msil_no_object_output)
+        << (hasEffectiveTriple() ? getEffectiveTriple().getTriple()
+                                 : getTripleString());
+    return nullptr;
+  }
   if (!Assemble)
     Assemble.reset(buildAssembler());
   return Assemble.get();
@@ -745,6 +755,16 @@ Tool *ToolChain::getClangAs() const {
 }
 
 Tool *ToolChain::getLink() const {
+  // Phase 1 has no MSIL linker, and no native linker can consume ILAsm text or
+  // MSIL bitcode (-flto would hand it to the gold plugin or lld). Reject every
+  // link, LTO included. The driver selects the link tool before it builds the
+  // link's inputs, so a non-LTO link reports this error once, here.
+  if (getTriple().isOSBinFormatMSIL()) {
+    D.Diag(clang::diag::err_drv_msil_no_object_output)
+        << (hasEffectiveTriple() ? getEffectiveTriple().getTriple()
+                                 : getTripleString());
+    return nullptr;
+  }
   if (!Link)
     Link.reset(buildLinker());
   return Link.get();
@@ -775,8 +795,13 @@ Tool *ToolChain::getOffloadPackager() const {
 }
 
 Tool *ToolChain::getLinkerWrapper() const {
-  if (!LinkerWrapper)
-    LinkerWrapper.reset(new tools::LinkerWrapper(*this, getLink()));
+  if (!LinkerWrapper) {
+    // getLink() reports the error and returns null for MSIL triples.
+    Tool *Linker = getLink();
+    if (!Linker)
+      return nullptr;
+    LinkerWrapper.reset(new tools::LinkerWrapper(*this, Linker));
+  }
   return LinkerWrapper.get();
 }
 
@@ -1932,6 +1957,10 @@ ToolChain::getSupportedSanitizers(BoundArch BA,
     Res |= SanitizerKind::MemTag;
   if (getTriple().isBPF())
     Res |= SanitizerKind::KernelAddress;
+  // KCFI checks indirect calls in native code and emits its type ids as module
+  // asm; MSIL has neither.
+  if (getTriple().isOSBinFormatMSIL())
+    Res &= ~SanitizerKind::KCFI;
   return Res;
 }
 

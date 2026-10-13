@@ -1496,9 +1496,14 @@ void CodeGenModule::Release() {
   // that the flag's absence unambiguously means unspecified regardless of the
   // target default. In the absence of a custom module flag merging behavior, an
   // explicit non-default model could silently merge with a defaulted module.
+  // MSIL emits no flag: the MSIL TargetMachine forces the exception model to
+  // None, and that override reaches only consumers that read TargetOptions,
+  // not those that read Module::getExceptionModel(). The driver still passes
+  // the native -exception-model so that predefines such as __SEH__ match.
   llvm::ExceptionHandling ExceptionModel =
       CodeGenOptions::toExceptionHandling(CodeGenOpts.getExceptionHandling());
-  if (ExceptionModel != llvm::ExceptionHandling::Default) {
+  if (ExceptionModel != llvm::ExceptionHandling::Default &&
+      !getTriple().isOSBinFormatMSIL()) {
     getModule().addModuleFlag(
         llvm::Module::Error, "exception-model",
         llvm::MDString::get(getLLVMContext(),
@@ -1715,7 +1720,7 @@ void CodeGenModule::Release() {
               LangOpts.PointerAuthInitFiniAddressDiscrimination);
     }
 
-    if (getTriple().isOSLinux()) {
+    if (getTriple().isOSLinux() && getTriple().isOSBinFormatELF()) {
       getModule().addModuleFlag(llvm::Module::Error, "ptrauth-sign-personality",
                                 LangOpts.PointerAuthCalls);
 
@@ -3742,8 +3747,9 @@ void CodeGenModule::finalizeKCFITypes() {
 
     // Generate a constant with the expected KCFI type identifier for all
     // address-taken function declarations to support annotating indirectly
-    // called assembly functions.
-    if (!AddressTaken || !F.isDeclaration())
+    // called assembly functions. MSIL modules never carry module asm (see
+    // Decl::FileScopeAsm in EmitTopLevelDecl).
+    if (!AddressTaken || !F.isDeclaration() || getTriple().isOSBinFormatMSIL())
       continue;
 
     const llvm::ConstantInt *Type;
@@ -3799,8 +3805,16 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
   setGVProperties(F, FD);
 
   // Setup target-specific attributes.
-  if (!IsIncompleteFunction && F->isDeclaration())
+  if (!IsIncompleteFunction && F->isDeclaration()) {
     getTargetCodeGenInfo().setTargetAttributes(FD, F, *this);
+
+    // MSIL selects its TargetCodeGenInfo by architecture, so mark
+    // prototype-less declarations here, as WebAssembly does; the backend gives
+    // them the signature of their call sites.
+    if (getTriple().isOSBinFormatMSIL() &&
+        !FD->doesThisDeclarationHaveABody() && !FD->hasPrototype())
+      F->addFnAttr("no-prototype");
+  }
 
   if (const auto *CSA = FD->getAttr<CodeSegAttr>())
     F->setSection(CSA->getName());
@@ -7511,6 +7525,7 @@ CodeGenModule::GetAddrOfConstantCFString(const StringLiteral *Literal) {
     llvm_unreachable("unknown file format");
   case llvm::Triple::DXContainer:
   case llvm::Triple::GOFF:
+  case llvm::Triple::MSIL:
   case llvm::Triple::SPIRV:
   case llvm::Triple::XCOFF:
     llvm_unreachable("unimplemented");
@@ -8206,6 +8221,15 @@ void CodeGenModule::EmitTopLevelDecl(Decl *D) {
     if (LangOpts.SYCLIsDevice)
       break;
     auto *AD = cast<FileScopeAsmDecl>(D);
+    // MSIL has no module-level assembly. Never append any, not even
+    // whitespace: ModuleSymbolTable asserts that the target has an MC asm
+    // parser whenever the module has module asm.
+    if (getTriple().isOSBinFormatMSIL()) {
+      if (!StringRef(AD->getAsmString()).trim().empty())
+        getDiags().Report(AD->getAsmLoc(), diag::err_msil_asm_unsupported)
+            << 2 << getTriple().str();
+      break;
+    }
 
     const TargetOptions &TargetOpts = getTarget().getTargetOpts();
     llvm::Module::GlobalAsmProperties Props;

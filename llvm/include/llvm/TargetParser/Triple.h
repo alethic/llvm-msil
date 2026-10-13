@@ -426,6 +426,7 @@ public:
     ELF,
     GOFF,
     MachO,
+    MSIL,
     SPIRV,
     Wasm,
     XCOFF,
@@ -537,6 +538,16 @@ public:
 
   /// Get the object format for this triple.
   ObjectFormatType getObjectFormat() const { return ObjectFormat; }
+
+  /// Get the object format implied by the architecture and OS alone, i.e. the
+  /// format this triple would have if it did not name one explicitly.
+  LLVM_ABI ObjectFormatType getDefaultObjectFormat() const;
+
+  /// If this triple's object format is MSIL, return the native platform triple
+  /// it is derived from: the same string with the "msil" format suffix removed,
+  /// so the object format is the platform default (ELF, COFF or MachO).
+  /// Otherwise return *this unchanged.
+  LLVM_ABI Triple getNativeFormatTriple() const;
 
   /// Parse the version number from the OS name component of the triple, if
   /// present.
@@ -885,6 +896,10 @@ public:
   bool isOSBinFormatDXContainer() const {
     return getObjectFormat() == Triple::DXContainer;
   }
+
+  /// Tests whether the target emits MSIL (CIL) for a .NET assembly. The rest
+  /// of the triple names the native platform whose C ABI the code follows.
+  bool isOSBinFormatMSIL() const { return getObjectFormat() == Triple::MSIL; }
 
   /// Tests whether the target uses WALI Wasm
   bool isWALI() const {
