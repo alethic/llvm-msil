@@ -1,0 +1,37 @@
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+-- bolt project is disabled
+-- clang project is enabled
+-- clang-tools-extra project is disabled
+-- cross-project-tests project is disabled
+-- lld project is enabled
+-- lldb project is disabled
+-- mlir project is disabled
+-- polly project is disabled
+-- flang project is disabled
+-- libc project is disabled
+-- compiler-rt project is disabled
+-- Doxygen disabled.
+-- Found Python3: C:/Users/JeromeHaltom/AppData/Local/Python/pythoncore-3.14-64/python.exe (found suitable version "3.14.7", minimum required is "3.8") found components: Interpreter
+-- Could NOT find LibLZMA (missing: LIBLZMA_LIBRARY LIBLZMA_INCLUDE_DIR LIBLZMA_HAS_AUTO_DECODER LIBLZMA_HAS_EASY_ENCODER LIBLZMA_HAS_LZMA_PRESET) 
+-- Could NOT find Backtrace (missing: Backtrace_LIBRARY Backtrace_INCLUDE_DIR) 
+-- LLVM host triple: x86_64-pc-windows-msvc
+-- Native target architecture is X86
+-- Threads enabled.
+-- Ninja version: 1.13.2
+-- Could NOT find OCaml (missing: OCAMLFIND OCAML_VERSION OCAML_STDLIB_PATH) 
+-- OCaml bindings disabled.
+-- LLVM default target triple: x86_64-pc-windows-msvc
+-- Precompiled headers enabled.
+-- Targeting X86
+-- Targeting WebAssembly
+-- Not building UnicodeCharSetsGenerator because libxml2 is not available
+-- LLD version: 24.0.0
+-- Clang version: 24.0.0git
+-- Could NOT find Perl (missing: PERL_EXECUTABLE) 
+-- Found Python3: C:/Users/JeromeHaltom/AppData/Local/Python/pythoncore-3.14-64/python.exe (found version "3.14.7") found components: Interpreter
+-- Not building llvm-mt.exe because libxml2 is not available
+-- Configuring done (33.5s)
+-- Generating done (14.2s)
+-- Build files have been written to: D:/llvm-msil/build
+configure exit=0 elapsed=48.6s

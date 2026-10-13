@@ -1,0 +1,23 @@
+# msil-expect-error.ps1 (plan M0.a) passes only for a clean diagnostic: the
+# program exits with exactly -ExitCode (default 1), its output matches
+# -Pattern, and the output has no crash marker. On Windows a fatal error
+# ends in abort() with exit code 3, which plain 'not' accepts, so the gates
+# rely on this script. Inputs/fake-program.py stands in for the compiler: it
+# prints Inputs/fake-output/<file> and exits with the given status. Every
+# crash case also prints the expected diagnostic and exits 1, so only the
+# rule under test can fail it.
+# REQUIRES: system-windows, pwsh
+
+# A clean diagnostic with exit 1 passes.
+# RUN: %{harness_check} exits 0 %{harness_expect_error} -Pattern "error: .*variadic" -- %python %S/Inputs/fake-program.py 1 %S/Inputs/fake-output/diag-clean.txt
+
+# Each crash marker fails, although the status and the pattern are right.
+# RUN: %{harness_check} exits 1 %{harness_expect_error} -Pattern "error: .*variadic" -- %python %S/Inputs/fake-program.py 1 %S/Inputs/fake-output/diag-llvm-error.txt
+# RUN: %{harness_check} exits 1 %{harness_expect_error} -Pattern "error: .*variadic" -- %python %S/Inputs/fake-program.py 1 %S/Inputs/fake-output/diag-please.txt
+# RUN: %{harness_check} exits 1 %{harness_expect_error} -Pattern "error: .*variadic" -- %python %S/Inputs/fake-program.py 1 %S/Inputs/fake-output/diag-stack-dump.txt
+# RUN: %{harness_check} exits 1 %{harness_expect_error} -Pattern "error: .*variadic" -- %python %S/Inputs/fake-program.py 1 %S/Inputs/fake-output/diag-exception-code.txt
+
+# The abort() status 3 fails with clean output, and so does output that does
+# not match the pattern.
+# RUN: %{harness_check} exits 1 %{harness_expect_error} -Pattern "error: .*variadic" -- %python %S/Inputs/fake-program.py 3 %S/Inputs/fake-output/diag-clean.txt
+# RUN: %{harness_check} exits 1 %{harness_expect_error} -Pattern "error: .*unsupported" -- %python %S/Inputs/fake-program.py 1 %S/Inputs/fake-output/diag-clean.txt

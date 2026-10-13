@@ -1,0 +1,12 @@
+# A program that keeps committing memory is stopped by the harness memory cap
+# and reported as '[memory limit]': the .NET 10 JIT was seen allocating 40+ GB
+# on bad IL. The cap is a Job Object on Windows and RLIMIT_DATA inside Linux,
+# where the WSL runner runs msil-run.py itself (plan section 12, M0 row);
+# there the runtime's out-of-memory message is what msil-run.py recognizes as
+# '[memory limit]'. The program commits up to 4 GiB in 1 MiB steps and touches
+# none of it, and it imports nothing, so the transcript is the same on every OS
+# and runner.
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/memory-hog.il
+# RUN: %{harness_check} within 60 %msil_exec --mem-limit-mb 256 --expect %S/Inputs/memory-hog --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "[memory limit]"

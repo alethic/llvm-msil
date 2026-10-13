@@ -1,0 +1,2 @@
+prog.c:3:5: error: 'f' has a variadic argument list
+PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ and include the crash backtrace.

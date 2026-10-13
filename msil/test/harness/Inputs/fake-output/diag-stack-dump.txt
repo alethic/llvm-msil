@@ -1,0 +1,3 @@
+prog.c:3:5: error: 'f' has a variadic argument list
+Stack dump:
+0.	Program arguments: llc prog.ll

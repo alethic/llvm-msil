@@ -1,0 +1,2 @@
+prog.c:3:5: error: 'f' has a variadic argument list
+Exception Code: 0x80000003

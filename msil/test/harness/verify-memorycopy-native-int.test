@@ -1,0 +1,17 @@
+# Both sides of the PEVerify exception of plan D21. The MEMMOVE sequence of
+# plan D15 (native int addresses, 'conv.i8; dup' lengths, then
+# Buffer::MemoryCopy(void*, void*, int64, int64)) makes PEVerify report
+# '[found Native Int][expected unmanaged pointer] Unexpected type on the
+# stack.', which is allowed: the module verifies, force-JITs and has memmove
+# semantics (exit 4). Passing a native int where an int64 length is expected
+# is still an error ('[expected Long]').
+# REQUIRES: msil-ilverify, msil-peverify
+
+# RUN: %ilasm -dll -output=%t.ok.dll %S/Inputs/memorycopy-native-int.il
+# RUN: %msil_verify %t.ok.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.ok.dll %}
+# RUN: %msil_exec --expect %S/Inputs/memorycopy-native-int %t.ok.dll
+
+# RUN: %ilasm -dll -output=%t.bad.dll %S/Inputs/memorycopy-int64-mismatch.il
+# RUN: not %msil_verify %t.bad.dll > %t.bad.log 2>&1
+# RUN: %{harness_check} contains %t.bad.log "\[found Native Int\]\[expected Long\] Unexpected type on the stack" "::move"

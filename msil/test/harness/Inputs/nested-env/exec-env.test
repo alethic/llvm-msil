@@ -1,0 +1,6 @@
+# Run only by a nested lit (dotnet-env-param.test): with
+# --param msil_dotnet_env=MSIL_TEST_ENV=abc, %msil_exec passes the variable to
+# the program without an explicit --env, and it exits with len("abc") = 3.
+
+# RUN: %ilasm -dll -output=%t.dll %S/../dotnet-env.il
+# RUN: %msil_exec --expect %S/../dotnet-env-3 %t.dll

@@ -1,0 +1,13 @@
+# msil-jitall.py runs jitall under a wall-clock timeout (plan M0.c): a JIT
+# can hang on bad IL. Force-JITting <Module> runs its initializer, which here
+# spins (Inputs/jitall-spin-cctor.il), so jitall must be killed after
+# --timeout seconds and the output must end with '[timeout]'. The option
+# comes after lit's default --timeout, so it wins. The initializer gives up
+# by itself after 120 s, so the outer 60 s bound also catches a jitall that
+# waits for it instead of killing it. On the WSL leg this is the timeout of
+# the Linux side.
+# REQUIRES: msil-jitall
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/jitall-spin-cctor.il
+# RUN: not %{harness_check} within 60 %msil_jitall --timeout 5 %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^\[timeout\]$" "^harness-check: finished in"

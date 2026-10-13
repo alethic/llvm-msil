@@ -1,0 +1,17 @@
+# A module initializer (<Module>::.cctor in the shape of plan D12) whose C
+# constructor calls the linux-gnu 'puts' import (pinvokeimpl("libc")).
+# msil-jitall.py runs the initializer while it force-JITs <Module>, so jitall
+# has to run where the program runs: inside WSL for the WSL runner, where
+# "libc" resolves. It reports every method ok ('ctor1', 'main' and
+# '<msil>Main'; it skips the .cctor and the P/Invoke stub), and the program
+# prints the constructor's line before 'main' returns. cctor-puts-windows.test
+# is the windows twin.
+# REQUIRES: msil-triple-linux, msil-jitall, msil-wsl || system-linux
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/cctor-puts-wsl.il
+# RUN: %msil_verify %t.dll
+# RUN: %msil_jitall %t.dll > %t.jitall.log 2>&1
+# RUN: %{harness_check} contains %t.jitall.log "^jitall: 3 ok, 0 failed$"
+# RUN: %{harness_check} lacks %t.jitall.log "JIT FAIL"
+# RUN: %msil_exec --expect %S/Inputs/cctor-puts-wsl --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "module initializer ran" "[exit 42]"

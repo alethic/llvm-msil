@@ -1,0 +1,104 @@
+== e03_sigs
+    2 x StackUnexpected    <Module>::main()                   [found Int32][expected Native Int] Unexpected type on the stack.
+   -> 2 Error(s) Verifying
+== e04_mem
+    1 x StackByRef         <Module>::frame_noinit()           [found Native Int] Expected ByRef on the stack.
+    1 x StackByRef         <Module>::main()                   [found Native Int] Expected ByRef on the stack.
+    1 x Unverifiable       <Module>::frame_init_sum()         Instruction cannot be verified.
+    1 x Unverifiable       <Module>::frame_noinit()           Instruction cannot be verified.
+    1 x Unverifiable       <Module>::main()                   Instruction cannot be verified.
+   -> 5 Error(s) Verifying
+== e05_conv
+   -> All Classes and Methods in
+== e06_cmp
+   -> All Classes and Methods in
+== e07_fnptr
+    1 x ?                  <Module>::apply(native int, int32) ImportCalli not implemented
+    1 x ?                  <Module>::fact(int64)              ImportCalli not implemented
+    1 x StackByRef         <Module>::main()                   [found Native Int] Expected ByRef on the stack.
+    1 x Unverifiable       <Module>::main()                   Instruction cannot be verified.
+   -> 4 Error(s) Verifying
+== e08_pinvoke
+    1 x ExpectedNumericType <Module>::main()                   [found address of '[e08_pinvoke]blob6'] Expected numeric type on the stack.
+   -> 1 Error(s) Verifying
+== e09_modinit
+    1 x StackByRef         <Module>::.cctor()                 [found Native Int] Expected ByRef on the stack.
+    1 x StackByRef         <Module>::main()                   [found Native Int] Expected ByRef on the stack.
+    1 x StackByRef         Exports::call_fp(int32)            [found Native Int] Expected ByRef on the stack.
+    1 x StackByRef         Exports::get_counter()             [found Native Int] Expected ByRef on the stack.
+    1 x StackByRef         Exports::msg()                     [found Native Int] Expected ByRef on the stack.
+    2 x Unverifiable       <Module>::.cctor()                 Instruction cannot be verified.
+   -> 7 Error(s) Verifying
+== e10_main
+    1 x StackByRef         <Module>::__msil_start(string[     )][offset 0x00000024][found Native Int] Expected ByRef on the stack.
+    1 x StackByRef         <Module>::main(int32, native int)  [found Native Int] Expected ByRef on the stack.
+   -> 2 Error(s) Verifying
+== e11_names
+   -> All Classes and Methods in
+== e12c_access
+    1 x ?                  Exports::viaClass(int32)           ImportCalli not implemented
+   -> 1 Error(s) Verifying
+== e13_i64ptr
+    1 x ?                  <Module>::c5(native int)           ImportCalli not implemented
+    1 x ?                  <Module>::run(native int, native int, string) ImportCalli not implemented
+    1 x StackByRef         <Module>::c1(native int)           [found Long] Expected ByRef on the stack.
+    1 x StackByRef         <Module>::c2(native int)           [found Native Int] Expected ByRef on the stack.
+    1 x StackByRef         <Module>::c3(native int)           [found Long] Expected ByRef on the stack.
+    1 x StackByRef         <Module>::c4(native int)           [found Long] Expected ByRef on the stack.
+    1 x StackUnexpected    <Module>::c3(native int)           [found Long][expected Native Int] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::c3(native int)           [found Native Int][expected Long] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::c4(native int)           [found Long][expected Native Int] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::c4(native int)           [found Native Int][expected Long] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::c6_inner(int64)          [found Long][expected Native Int] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::c7(native int)           [found Long][expected Native Int] Unexpected type on the stack.
+   -> 12 Error(s) Verifying
+== e14_ilv
+    1 x ?                  <Module>::m2(native int)           ImportCalli not implemented
+    1 x StackByRef         <Module>::m1(native int)           [found Native Int] Expected ByRef on the stack.
+   -> 2 Error(s) Verifying
+== e15_broken
+    1 x LocallocStackNotEmpty <Module>::b8_localloc_nonempty()   Stack must be empty before localloc, except for the size item.
+    1 x MethodFallthrough  <Module>::b12_fall_off_end()       Fall through end of the method without returning.
+    1 x PathStackDepth     <Module>::b3_join_depth(int32)     Stack depth differs depending on path.
+    1 x PathStackUnexpected <Module>::b4_join_type(int32)      [found Double][expected Int32] Non-compatible types on stack depending on path.
+    1 x ReturnEmpty        <Module>::b6_extra_at_ret()        Stack must contain only the return value.
+    1 x StackOverflow      <Module>::b1_maxstack()            Stack overflow.
+    1 x StackUnderflow     <Module>::b2_underflow()           Stack underflow.
+    1 x StackUnexpected    <Module>::b10_ret_i8_as_i4()       [found Long][expected Int32] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::b5_i8_to_i4_local()      [found Long][expected Int32] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::b7_f8_to_i4_local()      [found Double][expected Int32] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::b9_i4_plus_f8()          [found Int32][expected Double] Unexpected type on the stack.
+    1 x Unverifiable       <Module>::b8_localloc_nonempty()   Instruction cannot be verified.
+   -> 12 Error(s) Verifying
+== e16_syntax
+    1 x ?                  <Module>::sum_tail_calli(int64, int64) ImportCalli not implemented
+    1 x ExpectedNumericType <Module>::main()                   [found address of '[e16_syntax]b12'] Expected numeric type on the stack.
+   -> 2 Error(s) Verifying
+== e18_ldftn_pinvoke
+    1 x ?                  <Module>::main()                   ImportCalli not implemented
+   -> 1 Error(s) Verifying
+== e19_memmove
+    1 x StackByRef         <Module>::fill(native int, int32)  [found Native Int] Expected ByRef on the stack.
+    1 x StackByRef         <Module>::sum(native int, int32)   [found Native Int] Expected ByRef on the stack.
+    1 x Unverifiable       <Module>::cp(native int, native int, int32) Instruction cannot be verified.
+   -> 3 Error(s) Verifying
+== e20_align
+    1 x Unverifiable       <Module>::ll(int32)                Instruction cannot be verified.
+   -> 1 Error(s) Verifying
+== e21_voidptr
+    1 x StackByRef         <Module>::main()                   [found Native Int] Expected ByRef on the stack.
+    1 x StackByRef         <Module>::rd(void*, int32)         [found Native Int] Expected ByRef on the stack.
+    1 x UnmanagedPointer   <Module>::adv(uint8*)              Unmanaged pointers are not a verifiable type.
+    1 x UnmanagedPointer   <Module>::rd(void*, int32)         Unmanaged pointers are not a verifiable type.
+    1 x Unverifiable       <Module>::main()                   Instruction cannot be verified.
+   -> 5 Error(s) Verifying
+== e22_arith
+    1 x InitLocals         <Module>::d2l(float64)             initlocals must be set for verifiable methods with one or more local variables.
+    1 x StackUnexpected    <Module>::d2l(float64)             [found Double][expected Long] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::f2i(float32)             [found Single][expected Int32] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::i2f(int32)               [found Int32][expected Single] Unexpected type on the stack.
+    1 x StackUnexpected    <Module>::shl64_by_i64(int64, int64) [found Long] Unexpected type on the stack.
+   -> 5 Error(s) Verifying
+== e14_ilv with -g StackByRef -g ImportCalli
+    1 x ?                  <Module>::m2(native int)           ImportCalli not implemented
+   -> 1 Error(s) Verifying

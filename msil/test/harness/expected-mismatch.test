@@ -1,0 +1,8 @@
+# A transcript that differs from the expected file fails and prints a diff
+# (expected '[exit 41]', actual '[exit 42]'). A missing expected file is a
+# failure too, never a silent pass.
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/exit-42.il
+# RUN: not %msil_exec --expect %S/Inputs/mismatch %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^- ?\[exit 41\]$" "^\+ ?\[exit 42\]$"
+# RUN: not %msil_exec --expect %S/Inputs/no-such-expected-file %t.dll

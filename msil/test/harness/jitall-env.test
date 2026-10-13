@@ -1,0 +1,13 @@
+# msil-jitall.py --env VAR=VALUE reaches jitall's process (the msil_dotnet_env
+# passthrough, plan D38: DOTNET_TieredCompilation=0 must reach the JIT that
+# jitall drives, not only the program). Force-JITting <Module> runs its
+# initializer, which needs MSIL_TEST_ENV (Inputs/jitall-env-cctor.il): without
+# it every method fails with the initializer's NullReferenceException, with
+# --env MSIL_TEST_ENV=abc both methods JIT.
+# REQUIRES: msil-jitall
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/jitall-env-cctor.il
+# RUN: not %msil_jitall %t.dll > %t.unset.log 2>&1
+# RUN: %{harness_check} contains %t.unset.log "JIT FAIL .*::main\b.*NullReferenceException" "^jitall: 0 ok, 2 failed$"
+# RUN: %msil_jitall --env MSIL_TEST_ENV=abc %t.dll > %t.set.log 2>&1
+# RUN: %{harness_check} contains %t.set.log "^jitall: 2 ok, 0 failed$"

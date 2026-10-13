@@ -1,0 +1,23 @@
+// PROTOTYPE ONLY: stand-in for llc output of ../add-args.ll.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89) .ver 4:0:0:0 }
+.assembly '@NAME@' { }
+.method assembly static int32 'add'(int32 a, int32 b) cil managed noinlining {
+  .maxstack 2
+  ldarg.0
+  ldarg.1
+  add
+  ret
+}
+.method public static int32 'main'() cil managed {
+  .maxstack 2
+  ldc.i4.s 40
+  ldc.i4.2
+  call int32 'add'(int32, int32)
+  ret
+}
+.method public static int32 Main(string[] args) cil managed {
+  .entrypoint
+  .maxstack 1
+  call int32 'main'()
+  ret
+}

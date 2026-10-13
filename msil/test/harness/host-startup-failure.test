@@ -1,0 +1,21 @@
+# A program that the dotnet host never starts (here: its runtimeconfig.json
+# asks for Microsoft.NETCore.App 99.0.0, which is not installed) is a
+# configuration error of msil-run.py, exit status 2 with a 'could not start'
+# message, never an '[exit N]' transcript. The host fails with the HRESULT
+# 0x80008096; POSIX keeps only its low 8 bits, so on Linux (the WSL leg) a
+# harness that took that status for the program's would print '[exit 150]'
+# and accept Inputs/host-startup-150.expected, and on Windows it would report
+# a mismatch (status 1). The --runtimeconfig given here comes after the one in
+# %msil_exec and %msil_jitall, so it wins. msil-jitall.py treats a jitall that
+# the host does not start the same way.
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/exit-42.il
+# RUN: %{harness_check} exits 2 %msil_exec --runtimeconfig %S/Inputs/net99.runtimeconfig.json --expect %S/Inputs/host-startup-150 %t.dll > %t.exec.log 2>&1
+# RUN: %{harness_check} contains %t.exec.log "could not start"
+# RUN: %{harness_check} lacks %t.exec.log "^\[exit"
+
+# RUN: %if msil-jitall %{ %{harness_check} exits 2 %msil_jitall --runtimeconfig %S/Inputs/net99.runtimeconfig.json %t.dll > %t.jitall.log 2>&1 %}
+# RUN: %if msil-jitall %{ %{harness_check} contains %t.jitall.log "could not start" %}
+
+# The control: the same program with the runtimeconfig of %msil_exec runs.
+# RUN: %msil_exec --expect %S/Inputs/exit-42 %t.dll

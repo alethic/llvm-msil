@@ -1,0 +1,27 @@
+# A function address used as a native int (plan D2, D18; FUNC_ADDR prints
+# 'ldftn <member-ref>', M8.a) must pass msil-verify on both sides of the
+# allowance for it (plan section 12, 'D21 and M0.b item (7) refined', part
+# 2). PEVerify types an ldftn value as a method pointer and rejects every use
+# of it as a native int; ILVerify and the JIT accept them.
+# Inputs/ldftn-native-int.il has one method per use (call argument, local,
+# return value, ceq and beq with NULL in both operand orders, arithmetic,
+# calli), so PEVerify's stop at the first error of a method hides none of
+# them; it verifies and runs (exit 40). The allowance is exact: an ldftn value
+# passed for an int32 parameter (Inputs/ldftn-wrong-type.il) and native int +
+# int64 later in a method whose first PEVerify error is an ldftn use
+# (Inputs/ldftn-masked-mix.il, found by the neutralized pass) still fail.
+# REQUIRES: msil-ilverify, msil-peverify, msil-ildasm
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/ldftn-native-int.il
+# RUN: %msil_verify %t.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.dll %}
+# RUN: %msil_exec --expect %S/Inputs/ldftn-native-int --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "[exit 40]"
+
+# RUN: %ilasm -dll -output=%t.int32.dll %S/Inputs/ldftn-wrong-type.il
+# RUN: not %msil_verify %t.int32.dll > %t.int32.log 2>&1
+# RUN: %{harness_check} contains %t.int32.log "::wrong\b.*\[expected Int32\] Unexpected type on the stack"
+
+# RUN: %ilasm -dll -output=%t.mix.dll %S/Inputs/ldftn-masked-mix.il
+# RUN: not %msil_verify %t.mix.dll > %t.mix.log 2>&1
+# RUN: %{harness_check} contains %t.mix.log "::mix\b.*\[found Native Int\]\[expected Long\] Unexpected type on the stack"

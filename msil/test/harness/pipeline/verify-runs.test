@@ -1,0 +1,16 @@
+# %{msil_c} and %{msil_ll} run msil-verify on every module (plan 5.5:
+# compile -> ilasm -dll -> msil-verify -> jitall -> run). Inputs/bad-switch.c
+# and Inputs/bad-switch-ir.ll compile (through the stand-in) to a module that
+# runs correctly but switches on a native int, which breaks plan D35: only
+# msil-verify rejects it (ILVerify StackUnexpected), the JIT and the runtime
+# accept it. So both must fail in a nested lit, each with that error in its
+# own failure report, and without the %msil_verify step of c_pipeline or
+# ll_pipeline in lit.cfg.py they would pass. lit.cfg.py keeps Inputs/ out of
+# discovery, so a nested lit runs them. jitall-runs.test shows the jitall
+# step.
+# REQUIRES: msil-ilverify
+
+# RUN: not %{harness_lit} %S/Inputs/bad-switch.c %S/Inputs/bad-switch-ir.ll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^FAIL: MSIL :: harness/pipeline/Inputs/bad-switch\.c " "^FAIL: MSIL :: harness/pipeline/Inputs/bad-switch-ir\.ll "
+# RUN: %{harness_check} contains %t.log "TEST 'MSIL :: harness/pipeline/Inputs/bad-switch\.c' FAILED \*+\n(?:(?!\*{20}$).*\n)*?.*StackUnexpected.*::main\(\).*\[found Native Int\]\[expected Int32\]"
+# RUN: %{harness_check} contains %t.log "TEST 'MSIL :: harness/pipeline/Inputs/bad-switch-ir\.ll' FAILED \*+\n(?:(?!\*{20}$).*\n)*?.*StackUnexpected.*::main\(\).*\[found Native Int\]\[expected Int32\]"

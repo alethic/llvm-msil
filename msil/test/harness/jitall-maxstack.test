@@ -1,0 +1,10 @@
+# msil-jitall.py force-JITs every method without running any of them: a
+# .maxstack that is too small is reported as a JIT failure of that method
+# only, and the marker line that '<msil>Main' and 'main' would print never
+# appears.
+# REQUIRES: msil-jitall
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/jitall-maxstack.il
+# RUN: not %msil_jitall %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "JIT FAIL .*::add_two.*InvalidProgramException" "jitall: \d+ ok, 1 failed"
+# RUN: %{harness_check} lacks %t.log "MSIL-HARNESS"

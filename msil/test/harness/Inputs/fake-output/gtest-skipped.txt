@@ -1,0 +1,19 @@
+Note: Google Test filter = MSILFake.*
+[==========] Running 3 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 3 tests from MSILFake
+[ RUN      ] MSILFake.One
+[       OK ] MSILFake.One (0 ms)
+[ RUN      ] MSILFake.Two
+[       OK ] MSILFake.Two (0 ms)
+[ RUN      ] MSILFake.Three
+MSILFake.cpp(30): Skipped
+needs a feature this build does not have
+[  SKIPPED ] MSILFake.Three (0 ms)
+[----------] 3 tests from MSILFake (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 3 tests from 1 test suite ran. (0 ms total)
+[  PASSED  ] 2 tests.
+[  SKIPPED ] 1 test, listed below:
+[  SKIPPED ] MSILFake.Three

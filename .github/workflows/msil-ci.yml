@@ -1,0 +1,376 @@
+# CI for the MSIL fork (llvm/docs/MSIL/Design.md, llvm/docs/MSIL/ImplementationPlan.md).
+#
+# Only workflows named msil-*.yml are meant to run in this repository. The
+# workflows inherited from llvm/llvm-project are never edited or deleted (that
+# would conflict on every upstream merge); the repository owner disables them
+# in the repository settings with .github/msil/disable-upstream-workflows.sh.
+#
+# Two jobs build clang and llc with the X86 target (plus the experimental MSIL
+# target once llvm/lib/Target/MSIL exists, milestone M2), run the MSIL-related
+# unit tests and then 'ninja check-msil': the llc/clang FileCheck tests and the
+# execution tests in msil/test, compiled to IL, assembled, verified (ILVerify,
+# jitall, and PEVerify on Windows), run on .NET and compared with checked-in
+# transcripts and a native build (the native oracle).
+#   linux:   ubuntu, .NET 8 (tiered) and .NET 10 (TieredCompilation=0), NuGet ilasm and ildasm
+#   windows: .NET 8 and .NET Framework 4.8, Framework ilasm, ildasm and PEVerify
+# Every lit run passes msil_require_verify=1 (plan decision D38), so a missing
+# verifier or jitall fails the job instead of silently skipping a step.
+name: MSIL CI
+
+permissions:
+  contents: read
+
+on:
+  # Manual runs only (plan section 10, item 5). The push, pull_request and
+  # nightly triggers below are enabled by the repository owner, after making an
+  # msil-* branch the default branch (GitHub runs schedules from the default
+  # branch only) and running .github/msil/disable-upstream-workflows.sh, so
+  # that pushes to this fork do not start the inherited upstream workflows.
+  #
+  # push:
+  #   branches:
+  #     - 'msil-main'
+  #     - 'msil-milestone*'
+  # pull_request:
+  #   branches:
+  #     - 'msil-*'
+  #   paths-ignore:
+  #     - 'llvm/docs/**'
+  # schedule:
+  #   - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'Linux: also run all optimization levels, check-llvm and check-clang (adds hours)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  FULL_CHECK: ${{ github.event_name == 'schedule' || inputs.full == true }}
+  # The pinned IL tool versions (MsilILAsmVersion, MsilILVerifyVersion) are
+  # set only in this project file; the steps below read them from it.
+  MSIL_TOOLS_PROJ: msil/utils/tools/msil-tools.proj
+  # gtest filter of the unit-test step: every MSIL test plus the registry tests.
+  MSIL_GTEST_FILTER: '*MSIL*:TargetRegistry.*'
+
+jobs:
+  linux:
+    name: Linux x86_64 (.NET 8 and 10)
+    if: github.repository_owner == 'alethic'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /usr/share/swift
+          df -h /
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build clang lld
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5 # TODO(user): pin SHA (cannot be verified offline; no upstream workflow uses this action)
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Cache NuGet packages and dotnet tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA upstream pins for actions/cache/restore and actions/cache/save)
+        with:
+          path: |
+            ~/.nuget/packages
+            ~/.dotnet/tools
+          key: msil-dotnet-tools-${{ runner.os }}-${{ hashFiles('msil/utils/tools/msil-tools.proj') }}
+
+      - name: Fetch ilasm and ildasm (NuGet) and ILVerify (dotnet tool)
+        run: |
+          ilasm_version=$(dotnet msbuild "$MSIL_TOOLS_PROJ" -getProperty:MsilILAsmVersion | tr -d '\r')
+          ilverify_version=$(dotnet msbuild "$MSIL_TOOLS_PROJ" -getProperty:MsilILVerifyVersion | tr -d '\r')
+          for v in "$ilasm_version" "$ilverify_version"; do
+            if [[ ! $v =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::cannot read the tool versions from $MSIL_TOOLS_PROJ (got '$v')"
+              exit 1
+            fi
+          done
+
+          dotnet restore "$MSIL_TOOLS_PROJ" -p:MsilToolsRid=linux-x64
+          native=runtimes/linux-x64/native
+          packages=${NUGET_PACKAGES:-$HOME/.nuget/packages}
+          ilasm=$packages/runtime.linux-x64.microsoft.netcore.ilasm/$ilasm_version/$native/ilasm
+          ildasm=$packages/runtime.linux-x64.microsoft.netcore.ildasm/$ilasm_version/$native/ildasm
+          # NuGet extraction does not keep the executable bit.
+          chmod +x "$ilasm" "$ildasm"
+          # Fail here, not after the build, if this ilasm cannot assemble (flags as in %ilasm).
+          printf '%s\n' '.assembly extern mscorlib {}' '.assembly smoke {}' > "$RUNNER_TEMP/smoke.il"
+          "$ilasm" -nologo -quiet -dll -pe64 -x64 -output="$RUNNER_TEMP/smoke.dll" "$RUNNER_TEMP/smoke.il"
+          # Likewise for ildasm: msil-verify.py round-trips every DLL through
+          # ildasm and ilasm, and lit.cfg.py takes it from $MSIL_ILDASM.
+          "$ildasm" -out="$RUNNER_TEMP/smoke.out.il" "$RUNNER_TEMP/smoke.dll"
+          if ! grep -q '^\.assembly smoke' "$RUNNER_TEMP/smoke.out.il"; then
+            echo "::error::$ildasm did not disassemble smoke.dll"
+            exit 1
+          fi
+          echo "MSIL_ILASM=$ilasm" >> "$GITHUB_ENV"
+          echo "MSIL_ILDASM=$ildasm" >> "$GITHUB_ENV"
+
+          dotnet tool update --global dotnet-ilverify --version "$ilverify_version"
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Set up sccache
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          key: msil-linux
+          max-size: 2G
+          variant: sccache
+
+      - name: Configure
+        run: |
+          # The cache file enables the experimental MSIL target once
+          # llvm/lib/Target/MSIL exists (milestone M2), so this works before that.
+          cmake -G Ninja -S llvm -B build \
+            -C msil/cmake/caches/MSIL.cmake \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DLLVM_USE_LINKER=lld \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+            "-DLLVM_LIT_ARGS=-v --time-tests --xunit-xml-output=$GITHUB_WORKSPACE/build/lit-results.xml"
+
+      - name: Build
+        run: |
+          targets="clang llc opt FileCheck not count split-file llvm-config TargetParserTests MCTests"
+          unittests="build/unittests/TargetParser/TargetParserTests build/unittests/MC/MCTests"
+          # MSILTests exists once llvm/unittests/Target/MSIL does (M2).
+          all_targets=$(ninja -C build -t targets all)
+          if grep -q '^MSILTests:' <<< "$all_targets"; then
+            targets="$targets MSILTests"
+            unittests="$unittests build/unittests/Target/MSIL/MSILTests"
+          else
+            echo "::notice::no MSILTests target yet: building and running without it"
+          fi
+          echo "MSIL_UNITTESTS=$unittests" >> "$GITHUB_ENV"
+          ninja -C build $targets
+
+      - name: Unit tests (MSIL and TargetRegistry)
+        run: |
+          # GTEST_SKIP exits 0, so a skipped test would look like a pass; it fails here.
+          status=0
+          for exe in $MSIL_UNITTESTS; do
+            log="$RUNNER_TEMP/$(basename "$exe").log"
+            echo "::group::$exe --gtest_filter=$MSIL_GTEST_FILTER"
+            "$exe" "--gtest_filter=$MSIL_GTEST_FILTER" | tee "$log" || status=1
+            echo "::endgroup::"
+            if grep -q '^\[  SKIPPED \]' "$log"; then
+              echo "::error::$exe skipped a test"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Build jitall
+        run: python3 msil/utils/jitall/build-jitall.py
+
+      - name: check-msil (.NET 8, -O0 and -O2, native oracle)
+        run: ninja -C build check-msil
+        env:
+          LIT_OPTS: >-
+            --param msil_dotnet_runtime=8
+            --param msil_native_oracle=required
+            --param msil_require_verify=1
+            --param msil_ilasm=${{ env.MSIL_ILASM }}
+
+      - name: Execution tests (.NET 10, optimizing JIT)
+        run: >
+          build/bin/llvm-lit -sv build/tools/msil/test
+          --param msil_dotnet_runtime=10
+          --param msil_dotnet_env=DOTNET_TieredCompilation=0
+          --param msil_require_verify=1
+          --param "msil_ilasm=$MSIL_ILASM"
+
+      - name: Full run (all optimization levels, upstream regression suites)
+        if: env.FULL_CHECK == 'true'
+        run: |
+          build/bin/llvm-lit -sv build/tools/msil/test \
+            --param msil_opt_levels=O0,O1,O2,O3,Os,Oz \
+            --param msil_require_verify=1 \
+            --param "msil_ilasm=$MSIL_ILASM"
+          # CI only: check-llvm and check-clang build every tool, which the
+          # development host never does (plan section 4).
+          ninja -C build check-llvm check-clang
+
+      - name: Upload test outputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: msil-linux-test-output
+          path: |
+            build/lit-results.xml
+            build/tools/msil/test/**/Output/
+            build/test/CodeGen/MSIL/Output/
+            build/tools/clang/test/CodeGen/MSIL/Output/
+          retention-days: 7
+
+  windows:
+    name: Windows x64 (.NET 8 and .NET Framework 4.8)
+    if: github.repository_owner == 'alethic'
+    runs-on: windows-2022
+    timeout-minutes: 330
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up the MSVC environment (LIB/INCLUDE for the native oracle)
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5 # TODO(user): pin SHA (cannot be verified offline; no upstream workflow uses this action)
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Install ninja and ILVerify
+        run: |
+          choco install ninja --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "choco install ninja failed ($LASTEXITCODE)" }
+          $version = (dotnet msbuild $env:MSIL_TOOLS_PROJ -getProperty:MsilILVerifyVersion | Out-String).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "cannot read MsilILVerifyVersion from $env:MSIL_TOOLS_PROJ (got '$version')" }
+          dotnet tool update --global dotnet-ilverify --version $version
+          if ($LASTEXITCODE -ne 0) { throw "dotnet tool update dotnet-ilverify failed ($LASTEXITCODE)" }
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Check the .NET Framework tools (ilasm, PEVerify, ildasm)
+        run: |
+          # Fail here, not after the build, if the image lacks them (flags as in %ilasm).
+          $il = "$env:RUNNER_TEMP/smoke.il"
+          $dll = "$env:RUNNER_TEMP/smoke.dll"
+          Set-Content -Path $il -Value '.assembly extern mscorlib {}', '.assembly smoke {}'
+          $ilasm = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/ilasm.exe'
+          if (-not (Test-Path -LiteralPath $ilasm)) { throw "Framework ilasm not found: $ilasm" }
+          & $ilasm -nologo -quiet -dll -pe64 -x64 "-output=$dll" $il
+          if ($LASTEXITCODE -ne 0) { throw "Framework ilasm failed ($LASTEXITCODE)" }
+          $peverify = @(Resolve-Path "${env:ProgramFiles(x86)}/Microsoft SDKs/Windows/v*/bin/NETFX 4.* Tools/x64/PEVerify.exe" -ErrorAction SilentlyContinue)
+          if ($peverify.Count -eq 0) { throw 'PEVerify.exe (NETFX 4.x Tools of the Windows SDK) not found; msil_require_verify=1 needs it' }
+          & $peverify[0].Path /nologo $dll
+          if ($LASTEXITCODE -ne 0) { throw "PEVerify failed ($LASTEXITCODE)" }
+          # msil-verify.py round-trips every DLL through ildasm and ilasm; lit.cfg.py
+          # finds this ildasm in the NETFX tools directory. /out keeps its GUI closed.
+          $ildasm = Join-Path (Split-Path -Parent $peverify[0].Path) 'ildasm.exe'
+          if (-not (Test-Path -LiteralPath $ildasm)) { throw "ildasm.exe not found next to $($peverify[0].Path)" }
+          & $ildasm /nobar "/out=$env:RUNNER_TEMP/smoke.out.il" $dll
+          if ($LASTEXITCODE -ne 0) { throw "ildasm failed ($LASTEXITCODE)" }
+          if (-not (Select-String -LiteralPath "$env:RUNNER_TEMP/smoke.out.il" -Pattern '^\.assembly smoke' -Quiet)) { throw "$ildasm did not disassemble smoke.dll" }
+
+      - name: Set up sccache
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          key: msil-windows
+          max-size: 3G
+          variant: sccache
+
+      - name: Configure
+        run: |
+          # The cache file enables the experimental MSIL target once
+          # llvm/lib/Target/MSIL exists (milestone M2), so this works before that.
+          $workspace = $env:GITHUB_WORKSPACE -replace '\\', '/'
+          $cmakeArgs = @(
+            '-G', 'Ninja', '-S', 'llvm', '-B', 'build',
+            '-C', 'msil/cmake/caches/MSIL.cmake',
+            '-DCMAKE_C_COMPILER=clang-cl', '-DCMAKE_CXX_COMPILER=clang-cl',
+            '-DCMAKE_C_COMPILER_LAUNCHER=sccache',
+            '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache',
+            # sccache needs embedded debug information (upstream libc-overlay-tests.yml).
+            '-DCMAKE_POLICY_DEFAULT_CMP0141=NEW',
+            '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded',
+            '-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON',
+            "-DLLVM_LIT_ARGS=-v --time-tests --xunit-xml-output=$workspace/build/lit-results.xml"
+          )
+          cmake @cmakeArgs
+          if ($LASTEXITCODE -ne 0) { throw "cmake failed ($LASTEXITCODE)" }
+
+      - name: Build
+        run: |
+          $targets = @('clang', 'llc', 'opt', 'FileCheck', 'not', 'count', 'split-file', 'llvm-config', 'TargetParserTests', 'MCTests')
+          $unittests = @('build/unittests/TargetParser/TargetParserTests.exe', 'build/unittests/MC/MCTests.exe')
+          # MSILTests exists once llvm/unittests/Target/MSIL does (M2).
+          $allTargets = ninja -C build -t targets all
+          if ($LASTEXITCODE -ne 0) { throw "ninja -t targets failed ($LASTEXITCODE)" }
+          if ($allTargets -match '^MSILTests:') {
+            $targets += 'MSILTests'
+            $unittests += 'build/unittests/Target/MSIL/MSILTests.exe'
+          } else {
+            Write-Output '::notice::no MSILTests target yet: building and running without it'
+          }
+          "MSIL_UNITTESTS=$($unittests -join ';')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          ninja -C build @targets
+          if ($LASTEXITCODE -ne 0) { throw "ninja failed ($LASTEXITCODE)" }
+
+      - name: Unit tests (MSIL and TargetRegistry)
+        run: |
+          # GTEST_SKIP exits 0, so a skipped test would look like a pass; it fails here.
+          $failed = @()
+          foreach ($exe in $env:MSIL_UNITTESTS -split ';') {
+            Write-Output "::group::$exe --gtest_filter=$env:MSIL_GTEST_FILTER"
+            $out = & $exe "--gtest_filter=$env:MSIL_GTEST_FILTER" 2>&1 | ForEach-Object { "$_" }
+            $code = $LASTEXITCODE
+            $out | Write-Output
+            Write-Output '::endgroup::'
+            if ($code -ne 0) { $failed += "$exe (exit code $code)" }
+            if ($out -match '^\[  SKIPPED \]') { $failed += "$exe (skipped tests)" }
+          }
+          if ($failed.Count -gt 0) { throw "unit tests failed: $($failed -join ', ')" }
+
+      - name: Build jitall
+        run: |
+          python msil/utils/jitall/build-jitall.py
+          if ($LASTEXITCODE -ne 0) { throw "build-jitall.py failed ($LASTEXITCODE)" }
+
+      - name: check-msil (.NET 8 and .NET Framework, native oracle, PEVerify)
+        run: ninja -C build check-msil
+        env:
+          LIT_OPTS: >-
+            --param msil_dotnet_runtime=8
+            --param msil_native_oracle=required
+            --param msil_run_netfx=1
+            --param msil_require_verify=1
+
+      - name: Upload test outputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: msil-windows-test-output
+          path: |
+            build/lit-results.xml
+            build/tools/msil/test/**/Output/
+            build/test/CodeGen/MSIL/Output/
+            build/tools/clang/test/CodeGen/MSIL/Output/
+          retention-days: 7

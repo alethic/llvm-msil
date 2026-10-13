@@ -1,0 +1,13 @@
+# msil-jitall.py runs jitall under a memory cap (plan M0.c): the .NET 10 JIT
+# was seen allocating 40+ GB on bad IL. Force-JITting <Module> runs its
+# initializer, which here commits memory without bound
+# (Inputs/jitall-hog-cctor.il), so jitall must stop at the cap and the output
+# must end with '[memory limit]'. The option comes after lit's default
+# --mem-limit-mb, so it wins. The cap is a Job Object on Windows and
+# RLIMIT_DATA on Linux and inside WSL, where '[memory limit]' comes from the
+# runtime's out-of-memory message (plan section 12, M0 row).
+# REQUIRES: msil-jitall
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/jitall-hog-cctor.il
+# RUN: not %{harness_check} within 60 %msil_jitall --mem-limit-mb 256 %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^\[memory limit\]$" "^harness-check: finished in"

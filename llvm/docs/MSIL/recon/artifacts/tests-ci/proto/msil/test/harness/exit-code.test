@@ -1,0 +1,3 @@
+# The transcript ends with the exit code.
+RUN: %ilasm -dll -output=%t.dll %S/Inputs/exit7.il
+RUN: %msil_exec --expect %S/Inputs/exit7 %t.dll

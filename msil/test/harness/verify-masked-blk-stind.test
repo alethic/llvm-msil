@@ -1,0 +1,25 @@
+# cpblk, initblk and stind.i are allowed by plan D21 (cpblk and initblk are
+# unverifiable; stind.i stores through a native int, D2), so both verifiers
+# stop at the instruction and never check its operands. msil-verify.py's
+# neutralized pass (pass 2, which needs ildasm) replaces each with a call of a
+# stub typed like the instruction's operands, so it must still reject, one
+# method each (Inputs/masked-blk-stind.il): a cpblk with an int32 destination,
+# an initblk with an int32 or an int64 address, and a stind.i that stores an
+# int32 or a float64. Each message is checked for its own method. The
+# control module (Inputs/masked-blk-stind-ok.il) has the same instructions
+# with correctly typed operands; it passes and runs. The image copy of plan
+# D12 (cpblk from an ldsflda) passes too: verify-d12-image.test.
+# REQUIRES: msil-ilverify, msil-ildasm
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/masked-blk-stind.il
+# RUN: not %msil_verify %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "::cpblk_dst_int32\b.*\[found Int32\]\[expected Native Int\]"
+# RUN: %{harness_check} contains %t.log "::initblk_addr_int32\b.*\[found Int32\]\[expected Native Int\]"
+# RUN: %{harness_check} contains %t.log "::initblk_addr_int64\b.*\[found Long\]\[expected Native Int\]"
+# RUN: %{harness_check} contains %t.log "::stind_i_int32\b.*\[found Int32\]\[expected Native Int\]"
+# RUN: %{harness_check} contains %t.log "::stind_i_float64\b.*\[found Double\]\[expected Native Int\]"
+
+# RUN: %ilasm -dll -output=%t.ok.dll %S/Inputs/masked-blk-stind-ok.il
+# RUN: %msil_verify %t.ok.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.ok.dll %}
+# RUN: %msil_exec --expect %S/Inputs/masked-blk-stind-ok %t.ok.dll

@@ -1,0 +1,18 @@
+# Program output with a CR before a newline: puts("a\r") through the
+# windows-msvc 'puts' import (plan D14: ucrtbase). Windows text-mode stdout
+# writes 'a\r\r\n' and Linux writes 'a\r\n'; the transcript rule (plan
+# section 12, 'Transcript newline rule', and 5.5 '.expected is stdout (LF)')
+# replaces every run of CRs before an LF with one LF, in the output and in
+# .expected files alike, so both legs give the transcript 'a\n[exit 0]\n'
+# and match the same committed LF .expected file (puts-cr-wsl.test is the
+# linux twin). A transcript that %msil_exec writes with --out must also match
+# itself as an .expected file.
+# REQUIRES: msil-triple-windows
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/puts-cr-windows.il
+# RUN: %msil_verify %t.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.dll %}
+# RUN: %msil_exec --expect %S/Inputs/puts-cr-windows --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "a" "[exit 0]"
+# RUN: %msil_exec --out %t.self.expected %t.dll
+# RUN: %msil_exec --expect %t.self %t.dll

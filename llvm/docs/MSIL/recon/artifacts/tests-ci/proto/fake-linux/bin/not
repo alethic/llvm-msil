@@ -1,0 +1,3 @@
+#!/bin/sh
+echo PROTOTYPE STUB >&2
+exit 99

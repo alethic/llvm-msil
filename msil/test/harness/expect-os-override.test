@@ -1,0 +1,8 @@
+# <stem>.<os>.expected takes precedence over <stem>.expected, and <os> follows
+# the target triple, not the host (the WSL leg runs a linux triple from
+# Windows). For each stem only the override for its own triple says
+# '[exit 42]'; the generic file and the other OS's file say '[exit 1]'.
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/exit-42.il
+# RUN: %if msil-triple-windows %{ %msil_exec --expect %S/Inputs/override-windows %t.dll %}
+# RUN: %if msil-triple-linux %{ %msil_exec --expect %S/Inputs/override-linux %t.dll %}

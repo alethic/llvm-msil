@@ -1,0 +1,12 @@
+# Output through puts, imported as pinvokeimpl("libc" cdecl) the way the
+# backend declares it for linux-gnu triples (plan D14). On Windows this runs
+# with the WSL runner (--param msil_runner=wsl, which implies the linux triple);
+# a Linux host runs it directly. The transcript is the same as on Windows
+# (puts-windows.test).
+# REQUIRES: msil-triple-linux, msil-wsl || system-linux
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/puts-wsl.il
+# RUN: %msil_verify %t.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.dll %}
+# RUN: %msil_exec --expect %S/Inputs/puts-wsl --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "hello from puts" "second line" "[exit 7]"

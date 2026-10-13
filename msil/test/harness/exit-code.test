@@ -1,0 +1,10 @@
+# The whole per-level pipeline on a module in the Phase-1 output shape (plan
+# section 5.1): assemble, verify, force-JIT, run from a private directory and
+# compare with Inputs/exit-42.expected. The transcript ends with the exit
+# status and uses LF line endings.
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/exit-42.il
+# RUN: %msil_verify %t.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.dll %}
+# RUN: %msil_exec --expect %S/Inputs/exit-42 --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "[exit 42]"

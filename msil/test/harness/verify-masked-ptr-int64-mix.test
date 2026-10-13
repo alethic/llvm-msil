@@ -1,0 +1,26 @@
+# native int + int64 must fail msil-verify even when an allowed error comes
+# first in the same method. Each module puts one allowed first error of plan
+# D21 in front of the mix (Inputs/masked-mix-*.il): the D13 frame prologue
+# (localloc) and a 'br', a read of a local without init and a 'br', or a load
+# through a native int. ILVerify and PEVerify both stop at that first error,
+# so a wrapper that only filters their messages never sees the mix; the
+# neutralized pass of msil-verify.py (pass 2, which needs ildasm) does. Only
+# PEVerify reports the mix (verify-ptr-int64-mix.test), so this needs it.
+# The control module has the same three first errors before a correct
+# 'conv.i; add' and passes.
+# REQUIRES: msil-ilverify, msil-peverify, msil-ildasm
+
+# RUN: %ilasm -dll -output=%t.frame.dll %S/Inputs/masked-mix-frame.il
+# RUN: not %msil_verify %t.frame.dll > %t.frame.log 2>&1
+# RUN: %{harness_check} contains %t.frame.log "::mix\b.*\[found Native Int\]\[expected Long\] Unexpected type on the stack"
+
+# RUN: %ilasm -dll -output=%t.local.dll %S/Inputs/masked-mix-local.il
+# RUN: not %msil_verify %t.local.dll > %t.local.log 2>&1
+# RUN: %{harness_check} contains %t.local.log "::mix\b.*\[found Native Int\]\[expected Long\] Unexpected type on the stack"
+
+# RUN: %ilasm -dll -output=%t.ldind.dll %S/Inputs/masked-mix-ldind.il
+# RUN: not %msil_verify %t.ldind.dll > %t.ldind.log 2>&1
+# RUN: %{harness_check} contains %t.ldind.log "::mix\b.*\[found Native Int\]\[expected Long\] Unexpected type on the stack"
+
+# RUN: %ilasm -dll -output=%t.ok.dll %S/Inputs/masked-mix-ok.il
+# RUN: %msil_verify %t.ok.dll

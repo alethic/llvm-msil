@@ -1,0 +1,26 @@
+<!--
+  Fetches the IL tools the MSIL tests need on hosts without .NET Framework
+  (Linux, macOS). Nothing is built; `dotnet restore` only downloads:
+
+    dotnet restore msil/utils/tools/msil-tools.proj -p:MsilToolsRid=linux-x64
+
+  ilasm then lives at
+    $NUGET_PACKAGES/runtime.<rid>.microsoft.netcore.ilasm/<ver>/runtimes/<rid>/native/ilasm
+  which msil/test/lit.cfg.py finds on its own. ILVerify is a dotnet tool:
+    dotnet tool install (global) dotnet-ilverify, version MsilILVerifyVersion
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <MsilToolsRid Condition="'$(MsilToolsRid)' == ''">linux-x64</MsilToolsRid>
+    <!-- Keep in step with the runtime CI tests on (Design.md 7.1: net8.0). -->
+    <MsilILAsmVersion Condition="'$(MsilILAsmVersion)' == ''">8.0.0</MsilILAsmVersion>
+    <MsilILVerifyVersion>10.0.12</MsilILVerifyVersion>
+    <IsPackable>false</IsPackable>
+    <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageDownload Include="runtime.$(MsilToolsRid).Microsoft.NETCore.ILAsm" Version="[$(MsilILAsmVersion)]" />
+    <PackageDownload Include="runtime.$(MsilToolsRid).Microsoft.NETCore.ILDAsm" Version="[$(MsilILAsmVersion)]" />
+  </ItemGroup>
+</Project>

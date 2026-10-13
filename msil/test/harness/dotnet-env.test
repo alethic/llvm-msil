@@ -1,0 +1,9 @@
+# --env VAR=VALUE reaches the program (the msil_dotnet_env passthrough, plan
+# D38; the WSL runner passes it through 'env'). The program exits with
+# len(MSIL_TEST_ENV) + 16 * len(MSIL_TEST_ENV2). The flag repeats, and only the
+# first '=' separates the name from the value.
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/dotnet-env.il
+# RUN: %msil_exec --expect %S/Inputs/dotnet-env-0 %t.dll
+# RUN: %msil_exec --env MSIL_TEST_ENV=abc --expect %S/Inputs/dotnet-env-3 %t.dll
+# RUN: %msil_exec --env MSIL_TEST_ENV=x=y --env MSIL_TEST_ENV2=ab --expect %S/Inputs/dotnet-env-35 %t.dll

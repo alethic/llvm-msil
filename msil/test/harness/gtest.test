@@ -1,0 +1,26 @@
+# msil-gtest.ps1 (plan M0.a) fails unless the selected gtests really ran and
+# passed: GTEST_SKIP exits 0, so a plain run cannot tell a skipped test from
+# a passing one. Inputs/fake-program.il stands in for the gtest binary: it
+# prints Inputs/fake-output/<file> and exits with FAKE_PROGRAM_STATUS. The
+# script takes the shared lock of its -BuildDir, so every call passes the
+# private %t.build: the lock of the real build directory would make it wait
+# for lit's own ancestor (msil-build.ps1 holds the exclusive lock while
+# 'msil-build.ps1 check-msil-harness' runs, and msil-lock.ps1 waits for any
+# ninja whose command line names the build directory, which 'ninja -C <build>
+# check-msil' does).
+# REQUIRES: system-windows, msil-netfx, pwsh
+
+# RUN: %ilasm -exe -output=%t.fake.exe %S/Inputs/fake-program.il
+
+# A good run passes, also with -NoSkip and -MinTests at its count.
+# RUN: env FAKE_PROGRAM_OUTPUT=%S/Inputs/fake-output/gtest-passed-3.txt FAKE_PROGRAM_STATUS=0 %{harness_check} exits 0 %{harness_gtest} -BuildDir %t.build -Exe %t.fake.exe -Filter "MSILFake.*" -NoSkip -MinTests 3
+
+# Fewer passed tests than -MinTests fail.
+# RUN: env FAKE_PROGRAM_OUTPUT=%S/Inputs/fake-output/gtest-passed-3.txt FAKE_PROGRAM_STATUS=0 %{harness_check} exits 1 %{harness_gtest} -BuildDir %t.build -Exe %t.fake.exe -Filter "MSILFake.*" -MinTests 4
+
+# A non-zero exit fails, whatever the summary says.
+# RUN: env FAKE_PROGRAM_OUTPUT=%S/Inputs/fake-output/gtest-passed-3.txt FAKE_PROGRAM_STATUS=1 %{harness_check} exits 1 %{harness_gtest} -BuildDir %t.build -Exe %t.fake.exe -Filter "MSILFake.*"
+
+# A '[  SKIPPED ]' line fails with -NoSkip; without it the same run passes.
+# RUN: env FAKE_PROGRAM_OUTPUT=%S/Inputs/fake-output/gtest-skipped.txt FAKE_PROGRAM_STATUS=0 %{harness_check} exits 1 %{harness_gtest} -BuildDir %t.build -Exe %t.fake.exe -Filter "MSILFake.*" -NoSkip
+# RUN: env FAKE_PROGRAM_OUTPUT=%S/Inputs/fake-output/gtest-skipped.txt FAKE_PROGRAM_STATUS=0 %{harness_check} exits 0 %{harness_gtest} -BuildDir %t.build -Exe %t.fake.exe -Filter "MSILFake.*" -MinTests 2

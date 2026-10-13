@@ -1,0 +1,10 @@
+{
+  "runtimeOptions": {
+    "tfm": "net99.0",
+    "rollForward": "LatestPatch",
+    "framework": {
+      "name": "Microsoft.NETCore.App",
+      "version": "99.0.0"
+    }
+  }
+}

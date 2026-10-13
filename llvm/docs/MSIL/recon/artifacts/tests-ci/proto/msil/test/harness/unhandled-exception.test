@@ -1,0 +1,3 @@
+# An unhandled CLR exception is reported by type, the same on every OS.
+RUN: %ilasm -dll -output=%t.dll %S/Inputs/throw.il
+RUN: %msil_exec --expect %S/Inputs/throw %t.dll

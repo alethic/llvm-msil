@@ -1,0 +1,2 @@
+prog.c:3:5: error: 'f' has a variadic argument list
+LLVM ERROR: Cannot select: 0x1234: i32 = vaarg

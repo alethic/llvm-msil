@@ -1,0 +1,53 @@
+<!--
+  msil-tools.proj: fetches the IL tools the MSIL tests need on hosts without
+  the .NET Framework (Linux, macOS). Nothing is built; restore only downloads
+  the two packages below:
+
+    dotnet restore msil/utils/tools/msil-tools.proj -p:MsilToolsRid=linux-x64
+
+  ilasm and ildasm then live at
+    <NuGet global packages>/runtime.<rid>.microsoft.netcore.il{asm,dasm}/<ver>/runtimes/<rid>/native/
+  (~/.nuget/packages unless NUGET_PACKAGES says otherwise), where
+  msil/test/lit.cfg.py finds them; .github/workflows/msil-ci.yml also exports
+  their paths as MSIL_ILASM and MSIL_ILDASM. ILVerify is the dotnet tool
+  dotnet-ilverify, version MsilILVerifyVersion, installed by the CI workflow
+  with 'dotnet tool update -g dotnet-ilverify'.
+
+  The versions are pinned to the ones in the local NuGet cache of the
+  development host (10.0.12, plan section 8). The workflow reads both version
+  properties from this file with 'dotnet msbuild -getProperty:<name>', so
+  this file is the only place to change them.
+
+  Restore state goes to the temporary directory, never into the source tree,
+  so a local restore leaves 'git status' clean (the milestone scope check
+  stages every untracked file).
+
+  Note: an XML comment may not contain two consecutive hyphens (MSB4025).
+-->
+<Project>
+  <PropertyGroup>
+    <MsilToolsRid Condition="'$(MsilToolsRid)' == ''">linux-x64</MsilToolsRid>
+    <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">$([System.IO.Path]::GetTempPath())msil-tools-$(MsilToolsRid)/obj/</BaseIntermediateOutputPath>
+  </PropertyGroup>
+
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <MsilILAsmVersion Condition="'$(MsilILAsmVersion)' == ''">10.0.12</MsilILAsmVersion>
+    <MsilILVerifyVersion Condition="'$(MsilILVerifyVersion)' == ''">10.0.12</MsilILVerifyVersion>
+    <!-- Download only the packages below: no targeting pack, no sources, no audit. -->
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <NuGetAudit>false</NuGetAudit>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageDownload Include="runtime.$(MsilToolsRid).Microsoft.NETCore.ILAsm" Version="[$(MsilILAsmVersion)]" />
+    <PackageDownload Include="runtime.$(MsilToolsRid).Microsoft.NETCore.ILDAsm" Version="[$(MsilILAsmVersion)]" />
+  </ItemGroup>
+
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+</Project>

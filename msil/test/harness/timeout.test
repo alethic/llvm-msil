@@ -1,0 +1,9 @@
+# A program that does not finish is killed after --timeout seconds and
+# reported as '[timeout]' (plan M0.b: every child process runs under a
+# wall-clock limit, because a JIT can hang on bad IL). The busy loop gives up
+# by itself after 120 s, so the outer 60 s bound also catches a harness that
+# waits for the program instead of killing it.
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/spin.il
+# RUN: %{harness_check} within 60 %msil_exec --timeout 5 --expect %S/Inputs/spin --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "[timeout]"

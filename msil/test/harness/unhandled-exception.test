@@ -1,0 +1,8 @@
+# An unhandled CLR exception is reported by its type, the same on every OS
+# (Windows exits with 0xE0434352, Linux aborts with SIGABRT). 'ldnull; throw'
+# is how Phase 1 lowers a trap (plan section 5.1).
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/throw-null.il
+# RUN: %msil_verify %t.dll
+# RUN: %msil_exec --expect %S/Inputs/throw-null --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "[unhandled exception: System.NullReferenceException]"

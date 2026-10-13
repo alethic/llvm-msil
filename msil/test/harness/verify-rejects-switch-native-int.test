@@ -1,0 +1,12 @@
+# The reason for plan D35: 'switch' on a native int fails msil-verify with
+# ILVerify's StackUnexpected (the JIT and PEVerify accept it), while the same
+# body with 'conv.i4' before 'switch' verifies and runs (exit 11).
+# REQUIRES: msil-ilverify
+
+# RUN: %ilasm -dll -output=%t.native.dll %S/Inputs/switch-native-int.il
+# RUN: not %msil_verify %t.native.dll > %t.native.log 2>&1
+# RUN: %{harness_check} contains %t.native.log "StackUnexpected" "::select"
+
+# RUN: %ilasm -dll -output=%t.i32.dll %S/Inputs/switch-int32.il
+# RUN: %msil_verify %t.i32.dll
+# RUN: %msil_exec --expect %S/Inputs/switch-int32 %t.i32.dll

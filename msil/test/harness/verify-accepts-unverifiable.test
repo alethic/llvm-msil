@@ -1,0 +1,20 @@
+# What the backend emits by design is unverifiable but must pass msil-verify
+# (plan D21). ILVerify and PEVerify often report only the first error of a
+# method, so Inputs/unverifiable-ok.il gives every allowed construct a method
+# in which it is the first error: a frameless ldind and stind through a
+# native int argument (ILVerify StackByRef, PEVerify 'Expected ByRef'),
+# .locals without init and no localloc (InitLocals, 'initlocals must be
+# set'), cpblk, initblk and localloc (Unverifiable, 'Instruction cannot be
+# verified'), and a managed calli ('ImportCalli not implemented' is a note).
+# A D13 frame method combines them. Dropping any of these allowances from
+# msil-verify.py or ilverify-allowed.txt therefore fails this test, and the
+# native int methods show that the StackByRef allowance still accepts correct
+# addresses. UnmanagedPointer has no case: it needs an argument or local of a
+# pointer type, which plan D2 rules out, so no Phase-1 construct produces it.
+# The module also runs: exit 19.
+# REQUIRES: msil-ilverify
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/unverifiable-ok.il
+# RUN: %msil_verify %t.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.dll %}
+# RUN: %msil_exec --expect %S/Inputs/unverifiable-ok %t.dll

@@ -1,0 +1,30 @@
+# The data segment of plan D12 (plan section 5.1, M8.c, recon/asmprinter.md 9)
+# must pass msil-verify on both sides of the allowance for it (plan section
+# 12, 'D21 and M0.b item (7) refined', part 1). PEVerify rejects the image
+# copy's 'ldsflda valuetype '<msil>image_t' '<msil>image'' ('Cannot modify an
+# imaged based (RVA) static') and the function relocation's ldftn value, which
+# every module with an initialized global or a function pointer has; ILVerify
+# and the JIT accept both. Inputs/d12-image.il has the full shape (image type,
+# RVA blob and field, '<msil>data', address fields, a .cctor with the image
+# copy, a BSS initblk, a data and a function relocation): it verifies,
+# force-JITs (which runs the .cctor) and exits with 49, which it computes from
+# the copied image through both relocations and the BSS. The allowance is
+# exact: native int + int64 behind the image ldsflda (Inputs/d12-image-mix.il,
+# found by the neutralized pass) and an ldsflda of another RVA field
+# (Inputs/d12-image-other-rva.il) still fail.
+# REQUIRES: msil-ilverify, msil-peverify, msil-ildasm
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/d12-image.il
+# RUN: %msil_verify %t.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.dll > %t.jitall.log 2>&1 %}
+# RUN: %if msil-jitall %{ %{harness_check} contains %t.jitall.log "^jitall: 3 ok, 0 failed$" %}
+# RUN: %msil_exec --expect %S/Inputs/d12-image --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "[exit 49]"
+
+# RUN: %ilasm -dll -output=%t.mix.dll %S/Inputs/d12-image-mix.il
+# RUN: not %msil_verify %t.mix.dll > %t.mix.log 2>&1
+# RUN: %{harness_check} contains %t.mix.log "\.cctor\b.*\[found Native Int\]\[expected Long\] Unexpected type on the stack"
+
+# RUN: %ilasm -dll -output=%t.rva.dll %S/Inputs/d12-image-other-rva.il
+# RUN: not %msil_verify %t.rva.dll > %t.rva.log 2>&1
+# RUN: %{harness_check} contains %t.rva.log "\.cctor\b.*Cannot modify an imaged based \(RVA\) static"

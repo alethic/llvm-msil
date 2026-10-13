@@ -1,0 +1,27 @@
+# A join with different stack depths must fail msil-verify even when an
+# allowed error comes first in the same method. Each module puts one allowed
+# first error of plan D21 in front of the bad join (Inputs/masked-join-*.il):
+# the D13 frame prologue (localloc) and a 'br', a read of a local without
+# init and a 'br', or a load through a native int. ILVerify and PEVerify both
+# stop at that first error, so a wrapper that only filters their messages
+# never sees the join; the neutralized pass of msil-verify.py (pass 2, which
+# needs ildasm) does. The control module has the same three first errors
+# before a balanced join and passes. Nothing here is run or force-JITted: the
+# .NET 10 JIT was seen growing without bound on the bad join (cil-runtime
+# recon, e15).
+# REQUIRES: msil-ilverify, msil-ildasm
+
+# RUN: %ilasm -dll -output=%t.frame.dll %S/Inputs/masked-join-frame.il
+# RUN: not %msil_verify %t.frame.dll > %t.frame.log 2>&1
+# RUN: %{harness_check} contains %t.frame.log "PathStackDepth.*::join\(|::join\b.*Stack depth differs depending on path"
+
+# RUN: %ilasm -dll -output=%t.local.dll %S/Inputs/masked-join-local.il
+# RUN: not %msil_verify %t.local.dll > %t.local.log 2>&1
+# RUN: %{harness_check} contains %t.local.log "PathStackDepth.*::join\(|::join\b.*Stack depth differs depending on path"
+
+# RUN: %ilasm -dll -output=%t.ldind.dll %S/Inputs/masked-join-ldind.il
+# RUN: not %msil_verify %t.ldind.dll > %t.ldind.log 2>&1
+# RUN: %{harness_check} contains %t.ldind.log "PathStackDepth.*::join\(|::join\b.*Stack depth differs depending on path"
+
+# RUN: %ilasm -dll -output=%t.ok.dll %S/Inputs/masked-join-ok.il
+# RUN: %msil_verify %t.ok.dll

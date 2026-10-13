@@ -1,0 +1,46 @@
+# ILVerify errors that msil-verify.py accepts in backend output (plan D21),
+# in pass 1 (the assembly itself). The backend emits unverifiable, full-trust
+# IL by design (Design.md section 1), so these four codes are expected on
+# correct code. Pass 2 (the neutralized copy) accepts none of them.
+#
+# Syntax: one entry per line, 'CODE' or 'CODE: MESSAGE'. Both are regular
+# expressions that must match in full: CODE the code between the brackets of
+# '[IL]: Error [CODE]:', MESSAGE the text after the '[<where>]' field and its
+# '[offset 0x...]' field, without surrounding blanks. An entry without a
+# MESSAGE accepts the code with any message, so every entry here pins its
+# message to the construct named in its comment. '#' starts a comment (write
+# a literal '#' as \x23).
+#
+# Everything else fails the test, in particular the stack-shape and stack-type
+# codes the JIT may accept silently or choke on (llvm/docs/MSIL/recon/
+# cil-runtime.md e15: the .NET 10 JIT ran away on PathStackDepth):
+#   StackUnderflow StackOverflow PathStackDepth PathStackUnexpected
+#   StackUnexpected UninitStack MethodFallthrough ReturnEmpty ReturnMissing
+#   BadJumpTarget BadBranch LocallocStackNotEmpty UnrecognizedLocalNumber
+#   UnrecognizedArgumentNumber UnknownOpcode ExpectedNumericType
+# Add an entry only together with a comment naming the construct that
+# produces it, and only when that construct is correct by design.
+#
+# ILVerify cannot verify calli at all ("Error []: ... ImportCalli not
+# implemented", no code); msil-verify.py reports that as a note, not here.
+
+# localloc (the static frame, D13), cpblk and initblk (D15).
+Unverifiable: Instruction cannot be verified\.
+
+# '.locals' are never 'init' (D13).
+InitLocals: initlocals must be set for verifiable methods with one or more local variables\.
+
+# Every ldind.*/stind.* through a native int address (all memory access, D2):
+# an argument, a local holding the localloc frame, an 'ldsfld native int' of
+# a global, or arithmetic on them. An int32, int64 or float64 address
+# ('[found Int32]', '[found Long]', '[found Double]') is a backend bug and
+# fails here even where PEVerify does not run (Linux).
+StackByRef: \[found Native Int\] Expected ByRef on the stack\.
+
+# ldarg/ldloc of an argument or local whose own type is an unmanaged pointer
+# (void*). A void* in a callee's signature, such as the parameters of
+# [mscorlib]System.Buffer::MemoryCopy(void*, void*, int64, int64) (D15),
+# does not produce it. Phase 1 never gives an argument or local a pointer
+# type (D2: pointers are native int), so no Phase-1 construct produces this
+# code; the entry is kept because D21 lists it (phase-3 typed signatures).
+UnmanagedPointer: Unmanaged pointers are not a verifiable type\.

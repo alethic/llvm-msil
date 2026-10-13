@@ -1,0 +1,24 @@
+rc8 b1_ exit=1 JIT FAIL <Module>::b1_maxstack: InvalidProgramException: CLR detected an invalid program. | jitall: 0 ok, 1 failed
+rc8 b2_ exit=1 JIT FAIL <Module>::b2_underflow: InvalidProgramException: CLR detected an invalid program. | jitall: 0 ok, 1 failed
+rc8 b3_ exit=0 jitall: 1 ok, 0 failed
+rc8 b4_ exit=0 jitall: 1 ok, 0 failed
+rc8 b5_ exit=0 jitall: 1 ok, 0 failed
+rc8 b6_ exit=1 JIT FAIL <Module>::b6_extra_at_ret: InvalidProgramException: CLR detected an invalid program. | jitall: 0 ok, 1 failed
+rc8 b7_ exit=0 jitall: 1 ok, 0 failed
+rc8 b8_ exit=1 JIT FAIL <Module>::b8_localloc_nonempty: InvalidProgramException: CLR detected an invalid program. | jitall: 0 ok, 1 failed
+rc8 b9_ exit=0 jitall: 1 ok, 0 failed
+rc8 b10_ exit=0 jitall: 1 ok, 0 failed
+rc8 b11_ exit=0 jitall: 1 ok, 0 failed
+rc8 b12_ exit=1 JIT FAIL <Module>::b12_fall_off_end: InvalidProgramException: CLR detected an invalid program. | jitall: 0 ok, 1 failed
+rc10 b1_ exit=1 JIT FAIL <Module>::b1_maxstack: InvalidProgramException: CLR detected an invalid program. | jitall: 0 ok, 1 failed
+rc10 b2_ exit=1 JIT FAIL <Module>::b2_underflow: InvalidProgramException: CLR detected an invalid program. | jitall: 0 ok, 1 failed
+rc10 b3_ KILLED by guard (working set 1201 MB after 1 s) 
+rc10 b4_ exit=0 jitall: 1 ok, 0 failed
+rc10 b5_ exit=0 jitall: 1 ok, 0 failed
+rc10 b6_ exit=1 JIT FAIL <Module>::b6_extra_at_ret: InvalidProgramException: CLR detected an invalid program. | jitall: 0 ok, 1 failed
+rc10 b7_ exit=0 jitall: 1 ok, 0 failed
+rc10 b8_ exit=1 JIT FAIL <Module>::b8_localloc_nonempty: InvalidProgramException: CLR detected an invalid program. | jitall: 0 ok, 1 failed
+rc10 b9_ exit=0 jitall: 1 ok, 0 failed
+rc10 b10_ exit=0 jitall: 1 ok, 0 failed
+rc10 b11_ exit=0 jitall: 1 ok, 0 failed
+rc10 b12_ exit=1 JIT FAIL <Module>::b12_fall_off_end: InvalidProgramException: CLR detected an invalid program. | jitall: 0 ok, 1 failed

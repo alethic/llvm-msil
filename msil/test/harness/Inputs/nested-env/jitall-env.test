@@ -1,0 +1,8 @@
+# Run only by a nested lit (dotnet-env-param.test): with
+# --param msil_dotnet_env=MSIL_TEST_ENV=abc, %msil_jitall passes the variable
+# to jitall without an explicit --env, so the module initializer of
+# jitall-env-cctor.il succeeds and every method JITs.
+# REQUIRES: msil-jitall
+
+# RUN: %ilasm -dll -output=%t.dll %S/../jitall-env-cctor.il
+# RUN: %msil_jitall %t.dll

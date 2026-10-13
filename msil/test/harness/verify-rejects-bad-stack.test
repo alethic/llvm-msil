@@ -1,0 +1,9 @@
+# A stack-shape error fails msil-verify: a join reached with two values on one
+# path and one on the other is ILVerify's PathStackDepth, which is not on the
+# allow list (plan D21). The module is never run or force-JITted: the .NET 10
+# JIT was seen growing without bound on this shape (cil-runtime recon, e15).
+# REQUIRES: msil-ilverify
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/bad-stack-join.il
+# RUN: not %msil_verify %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "PathStackDepth" "::join"

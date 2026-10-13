@@ -1,0 +1,10 @@
+# msil-jitall.py force-JITs every method without running any of them: a
+# method that falls off its end is reported as a JIT failure of that method
+# only, and the marker line that '<msil>Main' and 'main' would print never
+# appears.
+# REQUIRES: msil-jitall
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/jitall-falloff.il
+# RUN: not %msil_jitall %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "JIT FAIL .*::no_ret.*InvalidProgramException" "jitall: \d+ ok, 1 failed"
+# RUN: %{harness_check} lacks %t.log "MSIL-HARNESS"

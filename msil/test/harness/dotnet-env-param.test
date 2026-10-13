@@ -1,0 +1,12 @@
+# --param msil_dotnet_env='VAR=VALUE[;...]' (plan D38) reaches both the
+# program and jitall: lit.cfg.py adds the variables to %msil_exec and
+# %msil_jitall. A nested lit runs Inputs/nested-env, whose tests set
+# MSIL_TEST_ENV in no other way: with the parameter both pass, without it
+# both fail (the program exits with 0 instead of 3, and the module
+# initializer of jitall-env-cctor.il throws).
+# REQUIRES: msil-jitall
+
+# RUN: %{harness_lit} --param msil_dotnet_env=MSIL_TEST_ENV=abc %S/Inputs/nested-env > %t.set.log 2>&1
+# RUN: %{harness_check} contains %t.set.log "^PASS: MSIL :: harness/Inputs/nested-env/exec-env\.test" "^PASS: MSIL :: harness/Inputs/nested-env/jitall-env\.test"
+# RUN: not %{harness_lit} %S/Inputs/nested-env > %t.unset.log 2>&1
+# RUN: %{harness_check} contains %t.unset.log "^FAIL: MSIL :: harness/Inputs/nested-env/exec-env\.test" "^FAIL: MSIL :: harness/Inputs/nested-env/jitall-env\.test"

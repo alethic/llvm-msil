@@ -1,0 +1,8 @@
+# Mixing native int and int64 is caught only by PEVerify (Windows).
+REQUIRES: msil-ilverify, msil-peverify
+RUN: %ilasm -dll -output=%t.dll %S/Inputs/ptr-int64-mix.il
+RUN: not %msil_verify %t.dll 2> %t.err
+RUN: %python -c "import sys; t=open(sys.argv[1]).read(); sys.exit(0 if 'peverify:' in t and 'Unexpected type on the stack' in t and 'ilverify:' not in t else 1)" %t.err
+# It still runs: the x64 JIT treats int64 as native int.
+RUN: %msil_exec %t.dll > %t.out
+RUN: %python -c "import sys; sys.exit(0 if open(sys.argv[1]).read() == '[exit 5]\n' else 1)" %t.out

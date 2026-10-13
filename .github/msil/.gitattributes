@@ -1,0 +1,2 @@
+# Keep scripts LF: core.autocrlf=true clones would check them out CRLF, which WSL/Linux bash rejects.
+*.sh text eol=lf

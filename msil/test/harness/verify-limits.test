@@ -1,0 +1,13 @@
+# msil-verify.py runs ILVerify and PEVerify under the timeout and memory cap
+# of msil-run.py (plan M0.b: every child process): the verifiers read the IL
+# that may make a JIT run away. A limit far below what the verifier needs
+# must fail the run with the limit's message; the same module passes with
+# lit's limits. The memory cap is a Job Object (checked on Windows only).
+# REQUIRES: msil-ilverify
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/exit-42.il
+# RUN: %msil_verify %t.dll
+# RUN: not %msil_verify --timeout 0.05 %t.dll > %t.timeout.log 2>&1
+# RUN: %{harness_check} contains %t.timeout.log "(?i)ilverify.*(did not finish within|timeout|timed out)"
+# RUN: %if system-windows %{ not %msil_verify --mem-limit-mb 1 %t.dll > %t.mem.log 2>&1 %}
+# RUN: %if system-windows %{ %{harness_check} contains %t.mem.log "(?i)ilverify.*memory (cap|limit)" %}

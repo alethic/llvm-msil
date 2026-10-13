@@ -1,0 +1,9 @@
+# --param msil_require_verify=1 also makes a missing ilasm a configuration
+# error: without an assembler every execution test would be UNSUPPORTED, and
+# the gate would pass without running anything (plan D38). A nested lit with
+# ilasm disabled ('--param msil_ilasm=') stops with lit's fatal-error status
+# 2. The control is require-verify.test, whose run with every tool present
+# passes.
+
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_require_verify=1 --param msil_ilasm= %S/Inputs/nested-ok > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "fatal: .*msil_require_verify" "(?i)\bilasm\b"

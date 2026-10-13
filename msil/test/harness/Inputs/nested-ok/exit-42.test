@@ -1,0 +1,5 @@
+# Run only by a nested lit (require-verify.test): a trivial test that passes
+# whenever the configuration loads.
+
+# RUN: %ilasm -dll -output=%t.dll %S/../exit-42.il
+# RUN: %msil_exec --expect %S/../exit-42 %t.dll

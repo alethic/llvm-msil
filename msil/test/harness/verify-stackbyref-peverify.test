@@ -1,0 +1,21 @@
+# The PEVerify side of verify-stackbyref.test: with PEVerify in the run, an
+# int32, int64 or float64 address still fails msil-verify, and PEVerify's
+# 'Expected ByRef on the stack.' line names the type that was found. Only
+# '[found Native Int]' is the unverifiable-by-design case (plans D2, D21).
+# REQUIRES: msil-ilverify, msil-peverify
+
+# RUN: %ilasm -dll -output=%t.i32.dll %S/Inputs/byref-int32-addr.il
+# RUN: not %msil_verify %t.i32.dll > %t.i32.log 2>&1
+# RUN: %{harness_check} contains %t.i32.log "^peverify: .*::load\b.*\[found Int32\] Expected ByRef on the stack"
+
+# RUN: %ilasm -dll -output=%t.i64.dll %S/Inputs/byref-int64-addr.il
+# RUN: not %msil_verify %t.i64.dll > %t.i64.log 2>&1
+# RUN: %{harness_check} contains %t.i64.log "^peverify: .*::load\b.*\[found Long\] Expected ByRef on the stack"
+
+# RUN: %ilasm -dll -output=%t.f64.dll %S/Inputs/byref-float64-addr.il
+# RUN: not %msil_verify %t.f64.dll > %t.f64.log 2>&1
+# RUN: %{harness_check} contains %t.f64.log "^peverify: .*::load\b.*\[found Double\] Expected ByRef on the stack"
+
+# RUN: %ilasm -dll -output=%t.st.dll %S/Inputs/byref-int32-store.il
+# RUN: not %msil_verify %t.st.dll > %t.st.log 2>&1
+# RUN: %{harness_check} contains %t.st.log "^peverify: .*::store\b.*\[found Int32\] Expected ByRef on the stack"

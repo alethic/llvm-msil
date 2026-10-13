@@ -1,0 +1,17 @@
+# ILVerify error codes that are expected in backend output (Design.md 1:
+# "unverifiable, full-trust IL"). One full-match regex per line. Everything
+# else, in particular the stack-shape codes below, fails the test:
+#   StackUnderflow StackOverflow PathStackDepth PathStackUnexpected
+#   StackUnexpected UninitStack MethodFallthrough ReturnEmpty ReturnMissing
+#   BadJumpTarget BadBranch LocallocStackNotEmpty UnrecognizedLocalNumber
+#   UnrecognizedArgumentNumber UnknownOpcode
+# Add a code here only with a comment naming the construct that produces it.
+
+# localloc, cpblk, initblk, calli unmanaged, ldind/stind through native int
+Unverifiable
+# .locals without 'init' (passes-frame.md 6.6)
+InitLocals
+# ldind.*/stind.* on a native int address
+StackByRef
+# unmanaged pointer types in signatures or locals
+UnmanagedPointer

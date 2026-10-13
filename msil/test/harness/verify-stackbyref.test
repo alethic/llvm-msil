@@ -1,0 +1,28 @@
+# ILVerify's StackByRef is allowed (plan D21) only because the backend's
+# addresses are native int (plan D2): an int32, int64 or float64 address must
+# still fail msil-verify, with ILVerify alone. '--peverify=' (the last value
+# wins) turns PEVerify off, so its messages cannot hide a StackByRef that the
+# ILVerify filter lets through; verify-stackbyref-peverify.test covers the run
+# with PEVerify. The ILVerify line names the type that was found.
+# REQUIRES: msil-ilverify
+
+# RUN: %ilasm -dll -output=%t.i32.dll %S/Inputs/byref-int32-addr.il
+# RUN: not %msil_verify --peverify= %t.i32.dll > %t.i32.log 2>&1
+# RUN: %{harness_check} contains %t.i32.log "StackByRef.*::load\(int32\).*\[found Int32\] Expected ByRef on the stack"
+
+# RUN: %ilasm -dll -output=%t.i64.dll %S/Inputs/byref-int64-addr.il
+# RUN: not %msil_verify --peverify= %t.i64.dll > %t.i64.log 2>&1
+# RUN: %{harness_check} contains %t.i64.log "StackByRef.*::load\(native int\).*\[found Long\] Expected ByRef on the stack"
+
+# RUN: %ilasm -dll -output=%t.f64.dll %S/Inputs/byref-float64-addr.il
+# RUN: not %msil_verify --peverify= %t.f64.dll > %t.f64.log 2>&1
+# RUN: %{harness_check} contains %t.f64.log "StackByRef.*::load\(float64\).*\[found Double\] Expected ByRef on the stack"
+
+# RUN: %ilasm -dll -output=%t.st.dll %S/Inputs/byref-int32-store.il
+# RUN: not %msil_verify --peverify= %t.st.dll > %t.st.log 2>&1
+# RUN: %{harness_check} contains %t.st.log "StackByRef.*::store\(int32, int32\).*\[found Int32\] Expected ByRef on the stack"
+
+# Native int addresses pass, with ILVerify alone and with every verifier.
+# RUN: %ilasm -dll -output=%t.ni.dll %S/Inputs/byref-native-int.il
+# RUN: %msil_verify --peverify= %t.ni.dll
+# RUN: %msil_verify %t.ni.dll

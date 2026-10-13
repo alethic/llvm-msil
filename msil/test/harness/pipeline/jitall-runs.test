@@ -1,0 +1,25 @@
+# %{msil_c} and %{msil_ll} force-JIT every module at every level (plan 5.5:
+# compile -> ilasm -dll -> msil-verify -> jitall -> run). A nested lit with
+# -a prints every command it ran and its output, so for each level that
+# msil_opt_levels selects (features msil-opt-<L> and msil-ll-opt-<L> of
+# lit.local.cfg) the output for Inputs/jitall-levels.c and
+# Inputs/jitall-levels-ir.ll must show the msil-verify command for that
+# level's .dll, and the msil-jitall command for it followed by its summary
+# 'jitall: N ok, 0 failed'. Without the %msil_jitall step of c_pipeline or
+# ll_pipeline in lit.cfg.py the summaries are missing (and without the
+# %msil_verify step the verify commands; verify-runs.test shows that a
+# rejected module fails the run).
+# REQUIRES: msil-jitall
+
+# RUN: %{harness_lit} -a %S/Inputs/jitall-levels.c %S/Inputs/jitall-levels-ir.ll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/pipeline/Inputs/jitall-levels\.c " "^PASS: MSIL :: harness/pipeline/Inputs/jitall-levels-ir\.ll "
+# RUN: %if msil-opt-O0 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels\.c\.tmp\.O0\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels\.c\.tmp\.O0\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}
+# RUN: %if msil-opt-O1 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels\.c\.tmp\.O1\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels\.c\.tmp\.O1\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}
+# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels\.c\.tmp\.O2\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels\.c\.tmp\.O2\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}
+# RUN: %if msil-opt-O3 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels\.c\.tmp\.O3\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels\.c\.tmp\.O3\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}
+# RUN: %if msil-opt-Os %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels\.c\.tmp\.Os\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels\.c\.tmp\.Os\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}
+# RUN: %if msil-opt-Oz %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels\.c\.tmp\.Oz\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels\.c\.tmp\.Oz\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}
+# RUN: %if msil-ll-opt-O0 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels-ir\.ll\.tmp\.O0\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels-ir\.ll\.tmp\.O0\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}
+# RUN: %if msil-ll-opt-O1 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels-ir\.ll\.tmp\.O1\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels-ir\.ll\.tmp\.O1\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}
+# RUN: %if msil-ll-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels-ir\.ll\.tmp\.O2\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels-ir\.ll\.tmp\.O2\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}
+# RUN: %if msil-ll-opt-O3 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels-ir\.ll\.tmp\.O3\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels-ir\.ll\.tmp\.O3\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}

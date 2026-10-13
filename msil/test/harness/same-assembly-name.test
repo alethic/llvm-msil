@@ -1,0 +1,12 @@
+# Two DLLs with the same assembly name in one directory: run in place,
+# 'dotnet exec other.dll' silently executes same.dll, because every DLL of the
+# application directory is on the probing list and same.dll matches the
+# assembly name (asmprinter recon 0.9). msil-run.py runs each program from a
+# private copy, so each one runs its own code.
+
+# RUN: rm -rf %t.d
+# RUN: mkdir -p %t.d
+# RUN: %ilasm -dll -output=%t.d/same.dll %S/Inputs/same-name-a.il
+# RUN: %ilasm -dll -output=%t.d/other.dll %S/Inputs/same-name-b.il
+# RUN: %msil_exec --expect %S/Inputs/same-name-b %t.d/other.dll
+# RUN: %msil_exec --expect %S/Inputs/same-name-a %t.d/same.dll

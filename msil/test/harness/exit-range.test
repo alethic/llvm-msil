@@ -1,0 +1,64 @@
+# Exit statuses outside 0..255 never pass (plan D37). Linux keeps only the low
+# 8 bits of a status, so a program that exits with 300 shows 44 there; on
+# Windows the harness must report '[exit 300: outside 0..255]', which matches
+# neither the truncated '[exit 44]' nor a literal '[exit 300]'. Linux (and the
+# WSL runner, which implies a linux triple) cannot see the full status, so
+# this runs only where a Windows triple is executed on Windows.
+# REQUIRES: system-windows, msil-triple-windows, msil-netfx
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/exit-300.il
+# RUN: not %msil_exec --expect %S/Inputs/exit-300-truncated --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "[exit 300: outside 0..255]"
+# RUN: not %msil_exec --expect %S/Inputs/exit-300-literal %t.dll
+
+# The boundaries of the range: 255 is the largest status that passes; 256 and
+# -1 (which Linux would show as 0 and 255) are outside it, even without
+# --expect.
+# RUN: %ilasm -dll -output=%t.255.dll %S/Inputs/exit-255.il
+# RUN: %msil_exec --expect %S/Inputs/exit-255 --out %t.255.out %t.255.dll
+# RUN: %{harness_check} equals %t.255.out "[exit 255]"
+# RUN: %ilasm -dll -output=%t.256.dll %S/Inputs/exit-256.il
+# RUN: not %msil_exec --out %t.256.out %t.256.dll
+# RUN: %{harness_check} equals %t.256.out "[exit 256: outside 0..255]"
+# RUN: %ilasm -dll -output=%t.m1.dll %S/Inputs/exit-minus-1.il
+# RUN: not %msil_exec --out %t.m1.out %t.m1.dll
+# RUN: %{harness_check} equals %t.m1.out "[exit -1: outside 0..255]"
+
+# update-expected.py refuses an out-of-range native result: it does not write
+# the .expected file, and --check fails even against a literal '[exit 300]'.
+# Both say why on a 'REFUSED:' line; any other failure (a native run that does
+# not start, a plain mismatch) does not satisfy the check.
+# Without a built clang, Inputs/fake-native-<N>.il stands in for both the
+# compiler and the native program (a .NET Framework exe that exits with N), so
+# 44 is the in-range control that proves the fake toolchain works. As the
+# compiler (Inputs/fake-native-cc.il, assembled into both) it accepts only the
+# oracle command line of plan M0.b items (6) and (8): a native --target, and
+# for C %{msil_cflags} (-ffreestanding, -Werror=return-type and an -I
+# directory that holds msil_test.h), for IR -Wno-override-module. So the .c
+# and .ll runs below also check the command line update-expected.py builds;
+# the first two show that the stand-in rejects one without these flags.
+# RUN: rm -rf %t.d
+# RUN: mkdir -p %t.d
+# RUN: %ilasm -exe -output=%t.d/fake-native-44.exe %S/Inputs/fake-native-44.il %S/Inputs/fake-native-cc.il
+# RUN: %ilasm -exe -output=%t.d/fake-native-300.exe %S/Inputs/fake-native-300.il %S/Inputs/fake-native-cc.il
+# RUN: cat %S/Inputs/exit-range-prog.c > %t.d/prog.c
+# RUN: cat %S/Inputs/exit-range-prog.ll > %t.d/irprog.ll
+# RUN: not %t.d/fake-native-44.exe %t.d/prog.c -o %t.d/bare.exe
+# RUN: not %t.d/fake-native-44.exe --target=x86_64-pc-windows-msvc %t.d/irprog.ll -o %t.d/bare.exe
+# RUN: %{harness_check} missing %t.d/bare.exe
+
+# RUN: %{harness_update_expected} --clang %t.d/fake-native-44.exe %t.d/prog.c
+# RUN: %{harness_check} equals %t.d/prog.expected "[exit 44]"
+# RUN: %{harness_update_expected} --clang %t.d/fake-native-44.exe --check %t.d/prog.c
+# RUN: %{harness_update_expected} --clang %t.d/fake-native-44.exe %t.d/irprog.ll
+# RUN: %{harness_check} equals %t.d/irprog.expected "[exit 44]"
+
+# RUN: rm -f %t.d/prog.expected
+# RUN: not %{harness_update_expected} --clang %t.d/fake-native-300.exe %t.d/prog.c > %t.write.log 2>&1
+# RUN: %{harness_check} missing %t.d/prog.expected
+# RUN: %{harness_check} contains %t.write.log "^REFUSED: .*prog\.c: .*\[exit 300: outside 0\.\.255\]"
+
+# RUN: %{harness_check} write %t.d/prog.expected "[exit 300]"
+# RUN: not %{harness_update_expected} --clang %t.d/fake-native-300.exe --check %t.d/prog.c > %t.check.log 2>&1
+# RUN: %{harness_check} equals %t.d/prog.expected "[exit 300]"
+# RUN: %{harness_check} contains %t.check.log "^REFUSED: .*prog\.c: .*\[exit 300: outside 0\.\.255\]"

@@ -1,0 +1,73 @@
+uname: Linux x86_64; dotnet: Microsoft.NETCore.App 10.0.12 [/usr/lib/dotnet/shared/Microsoft.NETCore.App]
+== linux net10 e01_hello
+hello from <Module>::main
+   exit 42
+== linux net10 e03_sigs
+typeof(Quoted.Dotted.Cls) Namespace/Name: Quoted.Dotted / Cls
+passes=9 fails=0
+   exit 0
+== linux net10 e04_mem
+OBSERVE overlapping cpblk dest=src+1 result=0x0706040303020101
+passes=32 fails=0
+   exit 0
+== linux net10 e05_conv
+OBSERVE conv.i4 3e9 = 0x000000007FFFFFFF
+OBSERVE conv.i4 NaN = 0x0000000000000000
+OBSERVE conv.i8 1e19 = 0x7FFFFFFFFFFFFFFF
+OBSERVE conv.u4 -1.0 = 0x0000000000000000
+OBSERVE conv.u8 -1.0 = 0x0000000000000000
+OBSERVE conv.u1 300.0 = 0x000000000000002C
+OBSERVE conv.i4 -3e9 = 0xFFFFFFFF80000000
+passes=32 fails=0
+   exit 0
+== linux net10 e05b_u64fp
+passes=6 fails=0
+   exit 0
+== linux net10 e06_cmp
+passes=43 fails=0
+   exit 0
+== linux net10 e07_fnptr
+passes=10 fails=0
+   exit 0
+== linux net10 e09_modinit
+seg-ok
+passes=6 fails=0
+   exit 0
+== linux net10 e11_names
+reflected name of 'quote\'and\\back' = passes=23 fails=0
+   exit 0
+== linux net10 e13_i64ptr
+  1 int64 as ldind/stind address -> 42
+  2 native int + int64 -> 42
+  3 stloc int64<->native int -> 43
+  4 int64 arg to native int param -> 44
+  5 calli through int64 -> 45
+  6 ret int64 as native int -> 46
+  7 beq int64 vs native int -> 47
+   exit 0
+== linux net10 e20_align
+OR of low 6 bits: localloc=48 AllocHGlobal=48
+   exit 0
+== e08L (stdout to pipe)
+[Console] before native puts
+[Console] after native puts
+passes=2 fails=0
+hello
+hello
+   exit 44
+== e08L (stdout to file)
+   exit 44
+[Console] before native puts
+[Console] after native puts
+passes=2 fails=0
+hello
+hello
+== e10L
+/mnt/c/Users/JeromeHaltom/AppData/Local/Temp/claude/D--llvm-msil/fa776849-ce33-4cee-bcc7-05382d063d3e/scratchpad/recon/cil-runtime/out/linux/e10L_main.dll
+alpha
+two words
+héllo
+   exit 44
+/mnt/c/Users/JeromeHaltom/AppData/Local/Temp/claude/D--llvm-msil/fa776849-ce33-4cee-bcc7-05382d063d3e/scratchpad/recon/cil-runtime/out/linux/e10L_main.dll
+xray
+   exit (native exit 7) 7

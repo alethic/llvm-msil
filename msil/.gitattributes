@@ -1,0 +1,7 @@
+# Everything under msil/ is checked out with LF line endings, whatever
+# core.autocrlf says: lit transcripts (.expected) are compared byte for byte.
+* text=auto eol=lf
+*.expected text eol=lf
+# cmd.exe needs CRLF batch files.
+*.bat text eol=crlf
+*.cmd text eol=crlf

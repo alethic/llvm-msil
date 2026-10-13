@@ -1,0 +1,6 @@
+# Unverifiable-by-design constructs pass, and calli still runs correctly.
+REQUIRES: msil-ilverify
+RUN: %ilasm -dll -output=%t.dll %S/Inputs/unverifiable-ok.il
+RUN: %msil_verify -v %t.dll
+RUN: %msil_exec %t.dll > %t.out
+RUN: %python -c "import sys; sys.exit(0 if open(sys.argv[1]).read() == '[exit 9]\n' else 1)" %t.out

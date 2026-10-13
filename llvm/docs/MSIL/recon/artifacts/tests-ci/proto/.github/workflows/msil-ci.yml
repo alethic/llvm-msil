@@ -1,0 +1,220 @@
+# CI for the MSIL fork (llvm/docs/MSIL/Design.md). Only workflows named
+# msil-*.yml are meant to run in this repository; the inherited llvm-project
+# workflows are disabled with .github/msil/disable-upstream-workflows.sh.
+name: MSIL CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - 'msil-main'
+      - 'msil-milestone*'
+  pull_request:
+    branches:
+      - 'msil-*'
+      - 'msil/**'
+    paths-ignore:
+      - 'llvm/docs/**'
+  schedule:
+    # Nightly, on the default branch only (GitHub runs schedules from there).
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'Also run check-llvm and check-clang'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+  FULL_CHECK: ${{ github.event_name == 'schedule' || inputs.full == true }}
+  # Pinned tool versions (see msil/utils/tools/msil-tools.proj).
+  ILVERIFY_VERSION: '10.0.12'
+
+jobs:
+  linux:
+    name: Linux x86_64 (.NET 8 and 10)
+    if: github.repository_owner == 'alethic'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /usr/share/swift
+          df -h /
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build clang lld
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5 # TODO: pin to a commit SHA like the other actions
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Cache NuGet packages and dotnet tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.nuget/packages
+            ~/.dotnet/tools
+          key: msil-dotnet-tools-${{ runner.os }}-${{ hashFiles('msil/utils/tools/msil-tools.proj') }}-${{ env.ILVERIFY_VERSION }}
+
+      - name: Fetch ilasm (NuGet) and ILVerify (dotnet tool)
+        run: |
+          dotnet restore msil/utils/tools/msil-tools.proj -p:MsilToolsRid=linux-x64
+          # NuGet extraction is not guaranteed to keep the executable bit.
+          chmod +x ~/.nuget/packages/runtime.linux-x64.microsoft.netcore.il*asm/*/runtimes/linux-x64/native/il*asm
+          dotnet tool update --global dotnet-ilverify --version "$ILVERIFY_VERSION"
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Set up sccache
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          key: msil-linux
+          max-size: 2G
+          variant: sccache
+
+      - name: Configure
+        run: >
+          cmake -G Ninja -S llvm -B build
+          -C msil/cmake/caches/MSIL.cmake
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          -DLLVM_USE_LINKER=lld
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+          "-DLLVM_LIT_ARGS=-v --time-tests --xunit-xml-output=${{ github.workspace }}/build/lit-results.xml"
+
+      - name: Build
+        run: >
+          ninja -C build
+          clang llc FileCheck not count split-file llvm-config llvm-mc
+          TargetParserTests MCTests MSILTests
+
+      - name: Unit tests (MSIL-related)
+        run: build/bin/llvm-lit -sv build/test/Unit "--filter=MSIL|TripleTest|TargetRegistry"
+
+      - name: check-msil (.NET 8, -O0 and -O2, native oracle)
+        run: ninja -C build check-msil
+        env:
+          LIT_OPTS: --param msil_dotnet_runtime=8 --param msil_native_oracle=required
+
+      - name: Execution tests (.NET 10, full-opt JIT)
+        run: >
+          build/bin/llvm-lit -sv build/tools/msil/test
+          --param msil_dotnet_runtime=10
+          --param msil_dotnet_env=DOTNET_TieredCompilation=0
+
+      - name: Nightly extras (all opt levels, upstream regression)
+        if: env.FULL_CHECK == 'true'
+        run: |
+          build/bin/llvm-lit -sv build/tools/msil/test --param msil_opt_levels=O0,O1,O2,O3,Os,Oz
+          ninja -C build check-llvm check-clang
+
+      - name: Upload test outputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: msil-linux-test-output
+          path: |
+            build/lit-results.xml
+            build/tools/msil/test/**/Output/
+            build/test/CodeGen/MSIL/Output/
+          retention-days: 7
+
+  windows:
+    name: Windows x64 (.NET 8 and .NET Framework 4.8)
+    if: github.repository_owner == 'alethic'
+    runs-on: windows-2022
+    timeout-minutes: 330
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up the MSVC environment (LIB/INCLUDE for the native oracle)
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: x64
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5 # TODO: pin to a commit SHA
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Install ninja and ILVerify
+        run: |
+          choco install ninja --no-progress
+          dotnet tool update --global dotnet-ilverify --version $env:ILVERIFY_VERSION
+          "$env:USERPROFILE\.dotnet\tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Set up sccache
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        with:
+          key: msil-windows
+          max-size: 3G
+          variant: sccache
+
+      - name: Configure
+        run: >
+          cmake -G Ninja -S llvm -B build
+          -C msil/cmake/caches/MSIL.cmake
+          -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DCMAKE_POLICY_DEFAULT_CMP0141=NEW
+          -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+          -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON
+          "-DLLVM_LIT_ARGS=-v --time-tests --xunit-xml-output=${{ github.workspace }}/build/lit-results.xml"
+
+      - name: Build
+        run: >
+          ninja -C build
+          clang llc FileCheck not count split-file llvm-config llvm-mc
+          TargetParserTests MCTests MSILTests
+
+      - name: Unit tests (MSIL-related)
+        run: python build/bin/llvm-lit.py -sv build/test/Unit "--filter=MSIL|TripleTest|TargetRegistry"
+
+      - name: check-msil (.NET 8 + .NET Framework, native oracle, PEVerify)
+        run: ninja -C build check-msil
+        env:
+          LIT_OPTS: --param msil_dotnet_runtime=8 --param msil_native_oracle=required --param msil_run_netfx=1
+
+      - name: Upload test outputs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: msil-windows-test-output
+          path: |
+            build/lit-results.xml
+            build/tools/msil/test/**/Output/
+            build/test/CodeGen/MSIL/Output/
+          retention-days: 7

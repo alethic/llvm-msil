@@ -1,0 +1,26 @@
+# A managed calli (plan 5.1 'calli int32(native int)', M9) hides the rest of
+# its method from both verifiers: ILVerify stops at it ('ImportCalli not
+# implemented', a note) and PEVerify reports 'Instruction cannot be verified'
+# (allowed) and stops too. msil-verify.py's neutralized pass (pass 2, which
+# needs ildasm) rewrites every calli it can express into a call of a stub with
+# the same signature, so it must still reject a join with different stack
+# depths behind a calli (Inputs/masked-join-calli.il) and an int64 argument
+# for an int32 parameter of the calli itself (Inputs/calli-wrong-arg.il). A
+# pass 2 that kept calli would accept both. The control module has a calli
+# with the right argument before a balanced join; it passes, force-JITs and
+# runs. The bad join is never run or force-JITted: the .NET 10 JIT was seen
+# growing without bound on it (cil-runtime recon, e15).
+# REQUIRES: msil-ilverify, msil-ildasm
+
+# RUN: %ilasm -dll -output=%t.join.dll %S/Inputs/masked-join-calli.il
+# RUN: not %msil_verify %t.join.dll > %t.join.log 2>&1
+# RUN: %{harness_check} contains %t.join.log "PathStackDepth.*::join\(|::join\b.*Stack depth differs depending on path"
+
+# RUN: %ilasm -dll -output=%t.arg.dll %S/Inputs/calli-wrong-arg.il
+# RUN: not %msil_verify %t.arg.dll > %t.arg.log 2>&1
+# RUN: %{harness_check} contains %t.arg.log "StackUnexpected.*::wrongarg\(.*\[found Long\]\[expected Int32\]|::wrongarg\b.*\[found Long\]\[expected Int32\]"
+
+# RUN: %ilasm -dll -output=%t.ok.dll %S/Inputs/calli-ok.il
+# RUN: %msil_verify %t.ok.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.ok.dll %}
+# RUN: %msil_exec --expect %S/Inputs/calli-ok %t.ok.dll

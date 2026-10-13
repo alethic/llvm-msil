@@ -1,0 +1,5 @@
+# Stack-shape errors fail msil-verify.
+REQUIRES: msil-ilverify
+RUN: %ilasm -dll -output=%t.dll %S/Inputs/badstack.il
+RUN: not %msil_verify %t.dll 2> %t.err
+RUN: %python -c "import sys; t=open(sys.argv[1]).read(); sys.exit(0 if 'PathStackDepth' in t and 'MethodFallthrough' in t else 1)" %t.err

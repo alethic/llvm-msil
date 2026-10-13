@@ -1,0 +1,11 @@
+# native int + int64 is a stack-type error that ILVerify misses and the x64 JIT
+# accepts silently; only PEVerify reports it, as '[found Native Int][expected
+# Long] Unexpected type on the stack.'. msil-verify must fail on it: the
+# MemoryCopy exception of plan D21 covers '[expected unmanaged pointer]' only.
+# The module still runs (exit 5), which is why execution alone proves nothing.
+# REQUIRES: msil-ilverify, msil-peverify
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/ptr-int64-mix.il
+# RUN: not %msil_verify %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "\[found Native Int\]\[expected Long\] Unexpected type on the stack" "::mix"
+# RUN: %msil_exec --expect %S/Inputs/ptr-int64-mix %t.dll

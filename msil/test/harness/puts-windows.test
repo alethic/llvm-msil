@@ -1,0 +1,12 @@
+# Output through puts, imported as pinvokeimpl("ucrtbase" cdecl) the way the
+# backend declares it for windows-msvc triples (plan D14). Windows puts writes
+# CRLF; the transcript folds it to LF. The import library follows the target
+# triple, so this test is selected by the triple, not by the host OS
+# (puts-wsl.test is the linux twin).
+# REQUIRES: msil-triple-windows
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/puts-windows.il
+# RUN: %msil_verify %t.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.dll %}
+# RUN: %msil_exec --expect %S/Inputs/puts-windows --out %t.out %t.dll
+# RUN: %{harness_check} equals %t.out "hello from puts" "second line" "[exit 7]"

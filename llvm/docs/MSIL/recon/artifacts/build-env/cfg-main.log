@@ -1,0 +1,204 @@
+'vswhere.exe' is not recognized as an internal or external command,
+operable program or batch file.
+-- The C compiler identification is Clang 22.1.3 with MSVC-like command-line
+-- The CXX compiler identification is Clang 22.1.3 with MSVC-like command-line
+-- The ASM compiler identification is Clang with MSVC-like command-line
+-- Found assembler: C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-cl.exe
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-cl.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- bolt project is disabled
+-- clang project is enabled
+-- clang-tools-extra project is disabled
+-- cross-project-tests project is disabled
+-- lld project is enabled
+-- lldb project is disabled
+-- mlir project is disabled
+-- polly project is disabled
+-- flang project is disabled
+-- libc project is disabled
+-- compiler-rt project is disabled
+-- Doxygen disabled.
+-- Found Python3: C:\Users\JeromeHaltom\AppData\Local\Python\pythoncore-3.14-64\python.exe (found suitable version "3.14.7", minimum required is "3.8") found components: Interpreter
+-- Looking for __GLIBC__
+-- Looking for __GLIBC__ - not found
+-- Performing Test HAVE_BUILTIN_THREAD_POINTER
+-- Performing Test HAVE_BUILTIN_THREAD_POINTER - Failed
+-- Looking for pfm_initialize in pfm
+-- Looking for pfm_initialize in pfm - not found
+-- Could NOT find LibLZMA (missing: LIBLZMA_LIBRARY LIBLZMA_INCLUDE_DIR LIBLZMA_HAS_AUTO_DECODER LIBLZMA_HAS_EASY_ENCODER LIBLZMA_HAS_LZMA_PRESET) 
+-- Looking for arc4random
+-- Looking for arc4random - not found
+-- Looking for backtrace
+-- Looking for backtrace - not found
+-- Could NOT find Backtrace (missing: Backtrace_LIBRARY Backtrace_INCLUDE_DIR) 
+-- Performing Test C_SUPPORTS_WERROR_UNGUARDED_AVAILABILITY_NEW
+-- Performing Test C_SUPPORTS_WERROR_UNGUARDED_AVAILABILITY_NEW - Success
+-- Looking for __register_frame
+-- Looking for __register_frame - not found
+-- Looking for __deregister_frame
+-- Looking for __deregister_frame - not found
+-- Looking for __unw_add_dynamic_fde
+-- Looking for __unw_add_dynamic_fde - not found
+-- Looking for _Unwind_Backtrace
+-- Looking for _Unwind_Backtrace - not found
+-- Looking for getpagesize
+-- Looking for getpagesize - not found
+-- Looking for sysconf
+-- Looking for sysconf - not found
+-- Looking for getrusage
+-- Looking for getrusage - not found
+-- Looking for isatty
+-- Looking for isatty - not found
+-- Looking for futimens
+-- Looking for futimens - not found
+-- Looking for futimes
+-- Looking for futimes - not found
+-- Looking for getauxval
+-- Looking for getauxval - not found
+-- Looking for sigaltstack
+-- Looking for sigaltstack - not found
+-- Looking for mallctl
+-- Looking for mallctl - not found
+-- Looking for mallinfo
+-- Looking for mallinfo - not found
+-- Looking for mallinfo2
+-- Looking for mallinfo2 - not found
+-- Looking for malloc_zone_statistics
+-- Looking for malloc_zone_statistics - not found
+-- Looking for posix_spawn
+-- Looking for posix_spawn - not found
+-- Looking for pread
+-- Looking for pread - not found
+-- Looking for sbrk
+-- Looking for sbrk - not found
+-- Looking for strerror_r
+-- Looking for strerror_r - not found
+-- Looking for strerror_s
+-- Looking for strerror_s - found
+-- Looking for setenv
+-- Looking for setenv - not found
+-- Looking for _chsize_s
+-- Looking for _chsize_s - found
+-- Looking for _alloca
+-- Looking for _alloca - not found
+-- Looking for __alloca
+-- Looking for __alloca - not found
+-- Looking for __chkstk
+-- Looking for __chkstk - found
+-- Looking for __chkstk_ms
+-- Looking for __chkstk_ms - not found
+-- Looking for ___chkstk
+-- Looking for ___chkstk - not found
+-- Looking for ___chkstk_ms
+-- Looking for ___chkstk_ms - not found
+-- Looking for __ashldi3
+-- Looking for __ashldi3 - not found
+-- Looking for __ashrdi3
+-- Looking for __ashrdi3 - not found
+-- Looking for __divdi3
+-- Looking for __divdi3 - not found
+-- Looking for __fixdfdi
+-- Looking for __fixdfdi - not found
+-- Looking for __fixsfdi
+-- Looking for __fixsfdi - not found
+-- Looking for __floatdidf
+-- Looking for __floatdidf - not found
+-- Looking for __lshrdi3
+-- Looking for __lshrdi3 - not found
+-- Looking for __moddi3
+-- Looking for __moddi3 - not found
+-- Looking for __udivdi3
+-- Looking for __udivdi3 - not found
+-- Looking for __umoddi3
+-- Looking for __umoddi3 - not found
+-- Looking for __main
+-- Looking for __main - not found
+-- Looking for __cmpdi2
+-- Looking for __cmpdi2 - not found
+-- Performing Test HAVE_STRUCT_STAT_ST_MTIMESPEC_TV_NSEC
+-- Performing Test HAVE_STRUCT_STAT_ST_MTIMESPEC_TV_NSEC - Failed
+-- Performing Test HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC
+-- Performing Test HAVE_STRUCT_STAT_ST_MTIM_TV_NSEC - Failed
+-- Looking for proc_pid_rusage
+-- Looking for proc_pid_rusage - not found
+-- Performing Test LLVM_HAS_ATOMICS
+-- Performing Test LLVM_HAS_ATOMICS - Success
+-- LLVM host triple: x86_64-pc-windows-msvc
+-- Native target architecture is X86
+-- Found DIASDK: C:/Program Files/Microsoft Visual Studio/18/Professional/DIA SDK/include
+-- Threads enabled.
+-- Ninja version: 1.13.2
+-- Could NOT find OCaml (missing: OCAMLFIND OCAML_VERSION OCAML_STDLIB_PATH) 
+-- OCaml bindings disabled.
+-- Could NOT find Python module pygments
+-- Could NOT find Python module pygments.lexers.c_cpp
+-- Found Python module yaml
+-- LLVM default target triple: x86_64-pc-windows-msvc
+-- Performing Test SUPPORTS_LIBCXX_HARDENING_MODE
+-- Performing Test SUPPORTS_LIBCXX_HARDENING_MODE - Success
+-- Performing Test LLVM_USES_LIBSTDCXX
+-- Performing Test LLVM_USES_LIBSTDCXX - Failed
+-- Performing Test LLVM_DEFAULT_TO_GLIBCXX_USE_CXX11_ABI
+-- Performing Test LLVM_DEFAULT_TO_GLIBCXX_USE_CXX11_ABI - Failed
+-- Performing Test CXX_SUPPORTS_SUGGEST_OVERRIDE_FLAG
+-- Performing Test CXX_SUPPORTS_SUGGEST_OVERRIDE_FLAG - Success
+-- Performing Test CXX_WSUGGEST_OVERRIDE_ALLOWS_ONLY_FINAL
+-- Performing Test CXX_WSUGGEST_OVERRIDE_ALLOWS_ONLY_FINAL - Success
+-- Performing Test C_WCOMMENT_ALLOWS_LINE_WRAP
+-- Performing Test C_WCOMMENT_ALLOWS_LINE_WRAP - Success
+-- Performing Test C_SUPPORTS_MISLEADING_INDENTATION_FLAG
+-- Performing Test C_SUPPORTS_MISLEADING_INDENTATION_FLAG - Success
+-- Performing Test CXX_SUPPORTS_MISLEADING_INDENTATION_FLAG
+-- Performing Test CXX_SUPPORTS_MISLEADING_INDENTATION_FLAG - Success
+-- Performing Test C_SUPPORTS_CTAD_MAYBE_UNSUPPORTED_FLAG
+-- Performing Test C_SUPPORTS_CTAD_MAYBE_UNSUPPORTED_FLAG - Success
+-- Performing Test CXX_SUPPORTS_CTAD_MAYBE_UNSUPPORTED_FLAG
+-- Performing Test CXX_SUPPORTS_CTAD_MAYBE_UNSUPPORTED_FLAG - Success
+-- Precompiled headers enabled.
+-- Looking for os_signpost_interval_begin
+-- Looking for os_signpost_interval_begin - not found
+-- Looking for flock
+-- Looking for flock - not found
+-- Performing Test LLVM_LINKER_SUPPORTS_B_SYMBOLIC_FUNCTIONS
+-- Performing Test LLVM_LINKER_SUPPORTS_B_SYMBOLIC_FUNCTIONS - Success
+-- Performing Test HAS_WERROR_GLOBAL_CTORS
+-- Performing Test HAS_WERROR_GLOBAL_CTORS - Success
+-- Performing Test LLVM_HAS_NOGLOBAL_CTOR_MUTEX
+-- Performing Test LLVM_HAS_NOGLOBAL_CTOR_MUTEX - Failed
+-- Looking for _M_X64
+-- Looking for _M_X64 - found
+-- Looking for _M_ARM64EC
+-- Looking for _M_ARM64EC - not found
+-- The ASM_MASM compiler identification is MSVC
+-- Found assembler: C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/ml64.exe
+-- Found Git: C:/Program Files/Git/cmd/git.exe (found version "2.55.0.windows.5")
+-- Looking for logf128
+-- Looking for logf128 - not found
+-- Targeting X86
+-- Targeting WebAssembly
+-- Not building UnicodeCharSetsGenerator because libxml2 is not available
+-- LLD version: 24.0.0
+-- Looking for sys/resource.h
+-- Looking for sys/resource.h - not found
+-- Looking for dlfcn.h
+-- Looking for dlfcn.h - not found
+-- Performing Test CLANG_HAVE_EMUTLS_GET_ADDRESS
+-- Performing Test CLANG_HAVE_EMUTLS_GET_ADDRESS - Failed
+-- Clang version: 24.0.0git
+-- Performing Test HAVE_LINKER_FLAG_LONG_PLT
+-- Performing Test HAVE_LINKER_FLAG_LONG_PLT - Success
+-- Could NOT find Perl (missing: PERL_EXECUTABLE) 
+-- Found Python3: C:\Users\JeromeHaltom\AppData\Local\Python\pythoncore-3.14-64\python.exe (found version "3.14.7") found components: Interpreter
+-- Not building llvm-mt.exe because libxml2 is not available
+-- Configuring done (62.9s)
+-- Generating done (28.8s)
+-- Build files have been written to: D:/llvm-msil/build
+configure exit=0 elapsed=93s
