@@ -109,10 +109,17 @@ void MSILMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
       break;
     }
     case MachineOperand::MO_MachineBasicBlock:
-      // A branch target: the block label, '@BB<f>_<b>'.
+      // A branch target, including every target of a switch: the block label,
+      // '@BB<f>_<b>'.
       MCOp = MCOperand::createExpr(
           MCSymbolRefExpr::create(MO.getMBB()->getSymbol(), Ctx));
       break;
+    case MachineOperand::MO_JumpTableIndex:
+      // MSILTargetLowering::LowerBR_JT copies the blocks of a jump table into
+      // the operands of BR_TABLE_I32, which lower as the block operands above,
+      // so a jump table is never referenced, and never emitted as data
+      // (MSILAsmPrinter::emitJumpTableInfo).
+      reportFatalInternalError("MSIL: unexpected jump-table index operand");
     case MachineOperand::MO_MCSymbol:
       MCOp =
           MCOperand::createExpr(MCSymbolRefExpr::create(MO.getMCSymbol(), Ctx));

@@ -4,17 +4,21 @@
 ; that the custom inserter (emitSelect) expands at once into a triangle: the
 ; block ends with 'BR_IF Sink, $cond', an empty false block falls through to
 ; Sink, and Sink starts with '$dst = PHI $t, ThisMBB, $f, FalseMBB'. The
-; successor lists and the PHI are built explicitly (analyzeBranch cannot
-; analyze branches until M6), so -verify-machineinstrs, which checks every PHI
+; custom inserter builds the successor lists and the PHI explicitly and does
+; not rely on branch analysis; -verify-machineinstrs, which checks every PHI
 ; against the predecessor lists, runs on every llc line here. In the CIL every
-; select is a 'brtrue' to an '@BB<f>_<b>' label (long form, never brfalse) and
-; no SELECT pseudo survives. Conditions are integer compares or i1 values
-; (floating-point compares arrive in M5); an i1 argument without zeroext is
-; masked with 'ldc.i4.1; and' first. The generic expansions of smin, smax,
-; umin and umax build such selects (they are Expand), so they become a compare
-; plus a triangle. A select between two constants that differ by one, or
-; between a power of two and zero, is arithmetic instead
-; (convertSelectOfConstantsToMath, D34).
+; select is a 'brtrue' to an '@BB<f>_<b>' label (long form, never brfalse)
+; and no SELECT pseudo survives. The only other branches are the zero tests
+; of the ctlz and cttz expansions in sel_then_ctlz and sel_then_cttz, which
+; branch folding may invert at -O2, so only their O2 lines accept 'brfalse'
+; (and 'beq' or 'bne.un'); everywhere else --implicit-check-not=brfalse
+; applies. Conditions here are integer compares or i1 values (selects on
+; fcmp conditions are run by msil/test/M1/02-fp/select-fp.ll); an i1
+; argument without zeroext is masked with 'ldc.i4.1; and' first. The generic
+; expansions of smin, smax, umin and umax build such selects (they are
+; Expand), so they become a compare plus a triangle. A select between two
+; constants that differ by one, or between a power of two and zero, is
+; arithmetic instead (convertSelectOfConstantsToMath, D34).
 ;
 ; The PRE lines check the operand order of SELECT_<RC> before the custom
 ; inserter runs (plan 5.4: the condition, then $t, then $f); the MIR lines
@@ -27,7 +31,7 @@
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=brfalse \
 ; DEFINE:   --implicit-check-not=SELECT --implicit-check-not=call \
-; DEFINE:   --implicit-check-not="{{br(true|false)?\.s }}"
+; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}"
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check} --check-prefixes=CHECK,O2
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %s \
@@ -225,10 +229,18 @@ define i32 @two_selects(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; the custom inserter splits it. The select's block then keeps only the BR_IF
 ; to the join block and has the false block and the join block as its two
 ; successors; the join block, which starts with the PHI of $t and $f, takes
-; over the zero test's BR_IF and BR and the two successors of the original
-; block, and the PHI in cond.end names the join block as its predecessor,
-; not the entry block (MIRO2). At -O0 the ctlz and cttz expansions are
-; straight-line code.
+; over the zero test (BR_UNLESS of the int32 value, or BEQ_I64 of the native
+; int value and 0, to cond.end), the BR to cond.false and the two successors
+; of the original block, and the PHI in cond.end names the join block as its
+; predecessor, not the entry block (MIRO2). In the CIL the select's brtrue and
+; label stay as they are. Branch folding and tail duplication turn the zero
+; test into one long-form conditional branch and copy cond.end, which returns
+; the width, into its predecessor, so both paths end in 'ret' and the method
+; has an early return. The O2 lines check that branch, then the width with its
+; 'ret' and the other path's 'ret' in either order (CHECK-DAG; the first
+; pattern spans two or three lines), and that the method ends right after the
+; later 'ret'; they fix neither the branch sense nor the block order. At -O0
+; the ctlz and cttz expansions are straight-line code.
 ; MIRO2-LABEL: name: sel_then_ctlz
 ; MIRO2:       {{^ *}}bb.0{{[ .:]}}
 ; MIRO2-NEXT:  successors: %bb.{{[0-9]+}}{{(\(0x[0-9a-f]+\))?}}, %bb.{{[0-9]+}}{{(\(0x[0-9a-f]+\))?$}}
@@ -244,7 +256,7 @@ define i32 @two_selects(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; MIRO2-NOT:   {{^ *}}bb.
 ; MIRO2:       {{^ *}}%{{[0-9]+}}:i32 = PHI [[T]], %bb.0, [[F]], %bb.[[FALSE]]{{$}}
 ; MIRO2-NOT:   {{^ *}}bb.
-; MIRO2:       {{^ *}}BR_IF %bb.[[END]], %{{[0-9]+}}
+; MIRO2:       {{^ *}}BR_UNLESS %bb.[[END]], %{{[0-9]+}}
 ; MIRO2-NEXT:  {{^ *}}BR %bb.[[CF]],
 ; MIRO2-NOT:   {{^ *[%$A-Z]}}
 ; MIRO2:       {{^ *}}bb.[[CF]].cond.false:
@@ -258,8 +270,14 @@ define i32 @two_selects(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
-; CHECK:       {{^}}  ret{{$}}
-; CHECK-NEXT:  {{^}}} // end of method 'sel_then_ctlz'{{$}}
+; O0-NOT:      {{b(rtrue|rfalse|eq|ne|lt|le|gt|ge)|switch}}
+; O0:          {{^}}  ret{{$}}
+; O0-NEXT:     {{^}}} // end of method 'sel_then_ctlz'{{$}}
+; O2:          {{^}}  {{brtrue|brfalse}} @BB[[F]]_{{[0-9]+}}{{$}}
+; O2-NOT:      {{b(rtrue|rfalse|eq|ne|lt|le|gt|ge)|switch}}
+; O2-DAG:      {{^}}  ldc.i4{{(\.s)?}} 32{{[[:space:]]+}}ret{{$}}
+; O2-DAG:      {{^}}  ret{{$}}
+; O2-NEXT:     {{^}}} // end of method 'sel_then_ctlz'{{$}}
 define i32 @sel_then_ctlz(i32 %c, i32 %x, i32 %y) {
   %b = icmp ne i32 %c, 0
   %s = select i1 %b, i32 %x, i32 %y
@@ -282,7 +300,7 @@ define i32 @sel_then_ctlz(i32 %c, i32 %x, i32 %y) {
 ; MIRO2-NOT:   {{^ *}}bb.
 ; MIRO2:       {{^ *}}%{{[0-9]+}}:i64 = PHI [[T]], %bb.0, [[F]], %bb.[[FALSE]]{{$}}
 ; MIRO2-NOT:   {{^ *}}bb.
-; MIRO2:       {{^ *}}BR_IF %bb.[[END]], %{{[0-9]+}}
+; MIRO2:       {{^ *}}BEQ_I64 %bb.[[END]], %{{[0-9]+}}, %{{[0-9]+}}
 ; MIRO2-NEXT:  {{^ *}}BR %bb.[[CF]],
 ; MIRO2-NOT:   {{^ *[%$A-Z]}}
 ; MIRO2:       {{^ *}}bb.[[CF]].cond.false:
@@ -296,8 +314,14 @@ define i32 @sel_then_ctlz(i32 %c, i32 %x, i32 %y) {
 ; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
-; CHECK:       {{^}}  ret{{$}}
-; CHECK-NEXT:  {{^}}} // end of method 'sel_then_cttz'{{$}}
+; O0-NOT:      {{b(rtrue|rfalse|eq|ne|lt|le|gt|ge)|switch}}
+; O0:          {{^}}  ret{{$}}
+; O0-NEXT:     {{^}}} // end of method 'sel_then_cttz'{{$}}
+; O2:          {{^}}  {{beq|bne\.un|brtrue|brfalse}} @BB[[F]]_{{[0-9]+}}{{$}}
+; O2-NOT:      {{b(rtrue|rfalse|eq|ne|lt|le|gt|ge)|switch}}
+; O2-DAG:      {{^}}  ldc.i4{{(\.s)?}} 64{{[[:space:]]+}}conv.i{{[[:space:]]+}}ret{{$}}
+; O2-DAG:      {{^}}  ret{{$}}
+; O2-NEXT:     {{^}}} // end of method 'sel_then_cttz'{{$}}
 define i64 @sel_then_cttz(i64 %c, i64 %x, i64 %y) {
   %b = icmp ult i64 %c, 5
   %s = select i1 %b, i64 %x, i64 %y

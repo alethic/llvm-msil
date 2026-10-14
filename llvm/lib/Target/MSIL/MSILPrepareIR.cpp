@@ -47,6 +47,10 @@
 ///   normal destination. The function is not compiled, so the call would
 ///   otherwise become a call of an external function. Other uses of the
 ///   function (its address) are left alone.
+/// - The code after a trap (a call of llvm.trap, llvm.debugtrap or
+///   llvm.ubsantrap without a "trap-func-name") in its block is replaced by
+///   'unreachable', which also drops the block's successor edges: the trap
+///   becomes the TRAP terminator, so nothing after it runs.
 /// - An alias, an ifunc or a global variable in a non-zero address space is an
 ///   error; its uses become poison and it is erased.
 /// - A thread-local variable is an error; it becomes an ordinary global.
@@ -92,6 +96,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <string>
 
@@ -635,6 +640,52 @@ static bool eraseCallsOf(ArrayRef<Function *> Deleted) {
   return !Calls.empty();
 }
 
+/// Returns true if instruction selection makes \p I the TRAP terminator: a
+/// call of llvm.trap, llvm.debugtrap or llvm.ubsantrap without a
+/// "trap-func-name" attribute, which SelectionDAGBuilder would lower as an
+/// ordinary call of that function instead.
+static bool isTrapTerminator(const Instruction &I) {
+  const auto *CI = dyn_cast<CallInst>(&I);
+  if (!CI)
+    return false;
+  Intrinsic::ID IID = CI->getIntrinsicID();
+  return (IID == Intrinsic::trap || IID == Intrinsic::debugtrap ||
+          IID == Intrinsic::ubsantrap) &&
+         CI->getAttributes()
+             .getFnAttr("trap-func-name")
+             .getValueAsString()
+             .empty();
+}
+
+/// Ends every block of \p F at its first trap. TRAP ('ldnull; throw') is a
+/// terminator and a barrier, so nothing after it runs in Phase 1, not even
+/// after llvm.debugtrap, which is not noreturn but becomes TRAP too (its
+/// default Expand action). Code that stayed after the trap would be erased by
+/// MSILCleanCodeAfterTrap while the block keeps its successor edges, and the
+/// values it defines would be read without a def in the successors.
+/// changeToUnreachable on the instruction after the trap erases the rest of
+/// the block and the edges, and removes the block from its successors' PHI
+/// nodes; UnreachableBlockElimination then drops the blocks that only the
+/// trap reached. Returns true if a block changed.
+static bool endBlocksAtTraps(Function &F) {
+  // Collect the first trap of each block first: changeToUnreachable erases
+  // the rest of its block, later traps included.
+  SmallVector<Instruction *, 4> Traps;
+  for (BasicBlock &BB : F)
+    for (Instruction &I : BB) {
+      if (!isTrapTerminator(I))
+        continue;
+      // A call is never the terminator of its block.
+      if (!isa<UnreachableInst>(I.getNextNode()))
+        Traps.push_back(&I);
+      break;
+    }
+
+  for (Instruction *Trap : Traps)
+    changeToUnreachable(Trap->getNextNode());
+  return !Traps.empty();
+}
+
 /// Reports a non-empty llvm.global_dtors and erases it. Destructors need an
 /// exit hook in the runtime support assembly (phase 3).
 static bool diagnoseGlobalDtors(Module &M) {
@@ -786,8 +837,10 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
     }
     bool HasError = diagnoseILNameLength(F, TM);
     HasError |= diagnoseDefinition(F, ASFinder, FPFinder);
-    if (!HasError)
+    if (!HasError) {
+      Changed |= endBlocksAtTraps(F);
       continue;
+    }
     F.deleteBody();
     // A declaration may not be in a comdat.
     F.setComdat(nullptr);

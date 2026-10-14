@@ -48,6 +48,12 @@ public:
                                       unsigned *Fast) const override;
   bool isIntDivCheap(EVT VT, AttributeList Attr) const override;
   MVT getJumpTableRegTy(const DataLayout &DL) const override;
+  /// Rejects a jump table of more than 4096 entries at every optimization
+  /// level, so that its MSILISD::BR_TABLE fits in one SDNode; otherwise
+  /// defers to the base class.
+  bool isSuitableForJumpTable(const SwitchInst *SI, uint64_t NumCases,
+                              uint64_t Range, ProfileSummaryInfo *PSI,
+                              BlockFrequencyInfo *BFI) const override;
   bool convertSelectOfConstantsToMath(EVT VT) const override;
 
   // Lowering hooks.

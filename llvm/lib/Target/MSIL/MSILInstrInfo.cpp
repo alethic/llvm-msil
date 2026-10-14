@@ -84,15 +84,151 @@ MachineInstr *MSILInstrInfo::commuteInstructionImpl(MachineInstr &MI,
   return TargetInstrInfo::commuteInstructionImpl(MI, NewMI, OpIdx1, OpIdx2);
 }
 
+/// Returns the conditional branch that is taken exactly when \p Opc is not
+/// taken, or 0 if \p Opc is not a conditional branch. Every conditional
+/// branch has one: brtrue and brfalse invert each other, and so do the
+/// integer compare-and-branches of each signedness. A floating-point
+/// compare-and-branch is inverted by the one of the other ordering, because
+/// the inverse must be true when an operand is a NaN exactly when the branch
+/// is false then (isel.md 11.7): blt (OLT) inverts to bge.un (UGE), not bge.
+static unsigned getInvertedBranch(unsigned Opc) {
+  switch (Opc) {
+  default:
+    return 0;
+  case MSIL::BR_IF:
+    return MSIL::BR_UNLESS;
+  case MSIL::BR_UNLESS:
+    return MSIL::BR_IF;
+  // Equality inverts the same way for every class: beq is OEQ and bne.un
+  // UNE on floating-point values.
+  case MSIL::BEQ_I32:
+    return MSIL::BNE_UN_I32;
+  case MSIL::BNE_UN_I32:
+    return MSIL::BEQ_I32;
+  case MSIL::BEQ_I64:
+    return MSIL::BNE_UN_I64;
+  case MSIL::BNE_UN_I64:
+    return MSIL::BEQ_I64;
+  case MSIL::BEQ_F32:
+    return MSIL::BNE_UN_F32;
+  case MSIL::BNE_UN_F32:
+    return MSIL::BEQ_F32;
+  case MSIL::BEQ_F64:
+    return MSIL::BNE_UN_F64;
+  case MSIL::BNE_UN_F64:
+    return MSIL::BEQ_F64;
+  // Integers: a signed order inverts to a signed one, an unsigned order to an
+  // unsigned one.
+  case MSIL::BLT_I32:
+    return MSIL::BGE_I32;
+  case MSIL::BGE_I32:
+    return MSIL::BLT_I32;
+  case MSIL::BLE_I32:
+    return MSIL::BGT_I32;
+  case MSIL::BGT_I32:
+    return MSIL::BLE_I32;
+  case MSIL::BLT_UN_I32:
+    return MSIL::BGE_UN_I32;
+  case MSIL::BGE_UN_I32:
+    return MSIL::BLT_UN_I32;
+  case MSIL::BLE_UN_I32:
+    return MSIL::BGT_UN_I32;
+  case MSIL::BGT_UN_I32:
+    return MSIL::BLE_UN_I32;
+  case MSIL::BLT_I64:
+    return MSIL::BGE_I64;
+  case MSIL::BGE_I64:
+    return MSIL::BLT_I64;
+  case MSIL::BLE_I64:
+    return MSIL::BGT_I64;
+  case MSIL::BGT_I64:
+    return MSIL::BLE_I64;
+  case MSIL::BLT_UN_I64:
+    return MSIL::BGE_UN_I64;
+  case MSIL::BGE_UN_I64:
+    return MSIL::BLT_UN_I64;
+  case MSIL::BLE_UN_I64:
+    return MSIL::BGT_UN_I64;
+  case MSIL::BGT_UN_I64:
+    return MSIL::BLE_UN_I64;
+  // Floating point: an ordered order inverts to an unordered one and back.
+  case MSIL::BLT_F32:
+    return MSIL::BGE_UN_F32;
+  case MSIL::BGE_UN_F32:
+    return MSIL::BLT_F32;
+  case MSIL::BLE_F32:
+    return MSIL::BGT_UN_F32;
+  case MSIL::BGT_UN_F32:
+    return MSIL::BLE_F32;
+  case MSIL::BGT_F32:
+    return MSIL::BLE_UN_F32;
+  case MSIL::BLE_UN_F32:
+    return MSIL::BGT_F32;
+  case MSIL::BGE_F32:
+    return MSIL::BLT_UN_F32;
+  case MSIL::BLT_UN_F32:
+    return MSIL::BGE_F32;
+  case MSIL::BLT_F64:
+    return MSIL::BGE_UN_F64;
+  case MSIL::BGE_UN_F64:
+    return MSIL::BLT_F64;
+  case MSIL::BLE_F64:
+    return MSIL::BGT_UN_F64;
+  case MSIL::BGT_UN_F64:
+    return MSIL::BLE_F64;
+  case MSIL::BGT_F64:
+    return MSIL::BLE_UN_F64;
+  case MSIL::BLE_UN_F64:
+    return MSIL::BGT_F64;
+  case MSIL::BGE_F64:
+    return MSIL::BLT_UN_F64;
+  case MSIL::BLT_UN_F64:
+    return MSIL::BGE_F64;
+  }
+}
+
 // Branch analysis.
 bool MSILInstrInfo::analyzeBranch(MachineBasicBlock &MBB,
                                   MachineBasicBlock *&TBB,
                                   MachineBasicBlock *&FBB,
                                   SmallVectorImpl<MachineOperand> &Cond,
                                   bool /*AllowModify*/) const {
-  // No branch is analyzable until the compare-and-branch records exist (M6),
-  // so the generic CFG optimizations leave the branches alone.
-  return true;
+  // CIL has nothing like WebAssembly's CFGStackify block, loop and try
+  // markers, so branch analysis stays valid through emission, and
+  // WebAssembly's bail-out for CFG-stackified functions is dropped. After
+  // MSILRegStackify its only caller is the MachineVerifier, which runs it
+  // after every pass under -verify-machineinstrs. Caution: no pass after
+  // MSILRegStackify may rebuild branches through insertBranch or
+  // updateTerminator, because the condition operands are stackified by then.
+  bool HaveCond = false;
+  for (MachineInstr &MI : MBB.terminators()) {
+    if (MI.isDebugInstr())
+      continue;
+    unsigned Opc = MI.getOpcode();
+    if (Opc == MSIL::BR) {
+      if (!HaveCond)
+        TBB = MI.getOperand(0).getMBB();
+      else
+        FBB = MI.getOperand(0).getMBB();
+    } else if (getInvertedBranch(Opc)) {
+      // brtrue, brfalse or a compare-and-branch: the target, then the
+      // operands that the condition pops.
+      if (HaveCond)
+        return true;
+      Cond.push_back(MachineOperand::CreateImm(Opc));
+      for (const MachineOperand &MO : drop_begin(MI.explicit_operands()))
+        Cond.push_back(MO);
+      TBB = MI.getOperand(0).getMBB();
+      HaveCond = true;
+    } else {
+      // A switch, a return, a trap or anything else: bail out.
+      return true;
+    }
+    if (MI.isBarrier())
+      break;
+  }
+
+  return false;
 }
 
 unsigned MSILInstrInfo::removeBranch(MachineBasicBlock &MBB,
@@ -130,12 +266,14 @@ unsigned MSILInstrInfo::insertBranch(
     return 1;
   }
 
-  assert(Cond.size() == 2 && "Expected a flag and a successor block");
+  assert(Cond.size() >= 2 && Cond[0].isImm() &&
+         "Expected a branch opcode and its condition operands");
+  unsigned Opc = Cond[0].getImm();
+  assert(getInvertedBranch(Opc) && "Not a conditional branch");
 
-  if (Cond[0].getImm())
-    BuildMI(&MBB, DL, get(MSIL::BR_IF)).addMBB(TBB).add(Cond[1]);
-  else
-    BuildMI(&MBB, DL, get(MSIL::BR_UNLESS)).addMBB(TBB).add(Cond[1]);
+  MachineInstrBuilder MIB = BuildMI(&MBB, DL, get(Opc)).addMBB(TBB);
+  for (const MachineOperand &MO : drop_begin(Cond))
+    MIB.add(MO);
   if (!FBB)
     return 1;
 
@@ -145,8 +283,14 @@ unsigned MSILInstrInfo::insertBranch(
 
 bool MSILInstrInfo::reverseBranchCondition(
     SmallVectorImpl<MachineOperand> &Cond) const {
-  assert(Cond.size() == 2 && "Expected a flag and a condition expression");
-  Cond.front() = MachineOperand::CreateImm(!Cond.front().getImm());
+  assert(Cond.size() >= 2 && Cond[0].isImm() &&
+         "Expected a branch opcode and its condition operands");
+  // Every conditional branch has an exact inverse (getInvertedBranch); a
+  // condition without one is reported as not reversible.
+  unsigned Inverse = getInvertedBranch(Cond[0].getImm());
+  if (!Inverse)
+    return true;
+  Cond[0].setImm(Inverse);
   return false;
 }
 

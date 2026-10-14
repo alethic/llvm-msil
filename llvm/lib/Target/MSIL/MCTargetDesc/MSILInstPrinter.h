@@ -17,7 +17,9 @@
 /// with a two-space indent. Opcodes that take an argument index, a local index
 /// or an integer constant are printed in their shortest form (ldarg.0,
 /// ldloc.s 4, ldc.i4.m1, ...); branches always in their long form (br @BB0_2,
-/// brtrue @BB0_2, ...).
+/// brtrue @BB0_2, blt.un @BB0_2, ...), and a switch as its whole target list
+/// followed by a 'br' to its first target, a dummy fall-through that never
+/// runs (not the C switch's default).
 ///
 /// MCInsts keep the operand positions of the MachineInstr: register operands
 /// are placeholders for values on the evaluation stack and print nothing, so
@@ -79,7 +81,12 @@ public:
   static const char *getRegisterName(MCRegister Reg);
 
 private:
-  /// 'switch (<targets>)' then 'br <default>' (BR_TABLE_I32).
+  /// 'switch (<targets>)' then, on the next line, 'br <first target>'
+  /// (BR_TABLE_I32: the int32 index placeholder, the jump-table block labels,
+  /// then the first label again). That 'br' is a dummy fall-through target
+  /// that is already a CFG successor and never runs: LLVM's range check before
+  /// the table sends every out-of-range value to the default first. It is not
+  /// the C switch's default.
   void printBrTable(const MCInst *MI, const MCSubtargetInfo &STI,
                     raw_ostream &O);
   /// 'call <method reference>' (CALL) or 'calli <call-site signature>'

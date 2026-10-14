@@ -16,11 +16,13 @@
 /// Print MCInst instructions as ILAsm text. The TableGen'erated printer prints
 /// the asm strings of MSILInstrInfo.td: plain opcodes such as 'add' or
 /// 'cgt.un', and branches, which always use the long forms ('br', 'brtrue',
-/// 'brfalse') with a block label operand ('@BB<function>_<block>', from
-/// MCAsmInfo's InternalSymbolPrefix). Printed here instead: the short forms
-/// of the argument, local and constant opcodes, which depend on the value of
-/// the immediate; 'switch', 'call' and 'calli', whose operands are variadic;
-/// and the offset of a global address.
+/// 'brfalse' and the fused compare-and-branch opcodes 'beq', 'bne.un', 'blt',
+/// 'blt.un', 'ble', 'ble.un', 'bgt', 'bgt.un', 'bge', 'bge.un') with a block
+/// label operand ('@BB<function>_<block>', from MCAsmInfo's
+/// InternalSymbolPrefix). Printed here instead: the short forms of the
+/// argument, local and constant opcodes, which depend on the value of the
+/// immediate; 'switch', 'call' and 'calli', whose operands are variadic; and
+/// the offset of a global address.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -216,10 +218,17 @@ void MSILInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     // Records with an empty asm string (ARGUMENT_*, COPY_*, TEE_*, the call
     // sequence markers, the CALL_PARAMS/CALL_RESULTS pseudos and the SELECT_*
     // pseudos, which custom inserters replace) are never lowered to MCInsts.
-    if (!getMnemonic(*MI).first)
+    const char *Mnemonic = getMnemonic(*MI).first;
+    if (!Mnemonic)
       reportFatalInternalError(Twine("MSIL: instruction ") +
                                MII.getName(MI->getOpcode()) +
                                " has no ILAsm text");
+    // A short branch ('br.s', 'beq.s', ...) has an 8-bit offset, and only the
+    // assembler knows the distance to the label, so the asm strings use the
+    // long forms only (plan 5.1).
+    assert((!MII.get(MI->getOpcode()).isBranch() ||
+            !StringRef(Mnemonic).rtrim().ends_with(".s")) &&
+           "branches print their long forms");
     // The generated printer starts every instruction with a tab: replace it by
     // the indent printed above.
     SmallString<64> Text;
@@ -239,18 +248,33 @@ void MSILInstPrinter::printInst(const MCInst *MI, uint64_t Address,
 void MSILInstPrinter::printBrTable(const MCInst *MI, const MCSubtargetInfo &STI,
                                    raw_ostream &O) {
   // switch (@BB0_1, @BB0_2)
-  // br @BB0_3
-  // The int32 index is on the stack (a register placeholder); the other
-  // operands are the targets, and the last one is the default, reached with
-  // 'br' when the index is out of range.
-  unsigned First = 0, E = MI->getNumOperands();
-  while (First != E && MI->getOperand(First).isReg())
-    ++First;
-  if (First == E)
-    reportFatalInternalError("MSIL: switch without a default target");
+  // br @BB0_1
+  // Operand 0 is the int32 index, a register placeholder for the value on the
+  // stack (decision D35: there is no native int form). The other operands are
+  // the block labels of the jump table, which MSILTargetLowering::LowerBR_JT
+  // copied into the instruction, followed by the first entry again. 'switch'
+  // falls through to the next instruction when the index is out of range
+  // (taken as unsigned), so that last operand is the target of the 'br' after
+  // it: a dummy fall-through target that is already a CFG successor of the
+  // block, not the C switch's default. It never executes: LLVM's range check
+  // before the jump table (never removed, D35) sends every out-of-range value
+  // to the real default first, and when the default is unreachable an
+  // out-of-range index is undefined behaviour.
+  // The table is printed whole on one line (ilasm 4.8 and 10 accept 20000
+  // targets) and never emitted as data.
+  unsigned E = MI->getNumOperands();
+  if (E < 2 || !MI->getOperand(0).isReg())
+    reportFatalInternalError("MSIL: switch without an index or a fall-through "
+                             "target");
+  for (unsigned I = 1; I != E; ++I) {
+    const MCOperand &Op = MI->getOperand(I);
+    if (!Op.isExpr() || !isa<MCSymbolRefExpr>(Op.getExpr()))
+      reportFatalInternalError("MSIL: switch target " + Twine(I) +
+                               " is not a block label");
+  }
   O << getMnemonic(*MI).first << " (";
   ListSeparator LS;
-  for (unsigned I = First; I + 1 < E; ++I) {
+  for (unsigned I = 1; I + 1 < E; ++I) {
     O << LS;
     printOperand(MI, I, STI, O);
   }

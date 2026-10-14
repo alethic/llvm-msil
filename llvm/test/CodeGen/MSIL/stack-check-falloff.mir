@@ -62,16 +62,24 @@ body: |
     dead %0:i32 = CONST_I32 1, implicit-def dead $arguments
 ...
 
-# The last block ends with a conditional branch (a loop back-edge), the case
-# that ilasm accepts and the JIT rejects (passes-frame.md experiment e3). The
-# argument is read for the branch, and the TRAP follows the branch.
+# The last block ends with a conditional branch (a loop back-edge) followed by
+# the barrier 'br' out of the loop: no TRAP. A last block that ends with the
+# conditional branch alone (the case that ilasm accepts and the JIT rejects,
+# passes-frame.md experiment e3) is not valid MIR from M6 on: once
+# MSILInstrInfo::analyzeBranch understands BR_IF, the machine verifier that
+# MIRParser runs on every parsed function reports a conditional fall-through
+# out of the function. TrapUnreachable, and the 'br' that insertBranch emits
+# after the conditional branch when it is given a false successor (one that is
+# not the next block), keep code generation from producing such a block. The
+# other cases here still cover MSILStackCheck's TRAP for a last block that does
+# not end in a barrier.
 # CHECK-LABEL: name: after_cond_branch{{$}}
 # CHECK:       maxStack: 1{{$}}
-# CHECK:       bb.1:
+# CHECK:       bb.2:
 # CHECK:       [[A:%[0-9]+]]:i32 = ARG_GET_I32 0,
-# CHECK-NEXT:  BR_IF %bb.1, [[A]],
-# CHECK-NEXT:  {{^ +}}TRAP{{( |$)}}
-# CHECK-NOT:   {{TRAP|RETURN}}
+# CHECK-NEXT:  BR_IF %bb.2, [[A]],
+# CHECK-NEXT:  BR %bb.1,
+# CHECK-NOT:   TRAP
 ---
 name:            after_cond_branch
 tracksRegLiveness: true
@@ -80,13 +88,18 @@ machineFunctionInfo:
   results: [ ]
 body: |
   bb.0:
-    successors: %bb.1
+    successors: %bb.2
     liveins: $arguments
     %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    BR %bb.2, implicit-def dead $arguments
 
   bb.1:
-    successors: %bb.1
-    BR_IF %bb.1, %0, implicit-def dead $arguments
+    RETURN implicit-def dead $arguments
+
+  bb.2:
+    successors: %bb.2, %bb.1
+    BR_IF %bb.2, %0, implicit-def dead $arguments
+    BR %bb.1, implicit-def dead $arguments
 ...
 
 # A function that ends with 'ret' gets no TRAP. Without RegStackify (only

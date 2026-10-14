@@ -18,10 +18,12 @@
 
 #include "MSILISelLowering.h"
 #include "MCTargetDesc/MSILMCTargetDesc.h"
+#include "MSILSelectionDAGInfo.h"
 #include "MSILSubtarget.h"
 #include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
+#include "llvm/CodeGen/MachineJumpTableInfo.h"
 #include "llvm/CodeGen/RuntimeLibcallUtil.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/IR/DiagnosticInfo.h"
@@ -223,7 +225,8 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // selects the SELECT_<RC> pseudos, which emitSelect turns into a branch
   // triangle (decision D34), because generic legalization emits SELECT
   // (variable i128 shifts, min/max). The fused forms are split into SETCC
-  // plus SELECT or BRCOND.
+  // plus SELECT or BRCOND; instruction selection turns BRCOND of a SETCC into
+  // one CIL compare-and-branch (beq, blt.un, ...; MSILInstrControl.td).
   for (MVT T : {MVT::i32, MVT::i64, MVT::f32, MVT::f64}) {
     setOperationAction(ISD::SELECT, T, Legal);
     setOperationAction({ISD::SELECT_CC, ISD::BR_CC}, T, Expand);
@@ -231,7 +234,8 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
 
   // TRAP is 'ldnull; throw', a terminator ('unreachable' always becomes a
   // trap). Expanded, it would be a call to abort, after which the method could
-  // fall off its end, which CIL forbids.
+  // fall off its end, which CIL forbids. DEBUGTRAP and UBSANTRAP keep their
+  // default Expand action, which makes them TRAP as well.
   setOperationAction(ISD::TRAP, MVT::Other, Legal);
 
   // Every operation that LowerOperation dispatches is Custom, because
@@ -243,8 +247,9 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // are I64.
   setOperationAction({ISD::GlobalAddress, ISD::ExternalSymbol, ISD::FrameIndex},
                      MVT::i64, Custom);
-  // Jump tables become a CIL 'switch' (M6). Custom, like Legal, keeps jump
-  // tables allowed (areJTsAllowed).
+  // Jump tables become a CIL 'switch' on an int32 index (LowerBR_JT, decision
+  // D35). Custom, like Legal, keeps jump tables allowed (areJTsAllowed). An
+  // indirectbr never gets here: IndirectBrExpand turns it into a switch.
   setOperationAction(ISD::BR_JT, MVT::Other, Custom);
   // i128 shifts by a variable amount: Custom, so that the type legalizer
   // builds *_PARTS nodes instead of calling __ashlti3, __lshrti3 or __ashrti3.
@@ -328,6 +333,33 @@ MVT MSILTargetLowering::getJumpTableRegTy(const DataLayout & /*DL*/) const {
   // CIL 'switch' takes an int32 index. SelectionDAGBuilder range-checks the
   // full-width value before it truncates it to this type.
   return MVT::i32;
+}
+
+/// The largest jump table, in entries, that becomes one CIL 'switch'.
+/// MSILISD::BR_TABLE carries every entry of its table as an SDNode operand,
+/// N + 3 operands in all (chain, index, the N entries and the dummy last
+/// target), and an SDNode holds at most SDNode::getMaxNumOperands() (65535)
+/// operands. 4096 is far below that limit, and a switch just above it still
+/// compiles fast enough for a boundary test.
+static constexpr uint64_t MaxJumpTableEntries = 4096;
+static_assert(MaxJumpTableEntries + 3 <= SDNode::getMaxNumOperands(),
+              "A maximal jump table does not fit in one BR_TABLE node");
+
+bool MSILTargetLowering::isSuitableForJumpTable(const SwitchInst *SI,
+                                                uint64_t NumCases,
+                                                uint64_t Range,
+                                                ProfileSummaryInfo *PSI,
+                                                BlockFrequencyInfo *BFI) const {
+  // A jump table has one entry for every value in Range. Check the cap first,
+  // also in optsize and minsize functions, for which the base class ignores
+  // getMaximumJumpTableSize(). When optimizing, switch lowering then splits a
+  // larger range into several tables, each behind LLVM's range check; at -O0
+  // it builds a table only for the whole range, so a range above the cap
+  // becomes a chain of compares. setMaximumJumpTableSize is not used: it sets
+  // the -max-jump-table-size option, which every target in the process shares.
+  if (Range > MaxJumpTableEntries)
+    return false;
+  return TargetLowering::isSuitableForJumpTable(SI, NumCases, Range, PSI, BFI);
 }
 
 bool MSILTargetLowering::convertSelectOfConstantsToMath(EVT /*VT*/) const {
@@ -546,7 +578,44 @@ SDValue MSILTargetLowering::LowerExternalSymbol(SDValue Op,
 }
 
 SDValue MSILTargetLowering::LowerBR_JT(SDValue Op, SelectionDAG &DAG) const {
-  reportFatalUsageError("MSIL: jump tables are implemented in M6");
+  // A jump table becomes a CIL 'switch' with its targets inline: BR_TABLE
+  // (chain, index, entry MBBs..., first entry MBB again), printed as
+  // 'switch (...)' and 'br <first entry>'. That last target is a dummy, not
+  // the switch's default (see below). No table is ever emitted as data.
+  SDLoc DL(Op);
+  SDValue Chain = Op.getOperand(0);
+  const auto *JT = cast<JumpTableSDNode>(Op.getOperand(1));
+  SDValue Index = Op.getOperand(2);
+  assert(JT->getTargetFlags() == 0 && "MSIL doesn't set target flags");
+  // 'switch' on a native int fails ILVerify, so the index is always an int32
+  // (decision D35): getJumpTableRegTy is i32, and SelectionDAGBuilder
+  // truncates the index to it only after the range check on the full-width
+  // value.
+  assert(Index.getValueType() == MVT::i32 && "Jump-table index is not i32");
+
+  SmallVector<SDValue, 8> Ops;
+  Ops.push_back(Chain);
+  Ops.push_back(Index);
+
+  MachineJumpTableInfo *MJTI = DAG.getMachineFunction().getJumpTableInfo();
+  const auto &MBBs = MJTI->getJumpTables()[JT->getIndex()].MBBs;
+  // isSuitableForJumpTable caps a table at MaxJumpTableEntries entries.
+  assert(MBBs.size() + 3 <= SDNode::getMaxNumOperands() &&
+         "Jump table too large for one BR_TABLE node");
+
+  // Add an operand for each case.
+  for (MachineBasicBlock *MBB : MBBs)
+    Ops.push_back(DAG.getBasicBlock(MBB));
+
+  // 'switch' falls through when the index is out of range, so it needs a
+  // default target. SelectionDAGBuilder's range check before the jump table
+  // already sends every out-of-range value to the switch's real default, so
+  // the first case serves: it is a successor of this block anyway. Without the
+  // range check (an unreachable default), an out-of-range index is undefined
+  // behaviour. Unlike WebAssembly (WebAssemblyFixBrTableDefaults), the range
+  // check is never removed.
+  Ops.push_back(DAG.getBasicBlock(MBBs.front()));
+  return DAG.getNode(MSILISD::BR_TABLE, DL, MVT::Other, Ops);
 }
 
 SDValue MSILTargetLowering::LowerShiftParts(SDValue Op,
@@ -861,9 +930,8 @@ MachineBasicBlock *MSILTargetLowering::emitSelect(MachineInstr &MI,
   //             ...                         ; the rest of BB
   //
   // PHI elimination later puts a copy of %t before the BR_IF and a copy of %f
-  // into FalseMBB, the shape of C#'s '?:'. analyzeBranch cannot analyze any
-  // branch until M6, so the successor lists are built here explicitly and
-  // nothing relies on branch analysis.
+  // into FalseMBB, the shape of C#'s '?:'. The successor lists are built here
+  // explicitly: nothing relies on branch analysis.
   const TargetInstrInfo &TII = *Subtarget->getInstrInfo();
   const DebugLoc &DL = MI.getDebugLoc();
   Register Dst = MI.getOperand(0).getReg();

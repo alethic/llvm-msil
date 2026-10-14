@@ -48,6 +48,9 @@ public:
                                        unsigned OpIdx1,
                                        unsigned OpIdx2) const override;
 
+  /// Branch analysis. A condition is the opcode of the conditional branch as
+  /// an immediate, followed by the register operands that the branch pops:
+  /// {BR_IF or BR_UNLESS, cond} or {B<cc>_<RC>, lhs, rhs}.
   bool analyzeBranch(MachineBasicBlock &MBB, MachineBasicBlock *&TBB,
                      MachineBasicBlock *&FBB,
                      SmallVectorImpl<MachineOperand> &Cond,
