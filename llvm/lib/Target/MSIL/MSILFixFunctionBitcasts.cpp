@@ -16,20 +16,33 @@
 /// the exact signature of its callee. M9 replaces it with a copy of
 /// WebAssemblyFixFunctionBitcasts.cpp, without the renaming of main.
 ///
-/// Until then it only neutralizes the calls that MSILTargetLowering::LowerCall
-/// would reject or drop and whose result needs more than one value (i128,
-/// { i64, i64 }, <2 x i64>). TargetLowering::LowerCallTo returns such a result
-/// through a hidden pointer to a stack slot that it creates and loads from
-/// around LowerCall, so after LowerCall's diagnostic the frame index would
-/// still reach instruction selection (frames arrive in M7). This pass reports
-/// each such call once, with LowerCall's diagnostic and in the order of
-/// LowerCall's checks, and erases it: its uses become poison, and an invoke
-/// branches to its normal destination. Calls that return at most one value
-/// are left to LowerCall, which stays the backstop for all of them.
+/// Until then it only neutralizes calls whose result needs more than one value
+/// (i128, { i64, i64 }, { double, double }, <2 x i64>, <2 x float>).
+/// TargetLowering::LowerCallTo returns such a result through a hidden pointer
+/// to a stack slot that it creates and loads from around LowerCall, so the
+/// frame index would reach instruction selection after any diagnostic (frames
+/// arrive in M7). This pass reports two kinds of such calls and erases them:
+/// their uses become poison, and an invoke branches to its normal destination.
+/// - A call that MSILTargetLowering::LowerCall would reject or drop is
+///   reported once, with LowerCall's diagnostic and in the order of LowerCall's
+///   checks.
+/// - Any other call of a function that this module does not define (a
+///   declaration or an available_externally definition, such as the
+///   __muldc3 and __divsc3 that clang calls for C complex multiplication and
+///   division) is reported with the text of MSILAsmPrinter::emitEndOfAsmFile,
+///   "call to external function '<name>' needs P/Invoke support (M8)", once
+///   per callee, in the order of first use. Every other call of that callee
+///   that LowerCall lowers has the callee's function type, so its result is
+///   demoted too and erased here; the AsmPrinter never notes the callee and
+///   does not repeat the error. M8.c removes this case.
+/// Calls that return at most one value are left to LowerCall, which stays the
+/// backstop for all of them.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
+#include "MSILUtilities.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/TargetLowering.h"
@@ -160,6 +173,16 @@ static bool isRejectedByLowerCall(const CallBase &CB, std::string &Msg) {
   return false;
 }
 
+/// Returns the callee of \p CB if it is a function that this module does not
+/// define, for which MSILAsmPrinter::noteExternFunction would record a call,
+/// or null.
+static const Function *getUndefinedCallee(const CallBase &CB) {
+  const auto *F = dyn_cast<Function>(CB.getCalledOperand());
+  if (F && F->isDeclarationForLinker() && !F->isIntrinsic())
+    return F;
+  return nullptr;
+}
+
 /// Erases \p CB, whose uses become poison. An invoke is replaced by a branch
 /// to its normal destination, and its unwind destination loses the edge.
 static void eraseCall(CallBase &CB) {
@@ -176,6 +199,8 @@ static void eraseCall(CallBase &CB) {
 bool MSILFixFunctionBitcastsLegacy::runOnModule(Module &M) {
   const auto &TM = getAnalysis<TargetPassConfig>().getTM<TargetMachine>();
   const DataLayout &DL = M.getDataLayout();
+  // The undefined callees reported so far, each of which is reported once.
+  SmallPtrSet<const Function *, 4> ReportedCallees;
   bool Changed = false;
   for (Function &F : M) {
     // An available_externally body is never code-generated (see
@@ -199,11 +224,22 @@ bool MSILFixFunctionBitcastsLegacy::runOnModule(Module &M) {
 
     for (CallBase *CB : Calls) {
       std::string Msg;
-      if (!isRejectedByLowerCall(*CB, Msg))
+      if (isRejectedByLowerCall(*CB, Msg)) {
+        if (!Msg.empty())
+          F.getContext().diagnose(
+              DiagnosticInfoUnsupported(F, Msg, CB->getDebugLoc()));
+      } else if (const Function *Callee = getUndefinedCallee(*CB)) {
+        // Temporary, until M8.c: LowerCall would build this call and the
+        // AsmPrinter would report its callee at the end of the module, but
+        // the demoted result stops compilation before that. Report the
+        // callee here, byte-identical to MSILAsmPrinter::emitEndOfAsmFile.
+        if (ReportedCallees.insert(Callee).second)
+          M.getContext().emitError("call to external function '" +
+                                   MSIL::getILName(*Callee, TM) +
+                                   "' needs P/Invoke support (M8)");
+      } else {
         continue;
-      if (!Msg.empty())
-        F.getContext().diagnose(
-            DiagnosticInfoUnsupported(F, Msg, CB->getDebugLoc()));
+      }
       eraseCall(*CB);
       Changed = true;
     }

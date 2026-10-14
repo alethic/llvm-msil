@@ -1,14 +1,15 @@
 ; Calls that M4 cannot compile are clean errors (ImplementationPlan.md section
 ; 2 'Diagnostics leave well-formed output', M4.a, M4.c; decisions D14, D19;
 ; section 12 rows 'M4.a extended', 'Plan 5.3 (MSILISelLowering.h) extended,
-; M4.b' and the two fix-loop ownership rows of fix-1). Each one is reported
-; exactly once, naming the caller (%{diag} rejects every other 'error:' and
-; 'warning:' line, so each expected error is checked), compilation goes on,
-; llc exits with 1 and prints neither 'LLVM ERROR' nor a crash report, no call
-; is built for the rejected call (its result is undefined, so the call
-; disappears from the IL), and the IL on stdout (llc deletes its -o file after
-; an error) still assembles. Every part runs on both triples at -O2 and at
-; least once at -O0 (the parts with two-value results on both triples).
+; M4.b', the two M4 fix-loop ownership rows of fix-1 and the two M5 rows of
+; fix-3). Each one is reported exactly once, naming the caller (%{diag}
+; rejects every other 'error:' and 'warning:' line, so each expected error is
+; checked), compilation goes on, llc exits with 1 and prints neither
+; 'LLVM ERROR' nor a crash report, no call is built for the rejected call (its
+; result is undefined, so the call disappears from the IL), and the IL on
+; stdout (llc deletes its -o file after an error) still assembles. Every part
+; runs on both triples at -O2 and at least once at -O0 (the parts with
+; two-value results on both triples).
 ;
 ; - LowerCall rejects a call of a variadic function ('calls to variadic
 ;   functions are not supported for MSIL yet', D19; K&R calls are fixed before
@@ -44,9 +45,18 @@
 ;   available_externally definition is called like a declaration. A
 ;   declaration that is never called, or whose calls were all rejected, is
 ;   not an error.
+; - A call of a declared function whose result needs more than one value
+;   ({ double, double } from __muldc3 and <2 x float> from __divsc3, which
+;   clang calls for C complex multiplication and division on
+;   x86_64-unknown-linux-gnu-msil; i128; { i64, i64 }) passes LowerCall's
+;   checks, but its result would be demoted to a stack slot (frames arrive in
+;   M7). Until M8.c, MSILFixFunctionBitcasts reports the callee before ISel
+;   with the same end-of-module text, once per callee and in the order of
+;   first use, and erases its calls; the end of the module does not report it
+;   again.
 ;
-; Later owners (section 12): M8.d updates the EXTERN, AVAIL, LIBCALL and
-; LIBCALLFP parts when M8 changes these texts; M9.c moves or retires the
+; Later owners (section 12): M8.d updates the EXTERN, AVAIL, EXTMULTI, LIBCALL
+; and LIBCALLFP parts when M8 changes these texts; M9.c moves or retires the
 ; MISMATCH, MMULTI and BYVAL parts when M9 makes those calls valid.
 
 ; DEFINE: %{diag} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
@@ -295,6 +305,23 @@
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/avail.ll \
 ; RUN:   > %t/avail.win.il
 ; RUN: FileCheck %s --check-prefix=AVAIL-IL --input-file=%t/avail.win.il
+
+; Declared callees whose result needs two values (temporary until M8.c).
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/extern-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=EXTMULTI
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/extern-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=EXTMULTI
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/extern-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=EXTMULTI
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/extern-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=EXTMULTI
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/extern-multi.ll \
+; RUN:   > %t/extern-multi.lnx.il
+; RUN: FileCheck %s --check-prefix=EXTMULTI-IL --input-file=%t/extern-multi.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/extern-multi.ll \
+; RUN:   > %t/extern-multi.win.il
+; RUN: FileCheck %s --check-prefix=EXTMULTI-IL --input-file=%t/extern-multi.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/extern-multi.dll %t/extern-multi.lnx.il %}
 
 ;--- variadic.ll
 ; A variadic callee, called with and without variadic arguments, then a
@@ -1018,4 +1045,98 @@ define i32 @f2(i32 %x) {
   %a = call i32 @ext(i32 %x)
   %b = call i32 @ext(i32 %a)
   ret i32 %b
+}
+
+;--- extern-multi.ll
+; Calls of declared functions returning { double, double } (__muldc3) and
+; <2 x float> (__divsc3), which clang -O2 emits for C complex multiplication
+; and division on x86_64-unknown-linux-gnu-msil, i128 and { i64, i64 }. Each
+; callee is called from two functions, with the result used and unused. It is
+; reported once, in the order of first use (not of declaration), in the form
+; and text of the end-of-module error, which does not repeat it. No call is
+; built: the callers return an undefined value (an uninitialized local at
+; -O2), and the rest of the module compiles.
+; EXTMULTI:     {{^}}error: call to external function '__divsc3' needs P/Invoke support (M8){{$}}
+; EXTMULTI:     {{^}}error: call to external function 'ext128' needs P/Invoke support (M8){{$}}
+; EXTMULTI:     {{^}}error: call to external function '__muldc3' needs P/Invoke support (M8){{$}}
+; EXTMULTI:     {{^}}error: call to external function 'extpair' needs P/Invoke support (M8){{$}}
+
+; EXTMULTI-IL-LABEL: .method {{.*}}'cdiv'(
+; EXTMULTI-IL-SAME:  float32, float32, float32, float32) cil managed{{$}}
+; EXTMULTI-IL-NOT:   call
+; EXTMULTI-IL:       {{^}}  ret{{$}}
+; EXTMULTI-IL-NEXT:  {{^}}} // end of method 'cdiv'{{$}}
+; EXTMULTI-IL-LABEL: .method {{.*}}'use128'(
+; EXTMULTI-IL-SAME:  native int) cil managed{{$}}
+; EXTMULTI-IL-NOT:   call
+; EXTMULTI-IL:       {{^}}  ret{{$}}
+; EXTMULTI-IL-NEXT:  {{^}}} // end of method 'use128'{{$}}
+; EXTMULTI-IL-LABEL: .method {{.*}}'cmul'(
+; EXTMULTI-IL-SAME:  float64, float64, float64, float64) cil managed{{$}}
+; EXTMULTI-IL-NOT:   call
+; EXTMULTI-IL:       {{^}}  ret{{$}}
+; EXTMULTI-IL-NEXT:  {{^}}} // end of method 'cmul'{{$}}
+; EXTMULTI-IL-LABEL: .method {{.*}}'usepair'(
+; EXTMULTI-IL-SAME:  native int) cil managed{{$}}
+; EXTMULTI-IL-NOT:   call
+; EXTMULTI-IL:       {{^}}  ret{{$}}
+; EXTMULTI-IL-NEXT:  {{^}}} // end of method 'usepair'{{$}}
+; EXTMULTI-IL-LABEL: .method {{.*}}'unused'(
+; EXTMULTI-IL-SAME:  native int, float64, float32) cil managed{{$}}
+; EXTMULTI-IL-NEXT:  {{^\{$}}
+; EXTMULTI-IL-NEXT:  {{^}}  .maxstack 0{{$}}
+; EXTMULTI-IL-NEXT:  {{^}}  ret{{$}}
+; EXTMULTI-IL-NEXT:  {{^}}} // end of method 'unused'{{$}}
+; EXTMULTI-IL-LABEL: .method {{.*}}'after_extern_multi'(
+; EXTMULTI-IL:       {{^}}  ldarg.0{{$}}
+; EXTMULTI-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; EXTMULTI-IL-NEXT:  {{^}}  add{{$}}
+; EXTMULTI-IL-NEXT:  {{^}}  ret{{$}}
+; EXTMULTI-IL-NOT:   {{^}}.method
+source_filename = "extern-multi.c"
+
+declare { double, double } @__muldc3(double, double, double, double)
+declare <2 x float> @__divsc3(float, float, float, float)
+declare i128 @ext128(i64)
+declare { i64, i64 } @extpair(i64)
+
+define float @cdiv(float %a, float %b, float %c, float %d) {
+  %r = call <2 x float> @__divsc3(float %a, float %b, float %c, float %d)
+  %re = extractelement <2 x float> %r, i64 0
+  %im = extractelement <2 x float> %r, i64 1
+  %s = fadd float %re, %im
+  ret float %s
+}
+
+define i64 @use128(i64 %x) {
+  %r = call i128 @ext128(i64 %x)
+  %t = trunc i128 %r to i64
+  ret i64 %t
+}
+
+define double @cmul(double %a, double %b, double %c, double %d) {
+  %r = call { double, double } @__muldc3(double %a, double %b, double %c, double %d)
+  %re = extractvalue { double, double } %r, 0
+  %im = extractvalue { double, double } %r, 1
+  %s = fadd double %re, %im
+  ret double %s
+}
+
+define i64 @usepair(i64 %x) {
+  %r = call { i64, i64 } @extpair(i64 %x)
+  %e = extractvalue { i64, i64 } %r, 1
+  ret i64 %e
+}
+
+define void @unused(i64 %x, double %d, float %f) {
+  %r1 = call { double, double } @__muldc3(double %d, double %d, double %d, double %d)
+  %r2 = call <2 x float> @__divsc3(float %f, float %f, float %f, float %f)
+  %r3 = call i128 @ext128(i64 %x)
+  %r4 = call { i64, i64 } @extpair(i64 %x)
+  ret void
+}
+
+define i32 @after_extern_multi(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
 }

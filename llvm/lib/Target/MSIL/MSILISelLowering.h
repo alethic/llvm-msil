@@ -93,7 +93,36 @@ private:
   /// Expands SHL_PARTS, SRA_PARTS and SRL_PARTS (i128 shifts by a variable
   /// amount) inline, so that no runtime helper is needed.
   SDValue LowerShiftParts(SDValue Op, SelectionDAG &DAG) const;
+  /// Converts an int64 to f32 with a rounding to odd before conv.r4, so that
+  /// the result is correctly rounded also when the JIT folds the conversion
+  /// through float64; returns any other int64 conversion unchanged.
+  SDValue LowerSINT_TO_FP(SDValue Op, SelectionDAG &DAG) const;
+  /// Converts a uint64 to f32 or f64 without conv.r.un, a SELECT or memory
+  /// (decision D17).
   SDValue LowerUINT_TO_FP(SDValue Op, SelectionDAG &DAG) const;
+  /// Replaces a constrained floating-point operation with its plain form and
+  /// its input chain: CIL has no floating-point exceptions or rounding modes.
+  SDValue LowerStrictFP(SDValue Op, SelectionDAG &DAG) const;
+  /// Folds the extension of an f16 or bf16 value that is an exact rounding of
+  /// a wider one, as DAGCombiner does; returns no value for any other.
+  SDValue LowerFP_EXTEND(SDValue Op, SelectionDAG &DAG) const;
+  /// Lowers FMINIMUM, FMAXIMUM, FMINIMUMNUM and FMAXIMUMNUM to compares and
+  /// a SELECT, testing the sign of a zero without memory.
+  SDValue LowerFMinMax(SDValue Op, SelectionDAG &DAG) const;
+  /// Diagnoses a change of the rounding mode (CIL only rounds to nearest).
+  SDValue LowerSET_ROUNDING(SDValue Op, SelectionDAG &DAG) const;
+  /// Lowers FPTRUNC_ROUND to conv.r4 when it rounds to nearest, and diagnoses
+  /// any other rounding mode.
+  SDValue LowerFPTRUNC_ROUND(SDValue Op, SelectionDAG &DAG) const;
+  /// Splits FSINCOS into FSIN and FCOS, so that no sincos call needs memory
+  /// for its results.
+  SDValue LowerFSINCOS(SDValue Op, SelectionDAG &DAG) const;
+  /// Diagnoses the frexp and modf libcalls, which return a result through
+  /// memory, without building them.
+  SDValue LowerFFREXP_FMODF(SDValue Op, SelectionDAG &DAG) const;
+  /// Converts between bf16 and f32/f64 through the compiler-rt helpers, as f16
+  /// does, instead of the generic expansions' bitcasts through memory.
+  SDValue LowerBF16Conversion(SDValue Op, SelectionDAG &DAG) const;
   /// Diagnoses an operation that Phase 1 does not support and returns a
   /// well-formed dummy value, so that compilation continues.
   SDValue LowerUnsupported(SDValue Op, SelectionDAG &DAG, StringRef What) const;

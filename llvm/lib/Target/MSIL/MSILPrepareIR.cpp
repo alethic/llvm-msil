@@ -35,9 +35,11 @@
 /// - A function definition that is variadic, calls inline assembly, accesses
 ///   a named register, records a stack map (stackmap, patchpoint, statepoint),
 ///   has deoptimization state ("deopt" operand bundles), makes a preallocated
-///   call (llvm.call.preallocated.*, "preallocated" operand bundles) or uses
-///   a pointer in a non-zero address space is an error, and its body is
-///   deleted.
+///   call (llvm.call.preallocated.*, "preallocated" operand bundles), uses
+///   a pointer in a non-zero address space, uses a floating-point type that
+///   CIL does not have (fp128, x86_fp80, ppc_fp128) or reads or writes the
+///   floating-point environment (llvm.get.fpenv, llvm.set.fpenv,
+///   llvm.get.fpmode, llvm.set.fpmode) is an error, and its body is deleted.
 /// - A function definition or used declaration whose IL name is longer than
 ///   ilasm accepts is an error; a definition loses its body.
 /// - A call or invoke of a definition that lost its body after an error
@@ -116,29 +118,99 @@ public:
   static char ID; // Pass identification, replacement for typeid
   MSILPrepareIRLegacy() : ModulePass(ID) {}
 };
+} // end anonymous namespace
+
+/// Returns true if \p Ty is a pointer in a non-zero address space.
+static bool isNonFlatPointer(Type *Ty) {
+  return Ty->isPointerTy() && Ty->getPointerAddressSpace() != 0;
+}
+
+/// Returns true if \p Ty is a floating-point type that CIL has no type for.
+static bool isFPTypeWithoutCILType(Type *Ty) {
+  return Ty->isFP128Ty() || Ty->isX86_FP80Ty() || Ty->isPPC_FP128Ty();
+}
+
+namespace {
+/// Finds the types that \p IsLeaf accepts in types and values, and caches
+/// the result for every type and constant it walks. With
+/// \p WalkAllocatedType, the allocated type of an alloca counts as a type of
+/// the instruction.
+template <bool (*IsLeaf)(Type *), bool WalkAllocatedType> class LeafTypeFinder {
+  DenseMap<Type *, Type *> TypeCache;
+  DenseMap<const Constant *, Type *> ConstantCache;
+
+public:
+  /// Returns the first such type that \p Ty is or contains (through vector,
+  /// array, structure and function types), or null.
+  Type *inType(Type *Ty) {
+    if (IsLeaf(Ty))
+      return Ty;
+    if (Ty->getNumContainedTypes() == 0)
+      return nullptr;
+    auto [It, Inserted] = TypeCache.try_emplace(Ty, nullptr);
+    if (!Inserted)
+      return It->second;
+    Type *Found = nullptr;
+    for (Type *Sub : Ty->subtypes())
+      if ((Found = inType(Sub)))
+        break;
+    // The recursion may have grown the map: look the entry up again.
+    TypeCache[Ty] = Found;
+    return Found;
+  }
+
+  /// Returns the first such type in the type of \p V or, for a constant
+  /// other than a global, in its operands (as in 'ptrtoint (ptr
+  /// addrspace(256) inttoptr (i64 48 to ptr addrspace(256)) to i64)'), or
+  /// null.
+  Type *inValue(const Value *V) {
+    if (Type *Found = inType(V->getType()))
+      return Found;
+    const auto *C = dyn_cast<Constant>(V);
+    if (!C || isa<GlobalValue>(C) || C->getNumOperands() == 0)
+      return nullptr;
+    auto [It, Inserted] = ConstantCache.try_emplace(C, nullptr);
+    if (!Inserted)
+      return It->second;
+    Type *Found = nullptr;
+    for (const Use &Op : C->operands())
+      if ((Found = inValue(Op.get())))
+        break;
+    ConstantCache[C] = Found;
+    return Found;
+  }
+
+  /// The same for the result and the operands of \p I and, with
+  /// WalkAllocatedType, the allocated type of an alloca.
+  Type *inInstruction(const Instruction &I) {
+    if (Type *Found = inType(I.getType()))
+      return Found;
+    if constexpr (WalkAllocatedType)
+      if (const auto *AI = dyn_cast<AllocaInst>(&I))
+        if (Type *Found = inType(AI->getAllocatedType()))
+          return Found;
+    for (const Use &Op : I.operands())
+      if (Type *Found = inValue(Op.get()))
+        return Found;
+    return nullptr;
+  }
+};
 
 /// Finds pointers in non-zero address spaces (x86 segment spaces 256-258,
 /// the MS 32-bit pointer spaces 270-271, ...) in types and values. CIL has
-/// only flat native-int pointers.
-class AddrSpaceFinder {
-  DenseMap<Type *, unsigned> TypeCache;
-  DenseMap<const Constant *, unsigned> ConstantCache;
+/// only flat native-int pointers. An alloca's allocated type is not walked:
+/// a load or a store of such a pointer has it as its result or operand type.
+using AddrSpaceFinder =
+    LeafTypeFinder<isNonFlatPointer, /*WalkAllocatedType=*/false>;
 
-public:
-  /// Returns the address space of the first pointer in a non-zero address
-  /// space that \p Ty is or contains (through vector, array, structure and
-  /// function types), or 0.
-  unsigned inType(Type *Ty);
-
-  /// Returns the address space of the first pointer in a non-zero address
-  /// space in the type of \p V or, for a constant other than a global, in
-  /// its operands (as in 'ptrtoint (ptr addrspace(256) inttoptr (i64 48 to
-  /// ptr addrspace(256)) to i64)'), or 0.
-  unsigned inValue(const Value *V);
-
-  /// The same for the result and the operands of \p I.
-  unsigned inInstruction(const Instruction &I);
-};
+/// Finds the floating-point types that CIL has no type for (fp128, x86_fp80,
+/// ppc_fp128) in types and values, the allocated type of an alloca included.
+/// Instruction selection cannot lower them: their operations become
+/// compiler-rt calls whose results come back through a stack slot, and their
+/// values are split or passed in memory. long double is double on every MSIL
+/// triple, so they come only from __float128 and from IR.
+using FPTypeFinder =
+    LeafTypeFinder<isFPTypeWithoutCILType, /*WalkAllocatedType=*/true>;
 } // end anonymous namespace
 
 char MSILPrepareIRLegacy::ID = 0;
@@ -152,49 +224,6 @@ INITIALIZE_PASS_END(MSILPrepareIRLegacy, DEBUG_TYPE,
 
 ModulePass *llvm::createMSILPrepareIRLegacyPass() {
   return new MSILPrepareIRLegacy();
-}
-
-unsigned AddrSpaceFinder::inType(Type *Ty) {
-  if (auto *PTy = dyn_cast<PointerType>(Ty))
-    return PTy->getAddressSpace();
-  if (Ty->getNumContainedTypes() == 0)
-    return 0;
-  auto [It, Inserted] = TypeCache.try_emplace(Ty, 0);
-  if (!Inserted)
-    return It->second;
-  unsigned AS = 0;
-  for (Type *Sub : Ty->subtypes())
-    if ((AS = inType(Sub)))
-      break;
-  // The recursion may have grown the map: look the entry up again.
-  TypeCache[Ty] = AS;
-  return AS;
-}
-
-unsigned AddrSpaceFinder::inValue(const Value *V) {
-  if (unsigned AS = inType(V->getType()))
-    return AS;
-  const auto *C = dyn_cast<Constant>(V);
-  if (!C || isa<GlobalValue>(C) || C->getNumOperands() == 0)
-    return 0;
-  auto [It, Inserted] = ConstantCache.try_emplace(C, 0);
-  if (!Inserted)
-    return It->second;
-  unsigned AS = 0;
-  for (const Use &Op : C->operands())
-    if ((AS = inValue(Op.get())))
-      break;
-  ConstantCache[C] = AS;
-  return AS;
-}
-
-unsigned AddrSpaceFinder::inInstruction(const Instruction &I) {
-  if (unsigned AS = inType(I.getType()))
-    return AS;
-  for (const Use &Op : I.operands())
-    if (unsigned AS = inValue(Op.get()))
-      return AS;
-  return 0;
 }
 
 /// Returns the IR name of \p GV as it appears in the IR ("@name").
@@ -452,7 +481,8 @@ static bool diagnoseILNameLength(const Function &F, const TargetMachine &TM) {
 
 /// Reports every construct in the definition \p F that MSIL cannot compile.
 /// Returns true if there was one.
-static bool diagnoseDefinition(Function &F, AddrSpaceFinder &Finder) {
+static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
+                               FPTypeFinder &FPFinder) {
   LLVMContext &Ctx = F.getContext();
   DiagnosticLocation FnLoc(F.getSubprogram());
   bool HasError = false;
@@ -464,12 +494,17 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &Finder) {
     HasError = true;
   }
 
-  // One diagnostic per definition for address spaces: at the signature, or
+  // One diagnostic per definition for address spaces: at the signature (the
+  // address space of the function itself is that of its pointer type), or
   // at the first instruction that uses one.
   DiagnosticLocation ASLoc = FnLoc;
-  unsigned AS = F.getAddressSpace();
-  if (!AS)
-    AS = Finder.inType(F.getFunctionType());
+  Type *ASTy = ASFinder.inType(F.getType());
+  if (!ASTy)
+    ASTy = ASFinder.inType(F.getFunctionType());
+
+  // The same for floating-point types without a CIL type.
+  DiagnosticLocation FPLoc = FnLoc;
+  Type *FPTy = FPFinder.inType(F.getFunctionType());
 
   // One diagnostic per definition for preallocated calls too: each one comes
   // with an llvm.call.preallocated.setup call and usually .arg calls.
@@ -531,17 +566,42 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &Finder) {
               I.getDebugLoc()));
         HasPreallocated = true;
         HasError = true;
+      } else if (IID == Intrinsic::get_fpenv || IID == Intrinsic::set_fpenv ||
+                 IID == Intrinsic::get_fpmode || IID == Intrinsic::set_fpmode) {
+        // SelectionDAGBuilder (fpenv) and LegalizeDAG (fpmode) pass the
+        // environment value to fegetenv, fesetenv, fegetmode or fesetmode
+        // through a stack temporary, whatever its width: LowerCall diagnoses
+        // the call, but the temporary still reaches instruction selection.
+        // reset.fpenv and reset.fpmode pass no temporary, and LowerCall's
+        // diagnostic covers them.
+        Ctx.diagnose(DiagnosticInfoUnsupported(
+            F,
+            Twine("floating-point environment access ('") +
+                Intrinsic::getBaseName(IID) + "') is not supported for MSIL",
+            I.getDebugLoc()));
+        HasError = true;
       }
     }
-    if (!AS && (AS = Finder.inInstruction(I)))
+    if (!ASTy && (ASTy = ASFinder.inInstruction(I)))
       ASLoc = DiagnosticLocation(I.getDebugLoc());
+    if (!FPTy && (FPTy = FPFinder.inInstruction(I)))
+      FPLoc = DiagnosticLocation(I.getDebugLoc());
   }
 
-  if (AS) {
-    std::string Msg = ("pointers in address space " + Twine(AS) +
-                       " are not supported for MSIL")
-                          .str();
+  if (ASTy) {
+    std::string Msg =
+        ("pointers in address space " + Twine(ASTy->getPointerAddressSpace()) +
+         " are not supported for MSIL")
+            .str();
     Ctx.diagnose(DiagnosticInfoUnsupported(F, Msg, ASLoc));
+    HasError = true;
+  }
+
+  if (FPTy) {
+    std::string Msg;
+    raw_string_ostream(Msg)
+        << "floating-point type '" << *FPTy << "' is not supported for MSIL";
+    Ctx.diagnose(DiagnosticInfoUnsupported(F, Msg, FPLoc));
     HasError = true;
   }
   return HasError;
@@ -709,7 +769,8 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
   bool Changed = resetExceptionModel(M);
   Changed |= disableMetadataSections(M, TM);
 
-  AddrSpaceFinder Finder;
+  AddrSpaceFinder ASFinder;
+  FPTypeFinder FPFinder;
   for (Function &F : M) {
     Changed |= stripStackProtector(F);
     Changed |= stripEntryInstrumentation(F);
@@ -724,7 +785,7 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
       continue;
     }
     bool HasError = diagnoseILNameLength(F, TM);
-    HasError |= diagnoseDefinition(F, Finder);
+    HasError |= diagnoseDefinition(F, ASFinder, FPFinder);
     if (!HasError)
       continue;
     F.deleteBody();

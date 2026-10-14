@@ -276,6 +276,27 @@ ASM_FUNCTION_LOONGARCH_RE = re.compile(
     flags=(re.M | re.S),
 )
 
+ASM_FUNCTION_MSIL_RE = re.compile(
+    # one-line method header with the quoted name (\' and \ooo escapes):
+    # .method public static int32 'add'(int32, int32) cil managed
+    r"^[ \t]*\.method[ \t][^\n]*?'(?P<func>(?:[^'\\\n]|\\[^\n])+)'"
+    r"(?P<func_name_separator>)\([^\n]*\n"
+    # opening brace and, with -asm-verbose, the function comments
+    # {                                       // -- Begin function add
+    #                                         // @add
+    r"[ \t]*\{[^\n]*\n(?:[ \t]*//[ \t]*@[^\n]*\n)?"
+    # method body
+    r"(?P<body>.*?)\n"
+    # end of method
+    r"^[ \t]*\}[ \t]*// end of method '(?P=func)'",
+    flags=(re.M | re.S),
+)
+
+# check_label_format for add_checks. A call prints the callee's name exactly as
+# its '.method' header does, so the label anchors on '.method' to never match a
+# call site in an earlier method.
+MSIL_CHECK_LABEL_FORMAT = "{} %s-LABEL: .method {{{{.*}}}}%s'%s'%s%s("
+
 SCRUB_X86_SHUFFLES_RE = re.compile(
     r"^(\s*\w+) [^#\n]+#+ ((?:[xyz]mm\d+|mem)( \{%k\d+\}( \{z\})?)? = .*)$", flags=re.M
 )
@@ -556,10 +577,26 @@ def scrub_asm_loongarch(asm, args):
     return asm
 
 
+def scrub_asm_msil(asm, args):
+    # Scrub runs of whitespace out of the assembly, but leave the leading
+    # whitespace in place.
+    asm = common.SCRUB_WHITESPACE_RE.sub(r" ", asm)
+    # Expand the tabs used for indentation.
+    asm = string.expandtabs(asm, 2)
+    # Strip trailing whitespace.
+    asm = common.SCRUB_TRAILING_WHITESPACE_RE.sub(r"", asm)
+    return asm
+
+
 # Returns a tuple of a scrub function and a function regex. Scrub function is
 # used to alter function body in some way, for example, remove trailing spaces.
 # Function regex is used to match function name, body, etc. in raw llc output.
 def get_run_handler(triple):
+    # MSIL triples are "<native triple>-msil": the native architecture only
+    # selects the C ABI, so check them before the architecture prefixes below.
+    if triple.endswith("-msil"):
+        return (scrub_asm_msil, ASM_FUNCTION_MSIL_RE)
+
     target_handlers = {
         "i686": (scrub_asm_x86, ASM_FUNCTION_X86_RE),
         "x86": (scrub_asm_x86, ASM_FUNCTION_X86_RE),
@@ -644,9 +681,10 @@ def add_checks(
     ginfo: common.GeneralizerInfo,
     global_vars_seen_dict,
     is_filtered,
+    check_label_format="{} %s-LABEL: %s%s%s%s",
 ):
-    # Label format is based on ASM string.
-    check_label_format = "{} %s-LABEL: %s%s%s%s".format(comment_marker)
+    # Label format is based on ASM string; "{}" is the comment marker.
+    check_label_format = check_label_format.format(comment_marker)
     return common.add_checks(
         output_lines,
         comment_marker,

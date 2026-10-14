@@ -1,0 +1,8 @@
+# REQUIRES: msil-registered-target, x86-registered-target
+## Check that MSIL methods are found and labeled by their '.method' header,
+## and that x86 checks in the same file keep their plain labels.
+## lit finds no 'llc' binary on Windows (llc.exe), so this directory is
+## UNSUPPORTED there; msil/utils/run-utc-tests.py runs this test instead.
+
+# RUN: cp -f %S/Inputs/msil-basic.ll %t.ll && %update_llc_test_checks %t.ll
+# RUN: diff -u %S/Inputs/msil-basic.ll.expected %t.ll
