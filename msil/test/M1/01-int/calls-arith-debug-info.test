@@ -1,0 +1,17 @@
+# calls-arith.c compiled with -O2 -g gives the same transcript as without -g
+# (Milestone 4, review-r2 findings 1 and 3). -O2 only: -O0 needs frames (M7,
+# D32), and both failures need -O1 or above. With -g at -O1 and above clang
+# turns on call-site info (EmitCallSiteInfo), which the MSIL call lowering must
+# keep in step when it splits and recombines a call ('Call site info was not
+# updated!'), and every x86_64 triple defaults to instruction-referencing
+# variable locations, whose LiveDebugValues assumes the allocated physical
+# registers that MSIL never has (main's named integer locals, such as one,
+# seven and big, carry #dbg_value records). The expected transcript is
+# calls-arith.expected, which update-expected.py generates for calls-arith.c;
+# calls-arith.c keeps its own %{msil_c_O2} run without -g, and these RUN lines
+# are that pipeline plus -g.
+# RUN: %clang_msil %{msil_cflags} -O2 -g -S %S/calls-arith.c -o %t.il
+# RUN: %ilasm -dll -output=%t.dll %t.il
+# RUN: %msil_verify %t.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.dll %}
+# RUN: %msil_exec --expect %S/calls-arith --out %t.out %t.dll

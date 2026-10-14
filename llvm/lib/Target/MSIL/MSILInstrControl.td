@@ -41,6 +41,18 @@ let isBranch = 1, isTerminator = 1, isBarrier = 1, hasCtrlDep = 1,
 defm BR_TABLE_I32 : I<(outs), (ins I32:$index, variable_ops), [],
                       "switch", 0x45>;
 
+// CIL has no select instruction (decision D34). SELECT_<RC> yields $t when
+// $cond is non-zero and $f otherwise; MSILTargetLowering::emitSelect, its
+// custom inserter, turns it into a branch triangle that ends in a PHI:
+//   BR_IF %sink, $cond   (taken edge: $t)
+//   <empty block>        (falls through to %sink: $f)
+//   %sink: $dst = PHI $t, $f
+let usesCustomInserter = 1, isPseudo = 1, hasSideEffects = 0, mayLoad = 0,
+    mayStore = 0 in
+foreach rc = [I32, I64, F32, F64] in
+defm SELECT_#rc : I<(outs rc:$dst), (ins I32:$cond, rc:$t, rc:$f),
+                    [(set rc:$dst, (select I32:$cond, rc:$t, rc:$f))]>;
+
 let hasCtrlDep = 1, isBarrier = 1, isTerminator = 1 in {
 // The returned value, if any, is the variable operand.
 let isReturn = 1 in

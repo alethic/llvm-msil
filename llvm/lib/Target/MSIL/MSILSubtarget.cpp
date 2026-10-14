@@ -18,6 +18,8 @@
 
 #include "MSILSubtarget.h"
 #include "MCTargetDesc/MSILMCTargetDesc.h"
+#include "llvm/Analysis/LibcallLoweringInfo.h"
+#include "llvm/IR/RuntimeLibcalls.h"
 #include "llvm/Support/Debug.h"
 using namespace llvm;
 
@@ -47,7 +49,12 @@ MSILSubtarget::MSILSubtarget(const Triple &TT, StringRef CPU, StringRef TuneCPU,
 MSILSubtarget::~MSILSubtarget() = default;
 
 void MSILSubtarget::initLibcallLoweringInfo(LibcallLoweringInfo &Info) const {
-  // M4 marks the helpers that MSIL expands inline instead (i128
-  // multiplication, overflow checks) as unavailable; until then the default
-  // libcalls apply.
+  // There is no runtime library to link against in Phase 1, so the helpers
+  // that the legalizer can do without are unavailable and it expands them
+  // inline: i128 multiplication (__multi3, otherwise also used for the wide
+  // multiply behind 64-bit overflow checks) and the multiplication overflow
+  // checks (__mulodi4, __muloti4). Shifts of i128 never need __ashlti3 and
+  // friends: SHL_PARTS, SRA_PARTS and SRL_PARTS are Custom.
+  for (RTLIB::Libcall LC : {RTLIB::MUL_I128, RTLIB::MULO_I64, RTLIB::MULO_I128})
+    Info.setLibcallImpl(LC, RTLIB::Unsupported);
 }

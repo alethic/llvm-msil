@@ -10,13 +10,16 @@
 ; two triples, and once with -stop-after=msil-prepare-ir to check the
 ; diagnostics of MSILPrepareIR alone and the IR it leaves behind. M3 adds the
 ; identifier length limit (D11 amended), garbage collection strategies and the
-; stack map intrinsics (amendment log 2026-10-13, fix-loop rows for fix-5).
+; stack map intrinsics (amendment log 2026-10-13, fix-loop rows for fix-5). M4
+; adds deoptimization state ("deopt" operand bundles) and preallocated calls
+; (amendment log 2026-10-13, fix-loop rows for fix-3 in M4).
 ;
-; Calls are implemented in M4 and global variables in M8, so no definition that
-; is compiled here may call a function or use a global: functions that use a
-; diagnosed symbol are available_externally, which is never code-generated but
-; still has to be rewritten, and the resolver an ifunc needs is a variadic
-; definition, which loses its body. Leaf definitions compile since M3.
+; Global variables are implemented in M8, so no definition that is compiled
+; here may use a global: functions that use a diagnosed symbol are
+; available_externally, which is never code-generated but still has to be
+; rewritten, and the resolver an ifunc needs is a variadic definition, which
+; loses its body. Leaf definitions compile since M3 and direct calls since M4;
+; a call of a definition that lost its body is erased (call-errors.ll).
 
 ; DEFINE: %{nocrash} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
 ; RUN: split-file %s %t
@@ -345,6 +348,91 @@
 ; STACKMAP-IL:     {{^}}.method public static int32 'msil_stackmap_free'() cil managed{{$}}
 ; STACKMAP-IL-NOT: .method
 
+; Deoptimization state: SelectionDAGBuilder lowers a call or invoke with a
+; "deopt" operand bundle as a statepoint, which needs the native call sequence
+; (CALLSEQ_END) that MSIL never emits; llvm.experimental.deoptimize also calls a
+; runtime function, and llvm.experimental.guard, which always has a "deopt"
+; bundle, has no lowering. Each such call or invoke is an error, whether its
+; callee is defined or declared and even with an empty bundle, and its function
+; loses its body. The call of such a function in msil_deopt_caller is erased,
+; so it is not reported as a call of an external function, and the definitions
+; without deopt state still compile.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/deopt.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=DEOPT --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/deopt.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=DEOPT --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/deopt.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=DEOPT --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/deopt.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=DEOPT --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/deopt.ll -o - 2>/dev/null \
+; RUN:   | FileCheck %s --check-prefix=DEOPT-IR --implicit-check-not="{{ (call|invoke) }}"
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/deopt.ll \
+; RUN:   > %t/deopt.il
+; RUN: FileCheck %s --check-prefix=DEOPT-IL --input-file=%t/deopt.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/deopt.dll %t/deopt.il %}
+
+; DEOPT: error: {{.*}}in function msil_deopt_def void (i32): deoptimization state ("deopt" operand bundles) is not supported for MSIL{{$}}
+; DEOPT: error: {{.*}}in function msil_deopt_decl void (i32): deoptimization state ("deopt" operand bundles) is not supported for MSIL{{$}}
+; DEOPT: error: {{.*}}in function msil_deopt_empty void (i32): deoptimization state ("deopt" operand bundles) is not supported for MSIL{{$}}
+; DEOPT: error: {{.*}}in function msil_deopt_invoke void (i32): deoptimization state ("deopt" operand bundles) is not supported for MSIL{{$}}
+; DEOPT: error: {{.*}}in function msil_deoptimize i32 (i32): deoptimization state ("deopt" operand bundles) is not supported for MSIL{{$}}
+; DEOPT: error: {{.*}}in function msil_guard i32 (i32, i1): deoptimization state ("deopt" operand bundles) is not supported for MSIL{{$}}
+
+; DEOPT-IR:      define internal void @msil_deopt_callee(i32 %x) {{.*\{$}}
+; DEOPT-IR:      declare void @msil_deopt_def(i32){{$}}
+; DEOPT-IR:      declare void @msil_deopt_decl(i32){{$}}
+; DEOPT-IR:      declare void @msil_deopt_empty(i32){{$}}
+; DEOPT-IR:      declare void @msil_deopt_invoke(i32){{$}}
+; DEOPT-IR:      declare i32 @msil_deoptimize(i32){{$}}
+; DEOPT-IR:      declare i32 @msil_guard(i32, i1){{$}}
+; DEOPT-IR:      define i32 @msil_deopt_caller(i32 %x) {{\{$}}
+; DEOPT-IR-NEXT:   ret i32 %x
+
+; DEOPT-IL-NOT: .method
+; DEOPT-IL:     {{^}}.method assembly static void 'msil_deopt_callee'(int32) cil managed{{$}}
+; DEOPT-IL-NOT: .method
+; DEOPT-IL:     {{^}}.method public static int32 'msil_deopt_caller'(int32) cil managed{{$}}
+; DEOPT-IL-NOT: .method
+
+; Preallocated calls: LowerCall rejects the preallocated argument, but the
+; llvm.call.preallocated.setup and .arg calls that come with the call would
+; still reach instruction selection ('Cannot select'), and when the result is
+; demoted (i128) MSILFixFunctionBitcasts erases the call and leaves them behind.
+; So a definition that makes a preallocated call, with or without
+; llvm.call.preallocated.arg, or tears one down is one error, and it loses its
+; body. A definition with a preallocated parameter is reported by
+; LowerFormalArguments and still compiles (unsupported-function-errors.ll).
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/prealloc.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=PREALLOC --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/prealloc.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=PREALLOC --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/prealloc.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=PREALLOC --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/prealloc.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=PREALLOC --implicit-check-not=error:
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/prealloc.ll -o - 2>/dev/null \
+; RUN:   | FileCheck %s --check-prefix=PREALLOC-IR --implicit-check-not="{{ call }}"
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/prealloc.ll \
+; RUN:   > %t/prealloc.il
+; RUN: FileCheck %s --check-prefix=PREALLOC-IL --input-file=%t/prealloc.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/prealloc.dll %t/prealloc.il %}
+
+; PREALLOC: error: {{.*}}in function msil_prealloc_i64 i64 (): preallocated arguments are not supported for MSIL{{$}}
+; PREALLOC: error: {{.*}}in function msil_prealloc_i128 i128 (): preallocated arguments are not supported for MSIL{{$}}
+; PREALLOC: error: {{.*}}in function msil_prealloc_noarg void (ptr): preallocated arguments are not supported for MSIL{{$}}
+; PREALLOC: error: {{.*}}in function msil_prealloc_teardown void (): preallocated arguments are not supported for MSIL{{$}}
+
+; PREALLOC-IR: declare i64 @msil_prealloc_i64(){{$}}
+; PREALLOC-IR: declare i128 @msil_prealloc_i128(){{$}}
+; PREALLOC-IR: declare void @msil_prealloc_noarg(ptr){{$}}
+; PREALLOC-IR: declare void @msil_prealloc_teardown(){{$}}
+; PREALLOC-IR: define i32 @msil_prealloc_free() {{\{$}}
+
+; PREALLOC-IL-NOT: .method
+; PREALLOC-IL:     {{^}}.method public static int32 'msil_prealloc_free'() cil managed{{$}}
+; PREALLOC-IL-NOT: .method
+
 ; MIR input (functions shaped like the plan 5.4 sample): machineFunctionInfo
 ; params and results accept only i32, i64, f32 and f64. Any other entry is a
 ; MIR parse error at its location with exit code 1, not a crash in the MIR
@@ -660,6 +748,101 @@ declare token @llvm.experimental.gc.statepoint.p0(i64, i32, ptr, i32, i32, ...)
 declare void @llvm.experimental.stackmap(i64, i32, ...)
 declare void @llvm.experimental.patchpoint.void(i64, i32, ptr, i32, ...)
 declare i64 @llvm.experimental.patchpoint.i64(i64, i32, ptr, i32, ...)
+
+;--- deopt.ll
+source_filename = "deopt.c"
+
+define internal void @msil_deopt_callee(i32 %x) noinline {
+  ret void
+}
+
+define void @msil_deopt_def(i32 %x) {
+  call void @msil_deopt_callee(i32 %x) [ "deopt"(i32 %x) ]
+  ret void
+}
+
+define void @msil_deopt_decl(i32 %x) {
+  call void @msil_deopt_ext(i32 %x) [ "deopt"(i32 %x) ]
+  ret void
+}
+
+define void @msil_deopt_empty(i32 %x) {
+  call void @msil_deopt_ext(i32 %x) [ "deopt"() ]
+  ret void
+}
+
+define void @msil_deopt_invoke(i32 %x) personality ptr @__gxx_personality_v0 {
+entry:
+  invoke void @msil_deopt_ext(i32 %x) [ "deopt"(i32 %x) ]
+          to label %ok unwind label %lp
+
+ok:
+  ret void
+
+lp:
+  %l = landingpad { ptr, i32 } cleanup
+  resume { ptr, i32 } %l
+}
+
+define i32 @msil_deoptimize(i32 %x) {
+  %r = call i32 (...) @llvm.experimental.deoptimize.i32(i32 %x) [ "deopt"(i32 %x) ]
+  ret i32 %r
+}
+
+define i32 @msil_guard(i32 %x, i1 %c) {
+  call void (i1, ...) @llvm.experimental.guard(i1 %c) [ "deopt"(i32 %x) ]
+  ret i32 %x
+}
+
+define i32 @msil_deopt_caller(i32 %x) {
+  call void @msil_deopt_def(i32 %x)
+  ret i32 %x
+}
+
+declare void @msil_deopt_ext(i32)
+declare i32 @__gxx_personality_v0(...)
+declare i32 @llvm.experimental.deoptimize.i32(...)
+declare void @llvm.experimental.guard(i1, ...)
+
+;--- prealloc.ll
+source_filename = "prealloc.c"
+
+define i64 @msil_prealloc_i64() {
+  %t = call token @llvm.call.preallocated.setup(i32 1)
+  %a = call ptr @llvm.call.preallocated.arg(token %t, i32 0) preallocated(i32)
+  %r = call i64 @msil_prealloc_ext_i64(ptr preallocated(i32) %a) [ "preallocated"(token %t) ]
+  ret i64 %r
+}
+
+define i128 @msil_prealloc_i128() {
+  %t = call token @llvm.call.preallocated.setup(i32 1)
+  %a = call ptr @llvm.call.preallocated.arg(token %t, i32 0) preallocated(i32)
+  %r = call i128 @msil_prealloc_ext_i128(ptr preallocated(i32) %a) [ "preallocated"(token %t) ]
+  ret i128 %r
+}
+
+define void @msil_prealloc_noarg(ptr %q) {
+  %t = call token @llvm.call.preallocated.setup(i32 1)
+  call void @msil_prealloc_ext_void(ptr preallocated(i32) %q) [ "preallocated"(token %t) ]
+  ret void
+}
+
+define void @msil_prealloc_teardown() {
+  %t = call token @llvm.call.preallocated.setup(i32 1)
+  call void @llvm.call.preallocated.teardown(token %t)
+  ret void
+}
+
+define i32 @msil_prealloc_free() {
+  ret i32 5
+}
+
+declare i64 @msil_prealloc_ext_i64(ptr preallocated(i32))
+declare i128 @msil_prealloc_ext_i128(ptr preallocated(i32))
+declare void @msil_prealloc_ext_void(ptr preallocated(i32))
+declare token @llvm.call.preallocated.setup(i32)
+declare ptr @llvm.call.preallocated.arg(token, i32)
+declare void @llvm.call.preallocated.teardown(token)
 
 ;--- mfi-bad-param.mir
 ---

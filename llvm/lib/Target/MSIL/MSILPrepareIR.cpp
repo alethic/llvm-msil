@@ -33,11 +33,18 @@
 ///   its body and its strategy are deleted before any pass runs
 ///   (doInitialization).
 /// - A function definition that is variadic, calls inline assembly, accesses
-///   a named register, records a stack map (stackmap, patchpoint, statepoint)
-///   or uses a pointer in a non-zero address space is an error, and its body
-///   is deleted.
+///   a named register, records a stack map (stackmap, patchpoint, statepoint),
+///   has deoptimization state ("deopt" operand bundles), makes a preallocated
+///   call (llvm.call.preallocated.*, "preallocated" operand bundles) or uses
+///   a pointer in a non-zero address space is an error, and its body is
+///   deleted.
 /// - A function definition or used declaration whose IL name is longer than
 ///   ilasm accepts is an error; a definition loses its body.
+/// - A call or invoke of a definition that lost its body after an error
+///   (above) is erased, and its uses become poison; an invoke branches to its
+///   normal destination. The function is not compiled, so the call would
+///   otherwise become a call of an external function. Other uses of the
+///   function (its address) are left alone.
 /// - An alias, an ifunc or a global variable in a non-zero address space is an
 ///   error; its uses become poison and it is erased.
 /// - A thread-local variable is an error; it becomes an ordinary global.
@@ -70,6 +77,7 @@
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/LLVMContext.h"
@@ -99,6 +107,10 @@ class MSILPrepareIRLegacy final : public ModulePass {
 
   bool doInitialization(Module &M) override;
   bool runOnModule(Module &M) override;
+
+  /// The definitions whose bodies this pass deleted after an error, in
+  /// doInitialization and in runOnModule.
+  SmallVector<Function *, 4> DeletedBodies;
 
 public:
   static char ID; // Pass identification, replacement for typeid
@@ -350,8 +362,10 @@ static bool stripPseudoProbes(Module &M) {
 /// collector that walks native frames. An available_externally body is never
 /// compiled and is not reported, but GC lowering instantiates the strategy of
 /// every function that has a body, and the AsmPrinter then prints its
-/// tables, so it loses its strategy too.
-static bool diagnoseGCStrategies(Module &M) {
+/// tables, so it loses its strategy too. Adds the definitions that lost their
+/// bodies to \p Deleted.
+static bool diagnoseGCStrategies(Module &M,
+                                 SmallVectorImpl<Function *> &Deleted) {
   bool Changed = false;
   for (Function &F : M) {
     if (F.isDeclaration() || !F.hasGC())
@@ -365,6 +379,7 @@ static bool diagnoseGCStrategies(Module &M) {
       F.deleteBody();
       // A declaration may not be in a comdat.
       F.setComdat(nullptr);
+      Deleted.push_back(&F);
     }
     F.clearGC();
     Changed = true;
@@ -456,6 +471,10 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &Finder) {
   if (!AS)
     AS = Finder.inType(F.getFunctionType());
 
+  // One diagnostic per definition for preallocated calls too: each one comes
+  // with an llvm.call.preallocated.setup call and usually .arg calls.
+  bool HasPreallocated = false;
+
   for (Instruction &I : instructions(F)) {
     if (auto *CB = dyn_cast<CallBase>(&I)) {
       if (CB->isInlineAsm()) {
@@ -486,6 +505,32 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &Finder) {
                 ") are not supported for MSIL",
             I.getDebugLoc()));
         HasError = true;
+      } else if (CB->hasDeoptState() ||
+                 IID == Intrinsic::experimental_deoptimize) {
+        // SelectionDAGBuilder lowers a call or invoke with deoptimization
+        // state as a statepoint, which needs the native call sequence;
+        // llvm.experimental.deoptimize also calls a runtime function, and
+        // llvm.experimental.guard has no lowering at all. The IR verifier
+        // requires a "deopt" bundle on both intrinsics; deoptimize is also
+        // matched by name for IR that was not verified.
+        Ctx.diagnose(DiagnosticInfoUnsupported(
+            F,
+            "deoptimization state (\"deopt\" operand bundles) is not "
+            "supported for MSIL",
+            I.getDebugLoc()));
+        HasError = true;
+      } else if (IID == Intrinsic::call_preallocated_setup ||
+                 IID == Intrinsic::call_preallocated_arg ||
+                 IID == Intrinsic::call_preallocated_teardown ||
+                 CB->countOperandBundlesOfType(LLVMContext::OB_preallocated)) {
+        // LowerCall rejects the preallocated argument, but the setup and arg
+        // calls would still reach instruction selection.
+        if (!HasPreallocated)
+          Ctx.diagnose(DiagnosticInfoUnsupported(
+              F, "preallocated arguments are not supported for MSIL",
+              I.getDebugLoc()));
+        HasPreallocated = true;
+        HasError = true;
       }
     }
     if (!AS && (AS = Finder.inInstruction(I)))
@@ -500,6 +545,34 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &Finder) {
     HasError = true;
   }
   return HasError;
+}
+
+/// Erases every call and invoke whose callee is one of \p Deleted, the
+/// definitions whose bodies were deleted after an error: they are not
+/// compiled, so a call of one would be lowered as a call of an external
+/// function. The uses of each call become poison, and an invoke branches to
+/// its normal destination. Other uses of the functions are left alone.
+static bool eraseCallsOf(ArrayRef<Function *> Deleted) {
+  // Collect the calls first: erasing one removes uses of the functions, and
+  // erasing an invoke may delete PHI nodes in its unwind destination.
+  SmallVector<CallBase *, 4> Calls;
+  for (Function *F : Deleted)
+    for (Use &U : F->uses())
+      if (auto *CB = dyn_cast<CallBase>(U.getUser());
+          CB && isa<CallInst, InvokeInst>(CB) && CB->isCallee(&U))
+        Calls.push_back(CB);
+
+  for (CallBase *CB : Calls) {
+    if (auto *II = dyn_cast<InvokeInst>(CB)) {
+      auto *BI = UncondBrInst::Create(II->getNormalDest(), II->getIterator());
+      BI->setDebugLoc(II->getDebugLoc());
+      II->getUnwindDest()->removePredecessor(II->getParent());
+    }
+    if (!CB->use_empty())
+      CB->replaceAllUsesWith(PoisonValue::get(CB->getType()));
+    CB->eraseFromParent();
+  }
+  return !Calls.empty();
 }
 
 /// Reports a non-empty llvm.global_dtors and erases it. Destructors need an
@@ -612,8 +685,9 @@ static void dropModuleContents(Module &M) {
 // in pipeline order, so this module pass is initialized before the function
 // pass manager that holds GC lowering and the AsmPrinter.
 bool MSILPrepareIRLegacy::doInitialization(Module &M) {
+  DeletedBodies.clear();
   bool Changed = stripPseudoProbes(M);
-  Changed |= diagnoseGCStrategies(M);
+  Changed |= diagnoseGCStrategies(M, DeletedBodies);
   return Changed;
 }
 
@@ -656,8 +730,12 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
     F.deleteBody();
     // A declaration may not be in a comdat.
     F.setComdat(nullptr);
+    DeletedBodies.push_back(&F);
     Changed = true;
   }
+
+  // Every definition that loses its body is known now.
+  Changed |= eraseCallsOf(DeletedBodies);
 
   Changed |= diagnoseGlobalDtors(M);
 

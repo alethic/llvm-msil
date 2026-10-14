@@ -21,17 +21,27 @@
 /// types are recorded in MSILFunctionInfo, from which the AsmPrinter prints
 /// the method header.
 ///
+/// A call becomes an MSILISD::CALL node (chain, callee, arguments...) whose
+/// results are the call's result (at most one) and the chain. Instruction
+/// selection splits it into CALL_PARAMS and CALL_RESULTS, and the custom
+/// inserter emitCallResults joins them into one CALL (a direct 'call' of a
+/// method) or CALL_INDIRECT ('calli' through an address).
+///
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "MSILISelLowering.h"
 #include "MSILMachineFunctionInfo.h"
+#include "MSILSelectionDAGInfo.h"
 #include "MSILSubtarget.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/InstrTypes.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <algorithm>
 using namespace llvm;
@@ -40,7 +50,7 @@ using namespace llvm;
 
 /// Reports \p Msg as an error in the current function. Compilation goes on, so
 /// the caller must still build a well-formed DAG.
-static void fail(const SDLoc &DL, SelectionDAG &DAG, const char *Msg) {
+static void fail(const SDLoc &DL, SelectionDAG &DAG, const Twine &Msg) {
   MachineFunction &MF = DAG.getMachineFunction();
   DAG.getContext()->diagnose(
       DiagnosticInfoUnsupported(MF.getFunction(), Msg, DL.getDebugLoc()));
@@ -123,7 +133,114 @@ SDValue MSILTargetLowering::LowerFormalArguments(
 
 SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
                                       SmallVectorImpl<SDValue> &InVals) const {
-  reportFatalUsageError("MSIL: calls are implemented in M4");
+  SelectionDAG &DAG = CLI.DAG;
+  SDLoc DL = CLI.DL;
+  SDValue Callee = CLI.Callee;
+  MachineFunction &MF = DAG.getMachineFunction();
+
+  // There is no 'tail.' prefix in Phase 1, so every call is an ordinary call
+  // (a musttail call is diagnosed below).
+  CLI.IsTailCall = false;
+
+  // A call that cannot be lowered builds no call node: instruction selection,
+  // the custom inserter and MCInstLower never meet it, and its results are
+  // undefined. After a diagnostic, compilation goes on with this well-formed
+  // DAG and llc exits with an error.
+  auto DropCall = [&]() -> SDValue {
+    for (const ISD::InputArg &In : CLI.Ins)
+      InVals.push_back(DAG.getUNDEF(In.VT));
+    return CLI.Chain;
+  };
+  auto Reject = [&](const Twine &Msg) -> SDValue {
+    fail(DL, DAG, Msg);
+    return DropCall();
+  };
+
+  // SelectionDAG calls a library function, named by an external symbol, for
+  // an operation that it cannot expand inline (an i128 division, for
+  // example). Phase 1 has no runtime library to call.
+  if (const auto *ES = dyn_cast<ExternalSymbolSDNode>(Callee))
+    return Reject(Twine("runtime library call '") + ES->getSymbol() +
+                  "' is not supported for MSIL yet");
+
+  // Calling an undefined value is undefined behavior. MSILPrepareIR leaves
+  // such calls behind when it replaces a diagnosed alias by poison.
+  if (Callee.isUndef())
+    return DropCall();
+
+  if (!callingConvSupported(CLI.CallConv))
+    return Reject("calling convention is not supported for MSIL");
+  if (CLI.IsPatchPoint)
+    return Reject("patchpoints are not supported for MSIL");
+  if (CLI.CB && CLI.CB->isMustTailCall())
+    return Reject("musttail calls are not supported for MSIL yet");
+
+  // A direct call names the callee's method, whose signature comes from the
+  // callee's own type (MSILAsmPrinter::getSignature), while the arguments and
+  // results here come from the call site's type. If the two differ, the call
+  // token would not match the method and the JIT would reject the call.
+  // MSILFixFunctionBitcasts (M9) makes them agree before ISel; this is the
+  // backstop.
+  const auto *GA = dyn_cast<GlobalAddressSDNode>(Callee);
+  const auto *F = GA ? dyn_cast<Function>(GA->getGlobal()) : nullptr;
+  // SelectionDAGBuilder lowers every recognized intrinsic itself, so only an
+  // 'llvm.*' name that LLVM does not know reaches this point. It has no CIL
+  // method; the asserts in MSILMCInstLower and MSILAsmPrinter stay internal
+  // invariants.
+  if (F && F->isIntrinsic())
+    return Reject(Twine("unknown intrinsic '") + F->getName() +
+                  "' is not supported for MSIL");
+  if (F && CLI.CB && CLI.CB->getFunctionType() != F->getFunctionType())
+    return Reject("mismatched call signature");
+
+  if (CLI.IsVarArg)
+    return Reject("calls to variadic functions are not supported for MSIL yet");
+
+  for (const ISD::OutputArg &Out : CLI.Outs) {
+    // SelectionDAG also sets the byval flag for inalloca and preallocated
+    // arguments, so test those first.
+    if (Out.Flags.isInAlloca())
+      return Reject("inalloca arguments are not supported for MSIL");
+    if (Out.Flags.isPreallocated())
+      return Reject("preallocated arguments are not supported for MSIL");
+    if (Out.Flags.isByVal())
+      return Reject("byval arguments are not supported for MSIL yet");
+    if (Out.Flags.isNest())
+      return Reject("nest arguments are not supported for MSIL");
+    // An sret argument (including the hidden one of a result that
+    // CanLowerReturn demotes) is an ordinary pointer argument. Narrow
+    // integers arrive as int32 (Out.VT is the register type), already
+    // extended as the signext/zeroext attributes say.
+  }
+
+  // A direct callee needs no address: CALL_PARAMS takes the function symbol
+  // itself, and MSILMCInstLower turns it into the method reference. Any other
+  // callee is an address computed into a register, called with 'calli'.
+  if (F)
+    Callee = DAG.getTargetGlobalAddress(F, DL, getPointerTy(MF.getDataLayout()),
+                                        GA->getOffset());
+
+  SmallVector<SDValue, 16> Ops;
+  Ops.push_back(CLI.Chain);
+  Ops.push_back(Callee);
+  Ops.append(CLI.OutVals.begin(), CLI.OutVals.end());
+
+  // CanLowerReturn demotes anything that needs more than one value.
+  assert(CLI.Ins.size() <= 1 && "a CIL method returns at most one value");
+  SmallVector<EVT, 2> InTys;
+  for (const ISD::InputArg &In : CLI.Ins) {
+    assert(!In.Flags.isByVal() && "byval is not valid for return values");
+    assert(!In.Flags.isNest() && "nest is not valid for return values");
+    InTys.push_back(In.VT);
+  }
+  InTys.push_back(MVT::Other);
+  SDValue Res = DAG.getNode(MSILISD::CALL, DL, DAG.getVTList(InTys), Ops);
+
+  for (unsigned I = 0, E = CLI.Ins.size(); I != E; ++I)
+    InVals.push_back(Res.getValue(I));
+
+  // Return the chain.
+  return Res.getValue(CLI.Ins.size());
 }
 
 bool MSILTargetLowering::CanLowerReturn(
@@ -166,7 +283,53 @@ MSILTargetLowering::LowerReturn(SDValue Chain, CallingConv::ID /*CallConv*/,
 }
 
 MachineBasicBlock *
-MSILTargetLowering::emitCallResults(MachineInstr &MI,
+MSILTargetLowering::emitCallResults(MachineInstr &CallResults,
                                     MachineBasicBlock *BB) const {
-  reportFatalUsageError("MSIL: calls are implemented in M4");
+  // Instruction selection glues CALL_PARAMS to CALL_RESULTS, so the two are
+  // adjacent.
+  MachineInstr &CallParams = *CallResults.getPrevNode();
+  assert(CallParams.getOpcode() == MSIL::CALL_PARAMS);
+  assert(CallResults.getOpcode() == MSIL::CALL_RESULTS);
+
+  // A direct call has the function symbol as its callee; an indirect call has
+  // the callee's address in a register (or a frame index).
+  bool IsIndirect =
+      CallParams.getOperand(0).isReg() || CallParams.getOperand(0).isFI();
+  unsigned CallOp = IsIndirect ? MSIL::CALL_INDIRECT : MSIL::CALL;
+
+  MachineFunction &MF = *BB->getParent();
+  const TargetInstrInfo &TII = *Subtarget->getInstrInfo();
+  MachineInstrBuilder MIB(
+      MF, MF.CreateMachineInstr(TII.get(CallOp), CallResults.getDebugLoc()));
+
+  // Move the function pointer to the end of the arguments for indirect calls:
+  // 'calli' pops the address after the arguments.
+  if (IsIndirect) {
+    MachineOperand FnPtr = CallParams.getOperand(0);
+    CallParams.removeOperand(0);
+    CallParams.addOperand(FnPtr);
+  }
+
+  // The results come first (variadicOpsAreDefs). For a direct call the callee
+  // follows them, so its operand index is the number of results.
+  for (const MachineOperand &Def : CallResults.defs())
+    MIB.add(Def);
+
+  // Avoid duplicating the implicit operands.
+  for (const MachineOperand &Use : CallParams.explicit_uses())
+    MIB.add(Use);
+
+  BB->insert(CallResults.getIterator(), MIB);
+  // With -emit-call-site-info (clang sets it for -g at -O1 and above), the
+  // scheduler records call-site info for each of the two pseudos, as both are
+  // calls. CALL_RESULTS replaced the MSILISD::CALL node and carries that
+  // node's info, so it moves to the new call; CALL_PARAMS' entry is dropped.
+  // WebAssembly's LowerCallResults omits this, but clang never asks for
+  // call-site info there: WebAssembly has no debug entry values.
+  MF.eraseAdditionalCallInfo(&CallParams);
+  MF.moveAdditionalCallInfo(&CallResults, MIB.getInstr());
+  CallParams.eraseFromParent();
+  CallResults.eraseFromParent();
+
+  return BB;
 }

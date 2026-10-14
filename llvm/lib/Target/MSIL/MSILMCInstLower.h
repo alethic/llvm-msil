@@ -26,12 +26,18 @@
 namespace llvm {
 class MCContext;
 class MachineInstr;
+class MachineOperand;
 class MSILAsmPrinter;
 
 /// This class is used to lower an MachineInstr into an MCInst.
 class LLVM_LIBRARY_VISIBILITY MSILMCInstLower {
   MCContext &Ctx;
   MSILAsmPrinter &Printer;
+
+  /// Lowers a function operand (the callee of a 'call', the target of an
+  /// 'ldftn') to the method reference, with the signature from the printer's
+  /// table, and notes an undefined function for the module trailer.
+  MCOperand lowerFunctionOperand(const MachineOperand &MO) const;
 
 public:
   MSILMCInstLower(MCContext &Ctx, MSILAsmPrinter &Printer)

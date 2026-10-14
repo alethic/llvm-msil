@@ -52,6 +52,8 @@ public:
 
   // Lowering hooks.
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
+  void ReplaceNodeResults(SDNode *N, SmallVectorImpl<SDValue> &Results,
+                          SelectionDAG &DAG) const override;
   MachineBasicBlock *
   EmitInstrWithCustomInserter(MachineInstr &MI,
                               MachineBasicBlock *BB) const override;
@@ -88,6 +90,8 @@ private:
   SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerExternalSymbol(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerBR_JT(SDValue Op, SelectionDAG &DAG) const;
+  /// Expands SHL_PARTS, SRA_PARTS and SRL_PARTS (i128 shifts by a variable
+  /// amount) inline, so that no runtime helper is needed.
   SDValue LowerShiftParts(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerUINT_TO_FP(SDValue Op, SelectionDAG &DAG) const;
   /// Diagnoses an operation that Phase 1 does not support and returns a
@@ -95,6 +99,8 @@ private:
   SDValue LowerUnsupported(SDValue Op, SelectionDAG &DAG, StringRef What) const;
 
   // Custom inserters.
+  /// Expands a SELECT_<RC> pseudo into a branch triangle that joins the two
+  /// values with a PHI (CIL has no select instruction).
   MachineBasicBlock *emitSelect(MachineInstr &MI, MachineBasicBlock *BB) const;
 };
 

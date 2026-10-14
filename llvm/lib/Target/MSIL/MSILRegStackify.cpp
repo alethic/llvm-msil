@@ -383,6 +383,14 @@ static bool isSafeToMove(const MachineOperand *Def, const MachineOperand *Use,
       return false;
     if (StackPointer && InterveningStackPointer)
       return false;
+    // CIL: a division or remainder may move past a call, because it throws
+    // only on undefined behaviour, but a call never moves below one. If the
+    // call does not return (it throws, exits or loops), the division is never
+    // executed, so running it first would add an exception the program does
+    // not have (DivideByZeroException, or ArithmeticException for
+    // INT_MIN / -1). WebAssembly lets the call sink here.
+    if (DefI->isCall() && trapsOnlyOnUB(*I))
+      return false;
 
     for (unsigned Reg : MutableRegisters)
       for (const MachineOperand &MO : I->operands())

@@ -1,0 +1,1021 @@
+; Calls that M4 cannot compile are clean errors (ImplementationPlan.md section
+; 2 'Diagnostics leave well-formed output', M4.a, M4.c; decisions D14, D19;
+; section 12 rows 'M4.a extended', 'Plan 5.3 (MSILISelLowering.h) extended,
+; M4.b' and the two fix-loop ownership rows of fix-1). Each one is reported
+; exactly once, naming the caller (%{diag} rejects every other 'error:' and
+; 'warning:' line, so each expected error is checked), compilation goes on,
+; llc exits with 1 and prints neither 'LLVM ERROR' nor a crash report, no call
+; is built for the rejected call (its result is undefined, so the call
+; disappears from the IL), and the IL on stdout (llc deletes its -o file after
+; an error) still assembles. Every part runs on both triples at -O2 and at
+; least once at -O0 (the parts with two-value results on both triples).
+;
+; - LowerCall rejects a call of a variadic function ('calls to variadic
+;   functions are not supported for MSIL yet', D19; K&R calls are fixed before
+;   ISel in M9), a direct call whose call-site type differs from the callee's
+;   ('mismatched call signature'; the backstop until MSILFixFunctionBitcasts in
+;   M9), a byval, nest or inalloca argument, a musttail call, an unsupported
+;   calling convention, a callee named 'llvm.*' that LLVM does not know
+;   ("unknown intrinsic '<name>' is not supported for MSIL") and an
+;   ExternalSymbol callee, which only runtime library calls have ("runtime
+;   library call '<name>' is not supported for MSIL yet", D14; here the i128
+;   to floating-point conversions __floattidf and __floatuntisf, which return
+;   one value).
+; - i128 division and remainder never reach LowerCall: the type legalizer
+;   (ReplaceNodeResults) reports the same runtime library text before any call
+;   is built, because their libcalls return two values. Only a variable
+;   divisor, or a non-exact division or a remainder by a constant that is not a
+;   power of two, gets there; division and remainder by a power of two and
+;   exact division by any constant expand inline (i128.ll).
+; - A rejected call whose result needs more than one value (i128,
+;   { i64, i64 }) would also be demoted to a stack slot around LowerCall, so
+;   MSILFixFunctionBitcasts reports it with LowerCall's text and erases it
+;   before ISel (until M9.b replaces it).
+; - A call of a definition whose body MSILPrepareIR deleted after a diagnostic
+;   (here inline assembly) is erased too, so the only error is the real one.
+;   The same holds for invokes, which share a landing pad with a PHI.
+; - Aliases and ifuncs are errors of their own (D26); their callers compile,
+;   with an undefined result, and add no error, also when the call-site
+;   result needs two values.
+; - A call of a function that is only declared is built, and the end of the
+;   module reports "call to external function '<name>' needs P/Invoke support
+;   (M8)" (M4.c; M8 replaces this with P/Invoke declarations) once per callee,
+;   in the order of first use, however many calls and callers it has; an
+;   available_externally definition is called like a declaration. A
+;   declaration that is never called, or whose calls were all rejected, is
+;   not an error.
+;
+; Later owners (section 12): M8.d updates the EXTERN, AVAIL, LIBCALL and
+; LIBCALLFP parts when M8 changes these texts; M9.c moves or retires the
+; MISMATCH, MMULTI and BYVAL parts when M9 makes those calls valid.
+
+; DEFINE: %{diag} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+; DEFINE:   --implicit-check-not=error: --implicit-check-not=warning:
+; RUN: split-file %s %t
+
+; Variadic callee.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/variadic.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=VARIADIC
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/variadic.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=VARIADIC
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/variadic.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=VARIADIC
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/variadic.ll \
+; RUN:   > %t/variadic.lnx.il
+; RUN: FileCheck %s --check-prefix=VARIADIC-IL --input-file=%t/variadic.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/variadic.ll \
+; RUN:   > %t/variadic.win.il
+; RUN: FileCheck %s --check-prefix=VARIADIC-IL --input-file=%t/variadic.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/variadic.dll %t/variadic.win.il %}
+
+; Variadic callees whose result needs two values.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/variadic-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=VMULTI
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/variadic-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=VMULTI
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/variadic-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=VMULTI
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/variadic-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=VMULTI
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/variadic-multi.ll \
+; RUN:   > %t/variadic-multi.lnx.il
+; RUN: FileCheck %s --check-prefix=VMULTI-IL --input-file=%t/variadic-multi.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/variadic-multi.ll \
+; RUN:   > %t/variadic-multi.win.il
+; RUN: FileCheck %s --check-prefix=VMULTI-IL --input-file=%t/variadic-multi.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/variadic-multi.dll %t/variadic-multi.win.il %}
+
+; Runtime library calls.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/libcall.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=LIBCALL
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/libcall.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=LIBCALL
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/libcall.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=LIBCALL
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libcall.ll \
+; RUN:   > %t/libcall.lnx.il
+; RUN: FileCheck %s --check-prefix=LIBCALL-IL --input-file=%t/libcall.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/libcall.ll \
+; RUN:   > %t/libcall.win.il
+; RUN: FileCheck %s --check-prefix=LIBCALL-IL --input-file=%t/libcall.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/libcall.dll %t/libcall.lnx.il %}
+
+; Runtime library calls that LowerCall sees as ExternalSymbol callees.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/libcall-fp.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=LIBCALLFP
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/libcall-fp.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=LIBCALLFP
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/libcall-fp.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=LIBCALLFP
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libcall-fp.ll \
+; RUN:   > %t/libcall-fp.lnx.il
+; RUN: FileCheck %s --check-prefix=LIBCALLFP-IL --input-file=%t/libcall-fp.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/libcall-fp.ll \
+; RUN:   > %t/libcall-fp.win.il
+; RUN: FileCheck %s --check-prefix=LIBCALLFP-IL --input-file=%t/libcall-fp.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/libcall-fp.dll %t/libcall-fp.win.il %}
+
+; Call-site type differs from the callee's.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/mismatch.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=MISMATCH
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/mismatch.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=MISMATCH
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/mismatch.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=MISMATCH
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/mismatch.ll \
+; RUN:   > %t/mismatch.lnx.il
+; RUN: FileCheck %s --check-prefix=MISMATCH-IL --input-file=%t/mismatch.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/mismatch.ll \
+; RUN:   > %t/mismatch.win.il
+; RUN: FileCheck %s --check-prefix=MISMATCH-IL --input-file=%t/mismatch.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/mismatch.dll %t/mismatch.win.il %}
+
+; Mismatched calls whose result needs two values.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/mismatch-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=MMULTI
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/mismatch-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=MMULTI
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/mismatch-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=MMULTI
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/mismatch-multi.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=MMULTI
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/mismatch-multi.ll \
+; RUN:   > %t/mismatch-multi.lnx.il
+; RUN: FileCheck %s --check-prefix=MMULTI-IL --input-file=%t/mismatch-multi.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/mismatch-multi.ll \
+; RUN:   > %t/mismatch-multi.win.il
+; RUN: FileCheck %s --check-prefix=MMULTI-IL --input-file=%t/mismatch-multi.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/mismatch-multi.dll %t/mismatch-multi.win.il %}
+
+; byval argument at the call site.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/byval.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=BYVAL
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/byval.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=BYVAL
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/byval.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=BYVAL
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/byval.ll \
+; RUN:   > %t/byval.lnx.il
+; RUN: FileCheck %s --check-prefix=BYVAL-IL --input-file=%t/byval.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/byval.ll \
+; RUN:   > %t/byval.win.il
+; RUN: FileCheck %s --check-prefix=BYVAL-IL --input-file=%t/byval.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/byval.dll %t/byval.win.il %}
+
+; nest and inalloca arguments.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/arg-attrs.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=ARGATTR
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/arg-attrs.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=ARGATTR
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/arg-attrs.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=ARGATTR
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/arg-attrs.ll \
+; RUN:   > %t/arg-attrs.lnx.il
+; RUN: FileCheck %s --check-prefix=ARGATTR-IL --input-file=%t/arg-attrs.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/arg-attrs.ll \
+; RUN:   > %t/arg-attrs.win.il
+; RUN: FileCheck %s --check-prefix=ARGATTR-IL --input-file=%t/arg-attrs.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/arg-attrs.dll %t/arg-attrs.win.il %}
+
+; musttail call.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/musttail.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=MUSTTAIL
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/musttail.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=MUSTTAIL
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/musttail.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=MUSTTAIL
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/musttail.ll \
+; RUN:   > %t/musttail.lnx.il
+; RUN: FileCheck %s --check-prefix=MUSTTAIL-IL --input-file=%t/musttail.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/musttail.ll \
+; RUN:   > %t/musttail.win.il
+; RUN: FileCheck %s --check-prefix=MUSTTAIL-IL --input-file=%t/musttail.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/musttail.dll %t/musttail.win.il %}
+
+; Unsupported calling conventions at the call site.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/callconv.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=CALLCONV
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/callconv.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=CALLCONV
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/callconv.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=CALLCONV
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/callconv.ll \
+; RUN:   > %t/callconv.lnx.il
+; RUN: FileCheck %s --check-prefix=CALLCONV-IL --input-file=%t/callconv.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/callconv.ll \
+; RUN:   > %t/callconv.win.il
+; RUN: FileCheck %s --check-prefix=CALLCONV-IL --input-file=%t/callconv.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/callconv.dll %t/callconv.win.il %}
+
+; Unknown 'llvm.*' callee.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/unknown-intrinsic.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=UNKINTR
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/unknown-intrinsic.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=UNKINTR
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/unknown-intrinsic.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=UNKINTR
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/unknown-intrinsic.ll \
+; RUN:   > %t/unknown-intrinsic.lnx.il
+; RUN: FileCheck %s --check-prefix=UNKINTR-IL --input-file=%t/unknown-intrinsic.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/unknown-intrinsic.ll \
+; RUN:   > %t/unknown-intrinsic.win.il
+; RUN: FileCheck %s --check-prefix=UNKINTR-IL --input-file=%t/unknown-intrinsic.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/unknown-intrinsic.dll %t/unknown-intrinsic.win.il %}
+
+; Callee whose body MSILPrepareIR deleted.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/diagnosed-callee.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=DIAGCALLEE
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/diagnosed-callee.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=DIAGCALLEE
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/diagnosed-callee.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=DIAGCALLEE
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/diagnosed-callee.ll \
+; RUN:   > %t/diagnosed-callee.lnx.il
+; RUN: FileCheck %s --check-prefix=DIAGCALLEE-IL --input-file=%t/diagnosed-callee.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/diagnosed-callee.ll \
+; RUN:   > %t/diagnosed-callee.win.il
+; RUN: FileCheck %s --check-prefix=DIAGCALLEE-IL --input-file=%t/diagnosed-callee.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/diagnosed-callee.dll %t/diagnosed-callee.win.il %}
+
+; Invokes of a variadic callee and of a callee whose body MSILPrepareIR deleted.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/invoke.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=INVOKE
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/invoke.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=INVOKE
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/invoke.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=INVOKE
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/invoke.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=INVOKE
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/invoke.ll \
+; RUN:   > %t/invoke.lnx.il
+; RUN: FileCheck %s --check-prefix=INVOKE-IL --input-file=%t/invoke.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/invoke.ll \
+; RUN:   > %t/invoke.win.il
+; RUN: FileCheck %s --check-prefix=INVOKE-IL --input-file=%t/invoke.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/invoke.dll %t/invoke.win.il %}
+
+; Callers of a diagnosed alias and ifunc.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/alias-callers.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=ALIAS
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/alias-callers.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=ALIAS
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/alias-callers.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=ALIAS
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/alias-callers.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=ALIAS
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/alias-callers.ll \
+; RUN:   > %t/alias-callers.lnx.il
+; RUN: FileCheck %s --check-prefix=ALIAS-IL --input-file=%t/alias-callers.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/alias-callers.ll \
+; RUN:   > %t/alias-callers.win.il
+; RUN: FileCheck %s --check-prefix=ALIAS-IL --input-file=%t/alias-callers.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/alias-callers.dll %t/alias-callers.lnx.il %}
+
+; Callee that is only declared (temporary M4 rule, replaced in M8).
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/extern.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=EXTERN
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/extern.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=EXTERN
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/extern.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=EXTERN
+
+; Several calls of an available_externally definition and of a declaration,
+; from two functions (the calls are built, so the IL does not assemble).
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/avail.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=AVAIL
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/avail.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=AVAIL
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/avail.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=AVAIL
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/avail.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=AVAIL
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/avail.ll \
+; RUN:   > %t/avail.lnx.il
+; RUN: FileCheck %s --check-prefix=AVAIL-IL --input-file=%t/avail.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/avail.ll \
+; RUN:   > %t/avail.win.il
+; RUN: FileCheck %s --check-prefix=AVAIL-IL --input-file=%t/avail.win.il
+
+;--- variadic.ll
+; A variadic callee, called with and without variadic arguments, then a
+; function that compiles normally.
+; VARIADIC:     error: {{.*}}call_variadic{{.*}}calls to variadic functions are not supported for MSIL yet
+; VARIADIC:     error: {{.*}}call_variadic_fixed_only{{.*}}calls to variadic functions are not supported for MSIL yet
+
+; VARIADIC-IL-LABEL: .method {{.*}}'call_variadic'(
+; VARIADIC-IL-NOT:   call
+; VARIADIC-IL:       {{^}}  ret{{$}}
+; VARIADIC-IL-NEXT:  {{^}}} // end of method 'call_variadic'{{$}}
+; VARIADIC-IL-LABEL: .method {{.*}}'call_variadic_fixed_only'(
+; VARIADIC-IL-NOT:   call
+; VARIADIC-IL:       {{^}}  ret{{$}}
+; VARIADIC-IL-NEXT:  {{^}}} // end of method 'call_variadic_fixed_only'{{$}}
+; VARIADIC-IL-LABEL: .method {{.*}}'after_variadic'(
+; VARIADIC-IL:       {{^}}  ldarg.0{{$}}
+; VARIADIC-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; VARIADIC-IL-NEXT:  {{^}}  add{{$}}
+; VARIADIC-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "variadic.c"
+
+declare i32 @vf(i32, ...)
+
+define i32 @call_variadic(i32 %x) {
+  %r = call i32 (i32, ...) @vf(i32 %x, i32 2, double 3.0)
+  ret i32 %r
+}
+
+define void @call_variadic_fixed_only(i32 %x) {
+  %r = call i32 (i32, ...) @vf(i32 %x)
+  ret void
+}
+
+define i32 @after_variadic(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+;--- variadic-multi.ll
+; Calls of variadic functions returning i128 and { i64, i64 }; the callers
+; return one half, so their own result is a single value. Each call is
+; reported once (MSILFixFunctionBitcasts) and nothing is left to crash later.
+; VMULTI:       error: {{.*}}call_variadic_i128{{.*}}calls to variadic functions are not supported for MSIL yet
+; VMULTI:       error: {{.*}}call_variadic_pair{{.*}}calls to variadic functions are not supported for MSIL yet
+
+; VMULTI-IL-LABEL: .method {{.*}}'call_variadic_i128'(
+; VMULTI-IL-SAME:  int32) cil managed{{$}}
+; VMULTI-IL-NOT:   call
+; VMULTI-IL:       {{^}}  ret{{$}}
+; VMULTI-IL-NEXT:  {{^}}} // end of method 'call_variadic_i128'{{$}}
+; VMULTI-IL-LABEL: .method {{.*}}'call_variadic_pair'(
+; VMULTI-IL-SAME:  int32) cil managed{{$}}
+; VMULTI-IL-NOT:   call
+; VMULTI-IL:       {{^}}  ret{{$}}
+; VMULTI-IL-NEXT:  {{^}}} // end of method 'call_variadic_pair'{{$}}
+; VMULTI-IL-LABEL: .method {{.*}}'after_variadic_multi'(
+; VMULTI-IL:       {{^}}  ldarg.0{{$}}
+; VMULTI-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; VMULTI-IL-NEXT:  {{^}}  add{{$}}
+; VMULTI-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "variadic-multi.c"
+
+declare i128 @vf128(i32, ...)
+declare { i64, i64 } @vfpair(i32, ...)
+
+define i64 @call_variadic_i128(i32 %x) {
+  %r = call i128 (i32, ...) @vf128(i32 %x, i32 1)
+  %t = trunc i128 %r to i64
+  ret i64 %t
+}
+
+define i64 @call_variadic_pair(i32 %x) {
+  %r = call { i64, i64 } (i32, ...) @vfpair(i32 %x, i32 1)
+  %e = extractvalue { i64, i64 } %r, 1
+  ret i64 %e
+}
+
+define i64 @after_variadic_multi(i64 %a, i64 %b) {
+  %r = add i64 %a, %b
+  ret i64 %r
+}
+
+;--- libcall.ll
+; i128 division and remainder by a variable, and by 10 (not a power of two),
+; need __divti3, __udivti3, __modti3 and __umodti3. The type legalizer reports
+; them (ReplaceNodeResults) before any call is built; no ExternalSymbol node
+; reaches LowerCall.
+; LIBCALL:      error: {{.*}}div128{{.*}}runtime library call '__divti3' is not supported for MSIL yet
+; LIBCALL:      error: {{.*}}urem128{{.*}}runtime library call '__umodti3' is not supported for MSIL yet
+; LIBCALL:      error: {{.*}}udiv128{{.*}}runtime library call '__udivti3' is not supported for MSIL yet
+; LIBCALL:      error: {{.*}}srem128{{.*}}runtime library call '__modti3' is not supported for MSIL yet
+; LIBCALL:      error: {{.*}}sdiv128_by_10{{.*}}runtime library call '__divti3' is not supported for MSIL yet
+; LIBCALL:      error: {{.*}}udiv128_by_10{{.*}}runtime library call '__udivti3' is not supported for MSIL yet
+
+; LIBCALL-IL-LABEL: .method {{.*}}'div128'(
+; LIBCALL-IL-SAME:  native int, native int, native int, native int) cil managed{{$}}
+; LIBCALL-IL-NOT:   call
+; LIBCALL-IL:       {{^}}  ret{{$}}
+; LIBCALL-IL-NEXT:  {{^}}} // end of method 'div128'{{$}}
+; LIBCALL-IL-LABEL: .method {{.*}}'urem128'(
+; LIBCALL-IL-NOT:   call
+; LIBCALL-IL:       {{^}}  ret{{$}}
+; LIBCALL-IL-NEXT:  {{^}}} // end of method 'urem128'{{$}}
+; LIBCALL-IL-LABEL: .method {{.*}}'udiv128'(
+; LIBCALL-IL-NOT:   call
+; LIBCALL-IL:       {{^}}  ret{{$}}
+; LIBCALL-IL-NEXT:  {{^}}} // end of method 'udiv128'{{$}}
+; LIBCALL-IL-LABEL: .method {{.*}}'srem128'(
+; LIBCALL-IL-NOT:   call
+; LIBCALL-IL:       {{^}}  ret{{$}}
+; LIBCALL-IL-NEXT:  {{^}}} // end of method 'srem128'{{$}}
+; LIBCALL-IL-LABEL: .method {{.*}}'sdiv128_by_10'(
+; LIBCALL-IL-SAME:  native int, native int) cil managed{{$}}
+; LIBCALL-IL-NOT:   call
+; LIBCALL-IL:       {{^}}  ret{{$}}
+; LIBCALL-IL-NEXT:  {{^}}} // end of method 'sdiv128_by_10'{{$}}
+; LIBCALL-IL-LABEL: .method {{.*}}'udiv128_by_10'(
+; LIBCALL-IL-NOT:   call
+; LIBCALL-IL:       {{^}}  ret{{$}}
+; LIBCALL-IL-NEXT:  {{^}}} // end of method 'udiv128_by_10'{{$}}
+; LIBCALL-IL-LABEL: .method {{.*}}'after_libcall'(
+; LIBCALL-IL:       {{^}}  ldarg.0{{$}}
+; LIBCALL-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBCALL-IL-NEXT:  {{^}}  div{{$}}
+; LIBCALL-IL-NEXT:  {{^}}  ret{{$}}
+; LIBCALL-IL-NOT:   {{__u?(div|mod)ti3}}
+source_filename = "libcall.c"
+
+define i64 @div128(i128 %a, i128 %b) {
+  %q = sdiv i128 %a, %b
+  %t = trunc i128 %q to i64
+  ret i64 %t
+}
+
+define i64 @urem128(i128 %a, i128 %b) {
+  %q = urem i128 %a, %b
+  %t = trunc i128 %q to i64
+  ret i64 %t
+}
+
+define i64 @udiv128(i128 %a, i128 %b) {
+  %q = udiv i128 %a, %b
+  %t = trunc i128 %q to i64
+  ret i64 %t
+}
+
+define i64 @srem128(i128 %a, i128 %b) {
+  %q = srem i128 %a, %b
+  %t = trunc i128 %q to i64
+  ret i64 %t
+}
+
+define i64 @sdiv128_by_10(i128 %a) {
+  %q = sdiv i128 %a, 10
+  %t = trunc i128 %q to i64
+  ret i64 %t
+}
+
+define i64 @udiv128_by_10(i128 %a) {
+  %q = udiv i128 %a, 10
+  %t = trunc i128 %q to i64
+  ret i64 %t
+}
+
+define i64 @after_libcall(i64 %a, i64 %b) {
+  %q = sdiv i64 %a, %b
+  ret i64 %q
+}
+
+;--- libcall-fp.ll
+; i128 to floating point is a runtime library call with one result, so it
+; reaches LowerCall as an ExternalSymbol callee.
+; LIBCALLFP:    error: {{.*}}sitofp128{{.*}}runtime library call '__floattidf' is not supported for MSIL yet
+; LIBCALLFP:    error: {{.*}}uitofp128{{.*}}runtime library call '__floatuntisf' is not supported for MSIL yet
+
+; LIBCALLFP-IL-LABEL: .method {{.*}}'sitofp128'(
+; LIBCALLFP-IL-SAME:  native int, native int) cil managed{{$}}
+; LIBCALLFP-IL-NOT:   call
+; LIBCALLFP-IL:       {{^}}  ret{{$}}
+; LIBCALLFP-IL-NEXT:  {{^}}} // end of method 'sitofp128'{{$}}
+; LIBCALLFP-IL-LABEL: .method {{.*}}'uitofp128'(
+; LIBCALLFP-IL-SAME:  native int, native int) cil managed{{$}}
+; LIBCALLFP-IL-NOT:   call
+; LIBCALLFP-IL:       {{^}}  ret{{$}}
+; LIBCALLFP-IL-NEXT:  {{^}}} // end of method 'uitofp128'{{$}}
+; LIBCALLFP-IL-LABEL: .method {{.*}}'after_libcall_fp'(
+; LIBCALLFP-IL:       {{^}}  ldarg.0{{$}}
+; LIBCALLFP-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBCALLFP-IL-NEXT:  {{^}}  add{{$}}
+; LIBCALLFP-IL-NEXT:  {{^}}  ret{{$}}
+; LIBCALLFP-IL-NOT:   __float
+source_filename = "libcall-fp.c"
+
+define double @sitofp128(i128 %x) {
+  %r = sitofp i128 %x to double
+  ret double %r
+}
+
+define float @uitofp128(i128 %x) {
+  %r = uitofp i128 %x to float
+  ret float %r
+}
+
+define i64 @after_libcall_fp(i64 %a, i64 %b) {
+  %r = add i64 %a, %b
+  ret i64 %r
+}
+
+;--- mismatch.ll
+; The call-site function type differs from the callee's in a parameter type,
+; the result type, the number of parameters and void versus a result.
+; MISMATCH:     error: {{.*}}call_param_type{{.*}}mismatched call signature
+; MISMATCH:     error: {{.*}}call_result_type{{.*}}mismatched call signature
+; MISMATCH:     error: {{.*}}call_param_count{{.*}}mismatched call signature
+; MISMATCH:     error: {{.*}}call_void_result{{.*}}mismatched call signature
+
+; MISMATCH-IL:       {{^}}.method public static int32 'callee'(int32) cil managed{{$}}
+; MISMATCH-IL-LABEL: .method {{.*}}'call_param_type'(
+; MISMATCH-IL-NOT:   call
+; MISMATCH-IL:       {{^}}  ret{{$}}
+; MISMATCH-IL-LABEL: .method {{.*}}'call_result_type'(
+; MISMATCH-IL-NOT:   call
+; MISMATCH-IL:       {{^}}  ret{{$}}
+; MISMATCH-IL-LABEL: .method {{.*}}'call_param_count'(
+; MISMATCH-IL-NOT:   call
+; MISMATCH-IL:       {{^}}  ret{{$}}
+; MISMATCH-IL-LABEL: .method {{.*}}'call_void_result'(
+; MISMATCH-IL-NOT:   call
+; MISMATCH-IL:       {{^}}  ret{{$}}
+; The matching call after them is compiled as usual.
+; MISMATCH-IL-LABEL: .method {{.*}}'call_matching'(
+; MISMATCH-IL:       {{^}}  ldarg.0{{$}}
+; MISMATCH-IL-NEXT:  {{^}}  call int32 'callee'(int32){{$}}
+; MISMATCH-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "mismatch.c"
+
+define i32 @callee(i32 %a) {
+  ret i32 %a
+}
+
+define i32 @call_param_type(i64 %x) {
+  %r = call i32 @callee(i64 %x)
+  ret i32 %r
+}
+
+define i64 @call_result_type(i32 %x) {
+  %r = call i64 @callee(i32 %x)
+  ret i64 %r
+}
+
+define i32 @call_param_count() {
+  %r = call i32 @callee()
+  ret i32 %r
+}
+
+define void @call_void_result(i32 %x) {
+  call void @callee(i32 %x)
+  ret void
+}
+
+define i32 @call_matching(i32 %x) {
+  %r = call i32 @callee(i32 %x)
+  ret i32 %r
+}
+
+;--- mismatch-multi.ll
+; Calls returning i128 and { i64, i64 } of functions defined as i32 (i32);
+; the callers return one half. Each callee is called once, so the order of
+; the errors is the order of the callers.
+; MMULTI:       error: {{.*}}call_mismatch_i128{{.*}}mismatched call signature
+; MMULTI:       error: {{.*}}call_mismatch_pair{{.*}}mismatched call signature
+
+; MMULTI-IL:         {{^}}.method public static int32 'callee_a'(int32) cil managed{{$}}
+; MMULTI-IL:         {{^}}.method public static int32 'callee_b'(int32) cil managed{{$}}
+; MMULTI-IL-LABEL: .method {{.*}}'call_mismatch_i128'(
+; MMULTI-IL-NOT:   call
+; MMULTI-IL:       {{^}}  ret{{$}}
+; MMULTI-IL-NEXT:  {{^}}} // end of method 'call_mismatch_i128'{{$}}
+; MMULTI-IL-LABEL: .method {{.*}}'call_mismatch_pair'(
+; MMULTI-IL-NOT:   call
+; MMULTI-IL:       {{^}}  ret{{$}}
+; MMULTI-IL-NEXT:  {{^}}} // end of method 'call_mismatch_pair'{{$}}
+; MMULTI-IL-LABEL: .method {{.*}}'after_mismatch_multi'(
+; MMULTI-IL:       {{^}}  ldarg.0{{$}}
+; MMULTI-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; MMULTI-IL-NEXT:  {{^}}  add{{$}}
+; MMULTI-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "mismatch-multi.c"
+
+define i32 @callee_a(i32 %a) {
+  ret i32 %a
+}
+
+define i32 @callee_b(i32 %a) {
+  ret i32 %a
+}
+
+define i64 @call_mismatch_i128(i32 %x) {
+  %r = call i128 @callee_a(i32 %x)
+  %t = trunc i128 %r to i64
+  ret i64 %t
+}
+
+define i64 @call_mismatch_pair(i32 %x) {
+  %r = call { i64, i64 } @callee_b(i32 %x)
+  %e = extractvalue { i64, i64 } %r, 0
+  ret i64 %e
+}
+
+define i32 @after_mismatch_multi(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+;--- byval.ll
+; A byval argument at a call of a declared function; the caller's own
+; parameter is an ordinary pointer. The rejected call is not built, so the
+; declaration is not reported as an external call.
+; BYVAL:        error: {{.*}}call_byval{{.*}}byval arguments are not supported for MSIL yet
+
+; BYVAL-IL-LABEL: .method {{.*}}'call_byval'(
+; BYVAL-IL-NOT:   call
+; BYVAL-IL:       {{^}}  ret{{$}}
+; BYVAL-IL-NEXT:  {{^}}} // end of method 'call_byval'{{$}}
+; BYVAL-IL-LABEL: .method {{.*}}'after_byval'(
+; BYVAL-IL:       {{^}}  ldarg.0{{$}}
+; BYVAL-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; BYVAL-IL-NEXT:  {{^}}  add{{$}}
+; BYVAL-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "byval.c"
+
+%S = type { i64, i64 }
+
+declare void @g(ptr byval(%S))
+
+define void @call_byval(ptr %p) {
+  call void @g(ptr byval(%S) %p)
+  ret void
+}
+
+define i32 @after_byval(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+;--- arg-attrs.ll
+; nest and inalloca arguments at calls of declared functions.
+; ARGATTR:      error: {{.*}}call_nest{{.*}}nest arguments are not supported for MSIL
+; ARGATTR:      error: {{.*}}call_inalloca{{.*}}inalloca arguments are not supported for MSIL
+
+; ARGATTR-IL-LABEL: .method {{.*}}'call_nest'(
+; ARGATTR-IL-NOT:   call
+; ARGATTR-IL:       {{^}}  ret{{$}}
+; ARGATTR-IL-NEXT:  {{^}}} // end of method 'call_nest'{{$}}
+; ARGATTR-IL-LABEL: .method {{.*}}'call_inalloca'(
+; ARGATTR-IL-NOT:   call
+; ARGATTR-IL:       {{^}}  ret{{$}}
+; ARGATTR-IL-NEXT:  {{^}}} // end of method 'call_inalloca'{{$}}
+; ARGATTR-IL-LABEL: .method {{.*}}'after_arg_attrs'(
+; ARGATTR-IL:       {{^}}  ldarg.0{{$}}
+; ARGATTR-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; ARGATTR-IL-NEXT:  {{^}}  add{{$}}
+; ARGATTR-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "arg-attrs.c"
+
+declare i64 @n(ptr nest)
+declare i64 @ia(ptr inalloca(i32))
+
+define i64 @call_nest(ptr %p) {
+  %r = call i64 @n(ptr nest %p)
+  ret i64 %r
+}
+
+define i64 @call_inalloca(ptr %p) {
+  %r = call i64 @ia(ptr inalloca(i32) %p)
+  ret i64 %r
+}
+
+define i32 @after_arg_attrs(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+;--- musttail.ll
+; A musttail call (CIL 'tail.' is not used in Phase 1).
+; MUSTTAIL:     error: {{.*}}call_musttail{{.*}}musttail calls are not supported for MSIL yet
+
+; MUSTTAIL-IL:       {{^}}.method public static int32 'callee'(int32) cil managed{{$}}
+; MUSTTAIL-IL-LABEL: .method {{.*}}'call_musttail'(
+; MUSTTAIL-IL-NOT:   call
+; MUSTTAIL-IL:       {{^}}  ret{{$}}
+; MUSTTAIL-IL-NEXT:  {{^}}} // end of method 'call_musttail'{{$}}
+; MUSTTAIL-IL-LABEL: .method {{.*}}'after_musttail'(
+; MUSTTAIL-IL:       {{^}}  ldarg.0{{$}}
+; MUSTTAIL-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; MUSTTAIL-IL-NEXT:  {{^}}  add{{$}}
+; MUSTTAIL-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "musttail.c"
+
+define i32 @callee(i32 %a) {
+  ret i32 %a
+}
+
+define i32 @call_musttail(i32 %x) {
+  %r = musttail call i32 @callee(i32 %x)
+  ret i32 %r
+}
+
+define i32 @after_musttail(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+;--- callconv.ll
+; Calls of declared functions with the x86_stdcallcc and ghccc conventions.
+; CALLCONV:     error: {{.*}}call_stdcall{{.*}}calling convention is not supported for MSIL
+; CALLCONV:     error: {{.*}}call_ghc{{.*}}calling convention is not supported for MSIL
+
+; CALLCONV-IL-LABEL: .method {{.*}}'call_stdcall'(
+; CALLCONV-IL-NOT:   call
+; CALLCONV-IL:       {{^}}  ret{{$}}
+; CALLCONV-IL-NEXT:  {{^}}} // end of method 'call_stdcall'{{$}}
+; CALLCONV-IL-LABEL: .method {{.*}}'call_ghc'(
+; CALLCONV-IL-NOT:   call
+; CALLCONV-IL:       {{^}}  ret{{$}}
+; CALLCONV-IL-NEXT:  {{^}}} // end of method 'call_ghc'{{$}}
+; CALLCONV-IL-LABEL: .method {{.*}}'after_callconv'(
+; CALLCONV-IL:       {{^}}  ldarg.0{{$}}
+; CALLCONV-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; CALLCONV-IL-NEXT:  {{^}}  add{{$}}
+; CALLCONV-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "callconv.c"
+
+declare x86_stdcallcc i32 @h(i32)
+declare ghccc void @k(i32)
+
+define i32 @call_stdcall(i32 %a) {
+  %r = call x86_stdcallcc i32 @h(i32 %a)
+  ret i32 %r
+}
+
+define void @call_ghc(i32 %a) {
+  call ghccc void @k(i32 %a)
+  ret void
+}
+
+define i32 @after_callconv(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+;--- unknown-intrinsic.ll
+; Declarations named 'llvm.*' that are not LLVM intrinsics pass the IR
+; verifier, so their calls reach LowerCall as direct calls.
+; UNKINTR:      error: {{.*}}call_unknown_intrinsic{{.*}}unknown intrinsic 'llvm.foo.bar' is not supported for MSIL
+; UNKINTR:      error: {{.*}}call_unknown_intrinsic_void{{.*}}unknown intrinsic 'llvm.foo.baz' is not supported for MSIL
+
+; UNKINTR-IL-LABEL: .method {{.*}}'call_unknown_intrinsic'(
+; UNKINTR-IL-NOT:   call
+; UNKINTR-IL:       {{^}}  ret{{$}}
+; UNKINTR-IL-NEXT:  {{^}}} // end of method 'call_unknown_intrinsic'{{$}}
+; UNKINTR-IL-LABEL: .method {{.*}}'call_unknown_intrinsic_void'(
+; UNKINTR-IL-NOT:   call
+; UNKINTR-IL:       {{^}}  ret{{$}}
+; UNKINTR-IL-NEXT:  {{^}}} // end of method 'call_unknown_intrinsic_void'{{$}}
+; UNKINTR-IL-LABEL: .method {{.*}}'after_unknown_intrinsic'(
+; UNKINTR-IL:       {{^}}  ldarg.0{{$}}
+; UNKINTR-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; UNKINTR-IL-NEXT:  {{^}}  add{{$}}
+; UNKINTR-IL-NEXT:  {{^}}  ret{{$}}
+; UNKINTR-IL-NOT:   llvm.foo
+source_filename = "unknown-intrinsic.c"
+
+declare i32 @llvm.foo.bar(i32)
+declare void @llvm.foo.baz(i32)
+
+define i32 @call_unknown_intrinsic(i32 %x) {
+  %r = call i32 @llvm.foo.bar(i32 %x)
+  ret i32 %r
+}
+
+define void @call_unknown_intrinsic_void(i32 %x) {
+  call void @llvm.foo.baz(i32 %x)
+  ret void
+}
+
+define i32 @after_unknown_intrinsic(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+;--- diagnosed-callee.ll
+; A definition with inline assembly, called from two other functions.
+; MSILPrepareIR reports it, deletes its body and erases its calls, so this is
+; the only error: %{diag} rejects any second 'error:' line, such as "call to
+; external function 'has_asm' needs P/Invoke support (M8)" for the function
+; that became a declaration, and the CHECK-NOT makes that explicit.
+; DIAGCALLEE:     error: {{.*}}has_asm{{.*}}inline assembly is not supported for MSIL
+; DIAGCALLEE-NOT: needs P/Invoke support
+
+; DIAGCALLEE-IL-LABEL: .method {{.*}}'calls_has_asm'(
+; DIAGCALLEE-IL-NOT:   call
+; DIAGCALLEE-IL:       {{^}}  ret{{$}}
+; DIAGCALLEE-IL-NEXT:  {{^}}} // end of method 'calls_has_asm'{{$}}
+; DIAGCALLEE-IL-LABEL: .method {{.*}}'drops_has_asm'(
+; DIAGCALLEE-IL-NOT:   call
+; DIAGCALLEE-IL:       {{^}}  ret{{$}}
+; DIAGCALLEE-IL-NEXT:  {{^}}} // end of method 'drops_has_asm'{{$}}
+; DIAGCALLEE-IL-LABEL: .method {{.*}}'after_diagnosed_callee'(
+; DIAGCALLEE-IL:       {{^}}  ldarg.0{{$}}
+; DIAGCALLEE-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; DIAGCALLEE-IL-NEXT:  {{^}}  add{{$}}
+; DIAGCALLEE-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "diagnosed-callee.c"
+
+define i32 @has_asm(i32 %x) noinline {
+  %r = call i32 asm "nop", "=r,r"(i32 %x)
+  ret i32 %r
+}
+
+define i32 @calls_has_asm(i32 %x) {
+  %r = call i32 @has_asm(i32 %x)
+  %s = add i32 %r, 1
+  ret i32 %s
+}
+
+define void @drops_has_asm(i32 %x) {
+  %r = call i32 @has_asm(i32 %x)
+  ret void
+}
+
+define i32 @after_diagnosed_callee(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+;--- invoke.ll
+; A function with a personality invokes a variadic function whose result
+; needs two values, a definition whose body MSILPrepareIR deletes (inline
+; assembly), and the variadic function again; all three share one landing
+; pad, which has a PHI. The errors are the inline assembly and the two
+; variadic calls, nothing crashes, and the rest of the module compiles.
+; INVOKE:       error: {{.*}}has_asm{{.*}}inline assembly is not supported for MSIL
+; INVOKE:       error: {{.*}}invokes{{.*}}calls to variadic functions are not supported for MSIL yet
+; INVOKE:       error: {{.*}}invokes{{.*}}calls to variadic functions are not supported for MSIL yet
+
+; INVOKE-IL-LABEL: .method {{.*}}'invokes'(
+; INVOKE-IL-SAME:  int32) cil managed{{$}}
+; INVOKE-IL-NOT:   call
+; INVOKE-IL:       {{^}}  ret{{$}}
+; INVOKE-IL-NEXT:  {{^}}} // end of method 'invokes'{{$}}
+; INVOKE-IL-LABEL: .method {{.*}}'after_invoke'(
+; INVOKE-IL:       {{^}}  ldarg.0{{$}}
+; INVOKE-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; INVOKE-IL-NEXT:  {{^}}  add{{$}}
+; INVOKE-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "invoke.c"
+
+declare i32 @__gxx_personality_v0(...)
+declare i128 @vi(i32, ...)
+
+define i32 @has_asm(i32 %x) noinline {
+  %r = call i32 asm "nop", "=r,r"(i32 %x)
+  ret i32 %r
+}
+
+define i64 @invokes(i32 %x) personality ptr @__gxx_personality_v0 {
+entry:
+  %a = invoke i128 (i32, ...) @vi(i32 %x, i32 1)
+          to label %ok unwind label %lp
+ok:
+  %b = invoke i32 @has_asm(i32 %x)
+          to label %ok2 unwind label %lp
+ok2:
+  %c = invoke i128 (i32, ...) @vi(i32 %b, i32 2)
+          to label %done unwind label %lp
+done:
+  %t = trunc i128 %c to i64
+  ret i64 %t
+lp:
+  %p = phi i64 [ 1, %entry ], [ 2, %ok ], [ 3, %ok2 ]
+  %l = landingpad { ptr, i32 } cleanup
+  ret i64 %p
+}
+
+define i32 @after_invoke(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+;--- alias-callers.ll
+; Calls of an alias whose result is used by an add, of an ifunc, and of an
+; alias whose call-site result is i128 (truncated to i64; a function that
+; returns i128 itself needs stores, M7). The errors are the alias and ifunc
+; definitions, in module order; their callers call nothing and return an
+; undefined value, an uninitialized local at -O2.
+; ALIAS:        error: {{.*}}alias @alias_fn is not supported for MSIL
+; ALIAS:        error: {{.*}}alias @alias128 is not supported for MSIL
+; ALIAS:        error: {{.*}}ifunc @ifunc_fn is not supported for MSIL
+
+; ALIAS-IL-LABEL: .method {{.*}}'calls_alias'(
+; ALIAS-IL-SAME:  int32) cil managed{{$}}
+; ALIAS-IL-NEXT:  {{^\{$}}
+; ALIAS-IL-NEXT:  {{^}}  .maxstack 1{{$}}
+; ALIAS-IL-NEXT:  {{^}}  .locals (int32){{$}}
+; ALIAS-IL-NEXT:  {{^}}  ldloc.0{{$}}
+; ALIAS-IL-NEXT:  {{^}}  ret{{$}}
+; ALIAS-IL-NEXT:  {{^}}} // end of method 'calls_alias'{{$}}
+; ALIAS-IL-LABEL: .method {{.*}}'calls_ifunc'(
+; ALIAS-IL-SAME:  int32) cil managed{{$}}
+; ALIAS-IL-NEXT:  {{^\{$}}
+; ALIAS-IL-NEXT:  {{^}}  .maxstack 1{{$}}
+; ALIAS-IL-NEXT:  {{^}}  .locals (int32){{$}}
+; ALIAS-IL-NEXT:  {{^}}  ldloc.0{{$}}
+; ALIAS-IL-NEXT:  {{^}}  ret{{$}}
+; ALIAS-IL-NEXT:  {{^}}} // end of method 'calls_ifunc'{{$}}
+; ALIAS-IL-LABEL: .method {{.*}}'calls_alias_i128'(
+; ALIAS-IL-SAME:  native int) cil managed{{$}}
+; ALIAS-IL-NEXT:  {{^\{$}}
+; ALIAS-IL-NEXT:  {{^}}  .maxstack 1{{$}}
+; ALIAS-IL-NEXT:  {{^}}  .locals (native int){{$}}
+; ALIAS-IL-NEXT:  {{^}}  ldloc.0{{$}}
+; ALIAS-IL-NEXT:  {{^}}  ret{{$}}
+; ALIAS-IL-NEXT:  {{^}}} // end of method 'calls_alias_i128'{{$}}
+; ALIAS-IL-LABEL: .method {{.*}}'after_alias'(
+; ALIAS-IL:       {{^}}  ldarg.0{{$}}
+; ALIAS-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; ALIAS-IL-NEXT:  {{^}}  add{{$}}
+; ALIAS-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "alias-callers.c"
+
+define i32 @target(i32 %x) noinline {
+  ret i32 %x
+}
+
+@alias_fn = alias i32 (i32), ptr @target
+@alias128 = alias i128 (i64), ptr @target
+@ifunc_fn = ifunc i32 (i32), ptr @resolver
+
+define ptr @resolver() {
+  ret ptr null
+}
+
+define i32 @calls_alias(i32 %x) {
+  %r = call i32 @alias_fn(i32 %x)
+  %s = add i32 %r, 1
+  ret i32 %s
+}
+
+define i32 @calls_ifunc(i32 %x) {
+  %r = call i32 @ifunc_fn(i32 %x)
+  ret i32 %r
+}
+
+define i64 @calls_alias_i128(i64 %x) {
+  %r = call i128 @alias128(i64 %x)
+  %t = trunc i128 %r to i64
+  ret i64 %t
+}
+
+define i32 @after_alias(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+;--- extern.ll
+; One error at the end of the module, naming the callee; the declaration that
+; is never called is not mentioned.
+; EXTERN:       error: {{.*}}call to external function 'ext' needs P/Invoke support (M8)
+source_filename = "extern.c"
+
+declare i32 @ext(i32)
+declare i32 @unused_decl(i32)
+
+define i32 @call_ext(i32 %x) {
+  %r = call i32 @ext(i32 %x)
+  ret i32 %r
+}
+
+define i32 @after_ext(i32 %a, i32 %b) {
+  %r = sub i32 %a, %b
+  ret i32 %r
+}
+
+;--- avail.ll
+; f1 calls the available_externally definition ae twice and the declaration
+; ext once, f2 calls ext twice. Neither callee is emitted and each is reported
+; once, in the order of first use: ae, then ext.
+; AVAIL:        error: {{.*}}call to external function 'ae' needs P/Invoke support (M8)
+; AVAIL:        error: {{.*}}call to external function 'ext' needs P/Invoke support (M8)
+
+; AVAIL-IL-NOT:   {{^}}.method {{.*}}'ae'(
+; AVAIL-IL-LABEL: .method {{.*}}'f1'(
+; AVAIL-IL:       {{^}}  ldarg.0{{$}}
+; AVAIL-IL-NEXT:  {{^}}  call int32 'ae'(int32){{$}}
+; AVAIL-IL-NEXT:  {{^}}  call int32 'ext'(int32){{$}}
+; AVAIL-IL-NEXT:  {{^}}  call int32 'ae'(int32){{$}}
+; AVAIL-IL-NEXT:  {{^}}  ret{{$}}
+; AVAIL-IL-LABEL: .method {{.*}}'f2'(
+; AVAIL-IL:       {{^}}  ldarg.0{{$}}
+; AVAIL-IL-NEXT:  {{^}}  call int32 'ext'(int32){{$}}
+; AVAIL-IL-NEXT:  {{^}}  call int32 'ext'(int32){{$}}
+; AVAIL-IL-NEXT:  {{^}}  ret{{$}}
+; AVAIL-IL-NOT:   {{^}}.method {{.*}}'{{ae|ext}}'(
+source_filename = "avail.c"
+
+define available_externally i32 @ae(i32 %x) {
+  ret i32 %x
+}
+declare i32 @ext(i32)
+
+define i32 @f1(i32 %x) {
+  %a = call i32 @ae(i32 %x)
+  %b = call i32 @ext(i32 %a)
+  %c = call i32 @ae(i32 %b)
+  ret i32 %c
+}
+
+define i32 @f2(i32 %x) {
+  %a = call i32 @ext(i32 %x)
+  %b = call i32 @ext(i32 %a)
+  ret i32 %b
+}

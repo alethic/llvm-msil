@@ -41,6 +41,11 @@
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/Register.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DataLayout.h"
@@ -58,6 +63,7 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Pass.h"
 #include "llvm/PassRegistry.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
@@ -113,6 +119,50 @@ getFunctionInfoSignature(const MSILFunctionInfo &MFI,
   for (MVT VT : MFI.getParams())
     Sig.Params.push_back(MSIL::toValType(VT, PointerSizeInBits));
   return Sig;
+}
+
+/// The signature that the call \p MI actually uses: its explicit register
+/// defs are the values it pushes and its explicit register uses the values it
+/// pops, in CIL types (after MSILExplicitLocals every register operand is a
+/// value on the evaluation stack).
+[[maybe_unused]] static MSIL::Signature
+getCallSiteSignature(const MachineInstr &MI) {
+  const MachineFunction &MF = *MI.getMF();
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+  unsigned PointerSizeInBits = MF.getDataLayout().getPointerSizeInBits();
+  MSIL::Signature Sig;
+  for (const MachineOperand &MO : MI.explicit_operands()) {
+    if (!MO.isReg())
+      continue;
+    Register Reg = MO.getReg();
+    const TargetRegisterClass *RC = Reg.isVirtual()
+                                        ? MRI.getRegClass(Reg)
+                                        : TRI.getMinimalPhysRegClass(Reg);
+    MSIL::ValType T =
+        MSIL::toValType(*TRI.legalclasstypes_begin(*RC), PointerSizeInBits);
+    if (MO.isDef())
+      Sig.Results.push_back(T);
+    else
+      Sig.Params.push_back(T);
+  }
+  return Sig;
+}
+
+/// Whether \p MI, if it is a direct call, pushes and pops exactly what the
+/// 'call' token, which spells the callee's signature, promises. LowerCall
+/// builds a direct call only when the call site's function type is the
+/// callee's and lowers its operands and results the way getSignature lowers
+/// that type; a mismatch would make the JIT reject the method
+/// (MissingMethodException or an unbalanced stack).
+[[maybe_unused]] static bool matchesCalleeSignature(const MachineInstr &MI,
+                                                    MSILAsmPrinter &AP) {
+  if (!MSIL::isCallDirect(MI.getOpcode()))
+    return true;
+  const MachineOperand &Callee = MSIL::getCalleeOp(MI);
+  const auto *F =
+      Callee.isGlobal() ? dyn_cast<Function>(Callee.getGlobal()) : nullptr;
+  return !F || getCallSiteSignature(MI) == AP.getSignature(*F);
 }
 
 /// ldarg, starg, ldloc and stloc take 16-bit indices, and ilasm silently
@@ -180,10 +230,20 @@ MSILTargetStreamer &MSILAsmPrinter::getTargetStreamer() {
 }
 
 const MSIL::Signature &MSILAsmPrinter::getSignature(const Function &F) {
-  auto It = FuncSigs.find(&F);
-  if (It != FuncSigs.end())
+  assert(!F.isIntrinsic() && "an intrinsic has no CIL method");
+  auto [It, Inserted] = FuncSigs.try_emplace(&F, nullptr);
+  if (!Inserted)
     return *It->second;
 
+  // Only the IR function type counts, never a body or the caller: ISel lowers
+  // the formal arguments and the return of a definition, and the operands and
+  // results of every call to it, from this type (call sites whose type
+  // differs from the callee's are diagnosed by LowerCall), so a declaration
+  // gets the signature its definition would have. Narrow integers widen to
+  // int32, 64-bit integers and pointers are native int (decision D2), and a
+  // return of more than one value becomes a leading pointer parameter. The
+  // variable part of a variadic function is not part of the signature
+  // (variadic definitions and calls are diagnosed in Phase 1, D19).
   SmallVector<MVT, 4> Params;
   SmallVector<MVT, 1> Results;
   MSIL::computeSignatureVTs(F.getFunctionType(), &F, F, TM, Params, Results);
@@ -193,7 +253,8 @@ const MSIL::Signature &MSILAsmPrinter::getSignature(const Function &F) {
     Sig->Results.push_back(MSIL::toValType(VT, PointerSizeInBits));
   for (MVT VT : Params)
     Sig->Params.push_back(MSIL::toValType(VT, PointerSizeInBits));
-  FuncSigs[&F] = Sig;
+  assert(Sig->Results.size() <= 1 && "a CIL method returns at most one value");
+  It->second = Sig;
   return *Sig;
 }
 
@@ -204,7 +265,9 @@ MSILAsmPrinter::internSignature(const MSIL::Signature &S) {
 }
 
 void MSILAsmPrinter::noteExternFunction(const Function &F) {
-  assert(F.isDeclarationForLinker() &&
+  // An available_externally definition counts as undefined: it gets no
+  // MachineFunction and therefore no method.
+  assert(F.isDeclarationForLinker() && !F.isIntrinsic() &&
          "only undefined functions become P/Invoke declarations");
   ExternFuncs.insert({&F, &getSignature(F)});
 }
@@ -315,6 +378,16 @@ void MSILAsmPrinter::emitStartOfAsmFile(Module &M) {
 }
 
 void MSILAsmPrinter::emitEndOfAsmFile(Module &M) {
+  // Temporary, until M8 declares undefined functions as P/Invoke methods
+  // (decision D14): Phase 1 has no linker, so a call to a function that this
+  // module does not define cannot be resolved. The call itself was printed
+  // already; the error makes llc and clang exit with 1. One error per
+  // function, in the order of first use.
+  for (const Function *F : ExternFuncs.keys())
+    M.getContext().emitError("call to external function '" +
+                             MSIL::getILName(*F, TM) +
+                             "' needs P/Invoke support (M8)");
+
   // The P/Invoke declarations, the data image, the address fields and the
   // module initializer come with globals and P/Invoke in M8, before the entry
   // point. An available_externally main has no method (no MachineFunction is
@@ -535,6 +608,9 @@ void MSILAsmPrinter::emitInstruction(const MachineInstr *MI) {
   // registers; MSILExplicitLocals has turned their uses into ldarg.
   if (MSIL::isArgument(MI->getOpcode()))
     return;
+
+  assert(matchesCalleeSignature(*MI, *this) &&
+         "a direct call does not match its callee's signature");
 
   MSILMCInstLower MCInstLowering(OutContext, *this);
   MCInst TmpInst;

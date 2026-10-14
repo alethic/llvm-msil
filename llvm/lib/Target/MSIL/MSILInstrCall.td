@@ -26,8 +26,10 @@ def MSILcallseq_start : SDNode<"ISD::CALLSEQ_START", SDT_MSILCallSeqStart,
 def MSILcallseq_end : SDNode<"ISD::CALLSEQ_END", SDT_MSILCallSeqEnd,
                              [SDNPHasChain, SDNPOptInGlue, SDNPOutGlue]>;
 
-// Call sequence markers. They print nothing and are erased by
-// MSILFrameLowering::eliminateCallFramePseudoInstr.
+// Call sequence markers. MSILTargetLowering::LowerCall emits no CALLSEQ_START
+// or CALLSEQ_END (as in WebAssembly, there is no outgoing argument area), so
+// these only give MSILInstrInfo its call frame opcodes. They would print
+// nothing and are erased by MSILFrameLowering::eliminateCallFramePseudoInstr.
 let isCodeGenOnly = 1 in {
 defm ADJCALLSTACKDOWN : I<(outs), (ins i32imm:$amt, i32imm:$amt2),
                           [(MSILcallseq_start timm:$amt, timm:$amt2)]>;

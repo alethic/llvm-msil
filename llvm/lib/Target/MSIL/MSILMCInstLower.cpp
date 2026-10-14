@@ -18,6 +18,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "MSILMCInstLower.h"
+#include "MCTargetDesc/MSILMCExpr.h"
+#include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "MSILAsmPrinter.h"
 #include "MSILUtilities.h"
 #include "llvm/ADT/StringRef.h"
@@ -39,7 +41,35 @@
 
 using namespace llvm;
 
+MCOperand
+MSILMCInstLower::lowerFunctionOperand(const MachineOperand &MO) const {
+  const auto &F = cast<Function>(*MO.getGlobal());
+  assert(!F.isIntrinsic() && "intrinsics are never called or referenced");
+  // MSILTargetLowering::isOffsetFoldingLegal never folds an offset into a
+  // function address: 'call' and 'ldftn' name a method, not an address.
+  if (MO.getOffset() != 0)
+    reportFatalInternalError("MSIL: reference to function '" +
+                             MSIL::getILName(F, Printer.TM) +
+                             "' with an offset");
+
+  // An undefined function, or one whose body is not compiled here
+  // (available_externally), becomes a P/Invoke declaration in the module
+  // trailer.
+  if (F.isDeclarationForLinker())
+    Printer.noteExternFunction(F);
+
+  // The method header of a definition prints the same signature, so the call
+  // token always matches the method.
+  return MCOperand::createExpr(MSILMemberRefExpr::createMethod(
+      MSIL::getILName(F, Printer.TM), &Printer.getSignature(F), Ctx));
+}
+
 void MSILMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
+  // The call-site signature operand of 'calli' is built here from the
+  // instruction's operands in M9.
+  if (MSIL::isCallIndirect(MI->getOpcode()))
+    reportFatalUsageError("MSIL: indirect calls are implemented in M9");
+
   OutMI.setOpcode(MI->getOpcode());
 
   for (const MachineOperand &MO : MI->operands()) {
@@ -89,11 +119,13 @@ void MSILMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
       break;
     case MachineOperand::MO_GlobalAddress: {
       const GlobalValue *GV = MO.getGlobal();
-      StringRef Name = MSIL::getILName(*GV, Printer.TM);
-      if (isa<Function>(GV))
-        reportFatalUsageError("MSIL: references to functions ('" + Name +
-                              "') are implemented in M4");
-      reportFatalUsageError("MSIL: references to global variables ('" + Name +
+      // The callee of a direct 'call' (and from M8 the target of 'ldftn').
+      if (isa<Function>(GV)) {
+        MCOp = lowerFunctionOperand(MO);
+        break;
+      }
+      reportFatalUsageError("MSIL: references to global variables ('" +
+                            MSIL::getILName(*GV, Printer.TM) +
                             "') are implemented in M8");
     }
     case MachineOperand::MO_ExternalSymbol:

@@ -16,7 +16,8 @@
 /// This class prints an MSIL MCInst as ILAsm text: one CIL opcode per line
 /// with a two-space indent. Opcodes that take an argument index, a local index
 /// or an integer constant are printed in their shortest form (ldarg.0,
-/// ldloc.s 4, ldc.i4.m1, ...).
+/// ldloc.s 4, ldc.i4.m1, ...); branches always in their long form (br @BB0_2,
+/// brtrue @BB0_2, ...).
 ///
 /// MCInsts keep the operand positions of the MachineInstr: register operands
 /// are placeholders for values on the evaluation stack and print nothing, so
@@ -78,9 +79,14 @@ public:
   static const char *getRegisterName(MCRegister Reg);
 
 private:
+  /// 'switch (<targets>)' then 'br <default>' (BR_TABLE_I32).
   void printBrTable(const MCInst *MI, const MCSubtargetInfo &STI,
                     raw_ostream &O);
+  /// 'call <method reference>' (CALL) or 'calli <call-site signature>'
+  /// (CALL_INDIRECT): the one MSILMemberRefExpr operand among the register
+  /// placeholders of the results and arguments.
   void printCall(const MCInst *MI, const MCSubtargetInfo &STI, raw_ostream &O);
+  /// The 'ldc.i4 <offset>; add' after the 'ldsfld' of a GLOBAL_ADDR.
   void printGlobalAddrOffset(const MCInst *MI, raw_ostream &O);
 };
 

@@ -20,7 +20,10 @@
 #include "MSIL.h"
 #include "MSILISelLowering.h"
 #include "MSILMachineFunctionInfo.h"
+#include "MSILSelectionDAGInfo.h"
 #include "MSILTargetMachine.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
@@ -57,6 +60,14 @@ public:
 
     if (MF.getFunction().hasFnAttribute(Attribute::Naked))
       diagnoseNakedFunction(MF);
+
+    // SelectionDAGISelLegacy and SelectionDAGISelPass have just set this from
+    // MF.shouldUseDebugInstrRef(), which is true on every x86_64 triple at -O1
+    // and above. Instruction-referencing LiveDebugValues assumes allocated
+    // physical registers, which MSIL never has, so keep DBG_VALUE variable
+    // locations as the aarch64 MSIL triples and WebAssembly do; the MSIL
+    // machine passes are written for them.
+    MF.setUseDebugInstrRef(false);
 
     return SelectionDAGISel::runOnMachineFunction(MF);
   }
@@ -113,6 +124,8 @@ void MSILDAGToDAGISel::Select(SDNode *Node) {
     return;
   }
 
+  SDLoc DL(Node);
+
   switch (Node->getOpcode()) {
   case ISD::ARITH_FENCE:
     // The generic selection produces TargetOpcode::ARITH_FENCE, a meta
@@ -122,6 +135,31 @@ void MSILDAGToDAGISel::Select(SDNode *Node) {
     ReplaceUses(SDValue(Node, 0), Node->getOperand(0));
     CurDAG->RemoveDeadNode(Node);
     return;
+
+  case MSILISD::CALL: {
+    // CALL has both variable operands and variable results, but ISel only
+    // supports one or the other. Split calls into two nodes glued together, one
+    // for the operands and one for the results. These two nodes will be
+    // recombined in a custom inserter hook into a single MachineInstr.
+    //
+    // Unlike WebAssembly there is no address wrapper to strip from the callee:
+    // MSILTargetLowering::LowerCall already made a direct callee a
+    // TargetGlobalAddress, and any other callee is an address in a register
+    // (an indirect call).
+    SmallVector<SDValue, 16> Ops(drop_begin(Node->op_values()));
+
+    // Add the chain last
+    Ops.push_back(Node->getOperand(0));
+    MachineSDNode *CallParams =
+        CurDAG->getMachineNode(MSIL::CALL_PARAMS, DL, MVT::Glue, Ops);
+
+    SDValue Link(CallParams, 0);
+    MachineSDNode *CallResults =
+        CurDAG->getMachineNode(MSIL::CALL_RESULTS, DL, Node->getVTList(), Link);
+    ReplaceNode(Node, CallResults);
+    return;
+  }
+
   default:
     break;
   }

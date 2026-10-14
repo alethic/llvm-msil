@@ -60,7 +60,8 @@ private:
   /// Owns every signature handed out by the services below. They outlive the
   /// MCInsts and MSILMemberRefExprs that point to them.
   SpecificBumpPtrAllocator<MSIL::Signature> SigAlloc;
-  /// Signatures of IR functions: definitions, declarations, ldftn targets.
+  /// Signatures of IR functions: definitions, call targets (defined or not)
+  /// and ldftn targets.
   DenseMap<const Function *, const MSIL::Signature *> FuncSigs;
   /// Signatures of external symbols (library calls), by name.
   StringMap<const MSIL::Signature *> ExtSymSigs;
@@ -80,19 +81,25 @@ public:
   /// MSILTargetNullStreamer for -filetype=null).
   MSILTargetStreamer &getTargetStreamer();
 
-  /// The CIL signature of \p F, computed once per module with
-  /// MSIL::computeSignatureVTs, the function ISel uses, and mapped through
-  /// MSIL::toValType. The method header of a definition, every call site and
-  /// 'ldftn', and the P/Invoke declaration of an undefined function all print
-  /// this one signature.
+  /// The CIL signature of \p F, a definition or a declaration alike, computed
+  /// once per module from the IR function type with MSIL::computeSignatureVTs
+  /// (the lowering ISel applies to formal arguments, returns and call
+  /// operands) and mapped through MSIL::toValType. The method header of a
+  /// definition, every call site and 'ldftn', and the P/Invoke declaration of
+  /// an undefined function all print this one signature, so a call token
+  /// always spells its callee's method header. The reference stays valid for
+  /// the rest of the module.
   const MSIL::Signature &getSignature(const Function &F);
 
   /// Returns the unique copy of the call-site signature \p S ('calli'), which
   /// lives as long as the printer.
   const MSIL::Signature &internSignature(const MSIL::Signature &S);
 
-  /// Records that the undefined function \p F is referenced from code or
-  /// data, so that the module trailer declares it as a P/Invoke.
+  /// Records that the undefined function \p F (a declaration, or an
+  /// available_externally definition, which gets no method) is referenced
+  /// from code or data, so that the module trailer declares it as a P/Invoke.
+  /// Until P/Invoke output exists (M8), emitEndOfAsmFile reports each
+  /// recorded function as an error.
   void noteExternFunction(const Function &F);
 
   /// Records that the external symbol \p Name (a library call) is called with

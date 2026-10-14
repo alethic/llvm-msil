@@ -14,7 +14,10 @@
 ///
 /// \file
 /// Print MCInst instructions as ILAsm text. The TableGen'erated printer prints
-/// the asm strings of MSILInstrInfo.td. Printed here instead: the short forms
+/// the asm strings of MSILInstrInfo.td: plain opcodes such as 'add' or
+/// 'cgt.un', and branches, which always use the long forms ('br', 'brtrue',
+/// 'brfalse') with a block label operand ('@BB<function>_<block>', from
+/// MCAsmInfo's InternalSymbolPrefix). Printed here instead: the short forms
 /// of the argument, local and constant opcodes, which depend on the value of
 /// the immediate; 'switch', 'call' and 'calli', whose operands are variadic;
 /// and the offset of a global address.
@@ -39,6 +42,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
+#include <optional>
 
 using namespace llvm;
 
@@ -210,8 +214,8 @@ void MSILInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     break;
   default: {
     // Records with an empty asm string (ARGUMENT_*, COPY_*, TEE_*, the call
-    // sequence markers and the CALL_PARAMS/CALL_RESULTS pseudos) are never
-    // lowered to MCInsts.
+    // sequence markers, the CALL_PARAMS/CALL_RESULTS pseudos and the SELECT_*
+    // pseudos, which custom inserters replace) are never lowered to MCInsts.
     if (!getMnemonic(*MI).first)
       reportFatalInternalError(Twine("MSIL: instruction ") +
                                MII.getName(MI->getOpcode()) +
@@ -256,19 +260,54 @@ void MSILInstPrinter::printBrTable(const MCInst *MI, const MCSubtargetInfo &STI,
 
 void MSILInstPrinter::printCall(const MCInst *MI, const MCSubtargetInfo &STI,
                                 raw_ostream &O) {
-  // The results and arguments are register placeholders. The one other
-  // operand is the method reference of a 'call' (operand index = number of
-  // results) or the call-site signature of a 'calli', both MSILMemberRefExprs.
-  unsigned I = 0, E = MI->getNumOperands();
-  while (I != E && MI->getOperand(I).isReg())
-    ++I;
-  if (I == E) {
-    if (MI->getOpcode() == MSIL::CALL_INDIRECT)
-      reportFatalInternalError("MSIL: calli signatures are implemented in M9");
-    reportFatalInternalError("MSIL: call without a method reference");
+  // call int32 'f'(int32, native int)
+  // calli int32(native int)
+  // The results and the arguments are register placeholders (values the call
+  // pushes and pops). The one other operand is an MSILMemberRefExpr: for
+  // CALL, whose variadic operands are defs (variadicOpsAreDefs), the method
+  // reference after the results (operand index = number of results), which
+  // prints the callee's signature exactly as its .method header does; for
+  // CALL_INDIRECT the call-site signature, which MSILMCInstLower adds next to
+  // the placeholders and the callee address (M9).
+  bool IsIndirect = MI->getOpcode() == MSIL::CALL_INDIRECT;
+  std::optional<unsigned> RefOp;
+  for (unsigned I = 0, E = MI->getNumOperands(); I != E; ++I) {
+    if (MI->getOperand(I).isReg())
+      continue;
+    if (RefOp)
+      reportFatalInternalError(Twine("MSIL: ") + MII.getName(MI->getOpcode()) +
+                               " has more than one non-register operand");
+    RefOp = I;
   }
+  if (!RefOp)
+    reportFatalInternalError(Twine("MSIL: ") + MII.getName(MI->getOpcode()) +
+                             " has no method reference or call-site signature");
+
+  const MCOperand &Op = MI->getOperand(*RefOp);
+  const auto *Ref =
+      Op.isExpr() ? dyn_cast<MSILMemberRefExpr>(Op.getExpr()) : nullptr;
+  // 'call' takes a method (a BCL method is preformatted text); 'calli' takes
+  // a stand-alone signature.
+  bool KindOK = false;
+  if (Ref) {
+    switch (Ref->getKind()) {
+    case MSILMemberRefExpr::Method:
+    case MSILMemberRefExpr::BCLMember:
+      KindOK = !IsIndirect;
+      break;
+    case MSILMemberRefExpr::StandAloneSig:
+      KindOK = IsIndirect;
+      break;
+    case MSILMemberRefExpr::Field:
+      break;
+    }
+  }
+  if (!KindOK)
+    reportFatalInternalError(Twine("MSIL: ") + MII.getName(MI->getOpcode()) +
+                             (IsIndirect ? " without a call-site signature"
+                                         : " without a method reference"));
   O << getMnemonic(*MI).first << ' ';
-  printOperand(MI, I, STI, O);
+  printOperand(MI, *RefOp, STI, O);
 }
 
 void MSILInstPrinter::printGlobalAddrOffset(const MCInst *MI, raw_ostream &O) {
