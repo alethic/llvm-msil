@@ -21,6 +21,7 @@
 #include "MSILSelectionDAGInfo.h"
 #include "MSILSubtarget.h"
 #include "llvm/ADT/FloatingPointMode.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineJumpTableInfo.h"
@@ -114,15 +115,17 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
     // explicit FSINCOS into the two calls.
     setOperationAction({ISD::FSIN, ISD::FCOS}, T, LibCall);
     setOperationAction(ISD::FSINCOS, T, Custom);
-    // frexp and modf return their second result through a pointer to a stack
-    // slot, which needs frames (M7): until M8 makes them math-library
-    // P/Invokes, LowerFFREXP_FMODF reports the libcall with LowerCall's text
-    // instead of building it.
+    // frexp and modf are libm calls until M8 makes them math-library
+    // P/Invokes (decision D14). Expanded, most would become the libcall that
+    // LowerCall reports, but the MSVC C runtime has no frexpf, so a float32
+    // frexp would expand inline there and compile on Windows only.
+    // LowerFFREXP_FMODF reports every one with LowerCall's text instead,
+    // naming the double function for that float32 call.
     setOperationAction({ISD::FFREXP, ISD::FMODF}, T, Custom);
     // llvm.fptrunc.round: only round.tonearest is supported.
     setOperationAction(ISD::FPTRUNC_ROUND, T, Custom);
     // fabs and copysign: the generic expansions work on the integer bits,
-    // through BITCAST and therefore a stack slot (M7).
+    // through BITCAST and therefore a stack slot (decision D16).
     setOperationAction({ISD::FABS, ISD::FCOPYSIGN}, T, Expand);
     // f16 and bf16 are not legal types: their values are held as integers,
     // and arithmetic converts them to and from f32. Those conversions are the
@@ -134,7 +137,7 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
     setOperationAction({ISD::BF16_TO_FP, ISD::FP_TO_BF16}, T, Custom);
   }
   // There is no reinterpreting opcode: a bitcast between an integer and a
-  // floating-point value goes through a stack slot, which needs frames (M7).
+  // floating-point value goes through a stack slot (decision D16).
   setOperationAction(ISD::BITCAST, {MVT::i32, MVT::i64, MVT::f32, MVT::f64},
                      Expand);
   // conv.i4, conv.u4, conv.i and conv.u do not saturate on .NET 8 and .NET
@@ -243,10 +246,44 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // milestone that implements an operation replaces its stub body (and keeps
   // the action), the stub fails naming that milestone (D33) instead of leaving
   // the node to 'Cannot select'.
-  // Frame indices (M7), global addresses and external symbols (M8). Pointers
-  // are I64.
+  // Frame indices; global addresses and external symbols (M8). Pointers are
+  // I64. A frame index becomes a TargetFrameIndex operand of its users, which
+  // MSILRegisterInfo::eliminateFrameIndex rewrites into an address relative
+  // to the frame base (decision D13).
   setOperationAction({ISD::GlobalAddress, ISD::ExternalSymbol, ISD::FrameIndex},
                      MVT::i64, Custom);
+  // A CopyToReg cannot take a frame index operand: LowerCopyToReg copies it
+  // into a register first.
+  setOperationAction(ISD::CopyToReg, MVT::Other, Custom);
+  // The static frame is the only stack in Phase 1. Dynamic allocas (VLAs),
+  // the stack saves and restores around them and the frame address need the
+  // phase-3 shadow stack; CIL has no return address, entry stack pointer or
+  // DWARF call frame, and no executable memory for trampolines.
+  // LowerOperation diagnoses each of them with its own text (plan section 12,
+  // 'M7.b diagnostic texts amended'); STACKSAVE and STACKRESTORE stay silent
+  // in a function with a dynamic alloca, whose DYNAMIC_STACKALLOC reports the
+  // error once. The legalizer would treat FRAMEADDR, RETURNADDR,
+  // ADDROFRETURNADDR, SPONENTRY and the trampolines as Custom anyway.
+  // EH_DWARF_CFA must be Custom: a Legal one is expanded into a FRAMEADDR,
+  // which would report the frame address instead.
+  setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i64, Custom);
+  setOperationAction({ISD::STACKSAVE, ISD::STACKRESTORE, ISD::INIT_TRAMPOLINE},
+                     MVT::Other, Custom);
+  setOperationAction({ISD::FRAMEADDR, ISD::RETURNADDR, ISD::ADDROFRETURNADDR,
+                      ISD::SPONENTRY, ISD::ADJUST_TRAMPOLINE,
+                      ISD::EH_DWARF_CFA},
+                     MVT::i64, Custom);
+  // The stack address (phase-3 shadow stack), the setjmp/longjmp builtins
+  // (phase 3) and llvm.eh.return are diagnosed the same way, and must be
+  // Custom too. The legalizer looks up the EH nodes by their first result
+  // type and silently turns Legal into Expand, which drops the longjmp and
+  // the eh.return, folds the setjmp to 0 and leaves the dispatch setup to
+  // 'Cannot select'. It looks up STACKADDRESS on MVT::Other, and the default
+  // Expand prints a generic text with no function name or source location.
+  setOperationAction(ISD::EH_SJLJ_SETJMP, MVT::i32, Custom);
+  setOperationAction({ISD::EH_SJLJ_LONGJMP, ISD::EH_SJLJ_SETUP_DISPATCH,
+                      ISD::EH_RETURN, ISD::STACKADDRESS},
+                     MVT::Other, Custom);
   // Jump tables become a CIL 'switch' on an int32 index (LowerBR_JT, decision
   // D35). Custom, like Legal, keeps jump tables allowed (areJTsAllowed). An
   // indirectbr never gets here: IndirectBrExpand turns it into a switch.
@@ -266,6 +303,37 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // the libcall in the type legalizer instead, before any call is built.
   setOperationAction({ISD::SDIV, ISD::UDIV, ISD::SREM, ISD::UREM}, MVT::i128,
                      Custom);
+
+  // Loads and stores. ldind and stind (MSILInstrMemory.td) read and write
+  // int32, native int, float32 and float64 values, and int32 values from and
+  // to 8 and 16 bits; an i1 in memory is a byte. The legalizer splits every
+  // other extending load and truncating store into one of those and a
+  // conversion: a native int goes to and from a narrower integer through an
+  // int32 (conv.i, conv.u, conv.i4), a float64 to and from a float32 through
+  // conv.r8 and conv.r4, and f16 and bf16 values, which are held as
+  // integers, through integer loads and stores and the f16 and bf16
+  // conversions.
+  for (MVT T : MVT::integer_valuetypes())
+    setLoadExtAction({ISD::EXTLOAD, ISD::ZEXTLOAD, ISD::SEXTLOAD}, T, MVT::i1,
+                     Promote);
+  for (MVT MemVT : {MVT::i8, MVT::i16, MVT::i32}) {
+    setLoadExtAction({ISD::EXTLOAD, ISD::ZEXTLOAD, ISD::SEXTLOAD}, MVT::i64,
+                     MemVT, Expand);
+    setTruncStoreAction(MVT::i64, MemVT, Expand);
+  }
+  setLoadExtAction(ISD::EXTLOAD, MVT::f64, MVT::f32, Expand);
+  setTruncStoreAction(MVT::f64, MVT::f32, Expand);
+  for (MVT T : {MVT::f32, MVT::f64}) {
+    setLoadExtAction(ISD::EXTLOAD, T, {MVT::f16, MVT::bf16}, Expand);
+    setTruncStoreAction(T, MVT::f16, Expand);
+    setTruncStoreAction(T, MVT::bf16, Expand);
+  }
+  // memcpy, memmove and memset are never expanded into loads and stores,
+  // whatever their size: MSILSelectionDAGInfo turns each into cpblk, initblk
+  // or Buffer::MemoryCopy (decision D15).
+  MaxStoresPerMemcpy = MaxStoresPerMemcpyOptSize = 0;
+  MaxStoresPerMemmove = MaxStoresPerMemmoveOptSize = 0;
+  MaxStoresPerMemset = MaxStoresPerMemsetOptSize = 0;
 
   // No atomics yet: AtomicExpand turns every atomic operation into an
   // __atomic_* libcall, which is diagnosed.
@@ -425,6 +493,61 @@ SDValue MSILTargetLowering::LowerOperation(SDValue Op,
   switch (Op.getOpcode()) {
   case ISD::FrameIndex:
     return LowerFrameIndex(Op, DAG);
+  case ISD::CopyToReg:
+    return LowerCopyToReg(Op, DAG);
+  // Dynamic allocas, the stack saves and restores around them and the frame
+  // and stack addresses wait for the phase-3 shadow stack (decision D13). Each
+  // has its own text, and one VLA gives one error (LowerStackSaveRestore).
+  case ISD::DYNAMIC_STACKALLOC:
+    return LowerUnsupported(
+        Op, DAG,
+        "dynamic alloca / VLA is not supported for MSIL yet (phase 3 shadow "
+        "stack)");
+  case ISD::STACKSAVE:
+  case ISD::STACKRESTORE:
+    return LowerStackSaveRestore(Op, DAG);
+  case ISD::FRAMEADDR:
+    return LowerUnsupported(
+        Op, DAG,
+        "llvm.frameaddress is not supported for MSIL yet (phase 3 shadow "
+        "stack)");
+  case ISD::STACKADDRESS:
+    return LowerUnsupported(
+        Op, DAG,
+        "llvm.stackaddress is not supported for MSIL yet (phase 3 shadow "
+        "stack)");
+  case ISD::EH_DWARF_CFA:
+    return LowerUnsupported(Op, DAG,
+                            "llvm.eh.dwarf.cfa is not supported for MSIL");
+  case ISD::RETURNADDR:
+    return LowerUnsupported(Op, DAG,
+                            "llvm.returnaddress is not supported for MSIL");
+  case ISD::ADDROFRETURNADDR:
+    return LowerUnsupported(
+        Op, DAG, "llvm.addressofreturnaddress is not supported for MSIL");
+  case ISD::SPONENTRY:
+    return LowerUnsupported(Op, DAG,
+                            "llvm.sponentry is not supported for MSIL");
+  case ISD::INIT_TRAMPOLINE:
+  case ISD::ADJUST_TRAMPOLINE:
+    return LowerUnsupported(Op, DAG, "trampolines are not supported for MSIL");
+  // setjmp/longjmp wait for phase 3; CIL cannot unwind to an address.
+  case ISD::EH_SJLJ_SETJMP:
+    return LowerUnsupported(
+        Op, DAG,
+        "llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 "
+        "setjmp/longjmp)");
+  case ISD::EH_SJLJ_LONGJMP:
+    return LowerUnsupported(
+        Op, DAG,
+        "llvm.eh.sjlj.longjmp is not supported for MSIL yet (phase 3 "
+        "setjmp/longjmp)");
+  case ISD::EH_SJLJ_SETUP_DISPATCH:
+    return LowerUnsupported(
+        Op, DAG, "llvm.eh.sjlj.setup.dispatch is not supported for MSIL");
+  case ISD::EH_RETURN:
+    return LowerUnsupported(Op, DAG,
+                            "llvm.eh.return is not supported for MSIL");
   case ISD::GlobalAddress:
     return LowerGlobalAddress(Op, DAG);
   case ISD::ExternalSymbol:
@@ -564,7 +687,33 @@ MSILTargetLowering::EmitInstrWithCustomInserter(MachineInstr &MI,
 
 SDValue MSILTargetLowering::LowerFrameIndex(SDValue Op,
                                             SelectionDAG &DAG) const {
-  reportFatalUsageError("MSIL: frame indices are implemented in M7");
+  int FI = cast<FrameIndexSDNode>(Op)->getIndex();
+  return DAG.getTargetFrameIndex(FI, Op.getValueType());
+}
+
+SDValue MSILTargetLowering::LowerCopyToReg(SDValue Op,
+                                           SelectionDAG &DAG) const {
+  SDValue Src = Op.getOperand(2);
+  if (isa<FrameIndexSDNode>(Src.getNode())) {
+    // CopyToReg nodes don't support FrameIndex operands. Other targets select
+    // the FI to some LEA-like instruction, but since we don't have that, we
+    // need to insert some kind of instruction that can take an FI operand and
+    // produces a value usable by CopyToReg (i.e. in a vreg). So insert a dummy
+    // copy between Op and its FI operand.
+    SDValue Chain = Op.getOperand(0);
+    SDLoc DL(Op);
+    Register Reg = cast<RegisterSDNode>(Op.getOperand(1))->getReg();
+    EVT VT = Src.getValueType();
+    assert(VT == MVT::i64 && "Frame indices are native ints");
+    SDValue Copy(DAG.getMachineNode(MSIL::COPY_I64, DL, VT, Src), 0);
+    return Op.getNode()->getNumValues() == 1
+               ? DAG.getCopyToReg(Chain, DL, Reg, Copy)
+               : DAG.getCopyToReg(Chain, DL, Reg, Copy,
+                                  Op.getNumOperands() == 4 ? Op.getOperand(3)
+                                                           : SDValue());
+  }
+  // Any other copy is legal as it is.
+  return Op;
 }
 
 SDValue MSILTargetLowering::LowerGlobalAddress(SDValue Op,
@@ -853,9 +1002,9 @@ SDValue MSILTargetLowering::LowerFSINCOS(SDValue Op, SelectionDAG &DAG) const {
 
 SDValue MSILTargetLowering::LowerFFREXP_FMODF(SDValue Op,
                                               SelectionDAG &DAG) const {
-  // The libcall would store its second result into a stack temporary before
-  // LowerCall even sees it, so report it here, with LowerCall's text, and go
-  // on with undefined results.
+  // Report the libcall with LowerCall's text and go on with undefined
+  // results: the expansion would call it too, except for a float32 frexp
+  // where the C runtime has no frexpf, which it would expand inline instead.
   EVT VT = Op.getValueType();
   auto GetLibcall = [&](EVT T) {
     return Op.getOpcode() == ISD::FFREXP ? RTLIB::getFREXP(T)
@@ -908,10 +1057,48 @@ SDValue MSILTargetLowering::LowerBF16Conversion(SDValue Op,
   return Result;
 }
 
+/// Returns well-formed dummy results for \p Op, an operation that is not
+/// lowered: a null pointer or zero for each integer value, undef for any other
+/// value and the input chain, which is operand 0 of every node with a chain
+/// result.
+static SDValue getDummyResults(SDValue Op, SelectionDAG &DAG) {
+  SDLoc DL(Op);
+  SmallVector<SDValue, 2> Results;
+  for (EVT VT : Op->values()) {
+    if (VT == MVT::Other)
+      Results.push_back(Op.getOperand(0));
+    else if (VT.isInteger())
+      Results.push_back(DAG.getConstant(0, DL, VT));
+    else
+      Results.push_back(DAG.getUNDEF(VT));
+  }
+  return DAG.getMergeValues(Results, DL);
+}
+
 SDValue MSILTargetLowering::LowerUnsupported(SDValue Op, SelectionDAG &DAG,
                                              StringRef What) const {
-  reportFatalUsageError(Twine("MSIL: unsupported operation '") + What +
-                        "' (its diagnostic is implemented in M7)");
+  DAG.getContext()->diagnose(DiagnosticInfoUnsupported(
+      DAG.getMachineFunction().getFunction(), What, SDLoc(Op).getDebugLoc()));
+  return getDummyResults(Op, DAG);
+}
+
+SDValue MSILTargetLowering::LowerStackSaveRestore(SDValue Op,
+                                                  SelectionDAG &DAG) const {
+  // clang brackets the scope of every VLA with llvm.stacksave and
+  // llvm.stackrestore (at -O0 always). In a function with a dynamic alloca,
+  // that alloca's DYNAMIC_STACKALLOC reports the error, so one VLA gives one
+  // error. FunctionLoweringInfo::set creates the variable-sized object of
+  // every dynamic alloca before any block is selected, so this holds also
+  // when the stacksave is selected before the alloca's block.
+  if (DAG.getMachineFunction().getFrameInfo().hasVarSizedObjects())
+    return getDummyResults(Op, DAG);
+  return LowerUnsupported(
+      Op, DAG,
+      Op.getOpcode() == ISD::STACKSAVE
+          ? "llvm.stacksave is not supported for MSIL yet (phase 3 shadow "
+            "stack)"
+          : "llvm.stackrestore is not supported for MSIL yet (phase 3 shadow "
+            "stack)");
 }
 
 //===----------------------------------------------------------------------===//
@@ -934,12 +1121,22 @@ MachineBasicBlock *MSILTargetLowering::emitSelect(MachineInstr &MI,
   // explicitly: nothing relies on branch analysis.
   const TargetInstrInfo &TII = *Subtarget->getInstrInfo();
   const DebugLoc &DL = MI.getDebugLoc();
+  MachineFunction *MF = BB->getParent();
+  // The address of a stack object is a frame index operand until prologue
+  // and epilogue insertion, but a PHI needs a register: copy it into one.
+  auto GetReg = [&](const MachineOperand &MO) -> Register {
+    if (!MO.isFI())
+      return MO.getReg();
+    Register Reg = MF->getRegInfo().createVirtualRegister(&MSIL::I64RegClass);
+    BuildMI(*BB, MI, DL, TII.get(MSIL::COPY_I64), Reg)
+        .addFrameIndex(MO.getIndex());
+    return Reg;
+  };
   Register Dst = MI.getOperand(0).getReg();
   Register Cond = MI.getOperand(1).getReg();
-  Register TrueVal = MI.getOperand(2).getReg();
-  Register FalseVal = MI.getOperand(3).getReg();
+  Register TrueVal = GetReg(MI.getOperand(2));
+  Register FalseVal = GetReg(MI.getOperand(3));
 
-  MachineFunction *MF = BB->getParent();
   const BasicBlock *LLVMBB = BB->getBasicBlock();
   MachineFunction::iterator InsertPos = std::next(BB->getIterator());
   MachineBasicBlock *FalseMBB = MF->CreateMachineBasicBlock(LLVMBB);

@@ -92,7 +92,18 @@ private:
   const MSILSubtarget *Subtarget;
 
   // Custom lowering hooks.
+  /// Makes a frame index a TargetFrameIndex operand of its users;
+  /// MSILRegisterInfo::eliminateFrameIndex turns it into an FP-relative
+  /// address.
   SDValue LowerFrameIndex(SDValue Op, SelectionDAG &DAG) const;
+  /// Copies a frame index into a register through a COPY_I64, because a
+  /// CopyToReg cannot take a frame index operand.
+  SDValue LowerCopyToReg(SDValue Op, SelectionDAG &DAG) const;
+  /// Diagnoses STACKSAVE and STACKRESTORE, except in a function with a
+  /// dynamic alloca, whose DYNAMIC_STACKALLOC already reports the error: there
+  /// they return their dummy results silently, so that one VLA gives one
+  /// error.
+  SDValue LowerStackSaveRestore(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerExternalSymbol(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerBR_JT(SDValue Op, SelectionDAG &DAG) const;
@@ -129,8 +140,9 @@ private:
   /// Converts between bf16 and f32/f64 through the compiler-rt helpers, as f16
   /// does, instead of the generic expansions' bitcasts through memory.
   SDValue LowerBF16Conversion(SDValue Op, SelectionDAG &DAG) const;
-  /// Diagnoses an operation that Phase 1 does not support and returns a
-  /// well-formed dummy value, so that compilation continues.
+  /// Reports \p What, the diagnostic text for an operation that Phase 1 does
+  /// not support, and returns well-formed dummy results (zero for an integer
+  /// value, the input chain for a chain), so that compilation continues.
   SDValue LowerUnsupported(SDValue Op, SelectionDAG &DAG, StringRef What) const;
 
   // Custom inserters.

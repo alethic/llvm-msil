@@ -78,10 +78,9 @@ generated `build/tools/msil/test/lit.site.cfg.py`. At configuration time
    #include "msil_test.h"
    ```
 
-   Use a per-level form (`%{msil_c_O2}`) only with a comment saying why: until
-   frames exist (M7) every C test uses `%{msil_c_O2}` with the first-line
-   comment '-O0 needs frames (M7)' (plan D32). Any other RUN line needs a
-   comment too.
+   Every C test uses `%{msil_c}` (since M7 added frames, plan D32). Use a
+   per-level form (`%{msil_c_O2}`) only with a comment saying why; any other
+   RUN line needs a comment too.
 2. Generate the expected transcript from a native build with the just-built
    clang, review it, and run the directory:
 

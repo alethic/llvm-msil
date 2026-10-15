@@ -6,13 +6,12 @@
 // .maxstack, and the generated entry point '<msil>Main'(string[] args), which
 // calls main() and returns its result (decision D27). clang's native CPU and
 // feature strings are accepted without a warning (decision D7), and the MinGW
-// driver's -exception-model=seh does not get in the way (decision D8). -O0
-// needs frames (M7): at -O0 windows-msvc gives main a return-value alloca
-// (decision D32).
+// driver's -exception-model=seh does not get in the way (decision D8). Only
+// that -O2 command line is pinned here.
 //
 // clang's tests have no ilasm; msil/test/M1/00-smoke/return-42.c assembles and
-// runs the same program, and llvm/test/CodeGen/MSIL/entrypoint.ll assembles the
-// entry point.
+// runs the same program at -O0 and -O2, and
+// llvm/test/CodeGen/MSIL/entrypoint.ll assembles the entry point.
 
 // REQUIRES: msil-registered-target
 

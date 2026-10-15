@@ -36,10 +36,13 @@
 ///   a named register, records a stack map (stackmap, patchpoint, statepoint),
 ///   has deoptimization state ("deopt" operand bundles), makes a preallocated
 ///   call (llvm.call.preallocated.*, "preallocated" operand bundles), uses
-///   a pointer in a non-zero address space, uses a floating-point type that
-///   CIL does not have (fp128, x86_fp80, ppc_fp128) or reads or writes the
-///   floating-point environment (llvm.get.fpenv, llvm.set.fpenv,
-///   llvm.get.fpmode, llvm.set.fpmode) is an error, and its body is deleted.
+///   the frame escape intrinsics (llvm.localescape, llvm.localrecover,
+///   llvm.localaddress, llvm.eh.recoverfp: clang emits them for C __finally
+///   blocks and for __except filters that read locals), uses a pointer in a
+///   non-zero address space, uses a floating-point type that CIL does not
+///   have (fp128, x86_fp80, ppc_fp128) or reads or writes the floating-point
+///   environment (llvm.get.fpenv, llvm.set.fpenv, llvm.get.fpmode,
+///   llvm.set.fpmode) is an error, and its body is deleted.
 /// - A function definition or used declaration whose IL name is longer than
 ///   ilasm accepts is an error; a definition loses its body.
 /// - A call or invoke of a definition that lost its body after an error
@@ -515,6 +518,10 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
   // with an llvm.call.preallocated.setup call and usually .arg calls.
   bool HasPreallocated = false;
 
+  // And for the frame escape intrinsics: clang emits several for one __try,
+  // and inlining a funclet copies its llvm.localrecover calls.
+  bool HasFrameEscape = false;
+
   for (Instruction &I : instructions(F)) {
     if (auto *CB = dyn_cast<CallBase>(&I)) {
       if (CB->isInlineAsm()) {
@@ -545,6 +552,26 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
                 ") are not supported for MSIL",
             I.getDebugLoc()));
         HasError = true;
+      } else if (IID == Intrinsic::localescape ||
+                 IID == Intrinsic::localrecover ||
+                 IID == Intrinsic::localaddress ||
+                 IID == Intrinsic::eh_recoverfp) {
+        // An outlined SEH funclet (a C __finally block or __except filter,
+        // -fms-extensions) reaches the locals of its parent through the
+        // parent's native frame pointer and the frame offsets that the
+        // AsmPrinter publishes as symbols. MSIL has no exception handling in
+        // Phase 1 and no lowering for these intrinsics: llvm.localescape
+        // would reach the AsmPrinter, and the others instruction selection.
+        // The parent (localescape, localaddress) and its funclets
+        // (localrecover, eh.recoverfp) each lose their bodies.
+        if (!HasFrameEscape)
+          Ctx.diagnose(DiagnosticInfoUnsupported(
+              F,
+              Twine("frame escape ('") + Intrinsic::getBaseName(IID) +
+                  "') is not supported for MSIL",
+              I.getDebugLoc()));
+        HasFrameEscape = true;
+        HasError = true;
       } else if (CB->hasDeoptState() ||
                  IID == Intrinsic::experimental_deoptimize) {
         // SelectionDAGBuilder lowers a call or invoke with deoptimization
@@ -573,12 +600,16 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
         HasError = true;
       } else if (IID == Intrinsic::get_fpenv || IID == Intrinsic::set_fpenv ||
                  IID == Intrinsic::get_fpmode || IID == Intrinsic::set_fpmode) {
-        // SelectionDAGBuilder (fpenv) and LegalizeDAG (fpmode) pass the
-        // environment value to fegetenv, fesetenv, fegetmode or fesetmode
-        // through a stack temporary, whatever its width: LowerCall diagnoses
-        // the call, but the temporary still reaches instruction selection.
-        // reset.fpenv and reset.fpmode pass no temporary, and LowerCall's
-        // diagnostic covers them.
+        // The environment value of these calls, whatever its width, goes
+        // through a stack temporary: SelectionDAGBuilder makes one for
+        // GET_FPENV_MEM or SET_FPENV_MEM (GET_FPENV and SET_FPENV are not
+        // legal), LegalizeDAG one for GET_FPMODE or SET_FPMODE, and
+        // LegalizeDAG passes it to fegetenv, fesetenv, fegetmode or
+        // fesetmode. The temporary is an ordinary frame object, so nothing
+        // crashes without this check, but LowerCall's diagnostic would name
+        // that library call instead of the floating-point environment access
+        // the program asked for. reset.fpenv and reset.fpmode pass no
+        // temporary, and LowerCall's diagnostic covers them.
         Ctx.diagnose(DiagnosticInfoUnsupported(
             F,
             Twine("floating-point environment access ('") +

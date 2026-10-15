@@ -1,17 +1,26 @@
-# calls-arith.c compiled with -O2 -g gives the same transcript as without -g
-# (Milestone 4, review-r2 findings 1 and 3). -O2 only: -O0 needs frames (M7,
-# D32), and both failures need -O1 or above. With -g at -O1 and above clang
-# turns on call-site info (EmitCallSiteInfo), which the MSIL call lowering must
-# keep in step when it splits and recombines a call ('Call site info was not
-# updated!'), and every x86_64 triple defaults to instruction-referencing
-# variable locations, whose LiveDebugValues assumes the allocated physical
-# registers that MSIL never has (main's named integer locals, such as one,
-# seven and big, carry #dbg_value records). The expected transcript is
-# calls-arith.expected, which update-expected.py generates for calls-arith.c;
-# calls-arith.c keeps its own %{msil_c_O2} run without -g, and these RUN lines
-# are that pipeline plus -g.
-# RUN: %clang_msil %{msil_cflags} -O2 -g -S %S/calls-arith.c -o %t.il
-# RUN: %ilasm -dll -output=%t.dll %t.il
-# RUN: %msil_verify %t.dll
-# RUN: %if msil-jitall %{ %msil_jitall %t.dll %}
-# RUN: %msil_exec --expect %S/calls-arith --out %t.out %t.dll
+# calls-arith.c compiled with -g gives the same transcript as without -g, at
+# -O0 and at -O2 (Milestone 4, review-r2 findings 1 and 3; Milestone 7,
+# review-r1 finding 3). The -O2 leg covers the two Milestone-4 failures, which
+# need -O1 or above: with -g at -O1 and above clang turns on call-site info
+# (EmitCallSiteInfo), which the MSIL call lowering must keep in step when it
+# splits and recombines a call ('Call site info was not updated!'), and every
+# x86_64 triple defaults to instruction-referencing variable locations, whose
+# LiveDebugValues assumes the allocated physical registers that MSIL never has
+# (main's named integer locals, such as one, seven and big, carry #dbg_value
+# records). The -O0 leg is the mode in which every parameter and local is a
+# #dbg_declare of a frame slot, which static frames (M7) make reachable. The
+# expected transcript is calls-arith.expected, which update-expected.py
+# generates for calls-arith.c; calls-arith.c runs the same pipeline without -g
+# at every level of %{msil_c}, and each leg here is one level of it plus -g.
+
+# RUN: %clang_msil %{msil_cflags} -O0 -g -S %S/calls-arith.c -o %t.O0.il
+# RUN: %ilasm -dll -output=%t.O0.dll %t.O0.il
+# RUN: %msil_verify %t.O0.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.O0.dll %}
+# RUN: %msil_exec --expect %S/calls-arith --out %t.O0.out %t.O0.dll
+
+# RUN: %clang_msil %{msil_cflags} -O2 -g -S %S/calls-arith.c -o %t.O2.il
+# RUN: %ilasm -dll -output=%t.O2.dll %t.O2.il
+# RUN: %msil_verify %t.O2.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t.O2.dll %}
+# RUN: %msil_exec --expect %S/calls-arith --out %t.O2.out %t.O2.dll

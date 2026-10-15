@@ -1,5 +1,4 @@
-// -O0 needs frames (M7): at -O0 every parameter and local is an alloca (D32).
-// Collatz sequences from C at -O2 (Milestone 6): data-dependent while loops
+// Collatz sequences from C (Milestone 6): data-dependent while loops
 // with an even/odd branch on unsigned long long, the longest chain below a
 // bound (a loop nest with a running maximum and its argmax), the peak value
 // of a chain, a recursive formulation, and a loop with two exits (reaching 1
@@ -9,7 +8,7 @@
 // four bytes folded into the low 8 bits (D37). That status is not
 // 1 + (line % 255) for any MSIL_EXPECT line of this file, so a failed check
 // cannot pass for it (re-check after edits that move lines).
-// RUN: %{msil_c_O2}
+// RUN: %{msil_c}
 #include "msil_test.h"
 
 #define NOINLINE __attribute__((noinline))

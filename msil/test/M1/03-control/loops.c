@@ -1,5 +1,4 @@
-// -O0 needs frames (M7): at -O0 every parameter and local is an alloca (D32).
-// Loops from C at -O2 (Milestone 6): for, while and do-while loops, break
+// Loops from C (Milestone 6): for, while and do-while loops, break
 // and continue, nested loops, loops with several exits, early returns from
 // inside a loop, and loops over int, unsigned, long long and double values
 // with calls in their bodies. The noinline helpers get inputs derived from
@@ -9,7 +8,7 @@
 // the results with all four bytes folded into the low 8 bits (D37). That
 // status is not 1 + (line % 255) for any MSIL_EXPECT line of this file, so a
 // failed check cannot pass for it (re-check after edits that move lines).
-// RUN: %{msil_c_O2}
+// RUN: %{msil_c}
 #include "msil_test.h"
 
 #define NOINLINE __attribute__((noinline))

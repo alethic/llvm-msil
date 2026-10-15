@@ -1,5 +1,4 @@
-// -O0 needs frames (M7): at -O0 every parameter and local is an alloca (D32).
-// Ackermann's function from C at -O2 (Milestone 6): recursion whose depth and
+// Ackermann's function from C (Milestone 6): recursion whose depth and
 // call count grow fast (ack(3, n) = 2^(n + 3) - 3; ack(3, 8) makes about 2.8
 // million calls and goes 2047 frames deep), with a recursive call as the
 // argument of another, in the classic three-case form on int, in a form
@@ -10,7 +9,7 @@
 // into the low 8 bits (D37). That status is not 1 + (line % 255) for any
 // MSIL_EXPECT line of this file, so a failed check cannot pass for it
 // (re-check after edits that move lines).
-// RUN: %{msil_c_O2}
+// RUN: %{msil_c}
 #include "msil_test.h"
 
 #define NOINLINE __attribute__((noinline))

@@ -1,5 +1,4 @@
-// -O0 needs frames (M7): at -O0 every parameter and local is an alloca (D32).
-// float and double from C at -O2 (Milestone 5): arithmetic in both precisions,
+// float and double from C (Milestone 5): arithmetic in both precisions,
 // the usual arithmetic conversions, comparisons with NaN, unsigned long long
 // to double and float (the D17 sequence), FP to unsigned conversions above the
 // signed range, signed zeros and conditional expressions. The noinline helpers
@@ -7,7 +6,7 @@
 // clang nor llc can fold them; no fabs, copysign, math library or FP bitcasts
 // (they need frames or P/Invoke). Each MSIL_CHECK group sets one bit of the
 // exit status when one of its checks fails (0 = all passed, 8 bits, D37).
-// RUN: %{msil_c_O2}
+// RUN: %{msil_c}
 #include "msil_test.h"
 
 #define NOINLINE __attribute__((noinline))

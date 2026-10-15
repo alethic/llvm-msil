@@ -52,8 +52,23 @@ public:
   /// Returns true if \p MF needs a static frame, i.e. a frame base.
   static bool needsFrame(const MachineFunction &MF);
 
+  /// Returns the alignment that the backend assumes for the address that
+  /// 'localloc' returns. ECMA-335 promises none, and a constant-size
+  /// localloc of 32 bytes or less is only 8-byte aligned on .NET Framework
+  /// 4.8 and in .NET 8 tiered code (decision D13), so a frame that needs
+  /// more is over-allocated and aligned up.
+  Align getLocallocAlign(const MachineFunction &MF) const;
+
 protected:
   bool hasFPImpl(const MachineFunction &MF) const override;
+
+private:
+  /// Allocates the static frame of \p MF and defines the frame base MSIL::FP
+  /// before \p InsertPt. This is the only code that knows how the frame is
+  /// allocated.
+  void emitFrameBase(MachineFunction &MF, MachineBasicBlock &MBB,
+                     MachineBasicBlock::iterator InsertPt,
+                     const DebugLoc &DL) const;
 };
 
 } // end namespace llvm

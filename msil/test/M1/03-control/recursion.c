@@ -1,5 +1,4 @@
-// -O0 needs frames (M7): at -O0 every parameter and local is an alloca (D32).
-// Recursion from C at -O2 (Milestone 6): doubly recursive Fibonacci, mutual
+// Recursion from C (Milestone 6): doubly recursive Fibonacci, mutual
 // recursion (is_even/is_odd, 1001 frames deep), binomial coefficients through
 // Pascal's rule, the Takeuchi function and McCarthy's 91 function (recursive
 // calls as arguments of recursive calls), Towers of Hanoi, recursive GCD and
@@ -12,7 +11,7 @@
 // four bytes folded into the low 8 bits (D37). That status is not
 // 1 + (line % 255) for any MSIL_EXPECT line of this file, so a failed check
 // cannot pass for it (re-check after edits that move lines).
-// RUN: %{msil_c_O2}
+// RUN: %{msil_c}
 #include "msil_test.h"
 
 #define NOINLINE __attribute__((noinline))

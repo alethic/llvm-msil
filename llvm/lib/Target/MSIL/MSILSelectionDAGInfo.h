@@ -27,6 +27,9 @@
 namespace llvm {
 namespace MSILISD {
 
+// The nodes the .td files define (ARGUMENT, RETURN, BR_TABLE, and the memory
+// intrinsics CPBLK, INITBLK and MEMMOVE, which carry memory operands) are
+// generated into MSILGenSDNodeInfo.inc.
 enum NodeType : unsigned {
   // A call with variadic results, which TableGen cannot describe:
   // (chain, callee, arguments...) -> (results..., chain). Instruction

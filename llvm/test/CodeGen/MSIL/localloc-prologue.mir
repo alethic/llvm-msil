@@ -1,0 +1,363 @@
+# The localloc prologue and frame-index elimination at the MIR level
+# (ImplementationPlan.md decision D13, M7.b, plan 5.4 'LOCALLOC'; recon
+# passes-frame.md 6.1-6.7):
+# - Prologue/epilogue insertion (prolog-epilog) puts the whole static frame
+#   behind one helper: right after the ARGUMENT_* block it inserts
+#   'CONST_I32 <frame size>' and '$fp = LOCALLOC' and nothing else. A function
+#   without stack objects gets no prologue, and there is no epilogue.
+# - With MaxAlign A above the assumed localloc alignment of 8, the LOCALLOC
+#   result goes to a virtual register R, StackSize + A - 8 bytes are
+#   allocated, and '$fp = AND_I64 (ADD_I64 R, CONST_I64 A-1), CONST_I64 -A'.
+# - eliminateFrameIndex: an object at FP+0 becomes $fp itself; any other
+#   becomes a new 'ADD_I64 $fp, (CONST_I64 off)' in front of its user; a frame
+#   index that is the first operand of an ADD_I64 whose other operand is a
+#   single-use CONST_I64 is folded (the constant becomes off + c, $fp replaces
+#   the frame index); a CONST_I64 with other uses is never changed.
+# - msil-replace-phys-regs then turns $fp into one virtual register (the frame
+#   base), so no physical register is left.
+# - The CIL: the prologue is 'ldc.i4 <size>; localloc; stloc <FP local>', the
+#   first code of the method; FP is a native int local, '.locals' has no
+#   'init', and there is exactly one localloc.
+# The memory operands use the plan 5.4 record layout: LDIND_*/STIND_* take the
+# memflags immediate first, then the address, then (for a store) the value.
+# Frame sizes are independent of the target's stack alignment: each frame's
+# object sizes add up to a multiple of max(16, MaxAlign).
+
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=prolog-epilog -verify-machineinstrs %s -o - \
+# RUN:   | FileCheck %s --check-prefix=PEI
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -run-pass=prolog-epilog -verify-machineinstrs %s -o - \
+# RUN:   | FileCheck %s --check-prefix=PEI
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=prolog-epilog,msil-replace-phys-regs \
+# RUN:   -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=RPR --implicit-check-not='$fp'
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -run-pass=prolog-epilog,msil-replace-phys-regs \
+# RUN:   -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=RPR --implicit-check-not='$fp'
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -start-before=prolog-epilog -asm-verbose=false \
+# RUN:   -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=IL --implicit-check-not=localloc \
+# RUN:   --implicit-check-not='.locals init'
+# RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -start-before=prolog-epilog -asm-verbose=false \
+# RUN:   -verify-machineinstrs %s -o - | FileCheck %s --check-prefix=IL --implicit-check-not=localloc \
+# RUN:   --implicit-check-not='.locals init'
+# RUN: %if ilasm %{ llc -mtriple=x86_64-pc-windows-msvc-msil -start-before=prolog-epilog %s -o %t.il \
+# RUN:   && %ilasm-verify -output=%t.dll %t.il %}
+
+# ---- two_slots: two 8-byte objects, 0 at FP+8, 1 at FP+0 ----
+# PEI-LABEL: name: two_slots{{$}}
+# PEI:       stackSize: 16{{$}}
+# PEI:       stack:
+# PEI:       - { id: 0, {{.*}}offset: -8, size: 8,
+# PEI:       - { id: 1, {{.*}}offset: -16, size: 8,
+# PEI:       body:
+# PEI:       %0:i32 = ARGUMENT_I32 0, implicit $arguments
+# PEI-NEXT:  [[SZ:%[0-9]+]]:i32 = {{(frame-setup )?}}CONST_I32 16,
+# PEI-NEXT:  $fp = {{(frame-setup )?}}LOCALLOC [[SZ]],
+# PEI-NEXT:  [[OFF:%[0-9]+]]:i64 = CONST_I64 8,
+# PEI-NEXT:  [[ADDR:%[0-9]+]]:i64 = ADD_I64 $fp, [[OFF]],
+# PEI-NEXT:  STIND_I4 0, [[ADDR]], %0,
+# PEI-NEXT:  %1:i32 = LDIND_I4 0, $fp,
+# PEI-NEXT:  RETURN %1,
+# PEI-NOT:   LOCALLOC
+
+# RPR-LABEL: name: two_slots{{$}}
+# RPR:       body:
+# RPR:       [[FP:%[0-9]+]]:i64 = {{(frame-setup )?}}LOCALLOC
+# RPR:       ADD_I64 [[FP]],
+# RPR:       LDIND_I4 0, [[FP]],
+
+# IL-LABEL:  .method {{.*}}'two_slots'(
+# IL-SAME:   int32) cil managed{{$}}
+# IL-NEXT:   {{^\{$}}
+# IL-NEXT:   {{^}}  .maxstack 2{{$}}
+# IL-NEXT:   {{^}}  .locals (native int){{$}}
+# IL-NEXT:   {{^}}  ldc.i4.s 16{{$}}
+# IL-NEXT:   {{^}}  localloc{{$}}
+# IL-NEXT:   {{^}}  stloc.0{{$}}
+# IL-NEXT:   {{^}}  ldloc.0{{$}}
+# IL-NEXT:   {{^}}  {{ldc\.i4\.8|ldc\.i4 8}}{{$}}
+# IL-NEXT:   {{^}}  conv.i{{$}}
+# IL-NEXT:   {{^}}  add{{$}}
+# IL-NEXT:   {{^}}  ldarg.0{{$}}
+# IL-NEXT:   {{^}}  stind.i4{{$}}
+# IL-NEXT:   {{^}}  ldloc.0{{$}}
+# IL-NEXT:   {{^}}  ldind.i4{{$}}
+# IL-NEXT:   {{^}}  ret{{$}}
+# IL-NEXT:   {{^}}} // end of method 'two_slots'{{$}}
+
+# ---- two_args: the prologue follows the whole ARGUMENT block ----
+# PEI-LABEL: name: two_args{{$}}
+# PEI:       body:
+# PEI:       %0:i64 = ARGUMENT_I64 0, implicit $arguments
+# PEI-NEXT:  %1:i32 = ARGUMENT_I32 1, implicit $arguments
+# PEI-NEXT:  [[SZ:%[0-9]+]]:i32 = {{(frame-setup )?}}CONST_I32 16,
+# PEI-NEXT:  $fp = {{(frame-setup )?}}LOCALLOC [[SZ]],
+# PEI-NEXT:  STIND_I4 0, $fp, %1,
+# PEI-NEXT:  STIND_I 0, %0, $fp,
+# PEI-NEXT:  RETURN implicit-def dead $arguments
+
+# IL-LABEL:  .method {{.*}}'two_args'(
+# IL-SAME:   native int, int32) cil managed{{$}}
+# IL-NEXT:   {{^\{$}}
+# IL-NEXT:   {{^}}  .maxstack 2{{$}}
+# IL-NEXT:   {{^}}  .locals (native int){{$}}
+# IL-NEXT:   {{^}}  ldc.i4.s 16{{$}}
+# IL-NEXT:   {{^}}  localloc{{$}}
+# IL-NEXT:   {{^}}  stloc.0{{$}}
+# IL-NEXT:   {{^}}  ldloc.0{{$}}
+# IL-NEXT:   {{^}}  ldarg.1{{$}}
+# IL-NEXT:   {{^}}  stind.i4{{$}}
+# IL-NEXT:   {{^}}  ldarg.0{{$}}
+# IL-NEXT:   {{^}}  ldloc.0{{$}}
+# IL-NEXT:   {{^}}  stind.i{{$}}
+# IL-NEXT:   {{^}}  ret{{$}}
+
+# ---- fold_add: frame index + single-use constant folds into the constant ----
+# PEI-LABEL: name: fold_add{{$}}
+# PEI:       body:
+# PEI:       {{(frame-setup )?}}LOCALLOC
+# PEI-NOT:   CONST_I64 4,
+# PEI:       [[C:%[0-9]+]]:i64 = CONST_I64 12,
+# PEI-NOT:   ADD_I64
+# PEI:       %2:i64 = ADD_I64 $fp, [[C]],
+# PEI-NOT:   ADD_I64
+# PEI:       STIND_I4 0, %2, %0,
+# PEI:       RETURN
+
+# IL-LABEL:  .method {{.*}}'fold_add'(
+# IL-SAME:   int32) cil managed{{$}}
+# IL-NEXT:   {{^\{$}}
+# IL-NEXT:   {{^}}  .maxstack 2{{$}}
+# IL-NEXT:   {{^}}  .locals (native int){{$}}
+# IL-NEXT:   {{^}}  ldc.i4.s 16{{$}}
+# IL-NEXT:   {{^}}  localloc{{$}}
+# IL-NEXT:   {{^}}  stloc.0{{$}}
+# IL-NEXT:   {{^}}  ldloc.0{{$}}
+# IL-NEXT:   {{^}}  {{ldc\.i4\.s 12|ldc\.i4 12}}{{$}}
+# IL-NEXT:   {{^}}  conv.i{{$}}
+# IL-NEXT:   {{^}}  add{{$}}
+# IL-NEXT:   {{^}}  ldarg.0{{$}}
+# IL-NEXT:   {{^}}  stind.i4{{$}}
+# IL-NEXT:   {{^}}  ldloc.0{{$}}
+# IL-NEXT:   {{^}}  ldind.i4{{$}}
+# IL-NEXT:   {{^}}  ret{{$}}
+
+# ---- shared_const: a constant with another use is left alone ----
+# PEI-LABEL: name: shared_const{{$}}
+# PEI:       body:
+# PEI:       {{(frame-setup )?}}LOCALLOC
+# PEI:       %1:i64 = CONST_I64 4,
+# PEI-NEXT:  [[OFF:%[0-9]+]]:i64 = CONST_I64 8,
+# PEI-NEXT:  [[NEW:%[0-9]+]]:i64 = ADD_I64 $fp, [[OFF]],
+# PEI-NEXT:  %2:i64 = ADD_I64 [[NEW]], %1,
+# PEI-NEXT:  %3:i64 = ADD_I64 %0, %1,
+# PEI-NEXT:  STIND_I 0, %3, %2,
+
+# IL-LABEL:  .method {{.*}}'shared_const'(
+# IL-SAME:   native int) cil managed{{$}}
+# IL-NEXT:   {{^\{$}}
+# IL-NEXT:   {{^}}  .maxstack 3{{$}}
+# IL-NEXT:   {{^}}  .locals (native int){{$}}
+# IL-NEXT:   {{^}}  ldc.i4.s 16{{$}}
+# IL-NEXT:   {{^}}  localloc{{$}}
+# IL-NEXT:   {{^}}  stloc.0{{$}}
+# IL-NEXT:   {{^}}  ldarg.0{{$}}
+# IL-NEXT:   {{^}}  {{ldc\.i4\.4|ldc\.i4 4}}{{$}}
+# IL-NEXT:   {{^}}  conv.i{{$}}
+# IL-NEXT:   {{^}}  add{{$}}
+# IL-NEXT:   {{^}}  ldloc.0{{$}}
+# IL-NEXT:   {{^}}  {{ldc\.i4\.8|ldc\.i4 8}}{{$}}
+# IL-NEXT:   {{^}}  conv.i{{$}}
+# IL-NEXT:   {{^}}  add{{$}}
+# IL-NEXT:   {{^}}  {{ldc\.i4\.4|ldc\.i4 4}}{{$}}
+# IL-NEXT:   {{^}}  conv.i{{$}}
+# IL-NEXT:   {{^}}  add{{$}}
+# IL-NEXT:   {{^}}  stind.i{{$}}
+# IL-NEXT:   {{^}}  ret{{$}}
+
+# ---- overalign16: MaxAlign 16, a 16-byte frame ----
+# PEI-LABEL: name: overalign16{{$}}
+# PEI:       stackSize: 16{{$}}
+# PEI:       body:
+# PEI:       %0:i32 = ARGUMENT_I32 0, implicit $arguments
+# PEI-NEXT:  [[SZ:%[0-9]+]]:i32 = {{(frame-setup )?}}CONST_I32 24,
+# PEI-NEXT:  [[RAW:%[0-9]+]]:i64 = {{(frame-setup )?}}LOCALLOC [[SZ]],
+# PEI-DAG:   [[C15:%[0-9]+]]:i64 = {{(frame-setup )?}}CONST_I64 15,
+# PEI-DAG:   [[CM16:%[0-9]+]]:i64 = {{(frame-setup )?}}CONST_I64 -16,
+# PEI-DAG:   [[SUM:%[0-9]+]]:i64 = {{(frame-setup )?}}ADD_I64 [[RAW]], [[C15]],
+# PEI:       $fp = {{(frame-setup )?}}AND_I64 [[SUM]], [[CM16]],
+# PEI-NEXT:  STIND_I4 0, $fp, %0,
+# PEI-NEXT:  %1:i32 = LDIND_I4 0, $fp,
+
+# RPR-LABEL: name: overalign16{{$}}
+# RPR:       body:
+# RPR:       [[RAW:%[0-9]+]]:i64 = {{(frame-setup )?}}LOCALLOC
+# RPR:       [[FP:%[0-9]+]]:i64 = {{(frame-setup )?}}AND_I64
+# RPR-NEXT:  STIND_I4 0, [[FP]], %0,
+# RPR-NEXT:  %1:i32 = LDIND_I4 0, [[FP]],
+
+# IL-LABEL:  .method {{.*}}'overalign16'(
+# IL-SAME:   int32) cil managed{{$}}
+# IL-NEXT:   {{^\{$}}
+# IL-NEXT:   {{^}}  .maxstack 2{{$}}
+# IL-NEXT:   {{^}}  .locals (native int{{(, native int)?}}){{$}}
+# IL-NEXT:   {{^}}  ldc.i4.s 24{{$}}
+# IL-NEXT:   {{^}}  localloc{{$}}
+# IL-NEXT:   {{^}}  stloc.[[R:[0-9]]]{{$}}
+# IL-NEXT:   {{^}}  ldloc.[[R]]{{$}}
+# IL-NEXT:   {{^}}  {{ldc\.i4\.s 15|ldc\.i4 15}}{{$}}
+# IL-NEXT:   {{^}}  conv.i{{$}}
+# IL-NEXT:   {{^}}  add{{$}}
+# IL-NEXT:   {{^}}  {{ldc\.i4\.s -16|ldc\.i4 -16}}{{$}}
+# IL-NEXT:   {{^}}  conv.i{{$}}
+# IL-NEXT:   {{^}}  and{{$}}
+# IL-NEXT:   {{^  (dup[[:space:]]+)?stloc\.}}[[F:[0-9]]]{{$}}
+# IL:        {{^}}  stind.i4{{$}}
+# IL-NEXT:   {{^}}  ldloc.[[F]]{{$}}
+# IL-NEXT:   {{^}}  ldind.i4{{$}}
+# IL-NEXT:   {{^}}  ret{{$}}
+
+# ---- no_frame: no stack objects, no prologue ----
+# PEI-LABEL: name: no_frame{{$}}
+# PEI:       body:
+# PEI-NOT:   LOCALLOC
+# PEI-NOT:   CONST_I32
+# PEI:       RETURN %0,
+
+# IL-LABEL:  .method {{.*}}'no_frame'(
+# IL-SAME:   int32) cil managed{{$}}
+# IL-NEXT:   {{^\{$}}
+# IL-NEXT:   {{^}}  .maxstack 1{{$}}
+# IL-NEXT:   {{^}}  ldarg.0{{$}}
+# IL-NEXT:   {{^}}  ret{{$}}
+
+--- |
+  source_filename = "prologue.c"
+
+  define i32 @two_slots(i32 %a) {
+    ret i32 0
+  }
+
+  define void @two_args(ptr %p, i32 %v) {
+    ret void
+  }
+
+  define i32 @fold_add(i32 %a) {
+    ret i32 0
+  }
+
+  define void @shared_const(ptr %q) {
+    ret void
+  }
+
+  define i32 @overalign16(i32 %a) {
+    ret i32 0
+  }
+
+  define i32 @no_frame(i32 %a) {
+    ret i32 %a
+  }
+...
+---
+name:            two_slots
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 8, alignment: 8 }
+  - { id: 1, size: 8, alignment: 8 }
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    STIND_I4 0, %stack.0, %0, implicit-def dead $arguments :: (store (s32) into %stack.0, align 8)
+    %1:i32 = LDIND_I4 0, %stack.1, implicit-def dead $arguments :: (load (s32) from %stack.1, align 8)
+    RETURN %1, implicit-def dead $arguments
+...
+---
+# Store the int argument into the slot, then the slot's address through the
+# pointer argument.
+name:            two_args
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 16, alignment: 8 }
+machineFunctionInfo:
+  params:  [ i64, i32 ]
+  results: [ ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i64 = ARGUMENT_I64 0, implicit $arguments
+    %1:i32 = ARGUMENT_I32 1, implicit $arguments
+    STIND_I4 0, %stack.0, %1, implicit-def dead $arguments :: (store (s32) into %stack.0, align 8)
+    STIND_I 0, %0, %stack.0, implicit-def dead $arguments :: (store (s64))
+    RETURN implicit-def dead $arguments
+...
+---
+# Object 0 is at FP+8; its address plus 4 is one constant, 12. Object 1 (at
+# FP+0) is read through FP.
+name:            fold_add
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 8, alignment: 4 }
+  - { id: 1, size: 8, alignment: 4 }
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    %1:i64 = CONST_I64 4, implicit-def dead $arguments
+    %2:i64 = ADD_I64 %stack.0, %1, implicit-def dead $arguments
+    STIND_I4 0, %2, %0, implicit-def dead $arguments :: (store (s32))
+    %3:i32 = LDIND_I4 0, %stack.1, implicit-def dead $arguments :: (load (s32) from %stack.1)
+    RETURN %3, implicit-def dead $arguments
+...
+---
+# The constant 4 is used by the frame address and by q+4: the frame address
+# is computed separately and q+4 keeps the constant 4.
+name:            shared_const
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 8, alignment: 8 }
+  - { id: 1, size: 8, alignment: 8 }
+machineFunctionInfo:
+  params:  [ i64 ]
+  results: [ ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i64 = ARGUMENT_I64 0, implicit $arguments
+    %1:i64 = CONST_I64 4, implicit-def dead $arguments
+    %2:i64 = ADD_I64 %stack.0, %1, implicit-def dead $arguments
+    %3:i64 = ADD_I64 %0, %1, implicit-def dead $arguments
+    STIND_I 0, %3, %2, implicit-def dead $arguments :: (store (s64))
+    RETURN implicit-def dead $arguments
+...
+---
+name:            overalign16
+tracksRegLiveness: true
+stack:
+  - { id: 0, size: 16, alignment: 16 }
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    STIND_I4 0, %stack.0, %0, implicit-def dead $arguments :: (store (s32) into %stack.0, align 16)
+    %1:i32 = LDIND_I4 0, %stack.0, implicit-def dead $arguments :: (load (s32) from %stack.0, align 16)
+    RETURN %1, implicit-def dead $arguments
+...
+---
+name:            no_frame
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i32 ]
+  results: [ i32 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i32 = ARGUMENT_I32 0, implicit $arguments
+    RETURN %0, implicit-def dead $arguments
+...

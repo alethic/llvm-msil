@@ -1,5 +1,4 @@
-// -O0 needs frames (M7): at -O0 every parameter and local is an alloca (D32).
-// switch from C at -O2 (Milestone 6): a dense switch in an interpreter loop
+// switch from C (Milestone 6): a dense switch in an interpreter loop
 // (a jump table, which is the CIL 'switch' on an int32 index), a sparse
 // switch (a tree of compares), a switch on long long with cases above 2^32
 // (range-checked at full width before the index is truncated, D35), a
@@ -16,7 +15,7 @@
 // folded into the low 8 bits (D37). That status is not 1 + (line % 255) for
 // any MSIL_EXPECT line of this file, so a failed check cannot pass for it
 // (re-check after edits that move lines).
-// RUN: %{msil_c_O2}
+// RUN: %{msil_c}
 #include "msil_test.h"
 
 #define NOINLINE __attribute__((noinline))

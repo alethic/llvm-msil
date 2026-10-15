@@ -1,9 +1,8 @@
-// -O0 needs frames (M7): at -O0 every parameter and local is an alloca (D32).
-// Direct calls and integer arithmetic from C at -O2 (Milestone 4): noinline
+// Direct calls and integer arithmetic from C (Milestone 4): noinline
 // helpers get inputs derived from argc (1 when run without arguments), so
 // neither clang nor llc can fold them; each MSIL_CHECK group sets one bit of
 // the exit status when one of its checks fails (0 = all passed, 8 bits, D37).
-// RUN: %{msil_c_O2}
+// RUN: %{msil_c}
 #include "msil_test.h"
 
 #define NOINLINE __attribute__((noinline))
