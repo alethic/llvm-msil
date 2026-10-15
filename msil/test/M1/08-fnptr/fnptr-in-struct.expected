@@ -1,0 +1,22 @@
+rect
+area=12
+perimeter=14
+tri
+area=30
+perimeter=11
+rect
+area=100
+perimeter=40
+tri
+area=14
+perimeter=9
+scaled area=1808
+square
+counter=-15
+thunk=1728
+thunk=-1099511627776
+thunk=8
+pipeline=35
+pipeline=93
+pipeline=115
+[exit 0]

@@ -1,0 +1,26 @@
+sizeof mixed=40
+align mixed=8
+off ll=8
+off s=16
+off i=20
+off tail=24
+off d=32
+sizeof small=6
+sizeof with_anon=12
+off hi=10
+sizeof packet=4
+sizeof rect=24
+wide
+area=50
+tall
+area=120
+(null)
+area=0
+square
+area=9
+local=16
+copy=40
+0x3f800000
+reversed=665544332211
+packet sum=2470
+[exit 0]

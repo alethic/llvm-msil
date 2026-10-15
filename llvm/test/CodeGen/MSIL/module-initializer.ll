@@ -3,21 +3,27 @@
 ; program of that example (a global array, a table of string pointers, a
 ; zero-initialized counter, a function pointer to a static function and three
 ; string literals), with the IR global order the example assumes and with
-; main calling sum directly (indirect calls arrive in M9). The trailer is the
-; example's, with the decisions that came after it: [mscorlib] references
-; (D10), IR names for private globals ('.str', not '.L.str'; D11), and
-; 'ldc.i4' constants in any encoding. In order:
+; main calling sum directly (indirect calls are covered by call-indirect.ll
+; and ldftn-calli.ll). The trailer is the example's, with the decisions that
+; came after it: [mscorlib] references (D10), IR names for private globals
+; ('.str', not '.L.str'; D11), 'ldc.i4' constants in any encoding, and
+; function address fields (plan section 12, 'Phase-1 function addresses'). In
+; order:
 ; - the P/Invoke declaration of puts (D14: "libc" on Linux, "ucrtbase" on
 ;   windows-msvc), after every method;
 ; - the image of the 72 initialized bytes (table +0, '.str' +20, '.str.1' +25,
 ;   names +32 at its 16-byte alignment, op +48, '.str.2' +56), with zeros in
 ;   the relocated slots, then the RVA field;
 ; - '<msil>data' and one address field per global, in layout order (hits, the
-;   only zero-initialized global, is last both in IR order and in the layout);
+;   only zero-initialized global, is last both in IR order and in the layout),
+;   then an empty line;
+; - the address field '<msil>fn_sum' of sum, the only function whose address
+;   is used (main calls sum and puts directly), then an empty line;
 ; - the .cctor: AllocHGlobal(76 + 16 - 1), align up to 16, store the base,
 ;   cpblk the image, initblk the 4 zero bytes at 72, store the address fields,
-;   then the three relocations in site order (names[0] = '.str' at 32,
-;   names[1] = '.str.1' at 40, op = ldftn of sum at 48), then ret; the zero
+;   set '<msil>fn_sum' with 'ldftn' of sum, then the three relocations in site
+;   order (names[0] = '.str' at 32, names[1] = '.str.1' at 40, op =
+;   '<msil>fn_sum' at 48), then ret; 'ldftn' appears nowhere else; the zero
 ;   tail at 72 and the three sites are 8-aligned, so no line has an
 ;   'unaligned.' prefix (plan section 12, 'M8.c amended (alignment prefixes
 ;   in <Module>::.cctor)'; the CHECK-NEXT chain pins that);
@@ -26,7 +32,8 @@
 ; that touch globals and calls.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=pinvokeimpl --implicit-check-not=".field " \
-; DEFINE:   --implicit-check-not=int64 --implicit-check-not=DisableRuntimeMarshalling --implicit-check-not="[System."
+; DEFINE:   --implicit-check-not=int64 --implicit-check-not=DisableRuntimeMarshalling --implicit-check-not="[System." \
+; DEFINE:   --implicit-check-not=ldftn
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s -o %t.lnx.il 2>&1 \
 ; RUN:   | count 0
 ; RUN: %{check} --check-prefixes=CHECK,O2,LNX --input-file=%t.lnx.il
@@ -147,7 +154,10 @@ declare i32 @puts(ptr)
 ; CHECK:         {{^}}.field public static initonly native int 'op'{{( |$)}}
 ; CHECK:         {{^}}.field assembly static initonly native int '.str.2'{{( |$)}}
 ; CHECK:         {{^}}.field public static initonly native int 'hits'{{( |$)}}
-; CHECK:         {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+; CHECK-EMPTY:
+; CHECK-NEXT:    {{^}}.field private static initonly native int '<msil>fn_sum'{{$}}
+; CHECK-EMPTY:
+; CHECK-NEXT:    {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
 ; CHECK-NEXT:    {{^\{$}}
 ; CHECK-NEXT:    {{^}}  .maxstack {{[3-9]}}{{$}}
 ; CHECK-NEXT:    {{^}}  {{ldc\.i4(\.s)? 91( |$)}}
@@ -199,6 +209,9 @@ declare i32 @puts(ptr)
 ; CHECK-NEXT:    {{^}}  {{ldc\.i4(\.s)? 72( |$)}}
 ; CHECK-NEXT:    {{^}}  add{{( |$)}}
 ; CHECK-NEXT:    {{^}}  stsfld native int 'hits'{{( |$)}}
+;   the function address field of sum
+; CHECK-NEXT:    {{^}}  ldftn int32 'sum'(native int, int32){{( |$)}}
+; CHECK-NEXT:    {{^}}  stsfld native int '<msil>fn_sum'{{( |$)}}
 ;   reloc @32: names[0] = .str
 ; CHECK-NEXT:    {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:    {{^}}  {{ldc\.i4(\.s)? 32( |$)}}
@@ -215,7 +228,7 @@ declare i32 @puts(ptr)
 ; CHECK-NEXT:    {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:    {{^}}  {{ldc\.i4(\.s)? 48( |$)}}
 ; CHECK-NEXT:    {{^}}  add{{( |$)}}
-; CHECK-NEXT:    {{^}}  ldftn int32 'sum'(native int, int32){{( |$)}}
+; CHECK-NEXT:    {{^}}  ldsfld native int '<msil>fn_sum'{{( |$)}}
 ; CHECK-NEXT:    {{^}}  stind.i{{( |$)}}
 ; CHECK-NEXT:    {{^}}  ret{{( |$)}}
 ; CHECK-NEXT:    {{^}}} // end of method '.cctor'{{$}}

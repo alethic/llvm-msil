@@ -6,12 +6,20 @@
 ; then 'stind.i'. The value of a relocation to data is 'ldsfld native int
 ; '<target>'' plus 'ldc.i4 <addend>; add' when the addend is not zero
 ; (negative addends and one past the end included); the value of a relocation
-; to a function is 'ldftn <signature>' of the function, internal functions
-; included. A relocation of 4 bytes (an address truncated to i32) converts the
-; value with 'conv.i4' and stores it with 'stind.i4'. Relocations sit inside
-; arrays and structs (here after an i32 and its padding), may point to the
-; global that holds them, and may point to a zero-initialized global.
-; Functions used as values in code are 'ldftn <signature>' (FUNC_ADDR, M8.a).
+; to a function is 'ldsfld native int '<msil>fn_<name>'', the address field of
+; the function, internal functions included. A relocation of 4 bytes (an
+; address truncated to i32) converts the value with 'conv.i4' and stores it
+; with 'stind.i4'. Relocations sit inside arrays and structs (here after an i32
+; and its padding), may point to the global that holds them, and may point to a
+; zero-initialized global. Functions used as values in code load the same field
+; (FUNC_ADDR, M8.a). Function address fields (plan section 12, 'Phase-1
+; function addresses'): every function whose address is used, in code or by a
+; relocation, has one field '.field private static initonly native int
+; '<msil>fn_<name>'', declared after the data-segment block and its empty
+; line, one line per function in module order, then an empty line; the .cctor
+; sets each field once, in the same order, with 'ldftn <signature>' of the
+; function and 'stsfld', after the stores of the global address fields and
+; before the relocations. 'ldftn' appears nowhere else (--implicit-check-not).
 ; Both triples, -O2 and -O0, and the module assembles. Every relocation site
 ; of relocs.ll is naturally aligned (8 for stind.i, 4 for stind.i4), and so is
 ; its zero tail at 144, so its .cctor has no 'unaligned.' prefix at all.
@@ -33,7 +41,7 @@
 ; + offset', M8.b): a clean error that names the global, exit code 1, no crash.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=".field " --implicit-check-not=pinvokeimpl \
-; DEFINE:   --implicit-check-not=int64 --implicit-check-not="&("
+; DEFINE:   --implicit-check-not=int64 --implicit-check-not="&(" --implicit-check-not=ldftn
 ; RUN: split-file %s %t
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/relocs.ll \
 ; RUN:   -o %t/lnx.il 2>&1 | count 0
@@ -51,7 +59,8 @@
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/win.o0.dll %t/win.o0.il %}
 
 ; DEFINE: %{ucheck} = FileCheck %s --check-prefix=UNALIGNED --implicit-check-not=".field " \
-; DEFINE:   --implicit-check-not=pinvokeimpl --implicit-check-not=int64 --implicit-check-not="&("
+; DEFINE:   --implicit-check-not=pinvokeimpl --implicit-check-not=int64 --implicit-check-not="&(" \
+; DEFINE:   --implicit-check-not=ldftn
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/unaligned.ll \
 ; RUN:   -o %t/unaligned.lnx.il 2>&1 | count 0
 ; RUN: %{ucheck} --input-file=%t/unaligned.lnx.il
@@ -115,11 +124,11 @@ define internal void @internal_fn() {
   ret void
 }
 
-; The address of a function in code.
+; The address of a function in code: its address field.
 ; CHECK-LABEL: {{^}}.method public static native int 'get_fp'() cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^}}  ldftn int32 'callee'(int32){{$}}
+; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>fn_callee'{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'get_fp'{{$}}
 define ptr @get_fp() {
@@ -129,7 +138,7 @@ define ptr @get_fp() {
 ; CHECK-LABEL: {{^}}.method public static native int 'get_ifp'() cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^}}  ldftn void 'internal_fn'(){{$}}
+; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>fn_internal_fn'{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'get_ifp'{{$}}
 define ptr @get_ifp() {
@@ -182,7 +191,11 @@ define i32 @deref_p8() {
 ; CHECK:        {{^}}.field public static initonly native int 'self'{{( |$)}}
 ; CHECK:        {{^}}.field public static initonly native int 'pz'{{( |$)}}
 ; CHECK:        {{^}}.field public static initonly native int 'zero'{{( |$)}}
-; CHECK:        {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+; CHECK-EMPTY:
+; CHECK-NEXT:   {{^}}.field private static initonly native int '<msil>fn_callee'{{$}}
+; CHECK-NEXT:   {{^}}.field private static initonly native int '<msil>fn_internal_fn'{{$}}
+; CHECK-EMPTY:
+; CHECK-NEXT:   {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
 ; CHECK-NEXT:   {{^\{$}}
 ; CHECK-NEXT:   {{^}}  .maxstack {{[3-9]}}{{$}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 163( |$)}}
@@ -263,6 +276,12 @@ define i32 @deref_p8() {
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 144( |$)}}
 ; CHECK-NEXT:   {{^}}  add{{( |$)}}
 ; CHECK-NEXT:   {{^}}  stsfld native int 'zero'{{( |$)}}
+;   the function address fields, in module order
+; CHECK-NEXT:   {{^}}  ldftn int32 'callee'(int32){{( |$)}}
+; CHECK-NEXT:   {{^}}  stsfld native int '<msil>fn_callee'{{( |$)}}
+; CHECK-NEXT:   {{^}}  ldftn void 'internal_fn'(){{( |$)}}
+; CHECK-NEXT:   {{^}}  stsfld native int '<msil>fn_internal_fn'{{( |$)}}
+;   the relocations, in site order
 ; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 16( |$)}}
 ; CHECK-NEXT:   {{^}}  add{{( |$)}}
@@ -292,17 +311,17 @@ define i32 @deref_p8() {
 ; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 48( |$)}}
 ; CHECK-NEXT:   {{^}}  add{{( |$)}}
-; CHECK-NEXT:   {{^}}  ldftn int32 'callee'(int32){{( |$)}}
+; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>fn_callee'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  stind.i{{( |$)}}
 ; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 56( |$)}}
 ; CHECK-NEXT:   {{^}}  add{{( |$)}}
-; CHECK-NEXT:   {{^}}  ldftn void 'internal_fn'(){{( |$)}}
+; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>fn_internal_fn'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  stind.i{{( |$)}}
 ; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 64( |$)}}
 ; CHECK-NEXT:   {{^}}  add{{( |$)}}
-; CHECK-NEXT:   {{^}}  ldftn int32 'callee'(int32){{( |$)}}
+; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>fn_callee'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  stind.i{{( |$)}}
 ; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 72( |$)}}
@@ -323,7 +342,7 @@ define i32 @deref_p8() {
 ; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 120( |$)}}
 ; CHECK-NEXT:   {{^}}  add{{( |$)}}
-; CHECK-NEXT:   {{^}}  ldftn int32 'callee'(int32){{( |$)}}
+; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>fn_callee'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  conv.i4{{( |$)}}
 ; CHECK-NEXT:   {{^}}  stind.i4{{( |$)}}
 ; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
@@ -385,7 +404,10 @@ define i32 @fn(i32 %v) {
 ; UNALIGNED:        {{^}}.field public static initonly native int 'q4'{{( |$)}}
 ; UNALIGNED:        {{^}}.field public static initonly native int 'h'{{( |$)}}
 ; UNALIGNED:        {{^}}.field public static initonly native int 'zz'{{( |$)}}
-; UNALIGNED:        {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+; UNALIGNED-EMPTY:
+; UNALIGNED-NEXT:   {{^}}.field private static initonly native int '<msil>fn_fn'{{$}}
+; UNALIGNED-EMPTY:
+; UNALIGNED-NEXT:   {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
 ; UNALIGNED-NEXT:   {{^\{$}}
 ; UNALIGNED-NEXT:   {{^}}  .maxstack {{[3-9]}}{{$}}
 ; UNALIGNED-NEXT:   {{^}}  {{ldc\.i4(\.s)? 91( |$)}}
@@ -430,6 +452,9 @@ define i32 @fn(i32 %v) {
 ; UNALIGNED-NEXT:   {{^}}  {{ldc\.i4(\.s)? 74( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  add{{( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  stsfld native int 'zz'{{( |$)}}
+;   the function address field: no prefix
+; UNALIGNED-NEXT:   {{^}}  ldftn int32 'fn'(int32){{( |$)}}
+; UNALIGNED-NEXT:   {{^}}  stsfld native int '<msil>fn_fn'{{( |$)}}
 ;   reloc @17 (odd): pk.p = x
 ; UNALIGNED-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  {{ldc\.i4(\.s)? 17( |$)}}
@@ -450,7 +475,7 @@ define i32 @fn(i32 %v) {
 ; UNALIGNED-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  {{ldc\.i4(\.s)? 36( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  add{{( |$)}}
-; UNALIGNED-NEXT:   {{^}}  ldftn int32 'fn'(int32){{( |$)}}
+; UNALIGNED-NEXT:   {{^}}  ldsfld native int '<msil>fn_fn'{{( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  unaligned. 4{{( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  stind.i{{( |$)}}
 ;   reloc @48 (8-aligned): no prefix
@@ -473,7 +498,7 @@ define i32 @fn(i32 %v) {
 ; UNALIGNED-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  {{ldc\.i4(\.s)? 63( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  add{{( |$)}}
-; UNALIGNED-NEXT:   {{^}}  ldftn int32 'fn'(int32){{( |$)}}
+; UNALIGNED-NEXT:   {{^}}  ldsfld native int '<msil>fn_fn'{{( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  conv.i4{{( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  unaligned. 1{{( |$)}}
 ; UNALIGNED-NEXT:   {{^}}  stind.i4{{( |$)}}

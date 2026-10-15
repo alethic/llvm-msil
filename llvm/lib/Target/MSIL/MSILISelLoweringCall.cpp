@@ -25,7 +25,13 @@
 /// results are the call's result (at most one) and the chain. Instruction
 /// selection splits it into CALL_PARAMS and CALL_RESULTS, and the custom
 /// inserter emitCallResults joins them into one CALL (a direct 'call' of a
-/// method) or CALL_INDIRECT ('calli' through an address).
+/// method) or CALL_INDIRECT ('calli' through an address, a managed call whose
+/// signature MSILMCInstLower takes from the call's own operands).
+///
+/// A byval argument is copied into a new object of the caller's static frame,
+/// and the callee receives the address of the copy, as in WebAssembly: the
+/// callee sees an ordinary pointer parameter. An sret argument is an ordinary
+/// pointer argument too.
 ///
 /// A library call, which SelectionDAG makes for an operation that it cannot
 /// expand inline, names its callee by an external symbol. Phase 1 has no
@@ -43,6 +49,7 @@
 #include "MSILUtilities.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -128,13 +135,13 @@ SDValue MSILTargetLowering::LowerFormalArguments(
       fail(DL, DAG, "inalloca arguments are not supported for MSIL");
     else if (In.Flags.isPreallocated())
       fail(DL, DAG, "preallocated arguments are not supported for MSIL");
-    else if (In.Flags.isByVal())
-      fail(DL, DAG, "byval arguments are not supported for MSIL yet");
     if (In.Flags.isNest())
       fail(DL, DAG, "nest arguments are not supported for MSIL");
-    // An sret argument is an ordinary pointer parameter. Narrow integers
-    // arrive as int32 (In.VT is the register type); SelectionDAGBuilder adds
-    // AssertSext/AssertZext for the signext/zeroext attributes.
+    // A byval argument is the address of the copy that the caller made
+    // (LowerCall), and an sret argument is an ordinary pointer parameter.
+    // Narrow integers arrive as int32 (In.VT is the register type);
+    // SelectionDAGBuilder adds AssertSext/AssertZext for the signext/zeroext
+    // attributes.
     InVals.push_back(In.Used ? DAG.getNode(MSILISD::ARGUMENT, DL, In.VT,
                                            DAG.getTargetConstant(InVals.size(),
                                                                  DL, MVT::i32))
@@ -191,7 +198,6 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   // symbol of a library call that becomes a P/Invoke declaration.
   const Function *F = nullptr;
   const char *LibCallee = nullptr;
-  int64_t CalleeOffset = 0;
 
   // SelectionDAG calls a library function, named by an external symbol, for
   // an operation that it cannot expand inline (sqrt, fmin, an i128 to
@@ -259,15 +265,37 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   if (CLI.CB && CLI.CB->isMustTailCall())
     return Reject("musttail calls are not supported for MSIL yet");
 
+  // A function as the callee, without an offset (isOffsetFoldingLegal never
+  // folds one into a function's address), is a direct call of its method.
+  // Any other callee is an address: a value in a register, a global
+  // variable's address, or a function's address plus an offset, called with
+  // 'calli'.
+  if (const auto *GA = dyn_cast<GlobalAddressSDNode>(Callee))
+    if (GA->getOffset() == 0)
+      F = dyn_cast<Function>(GA->getGlobal());
+
+  // SelectionDAGBuilder lowers every recognized intrinsic itself, so only an
+  // 'llvm.*' name that LLVM does not know reaches this point. It has no CIL
+  // method; the asserts in MSILMCInstLower and MSILAsmPrinter stay internal
+  // invariants.
+  if (F && F->isIntrinsic())
+    return Reject(Twine("unknown intrinsic '") + F->getName() +
+                  "' is not supported for MSIL");
+
   // A direct call names the callee's method, whose signature comes from the
   // callee's own type (MSILAsmPrinter::getSignature), while the arguments and
   // results here come from the call site's type. If the two differ, the call
   // token would not match the method and the JIT would reject the call.
-  // MSILFixFunctionBitcasts (M9) makes them agree before ISel; this is the
-  // backstop.
-  if (const auto *GA = dyn_cast<GlobalAddressSDNode>(Callee)) {
-    F = dyn_cast<Function>(GA->getGlobal());
-    CalleeOffset = GA->getOffset();
+  if (F && CLI.CB && CLI.CB->getFunctionType() != F->getFunctionType()) {
+    // MSILFixFunctionBitcasts makes a call of a function agree with the
+    // function's type before ISel; this is the backstop.
+    if (isa<Function>(CLI.CB->getCalledOperand()))
+      return Reject("mismatched call signature");
+    // The IR calls through a pointer that SelectionDAG folded into this
+    // function (a select of two functions with a constant condition, at -O0
+    // too). The call stays what the IR says: an indirect call, with the call
+    // site's signature, through the function's address.
+    F = nullptr;
   }
 
   // A narrow (i1, i8, i16) result is returned as an int32, and the zeroext
@@ -287,15 +315,6 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     CLI.RetZExt = false;
     CLI.RetSExt = false;
   }
-  // SelectionDAGBuilder lowers every recognized intrinsic itself, so only an
-  // 'llvm.*' name that LLVM does not know reaches this point. It has no CIL
-  // method; the asserts in MSILMCInstLower and MSILAsmPrinter stay internal
-  // invariants.
-  if (F && F->isIntrinsic())
-    return Reject(Twine("unknown intrinsic '") + F->getName() +
-                  "' is not supported for MSIL");
-  if (F && CLI.CB && CLI.CB->getFunctionType() != F->getFunctionType())
-    return Reject("mismatched call signature");
 
   if (CLI.IsVarArg)
     return Reject("calls to variadic functions are not supported for MSIL yet");
@@ -307,8 +326,6 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
       return Reject("inalloca arguments are not supported for MSIL");
     if (Out.Flags.isPreallocated())
       return Reject("preallocated arguments are not supported for MSIL");
-    if (Out.Flags.isByVal())
-      return Reject("byval arguments are not supported for MSIL yet");
     if (Out.Flags.isNest())
       return Reject("nest arguments are not supported for MSIL");
     // An sret argument (including the hidden one of a result that
@@ -317,18 +334,43 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     // extended as the signext/zeroext attributes say.
   }
 
+  // A byval argument is passed as the address of a copy in this function's
+  // static frame (decision D13), made just before the call, so the callee may
+  // change its argument without changing the caller's object. The copy is a
+  // cpblk (decision D15, MSILSelectionDAGInfo::EmitTargetCodeForMemcpy),
+  // never a library call. An empty aggregate needs no copy.
+  MVT PtrVT = getPointerTy(MF.getDataLayout());
+  SDValue Chain = CLI.Chain;
+  for (unsigned I = 0, E = CLI.Outs.size(); I != E; ++I) {
+    const ISD::OutputArg &Out = CLI.Outs[I];
+    if (!Out.Flags.isByVal() || Out.Flags.getByValSize() == 0)
+      continue;
+    MachineFrameInfo &MFI = MF.getFrameInfo();
+    Align Alignment = Out.Flags.getNonZeroByValAlign();
+    int FI = MFI.CreateStackObject(Out.Flags.getByValSize(), Alignment,
+                                   /*isSpillSlot=*/false);
+    SDValue SizeNode = DAG.getConstant(Out.Flags.getByValSize(), DL, PtrVT);
+    SDValue FINode = DAG.getFrameIndex(FI, PtrVT);
+    Chain = DAG.getMemcpy(Chain, DL, FINode, CLI.OutVals[I], SizeNode,
+                          Alignment, Alignment,
+                          /*isVol=*/false, /*AlwaysInline=*/true,
+                          /*CI=*/nullptr, std::nullopt, MachinePointerInfo(),
+                          MachinePointerInfo());
+    CLI.OutVals[I] = FINode;
+  }
+
   // A direct callee needs no address: CALL_PARAMS takes the function or
   // library symbol itself, and MSILMCInstLower turns it into the method
   // reference. Any other callee is an address computed into a register,
-  // called with 'calli'.
-  MVT PtrVT = getPointerTy(MF.getDataLayout());
+  // called with 'calli' (a managed call: Phase 1 takes function addresses
+  // only with ldftn, of methods and of P/Invoke declarations alike).
   if (F)
-    Callee = DAG.getTargetGlobalAddress(F, DL, PtrVT, CalleeOffset);
+    Callee = DAG.getTargetGlobalAddress(F, DL, PtrVT);
   else if (LibCallee)
     Callee = DAG.getTargetExternalSymbol(LibCallee, PtrVT);
 
   SmallVector<SDValue, 16> Ops;
-  Ops.push_back(CLI.Chain);
+  Ops.push_back(Chain);
   Ops.push_back(Callee);
   Ops.append(CLI.OutVals.begin(), CLI.OutVals.end());
 

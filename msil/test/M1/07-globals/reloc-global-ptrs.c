@@ -5,10 +5,13 @@
 // levels), a statically linked list and a cycle (a node pointing to itself),
 // a struct table of pointers into another table, pointers to static
 // (assembly-field) globals, pointers to zero-initialized (BSS) globals,
-// pointers to functions of the module (ldftn relocations, compared with the
-// address taken in code; calls through them come in M9) and to the puts and
-// putchar P/Invokes (putchar is referenced only from data, so its P/Invoke
-// exists only for the relocation). Indexes come from a volatile global, so
+// pointers to functions of the module and to the puts and putchar P/Invokes
+// (putchar is referenced only from data, so its P/Invoke exists only for the
+// relocation). A function relocation stores the value of the function's
+// address field ('<msil>fn_<name>'), which <Module>::.cctor sets once with
+// ldftn. Function pointers are compared with the addresses taken in code, not
+// called; calls through function pointers are covered by
+// msil/test/M1/08-fnptr. Indexes come from a volatile global, so
 // pointers are loaded at -O2 too. Writes through relocated pointers are read
 // back through the globals they point to. MSIL_EXPECT returns
 // 1 + (line % 255) at the first failed check; [exit 0] means every check

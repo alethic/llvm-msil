@@ -9,7 +9,8 @@
 /// \file
 /// MSILMemberRefExpr is the operand of every CIL instruction that names a
 /// metadata token: the method of a 'call' or 'ldftn', the address field of a
-/// global ('ldsfld'), the stand-alone signature of a 'calli', and BCL members.
+/// global or a function ('ldsfld'), the stand-alone signature of a 'calli',
+/// and BCL members.
 /// MSILMCInstLower creates it with the signature from MSILAsmPrinter's table,
 /// and MSILInstPrinter prints it through MCAsmInfo::printExpr, so the printer
 /// needs no side channel.
@@ -40,8 +41,10 @@ public:
   enum Kind : uint8_t {
     /// A method: prints "<ret> '<name>'(<params>)" (call, ldftn).
     Method,
-    /// A global's address field: prints "native int '<name>'" (ldsfld). The
-    /// offset is printed by the GLOBAL_ADDR case of MSILInstPrinter.
+    /// A global's or a function's address field: prints "native int '<name>'"
+    /// (ldsfld, used by GLOBAL_ADDR and FUNC_ADDR). Only GLOBAL_ADDR has an
+    /// offset, printed by its case of MSILInstPrinter;
+    /// MSILInstPrinter::checkAddressOperand rejects a FUNC_ADDR offset.
     Field,
     /// A call-site signature: prints "<ret>(<params>)" (calli), with an
     /// 'unmanaged cdecl' or 'unmanaged stdcall' prefix for unmanaged calls.

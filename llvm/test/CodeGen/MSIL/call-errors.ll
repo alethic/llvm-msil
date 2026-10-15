@@ -2,11 +2,11 @@
 ; section 2 'Diagnostics leave well-formed output', M4.a, M4.c, M8.a, M8.c;
 ; decisions D14, D19; section 12 rows 'M4.a extended', 'Plan 5.3
 ; (MSILISelLowering.h) extended, M4.b', the two M4 fix-loop ownership rows of
-; fix-1, the two M5 rows of fix-3 and the M8 rows for this file). Each one is
-; reported exactly once, naming the caller (%{diag} rejects every other
-; 'error:' and 'warning:' line, so each expected error is checked; the
-; end-of-module errors of EXTMULTI are matched as a group and counted),
-; compilation goes on, llc exits with 1 and prints neither
+; fix-1, the two M5 rows of fix-3, the M8 rows and the M9 row for this file).
+; Each one is reported exactly once, naming the caller (%{diag} rejects every
+; other 'error:' and 'warning:' line, so each expected error is checked; the
+; errors of STRUCTMM and the end-of-module errors of EXTMULTI are matched as a
+; group), compilation goes on, llc exits with 1 and prints neither
 ; 'LLVM ERROR' nor a crash report, no call is built for the rejected call (its
 ; result is undefined, so the call disappears from the IL), and the IL on
 ; stdout (llc deletes its -o file after an error) still assembles. Every part
@@ -14,10 +14,13 @@
 ; two-value results on both triples).
 ;
 ; - LowerCall rejects a call of a variadic function ('calls to variadic
-;   functions are not supported for MSIL yet', D19; K&R calls are fixed before
-;   ISel in M9), a direct call whose call-site type differs from the callee's
-;   ('mismatched call signature'; the backstop until MSILFixFunctionBitcasts in
-;   M9), a byval, nest or inalloca argument, a musttail call, an unsupported
+;   functions are not supported for MSIL yet', D19; varargs-call-error.ll has
+;   more, and K&R calls are fixed-arity, function-bitcasts.ll), a direct call
+;   whose call-site type still differs from the callee's after
+;   MSILFixFunctionBitcasts ('mismatched call signature'; since M9 only
+;   struct-typed mismatches, which the copied pass does not wrap; the others
+;   call wrappers, function-bitcasts.ll), a nest or inalloca argument (byval
+;   arguments are copied since M9, byval.ll), a musttail call, an unsupported
 ;   calling convention, a callee named 'llvm.*' that LLVM does not know
 ;   ("unknown intrinsic '<name>' is not supported for MSIL") and an
 ;   ExternalSymbol callee that is a runtime helper, whose name starts with
@@ -32,9 +35,14 @@
 ;   power of two, gets there; division and remainder by a power of two and
 ;   exact division by any constant expand inline (i128.ll).
 ; - A rejected call whose result needs more than one value (i128,
-;   { i64, i64 }) would also be demoted to a stack slot around LowerCall, so
-;   MSILFixFunctionBitcasts reports it with LowerCall's text and erases it
-;   before ISel (until M9.b replaces it).
+;   { i64, i64 }) is demoted to a frame slot around LowerCall (frames exist
+;   since M7) and reported once. Since M9, MSILFixFunctionBitcasts erases
+;   nothing (M4's copy erased these calls before ISel): LowerCall reports the
+;   call once and builds no call node, and the demoted result is read from
+;   its frame slot, so the caller has a static frame (a localloc). The IL
+;   checks therefore reject a call or calli only at the start of an
+;   instruction ('{{^}}  call'), which the 'call' inside 'localloc' does not
+;   match.
 ; - A call of a definition whose body MSILPrepareIR deleted after a diagnostic
 ;   (here inline assembly) is erased too, so the only error is the real one.
 ;   The same holds for invokes, which share a landing pad with a PHI.
@@ -55,15 +63,22 @@
 ;   clang calls for C complex multiplication and division on
 ;   x86_64-unknown-linux-gnu-msil; i128; { i64, i64 }) has its result demoted
 ;   to a frame slot (frames exist since M7). None of these callees is an
-;   import, so each is reported once with the same text, with or without its
-;   calls (MSILFixFunctionBitcasts may still erase them, section 12 row
-;   'fix-loop ownership: MSILFixFunctionBitcasts.cpp -> M8.c'): the errors
-;   are matched as a group and counted, and only the IL of the other functions
-;   is checked.
+;   import, so each is reported once with the same text (since M9
+;   MSILFixFunctionBitcasts erases none of their calls): the errors are
+;   matched as a group and counted, and only the IL of the other functions is
+;   checked.
+; - A byval argument of an import is copied like any byval argument (since
+;   M9, byval.ll), and the import, whose aggregate parameter a P/Invoke cannot
+;   pass, is reported once at the end of the module with M8.c's "imported
+;   function '<name>' has a parameter or result that a P/Invoke cannot pass
+;   natively (...)" and gets no P/Invoke declaration.
 ;
 ; Later owners (section 12): M8.d updated the EXTERN, AVAIL, EXTMULTI, LIBCALL,
-; LIBCALLFP and DIAGCALLEE parts for the M8 texts; M9.c moves or retires the
-; MISMATCH, MMULTI and BYVAL parts when M9 makes those calls valid.
+; LIBCALLFP and DIAGCALLEE parts for the M8 texts; M9.c retired the M4 parts
+; that M9 makes valid (mismatched scalar call types: wrappers in
+; function-bitcasts.ll; byval at a call site: byval.ll), kept LowerCall's
+; mismatch check as a backstop with struct-typed mismatches (STRUCTMM) and
+; added the byval call of an import (BYVALIMP).
 
 ; DEFINE: %{diag} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
 ; DEFINE:   --implicit-check-not=error: --implicit-check-not=warning:
@@ -131,52 +146,23 @@
 ; RUN: FileCheck %s --check-prefix=LIBCALLFP-IL --input-file=%t/libcall-fp.win.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/libcall-fp.dll %t/libcall-fp.win.il %}
 
-; Call-site type differs from the callee's.
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/mismatch.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=MISMATCH
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/mismatch.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=MISMATCH
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/mismatch.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=MISMATCH
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/mismatch.ll \
-; RUN:   > %t/mismatch.lnx.il
-; RUN: FileCheck %s --check-prefix=MISMATCH-IL --input-file=%t/mismatch.lnx.il
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/mismatch.ll \
-; RUN:   > %t/mismatch.win.il
-; RUN: FileCheck %s --check-prefix=MISMATCH-IL --input-file=%t/mismatch.win.il
-; RUN: %if ilasm %{ %ilasm-verify -output=%t/mismatch.dll %t/mismatch.win.il %}
-
-; Mismatched calls whose result needs two values.
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/mismatch-multi.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=MMULTI
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/mismatch-multi.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=MMULTI
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/mismatch-multi.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=MMULTI
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/mismatch-multi.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=MMULTI
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/mismatch-multi.ll \
-; RUN:   > %t/mismatch-multi.lnx.il
-; RUN: FileCheck %s --check-prefix=MMULTI-IL --input-file=%t/mismatch-multi.lnx.il
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/mismatch-multi.ll \
-; RUN:   > %t/mismatch-multi.win.il
-; RUN: FileCheck %s --check-prefix=MMULTI-IL --input-file=%t/mismatch-multi.win.il
-; RUN: %if ilasm %{ %ilasm-verify -output=%t/mismatch-multi.dll %t/mismatch-multi.win.il %}
-
-; byval argument at the call site.
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/byval.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=BYVAL
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/byval.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=BYVAL
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/byval.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=BYVAL
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/byval.ll \
-; RUN:   > %t/byval.lnx.il
-; RUN: FileCheck %s --check-prefix=BYVAL-IL --input-file=%t/byval.lnx.il
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/byval.ll \
-; RUN:   > %t/byval.win.il
-; RUN: FileCheck %s --check-prefix=BYVAL-IL --input-file=%t/byval.win.il
-; RUN: %if ilasm %{ %ilasm-verify -output=%t/byval.dll %t/byval.win.il %}
+; Call-site types that differ from the callee's in a struct type, which
+; MSILFixFunctionBitcasts does not wrap (one of them with a two-value result).
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/struct-mismatch.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=STRUCTMM
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/struct-mismatch.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=STRUCTMM
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/struct-mismatch.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=STRUCTMM
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/struct-mismatch.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=STRUCTMM
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/struct-mismatch.ll \
+; RUN:   > %t/struct-mismatch.lnx.il
+; RUN: FileCheck %s --check-prefix=STRUCTMM-IL --input-file=%t/struct-mismatch.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/struct-mismatch.ll \
+; RUN:   > %t/struct-mismatch.win.il
+; RUN: FileCheck %s --check-prefix=STRUCTMM-IL --input-file=%t/struct-mismatch.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/struct-mismatch.dll %t/struct-mismatch.win.il %}
 
 ; nest and inalloca arguments.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/arg-attrs.ll -o /dev/null 2>&1 \
@@ -338,6 +324,23 @@
 ; RUN:   > %t/extern-multi.win.il
 ; RUN: FileCheck %s --check-prefix=EXTMULTI-IL --implicit-check-not=pinvokeimpl --input-file=%t/extern-multi.win.il
 
+; byval argument of an imported declaration (the call is built, and ext gets
+; no P/Invoke, so the IL does not assemble).
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/byval-import.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=BYVALIMP
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/byval-import.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=BYVALIMP
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/byval-import.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=BYVALIMP
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/byval-import.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=BYVALIMP
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/byval-import.ll \
+; RUN:   > %t/byval-import.lnx.il
+; RUN: FileCheck %s --check-prefix=BYVALIMP-IL --implicit-check-not=pinvokeimpl --input-file=%t/byval-import.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/byval-import.ll \
+; RUN:   > %t/byval-import.win.il
+; RUN: FileCheck %s --check-prefix=BYVALIMP-IL --implicit-check-not=pinvokeimpl --input-file=%t/byval-import.win.il
+
 ;--- variadic.ll
 ; A variadic callee, called with and without variadic arguments, then a
 ; function that compiles normally.
@@ -345,11 +348,11 @@
 ; VARIADIC:     error: {{.*}}call_variadic_fixed_only{{.*}}calls to variadic functions are not supported for MSIL yet
 
 ; VARIADIC-IL-LABEL: .method {{.*}}'call_variadic'(
-; VARIADIC-IL-NOT:   call
+; VARIADIC-IL-NOT:   {{^}}  call
 ; VARIADIC-IL:       {{^}}  ret{{$}}
 ; VARIADIC-IL-NEXT:  {{^}}} // end of method 'call_variadic'{{$}}
 ; VARIADIC-IL-LABEL: .method {{.*}}'call_variadic_fixed_only'(
-; VARIADIC-IL-NOT:   call
+; VARIADIC-IL-NOT:   {{^}}  call
 ; VARIADIC-IL:       {{^}}  ret{{$}}
 ; VARIADIC-IL-NEXT:  {{^}}} // end of method 'call_variadic_fixed_only'{{$}}
 ; VARIADIC-IL-LABEL: .method {{.*}}'after_variadic'(
@@ -379,18 +382,18 @@ define i32 @after_variadic(i32 %a, i32 %b) {
 ;--- variadic-multi.ll
 ; Calls of variadic functions returning i128 and { i64, i64 }; the callers
 ; return one half, so their own result is a single value. Each call is
-; reported once (MSILFixFunctionBitcasts) and nothing is left to crash later.
+; reported once and nothing is left to crash later.
 ; VMULTI:       error: {{.*}}call_variadic_i128{{.*}}calls to variadic functions are not supported for MSIL yet
 ; VMULTI:       error: {{.*}}call_variadic_pair{{.*}}calls to variadic functions are not supported for MSIL yet
 
 ; VMULTI-IL-LABEL: .method {{.*}}'call_variadic_i128'(
 ; VMULTI-IL-SAME:  int32) cil managed{{$}}
-; VMULTI-IL-NOT:   call
+; VMULTI-IL-NOT:   {{^}}  call
 ; VMULTI-IL:       {{^}}  ret{{$}}
 ; VMULTI-IL-NEXT:  {{^}}} // end of method 'call_variadic_i128'{{$}}
 ; VMULTI-IL-LABEL: .method {{.*}}'call_variadic_pair'(
 ; VMULTI-IL-SAME:  int32) cil managed{{$}}
-; VMULTI-IL-NOT:   call
+; VMULTI-IL-NOT:   {{^}}  call
 ; VMULTI-IL:       {{^}}  ret{{$}}
 ; VMULTI-IL-NEXT:  {{^}}} // end of method 'call_variadic_pair'{{$}}
 ; VMULTI-IL-LABEL: .method {{.*}}'after_variadic_multi'(
@@ -434,28 +437,28 @@ define i64 @after_variadic_multi(i64 %a, i64 %b) {
 
 ; LIBCALL-IL-LABEL: .method {{.*}}'div128'(
 ; LIBCALL-IL-SAME:  native int, native int, native int, native int) cil managed{{$}}
-; LIBCALL-IL-NOT:   call
+; LIBCALL-IL-NOT:   {{^}}  call
 ; LIBCALL-IL:       {{^}}  ret{{$}}
 ; LIBCALL-IL-NEXT:  {{^}}} // end of method 'div128'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'urem128'(
-; LIBCALL-IL-NOT:   call
+; LIBCALL-IL-NOT:   {{^}}  call
 ; LIBCALL-IL:       {{^}}  ret{{$}}
 ; LIBCALL-IL-NEXT:  {{^}}} // end of method 'urem128'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'udiv128'(
-; LIBCALL-IL-NOT:   call
+; LIBCALL-IL-NOT:   {{^}}  call
 ; LIBCALL-IL:       {{^}}  ret{{$}}
 ; LIBCALL-IL-NEXT:  {{^}}} // end of method 'udiv128'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'srem128'(
-; LIBCALL-IL-NOT:   call
+; LIBCALL-IL-NOT:   {{^}}  call
 ; LIBCALL-IL:       {{^}}  ret{{$}}
 ; LIBCALL-IL-NEXT:  {{^}}} // end of method 'srem128'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'sdiv128_by_10'(
 ; LIBCALL-IL-SAME:  native int, native int) cil managed{{$}}
-; LIBCALL-IL-NOT:   call
+; LIBCALL-IL-NOT:   {{^}}  call
 ; LIBCALL-IL:       {{^}}  ret{{$}}
 ; LIBCALL-IL-NEXT:  {{^}}} // end of method 'sdiv128_by_10'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'udiv128_by_10'(
-; LIBCALL-IL-NOT:   call
+; LIBCALL-IL-NOT:   {{^}}  call
 ; LIBCALL-IL:       {{^}}  ret{{$}}
 ; LIBCALL-IL-NEXT:  {{^}}} // end of method 'udiv128_by_10'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'after_libcall'(
@@ -515,12 +518,12 @@ define i64 @after_libcall(i64 %a, i64 %b) {
 
 ; LIBCALLFP-IL-LABEL: .method {{.*}}'sitofp128'(
 ; LIBCALLFP-IL-SAME:  native int, native int) cil managed{{$}}
-; LIBCALLFP-IL-NOT:   call
+; LIBCALLFP-IL-NOT:   {{^}}  call
 ; LIBCALLFP-IL:       {{^}}  ret{{$}}
 ; LIBCALLFP-IL-NEXT:  {{^}}} // end of method 'sitofp128'{{$}}
 ; LIBCALLFP-IL-LABEL: .method {{.*}}'uitofp128'(
 ; LIBCALLFP-IL-SAME:  native int, native int) cil managed{{$}}
-; LIBCALLFP-IL-NOT:   call
+; LIBCALLFP-IL-NOT:   {{^}}  call
 ; LIBCALLFP-IL:       {{^}}  ret{{$}}
 ; LIBCALLFP-IL-NEXT:  {{^}}} // end of method 'uitofp128'{{$}}
 ; LIBCALLFP-IL-LABEL: .method {{.*}}'after_libcall_fp'(
@@ -546,140 +549,51 @@ define i64 @after_libcall_fp(i64 %a, i64 %b) {
   ret i64 %r
 }
 
-;--- mismatch.ll
-; The call-site function type differs from the callee's in a parameter type,
-; the result type, the number of parameters and void versus a result.
-; MISMATCH:     error: {{.*}}call_param_type{{.*}}mismatched call signature
-; MISMATCH:     error: {{.*}}call_result_type{{.*}}mismatched call signature
-; MISMATCH:     error: {{.*}}call_param_count{{.*}}mismatched call signature
-; MISMATCH:     error: {{.*}}call_void_result{{.*}}mismatched call signature
+;--- struct-mismatch.ll
+; MSILFixFunctionBitcasts (a copy of WebAssembly's) creates no wrapper when a
+; parameter or the result differs in a struct type, so these calls keep their
+; mismatched call-site types and LowerCall reports them: a { i32 } argument
+; for an i32 parameter, and a { i32, i32 } result (two values: demoted to a
+; frame slot first) for an i32 result. The errors are matched as a group: the
+; result case may be reported before ISel. The matching call after them is
+; compiled as usual.
+; STRUCTMM-DAG: error: {{.*}}call_struct_param{{.*}}mismatched call signature
+; STRUCTMM-DAG: error: {{.*}}call_struct_result{{.*}}mismatched call signature
 
-; MISMATCH-IL:       {{^}}.method public static int32 'callee'(int32) cil managed{{$}}
-; MISMATCH-IL-LABEL: .method {{.*}}'call_param_type'(
-; MISMATCH-IL-NOT:   call
-; MISMATCH-IL:       {{^}}  ret{{$}}
-; MISMATCH-IL-LABEL: .method {{.*}}'call_result_type'(
-; MISMATCH-IL-NOT:   call
-; MISMATCH-IL:       {{^}}  ret{{$}}
-; MISMATCH-IL-LABEL: .method {{.*}}'call_param_count'(
-; MISMATCH-IL-NOT:   call
-; MISMATCH-IL:       {{^}}  ret{{$}}
-; MISMATCH-IL-LABEL: .method {{.*}}'call_void_result'(
-; MISMATCH-IL-NOT:   call
-; MISMATCH-IL:       {{^}}  ret{{$}}
-; The matching call after them is compiled as usual.
-; MISMATCH-IL-LABEL: .method {{.*}}'call_matching'(
-; MISMATCH-IL:       {{^}}  ldarg.0{{$}}
-; MISMATCH-IL-NEXT:  {{^}}  call int32 'callee'(int32){{$}}
-; MISMATCH-IL-NEXT:  {{^}}  ret{{$}}
-source_filename = "mismatch.c"
+; STRUCTMM-IL:       {{^}}.method public static int32 'callee'(int32) cil managed{{$}}
+; STRUCTMM-IL-LABEL: .method {{.*}}'call_struct_param'(
+; STRUCTMM-IL-NOT:   {{^}}  call
+; STRUCTMM-IL:       {{^}}  ret{{$}}
+; STRUCTMM-IL-NEXT:  {{^}}} // end of method 'call_struct_param'{{$}}
+; STRUCTMM-IL-LABEL: .method {{.*}}'call_struct_result'(
+; STRUCTMM-IL-NOT:   {{^}}  call
+; STRUCTMM-IL:       {{^}}  ret{{$}}
+; STRUCTMM-IL-NEXT:  {{^}}} // end of method 'call_struct_result'{{$}}
+; STRUCTMM-IL-LABEL: .method {{.*}}'call_matching'(
+; STRUCTMM-IL:       {{^}}  ldarg.0{{$}}
+; STRUCTMM-IL-NEXT:  {{^}}  call int32 'callee'(int32){{$}}
+; STRUCTMM-IL-NEXT:  {{^}}  ret{{$}}
+; STRUCTMM-IL-NOT:   {{^}}.method {{.*}}_bitcast
+source_filename = "struct-mismatch.c"
 
 define i32 @callee(i32 %a) {
   ret i32 %a
 }
 
-define i32 @call_param_type(i64 %x) {
-  %r = call i32 @callee(i64 %x)
+define i32 @call_struct_param(i32 %x) {
+  %s = insertvalue { i32 } poison, i32 %x, 0
+  %r = call i32 @callee({ i32 } %s)
   ret i32 %r
 }
 
-define i64 @call_result_type(i32 %x) {
-  %r = call i64 @callee(i32 %x)
-  ret i64 %r
-}
-
-define i32 @call_param_count() {
-  %r = call i32 @callee()
-  ret i32 %r
-}
-
-define void @call_void_result(i32 %x) {
-  call void @callee(i32 %x)
-  ret void
+define i32 @call_struct_result(i32 %x) {
+  %r = call { i32, i32 } @callee(i32 %x)
+  %e = extractvalue { i32, i32 } %r, 1
+  ret i32 %e
 }
 
 define i32 @call_matching(i32 %x) {
   %r = call i32 @callee(i32 %x)
-  ret i32 %r
-}
-
-;--- mismatch-multi.ll
-; Calls returning i128 and { i64, i64 } of functions defined as i32 (i32);
-; the callers return one half. Each callee is called once, so the order of
-; the errors is the order of the callers.
-; MMULTI:       error: {{.*}}call_mismatch_i128{{.*}}mismatched call signature
-; MMULTI:       error: {{.*}}call_mismatch_pair{{.*}}mismatched call signature
-
-; MMULTI-IL:         {{^}}.method public static int32 'callee_a'(int32) cil managed{{$}}
-; MMULTI-IL:         {{^}}.method public static int32 'callee_b'(int32) cil managed{{$}}
-; MMULTI-IL-LABEL: .method {{.*}}'call_mismatch_i128'(
-; MMULTI-IL-NOT:   call
-; MMULTI-IL:       {{^}}  ret{{$}}
-; MMULTI-IL-NEXT:  {{^}}} // end of method 'call_mismatch_i128'{{$}}
-; MMULTI-IL-LABEL: .method {{.*}}'call_mismatch_pair'(
-; MMULTI-IL-NOT:   call
-; MMULTI-IL:       {{^}}  ret{{$}}
-; MMULTI-IL-NEXT:  {{^}}} // end of method 'call_mismatch_pair'{{$}}
-; MMULTI-IL-LABEL: .method {{.*}}'after_mismatch_multi'(
-; MMULTI-IL:       {{^}}  ldarg.0{{$}}
-; MMULTI-IL-NEXT:  {{^}}  ldarg.1{{$}}
-; MMULTI-IL-NEXT:  {{^}}  add{{$}}
-; MMULTI-IL-NEXT:  {{^}}  ret{{$}}
-source_filename = "mismatch-multi.c"
-
-define i32 @callee_a(i32 %a) {
-  ret i32 %a
-}
-
-define i32 @callee_b(i32 %a) {
-  ret i32 %a
-}
-
-define i64 @call_mismatch_i128(i32 %x) {
-  %r = call i128 @callee_a(i32 %x)
-  %t = trunc i128 %r to i64
-  ret i64 %t
-}
-
-define i64 @call_mismatch_pair(i32 %x) {
-  %r = call { i64, i64 } @callee_b(i32 %x)
-  %e = extractvalue { i64, i64 } %r, 0
-  ret i64 %e
-}
-
-define i32 @after_mismatch_multi(i32 %a, i32 %b) {
-  %r = add i32 %a, %b
-  ret i32 %r
-}
-
-;--- byval.ll
-; A byval argument at a call of a declared function; the caller's own
-; parameter is an ordinary pointer. The rejected call is not built, so the
-; declaration is not reported as an external call.
-; BYVAL:        error: {{.*}}call_byval{{.*}}byval arguments are not supported for MSIL yet
-
-; BYVAL-IL-LABEL: .method {{.*}}'call_byval'(
-; BYVAL-IL-NOT:   call
-; BYVAL-IL:       {{^}}  ret{{$}}
-; BYVAL-IL-NEXT:  {{^}}} // end of method 'call_byval'{{$}}
-; BYVAL-IL-LABEL: .method {{.*}}'after_byval'(
-; BYVAL-IL:       {{^}}  ldarg.0{{$}}
-; BYVAL-IL-NEXT:  {{^}}  ldarg.1{{$}}
-; BYVAL-IL-NEXT:  {{^}}  add{{$}}
-; BYVAL-IL-NEXT:  {{^}}  ret{{$}}
-source_filename = "byval.c"
-
-%S = type { i64, i64 }
-
-declare void @g(ptr byval(%S))
-
-define void @call_byval(ptr %p) {
-  call void @g(ptr byval(%S) %p)
-  ret void
-}
-
-define i32 @after_byval(i32 %a, i32 %b) {
-  %r = add i32 %a, %b
   ret i32 %r
 }
 
@@ -689,11 +603,11 @@ define i32 @after_byval(i32 %a, i32 %b) {
 ; ARGATTR:      error: {{.*}}call_inalloca{{.*}}inalloca arguments are not supported for MSIL
 
 ; ARGATTR-IL-LABEL: .method {{.*}}'call_nest'(
-; ARGATTR-IL-NOT:   call
+; ARGATTR-IL-NOT:   {{^}}  call
 ; ARGATTR-IL:       {{^}}  ret{{$}}
 ; ARGATTR-IL-NEXT:  {{^}}} // end of method 'call_nest'{{$}}
 ; ARGATTR-IL-LABEL: .method {{.*}}'call_inalloca'(
-; ARGATTR-IL-NOT:   call
+; ARGATTR-IL-NOT:   {{^}}  call
 ; ARGATTR-IL:       {{^}}  ret{{$}}
 ; ARGATTR-IL-NEXT:  {{^}}} // end of method 'call_inalloca'{{$}}
 ; ARGATTR-IL-LABEL: .method {{.*}}'after_arg_attrs'(
@@ -727,7 +641,7 @@ define i32 @after_arg_attrs(i32 %a, i32 %b) {
 
 ; MUSTTAIL-IL:       {{^}}.method public static int32 'callee'(int32) cil managed{{$}}
 ; MUSTTAIL-IL-LABEL: .method {{.*}}'call_musttail'(
-; MUSTTAIL-IL-NOT:   call
+; MUSTTAIL-IL-NOT:   {{^}}  call
 ; MUSTTAIL-IL:       {{^}}  ret{{$}}
 ; MUSTTAIL-IL-NEXT:  {{^}}} // end of method 'call_musttail'{{$}}
 ; MUSTTAIL-IL-LABEL: .method {{.*}}'after_musttail'(
@@ -757,11 +671,11 @@ define i32 @after_musttail(i32 %a, i32 %b) {
 ; CALLCONV:     error: {{.*}}call_ghc{{.*}}calling convention is not supported for MSIL
 
 ; CALLCONV-IL-LABEL: .method {{.*}}'call_stdcall'(
-; CALLCONV-IL-NOT:   call
+; CALLCONV-IL-NOT:   {{^}}  call
 ; CALLCONV-IL:       {{^}}  ret{{$}}
 ; CALLCONV-IL-NEXT:  {{^}}} // end of method 'call_stdcall'{{$}}
 ; CALLCONV-IL-LABEL: .method {{.*}}'call_ghc'(
-; CALLCONV-IL-NOT:   call
+; CALLCONV-IL-NOT:   {{^}}  call
 ; CALLCONV-IL:       {{^}}  ret{{$}}
 ; CALLCONV-IL-NEXT:  {{^}}} // end of method 'call_ghc'{{$}}
 ; CALLCONV-IL-LABEL: .method {{.*}}'after_callconv'(
@@ -796,11 +710,11 @@ define i32 @after_callconv(i32 %a, i32 %b) {
 ; UNKINTR:      error: {{.*}}call_unknown_intrinsic_void{{.*}}unknown intrinsic 'llvm.foo.baz' is not supported for MSIL
 
 ; UNKINTR-IL-LABEL: .method {{.*}}'call_unknown_intrinsic'(
-; UNKINTR-IL-NOT:   call
+; UNKINTR-IL-NOT:   {{^}}  call
 ; UNKINTR-IL:       {{^}}  ret{{$}}
 ; UNKINTR-IL-NEXT:  {{^}}} // end of method 'call_unknown_intrinsic'{{$}}
 ; UNKINTR-IL-LABEL: .method {{.*}}'call_unknown_intrinsic_void'(
-; UNKINTR-IL-NOT:   call
+; UNKINTR-IL-NOT:   {{^}}  call
 ; UNKINTR-IL:       {{^}}  ret{{$}}
 ; UNKINTR-IL-NEXT:  {{^}}} // end of method 'call_unknown_intrinsic_void'{{$}}
 ; UNKINTR-IL-LABEL: .method {{.*}}'after_unknown_intrinsic'(
@@ -839,11 +753,11 @@ define i32 @after_unknown_intrinsic(i32 %a, i32 %b) {
 ; DIAGCALLEE-NOT: undefined function
 
 ; DIAGCALLEE-IL-LABEL: .method {{.*}}'calls_has_asm'(
-; DIAGCALLEE-IL-NOT:   call
+; DIAGCALLEE-IL-NOT:   {{^}}  call
 ; DIAGCALLEE-IL:       {{^}}  ret{{$}}
 ; DIAGCALLEE-IL-NEXT:  {{^}}} // end of method 'calls_has_asm'{{$}}
 ; DIAGCALLEE-IL-LABEL: .method {{.*}}'drops_has_asm'(
-; DIAGCALLEE-IL-NOT:   call
+; DIAGCALLEE-IL-NOT:   {{^}}  call
 ; DIAGCALLEE-IL:       {{^}}  ret{{$}}
 ; DIAGCALLEE-IL-NEXT:  {{^}}} // end of method 'drops_has_asm'{{$}}
 ; DIAGCALLEE-IL-LABEL: .method {{.*}}'after_diagnosed_callee'(
@@ -886,7 +800,7 @@ define i32 @after_diagnosed_callee(i32 %a, i32 %b) {
 
 ; INVOKE-IL-LABEL: .method {{.*}}'invokes'(
 ; INVOKE-IL-SAME:  int32) cil managed{{$}}
-; INVOKE-IL-NOT:   call
+; INVOKE-IL-NOT:   {{^}}  call
 ; INVOKE-IL:       {{^}}  ret{{$}}
 ; INVOKE-IL-NEXT:  {{^}}} // end of method 'invokes'{{$}}
 ; INVOKE-IL-LABEL: .method {{.*}}'after_invoke'(
@@ -954,13 +868,13 @@ define i32 @after_invoke(i32 %a, i32 %b) {
 ; ALIAS-IL-NEXT:  {{^}}  ldloc.0{{$}}
 ; ALIAS-IL-NEXT:  {{^}}  ret{{$}}
 ; ALIAS-IL-NEXT:  {{^}}} // end of method 'calls_ifunc'{{$}}
+; Since M9 the call is not erased before ISel: the i128 result is read back
+; from its demoted frame slot (section 12, M4 fix-1 row: from M7 on the slot
+; compiles; the frame is a localloc), and nothing is called.
 ; ALIAS-IL-LABEL: .method {{.*}}'calls_alias_i128'(
 ; ALIAS-IL-SAME:  native int) cil managed{{$}}
-; ALIAS-IL-NEXT:  {{^\{$}}
-; ALIAS-IL-NEXT:  {{^}}  .maxstack 1{{$}}
-; ALIAS-IL-NEXT:  {{^}}  .locals (native int){{$}}
-; ALIAS-IL-NEXT:  {{^}}  ldloc.0{{$}}
-; ALIAS-IL-NEXT:  {{^}}  ret{{$}}
+; ALIAS-IL-NOT:   {{^}}  call
+; ALIAS-IL:       {{^}}  ret{{$}}
 ; ALIAS-IL-NEXT:  {{^}}} // end of method 'calls_alias_i128'{{$}}
 ; ALIAS-IL-LABEL: .method {{.*}}'after_alias'(
 ; ALIAS-IL:       {{^}}  ldarg.0{{$}}
@@ -1141,4 +1055,28 @@ define void @unused(i64 %x, double %d, float %f) {
 define i32 @after_extern_multi(i32 %a, i32 %b) {
   %r = add i32 %a, %b
   ret i32 %r
+}
+
+;--- byval-import.ll
+; A call of an import (D14: msil-import-module) with a byval aggregate. The
+; caller copies the aggregate into its frame and calls ext with the copy's
+; address, as for any byval argument (byval.ll); a P/Invoke cannot pass the
+; aggregate, so ext is reported once at the end of the module (M8.c's text;
+; pinvoke-errors.ll SIG has such declarations) and gets no P/Invoke.
+; BYVALIMP:          {{^}}error: imported function 'ext' has a parameter or result that a P/Invoke cannot pass natively (aggregates, vectors, 128-bit integers and half are not supported for MSIL yet){{$}}
+
+; BYVALIMP-IL-LABEL: .method {{.*}}'caller'(
+; BYVALIMP-IL-SAME:  native int) cil managed{{$}}
+; BYVALIMP-IL:       {{^}}  localloc{{$}}
+; BYVALIMP-IL:       {{^}}  call native int 'ext'(native int){{$}}
+; BYVALIMP-IL-NEXT:  {{^}}  ret{{$}}
+source_filename = "byval-import.c"
+
+%S = type { i64, i64, i64 }
+
+declare i64 @ext(ptr byval(%S) align 8) "msil-import-module"="mylib"
+
+define i64 @caller(ptr %p) {
+  %r = call i64 @ext(ptr byval(%S) align 8 %p)
+  ret i64 %r
 }

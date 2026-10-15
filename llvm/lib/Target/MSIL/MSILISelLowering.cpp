@@ -258,7 +258,8 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // A frame index becomes a TargetFrameIndex operand of its users, which
   // MSILRegisterInfo::eliminateFrameIndex rewrites into an address relative
   // to the frame base (decision D13). A global variable is reached through
-  // its address field (decision D12), a function through ldftn.
+  // its address field (decision D12), and so is a function, whose field
+  // <Module>::.cctor sets with ldftn.
   setOperationAction({ISD::GlobalAddress, ISD::ExternalSymbol, ISD::FrameIndex},
                      MVT::i64, Custom);
   // Thread-local storage waits for phase 3 (MSILPrepareIR already reports
@@ -381,8 +382,8 @@ EVT MSILTargetLowering::getSetCCResultType(const DataLayout & /*DL*/,
 bool MSILTargetLowering::isOffsetFoldingLegal(
     const GlobalAddressSDNode *GA) const {
   // The address of a global variable is its address field plus an offset
-  // ('ldsfld' then 'ldc.i4; add'); a function address ('ldftn') takes no
-  // offset.
+  // ('ldsfld' then 'ldc.i4; add'); a function address (the function's
+  // address field, which holds the value of 'ldftn') takes no offset.
   return !isa<Function>(GA->getGlobal());
 }
 
@@ -753,8 +754,9 @@ SDValue MSILTargetLowering::LowerGlobalAddress(SDValue Op,
   EVT VT = Op.getValueType();
   assert(GA->getTargetFlags() == 0 && "MSIL doesn't set target flags");
 
-  // A function used as a value: 'ldftn' of its method, or of its P/Invoke
-  // declaration when it is not defined in this module. ldftn takes no offset
+  // A function used as a value: its address field, which <Module>::.cctor
+  // sets with 'ldftn' of its method, or of its P/Invoke declaration when it
+  // is not defined in this module. The field takes no offset
   // (isOffsetFoldingLegal), so one that SelectionDAG built anyway is added.
   if (isa<Function>(GV)) {
     SDValue Addr = DAG.getNode(MSILISD::FUNC_ADDR, DL, VT,
@@ -784,10 +786,10 @@ SDValue MSILTargetLowering::LowerGlobalAddress(SDValue Op,
 
 SDValue MSILTargetLowering::LowerExternalSymbol(SDValue Op,
                                                 SelectionDAG &DAG) const {
-  // The address of a library function, as 'ldftn' of its P/Invoke
-  // declaration. SelectionDAG names library functions only as callees, which
-  // LowerCall turns into TargetExternalSymbols itself, applying the
-  // library-call policy, so no external symbol is expected here.
+  // The address of a library function. SelectionDAG names library functions
+  // only as callees, which LowerCall turns into TargetExternalSymbols itself,
+  // applying the library-call policy, so no external symbol is expected
+  // here; MSILMCInstLower reports one that reaches FUNC_ADDR.
   const auto *ES = cast<ExternalSymbolSDNode>(Op);
   EVT VT = Op.getValueType();
   assert(ES->getTargetFlags() == 0 && "MSIL doesn't set target flags");

@@ -106,9 +106,11 @@ private:
   SDValue LowerStackSaveRestore(SDValue Op, SelectionDAG &DAG) const;
   /// Wraps the address of a global variable in MSILISD::DATA_ADDR (its
   /// address field plus the offset, decision D12) and the address of a
-  /// function in MSILISD::FUNC_ADDR (ldftn).
+  /// function in MSILISD::FUNC_ADDR (its address field, which the module
+  /// initializer sets with ldftn).
   SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;
-  /// Wraps the address of a library function in MSILISD::EXT_SYM (ldftn).
+  /// Wraps the address of a library function in MSILISD::EXT_SYM (FUNC_ADDR,
+  /// which MSILMCInstLower reports).
   SDValue LowerExternalSymbol(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerBR_JT(SDValue Op, SelectionDAG &DAG) const;
   /// Expands SHL_PARTS, SRA_PARTS and SRL_PARTS (i128 shifts by a variable

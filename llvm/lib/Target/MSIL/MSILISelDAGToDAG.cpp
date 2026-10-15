@@ -144,8 +144,9 @@ void MSILDAGToDAGISel::Select(SDNode *Node) {
     //
     // Unlike WebAssembly there is no address wrapper to strip from the callee:
     // MSILTargetLowering::LowerCall already made a direct callee a
-    // TargetGlobalAddress, and any other callee is an address in a register
-    // (an indirect call).
+    // TargetGlobalAddress or TargetExternalSymbol, and any other callee is an
+    // address in a register, or the frame index of a stack object (an
+    // indirect call, which emitCallResults turns into CALL_INDIRECT).
     SmallVector<SDValue, 16> Ops(drop_begin(Node->op_values()));
 
     // Add the chain last

@@ -1,15 +1,21 @@
 ; P/Invoke targets referenced only by address (ImplementationPlan.md decision
 ; D14 'referenced from code or data', M8.c; recon asmprinter.md 7.3 'A
-; relocation to an undefined function ldftns its P/Invoke stub'): an
-; undefined import that is never called but whose address is stored in an
-; initializer, or taken in code, still gets its P/Invoke declaration, and the
-; address is 'ldftn <signature>' of that declaration: a .cctor relocation for
-; data, FUNC_ADDR for code. An import with "msil-import-name" is referenced
-; under its IR name; only the declaration names the entry point. Exactly one
-; declaration per import (a FileCheck run counts them), nothing is reported,
-; both triples (the libraries of D14), -O2 and -O0, and the output assembles.
+; relocation to an undefined function ldftns its P/Invoke stub'; plan section
+; 12, 'Phase-1 function addresses'): an undefined import that is never called
+; but whose address is stored in an initializer, or taken in code, still gets
+; its P/Invoke declaration and an address field '<msil>fn_<name>' (after the
+; data-segment block and its empty line, one per function in module order,
+; then an empty line). The .cctor sets each field once with 'ldftn
+; <signature>' of that declaration, after the stores of the global address
+; fields and before the relocations; a .cctor relocation for data, and
+; FUNC_ADDR in code, load the field ('ldftn' appears nowhere else). An import
+; with "msil-import-name" is referenced under its IR name, its field too; only
+; the declaration names the entry point. Exactly one declaration per import (a
+; FileCheck run counts them), nothing is reported, both triples (the libraries
+; of D14), -O2 and -O0, and the output assembles.
 
-; DEFINE: %{check} = FileCheck %s --implicit-check-not=".field " --implicit-check-not=int64
+; DEFINE: %{check} = FileCheck %s --implicit-check-not=".field " --implicit-check-not=int64 \
+; DEFINE:   --implicit-check-not=ldftn
 ; DEFINE: %{count} = FileCheck %s --check-prefix=NPINV
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s -o %t.lnx.il 2>&1 \
 ; RUN:   | count 0
@@ -41,7 +47,7 @@ declare i64 @renamed(i64) #0
 ; CHECK-LABEL: {{^}}.method public static native int 'get_putchar'() cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^}}  ldftn int32 'putchar'(int32){{$}}
+; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>fn_putchar'{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'get_putchar'{{$}}
 define ptr @get_putchar() {
@@ -65,7 +71,13 @@ define ptr @get_putchar() {
 ; CHECK:        {{^}}.field public static initonly native int 'first'{{( |$)}}
 ; CHECK:        {{^}}.field public static initonly native int 'handlers'{{( |$)}}
 ; CHECK:        {{^}}.field public static initonly native int 'cb'{{( |$)}}
-; CHECK:        {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+; CHECK-EMPTY:
+; CHECK-NEXT:   {{^}}.field private static initonly native int '<msil>fn_puts'{{$}}
+; CHECK-NEXT:   {{^}}.field private static initonly native int '<msil>fn_sqrt'{{$}}
+; CHECK-NEXT:   {{^}}.field private static initonly native int '<msil>fn_putchar'{{$}}
+; CHECK-NEXT:   {{^}}.field private static initonly native int '<msil>fn_renamed'{{$}}
+; CHECK-EMPTY:
+; CHECK-NEXT:   {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
 ; CHECK-NEXT:   {{^\{$}}
 ; CHECK-NEXT:   {{^}}  .maxstack {{[3-9]}}{{$}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 55( |$)}}
@@ -92,20 +104,31 @@ define ptr @get_putchar() {
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 32( |$)}}
 ; CHECK-NEXT:   {{^}}  add{{( |$)}}
 ; CHECK-NEXT:   {{^}}  stsfld native int 'cb'{{( |$)}}
+;   the function address fields, in module order: each ldftn names the
+;   P/Invoke declaration
+; CHECK-NEXT:   {{^}}  ldftn int32 'puts'(native int){{( |$)}}
+; CHECK-NEXT:   {{^}}  stsfld native int '<msil>fn_puts'{{( |$)}}
+; CHECK-NEXT:   {{^}}  ldftn float64 'sqrt'(float64){{( |$)}}
+; CHECK-NEXT:   {{^}}  stsfld native int '<msil>fn_sqrt'{{( |$)}}
+; CHECK-NEXT:   {{^}}  ldftn int32 'putchar'(int32){{( |$)}}
+; CHECK-NEXT:   {{^}}  stsfld native int '<msil>fn_putchar'{{( |$)}}
+; CHECK-NEXT:   {{^}}  ldftn native int 'renamed'(native int){{( |$)}}
+; CHECK-NEXT:   {{^}}  stsfld native int '<msil>fn_renamed'{{( |$)}}
+;   the relocations, in site order
 ; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 16( |$)}}
 ; CHECK-NEXT:   {{^}}  add{{( |$)}}
-; CHECK-NEXT:   {{^}}  ldftn int32 'puts'(native int){{( |$)}}
+; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>fn_puts'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  stind.i{{( |$)}}
 ; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 24( |$)}}
 ; CHECK-NEXT:   {{^}}  add{{( |$)}}
-; CHECK-NEXT:   {{^}}  ldftn float64 'sqrt'(float64){{( |$)}}
+; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>fn_sqrt'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  stind.i{{( |$)}}
 ; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>data'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  {{ldc\.i4(\.s)? 32( |$)}}
 ; CHECK-NEXT:   {{^}}  add{{( |$)}}
-; CHECK-NEXT:   {{^}}  ldftn native int 'renamed'(native int){{( |$)}}
+; CHECK-NEXT:   {{^}}  ldsfld native int '<msil>fn_renamed'{{( |$)}}
 ; CHECK-NEXT:   {{^}}  stind.i{{( |$)}}
 ; CHECK-NEXT:   {{^}}  ret{{( |$)}}
 ; CHECK-NEXT:   {{^}}} // end of method '.cctor'{{$}}

@@ -709,8 +709,12 @@ arrangeFreeFunctionLikeCall(CodeGenTypes &CGT, CodeGenModule &CGM,
   // explicitly use the variadic convention for unprototyped calls,
   // treat all of the arguments as required but preserve the nominal
   // possibility of variadics.
-  } else if (CGM.getTargetCodeGenInfo().isNoProtoCallVariadic(
-                 args, cast<FunctionNoProtoType>(fnType))) {
+  } else if (
+      // MSIL call/calli need exact signatures and have no %al convention, so
+      // unprototyped calls stay fixed-arity on every MSIL triple, as on wasm.
+      !CGM.getTriple().isOSBinFormatMSIL() &&
+      CGM.getTargetCodeGenInfo().isNoProtoCallVariadic(
+          args, cast<FunctionNoProtoType>(fnType))) {
     required = RequiredArgs(args.size());
   }
 

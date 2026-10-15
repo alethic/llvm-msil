@@ -11,9 +11,10 @@
 /// (llvm/docs/MSIL/ImplementationPlan.md section 5.1): the module header, one
 /// global method per function, and the module trailer: the P/Invoke
 /// declarations, the data segment of the global variables with their address
-/// fields, the module initializer and the entry point. It also owns the
-/// module's table of CIL method signatures, so every method header, call site,
-/// 'ldftn', 'calli' and P/Invoke declaration spells a signature the same way.
+/// fields, the address fields of the functions whose address is used, the
+/// module initializer and the entry point. It also owns the module's table of
+/// CIL method signatures, so every method header, call site, 'ldftn', 'calli'
+/// and P/Invoke declaration spells a signature the same way.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -36,6 +37,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
 #include <utility>
 
 namespace llvm {
@@ -108,6 +110,12 @@ private:
   /// llvm.global_ctors, sorted by priority: the module initializer calls them
   /// after the data segment is in place.
   SmallVector<Structor, 8> Ctors;
+  /// The functions whose address is used, by FUNC_ADDR in code or as the
+  /// target of a relocation of the data segment (noteFunctionAddress).
+  SmallPtrSet<const Function *, 8> UsedFuncAddrs;
+  /// UsedFuncAddrs in module order, set by emitEndOfAsmFile: the order of
+  /// their address fields and of the module initializer code that sets them.
+  SmallVector<const Function *, 0> FuncAddrs;
 
 public:
   MSILAsmPrinter(TargetMachine &TM, std::unique_ptr<MCStreamer> Streamer)
@@ -158,6 +166,18 @@ public:
   /// and therefore has no address field; once per function and global.
   void noteNonDataGlobal(const GlobalVariable &GV);
 
+  /// Records that the address of \p F is used (FUNC_ADDR, or a relocation of
+  /// the data segment) and returns the name of its address field,
+  /// '<msil>fn_<IL name>', which every use reads. <Module>::.cctor sets the
+  /// field once, with 'ldftn' of the method or of the P/Invoke declaration:
+  /// on .NET Framework, 'ldftn' in a method that the JIT compiles before the
+  /// target first ran yields another value than in one compiled after, and
+  /// two pointers to one C function must compare equal.
+  std::string noteFunctionAddress(const Function &F);
+
+  /// The name of the address field of a function whose IL name is \p ILName.
+  static std::string getFunctionAddressFieldName(StringRef ILName);
+
   //===------------------------------------------------------------------===//
   // MachineFunctionPass Implementation.
   //===------------------------------------------------------------------===//
@@ -200,9 +220,16 @@ private:
   /// define, in module order, and lists it in ExternGlobals.
   void collectExternGlobals(const Module &M);
 
+  /// Lists the functions whose address is used in FuncAddrs, in module order.
+  void collectFunctionAddresses(const Module &M);
+
+  /// The name of the address field of \p F (getFunctionAddressFieldName).
+  std::string getFunctionAddressField(const Function &F) const;
+
   /// Reports the address fields that ilasm would reject: a global variable
-  /// named like the field of the data segment, and two global variables with
-  /// one IL name.
+  /// named like the field of the data segment or like the address field of a
+  /// function, two global variables with one IL name, and two functions with
+  /// one IL name whose addresses are used.
   void checkAddressFieldNames(const Module &M);
 
   /// Returns the functions of llvm.global_ctors in the order the module
@@ -219,8 +246,12 @@ private:
   /// Emits the data image and the address fields (decision D12).
   void emitDataSegment();
 
+  /// Emits the address fields of the functions whose address is used.
+  void emitFunctionAddressFields();
+
   /// Emits <Module>::.cctor: it allocates and fills the data segment, sets the
-  /// address fields, applies the relocations and calls \p CtorFns.
+  /// address fields of the globals and of the functions, applies the
+  /// relocations and calls \p CtorFns.
   void emitModuleInitializer(ArrayRef<const Function *> CtorFns);
 
   /// Emits '<msil>Main'(string[]), the .entrypoint method that calls the C

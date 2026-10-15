@@ -1,0 +1,14 @@
+sizeof flags=8
+sizeof sfields=4
+sizeof gap=16
+sizeof rgb=4
+0x82822318fa785dff
+0x380a240fa6c3600
+a=7
+b=-63
+c=0
+d=-127
+sign sum=272
+0x840f
+0x9ceb
+[exit 0]

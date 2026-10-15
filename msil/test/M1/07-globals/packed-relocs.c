@@ -12,11 +12,14 @@
 // structs under #pragma pack(2) and pack(4). Pointers are read back through the
 // packed fields (code accesses them with alignment prefixes of its own),
 // written through, retargeted at run time and compared with the addresses taken
-// in code (functions are compared, not called: indirect calls come in M9). The
-// globals are writable and externally visible and table indexes come from a
-// volatile global, so the fields are loaded at run time at -O2 too. MSIL_EXPECT
-// returns 1 + (line % 255) at the first failed check; [exit 0] means every
-// check passed.
+// in code. Function pointers are compared, not called; calls through function
+// pointers are covered by msil/test/M1/08-fnptr. A function relocation stores
+// the value of the function's address field ('<msil>fn_<name>'), which
+// <Module>::.cctor sets once with ldftn. The globals are writable and
+// externally visible and table indexes come from a volatile global, so the
+// fields are loaded at run time at -O2 too. MSIL_EXPECT returns
+// 1 + (line % 255) at the first failed check; [exit 0] means every check
+// passed.
 // RUN: %{msil_c}
 #include "msil_test.h"
 

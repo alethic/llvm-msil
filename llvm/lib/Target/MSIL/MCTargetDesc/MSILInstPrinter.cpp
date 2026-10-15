@@ -290,12 +290,15 @@ void MSILInstPrinter::printCall(const MCInst *MI, const MCSubtargetInfo &STI,
   // call int32 'f'(int32, native int)
   // calli int32(native int)
   // The results and the arguments are register placeholders (values the call
-  // pushes and pops). The one other operand is an MSILMemberRefExpr: for
-  // CALL, whose variadic operands are defs (variadicOpsAreDefs), the method
-  // reference after the results (operand index = number of results), which
+  // pushes and pops). The one other operand is an MSILMemberRefExpr after the
+  // results (operand index = number of results; the variadic operands are
+  // defs first, variadicOpsAreDefs): for CALL the method reference, which
   // prints the callee's signature exactly as its .method header does; for
-  // CALL_INDIRECT the call-site signature, which MSILMCInstLower adds next to
-  // the placeholders and the callee address (M9).
+  // CALL_INDIRECT the call-site signature, which MSILMCInstLower builds from
+  // the call's results and arguments and inserts there (the callee address is
+  // the last placeholder: calli pops it after the arguments). The signature
+  // of a managed calli prints as '<result>(<params>)', with no calling
+  // convention.
   bool IsIndirect = MI->getOpcode() == MSIL::CALL_INDIRECT;
   std::optional<unsigned> RefOp;
   for (unsigned I = 0, E = MI->getNumOperands(); I != E; ++I) {
@@ -339,17 +342,17 @@ void MSILInstPrinter::printCall(const MCInst *MI, const MCSubtargetInfo &STI,
 
 void MSILInstPrinter::checkAddressOperand(const MCInst *MI) {
   // GLOBAL_ADDR loads a global's address field (decision D12) and FUNC_ADDR
-  // takes a method's address; any other operand would print as a different
-  // instruction or as no member at all.
-  bool IsGlobal = MI->getOpcode() == MSIL::GLOBAL_ADDR;
+  // a function's, which <Module>::.cctor sets with 'ldftn'; any other operand
+  // would print as a different instruction or as no member at all. Only
+  // GLOBAL_ADDR prints an offset.
   const MCOperand &Op = MI->getOperand(1);
   const auto *Ref =
       Op.isExpr() ? dyn_cast<MSILMemberRefExpr>(Op.getExpr()) : nullptr;
-  if (!Ref || Ref->getKind() != (IsGlobal ? MSILMemberRefExpr::Field
-                                          : MSILMemberRefExpr::Method))
+  if (!Ref || Ref->getKind() != MSILMemberRefExpr::Field)
     reportFatalInternalError(Twine("MSIL: ") + MII.getName(MI->getOpcode()) +
-                             (IsGlobal ? " without an address field"
-                                       : " without a method reference"));
+                             " without an address field");
+  if (MI->getOpcode() == MSIL::FUNC_ADDR && Ref->getOffset() != 0)
+    reportFatalInternalError("MSIL: FUNC_ADDR with an offset");
 }
 
 void MSILInstPrinter::printGlobalAddrOffset(const MCInst *MI, raw_ostream &O) {

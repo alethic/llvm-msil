@@ -36,9 +36,10 @@
 ; Not ported: commute_simd_min and commute_simd_max, because Phase 1 has no
 ; vectors (D8); stackpointer_dependency, because MSIL has no __stack_pointer
 ; global: the frame is one localloc in the prologue, and llvm.frameaddress is
-; a diagnostic (dynamic-alloca-error.ll); call_indirect_stackify, which waits
-; for indirect calls (M9). no_stackify_past_epilogue becomes
-; stackify_past_epilogue, because the MSIL epilogue is empty.
+; a diagnostic (dynamic-alloca-error.ll). call_indirect_stackify is ported to
+; call-indirect.ll, with the other indirect calls (M9).
+; no_stackify_past_epilogue becomes stackify_past_epilogue, because the MSIL
+; epilogue is empty.
 ;
 ; At -O0 MSILRegStackify only stackifies a value defined right before its use.
 ; The integer cases check -O0 for the order of calls and divisions only (O0);

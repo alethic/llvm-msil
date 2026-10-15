@@ -52,11 +52,13 @@
 using namespace llvm;
 
 MCOperand
-MSILMCInstLower::lowerFunctionOperand(const MachineOperand &MO) const {
+MSILMCInstLower::lowerFunctionOperand(const MachineInstr &MI,
+                                      const MachineOperand &MO) const {
   const auto &F = cast<Function>(*MO.getGlobal());
   assert(!F.isIntrinsic() && "intrinsics are never called or referenced");
   // MSILTargetLowering::isOffsetFoldingLegal never folds an offset into a
-  // function address: 'call' and 'ldftn' name a method, not an address.
+  // function address: 'call' names a method, and the address field of a
+  // function holds the address of the method itself.
   if (MO.getOffset() != 0)
     reportFatalInternalError("MSIL: reference to function '" +
                              MSIL::getILName(F, Printer.TM) +
@@ -67,6 +69,13 @@ MSILMCInstLower::lowerFunctionOperand(const MachineOperand &MO) const {
   // trailer.
   if (F.isDeclarationForLinker())
     Printer.noteExternFunction(F);
+
+  // FUNC_ADDR reads the function's address field, which <Module>::.cctor
+  // sets once with 'ldftn' of the method (or of the P/Invoke declaration), so
+  // that every pointer to the function has one value.
+  if (MI.getOpcode() == MSIL::FUNC_ADDR)
+    return MCOperand::createExpr(MSILMemberRefExpr::createField(
+        Printer.noteFunctionAddress(F), /*Offset=*/0, Ctx));
 
   // The method header of a definition prints the same signature, so the call
   // token always matches the method.
@@ -94,16 +103,17 @@ MSILMCInstLower::lowerExternalSymbolOperand(const MachineInstr &MI,
 
   // SelectionDAG names library functions only as callees, which LowerCall
   // turns into target symbols itself, so the address of one (FUNC_ADDR of a
-  // TargetExternalSymbol) has no signature to take it with. Report it and
-  // keep the output well formed.
+  // TargetExternalSymbol) has no signature to take it with. Report it, and
+  // give FUNC_ADDR the address field operand it prints (no field of that
+  // name is declared; the error fails the compilation).
   const Function &F = MI.getMF()->getFunction();
   F.getContext().diagnose(
       DiagnosticInfoUnsupported(F,
                                 "the address of library function '" + Name +
                                     "' is not supported for MSIL",
                                 MI.getDebugLoc()));
-  return MCOperand::createExpr(MSILMemberRefExpr::createMethod(
-      Name, &Printer.internSignature(MSIL::Signature()), Ctx));
+  return MCOperand::createExpr(MSILMemberRefExpr::createField(
+      MSILAsmPrinter::getFunctionAddressFieldName(Name), /*Offset=*/0, Ctx));
 }
 
 MSIL::Signature MSILMCInstLower::getCallSiteSignature(const MachineInstr &MI) {
@@ -129,12 +139,37 @@ MSIL::Signature MSILMCInstLower::getCallSiteSignature(const MachineInstr &MI) {
   return Sig;
 }
 
-void MSILMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
-  // The call-site signature operand of 'calli' is built here from the
-  // instruction's operands in M9.
-  if (MSIL::isCallIndirect(MI->getOpcode()))
-    reportFatalUsageError("MSIL: indirect calls are implemented in M9");
+MCOperand
+MSILMCInstLower::lowerCallIndirectSignature(const MachineInstr &MI) const {
+  // calli pops the arguments and then the address of the callee, which
+  // MSILTargetLowering::emitCallResults moved behind the arguments, so the
+  // address is the last register use and not a parameter of the signature.
+  const MachineOperand &Callee = MSIL::getCalleeOp(MI);
+  if (!Callee.isReg() || Callee.isDef())
+    reportFatalInternalError("MSIL: indirect call without a callee address");
+  MSIL::Signature Sig = getCallSiteSignature(MI);
+  [[maybe_unused]] unsigned PointerSizeInBits =
+      MI.getMF()->getDataLayout().getPointerSizeInBits();
+  assert(!Sig.Params.empty() &&
+         Sig.Params.back() ==
+             MSIL::toValType(MVT::getIntegerVT(PointerSizeInBits),
+                             PointerSizeInBits) &&
+         "the callee address is a pointer");
+  assert(Sig.Results.size() <= 1 && "a CIL method returns at most one value");
+  Sig.Params.pop_back();
+  // A managed call: in Phase 1 every function address is the value that
+  // <Module>::.cctor stored in the function's address field with ldftn, of
+  // a method of this module or of a P/Invoke declaration, whose stub the
+  // runtime calls as a managed method (recon/cil-runtime.md e07, e18).
+  // Native callers and unmanaged calli wait for phase 3.
+  Sig.CC = MSIL::CallConv::Managed;
+  // The interned signature lives as long as the printer, as the
+  // MSILMemberRefExpr that refers to it needs.
+  return MCOperand::createExpr(
+      MSILMemberRefExpr::createSig(&Printer.internSignature(Sig), Ctx));
+}
 
+void MSILMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
   OutMI.setOpcode(MI->getOpcode());
 
   for (const MachineOperand &MO : MI->operands()) {
@@ -191,9 +226,10 @@ void MSILMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
       break;
     case MachineOperand::MO_GlobalAddress: {
       const GlobalValue *GV = MO.getGlobal();
-      // The callee of a direct 'call', or the target of 'ldftn' (FUNC_ADDR).
+      // The callee of a direct 'call', or the function whose address field
+      // FUNC_ADDR reads.
       if (isa<Function>(GV)) {
-        MCOp = lowerFunctionOperand(MO);
+        MCOp = lowerFunctionOperand(*MI, MO);
         break;
       }
       // GLOBAL_ADDR: the global's address field (decision D12), which the
@@ -220,4 +256,12 @@ void MSILMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
 
     OutMI.addOperand(MCOp);
   }
+
+  // 'calli' names the signature of the call site (CALL_INDIRECT has no
+  // operand for it, plan section 5.4). It goes after the results, where the
+  // method reference of a 'call' is, so the two print alike:
+  // 'calli int32(native int, int32)'.
+  if (MSIL::isCallIndirect(MI->getOpcode()))
+    OutMI.insert(OutMI.begin() + MI->getNumExplicitDefs(),
+                 lowerCallIndirectSignature(*MI));
 }

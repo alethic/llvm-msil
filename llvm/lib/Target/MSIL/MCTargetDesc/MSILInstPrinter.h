@@ -90,11 +90,13 @@ private:
   void printBrTable(const MCInst *MI, const MCSubtargetInfo &STI,
                     raw_ostream &O);
   /// 'call <method reference>' (CALL) or 'calli <call-site signature>'
-  /// (CALL_INDIRECT): the one MSILMemberRefExpr operand among the register
-  /// placeholders of the results and arguments.
+  /// (CALL_INDIRECT, 'calli int32(native int, int32)' for a managed call):
+  /// the one MSILMemberRefExpr operand among the register placeholders of the
+  /// results, the arguments and, for calli, the callee address.
   void printCall(const MCInst *MI, const MCSubtargetInfo &STI, raw_ostream &O);
-  /// Checks that the operand of GLOBAL_ADDR is an address field and that of
-  /// FUNC_ADDR a method reference (MSILMemberRefExprs from MSILMCInstLower).
+  /// Checks that the operand of GLOBAL_ADDR and FUNC_ADDR is an address field
+  /// (an MSILMemberRefExpr from MSILMCInstLower): a global's, or a
+  /// function's, which has no offset.
   void checkAddressOperand(const MCInst *MI);
   /// The 'ldc.i4 <offset>; add' (or 'ldc.i8 <offset>; conv.i; add') after the
   /// 'ldsfld' of a GLOBAL_ADDR whose operand has a non-zero offset.

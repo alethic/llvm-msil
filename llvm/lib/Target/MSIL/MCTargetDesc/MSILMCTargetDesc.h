@@ -74,7 +74,8 @@ enum OperandType {
   OPERAND_F32IMM,
   /// 64-bit floating-point immediates.
   OPERAND_F64IMM,
-  /// Method reference (call, ldftn).
+  /// A function: the method reference (the callee of a call) or the function's
+  /// address field (FUNC_ADDR, ldsfld).
   OPERAND_METHOD,
   /// Address field of a global variable (ldsfld).
   OPERAND_DATA,

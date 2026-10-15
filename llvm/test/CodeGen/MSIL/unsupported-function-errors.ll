@@ -1,22 +1,24 @@
 ; User diagnostics for function definitions that M3 cannot compile
 ; (ImplementationPlan.md section 2, 'Diagnostics leave well-formed output';
-; M3.c, M3.d): byval, inalloca, preallocated and nest parameters; calling
-; conventions other than C, fast, cold, preserve_most and preserve_all; naked
-; functions; and methods with more than 65535 arguments or locals. Each problem
-; is reported once, llc exits with 1 without 'LLVM ERROR' or a stack dump, and
-; compilation goes on: a diagnosed parameter is lowered as the plain pointer it
-; is ('native int', decision D2; byval arguments arrive in M9), a function with
-; an unsupported convention is compiled like a C function, a naked function
-; keeps the method header of its IR type and its unreachable body traps, and
-; the well-formed function after them compiles as usual. llc deletes its -o
-; file after an error, so the modules that are checked and assembled are taken
-; from stdout.
+; M3.c, M3.d): inalloca, preallocated and nest parameters; calling conventions
+; other than C, fast, cold, preserve_most and preserve_all; naked functions;
+; and methods with more than 65535 arguments or locals. Since M9 a byval
+; parameter is the address of the caller's copy and is not diagnosed
+; (byval.ll). Each problem is reported once, llc exits with 1 without
+; 'LLVM ERROR' or a stack dump, and compilation goes on: a diagnosed parameter
+; is lowered as the plain pointer it is ('native int', decision D2), a function
+; with an unsupported convention is compiled like a C function, a naked
+; function keeps the method header of its IR type and its unreachable body
+; traps, and the well-formed function after them compiles as usual. llc deletes
+; its -o file after an error, so the modules that are checked and assembled are
+; taken from stdout.
 
 ; DEFINE: %{diag} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
 ; DEFINE:   --implicit-check-not=error: --implicit-check-not=warning:
 ; RUN: split-file %s %t
 
-; byval, inalloca, preallocated and nest parameters.
+; inalloca, preallocated and nest parameters (and undiagnosed byval and sret
+; ones).
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/args.ll -o /dev/null 2>&1 \
 ; RUN:   | %{diag} --check-prefix=ARGS
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/args.ll -o /dev/null 2>&1 \
@@ -127,14 +129,18 @@
 ; LOCALS-LIMIT:       {{^}}} // end of method 'locals'{{$}}
 
 ;--- args.ll
-; Each diagnosed parameter is reported once (SelectionDAG also sets the byval
-; flag on inalloca and preallocated arguments) and becomes a 'native int'
-; parameter that is read with ldarg like any pointer. sret is an ordinary
-; pointer parameter and is not diagnosed.
+; Each diagnosed parameter (inalloca, preallocated, nest) is reported once and
+; becomes a 'native int' parameter that is read with ldarg like any pointer.
+; Since M9 @byval and the byval parameter of @mixed are not diagnosed: the
+; caller copies a byval argument (M9.a), and the parameter stays a plain
+; 'native int', the address of that copy. SelectionDAG also sets the byval flag
+; on inalloca and preallocated arguments, which keep their own errors and are
+; not accepted as byval ones; %{diag} has --implicit-check-not=error:, so no
+; other error may appear. sret is an ordinary pointer parameter and is not
+; diagnosed either.
 
 %struct.S = type { i32, i32 }
 
-; ARGS: error: {{.*}}in function byval ptr (ptr): byval arguments are not supported for MSIL yet
 ; ARGS-IL-LABEL: {{^}}.method public static native int 'byval'(native int) cil managed{{$}}
 ; ARGS-IL-NEXT:  {{^\{$}}
 ; ARGS-IL-NEXT:  {{^}}  .maxstack 1{{$}}
@@ -174,8 +180,8 @@ define ptr @nest(i32 %x, ptr nest %n) {
   ret ptr %n
 }
 
-; Two diagnosed parameters in one function, around an ordinary one.
-; ARGS: error: {{.*}}in function mixed i32 (ptr, i32, ptr): byval arguments are not supported for MSIL yet
+; One diagnosed (inalloca) parameter after an undiagnosed byval one, around an
+; ordinary one.
 ; ARGS: error: {{.*}}in function mixed i32 (ptr, i32, ptr): inalloca arguments are not supported for MSIL{{$}}
 ; ARGS-IL-LABEL: {{^}}.method public static int32 'mixed'(native int, int32, native int) cil managed{{$}}
 ; ARGS-IL-NEXT:  {{^\{$}}

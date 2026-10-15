@@ -87,8 +87,9 @@ def f64imm_op : Operand<f64> {
   let PrintMethod = "printF64ImmOperand";
 }
 
-// A method: a function symbol until MSILMCInstLower turns it into an
-// MSILMemberRefExpr that prints the method reference.
+// A function: a function symbol until MSILMCInstLower turns it into an
+// MSILMemberRefExpr that prints the method reference (the callee of a call)
+// or the function's address field (FUNC_ADDR).
 let OperandType = "OPERAND_METHOD" in
 def function_op : Operand<i64>;
 
@@ -221,9 +222,12 @@ let hasSideEffects = 0, mayLoad = 0, mayStore = 0, isAsCheapAsAMove = 1,
 let StackPeakExtra = 1 in
 defm GLOBAL_ADDR : I<(outs I64:$res), (ins data_op:$addr), [],
                      "ldsfld $addr">;
-// Address of a function: 'ldftn <method reference>'.
+// Address of a function: 'ldsfld' of the function's address field
+// ('<msil>fn_<name>'), which <Module>::.cctor sets once with 'ldftn <method
+// reference>', so every pointer to one function has one value on every
+// runtime. Not a load, as for GLOBAL_ADDR.
 defm FUNC_ADDR : I<(outs I64:$res), (ins function_op:$func), [],
-                   "ldftn $func", 0xFE06>;
+                   "ldsfld $func", 0x7E>;
 }
 
 // Global variables live in the data segment, and code reaches each one
@@ -231,7 +235,8 @@ defm FUNC_ADDR : I<(outs I64:$res), (ins function_op:$func), [],
 // the offset into the global.
 def : Pat<(i64 (MSILdata_addr tglobaladdr:$addr)),
           (GLOBAL_ADDR tglobaladdr:$addr)>;
-// A function used as a value; an undefined one is its P/Invoke declaration.
+// A function used as a value; the address field of an undefined one holds
+// the address of its P/Invoke declaration.
 def : Pat<(i64 (MSILfunc_addr tglobaladdr:$func)),
           (FUNC_ADDR tglobaladdr:$func)>;
 // A library function used as a value. SelectionDAG names library functions

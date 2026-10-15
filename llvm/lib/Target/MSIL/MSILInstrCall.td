@@ -55,7 +55,10 @@ defm CALL_RESULTS : I<(outs), (ins variable_ops), []>;
 // The variadic operands are the result (if any), then for CALL the callee
 // (its operand index is the number of results), then the arguments; for
 // CALL_INDIRECT the callee address is the last argument (calli order).
-// MSILInstPrinter prints the method reference or call-site signature.
+// CALL_INDIRECT carries no signature operand: MSILMCInstLower builds the
+// managed call-site signature from the result and argument registers and
+// inserts it after the results, and MSILInstPrinter prints the method
+// reference or the call-site signature.
 let variadicOpsAreDefs = 1 in {
 defm CALL : I<(outs), (ins function_op:$callee, variable_ops), [],
               "call", 0x28>;

@@ -1,0 +1,25 @@
+add=2000
+sub=-16
+mul=76965813944320
+div=0
+mod=0
+min=-7
+max=1099511627776
+shl=384
+grid=80324070312
+events=33
+events=33484
+events=3348421
+square=144
+cube=-125
+negate=-77
+sq=9
+missing=-1
+cube->sq=25
+fact=1307674368000
+fact steps=125
+sum=5050
+sum steps=807
+gcd=21
+gcd steps=20
+[exit 235]

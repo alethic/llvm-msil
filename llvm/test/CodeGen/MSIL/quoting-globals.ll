@@ -125,6 +125,55 @@
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/msil-names.lnx.dll %t/msil-names.lnx.il %}
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/msil-names.win.dll %t/msil-names.win.il %}
 
+; Function address fields (plan section 12, 'Phase-1 function addresses'):
+; every function whose address is used gets the field '<msil>fn_<IL name>'.
+; Three cases would print IL that ilasm rejects (a duplicate field, or an
+; identifier that is too long), and llc reports each like the errors above
+; (one error that names the IR values, exit code 1, no crash):
+; - fnaddr-global.ll: a global variable named '<msil>fn_add1', the name of the
+;   address field of @add1, whose address is used;
+; - fnaddr-dup.ll: @"\01foo" and @foo, both 'foo'; their CIL signatures differ
+;   (int32(int32) and int32(int64)), so the two methods are valid overloads,
+;   but the address of each is used and both would get the field
+;   '<msil>fn_foo'; the later definition in module order is named first;
+; - the field name is '<msil>fn_' (9 bytes) plus the IL name, so a function
+;   whose name has 1014 bytes gets a field of 1023 bytes and the module
+;   assembles (FNADDR-LONG-OK), and one whose name has 1020 bytes, a valid
+;   method name, gets a field of 1029 bytes, which is an error that names the
+;   function and states the field's length and the limit (FNADDR-LONG-BAD).
+;   genfnaddr.py N prints a function named with N 'f's and a function that
+;   returns its address.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/fnaddr-global.ll -o /dev/null \
+; RUN:   2>&1 | %{diag} --check-prefix=FNADDR-GLOBAL
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/fnaddr-global.ll -o /dev/null \
+; RUN:   2>&1 | %{diag} --check-prefix=FNADDR-GLOBAL
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/fnaddr-dup.ll -o /dev/null \
+; RUN:   2>&1 | %{diag} --check-prefix=FNADDR-DUP
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/fnaddr-dup.ll -o /dev/null \
+; RUN:   2>&1 | %{diag} --check-prefix=FNADDR-DUP
+; RUN: %python %t/genfnaddr.py 1014 > %t/fnaddr-long-ok.ll
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/fnaddr-long-ok.ll \
+; RUN:   -o %t/fnaddr-long-ok.lnx.il 2>&1 | count 0
+; RUN: FileCheck %s --check-prefix=FNADDR-LONG-OK --input-file=%t/fnaddr-long-ok.lnx.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/fnaddr-long-ok.ll \
+; RUN:   -o %t/fnaddr-long-ok.win.il 2>&1 | count 0
+; RUN: FileCheck %s --check-prefix=FNADDR-LONG-OK --input-file=%t/fnaddr-long-ok.win.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/fnaddr-long-ok.lnx.dll %t/fnaddr-long-ok.lnx.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/fnaddr-long-ok.win.dll %t/fnaddr-long-ok.win.il %}
+; RUN: %python %t/genfnaddr.py 1020 > %t/fnaddr-long-bad.ll
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/fnaddr-long-bad.ll -o /dev/null \
+; RUN:   2>&1 | %{diag} --check-prefix=FNADDR-LONG-BAD
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/fnaddr-long-bad.ll -o /dev/null \
+; RUN:   2>&1 | %{diag} --check-prefix=FNADDR-LONG-BAD
+
+; FNADDR-LONG-OK:  {{^}}.method public static int32 '{{f+}}'(int32) cil managed{{$}}
+; FNADDR-LONG-OK:  {{^}}.method public static native int 'get'() cil managed{{$}}
+; FNADDR-LONG-OK:  {{^}}  ldsfld native int '<msil>fn_{{f+}}'{{$}}
+; FNADDR-LONG-OK:  {{^}}.field private static initonly native int '<msil>fn_{{f+}}'{{( |$)}}
+; FNADDR-LONG-OK:  {{^}}  ldftn int32 '{{f+}}'(int32){{( |$)}}
+; FNADDR-LONG-OK:  {{^}}  stsfld native int '<msil>fn_{{f+}}'{{( |$)}}
+; FNADDR-LONG-BAD: {{^}}error: {{.*}}function @{{f+}}: address field identifier of 1029 bytes is longer than the 1023 bytes ilasm accepts{{$}}
+
 ;--- names.ll
 ; Eleven int32 globals at +0 to +40 (values 1 to 11) and a pointer to 'it''s'
 ; at +48.
@@ -487,4 +536,65 @@ define i32 @main() {
   %b = load i32, ptr @"<msil>image", align 4
   %r = add i32 %a, %b
   ret i32 %r
+}
+
+;--- genfnaddr.py
+import sys
+
+name = "f" * int(sys.argv[1])
+print('source_filename = "long-fn.c"')
+print()
+print("define i32 @%s(i32 %%x) {" % name)
+print("  ret i32 %x")
+print("}")
+print()
+print("define ptr @get() {")
+print("  ret ptr @%s" % name)
+print("}")
+
+;--- fnaddr-global.ll
+; int fn_add1 __asm__("<msil>fn_add1") = 5; int add1(int x) { return x + 1; }
+; and a function that returns the address of add1.
+source_filename = "fnaddr-global.c"
+
+; FNADDR-GLOBAL: {{^}}error: {{.*}}global variable @"<msil>fn_add1" has the IL name '<msil>fn_add1' of the address field of function @add1{{$}}
+
+@"<msil>fn_add1" = global i32 5, align 4
+
+define i32 @add1(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+define ptr @get() {
+  ret ptr @add1
+}
+
+define i32 @main() {
+  %v = load i32, ptr @"<msil>fn_add1", align 4
+  ret i32 %v
+}
+
+;--- fnaddr-dup.ll
+; int foo2(int x) __asm__("foo"); int foo(long long x); both defined, and a
+; function that returns the address of each.
+source_filename = "fnaddr-dup.c"
+
+; FNADDR-DUP: {{^}}error: {{.*}}function @foo has the same IL name 'foo' as @"\01foo", and the addresses of both are used{{$}}
+
+define i32 @"\01foo"(i32 %x) {
+  ret i32 %x
+}
+
+define i32 @foo(i64 %x) {
+  %t = trunc i64 %x to i32
+  ret i32 %t
+}
+
+define ptr @get1() {
+  ret ptr @"\01foo"
+}
+
+define ptr @get2() {
+  ret ptr @foo
 }

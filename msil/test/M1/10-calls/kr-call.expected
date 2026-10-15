@@ -1,0 +1,14 @@
+mix*4=-11702
+halve*8=9
+widen=12884901895
+a note
+another note
+less
+digits=4
+mix via pointer=2125
+add3 via no-prototype pointer=314
+mix*4 via no-prototype pointer=-11703
+halve*8 via no-prototype pointer=14
+a note via a pointer
+later via no-prototype pointer=414
+[exit 0]

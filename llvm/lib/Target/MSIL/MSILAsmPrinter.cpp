@@ -14,12 +14,13 @@
 /// global method of '<Module>' (header, .maxstack, .locals, the instructions
 /// through MSILMCInstLower and MSILInstPrinter, and the closing brace), and
 /// the module trailer (P/Invoke declarations, the data image, the address
-/// fields of globals, the module initializer and the entry point) comes from
-/// emitEndOfAsmFile. ILAsm resolves forward references to methods and fields,
-/// so code refers to globals symbolically and the trailer is laid out after
-/// the last function. Everything else the base AsmPrinter would print
-/// (sections, linkage and visibility directives, alignment, constant pools,
-/// jump tables) is suppressed here or by MSILMCAsmInfo.
+/// fields of globals and of the functions whose address is used, the module
+/// initializer and the entry point) comes from emitEndOfAsmFile. ILAsm
+/// resolves forward references to methods and fields, so code refers to
+/// globals symbolically and the trailer is laid out after the last function.
+/// Everything else the base AsmPrinter would print (sections, linkage and
+/// visibility directives, alignment, constant pools, jump tables) is
+/// suppressed here or by MSILMCAsmInfo.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -158,6 +159,12 @@ static constexpr StringRef DataFieldName = "<msil>data";
 static constexpr StringRef ImageTypeName = "<msil>image_t";
 static constexpr StringRef ImageFieldName = "<msil>image";
 static constexpr StringRef ImageLabel = "<msil>image_d";
+
+/// The prefix of the address field of a function whose address is used: the
+/// field '<msil>fn_<IL name>' holds the value of 'ldftn' (plan section 12,
+/// 'Phase-1 function addresses'). An asm label can give a global variable
+/// such a name (checkAddressFieldNames).
+static constexpr StringRef FuncFieldPrefix = "<msil>fn_";
 
 /// The BCL method that allocates the data segment. It works on every runtime
 /// of decision D10, and its memory is neither zeroed nor freed.
@@ -352,6 +359,20 @@ void MSILAsmPrinter::noteNonDataGlobal(const GlobalVariable &GV) {
                            "', which is not program data");
 }
 
+std::string MSILAsmPrinter::noteFunctionAddress(const Function &F) {
+  assert(!F.isIntrinsic() && "an intrinsic has no address");
+  UsedFuncAddrs.insert(&F);
+  return getFunctionAddressField(F);
+}
+
+std::string MSILAsmPrinter::getFunctionAddressFieldName(StringRef ILName) {
+  return (FuncFieldPrefix + ILName).str();
+}
+
+std::string MSILAsmPrinter::getFunctionAddressField(const Function &F) const {
+  return getFunctionAddressFieldName(MSIL::getILName(F, TM));
+}
+
 //===----------------------------------------------------------------------===//
 // MachineFunctionPass Implementation.
 //===----------------------------------------------------------------------===//
@@ -371,6 +392,8 @@ bool MSILAsmPrinter::doInitialization(Module &M) {
   UsedExternGlobals.clear();
   ExternGlobals.clear();
   Ctors.clear();
+  UsedFuncAddrs.clear();
+  FuncAddrs.clear();
 
   // The base class would copy module-level inline assembly into the output
   // verbatim. The legacy pass manager initializes the AsmPrinter before any
@@ -464,17 +487,20 @@ void MSILAsmPrinter::emitStartOfAsmFile(Module &M) {
 
 void MSILAsmPrinter::emitEndOfAsmFile(Module &M) {
   // Every global variable has been added (emitGlobalVariable runs for each
-  // one before this hook). The layout comes first: a relocation can name an
-  // undefined function, whose 'ldftn' targets its P/Invoke declaration, as
-  // can a constructor, or an undefined global variable, which is an error.
+  // one before this hook). The layout comes first: a relocation can name a
+  // function, whose address field it reads, and an undefined one, whose
+  // 'ldftn' targets its P/Invoke declaration, as can a constructor, or an
+  // undefined global variable, which is an error.
   Data->finalize();
   for (const MSILReloc &R : Data->Relocs) {
-    if (const auto *F = dyn_cast<Function>(R.Target);
-        F && F->isDeclarationForLinker())
-      noteExternFunction(*F);
-    else if (const auto *GV = dyn_cast<GlobalVariable>(R.Target);
-             GV && GV->isDeclarationForLinker())
+    if (const auto *F = dyn_cast<Function>(R.Target)) {
+      noteFunctionAddress(*F);
+      if (F->isDeclarationForLinker())
+        noteExternFunction(*F);
+    } else if (const auto *GV = dyn_cast<GlobalVariable>(R.Target);
+               GV && GV->isDeclarationForLinker()) {
       noteExternGlobal(*GV);
+    }
   }
   // finalize() reports a symbol difference with an undefined end; the
   // variable is still an unresolved reference.
@@ -483,14 +509,17 @@ void MSILAsmPrinter::emitEndOfAsmFile(Module &M) {
       if (GV->isDeclarationForLinker())
         noteExternGlobal(*GV);
   collectExternGlobals(M);
+  collectFunctionAddresses(M);
   checkAddressFieldNames(M);
   SmallVector<const Function *, 8> CtorFns = collectConstructors();
 
   // ILAsm resolves forward references, so the order only serves the reader
   // (plan section 5.1): the P/Invoke declarations, the data segment with its
-  // address fields, the module initializer and the entry point.
+  // address fields, the address fields of functions, the module initializer
+  // and the entry point.
   emitPInvokeDeclarations(M);
   emitDataSegment();
+  emitFunctionAddressFields();
   emitModuleInitializer(CtorFns);
 
   // An available_externally main has no method (no MachineFunction is
@@ -535,6 +564,28 @@ void MSILAsmPrinter::collectExternGlobals(const Module &M) {
   }
 }
 
+void MSILAsmPrinter::collectFunctionAddresses(const Module &M) {
+  // A function used only as a callee, the constructors that the module
+  // initializer calls included, needs no address. An undefined function that
+  // is diagnosed keeps its field, as a referenced extern global does, so the
+  // code that reads it stays well formed.
+  for (const Function &F : M.functions()) {
+    if (!UsedFuncAddrs.contains(&F))
+      continue;
+    // The address field is a new place where the name is printed (D11). A
+    // name that is too long by itself is reported with its function
+    // (MSILPrepareIR).
+    StringRef ILName = MSIL::getILName(F, TM);
+    size_t Size = FuncFieldPrefix.size() + ILName.size();
+    if (ILName.size() <= MSIL::MaxILNameBytes && Size > MSIL::MaxILNameBytes)
+      F.getContext().emitError(
+          "function " + MSIL::getIRName(F) + ": address field identifier of " +
+          Twine(Size) + " bytes is longer than the " +
+          Twine(MSIL::MaxILNameBytes) + " bytes ilasm accepts");
+    FuncAddrs.push_back(&F);
+  }
+}
+
 void MSILAsmPrinter::checkAddressFieldNames(const Module &M) {
   // Every address field is a 'native int', so unlike methods, two fields
   // cannot share a name: ilasm rejects the second ('Duplicate field
@@ -560,6 +611,27 @@ void MSILAsmPrinter::checkAddressFieldNames(const Module &M) {
       GV.getContext().emitError("global variable " + MSIL::getIRName(GV) +
                                 " has the same IL name '" + Name + "' as " +
                                 MSIL::getIRName(*It->second));
+  }
+
+  // The address fields of functions are '<msil>fn_<IL name>'. Two functions
+  // with one IL name may both have methods (their signatures differ) but not
+  // both fields, and an asm label can give a global variable the name of one.
+  StringMap<const Function *> FuncFields;
+  for (const Function *F : FuncAddrs) {
+    std::string Name = getFunctionAddressField(*F);
+    auto [It, Inserted] = FuncFields.try_emplace(Name, F);
+    if (!Inserted) {
+      F->getContext().emitError(
+          "function " + MSIL::getIRName(*F) + " has the same IL name '" +
+          MSIL::getILName(*F, TM) + "' as " + MSIL::getIRName(*It->second) +
+          ", and the addresses of both are used");
+      continue;
+    }
+    if (auto GVIt = Fields.find(Name); GVIt != Fields.end())
+      GVIt->second->getContext().emitError(
+          "global variable " + MSIL::getIRName(*GVIt->second) +
+          " has the IL name '" + Name + "' of the address field of function " +
+          MSIL::getIRName(*F));
   }
 }
 
@@ -764,9 +836,18 @@ void MSILAsmPrinter::emitDataSegment() {
     TS.emitILLine("");
 }
 
+void MSILAsmPrinter::emitFunctionAddressFields() {
+  MSILTargetStreamer &TS = getTargetStreamer();
+  for (const Function *F : FuncAddrs)
+    TS.emitAddressField(getFunctionAddressField(*F), /*Public=*/false,
+                        /*Generated=*/true);
+  if (!FuncAddrs.empty())
+    TS.emitILLine("");
+}
+
 void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
   bool HasData = !Data->Entries.empty();
-  if (!HasData && CtorFns.empty())
+  if (!HasData && FuncAddrs.empty() && CtorFns.empty())
     return;
 
   // The member references print exactly as in code (MSILMemberRefExpr).
@@ -786,6 +867,19 @@ void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
   };
 
   SynthesizedBody Body;
+  // The address field of every function whose address is used, which code
+  // (FUNC_ADDR) and the relocations read: the module's only 'ldftn' of each
+  // function, so every pointer to it has one value. On .NET Framework, the
+  // 'ldftn' of a method that the JIT compiles before the target first ran
+  // yields the target's precode, and in one compiled after it its code. An
+  // undefined function's is the 'ldftn' of its P/Invoke declaration.
+  auto AddFunctionAddresses = [&] {
+    for (const Function *F : FuncAddrs) {
+      Body.addInst("ldftn " + MethodRef(*F), 0, 1);
+      Body.addInst("stsfld " + FieldRef(getFunctionAddressField(*F)), 1, 0);
+    }
+  };
+
   if (HasData) {
     LLVMContext &Ctx = Data->Entries.front().GV->getContext();
     uint64_t InitSize = Data->InitSize;
@@ -857,16 +951,16 @@ void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
       HasField.insert(E.GV);
     }
     HasField.insert_range(ExternGlobals);
+    AddFunctionAddresses();
 
     // The relocations, now that every address is known: the address of a
-    // global plus its addend, or a function's 'ldftn' (an undefined
-    // function's is that of its P/Invoke declaration).
+    // global plus its addend, or the address field of a function.
     for (const MSILReloc &R : Data->Relocs) {
       Body.addInst(Base, 0, 1);
       Body.addOffset(R.Site);
       if (const auto *F = dyn_cast<Function>(R.Target)) {
         assert(R.Addend == 0 && "the collector rejects function + offset");
-        Body.addInst("ldftn " + MethodRef(*F), 0, 1);
+        Body.addInst("ldsfld " + FieldRef(getFunctionAddressField(*F)), 0, 1);
       } else {
         const auto *GV = dyn_cast<GlobalVariable>(R.Target);
         if (!GV || !HasField.contains(GV))
@@ -887,6 +981,9 @@ void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
         Body.addInst("stind.i", 2, 0);
       }
     }
+  } else {
+    // Without a data segment, the function addresses come first.
+    AddFunctionAddresses();
   }
 
   // The constructors last, in priority order: the data they may touch is in

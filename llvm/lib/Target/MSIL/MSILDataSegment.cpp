@@ -274,8 +274,9 @@ void MSILDataCollector::emitValueImpl(const MCExpr *Value, unsigned Size,
     fail("address of an alias or ifunc");
     return appendZeros(Size);
   }
-  // The module initializer stores a function address with ldftn, which
-  // yields the method itself: an offset into it means nothing.
+  // The relocation stores the value of the function's address field, which
+  // the module initializer sets once with ldftn, so the value is still the
+  // method itself: an offset into it means nothing.
   if (isa<Function>(Target) && V.getConstant()) {
     fail("function address + offset");
     return appendZeros(Size);

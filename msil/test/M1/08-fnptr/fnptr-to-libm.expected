@@ -1,0 +1,24 @@
+floor=-3000
+ceil=-2000
+trunc=-3000
+sqrt=2500
+twice=3000
+floorf=2000
+ceilf=3000
+sqrtf=1500
+pow=1024000
+fmod=1500
+float_op=2500
+float_op=6000
+sqrt=1500
+pow=1024000
+powf=1024000
+ldexp=12000
+frexp=750
+frexp exponent=6
+modf=-250
+modf integral=-3000
+apply sqrt=500
+apply table=4000
+apply local=750
+[exit 0]

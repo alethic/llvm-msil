@@ -13,7 +13,13 @@
 ; errors is not pinned: they are matched as a group, and a second FileCheck
 ; run counts them. llc exits with 1 and prints neither 'LLVM ERROR' nor a
 ; crash report, and the IL (taken from stdout, as llc deletes its -o file
-; after an error) still has every method. A variadic function cannot be a
+; after an error) still has every method. A diagnosed undefined function
+; whose address is used keeps its address field and its .cctor pair (plan
+; section 12, 'Phase-1 function addresses'): free, taken in code, and abort,
+; stored in on_error, get '<msil>fn_free' and '<msil>fn_abort' in module
+; order, which the .cctor sets with 'ldftn' after the address field of
+; on_error, and which the code and the relocation load ('ldftn' appears
+; nowhere else). A variadic function cannot be a
 ; P/Invoke (D14, D19; Design.md 4.7): an import with "msil-import-module" that
 ; is variadic is an error naming it when its address is used (its calls are
 ; already errors of LowerCall, call-errors.ll), also without a declaration.
@@ -59,10 +65,10 @@
 ; RUN: FileCheck %s --check-prefix=NERR %{nocrash} --input-file=%t/undef.win.o0.err
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/undef.ll \
 ; RUN:   > %t/undef.lnx.il
-; RUN: FileCheck %s --check-prefixes=UNDEF-IL,UNDEF-LNX --input-file=%t/undef.lnx.il
+; RUN: FileCheck %s --check-prefixes=UNDEF-IL,UNDEF-LNX --implicit-check-not=ldftn --input-file=%t/undef.lnx.il
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/undef.ll \
 ; RUN:   > %t/undef.win.il
-; RUN: FileCheck %s --check-prefixes=UNDEF-IL,UNDEF-WIN --input-file=%t/undef.win.il
+; RUN: FileCheck %s --check-prefixes=UNDEF-IL,UNDEF-WIN --implicit-check-not=ldftn --input-file=%t/undef.win.il
 
 ; DEFINE: %{diag} = FileCheck %s %{nocrash} --implicit-check-not=error: --implicit-check-not=warning:
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/variadic-data.ll -o /dev/null 2>&1 \
@@ -170,7 +176,7 @@ source_filename = "undef.c"
 ; UNDEF-IL-LABEL: .method {{.*}}'len1'(
 ; UNDEF-IL:       {{^}}  call native int 'strlen'(native int){{$}}
 ; UNDEF-IL-LABEL: .method {{.*}}'free_addr'(
-; UNDEF-IL:       {{^}}  ldftn void 'free'(native int){{$}}
+; UNDEF-IL:       {{^}}  ldsfld native int '<msil>fn_free'{{$}}
 ; UNDEF-IL-LABEL: .method {{.*}}'say'(
 ; UNDEF-IL:       {{^}}  call int32 'puts'(native int){{$}}
 ; UNDEF-IL-NOT:   pinvokeimpl
@@ -178,6 +184,20 @@ source_filename = "undef.c"
 ; UNDEF-WIN:      {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 ; UNDEF-IL-NOT:   pinvokeimpl
 ; UNDEF-IL:       {{^}}.field public static initonly native int 'on_error'{{( |$)}}
+; UNDEF-IL-EMPTY:
+; UNDEF-IL-NEXT:  {{^}}.field private static initonly native int '<msil>fn_free'{{$}}
+; UNDEF-IL-NEXT:  {{^}}.field private static initonly native int '<msil>fn_abort'{{$}}
+; UNDEF-IL-EMPTY:
+; UNDEF-IL-NEXT:  {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+; UNDEF-IL:       {{^}}  stsfld native int 'on_error'{{( |$)}}
+; UNDEF-IL-NEXT:  {{^}}  ldftn void 'free'(native int){{( |$)}}
+; UNDEF-IL-NEXT:  {{^}}  stsfld native int '<msil>fn_free'{{( |$)}}
+; UNDEF-IL-NEXT:  {{^}}  ldftn void 'abort'(){{( |$)}}
+; UNDEF-IL-NEXT:  {{^}}  stsfld native int '<msil>fn_abort'{{( |$)}}
+; UNDEF-IL-NEXT:  {{^}}  ldsfld native int '<msil>data'{{( |$)}}
+; UNDEF-IL:       {{^}}  ldsfld native int '<msil>fn_abort'{{( |$)}}
+; UNDEF-IL-NEXT:  {{^}}  stind.i{{( |$)}}
+; UNDEF-IL:       {{^}}} // end of method '.cctor'{{$}}
 ; UNDEF-IL-NOT:   pinvokeimpl
 
 declare ptr @malloc(i64)
