@@ -1,7 +1,7 @@
 # Design: an LLVM backend that emits .NET (MSIL/CIL) assemblies from C
 
 Status: draft v2 for review, 2026-10-12
-Scope: C (via clang) to fully managed, IL-only .NET assemblies. Flat exported C API only. No C++/CLI object model, and no C++ interop or name-mangling work.
+Scope: C (via clang) to fully managed, IL-only .NET assemblies. Flat exported C API only. No C++/CLI object model, and no C++ interop or name-mangling work. Like LLVM itself, the project ships compiler tools only (`clang`, `llc`, `msil-ld`, ...); build systems (CMake, MSBuild, ...) are separate projects that integrate the compiler.
 
 **Decisions so far (from review of v1):**
 - The work lives in a fork of llvm-project.
@@ -27,7 +27,6 @@ Scope: C (via clang) to fully managed, IL-only .NET assemblies. Flat exported C 
 - A managed object model, GC references in C code, or C++/CLI-style mixed assemblies.
 - C++ beyond whatever already works as plain C with mangled names. Mangled names are legal CIL identifiers, so it costs nothing to leave the door open.
 - Being callable *from native C* (exporting symbols from the assembly to native callers). Callbacks into managed code via function pointers handed to native code are in scope; that is a different thing (see 4.5).
-- Multiple targets in one assembly. Each target produces its own assembly (5.6).
 - Verifiable/safe IL. The output is unverifiable, full-trust IL, the same as `/clr:pure` or `unsafe` C#.
 
 ---
@@ -60,7 +59,7 @@ The backend is an ordinary LLVM target: SelectionDAG instruction selection produ
 
 - **Pointer vs integer.** In MachineInstrs a pointer is just an `i64`, which is fine: CIL treats unmanaged pointers as `native int` anyway.
 - **Struct-by-value at P/Invoke boundaries.** Internal calls pass aggregates indirectly, so the backend only sees scalars there. A native callee that takes or returns a struct by value needs a real CIL value type in its P/Invoke signature, so the runtime can apply the native ABI. Clang attaches the C-level signature to `dllimport`-candidate declarations as metadata, and the backend emits matching value types with explicit layout.
-- **Assembly-level output:** method definitions, the module initializer, the P/Invoke table, the export class, and assembly references, all emitted by the AsmPrinter and object writer.
+- **Assembly-level output:** method definitions, the module initializer, the P/Invoke table and the export class, all emitted by the AsmPrinter and object writer, plus assembly references. Phase 1 hard-codes `[mscorlib]`; from phase 2 on, `msil-ld` takes the BCL references from the reference assemblies it is given (5.2, 7.1).
 
 ### 2.4 Why not a direct IR-to-CIL translator (v1's recommendation)
 
@@ -109,12 +108,12 @@ Windows is a first-class target, not just "UCRT":
 
 ### 3.2 SIMD
 
-SIMD is supported. .NET exposes hardware intrinsics that map almost one to one onto C's:
+SIMD is supported. .NET exposes hardware intrinsics that map almost one to one onto C's, and codegen switches (7.1) let the compiler use them:
 
 - **Generic LLVM vector types and operations** (`<4 x float>`, `<16 x i8>`, shuffles, ...) become `System.Runtime.Intrinsics.Vector128<T>`/`Vector256<T>`/`Vector512<T>` locals and operations.
 - **Architecture-specific intrinsics** (`immintrin.h` → `llvm.x86.*`, `arm_neon.h` → `llvm.aarch64.neon.*`) become calls to `System.Runtime.Intrinsics.X86.{Sse,Sse2,...,Avx2,Avx512F}` and `System.Runtime.Intrinsics.Arm.AdvSimd`, which the JIT turns into the same instructions. So target features (`-mavx2`, ...) are honored exactly as in a native build.
 - **A CPU without a feature** the code was compiled for throws `PlatformNotSupportedException`, the managed equivalent of the native illegal-instruction crash. Code that does its own runtime dispatch (`__builtin_cpu_supports`) maps that check to `IsSupported`.
-- **On .NET Framework (net48)** none of these APIs exist, so vectors are scalarized by the legalizer and arch-specific intrinsics are rejected unless they have a scalar fallback.
+- **Without those switches** (the default, and the only choice on .NET Framework, where none of these APIs exist), vectors are scalarized by the legalizer and arch-specific intrinsics are rejected unless they have a scalar fallback.
 - Intrinsics with no .NET equivalent are lowered to scalar code where LLVM can expand them, or rejected with an error naming the intrinsic.
 
 ---
@@ -137,7 +136,7 @@ The C program never touches the GC heap. All C-visible memory is unmanaged and n
 
 ### 4.3 Heap
 
-`malloc` comes from the selected libc. With a host libc (glibc, UCRT, ...) it is the real native `malloc` via P/Invoke, so pointers can be exchanged freely with native libraries. With a future portable libc it would be backed by `NativeMemory` or `Marshal.AllocHGlobal` (7.2).
+`malloc` comes from the selected libc. With a host libc (glibc, UCRT, ...) it is the real native `malloc` via P/Invoke, so pointers can be exchanged freely with native libraries. With a future portable libc it would be backed by `NativeMemory` or `Marshal.AllocHGlobal` (7.1).
 
 ### 4.4 Threads and TLS
 
@@ -148,14 +147,14 @@ C threads are CLR threads. `thread_local` variables live in a per-thread unmanag
 A C function pointer may be called from C in the same assembly, from another assembly, or by native code (for example a `qsort` comparator passed to native `qsort`).
 
 - **Representation:** a function pointer value is always a native-callable entry point, so pointers handed to native code are correct by construction.
-  - Modern .NET: the address of an `[UnmanagedCallersOnly]` thunk, obtained with `ldftn`.
-  - .NET Framework: there is no `UnmanagedCallersOnly`. Instead, the module initializer creates one delegate per address-taken function, keeps it alive in a static array, and stores `Marshal.GetFunctionPointerForDelegate` in the thunk table. This is slower to call from native code, but correct.
+  - Modern .NET, with the `UnmanagedCallersOnly` codegen switch (7.1): the address of an `[UnmanagedCallersOnly]` thunk, obtained with `ldftn`.
+  - Default, and the only choice on .NET Framework, which has no `UnmanagedCallersOnly`: the module initializer creates one delegate per address-taken function, keeps it alive in a static array, and stores `Marshal.GetFunctionPointerForDelegate` in the thunk table. This is slower to call from native code, but correct.
 - **Fast path:** indirect calls from our own code first check whether the pointer is in this assembly's thunk table (one range compare), and if so `calli` the *managed* method directly, which skips the native transition. Otherwise they use `calli unmanaged cdecl`.
 - Only address-taken functions get thunks.
 
 ### 4.6 setjmp/longjmp
 
-`setjmp` call sites are rewritten (starting from WebAssembly's Emscripten-style SjLj lowering) so that `longjmp` throws a managed exception caught in the function that called `setjmp`. With a host libc, the program's `setjmp`/`longjmp` calls are intercepted by the compiler and never reach the native ones, which could not unwind managed frames.
+`setjmp` call sites are rewritten (starting from WebAssembly's Emscripten-style SjLj lowering) so that `longjmp` throws a BCL exception type, which the function that called `setjmp` catches with an IL exception filter that matches the `jmp_buf`; no exception type has to be shared between assemblies. With a host libc, the program's `setjmp`/`longjmp` calls are intercepted by the compiler and never reach the native ones, which could not unwind managed frames.
 
 ### 4.7 Variadic functions
 
@@ -185,13 +184,13 @@ Following WebAssembly, there are two object kinds, and the linker accepts both, 
    2. **Referenced managed assemblies** built by this toolchain: read their export table (5.4). A match becomes a `call` into that assembly's export class.
    3. **Native shared libraries**, including the selected libc: read the native library's export table found via `-L`/`-l` (`llvm::object` handles ELF, COFF and Mach-O) to learn which library provides the symbol. A match becomes a P/Invoke stub. For cross-compiles where the native library is not present, the sysroot supplies symbol lists (or import libraries on Windows).
    4. Anything left is a link error.
-3. Lay out data segments, apply relocations, and write the PE.
+3. Lay out data segments, apply relocations, bind every BCL type and member the code uses to the reference assembly that defines it (7.1), and write the PE.
 
 `-lfoo` lookup per search directory: `libfoo.a` (static) → a managed `foo.dll` with our export metadata → native `libfoo.so` / `foo.dll` / `libfoo.dylib` (P/Invoke). `-Bstatic`/`-Bdynamic` force one or the other, as usual. The libc is just the default `-lc` for the triple, so it can be linked statically when a static build of it exists for the target (5.3, section 6).
 
 ### 5.3 P/Invoke shape
 
-- `DllImport` with only blittable types (integers, floats, `native int`, explicit-layout blittable structs). With only blittable types, the runtime does not marshal by copying even on .NET Framework. On .NET 7+ we also set `[assembly: DisableRuntimeMarshalling]`.
+- `DllImport` with only blittable types (integers, floats, `native int`, explicit-layout blittable structs). With only blittable types, the runtime does not marshal by copying even on .NET Framework. A codegen switch (for .NET 7+) also sets `[assembly: DisableRuntimeMarshalling]` (7.1).
 - Library names are emitted without prefixes or suffixes (`"z"`, not `"libz.so.1"`) so the runtime's probing finds `libz.so`, `z.dll`, or `libz.dylib`. Versioned sonames such as glibc's `libc.so.6` are taken from the native library's `DT_SONAME` when the linker reads it.
 - `[SuppressGCTransition]` is available as an opt-in attribute on modern .NET.
 
@@ -207,7 +206,7 @@ Following WebAssembly, there are two object kinds, and the linker accepts both, 
 
 ### 5.6 Shipping multiple targets
 
-The ABI is baked in per target, so there is one assembly per target. Package several targets with NuGet's `runtimes/<rid>/lib/<tfm>/` layout and let .NET's own resolution (`deps.json`) pick the right one. A single multi-target ("fat") assembly is a non-goal.
+The ABI is baked in per target, so there is one assembly per target. Combining the per-target assemblies is the business of the user's build system, not of the compiler. A single multi-target ("fat") assembly is not planned for phases 1-5; it may be considered after them.
 
 ---
 
@@ -217,30 +216,38 @@ The libc is a target choice, as in native C (section 3).
 
 - **Host libcs (glibc, musl, UCRT/MSVCRT, libSystem):** the default is dynamic, exactly like a native build. libc functions are P/Invoked from the system's shared libc, with the variadic handling from 4.7. Headers come from that platform's sysroot.
 - **Static libc:** possible when the libc can be built for our target and its OS layer can run without native code. For musl, that means replacing its syscall layer, because CIL cannot make syscalls directly. The practical options are P/Invoking the kernel interface through a tiny dynamic dependency (which defeats the point) or the portable layer below. So static host libcs are a later investigation, not a promise.
-- **Portable .NET libc (`-unknown-dotnet`), deferred, not in the current plan:** a real libc compiled for our target, statically linked, with its OS layer written in C# over the BCL. Candidates are wasi-libc with a managed WASI preview1 layer (a small, documented interface), musl with a managed syscall shim, or picolibc. Revisit only once the host-libc targets are solid.
-- **Runtime support assembly** (`MsilC.Runtime.dll`, C#): the shadow stack, TLS blocks, setjmp exception, thunk table, native `va_list` construction, and process startup (`Main(string[])` → `main(argc, argv)`). It multi-targets `net48` and `net8.0`, and later may be merged into each output assembly.
+- **Portable .NET libc (`-unknown-dotnet`), deferred, not in the current plan:** a real libc compiled for our target, statically linked, with its OS layer over the BCL. Candidates are wasi-libc with a managed WASI preview1 layer (a small, documented interface), musl with a managed syscall shim, or picolibc. Revisit only once the host-libc targets are solid.
+- **No runtime support assembly.** Generated code calls .NET (BCL) APIs directly wherever one exists: a `[ThreadStatic]` field plus `NativeMemory` or `Marshal.AllocHGlobal` for the per-thread shadow stack (4.2) and the `thread_local` block (4.4), `AppDomain.ProcessExit` for global destructors and `atexit` (4.1), `Environment.GetCommandLineArgs` for argv, `Interlocked`/`Volatile` for atomics, and `System.Half` for f16 and `Int128`/`UInt128` for i128 division where available. Newer APIs are used only as 7.1 allows: individual codegen switches, capability from the reference assemblies `msil-ld` binds against, and defaults that run on .NET Framework 4.8 and modern .NET alike. Where no suitable BCL API exists, or the default must also run on .NET Framework 4.8, the backend or `msil-ld` emits small helpers into the output assembly, private to it: IL generated by the toolchain, or C helpers compiled by this toolchain and linked statically by `msil-ld`, the way LLVM links compiler-rt builtins. An example is C complex `__muldc3`/`__divdc3`, whose Annex G infinity and NaN rules `System.Numerics.Complex` does not follow. For setjmp/longjmp no exception type is shared (4.6), the module initializer builds the thunk table (4.5), generated code builds native `va_list`s (4.7), and process startup is the generated `Main` that calls `main` (section 12). Every output assembly is therefore self-contained: it needs no runtime support assembly, and its only dependencies are the BCL, the native libraries it P/Invokes, and any assemblies it was explicitly linked against (5.2). Calls to the C math library go to the libc selected above, as in a native build, except where a 7.1 switch permits a specific `Math` API such as `Math.FusedMultiplyAdd`; mapping the math library to `Math`/`MathF` in general is not decided.
 
 ---
 
-## 7. Runtime profiles: .NET Framework and modern .NET
+## 7. .NET Framework and modern .NET
 
-### 7.1 Profile selection
+### 7.1 Codegen switches and assembly references
 
-The IL instructions we need (`calli unmanaged`, `localloc`, `cpblk`/`initblk`, `unaligned.`, `volatile.`, `tail.`, module initializers, RVA fields) have existed since CLR 2.0. A handful of library APIs differ between Framework and modern .NET, so codegen takes a profile flag, `-mdotnet=net48|net8.0`. The default is `net8.0`.
+The IL instructions we need (`calli unmanaged`, `localloc`, `cpblk`/`initblk`, `unaligned.`, `volatile.`, `tail.`, module initializers, RVA fields) have existed since CLR 2.0. A handful of library APIs and attributes differ between Framework and modern .NET (table below). There is no runtime profile and no target-framework option:
 
-| Need | Modern .NET (net8.0) | .NET Framework (net48) |
+- **Codegen switches.** Individual, independent switches permit specific newer APIs or attributes, for example "may use `Math.FusedMultiplyAdd`", "emit `DisableRuntimeMarshalling`" or "use `UnmanagedCallersOnly` thunks instead of delegate thunks". Their defaults keep the generated code running on .NET Framework 4.8 and modern .NET alike, as phase 1 output does. A build system may combine switches into a "net8.0" setting if it wants; the compiler has no profile concept.
+- **Capability from the references**, where that is possible: an API or attribute is usable only if some reference assembly defines it. Only `msil-ld` sees the references (5.2), so that is where this applies: an attribute such as `DisableRuntimeMarshalling`, or a newer API that a switch lets codegen use, is bound like any other BCL member and needs a reference that defines it.
+- **Assembly references** work as in Roslyn (`csc`): there is no core-library switch. Phase 1 hard-codes `[mscorlib]`, which .NET's `mscorlib` facade makes run everywhere. From phase 2 on, `msil-ld` is given reference assemblies and binds every BCL type and member the generated code needs (`Marshal.AllocHGlobal`, `Interlocked.MemoryBarrier`, `Math`, attributes such as `DisableRuntimeMarshalling`, ...) by searching them, and references whichever assembly defines it. .NET Framework's reference assemblies give `mscorlib`, which loads on both runtimes. .NET 8's give references such as `System.Runtime`, `System.Runtime.InteropServices` and `System.Threading` (where `Interlocked` lives), at version 8.0.0.0, so the output then loads only on .NET 8 and later.
+
+What differs between the runtimes (the table below, and 3.2 for SIMD) decides which switches exist and what their safe defaults are.
+
+| Need | Modern .NET (.NET 8) | .NET Framework 4.8 |
 |---|---|---|
 | Native-callable function pointers | `[UnmanagedCallersOnly]` + `ldftn` | Kept-alive delegates + `Marshal.GetFunctionPointerForDelegate` |
 | Unmanaged allocation | `NativeMemory` | `Marshal.AllocHGlobal` (or the libc's `malloc`) |
 | Disable marshalling | `DisableRuntimeMarshalling` | Not needed for blittable signatures |
 | Bit operations | `BitOperations` and `BinaryPrimitives` intrinsics | Inline IL sequences |
-| 128-bit integers | Expanded by the legalizer either way | Same |
+| Floating-point math | `Math.FusedMultiplyAdd`, `Math.CopySign`, `MathF`, `BitConverter.SingleToInt32Bits`; `Math.Min`/`Math.Max` order -0.0 below +0.0 | Generic expansions or C math library calls. `Math.Min(-0.0, 0.0)` is +0 |
+| 128-bit integers | Expanded by the legalizer, except the compiler-rt calls (division, floating-point conversions); division through `Int128`/`UInt128` | Expanded by the legalizer, except the compiler-rt calls (division, floating-point conversions), which are helpers in the output assembly (section 6) |
+| Half-precision floating point | `System.Half` | Helpers in the output assembly (section 6) |
 | Lazy library loading | `NativeLibrary` | `LoadLibrary`/`GetProcAddress` via kernel32 (Windows only) |
 | Valid triples | All | Windows triples. Framework runs only on Windows. |
 
 ### 7.2 Mono and Unity
 
-Mono and Unity are out of scope for the plan, but nothing in the net48 profile should preclude them. Worth a check in phase 4.
+Mono and Unity are out of scope for the plan, but nothing in the default output (7.1) should preclude them. Worth a check in phase 4.
 
 ---
 
@@ -250,9 +257,9 @@ Mono and Unity are out of scope for the plan, but nothing in the net48 profile s
 - `llvm/lib/TargetParser/Triple.cpp`: the `msil` object format. `llvm/lib/MC/TargetRegistry.cpp`: select the MSIL target by object format.
 - `clang/lib/Basic/Targets/`: a thin wrapper over the native `TargetInfo` when the object format is `msil` (`__MSIL__`, no inline asm, `long double` = `double`).
 - `clang/lib/CodeGen/Targets/MSIL.cpp`: ABI lowering, plus attaching C-level signatures to external declarations (2.3).
-- `clang/lib/Driver/ToolChains/MSIL.{h,cpp}`: sysroot and libc selection, the default `-lc`, the runtime assembly, invoking `msil-ld`. Managed `.dll` inputs become references.
+- `clang/lib/Driver/ToolChains/MSIL.{h,cpp}`: sysroot and libc selection, the default `-lc`, invoking `msil-ld`. Managed `.dll` inputs become references.
 - `lld/MSIL/` (`msil-ld`): an lld flavor modeled on `lld/wasm`.
-- Executables also get `foo.runtimeconfig.json` (modern .NET) or `foo.exe.config` (Framework). Later: an MSBuild SDK and NuGet packaging.
+- Like Roslyn (`csc`), which writes only the assembly and its PDB, the driver and `msil-ld` write neither `foo.runtimeconfig.json` (modern .NET) nor `foo.exe.config` (Framework). Those come from the build system or the user, as the .NET SDK's MSBuild targets write them for C#. The test harness writes its own runtimeconfig for test runs; that is test tooling, not the compiler.
 
 ---
 
@@ -274,7 +281,7 @@ Mono and Unity are out of scope for the plan, but nothing in the net48 profile s
 1. **JIT behavior on LLVM-shaped code.** RyuJIT falls back to minimal optimization for very large methods, and aggressive inlining produces those. Mitigation: an IL-size-aware inline cost, outlining, early measurement. The Framework JIT is more conservative still.
 2. **Host-libc ABI fidelity.** Arch-specific triples, variadic shims, `long double`, and libc structs read through P/Invoke. Each host libc needs its own conformance run.
 3. **Native variadic calls** beyond the v-variant table and the fixed-arity list are unsupported.
-4. **Function-pointer cost**, especially on .NET Framework, where native-to-managed calls go through delegates.
+4. **Function-pointer cost** where native-to-managed calls go through delegates: always on .NET Framework, and on modern .NET unless the `UnmanagedCallersOnly` switch is on (4.5).
 5. **Fork maintenance.** Keep the diff to new directories plus registration hooks, as WebAssembly and llvm-mos do.
 6. **Object format and PE writer effort** in phase 2.
 7. **Debugging** needs Portable PDB generation (Windows PDB for Framework) from LLVM debug locations.
@@ -288,10 +295,10 @@ Mono and Unity are out of scope for the plan, but nothing in the net48 profile s
 |---|---|
 | **0. Bootstrap** | Fork llvm-project and copy the WebAssembly target's skeleton into an experimental `MSIL` target: the `msil` object format in `Triple`, backend selection by object format, the clang `TargetInfo` wrapper, a driver stub. CI on Linux with the .NET SDK and ilasm, plus Windows CI for .NET Framework. |
 | **1. Single file to running assembly** (first milestone) | `-S` to `.il`, assembled with ilasm, runs on modern .NET. |
-| **2. Objects and linker** | CIL object format, `msil-ld`, direct PE writer, multiple TUs, archives, bitcode/LTO, `-shared` exports, assembly-to-assembly linking, P/Invoke resolution from native export tables. |
-| **3. libc and runtime** | Runtime assembly, the glibc and UCRT host-libc triples (P/Invoke, variadic shims), the net48 profile, setjmp, TLS, atomics. Real programs run: zlib, Lua, SQLite. |
+| **2. Objects and linker** | CIL object format, `msil-ld`, direct PE writer, multiple TUs, archives, bitcode/LTO, `-shared` exports, assembly-to-assembly linking, P/Invoke resolution from native export tables, BCL references bound from reference assemblies (7.1). |
+| **3. libc and runtime** | Runtime support through the BCL and helpers in the output assembly (section 6), the glibc and UCRT host-libc triples (P/Invoke, variadic shims), the codegen switches for newer .NET APIs (7.1), setjmp, TLS, atomics. Real programs run: zlib, Lua, SQLite. |
 | **4. Conformance and performance** | GCC torture tests and llvm-test-suite per triple, benchmarks vs native clang, inliner tuning, full SIMD intrinsic coverage, debug info, musl and Darwin triples. |
-| **5. Production toolchain** | MSBuild SDK and NuGet packaging (per-target `runtimes/<rid>` assemblies), 32-bit triples, static host libcs where viable. |
+| **5. Production toolchain** | 32-bit triples, static host libcs where viable. |
 
 ---
 
