@@ -1,0 +1,11 @@
+layout ok
+odd
+packed ok
+zero
+one
+two
+24090
+table ok
+pack(2) and pack(4) ok
+writes ok
+[exit 0]

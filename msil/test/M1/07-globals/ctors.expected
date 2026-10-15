@@ -1,0 +1,23 @@
+ctor 101: reads the data image
+seed=1000
+ctor 150: reads through a relocation
+*relocated=7
+ctor 300
+ctor 500 (first defined)
+ctor 500 (second defined)
+ctor 1000
+ctor default (first defined)
+ctor default (second defined)
+main
+101
+150
+300
+500
+501
+1000
+65535
+65536
+seed=1001
+target=70
+set_by_ctor=2002
+[exit 8]

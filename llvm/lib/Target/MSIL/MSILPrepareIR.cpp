@@ -48,8 +48,10 @@
 /// - A call or invoke of a definition that lost its body after an error
 ///   (above) is erased, and its uses become poison; an invoke branches to its
 ///   normal destination. The function is not compiled, so the call would
-///   otherwise become a call of an external function. Other uses of the
-///   function (its address) are left alone.
+///   otherwise become a call of an external function. For the same reason
+///   every other use of the function (its address in code, in a global
+///   initializer or in llvm.global_ctors) becomes poison, and it is removed
+///   from llvm.used and llvm.compiler.used.
 /// - The code after a trap (a call of llvm.trap, llvm.debugtrap or
 ///   llvm.ubsantrap without a "trap-func-name") in its block is replaced by
 ///   'unreachable', which also drops the block's successor edges: the trap
@@ -232,14 +234,6 @@ INITIALIZE_PASS_END(MSILPrepareIRLegacy, DEBUG_TYPE,
 
 ModulePass *llvm::createMSILPrepareIRLegacyPass() {
   return new MSILPrepareIRLegacy();
-}
-
-/// Returns the IR name of \p GV as it appears in the IR ("@name").
-static std::string getIRName(const GlobalValue &GV) {
-  std::string Name;
-  raw_string_ostream OS(Name);
-  GV.printAsOperand(OS, /*PrintType=*/false);
-  return Name;
 }
 
 /// Phase 1 compiles C for the x86_64 and aarch64 MSIL triples with 64-bit
@@ -463,26 +457,23 @@ static bool disableMetadataSections(Module &M, TargetMachine &TM) {
   return HasPCSections;
 }
 
-/// The longest identifier ilasm accepts, in bytes: Framework 4.8 and NuGet
-/// ilasm 10.0.12 report 'name too long' for 1024 bytes or more, counting
-/// UTF-8 bytes after they decode the \' and octal escapes of
-/// MSIL::printQuotedName (decision D11).
-static constexpr size_t MaxILNameBytes = 1023;
-
-/// Reports \p F if its IL name is longer than ilasm accepts. The diagnostic
-/// names the function in full, so the message gives only the length.
-/// Returns true if it was reported.
+/// Reports \p F if its IL name is longer than ilasm accepts
+/// (MSIL::MaxILNameBytes: Framework 4.8 and NuGet ilasm 10.0.12 report 'name
+/// too long' for 1024 bytes or more, counting UTF-8 bytes after they decode
+/// the \' and octal escapes of MSIL::printQuotedName, decision D11). The
+/// diagnostic names the function in full, so the message gives only the
+/// length. Returns true if it was reported.
 static bool diagnoseILNameLength(const Function &F, const TargetMachine &TM) {
   // Unnamed functions get short generated names ('__unnamed_N').
   if (!F.hasName())
     return false;
   size_t Size = MSIL::getILName(F, TM).size();
-  if (Size <= MaxILNameBytes)
+  if (Size <= MSIL::MaxILNameBytes)
     return false;
   F.getContext().diagnose(DiagnosticInfoUnsupported(
       F,
       "identifier of " + Twine(Size) + " bytes is longer than the " +
-          Twine(MaxILNameBytes) + " bytes ilasm accepts",
+          Twine(MSIL::MaxILNameBytes) + " bytes ilasm accepts",
       DiagnosticLocation(F.getSubprogram())));
   return true;
 }
@@ -647,7 +638,8 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
 /// definitions whose bodies were deleted after an error: they are not
 /// compiled, so a call of one would be lowered as a call of an external
 /// function. The uses of each call become poison, and an invoke branches to
-/// its normal destination. Other uses of the functions are left alone.
+/// its normal destination. The other uses of the functions, their addresses,
+/// are replaced by poisonAddressesOf.
 static bool eraseCallsOf(ArrayRef<Function *> Deleted) {
   // Collect the calls first: erasing one removes uses of the functions, and
   // erasing an invoke may delete PHI nodes in its unwind destination.
@@ -735,7 +727,7 @@ static bool diagnoseGlobalDtors(Module &M) {
           CS && CS->getNumOperands() >= 2)
         if (auto *Fn =
                 dyn_cast<GlobalValue>(CS->getOperand(1)->stripPointerCasts())) {
-          M.getContext().emitError("global destructor " + getIRName(*Fn) +
+          M.getContext().emitError("global destructor " + MSIL::getIRName(*Fn) +
                                    " is not supported for MSIL yet");
           Named = true;
         }
@@ -773,6 +765,35 @@ static void replaceGlobalValueWrappers(GlobalValue &GV) {
   }
 }
 
+/// Replaces every remaining use of the functions in \p Deleted, the
+/// definitions whose bodies were deleted after an error, by poison: their
+/// addresses in code, in global initializers (constant expressions included)
+/// and in llvm.global_ctors. The functions are not compiled, so the
+/// AsmPrinter would take each address for that of an external function: an
+/// 'undefined function' error after the real one, or a P/Invoke declaration
+/// for a function with the name of a Phase-1 import. The functions stay in
+/// the module as declarations, and metadata keeps naming them: the IR
+/// verifier runs again after this pass and accepts only a function (or null)
+/// in a "CG Profile" module flag entry.
+static bool poisonAddressesOf(Module &M, ArrayRef<Function *> Deleted) {
+  SmallPtrSet<const Constant *, 4> AddressTaken;
+  for (Function *F : Deleted)
+    if (!F->use_empty())
+      AddressTaken.insert(F);
+  if (AddressTaken.empty())
+    return false;
+
+  // llvm.used and llvm.compiler.used may only list global values.
+  removeFromUsedLists(M, [&](Constant *C) { return AddressTaken.contains(C); });
+  for (Function *F : Deleted) {
+    if (!AddressTaken.contains(F))
+      continue;
+    replaceGlobalValueWrappers(*F);
+    F->replaceNonMetadataUsesWith(PoisonValue::get(F->getType()));
+  }
+  return true;
+}
+
 /// Replaces every use of the global values in \p ToErase by poison and erases
 /// them.
 static void eraseGlobalValues(Module &M, ArrayRef<GlobalValue *> ToErase) {
@@ -791,8 +812,10 @@ static void eraseGlobalValues(Module &M, ArrayRef<GlobalValue *> ToErase) {
 
 /// After an unsupported target triple nothing in \p M can be compiled:
 /// deletes every function body and erases every alias, ifunc and global
-/// variable, except the llvm.* globals that name no code or data to compile
-/// (llvm.used and the like), so that only the module header is printed.
+/// variable, except the special llvm.* globals that hold no program data
+/// (MSIL::isSpecialLLVMGlobal: llvm.used and the like), so that only the
+/// module header is printed. A user global with an llvm.* name (a C asm label
+/// can spell one) is program data and is erased.
 static void dropModuleContents(Module &M) {
   for (Function &F : M) {
     if (F.isDeclaration())
@@ -807,7 +830,7 @@ static void dropModuleContents(Module &M) {
     // The constructor and destructor lists name functions that are no longer
     // compiled.
     StringRef Name = GV.getName();
-    if (!Name.starts_with("llvm.") || Name == "llvm.global_ctors" ||
+    if (!MSIL::isSpecialLLVMGlobal(GV) || Name == "llvm.global_ctors" ||
         Name == "llvm.global_dtors")
       ToErase.push_back(&GV);
   }
@@ -884,18 +907,23 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
 
   Changed |= diagnoseGlobalDtors(M);
 
+  // After diagnoseGlobalDtors, which names the destructors it reports.
+  Changed |= poisonAddressesOf(M, DeletedBodies);
+
   // The global values to replace by poison and erase.
   SmallVector<GlobalValue *, 4> ToErase;
   for (GlobalVariable &GV : M.globals()) {
-    // llvm.used and the other intrinsic globals hold no program data.
-    if (GV.getName().starts_with("llvm."))
+    // llvm.used and the other special globals hold no program data; a user
+    // global with an llvm.* name (a C asm label) does, and is checked.
+    if (MSIL::isSpecialLLVMGlobal(GV))
       continue;
     if (unsigned AS = GV.getAddressSpace()) {
-      Ctx.emitError("global variable " + getIRName(GV) + " in address space " +
-                    Twine(AS) + " is not supported for MSIL");
+      Ctx.emitError("global variable " + MSIL::getIRName(GV) +
+                    " in address space " + Twine(AS) +
+                    " is not supported for MSIL");
       ToErase.push_back(&GV);
     } else if (GV.isThreadLocal()) {
-      Ctx.emitError("thread-local variable " + getIRName(GV) +
+      Ctx.emitError("thread-local variable " + MSIL::getIRName(GV) +
                     " is not supported for MSIL yet");
       replaceThreadLocalAddressCalls(GV, &GV);
       GV.setThreadLocal(false);
@@ -903,11 +931,13 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
     }
   }
   for (GlobalAlias &GA : M.aliases()) {
-    Ctx.emitError("alias " + getIRName(GA) + " is not supported for MSIL");
+    Ctx.emitError("alias " + MSIL::getIRName(GA) +
+                  " is not supported for MSIL");
     ToErase.push_back(&GA);
   }
   for (GlobalIFunc &GI : M.ifuncs()) {
-    Ctx.emitError("ifunc " + getIRName(GI) + " is not supported for MSIL");
+    Ctx.emitError("ifunc " + MSIL::getIRName(GI) +
+                  " is not supported for MSIL");
     ToErase.push_back(&GI);
   }
   if (ToErase.empty())

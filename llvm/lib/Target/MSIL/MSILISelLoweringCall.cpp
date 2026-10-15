@@ -27,6 +27,12 @@
 /// inserter emitCallResults joins them into one CALL (a direct 'call' of a
 /// method) or CALL_INDIRECT ('calli' through an address).
 ///
+/// A library call, which SelectionDAG makes for an operation that it cannot
+/// expand inline, names its callee by an external symbol. Phase 1 has no
+/// linker and no runtime library, so LowerCall applies the library-call
+/// policy of decision D14 to it: a call of a function of this module, a
+/// P/Invoke of a Phase-1 import, or an error.
+///
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/MSILMCTargetDesc.h"
@@ -34,6 +40,8 @@
 #include "MSILMachineFunctionInfo.h"
 #include "MSILSelectionDAGInfo.h"
 #include "MSILSubtarget.h"
+#include "MSILUtilities.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -42,7 +50,9 @@
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Target/TargetMachine.h"
 #include <algorithm>
 using namespace llvm;
 
@@ -54,6 +64,27 @@ static void fail(const SDLoc &DL, SelectionDAG &DAG, const Twine &Msg) {
   MachineFunction &MF = DAG.getMachineFunction();
   DAG.getContext()->diagnose(
       DiagnosticInfoUnsupported(MF.getFunction(), Msg, DL.getDebugLoc()));
+}
+
+/// Returns true if a call with the lowered arguments and results of \p CLI
+/// matches the signature of \p F's method, which comes from F's own type
+/// (MSILAsmPrinter::getSignature), so that a direct call of it is valid.
+static bool matchesSignature(const Function &F,
+                             const TargetLowering::CallLoweringInfo &CLI) {
+  // A variadic method gets no parameter for the variable arguments.
+  if (F.isVarArg())
+    return false;
+  SmallVector<MVT, 4> Params;
+  SmallVector<MVT, 4> Results;
+  MSIL::computeSignatureVTs(F.getFunctionType(), &F,
+                            CLI.DAG.getMachineFunction().getFunction(),
+                            CLI.DAG.getTarget(), Params, Results);
+  return equal(Params,
+               map_range(CLI.Outs,
+                         [](const ISD::OutputArg &Out) { return Out.VT; })) &&
+         equal(Results, map_range(CLI.Ins, [](const ISD::InputArg &In) {
+                 return In.VT;
+               }));
 }
 
 // Test whether the given calling convention is supported. Every call is a
@@ -156,12 +187,65 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     return DropCall();
   };
 
+  // The callee of a direct call: a function of the module, or the external
+  // symbol of a library call that becomes a P/Invoke declaration.
+  const Function *F = nullptr;
+  const char *LibCallee = nullptr;
+  int64_t CalleeOffset = 0;
+
   // SelectionDAG calls a library function, named by an external symbol, for
-  // an operation that it cannot expand inline (an i128 division, for
-  // example). Phase 1 has no runtime library to call.
-  if (const auto *ES = dyn_cast<ExternalSymbolSDNode>(Callee))
-    return Reject(Twine("runtime library call '") + ES->getSymbol() +
-                  "' is not supported for MSIL yet");
+  // an operation that it cannot expand inline (sqrt, fmin, an i128 to
+  // floating-point conversion, ...). Phase 1 has no linker and no runtime
+  // library, so the library-call policy of decision D14 applies.
+  if (const auto *ES = dyn_cast<ExternalSymbolSDNode>(Callee)) {
+    StringRef Name = ES->getSymbol();
+    auto Mismatch = [&]() {
+      return Reject(Twine("library call '") + Name +
+                    "' does not match the type of the function of that name "
+                    "in this module");
+    };
+    // Methods are named by their IL name, so a function @"\01sqrt" is the
+    // one a call to 'sqrt' binds to.
+    const Function *Named =
+        MSIL::getFunctionByILName(*MF.getFunction().getParent(), Name);
+    if (Named && Named->isIntrinsic())
+      Named = nullptr;
+    if (Named && !Named->isDeclarationForLinker()) {
+      // A function of that name defined in this module is the one a linker
+      // would bind the call to (a freestanding program's own sqrt, or the
+      // function of -ftrap-function), and a P/Invoke of that name would clash
+      // with its method: call the method.
+      if (!matchesSignature(*Named, CLI))
+        return Mismatch();
+      F = Named;
+    } else {
+      // Otherwise it must be a Phase-1 import: puts, putchar, the C math
+      // library, or a declaration with "msil-import-module". The compiler-rt
+      // helpers (__divti3, __mulsc3, __extendhfsf2, __atomic_*, ...) wait for
+      // the phase-3 runtime library.
+      const Triple &TT = DAG.getTarget().getTargetTriple();
+      if (!MSIL::getPInvokeModule(TT, Name, Named)) {
+        if (Name.starts_with("__"))
+          return Reject(Twine("runtime helper '") + Name +
+                        "' is not available for MSIL yet (phase 3)");
+        return Reject(Twine("library call '") + Name +
+                      "' is not a Phase-1 import");
+      }
+      // An import that this module also declares is called through that
+      // declaration, so that one P/Invoke declaration, with the
+      // declaration's "msil-import-*" attributes, serves the library call and
+      // the module's own calls. Any other import becomes a P/Invoke
+      // declaration of the external symbol
+      // (MSILAsmPrinter::noteExternalSymbol), whose library comes from the
+      // import table alone.
+      if (Named && matchesSignature(*Named, CLI))
+        F = Named;
+      else if (MSIL::getPInvokeModule(TT, Name))
+        LibCallee = ES->getSymbol();
+      else
+        return Mismatch();
+    }
+  }
 
   // Calling an undefined value is undefined behavior. MSILPrepareIR leaves
   // such calls behind when it replaces a diagnosed alias by poison.
@@ -181,8 +265,28 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   // token would not match the method and the JIT would reject the call.
   // MSILFixFunctionBitcasts (M9) makes them agree before ISel; this is the
   // backstop.
-  const auto *GA = dyn_cast<GlobalAddressSDNode>(Callee);
-  const auto *F = GA ? dyn_cast<Function>(GA->getGlobal()) : nullptr;
+  if (const auto *GA = dyn_cast<GlobalAddressSDNode>(Callee)) {
+    F = dyn_cast<Function>(GA->getGlobal());
+    CalleeOffset = GA->getOffset();
+  }
+
+  // A narrow (i1, i8, i16) result is returned as an int32, and the zeroext
+  // and signext attributes of the result would let SelectionDAG trust its
+  // upper bits (TargetLowering::LowerCallTo adds AssertZext/AssertSext after
+  // this returns). That holds only for a function defined in this module,
+  // whose own return lowering extends the value. Any other callee is native
+  // code: an undefined function or a library call becomes a P/Invoke, and an
+  // indirect callee may be one too. The native ABIs (MS x64, SysV x86-64,
+  // AAPCS64) leave the bits above a narrow result unspecified (clang -O2
+  // compiles 'unsigned char f(int x) { return x; }' for x86-64 to
+  // 'movl %ecx, %eax; retq'), and the marshaller passes the whole register
+  // through, so the result must be extended again after the call. The int32
+  // signature stays: a narrow argument is already correct, as the managed
+  // caller passes it fully extended.
+  if (!F || F->isDeclarationForLinker()) {
+    CLI.RetZExt = false;
+    CLI.RetSExt = false;
+  }
   // SelectionDAGBuilder lowers every recognized intrinsic itself, so only an
   // 'llvm.*' name that LLVM does not know reaches this point. It has no CIL
   // method; the asserts in MSILMCInstLower and MSILAsmPrinter stay internal
@@ -213,12 +317,15 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     // extended as the signext/zeroext attributes say.
   }
 
-  // A direct callee needs no address: CALL_PARAMS takes the function symbol
-  // itself, and MSILMCInstLower turns it into the method reference. Any other
-  // callee is an address computed into a register, called with 'calli'.
+  // A direct callee needs no address: CALL_PARAMS takes the function or
+  // library symbol itself, and MSILMCInstLower turns it into the method
+  // reference. Any other callee is an address computed into a register,
+  // called with 'calli'.
+  MVT PtrVT = getPointerTy(MF.getDataLayout());
   if (F)
-    Callee = DAG.getTargetGlobalAddress(F, DL, getPointerTy(MF.getDataLayout()),
-                                        GA->getOffset());
+    Callee = DAG.getTargetGlobalAddress(F, DL, PtrVT, CalleeOffset);
+  else if (LibCallee)
+    Callee = DAG.getTargetExternalSymbol(LibCallee, PtrVT);
 
   SmallVector<SDValue, 16> Ops;
   Ops.push_back(CLI.Chain);

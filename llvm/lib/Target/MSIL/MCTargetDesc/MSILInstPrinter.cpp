@@ -229,6 +229,9 @@ void MSILInstPrinter::printInst(const MCInst *MI, uint64_t Address,
     assert((!MII.get(MI->getOpcode()).isBranch() ||
             !StringRef(Mnemonic).rtrim().ends_with(".s")) &&
            "branches print their long forms");
+    if (MI->getOpcode() == MSIL::GLOBAL_ADDR ||
+        MI->getOpcode() == MSIL::FUNC_ADDR)
+      checkAddressOperand(MI);
     // The generated printer starts every instruction with a tab: replace it by
     // the indent printed above.
     SmallString<64> Text;
@@ -334,16 +337,30 @@ void MSILInstPrinter::printCall(const MCInst *MI, const MCSubtargetInfo &STI,
   printOperand(MI, *RefOp, STI, O);
 }
 
+void MSILInstPrinter::checkAddressOperand(const MCInst *MI) {
+  // GLOBAL_ADDR loads a global's address field (decision D12) and FUNC_ADDR
+  // takes a method's address; any other operand would print as a different
+  // instruction or as no member at all.
+  bool IsGlobal = MI->getOpcode() == MSIL::GLOBAL_ADDR;
+  const MCOperand &Op = MI->getOperand(1);
+  const auto *Ref =
+      Op.isExpr() ? dyn_cast<MSILMemberRefExpr>(Op.getExpr()) : nullptr;
+  if (!Ref || Ref->getKind() != (IsGlobal ? MSILMemberRefExpr::Field
+                                          : MSILMemberRefExpr::Method))
+    reportFatalInternalError(Twine("MSIL: ") + MII.getName(MI->getOpcode()) +
+                             (IsGlobal ? " without an address field"
+                                       : " without a method reference"));
+}
+
 void MSILInstPrinter::printGlobalAddrOffset(const MCInst *MI, raw_ostream &O) {
   // 'ldsfld native int <field>' loads the address of the global; a folded
-  // offset is added after it (GLOBAL_ADDR has StackPeakExtra 1).
-  const MCOperand &Op = MI->getOperand(1);
-  if (!Op.isExpr())
-    return;
-  const auto *Ref = dyn_cast<MSILMemberRefExpr>(Op.getExpr());
-  if (!Ref || Ref->getOffset() == 0)
-    return;
+  // offset is added after it (GLOBAL_ADDR has StackPeakExtra 1): 'ldc.i4'
+  // when it fits in an int32, which 'add' takes with a native int, else
+  // 'ldc.i8' and 'conv.i' (decision D2).
+  const auto *Ref = cast<MSILMemberRefExpr>(MI->getOperand(1).getExpr());
   int64_t Offset = Ref->getOffset();
+  if (Offset == 0)
+    return;
   if (isInt<32>(Offset))
     O << "\n  ldc.i4 " << Offset;
   else

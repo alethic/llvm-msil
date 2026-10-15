@@ -1,0 +1,52 @@
+# update-expected.py links the native oracle as %{msil_native_ldflags} does
+# (plan D14): for a --target that is not a Windows triple, -lm follows the
+# source file (glibc keeps the C math library out of libc, and clang does not
+# add -lm for C); for a Windows triple (MSVC or MinGW) there is no -lm. The
+# stand-in compiler of exit-range.test (Inputs/fake-native-cc.il, assembled
+# into fake-native-44.exe) checks this besides the rest of the oracle command
+# line, so each run below writes '[exit 44]' only if update-expected.py built
+# the right link for its --target, for a C and for an IR source. The stand-in
+# is a .NET Framework exe (system-windows, msil-netfx). The result does not
+# depend on the lit triple (--target is explicit), so like exit-range.test it
+# runs only on the Windows-triple legs. The composite side of the rule
+# (%{msil_c} and %{msil_ll} with a Linux native triple) needs a Linux host and
+# is covered by the native-oracle run of msil-ci.yml's Linux job.
+# REQUIRES: system-windows, msil-triple-windows, msil-netfx
+
+# RUN: rm -rf %t.d
+# RUN: mkdir -p %t.d
+# RUN: %ilasm -exe -output=%t.d/fake-native-44.exe %S/Inputs/fake-native-44.il %S/Inputs/fake-native-cc.il
+# RUN: cat %S/Inputs/exit-range-prog.c > %t.d/prog.c
+# RUN: cat %S/Inputs/exit-range-prog.ll > %t.d/irprog.ll
+
+# The stand-in itself: with a Linux --target it accepts -lm after the source
+# (also after '-o <exe>') and rejects a command line without -lm or with -lm
+# before the source; with a Windows --target it rejects -lm wherever it is.
+# Each rejected command line is otherwise the accepted one, and the message
+# shows that the link rule rejected it.
+# RUN: %t.d/fake-native-44.exe --target=x86_64-unknown-linux-gnu %{msil_cflags} %t.d/prog.c -lm -o %t.d/direct.exe
+# RUN: %t.d/fake-native-44.exe --target=x86_64-unknown-linux-gnu -Wno-override-module %t.d/irprog.ll -o %t.d/direct.exe -lm
+# RUN: rm -f %t.d/direct.exe
+# RUN: not %t.d/fake-native-44.exe --target=x86_64-unknown-linux-gnu %{msil_cflags} %t.d/prog.c -o %t.d/direct.exe 2> %t.nolibm.log
+# RUN: %{harness_check} contains %t.nolibm.log "^fake-native: error: a non-Windows --target without -lm after the source "
+# RUN: not %t.d/fake-native-44.exe --target=x86_64-unknown-linux-gnu %{msil_cflags} -lm %t.d/prog.c -o %t.d/direct.exe 2> %t.early.log
+# RUN: %{harness_check} contains %t.early.log "^fake-native: error: -lm before the source file "
+# RUN: not %t.d/fake-native-44.exe --target=x86_64-pc-windows-msvc -Wno-override-module %t.d/irprog.ll -lm -o %t.d/direct.exe 2> %t.winlibm.log
+# RUN: %{harness_check} contains %t.winlibm.log "^fake-native: error: -lm with a Windows --target "
+# RUN: %{harness_check} missing %t.d/direct.exe
+
+# A Linux --target: update-expected.py passes -lm after the source.
+# RUN: %{harness_update_expected} --clang %t.d/fake-native-44.exe --target x86_64-unknown-linux-gnu %t.d/prog.c
+# RUN: %{harness_check} equals %t.d/prog.expected "[exit 44]"
+# RUN: %{harness_update_expected} --clang %t.d/fake-native-44.exe --target x86_64-unknown-linux-gnu %t.d/irprog.ll
+# RUN: %{harness_check} equals %t.d/irprog.expected "[exit 44]"
+
+# Windows targets, MSVC and MinGW: update-expected.py passes no -lm.
+# RUN: rm -f %t.d/prog.expected %t.d/irprog.expected
+# RUN: %{harness_update_expected} --clang %t.d/fake-native-44.exe --target x86_64-pc-windows-msvc %t.d/prog.c
+# RUN: %{harness_check} equals %t.d/prog.expected "[exit 44]"
+# RUN: %{harness_update_expected} --clang %t.d/fake-native-44.exe --target x86_64-pc-windows-msvc %t.d/irprog.ll
+# RUN: %{harness_check} equals %t.d/irprog.expected "[exit 44]"
+# RUN: rm -f %t.d/prog.expected
+# RUN: %{harness_update_expected} --clang %t.d/fake-native-44.exe --target x86_64-w64-windows-gnu %t.d/prog.c
+# RUN: %{harness_check} equals %t.d/prog.expected "[exit 44]"

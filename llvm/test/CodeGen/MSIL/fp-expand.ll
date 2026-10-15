@@ -1,37 +1,45 @@
 ; Floating-point operations that LLVM turns into library calls, and
-; floating-point features that CIL does not have, end in a clean diagnostic
-; (until M8 for the library calls; ImplementationPlan.md M5.a, M5.c and
-; section 2 'Diagnostics leave well-formed output'; decisions D14 and D16;
-; plan section 12, rows 'M5.a extended ...', 'M2.a item (5) extended ...' and
-; 'fix-loop ownership: fp-expand.ll -> M8.d'):
+; floating-point features that CIL does not have (ImplementationPlan.md M5.a,
+; M5.c and M8.a; section 2 'Diagnostics leave well-formed output'; decisions
+; D14 and D16; plan section 12, rows 'M5.a extended ...', 'M2.a item (5)
+; extended ...' and 'fix-loop ownership: fp-expand.ll -> M8.d'):
 ; - fma, sqrt, floor, ceil, trunc, rint, nearbyint, round, minnum and maxnum
 ;   (C fmin and fmax), sin, cos, tan, pow, exp, exp2, log, log2, log10, the
-;   inverse and hyperbolic functions, atan2, ldexp and powi are Expand (or
-;   LibCall): the legalizer emits a call of the C function (the 'f' variant
-;   for float32), and LowerCall reports "runtime library call '<name>' is not
-;   supported for MSIL yet" and builds no call (M8 makes the D14 math
-;   functions P/Invokes and changes this text; M8.d owns this file then).
+;   inverse and hyperbolic functions, atan2 and ldexp are Expand (or LibCall):
+;   the legalizer emits a call of the C function (the 'f' variant for
+;   float32). These are Phase-1 imports from M8 on (D14): the call is built
+;   ('call <ret> '<name>'(<params>)' right after the arguments) and the module
+;   declares one P/Invoke per function in the math library ('libm.so.6' on
+;   x86_64-unknown-linux-gnu-msil, 'ucrtbase' on x86_64-pc-windows-msvc-msil);
+;   nothing is reported and the IL assembles. A second FileCheck run counts the
+;   declarations. (powi is in libcall-policy.ll: __powidf2 on Linux, pow on
+;   windows-msvc.)
 ; - half (f16) values are promoted, and the conversions between half and
 ;   float32 or float64 are the compiler-rt calls __extendhfsf2, __truncsfhf2
-;   and __truncdfhf2, diagnosed the same way (f16 is unsupported in Phase 1).
-; - Library functions with more than one result (frexp, modf, sincos, and a
-;   sin and a cos of the same value, which the legalizer may combine into
-;   sincos) return the extra results through memory; they are diagnosed like
-;   the others and must not reach the frame-index stub of M7.
+;   and __truncdfhf2, which stay errors until phase 3 (D14): LowerCall reports
+;   "runtime helper '<name>' is not available for MSIL yet (phase 3)" and
+;   builds no call (f16 is unsupported in Phase 1).
+; - Library functions with more than one result return the extra results
+;   through memory, a frame temporary since M7: frexp and modf are imports and
+;   are called with the address of the temporary ('frexp'(float64, native
+;   int), 'modf'(float64, native int) and the float32 forms), and llvm.sincos,
+;   or a sin and a cos of the same value, become calls of sin and cos (sincos
+;   is not an import), so the module compiles and nothing is reported.
 ; - The MSVC C runtime has no frexpf or ldexpf: on x86_64-pc-windows-msvc-msil
-;   float32 frexp and ldexp are the double functions 'frexp' and 'ldexp' (ldexp
-;   through fpext and fptrunc), on x86_64-unknown-linux-gnu-msil 'frexpf' and
-;   'ldexpf', and modf is 'modff' on both (row 'M5.a extended (float32 frexp
-;   and ldexp on windows-msvc)'); never '?' and never a frame index.
+;   float32 frexp and ldexp call the double functions 'frexp' and 'ldexp'
+;   (conv.r8 before the call, conv.r4 after it), on
+;   x86_64-unknown-linux-gnu-msil 'frexpf' and 'ldexpf', and modf is 'modff'
+;   on both (row 'M5.a extended (float32 frexp and ldexp on windows-msvc)');
+;   never '?' and never a frame index.
 ; - fptosi and fptoui from float32 and float64 to i128, plain, constrained
 ;   and saturating, are the compiler-rt calls __fixsfti, __fixdfti,
 ;   __fixunssfti and __fixunsdfti; their two-value results would be demoted
-;   to a stack slot, so ReplaceNodeResults reports them with the same text
-;   and returns UNDEF (row 'M5.a extended'). From half and bfloat, plain and
-;   constrained, they name the float32 functions __fixsfti and __fixunssfti,
-;   which the legalizer calls after it extends the operand to float32; never
-;   '?' and never __fixhfti (row "Row 'M5.a extended' (floating point to
-;   i128) amended").
+;   to a stack slot, so ReplaceNodeResults reports them with the runtime
+;   helper text and returns UNDEF (row 'M5.a extended'). From half and
+;   bfloat, plain and constrained, they name the float32 functions __fixsfti
+;   and __fixunssfti, which the legalizer calls after it extends the operand
+;   to float32; never '?' and never __fixhfti (row "Row 'M5.a extended'
+;   (floating point to i128) amended").
 ; - CIL rounds only to nearest (row 'M5.a extended (constrained floating
 ;   point and rounding mode)'): llvm.set.rounding, and llvm.fptrunc.round with
 ;   any other mode than round.tonearest, report "changing the floating-point
@@ -69,12 +77,12 @@
 ; Each diagnostic names its function. Compilation goes on after it (later
 ; functions still compile, the 'after_*' functions check their bodies), llc
 ; exits with 1 and prints neither 'LLVM ERROR' nor a crash report, no call of
-; the library function is printed, and the IL on stdout still assembles. Where
+; the runtime helper is printed, and the IL on stdout still assembles. Where
 ; one function has exactly one library call or one unsupported type, every
 ; error line is accounted for (no other error or warning, in this order); for
-; f16, bfloat (plain and constrained) and the multi-result functions each
-; function needs at least one error naming one of its library calls, since
-; how many of the calls are diagnosed depends on the legalizer.
+; f16 and bfloat (plain and constrained) each function needs at least one
+; error naming one of its runtime helpers, since how many of the calls are
+; diagnosed depends on the legalizer.
 ; Every part runs on both triples at -O2 and at least once at -O0. fabs,
 ; copysign and the bitcasts between integers and floating point go through
 ; memory and are tested in M7.c (plan 5.5).
@@ -92,38 +100,40 @@
 ; DEFINE: %{nameban} = FileCheck %s --input-file=%t/names.err --check-prefix=NAMEBAN \
 ; DEFINE:   --implicit-check-not="call '?'" --implicit-check-not=warning: \
 ; DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
-; NAMEBAN: {{^}}error: {{.*}}: runtime library call '{{[_a-z0-9]+}}' is not supported for MSIL yet{{$}}
+; NAMEBAN: {{^}}error: {{.*}}: runtime helper '{{[_a-z0-9]+}}' is not available for MSIL yet (phase 3){{$}}
 ; RUN: split-file %s %t
 
 ; Math library functions, float32 and float64.
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/libm32.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefixes=LIBM32,LIBM32-LNX
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/libm32.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefixes=LIBM32,LIBM32-WIN
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/libm32.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefixes=LIBM32,LIBM32-LNX
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/libm32.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefixes=LIBM32,LIBM32-WIN
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libm32.ll \
-; RUN:   > %t/libm32.lnx.il
-; RUN: FileCheck %s --check-prefix=LIBM32-IL --implicit-check-not=call --input-file=%t/libm32.lnx.il
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/libm32.ll \
-; RUN:   > %t/libm32.win.il
-; RUN: FileCheck %s --check-prefix=LIBM32-IL --implicit-check-not=call --input-file=%t/libm32.win.il
-; RUN: %if ilasm %{ %ilasm-verify -output=%t/libm32.dll %t/libm32.win.il %}
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/libm64.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=LIBM64
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/libm64.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=LIBM64
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/libm64.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=LIBM64
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libm64.ll \
-; RUN:   > %t/libm64.lnx.il
-; RUN: FileCheck %s --check-prefix=LIBM64-IL --implicit-check-not=call --input-file=%t/libm64.lnx.il
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/libm64.ll \
-; RUN:   > %t/libm64.win.il
-; RUN: FileCheck %s --check-prefix=LIBM64-IL --implicit-check-not=call --input-file=%t/libm64.win.il
-; RUN: %if ilasm %{ %ilasm-verify -output=%t/libm64.dll %t/libm64.lnx.il %}
+; DEFINE: %{libm} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=.cctor
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libm32.ll \
+; RUN:   -o %t/libm32.lnx.il 2>&1 | count 0
+; RUN: %{libm} --check-prefixes=LIBM32,LIBM32-LNX -DMLIB=libm.so.6 --input-file=%t/libm32.lnx.il
+; RUN: FileCheck %s --check-prefix=NLIBM32 --input-file=%t/libm32.lnx.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/libm32.ll \
+; RUN:   -o %t/libm32.win.il 2>&1 | count 0
+; RUN: %{libm} --check-prefixes=LIBM32,LIBM32-WIN -DMLIB=ucrtbase --input-file=%t/libm32.win.il
+; RUN: FileCheck %s --check-prefix=NLIBM32 --input-file=%t/libm32.win.il
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/libm32.ll \
+; RUN:   -o %t/libm32.lnx.o0.il 2>&1 | count 0
+; RUN: %{libm} --check-prefixes=LIBM32,LIBM32-LNX -DMLIB=libm.so.6 --input-file=%t/libm32.lnx.o0.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/libm32.ll \
+; RUN:   -o %t/libm32.win.o0.il 2>&1 | count 0
+; RUN: %{libm} --check-prefixes=LIBM32,LIBM32-WIN -DMLIB=ucrtbase --input-file=%t/libm32.win.o0.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/libm32.lnx.dll %t/libm32.lnx.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/libm32.win.dll %t/libm32.win.il %}
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libm64.ll \
+; RUN:   -o %t/libm64.lnx.il 2>&1 | count 0
+; RUN: %{libm} --check-prefix=LIBM64 -DMLIB=libm.so.6 --input-file=%t/libm64.lnx.il
+; RUN: FileCheck %s --check-prefix=NLIBM64 --input-file=%t/libm64.lnx.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/libm64.ll \
+; RUN:   -o %t/libm64.win.il 2>&1 | count 0
+; RUN: %{libm} --check-prefix=LIBM64 -DMLIB=ucrtbase --input-file=%t/libm64.win.il
+; RUN: FileCheck %s --check-prefix=NLIBM64 --input-file=%t/libm64.win.il
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/libm64.ll \
+; RUN:   -o %t/libm64.lnx.o0.il 2>&1 | count 0
+; RUN: %{libm} --check-prefix=LIBM64 -DMLIB=libm.so.6 --input-file=%t/libm64.lnx.o0.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/libm64.lnx.dll %t/libm64.lnx.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/libm64.win.dll %t/libm64.win.il %}
 
 ; half.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/f16.ll -o /dev/null \
@@ -151,29 +161,22 @@
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/f16.dll %t/f16.win.il %}
 
 ; Functions with two results.
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/multi.ll -o /dev/null \
-; RUN:   2> %t/names.err
-; RUN: %{names} --check-prefixes=MULTI,MULTI-LNX --implicit-check-not="call '?'"
-; RUN: %{nameban}
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/multi.ll -o /dev/null \
-; RUN:   2> %t/names.err
-; RUN: %{names} --check-prefixes=MULTI,MULTI-WIN --implicit-check-not="call '?'"
-; RUN: %{nameban}
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/multi.ll -o /dev/null \
-; RUN:   2> %t/names.err
-; RUN: %{names} --check-prefixes=MULTI,MULTI-LNX --implicit-check-not="call '?'"
-; RUN: %{nameban}
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/multi.ll -o /dev/null \
-; RUN:   2> %t/names.err
-; RUN: %{names} --check-prefixes=MULTI,MULTI-WIN --implicit-check-not="call '?'"
-; RUN: %{nameban}
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/multi.ll \
-; RUN:   > %t/multi.lnx.il
-; RUN: FileCheck %s --check-prefix=MULTI-IL --implicit-check-not=call --input-file=%t/multi.lnx.il
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/multi.ll \
-; RUN:   > %t/multi.win.il
-; RUN: FileCheck %s --check-prefix=MULTI-IL --implicit-check-not=call --input-file=%t/multi.win.il
-; RUN: %if ilasm %{ %ilasm-verify -output=%t/multi.dll %t/multi.lnx.il %}
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/multi.ll \
+; RUN:   -o %t/multi.lnx.il 2>&1 | count 0
+; RUN: %{libm} --check-prefixes=MULTI,MULTI-LNX -DMLIB=libm.so.6 --input-file=%t/multi.lnx.il
+; RUN: FileCheck %s --check-prefix=NMULTI-LNX --input-file=%t/multi.lnx.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/multi.ll \
+; RUN:   -o %t/multi.win.il 2>&1 | count 0
+; RUN: %{libm} --check-prefixes=MULTI,MULTI-WIN -DMLIB=ucrtbase --input-file=%t/multi.win.il
+; RUN: FileCheck %s --check-prefix=NMULTI-WIN --input-file=%t/multi.win.il
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/multi.ll \
+; RUN:   -o %t/multi.lnx.o0.il 2>&1 | count 0
+; RUN: %{libm} --check-prefixes=MULTI,MULTI-LNX -DMLIB=libm.so.6 --input-file=%t/multi.lnx.o0.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/multi.ll \
+; RUN:   -o %t/multi.win.o0.il 2>&1 | count 0
+; RUN: %{libm} --check-prefixes=MULTI,MULTI-WIN -DMLIB=ucrtbase --input-file=%t/multi.win.o0.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/multi.lnx.dll %t/multi.lnx.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/multi.win.dll %t/multi.win.il %}
 
 ; Floating point to i128: plain, constrained and saturating.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/i128.ll -o /dev/null 2>&1 \
@@ -306,142 +309,297 @@
 ; float32: the C functions with the f suffix.
 source_filename = "fp-expand-libm32.c"
 
-; LIBM32:   error: {{.*}}in function fma_f32 {{.*}}: runtime library call 'fmaf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function sqrt_f32 {{.*}}: runtime library call 'sqrtf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function floor_f32 {{.*}}: runtime library call 'floorf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function ceil_f32 {{.*}}: runtime library call 'ceilf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function trunc_f32 {{.*}}: runtime library call 'truncf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function rint_f32 {{.*}}: runtime library call 'rintf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function nearbyint_f32 {{.*}}: runtime library call 'nearbyintf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function round_f32 {{.*}}: runtime library call 'roundf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function fmin_f32 {{.*}}: runtime library call 'fminf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function fmax_f32 {{.*}}: runtime library call 'fmaxf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function sin_f32 {{.*}}: runtime library call 'sinf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function cos_f32 {{.*}}: runtime library call 'cosf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function tan_f32 {{.*}}: runtime library call 'tanf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function pow_f32 {{.*}}: runtime library call 'powf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function exp_f32 {{.*}}: runtime library call 'expf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function exp2_f32 {{.*}}: runtime library call 'exp2f' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function log_f32 {{.*}}: runtime library call 'logf' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function log2_f32 {{.*}}: runtime library call 'log2f' is not supported for MSIL yet
-; LIBM32:   error: {{.*}}in function log10_f32 {{.*}}: runtime library call 'log10f' is not supported for MSIL yet
-; LIBM32-LNX: error: {{.*}}in function ldexp_f32 {{.*}}: runtime library call 'ldexpf' is not supported for MSIL yet
-; LIBM32-WIN: error: {{.*}}in function ldexp_f32 {{.*}}: runtime library call 'ldexp' is not supported for MSIL yet
-
-; LIBM32-IL-LABEL: .method {{.*}}'after_libm32'(
-; LIBM32-IL-NEXT:  {{^\{$}}
-; LIBM32-IL-NEXT:  {{^}}  .maxstack 2{{$}}
-; LIBM32-IL-NEXT:  {{^}}  ldarg.0{{$}}
-; LIBM32-IL-NEXT:  {{^}}  ldarg.1{{$}}
-; LIBM32-IL-NEXT:  {{^}}  sub{{$}}
-; LIBM32-IL-NEXT:  {{^}}  ret{{$}}
-; LIBM32-IL-NEXT:  {{^}}} // end of method 'after_libm32'{{$}}
-
+; LIBM32-LABEL: {{^}}.method public static float32 'fma_f32'(float32, float32, float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 3{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.2{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'fmaf'(float32, float32, float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'fma_f32'{{$}}
 define float @fma_f32(float %a, float %b, float %c) {
   %r = call float @llvm.fma.f32(float %a, float %b, float %c)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'sqrt_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'sqrtf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'sqrt_f32'{{$}}
 define float @sqrt_f32(float %a) {
   %r = call float @llvm.sqrt.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'floor_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'floorf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'floor_f32'{{$}}
 define float @floor_f32(float %a) {
   %r = call float @llvm.floor.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'ceil_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'ceilf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'ceil_f32'{{$}}
 define float @ceil_f32(float %a) {
   %r = call float @llvm.ceil.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'trunc_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'truncf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'trunc_f32'{{$}}
 define float @trunc_f32(float %a) {
   %r = call float @llvm.trunc.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'rint_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'rintf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'rint_f32'{{$}}
 define float @rint_f32(float %a) {
   %r = call float @llvm.rint.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'nearbyint_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'nearbyintf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'nearbyint_f32'{{$}}
 define float @nearbyint_f32(float %a) {
   %r = call float @llvm.nearbyint.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'round_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'roundf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'round_f32'{{$}}
 define float @round_f32(float %a) {
   %r = call float @llvm.round.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'fmin_f32'(float32, float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 2{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'fminf'(float32, float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'fmin_f32'{{$}}
 define float @fmin_f32(float %a, float %b) {
   %r = call float @llvm.minnum.f32(float %a, float %b)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'fmax_f32'(float32, float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 2{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'fmaxf'(float32, float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'fmax_f32'{{$}}
 define float @fmax_f32(float %a, float %b) {
   %r = call float @llvm.maxnum.f32(float %a, float %b)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'sin_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'sinf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'sin_f32'{{$}}
 define float @sin_f32(float %a) {
   %r = call float @llvm.sin.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'cos_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'cosf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'cos_f32'{{$}}
 define float @cos_f32(float %a) {
   %r = call float @llvm.cos.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'tan_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'tanf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'tan_f32'{{$}}
 define float @tan_f32(float %a) {
   %r = call float @llvm.tan.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'pow_f32'(float32, float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 2{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'powf'(float32, float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'pow_f32'{{$}}
 define float @pow_f32(float %a, float %b) {
   %r = call float @llvm.pow.f32(float %a, float %b)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'exp_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'expf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'exp_f32'{{$}}
 define float @exp_f32(float %a) {
   %r = call float @llvm.exp.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'exp2_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'exp2f'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'exp2_f32'{{$}}
 define float @exp2_f32(float %a) {
   %r = call float @llvm.exp2.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'log_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'logf'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'log_f32'{{$}}
 define float @log_f32(float %a) {
   %r = call float @llvm.log.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'log2_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'log2f'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'log2_f32'{{$}}
 define float @log2_f32(float %a) {
   %r = call float @llvm.log2.f32(float %a)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'log10_f32'(float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  call float32 'log10f'(float32){{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'log10_f32'{{$}}
 define float @log10_f32(float %a) {
   %r = call float @llvm.log10.f32(float %a)
   ret float %r
 }
 
 ; ldexpf on GNU; windows-msvc has no ldexpf, so ldexp on the widened value.
+; LIBM32-LABEL:    {{^}}.method public static float32 'ldexp_f32'(float32, int32) cil managed{{$}}
+; LIBM32-NEXT:     {{^\{$}}
+; LIBM32-NEXT:     {{^}}  .maxstack 2{{$}}
+; LIBM32-NEXT:     {{^}}  ldarg.0{{$}}
+; LIBM32-LNX-NEXT: {{^}}  ldarg.1{{$}}
+; LIBM32-LNX-NEXT: {{^}}  call float32 'ldexpf'(float32, int32){{$}}
+; LIBM32-WIN-NEXT: {{^}}  conv.r8{{$}}
+; LIBM32-WIN-NEXT: {{^}}  ldarg.1{{$}}
+; LIBM32-WIN-NEXT: {{^}}  call float64 'ldexp'(float64, int32){{$}}
+; LIBM32-WIN-NEXT: {{^}}  conv.r4{{$}}
+; LIBM32-NEXT:     {{^}}  ret{{$}}
+; LIBM32-NEXT:     {{^}}} // end of method 'ldexp_f32'{{$}}
 define float @ldexp_f32(float %a, i32 %e) {
   %r = call float @llvm.ldexp.f32.i32(float %a, i32 %e)
   ret float %r
 }
 
+; LIBM32-LABEL: {{^}}.method public static float32 'after_libm32'(float32, float32) cil managed{{$}}
+; LIBM32-NEXT:  {{^\{$}}
+; LIBM32-NEXT:  {{^}}  .maxstack 2{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM32-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM32-NEXT:  {{^}}  sub{{$}}
+; LIBM32-NEXT:  {{^}}  ret{{$}}
+; LIBM32-NEXT:  {{^}}} // end of method 'after_libm32'{{$}}
 define float @after_libm32(float %a, float %b) {
   %r = fsub float %a, %b
   ret float %r
 }
+
+; One P/Invoke per function, in the math library.
+; LIBM32-NOT:   {{^}}.method {{(public|assembly) static}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'fmaf'(float32, float32, float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'sqrtf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'floorf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'ceilf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'truncf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'rintf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'nearbyintf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'roundf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'fminf'(float32, float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'fmaxf'(float32, float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'sinf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'cosf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'tanf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'powf'(float32, float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'expf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'exp2f'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'logf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'log2f'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'log10f'(float32) cil managed preservesig {}{{$}}
+; LIBM32-LNX-DAG: {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'ldexpf'(float32, int32) cil managed preservesig {}{{$}}
+; LIBM32-WIN-DAG: {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
+; LIBM32-NOT:   {{^}}.method
+
+; NLIBM32-COUNT-20: pinvokeimpl
+; NLIBM32-NOT:      pinvokeimpl
 
 declare float @llvm.ceil.f32(float)
 declare float @llvm.cos.f32(float)
@@ -465,193 +623,385 @@ declare float @llvm.tan.f32(float)
 declare float @llvm.trunc.f32(float)
 
 ;--- libm64.ll
-; float64; ldexp keeps its int32 exponent, and powi becomes the
-; compiler-rt helper __powidf2, or pow of the converted exponent where
-; the C runtime has no __powidf2 (windows-msvc).
+; float64; ldexp keeps its int32 exponent.
 source_filename = "fp-expand-libm64.c"
 
-; LIBM64:   error: {{.*}}in function fma_f64 {{.*}}: runtime library call 'fma' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function sqrt_f64 {{.*}}: runtime library call 'sqrt' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function floor_f64 {{.*}}: runtime library call 'floor' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function ceil_f64 {{.*}}: runtime library call 'ceil' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function trunc_f64 {{.*}}: runtime library call 'trunc' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function rint_f64 {{.*}}: runtime library call 'rint' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function nearbyint_f64 {{.*}}: runtime library call 'nearbyint' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function round_f64 {{.*}}: runtime library call 'round' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function fmin_f64 {{.*}}: runtime library call 'fmin' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function fmax_f64 {{.*}}: runtime library call 'fmax' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function sin_f64 {{.*}}: runtime library call 'sin' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function cos_f64 {{.*}}: runtime library call 'cos' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function tan_f64 {{.*}}: runtime library call 'tan' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function pow_f64 {{.*}}: runtime library call 'pow' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function exp_f64 {{.*}}: runtime library call 'exp' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function exp2_f64 {{.*}}: runtime library call 'exp2' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function log_f64 {{.*}}: runtime library call 'log' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function log2_f64 {{.*}}: runtime library call 'log2' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function log10_f64 {{.*}}: runtime library call 'log10' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function asin_f64 {{.*}}: runtime library call 'asin' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function acos_f64 {{.*}}: runtime library call 'acos' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function atan_f64 {{.*}}: runtime library call 'atan' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function atan2_f64 {{.*}}: runtime library call 'atan2' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function sinh_f64 {{.*}}: runtime library call 'sinh' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function cosh_f64 {{.*}}: runtime library call 'cosh' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function tanh_f64 {{.*}}: runtime library call 'tanh' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function ldexp_f64 {{.*}}: runtime library call 'ldexp' is not supported for MSIL yet
-; LIBM64:   error: {{.*}}in function powi_f64 {{.*}}: runtime library call '{{__powidf2|pow}}' is not supported for MSIL yet
-
-; LIBM64-IL-LABEL: .method {{.*}}'after_libm64'(
-; LIBM64-IL-NEXT:  {{^\{$}}
-; LIBM64-IL-NEXT:  {{^}}  .maxstack 2{{$}}
-; LIBM64-IL-NEXT:  {{^}}  ldarg.0{{$}}
-; LIBM64-IL-NEXT:  {{^}}  ldarg.1{{$}}
-; LIBM64-IL-NEXT:  {{^}}  sub{{$}}
-; LIBM64-IL-NEXT:  {{^}}  ret{{$}}
-; LIBM64-IL-NEXT:  {{^}}} // end of method 'after_libm64'{{$}}
-
+; LIBM64-LABEL: {{^}}.method public static float64 'fma_f64'(float64, float64, float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 3{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.2{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'fma'(float64, float64, float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'fma_f64'{{$}}
 define double @fma_f64(double %a, double %b, double %c) {
   %r = call double @llvm.fma.f64(double %a, double %b, double %c)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'sqrt_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'sqrt'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'sqrt_f64'{{$}}
 define double @sqrt_f64(double %a) {
   %r = call double @llvm.sqrt.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'floor_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'floor'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'floor_f64'{{$}}
 define double @floor_f64(double %a) {
   %r = call double @llvm.floor.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'ceil_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'ceil'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'ceil_f64'{{$}}
 define double @ceil_f64(double %a) {
   %r = call double @llvm.ceil.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'trunc_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'trunc'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'trunc_f64'{{$}}
 define double @trunc_f64(double %a) {
   %r = call double @llvm.trunc.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'rint_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'rint'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'rint_f64'{{$}}
 define double @rint_f64(double %a) {
   %r = call double @llvm.rint.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'nearbyint_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'nearbyint'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'nearbyint_f64'{{$}}
 define double @nearbyint_f64(double %a) {
   %r = call double @llvm.nearbyint.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'round_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'round'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'round_f64'{{$}}
 define double @round_f64(double %a) {
   %r = call double @llvm.round.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'fmin_f64'(float64, float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 2{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'fmin'(float64, float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'fmin_f64'{{$}}
 define double @fmin_f64(double %a, double %b) {
   %r = call double @llvm.minnum.f64(double %a, double %b)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'fmax_f64'(float64, float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 2{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'fmax'(float64, float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'fmax_f64'{{$}}
 define double @fmax_f64(double %a, double %b) {
   %r = call double @llvm.maxnum.f64(double %a, double %b)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'sin_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'sin'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'sin_f64'{{$}}
 define double @sin_f64(double %a) {
   %r = call double @llvm.sin.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'cos_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'cos'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'cos_f64'{{$}}
 define double @cos_f64(double %a) {
   %r = call double @llvm.cos.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'tan_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'tan'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'tan_f64'{{$}}
 define double @tan_f64(double %a) {
   %r = call double @llvm.tan.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'pow_f64'(float64, float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 2{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'pow'(float64, float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'pow_f64'{{$}}
 define double @pow_f64(double %a, double %b) {
   %r = call double @llvm.pow.f64(double %a, double %b)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'exp_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'exp'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'exp_f64'{{$}}
 define double @exp_f64(double %a) {
   %r = call double @llvm.exp.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'exp2_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'exp2'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'exp2_f64'{{$}}
 define double @exp2_f64(double %a) {
   %r = call double @llvm.exp2.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'log_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'log'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'log_f64'{{$}}
 define double @log_f64(double %a) {
   %r = call double @llvm.log.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'log2_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'log2'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'log2_f64'{{$}}
 define double @log2_f64(double %a) {
   %r = call double @llvm.log2.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'log10_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'log10'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'log10_f64'{{$}}
 define double @log10_f64(double %a) {
   %r = call double @llvm.log10.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'asin_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'asin'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'asin_f64'{{$}}
 define double @asin_f64(double %a) {
   %r = call double @llvm.asin.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'acos_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'acos'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'acos_f64'{{$}}
 define double @acos_f64(double %a) {
   %r = call double @llvm.acos.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'atan_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'atan'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'atan_f64'{{$}}
 define double @atan_f64(double %a) {
   %r = call double @llvm.atan.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'atan2_f64'(float64, float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 2{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'atan2'(float64, float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'atan2_f64'{{$}}
 define double @atan2_f64(double %a, double %b) {
   %r = call double @llvm.atan2.f64(double %a, double %b)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'sinh_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'sinh'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'sinh_f64'{{$}}
 define double @sinh_f64(double %a) {
   %r = call double @llvm.sinh.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'cosh_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'cosh'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'cosh_f64'{{$}}
 define double @cosh_f64(double %a) {
   %r = call double @llvm.cosh.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'tanh_f64'(float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 1{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'tanh'(float64){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'tanh_f64'{{$}}
 define double @tanh_f64(double %a) {
   %r = call double @llvm.tanh.f64(double %a)
   ret double %r
 }
 
+; LIBM64-LABEL: {{^}}.method public static float64 'ldexp_f64'(float64, int32) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 2{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM64-NEXT:  {{^}}  call float64 'ldexp'(float64, int32){{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'ldexp_f64'{{$}}
 define double @ldexp_f64(double %a, i32 %e) {
   %r = call double @llvm.ldexp.f64.i32(double %a, i32 %e)
   ret double %r
 }
 
-define double @powi_f64(double %a, i32 %n) {
-  %r = call double @llvm.powi.f64.i32(double %a, i32 %n)
-  ret double %r
-}
-
+; LIBM64-LABEL: {{^}}.method public static float64 'after_libm64'(float64, float64) cil managed{{$}}
+; LIBM64-NEXT:  {{^\{$}}
+; LIBM64-NEXT:  {{^}}  .maxstack 2{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.0{{$}}
+; LIBM64-NEXT:  {{^}}  ldarg.1{{$}}
+; LIBM64-NEXT:  {{^}}  sub{{$}}
+; LIBM64-NEXT:  {{^}}  ret{{$}}
+; LIBM64-NEXT:  {{^}}} // end of method 'after_libm64'{{$}}
 define double @after_libm64(double %a, double %b) {
   %r = fsub double %a, %b
   ret double %r
 }
+
+; LIBM64-NOT:   {{^}}.method {{(public|assembly) static}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'fma'(float64, float64, float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'ceil'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'trunc'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'rint'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'nearbyint'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'round'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'fmin'(float64, float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'fmax'(float64, float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sin'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'cos'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'tan'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'pow'(float64, float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'exp'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'exp2'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'log'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'log2'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'log10'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'asin'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'acos'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'atan'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'atan2'(float64, float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sinh'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'cosh'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'tanh'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
+; LIBM64-NOT:   {{^}}.method
+
+; NLIBM64-COUNT-27: pinvokeimpl
+; NLIBM64-NOT:      pinvokeimpl
 
 declare double @llvm.acos.f64(double)
 declare double @llvm.asin.f64(double)
@@ -672,7 +1022,6 @@ declare double @llvm.maxnum.f64(double, double)
 declare double @llvm.minnum.f64(double, double)
 declare double @llvm.nearbyint.f64(double)
 declare double @llvm.pow.f64(double, double)
-declare double @llvm.powi.f64.i32(double, i32)
 declare double @llvm.rint.f64(double)
 declare double @llvm.round.f64(double)
 declare double @llvm.sin.f64(double)
@@ -693,11 +1042,11 @@ declare double @llvm.trunc.f64(double)
 ; diagnostic, and the half conversion it names is matched by a pattern.
 source_filename = "fp-expand-f16.c"
 
-; F16-DAG: error: {{.*}}in function f16_round_trip {{.*}}: runtime library call '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not supported for MSIL yet
-; F16-DAG: error: {{.*}}in function f16_add {{.*}}: runtime library call '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not supported for MSIL yet
-; F16-DAG: error: {{.*}}in function f16_from_f64 {{.*}}: runtime library call '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not supported for MSIL yet
-; F16-DAG: error: {{.*}}in function f16_mul_args {{.*}}: runtime library call '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not supported for MSIL yet
-; F16-DAG: error: {{.*}}in function f16_compare {{.*}}: runtime library call '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not supported for MSIL yet
+; F16-DAG: error: {{.*}}in function f16_round_trip {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not available for MSIL yet (phase 3)
+; F16-DAG: error: {{.*}}in function f16_add {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not available for MSIL yet (phase 3)
+; F16-DAG: error: {{.*}}in function f16_from_f64 {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not available for MSIL yet (phase 3)
+; F16-DAG: error: {{.*}}in function f16_mul_args {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not available for MSIL yet (phase 3)
+; F16-DAG: error: {{.*}}in function f16_compare {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not available for MSIL yet (phase 3)
 ; F16-NOT: error: {{.*}}in function after_f16
 ; F16-NOT: LLVM ERROR
 ; F16-NOT: PLEASE submit
@@ -748,31 +1097,16 @@ define float @after_f16(float %a, float %b) {
 }
 
 ;--- multi.ll
-; Library functions with two results: the second result comes back through
-; memory, so these must be diagnosed without reaching a frame index.
+; Library functions with two results: the second result comes back through a
+; frame temporary (localloc), whose address is the last argument of frexp and
+; modf. sin and cos of one value, and llvm.sincos, are two calls.
 source_filename = "fp-expand-multi.c"
 
-; MULTI-DAG: error: {{.*}}in function sin_and_cos_f64 {{.*}}: runtime library call '{{sin|cos|sincos}}' is not supported for MSIL yet
-; MULTI-DAG: error: {{.*}}in function frexp_f64 {{.*}}: runtime library call 'frexp' is not supported for MSIL yet
-; MULTI-DAG: error: {{.*}}in function modf_f64 {{.*}}: runtime library call 'modf' is not supported for MSIL yet
-; MULTI-DAG: error: {{.*}}in function sincos_f64 {{.*}}: runtime library call '{{sin|cos|sincos}}' is not supported for MSIL yet
-; MULTI-DAG: error: {{.*}}in function sin_and_cos_f32 {{.*}}: runtime library call '{{sinf|cosf|sincosf}}' is not supported for MSIL yet
-; MULTI-LNX-DAG: error: {{.*}}in function frexp_f32 {{.*}}: runtime library call 'frexpf' is not supported for MSIL yet
-; MULTI-WIN-DAG: error: {{.*}}in function frexp_f32 {{.*}}: runtime library call 'frexp' is not supported for MSIL yet
-; MULTI-DAG: error: {{.*}}in function modf_f32 {{.*}}: runtime library call 'modff' is not supported for MSIL yet
-; MULTI-NOT: error: {{.*}}in function after_multi
-; MULTI-NOT: LLVM ERROR
-; MULTI-NOT: PLEASE submit
-
-; MULTI-IL-LABEL: .method {{.*}}'after_multi'(
-; MULTI-IL-NEXT:  {{^\{$}}
-; MULTI-IL-NEXT:  {{^}}  .maxstack 2{{$}}
-; MULTI-IL-NEXT:  {{^}}  ldarg.0{{$}}
-; MULTI-IL-NEXT:  {{^}}  ldarg.1{{$}}
-; MULTI-IL-NEXT:  {{^}}  div{{$}}
-; MULTI-IL-NEXT:  {{^}}  ret{{$}}
-; MULTI-IL-NEXT:  {{^}}} // end of method 'after_multi'{{$}}
-
+; A sin and a cos of the same value (sincos on GNU targets).
+; MULTI-LABEL: {{^}}.method public static float64 'sin_and_cos_f64'(float64) cil managed{{$}}
+; MULTI-DAG:   {{^}}  call float64 'sin'(float64){{$}}
+; MULTI-DAG:   {{^}}  call float64 'cos'(float64){{$}}
+; MULTI:       {{^}}} // end of method 'sin_and_cos_f64'{{$}}
 ; A sin and a cos of the same value (sincos on GNU targets).
 define double @sin_and_cos_f64(double %x) {
   %s = call double @llvm.sin.f64(double %x)
@@ -781,6 +1115,11 @@ define double @sin_and_cos_f64(double %x) {
   ret double %r
 }
 
+; MULTI-LABEL: {{^}}.method public static float64 'frexp_f64'(float64) cil managed{{$}}
+; MULTI:       {{^}}  localloc{{$}}
+; MULTI:       {{^}}  call float64 'frexp'(float64, native int){{$}}
+; MULTI:       {{^}}  ldind.i4{{$}}
+; MULTI:       {{^}}} // end of method 'frexp_f64'{{$}}
 define double @frexp_f64(double %x) {
   %fe = call { double, i32 } @llvm.frexp.f64.i32(double %x)
   %f = extractvalue { double, i32 } %fe, 0
@@ -790,6 +1129,11 @@ define double @frexp_f64(double %x) {
   ret double %r
 }
 
+; MULTI-LABEL: {{^}}.method public static float64 'modf_f64'(float64) cil managed{{$}}
+; MULTI:       {{^}}  localloc{{$}}
+; MULTI:       {{^}}  call float64 'modf'(float64, native int){{$}}
+; MULTI:       {{^}}  ldind.r8{{$}}
+; MULTI:       {{^}}} // end of method 'modf_f64'{{$}}
 define double @modf_f64(double %x) {
   %fi = call { double, double } @llvm.modf.f64(double %x)
   %f = extractvalue { double, double } %fi, 0
@@ -798,6 +1142,10 @@ define double @modf_f64(double %x) {
   ret double %r
 }
 
+; MULTI-LABEL: {{^}}.method public static float64 'sincos_f64'(float64) cil managed{{$}}
+; MULTI-DAG:   {{^}}  call float64 'sin'(float64){{$}}
+; MULTI-DAG:   {{^}}  call float64 'cos'(float64){{$}}
+; MULTI:       {{^}}} // end of method 'sincos_f64'{{$}}
 define double @sincos_f64(double %x) {
   %sc = call { double, double } @llvm.sincos.f64(double %x)
   %s = extractvalue { double, double } %sc, 0
@@ -806,6 +1154,10 @@ define double @sincos_f64(double %x) {
   ret double %r
 }
 
+; MULTI-LABEL: {{^}}.method public static float32 'sin_and_cos_f32'(float32) cil managed{{$}}
+; MULTI-DAG:   {{^}}  call float32 'sinf'(float32){{$}}
+; MULTI-DAG:   {{^}}  call float32 'cosf'(float32){{$}}
+; MULTI:       {{^}}} // end of method 'sin_and_cos_f32'{{$}}
 define float @sin_and_cos_f32(float %x) {
   %s = call float @llvm.sin.f32(float %x)
   %c = call float @llvm.cos.f32(float %x)
@@ -813,6 +1165,16 @@ define float @sin_and_cos_f32(float %x) {
   ret float %r
 }
 
+; frexpf on GNU; windows-msvc has no frexpf, so the double function frexp on
+; the widened value.
+; MULTI-LABEL:    {{^}}.method public static float32 'frexp_f32'(float32) cil managed{{$}}
+; MULTI:          {{^}}  localloc{{$}}
+; MULTI-LNX:      {{^}}  call float32 'frexpf'(float32, native int){{$}}
+; MULTI-WIN:      {{^}}  conv.r8{{$}}
+; MULTI-WIN:      {{^}}  call float64 'frexp'(float64, native int){{$}}
+; MULTI-WIN-NEXT: {{^}}  conv.r4{{$}}
+; MULTI:          {{^}}  ldind.i4{{$}}
+; MULTI:          {{^}}} // end of method 'frexp_f32'{{$}}
 ; frexpf on GNU; windows-msvc has no frexpf, so the double function frexp.
 define float @frexp_f32(float %x) {
   %fe = call { float, i32 } @llvm.frexp.f32.i32(float %x)
@@ -823,6 +1185,11 @@ define float @frexp_f32(float %x) {
   ret float %r
 }
 
+; MULTI-LABEL: {{^}}.method public static float32 'modf_f32'(float32) cil managed{{$}}
+; MULTI:       {{^}}  localloc{{$}}
+; MULTI:       {{^}}  call float32 'modff'(float32, native int){{$}}
+; MULTI:       {{^}}  ldind.r4{{$}}
+; MULTI:       {{^}}} // end of method 'modf_f32'{{$}}
 define float @modf_f32(float %x) {
   %fi = call { float, float } @llvm.modf.f32(float %x)
   %f = extractvalue { float, float } %fi, 0
@@ -831,10 +1198,34 @@ define float @modf_f32(float %x) {
   ret float %r
 }
 
+; MULTI-LABEL: {{^}}.method public static float64 'after_multi'(float64, float64) cil managed{{$}}
+; MULTI-NEXT:  {{^\{$}}
+; MULTI-NEXT:  {{^}}  .maxstack 2{{$}}
+; MULTI-NEXT:  {{^}}  ldarg.0{{$}}
+; MULTI-NEXT:  {{^}}  ldarg.1{{$}}
+; MULTI-NEXT:  {{^}}  div{{$}}
+; MULTI-NEXT:  {{^}}  ret{{$}}
+; MULTI-NEXT:  {{^}}} // end of method 'after_multi'{{$}}
 define double @after_multi(double %a, double %b) {
   %r = fdiv double %a, %b
   ret double %r
 }
+
+; MULTI-NOT:     {{^}}.method {{(public|assembly) static}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sin'(float64) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'cos'(float64) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'modf'(float64, native int) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'sinf'(float32) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'cosf'(float32) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'modff'(float32, native int) cil managed preservesig {}{{$}}
+; MULTI-LNX-DAG: {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'frexpf'(float32, native int) cil managed preservesig {}{{$}}
+; MULTI-NOT:     {{^}}.method
+
+; NMULTI-LNX-COUNT-8: pinvokeimpl
+; NMULTI-LNX-NOT:     pinvokeimpl
+; NMULTI-WIN-COUNT-7: pinvokeimpl
+; NMULTI-WIN-NOT:     pinvokeimpl
 
 declare double @llvm.sin.f64(double)
 declare double @llvm.cos.f64(double)
@@ -850,15 +1241,15 @@ declare { float, float } @llvm.modf.f32(float)
 ; fptosi and fptoui to i128: the RTLIB helper is named in the error.
 source_filename = "fp-expand-i128.c"
 
-; I128:     error: {{.*}}in function fptosi_f32_i128 {{.*}}: runtime library call '__fixsfti' is not supported for MSIL yet
-; I128:     error: {{.*}}in function fptosi_f64_i128 {{.*}}: runtime library call '__fixdfti' is not supported for MSIL yet
-; I128:     error: {{.*}}in function fptoui_f32_i128 {{.*}}: runtime library call '__fixunssfti' is not supported for MSIL yet
-; I128:     error: {{.*}}in function fptoui_f64_i128 {{.*}}: runtime library call '__fixunsdfti' is not supported for MSIL yet
+; I128:     error: {{.*}}in function fptosi_f32_i128 {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
+; I128:     error: {{.*}}in function fptosi_f64_i128 {{.*}}: runtime helper '__fixdfti' is not available for MSIL yet (phase 3)
+; I128:     error: {{.*}}in function fptoui_f32_i128 {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
+; I128:     error: {{.*}}in function fptoui_f64_i128 {{.*}}: runtime helper '__fixunsdfti' is not available for MSIL yet (phase 3)
 ; The legalizer converts a half or bfloat operand to float32 first.
-; I128:     error: {{.*}}in function fptosi_f16_i128 {{.*}}: runtime library call '__fixsfti' is not supported for MSIL yet
-; I128:     error: {{.*}}in function fptoui_f16_i128 {{.*}}: runtime library call '__fixunssfti' is not supported for MSIL yet
-; I128:     error: {{.*}}in function fptosi_bf16_i128 {{.*}}: runtime library call '__fixsfti' is not supported for MSIL yet
-; I128:     error: {{.*}}in function fptoui_bf16_i128 {{.*}}: runtime library call '__fixunssfti' is not supported for MSIL yet
+; I128:     error: {{.*}}in function fptosi_f16_i128 {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
+; I128:     error: {{.*}}in function fptoui_f16_i128 {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
+; I128:     error: {{.*}}in function fptosi_bf16_i128 {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
+; I128:     error: {{.*}}in function fptoui_bf16_i128 {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
 
 ; I128-IL-LABEL: .method {{.*}}'use128'(
 ; I128-IL-SAME:  native int, native int) cil managed{{$}}
@@ -971,14 +1362,14 @@ define i64 @after_i128(i32 %a) {
 ; The constrained (strictfp) conversions to i128: the same errors.
 source_filename = "fp-expand-i128-strict.c"
 
-; I128S:    error: {{.*}}in function fptosi_f32_i128_strict {{.*}}: runtime library call '__fixsfti' is not supported for MSIL yet
-; I128S:    error: {{.*}}in function fptosi_f64_i128_strict {{.*}}: runtime library call '__fixdfti' is not supported for MSIL yet
-; I128S:    error: {{.*}}in function fptoui_f32_i128_strict {{.*}}: runtime library call '__fixunssfti' is not supported for MSIL yet
-; I128S:    error: {{.*}}in function fptoui_f64_i128_strict {{.*}}: runtime library call '__fixunsdfti' is not supported for MSIL yet
-; I128S:    error: {{.*}}in function fptosi_f16_i128_strict {{.*}}: runtime library call '__fixsfti' is not supported for MSIL yet
-; I128S:    error: {{.*}}in function fptoui_f16_i128_strict {{.*}}: runtime library call '__fixunssfti' is not supported for MSIL yet
-; I128S:    error: {{.*}}in function fptosi_bf16_i128_strict {{.*}}: runtime library call '__fixsfti' is not supported for MSIL yet
-; I128S:    error: {{.*}}in function fptoui_bf16_i128_strict {{.*}}: runtime library call '__fixunssfti' is not supported for MSIL yet
+; I128S:    error: {{.*}}in function fptosi_f32_i128_strict {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
+; I128S:    error: {{.*}}in function fptosi_f64_i128_strict {{.*}}: runtime helper '__fixdfti' is not available for MSIL yet (phase 3)
+; I128S:    error: {{.*}}in function fptoui_f32_i128_strict {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
+; I128S:    error: {{.*}}in function fptoui_f64_i128_strict {{.*}}: runtime helper '__fixunsdfti' is not available for MSIL yet (phase 3)
+; I128S:    error: {{.*}}in function fptosi_f16_i128_strict {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
+; I128S:    error: {{.*}}in function fptoui_f16_i128_strict {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
+; I128S:    error: {{.*}}in function fptosi_bf16_i128_strict {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
+; I128S:    error: {{.*}}in function fptoui_bf16_i128_strict {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
 
 ; I128S-IL-LABEL: .method {{.*}}'use128'(
 ; I128S-IL-SAME:  native int, native int) cil managed{{$}}
@@ -1101,10 +1492,10 @@ attributes #0 = { strictfp }
 ; fptoui to i128 (compares and selects): the same errors.
 source_filename = "fp-expand-i128-sat.c"
 
-; I128SAT:  error: {{.*}}in function fptosi_f32_i128_sat {{.*}}: runtime library call '__fixsfti' is not supported for MSIL yet
-; I128SAT:  error: {{.*}}in function fptosi_f64_i128_sat {{.*}}: runtime library call '__fixdfti' is not supported for MSIL yet
-; I128SAT:  error: {{.*}}in function fptoui_f32_i128_sat {{.*}}: runtime library call '__fixunssfti' is not supported for MSIL yet
-; I128SAT:  error: {{.*}}in function fptoui_f64_i128_sat {{.*}}: runtime library call '__fixunsdfti' is not supported for MSIL yet
+; I128SAT:  error: {{.*}}in function fptosi_f32_i128_sat {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
+; I128SAT:  error: {{.*}}in function fptosi_f64_i128_sat {{.*}}: runtime helper '__fixdfti' is not available for MSIL yet (phase 3)
+; I128SAT:  error: {{.*}}in function fptoui_f32_i128_sat {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
+; I128SAT:  error: {{.*}}in function fptoui_f64_i128_sat {{.*}}: runtime helper '__fixunsdfti' is not available for MSIL yet (phase 3)
 
 ; I128SAT-IL-LABEL: .method {{.*}}'use128'(
 ; I128SAT-IL-SAME:  native int, native int) cil managed{{$}}
@@ -1179,12 +1570,12 @@ source_filename = "fp-expand-rounding.c"
 
 ; ROUND: error: {{.*}}in function set_rounding {{.*}}: changing the floating-point rounding mode is not supported for MSIL{{$}}
 ; ROUND: error: {{.*}}in function fptrunc_round_upward {{.*}}: changing the floating-point rounding mode is not supported for MSIL{{$}}
-; ROUND: error: {{.*}}in function fptrunc_round_f16_tonearest {{.*}}: runtime library call '__truncsfhf2' is not supported for MSIL yet{{$}}
-; ROUND: error: {{.*}}in function fptrunc_round_bf16_tonearest {{.*}}: runtime library call '__truncsfbf2' is not supported for MSIL yet{{$}}
+; ROUND: error: {{.*}}in function fptrunc_round_f16_tonearest {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
+; ROUND: error: {{.*}}in function fptrunc_round_bf16_tonearest {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
 ; ROUND: error: {{.*}}in function fptrunc_round_v2f32_upward {{.*}}: changing the floating-point rounding mode is not supported for MSIL{{$}}
 ; One call per element.
-; ROUND: error: {{.*}}in function fptrunc_round_v2f16_tonearest {{.*}}: runtime library call '__truncsfhf2' is not supported for MSIL yet{{$}}
-; ROUND: error: {{.*}}in function fptrunc_round_v2f16_tonearest {{.*}}: runtime library call '__truncsfhf2' is not supported for MSIL yet{{$}}
+; ROUND: error: {{.*}}in function fptrunc_round_v2f16_tonearest {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
+; ROUND: error: {{.*}}in function fptrunc_round_v2f16_tonearest {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
 
 ; ROUND-IL-LABEL: .method {{.*}}'fptrunc_round_tonearest'(
 ; ROUND-IL-SAME:  float64) cil managed{{$}}
@@ -1310,11 +1701,11 @@ declare i32 @llvm.get.rounding()
 ; extensions and a truncation) is matched by a pattern.
 source_filename = "fp-expand-bf16.c"
 
-; BF16-DAG: error: {{.*}}in function bf16_ext_f32 {{.*}}: runtime library call '__extendbfsf2' is not supported for MSIL yet
-; BF16-DAG: error: {{.*}}in function bf16_ext_f64 {{.*}}: runtime library call '__extendbfsf2' is not supported for MSIL yet
-; BF16-DAG: error: {{.*}}in function bf16_trunc_f32 {{.*}}: runtime library call '__truncsfbf2' is not supported for MSIL yet
-; BF16-DAG: error: {{.*}}in function bf16_trunc_f64 {{.*}}: runtime library call '__truncdfbf2' is not supported for MSIL yet
-; BF16-DAG: error: {{.*}}in function bf16_add {{.*}}: runtime library call '{{__extendbfsf2|__truncsfbf2}}' is not supported for MSIL yet
+; BF16-DAG: error: {{.*}}in function bf16_ext_f32 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
+; BF16-DAG: error: {{.*}}in function bf16_ext_f64 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
+; BF16-DAG: error: {{.*}}in function bf16_trunc_f32 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
+; BF16-DAG: error: {{.*}}in function bf16_trunc_f64 {{.*}}: runtime helper '__truncdfbf2' is not available for MSIL yet (phase 3)
+; BF16-DAG: error: {{.*}}in function bf16_add {{.*}}: runtime helper '{{__extendbfsf2|__truncsfbf2}}' is not available for MSIL yet (phase 3)
 ; BF16-NOT: error: {{.*}}in function after_bf16
 ; BF16-NOT: LLVM ERROR
 ; BF16-NOT: PLEASE submit
@@ -1375,24 +1766,24 @@ define float @after_bf16(float %a, float %b) {
 ; pattern; every other function has one possible library call.
 source_filename = "fp-expand-strict16.c"
 
-; STRICT16-DAG: error: {{.*}}in function strict_fpext_f16_f32 {{.*}}: runtime library call '__extendhfsf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fpext_f16_f64 {{.*}}: runtime library call '__extendhfsf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fpext_bf16_f32 {{.*}}: runtime library call '__extendbfsf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fpext_bf16_f64 {{.*}}: runtime library call '__extendbfsf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f32_f16 {{.*}}: runtime library call '__truncsfhf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f64_f16 {{.*}}: runtime library call '__truncdfhf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f32_bf16 {{.*}}: runtime library call '__truncsfbf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f64_bf16 {{.*}}: runtime library call '__truncdfbf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fadd_f16 {{.*}}: runtime library call '{{__extendhfsf2|__truncsfhf2}}' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fadd_bf16 {{.*}}: runtime library call '{{__extendbfsf2|__truncsfbf2}}' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fcmp_f16 {{.*}}: runtime library call '__extendhfsf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fcmps_f16 {{.*}}: runtime library call '__extendhfsf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fcmp_bf16 {{.*}}: runtime library call '__extendbfsf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fcmps_bf16 {{.*}}: runtime library call '__extendbfsf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_sitofp_i32_f16 {{.*}}: runtime library call '__truncsfhf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_sitofp_i32_bf16 {{.*}}: runtime library call '__truncsfbf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fptosi_f16_i32 {{.*}}: runtime library call '__extendhfsf2' is not supported for MSIL yet
-; STRICT16-DAG: error: {{.*}}in function strict_fptosi_bf16_i32 {{.*}}: runtime library call '__extendbfsf2' is not supported for MSIL yet
+; STRICT16-DAG: error: {{.*}}in function strict_fpext_f16_f32 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fpext_f16_f64 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fpext_bf16_f32 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fpext_bf16_f64 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f32_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f64_f16 {{.*}}: runtime helper '__truncdfhf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f32_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f64_bf16 {{.*}}: runtime helper '__truncdfbf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fadd_f16 {{.*}}: runtime helper '{{__extendhfsf2|__truncsfhf2}}' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fadd_bf16 {{.*}}: runtime helper '{{__extendbfsf2|__truncsfbf2}}' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fcmp_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fcmps_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fcmp_bf16 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fcmps_bf16 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_sitofp_i32_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_sitofp_i32_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fptosi_f16_i32 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fptosi_bf16_i32 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
 ; STRICT16-NOT: error: {{.*}}in function after_strict16
 ; STRICT16-NOT: LLVM ERROR
 ; STRICT16-NOT: PLEASE submit

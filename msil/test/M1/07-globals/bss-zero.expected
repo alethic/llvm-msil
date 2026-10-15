@@ -1,0 +1,10 @@
+bss reads zero
+alignment ok
+fill pattern intact
+zeros[999]=-1
+0x123456789abcdef
+big_bss[last]=42
+zstruct.ll=-2
+zstruct.tail[12]=122
+align64[99]=64
+[exit 0]

@@ -12,14 +12,18 @@
 ; identifier length limit (D11 amended), garbage collection strategies and the
 ; stack map intrinsics (amendment log 2026-10-13, fix-loop rows for fix-5). M4
 ; adds deoptimization state ("deopt" operand bundles) and preallocated calls
-; (amendment log 2026-10-13, fix-loop rows for fix-3 in M4).
+; (amendment log 2026-10-13, fix-loop rows for fix-3 in M4). M8 adds the
+; addresses of a definition that lost its body (amendment log 2026-10-14,
+; fix-loop rows for fix-2 in M8).
 ;
-; Global variables are implemented in M8, so no definition that is compiled
-; here may use a global: functions that use a diagnosed symbol are
+; The cases written before M8, which implements global variables, compile no
+; definition that uses a global: functions that use a diagnosed symbol are
 ; available_externally, which is never code-generated but still has to be
 ; rewritten, and the resolver an ifunc needs is a variadic definition, which
-; loses its body. Leaf definitions compile since M3 and direct calls since M4;
-; a call of a definition that lost its body is erased (call-errors.ll).
+; loses its body. Leaf definitions compile since M3, direct calls since M4, and
+; globals and function addresses since M8. A call of a definition that lost
+; its body is erased (call-errors.ll), and every other use of its address
+; becomes poison (deleted-addr.ll).
 
 ; DEFINE: %{nocrash} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
 ; RUN: split-file %s %t
@@ -433,6 +437,73 @@
 ; PREALLOC-IL:     {{^}}.method public static int32 'msil_prealloc_free'() cil managed{{$}}
 ; PREALLOC-IL-NOT: .method
 
+; The address of a definition that lost its body: the function is not
+; compiled, so every use of its address becomes poison, not only its calls.
+; Otherwise the AsmPrinter would take it for an undefined function and add a
+; second error, 'undefined function ... is not defined in this module', or,
+; for the name of a Phase-1 import (putchar here), declare a P/Invoke. The
+; addresses are returned by a function (also through dso_local_equivalent),
+; stored in global initializers (as they are, with an offset, through ptrtoint
+; and through no_cfi) and listed in llvm.global_ctors; llvm.used loses its
+; entry, since it may only list global values. A definition with a gc loses
+; its body before any pass runs, and its address is replaced the same way.
+; Metadata keeps naming the declaration: the IR verifier runs again after
+; MSILPrepareIR and accepts only a function (or null) in a "CG Profile" entry.
+; Each function gets only its own error, the definitions that use the
+; addresses still compile, the constructor that compiles still runs, and the
+; IL on stdout assembles.
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/deleted-addr.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=DELADDR --implicit-check-not=error: --implicit-check-not="undefined function"
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/deleted-addr.ll -o /dev/null 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=DELADDR --implicit-check-not=error: --implicit-check-not="undefined function"
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/deleted-addr.ll -o - 2>/dev/null \
+; RUN:   | FileCheck %s --check-prefix=DELADDR-IR --implicit-check-not="{{(ptr|no_cfi|dso_local_equivalent) @(msil_bad_|putchar)}}"
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/deleted-addr.ll \
+; RUN:   > %t/deleted-addr.lnx.il
+; RUN: FileCheck %s --check-prefix=DELADDR-IL --input-file=%t/deleted-addr.lnx.il --implicit-check-not=msil_bad_ \
+; RUN:   --implicit-check-not=putchar --implicit-check-not=pinvokeimpl
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/deleted-addr.ll \
+; RUN:   > %t/deleted-addr.win.il
+; RUN: FileCheck %s --check-prefix=DELADDR-IL --input-file=%t/deleted-addr.win.il --implicit-check-not=msil_bad_ \
+; RUN:   --implicit-check-not=putchar --implicit-check-not=pinvokeimpl
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/deleted-addr.lnx.dll %t/deleted-addr.lnx.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/deleted-addr.win.dll %t/deleted-addr.win.il %}
+
+; DELADDR: error: {{.*}}in function msil_bad_gc void (): garbage collection strategy 'erlang' is not supported for MSIL{{$}}
+; DELADDR: error: {{.*}}in function msil_bad_ret void (): inline assembly is not supported for MSIL{{$}}
+; DELADDR: error: {{.*}}in function msil_bad_data void (): inline assembly is not supported for MSIL{{$}}
+; DELADDR: error: {{.*}}in function putchar i32 (i32): inline assembly is not supported for MSIL{{$}}
+; DELADDR: error: {{.*}}in function msil_bad_ctor void (): inline assembly is not supported for MSIL{{$}}
+; DELADDR: error: {{.*}}in function msil_bad_used void (): inline assembly is not supported for MSIL{{$}}
+
+; DELADDR-IR:      @msil_del_data = global ptr poison{{$}}
+; DELADDR-IR-NEXT: @msil_del_offset = global ptr poison{{$}}
+; DELADDR-IR-NEXT: @msil_del_int = global i64 poison{{$}}
+; DELADDR-IR-NEXT: @msil_del_nocfi = global ptr poison{{$}}
+; DELADDR-IR-NEXT: @msil_del_import = global ptr poison{{$}}
+; DELADDR-IR-NEXT: @msil_del_gc = global ptr poison{{$}}
+; DELADDR-IR-NEXT: @llvm.global_ctors = appending global [2 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr poison, ptr null }, { i32, ptr, ptr } { i32 65535, ptr @msil_ok_ctor, ptr null }]{{$}}
+; DELADDR-IR-NEXT: @llvm.used = appending global [1 x ptr] [ptr @msil_ok_ctor], section "llvm.metadata"{{$}}
+; DELADDR-IR:      declare void @msil_bad_gc(){{$}}
+; DELADDR-IR:      declare void @msil_bad_ret(){{$}}
+; DELADDR-IR:      define ptr @msil_del_ret() {{\{$}}
+; DELADDR-IR-NEXT:   ret ptr poison{{$}}
+; DELADDR-IR:      define ptr @msil_del_dsole() {{\{$}}
+; DELADDR-IR-NEXT:   ret ptr poison{{$}}
+; DELADDR-IR:      declare void @msil_bad_data(){{$}}
+; DELADDR-IR:      declare i32 @putchar(i32){{$}}
+; DELADDR-IR:      declare void @msil_bad_ctor(){{$}}
+; DELADDR-IR:      declare void @msil_bad_used(){{$}}
+; DELADDR-IR:      define void @msil_ok_ctor() {{\{$}}
+; DELADDR-IR:      !{{[0-9]+}} = !{ptr @msil_del_ret, ptr @msil_bad_ret, i64 10}{{$}}
+
+; DELADDR-IL:      {{^}}.method public static native int 'msil_del_ret'() cil managed{{$}}
+; DELADDR-IL:      {{^}}.method public static native int 'msil_del_dsole'() cil managed{{$}}
+; DELADDR-IL:      {{^}}.method public static void 'msil_ok_ctor'() cil managed{{$}}
+; DELADDR-IL:      {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+; DELADDR-IL:      {{^}}  call void 'msil_ok_ctor'(){{( |$)}}
+; DELADDR-IL-NEXT: {{^}}  ret{{$}}
+
 ; MIR input (functions shaped like the plan 5.4 sample): machineFunctionInfo
 ; params and results accept only i32, i64, f32 and f64. Any other entry is a
 ; MIR parse error at its location with exit code 1, not a crash in the MIR
@@ -843,6 +914,64 @@ declare void @msil_prealloc_ext_void(ptr preallocated(i32))
 declare token @llvm.call.preallocated.setup(i32)
 declare ptr @llvm.call.preallocated.arg(token, i32)
 declare void @llvm.call.preallocated.teardown(token)
+
+;--- deleted-addr.ll
+source_filename = "deleted-addr.c"
+
+@msil_del_data = global ptr @msil_bad_data
+@msil_del_offset = global ptr getelementptr (i8, ptr @msil_bad_data, i64 4)
+@msil_del_int = global i64 ptrtoint (ptr @msil_bad_data to i64)
+@msil_del_nocfi = global ptr no_cfi @msil_bad_data
+@msil_del_import = global ptr @putchar
+@msil_del_gc = global ptr @msil_bad_gc
+@llvm.global_ctors = appending global [2 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @msil_bad_ctor, ptr null }, { i32, ptr, ptr } { i32 65535, ptr @msil_ok_ctor, ptr null }]
+@llvm.used = appending global [2 x ptr] [ptr @msil_bad_used, ptr @msil_ok_ctor], section "llvm.metadata"
+
+define void @msil_bad_gc() gc "erlang" {
+  ret void
+}
+
+define void @msil_bad_ret() {
+  call void asm sideeffect "nop", ""()
+  ret void
+}
+
+define ptr @msil_del_ret() {
+  ret ptr @msil_bad_ret
+}
+
+define ptr @msil_del_dsole() {
+  ret ptr dso_local_equivalent @msil_bad_ret
+}
+
+define void @msil_bad_data() {
+  call void asm sideeffect "nop", ""()
+  ret void
+}
+
+define i32 @putchar(i32 %c) {
+  call void asm sideeffect "nop", ""()
+  ret i32 %c
+}
+
+define void @msil_bad_ctor() {
+  call void asm sideeffect "nop", ""()
+  ret void
+}
+
+define void @msil_bad_used() {
+  call void asm sideeffect "nop", ""()
+  ret void
+}
+
+define void @msil_ok_ctor() {
+  ret void
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 5, !"CG Profile", !1}
+!1 = !{!2}
+!2 = !{ptr @msil_del_ret, ptr @msil_bad_ret, i64 10}
 
 ;--- mfi-bad-param.mir
 ---

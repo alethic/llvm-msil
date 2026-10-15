@@ -1,0 +1,54 @@
+narrow loads
+schar=-7
+uchar=250
+short=-300
+ushort=65000
+schar+uchar=243
+short*ushort=-19500000
+bool=2
+int arithmetic
+int/7=-17636
+int%7=-4
+int>>3=-15432
+uint/7=613566754
+uint%7=2
+uint>>4=268435455
+int<uint=1
+int*int=15241383936
+long long arithmetic
+ll/1000=-5000000
+ll%1000=0
+ll%-7=-2
+ll>>12=-1220704
+ll+int=-5000123456
+0x8000000000000001
+0x1
+0x8000000000000003
+0x2aaaaaaaaaaaaaab
+ull<ll=0
+conversions
+float*1000=-750
+double*1000=2500
+(int)double=2
+(int)-double=-2
+(int)float=0
+int->double=-61728
+ll->double=-1250000000
+uchar->float=62
+double<float=0
+aggregates
+array=31415
+struct.c=113
+struct.i=17
+struct.ll=-18
+stores
+out_int=-246912
+out_ll=15000000000
+out_double*1000=-1875
+v_arr[2]=14
+v_struct.i=-17
+0x8000000000000000
+loop
+loop=6
+v_limit=4
+[exit 105]

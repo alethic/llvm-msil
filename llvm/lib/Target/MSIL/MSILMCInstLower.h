@@ -20,6 +20,7 @@
 #ifndef LLVM_LIB_TARGET_MSIL_MSILMCINSTLOWER_H
 #define LLVM_LIB_TARGET_MSIL_MSILMCINSTLOWER_H
 
+#include "MCTargetDesc/MSILMCTypeUtilities.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/Support/Compiler.h"
 
@@ -39,10 +40,23 @@ class LLVM_LIBRARY_VISIBILITY MSILMCInstLower {
   /// table, and notes an undefined function for the module trailer.
   MCOperand lowerFunctionOperand(const MachineOperand &MO) const;
 
+  /// Lowers the external symbol callee of the direct call \p MI (a library
+  /// call) to a method reference whose signature is the call's own, and notes
+  /// the symbol for its P/Invoke declaration in the module trailer.
+  MCOperand lowerExternalSymbolOperand(const MachineInstr &MI,
+                                       const MachineOperand &MO) const;
+
 public:
   MSILMCInstLower(MCContext &Ctx, MSILAsmPrinter &Printer)
       : Ctx(Ctx), Printer(Printer) {}
   void lower(const MachineInstr *MI, MCInst &OutMI) const;
+
+  /// The signature that the call \p MI actually uses: its explicit register
+  /// defs are the values it pushes and its explicit register uses the values
+  /// it pops, in CIL types (after MSILExplicitLocals every register operand
+  /// is a value on the evaluation stack). For a direct call this is the
+  /// signature of the method it calls.
+  static MSIL::Signature getCallSiteSignature(const MachineInstr &MI);
 };
 } // end namespace llvm
 

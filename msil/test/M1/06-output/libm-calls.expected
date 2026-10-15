@@ -1,0 +1,4 @@
+double calls: ok
+float calls: ok
+intrinsics: ok
+[exit 0]

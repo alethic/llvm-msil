@@ -188,14 +188,14 @@ void MSILTargetAsmStreamer::emitDataImage(StringRef TypeName,
   emitLine(OS.str());
 }
 
-void MSILTargetAsmStreamer::emitAddressField(StringRef Name, bool Public) {
+void MSILTargetAsmStreamer::emitAddressField(StringRef Name, bool Public,
+                                             bool Generated) {
   SmallString<64> Str;
   raw_svector_ostream OS(Str);
-  // Compiler-generated fields ('<msil>' names, which C cannot spell) are
-  // private; fields of C globals are public or assembly like their methods.
-  StringRef Access = Name.starts_with("<msil>") ? "private"
-                     : Public                   ? "public"
-                                                : "assembly";
+  // A compiler-generated field is private; the field of a C global is public
+  // or assembly like its methods. The caller says which, because an asm
+  // label can give a C global any name, '<msil>' ones included.
+  StringRef Access = Generated ? "private" : Public ? "public" : "assembly";
   OS << ".field " << Access << " static initonly native int ";
   MSIL::printQuotedName(OS, Name);
   emitLine(OS.str());

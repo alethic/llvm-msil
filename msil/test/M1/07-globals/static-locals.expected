@@ -1,0 +1,27 @@
+counter=5
+other_counter=110
+other_counter=120
+counter=6
+history[3]=4
+same array=1
+history[0]=10
+history[3]=40
+fib(10)=55
+fib(50)=12586269025
+fib(90)=2880067194370816120
+fib(90) again=2880067194370816120
+linked=6
+linked=7
+linked same=1
+linked=8
+red
+green
+blue
+red
+depth(3)=4
+depth(1)=4
+depth(7)=8
+block_static(4)=6
+block_static(3)=9
+counter=206
+[exit 206]

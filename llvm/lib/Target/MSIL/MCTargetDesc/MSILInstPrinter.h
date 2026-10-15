@@ -93,7 +93,11 @@ private:
   /// (CALL_INDIRECT): the one MSILMemberRefExpr operand among the register
   /// placeholders of the results and arguments.
   void printCall(const MCInst *MI, const MCSubtargetInfo &STI, raw_ostream &O);
-  /// The 'ldc.i4 <offset>; add' after the 'ldsfld' of a GLOBAL_ADDR.
+  /// Checks that the operand of GLOBAL_ADDR is an address field and that of
+  /// FUNC_ADDR a method reference (MSILMemberRefExprs from MSILMCInstLower).
+  void checkAddressOperand(const MCInst *MI);
+  /// The 'ldc.i4 <offset>; add' (or 'ldc.i8 <offset>; conv.i; add') after the
+  /// 'ldsfld' of a GLOBAL_ADDR whose operand has a non-zero offset.
   void printGlobalAddrOffset(const MCInst *MI, raw_ostream &O);
 };
 

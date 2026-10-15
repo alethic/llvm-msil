@@ -30,6 +30,8 @@
 
 def SDT_MSILArgument : SDTypeProfile<1, 1, [SDTCisVT<1, i32>]>;
 def SDT_MSILReturn   : SDTypeProfile<0, -1, []>;
+def SDT_MSILAddress  : SDTypeProfile<1, 1, [SDTCisSameAs<0, 1>,
+                                            SDTCisPtrTy<0>]>;
 
 //===----------------------------------------------------------------------===//
 // MSIL-specific DAG Nodes.
@@ -38,6 +40,15 @@ def SDT_MSILReturn   : SDTypeProfile<0, -1, []>;
 def MSILargument : SDNode<"MSILISD::ARGUMENT", SDT_MSILArgument>;
 def MSILreturn   : SDNode<"MSILISD::RETURN", SDT_MSILReturn,
                           [SDNPHasChain, SDNPVariadic]>;
+
+// Addresses (MSILTargetLowering::LowerGlobalAddress and LowerExternalSymbol):
+// the address of a global variable, a TargetGlobalAddress with the offset
+// folded in; the address of a function used as a value, a
+// TargetGlobalAddress; and the address of a library function, a
+// TargetExternalSymbol.
+def MSILdata_addr : SDNode<"MSILISD::DATA_ADDR", SDT_MSILAddress>;
+def MSILfunc_addr : SDNode<"MSILISD::FUNC_ADDR", SDT_MSILAddress>;
+def MSILext_sym   : SDNode<"MSILISD::EXT_SYM", SDT_MSILAddress>;
 
 //===----------------------------------------------------------------------===//
 // MSIL-specific Operands.
@@ -201,7 +212,6 @@ defm CONST_F64 : I<(outs F64:$res), (ins f64imm_op:$imm),
 // Addresses.
 //===----------------------------------------------------------------------===//
 
-// The patterns that select these come with globals and function pointers.
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0, isAsCheapAsAMove = 1,
     isReMaterializable = 1 in {
 // Address of a global variable: 'ldsfld native int <address field>', plus
@@ -215,6 +225,20 @@ defm GLOBAL_ADDR : I<(outs I64:$res), (ins data_op:$addr), [],
 defm FUNC_ADDR : I<(outs I64:$res), (ins function_op:$func), [],
                    "ldftn $func", 0xFE06>;
 }
+
+// Global variables live in the data segment, and code reaches each one
+// through its address field (decision D12). The offset of the operand is
+// the offset into the global.
+def : Pat<(i64 (MSILdata_addr tglobaladdr:$addr)),
+          (GLOBAL_ADDR tglobaladdr:$addr)>;
+// A function used as a value; an undefined one is its P/Invoke declaration.
+def : Pat<(i64 (MSILfunc_addr tglobaladdr:$func)),
+          (FUNC_ADDR tglobaladdr:$func)>;
+// A library function used as a value. SelectionDAG names library functions
+// only as callees, which LowerCall turns into target symbols itself, so this
+// is a backstop.
+def : Pat<(i64 (MSILext_sym texternalsym:$func)),
+          (FUNC_ADDR texternalsym:$func)>;
 
 //===----------------------------------------------------------------------===//
 // Additional sets of instructions.

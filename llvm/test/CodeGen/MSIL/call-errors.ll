@@ -1,10 +1,12 @@
-; Calls that M4 cannot compile are clean errors (ImplementationPlan.md section
-; 2 'Diagnostics leave well-formed output', M4.a, M4.c; decisions D14, D19;
-; section 12 rows 'M4.a extended', 'Plan 5.3 (MSILISelLowering.h) extended,
-; M4.b', the two M4 fix-loop ownership rows of fix-1 and the two M5 rows of
-; fix-3). Each one is reported exactly once, naming the caller (%{diag}
-; rejects every other 'error:' and 'warning:' line, so each expected error is
-; checked), compilation goes on, llc exits with 1 and prints neither
+; Calls that MSIL cannot compile are clean errors (ImplementationPlan.md
+; section 2 'Diagnostics leave well-formed output', M4.a, M4.c, M8.a, M8.c;
+; decisions D14, D19; section 12 rows 'M4.a extended', 'Plan 5.3
+; (MSILISelLowering.h) extended, M4.b', the two M4 fix-loop ownership rows of
+; fix-1, the two M5 rows of fix-3 and the M8 rows for this file). Each one is
+; reported exactly once, naming the caller (%{diag} rejects every other
+; 'error:' and 'warning:' line, so each expected error is checked; the
+; end-of-module errors of EXTMULTI are matched as a group and counted),
+; compilation goes on, llc exits with 1 and prints neither
 ; 'LLVM ERROR' nor a crash report, no call is built for the rejected call (its
 ; result is undefined, so the call disappears from the IL), and the IL on
 ; stdout (llc deletes its -o file after an error) still assembles. Every part
@@ -18,12 +20,13 @@
 ;   M9), a byval, nest or inalloca argument, a musttail call, an unsupported
 ;   calling convention, a callee named 'llvm.*' that LLVM does not know
 ;   ("unknown intrinsic '<name>' is not supported for MSIL") and an
-;   ExternalSymbol callee, which only runtime library calls have ("runtime
-;   library call '<name>' is not supported for MSIL yet", D14; here the i128
-;   to floating-point conversions __floattidf and __floatuntisf, which return
-;   one value).
+;   ExternalSymbol callee that is a runtime helper, whose name starts with
+;   '__' ("runtime helper '<name>' is not available for MSIL yet (phase 3)",
+;   D14 and M8.a; here the i128 to floating-point conversions __floattidf and
+;   __floatuntisf, which return one value; libcall-policy.ll has the library
+;   calls that are imports).
 ; - i128 division and remainder never reach LowerCall: the type legalizer
-;   (ReplaceNodeResults) reports the same runtime library text before any call
+;   (ReplaceNodeResults) reports the same runtime helper text before any call
 ;   is built, because their libcalls return two values. Only a variable
 ;   divisor, or a non-exact division or a remainder by a constant that is not a
 ;   power of two, gets there; division and remainder by a power of two and
@@ -38,25 +41,28 @@
 ; - Aliases and ifuncs are errors of their own (D26); their callers compile,
 ;   with an undefined result, and add no error, also when the call-site
 ;   result needs two values.
-; - A call of a function that is only declared is built, and the end of the
-;   module reports "call to external function '<name>' needs P/Invoke support
-;   (M8)" (M4.c; M8 replaces this with P/Invoke declarations) once per callee,
-;   in the order of first use, however many calls and callers it has; an
-;   available_externally definition is called like a declaration. A
+; - A call of a function that is only declared is built. If the function is
+;   not a Phase-1 import (D14; pinvoke.ll has the imports), the end of the
+;   module reports "undefined function '<name>' is not defined in this module
+;   and is not a Phase-1 import (puts, putchar, the C math library,
+;   msil-import-module); Phase 1 has no linker" (M8.c) once per callee,
+;   however many calls and callers it has, and declares no P/Invoke for it;
+;   an available_externally definition is called like a declaration. A
 ;   declaration that is never called, or whose calls were all rejected, is
 ;   not an error.
 ; - A call of a declared function whose result needs more than one value
 ;   ({ double, double } from __muldc3 and <2 x float> from __divsc3, which
 ;   clang calls for C complex multiplication and division on
-;   x86_64-unknown-linux-gnu-msil; i128; { i64, i64 }) passes LowerCall's
-;   checks, but its result would be demoted to a stack slot (frames arrive in
-;   M7). Until M8.c, MSILFixFunctionBitcasts reports the callee before ISel
-;   with the same end-of-module text, once per callee and in the order of
-;   first use, and erases its calls; the end of the module does not report it
-;   again.
+;   x86_64-unknown-linux-gnu-msil; i128; { i64, i64 }) has its result demoted
+;   to a frame slot (frames exist since M7). None of these callees is an
+;   import, so each is reported once with the same text, with or without its
+;   calls (MSILFixFunctionBitcasts may still erase them, section 12 row
+;   'fix-loop ownership: MSILFixFunctionBitcasts.cpp -> M8.c'): the errors
+;   are matched as a group and counted, and only the IL of the other functions
+;   is checked.
 ;
-; Later owners (section 12): M8.d updates the EXTERN, AVAIL, EXTMULTI, LIBCALL
-; and LIBCALLFP parts when M8 changes these texts; M9.c moves or retires the
+; Later owners (section 12): M8.d updated the EXTERN, AVAIL, EXTMULTI, LIBCALL,
+; LIBCALLFP and DIAGCALLEE parts for the M8 texts; M9.c moves or retires the
 ; MISMATCH, MMULTI and BYVAL parts when M9 makes those calls valid.
 
 ; DEFINE: %{diag} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
@@ -281,7 +287,7 @@
 ; RUN: FileCheck %s --check-prefix=ALIAS-IL --input-file=%t/alias-callers.win.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/alias-callers.dll %t/alias-callers.lnx.il %}
 
-; Callee that is only declared (temporary M4 rule, replaced in M8).
+; Callee that is only declared and is not a Phase-1 import.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/extern.ll -o /dev/null 2>&1 \
 ; RUN:   | %{diag} --check-prefix=EXTERN
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/extern.ll -o /dev/null 2>&1 \
@@ -306,22 +312,31 @@
 ; RUN:   > %t/avail.win.il
 ; RUN: FileCheck %s --check-prefix=AVAIL-IL --input-file=%t/avail.win.il
 
-; Declared callees whose result needs two values (temporary until M8.c).
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/extern-multi.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=EXTMULTI
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/extern-multi.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=EXTMULTI
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/extern-multi.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=EXTMULTI
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/extern-multi.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=EXTMULTI
+; Declared callees whose result needs two values.
+; DEFINE: %{multi} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+; DEFINE:   --implicit-check-not=warning:
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/extern-multi.ll -o /dev/null \
+; RUN:   2> %t/extern-multi.lnx.err
+; RUN: %{multi} --check-prefix=EXTMULTI --input-file=%t/extern-multi.lnx.err
+; RUN: %{multi} --check-prefix=NEXTMULTI --input-file=%t/extern-multi.lnx.err
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/extern-multi.ll -o /dev/null \
+; RUN:   2> %t/extern-multi.win.err
+; RUN: %{multi} --check-prefix=EXTMULTI --input-file=%t/extern-multi.win.err
+; RUN: %{multi} --check-prefix=NEXTMULTI --input-file=%t/extern-multi.win.err
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/extern-multi.ll -o /dev/null \
+; RUN:   2> %t/extern-multi.lnx.o0.err
+; RUN: %{multi} --check-prefix=EXTMULTI --input-file=%t/extern-multi.lnx.o0.err
+; RUN: %{multi} --check-prefix=NEXTMULTI --input-file=%t/extern-multi.lnx.o0.err
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/extern-multi.ll -o /dev/null \
+; RUN:   2> %t/extern-multi.win.o0.err
+; RUN: %{multi} --check-prefix=EXTMULTI --input-file=%t/extern-multi.win.o0.err
+; RUN: %{multi} --check-prefix=NEXTMULTI --input-file=%t/extern-multi.win.o0.err
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/extern-multi.ll \
 ; RUN:   > %t/extern-multi.lnx.il
-; RUN: FileCheck %s --check-prefix=EXTMULTI-IL --input-file=%t/extern-multi.lnx.il
+; RUN: FileCheck %s --check-prefix=EXTMULTI-IL --implicit-check-not=pinvokeimpl --input-file=%t/extern-multi.lnx.il
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/extern-multi.ll \
 ; RUN:   > %t/extern-multi.win.il
-; RUN: FileCheck %s --check-prefix=EXTMULTI-IL --input-file=%t/extern-multi.win.il
-; RUN: %if ilasm %{ %ilasm-verify -output=%t/extern-multi.dll %t/extern-multi.lnx.il %}
+; RUN: FileCheck %s --check-prefix=EXTMULTI-IL --implicit-check-not=pinvokeimpl --input-file=%t/extern-multi.win.il
 
 ;--- variadic.ll
 ; A variadic callee, called with and without variadic arguments, then a
@@ -410,12 +425,12 @@ define i64 @after_variadic_multi(i64 %a, i64 %b) {
 ; need __divti3, __udivti3, __modti3 and __umodti3. The type legalizer reports
 ; them (ReplaceNodeResults) before any call is built; no ExternalSymbol node
 ; reaches LowerCall.
-; LIBCALL:      error: {{.*}}div128{{.*}}runtime library call '__divti3' is not supported for MSIL yet
-; LIBCALL:      error: {{.*}}urem128{{.*}}runtime library call '__umodti3' is not supported for MSIL yet
-; LIBCALL:      error: {{.*}}udiv128{{.*}}runtime library call '__udivti3' is not supported for MSIL yet
-; LIBCALL:      error: {{.*}}srem128{{.*}}runtime library call '__modti3' is not supported for MSIL yet
-; LIBCALL:      error: {{.*}}sdiv128_by_10{{.*}}runtime library call '__divti3' is not supported for MSIL yet
-; LIBCALL:      error: {{.*}}udiv128_by_10{{.*}}runtime library call '__udivti3' is not supported for MSIL yet
+; LIBCALL:      error: {{.*}}div128{{.*}}runtime helper '__divti3' is not available for MSIL yet (phase 3)
+; LIBCALL:      error: {{.*}}urem128{{.*}}runtime helper '__umodti3' is not available for MSIL yet (phase 3)
+; LIBCALL:      error: {{.*}}udiv128{{.*}}runtime helper '__udivti3' is not available for MSIL yet (phase 3)
+; LIBCALL:      error: {{.*}}srem128{{.*}}runtime helper '__modti3' is not available for MSIL yet (phase 3)
+; LIBCALL:      error: {{.*}}sdiv128_by_10{{.*}}runtime helper '__divti3' is not available for MSIL yet (phase 3)
+; LIBCALL:      error: {{.*}}udiv128_by_10{{.*}}runtime helper '__udivti3' is not available for MSIL yet (phase 3)
 
 ; LIBCALL-IL-LABEL: .method {{.*}}'div128'(
 ; LIBCALL-IL-SAME:  native int, native int, native int, native int) cil managed{{$}}
@@ -495,8 +510,8 @@ define i64 @after_libcall(i64 %a, i64 %b) {
 ;--- libcall-fp.ll
 ; i128 to floating point is a runtime library call with one result, so it
 ; reaches LowerCall as an ExternalSymbol callee.
-; LIBCALLFP:    error: {{.*}}sitofp128{{.*}}runtime library call '__floattidf' is not supported for MSIL yet
-; LIBCALLFP:    error: {{.*}}uitofp128{{.*}}runtime library call '__floatuntisf' is not supported for MSIL yet
+; LIBCALLFP:    error: {{.*}}sitofp128{{.*}}runtime helper '__floattidf' is not available for MSIL yet (phase 3)
+; LIBCALLFP:    error: {{.*}}uitofp128{{.*}}runtime helper '__floatuntisf' is not available for MSIL yet (phase 3)
 
 ; LIBCALLFP-IL-LABEL: .method {{.*}}'sitofp128'(
 ; LIBCALLFP-IL-SAME:  native int, native int) cil managed{{$}}
@@ -817,11 +832,11 @@ define i32 @after_unknown_intrinsic(i32 %a, i32 %b) {
 ;--- diagnosed-callee.ll
 ; A definition with inline assembly, called from two other functions.
 ; MSILPrepareIR reports it, deletes its body and erases its calls, so this is
-; the only error: %{diag} rejects any second 'error:' line, such as "call to
-; external function 'has_asm' needs P/Invoke support (M8)" for the function
-; that became a declaration, and the CHECK-NOT makes that explicit.
+; the only error: %{diag} rejects any second 'error:' line, such as
+; "undefined function 'has_asm' is not defined in this module ..." for the
+; function that became a declaration, and the CHECK-NOT makes that explicit.
 ; DIAGCALLEE:     error: {{.*}}has_asm{{.*}}inline assembly is not supported for MSIL
-; DIAGCALLEE-NOT: needs P/Invoke support
+; DIAGCALLEE-NOT: undefined function
 
 ; DIAGCALLEE-IL-LABEL: .method {{.*}}'calls_has_asm'(
 ; DIAGCALLEE-IL-NOT:   call
@@ -991,7 +1006,7 @@ define i32 @after_alias(i32 %a, i32 %b) {
 ;--- extern.ll
 ; One error at the end of the module, naming the callee; the declaration that
 ; is never called is not mentioned.
-; EXTERN:       error: {{.*}}call to external function 'ext' needs P/Invoke support (M8)
+; EXTERN:       {{^}}error: {{.*}}undefined function 'ext' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 source_filename = "extern.c"
 
 declare i32 @ext(i32)
@@ -1009,10 +1024,11 @@ define i32 @after_ext(i32 %a, i32 %b) {
 
 ;--- avail.ll
 ; f1 calls the available_externally definition ae twice and the declaration
-; ext once, f2 calls ext twice. Neither callee is emitted and each is reported
-; once, in the order of first use: ae, then ext.
-; AVAIL:        error: {{.*}}call to external function 'ae' needs P/Invoke support (M8)
-; AVAIL:        error: {{.*}}call to external function 'ext' needs P/Invoke support (M8)
+; ext once, f2 calls ext twice. Neither callee is emitted, and each is
+; reported once (ae comes first both in the module and in the order of first
+; use) and gets no P/Invoke.
+; AVAIL:        {{^}}error: {{.*}}undefined function 'ae' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; AVAIL:        {{^}}error: {{.*}}undefined function 'ext' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 
 ; AVAIL-IL-NOT:   {{^}}.method {{.*}}'ae'(
 ; AVAIL-IL-LABEL: .method {{.*}}'f1'(
@@ -1027,6 +1043,7 @@ define i32 @after_ext(i32 %a, i32 %b) {
 ; AVAIL-IL-NEXT:  {{^}}  call int32 'ext'(int32){{$}}
 ; AVAIL-IL-NEXT:  {{^}}  ret{{$}}
 ; AVAIL-IL-NOT:   {{^}}.method {{.*}}'{{ae|ext}}'(
+; AVAIL-IL-NOT:   pinvokeimpl
 source_filename = "avail.c"
 
 define available_externally i32 @ae(i32 %x) {
@@ -1051,42 +1068,27 @@ define i32 @f2(i32 %x) {
 ; Calls of declared functions returning { double, double } (__muldc3) and
 ; <2 x float> (__divsc3), which clang -O2 emits for C complex multiplication
 ; and division on x86_64-unknown-linux-gnu-msil, i128 and { i64, i64 }. Each
-; callee is called from two functions, with the result used and unused. It is
-; reported once, in the order of first use (not of declaration), in the form
-; and text of the end-of-module error, which does not repeat it. No call is
-; built: the callers return an undefined value (an uninitialized local at
-; -O2), and the rest of the module compiles.
-; EXTMULTI:     {{^}}error: call to external function '__divsc3' needs P/Invoke support (M8){{$}}
-; EXTMULTI:     {{^}}error: call to external function 'ext128' needs P/Invoke support (M8){{$}}
-; EXTMULTI:     {{^}}error: call to external function '__muldc3' needs P/Invoke support (M8){{$}}
-; EXTMULTI:     {{^}}error: call to external function 'extpair' needs P/Invoke support (M8){{$}}
+; callee is called from two functions, with the result used and unused. None
+; is an import: each is reported once, in the end-of-module text, and gets no
+; P/Invoke; the errors are matched as a group and counted. Whether the calls
+; are built does not matter here; the rest of the module compiles.
+; EXTMULTI-DAG: {{^}}error: {{.*}}undefined function '__divsc3' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; EXTMULTI-DAG: {{^}}error: {{.*}}undefined function 'ext128' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; EXTMULTI-DAG: {{^}}error: {{.*}}undefined function '__muldc3' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; EXTMULTI-DAG: {{^}}error: {{.*}}undefined function 'extpair' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; NEXTMULTI-COUNT-4: {{^}}error:
+; NEXTMULTI-NOT:     {{^}}error:
 
 ; EXTMULTI-IL-LABEL: .method {{.*}}'cdiv'(
 ; EXTMULTI-IL-SAME:  float32, float32, float32, float32) cil managed{{$}}
-; EXTMULTI-IL-NOT:   call
-; EXTMULTI-IL:       {{^}}  ret{{$}}
-; EXTMULTI-IL-NEXT:  {{^}}} // end of method 'cdiv'{{$}}
 ; EXTMULTI-IL-LABEL: .method {{.*}}'use128'(
 ; EXTMULTI-IL-SAME:  native int) cil managed{{$}}
-; EXTMULTI-IL-NOT:   call
-; EXTMULTI-IL:       {{^}}  ret{{$}}
-; EXTMULTI-IL-NEXT:  {{^}}} // end of method 'use128'{{$}}
 ; EXTMULTI-IL-LABEL: .method {{.*}}'cmul'(
 ; EXTMULTI-IL-SAME:  float64, float64, float64, float64) cil managed{{$}}
-; EXTMULTI-IL-NOT:   call
-; EXTMULTI-IL:       {{^}}  ret{{$}}
-; EXTMULTI-IL-NEXT:  {{^}}} // end of method 'cmul'{{$}}
 ; EXTMULTI-IL-LABEL: .method {{.*}}'usepair'(
 ; EXTMULTI-IL-SAME:  native int) cil managed{{$}}
-; EXTMULTI-IL-NOT:   call
-; EXTMULTI-IL:       {{^}}  ret{{$}}
-; EXTMULTI-IL-NEXT:  {{^}}} // end of method 'usepair'{{$}}
 ; EXTMULTI-IL-LABEL: .method {{.*}}'unused'(
 ; EXTMULTI-IL-SAME:  native int, float64, float32) cil managed{{$}}
-; EXTMULTI-IL-NEXT:  {{^\{$}}
-; EXTMULTI-IL-NEXT:  {{^}}  .maxstack 0{{$}}
-; EXTMULTI-IL-NEXT:  {{^}}  ret{{$}}
-; EXTMULTI-IL-NEXT:  {{^}}} // end of method 'unused'{{$}}
 ; EXTMULTI-IL-LABEL: .method {{.*}}'after_extern_multi'(
 ; EXTMULTI-IL:       {{^}}  ldarg.0{{$}}
 ; EXTMULTI-IL-NEXT:  {{^}}  ldarg.1{{$}}

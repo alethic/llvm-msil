@@ -20,6 +20,7 @@
 #include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "MSILSelectionDAGInfo.h"
 #include "MSILSubtarget.h"
+#include "MSILUtilities.h"
 #include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -29,7 +30,9 @@
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalVariable.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
 #define DEBUG_TYPE "msil-lower"
@@ -91,10 +94,10 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
     // ogt and olt (MSILInstrFloat.td).
     setCondCodeAction({ISD::SETO, ISD::SETUO, ISD::SETONE, ISD::SETUEQ}, T,
                       Expand);
-    // No CIL opcode, and no BCL members in Phase 1: these become libm calls,
-    // which LowerCall diagnoses and does not build until M8 makes them
-    // math-library P/Invokes (decision D14). fmin and fmax become selects
-    // when no operand can be a NaN.
+    // No CIL opcode, and no BCL members in Phase 1: these become calls of the
+    // C math library, which are P/Invokes (decision D14, LowerCall). fmin and
+    // fmax become selects when no operand can be a NaN. roundeven and exp10
+    // are not Phase-1 imports, so LowerCall diagnoses them.
     setOperationAction({ISD::FMA, ISD::FSQRT, ISD::FPOW, ISD::FEXP, ISD::FEXP2,
                         ISD::FEXP10, ISD::FLOG, ISD::FLOG2, ISD::FLOG10,
                         ISD::FCEIL, ISD::FFLOOR, ISD::FTRUNC, ISD::FRINT,
@@ -108,20 +111,15 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
     setOperationAction(
         {ISD::FMINIMUM, ISD::FMAXIMUM, ISD::FMINIMUMNUM, ISD::FMAXIMUMNUM}, T,
         Custom);
-    // sin and cos are libm calls too, but LibCall rather than Expand: the
-    // expansion merges a sin and a cos of the same value into a call of
-    // sincos, which returns its results through memory and is not a Phase-1
-    // import (decision D14). For the same reason LowerFSINCOS splits an
-    // explicit FSINCOS into the two calls.
+    // sin and cos are math library calls too, but LibCall rather than
+    // Expand: the expansion merges a sin and a cos of the same value into a
+    // call of sincos, which is not a Phase-1 import (decision D14). For the
+    // same reason LowerFSINCOS splits an explicit FSINCOS into the two calls.
     setOperationAction({ISD::FSIN, ISD::FCOS}, T, LibCall);
     setOperationAction(ISD::FSINCOS, T, Custom);
-    // frexp and modf are libm calls until M8 makes them math-library
-    // P/Invokes (decision D14). Expanded, most would become the libcall that
-    // LowerCall reports, but the MSVC C runtime has no frexpf, so a float32
-    // frexp would expand inline there and compile on Windows only.
-    // LowerFFREXP_FMODF reports every one with LowerCall's text instead,
-    // naming the double function for that float32 call.
-    setOperationAction({ISD::FFREXP, ISD::FMODF}, T, Custom);
+    // frexp and modf keep their default Expand action: a call of the math
+    // library function (a P/Invoke), which returns its second result through
+    // a stack temporary (see below for float32 frexp on Windows).
     // llvm.fptrunc.round: only round.tonearest is supported.
     setOperationAction(ISD::FPTRUNC_ROUND, T, Custom);
     // fabs and copysign: the generic expansions work on the integer bits,
@@ -213,13 +211,26 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::FPTRUNC_ROUND, {MVT::f16, MVT::bf16}, Custom);
   for (MVT T : MVT::fp_fixedlen_vector_valuetypes())
     setOperationAction(ISD::FPTRUNC_ROUND, T, Custom);
-  // The MSVC C runtime has no ldexpf (RuntimeLibcalls.td), and native clang
-  // calls ldexp there. Do the same instead of the generic expansion, which
-  // goes through a stack slot: the double result rounds once to float, so the
-  // value does not change.
-  if (getLibcallImpl(RTLIB::LDEXP_F32) == RTLIB::Unsupported)
+  // The MSVC C runtime has no ldexpf and no frexpf (RuntimeLibcalls.td), and
+  // native clang calls ldexp and frexp there. msvcrt.dll, the C runtime of
+  // windows-gnu, does not export them either (MinGW links its own), so they
+  // are not Phase-1 imports there (MSIL::getPInvokeModule). Wherever the
+  // float32 function is not an import and the double one is, call the double
+  // one, instead of the generic expansions, which work on the integer bits
+  // through a stack slot, or a diagnosed call: the double result of ldexp
+  // rounds once to float, and the fraction that frexp returns for a float
+  // fits in a float, so the values do not change.
+  auto IsImport = [&](RTLIB::Libcall LC) {
+    RTLIB::LibcallImpl Impl = getLibcallImpl(LC);
+    return Impl != RTLIB::Unsupported &&
+           MSIL::getPInvokeModule(TM.getTargetTriple(),
+                                  getLibcallImplName(Impl));
+  };
+  if (!IsImport(RTLIB::LDEXP_F32) && IsImport(RTLIB::LDEXP_F64))
     setOperationPromotedToType({ISD::FLDEXP, ISD::STRICT_FLDEXP}, MVT::f32,
                                MVT::f64);
+  if (!IsImport(RTLIB::FREXP_F32) && IsImport(RTLIB::FREXP_F64))
+    setOperationPromotedToType(ISD::FFREXP, MVT::f32, MVT::f64);
 
   // SETCC stays Legal for i32, i64, f32 and f64: every integer and floating-
   // point condition code that is not Expand above is selected, the negated
@@ -242,16 +253,23 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   setOperationAction(ISD::TRAP, MVT::Other, Legal);
 
   // Every operation that LowerOperation dispatches is Custom, because
-  // SelectionDAG calls LowerOperation only for Custom actions. Until the
-  // milestone that implements an operation replaces its stub body (and keeps
-  // the action), the stub fails naming that milestone (D33) instead of leaving
-  // the node to 'Cannot select'.
-  // Frame indices; global addresses and external symbols (M8). Pointers are
-  // I64. A frame index becomes a TargetFrameIndex operand of its users, which
+  // SelectionDAG calls LowerOperation only for Custom actions.
+  // Frame indices, global addresses and external symbols. Pointers are I64.
+  // A frame index becomes a TargetFrameIndex operand of its users, which
   // MSILRegisterInfo::eliminateFrameIndex rewrites into an address relative
-  // to the frame base (decision D13).
+  // to the frame base (decision D13). A global variable is reached through
+  // its address field (decision D12), a function through ldftn.
   setOperationAction({ISD::GlobalAddress, ISD::ExternalSymbol, ISD::FrameIndex},
                      MVT::i64, Custom);
+  // Thread-local storage waits for phase 3 (MSILPrepareIR already reports
+  // every thread-local variable and makes it an ordinary global, so this is a
+  // backstop). IndirectBrExpand turns the address of every label that an
+  // indirectbr can branch to into an integer index, so only the address of
+  // a label that no indirectbr of its function targets reaches instruction
+  // selection (GNU C '&&label' without a computed goto). Both are diagnosed;
+  // without the Custom action they would end in 'Cannot select'.
+  setOperationAction({ISD::GlobalTLSAddress, ISD::BlockAddress}, MVT::i64,
+                     Custom);
   // A CopyToReg cannot take a frame index operand: LowerCopyToReg copies it
   // into a register first.
   setOperationAction(ISD::CopyToReg, MVT::Other, Custom);
@@ -335,8 +353,8 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   MaxStoresPerMemmove = MaxStoresPerMemmoveOptSize = 0;
   MaxStoresPerMemset = MaxStoresPerMemsetOptSize = 0;
 
-  // No atomics yet: AtomicExpand turns every atomic operation into an
-  // __atomic_* libcall, which is diagnosed.
+  // No atomics yet: AtomicExpand turns every atomic operation into a call of
+  // an __atomic_* function, which is not a Phase-1 import (decision D14).
   setMaxAtomicSizeInBitsSupported(0);
 }
 
@@ -552,6 +570,20 @@ SDValue MSILTargetLowering::LowerOperation(SDValue Op,
     return LowerGlobalAddress(Op, DAG);
   case ISD::ExternalSymbol:
     return LowerExternalSymbol(Op, DAG);
+  case ISD::GlobalTLSAddress: {
+    // The same text as MSILPrepareIR and the AsmPrinter, with the IR spelling
+    // of the global, which also names an unnamed or '\1'-escaped one.
+    std::string Msg =
+        "thread-local variable " +
+        MSIL::getIRName(*cast<GlobalAddressSDNode>(Op)->getGlobal()) +
+        " is not supported for MSIL yet";
+    return LowerUnsupported(Op, DAG, Msg);
+  }
+  case ISD::BlockAddress:
+    return LowerUnsupported(
+        Op, DAG,
+        "label address (blockaddress) is not supported for MSIL unless the "
+        "label is a target of an indirectbr (computed goto)");
   case ISD::BR_JT:
     return LowerBR_JT(Op, DAG);
   case ISD::SHL_PARTS:
@@ -583,9 +615,6 @@ SDValue MSILTargetLowering::LowerOperation(SDValue Op,
     return LowerFPTRUNC_ROUND(Op, DAG);
   case ISD::FSINCOS:
     return LowerFSINCOS(Op, DAG);
-  case ISD::FFREXP:
-  case ISD::FMODF:
-    return LowerFFREXP_FMODF(Op, DAG);
   case ISD::BF16_TO_FP:
   case ISD::FP_TO_BF16:
     return LowerBF16Conversion(Op, DAG);
@@ -621,9 +650,9 @@ void MSILTargetLowering::ReplaceNodeResults(SDNode *N,
   }
 
   // i128 division and remainder, and FP -> i128 conversions (the other Custom
-  // nodes with an illegal result type): report the libcall that the type
-  // legalizer would build, with LowerCall's text, and go on with an undefined
-  // result.
+  // nodes with an illegal result type): report the runtime helper that the
+  // type legalizer would call, with LowerCall's text (decision D14), and go
+  // on with an undefined result.
   RTLIB::Libcall LC;
   switch (N->getOpcode()) {
   case ISD::SDIV:
@@ -660,8 +689,8 @@ void MSILTargetLowering::ReplaceNodeResults(SDNode *N,
   const char *Name = getLibcallName(LC);
   DAG.getContext()->diagnose(DiagnosticInfoUnsupported(
       DAG.getMachineFunction().getFunction(),
-      Twine("runtime library call '") + (Name ? Name : "?") +
-          "' is not supported for MSIL yet",
+      Twine("runtime helper '") + (Name ? Name : "?") +
+          "' is not available for MSIL yet (phase 3)",
       SDLoc(N).getDebugLoc()));
   Results.push_back(DAG.getUNDEF(VT));
   // A constrained conversion also passes its input chain through.
@@ -718,12 +747,52 @@ SDValue MSILTargetLowering::LowerCopyToReg(SDValue Op,
 
 SDValue MSILTargetLowering::LowerGlobalAddress(SDValue Op,
                                                SelectionDAG &DAG) const {
-  reportFatalUsageError("MSIL: global addresses are implemented in M8");
+  SDLoc DL(Op);
+  const auto *GA = cast<GlobalAddressSDNode>(Op);
+  const GlobalValue *GV = GA->getGlobal();
+  EVT VT = Op.getValueType();
+  assert(GA->getTargetFlags() == 0 && "MSIL doesn't set target flags");
+
+  // A function used as a value: 'ldftn' of its method, or of its P/Invoke
+  // declaration when it is not defined in this module. ldftn takes no offset
+  // (isOffsetFoldingLegal), so one that SelectionDAG built anyway is added.
+  if (isa<Function>(GV)) {
+    SDValue Addr = DAG.getNode(MSILISD::FUNC_ADDR, DL, VT,
+                               DAG.getTargetGlobalAddress(GV, DL, VT));
+    if (int64_t Offset = GA->getOffset())
+      Addr =
+          DAG.getNode(ISD::ADD, DL, VT, Addr, DAG.getConstant(Offset, DL, VT));
+    return Addr;
+  }
+
+  // MSILPrepareIR reports and erases every alias and ifunc; this is a
+  // backstop.
+  if (!isa<GlobalVariable>(GV)) {
+    std::string Msg = (Twine("the address of '") + GV->getName() +
+                       "' is not supported for MSIL")
+                          .str();
+    return LowerUnsupported(Op, DAG, Msg);
+  }
+
+  // A global variable lives in the data segment, and its address is in its
+  // initonly address field (decision D12): 'ldsfld', plus the offset into
+  // the global, which DAGCombiner folds into the operand
+  // (isOffsetFoldingLegal).
+  return DAG.getNode(MSILISD::DATA_ADDR, DL, VT,
+                     DAG.getTargetGlobalAddress(GV, DL, VT, GA->getOffset()));
 }
 
 SDValue MSILTargetLowering::LowerExternalSymbol(SDValue Op,
                                                 SelectionDAG &DAG) const {
-  reportFatalUsageError("MSIL: external symbols are implemented in M8");
+  // The address of a library function, as 'ldftn' of its P/Invoke
+  // declaration. SelectionDAG names library functions only as callees, which
+  // LowerCall turns into TargetExternalSymbols itself, applying the
+  // library-call policy, so no external symbol is expected here.
+  const auto *ES = cast<ExternalSymbolSDNode>(Op);
+  EVT VT = Op.getValueType();
+  assert(ES->getTargetFlags() == 0 && "MSIL doesn't set target flags");
+  return DAG.getNode(MSILISD::EXT_SYM, SDLoc(Op), VT,
+                     DAG.getTargetExternalSymbol(ES->getSymbol(), VT));
 }
 
 SDValue MSILTargetLowering::LowerBR_JT(SDValue Op, SelectionDAG &DAG) const {
@@ -990,7 +1059,9 @@ SDValue MSILTargetLowering::LowerFPTRUNC_ROUND(SDValue Op,
 }
 
 SDValue MSILTargetLowering::LowerFSINCOS(SDValue Op, SelectionDAG &DAG) const {
-  // FSIN and FCOS are LibCall, so this does not recombine them.
+  // sin and cos are Phase-1 imports, and sincos, which returns its results
+  // through memory, is not (decision D14). FSIN and FCOS are LibCall, so the
+  // legalizer does not merge them again.
   SDLoc DL(Op);
   EVT VT = Op.getValueType();
   SDValue Src = Op.getOperand(0);
@@ -998,32 +1069,6 @@ SDValue MSILTargetLowering::LowerFSINCOS(SDValue Op, SelectionDAG &DAG) const {
       {DAG.getNode(ISD::FSIN, DL, VT, Src, Op->getFlags()),
        DAG.getNode(ISD::FCOS, DL, VT, Src, Op->getFlags())},
       DL);
-}
-
-SDValue MSILTargetLowering::LowerFFREXP_FMODF(SDValue Op,
-                                              SelectionDAG &DAG) const {
-  // Report the libcall with LowerCall's text and go on with undefined
-  // results: the expansion would call it too, except for a float32 frexp
-  // where the C runtime has no frexpf, which it would expand inline instead.
-  EVT VT = Op.getValueType();
-  auto GetLibcall = [&](EVT T) {
-    return Op.getOpcode() == ISD::FFREXP ? RTLIB::getFREXP(T)
-                                         : RTLIB::getMODF(T);
-  };
-  RTLIB::Libcall LC = GetLibcall(VT);
-  // The MSVC C runtime has no frexpf: there the float32 call is the double
-  // function, as native clang calls it.
-  if (VT == MVT::f32 && getLibcallImpl(LC) == RTLIB::Unsupported)
-    LC = GetLibcall(MVT::f64);
-  const char *Name = getLibcallName(LC);
-  SDLoc DL(Op);
-  DAG.getContext()->diagnose(DiagnosticInfoUnsupported(
-      DAG.getMachineFunction().getFunction(),
-      Twine("runtime library call '") + (Name && *Name ? Name : "?") +
-          "' is not supported for MSIL yet",
-      DL.getDebugLoc()));
-  return DAG.getMergeValues(
-      {DAG.getUNDEF(VT), DAG.getUNDEF(Op->getValueType(1))}, DL);
 }
 
 SDValue MSILTargetLowering::LowerBF16Conversion(SDValue Op,

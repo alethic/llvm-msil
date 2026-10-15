@@ -799,6 +799,19 @@ jitall_cmd += env_args
 clang = getattr(config, "clang", None) or "clang-not-found"
 llc = lit.util.which("llc", config.llvm_tools_dir) or "llc-not-found"
 
+# %{msil_native_ldflags}: the libraries of the native link (the native-oracle
+# legs), placed after the source because GNU ld resolves a library only for
+# the inputs before it. It is -lm when the native triple is not Windows: the C
+# math functions are Phase-1 imports (D14), glibc keeps them in libm (not
+# libc), and the clang driver does not add -lm for C. It is empty for Windows
+# triples (MSVC and MinGW alike link ucrtbase or msvcrt, which hold the math
+# functions), and the composites then leave it out, so their expansion on
+# Windows is exactly what it was before (harness/pipeline checks the
+# arguments). update-expected.py builds its native command line by the same
+# rule.
+native_ldflags = "" if triple_os == "windows" else "-lm"
+native_link = " %{msil_native_ldflags}" if native_ldflags else ""
+
 
 def c_pipeline(level):
     """compile -> assemble -> verify -> force-JIT -> run and compare, at -<level>."""
@@ -811,8 +824,9 @@ def c_pipeline(level):
         f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {t}.dll"
     )
     cmd += (
-        f" %if msil-native-oracle %{{ && %clang_native %{{msil_cflags}} -{level} %s"
-        f" -o {t}.native.exe && %msil_exec --native --expect %S/%{{s:stem}}"
+        f" %if msil-native-oracle %{{ && %clang_native %{{msil_cflags}} -{level}"
+        f" %s{native_link} -o {t}.native.exe"
+        f" && %msil_exec --native --expect %S/%{{s:stem}}"
         f" --out {t}.native.out {t}.native.exe %}}"
     )
     cmd += (
@@ -835,8 +849,9 @@ def ll_pipeline(level):
         f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {t}.dll"
     )
     cmd += (
-        f" %if msil-native-oracle %{{ && %clang_native -Wno-override-module -{level} %s"
-        f" -o {t}.native.exe && %msil_exec --native --expect %S/%{{s:stem}}"
+        f" %if msil-native-oracle %{{ && %clang_native -Wno-override-module -{level}"
+        f" %s{native_link} -o {t}.native.exe"
+        f" && %msil_exec --native --expect %S/%{{s:stem}}"
         f" --out {t}.native.out {t}.native.exe %}}"
     )
     cmd += (
@@ -863,6 +878,8 @@ substitutions = [
     # triples keep the implicit return (isMSVCRTEntryPoint), natively and for
     # MSIL alike. Directories may replace this (hosted C in phase 3).
     ("%{msil_cflags}", "-ffreestanding -Werror=return-type -I" + quote(inputs_dir)),
+    # -lm for non-Windows native triples, else empty (see native_ldflags).
+    ("%{msil_native_ldflags}", native_ldflags),
     ("%msil_triple", msil_triple),
     ("%clang_msil", "%s --target=%s" % (quote(clang), msil_triple)),
     ("%clang_native", "%s --target=%s" % (quote(clang), native_triple)),

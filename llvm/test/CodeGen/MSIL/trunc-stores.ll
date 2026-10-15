@@ -233,28 +233,28 @@ define void @trunc_i128_to_i32(ptr %p, i128 %v) {
 ;--- half-trunc.ll
 source_filename = "trunc-stores-half.c"
 
-; ERR: error: {{.*}}in function fptrunc_f32_to_half void (ptr, float): runtime library call '__truncsfhf2' is not supported for MSIL yet{{$}}
+; ERR: error: {{.*}}in function fptrunc_f32_to_half void (ptr, float): runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
 define void @fptrunc_f32_to_half(ptr %p, float %v) {
   %t = fptrunc float %v to half
   store half %t, ptr %p
   ret void
 }
 
-; ERR: error: {{.*}}in function fptrunc_f64_to_half void (ptr, double): runtime library call '__truncdfhf2' is not supported for MSIL yet{{$}}
+; ERR: error: {{.*}}in function fptrunc_f64_to_half void (ptr, double): runtime helper '__truncdfhf2' is not available for MSIL yet (phase 3){{$}}
 define void @fptrunc_f64_to_half(ptr %p, double %v) {
   %t = fptrunc double %v to half
   store half %t, ptr %p
   ret void
 }
 
-; ERR: error: {{.*}}in function fptrunc_f32_to_bfloat void (ptr, float): runtime library call '__truncsfbf2' is not supported for MSIL yet{{$}}
+; ERR: error: {{.*}}in function fptrunc_f32_to_bfloat void (ptr, float): runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
 define void @fptrunc_f32_to_bfloat(ptr %p, float %v) {
   %t = fptrunc float %v to bfloat
   store bfloat %t, ptr %p
   ret void
 }
 
-; ERR: error: {{.*}}in function fptrunc_f64_to_bfloat void (ptr, double): runtime library call '__truncdfbf2' is not supported for MSIL yet{{$}}
+; ERR: error: {{.*}}in function fptrunc_f64_to_bfloat void (ptr, double): runtime helper '__truncdfbf2' is not available for MSIL yet (phase 3){{$}}
 define void @fptrunc_f64_to_bfloat(ptr %p, double %v) {
   %t = fptrunc double %v to bfloat
   store bfloat %t, ptr %p

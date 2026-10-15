@@ -25,11 +25,21 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
+#include "llvm/CodeGen/Register.h"
+#include "llvm/CodeGen/TargetRegisterInfo.h"
+#include "llvm/CodeGen/TargetSubtargetInfo.h"
+#include "llvm/CodeGenTypes/MachineValueType.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DataLayout.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
+#include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCRegister.h"
@@ -62,6 +72,61 @@ MSILMCInstLower::lowerFunctionOperand(const MachineOperand &MO) const {
   // token always matches the method.
   return MCOperand::createExpr(MSILMemberRefExpr::createMethod(
       MSIL::getILName(F, Printer.TM), &Printer.getSignature(F), Ctx));
+}
+
+MCOperand
+MSILMCInstLower::lowerExternalSymbolOperand(const MachineInstr &MI,
+                                            const MachineOperand &MO) const {
+  // External symbols are the callees of library calls, and their names are
+  // Phase-1 imports or diagnosed by LowerCall (decision D14). They have no IR
+  // function type, so the call itself spells the signature of the P/Invoke
+  // declaration that the module trailer emits for the symbol.
+  StringRef Name = MO.getSymbolName();
+  if (MO.getOffset() != 0)
+    reportFatalInternalError("MSIL: reference to external symbol '" + Name +
+                             "' with an offset");
+  if (MSIL::isCallDirect(MI.getOpcode()) && &MSIL::getCalleeOp(MI) == &MO) {
+    const MSIL::Signature &Sig =
+        Printer.noteExternalSymbol(Name, getCallSiteSignature(MI));
+    return MCOperand::createExpr(
+        MSILMemberRefExpr::createMethod(Name, &Sig, Ctx));
+  }
+
+  // SelectionDAG names library functions only as callees, which LowerCall
+  // turns into target symbols itself, so the address of one (FUNC_ADDR of a
+  // TargetExternalSymbol) has no signature to take it with. Report it and
+  // keep the output well formed.
+  const Function &F = MI.getMF()->getFunction();
+  F.getContext().diagnose(
+      DiagnosticInfoUnsupported(F,
+                                "the address of library function '" + Name +
+                                    "' is not supported for MSIL",
+                                MI.getDebugLoc()));
+  return MCOperand::createExpr(MSILMemberRefExpr::createMethod(
+      Name, &Printer.internSignature(MSIL::Signature()), Ctx));
+}
+
+MSIL::Signature MSILMCInstLower::getCallSiteSignature(const MachineInstr &MI) {
+  const MachineFunction &MF = *MI.getMF();
+  const MachineRegisterInfo &MRI = MF.getRegInfo();
+  const TargetRegisterInfo &TRI = *MF.getSubtarget().getRegisterInfo();
+  unsigned PointerSizeInBits = MF.getDataLayout().getPointerSizeInBits();
+  MSIL::Signature Sig;
+  for (const MachineOperand &MO : MI.explicit_operands()) {
+    if (!MO.isReg())
+      continue;
+    Register Reg = MO.getReg();
+    const TargetRegisterClass *RC = Reg.isVirtual()
+                                        ? MRI.getRegClass(Reg)
+                                        : TRI.getMinimalPhysRegClass(Reg);
+    MSIL::ValType T =
+        MSIL::toValType(*TRI.legalclasstypes_begin(*RC), PointerSizeInBits);
+    if (MO.isDef())
+      Sig.Results.push_back(T);
+    else
+      Sig.Params.push_back(T);
+  }
+  return Sig;
 }
 
 void MSILMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
@@ -126,18 +191,31 @@ void MSILMCInstLower::lower(const MachineInstr *MI, MCInst &OutMI) const {
       break;
     case MachineOperand::MO_GlobalAddress: {
       const GlobalValue *GV = MO.getGlobal();
-      // The callee of a direct 'call' (and from M8 the target of 'ldftn').
+      // The callee of a direct 'call', or the target of 'ldftn' (FUNC_ADDR).
       if (isa<Function>(GV)) {
         MCOp = lowerFunctionOperand(MO);
         break;
       }
-      reportFatalUsageError("MSIL: references to global variables ('" +
-                            MSIL::getILName(*GV, Printer.TM) +
-                            "') are implemented in M8");
+      // GLOBAL_ADDR: the global's address field (decision D12), which the
+      // module initializer sets, plus the offset that ISel folded into the
+      // address (MSILInstPrinter prints the 'ldc.i4 <offset>; add'). A
+      // variable that holds no program data (llvm.used, a variable in the
+      // llvm.metadata section) has no field, and one that this module does
+      // not define is an error, reported at the end of the module, where it
+      // still gets a field.
+      if (const auto *GVar = dyn_cast<GlobalVariable>(GV)) {
+        if (MSIL::isSpecialLLVMGlobal(*GVar))
+          Printer.noteNonDataGlobal(*GVar);
+        else if (GVar->isDeclarationForLinker())
+          Printer.noteExternGlobal(*GVar);
+      }
+      MCOp = MCOperand::createExpr(MSILMemberRefExpr::createField(
+          MSIL::getILName(*GV, Printer.TM), MO.getOffset(), Ctx));
+      break;
     }
     case MachineOperand::MO_ExternalSymbol:
-      reportFatalUsageError(Twine("MSIL: references to external symbols ('") +
-                            MO.getSymbolName() + "') are implemented in M8");
+      MCOp = lowerExternalSymbolOperand(*MI, MO);
+      break;
     }
 
     OutMI.addOperand(MCOp);

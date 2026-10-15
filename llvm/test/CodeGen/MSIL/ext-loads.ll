@@ -266,28 +266,28 @@ define double @fpext_f32_to_f64(ptr %p) {
 ;--- half-ext.ll
 source_filename = "ext-loads-half.c"
 
-; ERR: error: {{.*}}in function fpext_half_to_f32 float (ptr): runtime library call '__extendhfsf2' is not supported for MSIL yet{{$}}
+; ERR: error: {{.*}}in function fpext_half_to_f32 float (ptr): runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
 define float @fpext_half_to_f32(ptr %p) {
   %v = load half, ptr %p
   %e = fpext half %v to float
   ret float %e
 }
 
-; ERR: error: {{.*}}in function fpext_half_to_f64 double (ptr): runtime library call '__extendhfsf2' is not supported for MSIL yet{{$}}
+; ERR: error: {{.*}}in function fpext_half_to_f64 double (ptr): runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
 define double @fpext_half_to_f64(ptr %p) {
   %v = load half, ptr %p
   %e = fpext half %v to double
   ret double %e
 }
 
-; ERR: error: {{.*}}in function fpext_bfloat_to_f32 float (ptr): runtime library call '__extendbfsf2' is not supported for MSIL yet{{$}}
+; ERR: error: {{.*}}in function fpext_bfloat_to_f32 float (ptr): runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3){{$}}
 define float @fpext_bfloat_to_f32(ptr %p) {
   %v = load bfloat, ptr %p
   %e = fpext bfloat %v to float
   ret float %e
 }
 
-; ERR: error: {{.*}}in function fpext_bfloat_to_f64 double (ptr): runtime library call '__extendbfsf2' is not supported for MSIL yet{{$}}
+; ERR: error: {{.*}}in function fpext_bfloat_to_f64 double (ptr): runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3){{$}}
 define double @fpext_bfloat_to_f64(ptr %p) {
   %v = load bfloat, ptr %p
   %e = fpext bfloat %v to double

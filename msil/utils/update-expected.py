@@ -16,13 +16,18 @@ the host triple (default <build>/bin/clang, where <build> is $MSIL_BUILD_DIR
 or <repo>/build), at --opt (default -O0), with the flags of %{msil_cflags}
 (-ffreestanding -Werror=return-type -I msil/test/Inputs; -ffreestanding turns
 off main's implicit 'return 0' except on MSVCRT triples, so falling off main
-is a compile error on Linux triples). It
-runs through 'msil-run.py --native', so the transcript format, the private
-directory, the timeout and the memory cap are those of the lit tests. .ll
-tests are compiled with -Wno-override-module instead of the C flags. The
-transcript newline rule of msil-run.py (every run of CRs before an LF becomes
-one LF) applies to what is written and, with --check, to the .expected file
-read, so a file that passes --check also passes the lit test.
+is a compile error on Linux triples). .ll tests are compiled with
+-Wno-override-module instead of the C flags. When --target is not a Windows
+triple, -lm follows the source, as %{msil_native_ldflags} does: glibc keeps
+the C math library, a Phase-1 import (plan D14), out of libc, and clang does
+not add -lm for C; MSVC and MinGW triples link ucrtbase or msvcrt, which hold
+it. These are the command lines of the native-oracle legs of %{msil_c} and
+%{msil_ll}. The program runs through 'msil-run.py --native', so the
+transcript format, the private directory, the timeout and the memory cap are
+those of the lit tests. The transcript newline rule of msil-run.py (every run
+of CRs before an LF becomes one LF) applies to what is written and, with
+--check, to the .expected file read, so a file that passes --check also
+passes the lit test.
 
 Exit statuses outside 0..255 are refused (plan D37): Linux truncates them, so
 such a test would pass on one OS by accident. Nothing is written for them, and
@@ -82,6 +87,11 @@ def default_target():
     return {"Windows": arch + "-pc-windows-msvc", "Darwin": arch + "-apple-darwin"}.get(
         platform.system(), arch + "-unknown-linux-gnu"
     )
+
+
+def is_windows_triple(triple):
+    """The rule of lit.cfg.py's msil-triple-windows: MSVC and MinGW triples."""
+    return "windows" in triple.split("-")
 
 
 def default_clang():
@@ -162,6 +172,7 @@ def main():
             file=sys.stderr,
         )
     osname = msil_run.host_os()
+    native_ldflags = [] if is_windows_triple(args.target) else ["-lm"]
     env = dict(os.environ)
     failures = 0
     with tempfile.TemporaryDirectory(prefix="msil-update-expected-") as tmp:
@@ -175,13 +186,14 @@ def main():
                 continue
             exe = os.path.join(tmp, os.path.basename(stem) + ".exe")
             # The same command lines as the native-oracle legs of %{msil_c} and
-            # %{msil_ll} in msil/test/lit.cfg.py.
+            # %{msil_ll} in msil/test/lit.cfg.py, %{msil_native_ldflags}
+            # included.
             cc = [args.clang, "--target=" + args.target, args.opt]
             if src.endswith(".ll"):
                 cc.append("-Wno-override-module")
             else:
                 cc += args.cflags.split() + ["-I", os.path.join(TEST_ROOT, "Inputs")]
-            cc += [src, "-o", exe]
+            cc += [src, *native_ldflags, "-o", exe]
             try:
                 res = msil_run.run_limited(
                     cc, None, env, args.timeout * 10, args.mem_limit_mb

@@ -94,13 +94,15 @@ generated `build/tools/msil/test/lit.site.cfg.py`. At configuration time
    `<name>.windows.expected` / `<name>.linux.expected` is the only exception
    and carries a comment in the test explaining it.
 
-Rules (plan 5.5, D32, D37): UB-free C11 that behaves the same natively at
-every level; `main` always returns explicitly (`-ffreestanding` turns off its
-implicit `return 0` on Linux triples, and `-Werror=return-type` makes falling
-off it an error there; MSVCRT triples keep the implicit return); the exit
-status is 0..255 (bitmasks use at most 8 bits, checksums are masked with
+Rules (plan 5.5, D14, D32, D37): UB-free C11 that behaves the same natively
+at every level; `main` always returns explicitly (`-ffreestanding` turns off
+its implicit `return 0` on Linux triples, and `-Werror=return-type` makes
+falling off it an error there; MSVCRT triples keep the implicit return); the
+exit status is 0..255 (bitmasks use at most 8 bits, checksums are masked with
 `& 0xff`); no `long`, `long double`, varargs, printing of addresses or of
-floating-point values; no library call beyond `puts`, through `msil_test.h`.
+floating-point values; no library calls other than the Phase-1 imports (D14:
+`puts`, `putchar` and the C math library; `M1/06-output/` tests them), and
+output goes through `msil_test.h`.
 Respect the capability table of plan 5.5: before M6 there are no branches, so
 tests accumulate results with `MSIL_CHECK(acc, bit, cond)` and `return acc;`;
 `MSIL_EXPECT(cond)` needs M6; the `put_*` helpers need M8.
@@ -146,9 +148,12 @@ Substitutions: `%msil_triple`, `%clang_msil`, `%llc_msil`, `%clang_native`,
 found), `%msil_jitall` (msil-jitall.py, with `--runner wsl` under
 `msil_runner=wsl`),
 `%msil_inputs`, `%{msil_cflags}` (`-ffreestanding -Werror=return-type
--I msil/test/Inputs`), `%{msil_c}`, `%{msil_ll}`, `%{msil_c_O0}` ..
-`%{msil_c_Oz}` and `%{msil_ll_O0}` .. `%{msil_ll_O3}`. Everything works in
-lit's internal shell.
+-I msil/test/Inputs`), `%{msil_native_ldflags}` (`-lm` when the native triple
+is not Windows, else empty: glibc keeps the C math library out of libc and
+clang does not add `-lm` for C; the native-oracle legs put it after the
+source, and `update-expected.py` follows the same rule), `%{msil_c}`,
+`%{msil_ll}`, `%{msil_c_O0}` .. `%{msil_c_Oz}` and `%{msil_ll_O0}` ..
+`%{msil_ll_O3}`. Everything works in lit's internal shell.
 
 ## Transcripts
 

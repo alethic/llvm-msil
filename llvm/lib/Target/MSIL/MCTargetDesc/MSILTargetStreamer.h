@@ -70,8 +70,12 @@ public:
   /// of that type placed at the blob.
   virtual void emitDataImage(StringRef TypeName, StringRef FieldName,
                              StringRef Label, ArrayRef<uint8_t> Bytes) = 0;
-  /// .field <access> static initonly native int '<Name>': a global's address.
-  virtual void emitAddressField(StringRef Name, bool Public) = 0;
+  /// .field <access> static initonly native int '<Name>': the address of a
+  /// global variable, 'public' if \p Public (non-local linkage) and
+  /// 'assembly' otherwise, or 'private' if \p Generated (the base of the data
+  /// segment, which the compiler generates).
+  virtual void emitAddressField(StringRef Name, bool Public,
+                                bool Generated = false) = 0;
   /// One line of text, verbatim (synthesized methods such as the module
   /// initializer and the entry point, and section comments).
   virtual void emitILLine(const Twine &Line) = 0;
@@ -99,7 +103,7 @@ public:
                    StringRef Entry) override;
   void emitDataImage(StringRef TypeName, StringRef FieldName, StringRef Label,
                      ArrayRef<uint8_t> Bytes) override;
-  void emitAddressField(StringRef Name, bool Public) override;
+  void emitAddressField(StringRef Name, bool Public, bool Generated) override;
   void emitILLine(const Twine &Line) override;
 };
 
@@ -119,7 +123,7 @@ public:
   void emitPInvoke(const MSILMethodDecl &, StringRef, StringRef) override {}
   void emitDataImage(StringRef, StringRef, StringRef,
                      ArrayRef<uint8_t>) override {}
-  void emitAddressField(StringRef, bool) override {}
+  void emitAddressField(StringRef, bool, bool) override {}
   void emitILLine(const Twine &) override {}
 };
 

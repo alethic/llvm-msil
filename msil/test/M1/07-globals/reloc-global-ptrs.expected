@@ -1,0 +1,14 @@
+scalars ok
+writes ok
+list ok
+low
+3
+mid
+315
+high
+24
+empty
+0
+tables ok
+functions ok
+[exit 0]

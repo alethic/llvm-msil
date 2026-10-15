@@ -1,0 +1,85 @@
+round=1
+arr=3607554180
+partial=3926696504
+lls[1]=1099511627776
+lls[3]=9223372036854775807
+bytes=280927351603710
+ds*1000=8750
+sparse=4079049372
+sparse[100]=6
+pts=6541
+tag=120
+s=-2
+i=100000
+ll=-5
+d*1000=500
+record
+nested=9765
+nested
+a char array initialized from a string literal
+sizeof text=47
+short
+sized zero tail=27
+lookup=100
+modified arr=687413116
+modified partial=3926696604
+A char array initialized from a string literal
+short!
+Record
+round=2
+arr=3607554180
+partial=3926696504
+lls[1]=1099511627776
+lls[3]=9223372036854775807
+bytes=280927351603710
+ds*1000=8750
+sparse=4079049372
+sparse[100]=6
+pts=6541
+tag=120
+s=-2
+i=100000
+ll=-5
+d*1000=500
+record
+nested=9765
+nested
+a char array initialized from a string literal
+sizeof text=47
+short
+sized zero tail=27
+lookup=110
+modified arr=1374826232
+modified partial=3926696604
+A char array initialized from a string literal
+short!
+Record
+round=3
+arr=3607554180
+partial=3926696504
+lls[1]=1099511627776
+lls[3]=9223372036854775807
+bytes=280927351603710
+ds*1000=8750
+sparse=4079049372
+sparse[100]=6
+pts=6541
+tag=120
+s=-2
+i=100000
+ll=-5
+d*1000=500
+record
+nested=9765
+nested
+a char array initialized from a string literal
+sizeof text=47
+short
+sized zero tail=27
+lookup=120
+modified arr=2062239348
+modified partial=3926696604
+A char array initialized from a string literal
+short!
+Record
+[exit 60]

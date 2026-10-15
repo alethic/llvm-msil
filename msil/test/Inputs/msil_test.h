@@ -7,12 +7,12 @@
 |*                                                                            *|
 |*===----------------------------------------------------------------------===*|
 |*                                                                            *|
-|* Milestone-1 programs are freestanding C: the only import is puts          *|
-|* (Design.md section 12), so all output goes through the put_* helpers, one  *|
-|* value per line. Everything is static inline so each test stays a single   *|
-|* translation unit without unused-function warnings. The same source is     *|
-|* also built natively (the oracle), so nothing here may depend on the MSIL  *|
-|* target.                                                                    *|
+|* Milestone-1 programs are freestanding C. Output goes through puts: the     *|
+|* put_* helpers print one value per line. The Phase-1 imports (plan D14) are *|
+|* puts, putchar and the C math library. Everything is static inline so each  *|
+|* test stays a single translation unit without unused-function warnings. The *|
+|* same source is also built natively (the oracle), so nothing here may       *|
+|* depend on the MSIL target.                                                 *|
 |*                                                                            *|
 |* Exit statuses must stay in 0..255 on every OS (plan D37): Linux keeps only *|
 |* the low 8 bits, and msil-run.py rejects anything else.                     *|

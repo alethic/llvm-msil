@@ -12,16 +12,21 @@
 ; memory order is passed as its C ABI value (seq_cst 5, release 3, acquire 2).
 ; The compare-exchange helper takes the expected value, and the generic load
 ; returns the loaded value, through a stack temporary, an ordinary frame object
-; since M7.b. The helpers are only declared, so the end of the module reports
-; "call to external function '<name>' needs P/Invoke support (M8)" once per
-; helper, in the order of first use (M4.c; decision D14 keeps the '__' library
-; calls, the __atomic_* helpers included, errors until phase 3).
+; since M7.b. AtomicExpand declares the helpers as functions and calls them
+; directly, so they are undefined functions of the module, and none of them is
+; a Phase-1 import (decision D14 keeps the '__' library functions, the
+; __atomic_* helpers included, errors until phase 3): the end of the module
+; reports each helper once (M8.c),
+;   undefined function '<name>' is not defined in this module and is not a
+;   Phase-1 import (puts, putchar, the C math library, msil-import-module);
+;   Phase 1 has no linker
+; and declares no P/Invoke for it.
 ;
-; Every error is checked with its whole text, in function order, and no other
-; error or warning is allowed (--implicit-check-not), so a doubled, a missing
-; or a different diagnostic fails; llc exits with 1 and prints neither
-; 'LLVM ERROR' nor a crash report. Each function is diagnosed at -O0 and -O2
-; on both triples.
+; Every error is checked with its whole text; the errors are matched as a
+; group (their order is not pinned) and a second FileCheck run counts them and
+; bans any other error, warning, 'LLVM ERROR' or crash report, so a doubled, a
+; missing or a different diagnostic fails; llc exits with 1. Each function is
+; diagnosed at -O0 and -O2 on both triples.
 ;
 ; llc deletes its -o file after an error, so the IL is taken from stdout, at
 ; -O0 and -O2 on both triples. Each helper call gets the atomic operand's
@@ -32,37 +37,46 @@
 ; two calls passes through a local. A raised maximum atomic size would either
 ; stop instruction selection at an atomic node or, with ATOMIC_LOAD and
 ; ATOMIC_STORE patterns, select plain ldind and stind; both fail here. As in
-; call-errors.ll (part AVAIL), whose calls of declared functions are built too,
-; the IL is not assembled: ilasm rejects every call of a helper the module does
-; not define ('unresolved global member ref').
-;
-; Later owner (section 12): M8.d updates the expected diagnostics when M8
-; replaces the P/Invoke text.
+; call-errors.ll (part AVAIL), whose calls of undefined functions are built
+; too, the IL is not assembled: ilasm rejects every call of a helper the module
+; does not define ('unresolved global member ref'), and no pinvokeimpl
+; declares one.
 
 ; DEFINE: %{diag} = FileCheck %s --check-prefix=ERR --implicit-check-not="LLVM ERROR" \
-; DEFINE:   --implicit-check-not="PLEASE submit" --implicit-check-not=error: --implicit-check-not=warning:
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %s -o /dev/null 2>&1 | %{diag}
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %s -o /dev/null 2>&1 | %{diag}
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %s -o /dev/null 2>&1 \
-; RUN:   | %{diag}
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %s -o /dev/null 2>&1 \
-; RUN:   | %{diag}
+; DEFINE:   --implicit-check-not="PLEASE submit" --implicit-check-not=warning:
+; DEFINE: %{count} = FileCheck %s --check-prefix=NERR --implicit-check-not="LLVM ERROR" \
+; DEFINE:   --implicit-check-not="PLEASE submit" --implicit-check-not=warning:
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %s -o /dev/null 2> %t.lnx.o2.err
+; RUN: %{diag} --input-file=%t.lnx.o2.err
+; RUN: %{count} --input-file=%t.lnx.o2.err
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %s -o /dev/null 2> %t.win.o2.err
+; RUN: %{diag} --input-file=%t.win.o2.err
+; RUN: %{count} --input-file=%t.win.o2.err
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %s -o /dev/null 2> %t.lnx.o0.err
+; RUN: %{diag} --input-file=%t.lnx.o0.err
+; RUN: %{count} --input-file=%t.lnx.o0.err
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %s -o /dev/null 2> %t.win.o0.err
+; RUN: %{diag} --input-file=%t.win.o0.err
+; RUN: %{count} --input-file=%t.win.o0.err
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   > %t.lnx.o2.il
-; RUN: FileCheck %s --check-prefix=IL --input-file=%t.lnx.o2.il
+; RUN: FileCheck %s --check-prefix=IL --implicit-check-not=pinvokeimpl --input-file=%t.lnx.o2.il
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   > %t.win.o2.il
-; RUN: FileCheck %s --check-prefix=IL --input-file=%t.win.o2.il
+; RUN: FileCheck %s --check-prefix=IL --implicit-check-not=pinvokeimpl --input-file=%t.win.o2.il
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   > %t.lnx.o0.il
-; RUN: FileCheck %s --check-prefix=IL --input-file=%t.lnx.o0.il
+; RUN: FileCheck %s --check-prefix=IL --implicit-check-not=pinvokeimpl --input-file=%t.lnx.o0.il
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   > %t.win.o0.il
-; RUN: FileCheck %s --check-prefix=IL --input-file=%t.win.o0.il
+; RUN: FileCheck %s --check-prefix=IL --implicit-check-not=pinvokeimpl --input-file=%t.win.o0.il
 
 source_filename = "atomic-errors.c"
 
-; ERR: {{^}}error: call to external function '__atomic_load_4' needs P/Invoke support (M8){{$}}
+; NERR-COUNT-6: {{^}}error:
+; NERR-NOT:     {{^}}error:
+
+; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_load_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 ; IL-LABEL: .method {{.*}}'aload'(
 ; IL-SAME:  native int) cil managed{{$}}
 ; IL-NEXT:  {{^\{$}}
@@ -77,7 +91,7 @@ define i32 @aload(ptr %p) {
   ret i32 %v
 }
 
-; ERR: {{^}}error: call to external function '__atomic_store_4' needs P/Invoke support (M8){{$}}
+; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_store_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 ; IL-LABEL: .method {{.*}}'astore'(
 ; IL-SAME:  native int, int32) cil managed{{$}}
 ; IL-NEXT:  {{^\{$}}
@@ -93,7 +107,7 @@ define void @astore(ptr %p, i32 %v) {
   ret void
 }
 
-; ERR: {{^}}error: call to external function '__atomic_fetch_add_4' needs P/Invoke support (M8){{$}}
+; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_fetch_add_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 ; IL-LABEL: .method {{.*}}'armw'(
 ; IL-SAME:  native int, int32) cil managed{{$}}
 ; IL-NEXT:  {{^\{$}}
@@ -111,7 +125,7 @@ define i32 @armw(ptr %p, i32 %v) {
 
 ; The expected value goes to the frame temporary, whose address is the second
 ; argument; the old value is read back from it after the call.
-; ERR: {{^}}error: call to external function '__atomic_compare_exchange_4' needs P/Invoke support (M8){{$}}
+; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_compare_exchange_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 ; IL-LABEL: .method {{.*}}'acas'(
 ; IL-SAME:  native int, int32, int32) cil managed{{$}}
 ; IL:       {{^}}  localloc{{$}}
@@ -150,7 +164,7 @@ define i32 @acas(ptr %p, i32 %e, i32 %n) {
 ; Under-aligned: the generic helper gets the size (native int 4), the operand,
 ; the address of the frame temporary that receives the value, and the order;
 ; the value is then read from the temporary.
-; ERR: {{^}}error: call to external function '__atomic_load' needs P/Invoke support (M8){{$}}
+; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_load' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 ; IL-LABEL: .method {{.*}}'aload_unaligned'(
 ; IL-SAME:  native int) cil managed{{$}}
 ; IL:       {{^}}  localloc{{$}}
@@ -177,7 +191,7 @@ define i32 @aload_unaligned(ptr %p) {
   ret i32 %v
 }
 
-; ERR: {{^}}error: call to external function '__atomic_load_8' needs P/Invoke support (M8){{$}}
+; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_load_8' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 ; IL-LABEL: .method {{.*}}'aload_i64'(
 ; IL-SAME:  native int) cil managed{{$}}
 ; IL-NEXT:  {{^\{$}}

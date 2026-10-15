@@ -1,13 +1,19 @@
-// The compiler half of the fake native toolchain of exit-range.test
-// (fake-native-<N>.il), assembled together with each of them. It checks the
-// command line that update-expected.py gives the oracle compiler against
-// plan M0.b items (6) and (8), as the native-oracle legs of %{msil_c} and
-// %{msil_ll} build it:
+// The compiler half of the fake native toolchain of exit-range.test and
+// update-expected-native-ldflags.test (fake-native-<N>.il), assembled
+// together with each of them. It checks the command line that
+// update-expected.py gives the oracle compiler against plan M0.b items (6)
+// and (8), as the native-oracle legs of %{msil_c} and %{msil_ll} build it:
 //   one source file, '-o <exe>' and a native '--target=<triple>' (not an
 //   -msil triple);
 //   a .c source: -ffreestanding, -Werror=return-type and an -I directory
 //   (either '-I <dir>' or '-I<dir>') that holds msil_test.h (%{msil_cflags});
-//   a .ll source: -Wno-override-module.
+//   a .ll source: -Wno-override-module;
+//   the native link (%{msil_native_ldflags}): for a --target that is not a
+//   Windows triple, -lm after the source file (GNU ld resolves a library
+//   only for the inputs before it; glibc keeps the C math library, a Phase-1
+//   import of plan D14, out of libc); for a Windows triple (MSVC or MinGW:
+//   'windows' is one of its dash-separated parts, the rule of lit.cfg.py's
+//   msil-triple-windows), no -lm anywhere.
 // Other options (-O<level>) are accepted. On a mismatch it prints what is
 // wrong and the command line to stderr and exits with 1; otherwise it
 // "compiles" by copying itself to <exe>. update-expected.py runs the
@@ -30,7 +36,7 @@
   .locals init (int32 i, string arg, string target, string output,
                 string source, int32 sources, bool freestanding,
                 bool returntype, bool include, bool nooverride,
-                string problem)
+                bool libm, bool libmfirst, string problem)
   ldc.i4.0
   stloc i
 @LOOP:
@@ -134,6 +140,19 @@
   stloc nooverride
   br @NEXT
 @NOT_NOOVERRIDE:
+  // -lm, and whether a source file comes after it (checked below).
+  ldloc arg
+  ldstr "-lm"
+  call bool [mscorlib]System.String::op_Equality(string, string)
+  brfalse @NOT_LIBM
+  ldc.i4.1
+  stloc libm
+  ldloc sources
+  brtrue @NEXT
+  ldc.i4.1
+  stloc libmfirst
+  br @NEXT
+@NOT_LIBM:
   // Any other option is accepted; anything else is a source file.
   ldloc arg
   ldstr "-"
@@ -184,6 +203,33 @@
   stloc problem
   br @FAIL
 @NATIVE_TARGET:
+  // %{msil_native_ldflags}: a Windows triple has 'windows' as one of its
+  // dash-separated parts, so '-<triple>-' contains '-windows-'.
+  ldstr "-"
+  ldloc target
+  ldstr "-"
+  call string [mscorlib]System.String::Concat(string, string, string)
+  ldstr "-windows-"
+  callvirt instance bool [mscorlib]System.String::Contains(string)
+  brfalse @NOT_WINDOWS
+  ldloc libm
+  brfalse @SOURCE_KIND
+  ldstr "-lm with a Windows --target (%{msil_native_ldflags} is empty for it)"
+  stloc problem
+  br @FAIL
+@NOT_WINDOWS:
+  ldloc libm
+  brtrue @HAS_LIBM
+  ldstr "a non-Windows --target without -lm after the source (%{msil_native_ldflags})"
+  stloc problem
+  br @FAIL
+@HAS_LIBM:
+  ldloc libmfirst
+  brfalse @SOURCE_KIND
+  ldstr "-lm before the source file (%{msil_native_ldflags} follows it)"
+  stloc problem
+  br @FAIL
+@SOURCE_KIND:
   ldloc source
   ldstr ".ll"
   callvirt instance bool [mscorlib]System.String::EndsWith(string)

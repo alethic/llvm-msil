@@ -104,7 +104,11 @@ private:
   /// they return their dummy results silently, so that one VLA gives one
   /// error.
   SDValue LowerStackSaveRestore(SDValue Op, SelectionDAG &DAG) const;
+  /// Wraps the address of a global variable in MSILISD::DATA_ADDR (its
+  /// address field plus the offset, decision D12) and the address of a
+  /// function in MSILISD::FUNC_ADDR (ldftn).
   SDValue LowerGlobalAddress(SDValue Op, SelectionDAG &DAG) const;
+  /// Wraps the address of a library function in MSILISD::EXT_SYM (ldftn).
   SDValue LowerExternalSymbol(SDValue Op, SelectionDAG &DAG) const;
   SDValue LowerBR_JT(SDValue Op, SelectionDAG &DAG) const;
   /// Expands SHL_PARTS, SRA_PARTS and SRL_PARTS (i128 shifts by a variable
@@ -131,12 +135,9 @@ private:
   /// Lowers FPTRUNC_ROUND to conv.r4 when it rounds to nearest, and diagnoses
   /// any other rounding mode.
   SDValue LowerFPTRUNC_ROUND(SDValue Op, SelectionDAG &DAG) const;
-  /// Splits FSINCOS into FSIN and FCOS, so that no sincos call needs memory
-  /// for its results.
+  /// Splits FSINCOS into FSIN and FCOS: sincos is not a Phase-1 import
+  /// (decision D14), and sin and cos are.
   SDValue LowerFSINCOS(SDValue Op, SelectionDAG &DAG) const;
-  /// Diagnoses the frexp and modf libcalls, which return a result through
-  /// memory, without building them.
-  SDValue LowerFFREXP_FMODF(SDValue Op, SelectionDAG &DAG) const;
   /// Converts between bf16 and f32/f64 through the compiler-rt helpers, as f16
   /// does, instead of the generic expansions' bitcasts through memory.
   SDValue LowerBF16Conversion(SDValue Op, SelectionDAG &DAG) const;

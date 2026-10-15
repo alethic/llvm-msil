@@ -1,0 +1,47 @@
+crc32
+0xcbf43926
+crc_low=54478
+popcount
+pop(0)=0
+pop(0xffffffff)=32
+pop(0x12345678)=13
+table2d
+0xfffffffefffdfffc
+row sum=-10
+0x6400c8012c0190
+row sum=1000
+0x80007fff00000001
+row sum=0
+scales
+scale*1000=1
+scale*1000=500
+scale*1000=2000
+scale*1000=1024000
+scale*1000=-3250
+pow3
+pow3=1
+pow3=2187
+pow3=4782969
+pow3=10460353203
+pow3=22876792454961
+pow3=50031545098999707
+pow3[last]=4052555153018976267
+pow3 consistent=1
+ops
+op=43010002
+code=4294967297
+op=45010002
+code=8589934594
+op=42020002
+code=12884901891
+op=47020002
+code=17179869188
+op=126030001
+code=-5
+op=33030001
+code=-6
+strings
+vowels=12
+MCMXCIV=1994
+MMXXVI=2026
+[exit 55]

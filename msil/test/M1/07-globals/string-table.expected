@@ -1,0 +1,73 @@
+names
+delta
+alpha
+echo
+charlie
+bravo
+golf
+india
+hotel
+foxtrot
+juliett
+kilo
+alpha
+lima
+mike
+sorted
+alpha
+alpha
+bravo
+charlie
+delta
+echo
+foxtrot
+golf
+hotel
+india
+juliett
+kilo
+lima
+mike
+digits
+zero
+seven
+four
+one
+eight
+five
+two
+nine
+six
+three
+special
+
+tab	here
+quote " inside
+backslash \ inside
+apostrophe ' inside
+percent % and braces {}
+suffixes
+suffix
+56789
+
+entries
+one
+one=1
+the first entry
+two
+two=2
+the second entry
+three
+three=3
+the third entry
+zero
+zero=0
+an entry whose key is also in digits[]
+same text as digits[0]=1
+buffers
+buffer A
+buffer b
+c!
+A
+buffers[3] aliases buf_a=1
+[exit 196]
