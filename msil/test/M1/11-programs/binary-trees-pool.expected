@@ -1,0 +1,30 @@
+stretch tree depth=11
+check=4095
+trees=1024
+depth=4
+check=31744
+trees=256
+depth=6
+check=32512
+trees=64
+depth=8
+check=32704
+trees=16
+depth=10
+check=32752
+long lived tree depth=10
+check=2047
+pool high water=4095
+distinct keys=259
+height=15
+weighted sum=156167
+smallest:
+4 5 14 19 23 28 29 30 35 40 55 56
+largest:
+967 968 970 971 974 976 979 985 991 995 998 999
+even keys deleted=133
+height after=13
+smallest odd:
+5 19 23 29 35 55 63 65 87 89 91 95
+odd keys deleted=126
+[exit 170]

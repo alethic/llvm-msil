@@ -1,0 +1,15 @@
+crc32    crc32c   crc16 adler32  input
+cbf43926 e3069283 29b1  091e01de "123456789"
+00000000 00000000 ffff  00000001 ""
+e8b7be43 c1d04330 9d77  00620062 "a"
+352441c2 364b3fb7 514a  024d0127 "abc"
+adaac02e 2d0e3663 ec0f  11e60398 "Wikipedia"
+414fa339 22620404 8fdd  5bdc0fda "The quick brown fox jumps over the lazy dog"
+chunks=132
+buffer crc32, crc32c, adler32
+0xa4afb6e
+0x8da45b15
+0x2767f4f3
+0x2144df1c
+0x44bc07b7
+[exit 110]

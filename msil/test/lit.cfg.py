@@ -10,7 +10,10 @@
 # must equal the checked-in <stem>[.<os>].expected, which update-expected.py
 # generates from a native build. %{msil_c} and %{msil_ll} run that pipeline
 # once per level of --param msil_opt_levels; optional legs add a native-oracle
-# build (msil_native_oracle) and a .NET Framework run (msil_run_netfx).
+# build (msil_native_oracle), a .NET Framework run (msil_run_netfx) and an
+# ildasm -> ilasm round trip (msil_roundtrip); msil_wsl_ilasm assembles with
+# the Linux ilasm inside WSL. msil/utils/ci/lit-legs.ps1 and lit-legs.sh run
+# every leg of the milestone-1 gate (plan M10) with these parameters.
 #
 # Nothing here is fatal when a tool is absent: directories that need it mark
 # themselves UNSUPPORTED, so check-all keeps working everywhere. Exceptions:
@@ -19,18 +22,21 @@
 # (on Windows) PEVerify, ilasm or .NET runtime for the selected runner a
 # configuration error, even when an empty --param msil_<tool>= or
 # $MSIL_<TOOL> disabled it on purpose, so a gate never passes with its
-# verification or every harness test UNSUPPORTED; and an explicitly requested
-# runner, runtime, leg or tool that cannot be used is one too. msil-exec
-# (clang with the MSIL target) is never required here: it arrives in later
-# milestones, and its absence only makes M1/ UNSUPPORTED.
+# verification or every harness test UNSUPPORTED; --param msil_require_exec=1
+# (the gate legs of msil/utils/ci pass it) does the same for msil-exec, which
+# M1/ needs (clang with the MSIL target, ilasm and a .NET runtime; see
+# M1/lit.local.cfg); and an explicitly requested runner, runtime, leg or tool
+# that cannot be used is one too.
 
 import glob
 import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import lit.formats
 import lit.util
@@ -245,6 +251,12 @@ for o in opt_levels:
 if not opt_levels:
     fatal("--param msil_opt_levels is empty")
 
+# msil_require_exec=1: msil/test/M1/lit.local.cfg makes a missing msil-exec a
+# configuration error instead of UNSUPPORTED (the gate legs pass it).
+config.msil_require_exec = bool_param("msil_require_exec")
+roundtrip = bool_param("msil_roundtrip")  # see "round trip" below
+wsl_ilasm_param = params.get("msil_wsl_ilasm")  # see "Linux ilasm in WSL"
+
 # ---------------------------------------------------------------- the target
 for t in config.targets_to_build:
     features.add(t.lower() + "-registered-target")  # msil-registered-target
@@ -338,10 +350,8 @@ host_rid = {"Windows": "win", "Linux": "linux", "Darwin": "osx"}.get(
 _nuget_roots = None
 
 
-def nuget_tools(tool):
-    """runtime.<rid>.Microsoft.NETCore.<ILAsm|ILDAsm> (tool 'ilasm' or 'ildasm')
-    from the NuGet global-packages folder (the only ilasm and ildasm on Linux
-    and macOS), newest version first."""
+def nuget_roots():
+    """The NuGet global-packages folders to search, most specific first."""
     global _nuget_roots
     if _nuget_roots is None:
         _nuget_roots = [
@@ -361,22 +371,52 @@ def nuget_tools(tool):
             )
             if m:
                 _nuget_roots.insert(1, m.group(1))
+    unique = {}
+    for r in filter(None, _nuget_roots):
+        unique.setdefault(os.path.normcase(os.path.normpath(r)), r)
+    return list(unique.values())
+
+
+def nuget_tool_path(root, tool, rid, version):
+    # NuGet lower-cases package ids and versions in the global-packages folder.
+    return os.path.join(
+        root,
+        "runtime.%s.microsoft.netcore.%s" % (rid, tool),
+        version,
+        "runtimes",
+        rid,
+        "native",
+        tool + (".exe" if rid.startswith("win-") else ""),
+    )
+
+
+def nuget_tools(tool, rid=host_rid):
+    """runtime.<rid>.Microsoft.NETCore.<ILAsm|ILDAsm> (tool 'ilasm' or 'ildasm')
+    from the NuGet global-packages folder (the only ilasm and ildasm on Linux
+    and macOS), newest version first. rid defaults to the host's."""
     hits = []
-    for root in filter(None, _nuget_roots):
-        hits += glob.glob(
-            os.path.join(
-                root,
-                "runtime.%s.microsoft.netcore.%s" % (host_rid, tool),
-                "*",
-                "runtimes",
-                host_rid,
-                "native",
-                tool + exe_ext,
-            )
-        )
+    for root in nuget_roots():
+        hits += glob.glob(nuget_tool_path(root, tool, rid, "*"))
     return [
         h for h in sorted(set(hits), key=version_key, reverse=True) if is_runnable(h)
     ]
+
+
+def pinned_tools_version():
+    """MsilILAsmVersion of msil/utils/tools/msil-tools.proj: the ilasm and
+    ildasm version that the CI restores and the gate legs use (read the way
+    msil/utils/ci/ci-common.ps1 and msil-ci.yml read it; the project file is
+    the only place that sets it)."""
+    proj = os.path.join(utils_dir, "tools", "msil-tools.proj")
+    try:
+        with open(proj, encoding="utf-8") as f:
+            text = f.read()
+    except OSError as e:
+        fatal("cannot read %s: %s" % (proj, e))
+    m = re.search(r"<MsilILAsmVersion[^>]*>\s*([0-9.]+)\s*</MsilILAsmVersion>", text)
+    if not m:
+        fatal("cannot read MsilILAsmVersion from " + proj)
+    return m.group(1)
 
 
 def overridden(name):
@@ -449,7 +489,7 @@ if runner == "wsl":
     default_major = 10  # WSL runs .NET 10 (plan D22)
 else:
     exec_runtimes = local_runtimes
-    default_major = 8  # Design.md 7.1: net8.0 is the default profile
+    default_major = 8  # .NET 8 by default (plan D22)
 for major in exec_runtimes:
     features.add("dotnet-runtime-%d" % major)
 
@@ -479,6 +519,79 @@ if exec_major is not None and (runner == "wsl" or dotnet):
     note("programs run on Microsoft.NETCore.App %s" % exec_runtimes[exec_major][0])
 else:
     note("no usable .NET runtime; execution tests are UNSUPPORTED")
+
+# ---------------------------------------------------------------- Linux ilasm in WSL
+# --param msil_wsl_ilasm=PATH (with msil_runner=wsl; the Linux assembler leg
+# of plan M10): %ilasm runs this Linux ilasm, the NuGet package
+# runtime.linux-x64.Microsoft.NETCore.ILAsm that the Linux CI job uses, inside
+# WSL through 'msil-run.py --tool --runner wsl', which translates the paths
+# and runs an executable copy from a private Linux temporary directory. The
+# copy is a precaution: on WSL's default DrvFs mount (no 'metadata' option)
+# the ilasm runs in place, but a DrvFs mount with 'metadata' and a restrictive
+# fmask (or a package extracted without the execute bit) makes the original
+# non-executable. msil_wsl_ilasm=nuget takes the newest one in the NuGet
+# global-packages folder; an empty value leaves %ilasm on the host.
+# msil-verify.py's neutralized pass keeps reassembling with the host ilasm.
+wsl_ilasm = None
+if wsl_ilasm_param:
+    if runner != "wsl":
+        fatal("--param msil_wsl_ilasm needs --param msil_runner=wsl")
+    if wsl_ilasm_param.lower() == "nuget":
+        found = nuget_tools("ilasm", "linux-x64")
+        if not found:
+            fatal(
+                "msil_wsl_ilasm=nuget: no runtime.linux-x64.microsoft.netcore.ilasm "
+                "package found ('dotnet restore msil/utils/tools/msil-tools.proj "
+                "-p:MsilToolsRid=linux-x64' fetches it)"
+            )
+        wsl_ilasm = os.path.normpath(found[0])
+    else:
+        wsl_ilasm = os.path.abspath(wsl_ilasm_param)
+    if not os.path.isfile(wsl_ilasm):
+        fatal("--param msil_wsl_ilasm=%s: no such file" % wsl_ilasm_param)
+    # Fail here, not in every test, when it cannot assemble inside WSL (a
+    # missing libstdc++, say).
+    os.makedirs(config.test_exec_root, exist_ok=True)
+    probe_dir = tempfile.mkdtemp(prefix="msil-wsl-ilasm-", dir=config.test_exec_root)
+    try:
+        probe_il = os.path.join(probe_dir, "probe.il")
+        probe_dll = os.path.join(probe_dir, "probe.dll")
+        with open(probe_il, "w", encoding="utf-8", newline="\n") as f:
+            f.write(".assembly extern mscorlib {}\n.assembly probe {}\n")
+        rc, out = run_quietly(
+            [
+                config.python_executable,
+                os.path.join(utils_dir, "msil-run.py"),
+                "--tool",
+                "--runner",
+                "wsl",
+                "--wsl-distro",
+                wsl_distro,
+                "--timeout",
+                "%g" % timeout,
+                "--mem-limit-mb",
+                str(mem_limit_mb),
+                "--",
+                wsl_ilasm,
+                "-nologo",
+                "-quiet",
+                "-dll",
+                *ilasm_flags.split(),
+                "-output=" + probe_dll,
+                probe_il,
+            ],
+            timeout + 300,
+        )
+        assembled = rc == 0 and os.path.isfile(probe_dll)
+    finally:
+        shutil.rmtree(probe_dir, ignore_errors=True)
+    if not assembled:
+        fatal(
+            "--param msil_wsl_ilasm=%s cannot assemble inside WSL %s (status %s):\n%s"
+            % (wsl_ilasm_param, wsl_distro, rc, out)
+        )
+    features.add("msil-wsl-ilasm")
+    note("ilasm inside WSL %s: %s" % (wsl_distro, wsl_ilasm))
 
 # ILVerify runs on the host and takes its reference assemblies from a host
 # runtime, of the same major as the programs when it is installed. jitall runs
@@ -554,6 +667,51 @@ if ildasm:
     note("ildasm: " + ildasm)
 else:
     note("ildasm not found; msil-verify.py skips its neutralized pass")
+
+# ---------------------------------------------------------------- round trip
+# --param msil_roundtrip=1 (Design.md 5.5: the .il output must round-trip
+# through ilasm and ildasm; the round-trip leg of plan M10): %{msil_c} and
+# %{msil_ll} also disassemble each module, reassemble the listing, require the
+# two listings to match (msil-verify.py --roundtrip) and run the reassembled
+# image against the same .expected file. Both tools are the .NET ones from the
+# NuGet global-packages folder (runtime.<rid>.Microsoft.NETCore.ILDAsm and
+# .ILAsm) at the version that msil/utils/tools/msil-tools.proj pins
+# (MsilILAsmVersion; the modern-ilasm and wsl-ilasm legs use the same one),
+# never whatever newer version another project restored into a shared folder;
+# a missing one is a configuration error that names the version. The
+# .NET Framework ildasm prints infinite FP constants as 'inf', which neither
+# the .NET Framework ilasm nor the .NET ilasm 10.0.12 reads back (recon
+# cil-runtime.md 15).
+rt_ildasm = rt_ilasm = None
+if roundtrip:
+    rt_version = pinned_tools_version()
+    rt_tools = {}
+    for tool in ("ildasm", "ilasm"):
+        candidates = [
+            nuget_tool_path(root, tool, host_rid, rt_version) for root in nuget_roots()
+        ]
+        rt_tools[tool] = next((c for c in candidates if is_runnable(c)), None)
+    missing = [t for t in ("ildasm", "ilasm") if not rt_tools[t]]
+    if missing:
+        fatal(
+            "--param msil_roundtrip=1 needs the .NET %s %s (MsilILAsmVersion of "
+            "msil/utils/tools/msil-tools.proj) in the NuGet global-packages folder "
+            "(searched %s; 'dotnet restore msil/utils/tools/msil-tools.proj "
+            "-p:MsilToolsRid=%s' fetches runtime.%s.Microsoft.NETCore.ILDAsm and "
+            ".ILAsm %s)"
+            % (
+                " and ".join(missing),
+                rt_version,
+                ", ".join(nuget_roots()) or "nothing",
+                host_rid,
+                host_rid,
+                rt_version,
+            )
+        )
+    rt_ildasm = os.path.normpath(rt_tools["ildasm"])
+    rt_ilasm = os.path.normpath(rt_tools["ilasm"])
+    features.add("msil-roundtrip")
+    note("round trip (%s): %s, %s" % (rt_version, rt_ildasm, rt_ilasm))
 
 if is_windows and os.path.isfile(os.path.join(netfx_dir, "clr.dll")):
     features.add("msil-netfx")
@@ -746,6 +904,15 @@ ilasm_cmd = "%s --tool%s -- %s -nologo -quiet%s" % (
     quote(ilasm or "ilasm-not-found"),
     ilasm_flags,
 )
+if wsl_ilasm:
+    # msil_wsl_ilasm: the Linux ilasm, inside WSL, under the same limits.
+    ilasm_cmd = "%s --tool --runner wsl --wsl-distro %s%s -- %s -nologo -quiet%s" % (
+        script("msil-run.py"),
+        wsl_distro,
+        limits,
+        quote(wsl_ilasm),
+        ilasm_flags,
+    )
 
 exec_cmd = "%s --expect-os %s%s" % (script("msil-run.py"), triple_os, limits)
 if runner == "wsl":
@@ -796,6 +963,16 @@ else:
         jitall_cmd += " --runtimeconfig " + quote(local_runtimeconfig)
 jitall_cmd += env_args
 
+# Without msil_roundtrip=1 nothing runs it (the composites test the feature),
+# and msil-verify.py rejects --roundtrip without the tools.
+roundtrip_cmd = script("msil-verify.py") + " --roundtrip"
+if rt_ildasm:
+    roundtrip_cmd += " --ildasm %s --ilasm %s%s" % (
+        quote(rt_ildasm),
+        quote(rt_ilasm),
+        limits,
+    )
+
 clang = getattr(config, "clang", None) or "clang-not-found"
 llc = lit.util.which("llc", config.llvm_tools_dir) or "llc-not-found"
 
@@ -813,6 +990,15 @@ native_ldflags = "" if triple_os == "windows" else "-lm"
 native_link = " %{msil_native_ldflags}" if native_ldflags else ""
 
 
+def roundtrip_leg(t):
+    """msil_roundtrip: the ildasm -> ilasm round trip of <t>.dll, then a run of
+    the reassembled image against the same .expected file."""
+    return (
+        f" %if msil-roundtrip %{{ && %msil_roundtrip --output={t}.rt.dll {t}.dll"
+        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.rt.out {t}.rt.dll %}}"
+    )
+
+
 def c_pipeline(level):
     """compile -> assemble -> verify -> force-JIT -> run and compare, at -<level>."""
     t = "%t." + level
@@ -823,6 +1009,7 @@ def c_pipeline(level):
         f" %if msil-jitall %{{ && %msil_jitall {t}.dll %}}"
         f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {t}.dll"
     )
+    cmd += roundtrip_leg(t)
     cmd += (
         f" %if msil-native-oracle %{{ && %clang_native %{{msil_cflags}} -{level}"
         f" %s{native_link} -o {t}.native.exe"
@@ -848,6 +1035,7 @@ def ll_pipeline(level):
         f" %if msil-jitall %{{ && %msil_jitall {t}.dll %}}"
         f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {t}.dll"
     )
+    cmd += roundtrip_leg(t)
     cmd += (
         f" %if msil-native-oracle %{{ && %clang_native -Wno-override-module -{level}"
         f" %s{native_link} -o {t}.native.exe"
@@ -889,6 +1077,7 @@ substitutions = [
     ("%msil_exec", exec_cmd),
     ("%msil_verify", verify_cmd),
     ("%msil_jitall", jitall_cmd),
+    ("%msil_roundtrip", roundtrip_cmd),
     ("%msil_inputs", slashes(inputs_dir)),
 ]
 # lit treats each name as a regular expression; none of these names contains a

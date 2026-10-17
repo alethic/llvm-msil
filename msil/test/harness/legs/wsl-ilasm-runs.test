@@ -1,0 +1,29 @@
+# --param msil_wsl_ilasm=PATH (with msil_runner=wsl; the Linux assembler leg
+# of plan M10) makes %ilasm run that ilasm inside WSL through msil-run.py
+# --tool --runner wsl. The leg cannot show which assembler ran: lit.cfg.py
+# prints its note 'ilasm inside WSL' after the start-up probe, before %ilasm
+# is built, so a lit.cfg.py whose %ilasm ignored the parameter would pass the
+# leg with the host's ilasm. A nested lit with -a runs
+# Inputs/nested-wsl-ilasm, whose test assembles a module with %ilasm, and
+# prints each command it ran with its output. That output must show that the
+# %ilasm command it ran is msil-run.py --tool --runner wsl with the given
+# ilasm, and that the assembler ran inside WSL: the stand-in ilasm written
+# here (a shell script with LF line endings) prints its own path, which is
+# the copy that msil-run.py --stage runs from a Linux temporary directory,
+# not a /mnt/<drive>/ path, and its arguments, whose Windows paths became
+# /mnt/<drive>/ paths; only the WSL path produces either. The stand-in passes
+# lit.cfg.py's start-up probe, which runs it with '-nologo -quiet -dll
+# <flags> -output=<probe.dll> <probe.il>' and needs <probe.dll>: it copies
+# its last argument to its -output= file. Where the linux-x64 ilasm that the
+# wsl-ilasm leg uses is in the NuGet global-packages folder (feature
+# msil-pinned-linux-ilasm of lit.local.cfg), the same nested run with that
+# real ilasm must run it the same way and pass. WSL only.
+# REQUIRES: msil-wsl
+
+# RUN: %{harness_check} write %t.ilasm.sh "#!/bin/sh" 'echo "stand-in ilasm: $0"' 'for a in "$@"; do echo "stand-in arg: $a"; case "$a" in -output=*) out=${a#-output=} ;; esac; src=$a; done' 'cp "$src" "$out"'
+# RUN: %{harness_lit} -a --param msil_wsl_ilasm=%t.ilasm.sh %S/Inputs/nested-wsl-ilasm > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/legs/Inputs/nested-wsl-ilasm/wsl-ilasm\.test " "^# executed command: .*msil-run\.py'? --tool --runner wsl --wsl-distro .* -- .*wsl-ilasm-runs\.test\.tmp\.ilasm\.sh'? -nologo -quiet .*-dll '?-output=.*wsl-ilasm\.test\.tmp\.dll'? .*exit-42\.il'?$"
+# RUN: %{harness_check} contains %t.log "^# \| stand-in ilasm: /\S+/wsl-ilasm-runs\.test\.tmp\.ilasm\.sh$" "^# \| stand-in arg: -dll$" "^# \| stand-in arg: -output=/mnt/[a-z]/\S+/wsl-ilasm\.test\.tmp\.dll$" "^# \| stand-in arg: /mnt/[a-z]/\S+/exit-42\.il$"
+# RUN: %{harness_check} lacks %t.log "^# \| stand-in ilasm: /mnt/" '^# \| stand-in arg: .*[A-Za-z]:[\/]'
+# RUN: %if msil-pinned-linux-ilasm %{ %{harness_lit} -a --param msil_wsl_ilasm=%{legs_linux_ilasm} %S/Inputs/nested-wsl-ilasm > %t.real.log 2>&1 %}
+# RUN: %if msil-pinned-linux-ilasm %{ %{harness_check} contains %t.real.log "^PASS: MSIL :: harness/legs/Inputs/nested-wsl-ilasm/wsl-ilasm\.test " "^# executed command: .*msil-run\.py'? --tool --runner wsl --wsl-distro .* -- .*runtime\.linux-x64\.microsoft\.netcore\.ilasm.%{legs_tools_version}.runtimes.linux-x64.native.ilasm'? -nologo -quiet .*-dll '?-output=.*wsl-ilasm\.test\.tmp\.dll'? .*exit-42\.il'?$" %}

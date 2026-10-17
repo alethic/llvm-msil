@@ -1,0 +1,17 @@
+static: 10 20 30 40
+pushed: 15 12 9 6 3 0
+reversed: 0 3 6 9 12 15
+reversed again: 15 12 9 6 3 0
+appended: 0 3 6 9 12 15 100 99 98 97
+sorted inserts: 0 0 2 4 4 5 5 7 10 11 11 13
+removed=2
+after removal: -100 2 4 4 5 5 7 10 11 11 13 1000
+merge sorted: 0 3 6 9 12 15 97 98 99 100
+merged: -100 0 2 3 4 4 5 5 6 7 9 10 11 11 12 13 15 97 98 99 100 1000
+duplicates removed=3
+deduplicated: -100 0 2 3 4 5 6 7 9 10 11 12 13 15 97 98 99 100 1000
+in use=19
+allocated until exhausted=29
+pool sorted: 1 51 55 65 87 96 103 113 166 234 244 264 265 273 297 344 350 358 358 364 368 429 471 479 514 549 550 601 621 643 650 661 683 701 751 758 772 791 865 875 880 898 910 959 980 980 992 992
+peak use=48
+[exit 186]

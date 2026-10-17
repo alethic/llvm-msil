@@ -1,0 +1,48 @@
+random
+compares=38498
+swaps=6496
+max depth=8
+smallest
+-1000
+-1000
+-1000
+-999
+-998
+-997
+-996
+-996
+largest
+996
+996
+996
+997
+998
+998
+999
+1000
+q1=-503
+median=4
+q3=502
+distinct=1548
+sum=2241
+sorted
+compares=27764
+swaps=0
+max depth=9
+reversed
+compares=27765
+swaps=1502
+max depth=9
+all equal
+compares=27867
+swaps=11924
+max depth=9
+organ pipe
+compares=88212
+swaps=6290
+max depth=6
+sawtooth
+compares=32412
+swaps=9440
+max depth=8
+[exit 98]

@@ -13,6 +13,9 @@
                    [--keep-copy DIR] [--timeout S] [--mem-limit-mb N] [-v]
                    prog.dll
     msil-verify.py --skip prog.dll        (no verifier configured: a no-op)
+    msil-verify.py --roundtrip --output OUT.dll --ildasm PATH --ilasm PATH
+                   [--keep-copy DIR] [--timeout S] [--mem-limit-mb N] [-v]
+                   prog.dll              (the ildasm -> ilasm round trip)
 
 The backend's output is unverifiable by design (Design.md section 1), so this
 wrapper fails only on errors outside the policy of plan D21. It runs two
@@ -109,10 +112,29 @@ fails too. Every child process (ildasm, ilasm, ILVerify, PEVerify) runs under
 the timeout and memory cap of msil-run.py. An empty --peverify or --ildasm
 means that tool is not available.
 
-Exit status: 0 if clean, 1 on a disallowed error, 2 on a usage error.
+--roundtrip does not verify. It checks that the assembly survives the
+ildasm -> ilasm round trip that Design.md 5.5 asks of the backend's output
+(lit parameter msil_roundtrip, feature msil-roundtrip, the M10 round-trip
+leg): --ildasm disassembles prog.dll, --ilasm reassembles that listing
+unchanged into --output (an image of the same kind), and --ildasm
+disassembles the result again. Both listings must be equal apart from the
+lines that differ between any two builds of one module ('// MVID:' and
+'// Image base:'); a difference is printed as a unified diff. The only edit
+to the listing is that an image layout directive whose value ildasm did not
+format ('.imagebase 0x%016I64x' from the Linux ildasm 10.0.12) is dropped,
+because ilasm rejects it; ilasm then uses its default, which is what the
+backend's output gets too. The lit leg runs --output afterwards and compares
+its transcript as usual. Use the .NET (NuGet) ildasm and ilasm: the .NET
+Framework ildasm prints infinite ldc.r4/ldc.r8 operands as 'inf', which
+neither the .NET Framework ilasm nor the .NET ilasm 10.0.12 reads back
+(llvm/docs/MSIL/recon/cil-runtime.md 15).
+
+Exit status: 0 if clean, 1 on a disallowed error (with --roundtrip: on a tool
+failure or a listing difference), 2 on a usage error.
 """
 
 import argparse
+import difflib
 import importlib.util
 import os
 import re
@@ -646,12 +668,13 @@ def ilasm_flags_for(path):
 COPY_LABEL = "neutralized copy"
 
 
-def disassemble(args, private):
-    """ildasm the assembly into the directory private. Returns (listing
-    text, None), or (None, failure message)."""
-    stem = os.path.splitext(os.path.basename(args.assembly))[0]
+def disassemble(args, private, assembly=None, label=COPY_LABEL):
+    """ildasm assembly (default: the assembly under test) into the directory
+    private. Returns (listing text, None), or (None, failure message)."""
+    assembly = assembly or args.assembly
+    stem = os.path.splitext(os.path.basename(assembly))[0]
     disasm = os.path.join(private, stem + ".ildasm.il")
-    cmd = [args.ildasm, "-utf8", "-out=" + disasm, os.path.abspath(args.assembly)]
+    cmd = [args.ildasm, "-utf8", "-out=" + disasm, os.path.abspath(assembly)]
     # The .NET Framework ildasm shows a progress window unless -nobar is
     # given; the .NET (NuGet) ildasm rejects the option.
     res, output, limit = run(cmd[:1] + ["-nobar"] + cmd[1:], args, cwd=private)
@@ -659,7 +682,7 @@ def disassemble(args, private):
         res, output, limit = run(cmd, args, cwd=private)
     if limit or res.returncode != 0 or not os.path.isfile(disasm):
         return None, "%s: ildasm failed (status %s): %s\n%s" % (
-            COPY_LABEL,
+            label,
             msil_run.describe_exit(res.returncode),
             limit or "",
             output,
@@ -723,6 +746,89 @@ def run_copy_pass(args, private, listing_text):
     return bad, notes
 
 
+ROUNDTRIP_LABEL = "round trip"
+# An image layout directive whose value ildasm did not format: the Linux
+# ildasm 10.0.12 prints '.imagebase 0x%016I64x' and '.stackreserve
+# 0x%016I64x' (a Windows format string), which ilasm rejects.
+UNFORMATTED_LAYOUT_RE = re.compile(
+    r"^\s*\.(?:imagebase|stackreserve|file\s+alignment)\b"
+    r"(?!\s+0x[0-9A-Fa-f]+\s*(?://.*)?$)"
+)
+# Listing lines that differ between two builds of the same module.
+BUILD_SPECIFIC_RE = re.compile(r"^\s*//\s*(?:MVID|Image base):")
+
+
+def roundtrip(args, private):
+    """--roundtrip: ildasm args.assembly, ilasm the listing into args.output,
+    ildasm that, and compare the listings. Returns a list of failures."""
+    label = ROUNDTRIP_LABEL
+    try:
+        flags = ilasm_flags_for(args.assembly)
+    except (OSError, ValueError, struct.error) as e:
+        return ["%s: %s" % (label, e)]
+    first, failure = disassemble(args, private, args.assembly, label)
+    if failure:
+        return [failure]
+    stem = os.path.splitext(os.path.basename(args.assembly))[0]
+    source = os.path.join(private, stem + ".roundtrip.il")
+    with open(source, "w", encoding="utf-8-sig", newline="\n") as f:
+        f.write(
+            "".join(
+                line + "\n"
+                for line in first.splitlines()
+                if not UNFORMATTED_LAYOUT_RE.match(line)
+            )
+        )
+    output = os.path.abspath(args.output)
+    if os.path.exists(output):
+        os.remove(output)  # never compare against a stale image
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    res, text, limit = run(
+        [args.ilasm, "-nologo", "-quiet"] + flags + ["-output=" + output, source],
+        args,
+        cwd=private,
+    )
+    if limit or res.returncode != 0 or not os.path.isfile(output):
+        return [
+            "%s: ilasm could not reassemble the disassembly of %s (status %s; "
+            "rerun with --keep-copy DIR to see it): %s\n%s"
+            % (
+                label,
+                os.path.basename(args.assembly),
+                msil_run.describe_exit(res.returncode),
+                limit or "",
+                text,
+            )
+        ]
+    second, failure = disassemble(args, private, output, label)
+    if failure:
+        return [failure]
+
+    def comparable(listing):
+        return [l for l in listing.splitlines(True) if not BUILD_SPECIFIC_RE.match(l)]
+
+    a, b = comparable(first), comparable(second)
+    if a != b:
+        diff = "".join(
+            difflib.unified_diff(
+                a,
+                b,
+                "ildasm %s" % os.path.basename(args.assembly),
+                "ildasm %s" % os.path.basename(output),
+            )
+        )
+        return [
+            "%s: the disassembly of the reassembled %s differs from that of %s:\n%s"
+            % (label, os.path.basename(output), os.path.basename(args.assembly), diff)
+        ]
+    if args.verbose:
+        print(
+            "msil-verify: %s: %s -> %s, %d listing lines identical"
+            % (label, args.assembly, args.output, len(a))
+        )
+    return []
+
+
 def verify(args, allow, private):
     """Both passes; private is the directory of pass 2 (None: no pass 2).
     Returns (failures, notes)."""
@@ -754,6 +860,35 @@ def verify(args, allow, private):
     return bad + cbad, notes
 
 
+def keep_copy(args, private):
+    if args.keep_copy:
+        os.makedirs(args.keep_copy, exist_ok=True)
+        for name in os.listdir(private):
+            shutil.copy2(os.path.join(private, name), args.keep_copy)
+
+
+def main_roundtrip(p, args):
+    if not (args.ildasm and args.ilasm and args.output):
+        p.error("--roundtrip needs --ildasm, --ilasm and --output")
+    if args.skip:
+        p.error("--roundtrip and --skip exclude each other")
+    if not os.path.isfile(args.assembly):
+        sys.stderr.write("msil-verify: error: %s not found\n" % args.assembly)
+        return 2
+    private = tempfile.mkdtemp(prefix="msil-roundtrip-")
+    try:
+        bad = roundtrip(args, private)
+    except OSError as e:
+        sys.stderr.write("msil-verify: error: %s\n" % e)
+        return 2
+    finally:
+        keep_copy(args, private)
+        msil_run.remove_tree(private)
+    for b in bad:
+        print(b, file=sys.stderr)
+    return 1 if bad else 0
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument(
@@ -774,15 +909,31 @@ def main():
     )
     p.add_argument("--peverify", help="also run PEVerify (Windows); empty: no PEVerify")
     p.add_argument(
-        "--ildasm", help="ildasm for the neutralized pass (pass 2); empty: skip it"
+        "--ildasm",
+        help="ildasm for the neutralized pass (pass 2) or --roundtrip; empty: "
+        "skip pass 2",
     )
-    p.add_argument("--ilasm", help="ilasm that reassembles the neutralized copy")
+    p.add_argument(
+        "--ilasm", help="ilasm that reassembles the neutralized copy or --roundtrip"
+    )
     p.add_argument(
         "--keep-copy",
         metavar="DIR",
-        help="keep the neutralized copy (.il and the reassembled image) in DIR",
+        help="keep the neutralized copy (.il and the reassembled image), or the "
+        "listings of --roundtrip, in DIR",
     )
     p.add_argument("--skip", action="store_true", help="no verifier available; succeed")
+    p.add_argument(
+        "--roundtrip",
+        action="store_true",
+        help="do not verify: check the ildasm -> ilasm round trip of the assembly "
+        "(needs --ildasm, --ilasm and --output)",
+    )
+    p.add_argument(
+        "--output",
+        metavar="FILE",
+        help="with --roundtrip: the reassembled image",
+    )
     p.add_argument(
         "--timeout",
         type=float,
@@ -801,6 +952,10 @@ def main():
     p.add_argument("assembly")
     args = p.parse_args()
 
+    if args.roundtrip:
+        return main_roundtrip(p, args)
+    if args.output:
+        p.error("--output needs --roundtrip")
     if args.skip:
         print("msil-verify: skipped (no ILVerify configured)")
         return 0
@@ -825,10 +980,7 @@ def main():
         return 2
     finally:
         if private:
-            if args.keep_copy:
-                os.makedirs(args.keep_copy, exist_ok=True)
-                for name in os.listdir(private):
-                    shutil.copy2(os.path.join(private, name), args.keep_copy)
+            keep_copy(args, private)
             msil_run.remove_tree(private)
     for n in notes:
         print(n)

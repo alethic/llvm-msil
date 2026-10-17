@@ -1,0 +1,50 @@
+arena area=24000
+step=0
+momentum x=1472
+momentum y=4096
+kinetic=4311040
+lowest y=5120
+step=100
+momentum x=-1059
+momentum y=3284
+kinetic=4124860
+lowest y=42
+step=200
+momentum x=-1411
+momentum y=-1870
+kinetic=2944204
+lowest y=624
+step=300
+momentum x=1911
+momentum y=-1368
+kinetic=1668594
+lowest y=625
+collisions=26
+bounces=60
+a#00
+x=33639
+y=2676
+b#01
+x=14953
+y=5464
+c#02
+x=6280
+y=6518
+d#03
+x=20683
+y=13305
+e#04
+x=24806
+y=4369
+f#05
+x=28152
+y=625
+g#06
+x=15664
+y=8135
+h#07
+x=33618
+y=1834
+centre x * 16=378140
+centre y * 16=63162
+[exit 122]

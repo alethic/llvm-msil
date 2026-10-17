@@ -1,0 +1,34 @@
+solutions(1)=1
+solutions(2)=0
+solutions(3)=0
+solutions(4)=2
+solutions(5)=10
+solutions(6)=4
+solutions(7)=40
+solutions(8)=92
+solutions(9)=352
+solutions(10)=724
+first solution
+Q.......
+....Q...
+.......Q
+.....Q..
+..Q.....
+......Q.
+.Q......
+...Q....
+fundamental solutions
+15863724
+16837425
+24683175
+25713864
+25741863
+26174835
+26831475
+27368514
+27581463
+35281746
+35841726
+36258174
+fundamental=12
+[exit 92]

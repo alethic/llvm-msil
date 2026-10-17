@@ -18,7 +18,7 @@
 // succeeds without a diagnostic, on Linux as well, and at -O0, where every
 // parameter is spilled to the static frame (M7).
 //
-// clang's tests have no ilasm, so this test does not assemble its output:
+// This test does not assemble its output:
 // llvm/test/CodeGen/MSIL/fence.ll runs llc and ilasm on a copy of the IR that
 // clang emits for barrier() here (function 'asm_barrier_clang'), and
 // msil/test/M1/05-memory/barrier.c assembles and runs C code of this kind.

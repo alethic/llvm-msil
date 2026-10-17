@@ -1,0 +1,5 @@
+# Run only by a nested lit (../../wsl-ilasm-local-runner.test, with an empty
+# --param msil_wsl_ilasm=): %ilasm assembles on the host, and the module runs.
+
+# RUN: %ilasm -dll -output=%t.dll %S/../../../Inputs/exit-42.il
+# RUN: %msil_exec --expect %S/../../../Inputs/exit-42 %t.dll

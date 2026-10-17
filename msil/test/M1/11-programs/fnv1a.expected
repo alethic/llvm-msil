@@ -1,0 +1,47 @@
+fnv1a32
+0x811c9dc5
+fnv1a64
+0xcbf29ce484222325
+fnv1a32
+0xe40c292c
+fnv1a64
+0xaf63dc4c8601ec8c
+fnv1a32
+0xbf9cf968
+fnv1a64
+0x85944171f73967e8
+fnv1a32
+0x4d0ea41d
+fnv1a64
+0x17a1a4f267be633d
+fnv1a32
+0xfaab16f
+fnv1a64
+0xfad3b41be58742af
+fold16(foobar)
+0x46f4
+pangram
+0xf3f9b7f5e7e47110
+pangram.
+0x75c4d4d9092c6c5a
+and=3
+cat=2
+dog=2
+while=1
+on=2
+bird=2
+ran=1
+sat=1
+the=8
+mat=2
+past=1
+words=25
+distinct=11
+probes=30
+bucket min=0
+bucket max=41
+block
+0x722a4ae121677f25
+block tail
+0xf31c11765c2a5925
+[exit 40]

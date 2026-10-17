@@ -1,0 +1,81 @@
+sorted keywords
+auto break case char const continue default do
+double else enum extern float for goto if
+int long register return short signed sizeof static
+struct switch typedef union unsigned void volatile while
+tokens
+keyword typedef
+keyword struct
+identifier node
+punctuator {
+keyword struct
+identifier node
+punctuator *
+identifier next
+punctuator ;
+keyword unsigned
+keyword long
+identifier key
+punctuator ;
+punctuator }
+identifier node
+punctuator ;
+keyword static
+keyword int
+identifier count
+punctuator (
+keyword const
+identifier node
+punctuator *
+identifier n
+punctuator ,
+keyword unsigned
+keyword long
+identifier key
+punctuator )
+punctuator {
+keyword int
+identifier found
+punctuator =
+number 0
+punctuator ;
+keyword for
+punctuator (
+punctuator ;
+identifier n
+punctuator !=
+number 0
+punctuator ;
+identifier n
+punctuator =
+identifier n
+punctuator ->
+identifier next
+punctuator )
+keyword if
+punctuator (
+identifier n
+punctuator ->
+identifier key
+punctuator ==
+identifier key
+punctuator &&
+identifier found
+punctuator <=
+number 100
+punctuator )
+identifier found
+punctuator +=
+number 2
+punctuator ;
+keyword return
+identifier found
+punctuator ;
+punctuator }
+counts
+keyword=14
+identifier=20
+number=4
+punctuator=30
+keyword index sum=270
+[exit 14]

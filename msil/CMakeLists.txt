@@ -1,4 +1,4 @@
-# The MSIL project: execution tests now, the runtime support assembly later.
+# The MSIL project: the execution tests and their harness, CI and build scripts.
 # Built as an LLVM external project, so no upstream CMake file changes:
 #   cmake -S llvm -B build -DLLVM_EXTERNAL_PROJECTS=msil \
 #         -DLLVM_EXTERNAL_MSIL_SOURCE_DIR=<repo>/msil ...

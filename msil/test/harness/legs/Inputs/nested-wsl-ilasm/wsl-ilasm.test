@@ -1,0 +1,6 @@
+# Run only by a nested lit (../../wsl-ilasm-runs.test, with --param
+# msil_wsl_ilasm=ILASM and the WSL runner): %ilasm assembles a module, which
+# must run ILASM inside WSL. The outer test reads the command that lit ran
+# and its output.
+
+# RUN: %ilasm -dll -output=%t.dll %S/../../../Inputs/exit-42.il

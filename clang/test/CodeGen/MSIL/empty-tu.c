@@ -14,7 +14,7 @@
 // llvm/unittests/Target/MSIL/MSILTargetMachineTest.cpp and
 // llvm/test/CodeGen/MSIL/pipeline.ll.
 //
-// clang's tests have no ilasm, so this test does not assemble its output:
+// This test does not assemble its output:
 // llvm/test/CodeGen/MSIL/empty-module.ll runs llc and ilasm on copies of the
 // IR that clang emits for an empty file on x86_64-pc-windows-msvc19.33.0-msil
 // (the versioned triple clang uses), x86_64-unknown-linux-gnu-msil and

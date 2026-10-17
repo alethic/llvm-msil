@@ -1,0 +1,17 @@
+# --param msil_require_exec=1 (the gate legs of msil/utils/ci pass it) makes
+# a missing msil-exec a configuration error in msil/test/M1/lit.local.cfg,
+# not a directory of UNSUPPORTED tests: a nested lit on M1 with ilasm
+# disabled ('--param msil_ilasm=') stops with lit's fatal-error status 2 and
+# names ilasm, and with every other part of msil-exec present it names only
+# ilasm. The error comes while lit loads M1's configuration, and
+# --show-tests ends the nested lit after discovery in any case, so no M1
+# test runs and no M1 Output directory is touched (the outer run owns them).
+# The control, where msil-exec is available: the same discovery with every
+# tool present loads M1's configuration and lists its tests.
+
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_require_exec=1 --param msil_ilasm= %S/../../M1 > %t.ilasm.log 2>&1
+# RUN: %{harness_check} contains %t.ilasm.log "fatal: msil: msil_require_exec=1, but the execution tests cannot run; missing: .*\bilasm\b"
+# RUN: %if msil-exec %{ %{harness_check} contains %t.ilasm.log "; missing: ilasm \(--param msil_ilasm=PATH\)$" %}
+# RUN: %if msil-exec %{ %{harness_lit} --show-tests --param msil_require_exec=1 %S/../../M1 > %t.ok.log 2>&1 %}
+# RUN: %if msil-exec %{ %{harness_check} contains %t.ok.log "^\s*MSIL :: M1/" %}
+# RUN: %if msil-exec %{ %{harness_check} lacks %t.ok.log "fatal:" %}

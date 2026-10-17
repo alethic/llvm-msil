@@ -1,0 +1,16 @@
+# msil-verify.py --roundtrip (%msil_roundtrip, the round-trip leg of plan M10)
+# fails when the reassembled image does not disassemble to the same listing:
+# the stand-in ilasm Inputs/fake-ilasm.py rewrites 'ldc.i4.0' to 'ldc.i4.1'
+# in the listing before the real ilasm assembles it, and the round trip must
+# exit 1 and print the difference as a unified diff. The control is the same
+# round trip with the real ilasm, which passes, so the failure comes from the
+# edit alone. A round trip that compared a listing with itself, or the
+# listing with the source it wrote, would pass both. The tools are those of
+# msil-verify.py's neutralized pass (%{legs_ildasm}, %{legs_ilasm}).
+# REQUIRES: msil-ilverify, msil-ildasm
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/roundtrip-ldc.il
+# RUN: %msil_roundtrip --ildasm %{legs_ildasm} --ilasm %{legs_ilasm} --output=%t.same.dll %t.dll
+# RUN: %python %S/Inputs/fake-ilasm.py make %t.perturb.cmd --replace ldc.i4.0 ldc.i4.1 -- %{legs_ilasm}
+# RUN: %{harness_check} exits 1 %msil_roundtrip --ildasm %{legs_ildasm} --ilasm %t.perturb.cmd --output=%t.rt.dll %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^round trip: the disassembly of the reassembled \S+\.rt\.dll differs from that of \S+\.tmp\.dll:$" "^--- ildasm \S+\.tmp\.dll$" "^\+\+\+ ildasm \S+\.rt\.dll$" "^-\s+IL_[0-9a-f]+:\s+ldc\.i4\.0$" "^\+\s+IL_[0-9a-f]+:\s+ldc\.i4\.1$"

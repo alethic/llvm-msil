@@ -13,6 +13,7 @@
     msil-run.py [OPTIONS] --netfx [--] prog.exe [ARGS...]      (.NET Framework)
     msil-run.py [OPTIONS] --native [--] prog.exe [ARGS...]     (native oracle)
     msil-run.py --tool [--timeout S] [--mem-limit-mb N] -- TOOL [ARGS...]
+    msil-run.py --tool --runner wsl [--wsl-distro D] [LIMITS] -- TOOL [ARGS...]
 
 The transcript is the program's stdout, followed by one status line, with
 every run of CRs before an LF (the regular expression \\r+\\n) replaced by a
@@ -63,6 +64,19 @@ diff and exits 1. --out FILE also writes the transcript to FILE. Without
 timeout and memory cap, from the current directory, passing its output and
 exit status through.
 
+--tool --runner wsl runs a Linux program that lives on a Windows drive (the
+Linux ilasm of the M10 assembler leg, lit parameter msil_wsl_ilasm) inside
+WSL, under the limits there: wsl.exe starts 'python3 msil-run.py --tool
+--stage' in the current directory. TOOL, and every argument that is an
+absolute Windows path (alone or as the VALUE of -OPTION=VALUE or
+-OPTION:VALUE), become /mnt/<drive>/... paths; relative paths and other
+arguments are passed unchanged. --stage copies TOOL into a fresh private
+temporary directory, makes the copy executable and runs it from there; the
+directory is removed afterwards. This is a precaution: under WSL's default
+DrvFs mount (no 'metadata' option) files on a Windows drive show as 0777 and
+run in place, but a DrvFs mount with 'metadata' and a restrictive fmask (or a
+package extracted without the execute bit) makes the original non-executable.
+
 A .dll that the dotnet host or CoreCLR does not start at all (a missing
 framework, an invalid runtimeconfig.json, 'Failed to create CoreCLR') is a
 configuration error on every OS, never an '[exit N]' line: POSIX keeps only
@@ -73,7 +87,8 @@ uses it too). An out-of-memory start-up failure (HRESULT 0x8007000E or
 
 Exit status: 0 on success; 1 on a mismatch or when the program's exit status
 is outside 0..255 (the transcript is still written); 2 on a usage or
-configuration error. With --tool, the tool's own status.
+configuration error. With --tool, the tool's own status (1 when it hit the
+timeout or the memory cap, 2 when it could not be started).
 """
 
 import argparse
@@ -541,6 +556,28 @@ def to_wsl_path(path):
     return "/mnt/" + drive[0].lower() + rest.replace("\\", "/")
 
 
+# An absolute Windows path, alone or as the value of -OPTION=VALUE or
+# -OPTION:VALUE (ilasm's -output=D:\x\y.dll).
+WIN_PATH_ARG_RE = re.compile(
+    r"^(?P<option>--?[A-Za-z][\w-]*[=:])?(?P<path>[A-Za-z]:[\\/].*)$"
+)
+
+
+def to_wsl_arg(arg):
+    """A tool argument for --tool --runner wsl: absolute Windows paths become
+    /mnt/<drive>/... paths, everything else is passed unchanged."""
+    m = WIN_PATH_ARG_RE.match(arg)
+    if not m:
+        return arg
+    return (m.group("option") or "") + to_wsl_path(m.group("path"))
+
+
+def wsl_exe():
+    return shutil.which("wsl.exe") or os.path.join(
+        os.environ.get("SystemRoot", r"C:\Windows"), "System32", "wsl.exe"
+    )
+
+
 def check_stdin(args):
     # A configuration error (exit status 2), never a status that 'not' accepts.
     if args.stdin and not os.path.isfile(args.stdin):
@@ -615,9 +652,7 @@ def run_wsl(args):
     if not os.path.isfile(args.program):
         raise ConfigError("%s not found" % args.program)
     check_stdin(args)
-    wsl = shutil.which("wsl.exe") or os.path.join(
-        os.environ.get("SystemRoot", r"C:\Windows"), "System32", "wsl.exe"
-    )
+    wsl = wsl_exe()
     assignments = ["%s=%s" % kv for kv in DOTNET_DEFAULTS]
     assignments += ["%s=%s" % kv for kv in parse_env_args(args.env)]
     cmd = (
@@ -662,25 +697,16 @@ def run_wsl(args):
     return transcript, stderr_text
 
 
-def run_tool(args):
-    """--tool: run args.program under the limits and pass everything through."""
-    cmd = [args.program] + args.args
-    try:
-        res = run_limited(cmd, None, dict(os.environ), args.timeout, args.mem_limit_mb)
-    except OSError as e:
-        sys.stderr.write("msil-run: cannot run %s: %s\n" % (args.program, e))
-        return 2
+def pass_through(res, name, timeout, mem_limit_mb):
+    """--tool: copy a tool's output and turn its result into our exit status."""
     emit(sys.stdout, res.stdout)
     emit(sys.stderr, res.stderr)
     if res.timed_out:
-        sys.stderr.write(
-            "msil-run: %s did not finish within %g s\n" % (args.program, args.timeout)
-        )
+        sys.stderr.write("msil-run: %s did not finish within %g s\n" % (name, timeout))
         return 1
     if res.memory_limit:
         sys.stderr.write(
-            "msil-run: %s hit the %d MiB memory cap\n"
-            % (args.program, args.mem_limit_mb)
+            "msil-run: %s hit the %d MiB memory cap\n" % (name, mem_limit_mb)
         )
         return 1
     rc = res.returncode
@@ -689,6 +715,77 @@ def run_tool(args):
     if IS_WINDOWS and rc >= (1 << 31):
         rc -= 1 << 32  # sys.exit() takes a C long; Windows keeps all 32 bits
     return rc
+
+
+def run_tool(args):
+    """--tool: run args.program under the limits and pass everything through."""
+    if args.runner == "wsl":
+        return run_tool_wsl(args)
+    program, private = args.program, None
+    if args.stage:
+        # A precaution: a DrvFs mount with 'metadata' and a restrictive fmask
+        # (or a package extracted without the execute bit) makes the original
+        # non-executable, so run an executable copy.
+        if not os.path.isfile(program):
+            raise ConfigError("%s not found" % program)
+        private = tempfile.mkdtemp(prefix="msil-run-tool-")
+        program = os.path.join(private, os.path.basename(args.program))
+    try:
+        if private:
+            try:
+                shutil.copyfile(args.program, program)
+                os.chmod(program, 0o755)
+            except OSError as e:
+                raise ConfigError("cannot stage %s: %s" % (args.program, e))
+        try:
+            res = run_limited(
+                [program] + args.args,
+                None,
+                dict(os.environ),
+                args.timeout,
+                args.mem_limit_mb,
+            )
+        except OSError as e:
+            raise ConfigError("cannot run %s: %s" % (args.program, e))
+    finally:
+        if private:
+            remove_tree(private)
+    return pass_through(res, args.program, args.timeout, args.mem_limit_mb)
+
+
+def run_tool_wsl(args):
+    """--tool --runner wsl: run the Linux program args.program, which lives on
+    a Windows drive, inside WSL through a copy of this script running there
+    (--tool --stage), so the limits apply inside Linux."""
+    if not IS_WINDOWS:
+        raise ConfigError("--runner wsl needs a Windows host")
+    if not os.path.isfile(args.program):
+        raise ConfigError("%s not found" % args.program)
+    cmd = [
+        wsl_exe(),
+        "-d",
+        args.wsl_distro,
+        "--cd",
+        os.getcwd(),
+        "--exec",
+        "python3",
+        to_wsl_path(os.path.abspath(__file__)),
+        "--tool",
+        "--stage",
+        "--timeout",
+        repr(args.timeout),
+        "--mem-limit-mb",
+        str(args.mem_limit_mb),
+        "--",
+        to_wsl_path(args.program),
+    ] + [to_wsl_arg(a) for a in args.args]
+    env = dict(os.environ)
+    set_env_var(env, "WSL_UTF8", "1")  # wsl.exe's own messages, not UTF-16
+    try:
+        res = run_limited(cmd, None, env, args.timeout + WSL_GRACE, args.mem_limit_mb)
+    except OSError as e:
+        raise ConfigError("cannot run %s: %s" % (cmd[0], e))
+    return pass_through(res, args.program, args.timeout + WSL_GRACE, args.mem_limit_mb)
 
 
 def parse_args(argv):
@@ -710,7 +807,7 @@ def parse_args(argv):
         "--runner",
         choices=("local", "wsl"),
         default="local",
-        help="where to run a .dll (default: local)",
+        help="where to run a .dll or a --tool (default: local)",
     )
     p.add_argument(
         "--wsl-distro",
@@ -754,6 +851,13 @@ def parse_args(argv):
     p.add_argument(
         "--show-stderr", action="store_true", help="always echo the program's stderr"
     )
+    p.add_argument(
+        "--stage",
+        action="store_true",
+        help="with --tool: run an executable copy of the tool from a private "
+        "temporary directory (a precaution for a DrvFs mount with 'metadata' "
+        "and a restrictive fmask, which makes the original non-executable)",
+    )
     # Everything after the first '--' (or from the first positional on) is the
     # program and its arguments, even if it looks like an option.
     if "--" in argv:
@@ -769,8 +873,10 @@ def parse_args(argv):
     args.program, args.args = rest[0], rest[1:]
     if args.timeout <= 0 or args.mem_limit_mb <= 0:
         p.error("--timeout and --mem-limit-mb must be positive")
-    if args.runner == "wsl" and (args.native or args.netfx or args.tool):
-        p.error("--runner wsl runs .dll programs only")
+    if args.runner == "wsl" and (args.native or args.netfx):
+        p.error("--runner wsl runs .dll programs and --tool only")
+    if args.stage and not args.tool:
+        p.error("--stage needs --tool")
     if args.netfx and not IS_WINDOWS:
         p.error("--netfx is only available on Windows")
     return args
@@ -778,9 +884,9 @@ def parse_args(argv):
 
 def main(argv=None):
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    if args.tool:
-        return run_tool(args)
     try:
+        if args.tool:
+            return run_tool(args)
         if args.runner == "wsl":
             out, stderr_text = run_wsl(args)
         else:

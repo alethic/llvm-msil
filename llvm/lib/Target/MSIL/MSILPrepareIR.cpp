@@ -32,32 +32,41 @@
 /// - A function definition with a garbage collection strategy is an error;
 ///   its body and its strategy are deleted before any pass runs
 ///   (doInitialization).
-/// - A function definition that is variadic, calls inline assembly, accesses
-///   a named register, records a stack map (stackmap, patchpoint, statepoint),
-///   has deoptimization state ("deopt" operand bundles), makes a preallocated
-///   call (llvm.call.preallocated.*, "preallocated" operand bundles), uses
+/// - A function definition that is variadic, calls inline assembly, calls a
+///   target intrinsic (llvm.x86.*, llvm.aarch64.*, ...), accesses a named
+///   register, reads the thread pointer (llvm.thread.pointer), records a
+///   stack map (stackmap, patchpoint, statepoint), has deoptimization state
+///   ("deopt" operand bundles), makes a preallocated call
+///   (llvm.call.preallocated.*, "preallocated" operand bundles), uses
 ///   the frame escape intrinsics (llvm.localescape, llvm.localrecover,
 ///   llvm.localaddress, llvm.eh.recoverfp: clang emits them for C __finally
 ///   blocks and for __except filters that read locals), uses a pointer in a
 ///   non-zero address space, uses a floating-point type that CIL does not
-///   have (fp128, x86_fp80, ppc_fp128) or reads or writes the floating-point
-///   environment (llvm.get.fpenv, llvm.set.fpenv, llvm.get.fpmode,
-///   llvm.set.fpmode) is an error, and its body is deleted.
+///   have (fp128, x86_fp80, ppc_fp128), uses a scalable vector type or a
+///   target extension type (SVE's <vscale x 4 x i32> and
+///   target("aarch64.svcount")), reads vscale (llvm.vscale, the scalable form
+///   of llvm.experimental.get.vector.length) or reads or writes the
+///   floating-point environment (llvm.get.fpenv, llvm.set.fpenv,
+///   llvm.get.fpmode, llvm.set.fpmode) is an error, and its body is deleted.
 /// - A function definition or used declaration whose IL name is longer than
 ///   ilasm accepts is an error; a definition loses its body.
+/// - A declaration whose signature has a scalable vector or target extension
+///   type is an error when its address is taken.
 /// - A call or invoke of a definition that lost its body after an error
-///   (above) is erased, and its uses become poison; an invoke branches to its
-///   normal destination. The function is not compiled, so the call would
-///   otherwise become a call of an external function. For the same reason
-///   every other use of the function (its address in code, in a global
-///   initializer or in llvm.global_ctors) becomes poison, and it is removed
-///   from llvm.used and llvm.compiler.used.
+///   (above), or of a declaration reported for its signature, is erased, and
+///   its uses become poison; an invoke branches to its normal destination.
+///   The function is not compiled, so the call would otherwise become a call
+///   of an external function. For the same reason every other use of the
+///   function (its address in code, in a global initializer or in
+///   llvm.global_ctors) becomes poison, and it is removed from llvm.used and
+///   llvm.compiler.used.
 /// - The code after a trap (a call of llvm.trap, llvm.debugtrap or
 ///   llvm.ubsantrap without a "trap-func-name") in its block is replaced by
 ///   'unreachable', which also drops the block's successor edges: the trap
 ///   becomes the TRAP terminator, so nothing after it runs.
-/// - An alias, an ifunc or a global variable in a non-zero address space is an
-///   error; its uses become poison and it is erased.
+/// - An alias, an ifunc, a global variable in a non-zero address space or one
+///   whose type has a target extension type is an error; its uses become
+///   poison and it is erased.
 /// - A thread-local variable is an error; it becomes an ordinary global.
 /// - A non-empty llvm.global_dtors is an error, and it is erased.
 /// - An "exception-model" module flag is reset to "none", the model the
@@ -121,7 +130,8 @@ class MSILPrepareIRLegacy final : public ModulePass {
   bool runOnModule(Module &M) override;
 
   /// The definitions whose bodies this pass deleted after an error, in
-  /// doInitialization and in runOnModule.
+  /// doInitialization and in runOnModule, and the declarations that it
+  /// reported for their signatures (diagnoseAddressTakenDeclarations).
   SmallVector<Function *, 4> DeletedBodies;
 
 public:
@@ -140,12 +150,21 @@ static bool isFPTypeWithoutCILType(Type *Ty) {
   return Ty->isFP128Ty() || Ty->isX86_FP80Ty() || Ty->isPPC_FP128Ty();
 }
 
+/// Returns true if \p Ty is a scalable vector type or a target extension
+/// type, which CIL has no type for.
+static bool isScalableOrTargetExtType(Type *Ty) {
+  return isa<ScalableVectorType>(Ty) || isa<TargetExtType>(Ty);
+}
+
 namespace {
 /// Finds the types that \p IsLeaf accepts in types and values, and caches
 /// the result for every type and constant it walks. With
 /// \p WalkAllocatedType, the allocated type of an alloca counts as a type of
-/// the instruction.
-template <bool (*IsLeaf)(Type *), bool WalkAllocatedType> class LeafTypeFinder {
+/// the instruction, and with \p WalkGEPSourceType, the source element type of
+/// a getelementptr.
+template <bool (*IsLeaf)(Type *), bool WalkAllocatedType,
+          bool WalkGEPSourceType = false>
+class LeafTypeFinder {
   DenseMap<Type *, Type *> TypeCache;
   DenseMap<const Constant *, Type *> ConstantCache;
 
@@ -191,13 +210,18 @@ public:
   }
 
   /// The same for the result and the operands of \p I and, with
-  /// WalkAllocatedType, the allocated type of an alloca.
+  /// WalkAllocatedType, the allocated type of an alloca, and with
+  /// WalkGEPSourceType, the source element type of a getelementptr.
   Type *inInstruction(const Instruction &I) {
     if (Type *Found = inType(I.getType()))
       return Found;
     if constexpr (WalkAllocatedType)
       if (const auto *AI = dyn_cast<AllocaInst>(&I))
         if (Type *Found = inType(AI->getAllocatedType()))
+          return Found;
+    if constexpr (WalkGEPSourceType)
+      if (const auto *GEP = dyn_cast<GetElementPtrInst>(&I))
+        if (Type *Found = inType(GEP->getSourceElementType()))
           return Found;
     for (const Use &Op : I.operands())
       if (Type *Found = inValue(Op.get()))
@@ -221,7 +245,33 @@ using AddrSpaceFinder =
 /// triple, so they come only from __float128 and from IR.
 using FPTypeFinder =
     LeafTypeFinder<isFPTypeWithoutCILType, /*WalkAllocatedType=*/true>;
+
+/// Finds the scalable vector types and the target extension types in types
+/// and values, the allocated type of an alloca and the source element type of
+/// a getelementptr included. D7 accepts every native feature string, so on
+/// the aarch64 MSIL triples clang compiles the SVE types: __SVInt32_t is
+/// <vscale x 4 x i32> and __SVCount_t is target("aarch64.svcount"). Their
+/// size is a multiple of vscale, a property of the native vector unit that
+/// CIL does not have: type legalization cannot scalarize them, and an alloca
+/// or a getelementptr of one needs vscale (Design.md 3.2 maps only
+/// fixed-length vectors). The other target extension types belong to other
+/// targets.
+using ScalableOrTargetExtTypeFinder =
+    LeafTypeFinder<isScalableOrTargetExtType, /*WalkAllocatedType=*/true,
+                   /*WalkGEPSourceType=*/true>;
 } // end anonymous namespace
+
+/// Returns the message for \p Ty, a type that a ScalableOrTargetExtTypeFinder
+/// found.
+static std::string getScalableOrTargetExtTypeMessage(Type *Ty) {
+  std::string Msg;
+  raw_string_ostream OS(Msg);
+  if (isa<ScalableVectorType>(Ty))
+    OS << "scalable vector type '" << *Ty << "' is not supported for MSIL";
+  else
+    OS << "type '" << *Ty << "' is not supported for MSIL";
+  return Msg;
+}
 
 char MSILPrepareIRLegacy::ID = 0;
 INITIALIZE_PASS_BEGIN(MSILPrepareIRLegacy, DEBUG_TYPE,
@@ -481,7 +531,8 @@ static bool diagnoseILNameLength(const Function &F, const TargetMachine &TM) {
 /// Reports every construct in the definition \p F that MSIL cannot compile.
 /// Returns true if there was one.
 static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
-                               FPTypeFinder &FPFinder) {
+                               FPTypeFinder &FPFinder,
+                               ScalableOrTargetExtTypeFinder &STFinder) {
   LLVMContext &Ctx = F.getContext();
   DiagnosticLocation FnLoc(F.getSubprogram());
   bool HasError = false;
@@ -505,6 +556,10 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
   DiagnosticLocation FPLoc = FnLoc;
   Type *FPTy = FPFinder.inType(F.getFunctionType());
 
+  // And for scalable vector and target extension types.
+  DiagnosticLocation STLoc = FnLoc;
+  Type *STTy = STFinder.inType(F.getFunctionType());
+
   // One diagnostic per definition for preallocated calls too: each one comes
   // with an llvm.call.preallocated.setup call and usually .arg calls.
   bool HasPreallocated = false;
@@ -512,6 +567,14 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
   // And for the frame escape intrinsics: clang emits several for one __try,
   // and inlining a funclet copies its llvm.localrecover calls.
   bool HasFrameEscape = false;
+
+  // And for llvm.thread.pointer.
+  bool HasThreadPointer = false;
+
+  // Each target intrinsic is reported once per definition, at its first call:
+  // an unrolled loop or the inlined wrappers of immintrin.h call one many
+  // times.
+  SmallPtrSet<const Function *, 4> ReportedIntrinsics;
 
   for (Instruction &I : instructions(F)) {
     if (auto *CB = dyn_cast<CallBase>(&I)) {
@@ -528,6 +591,22 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
             Twine("named register access (") + Intrinsic::getBaseName(IID) +
                 ") is not supported for MSIL",
             I.getDebugLoc()));
+        HasError = true;
+      } else if (IID == Intrinsic::thread_pointer) {
+        // __builtin_thread_pointer reads the native thread pointer (%fs:0 on
+        // x86_64 Linux, TPIDR_EL0 on aarch64), which CIL has no equivalent
+        // for. It is a generic intrinsic, but SelectionDAGBuilder makes an
+        // INTRINSIC_WO_CHAIN node of the call, which only a target with a
+        // lowering for it can select. Thread-local storage comes with
+        // phase 3 (Design.md 4.4). Reported once per definition: an inlined
+        // accessor such as a static libc's pthread_self calls it many times.
+        if (!HasThreadPointer)
+          Ctx.diagnose(DiagnosticInfoUnsupported(
+              F,
+              Twine("thread pointer access ('") + Intrinsic::getBaseName(IID) +
+                  "') is not supported for MSIL yet (phase 3 TLS)",
+              I.getDebugLoc()));
+        HasThreadPointer = true;
         HasError = true;
       } else if (IID == Intrinsic::experimental_stackmap ||
                  IID == Intrinsic::experimental_patchpoint_void ||
@@ -607,12 +686,40 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
                 Intrinsic::getBaseName(IID) + "') is not supported for MSIL",
             I.getDebugLoc()));
         HasError = true;
+      } else if (Intrinsic::isTargetIntrinsic(IID) ||
+                 IID == Intrinsic::vscale ||
+                 (IID == Intrinsic::experimental_get_vector_length &&
+                  cast<ConstantInt>(CB->getArgOperand(2))->isOne())) {
+        // MSIL has no target intrinsics of its own, and Phase 1 maps none of
+        // another target's (llvm.x86.* from immintrin.h, llvm.aarch64.* from
+        // arm_acle.h and arm_neon.h) to CIL: without the codegen switches of
+        // phase 3 they are rejected (Design.md 3.2). SelectionDAGBuilder
+        // would make an INTRINSIC_* node of the call, which instruction
+        // selection cannot select. Its calls go with the deleted body, and
+        // the declaration that stays is skipped like every intrinsic: it is
+        // never a P/Invoke or a Phase-1 import. The same goes for the
+        // generic intrinsics that read vscale (see
+        // ScalableOrTargetExtTypeFinder), llvm.vscale and
+        // llvm.experimental.get.vector.length with a true third operand
+        // (the scalable form): no scalable type is in their signatures, and
+        // SelectionDAGBuilder makes an ISD::VSCALE node of each, which
+        // instruction selection cannot select either.
+        const Function *Callee = CB->getCalledFunction();
+        if (ReportedIntrinsics.insert(Callee).second)
+          Ctx.diagnose(DiagnosticInfoUnsupported(
+              F,
+              Twine("intrinsic '") + Callee->getName() +
+                  "' is not supported for MSIL",
+              I.getDebugLoc()));
+        HasError = true;
       }
     }
     if (!ASTy && (ASTy = ASFinder.inInstruction(I)))
       ASLoc = DiagnosticLocation(I.getDebugLoc());
     if (!FPTy && (FPTy = FPFinder.inInstruction(I)))
       FPLoc = DiagnosticLocation(I.getDebugLoc());
+    if (!STTy && (STTy = STFinder.inInstruction(I)))
+      STLoc = DiagnosticLocation(I.getDebugLoc());
   }
 
   if (ASTy) {
@@ -631,15 +738,55 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
     Ctx.diagnose(DiagnosticInfoUnsupported(F, Msg, FPLoc));
     HasError = true;
   }
+
+  if (STTy) {
+    Ctx.diagnose(DiagnosticInfoUnsupported(
+        F, getScalableOrTargetExtTypeMessage(STTy), STLoc));
+    HasError = true;
+  }
   return HasError;
 }
 
+/// Reports each function in \p Decls whose address is still taken and adds
+/// it to \p Reported. \p Decls are the used declarations (and
+/// available_externally definitions) whose signatures have a scalable vector
+/// or target extension type. The AsmPrinter computes the CIL signature of an
+/// undefined function whose address is taken (for its 'ldftn', its address
+/// field or a constructor call), and these types have no CIL type. Their
+/// calls need no check: a call with the declaration's type has the type in
+/// its operands or its result, so its caller is reported and loses its body,
+/// and MSILFixFunctionBitcasts replaces a call with another type by a call of
+/// a trapping wrapper. A use in llvm.used or llvm.compiler.used takes no
+/// signature.
+static bool
+diagnoseAddressTakenDeclarations(ArrayRef<Function *> Decls,
+                                 ScalableOrTargetExtTypeFinder &STFinder,
+                                 SmallVectorImpl<Function *> &Reported) {
+  bool Changed = false;
+  for (Function *F : Decls) {
+    if (!F->hasAddressTaken(/*PutOffender=*/nullptr,
+                            /*IgnoreCallbackUses=*/false,
+                            /*IgnoreAssumeLikeCalls=*/false,
+                            /*IgnoreLLVMUsed=*/true,
+                            /*IgnoreARCAttachedCall=*/false,
+                            /*IgnoreCastedDirectCall=*/true))
+      continue;
+    std::string Msg = getScalableOrTargetExtTypeMessage(
+        STFinder.inType(F->getFunctionType()));
+    F->getContext().diagnose(DiagnosticInfoUnsupported(
+        *F, Msg, DiagnosticLocation(F->getSubprogram())));
+    Reported.push_back(F);
+    Changed = true;
+  }
+  return Changed;
+}
+
 /// Erases every call and invoke whose callee is one of \p Deleted, the
-/// definitions whose bodies were deleted after an error: they are not
-/// compiled, so a call of one would be lowered as a call of an external
-/// function. The uses of each call become poison, and an invoke branches to
-/// its normal destination. The other uses of the functions, their addresses,
-/// are replaced by poisonAddressesOf.
+/// definitions whose bodies were deleted after an error (and the declarations
+/// reported for their signatures): they are not compiled, so a call of one
+/// would be lowered as a call of an external function. The uses of each call
+/// become poison, and an invoke branches to its normal destination. The other
+/// uses of the functions, their addresses, are replaced by poisonAddressesOf.
 static bool eraseCallsOf(ArrayRef<Function *> Deleted) {
   // Collect the calls first: erasing one removes uses of the functions, and
   // erasing an invoke may delete PHI nodes in its unwind destination.
@@ -710,7 +857,7 @@ static bool endBlocksAtTraps(Function &F) {
 }
 
 /// Reports a non-empty llvm.global_dtors and erases it. Destructors need an
-/// exit hook in the runtime support assembly (phase 3).
+/// exit hook, AppDomain.ProcessExit (phase 3, Design.md 4.1).
 static bool diagnoseGlobalDtors(Module &M) {
   GlobalVariable *Dtors = M.getNamedGlobal("llvm.global_dtors");
   if (!Dtors || !Dtors->hasInitializer())
@@ -766,15 +913,16 @@ static void replaceGlobalValueWrappers(GlobalValue &GV) {
 }
 
 /// Replaces every remaining use of the functions in \p Deleted, the
-/// definitions whose bodies were deleted after an error, by poison: their
-/// addresses in code, in global initializers (constant expressions included)
-/// and in llvm.global_ctors. The functions are not compiled, so the
-/// AsmPrinter would take each address for that of an external function: an
-/// 'undefined function' error after the real one, or a P/Invoke declaration
-/// for a function with the name of a Phase-1 import. The functions stay in
-/// the module as declarations, and metadata keeps naming them: the IR
-/// verifier runs again after this pass and accepts only a function (or null)
-/// in a "CG Profile" module flag entry.
+/// definitions whose bodies were deleted after an error (and the declarations
+/// reported for their signatures), by poison: their addresses in code, in
+/// global initializers (constant expressions included) and in
+/// llvm.global_ctors. The functions are not compiled, so the AsmPrinter would
+/// take each address for that of an external function: an 'undefined
+/// function' error after the real one, or a P/Invoke declaration for a
+/// function with the name of a Phase-1 import. The functions stay in the
+/// module as declarations, and metadata keeps naming them: the IR verifier
+/// runs again after this pass and accepts only a function (or null) in a "CG
+/// Profile" module flag entry.
 static bool poisonAddressesOf(Module &M, ArrayRef<Function *> Deleted) {
   SmallPtrSet<const Constant *, 4> AddressTaken;
   for (Function *F : Deleted)
@@ -876,6 +1024,13 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
 
   AddrSpaceFinder ASFinder;
   FPTypeFinder FPFinder;
+  ScalableOrTargetExtTypeFinder STFinder;
+  // The used declarations whose signatures have a scalable vector or target
+  // extension type, checked once every diagnosed definition has lost its
+  // body (and its uses of them). The definitions that lost their bodies in
+  // doInitialization are declarations now, and their uses are replaced
+  // anyway.
+  SmallVector<Function *, 4> STDecls;
   for (Function &F : M) {
     Changed |= stripStackProtector(F);
     Changed |= stripEntryInstrumentation(F);
@@ -885,12 +1040,16 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
     // MachineFunctionPass::runOnFunction): only its declaration matters. The
     // name of a used declaration is printed in references to it.
     if (F.isDeclaration() || F.hasAvailableExternallyLinkage()) {
-      if (!F.isIntrinsic() && !F.use_empty())
+      if (!F.isIntrinsic() && !F.use_empty()) {
         diagnoseILNameLength(F, TM);
+        if (STFinder.inType(F.getFunctionType()) &&
+            !is_contained(DeletedBodies, &F))
+          STDecls.push_back(&F);
+      }
       continue;
     }
     bool HasError = diagnoseILNameLength(F, TM);
-    HasError |= diagnoseDefinition(F, ASFinder, FPFinder);
+    HasError |= diagnoseDefinition(F, ASFinder, FPFinder, STFinder);
     if (!HasError) {
       Changed |= endBlocksAtTraps(F);
       continue;
@@ -902,7 +1061,9 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
     Changed = true;
   }
 
-  // Every definition that loses its body is known now.
+  // Every definition that loses its body is known now, and so is every
+  // declaration whose address is still taken.
+  Changed |= diagnoseAddressTakenDeclarations(STDecls, STFinder, DeletedBodies);
   Changed |= eraseCallsOf(DeletedBodies);
 
   Changed |= diagnoseGlobalDtors(M);
@@ -921,6 +1082,14 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
       Ctx.emitError("global variable " + MSIL::getIRName(GV) +
                     " in address space " + Twine(AS) +
                     " is not supported for MSIL");
+      ToErase.push_back(&GV);
+    } else if (Type *Ty = GV.hasInitializer()
+                              ? STFinder.inValue(GV.getInitializer())
+                              : STFinder.inType(GV.getValueType())) {
+      // The IR verifier rejects scalable types in globals, but not every
+      // target extension type (wasm.externref, spirv.*, dx.*, ...).
+      Ctx.emitError("global variable " + MSIL::getIRName(GV) + ": " +
+                    getScalableOrTargetExtTypeMessage(Ty));
       ToErase.push_back(&GV);
     } else if (GV.isThreadLocal()) {
       Ctx.emitError("thread-local variable " + MSIL::getIRName(GV) +

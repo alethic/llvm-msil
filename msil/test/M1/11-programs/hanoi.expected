@@ -1,0 +1,34 @@
+four discs
+disc 1: A -> B
+disc 2: A -> C
+disc 1: B -> C
+disc 3: A -> B
+disc 1: C -> A
+disc 2: C -> B
+disc 1: A -> B
+disc 4: A -> C
+disc 1: B -> C
+disc 2: B -> A
+disc 1: C -> A
+disc 3: B -> C
+disc 1: A -> B
+disc 2: A -> C
+disc 1: B -> C
+1 disc: 1 moves, hash 070c6045
+2 discs: 3 moves, hash 5ccf411d
+3 discs: 7 moves, hash db0fbbb9
+4 discs: 15 moves, hash 7448cf95
+5 discs: 31 moves, hash 52bdb0b9
+6 discs: 63 moves, hash 32bdcf7d
+7 discs: 127 moves, hash 01978e69
+8 discs: 255 moves, hash 29a18355
+9 discs: 511 moves, hash df79ba19
+10 discs: 1023 moves, hash eb11aa3d
+11 discs: 2047 moves, hash a987c749
+12 discs: 4095 moves, hash 52262495
+13 discs: 8191 moves, hash c4be9eb9
+14 discs: 16383 moves, hash 26e806fd
+15 discs: 32767 moves, hash 3307fc29
+16 discs: 65535 moves, hash 35b631d5
+illegal moves refused=2
+[exit 255]

@@ -1,0 +1,35 @@
+first
+key=-50
+seq=0
+middle
+key=-3
+seq=1350
+last
+key=49
+seq=1495
+distinct keys=100
+longest run=27
+longest run key=-7
+perm[0]=119
+perm[999]=337
+inversions=259827
+merged
+-9
+-7
+1
+2
+3
+4
+5
+7
+9
+11
+13
+16
+17
+19
+23
+25
+29
+36
+[exit 243]

@@ -9,8 +9,8 @@
 // driver's -exception-model=seh does not get in the way (decision D8). Only
 // that -O2 command line is pinned here.
 //
-// clang's tests have no ilasm; msil/test/M1/00-smoke/return-42.c assembles and
-// runs the same program at -O0 and -O2, and
+// This test does not assemble its output: msil/test/M1/00-smoke/return-42.c
+// assembles and runs the same program at -O0 and -O2, and
 // llvm/test/CodeGen/MSIL/entrypoint.ll assembles the entry point.
 
 // REQUIRES: msil-registered-target

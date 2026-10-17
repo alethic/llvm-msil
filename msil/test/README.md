@@ -22,6 +22,9 @@ prog.c --clang --target=<triple> -S-->  %t.<L>.il  --ilasm -dll-->  %t.<L>.dll
                        and C constructors) does, where the program would run
   --> msil-run.py      run from a private directory, under a timeout and a memory
                        cap, and compare the transcript with prog[.<os>].expected
+  [--> round trip]     ildasm, ilasm and ildasm again (the .NET tools); both
+                       listings must match, and the reassembled image runs
+                       against the same .expected (msil_roundtrip=1)
   [--> native oracle]  the same source built natively must give the same transcript
   [--> .NET Framework] ilasm -exe and run on .NET Framework 4.8
 ```
@@ -29,7 +32,9 @@ prog.c --clang --target=<triple> -S-->  %t.<L>.il  --ilasm -dll-->  %t.<L>.dll
 jitall runs on the host with the local runner and inside WSL (on the WSL .NET
 runtime the programs use) with `msil_runner=wsl`: the module initializer of a
 linux-triple program calls libc and libm, which exist only there. ILVerify,
-PEVerify, ildasm and ilasm always run on the host.
+PEVerify, ildasm and ilasm run on the host, except that
+`--param msil_wsl_ilasm` makes `%ilasm` the Linux ilasm inside WSL (the
+neutralized pass of msil-verify.py still reassembles with the host ilasm).
 
 `%{msil_ll}` is the same for hand-written IR run through `llc` (`O0`..`O3`
 only; `.ll` files carry no target triple or datalayout). `llc` does no IPO, so
@@ -48,8 +53,30 @@ the MSIL target, ilasm and a .NET runtime); `harness/` needs `msil-ilasm` and
 jitall, PEVerify (Windows), ilasm or .NET runtime for the selected runner is a
 configuration error instead, also when an empty `--param msil_<tool>=` or
 `$MSIL_<TOOL>` switched it off, so a gate cannot pass with every harness test
-UNSUPPORTED. `msil-exec` is never required: clang with the MSIL target
-arrives in later milestones.
+UNSUPPORTED. `--param msil_require_exec=1` (every gate leg) does the same for
+`msil-exec`: `M1/` without clang, the MSIL target, ilasm or a runtime is a
+configuration error instead of UNSUPPORTED.
+
+## Directories
+
+`M1/` holds the milestone-1 tests (Design.md section 12), one directory per
+capability in the order the milestones added them, so the lowest-numbered
+failing directory names the earliest broken capability:
+
+| Directory | Since | Covers |
+|---|---|---|
+| `00-smoke/` | M3 | return values, `argc`, leaf methods |
+| `01-int/` | M4 | integer arithmetic of every width, `__int128`, compares, select, direct calls |
+| `02-fp/` | M5 | `float`/`double` arithmetic, NaN compares, conversions and their rounding, min/max |
+| `03-control/` | M6 | branches, loops, `switch` (dense, sparse, 64-bit), irreducible control flow, computed `goto`, traps |
+| `04-frames/` | M7 | address-taken locals, local arrays, over-aligned frames, recursion with frames |
+| `05-memory/` | M7 | loads and stores of every width, unaligned and volatile accesses, `memcpy`/`memset`/`memmove`, fences, bit builtins |
+| `06-output/` | M8 | `puts`, `putchar` and the C math library through P/Invoke |
+| `07-globals/` | M8 | globals, string tables, relocations, constructors, BSS |
+| `08-fnptr/` | M9 | function pointers, dispatch tables, callbacks, pointers to imports |
+| `09-structs/` | M9 | structs by value and returned, bit-fields, unions, nested aggregates |
+| `10-calls/` | M9 | K&R calls, many arguments, mutual and deep recursion |
+| `11-programs/` | M10 | the Design.md section 12 program corpus: 20 complete programs (fib, sieve, quicksort, a string table with relocations, a function-pointer VM, ...) |
 
 ## Running the tests
 
@@ -64,7 +91,27 @@ ninja -C build check-msil            (every MSIL test in the tree, lean dependen
 Source paths work because `llvm-lit` maps `msil/test/lit.cfg.py` to the
 generated `build/tools/msil/test/lit.site.cfg.py`. At configuration time
 `lit.cfg.py` runs `msil/utils/jitall/build-jitall.py`, which builds jitall into
-`build/tools/msil/jitall` when it is missing or out of date.
+`build/tools/msil/jitall` when it is missing or out of date. The
+`check-msil-m1-<dir>` targets are created by CMake, so a new directory gets
+its target at the next configure.
+
+`pwsh -File` reads an argument that starts with `-` and contains a `:` as
+`-Name:value`, so `msil-lit.ps1 -LitArgs "-sv --param msil_ilasm=D:/..."`
+fails with "Missing an argument for parameter 'LitArgs'". Bind the value
+with a colon (`-LitArgs:"-sv --param msil_ilasm=D:/..."`) or start it with a
+blank (`-LitArgs " -sv --param ..."`); msil-lit.ps1 splits it at blanks.
+
+The milestone-1 gate runs this suite in several legs, each a lit run with
+`--param msil_require_verify=1` plus the parameters of its leg (.NET 8 with
+the native oracle and .NET Framework 4.8, .NET 10, `TieredCompilation=0`,
+WSL with the linux triple, the Linux and the modern Windows ilasm, the
+ildasm round trip); `llvm/docs/MSIL/GettingStarted.md` section 7 lists
+them. Each leg also passes `--param msil_require_exec=1`, and a leg passes
+only when lit exits 0 and at least one test passed. `pwsh -NoProfile -File
+msil/utils/run-m1-gate.ps1` runs every leg in order through the same
+`msil/utils/ci/` scripts as `msil-ci.yml` and prints one summary row per
+leg; `msil/utils/ci/lit-legs.ps1 -List` names the legs, and each leg leaves
+its lit log and xunit file in `build/lit-results/<leg>.{log,xml}`.
 
 ## Adding a test
 
@@ -103,9 +150,11 @@ exit status is 0..255 (bitmasks use at most 8 bits, checksums are masked with
 floating-point values; no library calls other than the Phase-1 imports (D14:
 `puts`, `putchar` and the C math library; `M1/06-output/` tests them), and
 output goes through `msil_test.h`.
-Respect the capability table of plan 5.5: before M6 there are no branches, so
-tests accumulate results with `MSIL_CHECK(acc, bit, cond)` and `return acc;`;
-`MSIL_EXPECT(cond)` needs M6; the `put_*` helpers need M8.
+Every Phase-1 capability exists since M9, so a new test may use all of them
+(`MSIL_EXPECT(cond)`, the `put_*` helpers, frames, globals, function
+pointers). The capability table of plan 5.5 only limited what each milestone's
+tests could use; that is why tests in `01-int/` and `02-fp/` accumulate
+results branch-free with `MSIL_CHECK(acc, bit, cond)` and `return acc;`.
 
 ## Parameters and features
 
@@ -119,6 +168,9 @@ tests accumulate results with `MSIL_CHECK(acc, bit, cond)` and `return acc;`;
 | `msil_run_netfx` | `0` | `1`: also `ilasm -exe` and run on .NET Framework 4.8 (Windows, local runner) |
 | `msil_runner` | `local` | `wsl`: run programs in WSL (`wsl.exe -d Ubuntu`), on .NET 10 by default |
 | `msil_require_verify` | `0` | `1` (every gate): a missing ILVerify, ildasm, jitall, (Windows) PEVerify, ilasm or .NET runtime of the runner is a configuration error, even when an empty override disabled it |
+| `msil_require_exec` | `0` | `1` (every gate leg): `M1/` without the feature `msil-exec` is a configuration error, not UNSUPPORTED |
+| `msil_roundtrip` | `0` | `1`: `%{msil_c}` and `%{msil_ll}` also round-trip every assembly through the .NET ildasm and ilasm at the version msil/utils/tools/msil-tools.proj pins (MsilILAsmVersion) from the NuGet global-packages folder (a missing one is a configuration error naming the version) (`msil-verify.py --roundtrip`; the listings must match) and run the reassembled image against the same `.expected` (Design.md 5.5; not the Framework ildasm, which prints infinite constants as `inf`) |
+| `msil_wsl_ilasm` | unset | with `msil_runner=wsl`: `%ilasm` runs this Linux ilasm (a Windows path) inside WSL through `msil-run.py --tool --runner wsl`, which stages an executable copy; `nuget` picks the newest NuGet `runtime.linux-x64.Microsoft.NETCore.ILAsm` |
 | `msil_ilasm`, `msil_ildasm`, `msil_dotnet`, `msil_ilverify`, `msil_peverify` | auto | tool path; empty disables the tool; `msil_ilasm=nuget` picks the newest NuGet `runtime.<rid>.Microsoft.NETCore.ILAsm` |
 | `msil_jitall` | `<build>/tools/msil/jitall` | jitall directory; empty disables jitall |
 | `msil_timeout`, `msil_mem_limit_mb` | `60`, `4096` | limits for every child process |
@@ -135,7 +187,8 @@ Features: `msil-exec`, `msil-ilasm`, `msil-dotnet`, `dotnet-runtime-<N>` (of
 the runner), `msil-ilverify`, `msil-peverify`, `msil-ildasm` (msil-verify.py
 runs its neutralized pass), `msil-jitall` (jitall.dll is built and the runner
 has a runtime), `msil-netfx`,
-`msil-run-netfx`, `msil-wsl`, `msil-native-oracle`, `msil-registered-target`,
+`msil-run-netfx`, `msil-wsl`, `msil-wsl-ilasm`, `msil-roundtrip`,
+`msil-native-oracle`, `msil-registered-target`,
 `msil-triple=<triple>`, and `msil-triple-windows` / `msil-triple-linux`. The
 last two follow the effective triple, not the host: the WSL runner executes a
 linux triple from Windows, so a Windows-only P/Invoke test says
@@ -146,7 +199,8 @@ Substitutions: `%msil_triple`, `%clang_msil`, `%llc_msil`, `%clang_native`,
 `-dll` or `-exe` and `-output=`), `%dotnet`, `%msil_exec` (msil-run.py),
 `%msil_verify` (msil-verify.py, with `--ildasm`/`--ilasm` when ildasm was
 found), `%msil_jitall` (msil-jitall.py, with `--runner wsl` under
-`msil_runner=wsl`),
+`msil_runner=wsl`), `%msil_roundtrip` (`msil-verify.py --roundtrip` with the
+.NET ildasm and ilasm),
 `%msil_inputs`, `%{msil_cflags}` (`-ffreestanding -Werror=return-type
 -I msil/test/Inputs`), `%{msil_native_ldflags}` (`-lm` when the native triple
 is not Windows, else empty: glibc keeps the C math library out of libc and

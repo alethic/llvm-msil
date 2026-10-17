@@ -37,6 +37,16 @@ using namespace llvm;
 
 #define DEBUG_TYPE "msil-lower"
 
+/// Returns the size in bytes of the native va_list structure of \p TT
+/// (Design.md 4.7): the SysV x86-64 __va_list_tag (24 bytes) or the AAPCS64
+/// structure (32 bytes). Returns 0 where va_list is a plain char*: on Windows
+/// (msvc and gnu, x64 and ARM64) and on Apple ARM64.
+static unsigned getNativeVAListStructSize(const Triple &TT) {
+  if (TT.isOSWindows() || (TT.isAArch64() && TT.isOSDarwin()))
+    return 0;
+  return TT.isAArch64() ? 32 : 24;
+}
+
 MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
                                        const MSILSubtarget &STI)
     : TargetLowering(TM, STI), Subtarget(&STI) {
@@ -303,6 +313,26 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   setOperationAction({ISD::EH_SJLJ_LONGJMP, ISD::EH_SJLJ_SETUP_DISPATCH,
                       ISD::EH_RETURN, ISD::STACKADDRESS},
                      MVT::Other, Custom);
+  // A va_list parameter compiles: only variadic definitions and calls are
+  // Phase-1 errors (decision D19), and clang lowers va_arg inline for the
+  // native va_list layout of every triple (Design.md 3 and 4.7). va_end does
+  // nothing on any of those ABIs: Expand makes it its input chain. va_copy
+  // copies the va_list: a pointer load and store (Expand) where it is a
+  // char*, a cpblk of the native structure elsewhere (LowerVACOPY). Only
+  // hand-written IR has a va_arg instruction, which LowerOperation diagnoses
+  // (phase 3); the legalizer looks VAARG up on MVT::Other. A result type that
+  // the type legalizer changes asks ReplaceNodeResults first, which reports
+  // the instruction once: soft promotion (f16, bf16), scalarization and
+  // widening have no case for VAARG, and expansion would make several.
+  setOperationAction(ISD::VAEND, MVT::Other, Expand);
+  bool VAListIsStruct = getNativeVAListStructSize(TM.getTargetTriple()) != 0;
+  setOperationAction(ISD::VACOPY, MVT::Other, VAListIsStruct ? Custom : Expand);
+  setOperationAction(ISD::VAARG, {MVT::Other, MVT::f16, MVT::bf16}, Custom);
+  for (MVT T : MVT::integer_valuetypes())
+    if (T.getSizeInBits() > 64)
+      setOperationAction(ISD::VAARG, T, Custom);
+  for (MVT T : MVT::vector_valuetypes())
+    setOperationAction(ISD::VAARG, T, Custom);
   // Jump tables become a CIL 'switch' on an int32 index (LowerBR_JT, decision
   // D35). Custom, like Legal, keeps jump tables allowed (areJTsAllowed). An
   // indirectbr never gets here: IndirectBrExpand turns it into a switch.
@@ -507,6 +537,29 @@ static SDValue foldExtendOfExactRound(SDValue Src, EVT VT, const SDLoc &DL,
   return DAG.getNode(ISD::FP_EXTEND, DL, VT, In);
 }
 
+/// The error for a va_arg instruction (LowerOperation, ReplaceNodeResults).
+static constexpr const char *VAArgUnsupported =
+    "the va_arg instruction is not supported for MSIL yet (phase 3 variadics)";
+
+/// Lowers VACOPY where va_list is the native structure (Design.md 4.7): a
+/// copy of its bytes, which MSILSelectionDAGInfo makes a cpblk, as X86 and
+/// AArch64 copy it. Where va_list is a char*, VACOPY is Expand.
+static SDValue LowerVACOPY(SDValue Op, SelectionDAG &DAG) {
+  unsigned Size = getNativeVAListStructSize(DAG.getTarget().getTargetTriple());
+  assert(Size && "A pointer-sized va_list is copied by the generic expansion");
+  SDValue Chain = Op.getOperand(0);
+  SDValue DstPtr = Op.getOperand(1);
+  SDValue SrcPtr = Op.getOperand(2);
+  const Value *DstSV = cast<SrcValueSDNode>(Op.getOperand(3))->getValue();
+  const Value *SrcSV = cast<SrcValueSDNode>(Op.getOperand(4))->getValue();
+  SDLoc DL(Op);
+  return DAG.getMemcpy(Chain, DL, DstPtr, SrcPtr,
+                       DAG.getIntPtrConstant(Size, DL), Align(8), Align(8),
+                       /*isVol=*/false, /*AlwaysInline=*/false, /*CI=*/nullptr,
+                       std::nullopt, MachinePointerInfo(DstSV),
+                       MachinePointerInfo(SrcSV));
+}
+
 SDValue MSILTargetLowering::LowerOperation(SDValue Op,
                                            SelectionDAG &DAG) const {
   switch (Op.getOpcode()) {
@@ -567,6 +620,12 @@ SDValue MSILTargetLowering::LowerOperation(SDValue Op,
   case ISD::EH_RETURN:
     return LowerUnsupported(Op, DAG,
                             "llvm.eh.return is not supported for MSIL");
+  // va_copy of a native va_list structure. A va_arg instruction waits for
+  // phase 3: clang lowers va_arg inline, so only hand-written IR has one.
+  case ISD::VACOPY:
+    return LowerVACOPY(Op, DAG);
+  case ISD::VAARG:
+    return LowerUnsupported(Op, DAG, VAArgUnsupported);
   case ISD::GlobalAddress:
     return LowerGlobalAddress(Op, DAG);
   case ISD::ExternalSymbol:
@@ -634,6 +693,17 @@ void MSILTargetLowering::ReplaceNodeResults(SDNode *N,
   // per element, or the f16 and bf16 libcalls that LowerCall diagnoses).
   if (N->getOpcode() == ISD::FPTRUNC_ROUND) {
     Results.push_back(LowerFPTRUNC_ROUND(SDValue(N, 0), DAG));
+    return;
+  }
+
+  // A va_arg instruction of an f16, bf16, wider integer or vector type: the
+  // error of LowerOperation, an undefined value and the input chain.
+  if (N->getOpcode() == ISD::VAARG) {
+    DAG.getContext()->diagnose(
+        DiagnosticInfoUnsupported(DAG.getMachineFunction().getFunction(),
+                                  VAArgUnsupported, SDLoc(N).getDebugLoc()));
+    Results.push_back(DAG.getUNDEF(N->getValueType(0)));
+    Results.push_back(N->getOperand(0));
     return;
   }
 

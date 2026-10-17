@@ -1,0 +1,14 @@
+# --param msil_wsl_ilasm=PATH (the Linux assembler leg of plan M10) makes
+# %ilasm run that Linux ilasm inside WSL, so it needs --param msil_runner=wsl:
+# with the local runner a nested lit stops with lit's fatal-error status 2
+# and names msil_runner=wsl, instead of assembling on the host as if the leg
+# had run. The file exists, so the runner is the only problem; --show-tests
+# ends the nested lit after discovery even if the error were missing, so
+# nothing in Inputs/nested-ok runs (require-verify.test runs it). The
+# control: an empty msil_wsl_ilasm leaves %ilasm on the host, and the nested
+# suite Inputs/nested-host-ilasm (run by this test only) loads and passes.
+
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=local --param msil_wsl_ilasm=%S/Inputs/roundtrip-ldc.il %S/../Inputs/nested-ok > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "fatal: msil: --param msil_wsl_ilasm needs --param msil_runner=wsl"
+# RUN: %{harness_lit} --param msil_runner=local --param msil_wsl_ilasm= %S/Inputs/nested-host-ilasm > %t.empty.log 2>&1
+# RUN: %{harness_check} contains %t.empty.log "^PASS: MSIL :: harness/legs/Inputs/nested-host-ilasm/host-ilasm\.test"

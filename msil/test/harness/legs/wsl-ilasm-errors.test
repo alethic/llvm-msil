@@ -1,0 +1,14 @@
+# With msil_runner=wsl, --param msil_wsl_ilasm=PATH must name a file, and that
+# file must assemble inside WSL: lit.cfg.py assembles a probe module with it
+# while it loads, so a missing file ('no such file') or one that is not a
+# Linux ilasm ('cannot assemble inside WSL') stops a nested lit with lit's
+# fatal-error status 2 instead of failing every test of the leg.
+# --show-tests ends the nested lit after discovery even if the error were
+# missing, so nothing in Inputs/nested-ok runs. WSL only;
+# wsl-ilasm-local-runner.test covers the local runner.
+# REQUIRES: msil-wsl
+
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_wsl_ilasm=%t.no-such-ilasm %S/../Inputs/nested-ok > %t.missing.log 2>&1
+# RUN: %{harness_check} contains %t.missing.log "fatal: msil: --param msil_wsl_ilasm=\S*no-such-ilasm: no such file"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_wsl_ilasm=%S/Inputs/roundtrip-ldc.il %S/../Inputs/nested-ok > %t.bad.log 2>&1
+# RUN: %{harness_check} contains %t.bad.log "fatal: msil: --param msil_wsl_ilasm=\S*roundtrip-ldc\.il cannot assemble inside WSL"

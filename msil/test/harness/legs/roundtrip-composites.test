@@ -1,0 +1,37 @@
+# --param msil_roundtrip=1 (the round-trip leg of plan M10, Design.md 5.5)
+# makes %{msil_c} and %{msil_ll} disassemble each module they build,
+# reassemble the listing with the .NET ildasm and ilasm at the version that
+# msil/utils/tools/msil-tools.proj pins, require the two listings to match
+# (msil-verify.py --roundtrip) and run the reassembled image against the same
+# .expected file. The leg itself passes whenever its tests pass, so a
+# lit.cfg.py that dropped the round trip from c_pipeline or ll_pipeline, or
+# gated it on anything but msil_roundtrip=1, would leave it green without
+# round-tripping anything. A nested lit with -a and msil_roundtrip=1 prints
+# every command it ran, so for each level that msil_opt_levels selects
+# (features msil-opt-<L> and msil-ll-opt-<L> of lit.local.cfg) the output for
+# Inputs/nested-roundtrip/rt-levels.c and rt-levels-ir.ll must show the
+# round trip of that level's <t>.<L>.dll into <t>.<L>.rt.dll with the pinned
+# tools and an msil-run.py run of <t>.<L>.rt.dll, and both tests must pass.
+# The control: without msil_roundtrip=1 the same pipeline runs no round trip.
+# The nested suite has the stand-in compiler of harness/pipeline, so no clang
+# or llc is needed. msil_roundtrip=1 is a configuration error without the
+# pinned tools (roundtrip-tools-missing.test), so the test needs them
+# (feature msil-roundtrip-tools of lit.local.cfg; the gates and CI restore
+# them).
+# REQUIRES: msil-roundtrip-tools
+
+# RUN: %{harness_lit} -a --param msil_roundtrip=1 %S/Inputs/nested-roundtrip > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/legs/Inputs/nested-roundtrip/rt-levels\.c " "^PASS: MSIL :: harness/legs/Inputs/nested-roundtrip/rt-levels-ir\.ll "
+# RUN: %if msil-opt-O0 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .*\.microsoft\.netcore\.ildasm.%{legs_tools_version}.* --ilasm .*\.microsoft\.netcore\.ilasm.%{legs_tools_version}.* '?--output=.*rt-levels\.c\.tmp\.O0\.rt\.dll'? .*rt-levels\.c\.tmp\.O0\.dll'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --out .*rt-levels\.c\.tmp\.O0\.rt\.out'? .*rt-levels\.c\.tmp\.O0\.rt\.dll'?$" %}
+# RUN: %if msil-opt-O1 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .*\.microsoft\.netcore\.ildasm.%{legs_tools_version}.* --ilasm .*\.microsoft\.netcore\.ilasm.%{legs_tools_version}.* '?--output=.*rt-levels\.c\.tmp\.O1\.rt\.dll'? .*rt-levels\.c\.tmp\.O1\.dll'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --out .*rt-levels\.c\.tmp\.O1\.rt\.out'? .*rt-levels\.c\.tmp\.O1\.rt\.dll'?$" %}
+# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .*\.microsoft\.netcore\.ildasm.%{legs_tools_version}.* --ilasm .*\.microsoft\.netcore\.ilasm.%{legs_tools_version}.* '?--output=.*rt-levels\.c\.tmp\.O2\.rt\.dll'? .*rt-levels\.c\.tmp\.O2\.dll'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --out .*rt-levels\.c\.tmp\.O2\.rt\.out'? .*rt-levels\.c\.tmp\.O2\.rt\.dll'?$" %}
+# RUN: %if msil-opt-O3 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .*\.microsoft\.netcore\.ildasm.%{legs_tools_version}.* --ilasm .*\.microsoft\.netcore\.ilasm.%{legs_tools_version}.* '?--output=.*rt-levels\.c\.tmp\.O3\.rt\.dll'? .*rt-levels\.c\.tmp\.O3\.dll'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --out .*rt-levels\.c\.tmp\.O3\.rt\.out'? .*rt-levels\.c\.tmp\.O3\.rt\.dll'?$" %}
+# RUN: %if msil-opt-Os %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .*\.microsoft\.netcore\.ildasm.%{legs_tools_version}.* --ilasm .*\.microsoft\.netcore\.ilasm.%{legs_tools_version}.* '?--output=.*rt-levels\.c\.tmp\.Os\.rt\.dll'? .*rt-levels\.c\.tmp\.Os\.dll'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --out .*rt-levels\.c\.tmp\.Os\.rt\.out'? .*rt-levels\.c\.tmp\.Os\.rt\.dll'?$" %}
+# RUN: %if msil-opt-Oz %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .*\.microsoft\.netcore\.ildasm.%{legs_tools_version}.* --ilasm .*\.microsoft\.netcore\.ilasm.%{legs_tools_version}.* '?--output=.*rt-levels\.c\.tmp\.Oz\.rt\.dll'? .*rt-levels\.c\.tmp\.Oz\.dll'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --out .*rt-levels\.c\.tmp\.Oz\.rt\.out'? .*rt-levels\.c\.tmp\.Oz\.rt\.dll'?$" %}
+# RUN: %if msil-ll-opt-O0 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .*\.microsoft\.netcore\.ildasm.%{legs_tools_version}.* --ilasm .*\.microsoft\.netcore\.ilasm.%{legs_tools_version}.* '?--output=.*rt-levels-ir\.ll\.tmp\.O0\.rt\.dll'? .*rt-levels-ir\.ll\.tmp\.O0\.dll'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --out .*rt-levels-ir\.ll\.tmp\.O0\.rt\.out'? .*rt-levels-ir\.ll\.tmp\.O0\.rt\.dll'?$" %}
+# RUN: %if msil-ll-opt-O1 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .*\.microsoft\.netcore\.ildasm.%{legs_tools_version}.* --ilasm .*\.microsoft\.netcore\.ilasm.%{legs_tools_version}.* '?--output=.*rt-levels-ir\.ll\.tmp\.O1\.rt\.dll'? .*rt-levels-ir\.ll\.tmp\.O1\.dll'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --out .*rt-levels-ir\.ll\.tmp\.O1\.rt\.out'? .*rt-levels-ir\.ll\.tmp\.O1\.rt\.dll'?$" %}
+# RUN: %if msil-ll-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .*\.microsoft\.netcore\.ildasm.%{legs_tools_version}.* --ilasm .*\.microsoft\.netcore\.ilasm.%{legs_tools_version}.* '?--output=.*rt-levels-ir\.ll\.tmp\.O2\.rt\.dll'? .*rt-levels-ir\.ll\.tmp\.O2\.dll'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --out .*rt-levels-ir\.ll\.tmp\.O2\.rt\.out'? .*rt-levels-ir\.ll\.tmp\.O2\.rt\.dll'?$" %}
+# RUN: %if msil-ll-opt-O3 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .*\.microsoft\.netcore\.ildasm.%{legs_tools_version}.* --ilasm .*\.microsoft\.netcore\.ilasm.%{legs_tools_version}.* '?--output=.*rt-levels-ir\.ll\.tmp\.O3\.rt\.dll'? .*rt-levels-ir\.ll\.tmp\.O3\.dll'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --out .*rt-levels-ir\.ll\.tmp\.O3\.rt\.out'? .*rt-levels-ir\.ll\.tmp\.O3\.rt\.dll'?$" %}
+# RUN: %{harness_lit} -a --param msil_opt_levels=O2 %S/Inputs/nested-roundtrip/rt-levels-ir.ll > %t.off.log 2>&1
+# RUN: %{harness_check} contains %t.off.log "^PASS: MSIL :: harness/legs/Inputs/nested-roundtrip/rt-levels-ir\.ll " "^# executed command: .*msil-run\.py'? --expect-os .*rt-levels-ir\.ll\.tmp\.O2\.dll'?$"
+# RUN: %{harness_check} lacks %t.off.log "--roundtrip" "\.rt\.dll"

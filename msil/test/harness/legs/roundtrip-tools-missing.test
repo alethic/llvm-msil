@@ -1,0 +1,18 @@
+# --param msil_roundtrip=1 needs the .NET ildasm and ilasm at the version
+# that msil/utils/tools/msil-tools.proj pins (MsilILAsmVersion), and without
+# them lit.cfg.py stops instead of running %{msil_c} and %{msil_ll} without
+# the round trip: a nested lit whose NuGet global-packages folders are all
+# empty exits with lit's fatal-error status 2 and names the version and
+# MsilILAsmVersion. lit.cfg.py searches $NUGET_PACKAGES, the folder that
+# 'dotnet nuget locals global-packages --list' reports (dotnet itself puts
+# $NUGET_PACKAGES first) and ~/.nuget/packages, so the nested lit runs with
+# $NUGET_PACKAGES and the home directory ($USERPROFILE on Windows, $HOME
+# elsewhere) set to an empty directory. --show-tests ends the nested lit
+# after discovery even if the error were missing, so nothing in
+# ../Inputs/nested-ok runs. roundtrip-composites.test runs the round trip
+# where the tools are present.
+
+# RUN: rm -rf %t.empty
+# RUN: mkdir -p %t.empty
+# RUN: env NUGET_PACKAGES=%t.empty USERPROFILE=%t.empty HOME=%t.empty %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_roundtrip=1 %S/../Inputs/nested-ok > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "fatal: msil: --param msil_roundtrip=1 needs the \.NET ildasm and ilasm %{legs_tools_version} \(MsilILAsmVersion of msil/utils/tools/msil-tools\.proj\) in the NuGet global-packages folder"

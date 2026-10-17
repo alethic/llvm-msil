@@ -1,0 +1,22 @@
+# msil-run.py --tool --runner wsl (how %ilasm runs the Linux ilasm of
+# --param msil_wsl_ilasm) runs a Linux program that lives on a Windows drive
+# inside WSL: TOOL and every argument that is an absolute Windows path, alone
+# or as the VALUE of -OPTION=VALUE (ilasm's -output=), become /mnt/<drive>/
+# paths, and an executable copy of TOOL (--stage) runs from a private Linux
+# directory. The copy is a precaution, not a necessity: under WSL's default
+# DrvFs mount (no 'metadata' option) files on a Windows drive show as 0777
+# and run in place from /mnt/<drive>, and only a DrvFs mount with 'metadata'
+# and a restrictive fmask makes them non-executable. The stand-in tool is a
+# shell script written here with LF line endings: it prints its own path,
+# which must be the staged copy, not the /mnt/<drive>/ original, and its
+# arguments, copies its input to its -output= file and exits with 3, which
+# msil-run.py passes through. WSL only.
+# REQUIRES: msil-wsl
+
+# RUN: %{harness_check} write %t.tool.sh "#!/bin/sh" 'echo "tool: $0"' 'for a in "$@"; do echo "arg: $a"; done' 'cp "$2" "${1#-output=}" && exit 3'
+# RUN: %{harness_check} write %t.in "copied inside WSL"
+# RUN: rm -f %t.out
+# RUN: %{harness_check} exits 3 %{legs_msil_run} --tool --runner wsl --wsl-distro %{legs_wsl_distro} -- %t.tool.sh -output=%t.out %t.in > %t.log
+# RUN: %{harness_check} equals %t.out "copied inside WSL"
+# RUN: %{harness_check} contains %t.log "^tool: /" "^arg: -output=/mnt/[a-z]/\S+\.out$" "^arg: /mnt/[a-z]/\S+\.in$"
+# RUN: %{harness_check} lacks %t.log "^tool: /mnt/" '[A-Za-z]:[\\/]'

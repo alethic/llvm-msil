@@ -1,0 +1,14 @@
+# Why the round-trip leg takes the .NET (NuGet) ildasm and ilasm: the .NET
+# Framework 4.8 ildasm, which msil-verify.py's neutralized pass uses on
+# Windows, prints an infinite 'ldc.r8 float64(0x7FF0000000000000)' back as
+# 'ldc.r8 inf', and ilasm cannot parse that (recon cil-runtime.md 15). With
+# that ildasm, msil-verify.py --roundtrip (%msil_roundtrip) must exit 1 and
+# say that ilasm could not reassemble the listing, passing on ilasm's error
+# at the token 'inf'. Only where that ildasm is the one configured (feature
+# msil-netfx-ildasm, Windows); roundtrip-ilasm-error.test checks the same
+# failure path with any tools.
+# REQUIRES: msil-netfx-ildasm, msil-ilverify
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/roundtrip-inf.il
+# RUN: %{harness_check} exits 1 %msil_roundtrip --ildasm %{legs_ildasm} --ilasm %{legs_ilasm} --output=%t.rt.dll %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^round trip: ilasm could not reassemble the disassembly of \S+\.tmp\.dll \(status 1;" "syntax error at token 'inf'.*ldc\.r8\s+inf\b"

@@ -1,0 +1,354 @@
+; Triple parity (Design.md section 3; ImplementationPlan.md decisions D3, D6,
+; D11 and D14). An MSIL triple is the native triple with the msil object
+; format, so the backend compiles with the native data layout, and the x86_64
+; Linux and x86_64 Windows layouts differ only in the symbol mangling
+; ('m:e' / 'm:w'), which MSIL never uses: IL names come from IR names, never
+; from the Mangler (D11). The same portable IR (no data layout, no target
+; attributes) must therefore give the same module for
+; x86_64-unknown-linux-gnu-msil (Design.md 12's triple) and
+; x86_64-pc-windows-msvc-msil (the Windows execution triple of D6) except for
+; exactly two things: the triple in the header comment, and the library of
+; each P/Invoke declaration (D14: puts from "libc" or "ucrtbase", sqrt from
+; "libm.so.6" or "ucrtbase").
+;
+; The module covers the milestone-1 scope of Design.md 12: recursion, loops
+; over a global array (with a memset of it), a switch through a jump table, a
+; dispatch table of function pointers called with calli and a string table,
+; both filled in by the module initializer (relocations, '<msil>fn_' address
+; fields set with ldftn), a static frame (localloc) with initblk and volatile
+; accesses, a fence, FP arithmetic and conversions, 64-bit arithmetic as
+; native int (D2), a select, two imports, and main(argc, argv), which gets the
+; argv-building entry point (D27).
+;
+; Each output is normalized by deleting the triple line and replacing the
+; library of every 'pinvokeimpl(...)' with LIB; the normalized modules must be
+; identical (diff), comments and block labels included, at -O2 and at -O0. The
+; same holds for the two other x86_64 Phase-1 triples,
+; x86_64-unknown-linux-musl-msil ("libc" for both imports) and
+; x86_64-w64-windows-gnu-msil ("msvcrt"), at -O2. FileCheck pins what every
+; module must contain, so that the diff can never pass on two empty or
+; truncated modules, and checks that the normalization replaced exactly the
+; two libraries and the triple. Nothing is reported, int64 never appears (D2),
+; and every module assembles.
+
+; DEFINE: %{llc} = llc -verify-machineinstrs
+; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=pinvokeimpl
+; DEFINE: %{norm} = sed -e '/^\/\/ target triple   = /d' -e 's/pinvokeimpl([^ ]* cdecl)/pinvokeimpl(LIB cdecl)/'
+
+; RUN: %{llc} -mtriple=x86_64-unknown-linux-gnu-msil < %s -o %t.gnu.il 2>&1 | count 0
+; RUN: %{llc} -mtriple=x86_64-pc-windows-msvc-msil < %s -o %t.msvc.il 2>&1 | count 0
+; RUN: %{llc} -mtriple=x86_64-unknown-linux-musl-msil < %s -o %t.musl.il 2>&1 | count 0
+; RUN: %{llc} -mtriple=x86_64-w64-windows-gnu-msil < %s -o %t.mingw.il 2>&1 | count 0
+; RUN: %{check} -DTRIPLE=x86_64-unknown-linux-gnu-msil -DCLIB=libc -DMLIB=libm.so.6 --input-file=%t.gnu.il
+; RUN: %{check} -DTRIPLE=x86_64-pc-windows-msvc-msil -DCLIB=ucrtbase -DMLIB=ucrtbase --input-file=%t.msvc.il
+; RUN: %{check} -DTRIPLE=x86_64-unknown-linux-musl-msil -DCLIB=libc -DMLIB=libc --input-file=%t.musl.il
+; RUN: %{check} -DTRIPLE=x86_64-w64-windows-gnu-msil -DCLIB=msvcrt -DMLIB=msvcrt --input-file=%t.mingw.il
+; RUN: %{norm} %t.gnu.il > %t.gnu.norm
+; RUN: %{norm} %t.msvc.il > %t.msvc.norm
+; RUN: %{norm} %t.musl.il > %t.musl.norm
+; RUN: %{norm} %t.mingw.il > %t.mingw.norm
+; RUN: FileCheck %s --check-prefix=NORM --input-file=%t.gnu.norm
+; RUN: FileCheck %s --check-prefix=NORM --input-file=%t.msvc.norm
+; RUN: diff %t.gnu.norm %t.msvc.norm
+; RUN: diff %t.gnu.norm %t.musl.norm
+; RUN: diff %t.gnu.norm %t.mingw.norm
+
+; RUN: %{llc} -O0 -mtriple=x86_64-unknown-linux-gnu-msil < %s -o %t.gnu.o0.il 2>&1 | count 0
+; RUN: %{llc} -O0 -mtriple=x86_64-pc-windows-msvc-msil < %s -o %t.msvc.o0.il 2>&1 | count 0
+; RUN: %{check} -DTRIPLE=x86_64-unknown-linux-gnu-msil -DCLIB=libc -DMLIB=libm.so.6 --input-file=%t.gnu.o0.il
+; RUN: %{check} -DTRIPLE=x86_64-pc-windows-msvc-msil -DCLIB=ucrtbase -DMLIB=ucrtbase --input-file=%t.msvc.o0.il
+; RUN: %{norm} %t.gnu.o0.il > %t.gnu.o0.norm
+; RUN: %{norm} %t.msvc.o0.il > %t.msvc.o0.norm
+; RUN: FileCheck %s --check-prefix=NORM --input-file=%t.gnu.o0.norm
+; RUN: diff %t.gnu.o0.norm %t.msvc.o0.norm
+
+; RUN: %if ilasm %{ %ilasm-verify -output=%t.gnu.dll %t.gnu.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t.msvc.dll %t.msvc.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t.musl.dll %t.musl.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t.mingw.dll %t.mingw.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t.gnu.o0.dll %t.gnu.o0.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t.msvc.o0.dll %t.msvc.o0.il %}
+
+; The normalized module has no triple line and exactly two P/Invoke
+; declarations, both with the library replaced (the main checks below say
+; which two).
+; NORM-NOT:     {{target triple|pinvokeimpl}}
+; NORM-COUNT-2: {{^}}.method public hidebysig static pinvokeimpl(LIB cdecl) {{.+}} cil managed preservesig {}{{$}}
+; NORM-NOT:     {{target triple|pinvokeimpl}}
+
+; CHECK:      {{^}}// MSIL module generated by LLVM{{$}}
+; CHECK-NEXT: {{^}}// source_filename = "triple-parity.c"{{$}}
+; CHECK-NEXT: {{^}}// target triple   = "[[TRIPLE]]"{{$}}
+; CHECK-NEXT: {{^}}.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }{{$}}
+; CHECK-NEXT: {{^}}.assembly 'triple-parity' { .ver 0:0:0:0 }{{$}}
+
+source_filename = "triple-parity.c"
+
+@primes = global [64 x i8] zeroinitializer
+@.str.0 = private unnamed_addr constant [5 x i8] c"zero\00"
+@.str.1 = private unnamed_addr constant [4 x i8] c"one\00"
+@.str.2 = private unnamed_addr constant [4 x i8] c"two\00"
+@.str.3 = private unnamed_addr constant [6 x i8] c"three\00"
+@names = internal constant [4 x ptr] [ptr @.str.0, ptr @.str.1, ptr @.str.2, ptr @.str.3]
+@ops = internal constant [3 x ptr] [ptr @add, ptr @sub, ptr @mul]
+@counter = global i32 7
+
+declare i32 @puts(ptr)
+declare double @sqrt(double)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+
+; CHECK-LABEL: {{^}}.method assembly static int32 'add'(int32, int32) cil managed{{$}}
+; CHECK:       {{^}}  add{{$}}
+; CHECK:       {{^}}} // end of method 'add'{{$}}
+define internal i32 @add(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+; CHECK-LABEL: {{^}}.method assembly static int32 'sub'(int32, int32) cil managed{{$}}
+define internal i32 @sub(i32 %a, i32 %b) {
+  %r = sub i32 %a, %b
+  ret i32 %r
+}
+
+; CHECK-LABEL: {{^}}.method assembly static int32 'mul'(int32, int32) cil managed{{$}}
+define internal i32 @mul(i32 %a, i32 %b) {
+  %r = mul i32 %a, %b
+  ret i32 %r
+}
+
+; CHECK-LABEL: {{^}}.method public static int32 'fib'(int32) cil managed{{$}}
+; CHECK:       {{^}}  call int32 'fib'(int32){{$}}
+; CHECK:       {{^}}  call int32 'fib'(int32){{$}}
+; CHECK:       {{^}}} // end of method 'fib'{{$}}
+define i32 @fib(i32 %n) {
+entry:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %done, label %rec
+rec:
+  %n1 = add i32 %n, -1
+  %f1 = call i32 @fib(i32 %n1)
+  %n2 = add i32 %n, -2
+  %f2 = call i32 @fib(i32 %n2)
+  %s = add i32 %f1, %f2
+  ret i32 %s
+done:
+  ret i32 %n
+}
+
+; CHECK-LABEL: {{^}}.method public static int32 'sieve'(int32) cil managed{{$}}
+; CHECK:       {{^}}  ldsfld native int 'primes'{{$}}
+; CHECK:       {{^}}  initblk{{$}}
+; CHECK:       {{^}}  stind.i1{{$}}
+; CHECK:       {{^}}} // end of method 'sieve'{{$}}
+define i32 @sieve(i32 %n) {
+entry:
+  call void @llvm.memset.p0.i64(ptr @primes, i8 1, i64 64, i1 false)
+  br label %outer
+outer:
+  %i = phi i32 [ 2, %entry ], [ %i.next, %outer.next ]
+  %count = phi i32 [ 0, %entry ], [ %count.next, %outer.next ]
+  %i.ext = sext i32 %i to i64
+  %p = getelementptr inbounds [64 x i8], ptr @primes, i64 0, i64 %i.ext
+  %v = load i8, ptr %p
+  %isprime = icmp ne i8 %v, 0
+  br i1 %isprime, label %mark, label %outer.next
+mark:
+  %sq = mul i32 %i, %i
+  br label %inner
+inner:
+  %j = phi i32 [ %sq, %mark ], [ %j.next, %inner.body ]
+  %j.in = icmp slt i32 %j, %n
+  br i1 %j.in, label %inner.body, label %marked
+inner.body:
+  %j.ext = sext i32 %j to i64
+  %q = getelementptr inbounds [64 x i8], ptr @primes, i64 0, i64 %j.ext
+  store i8 0, ptr %q
+  %j.next = add i32 %j, %i
+  br label %inner
+marked:
+  %count.inc = add i32 %count, 1
+  br label %outer.next
+outer.next:
+  %count.next = phi i32 [ %count, %outer ], [ %count.inc, %marked ]
+  %i.next = add i32 %i, 1
+  %more = icmp slt i32 %i.next, %n
+  br i1 %more, label %outer, label %exit
+exit:
+  ret i32 %count.next
+}
+
+; CHECK-LABEL: {{^}}.method public static int32 'classify'(int32) cil managed{{$}}
+; CHECK:       {{^}}  switch (@BB{{[0-9]+_[0-9]+(, @BB[0-9]+_[0-9]+)+}}){{$}}
+; CHECK-NEXT:  {{^}}  br @BB{{[0-9]+_[0-9]+$}}
+; CHECK:       {{^}}} // end of method 'classify'{{$}}
+define i32 @classify(i32 %x) {
+entry:
+  switch i32 %x, label %other [
+    i32 0, label %c0
+    i32 1, label %c1
+    i32 2, label %c2
+    i32 3, label %c3
+    i32 5, label %c5
+  ]
+c0:
+  ret i32 10
+c1:
+  ret i32 20
+c2:
+  ret i32 35
+c3:
+  ret i32 47
+c5:
+  ret i32 51
+other:
+  ret i32 -1
+}
+
+; CHECK-LABEL: {{^}}.method public static int32 'dispatch'(int32, int32, int32) cil managed{{$}}
+; CHECK:       {{^}}  ldsfld native int 'ops'{{$}}
+; CHECK:       {{^}}  ldind.i{{$}}
+; CHECK-NEXT:  {{^}}  calli int32(int32, int32){{$}}
+; CHECK:       {{^}}} // end of method 'dispatch'{{$}}
+define i32 @dispatch(i32 %i, i32 %a, i32 %b) {
+  %i.ext = zext i32 %i to i64
+  %slot = getelementptr inbounds [3 x ptr], ptr @ops, i64 0, i64 %i.ext
+  %fn = load ptr, ptr %slot
+  %r = call i32 %fn(i32 %a, i32 %b)
+  ret i32 %r
+}
+
+; CHECK-LABEL: {{^}}.method public static int32 'local_sum'(int32) cil managed{{$}}
+; CHECK:       {{^}}  localloc{{$}}
+; CHECK:       {{^}}  initblk{{$}}
+; CHECK:       {{^}}  volatile.{{$}}
+; CHECK-NEXT:  {{^}}  stind.i4{{$}}
+; CHECK:       {{^}}  call void [mscorlib]System.Threading.Interlocked::MemoryBarrier(){{$}}
+; CHECK:       {{^}}  volatile.{{$}}
+; CHECK-NEXT:  {{^}}  ldind.i4{{$}}
+; CHECK:       {{^}}} // end of method 'local_sum'{{$}}
+define i32 @local_sum(i32 %n) {
+entry:
+  %buf = alloca [16 x i32], align 4
+  call void @llvm.memset.p0.i64(ptr %buf, i8 0, i64 64, i1 false)
+  br label %fill
+fill:
+  %i = phi i32 [ 0, %entry ], [ %i.next, %fill ]
+  %i.ext = zext i32 %i to i64
+  %p = getelementptr inbounds [16 x i32], ptr %buf, i64 0, i64 %i.ext
+  %v = mul i32 %i, %n
+  store volatile i32 %v, ptr %p
+  %i.next = add i32 %i, 1
+  %more = icmp ult i32 %i.next, 16
+  br i1 %more, label %fill, label %publish
+publish:
+  fence seq_cst
+  br label %sum
+sum:
+  %k = phi i32 [ 0, %publish ], [ %k.next, %sum ]
+  %acc = phi i32 [ 0, %publish ], [ %acc.next, %sum ]
+  %k.ext = zext i32 %k to i64
+  %q = getelementptr inbounds [16 x i32], ptr %buf, i64 0, i64 %k.ext
+  %w = load volatile i32, ptr %q
+  %acc.next = add i32 %acc, %w
+  %k.next = add i32 %k, 1
+  %again = icmp ult i32 %k.next, 16
+  br i1 %again, label %sum, label %done
+done:
+  ret i32 %acc.next
+}
+
+; CHECK-LABEL: {{^}}.method public static float64 'hyp'(float64, float64) cil managed{{$}}
+; CHECK:       {{^}}  call float64 'sqrt'(float64){{$}}
+; CHECK:       {{^}}} // end of method 'hyp'{{$}}
+define double @hyp(double %a, double %b) {
+  %aa = fmul double %a, %a
+  %bb = fmul double %b, %b
+  %s = fadd double %aa, %bb
+  %r = call double @sqrt(double %s)
+  ret double %r
+}
+
+; CHECK-LABEL: {{^}}.method public static int32 'pick'(int32, int32, int32) cil managed{{$}}
+define i32 @pick(i32 %c, i32 %a, i32 %b) {
+  %z = icmp eq i32 %c, 0
+  %r = select i1 %z, i32 %a, i32 %b
+  ret i32 %r
+}
+
+; CHECK-LABEL: {{^}}.method public static native int 'wide'(native int, int32) cil managed{{$}}
+; CHECK:       {{^}}  div{{$}}
+; CHECK:       {{^}}} // end of method 'wide'{{$}}
+define i64 @wide(i64 %a, i32 %b) {
+  %b.ext = sext i32 %b to i64
+  %m = mul i64 %a, %b.ext
+  %d = sdiv i64 %m, 3
+  ret i64 %d
+}
+
+; CHECK-LABEL: {{^}}.method public static int32 'round_trip'(int32) cil managed{{$}}
+; CHECK:       {{^}}  conv.r8{{$}}
+; CHECK:       {{^}}  ldc.r8 float64(0x4004000000000000){{$}}
+; CHECK:       {{^}}  conv.i4{{$}}
+; CHECK:       {{^}}} // end of method 'round_trip'{{$}}
+define i32 @round_trip(i32 %x) {
+  %d = sitofp i32 %x to double
+  %h = fmul double %d, 2.5
+  %r = fptosi double %h to i32
+  ret i32 %r
+}
+
+; CHECK-LABEL: {{^}}.method public static int32 'main'(int32, native int) cil managed{{$}}
+; CHECK:       {{^}}  ldsfld native int 'names'{{$}}
+; CHECK:       {{^}}  call int32 'puts'(native int){{$}}
+; CHECK:       {{^}}  ldsfld native int 'counter'{{$}}
+; CHECK:       {{^}}} // end of method 'main'{{$}}
+define i32 @main(i32 %argc, ptr %argv) {
+entry:
+  %idx = and i32 %argc, 3
+  %idx.ext = zext i32 %idx to i64
+  %slot = getelementptr inbounds [4 x ptr], ptr @names, i64 0, i64 %idx.ext
+  %name = load ptr, ptr %slot
+  %ignored = call i32 @puts(ptr %name)
+  %f = call i32 @fib(i32 10)
+  %p = call i32 @sieve(i32 64)
+  %c = call i32 @classify(i32 %argc)
+  %d = call i32 @dispatch(i32 2, i32 6, i32 7)
+  %l = call i32 @local_sum(i32 %argc)
+  %g = load i32, ptr @counter
+  %t1 = add i32 %f, %p
+  %t2 = add i32 %t1, %c
+  %t3 = add i32 %t2, %d
+  %t4 = add i32 %t3, %l
+  %t5 = add i32 %t4, %g
+  %r = and i32 %t5, 255
+  ret i32 %r
+}
+
+; The P/Invoke declarations, one per import, from the triple's libraries
+; (their order is not pinned here).
+; CHECK-LABEL: {{^}}// ---- undefined external functions: P/Invoke ----{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+
+; The data segment, its address fields and the function address fields.
+; CHECK:       {{^}}// ---- data segment: {{[0-9]+}} bytes ({{[0-9]+}} initialized + {{[0-9]+}} zero), align {{[0-9]+}} ----{{$}}
+; CHECK:       {{^}}.field private static initonly native int '<msil>data'{{$}}
+; CHECK-DAG:   {{^}}.field assembly static initonly native int 'names' // +{{[0-9]+}}{{$}}
+; CHECK-DAG:   {{^}}.field assembly static initonly native int 'ops' // +{{[0-9]+}}{{$}}
+; CHECK-DAG:   {{^}}.field public static initonly native int 'counter' // +{{[0-9]+}}{{$}}
+; CHECK-DAG:   {{^}}.field public static initonly native int 'primes' // +{{[0-9]+}}{{$}}
+; CHECK:       {{^}}.field private static initonly native int '<msil>fn_add'{{$}}
+; CHECK-NEXT:  {{^}}.field private static initonly native int '<msil>fn_sub'{{$}}
+; CHECK-NEXT:  {{^}}.field private static initonly native int '<msil>fn_mul'{{$}}
+
+; The module initializer and the entry point.
+; CHECK-LABEL: {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+; CHECK:       {{^}}  ldftn int32 'add'(int32, int32){{$}}
+; CHECK:       {{^}}} // end of method '.cctor'{{$}}
+; CHECK-LABEL: {{^}}.method private hidebysig static int32 '<msil>Main'(string[] args) cil managed{{$}}
+; CHECK:       {{^}}  .entrypoint{{$}}
+; CHECK:       {{^}}  call int32 'main'(int32, native int){{$}}
+; CHECK-NEXT:  {{^}}  ret{{$}}
+; CHECK-NEXT:  {{^}}} // end of method '<msil>Main'{{$}}
+; CHECK-NOT:   {{.}}

@@ -1,0 +1,15 @@
+# msil-verify.py --roundtrip (%msil_roundtrip) fails, exit 1, when ilasm
+# cannot reassemble the listing, and passes ilasm's own error on: the
+# stand-in ilasm Inputs/fake-ilasm.py turns 'ldc.i4.0' into 'ldc.r8 inf'
+# (what the .NET Framework ildasm prints for +infinity) before the real ilasm
+# runs, and ilasm rejects the token. A round trip that dropped ilasm's status
+# would go on to disassemble a missing or stale image instead. Runs with any
+# ildasm and ilasm; roundtrip-netfx-ildasm-inf.test is the real case on
+# Windows. The tools are those of msil-verify.py's neutralized pass.
+# REQUIRES: msil-ilverify, msil-ildasm
+
+# RUN: %ilasm -dll -output=%t.dll %S/Inputs/roundtrip-ldc.il
+# RUN: %python %S/Inputs/fake-ilasm.py make %t.inf.cmd --replace ldc.i4.0 "ldc.r8 inf" -- %{legs_ilasm}
+# RUN: %{harness_check} exits 1 %msil_roundtrip --ildasm %{legs_ildasm} --ilasm %t.inf.cmd --output=%t.rt.dll %t.dll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^round trip: ilasm could not reassemble the disassembly of \S+\.tmp\.dll \(status 1;" "syntax error at token 'inf'"
+# RUN: %{harness_check} lacks %t.log "differs from"
