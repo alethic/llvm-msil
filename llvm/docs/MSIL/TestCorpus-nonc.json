@@ -1,0 +1,1384 @@
+{
+ "final": {
+  "languages": [
+   {
+    "language": "Rust",
+    "verdict": "Good fit, and the best non-C source for Phase 1. Fat-LTO staticlib bitcode from rustc 1.99 (LLVM 23.1.1) has run end to end on this machine. With the uncommitted M9 changes, core::fmt through dyn Write also works. panic=abort removes unwinding, and Rust has no GC. The remaining gaps are aliases from function merging, user-written u128 division, atomics in alloc/sync types, black_box and memcmp.",
+    "integration_path": "rustc --edition 2021 --crate-type staticlib -C panic=abort -C opt-level=2 -C lto=fat -C codegen-units=1 -C llvm-args=-mergefunc-use-aliases=false --emit=llvm-bc,link --target x86_64-pc-windows-msvc. For the Linux layout use x86_64-unknown-none: it has the same data-layout string as x86_64-unknown-linux-gnu, but a softfloat rustc-abi and the kernel code model (extern 'C' floats are still double in the IR). The `link` part is required, because without it core and alloc stay as declarations. With it, the result is one post-LTO module whose only non-intrinsic declarations are the imports (verified). The mergefunc flag makes identical functions thunks instead of aliases, which MSIL rejects (the nightly alternative is -Zmerge-functions=disabled). Next, run opt -passes=lower-atomic if Arc, AtomicUsize or spin locks are present (verified for Arc). Then llc -O2 -mtriple=<native>-msil, ilasm and dotnet. Program shape: #![no_std] #![no_main], #[no_mangle] extern 'C' fn main() -> i32, a #[panic_handler] that calls puts and loops or traps, a bump #[global_allocator] over a static array, and output through extern 'C' putchar/puts. Later options: a custom target JSON with the msil triple (-Zbuild-std=core,alloc, nightly); in Phase 2, -Clinker-plugin-lto with msil-ld; in Phase 3, real std with panic=abort.",
+    "earliest_phase": "Phase 1 for no_std plus alloc. core::fmt works once M9 is committed (verified on the uncommitted M9 tree). Phase 3 for std.",
+    "blockers": "- Unwinding: never. panic=abort is mandatory, so catch_unwind and should_panic tests are permanently out, and under libtest the first failure ends the process. Functions keep `personality @__CxxFrameHandler3` with no EH pads, and llc-msil accepts that on both triples (verified).\n- GC root finding: not applicable.\n- Aliases: rustc -O emits `unnamed_addr alias` for identical functions, and MSIL rejects every GlobalAlias. -C llvm-args=-mergefunc-use-aliases=false fixes this (verified).\n- u128: user-written `/` and `%` by a non-power-of-two, and float-to-u128 casts, become __udivti3/__fixunsdfti. The backend reports these as Phase-3 helpers even when they are defined, and compiler_builtins is not in the LTO module (verified). Formatting u128 works, because core::fmt uses mul i128 (verified). Suggested fix: in MSIL lowering, setMaxDivRemBitWidthSupported(64) and setMaxLargeFPConvertBitWidthSupported(64), as NVPTX and AMDGPU do, so ExpandIRInsts expands these inline. i1024 division already expands inline this way.\n- black_box: becomes `asm sideeffect \"\", \"r,~{memory}\"(ptr)`, which MSILPrepareIR rejects. Suggested fix: accept an empty asm string with inputs and clobbers but no outputs, treat the operand as escaped and the call as a compiler barrier.\n- memcmp/bcmp: slice and str comparisons declare memcmp, which is not a Phase-1 import. Define it in Rust or tag it with msil-import-module.\n- Atomics: Arc, spin and once_cell become __atomic_* calls (the maximum atomic size is 0). Run lower-atomic (single-threaded only) until Phase 3.\n- TLS: none in no_std. std needs thread_local!, real atomics, a futex Mutex and variadic libc, so Phase 3.\n- Allocator: user-supplied in Phase 1.\n- SIMD and asm: force crates onto their portable backends with cfg flags, because llvm.x86.* intrinsics and cpuid asm break the retarget.",
+    "picks": [
+     {
+      "name": "Hand-written no_std smoke programs",
+      "what": "Small self-checking programs: sieve, FNV-1a, u128 shifts and multiplies, Newton sqrt, float math, saturating `as` casts, Box/Vec/BTreeMap/Rc (and Arc via lower-atomic) over a bump allocator, and write! into a dyn core::fmt::Write. Output goes through putchar/puts, and each program ends with a known exit code.",
+      "tier": "tiny",
+      "earliest_phase": "Phase 1 (now; core::fmt once M9 is committed)",
+      "why_good": "Verified end to end: a no_std program with Vec, Rc, a bump allocator, write! into dyn Write (10 indirect calls) and u128 Display printed the expected output on .NET 8 with the M9 llc, and Arc clone/drop ran after lower-atomic. Output is deterministic and is checked against a native build or Python. The programs pin down Rust-specific IR: llvm.fptoui.sat, ucmp, umin/umax, vector.reduce from autovectorization, and a personality with no EH pads.",
+      "blockers": "Pass -mergefunc-use-aliases=false. Avoid black_box, u128 `/` and `%` by non-powers-of-two, float-to-u128 casts, and slice or str compares without a memcmp definition.",
+      "claims_to_verify": [
+       "The existing Arc/Rc test still exits with 56 after lower-atomic. Arc clone/drop was verified, but that test was not rerun.",
+       "x86_64-unknown-none builds (softfloat rustc-abi, kernel code model) run correctly on x86_64-unknown-linux-gnu-msil, not only compile"
+      ],
+      "url": "https://doc.rust-lang.org/rustc/platform-support/x86_64-unknown-none.html",
+      "size": "tens of lines each"
+     },
+     {
+      "name": "rustc_codegen_gcc tests/run (plus rustc_codegen_cranelift example/mini_core)",
+      "what": "50 backend bring-up programs (array, structs, tuple, closure, fun_ptr, int_overflow, int_intrinsics, float, slice, static, sret, overaligned_byval, packed_u128, switchint_128bit, volatile, ptr_cast, return-tuple, abort, exit_code and others). Many are #![no_core] on mini_core and need no sysroot; int.rs uses std. The expected status and stdout are in each file's `// Run-time:` header. cg_clif's mini_core.rs and mini_core_hello_world.rs, with the TLS, thread and asm parts cut out, complement them.",
+      "tier": "suite",
+      "earliest_phase": "Phase 1 (fun_ptr and closure need M9)",
+      "why_good": "The same job as this corpus: a new backend bringing up rustc's IR feature by feature. The oracles are already machine-readable. It covers sret, overaligned byval and 128-bit switches, which are exactly the Phase-1 ABI items.",
+      "blockers": "- The no_core tests print through printf, which is variadic (Phase 3). Swap in a putchar-based integer printer in mini_core.\n- Excluded: asm.rs and catch_unwind.rs (never).\n- atomic_* tests need lower-atomic or Phase 3.\n- Weak or import linkage tests need Phase 2.\n- int.rs uses std and black_box.",
+      "claims_to_verify": [
+       "Which of the 50 files use std and which use mini_core",
+       "Every file, not only int.rs, has a parseable `// Run-time:` header",
+       "mini_core.rs compiles with the current stable rustc (lang items may need RUSTC_BOOTSTRAP=1)",
+       "Which tests use u128 division or remainder. These hit the Phase-3 helper error unless the inline expansion fix lands."
+      ],
+      "url": "https://github.com/rust-lang/rustc_codegen_gcc/tree/master/tests/run",
+      "size": "50 files, 20-200 lines each"
+     },
+     {
+      "name": "libm crate (Rust port of musl libm)",
+      "what": "Pure-Rust sin, cos, exp, log, pow, fma, cbrt, lgamma and friends. crates.io libm 0.2.16 is #![no_std] (development moved to rust-lang/compiler-builtins), so as a dependency every function is defined inside the module. A driver runs exported input and expected-output tables and prints bit patterns.",
+      "tier": "medium",
+      "earliest_phase": "Phase 1",
+      "why_good": "A float-codegen test with bit-exact oracles: the same algorithm natively and on MSIL must give identical bits. Its results can be compared with the backend's Phase-1 libm imports. It needs no allocator, atomics or TLS.",
+      "blockers": "Skip the f16 and f128 functions (CIL has no type for fp128, and f16 helpers are Phase 3). FP-environment functions are not supported.",
+      "claims_to_verify": [
+       "Post-LTO IR of the f32/f64 functions has no `udiv i128`/`urem i128` and no float-to-i128 conversion (grep the .ll)",
+       "Expected-value tables can be extracted from libm-test (MPFR/musl based) without running MPFR on the target",
+       "The CLR's float32 path keeps f32 results bit-identical, with no double rounding"
+      ],
+      "url": "https://github.com/rust-lang/compiler-builtins/tree/main/libm",
+      "size": "~20k lines"
+     },
+     {
+      "name": "RustCrypto sha2 + chacha20 with ed25519-dalek/curve25519-dalek (portable backends)",
+      "what": "Hashes, a stream cipher and signatures, all checked against published vectors (NIST SHA, RFC 8439, RFC 8032 and SUPERCOP sign.input). The program prints hex digests and signatures, which are diffed against sha256sum, OpenSSL or the native build.",
+      "tier": "medium",
+      "earliest_phase": "Phase 1",
+      "why_good": "Fully deterministic, with authoritative vectors. It is heavy on rotates, wrapping adds and u64×u64→u128 multiply chains, and has large precomputed constant tables (a data-segment stress test). It needs no alloc, atomics or TLS once the portable backends are forced.",
+      "blockers": "- The portable backends must be forced: --cfg sha2_backend=\"soft\" (sha2 0.11, or the force-soft feature in 0.10), --cfg chacha20_backend=\"soft\" and --cfg curve25519_dalek_backend=\"serial\".\n- Without them, cpufeatures brings in cpuid inline asm and an atomic cache, and the x86 backends bring in llvm.x86.* intrinsics.\n- zeroize uses volatile writes and compiler_fence, which should be fine after M7.",
+      "claims_to_verify": [
+       "The exact cfg names and values for the crate versions resolved on the day",
+       "The post-LTO IR has no llvm.x86.* calls and no inline asm (grep)",
+       "There is no i128 division anywhere in the curve25519 field arithmetic",
+       "The precomputed-tables feature's static data assembles under ilasm within size limits",
+       "ed25519-dalek with default-features=false still verifies the RFC 8032 vectors without alloc"
+      ],
+      "url": "https://github.com/dalek-cryptography/curve25519-dalek",
+      "size": "~25k lines combined"
+     },
+     {
+      "name": "wasmi WebAssembly interpreter with the official spec testsuite",
+      "what": "wasmi built with default-features=false and libm. The program feeds it .wasm modules and assertion lists precompiled on the host (each .wast converted to a .wasm plus an expected-results table) from static arrays, and prints pass or fail for each assertion.",
+      "tier": "large",
+      "earliest_phase": "Phase 1 after M9 (with lower-atomic). Phase 3 with real atomics.",
+      "why_good": "Huge dispatch loops and jump tables; both portable and indirect dispatch can be built, which stresses calli tables. It exercises exact i32/i64/f32/f64 semantics and saturating conversions. The spec testsuite holds tens of thousands of deterministic assertions, and wasmi claims 100% compliance natively, so any failure is a backend bug.",
+      "blockers": "- spin and Arc require lower-atomic.\n- Needs an allocator.\n- Error paths use fmt (M9).\n- The .wast runner needs std, so assertions must be generated on the host.\n- NaN-payload assertions depend on how the CLR treats float32 NaNs.",
+      "claims_to_verify": [
+       "wasmi's no_std build pulls in only spin plus Arc, and lower-atomic turns all of them into plain loads and stores",
+       "The CLR preserves signaling-NaN payloads through float32 ldind/stind and bitcasts (the wasm spec tests check NaN bits); otherwise those assertions must be split out",
+       "There is a practical host-side tool that turns .wast into binary modules plus an expected-results table (for example wabt's wast2json)",
+       "The resulting module stays within ilasm and CLR method-size limits (one huge dispatch function)"
+      ],
+      "url": "https://github.com/wasmi-labs/wasmi",
+      "size": "~60k lines + wasmparser ~40k"
+     },
+     {
+      "name": "rust-lang/rust library/coretests and library/alloctests",
+      "what": "The unit tests for core and alloc, run with a custom single-process harness, or with libtest one test per process under panic=abort.",
+      "tier": "suite",
+      "earliest_phase": "Phase 3 (libtest needs std). A no_std harness is possible after M9 but costly.",
+      "why_good": "Thousands of focused tests with a published .NET comparison point: rustc_codegen_clr reports 1764 of 1832 core tests passing (96.29%) and 92.77% of alloc tests. This is the conformance yardstick for Phase 4.",
+      "blockers": "- libtest needs std, which means TLS, atomics, threads and variadic libc.\n- should_panic and catch_unwind tests can never pass and must be filtered out.\n- -Zbuild-std is required.",
+      "claims_to_verify": [
+       "coretests and alloctests build with -Zbuild-std and -Cpanic=abort into a fat-LTO staticlib",
+       "How many tests carry #[should_panic] or call catch_unwind",
+       "Whether the rustc_codegen_clr figures are current, and which of its failures are .NET-specific"
+      ],
+      "url": "https://github.com/rust-lang/rust/tree/main/library/coretests",
+      "size": "~1800 core tests plus alloc tests"
+     }
+    ]
+   },
+   {
+    "language": "Zig",
+    "verdict": "Good fit, and the strongest non-Rust candidate. It has no GC and no unwinding (errors are values), panics go to an overridable handler, and the freestanding target needs no libc. It stresses integer legalization (odd and huge widths), overflow builtins and packed structs harder than C does.",
+    "integration_path": "zig build-obj (or zig test with a custom --test-runner) -target x86_64-freestanding-none -mcpu=baseline -fsingle-threaded -OReleaseSmall (or ReleaseFast) -femit-llvm-bc=out.bc -fno-emit-bin (flags verified in 0.15.1). Then llc -mtriple=x86_64-unknown-linux-gnu-msil (or the windows-msvc triple with -target x86_64-windows), ilasm and dotnet. Provide `export fn main() c_int`, an extern putchar, and a root `pub const panic` that is a namespace type (std.debug.FullPanic(myFn), std.debug.simple_panic or std.debug.no_panic), not a bare function. Zig 0.15.1 uses LLVM 20.1.8 but writes bitcode with its own writer (Builder.toBitcode). Non-exported functions are fastcc, which MSIL accepts. llvm.memcpy/memset/memmove become cpblk/Buffer.MemoryCopy/initblk, so only an explicit call to a memcpy symbol would need a definition. A second route is -ofmt=c followed by the fork's clang.",
+    "earliest_phase": "Phase 1",
+    "blockers": "- Unwinding: none in the language.\n- GC: none.\n- TLS: -fsingle-threaded turns threadlocal variables into plain globals (verified in the 0.15.1 source). Without it, MSIL rejects them.\n- Atomics: std.atomic is used in std. Avoid it, or run lower-atomic.\n- Allocator: explicit by design (FixedBufferAllocator works freestanding).\n- Rejected types: fp128 and x86_fp80 (f128, f80, c_longdouble), plus f16 helpers until Phase 3.\n- u128 `/` and `%` are Phase-3 helper errors (see the Rust entry for the suggested inline-expansion fix). Integers wider than 128 bits expand inline (verified for i1024).\n- std on Linux without libc makes syscalls through inline asm, which is never supported. With libc, start.zig defines main(argc, argv, envp), which emitEntryPoint rejects.\n- The default panic handler and test runner pull in std.debug stack traces.\n- @Vector tests are SIMD (Phase 4).",
+    "picks": [
+     {
+      "name": "Hand-written freestanding Zig smoke programs",
+      "what": "Programs covering odd widths (u3, i65, u1024), @addWithOverflow/@mulWithOverflow, saturating ops, packed structs, error unions and switch on errors, comptime-generated tables, slices and optionals, and function-pointer tables. Each prints through putchar and exits with a code.",
+      "tier": "tiny",
+      "earliest_phase": "Phase 1",
+      "why_good": "They pin down Zig-specific IR, such as i65 and u1024 arithmetic and packed-struct bitcasts, before the large suite runs. u1024 division is already verified to expand inline. Output is deterministic and comparable with a native zig build.",
+      "blockers": "Avoid u128 `/` and `%` and f16/f80/f128.",
+      "claims_to_verify": [
+       "The fork's llc reads Zig 0.15.1's self-written bitcode without errors",
+       "Code using @memcpy/@memset leaves no explicit call to a memcpy or memset symbol (compiler_rt is normally a separate object)",
+       "out.bc contains no GlobalAlias (for example from exporting one decl under several names), since MSIL rejects every alias"
+      ],
+      "url": "https://ziglang.org/download/0.15.1/release-notes.html",
+      "size": "tens to hundreds of lines each"
+     },
+     {
+      "name": "Zig test/behavior with a custom single-threaded test runner",
+      "what": "The language behavior tests: 2008 in 0.15.1, of which the LLVM backend passes 1977. A custom --test-runner walks builtin.test_functions, calls each one, and prints the name plus ok or fail through putchar. Tests are compiled in groups (with --test-filter) to keep modules small.",
+      "tier": "suite",
+      "earliest_phase": "Phase 1 (needs M9 for the test_functions table)",
+      "why_good": "Written to be run by several immature backends, so each test is self-contained and has a pass/fail oracle. Wide coverage of integer, float, struct and union, optional, error and comptime codegen.",
+      "blockers": "- Filter out tests that use f16/f80/f128/c_longdouble, @Vector, threadlocal, asm, u128 division or async.\n- error_return_trace must be off.\n- The default runner uses std.debug and an OS, so a custom runner is needed.",
+      "claims_to_verify": [
+       "The custom-runner approach works for x86_64-freestanding (see the ziggit thread on freestanding testing)",
+       "How many behavior tests reference f16, f80, f128, c_longdouble, @Vector or threadlocal (grep test/behavior)",
+       "Test functions are reached by indirect call, so a test that returns an error can be reported without unwinding"
+      ],
+      "url": "https://github.com/ziglang/zig/tree/master/test/behavior",
+      "size": "2008 tests (0.15.1)"
+     },
+     {
+      "name": "Zig lib/compiler_rt and its tests",
+      "what": "Zig's own compiler-rt written in Zig (__udivti3, __divti3, __fixdfti, float and int conversions, soft-float, __mulodi4 and so on) with in-file `test` blocks that call the helpers directly by name.",
+      "tier": "medium",
+      "earliest_phase": "Phase 1 (direct calls to defined functions are ordinary calls, not legalizer libcalls)",
+      "why_good": "It covers exactly the helpers the backend defers to Phase 3, with exhaustive edge-case tests. Compiled to bitcode, it is also a candidate in-module implementation of those helpers for Phase 3 (an alternative to P/Invoke).",
+      "blockers": "Each helper's implementation must itself avoid the operation it implements (for example, udivmod written with u64 halves). The f80 and f128 helpers are out. Legalizer-generated helper calls are still reported as errors even though the definitions are present, so only the direct-call tests work in Phase 1.",
+      "claims_to_verify": [
+       "compiler_rt's udivmod.zig and int.zig implement 128-bit division without emitting `udiv i128`",
+       "The tests build with the same custom runner and freestanding flags",
+       "Which compiler_rt files need f80/f128 or inline asm (exclude them)"
+      ],
+      "url": "https://github.com/ziglang/zig/tree/master/lib/compiler_rt",
+      "size": "~200 files"
+     },
+     {
+      "name": "Zig std unit tests for OS-independent modules (std.math, std.hash, std.crypto, std.sort, std.unicode)",
+      "what": "The in-file test blocks of std modules that need no OS, run with the custom runner and a FixedBufferAllocator-backed testing allocator. std.crypto carries published vectors (SHA-2, BLAKE3, ChaCha20, Ed25519, AES software path).",
+      "tier": "large",
+      "earliest_phase": "Phase 1 for a subset. Phase 3 for anything using std.testing.allocator or page_allocator.",
+      "why_good": "Thousands of deterministic tests with built-in expectations. The crypto tests are vector-checked.",
+      "blockers": "- std.testing.allocator may need an OS page allocator.\n- std.fmt-based expectEqual messages use fmt (indirect calls, M9).\n- Some crypto code selects x86 intrinsics by CPU feature, so -mcpu=baseline is needed.",
+      "claims_to_verify": [
+       "`zig test lib/std/math.zig` (and the others) compiles for x86_64-freestanding with a custom runner",
+       "std.testing.allocator works freestanding or can be overridden",
+       "With -mcpu=baseline, std.crypto.aes takes the software path (no AES-NI)"
+      ],
+      "url": "https://github.com/ziglang/zig/tree/master/lib/std",
+      "size": "thousands of tests"
+     }
+    ]
+   },
+   {
+    "language": "Fortran (Flang, with flang-rt for Phase 3)",
+    "verdict": "Good fit for computational kernels in Phase 1, and already verified: BLAS, the LAPACK DGESV chain and MINPACK all ran on .NET 8. Programs that use Fortran I/O, ALLOCATE or automatic arrays need flang-rt, so Phase 3. Fortran has no GC and no unwinding (STOP is a call). Prefer the windows-msvc triple: llvm.powi becomes a pow import there but the __powidf2 error on the Linux triple.",
+    "integration_path": "Stock flang 23.1.2: flang -c -emit-llvm -O2 --target=x86_64-pc-windows-msvc. Pass bitcode, not .ll, to the in-tree llc -mtriple=x86_64-pc-windows-msvc-msil, then ilasm and dotnet. For the Linux layout, use --target=x86_64-unknown-linux-gnu plus -fintrinsic-modules-path pointing at the windows-msvc finclude, and avoid real**integer. Phase 1 programs need: a driver written as `integer function main() bind(c,name='main')` that prints through bind(c) putchar/puts interfaces; the library and driver in one source (switch form with !dir$ fixed); and C or IR stubs for _FortranAProgramStart, _FortranAProgramEndStatement, _FortranAStopStatement and _FortranAStopStatementText. Phase 2: llvm-link or msil-ld archives. Phase 3: build flang-rt with the in-tree clang for the msil triple (AddFlangRT.cmake already uses -fno-exceptions -fno-rtti and -include stl-overrides.h) and link it in. pseudo-unit.cpp and the pseudo lock give a smaller intermediate step.",
+    "earliest_phase": "Phase 1 for kernels with a bind(c) driver and stubs. Phase 3 for ordinary PROGRAMs with I/O.",
+    "blockers": "- main signature: flang emits `i32 @main(i32, ptr, ptr)` (verified at -O2). emitEntryPoint accepts only i32 main() or i32 main(i32, ptr), so every PROGRAM is rejected. Suggested fix: accept the 3-argument form and pass a null envp. Released Nim 2.x with --os:any, and GNAT front ends from GCC 16 or older, produce the same shape. Nim devel and current gcc master's gnatbind do not.\n- Runtime entry points: every PROGRAM references _FortranAProgramStart and _FortranAProgramEndStatement. A stub written in Fortran with bind(c) crashed flang 23.1.2, so stubs must be C or IR.\n- -O0 and -O1 leave llvm.stacksave and _FortranACharacterCompareScalar1 calls, so use -O2.\n- BLOCK constructs keep stacksave/stackrestore at -O2 with no dynamic alloca (verified), and the fork rejects them. Suggested fix: make them no-ops when the function has no dynamic alloca.\n- NINT becomes llvm.lround, which is reported as 'not a Phase-1 import' (verified). Define lround/lroundf in the module.\n- real**integer becomes llvm.powi. That works on windows-msvc-msil (a pow import) but on linux-gnu-msil it is the __powidf2 Phase-3 error. integer**integer is inlined.\n- Complex: ABS, EXP and SQRT call cabs, cexp and csqrt, which are not imports. Complex division calls __divdc3 (a Phase-3 helper error) unless -fcomplex-arithmetic=improved is used.\n- Array-expression temporaries call malloc/free (Phase 3 or a module-local allocator). Automatic arrays become dynamic alloca (Phase 3).\n- Internal procedures passed as actual arguments need trampolines, and the 'nest' parameter is rejected.\n- REAL(16) is fp128, which is rejected.\n- TLS and atomics: only flang-rt's pthread lock is affected (use the pseudo lock).",
+    "picks": [
+     {
+      "name": "Reference BLAS (Reference-LAPACK BLAS/SRC)",
+      "what": "Level 1/2/3 BLAS in S/D/C/Z precision with LSAME and a replaced XERBLA, driven by a bind(c) main that compares against exact integer-valued results.",
+      "tier": "medium",
+      "earliest_phase": "Phase 1 (verified)",
+      "why_good": "Already ran end to end (dgemm, dtrsm, idamax, zdotc, dnrm2, dznrm2) with exact expected values. It exercises complex results (sret on Windows, {double,double} on Linux), hidden CHARACTER lengths and assumed-size arrays.",
+      "blockers": "Replace XERBLA (it uses WRITE and STOP). Avoid complex ABS/SQRT/EXP and NINT in the driver.",
+      "claims_to_verify": [
+       "The same module runs, not only compiles, on x86_64-unknown-linux-gnu-msil",
+       "-ffp-contract=off is needed for bit-exact comparison with a native build",
+       "flang output contains no GlobalAlias, since MSIL rejects every alias"
+      ],
+      "url": "https://github.com/Reference-LAPACK/lapack/tree/master/BLAS/SRC",
+      "size": "155 Fortran sources at v3.12.1 (147 .f, 8 .f90)"
+     },
+     {
+      "name": "Reference LAPACK, solver subsets now, whole library in Phase 2",
+      "what": "Single-module subsets, growing to QR, Cholesky (recursive DPOTRF2), symmetric eigen and SVD drivers checked by residual identities. The DGESV chain is verified: 40x40 with 2 right-hand sides, max error below 1e-10, plus the XERBLA path.",
+      "tier": "large",
+      "earliest_phase": "Phase 1 for subsets. Phase 2 for the whole library as an archive or through LTO.",
+      "why_good": "Real numerical code with self-validating residual checks. It covers recursion, IEEECK's Inf/NaN arithmetic, DLAMCH intrinsics and ILAENV string logic.",
+      "blockers": "IPARMQ uses NINT, so define lroundf in the module. Driver array expressions call malloc. Whether routines outside the DGESV chain use automatic arrays is unchecked.",
+      "claims_to_verify": [
+       "Which LAPACK routines use automatic arrays or BLOCK (dynamic alloca or stacksave)",
+       "The eigen and SVD drivers (DSYEV, DGESVD) hit no complex-division or powi helper",
+       "The residual thresholds that make tests deterministic across native and MSIL",
+       "The 2106-file count for SRC"
+      ],
+      "url": "https://github.com/Reference-LAPACK/lapack",
+      "size": "~2100 files in SRC"
+     },
+     {
+      "name": "fortran-lang/minpack (modern MINPACK)",
+      "what": "HYBRD, HYBRJ, LMDIF, LMDER and LMSTR on standard problems (Rosenbrock and others), with the user function passed as a procedure dummy (a function pointer). src/minpack.f90 is 3832 lines, and test/ has six programs (test_chkder, test_hybrd, test_hybrj, test_lmder, test_lmdif, test_lmstr).",
+      "tier": "medium",
+      "earliest_phase": "Phase 1 once stacksave/stackrestore without dynamic alloca become no-ops. Today it needs a bitcode edit.",
+      "why_good": "Verified after stripping stacksave: lmdif1 gave x=(1,1) with info=2, and hybrd1 gave 1.414213. It exercises callbacks through function pointers and BLOCK constructs.",
+      "blockers": "- `main : block` brings stacksave.\n- One `error stop` needs a StopStatementText stub.\n- The C API passes an internal procedure, which needs trampolines (excluded).\n- The test programs use formatted WRITE (Phase 3).",
+      "claims_to_verify": [
+       "After the stacksave no-op change, minpack.f90 compiles unmodified",
+       "minpack.f90 has no automatic arrays (grep)",
+       "The six test programs could run in Phase 1 if their WRITEs go through a minimal stub"
+      ],
+      "url": "https://github.com/fortran-lang/minpack",
+      "size": "3832 lines + 6 test programs"
+     },
+     {
+      "name": "TSVC (netlib vectord) and LINPACK (linpackd) kernels",
+      "what": "About 135 vectorizer-test loops with per-loop checksums (extracted from the shell archive with sed), plus the 100x100 LINPACK solve with its residual check. WRITE and second() are replaced by a putchar printer and a stub.",
+      "tier": "medium",
+      "earliest_phase": "Phase 1",
+      "why_good": "Deterministic checksums. Large COMMON blocks become common-linkage globals. TSVC also has a C version in llvm-test-suite, so the same loops can be tested differentially through clang and flang.",
+      "blockers": "- Formatted WRITE in check() and title() must be replaced.\n- second() must be supplied.\n- real**integer becomes llvm.powi: use the windows-msvc-msil triple (pow import), because linux-gnu-msil reports __powidf2.\n- Look for NINT (lround).",
+      "claims_to_verify": [
+       "The TSVC checksums match between flang-native and MSIL with -ffp-contract=off",
+       "The C TSVC in llvm-test-suite MultiSource/Benchmarks/TSVC covers the same loop set"
+      ],
+      "url": "https://www.netlib.org/benchmark/vectord",
+      "size": "5344 + 802 lines"
+     },
+     {
+      "name": "LLVM test-suite gfortran torture/execute (no-I/O subset)",
+      "what": "225 small execute tests (223 .f90 + 2 .f) from GCC's gfortran torture suite. About 167 have no I/O or ALLOCATE, and their oracle is the exit status from STOP n or abort. DisabledFiles.cmake disables 8 (st_function, entry_2, specifics, data_3, getarg_1, intrinsic_sr_kind, nan_inf_fmt, random_2).",
+      "tier": "suite",
+      "earliest_phase": "Phase 1 with the STOP stubs, plus either the 3-argument main fix or a rewrite that turns each program into a subroutine called by a bind(c) main. Phase 3 for the remaining ~58.",
+      "why_good": "Many small, focused language-feature tests with a trivial oracle. The Fortran counterpart of the C torture tests.",
+      "blockers": "- The main signature and the ProgramStart/Stop stubs.\n- Some tests may still hit array temporaries (malloc), NINT, descriptor intrinsics or complex helpers.\n- Licensed GPL-3.0: fetch at test time rather than vendoring.",
+      "claims_to_verify": [
+       "The 167/58 split by grep for I/O statements and ALLOCATE (the total of 225 is confirmed, the split was not re-derived)",
+       "How many of the 167 compile cleanly at -O2 with only the four stubs"
+      ],
+      "url": "https://github.com/llvm/llvm-test-suite/tree/main/Fortran/gfortran/torture/execute",
+      "size": "225 tests"
+     },
+     {
+      "name": "NIST FCVS (llvm-test-suite Fortran/UnitTests/fcvs21_f95)",
+      "what": "180 FM*.f validation programs, each with a reference_output file, covering statements, intrinsics, formatted I/O, ASSIGN/GOTO and arithmetic IF.",
+      "tier": "suite",
+      "earliest_phase": "Phase 3 (needs flang-rt formatted I/O)",
+      "why_good": "The standard F77 conformance suite. Outputs are deterministic, and llvm-test-suite already has the reference outputs and comparison options. It is the first real exercise of flang-rt on MSIL.",
+      "blockers": "- flang-rt must be built for MSIL: P/Invoke libc, POSIX file calls, fenv in ProgramStart, and the pseudo lock or real locks.\n- Some tests need -std=legacy.\n- NO_STOP_MESSAGE handling.",
+      "claims_to_verify": [
+       "flang-rt builds with the in-tree clang for the msil triple using the AddFlangRT.cmake flags",
+       "flang-rt's fenv calls (feclearexcept/fesetround) can be satisfied or stubbed under the CLR",
+       "Which programs the CMakeLists.txt omit list (line 25 onward) excludes, and why"
+      ],
+      "url": "https://github.com/llvm/llvm-test-suite/tree/main/Fortran/UnitTests/fcvs21_f95",
+      "size": "180 programs"
+     }
+    ]
+   },
+   {
+    "language": "D (LDC -betterC)",
+    "verdict": "Good fit for Phase 1. BetterC drops druntime: no GC, TypeInfo, ModuleInfo, exceptions or module constructors. Structs with destructors, scope(exit), templates, CTFE and bounds-checked slices remain, which is IR shaped differently from C (destructor cleanups that would be landingpads with exceptions are plain code here).",
+    "integration_path": "ldc2 -betterC -mtriple=x86_64-pc-windows-msvc -O2 -output-bc -checkaction=halt (flags verified in the LDC source). With -checkaction=halt, asserts and bounds failures become llvm.trap instead of a C assert call. Then llc -mtriple=x86_64-pc-windows-msvc-msil, ilasm and dotnet. Use extern(C) int main() and print through core.stdc putchar/puts. Use the MSVC triple, because `real` is x87 80-bit on x86 Linux and double under MSVC. LDC 1.43 supports LLVM 18-22 (prebuilt with 22.1.8), and its bitcode can be retargeted, which is easier than rebuilding LDC on LLVM 24.",
+    "earliest_phase": "Phase 1",
+    "blockers": "- Unwinding: none under -betterC (no exceptions).\n- GC: none under -betterC. Full druntime would need a conservative GC scanning the machine stack, which is never planned (LDC's wasm pointer-spill pass is a possible future model).\n- TLS: module-level variables are thread-local by default, so mark them __gshared or immutable.\n- Assert and bounds checks call the C runtime's assert unless -checkaction=halt is used (or the function is provided).\n- printf is variadic (Phase 3).\n- On Linux targets `real` is x86_fp80, which is rejected.",
+    "picks": [
+     {
+      "name": "Hand-written betterC programs",
+      "what": "Structs with destructors, postblit or copy constructors, scope(exit)/scope(failure), templates and static foreach, CTFE-generated tables, slices with bounds checks, delegates over struct methods, and core.int128 arithmetic, printed through putchar.",
+      "tier": "tiny",
+      "earliest_phase": "Phase 1 (delegates need M9)",
+      "why_good": "Pins down LDC's IR shapes: destructor cleanup paths, the {length, ptr} slice ABI and delegates as {context, funcptr}. Deterministic and comparable with a native build.",
+      "blockers": "Use __gshared globals and -checkaction=halt. Do not use printf. Avoid 128-bit division.",
+      "claims_to_verify": [
+       "LDC's bitcode for x86_64-pc-windows-msvc contains no TypeInfo, ModuleInfo or llvm.global_ctors under -betterC",
+       "LDC compiles scope(exit) in betterC without invoke/landingpad (or LowerInvoke handles any that appear)",
+       "LDC output contains no GlobalAlias, since MSIL rejects every alias"
+      ],
+      "url": "https://dlang.org/spec/betterc.html",
+      "size": "tens to hundreds of lines each"
+     },
+     {
+      "name": "DMD testsuite runnable -betterC tests",
+      "what": "The files in dmd compiler/test/runnable (and runnable_cxx) whose REQUIRED_ARGS include -betterC. The oracle is the exit code and assert.",
+      "tier": "suite",
+      "earliest_phase": "Phase 1 after replacing printf. Phase 3 as-is.",
+      "why_good": "Tests written by the D maintainers specifically for the no-runtime subset, with a simple oracle.",
+      "blockers": "Many probably use printf (variadic). Some may use features LDC handles differently from DMD.",
+      "claims_to_verify": [
+       "How many runnable tests carry -betterC in REQUIRED_ARGS",
+       "How many of them call printf",
+       "They pass with LDC natively before retargeting"
+      ],
+      "url": "https://github.com/dlang/dmd/tree/master/compiler/test/runnable",
+      "size": "dozens of files (unverified)"
+     }
+    ]
+   },
+   {
+    "language": "Odin",
+    "verdict": "Good fit for Phase 1. It has no GC and no exceptions, and has freestanding_amd64_win64/_sysv targets, -no-crt and -no-thread-local. Allocators and context are explicit, so the program solves the allocator problem itself, and under -no-crt the runtime defines memcpy/memset/memmove.",
+    "integration_path": "odin build x.odin -file -target:freestanding_amd64_win64 (x86_64-pc-windows-msvc) or freestanding_amd64_sysv (x86_64-pc-none-gnu) -build-mode:llvm-ir -no-crt -no-thread-local -default-to-nil-allocator, or an arena over a static buffer (all verified in the Odin source). Odin has no bitcode build mode, so assemble the textual .ll with the llvm-as from Odin's own LLVM (17-22 per build_odin.sh), then run the fork's llc -mtriple=...-msil on the bitcode. Freestanding forces no_entry_point, so export a C main. Building Odin against the fork itself is outside its supported LLVM range.",
+    "earliest_phase": "Phase 1",
+    "blockers": "- Unwinding: none.\n- GC: none.\n- TLS: avoided with -no-thread-local.\n- Atomics: core:sync, so avoid it.\n- Allocator: user-supplied arena.\n- 128-bit division: the runtime defines __udivti3, __umodti3, __udivmodti4 and __fixunsdfti (internal_i128.odin), but the backend still reports these as Phase-3 helpers. See the Rust entry for the inline-expansion fix.\n- Textual IR only, so the llvm-as matching Odin's LLVM is required.\n- core:fmt and core:os need an OS, so print through a foreign putchar.\n- The default test runner is threaded.",
+    "picks": [
+     {
+      "name": "examples/demo/demo.odin (freestanding subset)",
+      "what": "The language-feature tour: procedures, unions, maps, dynamic arrays, slices, bit_sets, matrix types, context and allocators, cut down to what runs freestanding and printed through putchar.",
+      "tier": "tiny",
+      "earliest_phase": "Phase 1 (maps and allocators need M9)",
+      "why_good": "Broad language coverage in one file. Map and dynamic-array code exercises the allocator procedure pointers that pass through context.",
+      "blockers": "Remove the fmt/os printing and any threading sections. Avoid u128 `/` and `%`.",
+      "claims_to_verify": [
+       "Which demo sections survive freestanding, and the file size (~2500 lines from memory)",
+       "Odin's IR contains no GlobalAlias, since MSIL rejects every alias"
+      ],
+      "url": "https://github.com/odin-lang/Odin/tree/master/examples/demo",
+      "size": "~2500 lines (from memory)"
+     },
+     {
+      "name": "Odin tests/core (crypto, hash, math, compress, strconv, encoding)",
+      "what": "Core-library test packages, run per package with a hand-written single-threaded main that calls the @(test) procedures. tests/core/crypto contains published vectors.",
+      "tier": "suite",
+      "earliest_phase": "Phase 1 for the computational packages. Phase 3 with the stock test runner.",
+      "why_good": "Existing assertions plus crypto test vectors. Deterministic.",
+      "blockers": "The stock runner uses threads and an OS. testing.T reporting uses fmt. Some packages need os.",
+      "claims_to_verify": [
+       "Which tests/core packages are OS-independent",
+       "core:crypto has a portable implementation of every tested primitive (no SIMD-only paths on amd64)",
+       "The test procedures can be called from a custom main without the testing runner's thread pool"
+      ],
+      "url": "https://github.com/odin-lang/Odin/tree/master/tests/core",
+      "size": "dozens of packages"
+     }
+    ]
+   },
+   {
+    "language": "C3",
+    "verdict": "Possible. It works in Phase 1 bare mode (no stdlib), but its semantics are close to C, so the extra coverage is mostly optionals, slices passed by value and generics. Its stdlib depends on libc (Phase 3). c3c accepts LLVM 19-24, so it can be built against this fork.",
+    "integration_path": "Build c3c against this fork (CMakeLists.txt allows LLVM 19-24). Then c3c compile --use-stdlib=no --link-libc=no --emit-llvm for an x86_64 Linux or Windows target. c3c writes only textual .ll (one per module, no bitcode option), so building it against the fork avoids any textual-IR version mismatch. Then run the fork's llc -mtriple=...-msil.",
+    "earliest_phase": "Phase 1 (bare). Phase 3 (stdlib).",
+    "blockers": "- Unwinding: none (result-based errors).\n- GC: none.\n- TLS and atomics: only in the stdlib.\n- Allocator: the stdlib calls libc malloc, so bare mode must supply one.\n- Panic and contract-failure handlers must be supplied.\n- Freestanding ELF targets are marked untested.",
+    "picks": [
+     {
+      "name": "Hand-written bare C3 programs",
+      "what": "Optionals and faults, defer, slices, generic modules, macros and bitstructs, with a supplied panic function and putchar output.",
+      "tier": "tiny",
+      "earliest_phase": "Phase 1",
+      "why_good": "Cheap to write. Produces optional and slice IR shapes that C does not.",
+      "blockers": "No stdlib.",
+      "claims_to_verify": [
+       "Bare-mode output needs only the user's panic and contract hooks (llvm.mem* intrinsics lower inline)",
+       "c3c builds against this fork's LLVM 24.0.0git, not only a released LLVM 24",
+       "The emitted .ll contains no GlobalAlias, since MSIL rejects every alias"
+      ],
+      "url": "https://github.com/c3lang/c3c",
+      "size": "small"
+     },
+     {
+      "name": "c3c test/unit (stdlib unit tests)",
+      "what": "The @test unit tests run by c3c compile-test test/unit, including test/unit/stdlib.",
+      "tier": "suite",
+      "earliest_phase": "Phase 3",
+      "why_good": "Many existing tests with built-in assertions.",
+      "blockers": "Needs the stdlib on libc: malloc, printf, I/O, possibly threads.",
+      "claims_to_verify": [
+       "The unit-test count",
+       "The compile-test runner can emit .ll instead of an executable"
+      ],
+      "url": "https://github.com/c3lang/c3c/tree/master/test/unit",
+      "size": "hundreds of tests (from memory)"
+     }
+    ]
+   },
+   {
+    "language": "Ada (GNAT LLVM)",
+    "verdict": "Possible but costly. The light runtime fits Phase 1 (no tasking; No_Exception_Propagation sends raise to a last-chance handler), and it brings range checks, tagged dispatch, discriminated records and 128-bit integers. But GNAT-LLVM must be built (against LLVM/Clang 21.1.x per its README), and ACATS depends heavily on exception propagation, which is never supported.",
+    "integration_path": "Build gnat-llvm (its README clones current gcc master for the front end). Compile with llvm-gcc -c -emit-llvm -O2 for an x86_64 Linux or Windows target, with a light runtime and pragma Restrictions (No_Exception_Propagation, No_Implicit_Dynamic_Code). Build the runtime as bitcode with make gnatlib-bc, llvm-link everything into one module, and run the fork's llc -mtriple=...-msil. gnatbind from gcc master emits main(argc, argv), or main() when Command_Line_Args_On_Target is false. Both are accepted.",
+    "earliest_phase": "Phase 1 for the light runtime. Phase 3+ for the full runtime, but never for exception-propagating tests.",
+    "blockers": "- Unwinding: exception propagation is never supported, so only the last-chance handler works and many ACATS tests are unusable.\n- GC: none.\n- TLS and atomics: the tasking runtime needs threads and TLS, so exclude it.\n- Allocator: the secondary stack.\n- Nested subprograms whose address escapes need trampolines and the 'nest' parameter, which is rejected.\n- Entry point: GNAT front ends from GCC 16 or older emit main with envp, which is rejected. Use the gcc-master front end that gnat-llvm uses.\n- Text_IO needs libc.\n- 128-bit division is a Phase-3 helper error.",
+    "picks": [
+     {
+      "name": "Hand-written Ada programs on the light runtime",
+      "what": "Tagged-type dispatch, discriminated and variant records, fixed point, Long_Long_Long_Integer (128-bit) arithmetic, unconstrained arrays returned on the secondary stack, and range-check failures sent to a last-chance handler that exits with a code.",
+      "tier": "tiny",
+      "earliest_phase": "Phase 1",
+      "why_good": "Exercises IR patterns no C-family frontend produces: overflow and range checks everywhere, secondary-stack returns and dispatch tables.",
+      "blockers": "GNAT-LLVM build cost. Avoid 128-bit division and Text_IO.",
+      "claims_to_verify": [
+       "gnat-llvm builds natively on Windows, or only under WSL",
+       "The light runtime, not only libgnat/libgnarl, builds as bitcode with gnatlib-bc",
+       "GNAT-LLVM passes static links as ordinary parameters (not 'nest') when no trampoline is needed",
+       "GNAT-LLVM output contains no GlobalAlias, since MSIL rejects every alias"
+      ],
+      "url": "https://github.com/AdaCore/gnat-llvm",
+      "size": "small"
+     },
+     {
+      "name": "ACATS executable tests (no-propagation subset)",
+      "what": "Ada conformance tests (the C-class executable tests) that report through the Report package, filtered to those that need neither exception propagation nor tasking.",
+      "tier": "suite",
+      "earliest_phase": "Phase 3 (Report uses Text_IO), and only ever a subset",
+      "why_good": "An authoritative conformance suite with self-checking PASSED/FAILED output.",
+      "blockers": "A large share of tests raise and handle exceptions across calls, or use tasking.",
+      "claims_to_verify": [
+       "The fraction of ACATS C-tests that pass under No_Exception_Propagation without tasking",
+       "The acats directory in gnat-llvm can drive an external runner (dotnet)"
+      ],
+      "url": "https://github.com/AdaCore/gnat-llvm/tree/master/llvm-interface/acats",
+      "size": "several thousand tests (from memory)"
+     }
+    ]
+   },
+   {
+    "language": "Swift (Embedded Swift)",
+    "verdict": "Possible after one backend change. All Swift code uses swiftcc, which MSIL rejects (callingConvSupported allows only C, Fast, Cold, PreserveMost and PreserveAll). swifterror and swiftself are not diagnosed and would pass through as ordinary pointer parameters, which is untested. Embedded Swift has no runtime metadata, uses refcounting, and throws through swifterror, with no unwinding.",
+    "integration_path": "swiftc -enable-experimental-feature Embedded -wmo -target x86_64-unknown-linux-gnu -O -emit-bc. Add -Xfrontend -assume-single-threaded (a hidden frontend option) for non-atomic refcounting. Then run llc -mtriple=...-msil, once the backend lowers swiftcc like ccc. Supply the documented dependencies (posix_memalign, free, putchar, arc4random_buf, memset) in the module. The Platform Abstraction Layer with a single-threaded implementation is still a forum proposal and has not shipped.",
+    "earliest_phase": "Phase 1 plus swiftcc support (not scheduled). Phase 3 if the libc hooks come through P/Invoke.",
+    "blockers": "- Calling convention: swiftcc is rejected. This is the only hard blocker.\n- swifterror/swiftself: not diagnosed, so they pass through as pointer parameters. Untested end to end.\n- Unwinding: none (swifterror).\n- GC: none (refcounting).\n- Atomics: refcounting is atomic unless -assume-single-threaded (or lower-atomic) is used.\n- Allocator: posix_memalign/free.\n- arc4random_buf for Hashable seeding.\n- Untyped throws allocates on the heap (unverified).",
+    "picks": [
+     {
+      "name": "Hand-written Embedded Swift programs",
+      "what": "Structs, enums with payloads, generics (fully specialized), classes with refcounting and typed throws, printed through putchar.",
+      "tier": "tiny",
+      "earliest_phase": "After swiftcc support",
+      "why_good": "The smallest path to prove swiftcc lowering and swifterror passing through as a pointer.",
+      "blockers": "swiftcc support.",
+      "claims_to_verify": [
+       "-emit-bc in Embedded mode emits no metadata or reflection references",
+       "-assume-single-threaded makes Embedded refcounting non-atomic",
+       "Which runtime symbols a minimal program references beyond posix_memalign, free, putchar, arc4random_buf and memset",
+       "swifterror treated as an ordinary pointer parameter works end to end",
+       "The output contains no GlobalAlias, since MSIL rejects every alias"
+      ],
+      "url": "https://github.com/swiftlang/swift-embedded-examples",
+      "size": "small"
+     },
+     {
+      "name": "swift/test/embedded executable lit tests",
+      "what": "The Embedded Swift lit tests marked executable_test, run with a dotnet runner.",
+      "tier": "suite",
+      "earliest_phase": "After swiftcc support, plus Phase 3 for tests that use the libc hooks",
+      "why_good": "Maintained tests specifically for the no-runtime subset, with FileCheck'd output.",
+      "blockers": "swiftcc support, plus the lit infrastructure of the Swift build.",
+      "claims_to_verify": [
+       "How many test/embedded tests are executable",
+       "The check-swift-embedded-wasi target has a runner substitution that can be reused for dotnet"
+      ],
+      "url": "https://github.com/swiftlang/swift/tree/main/test/embedded",
+      "size": "hundreds of tests (from memory)"
+     }
+    ]
+   },
+   {
+    "language": "Go (TinyGo)",
+    "verdict": "Possible, but only with two TinyGo patches. Phase 1 needs -gc=leaking -scheduler=none -panic=trap on a custom target, plus disabling recover for that target (otherwise every function with defer gets an inline-asm setjmp-style checkpoint) and a runtime main that returns int32. A precise GC is plausible later through the stack-object root chain TinyGo already uses for wasm. Goroutines need assembly stack switching, so they are out.",
+    "integration_path": "tinygo build -o out.bc with a custom target JSON (llvm-target x86_64 Linux or Windows, gc leaking, scheduler none, a custom build tag), then the fork's llc -mtriple=...-msil. Patch compiler/defer.go so supportsRecover returns false for the target. Give the custom runtime its own exported main that returns int32, because runtime_unix.go's main returns Go int (i64). Provide a heap region (a static array exposed as the heap start and end symbols) and putchar. llvm.mem* intrinsics lower inline. TinyGo 0.42 builds with LLVM 22 (19 and 20 still work).",
+    "earliest_phase": "Phase 1 with the recover and main patches (leaking GC). A precise GC needs a further TinyGo patch.",
+    "blockers": "- recover: TinyGo implements it with tinygo_longjmp and a per-architecture inline-asm checkpoint in every function with defer. supportsRecover is false only for wasm32 and xtensa. MSILPrepareIR rejects inline asm, so patch supportsRecover for an msil target.\n- Entry point: runtime_unix.go exports main(argc int32, argv) int, which is `i64 @main(i32, ptr)`. emitEntryPoint requires an i32 return, so it is rejected.\n- GC root finding: NeedsStackObjects is enabled only with the tinygo.wasm tag, so it would need an msil tag. That pass skips allocas, so address-taken locals in the localloc frame are not tracked.\n- Panics exit once recover is disabled.\n- Goroutines need -scheduler=tasks (assembly) or asyncify (wasm-only), so use none.\n- Some runtime files are .S and need stubs.\n- Interface method calls are direct calls inside generated type-switch functions. Func values (and possibly maps, unchecked) need M9.",
+    "picks": [
+     {
+      "name": "TinyGo testdata golden-output programs",
+      "what": "About 45 programs in testdata/*.go with expected .txt output, filtered to those with no goroutines or channels and no recover.",
+      "tier": "suite",
+      "earliest_phase": "Phase 1 (after M9 and the TinyGo patches)",
+      "why_good": "Expected output already exists and is used across TinyGo's targets and emulators. Covers maps, interfaces, closures, defer, reflect and strings.",
+      "blockers": "Drop the scheduler-dependent and recover tests. The leaking GC limits allocation-heavy tests.",
+      "claims_to_verify": [
+       "How many testdata programs need goroutines, channels or recover",
+       "A custom target JSON with scheduler none and gc leaking builds bitcode with no .S runtime references",
+       "TinyGo output contains no GlobalAlias, since MSIL rejects every alias"
+      ],
+      "url": "https://github.com/tinygo-org/tinygo/tree/release/testdata",
+      "size": "~45 programs"
+     },
+     {
+      "name": "tinygo test on pure stdlib packages",
+      "what": "The stdlib packages TinyGo's Makefile already tests (for example strconv, unicode/utf8, sort, math, bytes, strings, container/* and hash/*), each run as a test binary.",
+      "tier": "suite",
+      "earliest_phase": "Phase 1 for allocation-light packages with the leaking GC. Phase 3 with a precise GC.",
+      "why_good": "Upstream Go stdlib tests with built-in pass/fail.",
+      "blockers": "The testing package's output uses fmt and os. Allocation volume under the leaking GC. Tests that rely on recover cannot pass once it is disabled.",
+      "claims_to_verify": [
+       "The list of stdlib packages in TinyGo's Makefile test target",
+       "Each package test's memory high-water mark under -gc=leaking"
+      ],
+      "url": "https://github.com/tinygo-org/tinygo",
+      "size": "dozens of packages"
+     }
+    ]
+   },
+   {
+    "language": "Nim",
+    "verdict": "Possible through the C backend. With --mm:arc and --exceptions:goto, Nim exceptions compile to error flags checked after calls, with no unwinding and no setjmp, so even try/except works. ARC is deterministic refcounting and needs no stack scanning. Small shims are needed: an accepted main, malloc and panicoverride.",
+    "integration_path": "nim c --compileOnly --nimcache:dir --mm:arc --threads:off --exceptions:goto -d:useMalloc --panics:on --os:any x.nim. Released Nim 2.x emits main(argc, args, env) for --os:any, which is rejected. Use --noMain with your own main, or --os:standalone (main(void), needs panicoverride), or Nim devel (2-argument main), or the backend's 3-argument fix. Compile the generated .c with the fork's clang for the msil triple, or with stock clang to bitcode plus llvm-link (one module in Phase 1), then run llc. A C shim provides malloc/free/realloc (a bump allocator), the panicoverride hooks and output. clang turns memcpy/memset calls into intrinsics, which lower inline.",
+    "earliest_phase": "Phase 1 with shims. Phase 3 for the normal stdlib.",
+    "blockers": "- Unwinding: avoided with goto exceptions. The nlvm direct-LLVM route uses landingpads instead, which would break.\n- GC: ARC/ORC is fine. The older refc and markAndSweep collectors scan the stack and are never supported.\n- TLS and atomics: Nim 2 defaults to threads:on, so force --threads:off.\n- Allocator: -d:useMalloc needs malloc (a shim, or Phase 3).\n- Main: released 2.x --os:any has envp. See the integration path for the workarounds.\n- echo and the stdlib I/O use stdio (Phase 3).",
+    "picks": [
+     {
+      "name": "Hand-written Nim programs (goto exceptions, ARC, closures, iterators)",
+      "what": "raise/try/except/finally, ref objects with destructors and =copy/=sink hooks, closure iterators, generics and seq/string/Table, printed through a shimmed putchar.",
+      "tier": "tiny",
+      "earliest_phase": "Phase 1 (closures need M9)",
+      "why_good": "Proves on MSIL that exception handling expressed without unwinding works, which no C-family source exercises.",
+      "blockers": "malloc and output shims. --threads:off. An accepted main.",
+      "claims_to_verify": [
+       "--exceptions:goto output contains no setjmp, landingpad or invoke",
+       "The exact symbol set --os:any -d:useMalloc needs (the docs only say 'basic ANSI C stdlib and stdio')",
+       "The generated C, compiled by clang, produces no GlobalAlias"
+      ],
+      "url": "https://nim-lang.org/docs/nimc.html",
+      "size": "small"
+     },
+     {
+      "name": "Nim testament tests/ subset",
+      "what": "The upstream test tree, with expected output in each spec header, run by a testament-like script that builds through C to MSIL. Start with tests/arc, tests/destructor, tests/exception, tests/iter, tests/generics and tests/closure.",
+      "tier": "suite",
+      "earliest_phase": "Phase 1 for the no-I/O subset with shims. Phase 3 for the rest.",
+      "why_good": "Thousands of tests with machine-readable expectations. nlvm's skipped-tests list shows which tests depend on backend specifics.",
+      "blockers": "Most tests echo through stdio (Phase 3). Some need threads, the older GC or the JS backend.",
+      "claims_to_verify": [
+       "How many tests in the chosen directories pass natively with --os:any --mm:arc --threads:off",
+       "testament can be pointed at a custom compile-and-run pipeline"
+      ],
+      "url": "https://github.com/nim-lang/Nim/tree/devel/tests",
+      "size": "thousands of files (from memory)"
+     }
+    ]
+   },
+   {
+    "language": "Scheme (CHICKEN, Gambit)",
+    "verdict": "Possible for Phase 3, and valuable as a stress test of Phase 3 features. CHICKEN (Cheney on the MTA) exercises setjmp/longjmp, dynamic alloca (C_alloc is C_alloca) and deep frames, and its GC traces explicit roots. Gambit keeps its own stack array with a stop-and-copy GC. Neither needs machine-stack scanning.",
+    "integration_path": "CHICKEN: chicken x.scm -output-file x.c, then the fork's clang for the msil triple (or bitcode plus llvm-link with libchicken built as bitcode), then llc. Gambit: gsc -c x.scm, compiled with -D___NOT_USE_LABEL_VALUES in CFLAGS (no configure switch exists; gambit.h otherwise uses label values under __GNUC__), then the same path with the libgambit runtime.",
+    "earliest_phase": "Phase 3",
+    "blockers": "- CHICKEN needs setjmp/longjmp and dynamic alloca (both Phase 3).\n- CHICKEN's stack-limit checks compare addresses of locals, so address-taken locals live in the localloc frame (should still work).\n- Both runtimes need libc, signals and timers.\n- Gambit: escaped blockaddress (labels as values in tables) is rejected, so define ___NOT_USE_LABEL_VALUES.\n- No unwinding is needed.\n- GC root finding: explicit roots in both.",
+    "picks": [
+     {
+      "name": "CHICKEN chicken-core tests",
+      "what": "The runtime and compiler tests run by make check.",
+      "tier": "suite",
+      "earliest_phase": "Phase 3",
+      "why_good": "The most demanding available test of the Phase-3 setjmp, longjmp and alloca implementation, with real deep recursion and frequent longjmps.",
+      "blockers": "Signals, libc and file I/O in the tests.",
+      "claims_to_verify": [
+       "The minor GC detects nursery objects by C-stack address range (C_in_stackp), and that stays valid when locals are in the localloc frame",
+       "The make check test count"
+      ],
+      "url": "https://code.call-cc.org/",
+      "size": "~100 test scripts (from memory)"
+     },
+     {
+      "name": "Gambit unit-tests (and r7rs-benchmarks programs)",
+      "what": "Gambit's tests and unit-tests, plus ecraven/r7rs-benchmarks (small deterministic programs whose bench script already has Gambit and CHICKEN compile and run functions).",
+      "tier": "suite",
+      "earliest_phase": "Phase 3",
+      "why_good": "A trampoline-style C program with an explicit Scheme stack. The benchmarks print fixed results.",
+      "blockers": "libc, timers and the label-values macro.",
+      "claims_to_verify": [
+       "Each r7rs-benchmarks program checks a fixed expected result",
+       "The Gambit unit-test count"
+      ],
+      "url": "https://github.com/gambit/gambit",
+      "size": "hundreds of tests (from memory)"
+     }
+    ]
+   },
+   {
+    "language": "Koka",
+    "verdict": "Possible in Phase 3. The C output uses Perceus refcounting (no tracing GC), and effect handlers compile to plain C control flow (kklib has no setjmp, longjmp or ucontext). That makes Koka a good source of deep recursion, closures and indirect calls. However, kklib keeps its runtime context in a thread-local variable and uses _Atomic refcounts, so even pure programs need Phase 3 or a kklib patch.",
+    "integration_path": "koka -c (C goes into .koka/), then the fork's clang or stock clang to bitcode, llvm-link with kklib built as bitcode, then llc -mtriple=...-msil. Prefer system malloc over mimalloc.",
+    "earliest_phase": "Phase 3. Phase 1 only with a kklib patch that turns the thread-local context into a plain global, plus a malloc shim and lower-atomic.",
+    "blockers": "- TLS: kklib/src/init.c keeps `kk_context_t* context` in kk_decl_thread (__thread or __declspec(thread)), which MSIL rejects until Phase 3.\n- kklib needs malloc and stdio.\n- Refcounts are _Atomic for thread-shared objects (lower-atomic or Phase 3).\n- mimalloc uses TLS and OS calls, so disable it.\n- The parallel and async libraries need threads.\n- No unwinding.\n- GC: refcounting.",
+    "picks": [
+     {
+      "name": "Koka test/bench programs",
+      "what": "Functional benchmarks (rbtree, nqueens, deriv, cfold and similar) with fixed printed results.",
+      "tier": "medium",
+      "earliest_phase": "Phase 3",
+      "why_good": "Deterministic output, allocation-heavy refcounting and deep recursion.",
+      "blockers": "kklib on libc. The thread-local context.",
+      "claims_to_verify": [
+       "The current test/bench contents and expected outputs",
+       "kklib builds without mimalloc and without threads"
+      ],
+      "url": "https://github.com/koka-lang/koka/tree/master/test",
+      "size": "tens of programs"
+     },
+     {
+      "name": "Koka test/ expected-output suite",
+      "what": "The language tests run by stack test, with .out expected files.",
+      "tier": "suite",
+      "earliest_phase": "Phase 3",
+      "why_good": "Expected outputs already exist, and effect-handler tests compile to unusual C control flow.",
+      "blockers": "kklib and stdio.",
+      "claims_to_verify": [
+       "The test count"
+      ],
+      "url": "https://github.com/koka-lang/koka",
+      "size": "hundreds of tests (from memory)"
+     }
+    ]
+   },
+   {
+    "language": "Standard ML (MLton)",
+    "verdict": "Possible but low priority (Phase 3/4). The ML stack is a heap object managed by the runtime, and the precise GC never scans machine frames. With default flags the LLVM codegen emits C-calling-convention chunk functions and returns to a trampoline dispatcher, with no musttail and no cc10, so -codegen llvm is viable. The runtime needs GMP, mmap and signals.",
+    "integration_path": "mlton -codegen llvm with the defaults -chunk-tail-call false and -llvm-cc10 false. Never enable either: the fork rejects musttail and cc10. Point -llvm-llc at a wrapper that adds -mtriple=...-msil, or keep the generated .ll and run the fork's llvm-as and llc. -codegen c with the fork's clang is the alternative. The runtime (libmlton, gdtoa) is compiled with the fork's clang in Phase 3.",
+    "earliest_phase": "Phase 3",
+    "blockers": "- GMP for IntInf.\n- mmap/VirtualAlloc heap, signals, stdio.\n- The chunk dispatcher returns and calls the next chunk indirectly (M9).\n- musttail and cc10 appear only with the non-default Expert flags -chunk-tail-call true and -llvm-cc10 true.\n- No unwinding.\n- GC: precise, over the ML stack.",
+    "picks": [
+     {
+      "name": "MLton regression suite",
+      "what": "288 .sml programs in regression/, with 270 .ok expected-output files and 6 .nonterm files.",
+      "tier": "suite",
+      "earliest_phase": "Phase 3",
+      "why_good": "Expected outputs already exist, and whole-program optimization produces unusual C and IR.",
+      "blockers": "The runtime port (GMP, mmap, signals).",
+      "claims_to_verify": [
+       "MLton's textual LLVM IR parses with the fork's llvm-as",
+       "The C main MLton generates has a signature emitEntryPoint accepts",
+       "Which regression programs avoid IntInf/GMP and can run before a full runtime port",
+       "The output contains no GlobalAlias, since MSIL rejects every alias"
+      ],
+      "url": "https://github.com/MLton/mlton/tree/master/regression",
+      "size": "288 programs"
+     }
+    ]
+   },
+   {
+    "language": "Pascal (Free Pascal LLVM codegen)",
+    "verdict": "Poor fit without RTL work, and exceptions never work. FPC's LLVM mode (Linux and Darwin only, LLVM 7-17) lowers try/except to invoke/landingpad with Itanium EH, which LowerInvoke removes, so raising or catching never works. try/finally without a raise still runs. The default Linux RTL makes syscalls in assembler routines, and ansistring refcounting calls an assembler inclocked. Both become inline asm, which MSIL rejects even in single-threaded programs.",
+    "integration_path": "Build FPC with LLVM=1 on Linux or WSL. Rebuild the RTL with -dFPC_USE_LIBC, and patch it to use the Pascal inclocked fallback (undefine FPC_SYSTEM_HAS_INCLOCKED_LONGINT). Compile with -Clv<ver>, assemble the .ll with the matching llvm-as, then run the fork's llc -mtriple=x86_64-unknown-linux-gnu-msil. Floating point is strictfp with constrained intrinsics unless fastmath is on; the fork lowers strict FP.",
+    "earliest_phase": "Phase 3 for exception-free programs with a patched RTL. Never for exceptions.",
+    "blockers": "- Exceptions: invoke/landingpad with Itanium psABI EH (fpc_psabi_*), so never.\n- Inline asm: the Linux RTL's FpSysCall and x86_64 inclocked are assembler routines, emitted as naked functions with inline asm and rejected. An FPC_USE_LIBC RTL with Pascal fallbacks is a prerequisite.\n- libc via P/Invoke (Phase 3).\n- Heap manager.\n- Windows is not an FPC LLVM target, so only the Linux layout is available.",
+    "picks": [
+     {
+      "name": "FPC tests/ (tbs/webtbs subset)",
+      "what": "The compiler regression tests that pass natively with the LLVM codegen and neither raise nor catch exceptions.",
+      "tier": "suite",
+      "earliest_phase": "Phase 3",
+      "why_good": "Thousands of small tests with exit-code oracles.",
+      "blockers": "The RTL patches described above. Any test that raises an exception.",
+      "claims_to_verify": [
+       "What fraction of tbs/webtbs tests raise or catch exceptions",
+       "An RTL built with FPC_USE_LIBC under the LLVM codegen leaves no other assembler routines",
+       "Bitcode assembled by FPC's LLVM (7-17) loads in the fork"
+      ],
+      "url": "https://wiki.lazarus.freepascal.org/LLVM",
+      "size": "thousands (from memory)"
+     }
+    ]
+   },
+   {
+    "language": "V",
+    "verdict": "Possible but low priority (Phase 3). The default Boehm GC is conservative and scans the machine stack, which is never supported. -autofree alone still links Boehm for the objects it misses, so only -gc none programs qualify, and they leak. The builtin module uses libc.",
+    "integration_path": "v -gc none -o out.c x.v for a Linux target, then the fork's clang for the msil triple, then llc. On non-Windows targets the generated main is int main(int, char**), which is accepted. Windows console builds emit wmain with an envp parameter, so avoid them or force -cmain main.",
+    "earliest_phase": "Phase 3",
+    "blockers": "- GC: Boehm (never), so use -gc none, which leaks.\n- libc in the builtin module.\n- -freestanding is Linux-only and needs a bare builtin directory (-bare-builtin-dir).\n- Threads via go/spawn.",
+    "picks": [
+     {
+      "name": "vlib/v/tests with -gc none",
+      "what": "Compiler behavior tests that pass natively with -gc none.",
+      "tier": "suite",
+      "earliest_phase": "Phase 3",
+      "why_good": "Many small tests. Option/Result error handling needs no unwinding.",
+      "blockers": "The libc builtin. Memory growth without a GC.",
+      "claims_to_verify": [
+       "How many vlib/v/tests pass natively with -gc none (no published figure)"
+      ],
+      "url": "https://github.com/vlang/v",
+      "size": "over 1000 test files (from memory)"
+     }
+    ]
+   },
+   {
+    "language": "Julia (StaticCompiler.jl)",
+    "verdict": "Possible as a narrow Phase-1 niche: type-stable, allocation-free numeric kernels only. Current StaticCompiler (0.7.3 and later; 0.7.4 released 2026-10-12) requires Julia 1.11 or later. Julia 1.10 works only with 0.7.2 or older. It is not a broad test source.",
+    "integration_path": "Get the LLVM module with static_llvm_module or compile_llvm_module and a StaticTarget for an x86_64 triple, write it as bitcode, then llc -mtriple=...-msil.",
+    "earliest_phase": "Phase 1",
+    "blockers": "- No GC-tracked allocations.\n- Only constant globals (global Tuples and NamedTuples are allowed).\n- Errors must be overridden with @device_override.\n- StaticTools' MallocArray and MallocString need malloc.\n- Julia 1.11+ for current StaticCompiler.",
+    "picks": [
+     {
+      "name": "StaticCompiler/StaticTools example kernels",
+      "what": "Numeric loops (fib, matrix kernels, FP math) compiled without libjulia.",
+      "tier": "tiny",
+      "earliest_phase": "Phase 1",
+      "why_good": "IR from a very different frontend (Julia's codegen) on the same arithmetic.",
+      "blockers": "Allocation-free restriction.",
+      "claims_to_verify": [
+       "StaticCompiler 0.7.4 works on the installed Julia (1.11 or later)",
+       "The emitted IR has no julia.* GC intrinsics or addrspace(10) pointers",
+       "The output contains no GlobalAlias, since MSIL rejects every alias"
+      ],
+      "url": "https://github.com/tshort/StaticCompiler.jl",
+      "size": "small"
+     }
+    ]
+   },
+   {
+    "language": "Lean 4",
+    "verdict": "Poor fit. The runtime is C++ and throws exceptions in several paths, uses Task threads and atomic refcounts (in lean.h, which the generated C includes), and now pulls in libuv and mimalloc. GMP is optional (-DUSE_GMP=OFF selects the built-in mpn/mpz). Only tiny subsets could run before Phase 4.",
+    "integration_path": "lean -c out.c, then clang to bitcode with the Lean runtime. Not recommended.",
+    "earliest_phase": "Phase 4 at the earliest",
+    "blockers": "- C++ exceptions in the runtime (stackinfo, memory, interrupt, thread, process, uv).\n- libuv and mimalloc.\n- Threads and atomic refcounting.\n- GMP unless USE_GMP=OFF.",
+    "picks": []
+   },
+   {
+    "language": "Crystal",
+    "verdict": "Poor fit. The GC is not the limit: -Dgc_none selects a non-collecting malloc/HeapAlloc GC, which the wasm32 target always uses. The blockers are exceptions through landingpads and libunwind, which are never supported (the wasm32 port's abort-on-raise model would need a runtime patch for x86_64), and fiber context switching in asm.",
+    "integration_path": "Not recommended.",
+    "earliest_phase": "Never in practice",
+    "blockers": "- landingpad/libunwind exceptions (never), unless raise is patched to abort as on wasm32.\n- Fiber context switching in asm.\n- The event-loop runtime.",
+    "picks": []
+   },
+   {
+    "language": "Pony",
+    "verdict": "Possible later, low priority. Since ponyc 0.64.0 (PR #5002, merged 2026-05-27; current release 0.76.0), partial functions return an error flag instead of unwinding, so unwinding is no longer a blocker. The runtime still needs threads, atomics, TLS and ASIO.",
+    "integration_path": "Not yet assessed. Emit IR or bitcode from ponyc for an x86_64 target and retarget it once Phase 3 provides threads, atomics and TLS.",
+    "earliest_phase": "Phase 3 at the earliest",
+    "blockers": "- libponyrt's scheduler threads (ponyint_thread_create), PONY_ATOMIC atomics, __pony_thread_local TLS and ASIO.\n- No unwinding since 0.64.0.",
+    "picks": []
+   },
+   {
+    "language": "Kotlin/Native",
+    "verdict": "Poor fit. It has a C++ runtime with C++ exceptions, threads, atomics and TLS, and uses a JetBrains-pinned LLVM. The wasm32 target was removed in Kotlin 1.9.20.",
+    "integration_path": "Not recommended.",
+    "earliest_phase": "Never in practice",
+    "blockers": "Exceptions through landingpads. Threads, atomics and TLS in the runtime.",
+    "picks": []
+   },
+   {
+    "language": "Haskell (GHC)",
+    "verdict": "Poor fit. -fllvm emits `tail call ghccc` (not musttail), puts info tables in function prefix data, and post-processes llc's assembly with a mangler. MSIL rejects ghccc. The unregisterised via-C route is a large Phase 3+ RTS port.",
+    "integration_path": "Not recommended.",
+    "earliest_phase": "Never for -fllvm. Phase 3+ for unregisterised C.",
+    "blockers": "- ghccc calling convention (rejected).\n- Info tables as prefix data, and the assembly mangler for tables-next-to-code.\n- The RTS (block allocator, timers, signals).",
+    "picks": []
+   },
+   {
+    "language": "Roc",
+    "verdict": "Unknown, worth re-checking. The rewritten Zig compiler has an LLVM backend (MonoLlvmCodeGen.zig, Builder.zig and its own bitcode_writer.zig) with a settable target triple. Whether the CLI exposes the .bc is unverified. The host ABI (roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed and roc_crashed, passed through RocOps or as extern symbols) is host-supplied and would suit MSIL.",
+    "integration_path": "Check whether the roc CLI can emit or keep the .bc. If it can, retarget with llc -mtriple=...-msil and supply the host ABI in C or IR.",
+    "earliest_phase": "Unknown (Phase 1 in principle)",
+    "blockers": "Whether bitcode is reachable from the CLI. Refcount atomicity and other runtime needs are unchecked.",
+    "picks": []
+   },
+   {
+    "language": "Vala",
+    "verdict": "Poor fit. The usable --profile=posix subset is small (tests/posix holds only 8 tests), and the rest of the suite is GObject/GLib-based. It adds no coverage beyond C.",
+    "integration_path": "Not recommended.",
+    "earliest_phase": "Phase 3",
+    "blockers": "GLib/GObject in the default profile. Few posix-profile tests.",
+    "picks": []
+   }
+  ],
+  "dropped": [
+   "Rust/rustc_codegen_cranelift example/: merged into the rustc_codegen_gcc tests/run pick (mini_core, and hello_world cut down to the parts with no TLS, threads or asm)",
+   "Rust/blake3 (pure, no default features): an alternate to sha2 in the crypto pick. It has an official test_vectors.json.",
+   "Rust/miniz_oxide and lz4_flex: good Phase-1 alternates for a medium pick with alloc (deterministic round trip). lz4_flex's no-alloc path puts an 8-16 KB table on the stack, a useful frame test.",
+   "Rust/nom, serde_json, pulldown-cmark: Phase 1 once M9 is committed (core::fmt is everywhere), and hashbrown/foldhash seeding may need lower-atomic. Use them as Phase 2 targets with JSONTestSuite and the CommonMark spec examples.",
+   "Rust/zune-jpeg, tiny-skia, nalgebra: viable no_std+alloc mediums, but their oracles are checksums against a native build, not published vectors. Hold for Phase 2.",
+   "Rust/png, lewton, regex (full crate): require std, so Phase 3.",
+   "Rust/rhai: its no_std mode is nightly-only and pulls in portable-atomic. The std build in Phase 3 is simpler.",
+   "Rust/rust-lang tests/ui run-pass: Phase 3+, overlaps coretests. Use it for Phase 4 conformance at scale.",
+   "Rust/rustc-perf runtime benchmarks and Benchmarks Game: Phase 4 performance work. Their harnesses use black_box (an empty asm with a register input and a memory clobber, rejected until the asm fix lands).",
+   "Rust/rustc_codegen_clr: used as the reference bar (pass rates), not as a corpus.",
+   "Fortran/flang-rt: a prerequisite runtime, not a test source. It appears in the Fortran integration path and in the FCVS pick.",
+   "Fortran/BLAS testers xblat1-3 and LAPACK TESTING: Phase 3/4 follow-ups to the BLAS and LAPACK picks (they need formatted I/O and .in files). dblat1 needs only WRITE and STOP, so it can run early with a minimal I/O stub.",
+   "Fortran/QUADPACK, FFTPACK, EISPACK, ODEPACK: Phase-1 alternates with pure kernels. They need stubs for XERROR, D1MACH and XERRWD.",
+   "Fortran/SLATEC: Phase 2/3 (1400+ routines, quick checks need I/O, and the machine constants ship commented out).",
+   "Fortran/NAS Parallel Benchmarks serial, Polyhedron pb11, SNAP, Fortran UnitTests (except assign-goto), gfortran regression run tests: Phase 3/4. Polyhedron has no redistribution grant, so fetch it at test time.",
+   "Fortran/fortran-lang stdlib: Phase 4 (allocatables, deferred-length characters, polymorphism, fypp build).",
+   "Fortran/LFortran: a second Fortran frontend for cross-checking flang IR. Its runtime (lfortran_intrinsics.c) needs libc, so Phase 3, and its emit flags need confirming.",
+   "C/CLAPACK (f2c-translated LAPACK): C, so it belongs in the C corpus as a differential twin of the flang-built LAPACK.",
+   "Nim/nlvm: uses DWARF EH landingpads for raise, so the C backend with --exceptions:goto is the better route. Keep it as a cross-check once exceptions are avoided.",
+   "Lean 4, Crystal, Kotlin/Native, GHC, Vala: poor fit (see their language entries), no picks. Pony and Roc: no picks yet. Pony stopped unwinding in 0.64.0, and Roc's LLVM bitcode path needs checking, so both should be revisited."
+  ]
+ },
+ "checks": [
+  {
+   "subject": "MSIL backend: calling conventions",
+   "claim": "callingConvSupported accepts only C, Fast, Cold, PreserveMost and PreserveAll, so swiftcc is rejected",
+   "verdict": "confirmed",
+   "source": "llvm/lib/Target/MSIL/MSILISelLoweringCall.cpp:101-106 (used at 114 and 261)"
+  },
+  {
+   "subject": "MSIL backend: entry point",
+   "claim": "emitEntryPoint accepts only i32 main() or i32 main(i32, ptr), so any 3-argument main with envp is rejected",
+   "verdict": "confirmed",
+   "source": "llvm/lib/Target/MSIL/MSILAsmPrinter.cpp:910-922 ('unsupported signature for main'). The return type must also be i32."
+  },
+  {
+   "subject": "MSIL backend: i128 helpers",
+   "claim": "i128 `/` and `%` by anything other than a power of two, and FP-to-i128 conversions, are reported in ReplaceNodeResults as Phase-3 '__' helpers even when the module defines the helper",
+   "verdict": "confirmed",
+   "source": "MSILISelLowering.cpp:312-323 and 628-700. Reproduced: rustc u128 `/ 7` through build/bin/llc.exe gave \"runtime helper '__udivti3' is not available for MSIL yet (phase 3)\"."
+  },
+  {
+   "subject": "MSIL backend: division wider than 128 bits",
+   "claim": "u1024 division expands inline (ExpandLargeDivRem) and does not become __udivei4",
+   "verdict": "confirmed",
+   "source": "TargetLoweringBase.cpp:750 sets MaxDivRemBitWidthSupported=128 by default, and MSIL does not override it. ExpandIRInsts runs at TargetPassConfig.cpp:928. Local test: llc on `udiv i1024` produced IL with no call except the entry point's call to main."
+  },
+  {
+   "subject": "MSIL backend: memcpy/memset/memmove",
+   "claim": "memcpy/memset(/memmove) must be supplied by the program (Odin -no-crt, Zig out.bc, C3 bare mode, Ada, TinyGo)",
+   "verdict": "wrong",
+   "source": "MSILSelectionDAGInfo.cpp:17-21 (decision D15)",
+   "correction": "MSIL never turns llvm.memcpy, llvm.memmove or llvm.memset into library calls. They become cpblk, System.Buffer::MemoryCopy or initblk. Only an explicit call to a function named memcpy needs a definition. Odin's runtime defines memset/memcpy/memmove itself under ODIN_NO_CRT (base/runtime/procs.odin)."
+  },
+  {
+   "subject": "MSIL backend: other rejections",
+   "claim": "inline asm, thread_local globals, 'nest' parameters, fp128/x86_fp80, and stacksave/stackrestore without a dynamic alloca are all rejected; escaped blockaddress is rejected",
+   "verdict": "confirmed",
+   "source": "MSILPrepareIR.cpp:518 (inline asm), 925 (thread-local), 140 (fp128/x86_fp80). MSILISelLoweringCall.cpp:138/329 (nest). MSILISelLowering.cpp:1130-1146 (stacksave) and 582-586 (blockaddress is allowed when the label is only an indirectbr target)."
+  },
+  {
+   "subject": "MSIL backend: aliases (not in the claims)",
+   "claim": "(implicit) the listed blockers cover the IR shapes these frontends produce",
+   "verdict": "wrong",
+   "source": "MSILPrepareIR.cpp:933-935 ('alias ... is not supported for MSIL')",
+   "correction": "Every GlobalAlias is an error. This affects Rust (see the merge-functions entry) and should be checked for every frontend."
+  },
+  {
+   "subject": "MSIL backend: atomics / lower-atomic",
+   "claim": "Atomics become __atomic_* calls, and `opt -passes=lower-atomic` exists in the fork and fixes Arc",
+   "verdict": "confirmed",
+   "source": "MSILISelLowering.cpp:356-358 (setMaxAtomicSizeInBitsSupported(0)); PassRegistry.def:482. Local test: a Rust Arc clone/drop failed with undefined __atomic_fetch_sub_8/__atomic_fetch_add_8. After opt -passes=lower-atomic it assembled and ran on .NET 8 (exit 0). The specific 'exits with 56' test was not rerun."
+  },
+  {
+   "subject": "Rust: --emit=llvm-bc,link with fat LTO",
+   "claim": "With -C lto=fat --crate-type staticlib, --emit=llvm-bc,link writes one post-LTO module that defines core and alloc; without `link`, core stays as declarations",
+   "verdict": "confirmed",
+   "source": "Local rustc 1.99.0 (LLVM 23.1.1), x86_64-pc-windows-msvc. With link: 11 definitions, and the only non-intrinsic declarations were putchar and __CxxFrameHandler3. With --emit=llvm-ir alone: 5 definitions plus declarations of core::fmt::write and the Display impls."
+  },
+  {
+   "subject": "Rust: compiler_builtins",
+   "claim": "compiler_builtins is excluded from the LTO module",
+   "verdict": "confirmed",
+   "source": "The local post-LTO .ll has no compiler_builtins symbols."
+  },
+  {
+   "subject": "Rust: end-to-end run and M9 dyn Write",
+   "claim": "With the uncommitted M9 changes, a program that write!s into a dyn core::fmt::Write compiles and runs",
+   "verdict": "confirmed",
+   "source": "Test program: no_std, Vec, Rc, bump allocator, write! into dyn Write (10 indirect calls in the IR), u128 Display. Built with build/bin/llc.exe (LLVM 24.0.0git, built today at 08:00 from the dirty tree), then ilasm and dotnet 8. It printed '45 5 12345678901234567890123' and exited 0."
+  },
+  {
+   "subject": "Rust: personality without landingpads",
+   "claim": "llc-msil accepts functions that carry a personality but have no landingpads, on both triples",
+   "verdict": "confirmed",
+   "source": "The post-LTO module had 3 functions with `personality ptr @__CxxFrameHandler3` and 0 invokes. llc succeeded with -mtriple=x86_64-pc-windows-msvc-msil and with x86_64-unknown-linux-gnu-msil (both runs used the same MSVC-layout bitcode)."
+  },
+  {
+   "subject": "Rust: u128 Display",
+   "claim": "Display of u128 hits the __udivti3 Phase-3 helper error",
+   "verdict": "wrong",
+   "source": "Local rustc 1.99: core::fmt::num <u128 as Display>::fmt is defined in the LTO module with no udiv/urem i128 (it uses mul i128). It compiled and printed correctly on .NET.",
+   "correction": "Only user-written u128 `/` or `%` by a non-power-of-two (and FP-to-u128 casts) fail. Formatting u128 works."
+  },
+  {
+   "subject": "Rust: black_box",
+   "claim": "black_box lowers to an empty `asm sideeffect \"\"`, and the fix is to treat empty, operand-less asm as a no-op",
+   "verdict": "wrong",
+   "source": "Local IR: `call void asm sideeffect \"\", \"r,~{memory}\"(ptr nonnull %x)`. rustc uses the operand-less \"~{memory}\" form only for ZSTs.",
+   "correction": "black_box asm has a register input and a memory clobber. The fix has to accept an empty asm string with inputs and clobbers but no outputs, and treat the pointer as escaped and the asm as a compiler barrier."
+  },
+  {
+   "subject": "Rust: memcmp/bcmp",
+   "claim": "Slice and str equality emit memcmp/bcmp, which are not Phase-1 imports",
+   "verdict": "confirmed",
+   "source": "Local test on the msvc target: slice ==/< produced `declare i32 @memcmp`. The import list in MSILUtilities.cpp (puts, putchar, math functions, msil-import-module) does not include memcmp."
+  },
+  {
+   "subject": "Rust: data layout of x86_64-unknown-none",
+   "claim": "x86_64-unknown-none and x86_64-unknown-linux-gnu have identical data-layout strings",
+   "verdict": "confirmed",
+   "source": "rustc --print target-spec-json: both are 'e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128'. Caveat: 'none' also has rustc-abi softfloat, +soft-float and code-model kernel. extern \"C\" floats are still double in the IR (checked), and llc only produced the alias error below."
+  },
+  {
+   "subject": "Rust: merge-functions aliases (missing blocker)",
+   "claim": "The Rust blocker list is complete",
+   "verdict": "wrong",
+   "source": "rustc -O on both x86_64-pc-windows-msvc and x86_64-unknown-none emitted `@h = unnamed_addr alias ... @f` for identical functions. llc then failed with 'alias @h is not supported for MSIL'.",
+   "correction": "Add stable `-C llvm-args=-mergefunc-use-aliases=false`, which emits a thunk instead (verified), or nightly -Zmerge-functions=disabled."
+  },
+  {
+   "subject": "Rust: calling convention",
+   "claim": "(implicit) rustc's internal functions use a supported calling convention",
+   "verdict": "confirmed",
+   "source": "Internal Rust functions in the LTO module are `fastcc`, which MSIL accepts."
+  },
+  {
+   "subject": "Rust: rustc_codegen_gcc tests/run",
+   "claim": "Count of tests/run files; each has a `// Run-time:` header with status/stdout",
+   "verdict": "confirmed",
+   "source": "GitHub API: 50 .rs files in rust-lang/rustc_codegen_gcc tests/run. int.rs has '// Run-time:\\n//   status: 0' and uses std (std::hint::black_box). The std/mini_core split per file was not checked."
+  },
+  {
+   "subject": "Rust: libm crate",
+   "claim": "crates.io libm 0.2.x builds standalone as no_std even though development moved to compiler-builtins",
+   "verdict": "confirmed",
+   "source": "crates.io API: libm 0.2.16, repository github.com/rust-lang/compiler-builtins. libm/src/lib.rs starts with #![no_std]."
+  },
+  {
+   "subject": "Zig: LLVM version and bitcode writer",
+   "claim": "Zig 0.15 uses LLVM 20 and writes bitcode with its own writer",
+   "verdict": "confirmed",
+   "source": "ziglang.org 0.15.1 release notes: LLVM 20.1.8. 0.15.1 src/codegen/llvm.zig:948 calls o.builder.toBitcode (lib/std/zig/llvm/Builder.zig)."
+  },
+  {
+   "subject": "Zig: behavior test counts",
+   "claim": "0.15.1 behavior tests: 2008 total, 1977 passing on LLVM",
+   "verdict": "confirmed",
+   "source": "Zig 0.15.1 release notes: the x86_64 backend passes 1984/2008 and the LLVM backend 1977/2008."
+  },
+  {
+   "subject": "Zig: flags",
+   "claim": "-femit-llvm-bc=<path>, -fno-emit-bin, -fsingle-threaded and -mcpu exist",
+   "verdict": "confirmed",
+   "source": "zig 0.15.1 src/main.zig lines 432, 437, 543, 1306, 1520, 1540-1543, 1590"
+  },
+  {
+   "subject": "Zig: threadlocal under -fsingle-threaded",
+   "claim": "-fsingle-threaded turns threadlocal variables into plain globals",
+   "verdict": "confirmed",
+   "source": "0.15.1 src/codegen/llvm.zig:3039 and 4589: setThreadLocal is called only when !single_threaded"
+  },
+  {
+   "subject": "Zig: libc start code",
+   "claim": "With libc, std's start code emits main(argc, argv, envp), which emitEntryPoint rejects",
+   "verdict": "confirmed",
+   "source": "0.15.1 lib/std/start.zig:590: `fn main(c_argc: c_int, c_argv: [*][*:0]c_char, c_envp: ...) callconv(.c) c_int`"
+  },
+  {
+   "subject": "Zig: fastcc and panic handler",
+   "claim": "Non-exported functions use fastcc; provide `pub const panic` with a simple handler",
+   "verdict": "confirmed",
+   "source": "llvm.zig toLlvmCallConvTag: `.auto, .async => .fastcc`, and the C calling convention maps to ccc. builtin.zig:1085 declares `pub const panic: type`.",
+   "correction": "In 0.15 the root `panic` must be a namespace type such as std.debug.FullPanic(myFn), std.debug.simple_panic or std.debug.no_panic, not a bare function."
+  },
+  {
+   "subject": "Fortran: flang version",
+   "claim": "Stock flang 23.1.2",
+   "verdict": "confirmed",
+   "source": "'C:/Program Files/LLVM/bin/flang.exe --version' prints 'flang version 23.1.2'. LLVM 23.1.0 was released 2026-08-25."
+  },
+  {
+   "subject": "Fortran: main signature and runtime entry points",
+   "claim": "flang emits main as i32(i32, ptr, ptr) and calls _FortranAProgramStart/_FortranAProgramEndStatement",
+   "verdict": "confirmed",
+   "source": "llvm-project flang/lib/Optimizer/Builder/Runtime/Main.cpp ({argcTy, ptrTy, ptrTy}). Local -O2 IR: `define noundef i32 @main(i32 %0, ptr %1, ptr %2)` and `declare void @_FortranAProgramStart(i32, ptr, ptr, ptr)`."
+  },
+  {
+   "subject": "Fortran: BLOCK, NINT and complex lowering",
+   "claim": "BLOCK keeps stacksave/stackrestore at -O2 with no dynamic alloca; NINT becomes lround; complex ABS calls cabs; complex division calls __divdc3; -fcomplex-arithmetic=improved exists",
+   "verdict": "confirmed",
+   "source": "Local flang -O2 test: 4 stacksave calls and 0 dynamic allocas, plus llvm.lround.i32.f64, cabs and __divdc3. Fork llc reported the stacksave/stackrestore errors and \"library call 'lround' is not a Phase-1 import\". Option tables: IntrinsicCall.cpp:1203/1355/1458 and clang Options.td:1157 (FlangOption)."
+  },
+  {
+   "subject": "Fortran: x**n (TSVC/LINPACK pick)",
+   "claim": "Integer exponents become llvm.powi; does llc-msil lower powi or error on __powidf2?",
+   "verdict": "confirmed",
+   "source": "Local flang -O2: real**integer becomes @llvm.powi.f64.i32, and integer**integer is inlined (__mlir_math_ipowi). With x86_64-pc-windows-msvc-msil, llc lowers powi to a 'pow' P/Invoke. With x86_64-unknown-linux-gnu-msil it errors: \"runtime helper '__powidf2' is not available for MSIL yet (phase 3)\"."
+  },
+  {
+   "subject": "Fortran: flang-rt build",
+   "claim": "flang-rt is C++, built with -fno-exceptions -fno-rtti and stl-overrides.h; a pseudo unit exists",
+   "verdict": "confirmed",
+   "source": "flang-rt/cmake/modules/AddFlangRT.cmake:267 (-fno-exceptions -fno-rtti) and 273/283 (-include stl-overrides.h). flang-rt/lib/runtime/pseudo-unit.cpp exists."
+  },
+  {
+   "subject": "Fortran: Reference BLAS file count",
+   "claim": "BLAS/SRC has 169 files at v3.12.1",
+   "verdict": "wrong",
+   "source": "GitHub API, Reference-LAPACK/lapack BLAS/SRC?ref=v3.12.1: 157 entries",
+   "correction": "155 Fortran sources (147 .f and 8 .f90), plus CMakeLists.txt and Makefile."
+  },
+  {
+   "subject": "Fortran: MINPACK",
+   "claim": "minpack.f90 has 3832 lines; there are six test_*.f90 programs",
+   "verdict": "confirmed",
+   "source": "fortran-lang/minpack main: src/minpack.f90 is 3832 lines. test/ has test_chkder, test_hybrd, test_hybrj, test_lmder, test_lmdif and test_lmstr .f90."
+  },
+  {
+   "subject": "Fortran: gfortran torture/execute",
+   "claim": "167/58 split; DisabledFiles.cmake lists 8",
+   "verdict": "confirmed",
+   "source": "llvm-test-suite Fortran/gfortran/torture/execute has 225 Fortran files (223 .f90 + 2 .f), which equals 167+58. DisabledFiles.cmake lists 8: st_function, entry_2, specifics, data_3, getarg_1, intrinsic_sr_kind, nan_inf_fmt, random_2. The grep split itself was not re-derived."
+  },
+  {
+   "subject": "Fortran: NIST FCVS",
+   "claim": "180 programs, with an omitted list in CMakeLists.txt",
+   "verdict": "confirmed",
+   "source": "llvm-test-suite Fortran/UnitTests/fcvs21_f95 has 180 .f files and 180 reference_output files. CMakeLists.txt:25 onward has the omit/EXCLUDE list."
+  },
+  {
+   "subject": "Fortran blocker: Nim and GNAT have the same main shape",
+   "claim": "Nim and GNAT produce the same 3-argument main(argc, argv, envp)",
+   "verdict": "wrong",
+   "source": "Nim version-2-2 and version-2-0 compiler/cgen.nim PosixCMain: 'int main(int argc, char** args, char** env)'. Nim devel genPosixCMain: (argc, args) only. GCC master gcc/ada/bindgen.adb: (argc, argv) only, with 0 occurrences of envp. gcc-15 and gcc-16 bindgen.adb still have envp.",
+   "correction": "Released Nim 2.x: yes, it has envp, but --os:standalone gives main(void). GNAT: envp only on GCC 16 or older. The gnat-llvm README clones current gcc master, which generates main(argc, argv), and that is accepted."
+  },
+  {
+   "subject": "D: LDC LLVM range",
+   "claim": "LDC 1.43 supports LLVM 18-22",
+   "verdict": "confirmed",
+   "source": "LDC v1.43.0-beta1 release notes: 'Supports LLVM 18 - 22', minimum raised to 18, prebuilt with LLVM 22.1.8. LDC 1.42.0 (2026-03-01) added LLVM 21."
+  },
+  {
+   "subject": "D: LDC flags and real type",
+   "claim": "-output-bc, -betterC and -checkaction=halt exist; `real` is x87 80-bit on Linux and double on MSVC",
+   "verdict": "confirmed",
+   "source": "ldc driver/cl_options.cpp:275 (output-bc), 531-542 (checkaction D/C/halt/context), 645 (betterC). gen/target.cpp:74-76: 'only x86 has 80-bit extended precision; MSVC uses double'."
+  },
+  {
+   "subject": "D: betterC semantics",
+   "claim": "betterC drops TypeInfo, ModuleInfo, exceptions, GC and module constructors; keeps RAII and scope(exit); assert calls the C runtime",
+   "verdict": "confirmed",
+   "source": "dlang.org/spec/betterc.html"
+  },
+  {
+   "subject": "Odin: targets and flags",
+   "claim": "freestanding_amd64_win64/_sysv exist together with -no-crt, -no-thread-local, -default-to-nil-allocator and -build-mode:llvm-ir",
+   "verdict": "confirmed",
+   "source": "Odin src/build_settings.cpp:917-923 (freestanding_amd64_win64 is x86_64-pc-windows-msvc; _sysv is x86_64-pc-none-gnu). src/main.cpp:709, 712, 767 and 1432."
+  },
+  {
+   "subject": "Odin: bitcode output",
+   "claim": "Whether Odin can emit bitcode directly",
+   "verdict": "wrong",
+   "source": "Odin src/main.cpp:1420-1445: the build modes are dll/lib/obj/exe/asm/llvm(-ir)",
+   "correction": "There is no bitcode mode. Only textual IR is emitted, so the llvm-as matching Odin's LLVM (17-22, per build_odin.sh SUPPORTED_LLVM_VERSIONS) is needed."
+  },
+  {
+   "subject": "Odin: 128-bit division",
+   "claim": "128-bit division in the runtime is a Phase-3 helper error",
+   "verdict": "confirmed",
+   "source": "base/runtime/internal_i128.odin: Odin defines __umodti3, __udivmodti4, __udivti3 (when !IS_WASM) and __fixunsdfti etc. on top of udivmod128. MSIL's ReplaceNodeResults still reports these helpers even though they are defined in the module."
+  },
+  {
+   "subject": "C3: bitcode and LLVM version",
+   "claim": "c3c --emit-llvm emits bitcode or IR; c3c is built against LLVM 21 and its bitcode is readable by 24",
+   "verdict": "wrong",
+   "source": "c3c src/build/build_options.c:128 ('--emit-llvm: Emit LLVM IR as a .ll file per module'); no bitcode option was found. CMakeLists.txt:3-4 sets C3_LLVM_MIN_VERSION 19 and C3_LLVM_MAX_VERSION 24.",
+   "correction": "c3c emits textual .ll only. Because c3c accepts LLVM 19-24, it can be built against this fork, which avoids any version mismatch. The flag names --use-stdlib=no and --link-libc=no are correct."
+  },
+  {
+   "subject": "Ada: gnat-llvm build",
+   "claim": "gnat-llvm builds against LLVM/Clang 21.1.x; `make gnatlib-bc` builds the runtime as bitcode; `llvm-gcc -c -emit-llvm` works",
+   "verdict": "confirmed",
+   "source": "AdaCore/gnat-llvm README: 'Install LLVM and Clang 21.1.x'; gnatlib-bc produces libgnat.bc and libgnarl.bc; usage example 'llvm-gcc -c -emit-llvm file.adb'."
+  },
+  {
+   "subject": "Ada: gnatbind main",
+   "claim": "The gnatbind-generated main takes envp (3-argument main rejected)",
+   "verdict": "wrong",
+   "source": "gcc master gcc/ada/bindgen.adb:2021-2024 and 2719-2722 emit (argc : Integer; argv : System.Address) only. gcc-13 through gcc-16 still emit envp.",
+   "correction": "With the current GCC master sources that gnat-llvm uses, main is (argc, argv) or has no parameters (when Command_Line_Args_On_Target is false), and both are accepted. Only older GNAT front ends emit envp."
+  },
+  {
+   "subject": "Swift: flags and PAL",
+   "claim": "-emit-bc exists; a single-threaded flag exists; there is a PAL single-threaded implementation",
+   "verdict": "confirmed",
+   "source": "swift include/swift/Option/Options.td:1469 (emit_bc) and 1293 (-assume-single-threaded, a hidden frontend option). The forums.swift.org 'Introducing the Embedded Swift Platform Abstraction Layer' post (still a proposal, not shipped) describes swiftEmbeddedPlatformSingleThreaded, POSIX and MultiThreadedPOSIX. The documented dependencies are posix_memalign, free, putchar, arc4random_buf and memset."
+  },
+  {
+   "subject": "Swift: swifterror/swiftself",
+   "claim": "swiftcc and swifterror/swiftself are unsupported (hard blocker)",
+   "verdict": "wrong",
+   "source": "MSIL code diagnoses only the calling convention (MSILISelLoweringCall.cpp:101-106) and the inalloca/preallocated/nest flags (lines 134-139). There are no swifterror or swiftself checks, and supportSwiftError is not overridden.",
+   "correction": "Only swiftcc is a hard blocker today. The swifterror and swiftself attributes would pass through as ordinary pointer parameters. Whether that works end to end is untested."
+  },
+  {
+   "subject": "TinyGo: LLVM and stack objects",
+   "claim": "TinyGo 0.42 uses LLVM 22 (19 and 20 also work); NeedsStackObjects is enabled only with the tinygo.wasm tag",
+   "verdict": "confirmed",
+   "source": "tinygo.org/blog/2026/tinygo-0.42-recover-is-real (builds moved to LLVM 22; 19 and 20 still work). compileopts/config.go NeedsStackObjects returns true for conservative/custom/precise/boehm only when BuildTags contains tinygo.wasm."
+  },
+  {
+   "subject": "TinyGo: recover",
+   "claim": "recover is unavailable without unwinding, so a panic exits",
+   "verdict": "wrong",
+   "source": "src/runtime/panic.go says TinyGo has no stack unwinder; recover uses tinygo_longjmp. In compiler/defer.go, supportsRecover is false only for wasm32 and xtensa. hasDeferFrame is fn.Recover != nil && supportsRecover(), and createCheckpoint emits per-architecture inline asm. 0.42 makes runtime panics recoverable.",
+   "correction": "recover uses setjmp/longjmp-style inline asm, not unwinding. On a custom target with an x86_64 llvm-target, every function with defer gets an inline-asm checkpoint, which MSILPrepareIR rejects. This is a missing blocker unless the arch family maps to no-recover."
+  },
+  {
+   "subject": "TinyGo: runtime main",
+   "claim": "The runtime's main signature (argc and argv only) is accepted by emitEntryPoint",
+   "verdict": "wrong",
+   "source": "src/runtime/runtime_unix.go:79-80: `//export main func main(argc int32, argv *unsafe.Pointer) int`",
+   "correction": "Go `int` is 64-bit on amd64, so the IR is `i64 @main(i32, ptr)`. emitEntryPoint requires an i32 return, so this main is rejected. A custom-target runtime needs its own main that returns int32."
+  },
+  {
+   "subject": "TinyGo: interfaces",
+   "claim": "Maps, interfaces and strings are runtime calls through function pointers (M9)",
+   "verdict": "wrong",
+   "source": "tinygo transform/interface-lowering.go header: interface invokes are lowered to generated type-switch functions",
+   "correction": "Interface method calls are direct calls inside generated type switches, not function pointers. The claim was not checked for maps."
+  },
+  {
+   "subject": "Nim: main signature",
+   "claim": "Nim's C main probably has an envp parameter",
+   "verdict": "confirmed",
+   "source": "nim-lang/Nim version-2-2/compiler/cgen.nim:1636-1640 (PosixCMain 'int main(int argc, char** args, char** env)'), used for --os:any",
+   "correction": "devel cgen.nim genPosixCMain drops env (2 arguments). --os:standalone uses genStandaloneCMain, which emits main(void)."
+  },
+  {
+   "subject": "Nim: --os:any requirements",
+   "claim": "--os:any with -d:useMalloc needs only malloc, free, realloc, memcpy, memset and the panicoverride hooks",
+   "verdict": "unverifiable",
+   "source": "nim-lang.org/docs/nimc.html (embedded section): the platform must support 'some basic ANSI C library stdlib and stdio functions'; -d:useMalloc uses malloc/free/realloc and works only with --mm:none/arc/orc. The exact minimal symbol set is not documented."
+  },
+  {
+   "subject": "Scheme: CHICKEN C_alloc",
+   "claim": "CHICKEN 5's C_alloc uses alloca (dynamic)",
+   "verdict": "confirmed",
+   "source": "chicken-core commit 50a505dc ('Make CHICKEN build with TCC'): chicken.h defines C_alloc(n) as ((C_word *)C_alloca((n) * sizeof(C_word)))"
+  },
+  {
+   "subject": "Scheme: Gambit label values",
+   "claim": "A configure option disables labels-as-values in Gambit's C output",
+   "verdict": "wrong",
+   "source": "gambit include/gambit.h.in:1392-1430: label values are used under __GNUC__ unless ___NOT_USE_LABEL_VALUES or ___NOT_SUPPORT_LABEL_VALUES is defined",
+   "correction": "It is a preprocessor macro (pass -D___NOT_USE_LABEL_VALUES in CFLAGS). No dedicated configure switch was found."
+  },
+  {
+   "subject": "Scheme: r7rs-benchmarks",
+   "claim": "ecraven/r7rs-benchmarks exists with Gambit and CHICKEN runner scripts",
+   "verdict": "confirmed",
+   "source": "github.com/ecraven/r7rs-benchmarks: the `bench` script has chicken_comp/chicken_exec and gambitc_comp/gambitc_exec"
+  },
+  {
+   "subject": "Koka: setjmp",
+   "claim": "Effect handlers in the C backend never use setjmp/longjmp",
+   "verdict": "confirmed",
+   "source": "A grep of all 16 koka-lang/koka kklib/src/*.c files and kklib.h found no setjmp, longjmp or ucontext"
+  },
+  {
+   "subject": "Koka: Phase-1 feasibility",
+   "claim": "Phase 1 might work for pure programs with a malloc shim and lower-atomic",
+   "verdict": "wrong",
+   "source": "kklib/src/init.c: `static kk_decl_thread kk_context_t* context;` (kk_decl_thread is __thread or __declspec(thread), platform.h:201-226). kklib.h:140 has `_Atomic(kk_refcount_t) refcount`.",
+   "correction": "kklib keeps its runtime context in a thread-local variable, which MSIL rejects until Phase 3. The kklib runtime needs a patch (a plain global) before even pure programs could work in Phase 1."
+  },
+  {
+   "subject": "General: retargeting old bitcode",
+   "claim": "Bitcode from an older LLVM can be read by the newer LLVM; textual .ll is less forgiving; the -msil triples parse",
+   "verdict": "confirmed",
+   "source": "LLVM DeveloperPolicy (IR backwards compatibility: bitcode is read back to 3.0, the textual format is not compatible). Triple.cpp:732 and 1058-1062 (-msil suffix). Retargeted rustc 1.99 (LLVM 23) and flang 23.1.2 bitcode were read by llc 24.0.0git in these tests."
+  },
+  {
+   "subject": "Unverified picks",
+   "claim": "wasmi dependencies; CLR sNaN/float32 bit-exactness; RustCrypto cfgs; coretests should_panic counts; DMD betterC test counts; ACATS fractions; Zig custom-runner/std tests; TinyGo testdata counts; Embedded Swift untyped-throws allocation",
+   "verdict": "unverifiable",
+   "source": "Not checked against a primary source in this pass. These need repo greps or local runs."
+  },
+  {
+   "subject": "Standard ML (MLton)",
+   "claim": "MLton's LLVM codegen emits musttail between chunks, so musttail (rejected by the fork) blocks the -codegen llvm route",
+   "verdict": "wrong",
+   "correction": "MLton emits musttail only when the Expert flag -chunk-tail-call true is set. Control.chunkTailCall defaults to false. By default, leaveChunk flushes the frontier and stackTop and returns nextBlock to a dispatcher, so it works like a trampoline and uses no musttail. Chunk functions use the default C calling convention. cc10 (the GHC convention, which the fork also rejects) appears only with -llvm-cc10 true, which also defaults to false. musttail is therefore not a default blocker.",
+   "source": "github.com/MLton/mlton master: mlton/codegen/llvm-codegen/llvm-codegen.fun (leaveChunk, ~line 1396); mlton/control/control-flags.sml (chunkTailCall default=false, llvmCC10 default=false); mlton/main/main.fun lines 300-302 and 602-603"
+  },
+  {
+   "subject": "Standard ML (MLton)",
+   "claim": "The ML stack is runtime-managed and separate from the C stack, and the precise GC does not scan machine frames",
+   "verdict": "confirmed",
+   "source": "MLton runtime/gc/stack.h: stack objects are heap objects (header, reserved, used), and frame layouts come from frame.h. mlton/main/main.fun: the -llvm-as, -llvm-opt and -llvm-llc options exist, with llc as the default for -llvm-llc."
+  },
+  {
+   "subject": "Standard ML (MLton)",
+   "claim": "The runtime needs GMP (IntInf), mmap and signals",
+   "verdict": "confirmed",
+   "source": "MLton runtime/gc/int-inf.h uses __mpz_struct (GMP). runtime/platform/use-mmap.c provides GC_mmapAnon. runtime/gc/signals.c and runtime/basis/Posix/Signal.c exist. bin/mlton-script passes GMP include and lib options."
+  },
+  {
+   "subject": "Standard ML (MLton)",
+   "claim": "Size of the MLton regression suite (no number was given)",
+   "verdict": "confirmed",
+   "correction": "Count on master today: 288 .sml programs in regression/, with 270 .ok expected-output files and 6 .nonterm files.",
+   "source": "GitHub API listing of MLton/mlton/regression (master)"
+  },
+  {
+   "subject": "Pascal (Free Pascal LLVM codegen)",
+   "claim": "FPC's LLVM mode emits IR only for Linux and Darwin",
+   "verdict": "confirmed",
+   "source": "wiki.freepascal.org/LLVM: supported targets are Darwin x86-64/AArch64 and Linux x86-64/AArch64/ARMHF. Windows is not supported because it would need SEH-style LLVM exception handling."
+  },
+  {
+   "subject": "Pascal (Free Pascal LLVM codegen)",
+   "claim": "FPC's LLVM mode supports LLVM 7-17, selected with -Clv<ver>, and FPC is built with LLVM=1",
+   "verdict": "confirmed",
+   "source": "gitlab.com/freepascal.org/fpc/source main compiler/llvm/llvminfo.pas: the version enum runs llvmver_7_0 .. llvmver_17_0. The wiki says 'LLVM 7.0 until at least 17.0' and describes the LLVM=1 make option and the -Clv switch. The LLVM DeveloperPolicy says current LLVM can read any bitcode since 3.0, so .bc assembled by a matching llvm-as should load in the fork."
+  },
+  {
+   "subject": "Pascal (Free Pascal LLVM codegen)",
+   "claim": "try/except uses setjmp/longjmp, so it is a Phase 3 item",
+   "verdict": "wrong",
+   "correction": "The LLVM backend uses invoke/landingpad with Itanium psABI exception handling (fpc_psabi_begin_catch, fpc_psabi_end_catch, resume). It does not use setjmp/longjmp. LowerInvoke removes this, so raising or catching a Pascal exception can never work: this is 'never', not Phase 3. The normal-path finally code is duplicated outside the landing pad, so try/finally without a raise still runs.",
+   "source": "FPC main compiler/llvm/llvmpi.pas (tllvmexceptionstatehandler: 'all calls inside the exception block have to be invokes', landingpad clauses, fpc_psabi_*); compiler/llvm/nllvmflw.pas"
+  },
+  {
+   "subject": "Pascal (Free Pascal LLVM codegen)",
+   "claim": "The Linux RTL makes syscalls that may be inline asm",
+   "verdict": "confirmed",
+   "correction": "This is stronger than a Phase 3 blocker. The default Linux RTL (without -dFPC_USE_LIBC) implements FpSysCall as x86_64 'assembler' routines. The LLVM backend emits assembler routines as naked functions containing inline asm ('call void asm sideeffect' in agllvm.pas). The fork rejects all inline asm and module asm (MSILPrepareIR.cpp line ~518, MSILAsmPrinter.cpp line ~380). An RTL rebuilt with FPC_USE_LIBC, or Pascal fallbacks, is a prerequisite.",
+   "source": "FPC rtl/linux/x86_64/syscall.inc; rtl/linux/Makefile.fpc (the FPC_USE_LIBC option); compiler/llvm/agllvm.pas (WriteFunctionFlags marks po_assembler routines naked); the fork's llvm/lib/Target/MSIL/MSILPrepareIR.cpp"
+  },
+  {
+   "subject": "Pascal (Free Pascal LLVM codegen)",
+   "claim": "ansistring refcounting may use atomic increment when multithreading is on",
+   "verdict": "confirmed",
+   "correction": "fpc_AnsiStr_Incr_Ref calls inclocked. On x86_64, inclocked is an assembler routine that tests IsMultithread and conditionally emits a LOCK prefix, so it is inline asm under the LLVM backend, not an LLVM atomic. The fork rejects it even in single-threaded programs. Also note that FPC marks functions strictfp and emits llvm.experimental.constrained.* for floating-point math unless fastmath is on. The fork does lower strict FP (LowerStrictFP).",
+   "source": "FPC rtl/inc/astrings.inc lines 137-142; rtl/x86_64/x86_64.inc line 1528 (inclocked assembler); rtl/inc/generic.inc (the non-atomic Pascal fallback is used only when FPC_SYSTEM_HAS_INCLOCKED_LONGINT is undefined); compiler/llvm/nllvmadd.pas"
+  },
+  {
+   "subject": "V",
+   "claim": "The default GC is the conservative Boehm GC",
+   "verdict": "confirmed",
+   "source": "vlang/v vlib/v/help/build/build-c.txt: '-gc <mode> V uses a garbage collector by default. Only the Boehm-Demers-Weiser garbage collector is supported... The Boehm garbage collector is conservative'"
+  },
+  {
+   "subject": "V",
+   "claim": "Only -gc none or -autofree programs qualify",
+   "verdict": "wrong",
+   "correction": "-autofree on its own still links Boehm. The docs say autofree handles about 90-100% of objects and the 'remaining small percentage of objects is freed via GC'. A program qualifies only with -gc none, with or without -autofree.",
+   "source": "vlang/v doc/docs.md, Memory management section (around line 6696); build-c.txt: 'Use -gc none ... in case of wanting to handle memory manually, or strictly using -autofree'"
+  },
+  {
+   "subject": "V",
+   "claim": "-freestanding is Linux-only and needs a bare builtin directory",
+   "verdict": "confirmed",
+   "source": "vlang/v vlib/v/help/build/build-c.txt: '-freestanding Build the executable without dependency on libc. Supported only on linux targets currently.' -bare-builtin-dir supplies bare_print, bare_panic and similar."
+  },
+  {
+   "subject": "V",
+   "claim": "Whether the generated C main signature includes envp",
+   "verdict": "confirmed",
+   "correction": "On non-Windows targets V emits 'int main(int ___argc, char** ___argv)' with no envp. For Windows console apps it emits 'int wmain(int ___argc, wchar_t* ___argv[], wchar_t* ___envp[])', and wWinMain for gg apps or -subsystem windows. -cmain <Name> forces 'int Name(int ___argc, char** ___argv)'.",
+   "source": "vlang/v vlib/v/help/build/build-c.txt (-cmain and -subsystem); vlib/v/gen/c/testdata/console_windows_program.c.must_have"
+  },
+  {
+   "subject": "V",
+   "claim": "How many vlib/v/tests pass natively with -gc none",
+   "verdict": "unverifiable",
+   "source": "No published figure. Answering requires running the suite."
+  },
+  {
+   "subject": "Julia (StaticCompiler.jl)",
+   "claim": "The tooling is Julia 1.10 only",
+   "verdict": "wrong",
+   "correction": "Current StaticCompiler (0.7.3 and later, latest 0.7.4 from 2026-10-12) requires Julia 1.11 or later: the registry compat is julia = \"1.11.0 - 1\". CI tests Julia 1.11 and 1.12. Older releases (0.4.10-0.7.2) allowed Julia 1.8 and later. Julia 1.10 works only with 0.7.2 or earlier.",
+   "source": "github.com/tshort/StaticCompiler.jl Project.toml (julia = \"1.11\") and .github/workflows/ci.yml; JuliaRegistries/General S/StaticCompiler/Compat.toml"
+  },
+  {
+   "subject": "Julia (StaticCompiler.jl)",
+   "claim": "No GC allocations and no non-constant globals are allowed, errors must be overridden, and StaticTools malloc arrays need malloc",
+   "verdict": "confirmed",
+   "source": "StaticCompiler.jl README, Limitations: 'GC-tracked allocations and global variables do not work'. Errors need a @device_override, because error handling relies on libjulia. Use MallocString/MallocArray with malloc/free from StaticTools. Global Tuples and NamedTuples are allowed."
+  },
+  {
+   "subject": "Julia (StaticCompiler.jl)",
+   "claim": "An LLVM module can be obtained for an x86_64 triple and written as bitcode",
+   "verdict": "confirmed",
+   "source": "StaticCompiler.jl src/StaticCompiler.jl exports static_llvm_module and compile_llvm_module. src/target.jl: StaticTarget(triple, cpu, features) builds a target for any triple."
+  },
+  {
+   "subject": "Julia (StaticCompiler.jl)",
+   "claim": "The emitted IR has no julia.* GC intrinsics or addrspace(10) pointers",
+   "verdict": "unverifiable",
+   "source": "Neither the README nor the target code states what the final IR contains. Checking this means running static_llvm_module and inspecting the output."
+  },
+  {
+   "subject": "Lean 4",
+   "claim": "The runtime is C/C++ with GMP",
+   "verdict": "confirmed",
+   "correction": "GMP is optional. CMake has option(USE_GMP ON) by default, and -DUSE_GMP=OFF uses Lean's built-in mpn/mpz bignum code. The runtime also now pulls in libuv (async I/O) and mimalloc. Those are further blockers.",
+   "source": "leanprover/lean4 src/CMakeLists.txt (lines 103, 293-294, 336, 347+); src/runtime (mpn.cpp, mpz.cpp, libuv.cpp, mimalloc.cpp)"
+  },
+  {
+   "subject": "Lean 4",
+   "claim": "The runtime uses C++ exceptions in some paths, Task threads, and atomic refcounting",
+   "verdict": "confirmed",
+   "source": "lean4 src/runtime: 'throw' appears in stackinfo.cpp, memory.cpp, interrupt.cpp, thread.cpp, process.cpp, uv/*.cpp and others. src/include/lean/lean.h defines _Atomic task fields and atomic_load on m_rc, and the generated C includes lean.h. The '-c' (C output) option is in src/util/shell.cpp."
+  },
+  {
+   "subject": "Crystal",
+   "claim": "Crystal uses the conservative Boehm GC (never supported), so only --prelude=empty toys would work",
+   "verdict": "wrong",
+   "correction": "Boehm is the default but not mandatory. -Dgc_none selects src/gc/none.cr, which uses malloc or HeapAlloc with no collection, and the wasm32 target always uses it. Crystal's wasm32 port also shows an abort-on-raise model: there raise prints a message and exits. The GC therefore does not limit Crystal to --prelude=empty. Exceptions and the runtime remain the real blockers.",
+   "source": "crystal-lang/crystal src/gc.cr line 219 ('if flag?(:gc_none) || flag?(:wasm32)'); src/gc/none.cr; src/raise.cr wasm32 branch"
+  },
+  {
+   "subject": "Crystal",
+   "claim": "Exceptions use landingpads and libunwind, and fibers switch context in asm",
+   "verdict": "confirmed",
+   "source": "crystal-lang/crystal src/raise.cr (LibUnwind, __crystal_personality, __crystal_raise); src/fiber/context/x86_64-sysv.cr (asm blocks)"
+  },
+  {
+   "subject": "Pony",
+   "claim": "Partial calls are invokes that unwind; revisit if the 2026 return-flag PR lands",
+   "verdict": "wrong",
+   "correction": "The PR has landed. ponyc PR #5002, 'Replace stack-unwinding error handling with error-flag returns', merged on 2026-05-27 and shipped in ponyc 0.64.0 (2026-05-30). The current release is 0.76.0. Partial functions now return a result plus an error flag, and src/ contains no personality or landingpad. Unwinding is no longer the blocker. The remaining blockers are the runtime's threads, atomics, TLS and ASIO.",
+   "source": "github.com/ponylang/ponyc/pull/5002 (state MERGED); ponyc CHANGELOG.md, section 0.64.0; ponylang.io/blog/2026/05/ponys-errors-stop-unwinding-the-stack/"
+  },
+  {
+   "subject": "Pony",
+   "claim": "The runtime needs threads, atomics and ASIO",
+   "verdict": "confirmed",
+   "source": "ponyc src/libponyrt (actor, asio, sched, gc directories); sched/scheduler.c uses PONY_ATOMIC, __pony_thread_local (TLS) and ponyint_thread_create; src/common/pony/detail/atomics.h"
+  },
+  {
+   "subject": "Kotlin/Native",
+   "claim": "The C++ runtime uses C++ exceptions, and the LLVM is pinned by JetBrains",
+   "verdict": "confirmed",
+   "source": "JetBrains/kotlin kotlin-native/runtime/src/main/cpp/Exceptions.cpp (ExceptionObjHolder::Throw, catch (ExceptionObjHolder&)); kotlin-native/konan/konan.properties (llvmHome.<host> = $llvm.<host>.dev, a downloaded toolchain dependency)"
+  },
+  {
+   "subject": "Kotlin/Native",
+   "claim": "The wasm32 target is gone",
+   "verdict": "confirmed",
+   "source": "kotlinlang.org/docs/whatsnew1920.html: 'In Kotlin 1.9.20, we've also removed a number of previously deprecated targets' (wasm32 among them); it was deprecated in 1.8.20."
+  },
+  {
+   "subject": "Haskell (GHC)",
+   "claim": "-fllvm emits the ghccc calling convention and relies on guaranteed tail calls and prefix data",
+   "verdict": "confirmed",
+   "correction": "GHC emits 'tail call ghccc', not musttail. Even so, ghccc alone is rejected by the fork. GHC also post-processes LLVM's assembly with a mangler that rewrites @function to @object for tables-next-to-code.",
+   "source": "gitlab.haskell.org/ghc/ghc master: compiler/GHC/Llvm/Types.hs (CC_Ghc printed as 'ghccc'); compiler/GHC/CmmToLlvm/Base.hs (llvmGhcCC uses CC_Ccc only when unregisterised); compiler/GHC/CmmToLlvm/CodeGen.hs (Call TailCall); compiler/GHC/CmmToLlvm/Ppr.hs (info table emitted as function prefix); compiler/GHC/CmmToLlvm/Mangler.hs"
+  },
+  {
+   "subject": "Fork (llvm-msil)",
+   "claim": "ghccc is unsupported and musttail is rejected",
+   "verdict": "confirmed",
+   "correction": "callingConvSupported allows only C, Fast, Cold, PreserveMost and PreserveAll. cc10 (GHC), swiftcc and tailcc are all rejected.",
+   "source": "llvm\\lib\\Target\\MSIL\\MSILISelLoweringCall.cpp lines 101-106 and 265-266"
+  },
+  {
+   "subject": "Roc",
+   "claim": "The compiler was rewritten from Rust to Zig",
+   "verdict": "confirmed",
+   "source": "github.com/roc-lang/roc: the primary language is Zig and src/ holds the Zig compiler"
+  },
+  {
+   "subject": "Roc",
+   "claim": "The LLVM emission path after the rewrite is unverified or unknown",
+   "verdict": "wrong",
+   "correction": "The Zig compiler has an LLVM backend. src/backend/llvm/Builder.zig and MonoLlvmCodeGen.zig build LLVM IR from monomorphized IR with a settable target triple. bitcode_writer.zig serializes it to .bc, which src/llvm_compile compiles. Whether the CLI exposes the .bc to users is unverified.",
+   "source": "roc-lang/roc main: src/backend/llvm/README.md ('Monomorphized IR -> LLVM IR Builder -> LLVM Bitcode -> Object Code'); src/llvm_compile/README.md"
+  },
+  {
+   "subject": "Roc",
+   "claim": "The host interface is roc_alloc and roc_panic",
+   "verdict": "wrong",
+   "correction": "The host ABI is roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed and roc_crashed, passed through the RocOps struct or as extern symbols. roc_crashed replaces roc_panic.",
+   "source": "roc-lang/roc src/builtins/host_abi.zig (lines 69-84, RocOps at 145-178)"
+  },
+  {
+   "subject": "Vala",
+   "claim": "Only a small --profile=posix subset is usable, and the test suite is mostly GObject-based",
+   "verdict": "confirmed",
+   "source": "GNOME/vala compiler/valacompiler.vala: --profile accepts 'gobject' (default), 'posix' (minimal libc) and an undocumented 'libc'. tests/posix holds only 8 .vala tests, against dozens of GObject/GLib-oriented test directories (objects, dbus, asynchronous, gir, glib, threads...)."
+  },
+  {
+   "subject": "Context: bitcode compatibility",
+   "claim": "Bitcode from an older LLVM can be read by this newer LLVM, while textual .ll is less forgiving",
+   "verdict": "confirmed",
+   "source": "llvm.org/docs/DeveloperPolicy.html, IR Backwards Compatibility: 'The current LLVM version supports loading any bitcode since version 3.0' and 'The textual format is not backwards compatible'"
+  }
+ ]
+}

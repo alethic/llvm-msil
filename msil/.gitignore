@@ -1,0 +1,4 @@
+# Local orchestration state of the agent farm that builds this target: the
+# handoff notes, the workflow scripts and their arguments. They hold
+# machine-specific paths and session details, so they are never committed.
+/orchestration/
