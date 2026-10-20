@@ -1083,7 +1083,7 @@ header); and possibly the `Triple::merge`/`isCompatibleWith` change in P4.
 ## 9. Verification log and how to reproduce
 
 Scratch directory (session-local):
-`C:\Users\JEROME~1\AppData\Local\Temp\claude\D--llvm-msil\fa776849-ce33-4cee-bcc7-05382d063d3e\scratchpad\recon\triple-objfmt\`.
+`<scratch>\recon\triple-objfmt\`.
 
 - `cfg/llvm/Config/{llvm-config,abi-breaking,config}.h`: generated with `sed` from the
   `.cmake` templates (`#cmakedefine01` becomes 0, version 24.0.0).

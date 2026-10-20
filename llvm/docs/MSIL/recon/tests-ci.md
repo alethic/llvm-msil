@@ -3,7 +3,7 @@
 - Key: `tests-ci`. Date: 2026-10-12. Checkout: `msil-milestone1` @ `2829ef573b08` (llvm-project, LLVM 23 era; every path and line number below was read in this tree).
 - Scope: how MSIL tests are gated and laid out (lit, unit, clang), where end-to-end execution tests live and how they run (C to `.il` to ilasm to dotnet, compared with expected output), the milestone ladder with its test gates, GitHub Actions for the fork, and the fast local loop.
 - Method: read the lit, CMake and CI sources; then **built and ran a working prototype of the execution harness** on this host (Windows 11, .NET Framework 4.8 ilasm, .NET 8.0.31 and 10.0.12, ILVerify 10.0.12, PEVerify) and in WSL Ubuntu 26.04 (.NET 10.0.12). Since no MSIL backend exists yet, a stand-in "clang/llc" emitted hand-written IL. Everything else in the pipeline ran for real: lit, ilasm, ilverify, PEVerify, dotnet, .NET Framework, and a native oracle built with the stock VS clang 22.1.3 and link.exe.
-- Prototype: `C:\Users\JEROME~1\AppData\Local\Temp\claude\D--llvm-msil\fa776849-ce33-4cee-bcc7-05382d063d3e\scratchpad\recon\tests-ci\proto\` (tree in Appendix A, which reproduces every file in full). Raw experiments are one level up in `...\recon\tests-ci\` (`e1_hello.il` … `e4_buf.il`, `wsl_probe.sh`).
+- Prototype: `<scratch>\recon\tests-ci\proto\` (tree in Appendix A, which reproduces every file in full). Raw experiments are one level up in `...\recon\tests-ci\` (`e1_hello.il` … `e4_buf.il`, `wsl_probe.sh`).
 - "Verified" means run or read here. "(unverified)" marks things I could not check offline: NuGet package versions, GitHub-hosted runner contents, and timings.
 
 ---

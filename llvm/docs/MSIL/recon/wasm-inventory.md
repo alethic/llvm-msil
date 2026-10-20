@@ -1235,7 +1235,7 @@ These belong to other recon keys and other owners:
 ## 8. Experiments run (on this host)
 
 Sources are in this session's scratchpad,
-`C:\Users\JEROME~1\AppData\Local\Temp\claude\D--llvm-msil\fa776849-ce33-4cee-bcc7-05382d063d3e\scratchpad\recon\wasm-inventory\`.
+`<scratch>\recon\wasm-inventory\`.
 `il/` holds the probes and `MSIL/` holds the renamed copy.
 
 | Probe | What it tests | Result |

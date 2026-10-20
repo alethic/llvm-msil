@@ -26,7 +26,7 @@ operable program or batch file.
 -- libc project is disabled
 -- compiler-rt project is disabled
 -- Doxygen disabled.
--- Found Python3: C:\Users\JeromeHaltom\AppData\Local\Python\pythoncore-3.14-64\python.exe (found suitable version "3.14.7", minimum required is "3.8") found components: Interpreter
+-- Found Python3: %LOCALAPPDATA%\Python\pythoncore-3.14-64\python.exe (found suitable version "3.14.7", minimum required is "3.8") found components: Interpreter
 -- Looking for __GLIBC__
 -- Looking for __GLIBC__ - not found
 -- Performing Test HAVE_BUILTIN_THREAD_POINTER
@@ -196,7 +196,7 @@ operable program or batch file.
 -- Performing Test HAVE_LINKER_FLAG_LONG_PLT
 -- Performing Test HAVE_LINKER_FLAG_LONG_PLT - Success
 -- Could NOT find Perl (missing: PERL_EXECUTABLE) 
--- Found Python3: C:\Users\JeromeHaltom\AppData\Local\Python\pythoncore-3.14-64\python.exe (found version "3.14.7") found components: Interpreter
+-- Found Python3: %LOCALAPPDATA%\Python\pythoncore-3.14-64\python.exe (found version "3.14.7") found components: Interpreter
 -- Not building llvm-mt.exe because libxml2 is not available
 -- Configuring done (62.9s)
 -- Generating done (28.8s)

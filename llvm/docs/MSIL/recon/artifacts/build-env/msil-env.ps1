@@ -38,7 +38,7 @@ $global:MsilRepo    = 'D:\llvm-msil'
 $global:MsilBuild   = 'D:\llvm-msil\build'
 # Forward slashes on purpose: CMake pastes this into lit.site.cfg.py string literals, where
 # "C:\Users\..." is a SyntaxError (\U escape). Verified the hard way.
-$global:MsilPython  = 'C:/Users/JeromeHaltom/AppData/Local/Python/pythoncore-3.14-64/python.exe'
+$global:MsilPython  = '%LOCALAPPDATA%/Python/pythoncore-3.14-64/python.exe'
 $global:MsilLlvmBin = Join-Path $script:VsRoot 'VC\Tools\Llvm\x64\bin'
 $global:MsilIlasm   = 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\ilasm.exe'
 $global:MsilIldasm  = 'C:\Program Files (x86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.8 Tools\x64\ildasm.exe'

@@ -63,11 +63,11 @@ passes=2 fails=0
 hello
 hello
 == e10L
-/mnt/c/Users/JeromeHaltom/AppData/Local/Temp/claude/D--llvm-msil/fa776849-ce33-4cee-bcc7-05382d063d3e/scratchpad/recon/cil-runtime/out/linux/e10L_main.dll
+<scratch>/recon/cil-runtime/out/linux/e10L_main.dll
 alpha
 two words
 héllo
    exit 44
-/mnt/c/Users/JeromeHaltom/AppData/Local/Temp/claude/D--llvm-msil/fa776849-ce33-4cee-bcc7-05382d063d3e/scratchpad/recon/cil-runtime/out/linux/e10L_main.dll
+<scratch>/recon/cil-runtime/out/linux/e10L_main.dll
 xray
    exit (native exit 7) 7

@@ -3,7 +3,7 @@
 - Key: `asmprinter`
 - Date: 2026-10-12. Checkout: branch `msil-milestone1` @ `2829ef573b08`. Every API, path and line number below was checked against this tree. Anything not checked is marked *unverified*.
 - Scope: Design.md 2.3, 4.1, 5.3, 5.5 and 12 (milestone 1: `-S` emits ILAsm, `ilasm` builds the PE). The report answers task questions 1–5 in sections 2–8. Section 9 has the complete verified example, and section 10 lists the experiments.
-- Scratch experiments: `C:\Users\JEROME~1\AppData\Local\Temp\claude\D--llvm-msil\fa776849-ce33-4cee-bcc7-05382d063d3e\scratchpad\recon\asmprinter\`. They were assembled with `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\ilasm.exe` (4.8.9221), disassembled with `ildasm.exe` from `NETFX 4.8 Tools\x64`, and run on .NET 8.0.31 and 10.0.12 (Windows) and .NET 10.0.12 in WSL Ubuntu (glibc 2.43).
+- Scratch experiments: `<scratch>\recon\asmprinter\`. They were assembled with `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\ilasm.exe` (4.8.9221), disassembled with `ildasm.exe` from `NETFX 4.8 Tools\x64`, and run on .NET 8.0.31 and 10.0.12 (Windows) and .NET 10.0.12 in WSL Ubuntu (glibc 2.43).
 - Sibling reports this one builds on: `passes-frame.md` (`.maxstack`, `.locals`, frame), `isel.md` (MIs, register classes, signature sources), `triple-objfmt.md` (`Triple::MSIL`, `MCContext::IsMSIL`, `MSILTargetObjectFile`), `registry-tm.md`, `wasm-inventory.md`. Points of disagreement are listed in section 11.
 
 ---

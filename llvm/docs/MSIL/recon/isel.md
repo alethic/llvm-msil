@@ -13,7 +13,7 @@ Related sibling reports, which agree with this one where they overlap:
 - `passes-frame.md` covers the pass pipeline, the frame (`FP` fake physreg plus `localloc`), ExplicitLocals and `.maxstack`.
 - `registry-tm.md` covers target selection, the DataLayout and the TargetMachine.
 
-Scratch experiments for this report are in `C:\Users\JEROME~1\AppData\Local\Temp\claude\D--llvm-msil\fa776849-ce33-4cee-bcc7-05382d063d3e\scratchpad\recon\isel\`:
+Scratch experiments for this report are in `<scratch>\recon\isel\`:
 - `cilsem.il`, `cilsem2.il`: CIL semantics probes.
 - `bclprobe.il`, `nuintprobe.il`, `fence.il`: BCL member resolution on .NET 8.
 - `mixver.il`, `mixsem.il`: int32 / native int mixing, under PEVerify and at run time.

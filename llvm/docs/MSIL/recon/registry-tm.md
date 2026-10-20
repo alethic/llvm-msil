@@ -1138,7 +1138,7 @@ WebAssembly has) is not needed for M1.
 
 ## 10. Verified experiments (reproducible)
 
-Scratch dir: `C:\Users\JEROME~1\AppData\Local\Temp\claude\D--llvm-msil\fa776849-ce33-4cee-bcc7-05382d063d3e\scratchpad\recon\registry-tm\`
+Scratch dir: `<scratch>\recon\registry-tm\`
 (`portable.c`, `simd.c`, `libc.c`, `tiny.c`, `dl.c` and their `.ll` outputs).
 Compiler: `C:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\Llvm\x64\bin\clang.exe`,
 clang 22.1.3. There is no build of this checkout, so these show stock-LLVM

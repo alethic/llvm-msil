@@ -14,7 +14,7 @@ below, but it must keep this index.
 - Visual Studio 2026 Professional at `C:/Program Files/Microsoft Visual Studio/18/Professional`: MSVC 14.51, bundled
   clang-cl / lld-link / llvm-lib 22.1.3 (`VC/Tools/Llvm/x64/bin`), CMake 4.3.1 (on PATH only inside the dev environment),
   git-clang-format and clang-format 22.1.3.
-- ninja 1.13.2 on PATH. Python 3.14.7 at `C:/Users/JeromeHaltom/AppData/Local/Python/pythoncore-3.14-64/python.exe`
+- ninja 1.13.2 on PATH. Python 3.14.7 at `%LOCALAPPDATA%/Python/pythoncore-3.14-64/python.exe`
   (pass it to CMake with forward slashes).
 - .NET SDKs 6/8/9/10, .NET Framework 4.8 ilasm and PEVerify, modern ilasm/ildasm 10.0.12 in the NuGet global-packages
   folder `D:/packages/NuGet`, dotnet-ilverify 10.0.12, and WSL Ubuntu (stopped by default) with .NET 10.0.12 only.
@@ -82,7 +82,7 @@ I could not write the report file: the harness blocked it as a subagent report. 
 
 CONFIGURE: succeeded. D:\llvm-msil\build is configured (Ninja, Release + LLVM_ENABLE_ASSERTIONS=ON) but not built.
 - Timing: first configure 93 s (configure 62.9 s + generate 28.8 s); reconfigure 48.6 s. No CMake warnings in the real tree.
-- One configuration fix: Python3_EXECUTABLE must use forward slashes (C:/Users/JeromeHaltom/AppData/Local/Python/pythoncore-3.14-64/python.exe). With backslashes, llvm/test/lit.site.cfg.py.in:19 pastes "C:\Users..." into a Python string literal and lit dies with a \U SyntaxError.
+- One configuration fix: Python3_EXECUTABLE must use forward slashes (%LOCALAPPDATA%/Python/pythoncore-3.14-64/python.exe). With backslashes, llvm/test/lit.site.cfg.py.in:19 pastes "C:\Users..." into a Python string literal and lit dies with a \U SyntaxError.
 - Lit now starts, finds the unix tools in C:\Program Files\Git\usr\bin via the GitForWindows registry key, and stops at "Did not find FileCheck", as expected for an unbuilt tree.
 - Options: LLVM_ENABLE_PROJECTS=clang;lld, LLVM_TARGETS_TO_BUILD=X86;WebAssembly, LLVM_EXPERIMENTAL_TARGETS_TO_BUILD empty (later: `msil-configure.ps1 -Experimental MSIL`), LLVM_OPTIMIZED_TABLEGEN=OFF, PARALLEL_COMPILE_JOBS=8, PARALLEL_LINK_JOBS=2, PDB/benchmarks/examples/telemetry/DIA/zlib/zstd/libxml2 OFF, LLVM_INCLUDE_TESTS=ON, LLVM_BUILD_TESTS=OFF, LLVM_APPEND_VC_REV=OFF, CLANG_ENABLE_STATIC_ANALYZER=OFF, CLANG_ENABLE_OBJC_REWRITER=OFF, CMAKE_EXPORT_COMPILE_COMMANDS=ON, PCH left at the default (on).
   - Why tablegen OFF: llvm/CMakeLists.txt:1008-1012 turns LLVM_OPTIMIZED_TABLEGEN plus assertions into a nested NATIVE tblgen build, and Release tblgen is already /O2.
@@ -169,7 +169,7 @@ OPEN ISSUE for M1 run-tests: x86_64-unknown-linux-gnu-msil with DllImport("libc"
 
 - M1 run-tests use x86_64-unknown-linux-gnu-msil with DllImport("libc") for puts, which cannot resolve under dotnet on Windows. Options: run them under WSL Ubuntu (stopped; whether a .NET runtime is installed there is unverified), add x86_64-pc-windows-msvc-msil with puts from ucrtbase, or gate stdout tests behind a lit feature.
 - Should LLVM_USE_SYMLINKS=ON be adopted? Developer Mode is on and unprivileged symlinks work on C: and D: (verified). It would save about 0.8-1 GB (4 copies each of clang.exe and lld.exe); upstream Windows bots use copies.
-- Should psutil be installed for lit --timeout? Package psutil==7.0.0 (abi3 win_amd64 wheel, expected to work on Python 3.14; unverified), via "C:/Users/JeromeHaltom/AppData/Local/Python/pythoncore-3.14-64/python.exe -m pip install psutil==7.0.0". Not needed for M1.
+- Should psutil be installed for lit --timeout? Package psutil==7.0.0 (abi3 win_amd64 wheel, expected to work on Python 3.14; unverified), via "%LOCALAPPDATA%/Python/pythoncore-3.14-64/python.exe -m pip install psutil==7.0.0". Not needed for M1.
 - Who runs the first ~1-hour M1 build, and when? After it, every agent can syntax-check any file and run lit. Until then only TUs without generated-header dependencies can be checked, or the 559-step gen-headers bootstrap has to be run first.
 - The full markdown report could not be written to llvm/docs/MSIL/recon/build-env.md because the harness blocked subagent report files. The parent agent may want to write it from these fields.
 

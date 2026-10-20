@@ -54,7 +54,7 @@ $global:MsilBuild   = if ($env:MSIL_BUILD_DIR) { [System.IO.Path]::GetFullPath($
 # Forward slashes on purpose: CMake pastes this into lit.site.cfg.py string literals, where
 # "C:\Users\..." is a SyntaxError (\U escape). Verified the hard way.
 $script:MsilPy = if ($env:MSIL_PYTHON) { $env:MSIL_PYTHON }
-                 else { 'C:/Users/JeromeHaltom/AppData/Local/Python/pythoncore-3.14-64/python.exe' }
+                 else { "$env:LOCALAPPDATA/Python/pythoncore-3.14-64/python.exe" }
 if (-not $env:MSIL_PYTHON -and -not (Test-Path -LiteralPath $script:MsilPy)) {
   $script:PyCmd = Get-Command python.exe, python3.exe -CommandType Application -ErrorAction SilentlyContinue |
     Select-Object -First 1

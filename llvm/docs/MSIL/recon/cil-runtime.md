@@ -87,7 +87,7 @@ Every experiment in `final_runs.sh` was assembled with both ilasm builds and run
 - Key: `cil-runtime`
 - Date: 2026-10-12. Checkout: branch `msil-milestone1` @ `2829ef573b08`. Host: Windows 11 x64 and WSL Ubuntu 26.04 x64.
 - Scope: Design.md sections 4, 5.3, 5.5, 7 and 12. Every construct milestone 1 needs was written by hand in ILAsm, assembled, and **run**. That is 31 experiment files, two ilasm builds, and five runtimes: .NET 8.0.31, 9.0.20 and 10.0.12 on Windows, .NET 10.0.12 on Linux, and .NET Framework 4.8.
-- Scratch directory (`$SCR`): `C:\Users\JEROME~1\AppData\Local\Temp\claude\D--llvm-msil\fa776849-ce33-4cee-bcc7-05382d063d3e\scratchpad\recon\cil-runtime\`. All .il sources, harness scripts and raw logs are there; Appendix A lists them. The harness blocked writing this file into the repo from the subagent, so it is delivered as text.
+- Scratch directory (`$SCR`): `<scratch>\recon\cil-runtime\`. All .il sources, harness scripts and raw logs are there; Appendix A lists them. The harness blocked writing this file into the repo from the subagent, so it is delivered as text.
 - Nothing was downloaded, and no tracked repo file was modified.
 
 Legend: **[V]** = verified by running it here. **[U]** = not verified.
