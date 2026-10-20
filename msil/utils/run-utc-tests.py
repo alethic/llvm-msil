@@ -8,34 +8,50 @@
 # ===----------------------------------------------------------------------===#
 """Run simple update_llc_test_checks.py tests without lit.
 
-    run-utc-tests.py --llc build/bin/llc.exe msil-basic x86-basic
+    run-utc-tests.py --llc build/bin/llc.exe msil-basic x86-basic x86-mir-only
 
 llvm/test/tools/UpdateTestChecks/lit.local.cfg sets the 'llc-binary' feature
 only when a file named exactly 'llc' exists in the tools directory, so on
 Windows (llc.exe) lit reports the whole directory UNSUPPORTED. This script
 runs the tests of llvm/test/tools/UpdateTestChecks/update_llc_test_checks
-that have exactly these two RUN lines (anything else is an error):
+whose RUN lines use only the commands below (anything else is an error).
+A RUN line may continue on the next one after a backslash and may chain
+commands with '&&'; the commands run in order in a scratch directory, with
+%t = <scratch dir>/<test file name>.tmp, and the first one that fails fails
+the test. For example:
 
     # RUN: cp -f %S/Inputs/<f> %t.ll && %update_llc_test_checks %t.ll
     # RUN: diff -u %S/Inputs/<f>.expected %t.ll
 
-(%t may have another extension than .ll if it is the same throughout, and a
-RUN line may continue on the next one after a backslash.) For each test it
-copies Inputs/<f> into a scratch directory, runs
+The accepted commands are:
 
-    python llvm/utils/update_llc_test_checks.py --llc-binary <llc> --version=1 <copy>
+  cp [-f] %S/Inputs/<f> %t<ext>
+      Copies Inputs/<f>. The first command must be a cp.
+  %update_llc_test_checks %t<ext>
+      Runs 'python llvm/utils/update_llc_test_checks.py --llc-binary <llc>
+      --version=1 <file>' (the arguments lit.local.cfg adds). Its output is
+      shown, but only a non-zero exit status fails the test.
+  diff -u %S/Inputs/<f> %t<ext>
+      Compares Inputs/<f> with the file, ignoring a CR at the end of a line
+      (a Windows checkout has CRLF files, the script writes LF), and prints a
+      unified diff if they differ.
+  llc <args> < %t<ext> | FileCheck %t<ext>
+      Runs <llc> with the file as stdin and pipes its output into the
+      FileCheck next to <llc>, without a shell; either exiting non-zero fails
+      the test. <args> may contain no substitutions and no shell
+      metacharacters (each is made of letters, digits and '_.,=+:/-').
 
-(the arguments lit.local.cfg adds) and compares the result with
-Inputs/<f>.expected, ignoring a CR at the end of a line (a Windows checkout
-has CRLF files, the script writes LF). Differences are printed as a unified
-diff. 'REQUIRES: <target>-registered-target' lines are checked against
+%t keeps one extension (such as .ll) throughout, and a test must have at least
+one %update_llc_test_checks command and at least one diff or FileCheck.
+'REQUIRES: <target>-registered-target' lines are checked against
 'llvm-config --targets-built' when llvm-config is next to llc; a test whose
 target is missing fails rather than being skipped.
 
 A test name is the .test file name with or without '.test', or a path to a
-.test file. --llc defaults to <build>/bin/llc, where <build> is
-$MSIL_BUILD_DIR or <repo>/build. The scratch directory is deleted when every
-test passes, unless --keep or --work-dir is given.
+.test file (its Inputs directory is next to it). --llc defaults to
+<build>/bin/llc, where <build> is $MSIL_BUILD_DIR or <repo>/build. The
+scratch directory is deleted when every test passes, unless --keep or
+--work-dir is given.
 
 Exit status: 0 if every test passed, 1 otherwise.
 """
@@ -61,13 +77,17 @@ UPDATE_SCRIPT = os.path.join(REPO, "llvm", "utils", "update_llc_test_checks.py")
 DIRECTIVE_RE = re.compile(
     r"\b(RUN|REQUIRES|UNSUPPORTED|XFAIL|DEFINE|REDEFINE|ALLOW_RETRIES):(.*)$"
 )
-RUN_UPDATE_RE = re.compile(
-    r"^cp -f %S/Inputs/(?P<input>[^\s/\\]+) %t(?P<ext>\.\w+)"
-    r" && %update_llc_test_checks %t(?P=ext)$"
+# The commands a RUN line may chain with '&&' (see the module docstring).
+# Whitespace in a command is normalized to single spaces before matching.
+INPUT = r"%S/Inputs/(?P<input>[^\s/\\]+)"
+TMP = r"%t(?P<ext>\.\w+)"
+CP_RE = re.compile(r"^cp (?:-f )?%s %s$" % (INPUT, TMP))
+UPDATE_RE = re.compile(r"^%%update_llc_test_checks %s$" % TMP)
+DIFF_RE = re.compile(r"^diff -u %s %s$" % (INPUT, TMP))
+LLC_FILECHECK_RE = re.compile(
+    r"^llc(?P<args>(?: \S+)*) < %s \| FileCheck %%t(?P=ext)$" % TMP
 )
-RUN_DIFF_RE = re.compile(
-    r"^diff -u %S/Inputs/(?P<expected>[^\s/\\]+) %t(?P<ext>\.\w+)$"
-)
+PLAIN_ARG_RE = re.compile(r"^[\w.,=+:/-]+$")
 REGISTERED_TARGET_RE = re.compile(r"^([\w-]+)-registered-target$")
 
 
@@ -92,8 +112,33 @@ def find_test(name):
     return path
 
 
+def parse_command(command):
+    """Returns (kind, operand, ext) for one command of a RUN line.
+
+    kind is 'cp' or 'diff' (operand: the Inputs file name), 'update' (operand:
+    None) or 'llc' (operand: the llc arguments)."""
+    for kind, regex in (("cp", CP_RE), ("update", UPDATE_RE), ("diff", DIFF_RE)):
+        m = regex.match(command)
+        if m:
+            operand = m.group("input") if kind != "update" else None
+            return kind, operand, m.group("ext")
+    m = LLC_FILECHECK_RE.match(command)
+    if m:
+        args = m.group("args").split()
+        for arg in args:
+            if not PLAIN_ARG_RE.match(arg):
+                raise TestError(
+                    "unsupported llc argument '%s' in RUN command: %s" % (arg, command)
+                )
+        return "llc", args, m.group("ext")
+    raise TestError("unsupported RUN command: %s" % command)
+
+
 def parse_test(path):
-    """Returns (input file, expected file, scratch extension, required features)."""
+    """Returns (steps, scratch extension, required features).
+
+    Each step is (command text, kind, operand) where kind and operand are as
+    parse_command returns them, with Inputs file names made into paths."""
     runs, requires = [], []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -109,32 +154,36 @@ def parse_test(path):
                 runs[-1] = runs[-1][:-1].rstrip() + " " + value
             else:
                 runs.append(value)
-    if len(runs) != 2:
-        raise TestError("expected 2 RUN lines, found %d" % len(runs))
-    update, diff = RUN_UPDATE_RE.match(runs[0]), RUN_DIFF_RE.match(runs[1])
-    if not update:
-        raise TestError(
-            "first RUN line is not 'cp -f %%S/Inputs/<f> %%t.ll && "
-            "%%update_llc_test_checks %%t.ll': %s" % runs[0]
-        )
-    if not diff:
-        raise TestError(
-            "second RUN line is not 'diff -u %%S/Inputs/<f>.expected %%t.ll': %s"
-            % runs[1]
-        )
-    expected = update.group("input") + ".expected"
-    if diff.group("expected") != expected or diff.group("ext") != update.group("ext"):
-        raise TestError(
-            "the RUN lines do not compare %%t%s with Inputs/%s.expected"
-            % (update.group("ext"), update.group("input"))
-        )
+    if runs and runs[-1].endswith("\\"):
+        raise TestError("the last RUN line ends with a backslash")
+
     inputs = os.path.join(os.path.dirname(path), "Inputs")
-    return (
-        os.path.join(inputs, update.group("input")),
-        os.path.join(inputs, expected),
-        update.group("ext"),
-        requires,
-    )
+    steps, exts = [], set()
+    for run in runs:
+        for command in re.split(r"\s+&&\s+", run):
+            command = " ".join(command.split())
+            kind, operand, ext = parse_command(command)
+            if kind in ("cp", "diff"):
+                operand = os.path.join(inputs, operand)
+            steps.append((command, kind, operand))
+            exts.add(ext)
+    if not steps:
+        raise TestError("no RUN lines")
+    if steps[0][1] != "cp":
+        raise TestError(
+            "the first RUN command is not 'cp [-f] %%S/Inputs/<f> %%t<ext>': %s"
+            % steps[0][0]
+        )
+    if len(exts) != 1:
+        raise TestError(
+            "%%t is used with more than one extension: %s" % " ".join(sorted(exts))
+        )
+    kinds = set(kind for _, kind, _ in steps)
+    if "update" not in kinds:
+        raise TestError("no '%update_llc_test_checks %t<ext>' RUN command")
+    if not kinds & {"diff", "llc"}:
+        raise TestError("no 'diff -u' or 'llc ... | FileCheck' RUN command")
+    return steps, exts.pop(), requires
 
 
 def get_targets_built(llc):
@@ -175,17 +224,13 @@ def read_lines(path):
     return [line.rstrip("\r") for line in text.split("\n")]
 
 
-def run_test(path, llc, targets, work_dir):
-    """Runs one test; returns (messages to print, whether it passed)."""
-    name = os.path.basename(path)
-    input_file, expected_file, ext, requires = parse_test(path)
-    check_requires(requires, targets)
-    for f in (input_file, expected_file):
-        if not os.path.isfile(f):
-            raise TestError("missing file %s" % f)
-    # lit's %t is <output dir>/<test file name>.tmp.
-    result_file = os.path.join(work_dir, name + ".tmp" + ext)
-    shutil.copyfile(input_file, result_file)
+def filecheck_for(llc):
+    """The FileCheck in the same directory as llc."""
+    return os.path.join(os.path.dirname(llc), "FileCheck" + os.path.splitext(llc)[1])
+
+
+def run_update(result_file, llc, work_dir):
+    """Runs update_llc_test_checks.py; returns (messages, whether it passed)."""
     cmd = [
         sys.executable,
         UPDATE_SCRIPT,
@@ -215,6 +260,11 @@ def run_test(path, llc, targets, work_dir):
             % (proc.returncode, subprocess.list2cmdline(cmd)),
         )
         return messages, False
+    return messages, True
+
+
+def run_diff(expected_file, result_file):
+    """Compares the files as 'diff -u'; returns (messages, whether they match)."""
     diff = list(
         difflib.unified_diff(
             read_lines(expected_file),
@@ -225,8 +275,91 @@ def run_test(path, llc, targets, work_dir):
         )
     )
     if diff:
-        messages.append("\n".join(diff))
-        return messages, False
+        return ["\n".join(diff)], False
+    return [], True
+
+
+def run_llc_filecheck(args, result_file, llc, work_dir):
+    """Runs 'llc <args> < file | FileCheck file' without a shell; returns
+    (messages, whether both commands exited with 0)."""
+    llc_cmd = [llc] + args
+    filecheck_cmd = [filecheck_for(llc), result_file]
+    with open(result_file, "rb") as stdin, tempfile.TemporaryFile() as llc_stderr:
+        llc_proc = subprocess.Popen(
+            llc_cmd,
+            cwd=work_dir,
+            stdin=stdin,
+            stdout=subprocess.PIPE,
+            # A file, not a pipe: nothing reads llc's stderr until it exits.
+            stderr=llc_stderr,
+        )
+        try:
+            filecheck_proc = subprocess.Popen(
+                filecheck_cmd,
+                cwd=work_dir,
+                stdin=llc_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+        except OSError:
+            llc_proc.kill()
+            llc_proc.wait()
+            raise
+        finally:
+            # Only FileCheck reads llc's output now.
+            llc_proc.stdout.close()
+        filecheck_out = filecheck_proc.communicate()[0]
+        llc_rc = llc_proc.wait()
+        llc_stderr.seek(0)
+        llc_err = llc_stderr.read()
+    messages = []
+    # As under lit (pipefail), a failure of either command fails the test.
+    for name, cmd, rc, out in (
+        ("llc", llc_cmd, llc_rc, llc_err),
+        ("FileCheck", filecheck_cmd, filecheck_proc.returncode, filecheck_out),
+    ):
+        if rc != 0:
+            messages.append(
+                "%s exited with %d: %s" % (name, rc, subprocess.list2cmdline(cmd))
+            )
+            out = out.decode("utf-8", errors="replace").rstrip()
+            if out:
+                messages.append(out)
+    return messages, not messages
+
+
+def run_test(path, llc, targets, work_dir):
+    """Runs one test; returns (messages to print, whether it passed)."""
+    name = os.path.basename(path)
+    steps, ext, requires = parse_test(path)
+    check_requires(requires, targets)
+    needed = set(operand for _, kind, operand in steps if kind in ("cp", "diff"))
+    if any(kind == "llc" for _, kind, _ in steps):
+        needed.add(filecheck_for(llc))
+    for f in sorted(needed):
+        if not os.path.isfile(f):
+            raise TestError("missing file %s" % f)
+    # lit's %t is <output dir>/<test file name>.tmp.
+    result_file = os.path.join(work_dir, name + ".tmp" + ext)
+    messages = []
+    for index, (command, kind, operand) in enumerate(steps, 1):
+        if kind == "cp":
+            shutil.copyfile(operand, result_file)
+            step_messages, passed = [], True
+        elif kind == "update":
+            step_messages, passed = run_update(result_file, llc, work_dir)
+        elif kind == "diff":
+            step_messages, passed = run_diff(operand, result_file)
+        else:
+            step_messages, passed = run_llc_filecheck(
+                operand, result_file, llc, work_dir
+            )
+        if not passed:
+            messages.append(
+                "RUN command %d of %d failed: %s" % (index, len(steps), command)
+            )
+            return messages + step_messages, False
+        messages += step_messages
     return messages, True
 
 

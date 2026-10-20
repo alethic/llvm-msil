@@ -55,6 +55,14 @@ public:
                               uint64_t Range, ProfileSummaryInfo *PSI,
                               BlockFrequencyInfo *BFI) const override;
   bool convertSelectOfConstantsToMath(EVT VT) const override;
+  /// Keeps an and/or of two fcmps with a common operand, and a select of an
+  /// fcmp, as compares (like WebAssembly). FMINIMUMNUM and FMAXIMUMNUM are
+  /// Custom only so that llvm.minimumnum and llvm.maximumnum compile:
+  /// LowerFMinMax builds NaN compares, a 1.0/x signed-zero test and a select
+  /// triangle, which cost more than the compares a fold would replace.
+  bool isProfitableToCombineMinNumMaxNum(EVT VT) const override {
+    return false;
+  }
 
   // Lowering hooks.
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;

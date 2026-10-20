@@ -274,10 +274,11 @@ def update_test(ti: common.TestInfo):
                         output_lines.append(input_line)
                         continue
 
-                # Print out the various check lines here.
-                generated_prefixes.extend(
-                    add_function_checks(output_lines, run_list, func_name)
-                )
+                if run_list:
+                    # Print out the various check lines here.
+                    generated_prefixes.extend(
+                        add_function_checks(output_lines, run_list, func_name)
+                    )
 
                 # Also add MIR checks if we have them for this function
                 if mir_run_list and func_name:
