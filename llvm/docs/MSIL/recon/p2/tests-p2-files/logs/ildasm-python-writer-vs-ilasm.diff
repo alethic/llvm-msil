@@ -1,0 +1,56 @@
+19d18
+<   .hash algorithm 0x00008004
+22,23c21,22
+< .module hello.dll
+< .imagebase 0x0000000180000000
+---
+> .module 'hello-ilasm.dll'
+> .imagebase 0x0000000140000000
+32c31
+< .field private static valuetype '<msil>image_t' '<msil>image' at I_00002228
+---
+> .field private static valuetype '<msil>image_t' '<msil>image' at I_00002060
+339c338
+<   IL_014c:  call       int32 long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+---
+>   IL_014c:  call       int32 long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+350c349
+<   IL_015d:  ldc.r4     (01 00 80 7F)
+---
+>   IL_015d:  ldc.r4     (01 00 C0 7F)
+368c367
+<   .maxstack  8
+---
+>   .maxstack  2
+378c377
+<   .maxstack  8
+---
+>   .maxstack  1
+383c382
+< .method assembly static int32  long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+---
+> .method assembly static int32  long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+386c385
+<   .maxstack  8
+---
+>   .maxstack  1
+389c388
+< } // end of global method long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+---
+> } // end of global method long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+399c398
+<   .maxstack  8
+---
+>   .maxstack  3
+415c414
+< .method private hidebysig static int32  '<msil>Main'(string[] A_0) cil managed
+---
+> .method private hidebysig static int32  '<msil>Main'(string[] args) cil managed
+419c418
+<   .maxstack  8
+---
+>   .maxstack  1
+440c439
+< .data cil I_00002228 = bytearray (
+---
+> .data cil I_00002060 = bytearray (

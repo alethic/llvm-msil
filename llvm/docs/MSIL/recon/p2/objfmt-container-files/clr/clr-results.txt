@@ -1,0 +1,209 @@
+# MSVC /clr objects (cl 14.51 toolset: cl /nologo /clr /c /O2 a.cpp b.cpp; link /nologo a.obj b.obj /out:ab.exe)
+## llvm-objdump -h a.obj (VS LLVM 22.1.3)
+Sections:
+Idx Name           Size     VMA              Type
+  0 .drectve       0000007a 0000000000000000 
+  1 .debug$S       00000084 0000000000000000 DATA, DEBUG
+  2 .text$mn       00000013 0000000000000000 TEXT
+  3 .text$mn       00000013 0000000000000000 TEXT
+  4 .text$mn       00000013 0000000000000000 TEXT
+  5 .text$mn       00000013 0000000000000000 TEXT
+  6 .text$mn       00000010 0000000000000000 TEXT
+  7 .text$mn       00000010 0000000000000000 TEXT
+  8 .text$mn       00000018 0000000000000000 TEXT
+  9 .nep           00000010 0000000000000000 TEXT
+ 10 .data          00000008 0000000000000000 DATA
+ 11 .data          00000008 0000000000000000 DATA
+ 12 .rdata$ilfixup 00000008 0000000000000000 DATA
+ 13 .rdata$ilfixup 00000008 0000000000000000 DATA
+ 14 .text$mn       0000001e 0000000000000000 TEXT
+ 15 .nep           00000010 0000000000000000 TEXT
+ 16 .data          00000008 0000000000000000 DATA
+ 17 .data          00000008 0000000000000000 DATA
+ 18 .rdata$ilfixup 00000008 0000000000000000 DATA
+ 19 .rdata$ilfixup 00000008 0000000000000000 DATA
+ 20 .nep           00000010 0000000000000000 TEXT
+ 21 .data          00000008 0000000000000000 DATA
+ 22 .data          00000008 0000000000000000 DATA
+ 23 .rdata$ilfixup 00000008 0000000000000000 DATA
+ 24 .rdata$ilfixup 00000008 0000000000000000 DATA
+ 25 .nep           00000010 0000000000000000 TEXT
+ 26 .data          00000008 0000000000000000 DATA
+ 27 .data          00000008 0000000000000000 DATA
+ 28 .rdata$ilfixup 00000008 0000000000000000 DATA
+ 29 .rdata$ilfixup 00000008 0000000000000000 DATA
+ 30 .cormeta       00000888 0000000000000000 
+ 31 .chks64        00000100 0000000000000000 
+## llvm-nm a.obj
+00000000 d 04000001
+00000000 d 04000002
+00000000 d 04000003
+00000000 d 04000004
+00000000 t 06000001
+00000000 t 06000002
+00000000 t 06000003
+00000000 t 06000004
+00000000 t 06000005
+00000000 t 06000006
+00000000 t 06000007
+00000000 t 06000008
+00000000 ? 0A000006
+00000000 ? 0A000007
+00000000 ? 0A000008
+00000000 ? 0A000009
+00000000 ? 0A00000A
+00000000 ? 0A00000C
+00000000 ? 0A00000D
+00000000 ? 0A00000E
+00000000 T ??0CppInlineNamespaceAttribute@?A0xef4cf7d2@vc.cppcli.attributes@@$$FQE$AAM@PE$AAVString@System@@@Z
+00000000 T ??0IsChar16_t@vc.cppcli.modopts@@$$FQE$AAM@XZ
+00000000 T ??0IsChar32_t@vc.cppcli.modopts@@$$FQE$AAM@XZ
+00000000 T ??0ThisPointer@vc.cppcli.modopts@@$$FQE$AAM@XZ
+00000000 T ?add1@@$$J0YAHH@Z
+00000000 T ?helper@?A0xef4cf7d2@@$$FYAHH@Z
+00000000 T ?helper@?A0xef4cf7d2@@YAHH@Z
+00000000 T ?inl@@$$FYAHH@Z
+00000000 T ?main@@$$J0YAHXZ
+         U ?twice@@$$J0YAHH@Z
+01058da4 a @comp.id
+80010190 a @feat.00
+00000000 D __m2mep@?add1@@$$J0YAHH@Z
+00000000 D __m2mep@?helper@?A0xef4cf7d2@@$$FYAHH@Z
+00000000 D __m2mep@?inl@@$$FYAHH@Z
+00000000 D __m2mep@?main@@$$J0YAHXZ
+00000000 D __mep@?add1@@$$J0YAHH@Z
+00000000 D __mep@?helper@?A0xef4cf7d2@@$$FYAHH@Z
+00000000 D __mep@?inl@@$$FYAHH@Z
+00000000 D __mep@?main@@$$J0YAHXZ
+00000000 T __t2m@?inl@@YAHH@Z
+00000000 T add1
+         U counter
+00000000 T main
+## llvm-objdump -r a.obj (first records)
+a.obj:	file format coff-x86-64
+RELOCATION RECORDS FOR [.text$mn]:
+OFFSET           TYPE                     VALUE
+000000000000000e IMAGE_REL_AMD64_TOKEN    0A00000D
+RELOCATION RECORDS FOR [.text$mn]:
+OFFSET           TYPE                     VALUE
+000000000000000e IMAGE_REL_AMD64_TOKEN    0A00000C
+RELOCATION RECORDS FOR [.text$mn]:
+OFFSET           TYPE                     VALUE
+000000000000000e IMAGE_REL_AMD64_TOKEN    0A00000C
+RELOCATION RECORDS FOR [.text$mn]:
+OFFSET           TYPE                     VALUE
+000000000000000e IMAGE_REL_AMD64_TOKEN    0A00000C
+RELOCATION RECORDS FOR [.text$mn]:
+OFFSET           TYPE                     VALUE
+0000000000000010 IMAGE_REL_AMD64_TOKEN    0A00000A
+RELOCATION RECORDS FOR [.nep]:
+OFFSET           TYPE                     VALUE
+0000000000000006 IMAGE_REL_AMD64_REL32    __m2mep@?add1@@$$J0YAHH@Z
+000000000000000c IMAGE_REL_AMD64_REL32    __mep@?add1@@$$J0YAHH@Z
+RELOCATION RECORDS FOR [.data]:
+OFFSET           TYPE                     VALUE
+0000000000000000 IMAGE_REL_AMD64_TOKEN    0A000008
+RELOCATION RECORDS FOR [.data]:
+OFFSET           TYPE                     VALUE
+0000000000000000 IMAGE_REL_AMD64_TOKEN    0A000008
+RELOCATION RECORDS FOR [.rdata$ilfixup]:
+OFFSET           TYPE                     VALUE
+0000000000000000 IMAGE_REL_AMD64_ADDR32NB __mep@?add1@@$$J0YAHH@Z
+RELOCATION RECORDS FOR [.rdata$ilfixup]:
+## .text$mn contents (CIL method bodies; TOKEN relocations patch the zero operands)
+Contents of section .text$mn:
+ 0000 03300100 07000000 00000000 02280000  .0...........(..
+ 0010 00002a                               ..*
+Contents of section .text$mn:
+ 0000 03300100 07000000 00000000 02280000  .0...........(..
+ 0010 00002a                               ..*
+Contents of section .text$mn:
+ 0000 03300100 07000000 00000000 02280000  .0...........(..
+ 0010 00002a                               ..*
+Contents of section .text$mn:
+ 0000 03300100 07000000 00000000 02280000  .0...........(..
+ 0010 00002a                               ..*
+Contents of section .text$mn:
+ 0000 03300200 04000000 00000000 0217582a  .0............X*
+Contents of section .text$mn:
+ 0000 03300200 04000000 00000000 02195a2a  .0............Z*
+Contents of section .text$mn:
+ 0000 03300200 0c000000 00000000 021a5a7e  .0............Z~
+ 0010 00000000 5817582a                    ....X.X*
+Contents of section .text$mn:
+## .cormeta parsed with System.Reflection.Metadata (mdinfo raw a.cormeta)
+metadata root: sig=0x424A5342 version='v4.0.30319' streams=5 size=0x888
+  stream '#-' offset=0x6C size=0x2C8
+  stream '#Strings' offset=0x334 size=0x34C
+  stream '#US' offset=0x680 size=0x8
+  stream '#GUID' offset=0x688 size=0x10
+  stream '#Blob' offset=0x698 size=0x1F0
+kind=Ecma335 isAssembly=False module='a.obj' mvid=c364893b-7994-438b-863d-2eb5bdaf9c22
+  AssemblyRef mscorlib 4.0.0.0
+  AssemblyRef mscorlib 4.0.0.0
+  TypeRef 0x01000001 System.Runtime.CompilerServices.CallConvStdcall scope=AssemblyReference
+  TypeRef 0x01000002 System.Runtime.CompilerServices.CallConvCdecl scope=AssemblyReference
+  TypeRef 0x01000003 System.Runtime.CompilerServices.CallConvFastcall scope=AssemblyReference
+  TypeRef 0x01000004 System.Runtime.CompilerServices.IsVolatile scope=AssemblyReference
+  TypeRef 0x01000005 System.Attribute scope=AssemblyReference
+  TypeRef 0x01000006 System.AttributeUsageAttribute scope=AssemblyReference
+  TypeRef 0x01000007 System.AttributeTargets scope=AssemblyReference
+  TypeRef 0x01000008 System.Object scope=AssemblyReference
+  TypeRef 0x01000009 System.Runtime.CompilerServices.DecoratedNameAttribute scope=AssemblyReference
+  TypeRef 0x0100000A System.Runtime.CompilerServices.NativeCppClassAttribute scope=AssemblyReference
+  TypeRef 0x0100000B System.ValueType scope=AssemblyReference
+  TypeRef 0x0100000C System.Security.Permissions.SecurityAction scope=AssemblyReference
+  TypeRef 0x0100000D System.Security.Permissions.SecurityPermissionAttribute scope=AssemblyReference
+  TypeRef 0x0100000E System.Runtime.CompilerServices.AssemblyAttributesGoHereSM scope=AssemblyReference
+  TypeDef 0x02000001 .<Module> attrs=NotPublic
+  TypeDef 0x02000002 vc.cppcli.attributes.?A0xef4cf7d2.CppInlineNamespaceAttribute attrs=BeforeFieldInit
+  TypeDef 0x02000003 vc.cppcli.modopts.IsChar16_t attrs=BeforeFieldInit
+  TypeDef 0x02000004 vc.cppcli.modopts.IsChar32_t attrs=BeforeFieldInit
+  TypeDef 0x02000005 vc.cppcli.modopts.ThisPointer attrs=BeforeFieldInit
+  TypeDef 0x02000006 ?A0xef4cf7d2.__clr_placement_new_t attrs=SequentialLayout, Sealed, BeforeFieldInit
+  MethodDef 0x06000005 ?A0xef4cf7d2.helper rva=0x0 attrs=Assembly, Static
+  MethodDef 0x06000006 inl rva=0x0 attrs=Assembly, Static
+  MethodDef 0x06000007 add1 rva=0x0 attrs=Assembly, Static
+  MethodDef 0x06000008 main rva=0x0 attrs=Assembly, Static
+  MethodDef 0x06000001 .ctor rva=0x0 attrs=Public, HideBySig, SpecialName, RTSpecialName
+  MethodDef 0x06000002 .ctor rva=0x0 attrs=Public, HideBySig, SpecialName, RTSpecialName
+  MethodDef 0x06000003 .ctor rva=0x0 attrs=Public, HideBySig, SpecialName, RTSpecialName
+  MethodDef 0x06000004 .ctor rva=0x0 attrs=Public, HideBySig, SpecialName, RTSpecialName
+  Field 0x04000001 __m2mep@?helper@?A0xef4cf7d2@@$$FYAHH@Z attrs=Public, Static, HasFieldRVA rva=0x0
+  Field 0x04000002 __m2mep@?inl@@$$FYAHH@Z attrs=Public, Static, HasFieldRVA rva=0x0
+  Field 0x04000003 __m2mep@?add1@@$$J0YAHH@Z attrs=Public, Static, HasFieldRVA rva=0x0
+  Field 0x04000004 __m2mep@?main@@$$J0YAHXZ attrs=Public, Static, HasFieldRVA rva=0x0
+  Field 0x04000005 __unep@?helper@?A0xef4cf7d2@@$$FYAHH@Z attrs=Public, Static, HasFieldRVA rva=0x0
+  Field 0x04000006 __unep@?inl@@$$FYAHH@Z attrs=Public, Static, HasFieldRVA rva=0x0
+  Field 0x04000007 __unep@?add1@@$$J0YAHH@Z attrs=Public, Static, HasFieldRVA rva=0x0
+  Field 0x04000008 __unep@?main@@$$J0YAHXZ attrs=Public, Static, HasFieldRVA rva=0x0
+  MemberRef 0x0A000001 .ctor parent=TypeRef System.AttributeUsageAttribute
+  MemberRef 0x0A000002 ___CxxCallUnwindDtor parent=TypeDef .<Module>
+  MemberRef 0x0A000003 .ctor parent=TypeRef System.Runtime.CompilerServices.DecoratedNameAttribute
+  MemberRef 0x0A000004 ___CxxCallUnwindVecDtor parent=TypeDef .<Module>
+  MemberRef 0x0A000005 ___CxxCallUnwindDelDtor parent=TypeDef .<Module>
+  MemberRef 0x0A000006 ?A0xef4cf7d2.helper parent=MethodDef ?A0xef4cf7d2.helper
+  MemberRef 0x0A000007 inl parent=MethodDef inl
+  MemberRef 0x0A000008 add1 parent=MethodDef add1
+  MemberRef 0x0A000009 main parent=MethodDef main
+  MemberRef 0x0A00000A counter parent=TypeDef .<Module>
+  MemberRef 0x0A00000B .ctor parent=TypeRef System.Runtime.CompilerServices.NativeCppClassAttribute
+  MemberRef 0x0A00000C .ctor parent=TypeRef System.Object
+  MemberRef 0x0A00000D .ctor parent=TypeRef System.Attribute
+  MemberRef 0x0A00000E twice parent=TypeDef .<Module>
+  MemberRef 0x0A00000F .ctor parent=TypeRef System.Security.Permissions.SecurityPermissionAttribute
+## lld-link a.obj b.obj
+lld-link: error: a.obj: 0A00000D should not refer to special section 0
+## link.exe output ab.exe: runs, exit code
+exit=154
+## ab.exe metadata (methods only)
+machine=0x8664 characteristics=ExecutableImage, LargeAddressAware pe32plus=True isDll=False isExe=True
+CLI: flags=0 entry=0x06000044 metadata rva=0x4480 size=0x41D8
+metadata root: sig=0x424A5342 version='v4.0.30319' streams=5 size=0x41D8
+  stream '#~' offset=0x6C size=0x11E8
+  stream '#Strings' offset=0x1254 size=0x2144
+  stream '#US' offset=0x3398 size=0x594
+  stream '#GUID' offset=0x392C size=0x10
+  stream '#Blob' offset=0x393C size=0x89C
+  MethodDef 0x06000001 main rva=0x10A4 attrs=Assembly, Static
+  MethodDef 0x06000002 twice rva=0x10C4 attrs=Assembly, Static

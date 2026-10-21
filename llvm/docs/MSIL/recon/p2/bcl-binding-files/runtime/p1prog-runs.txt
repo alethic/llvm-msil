@@ -1,0 +1,8 @@
+## p1prog.exe a b
+Framework 4.8: exit 42 ; world 
+.NET 8.0.31: exit 42 ; world 
+.NET 10.0.12: exit 42 ; world 
+## p1prog_net8.exe a b
+Framework 4.8: exit 0xE0434352 (Git Bash shows 127) ;  Unhandled Exception: System.IO.FileNotFoundException: Could not load file or assembly 'System.Runtime, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' or one of its dependencies. T
+.NET 8.0.31: exit 42 ; world 
+.NET 10.0.12: exit 42 ; world 

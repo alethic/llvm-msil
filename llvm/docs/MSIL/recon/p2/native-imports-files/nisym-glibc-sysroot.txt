@@ -1,0 +1,49 @@
+# nisym through the glibc dev linker scripts of a mini sysroot (libc.so -> libc.so.6 + libc_nonshared.a + ld-linux; libm.so -> libm.so.6 + libmvec.so.1)
+# command: nisym --sysroot=<sysroot> -L<sysroot>/usr/lib/x86_64-linux-gnu -lc -lm -lpthread -ldl --query=...
+# C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu\libc.so: GNU linker script
+#   script input 'elf64-x86-64' -> elf64-x86-64
+#   script input '/usr/lib/x86_64-linux-gnu/libc.so.6' -> C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc.so.6
+# C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc.so.6: ELF shared object, DT_SONAME 'libc.so.6', DT_NEEDED [ld-linux-x86-64.so.2]
+#   3123 defined dynamic symbols
+#   script input '/usr/lib/x86_64-linux-gnu/libc_nonshared.a' -> C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a
+# C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a: archive, 4 members
+#   script input '/lib64/ld-linux-x86-64.so.2' -> C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/lib64/ld-linux-x86-64.so.2
+# C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/lib64/ld-linux-x86-64.so.2: ELF shared object, DT_SONAME 'ld-linux-x86-64.so.2', DT_NEEDED []
+#   32 defined dynamic symbols
+# C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu\libm.so: GNU linker script
+#   script input 'elf64-x86-64' -> elf64-x86-64
+#   script input '/usr/lib/x86_64-linux-gnu/libm.so.6' -> C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libm.so.6
+# C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libm.so.6: ELF shared object, DT_SONAME 'libm.so.6', DT_NEEDED [libc.so.6, ld-linux-x86-64.so.2]
+#   1372 defined dynamic symbols
+#   script input '/usr/lib/x86_64-linux-gnu/libmvec.so.1' -> C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libmvec.so.1
+# C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libmvec.so.1: ELF shared object, DT_SONAME 'libmvec.so.1', DT_NEEDED [libm.so.6, ld-linux-x86-64.so.2, libc.so.6]
+#   216 defined dynamic symbols
+# C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu\libpthread.a: archive, 0 members
+# C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu\libdl.a: archive, 0 members
+puts:
+  => puts: pinvokeimpl("libc.so.6") [func, puts@@GLIBC_2.2.5] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc.so.6
+atexit:
+     atexit: NOT BINDABLE: defined only in native object code (C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a(atexit.oS)) [code] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a(atexit.oS)
+  => atexit: link error (no bindable definition)
+at_quick_exit:
+     at_quick_exit: NOT BINDABLE: defined only in native object code (C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a(at_quick_exit.oS)) [code] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a(at_quick_exit.oS)
+  => at_quick_exit: link error (no bindable definition)
+pthread_atfork:
+     pthread_atfork: NOT BINDABLE: defined only in native object code (C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a(pthread_atfork.oS)) [code] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a(pthread_atfork.oS)
+  => pthread_atfork: link error (no bindable definition)
+__stack_chk_fail_local:
+     __stack_chk_fail_local: NOT BINDABLE: defined only in native object code (C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a(stack_chk_fail_local.oS)) [code] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a(stack_chk_fail_local.oS)
+  => __stack_chk_fail_local: link error (no bindable definition)
+sqrt:
+  => sqrt: pinvokeimpl("libm.so.6") [func, sqrt@@GLIBC_2.2.5, weak] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libm.so.6
+_ZGVbN2v_sin:
+  => _ZGVbN2v_sin: pinvokeimpl("libmvec.so.1") [ifunc, _ZGVbN2v_sin@@GLIBC_2.22] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libmvec.so.1
+pthread_create:
+  => pthread_create: pinvokeimpl("libc.so.6") [func, pthread_create@@GLIBC_2.34] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc.so.6
+dlopen:
+  => dlopen: pinvokeimpl("libc.so.6") [func, dlopen@@GLIBC_2.34] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/usr/lib/x86_64-linux-gnu/libc.so.6
+__tls_get_addr:
+  => __tls_get_addr: pinvokeimpl("ld-linux-x86-64.so.2") [func, __tls_get_addr@@GLIBC_2.3] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/lib64/ld-linux-x86-64.so.2
+_dl_argv:
+     _dl_argv: NOT BINDABLE: GLIBC_PRIVATE [data, _dl_argv@@GLIBC_PRIVATE] from C:/llvm-msil-scratch/p2/native-imports/sysroot-glibc/lib64/ld-linux-x86-64.so.2
+  => _dl_argv: link error (no bindable definition)

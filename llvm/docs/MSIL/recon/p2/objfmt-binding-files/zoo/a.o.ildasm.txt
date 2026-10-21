@@ -1,0 +1,204 @@
+
+//  .NET IL Disassembler.  Version 10.0.12
+
+
+
+// Metadata version: v4.0.30319
+.module extern msil.unresolved /*1A000001*/
+.module extern ucrtbase /*1A000002*/
+.assembly extern /*23000001*/ mscorlib
+{
+  .publickeytoken = (B7 7A 5C 56 19 34 E0 89 )                         // .z\V.4..
+  .ver 4:0:0:0
+}
+.assembly extern /*23000002*/ msil.extern
+{
+  .ver 0:0:0:0
+}
+.mresource /*28000001*/ private msil.link
+{
+  // Offset: 0x00000000 Length: 0x00000C0A
+}
+.module a.o
+// MVID: {5df68c17-c80c-46b3-9a4e-4fd18921bcd1}
+.imagebase 0x0000000140000000
+.file alignment 0x00000200
+.stackreserve 0x0000000000400000
+.subsystem 0x0003       // WINDOWS_CUI
+.corflags 0x00000001    //  ILONLY
+// Image base: 0x000001BFACF10000
+
+
+// ================== GLOBAL FIELDS ==========================
+
+.field /*04000001*/ public static initonly native int table
+.field /*04000002*/ public static initonly native int pcounter
+.field /*04000003*/ public static initonly native int '??_C@_05CJBACGMB@hello?$AA@'
+.field /*04000004*/ public static initonly native int msg
+.field /*04000005*/ static privatescope initonly native int va$PST04000005
+.field /*04000006*/ public static initonly native int '??_C@_04GHJNJNPO@main?$AA@'
+.field /*04000007*/ static privatescope initonly native int local_g$PST04000007
+.field /*04000008*/ public static initonly native int common_c
+
+// =============================================================
+
+
+// ================== GLOBAL METHODS =========================
+
+.method /*06000001*/ public static int32 
+        weakfn() cil managed
+{
+  // Code size       2 (0x2)
+  .maxstack  1
+  IL_0000:  ldc.i4.1
+  IL_0001:  ret
+} // end of global method weakfn
+
+.method /*06000002*/ privatescope static 
+        void  ctor_a$PST06000002() cil managed
+{
+  // Code size       22 (0x16)
+  .maxstack  4
+  IL_0000:  ldsfld     native int [msil.extern/*23000002*/]'<msil>Symbols'/*01000001*/::counter /* 0A000001 */
+  IL_0005:  ldsfld     native int va$PST04000005 /* 04000005 */
+  IL_000a:  volatile.
+  IL_000c:  ldind.i4
+  IL_000d:  ldsfld     native int [msil.extern/*23000002*/]'<msil>Symbols'/*01000001*/::counter /* 0A000001 */
+  IL_0012:  ldind.i4
+  IL_0013:  add
+  IL_0014:  stind.i4
+  IL_0015:  ret
+} // end of global method ctor_a
+
+.method /*06000003*/ public static int32 
+        main() cil managed
+{
+  // Code size       208 (0xd0)
+  .maxstack  4
+  .locals /*11000002*/ (int32 V_0,
+           int32 V_1)
+  IL_0000:  ldsfld     native int '??_C@_04GHJNJNPO@main?$AA@' /* 04000006 */
+  IL_0005:  call       int32 puts(native int) /* 06000005 */
+  IL_000a:  pop
+  IL_000b:  ldsfld     native int local_g$PST04000007 /* 04000007 */
+  IL_0010:  ldsfld     native int local_g$PST04000007 /* 04000007 */
+  IL_0015:  ldind.i4
+  IL_0016:  ldc.i4.1
+  IL_0017:  add
+  IL_0018:  stind.i4
+  IL_0019:  ldc.i4.1
+  IL_001a:  ldsfld     native int table /* 04000001 */
+  IL_001f:  ldind.i
+  IL_0020:  calli      int32(int32) /*11000001*/
+  IL_0025:  ldc.i4.2
+  IL_0026:  ldsfld     native int table /* 04000001 */
+  IL_002b:  ldc.i4     0x8
+  IL_0030:  add
+  IL_0031:  ldind.i
+  IL_0032:  calli      int32(int32) /*11000001*/
+  IL_0037:  add
+  IL_0038:  ldc.i4.3
+  IL_0039:  ldsfld     native int table /* 04000001 */
+  IL_003e:  ldc.i4     0x10
+  IL_0043:  add
+  IL_0044:  ldind.i
+  IL_0045:  calli      int32(int32) /*11000001*/
+  IL_004a:  add
+  IL_004b:  ldsfld     native int pcounter /* 04000002 */
+  IL_0050:  ldind.i
+  IL_0051:  ldind.i4
+  IL_0052:  add
+  IL_0053:  ldsfld     native int local_g$PST04000007 /* 04000007 */
+  IL_0058:  ldind.i4
+  IL_0059:  call       int32 helper$PST06000004(int32) /* 06000004 */
+  IL_005e:  add
+  IL_005f:  call       int32 weakfn() /* 06000001 */
+  IL_0064:  ldc.i4     0x3e8
+  IL_0069:  mul
+  IL_006a:  add
+  IL_006b:  stloc.0
+  IL_006c:  ldsfld     native int [msil.extern/*23000002*/]'<msil>FnAddr'/*01000002*/::maybe /* 0A000002 */
+  IL_0071:  ldc.i4     0x0
+  IL_0076:  conv.i
+  IL_0077:  ceq
+  IL_0079:  brtrue     IL_0086
+
+  IL_007e:  ldloc.0
+  IL_007f:  ldc.i4     0x186a0
+  IL_0084:  add
+  IL_0085:  stloc.0
+  IL_0086:  ldsfld     native int common_c /* 04000008 */
+  IL_008b:  ldsfld     native int common_c /* 04000008 */
+  IL_0090:  ldind.i4
+  IL_0091:  ldc.i4.1
+  IL_0092:  add
+  IL_0093:  dup
+  IL_0094:  stloc.1
+  IL_0095:  stind.i4
+  IL_0096:  ldloc.0
+  IL_0097:  ldloc.1
+  IL_0098:  add
+  IL_0099:  stloc.1
+  IL_009a:  ldc.i4.0
+  IL_009b:  stloc.0
+  IL_009c:  ldsfld     native int table /* 04000001 */
+  IL_00a1:  ldc.i4     0x8
+  IL_00a6:  add
+  IL_00a7:  ldind.i
+  IL_00a8:  ldsfld     native int table /* 04000001 */
+  IL_00ad:  ldc.i4     0x10
+  IL_00b2:  add
+  IL_00b3:  ldind.i
+  IL_00b4:  ceq
+  IL_00b6:  brtrue     IL_00bd
+
+  IL_00bb:  ldc.i4.7
+  IL_00bc:  stloc.0
+  IL_00bd:  ldloc.1
+  IL_00be:  ldloc.0
+  IL_00bf:  add
+  IL_00c0:  ldsfld     native int msg /* 04000004 */
+  IL_00c5:  ldind.i
+  IL_00c6:  ldind.u1
+  IL_00c7:  add
+  IL_00c8:  call       int32 b_extra() /* 06000006 */
+  IL_00cd:  add
+  IL_00ce:  conv.u1
+  IL_00cf:  ret
+} // end of global method main
+
+.method /*06000004*/ privatescope static 
+        int32  helper$PST06000004(int32 A_0) cil managed
+{
+  // Code size       5 (0x5)
+  .maxstack  2
+  IL_0000:  ldarg.0
+  IL_0001:  ldc.i4.s   100
+  IL_0003:  add
+  IL_0004:  ret
+} // end of global method helper
+
+.method /*06000005*/ public hidebysig static pinvokeimpl("ucrtbase" cdecl) 
+        int32  puts(native int A_0) cil managed preservesig
+{
+}
+.method /*06000006*/ public hidebysig static pinvokeimpl("msil.unresolved" cdecl) 
+        int32  b_extra() cil managed preservesig
+{
+}
+.method /*06000007*/ public hidebysig static pinvokeimpl("msil.unresolved" cdecl) 
+        int32  add3(int32 A_0) cil managed preservesig
+{
+}
+.method /*06000008*/ public hidebysig static pinvokeimpl("msil.unresolved" cdecl) 
+        int32  twice(int32 A_0) cil managed preservesig
+{
+}
+.method /*06000009*/ public hidebysig static pinvokeimpl("msil.unresolved" cdecl) 
+        int32  alias_twice(int32 A_0) cil managed preservesig
+{
+}
+
+// =============================================================
+
+// *********** DISASSEMBLY COMPLETE ***********************

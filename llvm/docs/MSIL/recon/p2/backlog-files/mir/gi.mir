@@ -1,0 +1,12 @@
+--- |
+  define double @f() { ret double +inf }
+...
+---
+name: f
+legalized: false
+body: |
+  bb.0:
+    %0:_(s64) = G_FCONSTANT double +inf
+    $xmm0 = COPY %0(s64)
+    RET 0, implicit $xmm0
+...

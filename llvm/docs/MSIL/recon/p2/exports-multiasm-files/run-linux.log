@@ -1,0 +1,83 @@
+######## e1/lnx-run.sh
+===== ver-eq net8: zlibx: module initializer|t_ok entered|add(2,3) = 5|
+===== ver-eq net10: zlibx: module initializer|t_ok entered|add(2,3) = 5|
+===== ver-lower net8: zlibx: module initializer|t_ok entered|add(2,3) = 5|
+===== ver-lower net10: zlibx: module initializer|t_ok entered|add(2,3) = 5|
+===== ver-rev net8: caught: |System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=1.2.3.5, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.||
+===== ver-rev net10: caught: |System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=1.2.3.5, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.||
+===== ver-major net8: caught: |System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.||
+===== ver-major net10: caught: |System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.||
+===== ver-none net8: zlibx: module initializer|t_ok entered|add(2,3) = 5|
+===== ver-none net10: zlibx: module initializer|t_ok entered|add(2,3) = 5|
+===== ver-pkt net8: zlibx: module initializer|t_ok entered|add(2,3) = 5|
+===== ver-pkt net10: zlibx: module initializer|t_ok entered|add(2,3) = 5|
+===== name-a net8: caught: |System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.||
+===== name-a net10: caught: |System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.||
+===== missing net8: caught: |System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.gone()'.|
+===== badsig net8: caught: |System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.add(IntPtr, Int32)'.|
+===== noclass net8: caught: |System.TypeLoadException: Could not load type 'Contoso.Zlib.Other' from assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'.|
+===== global net8: caught: |System.TypeLoadException: Could not load type '<Module>' from assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'.|
+===== cold net8: caught: |System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.gone()'.|
+######## e4/lnx-run.sh
+===== pure net8:   main entered|  lib: module initializer|  s_pure entered|  pure() = 42|  main done|
+===== pure net10:   main entered|  lib: module initializer|  s_pure entered|  pure() = 42|  main done|
+===== ldftn net8:   main entered|  lib: module initializer|  s_ldftn entered|  after ldftn|  lib: pure_print runs|  after calli|  main done|
+===== ldftn net10:   main entered|  lib: module initializer|  s_ldftn entered|  after ldftn|  lib: pure_print runs|  after calli|  main done|
+===== field net8:   main entered|  lib: module initializer|  s_field entered|  pub_g != 0: 1|  after field read|  main done|
+===== field net10:   main entered|  lib: module initializer|  s_field entered|  pub_g != 0: 1|  after field read|  main done|
+===== typeof net8:   main entered|  lib: module initializer|  s_typeof entered|L.Native|  after typeof|  main done|
+===== typeof net10:   main entered|  lib: module initializer|  s_typeof entered|L.Native|  after typeof|  main done|
+===== load net8:   main entered|  s_load entered|lib4, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null|  after Assembly.Load|  main done|
+===== load net10:   main entered|  s_load entered|lib4, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null|  after Assembly.Load|  main done|
+===== cold net8:   main entered|  lib: module initializer|  s_cold entered|  s_cold: call not taken|  main done|
+===== cold net10:   main entered|  lib: module initializer|  s_cold entered|  s_cold: call not taken|  main done|
+===== reflect net8:   main entered|  s_reflect entered|  after GetType|  after GetMethod|  lib: module initializer|  after Invoke|  main done|
+===== reflect net10:   main entered|  s_reflect entered|  after GetType|  after GetMethod|  lib: module initializer|  after Invoke|  main done|
+######## e4b/lnx-run.sh
+===== e4b v1 net8:   main entered|  B: module initializer begins|  B: module initializer ends|  A: module initializer begins|  A: module initializer ends|  A.peer == &b: ok|  B.peer == &a: WRONG (stale null address)|
+===== e4b v1 net10:   main entered|  B: module initializer begins|  B: module initializer ends|  A: module initializer begins|  A: module initializer ends|  A.peer == &b: ok|  B.peer == &a: WRONG (stale null address)|
+===== e4b v2 net8:   main entered|  B: module initializer begins|  B: data segment allocated|  A: data segment allocated|  B: module initializer ends|  A: module initializer begins|  A: module initializer ends|  A.peer == &b: ok|  B.peer == &a: ok|
+===== e4b v2 net10:   main entered|  B: module initializer begins|  B: data segment allocated|  A: data segment allocated|  B: module initializer ends|  A: module initializer begins|  A: module initializer ends|  A.peer == &b: ok|  B.peer == &a: ok|
+===== e4c ab net8:   c: constructors run|  a: constructors run|  b: constructors run|  prog: module initializer begins|  prog: module initializer ends|  main entered|
+===== e4c ab net10:   c: constructors run|  a: constructors run|  b: constructors run|  prog: module initializer begins|  prog: module initializer ends|  main entered|
+===== e4c ba net8:   b: constructors run|  c: constructors run|  a: constructors run|  prog: module initializer begins|  prog: module initializer ends|  main entered|
+===== e4c ba net10:   b: constructors run|  c: constructors run|  a: constructors run|  prog: module initializer begins|  prog: module initializer ends|  main entered|
+===== e5c separate net8:   dlib: constructors|  dprog: constructors|  main|  dlib: destructors|  dprog: destructors|
+===== e5c separate net10:   dlib: constructors|  dprog: constructors|  main|  dlib: destructors|  dprog: destructors|
+===== e5c shared net8:   dlib: constructors|  dprog: constructors|  main|  dprog: destructors|  dlib: destructors|
+===== e5c shared net10:   dlib: constructors|  dprog: constructors|  main|  dprog: destructors|  dlib: destructors|
+===== e2 prog2 net8:   &twice: program ldftn (.cctor) vs library '<msil>fn_twice': equal|  &twice: program ldftn (late) vs library '<msil>fn_twice': equal|  &twice: library same-module ldftn (late) vs library '<msil>fn_twice': equal|  &twice: library accessor vs library get_twice(): equal|  calli program pointer: twice(21) = 42|  calli library pointer: twice(21) = 42|
+===== e2 prog2 net10:   &twice: program ldftn (.cctor) vs library '<msil>fn_twice': equal|  &twice: program ldftn (late) vs library '<msil>fn_twice': equal|  &twice: library same-module ldftn (late) vs library '<msil>fn_twice': equal|  &twice: library accessor vs library get_twice(): equal|  calli program pointer: twice(21) = 42|  calli library pointer: twice(21) = 42|
+===== e2 prog2c net8:   &twice: program ldftn (.cctor) vs library '<msil>fn_twice': equal|  &twice: program ldftn (late) vs library '<msil>fn_twice': equal|  &twice: library same-module ldftn (late) vs library '<msil>fn_twice': equal|  &twice: library accessor vs library get_twice(): equal|  calli program pointer: twice(21) = 42|  calli library pointer: twice(21) = 42|
+===== e2 prog2c net10:   &twice: program ldftn (.cctor) vs library '<msil>fn_twice': equal|  &twice: program ldftn (late) vs library '<msil>fn_twice': equal|  &twice: library same-module ldftn (late) vs library '<msil>fn_twice': equal|  &twice: library accessor vs library get_twice(): equal|  calli program pointer: twice(21) = 42|  calli library pointer: twice(21) = 42|
+######## e5/lnx-run.sh lnx-libc-libc
+===== lnx-libc-libc heap net8
+  heap: string from the library's malloc: from-lib
+  heap: freed by the program's free(): no crash
+  [exit 0]
+===== lnx-libc-libc heap net10
+  heap: string from the library's malloc: from-lib
+  heap: freed by the program's free(): no crash
+  [exit 0]
+===== lnx-libc-libc stdio net8
+  stdio: fputs(FILE* from the library's fopen) = 1
+  stdio: fclose by the library = 0
+  stdio: file contains: written by the program
+  [exit 0]
+===== lnx-libc-libc stdio net10
+  stdio: fputs(FILE* from the library's fopen) = 1
+  stdio: fclose by the library = 0
+  stdio: file contains: written by the program
+  [exit 0]
+===== lnx-libc-libc errno net8
+  errno: library set ERANGE (34); the program reads 34
+  errno: then the library reads 34
+  errno: the program stored 7; the library reads 7
+  errno: after Console output the program reads 0
+  [exit 0]
+===== lnx-libc-libc errno net10
+  errno: library set ERANGE (34); the program reads 34
+  errno: then the library reads 34
+  errno: the program stored 7; the library reads 7
+  errno: after Console output the program reads 0
+  [exit 0]

@@ -1,0 +1,25 @@
+bigint-add.O2.txt: IL code 5689 -> 5359 bytes with short branches (5.8% smaller); headers 180 -> 169
+binary-trees-pool.O2.txt: IL code 5970 -> 5694 bytes with short branches (4.6% smaller); headers 180 -> 158
+collatz.O2.txt: IL code 4292 -> 4106 bytes with short branches (4.3% smaller); headers 96 -> 85
+crc32.O2.txt: IL code 3882 -> 3774 bytes with short branches (2.8% smaller); headers 60 -> 49
+dispatch-vm.O2.txt: IL code 7243 -> 6835 bytes with short branches (5.6% smaller); headers 288 -> 266
+fib.O2.txt: IL code 3436 -> 3223 bytes with short branches (6.2% smaller); headers 84 -> 73
+fnv1a.O2.txt: IL code 3499 -> 3337 bytes with short branches (4.6% smaller); headers 144 -> 122
+hanoi.O2.txt: IL code 3193 -> 3058 bytes with short branches (4.2% smaller); headers 60 -> 49
+kr-legacy.O2.txt: IL code 4742 -> 4466 bytes with short branches (5.8% smaller); headers 276 -> 155
+life.O2.txt: IL code 4515 -> 4395 bytes with short branches (2.7% smaller); headers 168 -> 146
+linked-list-pool.O2.txt: IL code 4230 -> 3957 bytes with short branches (6.5% smaller); headers 192 -> 181
+mandelbrot-fixed.O2.txt: IL code 2885 -> 2765 bytes with short branches (4.2% smaller); headers 96 -> 85
+matrix-mult.O2.txt: IL code 12889 -> 12718 bytes with short branches (1.3% smaller); headers 48 -> 37
+mergesort.O2.txt: IL code 4762 -> 4534 bytes with short branches (4.8% smaller); headers 72 -> 61
+nqueens.O2.txt: IL code 3314 -> 3098 bytes with short branches (6.5% smaller); headers 60 -> 49
+quicksort.O2.txt: IL code 4309 -> 4129 bytes with short branches (4.2% smaller); headers 48 -> 37
+sieve.O2.txt: IL code 4393 -> 4144 bytes with short branches (5.7% smaller); headers 36 -> 25
+string-table.O2.txt: IL code 5679 -> 5343 bytes with short branches (5.9% smaller); headers 60 -> 49
+strings.O2.txt: IL code 4580 -> 4289 bytes with short branches (6.4% smaller); headers 276 -> 254
+struct-sim.O2.txt: IL code 6181 -> 6067 bytes with short branches (1.8% smaller); headers 192 -> 148
+TOTAL 218 bodies: IL code 99683 -> 95291 (4.4% smaller); headers 2616 -> 2198
+TOTAL 359 bodies: IL code 123775 -> 113173 (8.6% smaller); headers 4308 -> 4088
+--- with shortest ldc.i4 forms as well:
+TOTAL 218 bodies: IL code 99683 -> 83270 (16.5% smaller); headers 2616 -> 2198
+TOTAL 359 bodies: IL code 123775 -> 94601 (23.6% smaller); headers 4308 -> 4088

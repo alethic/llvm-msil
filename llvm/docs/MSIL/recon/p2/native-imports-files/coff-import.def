@@ -1,0 +1,7 @@
+LIBRARY foo.dll
+EXPORTS
+  fn1
+  fn2 @5 NONAME
+  dataobj DATA
+  fn3 @7
+  renamed == realname

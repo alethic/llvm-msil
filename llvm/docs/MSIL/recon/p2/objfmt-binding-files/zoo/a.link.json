@@ -1,0 +1,170 @@
+{
+ "object": "a.o",
+ "image": "000000000000000000000000000000000000000000000000000000000000000068656c6c6f00000000000000000000000a0000006d61696e0000000007000000",
+ "init_size": 64,
+ "symbols": [
+  {
+   "name": "table",
+   "kind": "data",
+   "offset": 0,
+   "size": 24,
+   "align": 8,
+   "bind": "global",
+   "comdat": null,
+   "visibility": "default",
+   "merge_strings": false
+  },
+  {
+   "name": "pcounter",
+   "kind": "data",
+   "offset": 24,
+   "size": 8,
+   "align": 8,
+   "bind": "global",
+   "comdat": null,
+   "visibility": "default",
+   "merge_strings": false
+  },
+  {
+   "name": "??_C@_05CJBACGMB@hello?$AA@",
+   "kind": "data",
+   "offset": 32,
+   "size": 6,
+   "align": 4,
+   "bind": "weak",
+   "comdat": "??_C@_05CJBACGMB@hello?$AA@",
+   "visibility": "default",
+   "merge_strings": false
+  },
+  {
+   "name": "msg",
+   "kind": "data",
+   "offset": 40,
+   "size": 8,
+   "align": 8,
+   "bind": "global",
+   "comdat": null,
+   "visibility": "default",
+   "merge_strings": false
+  },
+  {
+   "name": "va",
+   "kind": "data",
+   "offset": 48,
+   "size": 4,
+   "align": 4,
+   "bind": "local",
+   "comdat": null,
+   "visibility": "default",
+   "merge_strings": false
+  },
+  {
+   "name": "??_C@_04GHJNJNPO@main?$AA@",
+   "kind": "data",
+   "offset": 52,
+   "size": 5,
+   "align": 4,
+   "bind": "weak",
+   "comdat": "??_C@_04GHJNJNPO@main?$AA@",
+   "visibility": "default",
+   "merge_strings": false
+  },
+  {
+   "name": "local_g",
+   "kind": "data",
+   "offset": 60,
+   "size": 4,
+   "align": 4,
+   "bind": "local",
+   "comdat": null,
+   "visibility": "default",
+   "merge_strings": false
+  },
+  {
+   "name": "common_c",
+   "kind": "data",
+   "offset": 68,
+   "size": 4,
+   "align": 4,
+   "bind": "common",
+   "comdat": null,
+   "visibility": "default",
+   "merge_strings": false
+  },
+  {
+   "name": "weakfn",
+   "kind": "func",
+   "bind": "weak",
+   "comdat": null,
+   "visibility": "default"
+  },
+  {
+   "name": "ctor_a",
+   "kind": "func",
+   "bind": "local",
+   "comdat": null,
+   "visibility": "default"
+  },
+  {
+   "name": "main",
+   "kind": "func",
+   "bind": "global",
+   "comdat": null,
+   "visibility": "default"
+  },
+  {
+   "name": "helper",
+   "kind": "func",
+   "bind": "local",
+   "comdat": null,
+   "visibility": "default"
+  }
+ ],
+ "relocs": [
+  {
+   "site": 0,
+   "kind": "fnaddr64",
+   "target": "add3",
+   "addend": 0,
+   "unaligned": 0
+  },
+  {
+   "site": 8,
+   "kind": "fnaddr64",
+   "target": "twice",
+   "addend": 0,
+   "unaligned": 0
+  },
+  {
+   "site": 16,
+   "kind": "fnaddr64",
+   "target": "alias_twice",
+   "addend": 0,
+   "unaligned": 0
+  },
+  {
+   "site": 24,
+   "kind": "addr64",
+   "target": "counter",
+   "addend": 0,
+   "unaligned": 0
+  },
+  {
+   "site": 40,
+   "kind": "addr64",
+   "target": "??_C@_05CJBACGMB@hello?$AA@",
+   "addend": 0,
+   "unaligned": 0
+  }
+ ],
+ "ctors": [
+  {
+   "func": "ctor_a",
+   "priority": 200
+  }
+ ],
+ "aliases": {},
+ "weak_undef": [
+  "maybe"
+ ]
+}

@@ -1,11 +1,11 @@
-# MSIL backend: implementation plan for Phase 0 and Phase 1
+# MSIL backend: implementation plan for Phases 0-2
 
-Status: plan v2, 2026-10-12 (v1 revised after an adversarial review; dispositions in Appendix A). Owner: lead planner (agent farm). Base: branch `msil-milestone1` at `2829ef573b08` (the design-doc commit, rewritten 2026-10-13 from `8da03434abcc`; upstream base `d1e15b695381`).
-Inputs: [Design.md](Design.md) (settled decisions) and the recon reports in [recon/](recon/) (`triple-objfmt`, `registry-tm`, `clang`, `wasm-inventory`, `isel`, `passes-frame`, `asmprinter`, `cil-runtime`, `tests-ci`, `build-env`), plus [recon/artifacts/](recon/artifacts/): the experiment sources and logs behind `cil-runtime` and `build-env`, the `tests-ci` prototype, and the review experiments (`review-cil/`). Every API, path and line number the plan relies on was checked in this checkout or comes from a recon report that checked it; anything else is marked *unverified*.
+Status: plan v2, 2026-10-12 (v1 revised after an adversarial review; dispositions in Appendix A); Phase 2 plan, 2026-10-21 (milestones M12-M23 and contracts 5.6-5.12, from the Phase 2 recon and the user's decisions of 2026-10-21, section 10). Owner: lead planner (agent farm). Base: branch `msil-milestone1` at `2829ef573b08` (the design-doc commit, rewritten 2026-10-13 from `8da03434abcc`; upstream base `d1e15b695381`); Phase 2: branch `msil` at `1ea64fe9fc7c` (after M11, with upstream llvm-project `64f50ffd4f1c` merged).
+Inputs: [Design.md](Design.md) (settled decisions) and the recon reports in [recon/](recon/) (`triple-objfmt`, `registry-tm`, `clang`, `wasm-inventory`, `isel`, `passes-frame`, `asmprinter`, `cil-runtime`, `tests-ci`, `build-env`), plus [recon/artifacts/](recon/artifacts/): the experiment sources and logs behind `cil-runtime` and `build-env`, the `tests-ci` prototype, and the review experiments (`review-cil/`). Phase 2 inputs: the recon in [recon/p2/](recon/p2/) (11 reports and three judge reports; [decision-brief.md](recon/p2/decision-brief.md) is the synthesis), [Status.md](Status.md) and [TestCorpus.md](TestCorpus.md). Every API, path and line number the plan relies on was checked in this checkout or comes from a recon report that checked it; anything else is marked *unverified*.
 
 ## 0. Summary
 
-Phase 0 + Phase 1 of the MSIL backend as 11 small milestones (M0-M10), followed by M11, which closes the follow-ups of the first upstream merge, each one workflow run (parallel WPs on disjoint files -> one serialized build -> tests -> 3-lens review -> verified fixes -> gate -> one [MSIL] commit). M0 lands the build, plan-check, test and CI infrastructure with no LLVM changes. M1 front-loads every widely-included header edit (Triple.h, MCContext.h, MCObjectFileInfo.h, clang diagnostics) plus the clang TargetInfo wrapper, so the only full rebuild is M1 (a TableGen-only pre-build lets implementers syntax-check first). M2 creates the experimental MSIL target with every Phase-1 source file, final query hooks and stubs only for lowering hooks, so CMakeLists.txt, MSIL.h and the pass pipeline never change again. M3-M9 add capabilities in dependency order (leaf functions and stackification; calls, integers and select; FP; control flow; memory, frames and fences; globals and P/Invoke; function pointers, prototypes and aggregates). Every milestone's tests are written by separate test agents from the spec and only use capabilities that already exist (plan 5.5), and verification is enforced in every gate. M10 is the Design.md section 12 conformance gate (25+ programs at -O0/-O2 vs a native oracle, .NET 8/10/Framework, optimizing-JIT legs and a WSL Linux leg). Phases 2-5 are outlined as future milestones. Plan v2 addresses the adversarial review (Appendix A).
+Phase 0 + Phase 1 of the MSIL backend as 11 small milestones (M0-M10), followed by M11, which closes the follow-ups of the first upstream merge, each one workflow run (parallel WPs on disjoint files -> one serialized build -> tests -> 3-lens review -> verified fixes -> gate -> one [MSIL] commit). M0 lands the build, plan-check, test and CI infrastructure with no LLVM changes. M1 front-loads every widely-included header edit (Triple.h, MCContext.h, MCObjectFileInfo.h, clang diagnostics) plus the clang TargetInfo wrapper, so the only full rebuild is M1 (a TableGen-only pre-build lets implementers syntax-check first). M2 creates the experimental MSIL target with every Phase-1 source file, final query hooks and stubs only for lowering hooks, so CMakeLists.txt, MSIL.h and the pass pipeline never change again. M3-M9 add capabilities in dependency order (leaf functions and stackification; calls, integers and select; FP; control flow; memory, frames and fences; globals and P/Invoke; function pointers, prototypes and aggregates). Every milestone's tests are written by separate test agents from the spec and only use capabilities that already exist (plan 5.5), and verification is enforced in every gate. M10 is the Design.md section 12 conformance gate (25+ programs at -O0/-O2 vs a native oracle, .NET 8/10/Framework, optimizing-JIT legs and a WSL Linux leg). Phase 2 (planned 2026-10-21 from the recon in recon/p2/ and the user's decisions, section 10) is M12-M23, with the same protocol and the shared contracts of sections 5.6-5.12: M12 fixes the backend items every linker path hits and adds the Linux native oracle; M13 front-loads every Phase 2 upstream hook and shared header (as M1 did for Phase 1) and builds lld; M14 links bitcode with msil-ld and adds the clang MSIL toolchain; M15 resolves P/Invokes from native libraries; M16-M17 build the ECMA-335 library (llvm/lib/CLI); M18 makes every MCInst one CIL instruction with a binary encoder; M19 writes CIL objects (ECMA-335 netmodules with a link-info record, Q1 = B2); M20 links CIL objects and writes the PE without ilasm; M21 binds the BCL from reference assemblies; M22 adds libraries and assembly-to-assembly linking; M23 is the Phase 2 exit (exit corpus, link-semantics matrix, objects by default). Phases 3-5 are outlined in section 7. Plan v2 addresses the adversarial review (Appendix A).
 
 | Milestone | Title | WPs | Rebuild | Runnable gate |
 |---|---|---|---|---|
@@ -21,6 +21,18 @@ Phase 0 + Phase 1 of the MSIL backend as 11 small milestones (M0-M10), followed 
 | M9 | Function pointers, prototype fix-ups and aggregates | 4 | target + relink | function pointers, K&R calls, structs |
 | M10 | Milestone-1 conformance: program corpus, verification legs, both triples, documentation | 5 | target + relink | Design.md 12 exit criteria, all legs |
 | M11 | Upstream-merge follow-ups: crash and pipeline fixes, upstream-hook coverage, more gate legs | 6 | target + relink, new llvm-profdata | M10 legs plus the M11 tests, upstream-hooks check, utc and more-levels legs |
+| M12 | Backlog fixes: whole-program aliases and weak references, empty asm with operands, inline i128 division, byval slots, Linux oracle | 6 | target + `CGStmt.cpp` + relink | the backlog tests on .NET 8/10, Framework and WSL; the Linux native oracle (E7) and private WSL runtimes; Phase 1 legs green, full run-m1-gate.ps1 after the commit |
+| M13 | Phase-2 shared plumbing: upstream hooks, MC object and link-record interfaces, ECMA-335 format headers, msil-ld stub | 7 | upstream hook batch (84 + 5 objects, not clang-wide), first lld build, new tools; 8-12 min | CLITests (26+), hook tests, msil-ld stub dispatch, the full upstream-hooks check; no IL changes |
+| M14 | msil-ld links bitcode, and the clang MSIL toolchain | 7 | lldMSIL + clang driver TUs + relink | multi-TU programs and archives through clang + msil-ld (`--lto-emit-asm`) + ilasm; all of M1 through LTO; the LTO rows of the link-semantics matrix |
+| M15 | Native libraries and P/Invoke resolution | 6 | target + lldMSIL + relink; new yaml2obj, llvm-mc | P/Invokes bound from native libraries on both triples, named link errors; `-S` IL byte-identical (D14 frozen) |
+| M16 | ECMA-335 library: writer half | 7 | new library only (LLVMCLI, CLITests) | CLITests (110+); canonical listings independent of the assembler (mdcanon) |
+| M17 | ECMA-335 library: reader, dumper, PE writer, link-info codec | 7 | new library + llvm-cil-dump, llvm-cil-copy | every M1 program copied through our PE writer verifies and runs on .NET 8/10, Framework and WSL; CLITests (170+) |
+| M18 | One MCInst per CIL instruction and the binary encoder (P2-A1) | 7 | target + relink | `-S` IL unchanged up to the shortest forms (Q26) and `nomangle`; the encoder equals ilasm on the M1 methods; Phase 1 legs on .NET 8, Framework and WSL .NET 10 (Windows .NET 10 after the commit) |
+| M19 | CIL objects (P2-A2) | 7 | target + 3 clang driver TUs + relink | `clang -c` objects canonically equal to ilasm of their object-form text; ildasm, nm and ar read them |
+| M20 | msil-ld links CIL objects and writes the PE | 8 | reconfigure; lib/CLI + target + lldMSIL + relink | two `clang -c` objects run with no ilasm on every runtime; M1 and M2 through objects with oracles O3, O4 and O6 (O2 right after the commit); the object rows of the matrix; record v1 frozen |
+| M21 | BCL reference binding | 6 | lldMSIL + ~8 target TUs + relink | outputs bound against the net48, net8 and net10 reference packs run; outputs without references are byte-identical |
+| M22 | Libraries and assembly-to-assembly linking | 7 | lldMSIL + lib/CLI + ~8 target TUs + relink | a library with its program, two- and three-library cycles and a C# consumer run on .NET 8 and Framework 4.8 (the libraries also on WSL .NET 10) against native shared-library oracles |
+| M23 | Phase-2 conformance and exit: exit corpus, link-semantics matrix, objects by default, phase gate | 5 | none | the nine exit programs and c-testsuite through objects and LTO on both triples and every runtime; the matrix complete; `obj` default; phase gate about 88-90 min |
 
 ## 1. How agents use this plan
 
@@ -135,7 +147,7 @@ Each milestone is executed by **one workflow run**, then a human checks the resu
 
 ## 3. Settled decisions (lead planner)
 
-Recon reports disagreed in a few places or left questions open. These are the binding answers for Phase 1. Items that genuinely need the user are in section 10; until the user answers, the default given here applies.
+Recon reports disagreed in a few places or left questions open. These are the binding answers for Phase 1. Items that genuinely need the user are in section 10; until the user answers, the default given here applies. Phase 2 amends some of these decisions through section 12 rows dated 2026-10-21 (D3, D5, D9, D10, D12, D14, D19, D21, D22, D26, D27, D28, D30, D31, D33, D36, D38); D12, D14 and D26 also carry a Phase 2 note in place (decision brief section 3 item 20).
 
 | # | Topic | Decision |
 |---|---|---|
@@ -150,9 +162,9 @@ Recon reports disagreed in a few places or left questions open. These are the bi
 | D9 | Build configuration | Keep the build-env configuration: targets `X86;WebAssembly` + experimental `MSIL`, projects `clang;lld` (lld unused in Phase 1), clang-cl/lld-link, Release + assertions, `LLVM_OPTIMIZED_TABLEGEN=OFF`. No AArch64 backend (MSIL is selected by object format; clang's AArch64 TargetInfo is always built). |
 | D10 | Assembly references | Phase 1 emits only `.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }` and uses only mscorlib members (`Marshal::AllocHGlobal`, `Marshal::StringToHGlobalAnsi`, `Environment::GetCommandLineArgs`, `Buffer::MemoryCopy`, `Interlocked::MemoryBarrier`). Verified to run unchanged on .NET 8/9/10 and .NET Framework 4.8 (cil-runtime e01/e01c; isel fence experiment). No `DisableRuntimeMarshalling` (blittable `preservesig` signatures do not need it). There is no core-library switch and no target-framework option: from P2-B on, msil-ld is given reference assemblies and binds every BCL type and member the generated code needs by searching them, so .NET 8 reference assemblies give references such as System.Runtime, System.Runtime.InteropServices and System.Threading, and .NET Framework's give mscorlib (section 12, 2026-10-14). |
 | D11 | Identifiers and labels | Every symbol-derived identifier is single-quoted through `MSIL::printQuotedName` (escapes: `\'`, backslash as `\134`, control bytes as octal, UTF-8 raw plus a BOM when any global name is non-ASCII). Compiler-generated names use the `<msil>` prefix (no dots in type names). Block labels are `@BB<f>_<b>` (`InternalSymbolPrefix = "@"`). Names come from IR names, never from the Mangler. |
-| D12 | Globals | One unmanaged data segment per module, allocated and filled by `<Module>::.cctor` from an RVA blob, with straight-line relocations and ctors; one `initonly native int` address field per global; code uses `ldsfld native int 'g'` (+ `ldc.i4 off; add`). Initializer bytes are captured from `AsmPrinter::emitGlobalConstant` through a collector streamer (NVPTX-style walker as fallback). RVA memory is never written and `&(label)` data is never emitted. |
+| D12 | Globals | One unmanaged data segment per module, allocated and filled by `<Module>::.cctor` from an RVA blob, with straight-line relocations and ctors; one `initonly native int` address field per global; code uses `ldsfld native int 'g'` (+ `ldc.i4 off; add`). Initializer bytes are captured from `AsmPrinter::emitGlobalConstant` through a collector streamer (NVPTX-style walker as fallback). RVA memory is never written and `&(label)` data is never emitted. **Phase 2 (decision brief item 20; section 12, 2026-10-21):** one data segment per module holds only for `-S` and llc text; CIL objects carry one record segment per defined global (5.8.8), and msil-ld outputs get one segment per assembly, laid out by `cli::layoutImage` from the objects' segments (5.9.9, M20). |
 | D13 | Frames | Design.md 4.2: one `localloc` at entry sized for the static frame, FP as a fake physreg turned into a vreg, `.locals` never `init`. The assumed localloc alignment is **8 bytes** (`MSILFrameLowering::getLocallocAlign()`): constant-size localloc of 32 bytes or less is only 8-aligned on .NET Framework 4.8 and in .NET 8 tiered code (review experiment `recon/artifacts/review-cil/align16.il`; the recon had measured only variable sizes), so any frame with MaxAlign > 8 (`__int128`, `_Alignas(16)`, arrays clang aligns to 16) over-allocates MaxAlign - 8 bytes and aligns up. Dynamic alloca, stacksave/stackrestore and frameaddress are diagnosed in Phase 1 (shadow stack in phase 3). The frame model stays behind one helper (user decision on a value-type frame pending, section 10). |
-| D14 | P/Invoke (Phase-1 import table) | An undefined function referenced from code or data becomes `pinvokeimpl("<lib>" cdecl) ... preservesig` only if it is a Phase-1 import: `puts` and `putchar` from the C library (linux-gnu/linux-musl `libc`, windows-msvc `ucrtbase`, windows-gnu `msvcrt`); the C math functions clang or the legalizer emit (sqrt, cbrt, floor, ceil, trunc, round, rint, nearbyint, fmod, remainder, fma, fmin, fmax, fdim, sin, cos, tan, asin, acos, atan, atan2, sinh, cosh, tanh, exp, exp2, expm1, log, log2, log10, log1p, pow, ldexp, frexp, modf, hypot, and their `f` variants) from the math library (linux-gnu `libm.so.6`, because glibc keeps libm separate and CoreCLR special-cases only `"libc"`; linux-musl `libc`; windows-msvc `ucrtbase`; windows-gnu `msvcrt`); or any function carrying the `msil-import-module` attribute (`msil-import-name` sets the entry point). Every other undefined function is an error: Phase 1 has no linker, and Design.md 5.2 step 4 makes an unresolved symbol a link error, not a runtime failure. Variadic callees are errors. Library calls whose name starts with `__` (compiler-rt and `__atomic_*` helpers) are errors until phase 3. Phase 2's msil-ld replaces the table with real symbol resolution. |
+| D14 | P/Invoke (Phase-1 import table) | An undefined function referenced from code or data becomes `pinvokeimpl("<lib>" cdecl) ... preservesig` only if it is a Phase-1 import: `puts` and `putchar` from the C library (linux-gnu/linux-musl `libc`, windows-msvc `ucrtbase`, windows-gnu `msvcrt`); the C math functions clang or the legalizer emit (sqrt, cbrt, floor, ceil, trunc, round, rint, nearbyint, fmod, remainder, fma, fmin, fmax, fdim, sin, cos, tan, asin, acos, atan, atan2, sinh, cosh, tanh, exp, exp2, expm1, log, log2, log10, log1p, pow, ldexp, frexp, modf, hypot, and their `f` variants) from the math library (linux-gnu `libm.so.6`, because glibc keeps libm separate and CoreCLR special-cases only `"libc"`; linux-musl `libc`; windows-msvc `ucrtbase`; windows-gnu `msvcrt`); or any function carrying the `msil-import-module` attribute (`msil-import-name` sets the entry point). Every other undefined function is an error: Phase 1 has no linker, and Design.md 5.2 step 4 makes an unresolved symbol a link error, not a runtime failure. Variadic callees are errors. Library calls whose name starts with `__` (compiler-rt and `__atomic_*` helpers) are errors until phase 3. **Phase 2 (decision brief item 20; section 12, 2026-10-21):** this table is the standalone import policy of `clang -S` and llc, frozen until the end of Phase 2 (no entry added or removed; 5.10.13). msil-ld's linked output resolves undefined functions from native libraries instead (M15, Q13), and object mode has no import policy: undefined functions become object symbols (M19). C spells the two attributes with WebAssembly's `import_module` and `import_name` (Q35, M13), and from M18 every P/Invoke prints `nomangle cdecl` (Q13, 5.10.11). |
 | D15 | Memory intrinsics | Never libcalls. Constant-length memcpy <= 2^32-1: `cpblk`; memset: `initblk` (variable length truncated with `conv.i4`, documented 4 GiB limit); memmove and variable-length memcpy: `[mscorlib]System.Buffer::MemoryCopy(void*, void*, int64, int64)` (NativeMemory is net6+ only). |
 | D16 | BCL intrinsics | None in Phase 1: ctlz/cttz/ctpop/bswap/rotates use LLVM's generic arithmetic expansions; fabs, copysign and FP<->integer bitcasts use the generic expansions through a stack slot and therefore work from M7 (their tests live in M7). isel.md decision 11 becomes phase-3 codegen switches that permit specific newer APIs, with defaults that run on .NET Framework 4.8 and modern .NET alike and, where that is possible, capability also taken from the reference assemblies (P2-B). A changed behaviour cannot be read from the references: `Math.Min`/`Max` order signed zeros only on modern .NET (isel.md 3.2), so the switch that maps fminimum/fmaximum to them alone decides, and by default they keep their M5 compare-and-select lowering. There is no net8.0 profile (section 12, 2026-10-14). |
 | D17 | uint64 -> FP | Custom for f32 and f64 results. `LowerUINT_TO_FP` emits `s = srl x, 63; y = or (srl x, trunc s), (and x, s); r = sint_to_fp y; result = fmul r, sint_to_fp(add s, 1)`: compiler-rt's halving with a sticky bit, with no SELECT and no memory. `conv.r4`/`conv.r8` of a non-negative int64 round once on every runtime (cil-runtime e05b) and the multiply by 1 or 2 is exact, so the result is correctly rounded. Never `conv.r.un` for 64-bit inputs (it double-rounds on .NET 8/9 and Framework, e05), and never the generic expansions (BITCAST through a stack slot for f64, SELECT for f32). |
@@ -164,7 +176,7 @@ Recon reports disagreed in a few places or left questions open. These are the bi
 | D23 | Pass manager | Legacy pipeline only in Phase 1. Copied passes drop their new-PM wrapper classes; `MSILPassRegistry.def` and `MSILCodeGenPassBuilder` are phase 4. |
 | D24 | Memory flags | A post-ISel `MSILSetMemFlags` pass (modeled on WebAssemblySetP2AlignOperands) fills a memflags immediate (bits 0-2 unaligned N in {1,2,4}, bit 3 volatile), not a root-aware ComplexPattern. |
 | D25 | Stack protector | MSILPrepareIR strips `ssp`/`sspstrong`/`sspreq`/`safestack` with a warning (the Linux and MSVC toolchains default to no protector anyway). |
-| D26 | Linkage | linkonce/weak/comdat definitions are ordinary definitions in the single-module world (MSVC string literals `??_C@...` included). External global variables, `thread_local`, aliases, ifuncs, non-empty `llvm.global_dtors` and module asm are errors. |
+| D26 | Linkage | linkonce/weak/comdat definitions are ordinary definitions in the single-module world (MSVC string literals `??_C@...` included). External global variables, `thread_local`, aliases, ifuncs, non-empty `llvm.global_dtors` and module asm are errors. **Phase 2 (decision brief item 20; section 12, 2026-10-21):** in whole-program mode (`-S`, llc text and msil-ld's `--lto-emit-asm` text) M12 lowers aliases of defined functions and variables, makes an unresolved `extern_weak` null plus a trap stub, turns a section on a global variable definition into an error (until M20, from which whole-program output lays out named sections as a one-object link does) and drops unreferenced discardable functions; in object mode (M19) aliases, `extern_weak` declarations and external globals become object symbols (5.8.10). Non-empty `llvm.global_dtors`, `thread_local`, ifuncs and module asm stay errors. |
 | D27 | Entry point | `'<msil>Main'(string[])` with `.entrypoint`: calls `main()` directly, or builds a NULL-terminated argv from `Environment.GetCommandLineArgs()` (argv[0] = dll path) for `main(int32, native int)`; any other signature is an error. |
 | D28 | Assembly name | `-msil-assembly-name`, default the stem of `source_filename`. The harness runs every DLL from a private directory, so same-named assemblies never collide. |
 | D29 | Method text | One-line header `.method <public|assembly> static <ret> '<name>'(<params>) cil managed`, `{` on the next line, `.maxstack`, optional `.locals (...)`, body, and `} // end of method '<name>'` (the update_llc_test_checks regex depends on it). |
@@ -211,6 +223,8 @@ Never: ninja check-llvm / check-clang / check-all (they build every tool); LLVM_
 Rebuild costs (step counts from `ninja -t commands` in the build-env recon; times are estimates on this shared 4C/8T host): M1 target set 3,462 steps (2,762 C++ TUs, 242 tablegen runs), 1-2.5 h; the whole tree 4,817 steps. After M1 only the MSIL target and relinks are rebuilt (5-30 min). The build script drops to `-j 4` below 16 GB free RAM and `-j 2` below 6 GB, because other agents' .NET experiments have been seen holding 40 GB.
 
 ## 5. Shared contracts
+
+Sections 5.1-5.5 are the Phase 1 contracts. Sections 5.6-5.12 are the Phase 2 contracts (2026-10-21): 5.6 source layout and ownership, 5.7 the ECMA-335 library, 5.8 CIL objects and the link-info record, 5.9 msil-ld, 5.10 the driver and native imports, 5.11 BCL reference binding, 5.12 the Phase 2 test harness and gates. Where a Phase 2 milestone changes a contract (Phase 1's included), a section 12 row dated 2026-10-21 or later says so, and the row wins over the text it amends.
 
 ### 5.1 ILAsm output contract (Phase 1)
 
@@ -751,6 +765,4193 @@ memory cap) -> transcript comparison. Every gate passes `msil_require_verify=1`,
 configuration error, not a silently skipped step (D38). The native-oracle (`msil_native_oracle`), .NET Framework
 (`msil_run_netfx=1`), WSL (`msil_runner=wsl`, linux triple, .NET 10) and optimizing-JIT
 (`msil_dotnet_env=DOTNET_TieredCompilation=0`) legs are parameters.
+
+### 5.6 Phase 2 source layout and ownership
+
+Phase 2 (M12-M23) creates the directories of 5.6.2 and changes the upstream files of 5.6.3. As in 5.2, every file has
+exactly one owner per milestone. Owners are named as **roles** `M<n>/<role>`: a role is a set of files that one work
+package owns. A milestone drafter may give several roles of one milestone to one WP, but never splits a role's files
+across WPs, and never gives one file to two roles. Test roles (`*-tests`) are always separate WPs from the roles whose
+code they test (section 1.4).
+
+**Precedence.** Subsections 5.7 (ECMA-335 library), 5.8 (B2 objects and the link-info record) and 5.9 (msil-ld) own the
+file names inside `llvm/include/llvm/CLI/`, `llvm/lib/CLI/`, `llvm/include/llvm/BinaryFormat/CLI*`,
+`llvm/include/llvm/BinaryFormat/MSILLink.h`, `llvm/lib/MC/`, the MSIL target's MC/object-writer files and `lld/MSIL/`.
+Where a name below differs from theirs, their name wins and the orchestrator corrects this table with a section 12 row;
+the milestone and role assignment here stands. Sources: driver-toolchain 10, native-imports 8.1, bcl-binding 10,
+lld-flavor 1.2/6.1, metadata-writer 4.1/7, mc-streamer 5.2/6, tests-p2 4, backlog 9, decision brief 2.
+
+#### 5.6.1 Rules
+
+1. **Fork prefixes.** M13 adds to `FORK_PREFIXES` of `msil/utils/ci/check-upstream-hooks.py`: `lld/MSIL/`,
+   `lld/test/MSIL/`, `llvm/include/llvm/CLI/`, `llvm/lib/CLI/`, `llvm/unittests/CLI/`, `llvm/tools/llvm-cil-dump/`,
+   `llvm/test/tools/llvm-cil-dump/`, `llvm/tools/llvm-cil-copy/`, `llvm/test/tools/llvm-cil-copy/`,
+   `llvm/test/MC/MSIL/` (if M13 misses the two `llvm-cil-copy` prefixes, `M17/harness` adds them). Paths under a fork
+   prefix need no manifest entry.
+2. **Manifest duty.** A milestone that creates a fork file in an upstream directory adds a `fork-only <path>` line to
+   `msil/utils/upstream-hooks.txt`; a milestone that edits an upstream file adds or updates its `hook <path>` block (at
+   least one `lit`, `gtest`, `compile` or `none <reason>` line) and adjusts `min-pass`. The role that owns
+   `msil/utils/upstream-hooks.txt` in that milestone (5.6.9) does it from the other roles' hand-overs. Every gate runs
+   `upstream-hooks.ps1 -Leg manifest,pins` (5.12.10).
+3. **Nothing downloaded or generated is committed**: corpus sources, reference packs, sysroots, WSL runtimes, built C#
+   tools, lit outputs. They live under `C:\llvm-msil-scratch` (or `$HOME` inside WSL) and are found through lit
+   parameters (5.12.2).
+4. **Never edited by a WP:** `llvm/docs/MSIL/Design.md` (user), `llvm/docs/MSIL/ImplementationPlan.md` and
+   `llvm/docs/MSIL/recon/**` (orchestrator), `llvm/docs/MSIL/FeatureIdeas.md` (end of the project only).
+5. **Public repository.** No committed text contains a user-profile path, a user name or a session id. WSL paths are
+   written with `$HOME`, Windows scratch paths as `C:\llvm-msil-scratch\...`.
+6. **Retiring pinned text.** A milestone whose WPs change an msil-ld diagnostic, option or option set, the IL text that
+   codegen or msil-ld prints (`-S`, llc, `--lto-emit-asm`), or the expansion of `%{msil_prog}`, `%{msil_c}`,
+   `%{msil_ll}` or `%{msil_ldflags}` gives its test role the **whole** `lld/test/MSIL/` directory and its harness role
+   the **whole** `msil/test/harness/prog/` directory (and `msil/test/harness/pipeline/` when the default `asm`
+   expansions change). The WP description lists the earlier pinned texts the milestone retires (test file and old
+   text), so the test author updates them from the specification. Known cases: 5.6.6 (`lld/test/MSIL/`) and 5.6.9
+   (`msil/test/harness/prog/`); a milestone drafter who finds another applies the rule and notes it.
+7. **Header first; no hand-over across a missing dependency.** The milestone workflow starts a WP only after every WP
+   on its Depends-on line has finished. A header whose declarations a contract pins (5.9.2, 5.9.3, 5.11.5) and that
+   another WP of the same milestone calls belongs to the role of a WP with no Depends-on line in that milestone (a
+   root); its `.cpp` may stay with another role (5.6.6 applies this in M14, M20 and M21). An in-milestone check that
+   uses another WP's file, script or private binary needs that WP on its Depends-on line; otherwise the check moves to
+   the gate. Exception: a root test WP may syntax-check its files against same-milestone headers that already exist
+   when it is ready to hand over; it never waits for, reads or builds them, and names the files it could not check as
+   checked at the gate (5.7.14; M16.e, M16.f, M17.e).
+8. **What a WP reads.** Phase 2 WPs read plan sections 1-4, the 5.x subsections their Reads line cites, their own
+   milestone and its section 12 rows, not all of sections 1-6 (the orchestrator records this as a section 12 row
+   amending 1.1 and uses the same wording in the workflow's prompts). A Reads line cites 5.7.10 for every test that
+   FileChecks `llvm-cil-dump` or `mdcanon` output (and 5.8.11 when it checks `--link-info`), 5.9.14, 5.10.14 or 5.11.9
+   for every test of msil-ld diagnostics, and 5.12.1-5.12.6 for every harness or execution test. A test WP never reads a
+   file that a non-test WP of its milestone owns (infra and docs included): it reads the committed state with
+   `git show HEAD:<path>` and the plan text (for example plan D14, not Status.md).
+
+#### 5.6.2 New directories and new tools
+
+| Directory or file | Created | Contents | Contract |
+|---|---|---|---|
+| `llvm/include/llvm/CLI/`, `llvm/lib/CLI/` | M13 skeleton; M16, M17; M18 (`BCLMembers`), M20 (`ImageLayout`, `Trailer`, `CallAdapter`), M22 (`SymbolTable` extended) | the ECMA-335 library `LLVMCLI` (`llvm::cli`) | 5.7 |
+| `llvm/include/llvm/CLI/BCLMembers.def`, `BCLMembers.h` | M18; the `.def` extended in M20, M21, M22 | the one list of BCL entities codegen and msil-ld use (5.11.7) | 5.7.2 (place, X-macros), 5.11.7 (content) |
+| `llvm/unittests/CLI/` | M13 | `CLITests` | 5.7 |
+| `llvm/tools/llvm-cil-dump/`, `llvm/test/tools/llvm-cil-dump/` | M17 | dumper with `--canonical` and the normalization options of 5.12.6 (oracles O3/O4) | 5.7.10, 5.12.6 |
+| `llvm/tools/llvm-cil-copy/`, `llvm/test/tools/llvm-cil-copy/` | M17 | metadata copier (the end-to-end oracle of M16-M17) | 5.7.10 |
+| `llvm/test/MC/MSIL/` | M18 | encoder tests | 5.8 |
+| `lld/MSIL/` | M13 stub; M14-M22 | msil-ld (`lldMSIL`) | 5.9, 5.10, 5.11 |
+| `lld/test/MSIL/` | M13 | msil-ld FileCheck tests | 5.9, 5.10, 5.11 |
+| `clang/lib/Driver/ToolChains/MSIL.h`, `MSIL.cpp` | M14 | `MSILToolChain<NativeTC>`, `tools::msil::Linker` | 5.10 |
+| `msil/test/M2/` | M14 | multi-TU execution tiers (5.12.5) | 5.12 |
+| `msil/test/Programs/` | M23 | exit-corpus drivers, ports, shims, `.expected` | 5.12.9 |
+| `msil/utils/msil-prog.py` | M14 | multi-TU build driver of the harness (5.12.4) | 5.12 |
+| `msil/utils/linux-oracle/start.c`, `msil/utils/make-linux-sysroot.py` | M12 | E7 Linux oracle and its library copies (5.12.8) | 5.12 |
+| `msil/utils/msil-wsl-dotnet.sh` | M12 | the private WSL .NET runtimes of Q39 (5.12.8) | 5.12 |
+| `msil/utils/mdtools/` (`mdump.cs`, `mdcanon.cs`, `build-mdtools.py`, `check-cil-defs.py`, `cli-corpus-check.py`) | M16; M17-M19 | C# oracle tools, built into `<build>/tools/msil/mdtools/` (`mdcanon` is the oracle until `llvm-cil-dump --canonical`), and the corpus check modes | 5.7.11, 5.12.6 |
+| `msil/utils/il-snapshot.py` | M15; M18, M20 | byte-identical-IL snapshot of `-S`/llc output (`--compare`, `--normalize forms`, `--llc-arg`, `--skip-changed`) | 5.10.13, 5.12.4 |
+| `msil/utils/check-il-forms-diff.py` | M18 | checks that Q26's mechanical test update changed only encoding forms and `nomangle` | 5.12.4 |
+| `msil/utils/ci/build-targets.txt` | M13; M15, M17 | the one build-target list of 5.6.11 (read by `build.ps1`, `build.sh` and `msil-build.ps1 -Standard`) | 5.6.11 |
+| `msil/utils/msil-equiv.py`, `msil/utils/equiv-allowed.txt` | M20 | O3/O4 comparator and its named allow-list | 5.12.6 |
+| `msil/utils/check-mscorlib-safe.py` | M21 | proves every built-in `[mscorlib]` entry on every runtime | 5.11.7 |
+| `msil/utils/corpus/manifest.json`, `msil/utils/corpus/fetch.py` | M23 | pinned exit corpus and its fetch step | 5.12.9 |
+| `msil/utils/ci/det-manifest.py` | M23 | cross-host determinism manifest of CIL objects and archives | 5.12.12 |
+| `msil/utils/make-glibc-sysroot.sh` | M15 | optional hosted-header leg (Q16) | 5.12.8 |
+
+#### 5.6.3 Upstream files Phase 2 changes (hooks)
+
+| File | Milestone | Role | Change | Manifest check |
+|---|---|---|---|---|
+| `clang/lib/CodeGen/CGStmt.cpp` (block exists) | M12 | `M12/clang` (one WP with `M12/ir`, M12.a) | empty GNU asm with operands passes through as IR asm (backlog 2.3) | existing lit lines |
+| `clang/include/clang/Basic/Attr.td` | M13 | `M13/clang-hooks` | `TargetWebAssemblyOrMSIL` and the two import records (5.10.7) | `lit clang/test/Sema/attr-wasm.c`, `lit clang/test/CodeGen/WebAssembly/wasm-import-module.c`, `wasm-import-name.c`, `clang/test/AST/ast-dump-wasm-attr-import.c` |
+| `clang/include/clang/Basic/AttrDocs.td` | M13 | `M13/clang-hooks` | one MSIL paragraph in each import doc | `none documentation only` |
+| `clang/lib/CodeGen/CodeGenModule.cpp` (block exists) | M13 | `M13/clang-hooks` | import attributes to IR attributes (5.10.7) | existing lines |
+| `clang/lib/Parse/ParsePragma.cpp` | M13 | `M13/clang-hooks` | `#pragma comment` handler for MSIL triples (5.10.6) | `lit clang/test/Preprocessor/pragma_microsoft.c`, `lit clang/test/CodeGen/pragma-comment.c` |
+| `clang/include/clang/Basic/DiagnosticDriverKinds.td` (block exists) | M13 | `M13/clang-hooks` | reworded and new MSIL driver errors (5.10.5) | existing lines |
+| `llvm/lib/Object/IRSymtab.cpp` | M13 | `M13/lld-hooks` | linker options of MSIL modules in the symbol table (5.10.6) | `lit llvm/test/Object/X86/irsymtab*.ll`, `llvm/test/LTO/Resolution/X86/symtab.ll`, `symtab-elf.ll` (need `llvm-as`, `llvm-bcanalyzer` and `llvm-lto2`, M13 targets) |
+| `llvm/lib/TargetParser/Triple.cpp`, `llvm/unittests/TargetParser/TripleTest.cpp` (blocks exist) | M13 | `M13/lld-hooks`, `M13/hook-tests` | `isCompatibleWith(X, X-msil)` (5.9) | existing gtest line |
+| `llvm/lib/MC/MCContext.cpp`, `TargetRegistry.cpp` (blocks exist); `MCAsmBackend.cpp`; `llvm/lib/MC/CMakeLists.txt` | M13 | `M13/mc-hooks` | MSIL symbol, streamer and writer factories with clean-error stubs (5.8.11's MC hooks) | `MCContext.cpp`, `TargetRegistry.cpp`: existing lines; `MCAsmBackend.cpp`: its switch-default line becomes a block with `lit llvm/test/CodeGen/X86/addrsig.ll`, `file-directive.ll`, `cov-sections.ll`; `llvm/lib/MC/CMakeLists.txt`: `none CMake list` |
+| `llvm/lib/CMakeLists.txt`, `llvm/unittests/CMakeLists.txt` | M13 | `M13/cli-contract` | `add_subdirectory(CLI)` | `none build wiring of the fork's llvm/lib/CLI; built and run by the CLITests gate step` (5.7.1) |
+| `lld/include/lld/Common/Driver.h`, `lld/Common/DriverDispatcher.cpp`, `lld/tools/lld/lld.cpp`, `lld/tools/lld/CMakeLists.txt`, `lld/CMakeLists.txt`, `lld/unittests/AsLibAll/AllDrivers.cpp`, `lld/unittests/AsLibAll/CMakeLists.txt`, `lld/test/lit.cfg.py` | M13 | `M13/lld-hooks` | MSIL flavor, `msil-ld` alias, msil-first `parseProgname`, `"MSIL": "msil"` feature (lld-flavor 1.2, 5.9) | `Driver.h`, `DriverDispatcher.cpp`, `lld.cpp`: `lit lld/test/MinGW/driver.test`, `lld/test/ELF/version.test`, `lld/test/wasm/version.test` and the LLDAsLibAllTests gtest; `AllDrivers.cpp` and `lld/unittests/AsLibAll/CMakeLists.txt`: `gtest tools/lld/unittests/AsLibAll/LLDAsLibAllTests.exe` (target `LLDAsLibAllTests`, 5.6.11), which the gtest leg of `upstream-hooks.ps1` runs with `-NoSkip -MinTests 1`, never `compile` (the hooks tree is configured without lld); `lld/CMakeLists.txt`, `lld/tools/lld/CMakeLists.txt`: `none` (build wiring); `lld/test/lit.cfg.py`: `none` (feature map). `check-upstream-hooks.py` adds that binary to `GTEST_BINARIES` and the suite `lld` (`lld/test`) to `SUITE_ROOTS` |
+| `clang/lib/Driver/Driver.cpp` | M14 | `M14/clang-toolchain` | four hunks (5.10.2) | `lit clang/test/Driver/cl-options.c`, `linux-ld-args.c`, `msvc-link.c`, `mingw.cpp` (fast subset) |
+| `clang/lib/Driver/ToolChain.cpp` (block exists) | M14 | `M14/clang-toolchain` | `getAssemble`/`getLink`/`getLinkerWrapper` hooks removed (5.10.2) | block shrinks to the KCFI line |
+| `clang/lib/Driver/ToolChains/Clang.cpp` (block exists) | M14, M19 | `M14/clang-toolchain`, `M19/clang-object` | M14: `ClangAs` uses the new error; M19: the `AssembleJobAction` error goes | existing lines |
+| `clang/lib/Driver/CMakeLists.txt` | M14 | `M14/clang-toolchain` | `ToolChains/MSIL.cpp` next to `ToolChains/WebAssembly.cpp` (line 96) | `none CMake list` |
+
+No Phase 2 milestone edits `MCSymbol.h`, `MCContext.h`, `MCSection.h`, `MCExpr.h`, `MCFixup.h`, `Triple.h`, IR headers,
+`BinaryFormat/Magic.h`, `Object/Binary.h`, `Object/ObjectFile.h`, `clang/Options/Options.td`, `clang/Driver/Types.def`
+or a clang diagnostic **group** (mc-streamer 6.2; Q9 needs no new clang option). A WP that finds it needs one stops and
+reports (section 1.2); the orchestrator then plans it as a section 12 row with its measured cost.
+
+#### 5.6.4 Fork files in upstream directories (`fork-only` lines)
+
+| Milestone | Paths |
+|---|---|
+| M13 | `llvm/include/llvm/BinaryFormat/CLI.h`, `CLITables.def`, `CILOpcodes.def`, `MSILLink.h`; `llvm/include/llvm/MC/MCSymbolMSIL.h`, `MCMSILStreamer.h`, `MCMSILObjectWriter.h`; `llvm/lib/MC/MCMSILStreamer.cpp`, `llvm/lib/MC/MCMSILObjectWriter.cpp` (the MC-hook unit tests are `llvm/unittests/Target/MSIL/MSILMCObjectHooksTest.cpp` in `MSILTests`, M13.f, so `llvm/unittests/MC/` gets no MSIL file and its `CMakeLists.txt` stays unhooked) |
+| M14 | `clang/lib/Driver/ToolChains/MSIL.h`, `clang/lib/Driver/ToolChains/MSIL.cpp`, `clang/test/Driver/msil-link.c`, `clang/test/Driver/msil-lto.c`, `clang/test/Driver/msil-header-search.c` |
+| M19 | `clang/test/Driver/msil-object.c` |
+| M22 | `clang/test/Driver/msil-shared.c` |
+
+#### 5.6.5 MSIL target files, the lib/MC object files and the target's tests (`llvm/lib/Target/MSIL/`, `llvm/unittests/Target/MSIL/`, `llvm/test/CodeGen/MSIL/`, `llvm/test/MC/MSIL/`)
+
+Phase 2 changes only these target files; every other file of 5.2 is unchanged in Phase 2.
+
+| File | Owners (milestone/role) |
+|---|---|
+| `MSILPrepareIR.cpp` | `M12/ir` (one WP with `M12/clang`, M12.a; aliases and `extern_weak` in whole-program mode, empty asm with operands, `VAArgInst` diagnostic, section diagnostic, unreferenced discardable definitions); `M19/target-object` (object mode keeps aliases and weak undefined symbols, c-fidelity F5); `M20/trailer` (M12's section diagnostic goes: whole-program named sections, 5.8.10, 5.9.9) |
+| `MSILISelLowering.cpp` | `M12/isel` (i128 widths); `M15/target-imports` (f32 `ldexp`/`frexp` promotion decoupled from D14, 5.10.13) |
+| `MSILISelLoweringCall.cpp` | `M12/isel` (byval slot pool); `M15/target-imports` (linked-mode library-call policy); `M19/target-object` (undefined symbols in object mode) |
+| `MSILMachineFunctionInfo.h`, `.cpp` | `M12/isel` |
+| `MSILUtilities.h`, `.cpp` | `M15/target-imports` (import modes, 5.10.13) |
+| `MSILAsmPrinter.h`, `.cpp` | `M14/target` (assembly name from the module, D28; under the module flag `msil-lto`, an undefined function that the D14 table does not import is reported as `undefined symbol: <name>`, 5.9.6); `M15/target-imports` (linked-mode P/Invokes); `M18/target-mc` (structured BCL operands, ILBuilder bodies); `M19/target-object`; `M20/trailer` (`-S` adopts the shared trailer builder, Q5) |
+| `MSILMCInstLower.*`, `MCTargetDesc/MSILInstPrinter.*`, `MCTargetDesc/MSILMCExpr.*`, `MSILInstrInfo.td`, `MSILInstrFormats.td`, `MSILInstrMemory.td`, new `MSILInstrCIL.td` | `M18/target-mc` |
+| `MCTargetDesc/MSILTargetStreamer.*` | `M18/target-mc` (structured BCL members, `nomangle`, 5.10.11); `M19/target-object`; `M20/trailer` (the text `cli::TrailerSink`, 5.9.10) |
+| `MCTargetDesc/MSILMCTargetDesc.*`, `MCTargetDesc/CMakeLists.txt`, `CMakeLists.txt`, new `MCTargetDesc/MSILMCCodeEmitter.cpp`, `MSILAsmBackend.cpp`, `MSILFixupKinds.h` | `M18/target-encoder` (also `MSIL::getObjectTargetWriter(const MCAsmBackend &)` and `createMSILObjectTargetWriter()`, which returns M13's default writer until M19, 5.8.11); `MSILMCTargetDesc.*` and `MCTargetDesc/CMakeLists.txt` again in `M19/target-writer` |
+| new `MCTargetDesc/MSILObjectWriter.h`, `MCTargetDesc/MSILObjectWriter.cpp`, `MCTargetDesc/MSILTargetObjectStreamer.cpp` | `M19/target-writer` (M19.a) |
+| `MSILTargetMachine.h` (`isObjectMode()`), `MSILTargetMachine.cpp` (`-msil-object-form`), `MSILAddMissingPrototypes.cpp` | `M19/target-object` (M19.b: object mode and the object-mode rules of the prototype pass, 5.8.10) |
+| `MSILFixFunctionBitcasts.cpp` | `M19/target-object` (object-mode rules, 5.8.10); `M20/trailer` (the `msil-lto` adapter branch through `cli::classifyCall`, 5.9.8; M19's object-mode rules stay) |
+| `MSILDataSegment.*` | `M19/target-object` (object mode: one record segment per defined global, 5.8.10); `M20/trailer` (offsets from `cli::layoutImage`, 5.9.9) |
+| the shared trailer builder (`.cctor`, `'<msil>Main'`, data-import initializer) | `M20/trailer`, in `llvm/include/llvm/CLI/Trailer.h` and `llvm/lib/CLI/Trailer.cpp` (5.9.10, 5.6.7) |
+| `llvm/unittests/Target/MSIL/*` | `M13/hook-tests` (`CMakeLists.txt`, `MSILMCObjectHooksTest.cpp`), `M15/target-tests` (`CMakeLists.txt`, `MSILImportsTest.cpp`), `M18/encoder-tests` (`CMakeLists.txt`, `MSILCILRecordsTest.cpp`, `MSILMCCodeEmitterTest.cpp`, `MSILTargetStreamerTest.cpp`); M19 adds no unit test |
+| `llvm/test/CodeGen/MSIL/` | `M12/llc-tests` (M12.c: the whole directory, its new tests and every existing test whose expectations M12 changes); `M13/hook-tests` (`irsymtab-linker-options.ll`); `M14/lld-tests` (M14.e: `lto-module-flags.ll`); `M15/target-tests` (M15.e: `imports-linked.ll`); `M18/llc-tests` (M18.e: the whole directory, mechanical Q26 and `nomangle` updates only, no added or deleted file); `M19/llc-object-tests` (M19.d: `object-*.ll`, and deletes `obj-unsupported.ll`); `M20/cli-tests` (M20.d: `reloc-loop-threshold.ll`, `function-bitcasts-lto.ll`, `imports-linked-data.ll`, `sections-whole-program.ll`, and `section-errors.ll`, whose M12 section diagnostic goes) |
+| `llvm/test/MC/MSIL/` | `M18/mc-tests` (M18.d creates it) |
+| `llvm/test/tools/UpdateTestChecks/update_llc_test_checks/Inputs/msil-basic.ll`, `msil-basic.ll.expected` | `M18/llc-tests` (regenerated with M18's llc) |
+| `llvm/include/llvm/MC/MCSymbolMSIL.h`, `MCMSILStreamer.h`, `MCMSILObjectWriter.h`, `llvm/lib/MC/MCMSILStreamer.cpp`, `MCMSILObjectWriter.cpp` (fork-only from M13) | `M13/mc-hooks`. No later Phase 2 milestone edits them: M18 and M19 override the writer and register the streamer in the target (M13.c). A fix loop that must change them gives the symbol and streamer files to `M18/target-mc` and the object-writer files to `M19/target-writer` through a fix-loop grant |
+
+`MSILTargetObjectFile.*` and `MCTargetDesc/MSILMCAsmInfo.cpp` do not change in Phase 2.
+
+#### 5.6.6 msil-ld files (`lld/MSIL/`, names per 5.9; lld-flavor 6.1, native-imports 8.1, bcl-binding 10, exports-multiasm 14)
+
+One row per milestone role, with the role splits of M15, M20, M21 and M22.
+`(root)` marks the role of a WP without a Depends-on line in its milestone; rule 7 (5.6.1) gives it the headers that
+the milestone's other lld roles call. `X.*` means `X.h` and `X.cpp`.
+
+| Milestone | Role (WP) | Files under `lld/MSIL/` (and others named) |
+|---|---|---|
+| M13 | `M13/lld-hooks` | `CMakeLists.txt`, `Driver.cpp` (stub), `Options.td` (stub) |
+| M14 | `M14/lld-symbols` (M14.b, root) | `InputFiles.*`, `Symbols.*`, `SymbolTable.*`, and the shared headers `Config.h` and `LTO.h` (declarations per 5.9.2, 5.9.3 and 5.9.13; M14.a's `Driver.cpp` and M14.c's `LTO.cpp` include them) |
+| M14 | `M14/lld-driver` (M14.a) | `CMakeLists.txt`, `Options.td`, `Driver.cpp` |
+| M14 | `M14/lld-lto` (M14.c) | `LTO.cpp`, `MapFile.*` (plus the clang and target files of 5.6.3, 5.6.5 and 5.6.8) |
+| M15 | `M15/lld-native` (M15.a) | `NativeLibraries.*`, `Driver.cpp`, `Options.td`, `Config.h`, `CMakeLists.txt`, `InputFiles.*`, `Symbols.*`, `SymbolTable.*`, `LTO.*`, `MapFile.*` (search rules 5.10.9, native kinds, late binding, import annotation 5.10.13, the map's native entries 5.9.14) |
+| M20 | `M20/lld-objects` (M20.b, root among the lld roles) | `CMakeLists.txt`, `Options.td`, `Config.h`, `Driver.cpp`, `InputFiles.*`, `InputChunks.*`, `TokenMap.*`, `Symbols.*`, `SymbolTable.*`, `MarkLive.*`, `LTO.*`, and `Writer.h` (its `Driver.cpp` calls `writeResult()`); `clang/lib/Driver/ToolChains/MSIL.{h,cpp}` |
+| M20 | `M20/lld-writer` (M20.c) | `Signatures.*`, `OutputSegment.*`, `Relocations.*`, `Synthetic.*`, `Writer.cpp`, `MapFile.*`, `NativeLibraries.*` (data imports) |
+| M21 | `M21/lld-refs` (M21.a, root) | `ReferenceSet.*`, `AssemblyFiles.*` (5.9.2's `ReferenceAssemblyFile` and 5.11.1's `createManagedLibraryFile`), `InputFiles.*`, `Options.td`, `Config.h`, `Driver.cpp`, `CMakeLists.txt`, and `BCLBinder.h` (5.11.5's declarations, `printBuiltinBCLTable` and `BCLBinder::printBinding` included, which its `Driver.cpp` calls) |
+| M21 | `M21/lld-bcl` (M21.b) | `BCLBinder.cpp`, `TokenMap.*`, `Synthetic.*`, `Relocations.*`, `Writer.*`; `llvm/include/llvm/CLI/BCLMembers.def`, `llvm/include/llvm/CLI/Trailer.h`, `llvm/lib/CLI/Trailer.cpp` |
+| M22 | `M22/lld-exports` (M22.a) | `Exports.*`, `Options.td`, `Config.h`, `Driver.cpp`, `CMakeLists.txt`, `LTO.cpp`; `llvm/include/llvm/CLI/SymbolTable.h`, `llvm/lib/CLI/SymbolTable.cpp`, `llvm/include/llvm/CLI/BCLMembers.def` |
+| M22 | `M22/lld-import` (M22.c) | `AssemblyFiles.*` (5.9.2's name; there is no `InputAssembly.*`), `InputFiles.*`, `Symbols.*`, `SymbolTable.*`, `TokenMap.*`, `Signatures.*`, `Relocations.*` |
+| M22 | `M22/lld-writer` (M22.b) | `Synthetic.*`, `Writer.*`; `llvm/include/llvm/CLI/Trailer.h`, `llvm/lib/CLI/Trailer.cpp` |
+
+`lld/test/MSIL/` (rule 6: the whole directory, one test role per milestone):
+
+| Milestone | Role (WP) | Why the whole directory | Files it adds |
+|---|---|---|---|
+| M13 | `M13/hook-tests` (M13.f) | creates it | `lit.local.cfg`, dispatch tests |
+| M14 | `M14/lld-tests` (M14.e) | msil-ld's first options and texts | the M14 tests (5.9) |
+| M15 | `M15/native-tests` (M15.d) | M15 changes M14's texts: `-l` search and the classification of library candidates, embedded library requests, `--ucrtbase-imports`, linked-text P/Invokes (`assembly`, D14 never consulted), undefined-symbol reporting moving into msil-ld | `native-*.test`, `Inputs/native/` |
+| M18 | `M18/llc-tests` (M18.e) | Q26: every `--lto-emit-asm` FileCheck line with long branches, long `ldc.i4` forms or `pinvokeimpl(... cdecl)` (mechanical update, as for `llvm/test/CodeGen/MSIL`) | none |
+| M20 | `M20/lld-tests` (M20.e) | CIL objects accepted, the LTO-only error gone, native data imports, the shared trailer | `obj-*.test` |
+| M21 | `M21/bcl-tests` (M21.d) | the BCL stand-in's `needs --reference ... not supported yet` and the positional-`.dll` error retire; `--reference` options, `--print-bcl-table`, `--print-bcl-binding` | `bcl-*.test`, `Inputs/fakepack/` |
+| M22 | `M22/shared-tests` (M22.e) | `-shared is not supported yet` and the positional toolchain-library error retire; `-e` with `-shared`; M21's `--print-bcl-table` lines gain M22's attribute entries | `shared-*.test`, `Inputs/shared/` |
+
+Any other milestone that changes what these tests pin gives its test role the directory the same way (rule 6).
+
+#### 5.6.7 ECMA-335 library (5.7)
+
+`M13/cli-contract` (M13.d) owns `BinaryFormat/CLI.h`, `CLITables.def`, `CILOpcodes.def`,
+`llvm/include/llvm/CLI/Handles.h`, `TableSchema.{h,cpp}`, `llvm/lib/CLI/CMakeLists.txt` and the two upstream CMake
+lines; its test role (M13.e) owns `llvm/unittests/CLI/CMakeLists.txt`, `CLIFormatTest.cpp`, `TableSchemaTest.cpp` and
+5.8's `MSILLinkTest.cpp`; `BinaryFormat/MSILLink.h` belongs to `M13/mc-hooks` (M13.c). M16 and M17 roles own the library
+files as 5.7 lists them (metadata-writer 7: WPs B, C, D, G in M16; E, F and the link-info/P2-C codec in M17): the M17
+codec role (M17.c) owns `LinkInfo.{h,cpp}` and `SymbolTable.{h,cpp}`, the M17 unit-test role (M17.e) `LinkInfoTest.cpp`
+and `SymbolTableTest.cpp`; `M17/cli-dump` owns `llvm/tools/llvm-cil-dump/` and `llvm/tools/llvm-cil-copy/`, and the test
+role `M17/cli-tests` owns `llvm/test/tools/llvm-cil-dump/`, `llvm/test/tools/llvm-cil-copy/` and, in M17,
+`msil/utils/mdtools/cli-corpus-check.py`. `M18/target-mc` creates `llvm/include/llvm/CLI/BCLMembers.def` and the
+header-only `BCLMembers.h` (5.7.2); `M20/trailer` extends the `.def` for the trailer and the spill classes
+(`Marshal_StringToHGlobalUni`, `EntryPointNotFoundException_ctor` and the type `Object`, 5.11.7), `M21/lld-bcl` adds the
+`NativeLibrary` entries (Required, not mscorlib-safe, requested only when the references define them, 5.10.12; no `Object` entry) and `M22/lld-exports` the attribute members of 5.11.7. In
+M20, `llvm/include/llvm/CLI/{ImageLayout,Trailer,CallAdapter}.h`, their `.cpp` files and `llvm/lib/CLI/CMakeLists.txt`
+belong to `M20/trailer`, and `llvm/unittests/CLI/CMakeLists.txt`, `ImageLayoutTest.cpp`, `TrailerTest.cpp` and
+`CallAdapterTest.cpp` to `M20/cli-tests` (M20.d); `Trailer.*` again to `M21/lld-bcl` and `M22/lld-writer` (5.6.6). In
+M22, `SymbolTable.{h,cpp}` go to `M22/lld-exports` and `SymbolTableTest.cpp` to `M22/shared-tests` (5.6.6).
+
+#### 5.6.8 clang driver and front-end tests
+
+| File | Owners |
+|---|---|
+| `clang/lib/Driver/ToolChains/MSIL.h`, `MSIL.cpp` | `M14/clang-toolchain`; `M15/clang-libs` (final default libraries, 5.10.4); `M19/clang-object` (`-c` writes objects, 5.10.5); `M20/lld-objects` (deletes `getLTOMode`); `M22/harness` (`/LD`, `/LDd`; the role `M22/clang-shared` merged into it) |
+| `clang/test/Driver/msil-toolchain.c` | `M13/hook-tests` (reworded error text); `M14/driver-tests` (object and LTO blocks, 5.12.13); `M19/object-tests` (object block moves to `msil-object.c`); `M20/lld-tests` (compile-and-link runs `cc1 -emit-obj`) |
+| `clang/test/Driver/msil-link.c`, `msil-lto.c`, `msil-header-search.c` | `M14/driver-tests`; `msil-link.c` and `msil-lto.c` again in `M15/driver-tests` (M15.e; the windows-msvc default libraries end with `--ucrtbase-imports`); `msil-link.c` and `msil-lto.c` again in `M20/lld-tests` |
+| `clang/test/Driver/msil-object.c` | `M19/object-tests`; `M20/lld-tests` |
+| `clang/test/Driver/msil-shared.c` | `M22/shared-tests` |
+| `clang/test/CodeGen/MSIL/import-attributes.c`, `pragma-comment-lib.c` | `M13/hook-tests` |
+| `clang/test/CodeGen/MSIL/inline-asm.c`, `asm-barrier.c` | `M12/exec-tests` |
+| `clang/test/CodeGen/MSIL/section-globals.c` | `M12/exec-tests` (new: M12's section diagnostic); `M20/cli-tests` (M20.d: the diagnostic goes, 5.12.13) |
+| `clang/test/CodeGen/MSIL/emit-obj-unsupported.c` (deleted), `clang/test/CodeGen/MSIL/emit-obj.c` (new) | `M19/object-tests` (M19.e, 5.12.13) |
+| `clang/test/CodeGen/MSIL/` (every file) | `M18/llc-tests` (M18.e: mechanical Q26 and `nomangle` updates only, no added or deleted file, 5.12.13) |
+
+#### 5.6.9 Harness, tests, CI and documentation (`msil/`, `.github/`, `llvm/docs/MSIL/`)
+
+| File | Owners |
+|---|---|
+| `msil/test/lit.cfg.py` | `M12/infra`, `M14/harness`, `M15/harness`, `M16/harness` (`msil_mdcanon`), `M17/harness` (`msil_cil_dump`), `M20/harness`, `M21/harness`, `M22/harness`, `M23/harness` |
+| `msil/test/CMakeLists.txt` (`check-msil` paths and `DEPENDS`) | `M13/infra` (`lld/test/MSIL`), `M14/harness`, `M17/harness` (llvm-cil-dump, llvm-cil-copy), `M18/harness` (`llvm/test/MC/MSIL`), `M19/harness` (`msil-object.c`), `M22/harness` (`clang/test/Driver/msil-shared.c`) |
+| `msil/utils/msil-run.py` | `M12/infra` (`--native --runner wsl`), `M15/harness` (`--dep`) |
+| `msil/utils/msil-verify.py` | `M15/harness` (`--dep`), `M20/harness` (`--md-baseline`), `M21/harness` (`--skip-peverify`), `M22/harness` (`--dep-dir`, `--also-verify-deps`) |
+| `msil/utils/msil-jitall.py` | `M15/harness` (`--dep`), `M22/harness` (`--dep-dir`) |
+| `msil/utils/jitall/build-jitall.py` | `M22/harness` (`--csharp`; unchanged before M22) |
+| `msil/utils/update-expected.py` | `M12/infra` (Linux oracle, `clang_rt` on Windows), `M14/harness` (`%{msil_prog}` tests), `M15/harness`, `M22/harness`, `M23/harness` |
+| `msil/utils/msil-prog.py` | `M14/harness` (`--stock-src`); `M15/harness`, `M20/harness` (`--pipeline obj`, `--equiv-out`, `--equiv-skip`), `M22/harness` (`--shlibs`) |
+| `msil/utils/il-snapshot.py` | `M15/harness`; `M18/harness` (`--normalize forms`); `M20/harness` (`--llc-arg`, `--skip-changed`) |
+| `msil/utils/check-il-forms-diff.py` | `M18/harness` |
+| `msil/utils/linux-oracle/start.c`, `make-linux-sysroot.py`, `msil-wsl-dotnet.sh` | `M12/infra` |
+| `msil/utils/make-glibc-sysroot.sh` | `M15/harness` |
+| `msil/utils/mdtools/` | `M16/cli-oracle`; `cli-corpus-check.py` again in `M17/cli-tests`, `M18/harness`, `M19/harness`; `mdcanon.cs` gains the 5.12.6 options in `M16/cli-oracle` |
+| `msil/utils/msil-equiv.py`, `equiv-allowed.txt` | `M20/harness`; `equiv-allowed.txt` again in `M22/harness` (`skip O4` lines for library links, 5.12.6) |
+| `msil/utils/check-mscorlib-safe.py` | `M21/harness` |
+| `msil/utils/corpus/` | `M23/corpus` |
+| `msil/utils/ci/lit-legs.ps1`, `lit-legs.sh` | `M12/infra` (`wsl-quick`, `expected-linux`, `@rsp`), `M14/harness` (`lto`, `det`), `M15/harness` (`hosted`), `M17/harness` (net8 paths), `M18/harness` (`encoder-parity`), `M19/harness` (`obj-text`, `obj-text-wsl`), `M20/harness` (`obj`, `obj-wsl`), `M21/harness` (`refs-*`), `M22/harness` (`clang/test/Driver/msil-shared.c` in the net8 lists), `M23/harness` (5.12.11's M23 leg set, default pipeline) |
+| `msil/utils/ci/build-targets.txt`, `build.ps1`, `build.sh`, `unit-tests.ps1`, `unit-tests.sh` | `M13/infra` (creates `build-targets.txt`), `M15/harness`, `M17/harness` (5.6.11 targets) |
+| `msil/utils/build/msil-build.ps1` | `M13/infra` (`-Standard`, 5.6.11) |
+| `msil/utils/ci/upstream-hooks.ps1`, `check-upstream-hooks.py` | `M13/infra` (fork prefixes, syntax-check entries); `check-upstream-hooks.py` again in `M17/harness` (rule 1) |
+| `msil/utils/upstream-hooks.txt` | the infra or harness role of every milestone that touches an upstream file: `M12/infra`, `M13/infra`, `M14/harness`, `M19/harness`, `M22/harness` |
+| `msil/utils/ci/det-manifest.py` | `M23/harness` |
+| `msil/utils/run-m1-gate.ps1` | `M12/infra`, `M23/harness` (the phase-exit rows) |
+| `msil/utils/tools/msil-tools.proj` | `M21/harness` (net48 reference package for the Linux CI job) |
+| `msil/cmake/caches/MSIL.cmake` | `M13/infra` (`LLVM_ENABLE_PROJECTS "clang;lld"`) |
+| `.github/workflows/msil-ci.yml` | `M12/infra` (setup-dotnet pin, Q38), `M13/infra`, `M21/harness`, `M23/harness` (5.12.12) |
+| `msil/test/M1/**` (new files only) | `M12/exec-tests` (also the header comment of the existing `04-frames/int128-return.c`); `M20/harness` adds `REQUIRES: msil-pipeline=asm` to the four explicit-RUN tests |
+| `msil/test/M2/lit.local.cfg`, `M2/00-link/`, `01-archive/`, `02-lto/`, `06-det/`, `08-semantics/` | `M14/exec-tests` (`08-semantics/` shared with 5.8/5.9: cases per 5.9.16) |
+| `msil/test/M2/03-native/`, `09-hosted/`, `08-semantics/pragma-comment-lib*`, `08-semantics/native-callback.test` | `M15/exec-tests`; `03-native/` again in `M20/exec-tests` (data imports) |
+| `msil/test/M2/08-semantics/knr-two-arities.test`, `.expected` | `M19/llc-object-tests` (M19.d; run on `lto` in M19) |
+| `msil/test/M2/07-equiv/`; `00-link/`, `02-lto/`, `06-det/`, `08-semantics/` (object-path cases) | `M20/exec-tests` |
+| `msil/test/M2/05-refs/` | `M21/exec-tests` |
+| `msil/test/M2/04-shared/`, `08-semantics/p2c-*` | `M22/shared-exec-tests` (M22.f; the lld and codec tests are `M22/shared-tests`, M22.e) |
+| `msil/test/M2/08-semantics/` (whole directory: `matrix.txt`, coverage check, missing and Phase 3 rows) | `M23/linksem-tests` |
+| `msil/test/Programs/**` | `M23/programs` |
+| `msil/test/harness/**` (new self-tests only) | `M12/infra` (`linux-oracle.test`), `M14/harness`, `M15/harness`, `M16/harness` and `M17/harness` (`canon-listing.test`, `canon-agree.test`), `M20/harness` (`equiv/`, `pipeline-obj/`), `M21/harness` (`ref-flags.test`, `skip-peverify.test`), `M22/harness` (`shlibs.test`, `csc.test`, `verify-data-cctor.test`); `M23/harness` owns the whole directory |
+| `msil/test/harness/prog/` (the whole directory, rule 6: it pins the `%{msil_prog}`, `%{msil_c}` and `%{msil_ldflags}` expansions and msil-prog.py's commands) | `M14/harness` (creates it), `M15/harness` (`%{msil_ldflags}` loses `-nodefaultlibs` and gains `--sysroot`; `--dep`), `M20/harness` (`%{msil_prog}` under `asm` means `obj`; `--pipeline obj`, `--equiv-out`, `--equiv-skip`), `M21/harness` (`%{msil_ref_flags}` in `%{msil_ldflags}`), `M22/harness` (`--shlibs`), `M23/harness` (default pipeline `obj`) |
+| `llvm/docs/MSIL/Status.md`, `GettingStarted.md`, `msil/README.md`, `msil/test/README.md`, `msil/utils/build/README.md` | the `docs` role of every milestone (in M13, M16 and M17 the infra or harness WP also holds the docs role); `llvm/docs/MSIL/TestCorpus.md` also in `M23/docs` |
+
+#### 5.6.10 The M13 batch and its measured rebuild cost
+
+Every upstream hook and every widely-included or shared header Phase 2 needs lands in M13 (the M1 of Phase 2), so
+M14-M23 rebuild only new libraries, the MSIL target, clang driver TUs and lld. Measured on 2026-10-21 from the shared
+build's `.ninja_deps` (3,218 objects) and `.ninja_log` (3.17 CPU-hours of compile = the 47-minute full rebuild), read
+only; Attr.td variants were run through the tree's `clang-tblgen` into scratch with `--write-if-changed` semantics
+compared (scripts in `C:\llvm-msil-scratch\p2-plan\tooling\`):
+
+| M13 edit | What rebuilds | Cost |
+|---|---|---|
+| `Attr.td`: new `TargetWebAssemblyOrMSIL` and the two import records retargeted to it (5.10.7) | of the 22 generated `.inc` files only `AttrHasAttributeImpl.inc` (1 object) and `AttrParsedAttrImpl.inc` (3 objects) change | ~95 CPU-s (`ParsedAttr.cpp` 21 s) |
+| `AttrDocs.td` text | `AttrDocTable.inc` (`AttrDocTable.cpp`) | 2 s |
+| for contrast: a new attribute record or a shared `ParseKind` (backlog 2.5 (a)/(b)) | `Attrs.inc`/`AttrParsedAttrList.inc`: 519-523 objects | 3,500 CPU-s, 31%, ~8.4 min: **not used** |
+| `DiagnosticDriverKinds.td`: one reworded and one new error, no new group | `DiagnosticDriverKinds.inc`: 84 objects | 282 CPU-s (2.5%), ~0.7 min |
+| `CodeGenModule.cpp`, `ParsePragma.cpp` | 1 object each | 25 s, 16.5 s |
+| `IRSymtab.cpp`, `Triple.cpp` (+ `TripleTest.cpp`) | 1 object each | 1.9 s, 2.8 s (+16.9 s) |
+| `MCContext.cpp`, `TargetRegistry.cpp`, `MCAsmBackend.cpp` | 3 objects | 8.6 s |
+| new headers (`BinaryFormat/CLI.h`, `CLITables.def`, `CILOpcodes.def`, `MSILLink.h`, `MC/MCSymbolMSIL.h`, `MCMSILStreamer.h`, `MCMSILObjectWriter.h`) | no existing dependents | 0 |
+| relinks | `clang.exe` 7.2 s, `opt.exe` 3.8 s, `llc.exe` 2.2 s, `MSILTests` 1.1 s, `MCTests` 1.0 s, `TargetParserTests` 0.3 s | ~20 s |
+| CMake lists (`llvm/lib`, `llvm/unittests`, `llvm/lib/MC`, lld) | one CMake regeneration | not measured (minutes) |
+| new: `lld` (126 compiles, 5 LLVM TUs, 7 TableGen runs, lld-flavor 5) | first build | 2.5-3 min wall at -j4 |
+| new: `llvm-ar` and its three copies, `llvm-nm`, `llvm-objdump`, `llvm-readobj` (5 + 3 + 11 + 13 TUs), `llvm-as`, `llvm-bcanalyzer`, `llvm-lto2`, `CLITests` skeleton, `LLDAsLibAllTests` | first build | ~2-4 min (estimate: mostly links) |
+
+**Result: M13 is not a clang-wide rebuild.** The hooks compile in about 1.5-2 minutes of wall time; with the new tools
+and the regeneration the M13 build is about 8-12 minutes. Q35's spelling holds; only the brief's rebuild estimate
+changes (open question 1).
+
+#### 5.6.11 Build targets per milestone, and disk on D:
+
+There is **one** list. It only grows, and every milestone builds all of it, so no gate runs a stale binary (a stale
+`LLDAsLibAllTests` or `llvm-lto2` would test an old lldMSIL or LTO in the upstream-hooks legs of M14 and M19):
+
+| Milestones | The complete build-target list (in this order) |
+|---|---|
+| M12 | the M11 set: `llc opt clang FileCheck not count split-file llvm-config llvm-profdata TargetParserTests MCTests MSILTests` |
+| M13, M14 | the M11 set, then `lld llvm-ar llvm-ranlib llvm-lib llvm-dlltool llvm-nm llvm-objdump llvm-readobj llvm-as llvm-bcanalyzer llvm-lto2 CLITests LLDAsLibAllTests` |
+| M15, M16 | the M13 list, then `yaml2obj llvm-mc` (versioned `.so` inputs, native-imports 9.1) |
+| M17-M23 | the M15 list, then `llvm-cil-dump llvm-cil-copy` |
+
+Why each M13 target: `lld` builds `lld.exe` and its copies `msil-ld`, `ld.lld`, `lld-link`, `ld64.lld` and `wasm-ld`
+(`add_lld_symlink` passes `ALWAYS_GENERATE`). `llvm-ranlib`, `llvm-lib` and `llvm-dlltool` are **not** built by
+`ninja llvm-ar`: `llvm/tools/llvm-ar/CMakeLists.txt:22-24` calls `add_llvm_tool_symlink` without `ALWAYS_GENERATE`, so
+each copy is its own custom target (`AddLLVM.cmake`, `build llvm-lib: phony tools/llvm-ar/llvm-lib`). Without them
+`llvm-lib /def:` in lld/test/MSIL (M14, M15) silently resolves to the VS 22.x `llvm-lib` on msil-env's PATH, and the
+Linux CI job has none. `llvm-as` and `llvm-bcanalyzer` serve the `IRSymtab.cpp` hook's upstream tests, `llvm-lto2` its
+`LTO/Resolution/X86/symtab*.ll` tests, `LLDAsLibAllTests` the `AllDrivers.cpp` hook (D9 row of section 12).
+
+**One source.** `M13/infra` writes the list to `msil/utils/ci/build-targets.txt` (one target per line, `#` comments
+allowed), makes `build.ps1` and `build.sh` read it, and gives `msil/utils/build/msil-build.ps1` the switch `-Standard`
+(build every target of that file, then any target named on the command line; `$Targets` is no longer mandatory with
+`-Standard`). `M15/harness` and `M17/harness` append their targets to the file. From M13 on, gate step G1 is
+`msil-build.ps1 -Standard`; each milestone's **Build targets** line spells out its row of the table above, and the
+role that edits `build-targets.txt` checks the file against that row.
+
+Never `check-lld`, `check-llvm`, `check-clang` or `check-all` (lld-flavor 5). Disk: the lld copies cost about 0.4 GB;
+the three `llvm-ar` copies, `llvm-lto2`, `LLDAsLibAllTests` and the other new tools about 1.0-1.5 GB (estimate from
+the sizes of `llc.exe`/`opt.exe`, 59 MB each); D: had 21-23 GB free on 2026-10-21. Every Phase 2 gate prints D:'s
+free space first; below 8 GB the orchestrator reports it to the user before building.
+
+### 5.7 ECMA-335 library (llvm/lib/CLI)
+
+One library reads and writes ECMA-335 modules for every Phase-2 consumer (decision Q28): the MSIL target (binary CIL
+encoding and synthesized bodies from M18, netmodule objects from M19), msil-ld (object input, the output PE, reference
+binding, P2-C inputs; M20-M22) and the tools `llvm-cil-dump` and `llvm-cil-copy`. Format constants live in
+`llvm/include/llvm/BinaryFormat/CLI.h` with two X-macro files; everything else is the LLVM component `CLI`
+(`LLVMCLI`), namespace `llvm::cli`. It lands in three milestones:
+
+- **M13**: format headers, handles, the table schema, the CMake hooks and the `CLITests` skeleton.
+- **M16** (writer half): blobs, signatures, custom attributes; opcodes, IL builder, IL decoder, method bodies; heaps
+  and `MetadataBuilder`; the C# oracle tools `mdump` and `mdcanon`.
+- **M17**: PE writer, PE image and metadata reader, dumper, `llvm-cil-dump`, `llvm-cil-copy`, and the codecs of the
+  link-info record and the P2-C symbol-table attribute.
+
+Later milestones add files that other contracts specify, as 5.7.1's table lists: the public BCL member list
+`BCLMembers.{def,h}` in M18 (5.7.2, content 5.11.7) and the link model's `ImageLayout`, `Trailer` and `CallAdapter` in
+M20 (5.9.8-5.9.10). M20-M22 extend `BCLMembers.def` and `Trailer`, and M22 extends the symbol-table codec.
+
+Sources: metadata-writer 4-7 (its prototype `metadata-writer-files/py/cliwriter.py` is an executable specification:
+when it and the C++ library disagree on the same input, one of them has a bug), bcl-binding 5.2-5.7 and 7,
+mc-streamer 5.3-5.5 and 5.10, objfmt-binding 3 and 11, lld-flavor 4, exports-multiasm 5 and 10.4, tests-p2 3.7-3.9,
+judge-dotnet-value 5.7 and 7.3. Every name below is a contract (section 1.9). A WP that needs a different name or
+signature stops and reports it; the orchestrator records the change in section 12 before the milestone commit.
+
+**Reading this section.** It is about 100 KB, so a Reads line cites subsections of 5.7, never "5.7" or "this section"
+as a whole. The rules:
+- a WP that writes files under `llvm/include/llvm/CLI/`, `llvm/lib/CLI/` or `llvm/unittests/CLI/` cites 5.7.1
+  (layout, CMake, conventions) and 5.7.12 (errors, determinism, limits), plus the subsections of the headers it
+  writes or tests;
+- a consumer cites the subsections of the headers it calls (5.7.15 lists them per milestone);
+- a test that FileChecks `llvm-cil-dump` or `%msil_canon` output cites 5.7.10, and also 5.8.11 when it checks
+  `--link-info`.
+
+#### 5.7.1 Layout, CMake and dependencies
+
+| Path | Contents | Lands |
+|---|---|---|
+| `llvm/include/llvm/BinaryFormat/CLI.h` | constants, enums, tokens, compressed integers, on-disk headers, limits (5.7.2); header-only | M13 |
+| `llvm/include/llvm/BinaryFormat/CLITables.def` | ECMA-335 II.22 schema (5.7.2) | M13 |
+| `llvm/include/llvm/BinaryFormat/CILOpcodes.def` | ECMA-335 III opcodes (5.7.2) | M13 |
+| `llvm/include/llvm/CLI/Handles.h` | `EntityHandle`, `TokenRef` (5.7.2); header-only | M13 |
+| `llvm/include/llvm/CLI/TableSchema.h`, `llvm/lib/CLI/TableSchema.cpp` | column metadata, coded indexes, `MetadataSizes` (5.7.6) | M13 |
+| `llvm/include/llvm/CLI/{Blob,Signature,CustomAttribute}.h`, `llvm/lib/CLI/{Blob,Signature,CustomAttribute}.cpp` | 5.7.3, 5.7.4 | M16 |
+| `llvm/include/llvm/CLI/{Opcodes,ILBuilder,ILDecoder,MethodBody}.h`, `llvm/lib/CLI/{Opcodes,ILBuilder,ILDecoder,MethodBody}.cpp` | 5.7.5 | M16 |
+| `llvm/include/llvm/CLI/{Heaps,MetadataBuilder}.h`, `llvm/lib/CLI/{Heaps,MetadataBuilder}.cpp` | 5.7.6 | M16 |
+| `llvm/include/llvm/CLI/PEWriter.h`, `llvm/lib/CLI/PEWriter.cpp` | 5.7.7 | M17 |
+| `llvm/include/llvm/CLI/{PEImage,MetadataReader}.h`, `llvm/lib/CLI/{PEImage,MetadataReader}.cpp` | 5.7.8 | M17 |
+| `llvm/include/llvm/CLI/LinkInfo.h`, `llvm/lib/CLI/LinkInfo.cpp` | 5.7.9 | M17 |
+| `llvm/include/llvm/CLI/SymbolTable.h`, `llvm/lib/CLI/SymbolTable.cpp` | the P2-C symbol-table codec (5.7.9, 5.9.15) | M17 (M22 extends it, and M22's commit freezes the format) |
+| `llvm/include/llvm/CLI/Dump.h`, `llvm/lib/CLI/Dump.cpp` | 5.7.10 | M17 |
+| `llvm/include/llvm/CLI/BCLMembers.def`, `llvm/include/llvm/CLI/BCLMembers.h` | the public BCL member list (5.7.2; content 5.11.7); `BCLMembers.h` is header-only | M18 (`M18/target-mc`; the `.def` extended in M20, M21 and M22) |
+| `llvm/include/llvm/CLI/{ImageLayout,Trailer,CallAdapter}.h`, `llvm/lib/CLI/{ImageLayout,Trailer,CallAdapter}.cpp` | the link contract's lib/CLI files (5.9.8-5.9.10) | M20 (`Trailer.*` extended in M21 and M22) |
+| `llvm/lib/CLI/CMakeLists.txt` | the component | M13 (created), M16, M17 and M20 (extended) |
+| `llvm/tools/llvm-cil-dump/{CMakeLists.txt,llvm-cil-dump.cpp}`, `llvm/tools/llvm-cil-copy/{CMakeLists.txt,llvm-cil-copy.cpp}` | 5.7.10 | M17 |
+| `llvm/unittests/CLI/` | gtest binary `CLITests` (5.7.13) | M13, M16, M17, M20, M22 |
+| `llvm/test/tools/llvm-cil-dump/`, `llvm/test/tools/llvm-cil-copy/` | lit tests over yaml2obj inputs | M17 |
+| `msil/utils/mdtools/` | `mdump.cs`, `mdcanon.cs`, `build-mdtools.py`, `check-cil-defs.py`, `cli-corpus-check.py` (5.7.11) | M16 (M17, M18 and M19 extend `cli-corpus-check.py`) |
+
+Rules:
+- **CMake.** `add_llvm_component_library(LLVMCLI <sources> ADDITIONAL_HEADER_DIRS ${LLVM_MAIN_INCLUDE_DIR}/llvm/CLI
+  LINK_COMPONENTS BinaryFormat MC Support TargetParser)`. MC is only for `StringTableBuilder` (the `#Strings` heap),
+  and TargetParser only for `PEOptions::get(const Triple &, ...)`. There is **no `Object` dependency**: PE headers
+  are written and parsed with `support::endian` and the constants of `BinaryFormat/COFF.h`. The unit tests use
+  `add_llvm_unittest(CLITests ...)` with `LLVM_LINK_COMPONENTS CLI Support TargetParser` and `LLVMTestingSupport`
+  (from M13: `MSILLinkTest.cpp` builds `Triple`s for `MSILLink::setDataModel`, and LLVM lists the components a target
+  uses directly).
+- **Upstream-file edits.** Exactly two one-line `add_subdirectory(CLI)` edits:
+  - `llvm/lib/CMakeLists.txt`, after `add_subdirectory(Object)` (line 31);
+  - `llvm/unittests/CMakeLists.txt`, between `add_subdirectory(CGData)` and `add_subdirectory(CodeGen)` (lines 39-40).
+
+  The tools need no hook, because `add_llvm_implicit_projects` picks them up. The upstream-hooks check (M11.d) must
+  know about all of this in M13. The M13 WP that owns `msil/utils/upstream-hooks.txt` and
+  `msil/utils/ci/check-upstream-hooks.py` (5.6) adds:
+  - `hook` blocks for the two CMake files, each with `none build wiring of the fork's llvm/lib/CLI; built and run by
+    the CLITests gate step`;
+  - `fork-only` lines for the four BinaryFormat files (`CLI.h`, `CLITables.def`, `CILOpcodes.def` and 5.8's
+    `MSILLink.h`);
+  - the new directories `llvm/include/llvm/CLI/`, `llvm/lib/CLI/`, `llvm/unittests/CLI/`, `llvm/tools/llvm-cil-dump/`,
+    `llvm/tools/llvm-cil-copy/`, `llvm/test/tools/llvm-cil-dump/` and `llvm/test/tools/llvm-cil-copy/` in
+    `FORK_PREFIXES`.
+- **Who links the library.** Consumers link `CLI` through `LINK_COMPONENTS`:
+  - `MSILDesc` and `MSILCodeGen` from M18;
+  - `lldMSIL` from M20 (M14 and M15 do not need it);
+  - the two tools and `CLITests`.
+
+  `LLVMMC` never depends on `LLVMCLI`, which depends on `LLVMMC`. `MCSymbolMSIL.h` may name `cli::MethodSig` only
+  through a forward declaration (`namespace llvm::cli { struct MethodSig; }`), and no lib/MC `.cpp` calls an LLVMCLI
+  function.
+- **Conventions** (section 2):
+  - the LLVM banner, and `LLVM_ABI` on every exported declaration under `llvm/include/llvm/CLI/`;
+  - header guards `LLVM_BINARYFORMAT_CLI_H` and `LLVM_CLI_<FILE>_H`; `DEBUG_TYPE "cli-<file>"`; no `cl::opt` in the
+    library;
+  - **one namespace `llvm::cli`, BinaryFormat constants included.** There is no `llvm::CLI`, because two namespaces
+    that differ only in case read as one.
+- **Checking work before the gate.** Until the gate's configure step knows lib/CLI, implementers syntax-check with
+  `msil-syntax.ps1 -FlagsFrom llvm/lib/MC/StringTableBuilder.cpp <files>`. They may also compile and link private
+  copies of `LLVMCLI` and its tests under `C:\llvm-msil-scratch\` against the shared build's `.lib` files (as M11.a
+  did for llc), never in `D:\llvm-msil\build`. A private build serves only the WP that made it. It compiles only
+  the WP's own sources and sources that were complete when the WP started (earlier milestones and the WPs it
+  depends on, 5.7.14). No
+  WP's check uses a binary that another WP of the same milestone built. Test WPs run only binaries that already exist
+  in the shared build or in the oracle tools of earlier milestones; this milestone's `CLITests`, `llvm-cil-dump`
+  and `llvm-cil-copy` first run for them at the gate. M13, M16, M17 and M20 add lib/CLI sources or tools, so each of
+  their gates runs `msil-configure.ps1` first.
+
+#### 5.7.2 BinaryFormat/CLI.h, the .def files and Handles.h (M13); BCLMembers (M18)
+
+Start from the verified drafts `llvm/docs/MSIL/recon/p2/metadata-writer-files/CLITables.def` and `CILOpcodes.def`.
+Add the LLVM banner, replace the draft comments, and keep the entries and their order. The macro contracts:
+
+```cpp
+// CLITables.def: three independent sections; each is expanded only if its macro is defined and #undef's it.
+CLI_TABLE(Id, Name, Sorted)                // Id 0x00..0x2C, Name as in ECMA II.22, Sorted 0/1 (II.22 sort order)
+CLI_COLUMN(Table, Column, Kind, Target)    // ECMA column order. Kind: U16 U32 StringIdx GuidIdx BlobIdx TableIdx
+                                           // CodedIdx. Target: a table (TableIdx), a coded index (CodedIdx) or None
+CLI_CODED_INDEX(Name, TagBits, Tables...)  // tables in tag order; None marks an unused tag
+// CILOpcodes.def: #error unless CIL_OPCODE is defined; #undef at the end. 219 entries in value order: the 218
+// opcodes of System.Reflection.Emit.OpCodes plus ECMA's no. (0xFE19).
+CIL_OPCODE(Enum, Text, Value, Operand, Pop, Push, Flow) // Value 0x00XX or 0xFEXX; Operand an OperandKind; Pop and
+                                           // Push StackBehaviour names; Flow a FlowControl name
+```
+
+`CLI.h`, namespace `llvm::cli`:
+
+```cpp
+enum class TableId : uint8_t { /* CLI_TABLE: Module = 0x00, TypeRef = 0x01, ..., GenericParamConstraint = 0x2C */ };
+// 0x30-0x37 (Portable PDB, Phase 4) are reserved: no enumerators and no schema in Phase 2.
+constexpr unsigned NumTableIds = 64;            // width of the #~ Valid and Sorted vectors
+enum class CodedIndexKind : uint8_t { /* CLI_CODED_INDEX order: TypeDefOrRef, ..., TypeOrMethodDef */ };
+enum class ColumnKind : uint8_t { U16, U32, StringIdx, GuidIdx, BlobIdx, TableIdx, CodedIdx };
+
+constexpr uint32_t makeToken(TableId T, uint32_t Row);   // (T << 24) | Row, Row < 2^24
+constexpr uint8_t getTokenType(uint32_t Token);          // high byte: a TableId value, or 0x70
+constexpr uint32_t getTokenRow(uint32_t Token);          // low 24 bits
+constexpr uint8_t UserStringTokenType = 0x70;            // ldstr operand: 0x70000000 | #US offset
+
+enum class OperandKind : uint8_t { InlineNone, ShortInlineVar, InlineVar, ShortInlineI, InlineI, InlineI8,
+  ShortInlineR, InlineR, ShortInlineBrTarget, InlineBrTarget, InlineMethod, InlineField, InlineType, InlineTok,
+  InlineSig, InlineString, InlineSwitch };
+enum class StackBehaviour : uint8_t { /* one enumerator for each Pop and Push name CILOpcodes.def uses, spelled as in
+  System.Reflection.Emit.StackBehaviour: Pop0, Pop1, Pop1_pop1, Popi, ..., Push0, ..., Varpop, Varpush */ };
+enum class FlowControl : uint8_t { Branch, Break, Call, Cond_Branch, Meta, Next, Return, Throw };
+enum class Opcode : uint16_t { /* CIL_OPCODE: Nop = 0x0000, ..., Ldc_i4_s = 0x001F, ..., Readonly = 0xFE1E */ };
+constexpr uint8_t TwoByteOpcodePrefix = 0xFE;
+
+enum ElementType : uint8_t { ELEMENT_TYPE_END = 0x00, ELEMENT_TYPE_VOID = 0x01, /* every II.23.1.16 value
+  through */ ELEMENT_TYPE_CMOD_REQD = 0x1F, ELEMENT_TYPE_CMOD_OPT = 0x20, ELEMENT_TYPE_INTERNAL = 0x21,
+  ELEMENT_TYPE_MODIFIER = 0x40, ELEMENT_TYPE_SENTINEL = 0x41, ELEMENT_TYPE_PINNED = 0x45 };
+enum SerializationTypeCode : uint8_t { SERIALIZATION_TYPE_TYPE = 0x50, SERIALIZATION_TYPE_TAGGED_OBJECT = 0x51,
+  SERIALIZATION_TYPE_FIELD = 0x53, SERIALIZATION_TYPE_PROPERTY = 0x54, SERIALIZATION_TYPE_ENUM = 0x55 };
+enum SignatureHeader : uint8_t { SIG_DEFAULT = 0x00, SIG_C = 0x01, SIG_STDCALL = 0x02, SIG_THISCALL = 0x03,
+  SIG_FASTCALL = 0x04, SIG_VARARG = 0x05, SIG_FIELD = 0x06, SIG_LOCAL = 0x07, SIG_PROPERTY = 0x08,
+  SIG_UNMANAGED = 0x09, SIG_GENERICINST = 0x0A, SIG_KIND_MASK = 0x0F, SIG_GENERIC = 0x10, SIG_HASTHIS = 0x20,
+  SIG_EXPLICITTHIS = 0x40 };
+```
+
+- **Attribute flag enums.** Scoped, marked with `LLVM_MARK_AS_BITMASK_ENUM`, and containing every value of ECMA
+  II.23.1:
+  - `TypeAttributes : uint32_t`, `FieldAttributes : uint16_t`, `MethodAttributes : uint16_t`,
+    `MethodImplAttributes : uint16_t`, `ParamAttributes : uint16_t`, `PropertyAttributes : uint16_t`,
+    `MethodSemanticsAttributes : uint16_t`, `PInvokeAttributes : uint16_t`, `GenericParamAttributes : uint16_t`,
+    `AssemblyFlags : uint32_t`, `ManifestResourceAttributes : uint32_t`, `FileAttributes : uint32_t`;
+  - `AssemblyHashAlgorithm : uint32_t` (`None = 0`, `MD5 = 0x8003`, `SHA1 = 0x8004`).
+
+  Enumerators carry the ECMA flag names in UpperCamelCase, as System.Reflection spells them. Examples:
+  `TypeAttributes::Public`, `TypeAttributes::BeforeFieldInit`, `TypeAttributes::Forwarder` (0x00200000),
+  `MethodAttributes::PrivateScope`, `MethodAttributes::HideBySig`, `MethodAttributes::SpecialName`,
+  `MethodAttributes::RTSpecialName`, `MethodAttributes::PinvokeImpl`, `PInvokeAttributes::NoMangle`,
+  `PInvokeAttributes::CallConvCdecl` (0x0200), `MethodSemanticsAttributes::Getter` (0x0002). Multi-bit fields get a
+  `Mask` suffix (`VisibilityMask`, `MemberAccessMask`, `CharSetMask`, `CallConvMask`). The M13 test WP checks the
+  values against SRM's enums. It compares values only and never copies `CorHdr.h` text (metadata-writer 4.2).
+- **Image constants.**
+  - `enum CorFlags : uint32_t`: `COMIMAGE_FLAGS_ILONLY` 0x1, `_32BITREQUIRED` 0x2, `_IL_LIBRARY` 0x4,
+    `_STRONGNAMESIGNED` 0x8, `_NATIVE_ENTRYPOINT` 0x10, `_TRACKDEBUGDATA` 0x10000, `_32BITPREFERRED` 0x20000.
+  - `struct CLIDataDirectory { support::ulittle32_t RVA, Size; }`.
+  - `struct Cor20Header`, little-endian fields in II.25.3.3 order: `Cb` (72), `MajorRuntimeVersion` (2),
+    `MinorRuntimeVersion` (5), `MetaData`, `Flags`, `EntryPointToken`, `Resources`, `StrongNameSignature`,
+    `CodeManagerTable`, `VTableFixups`, `ExportAddressTableJumps`, `ManagedNativeHeader`; with
+    `static_assert(sizeof(Cor20Header) == 72)`.
+  - `constexpr uint32_t DebugTypeEmbeddedPortablePdb = 17, DebugTypePdbChecksum = 19;` (absent from `COFF.h`; they
+    reserve Phase 4's carrier).
+- **Metadata root.**
+  - `MetadataSignature` (0x424A5342, "BSJB"), `MetadataMajorVersion` (1), `MetadataMinorVersion` (1),
+    `MetadataVersionString` ("v4.0.30319"), `TablesStreamMajorVersion` (2), `TablesStreamMinorVersion` (0);
+  - `enum HeapSizeFlags : uint8_t { HEAP_STRINGS_4 = 0x01, HEAP_GUID_4 = 0x02, HEAP_BLOB_4 = 0x04,
+    HEAP_EXTRA_DATA = 0x40 }`;
+  - `SortedTablesMask` (0x000016003301FA00: exactly ECMA's sorted tables, as Roslyn and SRM write it).
+- **Method bodies.**
+  - `enum MethodHeaderFlags : uint16_t { MethodHeaderTinyFormat = 0x2, MethodHeaderFatFormat = 0x3,
+    MethodHeaderMoreSects = 0x8, MethodHeaderInitLocals = 0x10 }`;
+  - `FatHeaderSize` (12), `TinyMaxCodeSize` (63), `TinyMaxStack` (8);
+  - `enum EHSectionFlags : uint8_t { EHSectionEHTable = 0x1, EHSectionOptILTable = 0x2, EHSectionFatFormat = 0x40,
+    EHSectionMoreSects = 0x80 }`;
+  - `enum class ExceptionClauseKind : uint32_t { Catch = 0, Filter = 1, Finally = 2, Fault = 4 }`.
+- **`struct AssemblyVersion { uint16_t Major = 0, Minor = 0, Build = 0, Revision = 0; }`**, with `==`.
+- **Compressed integers** (II.23.2), `inline`:
+
+  ```cpp
+  constexpr uint32_t MaxCompressedUInt = 0x1FFFFFFF;
+  unsigned encodeCompressedUInt(uint32_t V, uint8_t Out[4]);           // returns 1, 2 or 4; asserts V <= Max
+  unsigned getCompressedUIntSize(uint32_t V);
+  std::optional<uint32_t> decodeCompressedUInt(ArrayRef<uint8_t> &Bytes);  // consumes; nullopt if truncated or bad lead
+  unsigned encodeCompressedInt(int32_t V, uint8_t Out[4]);             // II.23.2 rotated sign; -2^28 <= V < 2^28
+  std::optional<int32_t> decodeCompressedInt(ArrayRef<uint8_t> &Bytes);
+  uint32_t encodeTypeDefOrRefOrSpec(uint32_t Token);                   // (row << 2) | 0 TypeDef, 1 TypeRef, 2 TypeSpec
+  std::optional<uint32_t> decodeTypeDefOrRefOrSpec(uint32_t Coded);     // -> token
+  ```
+- **Limits** (5.7.12):
+
+  ```cpp
+  constexpr uint32_t MaxIdentifierBytes = 1023;    // Q27; the same value as MSIL::MaxILNameBytes
+  constexpr uint32_t MaxMethodsPerType = 65524;    // metadata-writer 3.6
+  constexpr uint32_t MaxFieldsPerType = 65534;
+  constexpr uint32_t MaxTableRows = 0x00FFFFFF;
+  constexpr uint32_t MaxUserStringHeapSize = 0x00FFFFFF;
+  ```
+
+`llvm/include/llvm/CLI/Handles.h`:
+
+```cpp
+// A row of a MetadataBuilder (5.7.6), token-shaped: TableId << 24 | Index (Index 0 = nil).
+// The stable tables number rows at insertion, so their handle *is* the final token:
+//   TypeRef, TypeDef, TypeSpec, MemberRef, StandAloneSig, ModuleRef, AssemblyRef, MethodSpec.
+// The member tables are numbered by finalize(), so their handle is provisional:
+//   Field, MethodDef, Param, Property.
+struct EntityHandle {
+  uint32_t Value = 0;
+  TableId getTable() const; uint32_t getIndex() const; bool isNil() const;
+  friend bool operator==(EntityHandle, EntityHandle); friend bool operator!=(EntityHandle, EntityHandle);
+};
+// A token operand before encoding.
+class TokenRef {
+public:
+  enum class Kind : uint8_t { None, Token, Handle, External };
+  static TokenRef getToken(uint32_t Token);     // a final token
+  static TokenRef getHandle(EntityHandle H);    // resolved by MetadataBuilder::resolveToken
+  static TokenRef getExternal(uint32_t Id);     // a client symbol (e.g. an MCSymbol index), resolved by the client
+  Kind getKind() const; uint32_t getValue() const;
+};
+```
+
+**`BCLMembers.def` and `BCLMembers.h` (M18, owner `M18/target-mc`).** The one list of BCL entities that codegen, the
+trailer builder (5.9.10's `TrailerSink::getBCLMember(BCLMemberId)`) and the binder (5.11) use
+(`llvm/include/llvm/CLI/`, not BinaryFormat). The X-macros are `CLI_BCL_TYPE(Id, Namespace, Name, MscorlibSafe)` and
+`CLI_BCL_METHOD(Id, OwnerType, Name, HasThis, Return, Params, Strength, Fallback, MscorlibSafe)`, with signature types
+as canonical listing v1 text (5.7.10). The header-only `BCLMembers.h` provides `cli::BCLMemberId`,
+`cli::BCLStrength {Required, OptionalDrop, OptionalSubstitute}`, `cli::BCLMemberInfo`, `getAllBCLMembers()`,
+`getBCLMemberInfo(BCLMemberId)` and `printBCLMemberRef(raw_ostream &, BCLMemberId, StringRef Scope)`. The entries and
+the mscorlib-safe rule are 5.11.7's; M20, M21 and M22 add entries.
+
+#### 5.7.3 Blobs and signatures (M16)
+
+`Blob.h`. Writers append to a caller-owned vector, little-endian:
+
+```cpp
+class BlobWriter {
+public:
+  explicit BlobWriter(SmallVectorImpl<uint8_t> &Out);
+  void writeU8(uint8_t V); void writeU16(uint16_t V); void writeU32(uint32_t V); void writeU64(uint64_t V);
+  void writeCompressedUInt(uint32_t V); void writeCompressedInt(int32_t V);
+  void writeBytes(ArrayRef<uint8_t> B);
+  void writeSerString(std::optional<StringRef> UTF8);  // II.23.3: 0xFF for null, else compressed length + UTF-8
+  void writeString(StringRef UTF8);                    // compressed length + UTF-8; not the record codecs' 'str',
+                                                       // which has a uleb length (cli::RecordWriter, 5.8.8)
+  void align(unsigned Alignment);                      // zero bytes
+  size_t size() const;
+};
+class BlobReader {                                     // sticky error, like DataExtractor::Cursor
+public:
+  explicit BlobReader(ArrayRef<uint8_t> Bytes);
+  uint8_t readU8(); uint16_t readU16(); uint32_t readU32(); uint64_t readU64();
+  uint32_t readCompressedUInt(); int32_t readCompressedInt();
+  ArrayRef<uint8_t> readBytes(size_t N);
+  std::optional<StringRef> readSerString(); StringRef readString();
+  bool empty() const; size_t tell() const; size_t remaining() const;
+  Error takeError();  // the first failure; afterwards reads return 0 or empty and do not advance
+};
+```
+
+`Signature.h`. This is the one signature model for every Phase-2 signature: definitions, call sites, `calli`, BCL
+members, P/Invoke stubs and reference binding. The MSIL target keeps its Phase-1 `MSIL::Signature` (five `ValType`s)
+as the codegen view and converts it where metadata is written (M18).
+
+```cpp
+struct CustomModifier { bool IsRequired; uint32_t Type; };        // CMOD_REQD / CMOD_OPT, in blob order
+struct ArrayShape { uint32_t Rank; SmallVector<uint32_t, 0> Sizes; SmallVector<int32_t, 0> LowerBounds; };
+struct MethodSig;
+// One type of a signature (II.23.2.12). A regular value type: copyable, ==, hash_value().
+// "TypeRef" values are TypeDefOrRefOrSpec tokens (0x01/0x02/0x1B) of the module the signature belongs to, or client
+// ids that the client maps to tokens with mapTypeRefs() before encoding (the MC layer has no tokens yet).
+class TypeSig {
+public:
+  TypeSig();                                                        // void
+  static TypeSig get(ElementType Primitive);  // VOID..R8, I, U, STRING, OBJECT, TYPEDBYREF (asserts primitive)
+  static TypeSig getClass(uint32_t TypeRef);
+  static TypeSig getValueType(uint32_t TypeRef);
+  static TypeSig getPointer(TypeSig Pointee);                       // void* = getPointer(TypeSig())
+  static TypeSig getByRef(TypeSig Referent);
+  static TypeSig getSZArray(TypeSig Element);
+  static TypeSig getArray(TypeSig Element, ArrayShape Shape);
+  static TypeSig getGenericInst(bool IsValueType, uint32_t GenericType, ArrayRef<TypeSig> Args);
+  static TypeSig getGenericParam(bool IsMethodParam, uint32_t Index); // VAR / MVAR
+  static TypeSig getFunctionPointer(const MethodSig &Sig);
+  static TypeSig getPinned(TypeSig Local);                          // local signatures only
+  TypeSig withModifier(CustomModifier M) const;                     // appended after the existing modifiers
+  ElementType getElementType() const;
+  uint32_t getTypeRef() const;                    // CLASS, VALUETYPE; the generic type of GENERICINST
+  ArrayRef<TypeSig> getOperands() const;          // pointee, element, referent, or generic arguments
+  const ArrayShape &getArrayShape() const; const MethodSig &getFunctionSig() const;
+  uint32_t getGenericParamIndex() const; bool isMethodGenericParam() const;
+  ArrayRef<CustomModifier> getModifiers() const;
+  friend bool operator==(const TypeSig &, const TypeSig &);
+};
+struct MethodSig {
+  uint8_t Header = SIG_DEFAULT;            // calling-convention kind | SIG_HASTHIS | SIG_EXPLICITTHIS | SIG_GENERIC
+  uint32_t GenericParamCount = 0;
+  TypeSig Return;                          // may carry modifiers, BYREF, TYPEDBYREF
+  std::vector<TypeSig> Params;
+  uint32_t RequiredParamCount = UINT32_MAX; // < Params.size(): SENTINEL precedes Params[RequiredParamCount]
+                                            // (vararg call sites in MemberRef and StandAloneSig signatures only)
+  friend bool operator==(const MethodSig &, const MethodSig &);
+};
+struct PropertySig { bool HasThis = false; TypeSig Type; std::vector<TypeSig> Params; };
+hash_code hash_value(const TypeSig &T); hash_code hash_value(const MethodSig &S);
+
+void encodeMethodSig(const MethodSig &S, SmallVectorImpl<uint8_t> &Out);
+void encodeFieldSig(const TypeSig &T, SmallVectorImpl<uint8_t> &Out);          // 0x06 + type
+void encodeLocalSig(ArrayRef<TypeSig> Locals, SmallVectorImpl<uint8_t> &Out);  // 0x07 + count + types
+void encodePropertySig(const PropertySig &S, SmallVectorImpl<uint8_t> &Out);
+void encodeTypeSpec(const TypeSig &T, SmallVectorImpl<uint8_t> &Out);
+void encodeMethodSpec(ArrayRef<TypeSig> Args, SmallVectorImpl<uint8_t> &Out);   // 0x0A + count + types
+Expected<MethodSig> decodeMethodSig(ArrayRef<uint8_t> Blob);
+Expected<TypeSig> decodeFieldSig(ArrayRef<uint8_t> Blob);
+Expected<std::vector<TypeSig>> decodeLocalSig(ArrayRef<uint8_t> Blob);
+Expected<PropertySig> decodePropertySig(ArrayRef<uint8_t> Blob);
+Expected<TypeSig> decodeTypeSpec(ArrayRef<uint8_t> Blob);
+Expected<std::vector<TypeSig>> decodeMethodSpec(ArrayRef<uint8_t> Blob);
+TypeSig mapTypeRefs(const TypeSig &T, function_ref<uint32_t(uint32_t)> Map);    // msil-ld renumbering, binding
+MethodSig mapTypeRefs(const MethodSig &S, function_ref<uint32_t(uint32_t)> Map);
+void printTypeSig(raw_ostream &OS, const TypeSig &T,
+                  function_ref<void(raw_ostream &, uint32_t TypeRef)> PrintTypeRef);
+void printMethodSig(raw_ostream &OS, const MethodSig &S,
+                    function_ref<void(raw_ostream &, uint32_t TypeRef)> PrintTypeRef);
+```
+
+- **Encoders** assert on invalid input (a non-type token, a sentinel outside a vararg or C signature). A decoder
+  consumes the whole blob. Truncation, an unknown element type, trailing bytes, or nesting deeper than 64 levels
+  give an `Error`.
+- **Printing grammar** is canonical listing v1 (5.7.10), so the dumper, diagnostics and tests share one spelling.
+- **Test vectors** (metadata-writer 4.6; the runtimes accepted these exact bytes):
+
+  | Signature | Bytes |
+  |---|---|
+  | `int32()` | `00 00 08` |
+  | `int32(int32)` | `00 01 08 08` |
+  | `int32(native int)` | `00 01 08 18` |
+  | `int32(string[])` | `00 01 08 1D 0E` |
+  | `void()` | `00 00 01` |
+  | `instance void(string, string)` | `20 02 01 0E 0E` |
+  | field `valuetype` TypeDef 2 | `06 11 08` |
+  | field `native int` | `06 18` |
+  | locals `(int32, native int, int32, int32)` | `07 04 08 18 08 08` |
+
+#### 5.7.4 Custom attributes (M16)
+
+`CustomAttribute.h`, ECMA II.23.3:
+
+```cpp
+struct CAValue {                     // one fixed argument, named-argument value or array element
+  enum class Kind : uint8_t { Bool, Char, I1, U1, I2, U2, I4, U4, I8, U8, R4, R8, String, Type, Enum, Boxed, Array };
+  Kind K = Kind::I4;
+  uint64_t Bits = 0;                 // integers (two's complement), bool, char, R4/R8 raw bits, enum value
+  std::optional<std::string> Str;    // String; Type (an assembly-qualified type name); nullopt = null
+  ElementType EnumUnderlying = ELEMENT_TYPE_I4;
+  std::string EnumTypeName;          // Enum values in named arguments and boxed values
+  std::unique_ptr<CAValue> BoxedValue;               // Boxed (SERIALIZATION_TYPE_TAGGED_OBJECT)
+  std::optional<std::vector<CAValue>> Elements;      // Array; nullopt = null array
+};                                   // CAValue is deep-copyable
+struct CANamedArg { bool IsField; std::string Name; CAValue Value; };
+struct CustomAttributeValue { std::vector<CAValue> FixedArgs; std::vector<CANamedArg> NamedArgs; };
+// Resolves the underlying type of an enum parameter (a valuetype TypeRef in the constructor signature).
+using EnumTypeResolver = function_ref<Expected<ElementType>(uint32_t TypeRef)>;
+Error encodeCustomAttribute(const MethodSig &Ctor, const CustomAttributeValue &V, SmallVectorImpl<uint8_t> &Out,
+                            EnumTypeResolver Resolve = {});
+Expected<CustomAttributeValue> decodeCustomAttribute(const MethodSig &Ctor, ArrayRef<uint8_t> Blob,
+                                                     EnumTypeResolver Resolve = {});
+// The carrier of the link-info record (Q3) and of the symbol-table attribute (Q25): a constructor taking uint8[].
+void encodeByteArrayAttribute(ArrayRef<uint8_t> Payload, SmallVectorImpl<uint8_t> &Out); // 01 00, u32 n, bytes, 00 00
+Expected<ArrayRef<uint8_t>> decodeByteArrayAttribute(ArrayRef<uint8_t> Blob);
+```
+
+- Parsing and formatting the assembly-qualified type names in `Type` arguments belongs to the M21 binder (5.11); the
+  codec only carries the strings.
+- Vectors:
+  - the E1 blob of `AssemblyMetadataAttribute("msil.triple", "x86_64-pc-windows-msvc-msil")` (metadata-writer 4.6);
+  - a byte-array blob;
+  - csc-built blobs with enum, `Type`, boxed, array and named arguments. The test WP builds them in scratch with csc
+    and SRM and embeds the bytes, with the C# source line in a comment.
+
+#### 5.7.5 Opcodes, IL builder, IL decoder and method bodies (M16)
+
+`Opcodes.h`:
+
+```cpp
+struct OpcodeInfo { Opcode Op; StringLiteral Name; OperandKind Operand; StackBehaviour Pop, Push; FlowControl Flow; };
+const OpcodeInfo &getOpcodeInfo(Opcode Op);
+ArrayRef<OpcodeInfo> getAllOpcodes();                     // 219 entries, value order
+std::optional<Opcode> getOpcodeByValue(uint16_t Value);   // 0x00XX or 0xFEXX
+std::optional<Opcode> getOpcodeByName(StringRef Name);    // "ldc.i4.s"
+unsigned getOpcodeSize(Opcode Op);                        // 1 or 2
+unsigned getOperandSize(OperandKind K);                   // 0, 1, 2, 4 or 8; InlineSwitch: 4 (the count)
+std::optional<Opcode> getShortBranchForm(Opcode Op);      // br -> br.s ... leave -> leave.s
+std::optional<Opcode> getLongBranchForm(Opcode Op);
+int getStackPops(StackBehaviour B); int getStackPushes(StackBehaviour B);   // -1 for Varpop / Varpush
+```
+
+`MethodBody.h` (II.25.4):
+
+```cpp
+struct ExceptionClause { ExceptionClauseKind Kind; uint32_t TryOffset, TryLength, HandlerOffset, HandlerLength;
+                         uint32_t ClassTokenOrFilterOffset; };     // Catch: class token; Filter: filter offset; else 0
+struct MethodBodyInfo { ArrayRef<uint8_t> Code; uint16_t MaxStack = 8; uint32_t LocalVarSigToken = 0;
+                        bool InitLocals = false; ArrayRef<ExceptionClause> Clauses; };
+class MethodBodyStream {           // the IL stream of one image
+public:
+  uint32_t addBody(const MethodBodyInfo &B);   // returns the offset of the body's header in the stream
+  ArrayRef<uint8_t> getBytes() const; size_t size() const;
+};
+struct MethodBodyView { bool IsTiny; uint16_t MaxStack; uint32_t LocalVarSigToken; bool InitLocals;
+                        ArrayRef<uint8_t> Code; SmallVector<ExceptionClause, 0> Clauses; uint32_t Size; };
+Expected<MethodBodyView> decodeMethodBody(ArrayRef<uint8_t> Bytes);   // Bytes start at the header
+```
+
+- **Header.** A body is tiny exactly when its code is at most 63 bytes, `MaxStack` is at most 8, it has no locals,
+  no clauses and no `InitLocals`. Tiny headers are not aligned.
+- **Fat bodies** are 4-byte aligned with zero padding. Their flags word is `0x3 | (3 << 12)`, plus `MoreSects` when
+  there are clauses and `InitLocals` when it is set.
+- **`InitLocals`.** Codegen never sets it (D13). It exists so that `llvm-cil-copy` preserves ilasm's bodies.
+- **The EH section** follows the code, 4-byte aligned, as one section:
+  - **small** when n <= 20, every offset <= 0xFFFF and every length <= 0xFF: `01`, DataSize 12n+4 as one byte, two
+    zero bytes, then per clause u16 flags, u16 try offset, u8 try length, u16 handler offset, u8 handler length,
+    u32 class token or filter offset;
+  - **fat** otherwise: `41`, a 24-bit DataSize of 24n+4, six u32 per clause.
+
+  The decoder also accepts several EH sections (`MoreSects`) and gives an `Error` on an `OptILTable` section.
+- **Shared bodies.** Several MethodDefs may share one body offset (metadata-writer 3.6).
+
+`ILDecoder.h`, the token walker of msil-ld and the dumpers:
+
+```cpp
+struct ILInstruction {
+  uint32_t Offset = 0, Size = 0;           // Size counts the opcode and operand bytes
+  Opcode Op = Opcode::Nop;
+  int64_t Imm = 0;           // ShortInlineI (ldc.i4.s sign-extended; unaligned. and no. zero-extended), InlineI,
+                             // InlineI8, ShortInlineVar, InlineVar
+  uint64_t FPBits = 0;       // ShortInlineR (low 32 bits), InlineR
+  uint32_t Token = 0;        // InlineMethod/Field/Type/Tok/Sig/String
+  uint32_t TokenOffset = 0;  // offset of the 4 token bytes in the code
+  int64_t Target = 0;        // branches: absolute target offset (relative to the next instruction in the encoding)
+  SmallVector<int64_t, 0> SwitchTargets;   // absolute (relative to the end of the switch in the encoding)
+};
+Error decodeIL(ArrayRef<uint8_t> Code, function_ref<Error(const ILInstruction &)> Visit);
+Error rewriteILTokens(MutableArrayRef<uint8_t> Code, function_ref<Expected<uint32_t>(const ILInstruction &)> Map);
+```
+
+- `decodeIL` gives an `Error` for a truncated operand, an unknown opcode or a reserved prefix byte 0xF8-0xFF.
+- Targets outside the code are not errors here; the dumpers show them.
+- Tokens are always 4 bytes, so `rewriteILTokens` patches in place and never changes sizes or branch offsets
+  (objfmt-binding 3.3).
+
+`ILBuilder.h` builds synthesized bodies: msil-ld's `.cctor`, `'<msil>Main'`, stubs and accessors, and the target's
+`SynthesizedBody` replacement (M18). It produces both bytes (for msil-ld) and an inspectable instruction list (which
+the MSIL target turns into MCInsts for `-S` and objects). So it serves the shared trailer builder (Q5) wherever 5.9
+places it:
+
+- in the MSIL target, it emits MCInsts from `instructions()`;
+- in lld or lib/CLI, it encodes bytes.
+
+```cpp
+struct ILLabel { uint32_t Id = UINT32_MAX; bool isValid() const; };
+struct ILInstr { Opcode Op; uint32_t Offset; int64_t Imm; uint64_t FPBits; TokenRef Token; ILLabel Target;
+                 uint32_t SwitchBegin = 0, SwitchCount = 0; };
+struct ILExceptionClause { ExceptionClauseKind Kind; ILLabel TryBegin, TryEnd, HandlerBegin, HandlerEnd;
+                           ILLabel FilterBegin; TokenRef CatchType; };
+using TokenResolver = function_ref<Expected<uint32_t>(TokenRef)>;
+class ILBuilder {
+public:
+  explicit ILBuilder(bool ReturnsValue);
+  ILLabel createLabel();
+  void placeLabel(ILLabel L);                     // at the current position; once per label
+  void emit(Opcode Op);                           // InlineNone opcodes except ret
+  void emitImm(Opcode Op, int64_t Value);         // ShortInlineI, InlineI, InlineI8, ShortInlineVar, InlineVar as given
+  void emitR4(uint32_t Bits); void emitR8(uint64_t Bits);  // ldc.r4 / ldc.r8, exact bits (signaling NaNs kept)
+  void emitToken(Opcode Op, TokenRef T);          // field, type, tok, string and constrained. operands
+  void emitCall(Opcode Op, TokenRef Callee, unsigned Pops, unsigned Pushes); // call, callvirt, newobj, calli, jmp
+  void emitRet();                                 // pops 1 iff ReturnsValue
+  void emitBranch(Opcode Op, ILLabel Target);     // any br/b<cc>/brtrue/brfalse/leave, short or long spelling
+  void emitSwitch(ArrayRef<ILLabel> Targets);
+  void emitLdcI4(int32_t V);                      // shortest: ldc.i4.m1, ldc.i4.0-8, ldc.i4.s, ldc.i4
+  void emitLdarg(unsigned N); void emitLdarga(unsigned N); void emitStarg(unsigned N);  // shortest forms
+  void emitLdloc(unsigned N); void emitLdloca(unsigned N); void emitStloc(unsigned N);
+  void addExceptionClause(const ILExceptionClause &C);   // innermost first (II.19)
+  void setRelaxBranches(bool Relax);              // default true
+  void setMaxStack(unsigned N);                   // optional floor; getMaxStack() = max(computed, floor)
+  Error layout();                                 // branch forms, offsets, stack depths; no emit afterwards
+  ArrayRef<ILInstr> instructions() const;         // valid after layout()
+  ArrayRef<ILLabel> getSwitchTargets(const ILInstr &I) const;
+  uint32_t getLabelOffset(ILLabel L) const; uint32_t getCodeSize() const; unsigned getMaxStack() const;
+  Error encode(SmallVectorImpl<uint8_t> &Code, SmallVectorImpl<ExceptionClause> &Clauses,
+               TokenResolver Resolve) const;      // after layout()
+};
+```
+
+- **Shortest forms** (Q26) follow `MSILInstPrinter::printShortForm`:
+  - indexes 0-3 use the `.0`-`.3` opcodes, below 256 the `.s` form, otherwise the long form;
+  - `starg`, `ldarga` and `ldloca` have no `.N` forms;
+  - indexes above 65534 are a layout error.
+- **Relaxation** (metadata-writer 5.2):
+  - every branch starts short;
+  - a branch whose displacement leaves [-128, 127] is widened, and the pass repeats until nothing changes (it only
+    grows code, so it terminates and is deterministic);
+  - switch entries are always 32-bit.
+
+  With `setRelaxBranches(false)` each branch keeps the form it was given, and a short form that does not fit is an
+  `Error`.
+- **Stack depth.** It is computed with ECMA III.1.7.5's single forward pass:
+  - Pop and Push come from `CILOpcodes.def`; `emitCall` and `emitRet` give the variable counts;
+  - after `br`, `leave`, `ret`, `throw`, `rethrow`, `endfinally`, `endfilter` or `jmp`, the depth at the next
+    instruction is the depth that a forward branch recorded for a label placed there, else 0;
+  - catch and filter handlers and filter blocks start at depth 1; try blocks, finally and fault handlers at 0.
+
+  `layout()` gives an `Error` for:
+  - an underflow;
+  - a depth mismatch at a label;
+  - an unplaced label;
+  - a label placed between a prefix (`unaligned.`, `volatile.`, `tail.`, `constrained.`, `readonly.`) and its
+    instruction;
+  - a clause listed after a clause that encloses it.
+- **Token resolution.** `encode` passes every `TokenRef` to `Resolve`. `MetadataBuilder::resolveToken` (5.7.6)
+  resolves `Token` and `Handle` refs. A client with `External` refs wraps it, for example
+  `[&](TokenRef T) { return T.getKind() == TokenRef::Kind::External ? Mine(T) : MB.resolveToken(T); }`.
+
+#### 5.7.6 Table schema, heaps and MetadataBuilder
+
+**`TableSchema.h` (M13).** One layout computation shared by the writer and the reader (bcl-binding 7.4):
+
+```cpp
+struct ColumnInfo { StringLiteral Name; ColumnKind Kind; uint8_t Target; };  // Target: TableId or CodedIndexKind value
+ArrayRef<ColumnInfo> getTableColumns(TableId T);
+StringLiteral getTableName(TableId T); bool isSortedTable(TableId T);
+unsigned getCodedIndexTagBits(CodedIndexKind K);
+ArrayRef<std::optional<TableId>> getCodedIndexTables(CodedIndexKind K);
+std::optional<uint32_t> encodeCodedIndex(CodedIndexKind K, uint32_t Token);  // token 0 (nil) -> 0
+std::optional<uint32_t> decodeCodedIndex(CodedIndexKind K, uint32_t Value);  // -> token; 0 for nil
+class MetadataSizes {
+public:
+  MetadataSizes(ArrayRef<uint32_t> RowCounts /* NumTableIds entries */, uint8_t HeapSizeFlags);
+  static uint8_t computeHeapSizeFlags(uint64_t StringsSize, uint64_t GuidSize, uint64_t BlobSize);
+  uint32_t getRowCount(TableId T) const; uint8_t getHeapSizeFlags() const;
+  unsigned getColumnSize(TableId T, unsigned Column) const;    // U16: 2, U32: 4, indexes 2 or 4
+  unsigned getColumnOffset(TableId T, unsigned Column) const;
+  unsigned getRowSize(TableId T) const;
+  unsigned getCodedIndexSize(CodedIndexKind K) const;
+  uint64_t getTableOffset(TableId T) const;    // within the table data that follows the #~ row counts
+  uint64_t getTablesSize() const;
+};
+```
+
+Width rules (II.24.2.6):
+- a simple index is 2 bytes iff the target table has fewer than 2^16 rows;
+- a coded index with n tag bits is 2 bytes iff every one of its tables has fewer than 2^(16-n) rows;
+- a heap index is 4 bytes iff its `HeapSizeFlags` bit is set. `computeHeapSizeFlags` sets the bit iff that stream's
+  size, as written in the stream header (with padding), is at least 0x10000. Readers use the flags as written.
+
+**`Heaps.h` (M16).** Heap rules (metadata-writer 4.4):
+
+```cpp
+class StringHeapBuilder {   // #Strings: StringTableBuilder(ELF), tail merging, finalize() order
+public:
+  void add(StringRef S);    // copies S; "" is never stored: its index is 0
+  void finalize();
+  uint32_t getIndex(StringRef S) const; uint32_t getSize() const; void write(MutableArrayRef<uint8_t> Out) const;
+};
+class BlobHeapBuilder {     // #Blob: offset 0 = empty blob; compressed length + bytes; deduplicated
+public:
+  uint32_t add(ArrayRef<uint8_t> Bytes); uint32_t getSize() const; void write(MutableArrayRef<uint8_t> Out) const;
+};
+class UserStringHeapBuilder { // #US: offset 0 = 0x00; length + UTF-16LE + trailing byte (II.24.2.4); deduplicated
+public:
+  Expected<uint32_t> add(StringRef UTF8);   // error: invalid UTF-8, or the heap would pass MaxUserStringHeapSize
+  uint32_t getSize() const; void write(MutableArrayRef<uint8_t> Out) const;
+};
+class GuidHeapBuilder {     // #GUID: 16-byte entries, 1-based index
+public:
+  uint32_t add(const std::array<uint8_t, 16> &G); uint32_t getSize() const; void write(MutableArrayRef<uint8_t> Out) const;
+};
+```
+
+The `#US` trailing byte is 1 iff some UTF-16 code unit has a non-zero high byte, or a low byte in 0x01-0x08,
+0x0E-0x1F, 0x27, 0x2D or 0x7F.
+
+**`MetadataBuilder.h` (M16).**
+
+```cpp
+struct AssemblyIdentity { std::string Name; AssemblyVersion Version; AssemblyFlags Flags{};
+                          AssemblyHashAlgorithm HashAlg = AssemblyHashAlgorithm::SHA1;
+                          SmallVector<uint8_t, 0> PublicKey; std::string Culture; };
+struct AssemblyRefInfo { std::string Name; AssemblyVersion Version; AssemblyFlags Flags{};
+                         SmallVector<uint8_t, 0> PublicKeyOrToken; std::string Culture; SmallVector<uint8_t, 0> HashValue; };
+class MetadataBuilder {
+public:
+  MetadataBuilder();                         // creates the Module row, #GUID entry 1 (zero MVID) and TypeDef 1 '<Module>'
+  EntityHandle getModuleType() const;        // TypeDef row 1
+  void setModuleName(StringRef Name);
+  void setAssembly(const AssemblyIdentity &Id);    // never called for a netmodule (no Assembly row)
+  bool hasAssembly() const;
+  uint32_t addBlob(ArrayRef<uint8_t> Bytes);       // #Blob offset; final at once
+  uint32_t addUserString(StringRef UTF8);          // ldstr token; deduplicated
+  // Stable tables: deduplicated by content except TypeDef; the handle is the final token.
+  EntityHandle addAssemblyRef(const AssemblyRefInfo &R);
+  EntityHandle addModuleRef(StringRef Name);
+  EntityHandle addTypeRef(EntityHandle ResolutionScope, StringRef Namespace, StringRef Name);
+  EntityHandle addTypeDef(TypeAttributes Flags, StringRef Namespace, StringRef Name, EntityHandle Extends,
+                          EntityHandle EnclosingType = {});   // enclosing types precede nested ones by construction
+  EntityHandle addTypeSpec(uint32_t SigBlob);
+  EntityHandle addMemberRef(EntityHandle Parent, StringRef Name, uint32_t SigBlob);
+  EntityHandle addStandAloneSig(uint32_t SigBlob);
+  EntityHandle addMethodSpec(EntityHandle Method, uint32_t InstantiationBlob);
+  // Member tables: grouped by owner at finalize(), in insertion order within an owner.
+  EntityHandle addField(EntityHandle Owner, FieldAttributes Flags, StringRef Name, uint32_t SigBlob);
+  EntityHandle addMethod(EntityHandle Owner, MethodAttributes Flags, MethodImplAttributes ImplFlags, StringRef Name,
+                         uint32_t SigBlob);
+  EntityHandle addParam(EntityHandle Method, uint16_t Sequence, ParamAttributes Flags, StringRef Name);
+  EntityHandle addProperty(EntityHandle Owner, PropertyAttributes Flags, StringRef Name, uint32_t SigBlob);
+  // Sorted tables: stable-sorted by key at finalize().
+  void addMethodSemantics(EntityHandle Property, MethodSemanticsAttributes Semantics, EntityHandle Method);
+  void addImplMap(EntityHandle Method, PInvokeAttributes Flags, StringRef ImportName, EntityHandle ModuleRef);
+  void addClassLayout(EntityHandle TypeDef, uint16_t PackingSize, uint32_t ClassSize);
+  void addFieldLayout(EntityHandle Field, uint32_t Offset);
+  void addFieldRVA(EntityHandle Field, uint32_t MappedDataOffset);      // RVA = mapped-data RVA + offset
+  void addCustomAttribute(EntityHandle Parent, EntityHandle Constructor, uint32_t ValueBlob);
+  void setMethodBodyOffset(EntityHandle Method, uint32_t ILStreamOffset); // also allowed after finalize()
+  Error finalize(MethodBodyStream &Bodies);   // padding, grouping, sorting, #Strings, checks; Bodies gets pad bodies
+  Error checkMethodBodies() const;            // after finalize(): an IL method without a body offset is an Error
+  bool isFinalized() const;
+  uint32_t getToken(EntityHandle H) const;    // stable tables: always; member tables: after finalize()
+  Expected<uint32_t> resolveToken(TokenRef T) const;   // Token: as is; Handle: getToken; External: Error
+  uint32_t getRowCount(TableId T) const;      // after finalize(), padding rows included
+  size_t getSerializedSize() const;           // after finalize(); independent of RVAs (fixed-width columns)
+  size_t getMvidOffset() const;               // offset of #GUID entry 1 inside the serialized metadata
+  void serialize(MutableArrayRef<uint8_t> Out, uint32_t ILStreamRVA, uint32_t MappedDataRVA) const;
+};
+```
+
+Rules (metadata-writer 4.5; the protocol's "one assembly per target" applies to callers):
+- **Stable tables.** Because these tables number rows at insertion, every TypeDefOrRefOrSpec token in a signature
+  blob is final when the blob is added, and blobs are never rewritten at `finalize()`.
+- **Member tables** (Field, MethodDef, Property and Param) are runs owned by consecutive TypeDefs (Param: by
+  MethodDefs). An empty run points at the next owner's first row, or at rows + 1 at the end of the table.
+- **Implicit rows.** `finalize()` writes one PropertyMap row, in TypeDef order, for each TypeDef that owns
+  properties, and one NestedClass row for each `addTypeDef` call that names an `EnclosingType`.
+- **Sorted tables** (II.22): ClassLayout, Constant, CustomAttribute, FieldLayout, FieldRVA, ImplMap, MethodSemantics,
+  NestedClass, plus GenericParam and InterfaceImpl when they exist later.
+  - They are stable-sorted on the encoded key value, so ties keep insertion order.
+  - The `Sorted` vector is always `SortedTablesMask`; `Valid` has one bit per non-empty table.
+- **0xFFFF padding rule** (Roslyn's MetadataBuilder writes 0 here and the runtimes reject the file; metadata-writer
+  3.6). If Field, MethodDef or Param would have exactly 0xFFFF rows, `finalize()` appends one inert row and
+  re-checks, until none of them has exactly 0xFFFF rows. The inert rows are owned by the last TypeDef, which must be
+  a class (never an interface or enum; Phase 2 emits neither):
+  - Field: `'<msil>pad'`, `Private|Static`, signature `06 08`.
+  - MethodDef: `'<msil>pad'`, `Private|Static|HideBySig`, `IL|Managed`, signature `00 00 01`, body a tiny `ret`
+    added to `Bodies`.
+  - Param: sequence 0, flags 0, empty name, owned by a pad method (one is added if the last method is not one).
+
+  The `<msil>` prefix is reserved (D11).
+- **Content checks** are recorded when a row is added and reported by `finalize()`. `finalize()` returns the first
+  one as an `Error` (5.7.12):
+  - a name with a NUL byte;
+  - a name longer than `MaxIdentifierBytes` (TypeDef and TypeRef count `Namespace.Name`);
+  - more than `MaxMethodsPerType` methods or `MaxFieldsPerType` fields owned by one TypeDef (pad rows included);
+  - a table past `MaxTableRows`;
+  - invalid UTF-8 or overflow in `#US`.
+
+  `finalize()` does not check body offsets: bodies that reference Field, MethodDef or Param rows can be encoded only
+  after `finalize()` numbers those rows, so `setMethodBodyOffset` is allowed before and after it.
+  `checkMethodBodies()` (after `finalize()`) returns `cannot write CLI metadata: method '<owner>::<name>' has no body`
+  for the first IL method that is not `abstract`, `pinvokeimpl` or `runtime` and has no offset; `writePEImage` (5.7.7)
+  calls it.
+
+  Misuse (a handle from the wrong table for a column, an add after `finalize()`, a token request before it) is an
+  assertion.
+- **Serialization** (II.24.2):
+  - the root: signature, version 1.1, reserved 0, the version string padded to 4, flags 0, and five streams in this
+    order: `#~`, `#Strings`, `#US`, `#GUID`, `#Blob`;
+  - every stream is written even when empty, padded to 4 with zeros;
+  - `#~`: reserved 0, version 2.0, HeapSizes, reserved byte 1, Valid, Sorted, row counts of the present tables in id
+    order, then the table data in id order;
+  - Module row: Generation 0, Mvid = #GUID 1, EncId 0, EncBaseId 0;
+  - MethodDef.RVA = `ILStreamRVA` + body offset (0 without a body); FieldRVA.RVA = `MappedDataRVA` + offset.
+- **The writer's table set** in Phase 2: Module, TypeRef, TypeDef, Field, MethodDef, Param, MemberRef,
+  CustomAttribute, ClassLayout, FieldLayout, StandAloneSig, PropertyMap, Property, MethodSemantics, ModuleRef,
+  TypeSpec, ImplMap, FieldRVA, Assembly, AssemblyRef, NestedClass and MethodSpec (metadata-writer 4.3,
+  exports-multiasm 10.4). Constant, GenericParam, InterfaceImpl, Event, File, ExportedType and ManifestResource are
+  read but not written until a later milestone adds them.
+
+#### 5.7.7 PE writer (M17)
+
+`PEWriter.h`. This is the Roslyn envelope, not ilasm's (metadata-writer 0.3, 3.3, 4.9):
+
+```cpp
+enum class PEImageKind : uint8_t { Executable, Library, Module };   // EXE program, -shared DLL, netmodule object
+struct PEOptions {
+  COFF::MachineTypes Machine = COFF::IMAGE_FILE_MACHINE_AMD64;
+  PEImageKind Kind = PEImageKind::Executable;
+  uint32_t CorFlags = COMIMAGE_FLAGS_ILONLY;
+  uint64_t ImageBase = 0x140000000;               // Library and Module: 0x180000000
+  uint32_t SectionAlignment = 0x2000, FileAlignment = 0x200;
+  uint64_t StackReserve = 0x400000, StackCommit = 0x4000, HeapReserve = 0x100000, HeapCommit = 0x2000;
+  uint16_t Subsystem = COFF::IMAGE_SUBSYSTEM_WINDOWS_CUI;
+  uint16_t DllCharacteristics = 0x8540;          // DYNAMIC_BASE | NX_COMPAT | NO_SEH | TERMINAL_SERVER_AWARE
+  uint8_t MajorLinkerVersion = 14, MinorLinkerVersion = 0;  // lld's value: 0.0 breaks Authenticode
+                                                  // (lld/COFF/Writer.cpp:1910-1916, metadata-writer 1.2)
+  // x86_64 -> AMD64 and aarch64 -> ARM64, PE32+. Other architectures are an Error until phase 5 (PE32,
+  // mscoree stub, .reloc). Machine and CorFlags stay independent of the triple (FeatureIdeas 7 must stay open).
+  static Expected<PEOptions> get(const Triple &TT, PEImageKind Kind);
+};
+struct PESection { std::string Name; uint32_t Characteristics; ArrayRef<uint8_t> Data; };   // Name <= 8 bytes
+struct CoffSymbol {                    // the COFF view of objects (Q2); plain records, no aux records
+  std::string Name;                    // more than 8 bytes: string table
+  uint32_t Value = 0;                  // common symbols: the size
+  int16_t SectionNumber = 0;           // 0 undefined, 1 .text, 2.. PEContent::ExtraSections in order
+  uint16_t Type = 0;                   // 0x20 for functions
+  uint8_t StorageClass = COFF::IMAGE_SYM_CLASS_EXTERNAL;
+};
+struct DebugDirectoryEntry { uint32_t Type; uint16_t MajorVersion = 0, MinorVersion = 0; ArrayRef<uint8_t> Data; };
+struct PEContent {
+  const MetadataBuilder *Metadata = nullptr;      // finalized
+  ArrayRef<uint8_t> ILStream;                     // MethodBodyStream::getBytes()
+  ArrayRef<uint8_t> MappedFieldData;              // FieldRVA data; offsets as given to addFieldRVA
+  uint32_t EntryPointToken = 0;                   // a MethodDef token for Executable, else 0
+  ArrayRef<DebugDirectoryEntry> DebugEntries;     // none in Phase 2 outputs; Phase 4 PDB carrier
+  ArrayRef<PESection> ExtraSections;              // after .text
+  ArrayRef<CoffSymbol> CoffSymbols;               // objects only
+};
+struct BlobContentId {
+  std::array<uint8_t, 16> Guid; uint32_t Stamp;
+  static BlobContentId fromHash(ArrayRef<uint8_t> Hash);   // Hash: at least 20 bytes
+};
+Error writePEImage(const PEOptions &Opts, const PEContent &C, SmallVectorImpl<uint8_t> &Out,
+                   BlobContentId *Id = nullptr);
+```
+
+- **Image shape:**
+  - PE32+, with the classic 128-byte DOS header and stub that Roslyn and ilasm write (e_lfanew 0x80);
+  - characteristics `EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE`, plus `DLL` for Library and Module;
+  - OS and subsystem version 4.0, AddressOfEntryPoint 0, CheckSum 0;
+  - no import table, no IAT, no entry stub, no `.reloc` (metadata-writer 3.3: every runtime runs that shape, Framework
+    4.8 included).
+- **`.text`** (0x60000020) at RVA `SectionAlignment`, laid out in this order:
+  1. the 72-byte CLI header;
+  2. the IL stream, 4-aligned, so body offsets stay 4-aligned;
+  3. the metadata, 4-aligned;
+  4. the debug directory and its data, 4-aligned, if any;
+  5. the mapped field data, 8-aligned, last (Roslyn's order; RVA data is read-only on Windows, so D12's copy into
+     `AllocHGlobal` memory stays).
+
+  `ExtraSections` follow at section-aligned RVAs. An `ExtraSections` entry with empty `Data` is a marker section
+  (VirtualSize 0, SizeOfRawData 0, PointerToRawData 0, VirtualAddress the next section-aligned RVA; 5.8.6).
+  SizeOfHeaders is 0x200, or 0x400 when the headers need the room (5.8.6). The COFF symbol table and its string table
+  go after the last section's raw data, 4-aligned, file-only, with PointerToSymbolTable and NumberOfSymbols set.
+- **CLI header and data directories:**
+  - CLI header: runtime 2.5, `CorFlags`, `EntryPointToken`; all other directories 0;
+  - data directories: CLR (14) and, when there are debug entries, Debug (6). No strong name.
+- **Checks** (each an `Error`):
+  - `Kind == Module` requires `!Metadata->hasAssembly()`; the other kinds require an Assembly row (Q1 netmodule
+    shape);
+  - an Executable needs a valid MethodDef entry token; Library and Module need 0 (a DLL with an entry token runs,
+    but PEVerify `/md` reports 0x80131B21 for it, metadata-writer 4.9);
+  - the metadata must be finalized;
+  - `Metadata->checkMethodBodies()` passes (5.7.6); its `cannot write CLI metadata: ` error is returned unchanged.
+- **Content id** (Roslyn `/deterministic`, metadata-writer 3.10 and 4.10):
+  1. write the whole file with MVID = 0, COFF TimeDateStamp = 0 and debug-directory stamps = 0;
+  2. take the SHA-256 of all of it;
+  3. `fromHash` sets the MVID to digest[0..15] with byte 7 = (b7 & 0x0F) | 0x40 and byte 8 = (b8 & 0x3F) | 0x80, and
+     the stamp to LE32(digest[16..19]) | 0x80000000;
+  4. patch the MVID at `getMvidOffset()` and the stamp into the COFF header and every debug entry.
+
+  Vector: SHA-256("abc") gives GUID `bf1678ba-018f-4acf-8141-40de5dae2223` and stamp 0xA36103B0.
+
+#### 5.7.8 PE image and metadata reader (M17)
+
+`PEImage.h` handles PE32 and PE32+, so the AnyCPU reference assemblies are covered:
+
+```cpp
+struct PESectionInfo { std::string Name; uint32_t VirtualAddress, VirtualSize, PointerToRawData, SizeOfRawData,
+                       Characteristics; };
+class PEImage {
+public:
+  static Expected<PEImage> create(ArrayRef<uint8_t> File);   // the caller keeps File alive
+  uint16_t getMachine() const; bool isPE32Plus() const; bool isDll() const; uint16_t getCharacteristics() const;
+  uint32_t getTimeDateStamp() const; uint64_t getImageBase() const; uint16_t getSubsystem() const;
+  uint16_t getDllCharacteristics() const; uint32_t getSizeOfImage() const;
+  ArrayRef<PESectionInfo> sections() const;
+  std::optional<std::pair<uint32_t, uint32_t>> getDataDirectory(unsigned Index) const;  // RVA, size; nullopt if 0
+  Expected<ArrayRef<uint8_t>> getRVAData(uint32_t RVA, uint32_t Size) const;   // within one section's raw data
+  Expected<ArrayRef<uint8_t>> getRVATail(uint32_t RVA) const;                  // RVA to the end of its section
+  bool hasCLIHeader() const; Expected<Cor20Header> getCLIHeader() const;
+  Expected<std::vector<CoffSymbol>> getCoffSymbols() const;                    // empty if none
+  ArrayRef<uint8_t> getFile() const;
+};
+```
+
+`MetadataReader.h`. The reader is lazy and zero-copy: it decodes rows on access from the mapped file. It is const,
+but it builds lookup indexes on first use, so it is not thread-safe; use one reader per thread. Scale target: Framework
+`mscorlib.dll` (24,237 MethodDefs) and the 163-file net8 pack (bcl-binding 7.2).
+
+```cpp
+// Row structs: every string column as StringRef; blob columns as #Blob offsets; every TableIdx and CodedIdx column
+// as a token (nil = 0); list columns as row ranges [Begin, End).
+struct ModuleRow { uint16_t Generation; StringRef Name; uint32_t Mvid; };
+struct TypeRefRow { uint32_t ResolutionScope; StringRef Name, Namespace; };
+struct TypeDefRow { TypeAttributes Flags; StringRef Name, Namespace; uint32_t Extends;
+                    uint32_t FieldBegin, FieldEnd, MethodBegin, MethodEnd; };
+struct FieldRow { FieldAttributes Flags; StringRef Name; uint32_t Signature; };
+struct MethodDefRow { uint32_t RVA; MethodImplAttributes ImplFlags; MethodAttributes Flags; StringRef Name;
+                      uint32_t Signature; uint32_t ParamBegin, ParamEnd; };
+struct ParamRow { ParamAttributes Flags; uint16_t Sequence; StringRef Name; };
+struct MemberRefRow { uint32_t Parent; StringRef Name; uint32_t Signature; };
+struct ConstantRow { uint8_t Type; uint32_t Parent; uint32_t Value; };
+struct CustomAttributeRow { uint32_t Parent; uint32_t Constructor; uint32_t Value; };
+struct ClassLayoutRow { uint16_t PackingSize; uint32_t ClassSize; uint32_t Parent; };
+struct FieldLayoutRow { uint32_t Offset; uint32_t Field; };
+struct StandAloneSigRow { uint32_t Signature; };
+struct PropertyRow { PropertyAttributes Flags; StringRef Name; uint32_t Signature; };
+struct MethodSemanticsRow { MethodSemanticsAttributes Semantics; uint32_t Method; uint32_t Association; };
+struct ModuleRefRow { StringRef Name; };
+struct TypeSpecRow { uint32_t Signature; };
+struct ImplMapRow { PInvokeAttributes Flags; uint32_t MemberForwarded; StringRef ImportName; uint32_t ImportScope; };
+struct FieldRVARow { uint32_t RVA; uint32_t Field; };
+struct AssemblyRow { AssemblyHashAlgorithm HashAlg; AssemblyVersion Version; AssemblyFlags Flags;
+                     uint32_t PublicKey; StringRef Name, Culture; };
+struct AssemblyRefRow { AssemblyVersion Version; AssemblyFlags Flags; uint32_t PublicKeyOrToken;
+                        StringRef Name, Culture; uint32_t HashValue; };
+struct ExportedTypeRow { TypeAttributes Flags; uint32_t TypeDefId; StringRef Name, Namespace; uint32_t Implementation; };
+struct ManifestResourceRow { uint32_t Offset; ManifestResourceAttributes Flags; StringRef Name; uint32_t Implementation; };
+struct NestedClassRow { uint32_t NestedClass, EnclosingClass; };
+struct GenericParamRow { uint16_t Number; GenericParamAttributes Flags; uint32_t Owner; StringRef Name; };
+struct MethodSpecRow { uint32_t Method; uint32_t Instantiation; };
+
+class MetadataReader {
+public:
+  static Expected<std::unique_ptr<MetadataReader>> create(ArrayRef<uint8_t> File);   // a PE with a CLI header
+  static Expected<std::unique_ptr<MetadataReader>> createFromMetadata(ArrayRef<uint8_t> Root);  // tests; no image
+  const PEImage *getImage() const;                // null for createFromMetadata
+  StringRef getVersionString() const; uint8_t getHeapSizeFlags() const; const MetadataSizes &getSizes() const;
+  bool isAssembly() const;                        // an Assembly row exists
+  uint32_t getRowCount(TableId T) const;
+  uint32_t getHeapSize(StringRef StreamName) const;   // "#Strings", "#US", "#GUID", "#Blob"
+  Expected<uint32_t> getColumnValue(TableId T, uint32_t Row, unsigned Column) const; // heap columns as offsets,
+                                                                                     // index columns as tokens
+  Expected<StringRef> getString(uint32_t Offset) const;
+  Expected<ArrayRef<uint8_t>> getBlob(uint32_t Offset) const;
+  Expected<std::string> getUserString(uint32_t Offset) const;             // UTF-8
+  Expected<ArrayRef<uint8_t>> getUserStringUTF16(uint32_t Offset) const;  // raw UTF-16LE code units
+  Expected<std::array<uint8_t, 16>> getGuid(uint32_t Index) const;
+  Expected<ModuleRow> getModule() const;  Expected<AssemblyRow> getAssembly() const;
+  Expected<TypeRefRow> getTypeRef(uint32_t Row) const;  // ... one getter per row struct above:
+  // getTypeDef getField getMethodDef getParam getMemberRef getConstant getCustomAttribute getClassLayout
+  // getFieldLayout getStandAloneSig getProperty getMethodSemantics getModuleRef getTypeSpec getImplMap getFieldRVA
+  // getAssemblyRef getExportedType getManifestResource getNestedClass getGenericParam getMethodSpec
+  Expected<uint32_t> getOwnerTypeDef(uint32_t FieldOrMethodToken) const;   // TypeDef token
+  Expected<uint32_t> getEnclosingType(uint32_t TypeDefToken) const;        // 0 if not nested
+  Expected<SmallVector<uint32_t, 4>> getCustomAttributes(uint32_t ParentToken) const;   // CustomAttribute rows
+  Expected<std::optional<ImplMapRow>> findImplMap(uint32_t MethodDefToken) const;
+  Expected<std::optional<FieldRVARow>> findFieldRVA(uint32_t FieldToken) const;
+  Expected<std::optional<ClassLayoutRow>> findClassLayout(uint32_t TypeDefToken) const;
+  Expected<std::pair<uint32_t, uint32_t>> getPropertyRange(uint32_t TypeDefToken) const;   // Property rows
+  Expected<SmallVector<MethodSemanticsRow, 2>> getMethodSemantics(uint32_t PropertyToken) const;
+  Expected<std::string> getTypeFullName(uint32_t Token) const;   // TypeDef/TypeRef: "NS.Name", nested "Outer/Inner"
+  // Payloads of the uint8[] attributes on Parent whose constructor's declaring type is Namespace.Name.
+  Expected<SmallVector<ArrayRef<uint8_t>, 1>> getByteArrayAttributes(uint32_t ParentToken, StringRef Namespace,
+                                                                     StringRef Name) const;
+  Expected<MethodBodyView> getMethodBody(uint32_t MethodDefToken) const;   // Error if RVA 0
+  Expected<ArrayRef<uint8_t>> getFieldData(uint32_t FieldToken, uint32_t Size) const;
+};
+std::array<uint8_t, 8> computePublicKeyToken(ArrayRef<uint8_t> PublicKey);  // last 8 SHA-1 bytes, reversed
+```
+
+- **Checks at `create`:**
+  - the root signature, and a version-string length of at most 255, padded to 4;
+  - stream headers in bounds, with 4-aligned names;
+  - `#~` present. `#-` (uncompressed metadata, Ptr tables) is an `Error` "uncompressed metadata (#-) is not
+    supported" (bcl-binding 7.2). Unknown streams (`#Pdb`, `#JTD`) are ignored;
+  - `HEAP_EXTRA_DATA` skips one u32 after the row counts;
+  - row counts at most `MaxTableRows`, and the table data inside `#~`.
+
+  Row getters check heap and row indexes, so malformed input gives an `Error`, never a crash or an assertion.
+- **Lookups** (owner, enclosing type, custom attributes, ImplMap, FieldRVA, ClassLayout, properties, semantics) build
+  an index on first use and never rely on the `Sorted` bits.
+- **Vectors** for `computePublicKeyToken`: mscorlib's ECMA key gives `b77a5c561934e089`; System.Runtime 8.0 gives
+  `b03f5f7f11d50a3a` (bcl-binding 5.6).
+
+#### 5.7.9 Link-info record, symbol-table attribute and the COFF view hooks (M17)
+
+The record layouts belong to the link contract (5.8.8; the symbol table's payload is 5.9.15's). This library provides
+the byte vocabulary and the codecs:
+
+- **Vocabulary.** The record primitives are 5.8.8's: `u8`, `u32` (little-endian), `uleb`, `sleb` (minimal form
+  written, more than 10 bytes refused), `str` (`uleb` byte length + UTF-8) and `token`. `cli::RecordWriter` and
+  `cli::RecordReader` (5.8.11, M17.c) write and read them and frame the subsections, for the link-info record and the
+  symbol table alike; `BlobWriter`/`BlobReader` (5.7.3), whose strings have a compressed length, never do.
+- **Link-info codec.** `LinkInfo.h` (CLI-i, M17.c) over 5.8.11's model `llvm::MSILLink::Record` in
+  `llvm/include/llvm/BinaryFormat/MSILLink.h` (M13; header-only, including `llvm/TargetParser/Triple.h` for
+  `setDataModel`, as `BinaryFormat/ELF.h` does). Its declarations are exactly 5.8.11's (`RecordWriter` and
+  `RecordReader` with their members there; `getCOFFViewMarkerSections` for 5.8.6's marker sections):
+
+  ```cpp
+  class RecordWriter; class RecordReader;   // 5.8.8's primitives and subsection framing (members: 5.8.11)
+  void encodeLinkInfo(const MSILLink::Record &R, SmallVectorImpl<uint8_t> &Out);    // canonical bytes
+  Expected<MSILLink::Record> decodeLinkInfo(ArrayRef<uint8_t> Bytes);                // framing + C8
+  Expected<ArrayRef<uint8_t>> findLinkInfo(const MetadataReader &MD);                // the Module attribute (5.8.7)
+  Error validateLinkInfo(const MSILLink::Record &R, const MetadataReader &MD);      // C1-C7
+  std::vector<CoffSymbol> buildCOFFSymbolView(const MSILLink::Record &R);           // 5.8.6; PEContent::CoffSymbols
+  ArrayRef<PESection> getCOFFViewMarkerSections();  // 5.8.6's .data, .rdata, .bss markers: section numbers 2-4
+  void printLinkInfo(const MSILLink::Record &R, const MetadataReader *MD, raw_ostream &OS); // --link-info lines
+  ```
+
+  `LinkInfo.h` includes `CustomAttribute.h` for `encodeByteArrayAttribute`/`decodeByteArrayAttribute` (5.7.4) and
+  does not declare them again.
+- **Symbol-table codec** (P2-C, Q25; CLI-i, M17.c). `llvm/include/llvm/CLI/SymbolTable.h` and
+  `llvm/lib/CLI/SymbolTable.cpp` hold the model and its codec: `cli::LibrarySymbolTable` (`cli::LibraryDataSymbol`,
+  `cli::LibraryFunctionFlags`), `encodeSymbolTable`, `decodeSymbolTable`, `printSymbolTable`, `SymbolTableMagic`
+  ("MSYM") and `SymbolTableType` ("<msil>SymbolTable"). The payload is 5.9.15's, written with `RecordWriter`: the
+  magic, u8 major 1, u8 minor 0, then exports-multiasm 5.2's fields with its compressed integers replaced by `uleb`
+  (field list in M17.c item 8). M22.a extends it (the header flag INTERFACE 0x01, and the flagged-function flag ABI
+  0x04 followed by the definition's 5.8.8 SIGNATURES descriptor), and M22's commit freezes the format (5.9.15); a
+  later change needs a section 12 row.
+- **Encoders and decoders.**
+  - The encoders write exactly 5.8.8's field order (M17.c item 8's for the symbol table); equal values give equal
+    bytes.
+  - The decoders check magic, version, every length and the absence of trailing bytes. Messages:
+    `invalid link-info record: <field> at offset <n>: <problem>`; another major is
+    `invalid link-info record: version <n> is newer than this toolchain supports (1)`; an unknown kind below 0x40,
+    flag bit or enum value is
+    `invalid link-info record: v1.<minor> uses <feature>, which this toolchain does not support` (5.8.9). Every
+    message of the symbol-table decoder starts with `invalid symbol table: ` instead.
+- **Print format.** 5.8.11's `--link-info` line grammar, as M17.c item 7 extends its example uniformly (the set flags
+  in bit order among `UNDEFINED DLLEXPORT EXPLICIT_IMPORT NO_STRIP TLS ALIAS DLLIMPORT IMPORT`, and
+  ` import_module='<m>' import_name='<e>'` after an IMPORT symbol's name). `llvm-cil-dump --link-info` prints
+  `printLinkInfo`'s lines for the Module-row record and `printSymbolTable`'s for each Assembly-row symbol table
+  (5.7.10); M19's FileCheck tests use them.
+- **Carrier.** The payload sits in a custom attribute whose constructor takes `uint8[]`:
+  - writing: `encodeByteArrayAttribute` (5.7.4), then `MetadataBuilder::addCustomAttribute`. The parent is the Module
+    row for the link-info record, whose attribute class is the TypeRef `[msil.link]'<msil>LinkInfo'` (5.8.3, Q3), and
+    the Assembly row for the symbol table, whose attribute class `'<msil>SymbolTable'` is private and emitted into the
+    library (`AllowMultiple`, Q25, 5.9.15);
+  - reading: `MetadataReader::getByteArrayAttributes`, and `findLinkInfo` for the record.
+
+  The link-info names are 5.8.11's `MSILLink` constants; the symbol-table names are `SymbolTable.h`'s.
+- **COFF view** (Q2, B2 condition 6). `buildCOFFSymbolView` gives `PEContent::CoffSymbols` and
+  `getCOFFViewMarkerSections()` gives `PEContent::ExtraSections` (5.8.6: the empty `.data`, `.rdata` and `.bss`
+  markers, section numbers 2-4); the M19 object writer passes both to `writePEImage` (5.7.7), which writes the view,
+  and `PEImage::getCoffSymbols` reads it for tests. Which
+  symbols, storage classes and sections an object lists is 5.8.6's rule (judge-dotnet-value 7.3); msil-ld never reads
+  the view.
+- **Phase 4 carrier** (B2 condition 8). A per-object Portable PDB is reserved as a `DebugDirectoryEntry` of type
+  `DebugTypeEmbeddedPortablePdb`, keyed by the object's MethodDef rows. Its tables 0x30-0x37 are reserved in
+  `TableId` numbering only.
+
+#### 5.7.10 Dumper, llvm-cil-dump, llvm-cil-copy and canonical listing v1 (M17)
+
+`Dump.h`:
+
+```cpp
+struct CanonicalOptions { bool StripScopes = false; bool DeclarationOrder = false; bool CanonicalForms = false;
+                          // 5.12.6's six normalizations; false = keep
+                          bool IgnoreAssemblyHash = false; bool DropParams = false;
+                          bool IgnoreInitLocalsWithoutLocals = false; bool QuietSignalingNaN = false;
+                          bool StripPInvokeModule = false; bool IgnorePInvokeAccess = false;
+                          enum class Stats : uint8_t { None, Append, Only } StatsMode = Stats::None; };
+Error dumpCanonical(const MetadataReader &R, raw_ostream &OS, const CanonicalOptions &Opts = {});
+Error dumpHeaders(const MetadataReader &R, raw_ostream &OS);
+Error dumpTables(const MetadataReader &R, raw_ostream &OS);
+Error dumpLinkInfo(const MetadataReader &R, raw_ostream &OS);   // printLinkInfo / printSymbolTable, if present
+```
+
+**`llvm-cil-dump`.** Usage:
+`llvm-cil-dump [--canonical] [--scopes=keep|strip] [--order=sorted|decl] [--forms=exact|canon]
+[--assembly-hash=keep|ignore] [--params=keep|drop] [--initlocals=keep|ignore-without-locals] [--snan=keep|quiet]
+[--pinvoke-module=keep|strip] [--pinvoke-access=keep|ignore] [--stats|--stats-only] [--headers] [--tables]
+[--link-info] <file>...`.
+- `--canonical` is the default when no mode option is given.
+- The six options `--assembly-hash`, `--params`, `--initlocals`, `--snan`, `--pinvoke-module` and `--pinvoke-access`
+  are 5.12.6's normalizations (spellings and effects in its table; `CanonicalOptions` fields `IgnoreAssemblyHash`,
+  `DropParams`, `IgnoreInitLocalsWithoutLocals`, `QuietSignalingNaN`, `StripPInvokeModule` and
+  `IgnorePInvokeAccess`). Each defaults to `keep`, which is canonical listing v1 unchanged, and they apply while the
+  listing is produced, before sorting.
+- With several files, each file's output is preceded by `File: <path>`.
+- Errors: `llvm-cil-dump: error: '<file>': <message>`, then the tool goes on with the next file; exit 1 if any file
+  failed.
+- `--headers` prints lines in this order (hex digits uppercase):
+
+  ```text
+  Format: PE32+ machine=0x8664 exe|dll
+  COFF: sections=<n> timestamp=0x<8> characteristics=0x<4> symbols=<n>
+  Optional: imagebase=0x<16> sectionalign=0x<x> filealign=0x<x> subsystem=<n> dllchars=0x<4> stack=0x<x>,0x<x> heap=0x<x>,0x<x>
+  Section: <name> rva=0x<8> vsize=0x<x> raw=0x<x> rawsize=0x<x> flags=0x<8>        (one per section)
+  CLI: flags=0x<8> entrypoint=0x<8> metadata=0x<8>,0x<x> runtime=<maj>.<min>
+  Metadata: version='<v>' heapsizes=0x<2> valid=0x<16> sorted=0x<16>
+  Stream: <name> offset=0x<x> size=0x<x>                                             (one per stream)
+  Mvid: <8-4-4-4-12 lowercase hex>
+  ```
+- `--tables` prints, per present table, `Table: <Name> rows=<n> rowsize=<n>`, then one row per line:
+  `  <Name>[<row>]: <Column>=<value> ...` in ECMA column order. Values by column kind:
+  - U16: `0x<4X>`; U32: `0x<8X>`;
+  - StringIdx: `'<string>'`;
+  - BlobIdx: `<hex>` (or `-`);
+  - GuidIdx: `{8-4-4-4-12}` (or `0`);
+  - TableIdx and CodedIdx: the token `0x<8>` (`0` for nil).
+
+**`llvm-cil-copy`.** Usage: `llvm-cil-copy <input> -o <output>`.
+- It reads an IL-only PE32+ image (an assembly or a netmodule, ilasm's envelope included) and rebuilds every row with
+  `MetadataBuilder`, keeping table order. Signatures are re-encoded with `mapTypeRefs`, bodies copied with
+  `rewriteILTokens` and re-headed through `MethodBodyStream` (`InitLocals` and clauses kept), FieldRVA data copied,
+  and custom-attribute blobs copied verbatim.
+- The output is written with `writePEImage`. The kind comes from the input: an entry point means Executable, an
+  Assembly row means Library, otherwise Module. The machine also comes from the input.
+- A row of a table outside 5.7.6's writer set is an error: `unsupported table <Name> (<n> rows)`.
+- Purpose: the end-to-end oracle of M16+M17 before msil-ld exists, and a working model of msil-ld's row copy and token
+  remapping. The output must equal the input canonically and run identically (5.7.13).
+
+**Canonical listing v1.** It is layout-independent (tests-p2 3.8-3.9; prototype `tests-p2-files/mdcanon/mdcanon.cs`).
+Two implementations write it from this specification: `mdcanon` (C#, M16) and `llvm-cil-dump --canonical` (C++,
+M17). For the same file their outputs must be byte-identical. M17's gate checks that on the M1 corpus, and a spec
+ambiguity found there is settled by a section 12 row. Rules:
+
+| Item | Format |
+|---|---|
+| Encoding | UTF-8, no BOM, every line ends in LF, no trailing blanks |
+| Header lines, in order | `pe PE32\|PE32+ machine=0x<4X> exe\|dll subsystem=<dec>`; `cor flags=0x<8X> runtime=<maj>.<min> metadata-version=<s>`; `entrypoint <method>` (if any); `assembly '<n>' ver <a.b.c.d> flags=0x<8X> hash=0x<8X> culture='<c>' key=<hex>` (if an Assembly row); `module '<n>'`; then `assemblyref '<n>' ver <v> flags=0x<8X> key=<hex> culture='<c>'`, `moduleref '<n>'`, `file '<n>'`, `exportedtype '<full>'`, `resource '<n>'` |
+| Types | per TypeDef: an empty line, `.class '<full>' flags=0x<8X>[ extends <type>]`, then (indent 2) `.layout pack <p> size <s>`, `.implements <type>`, custom attributes, fields, properties, methods |
+| Field | `  .field '<n>' <type> flags=0x<4X>[ offset <d>][ const <hex>][ marshal <hex>]`; its custom attributes (indent 4); FieldRVA data: `    .data <n> bytes` and lines of `      ` + at most 32 hex bytes; n is the size of a primitive field type or the ClassLayout size of a TypeDef valuetype; otherwise `    .data (unknown size)` |
+| Property | `  .property '<n>' <propsig> flags=0x<4X>`; `    .get <method>` / `.set` / `.other` per MethodSemantics row; custom attributes (indent 4) |
+| Method | `  .method '<n>' <methodsig> flags=0x<4X> impl=0x<4X>`; `    .pinvokeimpl '<module>' entry '<n>' flags=0x<4X>`; `    .param <seq> '<n>' flags=0x<4X>[ marshal <hex>][ const <hex>]` in Sequence order; custom attributes (indent 4); with a body: `    .maxstack <n>[ initlocals]`, `    .locals (<type>, ...)`, `    L<i>: <opname>[ <operand>]` per instruction, `    .try L<a> to L<b> catch <type>\|filter L<f>\|finally\|fault handler L<c> to L<d>` per clause in table order |
+| Trailer | `assembly .custom <method> = <hex>` and `module .custom <method> = <hex>` lines after the types |
+| Custom attribute | `.custom <method> = <hex>` |
+| Stats (`--stats` appends, `--stats-only` prints only these lines; never compared between writers) | `# table <Name> rows=<n> rowsize=<n>` per present table in id order; `# heap <#Name> size=<n>` for `#Strings #US #GUID #Blob`; `# image size=<SizeOfImage> sections=<n1>,<n2>` |
+| `<hex>` | uppercase byte pairs separated by one blank; `-` when empty |
+| `'<n>'` | raw UTF-8 between single quotes; `\` -> `\\`, `'` -> `\'`, bytes 0x00-0x1F and 0x7F -> `\xHH` |
+| `<full>` | TypeDef `NS.Name` (or `Name`); nested `<enclosing full>/<NS.Name>` |
+| `<type>` outside signatures | TypeDef `'<full>'`; TypeRef `[<assembly>]NS.Name` (`[*]` with `--scopes=strip`), `[.module <m>]NS.Name`, `[.module self]NS.Name`, nested `<enclosing TypeRef text>/NS.Name`; TypeSpec: its signature text |
+| `<type>` in signatures (`printTypeSig`) | `void bool char int8 uint8 int16 uint16 int32 uint32 int64 uint64 float32 float64 native int native uint string object typedref`; `class <type>`, `valuetype <type>`; `<t>*`, `<t>&`, `<t>[]`, `<t>[` + (rank - 1) commas + `]`; `class\|valuetype <type><<a>, <b>>`; `!<n>`, `!!<n>`; `method <methodsig>`; `<t> modreq(<type>)` / `<t> modopt(<type>)` in blob order; `<t> pinned` |
+| `<methodsig>` | `[instance ][explicit ]<cc>[<<n>> ]<ret>(<p>, <p>)`; cc `` (default), `unmanaged cdecl `, `unmanaged stdcall `, `unmanaged thiscall `, `unmanaged fastcall `, `vararg `, `unmanaged ` (0x09); `..., ` before the first optional parameter |
+| `<method>` / field operands | MethodDef `<methodsig> '<owner full>'::'<n>'`; MemberRef `<sig> <parent>::'<n>'` (field MemberRefs: the field type; parent `<type>`, `[.module <m>]` or a MethodDef `<method>`); MethodSpec `<method><<args>>`; FieldDef `<type> '<owner full>'::'<n>'` |
+| Operands | `ldc.i4.s` signed, `unaligned.`/`no.` unsigned, var operands unsigned, InlineI/I8 signed (decimal); `float32(0x<8X>)`, `float64(0x<16X>)`; branch `L<index of the target instruction>` (the code size gives `L<count>`, any other offset `<offset 0x<X>>`); switch `L<a>, L<b>`; `ldstr` `"..."` with `\"`, `\\`, `\u<4X>` for UTF-16 code units < 0x20 or > 0x7E; `calli` `<methodsig>`; other tokens as above |
+| `--forms=canon` | short branches print as their long forms; `ldarg.s ldarga.s starg.s ldloc.s ldloca.s stloc.s ldc.i4.s` print without `.s` |
+| `--scopes=strip` | AssemblyRef scopes print `[*]`; `assemblyref` lines are omitted |
+| `--assembly-hash=ignore`, `--params=drop`, `--initlocals=ignore-without-locals`, `--snan=quiet`, `--pinvoke-module=strip`, `--pinvoke-access=ignore` | 5.12.6's effects (its table); each defaults to `keep` (listing v1 unchanged) and applies while the listing is produced, before sorting |
+| Order (`--order=sorted`, the default) | types by `<full>`; fields by `<n> <type>`; properties and methods by `<n> <sig>`; header list lines, `.get/.set/.other` and custom-attribute lines by their text. Comparison is by UTF-8 bytes (code-point order; mdcanon must not use UTF-16 ordinal). Ties are broken by the member's whole listing text, then by declaration order. `--order=decl`: table order |
+
+Left out: tokens, heap offsets, RVAs, header kind (tiny or fat), MVID, timestamps, image base, alignments, section
+layout and the COFF view. Param rows are included; `--params=drop` (5.12.6's `ilasm-params`) removes the ones ilasm
+adds.
+
+#### 5.7.11 C# oracle tools: mdump and mdcanon (M16)
+
+- **Location and build.** `msil/utils/mdtools/` (no NuGet; tests-p2 3.9).
+  - `build-mdtools.py [--out DIR] [--build-dir DIR] [--dotnet PATH] [--ref-major N] [--force]` is modeled on
+    `msil/utils/jitall/build-jitall.py`: the newest installed SDK's `csc.dll` compiles each `.cs` against the newest
+    installed `Microsoft.NETCore.App.Ref` N.x pack (N = 8 by default), and nothing is downloaded.
+  - It writes `<build>/tools/msil/mdtools/{mdump,mdcanon}.dll`, their `.runtimeconfig.json` files (rollForward
+    Major) and a stamp.
+  - It rebuilds only when a source changed, builds into a temporary sibling directory that is renamed into place, and
+    exits 0 or 1.
+  - `build-jitall.py` itself is not changed.
+- **`mdcanon.cs`.** Canonical listing v1 (5.7.10) over System.Reflection.Metadata, with the canonical options of
+  `llvm-cil-dump` (5.7.10; not `--headers`, `--tables` or `--link-info`) and a batch mode:
+  `mdcanon [--canonical] [--scopes=keep|strip] [--order=sorted|decl] [--forms=exact|canon] [--assembly-hash=keep|ignore]
+  [--params=keep|drop] [--initlocals=keep|ignore-without-locals] [--snan=keep|quiet] [--pinvoke-module=keep|strip]
+  [--pinvoke-access=keep|ignore] [--stats|--stats-only] [--out-dir DIR] <file>...`.
+  - mdcanon implements the six 5.12.6 normalization options in M16 (M16.d) and `llvm-cil-dump` in M17 (M17.d); the
+    two agree byte for byte, and M17's `cli-corpus-check.py --mode dumpers` compares them with the defaults and with
+    all six plus `--scopes=strip`.
+  - `--out-dir DIR` writes `DIR/<file name>.canon` per input in one process (a dump costs about 1.4 s of .NET
+    start-up, tests-p2 2.3).
+  - Exit 0, or 1 on an unreadable input.
+- **`mdump.cs`.** Three modes:
+  - a raw listing for people (`mdump [--no-pe] [--no-bodies] <file>...`, never compared);
+  - `--opcodes`: tab-separated `Name, Value(4 hex), OperandType, StackBehaviourPop, StackBehaviourPush,
+    FlowControl` of System.Reflection.Emit.OpCodes in value order;
+  - `--contentid <hex digest>`: `BlobContentId.FromHash`, printed as `<guid> 0x<8X>`.
+- **`check-cil-defs.py`.** Compares `CILOpcodes.def` with `mdump --opcodes` (name, value, operand kind, stack
+  behaviour, flow). ECMA's `no.` is expected to be missing from SRM. Exit 0 or 1.
+- **`cli-corpus-check.py --mode ilasm|copy|dumpers|stats|encoder|object|gnu-tools ...`.** M16 creates it with mode
+  `ilasm`, which compiles M1 programs with `clang -S`, assembles each with Framework ilasm and with the NuGet ilasm,
+  and requires equal `mdcanon` listings (tests-p2 E3: 40 of 40). Later milestones add modes:
+  - M17: `copy`, `dumpers` and `stats` (5.7.13; options `--cil-dump` and `--cil-copy`); `dumpers` compares the two
+    dumpers once with the default options and once with all six 5.12.6 options plus `--scopes=strip`;
+  - M18: `encoder` (`--llc`, `--min-methods N`, `--jobs N`): every M1 method's `-show-mc-encoding` bytes, token kinds
+    and `.maxstack` equal ilasm's; leg `encoder-parity`, Windows only;
+  - M19: `object`, 5.12.6's object oracle over `msil/test/M1` (record bytes and `--link-info` included, determinism
+    across directories, SRM and both ildasms, C1-C5 and C7, `llvm-nm` letters and the `llvm-ar` index; leg
+    `obj-text`), and `gnu-tools` (GNU `nm`/`ar` in WSL; leg `obj-text-wsl`), with the options `--llvm-nm`,
+    `--llvm-ar`, `--ildasm-framework`, `--ildasm-nuget` and `--wsl-distro` (`--triple` is M16's).
+
+#### 5.7.12 Errors, determinism and CLR limits
+
+- **Errors.** Everything that can fail on input returns `llvm::Error`/`Expected`, made with
+  `createStringError(<errc>, ...)`. Messages start in lowercase, have no trailing period, and start with a fixed
+  prefix that tests match:
+
+  | Prefix | Source |
+  |---|---|
+  | `invalid CLI image: ` | `PEImage` |
+  | `invalid CLI metadata: ` | `MetadataReader`; with `at offset 0x<hex>` where known |
+  | `invalid signature: ` | signature decoders |
+  | `invalid custom attribute blob: ` | custom-attribute decoder |
+  | `invalid method body: ` | `decodeMethodBody` |
+  | `invalid IL: ` | `decodeIL` |
+  | `invalid IL body: ` | `ILBuilder::layout` |
+  | `cannot write CLI metadata: ` | `MetadataBuilder::finalize` and `checkMethodBodies`; names the entity, e.g. `type 'X' has 65525 methods (limit 65524)` |
+  | `cannot write PE image: ` | `writePEImage` |
+
+  The link-info and symbol-table prefixes are in 5.7.9. No library function calls `report_fatal_error`, `exit` or
+  `abort` because of input data; API misuse is an assertion.
+- **Determinism** (metadata-writer 4.10, tests-p2 3.7). Output bytes depend only on the API calls and their order:
+  - never on pointer values, hash-table iteration order, time, environment, host, paths or threads;
+  - row order is insertion order (stable tables), owner-grouped insertion order (member tables), or a stable sort by
+    key (sorted tables);
+  - `#Blob`, `#US` and `#GUID` are in insertion order with deduplication, and `#Strings` is in `StringTableBuilder`
+    finalize order, which depends only on the content;
+  - every padding byte is zero; all integers are little-endian through `support::endian`, so a Linux host writes the
+    same bytes as Windows;
+  - the MVID and stamp are the content id (5.7.7), so module names are the only path-derived input, and choosing them
+    is the caller's job (Q1: object Module names are independent of the `-o` path).
+- **CLR limits enforced:**
+  - `MaxMethodsPerType` and `MaxFieldsPerType` (metadata-writer 3.6: 65,525 methods or 65,536 fields fail on every
+    runtime). msil-ld spills members into further classes before it reaches them (5.9); the library is the
+    backstop;
+  - the 0xFFFF padding rule (5.7.6);
+  - `MaxIdentifierBytes` (Q27; PEVerify `VLDTR_E_TD_NAMETOOLONG`);
+  - `MaxTableRows` and `MaxUserStringHeapSize` (24-bit token rows and `ldstr` offsets);
+  - `MaxCompressedUInt` in blobs;
+  - `maxstack` <= 65535;
+  - the tiny-header and small-EH conditions (5.7.5);
+  - no Assembly row in a netmodule, and the entry-token rules (5.7.7);
+  - RVA data stays read-only and 8-aligned (5.7.7).
+
+  Exact float32 signaling NaNs need codegen help: the JIT quiets an `ldc.r4` sNaN even when the bytes are exact
+  (metadata-writer 3.4), so the library only guarantees the bytes.
+
+#### 5.7.13 Testing
+
+| Milestone | Unit tests (`llvm/unittests/CLI/`, binary `CLITests`) | Oracles |
+|---|---|---|
+| M13 | `CLIFormatTest.cpp`: compressed integers (II.23.2: 0x03 `03`, 0x7F `7F`, 0x80 `80 80`, 0x2E57 `AE 57`, 0x3FFF `BF FF`, 0x4000 `C0 00 40 00`, 0x1FFFFFFF `DF FF FF FF`, the signed examples, rejected leads); token helpers; `.def` invariants (219 opcodes, unique values, two-byte values start with 0xFE, Sorted flags equal `SortedTablesMask`, tag bits cover each coded index); flag values. `TableSchemaTest.cpp`: column sizes at rows 0xFFFF/0x10000 (simple) and 2^(16-n)-1 / 2^(16-n) (coded), heap flags at 0xFFFF/0x10000, row sizes of real assemblies | row sizes and flag values computed with SRM in scratch by the test WP (the method of `metadata-writer-files/py/verify_schema.py`) and embedded |
+| M16 | `BlobTest`, `SignatureTest` (5.7.3 vectors, every element type, modifiers, sentinel, decode errors, `mapTypeRefs`, print grammar), `CustomAttributeTest`, `OpcodesTest` (every entry against an embedded copy of SRM's table from `metadata-writer-files/dotnet-opcodes.tsv`), `ILBuilderTest` (shortest forms, relaxation at +127/+128 and -128/-129 including backward branches, switch, maxstack, depth errors, clause order; E1's 371-byte `main` rebuilt instruction by instruction must equal ilasm's bytes, metadata-writer E2), `ILDecoderTest` (all 219 opcodes, truncation, `rewriteILTokens`), `MethodBodyTest` (code 63/64, maxstack 8/9, locals, InitLocals, EH 20/21 clauses, offset 0xFFFF/0x10000, length 0xFF/0x100, multi-section decode), `HeapsTest` (dedup, tail merging, `#US` trailing-byte cases, padding, size boundaries), `MetadataBuilderTest` (a Phase-1-shaped module with the 14 tables of metadata-writer 2: row counts, `Valid`/`Sorted`, member runs including empty runs, sorted-table order, padding at 0xFFFE/0xFFFF/0x10000 rows of Field, MethodDef and Param, the limits as Errors, `checkMethodBodies` before and after `setMethodBodyOffset`, deduplication, two identical builds give identical bytes; columns read back from the serialized bytes through `MetadataSizes`) | `check-cil-defs.py` (SRM opcodes); `cli-corpus-check.py --mode ilasm` (mdcanon stable across both ilasms) |
+| M17 | `PEWriterTest` (the content-id vector; header fields per kind; no import, IAT or reloc; `.text` order and alignments; marker sections and SizeOfHeaders 0x400; COFF view records and string table; Module without an Assembly row; entry-token errors; `checkMethodBodies`; determinism), `PEImageTest` (our images; truncated DOS header, bad e_lfanew or signature, sections out of range, unmapped RVAs, PE32 input), `MetadataReaderTest` (malformed root, streams, `#-`, out-of-range indexes give the 5.7.12 prefixes; 4-byte heap and coded indexes on a builder module with more than 64 KB of strings and 2^14 TypeRefs; `computePublicKeyToken` vectors), `RoundTripTest` (builder -> `writePEImage` -> reader for every table and column of the writer set, bodies, signatures, attributes; `dumpCanonical` on the result), `LinkInfoTest` (every entry kind of 5.8 round trip, version refusal, truncation errors, the attribute carrier through builder, PE and reader), `SymbolTableTest` (`CLISymbolTableTest`: round trip, magic, version, flag and trailing-byte errors, print) | lit: `llvm/test/tools/llvm-cil-dump/*.test` and `llvm-cil-copy/*.test` over yaml2obj inputs made from ilasm images (the `.il` kept in the test with `split-file`, the YAML generated once in scratch); `--headers`, `--tables`, `--canonical` and its options, errors on malformed variants. `cli-corpus-check.py`: `--mode dumpers` (`llvm-cil-dump --canonical` == `mdcanon` on every M1 C program at -O0/-O2 and on their copies, once with the defaults and once with the six 5.12.6 options plus `--scopes=strip`), `--mode copy` (copies canonically equal to their inputs; byte-identical across two runs and two directories; `msil/test/M1/11-programs` at -O2 run with the same transcript on .NET 8 with D21 verification clean, plus .NET 10, Framework 4.8 and WSL .NET 10 for five programs; PEVerify `/md` messages of the copy a subset of the input's (O6); ildasm -> ilasm round trip of the copy runs), `--mode stats` (`llvm-cil-dump --stats-only` == `mdcanon --stats-only` on the installed Framework 4.8 `mscorlib.dll` and net8 `System.Runtime.dll` and `System.Private.CoreLib.dll`, host only) |
+
+- **Test WPs** are written from this section by agents that do not read the same milestone's implementation
+  (section 1.4). An expected value comes from ECMA, a recon log, the Python prototype, or a tool run in scratch, never
+  from our own implementation's output.
+- **gtest names.** `CLITests` is a dedicated binary, so its suites are named `CLI<Topic>` (e.g.
+  `CLIBlobTest.CompressedUInt`) without an `MSIL` part. This is an exception to section 2's gtest naming rule, which
+  exists for filters in shared binaries. Gates run it with `msil-gtest.ps1 -Exe <build>/unittests/CLI/CLITests.exe
+  -Filter '*' -NoSkip -MinTests N`.
+- **Test-count floors.** N is the floor of the latest milestone that added `CLITests` cases, and it never goes down,
+  so a lost test file fails the step:
+
+  | Gates | N | Where the cases come from |
+  |---|---|---|
+  | M13, M14, M15 | 26 | at least 20 `CLIFormatTest` and `CLITableSchemaTest` cases plus 5.8's 6 `CLIMSILLinkTest` cases (M13.e) |
+  | M16 | 110 | the M16 row above |
+  | M17, M18, M19 | 170 | the M17 row above, `CLISymbolTableTest` included (M18 and M19 add no `CLITests` cases) |
+  | M20, M21 | 210 | M20.d's `CLIImageLayoutTest`, `CLITrailerTest` and `CLICallAdapterTest` |
+  | M22, M23 | 210, plus a `-Filter 'CLISymbolTableTest.*' -MinTests 9` step | M22.e extends M17's `CLISymbolTableTest`; M23 keeps M22's floor |
+
+  Every gate from M13 runs `CLITests` through `msil-gtest.ps1` with its floor (5.12.10 G2); from M22 also the
+  `CLISymbolTableTest.*` step, which M23 keeps. Section 2's `CLITests` row uses the same numbers.
+- **Build targets** in 5.6.11's one list, which `msil-build.ps1 -Standard` builds: M13 adds `CLITests`; M15 adds
+  `yaml2obj` (`LLVMObjectYAML`, a one-time compile of a few minutes) and `llvm-mc`; M17 adds `llvm-cil-dump` and
+  `llvm-cil-copy`. All of them stay in the list from then on.
+- **Gate cost** (Q32): in M16 the mdtools build and checks take about 3 minutes; in M17 `cli-corpus-check.py` takes
+  about 8 minutes (clang -S plus ilasm for 198 program-levels (M1's 99 C tests after M12) at about 0.4 s each, batch
+  dumps, and 20 verified runs at about 5 s each).
+
+#### 5.7.14 Work packages
+
+Letters are assigned by the plan; the IDs below are local to this contract. The milestones use these letters:
+CLI-fmt is M13.d and CLI-fmt-T is M13.e (which also tests 5.8's `MSILLink.h` in `MSILLinkTest.cpp`); CLI-a to
+CLI-f are M16.a to M16.f; CLI-g to CLI-l are M17.a to M17.f. M16.g and M17.g (harness and docs) come from 5.12. The
+milestone sections are authoritative for owned files, Depends-on and Reads lines. Ownership is per milestone.
+
+**Depends on.** The farm's milestone workflow starts a WP only after every WP in its Depends-on column has handed
+over. This partition relies on nothing more:
+- every header is owned by a root WP or by a WP that its users depend on, so no WP compiles against a header that a
+  WP started after it writes;
+- WPs that own headers still write the declarations first and keep them compilable after every edit, because the
+  root test WPs (CLI-e, CLI-f, CLI-k, CLI-l) run at the same time;
+- a root test WP syntax-checks every file whose included headers exist when it is ready to hand over. It names the
+  other files in its hand-over as checked at the gate. It never waits for, reads or builds a same-milestone
+  implementation (protocol 4).
+
+**M13** (one implementation WP and one test WP; no widely-included header):
+
+| WP | Kind, size | Owned files | Depends on | Reads |
+|---|---|---|---|---|
+| CLI-fmt | implement, ~1,300 | `llvm/include/llvm/BinaryFormat/CLI.h`, `llvm/include/llvm/BinaryFormat/CLITables.def`, `llvm/include/llvm/BinaryFormat/CILOpcodes.def`, `llvm/include/llvm/CLI/Handles.h`, `llvm/include/llvm/CLI/TableSchema.h`, `llvm/lib/CLI/TableSchema.cpp`, `llvm/lib/CLI/CMakeLists.txt`, `llvm/lib/CMakeLists.txt`, `llvm/unittests/CMakeLists.txt` | none | 5.7.1, 5.7.2, 5.7.6, 5.7.12 and 5.7.14; metadata-writer.md 4.1-4.5, 5.1; `metadata-writer-files/{CLITables.def,CILOpcodes.def,py/cliwriter.py,py/verify_schema.py,py/gen_tables_def.py}`; bcl-binding.md 7.2-7.4; `llvm/include/llvm/BinaryFormat/{COFF.h,Wasm.h}`; `llvm/include/llvm/ADT/BitmaskEnum.h`; `llvm/lib/Target/MSIL/MSILUtilities.h` (MaxILNameBytes) |
+| CLI-fmt-T | test, ~600 | `llvm/unittests/CLI/CMakeLists.txt`, `llvm/unittests/CLI/CLIFormatTest.cpp`, `llvm/unittests/CLI/TableSchemaTest.cpp`, `llvm/unittests/CLI/MSILLinkTest.cpp` | CLI-fmt and the M13 WP that writes `MSILLink.h` (it starts after both hand over) | 5.7.1, 5.7.2, 5.7.6 and 5.7.13; 5.8.8, 5.8.9 and 5.8.11 for `MSILLinkTest.cpp`; ECMA examples in metadata-writer.md 6; `metadata-writer-files/{verify_schema.log,dotnet-opcodes.tsv}`; `llvm/unittests/Object/CMakeLists.txt` (style) |
+
+**M16** (writer half; only the new library is rebuilt):
+
+| WP | Kind, size | Owned files | Depends on |
+|---|---|---|---|
+| CLI-a Blobs, signatures, custom attributes | implement, ~850 | `llvm/include/llvm/CLI/Blob.h`, `llvm/lib/CLI/Blob.cpp`, `llvm/include/llvm/CLI/Signature.h`, `llvm/lib/CLI/Signature.cpp`, `llvm/include/llvm/CLI/CustomAttribute.h`, `llvm/lib/CLI/CustomAttribute.cpp` | none |
+| CLI-b Opcodes, IL builder, IL decoder, method bodies | implement, ~1,100 | `llvm/include/llvm/CLI/Opcodes.h`, `llvm/lib/CLI/Opcodes.cpp`, `llvm/include/llvm/CLI/ILBuilder.h`, `llvm/lib/CLI/ILBuilder.cpp`, `llvm/include/llvm/CLI/ILDecoder.h`, `llvm/lib/CLI/ILDecoder.cpp`, `llvm/include/llvm/CLI/MethodBody.h`, `llvm/lib/CLI/MethodBody.cpp` | none (a root; CLI-c starts after it hands over) |
+| CLI-c Heaps and MetadataBuilder | implement, ~1,400 | `llvm/include/llvm/CLI/Heaps.h`, `llvm/lib/CLI/Heaps.cpp`, `llvm/include/llvm/CLI/MetadataBuilder.h`, `llvm/lib/CLI/MetadataBuilder.cpp`, `llvm/lib/CLI/CMakeLists.txt` (lists every M16 source) | CLI-b (`MethodBodyStream`) |
+| CLI-d C# oracle tools | infra, ~900 | `msil/utils/mdtools/mdump.cs`, `msil/utils/mdtools/mdcanon.cs`, `msil/utils/mdtools/build-mdtools.py`, `msil/utils/mdtools/check-cil-defs.py`, `msil/utils/mdtools/cli-corpus-check.py` | none |
+| CLI-e Tests for CLI-a and CLI-b | test, ~1,100 | `llvm/unittests/CLI/CMakeLists.txt` (lists CLI-f's files too), `llvm/unittests/CLI/BlobTest.cpp`, `llvm/unittests/CLI/SignatureTest.cpp`, `llvm/unittests/CLI/CustomAttributeTest.cpp`, `llvm/unittests/CLI/OpcodesTest.cpp`, `llvm/unittests/CLI/ILBuilderTest.cpp`, `llvm/unittests/CLI/ILDecoderTest.cpp`, `llvm/unittests/CLI/MethodBodyTest.cpp` | none |
+| CLI-f Tests for CLI-c | test, ~800 | `llvm/unittests/CLI/HeapsTest.cpp`, `llvm/unittests/CLI/MetadataBuilderTest.cpp` | none |
+
+Reads of the M16 WPs, by subsection of 5.7:
+- CLI-a: 5.7.1-5.7.4, 5.7.10 (the print grammar) and 5.7.12;
+- CLI-b: 5.7.1, 5.7.2, 5.7.5 and 5.7.12;
+- CLI-c: 5.7.1, 5.7.2, 5.7.6 and 5.7.12;
+- CLI-d: 5.7.10, 5.7.11 and 5.7.13;
+- CLI-e: 5.7.1-5.7.5, 5.7.10, 5.7.12 and 5.7.13;
+- CLI-f: 5.7.1, 5.7.2, 5.7.5, 5.7.6, 5.7.12 and 5.7.13.
+
+Every M16 WP also reads metadata-writer.md 4-6, the `metadata-writer-files/py/` prototype and logs, and the M13
+headers. CLI-a also reads bcl-binding.md 3.4 and 5.5-5.6 and exports-multiasm.md 5.2. CLI-b also reads mc-streamer.md
+5.3-5.5 and `llvm/lib/Target/MSIL/MCTargetDesc/MSILInstPrinter.cpp` (`getShortForm`). CLI-d also reads
+`tests-p2-files/mdcanon/`, `metadata-writer-files/mdump/`, `msil/utils/jitall/build-jitall.py`, tests-p2.md 2.2-2.3
+and 3.8-3.9. Gate additions: configure, build `CLITests`, the gtest step, `build-mdtools.py`, `check-cil-defs.py`,
+and `cli-corpus-check.py --mode ilasm` on `msil/test/M1/11-programs` at -O0/-O2.
+
+**M17** (reader, PE, dumpers, codecs).
+
+| WP | Kind, size | Owned files | Depends on |
+|---|---|---|---|
+| CLI-g PE writer | implement, ~650 | `llvm/include/llvm/CLI/PEWriter.h`, `llvm/lib/CLI/PEWriter.cpp`, `llvm/lib/CLI/CMakeLists.txt` (lists every M17 source) | none |
+| CLI-h PE image and metadata reader | implement, ~1,500 | `llvm/include/llvm/CLI/PEImage.h`, `llvm/lib/CLI/PEImage.cpp`, `llvm/include/llvm/CLI/MetadataReader.h`, `llvm/lib/CLI/MetadataReader.cpp` | CLI-g (`CoffSymbol` in `PEWriter.h`) |
+| CLI-i Link-info and symbol-table codecs | implement, ~900 | `llvm/include/llvm/CLI/LinkInfo.h`, `llvm/lib/CLI/LinkInfo.cpp`, `llvm/include/llvm/CLI/SymbolTable.h`, `llvm/lib/CLI/SymbolTable.cpp` | CLI-g (`PESection`, `CoffSymbol`), CLI-h (`MetadataReader`, which 5.8.11's `findLinkInfo` and `validateLinkInfo` take); it also uses M13's `MSILLink.h` (5.8) |
+| CLI-j Dumper and tools | implement, ~1,300 | `llvm/include/llvm/CLI/Dump.h`, `llvm/lib/CLI/Dump.cpp`, `llvm/tools/llvm-cil-dump/CMakeLists.txt`, `llvm/tools/llvm-cil-dump/llvm-cil-dump.cpp`, `llvm/tools/llvm-cil-copy/CMakeLists.txt`, `llvm/tools/llvm-cil-copy/llvm-cil-copy.cpp` | CLI-g, CLI-h, CLI-i |
+| CLI-k Unit tests | test, ~1,100 | `llvm/unittests/CLI/CMakeLists.txt`, `llvm/unittests/CLI/PEWriterTest.cpp`, `llvm/unittests/CLI/PEImageTest.cpp`, `llvm/unittests/CLI/MetadataReaderTest.cpp`, `llvm/unittests/CLI/RoundTripTest.cpp`, `llvm/unittests/CLI/LinkInfoTest.cpp`, `llvm/unittests/CLI/SymbolTableTest.cpp` | none |
+| CLI-l Tool tests and corpus oracle | test and infra, ~900 | `llvm/test/tools/llvm-cil-dump/` (a directory), `llvm/test/tools/llvm-cil-copy/` (a directory), `msil/utils/mdtools/cli-corpus-check.py` | none |
+
+Reads of the M17 WPs, by subsection:
+- CLI-g: 5.7.1, 5.7.6 (`checkMethodBodies`), 5.7.7, 5.7.12, 5.8.2 and 5.8.6;
+- CLI-h: 5.7.1, 5.7.6, 5.7.8 and 5.7.12;
+- CLI-i: 5.7.1, 5.7.4, 5.7.7, 5.7.9, 5.7.12, 5.8.3, 5.8.5-5.8.11 and 5.9.15;
+- CLI-j: 5.7.1, 5.7.6, 5.7.10, 5.7.12, 5.8.11 and 5.12.6;
+- CLI-k: 5.7.1, 5.7.6-5.7.10, 5.7.12, 5.7.13, 5.8.2, 5.8.5-5.8.11 and 5.9.15;
+- CLI-l: 5.7.10, 5.7.11, 5.7.13, 5.8.7, 5.8.8, 5.8.11 and 5.12.6.
+
+Every M17 WP also reads metadata-writer.md 3.3, 3.10 and 4.9-4.11, bcl-binding.md 7, and the M13 and M16 headers.
+CLI-g also reads `lld/COFF/Writer.cpp` (~1834-2056, `writeHeader`) and `llvm/include/llvm/BinaryFormat/COFF.h`. CLI-h
+also reads `llvm/include/llvm/Object/COFF.h` (struct shapes only, no dependency). CLI-i also reads
+`llvm/include/llvm/BinaryFormat/MSILLink.h` and exports-multiasm.md 5. CLI-j and CLI-l also read tests-p2.md 3.8-3.9
+and `msil/utils/mdtools/`. CLI-l also reads `msil/utils/msil-run.py` and `msil-verify.py` (CLIs),
+`llvm/test/tools/yaml2obj/COFF/` (PE YAML shape) and `git show HEAD:msil/test/lit.cfg.py` (ilasm and runtime
+discovery). It reads the committed copy because the working-tree file belongs to M17's harness WP, and the workflow
+forbids test WPs to read files that non-test WPs own. CLI-l checks its canonical expectations with M16's mdcanon
+before hand-over. `llvm-cil-dump` and `llvm-cil-copy` first run on its tests at the gate (5.7.1). Gate additions:
+configure; `msil-build.ps1 -Standard` (5.6.11's M17 list); the gtest step; `msil-lit.ps1
+llvm/test/tools/llvm-cil-dump llvm/test/tools/llvm-cil-copy`; and `cli-corpus-check.py --mode dumpers,copy,stats`.
+
+#### 5.7.15 What later milestones rely on
+
+Each later WP cites in its Reads the 5.7 subsections of what it uses (the rules at the top of 5.7):
+
+| Milestone | Writers of lib/CLI files (5.7.1 and 5.7.12 too) | Consumers | Tests that check `llvm-cil-dump` or `%msil_canon` output (5.7.10; 5.8.11 for `--link-info`) |
+|---|---|---|---|
+| M18 | M18.a (`BCLMembers.{def,h}`; content 5.11.7): 5.7.2 | MC encoder and AsmPrinter: 5.7.2, 5.7.3, 5.7.5 | M18.d (`--tables`) |
+| M19 | none | object writer: 5.7.3, 5.7.5-5.7.7, 5.7.9 | M19.d (every object test), M19.e (`--headers`, `--link-info`) |
+| M20 | M20.a (`ImageLayout`, `Trailer`, `CallAdapter`, `BCLMembers.def` entries): 5.7.2, 5.7.3, 5.7.5, 5.7.6; M20.d's CLITests files: 5.7.13 | msil-ld inputs: 5.7.3, 5.7.5, 5.7.8, 5.7.9; output: 5.7.3, 5.7.5-5.7.7, 5.7.12 (spill limits) | M20.e, M20.g (`'<msil>Spill1'` through `%msil_canon`) |
+| M21 | M21.b (`Trailer.{h,cpp}`, `BCLMembers.def` entries): 5.7.2, 5.7.3, 5.7.5, 5.7.6 | binder and references: 5.7.3, 5.7.4, 5.7.8 | M21.d |
+| M22 | M22.a (`SymbolTable.{h,cpp}`, `BCLMembers.def` entries): 5.7.2, 5.7.9; M22.b (`Trailer.{h,cpp}`): 5.7.3, 5.7.5, 5.7.6; M22.e's `SymbolTableTest.cpp`: 5.7.13 | library writer: 5.7.6, 5.7.7; library inputs: 5.7.8, 5.7.9 | M22.e |
+
+- **M18** links `CLI` into `MSILDesc` and `MSILCodeGen`, and uses:
+  - `getOpcodeInfo`/`getOpcodeByValue` for `MSILMCCodeEmitter` and for the target unit test that checks every
+    TableGen `cilop` against `CILOpcodes.def`;
+  - `getShortBranchForm`/`getLongBranchForm` if MC relaxes branches;
+  - `ILBuilder` in place of `SynthesizedBody`: `instructions()` become MCInsts, `TokenRef::getExternal` ids map to
+    MCSymbols, and `getMaxStack()` replaces the hand-counted depths;
+  - `cli::MethodSig`/`TypeSig` as the signature of structured BCL operands and of `MCSymbolMSIL` (forward-declared in
+    lib/MC).
+
+  Its encoder parity gate (2,670 of 2,670 methods) decodes ilasm output with `decodeIL` or `llvm-cil-dump`.
+- **M19** (the object writer) uses:
+  - `MetadataBuilder` without `setAssembly`, `MethodBodyStream`, and `writePEImage` with `PEImageKind::Module`,
+    `CoffSymbols` = `buildCOFFSymbolView(Record)` and `ExtraSections` = `getCOFFViewMarkerSections()` (5.8.6's three
+    empty marker sections, section numbers 2-4);
+  - `encodeLinkInfo` + `encodeByteArrayAttribute` for the record.
+
+  Gate: `canon(clang -c)` == `canon(ilasm(object-form text))` with `llvm-cil-dump --canonical`; ildasm opens every
+  object; `llvm-cil-dump --link-info` FileCheck tests.
+- **M20** (msil-ld) uses:
+  - `ObjFile` = `MetadataReader::create` over the object (or over the LTO in-memory object) + `findLinkInfo`,
+    `decodeLinkInfo` and `validateLinkInfo` (5.8.11);
+  - the token walker `decodeIL`/`rewriteILTokens`, signature re-encoding with `mapTypeRefs`, and `decodeMethodBody`;
+  - for the output, `MetadataBuilder`, `MethodBodyStream` and `writePEImage` (`Executable`), with the trailer built by
+    `ILBuilder`;
+  - spill classes below `MaxMethodsPerType`/`MaxFieldsPerType`.
+
+  O3/O4 run with `llvm-cil-dump --canonical`; `mdcanon` stays in the `--mode dumpers` cross-check.
+- **M21** (binder) uses:
+  - `MetadataReader` typed rows (TypeDef, NestedClass, ExportedType, Assembly, AssemblyRef, MethodDef, Field,
+    MemberRef, CustomAttribute for `[ReferenceAssembly]`);
+  - `computePublicKeyToken`;
+  - signature decoding with modifiers (modreqs are copied, bcl-binding 3.4);
+  - the custom-attribute codec for `Type`-argument rewriting (the type-name grammar is the binder's).
+- **M22** uses Property, PropertyMap and MethodSemantics (writer and reader), an Assembly-row attribute on a private
+  attribute class, `encodeSymbolTable`/`decodeSymbolTable` (5.7.9; M22.a extends the codec), Param rows with names on
+  exports, and `#Strings` suffix sharing (exports-multiasm 5.1).
+- **M23** runs `cli-corpus-check.py --mode ilasm,dumpers,copy,stats` on `msil/test/M1/11-programs` at -O2 (Q32; all
+  of `msil/test/M1` at -O0 and -O2 stays M17's gate scale) and relies on 5.7.12's determinism for the cross-host
+  comparison of CIL objects and archives (`det-manifest.py`, 5.12.12). No PE is compared across hosts; PE determinism
+  is checked within each host (section 10 item 12; tests-p2 3.7). `llvm-cil-dump --canonical` has been the O3/O4
+  comparator since M17 (brief, M17 row); `mdcanon` remains only in `--mode dumpers`.
+- **M12, M14, M15** do not use the library. M15 tells managed DLLs from native ones with `COFFObjectFile`'s CLR data
+  directory (14), because `PEImage` arrives only in M17.
+- **FeatureIdeas** (preclusion only). Nothing here assumes `<Module>`: members go on any TypeDef with any namespace
+  or nesting, the signature model is general, and machine and CorFlags are independent of the triple. The Portable
+  PDB tables and the `AllowMultiple` symbol-table attribute keep ideas 1 and 3-7 open.
+
+### 5.8 B2 objects and the link-info record v1
+
+This contract fixes what a CIL object is (user decision Q1, B2, with the C-fidelity conditions 1-8 of
+[decision-brief 1.2](recon/p2/decision-brief.md)) and the link-info record v1 that
+`llvm/include/llvm/BinaryFormat/MSILLink.h` defines (M13), `llvm/lib/CLI` encodes and decodes (M17), the backend
+writes (M19) and msil-ld reads (M20). Rules carry ids (O, R, C) so WPs, tests and reviews can cite them. Sources:
+objfmt-binding 4 and 11, judge-c-fidelity 1 (R1-R22), 4 (F1-F7) and 6.2, judge-dotnet-value 2 (J1-J7) and 7,
+objfmt-container 4, mc-streamer 5, exports-multiasm 5, native-imports 6-8. Checklists: wasm's `linking` section
+(`llvm/include/llvm/BinaryFormat/Wasm.h:202-264`, `WasmRelocs.def`) and lld/ELF (`Symbols.cpp:423-679`,
+`InputFiles.cpp:594-620, 1905-1912`, `Relocations.cpp:381-405`). Record v1 is specified field by field here, before
+any milestone writes it (condition 1); M19 writes it and M20's commit freezes it, after msil-ld has linked the
+matrix's `obj` rows with it (5.8.9). Later changes follow 5.8.9 and need a section 12 row.
+
+Planning questions of decision-brief 6 that this contract settles:
+- An undefined function is a MemberRef on `'<msil>Symbols'` unless it carries a Q35 import attribute.
+  `import_module` gives ImplMap stubs on that module (EXPLICIT_IMPORT). `import_name` alone gives stubs on
+  `msil.unresolved` with the entry as import name, which msil-ld binds natively under that name; so Q7's placeholder
+  has a producer and a test. A function whose address the object takes without calling it gets one stub with its
+  declared signature, so its attributes and signature survive. An undefined variable with either attribute carries
+  both names in SYMTAB (IMPORT, 5.8.8). Stubs on `msil.unresolved` from other producers are accepted (Q7).
+- Link semantics are a compact record only (5.8.8); typed per-row attributes (judge-dotnet-value J7) are not used,
+  and `llvm-cil-dump --link-info` is the readable view.
+- The trailer builder lives in `llvm/lib/CLI` (5.9.10).
+- msil-ld never relaxes branches or re-encodes instructions; it copies bodies and patches tokens (5.9.7), so branch
+  forms are decided once, in MC (5.7).
+- `Triple::isCompatibleWith` treats `X` and `X-msil` as compatible (M13), instead of filtering the IR linker's
+  warning. There is no stack-size option in Phase 2.
+
+#### 5.8.1 Modes and representations
+
+| Representation | Produced by | Backend mode | Content |
+|---|---|---|---|
+| CIL object (`.o`) | `clang -c`, `llc -filetype=obj`, LTO code generation inside msil-ld (M20) | object | netmodule + link-info record + COFF symbol view (5.8.2-5.8.8) |
+| object-form text | `llc` or `clang -S` with `-mllvm -msil-object-form` (Q5) | object | the same object as ILAsm text (5.8.4); ilasm turns it into an object that is canonically equal to the binary one (M19 oracle) |
+| `-S` text | `clang -S`, `llc` | whole-program | Phase 1's runnable module (plan 5.1, D14 frozen); from M20 its trailer comes from the shared builder (5.9.10) and it lays out named sections as a one-object link does (`cli::layoutImage`, 5.8.10, 5.9.9) |
+| `--lto-emit-asm` text | msil-ld | whole-program | as `-S`, for the merged LTO module (oracle O4) |
+
+- **Object mode** is `bool MSILTargetMachine::isObjectMode() const`: true when the target machine emits an object
+  file (`addPassesToEmitFile` with `CodeGenFileType::ObjectFile`) or `-msil-object-form` is set. MSILPrepareIR,
+  MSILAddMissingPrototypes, MSILFixFunctionBitcasts, LowerCall and the AsmPrinter query it (M19; the IR passes when
+  they run, 5.8.10). In object mode the whole-program rules are replaced by symbols (5.8.10):
+  the D14 import table, D26's errors for external globals, aliases and `extern_weak`, M12's alias RAUW and
+  null-plus-trap lowerings, M12's `section` diagnostic, and the per-module `.cctor`, `'<msil>Main'` and data image.
+- `-S` without `-msil-object-form` keeps the Phase 1 contract (Q5).
+
+#### 5.8.2 Envelope and netmodule shape (condition 7)
+
+- **O1** PE32+ image. COFF Machine from the triple (x86_64 0x8664, aarch64 0xAA64); Characteristics 0x2022
+  (EXECUTABLE_IMAGE, LARGE_ADDRESS_AWARE, DLL). Roslyn's envelope (metadata-writer 4.9): one `.text` section (CLI
+  header, IL bodies, metadata) plus the COFF view's marker sections (5.8.6); no imports, entry stub or `.reloc`;
+  CorFlags ILONLY; CLI EntryPointToken 0.
+- **O2** No Assembly row; no File, ExportedType or ManifestResource rows. A netmodule cannot be run by mistake
+  (objfmt-container 4.1, judge-c-fidelity F11).
+- **O3** Module row: Name = the base name of the IR `source_filename` (`a.c`; `ld-temp.o` for LTO modules;
+  `<msil>module` when empty), never derived from `-o`. Generation, EncId and EncBaseId are 0.
+- **O4** The MVID and the COFF TimeDateStamp come from the content hash (`BlobContentId.FromHash` over the SHA-256 of
+  the whole file, COFF view included, with both fields zeroed; metadata-writer 4.10), the same code path as outputs.
+  An object depends only on the IR and the options, so it is byte-identical across runs and directories.
+- **O5** No `.cctor`, no `'<msil>Main'`, no entry point, no `<msil>image_t`, `<msil>image` or `<msil>data` member, no
+  FieldRVA row and no image ClassLayout. Data bytes travel in the record (SEGMENTS). Objects carry no initialization
+  code (Q4; judge-dotnet-value J6: per-object init methods fail ILVerify and PEVerify `[InitOnly]`).
+- **O6** Every member is owned by `<Module>` (TypeDef row 1) in Phase 2. Objects never spill members: the CLR's
+  per-type limits apply when a type loads, and objects are never loaded (outputs spill, 5.9.12). Tables are limited
+  to 2^24 rows.
+- **O7** Identifiers are limited to 1,023 bytes (Q27). Method bodies never set InitLocals (D13).
+
+#### 5.8.3 Metadata rows and placeholder forms (condition 3)
+
+Placeholder scaffolding (the names are `MSILLink.h` constants, 5.8.11):
+
+| Rows | Purpose |
+|---|---|
+| AssemblyRef `msil.extern` 0.0.0.0 (no key); TypeRefs `[msil.extern]'<msil>Symbols'` and `[msil.extern]'<msil>FnAddr'` (empty namespace) | parents of the C-symbol placeholder MemberRefs |
+| AssemblyRef `msil.bcl` 0.0.0.0 | the unbound scope of every BCL TypeRef; msil-ld binds it (5.11, Q10) |
+| AssemblyRef `msil.link` 0.0.0.0; TypeRef `[msil.link]'<msil>LinkInfo'`; MemberRef `instance void .ctor(uint8[])` (signature blob `20 01 01 1D 05`); one CustomAttribute row on the Module row | the record's carrier (5.8.7) |
+| ModuleRef `msil.unresolved` | the module of an `import_name`-only function's stubs, `pinvokeimpl("msil.unresolved" as "<entry>" nomangle cdecl)`, which msil-ld binds natively under the ImplMap import name (5.9.6). The same form without `as` (import name = method name) is the cross-language placeholder that `csc -target:module` emits (Q7, judge-dotnet-value J4); msil-ld accepts it in any CIL object |
+
+What the object writer emits:
+
+| IR construct | Object rows | Symbol (5.8.8) |
+|---|---|---|
+| defined function `f` (any linkage) | MethodDef `f` in `<Module>`, Phase 1 header and body (D29, Q26 forms) | FUNCTION, Token = the MethodDef |
+| defined global `g` (any linkage, `common` included) | FieldDef `g`: `static initonly native int`, never stored in the object | DATA, Token = the FieldDef |
+| call of an undefined function `f` with IL signature S | MemberRef `[msil.extern]'<msil>Symbols'::'f'` with S (DEFAULT, static) | FUNCTION UNDEFINED |
+| undefined function with `msil-import-module` (Q35's `import_module`; entry = `msil-import-name`, else the C name) | per IL signature a MethodDef stub `public hidebysig static pinvokeimpl("<module>" as "<entry>" nomangle cdecl) ... preservesig` (Phase 1's P/Invoke shape with Q13's flags), ImplMap flags 0x0201 (NoMangle, CallConvCdecl), ModuleRef `<module>` verbatim | FUNCTION UNDEFINED EXPLICIT_IMPORT |
+| undefined function with `msil-import-name` only (Q35's `import_name`) | per IL signature a MethodDef stub `public hidebysig static pinvokeimpl("msil.unresolved" as "<entry>" nomangle cdecl) ... preservesig`, ImplMap flags 0x0201, ModuleRef `msil.unresolved` | FUNCTION UNDEFINED (no EXPLICIT_IMPORT) |
+| use of undefined data `x` | MemberRef `[msil.extern]'<msil>Symbols'::'x'`, signature `FIELD native int` | DATA UNDEFINED |
+| use of undefined data `x` with `msil-import-module` and/or `msil-import-name` (5.10.7, Q15) | the same MemberRef | DATA UNDEFINED IMPORT; ImportModule = the module or empty (native lookup), ImportName = the entry, else the C name |
+| address of any function `f` (`FUNC_ADDR`; defined, undefined or alias) | MemberRef `[msil.extern]'<msil>FnAddr'::'f'`, signature `FIELD native int` | FUNCTION (any) |
+| address of an undefined, prototyped function `f` that the object never calls | additionally one MethodDef stub with the declaration's IL signature, in the form the rows above give (on `<module>` for `msil-import-module`, else on `msil.unresolved` with import name `msil-import-name` or the C name). It carries the import attributes and gives msil-ld the signature of the P/Invoke stub that a native binding needs (5.10.11). An unprototyped declaration gets none; a native binding of it is native-imports 6's prototype-less error (5.10.13) | FUNCTION UNDEFINED (EXPLICIT_IMPORT with a module) |
+| alias `a` (GlobalAlias) | no row | FUNCTION or DATA with ALIAS |
+| BCL member (M18's `llvm/include/llvm/CLI/BCLMembers.def`) | MemberRef on TypeRef `[msil.bcl]<Namespace>.<Type>` | none |
+| `calli` signature, local signature | StandAloneSig | none |
+
+- **R1 Primary symbol.** A token that names a MethodDef or FieldDef of the object refers to the symbol whose name
+  equals the row's name. This includes WEAK and COMDAT definitions, which msil-ld redirects when another copy wins
+  (objfmt-binding 4.1); a redirected call site is checked against the winner like a reference (5.9.8). An import
+  stub's MethodDef (either stub form above) refers to its undefined symbol the same way. Every other
+  reference to an undefined symbol or to an alias uses a placeholder MemberRef: an in-TU call of a weak alias must
+  stay overridable (judge-c-fidelity F5; J3 gives 144 natively).
+- **R2 Function addresses** always go through `'<msil>FnAddr'`. msil-ld owns one `'<msil>fn_<name>'` field per
+  resolved method, so `&f` has one value in the whole program on Framework (M9; the zoo checks `table[1] == table[2]`).
+- **R3 One MemberRef per (name, call-site signature).** A MemberRef's identity is (parent, name, signature blob). A
+  call to an undefined function uses the call's IL signature, so a K&R function called with two argument lists has
+  two MemberRefs. The ABI descriptor (no prototype, byval, sret) is a SIGNATURES entry under the MemberRef's token.
+  It is not an MCInst operand property: M18's operands carry (class, IL name, IL signature), and M19's record builder
+  derives the descriptor from the IR call sites, keyed by (name, IL signature). Import stubs follow the same rule
+  (R7). When two calls share (name, IL signature) but differ in ABI descriptor, the backend records the first and
+  warns `calls to 'f' pass incompatible arguments; the object records the first call's layout` (undefined behaviour
+  in C, C11 6.5.2.2p9; ilasm cannot express duplicate MemberRefs).
+- **R4 Access** is Phase 1's: `public` for non-local linkage, `assembly` for internal and private linkage. Objects
+  never use `privatescope`; binding lives in the record.
+- **R5 Reserved names.** No row or symbol of an object starts with `<msil>` except the scaffolding above. (P3 helper
+  methods will use object-local `<msil>` rows; reserved.)
+- **R6 Row order**, so that ilasm gives the object-form text the tokens the record names (checked with Framework
+  ilasm 4.8 and ilasm 10.0.12, scratch experiment of 2026-10-21): AssemblyRefs in declaration order (`msil.extern`,
+  `msil.bcl`, `msil.link`); ModuleRef, MethodDef and Field rows in the order the object text declares them; TypeRef,
+  MemberRef and StandAloneSig rows in first-appearance order with duplicates merged; the record's TypeRef and ctor
+  MemberRef last. `cli::MetadataBuilder` must let the writer keep this order (5.7). M19's oracle
+  `canon(clang -c) == canon(ilasm(object-form text))` covers the decoded record.
+- **R7 Import-attributed declarations (M18, M19).** An undefined function with `msil-import-module` or
+  `msil-import-name` gets one stub per (name, call IL signature), and each call's token names the stub of its own
+  signature. MSILMCInstLower gives such a declaration the operand class Method (its import stub in this module) with
+  the call-site signature, so M19 writes one stub per signature the calls use. In whole-program mode ISel makes the
+  call-site signature equal the declaration's, so the interned Method operand is reused and prints like
+  ExternMethod; `-S`, llc and `--lto-emit-asm` text is unchanged.
+
+#### 5.8.4 Object-form text
+
+```text
+// MSIL object generated by LLVM
+// source_filename = "a.c"
+// target triple   = "x86_64-pc-windows-msvc-msil"
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+
+.method public static int32 'main'() cil managed
+{
+  ...
+  call int32 [msil.extern]'<msil>Symbols'::'add3'(int32)
+  ldsfld native int [msil.extern]'<msil>FnAddr'::'twice'
+  call void [msil.bcl]System.Buffer::MemoryCopy(void*, void*, int64, int64)
+  ...
+} // end of method 'main'
+.field public static initonly native int 'table'
+.method public hidebysig static pinvokeimpl("kernel32.dll" as "GetTickCount" nomangle cdecl) int32 'tick'() cil managed preservesig {}
+.method public hidebysig static pinvokeimpl("msil.unresolved" as "labs" nomangle cdecl) int32 'my_labs'(int32) cil managed preservesig {}
+
+.module 'a.c'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = ( 01 00 <N, LE32> <record bytes> 00 00 )
+```
+
+`.module` and `.custom` are the last two lines: both ilasms accept a trailing `.module`, attach the `.custom` to the
+Module row and number its ctor MemberRef last (scratch 2026-10-21). A BOM precedes non-ASCII names (D11). msil-ld
+never reads this text; it is the M19 oracle and a debugging aid. An object edited through ildasm and ilasm is not
+guaranteed to link (5.8.5 may reject it); outputs keep the Design.md 5.5 round trip.
+
+#### 5.8.5 Consistency between metadata and record
+
+`cli::decodeLinkInfo` checks C8 and `cli::validateLinkInfo` (M17) checks C1-C7 (messages start `C<n>: `). msil-ld
+calls both for every object; it reports a validation failure as `<file>: malformed CIL object: <rule>: <detail>` and
+a decoding failure as `<file>: ` followed by the decoder's message (`invalid link-info record: ...`, 5.7.9, 5.9.14).
+
+- **C1** A defined, non-alias FUNCTION symbol's Token is a MethodDef with a body whose Name equals the symbol name.
+- **C2** A defined or COMMON non-alias DATA symbol's Token is a FieldDef of `<Module>` with signature
+  `FIELD native int` whose Name equals the symbol name.
+- **C3** Every MethodDef with a body is the Token of exactly one FUNCTION symbol, and every FieldDef of exactly one
+  DATA symbol.
+- **C4** Every body-less MethodDef has an ImplMap row, and its name is an UNDEFINED FUNCTION symbol: EXPLICIT_IMPORT
+  for any module except `msil.unresolved`, not EXPLICIT_IMPORT for `msil.unresolved`. All stubs of one symbol name
+  the same module and the same non-empty import name.
+- **C5** Every MemberRef on `'<msil>Symbols'` names a SYMTAB symbol of the matching kind (method signature: FUNCTION;
+  field signature: DATA). Every MemberRef on `'<msil>FnAddr'` names a FUNCTION symbol.
+- **C6** Every other MemberRef's parent is a TypeRef scoped to an AssemblyRef (a BCL request, bound by name).
+- **C7** SIGNATURES tokens are MethodDefs or method MemberRefs on `'<msil>Symbols'`, at most one entry per token.
+- **C8** The record decodes (5.8.8) and every index in it is in range.
+
+#### 5.8.6 COFF symbol view (condition 6, Q2)
+
+- `cli::buildCOFFSymbolView` (M17) builds its records from the record, and `cli::getCOFFViewMarkerSections()` (M17)
+  supplies the three marker sections below. The object writer (M19) passes them to `cli::writePEImage` (5.7.7) as
+  `PEContent::CoffSymbols` and `PEContent::ExtraSections`, whose order gives the records' section numbers 2-4.
+  `writePEImage` writes the symbol table at the end of the file, 4-aligned, before hashing (O4), sets the COFF
+  header's PointerToSymbolTable and NumberOfSymbols, and appends the string table (a u32 size that counts itself,
+  then NUL-terminated names). msil-ld never reads the view, and an ilasm round trip drops it.
+- Section table: `.text`, then three marker sections with VirtualSize 0, SizeOfRawData 0, PointerToRawData 0 and
+  VirtualAddress = the next section-aligned RVA: `.data` (0xC0000040), `.rdata` (0x40000040), `.bss` (0xC0000080).
+  SizeOfHeaders grows to 0x400 when the headers need the room.
+- One 18-byte record per SYMTAB symbol, in SYMTAB order, no auxiliary records, Value 0 except for commons:
+
+| Symbol | SectionNumber | Type | StorageClass | `llvm-nm` |
+|---|---|---|---|---|
+| defined FUNCTION (aliases included) | 1 (`.text`) | 0x20 | EXTERNAL (2); STATIC (3) when LOCAL | `T` / `t` |
+| defined DATA in a READONLY segment | `.rdata` | 0 | as above | `R` / `r` |
+| defined DATA in a ZERO segment | `.bss` | 0 | as above | `B` / `b` |
+| other defined DATA | `.data` | 0 | as above | `D` / `d` |
+| COMMON | 0 | 0 | EXTERNAL, Value = size | `C` |
+| UNDEFINED (weak or not) | 0 | 0x20 for functions, else 0 | EXTERNAL | `U` |
+
+- Weak definitions and weak undefined symbols are plain records, never IMAGE_SYM_CLASS_WEAK_EXTERNAL (J2: weak
+  externals put `.weak.*` names and undefined symbols into the archive index).
+- Measured on an ilasm-built object patched to this layout (scratch 2026-10-21): VS `llvm-nm` 22.1.3 prints the
+  letters above; `llvm-ar rcs` indexes the defined globals and the common; ildasm 4.8, ildasm 10.0.12 and
+  System.Reflection.Metadata read the object unchanged. GNU `nm`/`ar` on this layout is an M19 gate check in WSL (J2
+  measured them without marker sections). `lld-link`, `ld.lld`, `lib.exe` and `llvm-lib` keep refusing objects (J2).
+
+#### 5.8.7 Record carrier and reserved debug carrier (condition 8)
+
+- Carrier (Q3): the CustomAttribute row of 5.8.3 with Parent = the Module row (HasCustomAttribute). Its value blob
+  (ECMA-335 II.23.3) is `01 00`, an int32 N (little-endian), N record bytes and `00 00`. Exactly one per object. A
+  module without it is not a CIL object (`<file>: not a CIL object (no link-info record)`; C# netmodules cannot be
+  linked in Phase 2, Q7).
+- Debug carrier (Phase 4): a PE debug-directory entry of type 17 (EmbeddedPortablePdb) in `.text`, whose Portable PDB
+  has MethodDebugInformation row i for the object's MethodDef row i (J5). The header flag `HAS_DEBUG_INFO` says that
+  it exists, and the skippable subsection kinds 0x40-0x4F are reserved for its link data. Phase 2 writers never emit
+  it; msil-ld ignores it with one warning per link (`debug information in <file> is ignored`).
+
+#### 5.8.8 The record v1, field by field (condition 1)
+
+**Encoding primitives** (`cli::RecordWriter` and `cli::RecordReader`, 5.8.11; shared with the P2-C symbol-table
+attribute, Q25, 5.9.15):
+
+| Name | Encoding |
+|---|---|
+| `u8`, `u32` | little-endian, fixed width |
+| `uleb`, `sleb` | LLVM `encodeULEB128` / `encodeSLEB128`; writers emit the minimal form; readers reject more than 10 bytes |
+| `str` | `uleb` byte length, then UTF-8 bytes (valid UTF-8, no NUL) |
+| `token` | `u32`: table id << 24 \| row |
+| symbol, segment and comdat index | `uleb`: 0-based position in SYMTAB, SEGMENTS or COMDATS |
+
+**Header** (fixed order; subsections follow):
+
+| Field | Encoding | Meaning | Rule implemented |
+|---|---|---|---|
+| Magic | `4D 53 4C 4B` ("MSLK") | identifies the record | the wasm `linking` section name |
+| Major | `u8` = 1 | incompatible layout version; a reader refuses another major | wasm linking-section version |
+| Minor | `u8` = 0 | additions within major 1 (5.8.9) | |
+| HeaderFlags | `uleb` | bit 0 HAS_DEBUG_INFO (5.8.7); other bits 0 | |
+| Triple | `str` | the target machine's normalized triple (the module's; for an LTO object the codegen triple that msil-ld sets through `OverrideTriple`, 5.9.13) | ELF `e_machine`/`EI_OSABI`; judge-c-fidelity 6.2 item 6 (`.note.msil`); wasm `WASM_TARGET_ARCH` |
+| ABIVersion | `uleb` = `MSILLink::ToolchainABIVersion` (1) | version of the internal calling convention (aggregates indirect, sret first, P3's variadic buffer); equal across all inputs | ELF `e_flags` ABI bits |
+| ABIFlags | `uleb` | codegen switches that change the ABI; equal across all inputs; Phase 2 defines none (0) | ELF `e_flags` |
+| FeatureFlags | `uleb` | codegen switches that do not change the ABI; msil-ld ORs them; Phase 2 defines none (0) | wasm `target_features` |
+| DataModel | 4 x `u8` | sizeof void\*, long, wchar_t, long double, computed by `MSILLink::setDataModel` (5.8.9's rule); equal across all inputs | exports-multiasm 5.2 |
+
+**Subsections**: a `u8` kind, a `uleb` payload size, then the payload. Kinds appear in increasing order, each at most
+once, and a reader checks that it consumed exactly the payload size. Kinds below 0x40 must be understood: an unknown
+one is an error. Kinds 0x40-0x7F may be skipped by a reader that does not know them.
+
+| Kind | Name | Phase 2 |
+|---|---|---|
+| 0x01 | SYMTAB | written |
+| 0x02 | SEGMENTS | written |
+| 0x03 | DATA_RELOCS | written |
+| 0x04 | COMDATS | written |
+| 0x05 | INIT_FINI | written (FINI entries from P3-A) |
+| 0x06 | SIGNATURES | written |
+| 0x07 | LINKER_OPTIONS | written |
+| 0x08 | MANAGED_REQUESTS | reserved: optional BCL requests with fallbacks (Q11, P3) |
+| 0x09 | TYPES | reserved: object-local type definitions merged by name (P3 value types) |
+| 0x40-0x4F | debug | reserved, skippable (5.8.7) |
+| 0x50-0x7F | optional | reserved for skippable additions |
+
+**SYMTAB** (0x01): a `uleb` count, then per symbol:
+
+| Field | Encoding | Present for | Meaning | Rule implemented |
+|---|---|---|---|---|
+| Kind | `u8` | all | FUNCTION 0, DATA 1 | ELF `STT_FUNC`/`STT_OBJECT`; wasm `WASM_SYMBOL_TYPE_FUNCTION`/`DATA` |
+| Flags | `uleb` | all | SymbolFlags, below | |
+| Name | `str` | all | the C symbol name (IR name, D11) | `st_name` |
+| Token | `token` | defined non-alias FUNCTION; defined or COMMON non-alias DATA | the MethodDef or FieldDef (C1, C2) | wasm `ElementIndex` |
+| Segment, Offset, Size | 3 x `uleb` | defined non-alias, non-common DATA | where its bytes are | `st_shndx`, `st_value`, `st_size`; wasm `DataRef` |
+| Aliasee | `uleb` | ALIAS | a defined non-alias symbol of the same kind in this object | an ELF alias is a second symbol on the same section and value (judge-c-fidelity J11) |
+| AliasOffset, Size | `sleb`, `uleb` | DATA ALIAS | the alias sits at the aliasee's offset + AliasOffset | the alias symbol's `st_value`, `st_size` |
+| CommonSize, CommonAlignLog2 | `uleb`, `u8` | COMMON | size and log2 alignment | `SHN_COMMON` `st_size` and `st_value`; wasm `CommonRef` |
+| ImportModule, ImportName | `str`, `str` | IMPORT | the import module (empty: msil-ld finds the module natively under ImportName) and the import entry (non-empty) | Q35's attributes, which clang accepts on variable declarations (`Attr.td` subjects `Function, GlobalVar`; `SemaWasm.cpp`); native ELF and COFF bind data by name at load time |
+
+SymbolFlags (bit values follow wasm where the meaning matches):
+
+| Bits | Name | Meaning | Rule implemented |
+|---|---|---|---|
+| 0x003 | BINDING | GLOBAL 0, WEAK 1, LOCAL 2, COMMON 3 | `STB_GLOBAL`, `STB_WEAK`, `STB_LOCAL`, `SHN_COMMON`; wasm `WASM_SYMBOL_BINDING_*` |
+| 0x00C | VISIBILITY | value << 2: DEFAULT 0, INTERNAL 1, HIDDEN 2, PROTECTED 3 | ELF `STV_*`, merged by lld/ELF's minimum rule |
+| 0x010 | UNDEFINED | a reference only | `SHN_UNDEF`; wasm `WASM_SYMBOL_UNDEFINED` |
+| 0x020 | DLLEXPORT | IR `dllexport` (Windows triples; P2-C export selection, Q22) | COFF `/EXPORT`; wasm `EXPORTED` |
+| 0x040 | EXPLICIT_IMPORT | an undefined function whose ImplMap stubs carry the import module and name | wasm `import_module` + `EXPLICIT_NAME` |
+| 0x080 | NO_STRIP | the global is in `llvm.used` | wasm `WASM_SYMBOL_NO_STRIP` |
+| 0x100 | TLS | thread-local data | `STT_TLS`; wasm `WASM_SYMBOL_TLS` |
+| 0x200 | ALIAS | defined through Aliasee | |
+| 0x400 | DLLIMPORT | IR `dllimport` on an undefined symbol (a hint; P2-C) | COFF `__imp_` |
+| 0x800 | IMPORT | an undefined variable with Q35 import attributes: ImportModule and ImportName follow (5.10.7; Q15's data imports). Functions carry their attributes in their stubs (5.8.3), so v1.0 sets IMPORT on DATA only | wasm `import_module` + `EXPLICIT_NAME`, for data |
+
+Constraints (C8): COMMON only for DATA, never with UNDEFINED or ALIAS; LOCAL never with UNDEFINED; UNDEFINED only
+with GLOBAL or WEAK; EXPLICIT_IMPORT only with FUNCTION and UNDEFINED; IMPORT only with DATA and UNDEFINED (v1.0),
+never with TLS, and with a non-empty ImportName; DLLIMPORT only with UNDEFINED; NO_STRIP never with UNDEFINED; TLS
+only for DATA; names unique within SYMTAB, non-empty and not starting with `<msil>`.
+
+Order: global variables in IR module order (definitions, commons and referenced declarations), then functions in IR
+module order (definitions and referenced declarations), then aliases in IR order, then the symbols that code
+generation creates (library calls) in first-reference order. Unreferenced declarations and intrinsics are omitted.
+msil-ld's image layout (5.9.9) and the function-address order of the trailer (5.9.10) depend on this order.
+
+**SEGMENTS** (0x02): a `uleb` count, then per segment, in the SYMTAB order of the symbols that define them:
+
+| Field | Encoding | Meaning | Rule implemented |
+|---|---|---|---|
+| Name | `str` | the output section name: the IR `section` verbatim (`$` kept), else `.rodata`, `.data`, `.bss`, `.tdata` or `.tbss` by `getKindForGlobal` | ELF `sh_name`; wasm `WASM_SEGMENT_INFO` name |
+| Flags | `uleb` | STRINGS 0x1, TLS 0x2, RETAIN 0x4 (the wasm values), ZERO 0x8, READONLY 0x10 | `SHF_MERGE\|SHF_STRINGS`, `SHF_TLS`, `SHF_GNU_RETAIN`, `SHT_NOBITS`, no `SHF_WRITE` |
+| AlignLog2 | `u8` | at most 30 | `sh_addralign` |
+| Size | `uleb` | below 2^31 | `sh_size` |
+| Bytes | Size raw bytes | absent when ZERO | the section contents |
+
+Writers emit one segment per defined global (the granularity of `-fdata-sections`): STRINGS for `unnamed_addr` C
+strings (`isMergeable1ByteCString`), RETAIN for globals in `llvm.used` (what TargetLoweringObjectFile does for ELF and
+wasm with `Used.count(GO)`), ZERO for zero-initialized globals, READONLY for constants, TLS for `.tdata`/`.tbss`.
+Relocation sites hold zero bytes.
+
+**DATA_RELOCS** (0x03): a `uleb` count, then entries sorted by (segment, offset); sites never overlap and never lie in
+a ZERO segment:
+
+| Field | Encoding | Meaning |
+|---|---|---|
+| Type | `u8` | RelocType, below |
+| Segment, Offset | 2 x `uleb` | the site |
+| Symbol | `uleb` | the target symbol (any binding; aliases and undefined symbols included) |
+| Addend | `sleb` | |
+| Width | `u8` | DIFF only: 1 to 16 bytes |
+| Symbol2 | `uleb` | DIFF only: the subtrahend |
+
+| Type | Value | Stored at the site | Rule implemented |
+|---|---|---|---|
+| ADDR64 | 0 | the address of a DATA symbol + addend, 8 bytes | `R_X86_64_64`, `R_AARCH64_ABS64`; wasm `R_WASM_MEMORY_ADDR_I64` |
+| ADDR32 | 1 | the low 32 bits of that address (Phase 1's truncation; no overflow check, because the address exists only at run time) | `R_X86_64_32` without its overflow check |
+| FNADDR64 | 2 | the function's pointer value (its `'<msil>fn_'` field), addend 0 | `R_X86_64_64` against `STT_FUNC`; wasm `R_WASM_TABLE_INDEX_I64` |
+| FNADDR32 | 3 | the low 32 bits of that value | |
+| DIFF | 4 | addr(Symbol) - addr(Symbol2) + addend in Width bytes, sign-extended beyond 8 bytes; an error unless it fits signed or unsigned (Phase 1's `MSILDataSegment::finalize`); both must be DATA symbols in the output's image | `R_X86_64_PC32` with Symbol2 = the site; RISC-V ADD/SUB pairs; wasm `R_WASM_MEMORY_ADDR_LOCREL_I32` |
+| TLS_OFFSET32 | 5 | the offset of a TLS symbol in the output's TLS template + addend, 4 bytes (P3) | `R_X86_64_DTPOFF32`; wasm `R_WASM_MEMORY_ADDR_TLS_SLEB` |
+| TLS_OFFSET64 | 6 | the same in 8 bytes (P3) | `R_X86_64_DTPOFF64` |
+
+Targets (C8): ADDR and DIFF name DATA symbols, FNADDR names FUNCTION symbols with addend 0, TLS_OFFSET names TLS
+symbols. msil-ld checks the resolved definition's kind again (`symbol type mismatch`, 5.9.5).
+
+**COMDATS** (0x04): a `uleb` count, then per group: Name (`str`, the IR Comdat name), Selection (`u8`,
+`MSILLink::ComdatSelection`, whose values equal `llvm::Comdat::SelectionKind`'s: Any 0, ExactMatch 1, Largest 2,
+NoDeduplicate 3, SameSize 4), a `uleb` member count and the members (`u8` kind: FUNCTION_SYMBOL 0 or SEGMENT 1;
+`uleb` index). Rule: ELF `SHT_GROUP` with
+`GRP_COMDAT` (Any) and ungrouped sections (NoDeduplicate), as `lld/ELF/InputFiles.cpp:1905-1912`; wasm
+`WASM_COMDAT_INFO`. The backend rejects ExactMatch, Largest and SameSize at compile time
+(`comdat 'x' uses selection kind 'largest', which MSIL does not support`), and msil-ld rejects them again if an
+object carries them. C produces only Any (judge-c-fidelity J7).
+
+**INIT_FINI** (0x05): a `uleb` count, then per entry in `llvm.global_ctors` / `llvm.global_dtors` array order: Kind
+(`u8`: INIT 0, FINI 1), Priority (`uleb`, 0-65535), Symbol (`uleb`: a defined FUNCTION of this object, any binding,
+signature `void()` or with a result that the caller pops), Comdat (`uleb`: 1 + the index of the group of the entry's
+associated global, 0 for none; the entry is dropped with that group). Rule: ELF `.init_array.N`/`.fini_array.N`;
+wasm `WASM_INIT_FUNCS`. The record does not place the entries among the object's own section slots: msil-ld runs an
+object's slots before its entries of equal key (5.9.9), which is the native order of every `clang -c` object. The
+AsmPrinter emits the structor list at `llvm.global_ctors`'s position in module order
+(`AsmPrinter::emitSpecialLLVMGlobal`), into the same `.init_array`/`.CRT$XCU` section as user slots, and clang
+creates that array after every global of the TU (`CodeGenModule::Release`). The backend keeps D26's error for a
+non-empty `llvm.global_dtors` in Phase 2, so FINI entries first appear in P3-A.
+
+**SIGNATURES** (0x06): a `uleb` count, then per entry (C7): Token (`token`); CallFlags (`uleb`: NO_PROTOTYPE 0x1,
+VARARG 0x2, SRET 0x4); FixedParams (`uleb`, VARARG only); SretSize and SretAlignLog2 (`uleb`, `u8`, SRET only: the
+returned aggregate, whose pointer is IL parameter 0); a `uleb` byval count and per byval parameter Param (`uleb`, the
+IL parameter index), Size (`uleb`) and AlignLog2 (`u8`). A MethodDef or MemberRef without an entry is prototyped, not
+variadic, and has no sret or byval parameter. Definitions get entries as references do (judge-c-fidelity 6.2 item
+4). Rule: native ABIs carry this information in the call itself (judge-c-fidelity R19); wasm `WasmSignature`;
+native-imports 6 lists the same flags. Phase 2 writers never set VARARG (D19 still rejects variadic calls and
+definitions).
+
+**LINKER_OPTIONS** (0x07): a `uleb` count, then per entry a Kind (`u8`: DEPENDENT_LIB 0 for an
+`!llvm.dependent-libraries` entry, LINKER_OPTION 1 for one `!llvm.linker.options` node), then one `str` for
+DEPENDENT_LIB (`m`, `ws2_32`) or a `uleb` n and n `str` for LINKER_OPTION (`/DEFAULTLIB:ws2_32.lib`, `-lws2_32`).
+Rule: ELF `.deplibs` (`SHT_LLVM_DEPENDENT_LIBRARIES`) and `SHT_LLVM_LINKER_OPTIONS`; COFF `.drectve`
+(judge-c-fidelity R17).
+
+wasm checklist: `WASM_SYMBOL_TABLE` -> SYMTAB; `WASM_SEGMENT_INFO` -> SEGMENTS; `reloc.DATA` -> DATA_RELOCS
+(`reloc.CODE` has no counterpart because IL tokens are found by decoding, decision-brief 1.4); `WASM_COMDAT_INFO` ->
+COMDATS (plus the selection kind, which wasm lacks); `WASM_INIT_FUNCS` -> INIT_FINI (plus destructors, which wasm
+lacks); `WASM_TARGET_ARCH` and `target_features` -> the header; function signatures -> metadata plus SIGNATURES;
+`dylink` -> the P2-C symbol-table attribute (5.9.15); `producers` -> none.
+
+#### 5.8.9 Versioning and compatibility
+
+- **Freeze.** M19 writes v1.0 and pins it in its tests, but no linker consumes it before M20, so M19's commit does not
+  freeze it. M20's commit freezes major 1, after msil-ld has linked every 5.9.16 row marked M20 on the `obj`
+  pipeline with it. A gap that M20 finds (the decision brief's section 5 names TLS, DIFF, COMDAT kinds, start/stop
+  symbols and gc roots as not yet prototyped) amends v1.0 in place, never as a major 2. Each amendment is a section 12
+  row naming the 5.8.8 field; M20's fix step updates M17's codec, M19's writer and their tests with it. The
+  specification itself is complete before M13 lands `MSILLink.h` (condition 1).
+- After the freeze a field never changes its meaning or encoding within major 1. A minor version may add subsection
+  kinds, SymbolFlags or CallFlags bits, RelocType values and enum values. A reader that meets one it does not know
+  in a must-understand position reports
+  `<file>: invalid link-info record: v1.<minor> uses <feature>, which this toolchain does not support` (the
+  decoder's text, 5.7.9) instead of guessing.
+- msil-ld accepts every minor version of major 1 and mixes objects of different minor versions.
+- Across all inputs of one link (CIL objects, LTO objects, and bitcode through its module triple and flags) these
+  must be equal: the triple key (architecture, OS, environment without its version, object format MSIL; the vendor
+  is ignored), ABIVersion, ABIFlags and DataModel. A mismatch is an error naming both files. Bitcode for the native
+  triple is accepted with Q12's warning (5.9.13).
+- **DataModel rule** (`MSILLink::setDataModel`, 5.8.11; one rule for writers and msil-ld):
+  - PointerSize: the size of address space 0's pointers (the module's DataLayout in the backend; for a bitcode
+    input, 8 for a 64-bit triple architecture, else 4, because the irsymtab carries no DataLayout).
+  - LongSize: 4 when PointerSize is 4 or the triple is Windows other than Cygwin
+    (`isOSWindows() && !isWindowsCygwinEnvironment()`), else 8.
+  - WCharSize: the module flag `wchar_size`, else `Triple::getDefaultWCharSize()`. This is
+    `TargetLibraryInfoImpl::getWCharSize`'s rule; clang emits the flag only when the size differs from the default,
+    `CodeGenModule.cpp:1447-1451`.
+  - LongDoubleSize: always 8 (D3). Stock-clang bitcode whose `long double` is x86_fp80 (linux-gnu, MinGW) is
+    Q12's documented limit: no data-model error and no warning beyond Q12's.
+- **When it is checked.**
+  - A CIL object: from its header, when the object is loaded.
+  - A bitcode input: PointerSize and LongSize, from its triple, when the input is loaded. Its WCharSize is not in
+    the irsymtab, so it is checked through the LTO objects. From M20 the backend writes each LTO object's header
+    from the merged (or ThinLTO backend) module, and msil-ld compares that header with the other inputs when it
+    parses the LTO object; a mismatch names the LTO object. Among bitcode modules the IR linker already rejects two
+    different `wchar_size` flags (behaviour Error); a module without the flag is not compared there.
+  - Before M20 every input is bitcode, so only the load-time part applies.
+  - M20.e's `obj-triple` pins this: stock-clang bitcode for the native triple mixed with an MSIL object links with
+    Q12's warning only; bitcode with `wchar_size` 2 on a linux-gnu triple gives the data-model error.
+- `MSILLink::ToolchainABIVersion` changes only with a section 12 row (P3-B's variadic convention is the expected first
+  change).
+
+#### 5.8.10 What object mode emits for each IR construct
+
+| IR | Object mode | Whole-program mode (`-S`, `--lto-emit-asm`) |
+|---|---|---|
+| `external` / `internal`, `private` definition | GLOBAL / LOCAL | Phase 1 |
+| `weak`, `weak_odr`, `linkonce`, `linkonce_odr` definition | WEAK, plus a COMDATS member when it has a comdat | ordinary definition (D26) |
+| `common` | COMMON with its allocation size and alignment | zero-initialized definition |
+| `available_externally` | not emitted; references are UNDEFINED | Phase 1 |
+| declaration / `extern_weak` declaration | UNDEFINED GLOBAL / UNDEFINED WEAK | D14 import or error / M12's null plus trap stub |
+| function declaration with `msil-import-module` / with `msil-import-name` only (Q35, 5.10.7) | EXPLICIT_IMPORT stubs on the module / stubs on `msil.unresolved` with the entry as import name (5.8.3) | D14: a P/Invoke on the module / the Phase 1 rule for an undefined function |
+| external global variable | DATA UNDEFINED | error (D26) |
+| external global variable with `msil-import-module` and/or `msil-import-name` | DATA UNDEFINED IMPORT with ImportModule and ImportName | error (D26) |
+| GlobalAlias (aliasee = a definition + a constant offset; offset 0 for functions) | ALIAS symbol with the alias's linkage and visibility | M12's RAUW plus forwarding |
+| GlobalIFunc, module asm | error (unchanged) | error |
+| visibility, `dllimport`, `dllexport` | VISIBILITY, DLLIMPORT, DLLEXPORT | ignored |
+| `section` on a global | the segment Name | from M20 the segment name, laid out by `cli::layoutImage` as a one-object link does (5.9.9); M12's diagnostic before M20 |
+| `section` on a function | ignored (methods have no addresses) | ignored |
+| `llvm.used` / `llvm.compiler.used` | NO_STRIP + RETAIN / nothing | nothing |
+| `llvm.global_ctors` | INIT entries | Phase 1 `.cctor` calls; from M20 sorted with the `.init_array*`/`.CRT$XC*` section slots by `cli::sortConstructors` (5.9.9) |
+| `llvm.global_dtors`, `thread_local` | error until P3-A (D26) | error |
+| call of an undefined `"no-prototype"` function | a MemberRef per call-site IL signature + NO_PROTOTYPE, no wrapper and no "mismatched call signature" error (`MSILISelLoweringCall.cpp:286-293`; the prototype passes below) | Phase 1 (both prototype passes unchanged) |
+| library call (any, `__` helpers included) | UNDEFINED FUNCTION symbol; msil-ld reports it if nothing defines it | D14 import, else Phase 1's error (standalone mode); `!msil.imports` in linked text (5.10.13) |
+| `!llvm.dependent-libraries`, `!llvm.linker.options` | LINKER_OPTIONS | ignored |
+| `unnamed_addr` C string constant | STRINGS segment | Phase 1 |
+| comdat selection other than Any and NoDeduplicate | compile-time error | ignored (D26) |
+
+**The prototype passes in object mode (R3; M19).** MSILAddMissingPrototypes leaves every `no-prototype` declaration
+and its attribute unchanged, without diagnostics (the 'cannot be derived' error for a declaration used only by
+address becomes msil-ld's, 5.10.13). MSILFixFunctionBitcasts creates no wrapper for a call whose callee is a
+declaration for the linker (`isDeclarationForLinker`), and turns a variadic-typed call of a `no-prototype` declaration
+into the non-variadic call of all of its arguments; calls of definitions keep Phase 1's wrappers. LowerCall makes
+every call of an undefined function a direct call with the call-site signature, including a fixed-arity call of a
+variadic `no-prototype` declaration. Both passes read `isObjectMode()` when they run, through
+`getAnalysisIfAvailable<TargetPassConfig>()` (without one, as in `opt`, they keep Phase 1's behaviour), because
+`CodeGenTargetMachineImpl::addPassesToEmitFile` adds the IR passes before `addAsmPrinter` calls `createMCStreamer`.
+Whole-program mode is unchanged. Phase 1 ran both passes in every mode, so a K&R call could lose an argument: a.c
+`int f(); r = f(1, 2); if (!r) return f(1);` with b.c `int f(int a, int b)` could give 1 instead of 3 (matrix case
+`knr-two-arities`, 5.9.16).
+
+**Whole-program sections (M20; Q5, Design.md 4.1).** From M20, whole-program mode (`-S`, llc, `--lto-emit-asm`) lays
+out named sections as a one-object link does: each global's segment carries object mode's name (5.8.8) and
+`cli::layoutImage` groups it under the triple's rules (5.9.9). On non-Windows triples a referenced
+`__start_X`/`__stop_X` naming an output section is an address field at its start or end; Windows triples keep D26's
+error, as native links leave it undefined. 8-byte slots of `.init_array*` (non-Windows) and `.CRT$XC*` (Windows)
+sections run as constructors, sorted with `llvm.global_ctors` by `cli::sortConstructors`. Destructor-table,
+unsupported and TLS sections get 5.9.9's texts, with the module's source file name as `<file>`. M12's section
+diagnostic (MSILPrepareIR (1c)) goes, and `section-errors.ll` and `section-globals.c` change (5.12.13). A module
+without explicit sections keeps its Phase 1 text.
+
+#### 5.8.11 C++ interface
+
+**MC hooks (M13; D5 as amended).** For `IsMSIL`, `MCContext::createSymbolImpl` creates `MCSymbolMSIL`
+(`llvm/include/llvm/MC/MCSymbolMSIL.h`); `Target::createMCObjectStreamer` creates `MCMSILStreamer`
+(`createMSILStreamer`, `llvm/include/llvm/MC/MCMSILStreamer.h`, `llvm/lib/MC/MCMSILStreamer.cpp`);
+`MCAsmBackend::createObjectWriter` creates the MSIL writer (`createMSILObjectWriter` over `MCMSILObjectTargetWriter`,
+`llvm/include/llvm/MC/MCMSILObjectWriter.h`, `llvm/lib/MC/MCMSILObjectWriter.cpp`), whose default `writeObject`
+reports `CIL object files are not supported for MSIL target <triple> yet` until M19's target writer overrides it.
+M18's encoder role provides `MSIL::getObjectTargetWriter(const MCAsmBackend &)` and `createMSILObjectTargetWriter()`.
+`MCContext.h`, `MCSymbol.h` and `TargetRegistry.h` are unchanged.
+
+```cpp
+// llvm/include/llvm/BinaryFormat/MSILLink.h (M13). Header only: BinaryFormat gains no .cpp.
+namespace llvm::MSILLink {
+inline constexpr char Magic[4] = {'M', 'S', 'L', 'K'};
+inline constexpr uint8_t MajorVersion = 1, MinorVersion = 0;
+inline constexpr unsigned ToolchainABIVersion = 1;
+inline constexpr StringLiteral ExternAssembly = "msil.extern", SymbolsType = "<msil>Symbols",
+    FnAddrType = "<msil>FnAddr", BCLAssembly = "msil.bcl", LinkInfoAssembly = "msil.link",
+    LinkInfoType = "<msil>LinkInfo", UnresolvedModule = "msil.unresolved";
+enum class SubsectionKind : uint8_t { SymTab = 0x01, Segments = 0x02, DataRelocs = 0x03, Comdats = 0x04,
+  InitFini = 0x05, Signatures = 0x06, LinkerOptions = 0x07, ManagedRequests = 0x08, Types = 0x09,
+  FirstOptional = 0x40, FirstDebug = 0x40, LastDebug = 0x4F, LastOptional = 0x7F };
+enum class SymbolKind : uint8_t { Function = 0, Data = 1 };
+enum SymbolFlags : uint32_t { BindingMask = 0x3, BindingGlobal = 0x0, BindingWeak = 0x1, BindingLocal = 0x2,
+  BindingCommon = 0x3, VisibilityMask = 0xC, VisibilityShift = 2, Undefined = 0x10, DLLExport = 0x20,
+  ExplicitImport = 0x40, NoStrip = 0x80, ThreadLocal = 0x100, Alias = 0x200, DLLImport = 0x400, Import = 0x800 };
+enum class Visibility : uint8_t { Default = 0, Internal = 1, Hidden = 2, Protected = 3 };  // = ELF STV_*
+enum SegmentFlags : uint32_t { SegStrings = 0x1, SegTLS = 0x2, SegRetain = 0x4, SegZero = 0x8,
+  SegReadOnly = 0x10 };
+enum class RelocType : uint8_t { Addr64 = 0, Addr32 = 1, FnAddr64 = 2, FnAddr32 = 3, Diff = 4,
+  TLSOffset32 = 5, TLSOffset64 = 6 };
+enum class ComdatSelection : uint8_t { Any = 0, ExactMatch = 1, Largest = 2, NoDeduplicate = 3,
+  SameSize = 4 };   // = llvm::Comdat::SelectionKind values (BinaryFormat cannot include IR headers)
+enum class ComdatMemberKind : uint8_t { FunctionSymbol = 0, Segment = 1 };
+enum class InitKind : uint8_t { Init = 0, Fini = 1 };
+enum CallFlags : uint32_t { NoPrototype = 0x1, VarArg = 0x2, Sret = 0x4 };
+enum class LinkerOptionKind : uint8_t { DependentLib = 0, LinkerOption = 1 };
+enum HeaderFlags : uint32_t { HasDebugInfo = 0x1 };
+
+struct Header { uint8_t Major = MajorVersion, Minor = MinorVersion; uint32_t Flags = 0; std::string Triple;
+  uint32_t ABIVersion = ToolchainABIVersion; uint64_t ABIFlags = 0, FeatureFlags = 0;
+  uint8_t PointerSize = 8, LongSize = 8, WCharSize = 4, LongDoubleSize = 8; };
+struct Symbol { SymbolKind Kind; uint32_t Flags = 0; std::string Name; uint32_t Token = 0;
+  uint32_t Segment = 0; uint64_t Offset = 0, Size = 0;         // defined DATA (Size also for DATA aliases)
+  uint32_t Aliasee = 0; int64_t AliasOffset = 0;                // ALIAS
+  uint64_t CommonSize = 0; uint8_t CommonAlignLog2 = 0;         // COMMON
+  std::string ImportModule, ImportName; };                      // IMPORT
+struct Segment { std::string Name; uint32_t Flags = 0; uint8_t AlignLog2 = 0; uint64_t Size = 0;
+  std::vector<uint8_t> Bytes; };
+struct Reloc { RelocType Type; uint32_t Segment; uint64_t Offset; uint32_t Symbol; int64_t Addend = 0;
+  uint8_t Width = 0; uint32_t Symbol2 = 0; };                  // Width, Symbol2: DIFF only
+struct ComdatGroup { std::string Name; ComdatSelection Selection;
+  std::vector<std::pair<ComdatMemberKind, uint32_t>> Members; };
+struct InitEntry { InitKind Kind; uint32_t Priority; uint32_t Symbol; uint32_t ComdatPlusOne = 0; };
+struct ByvalParam { uint32_t Param; uint64_t Size; uint8_t AlignLog2; };
+struct SignatureInfo { uint32_t Token; uint32_t Flags = 0; uint32_t FixedParams = 0; uint64_t SretSize = 0;
+  uint8_t SretAlignLog2 = 0; std::vector<ByvalParam> Byval; };
+struct LinkerOption { LinkerOptionKind Kind; std::vector<std::string> Args; };
+struct Record { Header Hdr; std::vector<Symbol> Symbols; std::vector<Segment> Segments;
+  std::vector<Reloc> Relocs; std::vector<ComdatGroup> Comdats; std::vector<InitEntry> Inits;
+  std::vector<SignatureInfo> Signatures; std::vector<LinkerOption> LinkerOptions;
+  std::vector<std::pair<uint8_t, std::vector<uint8_t>>> SkippedOptional; };  // kinds 0x40-0x7F, kept for dumping
+
+// 5.8.9's DataModel rule, shared by the object writer (M19) and msil-ld's bitcode inputs (M20). WCharSize is the
+// module flag `wchar_size` if present, else TT.getDefaultWCharSize(). Includes llvm/TargetParser/Triple.h, as
+// BinaryFormat/ELF.h does.
+inline void setDataModel(Header &H, const Triple &TT, unsigned PointerSize, unsigned WCharSize) {
+  H.PointerSize = PointerSize;
+  H.LongSize = (PointerSize == 4 || (TT.isOSWindows() && !TT.isWindowsCygwinEnvironment())) ? 4 : 8;
+  H.WCharSize = WCharSize;
+  H.LongDoubleSize = 8;   // D3; stock bitcode's x86_fp80 is Q12's documented limit
+}
+} // namespace llvm::MSILLink
+
+// llvm/include/llvm/CLI/LinkInfo.h and llvm/lib/CLI/LinkInfo.cpp (M17)
+namespace llvm::cli {
+class RecordWriter {   // 5.8.8 primitives and subsection framing, shared with the symbol table (5.9.15)
+public: explicit RecordWriter(SmallVectorImpl<uint8_t> &Out); void writeU8(uint8_t); void writeU32(uint32_t);
+  void writeULEB(uint64_t); void writeSLEB(int64_t); void writeString(StringRef); void writeBytes(ArrayRef<uint8_t>);
+  void beginSubsection(uint8_t Kind); void endSubsection(); };
+class RecordReader {   // the same reads, each taking a field name for messages; readSubsection; sticky takeError()
+};
+void encodeLinkInfo(const MSILLink::Record &R, SmallVectorImpl<uint8_t> &Out);    // canonical bytes
+Expected<MSILLink::Record> decodeLinkInfo(ArrayRef<uint8_t> Bytes);                // framing + C8
+// encodeByteArrayAttribute / decodeByteArrayAttribute: declared only in llvm/CLI/CustomAttribute.h (5.7.4, M16),
+// which this header includes
+Expected<ArrayRef<uint8_t>> findLinkInfo(const MetadataReader &MD);  // the Module attribute of 5.8.7
+Error validateLinkInfo(const MSILLink::Record &R, const MetadataReader &MD);  // C1-C7, messages start "C<n>: "
+std::vector<CoffSymbol> buildCOFFSymbolView(const MSILLink::Record &R);     // 5.8.6: PEContent::CoffSymbols (5.7.7)
+ArrayRef<PESection> getCOFFViewMarkerSections();   // 5.8.6: .data, .rdata, .bss markers (empty Data),
+                                                   // PEContent::ExtraSections, section numbers 2-4
+void printLinkInfo(const MSILLink::Record &R, const MetadataReader *MD, raw_ostream &OS); // dumper format
+} // namespace llvm::cli
+```
+
+`llvm-cil-dump --link-info <file>` prints `printLinkInfo`'s format, which test WPs FileCheck from M19 on. It prints
+one line per item in record order, quotes names per 5.7.10, and follows a token with its entity name only when a
+reader is given. The complete line grammar:
+- Header: `LinkInfo v1.<minor> triple=<t> abi=<n> abiflags=0x<x> features=0x<x> datamodel=<p>,<l>,<w>,<d>`, plus
+  ` flags=HAS_DEBUG_INFO` when that bit is set.
+- `Symbol <i> <KIND> <BINDING> <VISIBILITY>`, then the set flags in bit order among
+  `UNDEFINED DLLEXPORT EXPLICIT_IMPORT NO_STRIP TLS ALIAS DLLIMPORT IMPORT`, `'<name>'`, then as present
+  ` import_module='<m>' import_name='<e>'` (IMPORT), `method=0x<8X>` or `field=0x<8X>`, `segment= offset= size=`,
+  `aliasee=<i>` (DATA aliases add `offset= size=`), `size= align=` (COMMON, bytes).
+- `Segment <i> '<name>' align=<bytes> size=<n> flags=<names joined by |, or 0>`, then for non-ZERO segments lines of
+  two blanks and at most 32 bytes of canonical hex.
+- `Reloc <TYPE> [width=<w> ]segment= offset= symbol=<i> '<name>'[ symbol2=<j> '<name>'] addend=<a>`.
+- `Comdat '<name>' <SELECTION>` with `function=<i>` or `segment=<i>` per member.
+- `Init|Fini priority=<p> symbol=<i> '<name>'[ comdat=<g>]`.
+- `Signature 0x<8X>[ '<entity>'][ NO_PROTOTYPE][ VARARG fixed=<n>][ SRET size=<n> align=<bytes>][ byval=<param>:<size>:<align>]...`.
+- `LinkerOption DEPENDENT_LIB '<lib>'` or `LinkerOption LINKER_OPTION '<arg>'...`.
+- `Optional kind=0x<2X> size=<n>`.
+- The symbol table (5.9.15) prints after the record.
+
+Example (segment hex lines and some items omitted):
+
+```text
+LinkInfo v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 abiflags=0x0 features=0x0 datamodel=8,4,2,8
+Symbol 0 DATA GLOBAL DEFAULT 'table' field=0x04000001 segment=0 offset=0 size=24
+Symbol 4 DATA GLOBAL DEFAULT UNDEFINED IMPORT 'my_counter' import_module='' import_name='native_counter'
+Symbol 5 DATA COMMON DEFAULT 'common_c' field=0x04000005 size=4 align=4
+Symbol 6 FUNCTION WEAK DEFAULT 'weakfn' method=0x06000001
+Symbol 8 FUNCTION GLOBAL DEFAULT UNDEFINED 'add3'
+Symbol 11 FUNCTION WEAK DEFAULT ALIAS 'hook' aliasee=10
+Segment 0 '.rodata' align=8 size=24 flags=READONLY
+Reloc FNADDR64 segment=0 offset=0 symbol=8 'add3' addend=0
+Reloc DIFF width=4 segment=2 offset=8 symbol=1 'a' symbol2=2 'b' addend=0
+Comdat '??_C@_05CJBACGMB@hello?$AA@' ANY segment=3
+Init priority=200 symbol=7 'ctor_a'
+Signature 0x0A000002 'f' NO_PROTOTYPE byval=1:12:4
+LinkerOption DEPENDENT_LIB 'm'
+```
+
+### 5.9 msil-ld
+
+msil-ld is an lld flavor modeled on lld/wasm (driver, archives, LTO, map file, mark-live, `--reproduce`) whose symbol
+resolution is a port of lld/ELF (`lld/ELF/Symbols.cpp`, condition 2) and whose output is written through
+`llvm/lib/CLI` (5.7). It binds by name, renumbers every token by decoding IL, checks call-site signatures (Q8), lays
+out one data image and synthesizes `<Module>::.cctor` and `'<msil>Main'` through the trailer builder that `-S` also
+uses (Q5). Sources: lld-flavor 1-6, objfmt-binding 4.3 and 11.3, judge-c-fidelity 6.3, native-imports 8,
+exports-multiasm 10, metadata-writer 3.6 and 4.9. Native-library resolution (5.10), BCL binding (5.11) and the
+harness (5.12) are other contracts; this one names the hooks it gives them (5.9.18).
+
+#### 5.9.1 Hosting and dispatch (Q18)
+
+- A flavor inside `lld.exe` with the alias `msil-ld`: enum value `lld::MSIL` in `lld/include/lld/Common/Driver.h`,
+  `LLD_HAS_DRIVER(msil)` declaring `bool lld::msil::link(ArrayRef<const char *>, raw_ostream &, raw_ostream &, bool
+  exitEarly, bool disableOutput)`, `{lld::MSIL, &lld::msil::link}` in `LLD_ALL_DRIVERS`, `lldMSIL` linked into
+  `lld` and `lld/unittests/AsLibAll`, `msil-ld` added to the default `LLD_SYMLINKS_TO_CREATE`,
+  `add_subdirectory(MSIL)` in `lld/CMakeLists.txt`, `"MSIL": "msil"` in the `--targets-built` feature map of
+  `lld/test/lit.cfg.py` (lld-flavor 1.2).
+- `lld/Common/DriverDispatcher.cpp`: `getFlavor` maps `msil` to `MSIL`; `parseProgname` returns `MSIL` when any
+  `-`-separated component of the program name is `msil`, before the first-component rule, so
+  `x86_64-unknown-linux-gnu-msil-ld` is msil-ld and not the GNU flavor (lld-flavor 1.3, measured). `lld -flavor msil`
+  works as `argv[1]`. There is no `ld-msil` spelling.
+- Global state (`ctx`, `symtab`) is reset at the start of `link()`, as `lld/wasm/Driver.cpp:57-73` does, so
+  `LLD_IN_TEST=2` passes. Diagnostics go through lld's ErrorHandler and start with `msil-ld: `.
+- Files copied from lld/wasm start with `// Derived from lld/wasm/<File> at <commit>.`, the resolver with
+  `// Derived from lld/ELF/Symbols.cpp at <commit>.` (D30's rule for lld).
+
+#### 5.9.2 Files
+
+`lld/MSIL/` mirrors lld/wasm's names (5.6 assigns owners per milestone):
+
+| File | Content | First milestone |
+|---|---|---|
+| `CMakeLists.txt` | `lldMSIL`, `MSILOptionsTableGen`; LINK_COMPONENTS `${LLVM_TARGETS_TO_BUILD}` BinaryFormat BitWriter Core LTO MC Object Option Passes Support TargetParser, and `CLI` from M20 (5.7.1: M14 and M15 do not link it; M13's stub links `Option Support TargetParser`) | M13 (stub), M14, M20 |
+| `Options.td` | 5.9.3 | M13 (stub), M14 |
+| `Config.h` | `Config` (options), `Ctx` (state), `MSILSym` (linker-defined names) | M14 |
+| `Driver.cpp` | `link()`, `LinkerDriver`, response files, input search and creation, `--reproduce`, `--why-extract`, `-u`, entry handling | M13 (stub), M14 |
+| `InputFiles.{h,cpp}` | `InputFile`, `ObjFile` (CIL object: MetadataReader + record), `BitcodeFile`, archive members and lazy parsing, `identify()` | M14 (bitcode), M20 (objects) |
+| `InputChunks.{h,cpp}` | `InputMethod` (an object's method body and its token sites), `InputSegment` (a record segment), `SyntheticSegment` (commons, address slots) | M20 |
+| `Symbols.{h,cpp}` | symbol kinds; `Symbol::resolve` ported from lld/ELF | M14 |
+| `SymbolTable.{h,cpp}` | insertion, lazy symbols, comdat groups, late binding, weak-undefined stubs | M14 |
+| `TokenMap.{h,cpp}` | the IL token walker and per-object token maps (no wasm analogue) | M20 |
+| `Signatures.{h,cpp}` | Q8 checks, adapters, trap stubs (lld-flavor P2B2.e) | M20 |
+| `OutputSegment.{h,cpp}` | output sections of the image, `__start_`/`__stop_`, constructor tables | M20 |
+| `Relocations.{h,cpp}` | undefined reporting, requests for P/Invoke stubs and `'<msil>fn_'` fields | M20 |
+| `MarkLive.{h,cpp}` | `--gc-sections` | M20 |
+| `Synthetic.{h,cpp}` | the trailer sink over `cli::MetadataBuilder` (5.9.10), stub and adapter rows | M20 |
+| `Writer.{h,cpp}` | `void writeResult()` (lld/wasm's entry point): rows, tokens, body relocation, spilling, `cli::writePEImage` | M20 |
+| `MapFile.{h,cpp}` | `-Map` | M14 |
+| `LTO.{h,cpp}` | `BitcodeCompiler`, `MSILLinkHooksPass` (5.9.13) | M14 |
+| `NativeLibraries.{h,cpp}` | native readers and index (5.10) | M15 |
+| `AssemblyFiles.{h,cpp}` | `ReferenceAssemblyFile` (5.11), `ManagedLibraryFile` (5.9.15), and `InputFile *createManagedLibraryFile(MemoryBufferRef)` (5.9.4): in M21 it reports `<path>: linking .NET libraries built by this toolchain is not supported yet` and returns null; M22.c makes it return a `ManagedLibraryFile`, and M22's `-l` search calls it too | M21, M22 |
+| `BCLBinder.{h,cpp}` | BCL binding (5.11) | M21 |
+| `ReferenceSet.{h,cpp}` | `ReferenceSet`, `AssemblyIdentity` (5.11.2) | M21 |
+| `Exports.{h,cpp}` | export class, accessors, symbol-table attribute (5.9.15) | M22 |
+| `lld/test/MSIL/` | FileCheck tests, `lit.local.cfg` requiring the `msil` feature | M13 |
+
+lld/wasm has no `TokenMap`, `Signatures`, `Synthetic` or `Exports`; it has `InputElement`, `OutputSections`,
+`SyntheticSections` and `WriterUtils`, which msil-ld drops (lld-flavor 2.2).
+
+Headers that another WP of the same milestone calls into are pinned here. Callers can then compile against the
+pinned declarations whichever WP owns the header and whenever it is written:
+- `Writer.h`: `namespace lld::msil { void writeResult(); }` and nothing else (lld/wasm's `Writer.h`).
+- `LTO.h`: `class BitcodeCompiler { public: BitcodeCompiler(); ~BitcodeCompiler(); void add(BitcodeFile &F);
+  void setBitcodeLibFuncs(ArrayRef<StringRef> LibFuncs); SmallVector<InputFile *, 0> compile(); };` with lld/wasm's
+  meaning. Under `--lto-emit-asm`, `compile()` writes `-o` itself and returns an empty vector. From M20, without
+  `--lto-emit-asm`, it returns the in-memory LTO objects. `setBitcodeLibFuncs` is lld/wasm's and forwards to
+  `lto::LTO::setBitcodeLibFuncs`: `SymbolTable::compileBitcodeFiles()` calls it before `add()` with the library
+  functions of bitcode members that stayed lazy, as `lld/wasm/SymbolTable.cpp:81-118` and
+  `lld/ELF/Driver.cpp:2795-2810` do (upstream's '[LTO][LLD] Prevent invalid LTO libfunc transforms'; without it LTO
+  may call a library function whose bitcode definition stayed in an archive). M14's root WP owns `LTO.h`, and the
+  LTO role defines the function in `LTO.cpp`. `MSILLinkHooksPass` stays private to `LTO.cpp`.
+- `Config.h`: `struct Config`, with one member per 5.9.3 option, named as lld/wasm's member for the same option and
+  otherwise after the option's spelling in camelCase; `struct Ctx { Config arg; ... };` and `extern Ctx ctx;`
+  (lld/wasm's shape); `struct MSILSym` with the linker-defined symbols.
+- `AssemblyFiles.h` (from M21): `InputFile *createManagedLibraryFile(MemoryBufferRef)`, the driver's one path for
+  toolchain libraries (5.9.4). Its declaration does not change in M22, so M22's driver calls nothing new of the WP
+  that defines it.
+
+#### 5.9.3 Options
+
+lld's spellings (two dashes for new long options; joined `=` and separate forms as lld's `Eq` and `EEq` helpers).
+
+| Option | Meaning | Milestone |
+|---|---|---|
+| `-o <file>` | output; the assembly name defaults to its stem | M14 |
+| `--target=<triple>` | codegen triple; default: the first object's or bitcode's triple, with `-msil` appended to a native triple | M14 |
+| `-L <dir>`, `-l <name>`, `-l:<file>`, `--sysroot=<dir>`, `-Bstatic`, `-Bdynamic` | search; native and managed classification per 5.10 | M14, M15 |
+| `--whole-archive`, `--no-whole-archive`, `--start-lib`, `--end-lib` | lld semantics | M14 |
+| `-u <sym>`, `--undefined=<sym>` | force a reference (extracts lazy members) | M14 |
+| `-e <sym>`, `--entry=<sym>` | the C entry function; default `main`; must have a D27 shape. Before M20 only `main` (any other symbol is `--entry=<sym>: an entry point other than main is not supported yet`); with `-shared` the warning `--entry is ignored with -shared` (D27) | M14 (`main` only), M20, M22 (with `-shared`) |
+| `-shared`, `--shared` | DLL image, no entry point, exports (5.9.15); M14-M21 recognize it and report `-shared is not supported yet`, because the M14 driver already passes `--shared` for `-shared` (5.10.3) | M14 (error), M22 |
+| `--gc-sections` (default), `--no-gc-sections`, `--print-gc-sections` | 5.9.11 | M20 |
+| `--allow-multiple-definition`, `--warn-common`, `--fatal-warnings`, `--error-limit=<n>`, `--verbose`, `--trace`, `--trace-symbol=<sym>`, `-y <sym>`, `--color-diagnostics` | lld semantics | M14 |
+| `--no-dependent-libraries` | ignore LINKER_OPTIONS and bitcode dependent libraries | M15 (bitcode), M20 (objects) |
+| `-Map=<file>`, `--print-map`, `-M` | 5.9.14 | M14 |
+| `--why-extract=<file>` | 5.9.14 | M14 |
+| `--reproduce=<file>` | 5.9.14 | M14 |
+| `--lto-O<n>`, `--lto-CGO<n>`, `--lto-partitions=<n>`, `--thinlto-jobs=<n>`, `--thinlto-cache-dir=<dir>`, `--save-temps`, `--disable-verify`, `-mllvm <opt>`, `--mllvm=<opt>` | LTO (5.9.13); partitions and ThinLTO from M20 | M14 |
+| `--lto-emit-asm` | write ILAsm text of the whole-program LTO module to `-o`; with `-shared` the error `--lto-emit-asm cannot write a -shared library; link without --lto-emit-asm` (M22) | M14 |
+| `--reference=<file\|dir>`, `--reference <path>` | reference assemblies (Q9, 5.11) | M21 |
+| `--print-bcl-table` | prints the built-in `[mscorlib]` table and exits (5.11.1) | M21 |
+| `--print-bcl-binding=<request>` (hidden, repeatable) | request `member:<BCLMemberId>[:drop\|:substitute]`: prints how the binder binds it, for 5.11.5's mechanism test | M21 |
+| `--assembly-name=<name>`, `-soname <name>` | assembly name | M14 (module flag), M20 |
+| `--assembly-version=<a.b.c.d>`, `--export-class=<Ns.Name>`, `--exclude-libs=<list>`, `--export-all-symbols` | P2-C (5.9.15) | M22 |
+| `--interface-only` | with `-shared`: an interface library (5.9.15); without `-shared` an error | M22 |
+| `--print-imports` | native imports report (5.10) | M15 |
+| `--ucrtbase-imports` | the built-in native import library of 5.10.4 (the 11 mem/str/wcs functions bound to `ucrtbase.dll`), placed where the option appears; an error on non-Windows targets | M15 |
+| `--msil-reloc-loop-threshold=<n>` (hidden) | 5.9.10, for tests | M20 |
+| `--msil-type-member-limit=<n>` (hidden) | replaces 5.9.12's 65,524/65,534 per-type limits (and M22's export-class limit) when smaller, for FileCheck tests of spill classes; `msil/test/M2/00-link/spill-limits.test` runs the real limits | M20 |
+| `-s`, `--strip-all` | accepted and ignored (the driver passes them) | M14 |
+| `-r`, `--relocatable` | error `-r is not supported`, reported while the options are read, before any input, so `msil-ld -r` alone prints it; from M14 `lld/test/MSIL/dispatch.test` identifies msil-ld by it (the one msil-ld-only error Phase 2 never retires) | M14 |
+| `--version`, `-v`, `--help` | | M13 |
+
+Until the milestone that implements it, an option of this table is an unknown argument; `-shared`/`--shared` is
+recognized and rejected from M14 (above).
+
+#### 5.9.4 Inputs
+
+| File (`identify_magic` + CLI header checks) | Input kind | Notes |
+|---|---|---|
+| archive (GNU, BSD or COFF format; built by `llvm-ar`) | CIL and bitcode members become lazy | the archive symbol index is ignored; each member is identified as below; an archive of COFF import members is an import library and native-only archives are classified by 5.10 |
+| bitcode | `BitcodeFile` | lazy inside archives; member names `lib.a(m.o at <offset>)` for ThinLTO uniqueness |
+| PE with a CLI header, no Assembly row, the 5.8.7 attribute | `ObjFile` (CIL object) | `cli::MetadataReader` + `cli::decodeLinkInfo` + `cli::validateLinkInfo` |
+| PE with a CLI header, no Assembly row, no attribute | error `not a CIL object (no link-info record)` | C# netmodules (Q7) |
+| PE with a CLI header and an Assembly row carrying `'<msil>SymbolTable'` | `ManagedLibraryFile`, created only through `createManagedLibraryFile` (5.9.2), the driver's one path for toolchain libraries, positional or (M22) found by `-l` | before M21 the next row's error; M21: `<path>: linking .NET libraries built by this toolchain is not supported yet`; M22: P2-C (5.9.15). Given through `--reference` (M21 on): skipped with the warning `<path> is a library built by this toolchain; pass it as a link input instead` |
+| PE with a CLI header and an Assembly row, no symbol table | `ReferenceAssemblyFile` | Q9's positional reference (5.11), from M21; before M21 `<path>: .NET assembly inputs are not supported yet` |
+| native DLL, import library, ELF `.so`, GNU ld script | `NativeLibraryFile` | 5.10 |
+| anything else | error `unknown file type: <file>` | |
+
+- Lazy symbols of a CIL archive member: every non-LOCAL, non-UNDEFINED SYMTAB symbol (WEAK, COMMON and ALIAS
+  included), as `lld/ELF/InputFiles.cpp:2024-2041` takes every defined global. An archive without CIL or bitcode
+  members is a native static archive (5.10). `--whole-archive` loads every CIL and bitcode member.
+- Linker options (LINKER_OPTIONS, and the dependent libraries and COFF linker options of bitcode inputs) are
+  processed when their file is loaded (bitcode from M15, objects from M20), unless `--no-dependent-libraries`: a
+  DEPENDENT_LIB entry `x` (searched like `-lx`, lld/ELF `--dependent-libraries`) and the options `-l<name>`,
+  `-l:<file>`, `/DEFAULTLIB:<name>` and `-defaultlib:<name>` (lld-link `/DEFAULTLIB`) add a library by 5.10.6's
+  rules: `.lib` appended to an extension-less `/DEFAULTLIB` name, then searched like `-l:`, and requests naming an
+  MSVC C runtime library ignored with a `--verbose` note; `/alternatename:a=b` makes `a` resolve to `b` when `a` is
+  still undefined after all inputs (lld-link's rule); `/FAILIFMISMATCH:k=v` is an error when two inputs give
+  different values for `k` (lld-link); any other option is the warning `ignoring linker option '<opt>' in <file>`.
+- Command-line order (objects, archives, `-l`, linker-option libraries in the order their objects are loaded)
+  decides tie-breaks in resolution, layout and row order. msil-ld never reads timestamps, environment variables or
+  hash order, so the output depends only on its inputs and options.
+
+#### 5.9.5 Symbol resolution: the lld/ELF port (condition 2)
+
+`Symbols.h` kinds: `DefinedFunction` (an `InputMethod`, an LTO method or an explicit-import stub), `DefinedData` (an
+`InputSegment` + offset + size), `CommonSymbol` (size, alignment), `Undefined` (function or data), `LazySymbol`
+(archive member or `--start-lib` file), `SyntheticData` (`__start_`/`__stop_`), and the late-bound kinds
+`NativeFunction`/`NativeData` (5.10) and `ManagedFunction`/`ManagedData` (5.9.15). Each symbol has a binding (ELF
+`STB_*`), a visibility (`STV_*`), a kind (function or data), a TLS bit and the flags `isUsedInRegularObj`, `noStrip`,
+`live`, `traced`, `referenced`, `dllImport`.
+
+`Symbol::resolve` is a port of `lld/ELF/Symbols.cpp` (the shared-library cases dropped: managed and native
+definitions bind late, 5.9.6). Existing state down, incoming symbol across:
+
+| Existing \ incoming | Undefined (`:423-528`) | Lazy (`:652-679`) | Common (`:607-641`) | Defined (`:541-556`, `:643-650`) |
+|---|---|---|---|---|
+| none | Undefined with the incoming binding | Lazy | Common | Defined |
+| Undefined | stays; a GLOBAL reference makes the binding GLOBAL, a WEAK one makes it WEAK only while the symbol is still unreferenced (`:525-530`) | existing WEAK: becomes Lazy with binding WEAK, no extraction; existing GLOBAL: extract the member | Common | Defined |
+| Lazy | incoming WEAK: binding WEAK, no extraction; incoming GLOBAL: extract (recorded for `--why-extract`) | keep the first | Common, no extraction | Defined |
+| Common | unchanged | unchanged | alignment = max; size and file from the larger (`--warn-common` notes it) | replaced only by a non-WEAK definition (`return !other.isWeak()`) |
+| Defined WEAK | unchanged | unchanged | replaced by the Common | replaced by a GLOBAL definition, else the first stays |
+| Defined GLOBAL | unchanged | unchanged | stays (`--warn-common` notes it) | stays; both GLOBAL is `duplicate symbol` (`checkDuplicate`, `:600-605`) unless `--allow-multiple-definition` |
+
+Also ported:
+- Visibility merges to the most constraining non-default value (`:424-427`).
+- COMDAT groups (`InputFiles.cpp:1905-1912`): the first object that presents a group name keeps it; NoDeduplicate
+  groups are always kept; in later objects the group's members (methods and segments) are discarded and the symbols
+  they define enter as Undefined marked "discarded". A reference that resolves to nothing but a discarded copy is
+  `relocation refers to a symbol in a discarded section: <s>` (`Relocations.cpp:381-405`). Selections ExactMatch,
+  Largest and SameSize are errors.
+- Kind checks after insertion: a FUNCTION symbol and a DATA symbol of one name are
+  `symbol type mismatch: <s>` (wasm-ld's text and rule; lld/ELF does not check types); TLS against non-TLS is
+  `TLS attribute mismatch: <s>` (`InputFiles.cpp:1398`). judge-c-fidelity 6.2 item 3 would let a data reference
+  bind to a function's `'<msil>fn_'` field instead; msil-ld reports the mismatch, a named diagnostic, because
+  reading through such an address is undefined in C and has no CIL meaning.
+- An ALIAS resolves like a definition of its kind; its target is the aliasee's method or the aliasee's segment and
+  offset + AliasOffset (data). Aliases of aliases do not occur (the backend resolves `getAliaseeObject`).
+- LOCAL symbols never enter the table; they bind within their object.
+- Correction to judge-c-fidelity F1: lld/wasm in this checkout has common symbols (`lld/wasm/SymbolTable.cpp:338-348,
+  511-555`) with the same weak-versus-common rule. msil-ld still ports lld/ELF, the user's condition.
+
+#### 5.9.6 Late binding, weak undefined and undefined symbols
+
+Design.md 5.2 order (native-imports 8.2): objects and archive members first; managed and native definitions never
+preempt them or block archive extraction. After every input is loaded (and, when LTO writes objects, from M20,
+after the LTO objects are parsed; see **When it runs** below), each symbol still Undefined (WEAK or GLOBAL, not
+HIDDEN or INTERNAL) is bound by `SymbolTable::bindLateSymbols()` in this order:
+1. managed libraries in command-line order (P2-C, M22), searched by the symbol name (an import name applies to step 2
+   only), so an `msil.unresolved` stub's symbol binds to a library export when one exists and natively under its
+   ImplMap import name otherwise; EXPLICIT_IMPORT stubs and IMPORT data with a non-empty ImportModule skip step 1 as
+   they skip the lookup in step 2; a second exporter is a warning naming both (exports-multiasm 10.2);
+2. native libraries through `NativeIndex::lookup` (5.10), the first bindable definition in command-line order. The
+   lookup name is the symbol's import name: the ImplMap import name of its `msil.unresolved` stubs, the ImportName of
+   an IMPORT data symbol, else the symbol name. A symbol with an explicit module skips the lookup: EXPLICIT_IMPORT
+   stubs, and IMPORT data with a non-empty ImportModule, bind to that module and entry unchecked (5.10.7). Inputs
+   that give one symbol different import names or modules are 5.10.7's mismatch errors (CIL and LTO objects;
+   bitcode symbol tables carry no import names); an input that gives none takes the other's (wasm-ld's
+   `updateExistingUndefined`). An import name equal to the symbol name, which is what a stub without `as` has,
+   counts as none;
+3. still undefined and WEAK: address 0; `'<msil>fn_'` fields and address fields stay 0; each direct call binds to a
+   trap stub `'<msil>undef_<name>'` with the call's signature (`ldnull`, `throw`; wasm-ld's `createUndefinedStub`);
+4. still undefined and GLOBAL: `undefined symbol: <s>` with `>>> referenced by <file>:(<method>)` lines, if a live
+   method or segment references it; an undefined HIDDEN or INTERNAL symbol is `undefined hidden symbol: <s>` and never
+   binds late (`Symbols.cpp:428-436`).
+
+Because objects and archive members come first, P3's static helper archive can define `exit`, `atexit` and the
+like ahead of any native library (decision-brief 5: P3 must be able to intercept them).
+
+**When it runs.**
+- M14 (bitcode only, `--lto-emit-asm`, no native readers): msil-ld itself reports undefined HIDDEN symbols
+  (`undefined hidden symbol: <s>`), undefined GLOBAL data (`undefined symbol: <s>` with `>>> referenced by` lines)
+  and an undefined entry. An undefined WEAK symbol stays for the backend (M12's null-plus-trap lowering). An
+  undefined GLOBAL function goes to LTO code generation, where the frozen D14 table imports it; otherwise, because
+  msil-ld sets the module flag `msil-lto`, the backend reports `undefined symbol: <name>` (printed
+  `msil-ld: error: ...`; MSILAsmPrinter, M14's target role, 5.6.5). That is 5.9.14's first line, so the matrix case
+  `undefined` stays stable.
+- M15-M19, and from M20 under `--lto-emit-asm`: step 2 binds the bitcode symbol table before LTO, by symbol name
+  (bitcode symbol tables carry no import names), so the import-annotation pass can annotate the merged module
+  (5.9.13). Undefined and unbindable references of bitcode inputs are reported after LTO optimization by
+  `MSILLinkHooksPass` on the merged module, which also binds the library functions the optimizer introduced
+  (`printf` -> `puts`; such a name is `>>> referenced by ld-temp.o`) and leaves explicit `msil-import-module`
+  attributes unchecked. This replaces M14's pre-LTO report (the first line `undefined symbol: <s>` is unchanged), as
+  lld/ELF and lld/wasm report undefined symbols after LTO (LTOBackend writes `precodegen.bc` before
+  `PreCodeGenPassesHook`). On non-Windows triples an undefined `__start_X`/`__stop_X` is then neither reported nor
+  bound when a bitcode definition names section X (irsymtab section name): whole-program code generation defines it
+  (5.8.10, 5.9.9).
+- From M20, when LTO writes objects, late binding runs after LTO, over the parsed LTO objects, which carry import
+  names as any CIL object does (5.9.13).
+
+#### 5.9.7 The IL token walker and renumbering
+
+- `ObjFile::parse` decodes every kept MethodDef body (tiny or fat header, EH sections) with lib/CLI's opcode table
+  (`CILOpcodes.def` operand kinds) and records each 4-byte token operand as (offset, old token) in its
+  `InputMethod`. Unknown opcodes, truncated bodies or a token of a table the operand kind does not allow are
+  `<file>: malformed method body in '<m>' at IL offset <n>`.
+- Each object gets a `TokenMap` from old tokens to output entities:
+
+| Old token | Output entity |
+|---|---|
+| MethodDef with a body | the method of the symbol that the row's name resolves to (R1): this object's method, another object's winning copy, an LTO method, an adapter (5.9.8) or a trap stub; a site redirected to another input's definition is a call site for 5.9.8 |
+| MethodDef stub with ImplMap | the resolved definition if an object or bitcode file defines the name (checked by 5.9.8); else late binding (5.9.6), where EXPLICIT_IMPORT keeps its module and entry verbatim and `msil.unresolved` stubs bind natively under their ImplMap import name (equal to the method name when the producer wrote no `as`) |
+| FieldDef | the output address field of the resolved DATA symbol |
+| MemberRef on `'<msil>Symbols'` | method: as a MethodDef (by name); field: the address field of the resolved DATA symbol, or of a native data import (5.10.12) whose module and entry come from 5.9.6 step 2 (IMPORT included) |
+| MemberRef on `'<msil>FnAddr'` | the `'<msil>fn_<name>'` field of the resolved method (one per method; aliases share their target's) |
+| MemberRef on another TypeRef, TypeRef, TypeSpec, MethodSpec | the binder's result (5.11, M21; in M20 the BCL stand-in below); custom-attribute blobs rewritten as 5.11 says |
+| StandAloneSig | an output StandAloneSig, re-encoded and deduplicated |
+| UserString (`ldstr`) | the string re-added to the output `#US` heap |
+
+- **BCL stand-in (M20).** Until M21's `BCLBinder` exists, msil-ld rewrites every TypeRef scoped to `msil.bcl` to
+  `[mscorlib]` 4.0.0.0 `b77a5c561934e089` (D10) and copies MemberRefs by name with re-encoded signatures, without
+  lookup; the trailer's members and the spill classes' base type come from `BCLMembers.def`. M21's binder replaces
+  the stand-in. Any other AssemblyRef scope in an object is
+  `<file>: reference to assembly '<n>' needs --reference, which this msil-ld does not support yet`.
+- Signature blobs (MethodDef, MemberRef, field, local and `calli` signatures) are decoded and re-encoded with every
+  TypeDefOrRef coded index mapped (objfmt-binding 3.1: compressed indices cannot be patched). Phase 2 C code has none,
+  but the walker supports them.
+- Bodies are copied byte for byte and only token operands change (one exception below), so code sizes, branch
+  offsets, `.maxstack` and EH offsets never change; msil-ld never relaxes branches or changes instruction forms.
+- The one body edit besides token patching (M22): when a `'<msil>Symbols'` field MemberRef or a `'<msil>FnAddr'`
+  placeholder resolves to a managed library export (`ManagedData`/`ManagedFunction`), the site must be an `ldsfld`
+  (0x7E); the walker replaces it with `call` (0x28) to `[lib]Class::'<msil>addr_<name>'()` (signature `00 00 18`;
+  both forms are 5 bytes with stack effect 0 to 1, so offsets and `.maxstack` stay). Any other opcode on such a
+  token is `<file>: unsupported use of imported symbol '<s>' in '<m>' at IL offset <n>`. Importers never take a
+  library address with `ldftn` (exports-multiasm 4.2 and 10.4).
+
+#### 5.9.8 Call-site signature checks and adapters (Q8)
+
+Every call site that msil-ld binds by name to a definition is compared with that definition: IL signature plus the
+SIGNATURES descriptors of both sides. Such sites are:
+- a MemberRef on `'<msil>Symbols'`;
+- an import stub resolved to a definition;
+- a MethodDef with a body whose own definition lost to another input's: a WEAK definition overridden by a GLOBAL
+  one, or a member of a discarded COMDAT group (R1, 5.9.5). Here the call side is the losing copy's MethodDef
+  signature and its SIGNATURES entry (definitions have entries, 5.8.8), and the definition side is the winner's,
+  which may be an object method or an LTO method.
+
+A MethodDef that stays this object's own definition is never checked. `llvm/include/llvm/CLI/CallAdapter.h` (M20)
+declares `cli::ValueClass` (the IL value classes of the table below), `cli::CallShape` with
+`static CallShape get(const MethodSig &, const MSILLink::SignatureInfo *)`, `cli::CallMatch`, `cli::classifyCall`,
+`cli::buildAdapter(const CallMatch &, const MethodSig &CallSig, TokenRef Callee, ILBuilder &)` and
+`cli::printCallShape`; the names and these parameter lists are pinned. The decision is
+`cli::classifyCall(const CallShape &Call, const CallShape &Def) -> CallMatch` over IL value classes `int32`,
+`native int`, `float32`, `float64`, `void`:
+
+| Difference | Result |
+|---|---|
+| none | direct: the token names the definition |
+| extra trailing arguments at the call | adapter drops them (x86-64 callees ignore them); warning |
+| missing trailing arguments | adapter passes zero of each parameter's type; warning |
+| `native int` argument for an `int32` parameter | adapter `conv.i4` (the callee reads the low 32 bits natively); warning |
+| `int32` argument for a `native int` parameter | adapter `conv.i` (sign-extends; the upper half is unspecified natively); warning |
+| call expects a result, definition returns `void` / call discards a result | adapter returns zero / pops it; warning |
+| result `int32` versus `native int` | adapter `conv.i4` / `conv.i`; warning |
+| integer versus floating point, `float32` versus `float64`, in a parameter or the result | error (different native register classes) |
+| SRET on one side only; BYVAL at different positions or with different size or alignment | error |
+| VARARG on either side | error `variadic functions are not supported yet` (P3-B) |
+| a value type, typed pointer or generic instance in either signature (P3 and later) | exact match or error, until FeatureIdeas 3 is decided |
+
+- An adapter is `assembly static '<msil>adapt_<name>_<n>'` (n from 0 per definition in first-use order) with the
+  call's signature: load, convert or zero-fill each argument, call the definition, convert, pop or zero the result,
+  `ret`; `cli::ILBuilder` computes `.maxstack`. Every call site with the same (definition, call signature,
+  descriptor) shares one adapter.
+- Texts (wasm-ld's `reportFunctionSignatureMismatch` shape, `lld/wasm/SymbolTable.cpp:378-398`):
+  `function signature mismatch: f` / `>>> defined as int32(int32) in b.o` / `>>> called as int32(int32, int32) in a.o`,
+  then `>>> adapter: <what it does>` for a warning or `>>> <why it cannot be adapted>` for an error. For an
+  overridden definition the `called as` line gives the losing copy's signature and its object.
+- Calls through function pointers are not checked (`calli`; as in Phase 1 and natively).
+- LTO path: MSILFixFunctionBitcasts applies the same `cli::classifyCall` table when the module flag `msil-lto` is 1
+  (set by msil-ld, 5.9.13): the table's adapters instead of its bitcast wrappers, and its errors as `DiagnosticInfo`
+  errors instead of the trapping `_bitcast_invalid` wrapper, so the object and LTO paths agree. That covers the
+  overridden-definition case too: after the IR linker drops a losing WEAK copy, the calls of its module keep the
+  losing prototype's function type against the winner. `-S` and `llc` keep Phase 1's behaviour. Under the flag
+  MSILFixFunctionBitcasts (M20.a) builds IR wrappers that implement `classifyCall`'s actions and keep the pass's
+  Phase 1 names (R5 and C8 forbid `<msil>` names in objects). Each adaptation is a `DiagnosticInfo` warning
+  (`DS_Warning`) and each table error a `DiagnosticInfo` error, with this subsection's texts minus the ` in <file>`
+  parts (the merged module has no files); msil-ld's LTO diagnostic handler prints them. The pass sees the merged
+  module, so under LTO a mismatch inside one TU warns too, where `clang -c` adapts it silently with Phase 1's
+  wrapper and msil-ld sees no call site. This deviates from D30's mechanical-copy rule (section 12). M14-M19 keep
+  Phase 1's behaviour under `msil-lto` (a float/int mismatch becomes the trapping `_bitcast_invalid` wrapper), so
+  `float-int-mismatch` is an M20 case (5.9.16).
+- The matrix pins the overridden-definition case on both paths (`weak-def-sig-mismatch`, 5.9.16).
+
+#### 5.9.9 Data image layout, named sections and constructor tables
+
+`cli::layoutImage` (`llvm/include/llvm/CLI/ImageLayout.h`, M20) computes the layout for msil-ld and, from M20, for
+whole-program output (`-S`, llc, `--lto-emit-asm`; 5.8.10), so a one-object link equals `-S` (oracle O3). Inputs:
+every live segment (name, flags, alignment, size, bytes, input order) and every live common symbol (merged size and
+alignment, position). Rules:
+
+1. **Units.** A segment whose name is `.rodata`, `.data` or `.bss` is a unit by itself. Every other name is a group:
+   all live segments of one output section name form one unit placed at its first segment's position. The output
+   name is the segment name, except `.init_array.N`/`.fini_array.N` (-> `.init_array`/`.fini_array`) on non-Windows
+   triples, and the part before the first `$` on Windows triples (COFF grouping, `lld/COFF/Writer.cpp:844-864`).
+   Inside a group: by priority on non-Windows triples (`lld/ELF/OutputSections.cpp:832-879`: `.x.N` -> N, plain
+   `.x` -> 65536; stable), by full name on Windows triples (byte-wise; stable).
+2. **Initialized part.** Units that contain a non-ZERO segment, in input order (objects in link order, segments in
+   record order). Each segment starts at its alignment; ZERO members of a mixed group become zero bytes; padding is
+   zero. `InitSize` is the end of the last initialized unit.
+3. **Zero part.** Then the ZERO units and the common symbols in input order: per object in link order, the ZERO
+   default segments and ZERO-only groups by their defining symbols' SYMTAB order, and each common symbol at the
+   SYMTAB position of its first declaration, with its merged size and alignment.
+4. **Slots.** When the trailer uses the relocation loop (5.9.10), one 8-byte address slot per distinct (field,
+   addend) pair of the relocations without an image target (`cli::countAddressSlots`), 8-aligned, last. `TotalSize`
+   is the end.
+5. **Base alignment** `MaxAlign` = max(16, every alignment). `TotalSize + MaxAlign - 1` must fit in int32, else
+   `the data image of <n> bytes is larger than MSIL supports (2 GiB)` (Phase 1's limit).
+6. **Strings.** Live STRINGS segments with equal name, flags, alignment and bytes share the first copy (the
+   prototype's rule); there is no tail merging in Phase 2.
+7. **TLS** segments (`.tdata`, `.tbss`, TLS flag) are rejected in Phase 2 (`thread-local storage is not supported
+   yet`); P3-A lays them out as the TLS template.
+
+For a single object without commons or explicit sections, this reproduces Phase 1's `MSILDataSegment` layout
+(initialized globals in IR order, then zero-initialized ones) because SEGMENTS follow IR order (5.8.8).
+
+```cpp
+namespace llvm::cli {   // llvm/include/llvm/CLI/ImageLayout.h (M20)
+enum class SectionRules : uint8_t { ELF, COFF };            // COFF for Windows triples (rule 1)
+struct ImageSegment { StringRef Name; uint32_t Flags; uint8_t AlignLog2; uint64_t Size; ArrayRef<uint8_t> Bytes; };
+struct ImageCommon { uint64_t Size; uint8_t AlignLog2; };
+struct ImageInput {
+  std::vector<ImageSegment> Segments;                       // live segments in input order (rule 2)
+  std::vector<ImageCommon> Commons;
+  std::vector<std::pair<bool, uint32_t>> ZeroOrder;         // (is common, index) in rule 3's order
+  unsigned NumSlots = 0;                                    // rule 4
+  SectionRules Rules = SectionRules::ELF;
+};
+struct ImageSection { std::string Name; uint64_t Offset, Size; };  // __start_/__stop_, -Map, constructor tables
+struct ImageLayout {
+  std::vector<uint64_t> SegmentOffset, CommonOffset;
+  std::vector<int32_t> SharedWith;                          // rule 6: the segment whose copy is used, or -1
+  std::vector<ImageSection> Sections;
+  uint64_t InitSize = 0, SlotsOffset = 0, TotalSize = 0; uint8_t MaxAlignLog2 = 4;
+  std::vector<uint8_t> Image;                               // [0, InitSize); relocation sites are zero
+};
+enum class SectionClass : uint8_t { Data, ConstructorTable, DestructorTable, Unsupported, TLS };
+SectionClass classifySection(StringRef Name, SectionRules Rules);   // .init_array*, .CRT$XC*; .fini_array*,
+                                        // .CRT$XT*; .ctors*, .dtors*, other .CRT$X*; .tdata, .tbss
+// getConstructorKey: an INIT priority or a slot's input section -> the key of the constructor list below;
+// sortConstructors: that list's stable order. msil-ld and whole-program output share classifySection,
+// getConstructorKey and sortConstructors (names pinned; M20.a chooses the last two's parameter lists).
+Expected<ImageLayout> layoutImage(const ImageInput &In);
+}
+```
+
+**`__start_<name>`/`__stop_<name>`**: on non-Windows triples, when an undefined `__start_X` or `__stop_X` is
+referenced and output section X exists with a C-identifier name, msil-ld defines DATA symbols at its start and end
+(`lld/ELF/Writer.cpp:2289-2301`, `lld/wasm/Writer.cpp:544-556`). On Windows triples they are not defined: link.exe
+and lld-link do not define them either, so the reference stays undefined. From M20, whole-program output (`-S`, llc,
+`--lto-emit-asm`) applies the same rule to a referenced external `__start_X`/`__stop_X` naming one of its own output
+sections: an address field at the section's start or end. On Windows triples D26's error stays. Under
+`--lto-emit-asm`, msil-ld therefore neither reports nor binds such a symbol when a bitcode definition names section
+X (5.9.6).
+
+**Constructor list** (run in `.cctor` after relocations, in this order; for msil-ld and, from M20, for whole-program
+output, where the 8-byte slots of `.init_array*` (non-Windows) or `.CRT$XC*` (Windows) sections run as constructors
+too):
+- Non-Windows triples: every INIT entry with key = its priority (65535 -> 65536, because clang puts the default
+  priority in plain `.init_array`), and every 8-byte slot of the `.init_array` output section with key = its input
+  section's priority. A stable sort by key, ties in input order (below). Each slot must carry a FNADDR64 relocation
+  to a function, else `constructor table entry at .init_array+<off> in <file> is not a function address`.
+- Windows triples: every INIT entry with key = the section name clang's COFF lowering gives its priority
+  (`TargetLoweringObjectFileImpl.cpp:2066-2101`: 65535 -> `.CRT$XCU`; below 200 -> `.CRT$XCA%05u`; 200 -> `.CRT$XCC`;
+  201-399 -> `.CRT$XCC%05u`; 400 -> `.CRT$XCL`; above 400 -> `.CRT$XCT%05u`), and every slot of a `.CRT$XC*` input
+  section with key = its full name; sorted by key byte-wise, ties in input order (below).
+- Input order for equal keys follows a native non-LTO link. Objects come in link order. Within one object, its
+  section slots come first, in (segment, offset) order (SEGMENTS follow IR order), and then its INIT entries in
+  array order. That is the order ld.lld and lld-link give a `clang -c` object, because clang creates
+  `llvm.global_ctors` after the TU's other globals and the AsmPrinter emits the structor list at that position, into
+  the same section (5.8.8). Measured on 2026-10-21 with the VS clang and ld.lld for x86_64-unknown-linux-gnu, one TU
+  with a slot and a constructor: `.init_array` holds the slot first without LTO and the constructor first with
+  `-flto`, because LTO's IR mover links appending globals first (`LTO.cpp:1012-1014`). msil-ld applies the same
+  rule to LTO objects, so a one-TU case gives the non-LTO transcript on both the `obj` and the `lto` pipeline.
+  When an LTO object merges several TUs that each have slots and constructors of equal key, all its slots run
+  before all its constructors; C leaves this order unspecified, and native LTO differs from non-LTO there too.
+  `ctor-slot-order` (5.9.16) pins the one-TU case against native.
+- Each constructor is called directly (`call`), its result popped; entries of discarded comdat groups are dropped.
+- Destructors (FINI entries, `.fini_array*`, `.CRT$XT*`) are P3-A: in Phase 2 they are
+  `global destructors are not supported yet: <s> in <file>`. P3-A runs them at exit in the native order (the reverse
+  of the sorted `.fini_array` list; `.CRT$XT*` ascending).
+- `.ctors*`/`.dtors*`, `.CRT$XI*`, `.CRT$XL*`, `.CRT$XP*` and other `.CRT$X*` input sections are
+  `section '<name>' in <file> is not supported` (no silent drop, judge-c-fidelity J6).
+
+In whole-program output these texts give the module's source file name as `<file>`, and a module without explicit
+sections keeps its Phase 1 text (5.8.10).
+
+#### 5.9.10 The trailer builder, shared with `-S` (Q5, decision-brief 6)
+
+**Decision: it lives in `llvm/lib/CLI`** (`llvm/include/llvm/CLI/Trailer.h`, `llvm/lib/CLI/Trailer.cpp`, M20), not
+in the MSIL target library. Reasons: lld includes only public headers, and `llvm/lib/Target/MSIL/**` headers are
+private (lld/wasm uses only `llvm/include`); lib/CLI already holds the toolchain's link model (the record codec,
+5.8.11) and the `ILBuilder` and `MetadataBuilder` the trailer feeds; the MSIL target already links lib/CLI (M18 and
+M19), so `-S` gains no dependency; and the builder is pure computation with no MC or codegen dependency. The ILAsm
+text stays the target's: `MSILTargetStreamer` implements the text sink, so plan 5.1's text contract keeps one owner.
+The BCL members the trailer calls come from the public BCL member list, `llvm/include/llvm/CLI/BCLMembers.def` and
+`BCLMembers.h` (`cli::BCLMemberId`; place 5.7, content 5.11.7).
+
+```cpp
+namespace llvm::cli {
+using EntityRef = uint32_t;                 // a handle the sink defines and later prints or encodes
+struct RuntimeReloc { uint64_t Site; uint8_t Width;           // 8, or 4 (conv.i4 + stind.i4)
+  EntityRef Field = 0;                     // the target's address field or '<msil>fn_' field; 0 if none
+  std::optional<uint64_t> ImageOffset;     // the target's offset when it lives in the image
+  int64_t Addend = 0; };
+struct DataImport { EntityRef Field; std::string Module, Entry; };   // 5.10, Q15
+struct DataImportHelper {                   // 5.10.12: the native functions '<msil>dataimport' calls
+  enum class Kind : uint8_t { Kernel32, Dlfcn, NativeLibrary } K;   // NativeLibrary from M21
+  EntityRef Load, GetSymbol; };
+struct EntryPoint { EntityRef Main; bool HasArgs; unsigned PointerSize; };   // D27
+struct CrossReloc { uint64_t Site; uint8_t Width; EntityRef Accessor; int64_t Addend; };   // M22
+enum class TrailerOwner : uint8_t { Module, Data };   // M22: <Module> or '<msil>Data'
+struct TrailerMethod {                      // .cctor, '<msil>Main', '<msil>init_dataimports', helpers
+  std::string Name; MethodAttributes Flags; MethodSig Sig; std::vector<TypeSig> Locals;
+  ILBuilder Body;                           // externals are EntityRefs (TokenRef::getExternal)
+  TrailerOwner Owner = TrailerOwner::Module; };   // M22
+struct TrailerInput {
+  const ImageLayout *Image = nullptr;                       // null: no data segment
+  std::vector<std::pair<EntityRef, uint64_t>> AddressFields; // in image-offset order
+  std::vector<std::pair<EntityRef, EntityRef>> FnAddrFields; // (field, method) in canonical order (below)
+  std::vector<DataImport> DataImports;
+  std::optional<DataImportHelper> ImportHelper;              // set when DataImports is not empty
+  std::vector<RuntimeReloc> Relocs;                          // in site order
+  std::vector<std::pair<EntityRef, bool>> Ctors;             // (method, returns a value) in run order
+  std::optional<EntryPoint> Entry;
+  unsigned RelocLoopThreshold = 32;
+  bool TwoPhase = false;                                     // M22: -shared outputs
+  std::vector<EntityRef> LibraryTypes;                       // M22: one ldtoken and pop each
+  std::vector<CrossReloc> CrossRelocs;                       // M22: in site order
+};
+class TrailerSink {          // MSILTargetStreamer (text) and lld/MSIL Synthetic.cpp (rows)
+public:
+  virtual ~TrailerSink();
+  virtual EntityRef getDataField() = 0;                                        // '<msil>data'
+  virtual EntityRef addRVAData(StringRef TypeName, StringRef FieldName, ArrayRef<uint8_t> Bytes) = 0;
+  virtual EntityRef getBCLMember(BCLMemberId Id) = 0;                           // 5.11's member list
+  virtual EntityRef declareHelper(StringRef Name, const MethodSig &Sig) = 0;    // '<msil>dataimport'
+  virtual void emitMethod(const TrailerMethod &M) = 0;   // .cctor, '<msil>Main', helpers: name, signature,
+};                                                       // flags, locals, maxstack, instruction list
+unsigned countAddressSlots(ArrayRef<RuntimeReloc> Relocs, unsigned RelocLoopThreshold);  // 5.9.9 rule 4
+void buildTrailer(const TrailerInput &In, TrailerSink &Sink);
+}
+```
+
+Rules for `buildTrailer`:
+- **Shape.** `<Module>::.cctor` = allocate (`AllocHGlobal(TotalSize + MaxAlign - 1)`, align, store `'<msil>data'`),
+  `cpblk` the RVA image `'<msil>image'` (type `'<msil>image_t'`), `initblk` the zero part, store every address
+  field, `ldftn` and store every `'<msil>fn_'` field, the call of `'<msil>init_dataimports'` (data imports, Q15,
+  5.10.12), address slots (loop mode only), relocations, constructors, `ret`. With at most `RelocLoopThreshold`
+  relocations each relocation is stored straight-line from its `Field` (`ldsfld`, plus the addend) or, without one,
+  from `'<msil>data'` + ImageOffset + addend, and the instructions are Phase 1's `emitModuleInitializer` sequence,
+  instruction for instruction (with M18's Q26 forms), so `-S` text does not change. `'<msil>Main'` is Phase 1's
+  `emitEntryPoint` (D27).
+- **Canonical orders.** Address fields in image-offset order; `'<msil>fn_'` fields in the order of their methods'
+  first FUNCTION symbol over (objects in link order, SYMTAB order), which for one object is IR module order, as
+  Phase 1's `FuncAddrs`; relocations in output site order; constructors in 5.9.9's order.
+- **Relocation loop.** Above the threshold the trailer emits an RVA table `'<msil>relocs'` (type `'<msil>relocs_t'`,
+  explicit layout, pack 1) of 16-byte entries `{u32 Site; u32 Kind; i64 Value}`, Kind 0 = store base + Value
+  (pointer width), 1 = the same truncated to 4 bytes, 2 = store the pointer read at base + Value (an 8-byte address
+  slot), 3 = the same truncated to 4 bytes, and a loop in `.cctor` that applies the entries in order with
+  `unaligned. 1` stores. Relocations with an ImageOffset use kinds 0 and 1; the others (function pointers, native
+  data imports) use kinds 2 and 3 with an address slot that the straight-line part fills from the field (one `ldftn`
+  per function stays, M9). The threshold is `--msil-reloc-loop-threshold` in msil-ld and
+  `-msil-reloc-loop-threshold` in llc (lld-flavor 4.2; Design.md risk 1: a long straight-line `.cctor` drops the JIT
+  into MinOpts).
+- **Two-phase initialization** (exports-multiasm 6.4, M22). M22 adds `TrailerInput::TwoPhase`, `LibraryTypes` and
+  `CrossRelocs` (`cli::CrossReloc`) and `TrailerMethod::Owner` (`cli::TrailerOwner`). With the defaults (`TwoPhase`
+  false, no `LibraryTypes`, no `CrossRelocs`) `buildTrailer` emits the shape above byte for byte, so an output
+  without library inputs keeps it and O3 and `-S` are unchanged. `LibraryTypes` are the first export class of every
+  directly linked library, in command-line order, used or not, each run as `ldtoken` and `pop`; each cross
+  relocation is stored straight-line (`ldsfld '<msil>data'`, `ldc.i4` Site, `add`, `call` Accessor, the addend,
+  `conv.i4` for width 4, `stind.i`/`stind.i4`, `unaligned. 1` when misaligned). An EXE with library inputs keeps
+  one `.cctor`, which runs the `ldtoken`s and cross-assembly relocations after its in-assembly relocations and
+  before its constructors. With `TwoPhase` (set for `-shared` outputs, 5.9.15) phase 1, through the in-assembly
+  relocations and the loop, goes into `'<msil>Data'::.cctor` and never names another toolchain assembly, and
+  phase 2 (the `ldtoken`s, cross relocations and constructors) into `<Module>::.cctor`, which is omitted when empty;
+  methods are placed by `TrailerMethod::Owner`. This narrows Design.md 5.4 as edited on 2026-10-21 ("Linked outputs
+  initialize in two phases"; exports-multiasm R3 asks the same), pending section 10 item 10, which asks the user to
+  reword Design.md 4.1 and 5.4: libraries initialize in two phases, and a program runs the same steps, in the same
+  order, in its one module initializer. If the user keeps the wording instead, a section 12 row sets `TwoPhase` for
+  EXEs with library inputs, which changes only M22 (for every EXE it would also change M20's EXE shape and O3).
+- **Users.** The AsmPrinter in whole-program mode fills `TrailerInput` from `MSILDataSegment` (through
+  `cli::layoutImage`, one segment per global with object mode's name and flags, 5.8.8), `FuncAddrs`, the imports
+  (the D14 table in standalone mode; in linked text the kind-1 `!msil.imports` operands as `DataImports` and the
+  helper's operands as `ImportHelper`, 5.10.12, 5.10.13) and the constructors: `llvm.global_ctors` sorted with the
+  `.init_array*`/`.CRT$XC*` 8-byte slots by `cli::sortConstructors` (5.8.10, 5.9.9). On non-Windows triples a
+  referenced `__start_X`/`__stop_X` naming an output section is an address field at its start or end (Windows
+  triples keep D26's error); destructor-table, unsupported and TLS sections get 5.9.9's texts with the module's
+  source file name as `<file>`. msil-ld fills `TrailerInput` from the link. M20 replaces `emitModuleInitializer` and
+  `emitEntryPoint` with calls to `buildTrailer`; every existing llc and clang FileCheck test passes unchanged except
+  the two that pin M12's section diagnostic (`llvm/test/CodeGen/MSIL/section-errors.ll`,
+  `clang/test/CodeGen/MSIL/section-globals.c`, changed by M20.d, 5.12.13) and any that pins a straight-line `.cctor`
+  with more than `-msil-reloc-loop-threshold` (32) data relocations, which now uses the loop (plan 5.1 as amended;
+  M20.a reports such tests and the orchestrator decides them with a fix-loop row).
+
+#### 5.9.11 `--gc-sections` (default on)
+
+- Units: methods (each kept MethodDef body; adapters; stubs) and segments. Roots: the entry symbol and
+  `'<msil>Main'`, `-u` symbols, the `-shared` export set (5.9.15), NO_STRIP symbols, RETAIN segments, every INIT and
+  FINI entry, every segment of a constructor-table section (`.init_array*`, `.CRT$XC*`), every segment of a section
+  named by a referenced `__start_`/`__stop_` symbol (conservative: lld/ELF's `-z nostart-stop-gc` behaviour).
+- Marking follows token sites of live methods, relocations of live segments, symbols to their defining method or
+  segment, aliases to their aliasee and adapters to their definition. Dead methods and segments are dropped;
+  undefined symbols referenced only from dead units are not reported (lld semantics). `--print-gc-sections` lists
+  what was removed. This is more conservative than lld/ELF, which may drop `used` data (judge-c-fidelity 6.3).
+
+#### 5.9.12 Output rows, per-type limits and the PE
+
+- **Row order** follows input order only: TypeDef `<Module>`, then spill classes, then the image type and P2-C types;
+  MethodDefs: kept methods by object in link order and row order within an object, then adapters, trap stubs and
+  P/Invoke stubs (5.10) in first-use order, then the trailer's methods; fields likewise. MemberRefs and TypeRefs
+  come from the binder (5.11), deduplicated in first-use order.
+- **Names and access**: functions and address fields keep their symbol names (Phase 1 names); GLOBAL and WEAK
+  definitions are `public`, LOCAL ones `assembly`. Outputs never use `privatescope`: a LOCAL method (or field) whose
+  name equals a non-LOCAL method's (field's) name or an earlier LOCAL one's, in input order, is renamed
+  `'<name><msil><n>'` (n = 1, 2, ... per name). That keeps the Design.md 5.5 round trip exact (ildasm rewrites
+  `privatescope` names, objfmt-binding 4.5) and keeps every member reachable from spill classes. Linker-made
+  members: `'<msil>adapt_*'`, `'<msil>undef_*'` and P/Invoke stubs are `assembly` (spilled code may use them);
+  `'<msil>fn_<name>'` fields keep Phase 1's `private` access unless the output has a spill class, and then all of
+  them are `assembly` (O3 compares a one-object link with `-S`, whose fn fields are private); `.cctor`,
+  `'<msil>Main'`, `'<msil>data'`, `'<msil>image'`, `'<msil>relocs'`, `'<msil>dataimport'` and
+  `'<msil>init_dataimports'` are `private` (Phase 1's access, which the verifier neutralizer expects). In `-shared`
+  outputs `'<msil>Data'` holds `'<msil>data'`, the address, `'<msil>fn_'` and data-import fields, and
+  `'<msil>image'` and `'<msil>relocs'` stay in `<Module>`, all with `assembly` access (5.9.15). msil-ld creates an
+  address field for every live defined DATA symbol and for every alias that code references.
+- **Per-type limits** (metadata-writer 3.6, measured on every runtime): `<Module>` holds at most 65,524 methods and
+  65,534 fields, counting linker-made members (the hidden `--msil-type-member-limit=<n>` lowers both for tests,
+  5.9.3). Past that, methods move to `'<msil>Spill<N>'` classes (N from 1; `private abstract sealed auto ansi`,
+  extending the core library's `System.Object`: `BCLMembers.def`'s mscorlib-safe `Object` entry, added in M20 and
+  bound by M20's stand-in, 5.9.7, then by the binder from M21) and fields to the same classes, where address fields
+  are not `initonly` because `<Module>::.cctor` stores them (ECMA `initonly` rule, J6). `<Module>` keeps `.cctor`,
+  `'<msil>Main'` and the other `private` members above (`'<msil>data'`, `'<msil>image'`, `'<msil>relocs'`,
+  `'<msil>dataimport'`, `'<msil>init_dataimports'`). The 0xFFFF member-list padding is `cli::MetadataBuilder`'s
+  rule (5.7).
+- **PE** (Q19, metadata-writer 4.9): an EXE image with the entry-point token for programs, a DLL image for
+  `-shared`; machine from the triple; Roslyn's envelope; Module name = the output file name; Assembly name =
+  `--assembly-name` or the `-o` stem, version 0.0.0.0, HashAlgId SHA1 (0x8004), no public key; MVID and timestamp
+  from the content hash. An EXE needs an entry point (`undefined symbol: main`, or `unsupported signature for main`
+  for a non-D27 shape).
+
+#### 5.9.13 LTO
+
+- `BitcodeCompiler` follows `lld/wasm/LTO.cpp`: `lto::Config::OverrideTriple` = the codegen triple (lld-flavor 3.3),
+  `RelocModel` Static, `CGFileType` = `AssemblyFile` under `--lto-emit-asm` (whole-program text, M14 onwards) and
+  `ObjectFile` otherwise (from M20: the LTO output is parsed as in-memory CIL objects, `lld/wasm/SymbolTable.cpp:
+  112-117`, so ThinLTO and `--lto-partitions` work). Before M20 an object-producing LTO link is the error
+  `ThinLTO, --lto-partitions and LTO without --lto-emit-asm need CIL object output, which this msil-ld does not have; use --lto-emit-asm (clang: -Wl,--lto-emit-asm) to write ILAsm text`.
+  The clang driver's link job never passes `--lto-emit-asm` and never runs ilasm; the harness does (msil-prog.py,
+  5.12.4).
+- Resolutions: `Prevailing` for the winning bitcode definition; `VisibleToRegularObj` for symbols referenced by a CIL
+  object or its record, NO_STRIP symbols, the entry symbol, `-u` symbols and `-shared` exports; `LinkerRedefined`
+  is not used (no `--wrap` in Phase 2).
+- `MSILLinkHooksPass` (a legacy ModulePass in `lld/MSIL/LTO.cpp`, added through `lto::Config::PreCodeGenPassesHook`)
+  sets module flags on the merged module: `msil-assembly-name` (MDString, behaviour Override) and `msil-lto` (i32 1);
+  P3-A adds its codegen switches as module flags of the same kind. Under `--lto-emit-asm` it also sets
+  `msil-import-module`/`msil-import-name` on functions bound natively (lld-flavor 3.2). From M15 it is also
+  5.10.13's import-annotation pass: it sets the module flag `msil-linked` (i32 1, Override), writes `!msil.imports`,
+  turns a natively bound `extern_weak` declaration into an external declaration, binds the library functions the
+  optimizer introduced, leaving explicit `msil-import-module` attributes unchecked, and reports the merged module's
+  undefined, unbindable and native-callback references (5.9.6, 5.10.14) with `>>> referenced by` lines (a name the
+  optimizer introduced is `>>> referenced by ld-temp.o`). From M20 under `--lto-emit-asm` it also writes the kind-1
+  data operands and the data-import helper's kind-0 operands (5.10.12). When LTO writes objects (M20 on) it sets
+  only the module flags. The AsmPrinter's assembly name is the `-msil-assembly-name` option if given, else the
+  module flag, else the `source_filename` stem (D28).
+- Triples: an input is accepted when its triple key matches the codegen triple's (5.8.9); bitcode for the native
+  triple gets one warning per link (Q12):
+  `<file>: linking bitcode for <native triple> as <msil triple>; stock-clang bitcode is a compatibility path`.
+  `Triple::isCompatibleWith` (M13) keeps the IR linker from warning about the `-msil` suffix. The data model of a
+  bitcode input is checked as 5.8.9 says: its triple at load time, and from M20 the LTO objects' headers.
+- Import attributes in bitcode: from M20 the LTO objects carry them as any CIL object does (5.8.3 stubs, IMPORT data),
+  because the backend writes them from the merged module's `msil-import-module`/`msil-import-name`. As in wasm-ld,
+  msil-ld therefore learns a bitcode symbol's import names only when it parses the LTO object (5.9.6 step 2 runs
+  after LTO when LTO writes objects, M20 on; before LTO under `--lto-emit-asm`).
+- `lto::LTO::getRuntimeLibcallSymbols` pre-extracts lazy bitcode members, as lld/wasm does; extra extractions are
+  harmless (lld-flavor 3.2).
+
+#### 5.9.14 Map file, `--why-extract`, `--reproduce` and diagnostics
+
+- `-Map=<file>` (and `--print-map` to stdout) writes, in output order, the header line, an `Inputs:` section (loaded
+  files and extracted archive members in load order), a `Symbols:` section (`Kind Binding Input Symbol`, commons with
+  size and alignment), then `Image:`, `Methods:`, `Fields:` and `Imports:`. M14 writes the header, `Inputs:` and
+  `Symbols:`. M15 adds the native libraries read to `Inputs:` and the natively bound symbols to `Symbols:` (kinds
+  `NativeFunction` and `NativeData`, the library as input). M20 adds `Image:`, `Methods:`, `Fields:` and `Imports:`,
+  which show tokens and offsets that exist only in the PE (`M20/lld-writer` owns `MapFile.*`, and `M20/lld-tests`
+  updates `lld/test/MSIL/map.test`). Example of M20 (the `Inputs:` and `Symbols:` sections are omitted):
+
+```text
+msil-ld map of prog.exe (x86_64-pc-windows-msvc-msil)
+Image: 104 bytes (100 initialized), align 16
+  Offset     Size Align Section / input / symbol
+       0       24     8 .rodata
+       0       24     8   a.o:segment 0
+       0       24     8     table
+Methods:
+  Token      Owner      Input          Symbol
+  0x06000001 <Module>   a.o            main
+  0x06000007 <Module>   b.o            weakfn
+Fields:
+  Token      Owner      Offset   Symbol
+  0x04000001 <Module>        0   table
+Imports:
+  Token      Module!Entry                              Symbol
+  0x0600000A api-ms-win-crt-stdio-l1-1-0.dll!puts      puts
+```
+
+- `--why-extract=<file>` writes lld's tab-separated format: a header `reference\textracted\tsymbol`, then one line
+  per extraction (`a.o\tlibbcd.a(b.o)\tadd3`; `-u foo` as the reference for command-line `-u`).
+- `--reproduce=<file>` writes lld's tar: `<name>/response.txt`, `<name>/version.txt` and every file read (objects,
+  archives, bitcode, reference assemblies, native libraries, linker scripts), paths rewritten by
+  `lld/Common/Reproduce.cpp`.
+- Diagnostic texts (prefix `msil-ld: error: ` or `msil-ld: warning: `; tests pin them):
+
+| Condition | Text |
+|---|---|
+| two GLOBAL definitions | `duplicate symbol: <s>` + `>>> defined in <f1>` + `>>> defined in <f2>` |
+| undefined | `undefined symbol: <s>` + `>>> referenced by <file>:(<method>)` lines |
+| undefined hidden | `undefined hidden symbol: <s>` |
+| function versus data | `symbol type mismatch: <s>` + `>>> defined as function in <f1>` + `>>> defined as data in <f2>` |
+| TLS versus non-TLS | `TLS attribute mismatch: <s>` + `>>> in <f1>` + `>>> in <f2>` |
+| signature | 5.9.8 |
+| import attributes | 5.10.7's `import module mismatch for symbol: <s>` / `import name mismatch for symbol: <s>`, each with `>>> defined as <value> in <file>` lines |
+| record or metadata | `<file>: malformed CIL object: <rule>: <detail>` (C1-C7); `<file>: not a CIL object (no link-info record)`; `<file>: invalid link-info record: <field> at offset <n>: <problem>` (C8, framing); `<file>: invalid link-info record: version <n> is newer than this toolchain supports (1)`; `<file>: invalid link-info record: v1.<minor> uses <feature>, which this toolchain does not support` |
+| triple, ABI, data model | `<file>: target triple <t> is incompatible with <t0>`; `<file>: toolchain ABI version <a> differs from <a0> in <f0>`; `<file>: data model <m> differs from <m0> in <f0>` |
+| comdat | `comdat '<g>' in <file> uses selection kind '<k>', which msil-ld does not support` |
+| discarded copy | `relocation refers to a symbol in a discarded section: <s>` + `>>> defined in <file>` |
+| Phase 3 features | `thread-local storage is not supported yet: <s> in <file>`; `global destructors are not supported yet: <s> in <file>`; `variadic functions are not supported yet: <s>` |
+| sections | `section '<name>' in <file> is not supported`; `constructor table entry at <section>+<off> in <file> is not a function address` |
+| data | `symbol difference '<a>' - '<b>' in <file> does not fit in a <w>-byte value`; `the data image of <n> bytes is larger than MSIL supports (2 GiB)` |
+| linker options | warning `ignoring linker option '<opt>' in <file>`; `/failifmismatch: mismatch detected for '<k>':` + `>>> <f1> has value <v1>` + `>>> <f2> has value <v2>` (lld-link's exact text, `lld/COFF/DriverUtils.cpp:693`) |
+| debug carrier | warning `debug information in <file> is ignored` |
+| stock bitcode | warning (5.9.13) |
+| options (5.9.3) | `-r is not supported`; `-shared is not supported yet` (M14-M21); `--entry=<sym>: an entry point other than main is not supported yet` (M14-M19); warning `--entry is ignored with -shared` (M22) |
+| LTO before M20 | `ThinLTO, --lto-partitions and LTO without --lto-emit-asm need CIL object output, which this msil-ld does not have; use --lto-emit-asm (clang: -Wl,--lto-emit-asm) to write ILAsm text` (5.9.13) |
+| managed inputs | `<path>: .NET assembly inputs are not supported yet` (before M21); `<file>: reference to assembly '<n>' needs --reference, which this msil-ld does not support yet` (M20's stand-in, 5.9.7); `<path>: linking .NET libraries built by this toolchain is not supported yet` (M21); warning `<path> is a library built by this toolchain; pass it as a link input instead` (M21 on, 5.9.4); `<file>: unsupported use of imported symbol '<s>' in '<m>' at IL offset <n>` (M22, 5.9.7) |
+| native libraries, BCL | 5.10.14; 5.11.9 |
+
+#### 5.9.15 Libraries (`-shared`, P2-C, M22): what this contract fixes
+
+- Q21-Q25 as the brief recommends and exports-multiasm 10 designs: CLR-style `-Bsymbolic` and `-z defs` semantics;
+  export selection by DLLEXPORT on Windows triples when any input has one, else every default-visibility GLOBAL or
+  WEAK definition; export class `--export-class` (default: the assembly name, parsed like an `--export-class` value:
+  the last `.` separates the namespace, and a dot-free name gives a class without namespace; Q23 as implemented); per
+  function `f` the method plus `public static native int '<msil>addr_f'()`; per variable `x` that accessor plus
+  `.property native int x`; exported methods get Param rows named `A_<i>` (Flags 0).
+- Two-phase initialization for `-shared` outputs only (5.9.10): a beforefieldinit `'<msil>Data'` class whose `.cctor`
+  runs phase 1, then `<Module>::.cctor` phase 2. `'<msil>Data'` holds `'<msil>data'`, the address, `'<msil>fn_'` and
+  data-import fields (all `assembly`), while `'<msil>image'` and `'<msil>relocs'` stay in `<Module>` with `assembly`
+  access. An EXE with library inputs keeps one `.cctor` (pending section 10 item 10), and outputs without library
+  inputs are byte-identical to M20's.
+- The symbol-table attribute (Q25): a private class `'<msil>SymbolTable'` emitted into the library, AllowMultiple,
+  constructor `(uint8[])`, on the Assembly row; its blob is framed by `cli::encodeByteArrayAttribute` and its payload
+  written with `cli::RecordWriter` (5.8.8 primitives). The codec lives in `llvm/include/llvm/CLI/SymbolTable.h` and
+  `llvm/lib/CLI/SymbolTable.cpp` (M17.c; model `cli::LibrarySymbolTable`, 5.7.9). M22.a extends it and M22's commit
+  freezes the format; a later change needs a section 12 row. Payload (exports-multiasm 5.2's fields, with its
+  compressed integers and its u16 ABI version written as `uleb`): magic `4D 53 59 4D` ("MSYM"), u8 major 1, u8 minor
+  0, u8 flags (0x01 INTERFACE, M22), the toolchain ABI version (`uleb`, as 5.8.8's ABIVersion), str triple (without
+  its environment version), str C runtime identity, 4 x u8 data model, uleb n + str export classes, uleb n + data
+  symbols (str name, uleb size, u8 log2 alignment, u8 flags: 1 const, 2 thread-local, 4 weak), uleb n + flagged
+  functions (str name, u8 flags: 1 variadic, 2 weak, 4 ABI (M22), the last followed by the definition's 5.8.8
+  SIGNATURES descriptor, which Q8's checks on library calls need). The decoder refuses another major, unknown flags
+  and trailing bytes; `llvm-cil-dump --link-info` prints it (5.8.11).
+- The C runtime identity is the first `-l` in command-line order (driver defaults included) named `c`, `msvcrt`,
+  `ucrt`, `ucrtbase`, `crtdll` or `msvcr*`, written as given, else `none`; `none` matches any identity (windows-gnu
+  can mix msvcrt and ucrt within one triple, exports-multiasm 7.2).
+- `ManagedLibraryFile` (created through `createManagedLibraryFile`, 5.9.2) reads it; its symbols bind late (5.9.6
+  step 1) as `ManagedFunction`/`ManagedData`, referenced through MemberRefs on the export class and `'<msil>addr_'`
+  calls (exports-multiasm 10.2; the `ldsfld` rewrite of 5.9.7).
+- Interface libraries (M22): `--interface-only` with `-shared` writes the same export plan, identity and symbol table
+  as the real link of the same inputs, flagged INTERFACE, with stub bodies `ldnull; throw` and no image,
+  `'<msil>Data'` or trailer; undefined symbols are allowed and late binding is skipped. Linking against an interface
+  binds as against the real library, with the `--verbose` note
+  `<file> is an interface library; deploy the library built from the same objects`. Q21's `-z defs` makes a cyclic
+  pair unlinkable without one.
+- Not implemented: exports-multiasm 10.2's warning for an imported variable whose declared type is larger than the
+  exported size, because record v1 gives undefined DATA symbols no size (5.8.8); Status.md records it as a known
+  limitation (M22).
+
+#### 5.9.16 The link-semantics matrix (condition 5)
+
+- **Where.** `msil/test/M2/08-semantics/`, one lit test per case (tests-p2 3.1's cases are `msil/test/M2/00-link/`
+  tests instead; see their row), multi-TU through split-file and `%{msil_prog}` (5.12). The sources start from the
+  recon programs in the repository (`recon/p2/objfmt-binding-files/zoo/*.c`,
+  `recon/p2/objfmt-binding-files/sigmismatch/*.c`, `recon/p2/judge-c-fidelity-files/probes/*.c`). Object-content
+  checks (p7) are FileCheck tests in `llvm/test/CodeGen/MSIL/` over `llvm-cil-dump --link-info`.
+- **Pipelines.** `lto` (from M14), `obj` (from M20), and `asm` for single-TU cases; on `x86_64-pc-windows-msvc-msil`
+  with .NET 8, .NET 10 and Framework 4.8, and on `x86_64-unknown-linux-gnu-msil` under WSL with .NET 10 and the
+  private .NET 8 runtime (Q39).
+- **Native transcripts.** `update-expected.py` (5.12) builds each case natively: on Windows with the VS clang for
+  `x86_64-pc-windows-msvc` and lld-link; for Linux with Q33's cross-linked oracle (this tree's clang for
+  `x86_64-unknown-linux-gnu`, `%ld_lld` (VS `ld.lld` before M13, the tree's from M13), the `_start` file of tests-p2
+  E7 that runs `.init_array`, and copies of WSL's `libc.so.6`, `libm.so.6` and `libgcc_s.so.1`, 5.12.8), run under
+  WSL. Cases whose native result differs per OS keep per-triple `.expected` files; cases that are native on one OS
+  only are `REQUIRES:` that triple.
+- **The rule.** Every (case, pipeline, triple, runtime) either prints the native transcript or fails to compile or
+  link with exit status 1 and a named diagnostic that the test pins with FileCheck (where pipelines differ: prefixes
+  `OBJ`/`LTO` under `%if msil-prog-pipeline=<p>` for `%{msil_prog}` cases, `ASM` under `%if msil-pipeline=asm` for
+  `%{msil_c}` cases; 5.12.1, 5.12.2). A JIT-time or load-time exception (InvalidProgram, MissingMethod, TypeLoad,
+  EntryPointNotFound, BadImageFormat) is always a failure: msil-run.py prints `[unhandled exception: <type>]`, which
+  never equals a native transcript. Because `obj` and `lto` compare with the same `.expected`, they agree with each
+  other. Verification (D21) runs on every output.
+
+| Case | Programs (recon file) | Native | Phase 2 result | From |
+|---|---|---|---|---|
+| `zoo` | `zoo/a.c`, `zoo/b.c`: weak, weak undefined, COMDAT, common, alias, ctor priorities across objects, pointers in data, equal statics, shared import | 63 | 63 | M14 lto, M20 obj |
+| `zoo-archive` | `a.c` + `libbcd.a` (`b.c`, `c.c`, `d.c`): lazy extraction; the weak undefined `maybe` does not extract `c.o` | 63 | 63 | M14, M20 |
+| `zoo-defined` | `a.c`, `b.c`, `c.c` + `libbcd.a` | 223 | 223 | M14, M20 |
+| `p1-weak-alias` | `p1a.c` + `p1b.c` (both orders); `p1a.c` + `p1c.c`; `p1m.c`/`p1w.c` variants | 144; 114 | same | M14, M20 |
+| `p2-knr` | `p2a.c`, `p2b.c` (`-std=gnu17`): extra argument, K&R float promotion | 23 | 23 (obj: adapter and warning) | M14 lto, M20 obj |
+| `knr-two-arities` | a.c `int f(); int main(void) { int r = f(1, 2); if (!r) return f(1); <print r>; return 0; }`, b.c `int f(int a, int b) { return a + b; }` (`msil/test/M2/08-semantics/knr-two-arities.test`) | 3 | 3 (obj: two MemberRefs with NO_PROTOTYPE, and the missing-argument adapter and its warning for `f(1)`) | M19 lto, M20 obj; M23 on every pipeline, triple and runtime |
+| `sig-mismatch` | `sigmismatch/caller.c`, `callee.c` (J4b) | 41 | 41 (obj: adapter and warning) | M14 lto, M20 obj |
+| `p3-start-stop` | `p3a.c`, `p3b.c` | Linux 15; Windows: link error | Linux 15; Windows `undefined symbol: __start_myreg` | M20 |
+| `p4-selectany` | `p4a.c`, `p4b.c` (Windows) | 15 | 15 | M14, M20 |
+| `p5-tls` | `p5a.c`, `p5b.c` | 12 | named diagnostic (thread-local, D26); 12 from P3-A | M14, M20 |
+| `p6-ctors` | `p6a.c`, `p6b.c` with the destructors removed | `BCDM` | `BCDM` | M14, M20 |
+| `p6-dtors` | `p6a.c`, `p6b.c` | Linux oracle prints `BCDM` (its `_start` runs no `.fini_array`); Windows faults at exit (J9) | named diagnostic (global destructors); a transcript from P3-A, whose oracle `_start` must run `.fini_array` | M14, M20 |
+| `p7-flags` | `p7.c` without the `ext_var` call (its variadic call is D19's error, which `object-errors.ll` pins) and with `__declspec(dllimport) int ext_dll(int);` called on windows-msvc, so DLLIMPORT is exercised: object content, FileCheck test `llvm/test/CodeGen/MSIL/object-p7-flags.ll` | n/a | SIGNATURES, DLLIMPORT (windows-msvc), LINKER_OPTIONS as 5.8.8 | M19 |
+| `p8-section-ctor` | `p8.c` (`.init_array`, `.CRT$XCU`) | 42 | 42 on every pipeline (`asm` from M20, through 5.9.10's whole-program layout, 5.8.10); `asm` before M20: M12's diagnostic | M12 asm (diagnostic), M20 |
+| `ctor-slot-order` | `a.c`: a `used` slot in `.init_array` (Linux) or `.CRT$XCU` (Windows, `#pragma section` as in `p8.c`) and an `__attribute__((constructor))` function, each printing a letter; `b.c`: `main` only | the slot's letter, then the constructor's (non-LTO native) | native on `obj` and `lto` (5.9.9's rule for LTO objects) | M20 (obj, lto) |
+| `weak-def-sig-mismatch` | `a.c`: a weak definition `int f(int)` called inside `a.c` with a small positive argument; `b.c`: a strong `long long f(long long)` (`native int` on both triples), which wins, so a's call adapts with `conv.i` and the result with `conv.i4`. A variant uses `double f(double)` in `b.c` | the strong definition's result; the variant is undefined behaviour natively (no transcript) | native (adapter, warning); variant: 5.9.8's error on obj and lto, never a JIT-time exception | M20 (obj, lto) |
+| `import-attrs` | Q35's attributes through a test-built native library (`%{msil_deps}`, 5.12.5): an `import_name`-only function whose C name differs from its entry; an extern variable with `import_name` alone (module found natively); one with `import_module` and `import_name`. The native build spells the same bindings with asm labels (`__asm__("<entry>")`), plus `__declspec(dllimport)` on Windows | native | native | M20 (obj, lto) |
+| `p9-weak-common` | `p9a.c`, `p9b.c`, `-fcommon`, both orders | 1 | 1 | M14, M20 |
+| `common-largest` | `char c[4];` and `char c[16];` tentative definitions | native | native (largest wins) | M20 |
+| `static-same-name`, `inline-comdat`, `byval-sret-xtu`, `knr-def-xtu`, `main-not-first`, `data-only-tu` | tests-p2 3.1's list, as `msil/test/M2/00-link/` tests of the same names, one test per case and none in 08-semantics (00-link is the tier for plain multi-TU behaviour) | native | native | M14 lto, M20 obj |
+| `unaligned-reloc` | tests-p2 3.1's list | native | native | M20 |
+| `int-ptr-adapter`, `missing-arg-adapter` | K&R calls passing `0` for a pointer; a missing argument the callee does not read | native | native (adapter, warning) | M20 |
+| `type-mismatch`, `duplicate-strong`, `undefined` | function versus data; two strong definitions; no definition | link error for the last two; the first links natively with undefined behaviour (no transcript) | named diagnostic | M14 lto, M20 obj |
+| `float-int-mismatch` | prototype `float` versus `int` | links natively with undefined behaviour (no transcript) | named diagnostic (5.9.8's error; under LTO through `cli::classifyCall` in MSILFixFunctionBitcasts) | M20 (obj, lto) |
+| `weak-undef-guarded` | `if (&f) f();` with `f` weak undefined | native | native | M14, M20 |
+| `gc-used-retain` | `--gc-sections` keeps `used`/`retain` data and `__start_` sections (Linux) | native | native | M20 |
+| `pragma-comment-lib` | `#pragma comment(lib, ...)` naming a native library | native | native | M15 lto, M20 obj |
+| `native-callback` | one TU sorting an int array with `qsort` and a C comparator | the sorted transcript | `native function 'qsort' (<module>) takes a C function pointer; passing functions to native code needs phase 3 thunks` (5.10.14; lto from M15, obj from M20); the transcript from P3-B | M15 lto, M20 obj |
+| P3 rows | `p5-tls` and `p6-dtors` as transcripts, `.fini_array`/`.CRT$XT` sections, `atexit` order, a variadic definition called from another object | native | P3 milestones | P3 |
+| P2-C rows | a symbol defined by both a program and its library (warning, `-Bsymbolic`), a cyclic library pair, a weak definition in a library | native or named diagnostic | | M22 |
+
+In M14 the LTO path keeps Phase 1's MSILFixFunctionBitcasts and M12's section diagnostic, so `float-int-mismatch`,
+`p3-start-stop`, `p8-section-ctor`, `common-largest`, `unaligned-reloc`, the adapter cases and `gc-used-retain` are
+M20 rows on both pipelines.
+
+#### 5.9.17 Which milestone implements what
+
+| Milestone | This contract's parts |
+|---|---|
+| M12 | whole-program alias and `extern_weak` lowering and the `section` diagnostic stay whole-program-only (object mode replaces them in M19); the Linux oracle the matrix uses; M20 replaces the `section` diagnostic in whole-program mode too (5.8.10, 5.9.10) |
+| M13 | `BinaryFormat/MSILLink.h` complete (5.8.11, `setDataModel` included), with a gtest of its constants and of `setDataModel` per MSIL triple (`llvm/unittests/CLI/MSILLinkTest.cpp`); lld flavor hooks, `parseProgname` rule, `msil-ld` alias, `lld/MSIL` stub, `msil` lit feature (5.9.1); `Triple::isCompatibleWith` |
+| M14 | driver, options (`-e` only `main`, `-shared` rejected, 5.9.3), bitcode and archive inputs, the lld/ELF resolver port, LTO with `--lto-emit-asm`, `setBitcodeLibFuncs` and the hook pass, M14's undefined reporting (5.9.6), `-Map` (header, `Inputs:`, `Symbols:`), `--why-extract`, `--reproduce`; matrix `lto` rows and tests-p2 3.1's `00-link` cases |
+| M15 | native late binding (5.10) through `SymbolTable::bindLateSymbols`; dependent libraries and linker options of bitcode inputs; `--ucrtbase-imports`; the import-annotation pass and the undefined, unbindable and native-callback reports after LTO in `MSILLinkHooksPass` (5.9.6, 5.9.13, 5.10.13); the map's native inputs and symbols |
+| M16 | `cli::MetadataBuilder` row-order guarantees (R6) and the signature encoder with TypeDefOrRef remapping (5.7) |
+| M17 | `cli::` record codec with `RecordWriter`/`RecordReader`, validation, COFF view builder and marker sections, `llvm-cil-dump --link-info`; the P2-C symbol-table codec (`SymbolTable.{h,cpp}`, 5.7.9, 5.9.15) |
+| M18 | MCInst operands (class, IL name, IL signature) that distinguish own definitions, placeholder references (one per call signature; descriptors come from the IR call sites in M19, R3), import-attributed declarations as Method stubs per call signature (R7), `'<msil>FnAddr'` and BCL members; whole-program text unchanged (R7); `MSIL::getObjectTargetWriter` and `createMSILObjectTargetWriter()` (5.8.11) |
+| M19 | object mode: `isObjectMode()`, `-msil-object-form`, the object writer (5.8.2-5.8.8) with the COFF view's marker sections (5.8.6), 5.8.10's table (import stubs on a module and on `msil.unresolved`, IMPORT data, every library call an UNDEFINED symbol) and MSILAddMissingPrototypes and MSILFixFunctionBitcasts in object mode (5.8.10), `clang -c` writes CIL objects; record v1 written but not yet frozen (5.8.9); matrix case `knr-two-arities` on `lto` |
+| M20 | `ObjFile`, token walker, object resolution (commons, aliases, comdats), import-name binding of stubs and IMPORT data (5.9.6), Q8 checks including redirected definitions and `cli::classifyCall` (also in MSILFixFunctionBitcasts), `cli::layoutImage`, constructor tables, `__start_`/`__stop_`, `cli::buildTrailer` adopted by `-S`, relocation loop, spilling, `--gc-sections`, LTO objects, ThinLTO, the BCL stand-in (5.9.7), whole-program named sections, `__start_`/`__stop_` and constructor slots (5.8.10, 5.9.9, 5.9.10), the `msil-lto` warnings of MSILFixFunctionBitcasts (5.9.8), `-e` with any D27 shape, `--msil-type-member-limit`, the data model of bitcode inputs (5.8.9); matrix `obj` rows; record v1 frozen by its commit (5.8.9) |
+| M21 | BCL binding of `[msil.bcl]` scopes and trailer members (5.11), replacing M20's stand-in; `--reference`, `--print-bcl-table`, `--print-bcl-binding`; `createManagedLibraryFile` and the toolchain-library texts (5.9.4) |
+| M22 | `-shared`, `ManagedLibraryFile`, managed late binding (5.9.6 step 1), the symbol-table attribute with its INTERFACE and ABI bits and the freeze of its format (5.9.15), two-phase trailer for `-shared` outputs, `--interface-only`, the `ldsfld` -> `call` rewrite of library addresses (5.9.7) |
+| M23 | the matrix on every pipeline, triple and runtime in the phase gate; object determinism (`%{msil_det}`) |
+
+FileCheck coverage that this revision adds (the milestone sections name the files):
+- M13: `MSILLinkTest` checks `setDataModel` for `x86_64-pc-windows-msvc-msil`, `x86_64-w64-windows-gnu-msil`,
+  `x86_64-unknown-linux-gnu-msil` and `aarch64-unknown-linux-gnu-msil` (8,4,2,8; 8,4,2,8; 8,8,4,8; 8,8,4,8), with
+  WCharSize from `getDefaultWCharSize()`, and a `wchar_size` override.
+- M17: the codec round-trips IMPORT symbols. C8 rejects IMPORT on a FUNCTION, IMPORT without UNDEFINED, IMPORT with
+  TLS and an empty ImportName.
+- M19 (`object-imports.ll`): a stub on a module with EXPLICIT_IMPORT; an `import_name`-only stub on
+  `msil.unresolved` (`as "<entry>"`, no EXPLICIT_IMPORT); an address-only stub for a function never called; an extern
+  variable with IMPORT, with and without a module; their `--link-info` lines.
+- M20 (`obj-pinvoke`, `obj-data-import`, `obj-signatures`, `obj-ctors`, `obj-triple`):
+  - an `msil.unresolved` stub bound natively under its import name, plus one without `as` (object-form text through
+    ilasm under `%if ilasm`), so Q7's placeholder is tested;
+  - IMPORT data with and without a module;
+  - a WEAK definition overridden by a GLOBAL one with another signature (warning with adapter, and error);
+  - a slot and an INIT entry of equal key in one object;
+  - 5.8.9's data-model cases.
+
+#### 5.9.18 Interfaces this contract assumes from 5.6, 5.7 and 5.10-5.12
+
+- 5.7 (lib/CLI): `cli::MetadataReader` (tables, heaps, method bodies, custom attributes) and `cli::MetadataBuilder`
+  whose row order equals add order for MethodDef, Field and ModuleRef and first-add order for deduplicated TypeRef,
+  MemberRef and StandAloneSig rows (R6); a signature decoder and encoder with a TypeDefOrRef remapping callback;
+  `CILOpcodes.def` operand kinds; `cli::ILBuilder` (maxstack, shortest forms as Q26); `cli::writePEImage` with
+  `PEContent::CoffSymbols` (`cli::CoffSymbol`) and `PEContent::ExtraSections` (from `getCOFFViewMarkerSections()`),
+  the SizeOfHeaders growth of 5.8.6 (5.7.7), deterministic ids over the whole file, and EXE/DLL and netmodule shapes;
+  the files `LinkInfo`, `SymbolTable`, `ImageLayout`, `Trailer` and `CallAdapter` of this contract in lib/CLI's file
+  table.
+- 5.10: `lld/MSIL/NativeLibraries.{h,cpp}` with `NativeIndex::lookup(StringRef, SmallVectorImpl<const NativeExport
+  *> &Rejected)`, called with the import name of 5.9.6 step 2; P/Invoke stub creation per (symbol, IL signature)
+  with Q13's names; the data-import helper choice (`TrailerInput::ImportHelper`, 5.9.10) for
+  `TrailerInput::DataImports`, whose module and entry come from 5.9.6 step 2 (IMPORT data included); 5.10.7's
+  semantics and mismatch texts for the import attributes; `-l` classification, linker scripts, `--print-imports`,
+  `--ucrtbase-imports` (5.10.4); the M13 `#pragma comment(lib)` handler, whose libraries
+  `CodeGenModule::AddDependentLib` records in `!llvm.linker.options` on every MSIL triple (`-l<name>` on Linux
+  triples, `/DEFAULTLIB:<name>.lib` on windows-msvc; MSIL triples are not ELF, so never `!llvm.dependent-libraries`),
+  carried into `lto::InputFile::getCOFFLinkerOpts()` for MSIL bitcode by the `IRSymtab.cpp` hook (5.10.6); the
+  driver passing `--target=` and `-o`.
+- 5.11: binding of TypeRefs scoped to `msil.bcl` (and any other AssemblyRef) by name; the public BCL member list
+  (`BCLMembers.def` and `BCLMembers.h`, `cli::BCLMemberId`) shared by the target, the trailer builder and the
+  binder; the Q10 no-reference table.
+- 5.10 and 5.12: until M20, msil-ld writes only ILAsm text (`--lto-emit-asm`), so the harness (msil-prog.py) runs
+  ilasm on it; the clang driver's link job never passes `--lto-emit-asm` and never runs ilasm (5.9.13).
+- 5.12: `%{msil_prog}`, `%{msil_srcs}`, `msil_pipeline=asm|lto|obj`, `update-expected.py` for multi-TU tests and
+  per-triple `.expected` files, the Linux oracle, `llvm-cil-dump --canonical` and O3's allow-list (P/Invoke module
+  names differ between `-S`'s frozen D14 table and msil-ld's Q13 names), the feature `msil-prog-pipeline=<p>`
+  (5.12.2), and the `msil/test/M2/08-semantics/` and `00-link/` directories.
+
+### 5.10 Driver and native imports
+
+Sources: driver-toolchain 2-4, 6, 9-10; native-imports 1-10; lld-flavor 1.3, 2.3; brief Q6, Q9, Q12-Q20, Q35.
+
+#### 5.10.1 `MSILToolChain<NativeTC>` (M14)
+
+Files `clang/lib/Driver/ToolChains/MSIL.h` and `MSIL.cpp` (fork-only), about 100 + 300 lines, from the recon prototype
+(driver-toolchain-files/proto/).
+
+```cpp
+namespace clang::driver {
+namespace tools::msil {
+class LLVM_LIBRARY_VISIBILITY Linker final : public Tool {
+public:
+  explicit Linker(const ToolChain &TC);         // Tool("msil::Linker", "msil-ld", TC)
+  bool isLinkJob() const override { return true; }
+  bool hasIntegratedCPP() const override { return false; }
+  std::string getLinkerPath(const llvm::opt::ArgList &Args) const;
+  void ConstructJob(Compilation &C, const JobAction &JA, const InputInfo &Output,
+                    const InputInfoList &Inputs, const llvm::opt::ArgList &Args,
+                    const char *LinkingOutput) const override;
+};
+} // namespace tools::msil
+namespace toolchains {
+template <class NativeTC>
+class LLVM_LIBRARY_VISIBILITY MSILToolChain final : public NativeTC { /* overrides below */ };
+extern template class MSILToolChain<Linux>;
+extern template class MSILToolChain<MSVCToolChain>;
+extern template class MSILToolChain<MinGW>;
+/// The MSIL toolchain for an MSIL triple, or null when no native toolchain fits
+/// (the native switch then runs and the frontend rejects the triple, D6).
+std::unique_ptr<ToolChain> createMSILToolChain(const Driver &D, const llvm::Triple &Triple,
+                                               const llvm::opt::ArgList &Args);
+} // namespace toolchains
+} // namespace clang::driver
+```
+
+`createMSILToolChain` returns `MSILToolChain<Linux>` for `isOSLinux()`, `<MSVCToolChain>` for
+`isWindowsMSVCEnvironment()`, `<MinGW>` for `isWindowsGNUEnvironment()`, else null. Explicit instantiations live in
+`MSIL.cpp`. A future enclosed or `dotnet` triple gets its toolchain here and nowhere else (FeatureIdeas 6, preclusion
+only).
+
+| Override | Value |
+|---|---|
+| `getDefaultLinker()` | `"msil-ld"` |
+| `buildLinker()` | `new tools::msil::Linker(*this)` |
+| `buildAssembler()` | `D.Diag(diag::err_no_external_assembler)`, returns null (as `MSVCToolChain::buildAssembler`) |
+| `buildStaticLibTool()` | `new tools::gnutools::StaticLibTool(*this)` (`llvm-ar rcsD`, every MSIL triple) |
+| `HasNativeLLVMSupport()` | `true` |
+| `isPICDefault()`, `isPIEDefault(Args)`, `isPICDefaultForced()` | `false` each (D8; cc1 gets `-mrelocation-model static`) |
+| `getDefaultUnwindTableLevel(Args)` | `UnwindTableLevel::None` |
+| `getSupportedSanitizers(BA, DeviceOffloadKind)` | `(Undefined & ~Vptr) \| FloatDivideByZero \| UnsignedIntegerOverflow \| UnsignedShiftBase \| ImplicitConversion \| Nullability \| LocalBounds` (trap mode only; ASan and friends become `err_drv_unsupported_opt_for_target`) |
+| `GetDefaultRuntimeLibType()` | `ToolChain::RLT_CompilerRT` |
+| `getLTOMode(Args, Kind)` | M14-M19 (from M19 it returns `LTOK_None` for `-c` or `/c` without an explicit `-flto*`/`-fno-lto`); `M20/lld-objects` deletes it (5.10.5) |
+
+**Kept native, never overridden:** `ComputeEffectiveClangTriple`, `computeMSVCVersion`, `AddClangSystemIncludeArgs`,
+`addClangTargetOptions`, `TranslateArgs` (clang-cl), `IsMathErrnoDefault`, `GetExceptionModel`, `getDefaultDebugFormat`,
+`IsIntegratedAssemblerDefault` (true), the file and program paths of the native constructor, sysroot and GCC
+detection, multiarch include directories, `-fms-compatibility-version`, predefines, the Phase-1 `Clang.cpp` defaults
+(`-fms-volatile` and `/GS` off). Measured: the `-S` cc1 lines differ only by `-mrelocation-model static` (instead of
+`pic`/`-pic-level 2`/`-pic-is-pie`) and the missing `-funwind-tables=2`, and 372 corpus compiles give byte-identical
+IL (driver-toolchain 4.2). Hosted headers are not required in Phase 2 (Q16): header search stays native (`--sysroot`,
+the VS developer environment or `-Xmicrosoft-*`/`/winsysroot`), documented in GettingStarted.md.
+
+#### 5.10.2 Upstream driver hunks
+
+| File | Milestone | Hunk |
+|---|---|---|
+| `clang/lib/Driver/Driver.cpp` | M14 | `#include "ToolChains/MSIL.h"`; at the top of `getToolChain` after `auto &TC = ToolChains[Target.str()];`: `if (!TC && Target.isOSBinFormatMSIL()) TC = toolchains::createMSILToolChain(*this, Target, Args);`; `!C.getDefaultToolChain().getTriple().isOSBinFormatMSIL() &&` in the `err_drv_lto_without_lld` condition (`Driver.cpp:3451-3455`); `getDefaultImageName()` returns `"a.exe"` for `Target.isOSBinFormatMSIL()` (`:5460-5463`) |
+| `clang/lib/Driver/ToolChain.cpp` | M14 | delete the MSIL hooks of `getAssemble` (`:735-744`), `getLink` (`:758-767`) and the matching null check of `getLinkerWrapper` (`:796-805`), restoring upstream's text; keep the KCFI line (`:1960-1963`) |
+| `clang/lib/Driver/ToolChains/Clang.cpp` | M14 | `ClangAs::ConstructJob` (`:9341-9342`) reports `err_drv_msil_ilasm_input` |
+| `clang/lib/Driver/ToolChains/Clang.cpp` | M19 | delete the `AssembleJobAction` error (`:5541-5543`) |
+| `clang/lib/Driver/CMakeLists.txt` | M14 | `ToolChains/MSIL.cpp` |
+
+Measured compile: `Driver.cpp` 11.8 s, `ToolChain.cpp` 5.2 s, `Clang.cpp` 11.6 s, `MSIL.cpp` 2.0-2.4 s; no header.
+
+#### 5.10.3 The link job
+
+`tools::msil::Linker::getLinkerPath`: `--ld-path=` as given; `-fuse-ld=<absolute path>` as given; `-fuse-ld=lld`,
+`ld` or `msil-ld` and no `-fuse-ld`: `GetProgramPath("msil-ld")`; any other value: `err_drv_invalid_linker_name`.
+`CLANG_DEFAULT_LINKER` is ignored. The program is always plain `msil-ld` (never a triple-prefixed name: lld's
+`parseProgname` would pick the ELF flavor for `...-gnu-msil-ld`, lld-flavor 1.3). Response files:
+`ResponseFileSupport::AtFileUTF8()` (lld reads UTF-8; M14's driver test covers a non-ASCII path).
+
+Arguments in this order:
+
+1. `--target=<TC.getTriple().str()>` (normalized, without the MSVC version).
+2. `--sysroot=<D.SysRoot>` when set.
+3. `--shared` for `-shared` and clang-cl `/LD`, `/LDd` (M22 for `/LD`); `-s` gives `--strip-all`; `-pie`, `-no-pie`,
+   `-rdynamic` are claimed silently; `-static` is `err_drv_unsupported_opt_for_target`.
+4. `-L` and `-u` from the command line, then `TC.AddFilePathLibArgs` (the native library directories). On
+   windows-msvc: each `%LIB%` entry when `LIB` is set and no `/winsysroot`-style option is given; else the detected VC
+   lib directory (`getSubDirectoryPath(llvm::SubDirectoryType::Lib)`), `getUniversalCRTLibraryPath` and
+   `getWindowsSDKLibraryPath` (msil-ld is a GNU-style flavor and does not read `LIB`).
+5. LTO options when `TC.isUsingLTO(Args)`; never `tools::addLTOOptions` (it would add `-plugin LLVMgold`,
+   `CommonArgs.cpp:1078-1081`): `-O0` -> `--lto-O0`, `-O1`/`-Og` -> `--lto-O1`, `-O2`/`-Os`/`-Oz` -> `--lto-O2`,
+   `-O3`/`-Ofast` -> `--lto-O3` (no `-O`: nothing, msil-ld defaults to `--lto-O2`); `-flto-jobs=N` ->
+   `--thinlto-jobs=N`; `-flto-partitions=N` -> `--lto-partitions=N`; `-save-temps` -> `--save-temps`; each `-mllvm X` ->
+   `--mllvm=X` (a debugging aid; codegen switches travel as module flags, driver-toolchain R8).
+6. `AddLinkerInputs`: objects, bitcode, archives, `.dll` inputs, `-l`, `-Wl`/`-Xlinker`, `-e`, in command-line order.
+7. Unless `-nostdlib` or `-nodefaultlibs`: `-lpthread` for `-pthread` on Linux triples, the default libraries
+   (5.10.4), then the helper archive `TC.getCompilerRT(Args, "builtins")` if that file exists (Phase 3 provides it;
+   driver-toolchain 4.11).
+8. `-o <output>`.
+
+No crt files, no `-dynamic-linker`, no `-pie`, no `-plugin`. The driver writes no `runtimeconfig.json` and no
+`.exe.config` (Design.md 8). `--emit-static-lib` runs `llvm-ar rcsD`.
+
+#### 5.10.4 Default libraries per triple (Q14; M14 passes them without `--ucrtbase-imports`, M15 adds it and makes them resolve)
+
+| Triple | Default libraries (in this order) |
+|---|---|
+| `*-linux-gnu-msil` | `-lc -lm` (the backend calls libm for `sqrt`/`floor`/`fma`; an unused library costs nothing) |
+| `*-linux-musl-msil` | `-lc` |
+| `*-windows-msvc-msil` | `-lucrt -lkernel32 -loldnames --ucrtbase-imports` |
+| `*-windows-gnu-msil` | `-lmsvcrt` (a command-line `-l` value starting with `msvcr`, `ucrt` or `crtdll` replaces it and is repeated in its place, as `MinGW.cpp:91-101`) `-ladvapi32 -lshell32 -luser32 -lkernel32` |
+
+`--ucrtbase-imports` is an msil-ld option (5.9.3, M15; an error on non-Windows targets): a built-in native import
+library, placed where the option appears, that binds `memcpy`, `memset`, `memmove`, `memcmp`, `memchr`, `strchr`,
+`strrchr`, `strstr`, `wcschr`, `wcsrchr` and `wcsstr` to `ucrtbase.dll` (Q14; `ucrtbase.dll` exports all 11,
+native-imports 2.4). A user `-lvcruntime` comes earlier on the line and wins. msil-ld has **no** default libraries of
+its own: the driver states every library, so each stays attributable to its triple (FeatureIdeas 6 and 7). Never
+`msvcrt.lib`, `libcmt.lib` or `legacy_stdio_definitions.lib` on windows-msvc (native code).
+
+#### 5.10.5 `-c`, outputs, references and clean errors
+
+- **`-c` writes bitcode until M19 (Q6).** M14's `MSILToolChain::getLTOMode(Args, Kind)` returns the base result when
+  `-flto`, `-flto=` or `-fno-lto` is given; otherwise `LTOK_Full`, unless `-S` or `-emit-llvm` is given (then
+  `LTOK_None`, so Phase 1's `-S` and `-emit-llvm` cc1 lines stay byte-identical). `clang -c x.c` then runs
+  `cc1 -emit-llvm-bc -flto=full -flto-unit` and writes `x.o` (bitcode); `clang a.c b.c -o p.exe` compiles to bitcode
+  and links through msil-ld with LTO. `-fno-lto -c` reaches `Clang.cpp:5541-5543` and reports
+  `err_drv_msil_no_object_output`. M19 deletes that `Clang.cpp` error and makes the override return `LTOK_None` for
+  `-c` (or `/c`) without an explicit `-flto*`/`-fno-lto`, so `-c` writes CIL objects (one `cc1 -emit-obj` job through
+  the integrated assembler, `Driver.cpp:4880-4886`); compile-and-link keeps the bitcode default until M20, whose
+  `M20/lld-objects` role deletes the override (msil-ld accepts CIL objects from M20). From M19
+  `err_drv_msil_no_object_output` is unused; it stays in `DiagnosticDriverKinds.td` until a later milestone edits that
+  file (removing it alone would rebuild 84 objects and change an upstream hook for a dead diagnostic).
+- **Output naming and PE kind (Q19):** the default image name is `a.exe` on every MSIL triple (also with `-shared`);
+  the driver never appends an extension to `-o`; clang-cl's `/Fe` and `/LD` naming stay as upstream. msil-ld writes an
+  EXE image for programs and a DLL image for `--shared` whatever the name, names the assembly after the output stem
+  and warns when the output ends in neither `.exe` nor `.dll` (5.9).
+- **`-shared`** maps to `--shared`; `-Wl,--export-class=<Ns.Class>` passes through (Design.md 5.4, M22).
+- **Stock-clang bitcode** (Q12) needs nothing from the driver: `.bc`/`.o` inputs go to msil-ld as they are
+  (`HasNativeLLVMSupport`); its once-per-link warning and documented limits are 5.9's.
+- **References (Q9):** the driver adds none. `-Wl,--reference=<file|dir>` (CMake: `LINKER:--reference=...`) and
+  positional managed `.dll` inputs (an unknown extension is `TY_Object`, `Driver.cpp:3253-3265`) reach msil-ld in
+  command-line order. No new clang option in Phase 2. clang's `-r` stays lld's `--relocatable`.
+- **Clean errors (Q20), texts fixed in M13** (`DiagnosticDriverKinds.td`):
+  - `err_drv_msil_no_object_output` (reworded): `CIL object files are not supported for MSIL target '%0' yet; use
+    -flto to write LLVM bitcode objects, or -S to write ILAsm text`. Used for `-c` until M14 and for `-fno-lto -c`
+    in M14-M18 (M19 makes `-c` write CIL objects).
+  - `err_drv_msil_ilasm_input` (new): `assembling ILAsm text is not supported for MSIL target '%0'; compile C or LLVM
+    IR sources instead, or use -S to write ILAsm text`. Reported by `ClangAs` for `.s`/`.S`/`.il` inputs to an
+    assemble step, `-x assembler`, clang-cl `/FA` and `/Fa`, `-via-file-asm`, and (from M19, when `-c` writes
+    objects) `-save-temps -c`. Before M19, `-save-temps -c` writes bitcode temporaries and succeeds.
+  - `-fno-integrated-as -c` from M19: `err_no_external_assembler` (through `buildAssembler`).
+  - `-fembed-bitcode` stays `err_drv_unsupported_opt_for_target` (`Clang.cpp:5715-5722`).
+  - An `.il` file given to a link reaches msil-ld, which reports it (5.9).
+
+#### 5.10.6 `#pragma comment(lib)` and embedded library requests
+
+- **Front end (M13, `ParsePragma.cpp`):** install and remove `PragmaCommentHandler` also when
+  `getTargetInfo().getTriple().isOSBinFormatMSIL()` (`:474-479`, `:602-607`). In `PragmaCommentHandler::HandlePragma`,
+  an MSIL triple whose OS is not Windows accepts only the `lib` kind, as ELF does (`:3273`); Windows MSIL triples
+  accept what MSVC triples accept. Today the pragma is dropped silently on linux-gnu-msil (judge-c-fidelity J12).
+- **CodeGen:** unchanged. `CodeGenModule::AddDependentLib` takes its non-ELF path for MSIL triples and records the native
+  `TargetCodeGenInfo` spelling in `!llvm.linker.options`: `-l<name>` on Linux triples, `/DEFAULTLIB:<name>.lib` on
+  Windows triples (native-imports 7.3).
+- **Bitcode (M13, `IRSymtab.cpp`):** the `llvm.linker.options` collection at `IRSymtab.cpp:144` runs for
+  `TT.isOSBinFormatCOFF() || TT.isOSBinFormatMSIL()`, so `lto::InputFile::getCOFFLinkerOpts()` carries them for MSIL
+  bitcode (and archive members); `emitLinkerFlagsForGlobalCOFF` stays COFF-only.
+- **Objects (M19):** the link-info record's linker-options field (5.8) carries the same strings.
+- **msil-ld (M15 for bitcode, M20 for objects; M14 ignores embedded requests: without native readers, clang's default
+  `/DEFAULTLIB:libcmt` and `oldnames` requests on windows-msvc would make every M14 link depend on `LIB`, and M14's
+  undefined functions bind through D14 anyway):** accepts, case-insensitively, `-l<name>`, `-l:<file>`,
+  `/DEFAULTLIB:<name>` and `-defaultlib:<name>` (`.lib` appended when the name has no extension, then searched like
+  `-l:<name>`), from `getCOFFLinkerOpts()`, `getDependentLibraries()` (stock ELF bitcode) and the record. It ignores,
+  with a `--verbose` note, requests naming an MSVC C/C++ runtime library (`libcmt`, `libcmtd`, `msvcrt`, `msvcrtd`,
+  `libucrt`, `libucrtd`, `ucrt`, `ucrtd`, `libvcruntime`, `libvcruntimed`, `vcruntime`, `vcruntimed`, `msvcprt`,
+  `msvcprtd`, `libcpmt`, `libcpmtd`; the driver passes `--dependent-lib=libcmt` by default on windows-msvc), because the
+  default libraries (5.10.4) supply the C runtime. Another request it cannot find is an error: `unable to find library
+  from dependent library specifier: <name>` with `>>> requested by <file>`. `--no-dependent-libraries` (lld/ELF
+  spelling; M15 for bitcode, M20 for objects) drops every embedded request.
+
+#### 5.10.7 The C import attributes (Q35, M13)
+
+- **Spelling:** WebAssembly's `__attribute__((import_module("<module>")))` and `__attribute__((import_name("<entry>")))`
+  (also `[[clang::import_module(...)]]`), shared by widening their target. `Attr.td` gains
+  `def TargetWebAssemblyOrMSIL : TargetSpec { let CustomCode = [{ T.isWasm() || T.isOSBinFormatMSIL() }]; }` and the
+  records `WebAssemblyImportModule` and `WebAssemblyImportName` use `TargetSpecificAttr<TargetWebAssemblyOrMSIL>`; no
+  new record, no `ParseKind`, no Sema change (`SemaWasm`'s handlers are target-neutral, including
+  `warn_import_on_definition`). `__has_attribute(import_module)` becomes true on MSIL triples. `AttrDocs.td` adds an MSIL
+  paragraph to `WebAssemblyImportModuleDocs` and `WebAssemblyImportNameDocs`.
+- **CodeGen (`CodeGenModule.cpp`, under `getTriple().isOSBinFormatMSIL()`):** a function declaration without a body gets
+  the string attributes `"msil-import-module"` and `"msil-import-name"` (the Phase-1 IR attributes, D14); an external
+  variable declaration gets the same keys as `GlobalVariable` attributes (data imports, 5.10.12). Definitions keep
+  neither.
+- **Semantics:** an explicit `import_module` bypasses native lookup: the given module and entry (default: the C name)
+  are used unchecked, with `nomangle cdecl`. `import_name` alone renames the entry and resolves the module natively
+  under that entry name. Two inputs that disagree are an error, wasm-ld's text: `import module mismatch for symbol:
+  <name>` / `import name mismatch for symbol: <name>`, each followed by `>>> defined as <value> in <file>` lines. These
+  errors apply from M20, to CIL objects (from their stubs and IMPORT data) and to LTO objects, which carry the
+  attributes (5.9.6 step 2, 5.9.13). Bitcode symbol tables carry no import attributes, so for bitcode inputs in
+  M15-M19 the IR linker keeps the first declaration's attributes, unchecked (lld/wasm too checks objects only,
+  `lld/wasm/SymbolTable.cpp` ~715-745). `-S`/llc honour the attributes as in Phase 1.
+
+#### 5.10.8 Native library readers (M15, `lld/MSIL/NativeLibraries.{h,cpp}`)
+
+Everything through `llvm::object` (native-imports 2.1): no new LLVM code, no `LLVMInterfaceStub`.
+
+| Input (classified by `identify_magic`) | Reader | What it yields |
+|---|---|---|
+| ELF `ET_DYN` (`elf_shared_object`) | `readELFShared` (per ELFT) | `.dynsym` definitions; module = `DT_SONAME`, else the file name; versions from `readDynsymVersions()` (its `IsVerDef` field means "is default") and the raw `SHT_GNU_versym` hidden bit; `STT_GNU_IFUNC` = function; `STT_OBJECT`/`STT_COMMON` = data; `STT_TLS` = TLS; `SHN_ABS` version markers skipped; machine and class checked against the triple |
+| GNU ld script (text) | `readLinkerScript` | `GROUP`, `INPUT`, `AS_NEEDED`, `-l<name>` inside; `OUTPUT_FORMAT`, `SEARCH_DIR` ignored; an absolute path is resolved under `--sysroot` when the script lies inside the sysroot (GNU ld rule); a relative name: the script's own directory, then the `-L` directories, as lld/ELF's `ScriptParser::addFile` resolves it (`lld/ELF/ScriptParser.cpp:319-360`) |
+| archive member: COFF short import (`COFFImportFile`) | `readCOFFShortImport` | entry from the name type (EXPORTAS, NOPREFIX, UNDECORATE), `#<ordinal>` for ordinal-only; `IMPORT_CODE` = function, `IMPORT_DATA`/`IMPORT_CONST` = data; the DLL name parsed from the member as `lld/COFF/InputFiles.cpp:1259-1300` does; machine checked |
+| archive member: GNU long-format import object (MinGW dlltool) | `readGNULongImport` | the function and its `__imp_` from `.idata$5/6`; the DLL name from the tail member's `.idata$7` through the head symbol (native-imports 2.5) |
+| archive member: COFF object with weak externals `IMAGE_WEAK_EXTERN_SEARCH_ALIAS` (oldnames.lib) | `readCOFFAliasObject` | alias `<name>` -> `<target>`; the target resolves like any symbol |
+| archive member: any other ELF or COFF object | (none) | its defined symbols are recorded as "native code only" for the diagnostic |
+| PE without a CLI header (`pecoff_executable`) | `readPEDll` | `export_directories()`; data versus code from the exporting section's `IMAGE_SCN_CNT_CODE`; forwarders bound by their own name; module = the DLL file name |
+| `--ucrtbase-imports` | built-in | the 11 functions of 5.10.4, module `ucrtbase.dll` |
+
+```cpp
+namespace lld::msil {
+enum class NativeKind : uint8_t { Function, Data, TLS, NoType };
+enum class NotBindable : uint8_t { None, HiddenVersion, ThreadLocal, PrivateVersion, NativeCodeOnly };
+struct NativeExport {
+  StringRef Module;   // ModuleRef string: DT_SONAME, file name, or DLL file name verbatim
+  StringRef Entry;    // ImplMap import name; "#<n>" for an ordinal-only import
+  NativeKind Kind;
+  NotBindable Why;
+  StringRef Version;  // ELF default version, for --print-imports and diagnostics
+  InputFile *File;    // for ">>> defined in" lines
+};
+class NativeIndex {   // every definition per name, in link order
+public:
+  void addFile(MemoryBufferRef MB, StringRef Path, const llvm::Triple &TT);
+  const NativeExport *lookup(StringRef Name,
+                             SmallVectorImpl<const NativeExport *> &Rejected) const;
+};
+} // namespace lld::msil
+```
+
+#### 5.10.9 `-l` lookup, `-Bstatic`/`-Bdynamic`, sysroot inputs (Q17)
+
+- **Kinds of a candidate file:** *static* (an archive with at least one LLVM bitcode or CIL object member, or a linker
+  script under a static name that names one); *managed* (a PE with a CLI header and an Assembly row that carries the
+  toolchain symbol-table attribute, M22); *import* (an archive with short or long import members); *native-shared* (ELF
+  `ET_DYN`, a linker script under a shared name, a native DLL); *native-only* (an archive or script whose members are
+  all native objects): skipped, with `--verbose`: `skipping native static archive <path> (no CIL or bitcode members)`.
+  A managed `.dll` without the attribute found by `-l` is skipped with a warning (`use --reference for .NET reference
+  assemblies`).
+- **Candidates per `-L` directory:** ELF triples `lib<n>.a`, `<n>.dll`, `lib<n>.dll`, `lib<n>.so`; windows-msvc
+  `lib<n>.a`, `<n>.lib`, `<n>.dll`; windows-gnu `lib<n>.a`, `lib<n>.dll.a`, `<n>.dll.a`, `<n>.lib`, `lib<n>.dll`,
+  `<n>.dll`. Directories are searched in order; the first directory holding an acceptable candidate wins, and inside it
+  the best kind wins: static, then managed, then import/native-shared (list order). This is Design.md 5.2's static-first
+  rule; it is the opposite of GNU ld's default and is documented as such.
+- `-Bstatic` accepts only *static*; `-Bdynamic` restores the default; `-l:<file>` takes the exact name in the `-L`
+  directories, any kind; `-L=<dir>` and `=`-prefixed script paths are sysroot-relative.
+- **Milestones:** M14 implements *static*, `-l:` and the bitcode/CIL classification, and accepts any other candidate
+  `-l` finds as a native library without reading it (M14's codegen still resolves imports through D14, so `clang
+  foo.c` links wherever the default libraries are found); M15 reads the native kinds, scripts and import libraries and
+  adds `-Bstatic`/`-Bdynamic`; M22 *managed*.
+- **Sysroot inputs (Q17):** msil-ld reads the real files (`.so`, ld scripts, `libc_nonshared.a`, Windows import
+  libraries), exactly as ld.lld and lld-link do; no `llvm-ifs` text stubs (they cannot represent glibc's versioned
+  duplicates, native-imports 7.1).
+
+#### 5.10.10 Resolution order and bindability (native-imports 4, 8.2)
+
+1. Objects and archive members (CIL or bitcode, the helper archive included) by lld/ELF's rules (5.9).
+2. Managed libraries built by this toolchain (M22).
+3. Native libraries in command-line order; the first *bindable* definition wins; no duplicate error between libraries;
+   rejected definitions are kept for the diagnostic. Native definitions are late-bound: they never preempt a definition
+   and never block archive extraction.
+4. A weak undefined symbol with no definition: null, no P/Invoke.
+5. Anything else: `undefined symbol: <name>` with `>>> referenced by <file>`.
+
+Bindable: an ELF default-version (`@@`) or unversioned definition, not TLS, not `GLIBC_PRIVATE`; a COFF import or PE
+export of the right kind. An object's own definition of a libc name (`malloc`) replaces the P/Invoke for our code only
+(documented). `exit` may bind natively in Phase 2; `atexit` binds nowhere (glibc: `libc_nonshared.a`; UCRT: not
+exported) and stays an error until Phase 3 intercepts it (backlog 5).
+
+**Native callbacks (M15; until P3-B).** A native function that takes a C function pointer cannot be called until P3-B's
+native-callable thunks: native code calling a `'<msil>fn_'` ldftn value enters managed code without a reverse-P/Invoke
+transition. Every live call or address reference that native lookup (5.9.6 step 2) binds to a symbol or entry name of
+5.10.14's callback list is therefore a link error (5.10.14's text), also when the call passes no function, such as
+`signal(SIGPIPE, SIG_IGN)`. Explicit imports (`msil-import-module`, EXPLICIT_IMPORT stubs) are exempt (5.10.7:
+unchecked) and are the workaround. msil-ld checks it after LTO from M15 (`MSILLinkHooksPass`) and for CIL objects from
+M20. A function address passed to any other native function (a native library's own callback API, Win32 callbacks) is a
+known gap until P3-B (Status.md).
+
+#### 5.10.11 DllImport naming and ImplMap rows (Q13)
+
+- **Module string:** ELF: `DT_SONAME` verbatim (`libc.so.6`, `libm.so.6`, `libz.so.1`), else the file name as found;
+  Windows: the DLL name of the import member or export directory verbatim, suffix included
+  (`api-ms-win-crt-stdio-l1-1-0.dll`, `KERNEL32.dll`); Mach-O later: the install name. One `ModuleRef` per distinct
+  string.
+- **Entry:** the export name per the import name type, `#<n>` for ordinal-only imports, the alias target for oldnames
+  aliases.
+- **Rows msil-ld writes (M20, through 5.7's writer):** one `MethodDef` per (symbol, IL signature): `static`,
+  `hidebysig`, `pinvokeimpl` (0x2000), access `assembly`, ImplAttributes `preservesig` (0x0080), no body; one `ImplMap`
+  with `MappingFlags = 0x0201` (`NoMangle` 0x0001 | `CallConvCdecl` 0x0200; `stdcall` 0x0300 is P5's i686), `ImportName`
+  = entry, `ImportScope` = the ModuleRef; one canonical stub per symbol for its `'<msil>fn_<name>'` address field (the
+  declared prototype if any, else the first signature in input order).
+- **Text:** `MSILTargetStreamer::emitPInvoke` prints `pinvokeimpl("<module>" [as "<entry>"] nomangle cdecl)` from M18
+  on, for `-S`, llc and `--lto-emit-asm` alike, batched with Q26's mechanical update of the FileCheck tests; until M18
+  the text has no `nomangle` (M15's linked text binds only exact export names, so the A/W probe cannot misfire).
+
+#### 5.10.12 Native data imports (Q15, M20)
+
+- An undefined variable that resolves to native data keeps its address field (D12) and gets it filled at startup: a
+  private helper `'<msil>dataimport'(string module, string name) : native int` (one per output) and an initializer
+  method `'<msil>init_dataimports'()` that stores each address, called from `<Module>::.cctor` **before** data
+  relocations and constructors, from the shared trailer builder (5.9.10), never inlined into `.cctor` (FeatureIdeas 7).
+- Helper body, first that applies: (1) `System.Runtime.InteropServices.NativeLibrary::Load(string)` and
+  `GetExport(native int, string)` when the references define them (M21: Kind `NativeLibrary`, body `ldarg.0; call
+  NativeLibrary::Load(string); ldarg.1; call NativeLibrary::GetExport(native int, string); ret`, chosen in
+  `lld/MSIL/Relocations.cpp` when `BCLBinder::isDefined` holds for both members, ahead of M20's Kernel32/Dlfcn choice;
+  `BCLMembers.def` entries `NativeLibrary`, `NativeLibrary_Load` and `NativeLibrary_GetExport`, Required but not mscorlib-safe and requested only when the references define them, so not in the built-in mscorlib table); (2) on Windows triples (Kind `Kernel32`, M20),
+  P/Invokes `kernel32.dll` `LoadLibraryW` (Unicode) and `GetProcAddress` (ANSI), verified on Framework 4.8 and .NET 8;
+  (3) on ELF triples (Kind `Dlfcn`, M20), `dlopen`/`dlsym` bound from the link's native libraries like any import
+  (*unverified*: M20's test must run it under WSL .NET 8 and 10); else the error of 5.10.14.
+- The shared trailer builder models the helper as `cli::DataImportHelper { Kind; EntityRef Load, GetSymbol; }`
+  (`llvm/include/llvm/CLI/Trailer.h`, `cli::TrailerInput::ImportHelper`; M20). Kind `Kernel32` is the body of
+  native-imports-files/data-win.il (`Marshal::StringToHGlobalUni` plus `LoadLibraryW`, `Marshal::StringToHGlobalAnsi`
+  plus `GetProcAddress`); Kind `Dlfcn` calls `dlopen(path, 1)` and `dlsym`. A null result throws
+  `EntryPointNotFoundException("data import '<name>' not found in <module>")` (M20's `BCLMembers.def` entries, 5.11.7).
+- A missing library fails the module initializer (TypeInitializationException), like an eager native data relocation.
+- M15-M19: native data is the link error `importing native data symbol '<name>' (<module>) is not supported yet`; M20
+  retires it.
+- From M20 native data imports work in both link outputs: the PE, and under `--lto-emit-asm` the text, for which the
+  import-annotation pass writes kind-1 `!msil.imports` operands for native data plus kind-0 operands for the helper's
+  two functions (`LoadLibraryW`/`GetProcAddress` in `kernel32.dll` on Windows triples, `dlopen`/`dlsym` as bound on ELF
+  triples; 5.10.13). The AsmPrinter's linked mode turns them into `cli::TrailerInput::DataImports` and `ImportHelper`,
+  so O4 can compare the LTO PE with ilasm of that text.
+
+#### 5.10.13 Import modes and the D14 freeze
+
+| Mode | When | Policy |
+|---|---|---|
+| standalone | `clang -S`, cc1 `-S`, llc `-filetype=asm`/`null` (before M19, `clang -c` writes bitcode and runs no codegen) | the D14 table of M11, frozen (no entry added or removed; Status.md's D14 text renamed "standalone import table"), plus `msil-import-module`; every other undefined function is the Phase-1 error. Unchanged until the end of Phase 2 |
+| linked text | msil-ld LTO codegen (`--lto-emit-asm`, M15-M19; kept afterwards as O4's text side) | the module flag `"msil-linked"` (i32 1, behaviour `Override`), set by msil-ld's import-annotation pass (`MSILLinkHooksPass` through `lto::Config::PreCodeGenPassesHook`, 5.9.13; lld-flavor 3.2), which also sets `msil-import-module`/`msil-import-name` on every natively bound declaration, turns a natively bound `extern_weak` declaration into an external one, and writes the named metadata `!msil.imports` with operands `!{!"<symbol>", !"<module>", !"<entry>", i32 <kind>}`: kind 0 (function) for each name of `lto::LTO::getRuntimeLibcallSymbols(TT)` without a `__` prefix that the merged module neither defines nor declares and that a native library binds as a function; kind 1 (data) is reserved until M20, which adds kind-1 operands for native data and kind-0 operands for the data-import helper's functions (5.10.12). The same pass reports undefined and unbindable references after LTO (5.9.6). The backend never consults D14: an undefined function or library call takes module and entry from `msil-import-module` or a kind-0 `!msil.imports` operand, else `library call '<name>' was not resolved by msil-ld`; `__` helpers keep their Phase-3 error. Linked-text P/Invokes have `assembly` access (5.10.11) and no `nomangle` until M18. A module with `msil-lto` and without `msil-linked` keeps M14's backend behaviour (`lto-module-flags.ll` and the il-snapshot gate step pin it) |
+| object | `clang -c` and llc `-filetype=obj` from M19; LTO from M20 | no import policy in the backend: undefined functions and variables, and every library call (`__` helpers included), become UNDEFINED symbols with call-site flags (5.8.10); msil-ld resolves them and reports one that nothing defines (the D14 `__` error stays for `-S`) |
+
+M15 also moves the f32 `FLDEXP`/`FFREXP` promotion (`MSILISelLowering.cpp:225-241`) off the table: promote when
+`RuntimeLibcalls` has no f32 libcall for the triple, or for windows-gnu triples (msvcrt.dll lacks `ldexpf`/`frexpf`).
+Gate: byte-identical IL for every existing llc, clang and M1 input. In linked and object mode the Phase-1 compile-time
+checks for native callees (variadic, non-blittable, prototype-less used only by address) become link-time checks after
+native resolution, with native-imports 6's texts.
+
+#### 5.10.14 Diagnostics and reporting options (msil-ld, lld style; native-imports 8.5-8.6)
+
+- `symbol '<name>' is defined only in native object code (<archive>(<member>)); MSIL cannot link machine code`
+- `symbol '<name>' in <module> has only the non-default version <name>@<ver>, which a P/Invoke cannot bind`
+- `symbol '<name>' in <module> is thread-local data and cannot be imported; use <errno.h>` (for `errno`)
+- `symbol '<name>' in <module> is <ver> (GLIBC_PRIVATE) and cannot be bound`
+- `'<name>' in <module> is data, but <file> calls it as a function`
+- `data symbol '<name>' in <module> cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym`
+- `<path>: ELF machine <EM_x> does not match target <triple>` (and the COFF and PE machine forms)
+- `native function '<name>' (<module>) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3)`
+- `native function '<name>' (<module>) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)`
+- `native function '<name>' (<module>) takes a C function pointer; passing functions to native code needs phase 3
+  thunks`, with `>>> referenced by` lines (rule in 5.10.10), for the callback list, a sorted static table behind `bool
+  lld::msil::isNativeCallbackFunction(StringRef Name)` in `NativeLibraries.cpp`: `CreateThread`, `_beginthread`,
+  `_beginthreadex`, `_lfind`, `_lfind_s`, `_lsearch`, `_lsearch_s`, `_onexit`, `at_quick_exit`, `atexit`, `bsearch`,
+  `bsearch_s`, `call_once`, `ftw`, `lfind`, `lsearch`, `nftw`, `on_exit`, `pthread_atfork`, `pthread_create`,
+  `pthread_key_create`, `pthread_once`, `qsort`, `qsort_r`, `qsort_s`, `scandir`, `sigaction`, `signal`, `tdelete`,
+  `tdestroy`, `tfind`, `thrd_create`, `tsearch`, `tss_create`, `twalk`, `twalk_r`
+- `--verbose`: `skipping native static archive <path> (no CIL or bitcode members)`; `ignoring C runtime library request '<name>' from <file>`
+- `--print-imports`: one line per bound symbol, `<symbol> -> <module>!<entry> [function|data, <version>|-]`, then one
+  line per ELF module, `<module>: version floor <highest default version>`; `--trace-symbol=<name>` as lld.
+
+#### 5.10.15 Tests
+
+| Milestone | Tests (owners per 5.6) |
+|---|---|
+| M13 | `clang/test/CodeGen/MSIL/import-attributes.c` (`__has_attribute`, IR attributes on declarations and variables, the definition warning, wasm unchanged); `clang/test/CodeGen/MSIL/pragma-comment-lib.c` (`!llvm.linker.options` per triple, non-lib kinds ignored on Linux); `msil-toolchain.c` text update |
+| M14 | `clang/test/Driver/msil-link.c`, `msil-lto.c`, `msil-header-search.c` (texts in driver-toolchain-files/tests/, `-###` only, no `REQUIRES`, program matched as `"{{[^"]*}}msil-ld{{(\.exe)?}}"`, `--implicit-check-not` for `crt1.o`, `-dynamic-linker`, `-plugin`, `LLVMgold`, `ld.lld`, `link.exe`); `msil-toolchain.c` object and LTO blocks rewritten (5.12.13) |
+| M15 | `lld/test/MSIL/native-elf-resolve`, `native-elf-nosoname`, `native-elf-script`, `native-static-only`, `native-search`, `native-machine-mismatch`, `native-coff-importlib`, `native-coff-alias`, `native-coff-gnu-importlib`, `native-pe-dll`, `native-order`, `native-import-attr`, `native-signatures`, `native-variadic`, `native-aggregate`, `native-data`, `native-weak-undef`, `native-dependent-libs`, `native-ucrtbase-imports`, `native-print-imports` (`.test`; inputs from yaml2obj, `llvm-lib /def`, `llvm-mc` + `ld.lld`; native-imports 9.1) and `native-callback` (5.10.10); `msil-link.c` and `msil-lto.c` default-library lines (`--ucrtbase-imports`); `msil/test/M2/03-native/` (puts-free and `strlen`/`abs`/`malloc` programs, an ordinal import, an oldnames alias, IFUNC, versioned libm, a test-built `native.dll`/`libnative.so` through `%{msil_deps}`); `msil/test/M2/08-semantics/native-callback.test` (5.9.16); `llvm/test/CodeGen/MSIL/imports-linked.ll` (the `msil-linked` mode) |
+| M19 | `clang/test/Driver/msil-object.c` (driver-toolchain-files/tests/msil-object.c.proposed); `clang/test/CodeGen/MSIL/emit-obj.c` (5.12.13) |
+| M20 | `msil/test/M2/03-native/` data imports (glibc `stderr`/`environ`/`optind` under WSL, msvcrt `_iob` on Windows) |
+| M22 | `clang/test/Driver/msil-shared.c` (`-shared`, `/LD`, `/LDd`, `-Wl,--export-class=`) |
+
+### 5.11 BCL reference binding
+
+Sources: bcl-binding 0-6, 9-10; brief Q9-Q11; Design.md 7.1. Milestone M21 unless stated. BCL requests in objects are
+MemberRefs on `[msil.bcl]` TypeRefs (5.8.3); record v1 carries no request strengths (MANAGED_REQUESTS stays reserved,
+5.8.8).
+
+Until M21, msil-ld uses a stand-in (M20, 5.9.7): it rewrites every TypeRef scoped to `msil.bcl` to `[mscorlib]` 4.0.0.0
+`b77a5c561934e089` (D10) and copies MemberRefs by name with re-encoded signatures, with no lookup; the trailer's members
+and the spill classes' base type come from `BCLMembers.def`; any other AssemblyRef scope in an object is `<file>:
+reference to assembly '<n>' needs --reference, which this msil-ld does not support yet`. M21's `BCLBinder` replaces it,
+with byte-identical output for links without references (5.11.7).
+
+#### 5.11.1 Inputs and options
+
+- msil-ld option `--reference=<path>` and `--reference <path>` (`EEq`, double dash only, repeatable, no short form:
+  lld's `-r` is `--relocatable`, `-R` is `--rpath`): a file, or a directory meaning every `*.dll` in it with CLI
+  metadata (non-recursive; other files in a directory are skipped silently; an explicitly named file without metadata is
+  `<path>: not a .NET assembly`).
+- A positional managed `.dll` input is a reference when it lacks the toolchain symbol-table attribute (Design.md 5.2
+  step 2.2 and S7), else a library (M22). Before M21 a positional managed `.dll` is `<path>: .NET assembly inputs are
+  not supported yet`; a native DLL is a native library from M15. A toolchain library (an Assembly-row `uint8[]`
+  attribute of class `'<msil>SymbolTable'`) given through `--reference` is skipped with the warning `<path> is a library
+  built by this toolchain; pass it as a link input instead`. The driver hands every toolchain library input (positional,
+  and from M22 also one found by `-l`) to `InputFile *createManagedLibraryFile(MemoryBufferRef)`, declared in
+  `lld/MSIL/AssemblyFiles.h` (M21.a); in M21 it reports `<path>: linking .NET libraries built by this toolchain is not
+  supported yet` and returns null, and M22.c makes it return a `ManagedLibraryFile` (5.9.15).
+- Diagnostic options: `--print-bcl-table` prints the built-in table (5.11.7) and exits: one line per mscorlib-safe
+  `BCLMembers.def` entry in `.def` order, `type `, `method ` or `field ` (reserved: Phase 2's list has no field entries)
+  followed by `cli::printBCLMemberRef(..., "mscorlib")` (M18's text: return type first, then
+  `[mscorlib]<Ns>.<Type>::<Member>(<params>)`). The hidden, repeatable `--print-bcl-binding=<request>` prints test
+  bindings (5.11.5).
+
+#### 5.11.2 `ReferenceSet` (`lld/MSIL/ReferenceSet.{h,cpp}`)
+
+```cpp
+namespace lld::msil {
+struct AssemblyIdentity {           // lld::msil's: 5.7.6's cli::AssemblyIdentity carries the public key, not the token
+  std::string Name, Culture;
+  uint16_t Major = 0, Minor = 0, Build = 0, Revision = 0;
+  std::optional<std::array<uint8_t, 8>> PublicKeyToken;   // cli::computePublicKeyToken (5.7.8)
+};
+class ReferenceAssemblyFile;        // AssemblyFiles.h (5.9.2): one mapped file + its cli::MetadataReader (5.7.8)
+class ReferenceSet {
+public:
+  Error addPath(StringRef Path, bool Explicit);      // file or directory; identity checks below
+  bool empty() const;
+  Expected<const ReferenceAssemblyFile *> coreLibrary() const;
+  // Public TypeDefs named Ns.Name (nesting as Outer/Inner) and the forwarders of that name.
+  TypeCandidates findType(StringRef Namespace, StringRef Name) const;
+};
+} // namespace lld::msil
+```
+
+Loading is lazy: map the file, parse PE, CLI header, metadata root and the `Assembly` row; index only TypeDef (with
+NestedClass) and ExportedType names; decode member tables only for bound types. Identity rules: the same path twice is
+ignored; two files with the same full identity keep the first and warn; the same simple name with a different version
+or token is an error (no unification, Roslyn r15). A reference without `[assembly: ReferenceAssembly]` that makes a
+binding land in a `System.Private.*` assembly gives a warning.
+
+#### 5.11.3 The core-library rule
+
+The core library is the unique reference that defines top-level `System.Object` and has no AssemblyRef rows (Roslyn
+`IndexOfCorLibrary`). None, or two or more candidates, is an error for every link that binds a type (every link with a
+module initializer or `Main`); facades never qualify (they reference other assemblies). The core library is used for this
+check and for diagnostics; types are bound by the general lookup.
+
+#### 5.11.4 Type and member lookup
+
+- **Types:** candidates are public TypeDefs with the exact full name (nested: every enclosing type public or
+  nested-public). One: bind. Several: error, independent of reference order. None, but a reference forwards the name
+  (top-level ExportedType with `TypeAttributes.Forwarder` 0x00200000; nested forwarders chain through their enclosing
+  ExportedType without the bit): follow the chain inside the reference set; a missing destination is an error naming the
+  forwarder and the destination. Never bind to a facade's forwarder. Every type in a bound signature (parameters,
+  return, custom modifiers, generic arguments) and every needed base type is bound by the same rules, transitively.
+- **Members:** search the bound TypeDef's MethodDefs or Fields by name, then compare the calling convention
+  (static/instance, vararg, generic), generic arity, parameter count, return type and parameter types, after mapping each
+  definition token to its full name. Custom modifiers are ignored for matching and copied into the emitted signature (a
+  missing `modreq` gives MissingMethodException, bcl-binding 3.4). Two matches after ignoring modifiers: error. Not
+  found: search base types, but emit the requested declaring type as the MemberRef parent. Public members only.
+  `[Obsolete]` warns; `[RequiresPreviewFeatures]` is refused.
+
+#### 5.11.5 Requests, required and optional (Q11)
+
+Codegen (the backend for objects, msil-ld itself for synthesized code) produces requests: `Type`, `Method`, `Field`,
+`TypeSpec`/`MethodSpec`, `AttributeCtor` and `TypeName` (a `System.Type` value in an attribute blob), each with a
+strength:
+
+| Strength | Who | Missing in the references |
+|---|---|---|
+| required | every member the default codegen or msil-ld's synthesized code uses (Phase 1's six entities, the 5.11.7 additions) and every member a switch forces on | error (5.11.9) |
+| optional, drop | optimization-only attributes (`DisableRuntimeMarshalling`, `SuppressGCTransition`; P3 switches) | the attribute is omitted |
+| optional, substitute | API substitutions (FMA, Half, Int128; P3): the call goes to a private thunk whose body msil-ld supplies | the thunk calls the helper symbol, resolved like any undefined C symbol from the helper archive |
+
+Each fallback is reported under `--verbose`: `note: '<member>' is not defined by the references; <omitted|using helper
+'<symbol>'> (requested by <file> for <switch>)`. Phase 2 has no producer of optional requests (record v1 keeps
+MANAGED_REQUESTS reserved, 5.8.8), so M21 tests the mechanism through the hidden msil-ld option
+`--print-bcl-binding=<request>` against synthetic reference sets: requests `type:<Ns>.<Name>[/<Nested>]`,
+`member:<BCLMemberId>` with an optional `:drop` or `:substitute`, or `typename:<name>`, each printing
+`<request> -> <result>` (the bound type, the MemberRef text, the assembly-qualified name, `omitted`,
+`helper '<symbol>'`, or the error text). The private substitution thunk (the bind-or-helper body) lands with its first
+producer in P3-A, together with MANAGED_REQUESTS. In LTO links the capability may later reach codegen as a module flag
+(P3); Phase 2 reserves nothing else.
+
+`lld/MSIL/BCLBinder.h` belongs to the root role `M21/lld-refs` (M21.a), so that M21.a's `Driver.cpp` and `M21/lld-bcl`'s
+`BCLBinder.cpp` (M21.b, which never edits the header and defines `Impl`) compile against these pinned declarations
+(5.6.1 rule 7). The entity and signature types are 5.7's (`cli::EntityHandle` 5.7.2, `cli::MethodSig` and `cli::TypeSig`
+5.7.3, `cli::MetadataBuilder` 5.7.6, `cli::BCLMemberId` 5.7.2):
+
+```cpp
+namespace lld::msil {
+enum class RequestStrength : uint8_t { Required, OptionalDrop, OptionalSubstitute };  // cli::BCLStrength's values
+struct BCLRequest {
+  enum Kind : uint8_t { Type, Method, Field, TypeSpec, MethodSpec, AttributeCtor, TypeName } K;
+  RequestStrength Strength = RequestStrength::Required;
+  StringRef Switch;              // the codegen switch that made the request, for diagnostics; empty by default
+  const InputFile *RequestedBy;  // null for msil-ld's own synthesized code
+  StringRef Namespace, Name;     // Name nested as Outer/Inner; a TypeName request holds the whole string in Name
+  StringRef Member;
+  std::optional<cli::MethodSig> MethodSignature;   // methods, attribute constructors
+  std::optional<cli::TypeSig> FieldOrSpec;         // fields, type specs
+  SmallVector<cli::TypeSig, 0> Args;               // method specs
+  // TypeRef values in these signatures are output TypeRef, TypeDef or TypeSpec tokens (EntityHandle::Value, 5.7.2).
+};
+class BCLBinder {
+public:
+  /// Binds against Refs, or against the built-in [mscorlib] table when Refs.empty() (5.11.7).
+  BCLBinder(const ReferenceSet &Refs, cli::MetadataBuilder &Out);
+  ~BCLBinder();
+  /// The bound output entity; std::nullopt when an optional request falls back.
+  Expected<std::optional<cli::EntityHandle>> bind(const BCLRequest &R);
+  /// Capability query without emitting rows (the data-import helper's choice, 5.10.12).
+  bool isDefined(const BCLRequest &R);
+  Expected<cli::EntityHandle> bindType(StringRef Ns, StringRef Name);
+  Expected<cli::EntityHandle> bindMember(cli::BCLMemberId Id);   // the trailer sink's getBCLMember (5.9.10)
+  Error rewriteAttributeBlob(const cli::MethodSig &Ctor, ArrayRef<uint8_t> In, SmallVectorImpl<uint8_t> &Out);
+  void printBinding(StringRef Request, raw_ostream &OS);        // --print-bcl-binding
+private:
+  struct Impl;                   // defined in BCLBinder.cpp
+  std::unique_ptr<Impl> I;
+};
+void printBuiltinBCLTable(raw_ostream &OS);   // --print-bcl-table (5.11.1)
+} // namespace lld::msil
+```
+
+#### 5.11.6 Emission
+
+One AssemblyRef per defining assembly actually used, in first-use order: version from the defining assembly's own
+`Assembly` row (never from a facade's AssemblyRef, which says 0.0.0.0 in the .NET 8 pack), `Flags` 0, `PublicKeyOrToken`
+= the 8-byte token (`cli::computePublicKeyToken`, 5.7.8, of the definition's public key), culture as defined, empty
+`HashValue`. TypeRefs scoped to the defining AssemblyRef, nested TypeRefs to their enclosing TypeRef; MemberRef
+signatures are the definition's blob re-encoded with output tokens; `System.Type` attribute arguments are written as the
+assembly-qualified name of the bound definition. Rows are deduplicated; nothing is emitted for references that bound
+nothing. The output depends only on the reference *set*, never on its order.
+
+#### 5.11.7 The built-in `[mscorlib]` table (Q10)
+
+- Active exactly when the link has no reference (no `--reference`, no positional reference `.dll`); any reference turns
+  it off entirely. Entries bind to `mscorlib` 4.0.0.0, token `b77a5c561934e089`, flags 0 (D10).
+- Content: every `llvm/include/llvm/CLI/BCLMembers.def` entry flagged mscorlib-safe. In Phase 2: M18's
+  `System.ValueType`, the owner types and Phase 1's members `Marshal::AllocHGlobal(native int)`,
+  `Marshal::StringToHGlobalAnsi(string)`, `Environment::GetCommandLineArgs()`, `Buffer::MemoryCopy(void*, void*, int64,
+  int64)` and `Interlocked::MemoryBarrier()`; M20's `Marshal::StringToHGlobalUni(string)` (`Marshal_StringToHGlobalUni`)
+  and `EntryPointNotFoundException::.ctor(string)` (`EntryPointNotFoundException_ctor`) with its type, both Required,
+  for the data-import helper (5.10.12), and the type `System.Object` (`Object`, the spill classes' base, 5.9.12; M21
+  adds no `Object` entry), which M20's data-import and spill tests run on Framework, .NET 8 and .NET 10 and M21's
+  `check-mscorlib-safe.py` proves again; and what msil-ld's own synthesized code needs (M22 adds
+  `System.Attribute::.ctor()`, `AttributeUsageAttribute::.ctor(valuetype System.AttributeTargets)`,
+  `AttributeUsageAttribute::set_AllowMultiple(bool)` for the private symbol-table attribute class, Q25). From M21 an
+  entry is added only with a passing `check-mscorlib-safe.py` run (below); a type that is forwarded is not a member that
+  exists (`Math::FusedMultiplyAdd`, bcl-binding 2.4).
+- `BCLMembers.def` (created in M18 with 5.7.2's X-macros `CLI_BCL_TYPE` and `CLI_BCL_METHOD`; `BCLMembers.h` gives
+  `cli::BCLMemberId`, `cli::BCLStrength` and `cli::printBCLMemberRef`) records per entry: kind, namespace, type (nested
+  as `Outer/Inner`), member, the signature in a form from which the printer derives ILAsm text and the encoder and
+  binder an ECMA-335 blob with BCL type references, the strength and fallback kind (5.11.5), and the mscorlib-safe flag.
+  The printer's `-S` text, the encoder, msil-ld's request list and the built-in table all come from it.
+- A request outside the table is: `.NET member '<signature>' is not in msil-ld's built-in mscorlib table; pass
+  --reference=<reference assemblies>`.
+- `msil/utils/check-mscorlib-safe.py --msil-ld <path> --out <dir>`: writes an ILAsm probe that touches every line of
+  `msil-ld --print-bcl-table` through `[mscorlib]`, assembles it, and runs it on .NET Framework 4.8, .NET 8, .NET 10 and
+  WSL .NET 10; it fails on any TypeLoadException or MissingMethodException (the method of bcl-binding's
+  `mscorlib_safe.py`). Run by `msil/test/M2/05-refs/mscorlib-safe.test` (`%msil_check_mscorlib_safe`, 5.12.3) in
+  every gate from M21.
+
+#### 5.11.8 `-S`, objects and LTO text
+
+`-S` and llc keep printing `[mscorlib]` scopes from the built-in table (bcl-binding 5.11; Phase 1's runnable `-S`
+contract, Q5). Objects carry unbound requests (5.8). `--lto-emit-asm` text is never bound: it prints `[mscorlib]`
+scopes; with `--reference`, msil-ld still loads and checks the references (same diagnostics) and the O3/O4 comparisons
+in the reference legs normalize scopes (5.12.6).
+
+#### 5.11.9 Diagnostics (bcl-binding 4.5)
+
+- `the references contain no core library (an assembly that defines System.Object and references no other assembly); given: <list>`
+- `the references mix two core libraries: <identity> (<path>) and <identity> (<path>)`
+- `type '<Ns.Type>' is defined in two references: <identity> (<path>) and <identity> (<path>)`
+- `type '<Ns.Type>' is forwarded by <identity> to <assembly>, which is not among the references`
+- `type '<Ns.Type>' is not defined in the references (<n> assemblies)`
+- `undefined .NET member '<signature>' (requested by <file>[ for <switch>]); '<Ns.Type>' is defined in <identity> (<path>) but has no such member; overloads present: <list>`
+- `references <path> (<identity>) and <path> (<identity>) have the same name but different versions or keys`
+- warning `<path> has the same identity as <path> (<identity>); using the first`
+- warning `<path> is not a reference assembly; binding '<Ns.Type>' to <identity> ties the output to one runtime build`
+- warning `<path> is a library built by this toolchain; pass it as a link input instead` (under `--reference`, 5.11.1)
+- M21 only: `<path>: linking .NET libraries built by this toolchain is not supported yet` (5.11.1; M22 links them)
+- M22 (toolchain-built inputs, bcl-binding 5.9): `<library> references <name> <version>, newer than the reference <version>` (error); `<library> references <name>, which is not among the references` (warning).
+
+#### 5.11.10 Test legs and lit tests
+
+- `lld/test/MSIL/bcl-*.test` over small synthetic reference sets assembled with ilasm (forwarders, ambiguity, duplicate
+  identities, two core libraries, missing members, modreq copying, nested and generic types), plus fake core libraries
+  built offline as checked-in binaries with their generator (an ilasm-built non-`mscorlib` core library gets an
+  AssemblyRef, bcl-binding 7.5).
+- lit parameter `msil_references` (5.12.2) and legs:
+
+| Leg | Value | Runs on | Expectation |
+|---|---|---|---|
+| (every leg) | `none` | .NET 8, .NET 10, Framework, WSL | as Phase 1 (built-in table) |
+| `refs-net48` | `C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8` | .NET 8, Framework | runs; O3 with `scopes` normalization equals the no-reference build |
+| `refs-net8` | `<dotnet>\packs\Microsoft.NETCore.App.Ref\<newest 8.x>\ref\net8.0` | .NET 8, .NET 10 (and WSL) | runs; AssemblyRefs `System.Runtime`, `System.Runtime.InteropServices`, `System.Threading` 8.0.0.0; a Framework run is the expected FileNotFoundException (one negative test) |
+| `refs-net10` | the newest 10.x pack, `ref\net10.0` | .NET 10 | runs; one negative test on .NET 8 |
+
+Every `refs-*` leg runs with `msil_pipeline=obj` (`asm` has no link, and `msil_references` other than `none` with `asm`
+is a configuration error): `refs-net48` adds `msil_equiv=1 msil_run_netfx=1`, `refs-net8` `msil_dotnet_runtime=8`,
+`refs-net10` `msil_dotnet_runtime=10` (5.12.11). Tests that need a pack independent of the leg use
+`%{msil_ref_dir_net48}`, `%{msil_ref_dir_net8}` or `%{msil_ref_dir_net10}` with the feature `msil-refpack=<name>`, and
+`mscorlib-safe.test` uses `%msil_check_mscorlib_safe` (5.12.3).
+
+PEVerify cannot load outputs bound to .NET 8+ references (bcl-binding 3.5): in `refs-net8` and `refs-net10`,
+`msil-verify.py --skip-peverify "bound to .NET <n> references"` runs ILVerify against the pack and skips PEVerify; the
+same programs' PEVerify runs in every other leg.
+
+### 5.12 Phase 2 test harness and gates
+
+Sources: tests-p2 1-7; backlog 3-4, 9; brief Q29-Q33, Q38-Q39; plan 5.5 (its rules hold for every new execution
+test).
+
+#### 5.12.1 Pipelines
+
+lit parameter `msil_pipeline` (feature `msil-pipeline=<p>`): `asm` (default until M23), `lto` (M14 on), `obj` (M20 on;
+the default from M23, Q31).
+
+| Composite | `asm` | `lto` | `obj` |
+|---|---|---|---|
+| `%{msil_c}` (one C file) | Phase 1: `-S`, `ilasm -dll`, verify, jitall, run | `%{msil_prog}` with the one source | `%{msil_prog}` with the one source |
+| `%{msil_ll}` (one IR file) | Phase 1 (llc text) | Phase 1 (llc text) | `llc -filetype=obj`, link, as `%{msil_prog}` |
+| `%{msil_prog}` (multi-TU) | as `lto` before M20, as `obj` from M20 (no text linker) | `clang -flto -c` per source, link through the driver | `clang -c` per source, link through the driver |
+
+The feature `msil-prog-pipeline=<p>` (5.12.2) names the column that `%{msil_prog}` actually uses: under `asm` it is
+`lto` before M20 and `obj` from M20. A check that depends on how `%{msil_prog}` builds (LTO-only or object-only
+diagnostics and warnings, `--lto-emit-asm` text, `--check-prefix=LTO`/`OBJ` blocks) is guarded by
+`%if msil-prog-pipeline=<p>` or `REQUIRES: msil-prog-pipeline=<p>`, never by `msil-pipeline=<p>`, which decides only
+`%{msil_c}` and `%{msil_ll}` (their `ASM` checks stay under `%if msil-pipeline=asm`).
+
+Link output (parameter `msil_link_output`, feature `msil-link-output=<x>`): `il` until M20 (msil-ld `--lto-emit-asm`,
+then `ilasm -exe`; `lto` only), `pe` from M20 (msil-ld writes the image; `obj` is always `pe`). A program is always
+`prog.exe` (an EXE image runs under `dotnet exec` and on Framework, Q19), so one file serves every runtime.
+
+#### 5.12.2 lit parameters and features (additions to `msil/test/lit.cfg.py`)
+
+| Parameter | Values | Feature | Milestone | Meaning |
+|---|---|---|---|---|
+| `msil_pipeline` | `asm`, `lto`, `obj` | `msil-pipeline=<p>` | M14 | 5.12.1 |
+| `msil_link_output` | `il`, `pe` | `msil-link-output=<x>` | M14 | 5.12.1 |
+| (derived from `msil_pipeline`) | `lto`, `obj` | `msil-prog-pipeline=<p>` | M14 | the pipeline `%{msil_prog}` actually uses (5.12.1, which gives the guard rule): `lto` under `msil_pipeline=lto` and, before M20, under `asm`; `obj` under `msil_pipeline=obj` and, from M20, under `asm`. M20's harness role switches it together with the `asm` expansion of `%{msil_prog}`, and its `harness/prog/` self-tests pin both; M14.f, M15.e, M20.g and M22.f guard their `%{msil_prog}` checks with it |
+| `msil_equiv` | 0/1 | `msil-equiv` | M20 | O3, O4, O6 inside the composites (5.12.6) |
+| `msil_scale_tests` | 0/1 | `msil-scale-tests` | M20 | tests at the real CLR limits are `REQUIRES: msil-scale-tests` (in Phase 2 only `msil/test/M2/00-link/spill-limits.test`: 65,600 functions and 65,600 globals at -O0, one level). Only `lit-legs.ps1`'s `obj` leg sets it (from M23 its `net8` leg), on Windows, so `run-m1-gate.ps1` after M20's commit and M23's gate build it once; the M20 gate leaves the leg's M2 half, and with it `spill-limits`, to that post-commit run; `obj-wsl`, `lto`, `lit-legs.sh` and `net8` before M23 never set it |
+| `msil_ld`, `msil_ar`, `msil_nm`, `msil_cil_dump` | paths (default `<build>/bin/...`; never the VS `llvm-ar`, which cannot index LLVM 24 bitcode) | `msil-ld`, `msil-ar`, `msil-cil-dump` | M14, M17 | tools (`%msil_cil_dump` from M17, 5.12.3) |
+| `msil_mdcanon` | a directory; unset: `<build>/tools/msil/mdtools`, which lit builds on configuration with `build-mdtools.py`, as it builds jitall; empty: disabled | `msil-mdcanon` | M16 | `%msil_mdcanon` (5.12.3); a failed mdtools build is fatal under `msil_require_verify=1`; the host's dotnet runs mdcanon, also when `msil_runner=wsl` |
+| `msil_references` | `none`, `net48`, `net8`, `net10`, a path | `msil-ref=<name>` | M21 | `-Wl,--reference=<dir>` on every link (`%{msil_ref_flags}`); a value other than `none` with `msil_pipeline=asm` is a configuration error (asm has no link); O3 then runs with `--allow scopes` (5.12.6) |
+| `msil_linux_sysroot` | directory (default `$MSIL_LINUX_SYSROOT`, else `C:\llvm-msil-scratch\linux-sysroot` if present; `/` on the Linux CI job) | `msil-linux-sysroot`; with `ld.lld`: `msil-linux-oracle` | M12 | E7 oracle (5.12.8); `--sysroot` for Linux links from M15 |
+| `msil_wsl_dotnet` | `private` or an absolute WSL path | | M12 | WSL dotnet host (5.12.8); default `private` when installed, else `command -v dotnet` with a note |
+| `msil_native_rtlib` | path or `auto` | `msil-native-rtlib` | M12 | `clang_rt.builtins-x86_64.lib` for the Windows native oracle (`auto`: the VS clang's) |
+| `msil_corpus_dir` | directory (default `$MSIL_CORPUS_CACHE`, else 5.12.9's default cache) | `msil-corpus`, `msil-corpus-<name>` | M23 | enables `msil/test/Programs`: `msil-corpus` only when `<cache>/msil-corpus.stamp` matches the checked-in manifest, `msil-corpus-<name>` only for the trees the stamp lists (5.12.9) |
+| `msil_corpus_skip` | comma list of manifest names (default empty; lit-legs passes `$MSIL_CORPUS_SKIP`) | | M23 | entries left out on purpose: under `msil_require_corpus=1` an entry the stamp lacks is fatal unless named here, and its tests are then UNSUPPORTED with a note |
+| `msil_also_run` | comma list of `<major>` or `<major>+tc0` | `msil-also-run` | M23 | after the main run every composite repeats jitall and the run once per entry with that runtime's runtimeconfig (plus `DOTNET_TieredCompilation=0` for `+tc0`) against the same expected file; a runtime the runner lacks is fatal under `msil_require_exec=1`; Framework stays `msil_run_netfx` |
+| `msil_require_link`, `msil_require_corpus` | 0/1 | | M14, M23 | missing tool or cache is a configuration error, as `msil_require_exec` (`msil_corpus_skip` names corpus entries left out on purpose) |
+| `msil_require_csc` | 0/1 | `msil-csc` (when the newest SDK's csc is found) | M22 | `%msil_csc` (5.12.3); a missing csc is a configuration error |
+| `msil_glibc_sysroot` | directory (default `$MSIL_GLIBC_SYSROOT`, else `C:\llvm-msil-scratch\glibc-sysroot` when it holds `usr/include/stdio.h`) | `msil-glibc-sysroot`; `msil-ucrt-headers` when `INCLUDE` holds `corecrt.h` (5.12.8) | M15 | optional hosted compile-only leg (Q16); an explicitly given value without `usr/include/stdio.h` is a configuration error, so the hosted leg cannot pass by skipping |
+
+`%{msil_cflags}` becomes `-std=gnu17 -ffreestanding -Werror=return-type -I<Inputs>` in M12 (backlog 3.4).
+
+#### 5.12.3 Substitutions and composites
+
+| Name | Expands to | Milestone |
+|---|---|---|
+| `%msil_ld` | msil-ld under `msil-run.py --tool` limits | M14 |
+| `%msil_ar`, `%msil_nm`, `%ld_lld`, `%lld_link` | the tree's tools (VS `ld.lld`/`lld-link` before M13) | M12/M14 |
+| `%msil_prog_build` | `msil-prog.py` with tool paths, triple, `%{msil_cflags}`, `%{msil_ldflags}` (5.12.4) | M14 |
+| `%{msil_srcs}` | default `%s` | M14 |
+| `%{msil_stock_srcs}` | default empty; sources that the tree's clang compiles for the native triple with `-flto -c` (plus `-fno-ms-volatile` on windows-msvc) in MSIL mode (stock-clang bitcode, Q12, with a native oracle), and as ordinary sources in native mode (`msil-prog.py --stock-src`) | M14 |
+| `%{msil_archives}` | default empty; `NAME=SRC[,SRC...][;NAME=...]`, one archive per name, each built in its own directory | M14 |
+| `%{msil_libs}` | default empty; extra link arguments after the objects and archives, MSIL link only (the native oracle gets `%{msil_native_libs}`) | M14 |
+| `%{msil_native_libs}` | default empty; native link arguments used by both the MSIL and the oracle build | M15 |
+| `%{msil_deps}` | default empty; files copied next to the program for verify, jitall and run | M15 |
+| `%{msil_glibc_sysroot}` | the `msil_glibc_sysroot` directory (5.12.2, 5.12.8) | M15 |
+| `%{msil_ldflags}` | harness link flags: `-nodefaultlibs` in M14 only; from M15 no `-nodefaultlibs` and `--sysroot=<msil_linux_sysroot>` on Linux triples; from M21 also `%{msil_ref_flags}` | M14 |
+| `%{msil_ref_flags}` | `-Wl,--reference=<dir>` per `msil_references`, else empty | M21 |
+| `%{msil_ref_dir_net48}`, `%{msil_ref_dir_net8}`, `%{msil_ref_dir_net10}` | the reference-pack directories of 5.11.10's legs (the Framework `v4.8` reference directory, on Linux the net48 NuGet package's `build/.NETFramework/v4.8`; the newest `Microsoft.NETCore.App.Ref` 8.x and 10.x `ref/net<N>.0`), for tests that need an explicit pack whatever the leg; features `msil-refpack=<name>` when found | M21 |
+| `%{msil_shlibs}` | default empty; `[?]NAME=SRC[,SRC...][;...]`: shared libraries that `msil-prog.py --shlibs` builds before the program, for the MSIL build and the native oracle (`?NAME` builds an interface only, `--interface-only`) | M22 |
+| `%{msil_copts}` | default empty; extra compile flags for both builds of `%{msil_prog}` and `%{msil_det}` | M23 |
+| `%{msil_expect}` | the `--expect` stem of every composite, default `%S/%{s:stem}` | M23 |
+| `%{msil_prog}`, `%{msil_prog_O0}` ... `%{msil_prog_Oz}` | per level: build in a fresh `%t.<L>.d`, `%msil_verify`, `%msil_jitall`, `%msil_exec --expect %{msil_expect}` (`%S/%{s:stem}` before M23), then the `%if` legs: roundtrip (O2), equiv (O3/O4 on the `--equiv-out` image, O6 on the run image; 5.12.6), native oracle, netfx; under `msil_also_run` (M23) jitall and the run repeat once per entry | M14 |
+| `%{msil_prog_fail_O0}` ... `%{msil_prog_fail_Oz}` | `not` + the build at that level, for diagnostics checked with FileCheck and `--implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"` | M14 |
+| `%{msil_det}` | `%msil_prog_build --det` at -O2 (5.12.4) | M14 |
+| `%msil_mdcanon` | the host dotnet plus `mdcanon.dll` from parameter `msil_mdcanon` (5.12.2) | M16 |
+| `%msil_cil_dump` | `llvm-cil-dump` from parameter `msil_cil_dump` | M17 |
+| `%msil_canon` | `%msil_cil_dump --canonical` when the feature `msil-cil-dump` is present (M17 on), else the `%msil_mdcanon` command | M16 |
+| `%msil_equiv` | `msil-equiv.py --canon "%msil_canon" --allowed msil/utils/equiv-allowed.txt` | M20 |
+| `%msil_check_mscorlib_safe` | `python msil/utils/check-mscorlib-safe.py --msil-ld <msil-ld>` (5.11.7) | M21 |
+| `%msil_csc` | `python msil/utils/jitall/build-jitall.py --csharp` (feature `msil-csc`, parameter `msil_require_csc`) | M22 |
+| `%{msil_corpus}` | the corpus cache directory | M23 |
+
+Placeholder names are never substrings of other substitution names (lit's `REDEFINE:` rule, tests-p2 2.6).
+`%{msil_cflags}` stays a placeholder inside the composites, so a directory may redefine it (c-testsuite, 5.12.9). The
+harness self-tests `msil/test/harness/canon-listing.test` (M16; from M17 it requires `msil-cil-dump`) and
+`canon-agree.test` (M17) pin `%msil_canon` and `%msil_mdcanon`.
+
+#### 5.12.4 Scripts
+
+- **`msil/utils/msil-prog.py`** (M14): `--mode msil|native`, `--pipeline lto|obj`, `--link-output il|pe`, `--level <L>`,
+  `--triple <t>`, `--clang`, `--ar`, `--ilasm "<cmd>"`, `--ld-lld`, `--linux-sysroot`, `--start <start.c>`,
+  `--cflags "<f>"`, `--ldflags "<f>"`, `--src <file>` (repeatable), `--stock-src <file>` (repeatable;
+  `%{msil_stock_srcs}`), `--archives "<spec>"`, `--lib "<args>"` (repeatable), `--workdir <dir>`, `--out <file>`,
+  `--also-il <file>` (`lto` with `pe`: also write the same link's `--lto-emit-asm` text, the text side of O4),
+  `--equiv-out <file>` (M20; 5.12.6: after the main link, link the same inputs again with `-Wl,--no-gc-sections` added
+  and write that image to `<file>`; under `obj` the objects and archives are reused, under `lto` the bitcode is linked
+  again), `--equiv-skip <file> --test <path>` (M20: when the file has a `skip` line (5.12.6) covering the test for the
+  oracle that build feeds, it builds neither the equivalence link nor the `--also-il` text), `--shlibs "<spec>"` (M22;
+  `%{msil_shlibs}`), `--det`. It compiles each source with `-c` (plus `-flto` in `lto`) and each stock source with the
+  tree's clang for the native triple with `-flto -c` (plus `-fno-ms-volatile` on windows-msvc; an ordinary source in
+  native mode), builds each archive with `llvm-ar rcs` in `<workdir>/ar/<NAME>/`, links through the clang driver
+  (`-Wl,--lto-emit-asm -o prog.il` then `ilasm -exe` in `il` mode), and prints every command. `--mode native` builds the
+  same program for the native triple: on Windows with `-fuse-ld=lld` (and `msil_native_rtlib`), for a Linux triple with
+  the E7 recipe. `--shlibs` builds the libraries of `[?]NAME=SRC[,SRC...][;...]` in order before the program, each
+  linked against those built before it with the program's `--cflags` and `--ldflags`: in MSIL mode `clang -shared` into
+  `<workdir>/shlib/NAME.dll` (an interface `?NAME` with `-Wl,--interface-only` into `shlib-iface/`); natively on Windows
+  `-shared -fuse-ld=lld` (an interface through `-Wl,/force:unresolved`, *unverified*, fallback `llvm-lib /def:`);
+  natively on Linux `ld.lld -shared -Bsymbolic -soname libNAME.so`, with `-rpath '$ORIGIN'` on the program. `--det`
+  builds twice, in `<workdir>/a` and `<workdir>/b`, from relative paths with `-fdebug-compilation-dir=.`, and compares
+  every object, archive and output byte for byte (in `il` mode the objects, archives and the `--lto-emit-asm` text, not
+  ilasm's image, which ilasm stamps; with `--shlibs` the libraries too). Exit 0 only on success.
+- **`msil-run.py`** (M15): `--dep FILE` (repeatable) and `--dep-dir DIR`, copied next to the program in the private
+  directory (local and netfx runners) and into the WSL temporary directory.
+- **`msil-verify.py`**: `--dep FILE` (M15; ILVerify `-r`, copied next to the assembly for PEVerify),
+  `--md-baseline FILE` (M20; O6), `--skip-peverify REASON` (M21; prints `PEVerify skipped: REASON`), `--dep-dir DIR` and
+  `--also-verify-deps` (M22: every assembly in DIR as ILVerify `-r` and copied next to the assembly for PEVerify;
+  `--also-verify-deps` verifies each of them too).
+- **`msil-jitall.py`** (M15): `--dep FILE`, copied next to its private copy; `--dep-dir DIR` (M22).
+- **`update-expected.py`**: M12 adds the Linux oracle (`--os linux` writes `<stem>.linux.expected` when the Linux
+  transcript differs) and `clang_rt` for Windows; M14 handles `%{msil_prog*}` tests (split-file into a temporary
+  directory, read the `REDEFINE:` values with `%s`, `%S` and `%t` replaced, build with `msil-prog.py --mode native`).
+  M22 builds `%{msil_shlibs}` tests natively; M23 adds `--corpus-dir DIR` and the placeholders `%{msil_copts}` and
+  `%{msil_expect}`.
+- **`msil-equiv.py`** (M20, stdlib only): `--canon "<cmd>" --allowed <file> [--allow NAME]... [--oracle O3|O4] [--test
+  <path>] A B`. It runs `<cmd>` on A and on B with the dumper options of every `--allow` name appended (5.12.6; a name
+  that is not an entry of the file is a usage error, exit 2), diffs the two listings and exits 1 with the first 40
+  differing lines, 0 when they are equal. With `--test <path>` and a `skip <oracle> <path> <reason>` line whose oracle
+  is the `--oracle` value (default O3) and whose path is the test's (repository-relative) or, ending in `/`, a directory
+  above it, it prints `<oracle> skipped: <reason>` and exits 0 without dumping (5.12.6).
+- **`msil/utils/il-snapshot.py`** (M15; M18, M20), run from the repository root: `python msil/utils/il-snapshot.py
+  --build <dir> --out <dir> [--compare <dir>] [--exclude <path>]... [--jobs N] [--normalize forms] [--llc-arg <arg>]...
+  [--skip-changed] <paths>`. It compiles the `.c` files (`clang -S` with `%{msil_cflags}`) and the `.ll` files (llc;
+  each split-file part separately, from its own directory under a relative name) under `<paths>` that
+  `git ls-tree -r --name-only HEAD` lists, minus each `--exclude` (a directory excludes its subtree), at -O0 and -O2 for
+  x86_64-pc-windows-msvc-msil and x86_64-unknown-linux-gnu-msil and at -O2 for x86_64-w64-windows-gnu-msil and
+  x86_64-unknown-linux-musl-msil, into `<out>/<triple>/<level>/<path>.il` and `.err` (stderr and exit status; `--out` is
+  emptied first). `--compare` lists every differing, missing or extra file and exits 1; usage errors exit 2. M18 adds
+  `--normalize forms` (both sides: short branches become long ones; `ldc.i4.m1`, `ldc.i4.<n>` and `ldc.i4.s <n>` become
+  `ldc.i4 <n>`; `nomangle cdecl` becomes `cdecl`). M20 adds `--llc-arg <arg>` (repeatable; appended to every llc command
+  and, as `-mllvm <arg>`, to every `clang -S`) and `--skip-changed` (leaves out, and lists, every input under the roots
+  that `git status --porcelain --untracked-files=all` reports against HEAD). Gates: M15 (`--exclude
+  llvm/test/CodeGen/MSIL/imports-linked.ll`), M18 (`--normalize forms`), M19 (`msil/test/M1`), M20
+  (`--llc-arg=-msil-reloc-loop-threshold=1000000000 --skip-changed`); each compares with a HEAD baseline that a WP of
+  the milestone writes with the shared build before the milestone's build (M15.c, M18.f, M19.b, M20.f; section 11).
+- **`msil/utils/check-il-forms-diff.py`** (M18, stdlib): `[--repo DIR] [--base REV] <path>...` or `--self-test`; exit 0,
+  1 or 2. It reads `git diff -U0 <base>` for the modified `.ll`, `.c`, `.s`, `.test` and `.expected` files under the
+  paths (split-file parts included) and accepts a hunk only when it removes and adds equally many lines that are equal
+  after `--normalize forms` (applied to CHECK patterns too, `{{...}}` regex parts left alone), or its changed lines are
+  comment prose without `RUN:` or a CHECK prefix (leaders `;`, `//`, `#`), or it only removes CHECK-NOT lines that name
+  a short form; added or deleted files fail. M18's gate runs it over `llvm/test/CodeGen/MSIL`,
+  `clang/test/CodeGen/MSIL`, `lld/test/MSIL` and the update_llc_test_checks Inputs (5.12.13).
+- **`msil/utils/mdtools/build-mdtools.py`** (M16, 5.7.11) builds `mdump` and `mdcanon` offline;
+  **`msil/utils/jitall/build-jitall.py`** is unchanged until M22, whose harness adds `--csharp SRC --out EXE
+  [--reference DLL]... [--refs net8|net48] [--unsafe]` (the C# consumer of `M2/04-shared`, `%msil_csc`).
+
+#### 5.12.5 Layout
+
+```text
+msil/test/M2/lit.local.cfg     UNSUPPORTED without msil-exec and msil-ld; fatal under msil_require_link=1
+msil/test/M2/00-link/          multi-TU: calls, function pointers, data relocations, statics, weak, inline, common,
+                               ctor priorities, by-value structs, K&R across TUs, main in a later object (M14; obj M20)
+msil/test/M2/01-archive/       lazy extraction, data-only members, --whole-archive, --start-lib/--end-lib,
+                               same-named members, archive cycles, -Bstatic/-Bdynamic (M14, M15)
+msil/test/M2/02-lto/           stock-clang bitcode (Q12), mixed bitcode and objects (M20), --lto-O levels, ThinLTO (M20)
+msil/test/M2/03-native/        native imports (M15), data imports (M20)
+msil/test/M2/04-shared/        -shared libraries, assembly-to-assembly links, the C# consumer (M22)
+msil/test/M2/05-refs/          reference binding, mscorlib-safe.test (M21)
+msil/test/M2/06-det/           determinism: --lto-emit-asm text (M14), objects, archives and PE (M20)
+msil/test/M2/07-equiv/         explicit O3/O4 checks (M20)
+msil/test/M2/08-semantics/     the link-semantics matrix (5.12.7; M14 LTO path, M20 object path)
+msil/test/M2/09-hosted/        optional compile-only hosted leg (Q16; M15)
+msil/test/Programs/            the exit corpus (5.12.9; M23)
+msil/test/harness/             self-tests of --dep, msil-prog.py (prog/), %{msil_det}, msil-equiv.py, the equivalence
+                               link and each allow-list entry (equiv/)
+```
+
+Test format (from tests-p2 4.3): a `.test` file with `split-file` sources, `REDEFINE:` lines and one `%{msil_prog}` RUN
+line; `<stem>.expected` generated by `update-expected.py` (Windows native oracle), `<stem>.linux.expected` only where
+the E7 Linux oracle differs; plan 5.5's rules (freestanding, `msil_test.h`, UB-free, the same at every level, exit
+0..255, D37). A test that builds its own native library uses `%clang_native` with `%lld_link -dll -noentry
+-nodefaultlib` or `%ld_lld -shared -soname`, and passes it with `%{msil_deps}` (tests-p2 2.5).
+
+#### 5.12.6 Oracles (tests-p2 3.8)
+
+| Oracle | Comparison | From | Where |
+|---|---|---|---|
+| O1 | transcript against the native build (Windows oracle; E7 Linux oracle on WSL legs) | M14 | every composite |
+| O2 | ildasm -> ilasm -> ildasm of msil-ld output, listings equal, rerun (Design.md 5.5) | M20 | `msil-roundtrip` legs |
+| O3 | `canon(clang -c + msil-ld --no-gc-sections) == canon(clang -S + ilasm)`, single TU | M20 | `%{msil_c}`/`%{msil_ll}` under `obj` with `msil_equiv=1` |
+| O4 | `canon(msil-ld LTO PE, --no-gc-sections) == canon(ilasm(msil-ld --lto-emit-asm))`, multi TU | M20 | `%{msil_prog}` under `lto` with `msil_equiv=1` |
+| O5 | D21 verification and jitall of msil-ld output | M14 (ilasm'd text), M20 (PE) | every composite |
+| O6 | PEVerify `/md` messages of the msil-ld output (the image that runs) are a subset of the ilasm build's | M20 | with O3 |
+| object oracle | `canon(object) == canon(ilasm(object-form text))`, the object from `clang -c` or `llc -filetype=obj` | M19 | `cli-corpus-check.py --mode object`, `llvm/test/CodeGen/MSIL/object-form-text.ll` |
+
+**The equivalence link.** O3 and O4 compare an image that `msil-prog.py --equiv-out` links with `-Wl,--no-gc-sections`
+(5.12.4), never the image that is verified and run, which keeps msil-ld's default `--gc-sections` (5.9.11) so that every
+leg runs the default link. `-S` and `--lto-emit-asm` keep every function and global that codegen emitted, the default
+link drops the unreferenced ones, and a `--lto-O0` link runs no GlobalDCE; without the separate link, every single TU
+with an unreferenced external function or global and every -O0 LTO program with dead code would differ in methods,
+fields, image size and `.cctor` stores. Cost: one more msil-ld link per composite and level under `obj` (the objects
+are reused) and one more LTO link under `lto`.
+
+**Normalizations.** Every entry of `msil/utils/equiv-allowed.txt` is a dumper option of canonical listing v1. These
+option spellings are fixed here; 5.7.10 lists them in `llvm-cil-dump`'s usage line and in `cli::CanonicalOptions`
+(`IgnoreAssemblyHash`, `DropParams`, `IgnoreInitLocalsWithoutLocals`, `QuietSignalingNaN`, `StripPInvokeModule`,
+`IgnorePInvokeAccess`, each `false` by default; `--scopes=strip` is `StripScopes`), 5.7.11 in `mdcanon`, and both
+dumpers implement them byte-identically (`mdcanon` in M16, `llvm-cil-dump` in M17). Each option's default (`keep`) is
+canonical listing v1 unchanged. They apply while the listing is produced, before sorting, so 5.7.10's order rules see
+the normalized text. M17's `cli-corpus-check.py --mode dumpers` compares the two dumpers once with the defaults and once
+with every option below turned on.
+
+| Entry | Option | Effect on the listing | Why | Allowed in |
+|---|---|---|---|---|
+| `assembly-hash` | `--assembly-hash=ignore` | the `assembly` header line prints `hash=*` | msil-ld writes HashAlgId SHA1 0x8004 (5.9.12, as Roslyn), ilasm 0 (metadata-writer 2) | O3, O4 |
+| `ilasm-params` | `--params=drop` | no `.param` line for a Param row with Flags 0, no FieldMarshal row and no Constant row, whatever its name and sequence | ilasm adds one Param row per parameter (`A_<n>` when unnamed, the text's name otherwise, `args` on the entry point, `A_0` on P/Invoke stubs); codegen and msil-ld write none (M22's exported methods get `A_<i>` rows with Flags 0, dropped alike) | O3, O4, object oracle |
+| `ilasm-initlocals` | `--initlocals=ignore-without-locals` | a body whose LocalVarSigTok is 0 prints `.maxstack <n>` without ` initlocals`; bodies with a local signature are unchanged | ilasm sets InitLocals (header byte 0x13) on every body without `.locals`; codegen and msil-ld never set it (D13), and `-S` prints `.locals` without `init` | O3, O4, object oracle |
+| `snan-quiet` | `--snan=quiet` | an operand `float32(0x<8X>)` holding a signaling NaN (exponent bits all ones, fraction nonzero, bit 22 clear) prints with bit 22 set; float64 operands, Constant blobs and data bytes are unchanged | both ilasms quiet float32 signaling-NaN constants, the writers keep the bits, ilasm keeps float64 ones (metadata-writer 3.4, mc-streamer E4) | O3, O4, object oracle |
+| `pinvoke-module` | `--pinvoke-module=strip` | `.pinvokeimpl '<module>'` prints `.pinvokeimpl '*'`; `moduleref` header lines are omitted (`[.module <m>]` TypeRef scopes are unchanged) | `-S` binds through the frozen D14 table, msil-ld through native libraries with Q13 module strings (5.10.11, 5.10.13) | O3 |
+| `pinvoke-access` | `--pinvoke-access=ignore` | the `flags=` of a method with PinvokeImpl (0x2000) prints with MemberAccess (0x0007) cleared | `-S` prints D14 P/Invokes `public`, msil-ld writes `assembly` (5.10.11) | O3 |
+| `scopes` | `--scopes=strip` (5.7.10) | AssemblyRef scopes print `[*]`; `assemblyref` lines are omitted | `-S` and `--lto-emit-asm` print `[mscorlib]`, reference legs bind to the packs (5.11.8) | O3, O4, when `msil_references` is not `none` |
+
+**What each comparison allows.** O3: `assembly-hash ilasm-params ilasm-initlocals snan-quiet pinvoke-module
+pinvoke-access`, plus `scopes` in the reference legs. O4: `assembly-hash ilasm-params ilasm-initlocals snan-quiet`
+(linked text and msil-ld bind P/Invokes alike: Q13 modules, `assembly` access, M15), plus `scopes` in the reference
+legs. The object oracle runs in M19, before msil-equiv.py exists: `cli-corpus-check.py --mode object` and
+`object-form-text.ll` dump both sides with `--params=drop --initlocals=ignore-without-locals --snan=quiet` (the entries
+`ilasm-params`, `ilasm-initlocals` and `snan-quiet`); an object has no Assembly row, and both sides print the same
+stubs on `msil.unresolved`. O3 starts in M20, after M18 made `-S` print `nomangle cdecl` (5.10.11), so ImplMap flags
+and entry names compare exactly. Encoding forms are compared exactly (the printer and the encoder share one expansion,
+Q26); `.maxstack`, locals, EH clauses, data bytes and every operand must match.
+
+**`equiv-allowed.txt` format.** One entry per line, `<name> <option>[ <option>]... # <justification>`, with the names
+and option texts of the table above; `skip O3 <test path> <reason>` and `skip O4 <test path> <reason>` lines
+(repository-relative; a path ending in `/` covers its directory), honoured by `msil-equiv.py --oracle` and
+`msil-prog.py --equiv-skip` (5.12.4); lines starting with `#` are comments. msil-equiv.py takes the options from the
+file, so composites and tests pass names only. A `skip` line names a difference that no normalization removes: 5.8.10's
+remaining whole-program differences (M12's alias forwarding methods and `extern_weak` trap stubs; `M20/harness` adds the
+lines that M20's execution tests show), spill classes under O4 (`--lto-emit-asm` text has no per-type limit: `skip O4
+msil/test/M2/00-link/spill-limits.test`, M20), and from M22 every test that builds or links a `-shared` library, which
+has no `--lto-emit-asm` text (`skip O4 msil/test/M2/04-shared/` and the `msil/test/M2/08-semantics/p2c-*.test` files,
+`M22/harness`). The skipped tests stay in every other check; msil/test/README.md lists every line.
+
+**Self-tests** (`msil/test/harness/equiv/`, `M20/harness`): one per entry. Each builds a small pair A/B whose
+difference that entry removes, and runs it twice with every *other* entry allowed: once without the entry,
+`not %msil_equiv --allow <others> A B | FileCheck` on the expected first differing line, and once with it,
+`%msil_equiv --allow <others> --allow <name> A B`. Examples: `clang -c` + msil-ld against `-S` + ilasm of a function
+without locals (`ilasm-initlocals`) or with an unnamed parameter (`ilasm-params`); an `.ll` with an `ldc.r4` of a
+float32 signaling NaN (`snan-quiet`); two ilasm texts with and without `.hash algorithm 0x00008004`
+(`assembly-hash`). Also `no-gc-sections.test`: one TU with an unreferenced external function and an unreferenced
+external global; the default (`--gc-sections`) image against the ilasm build fails on the missing method and field
+with every entry allowed, and the `--equiv-out` image passes. And `unknown-name.test`: `--allow` of a name that is not
+in the file exits 2.
+
+#### 5.12.7 The link-semantics matrix (shared with 5.8 and 5.9)
+
+Location `msil/test/M2/08-semantics/`: the zoo of objfmt-binding-files/zoo, c-fidelity's `p1`-`p9`
+(judge-c-fidelity-files/probes) and the signature tests of judge-c-fidelity 6.5, later TLS and destructors, one `.test`
+each. tests-p2 3.1's plain multi-TU cases (`static-same-name`, `inline-comdat`, `byval-sret-xtu`,
+`knr-def-xtu`, `main-not-first`, `data-only-tu`) live in `msil/test/M2/00-link/`, the
+tier for plain multi-TU behaviour, one test per case and no duplicate here. Every case runs at -O0 and -O2 on both
+x86_64 triples, through LTO (M14) and objects (M20), and must either match its native transcript (`.expected` from the
+Windows oracle, `.linux.expected` from E7) or stop with the named diagnostic 5.9.16 assigns it, checked with
+`%{msil_prog_fail_<L>}` and FileCheck under `%if msil-prog-pipeline=<p>` (5.12.1, 5.12.2; never `%if msil-pipeline=<p>`,
+which decides only `%{msil_c}` and `%{msil_ll}`); a JIT-time exception (InvalidProgramException, MissingMethodException,
+EntryPointNotFoundException, TypeLoadException) is never an accepted outcome. 5.8/5.9 own the cases and their
+diagnostics; this subsection owns the place, the composites and the oracle.
+
+#### 5.12.8 Oracles and runtimes on this host (M12)
+
+- **E7 Linux oracle (Q33):** `msil/utils/linux-oracle/start.c` (a 20-line `_start` that runs `.init_array`, then
+  `exit(main(argc, argv))`), compiled with `clang --target=x86_64-unknown-linux-gnu -ffreestanding -fno-pic`; programs
+  linked by `ld.lld -dynamic-linker /lib64/ld-linux-x86-64.so.2 --as-needed start.o <objects> <sysroot>/libm.so.6
+  <sysroot>/libc.so.6 <sysroot>/libgcc_s.so.1` and run under WSL. `libgcc_s.so.1` is there because native i128 division
+  and conversion tests call `__udivti3`, `__fixdfti`, ..., which `libc.so.6` does not export and WSL's `libgcc_s.so.1`
+  does (checked 2026-10-21); `--as-needed` keeps it out of programs that do not use it.
+  `msil/utils/make-linux-sysroot.py --out <dir>` copies `libc.so.6`, `libm.so.6`, `libgcc_s.so.1` and
+  `ld-linux-x86-64.so.2` from the WSL distribution into `<dir>/usr/lib/x86_64-linux-gnu/` (and `<dir>/lib64/`) and
+  writes the scripts `libc.so` = `GROUP ( libc.so.6 )` and `libm.so` = `GROUP ( libm.so.6 )`; msil-ld uses the same
+  directory as `--sysroot` from M15. Git Bash callers set `MSYS_NO_PATHCONV=1`. `lit.cfg.py` enables
+  `msil-native-oracle` for `msil_runner=wsl` when the feature `msil-linux-oracle` is present (today it requires the
+  local runner, `lit.cfg.py:846-851`).
+- **Private WSL runtime (Q39):** `msil/utils/msil-wsl-dotnet.sh [--print-path]`, run inside WSL, installs the .NET
+  runtimes 8.0.31 and 10.0.13 (the versions in WSL on 2026-10-21; a later change is a section 12 row) with
+  `dotnet-install.sh --runtime dotnet --version <v> --install-dir "$HOME/.dotnet-msil" --no-path`, fetching the install
+  script into that directory; it changes no system setting (no `apt-mark`, no `sudo`). `msil_wsl_dotnet=private`
+  resolves to `$HOME/.dotnet-msil/dotnet` inside WSL. Installs are pre-approved (section 2).
+- **Windows oracle with compiler-rt:** `msil_native_rtlib=auto` links the VS clang's
+  `lib/clang/<ver>/lib/windows/clang_rt.builtins-x86_64.lib` into native builds (i128 tests, backlog 2.2).
+- **lit arguments through a response file:** `lit-legs.ps1` writes the `--param` pairs of a leg one per line into
+  `<build>/lit-results/<leg>.params.rsp` and passes `@<file>` (lit's `fromfile_prefix_chars`), so paths with blanks work
+  (backlog 3.5).
+- **Optional hosted leg (Q16, M15):** `msil/utils/make-glibc-sysroot.sh <dir>` (`apt-get download` of `libc6-dev`,
+  `linux-libc-dev`, `libc6`, `libgcc-s1`, unpacked with `dpkg-deb -x`, symlinks made relative, no root) into
+  `C:\llvm-msil-scratch\glibc-sysroot`; `msil/test/M2/09-hosted/` compiles hosted programs with
+  `--sysroot=%{msil_glibc_sysroot}` (feature `msil-glibc-sysroot`) and with UCRT headers when `INCLUDE` holds
+  `corecrt.h` (feature `msil-ucrt-headers`); compile-only, never a required leg. The script downloads only missing
+  packages, so G0 runs it in every gate from M15 (5.12.10).
+
+#### 5.12.9 The exit corpus (Q29, Q30; M23)
+
+- `msil/utils/corpus/manifest.json`: `{"version": 1, "programs": [{"name", "license", "url", "ref", "commit",
+  "archive_sha256"?, "tree_sha256", "strip", "files"?}]}`. `tree_sha256` is the SHA-256 of the sorted lines
+  `<sha256 of the file> <relative path>` of the extracted tree (GitHub archives are not byte-stable); `archive_sha256` pins
+  release tarballs. Pinned versions (tests-p2 5.1): zlib 1.3.2 (tag `v1.3.2`), tinf `57ffa1f1d5e3`, Monocypher 4.0.2
+  (release tarball), CoreMark `1f483d5b8316`, LZ4 1.10.0 (tag `v1.10.0`), BLAKE2 `ed1974ea8343`, TweetNaCl 20140427,
+  KISS FFT `2a1f13371`, jsmn `25647e692c79`, c-testsuite `5c7275656d75`. The M23 corpus WP records full 40-digit commits
+  and every hash, cross-checked against the abbreviated hashes of tests-p2 5.1.
+- `msil/utils/corpus/fetch.py [--cache <dir>] [--check] [--only N[,N...]] [--skip N[,N...]] [--list] [--self-test]`:
+  default cache `$MSIL_CORPUS_CACHE`, else `C:\llvm-msil-scratch\corpus-cache` (Windows) or `$HOME/.cache/msil-corpus`
+  (Linux); refuses a cache inside the repository; downloads only missing entries (about 7 MB), verifies every hash,
+  extracts to `<cache>/<name>-<ref>/`; `--check` verifies without network (exit 1 on anything missing or different).
+  Never vendored. The fetch is a gate step of M23 (user approval of 2026-10-21) and a CI step. After verifying the
+  selected entries it writes `<cache>/msil-corpus.stamp` (the sha256 of `manifest.json` and each selected entry's
+  `tree_sha256`; a failing `--check` removes it); lit enables `msil-corpus` only when the stamp matches the checked-in
+  manifest and `msil-corpus-<name>` only for the trees it lists (5.12.2). `--only` and `--skip` select entries, and a
+  run with a selection downloads, verifies and stamps only those. CI leaves CoreMark and c-testsuite out until the user
+  answers section 10 item 11: msil-ci.yml's `MSIL_CORPUS_SKIP: coremark,c-testsuite` goes to `fetch.py --skip` and,
+  through lit-legs, to `msil_corpus_skip` (5.12.12).
+- `msil/test/Programs/`: `lit.local.cfg` (requires `msil-corpus`; each program directory requires `msil-corpus-<name>`),
+  `support/` (the 7-member support library: arena allocator, `memcmp`/`memset`/`memcpy`/`strlen`, `puts` output),
+  `shim/` (shim headers used by both the MSIL and the native build), one directory per program with its driver, ports
+  (CoreMark's `core_portme.*`), `<name>.test` (built as a multi-TU program with static archives through
+  `%{msil_archives}` and its flags through `%{msil_copts}`) and `.expected`; `det/` (one `%{msil_det}` test per
+  program); `c-testsuite/` with `libc-free.txt` (the 150 libc-free tests) and a `lit.local.cfg` test format that yields
+  one lit test per listed name from `%{msil_corpus}`. Each line of `libc-free.txt` is `<name>` or
+  `<name> diag <text>  # <P3 item>`; a `diag` line is allowed only for a construct Phase 3 implements (a variadic
+  definition, P3-B; dynamic alloca, P3-A), for example `00140.c`, whose variadic definition LTO deleted at -O2 in the
+  recon (150 of 150 in tests-p2 2.4) but objects keep. The c-testsuite tests build with the recon's flags
+  (`%{msil_cflags}` redefined to `-std=gnu17 -w`, no `-ffreestanding`) against one shared expected file
+  (`exit0.expected` through `%{msil_expect}`); a `diag` name is built with `%{msil_prog_fail_<L>}` and FileCheck of
+  `<text>`.
+- Exit criteria per program (tests-p2 5.1): zlib's 12 round trips and checksums, CoreMark's CRC validation, BLAKE2's
+  keyed KATs (0 mismatches), Monocypher's self-checks, TweetNaCl equal on both triples; all at -O0 and -O2, both x86_64
+  triples, every runtime of the triple, through objects and through LTO.
+
+#### 5.12.10 Gates (Q32: 20-30 minutes per milestone, 70-90 minutes for M23; the build step is not counted)
+
+**Standard steps of every Phase 2 milestone gate** (estimates from the M11 leg times, tests-p2 1.3). The Phase 1
+coverage that stays in every gate is the whole `net8` leg (every Phase 1 FileCheck test, the harness and all of
+`msil/test/M1` at -O0 and -O2 on .NET 8 and Framework against the native oracle) and the WSL subset of G4.
+
+| Step | Command | Minutes |
+|---|---|---|
+| G0 | host setup, idempotent (seconds once done): `wsl -d Ubuntu -- bash msil/utils/msil-wsl-dotnet.sh`; `python msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot` (M12 on); from M15 `wsl -d Ubuntu -- bash msil/utils/make-glibc-sysroot.sh /mnt/c/llvm-msil-scratch/glibc-sysroot`, which downloads the pre-approved Ubuntu packages only when missing (no root) | <0.5 |
+| G1 | print D:'s free space; `msil-build.ps1 -Standard` from M13 on (the whole list of 5.6.11; M12: the M11 set by name) | build |
+| G2 | `MSILTests.exe`; `TargetParserTests.exe --gtest_filter=*MSIL*`; `MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*`; from M13 `msil-gtest.ps1 -Exe CLITests.exe -Filter '*' -NoSkip -MinTests <floor>` with the floor of 5.7.13 (26 in M13-M15, 110 in M16, 170 in M17-M19, 210 from M20), and from M22 a second step `msil-gtest.ps1 -Exe CLITests.exe -Filter 'CLISymbolTableTest.*' -NoSkip -MinTests 9`; M23 keeps both. A floor never goes down | ~1 |
+| G3 | `lit-legs.ps1 -Leg net8`: every MSIL FileCheck directory (llvm, clang, `lld/test/MSIL`, `llvm/test/MC/MSIL`, `llvm/test/tools/llvm-cil-dump`, `llvm/test/tools/llvm-cil-copy`, `clang/test/Driver/msil-*.c` as they appear) and `msil/test` (M1 asm, M2, harness) on .NET 8 and Framework with the native oracle required, `msil_require_verify=1`, `msil_require_exec=1`, `msil_require_link=1` (M14 on) | 9-11 |
+| G4 | `lit-legs.ps1 -Wsl -Leg wsl-quick`: `msil/test/M1/11-programs`, `msil/test/M2`, `msil/test/harness` on x86_64-unknown-linux-gnu-msil, WSL .NET 10 (private), E7 oracle | ~4 |
+| G5 | `upstream-hooks.ps1 -Leg manifest,pins`; the whole `upstream-hooks.ps1` when the milestone edits an upstream file | 0.3 (3) |
+| G6 | the milestone's test-presence check (M11 step 13's shape) | <0.5 |
+| G7, G8 | format check; `plan-check.py scope M<n>` | ~1 |
+
+Standard total: about 16-18 minutes; each milestone adds its own legs within the budget:
+
+| Milestone | Own legs | Total |
+|---|---|---|
+| M12 (changes IL: i128 expansion, byval slots) | `net10` (M1, 3.6), `wsl-net10` (all of M1) instead of `wsl-quick` (+2.7), `roundtrip` (1), `expected-linux` (new, ~2), full upstream-hooks (`CGStmt.cpp`) | ~29-31 (over 30 measured: `roundtrip` moves to the post-commit run) |
+| M13 | full upstream-hooks; `lld/test/MSIL` and the M13 hook tests in their own lit step (`lld/test/MSIL` joins `net8` in M14); the M13 gtest filters (`MSILMCObjectHooks.*`, `TripleTest.MSILIsCompatibleWith`, `CLIMSILLinkTest.*`, `LLDAsLibAllTests`) | ~24-27 |
+| M14 | `lto` (M1 and M2 on .NET 8, ~5), `det` (~1), full upstream-hooks (`Driver.cpp`) | ~28 (over 30 measured: `det`, then `wsl-quick`, move to the run after M15's commit) |
+| M15 | `lto` on `msil/test/M1/06-output` and `08-fnptr/fnptr-to-libm.c` on both triples (~3; `03-native` already runs in `net8` and `wsl-quick`); `expected` and `expected-linux` on the new M2 tests (~2); the `hosted` leg (~1); `il-snapshot.py --compare` (D14 frozen, 5.10.13; ~2); `lld/test/MSIL` with `RUN_LLD_MAIN_TWICE=1` (the native index is new lld global state, 5.9.1; ~1); G0 adds `make-glibc-sysroot.sh` | ~27-29 (over 30 measured: `expected-linux` moves to the post-commit run) |
+| M16 | `cli-corpus-check.py --mode ilasm` (~3) besides the CLI unit tests in G2 | ~21 |
+| M17 | `cli-corpus-check.py --mode dumpers`, `copy`, `stats` (~9; `dumpers` also with every 5.12.6 option on) besides the dumper lit tests in G3 | ~27-29 (over 30 measured: `wsl-quick` moves to the run after M18's commit) |
+| M18 (changes every IL text, Q26) | `wsl-net10` instead of `wsl-quick` (+2.7), `roundtrip` (1), `modern-ilasm` (0.7), `utc` (0.5), the encoder-parity leg (encoder equals ilasm on 2,670 methods, ~3), `il-snapshot.py --compare --normalize forms` (~3), `check-il-forms-diff.py` (<0.5); `net10` is not a gate step: it runs in the post-commit `run-m1-gate.ps1` after M18 | ~28-30 (over 30 measured: `roundtrip`, then `wsl-net10` (back to `wsl-quick`), move to the post-commit run) |
+| M19 | the object oracle over M1 (`canon(clang -c) == canon(ilasm(object-form text))` with `--params=drop --initlocals=ignore-without-locals --snan=quiet`, 5.12.6; leg `obj-text`, ~5), `obj-text-wsl` (~1), `il-snapshot.py --compare` over `msil/test/M1` against M19.b's HEAD baseline (~2; M19 changes PrepareIR, the prototype passes, LowerCall and the AsmPrinter, which whole-program text runs through), full upstream-hooks (`Clang.cpp`); no separate M19 lit step (`net8` runs the new tests) | ~27-30 (over 30 measured: the snapshot step, then `obj-text-wsl`, leave the gate, `obj-text-wsl` for a `run-m1-gate.ps1` run after M19's commit) |
+| M20 | the `obj` leg's parameters on `msil/test/M1` (`msil_equiv=1`: O3 on the `--no-gc-sections` equivalence link and O6; native oracle, netfx; ~7; the leg's M2 half, `spill-limits` included, repeats `net8`'s M2 and runs in the post-commit `run-m1-gate.ps1`), `obj-wsl` instead of `wsl-quick` (4.5), `det` (1), `il-snapshot.py --compare` over `msil/test/M1` and `llvm/test/CodeGen/MSIL` at `-msil-reloc-loop-threshold=1000000000` with `--skip-changed` against M20.f's HEAD baseline (2.5; with the loop out of reach every unchanged module prints its Phase 1 text), `lld/test/MSIL` twice, the two-object zoo on .NET 10 and WSL .NET 8, the no-ilasm and runtime checks (1); the O2 round trip on msil-ld outputs (`msil/test/M1/11-programs`, `msil/test/M2/07-equiv` under `obj`) runs right after the commit with the post-commit `run-m1-gate.ps1` (section 10 item 13) | ~29-31 (over 30 measured: the WSL .NET 8 zoo step, then `obj-wsl` (back to `wsl-quick`), move to the post-commit run) |
+| M21 | `refs-net48`, `refs-net8`, `refs-net10` (~2 each), `check-mscorlib-safe.py` (~1) | ~28 (over 30 measured: `refs-net10` moves to the post-commit run) |
+| M22 | `msil/test/M2/04-shared` and the P2-C rows inside G3/G4; their `DOTNET_TieredCompilation=0` run and the run bound to the net8 pack on .NET 10 (~4); `check-mscorlib-safe.py` (~1); `lld/test/MSIL` with `RUN_LLD_MAIN_TWICE=1`; an `lto` run with `msil_equiv=1` of one `04-shared` test and `p2c-cycle`, which proves the `skip O4` lines of 5.12.6 (~1) | ~29 (over 30 measured: the net8-pack run moves to the post-commit run) |
+
+**Moved out of the milestone gates** to `run-m1-gate.ps1` (unchanged script name; it runs every leg `lit-legs.ps1 -List`
+shows) and to M23: `net10`, `net8-tc0`, `more-levels`, `wsl-net10`, `wsl-net10-tc0`, `wsl-ilasm`, `modern-ilasm`,
+`roundtrip`, `expected` (M1), `expected-linux`, `utc`, upstream-hooks `lit`/`gtest`/`compile`, `ci-sh`, except where
+the table above names them. The orchestrator runs `run-m1-gate.ps1` in full (background, about 50-60 minutes, not a gate
+step) after the commits of M12, M15, M18 and M20 (M12 changes the IL of i128 division sites and byval calls in legs its
+gate skips: `net8-tc0`, `more-levels`, `wsl-net10-tc0`, `wsl-ilasm`, `modern-ilasm`, `utc`); a failure becomes a fix
+work package of the next milestone through a section 12 row. The gate agent records each step's measured minutes; if a
+gate's measured run exceeds 30 minutes, the steps its row above names leave the gate in that order, through a section
+12 row, for a post-commit `run-m1-gate.ps1` run.
+
+**M23 phase-exit gate (70-90 minutes):** `fetch.py --self-test`, `fetch.py --cache <cache>` (the approved download) and
+`--check` (all ten entries, never `--skip`); `run-m1-gate.ps1 -CorpusCache <cache>`: configure, build, unit tests, the
+`corpus` row, every leg of `lit-legs.ps1 -List` except the `-Quick` and `-Full` ones, WSL legs included (5.12.11's M23
+set; `MSIL_CORPUS_SKIP` removed from the legs' environment), the `determinism` row (`det-manifest.py`), every
+upstream-hooks leg and ci-sh; `cli-corpus-check.py --mode ilasm,dumpers,copy,stats` on `msil/test/M1/11-programs` at
+-O2; format and scope. Every lit leg keeps `msil_require_verify`, `msil_require_exec` and `msil_require_link`. `obj` is
+the default pipeline (`msil_link_output=pe`, Q31), so every Phase 1 leg runs through objects; the .NET 10 and
+`DOTNET_TieredCompilation=0` runs are `msil_also_run` entries of `net8` (`10,8+tc0`) and `wsl-net10` (`8,10+tc0`), which
+repeat jitall and the run on one verified build (`net10`, `net8-tc0` and `wsl-net10-tc0` are removed); ilasm is a test
+oracle only (`asm-oracle`, `modern-ilasm`, `wsl-ilasm`, the reference side of O3 and O4, the round trip). Legs with
+`msil_equiv=1` include the equivalence link of 5.12.6 in their time (one more msil-ld link per composite and level under
+`obj`, one more LTO link under `lto`); M23's Rebuild cost paragraph measures them within the 90 minutes.
+
+#### 5.12.11 Legs added to `lit-legs.ps1` and `lit-legs.sh`
+
+| Leg | Milestone | Paths | Parameters |
+|---|---|---|---|
+| `wsl-quick` | M12 | `msil/test/M1/11-programs`, `msil/test/M2`, `msil/test/harness` | WSL, Linux triple, `msil_wsl_dotnet=private`, `msil_linux_sysroot` |
+| `expected-linux` | M12 | `msil/test/M1` (and M2 from M14) | `update-expected.py --check --os linux` (not lit) |
+| `lto` | M14 | `msil/test/M1`, `msil/test/M2` | `msil_pipeline=lto`, native oracle |
+| `det` | M14 | `msil/test/M2/06-det` | |
+| `encoder-parity` | M18 | not lit: `cli-corpus-check.py --mode encoder` (Windows only; not in `lit-legs.sh`) | |
+| `obj-text`, `obj-text-wsl` | M19 | not lit: `cli-corpus-check.py --mode object` over `msil/test/M1` at -O0/-O2 (the object oracle of 5.12.6); `-Wsl`: `--mode gnu-tools`; `lit-legs.sh` lists neither | |
+| `obj`, `obj-wsl` | M20 | `msil/test/M1`, `msil/test/M2` (WSL: `11-programs` and M2) | `msil_pipeline=obj msil_equiv=1 msil_native_oracle=required msil_run_netfx=1`; `lit-legs.ps1`'s `obj` also `msil_scale_tests=1` (5.12.2) |
+| `refs-net48`, `refs-net8`, `refs-net10` | M21 | `msil/test/M1/11-programs`, `msil/test/M2/00-link`, `msil/test/M2/05-refs` | `msil_pipeline=obj` (asm has no link), `msil_references=<x>`; `refs-net48` adds `msil_equiv=1 msil_run_netfx=1`, `refs-net8` `msil_dotnet_runtime=8`, `refs-net10` `msil_dotnet_runtime=10` |
+| `hosted` | M15 | `msil/test/M2/09-hosted` | optional; not in `-List`'s default set |
+
+The `net8` leg's path list in `lit-legs.ps1` (`$checkMsil`) is the single list G3 uses; each milestone's harness role
+adds its new FileCheck paths there and to `check-msil` in `msil/test/CMakeLists.txt`: `lld/test/MSIL` joins `check-msil`
+in M13 and `$checkMsil`/`check_msil` in M14 (the M13 gate runs it in its own step), `llvm/test/MC/MSIL` both in M18, and
+`clang/test/Driver/msil-shared.c` both in M22. `lit-legs.sh` keeps the same legs, except the `-Wsl` ones (`wsl-quick`, `obj-wsl`, ...) and those a row above leaves out, for the Linux CI job (natively:
+`msil_linux_sysroot=/`, the apt clang as native oracle).
+
+**From M23** (Q32: the matrix and the exit corpus on every pipeline, triple and runtime within 70-90 minutes, tests-p2
+6.2) the leg set is replaced. Every lit leg keeps `msil_require_verify`, `msil_require_exec` and `msil_require_link`.
+`lit-legs.ps1`'s default set: `net8` (all FileCheck paths and msil/test; obj; native oracle, netfx, `msil_equiv=1`,
+`msil_also_run=10,8+tc0`, `msil_scale_tests=1`); `more-levels` (obj); `asm-oracle` (`msil/test/M1` and
+`msil/test/harness/pipeline` under asm; native oracle; `msil_roundtrip=1`; it leaves out the FileCheck directories,
+which do not depend on the pipeline, and M2, which links objects under asm, 5.12.1); `modern-ilasm` (asm); `roundtrip`
+(`msil/test/M1/11-programs` and `msil/test/M2/07-equiv` under obj: O2 on msil-ld outputs); `expected` (M1, M2); `utc`;
+`obj-text`; `lto` (`msil/test/M1/11-programs` and `msil/test/M2`; native oracle, netfx, `msil_equiv=1`,
+`msil_also_run=10`); `det` (`msil/test/M2/06-det` and `msil/test/Programs/det`); `refs-net48`, `refs-net8`,
+`refs-net10`; `programs` (the nine program directories; obj; native oracle, netfx, `msil_also_run=10`,
+`msil_corpus_dir`, `msil_require_corpus=1`); `programs-lto` (the same under lto, with `msil_equiv=1`); `ctest`
+(`msil/test/Programs/c-testsuite`; obj; .NET 8; native oracle). `-Wsl`: `wsl-net10` (M1, M2 and the harness; E7
+required; `msil_also_run=8,10+tc0`); `wsl-ilasm` (asm); `expected-linux` (M1, M2); `obj-text-wsl`; `lto-wsl`
+(`msil/test/M1/11-programs`, `msil/test/M2/02-lto` and `msil/test/M2/08-semantics`; `msil_also_run=8`); `programs-wsl`
+and `programs-lto-wsl` (`msil_also_run=8`); `det-wsl`. `-Quick` (a leg that runs only when named with `-Leg`):
+`wsl-quick`. `-Full`: `all-levels`; `lto-m1` (all of M1 under lto); `encoder-parity` (once obj is the default, O3 in
+`net8` compares every M1 method's encoding with ilasm's). Removed: `obj` and `obj-wsl` (folded into `net8` and
+`wsl-net10`; `net8` takes over `msil_scale_tests=1`); `net10`, `net8-tc0` and `wsl-net10-tc0` (folded into
+`msil_also_run` entries); `-Leg <removed leg>` fails naming the leg that now covers it. `lit-legs.sh`: `net8` with
+`msil_also_run=10,8+tc0,10+tc0` replaces `net10`, `net8-tc0` and `net10-tc0`, and `asm-oracle`, `lto`, `det`,
+`programs`, `programs-lto` and `ctest` run natively. Each pipeline of the programs and the matrix is its own leg (one
+pipeline per lit run). The corpus legs (`programs`, `programs-lto`, `ctest`, `det` and their `-Wsl` twins) get
+`msil_corpus_dir` from `$MSIL_CORPUS_CACHE` and `msil_corpus_skip` from `$MSIL_CORPUS_SKIP`; while `$MSIL_CORPUS_SKIP`
+names c-testsuite, the ctest leg prints `ctest: skipped (c-testsuite is in MSIL_CORPUS_SKIP)`, runs no lit and is
+reported as skipped, not passed.
+
+#### 5.12.12 CI (Q38)
+
+- M12: `.github/workflows/msil-ci.yml` pins `uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 #
+  v5.4.0` in both jobs (lines 114 and 221 today) and drops the `TODO(user)` comment; `check-action-pins.py` reports the
+  action as not used upstream without failing. The plan's section 8 sentence follows (S13; orchestrator). The workflow
+  stays `workflow_dispatch` only. No plan step changes repository settings: the user makes `msil` the default branch.
+- M13: `msil/cmake/caches/MSIL.cmake` gets `LLVM_ENABLE_PROJECTS "clang;lld"`; `build.ps1` and `build.sh` read
+  `msil/utils/ci/build-targets.txt` (5.6.11: the one list, which M15 extends with `yaml2obj llvm-mc` and M17 with
+  `llvm-cil-dump llvm-cil-copy`); `unit-tests.ps1`/`unit-tests.sh` run `CLITests` with the filter `'*'`.
+- M21: `msil/utils/tools/msil-tools.proj` pins the `microsoft.netframework.referenceassemblies.net48` package for the
+  Linux job's `refs-net48` leg (tooling from NuGet, as D31's ilasm; no packaging of the toolchain).
+- M23: msil-ci.yml sets the workflow-level env `MSIL_CORPUS_SKIP: coremark,c-testsuite` (section 10 item 11) and runs
+  `fetch.py --cache` and `--check` with `--skip` of it in both jobs, so GitHub's runners neither download nor run
+  CoreMark (EEMBC licence agreement) or c-testsuite (per-test licences from scc and tinycc); `lit-legs.ps1` and
+  `lit-legs.sh` pass the variable as `msil_corpus_skip` (CoreMark's program and det tests are UNSUPPORTED in CI) and
+  skip the ctest leg while it names c-testsuite (5.12.11); `run-m1-gate.ps1` removes the variable from the legs'
+  environment and runs `fetch.py` without `--skip`, so the phase gate on the development host runs all ten entries. If
+  the user allows CI to fetch them, a section 12 row empties the variable (one line of msil-ci.yml). Both jobs run
+  5.12.11's M23 legs (`lit-legs.sh`: `net8` with `msil_also_run`, `asm-oracle`, `lto`, `det`, `programs`, `programs-lto`
+  and `ctest` natively); the corpus cache uses `actions/cache` pinned as upstream pins it, keyed on
+  `hashFiles('msil/utils/corpus/manifest.json')`, filled by `fetch.py`; the Linux job runs the Linux triple natively
+  with `msil_linux_sysroot=/`; a determinism job compares the CIL objects and archives that both hosts build with
+  `msil/utils/ci/det-manifest.py` (every C file of `msil/test/M1`, both x86_64 MSIL triples, -O0 and -O2). No PE is
+  compared across hosts (the Windows runner has no Linux sysroot, the Linux runner no Windows import libraries); PE
+  determinism is checked within each host (`det`, `det-wsl`, CI's `det` leg; section 10 item 12).
+- No step files or drafts upstream reports (Q40).
+
+#### 5.12.13 Phase 1 tests that change
+
+| Test | Milestone | Change |
+|---|---|---|
+| `clang/test/Driver/msil-toolchain.c` lines 112-150 (object block) | M13, M14, M19, M20 | M13: the reworded error text. M14: `-c`, `-save-temps=obj -c` and `-fno-integrated-as -c` become `-###` checks of `cc1 -emit-llvm-bc -flto=full`; a plain link plans msil-ld; `-c -x assembler` pins `err_drv_msil_ilasm_input`; `-fno-lto -c` pins `err_drv_msil_no_object_output`. M19: the block moves, inverted, to `msil-object.c`. M20: the compile-and-link lines run `cc1 -emit-obj` |
+| `clang/test/Driver/msil-toolchain.c` lines 152-184 (LTO-link block, 8 RUN commands) | M14 | replaced by `msil-lto.c` |
+| `llvm/test/CodeGen/MSIL/obj-unsupported.ll` | M19 | deleted by `M19/llc-object-tests` (M19.d); the `object-*.ll` tests of 5.8 replace it |
+| `clang/test/CodeGen/MSIL/emit-obj-unsupported.c` (Phase 1, the M2 fix-6 row of section 12) | M19 | it pins `MSIL object file emission is not implemented; use -S (ILAsm text)` for cc1 `-emit-obj` and the driver's `-S -Xclang -emit-obj`, which M19 makes write CIL objects: `M19/object-tests` (M19.e) deletes it and writes `clang/test/CodeGen/MSIL/emit-obj.c`, the same commands as positive runs checked with `llvm-cil-dump --headers` and `--link-info`; M19's G6 step requires the old file gone |
+| `clang/test/CodeGen/MSIL/cc1as-unsupported.s` | stays | `-cc1as -filetype obj` stays a clean error once an asm backend exists (M13 stub factories, M18 backend) |
+| llc tests with D14 diagnostics (12 files) | stay | standalone mode is frozen (5.10.13); M19 adds `-filetype=obj` twins |
+| tests that check `[mscorlib]` (27 files) | stay | 5.11.8 |
+| every test with `pinvokeimpl(... cdecl)` text or long branch and `ldc.i4` forms that Q26 shortens: `llvm/test/CodeGen/MSIL` (M15's `imports-linked.ll` included), `clang/test/CodeGen/MSIL` and `lld/test/MSIL` (M14's `--lto-emit-asm` checks and M15's `native-*.test` pinvokeimpl lines; in the net8 leg since M14) | M18 | `nomangle cdecl` (5.10.11) and Q26's forms, updated mechanically by `M18/llc-tests` (M18.e); the gate checks all three directories and the update_llc_test_checks Inputs with `check-il-forms-diff.py` (5.12.4) |
+| `llvm/test/CodeGen/MSIL/section-errors.ll`, `clang/test/CodeGen/MSIL/section-globals.c` (both M12) | M20 | M12's section diagnostic goes (whole-program named sections, 5.8.10, 5.9.9); `M20/cli-tests` (M20.d) keeps the constructs that stay errors, with 5.9.9's texts |
+| `msil/test/M1` composite tests (132) | none | the pipeline parameter switches them |
+| the four explicit-RUN M1 tests (`01-int/trap-call-before-div.ll`, `01-int/trap-call-before-rem.ll`, `03-control/trap.ll`, `01-int/calls-arith-debug-info.test`) | M20 | `REQUIRES: msil-pipeline=asm`, or `obj` variants |
+| `update-expected.py` | M12, M14, M22, M23 | 5.12.4 |
+| `Status.md`, `msil/test/README.md` counts, GettingStarted.md section 5 | every docs role | counts and routes as tests and paths are added; M23 switches GettingStarted to `clang -c` + link |
 
 ## 6. Milestones
 
@@ -1781,21 +5982,2283 @@ Written after the other WPs, from their hand-overs and the files they changed. G
 
 **Rebuild cost.** MSIL target: 15 TUs (MSILTargetMachine.cpp, MSILISelDAGToDAG.cpp and the 13 that include MSILUtilities.h, MSILArgumentMove.cpp and MSILUtilities.cpp among them), plus relinks of llc, opt, clang, MCTests and MSILTests (~10-20 min); llvm-profdata is new: llvm-profdata.cpp plus the two libraries the build lacks, LLVMDebuginfod and LLVMHTTP (6 TUs in all), and one link (est. 2-4 min, 30-60 MB on D:). The private hooks tree on C: already exists (about 460 MB; if it has to be recreated: 242 s configure plus 473 s for the ARM object, about 140 MB). The gate adds about 45-55 min to M10's ~2 h: step 13 seconds, step 14 ~2 min, steps 15-17 ~6 min, steps 18-20 under a minute, step 21 6-10 min, step 22 12-15 min, step 23 seconds, and step 24 grows by the more-levels, utc and upstream-hooks rows (~10-14 min).
 
-## 7. Future milestones (phases 2-5)
+### M12. Backlog fixes: whole-program aliases and weak references, empty asm with operands, inline i128 division, byval slots, Linux oracle
 
-Each becomes a sequence of small milestones with the same protocol when its phase starts. Every phase that needs widely-included header edits (MCSymbol kinds, IR intrinsics, RuntimeLibcalls.td, CallingConv.h, clang Attr.td) front-loads them into its first milestone, as M1 does.
+**Goal.** Close the backend items every Phase 2 path hits and give the gates the oracles Phase 2 needs (recon `p2/backlog.md` 2-4 and 9; brief section 2, Q33, Q34, Q36, Q38, Q39). Whole-program mode (the only mode until M19, which guards these with `isObjectMode()`, 5.8.10): an alias becomes its aliasee plus a forwarding method, an unresolved `extern_weak` symbol is null and a direct call of it traps, a `section` on a global variable is an error instead of being dropped (judge-c-fidelity J6: a `.init_array` or `.CRT$XCU` constructor silently never ran), and unreferenced `linkonce` functions are dropped before they are diagnosed (UCRT `stdio.h` at -O0). Every mode: an empty asm with operands (`black_box`) becomes a barrier that keeps its operands, i128 division and FP<->i128 conversions expand inline (Q36), aggregate `va_arg` is a diagnostic instead of a crash, byval copies share frame slots. Infrastructure (5.12.8): `-std=gnu17`, compiler-rt in the Windows oracle, the E7 Linux oracle (Q33), a private WSL .NET (Q39), lit response files, the setup-dotnet pin (Q38).
 
-### P2-A. CIL object files and the MC object writer
+**Depends on:** M11 and the Phase 2 plan commit (plan sections 5.6 and 5.12).
 
-Phase 2 start: an MCSymbolMSIL with signatures, an MSIL MC object streamer and a CIL object format modeled on the wasm object format (method bodies in CIL, data segments, relocations, typed symbol table), the CIL binary encoder (opcode values checked against ECMA-335), and 'clang -c' producing .o. Requires a batched broad-rebuild header commit (MCSymbol kind if needed, MCContext createSymbolImpl, BinaryFormat additions), landed as the first milestone of the phase like M1.
+**Header changes:**
+- none (`MSILMachineFunctionInfo.h` is target-local: 15 MSIL TUs recompile)
 
-### P2-B. msil-ld: lld flavor, symbol resolution, LTO and the PE writer
+**Work packages**
 
-An lld flavor modeled on lld/wasm: loads objects and archives, runs LTO on bitcode (accepting stock-clang bitcode for the native triple after retargeting the module triple), resolves symbols to objects, managed assemblies and native libraries, lays out data and writes the PE/ECMA-335 metadata directly; ilasm remains a test oracle (round trip). The clang driver gains MSILToolChain<NativeTC> invoking msil-ld. Neither the driver nor msil-ld writes runtimeconfig.json or .exe.config: like Roslyn (csc), which writes only the assembly and its PDB, they leave them to the build system or the user. msil-ld is given reference assemblies (-r) and binds every BCL type and member the generated code needs (Marshal::AllocHGlobal, Interlocked::MemoryBarrier, Math, attributes such as DisableRuntimeMarshalling, ...) by searching them, referencing whichever assembly defines it (.NET 8 reference assemblies give references such as System.Runtime, System.Runtime.InteropServices and System.Threading, .NET Framework's give mscorlib); there is no core-library switch and no target-framework option (section 12, 2026-10-14).
+#### M12.a Whole-program lowerings in MSILPrepareIR and the clang asm path (implement, ~400 lines)
 
-### P2-C. Exports and assembly-to-assembly linking
+- Owned files: `llvm/lib/Target/MSIL/MSILPrepareIR.cpp`, `clang/lib/CodeGen/CGStmt.cpp`
+- Reads: llvm/docs/MSIL/recon/p2/backlog.md sections 2.1, 2.3, 3.1 and 9; llvm/docs/MSIL/recon/p2/backlog-files/alias-rust/ (alias.ll, calias.c, merge.ll, lower_rust.py); llvm/docs/MSIL/recon/p2/backlog-files/blackbox/ (bb.c, fakeuse.ll); llvm/docs/MSIL/recon/p2/backlog-files/vaarg/vaagg.ll; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md sections F4, F5 and 6.4; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/probes/p8.c; llvm/docs/MSIL/recon/p2/driver-toolchain.md section 5.4; llvm/docs/MSIL/recon/p2/driver-toolchain-files/logs/hosted-probe.log; llvm/lib/Target/MSIL/MSILUtilities.h (getPInvokeModule, isSpecialLLVMGlobal, getIRName, getILName); llvm/lib/Target/MSIL/MSILTargetMachine.cpp (addIRPasses); llvm/lib/Target/MSIL/MSILAsmPrinter.cpp (doInitialization, collectConstructors); llvm/lib/Target/MSIL/MSILISelLowering.cpp (VAArgUnsupported); llvm/include/llvm/IR/InlineAsm.h; llvm/docs/MSIL/recon/m11/split-files/tools/ (relink.ps1, mkrsp.py); this plan sections 2, 3 (D14, D19, D26, D36), 5.1, 5.3 (MSILUtilities.h), 5.8.10 and 5.9.6 (the trap stub msil-ld makes)
+- Provides: file-static `bool lowerWholeProgramSymbols(Module &M, const TargetMachine &TM)` (aliases, `extern_weak`, sections; M19 calls it only when `!isObjectMode()`), `bool dropUnreferencedDiscardableFunctions(Module &M)`, `bool lowerEmptyInlineAsm(Function &F)`; the trap stub `@"<msil>undef_<name>"` (msil-ld's name and shape, 5.9.6); the errors `global variable @<name> in section "<section>" is not supported for MSIL yet (phase 2 CIL objects)` (pinned by M12.c's `section-errors.ll` and M12.d's `section-globals.c` until M20, which retires it: M20.a lays out named sections in whole-program output as 5.8.10 says, M20.d updates both tests, and 5.9.16's `p8-section-ctor` gives 42 on `asm` too) and, for an aggregate `va_arg`, `the va_arg instruction is not supported for MSIL yet (phase 3 variadics)`
 
--shared libraries with a public export class (--export-class), the symbol-table custom attribute carrying names, kinds, signatures and the triple, linking against managed assemblies built by this toolchain, and P/Invoke resolution from native export tables / import libraries (DT_SONAME, kernel32.lib style mapping).
+`runOnModule`, after the target check, `resetExceptionModel` and `disableMetadataSections`, runs (1) `lowerWholeProgramSymbols`, (2) `dropUnreferencedDiscardableFunctions`, then the per-function loop, which calls (3) `lowerEmptyInlineAsm` before `diagnoseDefinition`, which gains (4); the file comment lists them. **(1a) Aliases**, backlog 2.1 steps 1-4 as amended by judge-c-fidelity F5: an alias is lowered when its aliasee object (`getAliaseeObject()`) is a defined Function, its value type a FunctionType and the offset 0, or a GlobalVariable and its value type not a FunctionType (any constant offset). Remove it from llvm.used and llvm.compiler.used, replace every use (code, initializers, llvm.global_ctors, other aliases) by `getAliasee()`, erase it. A function alias with non-local linkage first gets a forwarder with its name, function type, linkage, visibility, DLL storage class and unnamed_addr: one plain call of the aliasee object returning its result (no `musttail`, never `jmp`, which ILVerify rejects); a type mismatch is left to MSILFixFunctionBitcasts, which runs later. Any other alias (kind mismatch, offset into a function, ifunc aliasee) keeps `alias @<name> is not supported for MSIL`; ifuncs stay errors. **(1b) `extern_weak`**: a function declaration that `MSIL::getPInvokeModule(TT, MSIL::getILName(F, TM), &F)` resolves stays a P/Invoke (M15 widens that policy; this rule follows it). Otherwise its calls and invokes and the llvm.global_ctors entries naming it use the stub (internal, created once, the declaration's type, body `llvm.trap` + `unreachable`, printed `ldnull`, `throw`), every other use (compares, initializers, stored addresses, no_cfi and dso_local_equivalent wrappers) becomes `ptr null`, it leaves the used lists and stays an unused declaration. An `extern_weak` variable: every use becomes `ptr null`, then it is erased. Confirm that `MSILAsmPrinter::doInitialization` caches nothing that a function added by this pass would miss. **(1c) Sections** (F4): every GlobalVariable definition with an explicit section, except what `MSIL::isSpecialLLVMGlobal` accepts, gets the error above through `LLVMContext::emitError` (name from `getIRName`, section verbatim), in module order before any function diagnostic; the global stays ordinary data. Function sections stay ignored. **(2)** A definition with linkonce or linkonce_odr linkage that nothing uses outside its own body loses its body (`deleteBody`, comdat cleared, as a diagnosed definition does); then, repeatedly, every linkonce, linkonce_odr, internal or private definition whose last outside use was in a dropped body (driver-toolchain 5.4). Uses in initializers and the used and ctor lists count; global variables are never dropped; a local function unreferenced from the start stays (ret.ll). **(3)** Empty asm with operands: backlog 2.3's rule and lowering, precisely: a call (not invoke or callbr) of an InlineAsm whose string is empty after trimming, whose inputs are of any kind, whose outputs are indirect (`=*m`) or direct and tied to an input of the same type, any clobbers, no label; insert the D36 fence, `call void (...) @llvm.fake.use(<v>)` for each input that is not a Constant and has an integer type of at most 64 bits, a pointer, float or double type, and `call void @llvm.sideeffect()`; the result becomes the tied input (several: insertvalue from poison). Everything else keeps `inline assembly is not supported for MSIL` (add-prototypes.ll's untied `"=r,r"` included). In clang's `emitMSILAsmStmt` (`CGStmt.cpp` ~2751-2762): keep the operand-free fence; a GCCAsmStmt with a trimmed-empty string, no labels and outputs that are each read-write, tied by an input, or memory-only (TargetInfo::ConstraintInfo) goes down the native path (`AsmConstraintsInfo::EmitAsmStmt`), so its IR equals the native triple's; everything else, asm goto and Microsoft asm keep `err_msil_asm_unsupported`. **(4)** A VAArgInst of struct or array type is reported (DiagnosticInfoUnsupported, the text above, equal to `VAArgUnsupported`, which va-intrinsics.ll pins) and the body is deleted (SelectionDAGBuilder::visitVAArg crashes on it); scalar and vector `va_arg` stay with ISel. Checks: msil-syntax.ps1 on both TUs; then a private llc and clang as M11.a built them: compile the changed TUs with their compile_commands.json commands into scratch (outputs redirected), link with the line split-files/tools/mkrsp.py writes, those objects ahead of the shared build's libraries (relink.ps1), never writing D:\llvm-msil\build: backlog-files' alias.ll, calias.c, merge.ll (with `-mllvm -expand-div-rem-bits=64 -mllvm -expand-fp-convert-bits=64` for M12.b), bb.c, vaagg.ll and p8.c on both x86_64 triples at -O0/-O2, and calias.c (exit 0), bb.c (42) and merge.ll (88) run on .NET 8 through HEAD's msil-run.py (`git show HEAD:msil/utils/msil-run.py` into scratch: M12.e owns the working copy, 5.6.1 rule 7). Hand over the IL differences over msil/test/M1 and llvm/test/CodeGen/MSIL, for M12.f and the gate's fix loop (no WP of M12 waits for them).
+
+#### M12.b i128 widths and the byval slot pool (implement, ~100 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MSILISelLowering.cpp`, `llvm/lib/Target/MSIL/MSILISelLoweringCall.cpp`, `llvm/lib/Target/MSIL/MSILMachineFunctionInfo.h`, `llvm/lib/Target/MSIL/MSILMachineFunctionInfo.cpp`
+- Reads: llvm/docs/MSIL/recon/p2/backlog.md sections 2.2 and 2.6; llvm/docs/MSIL/recon/p2/backlog-files/i128/i128.c; llvm/docs/MSIL/recon/p2/backlog-files/byval/byval.c; llvm/lib/CodeGen/ExpandIRInsts.cpp (~69-78); llvm/lib/Target/NVPTX/NVPTXISelLowering.cpp (~1158-1159); llvm/test/CodeGen/MSIL/byval.ll (header); llvm/docs/MSIL/recon/m11/split-files/tools/ (relink.ps1, mkrsp.py); this plan sections 2, 3 (D13, D15, D33) and 5.3 (MSILMachineFunctionInfo.h)
+- Provides: `setMaxDivRemBitWidthSupported(64)` and `setMaxLargeFPConvertBitWidthSupported(64)` in the MSILTargetLowering constructor; `int MSILFunctionInfo::getByvalSlot(MachineFrameInfo &MFI, unsigned Index, uint64_t Size, Align Alignment)` (the function's Index-th byval object, created on first use, grown to the largest size and alignment asked for)
+
+(1) Q36: the two calls after `setMaxAtomicSizeInBitsSupported(0)`, with a comment: ExpandIRInsts then expands i128 division and remainder and the plain FP<->i128 conversions inline (NVPTX and AMDGPU do the same), so no `__divti3`/`__fixdfti` helper is asked for; constrained conversions and f16/bf16 <-> i128 still name helpers. llc's hidden `-expand-div-rem-bits=64 -expand-fp-convert-bits=64` reproduce the result with the old build (backlog E2). (2) Backlog 2.6: LowerCall's K-th byval argument of non-zero size (K counted per call) uses `getByvalSlot(MFI, K, ...)` instead of a new stack object, grown with `MFI.setObjectSize`/`setObjectAlignment`; the copy is still made before every call, and two byval arguments of one call get two slots. It works at -O0 too (no lifetime markers, StackColoring only from -O1). Comment the MSIL-only member of the copied function info; `clone()` copies it; no MIR serialization. Checks: msil-syntax.ps1; a private llc built as M12.a builds its own (mkrsp.py, relink.ps1) from this WP's objects: MSILISelLowering.cpp and all 15 TUs that include MSILMachineFunctionInfo.h (the class layout changes, so none may come from the shared build; none is M12.a's file): backlog i128.c has no helper call at -O0/-O2 on both triples, byval.c's `many` gets `ldc.i4.s 64` before `localloc` instead of 640 on the Linux triple. Hand over the byval.ll and struct-args-*.ll functions whose frames change, for M12.f and the gate's fix loop.
+
+#### M12.c llc tests for the backlog fixes (test, ~1,300 lines)
+
+- Owned files: `llvm/test/CodeGen/MSIL/`
+- Reads: this plan section 6 M12 (M12.a and M12.b are the specification; do not read their files); llvm/docs/MSIL/recon/p2/backlog.md sections 2.1-2.3, 2.6 and 3.1; llvm/docs/MSIL/recon/p2/backlog-files/alias-rust/lower_rust.py; llvm/docs/MSIL/recon/p2/backlog-files/blackbox/fakeuse.ll; llvm/docs/MSIL/recon/p2/backlog-files/vaarg/vaagg.ll; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/probes/p8.c; llvm/docs/MSIL/recon/p2/driver-toolchain-files/logs/hosted-probe.log; llvm/test/CodeGen/MSIL/ (call-errors.ll, unsupported-ir-errors.ll, fp-expand.ll, libcall-policy.ll, i128.ll, globals.ll, ret.ll, comdat-linkonce.ll, byval.ll, frame-index.ll, fence.ll, va-intrinsics.ll); this plan sections 2, 3 (D12, D13, D14, D26, D36), 5.1 and 5.5
+- Provides: `alias.ll`, `extern-weak.ll`, `asm-operands.ll`, `i128-divrem.ll`, `va-arg-aggregate.ll`, `byval-slot-reuse.ll`, `section-errors.ll`, `discardable-defs.ll` in llvm/test/CodeGen/MSIL
+
+Written from the specification only, with plan section 2's conventions (both x86_64 triples, -O0 and -O2, `%if ilasm` round trips, `--implicit-check-not="LLVM ERROR"` on diagnostics). Expected i128 IL comes from today's llc with `-expand-div-rem-bits=64 -expand-fp-convert-bits=64` (never in a RUN line), expected IL of the MSILPrepareIR lowerings from today's llc on hand-lowered IR (lower_rust.py). New tests: **alias.ll**: external, internal, private, weak, weak_odr and linkonce_odr function aliases, a chain, a type-mismatched alias, data aliases at offsets 0 and 16 used in code and in an initializer, aliases in llvm.used and llvm.global_ctors, `main` as an alias; callers call the aliasee, one public forwarder per external, weak and weak_odr alias and none otherwise; a split part keeps the error of a function-typed alias of a variable and of an ifunc. **extern-weak.ll**: a weak function called and null-compared (calls go to `'<msil>undef_maybe'`, an assembly method `ldnull`, `throw`; no `'<msil>fn_maybe'` field), its address in an initializer (zero data), a weak variable (null, no error), weak `puts` and a weak `"msil-import-module"` declaration (still P/Invokes), a mismatched call type, an invoke. **asm-operands.ll**: `"r"`, `"r,~{memory}"` on a pointer, `"*m"`, `"r|m"`, `"i"`, `"g"`, a tied `"=r,0"` returning its input, two tied outputs, `"=*m"`, a non-sideeffect form (fence.ll's MEMBARRIER line, the input's computation kept, no call); a split part keeps the error of `"nop"`, an untied `"=r"`, callbr and an unwinding invoke. **i128-divrem.ll**: udiv, urem, sdiv, srem by variables, the eight f32/f64 <-> i128 conversions and `llvm.fptosi.sat.i128.f64` with no call and `--implicit-check-not` on every helper name; a split part keeps the constrained and half conversion errors. **va-arg-aggregate.ll**: struct and array `va_arg` give the exact error naming each function, exit 1 without a crash, no method; a scalar `va_arg` and an ordinary function compile as before. **byval-slot-reuse.ll**: ten byval calls of a 64-byte struct share one 64-byte frame and address; one call's two byval arguments get two slots; sizes 24 and 40 share a 40-byte slot; alignments 8 and 16 give a 16-aligned slot with D13's over-allocation; a copy precedes every call. **section-errors.ll**: `.init_array`, `.CRT$XCU`, `myreg`, `.data.custom` and a `.rodata.x` constant each give the exact error in module order; a declaration or function with a section and an `llvm.metadata` global give nothing; the output assembles. **discardable-defs.ll**: hosted-probe.log's UCRT shape (linkonce_odr variadic `sprintf` -> linkonce_odr `_vsprintf_l` -> undeclared `__stdio_common_vsprintf` and a linkonce_odr function returning a global's address, plus an internal helper) next to `main` calling `puts`: exit 0, no diagnostic, none of those methods, the global's field kept; a referenced linkonce_odr function, one in llvm.used and an unreferenced internal function stay. Update the existing tests whose expectations change, keeping their intent: call-errors.ll (ALIAS: only the ifunc error stays; LIBCALL and LIBCALLFP: the i128 helper errors go), unsupported-ir-errors.ll (its alias.ll part lowers), fp-expand.ll (I128, I128SAT), libcall-policy.ll (HELPER, `--implicit-check-not`), i128.ll (comments), globals.ll (`ext_weak` is null), ret.ll and comdat-linkonce.ll (give `ret_linkonce_odr` and `inl` callers), byval.ll (`call_bump_twice`) and struct-args-*.ll functions with several byval calls; grep for the rest, and hand over every changed file with its reason and the RUN lines that fail with today's build.
+
+#### M12.d Execution and clang tests for the backlog fixes (test, ~1,000 lines)
+
+- Owned files: `msil/test/M1/01-int/i128-divrem.c`, `msil/test/M1/01-int/i128-divrem.expected`, `msil/test/M1/02-fp/i128-fp-conv.c`, `msil/test/M1/02-fp/i128-fp-conv.expected`, `msil/test/M1/04-frames/int128-return.c`, `msil/test/M1/07-globals/alias.c`, `msil/test/M1/07-globals/alias.expected`, `msil/test/M1/07-globals/weak-undefined.c`, `msil/test/M1/07-globals/weak-undefined.expected`, `msil/test/M1/10-calls/black-box.c`, `msil/test/M1/10-calls/black-box.expected`, `msil/test/M1/10-calls/byval-slots.c`, `msil/test/M1/10-calls/byval-slots.expected`, `msil/test/M1/10-calls/rust-shaped.ll`, `msil/test/M1/10-calls/rust-shaped.expected`, `clang/test/CodeGen/MSIL/inline-asm.c`, `clang/test/CodeGen/MSIL/asm-barrier.c`, `clang/test/CodeGen/MSIL/section-globals.c`
+- Depends on: M12.e
+- Reads: this plan section 6 M12 (M12.a, M12.b and M12.e are the specification; do not read M12.a's or M12.b's files); llvm/docs/MSIL/recon/p2/backlog.md sections 2.1-2.3 and 2.6; llvm/docs/MSIL/recon/p2/backlog-files/i128/i128.c; llvm/docs/MSIL/recon/p2/backlog-files/alias-rust/ (calias.c, merge.ll); llvm/docs/MSIL/recon/p2/backlog-files/blackbox/bb.c; llvm/docs/MSIL/recon/p2/backlog-files/byval/byval.c; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/probes/p8.c; msil/test/Inputs/msil_test.h; msil/test/M1/04-frames/int128-return.c; clang/test/CodeGen/MSIL/inline-asm.c; clang/test/CodeGen/MSIL/asm-barrier.c; this plan sections 2, 3 (D26, D36, D37), 5.5, 5.12.1-5.12.6 (their M12 rows: `%{msil_cflags}`, `msil_native_rtlib`, `msil_linux_sysroot`, `%ld_lld`, `update-expected.py --os linux`) and 5.12.8
+- Provides: the tests named in Owned files
+
+Spawned after M12.e hands over: it runs M12.e's update-expected.py, msil-run.py and lit parameters as they are and reads none of M12.e's files (5.6.1 rule 8). Plan 5.5's rules hold (freestanding, `msil_test.h`, UB-free, equal at -O0 and -O2, no `long`, exit 0..255, one `%{msil_c}` or `%{msil_ll}` RUN line); `.expected` comes from `update-expected.py` with M12.e's compiler-rt, and `--check --os linux` must pass too. **i128-divrem.c**: backlog i128.c's xorshift through noinline udiv, urem, sdiv, srem with divisors of every width and sign; checks `a == q * b + r`, prints hex. **i128-fp-conv.c**: the eight conversions on exact, rounding (ties to even), near-2^127, negative, zero and fractional values, printed as bit patterns, never out of range. **alias.c**: calias.c's external, static, weak and array aliases, an alias in a function-pointer table and one called by a constructor; no alias-versus-aliasee address compare (clang folds it). **weak-undefined.c**: an undefined weak function and variable tested by `if (maybe)`, `&weak_data == 0`, an initializer and a volatile pointer, never called (native link.exe and lld-link give null). **black-box.c**: bb.c's idioms (`"r"`, `"r,m"`, `"+r"`, `"+m"`, tied `"0"`, `"g"`) and a sum kept through a DoNotOptimize-style asm at -O2. **byval-slots.c**: a 64-byte int-only struct passed by value ten times in a row to callees that modify their copies, two in one call, one produced by a call that takes one, recursion; caller structs unchanged. **rust-shaped.ll**: merge.ll's shape without datalayout, triple or Rust runtime: an `unnamed_addr alias`, `asm sideeffect "", "r,~{memory}"(ptr)`, an i128 udiv, `llvm.fptosi.sat.i128.f64`; `main` prints and returns a checksum. **int128-return.c**: header comment only (division is inline since M12). **inline-asm.c**: the GNU_ASM empty statements with operands are accepted (`nop`, asm goto, untied `"=r"` and `"=rm"` stay errors); a new `OPERANDS` block checks with `-emit-llvm` that each accepted asm call equals the native x86_64-unknown-linux-gnu one. **asm-barrier.c**: a `BBOX` prefix: `-O2 -S` of `asm volatile("" : : "r"(v) : "memory")` between a computation and two stores keeps all three and prints the MEMBARRIER line. **section-globals.c** (new, `REQUIRES: msil-registered-target`): p8.c on both x86_64 MSIL triples (`-fms-extensions` for `.CRT$XCU`) plus `section("myreg")` data and a function with a section: `not %clang_cc1 ... -S` gives M12.a's exact error per global, nothing for the function. Validate with both native oracles, and with today's clang where possible (i128 tests with `-mllvm -expand-div-rem-bits=64 -mllvm -expand-fp-convert-bits=64` on .NET 8 and Framework); record which tests wait for the gate build.
+
+#### M12.e Oracles, private WSL runtime, legs and CI pin (infra, ~800 lines)
+
+- Owned files: `msil/test/lit.cfg.py`, `msil/utils/update-expected.py`, `msil/utils/msil-run.py`, `msil/utils/linux-oracle/start.c`, `msil/utils/make-linux-sysroot.py`, `msil/utils/msil-wsl-dotnet.sh`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/utils/run-m1-gate.ps1`, `msil/utils/upstream-hooks.txt`, `.github/workflows/msil-ci.yml`, `msil/test/harness/linux-oracle.test`, `msil/test/harness/Inputs/linux-oracle.c`, `msil/test/harness/Inputs/linux-oracle.expected`
+- Reads: this plan sections 5.5, 5.6.1, 5.6.9, 5.12.1-5.12.6 (M12 implements only their M12 rows), 5.12.8 and 5.12.10-5.12.12; llvm/docs/MSIL/recon/p2/tests-p2.md sections 1.3, 1.4, 2.7 and 6; llvm/docs/MSIL/recon/p2/tests-p2-files/linux-oracle/start.c; llvm/docs/MSIL/recon/p2/backlog.md sections 3.2-3.5 and 4.3; llvm/docs/MSIL/recon/p2/backlog-files/tools/cmp.ps1; llvm/docs/MSIL/recon/m11/hooks-artifacts/gen_litroot.py; msil/test/lit.cfg.py; msil/utils/msil-run.py; msil/utils/update-expected.py; msil/utils/ci/lit-legs.ps1; msil/utils/ci/lit-legs.sh; msil/utils/ci/upstream-hooks.ps1; msil/utils/run-m1-gate.ps1; .github/workflows/msil-ci.yml; msil/test/harness/legs/tool-runner-wsl.test
+- Provides: lit parameters `msil_native_rtlib`, `msil_linux_sysroot`, `msil_wsl_dotnet`; features `msil-native-rtlib`, `msil-linux-sysroot`, `msil-linux-oracle`; substitutions `%ld_lld`, `%lld_link`; `%{msil_cflags}` = `-std=gnu17 -ffreestanding -Werror=return-type -I<Inputs>`; lit notes `WSL dotnet (private): <path>` and `native oracle: E7 (<ld.lld>, sysroot <dir>)`; `msil-run.py --native --runner wsl`; `update-expected.py --os linux --rtlib --linux-sysroot --ld-lld`; `make-linux-sysroot.py --out <dir> [--distro <name>]`; `msil-wsl-dotnet.sh [--print-path]`; `msil/utils/linux-oracle/start.c`; legs `wsl-quick` and `expected-linux` (both `-Wsl`); `<build>/lit-results/<leg>.params.rsp`; run-m1-gate.ps1 step `host-setup`
+
+Implements 5.12.8 (`libgcc_s.so.1` in the sysroot and in the E7 link after `libc.so.6`, for the native build's i128 helpers `__udivti3`, `__fixdfti`, ..., which WSL's copy exports) and the M12 rows of 5.12.2, 5.12.3, 5.12.11 and 5.12.12. (1) lit.cfg.py: `-std=gnu17` first in `%{msil_cflags}`; `msil_native_rtlib` (default `auto` on Windows: the newest `%VCINSTALLDIR%Tools\Llvm\x64\lib\clang\*\lib\windows\clang_rt.builtins-x86_64.lib`, linked by the Windows oracle, fatal when missing under `msil_native_oracle=required`); `%ld_lld`/`%lld_link` from `<build>/bin`, else PATH, else `%VCINSTALLDIR%Tools\Llvm\x64\bin`; with `msil_runner=wsl` and `msil-linux-oracle` the native leg is E7 (start.o built once per lit run in the output tree; each test compiled `--target=x86_64-unknown-linux-gnu -fno-pic %{msil_cflags} -<L> -c`, linked `%ld_lld -dynamic-linker /lib64/ld-linux-x86-64.so.2 --as-needed start.o <obj> <sysroot>/usr/lib/x86_64-linux-gnu/{libm.so.6,libc.so.6,libgcc_s.so.1}`, run by `%msil_exec --native --runner wsl --expect`); `msil_wsl_dotnet` (an explicit `private` that is not installed is fatal and names msil-wsl-dotnet.sh); the two notes. (2) msil-run.py: `--native --runner wsl` runs a Linux executable through msil-run.py inside WSL, as `.dll` programs run there (private directory, limits, transcript, `--expect-os linux`). (3) update-expected.py: the `%{msil_cflags}` flags, `--rtlib`, `--os linux` (on Windows lit's E7 commands and `msil-run.py --native --runner wsl`; `--check` compares with `<stem>.linux.expected` if present, else `<stem>.expected`; writing creates `<stem>.linux.expected` only for a differing transcript). (4) start.c from tests-p2-files with the license banner. (5) make-linux-sysroot.py (standard library): the 5.12.8 layout, `libgcc_s.so.1` included, symlinks resolved, a glibc-version stamp; idempotent; refuses a directory inside the repository. (6) msil-wsl-dotnet.sh: 8.0.31 and 10.0.13 (variables at the top) into `"$HOME/.dotnet-msil"` with `dotnet-install.sh` (from `https://dot.net/v1/dotnet-install.sh`) `--runtime dotnet --version <v> --no-path`; skips installed versions; never `sudo`, `apt` or a system setting; `--print-path` exits 1 when not installed. (7) lit-legs.ps1: each lit leg writes its arguments one per line (`--param=<k>=<v>`, `--xunit-xml-output=<file>`) into `<build>/lit-results/<leg>.params.rsp` and passes `-LitArgs:-sv @<rsp>` as upstream-hooks.ps1 does (a build path with a blank fails clearly); every WSL leg passes `msil_wsl_dotnet=private`, `wsl-net10` also `msil_native_oracle=required`; legs `wsl-quick` (11-programs, harness, `msil/test/M2` once it exists; E7 required) and `expected-linux` (`update-expected.py --check --os linux msil/test/M1` under the shared lock); header lines with the M12 gate steps. lit-legs.sh: its header says its `expected` leg is the Linux job's native Linux oracle; no new legs. (8) run-m1-gate.ps1: a `host-setup` step before the lit legs unless `-NoWsl`, rows `host-setup/wsl-dotnet` and `host-setup/linux-sysroot` (`$MSIL_LINUX_SYSROOT` or `C:\llvm-msil-scratch\linux-sysroot`). (9) msil-ci.yml: both setup-dotnet lines become `uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0`, TODO gone; nothing else. (10) upstream-hooks.txt: no change planned. The `clang/lib/CodeGen/CGStmt.cpp` block's upstream asm tests (`asm.c`, `asm-inout.c`, `x86-64-inline-asm.c`, ...) and its two fork lines already cover M12.a's hunk, and section-globals.c tests the target, not a hook. This WP does not wait for M12.a (5.6.1 rule 7); if the gate's full upstream-hooks step shows a gap, M12.e adds the test in the fix loop. (11) linux-oracle.test (`REQUIRES: system-windows, msil-linux-oracle`): Inputs/linux-oracle.c (an `.init_array` constructor, puts output, a non-zero exit) built with the E7 substitutions and run with `%msil_exec --native --runner wsl --expect`. No committed text names a user profile path or user name. Checks, without the shared build's lit Output directories: the harness test and the `wsl-quick` paths through a private lit root (gen_litroot.py); `update-expected.py --check --os linux msil/test/M1` over the Phase 1 tests (M12.d starts after this hand-over; a differing Linux transcript is reported for a fix-loop decision, never given a hand-written override) and `--check` on Windows; msil-wsl-dotnet.sh and make-linux-sysroot.py twice (the second run changes nothing); `lit-legs.ps1 -List`; `bash -n` and `lit-legs.sh --list` in WSL; `yaml.safe_load` of msil-ci.yml; `check-action-pins.py`; `check-upstream-hooks.py --check`.
+
+#### M12.f Documentation (docs, ~200 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`
+- Depends on: M12.a, M12.b, M12.c, M12.d, M12.e
+- Reads: this plan section 6 M12 and its section 12 rows of 2026-10-21, and sections 5.12.8, 5.12.10 and 5.12.11; the hand-overs of M12.a-M12.e; llvm/docs/MSIL/Status.md sections 1-3; llvm/docs/MSIL/GettingStarted.md sections 2, 5 and 7; msil/README.md; msil/test/README.md
+- Provides: the documentation of M12
+
+Status.md: section 2 gains aliases (whole program: callers use the aliasee, external aliases get a forwarding method), `extern_weak` (null, a direct call traps, imports stay P/Invokes), empty asm with operands, inline i128 division and conversions (600-1,050 IL instructions per division site, backlog 2.2) and the dropped unreferenced linkonce functions; section 3: the `__int128` row keeps only constrained conversions, `_Float16`/`__bf16` and `_Complex`; the inline-asm row admits operands; new rows for `section` on a global variable (error until CIL objects, M20) and aggregate `va_arg` (error, phase 3); the byval Limits bullet goes; counts recounted. GettingStarted.md section 7: the new legs, the private runtime and E7 on the WSL legs, host setup, `msil_native_rtlib`, response files. msil/README.md Layout: `utils/linux-oracle/`, `utils/make-linux-sysroot.py`, `utils/msil-wsl-dotnet.sh`. msil/test/README.md: `-std=gnu17`, E7 and `<stem>.linux.expected`, legs, counts. Design.md stays untouched.
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '$f = (Get-PSDrive D).Free; "{0:N1} GB free on D:" -f ($f / 1GB); if ($f -lt 8GB) { "below 8 GB: report to the orchestrator before building"; exit 1 }'  (G1, plan 5.6.11)
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0: private WSL runtimes; idempotent; the first run downloads them)
+ 3. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0: the E7 sysroot; idempotent)
+ 4. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 llc opt clang FileCheck not count split-file llvm-config llvm-profdata TargetParserTests MCTests MSILTests
+ 5. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe
+ 6. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=*MSIL*
+ 7. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*
+ 8. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $new = @("llvm/test/CodeGen/MSIL/alias.ll", "llvm/test/CodeGen/MSIL/extern-weak.ll", "llvm/test/CodeGen/MSIL/asm-operands.ll", "llvm/test/CodeGen/MSIL/i128-divrem.ll", "llvm/test/CodeGen/MSIL/va-arg-aggregate.ll", "llvm/test/CodeGen/MSIL/byval-slot-reuse.ll", "llvm/test/CodeGen/MSIL/section-errors.ll", "llvm/test/CodeGen/MSIL/discardable-defs.ll", "clang/test/CodeGen/MSIL/section-globals.c", "msil/test/harness/linux-oracle.test") + @(foreach ($s in "01-int/i128-divrem", "02-fp/i128-fp-conv", "07-globals/alias", "07-globals/weak-undefined", "10-calls/black-box", "10-calls/byval-slots", "10-calls/rust-shaped") { "msil/test/M1/$s.expected" }); $req = [ordered]@{ "clang/test/CodeGen/MSIL/inline-asm.c" = "OPERANDS"; "clang/test/CodeGen/MSIL/asm-barrier.c" = "BBOX"; "msil/test/lit.cfg.py" = "-std=gnu17"; "msil/utils/make-linux-sysroot.py" = "libgcc_s" }; $bad = @(foreach ($k in $new) { if (-not (Test-Path -LiteralPath ($r + $k))) { "missing: $k" } }) + @(foreach ($k in $req.Keys) { if (-not (Select-String -Quiet -CaseSensitive -LiteralPath ($r + $k) -Pattern $req[$k])) { "no match for $($req[$k]) in $k" } }); if ($bad.Count) { $bad; exit 1 }; "every M12 test is present"'  (G6: lit only warns about a missing path)
+ 9. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3: every MSIL FileCheck test and msil/test on .NET 8 and Framework, native oracle with compiler-rt; 9-11 min)
+10. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net10  (M1 on .NET 10, because i128 and byval IL changed; ~3.6 min)
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg wsl-net10  (all of M1 and the harness, WSL .NET 10 on the private runtime, E7 oracle required; instead of wsl-quick; ~8 min)
+12. pwsh -NoProfile -Command '$d = "D:/llvm-msil/build/lit-results"; $bad = @(); if (-not (Select-String -Quiet -SimpleMatch -LiteralPath "$d/wsl-net10.params.rsp" -Pattern "--param=msil_wsl_dotnet=private")) { $bad += "no response file with msil_wsl_dotnet=private" }; if (-not (Select-String -Quiet -SimpleMatch -LiteralPath "$d/wsl-net10.log" -Pattern "WSL dotnet (private): ")) { $bad += "not the private runtime" }; if (-not (Select-String -Quiet -SimpleMatch -LiteralPath "$d/wsl-net10.log" -Pattern "native oracle: E7")) { $bad += "no E7 oracle" }; if ($bad.Count) { $bad; exit 1 }; "wsl-net10: response file, private runtime, E7 oracle"'
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg roundtrip  (~1 min)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg expected-linux  (update-expected.py --check --os linux msil/test/M1; ~2-3 min)
+15. pwsh -NoProfile -Command '$l = @(pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -List); $l; if ($LASTEXITCODE -ne 0 -or $l -notcontains "wsl-quick (-Wsl)" -or $l -notcontains "expected-linux (-Wsl)") { exit 1 }'  (wsl-quick first runs as M13's G4)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1  (G5 in full: CGStmt.cpp changed; ~3 min)
+17. python -c "import pathlib, yaml; t = pathlib.Path('D:/llvm-msil/.github/workflows/msil-ci.yml').read_text(encoding='utf-8'); yaml.safe_load(t); n = t.count('uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0'); assert n == 2 and 'TODO(user)' not in t, n; print('msil-ci.yml parses; setup-dotnet pinned twice')"
+18. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests clang/lib clang/include"  (must print no diff; same extension list as llvm/utils/git/code-format-helper.py, so .td files are never formatted)
+19. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M12"  (every staged path is owned by a WP of M12, is a M12 fix-loop amendment in section 12, or is on the allow-list)
+```
+
+**Exit criteria**
+- The new tests of M12.c and M12.d pass: aliases (C and rustc's) and weak references run equal to native on .NET 8, .NET 10, Framework and WSL .NET 10 at -O0 and -O2; empty asm with operands, inline i128 division and conversions (compiler-rt on Windows, libgcc_s under E7), aggregate `va_arg`, byval slots, section errors and dropped linkonce functions behave as M12.a and M12.b specify; every other asm form, alias kind, ifunc and helper keeps its Phase 1 diagnostic.
+- `%{msil_cflags}` starts with `-std=gnu17`; WSL legs run on the private runtime with E7 required; `expected-linux` passes on all of M1; lit legs read response files; `wsl-quick`, `expected-linux` and `host-setup` exist; setup-dotnet is pinned at v5.4.0; nothing downloaded is committed.
+- Every Phase 1 test of the gate's legs stays green, IL changes only where an M12 lowering applies, and the docs describe the fixes, legs and counts.
+
+**Review focus** (in addition to the three standing lenses)
+- The alias and `extern_weak` lowerings are right only for a whole program: every use is rewritten (initializers, used and ctor lists, chains, wrappers), imports are untouched, all of it sits in `lowerWholeProgramSymbols` for M19, and functions created in MSILPrepareIR are compiled and verifier-clean.
+- One asm acceptance rule in clang and MSILPrepareIR; no accepted form changes program semantics; nothing else slips through.
+- No false section error on clang's own globals (llvm.metadata, MSVC literals, `__const` data); the discardable drop never removes data, a referenced function or a local function unreferenced from the start.
+- byval: one call's byval arguments never share a slot; nested calls and recursion keep correct copies.
+- E7 is a faithful native oracle (start.c, libgcc_s only as needed); the private runtime needs no sudo or system change; no user-profile path in committed text.
+
+**Rebuild cost.** MSILPrepareIR.cpp, MSILISelLowering.cpp, MSILISelLoweringCall.cpp and the 15 TUs that include MSILMachineFunctionInfo.h; clang's CGStmt.cpp; relinks of llc, opt, clang and MSILTests: about 10-20 min, no configure, nothing new on D:. Gate about 29-31 min without the build (net8 9-11, net10 3.6, wsl-net10 with E7 about 8, roundtrip 1, expected-linux 2-3, upstream-hooks 3, the rest 2); if it runs over 30 minutes, roundtrip moves to the post-commit run-m1-gate.ps1 through a section 12 row. The orchestrator runs run-m1-gate.ps1 in full after the commit (background, 50-60 min; 5.12.10 and section 11): i128 and byval IL also changes in the legs this gate does not run (net8-tc0, more-levels, wsl-net10-tc0, wsl-ilasm, modern-ilasm, utc).
+
+### M13. Phase-2 shared plumbing: upstream hooks, MC object and link-record interfaces, ECMA-335 format headers, msil-ld stub
+
+**Goal.** Land every upstream hook and new shared header of Phase 2 in one batch, as M1 did for Phase 1, so that M14-M23 rebuild only new libraries, `lld/MSIL`, the MSIL target and single clang TUs (5.6.10): WebAssembly's `import_module`/`import_name` and `#pragma comment(lib)` on MSIL triples (Q35, 5.10.6-5.10.7), the Phase 2 driver diagnostic texts (5.10.5), `Triple::isCompatibleWith(X, X-msil)`, MSIL linker options in the irsymtab, the lib/MC object interfaces with clean-error defaults, link-info record v1 (`MSILLink.h`, 5.8.11), the ECMA-335 format headers and table schema that start `LLVMCLI` (5.7.2, 5.7.6), and the lld `msil` flavor with a stub msil-ld (5.9.1). It also writes 5.6.11's one build-target list to `msil/utils/ci/build-targets.txt`, which every later gate builds with `msil-build.ps1 -Standard`. The gate builds lld, the binary tools and the three `llvm-ar` copies for the first time, runs the full upstream-hooks check and proves that the batch is not a clang-wide rebuild. No IL changes.
+
+**Depends on:** M12 (G0 scripts `msil/utils/msil-wsl-dotnet.sh`, `msil/utils/make-linux-sysroot.py`; the `wsl-quick` leg).
+
+**Header changes:**
+- `clang/include/clang/Basic/Attr.td`, `AttrDocs.td`: the two import attributes' target widened (5 objects; measured, 5.6.10)
+- `clang/include/clang/Basic/DiagnosticDriverKinds.td`: one reworded and one new error, no new group (84 objects)
+- `lld/include/lld/Common/Driver.h`: the `MSIL` flavor (lld only; lld is built for the first time here)
+- new headers without dependents: `llvm/include/llvm/BinaryFormat/{CLI.h,CLITables.def,CILOpcodes.def,MSILLink.h}` (`MSILLink.h` includes `llvm/TargetParser/Triple.h` for `setDataModel`, as `BinaryFormat/ELF.h` does), `llvm/include/llvm/MC/{MCSymbolMSIL.h,MCMSILStreamer.h,MCMSILObjectWriter.h}`, `llvm/include/llvm/CLI/{Handles.h,TableSchema.h}`
+- nothing else: 5.6.3's never-edited list holds, plus `MC/TargetRegistry.h`
+
+**Work packages**
+
+#### M13.a clang: import attributes, #pragma comment(lib), driver diagnostic texts (implement, ~250 lines)
+
+- Owned files: `clang/include/clang/Basic/Attr.td`, `clang/include/clang/Basic/AttrDocs.td`, `clang/include/clang/Basic/DiagnosticDriverKinds.td`, `clang/lib/CodeGen/CodeGenModule.cpp`, `clang/lib/Parse/ParsePragma.cpp`
+- Reads: this plan sections 5.6.3, 5.6.10, 5.10.5-5.10.7 and decision D14; llvm/docs/MSIL/recon/p2/backlog.md section 2.5; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md (J12); clang/lib/CodeGen/Targets/WebAssembly.cpp (setTargetAttributes); clang/lib/Sema/SemaWasm.cpp; clang/include/clang/Basic/CMakeLists.txt (attribute generators)
+- Provides: `TargetWebAssemblyOrMSIL`; IR attributes `"msil-import-module"`/`"msil-import-name"` on MSIL function declarations and external variables; `PragmaCommentHandler` for `isOSBinFormatMSIL()`; `diag::err_drv_msil_no_object_output` reworded and `diag::err_drv_msil_ilasm_input` (%0 = triple), texts of 5.10.5
+
+5.10.5-5.10.7 exactly. `Attr.td`: the new TargetSpec and the `TargetSpecificAttr<>` argument of `WebAssemblyImportModule`/`WebAssemblyImportName`, nothing else (SemaWasm is target-neutral; `export_name` stays wasm-only). Before handing over, run `build/bin/clang-tblgen.exe` for every attribute generator with HEAD's and your `Attr.td` into `C:\llvm-msil-scratch\milestones\M13\M13.a\` and show that only `AttrHasAttributeImpl.inc` and `AttrParsedAttrImpl.inc` differ. `AttrDocs.td`: one MSIL paragraph per import doc. `CodeGenModule.cpp`, under `isOSBinFormatMSIL()`: body-less function declarations (beside the `"no-prototype"` block) and `VarDecl::DeclarationOnly` variables (at the global-variable `setTargetAttributes` call) get the D14 keys; definitions get none; `Targets/WebAssembly.cpp` is not touched. `ParsePragma.cpp`: the install and remove conditions gain `isOSBinFormatMSIL()` identically; non-Windows MSIL triples accept only `lib` (ELF's `warn_pragma_comment_ignored` otherwise); CodeGen keeps `AddDependentLib`'s non-ELF path (`!llvm.linker.options`). Checks: `msil-syntax.ps1` on the two `.cpp` files; git-clang-format. Hand-over: 5.6.3's manifest blocks.
+
+#### M13.b lld: msil flavor and stub, irsymtab linker options, Triple compatibility (implement, ~450 lines)
+
+- Owned files: `lld/include/lld/Common/Driver.h`, `lld/Common/DriverDispatcher.cpp`, `lld/tools/lld/lld.cpp`, `lld/tools/lld/CMakeLists.txt`, `lld/CMakeLists.txt`, `lld/unittests/AsLibAll/AllDrivers.cpp`, `lld/unittests/AsLibAll/CMakeLists.txt`, `lld/test/lit.cfg.py`, `lld/MSIL/CMakeLists.txt`, `lld/MSIL/Options.td`, `lld/MSIL/Driver.cpp`, `llvm/lib/Object/IRSymtab.cpp`, `llvm/lib/TargetParser/Triple.cpp`
+- Reads: this plan sections 5.6.3 (the IRSymtab, Triple and lld rows), 5.9.1-5.9.3 (M13 rows), 5.10.6 and decision D3; llvm/docs/MSIL/recon/p2/lld-flavor.md sections 1.1-1.4, 3.3 (item 7) and 5; llvm/docs/MSIL/recon/p2/lld-flavor-files/proto/ (flavor-dispatch.diff, Driver.cpp); lld/wasm/Driver.cpp; lld/wasm/Options.td; lld/wasm/CMakeLists.txt; llvm/lib/Object/IRSymtab.cpp (~140-185)
+- Provides: `lld::MSIL`; `LLD_HAS_DRIVER(msil)` (`lld::msil::link`); `LLD_ALL_DRIVERS` entry; `parseProgname` returns `MSIL` when any `-`-separated component equals `msil`; `lldMSIL`, `MSILOptionsTableGen`; the `msil-ld` copy; lld lit feature `msil`; stub: `--version` (and `-v` without inputs) prints `getLLDVersion()`, `--help` the options, no input `msil-ld: error: no input files`, any input `msil-ld: error: linking is not implemented yet`, unknown options lld's error, every message prefixed `msil-ld: `; `Triple::isCompatibleWith` true for X and X-msil; irsymtab linker options of MSIL modules in `getCOFFLinkerOpts()`
+
+(1) lld-flavor 1.2's hooks, each the wasm line copied (5.9.1); `getFlavor` maps `msil` only; `parseProgname` keeps `ld` -> Gnu, then prefers a component equal to `msil` (case-insensitive); the generic-driver message names `msil-ld (MSIL)`; AsLibAll declares, links and invokes `msil-ld`. (2) The stub (M14 replaces it): `lldMSIL` from `Driver.cpp` with LINK_COMPONENTS `Option Support TargetParser` (M14 widens to 5.9.2), `Options.td` with `--help`, `--version`, `-v` in lld/wasm's helper classes, `Driver.cpp` with `// Derived from lld/wasm/Driver.cpp at 64f50ffd4f1c.` and wasm's `link()` shape (a new `CommonLinkerContext` per call for `LLD_IN_TEST=2`, `logName` always `msil-ld`), returning `errorCount() == 0`. (3) `IRSymtab.cpp`: the `llvm.linker.options` collection also for `TT.isOSBinFormatMSIL()`; the other COFF logic stays COFF-only. (4) `isCompatibleWith`: when either triple is MSIL, compare the two `getNativeFormatTriple()`s (comment: lld-flavor 3.3 item 7, D3); `Triple.h` unchanged. Checks: `msil-syntax.ps1` on the three `.cpp` hooks and on `lld/MSIL/Driver.cpp` (`-FlagsFrom lld/wasm/Driver.cpp`, `-ExtraInclude` of a scratch `Options.inc` from `llvm-tblgen -gen-opt-parser-defs`, found before wasm's); a private `lld.exe` under `C:\llvm-msil-scratch\milestones\M13\M13.b\` for lld-flavor 1.3's cases is welcome; git-clang-format. Hand-over: 5.6.3's manifest blocks.
+
+#### M13.c MC object interfaces and the link-info record v1 header (implement, ~800 lines)
+
+- Owned files: `llvm/include/llvm/BinaryFormat/MSILLink.h`, `llvm/include/llvm/MC/MCSymbolMSIL.h`, `llvm/include/llvm/MC/MCMSILStreamer.h`, `llvm/include/llvm/MC/MCMSILObjectWriter.h`, `llvm/lib/MC/MCMSILStreamer.cpp`, `llvm/lib/MC/MCMSILObjectWriter.cpp`, `llvm/lib/MC/MCContext.cpp`, `llvm/lib/MC/TargetRegistry.cpp`, `llvm/lib/MC/MCAsmBackend.cpp`, `llvm/lib/MC/CMakeLists.txt`
+- Reads: this plan sections 5.6.3 (the MC rows), 5.6.4, 5.8.8, 5.8.9 (the DataModel rule), 5.8.11, 5.7.1 (LLVMMC never depends on LLVMCLI) and decisions D5, D12; llvm/docs/MSIL/recon/p2/mc-streamer.md sections 5.1-5.6, 6.2, 6.3 and 7; llvm/include/llvm/BinaryFormat/ELF.h (a header-only BinaryFormat header that includes Triple.h); llvm/include/llvm/MC/MCSymbolWasm.h; llvm/include/llvm/MC/MCWasmStreamer.h; llvm/lib/MC/MCWasmStreamer.cpp; llvm/include/llvm/MC/MCWasmObjectWriter.h; llvm/lib/MC/MCContext.cpp (createSymbolImpl); llvm/lib/MC/TargetRegistry.cpp; llvm/lib/MC/MCAsmBackend.cpp
+- Provides: every name of 5.8.11's `MSILLink.h`, including `SymbolFlags::Import` (0x800), `Symbol::ImportModule` and `Symbol::ImportName` (`std::string`) and `inline void setDataModel(Header &H, const Triple &TT, unsigned PointerSize, unsigned WCharSize)`; `class MCSymbolMSIL : public MCSymbol` with `enum class Kind : uint8_t { Unknown, Method, Data, FuncAddrField, Signature, ExternalMember }` and get/set pairs `Kind`, `Weak` (`isWeak`), `Visibility` (`MSILLink::Visibility`), `NoStrip` (`isNoStrip`), `Signature` (`const cli::MethodSig *`), `ImportModule`, `ImportName` (`std::optional<StringRef>`), `FuncTarget` (`const MCSymbolMSIL *`), `ExternalMemberId` (`uint32_t`, 0 = none), `Size` (`const MCExpr *`); `class MCMSILStreamer : public MCObjectStreamer`; `MCStreamer *createMSILStreamer(MCContext &, std::unique_ptr<MCAsmBackend> &&, std::unique_ptr<MCObjectWriter> &&, std::unique_ptr<MCCodeEmitter> &&)`; `class MCMSILObjectTargetWriter : public MCObjectTargetWriter` (format `Triple::MSIL`, `classof`, virtual `recordRelocation` with `MCObjectWriter`'s signature, virtual `uint64_t writeObject(MCAssembler &, raw_pwrite_stream &)`); `createMSILObjectWriter(std::unique_ptr<MCMSILObjectTargetWriter>, raw_pwrite_stream &)`; default writer error `CIL object files are not supported for MSIL target '<triple>' yet`
+
+(1) `MSILLink.h`: 5.8.11 transcribed exactly, header-only, guard `LLVM_BINARYFORMAT_MSILLINK_H`; it includes `llvm/TargetParser/Triple.h` for `setDataModel` (as `BinaryFormat/ELF.h` does; BinaryFormat already links TargetParser and gains no `.cpp`). Each enum and struct is commented with its 5.8.8 table and rule: C8 beside `SymbolFlags`, including IMPORT only with DATA and UNDEFINED, never with TLS, and with a non-empty ImportName; `ComdatSelection` equals `Comdat::SelectionKind`; `setDataModel` with 5.8.9's DataModel rule, word for word (PointerSize as given; LongSize 4 when PointerSize is 4 or the triple is Windows other than Cygwin, else 8; WCharSize as given; LongDoubleSize 8). No codec, no P2-C model, no INIT_FINI position field. (2) `MCSymbolMSIL.h` after `MCSymbolWasm.h`, trivially destructible (strings owned by the target streamer), `namespace llvm::cli { struct MethodSig; }` as its only CLI reference; comments define the kinds (mc-streamer 5.3) and say that M18 and M19 set its fields from the target; the header does not change after M13 (no later Phase 2 WP owns it). (3) `MCMSILStreamer` in `MCWasmStreamer`'s shape: `emitSymbolAttribute` maps `MCSA_Global`/`MCSA_Extern` to external, `MCSA_Weak`/`MCSA_WeakReference` to weak and external, `MCSA_Hidden`/`MCSA_Internal`/`MCSA_Protected` to the visibility, `MCSA_NoDeadStrip` to no-strip, `MCSA_ELF_TypeFunction`/`MCSA_ELF_TypeObject` to `Method`/`Data`, else returns false; `emitCommonSymbol` sets common, `Data`, external; `emitLocalCommonSymbol` reports `local common symbols are not supported for MSIL` through `MCContext::reportError`; directives MSIL never emits are `llvm_unreachable` as in wasm. `createMSILStreamer` lives in this header, not in `TargetRegistry.h` (69 dependents). (4) The default `writeObject` reports the Provides error through `MCContext::reportError` and writes no byte; `createMSILObjectWriter` returns a file-local writer that owns the target writer and forwards both calls, so M18 and M19 override them in the target and lib/MC never changes again. (5) Hooks: `MCContext.cpp` (`static_assert`; `IsMSIL` creates `MCSymbolMSIL`), `TargetRegistry.cpp` (`case Triple::MSIL` calls `createMSILStreamer`, reached once M18 registers an emitter and backend), `MCAsmBackend.cpp` (`case Triple::MSIL` in `createObjectWriter`; dwo unchanged), `llvm/lib/MC/CMakeLists.txt`. Checks: `msil-syntax.ps1` on the five `.cpp` files and a scratch TU including the four headers (and calling `setDataModel`); git-clang-format. Hand-over: 5.6.3's MC rows (the `MCAsmBackend.cpp` switch-default line becomes a block) and 5.6.4's fork-only lines.
+
+#### M13.d ECMA-335 format headers, table schema and the lib/CLI skeleton (implement, ~1,300 lines)
+
+- Owned files: `llvm/include/llvm/BinaryFormat/CLI.h`, `llvm/include/llvm/BinaryFormat/CLITables.def`, `llvm/include/llvm/BinaryFormat/CILOpcodes.def`, `llvm/include/llvm/CLI/Handles.h`, `llvm/include/llvm/CLI/TableSchema.h`, `llvm/lib/CLI/TableSchema.cpp`, `llvm/lib/CLI/CMakeLists.txt`, `llvm/lib/CMakeLists.txt`, `llvm/unittests/CMakeLists.txt`
+- Reads: this plan sections 5.7.1, 5.7.2, 5.7.6, 5.7.12 and 5.7.14; llvm/docs/MSIL/recon/p2/metadata-writer.md sections 3.8, 4.1-4.5 and 5.1; llvm/docs/MSIL/recon/p2/metadata-writer-files/{CLITables.def,CILOpcodes.def,verify_schema.log}; llvm/docs/MSIL/recon/p2/metadata-writer-files/py/{cliwriter.py,verify_schema.py,gen_tables_def.py}; llvm/docs/MSIL/recon/p2/bcl-binding.md sections 7.2-7.4; llvm/include/llvm/BinaryFormat/COFF.h; llvm/include/llvm/ADT/BitmaskEnum.h; llvm/lib/Target/MSIL/MSILUtilities.h (MaxILNameBytes)
+- Provides: every name 5.7.2 gives `CLI.h`, `CLITables.def` (`CLI_TABLE`, `CLI_COLUMN`, `CLI_CODED_INDEX`), `CILOpcodes.def` (`CIL_OPCODE`, 219 entries) and `Handles.h` (`cli::EntityHandle`, `cli::TokenRef`); 5.7.6's `TableSchema.h`; component `CLI` (`LLVMCLI`); `add_subdirectory(CLI)` in `llvm/lib` and `llvm/unittests`
+
+5.7.14's CLI-fmt: 5.7.2 and the `TableSchema` part of 5.7.6 exactly, namespace `llvm::cli` only, from the verified `.def` drafts (entries and order kept); values from ECMA-335 only; `MaxIdentifierBytes` equals `MSIL::MaxILNameBytes`; II.24.2.6's width rules. CMake and the two `add_subdirectory(CLI)` lines as 5.7.1 (sources: `TableSchema.cpp`; M13.e creates `llvm/unittests/CLI/CMakeLists.txt`). Checks: `msil-syntax.ps1 -FlagsFrom llvm/lib/MC/StringTableBuilder.cpp` on `TableSchema.cpp` and a scratch TU including every new header; a private build under `C:\llvm-msil-scratch\milestones\M13\M13.d\` (5.7.1) that recomputes `verify_schema.log`'s row sizes with `MetadataSizes`; git-clang-format. Hand-over: fork-only lines and the two CMake blocks (5.7.1).
+
+#### M13.e Tests for the CLI format, table schema and link-record constants (test, ~600 lines)
+
+- Owned files: `llvm/unittests/CLI/CMakeLists.txt`, `llvm/unittests/CLI/CLIFormatTest.cpp`, `llvm/unittests/CLI/TableSchemaTest.cpp`, `llvm/unittests/CLI/MSILLinkTest.cpp`
+- Depends on: M13.c, M13.d
+- Reads: this plan sections 5.7.1, 5.7.2, 5.7.6, 5.7.12, 5.7.13, 5.8.8, 5.8.9 (the DataModel rule), 5.8.11 and 5.9.17 (M13's `setDataModel` cases); llvm/docs/MSIL/recon/p2/metadata-writer.md sections 3.8 and 6; llvm/docs/MSIL/recon/p2/metadata-writer-files/{verify_schema.log,dotnet-opcodes.tsv}; llvm/docs/MSIL/recon/p2/metadata-writer-files/py/verify_schema.py (method); llvm/unittests/Object/CMakeLists.txt (style); llvm/include/llvm/IR/Comdat.h
+- Provides: `CLITests` (`build/unittests/CLI/CLITests.exe`): suites `CLIFormatTest`, `CLITableSchemaTest` (at least 20 tests together) and `CLIMSILLinkTest` (at least 6)
+
+From the specification only (section 1.4); expectations from ECMA-335, the contracts, the recon logs or tools run in scratch, never from the headers under test. `CMakeLists.txt` per 5.7.1 (`LLVM_LINK_COMPONENTS CLI Support TargetParser`, 5.7.1: `MSILLinkTest.cpp` builds `Triple`s directly; `LLVMTestingSupport`). `CLIFormatTest`: 5.7.13's M13 row, including ECMA II.23.2's unsigned and signed vectors, truncation and bad lead bytes, `.def` invariants and every flag value equal to System.Reflection's (generated in scratch with pwsh and embedded). `CLITableSchemaTest`: the 5.7.13 boundaries and `getRowSize` of every table for an ilasm-built `msil/test/M1/11-programs` program and the net8 `System.Runtime.dll`, computed with System.Reflection.Metadata in scratch. `CLIMSILLinkTest`: every constant, enumerator and default of 5.8.11 checked against 5.8.8's tables (magic `4D 53 4C 4B`; disjoint single-bit flags outside `BindingMask`/`VisibilityMask`, `Import` = 0x800 among them; `Symbol`'s `ImportModule`/`ImportName` empty by default; `Visibility` = ELF `STV_*`; `ComdatSelection` = `llvm::Comdat::SelectionKind`, header-only use), and `setDataModel` per 5.8.9 and 5.9.17: with `Triple::getDefaultWCharSize()` and pointer size 8, `x86_64-pc-windows-msvc-msil` and `x86_64-w64-windows-gnu-msil` give 8,4,2,8 and `x86_64-unknown-linux-gnu-msil` and `aarch64-unknown-linux-gnu-msil` give 8,8,4,8; a `wchar_size` override (2 on `x86_64-unknown-linux-gnu-msil`) gives 8,8,2,8; pointer size 4 gives LongSize 4. The WP starts after M13.c and M13.d hand over (Depends on) and syntax-checks its three `.cpp` files with `msil-syntax.ps1 -FlagsFrom llvm/unittests/TargetParser/TripleTest.cpp`, compiling against their headers without reading them; `CLITests` first runs at the gate (5.7.1).
+
+#### M13.f Hook tests: import attributes, #pragma comment(lib), driver texts, irsymtab, Triple, MC hooks, msil-ld dispatch (test, ~750 lines)
+
+- Owned files: `clang/test/CodeGen/MSIL/import-attributes.c`, `clang/test/CodeGen/MSIL/pragma-comment-lib.c`, `clang/test/Driver/msil-toolchain.c`, `llvm/test/CodeGen/MSIL/irsymtab-linker-options.ll`, `llvm/unittests/TargetParser/TripleTest.cpp`, `llvm/unittests/Target/MSIL/CMakeLists.txt`, `llvm/unittests/Target/MSIL/MSILMCObjectHooksTest.cpp`, `lld/test/MSIL/`
+- Depends on: M13.c
+- Reads: this plan sections 2, 5.8.11 (`MSILLink::Visibility`), 5.9.1, 5.9.14 (diagnostic format), 5.10.5-5.10.7, 5.12.13, decision D5 and the Provides of M13.a-M13.c; llvm/docs/MSIL/recon/p2/lld-flavor.md sections 1.3 and 3.3; `git show HEAD:lld/test/lit.cfg.py` (the committed feature map and tool substitutions; the working-tree file is M13.b's); llvm/docs/MSIL/recon/p2/judge-c-fidelity.md (J12); clang/test/CodeGen/WebAssembly/wasm-import-module.c; clang/test/Sema/attr-wasm.c; clang/test/CodeGen/pragma-comment.c; llvm/test/CodeGen/MSIL/pinvoke.ll; llvm/test/Object/X86/irsymtab.ll; lld/test/wasm/lit.local.cfg; lld/test/ELF/version.test; llvm/unittests/Target/MSIL/MSILTargetStreamerTest.cpp
+- Provides: the test files of gate step 16; gtests `MSILMCObjectHooks.*` (at least 6) and `TripleTest.MSILIsCompatibleWith`; `lld/test/MSIL/lit.local.cfg`, `dispatch.test`, `stub.test`
+
+From the specification only (section 1.4). The WP starts after M13.c hands over (Depends on) and compiles `MSILMCObjectHooksTest.cpp` against M13.c's headers without reading them; it never reads M13.a's or M13.b's files. (1) `import-attributes.c` (`-emit-llvm`, no REQUIRES; one `%if msil-registered-target` `-S` line): on x86_64 Linux, windows-msvc and aarch64 Linux MSIL triples `__has_attribute` is 1, both, one and the C23 spelling give the IR keys on declarations and external variables, definitions warn (`-verify`) and get none, the `-S` line shows pinvoke.ll's `pinvokeimpl("<module>" as "<entry>" cdecl)`; native x86_64-linux ignores the attribute, wasm32 keeps `wasm-import-module`. (2) `pragma-comment-lib.c`: `!llvm.linker.options` on every MSIL triple with the native spelling (`-lws2_32` on Linux with and without `-fms-extensions`, `/DEFAULTLIB:ws2_32.lib` on windows-msvc without it, windows-gnu as its native triple gives, generated once in scratch), no `!llvm.dependent-libraries`, non-lib kinds warned on Linux MSIL triples, the native ELF control unchanged. (3) `msil-toolchain.c`: the object block's `OBJ-*` checks get 5.10.5's text; nothing else. (4) `irsymtab-linker-options.ll`: `llvm-as`, `llvm-bcanalyzer -dump -show-binary-blobs`: the STRTAB blob carries the option for linux-gnu-msil and windows-msvc-msil and not for native x86_64-linux. (5) `TripleTest.MSILIsCompatibleWith`: compatible pairs (native/MSIL both ways, MSVC versions, windows-gnu vendors) and incompatible ones (other OS, environment, arch), plus `merge`. (6) `MSILMCObjectHooks` in `MSILTests` with test backend, emitter and target writer: symbols keep every field; `createMCObjectStreamer` returns a streamer for both x86_64 triples; attribute and common mapping; the local-common error; `createObjectWriter` dispatch to an overriding `writeObject`; the default writer's exact error through the context's handler and zero bytes. (7) `lld/test/MSIL/`: `lit.local.cfg` (requires `msil`; may add `%lld_exe` from `config.lld_tools_dir`); `dispatch.test` (`msil-ld --version`, `lld -flavor msil`, copies named `x86_64-unknown-linux-gnu-msil-ld`, `x86_64-w64-windows-gnu-msil-ld`, `aarch64-pc-windows-msvc-msil-ld` reach the stub, `ld.lld` and a copy named `msilx-ld` do not, plain `lld` names `msil-ld (MSIL)`; make the named copies hard links with `%python` and `os.link` in a fresh `%t` directory, with the `.exe` suffix on Windows, so a run costs no disk on D:); `stub.test` (each text of M13.b's Provides, crash markers excluded; `--version` checked as `LLD {{.+}}`, as lld/test/ELF/version.test does). Checks: `msil-syntax.ps1` on `TripleTest.cpp` and `MSILMCObjectHooksTest.cpp` (`-FlagsFrom llvm/unittests/Target/MSIL/MSILTargetStreamerTest.cpp`); run by hand, with outputs in scratch, the RUN lines that need nothing of this milestone (the native and wasm controls with the shared build's clang and FileCheck); every other RUN line needs M13.a's or M13.b's changes or a tool the shared build does not have yet (lld, llvm-as, llvm-bcanalyzer) and is listed in the hand-over as checked at the gate.
+
+#### M13.g Infra and docs: fork prefixes, upstream-hooks manifest, the build-target list, build and unit-test scripts, CI cache, documentation (infra, ~750 lines)
+
+- Owned files: `msil/utils/upstream-hooks.txt`, `msil/utils/ci/check-upstream-hooks.py`, `msil/utils/ci/upstream-hooks.ps1`, `msil/utils/ci/build-targets.txt`, `msil/utils/ci/build.ps1`, `msil/utils/ci/build.sh`, `msil/utils/build/msil-build.ps1`, `msil/utils/ci/unit-tests.ps1`, `msil/utils/ci/unit-tests.sh`, `msil/test/CMakeLists.txt`, `msil/cmake/caches/MSIL.cmake`, `.github/workflows/msil-ci.yml`, `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`, `msil/utils/build/README.md`
+- Depends on: M13.a, M13.b, M13.c, M13.d, M13.e, M13.f
+- Reads: this plan sections 5.6.1-5.6.4, 5.6.9-5.6.11, 5.7.1, 5.12.10, 5.12.12, M11.d, M11.f and M13.a-M13.f with their hand-overs; msil/utils/upstream-hooks.txt; msil/utils/ci/check-upstream-hooks.py; msil/utils/ci/upstream-hooks.ps1; msil/utils/ci/build.ps1; msil/utils/ci/build.sh; msil/utils/build/msil-build.ps1; msil/utils/ci/unit-tests.ps1; msil/test/CMakeLists.txt; llvm/tools/llvm-ar/CMakeLists.txt (the three copies); llvm/docs/MSIL/Status.md; llvm/docs/MSIL/GettingStarted.md
+- Provides: `FORK_PREFIXES` plus `lld/MSIL/`, `lld/test/MSIL/`, `llvm/include/llvm/CLI/`, `llvm/lib/CLI/`, `llvm/unittests/CLI/`, `llvm/tools/llvm-cil-dump/`, `llvm/test/tools/llvm-cil-dump/`, `llvm/tools/llvm-cil-copy/`, `llvm/test/tools/llvm-cil-copy/`, `llvm/test/MC/MSIL/`; `GTEST_BINARIES` plus `tools/lld/unittests/AsLibAll/LLDAsLibAllTests.exe` (run by the gtest leg); `SUITE_ROOTS` plus `"lld": "lld/test"`; `msil/utils/ci/build-targets.txt` (5.6.11's M13 row, one target per line); `msil-build.ps1 -Standard`; `build.ps1` and `build.sh` reading the file; unit-test scripts running `CLITests` (filter `*`); check-msil with `lld/test/MSIL`; `MSIL.cmake` with `clang;lld`
+
+Starts when M13.a-M13.f have handed over (Depends on). (1) `check-upstream-hooks.py`: the Provides additions with self-test cases (a file under a new prefix needs no block; `lld :: MSIL/x.test` maps to `lld/test/MSIL/x.test`). (2) `upstream-hooks.ps1`: LLDAsLibAllTests in the gtest leg (`-NoSkip -MinTests 1`). (3) `upstream-hooks.txt` from the hand-overs (5.6.3, 5.6.4, 5.7.1): fork-only lines for the four BinaryFormat headers, the three MC headers and the two MC `.cpp` files; new blocks: `Attr.td` (lit `clang/test/Sema/attr-wasm.c`, `clang/test/CodeGen/WebAssembly/wasm-import-module.c`, `wasm-import-name.c`, `clang/test/AST/ast-dump-wasm-attr-import.c`), `AttrDocs.td` (none), `ParsePragma.cpp` (lit `clang/test/Preprocessor/pragma_microsoft.c`, `clang/test/CodeGen/pragma-comment.c`), `IRSymtab.cpp` (lit `llvm/test/Object/X86/irsymtab*.ll`, `llvm/test/LTO/Resolution/X86/symtab.ll`, `symtab-elf.ll`), `MCAsmBackend.cpp` (replaces its switch-default line; lit `llvm/test/CodeGen/X86/addrsig.ll`, `file-directive.ll`, `cov-sections.ll`), the CMake files (none: build wiring), `Driver.h`, `DriverDispatcher.cpp`, `lld.cpp` (lit `lld/test/MinGW/driver.test`, `lld/test/ELF/version.test`, `lld/test/wasm/version.test`; gtest LLDAsLibAllTests), `lld/unittests/AsLibAll/AllDrivers.cpp` and its `CMakeLists.txt` (gtest `tools/lld/unittests/AsLibAll/LLDAsLibAllTests.exe`, never `compile`: the hooks tree `C:\llvm-msil-hooks-build` is configured without lld), `lld/test/lit.cfg.py` (none: feature map); `fork` lines for M13.f's tests in new and existing blocks (`DiagnosticDriverKinds.td`, `CodeGenModule.cpp`, `MCContext.cpp`, `TargetRegistry.cpp`, `Triple.cpp`); `min-pass` raised by the added inputs that PASS here. (4) The one build list (5.6.11): `build-targets.txt` holds the M11 set `llc opt clang FileCheck not count split-file llvm-config llvm-profdata TargetParserTests MCTests MSILTests`, then `lld llvm-ar llvm-ranlib llvm-lib llvm-dlltool llvm-nm llvm-objdump llvm-readobj llvm-as llvm-bcanalyzer llvm-lto2 CLITests LLDAsLibAllTests`, one per line in this order, with a `#` comment naming 5.6.11 and why `llvm-ranlib`, `llvm-lib` and `llvm-dlltool` are named (custom copy targets that `ninja llvm-ar` does not build; without them lit finds VS's `llvm-lib` on msil-env's PATH, and the Linux job has none). `build.ps1` and `build.sh` read it (no literal lists left; `#` and blank lines skipped) and keep their jitall step. `msil-build.ps1` gains `-Standard`: build every target of the file, then any target named on the command line; `$Targets` is no longer mandatory with it, and without `-Standard` the script behaves as before. (5) `unit-tests.ps1`/`.sh`: `CLITests` with filter `*` (suites without MSIL, 5.7.13). (6) `msil/test/CMakeLists.txt`: `lld/test/MSIL` in check-msil; `lld`, `llvm-as`, `llvm-bcanalyzer` in DEPENDS when they exist. (7) `MSIL.cmake` per 5.12.12; `msil-ci.yml` only its build-target comment (now naming `build-targets.txt`). (8) Docs: Status.md (state line, the object-files row's driver text, import attributes, `#pragma comment(lib)`, the msil-ld stub, test counts), GettingStarted.md (section 2: `msil-build.ps1 -Standard` and `build-targets.txt` instead of a literal target list; the driver text at ~125 and ~475), `msil/utils/build/README.md` (`-Standard`), the other READMEs as needed; never Design.md. Checks: `check-upstream-hooks.py --self-test`, `--check`, `--list-lit`; `upstream-hooks.ps1 -Leg manifest,pins` and `-SelfTest`; `bash -n` on the `.sh` files; `build-targets.txt` against 5.6.11's M13 row (gate step 5's command); `msil-build.ps1 -Standard -BuildDir C:\llvm-msil-scratch\milestones\M13\M13.g\nobuild` (an empty directory: ninja stops at once without `build.ninja`, after the script printed its ninja command line, which must list the file's targets in order; never against `D:\llvm-msil\build`).
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '$f = (Get-PSDrive D).Free / 1GB; "D: has {0:N1} GB free" -f $f; if ($f -lt 8) { "below 8 GB: report to the user before building (plan 5.6.11; M13 adds about 1.0-1.5 GB)"; exit 1 }'
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0, idempotent: Q39's private WSL runtimes)
+ 3. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0, idempotent: the E7 oracle libraries)
+ 4. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-configure.ps1 -Experimental MSIL  (new llvm/lib/CLI, llvm/unittests/CLI and lld/MSIL)
+ 5. pwsh -NoProfile -Command '$want = "llc opt clang FileCheck not count split-file llvm-config llvm-profdata TargetParserTests MCTests MSILTests lld llvm-ar llvm-ranlib llvm-lib llvm-dlltool llvm-nm llvm-objdump llvm-readobj llvm-as llvm-bcanalyzer llvm-lto2 CLITests LLDAsLibAllTests"; $got = @(Get-Content -LiteralPath D:/llvm-msil/msil/utils/ci/build-targets.txt | ForEach-Object { ($_ -replace "#.*$", "").Trim() } | Where-Object { $_ }) -join " "; if ($got -ne $want) { "build-targets.txt: $got"; "plan 5.6.11, M13 row: $want"; exit 1 }; "build-targets.txt equals plan 5.6.11 (M13 row)"'
+ 6. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard > D:/llvm-msil/build/msil-M13-build.log 2>&1  (G1: the 25 targets of step 5; run_in_background; 8-12 min)
+ 7. pwsh -NoProfile -Command '$m = @(Select-String -LiteralPath D:/llvm-msil/build/msil-M13-build.log -Pattern "^\[(\d+)/(\d+)\]" | ForEach-Object { $_.Matches[0] }); $ran = 0; $total = 0; if ($m.Count) { $ran = ($m | ForEach-Object { [int]$_.Groups[1].Value } | Measure-Object -Maximum).Maximum; $total = [int]$m[-1].Groups[2].Value }; "ninja edges run in the M13 build: $ran (total on the last status line, after restat pruning: $total)"; if ([Math]::Max($ran, $total) -gt 1000) { "more than 1,000 steps: a widely included header changed"; exit 1 }'  (not a clang-wide rebuild; the first lines' totals still count edges that restat prunes later)
+ 8. pwsh -NoProfile -Command '$b = "D:/llvm-msil/build/bin/"; $miss = @("lld", "msil-ld", "ld.lld", "lld-link", "ld64.lld", "wasm-ld", "llvm-ar", "llvm-ranlib", "llvm-lib", "llvm-dlltool", "llvm-nm", "llvm-objdump", "llvm-readobj", "llvm-as", "llvm-bcanalyzer", "llvm-lto2") | Where-Object { -not (Test-Path -LiteralPath ($b + $_ + ".exe")) }; $f = (Get-PSDrive D).Free / 1GB; "D: has {0:N1} GB free after the build" -f $f; if ($miss) { "missing: $miss"; exit 1 }; if ($f -lt 8) { "below 8 GB: report to the user"; exit 1 }'
+ 9. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/unit-tests.ps1  (G2: TargetParserTests, MCTests and MSILTests with the MSIL filter, and CLITests)
+10. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe -Filter 'MSILMCObjectHooks.*' -NoSkip -MinTests 6
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe -Filter 'TripleTest.MSILIsCompatibleWith' -NoSkip -MinTests 1
+12. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 26  (5.7.13's floor for M13-M15)
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter 'CLIMSILLinkTest.*' -NoSkip -MinTests 6
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/tools/lld/unittests/AsLibAll/LLDAsLibAllTests.exe -Filter '*' -NoSkip -MinTests 1
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-expect-error.ps1 -Pattern 'msil-ld: error: linking is not implemented yet' -- D:/llvm-msil/build/bin/msil-ld.exe D:/llvm-msil/msil/test/Inputs/msil_test.h  (exit 1, no crash marker)
+16. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $req = [ordered]@{ "clang/test/CodeGen/MSIL/import-attributes.c" = "msil-import-module"; "clang/test/CodeGen/MSIL/pragma-comment-lib.c" = "llvm.linker.options"; "clang/test/Driver/msil-toolchain.c" = "CIL object files are not supported for MSIL target"; "llvm/test/CodeGen/MSIL/irsymtab-linker-options.ll" = "llvm-bcanalyzer"; "llvm/unittests/TargetParser/TripleTest.cpp" = "MSILIsCompatibleWith"; "llvm/unittests/Target/MSIL/MSILMCObjectHooksTest.cpp" = "createMSILObjectWriter"; "llvm/unittests/CLI/CLIFormatTest.cpp" = "encodeCompressedUInt"; "llvm/unittests/CLI/TableSchemaTest.cpp" = "MetadataSizes"; "llvm/unittests/CLI/MSILLinkTest.cpp" = "setDataModel"; "lld/test/MSIL/lit.local.cfg" = "msil"; "lld/test/MSIL/dispatch.test" = "x86_64-unknown-linux-gnu-msil-ld"; "lld/test/MSIL/stub.test" = "linking is not implemented yet" }; $bad = @(foreach ($k in $req.Keys) { $p = $r + $k; if (-not (Test-Path -LiteralPath $p)) { "missing: $k" } elseif (-not (Select-String -Quiet -SimpleMatch -LiteralPath $p -Pattern $req[$k])) { "no match for $($req[$k]) in $k" } }); if ($bad.Count) { $bad; exit 1 }; "every M13 test is present"'  (G6)
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1" lld/test/MSIL clang/test/CodeGen/MSIL/import-attributes.c clang/test/CodeGen/MSIL/pragma-comment-lib.c clang/test/Driver/msil-toolchain.c llvm/test/CodeGen/MSIL/irsymtab-linker-options.ll  (lld/test/MSIL joins the net8 leg in M14)
+18. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3; 9-11 min)
+19. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-quick  (G4; about 4 min)
+20. python D:/llvm-msil/msil/utils/ci/check-upstream-hooks.py --self-test
+21. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1  (G5 in full: manifest, pins, lit, gtest, compile; 4-6 min)
+22. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -SelfTest
+23. python -c "import yaml; yaml.safe_load(open('D:/llvm-msil/.github/workflows/msil-ci.yml', encoding='utf-8'))"
+24. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (must print no diff; lld joins the paths from M13)
+25. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M13"
+```
+
+**Exit criteria**
+- `build-targets.txt` equals 5.6.11's M13 row, and `msil-build.ps1 -Standard` builds it with at most 1,000 ninja edges run; lld with its five copies, `llvm-ar` with its three copies (`llvm-ranlib`, `llvm-lib`, `llvm-dlltool`) and the six other tools exist in `build/bin`; D: keeps 8 GB.
+- On MSIL triples the import attributes give the D14 IR keys on declarations and external variables and reach `pinvokeimpl` in `-S`; `#pragma comment(lib)` gives `!llvm.linker.options`; the driver prints 5.10.5's texts; wasm and native triples are unchanged.
+- `isCompatibleWith(X, X-msil)` holds and incompatible pairs stay incompatible; MSIL bitcode's irsymtab carries linker options; MSIL contexts create `MCSymbolMSIL`, and both MC factories dispatch MSIL to the new writer, which fails with a clean MCContext error.
+- `MSILLink.h` equals 5.8.11, `Import` and `setDataModel` included (`CLIMSILLinkTest`: the four triples and the overrides); the CLI headers follow 5.7.2 and 5.7.6; CLITests passes at least 26 tests.
+- `msil-ld`, `lld -flavor msil` and names with an `msil` component reach the stub, which fails cleanly; the other flavors dispatch as before.
+- `upstream-hooks.ps1` passes every leg at the raised min-pass, and both self-tests pass; net8 and wsl-quick stay green; no IL changes.
+
+**Review focus** (in addition to the three standing lenses)
+- Hook minimality: wasm lines copied or one widened condition; only the three `.td` files among existing headers; `Attr.td` changes two generated files.
+- `MSILLink.h` against 5.8.11 name by name and `setDataModel` against 5.8.9's rule; LLVMMC free of LLVMCLI; `MCSymbolMSIL` trivially destructible; no `report_fatal_error` on a user path.
+- `parseProgname` matches whole components only; the stub is re-entrant and names itself `msil-ld`.
+- Import attributes only on declarations; identical pragma install and remove conditions.
+- ECMA-335 values against ECMA and System.Reflection; `setDataModel` expectations from the contract, not from the header; tests from the specification with negative cases; the manifest cannot pass with a missing block or an unknown gtest binary.
+- One build list: `build.ps1`, `build.sh` and `msil-build.ps1 -Standard` read only `build-targets.txt`; `msil-build.ps1` without `-Standard` is unchanged for every existing caller.
+
+**Rebuild cost.** A full rebuild of the M11 target set takes about 47 minutes (5.6.10). M13 is not a clang-wide rebuild: `DiagnosticDriverKinds.td` recompiles 84 objects (~282 CPU-s), `Attr.td` 4 (~95 CPU-s), `AttrDocs.td` 1, each hooked `.cpp` one (8 files) plus the two new MC TUs, then the tools linking LLVMMC or LLVMTargetParser relink (~20 s). New: lld (126 compiles, 2.5-3 min at -j4), `llvm-ar` and its three copies, llvm-nm, llvm-objdump, llvm-readobj, llvm-as, llvm-bcanalyzer, llvm-lto2, LLVMCLI, CLITests, LLDAsLibAllTests and lldMSIL, and one CMake regeneration. A restat-aware simulation over the tree's `build.ninja` and `.ninja_deps` (`C:\llvm-msil-scratch\p2-plan\revise-M13\restat_sim.py`) gives 402 edges run before the new LLVMCLI, CLITests, lldMSIL and MC TUs: expect 400-500 ninja steps, 8-12 minutes. The first `[N/M]` totals are near 1,000, because ninja counts every edge below the restat TableGen outputs of the three `.td` files until restat prunes them; step 7 therefore measures the edges run (the largest N, and the M of the last line). Disk: about 1.0-1.5 GB more on D: (lld and its five copies about 0.4 GB; 5.6.11). The gate after the build takes about 24-27 minutes. If it measures over 30 minutes, step 19 (`wsl-quick`; M13 changes no IL) moves to the `run-m1-gate.ps1` run after M15's commit through a section 12 row (section 11).
+
+### M14. msil-ld links bitcode, and the clang MSIL toolchain
+
+**Goal.** The first runnable Phase 2 milestone (P2B-1; brief section 2, lld-flavor 6.2). msil-ld links LLVM bitcode and archives of it: lazy members, resolution ported from `lld/ELF/Symbols.cpp` (5.9.5), whole-program LTO with `OverrideTriple` and the module flags `msil-assembly-name` and `msil-lto`, and `--lto-emit-asm`, whose ILAsm text ilasm turns into an EXE (the PE writer is M20); `-Map`, `--why-extract` and `--reproduce` as in lld. clang gets `MSILToolChain<NativeTC>` (5.10.1-5.10.5): `clang -c` writes bitcode (Q6), links run msil-ld, `-S` IL is unchanged. The harness gains `msil_pipeline=lto`, `%{msil_prog}`, the feature `msil-prog-pipeline=<p>` and the legs `lto` and `det`; `msil/test/M2` gets its first tiers and the LTO rows of the link-semantics matrix. Undefined functions still bind through the frozen D14 table (native libraries are M15); no lib/CLI code is used.
+
+**Depends on:** M13 (lld flavor and `lld/MSIL` stub, `lld/test/MSIL/lit.local.cfg`, `dispatch.test` and `stub.test`, `Triple::isCompatibleWith(X, X-msil)`, `MSILLink::setDataModel`, `err_drv_msil_ilasm_input` and the reworded `err_drv_msil_no_object_output`, `msil/utils/ci/build-targets.txt` and `msil-build.ps1 -Standard`) and M12 (`-std=gnu17`, the E7 Linux oracle and `update-expected.py --os linux`, the private WSL runtime, the `wsl-quick` and `expected-linux` legs, the whole-program alias and `extern_weak` lowering).
+
+**Header changes:**
+- none (`clang/lib/Driver/ToolChains/MSIL.h` is new and included by `Driver.cpp` and `MSIL.cpp` only; `lld/MSIL` headers are private).
+
+Roles of 5.6 (merged, never split): M14.a = lld-driver, M14.b = lld-symbols (root; it owns the shared headers `Config.h` and `LTO.h`, 5.6.1 rule 7 and 5.6.6), M14.c = lld-lto + target + clang-toolchain, M14.d = harness, M14.e = lld-tests + driver-tests, M14.f = exec-tests, M14.g = docs. The workflow starts a WP when every WP on its Depends-on line has finished: M14.b, M14.d and M14.e start at once, M14.c follows M14.b, M14.a follows M14.c, M14.f follows M14.d, M14.g comes last. A check that needs a file or tool of a WP not on the Depends-on line is a gate step (rule 7). M14's specifics are in their contract subsections: 5.9.2 (`setBitcodeLibFuncs`), the M14 subsets of 5.9.3, 5.9.6, 5.9.13, 5.9.14 and 5.10.6, 5.9.16's M14 cases, 5.12.2 and 5.12.7 (`msil-prog-pipeline`), and 5.12.3 and 5.12.4 (`%{msil_stock_srcs}`, `--stock-src`). Every WP reads the section 12 row of 2026-10-21 for M14, which amends D28.
+
+**Work packages**
+
+#### M14.a msil-ld driver: options, inputs, library search, triple and data-model checks, reproduce and why-extract (implement, ~1,200 lines)
+
+- Owned files: `lld/MSIL/CMakeLists.txt`, `lld/MSIL/Options.td`, `lld/MSIL/Driver.cpp`
+- Depends on: M14.b, M14.c
+- Reads: this plan sections 5.6.1, 5.6.6, 5.8.9, 5.8.11, 5.9.1-5.9.6, 5.9.13, 5.9.14, 5.10.3, 5.10.6, 5.10.9 and the section 12 rows for M14; llvm/docs/MSIL/recon/p2/lld-flavor.md sections 2.2-2.4, 3.1-3.3, 6.2 and 8; llvm/docs/MSIL/recon/p2/lld-flavor-files/proto/; llvm/docs/MSIL/recon/p2/lld-flavor-files/t1/; lld/MSIL/ (M14.b's and M14.c's headers); llvm/include/llvm/BinaryFormat/MSILLink.h; lld/wasm/Driver.cpp; lld/wasm/Options.td; lld/wasm/CMakeLists.txt; lld/ELF/Driver.cpp (writeWhyExtract); decisions D27, D30
+- Provides: the body of `lld::msil::link` and `LinkerDriver`; the definitions of `Ctx::Ctx()`, `Ctx::reset()` and `Ctx ctx` (lld/wasm keeps them in `Driver.cpp`); the 5.9.3 options marked M13 or M14; `-r`/`--relocatable` rejected while the options are read (`-r is not supported`, also without inputs); the LTO-only error; the triple and data-model checks of bitcode inputs
+
+Derived from lld/wasm (5.9.1 derivation lines; wasm-only code deleted). `link()` resets `ctx` (every member M14.b declares) and `symtab` first (`lld/wasm/Driver.cpp:55-73`); diagnostics keep 5.9.1's `msil-ld: ` prefix. Options.td: exactly the 5.9.3 rows of M13/M14; later options are unknown arguments except `-shared`/`--shared` (error `-shared is not supported yet`, 5.9.3). CMakeLists.txt: `lldMSIL` with the six M14 sources (`Driver`, `InputFiles`, `Symbols`, `SymbolTable`, `LTO`, `MapFile`) and `MSILOptionsTableGen`, LINK_COMPONENTS 5.9.2's list without `CLI` (M20 adds it; M13's stub has `Option Support TargetParser`). Driver.cpp keeps lld/wasm's flow (response files, `initLLVM()`, `--help`, `--version`, `--reproduce`) with: `-r`/`--relocatable` reported in `readConfigs`, before `createFiles`, so `msil-ld -r` alone prints `-r is not supported` (5.9.3); inputs in command-line order (5.9.4's M14 subset: bitcode and archives; a PE with a CLI header is `<file>: linking CIL object files and .NET assemblies is not supported yet`; a native library is accepted unread; else `unknown file type: <file>`); `-l` search (5.10.9's M14 subset: per-triple names, `-l:`, a bitcode archive wins in its directory, other candidates are native and accepted unread, else `unable to find library -l<name>`); `-u` and the entry (`main` only: `--entry=<sym>: an entry point other than main is not supported yet`, 5.9.3); `getRuntimeLibcallSymbols` pre-extraction (`<libcall>`, `lld/wasm/Driver.cpp:1438`). After every input and extracted member is loaded and before `symtab->bindLateSymbols()`, each `ctx.bitcodeFiles` entry is checked in load order: its triple key against the codegen triple (5.9.3 default, 5.8.9 key; `<file>: target triple <t> is incompatible with <t0>`), Q12's warning once per link (5.9.13), and its data model from the triple alone (5.8.9: `MSILLink::setDataModel(H, TT, TT.isArch64Bit() ? 8 : 4, TT.getDefaultWCharSize())`, PointerSize and LongSize compared, WCharSize not before M20; `<file>: data model <m> differs from <m0> in <f0>`; unreachable behind equal triple keys, M20.e's `obj-triple` pins it). Then `symtab->bindLateSymbols()`, `symtab->compileBitcodeFiles()`, `-Map`, `--why-extract`. Without `--lto-emit-asm`, with partitions above 1 or with ThinLTO input the link is the LTO-only error (5.9.13's text with its `--lto-emit-asm` hint). Embedded library requests are not read before M15 (5.10.6). Checks: tblgen of Options.td into scratch; msil-syntax.ps1 on Driver.cpp; optionally a private `lld.exe` under `C:\llvm-msil-scratch\milestones\M14\M14.a\` run on t1/ (never `D:\llvm-msil\build`).
+
+#### M14.b msil-ld shared headers, inputs and symbols: Config.h, LTO.h, bitcode files, lazy members, comdats and the lld/ELF resolver (implement, ~1,400 lines)
+
+- Owned files: `lld/MSIL/Config.h`, `lld/MSIL/LTO.h`, `lld/MSIL/InputFiles.h`, `lld/MSIL/InputFiles.cpp`, `lld/MSIL/Symbols.h`, `lld/MSIL/Symbols.cpp`, `lld/MSIL/SymbolTable.h`, `lld/MSIL/SymbolTable.cpp`
+- Reads: this plan sections 5.6.1, 5.6.6, 5.9.1-5.9.6, 5.9.13, 5.9.14 and the section 12 rows for M14; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md sections 1, 4 and 6.3; llvm/docs/MSIL/recon/p2/lld-flavor.md sections 2.3 and 3.1; lld/ELF/Symbols.cpp:423-679; lld/ELF/InputFiles.cpp:1821-1960 and 2024-2041; lld/wasm/Config.h; lld/wasm/LTO.h; lld/wasm/InputFiles.{h,cpp}; lld/wasm/Symbols.{h,cpp}; lld/wasm/SymbolTable.{h,cpp}; llvm/include/llvm/Object/IRSymtab.h; llvm/include/llvm/LTO/LTO.h
+- Provides: `Config.h` per 5.9.2: `struct Config` (one member per 5.9.3 option marked M13 or M14, lld/wasm's member name for a shared option, else the spelling in camelCase: `target` (`llvm::Triple`), `assemblyName`, `ltoEmitAsm`, `warnCommon`, ...), `struct MSILSym` (lld/wasm's `WasmSym` shape; no members before M20), `struct Ctx` (`Config arg`, `bitcodeFiles`, `lazyBitcodeFiles`, `whyExtractRecords`, `MSILSym sym`, `Ctx()`, `reset()`), `extern Ctx ctx`; `LTO.h` per 5.9.2: `class BitcodeCompiler` (`BitcodeCompiler()`, `~BitcodeCompiler()`, `void add(BitcodeFile &)`, `SmallVector<InputFile *, 0> compile()`, `void setBitcodeLibFuncs(ArrayRef<StringRef>)` (5.9.2), lld/wasm's private members); `InputFile`, `BitcodeFile` (`obj`, `parse()`, `parseLazy()`), `createObjectFile(MemoryBufferRef, StringRef archiveName = "", uint64_t offsetInArchive = 0, bool lazy = false)`, `toString(const InputFile *)`; `Symbol` with the M14 kinds `DefinedFunction`, `DefinedData`, `CommonSymbol`, `Undefined`, `LazySymbol`, binding, visibility, TLS, function/data, the 5.9.5 flags, `resolve()`, `extract()`; `SymbolTable` (`insert`, `find`, `addComdat`, `addUndefined`, `symbols()` in insertion order, `bindLateSymbols()`, `compileBitcodeFiles()`), `extern SymbolTable *symtab`
+
+Write `Config.h` and `LTO.h` first and completely: M14.c and M14.a start after this WP and compile against them as handed over. They are lld/wasm's files reduced to M14 (`Ctx::reset()` and `ctx` are defined in M14.a's `Driver.cpp`; LTO.h includes no `Writer.h`). The other files derive from lld/wasm's three; `Symbol::resolve` carries `// Derived from lld/ELF/Symbols.cpp at <commit>.` and cites the lld/ELF line of each case of 5.9.5's table, `--warn-common`, `--trace`/`-y` and the `--why-extract` records included. `BitcodeFile` over `lto::InputFile` (members named `lib.a(m.o at <offset>)`; comdats per 5.9.5; kinds from irsymtab's flags); `parseLazy()` per `lld/ELF/InputFiles.cpp:2024-2041`; non-bitcode archive members are the warning `<archive>(<member>): not LLVM bitcode; ignored`. Kind and TLS checks after each insertion with 5.9.14's texts. `compileBitcodeFiles()` in lld/wasm's shape (`SymbolTable.cpp:81-118`, the bitcode library functions passed through `setBitcodeLibFuncs` included) over M14.c's `BitcodeCompiler`; under `--lto-emit-asm` `compile()` returns no files. `bindLateSymbols()` is 5.9.6's M14 rule: undefined WEAK stays for the backend, undefined HIDDEN is `undefined hidden symbol`, undefined GLOBAL data is `undefined symbol` + `>>> referenced by`, undefined GLOBAL functions go to codegen. No native, managed or object kinds yet (M15, M20, M22 add them). Checks: msil-syntax.ps1 on the three .cpp files; a scratch table-driven check of `resolve` against 5.9.5 (not committed).
+
+#### M14.c LTO, link hooks, map file, the assembly-name hook and the clang MSIL toolchain (implement, ~1,000 lines)
+
+- Owned files: `lld/MSIL/LTO.cpp`, `lld/MSIL/MapFile.h`, `lld/MSIL/MapFile.cpp`, `llvm/lib/Target/MSIL/MSILAsmPrinter.cpp`, `clang/lib/Driver/ToolChains/MSIL.h`, `clang/lib/Driver/ToolChains/MSIL.cpp`, `clang/lib/Driver/CMakeLists.txt`, `clang/lib/Driver/Driver.cpp`, `clang/lib/Driver/ToolChain.cpp`, `clang/lib/Driver/ToolChains/Clang.cpp`
+- Depends on: M14.b
+- Reads: this plan sections 5.6.3, 5.6.5, 5.6.8, 5.9.2, 5.9.6, 5.9.13, 5.9.14, 5.10.1-5.10.5, 5.10.13 and the section 12 rows for M14; llvm/docs/MSIL/recon/p2/lld-flavor.md sections 3.1-3.3; llvm/docs/MSIL/recon/p2/driver-toolchain.md sections 2.2, 4 and 9; llvm/docs/MSIL/recon/p2/driver-toolchain-files/proto/; llvm/docs/MSIL/recon/p2/driver-toolchain-files/scripts/; lld/MSIL/ (M14.b's headers); lld/wasm/LTO.{h,cpp}; lld/wasm/MapFile.{h,cpp}; lld/ELF/LTO.cpp:169-172; llvm/include/llvm/LTO/Config.h; llvm/lib/Target/MSIL/MSILAsmPrinter.cpp:93-110 and 704-722; clang/lib/Driver/ToolChain.cpp:735-805; clang/lib/Driver/Driver.cpp:3451-3455 and 5460-5463; clang/lib/Driver/ToolChains/Clang.cpp:9340-9342; decisions D8, D14, D27, D28
+- Provides: the definitions of M14.b's `BitcodeCompiler`, `MSILLinkHooksPass` (private to `LTO.cpp`), the module flags `msil-assembly-name` (MDString, Override) and `msil-lto` (i32 1, Override), `writeMapFile()`; the AsmPrinter's assembly-name order and its `undefined symbol: <name>` text under `msil-lto`; `MSILToolChain<NativeTC>`, `createMSILToolChain`, `tools::msil::Linker`
+
+(1) LTO.cpp derived from lld/wasm/LTO.cpp with 5.9.13's configuration and resolutions (`CGFileType` AssemblyFile written to `-o`; only the entry, `-u` and no-strip symbols visible to regular objects); `MSILLinkHooksPass` (legacy pass through `PreCodeGenPassesHook`) sets the two module flags (assembly name: `--assembly-name`/`-soname`, else the `-o` stem) and nothing else in M14. (2) MapFile: 5.9.14's M14 sections (header, `Inputs:`, `Symbols:`). (3) MSILAsmPrinter.cpp: assembly name = `-msil-assembly-name`, else the module flag, else the source stem (D28 row); under `msil-lto` a non-libcall undefined function is reported as `undefined symbol: <name>` (5.9.6's M14 rule); IL without the flags is unchanged. (4) clang: MSIL.h/MSIL.cpp from the recon prototype with 5.10.1's overrides, 5.10.5's `getLTOMode`, the link job of 5.10.3 and the default libraries of 5.10.4 (no `--ucrtbase-imports` until M15), `AtFileUTF8`; the four Driver.cpp hunks, ToolChain.cpp back to upstream except the KCFI line, `ClangAs` reporting `err_drv_msil_ilasm_input`, `ToolChains/MSIL.cpp` in the CMake list (5.10.2). The driver never passes `--lto-emit-asm` or runs ilasm. Expected `-S` cc1 changes are only `-mrelocation-model static` and no `-funwind-tables=2`, with byte-identical IL (driver-toolchain 4.2). Checks: msil-syntax.ps1 on every owned .cpp; the recon's cc1 and corpus diffs with a private clang under `C:\llvm-msil-scratch\milestones\M14\M14.c\`, never writing `D:\llvm-msil\build`.
+
+#### M14.d Harness: lto pipeline, multi-TU composites, msil-prog.py, multi-TU update-expected, lto and det legs (infra, ~1,000 lines)
+
+- Owned files: `msil/test/lit.cfg.py`, `msil/test/CMakeLists.txt`, `msil/utils/msil-prog.py`, `msil/utils/update-expected.py`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/utils/upstream-hooks.txt`, `msil/test/harness/prog/`
+- Reads: this plan sections 5.5, 5.6.1-5.6.4, 5.6.9, 5.10.3, 5.10.4, 5.12.1-5.12.8, 5.12.10, 5.12.11, 5.12.13 and the section 12 rows for M14; llvm/docs/MSIL/recon/p2/tests-p2.md sections 1, 2.6, 2.7, 3.1-3.3, 3.7 and 4; llvm/docs/MSIL/recon/p2/tests-p2-files/litproto/; llvm/docs/MSIL/recon/p2/tests-p2-files/scripts/det.sh; llvm/docs/MSIL/recon/p2/driver-toolchain.md section 4.13; msil/test/lit.cfg.py; msil/utils/update-expected.py; msil/utils/msil-run.py; msil/utils/ci/lit-legs.ps1; msil/utils/ci/lit-legs.sh; msil/utils/ci/check-upstream-hooks.py; msil/utils/upstream-hooks.txt; msil/utils/run-m1-gate.ps1; msil/test/harness/pipeline/
+- Provides: lit parameters `msil_pipeline` (`asm`, `lto`), `msil_link_output` (`il`), `msil_ld`, `msil_ar`, `msil_nm`, `msil_require_link` (`config.msil_require_link`); features `msil-pipeline=<p>`, `msil-prog-pipeline=<p>` (5.12.2), `msil-link-output=<x>`, `msil-ld`, `msil-ar`; substitutions `%msil_ld`, `%msil_ar`, `%msil_nm`, `%msil_prog_build`, `%{msil_srcs}`, `%{msil_stock_srcs}`, `%{msil_archives}`, `%{msil_libs}`, `%{msil_ldflags}`, `%{msil_prog}`, `%{msil_prog_O0}`..`%{msil_prog_Oz}`, `%{msil_prog_fail_O0}`..`%{msil_prog_fail_Oz}`, `%{msil_det}`; `msil/utils/msil-prog.py`; legs `lto` and `det`
+
+5.12.1-5.12.4 for M14: `obj` and `pe` are configuration errors until M20; under `asm`, `%{msil_c}`/`%{msil_ll}` expand exactly as today (harness/pipeline pins them) and `%{msil_prog}` is lto's; under `lto`, `%{msil_c}` is `%{msil_prog}` of the one source and `%{msil_ll}` stays on llc; `%{msil_ldflags}` is `-nodefaultlibs`; `%{msil_stock_srcs}` and `msil-prog.py --stock-src` compile TUs with stock clang for the native triple (`-fno-ms-volatile` on windows-msvc; 5.12.3, 5.12.4). The feature `msil-prog-pipeline=<p>` names the pipeline `%{msil_prog}` actually uses: `lto` under both `asm` and `lto` in M14 (M20's harness switches it to `obj` together with the `asm` expansion; 5.12.2, 5.12.7). msil-prog.py (stdlib, Windows and Linux hosts): `-flto -c` per source, archives `lib<NAME>.a` linked as `-L<dir> -l<NAME>`, the link through clang with `-Wl,--lto-emit-asm -o prog.il`, then `ilasm -exe`; native mode on Windows (`-fuse-ld=lld`, `msil_native_rtlib`) and by M12's E7 recipe; `--det` compares objects, archives and `prog.il` (not ilasm's image). update-expected.py builds `%{msil_prog}` tests natively (split-file, `REDEFINE:` values), skips fail-only and det tests, and supports `--os linux`. Legs `lto` (M1 and M2, native oracle required) and `det` (M2/06-det) in both scripts, `msil_require_link=1` on every lit leg, `lld/test/MSIL` and the three new driver tests in `$checkMsil`, and the three driver tests and `llvm-ar` (DEPENDS) in check-msil (`msil/test/CMakeLists.txt`; M13.g already added `lld/test/MSIL`, `lld`, `llvm-as` and `llvm-bcanalyzer`), M2 in the `expected`/`expected-linux` legs, lit-legs.sh's header equal to `--list`. upstream-hooks.txt from 5.6.3 and 5.6.4: blocks for `clang/lib/Driver/Driver.cpp` (lit `cl-options.c`, `linux-ld-args.c`, `msvc-link.c`, `mingw.cpp`) and `clang/lib/Driver/CMakeLists.txt` (`none CMake list`), the ToolChain.cpp block reduced to KCFI, `fork-only` lines of 5.6.4 for M14, `min-pass` recounted. harness/prog/ self-tests (stand-in tools): every leg and level, archive specs, `--det` catching a planted difference, the configuration errors, the unchanged asm expansion, `msil-prog-pipeline=lto` under `asm` and `lto`. Checks: the harness tests; both `--list`s; `check-upstream-hooks.py --self-test` (the manifest check against the finished tree is gate step 16, rule 7); msil-prog.py's native mode on both triples, its MSIL mode against the recon prototypes under `C:\llvm-msil-scratch\p2\` (the real msil-ld and clang run at the gate, rule 7).
+
+#### M14.e msil-ld and clang driver tests (test, ~1,300 lines)
+
+- Owned files: `lld/test/MSIL/`, `clang/test/Driver/msil-link.c`, `clang/test/Driver/msil-lto.c`, `clang/test/Driver/msil-header-search.c`, `clang/test/Driver/msil-toolchain.c`, `llvm/test/CodeGen/MSIL/lto-module-flags.ll`
+- Reads: this plan sections 2, 5.6.1, 5.6.6, 5.8.9, 5.9.1, 5.9.3-5.9.6, 5.9.13, 5.9.14, 5.10.1-5.10.5, 5.10.9, 5.12.13 and the section 12 rows for M14; llvm/docs/MSIL/recon/p2/driver-toolchain.md sections 4 and 6; llvm/docs/MSIL/recon/p2/driver-toolchain-files/tests/; llvm/docs/MSIL/recon/p2/lld-flavor.md sections 2.3, 3.3 and 6.2; llvm/docs/MSIL/recon/p2/lld-flavor-files/t1/; lld/test/wasm/; lld/test/ELF/common.s; lld/test/ELF/comdat.s; lld/test/MSIL/; lld/test/lit.cfg.py; clang/test/Driver/msil-toolchain.c; llvm/test/CodeGen/MSIL/assembly-name.ll
+- Provides: the test files named below
+
+From the specification only (do not read M14.a-c). lld/test/MSIL (`.test` with split-file; `llvm-as`, `llvm-ar`, `llvm-lib /def:` inputs, all the tree's builds; FileCheck of `--lto-emit-asm` text; errors with `--implicit-check-not="PLEASE submit"`; no ilasm): `options` (also `--version`, `-v`, `--help`, `no input files`, an unknown option, `-r`, and `-shared`/`--shared` giving `-shared is not supported yet`), `lto-emit-asm` (assembly named after `-o`, `--assembly-name`, never `ld-temp`), `lto-object-output-error`, `lto-options`, `triple`, `stock-bitcode` (Q12 warning once), `resolve-weak`, `resolve-common` (both orders), `archive-lazy` (WEAK undefined does not extract), `whole-archive` (also `--start-lib`), `comdat`, `duplicate`, `undefined` (data, hidden, function under `msil-lto`, a D14 import accepted), `type-mismatch` (also TLS), `entry`, `libsearch`, `libcall`, `map`, `why-extract`, `reproduce`, `response-file` (UTF-8, non-ASCII path), `trace`, `input-errors`. Retired M13 texts (rule 6; this WP owns the whole directory): `stub.test`'s `msil-ld: error: linking is not implemented yet` for any input; delete `stub.test` (its still-valid cases move into `options`); `dispatch.test` stops detecting "reaches the stub" and identifies msil-ld by `--version` and by `-r` printing `error: -r is not supported` (5.9.3), which `ld.lld` and the `msilx-ld` copy do not print; no file under `lld/test/MSIL/` keeps the stub text (gate step 17). clang/test/Driver: msil-link.c, msil-lto.c and msil-header-search.c from the recon texts (`-###` only), updated to 5.10.3-5.10.5 (windows-msvc `-lucrt -lkernel32 -loldnames`, `a.exe`, `-fuse-ld`/`--ld-path=` rules, `--shared` for `-shared`); msil-toolchain.c per 5.12.13 (`-c`, `-save-temps=obj -c` and `-fno-integrated-as -c` become `-###` checks of `cc1 -emit-llvm-bc -flto=full`, a plain link plans msil-ld, `-c -x assembler` and `-fno-lto -c` pin their errors; the LTO block is replaced by a pointer to msil-lto.c). lto-module-flags.ll (both triples): the flag names the assembly, `-msil-assembly-name` overrides it, `msil-lto` changes only the undefined-function text. Record which RUN lines fail before the gate's build and why.
+
+#### M14.f Multi-TU execution tests and the LTO rows of the link-semantics matrix (test, ~1,200 lines)
+
+- Owned files: `msil/test/M2/lit.local.cfg`, `msil/test/M2/00-link/`, `msil/test/M2/01-archive/`, `msil/test/M2/02-lto/`, `msil/test/M2/06-det/`, `msil/test/M2/08-semantics/`
+- Depends on: M14.d
+- Reads: this plan sections 5.5, 5.9.5, 5.9.14, 5.9.16, 5.12.1-5.12.8 and the section 12 rows for M14; decisions D14, D26, D37; llvm/docs/MSIL/recon/p2/tests-p2.md sections 3.1-3.3 and 4.3; llvm/docs/MSIL/recon/p2/tests-p2-files/litproto/M2/; llvm/docs/MSIL/recon/p2/objfmt-binding-files/zoo/; llvm/docs/MSIL/recon/p2/objfmt-binding-files/sigmismatch/; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/probes/; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/ (results-native-win.txt, results-native-linux.txt); msil/test/Inputs/msil_test.h
+- Provides: the test files named below and their `.expected` files
+
+From the specification only (do not read M14.a-d; run M14.d's scripts, do not read them). 5.12.5's format (split-file, `REDEFINE:` placeholders, one `%{msil_prog}` line), plan 5.5's rules, `__attribute__((common))` instead of `-fcommon`, never plain `-c` (M19 changes it); `.expected`/`.linux.expected` only from update-expected.py; named diagnostics as `%{msil_prog_fail_O0}`/`_O2` piped to FileCheck `--check-prefix=LTO` inside `%if msil-prog-pipeline=lto %{ %}`, never guarded by `msil-pipeline=<p>` (5.12.2, 5.12.7: from M20 `%{msil_prog}` builds objects under the default `asm` pipeline). lit.local.cfg: UNSUPPORTED without `msil-exec` and `msil-ld`, fatal under `config.msil_require_link`. 00-link: `two-tu`, `static-same-name`, `weak-strong`, `inline-comdat`, `common`, `ctor-priority`, `byval-sret-xtu`, `knr-def-xtu`, `main-not-first`, `data-only-tu`. 01-archive: `lazy-members`, `data-only-member`, `same-named-members`, `archive-cycle`, `libc-name-override`. 02-lto: `stock-bitcode`, `stock-bitcode-archive`. 06-det: `det-lto`. 08-semantics (5.9.16's M14 rows, recon programs): `zoo`, `zoo-archive`, `zoo-defined`, `p1-weak-alias`, `p1-weak-alias-reversed`, `p1-weak-alias-kept`, `p1-weak-alias-main`, `p2-knr`, `sig-mismatch`, `p4-selectany` (Windows), `p5-tls`, `p6-ctors`, `p6-dtors`, `p9-weak-common`, `p9-weak-common-reversed`, `type-mismatch`, `duplicate-strong`, `undefined`, `weak-undef-guarded`; the other rows are M20's (5.9.16). Diagnostic texts come from 5.9.14 or from today's clang on the probe; a JIT-time exception is never accepted. Checks: generate every `.expected` with M14.d's update-expected.py (Windows and `--os linux`); the tests pass only after the gate's build.
+
+#### M14.g Documentation (docs, ~350 lines)
+
+- Owned files: `llvm/docs/MSIL/GettingStarted.md`, `llvm/docs/MSIL/Status.md`, `msil/README.md`, `msil/test/README.md`, `msil/utils/build/README.md`
+- Depends on: M14.a, M14.b, M14.c, M14.d, M14.e, M14.f
+- Reads: this plan section 6 M14, sections 5.6.9, 5.9.3, 5.9.13, 5.10.1-5.10.5, 5.12.1-5.12.5, 5.12.11 and the section 12 rows for M14; llvm/docs/MSIL/recon/p2/driver-toolchain.md sections 4.5, 4.7 and 4.8; llvm/docs/MSIL/recon/p2/lld-flavor.md section 3.3; the five owned files
+- Provides: the documentation of M14
+
+From the hand-overs. GettingStarted.md: `clang -c` writes bitcode; archives with the tree's `llvm-ar`; linking with `-Wl,--lto-emit-asm -o prog.il`, `ilasm -exe`, running on .NET and Framework; the LTO-only error; default libraries and `-nodefaultlibs`/sysroot for Linux triples on Windows; msil-ld's M14 options; stock bitcode as a compatibility path (Q12 limits); the `lto` and `det` legs. Status.md: state line, what msil-ld does and does not do yet, the matrix's LTO results, counts. msil/README.md and msil/test/README.md: msil-prog.py, M2, `%{msil_prog}`, the pipeline parameters and the `msil-prog-pipeline` feature. msil/utils/build/README.md: `lld` in the build example, `msil-build.ps1 -Standard`. Design.md untouched.
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0, idempotent)
+ 2. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0, idempotent)
+ 3. pwsh -NoProfile -Command '$f = [math]::Round((Get-PSDrive D).Free / 1GB, 1); "D: $f GB free"; if ($f -lt 8) { "below 8 GB: report to the user before building"; exit 1 }'
+ 4. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: the 5.6.11 list of M13 and M14 from msil/utils/ci/build-targets.txt, as the Build targets line spells it)
+ 5. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe
+ 6. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=*MSIL*
+ 7. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*
+ 8. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 26  (G2 floor, 5.12.10)
+ 9. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param RUN_LLD_MAIN_TWICE=1" lld/test/MSIL  (LLD_IN_TEST=2, 5.9.1)
+10. pwsh -NoProfile -Command '$d = "C:/llvm-msil-scratch/milestones/M14/gate"; New-Item -ItemType Directory -Force $d | Out-Null; foreach ($t in "x86_64-pc-windows-msvc-msil", "x86_64-unknown-linux-gnu-msil") { $o = "$d/q6-$t.o"; & D:/llvm-msil/build/bin/clang.exe --target=$t -ffreestanding -O2 -I D:/llvm-msil/msil/test/Inputs -c D:/llvm-msil/msil/test/M1/11-programs/fib.c -o $o; if ($LASTEXITCODE) { exit 1 }; $b = ([IO.File]::ReadAllBytes($o)[0..3]) -join ","; if ($b -ne "66,67,192,222") { "$o is not LLVM bitcode ($b)"; exit 1 } }; "clang -c wrote bitcode (Q6)"'
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3, now with lld/test/MSIL, the driver tests and M2; msil_require_link=1)
+12. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg lto  (M1's 99 C tests and M2 through msil-ld LTO at -O0 and -O2, native oracle; ~5 min)
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg det
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-quick  (G4)
+15. pwsh -NoProfile -Command ". D:/llvm-msil/msil/utils/build/msil-env.ps1; python D:/llvm-msil/msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check D:/llvm-msil/msil/test/M2"
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1  (G5 in full, manifest check included: four clang driver files changed; ~3 min)
+17. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $min = [ordered]@{ "lld/test/MSIL" = 24; "msil/test/M2/00-link" = 10; "msil/test/M2/01-archive" = 5; "msil/test/M2/02-lto" = 2; "msil/test/M2/06-det" = 1; "msil/test/M2/08-semantics" = 19 }; $bad = @(foreach ($k in "clang/test/Driver/msil-link.c", "clang/test/Driver/msil-lto.c", "clang/test/Driver/msil-header-search.c", "llvm/test/CodeGen/MSIL/lto-module-flags.ll", "lld/test/MSIL/dispatch.test", "msil/test/M2/lit.local.cfg", "msil/test/M2/08-semantics/zoo.test") { if (-not (Test-Path -LiteralPath ($r + $k))) { "missing: $k" } }); foreach ($k in $min.Keys) { $n = @(Get-ChildItem -LiteralPath ($r + $k) -Filter *.test -ErrorAction SilentlyContinue).Count; if ($n -lt $min[$k]) { $bad += "$k has $n .test files, needs $($min[$k])" } }; if (-not (Select-String -Quiet -LiteralPath ($r + "clang/test/Driver/msil-toolchain.c") -Pattern "emit-llvm-bc")) { $bad += "msil-toolchain.c lacks the -c checks" }; if (-not (Select-String -Quiet -SimpleMatch -LiteralPath ($r + "lld/test/MSIL/dispatch.test") -Pattern "-r is not supported" -ErrorAction SilentlyContinue)) { $bad += "dispatch.test does not identify msil-ld by -r" }; $bad += @(Get-ChildItem -LiteralPath ($r + "lld/test/MSIL") -Recurse -File -ErrorAction SilentlyContinue | Select-String -List -SimpleMatch -Pattern "linking is not implemented yet" | ForEach-Object { "M13 stub text still pinned in $($_.Path)" }); $bad += @(Get-ChildItem -LiteralPath ($r + "msil/test/M2") -Recurse -File -Filter *.test -ErrorAction SilentlyContinue | Select-String -List -SimpleMatch -Pattern "msil-pipeline=" | ForEach-Object { "$($_.Path) guards with msil-pipeline= instead of msil-prog-pipeline=" }); if (-not @(Get-ChildItem -LiteralPath ($r + "msil/test/M2/08-semantics") -File -Filter *.test -ErrorAction SilentlyContinue | Select-String -List -SimpleMatch -Pattern "msil-prog-pipeline=lto").Count) { $bad += "08-semantics has no msil-prog-pipeline=lto guard" }; if ($bad.Count) { $bad; exit 1 }; "every M14 test is present"'  (G6: lit only warns about a missing path)
+18. pwsh -NoProfile -Command '$p = @(pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -List); $s = @(wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/ci/lit-legs.sh --list); $rc = $LASTEXITCODE; $p; $s; if ($rc -ne 0) { exit 1 }; foreach ($n in "lto", "det") { if ($p -notcontains $n -or $s -notcontains $n) { "leg $n missing"; exit 1 } }'
+19. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (must print no diff)
+20. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M14"
+```
+
+**Exit criteria**
+- msil-ld links MSIL-clang and stock-clang bitcode and archives by 5.9.5's rules and writes ILAsm text with `--lto-emit-asm`, the assembly named after the output; every other LTO link is the LTO-only error; lld/test/MSIL passes, also with `LLD_IN_TEST=2`, and no test pins M13's stub text.
+- clang: `MSILToolChain` on Linux, MSVC and MinGW MSIL triples; `clang -c` writes bitcode; links plan msil-ld with 5.10.4's libraries and never `-plugin`, `LLVMgold`, `ld.lld` or `link.exe`; `a.exe` by default; `-S` IL unchanged; ToolChain.cpp differs from upstream only by the KCFI line.
+- All 99 M1 C tests pass through LTO at -O0 and -O2 against the native oracle; msil/test/M2 passes on .NET 8, Framework 4.8 and WSL .NET 10; every M14 matrix case prints its native transcript or its named diagnostic, never a JIT-time exception; objects, archives and `--lto-emit-asm` text are deterministic; pipeline-specific checks are guarded by `msil-prog-pipeline=<p>`.
+- CLITests keeps its floor of 26; the upstream-hooks check passes with the new Driver.cpp and CMakeLists.txt blocks; the five docs describe M14.
+
+**Review focus** (in addition to the three standing lenses)
+- The resolver against 5.9.5 and lld/ELF, case by case and in both input orders; LTO keeps only the entry, `-u` and no-strip symbols visible.
+- Config.h and LTO.h match 5.9.2's pinned declarations; no hash-order or time-dependent output; `Ctx::reset()` covers every global; copied lld/wasm code stays mechanically comparable; no CLI link dependency.
+- Upstream footprint is exactly 5.10.2's; the AsmPrinter hooks are inert without the module flags.
+- Matrix cases are the recon programs against native transcripts on both triples; error tests pin 5.9.14's texts; the asm expansion of `%{msil_c}` is unchanged; no M2 test would run its LTO expectations against an object build.
+
+**Rebuild cost.** `lldMSIL` (6 TUs) and the `lld.exe` relink with its alias copies; clangDriver's `Driver.cpp`, `ToolChain.cpp`, `Clang.cpp`, `MSIL.cpp`; `MSILAsmPrinter.cpp`; relinks of llc, opt, clang, MSILTests and `LLDAsLibAllTests`; one CMake regeneration; no new build target beyond M13's list: about 6-10 minutes, tens of MB on D:. Gate without the build: about 28 minutes (net8 ~12, lto ~5, wsl-quick ~4-5, upstream-hooks ~3, the rest ~4), within Q32 (5.12.10 estimated 27). If it measures over 30 minutes, step 13 (`det`) and then step 14 (`wsl-quick`) move to the `run-m1-gate.ps1` run after M15's commit, through a section 12 row (section 11). The full run-m1-gate.ps1 follows M15's commit, not this one.
+
+### M15. Native libraries and P/Invoke resolution
+
+**Goal.** In link mode msil-ld resolves undefined functions from the native libraries that a native link of the same program reads (Design.md 5.2 step 2.3; plan 5.10), replacing D14 there: readers for ELF shared objects with symbol versions, GNU ld scripts, COFF and MinGW import libraries, weak-alias objects and DLL export tables; `-l` lookup that skips native-only archives, and `-Bstatic`/`-Bdynamic`; DllImport names per Q13; the linker options of bitcode inputs; the driver's final default libraries (Q14). Every unbindable or unresolved symbol is a named link error reported after LTO; so are native data until M20 (5.10.12) and native functions that take C function pointers until P3-B (5.10.10, 5.10.14). msil-ld still writes ILAsm text, annotated with `msil-linked`, `msil-import-*` and `!msil.imports`, from which alone the backend prints `assembly` P/Invokes. D14 stays the frozen standalone policy of `clang -S`/llc, with byte-identical IL. The harness links with the default libraries and `--sysroot`, ships test-built native libraries with each program (`--dep`) and gains the optional hosted leg (Q16).
+
+**Depends on:** M14 (`--lto-emit-asm` links, `MSILLinkHooksPass`, `MSILToolChain`, `%{msil_prog}`, the `lto` pipeline, `lld/test/MSIL`, `msil/test/harness/prog/`), M13 (lld flavor, the `IRSymtab.cpp` and `#pragma comment(lib)` hooks, import attributes, `build-targets.txt` and `msil-build.ps1 -Standard`), M12 (E7 oracle and sysroot, private WSL runtime, `extern_weak` lowering). Every WP reads plan D14 as amended by the section 12 row of 2026-10-21 for M15; M15's specifics are in 5.9.3, 5.9.6, 5.9.13, 5.9.14, 5.9.16, 5.9.17, 5.10.4-5.10.15, 5.12.2-5.12.4, 5.12.7 and 5.12.10. M15.a-M15.d are roots, M15.e waits for M15.c and M15.f for all; no other in-milestone check uses another WP's file or binary (5.6.1 rule 7).
+
+**Header changes:**
+- none widely included: target-local `MSILUtilities.h` (about 15 MSIL TUs) and `MSILAsmPrinter.h`; lld/MSIL-local `Config.h`, `InputFiles.h`, `Symbols.h`, `SymbolTable.h`, `LTO.h`, `MapFile.h`
+
+**Work packages**
+
+#### M15.a msil-ld native libraries: readers, search, late binding, import annotation (implement, ~1,500 lines; nisym gives ~600)
+
+- Owned files: `lld/MSIL/NativeLibraries.h`, `lld/MSIL/NativeLibraries.cpp`, `lld/MSIL/Driver.cpp`, `lld/MSIL/Options.td`, `lld/MSIL/Config.h`, `lld/MSIL/InputFiles.h`, `lld/MSIL/InputFiles.cpp`, `lld/MSIL/Symbols.h`, `lld/MSIL/Symbols.cpp`, `lld/MSIL/SymbolTable.h`, `lld/MSIL/SymbolTable.cpp`, `lld/MSIL/LTO.h`, `lld/MSIL/LTO.cpp`, `lld/MSIL/MapFile.h`, `lld/MSIL/MapFile.cpp`, `lld/MSIL/CMakeLists.txt`
+- Reads: this plan sections 5.9.1-5.9.6, 5.9.13, 5.9.14 and 5.10.4-5.10.14 and the section 12 rows for M14 and M15; llvm/docs/MSIL/recon/p2/native-imports.md sections 2-8; llvm/docs/MSIL/recon/p2/native-imports-files/nisym.cpp; lld/ELF/InputFiles.cpp (~380-395, ~1564-1745); lld/ELF/ScriptParser.cpp (~319-360); lld/COFF/InputFiles.cpp (~1259-1300); lld/COFF/DriverUtils.cpp (~684-697, ~863); llvm/include/llvm/LTO/LTO.h; llvm/docs/MSIL/recon/m11/split-files/tools/mkrsp.py
+- Provides: `lld::msil::NativeKind`, `NotBindable`, `NativeExport`, `NativeIndex::addFile`, `NativeIndex::lookup` and the input kind `NativeLibraryFile` (5.10.8); `bool lld::msil::isNativeCallbackFunction(StringRef Name)`; symbol kinds `NativeFunction`, `NativeData`; step 2 of `SymbolTable::bindLateSymbols()`; options `-Bstatic`, `-Bdynamic`, `--ucrtbase-imports`, `--print-imports`, `--no-dependent-libraries`; on the merged LTO module, flag `"msil-linked"` (i32 1, Override), `msil-import-module`/`msil-import-name` on natively bound declarations, `!msil.imports` operands `!{!"<symbol>", !"<module>", !"<entry>", i32 0}`; the texts of 5.10.14, its callback text and list included
+
+Start from the nisym prototype, validated on glibc 2.43, the Windows SDK, System32 and mingw-w64 (native-imports 2.6).
+
+1. **Readers and `NativeIndex`.** As 5.10.8 and native-imports 2-4:
+   - lld/ELF's version rule;
+   - script paths resolved as lld/ELF's `ScriptParser::addFile` resolves them: sysroot prefix, `=`, `-l`, the script's directory, then `-L`;
+   - lld/COFF's DLL-name parsing;
+   - the MinGW long format of 2.5, which nisym lacks.
+
+   Every file is read through the driver, so `--reproduce` captures it. A PE with a CLR data directory (`COFFObjectFile` directory 14) is managed, never native. `--ucrtbase-imports` on a non-Windows target is an error.
+2. **Search.** `-l` search, kinds and `-Bstatic`/`-Bdynamic` as 5.10.9.
+   - A .NET assembly found by `-l` is skipped with a warning naming `--reference` (managed libraries arrive in M22).
+   - A missing library, and a script input missing under the sysroot, use lld/ELF's texts.
+3. **Linker options of bitcode inputs** (5.9.4, 5.10.6).
+   - Sources: `getCOFFLinkerOpts()` (tokenized as lld-link's `parseDirectives`) and `getDependentLibraries()`.
+   - Texts: lld/ELF's dependent-library text, and lld-link's `/failifmismatch: mismatch detected for '<k>':` text.
+   - M14 ignores embedded library requests (M14.a, 5.10.6); this WP implements all of it.
+4. **Late binding.** `bindLateSymbols` step 2 runs before LTO (5.9.6). Bitcode symbol tables carry no import names, so it looks up the symbol name. The first bindable definition in command-line order wins; it never preempts a definition or extracts a member. `--trace-symbol` prints `<file>: shared definition of <sym>`.
+5. **Import annotation and reporting** in `MSILLinkHooksPass`, on the merged module. Bitcode symbol tables carry neither import attributes nor the library functions the optimizer adds (`printf` -> `puts`). So this pass binds each declaration the module still references and reports what is unresolved, as lld/ELF and lld/wasm report undefined symbols after LTO (5.9.6, 5.9.13).
+   - A non-empty `msil-import-module` on a function is kept unchecked (5.10.7).
+   - Otherwise the pass looks up the `msil-import-name` value, else the name (5.9.6 step 2: an import name equal to the name counts as none). It uses step 2's result, else the same lookup, sets both attributes, and turns `extern_weak` into external linkage.
+   - Data called as a function, rejected definitions, native data and undefined names get the texts of 5.10.14 and 5.9.14, with `>>> referenced by` lines. Native data includes extern variables with import attributes, with or without a module (5.10.12, until M20). A name the optimizer added is `>>> referenced by ld-temp.o`.
+   - **Callbacks.** A natively bound function whose symbol or entry name is in 5.10.14's callback list is `native function '<name>' (<module>) takes a C function pointer; passing functions to native code needs phase 3 thunks`, with `>>> referenced by` lines. The list is a sorted static table in NativeLibraries.cpp behind `isNativeCallbackFunction`. Explicit `msil-import-module` imports are exempt.
+   - An unbound weak declaration keeps M12's null-plus-trap lowering (5.9.6 step 3).
+   - Each name of `lto::LTO::getRuntimeLibcallSymbols(TT)` that has no `__` prefix, is not in the module, and binds as a function becomes an `!msil.imports` operand.
+   - Variadic and aggregate callees are M15.b's.
+6. **`--print-imports`** (5.10.14). Lines are sorted by symbol. The version floor is the highest default version, compared on the dotted numbers after the last `_`.
+7. **`-Map` and state.** The map lists the native libraries read under `Inputs:`, and natively bound symbols under `Symbols:` (kinds `NativeFunction`, `NativeData`; the library as input). The `Imports:` section shows tokens and comes with M20 (5.9.14). `Ctx::reset()` clears the native index and every new global, so `LLD_IN_TEST=2` passes (5.9.1).
+
+Checks:
+- `msil-syntax.ps1` on every changed `.cpp`, with `-FlagsFrom` an lldMSIL TU.
+- A private `lld.exe` on C:: TUs compiled into scratch from `compile_commands.json` and linked as mkrsp.py does; never write the shared build. Run it, also with `LLD_IN_TEST=2`, on the native-imports-files inputs, `C:\llvm-msil-scratch\linux-sysroot` and the SDK libraries of `LIB` (msil-env.ps1).
+- Its codegen is the HEAD backend, which prints attribute-bound declarations through D14's attribute path (`public`); `!msil.imports` and `assembly` access are first checked at the gate. `--save-temps` writes `precodegen.bc` before the hook runs, so it shows no annotations.
+
+#### M15.b Backend import modes, f32 ldexp/frexp off D14, windows-msvc default libraries (implement, ~400 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MSILUtilities.h`, `llvm/lib/Target/MSIL/MSILUtilities.cpp`, `llvm/lib/Target/MSIL/MSILISelLowering.cpp`, `llvm/lib/Target/MSIL/MSILISelLoweringCall.cpp`, `llvm/lib/Target/MSIL/MSILAsmPrinter.h`, `llvm/lib/Target/MSIL/MSILAsmPrinter.cpp`, `clang/lib/Driver/ToolChains/MSIL.h`, `clang/lib/Driver/ToolChains/MSIL.cpp`
+- Reads: this plan decisions D11, D14 and D19, sections 5.10.4, 5.10.11, 5.10.13 and 5.10.14 and the section 12 rows for M14 and M15; llvm/docs/MSIL/recon/p2/native-imports.md sections 1, 6 and 10; llvm/lib/Target/MSIL/MSILUtilities.cpp (~144-308); llvm/lib/Target/MSIL/MSILISelLowering.cpp (~100-131, ~225-241); llvm/lib/Target/MSIL/MSILISelLoweringCall.cpp (~196-255); llvm/lib/Target/MSIL/MSILAsmPrinter.cpp (~462-485, ~681-807); llvm/include/llvm/IR/RuntimeLibcalls.td (~2089, ~2365)
+- Provides: `bool MSIL::isLinkedModule(const Module &M)`; `struct MSIL::NativeImport { StringRef Module; StringRef Entry; }`; `std::optional<MSIL::NativeImport> MSIL::getLinkedImport(const Module &M, StringRef Name, const Function *F)`; texts `library call '<name>' was not resolved by msil-ld` and `undefined function '<name>' was not resolved by msil-ld`; windows-msvc defaults `-lucrt -lkernel32 -loldnames --ucrtbase-imports`
+
+1. **Modes** (5.10.13).
+   - Linked means the flag `"msil-linked"` is 1.
+   - `getLinkedImport` returns F's non-empty `msil-import-module` (its entry is `msil-import-name`, else Name), else Name's kind-0 `!msil.imports` operand, else nullopt.
+   - Standalone code is unchanged. D14 is renamed "the standalone import table (D14, frozen)", with no entry added or removed.
+   - A module with `msil-lto` and without `msil-linked` keeps M14's behaviour, so `lto-module-flags.ll` and gate step 19 see no change.
+2. **Linked library calls** (MSILISelLoweringCall). A function the module defines is called directly. Otherwise:
+   - a `__` name keeps its Phase-3 text, even when `!msil.imports` lists it;
+   - when `getLinkedImport` succeeds, the call is a P/Invoke, as today;
+   - anything else is the not-resolved text.
+3. **Linked `emitPInvokeDeclarations`.** Module and entry come from `getLinkedImport`. A missing import is a not-resolved text (a backstop: msil-ld reports first).
+   - Variadic and non-native signatures get 5.10.14's `native function '<name>' (<module>) ...` texts.
+   - P/Invokes have `assembly` access (5.10.11) and no `nomangle` until M18.
+   - The D11 BOM check reads the `!msil.imports` strings.
+4. **f32 rule** (MSILISelLowering.cpp:225-241). Promote f32 `FLDEXP`/`STRICT_FLDEXP`/`FFREXP` to f64 when RuntimeLibcalls has no f32 implementation, or the triple is windows-gnu (msvcrt.dll lacks `ldexpf`/`frexpf`), and the f64 libcall exists. This is equivalent to the old rule on every MSIL triple.
+5. **Driver** (MSIL.cpp). Append `--ucrtbase-imports` after `-loldnames` for windows-msvc (5.10.4).
+
+Checks:
+- `msil-syntax.ps1` on the changed files.
+- A private llc/clang built as M11.a built them. Its standalone IL must equal the shared build's over msil/test/M1 and llvm/test/CodeGen/MSIL, compared with a scratch loop (not committed); il-snapshot.py's comparison is gate step 19.
+- A hand-written linked module.
+
+#### M15.c Harness: native libraries in links and runs, hosted leg, IL-identity snapshot (infra, ~650 lines)
+
+- Owned files: `msil/test/lit.cfg.py`, `msil/utils/msil-run.py`, `msil/utils/msil-verify.py`, `msil/utils/msil-jitall.py`, `msil/utils/msil-prog.py`, `msil/utils/update-expected.py`, `msil/utils/make-glibc-sysroot.sh`, `msil/utils/il-snapshot.py`, `msil/utils/ci/build-targets.txt`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/test/harness/prog/`, `msil/test/harness/dep-local.test`, `msil/test/harness/dep-wsl.test`, `msil/test/harness/Inputs/dep/`
+- Reads: this plan sections 5.5, 5.6.1, 5.6.11, 5.10.4, 5.12.1-5.12.6, 5.12.8, 5.12.10 and 5.12.11 and the section 12 rows for M15; llvm/docs/MSIL/recon/p2/tests-p2.md sections 2.5, 3.5 and 4.4; llvm/docs/MSIL/recon/p2/driver-toolchain.md section 5; llvm/docs/MSIL/recon/p2/driver-toolchain-files/scripts/mk-sysroot.sh
+- Provides: `%{msil_native_libs}`, `%{msil_deps}`; `--dep` in msil-run.py (also `--dep-dir`), msil-verify.py and msil-jitall.py; `%{msil_ldflags}` without `-nodefaultlibs`, with `--sysroot=<msil_linux_sysroot>` on Linux triples; parameter `msil_glibc_sysroot`, substitution `%{msil_glibc_sysroot}`, features `msil-glibc-sysroot`, `msil-ucrt-headers`; leg `hosted`; `bash msil/utils/make-glibc-sysroot.sh <dir>`; `python msil/utils/il-snapshot.py --build <dir> --out <dir> [--compare <dir>] [--exclude <path>]... [--jobs N] <paths>`
+
+1. **`--dep`, the two placeholders and `%{msil_ldflags}`** as 5.12.3-5.12.4. Both the MSIL link and the native oracle get `%{msil_native_libs}`. Every run gets one `--dep` per `%{msil_deps}` entry.
+2. **msil-prog.py and update-expected.py** pass the same libraries to native builds. E7 links add `-rpath '$ORIGIN'`.
+3. **`msil_glibc_sysroot`** defaults to `$MSIL_GLIBC_SYSROOT`, else `C:\llvm-msil-scratch\glibc-sysroot` when it holds `usr/include/stdio.h`. A value given with `--param` that lacks that file is a lit configuration error, so the hosted leg cannot pass by skipping. `msil-ucrt-headers` is set when `INCLUDE` has `corecrt.h`.
+4. **`make-glibc-sysroot.sh`** works as mk-sysroot.sh does: no root, merged-usr links copied (`cp -rL`), idempotent.
+5. **The `hosted` leg** (5.12.11) runs msil/test/M2/09-hosted with `msil_glibc_sysroot` given. It is optional: not in the default set, marked so by `-List`.
+6. **`build-targets.txt`** gains `yaml2obj` and `llvm-mc` after the M13 list (5.6.11's M15 row). `build.ps1`, `build.sh` and `msil-build.ps1 -Standard` read it since M13.
+7. **`harness/prog/`** (5.6.1 rule 6). Its self-tests pin M14's expansions. Update them: `%{msil_ldflags}` loses `-nodefaultlibs` and gains `--sysroot=<msil_linux_sysroot>` on Linux triples; both builds get `%{msil_native_libs}`; runs get `--dep`.
+8. **`il-snapshot.py`** proves 5.10.13's byte-identical IL as 5.12.4 specifies; M18 and M20 reuse it. It runs from the repository root.
+   - Only files HEAD tracks are compared (`git ls-tree`), minus each `--exclude`. Every `.c` goes through `clang -S` with `%{msil_cflags}`; every `.ll`, or each of its `;--- <name>.ll` parts, through llc.
+   - Output: `<out>/<triple>/<level>/<path>.il` and `.err` (stderr and exit status). `--out` is emptied first. No `.err` text depends on `--out`: split-file parts are compiled from their own directory under a relative name.
+   - Before hand-over, write the baseline with the shared (HEAD) build: `python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 6 --out C:/llvm-msil-scratch/milestones/M15/M15.c/il-baseline --exclude llvm/test/CodeGen/MSIL/imports-linked.ll msil/test/M1 llvm/test/CodeGen/MSIL`. The gate's build waits for it (section 11).
+9. **Self-tests** `dep-local.test` and `dep-wsl.test`: a managed and a native dependency on the local, netfx and WSL runners.
+
+Checks:
+- `msil-lit.ps1` on msil/test/harness, `prog/` included.
+- `lit-legs.ps1 -List`, and `bash -n` in WSL.
+- One run of make-glibc-sysroot.sh into `/mnt/c/llvm-msil-scratch/glibc-sysroot` (a pre-approved install).
+- The baseline; then `--compare` of a second snapshot against it (exit 0) and of one with a planted difference (exit 1), both into scratch.
+
+#### M15.d msil-ld native-library tests and the M14 texts M15 retires (test, ~1,500 lines)
+
+- Owned files: `lld/test/MSIL/`
+- Reads: this plan sections 2, 5.9.3-5.9.6, 5.9.13, 5.9.14 and 5.10.4-5.10.15 and the section 12 rows for M14 and M15; this milestone's M15.a and M15.b descriptions; llvm/docs/MSIL/recon/p2/native-imports.md sections 2-5, 8 and 9; llvm/docs/MSIL/recon/p2/native-imports-files/; lld/test/MSIL/; lld/test/lit.cfg.py
+- Provides: the 21 `lld/test/MSIL/native-*.test` and `Inputs/native/`; M14's lld tests updated to M15's rules
+
+Write these from the specification only. Do not read the M15.a or M15.b sources.
+- **New tests:** the 20 names of 5.10.15 and `native-callback`.
+  - Inputs. Bitcode comes from `llvm-as` with an MSIL triple. Native inputs come from yaml2obj (templates in native-imports-files), `llvm-lib /machine:x64 /def:`, `llvm-mc` with `ld.lld -shared --version-script` (`REQUIRES: x86`), `lld-link -dll -noentry`, `llvm-ar rcs` and text scripts.
+  - Checks. Link with `msil-ld --target=<t> --lto-emit-asm`. FileCheck the exact `pinvokeimpl("<module>" [as "<entry>"] cdecl)` lines (`assembly` access), `--print-imports`, and errors with `--implicit-check-not="PLEASE submit"`.
+- **Coverage** follows native-imports 9.1, 5.10.15 and 5.10.14's callback list:
+  - one negative case per `NotBindable` reason and per 5.10.14 text;
+  - ELF `@@` beside a hidden `@`, IFUNC, ABS markers, SONAME and the file name;
+  - scripts with `--sysroot`, and a missing input;
+  - the 5.10.9 search rules, including a skipped native `.a`, `-Bstatic`, `-l:` and the windows-gnu names;
+  - NONAME `#5`, DATA, EXPORTAS, `strdup` -> `_strdup`, the long format, DLL exports with data and a forwarder;
+  - order: bitcode before native, the first library wins;
+  - explicit and entry-only import attributes, and an extern variable with them (the native-data error);
+  - two prototypes of one native function;
+  - weak undefined, bound and unbound;
+  - dependent libraries, `/alternatename`, `/failifmismatch`, `--no-dependent-libraries`, `libcmt` ignored;
+  - `--ucrtbase-imports`, with an earlier fake `vcruntime.lib` winning;
+  - the version floor;
+  - callbacks: `qsort` from an ELF `.so`, `pthread_create`, `_beginthreadex` and `CreateThread` from import libraries, `lfind` through the oldnames alias to `_lfind`, an address-only reference. No error for an explicit `import_module` `qsort`, a listed name that bitcode defines, or a listed declaration that no code references after LTO.
+- **M14's tests** (5.6.1 rule 6). Update each from the specification, never weakening a check. Retired texts, then M15's:
+  - `undefined`: a D14 import (`puts`) accepted without native libraries; the backend's `undefined symbol: <name>` without `>>> referenced by` lines. Now msil-ld's post-LTO report with those lines; a libc name binds only through a native input.
+  - `libcall`, `lto-emit-asm` and every test that FileChecks `pinvokeimpl`: `public` D14 P/Invokes (`ucrtbase`, `libc`, `libm.so.6`). Now `assembly` with the Q13 module of an `Inputs/native/` library, else `library call '<name>' was not resolved by msil-ld`.
+  - `options`: `-Bstatic`, `-Bdynamic`, `--ucrtbase-imports`, `--print-imports`, `--no-dependent-libraries` as unknown arguments. Now accepted; `--ucrtbase-imports` with a Linux `--target` is an error.
+  - `libsearch`, `input-errors`: native candidates accepted unread. Now read and classified (5.10.9): native-only archives and .NET assemblies skipped, `-Bstatic`, machine-mismatch and malformed-file errors.
+  - `map`: natives now under `Inputs:` and `Symbols:`; still no `Imports:` section. `reproduce`, `trace`: native files in the tar; `shared definition` lines.
+  - Embedded library requests, ignored in M14, are read. A program that calls a libc or libm function gets a native input or pins the new text.
+- Validate the native inputs by hand into scratch with the shared build's `llvm-ar`, `llvm-as`, `llvm-lib`, `ld.lld` and `lld-link`; it has no `yaml2obj` or `llvm-mc` before the gate. Record which RUN lines need the gate build.
+
+#### M15.e Backend, driver, execution and hosted tests (test, ~1,150 lines)
+
+- Owned files: `llvm/test/CodeGen/MSIL/imports-linked.ll`, `llvm/unittests/Target/MSIL/MSILImportsTest.cpp`, `llvm/unittests/Target/MSIL/CMakeLists.txt`, `clang/test/Driver/msil-link.c`, `clang/test/Driver/msil-lto.c`, `msil/test/M2/03-native/`, `msil/test/M2/09-hosted/`, `msil/test/M2/08-semantics/pragma-comment-lib.test`, `msil/test/M2/08-semantics/pragma-comment-lib.expected`, `msil/test/M2/08-semantics/pragma-comment-lib.linux.expected`, `msil/test/M2/08-semantics/native-callback.test`
+- Depends on: M15.c
+- Reads: this plan sections 2, 3 (D11, D14, D37), 5.5, 5.9.14, 5.9.16, 5.10.4, 5.10.11-5.10.15 and 5.12.1-5.12.8 and the section 12 rows for M15; this milestone's M15.a, M15.b and M15.c descriptions; llvm/test/CodeGen/MSIL/fp-expand.ll; llvm/test/CodeGen/MSIL/pinvoke-libs.ll; clang/test/Driver/msil-lto.c; llvm/docs/MSIL/recon/p2/native-imports.md sections 3, 5 and 9.3; llvm/docs/MSIL/recon/p2/tests-p2.md section 3.5; llvm/docs/MSIL/recon/p2/driver-toolchain.md section 5.2
+
+Write these from the specification only. Do not read the M15.a, M15.b or M15.c sources.
+- **`imports-linked.ll`.** Hand-annotated linked modules, checked for:
+  - P/Invokes from attributes and from `!msil.imports` (`assembly` access);
+  - every M15.b error text, including a `__` helper that has an entry;
+  - the unflagged module, and one with only `msil-lto`, still printing D14 (`public`, `libm.so.6`/`ucrtbase`);
+  - f32 `ldexp`/`frexp` in both modes on linux-gnu, linux-musl, windows-msvc and windows-gnu.
+- **`MSILImportsTest.cpp`** (suite `MSILImportsTest`, at least 6 tests; `AsmParser` joins LINK_COMPONENTS):
+  - a `getPInvokeModule` snapshot from plan D14 (section 3) over the four x86_64 triples and aarch64 Linux;
+  - `isLinkedModule` and `getLinkedImport` on parsed IR.
+- **`msil-link.c`.** The windows-msvc and clang-cl default libraries end with `--ucrtbase-imports`; `-nodefaultlibs` drops them. Change `msil-lto.c` only where it pins the windows-msvc library list.
+- **`M2/03-native/`** (5.12.5 format; at least 9 `.test`):
+  - libc and libm functions with versions on both triples;
+  - IFUNC on Linux;
+  - kernel32, an ordinal `htons`, oldnames `strdup` and `--ucrtbase-imports` on Windows;
+  - a test-built `native.dll`/`libnative.so` through `%{msil_native_libs}` and `%{msil_deps}`;
+  - `-Wl,--print-imports` on the host libraries;
+  - an undefined symbol and `-Bstatic`, through `%{msil_prog_fail_O2}` piped to FileCheck `--check-prefix=LTO` inside `%if msil-prog-pipeline=lto %{ %}` (5.12.7), as M14's diagnostic cases do: the LTO link's `>>> referenced by` lines differ from an object link's (5.9.14). M20.g adds the `OBJ` lines.
+- **The matrix rows** (5.9.16):
+  - `pragma-comment-lib` (lto) uses the test-built library;
+  - `native-callback` (5.9.16, 5.10.14): `qsort` with a C comparator. It pipes `%{msil_prog_fail_O0}` and `_O2` to FileCheck `--check-prefix=LTO` inside `%if msil-prog-pipeline=lto %{ %}` (5.12.2, 5.12.7), as M14's diagnostic cases do, on both triples. It is never guarded by `msil-pipeline=<p>`: from M20 `%{msil_prog}` builds objects under the default `asm` pipeline. M20 adds the `OBJ` check under `%if msil-prog-pipeline=obj %{ %}`.
+- **`M2/09-hosted/`** (compile-only):
+  - the 38 glibc headers, and the UCRT headers except `tgmath.h`, with `-fsyntax-only`;
+  - a hosted glibc program linked to text with `%clang --target=x86_64-unknown-linux-gnu-msil --sysroot=%{msil_glibc_sysroot} -flto ... -Wl,--lto-emit-asm -Wl,--print-imports`, so the real `libc.so` script with its absolute paths and `libc_nonshared.a` is exercised;
+  - `atexit` reported as native-code-only from `libc_nonshared.a`.
+
+Checks: generate every `.expected` with update-expected.py (Windows and `--os linux`); run the `-fsyntax-only` hosted tests with the shared clang; record what passes only after the gate's build.
+
+#### M15.f Documentation (docs, ~300 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`, `msil/utils/build/README.md`
+- Depends on: M15.a, M15.b, M15.c, M15.d, M15.e
+- Reads: this milestone section and its section 12 rows; this plan sections 5.10 and 5.12; llvm/docs/MSIL/Status.md; llvm/docs/MSIL/GettingStarted.md sections 3, 7 and 8
+
+Write this from the hand-overs.
+- **Status.md:**
+  - Rename D14's section to "The standalone import table (D14)": frozen, used by `-S` and llc only.
+  - Add linked imports: Q13 names, bindability, default libraries, `--ucrtbase-imports` and `--print-imports`.
+  - List what is not done yet: data imports (M20); native variadic and aggregate callees, `atexit` and the native functions of the callback list (Phase 3); the map's `Imports:` section (M20).
+  - Known gap: a function address passed to any other native function (a native library's own callback API, Win32 callbacks) is not diagnosed and fails at run time until P3-B.
+  - Recount the tests.
+- **GettingStarted.md:**
+  - Linking: `LIB`, `--sysroot` with make-linux-sysroot.py or a real sysroot, `-l`, `-Bstatic`, `-Wl,--print-imports`.
+  - The hosted leg, il-snapshot.py and the M15 build targets.
+- **READMEs:** the new scripts, the M2 directories and the placeholders.
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0)
+ 2. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0; also the --sysroot of Linux-triple links)
+ 3. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/make-glibc-sysroot.sh /mnt/c/llvm-msil-scratch/glibc-sysroot  (G0, M15; downloads only when missing)
+ 4. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $b = "C:/llvm-msil-scratch/milestones/M15/M15.c/il-baseline"; if (Test-Path -LiteralPath "$b/x86_64-pc-windows-msvc-msil") { "baseline present: $b" } else { python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 6 --out $b --exclude llvm/test/CodeGen/MSIL/imports-linked.ll msil/test/M1 llvm/test/CodeGen/MSIL; if ($LASTEXITCODE) { exit 1 } }'  (before the first build only: the shared build is still HEAD's)
+ 5. pwsh -NoProfile -Command '$f = [math]::Round((Get-PSDrive D).Free / 1GB, 1); "D: $f GB free"; if ($f -lt 8) { "below 8 GB: report to the user before building"; exit 1 }'
+ 6. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: build-targets.txt = the Build targets line)
+ 7. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe  (G2)
+ 8. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe -Filter 'MSILImportsTest.*' -NoSkip -MinTests 6  (G2)
+ 9. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=*MSIL*  (G2)
+10. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*  (G2)
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 26  (G2, 5.12.10 floor)
+12. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param RUN_LLD_MAIN_TWICE=1" lld/test/MSIL  (LLD_IN_TEST=2, 5.9.1)
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3: lld/test/MSIL, llvm and clang FileCheck tests, harness, M1, M2 incl. 03-native; .NET 8 and Framework, native oracle)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-quick  (G4: M2 incl. 03-native on the Linux triple, E7 oracle)
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_pipeline=lto --param msil_native_oracle=required --param msil_run_netfx=1" msil/test/M1/06-output msil/test/M1/08-fnptr/fnptr-to-libm.c  (lto, Windows default libraries)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_pipeline=lto --param msil_native_oracle=required --param msil_runner=wsl --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_wsl_dotnet=private" msil/test/M1/06-output msil/test/M1/08-fnptr/fnptr-to-libm.c  (lto, E7 sysroot)
+17. pwsh -NoProfile -Command ". D:/llvm-msil/msil/utils/build/msil-env.ps1; python D:/llvm-msil/msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check D:/llvm-msil/msil/test/M2/03-native D:/llvm-msil/msil/test/M2/08-semantics/pragma-comment-lib.test"
+18. pwsh -NoProfile -Command ". D:/llvm-msil/msil/utils/build/msil-env.ps1; python D:/llvm-msil/msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --os linux --check D:/llvm-msil/msil/test/M2/03-native D:/llvm-msil/msil/test/M2/08-semantics/pragma-comment-lib.test"
+19. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 6 --out C:/llvm-msil-scratch/milestones/M15/gate/il-after --compare C:/llvm-msil-scratch/milestones/M15/M15.c/il-baseline --exclude llvm/test/CodeGen/MSIL/imports-linked.ll msil/test/M1 llvm/test/CodeGen/MSIL; if ($LASTEXITCODE) { exit 1 }'  (D14 frozen: IL and diagnostics of every HEAD file equal HEAD's)
+20. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg hosted  (Q16)
+21. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash -c "bash -n msil/utils/ci/lit-legs.sh && bash -n msil/utils/make-glibc-sysroot.sh && bash msil/utils/ci/lit-legs.sh --list | grep -q '^hosted'"
+22. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins  (G5: no upstream file changes)
+23. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $bad = @(); $min = [ordered]@{ "lld/test/MSIL/native-*.test" = 21; "msil/test/M2/03-native/*.test" = 9; "msil/test/M2/09-hosted/*" = 3 }; foreach ($k in $min.Keys) { $n = @(Get-ChildItem -Path $k -File -ErrorAction SilentlyContinue).Count; if ($n -lt $min[$k]) { $bad += "$k matches $n files, needs $($min[$k])" } }; $req = [ordered]@{ "llvm/test/CodeGen/MSIL/imports-linked.ll" = "msil-linked"; "llvm/unittests/Target/MSIL/MSILImportsTest.cpp" = "MSILImportsTest"; "clang/test/Driver/msil-link.c" = "ucrtbase-imports"; "msil/test/M2/08-semantics/pragma-comment-lib.test" = "pragma comment"; "msil/test/M2/08-semantics/native-callback.test" = "phase 3 thunks"; "lld/test/MSIL/native-callback.test" = "phase 3 thunks"; "lld/test/MSIL/options.test" = "print-imports"; "msil/test/harness/dep-local.test" = "--dep"; "msil/test/harness/dep-wsl.test" = "--dep"; "msil/utils/il-snapshot.py" = "--exclude"; "msil/utils/ci/build-targets.txt" = "yaml2obj" }; foreach ($k in $req.Keys) { if (-not (Test-Path -LiteralPath $k)) { $bad += "missing: $k" } elseif (-not (Select-String -Quiet -SimpleMatch -LiteralPath $k -Pattern $req[$k])) { $bad += "no match for $($req[$k]) in $k" } }; if (-not (Select-String -Quiet -SimpleMatch -LiteralPath msil/utils/ci/build-targets.txt -Pattern "llvm-mc" -ErrorAction SilentlyContinue)) { $bad += "build-targets.txt lacks llvm-mc" }; $p = @(pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -List); if (-not ($p -match "^hosted")) { $bad += "lit-legs.ps1 -List lacks hosted" }; $bad += @(Get-ChildItem -LiteralPath msil/test/M2 -Recurse -File -Filter *.test -ErrorAction SilentlyContinue | Select-String -List -SimpleMatch -Pattern "msil-pipeline=" | ForEach-Object { "$($_.Path) guards with msil-pipeline= instead of msil-prog-pipeline=" }); if (-not (Select-String -Quiet -SimpleMatch -LiteralPath msil/test/M2/08-semantics/native-callback.test -Pattern "msil-prog-pipeline=lto" -ErrorAction SilentlyContinue)) { $bad += "native-callback.test lacks the msil-prog-pipeline=lto guard" }; if ($bad.Count) { $bad; exit 1 }; "every M15 test is present"'  (G6)
+24. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (G7: must print no diff)
+25. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M15"  (G8)
+```
+
+**Exit criteria**
+- **Binding.** msil-ld binds every undefined bitcode function to the native libraries on its command line by 5.10.10, with Q13 names: `libc.so.6`, `libm.so.6`, `api-ms-win-crt-*`, `KERNEL32.dll`, `ucrtbase.dll`, `#N`, EXPORTAS and alias targets. Linked text never consults D14.
+- **Failures.** Every unbindable or unresolved symbol, native data, and every native function of the callback list is a named link error reported after LTO, never a run-time DllNotFound, EntryPointNotFound, SIGSEGV or GC hole. The 21 `native-*.test` and M14's updated lld tests pass, also with `LLD_IN_TEST=2`.
+- **Execution.** M2/03-native passes on .NET 8 and Framework and on WSL .NET 10, against native oracles. M1/06-output passes through `lto` with the default libraries on both triples. The `pragma-comment-lib` row matches native, and `native-callback` pins its diagnostic on both triples. The expected files agree with both oracles. The hosted leg passes.
+- **D14 frozen.** IL and diagnostics of every file HEAD tracks are byte-identical to HEAD's on four triples (step 19), every Phase 1 FileCheck test passes unchanged, and the f32 rule no longer calls `getPInvokeModule`.
+- **Driver.** The windows-msvc link job ends with `--ucrtbase-imports`.
+- **Docs.** The documentation is updated, the known callback gap included.
+- **After the commit.** The orchestrator runs the full `run-m1-gate.ps1` in the background (5.12.10). A failure becomes a fix WP of M16 through a section 12 row.
+
+**Review focus** (in addition to the three standing lenses)
+- Bindability is exactly what `dlsym`/`GetProcAddress` reach: versym's hidden bit, TLS and data never as functions, module strings verbatim.
+- Late binding keeps command-line order, never preempts and never extracts. Post-LTO reporting covers the names the optimizer introduces, explicit imports and the callback list (live references only; explicit imports exempt).
+- Standalone output is untouched, a module with only `msil-lto` keeps M14's text, and linked mode never reads D14.
+- lld/ELF and lld-link rules and texts are reused. Every read goes through the driver, and `Ctx::reset()` covers the native index.
+- The tests have a negative case per diagnostic and run on both triples with native oracles. M14's retired texts are replaced from the specification, never deleted or weakened.
+
+**Rebuild cost.** About 15 MSIL target TUs and about 20 lldMSIL TUs. Relinks of llc, opt, clang, lld, MSILTests and MCTests take about 5-10 minutes. `yaml2obj` (LLVMObjectYAML, about 40 TUs) and `llvm-mc` are new, about 5-8 minutes and 0.2 GB on D:. CMake regenerates by itself. The gate takes about 27-29 minutes: G0-G2 2, lld/test/MSIL twice 1, net8 10-12, wsl-quick 4.5, lto 3, expected 2, hosted 1, il-snapshot 2, the rest 1.5. If it measures over 30 minutes, step 18 (`expected-linux`) moves to the post-commit `run-m1-gate.ps1` run through a section 12 row.
+
+### M16. ECMA-335 library: writer half
+
+**Goal.** `llvm/lib/CLI` (5.7) gains its writer half, checked by two C# oracle tools over System.Reflection.Metadata (SRM): blobs, the one signature model of Phase 2 and custom-attribute blobs with the `uint8[]` carrier (5.7.3-5.7.4); opcodes, the IL decoder and token rewriter of msil-ld's walker (5.9.7), the `ILBuilder` of M18 and the shared trailer (5.9.10), and method bodies (5.7.5); heaps and `MetadataBuilder` with R6 row order (5.8.3), member runs, sorted tables, the 0xFFFF padding rule, CLR limits and deterministic bytes (5.7.6, 5.7.12); `mdump` and `mdcanon` (canonical listing v1 with 5.12.6's six normalization options, 5.7.10-5.7.11) built offline, `check-cil-defs.py`, and `cli-corpus-check.py --mode ilasm`, which proves on `msil/test/M1/11-programs` at -O0/-O2 that the listing does not depend on the assembler; the harness names `msil_mdcanon`, `%msil_mdcanon` and `%msil_canon` (mdcanon until M17, 5.12.3). Only `llvm/{include/llvm,lib,unittests}/CLI/`, `msil/` and docs change: no IL changes, and nothing but the new library rebuilds (nothing links LLVMCLI before M18). Implementers syntax-check with `msil-syntax.ps1 -FlagsFrom llvm/lib/CLI/TableSchema.cpp` (tests: `-FlagsFrom llvm/unittests/CLI/CLIFormatTest.cpp`) and may build private copies under `C:\llvm-msil-scratch\milestones\M16\<WP>\` against the shared build's `.lib` files, never in `D:\llvm-msil\build` (5.7.1).
+
+**Depends on:** M13 (the CLI format headers, `Handles.h`, `TableSchema.{h,cpp}`, the lib/CLI and unittests/CLI skeletons, the `CLITests` target, the fork prefixes, `msil-build.ps1 -Standard`) and M12 (G0 scripts, `wsl-quick`, `-std=gnu17`). M16 runs after M15, whose build-target list (5.6.11) its gate builds, but shares no file with M14 or M15 (brief 2). What M16 shares with other milestones is specified in its contract subsections: the byte-array framing in 5.7.4, `checkMethodBodies` in 5.7.6, `msil/utils/mdtools/` and the six dumper options in 5.7.11 and 5.12.6, `%msil_mdcanon` and `%msil_canon` in 5.12.3, the harness owners in 5.6.9, and the `CLI<Topic>` suite names in 5.7.13 (section 2's `CLITests` row is section 12's '-' row). The milestone workflow starts M16.a, M16.b, M16.d, M16.e and M16.f at once, M16.c when M16.b has handed over and M16.g last (5.7.14).
+
+**Header changes:**
+- none (new headers under `llvm/include/llvm/CLI/` only; no existing TU includes them)
+
+**Work packages**
+
+#### M16.a Blobs, signatures and custom attributes (implement, ~850 lines)
+
+- Owned files: `llvm/include/llvm/CLI/Blob.h`, `llvm/lib/CLI/Blob.cpp`, `llvm/include/llvm/CLI/Signature.h`, `llvm/lib/CLI/Signature.cpp`, `llvm/include/llvm/CLI/CustomAttribute.h`, `llvm/lib/CLI/CustomAttribute.cpp`
+- Reads: this plan sections 5.7.1-5.7.4, 5.7.10 and 5.7.12; llvm/docs/MSIL/recon/p2/metadata-writer.md sections 4.1 and 4.6; llvm/docs/MSIL/recon/p2/metadata-writer-files/py/cliwriter.py; llvm/docs/MSIL/recon/p2/bcl-binding.md sections 3.4, 4.4 and 5.5; llvm/include/llvm/BinaryFormat/CLI.h; llvm/include/llvm/CLI/Handles.h; llvm/include/llvm/Support/DataExtractor.h
+- Provides: every name of 5.7.3 and 5.7.4; the only declaration of `cli::encodeByteArrayAttribute` and `cli::decodeByteArrayAttribute` (5.7.4 and 5.8.11: M17.c's `LinkInfo.h` includes `CustomAttribute.h`)
+
+Implement 5.7.3-5.7.4 exactly (names, signatures, prefixes `invalid signature: ` and `invalid custom attribute blob: `). Write the three headers first and keep them compilable after every edit: the root test WP M16.e syntax-checks against them while you work (5.7.14). `BlobReader` is sticky like `DataExtractor::Cursor`. `TypeSig` is a regular value type: structural `==`, `hash_value` over content only, cheap copies (msil-ld keys MemberRefs by signature); document the representation. Decoders consume the whole blob and report offset and cause (truncation, bad compressed integer, unknown element type, tag 3, trailing bytes, misplaced SENTINEL, depth over 64); encoders assert on API misuse. `mapTypeRefs` reaches every TypeRef: CLASS/VALUETYPE operands, the GENERICINST type, modifier types and function-pointer signatures. `printTypeSig`/`printMethodSig` write exactly 5.7.10's signature rows (mdcanon prints the same; disagreements are settled against 5.7.10). Custom attributes: a CLASS constructor parameter is always `System.Type` (II.23.3 allows no other class), a VALUETYPE parameter is an enum resolved through `EnumTypeResolver` (none given: Error); boxed, enum, Type and array tags for `object` parameters and named arguments. The byte-array decoder refuses a null array, a short blob, named arguments and trailing bytes. Compare with `cliwriter.py` on the same inputs; a difference is a bug in one of them.
+
+#### M16.b Opcodes, IL decoder, IL builder and method bodies (implement, ~1,100 lines)
+
+- Owned files: `llvm/include/llvm/CLI/Opcodes.h`, `llvm/lib/CLI/Opcodes.cpp`, `llvm/include/llvm/CLI/ILDecoder.h`, `llvm/lib/CLI/ILDecoder.cpp`, `llvm/include/llvm/CLI/ILBuilder.h`, `llvm/lib/CLI/ILBuilder.cpp`, `llvm/include/llvm/CLI/MethodBody.h`, `llvm/lib/CLI/MethodBody.cpp`
+- Reads: this plan sections 5.7.1, 5.7.2, 5.7.5, 5.7.12, 5.9.7 and 5.9.10; llvm/docs/MSIL/recon/p2/metadata-writer.md sections 3.1, 3.9, 4.7, 5.1 and 5.2; llvm/docs/MSIL/recon/p2/metadata-writer-files/py/cliwriter.py; llvm/docs/MSIL/recon/p2/metadata-writer-files/py/relax_measure.py; llvm/docs/MSIL/recon/p2/mc-streamer.md sections 5.3-5.5; llvm/lib/Target/MSIL/MCTargetDesc/MSILInstPrinter.cpp (getShortForm, printShortForm); llvm/lib/Target/MSIL/MSILAsmPrinter.cpp (SynthesizedBody, which M18 replaces); llvm/include/llvm/BinaryFormat/CILOpcodes.def; llvm/include/llvm/CLI/Handles.h
+- Provides: every name of 5.7.5 (`Opcodes.h`, `MethodBody.h`, `ILDecoder.h`, `ILBuilder.h`)
+
+Implement 5.7.5 exactly. Write the four headers first and keep them compilable after every edit: the root test WP M16.e syntax-checks against them while you work, and M16.c, which starts when you hand over, builds on `MethodBodyStream` (5.7.14). `Opcodes.cpp` expands `CILOpcodes.def` into one constexpr table (219 entries, value order; FE 08, FE 10, FE 1B and the one-byte holes are not opcodes). `MethodBody.cpp`: the tiny and fat headers, 4-aligned fat bodies with zero padding, small or fat EH sections by 5.7.5's thresholds; `decodeMethodBody` follows MoreSects chains and rejects truncation, code past the end and OptILTable sections. `decodeIL` gives absolute targets, sign rules per operand kind and `TokenOffset`, and rejects truncated operands, unknown opcodes and reserved prefixes 0xF8-0xFF other than 0xFE; `rewriteILTokens` patches every token operand kind in place. `ILBuilder`: prefixes are instructions; shortest forms are exactly `printShortForm`'s (Q26; index above 65534: layout error); relaxation starts short and widens to a fixed point (switch entries always 32-bit); III.1.7.5 stack depth with 5.7.5's handler and dead-code rules, `setMaxStack` as a floor; every layout error of 5.7.5 (prefix `invalid IL body: `); `instructions()` carries final opcodes and offsets for M18; `encode` resolves every `TokenRef` through the caller. Check bodies and relaxation against `cliwriter.py`/`relax_measure.py` in scratch.
+
+#### M16.c Heaps and MetadataBuilder (implement, ~1,400 lines)
+
+- Owned files: `llvm/include/llvm/CLI/Heaps.h`, `llvm/lib/CLI/Heaps.cpp`, `llvm/include/llvm/CLI/MetadataBuilder.h`, `llvm/lib/CLI/MetadataBuilder.cpp`, `llvm/lib/CLI/CMakeLists.txt`
+- Depends on: M16.b
+- Reads: this plan sections 5.7.1, 5.7.2, 5.7.5, 5.7.6, 5.7.12 and 5.8.3 (R6); llvm/docs/MSIL/recon/p2/metadata-writer.md sections 2, 3.6, 3.10, 4.3-4.5 and 4.10; llvm/docs/MSIL/recon/p2/metadata-writer-files/py/cliwriter.py; llvm/docs/MSIL/recon/p2/metadata-writer-files/hello-python.mdump.txt; llvm/include/llvm/MC/StringTableBuilder.h; llvm/include/llvm/Support/ConvertUTF.h; llvm/include/llvm/CLI/TableSchema.h; llvm/lib/CLI/CMakeLists.txt
+- Provides: every name of 5.7.6's `Heaps.h` and `MetadataBuilder.h`, plus `Error MetadataBuilder::checkMethodBodies() const` (5.7.6); R6: AssemblyRef, ModuleRef, TypeRef, TypeSpec, MemberRef, StandAloneSig and MethodSpec rows numbered in first-add order with duplicates merged, Field/MethodDef/Param/Property rows in add order within their owner; `LLVMCLI` building every M13 and M16 source
+
+Implement 5.7.6 exactly (prefix `cannot write CLI metadata: `); write `Heaps.h` and `MetadataBuilder.h` first and keep them compilable (the root test WP M16.f compiles against them if they exist before it hands over, 5.7.14). `#Strings` uses `StringTableBuilder(StringTableBuilder::ELF)` with tail merging; `#Blob`, `#US` (UTF-16LE, length 2n+1, 5.7.6's trailing byte) and `#GUID` deduplicate in insertion order. Stable tables number rows at insertion, so their handles are final tokens; member tables are numbered by `finalize()`, which also writes PropertyMap and NestedClass rows, stable-sorts the sorted tables by encoded key, pads per the 0xFFFF rule (pad rows and tiny `ret` bodies of 5.7.6), finalizes `#Strings` and returns the first recorded content check, naming the entity. `finalize()` does not check body offsets: bodies that reference member rows can be encoded only after `finalize()`, so `setMethodBodyOffset` works before and after it, and `checkMethodBodies()` (after `finalize()`) returns `cannot write CLI metadata: method '<owner>::<name>' has no body` for the first IL method (not abstract, pinvokeimpl or runtime) without one; `writePEImage` calls it (M17). Serialize per 5.7.6 with M13's `MetadataSizes`; `getSerializedSize()` is RVA-independent. Bytes depend only on the calls and their order (5.7.12). `CMakeLists.txt`: keep M13's lines, add the nine M16 sources, `LINK_COMPONENTS BinaryFormat MC Support TargetParser` (no `Object`). Serialize metadata-writer 2's Phase-1-shaped module in scratch and compare with `cliwriter.py`'s bytes for the same calls.
+
+#### M16.d C# oracle tools: mdump, mdcanon and the corpus check (infra, ~1,500 lines)
+
+- Owned files: `msil/utils/mdtools/mdump.cs`, `msil/utils/mdtools/mdcanon.cs`, `msil/utils/mdtools/build-mdtools.py`, `msil/utils/mdtools/check-cil-defs.py`, `msil/utils/mdtools/cli-corpus-check.py`
+- Reads: this plan sections 5.7.10, 5.7.11, 5.7.13 and 5.12.6; llvm/docs/MSIL/recon/p2/tests-p2.md sections 2.3, 3.8 and 3.9; llvm/docs/MSIL/recon/p2/tests-p2-files/mdcanon/; llvm/docs/MSIL/recon/p2/tests-p2-files/logs/mdcanon-sample-dispatch-vm.txt; llvm/docs/MSIL/recon/p2/metadata-writer-files/mdump/Program.cs; llvm/docs/MSIL/recon/p2/metadata-writer-files/py/check_opcodes.py; llvm/include/llvm/BinaryFormat/CILOpcodes.def; msil/utils/jitall/build-jitall.py; msil/test/lit.cfg.py (dotnet, ilasm and NuGet discovery, `%{msil_cflags}`); msil/utils/ci/ci-common.ps1 (Get-MsilNuGetTool); msil/utils/tools/msil-tools.proj
+- Provides: `build-mdtools.py [--out DIR] [--build-dir DIR] [--dotnet PATH] [--ref-major N] [--force]` writing `<build>/tools/msil/mdtools/{mdump,mdcanon}.dll` with runtimeconfigs (rollForward Major) and a stamp; `mdcanon [--canonical] [--scopes=keep|strip] [--order=sorted|decl] [--forms=exact|canon] [--assembly-hash=keep|ignore] [--params=keep|drop] [--initlocals=keep|ignore-without-locals] [--snan=keep|quiet] [--pinvoke-module=keep|strip] [--pinvoke-access=keep|ignore] [--stats|--stats-only] [--out-dir DIR] <file>...`; `mdump [--no-pe] [--no-bodies] <file>...`, `mdump --opcodes`, `mdump --contentid <hex>`; `check-cil-defs.py [--def FILE] [--mdtools DIR] [--dotnet PATH]`; `cli-corpus-check.py --mode <m>[,<m>...] [--clang PATH] [--triple T] [--levels O0,O2] [--work DIR] [--mdtools DIR] [--dotnet PATH] [--ilasm-framework PATH] [--ilasm-nuget PATH] <dir-or-.c>...` with mode `ilasm` (M17 adds `dumpers`, `copy`, `stats`); exit 0/1 and a summary line `<script>: <mode>: <n> of <m> ...`
+
+Port and finish the prototypes per 5.7.11; nothing is downloaded or committed built. `mdcanon` implements all of canonical listing v1 (UTF-8 byte order, never UTF-16 ordinals; 5.7.10 escaping; LF) plus `--out-dir` batch mode, and the six normalization options of 5.12.6 (`--assembly-hash`, `--params`, `--initlocals`, `--snan`, `--pinvoke-module`, `--pinvoke-access`; default `keep`; 5.7.11) exactly as 5.12.6's table says, applied while the listing is produced and before sorting; M17's `llvm-cil-dump --canonical` must match them byte for byte. Where the prototype and 5.7.10 or 5.12.6 differ, the specification wins; a genuine ambiguity goes into the hand-over for a section 12 row (M17's gate compares the two dumpers byte for byte). Exercise each option on scratch ilasm images before hand-over; for `--snan=quiet` patch an `ldc.r4` operand to a signaling NaN after assembling (ilasm quiets them, 5.12.6). `mdump --opcodes` prints System.Reflection.Emit.OpCodes as 5.7.11 says; `--contentid` prints `<guid lowercase D> 0x<8X>`. `build-mdtools.py` copies `build-jitall.py`'s method (installed SDK csc, `Microsoft.NETCore.App.Ref` N.x, temporary sibling directory renamed into place, rebuild only on change); `build-jitall.py` is unchanged. `check-cil-defs.py` compares name, value, operand kind, pops, pushes and flow and expects only `no.` missing. `cli-corpus-check.py` is a mode framework that M17 extends: inputs are the `.c` files with a `<stem>.expected`, flags `-std=gnu17 -ffreestanding -Werror=return-type -I msil/test/Inputs`, triple `x86_64-pc-windows-msvc-msil`, clang `<build>/bin/clang.exe`, a work directory outside the repository (default `C:\llvm-msil-scratch\cli-corpus\`); mode `ilasm` assembles every `clang -S` output with Framework ilasm (`-nologo -quiet -dll -pe64 -x64`) and the NuGet ilasm at `MsilILAsmVersion`, dumps each set with one `mdcanon --out-dir` run and requires byte-equal listings (tests-p2 E3: 40 of 40), printing the first differing lines. Run it on `msil/test/M1/11-programs` before hand-over and report the time.
+
+#### M16.e Tests for blobs, signatures, custom attributes, opcodes, the IL builder and decoder, and method bodies (test, ~1,100 lines)
+
+- Owned files: `llvm/unittests/CLI/CMakeLists.txt`, `llvm/unittests/CLI/BlobTest.cpp`, `llvm/unittests/CLI/SignatureTest.cpp`, `llvm/unittests/CLI/CustomAttributeTest.cpp`, `llvm/unittests/CLI/OpcodesTest.cpp`, `llvm/unittests/CLI/ILBuilderTest.cpp`, `llvm/unittests/CLI/ILDecoderTest.cpp`, `llvm/unittests/CLI/MethodBodyTest.cpp`
+- Reads: this plan sections 5.7.1-5.7.5, 5.7.10 and 5.7.12-5.7.14; llvm/docs/MSIL/recon/p2/metadata-writer.md sections 3.1, 3.9, 4.6, 4.7, 5.1, 5.2 and 6; llvm/docs/MSIL/recon/p2/metadata-writer-files/dotnet-opcodes.tsv; llvm/docs/MSIL/recon/p2/metadata-writer-files/hello-ilasm.mdump.txt; llvm/docs/MSIL/recon/p2/metadata-writer-files/py/cliwriter.py; llvm/docs/MSIL/recon/p2/bcl-binding.md section 3.4; llvm/lib/Target/MSIL/MCTargetDesc/MSILInstPrinter.cpp (the Q26 forms); llvm/unittests/CLI/CMakeLists.txt; llvm/unittests/CLI/CLIFormatTest.cpp (style)
+
+Written from the specification only, without reading M16.a-M16.c (protocol 4); expected values come from ECMA-335, the recon logs, the Python prototype or tools run in scratch (csc, SRM), never from the implementation. A root WP that runs alongside M16.a and M16.b: syntax-check (`-FlagsFrom llvm/unittests/CLI/CLIFormatTest.cpp`) each test file whose included headers exist when you are ready to hand over, never wait for, read or build the implementation, and name the other files in the hand-over as checked at the gate (5.7.14). Suites are `CLI<Topic>`. `CMakeLists.txt` keeps M13's sources and adds all nine M16 test files (M16.f's two included), `LLVM_LINK_COMPONENTS CLI Support TargetParser` (M13's line, kept for `MSILLinkTest.cpp`; 5.7.1), `LLVMTestingSupport`. Cover 5.7.13's M16 row: `CLIBlobTest` (widths, II.23.2 examples and boundaries, SerString null/empty/UTF-8, the sticky error); `CLISignatureTest` (every 5.7.3 vector both ways, every element type, ARRAY shapes, GENERICINST, VAR/MVAR, FNPTR, modifiers in blob order, PINNED, SENTINEL, property signatures, each decode error, `mapTypeRefs` at every TypeRef position, the 5.7.10 print strings, equal hashes); `CLICustomAttributeTest` (metadata-writer 4.6's E1 blob, the byte-array framing and its errors, csc-built blobs with enum, `Type`, boxed, array and named arguments read with SRM in scratch and embedded with their C# line, each round-tripped byte-identical); `CLIOpcodesTest` (every entry against an embedded copy of `dotnet-opcodes.tsv` plus `no.`, holes, names, sizes, branch pairs, stack effects); `CLIILBuilderTest` (shortest forms at 0-3, 4, 255, 256, 65534 and 65535, `ldc.i4` at -1, 8, 9, -128, 127, 128; relaxation at +127/+128 and -128/-129 forward and backward, `leave`, cascading, switch, `setRelaxBranches(false)`; maxstack with calls, floors, handlers and dead code; every layout error; `encode` with Handle and External refs; E1's `main` rebuilt instruction by instruction equals its 371 bytes in `hello-ilasm.mdump.txt`); `CLIILDecoderTest` (all 219 opcodes, targets, sign rules, truncation, unknown and reserved bytes, `rewriteILTokens` and a Map error); `CLIMethodBodyTest` (code 63/64, maxstack 8/9, locals, InitLocals, mixed-body alignment, 20/21 clauses, offsets 0xFFFF/0x10000, lengths 0xFF/0x100, a hand-built MoreSects body, OptILTable).
+
+#### M16.f Tests for heaps and MetadataBuilder (test, ~800 lines)
+
+- Owned files: `llvm/unittests/CLI/HeapsTest.cpp`, `llvm/unittests/CLI/MetadataBuilderTest.cpp`
+- Reads: this plan sections 5.7.1, 5.7.2, 5.7.5, 5.7.6, 5.7.12-5.7.14 and 5.8.3 (R6); llvm/docs/MSIL/recon/p2/metadata-writer.md sections 2, 3.6, 4.3-4.5 and 4.10; llvm/docs/MSIL/recon/p2/metadata-writer-files/verify_schema.log; llvm/docs/MSIL/recon/p2/metadata-writer-files/hello-python.mdump.txt; llvm/docs/MSIL/recon/p2/metadata-writer-files/py/cliwriter.py; llvm/include/llvm/CLI/TableSchema.h
+
+Written from the specification only, without reading M16.a-M16.c (protocol 4); expected values as in M16.e. A root WP: M16.c starts only after M16.b hands over, so `Heaps.h` and `MetadataBuilder.h` may not exist when you are done; syntax-check what compiles then and name the rest in the hand-over as checked at the gate (5.7.14). `CLIHeapsTest`: `#Strings` deduplication and tail merging, `#Blob` lengths at 0x7F/0x80, every `#US` trailing-byte class, surrogate pairs, invalid UTF-8 and overflow, `#GUID` indexes, padding, the 0xFFFF/0x10000 sizes that flip `computeHeapSizeFlags`. `CLIMetadataBuilderTest`: metadata-writer 2's Phase-1-shaped module with its 14 tables serialized and read back column by column through `MetadataSizes` (row counts, `Valid`, `Sorted`, stream order and padding, `getMvidOffset`); member runs with empty runs; PropertyMap and NestedClass rows; stable sorted tables; R6 numbering for the stable tables and add order for members; the 0xFFFF padding at 0xFFFE, 0xFFFF and 0x10000 rows of Field, MethodDef and Param; every content check as an Error naming its entity (65,525 methods, 65,535 fields, a 1,024-byte name, a NUL); `checkMethodBodies` before and after `setMethodBodyOffset`; identical bytes from two identical builds.
+
+#### M16.g Harness wiring and documentation (infra, ~300 lines)
+
+- Owned files: `msil/test/lit.cfg.py`, `msil/test/harness/canon-listing.test`, `msil/test/harness/Inputs/canon-listing.il`, `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`
+- Depends on: M16.a, M16.b, M16.c, M16.d, M16.e, M16.f
+- Reads: this plan sections 5.7.10, 5.7.11, 5.12.1-5.12.6 and 6 M16; msil/test/lit.cfg.py (the jitall section); msil/test/harness/lit.local.cfg; llvm/docs/MSIL/GettingStarted.md; llvm/docs/MSIL/Status.md; msil/README.md; msil/test/README.md
+
+Spawned after the others hand over. `lit.cfg.py`, modeled on its jitall section: parameter `msil_mdcanon` (unset: `<build>/tools/msil/mdtools`, built on configuration by `build-mdtools.py`; empty: disabled; else a directory), feature `msil-mdcanon`, substitutions `%msil_mdcanon` (the host dotnet plus `mdcanon.dll`, on the host also when `msil_runner=wsl`) and `%msil_canon` (the same until M17); under `msil_require_verify=1` a failed mdtools build is fatal, as for jitall. `canon-listing.test` (`REQUIRES: msil-mdcanon`) assembles `Inputs/canon-listing.il` (an assembly with `.hash algorithm 0x00008004`, a field with RVA data, a P/Invoke stub, a method with `.locals` and one without, a named parameter, a branch, a switch, a non-ASCII `ldstr`, a try/catch, a custom attribute) with `%ilasm -dll` and FileChecks `%msil_canon` three times: default options; `--order=decl --forms=canon`; and the five 5.12.6 options an ilasm image exercises, `--assembly-hash=ignore --params=drop --initlocals=ignore-without-locals --pinvoke-module=strip --pinvoke-access=ignore` (`--snan` needs a patched image, M17.f). The expected lines are written from 5.7.10 and 5.12.6 by hand, then confirmed against mdcanon built into your scratch with `build-mdtools.py --out` from M16.d's handed-over sources (a disagreement is settled against the specification). Docs: Status.md (state line, the ECMA-335 library row, the oracle tools), GettingStarted.md (CLITests, `build-mdtools.py`, `check-cil-defs.py`, `cli-corpus-check.py --mode ilasm`), msil/README.md (`utils/mdtools/`), msil/test/README.md (the new parameter, feature, substitutions and harness test).
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '$f = (Get-PSDrive D).Free / 1GB; "D: has {0:N1} GB free" -f $f; if ($f -lt 8) { "below 8 GB: report to the user before building (plan 5.6.11)"; exit 1 }'
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0, idempotent: Q39's private WSL runtimes)
+ 3. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0, idempotent: the E7 oracle libraries)
+ 4. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-configure.ps1 -Experimental MSIL  (new lib/CLI and unittests/CLI sources)
+ 5. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: every target of msil/utils/ci/build-targets.txt, the Build targets line above; unchanged since M15)
+ 6. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe
+ 7. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=*MSIL*
+ 8. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*
+ 9. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 110
+10. python D:/llvm-msil/msil/utils/mdtools/build-mdtools.py --force  (offline: installed SDK and reference pack)
+11. python D:/llvm-msil/msil/utils/mdtools/check-cil-defs.py  (CILOpcodes.def equals System.Reflection.Emit.OpCodes plus no.)
+12. python D:/llvm-msil/msil/utils/mdtools/cli-corpus-check.py --mode ilasm --levels O0,O2 --work C:/llvm-msil-scratch/gates/M16/cli-corpus D:/llvm-msil/msil/test/M1/11-programs  (40 of 40 listings equal across both ilasms; about 2 min)
+13. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $req = [ordered]@{ "llvm/unittests/CLI/BlobTest.cpp" = "CLIBlobTest"; "llvm/unittests/CLI/SignatureTest.cpp" = "CLISignatureTest"; "llvm/unittests/CLI/CustomAttributeTest.cpp" = "CLICustomAttributeTest"; "llvm/unittests/CLI/OpcodesTest.cpp" = "CLIOpcodesTest"; "llvm/unittests/CLI/ILBuilderTest.cpp" = "CLIILBuilderTest"; "llvm/unittests/CLI/ILDecoderTest.cpp" = "CLIILDecoderTest"; "llvm/unittests/CLI/MethodBodyTest.cpp" = "CLIMethodBodyTest"; "llvm/unittests/CLI/HeapsTest.cpp" = "CLIHeapsTest"; "llvm/unittests/CLI/MetadataBuilderTest.cpp" = "CLIMetadataBuilderTest"; "llvm/unittests/CLI/CMakeLists.txt" = "MetadataBuilderTest"; "msil/test/harness/canon-listing.test" = "--pinvoke-access=ignore" }; $bad = @(foreach ($k in $req.Keys) { $p = $r + $k; if (-not (Test-Path -LiteralPath $p)) { "missing: $k" } elseif (-not (Select-String -Quiet -SimpleMatch -LiteralPath $p -Pattern $req[$k])) { "no match for $($req[$k]) in $k" } }); if ($bad.Count) { $bad; exit 1 }; "every M16 test is present"'  (G6)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1" msil/test/harness/canon-listing.test
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3; 9-11 min)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-quick  (G4; about 4 min)
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins  (G5; no upstream file changes)
+18. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (G7: must print no diff)
+19. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M16"
+```
+
+**Exit criteria**
+- `CLITests` passes at least 110 tests with none skipped, covering 5.7.13's M16 row: E1's 371-byte `main` rebuilt by `ILBuilder` equals ilasm's bytes, the 0xFFFF padding, the CLR limits as Errors, R6 order and byte-identical repeated builds.
+- `check-cil-defs.py` finds `CILOpcodes.def` equal to System.Reflection.Emit's 218 opcodes plus `no.`; `cli-corpus-check.py --mode ilasm` gives 40 of 40 equal listings.
+- `build-mdtools.py` builds offline and is a no-op when up to date; `mdcanon` takes 5.12.6's six options; `%msil_canon`, `%msil_mdcanon` and `msil-mdcanon` work; `canon-listing.test` passes with the default, declaration-order and normalized listings.
+- Only `llvm/{include/llvm,lib,unittests}/CLI/`, `msil/` and the four docs change; no IL changes; the net8, wsl-quick and manifest/pins steps stay green; the docs describe the library, the tools and the harness names.
+
+**Review focus** (in addition to the three standing lenses)
+- ECMA-335 exactness: signature grammar (modifier order, SENTINEL, GENERICINST, FNPTR), custom-attribute typing (CLASS means `System.Type`), header and EH thresholds, maxstack for handlers and dead code, relaxation fixed point, the `#US` trailing byte, sorted keys as encoded coded indexes, pad rows and their owner.
+- A library others build on: R6 order and final handles for stable tables, `checkMethodBodies` instead of a `finalize()` check, no input-driven assertion or fatal error, 5.7.12's prefixes, `support::endian`, no pointer- or hash-order dependence, no `Object` dependency, `LLVM_ABI`, one namespace `llvm::cli`.
+- One listing specification: mdcanon follows 5.7.10 and 5.12.6 where the prototype differs, and each normalization option changes only what 5.12.6 says, before sorting.
+- Test independence: expected bytes from ECMA, recon logs, the prototype or csc/SRM runs; negative cases present; the root test WPs did not read the implementation.
+
+**Rebuild cost.** A CMake reconfigure (about 1-2 min), nine new LLVMCLI TUs, nine new test TUs and one `CLITests` link: about 3-5 minutes and under 50 MB on D:. Nothing else relinks (`-Standard`'s other targets are up to date). `build-mdtools.py` takes about 20 seconds. Gate about 21 minutes: the standard steps (net8 9-11, wsl-quick about 4) plus about 3 for the M16 legs.
+
+### M17. ECMA-335 library: reader, dumper, PE writer, link-info codec
+
+**Goal.** `llvm/lib/CLI` becomes complete for Phase 2: the PE writer with Roslyn's envelope, the EXE, DLL and netmodule shapes, the COFF symbol view and a deterministic content id (5.7.7, 5.8.2, 5.8.6); the PE image and lazy metadata reader (5.7.8); the link-info codec with framing, C8 checks (IMPORT data symbols included), C1-C7 validation, the COFF view builder and the `--link-info` printer (5.8.5-5.8.11), plus the P2-C symbol-table codec (5.9.15); the dumper with canonical listing v1 and 5.12.6's six normalization options (5.7.10), `llvm-cil-dump` and `llvm-cil-copy`. `llvm-cil-copy` (reader, `MetadataBuilder`, `writePEImage`) is the end-to-end oracle before msil-ld: every M1 program's ilasm image copies to a canonically equal, byte-deterministic PE that verifies (D21) and runs with the same transcript, so the first images our writer produces run on .NET 8, .NET 10, Framework 4.8 and WSL. From this commit `%msil_canon` is `llvm-cil-dump --canonical` (O3/O4, 5.12.6); mdcanon remains the cross-check of `--mode dumpers`. Record v1 is written and pinned by tests here but frozen only by M20's commit (5.8.9). No target, clang, lld or upstream file changes. Implementers syntax-check with `msil-syntax.ps1 -FlagsFrom llvm/lib/CLI/MetadataBuilder.cpp` (tools: `llvm/tools/llvm-cat/llvm-cat.cpp`; tests: `llvm/unittests/CLI/CLIFormatTest.cpp`) and may build private copies under `C:\llvm-msil-scratch\milestones\M17\<WP>\`, never in `D:\llvm-msil\build` (5.7.1).
+
+**Depends on:** M16 (5.7.3-5.7.6, `checkMethodBodies`, `msil/utils/mdtools/` with mdcanon's 5.12.6 options, `%msil_canon`), M13 (`BinaryFormat/MSILLink.h` complete per 5.8.11, the IMPORT flag 0x800 with `ImportModule`/`ImportName` included; `msil-build.ps1 -Standard` and `build-targets.txt`) and M15 (the `yaml2obj` target). What M17 shares with other milestones is specified in its contract subsections: the record model `MSILLink::Record`, the codec signatures, `CoffSymbol` and `getCOFFViewMarkerSections` in 5.7.7, 5.7.9 and 5.8.11, the symbol-table codec in 5.7.9 and 5.9.15, the six dumper options in 5.7.10, `%msil_cil_dump` and `%msil_canon` in 5.12.3 and the harness owners in 5.6.9. The milestone workflow starts M17.a, M17.e and M17.f at once, then M17.b, M17.c and M17.d one after another (each builds on the previous one's header), and M17.g last (5.7.14).
+
+**Header changes:**
+- none (new headers under `llvm/include/llvm/CLI/` only; nothing outside lib/CLI and the two new tools includes them)
+
+**Work packages**
+
+#### M17.a PE writer (implement, ~700 lines)
+
+- Owned files: `llvm/include/llvm/CLI/PEWriter.h`, `llvm/lib/CLI/PEWriter.cpp`, `llvm/lib/CLI/CMakeLists.txt`
+- Reads: this plan sections 5.7.1, 5.7.6, 5.7.7, 5.7.12, 5.8.2, 5.8.6 and 5.8.7; llvm/docs/MSIL/recon/p2/metadata-writer.md sections 3.3, 3.10, 4.9 and 4.10; llvm/docs/MSIL/recon/p2/metadata-writer-files/py/cliwriter.py; llvm/docs/MSIL/recon/p2/judge-dotnet-value-files/coffsym.py; lld/COFF/Writer.cpp (writeHeader, ~1834-2056); llvm/include/llvm/BinaryFormat/COFF.h; llvm/include/llvm/Support/SHA256.h; llvm/include/llvm/CLI/MetadataBuilder.h
+- Provides: every name of 5.7.7; `LLVMCLI` building every M13, M16 and M17 source
+
+Implement 5.7.7 exactly, with 5.8.2 and 5.8.6 for objects. Write `PEWriter.h` first and keep it compilable after every edit: the root test WP M17.e compiles against it while you work, and M17.b-M17.d start after you hand over (5.7.14). `PEOptions::get`: x86_64 is AMD64, aarch64 is ARM64 (PE32+), any other architecture is `cannot write PE image: architecture '<a>' is not supported until phase 5`; characteristics 0x0022 for Executable and 0x2022 for Library and Module (5.8.2 O1). The metadata is serialized once with the final RVAs. An `ExtraSections` entry with empty `Data` is a marker section (VirtualSize, SizeOfRawData and PointerToRawData 0, VirtualAddress the next section-aligned RVA), and SizeOfHeaders grows to hold the section table (0x400 with 5.8.6's three markers). `CoffSymbols` follow the last raw data, 4-aligned: 18-byte records, longer names through the string table (a u32 size counting itself, NUL-terminated names), PointerToSymbolTable and NumberOfSymbols set, outside SizeOfImage. Checks of 5.7.7 with the prefix `cannot write PE image: `, except `checkMethodBodies()` (5.7.6), whose `cannot write CLI metadata: ` error is returned unchanged. Content id per 5.7.7 over the whole file, COFF view included. `CMakeLists.txt` keeps every line and adds `PEWriter.cpp`, `PEImage.cpp`, `MetadataReader.cpp`, `LinkInfo.cpp`, `SymbolTable.cpp` and `Dump.cpp`. Before hand-over write metadata-writer 2's module as an EXE in scratch, compare its headers with `cliwriter.py`'s image and run it on .NET 8 and Framework.
+
+#### M17.b PE image and metadata reader (implement, ~1,500 lines)
+
+- Owned files: `llvm/include/llvm/CLI/PEImage.h`, `llvm/lib/CLI/PEImage.cpp`, `llvm/include/llvm/CLI/MetadataReader.h`, `llvm/lib/CLI/MetadataReader.cpp`
+- Depends on: M17.a
+- Reads: this plan sections 5.7.1, 5.7.6, 5.7.8 and 5.7.12; llvm/docs/MSIL/recon/p2/bcl-binding.md sections 7.1-7.5; llvm/docs/MSIL/recon/p2/metadata-writer.md section 4.11; llvm/include/llvm/Object/COFF.h (struct shapes only, no dependency); llvm/include/llvm/CLI/TableSchema.h; llvm/include/llvm/CLI/MethodBody.h; llvm/include/llvm/CLI/CustomAttribute.h; llvm/include/llvm/Support/SHA1.h
+- Provides: every name of 5.7.8
+
+Implement 5.7.8 exactly; write the two headers first and keep them compilable (M17.e compiles against them, 5.7.14). `PEImage::create` validates the DOS header, e_lfanew, the PE signature, the COFF and PE32/PE32+ optional headers (fewer than 15 data directories: no CLI header) and the section table, with the prefix `invalid CLI image: `; `getRVAData` stays inside one section's raw data; `getCoffSymbols` reads 5.8.6's records through M17.a's `CoffSymbol`. `MetadataReader` is lazy and zero-copy: 5.7.8's create-time checks, M13's `MetadataSizes` for every column, all 45 tables through `getColumnValue`, typed getters, heap getters that check offsets and lengths, lookups indexed on first use (mutable state; one reader per thread; never trusting `Sorted`). `getByteArrayAttributes` matches the constructor's declaring TypeDef or TypeRef by `Namespace.Name` and decodes with `decodeByteArrayAttribute`. Malformed input gives an Error, never an assertion or crash; `mscorlib.dll` is not decoded up front and no lookup is quadratic. Before hand-over read every table of an ilasm image of `msil/test/M1/11-programs/dispatch-vm.c`, of Framework `mscorlib.dll` and of net8 `System.Runtime.dll` in scratch.
+
+#### M17.c Link-info and symbol-table codecs (implement, ~900 lines)
+
+- Owned files: `llvm/include/llvm/CLI/LinkInfo.h`, `llvm/lib/CLI/LinkInfo.cpp`, `llvm/include/llvm/CLI/SymbolTable.h`, `llvm/lib/CLI/SymbolTable.cpp`
+- Depends on: M17.a, M17.b
+- Reads: this plan sections 5.7.1, 5.7.4, 5.7.7-5.7.10, 5.7.12, 5.8.3, 5.8.5-5.8.11 and 5.9.15; llvm/include/llvm/BinaryFormat/MSILLink.h; llvm/include/llvm/CLI/CustomAttribute.h; llvm/docs/MSIL/recon/p2/exports-multiasm.md sections 5.2 and 5.4; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md section 6.2; llvm/docs/MSIL/recon/p2/judge-dotnet-value.md section 7.3; llvm/include/llvm/BinaryFormat/Wasm.h (the linking-section checklist); llvm/include/llvm/Support/LEB128.h
+- Provides: 5.8.11's lib/CLI interface with its signatures (5.7.9): `cli::RecordWriter` (`writeU8`, `writeU32`, `writeULEB`, `writeSLEB`, `writeString`, `writeBytes`, `beginSubsection(uint8_t)`, `endSubsection()`), `cli::RecordReader` (the same reads taking a field name, `readSubsection`, sticky `takeError`), `encodeLinkInfo`, `decodeLinkInfo`, `findLinkInfo`, `validateLinkInfo`, `buildCOFFSymbolView`, `printLinkInfo`, and `ArrayRef<PESection> getCOFFViewMarkerSections()`; `SymbolTable.h`: `cli::LibrarySymbolTable`, `cli::LibraryDataSymbol`, `cli::LibraryFunctionFlags`, `encodeSymbolTable`, `decodeSymbolTable`, `printSymbolTable`, `SymbolTableMagic` ("MSYM"), `SymbolTableType` ("<msil>SymbolTable")
+
+Write `LinkInfo.h` and `SymbolTable.h` first and keep them compilable (M17.e compiles against them, 5.7.14). (1) The record primitives and subsection framing of 5.8.8 (minimal LEB written; more than 10 bytes refused; payloads consumed exactly); messages `invalid link-info record: <field> at offset <n>: <problem>` (`invalid symbol table: ` for the attribute). `LinkInfo.h` includes `CustomAttribute.h` for the byte-array framing. (2) `encodeLinkInfo`: header, then non-empty subsections in kind order, fields in 5.8.8's order (an IMPORT symbol's `str` ImportModule then ImportName after the COMMON fields), `SkippedOptional` in kind order; equal records give equal bytes. (3) `decodeLinkInfo`: magic; another major is `invalid link-info record: version <n> is newer than this toolchain supports (1)`; subsection order and sizes; kinds 0x40-0x7F kept in `SkippedOptional`; every C8 constraint of 5.8.8 (flag combinations, IMPORT only with DATA and UNDEFINED, never with TLS and with a non-empty ImportName among them; names, index ranges, segment bounds and alignment, relocations sorted, non-overlapping, inside a non-ZERO segment and of the right target kind, selections 0-4, INIT symbols defined functions, one SIGNATURES entry per token); an unknown kind below 0x40, flag bit or enum value is `invalid link-info record: v1.<minor> uses <feature>, which this toolchain does not support` (5.8.9). (4) `findLinkInfo`: the single Module-row attribute of 5.8.7 (`.ctor` MemberRef on `'<msil>LinkInfo'` scoped to `msil.link`); none is `no link-info record`. (5) `validateLinkInfo`: C1-C7 against the reader, messages starting `C<n>: ` (msil-ld prepends `<file>: malformed CIL object: `). (6) `buildCOFFSymbolView`: 5.8.6's table in SYMTAB order with section numbers 1 `.text`, 2 `.data`, 3 `.rdata`, 4 `.bss`, the order of `getCOFFViewMarkerSections()` (0xC0000040, 0x40000040, 0xC0000080, empty data); a DATA alias takes its aliasee's section. (7) `printLinkInfo`, one line per item in record order, extending 5.8.11's example uniformly: the header line (` flags=HAS_DEBUG_INFO` appended when that bit is set); `Symbol <i> <KIND> <BINDING> <VISIBILITY>`, the set flags in bit order among `UNDEFINED DLLEXPORT EXPLICIT_IMPORT NO_STRIP TLS ALIAS DLLIMPORT IMPORT`, `'<name>'`, then as present ` import_module='<m>' import_name='<e>'` (IMPORT), `method=0x<8X>` or `field=0x<8X>`, `segment= offset= size=`, `aliasee=<i>` (DATA aliases add `offset= size=`), `size= align=` (COMMON, bytes); `Segment <i> '<name>' align=<bytes> size=<n> flags=<names joined by |, or 0>`, then for non-ZERO segments lines of two blanks and at most 32 bytes of canonical hex; `Reloc <TYPE> [width=<w> ]segment= offset= symbol=<i> '<name>'[ symbol2=<j> '<name>'] addend=<a>`; `Comdat '<name>' <SELECTION>` with `function=<i>` or `segment=<i>` per member; `Init|Fini priority=<p> symbol=<i> '<name>'[ comdat=<g>]`; `Signature 0x<8X>[ '<entity>'][ NO_PROTOTYPE][ VARARG fixed=<n>][ SRET size=<n> align=<bytes>][ byval=<param>:<size>:<align>]...`; `LinkerOption DEPENDENT_LIB '<lib>'` or `LinkerOption LINKER_OPTION '<arg>'...`; `Optional kind=0x<2X> size=<n>`. Quoting per 5.7.10; entity names only with a reader. Record v1 is frozen by M20's commit; until then 5.8.9's amendments arrive as section 12 rows that M20's fix step applies here. (8) Symbol table (5.9.15), written with `RecordWriter`: magic `4D 53 59 4D`, u8 major 1, u8 minor 0, u8 flags, uleb ABI version (5.8.8's ABIVersion encoding; `RecordWriter` has no u16), str triple, str C runtime identity, 4 x u8 data model, uleb n + str export classes, uleb n + data symbols (str name, uleb size, u8 log2 alignment, u8 flags: 1 const, 2 thread-local, 4 weak), uleb n + flagged functions (str name, u8 flags: 1 variadic, 2 weak); the decoder refuses another major, unknown flags and trailing bytes. M22 adds the header flag 0x01 INTERFACE and the flagged-function flag 0x04 ABI, followed by the definition's 5.8.8 SIGNATURES descriptor (5.9.15); until then the decoder refuses both as unknown flags. M22's commit freezes the format; amendments before then arrive as section 12 rows.
+
+#### M17.d Dumper, llvm-cil-dump and llvm-cil-copy (implement, ~1,400 lines)
+
+- Owned files: `llvm/include/llvm/CLI/Dump.h`, `llvm/lib/CLI/Dump.cpp`, `llvm/tools/llvm-cil-dump/CMakeLists.txt`, `llvm/tools/llvm-cil-dump/llvm-cil-dump.cpp`, `llvm/tools/llvm-cil-copy/CMakeLists.txt`, `llvm/tools/llvm-cil-copy/llvm-cil-copy.cpp`
+- Depends on: M17.a, M17.b, M17.c
+- Reads: this plan sections 5.7.1, 5.7.3, 5.7.5-5.7.8, 5.7.10, 5.7.12, 5.8.11 and 5.12.6; llvm/docs/MSIL/recon/p2/tests-p2.md sections 3.8 and 3.9; llvm/docs/MSIL/recon/p2/tests-p2-files/logs/mdcanon-sample-dispatch-vm.txt; msil/utils/mdtools/mdcanon.cs (M16's implementation of the same specification); llvm/tools/llvm-cat/ (tool style); llvm/tools/llvm-bcanalyzer/llvm-bcanalyzer.cpp
+- Provides: every name of 5.7.10's `Dump.h`, with `CanonicalOptions`' six 5.12.6 fields (5.7.10); the `llvm-cil-dump` and `llvm-cil-copy` command lines of 5.7.10, with `--link-info` in 5.8.11's format
+
+Implement 5.7.10 and the six normalization options of 5.12.6 (`--assembly-hash=ignore`, `--params=drop`, `--initlocals=ignore-without-locals`, `--snan=quiet`, `--pinvoke-module=strip`, `--pinvoke-access=ignore`; default `keep`; `CanonicalOptions` fields and usage line per 5.7.10), applied while the listing is produced and before sorting. Write `Dump.h` first and keep it compilable (M17.e compiles against it, 5.7.14). `dumpCanonical` must be byte-identical with mdcanon under every option (the gate compares them on the M1 corpus with defaults and with every option on): where mdcanon and 5.7.10 or 5.12.6 differ, follow the specification and report the defect; a genuine ambiguity goes into the hand-over for a section 12 row. `--link-info` prints `printLinkInfo` for the Module-row record and `printSymbolTable` for each Assembly-row `'<msil>SymbolTable'` payload; neither is the error `no link-info record or symbol table`. Several files, `File: <path>`, `llvm-cil-dump: error: '<file>': <message>`, continue, exit 1 if any failed. Tools: `cl::opt`, `InitLLVM`, `LLVM_LINK_COMPONENTS CLI Support`, `add_llvm_tool`. `llvm-cil-copy` rebuilds every row through `MetadataBuilder` in table order with an old-to-new token map (merged duplicates map to one row): signatures decoded, `mapTypeRefs`, re-encoded; bodies copied and patched with `rewriteILTokens` (`ldstr` strings re-added) and re-headed with the same maxstack, local signature, InitLocals and remapped clauses; FieldRVA data copied 8-aligned with the size rule of 5.7.10's `.data` line (unknown size: error); attribute blobs verbatim; Assembly row, references and entry point carried over; kind and machine per 5.7.10; `unsupported table <Name> (<n> rows)`. Before hand-over, build `LLVMCLI` and the tools privately from M16, M17.a-M17.c and your sources, copy and dump the ilasm images of `msil/test/M1/11-programs` in scratch and compare with mdcanon, with defaults and with every option on.
+
+#### M17.e Unit tests for the PE writer, reader, round trip and codecs (test, ~1,400 lines)
+
+- Owned files: `llvm/unittests/CLI/CMakeLists.txt`, `llvm/unittests/CLI/PEWriterTest.cpp`, `llvm/unittests/CLI/PEImageTest.cpp`, `llvm/unittests/CLI/MetadataReaderTest.cpp`, `llvm/unittests/CLI/RoundTripTest.cpp`, `llvm/unittests/CLI/LinkInfoTest.cpp`, `llvm/unittests/CLI/SymbolTableTest.cpp`
+- Reads: this plan sections 5.7.1, 5.7.6-5.7.10, 5.7.12-5.7.14, 5.8.2, 5.8.5-5.8.11, 5.9.15 and the M17.c text above; llvm/include/llvm/CLI/{Blob,Signature,CustomAttribute,MethodBody,ILBuilder,Heaps,MetadataBuilder}.h (M16, for building inputs); llvm/docs/MSIL/recon/p2/metadata-writer.md sections 3.3, 3.10, 4.9 and 4.10; llvm/docs/MSIL/recon/p2/bcl-binding.md sections 5.6 and 7.5; llvm/docs/MSIL/recon/p2/judge-dotnet-value-files/coffsym.py; llvm/docs/MSIL/recon/p2/judge-dotnet-value-files/results.txt; llvm/include/llvm/BinaryFormat/MSILLink.h; llvm/unittests/CLI/CMakeLists.txt; llvm/unittests/CLI/MSILLinkTest.cpp (style)
+
+Written from the specification only, without reading M17.a-M17.d (protocol 4); expected values from ECMA, the recon, the prototype, SRM or csc runs in scratch; suites `CLI<Topic>`; `CMakeLists.txt` keeps every earlier source and adds the six. A root WP that runs alongside M17.a-M17.d: syntax-check each test file whose included headers exist when you are ready to hand over, never wait for, read or build the implementation, and name the other files in the hand-over as checked at the gate (5.7.14). Cover 5.7.13's M17 row: `CLIPEWriterTest` (the content-id vector; header fields per kind; only the CLR directory; `.text` order and alignments; marker sections and SizeOfHeaders 0x400; COFF records with 8- and 9-byte names; every check including `checkMethodBodies` and an unsupported architecture; determinism, and one changed byte changing MVID and stamp; a `csc -target:module` netmodule built in scratch compared with a Module image, differences reported in the hand-over); `CLIPEImageTest` (our images, malformed variants, a hand-built PE32 image); `CLIMetadataReaderTest` (each malformation with its prefix, `#-`, 4-byte heap and coded indexes on a module with over 64 KB of strings and 2^14 TypeRefs, `computePublicKeyToken` for the ECMA key and for System.Runtime 8.0's key read with SRM); `CLIRoundTripTest` (builder, `writePEImage`, reader for every table and column of the writer set, bodies, signatures, attributes, properties, field data, `dumpCanonical` lines with default options); `CLILinkInfoTest` (every entry kind and flag round-trips, IMPORT data symbols with and without an ImportModule included; minimal LEB bytes of a hand-computed record; each C8 constraint and truncation, among them the four IMPORT violations: IMPORT on a FUNCTION, without UNDEFINED, with TLS, with an empty ImportName; major 2 and kind 0x0A refused, kind 0x45 kept; the carrier through builder, PE and `findLinkInfo` with constructor signature `20 01 01 1D 05`; C1-C7 both ways; `buildCOFFSymbolView` rows; `printLinkInfo` lines including 5.8.11's examples, the IMPORT line among them); `CLISymbolTableTest` (round trip, magic, version, flag and trailing-byte errors, print).
+
+#### M17.f Tool lit tests and the corpus oracle modes (test, ~1,100 lines)
+
+- Owned files: `llvm/test/tools/llvm-cil-dump/`, `llvm/test/tools/llvm-cil-copy/`, `msil/utils/mdtools/cli-corpus-check.py`
+- Reads: this plan sections 5.7.10, 5.7.11, 5.7.13, 5.7.14, 5.8.7, 5.8.8, 5.8.11 and 5.12.6 and the M17.c and M17.d text above; llvm/docs/MSIL/recon/p2/tests-p2.md sections 2.2, 2.3, 3.8 and 3.9; msil/utils/mdtools/ (M16); msil/utils/msil-run.py; msil/utils/msil-verify.py; git show HEAD:msil/test/lit.cfg.py (ilasm, ildasm, PEVerify, runners, `roundtrip_cmd`; the working-tree file is M17.g's); llvm/test/tools/yaml2obj/COFF/variable-number-rva.yaml; llvm/test/tools/llvm-readobj/COFF/file-headers.test
+
+Written from the specification only, without reading M17.a-M17.d (protocol 4). A root WP: the only dumper you run is M16's mdcanon (`<build>/tools/msil/mdtools/`); `llvm-cil-dump` and `llvm-cil-copy` first run on your tests at the gate (5.7.1, 5.7.14). (1) Lit tests over yaml2obj inputs of ilasm-built images (each `.il` kept with `split-file`; the YAML generated once in scratch by a Python script that writes the image's headers, data directories and sections as yaml2obj COFF YAML, checked by running the shared build's `yaml2obj` and comparing mdcanon's listing of its output with the ilasm image's; no binary inputs): `llvm-cil-dump/` `headers.test`, `tables.test`, `canonical.test`, `canonical-options.test` (`--scopes`, `--order`, `--forms`, `--stats`, `--stats-only` and each of the six 5.12.6 options on an input where it changes the listing; the `--snan=quiet` input patches an `ldc.r4` operand in the YAML to a float32 signaling NaN, which ilasm would quiet), `link-info.test` (a Module `.custom` whose record is hand-encoded from 5.8.8 in scratch, with an IMPORT data symbol), `multiple-files.test`, `errors.test`; `llvm-cil-copy/` `copy-assembly.test`, `copy-netmodule.test`, `unsupported-table.test`, `errors.test`. Check every canonical expectation against mdcanon on the same image; `--headers`, `--tables`, `--link-info` and copy expectations come from 5.7.10, 5.8.8 and 5.8.11. (2) `cli-corpus-check.py` gains `--cil-dump PATH` and `--cil-copy PATH` (default `<build>/bin/`) and 5.7.13's modes, which share one compile and assemble of the inputs: `dumpers` (`llvm-cil-dump --canonical` equals mdcanon on every input at each level and on its copy, once with the default options and once with `--assembly-hash=ignore --params=drop --initlocals=ignore-without-locals --snan=quiet --pinvoke-module=strip --pinvoke-access=ignore --scopes=strip`); `copy` (copies canonically equal and byte-identical across two work directories; the `msil/test/M1/11-programs` copies at -O2, written as `<stem>.exe`, verified as `%msil_verify` does and run with `msil-run.py --expect` on .NET 8, and `crc32`, `dispatch-vm`, `quicksort`, `string-table` and `struct-sim` also on .NET 10, Framework 4.8 and WSL .NET 10; PEVerify `/md` messages a subset of the input's; `msil-verify.py --roundtrip` on each copy); `stats` (`--stats-only` of both dumpers equal on Framework `mscorlib.dll` and the newest installed net8 `System.Runtime.dll` and `System.Private.CoreLib.dll`). Before hand-over run mode `ilasm` and the steps of the new modes that need no M17 binary (compile, assemble, mdcanon dumps, runs of the ilasm images) in scratch.
+
+#### M17.g Harness wiring and documentation (infra, ~350 lines)
+
+- Owned files: `msil/test/lit.cfg.py`, `msil/test/CMakeLists.txt`, `msil/test/harness/canon-listing.test`, `msil/test/harness/canon-agree.test`, `msil/utils/ci/build-targets.txt`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/utils/ci/check-upstream-hooks.py`, `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`
+- Depends on: M17.a, M17.b, M17.c, M17.d, M17.e, M17.f
+- Reads: this plan sections 5.6.1, 5.6.11, 5.7.10, 5.12.1-5.12.6, 5.12.11 and 6 M16 and M17; msil/test/lit.cfg.py; msil/test/CMakeLists.txt; msil/utils/ci/build-targets.txt; msil/utils/ci/lit-legs.ps1; msil/utils/ci/lit-legs.sh; msil/utils/ci/check-upstream-hooks.py; llvm/docs/MSIL/GettingStarted.md; llvm/docs/MSIL/Status.md; msil/README.md; msil/test/README.md
+
+Spawned after the others hand over. `lit.cfg.py`: parameter `msil_cil_dump` (default `<build>/bin/llvm-cil-dump[.exe]`), feature `msil-cil-dump`, substitution `%msil_cil_dump`, and `%msil_canon` = `llvm-cil-dump --canonical` when the feature is present, else M16's mdcanon command. `canon-listing.test` now requires `msil-cil-dump`, so M16's hand-written expectations (normalized run included) pin llvm-cil-dump; `canon-agree.test` (`REQUIRES: msil-cil-dump, msil-mdcanon`) assembles `Inputs/canon-listing.il`, `calli-ok.il`, `cctor-puts-windows.il`, `d12-image.il`, `exit-42.il` and `fp-special-constants.il` and requires equal `%msil_canon` and `%msil_mdcanon` output with default options, with `--scopes=strip --order=decl --forms=canon --stats`, and with the six 5.12.6 options on. `msil/test/CMakeLists.txt`: `check-msil` gains `llvm/test/tools/llvm-cil-dump` and `llvm/test/tools/llvm-cil-copy`, `MSIL_TEST_DEPS` gains `llvm-cil-dump`, `llvm-cil-copy` and `yaml2obj`. `lit-legs.ps1`/`.sh`: the net8 path list gains the two directories (headers updated, leg names unchanged). `build-targets.txt`: append `llvm-cil-dump` and `llvm-cil-copy` (5.6.11; `build.ps1`, `build.sh` and `msil-build.ps1 -Standard` read the file since M13 and do not change) and check that the file's targets equal the Build targets line below, in order. `check-upstream-hooks.py`: `FORK_PREFIXES` gains `llvm/tools/llvm-cil-copy/` and `llvm/test/tools/llvm-cil-copy/` if M13 did not add them; `--self-test` passes. The new tests first run at the gate. Docs: Status.md (state line, the library complete for Phase 2, the tools, `%msil_canon`), GettingStarted.md (targets, `llvm-cil-dump` modes and options and `llvm-cil-copy` with examples, the corpus modes), msil/README.md, msil/test/README.md.
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '$f = (Get-PSDrive D).Free / 1GB; "D: has {0:N1} GB free" -f $f; if ($f -lt 8) { "below 8 GB: report to the user before building (plan 5.6.11)"; exit 1 }'
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0, idempotent)
+ 3. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0, idempotent)
+ 4. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-configure.ps1 -Experimental MSIL  (new lib/CLI sources and two new tools)
+ 5. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: msil/utils/ci/build-targets.txt, which M17.g extends to the Build targets line above)
+ 6. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe
+ 7. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=*MSIL*
+ 8. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*
+ 9. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 170
+10. python D:/llvm-msil/msil/utils/mdtools/build-mdtools.py  (up to date since M16; dumpers and stats need mdcanon)
+11. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $req = [ordered]@{ "llvm/unittests/CLI/PEWriterTest.cpp" = "CLIPEWriterTest"; "llvm/unittests/CLI/PEImageTest.cpp" = "CLIPEImageTest"; "llvm/unittests/CLI/MetadataReaderTest.cpp" = "CLIMetadataReaderTest"; "llvm/unittests/CLI/RoundTripTest.cpp" = "CLIRoundTripTest"; "llvm/unittests/CLI/LinkInfoTest.cpp" = "CLILinkInfoTest"; "llvm/unittests/CLI/SymbolTableTest.cpp" = "CLISymbolTableTest"; "llvm/test/tools/llvm-cil-dump/headers.test" = "--headers"; "llvm/test/tools/llvm-cil-dump/canonical.test" = "--canonical"; "llvm/test/tools/llvm-cil-dump/canonical-options.test" = "--pinvoke-access=ignore"; "llvm/test/tools/llvm-cil-dump/link-info.test" = "--link-info"; "llvm/test/tools/llvm-cil-copy/copy-netmodule.test" = "llvm-cil-copy"; "msil/test/harness/canon-agree.test" = "msil_mdcanon" }; $bad = @(foreach ($k in $req.Keys) { $p = $r + $k; if (-not (Test-Path -LiteralPath $p)) { "missing: $k" } elseif (-not (Select-String -Quiet -SimpleMatch -LiteralPath $p -Pattern $req[$k])) { "no match for $($req[$k]) in $k" } }); if ($bad.Count) { $bad; exit 1 }; "every M17 test is present"'  (G6)
+12. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1" llvm/test/tools/llvm-cil-dump llvm/test/tools/llvm-cil-copy msil/test/harness/canon-listing.test msil/test/harness/canon-agree.test  (also inside step 14)
+13. python D:/llvm-msil/msil/utils/mdtools/cli-corpus-check.py --mode dumpers,copy,stats --levels O0,O2 --work C:/llvm-msil-scratch/gates/M17/cli-corpus D:/llvm-msil/msil/test/M1  (198 program-levels (M1's 99 C tests at -O0 and -O2) and their copies, dumpers with default and with all options; about 9-10 min)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3, now with the tool directories; 9-11 min)
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-quick  (G4; about 4 min)
+16. python D:/llvm-msil/msil/utils/ci/check-upstream-hooks.py --self-test
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins  (G5; no upstream file changes)
+18. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests llvm/tools/llvm-cil-dump llvm/tools/llvm-cil-copy clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (G7: must print no diff)
+19. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M17"
+```
+
+**Exit criteria**
+- `CLITests` passes at least 170 tests with none skipped, covering 5.7.13's M17 row (content id, envelope per kind, COFF view, reader errors, wide indexes, key tokens, a full writer-reader round trip, every link-info entry and flag with IMPORT, C8 constraint, C1-C7 rule, version rule and printer line).
+- `llvm-cil-dump --canonical` equals mdcanon byte for byte on 198 M1 program-levels and their copies, with the default options and with every 5.12.6 option on; `--stats-only` agrees on `mscorlib.dll`, `System.Runtime.dll` and `System.Private.CoreLib.dll`.
+- Every copy is canonically equal to its input and deterministic; the 11-programs copies verify (D21) and match `.expected` on .NET 8, five also on .NET 10, Framework 4.8 and WSL .NET 10; their PEVerify `/md` messages are a subset of the input's; their round trip runs.
+- `%msil_canon` is `llvm-cil-dump --canonical`; `build-targets.txt` ends with `llvm-cil-dump llvm-cil-copy`; the harness and tool tests pass in `check-msil` and the net8 leg; net8, wsl-quick and manifest/pins stay green; no IL changes; the docs are current.
+
+**Review focus** (in addition to the three standing lenses)
+- Envelope and record: Roslyn's values per kind, marker sections, the COFF string table, the content id over the whole file; 5.8.8's field order (IMPORT's two strings after COMMON) and C8 constraints; versioning (unknown must-understand items refused, 0x40-0x7F kept); C1-C7 as 5.8.5; the COFF view as 5.8.6.
+- A reader safe on hostile input: every index, offset and length checked, no assertion or crash, lazy at reference-pack scale, `#-` refused.
+- One listing specification, two implementations: the six normalization options change only what 5.12.6 says, before sorting; differences settled against 5.7.10 and 5.12.6 and recorded in section 12; tests independent of the implementation (hand-encoded records, SRM- and csc-derived vectors, yaml2obj inputs).
+
+**Rebuild cost.** A CMake reconfigure (about 1-2 min), six new LLVMCLI TUs, six test TUs, the `CLITests` relink and two one-TU tools linking Support, MC, BinaryFormat, TargetParser and CLI: about 4-6 minutes and 60-80 MB on D:. Nothing else relinks. Gate about 27-29 minutes: the standard steps, tool lit tests under a minute, the corpus check about 9-10 (198 program-levels of `clang -S` and ilasm, batch dumps twice, about 20 verified runs). If it measures over 30 minutes, step 15 (wsl-quick; M17 changes no IL) moves to the run-m1-gate.ps1 run after M18's commit through a section 12 row (section 11).
+
+### M18. One MCInst per CIL instruction and the binary encoder (P2-A1)
+
+**Goal.** After M18 the MSIL AsmPrinter emits only CIL MCInsts, labels and structured `MSILTargetStreamer` calls. Each MCInst is exactly one CIL instruction, and a table-driven `MSILMCCodeEmitter` encodes it. `-S` text and M19's objects are therefore two encodings of one event stream (mc-streamer R1). Pieces:
+- **Records.** There is one MC record `CIL_<Opcode>` for each `CILOpcodes.def` entry. `MSILMCInstLower` expands every multi-opcode record into them and picks the shortest forms (Q26). That includes short branches, chosen per method before emission, because msil-ld never relaxes (5.8).
+- **Operands.** Token operands carry the classes of 5.8.3 that the object writer needs. They print in whole-program form, or in object form under the printer option `object-form`, which M19 sets.
+- **Backend.** `MSILAsmBackend` has one fixup kind per token operand class, plus PC-relative data fixups for branches and switch entries.
+- **BCL members** come from `llvm/include/llvm/CLI/BCLMembers.def` (5.11.7).
+- **Synthesized bodies.** `cli::ILBuilder` builds the `.cctor` and Main, replacing `SynthesizedBody`. `emitILLine` goes.
+
+The `-S`, llc and `--lto-emit-asm` text changes only by Q26 forms and by `nomangle` in every `pinvokeimpl` (5.10.11). An IL snapshot against HEAD proves this, and a diff checker proves that the FileCheck updates are mechanical, in `llvm/test/CodeGen/MSIL`, `clang/test/CodeGen/MSIL` and `lld/test/MSIL` (whose M14 and M15 tests FileCheck `--lto-emit-asm` text; 5.6.1 rule 6). The gate also requires that the M1 suites stay green on .NET 8, Framework 4.8 and WSL .NET 10 (Windows .NET 10 runs in the post-commit `run-m1-gate.ps1`) and that the encoder equal ilasm byte for byte on every M1 method (mc-streamer E3: 2,670 methods). `llc -filetype=obj` stays a clean error until M19.
+
+**Depends on:** M17 (`llvm-cil-dump`, `cli-corpus-check.py --cil-dump`), M16 (`Opcodes.h`, `ILBuilder.h`, `Signature.h`), M15 (`llvm-mc` built, D14 frozen, `il-snapshot.py`, the `lld/test/MSIL/native-*.test` texts), M14 (`lld/test/MSIL` with `--lto-emit-asm` checks in the net8 leg), M13 (`CILOpcodes.def`, `MCSymbolMSIL.h`, `MCMSILObjectTargetWriter` with its clean default error, `llvm/test/MC/MSIL/` in `FORK_PREFIXES`, `msil-build.ps1 -Standard`), M12 (WSL legs and runtime).
+
+**Header changes:**
+- none outside the MSIL target: `MSILMCTargetDesc.h`, the `MSILInstrFormats.td` TSFlags and the regenerated `MSILGen*.inc` recompile the target (about 62 TUs). The new `llvm/include/llvm/CLI/BCLMembers.def` and `BCLMembers.h` are included only by the target in M18.
+
+**Work packages**
+
+#### M18.a CIL records, MC lowering, printer, target streamer and AsmPrinter (implement, ~1,400 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MSILInstrCIL.td`, `llvm/lib/Target/MSIL/MSILInstrFormats.td`, `llvm/lib/Target/MSIL/MSILInstrInfo.td`, `llvm/lib/Target/MSIL/MSILInstrMemory.td`, `llvm/lib/Target/MSIL/MSILMCInstLower.h`, `llvm/lib/Target/MSIL/MSILMCInstLower.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILInstPrinter.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILInstPrinter.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCExpr.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCExpr.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILTargetStreamer.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILTargetStreamer.cpp`, `llvm/lib/Target/MSIL/MSILAsmPrinter.h`, `llvm/lib/Target/MSIL/MSILAsmPrinter.cpp`, `llvm/include/llvm/CLI/BCLMembers.def`, `llvm/include/llvm/CLI/BCLMembers.h`
+- Depends on: M18.b
+- Reads: this plan sections 2, 5.1, 5.3, 5.4, 5.7.1, 5.7.2, 5.7.3, 5.7.5, 5.7.10, 5.7.12, 5.8.3, 5.8.4, 5.10.7, 5.10.11, 5.10.13 and 5.11.7-5.11.8, decisions D2, D11, D12, D14, D15, D27, D36, the section 12 rows of M18, and M18.b's Provides line; llvm/docs/MSIL/recon/p2/mc-streamer.md sections 2, 5.1-5.7 and 5.10; llvm/docs/MSIL/recon/p2/mc-streamer-files/tablegen-opcodes.txt; llvm/docs/MSIL/recon/p2/metadata-writer.md sections 3.9 and 5.1-5.4; llvm/include/llvm/BinaryFormat/CILOpcodes.def; llvm/include/llvm/CLI/ILBuilder.h; llvm/include/llvm/CLI/Signature.h; llvm/include/llvm/MC/MCSymbolMSIL.h; llvm/docs/MSIL/recon/m11/split-files/tools/ (relink.ps1, mkrsp.py)
+- Provides:
+  - **Records.** `MSIL::CIL_<Enum>`, one per `CILOpcodes.def` entry (e.g. `CIL_Ldc_i4_s`, `CIL_Br_s`). Each is `isCodeGenOnly` with TSFlags bits 18-3 = the CIL value. MCInst operands by OperandKind: none; one Imm (var and integer kinds); one SFPImm/DFPImm bit pattern; one label Expr (branches); one `MSILMemberRefExpr` (token kinds); N label Exprs (switch).
+  - **`MSILMemberRefExpr`** kinds `Method, Field, ExternMethod, ExternField, FnAddr, StandAloneSig, BCLMember`. Factories `createMethod`/`createExternMethod(StringRef ILName, const MSIL::Signature *, MCContext &)`, `createField`/`createExternField`/`createFnAddr(StringRef, MCContext &)`, `createSig`, `createBCL(cli::BCLMemberId, MCContext &)`. Getters, plus `printOperand(raw_ostream &, bool ObjectForm) const`.
+  - **Printer.** InstPrinter option `object-form` (llc `-M object-form`).
+  - **Lowering.** `MSILMCInstLower::lower(const MachineInstr &, SmallVectorImpl<MCInst> &) const` and `computeBranchForms(const MachineFunction &)`. In `MSIL::`: `buildLdcI4(int32_t)`, `buildVarInst(cli::Opcode LongForm, unsigned)`, `relaxBranches(MutableArrayRef<MCInst>, ArrayRef<std::pair<const MCSymbol *, unsigned>> Labels, const MCInstrInfo &)`, `getMCOpcodeForCIL(cli::Opcode)`.
+  - **Streamer** (plan 5.3). `emitILLine` removed; added `emitComment(const Twine &)`, `emitBlankLine()`, `emitLocals(ArrayRef<cli::TypeSig>)` and `MSILMethodDecl::Kind` (`MSILMethodKind { Function, ModuleInitializer, EntryPoint }`). `emitPInvoke` prints `pinvokeimpl("<module>" [as "<entry>"] nomangle cdecl)`.
+  - **BCL list.** `BCLMembers.def` with `CLI_BCL_TYPE(Id, Namespace, Name, MscorlibSafe)` and `CLI_BCL_METHOD(Id, OwnerType, Name, HasThis, Return, Params, Strength, Fallback, MscorlibSafe)`. The header-only `BCLMembers.h` provides `cli::BCLMemberId`, `cli::BCLStrength {Required, OptionalDrop, OptionalSubstitute}`, `cli::BCLMemberInfo`, `cli::getAllBCLMembers()`, `cli::getBCLMemberInfo(BCLMemberId)` and `cli::printBCLMemberRef(raw_ostream &, BCLMemberId, StringRef Scope)`.
+
+**(1) Records.** `MSILInstrCIL.td`, included at the end of `MSILInstrInfo.td`, holds the 219 `CIL_` records in value order: the def's Text as mnemonic and an operand per OperandKind. The existing operand defs are reused where they fit, with a new `cil_token_op` (PrintMethod `printTokenOperand`). Generate the file once with a scratch script and commit only the `.td`. `MSILInstrFormats.td` adds `let TSFlags{18-3} = Inst;`. MI-level records are otherwise unchanged (plan 5.4) and no longer reach MC. `MSILInstrMemory.td` loses its BCL asm text.
+
+**(2) Lowering.** It follows mc-streamer 5.3's table. TEE becomes `dup` plus the store. CONST_I64 becomes `ldc.i4` (shortest) or `ldc.i8`, then `conv.i`. GLOBAL_ADDR becomes `ldsfld`, plus an offset (shortest `ldc`) and `add`. FUNC_ADDR is an `ldsfld` of a FnAddr. Memflags become `unaligned. N`/`volatile.` prefixes. BR_TABLE_I32 becomes `switch` then `br`. TRAP becomes `ldnull` then `throw`. MEMMOVE becomes `conv.i8`, `dup` and a BCL `call`; MEMORY_BARRIER a BCL `call`. CALL is `call` and CALL_INDIRECT `calli`; every other record maps one to one.
+
+Shortest forms follow 5.7.5, ILBuilder's rule. Operand classes (5.8.3 R1-R3) depend on the IR alone:
+- a Function defined here is Method, with its own interned signature;
+- a declaration carrying `msil-import-module` or `msil-import-name` (5.10.7) is Method too (its import stub in this module, 5.8.3), with the call-site signature, because object mode writes one stub per (name, IL signature);
+- other functions (declarations, `available_externally`, `extern_weak`, GlobalAlias) are ExternMethod, with the call-site signature;
+- in whole-program mode ISel already makes every call-site signature equal the callee's, and the interned callee signature is then reused, so the text is unchanged (Method and ExternMethod print alike in whole-program form);
+- library calls are ExternMethod; FUNC_ADDR is FnAddr; a defined global (`common` included) is Field; a declaration or alias is ExternField; `calli` is StandAloneSig.
+
+Aliases and undefined globals occur only in object mode, which M19 tests. Notes and diagnostics stay where they are.
+
+**(3) Branch forms.** From `emitFunctionBodyStart`, `computeBranchForms` lowers the function once into a scratch list (no diagnostics, no notes) and records the index of each MBB label. `relaxBranches` makes every branch short (`cli::getShortBranchForm`), then widens (`getLongBranchForm`) each branch whose displacement from the next instruction leaves [-128, 127], until stable. Sizes come from `MSIL::getCILInstSize`. Emission uses the chosen forms, including the `br` after a `switch`. Switch entries stay 32-bit.
+
+**(4) Printing.** `CIL_` records only, with a two-space indent. `getShortForm`, `printShortForm`, `printBrTable`, `printCall`, `printGlobalAddrOffset`, `printMemFlagsOperand` and `checkAddressOperand` go.
+- Whole-program form is Phase 1's text: `int32 'f'(int32)`, `native int 'g'`, `native int '<msil>fn_f'`, `void [mscorlib]System.Threading.Interlocked::MemoryBarrier()`. Extern kinds print like their own-row counterparts.
+- Object form: `int32 [msil.extern]'<msil>Symbols'::'f'(int32)`, `native int [msil.extern]'<msil>Symbols'::'x'`, `native int [msil.extern]'<msil>FnAddr'::'f'`, BCL scope `[msil.bcl]`.
+- `printImpl`, used by the `-show-mc-encoding` fixup comments, prints the whole-program form.
+
+**(5) Expressions.** `evaluateAsRelocatableImpl` succeeds, so every token fixup reaches the backend. The value names `Ctx.getOrCreateSymbol(<IL name>)`, an `MCSymbolMSIL` whose Kind is set when Unknown (M13's kinds), or a temporary symbol for StandAloneSig and BCLMember. `visitUsedExpr` registers the symbol. M19's writer reads the class from `MCFixup::getValue()`.
+
+**(6) BCL list.** It holds System.ValueType and the owner types of the five Phase-1 members: `Marshal_AllocHGlobal` (`native int`/`native int`), `Marshal_StringToHGlobalAnsi` (`native int`/`string`), `Environment_GetCommandLineArgs` (`string[]`, no params), `Buffer_MemoryCopy` (`void`/`void*, void*, int64, int64`) and `Interlocked_MemoryBarrier` (`void`, no params). All are Required, have no fallback and are mscorlib-safe. Types use canonical listing v1 text (5.7.10). `printBCLMemberRef` prints `<Return> [<Scope>]<Ns>.<Type>::<Name>(<Params>)`. Every BCL name the target prints comes from this list.
+
+**(7) Streamer and AsmPrinter.** The `.cctor` and `'<msil>Main'` are built with `cli::ILBuilder`, in Phase 1's instruction order:
+- `emitCall` with `TokenRef::getExternal(i)`, an index into a per-method table of `MSILMemberRefExpr`s;
+- `emitToken` for `ldsfld`/`stsfld`/`ldsflda`/`ldftn`;
+- `emitBranch` to `@argv_loop`/`@argv_cond`;
+- then `layout()`, `emitMaxStack(getMaxStack())` (it must equal Phase 1's count) and TypeSig locals.
+
+Each `ILInstr` goes through `getMCOpcodeForCIL` to `EmitToStreamer`. `emitComment` and `emitBlankLine` replace the section lines. `MSILMethodKind` prints Phase 1's `.cctor` and Main headers. `nomangle cdecl` appears in every mode. The null streamer gets no-ops. M14's assembly name and M15's linked-mode P/Invokes are kept.
+
+**Checks.** `msil-tblgen.ps1`, `msil-syntax.ps1`, and private binaries built with M11.a's recipe (relink.ps1, mkrsp.py) into `C:/llvm-msil-scratch/milestones/M18/M18.a/bin/`: llc, clang, llvm-mc and lld (with a copy named `msil-ld.exe`). With them, every `llvm/test/CodeGen/MSIL` input may differ from the shared build only by Q26 forms and `nomangle`, and `-show-mc-encoding` text of `msil/test/M1/11-programs` must assemble with ilasm. Name the directory in the hand-over's interfaces: M18.c and M18.e depend on this WP and use it (5.6.1 rule 7); M18.d and M18.f do not, and meet these binaries at the gate.
+
+#### M18.b MSILMCCodeEmitter, MSILAsmBackend and fixup kinds (implement, ~700 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCCodeEmitter.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILAsmBackend.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILFixupKinds.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTargetDesc.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTargetDesc.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/CMakeLists.txt`, `llvm/lib/Target/MSIL/CMakeLists.txt`
+- Reads: this plan sections 2, 5.4, 5.7.1, 5.7.2, 5.7.5 and 5.8.1 and M18.a's Provides line; llvm/docs/MSIL/recon/p2/mc-streamer.md sections 3, 5.4, 5.5 and 7; llvm/lib/Target/WebAssembly/MCTargetDesc/WebAssemblyMCCodeEmitter.cpp; llvm/lib/Target/WebAssembly/MCTargetDesc/WebAssemblyAsmBackend.cpp; llvm/include/llvm/MC/MCFixup.h; llvm/lib/MC/MCAsmStreamer.cpp (AddEncodingComment); llvm/include/llvm/MC/MCMSILObjectWriter.h; llvm/include/llvm/CLI/Opcodes.h
+- Provides:
+  - **TSFlags.** `MSILII::CILOpcodeShift = 3`, `MSILII::CILOpcodeMask = 0xFFFFull << 3`, `uint16_t MSIL::getCILOpcodeValue(const MCInstrDesc &)`, `unsigned MSIL::getCILInstSize(const MCInst &, const MCInstrInfo &)`.
+  - **Fixups.** `MSIL::Fixups { fixup_cil_method_token = FirstTargetFixupKind, fixup_cil_field_token, fixup_cil_sig_token, fixup_cil_type_token, fixup_cil_tok_token, fixup_cil_string_token, LastTargetFixupKind, NumTargetFixupKinds }`.
+  - **Factories.** `createMSILMCCodeEmitter`, `createMSILAsmBackend`, and `std::unique_ptr<MCObjectTargetWriter> createMSILObjectTargetWriter()`, which in M18 returns M13's default `MCMSILObjectTargetWriter` (clean error); M19 replaces it.
+  - **Writer access.** `MCMSILObjectTargetWriter *MSIL::getObjectTargetWriter(const MCAsmBackend &)`, the writer that backend created last.
+  - **CMake.** `CLI` in the LINK_COMPONENTS of `LLVMMSILDesc` and `MSILCodeGen`.
+
+This WP is a root: M18.a includes its masks and declarations and starts only after it hands over (5.6.1 rule 7).
+
+**Encoding.** The CIL value comes from TSFlags, and `cli::getOpcodeByValue`/`getOpcodeInfo` give the OperandKind. The opcode is one byte, or `FE` and one byte; a value of 0xFFFF is `reportFatalInternalError`. Operands are little-endian:
+- var operands u8/u16; `ldc.i4.s` i8, `unaligned.` u8; i32; i64; float operands as their exact bits (signaling NaNs kept);
+- a token is 4 zero bytes plus `fixup_cil_<class>_token`;
+- a short branch is 1 byte plus a PC-relative `FK_Data_1` on label-1; a long branch is 4 bytes plus `FK_Data_4` on label-4;
+- a switch is u32 N, then each entry i a PC-relative `FK_Data_4` on label - 4*(N - i) (mc-streamer 5.4, E3).
+
+`getCILInstSize` equals the encoded size.
+
+**Backend.**
+- `getFixupKindInfo` returns `{name, 0, 32, 0}`.
+- `applyFixup` always sends token fixups to `recordRelocation`.
+- An unresolved branch fixup is the MCContext error `branch target outside its method`; a short one out of range is `short branch out of range`.
+- `mayNeedRelaxation` is false and `writeNopData` writes 0x00.
+- `createObjectTargetWriter` calls `createMSILObjectTargetWriter()` and remembers the result for `getObjectTargetWriter`.
+
+Register the emitter and the backend; `-S` is unchanged. `llc -filetype=obj` still errors in `MSILTargetMachine` (until M19). `llvm-mc -filetype=obj` and `cc1as -filetype obj` reach the AsmParser's `IsMSIL` error without an assertion.
+
+**Checks.** `msil-syntax.ps1` with `.inc` files generated from HEAD's `.td` into scratch (`msil-tblgen.ps1`), and a scratch driver that encodes MCInsts built from `cli::getOpcodeInfo` for every `CILOpcodes.def` entry through a hand-made `MCInstrDesc` with the TSFlags of 5.4. The `CIL_` records do not exist yet (M18.a runs after this WP), so encoding every real record is checked at the gate: M18.c's `MSILMCCodeEmitter` suite, `llvm/test/MC/MSIL` and the encoder-parity leg.
+
+#### M18.c Unit tests for records, BCL list, forms, encoder and streamer (test, ~900 lines)
+
+- Owned files: `llvm/unittests/Target/MSIL/CMakeLists.txt`, `llvm/unittests/Target/MSIL/MSILCILRecordsTest.cpp`, `llvm/unittests/Target/MSIL/MSILMCCodeEmitterTest.cpp`, `llvm/unittests/Target/MSIL/MSILTargetStreamerTest.cpp`
+- Depends on: M18.a, M18.b
+- Reads: this plan sections 2, 5.3, 5.4, 5.7.5, 5.10.11 and 5.11.7 and the Provides lines of M18.a and M18.b; llvm/docs/MSIL/recon/p2/mc-streamer.md sections 4 and 5.3-5.5; llvm/docs/MSIL/recon/p2/mc-streamer-files/tablegen-opcodes.txt; llvm/include/llvm/BinaryFormat/CILOpcodes.def; llvm/include/llvm/CLI/ILBuilder.h; llvm/unittests/Target/MSIL/MSILTargetStreamerTest.cpp
+- Provides: suites `MSILCILRecords`, `MSILBCLMembers`, `MSILBranchForms`, `MSILMCCodeEmitter` and `MSILAsmBackend`, at least 30 tests (step 8's filter)
+
+Written from the specification only; compile only after M18.a and M18.b hand over.
+- **MSILCILRecords.** Through the X-macro, every def entry has `CIL_<Enum>` with its Value (`getCILOpcodeValue`) and Text (`getMnemonic`). Every MI-level record with a cilop maps to the entry of the same mnemonic (E1: 175 records). Shortest forms: `buildLdcI4` at -129, -128, -2, -1, 0, 8, 9, 127, 128 and INT32_MIN/MAX; `buildVarInst` for ldarg, starg, ldloc, stloc, ldarga and ldloca at 0, 3, 4, 255, 256 and 65534; each equals what `cli::ILBuilder` emits.
+- **MSILBCLMembers.** `printBCLMemberRef(..., "mscorlib")` gives Phase 1's exact strings; with `msil.bcl` the same shape; flags and owners.
+- **MSILBranchForms.** Displacements +127/+128 and -128/-129, forward and backward; a widening chain; switch entries stay 32-bit; the fixed point is independent of the input forms.
+- **MSILMCCodeEmitter.** Through TargetRegistry. Bytes: `1F FB`, `FE 09 2C 01`, `FE 01`, `FE 17`, `FE 12 01`, `FE 13`, `ldc.i8`, `ldc.r4 0x7FA00000` kept. Fixups by kind, offset and PC-relative flag: method, field and sig tokens; `br.s` at 1; `br` at 1; a 3-target switch at offsets 5/9/13 with addends -12/-8/-4. `getCILInstSize` equals the encoded size for every `CIL_` record.
+- **MSILAsmBackend.** Fixup names and sizes.
+
+Update `MSILTargetStreamerTest.cpp`: `nomangle cdecl`, comments and blank lines instead of IL lines, TypeSig locals, the `.cctor`/Main headers, and every expression kind in both forms.
+
+#### M18.d MC lit tests (test, ~900 lines)
+
+- Owned files: `llvm/test/MC/MSIL/`
+- Reads: this plan sections 2, 5.1, 5.4, 5.7.10, 5.8.3, 5.8.4, 5.10.11 and 5.11.7 and the Provides lines of M18.a and M18.b; llvm/docs/MSIL/recon/p2/mc-streamer.md sections 4, 5.3-5.5 and 5.10; llvm/docs/MSIL/recon/p2/metadata-writer.md section 3.9; llvm/test/CodeGen/MSIL/lit.local.cfg; llvm/test/MC/WebAssembly/lit.local.cfg; llvm/lib/MC/MCAsmStreamer.cpp (encoding comments)
+
+Written from the specification only, with section 2's llc conventions. `lit.local.cfg` gates on the MSIL target and executes `llvm/test/CodeGen/MSIL/lit.local.cfg` for `ilasm` and `%ilasm-verify`.
+- `encoding-operands.ll`: `-show-mc-encoding` for every OperandKind (e.g. `encoding: [0x1f,0xfb]`, `fixup A - offset: 1, value: int32 'f'(int32), kind: fixup_cil_method_token`).
+- `encoding-branches.ll`: branches spanning exactly 127/128 and 128/129 bytes, forward and backward (`FK_PCRel_1`/`FK_PCRel_4`); `%if ilasm`.
+- `encoding-switch.ll`.
+- `encoding-synthesized.ll`: the `.cctor` and an argc/argv Main (`br.s @argv_cond`, `blt.s @argv_loop`, BCL fixups).
+- `shortest-forms.ll`: CONST_I64, GLOBAL_ADDR offsets, indices 3/4/255/256, tees.
+- `bcl-members.ll`: Phase 1 text, and `[msil.bcl]` under `-M object-form`.
+- `object-form-operands.ll`: every class in both forms (not assembled).
+- `pinvoke-nomangle.ll`: four triples, the `as` form; `%if ilasm` plus `llvm-cil-dump --tables` showing `MappingFlags=0x0201`.
+- `llvm-mc-unsupported.s`: `not llvm-mc -filetype=obj` prints `assembly parsing is not supported for MSIL`, with no crash.
+
+This WP is a root, so it never runs this milestone's llc or llvm-mc. Validate every byte and fixup expectation against hand-written ILAsm assembled with Framework ilasm (bytes and tokens through `llvm-cil-dump --headers --tables`), and the comment format against `MCAsmStreamer.cpp`. The tests first meet the new llc at the gate (G3).
+
+#### M18.e Mechanical update of the existing IL FileCheck tests (test, ~60 files, mechanical)
+
+- Owned files: `llvm/test/CodeGen/MSIL/`, `clang/test/CodeGen/MSIL/`, `lld/test/MSIL/`, `llvm/test/tools/UpdateTestChecks/update_llc_test_checks/Inputs/msil-basic.ll`, `llvm/test/tools/UpdateTestChecks/update_llc_test_checks/Inputs/msil-basic.ll.expected`
+- Depends on: M18.a, M18.b, M18.f
+- Reads: this plan sections 2, 5.1, 5.6.1 (rule 6), 5.6.6 (the `lld/test/MSIL/` table), 5.10.11 and 5.12.13 and this milestone's Goal and M18.f's Provides line; llvm/docs/MSIL/recon/p2/metadata-writer.md section 3.9; llvm/docs/MSIL/recon/m11/split-files/tools/ (relink.ps1, mkrsp.py); msil/utils/run-utc-tests.py; llvm/utils/update_llc_test_checks.py
+
+No new tests, no new or deleted files and no new RUN lines. Use the private llc, clang and lld (`msil-ld.exe`) that M18.a's hand-over names; if they are older than M18.a's final sources, rebuild them with M11.a's recipe into `C:\llvm-msil-scratch\milestones\M18\M18.e\`. Run every RUN line of the owned directories into scratch, never through lit in the shared build. Change only CHECK lines that fail because of short branches, the shortest `ldc.i4` forms or ` nomangle`, and keep `{{...}}` patterns that still match. Prose describing the old forms may be reworded, and a CHECK-NOT that pins the absence of a short form is deleted. Regenerate `msil-basic.ll.expected` with `update_llc_test_checks.py --llc-binary <private llc>`. Any other failure is reported to M18.a/M18.b with a reproducer, never edited away.
+
+Pinned texts this milestone retires (5.6.1 rule 6), all updated mechanically:
+- `lld/test/MSIL` (M14's `--lto-emit-asm` tests such as `lto-emit-asm` and the resolution tests, and M15.d's `native-*.test`): long branch forms and long `ldc.i4` in `--lto-emit-asm` bodies, and every `pinvokeimpl("<module>" [as "<entry>"] cdecl)` line, which becomes `... nomangle cdecl)` with `assembly` access unchanged;
+- `llvm/test/CodeGen/MSIL` (Phase 1 tests and M15's `imports-linked.ll`) and `clang/test/CodeGen/MSIL`: the same forms in `-S` and llc text.
+
+Tests outside the owned directories pin no IL text (`msil/test/M2` checks transcripts, `--print-imports` output and diagnostics); if one fails only by Q26 forms or `nomangle`, report it to the orchestrator for a section 12 fix-loop row. Finally run (do not read) M18.f's `check-il-forms-diff.py --base HEAD llvm/test/CodeGen/MSIL clang/test/CodeGen/MSIL lld/test/MSIL llvm/test/tools/UpdateTestChecks/update_llc_test_checks/Inputs` and report its counts per directory.
+
+#### M18.f Harness: IL snapshot normalization, diff checker, encoder parity, MC tests in the legs (infra, ~800 lines)
+
+- Owned files: `msil/utils/il-snapshot.py`, `msil/utils/check-il-forms-diff.py`, `msil/utils/mdtools/cli-corpus-check.py`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/test/CMakeLists.txt`
+- Reads: this plan sections 4, 5.7.10, 5.7.11, 5.12.6, 5.12.10 and 5.12.11 and this milestone's Goal and Provides lines; llvm/docs/MSIL/recon/p2/mc-streamer.md section 4 (E2-E5); llvm/docs/MSIL/recon/p2/mc-streamer-files/encode-check.py; llvm/lib/MC/MCAsmStreamer.cpp (AddEncodingComment); msil/utils/il-snapshot.py; msil/utils/mdtools/cli-corpus-check.py; msil/utils/ci/lit-legs.ps1; msil/utils/ci/lit-legs.sh; msil/utils/plan-check.py (exit codes, self-tests)
+- Provides:
+  - **`il-snapshot.py ... --normalize forms`.** Short branches become long; `ldc.i4.m1`, `ldc.i4.<n>` and `ldc.i4.s <n>` become `ldc.i4 <n>`; ` nomangle cdecl` becomes ` cdecl`.
+  - **`check-il-forms-diff.py`.** `python msil/utils/check-il-forms-diff.py [--repo DIR] [--base REV] <path>... | --self-test`; exit 0, 1 or 2. The gate runs it over `llvm/test/CodeGen/MSIL clang/test/CodeGen/MSIL lld/test/MSIL llvm/test/tools/UpdateTestChecks/update_llc_test_checks/Inputs`.
+  - **`cli-corpus-check.py --mode encoder [--llc PATH] [--min-methods N] [--jobs N]`.**
+  - **Leg `encoder-parity`.** A default non-lit leg, Windows only: `--mode encoder --levels O0,O2 --min-methods 2600 msil/test/M1` under the shared build lock, logging to `<build>/lit-results/encoder-parity.log`.
+  - **Wiring.** `llvm/test/MC/MSIL` in both legs' net8 path lists and in `check-msil`, with `llvm-mc` in `MSIL_TEST_DEPS`.
+  - **Baseline.** `C:/llvm-msil-scratch/milestones/M18/M18.f/il-baseline`.
+
+**(1) Baseline.** At spawn, before any M18 build reaches the shared tree: `il-snapshot.py --build D:/llvm-msil/build --jobs 6 --out <baseline> msil/test/M1 llvm/test/CodeGen/MSIL`.
+
+**(2) The checker.** It uses the standard library only and reads `git diff -U0 <base>` for modified files (`.ll`, `.c`, `.s`, `.test`, `.expected` and split-file parts inside them). A hunk passes when:
+- it removes and adds equally many lines that are equal after `--normalize forms` (applied to CHECK patterns too, `{{...}}` regex parts left as they are);
+- its changed lines are comment prose (leader `;`, `//` or `#`) without `RUN:` or a CHECK prefix; or
+- it only removes CHECK-NOT lines that name a short form.
+
+Added or deleted files fail. The self-test covers every rule, each comment leader and an lld-style `.test` with `# CHECK:` lines, in a temporary git repository.
+
+**(3) `--mode encoder`.** For each `.c` with a `.expected`, at each level:
+- `clang -S -emit-llvm`, then `llc -show-mc-encoding`, then Framework ilasm (`-nologo -quiet -dll -pe64 -x64`) on that text;
+- rebuild each method's bytes from the encoding comments, resolving PC-relative fixups from the label offsets;
+- read ilasm's bodies from `llvm-cil-dump --headers --tables` and the file bytes (tiny and fat headers);
+- require equal code bytes, token kinds and names matching each fixup, and equal `.maxstack`.
+
+A quieted float32 sNaN counts as `snan-quiet`. Fewer than `--min-methods` methods, or any mismatch, exits 1. It takes about 3 min with `--jobs 4`.
+
+**(4) Legs.** Add the leg and paths and update the headers. `lit-legs.sh` gets the path only, so its `--list` still equals its header.
+
+This WP is a root (its baseline must come from HEAD's binaries), and M18.e depends on it for the checker. **Checks.** Both self-tests; the baseline; `--mode encoder`'s parsing and comparison on a hand-written `-show-mc-encoding` sample against the ilasm image of the same text (a real encoder first runs at the gate, step 19); `lit-legs.ps1 -List`; and `bash -n` in WSL.
+
+#### M18.g Documentation (docs, ~250 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`
+- Depends on: M18.a, M18.b, M18.c, M18.d, M18.e, M18.f
+- Reads: this plan section 6 M18 and the section 12 rows for M18; llvm/docs/MSIL/Status.md; llvm/docs/MSIL/GettingStarted.md; msil/README.md; msil/test/README.md
+
+Written last, from the hand-overs.
+- **Status.md:** the state line, Q26 forms and `nomangle`, the MC encoder (objects in M19), `BCLMembers.def`, the parity result, ilasm's sNaN deviation, and the counts.
+- **GettingStarted.md:** `-show-mc-encoding`, `-M object-form`, the `encoder-parity` leg, the snapshot and diff checks.
+- **msil/README.md:** Layout rows.
+- **msil/test/README.md:** 'What runs'.
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '$f = (Get-PSDrive D).Free / 1GB; "D: has {0:N1} GB free" -f $f; if ($f -lt 8) { "below 8 GB: report to the user before building (plan 5.6.11)"; exit 1 }'
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0, idempotent)
+ 3. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0, idempotent)
+ 4. pwsh -NoProfile -Command 'if (-not (Test-Path -LiteralPath "C:/llvm-msil-scratch/milestones/M18/M18.f/il-baseline")) { "missing HEAD IL baseline (M18.f writes it before any M18 build)"; exit 1 }; "IL baseline present"'
+ 5. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-configure.ps1 -Experimental MSIL  (new MC sources, CLI link component)
+ 6. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: every target of msil/utils/ci/build-targets.txt, the Build targets line above)
+ 7. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe
+ 8. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe -Filter 'MSILCILRecords*:MSILBCLMembers*:MSILBranchForms*:MSILMCCodeEmitter*:MSILAsmBackend*' -NoSkip -MinTests 30
+ 9. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=*MSIL*
+10. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 170
+12. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $req = @(@("llvm/lib/Target/MSIL/MSILInstrCIL.td", "CIL_Ldc_i4_s"), @("llvm/lib/Target/MSIL/MCTargetDesc/MSILMCCodeEmitter.cpp", "encodeInstruction"), @("llvm/include/llvm/CLI/BCLMembers.def", "Marshal_AllocHGlobal"), @("llvm/unittests/Target/MSIL/MSILCILRecordsTest.cpp", "CILOpcodes.def"), @("llvm/unittests/Target/MSIL/MSILMCCodeEmitterTest.cpp", "fixup_cil_method_token"), @("llvm/test/MC/MSIL/lit.local.cfg", "MSIL"), @("llvm/test/MC/MSIL/encoding-operands.ll", "show-mc-encoding"), @("llvm/test/MC/MSIL/encoding-branches.ll", "FK_PCRel_1"), @("llvm/test/MC/MSIL/encoding-synthesized.ll", "argv_loop"), @("llvm/test/MC/MSIL/object-form-operands.ll", "<msil>FnAddr"), @("llvm/test/MC/MSIL/pinvoke-nomangle.ll", "nomangle cdecl"), @("llvm/test/MC/MSIL/llvm-mc-unsupported.s", "assembly parsing is not supported"), @("msil/utils/check-il-forms-diff.py", "--self-test"), @("msil/utils/il-snapshot.py", "--normalize"), @("msil/utils/ci/lit-legs.ps1", "encoder-parity"), @("msil/utils/ci/lit-legs.ps1", "llvm/test/MC/MSIL"), @("msil/utils/ci/lit-legs.sh", "llvm/test/MC/MSIL"), @("msil/test/CMakeLists.txt", "test/MC/MSIL")); $bad = @(foreach ($e in $req) { $p = $r + $e[0]; if (-not (Test-Path -LiteralPath $p)) { "missing: $($e[0])" } elseif (-not (Select-String -Quiet -SimpleMatch -LiteralPath $p -Pattern $e[1])) { "no match for $($e[1]) in $($e[0])" } }); if ($bad.Count) { $bad; exit 1 }; "every M18 file is present"'  (G6)
+13. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; python msil/utils/check-il-forms-diff.py --self-test; if ($LASTEXITCODE) { exit 1 }; python msil/utils/check-il-forms-diff.py --repo D:/llvm-msil --base HEAD llvm/test/CodeGen/MSIL clang/test/CodeGen/MSIL lld/test/MSIL llvm/test/tools/UpdateTestChecks/update_llc_test_checks/Inputs; if ($LASTEXITCODE) { exit 1 }'  (every test change is Q26 or nomangle, lld/test/MSIL included)
+14. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 6 --out C:/llvm-msil-scratch/milestones/M18/gate/il-after --compare C:/llvm-msil-scratch/milestones/M18/M18.f/il-baseline --normalize forms msil/test/M1 llvm/test/CodeGen/MSIL; if ($LASTEXITCODE) { exit 1 }'  (text and diagnostics equal HEAD's up to Q26 and nomangle; about 3 min)
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3 with llvm/test/MC/MSIL and lld/test/MSIL; 9-11 min)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-net10  (all of M1 on the Linux triple, instead of wsl-quick; about 7 min)
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg roundtrip,modern-ilasm  (both ilasms accept the new forms and nomangle; about 2 min)
+18. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg utc  (about 0.5 min)
+19. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg encoder-parity  (encoder equals ilasm on every M1 method at -O0/-O2, at least 2,600; about 3 min)
+20. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins  (G5; no upstream file changes)
+21. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests llvm/tools/llvm-cil-dump llvm/tools/llvm-cil-copy clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (must print no diff)
+22. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M18"
+```
+
+**Exit criteria**
+- Only `CIL_` records reach a streamer, all 219 with their correct value and mnemonic. No `SynthesizedBody` or `emitILLine` is left, and every printed BCL name comes from `BCLMembers.def`.
+- `-S` and llc text and diagnostics equal HEAD's up to Q26 and `nomangle` (step 14). The test changes are mechanical, `lld/test/MSIL`'s `--lto-emit-asm` checks included (step 13). All Phase 1 suites pass on .NET 8 and Framework 4.8 (net8) and on WSL .NET 10 (wsl-net10, all of M1), through ildasm/ilasm and the .NET ilasm, and the utc leg passes; Windows .NET 10 runs in the post-commit `run-m1-gate.ps1`.
+- The encoder equals ilasm on at least 2,600 M1 methods with 0 mismatches (quieted sNaNs counted apart). `llvm/test/MC/MSIL` pins every operand kind, the branch boundaries, switch entries, synthesized bodies, object-form spellings and ImplMap 0x0201.
+- The M18 unit suites run (at least 30 tests); `llc -filetype=obj`, `llvm-mc -filetype=obj` and `cc1as -filetype obj` give clean errors; the docs are current.
+
+**Review focus** (in addition to the three standing lenses)
+- One source of truth: the printer and the encoder read one record; `getCILInstSize` equals the encoding; the shortest-form rule equals ILBuilder's; branch forms are chosen once, before emission.
+- Operand classes follow 5.8.3 R1-R3, including paths that only object mode reaches. The whole-program form is exactly Phase 1's; the object form is exactly 5.8.4's.
+- Synthesized bodies keep Phase 1's order and `.maxstack`. Neither checker can pass silently. The parity oracle is independent of the encoder. `nomangle` keeps every D14 import binding (Q13).
+- An import-attributed declaration is Method with the call-site signature (one stub per IL signature in M19), without changing whole-program text.
+
+**Rebuild cost.** The MSIL target recompiles (about 62 TUs, 6 CPU-minutes) plus two new MC TUs. llc, opt, clang, lld, llvm-mc, llvm-objdump and MSILTests relink: about 10-15 min. Gate about 28-30 min: the standard steps without G4 about 12-14, wsl-net10 about 7 (instead of wsl-quick's 4), snapshot 3, roundtrip and modern-ilasm 2, utc 0.5, encoder parity 3, and the diff checker and the M18 unit filter under 1. The `net10` leg (3.6) is not a gate step: it runs in the post-commit `run-m1-gate.ps1` (5.12.10's M18 row). The gate agent records each step's measured minutes. If the measured total exceeds 30 minutes, the orchestrator moves, in this order and through a section 12 row, `roundtrip` (step 17 keeps `modern-ilasm`) and then `wsl-net10` (step 16 becomes `wsl-quick`) to that post-commit run. After the commit the orchestrator runs `run-m1-gate.ps1` in full (5.12.10), `net10` included.
+
+### M19. CIL objects (P2-A2)
+
+**Goal.** `clang -c` and `llc -filetype=obj` write CIL objects (Q1, B2). A CIL object is an ECMA-335 netmodule (5.8.2) holding:
+- the placeholder rows of 5.8.3, in R6 order;
+- link-info record v1 (5.8.8), in the Module row's custom attribute;
+- the COFF symbol view (5.8.6).
+
+`MSILObjectWriter` writes it with `cli::MetadataBuilder`, `MethodBodyStream` and `writePEImage(Module)`.
+
+Object mode is `MSILTargetMachine::isObjectMode()`. It replaces the whole-program rules with symbols, as 5.8.10's table lists:
+- D14, the D26 errors and M12's alias and `extern_weak` lowering do not apply;
+- Phase 1's prototype fix-ups stop at undefined callees: a `no-prototype` declaration keeps its type and attribute, and a call of any undefined function gets no wrapper, so each call signature becomes its own MemberRef (R3) with NO_PROTOTYPE where it applies;
+- there is no `.cctor`, Main or image;
+- data, relocations, constructors, comdats, call-site flags, sections and linker options go into the record.
+
+Object-form text (`-msil-object-form`, 5.8.4) is the same object as ILAsm. It feeds the gate's oracle, `canon(clang -c) == canon(ilasm(object-form text))`, record included, over the M1 corpus. ildasm and SRM must open every object; `llvm-nm`, `llvm-ar` and GNU `nm`/`ar` must read the COFF view; and objects must be byte-identical across directories.
+
+On the driver side, the `Clang.cpp` `AssembleJobAction` error goes, so `-c` writes CIL objects. A compile-and-link command keeps M14's bitcode default until M20, because msil-ld reads CIL objects only from M20. `-S` without the flag is unchanged. M19 writes record v1 and pins it in its tests; M20's commit freezes it, after msil-ld has linked the matrix's `obj` rows (5.8.9).
+
+**Depends on:** M18 (CIL MCInsts, operand classes and object-form spellings, the encoder and `MSIL::getObjectTargetWriter`, `BCLMembers.def`), M17 (`PEWriter`, `LinkInfo.h` with `encodeLinkInfo`, `buildCOFFSymbolView`, `getCOFFViewMarkerSections`, `llvm-cil-dump --link-info`), M16 (`MetadataBuilder` with R6 order, `MethodBodyStream`, `mdcanon`, `cli-corpus-check.py`), M15 (import modes, `il-snapshot.py`), M14 (`MSILToolChain::getLTOMode`, `err_drv_msil_ilasm_input`, `buildAssembler`, msil-ld's error for CIL inputs), M13 (`MSILLink.h` with `setDataModel` and the IMPORT flag, the `msil-import-module`/`msil-import-name` IR attributes, `MCSymbolMSIL`, `MCMSILStreamer`, `MCMSILObjectTargetWriter`, `msil-build.ps1 -Standard`), M12 (whole-program alias, `extern_weak` and `section` rules).
+
+**Header changes:**
+- none outside the MSIL target and the clang driver: `MSILTargetMachine.h`, `MSILTargetStreamer.h`, `MSILDataSegment.h` and `MSILMCTargetDesc.h` recompile the target (about 62 TUs); `clang/lib/Driver/ToolChains/MSIL.h` recompiles `Driver.cpp` and `MSIL.cpp`. `MSIL.h` does not change: the two prototype passes reach the target machine through `TargetPassConfig`.
+
+**Work packages**
+
+#### M19.a Object writer and object target streamer (implement, ~1,300 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MCTargetDesc/MSILObjectWriter.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILObjectWriter.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILTargetObjectStreamer.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTargetDesc.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILMCTargetDesc.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/CMakeLists.txt`
+- Depends on: M19.b
+- Reads: this plan sections 5.7.3, 5.7.5-5.7.7, 5.7.9, 5.7.12, 5.8.2-5.8.9, 5.8.11, 5.10.11 and 5.11.7 and the Provides lines of M19.b, M18.a and M18.b; llvm/docs/MSIL/recon/p2/mc-streamer.md sections 3, 5.6 and 5.8; llvm/docs/MSIL/recon/p2/objfmt-binding.md sections 4.1, 4.2 and 11.2; llvm/docs/MSIL/recon/p2/judge-dotnet-value.md section 7; llvm/docs/MSIL/recon/p2/objfmt-binding-files/zoo/a.o.il; llvm/include/llvm/MC/MCMSILObjectWriter.h; llvm/include/llvm/MC/MCMSILStreamer.h; llvm/include/llvm/CLI/MetadataBuilder.h; llvm/include/llvm/CLI/PEWriter.h; llvm/include/llvm/CLI/LinkInfo.h; llvm/include/llvm/CLI/BCLMembers.h; llvm/lib/MC/WasmObjectWriter.cpp (writeObject, recordRelocation)
+- Provides:
+  - **The writer.** `class MSILObjectWriter final : public MCMSILObjectTargetWriter` with `setModule(StringRef SourceFile, const Triple &)`, `addMethod(MCSection &, const MSILMethodDecl &, unsigned MaxStack, ArrayRef<cli::TypeSig> Locals)`, `addAddressField(StringRef, bool Public)`, `addPInvokeStub(const MSILMethodDecl &, StringRef Module, StringRef Entry)` and `setLinkInfo(StringRef ModuleName, const MSILLink::Record &)`. It overrides M13's `recordRelocation` and `writeObject`.
+  - **Factories.** `createMSILObjectTargetWriter()` now returns it; M18's stub is removed. `createMSILObjectTargetStreamer(MCStreamer &, const MCSubtargetInfo &)` is registered as the object target streamer.
+
+**(1) Object target streamer.** It reaches the writer through `MSIL::getObjectTargetWriter(Asm.getBackend())`.
+- `emitObjectHeader` calls `setModule`.
+- `emitMethodBegin` switches to a fresh `getMSILSection(".text.<n>")`, so branches resolve inside their method.
+- `emitMaxStack`, `emitLocals`, `emitMethodEnd`, `emitAddressField`, `emitPInvoke` and `emitLinkInfo` record their events in order.
+- `emitComment` and `emitBlankLine` are no-ops. Whole-program calls (`emitFileHeader`, `emitAssemblyRefs`, `emitAssembly`, `emitEntryPoint`, `emitDataImage`) are internal errors.
+- Strings are copied.
+
+**(2) Fixups.** `recordRelocation` keeps (section, offset, the `MSILMemberRefExpr` of `MCFixup::getValue()`) for the token kinds.
+
+**(3) `writeObject`.** It builds a MetadataBuilder without `setAssembly` and adds rows in R6 order:
+1. AssemblyRefs `msil.extern`, `msil.bcl` and `msil.link` (0.0.0.0, no key).
+2. Per method, in event order: the MethodDef (`<Module>`, Public or Assembly, Static); a signature mapped from `MSIL::Signature` (I4, I, I8, R4, R8, VOID; calli unmanaged prefixes become `SIG_C`/`SIG_STDCALL`); the locals' StandAloneSig. Then its token sites in offset order:
+   - Method: the MethodDef (for an import-attributed declaration, its stub for the operand's signature);
+   - Field: the FieldDef;
+   - ExternMethod: MemberRef `[msil.extern]'<msil>Symbols'::'<n>'` with the call-site signature;
+   - ExternField: the same parent, signature `06 18`;
+   - FnAddr: `[msil.extern]'<msil>FnAddr'::'<n>'`, `06 18`;
+   - StandAloneSig;
+   - BCLMember: TypeRef `[msil.bcl]<Ns>.<Type>` plus a MemberRef whose signature is parsed from `BCLMembers.def` text (primitives, `T*` and `T[]`; else an error naming the entry).
+
+   Patch each token, then `addBody` (never InitLocals).
+3. Fields (`Public|Static|InitOnly` or `Assembly|Static|InitOnly`, `06 18`).
+4. Stubs, in event order (`Public|Static|HideBySig|PinvokeImpl`, `PreserveSig`, no body, a ModuleRef per distinct module string, `msil.unresolved` included, and an ImplMap with MappingFlags 0x0201 and the stub's import name).
+5. Last, the carrier: TypeRef `[msil.link]'<msil>LinkInfo'`, `.ctor` MemberRef (`20 01 01 1D 05`), and a CustomAttribute on the Module row with `encodeByteArrayAttribute(encodeLinkInfo(Record))`.
+
+Every record token must equal the writer's row. A mismatch is the MCContext error `MSIL: link-info token mismatch for '<name>'`; never patch it silently. Then `finalize`, and `writePEImage(PEOptions::get(TT, PEImageKind::Module), ...)` with `ExtraSections = getCOFFViewMarkerSections()` and `CoffSymbols = buildCOFFSymbolView(Record)`. O3-O5 hold by construction.
+
+**Checks.** `msil-syntax.ps1`. A private llc (M11.a's recipe, from M19.b's and this WP's sources) compiles the zoo (`objfmt-binding-files/zoo/a.c`) and p7 (5.9.16's definition); each object must equal ilasm's object of M19.b's object-form text (`llvm-cil-dump --canonical --params=drop --initlocals=ignore-without-locals --snan=quiet` and unnormalized `--link-info`) and open in both ildasms and `llvm-nm`. Name the private binaries in the hand-over (M19.g reads it); M19.d-M19.f meet the writer at the gate.
+
+#### M19.b Object mode, the record builder and object-form text (implement, ~1,400 lines)
+
+- Owned files: `llvm/lib/Target/MSIL/MSILTargetMachine.h`, `llvm/lib/Target/MSIL/MSILTargetMachine.cpp`, `llvm/lib/Target/MSIL/MSILPrepareIR.cpp`, `llvm/lib/Target/MSIL/MSILAddMissingPrototypes.cpp`, `llvm/lib/Target/MSIL/MSILFixFunctionBitcasts.cpp`, `llvm/lib/Target/MSIL/MSILISelLoweringCall.cpp`, `llvm/lib/Target/MSIL/MSILDataSegment.h`, `llvm/lib/Target/MSIL/MSILDataSegment.cpp`, `llvm/lib/Target/MSIL/MSILAsmPrinter.h`, `llvm/lib/Target/MSIL/MSILAsmPrinter.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILTargetStreamer.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILTargetStreamer.cpp`
+- Reads: this plan sections 5.1, 5.3, 5.8, 5.10.7, 5.10.11, 5.10.13 and 5.11.8, decisions D12, D14, D19, D26, D27, the section 12 rows of M12, M15, M18 and M19, and the Provides lines of M18.a and M18.b; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md sections 1, 4 (F3, F5) and 6.2; llvm/docs/MSIL/recon/p2/objfmt-binding.md sections 4.1, 4.2 and 11.2; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/probes/; llvm/docs/MSIL/recon/p2/objfmt-binding-files/zoo/; llvm/include/llvm/BinaryFormat/MSILLink.h; llvm/include/llvm/CLI/LinkInfo.h; llvm/lib/CodeGen/TargetLoweringObjectFileImpl.cpp (getKindForGlobal, isMergeable1ByteCString, Used); llvm/lib/CodeGen/CodeGenTargetMachineImpl.cpp (addPassesToEmitFile: addIRPasses runs before createMCStreamer)
+- Provides:
+  - **Mode.** `bool MSILTargetMachine::isObjectMode() const` and `cl::opt<bool>` `-msil-object-form`. IR passes test it when they run, never when they are added.
+  - **Streamer.** `emitObjectHeader(bool BOM, StringRef SourceFile, StringRef TripleStr)` and `emitLinkInfo(StringRef ModuleName, const MSILLink::Record &)` in `MSILTargetStreamer`. The text and null streamers live here; the object streamer is M19.a's.
+  - **Event order.** Header; definitions in IR order; address fields in SYMTAB order; import stubs (module stubs and `msil.unresolved` stubs in first-use order, then the address-only stubs in SYMTAB order); link info.
+  - **Tokens.** Every record token numbered per R6.
+
+**(1) Mode.** Object mode is on when the target machine emits an object file or `-msil-object-form` is set. Record the file type in `createMCStreamer`. `addPassesToEmitFile` calls it after `addIRPasses` has added the passes and before any pass runs (`CodeGenTargetMachineImpl.cpp`), so a pass must query `isObjectMode()` inside `runOnModule`/`runOnFunction`, never in `addIRPasses`. `ObjectFile` now delegates to the base. Assembly output in object mode first appends `object-form` to `Options.MCOptions.InstPrinterOptions`. `-filetype=null` and assembly output without the flag stay whole-program, and whole-program output stays byte-identical.
+
+**(2) MSILPrepareIR in object mode.**
+- It keeps aliases of a definition plus a constant offset (offset 0 for functions); any other alias is `alias '<a>' must point to a definition plus a constant offset for MSIL`.
+- It keeps `extern_weak` declarations, external globals and `section` attributes.
+- It rejects comdat selections other than Any and NoDeduplicate: `comdat '<c>' uses selection kind '<k>', which MSIL does not support`.
+- It rejects `<msil>` names (R5).
+- It keeps the D19 and D26 errors for `llvm.global_dtors`, `thread_local`, ifuncs, module asm and variadics.
+
+**(2a) The prototype passes in object mode** (R3, 5.8.10; judge-c-fidelity F3). Each pass gets the target machine through `getAnalysisIfAvailable<TargetPassConfig>()` when it runs; without one (`opt`) it keeps its Phase 1 behaviour. In object mode:
+- `MSILAddMissingPrototypes` changes nothing: every `no-prototype` declaration keeps its variadic type and its attribute, without diagnostics. The Phase 1 'cannot be derived' error for a declaration used only by address becomes msil-ld's (5.10.13).
+- `MSILFixFunctionBitcasts` creates no wrapper for a call whose callee is a declaration for the linker (`isDeclarationForLinker`). A call with a variadic call type of a `no-prototype` declaration becomes the non-variadic call of all of its arguments (`getNonVariadicCallType`'s rule, as Phase 1 does for prototyped callees). Calls of definitions keep Phase 1's wrappers; calls of truly variadic functions are left to LowerCall's D19 error.
+
+Whole-program mode keeps both passes byte for byte; the il-snapshot gate step checks it.
+
+**(3) MSILISelLoweringCall in object mode.** No D14 or linked policy applies; every undefined callee and every library call (`__` helpers too) is a direct call to a symbol. There is no 'mismatched call signature' error for an undefined callee (`isDeclarationForLinker`: declarations, `extern_weak` and `available_externally`; R3). This includes a fixed-arity call of a variadic `no-prototype` declaration, which is a direct call with the call-site signature (M18's ExternMethod operand). An alias callee is a direct call.
+
+**(4) MSILDataSegment in object mode.** It keeps per-global entries and leaves DIFFs unfolded.
+
+**(5) AsmPrinter.**
+- `emitObjectHeader` prints `// MSIL object generated by LLVM`, the source and triple comments, and the three `.assembly extern '<placeholder>' { .ver 0:0:0:0 }` lines (BOM per D11).
+- Functions print as before (R4 access). Address fields of defined globals follow, then the import stubs of 5.8.3, each `public hidebysig static pinvokeimpl("<module>" as "<entry>" nomangle cdecl) <sig> '<name>'(...) cil managed preservesig {}`:
+  - per (name, call IL signature) of a declaration with `msil-import-module`: module = the attribute verbatim, entry = `msil-import-name`, else the C name;
+  - per (name, call IL signature) of a declaration with `msil-import-name` only: module `msil.unresolved`, entry = the import name;
+  - one address-only stub for an undefined, prototyped function whose address the object takes but never calls, with the declaration's IL signature: on the module for `msil-import-module`, else on `msil.unresolved` with the import name or the C name. An unprototyped declaration gets none.
+- There is no `<msil>` field and no trailer.
+- `emitLinkInfo` prints `.module '<O3 name>'` and `.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = ( 01 00 <N LE32> <bytes> 00 00 )`, using `encodeLinkInfo`.
+
+**(6) The record (5.8.8, 5.8.10).**
+- **Header:** the target machine's normalized triple; ABI version 1; flags 0; DataModel from `MSILLink::setDataModel(H, TT, <DataLayout pointer size of address space 0>, <module flag wchar_size, else TT.getDefaultWCharSize()>)` (5.8.9; clang omits the flag when it equals the default).
+- **SYMTAB** in 5.8.8's order (globals, functions, aliases, library calls), with bindings, visibility, DLL flags, NO_STRIP, ALIAS (with offset and size for data) and COMMON per 5.8.10 and C8. EXPLICIT_IMPORT marks functions whose stubs name a module other than `msil.unresolved`. An extern variable with `msil-import-module` and/or `msil-import-name` is DATA UNDEFINED IMPORT with ImportModule (empty without `msil-import-module`) and ImportName (the import name, else the C name).
+- **SEGMENTS:** one per defined non-common global, named by its section or `getKindForGlobal`, with STRINGS/RETAIN/ZERO/READONLY flags and zeroed relocation sites.
+- **DATA_RELOCS:** ADDR64/32, FNADDR64/32 and DIFF, relative to their segment and sorted.
+- **COMDATS:** Any and NoDeduplicate groups.
+- **INIT_FINI:** `llvm.global_ctors` in array order, each with its comdat + 1.
+- **SIGNATURES.** Definitions from their own attributes (`sret(T)`, `byval(T)`). References (`'<msil>Symbols'` MemberRefs and import stubs) from the IR calls (CallBase attributes plus the callee's `no-prototype`, which (2a) keeps), keyed by (name, IL signature from `computeSignatureVTs` of the call type). The first call wins; a later conflicting one warns `calls to '<f>' pass incompatible arguments; the object records the first call's layout` (R3). No VARARG (D19).
+- **LINKER_OPTIONS** from `!llvm.dependent-libraries` and `!llvm.linker.options`.
+- **Tokens (R6):** MethodDefs and Fields in emission order; MemberRefs in first-appearance order of distinct (parent, name, signature) over the operands that `EmitToStreamer` sends; the carrier last.
+
+**Checks.**
+- `msil-syntax.ps1`.
+- At spawn, before any M19 build reaches the shared tree, write the gate's baseline with HEAD's build: `il-snapshot.py --build D:/llvm-msil/build --jobs 6 --out C:/llvm-msil-scratch/milestones/M19/M19.b/il-baseline msil/test/M1` (this WP is a root, so the shared build is still HEAD's).
+- A private llc and clang (M11.a's recipe): whole-program IL of `msil/test/M1` equals that baseline, and the Phase 1 `llvm/test/CodeGen/MSIL` RUN lines give HEAD's text.
+- Object-form text of the zoo, p1-p9 (p7 as 5.9.16 defines it) and 11-programs assembles with both ilasms, and its `--link-info` names the right rows. The K&R program of `knr-two-arities`, in both call orders, gives two MemberRefs with NO_PROTOTYPE and no wrapper method.
+
+#### M19.c `clang -c` writes CIL objects (implement, ~120 lines)
+
+- Owned files: `clang/lib/Driver/ToolChains/MSIL.h`, `clang/lib/Driver/ToolChains/MSIL.cpp`, `clang/lib/Driver/ToolChains/Clang.cpp`
+- Reads: this plan sections 5.10.1, 5.10.2, 5.10.5 and 5.12.13 and the section 12 rows of M14 and M19; llvm/docs/MSIL/recon/p2/driver-toolchain.md sections 4 and 6; clang/lib/Driver/Driver.cpp (canCollapseAssembleAction, ~4880)
+- Provides: `-c` and `/c` run one `cc1 -emit-obj` job. `-flto -c` and `-emit-llvm -c` still write bitcode. Compile-and-link without `-c`/`-S`/`-emit-llvm`/explicit LTO flags still uses bitcode until M20.
+
+Delete the MSIL error in `Clang.cpp`'s `AssembleJobAction` branch, with its comment. `getLTOMode` also returns `LTOK_None` for `-c` without an explicit `-flto*`/`-fno-lto`; its comment says M20 removes the override (5.10.5). M14's code then gives `err_drv_msil_ilasm_input` for `-save-temps[=obj] -c`, `-c -x assembler`, `.il`/`.s` inputs, `-via-file-asm` and `/FA`/`/Fa`, and `err_no_external_assembler` for `-fno-integrated-as -c`. `err_drv_msil_no_object_output` stays defined but unused; removing it would rebuild 84 objects, so it is deferred (5.10.5). Checks: `msil-syntax.ps1`, and `-###` with a private clang.
+
+#### M19.d Object content tests and the K&R matrix case (test, ~1,300 lines)
+
+- Owned files: `llvm/test/CodeGen/MSIL/obj-unsupported.ll`, `llvm/test/CodeGen/MSIL/object-envelope.ll`, `llvm/test/CodeGen/MSIL/object-symbols.ll`, `llvm/test/CodeGen/MSIL/object-aliases.ll`, `llvm/test/CodeGen/MSIL/object-data.ll`, `llvm/test/CodeGen/MSIL/object-comdat.ll`, `llvm/test/CodeGen/MSIL/object-ctors.ll`, `llvm/test/CodeGen/MSIL/object-calls.ll`, `llvm/test/CodeGen/MSIL/object-imports.ll`, `llvm/test/CodeGen/MSIL/object-errors.ll`, `llvm/test/CodeGen/MSIL/object-form-text.ll`, `llvm/test/CodeGen/MSIL/object-coff-view.ll`, `llvm/test/CodeGen/MSIL/object-p7-flags.ll`, `msil/test/M2/08-semantics/knr-two-arities.test`, `msil/test/M2/08-semantics/knr-two-arities.expected`
+- Reads: this plan sections 2, 5.7.10, 5.8, 5.9.16, 5.10.7, 5.12.1-5.12.6 and this milestone's Goal, Provides lines and section 12 rows; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md sections 1, 4 and 6.2; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/probes/; llvm/docs/MSIL/recon/p2/objfmt-binding-files/zoo/; llvm/docs/MSIL/recon/p2/judge-dotnet-value.md sections 2 and 7.3; llvm/test/CodeGen/MSIL/obj-unsupported.ll; llvm/test/tools/llvm-cil-dump/ (the `--link-info`, `--headers` and `--canonical` formats); msil/test/M2/08-semantics/ (M14's test format, for example `p2-knr`)
+
+Written from the specification only. Inputs are IR; C-derived IR is generated once in scratch with HEAD's clang (`-S -emit-llvm`), with the datalayout and triple removed. Section 2's conventions apply, with clean-diagnostic checks. Every llc test runs `llc -filetype=obj` and FileChecks `llvm-cil-dump --link-info`, `--canonical`, `--headers` or `--tables` (5.7.10's formats). `obj-unsupported.ll` is deleted; its `-filetype=null` line moves to `object-envelope.ll`.
+- `object-envelope.ll`: O1-O7. Machine 0x8664/0xAA64, characteristics 0x2022, no entry point, `.text .data .rdata .bss`; `module 'a.c'` from `source_filename`, never from `-o`; no assembly row, `.cctor`, Main, image or FieldRVA. Two directories give identical bytes (`cmp`).
+- `object-symbols.ll`: every linkage, visibility, dll, `llvm.used`/`compiler.used` and declaration row of 5.8.10; SYMTAB order; the header's `datamodel=` for windows-msvc (8,4,2,8) and linux-gnu (8,8,4,8) without a `wchar_size` flag, and with `wchar_size` 2 on linux-gnu.
+- `object-aliases.ll`: function and data aliases with offsets, weak aliases, calls through placeholders (R1), FnAddr of an alias.
+- `object-data.ll`: SEGMENTS names (with `$`), flags, alignment and zeroed sites; ADDR64/32, FNADDR64/32 and DIFF 4/8, sorted.
+- `object-comdat.ll`: Any and NoDeduplicate groups, and an INIT entry with a comdat.
+- `object-ctors.ll`: INIT order and priorities, and a constructor that returns a value.
+- `object-calls.ll`:
+  - MemberRefs per (name, IL signature). A `no-prototype` declaration called as `f(1, 2)` and `f(1)` gives two MemberRefs, each with NO_PROTOTYPE, in both IR orders (one function calls `f(1, 2)` first, another `f(1)` first, each in its own `split-file` module). The declaration keeps its attribute, and `--canonical` lists no wrapper method (no `_bitcast` or `.fixed_sig` names).
+  - A prototyped declaration called through another function type gets the call's signature and no wrapper.
+  - A variadic-typed call of a `no-prototype` declaration (native SysV-style IR) becomes a fixed-arity MemberRef.
+  - An unprototyped declaration used only by address gives FnAddr, no stub and no error; its `-S` twin keeps the Phase 1 error.
+  - FnAddr for defined, undefined and alias functions (R2); `[msil.bcl]` TypeRefs; `calli` sigs; SIGNATURES (NO_PROTOTYPE, SRET, byval); the R3 warning.
+  - Library calls and `__` helpers as UNDEFINED symbols (the object twins of the D14 llc tests).
+- `object-imports.ll` (5.8.3, 5.9.17's M19 list):
+  - a stub on a module with `nomangle cdecl`, ImplMap `MappingFlags=0x0201`, its ModuleRef and EXPLICIT_IMPORT;
+  - an `import_name`-only declaration called with two IL signatures: two stubs `pinvokeimpl("msil.unresolved" as "<entry>" nomangle cdecl)`, ModuleRef `msil.unresolved`, no EXPLICIT_IMPORT;
+  - the address-only stub of a prototyped declaration that is never called: on `msil.unresolved` with the C name, and on its module with `msil-import-module`; none for an unprototyped one;
+  - extern variables with IMPORT, with a module and without one (`import_module=''`);
+  - their `--link-info` lines, and LINKER_OPTIONS.
+- `object-errors.ll`: every named object-mode error, including a variadic call (p7.c's `ext_var("x", 4)`, D19), plus whole-program still diagnosing what object mode accepts.
+- `object-form-text.ll`: 5.8.4's shape. Under `%if ilasm`, ilasm `-dll -pe64 -x64`, then `diff` of `--canonical --params=drop --initlocals=ignore-without-locals --snan=quiet` (both sides, 5.12.6's object oracle) and of unnormalized `--link-info` against the `-filetype=obj` object.
+- `object-coff-view.ll`: `llvm-nm` letters per 5.8.6; an `llvm-ar rcs` index with only defined symbols and commons.
+- `object-p7-flags.ll`: p7.c as 5.9.16 defines it: without the `ext_var` call, and with `__declspec(dllimport) int ext_dll(int);` called, on the windows-msvc triple only. It checks SIGNATURES (NO_PROTOTYPE on `ext_noproto`, SRET on `ext_sret`, byval on `ext_byval`), DLLIMPORT on `ext_dll`, DATA UNDEFINED `ext_data`, and LINKER_OPTIONS as the IR's metadata lists them (5.10.6). The ELF triple gets the same file without `ext_dll`.
+- `knr-two-arities.test` (5.12.5's format, one `%{msil_prog}` line): a.c is `int f(); int main(void) { int r = f(1, 2); if (!r) return f(1); <print r with msil_test.h>; return 0; }`, and b.c is `int f(int a, int b) { return a + b; }`. The native transcript prints 3 (`.expected` from `update-expected.py`; both oracles print 3, so there is no `.linux.expected`). It runs on `lto` in M19's net8 leg and on `obj` from M20, where `f(1)` gets the missing-argument adapter and its warning.
+
+Expected values come from 5.8 and the recon logs, never from implementation output. This WP is a root, so the llc tests first meet the writer at the gate.
+
+#### M19.e Driver and cc1 tests for `-c` and `-emit-obj` (test, ~450 lines)
+
+- Owned files: `clang/test/Driver/msil-object.c`, `clang/test/Driver/msil-toolchain.c`, `clang/test/CodeGen/MSIL/emit-obj-unsupported.c`, `clang/test/CodeGen/MSIL/emit-obj.c`
+- Reads: this plan sections 5.7.10, 5.8.2, 5.8.11, 5.10.1, 5.10.5 and 5.12.13, the section 12 rows of M19 and M19.c's Provides line; clang/test/Driver/msil-toolchain.c; clang/test/Driver/msil-lto.c; clang/test/Driver/msil-link.c; clang/test/CodeGen/MSIL/emit-obj-unsupported.c; clang/test/CodeGen/MSIL/cc1as-unsupported.s; llvm/docs/MSIL/recon/p2/driver-toolchain-files/tests/msil-object.c.proposed
+
+Written from the specification only. `msil-object.c` takes over M14's object block of `msil-toolchain.c`, inverted (`-###`):
+- `-c` gives one cc1 `"-emit-obj"` job, with no `-flto` or `-emit-llvm-bc`, on x86_64 Linux, MinGW, MSVC 19.40 and aarch64 Linux, and with clang-cl `/c`;
+- `-fno-lto -c` writes an object; `-flto -c` and `-emit-llvm -c` write bitcode;
+- `-save-temps[=obj] -c`, `-c -x assembler` and `/FA`/`/Fa` give `assembling ILAsm text is not supported for MSIL target`;
+- `-fno-integrated-as -c` gives `there is no external assembler that can be used on this platform`;
+- a link without `-c` still plans `-emit-llvm-bc -flto=full` and msil-ld.
+
+A `REQUIRES: msil-registered-target` part compiles with `%clang -c`, then checks `llvm-cil-dump --headers`/`--link-info`, `llvm-nm` and `-S -mllvm -msil-object-form`. In `msil-toolchain.c` replace the object block with a pointer to the new file.
+
+`emit-obj-unsupported.c` (Phase 1, the M2 fix-6 row of section 12) pins the error that M19 removes. Delete it, and write `clang/test/CodeGen/MSIL/emit-obj.c` (`REQUIRES: msil-registered-target`) with the same three commands as positive runs:
+- `%clang_cc1 -triple x86_64-unknown-linux-gnu-msil -emit-obj` and `-triple x86_64-pc-windows-msvc-msil`, and the driver's `-S -Xclang -emit-obj`, each exit 0 and write a CIL object;
+- `llvm-cil-dump --headers` shows Machine 0x8664, characteristics 0x2022, no entry point and module `emit-obj.c`; `--link-info` shows the `LinkInfo v1.0` line with the triple;
+- the `--implicit-check-not` patterns for `PLEASE submit`, `LLVM ERROR` and `Program aborted` stay, and so does the `-S` line.
+
+`cc1as-unsupported.s` stays as it is (5.12.13).
+
+#### M19.f Object oracle modes, legs, manifest and wiring (infra, ~700 lines)
+
+- Owned files: `msil/utils/mdtools/cli-corpus-check.py`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/test/CMakeLists.txt`, `msil/utils/upstream-hooks.txt`
+- Reads: this plan sections 5.6.1-5.6.4, 5.7.10, 5.7.11, 5.8.2-5.8.6, 5.12.6, 5.12.10 and 5.12.11 and this milestone's Goal and Provides lines; llvm/docs/MSIL/recon/p2/judge-dotnet-value.md section 2 (J2); llvm/docs/MSIL/recon/p2/judge-dotnet-value-files/coffsym.py; llvm/docs/MSIL/recon/p2/tests-p2.md sections 3.8 and 3.9; msil/utils/mdtools/cli-corpus-check.py; msil/utils/ci/lit-legs.ps1; msil/utils/ci/lit-legs.sh; msil/test/lit.cfg.py (ildasm discovery); msil/utils/upstream-hooks.txt
+- Provides:
+  - **Modes.** `cli-corpus-check.py --mode object` and `--mode gnu-tools`, with the options `--triple`, `--llvm-nm`, `--llvm-ar`, `--ildasm-framework`, `--ildasm-nuget` and `--wsl-distro`.
+  - **Leg `obj-text`** (default, not lit): `--mode object --levels O0,O2 msil/test/M1`, then the Linux triple on 11-programs.
+  - **Leg `obj-text-wsl`** (`-Wsl`): `--mode gnu-tools`.
+  - **Wiring.** `clang/test/Driver/msil-object.c` in the net8 lists and `check-msil` (unless a pattern already covers it); `llvm-nm` and `llvm-ar` in `MSIL_TEST_DEPS`; the manifest lines. (`clang/test/CodeGen/MSIL/emit-obj.c` and the new M2 test are covered by existing directory paths.)
+
+**(1) `--mode object`.** For each `.c` at each level:
+- `clang -c` twice, into two directories with different `-o`; the objects must be byte-identical.
+- `-S -mllvm -msil-object-form`, then Framework ilasm (`-dll -pe64 -x64`). `--canonical --params=drop --initlocals=ignore-without-locals --snan=quiet` of both objects (5.12.6's entries `ilasm-params`, `ilasm-initlocals` and `snan-quiet`) must be equal, and so must their unnormalized `--link-info`.
+- One `mdcanon --out-dir` batch over the objects must equal `--canonical` (SRM opens every object).
+- Both ildasms (`/text`) open every -O2 object.
+- C1-C5 and C7 must hold, checked from `--tables` and `--link-info`.
+- `llvm-nm` letters must match 5.8.6 applied to the record; an `llvm-ar rcs` index must list exactly the defined non-local symbols and the commons.
+
+It takes about 5 min with `--jobs 4`.
+
+**(2) `--mode gnu-tools`.** Inside WSL, GNU `nm` must give `llvm-nm`'s letters, and `ar t` and `nm -s` must list the members and the index (J2, now with marker sections).
+
+**(3) Legs and manifest.** Add the legs and update both headers; `lit-legs.sh` lists neither leg. The manifest gets `fork-only clang/test/Driver/msil-object.c`, and the Clang.cpp block gets `fork clang/test/Driver/msil-object.c` and a comment without the removed hunk.
+
+**Checks.** The modes on scratch ilasm objects of hand-written object-form text of the zoo (5.8.4); `lit-legs.ps1 -List`; `bash -n`; `check-upstream-hooks.py --check`. This WP is a root, so the modes first meet M19.a's writer at the gate (steps 15 and 16).
+
+#### M19.g Documentation (docs, ~300 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`
+- Depends on: M19.a, M19.b, M19.c, M19.d, M19.e, M19.f
+- Reads: this plan sections 5.8 and 6 M19 and the section 12 rows for M19; llvm/docs/MSIL/Status.md; llvm/docs/MSIL/GettingStarted.md; msil/README.md; msil/test/README.md
+
+Written last.
+- **Status.md:** the state line; `clang -c` and `llc -filetype=obj` write CIL objects; the 5.8.10 table in short (what object mode accepts and `-S` rejects, K&R calls with one MemberRef per call signature included); record v1 written and pinned by tests, frozen by M20's commit (5.8.9); objects are not linkable until M20, so compile-and-link still uses bitcode; `-msil-object-form`; the inspection tools; `lib.exe`, `llvm-lib` and native linkers refuse objects (J2); test counts.
+- **GettingStarted.md:** `clang -c` examples and the two legs.
+- **msil/README.md** and **msil/test/README.md:** the modes and legs.
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '$f = (Get-PSDrive D).Free / 1GB; "D: has {0:N1} GB free" -f $f; if ($f -lt 8) { "below 8 GB: report to the user before building (plan 5.6.11)"; exit 1 }'
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0, idempotent)
+ 3. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0, idempotent)
+ 4. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-configure.ps1 -Experimental MSIL  (new MC sources)
+ 5. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: every target of msil/utils/ci/build-targets.txt, the Build targets line above)
+ 6. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe
+ 7. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=*MSIL*
+ 8. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*
+ 9. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 170
+10. python D:/llvm-msil/msil/utils/mdtools/build-mdtools.py  (up to date since M16; obj-text uses mdcanon)
+11. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $req = @(@("llvm/lib/Target/MSIL/MCTargetDesc/MSILObjectWriter.cpp", "writeObject"), @("llvm/lib/Target/MSIL/MCTargetDesc/MSILTargetObjectStreamer.cpp", "emitLinkInfo"), @("llvm/lib/Target/MSIL/MSILTargetMachine.h", "isObjectMode"), @("llvm/lib/Target/MSIL/MSILAddMissingPrototypes.cpp", "isObjectMode"), @("llvm/lib/Target/MSIL/MSILFixFunctionBitcasts.cpp", "isObjectMode"), @("llvm/test/CodeGen/MSIL/object-envelope.ll", "filetype=obj"), @("llvm/test/CodeGen/MSIL/object-symbols.ll", "--link-info"), @("llvm/test/CodeGen/MSIL/object-data.ll", "DIFF"), @("llvm/test/CodeGen/MSIL/object-calls.ll", "NO_PROTOTYPE"), @("llvm/test/CodeGen/MSIL/object-imports.ll", "0x0201"), @("llvm/test/CodeGen/MSIL/object-imports.ll", "msil.unresolved"), @("llvm/test/CodeGen/MSIL/object-imports.ll", "IMPORT"), @("llvm/test/CodeGen/MSIL/object-form-text.ll", "msil-object-form"), @("llvm/test/CodeGen/MSIL/object-coff-view.ll", "llvm-nm"), @("llvm/test/CodeGen/MSIL/object-p7-flags.ll", "DLLIMPORT"), @("msil/test/M2/08-semantics/knr-two-arities.test", "msil_prog"), @("clang/test/Driver/msil-object.c", "-emit-obj"), @("clang/test/CodeGen/MSIL/emit-obj.c", "llvm-cil-dump"), @("msil/utils/mdtools/cli-corpus-check.py", "gnu-tools"), @("msil/utils/ci/lit-legs.ps1", "obj-text-wsl"), @("msil/utils/upstream-hooks.txt", "clang/test/Driver/msil-object.c")); $bad = @(foreach ($e in $req) { $p = $r + $e[0]; if (-not (Test-Path -LiteralPath $p)) { "missing: $($e[0])" } elseif (-not (Select-String -Quiet -SimpleMatch -LiteralPath $p -Pattern $e[1])) { "no match for $($e[1]) in $($e[0])" } }); if (-not (Test-Path -LiteralPath ($r + "msil/test/M2/08-semantics/knr-two-arities.expected"))) { $bad += "missing: msil/test/M2/08-semantics/knr-two-arities.expected" }; foreach ($g in "llvm/test/CodeGen/MSIL/obj-unsupported.ll", "clang/test/CodeGen/MSIL/emit-obj-unsupported.c") { if (Test-Path -LiteralPath ($r + $g)) { $bad += "$g still exists" } }; if ($bad.Count) { $bad; exit 1 }; "every M19 file is present"'  (G6)
+12. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; if (-not (Test-Path -LiteralPath "C:/llvm-msil-scratch/milestones/M19/M19.b/il-baseline")) { "missing HEAD IL baseline (M19.b writes it at spawn)"; exit 1 }; python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 6 --out C:/llvm-msil-scratch/milestones/M19/gate/il-after --compare C:/llvm-msil-scratch/milestones/M19/M19.b/il-baseline msil/test/M1; if ($LASTEXITCODE) { exit 1 }'  (whole-program text and diagnostics of M1 equal HEAD's; about 2 min)
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3: Phase 1 tests unchanged except the two replaced error tests, the object tests, emit-obj.c, msil-object.c and knr-two-arities on lto; 9-11 min)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-quick  (G4; about 4 min)
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg obj-text  (canon(clang -c) == canon(ilasm(object-form text)) with 5.12.6's three object-oracle options, record, determinism, SRM, ildasm, C1-C5/C7, llvm-nm, llvm-ar; about 5 min)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg obj-text-wsl  (GNU nm and ar; about 1 min)
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1  (G5 in full: Clang.cpp changed; about 3 min)
+18. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests llvm/tools/llvm-cil-dump llvm/tools/llvm-cil-copy clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (must print no diff)
+19. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M19"
+```
+
+**Exit criteria**
+- `clang -c` (`/c`) and `llc -filetype=obj` write CIL objects on the x86_64 and aarch64 MSIL triples; bitcode paths and the error matrix of 5.10.5 hold; compile-and-link still uses bitcode until M20.
+- Every object has 5.8.2's shape, 5.8.3's rows in R6 order (module stubs, `msil.unresolved` stubs and address-only stubs included), the record of 5.8.8 for every construct of 5.8.10 (IMPORT data and setDataModel's DataModel included), and 5.8.6's COFF view, all pinned by `object-*.ll` (p7 as 5.9.16 defines it).
+- A `no-prototype` callee called with two argument lists gives two MemberRefs with NO_PROTOTYPE whatever the call order, and no undefined callee gets a wrapper (R3); `knr-two-arities` prints the native transcript on `lto`.
+- On M1 at -O0/-O2, and the Linux triple on 11-programs:
+  - `canon(clang -c) == canon(ilasm(object-form text))`, record bytes included, and `--link-info` agrees;
+  - mdcanon and both ildasms open every object;
+  - C1-C5 and C7 hold;
+  - objects are deterministic across directories;
+  - `llvm-nm`, `llvm-ar` and GNU `nm`/`ar` agree with 5.8.6.
+- Whole-program output is unchanged: M1's `-S` text equals HEAD's (step 12), and the Phase 1 tests pass unmodified except `obj-unsupported.ll` and `emit-obj-unsupported.c`, which pinned the removed error and are replaced (5.12.13). net8, wsl-quick and the full upstream-hooks check pass; the docs are current. Record v1 is not frozen by this commit (M20's, 5.8.9).
+
+**Review focus** (in addition to the three standing lenses)
+- 5.8 field by field (header, subsection order and encodings, SYMTAB order, C8, R1-R6, O1-O7, COFF view). Gaps against wasm `linking` and lld/ELF found now are cheaper than after M20's freeze.
+- One token numbering (AsmPrinter), checked by the writer and never silently replaced. Object mode stays isolated: `-filetype=null` and `--lto-emit-asm` stay whole-program, and the two prototype passes decide it when they run, not when `addIRPasses` adds them. Determinism; the driver error matrix; the deferred diagnostic.
+
+**Rebuild cost.** The MSIL target recompiles (about 62 TUs) plus two new MC TUs, `Clang.cpp`, `MSIL.cpp` and `Driver.cpp`; clang, llc, opt, lld, llvm-mc, llvm-objdump and MSILTests relink: about 10-15 min. Gate about 27-30 min: G0, G2, G6 and G7/G8 about 3-4, net8 9-11, wsl-quick 4, the full upstream-hooks check 3, the M1 snapshot 2, obj-text 5 and obj-text-wsl 1. The M19 tests run inside net8, so there is no separate lit step. The gate agent records each step's measured minutes. If the measured total exceeds 30 minutes, the orchestrator drops, in this order and through a section 12 row, step 12 (M19.b's private-build snapshot and the unmodified Phase 1 FileCheck tests remain the evidence) and then step 16 (obj-text-wsl moves to a `run-m1-gate.ps1` run after M19's commit).
+
+### M20. msil-ld links CIL objects and writes the PE
+
+**Goal.** P2B-2: two `clang -c` objects link into an EXE that runs on .NET 8, .NET 10, Framework 4.8 and WSL with no ilasm. msil-ld:
+- reads B2 objects (5.8) and resolves them with M14's lld/ELF rules;
+- renumbers tokens by decoding IL (5.9.7) and checks call sites with Q8's adapter table (5.9.8);
+- lays out one image with named sections, `__start_`/`__stop_`, constructor tables and `--gc-sections` (5.9.9, 5.9.11);
+- synthesizes `.cctor` and `'<msil>Main'` with the trailer builder that `-S` now shares (5.9.10, Q5);
+- spills past the per-type limits and writes the EXE (5.9.12).
+
+Whole-program output (`-S`, llc, `--lto-emit-asm`) becomes Q5's and Design.md 4.1's one-object self-link: the same layout code, named sections, `__start_`/`__stop_` and constructor sections (M12's section diagnostic goes), and the relocation loop above 32 data relocations; every other module keeps its Phase 1 text. LTO emits in-memory objects (ThinLTO, partitions; 5.9.13), native data is imported (Q15), and compile-and-link uses objects. The harness gains `msil_pipeline=obj`, PE output and oracles O2-O6. BCL members bind to `[mscorlib]` (D10) through a stand-in that M21 replaces. This commit freezes record v1 (5.8.9).
+
+**Depends on:** M19 (objects, record v1.0), M18 (CIL MCInsts, `MSILMemberRefExpr`, ILBuilder trailer bodies, `BCLMembers.def`), M17 (PE writer/image, reader, `LinkInfo.h`, `llvm-cil-dump`), M16 (`MetadataBuilder`, signatures, IL decoder), M15 (`NativeIndex`, linked-text mode, `--dep`, `il-snapshot.py`), M14 (msil-ld, `%{msil_prog}`, `msil-prog-pipeline`, M2), M12 (E7 oracle, WSL runtimes, the section diagnostic M20 retires). The section 12 rows for M20 amend plan 5.1 (relocation loop), D26 (named sections in whole-program mode; M12's section diagnostic goes) and D30; record v1's freeze row is dated at this commit. Section 10 item 13 records that the O2 round trip on msil-ld outputs runs right after the commit.
+
+**Header changes:**
+- none widely included: new lib/CLI headers (included by lib/CLI, the target and lld/MSIL); three `BCLMembers.def` entries (about 8 target TUs); target-local and lld/MSIL-local headers; `clang/lib/Driver/ToolChains/MSIL.h` (2 TUs)
+
+Roles of 5.6: M20.a trailer (+ `MSILPrepareIR.cpp`), M20.b lld-objects (+ `Writer.h`, 5.6.1 rule 7, and one clang line), M20.c lld-writer, M20.d cli-tests, M20.e lld-tests + driver-tests, M20.f harness, M20.g exec-tests, M20.h docs. M20.a, M20.b, M20.e and M20.f are roots; M20.h comes last. A check that needs another WP's file or private binary, without that WP on the Depends-on line, is a gate step (rule 7). One milestone, not M20/M20b: `plan-check.py` rejects `### M20b.`.
+
+**Work packages**
+
+#### M20.a Shared link model in lib/CLI, adopted by whole-program output and LTO codegen (implement, ~1,800 lines, ~300 of them moved from MSILAsmPrinter.cpp)
+
+- Owned files: `llvm/include/llvm/CLI/ImageLayout.h`, `llvm/lib/CLI/ImageLayout.cpp`, `llvm/include/llvm/CLI/Trailer.h`, `llvm/lib/CLI/Trailer.cpp`, `llvm/include/llvm/CLI/CallAdapter.h`, `llvm/lib/CLI/CallAdapter.cpp`, `llvm/lib/CLI/CMakeLists.txt`, `llvm/include/llvm/CLI/BCLMembers.def`, `llvm/lib/Target/MSIL/MSILAsmPrinter.h`, `llvm/lib/Target/MSIL/MSILAsmPrinter.cpp`, `llvm/lib/Target/MSIL/MSILDataSegment.h`, `llvm/lib/Target/MSIL/MSILDataSegment.cpp`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILTargetStreamer.h`, `llvm/lib/Target/MSIL/MCTargetDesc/MSILTargetStreamer.cpp`, `llvm/lib/Target/MSIL/MSILFixFunctionBitcasts.cpp`, `llvm/lib/Target/MSIL/MSILPrepareIR.cpp`
+- Reads: this plan sections 5.1, 5.7.1, 5.7.3, 5.7.5, 5.7.6, 5.7.12, 5.8.8, 5.8.10, 5.9.8-5.9.10, 5.9.12, 5.9.14, 5.10.11-5.10.13, 5.11.7 and the section 12 rows for M12 and M18-M20; decisions D2, D12, D24, D26, D27, D30; llvm/docs/MSIL/recon/p2/lld-flavor.md section 4.2; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md sections 4 and 6.3; llvm/docs/MSIL/recon/p2/native-imports.md sections 5.2 and 8.4; llvm/docs/MSIL/recon/p2/native-imports-files/data-win.il; llvm/docs/MSIL/recon/p2/objfmt-binding-files/tools/msilobj/Linker.cs; lld/ELF/OutputSections.cpp:823-879; lld/COFF/Writer.cpp:844-852; llvm/lib/CodeGen/TargetLoweringObjectFileImpl.cpp:2066-2101; llvm/include/llvm/CLI/ILBuilder.h; llvm/include/llvm/CLI/BCLMembers.h; llvm/include/llvm/BinaryFormat/MSILLink.h; llvm/test/CodeGen/MSIL/module-initializer.ll
+- Provides:
+  - 5.9.9's `ImageLayout.h` plus `cli::SectionClass`, `cli::classifySection`, `cli::getConstructorKey`, `cli::sortConstructors`; 5.9.10's `Trailer.h` plus `cli::TrailerMethod` (name, attributes, `MethodSig`, locals, an `ILBuilder` with `EntityRef` externals) and `cli::DataImportHelper {Kind (Kernel32, Dlfcn); EntityRef Load, GetSymbol}` (`TrailerInput::ImportHelper`);
+  - `CallAdapter.h`: `cli::ValueClass`, `cli::CallShape` (`CallShape::get(const MethodSig &, const MSILLink::SignatureInfo *)`), `cli::CallMatch`, `cli::classifyCall`, `cli::buildAdapter(const CallMatch &, const MethodSig &CallSig, TokenRef Callee, ILBuilder &)`, `cli::printCallShape`;
+  - llc `-msil-reloc-loop-threshold` (default 32, any unsigned value); whole-program sections; the `msil-lto` warnings; `BCLMembers.def` entries `Marshal_StringToHGlobalUni`, `EntryPointNotFoundException_ctor` and the type `Object` (`System.Object`), all mscorlib-safe.
+
+(1) **`layoutImage`** is 5.9.9 rules 1-7. TLS segments and the 2 GiB limit are `Error`s naming the segment; callers add the symbol. `countAddressSlots` is rule 4. `classifySection` sorts a name, under `SectionRules`, into data, constructor table (`.init_array*`; `.CRT$XC*`), destructor table (`.fini_array*`; `.CRT$XT*`), unsupported (`.ctors*`, `.dtors*`, other `.CRT$X*`) or TLS. `getConstructorKey` gives 5.9.9's key for an INIT priority or a slot's section. `sortConstructors` is 5.9.9's stable order: inputs in link order, and within one input its slots, in (segment, offset) order, before its INIT entries of equal key.
+
+(2) **`buildTrailer`** moves M18's ILBuilder `emitModuleInitializer`/`emitEntryPoint` into lib/CLI.
+- Up to the threshold: Phase 1's `.cctor` instruction for instruction (D24, Q26, same `.maxstack`).
+- Above it: 5.9.10's `'<msil>relocs'` table, loop and slots.
+- Data imports run in `'<msil>init_dataimports'()` before the relocations, through `'<msil>dataimport'(string, string) : native int` shaped as data-win.il. Kernel32 uses `StringToHGlobalUni`+`LoadLibraryW` and `StringToHGlobalAnsi`+`GetProcAddress`; Dlfcn uses `dlopen(path, 1)`/`dlsym`. A null result throws `EntryPointNotFoundException("data import '<name>' not found in <module>")`.
+
+(3) **Calls.** `classifyCall` is 5.9.8's table only. `buildAdapter` loads, converts (`conv.i4`/`conv.i`) or zero-fills the arguments, calls, then converts, pops or zeroes the result.
+
+(4) **Whole-program output.** The AsmPrinter fills `TrailerInput` (data segment, `FuncAddrs`, imports, sorted constructors) and implements the text sink over M18's `MSILMemberRefExpr` table; `MSILTargetStreamer` gains the helper and RVA-type headers. `MSILDataSegment::finalize` takes its offsets from `layoutImage`, one segment per global with object mode's name and flags (5.8.8), so a one-object link equals `-S` (O3). Linked-text mode turns kind-1 `!msil.imports` operands into `DataImports` (5.10.12, 5.10.13). Sections (5.8.10, 5.9.9):
+- off Windows, a referenced external `__start_X`/`__stop_X` naming an output section is an address field at its start or end, not D26's error (Windows keeps the error);
+- each 8-byte constructor-table slot is a constructor, ordered with `llvm.global_ctors` by `sortConstructors`;
+- destructor-table, unsupported and TLS sections, and slots without a function, get 5.9.9's texts (`<file>` is the source file name);
+- MSILPrepareIR's section diagnostic (M12's (1c)) goes.
+
+A module without explicit sections keeps its Phase 1 layout and text.
+
+(5) **MSILFixFunctionBitcasts** under the module flag `msil-lto` builds IR wrappers for `classifyCall`'s actions, with Phase 1's names (R5 and C8 forbid `<msil>` names in objects). Each adaptation is a `DiagnosticInfo` warning (`DS_Warning`) and each error a `DiagnosticInfo` error, with 5.9.8's text minus the ` in <file>` parts; mismatches inside one TU warn too (5.9.8). Without the flag the pass is unchanged (the D30 deviation, section 12 row).
+
+Checks: msil-syntax.ps1. A private llc and clang under `C:\llvm-msil-scratch\milestones\M20\M20.a\`, compared with HEAD's build over llvm/test/CodeGen/MSIL, clang/test/CodeGen/MSIL and msil/test/M1: at `-msil-reloc-loop-threshold=1000000000`, text and diagnostics are identical except in the files that pin M12's section diagnostic; at the default threshold only modules whose `.cctor` uses `'<msil>relocs'` differ. The hand-over lists both sets with relocation counts. A FileCheck test that pins a straight-line `.cctor` is reported, never edited. Gate step 13 repeats the first comparison.
+
+#### M20.b msil-ld object inputs, symbols, token walker, liveness, LTO objects and driver (implement, ~1,500 lines)
+
+- Owned files: `lld/MSIL/CMakeLists.txt`, `lld/MSIL/Options.td`, `lld/MSIL/Config.h`, `lld/MSIL/Driver.cpp`, `lld/MSIL/Writer.h`, `lld/MSIL/InputFiles.h`, `lld/MSIL/InputFiles.cpp`, `lld/MSIL/InputChunks.h`, `lld/MSIL/InputChunks.cpp`, `lld/MSIL/TokenMap.h`, `lld/MSIL/TokenMap.cpp`, `lld/MSIL/Symbols.h`, `lld/MSIL/Symbols.cpp`, `lld/MSIL/SymbolTable.h`, `lld/MSIL/SymbolTable.cpp`, `lld/MSIL/MarkLive.h`, `lld/MSIL/MarkLive.cpp`, `lld/MSIL/LTO.h`, `lld/MSIL/LTO.cpp`, `clang/lib/Driver/ToolChains/MSIL.h`, `clang/lib/Driver/ToolChains/MSIL.cpp`
+- Reads: this plan sections 5.6.1, 5.7.3, 5.7.5, 5.7.8, 5.7.9, 5.8.2-5.8.9, 5.9.2-5.9.7, 5.9.11, 5.9.13, 5.9.14, 5.10.5, 5.10.7, 5.10.12, 5.10.13 and the section 12 rows for M14, M15, M19 and M20; llvm/docs/MSIL/recon/p2/lld-flavor.md sections 2.3, 3.1 and 4.4; llvm/docs/MSIL/recon/p2/objfmt-binding.md sections 3, 4.3 and 4.5; llvm/docs/MSIL/recon/p2/objfmt-binding-files/tools/msilobj/Linker.cs; llvm/docs/MSIL/recon/p2/objfmt-binding-files/tools/msilobj/IL.cs; lld/MSIL/; lld/wasm/InputChunks.h; lld/wasm/MarkLive.cpp; lld/wasm/SymbolTable.cpp:81-118; lld/wasm/LTO.cpp; lld/ELF/InputFiles.cpp:1905-1912 and 2024-2041; llvm/include/llvm/CLI/MetadataReader.h; llvm/include/llvm/CLI/LinkInfo.h; llvm/include/llvm/CLI/ILDecoder.h; clang/lib/Driver/ToolChains/MSIL.cpp
+- Provides: `lld/MSIL/Writer.h` (`void writeResult();`, 5.9.2); `ObjFile` (`parse()`, `parseLazy()`, `getRecord()`, `getReader()`, `methods()`, `segments()`, `getTokenMap()`); `InputMethod`, `InputSegment` (`live`, `discarded`), `SyntheticSegment`; `TokenMap::lookup(uint32_t) -> TokenTarget`; object-backed `DefinedFunction`/`DefinedData`, `SyntheticData`, `SymbolTable::addSyntheticData`; `markLive()`; `--gc-sections` (default), `--no-gc-sections`, `--print-gc-sections`, hidden `--msil-reloc-loop-threshold=<n>` and `--msil-type-member-limit=<n>` (`Config` members per 5.9.2); LTO object output; compile-and-link through objects
+
+Write `Writer.h` first, `namespace lld::msil { void writeResult(); }` and nothing else (5.9.2); M20.c defines it.
+
+(1) **Inputs** (5.9.4). Objects and archive members go through `PEImage`, `MetadataReader`, `findLinkInfo`, `decodeLinkInfo` and `validateLinkInfo`, with 5.8.5/5.8.7/5.8.9's texts. A PE with an Assembly row is `<file>: .NET assembly inputs are not supported yet` (M14's object-and-assembly error goes). LINKER_OPTIONS go through M15's code. Data model (5.8.9): an object's from its header, a bitcode input's from its triple at load time, and each LTO object's header when it is parsed (`wchar_t`; a mismatch names the LTO object).
+
+(2) **Symbols.** SYMTAB enters through M14's `Symbol::resolve`, unchanged:
+- commons carry size and alignment;
+- an ALIAS targets the aliasee's method, or its segment plus offset;
+- LOCAL symbols stay in their object.
+
+COMDATS follow 5.9.5: losing members are discarded and their symbols become Undefined "discarded". Kind and TLS checks follow.
+
+(3) **TokenMap** (5.9.7). `parse()` decodes bodies (`decodeMethodBody`, `decodeIL`) and maps each token site to a `TokenTarget`: a symbol by row name, FnAddr, a BCL row, a StandAloneSig blob or a user string. Explicit-import stubs keep module and entry; `msil.unresolved` stubs bind natively under their ImplMap import name (5.9.6 step 2).
+
+(4) **Late binding** (5.9.6) runs after object-producing LTO, and before LTO under `--lto-emit-asm`.
+- Step 2's lookup name is the stub's ImplMap import name, the IMPORT symbol's ImportName, else the symbol name. A name equal to the symbol name counts as none and yields to another input's. Explicit modules bind unchecked; differing names or modules are 5.10.7's errors.
+- Step 3 records the call signatures for M20.c's `'<msil>undef_'` stubs. `/alternatename` runs last.
+- Under `--lto-emit-asm` off Windows, an undefined `__start_X`/`__stop_X` is left to code generation when a bitcode definition names section X (irsymtab; 5.9.6).
+
+(5) **`markLive()`** (5.9.11) walks from the roots through token sites, relocations, aliases and definitions. `--print-gc-sections` prints `removing unused section <file>:(<name>)`.
+
+(6) **LTO** (5.9.13). ObjectFile output is parsed as in-memory `ObjFile`s (lld/wasm/SymbolTable.cpp:112-117), with ThinLTO, partitions and `--save-temps` objects; M14's LTO-only error goes. `MSILLinkHooksPass` sets only the module flags in object mode, and under `--lto-emit-asm` it adds kind-1 data and helper operands (5.10.12, 5.10.13).
+
+(7) **Driver.** The order is inputs, resolution, LTO, late binding, `markLive()`, `writeResult()`. `-e` takes any D27 shape (M14's `main`-only error goes). CMakeLists lists every M20 source of 5.9.2 and links `CLI`. In clang, delete `MSILToolChain::getLTOMode` (M19's comment), so compile-and-link runs `cc1 -emit-obj`.
+
+Checks: msil-syntax.ps1. A private lld (M15's recipe) under `C:\llvm-msil-scratch\milestones\M20\M20.b\`, whose scratch-only `writeResult()` (never committed) prints resolved symbols, token maps and live units, runs on the recon zoo, probes and sigmismatch objects from HEAD's clang. A private clang shows `cc1 -emit-obj` for compile-and-link. Never write `D:\llvm-msil\build`.
+
+#### M20.c msil-ld output: signature checks, image, constructors, rows, spill classes, trailer sink, PE (implement, ~1,450 lines)
+
+- Owned files: `lld/MSIL/Signatures.h`, `lld/MSIL/Signatures.cpp`, `lld/MSIL/OutputSegment.h`, `lld/MSIL/OutputSegment.cpp`, `lld/MSIL/Relocations.h`, `lld/MSIL/Relocations.cpp`, `lld/MSIL/Synthetic.h`, `lld/MSIL/Synthetic.cpp`, `lld/MSIL/Writer.cpp`, `lld/MSIL/MapFile.h`, `lld/MSIL/MapFile.cpp`, `lld/MSIL/NativeLibraries.h`, `lld/MSIL/NativeLibraries.cpp`
+- Depends on: M20.a, M20.b
+- Reads: this plan sections 5.7.3, 5.7.5-5.7.8, 5.7.12, 5.8.8, 5.9.5-5.9.12, 5.9.14, 5.10.7, 5.10.10-5.10.14, 5.11.6, 5.11.7 and the section 12 rows for M20; decisions D10, D12, D27; llvm/docs/MSIL/recon/p2/metadata-writer.md sections 3.6, 4.5 and 4.8-4.10; llvm/docs/MSIL/recon/p2/objfmt-binding.md sections 4.3-4.5; llvm/docs/MSIL/recon/p2/native-imports.md sections 5 and 8.3-8.5; llvm/docs/MSIL/recon/p2/objfmt-binding-files/tools/msilobj/Linker.cs; lld/wasm/Writer.cpp:544-556 and 1874-2048; lld/wasm/SymbolTable.cpp:378-398 and 1159-1180; lld/ELF/Relocations.cpp:381-405; lld/MSIL/; llvm/include/llvm/CLI/; llvm/lib/Target/MSIL/MCTargetDesc/MSILTargetStreamer.cpp (Phase 1 member flags)
+- Provides: the definition of `writeResult()`; the outputs of 5.9.8-5.9.12 (adapters, trap stubs, P/Invoke stubs, image, `__start_`/`__stop_`, constructor list, spill classes, EXE); 5.9.14's PE map; native data imports
+
+(1) **Signatures** (5.9.8). Sites bound by name to a definition: MemberRefs on `'<msil>Symbols'`, import stubs resolved to a definition, and MethodDef sites redirected from a losing WEAK or discarded COMDAT copy, whose call side is that copy's signature and SIGNATURES entry (`called as` names its object). Each live site gets `CallShape`s from both sides, then `classifyCall`.
+- Adapters `'<msil>adapt_<name>_<n>'` come from `buildAdapter`, one per (definition, call signature, descriptor).
+- Trap stubs `'<msil>undef_<name>'` (`ldnull`, `throw`) are made one per call signature.
+- Native callees: the link-time checks that 5.10.13 moves out of codegen run here for every object, LTO objects included (from M20 `MSILLinkHooksPass` only sets module flags, M20.b (6)): 5.10.14's variadic and non-passable texts, from the call-site signature and SIGNATURES descriptor; 5.10.14's callback check (`isNativeCallbackFunction`, M15.a) for every live call or address reference that native lookup binds, explicit imports exempt; and, for a prototype-less function used only by address that binds natively, Phase 1's `the signature of prototype-less function '<f>' cannot be derived: its address is used, but it is never called directly; declare it with a prototype` (M19.b (2a) moved it to msil-ld). Each comes with `>>> referenced by` lines.
+
+(2) **OutputSegment** (5.9.9).
+- `ImageInput` is built from live segments, commons and slots, with the TLS check first, then `layoutImage` runs.
+- `__start_`/`__stop_` are defined off Windows through `addSyntheticData`.
+- DIFFs are folded into the image, with the overflow text.
+- Constructors: INIT entries and FNADDR64 slots of constructor-table sections, keyed by `getConstructorKey` and ordered by `sortConstructors` (an object's slots before its INIT entries of equal key; LTO objects alike).
+- `classifySection`'s destructor-table and unsupported classes get 5.9.9's texts.
+
+(3) **Relocations.**
+- Undefined symbols are reported per 5.9.6 steps 3-4, live references only.
+- One `'<msil>fn_'` field per resolved method.
+- P/Invoke stubs per 5.10.11: one per (symbol, IL signature), `assembly`, `preservesig`, ImplMap 0x0201, ModuleRef verbatim, plus a canonical stub for the fn field.
+- Data imports take module and entry from IMPORT and 5.9.6 step 2, through 5.10.12's helper: the kernel32 pair on Windows; `dlopen`/`dlsym` bound like imports on ELF; otherwise 5.10.14's text.
+
+(4) **Synthetic.** A `TrailerSink` over `MetadataBuilder` provides `'<msil>data'`, `'<msil>image_t'`/`'<msil>relocs_t'` (ClassLayout, FieldRVA) and the helpers. `emitMethod` goes through `ILBuilder::encode` and `MethodBodyStream`, with Phase 1 member flags.
+
+(5) **Writer.** `writeResult()` runs, in order:
+- the signature checks and the layout;
+- 5.9.12's names, access and row order: colliding LOCAL members become `'<name><msil><n>'`, and `'<msil>fn_'` fields are `private` unless a spill class exists (5.9.12);
+- the BCL stand-in (5.9.7, 5.11): `msil.bcl` TypeRefs become `[mscorlib]` 4.0.0.0 b77a5c561934e089, MemberRefs are re-encoded and deduplicated, and any other AssemblyRef is `<file>: reference to assembly '<n>' needs --reference, which this msil-ld does not support yet`;
+- the bodies: signatures re-encoded with `mapTypeRefs`, bodies copied with `rewriteILTokens` (local signatures, EH class tokens and user strings re-added), then `buildTrailer`;
+- the image: `'<msil>Spill<N>'` classes (base `BCLMembers.def`'s `Object`) past 65,524 methods or 65,534 fields (or `--msil-type-member-limit`), the Assembly and Module rows, then `writePEImage(Executable)` with `'<msil>Main'` as the entry token.
+
+Only input order decides anything.
+
+(6) **MapFile:** 5.9.14's PE map: the Image, Methods, Fields and Imports sections after M14's and M15's `Inputs:` and `Symbols:`. (7) **NativeLibraries:** the helper lookups; M15's `importing native data symbol` error goes.
+
+Checks: a private lld with M20.a's and M20.b's files links the zoo (exit 63), p1-p9, sigmismatch and the 11-programs objects and runs them on .NET 8 and Framework. One-object links (`--no-gc-sections`) and `-S` + ilasm give equal `llvm-cil-dump --canonical` listings under 5.12.6's O3 options. The hand-over reports the time of a generated 65,600-function, 65,600-global program at -O0 (compile, link, verification, jitall, run; 5.12.2's `msil_scale_tests`).
+
+#### M20.d Tests of the lib/CLI link model and of whole-program adoption (test, ~1,100 lines)
+
+- Owned files: `llvm/unittests/CLI/CMakeLists.txt`, `llvm/unittests/CLI/ImageLayoutTest.cpp`, `llvm/unittests/CLI/TrailerTest.cpp`, `llvm/unittests/CLI/CallAdapterTest.cpp`, `llvm/test/CodeGen/MSIL/reloc-loop-threshold.ll`, `llvm/test/CodeGen/MSIL/function-bitcasts-lto.ll`, `llvm/test/CodeGen/MSIL/imports-linked-data.ll`, `llvm/test/CodeGen/MSIL/sections-whole-program.ll`, `llvm/test/CodeGen/MSIL/section-errors.ll`, `clang/test/CodeGen/MSIL/section-globals.c`
+- Depends on: M20.a
+- Reads: this plan sections 2, 5.1, 5.7.1, 5.7.12, 5.7.13, 5.8.8, 5.8.10, 5.9.8-5.9.10, 5.9.14, 5.10.12, 5.10.13 and the section 12 rows for M12 and M20; decisions D12, D24, D26, D27; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md sections 4 and 6.5; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/probes/p8.c; llvm/docs/MSIL/recon/p2/native-imports-files/data-win.il; llvm/docs/MSIL/recon/p2/objfmt-binding-files/sigmismatch/; lld/ELF/OutputSections.cpp:832-879; llvm/lib/CodeGen/TargetLoweringObjectFileImpl.cpp:2066-2101; llvm/unittests/CLI/ILBuilderTest.cpp; llvm/test/CodeGen/MSIL/module-initializer.ll; llvm/test/CodeGen/MSIL/global-relocs.ll; llvm/test/CodeGen/MSIL/function-bitcasts.ll; llvm/test/CodeGen/MSIL/imports-linked.ll
+- Provides: suites `CLIImageLayoutTest`, `CLITrailerTest`, `CLICallAdapterTest` (at least 40 tests); the four new llc tests; the two section tests updated
+
+From the specification only; this WP compiles against M20.a's headers without reading them or its sources (5.6.1 rule 8).
+- **ImageLayoutTest:** every rule of 5.9.9: units, ELF priorities and COFF `$` groups (stable ties), the init and zero parts, commons (first declaration, merged size and alignment), mixed groups, slots, STRINGS sharing, the TLS and 2 GiB errors, and Phase 1's layout for one object; `classifySection` under both rules, `getConstructorKey` for every priority band, `sortConstructors` (slots before INIT entries of equal key).
+- **TrailerTest:** a recording sink. It covers both sides of the threshold, kinds 0-3 with slots, `unaligned.` only where D24 needs it, 4-byte stores, canonical orders, constructors that return values, both D27 shapes, both helper kinds and `countAddressSlots`. It reproduces the sequences of module-initializer.ll and global-relocs.ll.
+- **CallAdapterTest:** every row of 5.9.8 in both directions, and the maxstack of each adapter.
+- **llc tests** (plan 2's conventions, `%ilasm-verify`):
+  - `reloc-loop-threshold.ll`: thresholds 0, 1 and the default on unaligned 4-byte sites and function pointers;
+  - `function-bitcasts-lto.ll`: sigmismatch's adapters with 5.9.8's warnings (no ` in <file>`) and errors under `msil-lto`, and function-bitcasts.ll's silent wrappers without it;
+  - `imports-linked-data.ll`: kind-1 operands give the helpers on each triple;
+  - `sections-whole-program.ll`, both x86_64 triples: section groups (ELF priorities, COFF `$`), `__start_`/`__stop_` on linux-gnu and D26's error on windows-msvc, `.init_array`/`.CRT$XCU` slots run from `.cctor` in 5.9.9's order with `llvm.global_ctors`, and the destructor, unsupported-section and slot texts.
+- **Retired text** (5.6.1 rule 6): `section-errors.ll` and `section-globals.c` pin M12's `global variable @<name> in section "<section>" is not supported for MSIL yet (phase 2 CIL objects)`. From M20 those globals compile; the tests keep the constructs that stay errors, with 5.9.9's texts. Any other file in HEAD that pins the old text is reported for a fix-loop row.
+
+Checks: msil-syntax.ps1 on the unit tests against M20.a's headers. The llc and clang tests first run at the gate; the hand-over records which RUN lines HEAD's binaries fail.
+
+#### M20.e msil-ld object-link FileCheck tests and driver tests (test, ~1,300 lines)
+
+- Owned files: `lld/test/MSIL/`, `clang/test/Driver/msil-lto.c`, `clang/test/Driver/msil-link.c`, `clang/test/Driver/msil-object.c`, `clang/test/Driver/msil-toolchain.c`
+- Reads: this plan sections 2, 5.7.10, 5.8.5-5.8.11, 5.9.3-5.9.14, 5.9.16, 5.10.5, 5.10.7, 5.10.11, 5.10.12, 5.10.14 and the section 12 rows for M14, M15 and M20; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md sections 4 and 6.5; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/probes/; llvm/docs/MSIL/recon/p2/objfmt-binding-files/zoo/; llvm/docs/MSIL/recon/p2/objfmt-binding-files/sigmismatch/; lld/test/MSIL/; lld/test/wasm/signature-mismatch.s; lld/test/wasm/startstop.s; lld/test/wasm/undefined-weak-call.s; lld/test/ELF/common.s; lld/test/ELF/comdat.s; lld/test/ELF/ctors_dtors_priority.s; lld/test/ELF/gc-sections.s; clang/test/Driver/msil-lto.c; clang/test/Driver/msil-object.c
+- Provides: the `obj-*.test` files below; the updated M14/M15 tests and driver lines
+
+From the specification only (do not read M20.a-c).
+- **Inputs:** `llc -filetype=obj` over split-file `.ll` (both triples where rules differ), `llvm-as`, `opt -module-summary`, `llvm-ar`; object-form text through ilasm under `%if ilasm`.
+- **Checks:** `llvm-cil-dump --canonical`/`--headers`/`--tables`/`--link-info` (5.7.10), map files and diagnostic texts with `--implicit-check-not="PLEASE submit"`. Add `llvm-cil-dump` to `lit.local.cfg` if it is missing.
+- **Tests:**
+  - linking: `obj-basic` (rows, entry, `[mscorlib]`, no placeholders, names), `obj-tokens` (every 5.9.7 class), `obj-resolve` (weak/strong both orders, aliases with a data offset, LOCAL renaming), `obj-common` (largest, weak versus common, `--warn-common`), `obj-comdat` (discarded-section reference), `obj-archive` (a weak undefined does not extract, `--whole-archive`, `--why-extract`);
+  - calls and errors: `obj-signatures` (every 5.9.8 text; a WEAK definition overridden by a GLOBAL one with another signature, as adapter with warning and as error), `obj-weak-undef`, `obj-undefined` (dead references silent), `obj-type-mismatch`;
+  - image: `obj-sections` (`$` groups, priorities, `__start_`/`__stop_` per triple; also through `--lto-emit-asm`, with no section error), `obj-ctors` (order per triple; a slot and an INIT entry of equal key in one object), `obj-sections-unsupported`, `obj-gc-sections`, `obj-reloc-loop`;
+  - output: `obj-spill` (`--msil-type-member-limit`, `'<msil>Spill1'`, non-`initonly` fields, fn fields `assembly` only with spill classes), `obj-map`, `obj-triple` (stock native-triple bitcode plus an MSIL object: Q12's warning only; MSIL bitcode with `wchar_size` 2 on linux-gnu plus an object: the data-model error naming the LTO object), `obj-linker-options`, `obj-entry`, `obj-pinvoke` (an `msil.unresolved` stub with `as` bound natively under its import name, and one without `as` from object-form text; a natively bound `qsort` call and address give 5.10.14's callback error and an explicit `import_module` `qsort` does not; a variadic native callee; the prototype-less address-only error), `obj-det`;
+  - LTO and imports: `obj-lto` (bitcode only, mixed, `--lto-partitions=2`, ThinLTO, `--save-temps`), `obj-data-import` (IMPORT with and without a module, both helpers, M15's `Inputs/native/`).
+- **Retired texts** (5.6.1 rule 6): M14's LTO-only error (`... need CIL object output, which this msil-ld does not have`), `linking CIL object files and .NET assemblies is not supported yet` (now `.NET assembly inputs are not supported yet`), `an entry point other than main is not supported yet` and its `map.test` (the PE map adds Image, Methods, Fields and Imports); M15's `importing native data symbol '<name>' (<module>) is not supported yet`; any `--lto-emit-asm` test that pins M12's section diagnostic; the driver lines that pin `-emit-llvm-bc` for compile-and-link, which now runs `cc1 -emit-obj` (`-flto` keeps bitcode).
+
+#### M20.f Harness: object pipeline, PE output, oracles O2-O6, IL snapshot, obj legs (infra, ~1,200 lines)
+
+- Owned files: `msil/test/lit.cfg.py`, `msil/utils/msil-prog.py`, `msil/utils/msil-verify.py`, `msil/utils/msil-equiv.py`, `msil/utils/equiv-allowed.txt`, `msil/utils/il-snapshot.py`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/test/harness/prog/`, `msil/test/harness/equiv/`, `msil/test/harness/pipeline-obj/`, `msil/test/M1/01-int/trap-call-before-div.ll`, `msil/test/M1/01-int/trap-call-before-rem.ll`, `msil/test/M1/03-control/trap.ll`, `msil/test/M1/01-int/calls-arith-debug-info.test`
+- Reads: this plan sections 5.5, 5.6.1, 5.7.10, 5.8.9, 5.12.1-5.12.7, 5.12.10, 5.12.11, 5.12.13 and the section 12 rows for M14, M15, M17, M18 and M20; llvm/docs/MSIL/recon/p2/tests-p2.md sections 2.3, 3.8, 4 and 6; llvm/docs/MSIL/recon/p2/tests-p2-files/mdcanon/compare_writers.py; msil/test/lit.cfg.py; msil/utils/msil-prog.py; msil/utils/msil-verify.py; msil/utils/il-snapshot.py; msil/utils/ilverify-allowed.txt; msil/utils/ci/lit-legs.ps1; msil/utils/ci/lit-legs.sh; msil/test/harness/
+- Provides: `msil_pipeline=obj`; `msil_link_output=pe` (default for `lto` and `obj`); `msil_equiv` (feature `msil-equiv`) and `%msil_equiv`; `msil-prog-pipeline=obj` under `asm` and `obj`; `msil_scale_tests` (feature `msil-scale-tests`); `%{msil_prog}` under `asm` means `obj`; `msil-prog.py --pipeline obj --link-output pe --also-il --equiv-out <file> --equiv-skip <file> --test <path>`; `msil-verify.py --md-baseline FILE`; `msil-equiv.py --canon "<cmd>" --allowed <file> [--allow NAME]... [--test <path>] [--oracle O3|O4] A B`; `equiv-allowed.txt` with 5.12.6's seven entries and `skip` lines; `il-snapshot.py --llc-arg <arg> --skip-changed`; the baseline `C:/llvm-msil-scratch/milestones/M20/M20.f/il-baseline`; legs `obj` and `obj-wsl`
+
+- **Baseline first.** At spawn, before any M20 build reaches the shared tree, from the repository root: `python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 6 --out C:/llvm-msil-scratch/milestones/M20/M20.f/il-baseline msil/test/M1 llvm/test/CodeGen/MSIL`. Then il-snapshot.py gains `--llc-arg <arg>` (repeatable; appended to every llc command, and as `-mllvm <arg>` to every `clang -S`) and `--skip-changed` (leaves out, and lists, every input under the given roots that `git status --porcelain --untracked-files=all` reports against HEAD).
+- **Composites** (5.12.1, 5.12.3, 5.12.6).
+  - Under `obj`, `%{msil_c}` is `%{msil_prog}` of its source, and `%{msil_ll}` is `llc -filetype=obj` plus the link.
+  - With `msil_equiv=1`, single-TU composites also build `-S` + `ilasm -exe` with the same output and assembly names; O3 (`%msil_equiv`) takes the `--equiv-out` image (`-Wl,--no-gc-sections`), O6 (`--md-baseline`) the run image.
+  - Under `lto`+`pe`, `%{msil_prog}` adds `--also-il` and `--equiv-out` and runs O4 (`--oracle O4`).
+  - Composites pass `--test %s`; for a test a `skip` line covers, msil-prog.py builds neither equivalence output.
+  - The roundtrip leg (O2) accepts PEs; `%{msil_det}` compares objects, archives and the PE.
+  - `%{msil_c}`/`%{msil_ll}` under `asm` expand as before: harness/pipeline/ and harness/legs/ pass unchanged, and a pin there that must change is reported for a fix-loop row.
+- **Features.** `msil-prog-pipeline` (M14.d's) is `obj` under `asm` and `obj`, `lto` under `lto`. `msil_scale_tests` (0/1) sets `msil-scale-tests`.
+- **`msil-equiv.py`** (stdlib) dumps with the allowed names' options, diffs and prints the first 40 differences; an unknown `--allow` name exits 2. A `skip O3` or `skip O4` line covers its path, or every test below a path ending in `/`, matched against `--test` relative to the repository root; the script then prints `<oracle> skipped: <reason>`.
+- **`equiv-allowed.txt`:** 5.12.6's seven entries as `<name> <option>... # <justification>`; then `skip O4 msil/test/M2/00-link/spill-limits.test` (spill classes: `--lto-emit-asm` text has no per-type limit), plus the 5.8.10 lines (M12's alias forwarders, `extern_weak` stubs) that M20.g's hand-over names, added in the gate's fix loop (M20.g starts only after M20.f hands over).
+- **Self-tests.** harness/prog/ (rule 6): drop M14's `obj`/`pe` configuration-error cases, its pin of `%{msil_prog}` under `asm` as lto's and its pin of `msil-prog-pipeline=lto` under `asm`; pin `%{msil_prog}` under `asm` as obj's (`--pipeline obj`, `--link-output pe`, `--equiv-out`, `--equiv-skip`), and pin the feature as `msil-prog-pipeline=obj` under `asm` and `obj` and `msil-prog-pipeline=lto` under `lto` (5.12.2). harness/equiv/: one self-test per entry (every other entry allowed; fails without its own), `no-gc-sections.test`, `unknown-name.test` (exit 2) and `skip.test` (O3, O4 and directory lines). harness/pipeline-obj/ pins every obj expansion with stand-in tools.
+- **Tests and legs.** `REQUIRES: msil-pipeline=asm` on the four explicit-RUN M1 tests (5.12.13). Leg `obj` (M1 and M2) in both scripts, with `msil_scale_tests=1` only in lit-legs.ps1's (5.12.2: once, on Windows); leg `obj-wsl` (`-Wsl`: 11-programs and M2) in lit-legs.ps1 only (lit-legs.sh runs the Linux triple natively and has no WSL legs, as for `wsl-quick`); headers matching `--list`.
+
+Checks: the baseline; the self-tests that need only HEAD's tools (stand-ins, ilasm-built pairs); both `--list`s; `bash -n` in WSL. Self-tests that need M20's msil-ld or dumper first run at the gate (rule 7).
+
+#### M20.g Execution tests: object path, matrix object rows, equivalence, data imports (test, ~1,400 lines)
+
+- Owned files: `msil/test/M2/00-link/`, `msil/test/M2/02-lto/`, `msil/test/M2/03-native/`, `msil/test/M2/06-det/`, `msil/test/M2/07-equiv/`, `msil/test/M2/08-semantics/`
+- Depends on: M20.f
+- Reads: this plan sections 5.5, 5.7.10, 5.8.10, 5.9.5-5.9.16, 5.10.7, 5.10.12, 5.10.14, 5.12.1-5.12.7 and the section 12 rows for M14 and M20; decisions D26, D37; llvm/docs/MSIL/recon/p2/tests-p2.md sections 3.1-3.3, 3.5, 3.7 and 4.3; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md sections 3, 4 and 6.5; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/probes/; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/results-native-linux.txt; llvm/docs/MSIL/recon/p2/objfmt-binding-files/zoo/; llvm/docs/MSIL/recon/p2/objfmt-binding-files/sigmismatch/; llvm/docs/MSIL/recon/p2/native-imports.md section 5; msil/test/M2/; msil/test/Inputs/msil_test.h
+- Provides: the test files below and their `.expected` files
+
+From the specification only (do not read M20.a-c). 5.12.5's format and plan 5.5's rules apply. `.expected` and `.linux.expected` come only from update-expected.py. A JIT-time exception is never accepted (5.9.16).
+- **Diagnostics.** `%{msil_prog}` diagnostics go through `%{msil_prog_fail_*}` with `OBJ`/`LTO` prefixes under `%if msil-prog-pipeline=<p>`; `ASM` prefixes only in `%{msil_c}` tests under `%if msil-pipeline=asm`. Every LTO-only check that earlier milestones wrote (M14.f's 00-link and 08-semantics, M15.e's `03-native/` diagnostics and `08-semantics/native-callback.test`, M19.d's `knr-two-arities.test`) is already guarded by `%if msil-prog-pipeline=lto` (M14's and M15's G6 steps check it); re-guard any in the owned directories that `msil-pipeline=<p>` guards, and report any elsewhere (`01-archive/`, `09-hosted/`) for a fix-loop row. Re-check their LTO lines against M20's object-path reports of LTO objects, and add the `OBJ` checks under `%if msil-prog-pipeline=obj` to every such case: 00-link, 03-native (M15's undefined-symbol and `-Bstatic` cases) and 08-semantics (`native-callback`, whose object-path diagnostic is msil-ld's, 5.10.14).
+- **08-semantics:**
+  - new: `p3-start-stop`, `p8-section-ctor` (42 on every pipeline), `common-largest`, `unaligned-reloc`, `int-ptr-adapter`, `missing-arg-adapter`, `float-int-mismatch`, `gc-used-retain`, `weak-def-sig-mismatch` (both variants), `ctor-slot-order` (a slot and a constructor in one TU, `main` in another) and `import-attrs` (a test-built native library through `%{msil_deps}`; the native build uses asm labels, plus `__declspec(dllimport)` on Windows);
+  - OBJ outcomes on the existing rows (adapter warnings on `p2-knr`, `sig-mismatch` and `knr-two-arities`, where `f(1)` gets the missing-argument adapter; the object-path texts of `native-callback`, with 5.10.14's callback text, and of `undefined`);
+  - the hand-over maps the rows M14 placed in 00-link.
+- **00-link:**
+  - `reloc-loop`: more than 32 relocations, unaligned, 4-byte, function pointers;
+  - `spill-limits`: `REQUIRES: msil-scale-tests`, -O0 only; 65,600 functions and 65,600 globals generated by `%python` into `%t`, kept live; it also checks `'<msil>Spill1'` with `%msil_canon`.
+- **02-lto** (forced `-flto`): `lto-pe`, `mixed-objects-bitcode`, `thinlto`, `lto-partitions`.
+- **03-native:** `data-import-testlib` (a test-built library's data via `%{msil_deps}`, both triples); `data-import-glibc` (`stderr`, `environ` and `optind` on Linux, settling 5.10.12's unverified `dlopen` path); `data-import-msvcrt` (`_iob` with `-lmsvcrt`); M15's data-error tests become runs; the OBJ lines of M15's undefined-symbol and `-Bstatic` diagnostics.
+- **06-det:** `det-obj`, `det-archive`.
+- **07-equiv** (explicit RUN lines): `o3-single`, `o3-reloc-loop`, `o3-sections` (named sections, `__start_`/`__stop_` on Linux, a constructor slot; the `-S` image runs too), `o4-zoo`, `o4-sections-ctors`.
+
+Checks: generate every `.expected` (Windows and `--os linux`) after M20.f hands over; the tests pass only after the gate's build. The hand-over names any test whose O3 or O4 difference needs a 5.8.10 `skip` line, with the difference.
+
+#### M20.h Documentation (docs, ~300 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`
+- Depends on: M20.a, M20.b, M20.c, M20.d, M20.e, M20.f, M20.g
+- Reads: this plan section 6 M20 and the section 12 rows for M20, sections 5.9.16, 5.12.4 and 5.12.6; the hand-overs of M20.a-M20.g; the four owned files
+- Provides: the documentation of M20
+
+From the hand-overs.
+- **Status.md:** the state line, PE output, object LTO and its warnings, data imports, whole-program sections, limits, the stand-in, the matrix's object results, record v1 frozen by this commit, the counts.
+- **GettingStarted.md:** `clang -c` plus link without ilasm, `--gc-sections`, map files, the obj legs.
+- **READMEs:** pipelines, `msil_equiv`, `msil_scale_tests`, `msil-prog-pipeline`, the allow-list and the `skip` lines (msil/test/README.md lists every line of `equiv-allowed.txt`).
+
+Design.md stays untouched.
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '$f = (Get-PSDrive D).Free / 1GB; "D: has {0:N1} GB free" -f $f; if ($f -lt 8) { "below 8 GB: report to the user before building (plan 5.6.11)"; exit 1 }'
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0, idempotent)
+ 3. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0, idempotent)
+ 4. pwsh -NoProfile -Command 'if (-not (Test-Path -LiteralPath "C:/llvm-msil-scratch/milestones/M20/M20.f/il-baseline")) { "missing HEAD IL baseline (M20.f writes it before any M20 build)"; exit 1 }; "IL baseline present"'
+ 5. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-configure.ps1 -Experimental MSIL  (new lib/CLI, lld/MSIL and CLITests sources)
+ 6. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: every target of msil/utils/ci/build-targets.txt, the Build targets line above)
+ 7. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe
+ 8. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=*MSIL*
+ 9. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*
+10. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 210
+11. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $req = [ordered]@{ "llvm/unittests/CLI/ImageLayoutTest.cpp" = "CLIImageLayoutTest"; "llvm/unittests/CLI/TrailerTest.cpp" = "CLITrailerTest"; "llvm/unittests/CLI/CallAdapterTest.cpp" = "CLICallAdapterTest"; "llvm/test/CodeGen/MSIL/reloc-loop-threshold.ll" = "msil-reloc-loop-threshold"; "llvm/test/CodeGen/MSIL/function-bitcasts-lto.ll" = "msil-lto"; "llvm/test/CodeGen/MSIL/imports-linked-data.ll" = "msil.imports"; "llvm/test/CodeGen/MSIL/sections-whole-program.ll" = "__start_"; "lld/MSIL/Writer.h" = "writeResult"; "lld/test/MSIL/obj-signatures.test" = "function signature mismatch"; "lld/test/MSIL/obj-spill.test" = "<msil>Spill1"; "lld/test/MSIL/obj-triple.test" = "wchar_size"; "msil/utils/equiv-allowed.txt" = "ilasm-initlocals"; "msil/utils/il-snapshot.py" = "skip-changed"; "msil/test/M1/03-control/trap.ll" = "msil-pipeline=asm"; "msil/test/M2/00-link/spill-limits.test" = "msil-scale-tests"; "msil/test/M2/03-native/data-import-testlib.test" = "msil_deps"; "msil/test/M2/08-semantics/p3-start-stop.test" = "__start_"; "msil/test/M2/08-semantics/ctor-slot-order.test" = "init_array"; "msil/test/M2/08-semantics/weak-def-sig-mismatch.test" = "msil-prog-pipeline"; "msil/test/M2/08-semantics/import-attrs.test" = "import_name" }; $min = [ordered]@{ "lld/test/MSIL" = @("obj-*.test", 24); "msil/test/M2/02-lto" = @("*.test", 6); "msil/test/M2/07-equiv" = @("*.test", 5); "msil/test/M2/08-semantics" = @("*.test", 30); "msil/test/harness/equiv" = @("*.test", 10); "msil/test/harness/pipeline-obj" = @("*.test", 1) }; $bad = @(foreach ($k in $req.Keys) { $p = $r + $k; if (-not (Test-Path -LiteralPath $p)) { "missing: $k" } elseif (-not (Select-String -Quiet -SimpleMatch -LiteralPath $p -Pattern $req[$k])) { "no match for $($req[$k]) in $k" } }); foreach ($k in $min.Keys) { $n = @(Get-ChildItem -LiteralPath ($r + $k) -Filter $min[$k][0] -ErrorAction SilentlyContinue).Count; if ($n -lt $min[$k][1]) { $bad += "$k has $n $($min[$k][0]), needs $($min[$k][1])" } }; if ($bad.Count) { $bad; exit 1 }; "every M20 test is present"'  (G6)
+12. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param RUN_LLD_MAIN_TWICE=1" lld/test/MSIL  (LLD_IN_TEST=2, 5.9.1)
+13. pwsh -NoProfile -Command 'Set-Location D:/llvm-msil; $o = "C:/llvm-msil-scratch/milestones/M20/gate/il-after"; Remove-Item -Recurse -Force -LiteralPath $o -ErrorAction SilentlyContinue; python msil/utils/il-snapshot.py --build D:/llvm-msil/build --jobs 6 --out $o --compare C:/llvm-msil-scratch/milestones/M20/M20.f/il-baseline --llc-arg=-msil-reloc-loop-threshold=1000000000 --skip-changed msil/test/M1 llvm/test/CodeGen/MSIL; if ($LASTEXITCODE) { exit 1 }'  (loop out of reach: whole-program text and diagnostics equal HEAD's for every file M20 does not change; about 2.5 min)
+14. pwsh -NoProfile -Command '. D:/llvm-msil/msil/utils/build/msil-env.ps1; $b = "D:/llvm-msil/build/bin"; $z = "D:/llvm-msil/llvm/docs/MSIL/recon/p2/objfmt-binding-files/zoo"; $d = "C:/llvm-msil-scratch/gates/M20/two-tu"; Remove-Item -Recurse -Force -LiteralPath $d -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force $d | Out-Null; foreach ($t in "x86_64-pc-windows-msvc-msil", "x86_64-unknown-linux-gnu-msil") { $s = @(); if ($t -like "*linux*") { $s = @("--sysroot=C:/llvm-msil-scratch/linux-sysroot") }; foreach ($f in "a", "b") { & "$b/clang.exe" --target=$t -O2 -fcommon -c "$z/$f.c" -o "$d/$t-$f.o"; if ($LASTEXITCODE) { exit 1 } }; $o = "$d/$t-zoo.exe"; $plan = (& "$b/clang.exe" --target=$t @s "$d/$t-a.o" "$d/$t-b.o" -o $o "-###" 2>&1 | Out-String); if ($plan -notmatch "msil-ld" -or $plan -match "ilasm|lto-emit-asm") { $plan; "the link must run msil-ld only"; exit 1 }; & "$b/clang.exe" --target=$t @s "$d/$t-a.o" "$d/$t-b.o" -o $o; if ($LASTEXITCODE) { exit 1 }; $h = (& "$b/llvm-cil-dump.exe" --headers $o | Out-String); if ($h -notmatch "Format: PE32\+ machine=0x8664 exe" -or $h -notmatch "entrypoint=0x06") { $h; exit 1 } }; "zoo: two clang -c objects linked into EXE images by msil-ld, no ilasm"'
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_pipeline=obj --param msil_dotnet_runtime=10 --param msil_require_verify=1 --param msil_require_exec=1" msil/test/M2/08-semantics/zoo.test msil/test/M2/08-semantics/zoo-archive.test  (Windows .NET 10)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_pipeline=obj --param msil_runner=wsl --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_wsl_dotnet=private --param msil_dotnet_runtime=8 --param msil_require_verify=1 --param msil_require_exec=1" msil/test/M2/08-semantics/zoo.test msil/test/M2/08-semantics/zoo-archive.test  (WSL .NET 8, private runtime)
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3: Phase 1 through -S, M2 through objects, lld/test/MSIL, llc and clang tests; .NET 8 and Framework; 9-11 min)
+18. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_pipeline=obj --param msil_equiv=1 --param msil_dotnet_runtime=8 --param msil_native_oracle=required --param msil_run_netfx=1 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1" msil/test/M1  (the obj leg's parameters on M1 at -O0/-O2 with O3 and O6; the leg's M2 half, which repeats step 17's M2 and adds `spill-limits` (`msil_scale_tests=1`), runs post-commit; about 7 min)
+19. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg obj-wsl  (replaces wsl-quick: 11-programs and M2 through objects, WSL .NET 10, E7 oracle; about 4.5 min)
+20. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg det
+21. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins  (G5; no upstream file changes)
+22. pwsh -NoProfile -Command '$p = @(pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -List); $s = @(wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/ci/lit-legs.sh --list); $rc = $LASTEXITCODE; $p; $s; if ($rc -ne 0) { exit 1 }; if ($p -notcontains "obj" -or $p -notcontains "obj-wsl (-Wsl)" -or $s -notcontains "obj") { "leg obj or obj-wsl missing"; exit 1 }'
+23. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests llvm/tools/llvm-cil-dump llvm/tools/llvm-cil-copy clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (must print no diff)
+24. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M20"
+```
+
+**Exit criteria**
+- **Unit tests and whole-program output.** `CLITests` passes at least 210 tests with none skipped. With the loop out of reach, `-S` and llc text and diagnostics over msil/test/M1 and llvm/test/CodeGen/MSIL equal HEAD's for every file M20 does not change (step 13); at the default threshold only modules above 32 data relocations change. Whole-program output lays out named sections, `__start_`/`__stop_` and constructor slots as a one-object link does. Every FileCheck test passes.
+- **No ilasm.** Two `clang -c` objects link through msil-ld alone. The zoo exits 63 with its native transcript on .NET 8, .NET 10, Framework and WSL .NET 10/8. Outputs verify (D21) and are deterministic; O2 on msil-ld outputs runs right after the commit.
+- **M1, oracles and matrix.** M1 passes through objects at -O0/-O2 on .NET 8 and Framework against the native oracle, with O3 on the equivalence link and O6. M2 passes through objects on Windows and in WSL, with 11-programs. O4 holds on 07-equiv, sections and constructors included. LTO writes PEs (ThinLTO, partitions) and warns for each adapter. Every 5.9.16 row marked M20 matches native or stops with its named diagnostic on each pipeline it names, never a JIT-time or load-time exception.
+- **The rest.** Spill classes are pinned by `obj-spill` (`--msil-type-member-limit`) and run at real scale in the post-commit `obj` leg; data imports run on both OSes. lld/test/MSIL passes, also with `LLD_IN_TEST=2`. Record v1 is frozen by this commit (5.8.9; the section 12 freeze row gets this commit's date). The docs describe M20.
+
+**Review focus** (in addition to the three standing lenses)
+- **Token walker:** every operand class, including EH class tokens, local and `calli` signatures and user strings. Discarded comdat members and losing weak copies never reach the output, and their redirected sites are checked. LOCAL renaming survives the round trip. No hash or pointer order.
+- **Trailer and whole-program output:** `-S` is unchanged without sections and below the threshold; a one-object link equals `-S` under O3 with only the named normalizations; sections, start/stop symbols and constructor order come from the same lib/CLI code on both sides. Loop mode handles unaligned and 4-byte sites, slots, and Framework function pointers (M9).
+- **Q8:** exactly 5.9.8's table, with the object and LTO paths agreeing, warnings included.
+- **Sections:** constructor keys per triple. `__start_`/`__stop_` only off Windows. Named diagnostics for unsupported sections. Conservative gc roots. M12's diagnostic retired wherever it was pinned.
+- **Record v1:** gaps must be found before this commit freezes it (5.8.9).
+- **PE and tests:** Roslyn's envelope; per-type limits and 0xFFFF padding; Phase 1 flags; the stand-in confined. Tests are independent, pin 5.9.14's texts and justify every allow-list entry and `skip` line.
+
+**Rebuild cost.** A reconfigure (1-2 min), then 3 LLVMCLI and 3 CLITests TUs, about 16 MSIL target TUs, about 16 lldMSIL TUs (8 new) and 2 clang driver TUs, and relinks of llc, opt, clang, lld and its copies, CLITests, MSILTests, LLDAsLibAllTests and the two CLI tools: about 8-12 minutes and 60-100 MB on D:. The gate, without the build, takes about 29-31 minutes:
+
+| Steps | Minutes |
+|---|---|
+| G0, baseline, units, presence, lld twice | 2.5 |
+| il-snapshot | 2.5 |
+| no-ilasm and runtimes | 1 |
+| net8 | 9-11 |
+| obj on M1 | 7 |
+| obj-wsl | 4.5 |
+| det | 1 |
+| rest | 1.5 |
+
+5.12.10's M20 row has the same total. The O2 round trip on msil-ld outputs (`msil-lit.ps1 -LitArgs "-sv --param msil_pipeline=obj --param msil_roundtrip=1 --param msil_require_verify=1" msil/test/M1/11-programs msil/test/M2/07-equiv`) runs right after the commit, with the post-commit `run-m1-gate.ps1` (section 11); a failure becomes a fix WP of M21 through a section 12 row. If the measured gate exceeds 30 minutes, step 16 (WSL .NET 8 zoo) and then step 19 (obj-wsl, replaced by wsl-quick) move to the post-commit run through a section 12 row. The orchestrator runs `run-m1-gate.ps1` in full after this commit (5.12.10), with the full `obj` (M2 and `spill-limits` included), `lto`, `net10`, `wsl-net10`, `roundtrip` and `expected-linux` legs.
+
+### M21. BCL reference binding
+
+**Goal.** msil-ld binds every .NET type and member of its output by searching reference assemblies, as Roslyn does (P2B-3; brief Q9-Q11; plan 5.11). `--reference=<file|dir>` and positional managed `.dll` inputs without the toolchain symbol table form a lazily indexed reference set with identities from Assembly rows. The rest is 5.11.3-5.11.6: the core-library rule, binding by definition only (ambiguity and forwarded-to-missing are errors; never a facade), members matched by full signature with their custom modifiers copied, AssemblyRefs in first-use order from the defining Assembly rows, and `System.Type` attribute arguments rewritten as assembly-qualified names. Requests carry Q11's strength. Without references, the built-in `[mscorlib]` table (Q10) binds the mscorlib-safe `BCLMembers.def` entries to mscorlib 4.0.0.0 and replaces M20's interim rule with byte-identical output, so O3 keeps holding; `check-mscorlib-safe.py` proves every entry on four runtimes. The data-import helper uses `NativeLibrary` when the references define it (5.10.12). `-S`, llc and `--lto-emit-asm` text keep `[mscorlib]` (5.11.8), and objects and record v1 do not change. The legs `refs-net48`, `refs-net8` and `refs-net10` run `M1/11-programs`, `M2/00-link` and `M2/05-refs` through objects.
+
+**Depends on:** M20 (object inputs, `TokenMap` with its BCL `TokenTarget`, the trailer sink in `Synthetic.cpp`, the BCL stand-in in `Writer.cpp`, which M21.b replaces, `cli::DataImportHelper` and its choice in `Relocations.cpp`, the `obj` pipeline, `msil-equiv.py` with `scopes`, `--msil-type-member-limit`, and the lld tests that pin M20's texts; if M20's commit moved the stand-in into files M21.b does not own, the orchestrator adds forward grants first), M18 (`BCLMembers.def`/`.h`), M17 (`MetadataReader`, `computePublicKeyToken`, `SymbolTableType`), M16 (signatures with modifiers, the custom-attribute codec, `cli::AssemblyIdentity`), M15 (managed-DLL detection, `--dep`). Every WP reads the section 12 row of 2026-10-21 that amends D10. M21's roles are in 5.6.6 and 5.6.9 (M21.a, a root, owns `BCLBinder.h`; M21.d owns all of `lld/test/MSIL/`), `createManagedLibraryFile` and `--print-bcl-table` in 5.9.4 and 5.11.1, optional requests through `--print-bcl-binding` in 5.11.5, the refs legs on `obj` in 5.12.2 and 5.12.11, and the `NativeLibrary` helper in 5.10.12.
+
+**Header changes:**
+- `llvm/include/llvm/CLI/BCLMembers.def` (entries appended after M18's and M20's ids) and `llvm/include/llvm/CLI/Trailer.h` (`DataImportHelper::Kind` gains `NativeLibrary`): the MSIL target TUs that include them (about 8), lib/CLI's `Trailer.cpp` and lldMSIL recompile; existing ids and every `-S` text stay unchanged.
+- otherwise lld/MSIL-local headers only
+
+Roles (5.6.6, 5.6.9): M21.a lld-refs (root), M21.b lld-bcl, M21.c harness, M21.d bcl-tests, M21.e exec-tests, M21.f docs. M21.a and M21.c-d start at once; M21.b waits for M21.a, M21.e for M21.c (5.6.1 rule 7).
+
+**Work packages**
+
+#### M21.a Reference inputs: --reference, the reference set, identities, core library, the binder header (implement, ~1,050 lines)
+
+- Owned files: `lld/MSIL/ReferenceSet.h`, `lld/MSIL/ReferenceSet.cpp`, `lld/MSIL/AssemblyFiles.h`, `lld/MSIL/AssemblyFiles.cpp`, `lld/MSIL/BCLBinder.h`, `lld/MSIL/InputFiles.h`, `lld/MSIL/InputFiles.cpp`, `lld/MSIL/Options.td`, `lld/MSIL/Config.h`, `lld/MSIL/Driver.cpp`, `lld/MSIL/CMakeLists.txt`
+- Reads: this plan sections 5.6.1, 5.6.6, 5.7.2, 5.7.3, 5.7.8, 5.9.2-5.9.4, 5.9.14, 5.11.1-5.11.5, 5.11.7-5.11.9 and the section 12 rows for M21; llvm/docs/MSIL/recon/p2/bcl-binding.md sections 2.1-2.3, 3.3, 4.1-4.5, 5.2-5.4, 5.12, 6.1 and 7.2; llvm/docs/MSIL/recon/p2/bcl-binding-files/tool/Program.cs (loading, identities, core library, forwarders); lld/MSIL/; llvm/include/llvm/CLI/MetadataReader.h; llvm/include/llvm/CLI/MetadataBuilder.h (cli::AssemblyIdentity); llvm/include/llvm/CLI/SymbolTable.h; llvm/include/llvm/CLI/BCLMembers.h; llvm/include/llvm/CLI/Signature.h; lld/wasm/Options.td (EEq)
+- Provides:
+  - options: `--reference=<path>`/`--reference <path>` (EEq, repeatable, no short form), `--print-bcl-table`, and the hidden, repeatable `--print-bcl-binding=<request>`;
+  - state: `Config::references`, and `Ctx::references` (`std::unique_ptr<ReferenceSet>`, reset by `Ctx::reset()`);
+  - in `AssemblyFiles.h`: `ReferenceAssemblyFile` (one mapped file and its `cli::MetadataReader`, 5.9.2, 5.11.2) with `getIdentity()` (5.11.2's `lld::msil::AssemblyIdentity`), `getPublicKeyToken()`, `getReader()`, `getPath()` and `isReferenceAssembly()`, `bool isToolchainLibrary(const cli::MetadataReader &)` and `InputFile *createManagedLibraryFile(MemoryBufferRef)` (5.9.4, 5.11.1; M22.c implements it for real);
+  - in `ReferenceSet.h`: 5.11.2's `AssemblyIdentity` (lld::msil's, with the public-key token; 5.7.6's `cli::AssemblyIdentity` carries the key) and `ReferenceSet` with `addPath(StringRef, bool Explicit)`, `empty()`, `coreLibrary()` (`Expected<const ReferenceAssemblyFile *>`) and `findType(StringRef Ns, StringRef Name) -> TypeCandidates` (definitions as `const ReferenceAssemblyFile *` + TypeDef token, forwarders with their destination name);
+  - `BCLBinder.h` exactly as item (1).
+
+(1) **`BCLBinder.h`** (root header, 5.6.1 rule 7; M21.b implements it). 5.11.5's `RequestStrength`, `BCLRequest` and `BCLBinder`, with:
+- `BCLRequest` fields: 5.11.5's kind, strength, switch and requester, then `StringRef Namespace, Name` (nested as `Outer/Inner`; a `TypeName` request holds the whole string in `Name`), `StringRef Member`, `std::optional<cli::MethodSig> MethodSignature` (methods, attribute constructors), `std::optional<cli::TypeSig> FieldOrSpec` (fields, type specs) and `SmallVector<cli::TypeSig, 0> Args` (method specs). TypeRef values in them are output TypeRef, TypeDef or TypeSpec tokens (`EntityHandle::Value`, final for those tables, 5.7.2), such as the binder returned for earlier requests.
+- `BCLBinder` members: the constructor `BCLBinder(const ReferenceSet &, cli::MetadataBuilder &)`, a destructor, `Expected<std::optional<cli::EntityHandle>> bind(const BCLRequest &)` (5.11.5), `bool isDefined(const BCLRequest &)`, `Expected<cli::EntityHandle> bindType(StringRef Ns, StringRef Name)`, `Expected<cli::EntityHandle> bindMember(cli::BCLMemberId)`, `Error rewriteAttributeBlob(const cli::MethodSig &Ctor, ArrayRef<uint8_t> In, SmallVectorImpl<uint8_t> &Out)` and `void printBinding(StringRef Request, raw_ostream &)`. The state is `struct Impl; std::unique_ptr<Impl> I;`, which `BCLBinder.cpp` defines, so M21.b never edits the header.
+- The free function `void printBuiltinBCLTable(raw_ostream &)`.
+
+If M21.b needs another public declaration, it asks through an outside-ownership request (section 1.7a).
+
+(2) **Options** per 5.11.1; `-r` stays M14's error. `--print-bcl-table` needs no input and calls `printBuiltinBCLTable(outs())`. Each `--print-bcl-binding` builds a `BCLBinder` over `ctx.references` and a scratch `cli::MetadataBuilder`, then calls `printBinding`.
+
+(3) **Inputs** (5.9.4). A PE with a CLI header and an Assembly row is classified in the driver, in command-line order:
+- without the toolchain table it is a reference (`ReferenceAssemblyFile`, as `--reference`);
+- with it (`isToolchainLibrary`: a `uint8[]` attribute of class `SymbolTableType` on the Assembly row) the driver calls `createManagedLibraryFile`. In M21 that reports `<path>: linking .NET libraries built by this toolchain is not supported yet` and returns null. M22.c makes it return a `ManagedLibraryFile`, and M22's `-l` search uses the same call.
+
+This replaces `.NET assembly inputs are not supported yet`. Every file is read through the driver, so `--reproduce` keeps it.
+
+(4) **`addPath`.** A directory contributes its `*.dll` files with a CLI header, not recursively; other files are skipped silently. An explicit file without a CLI header is `<path>: not a .NET assembly`. A toolchain library under `--reference` gives the warning `<path> is a library built by this toolchain; pass it as a link input instead` and is skipped. Loading is lazy (5.11.2): the reader, the Assembly row, public TypeDef names (nested ones as `Outer/Inner`, public only when every enclosing type is nested-public) and ExportedType names (top-level forwarders carry 0x00200000; nested ones chain through their enclosing ExportedType). No member table is decoded.
+
+(5) **Identities.** The Assembly row plus the token from `computePublicKeyToken`. The same normalized path twice is ignored. Duplicate identities and same-name conflicts follow 5.11.2, with 5.11.9's texts.
+
+(6) **`coreLibrary()`** (5.11.3) is computed once. A candidate that only forwards `System.Object` is named `(facade, forwards System.Object to <name>)` in the error.
+
+(7) **`findType`** returns every public definition; ambiguity is the binder's error. `--lto-emit-asm` links load the references and check the core-library rule, and bind nothing (5.11.8).
+
+(8) **`CMakeLists.txt`** adds `ReferenceSet.cpp`, `AssemblyFiles.cpp` and `BCLBinder.cpp`.
+
+Checks: `msil-syntax.ps1` over every owned `.cpp` (they include `BCLBinder.h`). `BCLBinder.cpp` exists only after M21.b, so the private build and the reference-set checks are M21.b's.
+
+#### M21.b The binder, the built-in mscorlib table and binding in the writer (implement, ~1,300 lines)
+
+- Owned files: `lld/MSIL/BCLBinder.cpp`, `llvm/include/llvm/CLI/BCLMembers.def`, `llvm/include/llvm/CLI/Trailer.h`, `llvm/lib/CLI/Trailer.cpp`, `lld/MSIL/TokenMap.h`, `lld/MSIL/TokenMap.cpp`, `lld/MSIL/Synthetic.h`, `lld/MSIL/Synthetic.cpp`, `lld/MSIL/Relocations.h`, `lld/MSIL/Relocations.cpp`, `lld/MSIL/Writer.h`, `lld/MSIL/Writer.cpp`
+- Depends on: M21.a
+- Reads: this plan sections 5.6.6, 5.7.1-5.7.4, 5.7.6, 5.7.8, 5.7.12, 5.9.7, 5.9.10, 5.9.12, 5.10.12 and 5.11, section 6 M18 and M20 (M20.a's DataImportHelper, M20.c's stand-in), the M21.a text above and the section 12 rows for M21; llvm/docs/MSIL/recon/p2/bcl-binding.md sections 1.1-1.3, 2.4, 3.4, 4.3-4.5 and 5.1-5.11; llvm/docs/MSIL/recon/p2/bcl-binding-files/tool/Program.cs (FindMember); llvm/docs/MSIL/recon/p2/bcl-binding-files/runtime/rebind.py; llvm/docs/MSIL/recon/p2/bcl-binding-files/roslyn/uco-blob.txt; llvm/include/llvm/CLI/BCLMembers.h; llvm/include/llvm/CLI/Signature.h; llvm/include/llvm/CLI/CustomAttribute.h; llvm/include/llvm/CLI/Trailer.h; lld/MSIL/
+- Provides:
+  - the implementation of M21.a's `BCLBinder.h` (`BCLBinder::Impl`, every member, `printBuiltinBCLTable`);
+  - the `BCLMembers.def` entries `NativeLibrary`, `NativeLibrary_Load` and `NativeLibrary_GetExport` (`Object` is M20.a's);
+  - `cli::DataImportHelper::Kind::NativeLibrary`.
+
+(1) **Requests** (5.11.5) come from three places. All are Required; only `--print-bcl-binding` makes optional ones (5.11.5).
+- Object TypeRefs scoped to `msil.bcl`, or to any AssemblyRef other than `msil.extern` and `msil.link`, bound by name, plus the MemberRefs on them.
+- msil-ld's own code: the trailer's `getBCLMember`, `System.ValueType` for `'<msil>image_t'`, and `System.Object` for spill classes.
+- The data-import helper's capability query.
+
+(2) **Lookup** with references (5.11.3-5.11.4). The core-library check comes first. A type binds when exactly one definition exists, in either reference order. Nested types bind through their enclosing TypeRef, and every type of a bound signature, modifiers included, binds transitively. Members are matched by name, then calling convention, generic arity, parameter count, return type and parameter types. Modifiers are ignored for matching and copied into the emitted signature. Base types are searched, keeping the requested parent; only public members count. `[Obsolete]` gives the warning `'<member>' is obsolete in <identity>`, and `[RequiresPreviewFeatures]` the error `'<member>' requires preview features`. Every other failure uses 5.11.9's texts. A missing optional member gives `std::nullopt` and 5.11.5's `--verbose` note.
+
+(3) **Emission** (5.11.6). AssemblyRef rows come from the defining Assembly row (Flags 0, the 8-byte token, empty HashValue), in first-use order. MemberRef signatures are the definition's blob, re-encoded with `mapTypeRefs`. The binder is the only producer of BCL AssemblyRefs, and the output depends only on the reference set.
+
+(4) **`Type` arguments.** `rewriteAttributeBlob` decodes a blob, binds every `Type` value (boxed and array values included, parsed as `Ns.Name[+Nested][, assembly part]` with the assembly part ignored) and writes `Ns.Name[+Nested], <Name>, Version=<a.b.c.d>, Culture=neutral, PublicKeyToken=<hex|null>`, the form of `uco-blob.txt`. `TokenMap` applies it to every attribute it copies.
+
+(5) **Built-in table** (5.11.7, D10). The rows are exactly those M20 wrote, so outputs stay byte-identical. `printBuiltinBCLTable` prints each mscorlib-safe entry in `.def` order as `type ` or `method ` plus `printBCLMemberRef(..., "mscorlib")` (5.11.1).
+
+(6) **Writer.** One binder per output, created after inputs and LTO and before rows, replaces M20's stand-in:
+- `TokenMap`'s BCL targets go through it (5.9.7), and an AssemblyRef other than the placeholders binds by name instead of M20's `needs --reference` error.
+- `Synthetic.cpp`'s `getBCLMember` calls `bindMember`.
+- Spill classes extend the bound `System.Object`.
+
+The data-import helper (5.10.12, M20's `cli::DataImportHelper`) gains Kind `NativeLibrary`, with the body `ldarg.0`, `call NativeLibrary::Load(string)`, `ldarg.1`, `call GetExport(native int, string)`, `ret` (both members throw on failure). `Relocations.cpp` chooses it when `isDefined` holds for both members, ahead of M20's Kernel32 and Dlfcn choice, which stays otherwise.
+
+(7) **`BCLMembers.def`.** Append `NativeLibrary` (`System.Runtime.InteropServices`), `NativeLibrary_Load` (`native int`, params `string`) and `NativeLibrary_GetExport` (`native int`, params `native int, string`): Required, no fallback, not mscorlib-safe. M18's unit tests must still pass; a pinned entry count goes to a fix-loop grant.
+
+(8) **`--print-bcl-binding`** requests are `type:<Ns>.<Name>[/<Nested>]`, `member:<BCLMemberId>[:drop|:substitute]` or `typename:<name>`. Each prints `<request> -> <result>`: the bound type, the MemberRef text, the assembly-qualified name, `omitted`, `helper '<symbol>'`, or the error text.
+
+Checks:
+- `msil-syntax.ps1`, then a private `lld.exe` under `C:\llvm-msil-scratch\milestones\M21\M21.b\` (with M21.a's files).
+- Reference sets: over the Framework `v4.8` directory the core library is `mscorlib`; over the newest 8.x and 10.x packs it is `System.Runtime`, and the net8 pack indexes in under 0.5 s without decoding any member table.
+- The M1 11-programs objects at -O0/-O2 in scratch, linked:
+  - with no reference: byte-identical to the shared build's (HEAD's msil-ld);
+  - with net48: canonically equal;
+  - with net8 and net10: the AssemblyRefs of bcl-binding 1.2.
+- Each run on .NET 8, .NET 10 and Framework 4.8.
+
+#### M21.c Harness: reference legs, check-mscorlib-safe.py, the PEVerify skip, the CI package (infra, ~700 lines)
+
+- Owned files: `msil/test/lit.cfg.py`, `msil/utils/msil-verify.py`, `msil/utils/check-mscorlib-safe.py`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/utils/tools/msil-tools.proj`, `.github/workflows/msil-ci.yml`, `msil/test/harness/ref-flags.test`, `msil/test/harness/skip-peverify.test`, `msil/test/harness/prog/`
+- Reads: this plan sections 5.6.1, 5.6.9, 5.11.7, 5.11.10, 5.12.1-5.12.6 and 5.12.10-5.12.12 and the section 12 rows for M21; llvm/docs/MSIL/recon/p2/tests-p2.md sections 3.6 and 6.1; llvm/docs/MSIL/recon/p2/bcl-binding.md sections 2.1, 2.4, 3.5 and 9; llvm/docs/MSIL/recon/p2/bcl-binding-files/tool/mscorlib_safe.py; msil/test/lit.cfg.py; msil/test/harness/prog/; msil/utils/msil-verify.py; msil/utils/msil-run.py; msil/utils/ci/lit-legs.ps1; msil/utils/ci/lit-legs.sh; msil/utils/tools/msil-tools.proj; .github/workflows/msil-ci.yml
+- Provides:
+  - lit parameter `msil_references` (`none`, `net48`, `net8`, `net10` or a path), feature `msil-ref=<name>`, placeholder `%{msil_ref_flags}` (inside `%{msil_ldflags}`);
+  - `%{msil_ref_dir_net48}`, `%{msil_ref_dir_net8}` and `%{msil_ref_dir_net10}`, with features `msil-refpack=<name>`;
+  - `%msil_check_mscorlib_safe` and `python msil/utils/check-mscorlib-safe.py --msil-ld <path> --out <dir> [--table <file>] [--ilasm <path>] [--runtimes netfx,net8,net10,wsl-net10] [--self-test]`;
+  - `msil-verify.py --skip-peverify REASON`;
+  - legs `refs-net48`, `refs-net8` and `refs-net10`;
+  - msil-tools.proj property `MsilNet48RefAssembliesVersion` (1.0.3, already in the NuGet cache).
+
+(1) **lit.cfg.py.** Packs: the Framework `v4.8` reference directory (on Linux, the net48 NuGet package's `build/.NETFramework/v4.8`), and the newest `Microsoft.NETCore.App.Ref` 8.x and 10.x `ref/net<N>.0`. `%{msil_ref_flags}` (`-Wl,--reference=<dir>`) joins `%{msil_ldflags}` (5.12.3), so it reaches the MSIL side of every link and never the native oracle. `msil_references` other than `none` with `msil_pipeline=asm` is a configuration error. With references, O3 runs with `--allow scopes`. For net8 and net10, `%msil_verify` skips PEVerify with the reason `bound to .NET <n> references` (bcl-binding 3.5).
+
+(2) **`check-mscorlib-safe.py`** (5.11.7). It takes the table from `--print-bcl-table` (or `--table`) and writes a probe that touches every entry through `[mscorlib]` (`ldtoken` of the type, method or field, in a method that `Main` calls; exit 42). It assembles the probe with Framework ilasm and runs it through msil-run.py on each runtime. It fails with the exception and the entry. `--self-test`: `MathF::Sqrt` fails on Framework, and Phase 1's six entities pass.
+
+(3) **Legs** (5.12.11), all `msil_pipeline=obj`, over `msil/test/M1/11-programs msil/test/M2/00-link msil/test/M2/05-refs`:
+- `refs-net48`: `msil_references=net48 msil_equiv=1 msil_run_netfx=1`;
+- `refs-net8`: `msil_references=net8 msil_dotnet_runtime=8`;
+- `refs-net10`: `msil_references=net10 msil_dotnet_runtime=10`.
+
+They go into both scripts and their headers; `lit-legs.sh --list` equals its header.
+
+(4) **CI.** msil-tools.proj gains a `PackageDownload` of `Microsoft.NETFramework.ReferenceAssemblies.net48` (test tooling, 5.12.12). msil-ci.yml's Linux job exports its `v4.8` directory as `MSIL_REF_NET48`.
+
+(5) **Self-tests.** `ref-flags.test`: a stand-in msil-ld records its arguments; the flags reach MSIL links only; asm with references is an error. `skip-peverify.test`.
+
+(6) **`harness/prog/`** (5.6.1 rule 6). Its self-tests pin the `%{msil_ldflags}` expansion. Update them: the expansion is unchanged under `msil_references=none`, and with `net48` the MSIL link gains `-Wl,--reference=<dir>` while the native build does not.
+
+Checks: msil/test/harness (stand-in tools only); `lit-legs.ps1 -List`, and `bash -n` plus `--list` in WSL; `--self-test`; a run with `--table` holding Phase 1's six entities.
+
+#### M21.d msil-ld binding tests over synthetic reference sets; retired lld texts (test, ~1,350 lines)
+
+- Owned files: `lld/test/MSIL/`
+- Reads: this plan sections 2, 5.6.1, 5.7.10, 5.9.3, 5.9.4, 5.9.14, 5.10.12 and 5.11, the M21.a and M21.b text above, and the section 12 rows for M21; llvm/docs/MSIL/recon/p2/bcl-binding.md sections 3.4, 4.2-4.5, 5 and 7.5; llvm/docs/MSIL/recon/p2/bcl-binding-files/fakepack/; llvm/docs/MSIL/recon/p2/bcl-binding-files/resolve-edge.txt; llvm/docs/MSIL/recon/p2/bcl-binding-files/tool/; lld/test/MSIL/; llvm/test/tools/llvm-cil-dump/ (yaml2obj inputs); lld/test/lit.cfg.py; `git show HEAD:llvm/include/llvm/CLI/BCLMembers.def` (M18's and M20's entries; the working-tree file is M21.b's)
+- Provides: the 15 `bcl-*.test` files below; `lld/test/MSIL/Inputs/fakepack/` (sources and `gen.py`; M22's tests reuse it); the updated earlier tests
+
+Write these from the specification only; do not read M21.a or M21.b. This WP owns all of `lld/test/MSIL/` (5.6.1 rule 6).
+
+**Retired texts.** Update every earlier test that pins them:
+- `<path>: .NET assembly inputs are not supported yet` (a positional managed `.dll`; M14's and M20's input tests): it is now a reference, and the case shows the binding;
+- `<file>: reference to assembly '<n>' needs --reference, which this msil-ld does not support yet` (M20's object tests): it now binds by name against a fake pack, and without references a request outside the built-in table gives 5.11.7's `pass --reference=<reference assemblies>` text;
+- any test that used `--reference` or `--print-bcl-table` as an unknown option.
+
+No file under `lld/test/MSIL/` keeps the first two texts, not even in a `CHECK-NOT` (gate step 9 searches for them).
+
+**Inputs.**
+- Fake reference sets are yaml2obj YAML generated once in scratch from ilasm-built assemblies. A non-`mscorlib` core library needs csc `-nostdlib` (bcl-binding 7.5).
+- The `.il`/`.cs` sources and `Inputs/fakepack/gen.py` are committed; no binary is.
+- Objects come from `llc -filetype=obj` over IR with a variable-length memmove, a fence, data with a relocation and `main(int, char **)`, so every Phase 1 BCL member is requested.
+- Check outputs with `llvm-cil-dump --tables`/`--canonical` (5.7.10), and errors with `--implicit-check-not="PLEASE submit"`.
+
+**Coverage**, one file each:
+- **`bcl-reference-option`**: both spellings, file and directory, a skipped non-metadata file, `not a .NET assembly`, the same path twice, `-r`, positional equal to `--reference`, the toolchain-library warning under `--reference`, the positional toolchain-library error (a fake-pack image with the `uint8[]` `SymbolTableType` attribute), and `--print-bcl-table`'s exact lines: one per mscorlib-safe entry of `BCLMembers.def` in `.def` order, that is M18's (System.ValueType, the owner types, the five Phase 1 methods), M20's (`Marshal_StringToHGlobalUni`, `EntryPointNotFoundException_ctor` and its type, and `System.Object`), and no `NativeLibrary` line.
+- **`bcl-identity`**: duplicate identities; another version or token; the warning for an implementation assembly that binds `System.Private.*`.
+- **`bcl-corlib`**: none (a facade only), two, and a candidate with an AssemblyRef.
+- **`bcl-types`**: one definition; two definitions in both orders; non-public and nested-private definitions ignored; nested; generic-arity names.
+- **`bcl-forwarders`**: in the set, the destination binds with its own Assembly-row version, not 0.0.0.0; forwarded to a missing assembly; nested forwarders.
+- **`bcl-members`**: return-type overloads, the overload list in the error, a base-type member with the derived parent, static versus instance, Obsolete, RequiresPreviewFeatures.
+- **`bcl-modifiers`**: a `modreq(InAttribute)` and a `modopt` copied, and `InAttribute` bound.
+- **`bcl-emission`**: the AssemblyRef columns, first-use order, no row for an unused reference, nested scopes, deduplication.
+- **`bcl-order`**: permuted references give `cmp`-equal PEs.
+- **`bcl-builtin`**: one `mscorlib` 4.0.0.0 `b77a5c561934e089` row; `member:NativeLibrary_Load` gives the table error.
+- **`bcl-strength`**: against a pack without `MemoryBarrier`: `:drop`, `:substitute` and Required.
+- **`bcl-typename`**: nested `+`, an ignored assembly part, unknown, and `PublicKeyToken=null`.
+- **`bcl-dataimport`**: a native data import (M15's `Inputs/native`) uses `NativeLibrary` only when the pack defines it.
+- **`bcl-lto-emit-asm`**: `[mscorlib]` text, and a bad set fails.
+- **`bcl-reproduce`**: the tar lists every reference read.
+
+Record which RUN lines fail before the gate's build.
+
+#### M21.e Execution tests with the real reference packs (test, ~700 lines)
+
+- Owned files: `msil/test/M2/05-refs/`
+- Depends on: M21.c
+- Reads: this plan sections 5.5, 5.7.10, 5.11.6-5.11.10 and 5.12.1-5.12.6, the M21.c text above and the section 12 rows for M21; llvm/docs/MSIL/recon/p2/bcl-binding.md sections 1.2, 2.2, 3.1-3.3 and 5.10; llvm/docs/MSIL/recon/p2/bcl-binding-files/runtime/ (p1prog.c, results.md, results-wsl.md); msil/test/M2/00-link/; msil/test/M2/03-native/; msil/test/Inputs/msil_test.h; `git show HEAD:msil/test/lit.cfg.py` (M20's composites; M21.c's additions are its text above)
+- Provides: `msil/test/M2/05-refs/` with `mscorlib-safe.test` (5.11.7) and the tests below
+
+Write these from the specification only. The format is 5.12.5's, with plan 5.5's rules, and `.expected` files come from update-expected.py. A test with its own references `REDEFINE`s `%{msil_ref_flags}`. At least 10 `.test` files:
+- **`mscorlib-safe`**: `%msil_check_mscorlib_safe`.
+- **`p1prog`**: bcl-binding's `p1prog.c`, in every leg.
+- **`rows-none`** (`REQUIRES: msil-ref=none`): one `mscorlib` 4.0.0.0 `b77a5c561934e089` row.
+- **`rows-net8`**: `System.Runtime`, `System.Runtime.InteropServices`, `System.Threading` 8.0.0.0 `b03f5f7f11d50a3a` in first-use order; runs on .NET 8; on Framework, FileCheck of `[unhandled exception: System.IO.FileNotFoundException]`.
+- **`rows-net10`**: on .NET 8 it fails with FileNotFoundException.
+- **`net48-equals-none`**: equal `%msil_canon`.
+- **`positional-pack`**: `cmp`-equal to `--reference`.
+- **`facade-only`** and **`two-corlibs`**: through `%{msil_prog_fail_O2}`.
+- **`dataimport-nativelibrary`**: M20's `03-native` data symbol, read through `NativeLibrary` on .NET 8 and WSL .NET 10.
+
+The tests pass only after the gate's build.
+
+#### M21.f Documentation (docs, ~300 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`
+- Depends on: M21.a, M21.b, M21.c, M21.d, M21.e
+- Reads: this plan section 6 M21, sections 5.11 and 5.12 and the section 12 rows for M21; llvm/docs/MSIL/recon/p2/bcl-binding.md sections 0, 3.3 and 5.10; the four owned files
+- Provides: the M21 text of the four documents
+
+From the hand-overs.
+- **Status.md:** references and the built-in table, diagnostics, where bound outputs run, PEVerify skipped for .NET 8+ bindings, optional requests reserved for P3, test counts.
+- **GettingStarted.md:** `-Wl,--reference=` for the Framework `v4.8` directory and the net8 and net10 packs, positional `.dll` references, `--print-bcl-table`, the refs legs and the script.
+- **READMEs:** the same.
+
+Design.md stays untouched.
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '$f = (Get-PSDrive D).Free / 1GB; "D: has {0:N1} GB free" -f $f; if ($f -lt 8) { "below 8 GB: report to the user before building (plan 5.6.11)"; exit 1 }'
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0, idempotent)
+ 3. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0, idempotent)
+ 4. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: every target of msil/utils/ci/build-targets.txt, the Build targets line above; CMake regenerates for the new lld/MSIL sources)
+ 5. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe
+ 6. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=*MSIL*
+ 7. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*
+ 8. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 210
+ 9. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $bad = @(); $n = @(Get-ChildItem -LiteralPath ($r + "lld/test/MSIL") -Filter "bcl-*.test").Count; if ($n -lt 15) { $bad += "lld/test/MSIL has $n bcl-*.test files, needs 15" }; $n = @(Get-ChildItem -LiteralPath ($r + "msil/test/M2/05-refs") -Filter *.test -ErrorAction SilentlyContinue).Count; if ($n -lt 10) { $bad += "msil/test/M2/05-refs has $n .test files, needs 10" }; $req = [ordered]@{ "lld/MSIL/ReferenceSet.cpp" = "coreLibrary"; "lld/MSIL/BCLBinder.h" = "printBinding"; "lld/MSIL/BCLBinder.cpp" = "printBuiltinBCLTable"; "lld/MSIL/AssemblyFiles.h" = "createManagedLibraryFile"; "llvm/include/llvm/CLI/BCLMembers.def" = "NativeLibrary_GetExport"; "lld/test/MSIL/Inputs/fakepack/gen.py" = "yaml"; "msil/test/M2/05-refs/mscorlib-safe.test" = "msil_check_mscorlib_safe"; "msil/utils/check-mscorlib-safe.py" = "--self-test"; "msil/utils/msil-verify.py" = "--skip-peverify"; "msil/test/harness/ref-flags.test" = "msil_ref_flags"; "msil/test/harness/skip-peverify.test" = "PEVerify skipped"; "msil/utils/tools/msil-tools.proj" = "MsilNet48RefAssembliesVersion" }; foreach ($k in $req.Keys) { $p = $r + $k; if (-not (Test-Path -LiteralPath $p)) { $bad += "missing: $k" } elseif (-not (Select-String -Quiet -SimpleMatch -LiteralPath $p -Pattern $req[$k])) { $bad += "no match for $($req[$k]) in $k" } }; $old = @(Get-ChildItem -LiteralPath ($r + "lld/test/MSIL") -Recurse -File | Select-String -SimpleMatch -List -Pattern ".NET assembly inputs are not supported yet", "which this msil-ld does not support yet" | ForEach-Object { $_.Path }); if ($old.Count) { $bad += "retired text still pinned: $($old -join ", ")" }; if ($bad.Count) { $bad; exit 1 }; "every M21 file is present"'  (G6: lit only warns about a missing path; no lld test keeps a retired text)
+10. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param RUN_LLD_MAIN_TWICE=1" lld/test/MSIL  (LLD_IN_TEST=2: the reference set and the binder are reset per link)
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1" msil/test/harness/ref-flags.test msil/test/harness/skip-peverify.test msil/test/harness/prog
+12. python D:/llvm-msil/msil/utils/check-mscorlib-safe.py --msil-ld D:/llvm-msil/build/bin/msil-ld.exe --out C:/llvm-msil-scratch/milestones/M21/gate/mscorlib-safe  (every built-in entry on Framework 4.8, .NET 8, .NET 10 and WSL .NET 10)
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3: lld/test/MSIL, every FileCheck directory, M1 asm, M2 incl. 05-refs, harness; .NET 8 and Framework; 10-11 min)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-quick  (G4; about 4 min)
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg refs-net48  (obj pipeline with the Framework reference assemblies, O3 with scopes, .NET 8 and Framework; about 2 min)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg refs-net8  (PEVerify skipped; .NET 8; about 2 min)
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg refs-net10  (.NET 10; about 2 min)
+18. pwsh -NoProfile -Command ". D:/llvm-msil/msil/utils/build/msil-env.ps1; python D:/llvm-msil/msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check D:/llvm-msil/msil/test/M2/05-refs"  (Windows native oracle)
+19. pwsh -NoProfile -Command ". D:/llvm-msil/msil/utils/build/msil-env.ps1; python D:/llvm-msil/msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --os linux --check D:/llvm-msil/msil/test/M2/05-refs"  (E7 Linux oracle)
+20. pwsh -NoProfile -Command '$p = @(pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -List); $s = @(wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/ci/lit-legs.sh --list); $rc = $LASTEXITCODE; $p; $s; if ($rc -ne 0) { exit 1 }; foreach ($n in "refs-net48", "refs-net8", "refs-net10") { if (-not ($p -match "^$n\b") -or -not ($s -match "^$n\b")) { "leg $n missing"; exit 1 } }'
+21. pwsh -NoProfile -Command '$v = "$(dotnet msbuild D:/llvm-msil/msil/utils/tools/msil-tools.proj -getProperty:MsilNet48RefAssembliesVersion)".Trim(); "MsilNet48RefAssembliesVersion = $v"; if ($v -ne "1.0.3") { exit 1 }'  (evaluation only; nothing is restored)
+22. python -c "import yaml; yaml.safe_load(open('D:/llvm-msil/.github/workflows/msil-ci.yml', encoding='utf-8'))"  (msil-ci.yml still parses)
+23. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins  (G5; no upstream file changes)
+24. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests llvm/tools/llvm-cil-dump llvm/tools/llvm-cil-copy clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (must print no diff)
+25. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M21"
+```
+
+**Exit criteria**
+- **With references**, BCL rows bind by 5.11.3-5.11.6: 5.11.9's diagnostics, modifiers copied, identities from Assembly rows, first-use order, independent of reference order. The 15 `bcl-*.test` and the updated earlier lld tests pass, also with `LLD_IN_TEST=2`, and no lld test pins a retired text.
+- **Without references**, the built-in table gives byte-identical outputs. `check-mscorlib-safe.py` passes every entry on Framework 4.8, .NET 8, .NET 10 and WSL .NET 10, and a request outside the table names `--reference`.
+- **The three refs legs** pass:
+  - net48: .NET 8 and Framework, O3 equal up to `scopes`;
+  - net8 and net10: their runtimes, ILVerify clean, PEVerify skipped with its reason.
+
+  Negative runtime cases print the expected exception.
+- **Data imports** use `NativeLibrary` exactly when the references define it.
+- **Unchanged.** `-S`, llc and `--lto-emit-asm` text, objects and the record do not change. CLITests keep M20's floor of 210; net8, wsl-quick and manifest/pins stay green; the docs describe M21.
+
+**Review focus** (in addition to the three standing lenses)
+- Roslyn parity: definitions only, never a facade; no version unification; versions from the defining Assembly row; real tokens.
+- Signature matching includes return type, calling convention and generic arity, and copies modifiers; types in bound signatures bind transitively.
+- The set stays lazy at pack scale, and nothing depends on reference order or hash order.
+- The built-in table is byte-identical to M20's output, and each of its entries is proven by a run.
+- `BCLBinder.h` matches item (1) of M21.a, and `createManagedLibraryFile` is the driver's only path for toolchain libraries (M22 relies on it).
+- Synthetic packs keep their sources and generator; real packs appear only behind `msil-refpack`; negative runtime cases assert the exception name.
+
+**Rebuild cost.** lldMSIL gets three new TUs, and six changed ones recompile, with a CMake regeneration. `BCLMembers.def` and `Trailer.h` recompile the MSIL target TUs that include them (about 8) and `Trailer.cpp`. Relinks: lld with its copies, llc, opt, clang, MSILTests, CLITests, LLDAsLibAllTests and the two CLI tools. That is about 6-10 minutes and tens of MB on D:. The gate takes about 28 minutes: G0-G2 2, lld tests 1.5, mscorlib-safe 1, net8 10-11, wsl-quick 4, refs legs 6, expected 1, the rest 1.5. If it runs over 30 minutes, `refs-net10` moves to the post-commit `run-m1-gate.ps1` through a section 12 row.
+
+### M22. Libraries and assembly-to-assembly linking
+
+**Goal.** P2-C (brief Q21-Q25; plan 5.9.15; exports-multiasm 10). `clang -shared`, clang-cl `/LD` and `/LDd` link a library assembly: a DLL image with no entry point.
+- **Exports** (Q22). On Windows triples: the `dllexport` definitions when any input has one. Otherwise: every default-visibility GLOBAL or WEAK definition. `--exclude-libs` and `--export-all-symbols` adjust the set. The exports are public static methods of the export class (`--export-class`, by default the assembly name, Q23).
+- **Accessors** (Q24): an `'<msil>addr_'` accessor per export, plus a property per variable.
+- **Two-phase initialization** of `-shared` outputs. The beforefieldinit `'<msil>Data'` class allocates, copies the image, sets the address fields and applies in-assembly relocations. `<Module>::.cctor` then runs one `ldtoken` per linked library, the cross-assembly relocations and the constructors. Cycles therefore see complete data. An EXE with library inputs runs the same steps, in the same order, in its one `<Module>::.cctor` (5.9.10, 5.9.15; section 10 item 10 asks the user to word Design.md 4.1 and 5.4 that way, and if the user keeps "linked outputs initialize in two phases", a section 12 row sets `TwoPhase` for those EXEs, which changes only M22).
+- **The symbol table** (Q25): a private, AllowMultiple `'<msil>SymbolTable'` attribute, written through the shared codec.
+
+Linking against a library has CLR semantics (Q21: no interposition, `-z defs`, warned duplicates). A call becomes a MemberRef with the library's signature, after Q8's check. An address becomes an `'<msil>addr_'` call. A data relocation becomes a phase-2 store. Every linked library initializes before `main`. A different triple, C runtime, data model or ABI version is a link error. `--interface-only` links a cyclic pair under `-z defs`.
+
+The gate runs a library with its program, a two- and a three-library cycle, initialization order and a C# consumer on .NET 8 and Framework 4.8, against native shared-library oracles on both triples. EXEs without library inputs and every `-S` text stay byte-identical.
+
+**Depends on:** M21 (reference set, binder, built-in table, `check-mscorlib-safe.py`, `AssemblyFiles.{h,cpp}` with `isToolchainLibrary` and the `createManagedLibraryFile` seam, the fake pack and the `bcl-*.test` files that M22.e updates), M20 (writer, trailer, `TokenMap`, `cli::classifyCall`, `Relocations`, `ObjFile` records with DLLEXPORT and visibility, LTO objects), M17 (the symbol-table codec, frozen by this commit), M15 (`--dep`/`--dep-dir`, the `-l` kinds), M14 (`-shared` to `--shared` in the driver, and msil-ld's `-shared` error and its `options.test` case, replaced here). M22's contract text is in 5.6.6-5.6.9 (roles and files), 5.9.3 (`--interface-only`), 5.9.6, 5.9.7, 5.9.10 (the two-phase scope), 5.9.15 (the symbol-table additions), 5.12.2-5.12.4 (`%{msil_shlibs}`, `%msil_csc`) and 5.12.6 (the `skip O4` lines). Every WP reads the section 12 rows dated 2026-10-21 for M22: they amend D21 and D27, record how Q23 is implemented and record the two-phase scope pending section 10 item 10 (the size-mismatch limitation is 5.9.15's).
+
+**Header changes:**
+- `llvm/include/llvm/CLI/Trailer.h` (two-phase fields with defaults), `llvm/include/llvm/CLI/SymbolTable.h` (two flags), `llvm/include/llvm/CLI/BCLMembers.def` (attribute entries appended): lib/CLI, lldMSIL and the MSIL target TUs that include them (about 8) recompile; `-S` unchanged
+- lld/MSIL-local headers and `clang/lib/Driver/ToolChains/MSIL.h` (2 TUs); nothing widely included
+
+Roles (5.6.6, 5.6.8, 5.6.9): M22.a lld-exports (the root among the lld roles), M22.c lld-import (after M22.a: it calls `getCRuntimeIdentity` and reads `Config::interfaceOnly`), M22.b lld-writer (after M22.a and M22.c), M22.d harness with clang-shared (root), M22.e shared-tests (root), M22.f shared-exec-tests (after M22.d), M22.g docs. `lld/MSIL/Writer.h` stays 5.9.2's `void writeResult();`: the writer calls `computeExportPlan()` itself, so M22.a's `Driver.cpp` needs no new writer declaration, and M22.a calls nothing new of M22.c's (5.6.1 rule 7).
+
+**Work packages**
+
+#### M22.a Exports: -shared, export selection, the export plan, the symbol table, interface libraries (implement, ~1,100 lines)
+
+- Owned files: `lld/MSIL/Exports.h`, `lld/MSIL/Exports.cpp`, `lld/MSIL/Options.td`, `lld/MSIL/Config.h`, `lld/MSIL/Driver.cpp`, `lld/MSIL/CMakeLists.txt`, `lld/MSIL/LTO.cpp`, `llvm/include/llvm/CLI/SymbolTable.h`, `llvm/lib/CLI/SymbolTable.cpp`, `llvm/include/llvm/CLI/BCLMembers.def`
+- Reads: this plan sections 5.6.1, 5.6.6, 5.7.1, 5.7.9, 5.7.12, 5.8.8 (SymbolFlags, SIGNATURES), 5.8.9, 5.9.2, 5.9.3, 5.9.6, 5.9.13-5.9.15, 5.10.3, 5.10.9 and 5.11.7, section 6 M17 (M17.c item 8) and M21, and the section 12 rows for M22; llvm/docs/MSIL/recon/p2/exports-multiasm.md sections 0, 2, 3, 5.2-5.5, 7.2, 10.1-10.3 and 12; llvm/docs/MSIL/recon/p2/exports-multiasm-files/e7/ (zl.c, main.c, symtab.py); llvm/docs/MSIL/recon/p2/exports-multiasm-files/tools/symtab/Program.cs; lld/ELF/Driver.cpp (excludeLibs); lld/MSIL/; llvm/include/llvm/CLI/SymbolTable.h; llvm/include/llvm/CLI/BCLMembers.h
+- Provides:
+  - options `-shared`/`--shared`, `--export-class=<Ns.Name>`, `--assembly-version=<a.b.c.d>`, `--exclude-libs=<list>|ALL`, `--export-all-symbols`, `--interface-only`, with their `Config` fields (named by 5.9.2's rule: `shared`, `exportClass`, `assemblyVersion`, `excludeLibs`, `exportAllSymbols`, `interfaceOnly`);
+  - in `Exports.h`: `ExportedSymbol { Symbol *Sym; bool IsData; Symbol *AliasOf; uint64_t Size; uint8_t AlignLog2; uint8_t Flags; }`, `ExportPlan { std::string Namespace, Name; std::vector<ExportedSymbol> Functions, Data; SmallVector<uint8_t, 0> SymbolTablePayload; }`, `Expected<ExportPlan> computeExportPlan()`, `bool mayBeExported(const Symbol &)`, `std::string getCRuntimeIdentity()`, `parseClassName(StringRef)`;
+  - in `SymbolTable.h`: `LibraryTableFlags::Interface` (0x01), and `LibraryFunctionFlags::ABI` (0x04) with the 5.8.8 SIGNATURES descriptor;
+  - the `BCLMembers.def` entries `Attribute`, `Attribute_ctor`, `AttributeUsageAttribute`, `AttributeTargets`, `AttributeUsageAttribute_ctor`, `AttributeUsageAttribute_set_AllowMultiple`;
+  - the managed `-l` kind.
+
+(1) **Options** (5.9.3). `-shared` replaces M14's error; with it, `-e` gives the warning `--entry is ignored with -shared`.
+- `parseClassName` handles `--export-class` and the default: the last `.` splits namespace from name. An empty name, a `/` or more than 1,023 bytes (Q27) is `invalid --export-class value '<v>'`.
+- `--assembly-version` takes one to four uint16 parts and applies to every output. `--exclude-libs` follows lld/ELF.
+- `--interface-only` without `-shared` is an error; with it the driver skips `bindLateSymbols()`. `--lto-emit-asm` with `-shared` is `--lto-emit-asm cannot write a -shared library; link without --lto-emit-asm`.
+- A `-shared` assembly name that differs from the output stem warns `assembly name '<n>' differs from the output file name '<f>'; the CLR loads a library only as <n>.dll` (exports-multiasm 3).
+- `-l` (5.10.9): a candidate with `isToolchainLibrary` is *managed*, ranked after static and before import or native-shared, and skipped under `-Bstatic`. The driver hands it to M21's `createManagedLibraryFile`, as it does a positional library, so M22.c's implementation serves both.
+
+(2) **Export selection** (Q22). `computeExportPlan` runs after resolution and LTO; `writeResult()` calls it.
+- Candidates are defined GLOBAL and WEAK symbols with DEFAULT or PROTECTED visibility, COMMON included as data. Names starting with `<msil>` never qualify, and neither does a member of an `--exclude-libs` archive.
+- On Windows triples, if some candidate is DLLEXPORT and `--export-all-symbols` is absent, only the DLLEXPORT candidates count.
+- The plan keeps input order and carries `AliasOf` for aliases. A TLS candidate is `thread-local storage is not supported yet: <s> in <file>`.
+
+(3) **LTO** (5.9.13). irsymtab has no dllexport bit, so `-shared` makes every bitcode definition for which `mayBeExported` holds `VisibleToRegularObj`. Q22 then applies to the in-memory objects' flags.
+
+(4) **The symbol table** (Q25; the M17.c layout, frozen by this commit):
+- flags: INTERFACE;
+- the ABI version and the triple without its environment version;
+- the C runtime identity (`getCRuntimeIdentity`): the first `-l` in command-line order, driver defaults included, named `c`, `msvcrt`, `ucrt`, `ucrtbase`, `crtdll` or `msvcr*`, written as given; else `none`;
+- the data model of the inputs' records;
+- one export class;
+- data symbols with size, log2 alignment and flags (1 const for a READONLY segment, 4 weak);
+- flagged functions: 2 weak, and 0x04 ABI followed by the definition's SIGNATURES descriptor in 5.8.8's encoding.
+
+The codec gains both bits, still refuses unknown ones, and `printSymbolTable` prints the new fields.
+
+(5) **Interface libraries** (5.9.3, 5.9.15). The same plan, identity and table as the real link, with INTERFACE set. Unresolved symbols are allowed and late binding is skipped (M22.c), and the bodies are stubs (M22.b). Linking against one binds as against the real library, with the `--verbose` note `<file> is an interface library; deploy the library built from the same objects`.
+
+(6) **`BCLMembers.def`.** Append `Attribute`, `Attribute_ctor` (`instance void .ctor()`), `AttributeUsageAttribute`, the value type `AttributeTargets`, `AttributeUsageAttribute_ctor` (`instance void .ctor(valuetype System.AttributeTargets)`) and `AttributeUsageAttribute_set_AllowMultiple` (`instance void set_AllowMultiple(bool)`). All are Required and mscorlib-safe (gate step 13 proves it).
+
+Checks: `msil-syntax.ps1`; a private `lld.exe` and `CLITests` under `C:\llvm-msil-scratch\milestones\M22\M22.a\` (`CLISymbolTableTest` built from HEAD's `SymbolTableTest.cpp`, not M22.e's copy in progress, still passes; the option texts of (1) by hand). E7 end to end needs M22.b and M22.c, so it is M22.b's check and the gate's.
+
+#### M22.b The library writer: export class, '<msil>Data', two-phase trailer, import rows (implement, ~1,100 lines)
+
+- Owned files: `llvm/include/llvm/CLI/Trailer.h`, `llvm/lib/CLI/Trailer.cpp`, `lld/MSIL/Synthetic.h`, `lld/MSIL/Synthetic.cpp`, `lld/MSIL/Writer.h`, `lld/MSIL/Writer.cpp`
+- Depends on: M22.a, M22.c
+- Reads: this plan sections 5.6.6, 5.7.1, 5.7.3-5.7.7, 5.7.12, 5.9.2, 5.9.9, 5.9.10, 5.9.12, 5.9.15 and 5.11.6, section 6 M20 and M21, the M22.a and M22.c text above and the section 12 rows for M22; llvm/docs/MSIL/recon/p2/exports-multiasm.md sections 4, 5.1, 5.2, 6 and 9-10.1; llvm/docs/MSIL/recon/p2/exports-multiasm-files/e7/zl.il.in; llvm/docs/MSIL/recon/p2/exports-multiasm-files/e6/zlibc.il; llvm/docs/MSIL/recon/p2/exports-multiasm-files/e4b/gen.py; llvm/include/llvm/CLI/MetadataBuilder.h; llvm/include/llvm/CLI/CustomAttribute.h; llvm/include/llvm/CLI/ILBuilder.h; lld/MSIL/ (M22.a's `Exports.h`, M22.c's `AssemblyFiles.h`, `Symbols.h` and `Relocations.h`: both WPs have finished)
+- Provides: `cli::CrossReloc { uint64_t Site; uint8_t Width; EntityRef Accessor; int64_t Addend; }`; `cli::TrailerInput::LibraryTypes`, `CrossRelocs` and `TwoPhase` (defaults empty, empty and false); `cli::TrailerOwner { Module, Data }` as `TrailerMethod::Owner`; the `-shared` output rows with `PEImageKind::Library`
+
+(1) **Trailer** (5.9.10, 5.9.15). With the defaults, `buildTrailer` emits M20's shape byte for byte.
+- An EXE with libraries gets the extra steps in `<Module>::.cctor`, after the in-assembly relocations and before the constructors:
+  - `ldtoken <type>` and `pop` per `LibraryTypes` entry;
+  - each cross relocation straight-line: `ldsfld '<msil>data'`, `ldc.i4` Site, `add`, `call` Accessor, then the addend, `conv.i4` for width 4, and `stind.i`/`stind.i4` (`unaligned. 1` when misaligned).
+- `TwoPhase` (set for `-shared` outputs): phase 1, through the in-assembly relocations and the loop, goes into `'<msil>Data'::.cctor`, and never names another toolchain assembly. Phase 2 (`ldtoken`s, cross relocations, constructors) goes into `<Module>::.cctor`, which is omitted when empty.
+
+(2) **`-shared` output** (5.9.12, exports-multiasm 10.1). `writeResult()` calls `computeExportPlan()`.
+- The image is `PEImageKind::Library`: entry token 0, no `'<msil>Main'` even with `main`. The Assembly row takes `--assembly-version` (every output) and no key.
+- TypeDefs after M20's:
+  - the export class: `public abstract sealed auto ansi`, extends `System.Object` through the binder;
+  - `'<msil>Data'`: `private abstract sealed auto ansi beforefieldinit`;
+  - `'<msil>SymbolTable'`: `private auto ansi sealed beforefieldinit`, extends `System.Attribute`.
+- `'<msil>Data'` holds `'<msil>data'`, every address field, every `'<msil>fn_'` field (one per exported function) and the data-import fields. All are `assembly`, `initonly` as M20 marks them. Overflow goes to M20's spill classes. `'<msil>image'` and `'<msil>relocs'` stay in `<Module>`, with `assembly` access.
+- Exported functions are owned by the export class, with Param rows named `A_<i>`. A function alias becomes a forwarding method of its own name.
+- Accessors come after the functions, in plan order:
+  - per function: `public hidebysig static native int '<msil>addr_f'()`, returning `'<msil>Data'::'<msil>fn_f'` (the aliasee's for an alias);
+  - per variable: `public hidebysig specialname static native int '<msil>addr_x'()`, returning its field (aliasee field + AliasOffset for an alias), plus Property `x` (signature `08 00 18`) with a Getter MethodSemantics row.
+- More than 65,524 methods in the class, or M20's `--msil-type-member-limit`, is `export class '<c>' would hold <n> methods; the CLR allows 65,524`.
+- The attribute class (Q25):
+  - `.ctor(uint8[] A_0)`, body `ldarg.0`, `call instance void [core]System.Attribute::.ctor()`, `ret`;
+  - `AttributeUsage(AttributeTargets.Assembly) { AllowMultiple = true }`, blob `01 00 01 00 00 00 01 00 54 02 0D 41 6C 6C 6F 77 4D 75 6C 74 69 70 6C 65 01`, encoded with `encodeCustomAttribute`;
+  - the Assembly-row attribute: `encodeByteArrayAttribute(Plan.SymbolTablePayload)`.
+- `--interface-only`: the same rows with `ldnull`/`throw` bodies, and no image, `'<msil>Data'`, trailer or other member.
+
+(3) **Imports** (from M22.c).
+- The libraries' AssemblyRefs and MemberRefs.
+- `LibraryTypes`: the first export class of every directly linked library, in command-line order, used or not (E4c).
+- `CrossRelocs` in site order.
+
+BCL rows come only from M21's binder. The sink in `Synthetic.cpp` places methods by `Owner`.
+
+Checks:
+- `msil-syntax.ps1`, then a private `lld.exe` and `CLITests` under `C:\llvm-msil-scratch\milestones\M22\M22.b\` (M20's `CLITrailerTest` passes with the defaults; M22.e's test sources count only at the gate).
+- In scratch: E7, E4b and E4c built from C and run on .NET 8 and Framework 4.8. ILVerify is clean, and PEVerify's only pass-1 note is the RVA image copy in `'<msil>Data'::.cctor` (M22.d's msil-verify.py accepts it; the gate runs D21 in full).
+- An EXE without libraries is `cmp`-identical to HEAD's msil-ld output.
+
+#### M22.c Linking against libraries: library inputs, checks, late binding, import shapes (implement, ~1,300 lines)
+
+- Owned files: `lld/MSIL/AssemblyFiles.h`, `lld/MSIL/AssemblyFiles.cpp`, `lld/MSIL/InputFiles.h`, `lld/MSIL/InputFiles.cpp`, `lld/MSIL/Symbols.h`, `lld/MSIL/Symbols.cpp`, `lld/MSIL/SymbolTable.h`, `lld/MSIL/SymbolTable.cpp`, `lld/MSIL/TokenMap.h`, `lld/MSIL/TokenMap.cpp`, `lld/MSIL/Signatures.h`, `lld/MSIL/Signatures.cpp`, `lld/MSIL/Relocations.h`, `lld/MSIL/Relocations.cpp`
+- Depends on: M22.a
+- Reads: this plan sections 5.6.6, 5.7.3, 5.7.5, 5.7.8, 5.7.9, 5.8.8, 5.8.9, 5.9.4-5.9.9, 5.9.14, 5.9.15, 5.10.9, 5.10.10 and 5.11.9, section 6 M20 and M21, the M22.a text above and the section 12 rows for M22; llvm/docs/MSIL/recon/p2/exports-multiasm.md sections 3, 4, 5.4, 6.1, 7.2, 8.2 and 10.2; llvm/docs/MSIL/recon/p2/bcl-binding.md section 5.9; llvm/docs/MSIL/recon/p2/exports-multiasm-files/tools/symtab/Program.cs; llvm/docs/MSIL/recon/p2/exports-multiasm-files/e7/ (main.il, zl.il.in, symtab.py); llvm/docs/MSIL/recon/p2/exports-multiasm-files/e2/prog2c.il; llvm/include/llvm/CLI/MetadataReader.h; llvm/include/llvm/CLI/SymbolTable.h; llvm/include/llvm/CLI/CallAdapter.h; lld/MSIL/ (M22.a's `Exports.h` and `Config.h` included)
+- Provides:
+  - `ManagedLibraryFile` with `parse()`, `getIdentity()`, `findExport(StringRef) -> const ManagedExport *` (kind, class, MethodDef, accessor, signature blob, flags, ABI descriptor), `getExportClassTypeRef(cli::MetadataBuilder &)`, `getMemberRef(const ManagedExport &, bool Accessor, cli::MetadataBuilder &)` and `isInterface()`;
+  - `createManagedLibraryFile` returning a `ManagedLibraryFile`; `isToolchainLibrary` keeps M21's declaration (M22.a's driver calls both);
+  - the kinds `ManagedFunction` and `ManagedData`, and step 1 of `bindLateSymbols()`;
+  - `CrossRelocation { uint64_t OutputSite; uint8_t Width; const ManagedExport *Target; int64_t Addend; }` with `getCrossRelocations()`.
+
+(1) **Inputs.** M21's seam `createManagedLibraryFile` now returns a `ManagedLibraryFile` for every PE with an Assembly row and `isToolchainLibrary`, positional or found by `-l`; the file is read through the driver. This replaces M21's "not supported yet". `SymbolTable::addFile` keeps the libraries in command-line order for late binding.
+
+(2) **`parse`** (exports-multiasm 5.4). `decodeSymbolTable`, then the checks in order, each naming both files:
+- the table version;
+- the ABI version, the triple key and the data model (5.9.14's texts);
+- the C runtime against M22.a's `getCRuntimeIdentity()`: `<file>: C runtime '<c>' differs from '<c0>' of this link`, where `none` matches anything.
+
+Then the symbol map:
+- each listed class must be a public TypeDef;
+- its public static methods outside `<msil>` are functions, each with `'<msil>addr_<name>'`;
+- each data symbol has a property whose getter is `'<msil>addr_<name>'`.
+
+A violation is `<file>: malformed export table: <what>`.
+
+(3) **Late binding**, step 1 of 5.9.6.
+- An undefined, non-hidden symbol binds by its symbol name to the first library, in command-line order, that exports it; a kind mismatch is `symbol type mismatch`.
+- A later exporter warns `symbol '<s>' is exported by <lib1> and <lib2>; using <lib1>`. An object definition that a library also exports warns `symbol '<s>' is defined in <file> and exported by <lib>; the output uses its own definition` (Q21).
+- Weak undefined symbols bind too, and `--trace-symbol` prints `<lib>: managed definition of <s>`.
+- `-z defs`: a `-shared` output, like a program, reports every undefined GLOBAL symbol left. Under `--interface-only` (`ctx.arg.interfaceOnly`) the driver skips late binding (M22.a) and the undefined report in `Relocations.cpp` stays silent.
+
+(4) **Signatures** (Q8). `cli::classifyCall` compares each call with the export's MethodDef signature and ABI descriptor. Adapters call the library MemberRef, and the texts are 5.9.8's with `>>> defined as <sig> in <lib>`.
+
+(5) **TokenMap** (5.9.7).
+- A `'<msil>Symbols'` method becomes `[lib]Ns.Class::f`, with the library's signature blob; its TypeDefOrRef entries are mapped by name through the binder.
+- A `'<msil>Symbols'` field bound to `ManagedData`, or `'<msil>FnAddr'` bound to `ManagedFunction`, must be read by `ldsfld` (0x7E). The opcode becomes `call` (0x28) and the token becomes `[lib]Class::'<msil>addr_<name>'()` (`00 00 18`). Both forms are 5 bytes with stack effect 0 to 1, so sizes, branch offsets and `.maxstack` stay. Any other opcode is `<file>: unsupported use of imported symbol '<s>' in '<m>' at IL offset <n>`.
+- `msil.unresolved` stubs take part in step 1 by their symbol name, and otherwise bind natively under their ImplMap import name (5.9.6 step 2). EXPLICIT_IMPORT stubs and IMPORT data with a module stay native.
+
+(6) **Relocations.** A DATA_RELOC whose target binds to a library becomes a `CrossRelocation` (FNADDR to `'<msil>addr_f'`, ADDR to `'<msil>addr_x'`, width 8 or 4). A DIFF against a library symbol is `symbol difference '<a>' - '<b>' in <file> refers to a symbol of <lib>`.
+
+(7) **AssemblyRefs.**
+- **Linked libraries.** One per library: its name and version, Flags 0, no key or token, its culture. TypeRefs are `[lib]Ns.Class`.
+- **A library's own AssemblyRefs** that are not libraries of this link are compared with the references, or with the built-in table's `mscorlib` 4.0.0.0 (bcl-binding 5.9; 5.11.9's M22 texts): a newer version is an error, an absent name a warning.
+
+(8) **`--lto-emit-asm`** with a library input is `<file>: --lto-emit-asm cannot import from a .NET library; link without --lto-emit-asm`.
+
+M22.c keeps every declaration that M21's `Writer.cpp` and `Synthetic.cpp` use, so its private build links and M22.b starts from a working tree.
+
+Checks:
+- `msil-syntax.ps1`, then a private `lld.exe` under `C:\llvm-msil-scratch\milestones\M22\M22.c\` (M22.a's files included; the writer is still M21's).
+- In scratch: an ilasm library from E7's `zl.il.in` whose table a scratch script re-encodes in M17.c's layout, linked with E2's `prog2c` sequence and a calls-only variant of E7's `main.c`; the MemberRefs, the `ldsfld` rewrite and the AssemblyRefs are inspected with `llvm-cil-dump`, and the programs run on .NET 8 and Framework 4.8. Cross-assembly data relocations need M22.b's trailer, so E7 in full is M22.b's check and the gate's.
+
+#### M22.d Driver /LD and the harness: shared libraries in tests, the C# compiler, library verification (infra, ~800 lines)
+
+- Owned files: `clang/lib/Driver/ToolChains/MSIL.h`, `clang/lib/Driver/ToolChains/MSIL.cpp`, `msil/test/lit.cfg.py`, `msil/test/CMakeLists.txt`, `msil/utils/msil-prog.py`, `msil/utils/update-expected.py`, `msil/utils/msil-verify.py`, `msil/utils/msil-jitall.py`, `msil/utils/jitall/build-jitall.py`, `msil/utils/upstream-hooks.txt`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/test/harness/shlibs.test`, `msil/test/harness/csc.test`, `msil/test/harness/verify-data-cctor.test`, `msil/test/harness/prog/`, `msil/utils/equiv-allowed.txt`
+- Reads: this plan sections 5.5, 5.6.1, 5.6.4, 5.6.9, 5.10.1, 5.10.3, 5.10.5, 5.12.1-5.12.6, 5.12.8 and 5.12.11 and the section 12 rows for M22; llvm/docs/MSIL/recon/p2/tests-p2.md sections 2.5 and 3.4; llvm/docs/MSIL/recon/p2/exports-multiasm.md sections 6.4, 8.1 and 9; llvm/docs/MSIL/recon/p2/exports-multiasm-files/e6/use.cs; clang/lib/Driver/ToolChains/MSIL.cpp; msil/test/lit.cfg.py; msil/test/CMakeLists.txt; msil/test/harness/prog/; msil/utils/msil-prog.py; msil/utils/update-expected.py; msil/utils/msil-verify.py; msil/utils/msil-jitall.py; msil/utils/msil-run.py; msil/utils/jitall/build-jitall.py; msil/utils/upstream-hooks.txt; msil/utils/equiv-allowed.txt; msil/utils/ci/lit-legs.ps1; msil/utils/ci/lit-legs.sh
+- Provides: the lit placeholder `%{msil_shlibs}` and `msil-prog.py --shlibs "<spec>"`; `%msil_csc` with feature `msil-csc` and parameter `msil_require_csc`; `msil-verify.py --dep-dir DIR --also-verify-deps` and `msil-jitall.py --dep-dir DIR`; `build-jitall.py --csharp SRC --out EXE [--reference DLL]... [--refs net8|net48] [--unsafe]`; `--shared` in the clang link job for `/LD` and `/LDd`; `clang/test/Driver/msil-shared.c` in the net8 lists and `check-msil`; the `skip O4` lines of `equiv-allowed.txt` for 04-shared and the three `p2c-*` rows
+
+(1) **clang.** The link job passes `--shared` for `/LD` and `/LDd` as for `-shared` (5.10.3). Naming stays upstream's (`/LD foo.c` writes `foo.dll`), and `-shared` without `-o` writes `a.exe` (Q19).
+
+(2) **`--shlibs`** (5.12.3, 5.12.4). The grammar is `[?]NAME=SRC[,SRC...][;...]`. Libraries are built in order before the program, each linked against the ones built before it, with the program's `--cflags` and `--ldflags`, `%{msil_ref_flags}` included. `?NAME` builds an interface only; a cycle is written `?b=b.c;a=a.c;b=b.c`.
+- **MSIL mode.** `clang -shared` into `<workdir>/shlib/NAME.dll`; interfaces use `-Wl,--interface-only` into `shlib-iface/`. The program links every real library positionally.
+- **Native Windows.** `-shared -fuse-ld=lld` writes `NAME.dll` and `NAME.lib`. An interface is the same link with `-Wl,/force:unresolved`, keeping only `NAME.lib`. That is *unverified*; the fallback is a test-supplied `NAME.def` turned into `NAME.lib` by `llvm-lib /def:`.
+- **Native Linux (E7).** `-fPIC` objects, `ld.lld -shared -Bsymbolic -soname libNAME.so`, no interfaces, and `-rpath '$ORIGIN'` on the program.
+- `--det` compares the libraries too.
+
+(3) **lit.cfg.py.** The composites pass `%{msil_shlibs}` to the MSIL build and to the native oracle. They pass `--dep-dir <workdir>/shlib` to msil-run, msil-jitall and msil-verify (with `--also-verify-deps`); a missing or empty directory is fine. `%msil_csc` is `python build-jitall.py --csharp`. `msil_require_csc=1` makes a missing SDK csc a configuration error.
+
+(4) **update-expected.py** builds and runs `%{msil_shlibs}` tests natively on both OSes.
+
+(5) **msil-verify.py.** `--dep-dir` gives ILVerify `-r` for every assembly in the directory and copies them next to the assembly for PEVerify. `--also-verify-deps` verifies each of them too. Pass 1 accepts the RVA-static note in `'<msil>Data'::.cctor` under the same listing check as `<Module>::.cctor`, and pass 2 neutralizes the copy in any method (D21 row). `msil-jitall.py --dep-dir` copies the directory.
+
+(6) **`build-jitall.py --csharp`.** One file through the newest SDK's csc: net8 against the newest 8.x pack (plus `<stem>.runtimeconfig.json`), net48 against the Framework `v4.8` directory and `Facades` (`-target:exe`), with `-langversion:latest -deterministic+`. The jitall build is unchanged, and nothing is downloaded.
+
+(7) **upstream-hooks.txt:** `fork-only clang/test/Driver/msil-shared.c` (5.6.4).
+
+(8) **Wiring.** `clang/test/Driver/msil-shared.c` (M22.e) joins `$checkMsil` in lit-legs.ps1, `check_msil` in lit-legs.sh and the `check-msil` path list in `msil/test/CMakeLists.txt`, unless a pattern already covers it. No leg is added, so both scripts' headers and `--list` stay as they are.
+
+(9) **`harness/prog/`** (5.6.1 rule 6). Its self-tests pin msil-prog.py's commands. Update them for `--shlibs`: without it every command is unchanged; with it the library builds come first, in both modes.
+
+(10) **Self-tests.**
+- `shlibs.test`: stand-in tools record the build order, the interfaces, the earlier libraries on each link, `--dep-dir` everywhere, and the native commands per OS.
+- `csc.test`: an ilasm stub library and a two-line C# program, for net8 and, under `msil-netfx`, net48.
+- `verify-data-cctor.test`: an ilasm library whose `'<msil>Data'::.cctor` copies the image.
+
+(11) **`equiv-allowed.txt`** (5.12.6). `-shared` outputs and links with a toolchain library input have no `--lto-emit-asm` text (M22.a item (1), M22.c item (8)), so O4 cannot run on them, and M23's `lto` leg runs msil/test/M2 with `msil_equiv=1`. Append `skip O4 msil/test/M2/04-shared/ -shared libraries and links against them have no --lto-emit-asm text` and one `skip O4` line with the same reason each for `msil/test/M2/08-semantics/p2c-bsymbolic.test`, `p2c-cycle.test` and `p2c-weak-def.test`. For these tests `msil-equiv.py --oracle O4` then prints `O4 skipped: <reason>`, and `msil-prog.py --equiv-skip`, with or without `--shlibs`, builds neither the equivalence link nor the `--also-il` text. The entries and the other `skip` lines stay M20's; M22.g's msil/test/README.md lists the new lines.
+
+Checks: the harness tests (stand-in tools only); `check-upstream-hooks.py --self-test` (the manifest against the finished tree, with M22.e's `msil-shared.c`, is gate step 21); `lit-legs.ps1 -List` and `bash -n` plus `--list` in WSL; a scratch `%{msil_shlibs}` test through update-expected.py on both OSes, with a cyclic pair on native Windows (this validates `/force:unresolved`).
+
+#### M22.e msil-ld library tests, the driver test, codec tests; retired lld texts (test, ~1,350 lines)
+
+- Owned files: `lld/test/MSIL/`, `clang/test/Driver/msil-shared.c`, `llvm/unittests/CLI/SymbolTableTest.cpp`
+- Reads: this plan sections 2, 5.6.1, 5.7.9, 5.7.10, 5.7.13, 5.8.8, 5.8.11, 5.9.3-5.9.15, 5.10.3, 5.10.9 and 5.11.9, the M22.a-M22.c text above and the section 12 rows for M22; llvm/docs/MSIL/recon/p2/exports-multiasm.md sections 3-6, 10 and 11; llvm/docs/MSIL/recon/p2/exports-multiasm-files/e7/; lld/test/MSIL/ (conventions, Inputs/native, Inputs/fakepack, the M14 and M21 tests it updates); clang/test/Driver/msil-link.c; llvm/unittests/CLI/SymbolTableTest.cpp; `git show HEAD:llvm/include/llvm/CLI/SymbolTable.h` (M17's API; M22.a's additions are its Provides line)
+- Provides: the 14 `shared-*.test` files and `lld/test/MSIL/Inputs/shared/`; the updated earlier lld tests; `clang/test/Driver/msil-shared.c`; the extended `CLISymbolTableTest`
+
+Write these from the specification only; do not read M22.a-M22.d. This WP owns all of `lld/test/MSIL/` (5.6.1 rule 6).
+
+**Retired texts.** Update every earlier test that pins them:
+- `-shared is not supported yet` (M14's `options.test`): `-shared` now links, and `-e` with `-shared` warns;
+- `<path>: linking .NET libraries built by this toolchain is not supported yet` (M21's `bcl-reference-option.test`): a positional toolchain library is now a library input, so the fake-pack image there gets a valid table or the case moves to `shared-checks` as a malformed table;
+- `--print-bcl-table`'s exact lines (M21's `bcl-reference-option.test`, and `bcl-builtin.test` if it lists them): the six attribute entries of M22.a item (6) follow in `.def` order.
+
+No file under `lld/test/MSIL/` keeps the first two texts, not even in a `CHECK-NOT` (gate step 10 searches for them).
+
+**Inputs.**
+- Objects come from `llc -filetype=obj` over split-file IR, and libraries are built in the test.
+- Check with `llvm-cil-dump --headers`/`--tables`/`--canonical`/`--link-info` (5.7.10, 5.8.11), and errors with `--implicit-check-not="PLEASE submit"`.
+- Patched images (versions, ABI, data model, malformed tables) are yaml2obj YAML made in scratch, with their script kept in `Inputs/shared/`.
+
+**Coverage**, one file each:
+- **`shared-layout`**:
+  - the export class (default from a plain and a dotted name, and `--export-class`) and its flags;
+  - method ownership, accessors, properties and Getter rows, `A_<i>` params;
+  - `'<msil>Data'`, and the attribute class with its AttributeUsage bytes;
+  - `<Module>` keeps hidden and local functions;
+  - characteristics 0x2022, entry token 0, no `'<msil>Main'` with `main`;
+  - `--assembly-version`, the name and `-e` warnings, and the export-class limit through `--msil-type-member-limit`.
+- **`shared-export-selection`**: default, protected and hidden visibility; Windows `dllexport`-only, auto-export and `--export-all-symbols`; `--exclude-libs` with a name and with `ALL`; commons, weak definitions, function and data aliases; TLS.
+- **`shared-symbol-table`**: golden `--link-info` text, the INTERFACE and ABI fields, the constructor signature.
+- **`shared-two-phase`**: phase 1 holds the allocation through the relocations and no foreign token; phase 2 holds the `ldtoken`s in link order, the cross relocations and the constructors; no `<Module>::.cctor` when phase 2 is empty; in an EXE, the `ldtoken`s come before the constructors.
+- **`shared-import`**:
+  - the MemberRef carries the library's signature;
+  - `'<msil>addr_'` calls where the object had `ldsfld`;
+  - cross relocations of widths 8 and 4;
+  - AssemblyRef columns;
+  - an unused library still gets its `ldtoken`;
+  - the unsupported-use error.
+- **`shared-checks`**:
+  - triple parts (the vendor is ignored);
+  - the C runtime on windows-gnu (`-lmsvcrt` against `-lucrt` with stub import libraries), with `none` compatible;
+  - ABI, data model and table version;
+  - malformed tables;
+  - a managed DLL without a table is a reference; a native DLL stays native.
+- **`shared-zdefs`**: undefined functions and data; weak undefined is allowed; `--interface-only`.
+- **`shared-signature`**: an extra argument gives an adapter and a warning; float against int and an SRET mismatch are errors.
+- **`shared-duplicates`**: two libraries in both orders, an object against a library, a kind mismatch.
+- **`shared-interface`**: stub bodies, INTERFACE, the same class and signatures as the real link, and a cyclic pair.
+- **`shared-lsearch`**: ranking, `-Bstatic`, M15's warning.
+- **`shared-lto`**: `-shared` bitcode keeps default-visibility exports, windows-msvc-msil keeps only `dllexport` ones, and both `--lto-emit-asm` errors.
+- **`shared-assemblyref`**: against M21's fake pack: a newer version is the error, an absent name the warning; another linked library is silent.
+- **`shared-size`**: 1,000 python-generated exports with 12-18-byte names. `#Strings` (`--stats-only`) must be at most the sum over f of (len('<msil>addr_' + f) + 1 + len('<msil>fn_' + f) + 1), plus 4,096: suffix sharing.
+- **`clang/test/Driver/msil-shared.c`** (`-###`, no REQUIRES): `-shared` on the four x86_64 MSIL triples (`--shared`, `a.exe`, `-o lib.dll`), clang-cl `/LD` and `/LDd` (`foo.dll`), `-Wl,--export-class=NS.Name`, `-shared -nostdlib`.
+- **`SymbolTableTest.cpp`** (`CLISymbolTableTest`, at least 9 tests): INTERFACE and ABI descriptors (SRET, byval, NO_PROTOTYPE) round trip; unknown bits refused; printed lines.
+
+#### M22.f Multi-assembly execution tests and the P2-C rows of the link-semantics matrix (test, ~1,100 lines)
+
+- Owned files: `msil/test/M2/04-shared/`, `msil/test/M2/08-semantics/p2c-bsymbolic.test`, `msil/test/M2/08-semantics/p2c-bsymbolic.expected`, `msil/test/M2/08-semantics/p2c-bsymbolic.linux.expected`, `msil/test/M2/08-semantics/p2c-cycle.test`, `msil/test/M2/08-semantics/p2c-cycle.expected`, `msil/test/M2/08-semantics/p2c-cycle.linux.expected`, `msil/test/M2/08-semantics/p2c-weak-def.test`, `msil/test/M2/08-semantics/p2c-weak-def.expected`, `msil/test/M2/08-semantics/p2c-weak-def.linux.expected`
+- Depends on: M22.d
+- Reads: this plan sections 5.5, 5.9.14-5.9.16 and 5.12.1-5.12.7, the M22.a-M22.d text above and the section 12 rows for M22; llvm/docs/MSIL/recon/p2/exports-multiasm.md sections 4, 6-9, 10.5 and 11; llvm/docs/MSIL/recon/p2/exports-multiasm-files/ (e2, e2b, e4b, e4c, e5, e6, e7); llvm/docs/MSIL/recon/p2/tests-p2.md section 3.4; msil/test/M2/00-link/; msil/test/Inputs/msil_test.h; `git show HEAD:msil/test/lit.cfg.py` (M21's composites; M22.d's additions are its text above)
+- Provides: `msil/test/M2/04-shared/` and the three `p2c-*` matrix rows with their expected files
+
+Write these from the specification only. The format is 5.12.5's, with `%{msil_shlibs}`. Sources use an `API` macro (`__declspec(dllexport)` on Windows, `visibility("default")` elsewhere), and imported data is `__declspec(dllimport)` on Windows, as the native oracle needs. `.expected` files come from update-expected.py (`.linux.expected` only where Linux differs). Tests run at -O0 and -O2. A check that depends on how `%{msil_prog}` builds, such as an msil-ld diagnostic whose text differs between the pipelines (the `p2c-bsymbolic` warning, whose `<file>` is the object under `obj` and the LTO object under `lto`), uses `OBJ`/`LTO` prefixes inside `%if msil-prog-pipeline=<p> %{ %}`, never `msil-pipeline=<p>` (5.12.2, 5.12.7).
+
+04-shared has at least 12 `.test` files:
+- **`lib-and-prog`**: E7's `zl.c`/`main.c`: calls, data, `extern` data, both relocation kinds, pointer identity both ways, the constructor before `main`, and a program function called by the library.
+- **`framework-identity`**: E2's `prog2c`.
+- **`cycle-pair`** (E4b, through interfaces) and **`cycle-three`**.
+- **`init-order`** (E4c, an unused library's constructor included).
+- **`missing-library`** and **`missing-member`**: `not` plus FileCheck of the exception name.
+- **`c-state`**: heap, a `FILE *` and `errno` read right after the setter.
+- **`archive-in-two-libs`**: separate copies.
+- **`csharp-consumer`**: a library with `--export-class=Contoso.Lib.Native` and E6's `use.cs`. It is compiled with `%msil_csc` for net8 and run on .NET 8, and, under `msil-netfx` with `msil-ref=none` or `msil-ref=net48`, compiled for net48 and run on Framework 4.8. FileCheck.
+- **`lib-det`**: `%{msil_det}` with libraries.
+- **`roundtrip-library`** (`msil-roundtrip`): ildasm and ilasm keep the attribute, and a relink runs.
+- **`lsearch-managed`**: `-L` and `-l`.
+
+Matrix rows (5.9.16, P2-C):
+- **`p2c-bsymbolic`**: both the program and the library define the function; FileCheck the warning; the native Linux oracle uses `-Bsymbolic`.
+- **`p2c-cycle`**: a cyclic pair with constructors.
+- **`p2c-weak-def`**: a weak library definition against a strong one in the program.
+
+Only the missing-* tests may end in an exception. Generate the expected files with M22.d's update-expected.py (it has handed over).
+
+#### M22.g Documentation (docs, ~350 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `msil/README.md`, `msil/test/README.md`
+- Depends on: M22.a, M22.b, M22.c, M22.d, M22.e, M22.f
+- Reads: this plan section 6 M22, sections 5.9.15 and 5.12 and the section 12 rows for M22; llvm/docs/MSIL/recon/p2/exports-multiasm.md sections 10 and 13; the four owned files
+- Provides: the M22 text of the four documents
+
+From the hand-overs.
+- **Status.md:**
+  - what `-shared` produces and how linking against libraries works;
+  - the symbol table, the C runtime rule, interface libraries;
+  - exports-multiasm 10.5's limitations, plus the size-mismatch warning that record v1 cannot support;
+  - counts.
+- **GettingStarted.md:** a library and a program, `/LD`, `--export-class`, deployment next to the program, a C# consumer, and cycles through `-Wl,--interface-only`.
+- **READMEs:** `04-shared`, `%{msil_shlibs}`, `%msil_csc` and the new `skip O4` lines (msil/test/README.md lists every `equiv-allowed.txt` line).
+
+Design.md stays untouched.
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '$f = (Get-PSDrive D).Free / 1GB; "D: has {0:N1} GB free" -f $f; if ($f -lt 8) { "below 8 GB: report to the user before building (plan 5.6.11)"; exit 1 }'
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0, idempotent)
+ 3. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0, idempotent)
+ 4. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: every target of msil/utils/ci/build-targets.txt, the Build targets line above; CMake regenerates for Exports.cpp and msil/test/CMakeLists.txt)
+ 5. D:/llvm-msil/build/unittests/Target/MSIL/MSILTests.exe
+ 6. D:/llvm-msil/build/unittests/TargetParser/TargetParserTests.exe --gtest_filter=*MSIL*
+ 7. D:/llvm-msil/build/unittests/MC/MCTests.exe --gtest_filter=TargetRegistry.*:*MSIL*
+ 8. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 210
+ 9. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter 'CLISymbolTableTest.*' -NoSkip -MinTests 9
+10. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $bad = @(); $n = @(Get-ChildItem -LiteralPath ($r + "lld/test/MSIL") -Filter "shared-*.test").Count; if ($n -lt 14) { $bad += "lld/test/MSIL has $n shared-*.test files, needs 14" }; $n = @(Get-ChildItem -LiteralPath ($r + "msil/test/M2/04-shared") -Filter *.test -ErrorAction SilentlyContinue).Count; if ($n -lt 12) { $bad += "msil/test/M2/04-shared has $n .test files, needs 12" }; $req = [ordered]@{ "lld/MSIL/Exports.cpp" = "computeExportPlan"; "lld/MSIL/AssemblyFiles.cpp" = "ManagedLibraryFile"; "llvm/include/llvm/CLI/Trailer.h" = "CrossReloc"; "llvm/include/llvm/CLI/BCLMembers.def" = "AttributeUsageAttribute_ctor"; "clang/test/Driver/msil-shared.c" = "/LDd"; "msil/test/M2/04-shared/csharp-consumer.test" = "msil_csc"; "msil/test/M2/04-shared/cycle-pair.test" = "msil_shlibs"; "msil/test/M2/08-semantics/p2c-bsymbolic.test" = "msil_shlibs"; "msil/test/M2/08-semantics/p2c-cycle.test" = "msil_shlibs"; "msil/test/M2/08-semantics/p2c-weak-def.test" = "msil_shlibs"; "msil/test/harness/shlibs.test" = "shlibs"; "msil/test/harness/csc.test" = "msil_csc"; "msil/test/harness/verify-data-cctor.test" = "<msil>Data"; "msil/utils/upstream-hooks.txt" = "fork-only clang/test/Driver/msil-shared.c"; "msil/utils/equiv-allowed.txt" = "skip O4 msil/test/M2/04-shared/"; "msil/utils/ci/lit-legs.ps1" = "msil-shared.c"; "msil/utils/ci/lit-legs.sh" = "msil-shared.c"; "msil/test/CMakeLists.txt" = "msil-shared.c" }; foreach ($k in $req.Keys) { $p = $r + $k; if (-not (Test-Path -LiteralPath $p)) { $bad += "missing: $k" } elseif (-not (Select-String -Quiet -SimpleMatch -LiteralPath $p -Pattern $req[$k])) { $bad += "no match for $($req[$k]) in $k" } }; $old = @(Get-ChildItem -LiteralPath ($r + "lld/test/MSIL") -Recurse -File | Select-String -SimpleMatch -List -Pattern "-shared is not supported yet", "linking .NET libraries built by this toolchain is not supported yet" | ForEach-Object { $_.Path }); if ($old.Count) { $bad += "retired text still pinned: $($old -join ", ")" }; if ($bad.Count) { $bad; exit 1 }; "every M22 file is present"'  (G6: lit only warns about a missing path; a pattern that covers msil-shared.c replaces the three wiring entries through a section 12 row; no lld test keeps a retired text)
+11. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param RUN_LLD_MAIN_TWICE=1" lld/test/MSIL clang/test/Driver/msil-shared.c  (LLD_IN_TEST=2 with library inputs; includes the updated M14 and M21 tests)
+12. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1 --param msil_require_csc=1" msil/test/harness/shlibs.test msil/test/harness/csc.test msil/test/harness/verify-data-cctor.test msil/test/harness/prog
+13. python D:/llvm-msil/msil/utils/check-mscorlib-safe.py --msil-ld D:/llvm-msil/build/bin/msil-ld.exe --out C:/llvm-msil-scratch/milestones/M22/gate/mscorlib-safe  (the attribute entries on Framework 4.8, .NET 8, .NET 10 and WSL .NET 10)
+14. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Leg net8  (G3: lld/test/MSIL, every FileCheck directory incl. msil-shared.c, M1 asm, M2 incl. 04-shared and the P2-C matrix rows, harness; .NET 8 and Framework; 11-12 min)
+15. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -Wsl -Leg wsl-quick  (G4: 04-shared on x86_64-unknown-linux-gnu-msil against the E7 shared-library oracle; about 5 min)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_csc=1 --param msil_dotnet_env=DOTNET_TieredCompilation=0" msil/test/M2/04-shared msil/test/M2/08-semantics/p2c-bsymbolic.test msil/test/M2/08-semantics/p2c-cycle.test msil/test/M2/08-semantics/p2c-weak-def.test  (.NET 8 optimizing JIT; about 2 min)
+17. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1 --param msil_require_csc=1 --param msil_pipeline=obj --param msil_references=net8 --param msil_dotnet_runtime=10" msil/test/M2/04-shared  (libraries and programs bound to the net8 pack, on .NET 10; about 2 min)
+18. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_pipeline=lto --param msil_equiv=1 --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1" msil/test/M2/04-shared/lib-and-prog.test msil/test/M2/08-semantics/p2c-cycle.test  (lto with O4: the skip lines hold; about 1 min)
+19. pwsh -NoProfile -Command ". D:/llvm-msil/msil/utils/build/msil-env.ps1; python D:/llvm-msil/msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --check D:/llvm-msil/msil/test/M2/04-shared D:/llvm-msil/msil/test/M2/08-semantics/p2c-bsymbolic.test D:/llvm-msil/msil/test/M2/08-semantics/p2c-cycle.test D:/llvm-msil/msil/test/M2/08-semantics/p2c-weak-def.test"  (Windows native oracle)
+20. pwsh -NoProfile -Command ". D:/llvm-msil/msil/utils/build/msil-env.ps1; python D:/llvm-msil/msil/utils/update-expected.py --clang D:/llvm-msil/build/bin/clang.exe --os linux --check D:/llvm-msil/msil/test/M2/04-shared D:/llvm-msil/msil/test/M2/08-semantics/p2c-bsymbolic.test D:/llvm-msil/msil/test/M2/08-semantics/p2c-cycle.test D:/llvm-msil/msil/test/M2/08-semantics/p2c-weak-def.test"  (E7 Linux oracle)
+21. pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins  (G5: the new fork-only line against the finished tree; no upstream file changes)
+22. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests llvm/tools/llvm-cil-dump llvm/tools/llvm-cil-copy clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (must print no diff)
+23. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M22"
+```
+
+**Exit criteria**
+- **Libraries.** `-shared`, `/LD` and `/LDd` write DLL library assemblies with Q22-Q25's exports, export class, accessors, properties and frozen symbol table, two-phase initialization and no entry point; `--interface-only` writes their interfaces. The 14 `shared-*.test` and the updated earlier lld tests pass, also with `LLD_IN_TEST=2`, and no lld test pins a retired text.
+- **Linking against them.** Calls bind with the library's signature after Q8; addresses come from accessors; data relocations are phase-2 stores (in an EXE, the same steps in its one `.cctor`); every linked library initializes before `main`. Mismatches, undefined symbols in `-shared` output and malformed tables are named link errors, and duplicates are warned.
+- **Execution.** 04-shared and the three P2-C matrix rows print native transcripts on .NET 8 (tiered and TieredCompilation=0), Framework 4.8 and WSL .NET 10, and bound to the net8 pack on .NET 10. This covers E7 with identity on Framework, both cycles with complete data, E4c's order and shared C state. The C# consumer runs on .NET 8 and Framework 4.8.
+- **Unchanged.** The new BCL entries pass `check-mscorlib-safe.py`. `-S` text and EXEs without libraries are unchanged. CLITests keep the floor of 210 and `CLISymbolTableTest` has at least 9 cases; `msil-shared.c` runs in the net8 leg and `check-msil`; under `lto` with `msil_equiv=1` the `skip O4` lines keep O4 off the library links; net8, wsl-quick and manifest/pins stay green, and the docs describe M22.
+
+**Review focus** (in addition to the three standing lenses)
+- **Phases.** Phase 1 never names another toolchain assembly; phase 2 starts with the `ldtoken`s; importers never take a library address with `ldftn` (exports-multiasm 4.2); an EXE without libraries is unchanged.
+- **The rewrite.** `ldsfld` to `call` keeps sizes, offsets and `.maxstack`, and every other use is diagnosed.
+- **Q21-Q25 exactly.** No public key tokens; exact library versions; the frozen table and its checks; a deterministic C runtime rule.
+- **Seams.** Toolchain libraries reach M22.c only through `createManagedLibraryFile`; `Writer.h` is unchanged.
+- **Tests.** Native shared-library oracles on both triples (`-Bsymbolic` on Linux); E4b and E4c reproduced; a negative test per diagnostic; the consumer compiled by csc.
+
+**Rebuild cost.**
+- lldMSIL: about 14 changed TUs plus `Exports.cpp`, with a CMake regeneration (also for `msil/test/CMakeLists.txt`).
+- lib/CLI: `Trailer.cpp` and `SymbolTable.cpp`.
+- The MSIL target TUs that include `Trailer.h` or `BCLMembers.h` (about 8), and clang's `ToolChains/MSIL.cpp`.
+- Relinks: lld with its copies, llc, opt, clang, MSILTests, CLITests, LLDAsLibAllTests and the two CLI tools.
+
+That is about 6-10 minutes and tens of MB on D:. The gate takes about 29 minutes: G0-G2 2, the lld and harness tests 2, mscorlib-safe 1, net8 11-12, wsl-quick 5, steps 16-17 4, the O4 skip step 1, expected checks 2, the rest 1. If it runs over 30 minutes, step 17 moves to the post-commit `run-m1-gate.ps1` through a section 12 row.
+
+### M23. Phase-2 conformance and exit: exit corpus, link-semantics matrix, objects by default, phase gate
+
+**Goal.** Close Phase 2 (brief Q29-Q33, Q38; plan 5.12.9-5.12.12). Q29's nine multi-TU programs (zlib `Z_SOLO`, tinf + zlib, Monocypher, CoreMark, LZ4, BLAKE2, TweetNaCl, KISS FFT, jsmn), built with static archives, match their native builds at -O0 and -O2, through objects and through LTO, on both x86_64 MSIL triples and every runtime of each (.NET 8, .NET 10, Framework 4.8; WSL .NET 10 and the private WSL .NET 8); c-testsuite's 150 libc-free tests run through objects; the sources come from a pinned manifest into a cache on C: (the download the user approved on 2026-10-21), never vendored. The link-semantics matrix of 5.9.16 is complete and runs on every pipeline, triple and runtime (condition 5). `obj` becomes the default test pipeline (Q31), with an `asm` oracle leg. Determinism legs cover objects, archives and PEs; CI caches the corpus (without CoreMark and c-testsuite until the user answers section 10's item on their CI licences), runs the new legs and compares both hosts' objects, with setup-dotnet still at the v5.4.0 SHA (Q38). The docs describe Phase 2 as built. The gate fits Q32 because one verified build serves several runtimes (`msil_also_run`). No compiler source changes, except through the fix loop.
+
+**Depends on:** M22 and through it M12-M21: M12's E7 oracle, private WSL runtimes and `update-expected.py --os linux`; M14's `%{msil_prog}`, `%{msil_det}`, msil-prog.py and legs `lto`/`det`; M15's native and default libraries and its native-callback and `atexit` diagnostics; M16-M17's mdtools, `llvm-cil-dump --canonical` with the 5.12.6 options and cli-corpus-check.py; M18-M19's legs `encoder-parity`, `obj-text`, `obj-text-wsl`; M20's `obj` pipeline, `pe` output, `msil_equiv` (O3, O4, O6 on the `--equiv-out` equivalence link), legs `obj`/`obj-wsl`, `msil_scale_tests`, harness/pipeline-obj/, the frozen record v1 and the matrix cases `weak-def-sig-mismatch`, `ctor-slot-order` and `import-attrs`; M21's `refs-*` legs; M22's `-shared`, `msil/test/M2/04-shared/`, the P2-C matrix rows and its CLITests floor.
+
+**Header changes:**
+- none (no C++ changes; the gate's build step only confirms that the tree is current)
+
+Roles of 5.6.9 (merged, never split): M23.a = `M23/corpus`, M23.b = `M23/programs`, M23.c = `M23/linksem-tests`, M23.d = `M23/harness`, M23.e = `M23/docs`. M23's specifics are in 5.7.15 (M23 note), 5.9.16 and 5.12.2-5.12.12; the section 12 rows dated 2026-10-21 for M23 record the Phase 1 decisions at the exit (plan 5.5, D22, D31, D38), the CI corpus default ('M23 CI corpus', section 10 item 11) and the cross-host determinism scope ('Cross-host determinism', section 10 item 12). Every WP reads plan sections 1-4, the 5.x subsections its Reads line cites and the section 12 rows for M23 (5.6.1 rule 8). The chain is a -> d -> (b, c) -> e: each WP's checks run the files of the WPs on its Depends-on line (5.6.1 rule 7).
+
+**Work packages**
+
+#### M23.a Exit-corpus manifest and fetch step (infra, ~600 lines)
+
+- Owned files: `msil/utils/corpus/`
+- Reads: this plan sections 5.6.1, 5.12.9 and 5.12.12, section 10's Phase 2 items and the section 12 rows for M23; llvm/docs/MSIL/recon/p2/tests-p2.md sections 2.4, 5 and 9; llvm/docs/MSIL/recon/p2/tests-p2-files/corpus/corpus.py; llvm/docs/MSIL/recon/p2/tests-p2-files/corpus/ctest.py; llvm/docs/MSIL/TestCorpus.md; msil/utils/make-linux-sysroot.py (refusing a directory inside the repository); msil/utils/plan-check.py (exit codes, self-test convention)
+- Provides: `msil/utils/corpus/manifest.json` (5.12.9's schema plus `license_file`; entries `zlib`, `tinf`, `monocypher`, `coremark`, `lz4`, `blake2`, `tweetnacl`, `kissfft`, `jsmn`, `c-testsuite`); `python msil/utils/corpus/fetch.py [--cache DIR] [--check] [--only N[,N...]] [--skip N[,N...]] [--list] [--self-test]` (exit 0 OK, 1 a check, hash or download failed, 2 usage, an unknown entry name included); trees at `<cache>/<name>-<ref>/`; the stamp `<cache>/msil-corpus.stamp`, JSON `{"manifest_sha256": "<sha256 of manifest.json's bytes>", "trees": {"<name>": "<tree_sha256>"}}` listing exactly the selected entries, written only after every selected entry verified and removed by a failing `--check`
+
+Manifest: 5.12.9's versions, each git source by its full 40-digit commit (resolved from the tag or abbreviated hash, cross-checked with tests-p2 5.1; the recon's clones under `C:\llvm-msil-scratch\p2\tests-p2\e4-corpus\src` help if still present); `url` a GitHub archive at that commit, the Monocypher release tarball or the two TweetNaCl files of `tweetnacl.cr.yp.to/20140427/`; `archive_sha256` for tarballs and single files; `tree_sha256` for every entry; `license`, `license_file`; `files` only to restrict an entry. fetch.py (standard library): refuses a cache inside the repository (resolved, case-insensitive on Windows) and any non-`https` URL; downloads only missing or unverified entries, into temporary files in the cache; checks `archive_sha256` before extracting; extracts the untrusted archives with tarfile `filter="data"`, rejecting absolute names, `..`, links leaving the tree and special files; strips `strip` components; moves a tree into place only when `tree_sha256` matches; deletes nothing but its own `<name>-<ref>` trees and temporary files; `--check` is offline; `--only`/`--skip` select entries, and a run with a selection downloads, verifies and writes into the stamp only the selected entries: CI passes `--skip coremark,c-testsuite` from msil-ci.yml's `MSIL_CORPUS_SKIP` until the user answers section 10's item on their CI licences, and lit treats the left-out entries as unsupported (5.12.12; row 'M23 CI corpus'); prints one line per entry (`skipped` for a left-out one) and `fetch.py: <n> of <m> verified`. `--self-test` (offline, temporary directory outside the repository, `file://` URLs allowed only here, to a tar.gz with a strip component, a zip and a single file it builds) reports: success and a second run that downloads nothing, an archive hash mismatch, a tree mismatch after a planted edit (`--check` exits 1, stamp removed), a `--skip` run whose stamp lists only the selected trees followed by a `--check` without `--skip` that exits 1 on the missing entry, an unknown `--skip` name (exit 2), traversal and link members, a cache inside the repository, an `http` URL. Checks: the self-test; one real fetch of every entry into `C:\llvm-msil-scratch\corpus-cache` (section 10, 'Corpus download approved'; the milestone's only network access besides gate step 5; M23.b and M23.c use this cache) that fixes every hash, then `--check`; sizes and times in the hand-over. Nothing downloaded is committed; CoreMark's EEMBC agreement and c-testsuite's per-test licences stay unverified for CI (tests-p2 9 items 7-8), hence CI's default above.
+
+#### M23.b Exit-corpus programs, determinism builds and c-testsuite (test, ~1,400 lines)
+
+- Owned files: `msil/test/Programs/`
+- Depends on: M23.a, M23.d
+- Reads: this plan sections 5.5, 5.12.1-5.12.6, 5.12.9 and 5.12.12, decision D37 (section 3), the M23.a and M23.d text above and the section 12 rows for M23; llvm/docs/MSIL/recon/p2/tests-p2.md sections 2.4, 4.3 and 5; llvm/docs/MSIL/recon/p2/tests-p2-files/corpus/ (corpus.py and ctest.py recipes; harness/ (drivers, sup/, shim/, coremark/)); llvm/docs/MSIL/recon/p2/tests-p2-files/logs/corpus-results-windows-O2.json; llvm/docs/MSIL/recon/m11/hooks-artifacts/gen_litroot.py; msil/test/M2/00-link/ (multi-TU test format); msil/test/Inputs/msil_test.h
+- Provides: `msil/test/Programs/<name>/<name>.test` and `msil/test/Programs/det/<name>.test` for `zlib`, `tinf`, `monocypher`, `coremark`, `lz4`, `blake2`, `tweetnacl`, `kissfft`, `jsmn`; `msil/test/Programs/c-testsuite/` (`libc-free.txt`, `exit0.expected`, a test format yielding one lit test per listed name)
+
+From the specification only: do not read M23.a's or M23.d's working-tree files (`git show HEAD:msil/test/lit.cfg.py` and `git show HEAD:msil/utils/update-expected.py` show the harness before M23); run them as the checks below need, and take the tree names `<name>-<ref>` from M23.a's hand-over or the cache directory. (1) `lit.local.cfg`: `config.suffixes = [".test"]` (msil/test would otherwise run the `.c` drivers, support files and shims); UNSUPPORTED without `msil-corpus`; each program directory requires `msil-corpus-<name>`, so an entry the stamp leaves out (CoreMark and c-testsuite in CI, 5.12.12 and row 'M23 CI corpus') is UNSUPPORTED with no change here. (2) `support/` (the seven support TUs and `sup.h`; allocator and `mem*`/`strlen` only under `__MSIL__`), `shim/` (the five shims) and `gen.h`, ported from the recon unchanged in meaning. (3) Per program: its driver(s) (CoreMark also `core_portme.{h,c}`) and `<name>.test`: `REDEFINE: %{msil_srcs} = <drivers in %S>`; `REDEFINE: %{msil_archives} = <lib>=%{msil_corpus}/<name>-<ref>/<src>,...;sup=%S/../support/sup_arena.c,...` (one archive per recon library plus `sup`); `REDEFINE: %{msil_copts} = -isystem %S/../shim -I%S/../support ...` (the recon's include directories and defines, `-Werror=implicit-function-declaration -w`); `RUN: %{msil_prog}`. `.expected` only from update-expected.py (`.linux.expected` only where the Linux transcript differs; none for TweetNaCl). Drivers return their error count masked to 8 bits (D37), so every transcript ends `[exit 0]` (zlib's 12 round trips, CoreMark's CRCs, BLAKE2's 4 x 256 keyed KATs, Monocypher's self-checks). (4) `det/<name>.test`: the program's REDEFINE lines, `RUN: %python %S/check-recipe.py %s %S/../<name>/<name>.test` (fails when the REDEFINE lines differ), `RUN: %{msil_det}`. (5) c-testsuite: `libc-free.txt` lists the 150 tests of the pinned tree whose source matches no libc call by ctest.py's regular expression (header: rule and count), as `<name>` or `<name> diag <text>  # <P3 item>`; `exit0.expected` is `[exit 0]`; the `lit.local.cfg` format builds each name with `%{msil_prog}`, `%{msil_srcs}` = `%{msil_corpus}/c-testsuite-<ref>/tests/single-exec/<name>.c`, `%{msil_expect}` = `%S/exit0`, the native oracle and the recon's flags in both builds (`%{msil_cflags}` redefined to `-std=gnu17 -w`: no `-ffreestanding`, because several tests rely on main's implicit `return 0`), and a `diag` name with `%{msil_prog_fail_<L>}` and FileCheck of `<text>` (`--implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"`); a listed test whose `.c.expected` is not empty is a configuration error. `diag` is allowed only for a Phase 3 construct: a variadic definition (P3-B, D19's diagnostic; `00140`, which LTO deleted at -O2 but objects keep) or dynamic alloca (P3-A). Checks, with M23.a's cache and M23.d's harness: every program at -O0/-O2, both triples (WSL through a private lit root, gen_litroot.py), both pipelines; c-testsuite at -O0/-O2 through objects. A compiler or linker failure goes to the orchestrator with a reproducer (fix loop, section 1.7a), never into a weakened test. Report each program's time.
+
+#### M23.c Link-semantics matrix: coverage list, missing rows, Phase 3 rows (test, ~500 lines)
+
+- Owned files: `msil/test/M2/08-semantics/`
+- Depends on: M23.d
+- Reads: this plan sections 5.8.8, 5.9.8, 5.9.9, 5.9.14, 5.9.16, 5.10.10, 5.10.14 (with its native-callback list) and 5.12.1-5.12.7, the M23.d text above and the section 12 rows for M23; llvm/docs/MSIL/recon/p2/judge-c-fidelity.md sections 3, 4 and 6.5; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/probes/; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/results-native-win.txt; llvm/docs/MSIL/recon/p2/judge-c-fidelity-files/results-native-linux.txt; llvm/docs/MSIL/recon/p2/objfmt-binding-files/zoo/; llvm/docs/MSIL/recon/p2/objfmt-binding-files/sigmismatch/; llvm/docs/MSIL/recon/m11/hooks-artifacts/gen_litroot.py; msil/test/M2/ (the cases of M14, M15, M20, M22); llvm/test/CodeGen/MSIL/ (M19's p7 test)
+- Provides: `msil/test/M2/08-semantics/matrix.txt` (the columns below), `matrix-coverage.test`, `Inputs/check-matrix.py`; new cases `fini-array.test`, `crt-xt.test`, `variadic-def-xtu.test`, `atexit-order.test`, and a test for any non-P3 row of 5.9.16 that has none
+
+From the specification only: do not read M23.d's working-tree files (`git show HEAD:msil/test/lit.cfg.py` shows the harness before M23). Closes condition 5 for Phase 2; never edits or weakens an existing case; no XFAIL line anywhere. (1) `matrix.txt`, one line per 5.9.16 row and variant: `<case> | <tests, relative to msil/test/M2 or the repository> | <native: transcript, link error or UB> | <pipelines> | <triples> | <Phase 2: transcript, diag:<text> or untested: <reason>> | <milestones>`, including rows that live elsewhere (M14's 00-link cases, M15's `native-callback` and `pragma-comment-lib`, M19's p7 test, M22's P2-C rows), M20's `weak-def-sig-mismatch` (transcript with the adapter warning; its `double` variant `UB` natively and 5.9.8's error), `ctor-slot-order` and `import-attrs`, each with `obj` and `lto` on both triples, and the P3 rows (p5-tls and p6-dtors as future transcripts, `.fini_array`/`.CRT$XT`, atexit order, a variadic definition across objects). `float-int-mismatch` and `type-mismatch` link natively with undefined behaviour, so their native column is `UB` (no transcript) and their Phase 2 column the named diagnostic (5.9.16). (2) `Inputs/check-matrix.py` (standard library), run by `matrix-coverage.test` with the repository root: every listed file exists and every `.test` here is listed; a `UB` or `link error` native column has a `diag:` Phase 2 column; a transcript case runs `%{msil_prog}` at the leg's levels on both x86_64 triples unless its row names one triple and the test REQUIRES it; a `diag` case FileChecks `<text>` for each listed pipeline, with `--implicit-check-not` for `LLVM ERROR`, `PLEASE submit` and 5.9.16's JIT-time exception names; every case 5.9.16 assigns to M20 lists both `obj` and `lto`; a P3 row has a test pinning its current Phase 2 diagnostic or `untested: <reason>`. Every pipeline-specific check is guarded by `%if msil-prog-pipeline=<p>` (5.12.7), never by `msil-pipeline=<p>`. (3) New cases from the probes (`.expected` only from update-expected.py, both OS): `fini-array` (Linux: a `.fini_array` destructor stops with M20's unsupported-section diagnostic), `crt-xt` (Windows, `.CRT$XT*`, the same), `variadic-def-xtu` (a variadic definition called from another object: the variadic-definition diagnostic at `clang -c` under obj, at the link under lto), `atexit-order` (`atexit` binds nowhere in Phase 2, 5.10.10: the case pins the link diagnostic each triple gives, expected `undefined symbol: atexit`; a transcript from P3), and any missing non-P3 row. A case whose Phase 2 result is neither its native transcript nor a named diagnostic (a JIT-time exception, a crash, a wrong transcript) goes to the orchestrator with a reproducer, who picks a named diagnostic (fix loop) or a known gap in Status.md; such a case never becomes `untested`. Checks: the whole matrix through a private lit root (gen_litroot.py), obj and lto, Windows .NET 8 with Framework and `msil_also_run=10`, WSL .NET 10 with `msil_also_run=8`: every case prints its native transcript or its named diagnostic, never a JIT-time exception; failures go to the orchestrator with reproducers.
+
+#### M23.d Harness: objects by default, corpus parameters, folded runtimes, phase-exit legs, gate rows, CI (infra, ~1,500 lines)
+
+- Owned files: `msil/test/lit.cfg.py`, `msil/test/harness/`, `msil/utils/update-expected.py`, `msil/utils/ci/lit-legs.ps1`, `msil/utils/ci/lit-legs.sh`, `msil/utils/ci/det-manifest.py`, `msil/utils/run-m1-gate.ps1`, `.github/workflows/msil-ci.yml`
+- Depends on: M23.a
+- Reads: this plan sections 4, 5.5, 5.6.1, 5.7.12 (determinism), 5.7.15's M23 note and 5.12, the M11 section of section 6 (run-m1-gate.ps1 and lit-legs conventions), section 10's Phase 2 items and the section 12 rows for M23; llvm/docs/MSIL/recon/p2/tests-p2.md sections 1.3, 3.7, 3.8, 6 and 7; llvm/docs/MSIL/recon/m11/hooks-artifacts/gen_litroot.py; msil/test/lit.cfg.py; msil/test/harness/; msil/utils/update-expected.py; msil/utils/msil-prog.py; msil/utils/msil-run.py; msil/utils/msil-jitall.py; msil/utils/ci/lit-legs.ps1; msil/utils/ci/lit-legs.sh; msil/utils/ci/ci-common.ps1; msil/utils/ci/check-action-pins.py; msil/utils/run-m1-gate.ps1; .github/workflows/msil-ci.yml
+- Provides: defaults `msil_pipeline=obj` and `msil_link_output=pe`; lit parameters `msil_corpus_dir`, `msil_require_corpus`, `msil_corpus_skip`, `msil_also_run`, features `msil-corpus`, `msil-corpus-<name>`, `msil-also-run` and substitutions `%{msil_corpus}`, `%{msil_copts}`, `%{msil_expect}` (5.12.2, 5.12.3, 5.12.9); `update-expected.py --corpus-dir DIR`; `python msil/utils/ci/det-manifest.py build --clang PATH --ar PATH --out FILE [--work DIR] [--levels O0,O2] | compare A B | --self-test`; the M23 legs of 5.12.10-5.12.11 and their `MSIL_CORPUS_SKIP` handling (5.12.12; row 'M23 CI corpus'); run-m1-gate.ps1 `-CorpusCache DIR`, `-FetchCorpus` and rows `corpus`, `determinism`; msil-ci.yml's `MSIL_CORPUS_SKIP`, corpus cache and fetch steps and the `determinism` job
+
+(1) lit.cfg.py: with no parameter `%{msil_c}`, `%{msil_ll}` and `%{msil_prog}` run through objects and the PE (5.12.1; `asm` stays selectable); the corpus parameters, `msil_corpus_skip`, `msil_also_run`, `%{msil_copts}` and `%{msil_expect}` as 5.12.2 and 5.12.3 define them, `%{msil_copts}` also in `%{msil_det}`; `%{msil_cflags}` stays a placeholder inside the composites, so a directory may redefine it (c-testsuite); a missing or stale stamp is a note, and under `msil_require_corpus=1` a fatal error naming `fetch.py --cache <dir>`, as is an entry the stamp lacks unless `msil_corpus_skip` names it; no placeholder name is a substring of another (5.12.3). (2) harness/ (5.6.1 rule 6: the default expansions of `%{msil_c}` and `%{msil_prog}` change, and M23.d owns the whole directory): the texts M23 retires are harness/pipeline/'s tests that assumed the `asm` default (now REQUIRES `msil-pipeline=asm`; nested lit runs pass `--param msil_pipeline=asm`) and harness/prog/'s pins of the `%{msil_prog}` and `%{msil_c}` expansions (the `obj` route by default, `--expect` from `%{msil_expect}`, the `%{msil_copts}` flags, the `msil_also_run` runs); lld/test/MSIL/ pins no harness text and stays untouched. New self-tests with stand-in tools: `default-pipeline.test` (features `msil-pipeline=obj`, `msil-prog-pipeline=obj` and `msil-link-output=pe` with no parameter; `%{msil_c}` is the object route), `also-run.test` (two entries give two more jitall runs and runs with the right runtimeconfig and environment; an unknown runtime is fatal; a transcript that differs on one extra runtime fails), `corpus-param.test` (no cache, a stale stamp, a valid fake stamp; the `msil_require_corpus` error; a fake stamp without one entry, fatal under `msil_require_corpus=1` without `msil_corpus_skip` and UNSUPPORTED with it), `copts-expect.test`, `det-manifest.test` (`--self-test`). (3) update-expected.py: `--corpus-dir`; the three placeholders in REDEFINE values; Programs tests built natively; det tests and the c-testsuite format skipped. (4) det-manifest.py (standard library): `build` compiles every C file of msil/test/M1 with `-c` for x86_64-pc-windows-msvc-msil and x86_64-unknown-linux-gnu-msil at each level (`-std=gnu17 -ffreestanding -Werror=return-type -I msil/test/Inputs`, relative paths, `-fdebug-compilation-dir=.`, a thread pool, a work directory outside the repository), adds one `llvm-ar rcs` archive per triple and level, writes sorted lines `<sha256>  <triple>/<level>/<path>`; `compare` exits 1 on a differing entry or when no entry is common, and lists entries found in one file only. (5) lit-legs.ps1 and lit-legs.sh: the M23 legs of 5.12.10-5.12.11; `-Leg <removed leg>` fails naming the leg that now covers it; the corpus legs (programs, programs-lto, ctest, det and their `-Wsl` twins) get `msil_corpus_dir` from `$MSIL_CORPUS_CACHE` and `msil_corpus_skip` from `$MSIL_CORPUS_SKIP`; while `$MSIL_CORPUS_SKIP` names `c-testsuite`, the ctest leg prints `ctest: skipped (c-testsuite is in MSIL_CORPUS_SKIP)` and does not run, and is reported as skipped, not passed (5.12.12; row 'M23 CI corpus'); headers name the M23 gate steps; lit-legs.sh's header equals its `--list`. lit-legs.ps1's `net8` passes `msil_scale_tests=1` (it absorbs M20's `obj` leg, the only leg that set it; 5.12.2), so `msil/test/M2/00-link/spill-limits.test` runs once per phase gate, on Windows, instead of being UNSUPPORTED in every leg; no other leg sets it. (6) run-m1-gate.ps1: `-CorpusCache` (default `$MSIL_CORPUS_CACHE`, else `C:\llvm-msil-scratch\corpus-cache`), exported to the legs; `MSIL_CORPUS_SKIP` removed from the legs' environment, so the phase gate runs all ten entries; a `corpus` step before the legs (`fetch.py --check`, never with `--skip`; with `-FetchCorpus`, `fetch.py --cache` first); a `determinism` step after them (`det-manifest.py build` in `C:\llvm-msil-scratch\gates\det\a` and `...\b`, then `compare`); expected rows: `-List` without `-Quick` and `-Full`, plus `corpus` and `determinism`; a failed `corpus` row does not stop the legs; the header names the phase-exit rows and their costs. (7) msil-ci.yml, still `workflow_dispatch` only and with no step that changes repository settings (the user makes `msil` the default branch, Q38): a workflow-level env `MSIL_CORPUS_SKIP: coremark,c-testsuite` whose comment names section 10's item on the CI licences (5.12.12; row 'M23 CI corpus'); in both jobs an `actions/cache` step pinned as the existing one, keyed on `hashFiles('msil/utils/corpus/manifest.json')`, for a directory outside the checkout exported as `MSIL_CORPUS_CACHE`, then `fetch.py --cache` and `--check`, each with `--skip` of `MSIL_CORPUS_SKIP`; after the legs `det-manifest.py build --out build/lit-results/det-<os>.txt` and its upload (upload-artifact pinned as today) whenever the build passed; a `determinism` job (needs both; ubuntu-24.04; the owner guard; `actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2`, upstream's pin) running `det-manifest.py compare`; setup-dotnet keeps the v5.4.0 SHA; the header names the legs, the corpus and what CI leaves out, and the determinism job. Checks: the harness self-tests (private lit root, gen_litroot.py); `lit-legs.ps1 -List`; `lit-legs.sh --list` in WSL against its header; `-Leg obj`'s message; `-Leg ctest` with `MSIL_CORPUS_SKIP=coremark,c-testsuite` prints its skip line and runs no lit; `det-manifest.py --self-test` and two real builds compared; `run-m1-gate.ps1 -SkipConfigure -SkipBuild -SkipUnitTests -SkipUpstreamHooks -NoWsl -Leg det` (rows `corpus` and `determinism` shown); msil-ci.yml parses; check-action-pins.py; `msil/test/M1/11-programs` under the new default through a private lit root.
+
+#### M23.e Documentation of Phase 2 as built (docs, ~700 lines)
+
+- Owned files: `llvm/docs/MSIL/Status.md`, `llvm/docs/MSIL/GettingStarted.md`, `llvm/docs/MSIL/TestCorpus.md`, `msil/README.md`, `msil/test/README.md`, `msil/utils/build/README.md`
+- Depends on: M23.a, M23.b, M23.c, M23.d
+- Reads: this plan sections 5.9.16 and 5.12, section 7 (P2-A to P3-B), section 10 (the Phase 2 decisions and the open items), the Goal and Exit criteria of M12-M22 and the whole M23 section (section 6), and the section 12 rows of Phase 2; llvm/docs/MSIL/recon/p2/decision-brief.md sections 0.2 and 1.2; the hand-overs of M23.a-M23.d and the files they create (msil/test/M2/08-semantics/matrix.txt, msil/utils/corpus/manifest.json); llvm/docs/MSIL/Status.md; llvm/docs/MSIL/GettingStarted.md; llvm/docs/MSIL/TestCorpus.md; msil/README.md; msil/test/README.md; msil/utils/build/README.md
+- Provides: the documentation of the Phase 2 exit
+
+Written last, from the hand-overs; Design.md and FeatureIdeas.md stay untouched. Status.md becomes "status of Phase 2": the state line; a section "Phase 2 exit criteria" with Q29's items and how each is met (programs by triple, runtime, pipeline and level; c-testsuite with each `diag` entry; the matrix as a table from matrix.txt: case, native result, Phase 2 result per pipeline, and the P3 rows: TLS, destructors, `.fini_array`/`.CRT$XT`, `atexit`, function pointers passed to native code, variadic definitions across objects; M1 through objects); the outcomes of Design.md 11's Phase 2 row and the leg proving each; Phase 1's table under its own heading; what Phase 2 does not do and the known gaps (cross-host PE determinism; CI licences: CoreMark and c-testsuite run only in the phase gate on the development host while `MSIL_CORPUS_SKIP` names them; `untested` rows); oracles O1-O6 next to D21; runtime differences found; "Proposed Design.md updates" for Phase 2 as built (among them, while section 10's item on Design.md 4.1/5.4 is open, how an EXE with library inputs initializes as built); counts from the tree. GettingStarted.md: sections 3-5 lead with `clang -c` and the link (archives with the tree's `llvm-ar`, `-Wl,--reference=`, `-shared`), `-S` plus ilasm as the oracle route, runtimeconfig.json still the user's; section 7: the default pipeline, the legs after M23 (old names to new), the corpus (`fetch.py`, the cache, `msil_corpus_dir`, `--skip`, `MSIL_CORPUS_SKIP` and `msil_corpus_skip`), `msil_also_run`, the phase gate (`run-m1-gate.ps1 -CorpusCache`/`-FetchCorpus`), the determinism job. TestCorpus.md: a section "Phase 2 exit corpus" (versions and licences from manifest.json, results, `diag` entries, the CI licences still unverified and CI's default skip). msil/README.md: `utils/corpus/`, `test/Programs/`, `utils/ci/det-manifest.py`. msil/test/README.md: default pipeline, Programs, `msil_also_run`, legs, counts. msil/utils/build/README.md: the phase gate's build targets (`msil-build.ps1 -Standard`).
+
+**Build targets:** `llc` `opt` `clang` `FileCheck` `not` `count` `split-file` `llvm-config` `llvm-profdata` `TargetParserTests` `MCTests` `MSILTests` `lld` `llvm-ar` `llvm-ranlib` `llvm-lib` `llvm-dlltool` `llvm-nm` `llvm-objdump` `llvm-readobj` `llvm-as` `llvm-bcanalyzer` `llvm-lto2` `CLITests` `LLDAsLibAllTests` `yaml2obj` `llvm-mc` `llvm-cil-dump` `llvm-cil-copy`
+
+**Gate commands** (run in order by the gate agent; all must succeed):
+
+```text
+ 1. pwsh -NoProfile -Command '$f = (Get-PSDrive D).Free / 1GB; "D: has {0:N1} GB free" -f $f; if ($f -lt 8) { "below 8 GB: report to the user before building (plan 5.6.11)"; exit 1 }'
+ 2. wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/msil-wsl-dotnet.sh  (G0, idempotent)
+ 3. python D:/llvm-msil/msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot  (G0, idempotent)
+ 4. python D:/llvm-msil/msil/utils/corpus/fetch.py --self-test  (offline: hash mismatches, --skip stamps, traversal, a cache inside the repository, http URLs)
+ 5. python D:/llvm-msil/msil/utils/corpus/fetch.py --cache C:/llvm-msil-scratch/corpus-cache  (the download the user approved on 2026-10-21: only entries the cache lacks, about 7 MB, every hash verified; nothing enters the repository)
+ 6. python D:/llvm-msil/msil/utils/corpus/fetch.py --cache C:/llvm-msil-scratch/corpus-cache --check  (offline, all ten entries, no --skip; writes the stamp lit reads)
+ 7. python -c "import json, re; m = json.load(open('D:/llvm-msil/msil/utils/corpus/manifest.json', encoding='utf-8')); p = {e['name']: e for e in m['programs']}; need = {'zlib', 'tinf', 'monocypher', 'coremark', 'lz4', 'blake2', 'tweetnacl', 'kissfft', 'jsmn', 'c-testsuite'}; assert m['version'] == 1 and set(p) == need, sorted(p); bad = [n for n, e in p.items() if not re.fullmatch('[0-9a-f]{64}', e.get('tree_sha256', '')) or not (re.fullmatch('[0-9a-f]{40}', e.get('commit', '')) or re.fullmatch('[0-9a-f]{64}', e.get('archive_sha256', ''))) or not e.get('license')]; assert not bad, bad; print('manifest.json: 10 entries pinned by commit or archive hash and by tree hash')"
+ 8. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard  (G1: the M17-M23 list of 5.6.11 from msil/utils/ci/build-targets.txt; no source changes, so it only confirms that the tree is current)
+ 9. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests 210  (G2: M22's floor, 5.7.13 and 5.12.10)
+10. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-gtest.ps1 -Exe D:/llvm-msil/build/unittests/CLI/CLITests.exe -Filter 'CLISymbolTableTest.*' -NoSkip -MinTests 9  (G2: M22's CLISymbolTableTest cases)
+11. pwsh -NoProfile -Command '$r = "D:/llvm-msil/"; $bad = @(); foreach ($p in "zlib", "tinf", "monocypher", "coremark", "lz4", "blake2", "tweetnacl", "kissfft", "jsmn") { foreach ($f in "msil/test/Programs/$p/$p.test", "msil/test/Programs/$p/$p.expected", "msil/test/Programs/det/$p.test") { if (-not (Test-Path -LiteralPath ($r + $f))) { $bad += "missing: $f" } }; foreach ($e in @(Get-ChildItem -LiteralPath ($r + "msil/test/Programs/$p") -Filter *.expected -ErrorAction SilentlyContinue)) { if ((Get-Content -LiteralPath $e.FullName -Tail 1) -ne "[exit 0]") { $bad += "$($e.Name) does not end with [exit 0]" } } }; if (Test-Path -LiteralPath ($r + "msil/test/Programs/tweetnacl/tweetnacl.linux.expected")) { $bad += "tweetnacl has a Linux override" }; $n = @(Get-Content -LiteralPath ($r + "msil/test/Programs/c-testsuite/libc-free.txt") -ErrorAction SilentlyContinue | Where-Object { $_ -match "^\s*[^#\s]" }).Count; if ($n -ne 150) { $bad += "libc-free.txt lists $n tests, not 150" }; foreach ($f in "msil/test/Programs/lit.local.cfg", "msil/test/Programs/c-testsuite/lit.local.cfg", "msil/test/Programs/c-testsuite/exit0.expected", "msil/test/M2/08-semantics/matrix.txt", "msil/test/M2/08-semantics/matrix-coverage.test", "msil/test/M2/08-semantics/fini-array.test", "msil/test/M2/08-semantics/crt-xt.test", "msil/test/M2/08-semantics/variadic-def-xtu.test", "msil/test/M2/08-semantics/atexit-order.test", "msil/utils/ci/det-manifest.py", "msil/test/harness/default-pipeline.test", "msil/test/harness/also-run.test", "msil/test/harness/corpus-param.test", "msil/test/harness/copts-expect.test", "msil/test/harness/det-manifest.test") { if (-not (Test-Path -LiteralPath ($r + $f))) { $bad += "missing: $f" } }; $m = Get-Content -Raw -LiteralPath ($r + "msil/test/M2/08-semantics/matrix.txt") -ErrorAction SilentlyContinue; foreach ($k in "weak-def-sig-mismatch", "ctor-slot-order", "import-attrs", "float-int-mismatch", "type-mismatch", "atexit-order", "p5-tls", "p6-dtors") { if (-not $m -or -not $m.Contains($k)) { $bad += "matrix.txt lacks $k" } }; $s = Get-Content -Raw -LiteralPath ($r + "llvm/docs/MSIL/Status.md"); foreach ($k in "Phase 2 exit criteria", "p5-tls", "p6-dtors", "c-testsuite", "CoreMark") { if (-not $s.Contains($k)) { $bad += "Status.md lacks $k" } }; $g = Get-Content -Raw -LiteralPath ($r + "llvm/docs/MSIL/GettingStarted.md"); foreach ($k in "fetch.py", "msil_also_run", "MSIL_CORPUS_SKIP") { if (-not $g.Contains($k)) { $bad += "GettingStarted.md lacks $k" } }; if ($bad.Count) { $bad; exit 1 }; "every M23 file is present"'  (G6: lit only warns about a missing path)
+12. pwsh -NoProfile -Command '$p = @(pwsh -NoProfile -File D:/llvm-msil/msil/utils/ci/lit-legs.ps1 -List); $s = @(wsl -d Ubuntu --cd /mnt/d/llvm-msil --exec bash msil/utils/ci/lit-legs.sh --list); $rc = $LASTEXITCODE; $p; $s; $bad = @(); if ($rc -ne 0) { $bad += "lit-legs.sh --list failed" }; foreach ($n in "net8", "more-levels", "asm-oracle", "modern-ilasm", "roundtrip", "expected", "utc", "obj-text", "lto", "det", "refs-net48", "refs-net8", "refs-net10", "programs", "programs-lto", "ctest", "wsl-net10 (-Wsl)", "wsl-ilasm (-Wsl)", "expected-linux (-Wsl)", "obj-text-wsl (-Wsl)", "lto-wsl (-Wsl)", "programs-wsl (-Wsl)", "programs-lto-wsl (-Wsl)", "det-wsl (-Wsl)", "wsl-quick (-Quick)", "lto-m1 (-Full)", "encoder-parity (-Full)") { if ($p -notcontains $n) { $bad += "lit-legs.ps1 -List lacks $n" } }; foreach ($n in "obj", "obj-wsl", "obj-wsl (-Wsl)", "net10", "net8-tc0", "wsl-net10-tc0", "wsl-net10-tc0 (-Wsl)", "wsl-quick (-Wsl)", "encoder-parity") { if ($p -contains $n) { $bad += "lit-legs.ps1 -List still has $n" } }; foreach ($n in "net8", "asm-oracle", "lto", "det", "programs", "programs-lto", "ctest") { if ($s -notcontains $n) { $bad += "lit-legs.sh --list lacks $n" } }; if ($bad.Count) { $bad; exit 1 }'
+13. pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1" msil/test/harness msil/test/M2/08-semantics/matrix-coverage.test  (the self-tests of the default flip, msil_also_run, the corpus parameters with msil_corpus_skip, det-manifest.py and the matrix list, before the long run; about 2 min, also inside step 16)
+14. python D:/llvm-msil/msil/utils/mdtools/build-mdtools.py  (up to date since M16; the dumpers and stats modes need mdcanon)
+15. python D:/llvm-msil/msil/utils/mdtools/cli-corpus-check.py --mode ilasm,dumpers,copy,stats --levels O2 --work C:/llvm-msil-scratch/gates/M23/cli-corpus D:/llvm-msil/msil/test/M1/11-programs  (all four modes of 5.7.13 at 5.7.15's M23 scale; about 1.5 min)
+16. pwsh -NoProfile -File D:/llvm-msil/msil/utils/run-m1-gate.ps1 -CorpusCache C:/llvm-msil-scratch/corpus-cache  (the phase-exit run, started with run_in_background: configure, build, unit tests with CLITests, corpus (fetch.py --check, never --skip; MSIL_CORPUS_SKIP cleared for the legs), every leg of 'lit-legs.ps1 -List' except -Quick and -Full (WSL legs included; net8, lto and programs-lto with the equivalence link of 5.12.6; net8 with msil_scale_tests=1, M20's spill-limits), determinism, every upstream-hooks leg, ci-sh; every row must PASS; about 81 min after the build)
+17. python -c "import pathlib, yaml; t = pathlib.Path('D:/llvm-msil/.github/workflows/msil-ci.yml').read_text(encoding='utf-8'); y = yaml.safe_load(t); on = y.get('on', y.get(True)); assert list(on) == ['workflow_dispatch'], on; assert t.count('uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0') == 2; assert t.count('msil/utils/corpus/manifest.json') >= 2 and 'msil/utils/corpus/fetch.py' in t; assert y['env'].get('MSIL_CORPUS_SKIP') == 'coremark,c-testsuite', y['env']; assert t.count('--skip') >= 2; assert 'determinism' in y['jobs'] and 'det-manifest.py compare' in t; print('msil-ci.yml: dispatch only, setup-dotnet v5.4.0, corpus cache and fetch without CoreMark and c-testsuite, determinism job')"
+18. python D:/llvm-msil/msil/utils/ci/check-action-pins.py D:/llvm-msil  (actions/cache and actions/download-artifact pinned as upstream pins them)
+19. pwsh -NoProfile -Command "Set-Location D:/llvm-msil; git add -A; python 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/git-clang-format' --binary 'C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/clang-format.exe' --extensions c,cpp,h,hpp,hxx,cxx,inc,cppm,cl --diff HEAD -- llvm/lib llvm/include llvm/unittests llvm/tools/llvm-cil-dump llvm/tools/llvm-cil-copy clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests"  (must print no diff; M23 changes no C++ unless the fix loop did)
+20. pwsh -NoProfile -Command "git -C D:/llvm-msil add -A; python D:/llvm-msil/msil/utils/plan-check.py scope M23"  (also proves that no corpus file entered the repository)
+```
+
+**Exit criteria**
+- Q29: each program matches its native build at -O0 and -O2 on x86_64-pc-windows-msvc-msil (.NET 8, .NET 10, Framework 4.8) and x86_64-unknown-linux-gnu-msil (WSL .NET 10 and .NET 8, E7 oracle), through objects and through LTO (O4 on the LTO legs), verification and jitall clean; every transcript ends `[exit 0]`; TweetNaCl is identical on both triples. The 150 c-testsuite tests match native through objects at -O0 and -O2, except the `diag` entries, each a named diagnostic of a Phase 3 feature.
+- Matrix: matrix-coverage.test passes; every case prints its native transcript or named diagnostic on obj and lto, both triples, five runtimes, M20's `weak-def-sig-mismatch`, `ctor-slot-order` and `import-attrs` included; `float-int-mismatch` and `type-mismatch` (undefined behaviour natively) give their named diagnostics; no JIT-time exception, no XFAIL; every P3 row is pinned (`atexit-order` included) or `untested` with a reason.
+- `obj` is the default; every Phase 1 leg is green through objects (net8 with O3/O6 on the equivalence link, .NET 10 and TieredCompilation=0 runs and M20's spill-limits under `msil_scale_tests=1`, more-levels, wsl-net10 with .NET 8 and TieredCompilation=0 runs, the round trip of msil-ld outputs), and asm-oracle, modern-ilasm and wsl-ilasm are green.
+- det and det-wsl are byte-identical across directories for M2/06-det and the nine programs; det-manifest.py compares equal across two work directories; msil-ci.yml runs the new legs with the corpus cache, leaves out CoreMark and c-testsuite through `MSIL_CORPUS_SKIP` until the user answers section 10's item (no CI leg passes all-UNSUPPORTED because of it), compares both hosts' manifests, stays dispatch-only with setup-dotnet at the v5.4.0 SHA, passes check-action-pins.py, and no step changes repository settings or files upstream reports.
+- CLITests passes at M22's floor (210 tests, `CLISymbolTableTest.*` at least 9); cli-corpus-check.py passes its four modes; every corpus entry is pinned by commit or archive hash and tree hash; `fetch.py --check` passes on all ten entries; nothing downloaded is committed; the docs describe Phase 2 as built; the gate time is recorded within Q32, or the cut order below applies.
+
+**Review focus** (in addition to the three standing lenses)
+- fetch.py treats downloads as untrusted (https only, hash before extraction, safe extraction, cache outside the repository); no network outside fetch.py and CI's fetch step; the manifest pins exactly 5.12.9's versions, with licences; CI fetches neither CoreMark nor c-testsuite while `MSIL_CORPUS_SKIP` names them, and the phase gate never skips an entry.
+- No coverage lost: every pre-M23 leg (M11's and Phase 2's) maps to a leg that now runs its tests and runtimes; `msil_also_run` repeats jitall and the run on the same verified build; no leg can pass with every test UNSUPPORTED (`msil_require_corpus` with `msil_corpus_skip`, `_exec`, `_link`, `_verify`; the ctest leg's skip line in CI).
+- Programs keep the recon drivers' semantics, are UB-free and use the same flags in both builds; `diag` only for P3 features; `.expected` generated; matrix cases never weakened, P3 rows honest, `UB` native rows only with a named diagnostic.
+- Budget accounting (the equivalence link included); CI pins as upstream's; no user-profile path in committed text; nothing precludes FeatureIdeas (one triple per lit run is a harness assumption only, tests-p2 8).
+
+**Rebuild cost.** No C++ changes: step 8 is a no-op build and run-m1-gate.ps1's configure reruns CMake (about 1 min, build time); a fix loop rebuilds per its files. Gate after the build, about 88-90 min: steps 2-7 and 9-15 about 6.5 min (step 13 ~2, step 15 ~1.5); step 16 about 81 min (unit tests ~1; Windows legs ~53: net8 ~15.3, more-levels ~6.5, refs ~6, asm-oracle ~5.5, obj-text ~4, ctest ~4, lto ~3.9, programs and programs-lto ~3.7, expected ~2.5, the rest ~1.5; WSL legs ~22: wsl-net10 ~12, programs-wsl and programs-lto-wsl ~4, expected-linux ~3, lto-wsl ~1.5, the rest ~2; upstream-hooks ~4; determinism and ci-sh ~1.5); steps 17-20 about 1.5 min. The equivalence link (5.12.6) is included: about 500 more msil-ld links in net8 (M1 and M2 at -O0 and -O2) and 280 more LTO links in lto, at 0.25-0.3 s each (measured on this host on 2026-10-21: a one-function `lld-link` link takes 0.15 s median, 0.22 s through the clang driver; tests-p2 2.1's prototype LTO link 0.19 s), about 0.3 and 0.2 min of wall time at the M11 net8 leg's parallelism (4,006 s of test time in 513 s), and 18 more LTO links in programs-lto, about 0.2 min (LZ4 at -O0, 7.6 s in the recon, is the longest). M20's `spill-limits` (net8 only) and LZ4 at -O0 bound the net8 and programs legs. Over 90 minutes, the orchestrator cuts in this order, each through a section 12 row: ctest at -O2 only, obj-text on msil/test/M1 at -O2 only, lto on msil/test/M2/08-semantics and 02-lto only (about 2 min each).
+
+## 7. Phase outlines (phases 2-5)
+
+Phase 2 is planned in full: milestones M12-M23 (section 6) with the contracts of sections 5.6-5.12, from the recon in [recon/p2/](recon/p2/) and the user's decisions of 2026-10-21 (section 10). P2-A, P2-B and P2-C below say what each part covers and which milestones implement it; M12 (backlog fixes) and M23 (the Phase 2 exit) belong to none of them. Phases 3-5 each become a sequence of small milestones with the same protocol when the phase starts. Every phase that needs widely-included header edits (MCSymbol kinds, IR intrinsics, RuntimeLibcalls.td, CallingConv.h, clang Attr.td) front-loads them into its first milestone, as M1 and M13 do.
+
+### P2-A. CIL object files and the MC object writer (M13, M16-M19)
+
+M13, Phase 2's first milestone, batches every upstream hook and shared header of the phase: the lib/MC `.cpp` hooks with clean-error stub factories and the new headers `MCSymbolMSIL.h`, `MCMSILStreamer.h` and `MCMSILObjectWriter.h`; `BinaryFormat/CLI.h`, `CLITables.def` and `CILOpcodes.def`; the link-info record v1 contract (`BinaryFormat/MSILLink.h`, 5.8.11); the lld flavor hooks; and clang `Attr.td`'s import attributes. No `MCSymbol.h` or `MCContext.h` edit is needed (measured), and the widened `Attr.td` target recompiles only a few objects, so M13 is not a clang-wide rebuild (5.6.10). M16 and M17 build the ECMA-335 reader and writer in `llvm/lib/CLI` (5.7). M18 makes every MCInst one CIL instruction, with structured BCL operands and a table-driven encoder shared by `-S` and objects. M19 writes CIL objects through `llvm/lib/CLI`: ECMA-335 netmodules (no Assembly row) whose definitions are metadata rows and whose cross-object references are named metadata references, with a versioned link-info record in a module-level custom attribute and a COFF symbol view for `nm` and `ar` (Q1 = B2; 5.8); M20's commit freezes record v1, after msil-ld has linked the object rows of the link-semantics matrix with it (5.8.9). Objects carry no `.cctor` and no `Main`. Until M19, `clang -c` writes bitcode (Q6).
+
+### P2-B. msil-ld: lld flavor, symbol resolution, LTO and the PE writer (M14, M15, M20, M21)
+
+msil-ld is an lld flavor hosted in `lld` as `msil-ld` (Q18), modeled on lld/wasm for its driver and LTO, with lld/ELF's resolution rules (a port of `lld/ELF/Symbols.cpp`: weak, common, COMDAT, aliases, lazy extraction; 5.9.5). M14 links bitcode and archives (ILAsm text through `--lto-emit-asm`, assembled by ilasm until the PE writer exists) and gives clang the `MSILToolChain<NativeTC>` that invokes msil-ld; bitcode from stock clang is a documented compatibility path with a warning (Q12). M15 resolves symbols to native libraries (P/Invoke resolution from native export tables and import libraries: `DT_SONAME`, kernel32.lib-style mapping; Q13-Q17), which moved here from P2-C (backlog S4). M20 links CIL objects: it binds by name, renumbers every token by decoding IL (5.9.7), checks every cross-object call signature against the definition (an adapter and a warning where native behaviour can be matched, otherwise a link error naming both objects; Q8), lays out one data segment, synthesizes `<Module>::.cctor` and `'<msil>Main'` with the trailer builder that `-S` also uses (5.9.10), and writes the PE/ECMA-335 metadata directly; ilasm remains a test oracle (round trip). M21 binds every BCL type and member the generated code needs (Marshal::AllocHGlobal, Interlocked::MemoryBarrier, Math, attributes such as DisableRuntimeMarshalling, ...) by searching the reference assemblies given with `--reference` (repeatable, no short form, because lld's `-r` means `--relocatable`; Q9), referencing whichever assembly defines it (.NET 8 reference assemblies give references such as System.Runtime, System.Runtime.InteropServices and System.Threading, .NET Framework's give mscorlib). With no references, msil-ld binds the members that the default code generation uses to `[mscorlib]` 4.0.0.0 from a built-in table of members that mscorlib provides on .NET Framework 4.8 and modern .NET alike; a member outside that table needs a reference (Q10, backlog S2). There is no core-library switch and no target-framework option (section 12, 2026-10-14). msil-ld links the toolchain's static C helper archive like any other archive, the way lld links compiler-rt builtins, and keeps the IL helpers the backend emits private to the output; the archive, its content and the driver's default input for it come with P3 (backlog S3). Neither the driver nor msil-ld writes runtimeconfig.json or .exe.config: like Roslyn (csc), which writes only the assembly and its PDB, they leave them to the build system or the user.
+
+### P2-C. Exports and assembly-to-assembly linking (M22)
+
+`-shared` libraries (clang `-shared`, clang-cl `/LD`) with a public export class (`--export-class`, by default the assembly name; Q23): per exported function the method and a `'<msil>addr_f'()` accessor, per exported variable the accessor and a property, never public fields (Q24). On Windows triples the exports are the `dllexport` symbols when any exist, otherwise every default-visibility symbol (Q22). Libraries have CLR-style `-Bsymbolic` and `-z defs` semantics, with a warning for duplicate definitions (Q21), and initialize in two phases: a beforefieldinit `'<msil>Data'` class, then `<Module>::.cctor`, which runs one `ldtoken` per linked library. The symbol table (names, kinds, signatures, the triple, the C runtime identity, the data model and an ABI version) is carried by a custom attribute whose type is a private attribute class emitted into the library, never one from a support assembly (Q25; section 12, 2026-10-15); the attribute allows multiple instances, so one assembly holding several triples stays possible, and it shares its codec with the objects' link-info record. Programs link against managed assemblies built by this toolchain, with triple, C runtime and ABI checks. Native P/Invoke resolution is P2-B (M15).
 
 ### P3-A. Runtime support in the output assembly and codegen switches for newer .NET APIs
 
@@ -1803,11 +8266,11 @@ No runtime support assembly (section 12, 2026-10-15): the generated code calls t
 
 ### P3-B. Variadics, native-callable function pointers, setjmp/longjmp, atomics
 
-Variadic definitions and calls (native va_list construction over an argument buffer, v-variant table, msil_fixed_arity attribute), native-callable thunks (kept-alive delegates by default, [UnmanagedCallersOnly] thunks behind their P3-A switch) with the in-assembly fast path, setjmp/longjmp via a BCL exception type that the setjmp caller catches with an IL exception filter matching the jmp_buf (from the Emscripten SjLj lowering; no exception type is shared between assemblies), C11 atomics mapped to Interlocked/Volatile, i128 division and f16 through Int128/UInt128 and System.Half where the codegen switches and references allow (P3-A) and through compiler-rt-style helpers in the output assembly otherwise, and such helpers also for C complex (__muldc3, __divdc3, ...; System.Numerics.Complex does not follow C Annex G's infinity and NaN rules) and for the other compiler-rt calls the legalizer emits where no suitable BCL API exists (i128 floating-point conversions, bfloat conversions, ...); glibc and UCRT host-libc conformance (zlib, Lua, SQLite).
+Variadic definitions and calls (native va_list construction over an argument buffer, v-variant table, msil_fixed_arity attribute), native-callable thunks (kept-alive delegates by default, [UnmanagedCallersOnly] thunks behind their P3-A switch) with the in-assembly fast path, setjmp/longjmp via a BCL exception type that the setjmp caller catches with an IL exception filter matching the jmp_buf (from the Emscripten SjLj lowering; no exception type is shared between assemblies), C11 atomics mapped to Interlocked/Volatile, f16 through System.Half where the codegen switches and references allow (P3-A) and through compiler-rt-style helpers in the output assembly otherwise, and such helpers also for C complex (__muldc3, __divdc3, ...; System.Numerics.Complex does not follow C Annex G's infinity and NaN rules) and for the other compiler-rt calls the legalizer emits where no suitable BCL API exists (constrained and f16/bf16 <-> i128 conversions, bfloat conversions, ...); i128 division and remainder and the plain FP<->i128 conversions are expanded inline since M12 (Q36), and P3 may replace that expansion by one private helper per assembly or by Int128/UInt128 behind a switch (backlog S12); glibc and UCRT host-libc conformance (zlib, Lua, SQLite).
 
 ### P4-A. Conformance and performance
 
-GCC torture tests and llvm-test-suite per triple through the same transcript harness, benchmarks against native clang, IL-size-aware inlining, revisit the frame model (value-type frame local vs localloc, measured 73 vs 4 bytes of prologue), full SIMD (Vector128/256/512 and arch intrinsics), Portable PDB debug info, musl and Darwin triples (UserLabelPrefix fix for m:o), new pass manager pipeline.
+GCC torture tests and llvm-test-suite per triple through the same transcript harness, benchmarks against native clang, IL-size-aware inlining, revisit the frame model (value-type frame local vs localloc, measured 73 vs 4 bytes of prologue), full SIMD (Vector128/256/512 and arch intrinsics), Portable PDB debug info, musl and Darwin triples (UserLabelPrefix fix for m:o), new pass manager pipeline, swiftcc (Embedded Swift; backlog 2.4) or its removal (Q34).
 
 ### P5-A. Production toolchain
 
@@ -1818,9 +8281,10 @@ GCC torture tests and llvm-test-suite per triple through the same transcript har
 Installs are pre-approved by the user (section 2). Present on this machine:
 
 - Framework ilasm 4.8, modern ilasm/ildasm 10.0.12 (win-x64 and linux-x64, D:/packages/NuGet), .NET 6/8/9/10 runtimes, dotnet-ilverify 10.0.12, PEVerify, VS 2026 toolchain.
-- WSL Ubuntu 26.04: .NET SDK 10.0.112 / runtime 10.0.12 (apt `dotnet-sdk-10.0`) and .NET runtime 8.0.31 (Ubuntu 26.04 has no `dotnet-runtime-8.0` package; installed by the orchestrator with `dotnet-install.sh --runtime dotnet --channel 8.0 --install-dir /usr/lib/dotnet`). Both runtimes resolve through `/usr/bin/dotnet`.
+- WSL Ubuntu 26.04: .NET SDK 10.0.112 / runtime 10.0.12 (apt `dotnet-sdk-10.0`) and .NET runtime 8.0.31 (Ubuntu 26.04 has no `dotnet-runtime-8.0` package; installed by the orchestrator with `dotnet-install.sh --runtime dotnet --channel 8.0 --install-dir /usr/lib/dotnet`). Both runtimes resolve through `/usr/bin/dotnet`. From M12 the harness uses private runtimes instead (8.0.31 and 10.0.13 in `$HOME/.dotnet-msil`, installed by `msil/utils/msil-wsl-dotnet.sh` with dotnet-install.sh; Q39), so apt upgrades of the system runtimes no longer change what the tests run on.
 - Optional (local): psutil==7.0.0 for 'lit --timeout' (python -m pip install psutil==7.0.0); not needed because msil-run.py enforces its own timeouts.
-- CI only, downloaded by GitHub-hosted runners once the user enables msil-ci.yml: actions/setup-dotnet (tag v4.x, SHA to be pinned by the user), NuGet runtime.linux-x64.Microsoft.NETCore.ILAsm 10.0.12 and runtime.linux-x64.Microsoft.NETCore.ILDAsm 10.0.12, dotnet tool dotnet-ilverify 10.0.12, apt packages ninja-build clang lld, choco package ninja, and sccache via hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d (v1.2.24, same SHA as upstream).
+- CI only, downloaded by GitHub-hosted runners once the user enables msil-ci.yml (dispatching it needs `msil` as the repository's default branch, which the user sets; Q38): actions/setup-dotnet v5.4.0 (`26b0ec14cb23fa6904739307f278c14f94c95bf1`, pinned in both jobs by M12.e; Q38, backlog S13), NuGet runtime.linux-x64.Microsoft.NETCore.ILAsm 10.0.12 and runtime.linux-x64.Microsoft.NETCore.ILDAsm 10.0.12, dotnet tool dotnet-ilverify 10.0.12, apt packages ninja-build clang lld, choco package ninja, and sccache via hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d (v1.2.24, same SHA as upstream).
+- Phase 2 downloads (installs are pre-approved, section 2; the corpus fetch was approved on 2026-10-21): M12 the private WSL .NET runtimes (dotnet-install.sh); M15 the Ubuntu glibc packages of the hosted sysroot (`apt-get download`, no root, by `msil/utils/make-glibc-sysroot.sh`, only when missing); M21 the NuGet package Microsoft.NETFramework.ReferenceAssemblies.net48 1.0.3 (already in the NuGet cache here; CI downloads it through msil-tools.proj); M23 the pinned exit-corpus sources into `C:\llvm-msil-scratch\corpus-cache` (pinned by version and hash, never vendored into the repository; Q30).
 
 ## 9. Risks the plan tracks
 
@@ -1868,13 +8332,78 @@ Installs are pre-approved by the user (section 2). Present on this machine:
 4. Phase-1 triple scope in clang (decision D6): x86_64/aarch64 on Linux (gnu, musl) and Windows (msvc, gnu) only; aarch64-apple-darwin-msil and i686-pc-windows-msvc-msil are rejected until phases 4/5 (they need the UserLabelPrefix rework for m:o/m:x layouts). Confirm.
    **Resolved 2026-10-12: D6 default accepted (darwin and i686 MSIL triples rejected until phases 4/5).**
 5. GitHub/CI (branch names updated 2026-10-13: the integration branch is `msil`; `main` stays a pure upstream mirror for downsyncs): which branch becomes the fork's default (msil or msil-milestone1); whether the repository is public (hosted-runner size and cost; a cold build is 1.5-3 h); whether to enable msil-ci.yml during Phase 1; and running .github/msil/disable-upstream-workflows.sh (a repository-settings change only you should make).
-   **Resolved 2026-10-12: M0.e commits msil-ci.yml with workflow_dispatch only (no push/PR triggers). Default branch, repository visibility, enabling triggers and running disable-upstream-workflows.sh remain user actions.**
+   **Resolved 2026-10-12: M0.e commits msil-ci.yml with workflow_dispatch only (no push/PR triggers). Default branch, repository visibility, enabling triggers and running disable-upstream-workflows.sh remain user actions.** **2026-10-21 (Q38): the user makes `msil` the default branch; no plan step changes repository settings.**
 6. This checkout has core.autocrlf=true (CRLF working tree). msil/.gitattributes forces LF under msil/ either way; switching the clone to core.autocrlf=false and renormalizing is your call (upstream recommends false on Windows).
    **Default 2026-10-12: leave core.autocrlf as is; msil/.gitattributes forces LF under msil/.**
 7. Security (user action, not a design decision): the cil-runtime recon found plaintext GitHub feed credentials (PATs) in %APPDATA%/NuGet/NuGet.Config. Consider rotating them or moving them to a credential provider. Agents are instructed never to read or copy that file.
 8. ~~Optional download: the .NET 8 runtime inside WSL Ubuntu.~~ Resolved 2026-10-12: installs are pre-approved and .NET 8.0.31 is installed in WSL (section 8).
 9. __ELF__ on Linux MSIL triples: clang defines __ELF__ only when the object format is ELF (clang/lib/Frontend/InitPreprocessor.cpp), so x86_64-unknown-linux-gnu-msil does not define it, a deviation from Design.md section 3's 'predefines are exactly the native ones'. Default for Phase 1: leave it undefined (M1.f pins this with an explicit test; freestanding tests do not depend on it). Alternative: define it in the MSILTargetInfo wrapper for Linux triples so glibc headers see what they see natively. Choose.
    **Default 2026-10-12: leave __ELF__ undefined in Phase 1 (M1.f pins it); revisit with host-libc headers in phase 3.**
+
+### Phase 2 decisions (user, 2026-10-21)
+
+The Phase 2 decision brief ([recon/p2/decision-brief.md](recon/p2/decision-brief.md), sections 0-1) asked Q1-Q40. The user's answers of 2026-10-21 bind M12-M23: Q1 is B2 with its conditions, Q2-Q39 are as the brief recommends (Q37 and Q38 with the details below), and Q40 is declined. The last column says where the plan implements each answer.
+
+| Q | Question | Decision (2026-10-21) | Plan |
+|---|---|---|---|
+| Q1 | CIL object format and binding | **B2**, with the C-fidelity judge's contract (brief 1.2, conditions 1-8). A CIL object is an ECMA-335 netmodule (PE32+ envelope, no Assembly row, content-hash MVID, Module name independent of the `-o` path, no `.cctor`, no `Main`, no image field); definitions are metadata rows; cross-object references are named metadata references (MemberRefs on placeholder types, ImplMap stubs on `msil.unresolved`); a versioned link-info record in a module-level custom attribute carries C link semantics, data images, data relocations, section names, constructor and destructor lists, call-site signature flags and linker options; a plain COFF symbol table in the envelope serves nm and ar. msil-ld binds by name, renumbers every token by decoding IL, uses lld/ELF's resolution rules, checks call-site signatures (adapter and warning, else a link error), lays out one data segment and synthesizes `<Module>::.cctor` and `'<msil>Main'` through one trailer builder that `-S` also uses. Bitcode (`-flto`) is the bring-up path and the permanent `-flto` path. Conditions: (1) record v1 specified field by field against gABI, lld/ELF and wasm's `linking` section before P2-A freezes it; (2) the resolver is a port of lld/ELF `Symbols.cpp`; (3) one MemberRef per (name, call-site signature); (4) section names; (5) a link-semantics matrix against native transcripts; (6) the COFF symbol view; (7) the netmodule shape rules; (8) a reserved per-object Portable PDB carrier for Phase 4 | 5.8 (record v1 5.8.8, frozen at M20's commit; conditions 1, 3, 6-8), 5.9 (2: 5.9.5; 4: 5.9.9; 5: 5.9.16, 5.12.7); M13, M17, M19, M20 |
+| Q2 | How nm and ar see objects | a plain COFF symbol table in each object's PE envelope (no LLVM change) | 5.8.6; M17, M19 |
+| Q3 | Carrier of the link-info record | one versioned binary record in a module-level custom attribute | 5.8.7; M17, M19 |
+| Q4 | Data model | msil-ld synthesizes `.cctor` and `Main` from per-object data images and relocation tables; no initialization code in objects | 5.9.9, 5.9.10; M20 |
+| Q5 | What `clang -S` prints | Phase 1's runnable module: the object plus a one-object self-link trailer from the builder msil-ld uses, with D14 frozen; object-form text behind a flag, for the ilasm oracle | 5.8.1, 5.8.4, 5.9.10; M19, M20 |
+| Q6 | `clang -c` before CIL objects | writes bitcode until M19 | 5.10.5; M14, M19 |
+| Q7 | C# netmodule inputs | an end-of-project idea; `pinvokeimpl("msil.unresolved" nomangle cdecl)` is fixed now as the documented placeholder | 5.8.3 |
+| Q8 | Cross-object signature mismatch | an adapter thunk and a warning where native behaviour can be matched, otherwise a link error naming both objects | 5.9.8; M20, M22 |
+| Q9 | Spelling of the reference option | `--reference=<file\|dir>` or `--reference <path>`, repeatable, no short form; positional managed `.dll` inputs are references too; no new clang option in Phase 2 | 5.11.1; M21 |
+| Q10 | Binding without references | a built-in table of `[mscorlib]`-safe members bound to mscorlib 4.0.0.0, switched off by any `--reference`; anything outside it is an error asking for `--reference` | 5.11.7; M20 (stand-in), M21 |
+| Q11 | BCL members the references lack | members the default code generation needs are required (error); optimization-only attributes are optional and dropped; API substitutions are optional, fall back to a helper and are reported under `--verbose` | 5.11.5; M21 |
+| Q12 | Bitcode from stock clang | supported, with a once-per-link warning and documented limits | 5.10; M14 |
+| Q13 | DllImport library names | the name a native link records: ELF `DT_SONAME`; on Windows the DLL file name verbatim with `.dll`, `#N` for ordinals; always ExactSpelling\|CDecl | 5.10.11; M15, M18 |
+| Q14 | Default C libraries on windows-msvc | `ucrt.lib`, `kernel32.lib` and `oldnames.lib`, plus a toolchain import list that binds the 11 mem/str/wcs functions to `ucrtbase.dll` | 5.10.4; M14, M15 |
+| Q15 | Native data imports | the existing address field, filled at startup by a private helper (NativeLibrary, or LoadLibrary/GetProcAddress, dlopen/dlsym) | 5.10.12; M20, M21 |
+| Q16 | Hosted headers | not required in Phase 2: freestanding execution tests, native header search in the driver, an optional compile-only hosted leg | 5.10, 5.12; M15 |
+| Q17 | Sysroot input | real sysroot files: `.so` files, GNU ld scripts and import libraries | 5.10.8, 5.10.9; M15 |
+| Q18 | Hosting of msil-ld | a flavor inside `lld.exe` with an `msil-ld` alias; `parseProgname` prefers `msil` | 5.9.1; M13 |
+| Q19 | Output naming and PE kind | `a.exe` on every MSIL triple; programs are EXE images; `-shared` gives a DLL image | 5.10.5; M14, M22 |
+| Q20 | `-save-temps -c`, `/FA`, `/Fa`, `.il` inputs | clean errors (no ILAsm parser in Phase 2) | 5.10.5; M13, M14 |
+| Q21 | Library semantics | CLR-style: `-Bsymbolic`, `-z defs`, a warning for duplicate definitions | 5.9.15; M22 |
+| Q22 | Export selection on Windows triples | `dllexport` symbols when any exist, otherwise every default-visibility symbol | M22 |
+| Q23 | Default export class | the assembly name as a class without a namespace; `--export-class` overrides it | M22 |
+| Q24 | Export surface | per function the method and a `'<msil>addr_f'()` accessor; per variable the accessor and a property; never public fields | M22 |
+| Q25 | Type of the symbol-table attribute | a private attribute class emitted into the library (AllowMultiple), sharing its codec with the link-info record | 5.9.15; M17, M22 |
+| Q26 | Shortest instruction forms in `-S` | yes; FileCheck tests are updated mechanically | 5.1 (section 12 row); M18 |
+| Q27 | Identifier length | keep the 1,023-byte limit everywhere in Phase 2 | 5.7.12 |
+| Q28 | Name and place of the ECMA-335 library | one library with reader and writer at `llvm/lib/CLI` (namespace `llvm::cli`), constants in `BinaryFormat/CLI.h` | 5.7; M13, M16, M17 |
+| Q29 | Programs of the Phase 2 exit | nine multi-TU programs (zlib `Z_SOLO`, tinf + zlib, Monocypher, CoreMark, LZ4, BLAKE2, TweetNaCl, KISS FFT, jsmn) at -O0/-O2 on both triples and every runtime, plus c-testsuite's 150 libc-free tests, the link-semantics matrix and M1 through the object pipeline | 5.12.9; M23 |
+| Q30 | Source of the corpus | a pinned manifest fetched into a cache outside the repository by a gate step (the network step is approved, below); never vendored | 5.12.9; M23 |
+| Q31 | Default test pipeline | `asm` until the Phase 2 exit, then `obj`, keeping one `asm` oracle leg | 5.12.1; M23 |
+| Q32 | Gate budget | 20-30 minutes per milestone gate, 70-90 minutes for the phase-exit gate | 5.12.10; section 11 |
+| Q33 | Linux oracle | cross-linked native binaries with copies of WSL's `libc.so.6`/`libm.so.6` (no sudo) | 5.12.8; M12 |
+| Q34 | Backlog placement | a separate M12 'Backlog fixes'; the import attribute in M13; the S1-S8 texts in the Phase 2 plan; swiftcc moves to P4 or is dropped; the test-count item is dropped | M12, M13; section 7 (P4-A) |
+| Q35 | C spelling of the import attribute | WebAssembly's `import_module`/`import_name` (an `Attr.td` hook in M13) | 5.10.7; M13 |
+| Q36 | i128 division and FP<->i128 conversions | expanded inline (M12); Design.md 7.1's 128-bit row and plan P3-B change | M12; section 7 (P3-B) |
+| Q37 | Status.md's 14 Design.md texts and backlog S1-S13 | apply them all; item 4 amended per Q13 | Design.md (section 12 row); sections 7 and 8 |
+| Q38 | CI | pin actions/setup-dotnet at v5.4.0 `26b0ec14cb23fa6904739307f278c14f94c95bf1`; the user makes `msil` the GitHub default branch, and no plan step changes repository settings | M12.e; section 8 |
+| Q39 | WSL .NET updates | the harness uses a private dotnet-install.sh runtime in WSL; no system setting changes | 5.12.8; M12 |
+| Q40 | Upstream reports | **declined**: no plan step files or drafts upstream reports (the MIR FP-literal lexer regression, the wasm-isel verifier defect and the aggregate va_arg crash stay unreported) | - |
+
+Also decided on 2026-10-21:
+- **Corpus download approved.** A gate step may download the pinned exit-corpus sources (Q29, Q30) into a cache on C: (`C:\llvm-msil-scratch\corpus-cache`), never vendored into the repository, pinned by version and hash (M23).
+- **Default branch.** The user makes `msil` the GitHub default branch (Q38); no plan step changes repository settings.
+- **Standing rules, unchanged.** Compiler tools only (no NuGet packaging, no MSBuild SDK); Roslyn-style references; no runtime support assembly; one assembly per target; FeatureIdeas.md is evaluated only at the very end (not planned, not precluded); no Claude or AI attribution in commits; the repository is public, so no committed text names a user-profile path, a user name or a session id.
+
+### Phase 2 items that need the user (2026-10-21)
+
+These came up while the Phase 2 plan was written. Until the user answers, the default given with each item applies.
+
+10. Two-phase initialization in Design.md 4.1 and 5.4. Design.md, as updated on 2026-10-21, says every linked output initializes in two phases (4.1: "two phases in linked outputs, 5.4"; 5.4: "Linked outputs initialize in two phases. First a `beforefieldinit` class `'<msil>Data'` ..."). M22 makes only `-shared` outputs two-phase: an EXE with library inputs runs the same steps, in the same order, in its one `<Module>::.cctor` (section 12 row of M22 on 5.9.10 and 5.9.15). msil-ld never takes an EXE as a library input, so no other assembly's phase 1 waits on an EXE, and one module initializer keeps O3 and `-S` identical. Agents do not edit Design.md (section 2). Proposed wording for 4.1 and 5.4: 'Libraries (`-shared` outputs) initialize in two phases ...; a program runs the same steps, in the same order, in its one module initializer.' Approve that wording, or keep two phases for every linked output (then a section 12 row sets `TwoPhase` for EXEs with library inputs, which changes only M22).
+   **Default 2026-10-21: M22 builds one-phase EXEs as planned; Design.md stays as it is until you answer.**
+11. CI licences of the exit corpus. CoreMark comes under the EEMBC licence agreement and c-testsuite's tests carry per-test licences from scc and tinycc; whether GitHub's runners may download and run them is unverified (brief Q30; tests-p2 9 items 7-8). The approval of 2026-10-21 covers the gate's download into a cache on C:. Allow CI to fetch and run them, or keep them out of CI.
+   **Default 2026-10-21: msil-ci.yml leaves both out (`MSIL_CORPUS_SKIP: coremark,c-testsuite`; section 12 row 'M23 CI corpus'); the phase gate on the development host runs all ten entries. If you allow CI to fetch them, a section 12 row empties the variable.**
+12. Scope of the cross-host determinism check (contract 5.7's M23 note; tests-p2 3.7). Neither CI runner can link the other OS's triple (the Windows runner has no Linux sysroot, the Linux runner no Windows import libraries), so M23 compares only the CIL objects and archives that both hosts build (every C file of msil/test/M1, both x86_64 MSIL triples, -O0 and -O2) and checks PE determinism within each host. Alternative: give one runner the other's link inputs so that linked PEs are compared across hosts too.
+   **Default 2026-10-21: objects and archives across hosts, PEs within each host (section 12 row 'Cross-host determinism').**
+13. M20's round trip. The decision brief's M20 gate includes 'D21 and the round trip pass on outputs', and Q32 allows 20-30 minutes per milestone gate. With the O2 round trip on msil-ld outputs and `spill-limits` at the real CLR limits, M20's gate is estimated at 30-33 minutes, so the plan runs both right after M20's commit, with the post-commit run-m1-gate.ps1 (`msil/test/M1/11-programs` and `msil/test/M2/07-equiv` under `obj`, and the `obj` leg's M2 half); a failure becomes a fix work package of M21 (M20's Rebuild cost, 5.12.10). The gate keeps D21 on outputs, determinism, O3, O4, O6 and the spill classes at a lowered limit (`--msil-type-member-limit`). Alternative: keep both in M20's gate and accept about 31-33 minutes.
+   **Default 2026-10-21: the round trip and `spill-limits` run right after M20's commit; M20's gate is about 29-31 minutes.**
 
 ## 11. Notes for the orchestrator
 
@@ -1893,6 +8422,48 @@ Installs are pre-approved by the user (section 2). Present on this machine:
   order: M2.b and M2.e; then M2.f and M2.c; then M2.a and M2.d.
 - The structured plan returned with this document is generated from the same source as this file (scratch
   `recon/plan-revise/plan_rev.py` + `render_plan.py`).
+- **Phase 2 (M12-M23).** Work on branch `msil` (HEAD `1ea64fe9fc7c` when the Phase 2 plan was written); one commit per
+  milestone, `[MSIL] M<n>: <title>`, without attribution trailers (section 1.8 says `msil-milestone1`, which applied
+  to Phase 1). Scratch is `C:\llvm-msil-scratch` (`<scratch>\milestones\<M>\<WP>\`); private trees and the private
+  builds some WPs need (M11.a's recipe) go there too, never into `D:\llvm-msil\build`. The private hooks tree
+  `C:\llvm-msil-hooks-build` serves the compile leg of upstream-hooks.ps1 (M11) and is never deleted by scripts.
+- **Work-package order (Phase 2; 5.6.1 rule 7, section 12 row).** msil-milestone.workflow.js starts a WP only when
+  every WP on its Depends-on line has finished; the note above ('Spawn every WP of a milestone at once') and 1.2a's
+  'spawned with the others' describe Phase 1. A header that a contract pins and that another WP of the milestone calls
+  belongs to a root WP, and an in-milestone check that needs another WP's file, script or private binary either names
+  that WP on its Depends-on line or runs at the gate. `plan-check.py ownership` does not check this; read each
+  milestone's role paragraph before spawning it.
+- **What a WP reads (Phase 2; 5.6.1 rule 8, section 12 row).** Give each Phase 2 WP plan sections 1-4, the 5.x
+  subsections its Reads line cites, its own milestone and that milestone's section 12 rows, not sections 1-6 (about
+  1.06 MB of the 1.4 MB plan). msil-milestone.workflow.js still tells WP and reviewer agents to 'Read plan sections
+  1-5' (about 374 KB); change both prompts to this wording before M12 is spawned. A test WP never reads a file that a
+  non-test WP of its milestone owns: it reads `git show HEAD:<path>` and the plan text.
+- **Disk.** D: had 16-22 GB free while Phase 2 was planned. Every Phase 2 gate prints D:'s free space first; below
+  8 GB report it to the user before building. M13 adds about 1 GB (lld and its alias copies about 0.4 GB), later
+  milestones tens of MB each (their Rebuild cost paragraphs). There is no second build tree on D:.
+- **Gate budget (Q32).** 20-30 minutes per milestone gate after the build, 70-90 minutes for M23's phase-exit gate.
+  The M11 gate (26 steps, about 3 h) is the regression baseline: Phase 2 gates keep the Phase 1 suites green with the
+  fast legs of 5.12.10 (net8, wsl-quick, ...), and the orchestrator runs `run-m1-gate.ps1` in full in the background
+  after the commits of M12, M15, M18 and M20 (not a gate step; a failure becomes a fix WP of the next milestone
+  through a section 12 row). A gate that measures over 30 minutes moves the step its Rebuild cost paragraph names to
+  that run, through a section 12 row.
+- **Rebuilds.** A full rebuild takes about 47 minutes (3.0-3.2 CPU-hours of compile). Every widely-included header
+  change of Phase 2 is in M13 (5.6.10), which also builds lld for the first time (8-12 minutes); later milestones
+  rebuild only new libraries, lld/MSIL, the MSIL target and single clang TUs.
+- **Baselines before the build.** M15.c, M18.f, M19.b and M20.f write IL baselines with the shared HEAD build at spawn
+  (`C:\llvm-msil-scratch\milestones\<M>\<WP>\il-baseline`); the build agent starts the milestone's build only after
+  they have handed over, and the gate fails if the baseline is missing.
+- **Record freeze.** When M20 is committed, replace the date cell `<M20 commit date>` of the section 12 row 'Link-info
+  record v1 (5.8.8) frozen at this commit' with the commit date; later record changes follow 5.8.9. M22's commit
+  freezes the symbol-table format of M17.c (5.9.15).
+- **Open user items.** Section 10 items 10-13 (Design.md's two-phase wording, M22; the CI licences of CoreMark and
+  c-testsuite, M23; the cross-host determinism scope, M23; M20's round trip after the commit, M20) keep their defaults
+  until the user answers; record an answer as a section 12 row before the milestone it affects is spawned.
+- **Network and settings.** Only the downloads of section 8 (pre-approved installs and the M23 corpus fetch, approved
+  2026-10-21). No plan step files or drafts upstream reports (Q40) or changes repository settings (Q38).
+- **Inputs.** The Phase 2 recon (`llvm/docs/MSIL/recon/p2/`) is committed with this plan; every Reads entry that names
+  `p2/` recon points there. Before each Phase 2 milestone, `plan-check.py reads M<n>` also proves that the files
+  earlier milestones were to create exist.
 
 ## 12. Amendment log
 
@@ -2126,6 +8697,45 @@ the change text ``fix-loop ownership: `<path>` -> <agent>``, for example
 | 2026-10-20 | M11 | M11.d checks tightened (review-r2 fix loop): (a) `check-upstream-hooks.py --check` rejects a `fork-only` line whose path exists in the upstream base (`git cat-file -e <base>:<path>` succeeds; the message says it needs a hook block), and its unlisted-hook message offers `fork-only` only for a path that the base lacks. (b) switch-default and switch-other are checked per switch, not per file: in a switch-default file each XCOFF case label must lie in a switch whose own body (not a nested switch) has a `default:` label or an MSIL case label, else the label's line is reported; a switch-other line exempts only the unqualified `case XCOFF:` and `case IsXCOFF:` labels of its file, and qualified `Triple::XCOFF` and `MCContext::IsXCOFF` labels there are checked as in any other file; a switch-default line whose file has no XCOFF switch, or a switch-other line whose file has no unqualified XCOFF label, is stale. The line formats stay as they are. (c) Every name on a `utc` line must be one of the utc leg's tests, which `--check` reads from `$utcTests` of msil/utils/ci/lit-legs.ps1 and `utc_tests` of msil/utils/ci/lit-legs.sh and requires to be equal (the list stays in the two leg scripts). (d) `check-action-pins.py` also checks .github/workflows/msil-ci.yml as text: its windows job has a step whose `run:` is exactly `pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -NoCompile -NoManifest -MinPass 250`, whose `if:` is `${{ !cancelled() && steps.<id>.outcome == 'success' }}`, and `<id>` is the `id:` of that job's Build step. Each `--self-test` plants the new defects: a fork-only line for a file of the base; a switch-default file with a second XCOFF switch without `default:`; a switch-other file with a qualified XCOFF switch; stale switch-default and switch-other lines; a utc name outside the list, and leg lists that differ; a misspelled or missing step id, and a missing upstream-hooks step. The manifest header and GettingStarted.md section 7 (M11.f) describe them | review-r2 findings 2, 3, 4 and 8, each reproduced by its verifier: a fork-only line for clang/lib/Driver/ToolChain.cpp (present at 64f50ffd4f1c) passed --check and silently dropped 3 tests from --list-lit; a second XCOFF switch with neither `default:` nor an MSIL case in a switch-default or switch-other file passed; `utc arm-function-name`, which no leg runs, as a block's only coverage passed; `steps.biuld.outcome`, a missing `id: build` or a deleted step passed gate steps 18 and 19. The eight current fork-only paths are absent at the base, each of the three exempted files has one XCOFF switch that the new rules accept, the two utc lists are equal and msil-ci.yml is correct, so today's tree passes the tightened checks |
 | 2026-10-20 | M11 | Row 'Rows Plan 5.3 and 5.4 extended (output of instruction selection, M11.a) and its correction of 2026-10-20 narrowed again' (2026-10-20) corrected: exception (b) keeps its effect (the IL of `-start-after=msil-isel` lacks the `@tmpN: // Address of block that was removed by CodeGen` labels that the full pipeline prints; every other line of the IL is the same), but no block is deleted, so its clause 'the codegen IR passes deleted those blocks before instruction selection, so the IR inside the MIR no longer has them' now reads: IndirectBrExpand replaces each blockaddress with the block's number before instruction selection (BlockAddress::replaceAllUsesWith keeps the constants alive, so in the full pipeline those IR blocks stay address-taken and AsmPrinter prints an unreferenced label for each block no machine block defines; the IR inside the MIR has no blockaddress left, so the resumed compile prints none). GettingStarted.md section 8 and Status.md section 2 (M11.f) give this mechanism | review-r2-residual item 1 (M11.f), checked by triage in the source and with the shared build: IndirectBrExpandPass.cpp rewrites each used blockaddress with `BA->replaceAllUsesWith(ConstantExpr::getIntToPtr(<index from 1>, ...))`, and AsmPrinter::emitFunctionBody emits that comment and label for every IR block whose `hasAddressTaken()` holds and whose block-address symbol no machine block defined (MSILSubtarget::enableIndirectBrExpand is true); msil/test/M1/03-control/indirectbr.ll at -O0 on x86_64-pc-windows-msvc-msil: the `-stop-after=msil-isel` MIR keeps bb.1.a, bb.2.b, bb.3.c of @dispatch and bb.3.op_inc, bb.4.op_mul, bb.5.op_xor of @threaded and has no blockaddress, the full pipeline's IL has six such labels and the `-start-after=msil-isel` IL none |
 | 2026-10-20 | M11 | M11.b text corrected (orchestrator, from M11.b's hand-over): the sentence 'the debug-info function aborts at -O2 on its own' does not hold for `@sel_dbg`. Its first argument is `zeroext`, so instruction selection emits only DBG_VALUEs between the ARGUMENTs; that MIR is verifier-clean, and before M11.a the function failed only through its CHECK-NEXT lines. The case that aborts without M11.a (an instruction scheduled before an ARGUMENT, with debug info) is `@rotr_dbg` in stop-after-isel.ll, added in the review-r1 fix loop | M11.b hand-over and review round 1 (finding 'The debug-info function in stop-after-isel.ll never trips the verifier before the fix'); stop-after-isel.ll's header documents both functions |
+| 2026-10-21 | - | Phase 2 plan added (user decisions 2026-10-21): milestones M12-M23 (section 6, after M11); the Phase 2 contracts 5.6-5.12 (section 5, after 5.5); section 0's summary and table; P2-A, P2-B and P2-C rewritten as pointers to M12-M23 with the decision brief's section 3 items 17-19 and backlog S1-S5 and S11, P3-B's 128-bit text per Q36 and S12, and swiftcc in P4-A per Q34 (section 7); notes on D12, D14 and D26 per brief item 20 (section 3); the setup-dotnet pin, the private WSL runtimes and the Phase 2 downloads (section 8; Q38, Q39, S13); the user's answers to Q1-Q40 and four new items that need the user, 10-13 (section 10); Phase 2 notes for the orchestrator (section 11); and the rows below: the work-package order and reading rules of Phase 2, the rows the milestone drafters returned, and the Design.md edits. Written by the Phase 2 plan run of 2026-10-21 (recon, three judges, the decision brief, three contract authors, milestone drafters, a plan review, revisions and the plan assembly) | [recon/p2/decision-brief.md](recon/p2/decision-brief.md) and the user's answers to its Q1-Q40 (section 10) |
+| 2026-10-21 | - | Section 1.2a amended for Phase 2 (5.6.1 rule 7): the milestone workflow starts a WP only when every WP on its Depends-on line has finished, not together with the others, so a dependent never waits inside its run for a hand-over. A header whose declarations a contract pins (5.9.2, 5.9.3, 5.11.5) and that another WP of the same milestone calls belongs to a root WP's role (M14.b owns `lld/MSIL/Config.h` and `LTO.h`, M20.b `lld/MSIL/Writer.h`, M21.a `lld/MSIL/BCLBinder.h`); an in-milestone check that uses another WP's file, script or private binary needs that WP on its Depends-on line, otherwise it runs at the gate. Section 11's 'Spawn every WP of a milestone at once' describes Phase 1 only | msil-milestone.workflow.js starts each WP after Promise.all over its Depends-on WPs; the plan review (farm lens) found M14, M18, M20 and M21 relying on headers or binaries of WPs started later |
+| 2026-10-21 | - | Section 1.1 amended for Phase 2 (5.6.1 rule 8): the orchestrator gives each Phase 2 WP plan sections 1-4, the 5.x subsections its Reads line cites, its own milestone and that milestone's section 12 rows, instead of sections 1-6; reviewers read the same plus the diff. A Reads line cites 5.7.10 for every test that FileChecks `llvm-cil-dump` or mdcanon output (M19.d, M20.e, M21.d and M22.e among them; 5.8.11 too when it checks `--link-info`), 5.9.14, 5.10.14 or 5.11.9 for every test of msil-ld diagnostics, and 5.12.1-5.12.6 for every harness or execution test. A test WP never reads a file that a non-test WP of its milestone owns (infra and docs included); it reads `git show HEAD:<path>` and the plan text (M15.e reads plan D14, M17.f `git show HEAD:msil/test/lit.cfg.py`). The workflow's WP and reviewer prompts ('Read plan sections 1-5') change to this wording before M12 is spawned (section 11) | the plan is about 1.4 MB, sections 1-6 about 1.06 MB and sections 1-5 about 374 KB (some 95k tokens), sections 1-4 about 34 KB; the workflow's off-limits list for a test WP is every non-test WP's owned files; plan review (farm lens) |
+| 2026-10-21 | M12 | D26 amended (whole-program mode, MSILPrepareIR::lowerWholeProgramSymbols): a GlobalAlias whose aliasee object is a defined function (function value type, offset 0) or a global variable (non-function value type, any constant offset) is lowered: every use becomes the aliasee expression, and a function alias with non-local linkage also gets a forwarding definition under its name; every other alias and every ifunc stays an error. An extern_weak declaration that the import policy (MSIL::getPInvokeModule) does not resolve becomes null, and its direct calls and llvm.global_ctors entries call an internal trap stub '<msil>undef_<name>'. A section on a global variable definition (llvm.metadata excepted) is an error ('global variable @<name> in section "<section>" is not supported for MSIL yet (phase 2 CIL objects)'), no longer ignored. Object mode (M19, MSILTargetMachine::isObjectMode()) replaces all three by symbols and the segment name (plan 5.8.10) | Q34, Q1 conditions 1 and 4, judge-c-fidelity F4/F5 and 6.4, backlog 2.1, brief item 20 |
+| 2026-10-21 | M12 | D26 amended: before any diagnostic MSILPrepareIR drops the body of every unreferenced linkonce/linkonce_odr function definition and, transitively, of the linkonce, linkonce_odr, internal and private definitions only those referenced; global variables and functions unreferenced from the start with local linkage stay. ret.ll and comdat-linkonce.ll give their linkonce_odr functions callers | driver-toolchain 5.4 (UCRT stdio.h at -O0) |
+| 2026-10-21 | M12 | D36 amended: an empty asm statement with operands (inputs of any kind, indirect outputs, register outputs tied to a same-typed input; no labels) is accepted by clang (native emission path) and lowered by MSILPrepareIR into the D36 fence, llvm.fake.use of each non-constant integer (<= 64 bits), pointer, float or double input, and llvm.sideeffect; tied outputs become their inputs. Non-empty asm, untied register outputs, asm goto, callbr, unwinding invokes and Microsoft asm stay errors | backlog 2.3, Q34 |
+| 2026-10-21 | M12 | D14/D33 note and P3-B text: MSILTargetLowering sets setMaxDivRemBitWidthSupported(64) and setMaxLargeFPConvertBitWidthSupported(64), so i128 division/remainder and the plain FP<->i128 conversions are expanded inline (ExpandIRInsts) on every runtime; constrained and f16/bf16 <-> i128 conversions still name helpers. P3-B's 'i128 division through Int128/UInt128 or helpers' becomes: expanded inline since M12; P3 may replace the expansion by one private helper per assembly or Int128/UInt128 behind a switch (backlog S12) | Q36 |
+| 2026-10-21 | M12 | D19 note: a va_arg instruction of a struct or array type is diagnosed by MSILPrepareIR with the ISel text and the function loses its body (SelectionDAGBuilder::visitVAArg crashed on it); scalar and vector va_arg stay diagnosed in instruction selection | backlog 3.1 |
+| 2026-10-21 | M12 | M9.a byval amended: the K-th byval argument of every call in a function reuses the function's K-th byval frame slot (MSILFunctionInfo::getByvalSlot), grown to the largest size and alignment, instead of one new frame object per call; Status.md's byval limit goes | backlog 2.6 |
+| 2026-10-21 | M12 | Plan 5.5 amended: %{msil_cflags} is '-std=gnu17 -ffreestanding -Werror=return-type -I<Inputs>' (update-expected.py the same); the Windows native oracle links msil_native_rtlib (default auto: the VS clang's clang_rt.builtins-x86_64.lib); WSL legs run on the private runtime $HOME/.dotnet-msil (msil_wsl_dotnet=private, Q39) with the E7 Linux oracle (msil_linux_sysroot; VS ld.lld until M13 builds lld); per-OS overrides <stem>.linux.expected come from update-expected.py --os linux | backlog 3.3-3.5 and 4.3, Q33, Q39 |
+| 2026-10-21 | - | Section 8: actions/setup-dotnet is pinned at v5.4.0 26b0ec14cb23fa6904739307f278c14f94c95bf1 in both msil-ci.yml jobs (M12.e, Q38); the user makes msil the default branch (no plan step changes repository settings); WSL .NET runtimes 8.0.31 and 10.0.13 are installed privately into $HOME/.dotnet-msil by msil/utils/msil-wsl-dotnet.sh (Q39) and the harness no longer resolves them through /usr/bin/dotnet | backlog S13, Q38, Q39 |
+| 2026-10-21 | M13 | D3 amended: Triple.cpp's isCompatibleWith treats an MSIL triple and its native triple, and two MSIL triples whose getNativeFormatTriple() are compatible, as compatible (M13.b); Triple.h keeps exactly the API D3 lists | The IR linker warns 'Linking two modules of different target triples' when stock and MSIL bitcode mix (lld-flavor 3.3 item 7); contract 5.8 chose the hook over filtering the warning |
+| 2026-10-21 | M13 | D5 amended: for IsMSIL, MCContext::createSymbolImpl creates MCSymbolMSIL (llvm/MC/MCSymbolMSIL.h). Target::createMCObjectStreamer creates MCMSILStreamer (createMSILStreamer, llvm/MC/MCMSILStreamer.h). MCAsmBackend::createObjectWriter creates the MSIL writer (createMSILObjectWriter over MCMSILObjectTargetWriter, llvm/MC/MCMSILObjectWriter.h). Until M19's target writer overrides writeObject, the default reports 'CIL object files are not supported for MSIL target <triple> yet'. MCContext.h, MCSymbol.h and TargetRegistry.h are unchanged | Brief section 2 (M13); mc-streamer 5.2 and 6.2 |
+| 2026-10-21 | M13 | D9 amended: lld is built from M13 (msil-ld is the msil flavor of lld.exe, Q18), and msil/cmake/caches/MSIL.cmake enables clang;lld. The build set gains lld, llvm-ar, llvm-ranlib, llvm-lib, llvm-dlltool, llvm-nm, llvm-objdump, llvm-readobj, llvm-as, llvm-bcanalyzer, llvm-lto2, CLITests and LLDAsLibAllTests. This is 5.6.11's one list: M13.g writes it to msil/utils/ci/build-targets.txt, and build.ps1, build.sh and 'msil-build.ps1 -Standard' read it (gate step G1 is 'msil-build.ps1 -Standard' from M13 on). Every later Phase 2 milestone keeps these targets in its Build targets line | irsymtab.ll and LTO/Resolution/X86/symtab*.ll need llvm-lto2. AllDrivers.cpp's upstream test is LLDAsLibAllTests, and a stale copy would test an old lldMSIL. llvm-ranlib, llvm-lib and llvm-dlltool are separate copy targets (add_llvm_tool_symlink without ALWAYS_GENERATE, llvm/tools/llvm-ar/CMakeLists.txt:22-24; build.ninja: 'build bin/llvm-lib.exe: CUSTOM_COMMAND bin/llvm-ar.exe'), which 'ninja llvm-ar' does not build. Without them, 'llvm-lib /def:' in lld/test/MSIL (M14, M15) silently resolves to VS's llvm-lib 22.x on msil-env's PATH, and the Linux job has none |
+| 2026-10-21 | M13 | D14 amended: on MSIL triples, C spells the IR attributes msil-import-module and msil-import-name with WebAssembly's import_module and import_name (Q35, 5.10.7). The import table itself stays frozen as the standalone -S/llc policy (5.10.13) | User decision Q35 |
+| 2026-10-21 | M13 | M1.c's text of err_drv_msil_no_object_output is superseded by 5.10.5's: 'CIL object files are not supported for MSIL target '%0' yet; use -flto to write LLVM bitcode objects, or -S to write ILAsm text'. err_drv_msil_ilasm_input is added in M13 and first reported in M14 | Q6, Q20; one DiagnosticDriverKinds.td change (84 objects) for all of Phase 2 |
+| 2026-10-21 | M13 | Sections 2 and 4 (format check): from M13 the git-clang-format path list is `llvm/lib llvm/include llvm/unittests clang/lib clang/include lld/MSIL lld/Common lld/include lld/tools lld/unittests`, and from M17 it also has `llvm/tools/llvm-cil-dump llvm/tools/llvm-cil-copy`; every Phase 2 gate's format step uses its milestone's list | Phase 2 adds lld code, edits lld hooks and adds two LLVM tools; .td and .def files stay unformatted |
+| 2026-10-21 | M14 | D28 amended: the assembly name is `-msil-assembly-name` if given, else the module flag `msil-assembly-name` (MDString, Override; set by msil-ld from `--assembly-name`/`-soname`, else the `-o` stem, 5.9.13), else the `source_filename` stem | LTO's merged module is named ld-temp.o |
+| 2026-10-21 | M15 | D14 amended (decision brief item 20): D14 is the standalone import table of `clang -S` and llc, frozen until the end of Phase 2 (no entry added or removed). msil-ld's linked text (module flag `msil-linked`, M15) and CIL objects (M19) never consult it. The f32 ldexp/frexp promotion depends only on RuntimeLibcalls and windows-gnu | brief Q5 and Q13; plan 5.10.13 |
+| 2026-10-21 | - | Section 2 (unit tests and test conventions), from M13: the dedicated gtest binary `CLITests` (`llvm/unittests/CLI/`) names its suites `CLI<Topic>` without 'MSIL' (5.7.13), an exception to section 2's rule that every new gtest name contains `MSIL`; `msil/utils/ci/unit-tests.ps1`/`unit-tests.sh` run it with the filter '*' rather than the shared '*MSIL*' filter; gates run `msil-gtest.ps1 -Exe <build>/unittests/CLI/CLITests.exe -Filter '*' -NoSkip -MinTests N` with the floors of 5.7.13 and 5.12.10 G2: 26 in M13-M15, 110 in M16, 170 in M17-M19, 210 in M20 and M21, and 210 in M22 and M23 plus a `-Filter 'CLISymbolTableTest.*' -NoSkip -MinTests 9` step; a floor never goes down | the 'MSIL' naming rule exists for filters over shared binaries; one floor table for 5.7.13, 5.12.10 and this row |
+| 2026-10-21 | M18 | Plan 5.1 amended (Q26, 5.10.11): -S, llc and --lto-emit-asm text use the shortest forms, including short branches ('br.s', 'blt.s', ...), the shortest 'ldc.i4' for CONST_I64, for GLOBAL_ADDR offsets and in the .cctor/'<msil>Main' bodies, and 'pinvokeimpl("<lib>" [as "<entry>"] nomangle cdecl)' on every P/Invoke; the rule 'Branches always use the long forms' is withdrawn | Q26; msil-ld never relaxes branches (5.8), so MC chooses forms once and text and binary agree |
+| 2026-10-21 | M18 | Plan 5.3 amended: MSILTargetStreamer loses emitILLine and gains emitComment(const Twine &), emitBlankLine(), emitLocals(ArrayRef<cli::TypeSig>) (replacing the ValType form) and MSILMethodDecl::Kind (MSILMethodKind {Function, ModuleInitializer, EntryPoint}); MSILMemberRefExpr gets the kinds Method, Field, ExternMethod, ExternField, FnAddr, StandAloneSig and BCLMember (createField has no offset; createBCL takes a cli::BCLMemberId), printOperand(OS, ObjectForm), and becomes relocatable; MSILMCInstLower::lower(const MachineInstr &, SmallVectorImpl<MCInst> &) replaces lower(const MachineInstr *, MCInst &) | one MCInst per CIL instruction (mc-streamer R1) |
+| 2026-10-21 | M18 | Plan 5.4 amended: MC-level records CIL_<Enum>, one per CILOpcodes.def entry (isCodeGenOnly, file MSILInstrCIL.td); TSFlags bits 18-3 hold the CIL value (MSILII::CILOpcodeShift = 3, CILOpcodeMask); MI-level records keep their names, operand lists, cilop values and StackPeakExtra but never reach MC; MEMMOVE and MEMORY_BARRIER lose their BCL asm text | the printer and the encoder read one record |
+| 2026-10-21 | M18 | D14 text: Phase-1 P/Invoke declarations print 'nomangle cdecl' (ImplMap 0x0201); the table itself stays frozen (5.10.13) | Q13, 5.10.11 |
+| 2026-10-21 | M19 | Plan 5.3 amended: MSILTargetStreamer gains emitObjectHeader(bool BOM, StringRef SourceFile, StringRef TripleStr) and emitLinkInfo(StringRef ModuleName, const MSILLink::Record &); MSILTargetMachine gains isObjectMode() and -msil-object-form. Object event order: definitions in IR order, address fields in SYMTAB order, import stubs (stubs on a module and on msil.unresolved in first-use order, then the address-only stubs in SYMTAB order), link info. The AsmPrinter numbers the record's tokens (R6), and MSILObjectWriter checks them and never silently replaces them | object-form text and objects share one event stream and one numbering |
+| 2026-10-21 | M19 | D12, D14 and D26 amended (decision-brief item 20). D12's single per-module segment holds only for -S and llc text: objects carry one record segment per defined global, and outputs get one segment per assembly (M20). D14 is the standalone -S/llc policy: object mode has no import policy. D26's errors for aliases, extern_weak and external globals become object symbols in object mode (5.8.10); global_dtors, thread_local, ifunc and module asm stay errors | B2 objects (Q1) |
+| 2026-10-21 | M20 | D30 amended: `MSILFixFunctionBitcasts.cpp` (copied from WebAssembly) gains an MSIL-only branch under the module flag `msil-lto` that applies `cli::classifyCall`'s table (each adapter with a warning, each table error an error; 5.9.8, M20.a); without the flag the pass is unchanged. Reviewers accept this deviation from D30's mechanical-copy rule | one adapter table for the object and LTO paths; Q8 asks for a warning with each adapter, and `-flto` is a permanent path (Q1) |
+| 2026-10-21 | M20 | Plan 5.1 (module initializer) amended: with more than `-msil-reloc-loop-threshold` (default 32) data relocations, `-S` applies them through 5.9.10's `'<msil>relocs'` table and loop; at or below the threshold the text is unchanged. M20.a reports any FileCheck test that pins a straight-line `.cctor` above the threshold, and the orchestrator decides it with a fix-loop row | Q5 and O3: `-S` and msil-ld share one trailer builder; Design.md risk 1 |
+| 2026-10-21 | M20 | D26 amended (Q5; Design.md 4.1: '`-S` output is a one-object self-link with the same shape'): from M20, whole-program mode (`-S`, llc, `--lto-emit-asm`) lays out named sections as a one-object link does (5.8.10, 5.9.9, 5.9.10), and M12's section diagnostic (MSILPrepareIR (1c)) goes; a module without explicit sections keeps its Phase 1 text | O3 compares with `-S` and O4 with the `--lto-emit-asm` text, which must build `p3-start-stop`, `p8-section-ctor`, `ctor-slot-order`, `gc-used-retain` and `o4-sections-ctors`; M12's diagnostic was the stopgap until CIL objects (Status.md) |
+| <M20 commit date> | M20 | Link-info record v1 (5.8.8) frozen at this commit, after msil-ld linked every 5.9.16 row marked M20 on the `obj` pipeline with it; gaps that M20 found amended v1.0 in place (section 12 rows naming the 5.8.8 field, with M17's codec, M19's writer and their tests granted to the fixing WP by fix-loop rows); later changes follow 5.8.9 | B2 condition 1 and 5.8.9 (the date is filled in when M20 is committed) |
+| 2026-10-21 | M21 | D10 amended: the mscorlib-only rule (one AssemblyRef `mscorlib` 4.0.0.0 b77a5c561934e089) now holds for `-S`, llc, `--lto-emit-asm` text and for links without references (msil-ld's built-in table, Q10, limited to `BCLMembers.def` entries proven by check-mscorlib-safe.py); with `--reference` or positional reference assemblies msil-ld binds every BCL type and member per 5.11 | brief Q9-Q11 and item 20 |
+| 2026-10-21 | M22 | 5.9.10 and 5.9.15 (two-phase scope, pending section 10 item 10): M22 makes only `-shared` outputs two-phase (`'<msil>Data'::.cctor`, then `<Module>::.cctor`); an EXE with library inputs keeps one `.cctor`, which runs the `ldtoken`s and cross-assembly relocations after its in-assembly relocations and before its constructors. This narrows Design.md 4.1 and 5.4 ('linked outputs initialize in two phases'); if the user keeps that wording, a later row sets `TwoPhase` for EXEs with library inputs, which changes only M22. Outputs without library inputs are byte-identical | exports-multiasm 6.4 R3 asks two phases for every output, but msil-ld never takes an EXE as a library input (only `-shared` outputs carry the symbol table), so no other assembly's phase 1 waits on an EXE, and one module initializer keeps O3 and `-S` identical; Design.md is the user's, so the deviation goes to section 10 |
+| 2026-10-21 | M22 | D27 amended: `-shared` outputs have no entry point and no `'<msil>Main'`; `main` is exported like any function; `-e` with `-shared` is a warning | exports-multiasm 10.1 |
+| 2026-10-21 | M22 | D21 refined: msil-verify.py also accepts the pass-1 PEVerify note 'Cannot modify an imaged based (RVA) static' in `'<msil>Data'::.cctor` under the same ildasm-listing check (`ldsflda valuetype '<msil>image_t' '<msil>image'` at the offset), neutralizes that copy in any method in pass 2, and verifies linked libraries (`--dep-dir`, `--also-verify-deps`) | two-phase libraries copy the image in '<msil>Data'::.cctor (exports-multiasm 6.4 and E7) |
+| 2026-10-21 | M22 | Q23 as implemented: the default export class is the assembly name parsed like an `--export-class` value (the last `.` separates the namespace); a dot-free name gives a class without namespace, exactly as Q23 says | otherwise C# cannot name the class of a dotted assembly name |
+| 2026-10-21 | M23 | M23 CI corpus (section 10 item 11; default until the user answers): msil-ci.yml leaves CoreMark and c-testsuite out of CI through the workflow-level env `MSIL_CORPUS_SKIP: coremark,c-testsuite` (5.12.9, 5.12.11, 5.12.12), so GitHub's runners neither download nor run them; the phase gate on the development host runs all ten entries (run-m1-gate.ps1 clears the variable). If the user allows CI to fetch them, a section 12 row empties the variable (one line of msil-ci.yml) | the approval of 2026-10-21 covers a gate step that downloads into a cache on C:; the CI licences of CoreMark (EEMBC licence agreement) and c-testsuite (per-test licences from scc and tinycc) are unverified (brief Q30; tests-p2 9 items 7-8) |
+| 2026-10-21 | M23 | Phase 1 decisions at the Phase 2 exit (Q31; brief section 3 item 20). Plan 5.5's composites run through objects by default (msil_pipeline=obj, msil_link_output=pe), and -S plus ilasm stays selectable as the asm oracle. D22 and D38: the .NET 10 leg and the DOTNET_TieredCompilation=0 legs become msil_also_run entries of net8 and wsl-net10 (the same tests, with jitall and the run per runtime, on one verified build). D31: ilasm is a test oracle only (asm-oracle, modern-ilasm, wsl-ilasm, the reference side of O3 and O4, the round trip) | from M23 the default route is clang -c plus msil-ld |
+| 2026-10-21 | M23 | Cross-host determinism (contract 5.7's M23 note; tests-p2 3.7). msil-ci.yml's determinism job compares the CIL objects and archives that both CI hosts build with det-manifest.py: every C file of msil/test/M1, for both x86_64 MSIL triples, at -O0 and -O2. No PE is compared across hosts: the Windows runner has no Linux sysroot and the Linux runner has no Windows import libraries. PE determinism is checked within each host (the det and det-wsl legs, and CI's det leg) | open question to the user |
+| 2026-10-21 | - | Design.md updated with the user's approval (Q37; section 2's rule that agents never edit Design.md still binds every milestone WP): the decision brief's section 3 items 1-16 (CIL objects as ECMA-335 modules with a link-info record; the linker-synthesized module initializer and one data segment per output; lld/ELF resolution rules; Q13 library naming and the native resolver's limits; the `-lfoo` rule; exports with accessors and properties, two-phase initialization, `-Bsymbolic`/`-z defs` semantics and the private symbol-table attribute; `llvm/lib/CLI`, `lld/MSIL` and the driver in section 8; risk 6 and the phase 2 row), the 14 texts of Status.md section 6 (item 4 amended per Q13) and backlog S6-S12; Status.md section 6 now records where each item went. Section 10 item 10 asks the user to word 4.1's and 5.4's two-phase initialization as M22 builds it (libraries two-phase, a program one module initializer) | decision brief section 3 and Q37; recon/p2/backlog.md sections 6 and 7 |
 
 ## Appendix A. Review dispositions (plan v1 -> v2)
 

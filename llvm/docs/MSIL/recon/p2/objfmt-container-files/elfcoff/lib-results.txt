@@ -1,0 +1,31 @@
+== llvm-lib cil-elf-em.o
+cil-elf-em.o: not a COFF object, bitcode, archive, import library or resource file
+rc=1; index: 
+== lib.exe cil-elf-em.o
+cil-elf-em.o : fatal error LNK1107: invalid or corrupt file: cannot read at 0x858
+rc=1107
+== llvm-lib cil-elf.o
+cil-elf.o: not a COFF object, bitcode, archive, import library or resource file
+rc=1; index: 
+== lib.exe cil-elf.o
+cil-elf.o : fatal error LNK1107: invalid or corrupt file: cannot read at 0x858
+rc=1107
+== llvm-lib obj.netmodule
+obj.netmodule: not a COFF object, bitcode, archive, import library or resource file
+rc=1; index: 
+== lib.exe obj.netmodule
+obj.netmodule : fatal error LNK1302: only support linking safe .netmodules; unable to link pure .netmodule
+rc=1302
+== llvm-lib a_bc.o
+rc=0; index: main in a_bc.o; ; 
+== lib.exe a_bc.o
+a_bc.o : fatal error LNK1107: invalid or corrupt file: cannot read at 0xE10
+rc=1107
+== llvm-lib cil-coff.o
+rc=0; index: .weak.weak_undef.default.twice in cil-coff.o; common_var in cil-coff.o; counter in cil-coff.o
+== llvm-lib cil-coff-unk.o
+cil-coff-unk.o: unknown machine: 0
+rc=1; index: 
+== llvm-lib cil-coff-cee.o
+cil-coff-cee.o: not a COFF object, bitcode, archive, import library or resource file
+rc=1; index: 

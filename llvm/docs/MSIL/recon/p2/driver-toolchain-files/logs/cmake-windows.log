@@ -1,0 +1,49 @@
+-- The C compiler identification is Clang 24.0.0 with GNU-like command-line
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/llvm-msil-scratch/p2/driver-toolchain/proto/bin/clang.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Configuring done (3.4s)
+-- Generating done (0.1s)
+-- Build files have been written to: C:/llvm-msil-scratch/p2/driver-toolchain/cmake/build
+configure exit=0 (4 s)
+Change Dir: 'C:/llvm-msil-scratch/p2/driver-toolchain/cmake/build'
+
+Run Build Command(s): <winget>/ninja.exe -v
+[1/6] C:\llvm-msil-scratch\p2\driver-toolchain\proto\bin\clang.exe --target=x86_64-pc-windows-msvc-msil   --target=x86_64-pc-windows-msvc-msil -flto -O3 -DNDEBUG -ffreestanding -MD -MT CMakeFiles/util.dir/util.c.obj -MF CMakeFiles\util.dir\util.c.obj.d -o CMakeFiles/util.dir/util.c.obj -c C:/llvm-msil-scratch/p2/driver-toolchain/cmake/proj/util.c
+[2/6] C:\llvm-msil-scratch\p2\driver-toolchain\proto\bin\clang.exe --target=x86_64-pc-windows-msvc-msil   --target=x86_64-pc-windows-msvc-msil -flto -O3 -DNDEBUG -ffreestanding -MD -MT CMakeFiles/app.dir/main.c.obj -MF CMakeFiles\app.dir\main.c.obj.d -o CMakeFiles/app.dir/main.c.obj -c C:/llvm-msil-scratch/p2/driver-toolchain/cmake/proj/main.c
+[3/6] C:\llvm-msil-scratch\p2\driver-toolchain\proto\bin\clang.exe --target=x86_64-pc-windows-msvc-msil -Dshlib_EXPORTS  --target=x86_64-pc-windows-msvc-msil -flto -O3 -DNDEBUG -ffreestanding -MD -MT CMakeFiles/shlib.dir/shlib.c.obj -MF CMakeFiles\shlib.dir\shlib.c.obj.d -o CMakeFiles/shlib.dir/shlib.c.obj -c C:/llvm-msil-scratch/p2/driver-toolchain/cmake/proj/shlib.c
+[4/6] C:\Windows\system32\cmd.exe /C "cd . && "C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E rm -f libutil.a && C:\PROGRA~1\MICROS~3\18\PROFES~1\VC\Tools\Llvm\x64\bin\llvm-ar.exe qc libutil.a  CMakeFiles/util.dir/util.c.obj && C:\PROGRA~1\MICROS~3\18\PROFES~1\VC\Tools\Llvm\x64\bin\LLVM-R~1.EXE libutil.a && cd ."
+[5/6] C:\Windows\system32\cmd.exe /C "cd . && C:\llvm-msil-scratch\p2\driver-toolchain\proto\bin\clang.exe --target=x86_64-pc-windows-msvc-msil -fPIC --target=x86_64-pc-windows-msvc-msil -flto -O3 -DNDEBUG  -shared -Wl,--export-class=Demo.Native  -o shlib.dll CMakeFiles/shlib.dir/shlib.c.obj   && cd ."
+[6/6] C:\Windows\system32\cmd.exe /C "cd . && C:\llvm-msil-scratch\p2\driver-toolchain\proto\bin\clang.exe --target=x86_64-pc-windows-msvc-msil --target=x86_64-pc-windows-msvc-msil -flto -O3 -DNDEBUG  CMakeFiles/app.dir/main.c.obj -o app.exe  libutil.a && cd ."
+
+build exit=0
+
+[32;1mName                  [0m[32;1m Length[0m
+[32;1m----                  [0m [32;1m------[0m
+app.exe                  2560
+app.runtimeconfig.json    113
+libutil.a                3736
+shlib.dll                2048
+
+--- dotnet app.exe (.NET 8, runtimeconfig from CMake)
+cmake-built MSIL program
+exit=42
+--- app.exe directly (.NET Framework 4.8)
+cmake-built MSIL program
+exit=42
+--- CMake cache facts
+CMAKE_AR:FILEPATH=C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/llvm-ar.exe
+set(CMAKE_C_COMPILER_ID "Clang")
+set(CMAKE_C_SIMULATE_ID "MSVC")
+set(CMAKE_C_COMPILER_FRONTEND_VARIANT "GNU")
+set(CMAKE_LINKER "C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/lld-link.exe")
+set(CMAKE_C_COMPILER_LINKER_FRONTEND_VARIANT )
+set(CMAKE_C_IMPLICIT_LINK_LIBRARIES "ucrt;kernel32")
+set(CMAKE_C_IMPLICIT_LINK_DIRECTORIES "C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/MSVC/14.51.36231/atlmfc/lib/x64;C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/MSVC/14.51.36231/lib/x64;C:/Program Files (x86)/Windows Kits/NETFXSDK/4.8/Lib/um/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64")
+--- stand-in log (linker command lines)
+msil-ld --target=x86_64-pc-windows-msvc-msil -LC:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\MSVC\14.51.36231\ATLMFC\lib\x64 -LC:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\MSVC\14.51.36231\lib\x64 -LC:\Program Files (x86)\Windows Kits\NETFXSDK\4.8\lib\um\x64 -LC:\Program Files (x86)\Windows Kits\10\lib\10.0.26100.0\ucrt\x64 -LC:\Program Files (x86)\Windows Kits\10\\lib\10.0.26100.0\\um\x64 $TMP\CMakeCCompilerId-c430b8.o -lucrt -lkernel32 -o a.exe
+msil-ld --target=x86_64-pc-windows-msvc-msil -LC:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\MSVC\14.51.36231\ATLMFC\lib\x64 -LC:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\MSVC\14.51.36231\lib\x64 -LC:\Program Files (x86)\Windows Kits\NETFXSDK\4.8\lib\um\x64 -LC:\Program Files (x86)\Windows Kits\10\lib\10.0.26100.0\ucrt\x64 -LC:\Program Files (x86)\Windows Kits\10\\lib\10.0.26100.0\\um\x64 CMakeFiles/cmTC_d8a94.dir/CMakeCCompilerABI.c.obj -lucrt -lkernel32 -o cmTC_d8a94.exe
+msil-ld --target=x86_64-pc-windows-msvc-msil --shared -LC:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\MSVC\14.51.36231\ATLMFC\lib\x64 -LC:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\MSVC\14.51.36231\lib\x64 -LC:\Program Files (x86)\Windows Kits\NETFXSDK\4.8\lib\um\x64 -LC:\Program Files (x86)\Windows Kits\10\lib\10.0.26100.0\ucrt\x64 -LC:\Program Files (x86)\Windows Kits\10\\lib\10.0.26100.0\\um\x64 --lto-O3 --export-class=Demo.Native CMakeFiles/shlib.dir/shlib.c.obj -lucrt -lkernel32 -o shlib.dll
+msil-ld --target=x86_64-pc-windows-msvc-msil -LC:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\MSVC\14.51.36231\ATLMFC\lib\x64 -LC:\Program Files\Microsoft Visual Studio\18\Professional\VC\Tools\MSVC\14.51.36231\lib\x64 -LC:\Program Files (x86)\Windows Kits\NETFXSDK\4.8\lib\um\x64 -LC:\Program Files (x86)\Windows Kits\10\lib\10.0.26100.0\ucrt\x64 -LC:\Program Files (x86)\Windows Kits\10\\lib\10.0.26100.0\\um\x64 --lto-O3 CMakeFiles/app.dir/main.c.obj libutil.a -lucrt -lkernel32 -o app.exe

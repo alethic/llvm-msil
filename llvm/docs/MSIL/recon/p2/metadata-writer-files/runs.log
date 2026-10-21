@@ -1,0 +1,102 @@
+== hello: Roslyn-style envelope (PE32+ AMD64, ILONLY, no import/stub/reloc)
+hello.dll                    net8    exit=63  
+hello.dll                    net8TC0 exit=63  
+hello.dll                    net10   exit=63  
+hello.exe                    net8    exit=63  
+hello.exe                    net8TC0 exit=63  
+hello.exe                    net10   exit=63  
+hello.exe                    fw4.8   exit=63  
+== ilasm-style envelope (mscoree import, x64 stub, .reloc DIR64)
+hellostub.exe                net8    exit=63  
+hellostub.exe                net8TC0 exit=63  
+hellostub.exe                net10   exit=63  
+hellostub.exe                fw4.8   exit=63  
+== fat EH section format
+fateh.exe                    net8    exit=63  
+fateh.exe                    net8TC0 exit=63  
+fateh.exe                    net10   exit=63  
+fateh.exe                    fw4.8   exit=63  
+== PE32 / CorFlags variants
+pe32-anycpu-stub             net8    exit=63  
+pe32-anycpu-stub             net8TC0 exit=63  
+pe32-anycpu-stub             net10   exit=63  
+pe32-anycpu-stub             fw4.8   exit=63  
+pe32-anycpu-nostub           net8    exit=63  
+pe32-anycpu-nostub           net8TC0 exit=63  
+pe32-anycpu-nostub           net10   exit=63  
+pe32-anycpu-nostub           fw4.8   exit=63  
+pe32-32bitreq                net8    exit=127 Unhandled exception. System.IO.FileLoadException: Could not load file or assembly 'req32, Version=0.0.0.0, Cul
+pe32-32bitreq                net8TC0 exit=127 Unhandled exception. System.IO.FileLoadException: Could not load file or assembly 'req32, Version=0.0.0.0, Cul
+pe32-32bitreq                net10   exit=127 Unhandled exception. System.IO.FileLoadException: Could not load file or assembly 'C:\llvm-msil-scratch\p2\met
+pe32-32bitreq                fw4.8   exit=63  
+pe32-32bitreq+pref           net8    exit=127 Unhandled exception. System.BadImageFormatException: Could not load file or assembly 'C:\llvm-msil-scratch\p2\
+pe32-32bitreq+pref           net8TC0 exit=127 Unhandled exception. System.BadImageFormatException: Could not load file or assembly 'C:\llvm-msil-scratch\p2\
+pe32-32bitreq+pref           net10   exit=127 Unhandled exception. System.BadImageFormatException: Could not load file or assembly 'C:\llvm-msil-scratch\p2\
+pe32-32bitreq+pref           fw4.8   exit=63  
+pe32plus-32bitreq            net8    exit=127 Unhandled exception. System.IO.FileLoadException: Could not load file or assembly 'x64req32, Version=0.0.0.0, 
+pe32plus-32bitreq            net8TC0 exit=127 Unhandled exception. System.IO.FileLoadException: Could not load file or assembly 'x64req32, Version=0.0.0.0, 
+pe32plus-32bitreq            net10   exit=127 Unhandled exception. System.BadImageFormatException: Could not load file or assembly 'C:\llvm-msil-scratch\p2\
+pe32plus-32bitreq            fw4.8   exit=127  Unhandled Exception: System.BadImageFormatException: Could not load file or assembly 'x64req32.exe' or one of
+== float32 signaling NaN: 248 = still 0x7F800001, 252 = quieted to 0x7FC00001
+snan-ldc.r4                  net8    exit=252 
+snan-ldc.r4                  net8TC0 exit=252 
+snan-ldc.r4                  net10   exit=252 
+snan-ldc.r4                  fw4.8   exit=252 
+snan-ldind-stind             net8    exit=248 
+snan-ldind-stind             net8TC0 exit=248 
+snan-ldind-stind             net10   exit=248 
+snan-ldind-stind             fw4.8   exit=248 
+== RVA data: read-only in .text; .sdata RW section; writing into it
+sdata                        net8    exit=63  
+sdata                        net8TC0 exit=63  
+sdata                        net10   exit=63  
+sdata                        fw4.8   exit=63  
+rvawrite-text                net8    exit=139 Fatal error. System.AccessViolationException: Attempted to read or write protected memory. This is often an in
+rvawrite-text                net8TC0 exit=139 Fatal error. System.AccessViolationException: Attempted to read or write protected memory. This is often an in
+rvawrite-text                net10   exit=139 Fatal error.  System.AccessViolationException: Attempted to read or write protected memory. This is often an i
+rvawrite-text                fw4.8   exit=139  Unhandled Exception: System.AccessViolationException: Attempted to read or write protected memory. This is of
+rvawrite-sdata               net8    exit=139 Fatal error. System.AccessViolationException: Attempted to read or write protected memory. This is often an in
+rvawrite-sdata               net8TC0 exit=139 Fatal error. System.AccessViolationException: Attempted to read or write protected memory. This is often an in
+rvawrite-sdata               net10   exit=139 Fatal error.  System.AccessViolationException: Attempted to read or write protected memory. This is often an i
+rvawrite-sdata               fw4.8   exit=139  Unhandled Exception: System.AccessViolationException: Attempted to read or write protected memory. This is of
+== 4-byte indexes: 70000 extra fields split over two classes
+split-70000-fields           net8    exit=63  
+split-70000-fields           net8TC0 exit=63  
+split-70000-fields           net10   exit=63  
+split-70000-fields           fw4.8   exit=63  
+== per-type limits
+methods-65524                net8    exit=63  
+methods-65524                net8TC0 exit=63  
+methods-65524                net10   exit=63  
+methods-65524                fw4.8   exit=63  
+methods-65525                net8    exit=127 Unhandled exception. System.MissingMethodException: Entry point not found in assembly 'mlim2, Version=0.0.0.0,
+methods-65525                net8TC0 exit=127 Unhandled exception. System.MissingMethodException: Entry point not found in assembly 'mlim2, Version=0.0.0.0,
+methods-65525                net10   exit=127 Unhandled exception. System.MissingMethodException: Entry point not found in assembly 'mlim2, Version=0.0.0.0,
+methods-65525                fw4.8   exit=127  Unhandled Exception: System.TypeLoadException: Type '<Module>' from assembly 'mlim2, Version=0.0.0.0, Culture
+fields-65536                 net8    exit=127 Unhandled exception. System.MissingMethodException: Entry point not found in assembly 'flim, Version=0.0.0.0, 
+fields-65536                 net8TC0 exit=127 Unhandled exception. System.MissingMethodException: Entry point not found in assembly 'flim, Version=0.0.0.0, 
+fields-65536                 net10   exit=127 Unhandled exception. System.MissingMethodException: Entry point not found in assembly 'flim, Version=0.0.0.0, 
+fields-65536                 fw4.8   exit=127  Unhandled Exception: System.TypeLoadException: Internal limitation: too many fields. 
+srm-fields-65534             net8    exit=42  
+srm-fields-65534             net8TC0 exit=42  
+srm-fields-65534             net10   exit=42  
+srm-fields-65534             fw4.8   exit=42  
+srm-fields-65535             net8    exit=127 Unhandled exception. System.BadImageFormatException: Could not load file or assembly 'srm, Version=0.0.0.0, Cu
+srm-fields-65535             net8TC0 exit=127 Unhandled exception. System.BadImageFormatException: Could not load file or assembly 'srm, Version=0.0.0.0, Cu
+srm-fields-65535             net10   exit=127 Unhandled exception. System.MissingMethodException: Entry point not found in assembly 'srm, Version=0.0.0.0, C
+srm-fields-65535             fw4.8   exit=127  Unhandled Exception: System.BadImageFormatException: Could not load file or assembly 'srm, Version=0.0.0.0, C
+== determinism
+two runs: byte-identical
+== Linux (WSL): hello-linux.dll (ModuleRef libc), .sdata write
+linux net8 hello-linux.dll exit=63
+linux net8 TC=0 hello-linux.dll exit=63
+linux net10 hello-linux.dll exit=63
+linux net10 TC=0 hello-linux.dll exit=63
+linux net8 rvw-sdata-l.dll exit=63
+linux net8 TC=0 rvw-sdata-l.dll exit=63
+linux net10 rvw-sdata-l.dll exit=63
+linux net10 TC=0 rvw-sdata-l.dll exit=63
+linux net8 rvw-text-l.dll exit=134
+linux net8 TC=0 rvw-text-l.dll exit=134
+linux net10 rvw-text-l.dll exit=134
+linux net10 TC=0 rvw-text-l.dll exit=134

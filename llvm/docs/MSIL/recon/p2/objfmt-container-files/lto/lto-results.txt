@@ -1,0 +1,40 @@
+# (E) bitcode-only objects
+## clang -c for an MSIL triple today
+clang: error: emitting object files is not yet supported for MSIL target 'x86_64-pc-windows-msvc19.33.0-msil'; use -S to produce ILAsm text, or -emit-llvm or -flto to produce bitcode
+## clang -c -flto works today; VS-bundled LLVM 22.1.3 llvm-nm and llvm-ar read the (LLVM 24git) bitcode
+
+a.o:
+                 U counter
+---------------- T main
+                 U twice
+
+b.o:
+---------------- D counter
+---------------- W twice
+Archive map
+counter in b.o
+main in a.o
+twice in b.o
+
+## LTO-style link emulated with cc1 -mlink-bitcode-file, then ilasm, then .NET 8 (expected 41)
+clang --target=x86_64-pc-windows-msvc-msil -S -O2 -x ir a.o -Xclang -mlink-bitcode-file -Xclang b.o -o ab.il; ilasm -dll -pe64 -x64 ab.il; dotnet exec ab.dll
+exit=41
+
+## Synthetic program: 100 TUs x 40 functions + main (big/gen.py 100 40; 52,501 lines of C; 4,103 methods), serial, one process per step, 4C/8T host
+(measured 2026-10-20 with time.sh and the commands below; clang/llc from D:\llvm-msil\build at 1ea64fe9fc7c, Release+assertions)
+per-TU clang -O2 -c -flto (frontend + IR optimization), 101 TUs:                 56.3 s
+per-TU clang -O2 -S (frontend + IR optimization + MSIL codegen), 100 TUs:          75.0 s
+  => codegen share of a separate compile: about 19 s for 100 TUs (0.19 s per TU, about 25%)
+10 TUs codegen only from bitcode (-x ir -Xclang -disable-llvm-passes):             4.2 s, of which 1.6 s is 10 clang process starts
+LTO-style link, merge only (101 bitcode files -> one module, -emit-llvm-bc):       2.7 s
+LTO-style link, merge + O2 codegen once (no IR re-optimization):                    24.8 s  (single thread)
+LTO-style link, merge + full O2 IR pipeline + codegen once:                         54.1 s  (single thread)
+LTO-style link at -O0 (merge + -O0 codegen):                                        12.2 s
+outputs: big.il 16.5 MB of ILAsm text; merged bitcode 3.76 MB; per-TU bitcode 4.0 MB in all
+
+# The same program through per-TU netmodules and the netmerge prototype (option B/C):
+llc of main.ll with the twice/tuN_entry declarations marked "msil-import-module"="msil.unresolved" (P/Invoke stubs to the placeholder module)
+ilasm (Framework 4.8) of 101 per-TU modules (.assembly line removed):              12.2 s
+netmerge bigmerged.dll main.netmodule tu0..tu99.netmodule:                          0.94 / 1.29 / 1.08 s (three runs, including .NET start-up)
+  merged 101 modules: methods=4302 fields=400 tokensRewritten=24977 sigTypeRefsRewritten=100 placeholdersResolved=100 renamed=297
+bigmerged.dll exit code on .NET 8, .NET 10 and .NET Framework 4.8 (bigmerged.exe): 140, the same as the LTO-built biglto.dll (140)

@@ -1,0 +1,174 @@
+== J0 re-run objfmt-binding zoo link (option 2)
+  constructors in order: ctor_b(100) ctor_a(200)
+main
+add3
+net8 exit 63
+main
+add3
+net10 exit 63
+main
+add3
+netfx exit 63
+== J1 ILSpy on a B object and on the linked output
+ilspycmd: 11.1.0.9782
+using System;
+using System.Runtime.InteropServices;
+
+internal class <Module>
+{
+	public static readonly IntPtr table;
+
+	public static readonly IntPtr pcounter;
+
+	public static readonly IntPtr ??_C@_05CJBACGMB@hello?$AA@;
+
+	public static readonly IntPtr msg;
+
+	private static readonly IntPtr va;
+
+	public static readonly IntPtr ??_C@_04GHJNJNPO@main?$AA@;
+
+	private static readonly IntPtr local_g;
+
+	public static readonly IntPtr common_c;
+
+	public static int weakfn()
+	{
+		return 1;
+	}
+
+	unsafe static void ctor_a()
+	{
+		*(int*)<msil>Symbols.counter = *(int*)va + *(int*)<msil>Symbols.counter;
+	}
+
+	public unsafe static int main()
+	{
+		puts(??_C@_04GHJNJNPO@main?$AA@);
+		*(int*)local_g = *(int*)local_g + 1;
+		int num = ((delegate*<int, int>)(*(IntPtr*)table))(1) + ((delegate*<int, int>)(*(IntPtr*)((nint)table + 8)))(2) + ((delegate*<int, int>)(*(IntPtr*)((nint)table + 16)))(3) + *(*(int**)pcounter) + helper(*(int*)local_g) + weakfn() * 1000;
+		if (<msil>FnAddr.maybe != (IntPtr)0)
+		{
+			num += 100000;
+		}
+31
+== J2 B object + COFF symbol-table view: llvm-nm, llvm-ar, GNU nm/ar, .NET readers, linkers
+a.o: 19 symbol records at 0x1600, string table 71 bytes
+b.o: 15 symbol records at 0x1400, string table 71 bytes
+../zoo/a.o: no symbols
+140002000 T ??_C@_04GHJNJNPO@main?$AA@
+140002000 T ??_C@_05CJBACGMB@hello?$AA@
+         U add3
+         U alias_twice
+         U b_extra
+00000004 C common_c
+         U counter
+140002000 t ctor_a
+140002000 t helper
+140002000 t local_g
+140002000 T main
+         U maybe
+140002000 T msg
+140002000 T pcounter
+         U puts
+140002000 T table
+         U twice
+140002000 t va
+140002000 T weakfn
+Archive map
+??_C@_04GHJNJNPO@main?$AA@ in a.o
+??_C@_04JCHODAIH@add3?$AA@ in b.o
+??_C@_05CJBACGMB@hello?$AA@ in a.o
+add3 in b.o
+alias_twice in b.o
+b_extra in b.o
+common_c in a.o
+counter in b.o
+main in a.o
+msg in a.o
+msg_b in b.o
+pcounter in a.o
+table in a.o
+twice in b.o
+weakfn in a.o
+
+msilobj: extracted libab.a(b.o) for counter,add3,twice,b_extra,alias_twice
+msilobj: linked 2 objects (1 archive members not extracted) -> z.dll (3072 bytes) in 74.9 ms
+  data relocations 6 (dropped with discarded COMDAT copies: 0), COMDAT copies dropped 1, weak definitions overridden 1, common merges 1, strings merged 0, archive members extracted 1
+main
+add3
+net8 exit 63
+9
+9
+using System;
+using System.Runtime.InteropServices;
+
+lld-link: error: a.o: unknown file type
+ld.lld: error: a.o: unknown file type
+a.o: not a COFF object, bitcode, archive, import library or resource file
+0000000140002000 T ??_C@_04GHJNJNPO@main?$AA@
+0000000140002000 T ??_C@_05CJBACGMB@hello?$AA@
+                 U add3
+                 U alias_twice
+
+Archive index:
+main in a.o
+weakfn in a.o
+table in a.o
+pcounter in a.o
+== J3 ildasm/ilasm round trip of objects, relink, run
+  constructors in order: ctor_b(100) ctor_a(200)
+main
+add3
+net8 exit 63
+main
+add3
+netfx exit 63
+== J4 C# netmodule with the B placeholder convention
+	.method private hidebysig static pinvokeimpl("msil.unresolved" nomangle cdecl) 
+		IL_0002: call int32 CsLib::twice(int32)
+msilobj: System.Exception: cslib.netmodule: no msil.link resource
+== J5 per-object Portable PDB through ilasm 10 (object-shaped module)
+BSJB
+module obj.o  isAssembly=False  pdb docs=2 methods=2
+  twice (0x06000001) IL_0000 -> obj.c:3:1
+  twice (0x06000001) IL_0002 -> obj.c:4:1
+== J6 initonly stores outside .cctor (per-object init methods)
+netfx exit 49
+net8 exit 49
+[IL]: Error [InitOnly]: [C:\llvm-msil-scratch\p2\judge-dotnet-value\initonly\initchk.exe : <Module>::<msil>init_data$a.o()][offset 0x00000003] Cannot change initonly field outside its .ctor.
+1 Error(s) Verifying C:\llvm-msil-scratch\p2\judge-dotnet-value\initonly\initchk.exe
+[IL]: Error: [C:\llvm-msil-scratch\p2\judge-dotnet-value\initonly\initchk.exe : <Module>::<msil>init_data$a.o][offset 0x00000003] Cannot change initonly field outside its .ctor.
+1 Error(s) Verifying initchk.exe
+== J7 typed link-semantics attributes rendered by ILSpy and ildasm
+using System;
+using System.Runtime.InteropServices;
+using MSIL.Link;
+
+[module: Object("x86_64-pc-windows-msvc-msil", 1)]
+internal class <Module>
+{
+	[Common(4, 4)]
+	public static readonly IntPtr common_c;
+
+	[Weak]
+	public static int weakfn()
+	{
+		return 1;
+	}
+
+	[Comdat("inl")]
+	public static int inl()
+	{
+		return 2;
+	}
+
+	[DllImport("msil.unresolved", CallingConvention = CallingConvention.Cdecl)]
+	public static extern int twice(int A_0);
+== J8 D object (objfmt-container cil-elf-em.o) in .NET and LLVM tools
+0000000000000008 C common_var
+0000000000000000 D counter
+                 U ext
+0000000000000000 t helper
+System.BadImageFormatException: Unknown file format.
+error : File 'C:/llvm-msil-scratch/p2/objfmt-container/elfcoff/cil-elf-em.o' not found or not a PE file

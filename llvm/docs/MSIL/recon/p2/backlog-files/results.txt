@@ -1,0 +1,171 @@
+# backlog recon: trimmed experiment log (2026-10-21, msil @ 1ea64fe9fc7c, build/bin tools)
+
+## E1 alias.ll (llc -mtriple=x86_64-pc-windows-msvc-msil)
+error: alias @g2 is not supported for MSIL
+error: alias @inc_alias is not supported for MSIL
+error: alias @inc_pub is not supported for MSIL
+exit=1
+
+## E1 calias.c (clang --target=x86_64-pc-windows-msvc-msil -O2)
+error: alias @pub_alias is not supported for MSIL
+error: alias @priv_alias is not supported for MSIL
+error: alias @weak_alias is not supported for MSIL
+error: alias @table_alias is not supported for MSIL
+4 errors generated.
+exit=1
+
+## E1 rustc 1.99.0 (LLVM 23.1.1) merge.rs -> merge.ll, retargeted to x86_64-pc-windows-msvc-msil
+9:@sum_b = unnamed_addr alias i32 (ptr, i64), ptr @sum_a
+13:define hidden void @_RNvCsdtSMxSA38aw_7___rustc17rust_begin_unwind(ptr noalias nofree noundef readonly align 8 captures(none) dereferenceable(24) %_1) unnamed_addr #0 !guid !5 {
+32:define noundef <16 x i8> @div128(ptr noalias nofree noundef readonly align 16 captures(none) dead_on_return dereferenceable(16) %a, ptr noalias nofree noundef readonly align 16 captures(none) dead_on_return dereferenceable(16) %b) unnamed_addr #2 !guid !7 {
+46:  tail call void @_RNvNtNtCs9rw95XCWuke_4core9panicking11panic_const23panic_const_div_by_zero(ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24) @alloc_92f628b60e16d0287d9db324f600a0cf) #10
+59:  call void asm sideeffect "", "r,~{memory}"(ptr nonnull %_3) #11, !srcloc !10
+67:  call void asm sideeffect "", "r,~{memory}"(ptr nonnull %_5) #11, !srcloc !10
+84:  call void asm sideeffect "", "r,~{memory}"(ptr nonnull %_16) #11, !srcloc !10
+168:declare void @_RNvNtNtCs9rw95XCWuke_4core9panicking11panic_const23panic_const_div_by_zero(ptr noalias nofree noundef readonly align 8 captures(address, read_provenance) dereferenceable(24)) unnamed_addr #7
+in function entry i64 (i64): inline assembly is not supported for MSIL
+in function entry i64 (i64): inline assembly is not supported for MSIL
+in function entry i64 (i64): inline assembly is not supported for MSIL
+error: alias @sum_b is not supported for MSIL
+in function div128 <16 x i8> (ptr, ptr): runtime helper '__udivti3' is not available for MSIL yet (phase 3)
+in function f2i128 <16 x i8> (double): runtime helper '__fixdfti' is not available for MSIL yet (phase 3)
+error: undefined function '_RNvNtNtCs9rw95XCWuke_4core9panicking11panic_const23panic_const_div_by_zero' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker
+
+## E1/E2/E3 lowered (lower_rust.py) + -expand-div-rem-bits=64 -expand-fp-convert-bits=64: llc exit, then ilasm + run (PowerShell): net8=88 net10=88 netfx=88; native rustc -O build prints 88
+llc exit=0
+
+## E2 fp-expand.ll split inputs, default vs expanded (errors)
+i128: default 8, expanded 2
+i128-strict: default 8, expanded 8
+i128-sat: default 4, expanded 0
+in function fptosi_f16_i128 void (i16): runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+in function fptoui_f16_i128 void (i16): runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+
+## E2 call-errors.ll libcall/libcall-fp and libcall-policy.ll helpers, expanded
+ce/libcall: 
+ce/libcall-fp: 
+lp/helpers: in function lround64 i64 (double): library call 'lround' is not a Phase-1 import;in function exp10_f64 double (double): library call 'exp10' is not a Phase-1 import;
+
+## E2 IL instructions per expanded function (i128.c -O2)
+881 .method public static void 'udiv'(native int, native int, na
+974 .method public static void 'urem'(native int, native int, na
+958 .method public static void 'sdiv'(native int, native int, na
+1053 .method public static void 'srem'(native int, native int, na
+582 .method public static float64 'u2d'(native int) cil managed
+573 .method public static float32 'i2f'(native int) cil managed
+311 .method public static void 'd2i'(native int, float64) cil ma
+159 .method public static void 'f2u'(native int, float32) cil ma
+
+## E3 fakeuse.ll -O2 (method body)
+.method public static int32 'f'(int32) cil managed
+{                                       // -- Begin function f
+                                        // @f
+  .maxstack 2
+  .locals (native int)
+// %bb.0:
+  ldc.i4.s 16
+  localloc
+  stloc.0
+  ldloc.0
+  ldc.i4 12
+  conv.i
+  add
+  ldarg.0
+  stind.i4
+	//MEMBARRIER
+  ldloc.0
+  ldc.i4 12
+  conv.i
+  add
+  stloc.0
+  ldarg.0
+  ldc.i4.7
+  mul
+  starg.s 0
+  ldc.i4.0
+  ret
+} // end of method 'f'
+
+## E3 bb.c (C black-box idioms)
+e3-blackbox/bb.c:1:48: error: inline assembly is not supported for the MSIL target 'x86_64-pc-windows-msvc19.33.0-msil'
+e3-blackbox/bb.c:2:49: error: inline assembly is not supported for the MSIL target 'x86_64-pc-windows-msvc19.33.0-msil'
+e3-blackbox/bb.c:3:52: error: inline assembly is not supported for the MSIL target 'x86_64-pc-windows-msvc19.33.0-msil'
+3 errors generated.
+  tail call void asm sideeffect "", "r,~{memory},~{dirflag},~{fpsr},~{flags}"(i32 41) #2, !srcloc !9
+  call void asm sideeffect "", "r|m,~{memory},~{dirflag},~{fpsr},~{flags}"(ptr nonnull %y) #2, !srcloc !10
+  %0 = call i32 asm sideeffect "", "=r,0,~{memory},~{dirflag},~{fpsr},~{flags}"(i32 41) #2, !srcloc !11
+  call void asm sideeffect "", "~{memory},~{dirflag},~{fpsr},~{flags}"() #2, !srcloc !12
+
+## E3 swift.ll
+error: <unknown>:0:0: in function add i32 (i32, i32, ptr): calling convention is not supported for MSIL
+error: <unknown>:0:0: in function main i32 (): calling convention is not supported for MSIL
+
+## E4 byval.c localloc sizes (-O2)
+x86_64-unknown-linux-gnu-msil: int:   ldc.i4 640;int:   ldc.i4.s 64;
+x86_64-pc-windows-msvc-msil: 
+aarch64-unknown-linux-gnu-msil: 
+
+## E5 va_arg
+vaagg: Unknown type! UNREACHABLE executed at D:/llvm-msil/llvm/lib/CodeGen/ValueTypes.cpp:254! (llc exit 132, 0xC000001D)
+vascalar: error: <unknown>:0:0: in function get i32 (ptr): the va_arg instruction is not supported for MSIL yet (phase 3 variadics) (llc exit 1)
+native x86_64-unknown-linux-gnu vaagg: Unknown type! UNREACHABLE executed at D:/llvm-msil/llvm/lib/CodeGen/ValueTypes.cpp:254! 
+
+## E7 MIR FP literals
+    %0:f64 = CONST_F64 double +inf, implicit-def dead $arguments
+    %0:f32 = CONST_F32 float +qnan, implicit-def dead $arguments
+    %0:f64 = CONST_F64 double 1.500000e+00, implicit-def dead $arguments
+error: e7-mir/inf.mir:81:31: expected a floating point literal
+error: e7-mir/gi-inf.mir:9:36: expected a floating point literal
+
+## E7 wasm32 -stop-after=wasm-isel (late.ll)
+*** Bad machine code: Using an undefined physical register ***
+msil -stop-after=msil-isel: 0 lines of diagnostics
+
+## E2 i128.c, cmp.ps1 (native clang -O2 + VS clang_rt.builtins-x86_64.lib vs clang --target=x86_64-pc-windows-msvc-msil
+##    -mllvm -expand-div-rem-bits=64 -mllvm -expand-fp-convert-bits=64, Framework ilasm -exe -pe64 -x64)
+-O2: native exit=30 (0x451115385c4b46d0a883e4bc6650529e / 0x24924924924924924924924924924924 / 0xffffffffffffe1bfb2e275029fdb6db7)
+     rc8 exit=30 same=True; rc10 exit=30 same=True; netfx exit=30 same=True
+-O0: same results on all three runtimes
+x86_64-unknown-linux-gnu-msil, WSL .NET 10.0.13 (private directory): same three lines, [exit 30]
+msil-verify.py (ILVerify allow-list + PEVerify + neutralized second pass) on i128.exe: exit 0
+Without the two -mllvm options: 8 errors "runtime helper '__udivti3' ... (phase 3)" etc.
+
+## E2 bench.c (3,000,000 u128 divisions, divisors of every width), whole process
+native (compiler-rt __udivti3): about 300 ms; MSIL expanded: .NET 8 1,023 ms, .NET 10 968 ms, Framework 4.8 1,013 ms
+C# UInt128 '/' on .NET 8 (same loop, in-process stopwatch): 428-482 ms
+
+## E2 bitint.c (unsigned _BitInt(200) division and conversion): compiles TODAY without options
+native exit=77; rc8/rc10/netfx exit=77 same=True (widths above 128 are already expanded by ExpandIRInsts)
+
+## E1 jmp-based alias stub (merge-jmp.il): runs (88) on .NET 8, .NET 10, Framework 4.8;
+ILVerify: [Unverifiable] ... sum_b ... Instruction cannot be verified; PEVerify: same. The plain forwarding call is clean.
+
+## E6 no-sudo Linux oracle: fork clang --target=x86_64-unknown-linux-gnu -O2 -ffreestanding -fno-pic -c, WSL binutils ld with a
+##    5-instruction _start (start.c) against libc.so.6 and libm.so.6
+fib: matches .expected; crc32: matches .expected; mandelbrot-fixed: matches .expected; kr-legacy: matches .expected
+
+## E8 Design.md 12 literal commands (prog.c = fib(10) - 13)
+ilasm -dll prog.il -> machine=0x014C magic=0x010B (PE32, AnyCPU)
+dotnet prog.dll -> "The library 'hostpolicy.dll' required to execute the application was not found", exit 0x80008083
+dotnet exec --runtimeconfig rc8.json prog.dll -> 42; with prog.runtimeconfig.json next to it -> 42
+
+## E9 native exit(3) with a ProcessExit handler and a native atexit callback (C# probe, Release)
+atexit: EntryPointNotFoundException in ucrtbase (exports _crt_atexit) and in glibc libc.so.6 (exports __cxa_atexit)
+.NET 8.0 Windows: "calling native exit(3)", "native atexit handler ran", exit 3   (ProcessExit did NOT run)
+.NET Framework 4.8: "calling native exit(3)", "ProcessExit ran", exit 3          (native handler output absent)
+WSL .NET 10.0.13:   "calling native exit(3)", "native atexit handler ran", exit 3   (ProcessExit did NOT run)
+
+## Exports (llvm-readobj --coff-exports, System32)
+msvcrt.dll (1330): hypot=no cbrt=no round=no frexpf=no ldexpf=no hypotf=no atexit=yes _crt_atexit=no exit=yes
+ucrtbase.dll (2484): hypot=yes cbrt=yes round=yes frexpf=no ldexpf=no hypotf=no atexit=no _crt_atexit=yes exit=yes
+
+## CI
+gh api repos/actions/setup-dotnet/git/ref/tags/v5 -> 26b0ec14cb23fa6904739307f278c14f94c95bf1 (same as v5.4.0, 2026-06-26)
+gh api .../tags/v6.0.0 -> a98b56852c35b8e3190ac28c8c2271da59106c68 (2026-07-16)
+gh run list -R <owner>/llvm-msil --workflow msil-ci.yml -> HTTP 404: workflow msil-ci.yml not found on the default branch
+gh api repos/<owner>/llvm-msil -> default_branch main, public; actions/runs total_count 3 (all dependabot on main)
+
+## WSL Ubuntu
+cc/gcc/clang/zig/tcc: none; binutils 2.46 installed; no /usr/include/stdio.h, no crt1.o, libc.so.6 and libm.so.6 present
+unattended-upgrades: enabled, active; APT::Periodic::Unattended-Upgrade "1"; apt-mark showhold: (none)
+dotnet packages: dotnet-runtime-10.0 10.0.13 (apt); Microsoft.NETCore.App 8.0.31 (dotnet-install.sh), 10.0.13

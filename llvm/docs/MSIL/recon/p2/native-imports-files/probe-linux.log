@@ -1,0 +1,65 @@
+# probe-lnx.exe (gen_probe.py linux, l26 removed), WSL Ubuntu 26.04, glibc 2.43, no libc6-dev/zlib1g-dev
+=== .NET 8.0.31
+OK   l01 [libc as abs] abs from libc: 5
+OK   l02 [c as abs] abs from c: 5
+OK   l03 [libc.so.6 as abs] abs from libc.so.6: 5
+FAIL l04 [libc.so as abs] abs from libc.so (dev linker script absent): System.DllNotFoundException
+FAIL l05 [libm as sqrt] sqrt from libm: System.DllNotFoundException
+FAIL l06 [m as sqrt] sqrt from m: System.DllNotFoundException
+OK   l07 [libm.so.6 as sqrt] sqrt from libm.so.6: 1.5
+FAIL l08 [libm.so as sqrt] sqrt from libm.so: System.DllNotFoundException
+FAIL l09 [libz as zlibVersion] zlibVersion from libz: System.DllNotFoundException
+FAIL l10 [z as zlibVersion] zlibVersion from z: System.DllNotFoundException
+OK   l11 [libz.so.1 as zlibVersion] zlibVersion from libz.so.1 (DT_SONAME): 135666008457650
+FAIL l12 [libz.so as zlibVersion] zlibVersion from libz.so: System.DllNotFoundException
+OK   l13 [libpthread.so.0 as pthread_self] pthread_self from libpthread.so.0 (2.34+: lives in libc): 135668197394304
+OK   l14 [libdl.so.2 as dlerror] dlerror from libdl.so.2 (2.34+: lives in libc): 0
+FAIL l15 [libm.so.6 as matherr] matherr (compat-only matherr@GLIBC_2.2.5): System.EntryPointNotFoundException
+OK   l16 [libc.so.6 as memchr] memchr (IFUNC): 99765061426913
+OK   l17 [libc.so.6 as strlen] strlen (IFUNC): 3
+OK   l18 [libm.so.6 as abs] abs from libm.so.6 (found in its DT_NEEDED libc): 5
+OK   l19 [libm.so.6 as sqrtf] sqrtf (default version GLIBC_2.43): 1.5
+OK   l20 [libm.so.6 as exp] exp (exp@@GLIBC_2.29 and exp@GLIBC_2.2.5): 1
+OK   l21 [libc.so.6 as __errno_location] __errno_location(): 135668197394176
+OK   l22 [libz.so.1.3.1 as zlibVersion] zlibVersion from the real file name: 135666008457650
+OK   l23 [libc.so.6 as fstat] fstat(-1, NULL) (fstat@@GLIBC_2.33): -1
+FAIL l24 [libc.so.6 as atexit] atexit (only in libc_nonshared.a): System.EntryPointNotFoundException
+FAIL l25 [libc as sqrt] sqrt from libc (glibc keeps it in libm): System.EntryPointNotFoundException
+=== .NET 10.0.13
+OK   l01 [libc as abs] abs from libc: 5
+OK   l02 [c as abs] abs from c: 5
+OK   l03 [libc.so.6 as abs] abs from libc.so.6: 5
+FAIL l04 [libc.so as abs] abs from libc.so (dev linker script absent): System.DllNotFoundException
+FAIL l05 [libm as sqrt] sqrt from libm: System.DllNotFoundException
+FAIL l06 [m as sqrt] sqrt from m: System.DllNotFoundException
+OK   l07 [libm.so.6 as sqrt] sqrt from libm.so.6: 1.5
+FAIL l08 [libm.so as sqrt] sqrt from libm.so: System.DllNotFoundException
+FAIL l09 [libz as zlibVersion] zlibVersion from libz: System.DllNotFoundException
+FAIL l10 [z as zlibVersion] zlibVersion from z: System.DllNotFoundException
+OK   l11 [libz.so.1 as zlibVersion] zlibVersion from libz.so.1 (DT_SONAME): 140163815727538
+FAIL l12 [libz.so as zlibVersion] zlibVersion from libz.so: System.DllNotFoundException
+OK   l13 [libpthread.so.0 as pthread_self] pthread_self from libpthread.so.0 (2.34+: lives in libc): 140164094134144
+OK   l14 [libdl.so.2 as dlerror] dlerror from libdl.so.2 (2.34+: lives in libc): 0
+FAIL l15 [libm.so.6 as matherr] matherr (compat-only matherr@GLIBC_2.2.5): System.EntryPointNotFoundException
+OK   l16 [libc.so.6 as memchr] memchr (IFUNC): 103350166970033
+OK   l17 [libc.so.6 as strlen] strlen (IFUNC): 3
+OK   l18 [libm.so.6 as abs] abs from libm.so.6 (found in its DT_NEEDED libc): 5
+OK   l19 [libm.so.6 as sqrtf] sqrtf (default version GLIBC_2.43): 1.5
+OK   l20 [libm.so.6 as exp] exp (exp@@GLIBC_2.29 and exp@GLIBC_2.2.5): 1
+OK   l21 [libc.so.6 as __errno_location] __errno_location(): 140164094134016
+OK   l22 [libz.so.1.3.1 as zlibVersion] zlibVersion from the real file name: 140163815727538
+OK   l23 [libc.so.6 as fstat] fstat(-1, NULL) (fstat@@GLIBC_2.33): -1
+FAIL l24 [libc.so.6 as atexit] atexit (only in libc_nonshared.a): System.EntryPointNotFoundException
+FAIL l25 [libc as sqrt] sqrt from libc (glibc keeps it in libm): System.EntryPointNotFoundException
+=== probe-l26.exe: pinvokeimpl("libc.so.6" as "errno") called as a function (TLS data symbol)
+dlsym resolves it; the call crashes: Segmentation fault, exit status 139 (.NET 10)
+=== data-modern-lnx.il (NativeLibrary.Load("libc.so.6") + GetExport of stdout, environ, optind; fputs to *stdout)
+(.NET 8 and .NET 10 identical):
+optind = 1
+environ[0] starts with SHEL
+hello through a native data import of stdout
+rc=0
+=== abi-sysv.il + libbig.so.1 (abi-sysv-big.c built with VS clang --target=x86_64-linux-gnu and ld.lld -shared)
+mk: 24-byte struct returned through IR sret, declared as a plain first native int: prints 21
+sum: 24-byte struct passed IR byval, declared as an explicit-layout value type (.size 24): prints 42
+.NET 8 and .NET 10 (WSL): 21, 42

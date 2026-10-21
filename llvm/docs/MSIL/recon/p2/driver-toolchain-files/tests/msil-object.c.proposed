@@ -1,0 +1,55 @@
+// Proposed clang/test/Driver/msil-object.c (recon driver-toolchain), for the
+// milestone that lands the P2-A object writer. NOT runnable before P2-A: today
+// every -c below reports err_drv_msil_no_object_output (msil-toolchain.c lines
+// 112-150), and that block moves here, inverted.
+//
+// -c is one cc1 job that writes a CIL object through the integrated assembler
+// (the MSIL MC object streamer); there is no assemble job and no external
+// assembler.
+
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ --implicit-check-not='"-cc1as"' --implicit-check-not='"as"' \
+// RUN:     --implicit-check-not=error: %s
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ --implicit-check-not='"-cc1as"' --implicit-check-not=error: %s
+// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ --implicit-check-not='"-cc1as"' --implicit-check-not=error: %s
+// RUN: %clang -### --target=aarch64-unknown-linux-gnu-msil -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ --implicit-check-not='"-cc1as"' --implicit-check-not=error: %s
+// OBJ: "-cc1" "-triple" "{{[^"]*}}-msil" "-emit-obj"
+
+// Default object names follow the native driver: foo.o in GCC mode, foo.obj
+// with clang-cl.
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -c %s 2>&1 | FileCheck --check-prefix=NAME-O %s
+// NAME-O: "-o" "msil-object.o"
+// RUN: %clang_cl -### --target=x86_64-pc-windows-msvc-msil /c -- %s 2>&1 | FileCheck --check-prefix=NAME-OBJ %s
+// NAME-OBJ: "-o" "msil-object.obj"
+
+// A plain link compiles to CIL objects and links them with msil-ld (no -flto).
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil %s -o p.exe 2>&1 \
+// RUN:   | FileCheck --check-prefix=LINK --implicit-check-not=error: %s
+// LINK: "-cc1" {{.*}}"-emit-obj"
+// LINK: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-gnu-msil"
+// LINK-SAME: "-o" "p.exe"
+
+// There is no external CIL assembler: -fno-integrated-as -c is an error
+// (MSILToolChain::buildAssembler, as MSVCToolChain::buildAssembler does).
+// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=NOIAS %s
+// NOIAS: error: there is no external assembler that can be used on this platform
+
+// ILAsm text cannot be assembled to an object in Phase 2 (no MSIL asm parser,
+// mc-streamer recon R7): .s/.il inputs to -c, -save-temps -c, -via-file-asm and
+// /FA keep a clean error (reworded err_drv_msil_no_object_output).
+// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -c -x assembler %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=ASM %s
+// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -save-temps=obj -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=ASM %s
+// ASM: error: {{.*}}MSIL{{.*}}
+
+// -S still writes ILAsm text, and -c -emit-llvm / -flto -c bitcode.
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -S %s -o %t.il 2>&1 \
+// RUN:   | FileCheck --check-prefix=TEXT --implicit-check-not=error: %s
+// TEXT: "-cc1" "-triple" "x86_64-unknown-linux-gnu-msil" "-S"
+
+int main(void) { return 0; }

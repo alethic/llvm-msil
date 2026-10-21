@@ -1,0 +1,11 @@
+native windows p1ab: out=[] exit 144
+native windows p1ac: out=[] exit 114
+native windows p1mwb: out=[] exit 144
+native windows p2: out=[] exit 23
+native windows sig: out=[] exit 41
+native windows p4: out=[] exit 15
+native windows p5: out=[] exit 12
+native windows p6: out=[BCDM] exit -1073741819
+native windows p8: out=[] exit 42
+native windows p9ab: out=[] exit 1
+native windows p9ba: out=[] exit 1

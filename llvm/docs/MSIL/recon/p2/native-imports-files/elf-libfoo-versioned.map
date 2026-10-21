@@ -1,0 +1,2 @@
+V1 { global: foo; bar; tlsvar; ifn; newf; oldf; local: *; };
+V2 { global: newf; } V1;

@@ -1,0 +1,15 @@
+--- a/clang/lib/Driver/ToolChain.cpp	2026-10-13 01:07:08.778733900 -0500
++++ b/clang/lib/Driver/ToolChain.cpp	2026-10-21 00:15:34.984834100 -0500
+@@ -759,12 +759,6 @@
+   // MSIL bitcode (-flto would hand it to the gold plugin or lld). Reject every
+   // link, LTO included. The driver selects the link tool before it builds the
+   // link's inputs, so a non-LTO link reports this error once, here.
+-  if (getTriple().isOSBinFormatMSIL()) {
+-    D.Diag(clang::diag::err_drv_msil_no_object_output)
+-        << (hasEffectiveTriple() ? getEffectiveTriple().getTriple()
+-                                 : getTripleString());
+-    return nullptr;
+-  }
+   if (!Link)
+     Link.reset(buildLinker());
+   return Link.get();

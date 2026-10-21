@@ -1,0 +1,261 @@
+# (D) CIL method bodies in ELF and COFF relocatable objects, assembled by clang's integrated assembler (x86_64 as a carrier).
+# cil-elf.o: e_machine EM_X86_64; cil-elf-em.o: e_machine patched to 0xC11 (unassigned, stands for EM_CIL); cil-elf-none.o: EM_NONE (BPF's pre-2016 choice)
+# cil-coff.o: AMD64; cil-coff-cee.o: Machine 0xC0EE (IMAGE_FILE_MACHINE_CEE in winnt.h); cil-coff-unk.o: Machine 0 (UNKNOWN)
+# Tools: VS-bundled LLVM 22.1.3 (llvm-*, ld.lld, lld-link), MSVC link.exe/lib.exe 14.51
+
+=== cil-elf.o
+Format: elf64-x86-64
+  Machine: EM_X86_64 (0x3E)
+-- llvm-nm
+0000000000000008 C common_var
+0000000000000000 D counter
+                 U ext
+0000000000000000 t helper
+0000000000000000 T hid
+0000000000000000 W inl
+0000000000000008 D table
+0000000000000000 D tlsvar
+0000000000000000 T twice
+                 w weak_undef
+-- llvm-objdump -h (names)
+00000000 .strtab .text .cil.text.helper .cil.text.twice .rela.cil.text.twice .group .cil.text.inl .cil.text.hid .rela.cil.text.hid .data .rela.data .tdata .data.rel .rela.data.rel .init_array.101 .rela.init_array.101 .msil.sig .note.GNU-stack .symtab 
+-- llvm-objdump -r
+RELOCATION RECORDS FOR [.cil.text.twice]:
+OFFSET           TYPE                     VALUE
+0000000000000003 R_X86_64_32              .cil.text.helper
+000000000000000a R_X86_64_32              counter
+RELOCATION RECORDS FOR [.cil.text.hid]:
+OFFSET           TYPE                     VALUE
+0000000000000003 R_X86_64_32              ext
+RELOCATION RECORDS FOR [.data]:
+OFFSET           TYPE                     VALUE
+0000000000000008 R_X86_64_64              counter
+0000000000000010 R_X86_64_64              twice
+RELOCATION RECORDS FOR [.data.rel]:
+OFFSET           TYPE                     VALUE
+0000000000000000 R_X86_64_64              weak_undef
+RELOCATION RECORDS FOR [.init_array.101]:
+OFFSET           TYPE                     VALUE
+0000000000000000 R_X86_64_64              twice
+-- llvm-readobj --section-groups
+LoadName: <Not found>
+    Name: .group (50)
+    Signature: inl
+-- llvm-ar index: twice in cil-elf.o;counter in cil-elf.o;inl in cil-elf.o;hid in cil-elf.o;table in cil-elf.o;tlsvar in cil-elf.o;common_var in cil-elf.o;
+-- llvm-objcopy --remove-section: ok
+-- llvm-size:      33	     44	      0	     77	     4d	cil-elf.o
+-- ld.lld -r: 
+-- llvm-objdump -d: Disassembly of section .cil.text.helper:
+
+=== cil-elf-em.o
+Format: elf64-unknown
+  Machine: 0xC11
+-- llvm-nm
+0000000000000008 C common_var
+0000000000000000 D counter
+                 U ext
+0000000000000000 t helper
+0000000000000000 T hid
+0000000000000000 W inl
+0000000000000008 D table
+0000000000000000 D tlsvar
+0000000000000000 T twice
+                 w weak_undef
+-- llvm-objdump -h (names)
+00000000 .strtab .text .cil.text.helper .cil.text.twice .rela.cil.text.twice .group .cil.text.inl .cil.text.hid .rela.cil.text.hid .data .rela.data .tdata .data.rel .rela.data.rel .init_array.101 .rela.init_array.101 .msil.sig .note.GNU-stack .symtab 
+-- llvm-objdump -r
+RELOCATION RECORDS FOR [.cil.text.twice]:
+OFFSET           TYPE                     VALUE
+0000000000000003 Unknown                  .cil.text.helper
+000000000000000a Unknown                  counter
+RELOCATION RECORDS FOR [.cil.text.hid]:
+OFFSET           TYPE                     VALUE
+0000000000000003 Unknown                  ext
+RELOCATION RECORDS FOR [.data]:
+OFFSET           TYPE                     VALUE
+0000000000000008 Unknown                  counter
+0000000000000010 Unknown                  twice
+RELOCATION RECORDS FOR [.data.rel]:
+OFFSET           TYPE                     VALUE
+0000000000000000 Unknown                  weak_undef
+RELOCATION RECORDS FOR [.init_array.101]:
+OFFSET           TYPE                     VALUE
+0000000000000000 Unknown                  twice
+-- llvm-readobj --section-groups
+LoadName: <Not found>
+    Name: .group (50)
+    Signature: inl
+-- llvm-ar index: twice in cil-elf-em.o;counter in cil-elf-em.o;inl in cil-elf-em.o;hid in cil-elf-em.o;table in cil-elf-em.o;tlsvar in cil-elf-em.o;common_var in cil-elf-em.o;
+-- llvm-objcopy --remove-section: ok
+-- llvm-size:      33	     44	      0	     77	     4d	cil-elf-em.o
+-- ld.lld -r: ld.lld: error: unsupported e_machine value: 3089
+-- llvm-objdump -d: error: 'cil-elf-em.o': can't find target: unable to get target for 'unknown--', see --version and --triple.
+
+=== cil-elf-none.o
+Format: elf64-unknown
+  Machine: EM_NONE (0x0)
+-- llvm-nm
+0000000000000008 C common_var
+0000000000000000 D counter
+                 U ext
+0000000000000000 t helper
+0000000000000000 T hid
+0000000000000000 W inl
+0000000000000008 D table
+0000000000000000 D tlsvar
+0000000000000000 T twice
+                 w weak_undef
+-- llvm-objdump -h (names)
+00000000 .strtab .text .cil.text.helper .cil.text.twice .rela.cil.text.twice .group .cil.text.inl .cil.text.hid .rela.cil.text.hid .data .rela.data .tdata .data.rel .rela.data.rel .init_array.101 .rela.init_array.101 .msil.sig .note.GNU-stack .symtab 
+-- llvm-objdump -r
+RELOCATION RECORDS FOR [.cil.text.twice]:
+OFFSET           TYPE                     VALUE
+0000000000000003 Unknown                  .cil.text.helper
+000000000000000a Unknown                  counter
+RELOCATION RECORDS FOR [.cil.text.hid]:
+OFFSET           TYPE                     VALUE
+0000000000000003 Unknown                  ext
+RELOCATION RECORDS FOR [.data]:
+OFFSET           TYPE                     VALUE
+0000000000000008 Unknown                  counter
+0000000000000010 Unknown                  twice
+RELOCATION RECORDS FOR [.data.rel]:
+OFFSET           TYPE                     VALUE
+0000000000000000 Unknown                  weak_undef
+RELOCATION RECORDS FOR [.init_array.101]:
+OFFSET           TYPE                     VALUE
+0000000000000000 Unknown                  twice
+-- llvm-readobj --section-groups
+LoadName: <Not found>
+    Name: .group (50)
+    Signature: inl
+-- llvm-ar index: twice in cil-elf-none.o;counter in cil-elf-none.o;inl in cil-elf-none.o;hid in cil-elf-none.o;table in cil-elf-none.o;tlsvar in cil-elf-none.o;common_var in cil-elf-none.o;
+-- llvm-objcopy --remove-section: ok
+-- llvm-size:      33	     44	      0	     77	     4d	cil-elf-none.o
+-- ld.lld -r: ld.lld: error: unsupported e_machine value: 0
+-- llvm-objdump -d: error: 'cil-elf-none.o': can't find target: unable to get target for 'unknown--', see --version and --triple.
+
+=== cil-coff.o
+Format: COFF-x86-64
+  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)
+-- llvm-nm: 00000000 A .weak.weak_undef.default.twice;00000008 C common_var;00000000 D counter;         U ext;00000000 t helper;00000000 T hid;00000000 T inl;00000008 D table;00000000 D tlsvar;00000000 T twice;00000000 W weak_undef;
+-- llvm-objdump -r: 0000000000000008 IMAGE_REL_AMD64_ADDR64   counter;0000000000000010 IMAGE_REL_AMD64_ADDR64   twice;0000000000000018 IMAGE_REL_AMD64_ADDR64   weak_undef;
+-- llvm-ar index: .weak.weak_undef.default.twice in cil-coff.o;common_var in cil-coff.o;counter in cil-coff.o;
+-- lld-link /dll /noentry: lld-link: error: undefined symbol: ext
+
+=== cil-coff-cee.o
+error: 'cil-coff-cee.o': The file was not recognized as a valid object file
+-- llvm-nm: error: cil-coff-cee.o: The file was not recognized as a valid object file;;
+-- llvm-objdump -r: error: 'cil-coff-cee.o': The file was not recognized as a valid object file;
+-- llvm-ar index: 
+-- lld-link /dll /noentry: lld-link: error: cil-coff-cee.o: unknown file type
+
+=== cil-coff-unk.o
+Format: COFF-<unknown arch>
+  Machine: IMAGE_FILE_MACHINE_UNKNOWN (0x0)
+-- llvm-nm: 00000000 A .weak.weak_undef.default.twice;00000008 C common_var;00000000 D counter;         U ext;00000000 t helper;00000000 T hid;00000000 T inl;00000008 D table;00000000 D tlsvar;00000000 T twice;00000000 W weak_undef;
+-- llvm-objdump -r: 00000008 Unknown                  counter;00000010 Unknown                  twice;00000018 Unknown                  weak_undef;
+-- llvm-ar index: .weak.weak_undef.default.twice in cil-coff-unk.o;common_var in cil-coff-unk.o;counter in cil-coff-unk.o;
+-- lld-link /dll /noentry: lld-link: warning: /machine is not specified. x64 is assumed
+
+=== MSVC link.exe / lib.exe (link.ps1)
+== link.exe cil-coff.o
+cil-coff.o : error LNK2001: unresolved external symbol ext
+x_cil-coff.dll : warning LNK4088: image being generated due to /FORCE option; image may not run
+cil-coff.o : warning LNK4210: .CRT section exists; there may be unhandled static initializers or terminators
+cil-coff.o : error LNK2017: 'ADDR32' relocation to 'helper' invalid without /LARGEADDRESSAWARE:NO
+rc=
+== lib.exe cil-coff.o
+rc=0
+== link.exe cil-coff-unk.o
+LINK : warning LNK4068: /MACHINE not specified; defaulting to X64
+cil-coff-unk.o : error LNK2001: unresolved external symbol ext
+x_cil-coff-unk.dll : warning LNK4088: image being generated due to /FORCE option; image may not run
+cil-coff-unk.o : warning LNK4210: .CRT section exists; there may be unhandled static initializers or terminators
+rc=0
+== lib.exe cil-coff-unk.o
+rc=0
+== link.exe cil-coff-cee.o
+cil-coff-cee.o : fatal error LNK1136: invalid or corrupt file
+rc=1136
+== lib.exe cil-coff-cee.o
+cil-coff-cee.o : fatal error LNK1136: invalid or corrupt file
+rc=1136
+
+=== linkorder.s: per-method side section (SHF_LINK_ORDER) in a COMDAT group, and a .note.msil carrying the triple
+    Link: 0
+    Name: .strtab (101)
+    Link: 0
+    Name: .text (1)
+    Link: 0
+    Name: .cil.text.twice (61)
+    Link: 0
+    Name: .msil.method.twice (82)
+      SHF_LINK_ORDER (0x80)
+    Link: 3
+    Name: .rela.msil.method.twice (77)
+    Link: 11
+    Name: .group (7)
+    Link: 11
+    Name: .cil.text.inl (14)
+      SHF_GROUP (0x200)
+    Link: 0
+    Name: .msil.method.inl (33)
+      SHF_GROUP (0x200)
+      SHF_LINK_ORDER (0x80)
+    Link: 7
+    Name: .rela.msil.method.inl (28)
+      SHF_GROUP (0x200)
+    Link: 11
+    Name: .note.msil (50)
+    Link: 0
+    Name: .symtab (109)
+    Link: 1
+AddressSize: 64bit
+    Size: 0x30
+        Owner: MSIL
+=== determinism: two assemblies of cil-elf.s and of cil-coff.s are byte-identical; COFF TimeDateStamp=0
+
+=== llvm-readobj --symbols cil-elf-em.o (unknown e_machine): hidden, TLS and common survive
+    Binding: Local (0x0)
+    Type: None (0x0)
+    Section: Undefined (0x0)
+    Binding: Local (0x0)
+    Type: Section (0x3)
+    Section: .cil.text.helper (0x3)
+    Binding: Local (0x0)
+    Type: Function (0x2)
+    Section: .cil.text.helper (0x3)
+    Binding: Global (0x1)
+    Type: Function (0x2)
+    Section: .cil.text.twice (0x4)
+    Binding: Global (0x1)
+    Type: None (0x0)
+    Section: .data (0xA)
+    Name: inl (67)
+    Binding: Weak (0x2)
+    Type: Function (0x2)
+    Section: .cil.text.inl (0x7)
+    Name: hid (165)
+    Binding: Global (0x1)
+    Type: Function (0x2)
+      STV_HIDDEN (0x2)
+    Section: .cil.text.hid (0x8)
+    Binding: Global (0x1)
+    Type: None (0x0)
+    Section: Undefined (0x0)
+    Binding: Global (0x1)
+    Type: None (0x0)
+    Section: .data (0xA)
+    Name: tlsvar (32)
+    Binding: Global (0x1)
+    Type: TLS (0x6)
+    Section: .tdata (0xC)
+    Name: common_var (39)
+    Binding: Global (0x1)
+    Type: Object (0x1)
+    Section: Common (0xFFF2)
+    Name: weak_undef (112)
+    Binding: Weak (0x2)
+    Type: None (0x0)
+    Section: Undefined (0x0)

@@ -1,0 +1,63 @@
+== option 2, windows-msvc -O0: a.o + b.o
+  msilobj: linked 2 objects (0 archive members not extracted) -> zoo.dll (3072 bytes) in 111.1 ms
+    methods 12 (from objects 9, native imports 1, trap stubs 0), fields 19, data segment 104 bytes (100 initialized), align 16
+    IL bytes rewritten 688, instructions 333, token sites 40: Field 28, MemberRef 3, MethodDef 6, StandAloneSig 3
+    token bindings: FieldDef -> other object's address field (COMDAT/weak/common) 2, FieldDef -> own address field 26, ImplMap stub -> definition 1, MemberRef <msil>FnAddr -> function address field 1, MemberRef <msil>Symbols (data) -> address field 2, MethodDef -> other object's definition (weak/COMDAT loser) 1, MethodDef -> own definition 2, MethodDef stub -> native import (explicit module) 2, StandAloneSig -> StandAloneSig 3
+    signature blobs re-encoded 27 (TypeDefOrRef coded indices inside: 0), standalone sigs 3, EH clauses 0, user strings 0
+    data relocations 6 (dropped with discarded COMDAT copies: 0), COMDAT copies dropped 1, weak definitions overridden 1, common merges 1, strings merged 0, archive members extracted 0
+    constructors in order: ctor_b(100) ctor_a(200)
+    .NET 8: [main add3 ] exit 63; .NET 10: exit 63; .NET Framework 4.8: [main add3 ] exit 63
+== option 2, windows-msvc -O0: a.o + libbcd.a (b.o c.o d.o; c.o defines the weak-undefined 'maybe')
+  msilobj: extracted libbcd.a(b.o) for counter,add3,twice,b_extra,alias_twice
+  msilobj: linked 2 objects (2 archive members not extracted) -> zooar.dll (3072 bytes) in 203.5 ms
+    .NET 8: [main add3 ] exit 63; .NET 10: exit 63; .NET Framework 4.8: [main add3 ] exit 63
+== option 2, windows-msvc -O1: a.o + b.o
+  msilobj: linked 2 objects (0 archive members not extracted) -> zoo.dll (3072 bytes) in 129.5 ms
+    methods 12 (from objects 9, native imports 1, trap stubs 0), fields 19, data segment 104 bytes (100 initialized), align 16
+    IL bytes rewritten 351, instructions 157, token sites 37: Field 25, MemberRef 3, MethodDef 6, StandAloneSig 3
+    token bindings: FieldDef -> other object's address field (COMDAT/weak/common) 2, FieldDef -> own address field 23, ImplMap stub -> definition 1, MemberRef <msil>FnAddr -> function address field 1, MemberRef <msil>Symbols (data) -> address field 2, MethodDef -> other object's definition (weak/COMDAT loser) 1, MethodDef -> own definition 2, MethodDef stub -> native import (explicit module) 2, StandAloneSig -> StandAloneSig 3
+    signature blobs re-encoded 24 (TypeDefOrRef coded indices inside: 0), standalone sigs 2, EH clauses 0, user strings 0
+    data relocations 6 (dropped with discarded COMDAT copies: 0), COMDAT copies dropped 1, weak definitions overridden 1, common merges 1, strings merged 0, archive members extracted 0
+    constructors in order: ctor_b(100) ctor_a(200)
+    .NET 8: [main add3 ] exit 63; .NET 10: exit 63; .NET Framework 4.8: [main add3 ] exit 63
+== option 2, windows-msvc -O1: a.o + libbcd.a (b.o c.o d.o; c.o defines the weak-undefined 'maybe')
+  msilobj: extracted libbcd.a(b.o) for counter,add3,twice,b_extra,alias_twice
+  msilobj: linked 2 objects (2 archive members not extracted) -> zooar.dll (3072 bytes) in 138.8 ms
+    .NET 8: [main add3 ] exit 63; .NET 10: exit 63; .NET Framework 4.8: [main add3 ] exit 63
+== option 2, windows-msvc -O2: a.o + b.o
+  msilobj: linked 2 objects (0 archive members not extracted) -> zoo.dll (3072 bytes) in 128.8 ms
+    methods 12 (from objects 9, native imports 1, trap stubs 0), fields 19, data segment 104 bytes (100 initialized), align 16
+    IL bytes rewritten 351, instructions 157, token sites 37: Field 25, MemberRef 3, MethodDef 6, StandAloneSig 3
+    token bindings: FieldDef -> other object's address field (COMDAT/weak/common) 2, FieldDef -> own address field 23, ImplMap stub -> definition 1, MemberRef <msil>FnAddr -> function address field 1, MemberRef <msil>Symbols (data) -> address field 2, MethodDef -> other object's definition (weak/COMDAT loser) 1, MethodDef -> own definition 2, MethodDef stub -> native import (explicit module) 2, StandAloneSig -> StandAloneSig 3
+    signature blobs re-encoded 24 (TypeDefOrRef coded indices inside: 0), standalone sigs 2, EH clauses 0, user strings 0
+    data relocations 6 (dropped with discarded COMDAT copies: 0), COMDAT copies dropped 1, weak definitions overridden 1, common merges 1, strings merged 0, archive members extracted 0
+    constructors in order: ctor_b(100) ctor_a(200)
+    .NET 8: [main add3 ] exit 63; .NET 10: exit 63; .NET Framework 4.8: [main add3 ] exit 63
+== option 2, windows-msvc -O2: a.o + libbcd.a (b.o c.o d.o; c.o defines the weak-undefined 'maybe')
+  msilobj: extracted libbcd.a(b.o) for counter,add3,twice,b_extra,alias_twice
+  msilobj: linked 2 objects (2 archive members not extracted) -> zooar.dll (3072 bytes) in 158.5 ms
+    .NET 8: [main add3 ] exit 63; .NET 10: exit 63; .NET Framework 4.8: [main add3 ] exit 63
+== option 2, BCL references bound against reference assemblies (-O1)
+  net8.0 reference pack:
+    .NET 8: [main add3 ] exit 63; .NET 10: exit 63; .NET Framework 4.8: [ Unhandled Exception: System.IO.FileNotFoundException: Could not load file or assembly 'System.Runtime, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' or one of its dependencies. The system cannot find the file specified. ] exit 127
+  .NETFramework v4.8 reference assemblies:
+    .NET 8: [main add3 ] exit 63; .NET 10: exit 63; .NET Framework 4.8: [main add3 ] exit 63
+== option 2, linux-gnu -O1 (merge_strings on '.str'), run in WSL
+  msilobj: linked 2 objects (0 archive members not extracted) -> zool.dll (3072 bytes) in 187.0 ms
+    methods 12 (from objects 9, native imports 1, trap stubs 0), fields 20, data segment 104 bytes (100 initialized), align 16
+    IL bytes rewritten 351, instructions 157, token sites 37: Field 25, MemberRef 3, MethodDef 6, StandAloneSig 3
+    token bindings: FieldDef -> other object's address field (COMDAT/weak/common) 1, FieldDef -> own address field 24, ImplMap stub -> definition 1, MemberRef <msil>FnAddr -> function address field 1, MemberRef <msil>Symbols (data) -> address field 2, MethodDef -> other object's definition (weak/COMDAT loser) 1, MethodDef -> own definition 2, MethodDef stub -> native import (explicit module) 2, StandAloneSig -> StandAloneSig 3
+    signature blobs re-encoded 24 (TypeDefOrRef coded indices inside: 0), standalone sigs 2, EH clauses 0, user strings 0
+    data relocations 6 (dropped with discarded COMDAT copies: 0), COMDAT copies dropped 0, weak definitions overridden 1, common merges 1, strings merged 1, archive members extracted 0
+    constructors in order: ctor_b(100) ctor_a(200)
+    WSL rc8.json: [main add3] exit 63
+    WSL rc10.json: [main add3] exit 63
+== option 4 (no merge): a.dll + b.dll unchanged, facade msil.extern.dll + driver zoo4.exe
+  objects: a, b; facade forwarders: 16; constructors: ctor_b(100) ctor_a(200)
+    .NET 8: [main add3 ] exit 63; .NET 10: exit 63; .NET Framework 4.8: [main add3 ] exit 63
+== option 3 (IR-level link, clang -Xclang -mlink-bitcode-file), as is:
+  error: alias @alias_twice is not supported for MSIL
+  error: undefined function 'maybe' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker
+  2 errors generated.
+== option 3 with the alias replaced by a wrapper and the weak undefined by a null constant (expect 70: alias identity lost, +7):
+    .NET 8: [main add3 ] exit 70; .NET 10: exit 70; .NET Framework 4.8: [main add3 ] exit 70

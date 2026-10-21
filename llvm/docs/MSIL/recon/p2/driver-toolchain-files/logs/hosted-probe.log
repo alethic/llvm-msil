@@ -1,0 +1,56 @@
+== hello.c LNX -O0: exit 0
+== hello.c WIN -O0: exit 1
+      1 undefined function '__stdio_common_vsprintf': not a Phase-1 import
+      2 variadic function definitions are not supported for MSIL yet
+== hello.c LNX -O2: exit 0
+== hello.c WIN -O2: exit 0
+== libcuse.c LNX -O0: exit 1
+      1 calls to variadic functions are not supported for MSIL yet
+      1 external global variable 'stdout' is not supported (phase 2 linker)
+      1 undefined function '__ctype_b_loc': not a Phase-1 import
+      1 undefined function '__errno_location': not a Phase-1 import
+      1 undefined function 'fputs': not a Phase-1 import
+      1 undefined function 'free': not a Phase-1 import
+      1 undefined function 'getchar': not a Phase-1 import
+      1 undefined function 'malloc': not a Phase-1 import
+      1 undefined function 'strcpy': not a Phase-1 import
+      1 undefined function 'toupper': not a Phase-1 import
+== libcuse.c WIN -O0: exit 1
+      1 undefined function '__acrt_iob_func': not a Phase-1 import
+      1 undefined function '__stdio_common_vfprintf': not a Phase-1 import
+      1 undefined function '__stdio_common_vsprintf': not a Phase-1 import
+      1 undefined function '_errno': not a Phase-1 import
+      1 undefined function 'fputs': not a Phase-1 import
+      1 undefined function 'free': not a Phase-1 import
+      1 undefined function 'getchar': not a Phase-1 import
+      1 undefined function 'isalpha': not a Phase-1 import
+      1 undefined function 'malloc': not a Phase-1 import
+      1 undefined function 'strcpy': not a Phase-1 import
+      1 undefined function 'toupper': not a Phase-1 import
+      3 variadic function definitions are not supported for MSIL yet
+== libcuse.c LNX -O2: exit 1
+      1 calls to variadic functions are not supported for MSIL yet
+      1 external global variable 'stdin' is not supported (phase 2 linker)
+      1 external global variable 'stdout' is not supported (phase 2 linker)
+      1 undefined function '__ctype_b_loc': not a Phase-1 import
+      1 undefined function '__ctype_toupper_loc': not a Phase-1 import
+      1 undefined function '__errno_location': not a Phase-1 import
+      1 undefined function 'fputs': not a Phase-1 import
+      1 undefined function 'free': not a Phase-1 import
+      1 undefined function 'getc': not a Phase-1 import
+      1 undefined function 'malloc': not a Phase-1 import
+== libcuse.c WIN -O2: exit 1
+      1 undefined function '__acrt_iob_func': not a Phase-1 import
+      1 undefined function '_errno': not a Phase-1 import
+      1 undefined function 'fputs': not a Phase-1 import
+      1 undefined function 'free': not a Phase-1 import
+      1 undefined function 'getchar': not a Phase-1 import
+      1 undefined function 'isalpha': not a Phase-1 import
+      1 undefined function 'malloc': not a Phase-1 import
+      1 undefined function 'toupper': not a Phase-1 import
+      1 variadic function definitions are not supported for MSIL yet
+== UCRT stdio.h at -O0 after removing unreferenced linkonce_odr definitions (opt -passes=globaldce):
+definitions before: 8
+definitions after: 1
+hello from hosted headers
+Framework 4.8 run exit=0

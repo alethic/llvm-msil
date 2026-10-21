@@ -1,0 +1,12 @@
+fib.fw.txt: .text 0x142A metadata 0x2E94/0x528 IL code 3436 (with headers/EH 3520, largest 2200) bodies fat 7 tiny 0
+   heaps UserString 0x8, String 0x259, Blob 0x6C, Guid 0x10
+   rows  Module 1, TypeRef 2, TypeDef 2, Field 18, MethodDef 8, Param 7, MemberRef 1, ClassLayout 1, StandAloneSig 5, ModuleRef 1, ImplMap 1, FieldRva 1, Assembly 1, AssemblyRef 1
+quicksort.fw.txt: .text 0x16EA metadata 0x3208/0x474 IL code 4309 (with headers/EH 4357, largest 3314) bodies fat 4 tiny 0
+   heaps UserString 0x8, String 0x1F8, Blob 0x64, Guid 0x10
+   rows  Module 1, TypeRef 2, TypeDef 2, Field 17, MethodDef 5, Param 4, MemberRef 1, ClassLayout 1, StandAloneSig 2, ModuleRef 1, ImplMap 1, FieldRva 1, Assembly 1, AssemblyRef 1
+string-table.fw.txt: .text 0x239A metadata 0x3A68/0x8C4 IL code 5679 (with headers/EH 5739, largest 3775) bodies fat 5 tiny 0
+   heaps UserString 0x8, String 0x583, Blob 0x58, Guid 0x10
+   rows  Module 1, TypeRef 2, TypeDef 2, Field 48, MethodDef 6, Param 5, MemberRef 1, ClassLayout 1, StandAloneSig 3, ModuleRef 1, ImplMap 1, FieldRva 1, Assembly 1, AssemblyRef 1
+dispatch-vm.fw.txt: .text 0x2DAA metadata 0x426C/0xAD0 IL code 7243 (with headers/EH 7531, largest 2569) bodies fat 24 tiny 0
+   heaps UserString 0x8, String 0x582, Blob 0xA4, Guid 0x10
+   rows  Module 1, TypeRef 2, TypeDef 2, Field 56, MethodDef 25, Param 23, MemberRef 1, ClassLayout 1, StandAloneSig 15, ModuleRef 1, ImplMap 1, FieldRva 1, Assembly 1, AssemblyRef 1

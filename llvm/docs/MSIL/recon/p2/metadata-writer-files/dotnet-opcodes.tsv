@@ -1,0 +1,444 @@
+nop	0x0000	InlineNone	1	Pop0	Push0	Next	Primitive
+break	0x0001	InlineNone	1	Pop0	Push0	Break	Primitive
+ldarg.0	0x0002	InlineNone	1	Pop0	Push1	Next	Macro
+ldarg.1	0x0003	InlineNone	1	Pop0	Push1	Next	Macro
+ldarg.2	0x0004	InlineNone	1	Pop0	Push1	Next	Macro
+ldarg.3	0x0005	InlineNone	1	Pop0	Push1	Next	Macro
+ldloc.0	0x0006	InlineNone	1	Pop0	Push1	Next	Macro
+ldloc.1	0x0007	InlineNone	1	Pop0	Push1	Next	Macro
+ldloc.2	0x0008	InlineNone	1	Pop0	Push1	Next	Macro
+ldloc.3	0x0009	InlineNone	1	Pop0	Push1	Next	Macro
+stloc.0	0x000A	InlineNone	1	Pop1	Push0	Next	Macro
+stloc.1	0x000B	InlineNone	1	Pop1	Push0	Next	Macro
+stloc.2	0x000C	InlineNone	1	Pop1	Push0	Next	Macro
+stloc.3	0x000D	InlineNone	1	Pop1	Push0	Next	Macro
+ldarg.s	0x000E	ShortInlineVar	1	Pop0	Push1	Next	Macro
+ldarga.s	0x000F	ShortInlineVar	1	Pop0	Pushi	Next	Macro
+starg.s	0x0010	ShortInlineVar	1	Pop1	Push0	Next	Macro
+ldloc.s	0x0011	ShortInlineVar	1	Pop0	Push1	Next	Macro
+ldloca.s	0x0012	ShortInlineVar	1	Pop0	Pushi	Next	Macro
+stloc.s	0x0013	ShortInlineVar	1	Pop1	Push0	Next	Macro
+ldnull	0x0014	InlineNone	1	Pop0	Pushref	Next	Primitive
+ldc.i4.m1	0x0015	InlineNone	1	Pop0	Pushi	Next	Macro
+ldc.i4.0	0x0016	InlineNone	1	Pop0	Pushi	Next	Macro
+ldc.i4.1	0x0017	InlineNone	1	Pop0	Pushi	Next	Macro
+ldc.i4.2	0x0018	InlineNone	1	Pop0	Pushi	Next	Macro
+ldc.i4.3	0x0019	InlineNone	1	Pop0	Pushi	Next	Macro
+ldc.i4.4	0x001A	InlineNone	1	Pop0	Pushi	Next	Macro
+ldc.i4.5	0x001B	InlineNone	1	Pop0	Pushi	Next	Macro
+ldc.i4.6	0x001C	InlineNone	1	Pop0	Pushi	Next	Macro
+ldc.i4.7	0x001D	InlineNone	1	Pop0	Pushi	Next	Macro
+ldc.i4.8	0x001E	InlineNone	1	Pop0	Pushi	Next	Macro
+ldc.i4.s	0x001F	ShortInlineI	1	Pop0	Pushi	Next	Macro
+ldc.i4	0x0020	InlineI	1	Pop0	Pushi	Next	Primitive
+ldc.i8	0x0021	InlineI8	1	Pop0	Pushi8	Next	Primitive
+ldc.r4	0x0022	ShortInlineR	1	Pop0	Pushr4	Next	Primitive
+ldc.r8	0x0023	InlineR	1	Pop0	Pushr8	Next	Primitive
+dup	0x0025	InlineNone	1	Pop1	Push1_push1	Next	Primitive
+pop	0x0026	InlineNone	1	Pop1	Push0	Next	Primitive
+jmp	0x0027	InlineMethod	1	Pop0	Push0	Call	Primitive
+call	0x0028	InlineMethod	1	Varpop	Varpush	Call	Primitive
+calli	0x0029	InlineSig	1	Varpop	Varpush	Call	Primitive
+ret	0x002A	InlineNone	1	Varpop	Push0	Return	Primitive
+br.s	0x002B	ShortInlineBrTarget	1	Pop0	Push0	Branch	Macro
+brfalse.s	0x002C	ShortInlineBrTarget	1	Popi	Push0	Cond_Branch	Macro
+brtrue.s	0x002D	ShortInlineBrTarget	1	Popi	Push0	Cond_Branch	Macro
+beq.s	0x002E	ShortInlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+bge.s	0x002F	ShortInlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+bgt.s	0x0030	ShortInlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+ble.s	0x0031	ShortInlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+blt.s	0x0032	ShortInlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+bne.un.s	0x0033	ShortInlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+bge.un.s	0x0034	ShortInlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+bgt.un.s	0x0035	ShortInlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+ble.un.s	0x0036	ShortInlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+blt.un.s	0x0037	ShortInlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+br	0x0038	InlineBrTarget	1	Pop0	Push0	Branch	Primitive
+brfalse	0x0039	InlineBrTarget	1	Popi	Push0	Cond_Branch	Primitive
+brtrue	0x003A	InlineBrTarget	1	Popi	Push0	Cond_Branch	Primitive
+beq	0x003B	InlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+bge	0x003C	InlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+bgt	0x003D	InlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+ble	0x003E	InlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+blt	0x003F	InlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+bne.un	0x0040	InlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+bge.un	0x0041	InlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+bgt.un	0x0042	InlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+ble.un	0x0043	InlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+blt.un	0x0044	InlineBrTarget	1	Pop1_pop1	Push0	Cond_Branch	Macro
+switch	0x0045	InlineSwitch	1	Popi	Push0	Cond_Branch	Primitive
+ldind.i1	0x0046	InlineNone	1	Popi	Pushi	Next	Primitive
+ldind.u1	0x0047	InlineNone	1	Popi	Pushi	Next	Primitive
+ldind.i2	0x0048	InlineNone	1	Popi	Pushi	Next	Primitive
+ldind.u2	0x0049	InlineNone	1	Popi	Pushi	Next	Primitive
+ldind.i4	0x004A	InlineNone	1	Popi	Pushi	Next	Primitive
+ldind.u4	0x004B	InlineNone	1	Popi	Pushi	Next	Primitive
+ldind.i8	0x004C	InlineNone	1	Popi	Pushi8	Next	Primitive
+ldind.i	0x004D	InlineNone	1	Popi	Pushi	Next	Primitive
+ldind.r4	0x004E	InlineNone	1	Popi	Pushr4	Next	Primitive
+ldind.r8	0x004F	InlineNone	1	Popi	Pushr8	Next	Primitive
+ldind.ref	0x0050	InlineNone	1	Popi	Pushref	Next	Primitive
+stind.ref	0x0051	InlineNone	1	Popi_popi	Push0	Next	Primitive
+stind.i1	0x0052	InlineNone	1	Popi_popi	Push0	Next	Primitive
+stind.i2	0x0053	InlineNone	1	Popi_popi	Push0	Next	Primitive
+stind.i4	0x0054	InlineNone	1	Popi_popi	Push0	Next	Primitive
+stind.i8	0x0055	InlineNone	1	Popi_popi8	Push0	Next	Primitive
+stind.r4	0x0056	InlineNone	1	Popi_popr4	Push0	Next	Primitive
+stind.r8	0x0057	InlineNone	1	Popi_popr8	Push0	Next	Primitive
+add	0x0058	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+sub	0x0059	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+mul	0x005A	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+div	0x005B	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+div.un	0x005C	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+rem	0x005D	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+rem.un	0x005E	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+and	0x005F	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+or	0x0060	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+xor	0x0061	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+shl	0x0062	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+shr	0x0063	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+shr.un	0x0064	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+neg	0x0065	InlineNone	1	Pop1	Push1	Next	Primitive
+not	0x0066	InlineNone	1	Pop1	Push1	Next	Primitive
+conv.i1	0x0067	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.i2	0x0068	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.i4	0x0069	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.i8	0x006A	InlineNone	1	Pop1	Pushi8	Next	Primitive
+conv.r4	0x006B	InlineNone	1	Pop1	Pushr4	Next	Primitive
+conv.r8	0x006C	InlineNone	1	Pop1	Pushr8	Next	Primitive
+conv.u4	0x006D	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.u8	0x006E	InlineNone	1	Pop1	Pushi8	Next	Primitive
+callvirt	0x006F	InlineMethod	1	Varpop	Varpush	Call	Objmodel
+cpobj	0x0070	InlineType	1	Popi_popi	Push0	Next	Objmodel
+ldobj	0x0071	InlineType	1	Popi	Push1	Next	Objmodel
+ldstr	0x0072	InlineString	1	Pop0	Pushref	Next	Objmodel
+newobj	0x0073	InlineMethod	1	Varpop	Pushref	Call	Objmodel
+castclass	0x0074	InlineType	1	Popref	Pushref	Next	Objmodel
+isinst	0x0075	InlineType	1	Popref	Pushi	Next	Objmodel
+conv.r.un	0x0076	InlineNone	1	Pop1	Pushr8	Next	Primitive
+unbox	0x0079	InlineType	1	Popref	Pushi	Next	Primitive
+throw	0x007A	InlineNone	1	Popref	Push0	Throw	Objmodel
+ldfld	0x007B	InlineField	1	Popref	Push1	Next	Objmodel
+ldflda	0x007C	InlineField	1	Popref	Pushi	Next	Objmodel
+stfld	0x007D	InlineField	1	Popref_pop1	Push0	Next	Objmodel
+ldsfld	0x007E	InlineField	1	Pop0	Push1	Next	Objmodel
+ldsflda	0x007F	InlineField	1	Pop0	Pushi	Next	Objmodel
+stsfld	0x0080	InlineField	1	Pop1	Push0	Next	Objmodel
+stobj	0x0081	InlineType	1	Popi_pop1	Push0	Next	Primitive
+conv.ovf.i1.un	0x0082	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.i2.un	0x0083	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.i4.un	0x0084	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.i8.un	0x0085	InlineNone	1	Pop1	Pushi8	Next	Primitive
+conv.ovf.u1.un	0x0086	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.u2.un	0x0087	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.u4.un	0x0088	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.u8.un	0x0089	InlineNone	1	Pop1	Pushi8	Next	Primitive
+conv.ovf.i.un	0x008A	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.u.un	0x008B	InlineNone	1	Pop1	Pushi	Next	Primitive
+box	0x008C	InlineType	1	Pop1	Pushref	Next	Primitive
+newarr	0x008D	InlineType	1	Popi	Pushref	Next	Objmodel
+ldlen	0x008E	InlineNone	1	Popref	Pushi	Next	Objmodel
+ldelema	0x008F	InlineType	1	Popref_popi	Pushi	Next	Objmodel
+ldelem.i1	0x0090	InlineNone	1	Popref_popi	Pushi	Next	Objmodel
+ldelem.u1	0x0091	InlineNone	1	Popref_popi	Pushi	Next	Objmodel
+ldelem.i2	0x0092	InlineNone	1	Popref_popi	Pushi	Next	Objmodel
+ldelem.u2	0x0093	InlineNone	1	Popref_popi	Pushi	Next	Objmodel
+ldelem.i4	0x0094	InlineNone	1	Popref_popi	Pushi	Next	Objmodel
+ldelem.u4	0x0095	InlineNone	1	Popref_popi	Pushi	Next	Objmodel
+ldelem.i8	0x0096	InlineNone	1	Popref_popi	Pushi8	Next	Objmodel
+ldelem.i	0x0097	InlineNone	1	Popref_popi	Pushi	Next	Objmodel
+ldelem.r4	0x0098	InlineNone	1	Popref_popi	Pushr4	Next	Objmodel
+ldelem.r8	0x0099	InlineNone	1	Popref_popi	Pushr8	Next	Objmodel
+ldelem.ref	0x009A	InlineNone	1	Popref_popi	Pushref	Next	Objmodel
+stelem.i	0x009B	InlineNone	1	Popref_popi_popi	Push0	Next	Objmodel
+stelem.i1	0x009C	InlineNone	1	Popref_popi_popi	Push0	Next	Objmodel
+stelem.i2	0x009D	InlineNone	1	Popref_popi_popi	Push0	Next	Objmodel
+stelem.i4	0x009E	InlineNone	1	Popref_popi_popi	Push0	Next	Objmodel
+stelem.i8	0x009F	InlineNone	1	Popref_popi_popi8	Push0	Next	Objmodel
+stelem.r4	0x00A0	InlineNone	1	Popref_popi_popr4	Push0	Next	Objmodel
+stelem.r8	0x00A1	InlineNone	1	Popref_popi_popr8	Push0	Next	Objmodel
+stelem.ref	0x00A2	InlineNone	1	Popref_popi_popref	Push0	Next	Objmodel
+ldelem	0x00A3	InlineType	1	Popref_popi	Push1	Next	Objmodel
+stelem	0x00A4	InlineType	1	Popref_popi_pop1	Push0	Next	Objmodel
+unbox.any	0x00A5	InlineType	1	Popref	Push1	Next	Objmodel
+conv.ovf.i1	0x00B3	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.u1	0x00B4	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.i2	0x00B5	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.u2	0x00B6	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.i4	0x00B7	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.u4	0x00B8	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.i8	0x00B9	InlineNone	1	Pop1	Pushi8	Next	Primitive
+conv.ovf.u8	0x00BA	InlineNone	1	Pop1	Pushi8	Next	Primitive
+refanyval	0x00C2	InlineType	1	Pop1	Pushi	Next	Primitive
+ckfinite	0x00C3	InlineNone	1	Pop1	Pushr8	Next	Primitive
+mkrefany	0x00C6	InlineType	1	Popi	Push1	Next	Primitive
+ldtoken	0x00D0	InlineTok	1	Pop0	Pushi	Next	Primitive
+conv.u2	0x00D1	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.u1	0x00D2	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.i	0x00D3	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.i	0x00D4	InlineNone	1	Pop1	Pushi	Next	Primitive
+conv.ovf.u	0x00D5	InlineNone	1	Pop1	Pushi	Next	Primitive
+add.ovf	0x00D6	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+add.ovf.un	0x00D7	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+mul.ovf	0x00D8	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+mul.ovf.un	0x00D9	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+sub.ovf	0x00DA	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+sub.ovf.un	0x00DB	InlineNone	1	Pop1_pop1	Push1	Next	Primitive
+endfinally	0x00DC	InlineNone	1	Pop0	Push0	Return	Primitive
+leave	0x00DD	InlineBrTarget	1	Pop0	Push0	Branch	Primitive
+leave.s	0x00DE	ShortInlineBrTarget	1	Pop0	Push0	Branch	Primitive
+stind.i	0x00DF	InlineNone	1	Popi_popi	Push0	Next	Primitive
+conv.u	0x00E0	InlineNone	1	Pop1	Pushi	Next	Primitive
+prefix7	0x00F8	InlineNone	1	Pop0	Push0	Meta	Nternal
+prefix6	0x00F9	InlineNone	1	Pop0	Push0	Meta	Nternal
+prefix5	0x00FA	InlineNone	1	Pop0	Push0	Meta	Nternal
+prefix4	0x00FB	InlineNone	1	Pop0	Push0	Meta	Nternal
+prefix3	0x00FC	InlineNone	1	Pop0	Push0	Meta	Nternal
+prefix2	0x00FD	InlineNone	1	Pop0	Push0	Meta	Nternal
+prefix1	0x00FE	InlineNone	1	Pop0	Push0	Meta	Nternal
+prefixref	0x00FF	InlineNone	1	Pop0	Push0	Meta	Nternal
+arglist	0xFE00	InlineNone	2	Pop0	Pushi	Next	Primitive
+ceq	0xFE01	InlineNone	2	Pop1_pop1	Pushi	Next	Primitive
+cgt	0xFE02	InlineNone	2	Pop1_pop1	Pushi	Next	Primitive
+cgt.un	0xFE03	InlineNone	2	Pop1_pop1	Pushi	Next	Primitive
+clt	0xFE04	InlineNone	2	Pop1_pop1	Pushi	Next	Primitive
+clt.un	0xFE05	InlineNone	2	Pop1_pop1	Pushi	Next	Primitive
+ldftn	0xFE06	InlineMethod	2	Pop0	Pushi	Next	Primitive
+ldvirtftn	0xFE07	InlineMethod	2	Popref	Pushi	Next	Primitive
+ldarg	0xFE09	InlineVar	2	Pop0	Push1	Next	Primitive
+ldarga	0xFE0A	InlineVar	2	Pop0	Pushi	Next	Primitive
+starg	0xFE0B	InlineVar	2	Pop1	Push0	Next	Primitive
+ldloc	0xFE0C	InlineVar	2	Pop0	Push1	Next	Primitive
+ldloca	0xFE0D	InlineVar	2	Pop0	Pushi	Next	Primitive
+stloc	0xFE0E	InlineVar	2	Pop1	Push0	Next	Primitive
+localloc	0xFE0F	InlineNone	2	Popi	Pushi	Next	Primitive
+endfilter	0xFE11	InlineNone	2	Popi	Push0	Return	Primitive
+unaligned.	0xFE12	ShortInlineI	2	Pop0	Push0	Meta	Prefix
+volatile.	0xFE13	InlineNone	2	Pop0	Push0	Meta	Prefix
+tail.	0xFE14	InlineNone	2	Pop0	Push0	Meta	Prefix
+initobj	0xFE15	InlineType	2	Popi	Push0	Next	Objmodel
+constrained.	0xFE16	InlineType	2	Pop0	Push0	Meta	Prefix
+cpblk	0xFE17	InlineNone	2	Popi_popi_popi	Push0	Next	Primitive
+initblk	0xFE18	InlineNone	2	Popi_popi_popi	Push0	Next	Primitive
+rethrow	0xFE1A	InlineNone	2	Pop0	Push0	Throw	Objmodel
+sizeof	0xFE1C	InlineType	2	Pop0	Pushi	Next	Primitive
+refanytype	0xFE1D	InlineNone	2	Pop1	Pushi	Next	Primitive
+readonly.	0xFE1E	InlineNone	2	Pop0	Push0	Meta	Prefix
+ILOpCode	Nop	0x0000
+ILOpCode	Break	0x0001
+ILOpCode	Ldarg_0	0x0002
+ILOpCode	Ldarg_1	0x0003
+ILOpCode	Ldarg_2	0x0004
+ILOpCode	Ldarg_3	0x0005
+ILOpCode	Ldloc_0	0x0006
+ILOpCode	Ldloc_1	0x0007
+ILOpCode	Ldloc_2	0x0008
+ILOpCode	Ldloc_3	0x0009
+ILOpCode	Stloc_0	0x000A
+ILOpCode	Stloc_1	0x000B
+ILOpCode	Stloc_2	0x000C
+ILOpCode	Stloc_3	0x000D
+ILOpCode	Ldarg_s	0x000E
+ILOpCode	Ldarga_s	0x000F
+ILOpCode	Starg_s	0x0010
+ILOpCode	Ldloc_s	0x0011
+ILOpCode	Ldloca_s	0x0012
+ILOpCode	Stloc_s	0x0013
+ILOpCode	Ldnull	0x0014
+ILOpCode	Ldc_i4_m1	0x0015
+ILOpCode	Ldc_i4_0	0x0016
+ILOpCode	Ldc_i4_1	0x0017
+ILOpCode	Ldc_i4_2	0x0018
+ILOpCode	Ldc_i4_3	0x0019
+ILOpCode	Ldc_i4_4	0x001A
+ILOpCode	Ldc_i4_5	0x001B
+ILOpCode	Ldc_i4_6	0x001C
+ILOpCode	Ldc_i4_7	0x001D
+ILOpCode	Ldc_i4_8	0x001E
+ILOpCode	Ldc_i4_s	0x001F
+ILOpCode	Ldc_i4	0x0020
+ILOpCode	Ldc_i8	0x0021
+ILOpCode	Ldc_r4	0x0022
+ILOpCode	Ldc_r8	0x0023
+ILOpCode	Dup	0x0025
+ILOpCode	Pop	0x0026
+ILOpCode	Jmp	0x0027
+ILOpCode	Call	0x0028
+ILOpCode	Calli	0x0029
+ILOpCode	Ret	0x002A
+ILOpCode	Br_s	0x002B
+ILOpCode	Brfalse_s	0x002C
+ILOpCode	Brtrue_s	0x002D
+ILOpCode	Beq_s	0x002E
+ILOpCode	Bge_s	0x002F
+ILOpCode	Bgt_s	0x0030
+ILOpCode	Ble_s	0x0031
+ILOpCode	Blt_s	0x0032
+ILOpCode	Bne_un_s	0x0033
+ILOpCode	Bge_un_s	0x0034
+ILOpCode	Bgt_un_s	0x0035
+ILOpCode	Ble_un_s	0x0036
+ILOpCode	Blt_un_s	0x0037
+ILOpCode	Br	0x0038
+ILOpCode	Brfalse	0x0039
+ILOpCode	Brtrue	0x003A
+ILOpCode	Beq	0x003B
+ILOpCode	Bge	0x003C
+ILOpCode	Bgt	0x003D
+ILOpCode	Ble	0x003E
+ILOpCode	Blt	0x003F
+ILOpCode	Bne_un	0x0040
+ILOpCode	Bge_un	0x0041
+ILOpCode	Bgt_un	0x0042
+ILOpCode	Ble_un	0x0043
+ILOpCode	Blt_un	0x0044
+ILOpCode	Switch	0x0045
+ILOpCode	Ldind_i1	0x0046
+ILOpCode	Ldind_u1	0x0047
+ILOpCode	Ldind_i2	0x0048
+ILOpCode	Ldind_u2	0x0049
+ILOpCode	Ldind_i4	0x004A
+ILOpCode	Ldind_u4	0x004B
+ILOpCode	Ldind_i8	0x004C
+ILOpCode	Ldind_i	0x004D
+ILOpCode	Ldind_r4	0x004E
+ILOpCode	Ldind_r8	0x004F
+ILOpCode	Ldind_ref	0x0050
+ILOpCode	Stind_ref	0x0051
+ILOpCode	Stind_i1	0x0052
+ILOpCode	Stind_i2	0x0053
+ILOpCode	Stind_i4	0x0054
+ILOpCode	Stind_i8	0x0055
+ILOpCode	Stind_r4	0x0056
+ILOpCode	Stind_r8	0x0057
+ILOpCode	Add	0x0058
+ILOpCode	Sub	0x0059
+ILOpCode	Mul	0x005A
+ILOpCode	Div	0x005B
+ILOpCode	Div_un	0x005C
+ILOpCode	Rem	0x005D
+ILOpCode	Rem_un	0x005E
+ILOpCode	And	0x005F
+ILOpCode	Or	0x0060
+ILOpCode	Xor	0x0061
+ILOpCode	Shl	0x0062
+ILOpCode	Shr	0x0063
+ILOpCode	Shr_un	0x0064
+ILOpCode	Neg	0x0065
+ILOpCode	Not	0x0066
+ILOpCode	Conv_i1	0x0067
+ILOpCode	Conv_i2	0x0068
+ILOpCode	Conv_i4	0x0069
+ILOpCode	Conv_i8	0x006A
+ILOpCode	Conv_r4	0x006B
+ILOpCode	Conv_r8	0x006C
+ILOpCode	Conv_u4	0x006D
+ILOpCode	Conv_u8	0x006E
+ILOpCode	Callvirt	0x006F
+ILOpCode	Cpobj	0x0070
+ILOpCode	Ldobj	0x0071
+ILOpCode	Ldstr	0x0072
+ILOpCode	Newobj	0x0073
+ILOpCode	Castclass	0x0074
+ILOpCode	Isinst	0x0075
+ILOpCode	Conv_r_un	0x0076
+ILOpCode	Unbox	0x0079
+ILOpCode	Throw	0x007A
+ILOpCode	Ldfld	0x007B
+ILOpCode	Ldflda	0x007C
+ILOpCode	Stfld	0x007D
+ILOpCode	Ldsfld	0x007E
+ILOpCode	Ldsflda	0x007F
+ILOpCode	Stsfld	0x0080
+ILOpCode	Stobj	0x0081
+ILOpCode	Conv_ovf_i1_un	0x0082
+ILOpCode	Conv_ovf_i2_un	0x0083
+ILOpCode	Conv_ovf_i4_un	0x0084
+ILOpCode	Conv_ovf_i8_un	0x0085
+ILOpCode	Conv_ovf_u1_un	0x0086
+ILOpCode	Conv_ovf_u2_un	0x0087
+ILOpCode	Conv_ovf_u4_un	0x0088
+ILOpCode	Conv_ovf_u8_un	0x0089
+ILOpCode	Conv_ovf_i_un	0x008A
+ILOpCode	Conv_ovf_u_un	0x008B
+ILOpCode	Box	0x008C
+ILOpCode	Newarr	0x008D
+ILOpCode	Ldlen	0x008E
+ILOpCode	Ldelema	0x008F
+ILOpCode	Ldelem_i1	0x0090
+ILOpCode	Ldelem_u1	0x0091
+ILOpCode	Ldelem_i2	0x0092
+ILOpCode	Ldelem_u2	0x0093
+ILOpCode	Ldelem_i4	0x0094
+ILOpCode	Ldelem_u4	0x0095
+ILOpCode	Ldelem_i8	0x0096
+ILOpCode	Ldelem_i	0x0097
+ILOpCode	Ldelem_r4	0x0098
+ILOpCode	Ldelem_r8	0x0099
+ILOpCode	Ldelem_ref	0x009A
+ILOpCode	Stelem_i	0x009B
+ILOpCode	Stelem_i1	0x009C
+ILOpCode	Stelem_i2	0x009D
+ILOpCode	Stelem_i4	0x009E
+ILOpCode	Stelem_i8	0x009F
+ILOpCode	Stelem_r4	0x00A0
+ILOpCode	Stelem_r8	0x00A1
+ILOpCode	Stelem_ref	0x00A2
+ILOpCode	Ldelem	0x00A3
+ILOpCode	Stelem	0x00A4
+ILOpCode	Unbox_any	0x00A5
+ILOpCode	Conv_ovf_i1	0x00B3
+ILOpCode	Conv_ovf_u1	0x00B4
+ILOpCode	Conv_ovf_i2	0x00B5
+ILOpCode	Conv_ovf_u2	0x00B6
+ILOpCode	Conv_ovf_i4	0x00B7
+ILOpCode	Conv_ovf_u4	0x00B8
+ILOpCode	Conv_ovf_i8	0x00B9
+ILOpCode	Conv_ovf_u8	0x00BA
+ILOpCode	Refanyval	0x00C2
+ILOpCode	Ckfinite	0x00C3
+ILOpCode	Mkrefany	0x00C6
+ILOpCode	Ldtoken	0x00D0
+ILOpCode	Conv_u2	0x00D1
+ILOpCode	Conv_u1	0x00D2
+ILOpCode	Conv_i	0x00D3
+ILOpCode	Conv_ovf_i	0x00D4
+ILOpCode	Conv_ovf_u	0x00D5
+ILOpCode	Add_ovf	0x00D6
+ILOpCode	Add_ovf_un	0x00D7
+ILOpCode	Mul_ovf	0x00D8
+ILOpCode	Mul_ovf_un	0x00D9
+ILOpCode	Sub_ovf	0x00DA
+ILOpCode	Sub_ovf_un	0x00DB
+ILOpCode	Endfinally	0x00DC
+ILOpCode	Leave	0x00DD
+ILOpCode	Leave_s	0x00DE
+ILOpCode	Stind_i	0x00DF
+ILOpCode	Conv_u	0x00E0
+ILOpCode	Arglist	0xFE00
+ILOpCode	Ceq	0xFE01
+ILOpCode	Cgt	0xFE02
+ILOpCode	Cgt_un	0xFE03
+ILOpCode	Clt	0xFE04
+ILOpCode	Clt_un	0xFE05
+ILOpCode	Ldftn	0xFE06
+ILOpCode	Ldvirtftn	0xFE07
+ILOpCode	Ldarg	0xFE09
+ILOpCode	Ldarga	0xFE0A
+ILOpCode	Starg	0xFE0B
+ILOpCode	Ldloc	0xFE0C
+ILOpCode	Ldloca	0xFE0D
+ILOpCode	Stloc	0xFE0E
+ILOpCode	Localloc	0xFE0F
+ILOpCode	Endfilter	0xFE11
+ILOpCode	Unaligned	0xFE12
+ILOpCode	Volatile	0xFE13
+ILOpCode	Tail	0xFE14
+ILOpCode	Initobj	0xFE15
+ILOpCode	Constrained	0xFE16
+ILOpCode	Cpblk	0xFE17
+ILOpCode	Initblk	0xFE18
+ILOpCode	Rethrow	0xFE1A
+ILOpCode	Sizeof	0xFE1C
+ILOpCode	Refanytype	0xFE1D
+ILOpCode	Readonly	0xFE1E

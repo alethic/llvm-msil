@@ -1,0 +1,34 @@
+Retarget experiment (scripts/retarget_corpus.py, scripts/run-wsl.sh), 2026-10-20.
+Corpus: every C program of msil/test/M1 (93 files), freestanding, compared with the
+checked-in .expected transcripts (stdout + exit status).
+
+Mode llc: stock clang --target=<native> -flto -c (pre-link pipeline with the native X86 TTI)
+          -> llc -mtriple=<native>-msil -> ilasm 4.8 -pe64 -x64 -> run.
+Mode ld:  the same bitcode -> msil-ld prototype (lto::Config::OverrideTriple = <native>-msil,
+          --lto-emit-asm, -L C:/Windows/System32 -lucrtbase) -> ilasm -> run.
+
+x86_64-pc-windows-msvc        O2  llc               pass 36, llc-fail 57 of 93
+   55 x "undefined function '__atomic_load_N' ... not a Phase-1 import" (clang's default
+      -fms-volatile on x86 MSVC makes volatile accesses atomic acquire/release loads/stores;
+      the MSIL driver turns it off, clang/lib/Driver/ToolChains/Clang.cpp:6417-6425)
+    1 x barrier: "inline assembly is not supported for MSIL" (asm volatile("" ::: "memory"))
+    1 x kr-import: "mismatched call signature" (no "no-prototype" attribute from stock clang)
+x86_64-pc-windows-msvc -fno-ms-volatile O2 llc  pass 91, llc-fail 2 (barrier, kr-import)
+x86_64-pc-windows-msvc -fno-ms-volatile O0 llc  pass 91, llc-fail 2 (barrier, kr-import)
+x86_64-unknown-linux-gnu      O2  llc  89 assembled, 4 llc-fail; WSL .NET 10: pass 89 fail 0
+x86_64-unknown-linux-gnu      O0  llc  89 assembled, 4 llc-fail; WSL .NET 10: pass 89 fail 0
+   barrier (inline asm), kr-import (mismatched call signature),
+   kr-call and kr-legacy: "calls to variadic functions are not supported for MSIL yet"
+   (SysV x86-64 clang calls unprototyped functions as variadic, CGCall.cpp:715)
+
+Through the msil-ld prototype (mode ld):
+x86_64-pc-windows-msvc-msil   O2  pass 93 of 93   (MSIL clang -flto bitcode, --lto-O2)
+x86_64-pc-windows-msvc-msil   O0  pass 93 of 93   (MSIL clang -O0 -flto bitcode, --lto-O0)
+x86_64-pc-windows-msvc -fno-ms-volatile O2  pass 91, fail 2 (barrier, kr-import)
+
+Code size, 93 programs at O2 (mode ld): stock-bitcode IL 202,856 instruction lines vs
+MSIL-bitcode IL 159,549 (+27%); vector-typed IR lines in the pre-link bitcode 3,221 vs 103
+(the X86 TTI vectorizes, the MSIL legalizer scalarizes again).
+
+DataLayout, "target-cpu", "target-features", "tune-cpu" and module flags of fib.c are
+byte-identical between <native> and <native>-msil on both x86_64 triples.

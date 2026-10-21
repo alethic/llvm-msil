@@ -1,0 +1,62 @@
+# Creation commits and churn of object-format files (git log --follow), checkout 1ea64fe9fc7c
+llvm/lib/MC/WasmObjectWriter.cpp | 1990 lines | added 18eafb6c688f 2017-02-22 | 291 commits
+llvm/lib/Object/WasmObjectFile.cpp | 2376 lines | added 2c6f75ddc51f 2016-11-30 | 236 commits
+llvm/include/llvm/BinaryFormat/Wasm.h | 582 lines | added 2c6f75ddc51f 2016-11-30 | 147 commits
+llvm/lib/ObjectYAML/WasmYAML.cpp | 671 lines | added d3d84fdda185 2017-03-30 | 81 commits
+llvm/tools/obj2yaml/wasm2yaml.cpp | 442 lines | added d3d84fdda185 2017-03-30 | 65 commits
+llvm/tools/llvm-readobj/WasmDumper.cpp | 255 lines | added 6d76b7b455cd 2017-01-30 | 54 commits
+llvm/tools/llvm-objdump/WasmDump.cpp | 65 lines | added 2c6f75ddc51f 2016-11-30 | 13 commits
+llvm/lib/ObjCopy/wasm/WasmObjcopy.cpp | 155 lines | added a928d127a52a 2019-11-22 | 22 commits
+lld/wasm/Driver.cpp | 1517 lines | added c94d393ad52b 2017-11-17 | 329 commits
+llvm/lib/MC/MCWasmStreamer.cpp | 177 lines | added 18eafb6c688f 2017-02-22 | 74 commits
+llvm/lib/Object/GOFFObjectFile.cpp | 917 lines | added 5b2423183cb3 2023-04-28 | 28 commits
+llvm/lib/MC/GOFFObjectWriter.cpp | 878 lines | added 3adc2a0b84d0 2023-09-29 | 30 commits
+llvm/lib/Object/DXContainer.cpp | 1128 lines | added 4070aa01561c 2022-04-28 | 49 commits
+llvm/lib/MC/MCDXContainerWriter.cpp | 168 lines | added 3adc908b2685 2022-06-06 | 25 commits
+llvm/lib/MC/SPIRVObjectWriter.cpp | 53 lines | added 6c69427e880b 2022-04-14 | 11 commits
+llvm/lib/ObjectYAML/DXContainerYAML.cpp | 1186 lines | added 129c056d6269 2022-06-01 | 47 commits
+
+# Bring-up commits (git show --shortstat)
+2c6f75ddc51f 2016-11-30 [WebAssembly] Add llvm-objdump support for wasm file format ::  17 files changed, 546 insertions(+), 2 deletions(-)
+6d76b7b455cd 2017-01-30 [WebAssembly] Add wasm support for llvm-readobj ::  10 files changed, 165 insertions(+), 8 deletions(-)
+18eafb6c688f 2017-02-22 [WebAssembly] Add skeleton MC support for the Wasm container format ::  35 files changed, 1307 insertions(+), 22 deletions(-)
+d3d84fdda185 2017-03-30 [WebAssembly] Improve support for WebAssembly binary format ::  35 files changed, 2442 insertions(+), 85 deletions(-)
+c94d393ad52b 2017-11-17 [WebAssembly] Initial wasm linker implementation ::  61 files changed, 5791 insertions(+), 16 deletions(-)
+4070aa01561c 2022-04-28 [Object][DX] Initial DXContainer parsing support ::  6 files changed, 224 insertions(+)
+3adc908b2685 2022-06-06 [DirectX][MC] Add MC support for DXContainer ::  14 files changed, 393 insertions(+), 2 deletions(-)
+5b2423183cb3 2023-04-28 [SystemZ][z/OS] Add GOFFObjectFile class support for HDR, ESD and END records ::  10 files changed, 1543 insertions(+), 3 deletions(-)
+3adc2a0b84d0 2023-09-29 [SystemZ/zOS/GOFF] Implement GOFF writer for empty files. ::  14 files changed, 551 insertions(+), 25 deletions(-)
+cfb51f54ba80 2016-07-15 BPF: Use official ELF e_machine value ::  8 files changed, 33 insertions(+), 1 deletion(-)
+69f2c79f2ad2 2020-09-02 [ELF] Add a new e_machine value EM_CSKY and add some CSKY relocation types ::  6 files changed, 113 insertions(+)
+e53e6ec6ef74 2022-02-10 [LoongArch 2/6] Add ELF machine flag and relocs for upcoming LoongArch target ::  9 files changed, 339 insertions(+)
+
+# Files touched by adding an ELF e_machine
+== cfb51f54ba80
+ llvm/include/llvm/Object/ELFObjectFile.h                | 5 +++++
+ llvm/include/llvm/Support/ELF.h                         | 6 ++++++
+ llvm/include/llvm/Support/ELFRelocs/BPF.def             | 9 +++++++++
+ llvm/lib/Object/ELF.cpp                                 | 6 ++++++
+ llvm/lib/ObjectYAML/ELFYAML.cpp                         | 4 ++++
+ llvm/lib/Target/BPF/MCTargetDesc/BPFELFObjectWriter.cpp | 2 +-
+ llvm/tools/llvm-objdump/llvm-objdump.cpp                | 1 +
+ llvm/tools/llvm-readobj/ELFDumper.cpp                   | 1 +
+ 8 files changed, 33 insertions(+), 1 deletion(-)
+== 69f2c79f2ad2
+ llvm/include/llvm/BinaryFormat/ELF.h              |  7 ++++++
+ llvm/include/llvm/BinaryFormat/ELFRelocs/CSKY.def | 74 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ llvm/include/llvm/Object/ELFObjectFile.h          |  4 ++++
+ llvm/lib/Object/ELF.cpp                           |  9 ++++++++
+ llvm/lib/ObjectYAML/ELFYAML.cpp                   |  4 ++++
+ llvm/unittests/Object/ELFObjectFileTest.cpp       | 15 +++++++++++++
+ 6 files changed, 113 insertions(+)
+== e53e6ec6ef74
+ llvm/include/llvm/BinaryFormat/ELF.h                          |   6 +++
+ llvm/include/llvm/BinaryFormat/ELFRelocs/LoongArch.def        |  63 ++++++++++++++++++++++++++
+ llvm/include/llvm/Object/ELFObjectFile.h                      |  15 +++++++
+ llvm/lib/Object/ELF.cpp                                       |   7 +++
+ llvm/lib/ObjectYAML/ELFYAML.cpp                               |   4 ++
+ llvm/test/tools/llvm-readobj/ELF/reloc-types-loongarch64.test | 121 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ llvm/tools/llvm-readobj/ELFDumper.cpp                         |   1 +
+ llvm/unittests/Object/ELFObjectFileTest.cpp                   |  13 ++++++
+ llvm/unittests/Object/ELFTest.cpp                             | 109 +++++++++++++++++++++++++++++++++++++++++++++
+ 9 files changed, 339 insertions(+)

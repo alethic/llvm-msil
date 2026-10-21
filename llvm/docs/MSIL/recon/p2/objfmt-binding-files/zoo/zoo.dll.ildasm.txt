@@ -1,0 +1,425 @@
+
+//  .NET IL Disassembler.  Version 10.0.12
+
+
+
+// Metadata version: v4.0.30319
+.module extern ucrtbase
+.assembly extern mscorlib
+{
+  .publickeytoken = (B7 7A 5C 56 19 34 E0 89 )                         // .z\V.4..
+  .ver 4:0:0:0
+}
+.assembly zoo
+{
+  .hash algorithm 0x00008004
+  .ver 0:0:0:0
+}
+.module zoo.dll
+// MVID: {10b46c84-b47d-46f3-a4e6-b2933a48eef7}
+.imagebase 0x0000000000400000
+.file alignment 0x00000200
+.stackreserve 0x0000000000100000
+.subsystem 0x0003       // WINDOWS_CUI
+.corflags 0x00000001    //  ILONLY
+// Image base: 0x000001D067C80000
+
+
+// ================== GLOBAL FIELDS ==========================
+
+.field public static initonly native int table
+.field public static initonly native int pcounter
+.field public static initonly native int '??_C@_05CJBACGMB@hello?$AA@'
+.field public static initonly native int msg
+.field static privatescope initonly native int va$PST04000005
+.field public static initonly native int '??_C@_04GHJNJNPO@main?$AA@'
+.field static privatescope initonly native int local_g$PST04000007
+.field public static initonly native int common_c
+.field public static initonly native int counter
+.field public static initonly native int msg_b
+.field public static initonly native int '??_C@_04JCHODAIH@add3?$AA@'
+.field static privatescope initonly native int $FD$C$PST0400000C
+.field static privatescope initonly native int vb$PST0400000D
+.field static privatescope initonly native int idx$PST0400000E
+.field private static initonly native int '<msil>fn_add3'
+.field private static initonly native int '<msil>fn_twice'
+.field private static native int '<msil>fn_maybe'
+.field private static initonly native int '<msil>data'
+.field private static valuetype '<msil>image_t' '<msil>image' at I_000027D8
+
+// =============================================================
+
+
+// ================== GLOBAL METHODS =========================
+
+.method privatescope static void  ctor_a$PST06000001() cil managed
+{
+  // Code size       22 (0x16)
+  .maxstack  8
+  IL_0000:  ldsfld     native int counter
+  IL_0005:  ldsfld     native int va$PST04000005
+  IL_000a:  volatile.
+  IL_000c:  ldind.i4
+  IL_000d:  ldsfld     native int counter
+  IL_0012:  ldind.i4
+  IL_0013:  add
+  IL_0014:  stind.i4
+  IL_0015:  ret
+} // end of global method ctor_a
+
+.method public static int32  main() cil managed
+{
+  // Code size       208 (0xd0)
+  .maxstack  4
+  .locals (int32 V_0,
+           int32 V_1)
+  IL_0000:  ldsfld     native int '??_C@_04GHJNJNPO@main?$AA@'
+  IL_0005:  call       int32 puts(native int)
+  IL_000a:  pop
+  IL_000b:  ldsfld     native int local_g$PST04000007
+  IL_0010:  ldsfld     native int local_g$PST04000007
+  IL_0015:  ldind.i4
+  IL_0016:  ldc.i4.1
+  IL_0017:  add
+  IL_0018:  stind.i4
+  IL_0019:  ldc.i4.1
+  IL_001a:  ldsfld     native int table
+  IL_001f:  ldind.i
+  IL_0020:  calli      int32(int32)
+  IL_0025:  ldc.i4.2
+  IL_0026:  ldsfld     native int table
+  IL_002b:  ldc.i4     0x8
+  IL_0030:  add
+  IL_0031:  ldind.i
+  IL_0032:  calli      int32(int32)
+  IL_0037:  add
+  IL_0038:  ldc.i4.3
+  IL_0039:  ldsfld     native int table
+  IL_003e:  ldc.i4     0x10
+  IL_0043:  add
+  IL_0044:  ldind.i
+  IL_0045:  calli      int32(int32)
+  IL_004a:  add
+  IL_004b:  ldsfld     native int pcounter
+  IL_0050:  ldind.i
+  IL_0051:  ldind.i4
+  IL_0052:  add
+  IL_0053:  ldsfld     native int local_g$PST04000007
+  IL_0058:  ldind.i4
+  IL_0059:  call       int32 helper$PST06000003(int32)
+  IL_005e:  add
+  IL_005f:  call       int32 weakfn()
+  IL_0064:  ldc.i4     0x3e8
+  IL_0069:  mul
+  IL_006a:  add
+  IL_006b:  stloc.0
+  IL_006c:  ldsfld     native int '<msil>fn_maybe'
+  IL_0071:  ldc.i4     0x0
+  IL_0076:  conv.i
+  IL_0077:  ceq
+  IL_0079:  brtrue     IL_0086
+
+  IL_007e:  ldloc.0
+  IL_007f:  ldc.i4     0x186a0
+  IL_0084:  add
+  IL_0085:  stloc.0
+  IL_0086:  ldsfld     native int common_c
+  IL_008b:  ldsfld     native int common_c
+  IL_0090:  ldind.i4
+  IL_0091:  ldc.i4.1
+  IL_0092:  add
+  IL_0093:  dup
+  IL_0094:  stloc.1
+  IL_0095:  stind.i4
+  IL_0096:  ldloc.0
+  IL_0097:  ldloc.1
+  IL_0098:  add
+  IL_0099:  stloc.1
+  IL_009a:  ldc.i4.0
+  IL_009b:  stloc.0
+  IL_009c:  ldsfld     native int table
+  IL_00a1:  ldc.i4     0x8
+  IL_00a6:  add
+  IL_00a7:  ldind.i
+  IL_00a8:  ldsfld     native int table
+  IL_00ad:  ldc.i4     0x10
+  IL_00b2:  add
+  IL_00b3:  ldind.i
+  IL_00b4:  ceq
+  IL_00b6:  brtrue     IL_00bd
+
+  IL_00bb:  ldc.i4.7
+  IL_00bc:  stloc.0
+  IL_00bd:  ldloc.1
+  IL_00be:  ldloc.0
+  IL_00bf:  add
+  IL_00c0:  ldsfld     native int msg
+  IL_00c5:  ldind.i
+  IL_00c6:  ldind.u1
+  IL_00c7:  add
+  IL_00c8:  call       int32 b_extra()
+  IL_00cd:  add
+  IL_00ce:  conv.u1
+  IL_00cf:  ret
+} // end of global method main
+
+.method privatescope static int32  helper$PST06000003(int32 A_0) cil managed
+{
+  // Code size       5 (0x5)
+  .maxstack  8
+  IL_0000:  ldarg.0
+  IL_0001:  ldc.i4.s   100
+  IL_0003:  add
+  IL_0004:  ret
+} // end of global method helper
+
+.method public static int32  add3(int32 A_0) cil managed
+{
+  // Code size       54 (0x36)
+  .maxstack  3
+  .locals (int32 V_0,
+           int32 V_1)
+  IL_0000:  ldsfld     native int '??_C@_04JCHODAIH@add3?$AA@'
+  IL_0005:  call       int32 puts(native int)
+  IL_000a:  pop
+  IL_000b:  ldsfld     native int counter
+  IL_0010:  ldsfld     native int counter
+  IL_0015:  ldind.i4
+  IL_0016:  ldc.i4.1
+  IL_0017:  add
+  IL_0018:  dup
+  IL_0019:  stloc.0
+  IL_001a:  stind.i4
+  IL_001b:  ldsfld     native int $FD$C$PST0400000C
+  IL_0020:  ldsfld     native int $FD$C$PST0400000C
+  IL_0025:  ldind.i4
+  IL_0026:  ldc.i4.1
+  IL_0027:  add
+  IL_0028:  dup
+  IL_0029:  stloc.1
+  IL_002a:  stind.i4
+  IL_002b:  ldloc.1
+  IL_002c:  ldloc.0
+  IL_002d:  add
+  IL_002e:  ldarg.0
+  IL_002f:  call       int32 $MD$5$PST06000005(int32)
+  IL_0034:  add
+  IL_0035:  ret
+} // end of global method add3
+
+.method privatescope static int32  $MD$5$PST06000005(int32 A_0) cil managed
+{
+  // Code size       4 (0x4)
+  .maxstack  8
+  IL_0000:  ldarg.0
+  IL_0001:  ldc.i4.3
+  IL_0002:  mul
+  IL_0003:  ret
+} // end of global method $MD$5
+
+.method public static int32  twice(int32 A_0) cil managed
+{
+  // Code size       4 (0x4)
+  .maxstack  8
+  IL_0000:  ldarg.0
+  IL_0001:  ldc.i4.1
+  IL_0002:  shl
+  IL_0003:  ret
+} // end of global method twice
+
+.method public static int32  weakfn() cil managed
+{
+  // Code size       2 (0x2)
+  .maxstack  8
+  IL_0000:  ldc.i4.2
+  IL_0001:  ret
+} // end of global method weakfn
+
+.method privatescope static void  ctor_b$PST06000008() cil managed
+{
+  // Code size       22 (0x16)
+  .maxstack  8
+  IL_0000:  ldsfld     native int counter
+  IL_0005:  ldsfld     native int vb$PST0400000D
+  IL_000a:  volatile.
+  IL_000c:  ldind.i4
+  IL_000d:  ldsfld     native int counter
+  IL_0012:  ldind.i4
+  IL_0013:  mul
+  IL_0014:  stind.i4
+  IL_0015:  ret
+} // end of global method ctor_b
+
+.method public static int32  b_extra() cil managed
+{
+  // Code size       30 (0x1e)
+  .maxstack  8
+  IL_0000:  ldsfld     native int common_c
+  IL_0005:  ldind.i4
+  IL_0006:  ldc.i4     0x3e8
+  IL_000b:  mul
+  IL_000c:  ldsfld     native int idx$PST0400000E
+  IL_0011:  volatile.
+  IL_0013:  ldind.i4
+  IL_0014:  conv.i
+  IL_0015:  ldsfld     native int '??_C@_05CJBACGMB@hello?$AA@'
+  IL_001a:  add
+  IL_001b:  ldind.i1
+  IL_001c:  add
+  IL_001d:  ret
+} // end of global method b_extra
+
+.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) 
+        int32  puts(native int A_0) cil managed preservesig
+{
+}
+.method private hidebysig specialname rtspecialname static 
+        void  .cctor() cil managed
+{
+  // Code size       339 (0x153)
+  .maxstack  4
+  IL_0000:  ldc.i4.s   119
+  IL_0002:  conv.i
+  IL_0003:  call       native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+  IL_0008:  ldc.i4.s   15
+  IL_000a:  conv.i
+  IL_000b:  add
+  IL_000c:  ldc.i4.s   -16
+  IL_000e:  conv.i
+  IL_000f:  and
+  IL_0010:  stsfld     native int '<msil>data'
+  IL_0015:  ldsfld     native int '<msil>data'
+  IL_001a:  ldsflda    valuetype '<msil>image_t' '<msil>image'
+  IL_001f:  ldc.i4.s   100
+  IL_0021:  cpblk
+  IL_0023:  ldsfld     native int '<msil>data'
+  IL_0028:  ldc.i4.s   100
+  IL_002a:  add
+  IL_002b:  ldc.i4.0
+  IL_002c:  ldc.i4.4
+  IL_002d:  initblk
+  IL_002f:  ldsfld     native int '<msil>data'
+  IL_0034:  stsfld     native int table
+  IL_0039:  ldsfld     native int '<msil>data'
+  IL_003e:  ldc.i4.s   24
+  IL_0040:  add
+  IL_0041:  stsfld     native int pcounter
+  IL_0046:  ldsfld     native int '<msil>data'
+  IL_004b:  ldc.i4.s   32
+  IL_004d:  add
+  IL_004e:  stsfld     native int '??_C@_05CJBACGMB@hello?$AA@'
+  IL_0053:  ldsfld     native int '<msil>data'
+  IL_0058:  ldc.i4.s   40
+  IL_005a:  add
+  IL_005b:  stsfld     native int msg
+  IL_0060:  ldsfld     native int '<msil>data'
+  IL_0065:  ldc.i4.s   48
+  IL_0067:  add
+  IL_0068:  stsfld     native int va$PST04000005
+  IL_006d:  ldsfld     native int '<msil>data'
+  IL_0072:  ldc.i4.s   52
+  IL_0074:  add
+  IL_0075:  stsfld     native int '??_C@_04GHJNJNPO@main?$AA@'
+  IL_007a:  ldsfld     native int '<msil>data'
+  IL_007f:  ldc.i4.s   60
+  IL_0081:  add
+  IL_0082:  stsfld     native int local_g$PST04000007
+  IL_0087:  ldsfld     native int '<msil>data'
+  IL_008c:  ldc.i4.s   100
+  IL_008e:  add
+  IL_008f:  stsfld     native int common_c
+  IL_0094:  ldsfld     native int '<msil>data'
+  IL_0099:  ldc.i4.s   64
+  IL_009b:  add
+  IL_009c:  stsfld     native int counter
+  IL_00a1:  ldsfld     native int '<msil>data'
+  IL_00a6:  ldc.i4.s   72
+  IL_00a8:  add
+  IL_00a9:  stsfld     native int msg_b
+  IL_00ae:  ldsfld     native int '<msil>data'
+  IL_00b3:  ldc.i4.s   80
+  IL_00b5:  add
+  IL_00b6:  stsfld     native int '??_C@_04JCHODAIH@add3?$AA@'
+  IL_00bb:  ldsfld     native int '<msil>data'
+  IL_00c0:  ldc.i4.s   88
+  IL_00c2:  add
+  IL_00c3:  stsfld     native int $FD$C$PST0400000C
+  IL_00c8:  ldsfld     native int '<msil>data'
+  IL_00cd:  ldc.i4.s   92
+  IL_00cf:  add
+  IL_00d0:  stsfld     native int vb$PST0400000D
+  IL_00d5:  ldsfld     native int '<msil>data'
+  IL_00da:  ldc.i4.s   96
+  IL_00dc:  add
+  IL_00dd:  stsfld     native int idx$PST0400000E
+  IL_00e2:  ldftn      int32 add3(int32)
+  IL_00e8:  stsfld     native int '<msil>fn_add3'
+  IL_00ed:  ldftn      int32 twice(int32)
+  IL_00f3:  stsfld     native int '<msil>fn_twice'
+  IL_00f8:  ldsfld     native int '<msil>data'
+  IL_00fd:  ldsfld     native int '<msil>fn_add3'
+  IL_0102:  stind.i
+  IL_0103:  ldsfld     native int '<msil>data'
+  IL_0108:  ldc.i4.8
+  IL_0109:  add
+  IL_010a:  ldsfld     native int '<msil>fn_twice'
+  IL_010f:  stind.i
+  IL_0110:  ldsfld     native int '<msil>data'
+  IL_0115:  ldc.i4.s   16
+  IL_0117:  add
+  IL_0118:  ldsfld     native int '<msil>fn_twice'
+  IL_011d:  stind.i
+  IL_011e:  ldsfld     native int '<msil>data'
+  IL_0123:  ldc.i4.s   24
+  IL_0125:  add
+  IL_0126:  ldsfld     native int counter
+  IL_012b:  stind.i
+  IL_012c:  ldsfld     native int '<msil>data'
+  IL_0131:  ldc.i4.s   40
+  IL_0133:  add
+  IL_0134:  ldsfld     native int '??_C@_05CJBACGMB@hello?$AA@'
+  IL_0139:  stind.i
+  IL_013a:  ldsfld     native int '<msil>data'
+  IL_013f:  ldc.i4.s   72
+  IL_0141:  add
+  IL_0142:  ldsfld     native int '??_C@_05CJBACGMB@hello?$AA@'
+  IL_0147:  stind.i
+  IL_0148:  call       void ctor_b$PST06000008()
+  IL_014d:  call       void ctor_a$PST06000001()
+  IL_0152:  ret
+} // end of global method .cctor
+
+.method private hidebysig static int32  '<msil>Main'(string[] A_0) cil managed
+{
+  .entrypoint
+  // Code size       6 (0x6)
+  .maxstack  8
+  IL_0000:  call       int32 main()
+  IL_0005:  ret
+} // end of global method '<msil>Main'
+
+
+// =============================================================
+
+
+// =============== CLASS MEMBERS DECLARATION ===================
+
+.class private explicit ansi sealed '<msil>image_t'
+       extends [mscorlib]System.ValueType
+{
+  .pack 1
+  .size 100
+} // end of class '<msil>image_t'
+
+
+// =============================================================
+
+.data cil I_000027D8 = bytearray (
+                 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+                 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+                 68 65 6C 6C 6F 00 00 00 00 00 00 00 00 00 00 00  // hello...........
+                 0A 00 00 00 6D 61 69 6E 00 00 00 00 07 00 00 00  // ....main........
+                 05 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+                 61 64 64 33 00 00 00 00 0B 00 00 00 02 00 00 00  // add3............
+                 04 00 00 00) 
+// *********** DISASSEMBLY COMPLETE ***********************

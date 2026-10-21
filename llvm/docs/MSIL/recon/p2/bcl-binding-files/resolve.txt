@@ -1,0 +1,749 @@
+== P1 core: System.Object
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== P1 image base: System.ValueType
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== P1 cctor+Main: native int System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: native int (native int)  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: native int (native int)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: native int (native int)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+== P1 Main: native int System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: native int (string)  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: native int (string)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: native int (string)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: native int (string)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int (string)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: native int (string)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+== P1 Main: string[] System.Environment::GetCommandLineArgs()
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: string[] ()  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: string[] ()  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: string[] ()  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: string[] ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: string[] ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: string[] ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P1 memmove: void System.Buffer::MemoryCopy(void*,void*,int64,int64)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (void*, void*, int64, int64)  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (void*, void*, int64, int64)  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (void*, void*, int64, int64)  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*, void*, int64, int64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*, void*, int64, int64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*, void*, int64, int64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== P1 fence: void System.Threading.Interlocked::MemoryBarrier()
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void ()  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 alloc: void* System.Runtime.InteropServices.NativeMemory::Alloc(native uint)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: void* (native uint)
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void* (native uint)
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void* (native uint)
+== P3 alloc: void* System.Runtime.InteropServices.NativeMemory::AllocZeroed(native uint)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: void* (native uint)
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void* (native uint)
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void* (native uint)
+== P3 alloc: void* System.Runtime.InteropServices.NativeMemory::AlignedAlloc(native uint,native uint)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: void* (native uint, native uint)
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void* (native uint, native uint)
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void* (native uint, native uint)
+== P3 alloc: void System.Runtime.InteropServices.NativeMemory::Free(void*)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*)
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*)
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*)
+== P3 alloc: void System.Runtime.InteropServices.NativeMemory::AlignedFree(void*)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*)
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*)
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*)
+== P3 mem: void System.Runtime.InteropServices.NativeMemory::Copy(void*,void*,native uint)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-MEMBER  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*, void*, native uint)
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*, void*, native uint)
+== P3 mem: void System.Runtime.InteropServices.NativeMemory::Fill(void*,native uint,uint8)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-MEMBER  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*, native uint, uint8)
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*, native uint, uint8)
+== P3 mem: void System.Runtime.InteropServices.NativeMemory::Clear(void*,native uint)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-MEMBER  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*, native uint)
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (void*, native uint)
+== P3 alloc: void System.Runtime.InteropServices.Marshal::FreeHGlobal(native int)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (native int)  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (native int)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (native int)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (native int)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (native int)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (native int)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+== P3 TLS: System.ThreadStaticAttribute::.ctor()
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void ()  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== P3 atexit: System.AppDomain System.AppDomain::get_CurrentDomain()
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: System.AppDomain ()  forwarded by: netstandard->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: System.AppDomain ()  forwarded by: mscorlib->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: System.AppDomain ()  forwarded by: mscorlib->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: System.AppDomain ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: System.AppDomain ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: System.AppDomain ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 atexit: void System.AppDomain::add_ProcessExit(System.EventHandler)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (System.EventHandler)  forwarded by: netstandard->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (System.EventHandler)  forwarded by: mscorlib->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (System.EventHandler)  forwarded by: mscorlib->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (System.EventHandler)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (System.EventHandler)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (System.EventHandler)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 atexit: void System.EventHandler::.ctor(object,native int)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (object, native int)  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (object, native int)  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (object, native int)  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (object, native int)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (object, native int)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (object, native int)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== P3 exit: void System.Environment::Exit(int32)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (int32)  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (int32)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (int32)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (int32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (int32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (int32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 thunks: native int System.Runtime.InteropServices.Marshal::GetFunctionPointerForDelegate(System.Delegate)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: native int (System.Delegate)  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: native int (System.Delegate)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: native int (System.Delegate)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: native int (System.Delegate)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int (System.Delegate)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: native int (System.Delegate)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+== P3 thunks: native int System.Runtime.InteropServices.Marshal::GetFunctionPointerForDelegate``1(!!0)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: native int ``1(!!0)  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: native int ``1(!!0)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: native int ``1(!!0)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: native int ``1(!!0)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int ``1(!!0)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: native int ``1(!!0)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+== P3 thunks: System.Runtime.InteropServices.UnmanagedCallersOnlyAttribute::.ctor()
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: void ()
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void ()
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void ()
+== P3 thunks: System.Type[] System.Runtime.InteropServices.UnmanagedCallersOnlyAttribute::CallConvs
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: System.Type[] CallConvs
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: System.Type[] CallConvs
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: System.Type[] CallConvs
+== P3 thunks: System.Runtime.CompilerServices.CallConvCdecl
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.CompilerServices.VisualC->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.CompilerServices.VisualC->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.CompilerServices.VisualC->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.CompilerServices.VisualC->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.CompilerServices.VisualC->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.CompilerServices.VisualC->System.Runtime
+== P3 thunks: System.Runtime.InteropServices.UnmanagedFunctionPointerAttribute::.ctor(System.Runtime.InteropServices.CallingConvention)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (System.Runtime.InteropServices.CallingConvention)  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (System.Runtime.InteropServices.CallingConvention)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (System.Runtime.InteropServices.CallingConvention)  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (System.Runtime.InteropServices.CallingConvention)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropSer
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (System.Runtime.InteropServices.CallingConvention)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropSer
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (System.Runtime.InteropServices.CallingConvention)  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropS
+== P3 thunks: System.MulticastDelegate
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== P3 pinvoke: System.Runtime.CompilerServices.DisableRuntimeMarshallingAttribute::.ctor()
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-TYPE
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void ()
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void ()
+== P3 pinvoke: System.Runtime.InteropServices.SuppressGCTransitionAttribute::.ctor()
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void ()
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void ()
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void ()
+== P3 lazyload: native int System.Runtime.InteropServices.NativeLibrary::Load(string)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: native int (string)
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int (string)
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: native int (string)
+== P3 lazyload: native int System.Runtime.InteropServices.NativeLibrary::GetExport(native int,string)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int, string)
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int, string)
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int, string)
+== P3 errno: int32 System.Runtime.InteropServices.Marshal::GetLastPInvokeError()
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 ()  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 ()  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 ()  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+== P3 errno: int32 System.Runtime.InteropServices.Marshal::GetLastWin32Error()
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: int32 ()  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: int32 ()  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int32 ()  forwarded by: mscorlib->netstandard, System.Runtime.InteropServices->netstandard
+   [net6] OK  defined in System.Runtime.InteropServices 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 ()  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net8] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 ()  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+   [net10] OK  defined in System.Runtime.InteropServices 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 ()  forwarded by: mscorlib->System.Runtime.InteropServices, netstandard->System.Runtime.InteropServices
+== P3 atomics: int32 System.Threading.Interlocked::CompareExchange(int32&,int32,int32)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: int32 (int32&, int32, int32)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: int32 (int32&, int32, int32)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int32 (int32&, int32, int32)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: int64 System.Threading.Interlocked::CompareExchange(int64&,int64,int64)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: int64 (int64&, int64, int64)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: int64 (int64&, int64, int64)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int64 (int64&, int64, int64)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: native int System.Threading.Interlocked::CompareExchange(native int&,native int,native int)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: native int (native int&, native int, native int)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: native int (native int&, native int, native int)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: native int (native int&, native int, native int)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int&, native int, native int)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int&, native int, native int)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int&, native int, native int)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: uint32 System.Threading.Interlocked::CompareExchange(uint32&,uint32,uint32)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Threading->mscorlib  overloads present: int32 (int32&, int32, int32) | int64 (int64&, int64, int64) | float32 (float32&, float
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard  overloads present: float64 (float64&, float64, float64) | int32 (int32&, int32, int32) | int64 (int
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard  overloads present: float64 (float64&, float64, float64) | int32 (int32&, int32, int32) | int64 (int
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: uint32 (uint32&, uint32, uint32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: uint32 (uint32&, uint32, uint32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: uint32 (uint32&, uint32, uint32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: uint8 System.Threading.Interlocked::CompareExchange(uint8&,uint8,uint8)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Threading->mscorlib  overloads present: int32 (int32&, int32, int32) | int64 (int64&, int64, int64) | float32 (float32&, float
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard  overloads present: float64 (float64&, float64, float64) | int32 (int32&, int32, int32) | int64 (int
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard  overloads present: float64 (float64&, float64, float64) | int32 (int32&, int32, int32) | int64 (int
+   [net6] NO-MEMBER  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Threading, netstandard->System.Threading  overloads present: float64 (float64&, float64, float64) | int32 (int32&, int32, int32) | i
+   [net8] NO-MEMBER  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Threading, netstandard->System.Threading  overloads present: float64 (float64&, float64, float64) | int32 (int32&, int32, int32) | i
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: uint8 (uint8&, uint8, uint8)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: int16 System.Threading.Interlocked::CompareExchange(int16&,int16,int16)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Threading->mscorlib  overloads present: int32 (int32&, int32, int32) | int64 (int64&, int64, int64) | float32 (float32&, float
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard  overloads present: float64 (float64&, float64, float64) | int32 (int32&, int32, int32) | int64 (int
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard  overloads present: float64 (float64&, float64, float64) | int32 (int32&, int32, int32) | int64 (int
+   [net6] NO-MEMBER  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Threading, netstandard->System.Threading  overloads present: float64 (float64&, float64, float64) | int32 (int32&, int32, int32) | i
+   [net8] NO-MEMBER  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Threading, netstandard->System.Threading  overloads present: float64 (float64&, float64, float64) | int32 (int32&, int32, int32) | i
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int16 (int16&, int16, int16)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: int32 System.Threading.Interlocked::Exchange(int32&,int32)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: int32 (int32&, int32)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: int32 (int32&, int32)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int32 (int32&, int32)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: int64 System.Threading.Interlocked::Exchange(int64&,int64)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: int64 (int64&, int64)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: int64 (int64&, int64)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int64 (int64&, int64)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: native int System.Threading.Interlocked::Exchange(native int&,native int)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: native int (native int&, native int)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: native int (native int&, native int)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: native int (native int&, native int)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int&, native int)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int&, native int)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int&, native int)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: uint8 System.Threading.Interlocked::Exchange(uint8&,uint8)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Threading->mscorlib  overloads present: int32 (int32&, int32) | int64 (int64&, int64) | float32 (float32&, float32) | float64 
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard  overloads present: float64 (float64&, float64) | int32 (int32&, int32) | int64 (int64&, int64) | na
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard  overloads present: float64 (float64&, float64) | int32 (int32&, int32) | int64 (int64&, int64) | na
+   [net6] NO-MEMBER  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Threading, netstandard->System.Threading  overloads present: float64 (float64&, float64) | int32 (int32&, int32) | int64 (int64&, in
+   [net8] NO-MEMBER  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  forwarded by: mscorlib->System.Threading, netstandard->System.Threading  overloads present: float64 (float64&, float64) | int32 (int32&, int32) | int64 (int64&, in
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: uint8 (uint8&, uint8)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: int32 System.Threading.Interlocked::Add(int32&,int32)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: int32 (int32&, int32)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: int32 (int32&, int32)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int32 (int32&, int32)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: int64 System.Threading.Interlocked::Add(int64&,int64)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: int64 (int64&, int64)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: int64 (int64&, int64)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int64 (int64&, int64)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: int32 System.Threading.Interlocked::And(int32&,int32)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: int64 System.Threading.Interlocked::Or(int64&,int64)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&, int64)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: void System.Threading.Interlocked::MemoryBarrierProcessWide()
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: int32 System.Threading.Volatile::Read(int32&)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: int32 (int32&)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: int32 (int32&)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int32 (int32&)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (int32&)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: int64 System.Threading.Volatile::Read(int64&)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: int64 (int64&)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: int64 (int64&)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int64 (int64&)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (int64&)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: native int System.Threading.Volatile::Read(native int&)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: native int (native int&)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: native int (native int&)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: native int (native int&)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int&)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int&)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int&)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: void System.Threading.Volatile::Write(int32&,int32)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (int32&, int32)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (int32&, int32)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (int32&, int32)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (int32&, int32)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 atomics: void System.Threading.Volatile::Write(native int&,native int)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (native int&, native int)  forwarded by: netstandard->mscorlib, System.Threading->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (native int&, native int)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (native int&, native int)  forwarded by: mscorlib->netstandard, System.Threading->netstandard
+   [net6] OK  defined in System.Threading 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (native int&, native int)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net8] OK  defined in System.Threading 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (native int&, native int)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+   [net10] OK  defined in System.Threading 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (native int&, native int)  forwarded by: mscorlib->System.Threading, netstandard->System.Threading
+== P3 pause: void System.Threading.Thread::SpinWait(int32)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (int32)  forwarded by: netstandard->mscorlib, System.Threading.Thread->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (int32)  forwarded by: mscorlib->netstandard, System.Threading.Thread->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (int32)  forwarded by: mscorlib->netstandard, System.Threading.Thread->netstandard
+   [net6] OK  defined in System.Threading.Thread 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (int32)  forwarded by: mscorlib->System.Threading.Thread, netstandard->System.Threading.Thread
+   [net8] OK  defined in System.Threading.Thread 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (int32)  forwarded by: mscorlib->System.Threading.Thread, netstandard->System.Threading.Thread
+   [net10] OK  defined in System.Threading.Thread 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (int32)  forwarded by: mscorlib->System.Threading.Thread, netstandard->System.Threading.Thread
+== P3 half: System.Half
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]
+== P3 half: float32 System.Half::op_Explicit(System.Half)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (System.Half)
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (System.Half)
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (System.Half)
+== P3 half: System.Half System.Half::op_Explicit(float32)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: System.Half (float32)
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: System.Half (float32)
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: System.Half (float32)
+== P3 half: System.Half System.Half::op_Explicit(float64)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: System.Half (float64)
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: System.Half (float64)
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: System.Half (float64)
+== P3 half: int16 System.BitConverter::HalfToInt16Bits(System.Half)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: int16 (System.Half)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: int16 (System.Half)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: int16 (System.Half)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 half: System.Half System.BitConverter::Int16BitsToHalf(int16)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: System.Half (int16)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: System.Half (int16)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: System.Half (int16)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 i128: System.Int128
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-TYPE
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]
+== P3 i128: void System.Int128::.ctor(uint64,uint64)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-TYPE
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (uint64, uint64)
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (uint64, uint64)
+== P3 i128: System.Int128 System.Int128::op_Division(System.Int128,System.Int128)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-TYPE
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: System.Int128 (System.Int128, System.Int128)
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: System.Int128 (System.Int128, System.Int128)
+== P3 i128: System.Int128 System.Int128::op_Modulus(System.Int128,System.Int128)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-TYPE
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: System.Int128 (System.Int128, System.Int128)
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: System.Int128 (System.Int128, System.Int128)
+== P3 i128: System.UInt128 System.UInt128::op_Division(System.UInt128,System.UInt128)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-TYPE
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: System.UInt128 (System.UInt128, System.UInt128)
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: System.UInt128 (System.UInt128, System.UInt128)
+== P3 i128: uint64 System.Int128::op_Explicit(System.Int128)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-TYPE
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: uint64 (System.Int128)
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: uint64 (System.Int128)
+== P3 i128: System.Int128 System.Int128::op_RightShift(System.Int128,int32)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-TYPE
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: System.Int128 (System.Int128, int32)
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: System.Int128 (System.Int128, int32)
+== P3 i128: float64 System.Int128::op_Explicit(System.Int128)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-TYPE
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (System.Int128)
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (System.Int128)
+== P3 math: float64 System.Math::FusedMultiplyAdd(float64,float64,float64)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float32 System.MathF::FusedMultiplyAdd(float32,float32,float32)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (float32, float32, float32)  forwarded by: netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (float32, float32, float32)  forwarded by: netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (float32, float32, float32)  forwarded by: netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float64 System.Math::CopySign(float64,float64)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float64 System.Math::Sqrt(float64)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: float64 (float64)  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float32 System.MathF::Sqrt(float32)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: float32 (float32)
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (float32)  forwarded by: netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (float32)  forwarded by: netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (float32)  forwarded by: netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float64 System.Math::Floor(float64)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: float64 (float64)  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float64 System.Math::Round(float64,System.MidpointRounding)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: float64 (float64, System.MidpointRounding)  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64, System.MidpointRounding)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64, System.MidpointRounding)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, System.MidpointRounding)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, System.MidpointRounding)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, System.MidpointRounding)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float64 System.Math::Min(float64,float64)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: float64 (float64, float64)  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64, float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64, float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float64 System.Math::Abs(float64)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: float64 (float64)  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float64 System.Math::ScaleB(float64,int32)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, int32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, int32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, int32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float64 System.Math::Cbrt(float64)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float64 System.Math::Log2(float64)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 math: float64 System.Math::IEEERemainder(float64,float64)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: float64 (float64, float64)  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64, float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: float64 (float64, float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float64 (float64, float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 bits: int32 System.BitConverter::SingleToInt32Bits(float32)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int32 (float32)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (float32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (float32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (float32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 bits: float32 System.BitConverter::Int32BitsToSingle(int32)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: float32 (int32)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (int32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (int32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: float32 (int32)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 bits: int64 System.BitConverter::DoubleToInt64Bits(float64)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: int64 (float64)  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: int64 (float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: int64 (float64)  forwarded by: mscorlib->netstandard, System.Runtime.Extensions->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: int64 (float64)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.Extensions->System.Runtime
+== P3 bits: int32 System.Numerics.BitOperations::PopCount(uint32)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (uint32)  forwarded by: System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (uint32)  forwarded by: System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (uint32)  forwarded by: System.Runtime.Extensions->System.Runtime
+== P3 bits: int32 System.Numerics.BitOperations::LeadingZeroCount(uint64)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (uint64)  forwarded by: System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (uint64)  forwarded by: System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (uint64)  forwarded by: System.Runtime.Extensions->System.Runtime
+== P3 bits: int32 System.Numerics.BitOperations::TrailingZeroCount(uint32)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (uint32)  forwarded by: System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (uint32)  forwarded by: System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: int32 (uint32)  forwarded by: System.Runtime.Extensions->System.Runtime
+== P3 bits: uint32 System.Numerics.BitOperations::RotateLeft(uint32,int32)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: uint32 (uint32, int32)  forwarded by: System.Runtime.Extensions->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: uint32 (uint32, int32)  forwarded by: System.Runtime.Extensions->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: uint32 (uint32, int32)  forwarded by: System.Runtime.Extensions->System.Runtime
+== P3 bits: uint32 System.Buffers.Binary.BinaryPrimitives::ReverseEndianness(uint32)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: uint32 (uint32)  forwarded by: System.Memory->netstandard
+   [net6] OK  defined in System.Memory 6.0.0.0 [cc7b13ffcd2ddd51]  sig: uint32 (uint32)  forwarded by: netstandard->System.Memory
+   [net8] OK  defined in System.Memory 8.0.0.0 [cc7b13ffcd2ddd51]  sig: uint32 (uint32)  forwarded by: netstandard->System.Memory
+   [net10] OK  defined in System.Memory 10.0.0.0 [cc7b13ffcd2ddd51]  sig: uint32 (uint32)  forwarded by: netstandard->System.Memory
+== P3 sjlj: System.Exception::.ctor()
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void ()  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== P3 sjlj: System.Collections.IDictionary System.Exception::get_Data()
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: System.Collections.IDictionary ()  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: System.Collections.IDictionary ()  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: System.Collections.IDictionary ()  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: System.Collections.IDictionary ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: System.Collections.IDictionary ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: System.Collections.IDictionary ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== P3 sjlj: System.Collections.IDictionary::set_Item(object,object)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (object, object)  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (object, object)  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (object, object)  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (object, object)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (object, object)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (object, object)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== P3 trap: void System.Diagnostics.Debugger::Break()
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void ()  forwarded by: netstandard->mscorlib, System.Diagnostics.Debug->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Diagnostics.Debug->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Diagnostics.Debug->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Diagnostics.Debug->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Diagnostics.Debug->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Diagnostics.Debug->System.Runtime
+== P4 x86: bool System.Runtime.Intrinsics.X86.Sse42::get_IsSupported()
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.Intrinsics 6.0.0.0 [cc7b13ffcd2ddd51]  sig: bool ()
+   [net8] OK  defined in System.Runtime.Intrinsics 8.0.0.0 [cc7b13ffcd2ddd51]  sig: bool ()
+   [net10] OK  defined in System.Runtime.Intrinsics 10.0.0.0 [cc7b13ffcd2ddd51]  sig: bool ()
+== P4 x86: uint32 System.Runtime.Intrinsics.X86.Sse42::Crc32(uint32,uint32)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.Intrinsics 6.0.0.0 [cc7b13ffcd2ddd51]  sig: uint32 (uint32, uint32)
+   [net8] OK  defined in System.Runtime.Intrinsics 8.0.0.0 [cc7b13ffcd2ddd51]  sig: uint32 (uint32, uint32)
+   [net10] OK  defined in System.Runtime.Intrinsics 10.0.0.0 [cc7b13ffcd2ddd51]  sig: uint32 (uint32, uint32)
+== P4 x86: uint64 System.Runtime.Intrinsics.X86.Sse42/X64::Crc32(uint64,uint64)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.Intrinsics 6.0.0.0 [cc7b13ffcd2ddd51]  sig: uint64 (uint64, uint64)
+   [net8] OK  defined in System.Runtime.Intrinsics 8.0.0.0 [cc7b13ffcd2ddd51]  sig: uint64 (uint64, uint64)
+   [net10] OK  defined in System.Runtime.Intrinsics 10.0.0.0 [cc7b13ffcd2ddd51]  sig: uint64 (uint64, uint64)
+== P4 x86: void System.Runtime.Intrinsics.X86.X86Base::Pause()
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-MEMBER  defined in System.Runtime.Intrinsics 6.0.0.0 [cc7b13ffcd2ddd51]
+   [net8] OK  defined in System.Runtime.Intrinsics 8.0.0.0 [cc7b13ffcd2ddd51]  sig: void ()
+   [net10] OK  defined in System.Runtime.Intrinsics 10.0.0.0 [cc7b13ffcd2ddd51]  sig: void ()
+== P4 x86: System.Runtime.Intrinsics.Vector128`1<uint8> System.Runtime.Intrinsics.X86.Ssse3::Shuffle(System.Runtime.Intrinsics.Vector128`1<uint8>,System.Runtime.Intrinsics.Vector128`1<uint8>)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.Intrinsics 6.0.0.0 [cc7b13ffcd2ddd51]  sig: System.Runtime.Intrinsics.Vector128`1<uint8> (System.Runtime.Intrinsics.Vector128`1<uint8>, System.Runtime.Intrinsics.Vector128`1<uint8>)
+   [net8] OK  defined in System.Runtime.Intrinsics 8.0.0.0 [cc7b13ffcd2ddd51]  sig: System.Runtime.Intrinsics.Vector128`1<uint8> (System.Runtime.Intrinsics.Vector128`1<uint8>, System.Runtime.Intrinsics.Vector128`1<uint8>)
+   [net10] OK  defined in System.Runtime.Intrinsics 10.0.0.0 [cc7b13ffcd2ddd51]  sig: System.Runtime.Intrinsics.Vector128`1<uint8> (System.Runtime.Intrinsics.Vector128`1<uint8>, System.Runtime.Intrinsics.Vector128`1<uint8>)
+== P4 arm: uint32 System.Runtime.Intrinsics.Arm.Crc32::ComputeCrc32(uint32,uint32)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.Intrinsics 6.0.0.0 [cc7b13ffcd2ddd51]  sig: uint32 (uint32, uint32)
+   [net8] OK  defined in System.Runtime.Intrinsics 8.0.0.0 [cc7b13ffcd2ddd51]  sig: uint32 (uint32, uint32)
+   [net10] OK  defined in System.Runtime.Intrinsics 10.0.0.0 [cc7b13ffcd2ddd51]  sig: uint32 (uint32, uint32)
+== P4 vec: System.Runtime.Intrinsics.Vector128`1
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] OK  defined in System.Runtime.Intrinsics 6.0.0.0 [cc7b13ffcd2ddd51]
+   [net8] OK  defined in System.Runtime.Intrinsics 8.0.0.0 [cc7b13ffcd2ddd51]
+   [net10] OK  defined in System.Runtime.Intrinsics 10.0.0.0 [cc7b13ffcd2ddd51]
+== P4 vec: System.Runtime.Intrinsics.Vector128`1<!!0> System.Runtime.Intrinsics.Vector128::Create``1(!!0)
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] NO-TYPE
+   [net6] NO-MEMBER  defined in System.Runtime.Intrinsics 6.0.0.0 [cc7b13ffcd2ddd51]  overloads present: System.Runtime.Intrinsics.Vector128`1<uint8> (uint8) | System.Runtime.Intrinsics.Vector128`1<uint8> (uint8, uint8, uint8, uint8, uint8,
+   [net8] OK  defined in System.Runtime.Intrinsics 8.0.0.0 [cc7b13ffcd2ddd51]  sig: System.Runtime.Intrinsics.Vector128`1<!!0> ``1(!!0)
+   [net10] OK  defined in System.Runtime.Intrinsics 10.0.0.0 [cc7b13ffcd2ddd51]  sig: System.Runtime.Intrinsics.Vector128`1<!!0> ``1(!!0)
+== FI-6: !!0[] System.GC::AllocateArray``1(int32,bool)
+   [net48] NO-MEMBER  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] NO-MEMBER  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] NO-MEMBER  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: !!0[] ``1(int32, bool)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: !!0[] ``1(int32, bool)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: !!0[] ``1(int32, bool)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== FI-7: bool System.Runtime.InteropServices.RuntimeInformation::IsOSPlatform(System.Runtime.InteropServices.OSPlatform)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: bool (System.Runtime.InteropServices.OSPlatform)  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices.RuntimeInformation->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: bool (System.Runtime.InteropServices.OSPlatform)  forwarded by: System.Runtime.InteropServices.RuntimeInformation->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: bool (System.Runtime.InteropServices.OSPlatform)  forwarded by: System.Runtime.InteropServices.RuntimeInformation->netstandard
+   [net6] OK  defined in System.Runtime.InteropServices.RuntimeInformation 6.0.0.0 [b03f5f7f11d50a3a]  sig: bool (System.Runtime.InteropServices.OSPlatform)  forwarded by: mscorlib->System.Runtime.InteropServices.RuntimeInformation, netstan
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: bool (System.Runtime.InteropServices.OSPlatform)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.InteropServices.RuntimeInformatio
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: bool (System.Runtime.InteropServices.OSPlatform)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime, System.Runtime.InteropServices.RuntimeInformat
+== FI-4: System.Span`1
+   [net48] NO-TYPE
+   [ns2.0] NO-TYPE
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  forwarded by: System.Memory->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  forwarded by: netstandard->System.Runtime, System.Memory->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  forwarded by: netstandard->System.Runtime, System.Memory->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  forwarded by: netstandard->System.Runtime, System.Memory->System.Runtime
+== roslyn: System.Runtime.CompilerServices.RuntimeCompatibilityAttribute::.ctor()
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void ()  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void ()  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void ()  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+== roslyn: System.Runtime.Versioning.TargetFrameworkAttribute::.ctor(string)
+   [net48] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (string)  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+   [ns2.0] OK  defined in netstandard 2.0.0.0 [cc7b13ffcd2ddd51]  sig: void (string)  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [ns2.1] OK  defined in netstandard 2.1.0.0 [cc7b13ffcd2ddd51]  sig: void (string)  forwarded by: mscorlib->netstandard, System.Runtime->netstandard
+   [net6] OK  defined in System.Runtime 6.0.0.0 [b03f5f7f11d50a3a]  sig: void (string)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net8] OK  defined in System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]  sig: void (string)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime
+   [net10] OK  defined in System.Runtime 10.0.0.0 [b03f5f7f11d50a3a]  sig: void (string)  forwarded by: mscorlib->System.Runtime, netstandard->System.Runtime

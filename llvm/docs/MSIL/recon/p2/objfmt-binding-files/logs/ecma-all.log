@@ -1,0 +1,36 @@
+== multimodule: MemberRef with a ModuleRef parent + File + ExportedType (a netmodule)
+  Framework 4.8: [] exit 81
+  .NET 8:        [Unhandled exception. System.IO.FileLoadException: Could not load file or assembly 'mod2.netmodule'. The module cannot be loaded because only single file assemblies are supported. (0x8013101E) File name: 'mod2.netmodule' ] exit 127
+  .NET 10:       [Unhandled exception. System.IO.FileLoadException: Could not load file or assembly 'mod2.netmodule'. The module cannot be loaded because only single file assemblies are supported. (0x8013101E) File name: 'mod2.netmodule' ] exit 127
+== forwarder: ExportedType type forwarder in a facade assembly 'msil.extern'
+  Framework 4.8: [] exit 104
+  .NET 8:        [] exit 104
+  .NET 10:       [] exit 104
+== globalref: MemberRef to a global method of another assembly through TypeRef [b]'<Module>'
+  Framework 4.8: [ Unhandled Exception: System.TypeLoadException: Could not load type '<Module>' from assembly 'b, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null'. ] exit 127
+  .NET 8:        [Unhandled exception. System.TypeLoadException: Could not load type '<Module>' from assembly 'b, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null'. ] exit 127
+== cctor-cycle: lazy type initializers of two assemblies that read each other's address fields
+  Framework 4.8: [2000 1000 ] exit 0
+  .NET 8:        [2000 1000 ] exit 0
+== unlinked: an object run without linking (ImplMap stub on 'msil.unresolved', MemberRef on [msil.extern])
+  Framework 4.8: [System.DllNotFoundException: Unable to load DLL 'msil.unresolved': The specified module could not be found. (Exception from HRESULT: 0x8007007E) System.IO.FileNotFoundException: Could not load file or assembly 'msil.extern, Version=0.0.0.0,] exit 0
+  .NET 8:        [System.DllNotFoundException: Unable to load DLL 'msil.unresolved' or one of its dependencies: The specified module could not be found. (0x8007007E) System.IO.FileNotFoundException: Could not load file or assembly 'msil.extern, Version=0.0.0] exit 0
+== carriers: link info in custom attributes, a resource, a PE section, an embedded Portable PDB, an extra metadata stream, EnC tables
+  attr       1536 bytes  read back: Weak on 0x06000001, value 4 bytes; Relocs on 0x04000001, value 43 bytes
+  resource   1536 bytes  read back: msil.link: {"weak":["f"],"relocs":[[0,"g",0]]}
+  section    2048 bytes  read back: .msilnk at RVA 0x4000: {"weak":["f"],"relocs":[[0,"g",0]]}
+  pdb        1536 bytes  read back: 0x06000001: weak; 0x04000001: {"weak":["f"],"relocs":[[0,"g",0]]}; 0x00000001: ctors:
+  stream     1536 bytes  read back: streams [#~, #Strings, #US, #GUID, #Blob, #MSIL], SRM methods 1, #MSIL: {"weak":["f"],"relocs":[[0,"g",0]]}
+  enc        1536 bytes  read back: first stream #-, EncLog rows 2, EncMap rows 2
+  attr     Desktop: f() = 1
+  resource Desktop: f() = 1
+  section  Desktop: f() = 1
+  pdb      Desktop: f() = 1
+  stream   Desktop: f() = 1
+  enc      Desktop: Could not load file or assembly '1536 bytes loaded from Anonymously Hosted DynamicMethods Assembly, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null' or one of its dependencies. An attempt was made to load a program with an incorrect format.Exception calling "Load" with "1" argument(s): "Could not load file or assembly '1536 bytes loaded from Anonymously Hosted DynamicMethods Assembly, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null' or one of its dependencies. An attempt was made to load a program with an incorrect format."
+  attr     Core: f() = 1
+  resource Core: f() = 1
+  section  Core: f() = 1
+  pdb      Core: f() = 1
+  stream   Core: f() = 1
+  enc      Core: Bad IL format.Exception calling "Load" with "1" argument(s): "Bad IL format."

@@ -1,0 +1,35 @@
+== P1 core: System.Object
+   [net8-mscorlib-facade-only] FORWARDED-TO-MISSING(System.Runtime)  via forwarders: mscorlib  forwarded by: mscorlib->System.Runtime
+   [net8-facade+SRI] FORWARDED-TO-MISSING(System.Runtime)  via forwarders: mscorlib  forwarded by: mscorlib->System.Runtime
+   [net48-mscorlib+net8-SR+SRI] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  defined in several: mscorlib 4.0.0.0 [b77a5c561934e089]; System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]
+   [net48-facades-only] FORWARDED-TO-MISSING(mscorlib)  via forwarders: netstandard  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+== P1 image base: System.ValueType
+   [net8-mscorlib-facade-only] FORWARDED-TO-MISSING(System.Runtime)  via forwarders: mscorlib  forwarded by: mscorlib->System.Runtime
+   [net8-facade+SRI] FORWARDED-TO-MISSING(System.Runtime)  via forwarders: mscorlib  forwarded by: mscorlib->System.Runtime
+   [net48-mscorlib+net8-SR+SRI] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  defined in several: mscorlib 4.0.0.0 [b77a5c561934e089]; System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]
+   [net48-facades-only] FORWARDED-TO-MISSING(mscorlib)  via forwarders: netstandard  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+== P1 cctor+Main: native int System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+   [net8-mscorlib-facade-only] FORWARDED-TO-MISSING(System.Runtime.InteropServices)  via forwarders: mscorlib  forwarded by: mscorlib->System.Runtime.InteropServices
+   [net8-facade+SRI] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int (native int)  forwarded by: mscorlib->System.Runtime.InteropServices
+   [net48-mscorlib+net8-SR+SRI] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: native int (native int)  defined in several: mscorlib 4.0.0.0 [b77a5c561934e089]; System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]
+   [net48-facades-only] FORWARDED-TO-MISSING(mscorlib)  via forwarders: netstandard  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices->mscorlib
+== P1 Main: native int System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string)
+   [net8-mscorlib-facade-only] FORWARDED-TO-MISSING(System.Runtime.InteropServices)  via forwarders: mscorlib  forwarded by: mscorlib->System.Runtime.InteropServices
+   [net8-facade+SRI] OK  defined in System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]  sig: native int (string)  forwarded by: mscorlib->System.Runtime.InteropServices
+   [net48-mscorlib+net8-SR+SRI] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: native int (string)  defined in several: mscorlib 4.0.0.0 [b77a5c561934e089]; System.Runtime.InteropServices 8.0.0.0 [b03f5f7f11d50a3a]
+   [net48-facades-only] FORWARDED-TO-MISSING(mscorlib)  via forwarders: netstandard  forwarded by: netstandard->mscorlib, System.Runtime.InteropServices->mscorlib
+== P1 Main: string[] System.Environment::GetCommandLineArgs()
+   [net8-mscorlib-facade-only] FORWARDED-TO-MISSING(System.Runtime)  via forwarders: mscorlib  forwarded by: mscorlib->System.Runtime
+   [net8-facade+SRI] FORWARDED-TO-MISSING(System.Runtime)  via forwarders: mscorlib  forwarded by: mscorlib->System.Runtime
+   [net48-mscorlib+net8-SR+SRI] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: string[] ()  defined in several: mscorlib 4.0.0.0 [b77a5c561934e089]; System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]
+   [net48-facades-only] FORWARDED-TO-MISSING(mscorlib)  via forwarders: netstandard  forwarded by: netstandard->mscorlib, System.Runtime.Extensions->mscorlib
+== P1 memmove: void System.Buffer::MemoryCopy(void*,void*,int64,int64)
+   [net8-mscorlib-facade-only] FORWARDED-TO-MISSING(System.Runtime)  via forwarders: mscorlib  forwarded by: mscorlib->System.Runtime
+   [net8-facade+SRI] FORWARDED-TO-MISSING(System.Runtime)  via forwarders: mscorlib  forwarded by: mscorlib->System.Runtime
+   [net48-mscorlib+net8-SR+SRI] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void (void*, void*, int64, int64)  defined in several: mscorlib 4.0.0.0 [b77a5c561934e089]; System.Runtime 8.0.0.0 [b03f5f7f11d50a3a]
+   [net48-facades-only] FORWARDED-TO-MISSING(mscorlib)  via forwarders: netstandard  forwarded by: netstandard->mscorlib, System.Runtime->mscorlib
+== P1 fence: void System.Threading.Interlocked::MemoryBarrier()
+   [net8-mscorlib-facade-only] FORWARDED-TO-MISSING(System.Threading)  via forwarders: mscorlib  forwarded by: mscorlib->System.Threading
+   [net8-facade+SRI] FORWARDED-TO-MISSING(System.Threading)  via forwarders: mscorlib  forwarded by: mscorlib->System.Threading
+   [net48-mscorlib+net8-SR+SRI] OK  defined in mscorlib 4.0.0.0 [b77a5c561934e089]  sig: void ()  defined in several: mscorlib 4.0.0.0 [b77a5c561934e089]; System.Threading 8.0.0.0 [b03f5f7f11d50a3a]
+   [net48-facades-only] FORWARDED-TO-MISSING(mscorlib)  via forwarders: netstandard  forwarded by: netstandard->mscorlib, System.Threading->mscorlib

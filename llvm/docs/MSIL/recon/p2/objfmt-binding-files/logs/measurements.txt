@@ -1,0 +1,48 @@
+objfmt-binding measurements (host: 4C/8T, Windows 11; shared machine, numbers are noisy)
+
+1. M1 corpus through the option-2 pipeline (tools/corpus.sh: clang -emit-llvm, irinfo prep,
+   Phase-1 llc, objectify, Framework ilasm -> one CIL object per program; msilobj link;
+   msil-run.py --expect against the committed .expected transcripts):
+     x86_64-pc-windows-msvc-msil -O2: pass 93 fail 0  (.NET 8 and .NET Framework 4.8)
+     x86_64-pc-windows-msvc-msil -O0: pass 93 fail 0  (.NET 8 and .NET Framework 4.8)
+   Summed over every link (91 distinct program names; two names occur twice in msil/test/M1):
+     -O0: IL bytes 416251, token sites 7546, TypeDefOrRef coded indices in signatures 0,
+          EH clauses 0, user strings 0, data relocations 369
+     -O2: IL bytes 314296, token sites 7975, coded indices 0, EH clauses 0, user strings 0,
+          data relocations 320
+   msilobj ilstats over the objects:
+     -O0: 91 files, 1338 methods, 416251 IL bytes, 192987 instructions, 7546 token sites
+          (1.8 per 100 IL bytes; tokens are 7.3% of IL bytes); MethodDef 4358, Field 2859,
+          MemberRef 165, StandAloneSig 164; wasm-style relocation records ~28543 bytes (6.9% of IL)
+     -O2: 91 files, 1002 methods, 314296 IL bytes, 152133 instructions, 7975 token sites
+          (2.5 per 100 IL bytes; 10.1%); Field 3921, MethodDef 3720, StandAloneSig 183,
+          MemberRef 151; wasm-style relocation records ~30298 bytes (9.6% of IL)
+
+2. Link throughput (bench/scale-gen.py 200 50: 200 objects x 50 functions, 3 cross-object calls
+   and 2 cross-object global reads per function, 8 function-pointer data relocations per object;
+   4.0 MB of ilasm-built objects):
+     link phase 380-580 ms, whole msilobj process 1.2-1.5 s (C# prototype, .NET 10, includes
+     JIT of the tool); output 843776 bytes, 10003 methods, 440002 IL bytes, 60000 token sites
+     rewritten, 1600 data relocations; the output runs on .NET 8 (exit 0).
+   Phase-1 codegen for comparison (LTO-only cost): llc -O2 over the 91 corpus modules
+     12.4 s, 136 ms per module including ~39 ms process start (Release+assertions build).
+
+3. Option 5 (calli through a startup-filled slot) vs direct calls (bench/got-Program.cs,
+   400M iterations of (x<<1)+1, three rounds each; ranges over rounds and two sessions):
+     .NET 8 tiered:          inlined call 193-302 ms, non-inlined call 503-1114 ms, calli 787-1577 ms
+     .NET 8 TC=0:            inlined call 189-259 ms, non-inlined call 673-1185 ms, calli 820-1499 ms
+     .NET Framework 4.8:     inlined call 286-449 ms, non-inlined call 854-1301 ms, calli 1010-1683 ms
+
+4. Option 4 startup cost (bench/startup-gen.py, bench/startup-bench.py; 21 runs, min/median):
+     .NET 8,   one assembly with 200 classes:  min 101 ms, median 118 ms
+     .NET 8,   200 one-class assemblies:       min 280 ms, median 307 ms   (~0.9 ms per assembly)
+     NETFX 4.8, one assembly:                  min  53 ms, median  67 ms
+     NETFX 4.8, 200 assemblies:                min 268 ms, median 302 ms   (~1.1 ms per assembly)
+
+5. Cross-object signature mismatch (sigmismatch/caller.c declares int f(int, int), callee.c
+   defines int f(int)): the option-2 prototype binds by name only, so the call site gets the
+   definition's MethodDef token with two arguments pushed:
+     .NET 8: System.InvalidProgramException: Common Language Runtime detected an invalid program.
+             at main()  -> exit 127 (natively the extra argument is ignored and the result is 41)
+   msil-ld has to compare signatures when it binds (wasm-ld: lld/wasm/SymbolTable.cpp
+   reportFunctionSignatureMismatch, getFunctionVariant) and diagnose or emit an adapter.

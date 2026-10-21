@@ -1,0 +1,79 @@
+# nisym on glibc 2.43 (Ubuntu 26.04 WSL) libc.so.6, libm.so.6, libpthread.so.0, libdl.so.2, libz.so.1.3.1
+# command: nisym libc.so.6 libm.so.6 libpthread.so.0 libdl.so.2 libz.so.1.3.1 --query=...
+# libc.so.6: ELF shared object, DT_SONAME 'libc.so.6', DT_NEEDED [ld-linux-x86-64.so.2]
+#   3123 defined dynamic symbols
+# libm.so.6: ELF shared object, DT_SONAME 'libm.so.6', DT_NEEDED [libc.so.6, ld-linux-x86-64.so.2]
+#   1372 defined dynamic symbols
+# libpthread.so.0: ELF shared object, DT_SONAME 'libpthread.so.0', DT_NEEDED [libc.so.6]
+#   12 defined dynamic symbols
+# libdl.so.2: ELF shared object, DT_SONAME 'libdl.so.2', DT_NEEDED [libc.so.6]
+#   3 defined dynamic symbols
+# libz.so.1.3.1: ELF shared object, DT_SONAME 'libz.so.1', DT_NEEDED [libc.so.6]
+#   88 defined dynamic symbols
+puts:
+  => puts: pinvokeimpl("libc.so.6") [func, puts@@GLIBC_2.2.5] from libc.so.6
+printf:
+  => printf: pinvokeimpl("libc.so.6") [func, printf@@GLIBC_2.2.5] from libc.so.6
+vprintf:
+  => vprintf: pinvokeimpl("libc.so.6") [func, vprintf@@GLIBC_2.2.5] from libc.so.6
+malloc:
+  => malloc: pinvokeimpl("libc.so.6") [func, malloc@@GLIBC_2.2.5] from libc.so.6
+memcpy:
+     memcpy: NOT BINDABLE: only a non-default version (memcpy@GLIBC_2.2.5); dlsym cannot return it [func, memcpy@GLIBC_2.2.5] from libc.so.6
+  => memcpy: pinvokeimpl("libc.so.6") [ifunc, memcpy@@GLIBC_2.14] from libc.so.6
+strlen:
+  => strlen: pinvokeimpl("libc.so.6") [ifunc, strlen@@GLIBC_2.2.5] from libc.so.6
+stdout:
+  => stdout: pinvokeimpl("libc.so.6") [data, stdout@@GLIBC_2.2.5] from libc.so.6
+errno:
+     errno: NOT BINDABLE: thread-local data [tls, errno@@GLIBC_PRIVATE] from libc.so.6
+  => errno: link error (no bindable definition)
+__errno_location:
+  => __errno_location: pinvokeimpl("libc.so.6") [func, __errno_location@@GLIBC_2.2.5] from libc.so.6
+environ:
+  => environ: pinvokeimpl("libc.so.6") [data, environ@@GLIBC_2.2.5, weak] from libc.so.6
+atexit: UNDEFINED (link error)
+__cxa_atexit:
+  => __cxa_atexit: pinvokeimpl("libc.so.6") [func, __cxa_atexit@@GLIBC_2.2.5] from libc.so.6
+sqrt:
+  => sqrt: pinvokeimpl("libm.so.6") [func, sqrt@@GLIBC_2.2.5, weak] from libm.so.6
+sqrtf:
+  => sqrtf: pinvokeimpl("libm.so.6") [func, sqrtf@@GLIBC_2.43] from libm.so.6
+     sqrtf: NOT BINDABLE: only a non-default version (sqrtf@GLIBC_2.2.5); dlsym cannot return it [func, sqrtf@GLIBC_2.2.5] from libm.so.6
+exp:
+     exp: NOT BINDABLE: only a non-default version (exp@GLIBC_2.2.5); dlsym cannot return it [func, exp@GLIBC_2.2.5] from libm.so.6
+  => exp: pinvokeimpl("libm.so.6") [func, exp@@GLIBC_2.29] from libm.so.6
+hypot:
+     hypot: NOT BINDABLE: only a non-default version (hypot@GLIBC_2.2.5); dlsym cannot return it [func, hypot@GLIBC_2.2.5] from libm.so.6
+  => hypot: pinvokeimpl("libm.so.6") [func, hypot@@GLIBC_2.35] from libm.so.6
+matherr:
+     matherr: NOT BINDABLE: only a non-default version (matherr@GLIBC_2.2.5); dlsym cannot return it [func, matherr@GLIBC_2.2.5, weak] from libm.so.6
+  => matherr: link error (no bindable definition)
+signgam:
+  => signgam: pinvokeimpl("libm.so.6") [data, signgam@@GLIBC_2.2.5, weak] from libm.so.6
+_LIB_VERSION:
+     _LIB_VERSION: NOT BINDABLE: only a non-default version (_LIB_VERSION@GLIBC_2.2.5); dlsym cannot return it [data, _LIB_VERSION@GLIBC_2.2.5] from libm.so.6
+  => _LIB_VERSION: link error (no bindable definition)
+pthread_create:
+     pthread_create: NOT BINDABLE: only a non-default version (pthread_create@GLIBC_2.2.5); dlsym cannot return it [func, pthread_create@GLIBC_2.2.5] from libc.so.6
+  => pthread_create: pinvokeimpl("libc.so.6") [func, pthread_create@@GLIBC_2.34] from libc.so.6
+dlopen:
+     dlopen: NOT BINDABLE: only a non-default version (dlopen@GLIBC_2.2.5); dlsym cannot return it [func, dlopen@GLIBC_2.2.5] from libc.so.6
+  => dlopen: pinvokeimpl("libc.so.6") [func, dlopen@@GLIBC_2.34] from libc.so.6
+dlsym:
+  => dlsym: pinvokeimpl("libc.so.6") [func, dlsym@@GLIBC_2.34] from libc.so.6
+     dlsym: NOT BINDABLE: only a non-default version (dlsym@GLIBC_2.2.5); dlsym cannot return it [func, dlsym@GLIBC_2.2.5] from libc.so.6
+stat:
+  => stat: pinvokeimpl("libc.so.6") [func, stat@@GLIBC_2.33, weak] from libc.so.6
+fstat:
+  => fstat: pinvokeimpl("libc.so.6") [func, fstat@@GLIBC_2.33, weak] from libc.so.6
+__xstat:
+  => __xstat: pinvokeimpl("libc.so.6") [func, __xstat@@GLIBC_2.2.5] from libc.so.6
+zlibVersion:
+  => zlibVersion: pinvokeimpl("libz.so.1") [func] from libz.so.1.3.1
+_errno: UNDEFINED (link error)
+__acrt_iob_func: UNDEFINED (link error)
+optarg:
+  => optarg: pinvokeimpl("libc.so.6") [data, optarg@@GLIBC_2.2.5] from libc.so.6
+timezone:
+  => timezone: pinvokeimpl("libc.so.6") [data, timezone@@GLIBC_2.2.5, weak] from libc.so.6

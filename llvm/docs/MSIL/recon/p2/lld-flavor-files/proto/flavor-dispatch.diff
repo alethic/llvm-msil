@@ -1,0 +1,29 @@
+--- a/lld/include/lld/Common/Driver.h	2026-10-12 10:31:18.671484200 -0500
++++ b/lld/include/lld/Common/Driver.h	2026-10-20 23:27:22.166571200 -0500
+@@ -20,6 +20,7 @@
+   WinLink, // -flavor link
+   Darwin,  // -flavor darwin
+   Wasm,    // -flavor wasm
++  MSIL,    // -flavor msil
+ };
+ 
+ using Driver = bool (*)(llvm::ArrayRef<const char *>, llvm::raw_ostream &,
+--- a/lld/Common/DriverDispatcher.cpp	2026-10-12 10:31:18.613351700 -0500
++++ b/lld/Common/DriverDispatcher.cpp	2026-10-20 23:27:22.166571200 -0500
+@@ -32,6 +32,7 @@
+   return StringSwitch<Flavor>(s)
+       .CasesLower({"ld", "ld.lld", "gnu"}, Gnu)
+       .CasesLower({"wasm", "ld-wasm"}, Wasm)
++      .CasesLower({"msil", "ld-msil"}, MSIL)
+       .CaseLower("link", WinLink)
+       .CasesLower({"ld64", "ld64.lld", "darwin"}, Darwin)
+       .Default(Invalid);
+@@ -118,7 +119,7 @@
+   if (f == Invalid) {
+     err("lld is a generic driver.\n"
+         "Invoke ld.lld (Unix), ld64.lld (macOS), lld-link (Windows), wasm-ld"
+-        " (WebAssembly) instead");
++        " (WebAssembly), msil-ld (MSIL) instead");
+     return Invalid;
+   }
+   return f;

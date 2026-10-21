@@ -1,0 +1,211 @@
+== r1-net8 0.0.0.0 [null] (r1-net8.exe)
+   AssemblyRef 1: System.Runtime 8.0.0.0 pkt=b03f5f7f11d50a3a flags=0
+   AssemblyRef 2: System.Runtime.InteropServices 8.0.0.0 pkt=b03f5f7f11d50a3a flags=0
+   AssemblyRef 3: System.Threading 8.0.0.0 pkt=b03f5f7f11d50a3a flags=0
+   TypeRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute -> [System.Runtime]
+   TypeRef System.Diagnostics.DebuggableAttribute -> [System.Runtime]
+   TypeRef System.Diagnostics.DebuggableAttribute/DebuggingModes -> [nested in System.Diagnostics.DebuggableAttribute]
+   TypeRef System.Security.Permissions.SecurityAction -> [System.Runtime]
+   TypeRef System.Security.Permissions.SecurityPermissionAttribute -> [System.Runtime]
+   TypeRef System.Security.UnverifiableCodeAttribute -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.RefSafetyRulesAttribute -> [System.Runtime]
+   TypeRef System.ValueType -> [System.Runtime]
+   TypeRef System.Type -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.FixedBufferAttribute -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.CompilerGeneratedAttribute -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.UnsafeValueTypeAttribute -> [System.Runtime]
+   TypeRef System.Object -> [System.Runtime]
+   TypeRef System.Runtime.InteropServices.Marshal -> [System.Runtime.InteropServices]
+   TypeRef System.Environment -> [System.Runtime]
+   TypeRef System.Buffer -> [System.Runtime]
+   TypeRef System.Threading.Interlocked -> [System.Threading]
+   MemberRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute::.ctor : void (int32)
+   MemberRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute::.ctor : void ()
+   MemberRef System.Diagnostics.DebuggableAttribute::.ctor : void (System.Diagnostics.DebuggableAttribute/DebuggingModes)
+   MemberRef System.Security.Permissions.SecurityPermissionAttribute::.ctor : void (System.Security.Permissions.SecurityAction)
+   MemberRef System.Security.UnverifiableCodeAttribute::.ctor : void ()
+   MemberRef System.Runtime.CompilerServices.RefSafetyRulesAttribute::.ctor : void (int32)
+   MemberRef System.Runtime.CompilerServices.FixedBufferAttribute::.ctor : void (System.Type, int32)
+   MemberRef System.Runtime.CompilerServices.CompilerGeneratedAttribute::.ctor : void ()
+   MemberRef System.Runtime.CompilerServices.UnsafeValueTypeAttribute::.ctor : void ()
+   MemberRef System.Runtime.InteropServices.Marshal::AllocHGlobal : native int (native int)
+   MemberRef System.Environment::GetCommandLineArgs : string[] ()
+   MemberRef System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi : native int (string)
+   MemberRef System.Buffer::MemoryCopy : void (void*, void*, int64, int64)
+   MemberRef System.Threading.Interlocked::MemoryBarrier : void ()
+== r2-net48 0.0.0.0 [null] (r2-net48.exe)
+   AssemblyRef 1: mscorlib 4.0.0.0 pkt=b77a5c561934e089 flags=0
+   TypeRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute -> [mscorlib]
+   TypeRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute -> [mscorlib]
+   TypeRef System.Diagnostics.DebuggableAttribute -> [mscorlib]
+   TypeRef System.Diagnostics.DebuggableAttribute/DebuggingModes -> [nested in System.Diagnostics.DebuggableAttribute]
+   TypeRef System.Security.Permissions.SecurityAction -> [mscorlib]
+   TypeRef System.Security.Permissions.SecurityPermissionAttribute -> [mscorlib]
+   TypeRef System.Security.UnverifiableCodeAttribute -> [mscorlib]
+   TypeRef System.Runtime.CompilerServices.CompilerGeneratedAttribute -> [mscorlib]
+   TypeRef System.Attribute -> [mscorlib]
+   TypeRef System.AttributeTargets -> [mscorlib]
+   TypeRef System.AttributeUsageAttribute -> [mscorlib]
+   TypeRef System.ValueType -> [mscorlib]
+   TypeRef System.Type -> [mscorlib]
+   TypeRef System.Runtime.CompilerServices.FixedBufferAttribute -> [mscorlib]
+   TypeRef System.Runtime.CompilerServices.UnsafeValueTypeAttribute -> [mscorlib]
+   TypeRef System.Object -> [mscorlib]
+   TypeRef System.IntPtr -> [mscorlib]
+   TypeRef System.Runtime.InteropServices.Marshal -> [mscorlib]
+   TypeRef System.Environment -> [mscorlib]
+   TypeRef System.Buffer -> [mscorlib]
+   TypeRef System.Threading.Interlocked -> [mscorlib]
+   MemberRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute::.ctor : void (int32)
+   MemberRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute::.ctor : void ()
+   MemberRef System.Diagnostics.DebuggableAttribute::.ctor : void (System.Diagnostics.DebuggableAttribute/DebuggingModes)
+   MemberRef System.Security.Permissions.SecurityPermissionAttribute::.ctor : void (System.Security.Permissions.SecurityAction)
+   MemberRef System.Security.UnverifiableCodeAttribute::.ctor : void ()
+   MemberRef System.Runtime.CompilerServices.CompilerGeneratedAttribute::.ctor : void ()
+   MemberRef System.AttributeUsageAttribute::.ctor : void (System.AttributeTargets)
+   MemberRef System.Runtime.CompilerServices.FixedBufferAttribute::.ctor : void (System.Type, int32)
+   MemberRef System.Runtime.CompilerServices.UnsafeValueTypeAttribute::.ctor : void ()
+   MemberRef System.Attribute::.ctor : void ()
+   MemberRef System.IntPtr::op_Explicit : native int (int32)
+   MemberRef System.Runtime.InteropServices.Marshal::AllocHGlobal : native int (native int)
+   MemberRef System.Environment::GetCommandLineArgs : string[] ()
+   MemberRef System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi : native int (string)
+   MemberRef System.IntPtr::op_Explicit : void* (native int)
+   MemberRef System.Buffer::MemoryCopy : void (void*, void*, int64, int64)
+   MemberRef System.Threading.Interlocked::MemoryBarrier : void ()
+== r3-ns20 0.0.0.0 [null] (r3-ns20.exe)
+   AssemblyRef 1: netstandard 2.0.0.0 pkt=cc7b13ffcd2ddd51 flags=0
+   TypeRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute -> [netstandard]
+   TypeRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute -> [netstandard]
+   TypeRef System.Diagnostics.DebuggableAttribute -> [netstandard]
+   TypeRef System.Diagnostics.DebuggableAttribute/DebuggingModes -> [nested in System.Diagnostics.DebuggableAttribute]
+   TypeRef System.Security.Permissions.SecurityAction -> [netstandard]
+   TypeRef System.Security.Permissions.SecurityPermissionAttribute -> [netstandard]
+   TypeRef System.Security.UnverifiableCodeAttribute -> [netstandard]
+   TypeRef System.Runtime.CompilerServices.CompilerGeneratedAttribute -> [netstandard]
+   TypeRef System.Attribute -> [netstandard]
+   TypeRef System.AttributeTargets -> [netstandard]
+   TypeRef System.AttributeUsageAttribute -> [netstandard]
+   TypeRef System.ValueType -> [netstandard]
+   TypeRef System.Type -> [netstandard]
+   TypeRef System.Runtime.CompilerServices.FixedBufferAttribute -> [netstandard]
+   TypeRef System.Runtime.CompilerServices.UnsafeValueTypeAttribute -> [netstandard]
+   TypeRef System.Object -> [netstandard]
+   TypeRef System.IntPtr -> [netstandard]
+   TypeRef System.Runtime.InteropServices.Marshal -> [netstandard]
+   TypeRef System.Environment -> [netstandard]
+   TypeRef System.Buffer -> [netstandard]
+   TypeRef System.Threading.Interlocked -> [netstandard]
+   MemberRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute::.ctor : void (int32)
+   MemberRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute::.ctor : void ()
+   MemberRef System.Diagnostics.DebuggableAttribute::.ctor : void (System.Diagnostics.DebuggableAttribute/DebuggingModes)
+   MemberRef System.Security.Permissions.SecurityPermissionAttribute::.ctor : void (System.Security.Permissions.SecurityAction)
+   MemberRef System.Security.UnverifiableCodeAttribute::.ctor : void ()
+   MemberRef System.Runtime.CompilerServices.CompilerGeneratedAttribute::.ctor : void ()
+   MemberRef System.AttributeUsageAttribute::.ctor : void (System.AttributeTargets)
+   MemberRef System.Runtime.CompilerServices.FixedBufferAttribute::.ctor : void (System.Type, int32)
+   MemberRef System.Runtime.CompilerServices.UnsafeValueTypeAttribute::.ctor : void ()
+   MemberRef System.Attribute::.ctor : void ()
+   MemberRef System.IntPtr::op_Explicit : native int (int32)
+   MemberRef System.Runtime.InteropServices.Marshal::AllocHGlobal : native int (native int)
+   MemberRef System.Environment::GetCommandLineArgs : string[] ()
+   MemberRef System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi : native int (string)
+   MemberRef System.IntPtr::op_Explicit : void* (native int)
+   MemberRef System.Buffer::MemoryCopy : void (void*, void*, int64, int64)
+   MemberRef System.Threading.Interlocked::MemoryBarrier : void ()
+== r11-vscsc-default 0.0.0.0 [null] (r11-vscsc-default.exe)
+   AssemblyRef 1: mscorlib 4.0.0.0 pkt=b77a5c561934e089 flags=0
+   TypeRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute -> [mscorlib]
+   TypeRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute -> [mscorlib]
+   TypeRef System.Diagnostics.DebuggableAttribute -> [mscorlib]
+   TypeRef System.Diagnostics.DebuggableAttribute/DebuggingModes -> [nested in System.Diagnostics.DebuggableAttribute]
+   TypeRef System.Security.Permissions.SecurityAction -> [mscorlib]
+   TypeRef System.Security.Permissions.SecurityPermissionAttribute -> [mscorlib]
+   TypeRef System.Security.UnverifiableCodeAttribute -> [mscorlib]
+   TypeRef System.Runtime.CompilerServices.CompilerGeneratedAttribute -> [mscorlib]
+   TypeRef System.Attribute -> [mscorlib]
+   TypeRef System.AttributeTargets -> [mscorlib]
+   TypeRef System.AttributeUsageAttribute -> [mscorlib]
+   TypeRef System.ValueType -> [mscorlib]
+   TypeRef System.Type -> [mscorlib]
+   TypeRef System.Runtime.CompilerServices.FixedBufferAttribute -> [mscorlib]
+   TypeRef System.Runtime.CompilerServices.UnsafeValueTypeAttribute -> [mscorlib]
+   TypeRef System.Object -> [mscorlib]
+   TypeRef System.IntPtr -> [mscorlib]
+   TypeRef System.Runtime.InteropServices.Marshal -> [mscorlib]
+   TypeRef System.Environment -> [mscorlib]
+   TypeRef System.Buffer -> [mscorlib]
+   TypeRef System.Threading.Interlocked -> [mscorlib]
+   MemberRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute::.ctor : void (int32)
+   MemberRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute::.ctor : void ()
+   MemberRef System.Diagnostics.DebuggableAttribute::.ctor : void (System.Diagnostics.DebuggableAttribute/DebuggingModes)
+   MemberRef System.Security.Permissions.SecurityPermissionAttribute::.ctor : void (System.Security.Permissions.SecurityAction)
+   MemberRef System.Security.UnverifiableCodeAttribute::.ctor : void ()
+   MemberRef System.Runtime.CompilerServices.CompilerGeneratedAttribute::.ctor : void ()
+   MemberRef System.AttributeUsageAttribute::.ctor : void (System.AttributeTargets)
+   MemberRef System.Runtime.CompilerServices.FixedBufferAttribute::.ctor : void (System.Type, int32)
+   MemberRef System.Runtime.CompilerServices.UnsafeValueTypeAttribute::.ctor : void ()
+   MemberRef System.Attribute::.ctor : void ()
+   MemberRef System.IntPtr::op_Explicit : native int (int32)
+   MemberRef System.Runtime.InteropServices.Marshal::AllocHGlobal : native int (native int)
+   MemberRef System.Environment::GetCommandLineArgs : string[] ()
+   MemberRef System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi : native int (string)
+   MemberRef System.IntPtr::op_Explicit : void* (native int)
+   MemberRef System.Buffer::MemoryCopy : void (void*, void*, int64, int64)
+   MemberRef System.Threading.Interlocked::MemoryBarrier : void ()
+== r14b-net48-mscorlib-first+net8 0.0.0.0 [null] (r14b-net48-mscorlib-first+net8.exe)
+   AssemblyRef 1: System.Runtime 8.0.0.0 pkt=b03f5f7f11d50a3a flags=0
+   AssemblyRef 2: System.Runtime.InteropServices 8.0.0.0 pkt=b03f5f7f11d50a3a flags=0
+   AssemblyRef 3: System.Threading 8.0.0.0 pkt=b03f5f7f11d50a3a flags=0
+   TypeRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute -> [System.Runtime]
+   TypeRef System.Diagnostics.DebuggableAttribute -> [System.Runtime]
+   TypeRef System.Diagnostics.DebuggableAttribute/DebuggingModes -> [nested in System.Diagnostics.DebuggableAttribute]
+   TypeRef System.Security.Permissions.SecurityAction -> [System.Runtime]
+   TypeRef System.Security.Permissions.SecurityPermissionAttribute -> [System.Runtime]
+   TypeRef System.Security.UnverifiableCodeAttribute -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.RefSafetyRulesAttribute -> [System.Runtime]
+   TypeRef System.ValueType -> [System.Runtime]
+   TypeRef System.Type -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.FixedBufferAttribute -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.CompilerGeneratedAttribute -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.UnsafeValueTypeAttribute -> [System.Runtime]
+   TypeRef System.Object -> [System.Runtime]
+   TypeRef System.Runtime.InteropServices.Marshal -> [System.Runtime.InteropServices]
+   TypeRef System.Environment -> [System.Runtime]
+   TypeRef System.Buffer -> [System.Runtime]
+   TypeRef System.Threading.Interlocked -> [System.Threading]
+   MemberRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute::.ctor : void (int32)
+   MemberRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute::.ctor : void ()
+   MemberRef System.Diagnostics.DebuggableAttribute::.ctor : void (System.Diagnostics.DebuggableAttribute/DebuggingModes)
+   MemberRef System.Security.Permissions.SecurityPermissionAttribute::.ctor : void (System.Security.Permissions.SecurityAction)
+   MemberRef System.Security.UnverifiableCodeAttribute::.ctor : void ()
+   MemberRef System.Runtime.CompilerServices.RefSafetyRulesAttribute::.ctor : void (int32)
+   MemberRef System.Runtime.CompilerServices.FixedBufferAttribute::.ctor : void (System.Type, int32)
+   MemberRef System.Runtime.CompilerServices.CompilerGeneratedAttribute::.ctor : void ()
+   MemberRef System.Runtime.CompilerServices.UnsafeValueTypeAttribute::.ctor : void ()
+   MemberRef System.Runtime.InteropServices.Marshal::AllocHGlobal : native int (native int)
+   MemberRef System.Environment::GetCommandLineArgs : string[] ()
+   MemberRef System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi : native int (string)
+   MemberRef System.Buffer::MemoryCopy : void (void*, void*, int64, int64)
+   MemberRef System.Threading.Interlocked::MemoryBarrier : void ()
+== r17-fma-net8 0.0.0.0 [null] (r17-fma-net8.exe)
+   AssemblyRef 1: System.Runtime 8.0.0.0 pkt=b03f5f7f11d50a3a flags=0
+   TypeRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute -> [System.Runtime]
+   TypeRef System.Diagnostics.DebuggableAttribute -> [System.Runtime]
+   TypeRef System.Diagnostics.DebuggableAttribute/DebuggingModes -> [nested in System.Diagnostics.DebuggableAttribute]
+   TypeRef System.Security.Permissions.SecurityAction -> [System.Runtime]
+   TypeRef System.Security.Permissions.SecurityPermissionAttribute -> [System.Runtime]
+   TypeRef System.Security.UnverifiableCodeAttribute -> [System.Runtime]
+   TypeRef System.Runtime.CompilerServices.RefSafetyRulesAttribute -> [System.Runtime]
+   TypeRef System.Object -> [System.Runtime]
+   TypeRef System.Math -> [System.Runtime]
+   MemberRef System.Runtime.CompilerServices.CompilationRelaxationsAttribute::.ctor : void (int32)
+   MemberRef System.Runtime.CompilerServices.RuntimeCompatibilityAttribute::.ctor : void ()
+   MemberRef System.Diagnostics.DebuggableAttribute::.ctor : void (System.Diagnostics.DebuggableAttribute/DebuggingModes)
+   MemberRef System.Security.Permissions.SecurityPermissionAttribute::.ctor : void (System.Security.Permissions.SecurityAction)
+   MemberRef System.Security.UnverifiableCodeAttribute::.ctor : void ()
+   MemberRef System.Runtime.CompilerServices.RefSafetyRulesAttribute::.ctor : void (int32)
+   MemberRef System.Math::FusedMultiplyAdd : float64 (float64, float64, float64)

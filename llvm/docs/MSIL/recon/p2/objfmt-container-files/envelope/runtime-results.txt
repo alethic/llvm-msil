@@ -1,0 +1,36 @@
+# Runtime acceptance of the envelope variants (expected exit 43 = twice(20) = (20+1)*2+1).
+# .NET: dotnet exec --runtimeconfig {net8,net10}.json (rolls forward to 8.0.32 / 10.0.13); Framework 4.8: the -exe variants run directly.
+# *_z variants: the original metadata copy in .text overwritten with 0xCC, proving the loader reads the relocated root that has the extra stream.
+two.dll on net8: exit=43
+two.dll on net10: exit=43
+two_stream.dll on net8: exit=43
+two_stream.dll on net10: exit=43
+two_section.dll on net8: exit=43
+two_section.dll on net10: exit=43
+two_stream_z.dll on net8: exit=43
+two_stream_z.dll on net10: exit=43
+two.exe on .NET Framework 4.8: exit=43
+two_stream.exe on .NET Framework 4.8: exit=43
+two_section.exe on .NET Framework 4.8: exit=43
+two_stream_z.exe on .NET Framework 4.8: exit=43
+
+# dotnet exec of a netmodule:
+dotnet exec needs a managed .dll or .exe extension. The application specified was 'C:\llvm-msil-scratch\p2\objfmt-container\envelope\run_net8\two.netmodule'
+
+# Multi-module assembly (multi/main.il: .file 'two.netmodule' + call [.module 'two.netmodule']::'twice'):
+multi.exe on .NET Framework 4.8: exit=43
+Unhandled exception. System.IO.FileLoadException: Could not load file or assembly 'two.netmodule'. The module cannot be loaded because only single file assemblies are supported. (0x8013101E)
+Unhandled exception. System.IO.FileLoadException: Could not load file or assembly 'two.netmodule'. The module cannot be loaded because only single file assemblies are supported. (0x8013101E)
+
+# ilasm determinism (same input, same output name, separate directories):
+a2882b9664469b26e06077c24a0d06e1  d1/two.dll
+a2882b9664469b26e06077c24a0d06e1  d2/two.dll
+5cc16a3b80fd9b159529efd9462bca15  d3/two.dll
+d75261978fb5a8f0970f1b3269951ec8  d4/two.dll
+(d1,d2: ilasm 10.0.12 -det; d3,d4: ilasm 10.0.12 without -det)
+
+# ilasm on undefined global references (shape/undef.il: call int32 'twice'(int32) with no definition; shape/msvcshape.il: call int32 '<Module>'::'twice'(int32)):
+Resolving local member refs: Error: unresolved global member ref 'twice'
+1 -> 0 defs, 0 refs, 1 unresolved
+Resolving local member refs: Error: unresolved global member ref 'twice'
+1 -> 0 defs, 0 refs, 1 unresolved

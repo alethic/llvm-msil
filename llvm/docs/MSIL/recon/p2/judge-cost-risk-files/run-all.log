@@ -1,0 +1,114 @@
+### J1 option D: CIL in ELF ET_REL with an unknown e_machine (objfmt-container 6.2 re-run)
+Format: elf64-unknown
+  Machine: 0xC11
+0000000000000008 C common_var
+0000000000000000 D counter
+                 U ext
+0000000000000000 t helper
+0000000000000000 T hid
+0000000000000000 W inl
+0000000000000008 D table
+0000000000000000 D tlsvar
+0000000000000000 T twice
+                 w weak_undef
+Archive map
+twice in em0c11.o
+counter in em0c11.o
+inl in em0c11.o
+hid in em0c11.o
+table in em0c11.o
+tlsvar in em0c11.o
+common_var in em0c11.o
+twice in lo0c11.o
+inl in lo0c11.o
+
+
+RELOCATION RECORDS FOR [.cil.text.twice]:
+OFFSET           TYPE                     VALUE
+0000000000000003 Unknown                  .cil.text.helper
+000000000000000a Unknown                  counter
+
+RELOCATION RECORDS FOR [.cil.text.hid]:
+    Signature: inl
+      .cil.text.inl (7)
+      .msil.method.inl (8)
+      .rela.msil.method.inl (9)
+ld.lld: error: unsupported e_machine value: 3089
+
+### J2 option B/2: two ECMA-335 module objects linked by name (objfmt-binding E2 re-run)
+a.o: 4 methods, 6 stubs, 8 data symbols, 5 relocs, 1 ctors, image 64 bytes
+b.o: 6 methods, 1 stubs, 8 data symbols, 1 relocs, 1 ctors, image 44 bytes
+  IL bytes rewritten 351, instructions 157, token sites 37: Field 25, MemberRef 3, MethodDef 6, StandAloneSig 3
+  constructors in order: ctor_b(100) ctor_a(200)
+main
+add3
+Framework 4.8 exit=63
+main
+add3
+.NET 8 exit=63
+a.o: no symbols
+libab.a:a.o: no symbols
+libab.a:b.o: no symbols
+Format: COFF-x86-64
+0000000140002000 <.text>:
+140002000: 30 31                       	xorb	%dh, (%rcx)
+lld-link: error: a.o: unknown file type
+ld.lld: error: a.o: unknown file type
+
+### J3 option E: bitcode objects today
+clang: error: emitting object files is not yet supported for MSIL target 'x86_64-pc-windows-msvc19.33.0-msil'; use -S to produce ILAsm text, or -emit-llvm or -flto to produce bitcode
+ 42 43 c0 de
+Framework 4.8 exit=42
+
+### J4 initonly address fields stored by a per-object init method vs by .cctor
+perobj Framework exit=1
+perobj .NET 8 exit=1
+... Cannot change initonly field outside its .ctor.
+1 Error(s) Verifying perobj.exe
+... Cannot change initonly field outside its .ctor.
+1 Error(s) Verifying C:\llvm-msil-scratch\p2\judge-cost-risk\initonly\perobj.exe
+cctor Framework exit=1
+cctor .NET 8 exit=1
+All Classes and Methods in cctor.exe Verified.
+All Classes and Methods in C:\llvm-msil-scratch\p2\judge-cost-risk\initonly\cctor.exe Verified.
+
+### J5 metadata tables in a Phase-1 object vs a Phase-3/4-shaped object
+a.o: 12 tables: Module=1 TypeRef=2 TypeDef=1 Field=8 MethodDef=9 Param=5 MemberRef=2 StandAloneSig=2 ModuleRef=2 ImplMap=5 AssemblyRef=2 ManifestResource=1
+  heaps: Strings=271 Blob=36 US=8 GUID=16; method bodies 285 bytes; file 5632 bytes
+b.o: 10 tables: Module=1 TypeDef=1 Field=8 MethodDef=7 Param=4 StandAloneSig=1 ModuleRef=2 ImplMap=1 AssemblyRef=2 ManifestResource=1
+  heaps: Strings=212 Blob=36 US=8 GUID=16; method bodies 188 bytes; file 5120 bytes
+p3shape.o: 16 tables: Module=1 TypeRef=12 TypeDef=3 Field=6 MethodDef=9 Param=8 MemberRef=7 CustomAttribute=2 ClassLayout=1 FieldLayout=3 StandAloneSig=1 ModuleRef=1 TypeSpec=1 ImplMap=1 AssemblyRef=3 MethodSpec=1
+  heaps: Strings=479 Blob=108 US=8 GUID=16; method bodies 141 bytes; file 3072 bytes
+
+### J6 header dependents in the shared build (read-only parse of .ninja_deps/.ninja_log)
+objects with deps: 3218, compile ms total: 11402439 (3.17 CPU-h)
+llvm/binaryformat/elf.h                          51 objects   2.4% of compile CPU
+llvm/binaryformat/coff.h                         58 objects   1.7% of compile CPU
+llvm/object/elfobjectfile.h                      15 objects   0.5% of compile CPU
+llvm/object/elf.h                                16 objects   0.6% of compile CPU
+llvm/binaryformat/magic.h                       147 objects   6.0% of compile CPU
+llvm/object/binary.h                            158 objects   6.5% of compile CPU
+llvm/object/objectfile.h                        135 objects   5.3% of compile CPU
+llvm/object/symbolicfile.h                      145 objects   6.0% of compile CPU
+llvm/mc/mcsectionmsil.h                           3 objects   0.1% of compile CPU
+llvm/mc/mccontext.h                             609 objects  19.3% of compile CPU
+llvm/mc/mcsymbol.h                              607 objects  19.0% of compile CPU
+llvm/mc/mcobjectfileinfo.h                      104 objects   3.9% of compile CPU
+llvm/targetparser/triple.h                     2104 objects  81.9% of compile CPU
+
+### J7 upstream churn of hook files (commits since 2024-10-21 / 2025-10-21; HEAD merged upstream 2026-10-19)
+49 20 llvm/include/llvm/BinaryFormat/ELF.h
+11 4 llvm/include/llvm/Object/ELFObjectFile.h
+24 10 llvm/lib/Object/ELF.cpp
+38 14 llvm/lib/ObjectYAML/ELFYAML.cpp
+71 38 llvm/tools/llvm-readobj/ELFDumper.cpp
+2 1 llvm/lib/Object/SymbolicFile.cpp
+5 2 llvm/lib/Object/ObjectFile.cpp
+3 1 llvm/include/llvm/Object/Binary.h
+1 0 llvm/include/llvm/BinaryFormat/Magic.h
+12 5 llvm/lib/MC/TargetRegistry.cpp
+31 2 llvm/lib/MC/MCAsmBackend.cpp
+46 13 llvm/lib/MC/MCContext.cpp
+commits that changed EM_ constant lines in ELF.h (2y): 1
+commits that changed 'case ELF::EM_' lines in ELFObjectFile.h (2y): 1
+commits that changed EM_ lines in ELFYAML.cpp / ELF.cpp / ELFDumper.cpp (2y): 1 / 2 / 13

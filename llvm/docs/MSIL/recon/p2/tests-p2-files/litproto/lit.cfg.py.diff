@@ -1,0 +1,83 @@
+--- lit.cfg.py.orig	2026-10-21 00:30:56.469179100 -0500
++++ lit.cfg.py	2026-10-21 00:30:56.912557300 -0500
+@@ -973,6 +973,26 @@
+         limits,
+     )
+ 
++
++# ---------------------------------------------------------------- Phase-2 pipeline (tests-p2 prototype)
++# --param msil_pipeline=asm (default): clang -S -> ilasm (Phase 1).
++#                       =lto: clang -flto -c -> msil-ld --lto-emit-asm -> ilasm (P2-B first milestone).
++#                       =obj: clang -c -> msil-ld -> PE (P2-A + P2-B; not available in the prototype).
++# --param msil_ld=PATH  the linker (default: <tools>/msil-ld[.exe]).
++pipeline = params.get("msil_pipeline", "asm")
++if pipeline not in ("asm", "lto", "obj"):
++    fatal("--param msil_pipeline=%s: use asm, lto or obj" % pipeline)
++features.add("msil-pipeline=" + pipeline)
++msil_ld = params.get("msil_ld") or lit.util.which("msil-ld", config.llvm_tools_dir)
++if msil_ld and os.path.isfile(msil_ld):
++    features.add("msil-ld")
++elif pipeline != "asm":
++    fatal("--param msil_pipeline=%s needs msil-ld (--param msil_ld=PATH)" % pipeline)
++if pipeline == "obj":
++    fatal("--param msil_pipeline=obj: the prototype msil-ld writes only ILAsm text (--lto-emit-asm)")
++# The libraries a link searches by default (a Phase-2 driver adds the triple's
++# libc itself; the prototype reads only COFF export tables).
++msil_ld_libs = {"windows": '-L "C:/Windows/System32" -lucrtbase'}.get(triple_os, "")
+ clang = getattr(config, "clang", None) or "clang-not-found"
+ llc = lit.util.which("llc", config.llvm_tools_dir) or "llc-not-found"
+ 
+@@ -1002,8 +1022,13 @@
+ def c_pipeline(level):
+     """compile -> assemble -> verify -> force-JIT -> run and compare, at -<level>."""
+     t = "%t." + level
++    if pipeline == "lto":
++        first = (f"%clang_msil %{{msil_cflags}} -{level} -flto -c %s -o {t}.o"
++                 f" && %msil_ld --lto-emit-asm -o {t}.il {t}.o %{{msil_ld_libs}}")
++    else:
++        first = f"%clang_msil %{{msil_cflags}} -{level} -S %s -o {t}.il"
+     cmd = (
+-        f"%clang_msil %{{msil_cflags}} -{level} -S %s -o {t}.il"
++        first +
+         f" && %ilasm -dll -output={t}.dll {t}.il"
+         f" && %msil_verify {t}.dll"
+         f" %if msil-jitall %{{ && %msil_jitall {t}.dll %}}"
+@@ -1052,7 +1077,38 @@
+ # llc takes -O0..-O3 only; -Os/-Oz levels are skipped for IR tests.
+ ll_levels = [o for o in opt_levels if o in ("O0", "O1", "O2", "O3")] or ["O2"]
+ 
++def prog_pipeline(level):
++    """A multi-TU program: compile %{msil_srcs} with -c into a fresh directory,
++    link them with %{msil_libs}, then verify, force-JIT and run as c_pipeline."""
++    t = "%t." + level
++    d = t + ".d"
++    if pipeline == "asm":
++        return "echo multi-TU programs need --param msil_pipeline=lto or obj && false"
++    cmd = (
++        f"rm -rf {d} && mkdir -p {d} && cd {d}"
++        f" && %clang_msil %{{msil_cflags}} -{level} -flto -c %{{msil_srcs}}"
++        f" && %msil_ld --lto-emit-asm -o {t}.il *.o %{{msil_libs}} %{{msil_ld_libs}}"
++        f" && %ilasm -dll -output={t}.dll {t}.il"
++        f" && %msil_verify {t}.dll"
++        f" %if msil-jitall %{{ && %msil_jitall {t}.dll %}}"
++        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {t}.dll"
++    )
++    cmd += (
++        f" %if msil-native-oracle %{{ && %clang_native %{{msil_cflags}} -{level}"
++        f" %{{msil_srcs}}{native_link} -o {t}.native.exe"
++        f" && %msil_exec --native --expect %S/%{{s:stem}}"
++        f" --out {t}.native.out {t}.native.exe %}}"
++    )
++    return cmd
++
++
+ substitutions = [
++    ("%{msil_prog}", " && ".join(prog_pipeline(o) for o in opt_levels)),
++    ("%{msil_srcs}", "%s"),
++    ("%{msil_libs}", ""),
++    ("%{msil_ld_libs}", msil_ld_libs),
++    ("%msil_ld", quote(msil_ld or "msil-ld-not-found")),
++    ("%msil_ar", quote("C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/llvm-ar.exe")),
+     # Composites first; they expand into the atoms below.
+     ("%{msil_c}", " && ".join(c_pipeline(o) for o in opt_levels)),
+     ("%{msil_ll}", " && ".join(ll_pipeline(o) for o in ll_levels)),

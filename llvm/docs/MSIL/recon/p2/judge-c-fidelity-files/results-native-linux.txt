@@ -1,0 +1,13 @@
+native linux p1ab: out=[] exit 144
+native linux p1ac: out=[] exit 114
+native linux p1mwb: out=[] exit 144
+native linux p1mbw: out=[] exit 144
+native linux p1mwc: out=[] exit 114
+native linux p2: out=[] exit 23
+native linux sig: out=[] exit 41
+native linux p3: out=[] exit 15
+native linux p5: out=[] exit 12
+native linux p6: out=[BCDM] exit 0
+native linux p8: out=[] exit 42
+native linux p9ab: out=[] exit 1
+native linux p9ba: out=[] exit 1

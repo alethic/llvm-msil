@@ -1,0 +1,113 @@
+object files in deps log: 2691; summed compile time 3.00 CPU-h
+
+d:/llvm-msil/llvm/include/llvm/mc/mccontext.h
+  dependents: 607 objs (22.6%), 0.61 CPU-h (~5 min at -j8 eff. 7)
+  top: lib/CodeGen 238, lib/Target/X86 83, lib/Target/WebAssembly 65, lib/MC 36, lib/Target/MSIL 33, lib/CodeGen/GlobalISel 28, lib/CodeGen/AsmPrinter 27, lib/CodeGen/SelectionDAG 26
+
+d:/llvm-msil/llvm/include/llvm/mc/mcsymbol.h
+  dependents: 605 objs (22.5%), 0.60 CPU-h (~5 min at -j8 eff. 7)
+  top: lib/CodeGen 238, lib/Target/X86 79, lib/Target/WebAssembly 62, lib/MC 48, lib/Target/MSIL 32, lib/CodeGen/GlobalISel 28, lib/CodeGen/AsmPrinter 27, lib/CodeGen/SelectionDAG 26
+
+d:/llvm-msil/llvm/include/llvm/mc/mcsectionmsil.h
+  dependents: 3 objs (0.1%), 0.00 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/MC 2, unittests/MC 1
+
+d:/llvm-msil/llvm/include/llvm/mc/mcobjectfileinfo.h
+  dependents: 104 objs (3.9%), 0.12 CPU-h (~1 min at -j8 eff. 7)
+  top: lib/MC 18, lib/CodeGen/AsmPrinter 16, lib/Target/X86 10, lib/CodeGen 9, lib/Target/WebAssembly 9, lib/LTO 5, unittests/MC 5, lib/Target/MSIL 5
+
+d:/llvm-msil/llvm/include/llvm/mc/mcsection.h
+  dependents: 653 objs (24.3%), 0.67 CPU-h (~6 min at -j8 eff. 7)
+  top: lib/CodeGen 238, lib/Target/X86 85, lib/Target/WebAssembly 66, lib/MC 55, lib/Target/MSIL 36, lib/CodeGen/GlobalISel 28, lib/CodeGen/AsmPrinter 27, lib/CodeGen/SelectionDAG 26
+
+d:/llvm-msil/llvm/include/llvm/mc/mcasmbackend.h
+  dependents: 28 objs (1.0%), 0.02 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/MC 19, lib/Target/WebAssembly 2, lib/Target/X86 2, unittests/MC 2, lib/CodeGen 1, tools/clang/tools/driver 1, unittests/Target/MSIL 1
+
+d:/llvm-msil/llvm/include/llvm/mc/mcobjectwriter.h
+  dependents: 40 objs (1.5%), 0.02 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/MC 28, lib/Target/X86 5, unittests/MC 3, lib/Target/WebAssembly 2, lib/CodeGen 1, tools/clang/tools/driver 1
+
+d:/llvm-msil/llvm/include/llvm/mc/targetregistry.h
+  dependents: 69 objs (2.6%), 0.10 CPU-h (~1 min at -j8 eff. 7)
+  top: lib/MC 10, lib/Target/WebAssembly 8, lib/Target/X86 8, lib/LTO 5, unittests/MC 5, lib/Target/MSIL 4, lib/MC/MCDisassembler 3, tools/clang/lib/Driver 3
+
+d:/llvm-msil/llvm/include/llvm/mc/mcstreamer.h
+  dependents: 95 objs (3.5%), 0.08 CPU-h (~1 min at -j8 eff. 7)
+  top: lib/CodeGen/AsmPrinter 26, lib/MC 23, lib/Target/X86 10, lib/MC/MCParser 9, lib/Target/WebAssembly 7, lib/Target/MSIL 6, lib/CodeGen 4, lib/Object 2
+
+d:/llvm-msil/llvm/include/llvm/mc/mcfixup.h
+  dependents: 653 objs (24.3%), 0.67 CPU-h (~6 min at -j8 eff. 7)
+  top: lib/CodeGen 238, lib/Target/X86 85, lib/Target/WebAssembly 66, lib/MC 55, lib/Target/MSIL 36, lib/CodeGen/GlobalISel 28, lib/CodeGen/AsmPrinter 27, lib/CodeGen/SelectionDAG 26
+
+d:/llvm-msil/llvm/include/llvm/mc/mcexpr.h
+  dependents: 625 objs (23.2%), 0.62 CPU-h (~5 min at -j8 eff. 7)
+  top: lib/CodeGen 238, lib/Target/X86 87, lib/Target/WebAssembly 63, lib/MC 51, lib/Target/MSIL 34, lib/CodeGen/GlobalISel 28, lib/CodeGen/AsmPrinter 27, lib/CodeGen/SelectionDAG 26
+
+d:/llvm-msil/llvm/include/llvm/binaryformat/magic.h
+  dependents: 147 objs (5.5%), 0.19 CPU-h (~2 min at -j8 eff. 7)
+  top: lib/Object 28, lib/DebugInfo/DWARF 27, lib/DebugInfo/PDB 17, tools/clang/lib/CodeGen 14, lib/ObjectYAML 10, lib/ProfileData 6, lib/LTO 5, lib/DebugInfo/GSYM 4
+
+d:/llvm-msil/llvm/include/llvm/binaryformat/wasm.h
+  dependents: 86 objs (3.2%), 0.07 CPU-h (~1 min at -j8 eff. 7)
+  top: lib/Target/WebAssembly 64, lib/ObjectYAML 8, lib/MC 5, lib/Object 4, lib/BinaryFormat 1, lib/MC/MCParser 1, lib/CodeGen 1, lib/CodeGen/AsmPrinter 1
+
+d:/llvm-msil/llvm/include/llvm/object/binary.h
+  dependents: 158 objs (5.9%), 0.21 CPU-h (~2 min at -j8 eff. 7)
+  top: lib/Object 31, lib/DebugInfo/DWARF 27, tools/clang/lib/CodeGen 18, lib/DebugInfo/PDB 17, lib/ObjectYAML 14, lib/ProfileData 6, lib/LTO 5, lib/DebugInfo/GSYM 4
+
+d:/llvm-msil/llvm/include/llvm/object/objectfile.h
+  dependents: 135 objs (5.0%), 0.17 CPU-h (~1 min at -j8 eff. 7)
+  top: lib/DebugInfo/DWARF 27, lib/Object 25, lib/DebugInfo/PDB 17, tools/clang/lib/CodeGen 13, lib/ObjectYAML 10, lib/ProfileData 6, lib/DebugInfo/GSYM 4, lib/DebugInfo/Symbolize 4
+
+d:/llvm-msil/llvm/include/llvm/targetparser/triple.h
+  dependents: 2102 objs (78.1%), 2.59 CPU-h (~22 min at -j8 eff. 7)
+  top: lib/CodeGen 238, lib/Analysis 124, tools/clang/lib/AST 117, tools/clang/lib/CodeGen 105, lib/Transforms/Utils 98, lib/Target/X86 88, tools/clang/lib/Sema 87, lib/IR 85
+
+d:/llvm-msil/llvm/include/llvm/mc/mcsymbolwasm.h
+  dependents: 42 objs (1.6%), 0.03 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/Target/WebAssembly 31, lib/MC 4, lib/Object 3, lib/MC/MCParser 1, lib/ObjectYAML 1, lib/CodeGen/AsmPrinter 1, lib/ProfileData/Coverage 1
+
+d:/llvm-msil/llvm/include/llvm/mc/mcwasmstreamer.h
+  dependents: 1 objs (0.0%), 0.00 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/MC 1
+
+d:/llvm-msil/build/tools/clang/include/clang/basic/diagnosticdriverkinds.inc
+  dependents: 84 objs (3.1%), 0.08 CPU-h (~1 min at -j8 eff. 7)
+  top: tools/clang/lib/Driver 72, tools/clang/tools/driver 4, tools/clang/lib/Basic 3, tools/clang/lib/CodeGen 2, tools/clang/lib/Lex 1, tools/clang/lib/Options 1, tools/clang/lib/Frontend 1
+
+d:/llvm-msil/llvm/include/llvm/codegen/asmprinter.h
+  dependents: 39 objs (1.4%), 0.04 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/CodeGen/AsmPrinter 26, lib/CodeGen 3, lib/Target/X86 3, lib/Target/WebAssembly 3, lib/Target/MSIL 3, lib/Passes 1
+
+d:/llvm-msil/llvm/include/llvm/mc/mccodeemitter.h
+  dependents: 24 objs (0.9%), 0.02 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/MC 13, lib/Target/X86 5, unittests/MC 2, lib/CodeGen 1, lib/Target/WebAssembly 1, tools/clang/tools/driver 1, unittests/Target/MSIL 1
+
+d:/llvm-msil/llvm/include/llvm/binaryformat/coff.h
+  dependents: 58 objs (2.2%), 0.05 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/Object 11, lib/ObjectYAML 11, lib/DebugInfo/PDB 9, lib/MC 7, lib/DebugInfo/CodeView 4, lib/MC/MCParser 3, lib/CodeGen/AsmPrinter 3, lib/BinaryFormat 2
+
+d:/llvm-msil/llvm/include/llvm/binaryformat/elf.h
+  dependents: 51 objs (1.9%), 0.07 CPU-h (~1 min at -j8 eff. 7)
+  top: lib/MC 9, lib/ObjectYAML 9, lib/Object 8, lib/Target/X86 4, lib/DebugInfo/Symbolize 2, lib/ProfileData 2, lib/CodeGen 2, lib/CodeGen/AsmPrinter 2
+
+d:/llvm-msil/llvm/include/llvm/object/symbolicfile.h
+  dependents: 145 objs (5.4%), 0.19 CPU-h (~2 min at -j8 eff. 7)
+  top: lib/Object 28, lib/DebugInfo/DWARF 27, lib/DebugInfo/PDB 17, tools/clang/lib/CodeGen 14, lib/ObjectYAML 10, lib/ProfileData 6, lib/LTO 5, lib/DebugInfo/GSYM 4
+
+d:/llvm-msil/llvm/include/llvm/mc/mcassembler.h
+  dependents: 30 objs (1.1%), 0.02 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/MC 25, lib/Target/X86 3, lib/Target/WebAssembly 1, unittests/MC 1
+
+d:/llvm-msil/llvm/include/llvm/mc/mcobjectstreamer.h
+  dependents: 20 objs (0.7%), 0.01 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/MC 15, lib/Target/X86 2, unittests/MC 2, lib/MC/MCParser 1
+
+d:/llvm-msil/llvm/include/llvm/mc/mcsectionwasm.h
+  dependents: 12 objs (0.4%), 0.01 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/MC 5, lib/Target/WebAssembly 5, lib/MC/MCParser 1, lib/CodeGen 1
+
+d:/llvm-msil/llvm/include/llvm/object/wasm.h
+  dependents: 5 objs (0.2%), 0.01 CPU-h (~0 min at -j8 eff. 7)
+  top: lib/Object 3, lib/ObjectYAML 1, lib/ProfileData/Coverage 1

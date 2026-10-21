@@ -1,0 +1,54 @@
+# What real libc headers make the resolver see (clang at HEAD 1ea64fe9fc7c, -O1 -S -emit-llvm)
+
+## x86_64-pc-windows-msvc-msil, Windows SDK 10.0.26100.0 UCRT headers (msil-env.ps1 INCLUDE)
+```c
+#include <stdio.h>
+#include <errno.h>
+#include <string.h>
+int main(void) { printf("hi %d\n", errno); fputs("x\n", stderr); return (int)strlen("abc"); }
+```
+@"??_C@_06BGCNIHOP@hi?5?$CFd?6?$AA@" = linkonce_odr unnamed_addr constant [7 x i8] c"hi %d\0A\00", comdat, align 4
+@"??_C@_02KALDPHIP@x?6?$AA@" = linkonce_odr unnamed_addr constant [3 x i8] c"x\0A\00", comdat, align 4
+@__local_stdio_printf_options._OptionsStorage = internal global i64 0, align 8
+define noundef i32 @main() local_unnamed_addr #0 {
+define linkonce_odr i32 @printf(ptr noundef %_Format, ...) local_unnamed_addr #1 comdat {
+declare ptr @_errno() local_unnamed_addr #2
+declare ptr @__acrt_iob_func(i32 noundef) local_unnamed_addr #2
+define linkonce_odr ptr @__local_stdio_printf_options() local_unnamed_addr #5 comdat {
+declare i32 @__stdio_common_vfprintf(i64 noundef, ptr noundef, ptr noundef, ptr noundef, ptr noundef) local_unnamed_addr #2
+declare noundef i64 @fwrite(ptr noundef readonly captures(none), i64 noundef, i64 noundef, ptr noundef captures(none)) local_unnamed_addr #6
+
+## x86_64-unknown-linux-gnu-msil, --sysroot = libc6-dev 2.43 + linux-libc-dev headers (apt-get download, dpkg-deb -x)
+```c
+#include <stdio.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <unistd.h>
+extern char **environ;
+int main(int argc, char **argv) {
+  int c = getopt(argc, argv, "x");
+  printf("hi %d %d\n", errno, c);
+  fputs("x\n", stderr);
+  return environ != 0 && optind > 0 ? 0 : 1;
+}
+```
+@.str = private unnamed_addr constant [2 x i8] c"x\00", align 1
+@.str.1 = private unnamed_addr constant [10 x i8] c"hi %d %d\0A\00", align 1
+@.str.2 = private unnamed_addr constant [3 x i8] c"x\0A\00", align 1
+@stderr = external local_unnamed_addr global ptr, align 8
+@environ = external local_unnamed_addr global ptr, align 8
+@optind = external local_unnamed_addr global i32, align 4
+define range(i32 0, 2) i32 @main(i32 noundef %argc, ptr noundef %argv) local_unnamed_addr #0 {
+declare i32 @getopt(i32 noundef, ptr noundef, ptr noundef) local_unnamed_addr #1
+declare noundef i32 @printf(ptr noundef readonly captures(none), ...) local_unnamed_addr #2
+declare ptr @__errno_location() local_unnamed_addr #3
+declare noundef i64 @fwrite(ptr noundef readonly captures(none), i64 noundef, i64 noundef, ptr noundef captures(none)) local_unnamed_addr #4
+
+## Phase-1 diagnostics for the same file with -S (linux-gnu-msil)
+hello-lnx.c:6:5: error: calls to variadic functions are not supported for MSIL yet
+error: external global variable 'stderr' is not supported (phase 2 linker)
+error: external global variable 'environ' is not supported (phase 2 linker)
+error: external global variable 'optind' is not supported (phase 2 linker)
+error: undefined function 'getopt' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker
+error: undefined function '__errno_location' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker
+error: undefined function 'fwrite' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker

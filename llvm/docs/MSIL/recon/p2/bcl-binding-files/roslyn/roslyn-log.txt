@@ -1,0 +1,77 @@
+### r1-net8
+    (exit 0; output written)
+### r2-net48
+    (exit 0; output written)
+### r3-ns20
+    (exit 0; output written)
+### r4-net8-mscorlib-facade-only
+      1 p1.cs(5,19): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(3,14): error CS0518: Predefined type 'System.Object' is not defined or imported
+      1 p1.cs(2,34): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(2,27): error CS0518: Predefined type 'System.Byte' is not defined or imported
+      1 p1.cs(2,15): error CS0518: Predefined type 'System.ValueType' is not defined or imported
+    (exit 1; output none)
+### r5-net8-System.Runtime-only
+      1 p1.cs(9,27): error CS0234: The type or namespace name 'Marshal' does not exist in the namespace 'System.Runtime.InteropServices' (are you missing an assembly reference?)
+      1 p1.cs(7,27): error CS0234: The type or namespace name 'Marshal' does not exist in the namespace 'System.Runtime.InteropServices' (are you missing an assembly reference?)
+      1 p1.cs(11,9): error CS0234: The type or namespace name 'Interlocked' does not exist in the namespace 'System.Threading' (are you missing an assembly reference?)
+    (exit 1; output none)
+### r6-net48-mscorlib+net8-SR-SRI-ST
+      1 p1.cs(5,19): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(3,14): error CS0518: Predefined type 'System.Object' is not defined or imported
+      1 p1.cs(2,34): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(2,27): error CS0518: Predefined type 'System.Byte' is not defined or imported
+      1 p1.cs(2,15): error CS0518: Predefined type 'System.ValueType' is not defined or imported
+      1 error CS0518: Predefined type 'System.Void' is not defined or imported
+    (exit 1; output none)
+### r7-fma-net48
+      1 fma.cs(1,62): error CS0117: 'Math' does not contain a definition for 'FusedMultiplyAdd'
+    (exit 1; output none)
+### r8-dotnet-csc-no-refs
+      1 p1.cs(5,19): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(3,14): error CS0518: Predefined type 'System.Object' is not defined or imported
+      1 p1.cs(2,34): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(2,27): error CS0518: Predefined type 'System.Byte' is not defined or imported
+      1 p1.cs(2,15): error CS0518: Predefined type 'System.ValueType' is not defined or imported
+    (exit 1; output none)
+### r9-nostdlib-no-refs
+      1 p1.cs(5,19): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(3,14): error CS0518: Predefined type 'System.Object' is not defined or imported
+      1 p1.cs(2,34): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(2,27): error CS0518: Predefined type 'System.Byte' is not defined or imported
+      1 p1.cs(2,15): error CS0518: Predefined type 'System.ValueType' is not defined or imported
+    (exit 1; output none)
+### r10-net8-SR+net10-SR
+      1 p1.cs(5,19): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(3,14): error CS0518: Predefined type 'System.Object' is not defined or imported
+      1 p1.cs(2,34): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(2,27): error CS0518: Predefined type 'System.Byte' is not defined or imported
+      1 p1.cs(2,15): error CS0518: Predefined type 'System.ValueType' is not defined or imported
+      1 error CS0518: Predefined type 'System.Void' is not defined or imported
+    (exit 1; output none)
+### r13-net48-mscorlib+net8-SRI
+      1 p1.cs(9,27): error CS0433: The type 'Marshal' exists in both 'System.Runtime.InteropServices, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' and 'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'
+      1 p1.cs(7,27): error CS0433: The type 'Marshal' exists in both 'System.Runtime.InteropServices, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' and 'mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'
+    (exit 1; output none)
+### r14-net8+net48-mscorlib-last
+      1 p1.cs(5,19): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(3,14): error CS0518: Predefined type 'System.Object' is not defined or imported
+      1 p1.cs(2,34): error CS0518: Predefined type 'System.Int32' is not defined or imported
+      1 p1.cs(2,27): error CS0518: Predefined type 'System.Byte' is not defined or imported
+      1 p1.cs(2,15): error CS0518: Predefined type 'System.ValueType' is not defined or imported
+      1 error CS0518: Predefined type 'System.Void' is not defined or imported
+    (exit 1; output none)
+### r14b-net48-mscorlib-first+net8
+    (exit 0; output written)
+### r15-net8+net10-SRI
+      1 p1.cs(9,27): error CS0433: The type 'Marshal' exists in both 'System.Runtime.InteropServices, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' and 'System.Runtime.InteropServices, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'
+      1 p1.cs(7,27): error CS0433: The type 'Marshal' exists in both 'System.Runtime.InteropServices, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' and 'System.Runtime.InteropServices, Version=10.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'
+    (exit 1; output none)
+### r17-fma-net8
+    (exit 0; output written)
+### r11-vs-csc.exe-no-refs (Framework-hosted csc, default mscorlib)
+    (exit 0)
+### r18: net8 System.Runtime + net8 mscorlib facade (Marshal forwarded to the missing System.Runtime.InteropServices)
+p1.cs(11,9): error CS1069: The type name 'Interlocked' could not be found in the namespace 'System.Threading'. This type has been forwarded to assembly 'System.Threading, Version=0.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' Consider adding a reference to that assembly.
+p1.cs(7,27): error CS1069: The type name 'Marshal' could not be found in the namespace 'System.Runtime.InteropServices'. This type has been forwarded to assembly 'System.Runtime.InteropServices, Version=0.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' Consider adding a reference to that assembly.
+p1.cs(9,27): error CS1069: The type name 'Marshal' could not be found in the namespace 'System.Runtime.InteropServices'. This type has been forwarded to assembly 'System.Runtime.InteropServices, Version=0.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' Consider adding a reference to that assembly.

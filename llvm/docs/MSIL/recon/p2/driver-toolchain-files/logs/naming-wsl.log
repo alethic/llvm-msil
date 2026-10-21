@@ -1,0 +1,16 @@
+exe image as p.exe: dotnet exec --runtimeconfig rc10 -> 42 : hello
+exe image as p.exe: dotnet ./p.exe (rc8 next to it) -> 42 : hello
+exe image as p.dll: dotnet exec --runtimeconfig rc10 -> 42 : hello
+exe image as p.dll: dotnet ./p.dll (rc8 next to it) -> 42 : hello
+exe image as a.out: dotnet exec --runtimeconfig rc10 -> 129 : dotnet exec needs a managed .dll or .exe extension. The application specified was '/tmp/msil-naming/exe-a.out/a.out'
+exe image as a.out: dotnet ./a.out (rc8 next to it) -> 1 : Could not execute because the specified command or file was not found.
+exe image as prog: dotnet exec --runtimeconfig rc10 -> 129 : dotnet exec needs a managed .dll or .exe extension. The application specified was '/tmp/msil-naming/exe-prog/prog'
+exe image as prog: dotnet ./prog (rc8 next to it) -> 1 : Could not execute because the specified command or file was not found.
+dll image as p.exe: dotnet exec --runtimeconfig rc10 -> 42 : hello
+dll image as p.exe: dotnet ./p.exe (rc8 next to it) -> 42 : hello
+dll image as p.dll: dotnet exec --runtimeconfig rc10 -> 42 : hello
+dll image as p.dll: dotnet ./p.dll (rc8 next to it) -> 42 : hello
+dll image as a.out: dotnet exec --runtimeconfig rc10 -> 129 : dotnet exec needs a managed .dll or .exe extension. The application specified was '/tmp/msil-naming/dll-a.out/a.out'
+dll image as a.out: dotnet ./a.out (rc8 next to it) -> 1 : Could not execute because the specified command or file was not found.
+dll image as prog: dotnet exec --runtimeconfig rc10 -> 129 : dotnet exec needs a managed .dll or .exe extension. The application specified was '/tmp/msil-naming/dll-prog/prog'
+dll image as prog: dotnet ./prog (rc8 next to it) -> 1 : Could not execute because the specified command or file was not found.

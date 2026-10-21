@@ -1,0 +1,6 @@
+table: 218 opcodes; OpCodes has 218 (+8 reserved prefixes ['prefix1', 'prefix2', 'prefix3', 'prefix4', 'prefix5', 'prefix6', 'prefix7', 'prefixref']); ILOpCode has 218 values; ILOpCode extra: []
+fw known ilasm deviation: [('ldc.r4', '0x7fc00001', '0x7f800001')]
+fw ilasm: 219 opcodes decoded, 500 bytes; re-encoded bytes IDENTICAL
+modern known ilasm deviation: [('ldc.r4', '0x7fc00001', '0x7f800001')]
+modern ilasm: 219 opcodes decoded, 500 bytes; re-encoded bytes IDENTICAL
+RESULT: PASS

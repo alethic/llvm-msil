@@ -1,0 +1,36 @@
+--- a/clang/lib/Driver/Driver.cpp	2026-10-19 16:55:20.968926100 -0500
++++ b/clang/lib/Driver/Driver.cpp	2026-10-21 00:15:34.982826900 -0500
+@@ -50,6 +50,7 @@
+ #include "ToolChains/TCE.h"
+ #include "ToolChains/UEFI.h"
+ #include "ToolChains/VEToolchain.h"
++#include "ToolChains/MSIL.h"
+ #include "ToolChains/WebAssembly.h"
+ #include "ToolChains/XCore.h"
+ #include "ToolChains/ZOS.h"
+@@ -3449,6 +3450,7 @@
+         !C.getDefaultToolChain().getTriple().isSPIRV())
+       Diag(clang::diag::err_drv_emit_llvm_link);
+     if (C.getDefaultToolChain().getTriple().isWindowsMSVCEnvironment() &&
++        !C.getDefaultToolChain().getTriple().isOSBinFormatMSIL() &&
+         C.getDefaultToolChain().isUsingLTO(Args) &&
+         !Args.getLastArgValue(options::OPT_fuse_ld_EQ)
+              .starts_with_insensitive("lld"))
+@@ -5459,6 +5461,8 @@
+ 
+ const char *Driver::getDefaultImageName() const {
+   llvm::Triple Target(llvm::Triple::normalize(TargetTriple));
++  if (Target.isOSBinFormatMSIL())
++    return "a.exe";
+   return Target.isOSWindows() ? "a.exe" : "a.out";
+ }
+ 
+@@ -6169,6 +6173,8 @@
+                                       const llvm::Triple &Target) const {
+ 
+   auto &TC = ToolChains[Target.str()];
++  if (!TC && Target.isOSBinFormatMSIL())
++    TC = toolchains::createMSILToolChain(*this, Target, Args);
+   if (!TC) {
+     switch (Target.getOS()) {
+     case llvm::Triple::AIX:

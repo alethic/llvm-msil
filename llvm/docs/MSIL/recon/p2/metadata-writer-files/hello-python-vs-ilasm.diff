@@ -1,0 +1,154 @@
+3c3
+< PE.TimeDateStamp 0x94723938
+---
+> PE.TimeDateStamp 0x6AD84382
+5c5
+< PE.ImageBase 0x180000000 SectionAlign 0x2000 FileAlign 0x200
+---
+> PE.ImageBase 0x140000000 SectionAlign 0x2000 FileAlign 0x200
+8c8
+< PE.SizeOfImage 0x4000 SizeOfHeaders 0x200 SizeOfCode 0x1000 InitData 0x0
+---
+> PE.SizeOfImage 0x6000 SizeOfHeaders 0x200 SizeOfCode 0xC00 InitData 0x200
+10,12c10,13
+< PE.EntryPointRVA 0x0 BaseOfCode 0x2000 CheckSum 0x0
+< PE.Dir.Import 0x0/0x0 IAT 0x0/0x0 Reloc 0x0/0x0 Debug 0x0/0x0 Resource 0x0/0x0 CLR 0x2000/0x48
+< PE.Section .text VA 0x2000 VSize 0xE24 Raw 0x200/0x1000 Chars 0x60000020
+---
+> PE.EntryPointRVA 0x2B0E BaseOfCode 0x2000 CheckSum 0x0
+> PE.Dir.Import 0x2AB8/0x53 IAT 0x2000/0x10 Reloc 0x4000/0xC Debug 0x0/0x0 Resource 0x0/0x0 CLR 0x2010/0x48
+> PE.Section .text VA 0x2000 VSize 0xB1A Raw 0x200/0xC00 Chars 0x60000020
+> PE.Section .reloc VA 0x4000 VSize 0xC Raw 0xE00/0x200 Chars 0x42000040
+14,20c15,21
+< COR.Metadata 0x2270/0xBB4 Resources 0x0/0x0 StrongName 0x0/0x0
+< MD.Root sig 0x424A5342 v1.1 version 'v4.0.30319' (len 12) flags 0 streams 5 size 0xBB4
+< MD.Stream #~ off 0x6C size 0x160
+< MD.Stream #Strings off 0x1CC size 0x8EC
+< MD.Stream #US off 0xAB8 size 0x7C
+< MD.Stream #GUID off 0xB34 size 0x10
+< MD.Stream #Blob off 0xB44 size 0x70
+---
+> COR.Metadata 0x22C0/0x7F4 Resources 0x0/0x0 StrongName 0x0/0x0
+> MD.Root sig 0x424A5342 v1.1 version 'v4.0.30319' (len 12) flags 0 streams 5 size 0x7F4
+> MD.Stream #~ off 0x6C size 0x178
+> MD.Stream #Strings off 0x1E4 size 0x514
+> MD.Stream #US off 0x6F8 size 0x7C
+> MD.Stream #GUID off 0x774 size 0x10
+> MD.Stream #Blob off 0x784 size 0x70
+22c23
+< MD.Tables v2.0 HeapSizes 0x00 Reserved2 1 Valid 0x0000000934029457 Sorted 0x000016003301FA00
+---
+> MD.Tables v2.0 HeapSizes 0x00 Reserved2 1 Valid 0x0000000934029557 Sorted 0x000016003325FA00
+24c25
+< MD.Heap String size 0x8EC
+---
+> MD.Heap String size 0x513
+27,42c28,44
+< MD.Table Module (0x00) rows 1 rowsize 10 offset 0xBC
+< MD.Table TypeRef (0x01) rows 3 rowsize 6 offset 0xC6
+< MD.Table TypeDef (0x02) rows 2 rowsize 14 offset 0xD8
+< MD.Table Field (0x04) rows 4 rowsize 6 offset 0xF4
+< MD.Table MethodDef (0x06) rows 7 rowsize 14 offset 0x10C
+< MD.Table MemberRef (0x0A) rows 3 rowsize 6 offset 0x16E
+< MD.Table CustomAttribute (0x0C) rows 1 rowsize 6 offset 0x180
+< MD.Table ClassLayout (0x0F) rows 1 rowsize 8 offset 0x186
+< MD.Table StandAloneSig (0x11) rows 2 rowsize 2 offset 0x18E
+< MD.Table ModuleRef (0x1A) rows 1 rowsize 2 offset 0x192
+< MD.Table ImplMap (0x1C) rows 1 rowsize 8 offset 0x194
+< MD.Table FieldRva (0x1D) rows 1 rowsize 6 offset 0x19C
+< MD.Table Assembly (0x20) rows 1 rowsize 22 offset 0x1A2
+< MD.Table AssemblyRef (0x23) rows 1 rowsize 20 offset 0x1B8
+< Module name 'hello.dll' gen 0 mvid 3155a7b5-10fb-4ce4-941a-c6c3817aafda
+< Assembly 'hello' ver 0.0.0.0 flags 0x0 hash 0x8004 pubkey [<nil>] culture '<nil>' CAs 1
+---
+> MD.Table Module (0x00) rows 1 rowsize 10 offset 0xC0
+> MD.Table TypeRef (0x01) rows 3 rowsize 6 offset 0xCA
+> MD.Table TypeDef (0x02) rows 2 rowsize 14 offset 0xDC
+> MD.Table Field (0x04) rows 4 rowsize 6 offset 0xF8
+> MD.Table MethodDef (0x06) rows 7 rowsize 14 offset 0x110
+> MD.Table Param (0x08) rows 3 rowsize 6 offset 0x172
+> MD.Table MemberRef (0x0A) rows 3 rowsize 6 offset 0x184
+> MD.Table CustomAttribute (0x0C) rows 1 rowsize 6 offset 0x196
+> MD.Table ClassLayout (0x0F) rows 1 rowsize 8 offset 0x19C
+> MD.Table StandAloneSig (0x11) rows 2 rowsize 2 offset 0x1A4
+> MD.Table ModuleRef (0x1A) rows 1 rowsize 2 offset 0x1A8
+> MD.Table ImplMap (0x1C) rows 1 rowsize 8 offset 0x1AA
+> MD.Table FieldRva (0x1D) rows 1 rowsize 6 offset 0x1B2
+> MD.Table Assembly (0x20) rows 1 rowsize 22 offset 0x1B8
+> MD.Table AssemblyRef (0x23) rows 1 rowsize 20 offset 0x1CE
+> Module name 'hello_fw.dll' gen 0 mvid 28dd087a-cc2f-4f4a-9b72-2a23b631584a
+> Assembly 'hello_il' ver 0.0.0.0 flags 0x0 hash 0x0 pubkey [<nil>] culture '<nil>' CAs 1
+45,47c47,49
+< TypeRef 01000001 scope 23000001 'System' 'ValueType'
+< TypeRef 01000002 scope 23000001 'System.Runtime.InteropServices' 'Marshal'
+< TypeRef 01000003 scope 23000001 'System.Reflection' 'AssemblyMetadataAttribute'
+---
+> TypeRef 01000001 scope 23000001 'System.Reflection' 'AssemblyMetadataAttribute'
+> TypeRef 01000002 scope 23000001 'System' 'ValueType'
+> TypeRef 01000003 scope 23000001 'System.Runtime.InteropServices' 'Marshal'
+49c51
+<   Field 04000001 flags 0x0111 '<msil>image' sig [06 11 08] field valuetype <nil>.<msil>image_t rva 0x2228 offset -1 CAs 0
+---
+>   Field 04000001 flags 0x0111 '<msil>image' sig [06 11 08] field valuetype <nil>.<msil>image_t rva 0x2060 offset -1 CAs 0
+53c55
+<   Method 06000001 flags 0x0016 impl 0x0000 'main' sig [00 00 08] int32() rva 0x2048 params 0
+---
+>   Method 06000001 flags 0x0016 impl 0x0000 'main' sig [00 00 08] int32() rva 0x20A8 params 0
+56c58
+<     IL 371 [7E 03 00 00 04 28 05 00 00 06 26 72 01 00 00 70 28 02 00 00 0A 28 05 00 00 06 26 16 0A 1D 7E 04 00 00 04 29 01 00 00 11 1F 31 33 04 06 17 60 0A 28 03 00 00 06 DE 0B 26 17 FE 11 26 06 18 60 0A DE 00 16 0D 17 0C 09 08 58 0D 08 17 58 0C 08 1F 0A 31 F3 09 1F 37 33 04 06 1A 60 0A 18 45 03 00 00 00 02 00 00 00 04 00 00 00 06 00 00 00 2B 08 2B 06 2B 04 06 1E 60 0A 38 CA 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 14 7A 06 1F 10 60 0A 28 04 00 00 06 2C 05 06 1F 20 60 0A 1E FE 0F 0B 07 22 01 00 80 7F 56 07 4A 20 01 00 80 7F 33 05 06 1F 40 60 0A 06 2A]
+---
+>     IL 371 [7E 03 00 00 04 28 05 00 00 06 26 72 01 00 00 70 28 02 00 00 0A 28 05 00 00 06 26 16 0A 1D 7E 04 00 00 04 29 01 00 00 11 1F 31 33 04 06 17 60 0A 28 03 00 00 06 DE 0B 26 17 FE 11 26 06 18 60 0A DE 00 16 0D 17 0C 09 08 58 0D 08 17 58 0C 08 1F 0A 31 F3 09 1F 37 33 04 06 1A 60 0A 18 45 03 00 00 00 02 00 00 00 04 00 00 00 06 00 00 00 2B 08 2B 06 2B 04 06 1E 60 0A 38 CA 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 14 7A 06 1F 10 60 0A 28 04 00 00 06 2C 05 06 1F 20 60 0A 1E FE 0F 0B 07 22 01 00 C0 7F 56 07 4A 20 01 00 80 7F 33 05 06 1F 40 60 0A 06 2A]
+58,59c60,63
+<   Method 06000002 flags 0x0013 impl 0x0000 'square' sig [00 01 08 08] int32(int32) rva 0x21D8 params 0
+<     Body tiny hdr0 0x12 align4 True size 5 maxstack 8 locals nil init False eh 0
+---
+>   Method 06000002 flags 0x0013 impl 0x0000 'square' sig [00 01 08 08] int32(int32) rva 0x2238 params 1
+>     Param 08000001 seq 1 flags 0x0 'A_0'
+>     Body fat hdr0 0x13 align4 True size 16 maxstack 2 locals nil init True eh 0
+>     FatHeader [13 30 02 00 04 00 00 00 00 00 00 00]
+61,62c65,67
+<   Method 06000003 flags 0x0013 impl 0x0000 'thrower' sig [00 00 01] void() rva 0x21DD params 0
+<     Body tiny hdr0 0x0A align4 False size 3 maxstack 8 locals nil init False eh 0
+---
+>   Method 06000003 flags 0x0013 impl 0x0000 'thrower' sig [00 00 01] void() rva 0x2248 params 0
+>     Body fat hdr0 0x13 align4 True size 14 maxstack 1 locals nil init True eh 0
+>     FatHeader [13 30 01 00 02 00 00 00 00 00 00 00]
+64,65c69,71
+<   Method 06000004 flags 0x0013 impl 0x0000 'long_X' sig [00 00 08] int32() rva 0x21E0 params 0
+<     Body tiny hdr0 0x0A align4 True size 3 maxstack 8 locals nil init False eh 0
+---
+>   Method 06000004 flags 0x0013 impl 0x0000 'long_X' sig [00 00 08] int32() rva 0x2258 params 0
+>     Body fat hdr0 0x13 align4 True size 14 maxstack 1 locals nil init True eh 0
+>     FatHeader [13 30 01 00 02 00 00 00 00 00 00 00]
+67c73,74
+<   Method 06000005 flags 0x2096 impl 0x0080 'puts' sig [00 01 08 18] int32(native int) rva 0x0 params 0
+---
+>   Method 06000005 flags 0x2096 impl 0x0080 'puts' sig [00 01 08 18] int32(native int) rva 0x0 params 1
+>     Param 08000002 seq 1 flags 0x0 'A_0'
+69,73c76,83
+<   Method 06000006 flags 0x1891 impl 0x0000 '.cctor' sig [00 00 01] void() rva 0x21E3 params 0
+<     Body tiny hdr0 0xDE align4 False size 56 maxstack 8 locals nil init False eh 0
+<     IL 55 [20 48 00 00 00 D3 28 01 00 00 0A 80 02 00 00 04 7E 02 00 00 04 7F 01 00 00 04 20 48 00 00 00 FE 17 7E 02 00 00 04 80 03 00 00 04 FE 06 02 00 00 06 80 04 00 00 04 2A]
+<   Method 06000007 flags 0x0091 impl 0x0000 '<msil>Main' sig [00 01 08 1D 0E] int32(string[]) rva 0x221B params 0
+<     Body tiny hdr0 0x1A align4 False size 7 maxstack 8 locals nil init False eh 0
+---
+>   Method 06000006 flags 0x1891 impl 0x0000 '.cctor' sig [00 00 01] void() rva 0x2268 params 0
+>     Body fat hdr0 0x13 align4 True size 67 maxstack 3 locals nil init True eh 0
+>     FatHeader [13 30 03 00 37 00 00 00 00 00 00 00]
+>     IL 55 [20 48 00 00 00 D3 28 03 00 00 0A 80 02 00 00 04 7E 02 00 00 04 7F 01 00 00 04 20 48 00 00 00 FE 17 7E 02 00 00 04 80 03 00 00 04 FE 06 02 00 00 06 80 04 00 00 04 2A]
+>   Method 06000007 flags 0x0091 impl 0x0000 '<msil>Main' sig [00 01 08 1D 0E] int32(string[]) rva 0x22AC params 1
+>     Param 08000003 seq 1 flags 0x0 'args'
+>     Body fat hdr0 0x13 align4 True size 18 maxstack 1 locals nil init True eh 0
+>     FatHeader [13 30 01 00 06 00 00 00 00 00 00 00]
+76c86
+< MemberRef 0A000001 parent [mscorlib]System.Runtime.InteropServices.Marshal 'AllocHGlobal' sig [00 01 18 18] native int(native int)
+---
+> MemberRef 0A000001 parent [mscorlib]System.Reflection.AssemblyMetadataAttribute '.ctor' sig [20 02 01 0E 0E] instance void(string, string)
+78c88
+< MemberRef 0A000003 parent [mscorlib]System.Reflection.AssemblyMetadataAttribute '.ctor' sig [20 02 01 0E 0E] instance void(string, string)
+---
+> MemberRef 0A000003 parent [mscorlib]System.Runtime.InteropServices.Marshal 'AllocHGlobal' sig [00 01 18 18] native int(native int)
+81c91
+< CustomAttribute 0C000001 parent 20000001 ctor 0A000003 value [01 00 0B 6D 73 69 6C 2E 74 72 69 70 6C 65 1B 78 38 36 5F 36 34 2D 70 63 2D 77 69 6E 64 6F 77 73 2D 6D 73 76 63 2D 6D 73 69 6C 00 00]
+---
+> CustomAttribute 0C000001 parent 20000001 ctor 0A000001 value [01 00 0B 6D 73 69 6C 2E 74 72 69 70 6C 65 1B 78 38 36 5F 36 34 2D 70 63 2D 77 69 6E 64 6F 77 73 2D 6D 73 76 63 2D 6D 73 69 6C 00 00]

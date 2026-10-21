@@ -1,0 +1,122 @@
+# BCL types and members the MSIL backend uses (Phase 1) or is expected to use (Phase 3+).
+# Syntax: label | [ret] Namespace.Type[/Nested]::Member[``arity](params)
+#
+# --- Phase 1 (emitted today, D10) ---
+P1 core | System.Object
+P1 image base | System.ValueType
+P1 cctor+Main | native int System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+P1 Main | native int System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string)
+P1 Main | string[] System.Environment::GetCommandLineArgs()
+P1 memmove | void System.Buffer::MemoryCopy(void*, void*, int64, int64)
+P1 fence | void System.Threading.Interlocked::MemoryBarrier()
+# --- Phase 3: memory (shadow stack, TLS block, Design 4.2/4.4, 7.1) ---
+P3 alloc | void* System.Runtime.InteropServices.NativeMemory::Alloc(native uint)
+P3 alloc | void* System.Runtime.InteropServices.NativeMemory::AllocZeroed(native uint)
+P3 alloc | void* System.Runtime.InteropServices.NativeMemory::AlignedAlloc(native uint, native uint)
+P3 alloc | void System.Runtime.InteropServices.NativeMemory::Free(void*)
+P3 alloc | void System.Runtime.InteropServices.NativeMemory::AlignedFree(void*)
+P3 mem | void System.Runtime.InteropServices.NativeMemory::Copy(void*, void*, native uint)
+P3 mem | void System.Runtime.InteropServices.NativeMemory::Fill(void*, native uint, uint8)
+P3 mem | void System.Runtime.InteropServices.NativeMemory::Clear(void*, native uint)
+P3 alloc | void System.Runtime.InteropServices.Marshal::FreeHGlobal(native int)
+P3 TLS | System.ThreadStaticAttribute::.ctor()
+# --- Phase 3: process exit, argv, exit (Design 4.1, D27) ---
+P3 atexit | System.AppDomain System.AppDomain::get_CurrentDomain()
+P3 atexit | void System.AppDomain::add_ProcessExit(System.EventHandler)
+P3 atexit | void System.EventHandler::.ctor(object, native int)
+P3 exit | void System.Environment::Exit(int32)
+# --- Phase 3: function pointers (Design 4.5) ---
+P3 thunks | native int System.Runtime.InteropServices.Marshal::GetFunctionPointerForDelegate(System.Delegate)
+P3 thunks | native int System.Runtime.InteropServices.Marshal::GetFunctionPointerForDelegate``1(!!0)
+P3 thunks | System.Runtime.InteropServices.UnmanagedCallersOnlyAttribute::.ctor()
+P3 thunks | System.Type[] System.Runtime.InteropServices.UnmanagedCallersOnlyAttribute::CallConvs
+P3 thunks | System.Runtime.CompilerServices.CallConvCdecl
+P3 thunks | System.Runtime.InteropServices.UnmanagedFunctionPointerAttribute::.ctor(System.Runtime.InteropServices.CallingConvention)
+P3 thunks | System.MulticastDelegate
+# --- Phase 3: P/Invoke attributes (Design 5.3) ---
+P3 pinvoke | System.Runtime.CompilerServices.DisableRuntimeMarshallingAttribute::.ctor()
+P3 pinvoke | System.Runtime.InteropServices.SuppressGCTransitionAttribute::.ctor()
+P3 lazyload | native int System.Runtime.InteropServices.NativeLibrary::Load(string)
+P3 lazyload | native int System.Runtime.InteropServices.NativeLibrary::GetExport(native int, string)
+P3 errno | int32 System.Runtime.InteropServices.Marshal::GetLastPInvokeError()
+P3 errno | int32 System.Runtime.InteropServices.Marshal::GetLastWin32Error()
+# --- Phase 3: atomics (Interlocked, Volatile) ---
+P3 atomics | int32 System.Threading.Interlocked::CompareExchange(int32&, int32, int32)
+P3 atomics | int64 System.Threading.Interlocked::CompareExchange(int64&, int64, int64)
+P3 atomics | native int System.Threading.Interlocked::CompareExchange(native int&, native int, native int)
+P3 atomics | uint32 System.Threading.Interlocked::CompareExchange(uint32&, uint32, uint32)
+P3 atomics | uint8 System.Threading.Interlocked::CompareExchange(uint8&, uint8, uint8)
+P3 atomics | int16 System.Threading.Interlocked::CompareExchange(int16&, int16, int16)
+P3 atomics | int32 System.Threading.Interlocked::Exchange(int32&, int32)
+P3 atomics | int64 System.Threading.Interlocked::Exchange(int64&, int64)
+P3 atomics | native int System.Threading.Interlocked::Exchange(native int&, native int)
+P3 atomics | uint8 System.Threading.Interlocked::Exchange(uint8&, uint8)
+P3 atomics | int32 System.Threading.Interlocked::Add(int32&, int32)
+P3 atomics | int64 System.Threading.Interlocked::Add(int64&, int64)
+P3 atomics | int32 System.Threading.Interlocked::And(int32&, int32)
+P3 atomics | int64 System.Threading.Interlocked::Or(int64&, int64)
+P3 atomics | void System.Threading.Interlocked::MemoryBarrierProcessWide()
+P3 atomics | int32 System.Threading.Volatile::Read(int32&)
+P3 atomics | int64 System.Threading.Volatile::Read(int64&)
+P3 atomics | native int System.Threading.Volatile::Read(native int&)
+P3 atomics | void System.Threading.Volatile::Write(int32&, int32)
+P3 atomics | void System.Threading.Volatile::Write(native int&, native int)
+P3 pause | void System.Threading.Thread::SpinWait(int32)
+# --- Phase 3: f16 and i128 (Design 7.1 table) ---
+P3 half | System.Half
+P3 half | float32 System.Half::op_Explicit(System.Half)
+P3 half | System.Half System.Half::op_Explicit(float32)
+P3 half | System.Half System.Half::op_Explicit(float64)
+P3 half | int16 System.BitConverter::HalfToInt16Bits(System.Half)
+P3 half | System.Half System.BitConverter::Int16BitsToHalf(int16)
+P3 i128 | System.Int128
+P3 i128 | void System.Int128::.ctor(uint64, uint64)
+P3 i128 | System.Int128 System.Int128::op_Division(System.Int128, System.Int128)
+P3 i128 | System.Int128 System.Int128::op_Modulus(System.Int128, System.Int128)
+P3 i128 | System.UInt128 System.UInt128::op_Division(System.UInt128, System.UInt128)
+P3 i128 | uint64 System.Int128::op_Explicit(System.Int128)
+P3 i128 | System.Int128 System.Int128::op_RightShift(System.Int128, int32)
+P3 i128 | float64 System.Int128::op_Explicit(System.Int128)
+# --- Phase 3: math switches (Design 7.1, D16) ---
+P3 math | float64 System.Math::FusedMultiplyAdd(float64, float64, float64)
+P3 math | float32 System.MathF::FusedMultiplyAdd(float32, float32, float32)
+P3 math | float64 System.Math::CopySign(float64, float64)
+P3 math | float64 System.Math::Sqrt(float64)
+P3 math | float32 System.MathF::Sqrt(float32)
+P3 math | float64 System.Math::Floor(float64)
+P3 math | float64 System.Math::Round(float64, System.MidpointRounding)
+P3 math | float64 System.Math::Min(float64, float64)
+P3 math | float64 System.Math::Abs(float64)
+P3 math | float64 System.Math::ScaleB(float64, int32)
+P3 math | float64 System.Math::Cbrt(float64)
+P3 math | float64 System.Math::Log2(float64)
+P3 math | float64 System.Math::IEEERemainder(float64, float64)
+P3 bits | int32 System.BitConverter::SingleToInt32Bits(float32)
+P3 bits | float32 System.BitConverter::Int32BitsToSingle(int32)
+P3 bits | int64 System.BitConverter::DoubleToInt64Bits(float64)
+P3 bits | int32 System.Numerics.BitOperations::PopCount(uint32)
+P3 bits | int32 System.Numerics.BitOperations::LeadingZeroCount(uint64)
+P3 bits | int32 System.Numerics.BitOperations::TrailingZeroCount(uint32)
+P3 bits | uint32 System.Numerics.BitOperations::RotateLeft(uint32, int32)
+P3 bits | uint32 System.Buffers.Binary.BinaryPrimitives::ReverseEndianness(uint32)
+# --- Phase 3: setjmp/longjmp (Design 4.6), traps ---
+P3 sjlj | System.Exception::.ctor()
+P3 sjlj | System.Collections.IDictionary System.Exception::get_Data()
+P3 sjlj | System.Collections.IDictionary::set_Item(object, object)
+P3 trap | void System.Diagnostics.Debugger::Break()
+# --- Phase 3/4: intrinsics (Design 3.2) ---
+P4 x86 | bool System.Runtime.Intrinsics.X86.Sse42::get_IsSupported()
+P4 x86 | uint32 System.Runtime.Intrinsics.X86.Sse42::Crc32(uint32, uint32)
+P4 x86 | uint64 System.Runtime.Intrinsics.X86.Sse42/X64::Crc32(uint64, uint64)
+P4 x86 | void System.Runtime.Intrinsics.X86.X86Base::Pause()
+P4 x86 | System.Runtime.Intrinsics.Vector128`1<uint8> System.Runtime.Intrinsics.X86.Ssse3::Shuffle(System.Runtime.Intrinsics.Vector128`1<uint8>, System.Runtime.Intrinsics.Vector128`1<uint8>)
+P4 arm | uint32 System.Runtime.Intrinsics.Arm.Crc32::ComputeCrc32(uint32, uint32)
+P4 vec | System.Runtime.Intrinsics.Vector128`1
+P4 vec | System.Runtime.Intrinsics.Vector128`1<!!0> System.Runtime.Intrinsics.Vector128::Create``1(!!0)
+# --- FeatureIdeas (only to check that a binder design does not preclude them) ---
+FI-6 | !!0[] System.GC::AllocateArray``1(int32, bool)
+FI-7 | bool System.Runtime.InteropServices.RuntimeInformation::IsOSPlatform(System.Runtime.InteropServices.OSPlatform)
+FI-4 | System.Span`1
+# --- Roslyn's optional well-known attributes (not needed by msil-ld) ---
+roslyn | System.Runtime.CompilerServices.RuntimeCompatibilityAttribute::.ctor()
+roslyn | System.Runtime.Versioning.TargetFrameworkAttribute::.ctor(string)

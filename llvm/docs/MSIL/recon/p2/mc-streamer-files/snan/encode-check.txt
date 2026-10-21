@@ -1,0 +1,2 @@
+{'methods': 3, 'bytes': 48, 'token slots': 2, 'identical': 2, 'different': 1}
+DIFF ('snan.il', 'main', 17, 17, 3, 'a07f280000000020', 'e07f280000000020', True)

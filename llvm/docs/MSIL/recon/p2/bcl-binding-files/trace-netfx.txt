@@ -1,0 +1,60 @@
+### .NET Framework 4.8 (Framework64 + GAC facades), starting at [mscorlib]
+System.Object
+   mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF
+System.ValueType
+   mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF
+native int System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+   mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: native int (native int)
+native int System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string)
+   mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: native int (string)
+string[] System.Environment::GetCommandLineArgs()
+   mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: string[] ()
+void System.Buffer::MemoryCopy(void*,void*,int64,int64)
+   mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: void (void*, void*, int64, int64)
+void System.Threading.Interlocked::MemoryBarrier()
+   mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: void ()
+### .NET Framework 4.8 (Framework64 + GAC facades), starting at [netstandard]
+System.Object
+   netstandard 2.0.0.0 [cc7b13ffcd2ddd51] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF
+System.ValueType
+   netstandard 2.0.0.0 [cc7b13ffcd2ddd51] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF
+native int System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+   netstandard 2.0.0.0 [cc7b13ffcd2ddd51] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: native int (native int)
+native int System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string)
+   netstandard 2.0.0.0 [cc7b13ffcd2ddd51] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: native int (string)
+string[] System.Environment::GetCommandLineArgs()
+   netstandard 2.0.0.0 [cc7b13ffcd2ddd51] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: string[] ()
+void System.Buffer::MemoryCopy(void*,void*,int64,int64)
+   netstandard 2.0.0.0 [cc7b13ffcd2ddd51] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: void (void*, void*, int64, int64)
+void System.Threading.Interlocked::MemoryBarrier()
+   netstandard 2.0.0.0 [cc7b13ffcd2ddd51] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: void ()
+### .NET Framework 4.8 (Framework64 + GAC facades), starting at [System.Runtime]
+System.Object
+   System.Runtime 4.0.0.0 [b03f5f7f11d50a3a] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF
+System.ValueType
+   System.Runtime 4.0.0.0 [b03f5f7f11d50a3a] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF
+native int System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+   System.Runtime 4.0.0.0 [b03f5f7f11d50a3a]  TYPE NOT FOUND (TypeLoadException at run time)
+native int System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string)
+   System.Runtime 4.0.0.0 [b03f5f7f11d50a3a]  TYPE NOT FOUND (TypeLoadException at run time)
+string[] System.Environment::GetCommandLineArgs()
+   System.Runtime 4.0.0.0 [b03f5f7f11d50a3a]  TYPE NOT FOUND (TypeLoadException at run time)
+void System.Buffer::MemoryCopy(void*,void*,int64,int64)
+   System.Runtime 4.0.0.0 [b03f5f7f11d50a3a] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: void (void*, void*, int64, int64)
+void System.Threading.Interlocked::MemoryBarrier()
+   System.Runtime 4.0.0.0 [b03f5f7f11d50a3a]  TYPE NOT FOUND (TypeLoadException at run time)
+### .NET Framework 4.8 (Framework64 + GAC facades), starting at [System.Runtime.InteropServices]
+System.Object
+   System.Runtime.InteropServices 4.0.0.0 [b03f5f7f11d50a3a]  TYPE NOT FOUND (TypeLoadException at run time)
+System.ValueType
+   System.Runtime.InteropServices 4.0.0.0 [b03f5f7f11d50a3a]  TYPE NOT FOUND (TypeLoadException at run time)
+native int System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+   System.Runtime.InteropServices 4.0.0.0 [b03f5f7f11d50a3a] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: native int (native int)
+native int System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string)
+   System.Runtime.InteropServices 4.0.0.0 [b03f5f7f11d50a3a] -> mscorlib 4.0.0.0 [b77a5c561934e089]  TYPEDEF  member OK: native int (string)
+string[] System.Environment::GetCommandLineArgs()
+   System.Runtime.InteropServices 4.0.0.0 [b03f5f7f11d50a3a]  TYPE NOT FOUND (TypeLoadException at run time)
+void System.Buffer::MemoryCopy(void*,void*,int64,int64)
+   System.Runtime.InteropServices 4.0.0.0 [b03f5f7f11d50a3a]  TYPE NOT FOUND (TypeLoadException at run time)
+void System.Threading.Interlocked::MemoryBarrier()
+   System.Runtime.InteropServices 4.0.0.0 [b03f5f7f11d50a3a]  TYPE NOT FOUND (TypeLoadException at run time)

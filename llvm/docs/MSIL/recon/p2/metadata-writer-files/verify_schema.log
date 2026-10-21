@@ -1,0 +1,9 @@
+fx-System.Core.txt: 28 tables, HeapSizes 0x00, all row sizes match SRM
+fx-System.txt: 30 tables, HeapSizes 0x05, all row sizes match SRM
+fx-mscorlib.txt: 30 tables, HeapSizes 0x05, all row sizes match SRM
+hello.txt: 14 tables, HeapSizes 0x00, all row sizes match SRM
+net8-System.Runtime.txt: 22 tables, HeapSizes 0x05, all row sizes match SRM
+net8-corelib.txt: 29 tables, HeapSizes 0x05, all row sizes match SRM
+net8-mscorlib.txt: 8 tables, HeapSizes 0x00, all row sizes match SRM
+tables covered across inputs: 34 of 45: ['Assembly', 'AssemblyRef', 'ClassLayout', 'Constant', 'CustomAttribute', 'DeclSecurity', 'Event', 'EventMap', 'ExportedType', 'Field', 'FieldLayout', 'FieldMarshal', 'FieldRVA', 'File', 'GenericParam', 'GenericParamConstraint', 'ImplMap', 'InterfaceImpl', 'ManifestResource', 'MemberRef', 'MethodDef', 'MethodImpl', 'MethodSemantics', 'MethodSpec', 'Module', 'ModuleRef', 'NestedClass', 'Param', 'Property', 'PropertyMap', 'StandAloneSig', 'TypeDef', 'TypeRef', 'TypeSpec']
+RESULT: PASS

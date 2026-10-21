@@ -1,0 +1,1 @@
+{'methods': 2670, 'bytes': 848670, 'token slots': 22938, 'identical': 2670}

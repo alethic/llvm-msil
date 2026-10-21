@@ -1,0 +1,90 @@
+# probe-win.exe (gen_probe.py windows), Windows 11 26200
+=== .NET Framework 4.8
+OK   w01 [ucrtbase as abs] abs: 5
+OK   w02 [ucrtbase.dll as abs] abs: 5
+OK   w03 [api-ms-win-crt-utility-l1-1-0 as abs] abs via API set: 5
+OK   w04 [api-ms-win-crt-utility-l1-1-0.dll as abs] abs via API set + .dll: 5
+OK   w05 [API-MS-WIN-CRT-UTILITY-L1-1-0.DLL as abs] abs, upper case: 5
+OK   w06 [api-ms-win-crt-string-l1-1-0 as strlen] strlen via API set: 3
+OK   w07 [api-ms-win-crt-math-l1-1-0 as sqrt] sqrt via API set: 1.5
+OK   w08 [KERNEL32 as GetTickCount] GetTickCount, import-library spelling: 429407578
+OK   w09 [KERNEL32.dll as GetTickCount] GetTickCount + .dll: 429407578
+OK   w10 [kernel32 as GetTickCount] GetTickCount lower case: 429407578
+OK   w11 [WS2_32 as #9] htons by ordinal #9: 13330
+OK   w12 [ws2_32 as htons] htons by name: 13330
+OK   w13 [VCRUNTIME140 as memchr] memchr from vcruntime140: 25428369
+OK   w14 [ucrtbase as memchr] memchr from ucrtbase: 25428289
+FAIL w15 [ucrtbase as frexpf] frexpf (not exported): System.EntryPointNotFoundException
+OK   w16 [api-ms-win-crt-string-l1-1-0 as _strdup] strdup via the oldnames alias _strdup: 25428320
+FAIL w17 [libc as abs] abs from libc: System.DllNotFoundException
+OK   w18 [msvcrt as abs] abs from msvcrt: 5
+OK   w19 [api-ms-win-crt-stdio-l1-1-0 as __acrt_iob_func] __acrt_iob_func(1) (stdout): 140721295821976
+FAIL w20 [c as abs] abs from c: System.DllNotFoundException
+OK   w21 [api-ms-win-crt-runtime-l1-1-0 as _errno] _errno(): 24861584
+OK   w22 [api-ms-win-crt-math-l1-1-0 as abs] abs from the wrong API set (math): 5
+FAIL w23 [ucrtbase as printf] printf (not exported by ucrtbase): System.EntryPointNotFoundException
+FAIL x01 [kernel32 as GetProcAddress] data import address via LoadLibraryW/GetProcAddress: System.EntryPointNotFoundException
+=== .NET 8.0.32
+OK   w01 [ucrtbase as abs] abs: 5
+OK   w02 [ucrtbase.dll as abs] abs: 5
+OK   w03 [api-ms-win-crt-utility-l1-1-0 as abs] abs via API set: 5
+OK   w04 [api-ms-win-crt-utility-l1-1-0.dll as abs] abs via API set + .dll: 5
+OK   w05 [API-MS-WIN-CRT-UTILITY-L1-1-0.DLL as abs] abs, upper case: 5
+OK   w06 [api-ms-win-crt-string-l1-1-0 as strlen] strlen via API set: 3
+OK   w07 [api-ms-win-crt-math-l1-1-0 as sqrt] sqrt via API set: 1.5
+OK   w08 [KERNEL32 as GetTickCount] GetTickCount, import-library spelling: 429407875
+OK   w09 [KERNEL32.dll as GetTickCount] GetTickCount + .dll: 429407875
+OK   w10 [kernel32 as GetTickCount] GetTickCount lower case: 429407875
+OK   w11 [WS2_32 as #9] htons by ordinal #9: 13330
+OK   w12 [ws2_32 as htons] htons by name: 13330
+OK   w13 [VCRUNTIME140 as memchr] memchr from vcruntime140: 2781253833489
+OK   w14 [ucrtbase as memchr] memchr from ucrtbase: 2781253833233
+FAIL w15 [ucrtbase as frexpf] frexpf (not exported): System.EntryPointNotFoundException
+OK   w16 [api-ms-win-crt-string-l1-1-0 as _strdup] strdup via the oldnames alias _strdup: 2781253833296
+FAIL w17 [libc as abs] abs from libc: System.DllNotFoundException
+OK   w18 [msvcrt as abs] abs from msvcrt: 5
+OK   w19 [api-ms-win-crt-stdio-l1-1-0 as __acrt_iob_func] __acrt_iob_func(1) (stdout): 140721295821976
+FAIL w20 [c as abs] abs from c: System.DllNotFoundException
+OK   w21 [api-ms-win-crt-runtime-l1-1-0 as _errno] _errno(): 2781225660272
+OK   w22 [api-ms-win-crt-math-l1-1-0 as abs] abs from the wrong API set (math): 5
+FAIL w23 [ucrtbase as printf] printf (not exported by ucrtbase): System.EntryPointNotFoundException
+FAIL x01 [kernel32 as GetProcAddress] data import address via LoadLibraryW/GetProcAddress: System.EntryPointNotFoundException
+=== .NET 10.0.13
+OK   w01 [ucrtbase as abs] abs: 5
+OK   w02 [ucrtbase.dll as abs] abs: 5
+OK   w03 [api-ms-win-crt-utility-l1-1-0 as abs] abs via API set: 5
+OK   w04 [api-ms-win-crt-utility-l1-1-0.dll as abs] abs via API set + .dll: 5
+OK   w05 [API-MS-WIN-CRT-UTILITY-L1-1-0.DLL as abs] abs, upper case: 5
+OK   w06 [api-ms-win-crt-string-l1-1-0 as strlen] strlen via API set: 3
+OK   w07 [api-ms-win-crt-math-l1-1-0 as sqrt] sqrt via API set: 1.5
+OK   w08 [KERNEL32 as GetTickCount] GetTickCount, import-library spelling: 429408140
+OK   w09 [KERNEL32.dll as GetTickCount] GetTickCount + .dll: 429408140
+OK   w10 [kernel32 as GetTickCount] GetTickCount lower case: 429408140
+OK   w11 [WS2_32 as #9] htons by ordinal #9: 13330
+OK   w12 [ws2_32 as htons] htons by name: 13330
+OK   w13 [VCRUNTIME140 as memchr] memchr from vcruntime140: 2500941159537
+OK   w14 [ucrtbase as memchr] memchr from ucrtbase: 2500941160017
+FAIL w15 [ucrtbase as frexpf] frexpf (not exported): System.EntryPointNotFoundException
+OK   w16 [api-ms-win-crt-string-l1-1-0 as _strdup] strdup via the oldnames alias _strdup: 2500941160128
+FAIL w17 [libc as abs] abs from libc: System.DllNotFoundException
+OK   w18 [msvcrt as abs] abs from msvcrt: 5
+OK   w19 [api-ms-win-crt-stdio-l1-1-0 as __acrt_iob_func] __acrt_iob_func(1) (stdout): 140721295821976
+FAIL w20 [c as abs] abs from c: System.DllNotFoundException
+OK   w21 [api-ms-win-crt-runtime-l1-1-0 as _errno] _errno(): 2500940901184
+OK   w22 [api-ms-win-crt-math-l1-1-0 as abs] abs from the wrong API set (math): 5
+FAIL w23 [ucrtbase as printf] printf (not exported by ucrtbase): System.EntryPointNotFoundException
+FAIL x01 [kernel32 as GetProcAddress] data import address via LoadLibraryW/GetProcAddress: System.EntryPointNotFoundException
+=== dotted.il (DLL file my.dot.dll)
+Framework 4.8: my.dot -> System.DllNotFoundException; my.dot.dll -> 2
+.NET 8 / .NET 10: my.dot -> 2; my.dot.dll -> 2
+=== mangle.il (entry 'GetModuleHandle', which kernel32 does not export)
+Framework 4.8 / .NET 8 / .NET 10: without nomangle -> binds GetModuleHandleA (returns the module handle); with nomangle -> System.EntryPointNotFoundException
+=== data-win.il (kernel32 LoadLibraryW + GetProcAddress of msvcrt '_iob', fputs to &_iob[1])
+Framework 4.8, .NET 8: prints 'hello through msvcrt's _iob[1] (data import)', exit 0
+=== data-modern.il (NativeLibrary.Load + GetExport of msvcrt '_iob')
+.NET 8, .NET 10: prints the line, exit 0; Framework 4.8: TypeInitializationException (FileNotFoundException for System.Runtime.InteropServices 8.0.0.0: no NativeLibrary)
+=== sret-win64.il (lldiv through api-ms-win-crt-utility-l1-1-0.dll, hidden return pointer as a plain first native int)
+Framework 4.8, .NET 8, .NET 10: prints 9 and 2 (quot, rem of 47/5)
+=== note on x01 (all three runtimes: EntryPointNotFoundException)
+x01 declared pinvokeimpl("msvcrt") '__p__environ', which x64 msvcrt.dll does not export (it exports the data symbol _environ);
+the failure is the experiment's, and the kind of error the resolver reports at link time. data-win.il replaced it.

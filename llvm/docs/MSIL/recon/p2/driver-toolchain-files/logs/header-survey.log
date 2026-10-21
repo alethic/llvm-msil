@@ -1,0 +1,11 @@
+x86_64-unknown-linux-gnu-msil --sysroot (C + POSIX): 38 headers, 38 clean; not clean: none
+x86_64-unknown-linux-gnu    --sysroot (C + POSIX): 38 headers, 38 clean; not clean: none
+x86_64-pc-windows-msvc-msil VC+SDK (C + Windows): 35 headers, 34 clean; not clean: h_tgmath.c
+x86_64-pc-windows-msvc      VC+SDK (C + Windows): 35 headers, 34 clean; not clean: h_tgmath.c
+tgmath.h on windows-msvc (native and MSIL):
+D:\llvm-msil\build\lib\clang\24\include\tgmath.h:72:50: error: passing '_Complex float' to parameter of incompatible type '_Fcomplex' (aka 'struct _C_float_complex')
+D:\llvm-msil\build\lib\clang\24\include\tgmath.h:76:50: error: passing '_Complex double' to parameter of incompatible type '_Dcomplex' (aka 'struct _C_double_complex')
+x86_64-pc-windows-msvc-msil -ffreestanding, no VC/SDK (freestanding headers): 9 headers, 9 clean; not clean: none
+x86_64-unknown-linux-gnu-msil -ffreestanding, no sysroot (freestanding headers): 9 headers, 9 clean; not clean: none
+stdio.h with only the SDK root (no VC detected):
+h_stdio.c:1:10: fatal error: 'stdio.h' file not found

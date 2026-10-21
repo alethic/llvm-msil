@@ -1,0 +1,109 @@
+## inputs: a.o stock clang (native triple), b.o/h1.o/h2.o/dup.o/undef.o MSIL clang, all -flto
+$ /d/llvm-msil/build/bin/clang.exe --target=x86_64-pc-windows-msvc -fno-ms-volatile -O2 -flto -c a.c -o a.o
+[rc=0]
+$ /d/llvm-msil/build/bin/clang.exe --target=x86_64-pc-windows-msvc-msil -O2 -flto -c b.c -o b.o
+[rc=0]
+$ /d/llvm-msil/build/bin/clang.exe --target=x86_64-pc-windows-msvc-msil -O2 -flto -c h1.c -o h1.o
+[rc=0]
+$ /d/llvm-msil/build/bin/clang.exe --target=x86_64-pc-windows-msvc-msil -O2 -flto -c h2.c -o h2.o
+[rc=0]
+$ /d/llvm-msil/build/bin/clang.exe --target=x86_64-pc-windows-msvc-msil -flto -c dup.c -o dup.o
+[rc=0]
+$ /d/llvm-msil/build/bin/clang.exe --target=x86_64-pc-windows-msvc-msil -flto -c undef.c -o undef.o
+[rc=0]
+$ /d/llvm-msil/build/bin/clang.exe --target=x86_64-unknown-linux-gnu -flto -c b.c -o b-linux.o
+[rc=0]
+$ /c/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/llvm-ar.exe rcs lib/libhelp.a h1.o h2.o
+[rc=0]
+## flavor dispatch
+$ ../proto/bin/msil-ld.exe --version
+LLD 24.0.0 (msil-ld prototype)
+[rc=0]
+$ ./lld.exe -flavor msil --version
+LLD 24.0.0 (msil-ld prototype)
+[rc=0]
+$ ./x86_64-msil-ld.exe --version
+LLD 24.0.0 (msil-ld prototype)
+[rc=0]
+$ ./wasm-ld.exe --version
+[rc=1]
+$ ./lld.exe --version
+lld is a generic driver.
+Invoke ld.lld (Unix), ld64.lld (macOS), lld-link (Windows), wasm-ld (WebAssembly), msil-ld (MSIL) instead
+[rc=1]
+## link: stock + MSIL bitcode, lazy archive member, native DLL exports
+$ ../proto/bin/msil-ld.exe --lto-emit-asm -o prog.il a.o b.o -L lib -lhelp -L C:/Windows/System32 -lucrtbase -mllvm -msil-assembly-name=prog -Map prog.map --why-extract=why.txt --reproduce repro.tar
+msil-ld: warning: Linking two modules of different target triples: 'b.o' is 'x86_64-pc-windows-msvc19.33.0-msil' whereas 'ld-temp.o' is 'x86_64-pc-windows-msvc19.33.0'
+
+
+msil-ld: warning: Linking two modules of different target triples: 'lib\libhelp.a(h1.o at 474)' is 'x86_64-pc-windows-msvc19.33.0-msil' whereas 'ld-temp.o' is 'x86_64-pc-windows-msvc19.33.0'
+
+[rc=0]
+$ cat why.txt
+reference	extracted	symbol
+a.o	lib\libhelp.a(libhelp.a(h1.o at 474))	helper_from_lib
+$ grep -v defined prog.map
+symbol	kind	file
+puts	pinvoke	ucrtbase
+strlen	pinvoke	ucrtbase
+atoi	pinvoke	ucrtbase
+toupper	pinvoke	ucrtbase
+$ grep pinvokeimpl prog.il
+.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}
+.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) native int 'strlen'(native int) cil managed preservesig {}
+.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'atoi'(native int) cil managed preservesig {}
+.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'toupper'(int32) cil managed preservesig {}
+$ grep -c never_used prog.il
+0
+$ tar tf repro.tar
+repro/response.txt
+repro/version.txt
+repro/C/llvm-msil-scratch/p2/lld-flavor/t1/a.o
+repro/C/llvm-msil-scratch/p2/lld-flavor/t1/b.o
+repro/C/llvm-msil-scratch/p2/lld-flavor/t1/lib/libhelp.a
+repro/C/Windows/System32/ucrtbase.dll
+$ /c/Windows/Microsoft.NET/Framework64/v4.0.30319/ilasm.exe -nologo -quiet -dll -pe64 -x64 -output=prog.dll prog.il
+[rc=0]
+$ dotnet exec --runtimeconfig ../retarget/net8.runtimeconfig.json run/prog.dll
+hello from a.c (stock clang bitcode)
+alpha
+beta
+gamma
+385
+helper_from_lib (archive member h1)
+500
+12
+-42
+81
+4
+[rc=7]
+## diagnostics
+$ ../proto/bin/msil-ld.exe --lto-emit-asm -o x.il a.o b.o dup.o --whole-archive lib/libhelp.a --no-whole-archive -L C:/Windows/System32 -lucrtbase
+msil-ld: error: duplicate symbol: duplicate_me
+>>> defined in dup.o
+>>> defined in lib/libhelp.a(libhelp.a(h2.o at 4310))
+[rc=1]
+$ ../proto/bin/msil-ld.exe --lto-emit-asm -o x.il undef.o
+msil-ld: error: undefined symbol: missing_fn
+>>> referenced by undef.o
+[rc=1]
+$ ../proto/bin/msil-ld.exe --lto-emit-asm -o x.il a.o b-linux.o
+msil-ld: error: b-linux.o: target triple 'x86_64-unknown-linux-gnu' is not compatible with 'x86_64-pc-windows-msvc19.33.0-msil'
+[rc=1]
+$ ../proto/bin/msil-ld.exe --lto-emit-asm -o x.il a.o -lnosuch
+msil-ld: error: unable to find library -lnosuch
+[rc=1]
+## response file
+$ ../proto/bin/msil-ld.exe @link.rsp
+msil-ld: warning: Linking two modules of different target triples: 'b.o' is 'x86_64-pc-windows-msvc19.33.0-msil' whereas 'ld-temp.o' is 'x86_64-pc-windows-msvc19.33.0'
+
+
+msil-ld: warning: Linking two modules of different target triples: 'lib\libhelp.a(h1.o at 474)' is 'x86_64-pc-windows-msvc19.33.0-msil' whereas 'ld-temp.o' is 'x86_64-pc-windows-msvc19.33.0'
+
+[rc=0]
+## ThinLTO input (needs the object format)
+$ ../proto/bin/msil-ld.exe --lto-emit-asm -o thin.il a.thin.o b.thin.o h1.thin.o -L C:/Windows/System32 -lucrtbase
+msil-ld: error: external global variable 'counter' is not supported (phase 2 linker)
+msil-ld: error: external global variable 'names' is not supported (phase 2 linker)
+msil-ld: error: external global variable '??_C@_0CE@LKKIBDMC@helper_from_lib?5?$CIarchive?5member?5@' is not supported (phase 2 linker)
+[rc=1]

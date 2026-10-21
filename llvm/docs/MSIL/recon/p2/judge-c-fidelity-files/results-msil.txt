@@ -1,0 +1,63 @@
+== J1 zoo (objfmt-binding E2) through the option-2 prototype, -O1 windows-msvc (native: 63)
+zoo objects (option-2 prototype, link order:a b): .NET8 63 .NET10 63 NETFX 63
+== J2 zoo through the LTO-style path (clang -c -flto + cc1 -mlink-bitcode-file)
+zoo [x86_64-pc-windows-msvc-msil] LTO: -c -flto ok; link/codegen: error: alias @alias_twice is not supported for MSIL error: undefined function 'maybe' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker 2 errors generated. 
+== J3 weak alias overridden by a strong definition (native: 144; without p1b: 114)
+p1ab [x86_64-pc-windows-msvc-msil] LTO: -c -flto ok; link/codegen: error: alias @arr_alias is not supported for MSIL 1 error generated. 
+p1ac [x86_64-pc-windows-msvc-msil] LTO: -c -flto ok; link/codegen: error: alias @hook is not supported for MSIL error: alias @arr_alias is not supported for MSIL 2 errors generated. 
+p1mwb objects (option-2 prototype): msilobj: error: duplicate symbol: hook in p1w.o and p1b.o 
+p1mbw objects (option-2 prototype): msilobj: error: duplicate symbol: hook (alias) in p1b.o and p1w.o 
+p1mwc objects (option-2 prototype, link order:p1m p1w p1c): .NET8 114 .NET10 114 NETFX 114
+== J4 K&R calls whose prototype-less call types differ from the definitions (native: 23)
+p2 [x86_64-pc-windows-msvc-msil] LTO: .NET8 23 .NET10 23 NETFX 23
+p2 [x86_64-unknown-linux-gnu-msil] LTO: .NET8 23 .NET10 23 NETFX 23
+p2 objects: mkobj p2a failed: error: <unknown>:0:0: in function main i32 (): mismatched call signature
+== J4b prototype that disagrees with the definition (objfmt-binding E16; native: 41)
+sig [x86_64-pc-windows-msvc-msil] LTO: .NET8 41 .NET10 41 NETFX 41
+sig objects (option-2 prototype, link order:caller callee): .NET8 127 .NET10 127 NETFX 127
+   Unhandled exception. System.InvalidProgramException: Common Language Runtime detected an invalid program.
+== J5 __start_/__stop_ section registration (native linux: 15)
+p3 [x86_64-unknown-linux-gnu-msil] LTO: -c -flto ok; link/codegen: error: external global variable '__start_myreg' is not supported (phase 2 linker) error: external global variable '__stop_myreg' is not supported (phase 2 linker) 2 errors generated. 
+== J6 constructor registered through a named section (native linux and windows: 42)
+p8 [x86_64-pc-windows-msvc-msil] -S + ilasm (no diagnostic): .NET8 3 .NET10 3 NETFX 3
+p8 [x86_64-unknown-linux-gnu-msil] -S + ilasm (no diagnostic): .NET8 3 .NET10 3 NETFX 3
+== J7 __declspec(selectany) data in two objects (native windows: 15)
+p4 [x86_64-pc-windows-msvc-msil] LTO: .NET8 15 .NET10 15 NETFX 15
+p4 objects (option-2 prototype, link order:p4a p4b): .NET8 15 .NET10 15 NETFX 15
+== J8 thread_local across objects (native: 12) and J9 destructors with priorities
+p5 [x86_64-pc-windows-msvc-msil] LTO: -c -flto ok; link/codegen: error: thread-local variable @tcount is not supported for MSIL yet 1 error generated. 
+p6 [x86_64-pc-windows-msvc-msil] LTO: -c -flto ok; link/codegen: error: global destructor @d150 is not supported for MSIL yet error: global destructor @d120 is not supported for MSIL yet 2 errors generated. 
+== J10 weak definition vs common definition (native lld/ELF and lld-link: 1)
+p9ab [x86_64-pc-windows-msvc-msil] LTO: .NET8 1 .NET10 1 NETFX 1
+p9ba [x86_64-pc-windows-msvc-msil] LTO: .NET8 1 .NET10 1 NETFX 1
+p9ab objects (option-2 prototype, link order:p9a p9b): .NET8 51 .NET10 51 NETFX 51
+p9ba objects (option-2 prototype, link order:p9b p9a): .NET8 51 .NET10 51 NETFX 51
+== J11 ELF vocabulary with an unassigned e_machine (0xC11): native x86_64 objects patched
+Format: elf64-unknown
+  Machine: 0xC11
+0000000000000000 D arr_alias
+0000000000000000 D base_arr
+0000000000000000 t dummy_hook
+0000000000000000 W hook
+Archive map
+base_arr in p1w.em.o
+hook in p1w.em.o
+arr_alias in p1w.em.o
+   sym dummy_hook Local Function .text.dummy_hook
+   sym base_arr Global Object .data.base_arr
+   sym hook Weak Function .text.dummy_hook
+   sym arr_alias Global Object .data.base_arr
+       Name: myreg (46)
+       Name: .llvm_addrsig (32)
+       Name: .init_array.120 (161)
+       Name: .init_array (6)
+       Name: .fini_array.120 (182)
+       Name: .llvm_addrsig (57)
+       Name: .deplibs (25)
+       Name: .llvm_addrsig (97)
+   tcount     Type: TLS (0x6)
+ld.lld: error: unsupported e_machine value: 3089
+== J12 #pragma comment(lib) per triple
+   x86_64-unknown-linux-gnu-msil: 
+   x86_64-unknown-linux-gnu: !llvm.dependent-libraries = !{!0} 
+   x86_64-pc-windows-msvc-msil: !llvm.linker.options = !{!2} 

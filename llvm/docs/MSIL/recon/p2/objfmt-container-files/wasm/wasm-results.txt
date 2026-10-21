@@ -1,0 +1,26 @@
+# (A) reference point: a wasm32 object from this tree's clang (-O1 -c two.c) read by VS-bundled LLVM 22.1.3 tools
+         U counter
+         U ext
+00000000 D table
+00000001 W twice
+Idx Name            Size     VMA      Type
+  0 TYPE            00000006 00000000 
+  1 IMPORT          00000022 00000000 
+  2 FUNCTION        00000002 00000000 
+  3 DATACOUNT       00000001 00000000 
+  4 CODE            0000001f 00000000 TEXT
+  5 DATA            0000000e 00000000 DATA
+  6 linking         0000004b 00000000 
+  7 reloc.CODE      00000009 00000000 
+  8 reloc.DATA      00000006 00000000 
+  9 producers       0000001f 00000000 
+ 10 target_features 00000084 00000000 
+two.o:	file format wasm
+RELOCATION RECORDS FOR [CODE]:
+OFFSET   TYPE                     VALUE
+0000000c R_WASM_MEMORY_ADDR_LEB   counter+0
+00000015 R_WASM_FUNCTION_INDEX_LEB ext+0
+RELOCATION RECORDS FOR [DATA]:
+OFFSET   TYPE                     VALUE
+00000006 R_WASM_MEMORY_ADDR_I32   counter+0
+file size: 471 bytes

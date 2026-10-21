@@ -1,0 +1,23 @@
+# An archive: only members that resolve an undefined symbol are linked, so the
+# unused member's duplicate definition and its constructor never take effect.
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/lib
+# RUN: %clang_msil %{msil_cflags} -O2 -flto -c %t/used.c -o %t/lib/used.o
+# RUN: %clang_msil %{msil_cflags} -O2 -flto -c %t/unused.c -o %t/lib/unused.o
+# RUN: %msil_ar rcs %t/lib/libhelp.a %t/lib/used.o %t/lib/unused.o
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_libs} = -L %t/lib -lhelp
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+int helper(void);
+int value(void) { return 7; }
+int main(void) {
+  put_i64(helper());
+  return value();
+}
+#--- used.c
+int helper(void) { return 100; }
+#--- unused.c
+int puts(const char *);
+int value(void) { return 99; }
+__attribute__((constructor)) static void ctor(void) { puts("unused constructor ran"); }

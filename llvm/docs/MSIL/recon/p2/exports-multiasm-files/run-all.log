@@ -1,0 +1,1128 @@
+######## E1 export class, missing members, versioning
+===== ok
+--- net8
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net10
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net48
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+===== missing
+--- net8
+  caught: 
+  System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.gone()'.
+  [exit 0]
+--- net10
+  caught: 
+  System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.gone()'.
+  [exit 0]
+--- net48
+  caught: 
+  System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.gone()'.
+  [exit 0]
+===== badsig
+--- net8
+  caught: 
+  System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.add(IntPtr, Int32)'.
+  [exit 0]
+--- net10
+  caught: 
+  System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.add(IntPtr, Int32)'.
+  [exit 0]
+--- net48
+  caught: 
+  System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.add(IntPtr, Int32)'.
+  [exit 0]
+===== noclass
+--- net8
+  caught: 
+  System.TypeLoadException: Could not load type 'Contoso.Zlib.Other' from assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'.
+  [exit 0]
+--- net10
+  caught: 
+  System.TypeLoadException: Could not load type 'Contoso.Zlib.Other' from assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'.
+  [exit 0]
+--- net48
+  caught: 
+  System.TypeLoadException: Could not load type 'Contoso.Zlib.Other' from assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'.
+  [exit 0]
+===== noasm
+--- net8
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'nolib, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'nolib, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+--- net10
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'nolib, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'nolib, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+--- net48
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'nolib, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null' or one of its dependencies. The system cannot find the file specified.
+  File name: 'nolib, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+===== global
+--- net8
+  caught: 
+  System.TypeLoadException: Could not load type '<Module>' from assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'.
+  [exit 0]
+--- net10
+  caught: 
+  System.TypeLoadException: Could not load type '<Module>' from assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'.
+  [exit 0]
+--- net48
+  caught: 
+  System.TypeLoadException: Could not load type '<Module>' from assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'.
+  [exit 0]
+===== cold
+--- net8
+  caught: 
+  System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.gone()'.
+  [exit 0]
+--- net10
+  caught: 
+  System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.gone()'.
+  [exit 0]
+--- net48
+  caught: 
+  System.MissingMethodException: Method not found: 'Int32 Contoso.Zlib.Native.gone()'.
+  [exit 0]
+===== ver-eq
+--- net8
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net10
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net48
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+===== ver-lower
+--- net8
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net10
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net48
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+===== ver-rev
+--- net8
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=1.2.3.5, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'zlibx, Version=1.2.3.5, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+--- net10
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=1.2.3.5, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'zlibx, Version=1.2.3.5, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+--- net48
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+===== ver-major
+--- net8
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'zlibx, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+--- net10
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'zlibx, Version=2.0.0.0, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+--- net48
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+===== ver-none
+--- net8
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net10
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net48
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+===== ver-pkt
+--- net8
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net10
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net48
+  caught: 
+  System.IO.FileLoadException: Could not load file or assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=0102030405060708' or one of its dependencies. The located assembly's manifest definition does not match the assembly reference. (Exception from HRESULT: 0x80131040)
+  File name: 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=0102030405060708'
+  [exit 0]
+===== name-a
+--- net8
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+--- net10
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+--- net48
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null' or one of its dependencies. The system cannot find the file specified.
+  File name: 'zlibx, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+===== name-b
+--- net8
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'z, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'z, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+--- net10
+  caught: 
+  System.IO.FileNotFoundException: Could not load file or assembly 'z, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'z, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+--- net48
+  caught: 
+  System.IO.FileLoadException: Could not load file or assembly 'z, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null' or one of its dependencies. The located assembly's manifest definition does not match the assembly reference. (Exception from HRESULT: 0x80131040)
+  File name: 'z, Version=1.2.3.4, Culture=neutral, PublicKeyToken=null'
+  [exit 0]
+######## E2 exported data and function addresses
+===== prog2 (target first called directly)
+--- net8
+    &twice: program ldftn (.cctor) vs library '<msil>fn_twice': equal
+    &twice: program ldftn (late) vs library '<msil>fn_twice': equal
+    &twice: library same-module ldftn (late) vs library '<msil>fn_twice': equal
+    &twice: library accessor vs library get_twice(): equal
+    calli program pointer: twice(21) = 42
+    calli library pointer: twice(21) = 42
+    bump() after the program stored 40 = 41
+    &counter: program field vs exported field: equal
+  [exit 0]
+--- net10
+    &twice: program ldftn (.cctor) vs library '<msil>fn_twice': equal
+    &twice: program ldftn (late) vs library '<msil>fn_twice': equal
+    &twice: library same-module ldftn (late) vs library '<msil>fn_twice': equal
+    &twice: library accessor vs library get_twice(): equal
+    calli program pointer: twice(21) = 42
+    calli library pointer: twice(21) = 42
+    bump() after the program stored 40 = 41
+    &counter: program field vs exported field: equal
+  [exit 0]
+--- net48
+    &twice: program ldftn (.cctor) vs library '<msil>fn_twice': equal
+    &twice: program ldftn (late) vs library '<msil>fn_twice': equal
+    &twice: library same-module ldftn (late) vs library '<msil>fn_twice': equal
+    &twice: library accessor vs library get_twice(): equal
+    calli program pointer: twice(21) = 42
+    calli library pointer: twice(21) = 42
+    bump() after the program stored 40 = 41
+    &counter: program field vs exported field: equal
+  [exit 0]
+===== prog2c (target first called through calli)
+--- net8
+    &twice: program ldftn (.cctor) vs library '<msil>fn_twice': equal
+    &twice: program ldftn (late) vs library '<msil>fn_twice': equal
+    &twice: library same-module ldftn (late) vs library '<msil>fn_twice': equal
+    &twice: library accessor vs library get_twice(): equal
+    calli program pointer: twice(21) = 42
+    calli library pointer: twice(21) = 42
+    bump() after the program stored 40 = 41
+    &counter: program field vs exported field: equal
+  [exit 0]
+--- net10
+    &twice: program ldftn (.cctor) vs library '<msil>fn_twice': equal
+    &twice: program ldftn (late) vs library '<msil>fn_twice': equal
+    &twice: library same-module ldftn (late) vs library '<msil>fn_twice': equal
+    &twice: library accessor vs library get_twice(): equal
+    calli program pointer: twice(21) = 42
+    calli library pointer: twice(21) = 42
+    bump() after the program stored 40 = 41
+    &counter: program field vs exported field: equal
+  [exit 0]
+--- net48
+    &twice: program ldftn (.cctor) vs library '<msil>fn_twice': equal
+    &twice: program ldftn (late) vs library '<msil>fn_twice': DIFFER
+    &twice: library same-module ldftn (late) vs library '<msil>fn_twice': DIFFER
+    &twice: library accessor vs library get_twice(): equal
+    calli program pointer: twice(21) = 42
+    calli library pointer: twice(21) = 42
+    bump() after the program stored 40 = 41
+    &counter: program field vs exported field: equal
+  [exit 0]
+===== e2b ident (call first)
+--- net8
+    global method: early vs late ldftn: equal
+    class method:  early vs late ldftn: equal
+  [exit 0]
+--- net10
+    global method: early vs late ldftn: equal
+    class method:  early vs late ldftn: equal
+  [exit 0]
+--- net48
+    global method: early vs late ldftn: equal
+    class method:  early vs late ldftn: equal
+  [exit 0]
+===== e2b ident2 (calli first)
+--- net8
+    global method: .cctor vs late ldftn (target ran via calli): equal
+    class method:  .cctor vs late ldftn (target ran via calli): equal
+  [exit 0]
+--- net10
+    global method: .cctor vs late ldftn (target ran via calli): equal
+    class method:  .cctor vs late ldftn (target ran via calli): equal
+  [exit 0]
+--- net48
+    global method: .cctor vs late ldftn (target ran via calli): DIFFER
+    class method:  .cctor vs late ldftn (target ran via calli): DIFFER
+  [exit 0]
+######## E3 symbol table encodings (1000 functions + 50 data)
+===== base
+file 73728 bytes, metadata 52720 bytes
+  stream #~           31348 bytes
+  stream #Strings     18712 bytes
+  stream #US              8 bytes
+  stream #GUID           16 bytes
+  stream #Blob         2528 bytes
+  table TypeDef               2 rows x 14 bytes
+  table MethodDef          1051 rows x 14 bytes
+  table Field                51 rows x 6 bytes
+  table Property             50 rows x 6 bytes
+  table CustomAttribute       0 rows x 8 bytes
+  table MemberRef             1 rows x 6 bytes
+  table ManifestResource      0 rows x 12 bytes
+===== attr-a
+file 98816 bytes, metadata 77736 bytes
+  stream #~           31408 bytes
+  stream #Strings     18752 bytes
+  stream #US              8 bytes
+  stream #GUID           16 bytes
+  stream #Blob        27444 bytes
+  table TypeDef               3 rows x 14 bytes
+  table MethodDef          1052 rows x 14 bytes
+  table Field                51 rows x 6 bytes
+  table Property             50 rows x 6 bytes
+  table CustomAttribute       1 rows x 8 bytes
+  table MemberRef             2 rows x 6 bytes
+  table ManifestResource      0 rows x 12 bytes
+===== attr-b
+file 77312 bytes, metadata 55968 bytes
+  stream #~           31408 bytes
+  stream #Strings     18752 bytes
+  stream #US              8 bytes
+  stream #GUID           16 bytes
+  stream #Blob         5676 bytes
+  table TypeDef               3 rows x 14 bytes
+  table MethodDef          1052 rows x 14 bytes
+  table Field                51 rows x 6 bytes
+  table Property             50 rows x 6 bytes
+  table CustomAttribute       1 rows x 8 bytes
+  table MemberRef             2 rows x 6 bytes
+  table ManifestResource      0 rows x 12 bytes
+===== attr-t
+file 122368 bytes, metadata 101332 bytes
+  stream #~           31408 bytes
+  stream #Strings     18752 bytes
+  stream #US              8 bytes
+  stream #GUID           16 bytes
+  stream #Blob        51040 bytes
+  table TypeDef               3 rows x 14 bytes
+  table MethodDef          1052 rows x 14 bytes
+  table Field                51 rows x 6 bytes
+  table Property             50 rows x 6 bytes
+  table CustomAttribute       1 rows x 8 bytes
+  table MemberRef             2 rows x 6 bytes
+  table ManifestResource      0 rows x 12 bytes
+===== attr-n
+file 75264 bytes, metadata 53960 bytes
+  stream #~           31408 bytes
+  stream #Strings     18752 bytes
+  stream #US              8 bytes
+  stream #GUID           16 bytes
+  stream #Blob         3668 bytes
+  table TypeDef               3 rows x 14 bytes
+  table MethodDef          1052 rows x 14 bytes
+  table Field                51 rows x 6 bytes
+  table Property             50 rows x 6 bytes
+  table CustomAttribute       1 rows x 8 bytes
+  table MemberRef             2 rows x 6 bytes
+  table ManifestResource      0 rows x 12 bytes
+===== res-a
+file 98816 bytes, metadata 52748 bytes
+  stream #~           31364 bytes
+  stream #Strings     18724 bytes
+  stream #US              8 bytes
+  stream #GUID           16 bytes
+  stream #Blob         2528 bytes
+  table TypeDef               2 rows x 14 bytes
+  table MethodDef          1051 rows x 14 bytes
+  table Field                51 rows x 6 bytes
+  table Property             50 rows x 6 bytes
+  table CustomAttribute       0 rows x 8 bytes
+  table MemberRef             1 rows x 6 bytes
+  table ManifestResource      1 rows x 12 bytes
+===== fnacc
+file 209920 bytes, metadata 136712 bytes
+  stream #~           62884 bytes
+  stream #Strings     71160 bytes
+  stream #US              8 bytes
+  stream #GUID           16 bytes
+  stream #Blob         2536 bytes
+  table TypeDef               2 rows x 18 bytes
+  table MethodDef          2051 rows x 16 bytes
+  table Field              1051 rows x 8 bytes
+  table Property             50 rows x 8 bytes
+  table CustomAttribute       0 rows x 8 bytes
+  table MemberRef             2 rows x 8 bytes
+  table ManifestResource      0 rows x 14 bytes
+===== fnfld
+file 116224 bytes, metadata 83920 bytes
+  stream #~           37348 bytes
+  stream #Strings     43912 bytes
+  stream #US              8 bytes
+  stream #GUID           16 bytes
+  stream #Blob         2528 bytes
+  table TypeDef               2 rows x 14 bytes
+  table MethodDef          1051 rows x 14 bytes
+  table Field              1051 rows x 6 bytes
+  table Property             50 rows x 6 bytes
+  table CustomAttribute       0 rows x 8 bytes
+  table MemberRef             1 rows x 6 bytes
+  table ManifestResource      0 rows x 12 bytes
+===== proposed
+file 189952 bytes, metadata 137892 bytes
+  stream #~           62936 bytes
+  stream #Strings     71156 bytes
+  stream #US              8 bytes
+  stream #GUID           16 bytes
+  stream #Blob         3668 bytes
+  table TypeDef               3 rows x 18 bytes
+  table MethodDef          2052 rows x 16 bytes
+  table Field              1051 rows x 8 bytes
+  table Property             50 rows x 8 bytes
+  table CustomAttribute       1 rows x 8 bytes
+  table MemberRef             2 rows x 8 bytes
+  table ManifestResource      0 rows x 14 bytes
+===== read attr-a
+table: 24894 bytes in the custom attribute
+triple x86_64-pc-windows-msvc-msil matches x86_64-pc-windows-msvc19.33.0-msil; 1050 symbols; decode 448 us per table
+  function inflate_0 sig[6]
+  function dictionary_params_1 sig[6]
+  function gz_hash_2 sig[3]
+  data deflate_buffer_10000 size 8 align 8
+===== read attr-b
+table: 3126 bytes in the custom attribute
+triple x86_64-pc-windows-msvc-msil matches x86_64-pc-windows-msvc19.33.0-msil; 1050 symbols; decode 496 us per table
+  function inflate_0 sig[6]
+  function dictionary_params_1 sig[6]
+  function gz_hash_2 sig[3]
+  data deflate_buffer_10000 size 8 align 8 via <msil>addr_deflate_buffer_10000
+===== read attr-t
+table: 48490 bytes in the custom attribute
+triple x86_64-pc-windows-msvc-msil matches x86_64-pc-windows-msvc19.33.0-msil; 1050 symbols; decode 546 us per table
+  F inflate_0 int32(float64,native int,float64)
+  F dictionary_params_1 int32(int32,int32,native int)
+  F gz_hash_2 int32()
+===== read attr-n
+table: 1119 bytes in the custom attribute
+triple x86_64-pc-windows-msvc-msil matches x86_64-pc-windows-msvc19.33.0-msil; 1050 symbols; decode 567 us per table
+  function Contoso.Big.Native::inflate_0 sig[6]
+  function Contoso.Big.Native::dictionary_params_1 sig[6]
+  function Contoso.Big.Native::gz_hash_2 sig[3]
+  function Contoso.Big.Native::len_3 sig[6]
+  data Contoso.Big.Native::deflate_buffer_10000 size 8 align 8 via <msil>addr_deflate_buffer_10000
+  data Contoso.Big.Native::set_block_block_10001 size 1024 align 8 via <msil>addr_set_block_block_10001
+  data Contoso.Big.Native::buffer_read_10002 size 1024 align 8 via <msil>addr_buffer_read_10002
+  data Contoso.Big.Native::copy_stream_10003 size 8 align 8 via <msil>addr_copy_stream_10003
+===== read res-a
+table: 24894 bytes in the manifest resource
+triple x86_64-pc-windows-msvc-msil matches x86_64-pc-windows-msvc-msil; 1050 symbols; decode 457 us per table
+  function inflate_0 sig[6]
+  function dictionary_params_1 sig[6]
+  function gz_hash_2 sig[3]
+  data deflate_buffer_10000 size 8 align 8
+table: 1119 bytes in the custom attribute
+error: symlib.dll was built for x86_64-pc-windows-msvc-msil, which cannot be linked into x86_64-unknown-linux-gnu-msil
+table: 1119 bytes in the custom attribute
+error: symlib.dll was built for x86_64-pc-windows-msvc-msil, which cannot be linked into x86_64-w64-windows-gnu-msil
+table: 1119 bytes in the custom attribute
+error: symlib.dll was built for x86_64-pc-windows-msvc-msil, which cannot be linked into aarch64-pc-windows-msvc-msil
+error: no symbol table: not built by this toolchain
+===== #MSIL metadata stream
+file 27648 bytes, metadata 25568 bytes
+  stream #~             252 bytes
+  stream #Strings       180 bytes
+  stream #US             56 bytes
+  stream #GUID           16 bytes
+  stream #Blob           44 bytes
+  stream #MSIL        24896 bytes
+  table TypeDef               2 rows x 14 bytes
+--- net8
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net10
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+--- net48
+  zlibx: module initializer
+  t_ok entered
+  add(2,3) = 5
+  bump() = 1010
+  [exit 0]
+===== eager address publication, 1000 exports (ms, three runs)
+none: 2.01 ms 1.99 ms 2.49 ms 
+none: 1.79 ms 2.17 ms 3.22 ms 
+none: 1.94 ms 1.37 ms 1.99 ms 
+ldftn: 6.99 ms 5.60 ms 6.57 ms 
+ldftn: 5.56 ms 5.55 ms 7.42 ms 
+ldftn: 9.61 ms 5.49 ms 7.13 ms 
+delegate: 44.37 ms 36.91 ms 38.43 ms 
+delegate: 34.77 ms 32.60 ms 36.68 ms 
+delegate: 31.04 ms 27.82 ms 42.78 ms 
+######## E4 module initializer timing
+===== pure
+--- net8
+    main entered
+    lib: module initializer
+    s_pure entered
+    pure() = 42
+    main done
+  [exit 0]
+--- net10
+    main entered
+    lib: module initializer
+    s_pure entered
+    pure() = 42
+    main done
+  [exit 0]
+--- net48
+    main entered
+    lib: module initializer
+    s_pure entered
+    pure() = 42
+    main done
+  [exit 0]
+===== data
+--- net8
+    main entered
+    lib: module initializer
+    s_data entered
+    data() = 7
+    main done
+  [exit 0]
+--- net10
+    main entered
+    lib: module initializer
+    s_data entered
+    data() = 7
+    main done
+  [exit 0]
+--- net48
+    main entered
+    lib: module initializer
+    s_data entered
+    data() = 7
+    main done
+  [exit 0]
+===== ldftn
+--- net8
+    main entered
+    lib: module initializer
+    s_ldftn entered
+    after ldftn
+    lib: pure_print runs
+    after calli
+    main done
+  [exit 0]
+--- net10
+    main entered
+    lib: module initializer
+    s_ldftn entered
+    after ldftn
+    lib: pure_print runs
+    after calli
+    main done
+  [exit 0]
+--- net48
+    main entered
+    lib: module initializer
+    s_ldftn entered
+    after ldftn
+    lib: pure_print runs
+    after calli
+    main done
+  [exit 0]
+===== field
+--- net8
+    main entered
+    lib: module initializer
+    s_field entered
+    pub_g != 0: 1
+    after field read
+    main done
+  [exit 0]
+--- net10
+    main entered
+    lib: module initializer
+    s_field entered
+    pub_g != 0: 1
+    after field read
+    main done
+  [exit 0]
+--- net48
+    main entered
+    lib: module initializer
+    s_field entered
+    pub_g != 0: 1
+    after field read
+    main done
+  [exit 0]
+===== typeof
+--- net8
+    main entered
+    lib: module initializer
+    s_typeof entered
+  L.Native
+    after typeof
+    main done
+  [exit 0]
+--- net10
+    main entered
+    lib: module initializer
+    s_typeof entered
+  L.Native
+    after typeof
+    main done
+  [exit 0]
+--- net48
+    main entered
+    lib: module initializer
+    s_typeof entered
+  L.Native
+    after typeof
+    main done
+  [exit 0]
+===== load
+--- net8
+    main entered
+    s_load entered
+  lib4, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
+    after Assembly.Load
+    main done
+  [exit 0]
+--- net10
+    main entered
+    s_load entered
+  lib4, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
+    after Assembly.Load
+    main done
+  [exit 0]
+--- net48
+    main entered
+    s_load entered
+  lib4, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
+    after Assembly.Load
+    main done
+  [exit 0]
+===== cold
+--- net8
+    main entered
+    lib: module initializer
+    s_cold entered
+    s_cold: call not taken
+    main done
+  [exit 0]
+--- net10
+    main entered
+    lib: module initializer
+    s_cold entered
+    s_cold: call not taken
+    main done
+  [exit 0]
+--- net48
+    main entered
+    lib: module initializer
+    s_cold entered
+    s_cold: call not taken
+    main done
+  [exit 0]
+===== reflect
+--- net8
+    main entered
+    s_reflect entered
+    after GetType
+    after GetMethod
+    lib: module initializer
+    after Invoke
+    main done
+  [exit 0]
+--- net10
+    main entered
+    s_reflect entered
+    after GetType
+    after GetMethod
+    lib: module initializer
+    after Invoke
+    main done
+  [exit 0]
+--- net48
+    main entered
+    s_reflect entered
+    after GetType
+    after GetMethod
+    lib: module initializer
+    after Invoke
+    main done
+  [exit 0]
+===== none
+--- net8
+    main entered
+    s_none entered (no reference to lib4)
+    main done
+  [exit 0]
+--- net10
+    main entered
+    s_none entered (no reference to lib4)
+    main done
+  [exit 0]
+--- net48
+    main entered
+    s_none entered (no reference to lib4)
+    main done
+  [exit 0]
+===== e4b variant 1
+--- net8
+    main entered
+    B: module initializer begins
+    B: module initializer ends
+    A: module initializer begins
+    A: module initializer ends
+    A.peer == &b: ok
+    B.peer == &a: WRONG (stale null address)
+  [exit 0]
+--- net10
+    main entered
+    B: module initializer begins
+    B: module initializer ends
+    A: module initializer begins
+    A: module initializer ends
+    A.peer == &b: ok
+    B.peer == &a: WRONG (stale null address)
+  [exit 0]
+--- net48
+    main entered
+    B: module initializer begins
+    B: module initializer ends
+    A: module initializer begins
+    A: module initializer ends
+    A.peer == &b: ok
+    B.peer == &a: WRONG (stale null address)
+  [exit 0]
+===== e4b variant 2
+--- net8
+    main entered
+    B: module initializer begins
+    B: data segment allocated
+    A: data segment allocated
+    B: module initializer ends
+    A: module initializer begins
+    A: module initializer ends
+    A.peer == &b: ok
+    B.peer == &a: ok
+  [exit 0]
+--- net10
+    main entered
+    B: module initializer begins
+    B: data segment allocated
+    A: data segment allocated
+    B: module initializer ends
+    A: module initializer begins
+    A: module initializer ends
+    A.peer == &b: ok
+    B.peer == &a: ok
+  [exit 0]
+--- net48
+    main entered
+    B: module initializer begins
+    B: data segment allocated
+    A: data segment allocated
+    B: module initializer ends
+    A: module initializer begins
+    A: module initializer ends
+    A.peer == &b: ok
+    B.peer == &a: ok
+  [exit 0]
+===== e4c program touches: none
+--- net8
+    prog: module initializer begins
+    prog: module initializer ends
+    main entered
+  [exit 0]
+--- net10
+    prog: module initializer begins
+    prog: module initializer ends
+    main entered
+  [exit 0]
+--- net48
+    prog: module initializer begins
+    prog: module initializer ends
+    main entered
+  [exit 0]
+===== e4c program touches: ab
+--- net8
+    c: constructors run
+    a: constructors run
+    b: constructors run
+    prog: module initializer begins
+    prog: module initializer ends
+    main entered
+  [exit 0]
+--- net10
+    c: constructors run
+    a: constructors run
+    b: constructors run
+    prog: module initializer begins
+    prog: module initializer ends
+    main entered
+  [exit 0]
+--- net48
+    c: constructors run
+    a: constructors run
+    b: constructors run
+    prog: module initializer begins
+    prog: module initializer ends
+    main entered
+  [exit 0]
+===== e4c program touches: ba
+--- net8
+    b: constructors run
+    c: constructors run
+    a: constructors run
+    prog: module initializer begins
+    prog: module initializer ends
+    main entered
+  [exit 0]
+--- net10
+    b: constructors run
+    c: constructors run
+    a: constructors run
+    prog: module initializer begins
+    prog: module initializer ends
+    main entered
+  [exit 0]
+--- net48
+    b: constructors run
+    c: constructors run
+    a: constructors run
+    prog: module initializer begins
+    prog: module initializer ends
+    main entered
+  [exit 0]
+===== e4c ReadyToRun images (net8)
+  c: constructors run
+  a: constructors run
+  b: constructors run
+  prog: module initializer begins
+  prog: module initializer ends
+  main entered
+######## E5 C library state across assemblies
+===== win-ucrtbase-ucrtbase heap
+--- net8
+    heap: string from the library's malloc: from-lib
+    heap: freed by the program's free(): no crash
+  [exit 0]
+--- net10
+    heap: string from the library's malloc: from-lib
+    heap: freed by the program's free(): no crash
+  [exit 0]
+--- net48
+    heap: string from the library's malloc: from-lib
+    heap: freed by the program's free(): no crash
+  [exit 0]
+===== win-ucrtbase-ucrtbase stdio
+--- net8
+    stdio: fputs(FILE* from the library's fopen) = 0
+    stdio: fclose by the library = 0
+    stdio: file contains: written by the program
+  [exit 0]
+--- net10
+    stdio: fputs(FILE* from the library's fopen) = 0
+    stdio: fclose by the library = 0
+    stdio: file contains: written by the program
+  [exit 0]
+--- net48
+    stdio: fputs(FILE* from the library's fopen) = 0
+    stdio: fclose by the library = 0
+    stdio: file contains: written by the program
+  [exit 0]
+===== win-ucrtbase-ucrtbase errno
+--- net8
+    errno: library set ERANGE (34); the program reads 34
+    errno: then the library reads 34
+    errno: the program stored 7; the library reads 7
+    errno: after Console output the program reads 0
+  [exit 0]
+--- net10
+    errno: library set ERANGE (34); the program reads 34
+    errno: then the library reads 34
+    errno: the program stored 7; the library reads 7
+    errno: after Console output the program reads 0
+  [exit 0]
+--- net48
+    errno: library set ERANGE (34); the program reads 34
+    errno: then the library reads 34
+    errno: the program stored 7; the library reads 7
+    errno: after Console output the program reads 7
+  [exit 0]
+===== win-msvcrt-ucrtbase heap
+--- net8
+    heap: string from the library's malloc: from-lib
+  [exit 127]
+--- net10
+    heap: string from the library's malloc: from-lib
+  [exit 127]
+--- net48
+    heap: string from the library's malloc: from-lib
+  [exit 127]
+===== win-msvcrt-ucrtbase stdio
+--- net8
+  Fatal error. System.AccessViolationException: Attempted to read or write protected memory. This is often an indication that other memory is corrupt.
+  Repeat 2 times:
+  --------------------------------
+  --------------------------------
+  [exit 139]
+--- net10
+  Fatal error.
+  0xC0000005
+  [exit 139]
+--- net48
+  Unhandled Exception: System.AccessViolationException: Attempted to read or write protected memory. This is often an indication that other memory is corrupt.
+  [exit 139]
+===== win-msvcrt-ucrtbase errno
+--- net8
+    errno: library set ERANGE (34); the program reads 0
+    errno: then the library reads 34
+    errno: the program stored 7; the library reads 34
+    errno: after Console output the program reads 0
+  [exit 0]
+--- net10
+    errno: library set ERANGE (34); the program reads 0
+    errno: then the library reads 34
+    errno: the program stored 7; the library reads 34
+    errno: after Console output the program reads 0
+  [exit 0]
+--- net48
+    errno: library set ERANGE (34); the program reads 0
+    errno: then the library reads 34
+    errno: the program stored 7; the library reads 34
+    errno: after Console output the program reads 7
+  [exit 0]
+===== e5c separate
+--- net8
+    dlib: constructors
+    dprog: constructors
+    main
+    dlib: destructors
+    dprog: destructors
+  [exit 0]
+--- net10
+    dlib: constructors
+    dprog: constructors
+    main
+    dlib: destructors
+    dprog: destructors
+  [exit 0]
+--- net48
+    dlib: constructors
+    dprog: constructors
+    main
+    dlib: destructors
+    dprog: destructors
+  [exit 0]
+===== e5c shared
+--- net8
+    dlib: constructors
+    dprog: constructors
+    main
+    dprog: destructors
+    dlib: destructors
+  [exit 0]
+--- net10
+    dlib: constructors
+    dprog: constructors
+    main
+    dprog: destructors
+    dlib: destructors
+  [exit 0]
+--- net48
+    dlib: constructors
+    dprog: constructors
+    main
+    dprog: destructors
+    dlib: destructors
+  [exit 0]
+######## E6 C# consumers and C# libraries
+===== C# (net8 build) on net8/net10
+zlibc: constructors
+C#: add(2, 3) = 5
+C#: bump() after *counter = 40 -> 41
+C#: get_twice()(21) = 42
+C#: get_twice() == <msil>addr_twice: True
+C#: length("hello, world") = 12
+zlibc: constructors
+C#: add(2, 3) = 5
+C#: bump() after *counter = 40 -> 41
+C#: get_twice()(21) = 42
+C#: get_twice() == <msil>addr_twice: True
+C#: length("hello, world") = 12
+===== C# (net48 build)
+zlibc: constructors
+C#: add(2, 3) = 5
+C#: bump() after *counter = 40 -> 41
+C#: get_twice()(21) = 42
+C#: get_twice() == <msil>addr_twice: True
+C#: length("hello, world") = 12
+===== IL calling a C# library
+--- net8
+    Add(40, 2) [int64 params, native int args] = 42
+    Sum(p, 3) [int32* param, native int arg] = 18
+    Twice(21) [native int] = 42
+  [exit 0]
+--- net10
+    Add(40, 2) [int64 params, native int args] = 42
+    Sum(p, 3) [int32* param, native int arg] = 18
+    Twice(21) [native int] = 42
+  [exit 0]
+--- net48
+    Add(40, 2) [int64 params, native int args] = 42
+    Sum(p, 3) [int32* param, native int arg] = 18
+    Twice(21) [native int] = 42
+  [exit 0]
+===== ReadyToRun C# app + ReadyToRun C library
+C#: main entered
+C#: counter = 100 (100 means the constructor ran first), twice(21) = 42
+zl: constructor
+######## E7 end-to-end prototype
+--- net8
+  zl: constructor
+  [exit 0]
+--- net10
+  zl: constructor
+  [exit 0]
+--- net48
+  zl: constructor
+  [exit 0]
+===== missing library
+--- net8
+  Unhandled exception. System.TypeInitializationException: The type initializer for '<Module>' threw an exception.
+   ---> System.IO.FileNotFoundException: Could not load file or assembly 'zl, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'zl, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'
+     --- End of inner exception stack trace ---
+  [exit 127]
+--- net10
+  Unhandled exception. System.TypeInitializationException: The type initializer for '<Module>' threw an exception.
+   ---> System.IO.FileNotFoundException: Could not load file or assembly 'zl, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'. The system cannot find the file specified.
+  File name: 'zl, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null'
+     --- End of inner exception stack trace ---
+  [exit 127]
+--- net48
+  Unhandled Exception: System.TypeInitializationException: The type initializer for '<Module>' threw an exception. ---> System.IO.FileNotFoundException: Could not load file or assembly 'zl, Version=1.
+     --- End of inner exception stack trace ---
+  [exit 127]
+===== accessor bench
+--- net8
+    accessor per access: 232 ms / 200M
+    cached import field: 306 ms / 200M
+    accessor per access: 220 ms / 200M
+    cached import field: 227 ms / 200M
+  [exit 0]
+--- net10
+    accessor per access: 235 ms / 200M
+    cached import field: 237 ms / 200M
+    accessor per access: 234 ms / 200M
+    cached import field: 242 ms / 200M
+  [exit 0]
+--- net48
+    accessor per access: 149 ms / 200M
+    cached import field: 137 ms / 200M
+    accessor per access: 80 ms / 200M
+    cached import field: 93 ms / 200M
+  [exit 0]
+===== accessor bench TC=0
+--- net8
+    accessor per access: 79 ms / 200M
+    cached import field: 62 ms / 200M
+    accessor per access: 99 ms / 200M
+    cached import field: 114 ms / 200M
+  [exit 0]
+--- net10
+    accessor per access: 99 ms / 200M
+    cached import field: 93 ms / 200M
+    accessor per access: 101 ms / 200M
+    cached import field: 76 ms / 200M
+  [exit 0]
+--- net48
+    accessor per access: 172 ms / 200M
+    cached import field: 102 ms / 200M
+    accessor per access: 80 ms / 200M
+    cached import field: 63 ms / 200M
+  [exit 0]

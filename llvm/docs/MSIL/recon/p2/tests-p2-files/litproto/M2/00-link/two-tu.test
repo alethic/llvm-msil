@@ -1,0 +1,24 @@
+# Two translation units: calls, a function pointer and data relocations across files.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+extern const char *const names[];
+extern int count;
+int twice(int);
+int (*get_op(void))(int);
+int main(void) {
+  for (int i = 0; i < count; ++i)
+    puts(names[i]);
+  put_i64(twice(21));
+  put_i64(get_op()(5));
+  return count;
+}
+#--- util.c
+static const char a[] = "alpha", b[] = "beta";
+const char *const names[] = {a, b, "gamma"};
+int count = 3;
+int twice(int x) { return 2 * x; }
+static int square(int x) { return x * x; }
+int (*get_op(void))(int) { return square; }

@@ -1,0 +1,100 @@
+# Envelope variants: ilasm-built PE assembly (two.dll), netmodule (two.netmodule) and an object-like netmodule (obj.netmodule: one ImplMap stub to 'msil.unresolved' and one MemberRef whose parent is that ModuleRef), each unmodified, with an extra metadata stream '#MSILLink' (pepatch.py stream) and with an extra PE section '.msillnk' (pepatch.py section).
+=== two.dll
+ildasm 4.8: rc=0 .method lines=5
+ildasm 10.0.12: rc=0 .method lines=5
+ilverify: rc=2 :: [IL]: Error [StackByRef]: [<Module>::twice(int32)][offset 0x0000000D][found Native Int] Expected ByRef on the stack.|[IL]: Error [Unverifiable]: [<Module>::.cctor()][offset 0x00000027] Instruction cannot be verified.|2 Error(s) Verifying C:\llvm-msil-scratch\p2\objfmt-container\envelope\two.dll|
+peverify /il: rc=1 :: [offset 0x0000001D] Cannot modify an imaged based (RVA) static|[offset 0x0000000D][found Native Int] Expected ByRef on the stack.|2 Error(s) Verifying two.dll|
+System.Reflection.Metadata: rc=0 :: kind=Ecma335 isAssembly=True module='two.dll' mvid=97de8945-3b1d-447b-a46a-bee70e1c76dd|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=5 Param=3 MemberRef=1 ClassLayout=1 FieldRva=1 Assembly=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc 
+llvm-nm: rc=0 :: two.dll: no symbols|
+=== two_stream.dll
+ildasm 4.8: rc=0 .method lines=5
+ildasm 10.0.12: rc=0 .method lines=5
+ilverify: rc=2 :: [IL]: Error [StackByRef]: [<Module>::twice(int32)][offset 0x0000000D][found Native Int] Expected ByRef on the stack.|[IL]: Error [Unverifiable]: [<Module>::.cctor()][offset 0x00000027] Instruction cannot be verified.|2 Error(s) Verifying C:\llvm-msil-scratch\p2\objfmt-container\envelope\two_stream.dll|
+peverify /il: rc=1 :: [offset 0x0000001D] Cannot modify an imaged based (RVA) static|[offset 0x0000000D][found Native Int] Expected ByRef on the stack.|2 Error(s) Verifying two_stream.dll|
+System.Reflection.Metadata: rc=0 ::   stream '#MSILLink' offset=0x2A4 size=0x28|kind=Ecma335 isAssembly=True module='two.dll' mvid=97de8945-3b1d-447b-a46a-bee70e1c76dd|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=5 Param=3 MemberRef=1 ClassLayout=1 FieldRva=1 Assembly=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc .msilmd 
+llvm-nm: rc=0 :: two_stream.dll: no symbols|
+=== two_section.dll
+ildasm 4.8: rc=0 .method lines=5
+ildasm 10.0.12: rc=0 .method lines=5
+ilverify: rc=2 :: [IL]: Error [StackByRef]: [<Module>::twice(int32)][offset 0x0000000D][found Native Int] Expected ByRef on the stack.|[IL]: Error [Unverifiable]: [<Module>::.cctor()][offset 0x00000027] Instruction cannot be verified.|2 Error(s) Verifying C:\llvm-msil-scratch\p2\objfmt-container\envelope\two_section.dll|
+peverify /il: rc=1 :: [offset 0x0000001D] Cannot modify an imaged based (RVA) static|[offset 0x0000000D][found Native Int] Expected ByRef on the stack.|2 Error(s) Verifying two_section.dll|
+System.Reflection.Metadata: rc=0 :: kind=Ecma335 isAssembly=True module='two.dll' mvid=97de8945-3b1d-447b-a46a-bee70e1c76dd|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=5 Param=3 MemberRef=1 ClassLayout=1 FieldRva=1 Assembly=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc .msillnk 
+llvm-nm: rc=0 :: two_section.dll: no symbols|
+=== two_stream_z.dll
+ildasm 4.8: rc=0 .method lines=5
+ildasm 10.0.12: rc=0 .method lines=5
+ilverify: rc=2 :: [IL]: Error [StackByRef]: [<Module>::twice(int32)][offset 0x0000000D][found Native Int] Expected ByRef on the stack.|[IL]: Error [Unverifiable]: [<Module>::.cctor()][offset 0x00000027] Instruction cannot be verified.|2 Error(s) Verifying C:\llvm-msil-scratch\p2\objfmt-container\envelope\two_stream_z.dll|
+peverify /il: rc=1 :: [offset 0x0000001D] Cannot modify an imaged based (RVA) static|[offset 0x0000000D][found Native Int] Expected ByRef on the stack.|2 Error(s) Verifying two_stream_z.dll|
+System.Reflection.Metadata: rc=0 ::   stream '#MSILLink' offset=0x2A4 size=0x28|kind=Ecma335 isAssembly=True module='two.dll' mvid=97de8945-3b1d-447b-a46a-bee70e1c76dd|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=5 Param=3 MemberRef=1 ClassLayout=1 FieldRva=1 Assembly=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc .msilmd 
+llvm-nm: rc=0 :: two_stream_z.dll: no symbols|
+=== two.netmodule
+ildasm 4.8: rc=0 .method lines=5
+ildasm 10.0.12: rc=0 .method lines=5
+ilverify: rc=1 :: Error: The format of a DLL or executable being loaded is invalid|Internal.TypeSystem.TypeSystemException+BadImageFormatException: The format of a DLL or executable being loaded is invalid|   at Internal.TypeSystem.ThrowHelper.ThrowBadImageFormatException()|   at Internal.TypeSystem.Ecma.EcmaAssembly..ctor(TypeSystemContext context, PEReader peReader, MetadataReader metadataReader, IModuleResolver 
+peverify /il: rc=1 :: The module 'C:\llvm-msil-scratch\p2\objfmt-container\envelope\two.netmodule' was expected to contain an assembly manifest.|1 Error(s) Verifying two.netmodule|
+System.Reflection.Metadata: rc=0 :: kind=Ecma335 isAssembly=False module='two.netmodule' mvid=039618c6-6c65-4630-9b86-3912a0207aee|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=5 Param=3 MemberRef=1 ClassLayout=1 FieldRva=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc 
+llvm-nm: rc=0 :: two.netmodule: no symbols|
+=== two_stream.netmodule
+ildasm 4.8: rc=0 .method lines=5
+ildasm 10.0.12: rc=0 .method lines=5
+ilverify: rc=1 :: Error: The format of a DLL or executable being loaded is invalid|Internal.TypeSystem.TypeSystemException+BadImageFormatException: The format of a DLL or executable being loaded is invalid|   at Internal.TypeSystem.ThrowHelper.ThrowBadImageFormatException()|   at Internal.TypeSystem.Ecma.EcmaAssembly..ctor(TypeSystemContext context, PEReader peReader, MetadataReader metadataReader, IModuleResolver 
+peverify /il: rc=1 :: The module 'C:\llvm-msil-scratch\p2\objfmt-container\envelope\two_stream.netmodule' was expected to contain an assembly manifest.|1 Error(s) Verifying two_stream.netmodule|
+System.Reflection.Metadata: rc=0 ::   stream '#MSILLink' offset=0x28C size=0x28|kind=Ecma335 isAssembly=False module='two.netmodule' mvid=039618c6-6c65-4630-9b86-3912a0207aee|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=5 Param=3 MemberRef=1 ClassLayout=1 FieldRva=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc .msilmd 
+llvm-nm: rc=0 :: two_stream.netmodule: no symbols|
+=== two_section.netmodule
+ildasm 4.8: rc=0 .method lines=5
+ildasm 10.0.12: rc=0 .method lines=5
+ilverify: rc=1 :: Error: The format of a DLL or executable being loaded is invalid|Internal.TypeSystem.TypeSystemException+BadImageFormatException: The format of a DLL or executable being loaded is invalid|   at Internal.TypeSystem.ThrowHelper.ThrowBadImageFormatException()|   at Internal.TypeSystem.Ecma.EcmaAssembly..ctor(TypeSystemContext context, PEReader peReader, MetadataReader metadataReader, IModuleResolver 
+peverify /il: rc=1 :: The module 'C:\llvm-msil-scratch\p2\objfmt-container\envelope\two_section.netmodule' was expected to contain an assembly manifest.|1 Error(s) Verifying two_section.netmodule|
+System.Reflection.Metadata: rc=0 :: kind=Ecma335 isAssembly=False module='two.netmodule' mvid=039618c6-6c65-4630-9b86-3912a0207aee|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=5 Param=3 MemberRef=1 ClassLayout=1 FieldRva=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc .msillnk 
+llvm-nm: rc=0 :: two_section.netmodule: no symbols|
+=== obj.netmodule
+ildasm 4.8: rc=0 .method lines=6
+ildasm 10.0.12: rc=0 .method lines=6
+ilverify: rc=1 :: Error: The format of a DLL or executable being loaded is invalid|Internal.TypeSystem.TypeSystemException+BadImageFormatException: The format of a DLL or executable being loaded is invalid|   at Internal.TypeSystem.ThrowHelper.ThrowBadImageFormatException()|   at Internal.TypeSystem.Ecma.EcmaAssembly..ctor(TypeSystemContext context, PEReader peReader, MetadataReader metadataReader, IModuleResolver 
+peverify /il: rc=1 :: The module 'C:\llvm-msil-scratch\p2\objfmt-container\envelope\obj.netmodule' was expected to contain an assembly manifest.|1 Error(s) Verifying obj.netmodule|
+System.Reflection.Metadata: rc=0 :: kind=Ecma335 isAssembly=False module='obj.netmodule' mvid=e7f7bffe-0bed-46c5-b020-42dd126cf104|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=6 Param=4 MemberRef=2 ClassLayout=1 ModuleRef=1 ImplMap=1 FieldRva=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc 
+llvm-nm: rc=0 :: obj.netmodule: no symbols|
+=== obj_stream.netmodule
+ildasm 4.8: rc=0 .method lines=6
+ildasm 10.0.12: rc=0 .method lines=6
+ilverify: rc=1 :: Error: The format of a DLL or executable being loaded is invalid|Internal.TypeSystem.TypeSystemException+BadImageFormatException: The format of a DLL or executable being loaded is invalid|   at Internal.TypeSystem.ThrowHelper.ThrowBadImageFormatException()|   at Internal.TypeSystem.Ecma.EcmaAssembly..ctor(TypeSystemContext context, PEReader peReader, MetadataReader metadataReader, IModuleResolver 
+peverify /il: rc=1 :: The module 'C:\llvm-msil-scratch\p2\objfmt-container\envelope\obj_stream.netmodule' was expected to contain an assembly manifest.|1 Error(s) Verifying obj_stream.netmodule|
+System.Reflection.Metadata: rc=0 ::   stream '#MSILLink' offset=0x2D4 size=0x28|kind=Ecma335 isAssembly=False module='obj.netmodule' mvid=e7f7bffe-0bed-46c5-b020-42dd126cf104|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=6 Param=4 MemberRef=2 ClassLayout=1 ModuleRef=1 ImplMap=1 FieldRva=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc .msilmd 
+llvm-nm: rc=0 :: obj_stream.netmodule: no symbols|
+=== obj_section.netmodule
+ildasm 4.8: rc=0 .method lines=6
+ildasm 10.0.12: rc=0 .method lines=6
+ilverify: rc=1 :: Error: The format of a DLL or executable being loaded is invalid|Internal.TypeSystem.TypeSystemException+BadImageFormatException: The format of a DLL or executable being loaded is invalid|   at Internal.TypeSystem.ThrowHelper.ThrowBadImageFormatException()|   at Internal.TypeSystem.Ecma.EcmaAssembly..ctor(TypeSystemContext context, PEReader peReader, MetadataReader metadataReader, IModuleResolver 
+peverify /il: rc=1 :: The module 'C:\llvm-msil-scratch\p2\objfmt-container\envelope\obj_section.netmodule' was expected to contain an assembly manifest.|1 Error(s) Verifying obj_section.netmodule|
+System.Reflection.Metadata: rc=0 :: kind=Ecma335 isAssembly=False module='obj.netmodule' mvid=e7f7bffe-0bed-46c5-b020-42dd126cf104|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=6 Param=4 MemberRef=2 ClassLayout=1 ModuleRef=1 ImplMap=1 FieldRva=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc .msillnk 
+llvm-nm: rc=0 :: obj_section.netmodule: no symbols|
+=== obj.dll
+ildasm 4.8: rc=0 .method lines=6
+ildasm 10.0.12: rc=0 .method lines=6
+ilverify: rc=2 :: [IL]: Error [StackByRef]: [<Module>::twice(int32)][offset 0x0000000D][found Native Int] Expected ByRef on the stack.|[IL]: Error []: [<Module>::main()] Assembly or module not found: msil.unresolved|[IL]: Error [Unverifiable]: [<Module>::.cctor()][offset 0x00000027] Instruction cannot be verified.|3 Error(s) Verifying C:\llvm-msil-scratch\p2\objfmt-container\envelope\obj.dll|
+peverify /il: rc=1 :: [offset 0x0000001D] Cannot modify an imaged based (RVA) static|[offset 0x0000000D][found Native Int] Expected ByRef on the stack.|[offset 0x0000000C]System.BadImageFormatException: An attempt was made to load a program with an incorrect format. (Exception from HRESULT: 0x8007000B) Unable to resolve token.|3 Error(s) Verifying obj.dll|
+System.Reflection.Metadata: rc=0 :: kind=Ecma335 isAssembly=True module='obj.dll' mvid=f1cc7dcc-96f1-4cb1-b56a-af6365a893a9|rows: Module=1 TypeRef=2 TypeDef=2 Field=3 MethodDef=6 Param=4 MemberRef=2 ClassLayout=1 ModuleRef=1 ImplMap=1 FieldRva=1 Assembly=1 AssemblyRef=1|
+llvm-readobj: rc=0 :: Format: COFF-x86-64|  Machine: IMAGE_FILE_MACHINE_AMD64 (0x8664)|
+llvm-objdump -h: rc=0 :: .text .reloc 
+llvm-nm: rc=0 :: obj.dll: no symbols|

@@ -1,0 +1,22 @@
+exe image as p.exe : dotnet exec --runtimeconfig rc8       exit=42          hello
+exe image as p.exe : dotnet <file> (rc next to it)         exit=42          hello
+exe image as p.exe : direct (Framework)                    exit=42          hello
+exe image as p.dll : dotnet exec --runtimeconfig rc8       exit=42          hello
+exe image as p.dll : dotnet <file> (rc next to it)         exit=42          hello
+exe image as a.out : dotnet exec --runtimeconfig rc8       exit=-2147450751 dotnet exec needs a managed .dll or .exe extension. The application specified was 'C:\llvm-msil-scratch\p2\driver-toolchain\naming\exe-a_out\a.out'
+exe image as a.out : dotnet <file> (rc next to it)         exit=1           Could not execute because the specified command or file was not found.
+exe image as prog : dotnet exec --runtimeconfig rc8        exit=-2147450751 dotnet exec needs a managed .dll or .exe extension. The application specified was 'C:\llvm-msil-scratch\p2\driver-toolchain\naming\exe-prog\prog'
+exe image as prog : dotnet <file> (rc next to it)          exit=1           Could not execute because the specified command or file was not found.
+dll image as p.exe : dotnet exec --runtimeconfig rc8       exit=42          hello
+dll image as p.exe : dotnet <file> (rc next to it)         exit=42          hello
+dll image as p.exe : direct (Framework)                    exit=            cannot start: Program 'p.exe' failed to run: StandardOutputEncoding is only supported when standard output is redirected.At C:\llvm-msil-scratch\p2\driver-toolchain\scripts\naming-win.ps1:30 char:82
+dll image as p.dll : dotnet exec --runtimeconfig rc8       exit=42          hello
+dll image as p.dll : dotnet <file> (rc next to it)         exit=42          hello
+dll image as a.out : dotnet exec --runtimeconfig rc8       exit=-2147450751 dotnet exec needs a managed .dll or .exe extension. The application specified was 'C:\llvm-msil-scratch\p2\driver-toolchain\naming\dll-a_out\a.out'
+dll image as a.out : dotnet <file> (rc next to it)         exit=1           Possible reasons for this include:
+dll image as prog : dotnet exec --runtimeconfig rc8        exit=-2147450751 dotnet exec needs a managed .dll or .exe extension. The application specified was 'C:\llvm-msil-scratch\p2\driver-toolchain\naming\dll-prog\prog'
+dll image as prog : dotnet <file> (rc next to it)          exit=1           Could not execute because the specified command or file was not found.
+api-ms-win-crt-stdio-l1-1-0 puts: .NET 8                   exit=42          hello
+api-ms-win-crt-stdio-l1-1-0 puts: .NET 10                  exit=42          hello
+api-ms-win-crt-stdio-l1-1-0 puts: Framework 4.8            exit=42          hello
+Process.Start of a DLL image named p.exe: An error occurred trying to start process 'C:\llvm-msil-scratch\p2\driver-toolchain\naming\dll-p_exe\p.exe' with working directory 'D:\llvm-msil'. The specified executable is not a valid application for this OS platform. (NativeErrorCode 193)

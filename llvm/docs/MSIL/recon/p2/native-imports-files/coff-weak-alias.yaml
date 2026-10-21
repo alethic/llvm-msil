@@ -1,0 +1,24 @@
+# An oldnames.lib-style member: machine-independent COFF object whose only
+# content is the weak external 'strdup' that aliases '_strdup'
+# (IMAGE_WEAK_EXTERN_SEARCH_ALIAS), as in MSVC's oldnames.lib.
+--- !COFF
+header:
+  Machine:         IMAGE_FILE_MACHINE_UNKNOWN
+  Characteristics: [  ]
+sections:        []
+symbols:
+  - Name:            _strdup
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            strdup
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_WEAK_EXTERNAL
+    WeakExternal:
+      TagIndex:        0
+      Characteristics: IMAGE_WEAK_EXTERN_SEARCH_ALIAS

@@ -249,87 +249,20 @@ What differs between the runtimes Phase 1 targets, and how the backend deals wit
 - **Tiered compilation.** Short programs run almost entirely as Tier-0 code, which is why the
   gate repeats the suite with `DOTNET_TieredCompilation=0`; no difference in results is known.
 
-## 6. Proposed Design.md updates
+## 6. Design.md updates
 
-Design.md is the user's document; agents do not edit it. These changes would make it match
-Phase 1 as built. Each names the passage, the proposed change and the evidence.
+The 14 Design.md updates this section proposed were applied to [Design.md](Design.md) on
+2026-10-21, with the user's approval, together with the Phase 2 plan, the Phase 2 decisions
+(recon `p2/decision-brief.md` section 3) and the consistency fixes of recon `p2/backlog.md`
+section 7. Item 4 was amended: a `DllImport` names the library as a native link records it (the
+ELF `DT_SONAME`, the exact Windows DLL file name), always `ExactSpelling` and `CDecl`, never a bare
+name and never `libc` (Design.md 5.3). Where each item went, for the references above:
 
-1. **Section 12, `dotnet prog.dll` needs a runtimeconfig.** The milestone command `ilasm -dll
-   prog.il`, then `dotnet prog.dll` does not run: without `prog.runtimeconfig.json` the host
-   stops with "The library 'hostpolicy.dll' (Linux: 'libhostpolicy.so') required to execute the
-   application was not found" and exit status `0x80008083` (131 in 8 bits) on both hosts (recon
-   `tests-ci.md` E2; re-checked on Windows with .NET 8 on 2026-10-15 and in WSL Ubuntu on
-   2026-10-16 with an `x86_64-unknown-linux-gnu-msil` build). Section 8 already says the
-   compiler never writes the file. Proposed: "then `dotnet prog.dll`, with a
-   `prog.runtimeconfig.json` written by the user or the build system (or `dotnet exec
-   --runtimeconfig <file> prog.dll`)", and a pointer to GettingStarted.md section 5.
-2. **Section 12, ilasm options.** `ilasm -dll prog.il` writes a 32-bit "AnyCPU" image (PE32,
-   machine 0x14C), which a 32-bit runtime would load although the code assumes 64-bit pointers;
-   the Framework ilasm's `-pe64` alone means Itanium (recon `cil-runtime.md` 1.3). Section 3 says
-   the PE's machine type is set from the triple. Proposed: `ilasm -dll -pe64 -x64 prog.il`
-   (`-pe64 -arm64` for aarch64 triples).
-3. **Section 12, verification criterion.** Replace "`ilverify` reports no stack-shape errors
-   (unverifiable pointer use is expected)" with the policy of section 4 above (D21 and its
-   refinement, both approved by the user): MSILStackCheck, jitall, ILVerify with the allow-list
-   and PEVerify on Windows, clean on the assembly and on a neutralized ildasm/ilasm copy. ILVerify
-   stops at the first error per method and cannot verify `calli`, so the literal sentence cannot
-   be checked on real C code.
-4. **Section 12 "one hard-coded P/Invoke", sections 5.2 and 5.3.** Phase 1 has the import table of
-   D14 (section 2 above), not one hard-coded `puts` and not "every undefined function becomes a
-   P/Invoke": `puts`, `putchar` and the C math library, plus functions with the
-   `msil-import-module` IR attribute; every other undefined function is a compile error, as
-   5.2 step 4 makes it a link error. Library names are per triple; on glibc the math library is
-   `libm.so.6`, because glibc keeps libm separate and CoreCLR maps only the bare name `libc`, so
-   5.3's "names without prefixes or suffixes" does not hold for it. On Windows a function is
-   imported only if the C runtime DLL exports it under that name (`msvcrt.dll` has no `hypot`,
-   `cbrt`, `round`, ...; `ucrtbase.dll` no `frexpf`, `ldexpf`, `hypotf`), which is 5.2 step 2.3
-   applied by hand.
-5. **Section 3, predefines.** "Predefines ... are exactly the native ones by construction" does not
-   hold for `__ELF__`: clang defines it only for the ELF object format, so Linux MSIL triples do
-   not define it (plan section 10, decision 9: left undefined in Phase 1 and pinned by a test;
-   revisit when glibc headers are used in phase 3). Proposed: "exactly the native ones, plus
-   `__MSIL__` and minus `__ELF__` on Linux triples".
-6. **Section 4.2, localloc alignment.** Add: a constant-size `localloc` of 32 bytes or less can be
-   only 8-byte aligned on every runtime: .NET Framework 4.8 for 8 to 32 bytes, .NET 8 and .NET 10
-   for 16 and 32 bytes in Tier-0 code and for 8 bytes in optimized code (review experiment
-   `recon/artifacts/review-cil/align16.il`; D13 names Framework and .NET 8, and a re-run on
-   2026-10-15 showed .NET 10 behaving like .NET 8). The frame therefore assumes 8-byte alignment;
-   a frame with an object aligned above 8 bytes allocates `MaxAlign - 8` extra bytes and aligns
-   its base up (D13). `.locals` is never `init`.
-7. **Section 10 (risks) or 4.2, the main-thread stack.** Record the roughly 1.5 MB main-thread
-   stack of `dotnet.exe` on Windows (native Linux programs: 8 MB by default; an ilasm-built `.exe`
-   on .NET Framework: 4 MB) together with the larger CIL frames as a known difference for deep
-   recursion: about 19,000 `-O0`-shaped frames overflow it, and a .NET stack overflow ends the
-   process. A later phase could let the generated `Main` run `main` on a thread with a
-   configurable stack size.
-8. **Section 12 "Function pointers within the module (`ldftn` + `calli`)" and 4.5.** On .NET
-   Framework, `ldftn` of the same method in two methods can give different values (precode vs.
-   compiled code), which breaks C's function-pointer equality. Phase 1 therefore gives each
-   address-taken function one `'<msil>fn_<name>'` field that the module initializer sets with
-   `ldftn` once; code and relocations read the field (plan section 12, M9 row). That field is the
-   per-function slot that 4.5's thunk table fills later.
-9. **Section 2.3, pointer vs integer.** Add that every 64-bit integer, not only a pointer, is
-   `native int` on 64-bit triples and `int64` is never emitted (D2): PEVerify rejects mixing the
-   two, and one CIL type per register class keeps the stack types exact.
-10. **Section 3, inline assembly.** "Rejects inline assembly" has one exception: an empty asm
-    statement (`asm volatile("" ::: "memory")`, a common compiler barrier) is accepted and becomes
-    a compiler-only fence (plan section 12, M1.d row; D36).
-11. **Section 3, triple table.** Mark `aarch64-apple-darwin-msil` as later (phase 4), as
-    `i686-pc-windows-msvc-msil` is: clang rejects Darwin and i686 MSIL triples until the
-    `UserLabelPrefix` rework (D6).
-12. **Section 5.5, Milestone 1.** Note the two ilasm limits Phase 1 lives with until the phase-2 PE
-    writer: identifiers of at most 1023 bytes (longer C names are a compile error), and float32
-    signaling-NaN constants come out quiet.
-13. **Section 12, generated `Main`.** Record its contract (D27): `main(void)` or
-    `main(int, char **)`; `argv` is NULL-terminated and `argv[0]` is the assembly path (what
-    `Environment.GetCommandLineArgs()` returns under `dotnet x.dll`), not the native program path;
-    any other `main` signature is an error.
-14. **Section 3, `long double`.** "On glibc x86-64 that differs from native" names one case of
-    several. `long double` is `double` (8 bytes, `__LDBL_MANT_DIG__` 53) on every MSIL triple;
-    natively it is the 80-bit x87 format in 16 bytes on x86-64 Linux (glibc and musl) and x86-64
-    MinGW, and IEEE binary128 in 16 bytes on AArch64 Linux (glibc and musl); only windows-msvc
-    (x86-64 and AArch64) and AArch64 windows-gnu match (`clang -ffreestanding -E -dM`, native vs.
-    `-msil` triple, 2026-10-16). Proposed: "On x86-64 Linux and MinGW (80-bit) and on AArch64
-    Linux (binary128) that differs from native, so `long double` interop on those triples is a
-    documented limitation; on windows-msvc and AArch64 windows-gnu `long double` is natively
-    `double`."
+| Items | Design.md |
+|---|---|
+| 1, 2, 3, 4, 8, 13 | the "As built (Phase 1)" note at the end of section 12; item 4 also 5.3, item 8 also 4.5 |
+| 5, 10, 11, 14 | section 3 (predefines, inline assembly, triple table, `long double`) |
+| 6 | 4.2 |
+| 7 | section 10, risk 9 |
+| 9 | 2.3 |
+| 12 | 5.5 |

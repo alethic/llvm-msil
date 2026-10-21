@@ -1,0 +1,35 @@
+section 0: type (12 bytes)
+section 1: import (68 bytes)
+section 2: function (2 bytes)
+section 3: elem (7 bytes)
+section 4: datacount (1 bytes)
+section 5: code (98 bytes)
+section 6: data (28 bytes)
+section 7: custom "linking" (142 bytes)
+   sym 0: FUNCTION flags=0x04 index=1 entry
+   sym 1: FUNCTION flags=0x10 index=0 (import name)
+   sym 2: DATA     flags=0x10 ext_data (undefined)
+   sym 3: DATA     flags=0x04 counter seg=0 off=0 size=4
+   sym 4: TABLE    flags=0x90 index=0 (import name)
+   sym 5: DATA     flags=0x04 fp seg=2 off=0 size=4
+   sym 6: DATA     flags=0x04 pcounter seg=1 off=0 size=4
+   linking subsection 5 (45 bytes)
+   linking subsection 9 (7 bytes)
+section 8: custom "reloc.CODE" (48 bytes)
+   relocations for section 5: 10
+     R_WASM_FUNCTION_INDEX_LEB    offset=0x8 symbol/type=1
+     R_WASM_MEMORY_ADDR_LEB       offset=0x11 symbol/type=2 addend=0
+     R_WASM_MEMORY_ADDR_LEB       offset=0x1b symbol/type=3 addend=0
+     R_WASM_MEMORY_ADDR_LEB       offset=0x23 symbol/type=3 addend=0
+     R_WASM_TYPE_INDEX_LEB        offset=0x2d symbol/type=1
+     R_WASM_TABLE_NUMBER_LEB      offset=0x32 symbol/type=4
+     R_WASM_MEMORY_ADDR_LEB       offset=0x43 symbol/type=5 addend=0
+     R_WASM_TYPE_INDEX_LEB        offset=0x49 symbol/type=1
+     R_WASM_TABLE_NUMBER_LEB      offset=0x4e symbol/type=4
+     R_WASM_MEMORY_ADDR_LEB       offset=0x58 symbol/type=6 addend=0
+section 9: custom "reloc.DATA" (20 bytes)
+   relocations for section 6: 2
+     R_WASM_MEMORY_ADDR_I32       offset=0xf symbol/type=3 addend=0
+     R_WASM_TABLE_INDEX_I32       offset=0x18 symbol/type=1
+section 10: custom "producers" (41 bytes)
+section 11: custom "target_features" (148 bytes)

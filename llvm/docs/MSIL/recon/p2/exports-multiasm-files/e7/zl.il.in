@@ -1,0 +1,84 @@
+// E7 library zl.dll in the proposed P2-C shape (hand-written from zl.c and its Phase-1 output).
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'zl'
+{
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = @BLOB@
+  .ver 1:0:0:0
+}
+.class private auto ansi sealed beforefieldinit '<msil>SymbolTable' extends [mscorlib]System.Attribute
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor(uint8[] table) cil managed
+  { .maxstack 1 ldarg.0 call instance void [mscorlib]System.Attribute::.ctor() ret }
+}
+
+// ---- undefined external functions: P/Invoke ----
+.method assembly static pinvokeimpl("@CRT@" cdecl) int32 'puts'(native int) cil managed preservesig {}
+
+// ---- phase 1: data segment, address fields, function addresses, intra-assembly relocations ----
+.class private explicit ansi sealed '<msil>image_t' extends [mscorlib]System.ValueType { .pack 1 .size 32 }
+.data cil '<msil>image_d' = bytearray (
+  05 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 7A 6C 3A 20 63 6F 6E 73 74 72 75 63 74 6F 72 00 )
+.class private abstract sealed auto ansi beforefieldinit '<msil>Data' extends [mscorlib]System.Object
+{
+  .field private static valuetype '<msil>image_t' '<msil>image' at '<msil>image_d'
+  .field assembly static initonly native int '<msil>data'
+  .field assembly static initonly native int 'counter'        // +0
+  .field assembly static initonly native int 'pcounter'       // +8
+  .field assembly static initonly native int '.str'           // +16
+  .field assembly static initonly native int 'calls'          // +32
+  .field assembly static initonly native int '<msil>fn_twice'
+  .field assembly static initonly native int '<msil>fn_bump'
+  .field assembly static initonly native int '<msil>fn_get_twice'
+  .field assembly static initonly native int '<msil>fn_apply'
+  .method private hidebysig specialname rtspecialname static void .cctor() cil managed
+  {
+    .maxstack 3
+    ldc.i4 51 conv.i call native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+    ldc.i4.s 15 conv.i add ldc.i4.s -16 conv.i and stsfld native int '<msil>Data'::'<msil>data'
+    ldsfld native int '<msil>Data'::'<msil>data' ldsflda valuetype '<msil>image_t' '<msil>Data'::'<msil>image' ldc.i4 32 cpblk
+    ldsfld native int '<msil>Data'::'<msil>data' ldc.i4 32 add ldc.i4.0 ldc.i4 4 initblk
+    ldsfld native int '<msil>Data'::'<msil>data' stsfld native int '<msil>Data'::'counter'
+    ldsfld native int '<msil>Data'::'<msil>data' ldc.i4 8 add stsfld native int '<msil>Data'::'pcounter'
+    ldsfld native int '<msil>Data'::'<msil>data' ldc.i4 16 add stsfld native int '<msil>Data'::'.str'
+    ldsfld native int '<msil>Data'::'<msil>data' ldc.i4 32 add stsfld native int '<msil>Data'::'calls'
+    ldftn int32 'Contoso.Zl.Native'::'twice'(int32) stsfld native int '<msil>Data'::'<msil>fn_twice'
+    ldftn int32 'Contoso.Zl.Native'::'bump'() stsfld native int '<msil>Data'::'<msil>fn_bump'
+    ldftn native int 'Contoso.Zl.Native'::'get_twice'() stsfld native int '<msil>Data'::'<msil>fn_get_twice'
+    ldftn int32 'Contoso.Zl.Native'::'apply'(native int, int32) stsfld native int '<msil>Data'::'<msil>fn_apply'
+    // int *pcounter = &counter;
+    ldsfld native int '<msil>Data'::'<msil>data' ldc.i4 8 add ldsfld native int '<msil>Data'::'counter' stind.i
+    ret
+  }
+}
+
+// ---- hidden and internal functions stay in <Module> ----
+.method assembly static int32 'helper'(int32) cil managed { .maxstack 2 ldarg.0 ldc.i4.s 10 mul ret }
+.method assembly static void 'init'() cil managed
+{ .maxstack 2 ldsfld native int '<msil>Data'::'.str' call int32 'puts'(native int) pop
+  ldsfld native int '<msil>Data'::'counter' ldc.i4 100 stind.i4 ret }
+
+// ---- the export class ----
+.class public abstract sealed auto ansi 'Contoso.Zl.Native' extends [mscorlib]System.Object
+{
+  .method public static int32 'twice'(int32) cil managed
+  { .maxstack 3 ldsfld native int '<msil>Data'::'calls' ldsfld native int '<msil>Data'::'calls' ldind.i4 ldc.i4.1 add stind.i4 ldarg.0 ldc.i4.1 shl ret }
+  .method public static int32 'bump'() cil managed
+  { .maxstack 3 .locals (int32) ldsfld native int '<msil>Data'::'counter' ldsfld native int '<msil>Data'::'counter' ldind.i4 ldc.i4.1 add dup stloc.0 stind.i4 ldloc.0 ret }
+  .method public static native int 'get_twice'() cil managed { .maxstack 1 ldsfld native int '<msil>Data'::'<msil>fn_twice' ret }
+  .method public static int32 'apply'(native int, int32) cil managed
+  { .maxstack 3 ldarg.1 ldarg.0 calli int32(int32) ldc.i4.0 call int32 'helper'(int32) add ret }
+  // exported data: property (C#) + address accessor (C)
+  .method public hidebysig specialname static native int '<msil>addr_counter'() cil managed { .maxstack 1 ldsfld native int '<msil>Data'::'counter' ret }
+  .property native int 'counter'() { .get native int 'Contoso.Zl.Native'::'<msil>addr_counter'() }
+  .method public hidebysig specialname static native int '<msil>addr_pcounter'() cil managed { .maxstack 1 ldsfld native int '<msil>Data'::'pcounter' ret }
+  .property native int 'pcounter'() { .get native int 'Contoso.Zl.Native'::'<msil>addr_pcounter'() }
+  // canonical function addresses
+  .method public static native int '<msil>addr_twice'() cil managed { .maxstack 1 ldsfld native int '<msil>Data'::'<msil>fn_twice' ret }
+  .method public static native int '<msil>addr_bump'() cil managed { .maxstack 1 ldsfld native int '<msil>Data'::'<msil>fn_bump' ret }
+  .method public static native int '<msil>addr_get_twice'() cil managed { .maxstack 1 ldsfld native int '<msil>Data'::'<msil>fn_get_twice' ret }
+  .method public static native int '<msil>addr_apply'() cil managed { .maxstack 1 ldsfld native int '<msil>Data'::'<msil>fn_apply' ret }
+}
+
+// ---- phase 2: imports and cross-assembly relocations (none here), then constructors ----
+.method private hidebysig specialname rtspecialname static void .cctor() cil managed
+{ .maxstack 1 call void 'init'() ret }

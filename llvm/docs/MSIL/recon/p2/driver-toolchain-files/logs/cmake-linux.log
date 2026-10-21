@@ -1,0 +1,45 @@
+-- The C compiler identification is Clang 24.0.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: C:/llvm-msil-scratch/p2/driver-toolchain/proto/bin/clang.exe - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Configuring done (3.3s)
+-- Generating done (0.1s)
+-- Build files have been written to: C:/llvm-msil-scratch/p2/driver-toolchain/cmake/build-lnx
+configure exit=0 (4 s)
+Change Dir: 'C:/llvm-msil-scratch/p2/driver-toolchain/cmake/build-lnx'
+
+Run Build Command(s): <winget>/ninja.exe -v
+[1/6] C:\llvm-msil-scratch\p2\driver-toolchain\proto\bin\clang.exe --target=x86_64-unknown-linux-gnu-msil --sysroot=C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc   --target=x86_64-unknown-linux-gnu-msil -flto -O3 -DNDEBUG -O3 -DNDEBUG -ffreestanding -MD -MT CMakeFiles/util.dir/util.c.obj -MF CMakeFiles\util.dir\util.c.obj.d -o CMakeFiles/util.dir/util.c.obj -c C:/llvm-msil-scratch/p2/driver-toolchain/cmake/proj-lnx/util.c
+[2/6] C:\llvm-msil-scratch\p2\driver-toolchain\proto\bin\clang.exe --target=x86_64-unknown-linux-gnu-msil --sysroot=C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc   --target=x86_64-unknown-linux-gnu-msil -flto -O3 -DNDEBUG -O3 -DNDEBUG -ffreestanding -MD -MT CMakeFiles/app.dir/main.c.obj -MF CMakeFiles\app.dir\main.c.obj.d -o CMakeFiles/app.dir/main.c.obj -c C:/llvm-msil-scratch/p2/driver-toolchain/cmake/proj-lnx/main.c
+[3/6] C:\llvm-msil-scratch\p2\driver-toolchain\proto\bin\clang.exe --target=x86_64-unknown-linux-gnu-msil --sysroot=C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc -Dshlib_EXPORTS  --target=x86_64-unknown-linux-gnu-msil -flto -O3 -DNDEBUG -O3 -DNDEBUG -ffreestanding -MD -MT CMakeFiles/shlib.dir/shlib.c.obj -MF CMakeFiles\shlib.dir\shlib.c.obj.d -o CMakeFiles/shlib.dir/shlib.c.obj -c C:/llvm-msil-scratch/p2/driver-toolchain/cmake/proj-lnx/shlib.c
+[4/6] C:\Windows\system32\cmd.exe /C "cd . && "C:\Program Files\Microsoft Visual Studio\18\Professional\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E rm -f libutil.a && C:\PROGRA~1\MICROS~3\18\PROFES~1\VC\Tools\Llvm\x64\bin\llvm-ar.exe qc libutil.a  CMakeFiles/util.dir/util.c.obj && C:\PROGRA~1\MICROS~3\18\PROFES~1\VC\Tools\Llvm\x64\bin\LLVM-R~1.EXE libutil.a && cd ."
+[5/6] C:\Windows\system32\cmd.exe /C "cd . && C:\llvm-msil-scratch\p2\driver-toolchain\proto\bin\clang.exe --target=x86_64-unknown-linux-gnu-msil --sysroot=C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc -fPIC --target=x86_64-unknown-linux-gnu-msil -flto -O3 -DNDEBUG -O3 -DNDEBUG  -shared -Wl,--export-class=Demo.Native  -o shlib.dll CMakeFiles/shlib.dir/shlib.c.obj   && cd ."
+[6/6] C:\Windows\system32\cmd.exe /C "cd . && C:\llvm-msil-scratch\p2\driver-toolchain\proto\bin\clang.exe --target=x86_64-unknown-linux-gnu-msil --sysroot=C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc --target=x86_64-unknown-linux-gnu-msil -flto -O3 -DNDEBUG -O3 -DNDEBUG  CMakeFiles/app.dir/main.c.obj -o app.exe  libutil.a && cd ."
+
+build exit=0
+
+[32;1mName                  [0m[32;1m Length[0m
+[32;1m----                  [0m [32;1m------[0m
+app.exe                  2048
+app.runtimeconfig.json    114
+libutil.a                3544
+shlib.dll                2048
+
+--- WSL: dotnet app.exe (.NET 10, runtimeconfig from CMake)
+exit=42
+--- CMake cache facts
+CMAKE_AR:FILEPATH=C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/llvm-ar.exe
+set(CMAKE_C_COMPILER_ID "Clang")
+set(CMAKE_C_SIMULATE_ID "")
+set(CMAKE_C_COMPILER_FRONTEND_VARIANT "GNU")
+set(CMAKE_LINKER "C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/Llvm/x64/bin/ld.lld.exe")
+set(CMAKE_C_COMPILER_LINKER_FRONTEND_VARIANT )
+set(CMAKE_C_IMPLICIT_LINK_LIBRARIES "c;m")
+set(CMAKE_C_IMPLICIT_LINK_DIRECTORIES "C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib/x86_64-linux-gnu;C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib64;C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib")
+--- stand-in log (linker command lines)
+msil-ld --target=x86_64-unknown-linux-gnu-msil $TMP\CMakeCCompilerId-61b716.o -lc -lm -o a.exe
+msil-ld --target=x86_64-unknown-linux-gnu-msil --sysroot=C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc -LC:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib/x86_64-linux-gnu -LC:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib64 -LC:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib CMakeFiles/cmTC_c4d9e.dir/CMakeCCompilerABI.c.obj -lc -lm -o cmTC_c4d9e.exe
+msil-ld --target=x86_64-unknown-linux-gnu-msil --sysroot=C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc --shared -LC:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib/x86_64-linux-gnu -LC:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib64 -LC:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib --lto-O3 --export-class=Demo.Native CMakeFiles/shlib.dir/shlib.c.obj -lc -lm -o shlib.dll
+msil-ld --target=x86_64-unknown-linux-gnu-msil --sysroot=C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc -LC:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib/x86_64-linux-gnu -LC:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib64 -LC:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib --lto-O3 CMakeFiles/app.dir/main.c.obj libutil.a -lc -lm -o app.exe

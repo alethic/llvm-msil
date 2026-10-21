@@ -1,0 +1,87 @@
+# nisym on the Windows SDK 10.0.26100.0 ucrt.lib/kernel32.lib/ws2_32.lib and MSVC 14.51 vcruntime.lib/oldnames.lib/msvcrt.lib
+# command: nisym --os=windows -L<ucrt> -L<um> -L<msvc> -lucrt -lvcruntime -loldnames -lkernel32 -lws2_32 -lmsvcrt --query=...
+# C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib: archive, 1392 members
+# C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/MSVC/14.51.36231/lib/x64\vcruntime.lib: archive, 113 members
+# C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/MSVC/14.51.36231/lib/x64\oldnames.lib: archive, 228 members
+# C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64\kernel32.lib: archive, 1399 members
+# C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64\ws2_32.lib: archive, 201 members
+# C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/MSVC/14.51.36231/lib/x64\msvcrt.lib: archive, 1334 members
+puts:
+  => puts: pinvokeimpl("api-ms-win-crt-stdio-l1-1-0") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-stdio-l1-1-0.dll)
+printf: UNDEFINED (link error)
+malloc:
+  => malloc: pinvokeimpl("api-ms-win-crt-heap-l1-1-0") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-heap-l1-1-0.dll)
+_errno:
+  => _errno: pinvokeimpl("api-ms-win-crt-runtime-l1-1-0") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-runtime-l1-1-0.dll)
+__acrt_iob_func:
+  => __acrt_iob_func: pinvokeimpl("api-ms-win-crt-stdio-l1-1-0") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-stdio-l1-1-0.dll)
+memcpy:
+  => memcpy: pinvokeimpl("VCRUNTIME140") [code] from C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/MSVC/14.51.36231/lib/x64\vcruntime.lib(VCRUNTIME140.dll)
+strchr:
+  => strchr: pinvokeimpl("VCRUNTIME140") [code] from C:/Program Files/Microsoft Visual Studio/18/Professional/VC/Tools/MSVC/14.51.36231/lib/x64\vcruntime.lib(VCRUNTIME140.dll)
+sqrt:
+  => sqrt: pinvokeimpl("api-ms-win-crt-math-l1-1-0") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-math-l1-1-0.dll)
+frexpf: UNDEFINED (link error)
+hypotf: UNDEFINED (link error)
+_hypotf:
+  => _hypotf: pinvokeimpl("api-ms-win-crt-math-l1-1-0") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-math-l1-1-0.dll)
+strdup (weak alias -> _strdup):
+  => strdup: pinvokeimpl("api-ms-win-crt-string-l1-1-0" as "_strdup") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-string-l1-1-0.dll)
+open (weak alias -> _open):
+  => open: pinvokeimpl("api-ms-win-crt-stdio-l1-1-0" as "_open") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-stdio-l1-1-0.dll)
+fileno (weak alias -> _fileno):
+  => fileno: pinvokeimpl("api-ms-win-crt-stdio-l1-1-0" as "_fileno") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-stdio-l1-1-0.dll)
+atexit:
+  => atexit: link error (no bindable definition)
+_crt_atexit:
+  => _crt_atexit: pinvokeimpl("api-ms-win-crt-runtime-l1-1-0") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-runtime-l1-1-0.dll)
+_mbcasemap:
+     _mbcasemap: NOT BINDABLE: data import (only __imp__mbcasemap exists) [const] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-multibyte-l1-1-0.dll)
+  => _mbcasemap: link error (no bindable definition)
+socket:
+  => socket: pinvokeimpl("WS2_32" as "#23") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64\ws2_32.lib(WS2_32.dll)
+htons:
+  => htons: pinvokeimpl("WS2_32" as "#9") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64\ws2_32.lib(WS2_32.dll)
+GetProcAddress:
+  => GetProcAddress: pinvokeimpl("KERNEL32") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64\kernel32.lib(KERNEL32.dll)
+stdout: UNDEFINED (link error)
+errno: UNDEFINED (link error)
+environ: UNDEFINED (link error)
+__p__environ:
+  => __p__environ: pinvokeimpl("api-ms-win-crt-environment-l1-1-0") [code] from C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64\ucrt.lib(api-ms-win-crt-environment-l1-1-0.dll)
+
+# PE DLL export tables (Windows 11 26200 System32)
+# C:/Windows/System32/ucrtbase.dll: PE DLL 'ucrtbase.dll', 2484 named exports
+# C:/Windows/System32/msvcrt.dll: PE DLL 'msvcrt.dll', 1330 named exports
+# C:/Windows/System32/kernel32.dll: PE DLL 'KERNEL32.dll', 1698 named exports
+# C:/Windows/System32/ws2_32.dll: PE DLL 'WS2_32.dll', 196 named exports
+puts:
+  => puts: pinvokeimpl("ucrtbase") [code] from C:/Windows/System32/ucrtbase.dll
+     puts: pinvokeimpl("msvcrt") [code] from C:/Windows/System32/msvcrt.dll
+printf:
+  => printf: pinvokeimpl("msvcrt") [code] from C:/Windows/System32/msvcrt.dll
+memcpy:
+  => memcpy: pinvokeimpl("ucrtbase") [code] from C:/Windows/System32/ucrtbase.dll
+     memcpy: pinvokeimpl("msvcrt") [code] from C:/Windows/System32/msvcrt.dll
+_errno:
+  => _errno: pinvokeimpl("ucrtbase") [code] from C:/Windows/System32/ucrtbase.dll
+     _errno: pinvokeimpl("msvcrt") [code] from C:/Windows/System32/msvcrt.dll
+_mbcasemap:
+     _mbcasemap: NOT BINDABLE: data export (RVA in a non-code section) [data] from C:/Windows/System32/ucrtbase.dll
+     _mbcasemap: NOT BINDABLE: data export (RVA in a non-code section) [data] from C:/Windows/System32/msvcrt.dll
+  => _mbcasemap: link error (no bindable definition)
+_iob:
+     _iob: NOT BINDABLE: data export (RVA in a non-code section) [data] from C:/Windows/System32/msvcrt.dll
+  => _iob: link error (no bindable definition)
+_environ:
+     _environ: NOT BINDABLE: data export (RVA in a non-code section) [data] from C:/Windows/System32/msvcrt.dll
+  => _environ: link error (no bindable definition)
+__p__environ:
+  => __p__environ: pinvokeimpl("ucrtbase") [code] from C:/Windows/System32/ucrtbase.dll
+frexpf: UNDEFINED (link error)
+hypot:
+  => hypot: pinvokeimpl("ucrtbase") [code] from C:/Windows/System32/ucrtbase.dll
+AcquireSRWLockExclusive:
+  => AcquireSRWLockExclusive: pinvokeimpl("kernel32") [code] from C:/Windows/System32/kernel32.dll
+socket:
+  => socket: pinvokeimpl("ws2_32") [code] from C:/Windows/System32/ws2_32.dll

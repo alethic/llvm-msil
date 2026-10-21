@@ -1,0 +1,15 @@
+$ clang --target=x86_64-pc-windows-msvc-msil -ffreestanding -O2 -flto a.c b.c -o prog.exe
+exit=0
+$ dotnet prog.exe   (.NET 8)
+two-file program
+exit=42
+$ ./prog.exe        (.NET Framework 4.8)
+two-file program
+exit=42
+$ clang --target=x86_64-unknown-linux-gnu-msil -ffreestanding -O2 -flto b.c c.c -o lnx.exe
+exit=0
+$ wsl dotnet lnx.exe (.NET 10)
+exit=42
+--- link jobs the driver planned (stand-in log)
+msil-ld --target=x86_64-pc-windows-msvc-msil -LC:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\ucrt\x64 -LC:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\um\x64 --lto-O2 $TMP/a-a5190d.o $TMP/b-c5e873.o -lucrt -lkernel32 -o prog.exe
+msil-ld --target=x86_64-unknown-linux-gnu-msil --lto-O2 $TMP/b-71d99a.o $TMP/c-c0f196.o -lc -lm -o lnx.exe

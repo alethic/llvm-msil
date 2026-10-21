@@ -1,0 +1,127 @@
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly extern 'zlibx' { @VER@ }
+.assembly extern 'nolib' { .ver 1:0:0:0 }
+.assembly 'prog' { .ver 0:0:0:0 }
+
+.method public static void say(string) cil managed { .maxstack 1 ldarg.0 call void [mscorlib]System.Console::WriteLine(string) ret }
+.method public static void sayi(string, int32) cil managed
+{ .maxstack 2 ldarg.0 ldarg.1 box [mscorlib]System.Int32 call string [mscorlib]System.String::Concat(object, object) call void [mscorlib]System.Console::WriteLine(string) ret }
+
+.method public static void t_ok() cil managed noinlining
+{
+  .maxstack 3
+  ldstr "t_ok entered"
+  call void say(string)
+  ldstr "add(2,3) = "
+  ldc.i4.2
+  ldc.i4.3
+  call int32 [zlibx]Contoso.Zlib.Native::'add'(int32, int32)
+  call void sayi(string, int32)
+  ldstr "bump() = "
+  call int32 [zlibx]Contoso.Zlib.Native::'bump'()
+  call void sayi(string, int32)
+  ret
+}
+// a member that the library does not define
+.method public static void t_missing() cil managed noinlining
+{
+  .maxstack 1
+  ldstr "t_missing entered"
+  call void say(string)
+  call int32 [zlibx]Contoso.Zlib.Native::'gone'()
+  pop
+  ret
+}
+// the right name with the wrong signature
+.method public static void t_badsig() cil managed noinlining
+{
+  .maxstack 2
+  ldstr "t_badsig entered"
+  call void say(string)
+  ldc.i4.2
+  conv.i
+  ldc.i4.3
+  call int32 [zlibx]Contoso.Zlib.Native::'add'(native int, int32)
+  pop
+  ret
+}
+// a class that the library does not define
+.method public static void t_noclass() cil managed noinlining
+{
+  .maxstack 1
+  ldstr "t_noclass entered"
+  call void say(string)
+  call int32 [zlibx]Contoso.Zlib.Other::'f'()
+  pop
+  ret
+}
+// an assembly that does not exist
+.method public static void t_noasm() cil managed noinlining
+{
+  .maxstack 1
+  ldstr "t_noasm entered"
+  call void say(string)
+  call int32 [nolib]X::'f'()
+  pop
+  ret
+}
+// a global method of the library's <Module> (public, but <Module> is not a public type)
+.method public static void t_global() cil managed noinlining
+{
+  .maxstack 2
+  ldstr "t_global entered"
+  call void say(string)
+  ldstr "helper(4) = "
+  ldc.i4.4
+  call int32 [zlibx]'<Module>'::'helper'(int32)
+  call void sayi(string, int32)
+  ret
+}
+// the missing member only on a path that does not run
+.method public static void t_missing_cold(bool) cil managed noinlining
+{
+  .maxstack 1
+  ldstr "t_missing_cold entered"
+  call void say(string)
+  ldarg.0
+  brfalse L1
+  call int32 [zlibx]Contoso.Zlib.Native::'gone'()
+  pop
+L1:
+  ldstr "t_missing_cold: cold path skipped"
+  call void say(string)
+  ret
+}
+
+.method public static int32 main(string[] args) cil managed
+{
+  .entrypoint
+  .maxstack 3
+  .locals init (string)
+  ldarg.0
+  ldc.i4.0
+  ldelem.ref
+  stloc.0
+  .try
+  {
+    ldloc.0 ldstr "ok"      call bool [mscorlib]System.String::op_Equality(string, string) brfalse N1  call void t_ok()      br DONE
+N1: ldloc.0 ldstr "missing" call bool [mscorlib]System.String::op_Equality(string, string) brfalse N2  call void t_missing() br DONE
+N2: ldloc.0 ldstr "badsig"  call bool [mscorlib]System.String::op_Equality(string, string) brfalse N3  call void t_badsig()  br DONE
+N3: ldloc.0 ldstr "noclass" call bool [mscorlib]System.String::op_Equality(string, string) brfalse N4  call void t_noclass() br DONE
+N4: ldloc.0 ldstr "noasm"   call bool [mscorlib]System.String::op_Equality(string, string) brfalse N5  call void t_noasm()   br DONE
+N5: ldloc.0 ldstr "global"  call bool [mscorlib]System.String::op_Equality(string, string) brfalse N6  call void t_global()  br DONE
+N6: ldloc.0 ldstr "cold"    call bool [mscorlib]System.String::op_Equality(string, string) brfalse DONE ldc.i4.0 call void t_missing_cold(bool) br DONE
+DONE: leave END
+  }
+  catch [mscorlib]System.Exception
+  {
+    callvirt instance string [mscorlib]System.Object::ToString()
+    ldstr "caught: "
+    call void say(string)
+    call void say(string)
+    leave END
+  }
+END:
+  ldc.i4.0
+  ret
+}

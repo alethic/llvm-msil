@@ -1,0 +1,62 @@
+# netmerge (tools/netmerge/Program.cs) on two ilasm-built netmodules (m1.il, m2.il; see m1.c, m2.c)
+# expected exit 66 = twice(20) + counter + seven = ((20-1)*2 + table[1]) + 1 + 7
+merged 2 modules -> merged.dll: methods=7 fields=7 tokensRewritten=21 sigTypeRefsRewritten=2 placeholdersResolved=2 renamed=3
+merged 2 modules -> merged.exe: methods=7 fields=7 tokensRewritten=21 sigTypeRefsRewritten=2 placeholdersResolved=2 renamed=3
+merged.dll on net8: exit=66
+merged.dll on net10: exit=66
+merged.exe on .NET Framework 4.8: exit=66
+two merges in separate directories: identical bytes
+
+## missing definition:
+netmerge: error: undefined symbol 'twice' referenced by m1.netmodule
+
+## ilverify merged.dll (new: InitOnly errors, because each input's .cctor became an ordinary method '<msil>cctor$N' that stores initonly fields)
+[IL]: Error [StackByRef]: [<Module>::main()][offset 0x0000000C][found Native Int] Expected ByRef on the stack.
+[IL]: Error [InitOnly]: [<Module>::<msil>cctor$0()][offset 0x00000013] Cannot change initonly field outside its .ctor.
+[IL]: Error [Unverifiable]: [<Module>::<msil>cctor$0()][offset 0x00000027] Instruction cannot be verified.
+[IL]: Error [InitOnly]: [<Module>::<msil>cctor$0()][offset 0x0000002E] Cannot change initonly field outside its .ctor.
+[IL]: Error [StackByRef]: [<Module>::twice(int32)][offset 0x00000005][found Native Int] Expected ByRef on the stack.
+[IL]: Error [InitOnly]: [<Module>::<msil>cctor$1()][offset 0x00000013] Cannot change initonly field outside its .ctor.
+[IL]: Error [Unverifiable]: [<Module>::<msil>cctor$1()][offset 0x00000027] Instruction cannot be verified.
+[IL]: Error [InitOnly]: [<Module>::<msil>cctor$1()][offset 0x0000002E] Cannot change initonly field outside its .ctor.
+[IL]: Error [InitOnly]: [<Module>::<msil>cctor$1()][offset 0x0000003E] Cannot change initonly field outside its .ctor.
+9 Error(s) Verifying merged.dll
+## PEVerify /il merged.dll
+[offset 0x0000000C][found Native Int] Expected ByRef on the stack.
+[offset 0x00000013] Cannot change initonly field outside its .ctor.
+[offset 0x00000005][found Native Int] Expected ByRef on the stack.
+[offset 0x00000013] Cannot change initonly field outside its .ctor.
+4 Error(s) Verifying merged.dll
+## ildasm 4.8 merged.dll (method headers and tokens that were rewritten)
+.method public static int32  main() cil managed
+  IL_0002:  call       int32 twice(int32)
+  IL_0007:  ldsfld     native int counter
+  IL_000e:  ldsfld     native int seven
+.method private hidebysig static void  '<msil>cctor$0'() cil managed
+  IL_0006:  call       native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+  IL_0013:  stsfld     native int '<msil>data'
+  IL_0018:  ldsfld     native int '<msil>data'
+  IL_001d:  ldsflda    valuetype '<msil>image_t' '<msil>image'
+  IL_0029:  ldsfld     native int '<msil>data'
+  IL_002e:  stsfld     native int seven
+.method private hidebysig static int32  '<msil>Main'(string[] args) cil managed
+  IL_0000:  call       int32 main()
+.method public static int32  twice(int32 A_0) cil managed
+  IL_0000:  ldsfld     native int counter
+  IL_0009:  ldsfld     native int table
+  IL_0011:  call       int32 helper(int32)
+.method assembly static int32  helper(int32 A_0) cil managed
+.method private hidebysig static void  '<msil>cctor$1'() cil managed
+  IL_0006:  call       native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+  IL_0013:  stsfld     native int '<msil>data$1'
+  IL_0018:  ldsfld     native int '<msil>data$1'
+  IL_001d:  ldsflda    valuetype '<msil>image_t$1' '<msil>image$1'
+  IL_0029:  ldsfld     native int '<msil>data$1'
+  IL_002e:  stsfld     native int counter
+  IL_0033:  ldsfld     native int '<msil>data$1'
+  IL_003e:  stsfld     native int table
+.method private hidebysig specialname rtspecialname static 
+  IL_0000:  call       void '<msil>cctor$0'()
+  IL_0005:  call       void '<msil>cctor$1'()
+.class private explicit ansi sealed '<msil>image_t'
+.class private explicit ansi sealed '<msil>image_t$1'

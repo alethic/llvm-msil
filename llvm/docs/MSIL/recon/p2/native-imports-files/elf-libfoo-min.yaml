@@ -1,0 +1,61 @@
+# Minimal ELF shared object for resolver tests (no program headers, no code):
+# DT_SONAME, a function, a data object, an IFUNC, a TLS variable, a symbol
+# with a default and a hidden version (newf@@V2, newf@V1) and a symbol with
+# only a hidden version (oldf@V1). llvm::object reads .dynamic through its
+# section header. The DT_SONAME value is the offset of "libfoo.so.1" in the
+# .dynstr that yaml2obj builds (checked by llvm-readobj --dynamic-table).
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:    .text
+    Type:    SHT_PROGBITS
+    Flags:   [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:    0x40
+  - Name:    .data
+    Type:    SHT_PROGBITS
+    Flags:   [ SHF_ALLOC, SHF_WRITE ]
+    Size:    0x10
+  - Name:    .tbss
+    Type:    SHT_NOBITS
+    Flags:   [ SHF_ALLOC, SHF_WRITE, SHF_TLS ]
+    Size:    0x4
+  - Name:    .gnu.version
+    Type:    SHT_GNU_versym
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynsym
+    # index 0 (null), foo V1, bar V1, tlsvar V1, ifn V1, newf V1 hidden,
+    # newf V2, oldf V1 hidden (0x8000 | 2 = 32770)
+    Entries: [ 0, 2, 2, 2, 2, 32770, 3, 32770 ]
+  - Name:    .gnu.version_d
+    Type:    SHT_GNU_verdef
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynstr
+    Entries:
+      - Flags:      1
+        VersionNdx: 1
+        Names:      [ libfoo.so.1 ]
+      - VersionNdx: 2
+        Names:      [ V1 ]
+      - VersionNdx: 3
+        Names:      [ V2, V1 ]
+  - Name:    .dynamic
+    Type:    SHT_DYNAMIC
+    Flags:   [ SHF_ALLOC, SHF_WRITE ]
+    Link:    .dynstr
+    Entries:
+      - Tag:   DT_SONAME
+        Value: [[SONAME=0x24]]
+      - Tag:   DT_NULL
+        Value: 0
+DynamicSymbols:
+  - { Name: foo,        Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x0,  Size: 4 }
+  - { Name: bar,        Type: STT_OBJECT,    Section: .data, Binding: STB_GLOBAL, Value: 0x0,  Size: 4 }
+  - { Name: tlsvar,     Type: STT_TLS,       Section: .tbss, Binding: STB_GLOBAL, Value: 0x0,  Size: 4 }
+  - { Name: ifn,        Type: STT_GNU_IFUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: newf,       Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 6 }
+  - { Name: 'newf (1)', Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 6 }
+  - { Name: oldf,       Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 6 }

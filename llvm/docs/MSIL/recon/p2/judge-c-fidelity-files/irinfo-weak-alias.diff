@@ -1,0 +1,11 @@
+--- irinfo.orig.py	2026-10-21 01:09:35.122781300 -0500
++++ irinfo.py	2026-10-21 01:09:35.385661200 -0500
+@@ -175,7 +175,7 @@
+         m = re.match(r'declare (extern_weak )?(.*?)@("(?:[^"]|\\")*"|[\w.$]+)\((.*)\)(.*)$', line)
+         if m and not m.group(3).startswith('llvm.') and m.group(3).strip('"') not in D14:
+             line = 'declare %s%s@%s(%s) #990' % (m.group(1) or '', m.group(2), m.group(3), m.group(4))
+-        m = re.match(r'@("(?:[^"]|\\")*"|[\w.$]+) = (?:dso_local )?alias ', line)
++        m = re.match(r'@("(?:[^"]|\\")*"|[\w.$]+) = (?:\w+ )?(?:dso_local )?alias ', line)
+         if m:
+             line = '; alias removed for the Phase-1 backend: ' + line
+         m = re.match(r'@("(?:[^"]|\\")*"|[\w.$]+) = (external|extern_weak) ((?:\w+ )*)global (.*?)(, align \d+)?$', line)

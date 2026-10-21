@@ -1,0 +1,146 @@
+files 186, methods with bodies 2670: tiny headers 0, fat 2670 (fat without locals 685), with EH 0
+IL code bytes 848670, header bytes 32040, largest body 21780, largest maxstack 321
+token operands 22938, branch operands 21758, switch targets 164, targets not on an instruction boundary 0
+
+== opcodes (encoding, name, count)
+  0x0002 ldarg.0	4710
+  0x0003 ldarg.1	1931
+  0x0004 ldarg.2	535
+  0x0005 ldarg.3	102
+  0x0006 ldloc.0	32477
+  0x0007 ldloc.1	4750
+  0x0008 ldloc.2	3550
+  0x0009 ldloc.3	2997
+  0x000A stloc.0	2590
+  0x000B stloc.1	3017
+  0x000C stloc.2	2854
+  0x000D stloc.3	2525
+  0x000E ldarg.s	229
+  0x0010 starg.s	793
+  0x0011 ldloc.s	22348
+  0x0013 stloc.s	17880
+  0x0015 ldc.i4.m1	659
+  0x0016 ldc.i4.0	3596
+  0x0017 ldc.i4.1	3444
+  0x0018 ldc.i4.2	1185
+  0x0019 ldc.i4.3	919
+  0x001A ldc.i4.4	480
+  0x001B ldc.i4.5	389
+  0x001C ldc.i4.6	243
+  0x001D ldc.i4.7	433
+  0x001E ldc.i4.8	593
+  0x001F ldc.i4.s	9839
+  0x0020 ldc.i4	48091
+  0x0021 ldc.i8	1033
+  0x0022 ldc.r4	556
+  0x0023 ldc.r8	1351
+  0x0025 dup	5048
+  0x0026 pop	1035
+  0x0028 call	8703
+  0x0029 calli	347
+  0x002A ret	3649
+  0x0038 br	12763
+  0x0039 brfalse	912
+  0x003A brtrue	1395
+  0x003B beq	2078
+  0x003C bge	246
+  0x003D bgt	1058
+  0x003E ble	176
+  0x003F blt	322
+  0x0040 bne.un	2191
+  0x0041 bge.un	53
+  0x0042 bgt.un	466
+  0x0043 ble.un	30
+  0x0044 blt.un	68
+  0x0045 switch	22
+  0x0046 ldind.i1	437
+  0x0047 ldind.u1	1889
+  0x0048 ldind.i2	126
+  0x0049 ldind.u2	252
+  0x004A ldind.i4	10851
+  0x004D ldind.i	5510
+  0x004E ldind.r4	467
+  0x004F ldind.r8	1375
+  0x0052 stind.i1	3707
+  0x0053 stind.i2	421
+  0x0054 stind.i4	7910
+  0x0056 stind.r4	211
+  0x0057 stind.r8	557
+  0x0058 add	50744
+  0x0059 sub	1089
+  0x005A mul	4909
+  0x005B div	128
+  0x005C div.un	494
+  0x005D rem	162
+  0x005E rem.un	141
+  0x005F and	1197
+  0x0060 or	1405
+  0x0061 xor	608
+  0x0062 shl	2087
+  0x0063 shr	382
+  0x0064 shr.un	834
+  0x0065 neg	344
+  0x0066 not	99
+  0x0067 conv.i1	69
+  0x0068 conv.i2	51
+  0x0069 conv.i4	787
+  0x006A conv.i8	18
+  0x006B conv.r4	178
+  0x006C conv.r8	265
+  0x006D conv.u4	6
+  0x0076 conv.r.un	6
+  0x007E ldsfld	10806
+  0x007F ldsflda	118
+  0x0080 stsfld	2707
+  0x008E ldlen	56
+  0x009A ldelem.ref	56
+  0x00D1 conv.u2	69
+  0x00D2 conv.u1	268
+  0x00D3 conv.i	45094
+  0x00DF stind.i	4823
+  0x00E0 conv.u	976
+  0xFE01 ceq	710
+  0xFE02 cgt	49
+  0xFE03 cgt.un	109
+  0xFE04 clt	144
+  0xFE05 clt.un	40
+  0xFE06 ldftn	257
+  0xFE0C ldloc	976
+  0xFE0E stloc	537
+  0xFE0F localloc	1581
+  0xFE12 unaligned.	1699
+  0xFE13 volatile.	2058
+  0xFE17 cpblk	843
+  0xFE18 initblk	156
+
+== token operands by opcode and table
+  call -> MemberRef	329
+  call -> MethodDef	8374
+  calli -> StandAloneSig	347
+  ldftn -> MethodDef	257
+  ldsfld -> FieldDef	10806
+  ldsflda -> FieldDef	118
+  stsfld -> FieldDef	2707
+
+== member references (opcode, parent, name)
+  call MemberRef [mscorlib]System.Buffer::MemoryCopy	18
+  call MemberRef [mscorlib]System.Environment::GetCommandLineArgs	56
+  call MemberRef [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal	178
+  call MemberRef [mscorlib]System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi	56
+  call MemberRef [mscorlib]System.Threading.Interlocked::MemoryBarrier	21
+
+== metadata table rows (summed over files)
+  Assembly	186
+  AssemblyRef	186
+  ClassLayout	118
+  Field	2825
+  FieldRva	118
+  ImplMap	308
+  MemberRef	298
+  MethodDef	2978
+  Module	186
+  ModuleRef	124
+  Param	4266
+  StandAloneSig	1494
+  TypeDef	304
+  TypeRef	360

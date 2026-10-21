@@ -1,0 +1,40 @@
+4,5c4,5
+< assembly 'hello' ver 0.0.0.0 flags=0 hash=Sha1 culture='' key=-
+< module 'hello.dll'
+---
+> assembly 'hello' ver 0.0.0.0 flags=0 hash=None culture='' key=-
+> module 'hello-ilasm.dll'
+19c19
+<     .maxstack 8
+---
+>     .maxstack 3 initlocals
+34c34,35
+<     .maxstack 8
+---
+>     .param 1 'args' None
+>     .maxstack 1 initlocals
+37,38c38,39
+<   .method 'long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+<     .maxstack 8
+---
+>   .method 'long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+>     .maxstack 1 initlocals
+311c312
+<     L267: call int32() '<Module>'::'long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+---
+>     L267: call int32() '<Module>'::'long_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+321c322
+<     L277: ldc.r4 float32(0x7F800001)
+---
+>     L277: ldc.r4 float32(0x7FC00001)
+335a337
+>     .param 1 'A_0' None
+337c339,340
+<     .maxstack 8
+---
+>     .param 1 'A_0' None
+>     .maxstack 2 initlocals
+343c346
+<     .maxstack 8
+---
+>     .maxstack 1 initlocals

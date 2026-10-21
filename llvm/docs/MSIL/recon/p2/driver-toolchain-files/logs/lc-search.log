@@ -1,0 +1,9 @@
+sysroot files: libc.a 6238972 bytes, 2233 members
+libc.so (text):
+GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a  AS_NEEDED ( /lib64/ld-linux-x86-64.so.2 ) )
+libm.so (text):
+GROUP ( /usr/lib/x86_64-linux-gnu/libm.so.6  AS_NEEDED ( /usr/lib/x86_64-linux-gnu/libmvec.so.1 ) )
+libm.a (text):
+GROUP ( /usr/lib/x86_64-linux-gnu/libm-2.43.a /usr/lib/x86_64-linux-gnu/libmvec.a )
+prototype msil-ld -L<sysroot> -lc -lm: exit 1, 2233 'neither an MSIL object nor bitcode' warnings (libc.a members), other diagnostics:
+      1 msil-ld: error: unknown file type: C:/llvm-msil-scratch/p2/driver-toolchain/sysroot-glibc/usr/lib/x86_64-linux-gnu\libm.a
