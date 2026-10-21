@@ -1,0 +1,115 @@
+jobs 4848 failures 112
+Counter({('-stop-after=msil-isel', '-O0'): 14, ('-stop-after=msil-isel', '-O1'): 14, ('-stop-after=msil-isel', '-O2'): 14, ('-stop-after=msil-isel', '-O3'): 14, ('-stop-before=msil-argument-move', '-O0'): 14, ('-stop-before=msil-argument-move', '-O1'): 14, ('-stop-before=msil-argument-move', '-O2'): 14, ('-stop-before=msil-argument-move', '-O3'): 14})
+Counter({'Using an undefined physical register': 128})
+indirectbr.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O0 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O1 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O2 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O3 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O0 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O1 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O2 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O3 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+indirectbr.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @ibr_loop: %11:i32 = ARGUMENT_I32 0, implicit $arguments
+int-arith.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O0 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O1 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O2 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O3 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O0 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O1 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O2 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O3 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+int-arith.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @rotr_i64: %2:i64 = ARGUMENT_I64 0, implicit $arguments
+loop-phi.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O0 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O1 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O2 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O3 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O0 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O1 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O2 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O3 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+loop-phi.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @fib: %5:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O0 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O1 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O2 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O3 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O0 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O1 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O2 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O3 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+narrow-ints.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @slt_i8: %2:i32 = ARGUMENT_I32 0, implicit $arguments
+returned.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O0 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O1 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O2 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O3 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O0 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O1 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O2 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O3 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+returned.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @test_not_dominated: %0:i64 = ARGUMENT_I64 0, implicit $arguments
+select.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O0 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O1 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O2 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O3 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O0 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O1 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O2 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O3 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+select.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @select_i1_noext: %3:i32 = ARGUMENT_I32 2, implicit $arguments | Using an undefined physical register @select_i1_noext: %4:i32 = ARGUMENT_I32 1, implicit $arguments
+tti-hooks.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O0 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O1 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O2 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-unknown-linux-gnu-msil -stop-after=msil-isel -O3 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-unknown-linux-gnu-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O0 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O1 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O2 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-pc-windows-msvc-msil -stop-after=msil-isel -O3 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O0 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O1 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O2 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments
+tti-hooks.ll x86_64-pc-windows-msvc-msil -stop-before=msil-argument-move -O3 Using an undefined physical register @msil_sum_1024: %4:i64 = ARGUMENT_I64 0, implicit $arguments

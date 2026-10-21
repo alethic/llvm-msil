@@ -22,6 +22,7 @@ file handle, so the operating system releases it the moment the holder exits or 
 | exclusive | `msil-configure.ps1`, `msil-build.ps1` (cmake, ninja) | one writer per build directory |
 | shared | `msil-lit.ps1`, `msil-run.ps1`, `msil-gtest.ps1`, `msil-expect-error.ps1` (when the program is in the build directory) | on Windows a running `.exe` cannot be relinked, so tools never run while ninja writes |
 | none | `msil-syntax.ps1`, `msil-tblgen.ps1`, `msil-env.ps1` | they write nothing into the build tree |
+| exclusive, on the private hooks tree | `msil/utils/ci/upstream-hooks.ps1` (its compile leg runs cmake and ninja there itself; `-SelfTest` takes the same lock shared) | the hooks tree has its own `.msil-build.lock`; the main build directory's lock is not involved (below) |
 
 A waiting script prints the current holder and waits (`-WaitMinutes`, default 240 for
 builds and lit). The exclusive lock also waits for orphaned `ninja.exe`/`cmake.exe`
@@ -74,8 +75,12 @@ pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-configure.ps1 -Experime
 `ninja -C <build> <targets>`. Drops to `-j 4` below 16 GB of free RAM and `-j 2` below 6 GB
 unless `-Jobs` is given; `-KeepGoing` adds `-k 0`.
 
+The build targets of milestone M11 (the same list as `msil/utils/ci/build.ps1` and `build.sh`;
+`llvm-profdata` serves two upstream clang driver tests of the upstream-hooks check, which also
+runs all of `TargetParserTests` and `MCTests`):
+
 ```powershell
-pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 llc opt clang FileCheck not count split-file llvm-config MCTests MSILTests
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 llc opt clang FileCheck not count split-file llvm-config llvm-profdata TargetParserTests MCTests MSILTests
 ```
 
 ### msil-lit.ps1 (shared)
@@ -100,8 +105,10 @@ pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-run.ps1 llc -mtriple=x8
 Compiles each file with `/Zs` (no output) using its own command from `compile_commands.json`;
 headers and files without an entry borrow the flags of a TU in the same or a parent
 directory, or of `-FlagsFrom <tu>`. `-ExtraInclude <dir,dir,...>` puts extra `/I` directories
-first. `-NoPch` drops the PCH force-include (stricter). A `/Zs` check costs about as much as a
-compile, so check single files, not directories. Needs the TableGen outputs the file includes:
+first. `-NoPch` drops the PCH force-include (stricter). `-ExtraFlags <flags>` appends compiler
+flags after the TU's own (`/clang:-Werror=switch` turns an unhandled enumerator into a failure),
+and `-BuildDir <dir>` reads another tree's `compile_commands.json` (the private hooks tree). A
+`/Zs` check costs about as much as a compile, so check single files, not directories. Needs the TableGen outputs the file includes:
 before M1.0 only TUs without generated headers can be checked.
 
 ```powershell
@@ -140,6 +147,38 @@ stdout+stderr matches `-Pattern`, and the output has none of `PLEASE submit a bu
 
 ```powershell
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-expect-error.ps1 -Pattern 'error: .*variadic' -- llc -mtriple=x86_64-pc-windows-msvc-msil vararg.ll -o NUL
+```
+
+## The private hooks tree
+
+The compile leg of `msil/utils/ci/upstream-hooks.ps1` (plan M11; llvm/docs/MSIL/GettingStarted.md
+section 7) compiles two hooked upstream files that the main build never compiles,
+`llvm/lib/Target/ARM/AsmParser/ARMAsmParser.cpp` and
+`lldb/source/Plugins/Process/gdb-remote/GDBRemoteCommunicationClient.cpp`, in a build tree of its
+own: `-HooksBuildDir`, else `$env:MSIL_HOOKS_BUILD_DIR`, else `C:\llvm-msil-hooks-build`
+(projects clang and lldb, the ARM target only, no tests, no optional lldb dependency, the
+compilers and job limits of `msil-configure.ps1`).
+
+- **Its own lock.** The leg takes the tree's exclusive lock (`Enter-MsilBuildLock -BuildDir
+  <tree>` from `msil-lock.ps1`, the file `<tree>/.msil-build.lock`) and, while it holds it, runs
+  cmake (only when the tree has no `build.ninja`) and ninja there directly. It never calls
+  `msil-configure.ps1` or `msil-build.ps1`: they take the same lock themselves and would wait
+  for their own parent. The main build directory's lock is not involved, and the leg refuses to
+  use the main build directory as the hooks tree.
+- **What it runs.** `ninja -C <tree>` on the ARMAsmParser.cpp object (it also generates the ARM
+  `.inc` files), then `msil-syntax.ps1 -BuildDir <tree> -ExtraFlags /clang:-Werror=switch` on
+  both files. The lldb object is never built with ninja: its order-only dependencies are about
+  1,000 unrelated TUs (19 min).
+- **Cost.** About 47 s per run; about 13 min and 140 MB for a new tree (4 min configure, 8 min
+  for the ARM object); 5-13 min after an upstream merge. The development host's tree is about
+  460 MB, because the recon also built the lldb object there.
+- **Never deleted by scripts.** No script deletes or cleans the tree. For a broken CMake cache,
+  run `cmake --fresh` on it by hand, or point `MSIL_HOOKS_BUILD_DIR` at a new directory.
+
+To check one of the two files by hand against the tree:
+
+```powershell
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 -BuildDir C:/llvm-msil-hooks-build -ExtraFlags /clang:-Werror=switch llvm/lib/Target/ARM/AsmParser/ARMAsmParser.cpp
 ```
 
 ## Plan checks

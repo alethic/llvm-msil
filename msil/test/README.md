@@ -40,6 +40,19 @@ neutralized pass of msil-verify.py still reassembles with the host ilasm).
 only; `.ll` files carry no target triple or datalayout). `llc` does no IPO, so
 values passed to `noinline` functions stay opaque even at `-O2`.
 
+Most gate and CI legs run the default levels `O0,O2`. The `more-levels` leg
+runs `M1/` again with `--param msil_opt_levels=O1,O3,Os,Oz` on .NET 8 in every
+gate run and in both CI jobs (the gate and the Windows job on
+`x86_64-pc-windows-msvc-msil`, the Linux job on
+`x86_64-unknown-linux-gnu-msil`), so every `%{msil_c}` test runs at all six
+levels and every `%{msil_ll}` test at `O0`..`O3`. The `utc` leg is not part
+of this suite: `msil/utils/run-utc-tests.py` runs six tests of
+`llvm/test/tools/UpdateTestChecks/update_llc_test_checks` (`msil-basic`,
+`x86-basic`, `x86-mir-only`, `x86-asm-mir-mixed`, `x86-constant-pool`,
+`asm-show-inst`) without lit, which reports them UNSUPPORTED on Windows
+(`llvm/test/tools/UpdateTestChecks/lit.local.cfg` sets the `llc-binary`
+feature they require only when a file named exactly `llc` exists).
+
 Every child process (ilasm, ildasm, ILVerify, PEVerify, jitall, dotnet, native
 programs) runs under a wall-clock timeout (60 s) and a cap on committed memory
 (4096 MiB): a Windows Job Object, or `RLIMIT_DATA` in a new session on POSIX.
@@ -104,10 +117,12 @@ blank (`-LitArgs " -sv --param ..."`); msil-lit.ps1 splits it at blanks.
 The milestone-1 gate runs this suite in several legs, each a lit run with
 `--param msil_require_verify=1` plus the parameters of its leg (.NET 8 with
 the native oracle and .NET Framework 4.8, .NET 10, `TieredCompilation=0`,
-WSL with the linux triple, the Linux and the modern Windows ilasm, the
-ildasm round trip); `llvm/docs/MSIL/GettingStarted.md` section 7 lists
-them. Each leg also passes `--param msil_require_exec=1`, and a leg passes
-only when lit exits 0 and at least one test passed. `pwsh -NoProfile -File
+the four extra optimization levels of `more-levels`, WSL with the linux
+triple, the Linux and the modern Windows ilasm, the ildasm round trip), and
+two legs that are not lit runs: `expected` (`update-expected.py --check`) and
+`utc`; `llvm/docs/MSIL/GettingStarted.md` section 7 lists them. Each lit leg
+also passes `--param msil_require_exec=1`, and a lit leg passes only when lit
+exits 0 and at least one test passed. `pwsh -NoProfile -File
 msil/utils/run-m1-gate.ps1` runs every leg in order through the same
 `msil/utils/ci/` scripts as `msil-ci.yml` and prints one summary row per
 leg; `msil/utils/ci/lit-legs.ps1 -List` names the legs, and each leg leaves
@@ -161,7 +176,7 @@ results branch-free with `MSIL_CHECK(acc, bit, cond)` and `return acc;`.
 | `--param` | Default | Meaning |
 |---|---|---|
 | `msil_triple` | host: `x86_64-pc-windows-msvc-msil` or `x86_64-unknown-linux-gnu-msil`; `x86_64-unknown-linux-gnu-msil` with `msil_runner=wsl` | triple of `%clang_msil` and `%llc_msil` |
-| `msil_opt_levels` | `O0,O2` | levels `%{msil_c}` / `%{msil_ll}` run (`O0,O1,O2,O3,Os,Oz`) |
+| `msil_opt_levels` | `O0,O2` | levels `%{msil_c}` / `%{msil_ll}` run (`O0,O1,O2,O3,Os,Oz`; `%{msil_ll}` skips `Os` and `Oz`); the `more-levels` leg passes `O1,O3,Os,Oz` |
 | `msil_dotnet_runtime` | `8` (`10` with `msil_runner=wsl`), else the newest | Microsoft.NETCore.App major the programs run on; a missing one is an error |
 | `msil_dotnet_env` | empty | `VAR=VALUE[;VAR=VALUE...]` for programs and jitall, e.g. `DOTNET_TieredCompilation=0` (D38) |
 | `msil_native_oracle` | `0` | `1`: also build natively and compare when possible; `required`: an error when it is not possible (CI) |

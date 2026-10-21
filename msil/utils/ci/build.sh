@@ -7,14 +7,18 @@
 #
 #   bash msil/utils/ci/build.sh [BUILD_DIR]            (default <repo>/build)
 #
-# The same targets as build.ps1: the M10 build targets (plan M10) plus TargetParserTests for
-# unit-tests.sh. jitall (msil/utils/jitall/build-jitall.py) is then compiled offline into
+# The same targets as build.ps1 (the two scripts keep the same list): the M11 build targets
+# (plan M11), clang llc opt FileCheck not count split-file llvm-config llvm-profdata
+# TargetParserTests MCTests MSILTests. TargetParserTests and MCTests are for unit-tests.sh;
+# llvm-profdata is for the upstream lit tests that need it (upstream-hooks.ps1 runs them in the
+# Windows job). jitall (msil/utils/jitall/build-jitall.py) is then compiled offline into
 # <build>/tools/msil/jitall.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/ci-common.sh"
 build=${1:-$MSIL_REPO/build}
 
-targets=(clang llc opt FileCheck not count split-file llvm-config TargetParserTests MCTests MSILTests)
+targets=(clang llc opt FileCheck not count split-file llvm-config llvm-profdata TargetParserTests MCTests
+         MSILTests)
 
 start=$SECONDS
 rc=0

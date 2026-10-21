@@ -31,9 +31,10 @@ is experimental: it goes in `LLVM_EXPERIMENTAL_TARGETS_TO_BUILD`, never in
 | `utils/jitall/`, `utils/msil-jitall.py` | force-JIT every method of an assembly without running it |
 | `utils/tools/msil-tools.proj` | NuGet download of ilasm/ildasm for Linux CI |
 | `utils/build/` | PowerShell build, lit, syntax-check and TableGen helpers with the shared build lock |
-| `utils/ci/` | the CI job steps (configure, build, unit tests, lit legs) as `.ps1`/`.sh` scripts that `.github/workflows/msil-ci.yml` and the local gate both call |
-| `utils/run-m1-gate.ps1` | the milestone-1 gate: runs every leg (the `utils/ci/` scripts in CI order) and prints one summary row per leg |
-| `utils/run-utc-tests.py` | runs `update_llc_test_checks.py` tests (`msil-basic`, ...) without lit, which skips them on Windows |
+| `utils/ci/` | the CI job steps as `.ps1`/`.sh` scripts that `.github/workflows/msil-ci.yml` and the local gate both call: configure, build, unit tests and lit legs, plus the upstream-hooks check (`upstream-hooks.ps1`, Windows only, with `check-upstream-hooks.py`, which checks the manifest and judges the lit results) and the action-pin check (`check-action-pins.py`: the `msil-*.yml` workflows pin every action as upstream's workflows do) |
+| `utils/run-m1-gate.ps1` | the milestone-1 gate: runs every leg (the `utils/ci/` scripts in CI order, the upstream-hooks check included) and prints one summary row per leg |
+| `utils/upstream-hooks.txt` | the manifest of hooked upstream files: every upstream file the fork changes, with the upstream lit tests, unit tests or compile coverage that exercise the change and the fork tests that pin the MSIL side; upstream merges keep it complete (`llvm/docs/MSIL/GettingStarted.md` section 7) |
+| `utils/run-utc-tests.py` | runs `update_llc_test_checks.py` tests (`msil-basic`, ...) without lit, which skips them on Windows; the `utc` leg of the gate and CI runs six of them |
 | `utils/plan-check.py` | ownership, inputs and commit-scope checks of `llvm/docs/MSIL/ImplementationPlan.md` |
 
 How to build the compiler, compile and run a C program and run the tests:

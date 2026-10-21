@@ -1,0 +1,3 @@
+runs 1692 ; control exit!=0 (diagnostic tests): 466
+variant A: identical IL+exit+stderr in 1692 runs, different in 0
+variant B: identical IL+exit+stderr in 1692 runs, different in 0

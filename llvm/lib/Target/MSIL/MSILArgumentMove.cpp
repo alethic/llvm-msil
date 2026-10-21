@@ -25,12 +25,18 @@
 /// respect this is the ScheduleDAG scheduler. This pass is therefore run
 /// immediately after that.
 ///
+/// Instruction selection already moves the ARGUMENTs back to the top
+/// (MSIL::moveArgumentsToTop, called by MSILDAGToDAGISel after scheduling),
+/// so that the MIR llc prints when it stops after instruction selection
+/// passes the machine verifier, and this pass changes nothing on its output.
+/// It stays in the pipeline for MIR input, which may have an ARGUMENT
+/// anywhere in the entry block.
+///
 /// This is all hopefully a temporary solution until we find a better solution
 /// for describing the live-in nature of arguments.
 ///
 //===----------------------------------------------------------------------===//
 
-#include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "MSIL.h"
 #include "MSILUtilities.h"
 #include "llvm/CodeGen/MachineBlockFrequencyInfo.h"
@@ -67,36 +73,11 @@ FunctionPass *llvm::createMSILArgumentMoveLegacyPass() {
   return new MSILArgumentMoveLegacy();
 }
 
-static bool argumentMove(MachineFunction &MF) {
+bool MSILArgumentMoveLegacy::runOnMachineFunction(MachineFunction &MF) {
   LLVM_DEBUG({
     dbgs() << "********** Argument Move **********\n"
            << "********** Function: " << MF.getName() << '\n';
   });
 
-  bool Changed = false;
-  MachineBasicBlock &EntryMBB = MF.front();
-  MachineBasicBlock::iterator InsertPt = EntryMBB.end();
-
-  // Look for the first NonArg instruction.
-  for (MachineInstr &MI : EntryMBB) {
-    if (!MSIL::isArgument(MI.getOpcode())) {
-      InsertPt = MI;
-      break;
-    }
-  }
-
-  // Now move any argument instructions later in the block
-  // to before our first NonArg instruction.
-  for (MachineInstr &MI : llvm::make_range(InsertPt, EntryMBB.end())) {
-    if (MSIL::isArgument(MI.getOpcode())) {
-      EntryMBB.insert(InsertPt, MI.removeFromParent());
-      Changed = true;
-    }
-  }
-
-  return Changed;
-}
-
-bool MSILArgumentMoveLegacy::runOnMachineFunction(MachineFunction &MF) {
-  return argumentMove(MF);
+  return MSIL::moveArgumentsToTop(MF);
 }

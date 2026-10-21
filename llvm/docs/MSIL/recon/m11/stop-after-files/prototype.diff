@@ -1,0 +1,27 @@
+--- /d/llvm-msil/llvm/lib/Target/MSIL/MSILISelDAGToDAG.cpp	2026-10-15 06:41:17.459251500 -0500
++++ <scratch>/m11/stopafter/proto/MSILISelDAGToDAG.cpp	2026-10-20 08:38:19.892388500 -0500
+@@ -69,7 +69,23 @@
+     // machine passes are written for them.
+     MF.setUseDebugInstrRef(false);
+ 
+-    return SelectionDAGISel::runOnMachineFunction(MF);
++    bool Changed = SelectionDAGISel::runOnMachineFunction(MF);
++    // PROTOTYPE (M11 recon item 4): the ScheduleDAG scheduler may place an
++    // ARGUMENT after an instruction that has 'implicit-def dead $arguments',
++    // which the machine verifier rejects. Move them to the top here, exactly
++    // as MSILArgumentMove does, so the ISel output is verifier-clean.
++    MachineBasicBlock &EntryMBB = MF.front();
++    MachineBasicBlock::iterator InsertPt = EntryMBB.end();
++    for (MachineInstr &MI : EntryMBB)
++      if (!MSIL::isArgument(MI.getOpcode())) {
++        InsertPt = MI;
++        break;
++      }
++    for (MachineInstr &MI : llvm::make_early_inc_range(
++             llvm::make_range(InsertPt, EntryMBB.end())))
++      if (MSIL::isArgument(MI.getOpcode()))
++        EntryMBB.insert(InsertPt, MI.removeFromParent());
++    return Changed;
+   }
+ 
+   void Select(SDNode *Node) override;

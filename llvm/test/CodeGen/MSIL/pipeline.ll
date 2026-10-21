@@ -1,17 +1,23 @@
 ; The legacy codegen pipeline of MSILPassConfig (ImplementationPlan.md 5.3,
-; recon passes-frame.md 4.2) is fixed in M2 and does not change again in
-; Phase 1 (decision D33). This test pins the order of the MSIL passes and of
-; the generic passes next to them, at -O0 and -O2 on both execution triples:
+; recon passes-frame.md 4.2) was fixed in M2 (decision D33); M11 removed the
+; second invoke lowering (section 12 rows of 2026-10-20, recon
+; m11/eh-passes.md). This test pins the order of the MSIL passes and of the
+; generic passes next to them, at -O0 and -O2 on both execution triples:
 ; - IR: MSILPrepareIR runs first of the target's IR passes, then
 ;   AddMissingPrototypes, FixFunctionBitcasts and (-O2 only here)
 ;   OptimizeReturned, then LowerInvoke, UnreachableBlockElim and
 ;   IndirectBrExpand ahead of the generic IR passes;
-; - exceptions: the exception model is always None (decision D8), so
-;   TargetPassConfig lowers invokes a second time, after CodeGenPrepare and
-;   before AtomicExpand (addISelPrepare), and never adds a DWARF, SjLj or
-;   Windows EH preparation pass, even when -exception-model asks for one: the
-;   MinGW run passes the model that clang's MinGW toolchain sets for x86_64
-;   (-exception-model=seh, which is WinEH), even for C;
+; - exceptions: the exception model is always None (decision D8), and
+;   MSILPassConfig::addPassesToHandleExceptions adds nothing, so LowerInvoke
+;   runs exactly once, in addIRPasses, and UnreachableBlockElim exactly twice:
+;   MSIL's, right after LowerInvoke, and the generic one that
+;   TargetPassConfig::addIRPasses adds after the GC lowering passes. Neither
+;   runs again between the generic IR passes (CodeGenPrepare at -O2) and
+;   AtomicExpand (addISelPrepare), where TargetPassConfig used to add them a
+;   second time, and no DWARF, SjLj or Windows EH preparation pass is
+;   added, even when -exception-model asks for one: the MinGW run passes the
+;   model that clang's MinGW toolchain sets for x86_64 (-exception-model=seh,
+;   which is WinEH), even for C;
 ; - instruction selection: ISel, then ArgumentMove, SetMemFlags and
 ;   CleanCodeAfterTrap;
 ; - no register allocator, no virtual register rewriter, and none of the
@@ -24,15 +30,19 @@
 ;   frame layout analysis), and no other MSIL pass runs between it and the
 ;   MSIL AsmPrinter.
 ;
-; Every output line that names an MSIL pass must be matched
-; (--implicit-check-not=MSIL; the 'Pass Arguments' line spells them in lower
-; case), so each MSIL pass runs exactly once and the -O2-only passes are absent
-; at -O0. The checks are ordered but not adjacent: when M3-M9 replace the stub
-; passes, those gain required analyses (LiveIntervals, MachineDominatorTree,
-; ...) that the pass manager schedules in between. -verify-machineinstrs is
-; left out because it inserts machine verifier passes (EXPENSIVE_CHECKS builds
-; insert them anyway, and the ordered checks skip them). The module has no
-; function definitions, which would reach the M2 lowering stubs.
+; Every output line that names an MSIL pass, 'Lower invoke and unwind' or
+; 'Remove unreachable blocks from the CFG' must be matched
+; (--implicit-check-not=MSIL and the two EH strings; the 'Pass Arguments' line
+; spells these passes in lower case, -msil-*, -lowerinvoke and
+; -unreachableblockelim, which the case-sensitive strings do not match), so
+; each MSIL pass runs exactly once, LowerInvoke once and UnreachableBlockElim
+; twice, and the -O2-only passes are absent at -O0. The checks are ordered but
+; not adjacent: when M3-M9 replace the stub passes, those gain required
+; analyses (LiveIntervals, MachineDominatorTree, ...) that the pass manager
+; schedules in between. -verify-machineinstrs is left out because it inserts
+; machine verifier passes (EXPENSIVE_CHECKS builds insert them anyway, and the
+; ordered checks skip them). The module has no function definitions, which
+; would reach the M2 lowering stubs.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=MSIL \
 ; DEFINE:   --implicit-check-not="Register Allocator" \
@@ -49,7 +59,9 @@
 ; DEFINE:   --implicit-check-not="Branch Probability Basic Block Placement" \
 ; DEFINE:   --implicit-check-not="Exception handling preparation" \
 ; DEFINE:   --implicit-check-not="SJLJ Exception Handling preparation" \
-; DEFINE:   --implicit-check-not="Windows exception handling preparation"
+; DEFINE:   --implicit-check-not="Windows exception handling preparation" \
+; DEFINE:   --implicit-check-not="Lower invoke and unwind" \
+; DEFINE:   --implicit-check-not="Remove unreachable blocks from the CFG"
 
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -debug-pass=Structure < %s -o /dev/null 2>&1 \
 ; RUN:   | %{check} --check-prefixes=CHECK,O0
@@ -72,9 +84,9 @@
 ; CHECK:       Lower invoke and unwind, for unwindless code generators
 ; CHECK:       Remove unreachable blocks from the CFG
 ; CHECK:       Expand indirectbr instructions
-; O2:          CodeGen Prepare
-; CHECK:       Lower invoke and unwind, for unwindless code generators
+; CHECK:       Shadow Stack GC Lowering
 ; CHECK:       Remove unreachable blocks from the CFG
+; O2:          CodeGen Prepare
 ; CHECK:       Expand Atomic instructions
 ; CHECK:       Insert stack protectors
 ; CHECK:       MSIL Instruction Selection

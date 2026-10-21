@@ -1,0 +1,350 @@
+# upstream-hooks.txt - the upstream files that the MSIL fork changes, and the tests that cover
+# each change (plan M11, item 7; section 12 row 'Upstream merges ... also maintain
+# msil/utils/upstream-hooks.txt').
+#
+# Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+#
+# Checked by msil/utils/ci/check-upstream-hooks.py and run by msil/utils/ci/upstream-hooks.ps1
+# (the 'upstream-hooks' step of msil/utils/run-m1-gate.ps1, the upstream-merge gate and the
+# Windows CI job). An upstream merge, or a milestone that changes another upstream file, updates
+# this file in the same commit.
+#
+# Format. One entry per line; a line whose first non-blank character is '#' is a comment, and
+# blank lines are ignored. Paths are relative to the repository root, with '/'.
+#
+#   hook <path>               an upstream file that the fork changes. The indented lines below
+#                             it (at least one of lit, gtest, compile, utc, none) say how its
+#                             upstream behaviour is tested:
+#     lit <path-or-glob>      upstream lit tests ('*', '?' and '[...]' globs over test files;
+#                             each must match at least one file). All lit lines together are the
+#                             lit inputs that 'check-upstream-hooks.py --list-lit' prints and the
+#                             lit leg runs in one llvm-lit invocation with the shared build's
+#                             tools. The list goes to lit through a response file
+#                             (<build>/lit-results/upstream-hooks.rsp, '@<file>' inside -LitArgs),
+#                             so its length never meets the Windows command-line limit.
+#     gtest <exe> [<filter>]  a gtest binary of the build (path relative to the build directory)
+#                             whose tests exercise the change; the gtest leg runs every test of
+#                             TargetParserTests and MCTests except the host- and target-gated ones
+#                             that upstream-hooks.ps1 excludes by name (<filter> only documents
+#                             the relevant tests)
+#     compile                 compiled by the compile leg in the private hooks build tree with
+#                             -Werror=switch. Valid only on the leg's translation units
+#                             (llvm/lib/Target/ARM/AsmParser/ARMAsmParser.cpp and
+#                             lldb/source/Plugins/Process/gdb-remote/GDBRemoteCommunicationClient.cpp;
+#                             COMPILE_FILES of check-upstream-hooks.py, which upstream-hooks.ps1
+#                             reads with --list-compile) and on a file that one of them #includes
+#                             directly (the include path, such as "llvm/MC/MCContext.h", is a
+#                             suffix of the hook's path). Each of the two needs a hook block with
+#                             a compile line
+#     utc <test>...           update_llc_test_checks tests (llvm/test/tools/UpdateTestChecks/
+#                             update_llc_test_checks/<test>.test) that the 'utc' leg of
+#                             msil/utils/ci/lit-legs.ps1 and lit-legs.sh runs through
+#                             msil/utils/run-utc-tests.py. Each must exist and be one of the
+#                             leg's tests: the list stays in the leg scripts ('$utcTests = @(...)'
+#                             of lit-legs.ps1, 'utc_tests=(...)' of lit-legs.sh), and the manifest
+#                             leg checks that both lists parse, that they are equal and that every
+#                             utc name is on them
+#     none <reason>           no runnable upstream test; the reason is required
+#     fork <path>             a fork test that pins the MSIL side of the change (must exist)
+#   fork-only <path>          a fork file inside an upstream directory (not a hook). The path
+#                             must not exist in the upstream base: a file of the base that the
+#                             fork changes needs a hook block, and the check fails a fork-only
+#                             line for it
+#   switch-default <path>     a file with an exhaustive object-format switch (see below) whose
+#                             XCOFF case needs no MSIL case because that switch has 'default:'.
+#                             Per switch: an XCOFF case of the file in a switch without its own
+#                             'default:' (one in a nested switch does not count) still needs an
+#                             MSIL case. Stale when 'git grep' finds no XCOFF case label in the
+#                             file
+#   switch-other <path> <reason>
+#                             a file whose unqualified 'case XCOFF:' or 'case IsXCOFF:' belongs
+#                             to another enumeration. Only those labels are exempt: a qualified
+#                             'case Triple::XCOFF:' or 'case MCContext::IsXCOFF:' of the file is
+#                             checked as in any other file. Stale when the file has no
+#                             unqualified XCOFF case label in code
+#   allow <test> <reason>     one lit input whose FAIL the lit leg accepts: only an environment
+#                             failure of that one test file (a tool or runtime the build cannot
+#                             provide), and the reason names it. Never a glob, a directory or a
+#                             real mismatch; an entry whose test passes is stale and fails the
+#                             check. A real failure is fixed in the fork, or the test is dropped
+#                             from its lit line with a comment.
+#   min-pass <N>              the lit leg needs at least N PASS results (XFAIL does not count)
+#
+# The manifest leg (check-upstream-hooks.py --check) compares this file with the repository:
+#   - The upstream base is $MSIL_UPSTREAM_BASE if set; else MERGE_HEAD while a merge is in
+#     progress (the upstream commit being merged: the merge gate checks the uncommitted merge,
+#     and the diff against MERGE_HEAD is the fork's footprint on the new upstream); else the
+#     second parent of the last first-parent merge whose subject starts '[MSIL] Merge upstream
+#     llvm-project main at ' (merge commits keep that subject). No base (a shallow clone, for
+#     example) is an error, never a pass.
+#   - The changed paths are 'git diff --name-only <base>' (the working tree, so uncommitted work
+#     counts) plus the untracked files. Every changed path outside the fork-only prefixes
+#     llvm/lib/Target/MSIL/ llvm/test/CodeGen/MSIL/ llvm/docs/MSIL/ llvm/unittests/Target/MSIL/
+#     clang/test/CodeGen/MSIL/ msil/ .github/msil/ that is not a fork-only line needs a hook
+#     block; a hook block or fork-only line for an unchanged path is stale, and a fork-only
+#     line for a path that the base has ('git cat-file -e <base>:<path>' succeeds) fails.
+#   - Every exhaustive object-format switch of the whole monorepo (built or not: lld, bolt,
+#     lldb, other targets) has an MSIL case. Such a switch has a 'case Triple::XCOFF:' or
+#     'case MCContext::IsXCOFF:' label (with or without 'llvm::') or an unqualified
+#     'case XCOFF:' or 'case IsXCOFF:' (class scope or 'using enum') in a C, C++ or
+#     Objective-C source file. Every such label in code (comments and string literals do not
+#     count) needs an MSIL case label ('case Triple::MSIL:', 'case MCContext::IsMSIL:',
+#     'case MSIL:' or 'case IsMSIL:', with or without 'llvm::') in the same switch: the
+#     innermost 'switch (...) {' body around it, not a switch nested in it. Triple::MSIL
+#     elsewhere in the file (a comparison, a comment, a case of another switch) does not cover
+#     it. The exemptions are per switch: in a switch-default file a 'default:' label of the
+#     same switch also covers the label; a switch-other file exempts only its unqualified
+#     labels. Where the braces of a file do not match (preprocessor conditionals), or a label
+#     is outside every switch body (a macro), the check counts instead (the conservative
+#     fallback): at least as many covering labels (MSIL case labels, and in a switch-default
+#     file also 'default:' labels) as XCOFF labels that need cover. A problem names the file
+#     and the line of the uncovered XCOFF case.
+
+min-pass 280
+
+fork-only .github/workflows/msil-ci.yml
+fork-only clang/lib/Basic/Targets/MSIL.h
+fork-only clang/test/Driver/msil-toolchain.c
+fork-only clang/test/Preprocessor/init-msil.c
+fork-only llvm/include/llvm/MC/MCSectionMSIL.h
+fork-only llvm/test/tools/UpdateTestChecks/update_llc_test_checks/Inputs/msil-basic.ll
+fork-only llvm/test/tools/UpdateTestChecks/update_llc_test_checks/Inputs/msil-basic.ll.expected
+fork-only llvm/test/tools/UpdateTestChecks/update_llc_test_checks/msil-basic.test
+
+switch-default llvm/lib/ExecutionEngine/JITLink/JITLink.cpp
+switch-default llvm/lib/MC/MCAsmBackend.cpp
+switch-other llvm/lib/MC/StringTableBuilder.cpp its 'case XCOFF:' is StringTableBuilder::Kind, not an object-format enumeration
+
+# No allow lines: every lit input passes (or is UNSUPPORTED) with the build targets of plan M11.
+
+hook clang/include/clang/Basic/DiagnosticCommonKinds.td
+  none adds the error err_msil_asm_unsupported only; every clang build regenerates the diagnostic tables, and upstream's Misc/warning-flags.c needs diagtool (not built) and lists warnings only
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+  fork clang/test/CodeGen/MSIL/ms-inline-asm.c
+
+hook clang/include/clang/Basic/DiagnosticDriverKinds.td
+  none adds the error err_drv_msil_no_object_output only (as DiagnosticCommonKinds.td)
+  fork clang/test/Driver/msil-toolchain.c
+
+hook clang/lib/Basic/Targets.cpp
+  # init.c (112 s) and predefined-arch-macros.c (174 s) also pass, but are too slow for the
+  # gate; these siblings cover AllocateTarget for the same triples.
+  lit clang/test/Preprocessor/init-x86.c
+  lit clang/test/Preprocessor/init-aarch64.c
+  lit clang/test/Preprocessor/predefined-win-macros.c
+  fork clang/test/CodeGen/MSIL/triples.c
+  fork clang/test/Preprocessor/init-msil.c
+
+hook clang/lib/CodeGen/BackendUtil.cpp
+  lit clang/test/CodeGen/asan-globals-gc.cpp
+  fork clang/test/CodeGen/MSIL/emit-obj-unsupported.c
+
+hook clang/lib/CodeGen/CGBuiltin.cpp
+  lit clang/test/CodeGen/bittest-intrin.c
+  lit clang/test/CodeGen/ms-intrinsics.c
+  lit clang/test/Sema/bittest-intrinsics.c
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+
+hook clang/lib/CodeGen/CGCall.cpp
+  lit clang/test/CodeGen/X86/x86_64-arguments.c
+  lit clang/test/CodeGen/2007-02-25-C-DotDotDot.c
+  lit clang/test/CodeGen/variadic-null-win64.c
+  lit clang/test/CodeGen/no-prototype.c
+  fork clang/test/CodeGen/MSIL/no-proto-call.c
+
+hook clang/lib/CodeGen/CGObjCMac.cpp
+  lit clang/test/CodeGenObjC/section-name.m
+  lit clang/test/CodeGenObjC/sections.m
+
+hook clang/lib/CodeGen/CGStmt.cpp
+  lit clang/test/CodeGen/asm.c
+  lit clang/test/CodeGen/asm_64.c
+  lit clang/test/CodeGen/asm-inout.c
+  lit clang/test/CodeGen/asm-goto.c
+  lit clang/test/CodeGen/asm-errors.c
+  lit clang/test/CodeGen/X86/x86-64-inline-asm.c
+  lit clang/test/CodeGen/X86/inline-asm-constraints.c
+  fork clang/test/CodeGen/MSIL/asm-barrier.c
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+
+hook clang/lib/CodeGen/CodeGenAction.cpp
+  # thinlto-inline-asm.c needs llvm-lto2 (not built).
+  lit clang/test/CodeGen/exception-model-flag.c
+  lit clang/test/Driver/ir-exception-model.c
+  lit clang/test/CodeGen/WebAssembly/wasm-exception-model-flag-ir-input-mismatch.ll
+  lit clang/test/CodeGen/WebAssembly/wasm-exception-model-flag-parse-ir-input.ll
+  fork clang/test/CodeGen/MSIL/triples.c
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+
+hook clang/lib/CodeGen/CodeGenModule.cpp
+  lit clang/test/CodeGen/exception-model-flag.c
+  lit clang/test/CodeGen/ptrauth-module-flags.c
+  lit clang/test/CodeGen/kcfi.c
+  lit clang/test/CodeGen/kcfi-arity.c
+  lit clang/test/CodeGen/kcfi-generalize.c
+  lit clang/test/CodeGen/kcfi-normalize.c
+  lit clang/test/CodeGen/cfstring.c
+  lit clang/test/CodeGen/cfstring-windows.c
+  lit clang/test/CodeGen/cfstring-elf-sections-x86_64.c
+  lit clang/test/CodeGen/2006-01-23-FileScopeAsm.c
+  lit clang/test/CodeGen/no-prototype.c
+  fork clang/test/CodeGen/MSIL/triples.c
+  fork clang/test/CodeGen/MSIL/no-prototype.c
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+
+hook clang/lib/CodeGen/TargetBuiltins/X86.cpp
+  lit clang/test/CodeGen/ms-intrinsics-cpuid.c
+  lit clang/test/CodeGen/ms-intrinsics.c
+  lit clang/test/Headers/cpuid.c
+  lit clang/test/Headers/__cpuidex_conflict.c
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+
+hook clang/lib/Driver/ToolChain.cpp
+  # fsanitize.c also passes but takes about 250 s; fsanitize-cfi.c covers the KCFI hunk.
+  # spirv-openmp-toolchain.c builds a clang-linker-wrapper job: the only test here that reaches
+  # getLinkerWrapper, the one hunk that changes control flow for native triples.
+  lit clang/test/Driver/integrated-as.c
+  lit clang/test/Driver/fsanitize-cfi.c
+  lit clang/test/Driver/spirv-openmp-toolchain.c
+  fork clang/test/Driver/msil-toolchain.c
+
+hook clang/lib/Driver/ToolChains/Clang.cpp
+  # cl-options.c (/GS default, /volatile:ms) and clang_f_opts.c (-fms-volatile) are the only
+  # upstream tests of those hunks; they need llvm-profdata, an M11 build target.
+  # embed-bitcode-wasm.c needs llvm-readobj (not built).
+  lit clang/test/Driver/embed-bitcode.c
+  lit clang/test/Driver/fembed-bitcode.c
+  lit clang/test/Driver/as-options.s
+  lit clang/test/Driver/integrated-as.s
+  lit clang/test/Driver/cl-options.c
+  lit clang/test/Driver/clang_f_opts.c
+  fork clang/test/Driver/msil-toolchain.c
+
+hook clang/lib/Parse/ParseStmtAsm.cpp
+  lit clang/test/Parser/ms-inline-asm.c
+  lit clang/test/Parser/ms-inline-asm-nested-braces.c
+  lit clang/test/Sema/ms-inline-asm.c
+  lit clang/test/Sema/ms-inline-asm-invalid-arch.c
+  lit clang/test/CodeGen/ms-inline-asm*.c
+  lit clang/test/CodeGen/ms-inline-asm*.cpp
+  fork clang/test/CodeGen/MSIL/ms-inline-asm.c
+
+hook clang/lib/Sema/SemaChecking.cpp
+  lit clang/test/Sema/builtins.c
+  lit clang/test/CodeGen/cfstring.c
+  fork clang/test/CodeGen/MSIL/triples.c
+
+hook clang/lib/Sema/SemaDeclAttr.cpp
+  lit clang/test/Sema/MicrosoftCompatibility.c
+  lit clang/test/Sema/attr-aligned.c
+  fork clang/test/CodeGen/MSIL/triples.c
+  fork clang/test/CodeGen/MSIL/datalayout.c
+
+hook lldb/source/Plugins/Process/gdb-remote/GDBRemoteCommunicationClient.cpp
+  # Syntax-checked only (lldb is not built; its object would first build about 1,000
+  # unrelated TUs), and no lldb test runs (check-lldb is excluded on Windows even upstream).
+  compile
+
+hook llvm/CMakeLists.txt
+  none adds MSIL to LLVM_ALL_EXPERIMENTAL_TARGETS: exercised by every configure (the gate's configure step and the hooks build tree)
+
+hook llvm/include/llvm/Config/Targets.h.cmake
+  none LLVM_HAS_MSIL_TARGET is generated by every configure and has no consumer
+
+hook llvm/include/llvm/MC/MCContext.h
+  gtest unittests/MC/MCTests.exe
+  compile
+  lit llvm/test/CodeGen/X86/coff-comdat*.ll
+  lit llvm/test/CodeGen/X86/elf-comdat*.ll
+  lit llvm/test/CodeGen/X86/section-*.ll
+  lit llvm/test/CodeGen/WebAssembly/custom-sections.ll
+
+hook llvm/include/llvm/MC/MCObjectFileInfo.h
+  gtest unittests/MC/MCTests.exe
+
+hook llvm/include/llvm/TargetParser/Triple.h
+  gtest unittests/TargetParser/TargetParserTests.exe
+  compile
+
+hook llvm/lib/Bitcode/Writer/BitcodeWriter.cpp
+  # embed-bitcode-noopt.c and .ll need llvm-objcopy (not built); embed-bitcode.ll is
+  # UNSUPPORTED without the ARM and AArch64 targets but runs wherever they are built.
+  lit llvm/test/Transforms/EmbedBitcode/*.ll
+  lit clang/test/Frontend/x86-embed-bitcode.ll
+  lit clang/test/Frontend/embed-bitcode.ll
+  fork clang/test/Driver/msil-toolchain.c
+
+hook llvm/lib/MC/MCContext.cpp
+  gtest unittests/MC/MCTests.exe
+  lit llvm/test/CodeGen/X86/coff-comdat*.ll
+  lit llvm/test/CodeGen/X86/elf-comdat*.ll
+  lit llvm/test/CodeGen/X86/section-*.ll
+  lit llvm/test/CodeGen/WebAssembly/custom-sections.ll
+
+hook llvm/lib/MC/MCObjectFileInfo.cpp
+  # DebugInfo/X86/c-type-units.ll and generate-odr-hash.ll need llvm-dwarfdump (not built).
+  gtest unittests/MC/MCTests.exe
+  lit llvm/test/CodeGen/X86/coff-comdat*.ll
+  lit llvm/test/CodeGen/X86/elf-comdat*.ll
+  lit llvm/test/CodeGen/X86/section-*.ll
+  lit llvm/test/CodeGen/WebAssembly/custom-sections.ll
+
+hook llvm/lib/MC/MCParser/AsmParser.cpp
+  # cc1as-defsym.s (llvm-nm), cc1as-relax-all.s (llvm-objdump) and
+  # WebAssembly/inline-asm-roundtrip.ll (llvm-mc) need tools this build lacks.
+  lit clang/test/Misc/cc1as-asm.s
+  lit clang/test/Misc/cc1as-output-asm-variant.c
+  lit llvm/test/CodeGen/X86/inline-asm*.ll
+  lit llvm/test/CodeGen/X86/2008-09-17-inline-asm-1.ll
+  lit llvm/test/CodeGen/WebAssembly/inline-asm.ll
+  lit llvm/test/CodeGen/WebAssembly/inline-asm-m.ll
+  lit llvm/test/CodeGen/WebAssembly/inline-asm-tied.ll
+  lit llvm/test/CodeGen/WebAssembly/inline-asm-failure.ll
+  fork clang/test/CodeGen/MSIL/cc1as-unsupported.s
+
+hook llvm/lib/MC/TargetRegistry.cpp
+  gtest unittests/MC/MCTests.exe
+  lit llvm/test/tools/llc/*.ll
+  lit llvm/test/tools/llc/*.mir
+  fork llvm/test/CodeGen/MSIL/target-selection.ll
+  fork llvm/test/CodeGen/MSIL/march-msil.ll
+
+hook llvm/lib/Target/ARM/AsmParser/ARMAsmParser.cpp
+  # ARM is not a target of the main build; the hooks tree builds this object. No ARM test runs.
+  compile
+
+hook llvm/lib/Target/TargetMachine.cpp
+  lit llvm/test/CodeGen/X86/*pic*.ll
+  lit llvm/test/CodeGen/X86/dso_local_equivalent*.ll
+  lit llvm/test/CodeGen/X86/extern_weak.ll
+  lit llvm/test/CodeGen/WebAssembly/function-addr-offset.ll
+
+hook llvm/lib/TargetParser/TargetDataLayout.cpp
+  gtest unittests/TargetParser/TargetParserTests.exe
+  lit clang/test/CodeGen/target-data.c
+  fork clang/test/CodeGen/MSIL/datalayout.c
+
+hook llvm/lib/TargetParser/Triple.cpp
+  gtest unittests/TargetParser/TargetParserTests.exe
+  fork clang/test/CodeGen/MSIL/triples.c
+
+hook llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+  # X86/asm_mov_no_instrumentation.s needs llvm-mc (not built).
+  lit llvm/test/Instrumentation/AddressSanitizer/*.ll
+  lit llvm/test/Instrumentation/AddressSanitizer/X86/*.ll
+
+hook llvm/unittests/MC/TargetRegistry.cpp
+  gtest unittests/MC/MCTests.exe
+
+hook llvm/unittests/TargetParser/TripleTest.cpp
+  gtest unittests/TargetParser/TargetParserTests.exe
+
+hook llvm/utils/UpdateTestChecks/asm.py
+  utc msil-basic x86-basic x86-mir-only x86-asm-mir-mixed x86-constant-pool asm-show-inst
+  fork llvm/test/tools/UpdateTestChecks/update_llc_test_checks/msil-basic.test
+
+hook llvm/utils/update_llc_test_checks.py
+  utc msil-basic x86-basic x86-mir-only x86-asm-mir-mixed x86-constant-pool asm-show-inst
+  fork llvm/test/tools/UpdateTestChecks/update_llc_test_checks/msil-basic.test

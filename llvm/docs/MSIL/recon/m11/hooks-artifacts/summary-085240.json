@@ -1,0 +1,252 @@
+[
+ {
+  "group": 0,
+  "file": "clang/lib/Basic/Targets.cpp",
+  "rc": 0,
+  "secs": 314.0,
+  "inputs": 6,
+  "pass": 6,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 1,
+  "file": "clang/lib/CodeGen/BackendUtil.cpp",
+  "rc": 0,
+  "secs": 62.1,
+  "inputs": 1,
+  "pass": 1,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 2,
+  "file": "clang/lib/CodeGen/CGBuiltin.cpp",
+  "rc": 0,
+  "secs": 33.0,
+  "inputs": 3,
+  "pass": 3,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 3,
+  "file": "clang/lib/CodeGen/CGCall.cpp",
+  "rc": 0,
+  "secs": 18.1,
+  "inputs": 4,
+  "pass": 4,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 4,
+  "file": "clang/lib/CodeGen/CGObjCMac.cpp",
+  "rc": 0,
+  "secs": 14.0,
+  "inputs": 2,
+  "pass": 2,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 5,
+  "file": "clang/lib/CodeGen/CGStmt.cpp",
+  "rc": 0,
+  "secs": 19.3,
+  "inputs": 7,
+  "pass": 7,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 6,
+  "file": "clang/lib/CodeGen/CodeGenAction.cpp",
+  "rc": 1,
+  "secs": 16.5,
+  "inputs": 6,
+  "pass": 4,
+  "fail": [
+   "Clang.CodeGen/thinlto-inline-asm.c"
+  ],
+  "unsupported": 1,
+  "other": []
+ },
+ {
+  "group": 7,
+  "file": "clang/lib/CodeGen/CodeGenModule.cpp",
+  "rc": 0,
+  "secs": 19.5,
+  "inputs": 11,
+  "pass": 11,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 8,
+  "file": "clang/lib/CodeGen/TargetBuiltins/X86.cpp",
+  "rc": 0,
+  "secs": 19.1,
+  "inputs": 4,
+  "pass": 4,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 9,
+  "file": "clang/lib/Driver/ToolChain.cpp",
+  "rc": 0,
+  "secs": 307.2,
+  "inputs": 3,
+  "pass": 3,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 10,
+  "file": "clang/lib/Driver/ToolChains/Clang.cpp",
+  "rc": 1,
+  "secs": 65.8,
+  "inputs": 8,
+  "pass": 4,
+  "fail": [
+   "Clang.Driver/cl-options.c",
+   "Clang.Driver/clang_f_opts.c",
+   "Clang.Driver/embed-bitcode-wasm.c"
+  ],
+  "unsupported": 1,
+  "other": []
+ },
+ {
+  "group": 11,
+  "file": "clang/lib/Parse/ParseStmtAsm.cpp",
+  "rc": 0,
+  "secs": 21.4,
+  "inputs": 15,
+  "pass": 15,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 12,
+  "file": "clang/lib/Sema/SemaChecking.cpp",
+  "rc": 0,
+  "secs": 14.0,
+  "inputs": 2,
+  "pass": 2,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 13,
+  "file": "clang/lib/Sema/SemaDeclAttr.cpp",
+  "rc": 0,
+  "secs": 17.7,
+  "inputs": 2,
+  "pass": 2,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 14,
+  "file": "clang/lib/Frontend+cc1as (AsmParser.cpp via cc1as)",
+  "rc": 1,
+  "secs": 16.3,
+  "inputs": 4,
+  "pass": 2,
+  "fail": [
+   "Clang.Misc/cc1as-defsym.s",
+   "Clang.Misc/cc1as-relax-all.s"
+  ],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 15,
+  "file": "llvm/lib/MC/MCParser/AsmParser.cpp",
+  "rc": 1,
+  "secs": 21.9,
+  "inputs": 54,
+  "pass": 53,
+  "fail": [
+   "LLVM.CodeGen/WebAssembly/inline-asm-roundtrip.ll"
+  ],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 16,
+  "file": "llvm/lib/MC/TargetRegistry.cpp",
+  "rc": 0,
+  "secs": 24.2,
+  "inputs": 14,
+  "pass": 9,
+  "fail": [],
+  "unsupported": 5,
+  "other": []
+ },
+ {
+  "group": 17,
+  "file": "llvm/lib/MC/MCContext.cpp + MCObjectFileInfo.cpp",
+  "rc": 1,
+  "secs": 25.0,
+  "inputs": 9,
+  "pass": 7,
+  "fail": [
+   "LLVM.DebugInfo/X86/c-type-units.ll",
+   "LLVM.DebugInfo/X86/generate-odr-hash.ll"
+  ],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 18,
+  "file": "llvm/lib/Target/TargetMachine.cpp",
+  "rc": 0,
+  "secs": 14.0,
+  "inputs": 42,
+  "pass": 42,
+  "fail": [],
+  "unsupported": 0,
+  "other": []
+ },
+ {
+  "group": 19,
+  "file": "llvm/lib/Bitcode/Writer/BitcodeWriter.cpp",
+  "rc": 1,
+  "secs": 11.5,
+  "inputs": 8,
+  "pass": 5,
+  "fail": [
+   "Clang.Frontend/embed-bitcode-noopt.c",
+   "Clang.Frontend/embed-bitcode-noopt.ll"
+  ],
+  "unsupported": 1,
+  "other": []
+ },
+ {
+  "group": 20,
+  "file": "llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp",
+  "rc": 1,
+  "secs": 18.0,
+  "inputs": 1,
+  "pass": 110,
+  "fail": [
+   "LLVM.Instrumentation/AddressSanitizer/X86/asm_mov_no_instrumentation.s"
+  ],
+  "unsupported": 19,
+  "other": []
+ }
+]

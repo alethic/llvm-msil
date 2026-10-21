@@ -8,18 +8,24 @@
 #   bash msil/utils/ci/lit-legs.sh [--full] [--leg NAME[,NAME...]] [--list] [BUILD_DIR]
 #
 # Legs, in order (lit-legs.ps1 has the Windows legs and the WSL legs of the development host,
-# the M10 gate steps 5-12 of plan section 6); the triple is x86_64-unknown-linux-gnu-msil, the
-# triple of Design.md section 12:
-#   net8        llc/clang FileCheck tests, harness and msil/test/M1 on .NET 8 (tiered), -O0 and
-#               -O2, native oracle required (check-msil's paths)
-#   net10       msil/test/M1 on .NET 10
-#   net8-tc0    msil/test/M1 on .NET 8 with DOTNET_TieredCompilation=0 (optimizing JIT)
-#   net10-tc0   msil/test/M1 on .NET 10 with DOTNET_TieredCompilation=0
-#   roundtrip   msil/test/M1/11-programs through ildasm -> ilasm, then run (Design.md 5.5)
-#   expected    update-expected.py --check msil/test/M1 (.expected files vs a native build)
-#   all-levels  --full: msil/test at O0,O1,O2,O3,Os,Oz
-#   upstream    --full: ninja check-llvm check-clang (regressions our hooks cause upstream;
-#               CI only: they build every tool, which the development host never does)
+# the gate steps 5-12 (M10 and M11) and 20-21 (M11) of plan section 6); the triple is
+# x86_64-unknown-linux-gnu-msil, the triple of Design.md section 12:
+#   net8         llc/clang FileCheck tests, harness and msil/test/M1 on .NET 8 (tiered), -O0 and
+#                -O2, native oracle required (check-msil's paths)
+#   net10        msil/test/M1 on .NET 10
+#   net8-tc0     msil/test/M1 on .NET 8 with DOTNET_TieredCompilation=0 (optimizing JIT)
+#   net10-tc0    msil/test/M1 on .NET 10 with DOTNET_TieredCompilation=0
+#   more-levels  msil/test/M1 on .NET 8 at O1,O3,Os,Oz (O0 and O2 run in the legs above; .ll
+#                tests run at O1 and O3 only); the Windows leg of the same name is M11 gate
+#                step 21, and step 22 runs this triple at these levels under WSL (.NET 10)
+#   roundtrip    msil/test/M1/11-programs through ildasm -> ilasm, then run (Design.md 5.5)
+#   expected     update-expected.py --check msil/test/M1 (.expected files vs a native build)
+#   utc          run-utc-tests.py with the six update_llc_test_checks tests of lit-legs.ps1's
+#                utc leg (M11 gate step 20): the same list, so both jobs check the same files,
+#                and a test whose target the build lacks fails instead of being UNSUPPORTED
+#   all-levels   --full: msil/test at O0,O1,O2,O3,Os,Oz
+#   upstream     --full: ninja check-llvm check-clang (regressions our hooks cause upstream;
+#                CI only: they build every tool, which the development host never does)
 # ilasm and ildasm are the NuGet runtime.linux-x64.Microsoft.NETCore.ILAsm/ILDAsm packages
 # ($MSIL_ILASM and $MSIL_ILDASM, which lit.cfg.py reads, or found in the NuGet global-packages
 # folder); the roundtrip leg takes both from that folder at the version that
@@ -28,8 +34,9 @@
 #
 # Every lit leg passes --param msil_require_verify=1 (plan D38) and --param msil_require_exec=1,
 # writes <build>/lit-results/<leg>.xml (xunit) and <leg>.log, and passes when lit exits 0 and
-# at least one test passed. Every selected leg runs even after a failure; the exit status is 1
-# if any failed.
+# at least one test passed. The other legs write <build>/lit-results/<leg>.log and pass when
+# their command exits 0. Every selected leg runs even after a failure; the exit status is 1 if
+# any failed.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/ci-common.sh"
 
@@ -67,14 +74,19 @@ m1=("$MSIL_REPO/msil/test/M1")
 programs=("$MSIL_REPO/msil/test/M1/11-programs")
 tc0=msil_dotnet_env=DOTNET_TieredCompilation=0
 
-# name:kind (kind: lit, expected, upstream; a 'full' suffix marks --full legs)
-legs=(net8:lit net10:lit net8-tc0:lit net10-tc0:lit roundtrip:lit expected:expected
-  all-levels:lit:full upstream:upstream:full)
+# name:kind (kind: lit, expected, utc, upstream; a 'full' suffix marks --full legs)
+legs=(net8:lit net10:lit net8-tc0:lit net10-tc0:lit more-levels:lit roundtrip:lit
+  expected:expected utc:utc all-levels:lit:full upstream:upstream:full)
+
+# The tests of the utc leg; lit-legs.ps1 has the same list (keep the two the same).
+# wasm-function-name is left out: it needs WebAssembly, which msil/cmake/caches/MSIL.cmake does
+# not build.
+utc_tests=(msil-basic x86-basic x86-mir-only x86-asm-mir-mixed x86-constant-pool asm-show-inst)
 
 leg_paths() {
   case $1 in
     net8) printf '%s\n' "${check_msil[@]}" ;;
-    net10 | net8-tc0 | net10-tc0) printf '%s\n' "${m1[@]}" ;;
+    net10 | net8-tc0 | net10-tc0 | more-levels) printf '%s\n' "${m1[@]}" ;;
     roundtrip) printf '%s\n' "${programs[@]}" ;;
     all-levels) echo "$MSIL_REPO/msil/test" ;;
   esac
@@ -86,6 +98,7 @@ leg_params() {
     net10) echo msil_dotnet_runtime=10 ;;
     net8-tc0) printf '%s\n' msil_dotnet_runtime=8 "$tc0" ;;
     net10-tc0) printf '%s\n' msil_dotnet_runtime=10 "$tc0" ;;
+    more-levels) printf '%s\n' msil_dotnet_runtime=8 msil_opt_levels=O1,O3,Os,Oz ;;
     roundtrip) echo msil_roundtrip=1 ;;
     all-levels) echo msil_opt_levels=O0,O1,O2,O3,Os,Oz ;;
   esac
@@ -148,6 +161,17 @@ run_expected_leg() {
   return $((rc != 0))
 }
 
+run_utc_leg() {
+  # run-utc-tests.py, not lit, as on Windows (where lit reports these tests UNSUPPORTED): the
+  # fixed list runs in both jobs, and a missing target fails the test.
+  local log=$results/utc.log rc=0 summary
+  python3 "$MSIL_REPO/msil/utils/run-utc-tests.py" --llc "$build/bin/llc" "${utc_tests[@]}" 2>&1 |
+    tee "$log" || rc=$?
+  summary=$(grep -E '^[0-9]+ of [0-9]+ tests passed$' "$log" | tail -n 1 || true)
+  LEG_DETAIL="run-utc-tests.py: ${summary:-no summary} (exit $rc)"
+  return $((rc != 0))
+}
+
 run_upstream_leg() {
   local log=$results/upstream.log rc=0
   ninja -C "$build" check-llvm check-clang 2>&1 | tee "$log" || rc=$?
@@ -170,6 +194,7 @@ for l in "${legs[@]}"; do
   case $kind in
     lit) run_lit_leg "$name" || status=FAIL ;;
     expected) run_expected_leg || status=FAIL ;;
+    utc) run_utc_leg || status=FAIL ;;
     upstream) run_upstream_leg || status=FAIL ;;
   esac
   ci_result lit-legs "$name" "$status" $((SECONDS - start)) "$LEG_DETAIL"

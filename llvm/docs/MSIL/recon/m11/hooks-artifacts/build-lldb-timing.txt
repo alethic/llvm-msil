@@ -1,0 +1,2 @@
+start 2026-10-20T08:09:29 target=tools\lldb\source\Plugins\Process\gdb-remote\CMakeFiles\lldbPluginProcessGDBRemote.dir\GDBRemoteCommunicationClient.cpp.obj
+build exit=0 elapsed=1141s end=2026-10-20T08:28:30

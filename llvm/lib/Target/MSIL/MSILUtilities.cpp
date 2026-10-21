@@ -19,6 +19,9 @@
 #include "MSILUtilities.h"
 #include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "MSILMachineFunctionInfo.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/CodeGen/MachineBasicBlock.h"
+#include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
 #include "llvm/IR/Function.h"
@@ -109,6 +112,32 @@ unsigned MSIL::getCopyOpcodeForRegClass(const TargetRegisterClass *RC) {
   default:
     llvm_unreachable("Unexpected register class");
   }
+}
+
+bool MSIL::moveArgumentsToTop(MachineFunction &MF) {
+  bool Changed = false;
+  MachineBasicBlock &EntryMBB = MF.front();
+  MachineBasicBlock::iterator InsertPt = EntryMBB.end();
+
+  // Look for the first NonArg instruction.
+  for (MachineInstr &MI : EntryMBB) {
+    if (!MSIL::isArgument(MI.getOpcode())) {
+      InsertPt = MI;
+      break;
+    }
+  }
+
+  // Now move any argument instructions later in the block
+  // to before our first NonArg instruction.
+  for (MachineInstr &MI :
+       llvm::make_early_inc_range(llvm::make_range(InsertPt, EntryMBB.end()))) {
+    if (MSIL::isArgument(MI.getOpcode())) {
+      EntryMBB.insert(InsertPt, MI.removeFromParent());
+      Changed = true;
+    }
+  }
+
+  return Changed;
 }
 
 //===----------------------------------------------------------------------===//

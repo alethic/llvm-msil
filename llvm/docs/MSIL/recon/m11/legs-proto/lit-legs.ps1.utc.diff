@@ -1,0 +1,54 @@
+--- a/msil/utils/ci/lit-legs.ps1
++++ b/msil/utils/ci/lit-legs.ps1
+@@ -24,6 +24,8 @@
+ #   modern-ilasm   11-programs assembled by the .NET ilasm (win-x64), not Framework's  (step 11)
+ #   roundtrip      11-programs through ildasm -> ilasm, then run (Design.md 5.5)
+ #   expected       update-expected.py --check msil/test/M1: .expected vs native      (step 12)
++#   utc            run-utc-tests.py: the update_llc_test_checks tests that lit reports
++#                  UNSUPPORTED on Windows (no 'llc' file; plan M5.b and section 12)
+ #   all-levels     -Full: msil/test at O0,O1,O2,O3,Os,Oz (nightly)
+ # The WSL legs need a WSL distribution with .NET 10 (only the development host has one; the Linux
+ # CI job covers the Linux triple natively). modern-ilasm and wsl-ilasm take the .NET ilasm, and
+@@ -80,6 +82,7 @@
+      Params = { "msil_ilasm=$(Get-MsilNuGetTool -Repo $MsilRepo -Rid win-x64 -Tool ilasm)" } }
+   @{ Name = 'roundtrip'; Paths = $programs; Params = { 'msil_roundtrip=1' } }
+   @{ Name = 'expected'; Expected = $true }
++  @{ Name = 'utc'; Utc = $true }
+   @{ Name = 'all-levels'; Paths = @('msil/test'); Full = $true
+      Params = { 'msil_opt_levels=O0,O1,O2,O3,Os,Oz' } }
+ )
+@@ -146,10 +149,33 @@
+   return @{ Ok = ($rc -eq 0); Detail = "update-expected.py --check msil/test/M1 (exit $rc)" }
+ }
+ 
++# The update_llc_test_checks tests that run-utc-tests.py can run and whose targets every build
++# of msil/utils/ci has (X86 and MSIL; wasm-function-name needs WebAssembly, which
++# msil/cmake/caches/MSIL.cmake does not build).
++$utcTests = @('msil-basic', 'x86-basic', 'x86-mir-only', 'x86-asm-mir-mixed', 'x86-constant-pool',
++              'asm-show-inst')
++
++function Invoke-UtcLeg($l) {
++  # lit cannot run these on Windows (llvm/test/tools/UpdateTestChecks/lit.local.cfg looks for a
++  # file named 'llc'); run-utc-tests.py runs their RUN lines without lit (plan M5.b).
++  $log = Join-Path $results "$($l.Name).log"
++  $llc = Join-Path $BuildDir 'bin/llc.exe'
++  $lock = Enter-MsilBuildLock -BuildDir $BuildDir -Shared -What 'run-utc-tests'
++  try {
++    & $MsilPython (Join-Path $MsilRepo 'msil/utils/run-utc-tests.py') --llc $llc @utcTests 2>&1 |
++      ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
++    $rc = $LASTEXITCODE
++  } finally { $lock.Dispose() }
++  $summary = @(Select-String -LiteralPath $log -Pattern '^\d+ of \d+ tests passed$' | Select-Object -Last 1)
++  $what = if ($summary.Count -gt 0) { $summary[0].Line } else { 'no summary' }
++  return @{ Ok = ($rc -eq 0); Detail = "run-utc-tests.py: $what (exit $rc)" }
++}
++
+ foreach ($l in $run) {
+   $sw = [Diagnostics.Stopwatch]::StartNew()
+   try {
+-    $r = if ($l.Expected) { Invoke-ExpectedLeg $l } else { Invoke-LitLeg $l }
++    $r = if ($l.Expected) { Invoke-ExpectedLeg $l } elseif ($l.Utc) { Invoke-UtcLeg $l }
++         else { Invoke-LitLeg $l }
+   } catch {
+     $r = @{ Ok = $false; Detail = "$_" }
+   }

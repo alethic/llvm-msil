@@ -1,0 +1,11 @@
+--- a/msil/test/lit.cfg.py
++++ b/msil/test/lit.cfg.py
+@@ -447,7 +447,7 @@
+     note("ilasm: " + ilasm)
+ else:
+     note("ilasm not found; execution tests are UNSUPPORTED")
+-ilasm_flags = {"x86_64": " -pe64 -x64", "aarch64": " -pe64 -arm64"}.get(triple_arch, "")
++ilasm_flags = {"x86_64": " -pe64 -x64", "aarch64": " -pe64 -arm64"}.get(params.get("msil_pe_machine") or triple_arch, "")
+ 
+ # ---------------------------------------------------------------- execution runtime
+ wsl_dotnet = None

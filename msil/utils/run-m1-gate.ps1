@@ -1,5 +1,6 @@
-# run-m1-gate.ps1 - run every leg of the milestone-1 gate (plan M10) on the development host,
-# through the scripts that the CI workflow runs, in the CI order, and print one row per leg.
+# run-m1-gate.ps1 - run every leg of the milestone-1 gate (plan M10, extended in M11) on the
+# development host, through the scripts that the CI workflow runs, in the CI order, and print one
+# row per leg.
 #
 # Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
@@ -11,23 +12,31 @@
 # Steps (the Windows job of .github/workflows/msil-ci.yml runs the same scripts in the same order):
 #   1. msil/utils/ci/configure.ps1   msil-configure.ps1 -Experimental MSIL (the only step that
 #                                    differs from CI, which configures with -C MSIL.cmake)
-#   2. msil/utils/ci/build.ps1       ninja targets of the M10 gate + TargetParserTests, jitall
+#   2. msil/utils/ci/build.ps1       ninja targets of the M11 gate (TargetParserTests and
+#                                    llvm-profdata among them), jitall
 #   3. msil/utils/ci/unit-tests.ps1  TargetParserTests, MCTests, MSILTests (no skipped tests)
 #   4. msil/utils/ci/lit-legs.ps1 -Wsl
 #        net8 (.NET 8 + .NET Framework 4.8 + native oracle, all MSIL lit tests), net10,
-#        net8-tc0 (DOTNET_TieredCompilation=0), wsl-net10 (msil/test/M1 and the harness
-#        self-tests under the WSL runner), wsl-net10-tc0, wsl-ilasm (Linux ilasm inside WSL),
-#        modern-ilasm (.NET ilasm on Windows), roundtrip (ildasm -> ilasm), expected
-#        (update-expected.py --check); -Full adds all-levels.
-#   5. ci-sh (not with -NoWsl)       a smoke check of the Linux job's scripts inside WSL: bash -n
+#        net8-tc0 (DOTNET_TieredCompilation=0), more-levels (msil/test/M1 at O1, O3, Os and Oz
+#        on .NET 8; M11), wsl-net10 (msil/test/M1 and the harness self-tests under the WSL
+#        runner), wsl-net10-tc0, wsl-ilasm (Linux ilasm inside WSL), modern-ilasm (.NET ilasm on
+#        Windows), roundtrip (ildasm -> ilasm), expected (update-expected.py --check), utc
+#        (run-utc-tests.py with six update_llc_test_checks tests; M11); -Full adds all-levels.
+#   5. msil/utils/ci/upstream-hooks.ps1 (M11; not with -SkipUpstreamHooks)
+#        manifest (msil/utils/upstream-hooks.txt lists every upstream file the fork changes, and
+#        every object-format switch has an MSIL case), pins (action pins as upstream's), lit
+#        (the upstream lit tests of the hooked files), gtest (all of TargetParserTests and
+#        MCTests), compile (ARMAsmParser.cpp and lldb's GDBRemoteCommunicationClient.cpp in the
+#        private hooks build tree on C:). CI runs it with -NoCompile -NoManifest -MinPass 250.
+#   6. ci-sh (not with -NoWsl)       a smoke check of the Linux job's scripts inside WSL: bash -n
 #                                    on every msil/utils/ci/*.sh, 'lit-legs.sh --list' must print
 #                                    the legs its header documents, and lit-legs.sh and
 #                                    unit-tests.sh must fail (exit non-zero, FAIL rows) against an
 #                                    empty build directory. The Linux job's configure, build,
 #                                    unit-test and lit steps themselves are not run here (they
 #                                    need a Linux build tree); only the CI runs them.
-# A failed configure or build stops steps 3 and 4 (nothing in them could pass); ci-sh needs no
-# build and still runs. The unit tests and every leg run even after a failure. The summary table
+# A failed configure or build stops steps 3, 4 and 5 (nothing in them could pass); ci-sh needs
+# no build and still runs. The unit tests and every leg run even after a failure. The summary table
 # has one row per step or leg; the exit status is 0 only if every row is PASS. A child script
 # that ends with a non-zero exit status without a FAIL row (an exception before its first leg,
 # for example an unknown -Leg, or a killed process) gets a FAIL row, and so does every expected
@@ -37,13 +46,16 @@
 # Build agent or gate agent only: steps 1 and 2 take the exclusive build-dir lock (cmake, ninja).
 # The whole run takes an hour or more on this host, so start it with run_in_background and wait
 # for it (a background job dies with the agent's turn). -SkipConfigure/-SkipBuild reuse the
-# current build; -Leg runs only the named legs (see lit-legs.ps1 -List). The format and scope
-# checks of the gate (plan M10 gate steps 14 and 15) are not legs and are not run here.
+# current build; -Leg runs only the named lit legs (see lit-legs.ps1 -List); -SkipUpstreamHooks
+# leaves out step 5. The upstream-hooks step always runs all of its legs, and the gate checks
+# that each of them (manifest, pins, lit, gtest, compile) has a row. The format and scope checks
+# of the gate (plan M11 gate steps 25 and 26) are not legs and are not run here.
 [CmdletBinding()]
 param(
   [switch]$SkipConfigure,
   [switch]$SkipBuild,
   [switch]$SkipUnitTests,
+  [switch]$SkipUpstreamHooks,
   [switch]$NoWsl,
   [switch]$Full,
   [string[]]$Leg = @(),
@@ -146,7 +158,7 @@ function Get-ExpectedLegs {
   return [pscustomobject]@{ Expected = $expected; Known = @($all | ForEach-Object { $_.Name }) }
 }
 
-# Step 5: the Linux job's scripts inside WSL (see the header). Returns the failures.
+# Step 6: the Linux job's scripts inside WSL (see the header). Returns the failures.
 function Invoke-CiShSmoke {
   $problems = [System.Collections.Generic.List[string]]::new()
   $wsl = Get-Command wsl.exe -CommandType Application -ErrorAction SilentlyContinue |
@@ -240,6 +252,10 @@ if (-not $stop) {
     Test-ChildRows 'lit-legs' 'lit-legs.ps1' $rc @()
   } else {
     Test-ChildRows 'lit-legs' 'lit-legs.ps1' $rc $legs.Expected $legs.Known
+  }
+  if (-not $SkipUpstreamHooks) {
+    $rc = Invoke-CiScript 'upstream-hooks.ps1' @()
+    Test-ChildRows 'upstream-hooks' 'upstream-hooks.ps1' $rc @('manifest', 'pins', 'lit', 'gtest', 'compile')
   }
 }
 if (-not $NoWsl) {

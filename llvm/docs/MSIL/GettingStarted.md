@@ -64,13 +64,16 @@ tree with the Visual Studio clang-cl toolchain and serialize builds through a lo
 
 ```powershell
 pwsh -NoProfile -File msil/utils/build/msil-configure.ps1 -Experimental MSIL
-pwsh -NoProfile -File msil/utils/build/msil-build.ps1 llc opt clang FileCheck not count split-file llvm-config MCTests MSILTests
+pwsh -NoProfile -File msil/utils/build/msil-build.ps1 llc opt clang FileCheck not count split-file llvm-config llvm-profdata TargetParserTests MCTests MSILTests
 ```
 
-The second line builds everything the tests need: the tools, the lit helpers and the unit tests
-(`LLVM_BUILD_TESTS` is off, so unit tests are built only when named). A first build compiles
-about 3,500 steps; afterwards a change in `llvm/lib/Target/MSIL` rebuilds the target and relinks
-in minutes. `llc --version` lists `msil - MSIL (.NET CIL as ILAsm text)` when the target is in.
+The second line builds everything the tests need (the build targets of milestone M11, which
+`msil/utils/ci/build.ps1` and `build.sh` also build): the tools, the lit helpers and the unit
+tests (`LLVM_BUILD_TESTS` is off, so unit tests are built only when named). `llvm-profdata` is
+there for two upstream clang driver tests of the upstream-hooks check (section 7), and the whole
+of `TargetParserTests` and `MCTests` runs in that check too. A first build compiles about 3,500
+steps; afterwards a change in `llvm/lib/Target/MSIL` rebuilds the target and relinks in minutes.
+`llc --version` lists `msil - MSIL (.NET CIL as ILAsm text)` when the target is in.
 
 ## 3. Compile a C program
 
@@ -111,11 +114,14 @@ clang --target=x86_64-pc-windows-msvc-msil   -O2 -ffreestanding -S fib.c -o fib.
   `double` on every MSIL triple (natively it is wider on Linux and x86_64 MinGW; Status.md
   section 3). The P/Invoke library names come from the triple (`libc` and `libm.so.6` on glibc,
   `ucrtbase` on windows-msvc), so build for the OS you run on.
-- Every optimization level works (`-O0` to `-O3`, `-Os`, `-Oz`); the tests run `-O0` and `-O2`.
+- Every optimization level works (`-O0` to `-O3`, `-Os`, `-Oz`); the execution tests run at
+  `-O0` and `-O2` in most legs, and the `more-levels` leg runs most of them at the other levels
+  (C programs at all four, IR tests at `-O1` and `-O3`; section 7).
 - `-ffreestanding` keeps the optimizer from introducing libc calls that are not Phase-1 imports.
   It also turns off `main`'s implicit `return 0` on Linux triples, so return explicitly.
 - The assembly is named after the source file's stem (`fib`). `-mllvm -msil-assembly-name=<name>`
-  sets another name.
+  sets another name. `-mllvm` passes backend options as it does for native targets (llc's
+  `-print-after=`, `-debug-pass=Structure`, `-verify-machineinstrs`, ...; section 8).
 - `-c`, or no `-S` at all, stops with `emitting object files is not yet supported for MSIL target
   '...'; use -S to produce ILAsm text, or -emit-llvm or -flto to produce bitcode`. Object files and
   `msil-ld` are phase 2.
@@ -232,10 +238,11 @@ depth of every instruction and the exact `.maxstack` and stops the compile on a 
 | Suite | Where | What |
 |---|---|---|
 | Unit tests | `llvm/unittests/Target/MSIL`, plus the MSIL cases of `TargetParserTests` and `MCTests` | type mapping, name quoting, stack effects, target machine, streamer, triples, target selection |
-| llc and MIR tests | `llvm/test/CodeGen/MSIL` | the emitted IL, FileCheck'ed on both x86_64 triples, and assembled with ilasm when it is available |
-| clang tests | `clang/test/CodeGen/MSIL`, `clang/test/Preprocessor/init-msil.c`, `clang/test/Driver/msil-toolchain.c` | the clang wrapper, predefines, driver errors, Design.md 12's literal command |
-| Execution tests | `msil/test/M1/<NN-area>/` | C and IR programs compiled at `-O0` and `-O2`, assembled, verified, force-JITted, run and compared with checked-in transcripts and with a native build; `11-programs/` is the Design.md 12 program corpus |
+| llc and MIR tests | `llvm/test/CodeGen/MSIL` | the emitted IL, FileCheck'ed on both x86_64 triples (and the aarch64 ones where the ABI differs), and assembled with ilasm when it is available; the pass pipeline and the MIR at llc's stop points |
+| clang tests | `clang/test/CodeGen/MSIL`, `clang/test/Preprocessor/init-msil.c`, `clang/test/Driver/msil-toolchain.c` | the clang wrapper, predefines, driver errors (the ELF-only section options among them), `-mllvm` options, `-cc1as`, Design.md 12's literal command |
+| Execution tests | `msil/test/M1/<NN-area>/` | C and IR programs compiled at `-O0` and `-O2` (and in the `more-levels` leg at the other levels; see below), assembled, verified, force-JITted, run and compared with checked-in transcripts and with a native build; `11-programs/` is the Design.md 12 program corpus |
 | Harness self-tests | `msil/test/harness/` | the runner, verifier and JIT checker themselves |
+| Upstream regression tests | the upstream lit tests and unit tests named in `msil/utils/upstream-hooks.txt` | the upstream behaviour of every upstream file the fork changes (the upstream-hooks check, below) |
 
 ```sh
 ninja -C build check-msil                 # every MSIL lit test (lean dependencies)
@@ -266,12 +273,14 @@ skipped steps or UNSUPPORTED tests:
 | `net8` | `llvm/test/CodeGen/MSIL`, the clang MSIL tests, `msil/test` | `msil_dotnet_runtime=8 msil_native_oracle=required msil_run_netfx=1` (.NET 8, the native oracle and .NET Framework 4.8; the native link needs `LIB`: use a VS x64 developer prompt, or `msil-lit.ps1`, which enters that environment) |
 | `net10` | `msil/test/M1` | `msil_dotnet_runtime=10` |
 | `net8-tc0` | `msil/test/M1` | `msil_dotnet_runtime=8 msil_dotnet_env=DOTNET_TieredCompilation=0` (optimizing JIT) |
+| `more-levels` | `msil/test/M1` | `msil_dotnet_runtime=8 msil_opt_levels=O1,O3,Os,Oz`: the four levels the other legs leave out (they run `-O0` and `-O2`); `.ll` tests that use `%{msil_ll}` run at `-O1` and `-O3` only, because llc has no `-Os` or `-Oz`. The three trap tests (`01-int/trap-call-before-div.ll`, `01-int/trap-call-before-rem.ll`, `03-control/trap.ll`) and `01-int/calls-arith-debug-info.test` have explicit RUN lines that pin `-O0` and `-O2` in every leg |
 | `wsl-net10` | `msil/test/M1`, `msil/test/harness` | `msil_runner=wsl msil_triple=x86_64-unknown-linux-gnu-msil msil_dotnet_runtime=10` |
 | `wsl-net10-tc0` | `msil/test/M1` | the `wsl-net10` parameters plus `msil_dotnet_env=DOTNET_TieredCompilation=0` |
 | `wsl-ilasm` | `msil/test/M1/11-programs` | the `wsl-net10` parameters plus `msil_wsl_ilasm=<the NuGet linux-x64 ilasm>`: assembled by the Linux ilasm inside WSL |
 | `modern-ilasm` | `msil/test/M1/11-programs` | `msil_ilasm=<the NuGet win-x64 ilasm.exe>` |
 | `roundtrip` | `msil/test/M1/11-programs` | `msil_roundtrip=1`: every assembly goes through ildasm and ilasm (Design.md 5.5) and the reassembled one runs |
 | `expected` | `msil/test/M1` | not lit: `update-expected.py --check` |
+| `utc` | six tests of `llvm/test/tools/UpdateTestChecks/update_llc_test_checks` | not lit: `msil/utils/run-utc-tests.py --llc <build>/bin/llc msil-basic x86-basic x86-mir-only x86-asm-mir-mixed x86-constant-pool asm-show-inst` runs their RUN lines (lit reports them UNSUPPORTED on Windows: `llvm/test/tools/UpdateTestChecks/lit.local.cfg` sets the `llc-binary` feature they require only when a file named exactly `llc` exists); the log is `build/lit-results/utc.log` |
 | `all-levels` (nightly) | `msil/test` | `msil_opt_levels=O0,O1,O2,O3,Os,Oz` |
 
 Expected transcripts (`<test>.expected`) are generated from a native build, never written by
@@ -294,29 +303,170 @@ pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List                          
 ```
 
 `run-m1-gate.ps1` runs the scripts in `msil/utils/ci/` in the order the CI workflow
-`.github/workflows/msil-ci.yml` runs them: `configure.ps1`, `build.ps1` (the tools, the unit
-tests and jitall), `unit-tests.ps1` (`TargetParserTests`, `MCTests` and `MSILTests`, no skipped
-test allowed) and `lit-legs.ps1 -Wsl` (the legs above). The gate's `-NoWsl` leaves out `-Wsl`
-and with it the three WSL legs, `-Full` adds `all-levels`, `-Leg` runs only the named legs, and
+`.github/workflows/msil-ci.yml` runs them: `configure.ps1`, `build.ps1` (the build targets of
+section 2 and jitall), `unit-tests.ps1` (`TargetParserTests`, `MCTests` and `MSILTests`, no
+skipped test allowed), `lit-legs.ps1 -Wsl` (the legs above) and `upstream-hooks.ps1` (the
+upstream-hooks check below, every leg; the gate checks that each of them has a row). The gate's
+`-NoWsl` leaves out `-Wsl` and with it the three WSL legs, `-Full` adds `all-levels`, `-Leg` runs
+only the named legs, `-SkipUpstreamHooks` leaves out the upstream-hooks step, and
 `-SkipConfigure`, `-SkipBuild` and `-SkipUnitTests` reuse what is there. Unless `-NoWsl`, a
 `ci-sh` row smoke-checks the Linux job's scripts inside WSL (`bash -n` on
 `msil/utils/ci/*.sh`, `lit-legs.sh --list` against its header, and a non-zero exit with FAIL
 rows against an empty build directory); the Linux job's configure, build, unit-test and lit
 steps themselves run only in CI. A child script that exits non-zero without a FAIL row, and
 every selected leg without a row, add FAIL rows. A failed configure or build stops the unit
-tests and the legs (`ci-sh` needs no build and still runs); every leg runs even after another
-one failed. A leg passes when lit exits 0 and at least one test passed; its lit log and xunit
-file are `build/lit-results/<leg>.log` and `<leg>.xml`. The run ends with a summary table with
-one row per step or leg and exits 0 only when every row passed. A full run takes an hour or
-more.
+tests, the legs and the upstream-hooks step (`ci-sh` needs no build and still runs); every leg
+runs even after another one failed. A lit leg passes when lit exits 0 and at least one test
+passed, `expected` and `utc` when their script exits 0; the lit log and xunit file of a leg are
+`build/lit-results/<leg>.log` and `<leg>.xml`. The run ends with a summary table with one row
+per step or leg and exits 0 only when every row passed. A full run takes well over an hour.
 
 The Windows CI job runs the same scripts, except that `configure.ps1 -Ci` configures with the
-cache file instead of `msil-configure.ps1` and `lit-legs.ps1` runs without `-Wsl` (a GitHub
-runner has no WSL); the Linux job runs their `.sh` twins, whose legs cover
-`x86_64-unknown-linux-gnu-msil` natively on .NET 8 and .NET 10
-(`bash msil/utils/ci/lit-legs.sh --list`). The workflow is committed with a manual trigger only
-(`workflow_dispatch`); enabling push, pull-request or nightly runs is the repository owner's
-decision.
+cache file instead of `msil-configure.ps1`, `lit-legs.ps1` runs without `-Wsl` (a GitHub
+runner has no WSL), and `upstream-hooks.ps1` runs as `-NoCompile -NoManifest -MinPass 250`
+whenever the build passed (also after failed unit tests or legs). The Linux job runs their
+`.sh` twins, whose legs cover `x86_64-unknown-linux-gnu-msil` natively on .NET 8 and .NET 10,
+including `more-levels` and `utc` (`bash msil/utils/ci/lit-legs.sh --list`); its `--full` legs
+add `all-levels` and `upstream`, which builds and runs all of `ninja check-llvm check-clang`.
+The workflow is committed with a manual trigger only (`workflow_dispatch`, whose `full` input
+selects the full legs, as a nightly schedule would); enabling push, pull-request or nightly runs
+is the repository owner's decision.
+
+### The upstream-hooks check
+
+The fork changes 36 upstream files today (its *hooks*): new diagnostics, MSIL branches in clang's
+driver, code generation and Sema, the MSIL object format and `IsMSIL` environment in the triple
+and MC layers, `case` labels for it in exhaustive switches, and so on.
+`msil/utils/upstream-hooks.txt`, the manifest, names each of them with the upstream tests that
+exercise the changed code, and `msil/utils/ci/upstream-hooks.ps1` (Windows only) runs those tests
+and proves that the list is complete:
+
+```powershell
+pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1                         # every leg
+pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -Leg manifest,pins
+pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -NoCompile -NoManifest -MinPass 250   # CI
+pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -SelfTest
+python msil/utils/ci/check-upstream-hooks.py --check          # the manifest leg alone
+python msil/utils/ci/check-upstream-hooks.py --list-lit       # the lit inputs, one per line
+python msil/utils/ci/check-upstream-hooks.py --list-compile   # the compile leg's two files
+python msil/utils/ci/check-action-pins.py                     # the pins leg alone
+python msil/utils/ci/check-action-pins.py --self-test         # the pins checker's self-test
+```
+
+| Leg | What it checks | Time |
+|---|---|---|
+| `manifest` | `check-upstream-hooks.py --check`: every upstream file that differs from the upstream base (below) has a `hook` block, unless it is a file the fork added, on a `fork-only` line; a `fork-only` path must not exist in the upstream base (an upstream file the fork changes needs a `hook` block), and no block or `fork-only` line names an unchanged file (stale); every block says how it is tested (`lit`, `gtest`, `compile`, `utc` or `none <reason>`), every lit pattern matches a file, and every fork test exists; every name on a `utc` line is one of the `utc` leg's tests, which the check reads from `$utcTests` of `msil/utils/ci/lit-legs.ps1` and `utc_tests` of `msil/utils/ci/lit-legs.sh` and requires to be equal; every `compile` line names a compile-leg file or a header that one of them `#include`s directly, matched by include-path suffix such as `llvm/MC/MCContext.h`, and each compile-leg file has a block with a `compile` line (step 2 below); every exhaustive object-format switch in the whole monorepo, built or not (`case Triple::XCOFF:` or `case MCContext::IsXCOFF:`, with or without `llvm::`, or an unqualified `case XCOFF:` / `case IsXCOFF:`), has an MSIL case label in the same switch (comments and string literals do not count; a `Triple::MSIL` elsewhere in the file does not cover it); the two exemptions are checked per switch, not per file: in a file with a `switch-default` line each XCOFF case label must sit in a switch whose own body (not a nested switch) has a `default:` label or an MSIL case label, and a `switch-other` line exempts only its file's unqualified `case XCOFF:` / `case IsXCOFF:` labels, while its `Triple::XCOFF` and `MCContext::IsXCOFF` labels are checked as in any other file; a `switch-default` line whose file has no XCOFF switch, or a `switch-other` line whose file has no unqualified XCOFF label, is stale; a file whose braces do not match, or whose label sits outside a switch body (a macro), needs at least as many covering labels in code (MSIL case labels, plus `default:` labels in a `switch-default` file) as XCOFF labels that need cover instead (the unqualified labels of a `switch-other` file need none) | 11-20 s |
+| `pins` | `check-action-pins.py`: every `uses: <action>@<sha> # <version>` of the `msil-*.yml` workflows under `.github` pins the action at the SHA and version that upstream's workflows use; quoted values are read as well (one pair of single or double quotes is stripped, in the MSIL and the upstream workflows alike); an action upstream never uses (`actions/setup-dotnet`) is printed without failing. Any other `uses:` line of an `msil-*.yml`, one that is neither such a pin nor a local `./...` action or reusable workflow nor a `docker://` image (no `@<ref>`, an unterminated quote, the value on the next line), fails, and so does an MSIL workflow with `uses:` lines but no pin. It also reads `.github/workflows/msil-ci.yml` as text: its windows job must have a step whose `run:` is exactly `pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -NoCompile -NoManifest -MinPass 250` and whose `if:` is `${{ !cancelled() && steps.<id>.outcome == 'success' }}`, with `<id>` the `id:` of that job's Build step, and which comes after that step; the Build step is the one step of the windows job whose `run:` names `msil/utils/ci/build.ps1`, and the job must have exactly one. So each of these fails: a deleted step, a misspelled id, a Build step without an `id:` (or with a blank one), the step before the Build step or in another job, a changed `run:` line, a guard without `!cancelled()`, no `if:`, no Build step, and two or more Build steps | 1 s |
+| `lit` | the upstream lit tests of the `lit` lines (301 today), in one `msil-lit.ps1` call (the list goes to lit through the response file `build/lit-results/upstream-hooks.rsp`, so it never meets the Windows command-line limit); `check-upstream-hooks.py --lit-verdict` passes lit's JSON report when every FAIL is allow-listed, no allow-listed test passed or went missing, nothing is UNRESOLVED, TIMEOUT or XPASS, every input ran, and at least `min-pass` (280) tests PASS (XFAIL does not count) | about 1 min |
+| `gtest` | all of `TargetParserTests` (at least 700 tests) and `MCTests` (at least 40) through `msil-gtest.ps1 -NoSkip`, except the host-gated `HostTest` cases, `TargetRegistry.MSILLookupWithoutTarget` (it skips whenever MSIL is built) and the `Disassembler` test of a target that `llvm-config --targets-built` does not list | 10-25 s |
+| `compile` | the two hooked files the main build never compiles, `llvm/lib/Target/ARM/AsmParser/ARMAsmParser.cpp` and `lldb/source/Plugins/Process/gdb-remote/GDBRemoteCommunicationClient.cpp`, in the private hooks tree (below): ninja builds the ARM object, and `msil-syntax.ps1` checks both files with `-Werror=switch`, so an object-format enumerator without a case fails | about 47 s |
+
+Each leg writes a row of step `upstream-hooks`, every selected leg runs even after a failure,
+and the exit status is 1 if a row failed. The logs, the response file and lit's reports are
+`build/lit-results/upstream-hooks*.{log,rsp,json,xml}`. `-Leg` runs only the named legs;
+`-NoManifest` and `-NoCompile` print a SKIP line for their leg and write no row; `-MinPass N`
+overrides the manifest's `min-pass`. `-SelfTest` runs only the self-tests, as the four rows
+`checker`, `pins-checker`, `gtest-filter` and `compile-mutation` of step
+`upstream-hooks-self-test`:
+
+- `checker`: `check-upstream-hooks.py --self-test` plants every defect the checks look for (an
+  unlisted hook, a stale block, a `fork-only` line for a file of the base, a missing fork test,
+  an unmatched glob, a `utc` name outside the leg's list, leg lists that differ, a leg list
+  that does not parse or has an unterminated quote, a leg script without the list, `compile`
+  lines outside the compile leg, on a `.cpp` file it does not compile and on headers that no
+  compile-leg file `#include`s directly, switches without an MSIL case, bad allow lines, a merge
+  in progress, failing and stale lit verdicts) in a temporary git repository. The switch
+  defects are checked per switch: they include a file with two switches and one MSIL case, a
+  file whose only MSIL mention is a comment, a `switch-default` file with a second XCOFF switch
+  without `default:`, a `switch-other` file with a qualified XCOFF switch, and stale
+  `switch-default` and `switch-other` lines.
+- `pins-checker`: `check-action-pins.py --self-test` plants, in temporary `.github` trees,
+  stale unquoted, single-quoted, double-quoted and comment-less pins, unparsable `uses:` lines,
+  an MSIL workflow without a pin, and the wiring defects of the upstream-hooks step: a
+  misspelled id in the guard, a missing or blank `id:` on the Build step, a deleted
+  upstream-hooks step, one moved to another job or before the Build step, a changed `run:`
+  line, a guard without `!cancelled()` or no guard, no Build step, and no `msil-ci.yml`; each of
+  them must fail, while the clean tree (quoted pins, local actions, a reusable workflow, a
+  `docker://` image and a correctly wired upstream-hooks step) must pass.
+- `gtest-filter`: the `MCTests` filter is derived for four target lists.
+- `compile-mutation`: copies of both compile-leg files without their MSIL case, in a temporary
+  directory, must fail `-Werror=switch` with `not handled in switch` while the originals pass.
+
+The self-test needs the hooks tree (`compile-mutation` fails without its `build.ninja`) and
+writes nothing inside the repository.
+
+**The upstream base.** The manifest leg compares the working tree (uncommitted and untracked
+files included, so a milestone's own work counts) with, in this order: the commit in
+`$env:MSIL_UPSTREAM_BASE`; `MERGE_HEAD` while a merge is in progress (the upstream commit being
+merged, so the merge gate sees the fork's footprint on the new upstream); else the second parent
+of the last first-parent commit whose subject is `[MSIL] Merge upstream llvm-project main at
+<sha>`. Upstream merge commits therefore keep that subject. The leg prints the base and why it
+chose it; finding none (a shallow clone, for example) is a failure, never a pass. Changes under
+the fork's own directories (`llvm/lib/Target/MSIL/`, `llvm/test/CodeGen/MSIL/`,
+`llvm/docs/MSIL/`, `llvm/unittests/Target/MSIL/`, `clang/test/CodeGen/MSIL/`, `msil/`,
+`.github/msil/`) are never hooks.
+
+**Extending the manifest.** An upstream merge, or a milestone that changes another upstream
+file, updates the manifest in the same commit (the format is documented in its header):
+
+1. Run `upstream-hooks.ps1` on the uncommitted merge (or change). The manifest leg names every
+   unlisted hook and every stale entry, and the lit and gtest legs show which upstream tests now
+   fail.
+2. For a new hooked file add a `hook <path>` block with `lit <path-or-glob>` lines for the
+   upstream tests that reach the changed code, `gtest <exe> [<filter>]`, `compile`,
+   `utc <test>...` or `none <reason>`, and a `fork <test>` line for each fork test that pins
+   the MSIL side. A `utc` line names only tests that the `utc` leg runs: each name must be in
+   `$utcTests` of `msil/utils/ci/lit-legs.ps1` and `utc_tests` of `msil/utils/ci/lit-legs.sh`
+   (the two lists stay equal), so a test that the leg should run is added to both lists first.
+   Drop the block of a file the fork no longer changes. `compile` is valid only on the compile
+   leg's two translation units and on a file that one of them `#include`s directly
+   (`llvm/include/llvm/MC/MCContext.h` and `llvm/include/llvm/TargetParser/Triple.h` today);
+   the manifest leg rejects it anywhere else, and each of the two units needs a block with a
+   `compile` line. The units are listed once, in
+   `COMPILE_FILES` of `check-upstream-hooks.py`, which `upstream-hooks.ps1` reads through
+   `check-upstream-hooks.py --list-compile`.
+3. A file that the fork adds inside an upstream directory, one the upstream base does not
+   have, gets a `fork-only <path>` line. `fork-only` is only for such files: an upstream file
+   that the fork changes always needs a `hook` block, and the manifest leg rejects a
+   `fork-only` line whose path exists in the base. A new exhaustive object-format switch gets
+   an MSIL case. Otherwise a `switch-default <path>` line covers the XCOFF switches of its file
+   that have their own `default:` label (every other XCOFF switch of that file still needs an
+   MSIL case), and `switch-other <path> <reason>` covers the unqualified `case XCOFF:` /
+   `case IsXCOFF:` labels of a file where `XCOFF` belongs to another enumeration (its
+   `Triple::XCOFF` and `MCContext::IsXCOFF` labels still need MSIL cases). Drop the line when
+   its file no longer has an XCOFF switch (`switch-default`) or an unqualified XCOFF label
+   (`switch-other`); the leg reports it as stale.
+4. Run the leg again until it passes, and check that `--list-lit` grew with the new tests.
+
+**The allow-list.** An `allow <test> <reason>` line lets one lit input FAIL. It takes only an
+environment failure of that single test file (a tool or runtime the build cannot provide), and
+the reason names the tool; never a glob, a directory or a real FileCheck mismatch. An
+allow-listed test that passes is stale and fails the leg. A real failure is fixed in the fork,
+or the test is dropped from its `lit` line with a comment. The list is empty today; tests that
+need tools this build lacks (`llvm-readobj`, `llvm-mc`, `llvm-objdump`, ...) are left out of the
+manifest instead.
+
+**The private hooks tree.** The compile leg works in `-HooksBuildDir`, else
+`$env:MSIL_HOOKS_BUILD_DIR`, else `C:\llvm-msil-hooks-build`: projects clang and lldb, the ARM
+target only, no tests and no optional lldb dependency. When the tree has no `build.ninja` the
+leg configures it (about 4 min); it then builds the ARM object (about 8 min the first time,
+5-13 min after an upstream merge) and checks both files (about 47 s on every run). A new tree
+takes about 140 MB (the development host's tree is about 460 MB, because the recon also built
+the lldb object there). The leg takes the tree's own exclusive build lock and runs cmake and
+ninja there itself ([msil/utils/build/README.md](../../../msil/utils/build/README.md)); it
+refuses the main build directory, never builds the lldb object (its order-only dependencies are
+about 1,000 unrelated TUs), and never deletes or cleans the tree: for a broken cache run
+`cmake --fresh` on it by hand or point `MSIL_HOOKS_BUILD_DIR` at a new directory. What stays
+uncovered: the lldb file is only syntax-checked, and no ARM or lldb test runs.
+
+**Where it runs.** `run-m1-gate.ps1` runs every leg (step 5, after the lit legs;
+`-SkipUpstreamHooks` leaves it out). The Windows CI job runs `-NoCompile -NoManifest -MinPass
+250`: its shallow checkout has no merge commit for the manifest leg, the hooks tree is a
+development-host cost, and its build has no WebAssembly target, so the list's WebAssembly tests
+are UNSUPPORTED there (the development host's gate enforces the manifest's `min-pass`). This
+curated check runs on every gate run and every Windows CI run; the Linux job's `--full` leg `upstream` (`ninja
+check-llvm check-clang`, hours) stays the complete upstream regression run, for nightly and
+manual full CI runs.
 
 ## 8. When something goes wrong
 
@@ -332,3 +482,42 @@ decision.
 | `System.DllNotFoundException` naming `libc`, `libm.so.6`, `ucrtbase` or `msvcrt` | the assembly was built for another OS than the one running it |
 | `System.BadImageFormatException` / `FileLoadException` at start-up | the image's machine (`-x64`, `-arm64`) does not match the process |
 | `System.InvalidProgramException` | a backend bug: the JIT rejected a method. `msil-jitall.py` names it; please report it with the `.il` |
+| `error: unsupported option '-fsplit-machine-functions' for target '...-msil'`, and the same for `-fbasic-block-sections=all` or `=list=`, `-fbasic-block-address-map` and `-fpartition-static-data-sections` | these options put functions, blocks or data in ELF sections, and CIL methods have no sections; drop the option (Status.md section 3). `-fbasic-block-sections=none` is accepted |
+| `warning: basic block address map is not supported for MSIL; ignored` | `-fbasic-block-sections=labels` (a deprecated alias, which the driver passes on as `-fbasic-block-address-map`), or the address map requested through cc1 or llc; the output is the same as without it |
+
+To look inside the backend, `llc -stop-after=<pass>` and `-stop-before=<pass>` print the machine
+code (MIR) at every MSIL pass from instruction selection on: `msil-isel`, `msil-argument-move`,
+`msil-set-mem-flags`, `msil-clean-code-after-trap`, the generic passes, then
+`msil-nullify-dbg-value-lists`, `msil-replace-phys-regs`, `msil-optimize-live-intervals`,
+`msil-reg-stackify`, `msil-reg-coloring`, `msil-explicit-locals`, `msil-reg-numbering` and
+`msil-stack-check` (`llc -debug-pass=Arguments` prints the whole pipeline). Stopping works at
+every one of them, and llc runs the machine verifier on the MIR it prints there. The MIR of
+instruction selection reads back: `llc -run-pass=none x.mir` verifies it again, and
+`llc -start-after=msil-isel x.mir -o x.il` finishes the compile with the same IL as the full
+pipeline (`llvm/test/CodeGen/MSIL/stop-after-isel.ll`). Reading MIR back has three limits, all
+from upstream code; none of them changes the IL of a normal compile:
+
+- MIR with a floating-point infinity or NaN constant reads back at no stop point, `msil-isel`
+  included. A `CONST_F32` or `CONST_F64` with such an immediate prints as `float +inf`,
+  `double -inf` or `double +qnan`, and the MIR lexer rejects that spelling:
+  `llc -run-pass=none` and `-start-after=msil-isel` exit 1 with
+  `x.mir:<line>:<column>: expected a floating point literal`. This is an upstream MIR printer
+  and parser mismatch that WebAssembly shows too; several floating-point tests of
+  `msil/test/M1` hit it.
+- For a function that takes block addresses (`blockaddress`, computed goto), the IL of
+  `-start-after=msil-isel` lacks the `@tmpN: // Address of block that was removed by CodeGen`
+  labels that the full pipeline prints; every other line of the IL is the same. Nothing refers
+  to those labels: IndirectBrExpand, which runs before instruction selection, replaces each
+  `blockaddress` with the block's number. The full pipeline still prints a label for every
+  block whose address the input IR took, while the IR inside the MIR no longer takes any.
+- MIR printed at `branch-folder` or any later stop point, for a function whose `switch` became
+  a jump table, cannot be read back yet: `llc -run-pass=none` asserts
+  `Cannot create an empty jump table!`, because BranchFolder empties the table, which the MSIL
+  `switch` (`BR_TABLE_I32`) does not reference. This is an upstream MIR printer and parser
+  issue that WebAssembly shows too.
+
+A build from before milestone M11 aborts at `-stop-after=msil-isel` and
+`-stop-before=msil-argument-move` with
+`Bad machine code: Using an undefined physical register`. `-print-after-isel`,
+`-print-after=<pass>`, `-debug-pass=Structure` and `-verify-machineinstrs` work in llc and,
+through `-mllvm`, in clang.

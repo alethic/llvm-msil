@@ -31,6 +31,7 @@ namespace llvm {
 class Function;
 class GlobalValue;
 class GlobalVariable;
+class MachineFunction;
 class MachineInstr;
 class MachineOperand;
 class MCRegisterClass;
@@ -76,6 +77,13 @@ const MachineOperand &getCalleeOp(const MachineInstr &MI);
 
 /// Returns the appropriate copy opcode for the given register class.
 unsigned getCopyOpcodeForRegClass(const TargetRegisterClass *RC);
+
+/// Moves every ARGUMENT_<RC> of the entry block of \p MF above the first
+/// other instruction of that block, keeping the relative order of the
+/// ARGUMENTs and of the other instructions. Returns true if an instruction
+/// moved. Instruction selection and MSILArgumentMove call it, because the
+/// ScheduleDAG scheduler can put an ARGUMENT after other instructions.
+bool moveArgumentsToTop(MachineFunction &MF);
 
 /// The Phase-1 import table (decision D14). Phase 1 has no linker, so an
 /// undefined function can only be called through a P/Invoke into a native

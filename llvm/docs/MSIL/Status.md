@@ -1,7 +1,8 @@
 # MSIL backend: status of Phase 1
 
-State at the end of milestone M10 (2026-10-15, branch `msil-milestone1`). Phase 1 is the "first
-milestone" of [Design.md](Design.md) section 12: one C file compiled with `clang -S` to ILAsm text,
+State after milestone M11 (2026-10-20, branch `msil`, with upstream llvm-project main at
+`64f50ffd4f1c` merged). Phase 1 (milestones M0-M10) is the "first milestone" of
+[Design.md](Design.md) section 12: one C file compiled with `clang -S` to ILAsm text,
 assembled with `ilasm`, run on .NET. How to build and use it is in
 [GettingStarted.md](GettingStarted.md); the decisions referred to as D1-D38 are in section 3 of
 [ImplementationPlan.md](ImplementationPlan.md), and its section 12 records every later amendment.
@@ -10,8 +11,8 @@ assembled with `ilasm`, run on .NET. How to build and use it is in
 
 | Criterion | How Phase 1 meets it |
 |---|---|
-| About 25 small C programs compile at `-O0` and `-O2`, run, and match native clang's output, as a lit suite in CI | `msil/test/M1/11-programs/` has 20 programs (fib, sieve, quicksort over a global array, mergesort, n-queens, hanoi, matrix multiplication, crc32, a string table with relocations, a bytecode VM dispatching through a function-pointer table, fnv1a, string functions, bignum addition, life, fixed-point mandelbrot, collatz, a struct-heavy simulation, linked lists and binary trees in static pools, K&R code). With the struct and function-pointer programs of `08-fnptr/`, `09-structs/` and `10-calls/` and the other execution tests in `msil/test/M1/` (more than 110), each test runs at `-O0` and `-O2` and its transcript (stdout and exit status) must equal the one a native clang build produces. The gate runs the suite on .NET 8 (tiered and with `DOTNET_TieredCompilation=0`), .NET 10, .NET Framework 4.8, and in WSL on .NET 10 for `x86_64-unknown-linux-gnu-msil` (tiered and optimizing JIT), assembles the programs with the Framework ilasm, the modern Windows ilasm and the Linux ilasm, and round-trips them through the modern ildasm and ilasm (Design.md 5.5). CI (`.github/workflows/msil-ci.yml`) runs the same scripts as the local gate; it has a manual trigger only until the repository owner enables more |
-| FileCheck tests on the emitted `.il` | about 100 llc and MIR tests in `llvm/test/CodeGen/MSIL` (both x86_64 triples, ilasm round trip where a module is complete), clang tests in `clang/test/CodeGen/MSIL` (including `design-milestone1.c`, Design.md 12's literal command on fib) and unit tests in `llvm/unittests/Target/MSIL` |
+| About 25 small C programs compile at `-O0` and `-O2`, run, and match native clang's output, as a lit suite in CI | `msil/test/M1/11-programs/` has 20 programs (fib, sieve, quicksort over a global array, mergesort, n-queens, hanoi, matrix multiplication, crc32, a string table with relocations, a bytecode VM dispatching through a function-pointer table, fnv1a, string functions, bignum addition, life, fixed-point mandelbrot, collatz, a struct-heavy simulation, linked lists and binary trees in static pools, K&R code). With the struct and function-pointer programs of `08-fnptr/`, `09-structs/` and `10-calls/` and the other execution tests in `msil/test/M1/` (136 in all: 93 C programs, 42 IR files and one test that compiles a C program with `-g`), each test runs at `-O0` and `-O2` and its transcript (stdout and exit status) must equal the one a native clang build produces; the gate also runs every C program of `msil/test/M1` at `-O1`, `-O3`, `-Os` and `-Oz` and every IR test that uses `%{msil_ll}` (39 of the 42) at `-O1` and `-O3` (the `more-levels` leg, on .NET 8); the three trap tests `01-int/trap-call-before-div.ll`, `01-int/trap-call-before-rem.ll` and `03-control/trap.ll`, like the `-g` test, have explicit RUN lines that pin `-O0` and `-O2` in every leg. The gate runs the suite on .NET 8 (tiered and with `DOTNET_TieredCompilation=0`), .NET 10, .NET Framework 4.8, and in WSL on .NET 10 for `x86_64-unknown-linux-gnu-msil` (tiered and optimizing JIT), assembles the programs with the Framework ilasm, the modern Windows ilasm and the Linux ilasm, and round-trips them through the modern ildasm and ilasm (Design.md 5.5). It also runs the upstream regression tests of the 36 upstream files the fork changes (about 300 lit tests and all of `TargetParserTests` and `MCTests`; the upstream-hooks check of GettingStarted.md section 7). CI (`.github/workflows/msil-ci.yml`) runs the same scripts as the local gate; it has a manual trigger only until the repository owner enables more |
+| FileCheck tests on the emitted `.il` | 111 llc and MIR tests in `llvm/test/CodeGen/MSIL` (104 `.ll`, 7 `.mir`; both x86_64 triples, the aarch64 triples where the ABI differs, ilasm round trip where a module is complete), 19 clang tests in `clang/test/CodeGen/MSIL` (including `design-milestone1.c`, Design.md 12's literal command on fib), the driver tests in `clang/test/Driver/msil-toolchain.c` and unit tests in `llvm/unittests/Target/MSIL` |
 | `ilverify` reports no stack-shape errors | replaced by the verification policy of section 4 (decision D21, approved by the user 2026-10-12), enforced in every gate |
 
 ## 2. What works
@@ -33,6 +34,27 @@ assembled with `ilasm`, run on .NET. How to build and use it is in
   (D28).
 - Unsupported input ends in an error that names the function or feature, with exit status 1,
   never a crash.
+- `-mllvm` passes backend options from clang as llc takes them, and llc's stop points
+  (`-stop-after=`, `-stop-before=`) work at every MSIL pass from `msil-isel` on: llc stops
+  there, and the MIR it prints passes the machine verifier. The MIR of instruction selection
+  reads back and compiles on with `-start-after=msil-isel` to the same IL as the full pipeline
+  (GettingStarted.md section 8). Reading MIR back has three limits, all from upstream code;
+  none of them changes the IL of a normal compile:
+  - MIR with a floating-point infinity or NaN constant reads back at no stop point,
+    `msil-isel` included: `CONST_F32` and `CONST_F64` print it as `float +inf`,
+    `double -inf` or `double +qnan`, which the MIR parser rejects
+    (`expected a floating point literal`), an upstream MIR printer and parser mismatch that
+    WebAssembly shows too.
+  - For a function that takes block addresses (computed goto), the IL of
+    `-start-after=msil-isel` lacks the `@tmpN: // Address of block that was removed by CodeGen`
+    labels that the full pipeline prints; every other line is the same. IndirectBrExpand, which
+    runs before instruction selection, replaces each `blockaddress` with the block's number, so
+    the IR inside the MIR takes no block address any more, while the full pipeline still prints
+    an unused label for each block whose address the input IR took.
+  - MIR printed at `branch-folder` or a later stop point does not read back yet when a `switch`
+    became a jump table (`llc -run-pass=none` asserts `Cannot create an empty jump table!`:
+    BranchFolder empties the table the MSIL `switch` does not reference, an upstream MIR
+    printer and parser issue that WebAssembly shows too).
 
 ### Triples (D6)
 
@@ -49,6 +71,15 @@ assembled with `ilasm`, run on .NET. How to build and use it is in
 clang uses the native target's ABI, data layout and predefines and adds `__MSIL__`; `long double`
 is `double` on every MSIL triple, which differs from native on Linux and x86_64 MinGW (section 3).
 Linux MSIL triples do not define `__ELF__` (section 6, item 5).
+
+On the aarch64 triples clang classifies aggregates as AAPCS64 does natively. Since upstream
+`de7794fcf781` (merged with `64f50ffd4f1c`), a non-HFA aggregate argument smaller than 8 bytes is
+passed as an integer of its exact size (`i8` ... `i56`, formerly `i64`), so 1-4-byte structs are
+`int32` IL parameters and 5-7-byte ones stay `native int`; results did not change. Both sides of
+every call come from the same clang and no Phase-1 import takes an aggregate, so nothing can
+disagree. `clang/test/CodeGen/MSIL/aarch64-aggregate-abi.c` and
+`llvm/test/CodeGen/MSIL/struct-args-aapcs64.ll` pin these shapes on all four aarch64 triples and
+assemble them with `ilasm -arm64`; execution stays x86_64-only (D6).
 
 ### C and LLVM IR
 
@@ -67,7 +98,8 @@ Linux MSIL triples do not define `__ELF__` (section 6, item 5).
 - Calls: direct calls, calls through function pointers (managed `calli`), K&R definitions and
   calls without a prototype (MSILAddMissingPrototypes), calls through a mismatched function type
   (MSILFixFunctionBitcasts wrappers), structs passed by value (copied by the caller) and returned
-  through `sret`, on the SysV and Win64 ABIs.
+  through `sret`, on the SysV and Win64 ABIs (and the AArch64 ABIs on the aarch64 triples, FileCheck
+  and ilasm only).
 - Memory: loads and stores of every scalar width, `volatile` and unaligned accesses (`volatile.`
   and `unaligned.` prefixes), `memcpy`/`memset`/`memmove` (`cpblk`, `initblk`, and
   `System.Buffer::MemoryCopy` when the copy may overlap or the length is variable; D15). Static
@@ -130,6 +162,7 @@ is imported from that library.
 | Debug information (Portable PDB) | `-g` accepted, nothing emitted | phase 4 |
 | Darwin and i686 triples | unknown target triple | phases 4 and 5 |
 | Stack protector (`-fstack-protector*`, `/GS`), control-flow guard, patchable function entries | ignored with a warning (clang-cl's implicit `/GS` is not passed) | |
+| Basic block sections, late function splitting, basic block address map, static data partitioning (`-fbasic-block-sections=`, `-fsplit-machine-functions`, `-fbasic-block-address-map`, `-fpartition-static-data-sections`) | `-fsplit-machine-functions`, `-fbasic-block-sections=all` and `=list=`, `-fbasic-block-address-map` and `-fpartition-static-data-sections` are a driver error (`unsupported option '...' for target '...'`), because MSIL is not ELF; `-fbasic-block-sections=none` is accepted, and `-fbasic-block-sections=labels` (a deprecated alias) passes the driver as `-fbasic-block-address-map` and ends in the backend's warning `basic block address map is not supported for MSIL; ignored`. Passed to cc1 or llc directly (`-fsplit-machine-functions`, `-mllvm -function-splitting=`, `--basic-block-sections=`, ...), the options are ignored, the address map with that warning: the IL is the same as without them | never: CIL methods have no sections |
 
 ### Limits
 

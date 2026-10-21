@@ -6,11 +6,13 @@
 # in the repository settings with .github/msil/disable-upstream-workflows.sh.
 #
 # Each job installs its tools and then runs the scripts in msil/utils/ci, in
-# this order: configure, build, unit-tests, lit-legs. The local milestone-1
-# gate (msil/utils/run-m1-gate.ps1, plan M10) runs the Windows job's scripts
-# in the same order on the development host, so the gate executes the CI
-# commands; only configure differs (CI uses msil/cmake/caches/MSIL.cmake, the
-# host msil/utils/build/msil-configure.ps1). The Linux job's scripts need a
+# this order: configure, build, unit-tests, lit-legs, and in the Windows job
+# upstream-hooks. The local milestone-1 gate (msil/utils/run-m1-gate.ps1, plan
+# M10 and M11) runs the Windows job's scripts in the same order on the
+# development host, so the gate executes the CI commands; only configure
+# differs (CI uses msil/cmake/caches/MSIL.cmake, the host
+# msil/utils/build/msil-configure.ps1), and the gate also runs the
+# upstream-hooks legs that CI skips. The Linux job's scripts need a
 # Linux build tree, so the gate only smoke-checks them inside WSL (its ci-sh
 # row: bash -n, the leg list of lit-legs.sh, and their failure exit status
 # against an empty build directory). The scripts build clang, llc and the
@@ -20,12 +22,18 @@
 # jitall, and PEVerify on Windows), run on .NET and compared with checked-in
 # transcripts and a native build (the native oracle).
 #   linux:   x86_64-unknown-linux-gnu-msil; .NET 8 and .NET 10, each tiered
-#            and with DOTNET_TieredCompilation=0; NuGet ilasm and ildasm;
-#            the ildasm -> ilasm round trip; .expected files vs native
+#            and with DOTNET_TieredCompilation=0; msil/test/M1 also at O1,
+#            O3, Os and Oz (more-levels); NuGet ilasm and ildasm; the
+#            ildasm -> ilasm round trip; .expected files vs native; the
+#            update_llc_test_checks tests (utc, run-utc-tests.py)
 #   windows: x86_64-pc-windows-msvc-msil; .NET 8 (tiered and
-#            TieredCompilation=0), .NET 10 and .NET Framework 4.8; Framework
-#            ilasm, ildasm and PEVerify; the .NET ilasm leg; the round trip;
-#            .expected files vs native
+#            TieredCompilation=0), .NET 10 and .NET Framework 4.8;
+#            msil/test/M1 at O1, O3, Os and Oz on .NET 8 (more-levels);
+#            Framework ilasm, ildasm and PEVerify; the .NET ilasm leg; the
+#            round trip; .expected files vs native; utc; then the upstream
+#            hook tests (msil/utils/ci/upstream-hooks.ps1 -NoCompile
+#            -NoManifest: action pins, the upstream lit tests of the upstream
+#            files the fork changes, full TargetParserTests and MCTests)
 # The legs that need WSL (the Linux triple and the Linux ilasm run from
 # Windows) run only on the development host (lit-legs.ps1 -Wsl). Nightly and
 # manual 'full' runs add every optimization level, and on Linux check-llvm and
@@ -176,7 +184,7 @@ jobs:
 
       - name: Upload test outputs
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: msil-linux-test-output
           path: |
@@ -272,6 +280,7 @@ jobs:
         run: pwsh -NoProfile -File msil/utils/ci/configure.ps1 -Ci
 
       - name: Build (msil/utils/ci/build.ps1)
+        id: build
         run: pwsh -NoProfile -File msil/utils/ci/build.ps1
 
       - name: Unit tests (msil/utils/ci/unit-tests.ps1)
@@ -284,9 +293,29 @@ jobs:
           pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 @legArgs
           exit $LASTEXITCODE
 
+      # The upstream regression tests of the upstream files the fork changes
+      # (msil/utils/upstream-hooks.txt): the action-pin check, the curated lit
+      # list and the full TargetParserTests and MCTests. It runs whenever the
+      # build passed, also after failed unit tests or test legs (as in
+      # run-m1-gate.ps1). Two legs are left to the development host's gate:
+      # the manifest leg diffs against the upstream merge commit, which this
+      # shallow checkout lacks (-NoManifest), and the compile leg's private
+      # build tree (clang and lldb for the ARM target) is a development-host
+      # cost (-NoCompile). This build has no WebAssembly target, so the
+      # list's WebAssembly tests are UNSUPPORTED here: hence -MinPass 250
+      # instead of the manifest's min-pass, which the gate enforces, and the
+      # script leaves Disassembler.WebAssemblyTest out of MCTests. Its lit
+      # report and log (build/lit-results/upstream-hooks.*) are uploaded below.
+      # check-action-pins.py checks this step's run: line, its if: guard and
+      # that the guard names the Build step's id: (steps.<missing id> is null,
+      # which would skip this step while the job stays green).
+      - name: Upstream hook tests (msil/utils/ci/upstream-hooks.ps1)
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: pwsh -NoProfile -File msil/utils/ci/upstream-hooks.ps1 -NoCompile -NoManifest -MinPass 250
+
       - name: Upload test outputs
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: msil-windows-test-output
           path: |

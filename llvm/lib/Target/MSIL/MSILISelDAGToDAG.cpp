@@ -22,6 +22,7 @@
 #include "MSILMachineFunctionInfo.h"
 #include "MSILSelectionDAGInfo.h"
 #include "MSILTargetMachine.h"
+#include "MSILUtilities.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/SelectionDAGISel.h"
@@ -69,7 +70,18 @@ public:
     // machine passes are written for them.
     MF.setUseDebugInstrRef(false);
 
-    return SelectionDAGISel::runOnMachineFunction(MF);
+    bool Changed = SelectionDAGISel::runOnMachineFunction(MF);
+
+    // The ScheduleDAG scheduler can put an ARGUMENT after another instruction,
+    // and every other instruction has 'implicit-def dead $arguments', so the
+    // machine verifier reports the ARGUMENT's 'implicit $arguments' as a use
+    // of an undefined physical register. Move the ARGUMENTs back to the top
+    // here, not only in MSILArgumentMove: llc verifies the MIR at the end of
+    // every pipeline that stops before code emission (upstream 663669080864),
+    // such as -stop-after=msil-isel, and the MIR parser verifies every
+    // function it reads.
+    MSIL::moveArgumentsToTop(MF);
+    return Changed;
   }
 
   void Select(SDNode *Node) override;

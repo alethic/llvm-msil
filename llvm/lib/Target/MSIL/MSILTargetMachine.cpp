@@ -28,6 +28,7 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Function.h"
+#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/PassRegistry.h"
@@ -156,7 +157,16 @@ namespace {
 class MSILPassConfig final : public TargetPassConfig {
 public:
   MSILPassConfig(MSILTargetMachine &TM, PassManagerBase &PM)
-      : TargetPassConfig(TM, PM) {}
+      : TargetPassConfig(TM, PM) {
+    // CIL methods have no sections, so no function is ever split. Late
+    // function splitting is dropped silently, like basic block sections in
+    // the MSILTargetMachine constructor, but here: the base constructor has
+    // just applied llc's and -mllvm's -function-splitting=, and
+    // addMachinePasses reads the mode when it builds the pipeline (with All
+    // it adds BasicBlockSections, which gives the method a section of its
+    // own and moves cold blocks to a cold section).
+    TM.Options.FunctionSplitting = FunctionSplittingMode::None;
+  }
 
   MSILTargetMachine &getMSILTargetMachine() const {
     return getTM<MSILTargetMachine>();
@@ -165,6 +175,7 @@ public:
   FunctionPass *createTargetRegisterAllocator(bool) override;
 
   void addIRPasses() override;
+  void addPassesToHandleExceptions() override;
   void addISelPrepare() override;
   bool addInstSelector() override;
   void addPostRegAlloc() override;
@@ -232,7 +243,10 @@ void MSILPassConfig::addIRPasses() {
     addPass(createMSILOptimizeReturnedLegacyPass());
 
   // There is no exception model: lower invokes into calls and delete the
-  // unreachable landing pads.
+  // unreachable landing pads, here, after the MSIL IR passes above and before
+  // IndirectBrExpand and the generic IR passes that
+  // TargetPassConfig::addIRPasses adds; addPassesToHandleExceptions adds
+  // nothing.
   addPass(createLowerInvokePass());
   addPass(createUnreachableBlockEliminationPass());
 
@@ -241,6 +255,19 @@ void MSILPassConfig::addIRPasses() {
   addPass(createIndirectBrExpandPass(getOptLevel()));
 
   TargetPassConfig::addIRPasses();
+}
+
+void MSILPassConfig::addPassesToHandleExceptions() {
+  // The exception model is always None (decision D8), and addIRPasses has
+  // already lowered every invoke into a call and removed the landing pads
+  // that became unreachable, after the MSIL IR passes and before
+  // IndirectBrExpand and the generic IR passes that
+  // TargetPassConfig::addIRPasses adds.
+  // TargetPassConfig would add LowerInvoke and UnreachableBlockElim a second
+  // time, after CodeGenPrepare.
+  assert(TM->getMCAsmInfo().getExceptionHandlingType() ==
+             ExceptionHandling::None &&
+         "MSIL has no exception model (decision D8)");
 }
 
 void MSILPassConfig::addISelPrepare() {
@@ -253,9 +280,10 @@ void MSILPassConfig::addISelPrepare() {
 bool MSILPassConfig::addInstSelector() {
   (void)TargetPassConfig::addInstSelector();
   addPass(createMSILISelDagLegacyPass(getMSILTargetMachine(), getOptLevel()));
-  // Run the argument-move pass immediately after the ScheduleDAG scheduler
-  // so that we can fix up the ARGUMENT instructions before anything else
-  // sees them in the wrong place.
+  // Instruction selection already moves the ARGUMENT instructions that the
+  // ScheduleDAG scheduler put in the wrong place back to the top of the entry
+  // block. The argument-move pass does the same for MIR input that starts
+  // after instruction selection.
   addPass(createMSILArgumentMoveLegacyPass());
   // Set the memory-flags operands (the unaligned. and volatile. prefixes).
   // This information is present during ISel, but later passes may drop the

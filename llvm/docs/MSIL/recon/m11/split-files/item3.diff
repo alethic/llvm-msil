@@ -1,0 +1,20 @@
+--- a/llvm/lib/Target/MSIL/MSILTargetMachine.cpp	2026-10-13 12:38:59.005582300 -0500
++++ b/llvm/lib/Target/MSIL/MSILTargetMachine.cpp	2026-10-20 07:56:00.616507900 -0500
+@@ -156,7 +156,16 @@
+ class MSILPassConfig final : public TargetPassConfig {
+ public:
+   MSILPassConfig(MSILTargetMachine &TM, PassManagerBase &PM)
+-      : TargetPassConfig(TM, PM) {}
++      : TargetPassConfig(TM, PM) {
++    // CIL methods have no sections, so no function is ever split. Late
++    // function splitting is dropped silently, like basic block sections in
++    // the MSILTargetMachine constructor, but here: the base constructor has
++    // just applied llc's and -mllvm's -function-splitting=, and
++    // addMachinePasses reads the mode when it builds the pipeline (with All
++    // it adds BasicBlockSections, which gives the method a section of its
++    // own and moves cold blocks to a cold section).
++    TM.Options.FunctionSplitting = FunctionSplittingMode::None;
++  }
+ 
+   MSILTargetMachine &getMSILTargetMachine() const {
+     return getTM<MSILTargetMachine>();

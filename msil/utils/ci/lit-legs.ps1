@@ -11,12 +11,15 @@
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -Leg net10,roundtrip
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List
 #
-# Legs, in order (the numbers are the M10 gate steps of plan section 6; lit-legs.sh has the
-# Linux job's legs):
+# Legs, in order (the numbers are the gate steps of plan section 6 that run the same command:
+# steps 5-12 are the same in the M10 and the M11 gate, steps 20 and 21 are M11's; lit-legs.sh
+# has the Linux job's legs):
 #   net8           llc/clang FileCheck tests, harness, msil/test/M1 on .NET 8 (tiered) and on the
 #                  .NET Framework 4.8, -O0 and -O2, native oracle required             (step 5)
 #   net10          msil/test/M1 on .NET 10                                             (step 6)
 #   net8-tc0       msil/test/M1 on .NET 8, DOTNET_TieredCompilation=0 (optimizing JIT)  (step 7)
+#   more-levels    msil/test/M1 on .NET 8 at O1,O3,Os,Oz (O0 and O2 run in the other legs; .ll
+#                  tests run at O1 and O3 only, lit.cfg.py)                            (step 21)
 #   wsl-net10      -Wsl: msil/test/M1 and msil/test/harness (the WSL runner's own checks),
 #                  x86_64-unknown-linux-gnu-msil, WSL .NET 10                          (step 8)
 #   wsl-net10-tc0  -Wsl: the same with DOTNET_TieredCompilation=0                      (step 9)
@@ -24,6 +27,9 @@
 #   modern-ilasm   11-programs assembled by the .NET ilasm (win-x64), not Framework's  (step 11)
 #   roundtrip      11-programs through ildasm -> ilasm, then run (Design.md 5.5)
 #   expected       update-expected.py --check msil/test/M1: .expected vs native      (step 12)
+#   utc            run-utc-tests.py with six tests of llvm/test/tools/UpdateTestChecks/
+#                  update_llc_test_checks, which lit reports UNSUPPORTED on Windows (it looks
+#                  for a file named 'llc'; plan M5.b and section 12)                   (step 20)
 #   all-levels     -Full: msil/test at O0,O1,O2,O3,Os,Oz (nightly)
 # The WSL legs need a WSL distribution with .NET 10 (only the development host has one; the Linux
 # CI job covers the Linux triple natively). modern-ilasm and wsl-ilasm take the .NET ilasm, and
@@ -37,8 +43,10 @@
 # steps) with --param msil_require_verify=1 (plan D38) and --param msil_require_exec=1, so a
 # missing verifier, jitall, compiler or runtime is a configuration error instead of a leg of
 # UNSUPPORTED tests, and writes <build>/lit-results/<leg>.xml (xunit) and <leg>.log. A leg passes
-# when lit exits 0 and at least one test passed. Every selected leg runs even after a failure;
-# the exit status is 1 if any failed.
+# when lit exits 0 and at least one test passed. expected and utc are not lit legs: each runs its
+# script under the shared build-dir lock, writes <build>/lit-results/<leg>.log and passes when
+# the script exits 0. Every selected leg runs even after a failure; the exit status is 1 if any
+# failed.
 [CmdletBinding()]
 param(
   [string]$BuildDir = '',         # default: $env:MSIL_BUILD_DIR, else <repo>\build
@@ -69,6 +77,8 @@ $legs = @(
      Params = { 'msil_dotnet_runtime=8', 'msil_native_oracle=required', 'msil_run_netfx=1' } }
   @{ Name = 'net10'; Paths = $m1; Params = { 'msil_dotnet_runtime=10' } }
   @{ Name = 'net8-tc0'; Paths = $m1; Params = { 'msil_dotnet_runtime=8', $tc0 } }
+  @{ Name = 'more-levels'; Paths = $m1
+     Params = { 'msil_dotnet_runtime=8', 'msil_opt_levels=O1,O3,Os,Oz' } }
   @{ Name = 'wsl-net10'; Paths = @('msil/test/M1', 'msil/test/harness'); Wsl = $true
      Params = { 'msil_runner=wsl', $linux, 'msil_dotnet_runtime=10' } }
   @{ Name = 'wsl-net10-tc0'; Paths = $m1; Wsl = $true
@@ -80,9 +90,17 @@ $legs = @(
      Params = { "msil_ilasm=$(Get-MsilNuGetTool -Repo $MsilRepo -Rid win-x64 -Tool ilasm)" } }
   @{ Name = 'roundtrip'; Paths = $programs; Params = { 'msil_roundtrip=1' } }
   @{ Name = 'expected'; Expected = $true }
+  @{ Name = 'utc'; Utc = $true }
   @{ Name = 'all-levels'; Paths = @('msil/test'); Full = $true
      Params = { 'msil_opt_levels=O0,O1,O2,O3,Os,Oz' } }
 )
+
+# The tests of the utc leg: the update_llc_test_checks tests that run-utc-tests.py can run and
+# whose targets every build of msil/utils/ci has (MSIL and X86). wasm-function-name needs
+# WebAssembly, which msil/cmake/caches/MSIL.cmake does not build, and run-utc-tests.py fails a
+# test whose target is missing instead of skipping it. lit-legs.sh has the same list.
+$utcTests = @('msil-basic', 'x86-basic', 'x86-mir-only', 'x86-asm-mir-mixed', 'x86-constant-pool',
+              'asm-show-inst')
 
 $selected = @($Leg | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $known = $legs | ForEach-Object { $_.Name }
@@ -146,10 +164,31 @@ function Invoke-ExpectedLeg($l) {
   return @{ Ok = ($rc -eq 0); Detail = "update-expected.py --check msil/test/M1 (exit $rc)" }
 }
 
+function Invoke-UtcLeg($l) {
+  # lit cannot run these tests on Windows (llvm/test/tools/UpdateTestChecks/lit.local.cfg sets
+  # its llc-binary feature only when a file named 'llc' exists); run-utc-tests.py runs their RUN
+  # lines without lit (plan M5.b). It needs llc and llvm-config from the build.
+  $log = Join-Path $results "$($l.Name).log"
+  $llc = Join-Path $BuildDir 'bin/llc.exe'
+  $lock = Enter-MsilBuildLock -BuildDir $BuildDir -Shared -What 'run-utc-tests'
+  try {
+    & $MsilPython (Join-Path $MsilRepo 'msil/utils/run-utc-tests.py') --llc $llc @utcTests 2>&1 |
+      ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
+    $rc = $LASTEXITCODE
+  } finally { $lock.Dispose() }
+  $summary = @(if (Test-Path -LiteralPath $log) {
+                 Select-String -LiteralPath $log -Pattern '^\d+ of \d+ tests passed$' |
+                   Select-Object -Last 1
+               })
+  $what = if ($summary.Count -gt 0) { $summary[0].Line } else { 'no summary' }
+  return @{ Ok = ($rc -eq 0); Detail = "run-utc-tests.py: $what (exit $rc)" }
+}
+
 foreach ($l in $run) {
   $sw = [Diagnostics.Stopwatch]::StartNew()
   try {
-    $r = if ($l.Expected) { Invoke-ExpectedLeg $l } else { Invoke-LitLeg $l }
+    $r = if ($l.Expected) { Invoke-ExpectedLeg $l } elseif ($l.Utc) { Invoke-UtcLeg $l }
+         else { Invoke-LitLeg $l }
   } catch {
     $r = @{ Ok = $false; Detail = "$_" }
   }

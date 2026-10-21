@@ -1,0 +1,202 @@
+# upstream-hooks.txt - DRAFT (recon M11 items 6/7) of msil/utils/upstream-hooks.txt.
+# Every upstream file the MSIL fork changes (git diff <upstream base> HEAD, minus fork-only paths)
+# needs a 'hook' block. Inside a block, at least one of:
+#   lit <path-or-glob>      upstream lit test(s), relative to the repository root; run in one
+#                           llvm-lit invocation with the shared build's tools
+#   gtest <exe> [<filter>]  upstream unit tests (exe relative to the build dir)
+#   compile                 compiled by the private hooks build (hooks-compile leg)
+#   utc <test>...           run-utc-tests.py tests (the 'utc' row of item 8)
+#   none <reason>           no runnable upstream test; the reason is required
+# and optionally 'fork <path>' lines naming the fork tests that pin the MSIL behaviour (each must
+# exist). 'fork-only <path>' marks a fork file that lives in an upstream directory. 'allow <test>
+# <reason>' accepts one lit FAIL (environment only); an allow entry whose test passes is stale.
+# Fork-only prefixes (never hooks): llvm/lib/Target/MSIL/ llvm/test/CodeGen/MSIL/ llvm/docs/MSIL/
+# llvm/unittests/Target/MSIL/ clang/test/CodeGen/MSIL/ msil/ .github/msil/
+
+fork-only .github/workflows/msil-ci.yml
+fork-only clang/lib/Basic/Targets/MSIL.h
+fork-only llvm/include/llvm/MC/MCSectionMSIL.h
+fork-only clang/test/Driver/msil-toolchain.c
+fork-only clang/test/Preprocessor/init-msil.c
+fork-only llvm/test/tools/UpdateTestChecks/update_llc_test_checks/msil-basic.test
+fork-only llvm/test/tools/UpdateTestChecks/update_llc_test_checks/Inputs/msil-basic.ll
+fork-only llvm/test/tools/UpdateTestChecks/update_llc_test_checks/Inputs/msil-basic.ll.expected
+
+hook clang/include/clang/Basic/DiagnosticCommonKinds.td
+  none new error err_msil_asm_unsupported only; the diagnostic tables are rebuilt by every clang build; upstream's warning-flags.c needs diagtool (not built) and lists warnings only
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+  fork clang/test/CodeGen/MSIL/ms-inline-asm.c
+hook clang/include/clang/Basic/DiagnosticDriverKinds.td
+  none new error err_drv_msil_no_object_output only (see DiagnosticCommonKinds.td)
+  fork clang/test/Driver/msil-toolchain.c
+hook clang/lib/Basic/Targets.cpp
+  lit clang/test/Preprocessor/init-x86.c
+  lit clang/test/Preprocessor/init-aarch64.c
+  lit clang/test/Preprocessor/predefined-win-macros.c
+  fork clang/test/CodeGen/MSIL/triples.c
+  fork clang/test/Preprocessor/init-msil.c
+hook clang/lib/CodeGen/BackendUtil.cpp
+  lit clang/test/CodeGen/asan-globals-gc.cpp
+  fork clang/test/CodeGen/MSIL/emit-obj-unsupported.c
+hook clang/lib/CodeGen/CGBuiltin.cpp
+  lit clang/test/CodeGen/bittest-intrin.c
+  lit clang/test/CodeGen/ms-intrinsics.c
+  lit clang/test/Sema/bittest-intrinsics.c
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+hook clang/lib/CodeGen/CGCall.cpp
+  lit clang/test/CodeGen/X86/x86_64-arguments.c
+  lit clang/test/CodeGen/2007-02-25-C-DotDotDot.c
+  lit clang/test/CodeGen/variadic-null-win64.c
+  lit clang/test/CodeGen/no-prototype.c
+  fork clang/test/CodeGen/MSIL/no-proto-call.c
+hook clang/lib/CodeGen/CGObjCMac.cpp
+  lit clang/test/CodeGenObjC/section-name.m
+  lit clang/test/CodeGenObjC/sections.m
+hook clang/lib/CodeGen/CGStmt.cpp
+  lit clang/test/CodeGen/asm.c
+  lit clang/test/CodeGen/asm_64.c
+  lit clang/test/CodeGen/asm-inout.c
+  lit clang/test/CodeGen/asm-goto.c
+  lit clang/test/CodeGen/asm-errors.c
+  lit clang/test/CodeGen/X86/x86-64-inline-asm.c
+  lit clang/test/CodeGen/X86/inline-asm-constraints.c
+  fork clang/test/CodeGen/MSIL/asm-barrier.c
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+hook clang/lib/CodeGen/CodeGenAction.cpp
+  lit clang/test/CodeGen/exception-model-flag.c
+  lit clang/test/Driver/ir-exception-model.c
+  lit clang/test/CodeGen/WebAssembly/wasm-exception-model-flag-ir-input-mismatch.ll
+  lit clang/test/CodeGen/WebAssembly/wasm-exception-model-flag-parse-ir-input.ll
+  fork clang/test/CodeGen/MSIL/triples.c
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+hook clang/lib/CodeGen/CodeGenModule.cpp
+  lit clang/test/CodeGen/exception-model-flag.c
+  lit clang/test/CodeGen/ptrauth-module-flags.c
+  lit clang/test/CodeGen/kcfi.c
+  lit clang/test/CodeGen/kcfi-arity.c
+  lit clang/test/CodeGen/kcfi-generalize.c
+  lit clang/test/CodeGen/kcfi-normalize.c
+  lit clang/test/CodeGen/cfstring.c
+  lit clang/test/CodeGen/cfstring-windows.c
+  lit clang/test/CodeGen/cfstring-elf-sections-x86_64.c
+  lit clang/test/CodeGen/2006-01-23-FileScopeAsm.c
+  lit clang/test/CodeGen/no-prototype.c
+  fork clang/test/CodeGen/MSIL/triples.c
+  fork clang/test/CodeGen/MSIL/no-prototype.c
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+hook clang/lib/CodeGen/TargetBuiltins/X86.cpp
+  lit clang/test/CodeGen/ms-intrinsics-cpuid.c
+  lit clang/test/CodeGen/ms-intrinsics.c
+  lit clang/test/Headers/cpuid.c
+  lit clang/test/Headers/__cpuidex_conflict.c
+  fork clang/test/CodeGen/MSIL/inline-asm.c
+hook clang/lib/Driver/ToolChain.cpp
+  lit clang/test/Driver/integrated-as.c
+  lit clang/test/Driver/fsanitize-cfi.c
+  fork clang/test/Driver/msil-toolchain.c
+hook clang/lib/Driver/ToolChains/Clang.cpp
+  lit clang/test/Driver/embed-bitcode.c
+  lit clang/test/Driver/fembed-bitcode.c
+  lit clang/test/Driver/as-options.s
+  lit clang/test/Driver/integrated-as.s
+  # option B (llvm-profdata added to the build list):
+  # lit clang/test/Driver/cl-options.c
+  # lit clang/test/Driver/clang_f_opts.c
+  fork clang/test/Driver/msil-toolchain.c
+hook clang/lib/Parse/ParseStmtAsm.cpp
+  lit clang/test/Parser/ms-inline-asm.c
+  lit clang/test/Parser/ms-inline-asm-nested-braces.c
+  lit clang/test/Sema/ms-inline-asm.c
+  lit clang/test/Sema/ms-inline-asm-invalid-arch.c
+  lit clang/test/CodeGen/ms-inline-asm*.c
+  lit clang/test/CodeGen/ms-inline-asm*.cpp
+  fork clang/test/CodeGen/MSIL/ms-inline-asm.c
+hook clang/lib/Sema/SemaChecking.cpp
+  lit clang/test/Sema/builtins.c
+  lit clang/test/CodeGen/cfstring.c
+  fork clang/test/CodeGen/MSIL/triples.c
+hook clang/lib/Sema/SemaDeclAttr.cpp
+  lit clang/test/Sema/MicrosoftCompatibility.c
+  lit clang/test/Sema/attr-aligned.c
+  fork clang/test/CodeGen/MSIL/triples.c
+  fork clang/test/CodeGen/MSIL/datalayout.c
+hook lldb/source/Plugins/Process/gdb-remote/GDBRemoteCommunicationClient.cpp
+  compile
+hook llvm/CMakeLists.txt
+  none LLVM_ALL_EXPERIMENTAL_TARGETS gains MSIL: exercised by every configure (gate configure step and the hooks build)
+hook llvm/include/llvm/Config/Targets.h.cmake
+  none LLVM_HAS_MSIL_TARGET is generated by every configure and has no consumer
+hook llvm/include/llvm/MC/MCContext.h
+  gtest unittests/MC/MCTests.exe -TargetRegistry.MSILLookupWithoutTarget
+  compile
+  lit llvm/test/CodeGen/X86/coff-comdat*.ll
+  lit llvm/test/CodeGen/X86/elf-comdat*.ll
+  lit llvm/test/CodeGen/X86/section-*.ll
+  lit llvm/test/CodeGen/WebAssembly/custom-sections.ll
+hook llvm/include/llvm/MC/MCObjectFileInfo.h
+  gtest unittests/MC/MCTests.exe -TargetRegistry.MSILLookupWithoutTarget
+hook llvm/include/llvm/TargetParser/Triple.h
+  gtest unittests/TargetParser/TargetParserTests.exe -HostTest.getMacOSHostVersion:HostTest.AIXHostVersionDetect:HostTest.AIXTargetVersionDetect:HostTest.AIXHostCPUDetect
+  compile
+hook llvm/lib/Bitcode/Writer/BitcodeWriter.cpp
+  lit llvm/test/Transforms/EmbedBitcode/*.ll
+  lit clang/test/Frontend/x86-embed-bitcode.ll
+  fork clang/test/Driver/msil-toolchain.c
+hook llvm/lib/MC/MCContext.cpp
+  gtest unittests/MC/MCTests.exe -TargetRegistry.MSILLookupWithoutTarget
+  lit llvm/test/CodeGen/X86/coff-comdat*.ll
+  lit llvm/test/CodeGen/X86/elf-comdat*.ll
+  lit llvm/test/CodeGen/X86/section-*.ll
+  lit llvm/test/CodeGen/WebAssembly/custom-sections.ll
+hook llvm/lib/MC/MCObjectFileInfo.cpp
+  gtest unittests/MC/MCTests.exe -TargetRegistry.MSILLookupWithoutTarget
+  lit llvm/test/CodeGen/X86/coff-comdat*.ll
+  lit llvm/test/CodeGen/X86/elf-comdat*.ll
+  lit llvm/test/CodeGen/X86/section-*.ll
+  lit llvm/test/CodeGen/WebAssembly/custom-sections.ll
+hook llvm/lib/MC/MCParser/AsmParser.cpp
+  lit clang/test/Misc/cc1as-asm.s
+  lit clang/test/Misc/cc1as-output-asm-variant.c
+  lit llvm/test/CodeGen/X86/inline-asm*.ll
+  lit llvm/test/CodeGen/X86/2008-09-17-inline-asm-1.ll
+  lit llvm/test/CodeGen/WebAssembly/inline-asm.ll
+  lit llvm/test/CodeGen/WebAssembly/inline-asm-m.ll
+  lit llvm/test/CodeGen/WebAssembly/inline-asm-tied.ll
+  lit llvm/test/CodeGen/WebAssembly/inline-asm-failure.ll
+  fork clang/test/CodeGen/MSIL/cc1as-unsupported.s
+hook llvm/lib/MC/TargetRegistry.cpp
+  gtest unittests/MC/MCTests.exe -TargetRegistry.MSILLookupWithoutTarget
+  lit llvm/test/tools/llc/*.ll
+  lit llvm/test/tools/llc/*.mir
+  fork llvm/test/CodeGen/MSIL/target-selection.ll
+  fork llvm/test/CodeGen/MSIL/march-msil.ll
+hook llvm/lib/Target/ARM/AsmParser/ARMAsmParser.cpp
+  compile
+hook llvm/lib/Target/TargetMachine.cpp
+  lit llvm/test/CodeGen/X86/*pic*.ll
+  lit llvm/test/CodeGen/X86/dso_local_equivalent*.ll
+  lit llvm/test/CodeGen/X86/extern_weak.ll
+  lit llvm/test/CodeGen/WebAssembly/function-addr-offset.ll
+hook llvm/lib/TargetParser/TargetDataLayout.cpp
+  gtest unittests/TargetParser/TargetParserTests.exe -HostTest.getMacOSHostVersion:HostTest.AIXHostVersionDetect:HostTest.AIXTargetVersionDetect:HostTest.AIXHostCPUDetect
+  lit clang/test/CodeGen/target-data.c
+  fork clang/test/CodeGen/MSIL/datalayout.c
+hook llvm/lib/TargetParser/Triple.cpp
+  gtest unittests/TargetParser/TargetParserTests.exe -HostTest.getMacOSHostVersion:HostTest.AIXHostVersionDetect:HostTest.AIXTargetVersionDetect:HostTest.AIXHostCPUDetect
+  fork clang/test/CodeGen/MSIL/triples.c
+hook llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
+  lit llvm/test/Instrumentation/AddressSanitizer/*.ll
+  lit llvm/test/Instrumentation/AddressSanitizer/X86/*.ll
+hook llvm/unittests/MC/TargetRegistry.cpp
+  gtest unittests/MC/MCTests.exe -TargetRegistry.MSILLookupWithoutTarget
+hook llvm/unittests/TargetParser/TripleTest.cpp
+  gtest unittests/TargetParser/TargetParserTests.exe -HostTest.getMacOSHostVersion:HostTest.AIXHostVersionDetect:HostTest.AIXTargetVersionDetect:HostTest.AIXHostCPUDetect
+hook llvm/utils/UpdateTestChecks/asm.py
+  utc msil-basic x86-basic x86-mir-only
+hook llvm/utils/update_llc_test_checks.py
+  utc msil-basic x86-basic x86-mir-only
+
+# Exhaustive switches over Triple::ObjectFormatType / MCContext::Environment that need no MSIL
+# case because they end in 'default:' (checked by the switch-coverage scan):
+switch-default llvm/lib/MC/MCAsmBackend.cpp
+switch-default llvm/lib/ExecutionEngine/JITLink/JITLink.cpp
