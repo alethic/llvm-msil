@@ -1,0 +1,6 @@
+# Only a named diagnostic (%{msil_prog_fail_<L>}): no .expected file.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s %}
+#--- a.c
+// prog-error: link undefined symbol: nowhere

@@ -18,8 +18,9 @@
 /// The IR optimizer queries it long before the code it describes can be
 /// generated, so every hook here is final (it is never a stub). It turns off
 /// what CIL code cannot use or should not get: vector types, lookup tables of
-/// constants (they need loads and globals instead of a CIL switch) and partial
-/// or runtime unrolling (large methods slow down the JIT).
+/// constants (they need loads and globals instead of a CIL switch), partial
+/// or runtime unrolling (large methods slow down the JIT) and half or bfloat
+/// parameters created by ArgumentPromotion (they need phase-3 helpers).
 ///
 //===----------------------------------------------------------------------===//
 
@@ -56,6 +57,9 @@ public:
   void getUnrollingPreferences(Loop *L, ScalarEvolution &SE,
                                TTI::UnrollingPreferences &UP,
                                OptimizationRemarkEmitter *ORE) const override;
+
+  bool areTypesABICompatible(const Function *Caller, const Function *Callee,
+                             ArrayRef<Type *> Types) const override;
 
   /// @}
 

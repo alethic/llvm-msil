@@ -1,0 +1,18 @@
+# A %{msil_prog} test for ../../update-expected.test: two sources (the list
+# continued on a second redefinition line), a stock-clang source and an archive
+# whose second member is named relative to the test's directory (%S).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c \
+# REDEFINE:   %t/util.c
+# REDEFINE: %{msil_stock_srcs} = %t/stock.c
+# REDEFINE: %{msil_archives} = one=%t/a1.c,%S/two-a2.c
+# REDEFINE: %{msil_libs} = -Wl,--msil-link-only
+# RUN: %{msil_prog}
+#--- main.c
+// prog-value: 1
+#--- util.c
+// prog-value: 2
+#--- stock.c
+// prog-value: 4
+#--- a1.c
+// prog-value: 8

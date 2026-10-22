@@ -1,0 +1,292 @@
+## Undefined symbols in M14 (ImplementationPlan.md 5.9.6, 'When it runs',
+## M14; 5.9.14's texts). msil-ld reads no native library yet, so after every
+## input is loaded:
+## - undefined GLOBAL data is msil-ld's error 'undefined symbol: <s>' with
+##   '>>> referenced by <file>:(<method>)' lines, at most three, then
+##   '>>> referenced <n> more times' (lld's form);
+## - an undefined HIDDEN symbol, data or function, is 'undefined hidden
+##   symbol: <s>' and never binds late;
+## - an undefined GLOBAL function goes to LTO code generation, where the
+##   frozen D14 table imports it if it is a Phase-1 import (puts, putchar, the
+##   C math library; 'pinvokeimpl', the library depending on the triple);
+##   otherwise the backend reports 'undefined symbol: <name>', because
+##   msil-ld sets the module flag msil-lto (printed as msil-ld's error, the
+##   first line of 5.9.14's text, so the matrix case stays stable when M15
+##   moves the report into msil-ld);
+## - an undefined WEAK symbol stays for the backend (resolve-weak.test).
+## A HIDDEN reference to a symbol defined elsewhere links.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as data.ll -o data.o
+# RUN: llvm-as hidden-fn.ll -o hidden-fn.o
+# RUN: llvm-as hidden-data.ll -o hidden-data.o
+# RUN: llvm-as hidden-def.ll -o hidden-def.o
+# RUN: llvm-as fn.ll -o fn.o
+# RUN: llvm-as imports-win.ll -o imports-win.o
+# RUN: llvm-as imports-lnx.ll -o imports-lnx.o
+# RUN: llvm-as data-def.ll -o data-def.o
+# RUN: llvm-ar rcs libdata.a data-def.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: not msil-ld --lto-emit-asm data.o -o x.il 2>&1 | %{err} --check-prefix=DATA
+# DATA:      {{^}}msil-ld: error: undefined symbol: ext_data{{$}}
+# DATA-NEXT: {{^}}>>> referenced by data.o:(main){{$}}
+
+## lld's limit: three '>>> referenced by <file>:(<method>)' lines, then
+## '>>> referenced <n> more times' for the rest (here f3 and the initializer
+## of the global ptr).
+# RUN: llvm-as many.ll -o many.o
+# RUN: not msil-ld --lto-emit-asm many.o -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=MANY --implicit-check-not=error: --implicit-check-not=">>>"
+# MANY:      {{^}}msil-ld: error: undefined symbol: ext_data{{$}}
+# MANY-NEXT: {{^}}>>> referenced by many.o:(main){{$}}
+# MANY-NEXT: {{^}}>>> referenced by many.o:(f1){{$}}
+# MANY-NEXT: {{^}}>>> referenced by many.o:(f2){{$}}
+# MANY-NEXT: {{^}}>>> referenced 2 more times{{$}}
+
+## An archive member that defines the data satisfies it.
+# RUN: msil-ld --lto-emit-asm --lto-O0 data.o libdata.a -o data.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DATA-OK --input-file=data.il
+# DATA-OK:   ldsfld native int 'ext_data'
+
+# RUN: not msil-ld --lto-emit-asm hidden-fn.o -o x.il 2>&1 | %{err} --check-prefix=HIDDEN-FN
+# RUN: not msil-ld --lto-emit-asm hidden-data.o -o x.il 2>&1 | %{err} --check-prefix=HIDDEN-DATA
+# HIDDEN-FN:   {{^}}msil-ld: error: undefined hidden symbol: hidden_fn{{$}}
+# HIDDEN-DATA: {{^}}msil-ld: error: undefined hidden symbol: hidden_data{{$}}
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 hidden-fn.o hidden-def.o -o hidden.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O0 hidden-def.o hidden-fn.o -o hidden2.il 2>&1 | count 0
+
+## Two references to one never-defined name merge their visibility to the most
+## constraining non-default one (5.9.5 'Also ported', lld/ELF Symbols.cpp
+## :424-427), in either input order. For puts, a D14 import, a lost merge
+## would be a silent P/Invoke and exit code 0; for data, the GLOBAL
+## 'undefined symbol' error. Hidden is more constraining than protected, and
+## default + protected is lld/ELF's 'undefined protected symbol'.
+# RUN: llvm-as vis-fn-default.ll -o vis-fn-default.o
+# RUN: llvm-as vis-fn-hidden.ll -o vis-fn-hidden.o
+# RUN: llvm-as vis-fn-protected.ll -o vis-fn-protected.o
+# RUN: llvm-as vis-data-default.ll -o vis-data-default.o
+# RUN: llvm-as vis-data-hidden.ll -o vis-data-hidden.o
+# DEFINE: %{vis} = %{err} --implicit-check-not='undefined symbol'
+# RUN: not msil-ld --lto-emit-asm vis-fn-default.o vis-fn-hidden.o -o x.il 2>&1 | %{vis} --check-prefix=VIS-HIDDEN-FN
+# RUN: not msil-ld --lto-emit-asm vis-fn-hidden.o vis-fn-default.o -o x.il 2>&1 | %{vis} --check-prefix=VIS-HIDDEN-FN
+# RUN: not msil-ld --lto-emit-asm vis-data-default.o vis-data-hidden.o -o x.il 2>&1 | %{vis} --check-prefix=VIS-HIDDEN-DATA
+# RUN: not msil-ld --lto-emit-asm vis-data-hidden.o vis-data-default.o -o x.il 2>&1 | %{vis} --check-prefix=VIS-HIDDEN-DATA
+# RUN: not msil-ld --lto-emit-asm vis-fn-default.o vis-fn-protected.o -o x.il 2>&1 \
+# RUN:   | %{vis} --check-prefix=VIS-PROTECTED-FN --implicit-check-not='undefined hidden'
+# RUN: not msil-ld --lto-emit-asm vis-fn-protected.o vis-fn-default.o -o x.il 2>&1 \
+# RUN:   | %{vis} --check-prefix=VIS-PROTECTED-FN --implicit-check-not='undefined hidden'
+# RUN: not msil-ld --lto-emit-asm vis-fn-default.o vis-fn-hidden.o vis-fn-protected.o -o x.il 2>&1 \
+# RUN:   | %{vis} --check-prefix=VIS-HIDDEN-FN --implicit-check-not='undefined protected'
+# RUN: not msil-ld --lto-emit-asm vis-fn-protected.o vis-fn-hidden.o vis-fn-default.o -o x.il 2>&1 \
+# RUN:   | %{vis} --check-prefix=VIS-HIDDEN-FN --implicit-check-not='undefined protected'
+# VIS-HIDDEN-FN:    {{^}}msil-ld: error: undefined hidden symbol: puts{{$}}
+# VIS-HIDDEN-DATA:  {{^}}msil-ld: error: undefined hidden symbol: d{{$}}
+# VIS-PROTECTED-FN: {{^}}msil-ld: error: undefined protected symbol: puts{{$}}
+
+## A function: the backend's report under msil-lto, on both triples.
+# RUN: not msil-ld --lto-emit-asm fn.o -o x.il 2>&1 | %{err} --check-prefix=FN
+# RUN: llvm-as fn-lnx.ll -o fn-lnx.o
+# RUN: not msil-ld --lto-emit-asm fn-lnx.o -o x.il 2>&1 | %{err} --check-prefix=FN
+# FN:        {{^}}msil-ld: error: undefined symbol: ext_fn{{$}}
+# FN-NOT:    Phase 1 has no linker
+
+## Phase-1 imports are P/Invokes: ucrtbase on windows-msvc, libc and
+## libm.so.6 on linux-gnu (D14).
+# RUN: msil-ld --lto-emit-asm --lto-O0 imports-win.o -o win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WIN --input-file=win.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 imports-lnx.o -o lnx.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LNX --input-file=lnx.il
+
+# WIN-DAG:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# WIN-DAG:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+# LNX-DAG:   {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# LNX-DAG:   {{^}}.method public hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+
+#--- data.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@ext_data = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @ext_data
+  ret i32 %v
+}
+
+#--- many.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@ext_data = external global i32
+@ptr = global ptr @ext_data
+
+define i32 @main() {
+  %v = load i32, ptr @ext_data
+  ret i32 %v
+}
+
+define i32 @f1() {
+  %v = load i32, ptr @ext_data
+  ret i32 %v
+}
+
+define i32 @f2() {
+  %v = load i32, ptr @ext_data
+  ret i32 %v
+}
+
+define i32 @f3() {
+  %v = load i32, ptr @ext_data
+  ret i32 %v
+}
+
+#--- data-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@ext_data = global i32 3, align 4
+
+#--- hidden-fn.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @hidden_fn()
+  ret i32 %r
+}
+
+declare hidden i32 @hidden_fn()
+
+#--- hidden-data.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@hidden_data = external hidden global i32
+
+define i32 @main() {
+  %v = load i32, ptr @hidden_data
+  ret i32 %v
+}
+
+#--- hidden-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @hidden_fn() {
+  ret i32 6
+}
+
+#--- fn.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @ext_fn(i32 1)
+  ret i32 %r
+}
+
+declare i32 @ext_fn(i32)
+
+#--- fn-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @ext_fn(i32 1)
+  ret i32 %r
+}
+
+declare i32 @ext_fn(i32)
+
+#--- imports-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  %s = call double @sqrt(double 4.0)
+  %i = fptosi double %s to i32
+  %t = add i32 %r, %i
+  ret i32 %t
+}
+
+declare i32 @puts(ptr)
+declare double @sqrt(double)
+
+#--- imports-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  %s = call double @sqrt(double 4.0)
+  %i = fptosi double %s to i32
+  %t = add i32 %r, %i
+  ret i32 %t
+}
+
+declare i32 @puts(ptr)
+declare double @sqrt(double)
+
+#--- vis-fn-default.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr null)
+  ret i32 %r
+}
+
+declare i32 @puts(ptr)
+
+#--- vis-fn-hidden.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @g() {
+  %r = call i32 @puts(ptr null)
+  ret i32 %r
+}
+
+declare hidden i32 @puts(ptr)
+
+#--- vis-fn-protected.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @h() {
+  %r = call i32 @puts(ptr null)
+  ret i32 %r
+}
+
+declare protected i32 @puts(ptr)
+
+#--- vis-data-default.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@d = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @d
+  ret i32 %v
+}
+
+#--- vis-data-hidden.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@d = external hidden global i32
+
+define i32 @g() {
+  %v = load i32, ptr @d
+  ret i32 %v
+}

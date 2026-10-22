@@ -1,0 +1,7 @@
+# A %{msil_prog} test for Windows triples only.
+# REQUIRES: msil-triple-windows
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c
+# RUN: %{msil_prog}
+#--- a.c
+// prog-value: 21

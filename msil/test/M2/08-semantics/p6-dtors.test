@@ -1,0 +1,27 @@
+# Matrix case p6-dtors: destructors are a named diagnostic, not a crash at exit.
+# recon/p2/judge-c-fidelity-files/probes/p6a.c and p6b.c with their
+# destructors of priority 150 and 120: natively the Linux oracle prints BCDM
+# (its _start runs no .fini_array) and Windows faults at exit (J9), so there is
+# no transcript. Global destructors need phase 3 (D26), and under LTO the
+# merged module's llvm.global_dtors is the backend's error, which msil-ld
+# prints, for each destructor; the link fails with exit status 1. A
+# transcript comes with P3-A. Plan 5.9.16 row p6-dtors (M14 lto, M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p6a.c %t/p6b.c
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# LTO-DAG: msil-ld: error: {{.*}}global destructor @d150 is not supported for MSIL yet
+# LTO-DAG: msil-ld: error: {{.*}}global destructor @d120 is not supported for MSIL yet
+# LTO:     clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- p6a.c
+/* p6a.c: constructors and destructors with priorities across objects (representation) */
+int putchar(int);
+__attribute__((constructor(150))) static void c150(void) { putchar('C'); }
+__attribute__((destructor(150))) static void d150(void) { putchar('c'); }
+int main(void) { putchar('M'); return 0; }
+#--- p6b.c
+/* p6b.c */
+int putchar(int);
+__attribute__((constructor(120))) static void c120(void) { putchar('B'); }
+__attribute__((destructor(120))) static void d120(void) { putchar('b'); }
+__attribute__((constructor)) static void cdef(void) { putchar('D'); }

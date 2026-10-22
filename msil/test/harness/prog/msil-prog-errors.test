@@ -1,0 +1,74 @@
+# msil-prog.py's usage and configuration errors: exit status 2 and a message
+# that names the problem, before any command runs (plan 5.12.4; M14):
+# (1) --pipeline obj and (2) --link-output pe need M20's CIL objects and PE
+#     writer;
+# (3) a source that does not exist;
+# (4) a --workdir that holds a source (the build empties it first);
+# (5) bad --archives specifications: no '=', a bad name, a name given twice,
+#     an empty source;
+# (6) E7 options without all three of --ld-lld, --linux-sysroot and --start
+#     (empty ones cancel those of %msil_prog_build under the WSL runner), a
+#     sysroot without the E7 libraries, and the E7 recipe for a triple it
+#     does not build;
+# (7) no --src; (8) a level that does not exist; (9) MSIL mode without
+#     --ilasm; (10) --also-il in native mode.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: mkdir -p %t/w
+
+# (1), (2)
+# RUN: %{harness_check} exits 2 %msil_prog_build --pipeline obj --level O2 --workdir %t/w --src %t/main.c > %t/1.log 2>&1
+# RUN: %{harness_check} contains %t/1.log "^msil-prog: error: --pipeline obj needs CIL objects and msil-ld's PE writer \(plan M20\); use --pipeline lto$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --link-output pe --level O2 --workdir %t/w --src %t/main.c > %t/2.log 2>&1
+# RUN: %{harness_check} contains %t/2.log "^msil-prog: error: --link-output pe needs msil-ld's PE writer \(plan M20\); use --link-output il$"
+
+# (3)
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/w --src %t/main.c %t/missing.c > %t/3.log 2>&1
+# RUN: %{harness_check} contains %t/3.log "^msil-prog: error: source \S*missing\.c: no such file$"
+
+# (4)
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t --src %t/main.c > %t.4.log 2>&1
+# RUN: %{harness_check} contains %t.4.log "^msil-prog: error: --workdir \S+ holds the source \S*main\.c; it is emptied before the build$"
+# RUN: %{harness_check} contains %t/main.c "prog-value"
+
+# (5)
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/w --src %t/main.c --archives='%t/main.c' > %t/5a.log 2>&1
+# RUN: %{harness_check} contains %t/5a.log "^msil-prog: error: --archives: '\S*main\.c' is not NAME=SRC\[,SRC\.\.\.\]$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/w --src %t/main.c --archives='a/b=%t/main.c' > %t/5b.log 2>&1
+# RUN: %{harness_check} contains %t/5b.log "^msil-prog: error: --archives: bad archive name 'a/b'$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/w --src %t/main.c --archives='x=%t/main.c;x=%t/main.c' > %t/5c.log 2>&1
+# RUN: %{harness_check} contains %t/5c.log "^msil-prog: error: --archives: archive x is named twice$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/w --src %t/main.c --archives='x=%t/main.c,' > %t/5d.log 2>&1
+# RUN: %{harness_check} contains %t/5d.log "^msil-prog: error: --archives: archive x has an empty source$"
+
+# (6)
+# RUN: %{harness_check} exits 2 %msil_prog_build --mode native --ld-lld=%t/main.c --linux-sysroot= --start= --level O2 --workdir %t/w --src %t/main.c > %t/6a.log 2>&1
+# RUN: %{harness_check} contains %t/6a.log "^msil-prog: error: the E7 oracle needs all of --ld-lld, --linux-sysroot and --start$"
+# RUN: mkdir -p %t/sysroot/usr/lib/x86_64-linux-gnu
+# RUN: %{harness_check} write %t/sysroot/usr/lib/x86_64-linux-gnu/libm.so.6
+# RUN: %{harness_check} write %t/sysroot/usr/lib/x86_64-linux-gnu/libc.so.6
+# RUN: %{harness_check} exits 2 %msil_prog_build --mode native --triple x86_64-unknown-linux-gnu-msil --ld-lld=%t/main.c --linux-sysroot=%t/sysroot --start=%t/main.c --level O2 --workdir %t/w --src %t/main.c > %t/6b.log 2>&1
+# RUN: %{harness_check} contains %t/6b.log "^msil-prog: error: --linux-sysroot \S*sysroot has no libgcc_s\.so\.1 in usr/lib/x86_64-linux-gnu \(run msil/utils/make-linux-sysroot\.py\)$"
+# RUN: %{harness_check} write %t/sysroot/usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+# RUN: %{harness_check} exits 2 %msil_prog_build --mode native --triple x86_64-pc-windows-msvc-msil --ld-lld=%t/main.c --linux-sysroot=%t/sysroot --start=%t/main.c --level O2 --workdir %t/w --src %t/main.c > %t/6c.log 2>&1
+# RUN: %{harness_check} contains %t/6c.log "^msil-prog: error: the E7 Linux oracle builds x86_64-unknown-linux-gnu only, not x86_64-pc-windows-msvc$"
+
+# (7), (8)
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/w > %t/7.log 2>&1
+# RUN: %{harness_check} contains %t/7.log "^msil-prog: error: no --src$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O4 --workdir %t/w --src %t/main.c > %t/8.log 2>&1
+# RUN: %{harness_check} contains %t/8.log "error: --level O4: use one of O0, O1, O2, O3, Os, Oz$"
+
+# (9), (10)
+# RUN: %{harness_check} exits 2 %msil_prog_build --ilasm= --level O2 --workdir %t/w --src %t/main.c > %t/9.log 2>&1
+# RUN: %{harness_check} contains %t/9.log "^msil-prog: error: --ilasm is empty$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --mode native --also-il %t/x.il --level O2 --workdir %t/w --src %t/main.c > %t/10.log 2>&1
+# RUN: %{harness_check} contains %t/10.log "^msil-prog: error: --also-il is an MSIL-mode option$"
+
+# No error ran a command.
+# RUN: %{harness_check} lacks %t/1.log "^msil-prog: (?!error: )"
+# RUN: %{harness_check} lacks %t/3.log "^msil-prog: (?!error: )"
+# RUN: %{harness_check} lacks %t/6c.log "^msil-prog: (?!error: )"
+
+#--- main.c
+// prog-value: 1

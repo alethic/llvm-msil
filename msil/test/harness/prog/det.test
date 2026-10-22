@@ -1,0 +1,52 @@
+# %{msil_det} and msil-prog.py --det (plan 5.12.4, 3.7 of recon tests-p2):
+# the program is built twice, in <workdir>/a and <workdir>/b, with the same
+# relative command lines and -fdebug-compilation-dir=. on every compile, and
+# every file of the two build directories is compared byte for byte except
+# ilasm's image prog.exe (ilasm stamps it):
+# (1) a deterministic build passes and says how many files it compared;
+# (2) a source whose object records the build directory (the stand-in's
+#     'prog-plant: object') fails with status 1 and names the object, and
+#     only it;
+# (3) a source whose linked text records it ('prog-plant: il') fails naming
+#     prog.il, and only it;
+# (4) --det has no native mode (a usage error, status 2).
+# --out and --also-il receive build a's image and text.
+
+# RUN: rm -rf %t && split-file %s %t
+
+# (1)
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# REDEFINE: %{msil_archives} = one=%t/a1.c
+# RUN: %{msil_det} --out %t/det.exe --also-il %t/det.il > %t/1.log 2>&1
+# RUN: %{harness_check} contains %t/1.log "^msil-prog: --det: the 6 files of builds a and b are identical \(ilasm's image prog\.exe not compared\)$"
+# RUN: %{harness_check} contains %t/1.log "^msil-prog: .* -O2 -flto -fdebug-compilation-dir=\. -c \.\./\.\./\S+/main\.c -o obj/main\.o$" "^msil-prog: .* -O2 -flto -fdebug-compilation-dir=\. -c \.\./\.\./\S+/a1\.c -o ar/one/a1\.o$" "-exe -output=\S+det\.d.a.prog\.exe " "-exe -output=\S+det\.d.b.prog\.exe "
+# RUN: %{harness_check} contains %t/det.il "ldc\.i4 7$"
+# RUN: %{harness_check} lacks %t/1.log "differs" "msil-prog: error"
+
+# (2)
+# REDEFINE: %{msil_srcs} = %t/main.c %t/plant-obj.c
+# REDEFINE: %{msil_archives} =
+# RUN: %{harness_check} exits 1 %{msil_det} > %t/2.log 2>&1
+# RUN: %{harness_check} contains %t/2.log "^msil-prog: --det: obj/plant-obj\.o differs between a and b \(\d+ and \d+ bytes, first difference at offset \d+\)$" "^msil-prog: error: --det: builds a and b differ \(see above\)$"
+# RUN: %{harness_check} lacks %t/2.log "main\.o differs" "prog\.il differs" "identical"
+
+# (3)
+# REDEFINE: %{msil_srcs} = %t/main.c %t/plant-il.c
+# RUN: %{harness_check} exits 1 %{msil_det} > %t/3.log 2>&1
+# RUN: %{harness_check} contains %t/3.log "^msil-prog: --det: prog\.il differs between a and b " "^msil-prog: error: --det: builds a and b differ"
+# RUN: %{harness_check} lacks %t/3.log "\.o differs" "\.a differs"
+
+# (4)
+# RUN: %{harness_check} exits 2 %{msil_det} --mode native > %t/4.log 2>&1
+# RUN: %{harness_check} contains %t/4.log "^msil-prog: error: --det compares MSIL builds; it has no native mode$"
+
+#--- main.c
+// prog-value: 1
+#--- util.c
+// prog-value: 2
+#--- a1.c
+// prog-value: 4
+#--- plant-obj.c
+// prog-plant: object
+#--- plant-il.c
+// prog-plant: il

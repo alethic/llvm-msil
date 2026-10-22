@@ -1,0 +1,28 @@
+# Archive members are linked only when they resolve an undefined symbol.
+# libhelp.a holds used.c, which defines helper (undefined in main.c), and
+# unused.c, which resolves nothing that is still undefined: its definition of
+# value duplicates main.c's, and its constructor would print. Only used.c is
+# extracted, so there is no duplicate symbol and the constructor never runs
+# (plan 5.9.5: a Lazy symbol is extracted by a GLOBAL reference; a defined
+# symbol is never replaced by a member). The prototype of recon tests-p2 4.3,
+# with the archive built by the harness (%{msil_archives}) so that the native
+# oracle links the same archive. Plan 5.12.5 (M14 lto; M20 obj).
+# REQUIRES: msil-ar
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_archives} = help=%t/used.c,%t/unused.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+int helper(void);
+int value(void) { return 7; }
+int main(void) {
+  put_i64(helper());
+  return value();
+}
+#--- used.c
+int helper(void) { return 100; }
+#--- unused.c
+int puts(const char *);
+int value(void) { return 99; }
+__attribute__((constructor)) static void ctor(void) { puts("unused constructor ran"); }

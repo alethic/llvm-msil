@@ -1,0 +1,117 @@
+## Runtime library calls defined in bitcode archive members
+## (ImplementationPlan.md 5.9.13; lld/wasm/Driver.cpp's handleLibcall): the
+## code generator may call a runtime library function that no input
+## references yet, so before LTO msil-ld extracts every lazy bitcode member
+## that defines a symbol of lto::LTO::getRuntimeLibcallSymbols for the
+## triple, as lld does. --why-extract names the reference '<libcall>'. A
+## member that defines no such symbol stays lazy, in an archive and between
+## --start-lib and --end-lib alike. memcpy is a runtime library call on every
+## x86_64 triple.
+## The other direction (5.9.2's setBitcodeLibFuncs, as lld passes it): the
+## library functions that only unextracted lazy bitcode members define are
+## given to LTO, which then does not call them, because nothing can extract a
+## member after LTO. The files of printf/ port lld/test/ELF/lto/
+## libcall-archive-bitcode.test: main calls printf("foo\n"), which LTO's
+## optimizer turns into puts("foo") only when puts.o is a regular input; with
+## puts.o lazy, the call stays a variadic call, an error of the backend until
+## phase 3 (D19). (A dropped setBitcodeLibFuncs would rewrite the call there
+## too and link it as the D14 P/Invoke of puts.)
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as memcpy.ll -o memcpy.o
+# RUN: llvm-as other.ll -o other.o
+# RUN: llvm-ar rcs libc.a memcpy.o other.o
+
+# DEFINE: %{vararg} = --check-prefix=VARARG --implicit-check-not=error: --implicit-check-not=puts \
+# DEFINE:   --implicit-check-not="PLEASE submit"
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o libc.a -o lib.il --why-extract=lib.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WHY --match-full-lines --strict-whitespace --input-file=lib.why
+# RUN: FileCheck %s --check-prefix=IL --implicit-check-not=not_a_libcall --input-file=lib.il
+
+#      WHY:reference	extracted	symbol
+# WHY-NEXT:<libcall>	libc.a(memcpy.o)	memcpy
+#  WHY-NOT:{{.}}
+
+# IL:      {{^}}.method {{.*}}'memcpy'(native int, native int, native int) cil managed{{$}}
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o --start-lib memcpy.o other.o --end-lib -o sl.il \
+# RUN:   --why-extract=sl.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WHY-SL --match-full-lines --strict-whitespace --input-file=sl.why
+# RUN: FileCheck %s --check-prefix=IL --implicit-check-not=not_a_libcall --input-file=sl.il
+
+#      WHY-SL:reference	extracted	symbol
+# WHY-SL-NEXT:<libcall>	memcpy.o	memcpy
+#  WHY-SL-NOT:{{.}}
+
+## printf -> puts only when puts.o is linked: not from an archive member or
+## between --start-lib and --end-lib (at the default --lto-O2, where the
+## rewrite runs).
+# RUN: cd %t/printf
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as puts.ll -o puts.o
+# RUN: llvm-ar rcs libc.a puts.o
+# RUN: not msil-ld --lto-emit-asm main.o libc.a -o x.il 2>&1 | FileCheck %s %{vararg}
+# RUN: not msil-ld --lto-emit-asm main.o --start-lib puts.o --end-lib -o x.il 2>&1 | FileCheck %s %{vararg}
+# RUN: msil-ld --lto-emit-asm main.o puts.o -o puts.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=PUTS --implicit-check-not=pinvokeimpl --implicit-check-not=printf \
+# RUN:   --input-file=puts.il
+
+# VARARG: {{^}}msil-ld: error: <unknown>:0:0: in function main i32 (): calls to variadic functions are not supported for MSIL yet{{$}}
+
+# PUTS-LABEL: {{^}}.method public static int32 'main'() cil managed{{$}}
+# PUTS:       call int32 'puts'(native int)
+# PUTS-LABEL: {{^}}.method {{.*}}static int32 'puts'(native int) cil managed{{$}}
+# PUTS:       {{^}}  ldc.i4.7{{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- memcpy.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define ptr @memcpy(ptr %d, ptr %s, i64 %n) {
+  ret ptr %d
+}
+
+#--- other.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @not_a_libcall() {
+  ret i32 1
+}
+
+#--- printf/main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@str = constant [5 x i8] c"foo\0A\00"
+
+define i32 @main() {
+  %call = call i32 (ptr, ...) @printf(ptr @str)
+  ret i32 0
+}
+
+declare i32 @printf(ptr, ...)
+
+#--- printf/puts.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; The volatile store keeps main's call: without a side effect puts would be
+;; readnone, and its unused result would let the optimizer delete the call
+;; (the upstream test uses an empty asm statement for this).
+@puts_calls = global i32 0, align 4
+
+define i32 @puts(ptr nocapture readonly %0) noinline {
+  store volatile i32 1, ptr @puts_calls, align 4
+  ret i32 7
+}

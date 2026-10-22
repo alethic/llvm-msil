@@ -1,0 +1,19 @@
+# Matrix case p9-weak-common: a common definition beats a weak definition (native 1).
+# recon/p2/judge-c-fidelity-files/probes/p9a.c, linked first, has a weak
+# definition of cw (5) and reads it; p9b.c has a tentative definition of cw,
+# common through __attribute__((common)) instead of -fcommon. lld/ELF (plan
+# 5.9.5: Defined WEAK is replaced by the Common) and lld-link both keep the
+# common, so get() reads 0 and main returns 1; the weak value would give 51.
+# Plan 5.9.16 row p9-weak-common, first order (M14, M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p9a.c %t/p9b.c
+# RUN: %{msil_prog}
+#--- p9a.c
+/* p9a.c: a weak definition ... */
+__attribute__((weak)) int cw = 5;
+int get(void) { return cw; }
+#--- p9b.c
+/* p9b.c: ... and a common (tentative, __attribute__((common))) definition of the same name */
+int cw __attribute__((common));
+int get(void);
+int main(void) { return get() * 10 + 1; }   /* lld/ELF: the common wins, 1; the weak value would give 51 */

@@ -1,0 +1,26 @@
+# Constructors with priorities in two translation units run in the native order.
+# a.c and b.c each define constructors with distinct priorities (101 to 300),
+# one with priority 400 and one without a priority. They must run as natively:
+# by priority across both objects, and for an equal priority (400, and the
+# default) in link order, a.c before b.c; then main. Every constructor prints,
+# so none is evaluated at compile time. Recon tests-p2 3.1, plan 5.12.5 (M14
+# lto; M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+#--- a.c
+#include "msil_test.h"
+__attribute__((constructor(300))) static void a300(void) { puts("a300"); }
+__attribute__((constructor)) static void a_default(void) { puts("a default"); }
+__attribute__((constructor(400))) static void a400(void) { puts("a400"); }
+__attribute__((constructor(101))) static void a101(void) { puts("a101"); }
+int main(void) {
+  puts("main");
+  return 0;
+}
+#--- b.c
+int puts(const char *);
+__attribute__((constructor)) static void b_default(void) { puts("b default"); }
+__attribute__((constructor(250))) static void b250(void) { puts("b250"); }
+__attribute__((constructor(400))) void b400(void) { puts("b400"); }
+__attribute__((constructor(200))) void b200(void) { puts("b200"); }

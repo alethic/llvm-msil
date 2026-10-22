@@ -1,0 +1,29 @@
+# Matrix case p1-weak-alias, other order: the strong definition comes first (native 144).
+# The probes of p1-weak-alias with p1b.c, which has the strong hook, linked
+# before p1a.c, whose weak alias hook must not replace it (plan 5.9.5: a
+# GLOBAL definition stays). recon/p2/judge-c-fidelity-files/probes/p1a.c and
+# p1b.c. Plan 5.9.16 row p1-weak-alias, both orders (M14, M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p1b.c %t/p1a.c
+# RUN: %{msil_prog}
+#--- p1a.c
+/* p1a.c: musl-style weak alias overridden by a strong definition in p1b.c,
+   plus a data alias whose identity is checked. */
+static int dummy_hook(void) { return 1; }
+extern int hook(void) __attribute__((weak, alias("dummy_hook")));
+int base_arr[4] = { 1, 2, 3, 4 };
+extern int arr_alias[4] __attribute__((alias("base_arr")));
+int other_hook(void);                       /* p1b.c or p1c.c */
+int *volatile pa = arr_alias, *volatile pb = base_arr;   /* address identity at run time */
+int main(void) {
+  int r = hook() * 10;                      /* strong hook in p1b.c: 40; weak alias alone: 10 */
+  r += (pa == pb) ? 1 : 0;                  /* data alias identity: 1 */
+  r += arr_alias[2];                        /* 3 */
+  r += other_hook();                        /* 100 */
+  return r;                                 /* with p1b.c: 144; with p1c.c: 114 */
+}
+#--- p1b.c
+/* p1b.c: the strong definition that must beat p1a.c's weak alias */
+int hook(void) { return 4; }
+extern int base_arr[4];
+int other_hook(void) { return base_arr[0] * 100; }

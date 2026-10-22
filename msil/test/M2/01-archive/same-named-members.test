@@ -1,0 +1,39 @@
+# Two archives whose members have the same name (util.o) are both linked.
+# libone.a and libtwo.a each hold a util.c (from different directories), with
+# different external functions and data, a static helper and a static
+# variable of the same name; libone.a also holds extra.c. main.c needs symbols
+# from both util.o members, which must stay distinct inputs (the tinf/zlib
+# case of recon tests-p2 3.2). Plan 5.12.5 (M14 lto; M20 obj).
+# REQUIRES: msil-ar
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_archives} = one=%t/one/util.c,%t/one/extra.c;two=%t/two/util.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+int one_value(void);
+int two_value(void);
+int one_extra(void);
+extern int one_data, two_data;
+int main(void) {
+  put_kv("one_value", one_value());
+  put_kv("two_value", two_value());
+  put_kv("one_value", one_value());
+  put_kv("two_value", two_value());
+  put_kv("one_extra", one_extra());
+  put_kv("data", one_data * 100 + two_data);
+  return one_value() + two_value();
+}
+#--- one/util.c
+static int state = 10;
+__attribute__((noinline)) static int helper(void) { return state++; }
+int one_data = 1;
+int one_value(void) { return helper(); }
+#--- one/extra.c
+int one_value(void);
+int one_extra(void) { return one_value() * 1000; }
+#--- two/util.c
+static int state = 50;
+__attribute__((noinline)) static int helper(void) { return state--; }
+int two_data = 2;
+int two_value(void) { return helper(); }

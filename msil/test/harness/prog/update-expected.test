@@ -1,0 +1,54 @@
+# update-expected.py and %{msil_prog} tests (plan 5.12.4, 5.12.5; M14). On a
+# copy of Inputs/ue, with the stand-ins of lit.local.cfg as --clang and --ar
+# and the tree's split-file:
+# (1) a write run builds two.test natively as the native-oracle leg of
+#     %{msil_prog} builds it (its split-file parts in a temporary directory,
+#     %{msil_srcs} continued over two redefinition lines, %{msil_stock_srcs},
+#     %{msil_archives} with a member named through %S; %{msil_libs} is the
+#     MSIL link's) and writes two.expected; it skips the tests whose only
+#     composite is %{msil_prog_fail_<L>} or %{msil_det} and the one without a
+#     composite, writes no .expected file for them, and follows the required
+#     features that name the oracle's triple (msil-triple-windows on a Windows
+#     host, msil-triple-linux on a Linux one), while features it does not
+#     decide count as present when required and absent when unsupported;
+# (2) --check passes against what it wrote;
+# (3) --check of a wrong two.expected fails with status 1 and the diff.
+# The stand-in's native program is a .NET Framework executable for a Windows
+# triple and a shell script for a Linux one, so this runs on a Windows host
+# with the .NET Framework and on a Linux host.
+# REQUIRES: (system-windows && msil-netfx) || system-linux
+
+# RUN: rm -rf %t.d && mkdir -p %t.d
+# RUN: cat %S/Inputs/ue/two.test > %t.d/two.test
+# RUN: cat %S/Inputs/ue/two-a2.c > %t.d/two-a2.c
+# RUN: cat %S/Inputs/ue/fail-only.test > %t.d/fail-only.test
+# RUN: cat %S/Inputs/ue/det-only.test > %t.d/det-only.test
+# RUN: cat %S/Inputs/ue/windows-only.test > %t.d/windows-only.test
+# RUN: cat %S/Inputs/ue/linux-only.test > %t.d/linux-only.test
+# RUN: cat %S/Inputs/ue/unknown-features.test > %t.d/unknown-features.test
+# RUN: cat %S/Inputs/ue/no-composite.test > %t.d/no-composite.test
+
+# (1)
+# RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none %t.d > %t.1.log 2>&1
+# RUN: %{harness_check} contains %t.1.log "^wrote \S+two\.expected$" "^skip \(fail-only: %\{msil_prog_fail_<L>\}\): \S+fail-only\.test$" "^skip \(det: %\{msil_det\}\): \S+det-only\.test$" "^skip \(no %\{msil_c\}/%\{msil_ll\}/%\{msil_prog\} RUN line\): \S+no-composite\.test$" "^wrote \S+unknown-features\.expected$"
+# RUN: %{harness_check} equals %t.d/two.expected "[exit 31]"
+# RUN: %{harness_check} equals %t.d/unknown-features.expected "[exit 23]"
+# RUN: %{harness_check} missing %t.d/fail-only.expected
+# RUN: %{harness_check} missing %t.d/det-only.expected
+# RUN: %{harness_check} missing %t.d/no-composite.expected
+# RUN: %if system-windows %{ %{harness_check} contains %t.1.log "^wrote \S+windows-only\.expected$" "^skip \(REQUIRES: msil-triple-linux, for x86_64-pc-windows-msvc\): \S+linux-only\.test$" %}
+# RUN: %if system-windows %{ %{harness_check} equals %t.d/windows-only.expected "[exit 21]" %}
+# RUN: %if system-windows %{ %{harness_check} missing %t.d/linux-only.expected %}
+# RUN: %if system-linux %{ %{harness_check} contains %t.1.log "^wrote \S+linux-only\.expected$" "^skip \(REQUIRES: msil-triple-windows, for x86_64-unknown-linux-gnu\): \S+windows-only\.test$" %}
+# RUN: %if system-linux %{ %{harness_check} equals %t.d/linux-only.expected "[exit 22]" %}
+# RUN: %if system-linux %{ %{harness_check} missing %t.d/windows-only.expected %}
+# RUN: %{harness_check} lacks %t.1.log "^(FAIL|MISMATCH|MISSING|REFUSED)" "^msil-prog: "
+
+# (2)
+# RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none --check %t.d > %t.2.log 2>&1
+# RUN: %{harness_check} contains %t.2.log "^ok: \S+two\.test$" "^ok: \S+unknown-features\.test$"
+
+# (3)
+# RUN: %{harness_check} write %t.d/two.expected "[exit 99]"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none --check %t.d/two.test > %t.3.log 2>&1
+# RUN: %{harness_check} contains %t.3.log "^MISMATCH: \S+two\.test$" "^--- \S+two\.expected$" "^-\[exit 99\]$" "^\+\[exit 31\]$"

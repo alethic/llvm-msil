@@ -1,0 +1,35 @@
+# The entry point main is defined in the last of three translation units.
+# first.c and second.c come first on the link line and define the functions,
+# the data and a constructor that main.c uses; the program's entry point is
+# still main.c's main (D27), and second.c's constructor runs before it.
+# Recon tests-p2 3.1, plan 5.12.5 (M14 lto; M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/first.c %t/second.c %t/main.c
+# RUN: %{msil_prog}
+#--- first.c
+int puts(const char *);
+int first_value = 11;
+int first_fn(int x) {
+  puts("first_fn");
+  return x + first_value;
+}
+#--- second.c
+int puts(const char *);
+int first_fn(int);
+extern int first_value;
+int second_ready;
+__attribute__((constructor)) static void second_init(void) {
+  puts("second_init");
+  second_ready = first_value;
+}
+int second_fn(int x) { return first_fn(x) * 2 + second_ready; }
+#--- main.c
+#include "msil_test.h"
+int second_fn(int);
+extern int second_ready;
+int main(void) {
+  puts("main");
+  put_i64(second_ready);
+  put_i64(second_fn(4));
+  return 7;
+}

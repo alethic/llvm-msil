@@ -1,0 +1,51 @@
+# C99 inline functions and identical string literals in several translation units.
+# inl.h has an inline definition of clamp_add (an inline definition only, C11
+# 6.7.4p7); a.c also declares it extern, so a.c provides the one external
+# definition, which b.c's calls (always at -O0) and the function pointers of
+# a.c and b.c use, so the two pointers are equal. a.c, b.c and c.c all return
+# or print the same string literal, which windows-msvc emits as a linkonce_odr
+# COMDAT '??_C@...' in each object: the link keeps one copy (the first, plan
+# 5.9.5) and every TU's references bind to it (D26).
+# Recon tests-p2 3.1, plan 5.12.5 (M14 lto; M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c %t/c.c
+# RUN: %{msil_prog}
+#--- inl.h
+inline int clamp_add(int a, int b) {
+  int s = a + b;
+  return s > 100 ? 100 : s;
+}
+static inline const char *banner(void) { return "shared literal"; }
+#--- a.c
+#include "msil_test.h"
+#include "inl.h"
+// The external definition of clamp_add is in this TU.
+extern inline int clamp_add(int a, int b);
+int b_sum(void);
+const char *b_text(void);
+const char *c_text(void);
+int (*b_clamp(void))(int, int);
+
+int main(void) {
+  put_i64(clamp_add(30, 40));
+  put_i64(clamp_add(90, 40));
+  put_i64(b_sum());
+  puts(banner());
+  puts(b_text());
+  puts(c_text());
+  puts("shared literal");
+  int (*fp)(int, int) = clamp_add;
+  put_i64(fp(1, 2));
+  put_i64(fp == b_clamp());
+  return 0;
+}
+#--- b.c
+#include "inl.h"
+int b_sum(void) {
+  int (*fp)(int, int) = clamp_add;
+  return clamp_add(60, 70) + fp(5, 6);
+}
+const char *b_text(void) { return banner(); }
+int (*b_clamp(void))(int, int) { return clamp_add; }
+#--- c.c
+const char *c_text(void) { return "shared literal"; }

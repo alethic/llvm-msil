@@ -1,0 +1,40 @@
+# Archive members that define only data are extracted for data references.
+# libtables.a holds squares.c and names.c, which define only data, describe.c,
+# a function that reads names.c's table, and unused.c. main.c reads squares
+# (extracting squares.c) and calls describe (extracting describe.c, whose
+# reference extracts names.c in turn); unused.c is not linked, so its
+# constructor never prints. Recon tests-p2 3.2, plan 5.12.5 (M14 lto; M20 obj).
+# REQUIRES: msil-ar
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_archives} = tables=%t/squares.c,%t/describe.c,%t/names.c,%t/unused.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+extern const int squares[10];
+extern int square_reads;
+const char *describe(int i);
+int main(void) {
+  int s = 0;
+  for (int i = 0; i < 10; ++i)
+    s += squares[i];
+  put_kv("sum of squares", s);
+  square_reads += 3;
+  put_kv("square_reads", square_reads);
+  for (int i = 0; i < 4; ++i)
+    put_str(describe(i));
+  return s & 0xff;
+}
+#--- squares.c
+const int squares[10] = {0, 1, 4, 9, 16, 25, 36, 49, 64, 81};
+int square_reads = 1;
+#--- names.c
+static const char zero[] = "zero";
+const char *const names[4] = {zero, "one", "two", "three"};
+#--- describe.c
+extern const char *const names[4];
+const char *describe(int i) { return names[i & 3]; }
+#--- unused.c
+int puts(const char *);
+int unused_table[3] = {7, 8, 9};
+__attribute__((constructor)) static void unused_ctor(void) { puts("unused member linked"); }

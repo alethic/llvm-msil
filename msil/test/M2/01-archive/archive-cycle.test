@@ -1,0 +1,36 @@
+# Two archives that depend on each other resolve without a group or a repeated -l.
+# main.c calls a_entry in libalpha.a (a1.c), which calls b_fn in libbeta.a
+# (b1.c), which calls a_helper, defined by another member of libalpha.a
+# (a2.c) that was not extracted when libalpha.a was read. lld's rule, which
+# msil-ld keeps (plan 5.9.5): lazy symbols stay in the symbol table, so a
+# later archive's reference still extracts a member of an earlier archive (GNU
+# ld would need --start-group). The native oracle links with lld as well
+# (msil-prog.py). Recon tests-p2 3.2, plan 5.12.5 (M14 lto; M20 obj).
+# REQUIRES: msil-ar
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_archives} = alpha=%t/a1.c,%t/a2.c,%t/a3.c;beta=%t/b1.c,%t/b2.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+int a_entry(int);
+int main(void) {
+  put_i64(a_entry(4));
+  return a_entry(1);
+}
+#--- a1.c
+int b_fn(int);
+int a_entry(int x) { return b_fn(x) + 1; }
+#--- a2.c
+int a_helper(int x) { return x * 10; }
+#--- a3.c
+int puts(const char *);
+int a_unused(void) { return 3; }
+__attribute__((constructor)) static void a3_ctor(void) { puts("a3 linked"); }
+#--- b1.c
+int a_helper(int);
+int b_fn(int x) { return a_helper(x) + 2; }
+#--- b2.c
+int puts(const char *);
+int b_unused(void) { return 4; }
+__attribute__((constructor)) static void b2_ctor(void) { puts("b2 linked"); }

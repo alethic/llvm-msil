@@ -1,0 +1,45 @@
+# Two translation units: calls, function pointers and data relocations across files.
+# main.c calls util.c's functions, calls a static function of util.c through
+# the pointer util.c returns, prints util.c's table of string pointers (to
+# static arrays and to a literal) and reads its int; util.c's data holds
+# pointers to main.c's function and variable (relocations in both directions),
+# and main.c writes through one of them. The prototype of recon tests-p2 4.3
+# (plan 5.12.5), linked by msil-ld (M14 lto; M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+extern const char *const names[];
+extern int count;
+extern int (*const ops[])(int);
+extern int *const main_counter_ptr;
+int twice(int);
+int (*get_op(void))(int);
+
+int main_counter = 40;
+int add_main(int x) { return x + main_counter; }
+
+int main(void) {
+  for (int i = 0; i < count; ++i)
+    puts(names[i]);
+  put_i64(twice(21));
+  put_i64(get_op()(5));
+  for (int i = 0; i < 3; ++i)
+    put_i64(ops[i](i + 1));
+  *main_counter_ptr += 2;
+  put_i64(main_counter);
+  put_i64(add_main(0));
+  return count;
+}
+#--- util.c
+int add_main(int);
+extern int main_counter;
+static const char a[] = "alpha", b[] = "beta";
+const char *const names[] = {a, b, "gamma"};
+int count = 3;
+int twice(int x) { return 2 * x; }
+static int square(int x) { return x * x; }
+int (*get_op(void))(int) { return square; }
+int (*const ops[])(int) = {twice, square, add_main};
+int *const main_counter_ptr = &main_counter;

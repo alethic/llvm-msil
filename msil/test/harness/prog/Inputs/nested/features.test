@@ -1,0 +1,10 @@
+# Run in a nested lit by ../../pipelines.test and listed by
+# ../../lit-config.test: it prints the pipeline features of the
+# configuration (plan 5.12.2).
+# REQUIRES: msil-prog-pipeline=lto, msil-link-output=il
+# RUN: %if msil-pipeline=asm %{ echo feature msil-pipeline=asm %}
+# RUN: %if msil-pipeline=lto %{ echo feature msil-pipeline=lto %}
+# RUN: %if msil-prog-pipeline=lto %{ echo feature msil-prog-pipeline=lto %}
+# RUN: %if msil-link-output=il %{ echo feature msil-link-output=il %}
+# RUN: %if msil-ld %{ echo feature msil-ld %}
+# RUN: %if msil-ar %{ echo feature msil-ar %}

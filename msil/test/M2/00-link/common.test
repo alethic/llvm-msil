@@ -1,0 +1,49 @@
+# Tentative definitions with __attribute__((common)) merged across translation units.
+# a.c and b.c both have common definitions of shared_count and shared_table
+# (the attribute instead of -fcommon, which the native oracle would not get):
+# the link makes one object of each, so writes in b.c are seen in a.c and the
+# addresses agree. a.c's common 'configured' meets c.c's initialized
+# definition, which wins with its value (plan 5.9.5: Common is replaced by a
+# non-WEAK definition); the common definitions have equal sizes (different
+# sizes, 'common-largest', are an M20 row of 5.9.16).
+# Recon tests-p2 3.1, plan 5.12.5 (M14 lto; M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c %t/c.c
+# RUN: %{msil_prog}
+#--- a.c
+#include "msil_test.h"
+int shared_count __attribute__((common));
+int shared_table[4] __attribute__((common));
+int configured __attribute__((common));
+void b_bump(int n);
+int *b_count_addr(void);
+int *b_table_addr(void);
+int configured_twice(void);
+
+int main(void) {
+  put_kv("shared_count", shared_count);
+  shared_count = 1;
+  b_bump(5);
+  put_kv("shared_count", shared_count);
+  for (int i = 0; i < 4; ++i)
+    put_i64(shared_table[i]);
+  put_kv("configured", configured);
+  configured += 1;
+  put_kv("configured_twice", configured_twice());
+  put_kv("same count", &shared_count == b_count_addr());
+  put_kv("same table", shared_table == b_table_addr());
+  return shared_count;
+}
+#--- b.c
+int shared_count __attribute__((common));
+int shared_table[4] __attribute__((common));
+void b_bump(int n) {
+  shared_count += n;
+  shared_table[2] = n;
+  shared_table[3] = shared_count;
+}
+int *b_count_addr(void) { return &shared_count; }
+int *b_table_addr(void) { return shared_table; }
+#--- c.c
+int configured = 9;
+int configured_twice(void) { return configured * 2; }

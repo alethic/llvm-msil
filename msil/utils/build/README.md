@@ -80,12 +80,16 @@ order, then the targets named on the command line (one already on the list is no
 the targets may then be left out. That file is the one build-target list (plan 5.6.11): gate
 step G1 is `msil-build.ps1 -Standard`, `msil/utils/ci/build.ps1` runs the same command, and
 `build.sh` reads the same file. It has one target per line, `#` comments and blank lines; a line
-with two names is an error. Without `-Standard` the script builds exactly the targets it is given
-and needs at least one, as before.
+with two names is an error. Among its targets are `lld`, which also makes `msil-ld` (lld's
+`msil` flavor, the linker clang runs for MSIL triples), and `llvm-ar` with its copies, which
+`msil/test/M2` and `lld/test/MSIL` need (M14). Without `-Standard` the script builds exactly the
+targets it is given and needs at least one, as before: after a change in `lld/MSIL` or in clang's
+MSIL toolchain, `lld clang` relinks `msil-ld` and clang.
 
 ```powershell
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard llvm-mc
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 lld clang
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 llc FileCheck
 ```
 
@@ -104,6 +108,7 @@ Runs `<build>/bin/<tool>.exe`, passing every further argument through verbatim.
 
 ```powershell
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-run.ps1 llc -mtriple=x86_64-pc-windows-msvc-msil in.ll -o -
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-run.ps1 msil-ld --version
 ```
 
 ### msil-syntax.ps1 (no lock)
@@ -119,7 +124,12 @@ before M1.0 only TUs without generated headers can be checked.
 
 ```powershell
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 -FlagsFrom llvm/lib/Target/WebAssembly/WebAssemblyInstrInfo.cpp -ExtraInclude llvm/lib/Target/MSIL,build/lib/Target/MSIL,C:/scratch/tblgen llvm/lib/Target/MSIL/MSILInstrInfo.cpp
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 lld/MSIL/SymbolTable.cpp
 ```
+
+A source file that a CMake list gained since the last configure has no entry yet and borrows the
+flags of a TU in its directory, as M14's new `lld/MSIL` files borrowed `Driver.cpp`'s before the
+gate configured them.
 
 ### msil-tblgen.ps1 (no lock)
 

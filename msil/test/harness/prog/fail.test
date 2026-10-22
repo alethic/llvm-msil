@@ -1,0 +1,39 @@
+# %{msil_prog_fail_<L>} (plan 5.12.3) is 'not' plus the build of one level,
+# for named diagnostics: it passes when the build fails, and the output that a
+# test pipes into FileCheck holds the tool's diagnostic and msil-prog.py's
+# summary of the failing step. With the stand-ins of lit.local.cfg:
+# (1) a link error ('msil-ld: error: ...') at -O0 and -O2, after the commands
+#     that ran; the link at -O2 is the one that failed;
+# (2) a compile error, which stops the build before the link;
+# (3) the build without the failing source succeeds, so 'not' fails.
+# msil-prog.py's usage errors (status 2) are in msil-prog-errors.test.
+
+# RUN: rm -rf %t && split-file %s %t
+
+# (1)
+# REDEFINE: %{msil_srcs} = %t/main.c %t/undef.c
+# RUN: %{msil_prog_fail_O0} > %t/1.O0.log 2>&1
+# RUN: %{harness_check} contains %t/1.O0.log "^msil-prog: .* -O0 -nodefaultlibs obj/main\.o obj/undef\.o -Wl,--lto-emit-asm -o prog\.il$" "^msil-ld: error: undefined symbol: nowhere$" "^msil-prog: error: the link failed \(exit status 1\)$"
+# RUN: %{msil_prog_fail_O2} > %t/1.O2.log 2>&1
+# RUN: %{harness_check} contains %t/1.O2.log "^msil-prog: .* -O2 -nodefaultlibs obj/main\.o obj/undef\.o -Wl,--lto-emit-asm -o prog\.il$" "^msil-ld: error: undefined symbol: nowhere$"
+# RUN: %{harness_check} lacks %t/1.O2.log " -exe -output=" "LLVM ERROR" "PLEASE submit"
+
+# (2)
+# REDEFINE: %{msil_srcs} = %t/main.c %t/bad.c %t/util.c
+# RUN: %{msil_prog_fail_O1} > %t/2.log 2>&1
+# RUN: %{harness_check} contains %t/2.log "bad\.c:1:1: error: expected ';' after top level declarator$" "^msil-prog: error: the compile of \S*bad\.c failed \(exit status 1\)$"
+# RUN: %{harness_check} lacks %t/2.log "util\.c" "lto-emit-asm"
+
+# (3)
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# RUN: not %{msil_prog_fail_O0} > %t/3.log 2>&1
+# RUN: %{harness_check} lacks %t/3.log "msil-prog: error"
+
+#--- main.c
+// prog-value: 1
+#--- util.c
+// prog-value: 2
+#--- undef.c
+// prog-error: link undefined symbol: nowhere
+#--- bad.c
+// prog-error: compile expected ';' after top level declarator

@@ -12,15 +12,24 @@
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List
 #
 # Legs, in order. The numbers are the gate steps of plan section 6 that run the same command:
-# 'M12 n' for the M12 gate, plain numbers for the M10 and M11 gates (steps 5-12 the same in both,
-# 20 and 21 M11's); lit-legs.sh has the Linux job's legs:
-#   net8           llc/clang FileCheck tests, harness, msil/test/M1 on .NET 8 (tiered) and on the
-#                  .NET Framework 4.8, -O0 and -O2, native oracle required (with the VS clang's
-#                  compiler-rt builtins, lit's msil_native_rtlib=auto)          (M12 9; step 5)
+# 'M14 n' for the M14 gate, 'M12 n' for the M12 gate, plain numbers for the M10 and M11 gates
+# (steps 5-12 the same in both, 20 and 21 M11's); lit-legs.sh has the Linux job's legs:
+#   net8           llc/clang FileCheck tests (lld/test/MSIL and the clang driver tests
+#                  included), harness, msil/test/M1 and msil/test/M2 on .NET 8 (tiered) and on
+#                  the .NET Framework 4.8, -O0 and -O2, native oracle required (with the VS
+#                  clang's compiler-rt builtins, lit's msil_native_rtlib=auto)
+#                                                                  (M14 11; M12 9; step 5)
 #   net10          msil/test/M1 on .NET 10                                       (M12 10; step 6)
 #   net8-tc0       msil/test/M1 on .NET 8, DOTNET_TieredCompilation=0 (optimizing JIT)  (step 7)
 #   more-levels    msil/test/M1 on .NET 8 at O1,O3,Os,Oz (O0 and O2 run in the other legs; .ll
 #                  tests run at O1 and O3 only, lit.cfg.py)                            (step 21)
+#   lto            msil/test/M1 and msil/test/M2 with msil_pipeline=lto (plan 5.12.11): every
+#                  C test of M1 as a one-source program through clang -flto -c, msil-ld
+#                  --lto-emit-asm and ilasm -exe, and M2, on .NET 8 at -O0 and -O2, native oracle
+#                  required; M1's .ll tests are filtered out (lto runs them on llc text, as
+#                  net8 does)                                                        (M14 12)
+#   det            msil/test/M2/06-det: %{msil_det}, objects, archives and --lto-emit-asm text
+#                  built twice and compared                                          (M14 13)
 #   wsl-net10      -Wsl: msil/test/M1 and msil/test/harness (the WSL runner's own checks),
 #                  x86_64-unknown-linux-gnu-msil, WSL .NET 10, E7 Linux oracle required (M12 11,
 #                  and M12 12 checks its response file and log; step 8)
@@ -31,10 +40,11 @@
 #                  step of every Phase 2 gate from M13 on; the M12 gate runs wsl-net10 instead)
 #   modern-ilasm   11-programs assembled by the .NET ilasm (win-x64), not Framework's  (step 11)
 #   roundtrip      11-programs through ildasm -> ilasm, then run (Design.md 5.5)       (M12 13)
-#   expected       update-expected.py --check msil/test/M1: .expected vs the Windows native
-#                  oracle, with the compiler-rt builtins                               (step 12)
-#   expected-linux -Wsl: update-expected.py --check --os linux msil/test/M1: the E7 Linux
-#                  oracle vs <stem>.linux.expected, else <stem>.expected               (M12 14)
+#   expected       update-expected.py --check msil/test/M1 msil/test/M2: .expected vs the Windows
+#                  native oracle, with the compiler-rt builtins (M2's %{msil_prog} tests built by
+#                  msil-prog.py --mode native)                              (M14 15; step 12)
+#   expected-linux -Wsl: update-expected.py --check --os linux msil/test/M1 msil/test/M2: the E7
+#                  Linux oracle vs <stem>.linux.expected, else <stem>.expected        (M12 14)
 #   utc            run-utc-tests.py with six tests of llvm/test/tools/UpdateTestChecks/
 #                  update_llc_test_checks, which lit reports UNSUPPORTED on Windows (it looks
 #                  for a file named 'llc'; plan M5.b and section 12)                   (step 20)
@@ -55,19 +65,20 @@
 # version in that folder is never used, and a missing one fails the leg; nothing here downloads.
 #
 # Every lit leg runs msil/utils/build/msil-lit.ps1 (shared build-dir lock, the command of the gate
-# steps) with --param msil_require_verify=1 (plan D38) and --param msil_require_exec=1, so a
-# missing verifier, jitall, compiler or runtime is a configuration error instead of a leg of
-# UNSUPPORTED tests, and writes <build>/lit-results/<leg>.xml (xunit) and <leg>.log. Its lit
-# arguments go one per line ('--param=<k>=<v>', '--xunit-xml-output=<file>') into the response
-# file <build>/lit-results/<leg>.params.rsp, which msil-lit.ps1 passes to lit as '-sv @<file>'
-# (lit reads response files, as upstream-hooks.ps1 uses them), so a parameter value may contain
-# blanks (a NuGet ilasm under a profile directory with a space; backlog 3.5); the build directory
-# itself may not, because msil-lit.ps1 splits -LitArgs at blanks, and the leg fails naming it. A
-# leg passes when lit exits 0 and at least one test passed. expected, expected-linux and utc are
-# not lit legs: each runs its script under the shared build-dir lock, writes
-# <build>/lit-results/<leg>.log and passes when the script exits 0 (and, for the expected legs,
-# at least one test matched). Every selected leg runs even after a failure; the exit status is 1
-# if any failed.
+# steps) with --param msil_require_verify=1 (plan D38), --param msil_require_exec=1 and --param
+# msil_require_link=1 (plan 5.12.2, M14), so a missing verifier, jitall, compiler, runtime,
+# msil-ld or llvm-ar is a configuration error instead of a leg of UNSUPPORTED tests, and writes
+# <build>/lit-results/<leg>.xml (xunit) and <leg>.log. Its lit arguments go one per line
+# ('--param=<k>=<v>', the lto leg's '--filter-out=<regex>', '--xunit-xml-output=<file>') into
+# the response file <build>/lit-results/<leg>.params.rsp, which msil-lit.ps1 passes to lit as
+# '-sv @<file>' (lit reads response files, as upstream-hooks.ps1 uses them), so a parameter value
+# may contain blanks (a NuGet ilasm under a profile directory with a space; backlog 3.5); the
+# build directory itself may not, because msil-lit.ps1 splits -LitArgs at blanks, and the leg
+# fails naming it. A leg passes when lit exits 0 and at least one test passed. expected,
+# expected-linux and utc are not lit legs: each runs its script under the shared build-dir lock,
+# writes <build>/lit-results/<leg>.log and passes when the script exits 0 (and, for the expected
+# legs, at least one test matched). Every selected leg runs even after a failure; the exit
+# status is 1 if any failed.
 [CmdletBinding()]
 param(
   [string]$BuildDir = '',         # default: $env:MSIL_BUILD_DIR, else <repo>\build
@@ -85,8 +96,14 @@ if (-not $BuildDir) { $BuildDir = $MsilBuild }
 $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
 
 $checkMsil = @('llvm/test/CodeGen/MSIL', 'clang/test/CodeGen/MSIL', 'clang/test/Preprocessor/init-msil.c',
-               'clang/test/Driver/msil-toolchain.c', 'msil/test')
+               'clang/test/Driver/msil-toolchain.c', 'clang/test/Driver/msil-link.c',
+               'clang/test/Driver/msil-lto.c', 'clang/test/Driver/msil-header-search.c',
+               'lld/test/MSIL', 'msil/test')
 $m1 = @('msil/test/M1')
+# msil/test/M2 (plan 5.12.5, from M14) where it exists.
+function Get-M2Paths {
+  if (Test-Path -LiteralPath (Join-Path $MsilRepo 'msil/test/M2')) { 'msil/test/M2' }
+}
 $programs = @('msil/test/M1/11-programs')
 $linux = 'msil_triple=x86_64-unknown-linux-gnu-msil'
 $tc0 = 'msil_dotnet_env=DOTNET_TieredCompilation=0'
@@ -107,6 +124,9 @@ $legs = @(
   @{ Name = 'net8-tc0'; Paths = { $m1 }; Params = { 'msil_dotnet_runtime=8', $tc0 } }
   @{ Name = 'more-levels'; Paths = { $m1 }
      Params = { 'msil_dotnet_runtime=8', 'msil_opt_levels=O1,O3,Os,Oz' } }
+  @{ Name = 'lto'; Paths = { $m1 + @(Get-M2Paths) }; Lit = @('--filter-out=\.ll$')
+     Params = { 'msil_pipeline=lto', 'msil_dotnet_runtime=8', 'msil_native_oracle=required' } }
+  @{ Name = 'det'; Paths = { 'msil/test/M2/06-det' }; Params = { 'msil_dotnet_runtime=8' } }
   @{ Name = 'wsl-net10'; Paths = { 'msil/test/M1', 'msil/test/harness' }; Wsl = $true
      Params = { $wslRuntime + $e7 } }
   @{ Name = 'wsl-net10-tc0'; Paths = { $m1 }; Wsl = $true; Params = { $wslRuntime + $tc0 } }
@@ -157,13 +177,14 @@ function Invoke-LitLeg($l) {
   if ($BuildDir -match '\s') {
     throw "the build directory '$BuildDir' contains a blank, which msil-lit.ps1 would split inside -LitArgs"
   }
-  $params = @(& $l.Params) + @('msil_require_verify=1', 'msil_require_exec=1')
+  $params = @(& $l.Params) + @('msil_require_verify=1', 'msil_require_exec=1', 'msil_require_link=1')
   $paths = @(& $l.Paths)
   $rsp = Join-Path $results "$($l.Name).params.rsp"
   $xml = (Join-Path $results "$($l.Name).xml").Replace('\', '/')
   # One argument per line, the way lit's argument parser reads '@<file>' (fromfile_prefix_chars
   # in lit/cl_arguments.py): a blank inside a value stays inside it.
-  $rspLines = @($params | ForEach-Object { "--param=$_" }) + "--xunit-xml-output=$xml"
+  $rspLines = @($params | ForEach-Object { "--param=$_" }) + @($l.Lit | Where-Object { $_ }) +
+              "--xunit-xml-output=$xml"
   foreach ($a in $rspLines) {
     if ($a -match '[\r\n]') { throw "lit argument with a line break: '$a'" }
   }
@@ -194,19 +215,22 @@ function Invoke-ExpectedLeg($l) {
   # update-expected.py builds natively with the just-built clang and compares: 'expected' with
   # the Windows oracle (LIB from the VS environment, which msil-env.ps1 or ilammy/msvc-dev-cmd
   # provides, and the VS clang's compiler-rt builtins; gate step 12 of M10 and M11),
-  # 'expected-linux' with the E7 Linux oracle under WSL (M12 gate step 14).
+  # 'expected-linux' with the E7 Linux oracle under WSL (M12 gate step 14). Both check M2's
+  # %{msil_prog} tests too (from M14; msil-prog.py --mode native builds them).
   $log = Join-Path $results "$($l.Name).log"
   $clang = Join-Path $BuildDir 'bin/clang.exe'
   $osArgs = @()
-  $what = 'update-expected.py --check msil/test/M1'
+  $testPaths = @('msil/test/M1') + @(Get-M2Paths)
+  $what = "update-expected.py --check $($testPaths -join ' ')"
   if ($l.Expected -eq 'linux') {
     $osArgs = @('--os', 'linux', '--linux-sysroot', $linuxSysroot)
-    $what = 'update-expected.py --check --os linux msil/test/M1'
+    $what = "update-expected.py --check --os linux $($testPaths -join ' ')"
   }
   $lock = Enter-MsilBuildLock -BuildDir $BuildDir -Shared -What $what
   try {
     & $MsilPython (Join-Path $MsilRepo 'msil/utils/update-expected.py') --clang $clang --check @osArgs `
-      (Join-Path $MsilRepo 'msil/test/M1') 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $log | Out-Host
+      @($testPaths | ForEach-Object { Join-Path $MsilRepo $_ }) 2>&1 | ForEach-Object { "$_" } |
+      Tee-Object -FilePath $log | Out-Host
     $rc = $LASTEXITCODE
   } finally { $lock.Dispose() }
   $ok = @(Select-String -LiteralPath $log -Pattern '^ok: ').Count

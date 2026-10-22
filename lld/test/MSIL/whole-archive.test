@@ -1,0 +1,112 @@
+## --whole-archive, --no-whole-archive, --start-lib and --end-lib keep lld's
+## semantics (ImplementationPlan.md 5.9.3, 5.9.4):
+## - --whole-archive loads every bitcode member of the archives that follow
+##   it, until --no-whole-archive; a member it loads can then be a duplicate;
+## - the files between --start-lib and --end-lib behave like the members of an
+##   archive: each one is loaded only when a GLOBAL reference (or -u) needs a
+##   symbol it defines, and it is named by its own path;
+## - nested --start-lib and a stray --end-lib are errors.
+## At --lto-O0 an unreferenced (internalized) function of a loaded member
+## stays in the output, which shows what was loaded.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as h1.ll -o h1.o
+# RUN: llvm-as h2.ll -o h2.o
+# RUN: llvm-as dup.ll -o dup.o
+# RUN: llvm-ar rcs lib.a h1.o h2.o
+
+# DEFINE: %{lazy} = FileCheck %s --check-prefix=LAZY --implicit-check-not=never_used \
+# DEFINE:   --implicit-check-not=duplicate_me
+# DEFINE: %{all} = FileCheck %s --check-prefix=ALL
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o lib.a -o lazy.il 2>&1 | count 0
+# RUN: %{lazy} --input-file=lazy.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o --whole-archive lib.a --no-whole-archive -o all.il 2>&1 | count 0
+# RUN: %{all} --input-file=all.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 --whole-archive lib.a --no-whole-archive main.o -o all2.il 2>&1 | count 0
+# RUN: %{all} --input-file=all2.il
+
+## --no-whole-archive restores the default, and the options only affect the
+## archives that follow them.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o --whole-archive --no-whole-archive lib.a -o off.il 2>&1 | count 0
+# RUN: %{lazy} --input-file=off.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o lib.a --whole-archive -o after.il 2>&1 | count 0
+# RUN: %{lazy} --input-file=after.il
+
+# LAZY:      {{^}}.method assembly static int32 'helper'() cil managed{{$}}
+
+# ALL-DAG:   {{^}}.method {{public|assembly}} static int32 'helper'() cil managed{{$}}
+# ALL-DAG:   {{^}}.method {{public|assembly}} static int32 'never_used'() cil managed{{$}}
+# ALL-DAG:   {{^}}.method {{public|assembly}} static int32 'duplicate_me'() cil managed{{$}}
+
+## A member that --whole-archive loads can be a duplicate; as a lazy member it
+## is not loaded, because dup.o already defines duplicate_me.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o dup.o lib.a -o nodup.il 2>&1 | count 0
+# RUN: not msil-ld --lto-emit-asm --lto-O0 main.o dup.o --whole-archive lib.a -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=DUP --implicit-check-not=error: --implicit-check-not="PLEASE submit"
+
+# DUP:       {{^}}msil-ld: error: duplicate symbol: duplicate_me{{$}}
+# DUP-NEXT:  {{^}}>>> defined in dup.o{{$}}
+# DUP-NEXT:  {{^}}>>> defined in lib.a(h2.o){{$}}
+
+## --start-lib/--end-lib: lazy files.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o --start-lib h1.o h2.o --end-lib -o sl.il \
+# RUN:   --why-extract=sl.why 2>&1 | count 0
+# RUN: %{lazy} --input-file=sl.il
+# RUN: FileCheck %s --check-prefix=WHY-SL --match-full-lines --strict-whitespace --input-file=sl.why
+# RUN: msil-ld --lto-emit-asm --lto-O0 --start-lib h1.o h2.o --end-lib main.o -o sl2.il 2>&1 | count 0
+# RUN: %{lazy} --input-file=sl2.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 -u never_used main.o --start-lib h1.o h2.o --end-lib -o slu.il 2>&1 \
+# RUN:   | count 0
+# RUN: %{all} --input-file=slu.il
+
+#      WHY-SL:reference	extracted	symbol
+# WHY-SL-NEXT:main.o	h1.o	helper
+#  WHY-SL-NOT:{{.}}
+
+# RUN: not msil-ld --lto-emit-asm main.o --start-lib --start-lib h1.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NESTED --implicit-check-not="PLEASE submit"
+# RUN: not msil-ld --lto-emit-asm main.o --end-lib -o x.il 2>&1 | FileCheck %s --check-prefix=STRAY --implicit-check-not="PLEASE submit"
+
+# NESTED:    {{^}}msil-ld: error: nested --start-lib{{$}}
+# STRAY:     {{^}}msil-ld: error: stray --end-lib{{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @helper()
+  ret i32 %r
+}
+
+declare i32 @helper()
+
+#--- h1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @helper() {
+  ret i32 1
+}
+
+#--- h2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @never_used() {
+  ret i32 3
+}
+
+define i32 @duplicate_me() {
+  ret i32 4
+}
+
+#--- dup.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @duplicate_me() {
+  ret i32 5
+}

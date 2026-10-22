@@ -19,7 +19,13 @@
 ; - isLegalAddressingMode accepts only [reg] (CIL ldind/stind have no offset),
 ;   and it is reached through TTI getGEPCost at -O2, LoopStrengthReduce and
 ;   CodeGenPrepare, which therefore sinks no address computation into the
-;   blocks that use them.
+;   blocks that use them;
+; - areTypesABICompatible rejects half and bfloat, and the vectors, arrays and
+;   structs that contain them: ArgumentPromotion keeps the pointer parameter
+;   of an internal function that only loads such a value through it, because
+;   a half or bfloat passed by value needs a compiler-rt helper until phase 3
+;   (D14), and LTO internalizes functions that take one by pointer (b2i and
+;   b2u of msil/test/M1/02-fp/i128-fp-conv.c).
 ; The vectorizer and unroller checks need the forcing options: at plain -O2,
 ; BasicTTIImpl enables partial and runtime unrolling only for a scheduling
 ; model with a loop buffer, which MSIL lacks, and its default 32-bit vector
@@ -127,6 +133,27 @@
 ; CGP:       else:
 ; CGP-NEXT:    %w = load i32, ptr %q
 
+; ArgumentPromotion. The internal functions that load only a bfloat, a half or
+; a struct holding an array of bfloat through their pointer parameter keep the
+; pointer; the one that loads an i32 gets the i32, which shows that the pass
+; ran.
+; RUN: opt -mtriple=x86_64-pc-windows-msvc-msil -passes=argpromotion -S < %s 2>%t.apwin.err \
+; RUN:   | FileCheck %s --check-prefix=AP
+; RUN: count 0 < %t.apwin.err
+; RUN: opt -mtriple=x86_64-unknown-linux-gnu-msil -passes=argpromotion -S < %s 2>%t.ap.err \
+; RUN:   | FileCheck %s --check-prefix=AP
+; RUN: count 0 < %t.ap.err
+; AP-LABEL: define internal i32 @msil_ap_bf16(ptr %p)
+; AP-LABEL: define internal i32 @msil_ap_half(ptr %p)
+; AP-LABEL: define internal i32 @msil_ap_agg(ptr %p)
+; AP-LABEL: define internal i32 @msil_ap_i32(i32 %p.0.val)
+; AP-LABEL: define i32 @msil_ap_caller(
+; AP:         %rb = call i32 @msil_ap_bf16(ptr %b)
+; AP-NEXT:    %rh = call i32 @msil_ap_half(ptr %h)
+; AP-NEXT:    %ra = call i32 @msil_ap_agg(ptr %a)
+; AP-NEXT:    %i.val = load i32, ptr %i, align 4
+; AP-NEXT:    %ri = call i32 @msil_ap_i32(i32 %i.val)
+
 ; Loop Access Analysis. For a dependence distance known only by a lower bound
 ; (@msil_laa_dist: at least 2 bytes, so at most two i8 lanes, 16 bits), it
 ; reports a backward-vectorizable dependence only when those 16 bits are at
@@ -198,6 +225,14 @@
 ; X86-LAA-NEXT:      Memory dependences are safe with run-time checks
 ; X86-LAA:           Run-time memory checks:
 ; X86-LAA-NEXT:      Check 0:
+; It passes half and bfloat by value, so ArgumentPromotion promotes every
+; pointer parameter.
+; RUN: %if x86-registered-target %{ opt -mtriple=x86_64-unknown-linux-gnu -passes=argpromotion -S < %s \
+; RUN:   | FileCheck %s --check-prefix=X86-AP %}
+; X86-AP-LABEL: define internal i32 @msil_ap_bf16(bfloat %p.0.val)
+; X86-AP-LABEL: define internal i32 @msil_ap_half(half %p.0.val)
+; X86-AP-LABEL: define internal i32 @msil_ap_agg({ i32, [2 x bfloat] } %p.0.val)
+; X86-AP-LABEL: define internal i32 @msil_ap_i32(i32 %p.0.val)
 
 @.str.a = private unnamed_addr constant [6 x i8] c"alpha\00"
 @.str.b = private unnamed_addr constant [5 x i8] c"beta\00"
@@ -417,6 +452,48 @@ entry:
   ret ptr %v
 }
 
+; Internal noinline functions that read their argument through a pointer, as
+; b2i and b2u of i128-fp-conv.c do once LTO internalizes them.
+define internal i32 @msil_ap_bf16(ptr %p) #1 {
+entry:
+  %v = load bfloat, ptr %p, align 2
+  %r = fptosi bfloat %v to i32
+  ret i32 %r
+}
+
+define internal i32 @msil_ap_half(ptr %p) #1 {
+entry:
+  %v = load half, ptr %p, align 2
+  %r = fptosi half %v to i32
+  ret i32 %r
+}
+
+define internal i32 @msil_ap_agg(ptr %p) #1 {
+entry:
+  %v = load { i32, [2 x bfloat] }, ptr %p, align 4
+  %e = extractvalue { i32, [2 x bfloat] } %v, 1, 1
+  %r = fptosi bfloat %e to i32
+  ret i32 %r
+}
+
+define internal i32 @msil_ap_i32(ptr %p) #1 {
+entry:
+  %v = load i32, ptr %p, align 4
+  ret i32 %v
+}
+
+define i32 @msil_ap_caller(ptr %b, ptr %h, ptr %a, ptr %i) #0 {
+entry:
+  %rb = call i32 @msil_ap_bf16(ptr %b)
+  %rh = call i32 @msil_ap_half(ptr %h)
+  %ra = call i32 @msil_ap_agg(ptr %a)
+  %ri = call i32 @msil_ap_i32(ptr %i)
+  %s0 = add i32 %rb, %rh
+  %s1 = add i32 %s0, %ra
+  %s2 = add i32 %s1, %ri
+  ret i32 %s2
+}
+
 ; a[i + k] = a[i] + 1 for 0 <= i < n with k = x + 2 for a byte x: a backward
 ; dependence whose distance is 2 to 257 bytes, known at compile time only by
 ; its lower bound. It is the last function, so that the ordered O2 checks
@@ -444,5 +521,6 @@ exit:
   ret void
 }
 
-; What clang attaches to every x86_64 function.
+; What clang attaches to every x86_64 function, and to a noinline one.
 attributes #0 = { nounwind "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }
+attributes #1 = { noinline nounwind "target-cpu"="x86-64" "target-features"="+cmov,+cx8,+fxsr,+mmx,+sse,+sse2,+x87" "tune-cpu"="generic" }

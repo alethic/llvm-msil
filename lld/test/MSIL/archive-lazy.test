@@ -1,0 +1,247 @@
+## Archives of bitcode (ImplementationPlan.md 5.9.4, 5.9.5): every member's
+## own symbol table enters as lazy symbols (the archive symbol index is not
+## used), so the archive's position does not matter; a GLOBAL reference
+## extracts the member that defines the symbol, and only that member:
+## - existing Undefined GLOBAL + Lazy, and Lazy + incoming GLOBAL: extract;
+## - a WEAK reference never extracts, before or after the archive, and the
+##   symbol stays a weak undefined one (the backend's trap stub); a later
+##   GLOBAL reference still extracts;
+## - of two archives defining a symbol, the first one's member is extracted,
+##   also when both come before the reference (Lazy + Lazy keeps the first);
+## - a definition, or a common, never extracts a member: neither a Defined
+##   symbol meeting a Lazy one (Defined + Lazy) nor a Lazy one meeting an
+##   incoming definition (Lazy + Defined), and a WEAK definition no more than
+##   a GLOBAL one; the definition is kept and later references bind to it.
+## Extracted members are named 'lib.a(m.o)' in diagnostics and
+## 'lib.a(m.o at <offset>)' as LTO inputs, so that same-named members stay
+## distinct for ThinLTO. --why-extract (why-extract.test) shows each
+## extraction; '<msil>' in the output shows the rest.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as h1.ll -o h1.o
+# RUN: llvm-as h2.ll -o h2.o
+# RUN: llvm-as h1b.ll -o h1b.o
+# RUN: llvm-as weakref.ll -o weakref.o
+# RUN: llvm-as useref.ll -o useref.o
+# RUN: llvm-as cdef.ll -o cdef.o
+# RUN: llvm-as ccom.ll -o ccom.o
+# RUN: llvm-as weakdef.ll -o weakdef.o
+# RUN: llvm-ar rcs lib.a h1.o h2.o
+# RUN: llvm-ar rcs lib2.a h1b.o
+# RUN: llvm-ar rcs libc.a cdef.o
+
+# DEFINE: %{none} = FileCheck %s --check-prefix=NONE --match-full-lines --strict-whitespace
+
+## A GLOBAL reference extracts h1.o, whichever comes first, and not h2.o.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o lib.a -o a1.il --why-extract=a1.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=H1 --implicit-check-not=never_used --input-file=a1.il
+# RUN: FileCheck %s --check-prefix=WHY-H1 --match-full-lines --strict-whitespace --input-file=a1.why
+# RUN: msil-ld --lto-emit-asm --lto-O0 lib.a main.o -o a2.il --why-extract=a2.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=H1 --implicit-check-not=never_used --input-file=a2.il
+# RUN: FileCheck %s --check-prefix=WHY-H1 --match-full-lines --strict-whitespace --input-file=a2.why
+
+## --lto-emit-asm text is verbose (5.9.13): a defined function's '{' line
+## ends in a comment, and comment lines come between its instructions.
+# H1:          call int32 'helper'()
+# H1:          {{^}}.method assembly static int32 'helper'() cil managed{{$}}
+# H1-NEXT:     {{^[{]}}
+# H1:          {{^}}  .maxstack 1{{$}}
+# H1:          {{^}}  ldc.i4.1{{$}}
+# H1-NEXT:     {{^}}  ret{{$}}
+# H1-NEXT:     {{^[}]}} // end of method 'helper'{{$}}
+
+#      WHY-H1:reference	extracted	symbol
+# WHY-H1-NEXT:main.o	lib.a(h1.o)	helper
+#  WHY-H1-NOT:{{.}}
+
+## A WEAK reference extracts nothing, before or after the archive.
+# RUN: msil-ld --lto-emit-asm --lto-O0 weakref.o lib.a -o w1.il --why-extract=w1.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=STUB --implicit-check-not="'helper'()" --input-file=w1.il
+# RUN: %{none} --input-file=w1.why
+# RUN: msil-ld --lto-emit-asm --lto-O0 lib.a weakref.o -o w2.il --why-extract=w2.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=STUB --implicit-check-not="'helper'()" --input-file=w2.il
+# RUN: %{none} --input-file=w2.why
+
+# STUB:        call int32 '<msil>undef_helper'()
+
+#      NONE:reference	extracted	symbol
+#  NONE-NOT:{{.}}
+
+## A later GLOBAL reference extracts the member the weak one left lazy.
+# RUN: msil-ld --lto-emit-asm --lto-O0 weakref.o lib.a useref.o -o w3.il --why-extract=w3.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LATE --implicit-check-not=undef_helper --input-file=w3.il
+# RUN: FileCheck %s --check-prefix=WHY-LATE --match-full-lines --strict-whitespace --input-file=w3.why
+
+# LATE:        {{^}}.method assembly static int32 'helper'() cil managed{{$}}
+#      WHY-LATE:reference	extracted	symbol
+# WHY-LATE-NEXT:useref.o	lib.a(h1.o)	helper
+#  WHY-LATE-NOT:{{.}}
+
+## Two archives define helper: the first archive on the command line wins.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o lib.a lib2.a -o l12.il --why-extract=l12.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=H1 --input-file=l12.il
+# RUN: FileCheck %s --check-prefix=WHY-H1 --match-full-lines --strict-whitespace --input-file=l12.why
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o lib2.a lib.a -o l21.il --why-extract=l21.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=H1B --input-file=l21.il
+# RUN: FileCheck %s --check-prefix=WHY-H1B --match-full-lines --strict-whitespace --input-file=l21.why
+
+# H1B:         {{^}}.method assembly static int32 'helper'() cil managed{{$}}
+# H1B-NEXT:    {{^[{]}}
+# H1B:         {{^}}  .maxstack 1{{$}}
+# H1B:         {{^}}  ldc.i4.2{{$}}
+# H1B-NEXT:    {{^}}  ret{{$}}
+# H1B-NEXT:    {{^[}]}} // end of method 'helper'{{$}}
+
+#      WHY-H1B:reference	extracted	symbol
+# WHY-H1B-NEXT:main.o	lib2.a(h1b.o)	helper
+#  WHY-H1B-NOT:{{.}}
+
+## Both archives before the reference: the first lazy symbol stays (Lazy +
+## Lazy keeps the first), and the reference extracts its member.
+# RUN: msil-ld --lto-emit-asm --lto-O0 lib.a lib2.a main.o -o ll12.il --why-extract=ll12.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=H1 --input-file=ll12.il
+# RUN: FileCheck %s --check-prefix=WHY-H1 --match-full-lines --strict-whitespace --input-file=ll12.why
+# RUN: msil-ld --lto-emit-asm --lto-O0 lib2.a lib.a main.o -o ll21.il --why-extract=ll21.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=H1B --input-file=ll21.il
+# RUN: FileCheck %s --check-prefix=WHY-H1B --match-full-lines --strict-whitespace --input-file=ll21.why
+
+## A definition on the command line, in front of the archive, extracts nothing
+## (Defined + Lazy).
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o h1b.o lib.a -o d.il --why-extract=d.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=H1B --input-file=d.il
+# RUN: %{none} --input-file=d.why
+
+## Behind the archive, a definition replaces the lazy symbol without
+## extracting (Lazy + Defined), as long as it comes before the reference: in
+## 'lib.a main.o h1b.o' main.o extracts h1.o first, and h1b.o's helper is then
+## a duplicate, as in lld/ELF.
+# RUN: msil-ld --lto-emit-asm --lto-O0 lib.a h1b.o main.o -o ld.il --why-extract=ld.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=H1B --input-file=ld.il
+# RUN: %{none} --input-file=ld.why
+# RUN: not msil-ld --lto-emit-asm --lto-O0 lib.a main.o h1b.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=DUP --implicit-check-not=error: --implicit-check-not="PLEASE submit"
+
+# DUP:      {{^}}msil-ld: error: duplicate symbol: helper{{$}}
+# DUP-NEXT: {{^}}>>> defined in lib.a(h1.o){{$}}
+# DUP-NEXT: {{^}}>>> defined in h1b.o{{$}}
+
+## A WEAK definition extracts nothing either, in front of the archive (Defined
+## WEAK + Lazy) or behind it (Lazy + Defined), and its body is the one kept.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o weakdef.o lib.a -o wd1.il --why-extract=wd1.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WEAKDEF --input-file=wd1.il
+# RUN: %{none} --input-file=wd1.why
+# RUN: msil-ld --lto-emit-asm --lto-O0 weakdef.o main.o lib.a -o wd2.il --why-extract=wd2.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WEAKDEF --input-file=wd2.il
+# RUN: %{none} --input-file=wd2.why
+# RUN: msil-ld --lto-emit-asm --lto-O0 lib.a weakdef.o main.o -o wd3.il --why-extract=wd3.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WEAKDEF --input-file=wd3.il
+# RUN: %{none} --input-file=wd3.why
+
+# WEAKDEF:      {{^}}.method {{.*}}static int32 'helper'() cil managed{{$}}
+# WEAKDEF:      {{^}}  ldc.i4.s 9{{$}}
+# WEAKDEF-NEXT: {{^}}  ret{{$}}
+# WEAKDEF-NEXT: {{^[}]}} // end of method 'helper'{{$}}
+# WEAKDEF-NOT:  {{^}}.method {{.*}}'helper'()
+
+## A common never extracts a member that defines the symbol.
+# RUN: msil-ld --lto-emit-asm --lto-O0 ccom.o libc.a -o c1.il --why-extract=c1.why 2>&1 | count 0
+# RUN: %{none} --input-file=c1.why
+# RUN: FileCheck %s --check-prefix=COMMON --implicit-check-not=bytearray --input-file=c1.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 libc.a ccom.o -o c2.il --why-extract=c2.why 2>&1 | count 0
+# RUN: %{none} --input-file=c2.why
+# RUN: FileCheck %s --check-prefix=COMMON --implicit-check-not=bytearray --input-file=c2.il
+
+# COMMON:      {{^}}// ---- data segment: 4 bytes (0 initialized + 4 zero), align 16 ----{{$}}
+
+## LTO's input names for archive members carry the member's offset.
+# RUN: mkdir st
+# RUN: msil-ld --lto-emit-asm --save-temps main.o lib.a -o st/prog.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=RES --input-file=st/prog.il.resolution.txt
+
+# RES:         {{^}}main.o{{$}}
+# RES:         {{^}}lib.a(h1.o at {{[0-9]+}}){{$}}
+# RES-NEXT:    {{^}}-r=lib.a(h1.o at {{[0-9]+}}),helper,p{{l?}}{{$}}
+# RES-NOT:     h2.o
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @helper()
+  ret i32 %r
+}
+
+declare i32 @helper()
+
+#--- h1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @helper() {
+  ret i32 1
+}
+
+#--- h2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @never_used() {
+  ret i32 3
+}
+
+#--- h1b.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @helper() {
+  ret i32 2
+}
+
+#--- weakref.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @helper()
+  ret i32 %r
+}
+
+declare extern_weak i32 @helper()
+
+#--- useref.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @use_helper() {
+  %r = call i32 @helper()
+  ret i32 %r
+}
+
+declare i32 @helper()
+
+#--- cdef.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = global i32 5, align 4
+
+#--- ccom.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = common global i32 0, align 4
+
+define i32 @main() {
+  %v = load i32, ptr @counter
+  ret i32 %v
+}
+
+#--- weakdef.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define weak i32 @helper() {
+  ret i32 9
+}

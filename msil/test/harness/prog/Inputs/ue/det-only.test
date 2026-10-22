@@ -1,0 +1,6 @@
+# Only a determinism check (%{msil_det}): no .expected file.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c
+# RUN: %{msil_det}
+#--- a.c
+// prog-value: 1

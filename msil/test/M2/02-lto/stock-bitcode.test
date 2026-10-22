@@ -1,0 +1,70 @@
+# Bitcode from stock clang for the native triple linked with MSIL bitcode (Q12).
+# stock1.c and stock2.c are compiled by the tree's clang for the native triple
+# with -flto (plus -fno-ms-volatile on windows-msvc: MSVC's volatile would be
+# atomic acquire/release, so stock1.c's volatile counter checks the flag) and
+# main.c for the MSIL triple; msil-ld links them in one LTO module for the
+# MSIL triple. The stock code calls back into main.c, takes structures by
+# value, returns 64-bit values, holds pointers to its own and to main.c's data
+# and runs a constructor. Natively all three are ordinary sources. The second
+# RUN line pins msil-ld's warning: once per link, although two stock inputs
+# are linked (plan 5.9.13). Recon tests-p2 3.3, plan 5.12.3 (M14 lto).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_stock_srcs} = %t/stock1.c %t/stock2.c
+# RUN: %{msil_prog}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.d --src %{msil_srcs} --stock-src %{msil_stock_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# LTO:     msil-ld: warning: {{.*}}stock1.o: linking bitcode for x86_64-{{[^ ]+}} as x86_64-{{[^ ]+}}-msil; stock-clang bitcode is a compatibility path
+# LTO-NOT: stock-clang bitcode is a compatibility path
+#--- shared.h
+struct point { int x, y, z; };
+int msil_side(int v);
+extern int msil_data;
+int stock_mul(int a, int b);
+long long stock_wide(int a);
+int stock_dot(struct point p, struct point q);
+int stock_counter(void);
+const char *stock_name(int i);
+int stock_ctor_ran(void);
+int stock2_call(int v);
+#--- main.c
+#include "msil_test.h"
+#include "shared.h"
+int msil_data = 5;
+int msil_side(int v) { return v + msil_data; }
+int main(void) {
+  put_kv("stock_mul", stock_mul(6, 7));
+  put_kv("stock_wide", stock_wide(3));
+  struct point p = {1, 2, 3}, q = {4, 5, 6};
+  put_kv("stock_dot", stock_dot(p, q));
+  put_kv("p.x", p.x);
+  put_kv("stock_counter", stock_counter());
+  put_kv("stock_counter", stock_counter());
+  put_str(stock_name(0));
+  put_str(stock_name(1));
+  put_kv("stock_ctor_ran", stock_ctor_ran());
+  put_kv("stock2_call", stock2_call(10));
+  return stock_mul(3, 4);
+}
+#--- stock1.c
+#include "shared.h"
+static volatile int vcount;
+static int ctor_ran;
+static const char first[] = "stock first";
+const char *const stock_names[2] = {first, "stock second"};
+int *const msil_data_ptr = &msil_data;
+__attribute__((constructor)) static void stock_init(void) { ctor_ran = 1; }
+int stock_mul(int a, int b) { return msil_side(a * b); }
+long long stock_wide(int a) { return a * 4000000000LL; }
+int stock_dot(struct point p, struct point q) {
+  p.x = 100;
+  return p.x * q.x + p.y * q.y + p.z * q.z;
+}
+int stock_counter(void) {
+  vcount = vcount + 1;
+  return vcount + *msil_data_ptr;
+}
+const char *stock_name(int i) { return stock_names[i & 1]; }
+int stock_ctor_ran(void) { return ctor_ran; }
+#--- stock2.c
+#include "shared.h"
+int stock2_call(int v) { return stock_mul(v, 2) + msil_side(1); }

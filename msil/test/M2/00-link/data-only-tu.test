@@ -1,0 +1,57 @@
+# A translation unit whose only content is data.
+# data.c defines no function: constant and writable tables, a zero-filled
+# array, string pointers (to a static array, into it and to a literal), a
+# pointer into another of its arrays and a linked list of constant structures
+# that point at each other. main.c reads and writes all of it.
+# Recon tests-p2 3.1, plan 5.12.5 (M14 lto; M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/data.c
+# RUN: %{msil_prog}
+#--- entry.h
+struct entry {
+  const char *name;
+  int value;
+  const struct entry *next;
+};
+#--- main.c
+#include "msil_test.h"
+#include "entry.h"
+extern const int primes[8];
+extern const int *const prime_ptr;
+extern int counter;
+extern int zeros[16];
+extern const char *const words[3];
+extern const struct entry chain[3];
+extern unsigned char bytes[];
+
+int main(void) {
+  int sum = 0;
+  for (int i = 0; i < 8; ++i)
+    sum += primes[i];
+  put_kv("sum of primes", sum);
+  put_kv("*prime_ptr", *prime_ptr);
+  counter += 2;
+  put_kv("counter", counter);
+  zeros[15] = 4;
+  int z = 0;
+  for (int i = 0; i < 16; ++i)
+    z += zeros[i];
+  put_kv("zeros", z);
+  for (int i = 0; i < 3; ++i)
+    put_str(words[i]);
+  for (const struct entry *e = chain; e; e = e->next)
+    put_kv(e->name, e->value);
+  put_kv("bytes", bytes[0] + bytes[1] + bytes[2]);
+  return counter;
+}
+#--- data.c
+#include "entry.h"
+const int primes[8] = {2, 3, 5, 7, 11, 13, 17, 19};
+const int *const prime_ptr = &primes[4];
+int counter = 5;
+int zeros[16];
+static const char hello[] = "hello";
+const char *const words[3] = {hello, "world", hello + 1};
+const struct entry chain[3] = {
+    {"first", 1, &chain[1]}, {"second", 2, &chain[2]}, {"third", 3, 0}};
+unsigned char bytes[] = {200, 50, 5};

@@ -1,0 +1,128 @@
+# Structures passed and returned by value between translation units.
+# callee.c returns structures of 3, 8, 12, 16 and 32 bytes (in registers or
+# through a hidden result pointer, natively depending on the triple) and takes
+# them by value; main.c checks that a callee's writes to its copy never reach
+# the caller's object, and passes a structure through a function pointer
+# taken in callee.c. Recon tests-p2 3.1, plan 5.12.5 (M14 lto; M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/callee.c
+# RUN: %{msil_prog}
+#--- structs.h
+struct s3 { char c[3]; };
+struct pair { int a, b; };
+struct s12 { int a, b, c; };
+struct s16 { long long x; int y, z; };
+struct big { long long x; int y[6]; };
+
+struct s3 make_s3(char base);
+int sum_s3(struct s3 v);
+struct pair swap_pair(struct pair p);
+int sum_s12(struct s12 v);
+struct s16 make_s16(int seed);
+long long sum_s16(struct s16 v);
+struct big make_big(int seed);
+long long sum_big(struct big v);
+long long (*get_sum_big(void))(struct big);
+struct big bump_big(struct big v, int by);
+#--- main.c
+#include "msil_test.h"
+#include "structs.h"
+
+int main(void) {
+  struct s3 a = make_s3('a');
+  put_i64(a.c[0] + a.c[1] * 2 + a.c[2] * 3);
+  put_i64(sum_s3(a));
+  put_i64(a.c[0]);
+
+  struct pair p = {3, 4};
+  struct pair q = swap_pair(p);
+  put_i64(p.a * 10 + p.b);
+  put_i64(q.a * 10 + q.b);
+
+  struct s12 t;
+  t.a = 1;
+  t.b = 20;
+  t.c = 300;
+  put_i64(sum_s12(t));
+  put_i64(t.a + t.b + t.c);
+
+  struct s16 u = make_s16(7);
+  put_i64(u.x);
+  put_i64(sum_s16(u));
+  put_i64(u.y);
+
+  struct big b = make_big(5);
+  put_i64(sum_big(b));
+  put_i64(b.y[0]);
+  put_i64(get_sum_big()(b));
+  struct big c = bump_big(b, 100);
+  put_i64(sum_big(c));
+  put_i64(b.x);
+  return (int)(sum_big(b) & 0xff);
+}
+#--- callee.c
+#include "structs.h"
+
+struct s3 make_s3(char base) {
+  struct s3 r;
+  for (int i = 0; i < 3; ++i)
+    r.c[i] = (char)(base + i);
+  return r;
+}
+
+int sum_s3(struct s3 v) {
+  int s = v.c[0] + v.c[1] + v.c[2];
+  v.c[0] = 0;
+  return s + v.c[0];
+}
+
+struct pair swap_pair(struct pair p) {
+  int t = p.a;
+  p.a = p.b;
+  p.b = t;
+  return p;
+}
+
+int sum_s12(struct s12 v) {
+  v.a *= 2;
+  return v.a + v.b + v.c;
+}
+
+struct s16 make_s16(int seed) {
+  struct s16 r;
+  r.x = seed * 1000000007LL;
+  r.y = seed;
+  r.z = -seed;
+  return r;
+}
+
+long long sum_s16(struct s16 v) {
+  v.y = 99;
+  return v.x + v.y + v.z;
+}
+
+struct big make_big(int seed) {
+  struct big r;
+  r.x = seed * 3LL;
+  for (int i = 0; i < 6; ++i)
+    r.y[i] = seed + i;
+  return r;
+}
+
+long long sum_big(struct big v) {
+  long long s = v.x;
+  for (int i = 0; i < 6; ++i)
+    s += v.y[i];
+  v.y[0] = -1;
+  v.x = 0;
+  return s;
+}
+
+long long (*get_sum_big(void))(struct big) { return sum_big; }
+
+struct big bump_big(struct big v, int by) {
+  v.x += by;
+  for (int i = 0; i < 6; ++i)
+    v.y[i] += by;
+  return v;
+}

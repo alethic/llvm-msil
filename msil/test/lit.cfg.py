@@ -15,6 +15,13 @@
 # the Linux ilasm inside WSL. msil/utils/ci/lit-legs.ps1 and lit-legs.sh run
 # every leg of the milestone-1 gate (plan M10) with these parameters.
 #
+# Phase 2 (plan 5.12): %{msil_prog} builds a program of several translation
+# units and archives with msil/utils/msil-prog.py, which compiles with
+# -flto -c and links through the clang driver and msil-ld
+# (-Wl,--lto-emit-asm, then ilasm -exe), and runs it like %{msil_c};
+# msil_pipeline=lto makes %{msil_c} a one-source %{msil_prog} (see "linker"
+# and "%{msil_prog}" below).
+#
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
 # compiler-rt builtins for the i128 helpers (msil_native_rtlib); on Linux by
@@ -36,8 +43,9 @@
 # verification or every harness test UNSUPPORTED; --param msil_require_exec=1
 # (the gate legs of msil/utils/ci pass it) does the same for msil-exec, which
 # M1/ needs (clang with the MSIL target, ilasm and a .NET runtime; see
-# M1/lit.local.cfg); and an explicitly requested runner, runtime, leg or tool
-# that cannot be used is one too.
+# M1/lit.local.cfg); --param msil_require_link=1 (and msil_pipeline=lto) does
+# the same for msil-ld and llvm-ar; and an explicitly requested runner,
+# runtime, leg or tool that cannot be used is one too.
 
 import glob
 import json
@@ -267,6 +275,40 @@ if not opt_levels:
 config.msil_require_exec = bool_param("msil_require_exec")
 roundtrip = bool_param("msil_roundtrip")  # see "round trip" below
 wsl_ilasm_param = params.get("msil_wsl_ilasm")  # see "Linux ilasm in WSL"
+
+# --param msil_pipeline=asm|lto (plan 5.12.1, 5.12.2; feature
+# msil-pipeline=<p>) decides how %{msil_c} and %{msil_c_<L>} build a test:
+# asm (the default) as in Phase 1, clang -S and ilasm -dll; lto as
+# %{msil_prog} of the one source, through msil-ld. %{msil_ll} stays on llc
+# text under both. %{msil_prog} (multi-TU programs, see "linker" below) is
+# lto's under both, which the feature msil-prog-pipeline=lto names; a check
+# that depends on how %{msil_prog} builds is guarded by
+# msil-prog-pipeline=<p>, never by msil-pipeline=<p>. 'obj' (and with it
+# msil-prog-pipeline=obj) needs CIL objects and msil-ld's PE writer (M20).
+pipeline = params.get("msil_pipeline", "asm")
+if pipeline == "obj":
+    fatal(
+        "--param msil_pipeline=obj needs CIL objects and msil-ld's PE writer "
+        "(plan M20); use asm or lto"
+    )
+if pipeline not in ("asm", "lto"):
+    fatal("--param msil_pipeline=%s: use asm or lto" % pipeline)
+features.add("msil-pipeline=" + pipeline)
+prog_pipeline_name = "lto"  # what %{msil_prog} uses under asm and lto (M14)
+features.add("msil-prog-pipeline=" + prog_pipeline_name)
+# --param msil_link_output=il (feature msil-link-output=<x>): msil-ld writes
+# ILAsm text (--lto-emit-asm) that ilasm -exe assembles; 'pe', msil-ld's own
+# image, is M20's.
+link_output = params.get("msil_link_output", "il")
+if link_output == "pe":
+    fatal("--param msil_link_output=pe needs msil-ld's PE writer (plan M20); use il")
+if link_output != "il":
+    fatal("--param msil_link_output=%s: use il" % link_output)
+features.add("msil-link-output=" + link_output)
+# msil_require_link=1 (every gate leg passes it): a missing msil-ld or llvm-ar
+# is a configuration error, and msil/test/M2/lit.local.cfg makes missing
+# execution support one, instead of an UNSUPPORTED M2.
+config.msil_require_link = bool_param("msil_require_link")
 
 # ---------------------------------------------------------------- the target
 for t in config.targets_to_build:
@@ -1160,6 +1202,66 @@ if oracle_required or bool_param("msil_native_oracle"):
         else:
             note("native oracle: " + native_triple)
 
+
+# ---------------------------------------------------------------- linker
+# msil-ld and the archiver of the multi-TU programs (plan 5.12.2, 5.12.3):
+# --param msil_ld, msil_ar and msil_nm (or $MSIL_LD, $MSIL_AR, $MSIL_NM) name
+# the tools; by default they are the tree's <build>/bin/msil-ld (lld's msil
+# flavor), llvm-ar and llvm-nm, never ones from PATH: the Visual Studio
+# llvm-ar cannot index the tree's bitcode. An empty value disables a tool.
+# Features msil-ld and msil-ar. msil_pipeline=lto, whose %{msil_c} links
+# through them, and msil_require_link=1 make a missing one a configuration
+# error.
+def find_tree_tool(name, exe):
+    override = params.get("msil_" + name)
+    if override is None:
+        override = os.environ.get("MSIL_" + name.upper())
+    if override is not None:
+        if override == "":
+            note("%s disabled by an empty override" % exe)
+            return None
+        found = override if is_runnable(override) else lit.util.which(override)
+        if not found:
+            fatal("msil_%s=%s: no such program" % (name, override))
+        return os.path.normpath(found)
+    candidate = os.path.join(config.llvm_tools_dir, exe + exe_ext)
+    return os.path.normpath(candidate) if is_runnable(candidate) else None
+
+
+msil_ld = find_tree_tool("ld", "msil-ld")
+msil_ar = find_tree_tool("ar", "llvm-ar")
+msil_nm = find_tree_tool("nm", "llvm-nm")
+for tool, path, feature in (
+    ("msil-ld", msil_ld, "msil-ld"),
+    ("llvm-ar", msil_ar, "msil-ar"),
+    ("llvm-nm", msil_nm, None),
+):
+    if path:
+        note("%s: %s" % (tool, path))
+        if feature:
+            features.add(feature)
+    else:
+        note("%s not found" % tool)
+link_missing = [
+    "%s (--param msil_%s=PATH; build the %s target)" % (tool, name, target)
+    for tool, name, target, path in (
+        ("msil-ld", "ld", "lld", msil_ld),
+        ("llvm-ar", "ar", "llvm-ar", msil_ar),
+    )
+    if not path
+]
+if link_missing and pipeline == "lto":
+    fatal(
+        "--param msil_pipeline=lto links every C test through msil-ld, but "
+        "these are missing: " + "; ".join(link_missing)
+    )
+if link_missing and config.msil_require_link:
+    fatal("msil_require_link=1, but these are missing: " + "; ".join(link_missing))
+note(
+    "pipeline %s (%%{msil_prog}: %s, link output %s)"
+    % (pipeline, prog_pipeline_name, link_output)
+)
+
 # Everything needed to compile and run C programs.
 if {"clang", "msil-registered-target", "msil-ilasm", "msil-dotnet"} <= features:
     features.add("msil-exec")
@@ -1351,12 +1453,15 @@ def native_leg(t, level, compile_flags):
     )
 
 
-def roundtrip_leg(t):
-    """msil_roundtrip: the ildasm -> ilasm round trip of <t>.dll, then a run of
+def roundtrip_leg(t, image=None):
+    """msil_roundtrip: the ildasm -> ilasm round trip of <t>.dll (or of the
+    program image of %{msil_prog}, written back as <t>.rt.exe), then a run of
     the reassembled image against the same .expected file."""
+    rt = f"{t}.rt.exe" if image else f"{t}.rt.dll"
+    image = image or f"{t}.dll"
     return (
-        f" %if msil-roundtrip %{{ && %msil_roundtrip --output={t}.rt.dll {t}.dll"
-        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.rt.out {t}.rt.dll %}}"
+        f" %if msil-roundtrip %{{ && %msil_roundtrip --output={rt} {image}"
+        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.rt.out {rt} %}}"
     )
 
 
@@ -1403,15 +1508,166 @@ def ll_pipeline(level):
 # llc takes -O0..-O3 only; -Os/-Oz levels are skipped for IR tests.
 ll_levels = [o for o in opt_levels if o in ("O0", "O1", "O2", "O3")] or ["O2"]
 
+# ---------------------------------------------------------------- %{msil_prog}
+# Multi-TU programs (plan 5.12.3-5.12.5): msil/utils/msil-prog.py builds the
+# program (%msil_prog_build), and the composite verifies, force-JITs and runs
+# it as %{msil_c} does. A test lists its sources and libraries in placeholders
+# that its REDEFINE: lines set:
+#   %{msil_srcs}        the C sources, compiled with -flto -c (default %s)
+#   %{msil_stock_srcs}  sources that the tree's clang compiles for the native
+#                       triple with -flto -c (stock-clang bitcode, plan Q12)
+#   %{msil_archives}    NAME=SRC[,SRC...][;NAME=...]: one archive libNAME.a
+#                       per NAME, linked as -L<dir> -lNAME (a SRC written
+#                       stock:SRC is compiled as a stock source)
+#   %{msil_libs}        further arguments of the MSIL link (not the oracle's)
+# and a directory may redefine %{msil_cflags} and %{msil_ldflags}, the MSIL
+# link's flags (-nodefaultlibs in M14: the driver's default libraries are
+# M15's). Each level builds in a fresh %t.<L>.d into %t.<L>.d/prog.exe (an EXE,
+# so the same image runs under 'dotnet exec' and on the .NET Framework, plan
+# 5.12.1), then %msil_verify, %msil_jitall and %msil_exec --expect
+# %S/%{s:stem}, and the %if legs: the round trip of the image, the native
+# oracle (msil-prog.py --mode native, the same sources and archives built
+# for the native triple; E7 with msil_runner=wsl) and the .NET Framework run.
+# %{msil_prog_fail_<L>} is 'not' plus the build at one level, for named
+# diagnostics: pipe it with 2>&1 into FileCheck, with
+# --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit", under
+# %if msil-prog-pipeline=<p>. %{msil_det} builds twice at -O2 and compares
+# (msil-prog.py --det). The placeholders sit inside single quotes on the
+# command line (the archive list has ';'), so their values may not contain a
+# single quote, and one value may not contain ',' or ';' in a path.
+# %msil_prog_build is everything but the level, the directories and the
+# inputs: the template with @TOOLS@ replaced by the tool arguments, sorted by
+# name. harness/prog/lit.local.cfg rebuilds it from config.msil_prog_template
+# and config.msil_prog_tool_args with stand-ins (data, not a function: lit
+# pickles the configuration for its worker processes).
+prog_template = (
+    "%s --triple %s @TOOLS@ --cflags='%%{msil_cflags}' --ldflags='%%{msil_ldflags}'"
+    " --native-ldflags='%%{msil_native_ldflags}' --timeout %g --mem-limit-mb %d"
+    % (script("msil-prog.py"), msil_triple, timeout * 10, mem_limit_mb)
+)
+
+
+def make_prog_build(tool_args):
+    return prog_template.replace(
+        "@TOOLS@", " ".join(tool_args[k] for k in sorted(tool_args))
+    )
+
+
+prog_tool_args = {
+    "ar": "--ar=" + quote(msil_ar or "llvm-ar-not-found"),
+    "clang": "--clang=" + quote(clang),
+    "ilasm": "--ilasm='%s'" % ilasm_cmd,
+    "ld": "--ld=" + quote(msil_ld or "msil-ld-not-found"),
+}
+if e7_oracle:
+    # msil-prog.py's native mode builds the E7 Linux oracle (plan 5.12.8).
+    prog_tool_args["ld-lld"] = "--ld-lld=" + quote(ld_lld)
+    prog_tool_args["linux-sysroot"] = "--linux-sysroot=" + quote(linux_sysroot)
+    prog_tool_args["start"] = "--start=" + quote(e7_start)
+config.msil_prog_tool_args = prog_tool_args
+config.msil_prog_template = prog_template
+
+
+def prog_inputs(srcs, stock, archives, libs, native=False):
+    """The input options of msil-prog.py (a None part is left out)."""
+    text = f" --src {srcs}"
+    if stock is not None:
+        text += f" --stock-src {stock}"
+    if archives is not None:
+        text += f" --archives='{archives}'"
+    if libs is not None and not native:
+        text += f" --lib='{libs}'"
+    return text
+
+
+PROG_PLACEHOLDERS = (
+    "%{msil_srcs}",
+    "%{msil_stock_srcs}",
+    "%{msil_archives}",
+    "%{msil_libs}",
+)
+
+
+def prog_build(level, inputs, fail=False):
+    """The MSIL build of %{msil_prog} at -<level>: (command, program)."""
+    t = "%t." + level
+    exe = f"{t}.d/prog.exe"
+    cmd = f"%msil_prog_build --level {level} --workdir {t}.d --out {exe}" + prog_inputs(
+        *inputs
+    )
+    return ("not " + cmd if fail else cmd), exe
+
+
+def prog_pipeline(level, inputs=PROG_PLACEHOLDERS):
+    """%{msil_prog} at -<level>: build, verify, force-JIT, run and compare,
+    then the legs."""
+    t = "%t." + level
+    build, exe = prog_build(level, inputs)
+    cmd = (
+        f"{build} && %msil_verify {exe}"
+        f" %if msil-jitall %{{ && %msil_jitall {exe} %}}"
+        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {exe}"
+    )
+    cmd += roundtrip_leg(t, exe)
+    native = f"{t}.native.d/prog.{'elf' if e7_oracle else 'exe'}"
+    cmd += (
+        f" %if msil-native-oracle %{{ && %msil_prog_build --mode native"
+        f" --level {level} --workdir {t}.native.d --out {native}"
+        + prog_inputs(*inputs, native=True)
+        + f" && %msil_exec --native --expect %S/%{{s:stem}}"
+        f" --out {t}.native.out {native} %}}"
+    )
+    cmd += (
+        f" %if msil-run-netfx %{{ && %msil_exec --netfx --expect %S/%{{s:stem}}"
+        f" --out {t}.netfx.out {exe} %}}"
+    )
+    return cmd
+
+
+def c_composite(level):
+    """%{msil_c_<level>}: Phase 1's pipeline under msil_pipeline=asm, the
+    one-source %{msil_prog} under lto."""
+    if pipeline == "lto":
+        return prog_pipeline(level, ("%s", None, None, None))
+    return c_pipeline(level)
+
+
+ALL_LEVELS = ("O0", "O1", "O2", "O3", "Os", "Oz")
+
 substitutions = [
     # Composites first; they expand into the atoms below.
-    ("%{msil_c}", " && ".join(c_pipeline(o) for o in opt_levels)),
+    ("%{msil_c}", " && ".join(c_composite(o) for o in opt_levels)),
     ("%{msil_ll}", " && ".join(ll_pipeline(o) for o in ll_levels)),
-    *[
-        ("%%{msil_c_%s}" % o, c_pipeline(o))
-        for o in ("O0", "O1", "O2", "O3", "Os", "Oz")
-    ],
+    *[("%%{msil_c_%s}" % o, c_composite(o)) for o in ALL_LEVELS],
     *[("%%{msil_ll_%s}" % o, ll_pipeline(o)) for o in ("O0", "O1", "O2", "O3")],
+    ("%{msil_prog}", " && ".join(prog_pipeline(o) for o in opt_levels)),
+    *[("%%{msil_prog_%s}" % o, prog_pipeline(o)) for o in ALL_LEVELS],
+    *[
+        ("%%{msil_prog_fail_%s}" % o, prog_build(o, PROG_PLACEHOLDERS, fail=True)[0])
+        for o in ALL_LEVELS
+    ],
+    (
+        "%{msil_det}",
+        "%msil_prog_build --det --level O2 --workdir %t.det.d"
+        + prog_inputs(*PROG_PLACEHOLDERS),
+    ),
+    ("%msil_prog_build", make_prog_build(prog_tool_args)),
+    # The placeholders of %{msil_prog}, set by REDEFINE: lines (plan 5.12.3).
+    ("%{msil_srcs}", "%s"),
+    ("%{msil_stock_srcs}", ""),
+    ("%{msil_archives}", ""),
+    ("%{msil_libs}", ""),
+    # The MSIL link's harness flags: -nodefaultlibs in M14 (plan 5.12.3; M15
+    # links the default libraries of plan 5.10.4 through --sysroot instead).
+    ("%{msil_ldflags}", "-nodefaultlibs"),
+    # msil-ld under msil-run.py's limits, and the tree's llvm-ar and llvm-nm.
+    (
+        "%msil_ld",
+        "%s --tool%s -- %s"
+        % (script("msil-run.py"), limits, quote(msil_ld or "msil-ld-not-found")),
+    ),
+    ("%msil_ar", quote(msil_ar or "llvm-ar-not-found")),
+    ("%msil_nm", quote(msil_nm or "llvm-nm-not-found")),
     # -std=gnu17 pins the C dialect against a change of clang's default
     # (C23 rejects the K&R definitions of 11-programs/kr-legacy.c; backlog
     # 3.4). -ffreestanding turns off main's implicit 'return 0'

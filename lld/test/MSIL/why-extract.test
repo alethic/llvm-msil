@@ -1,0 +1,90 @@
+## --why-extract=<file> (ImplementationPlan.md 5.9.14): lld's tab-separated
+## format, a header 'reference<TAB>extracted<TAB>symbol' and one line per
+## extraction in lld's order: a record is written after its member is
+## loaded, so an extraction that loading the member causes comes first. The
+## reference of a command-line -u is '-u <sym>'. '-' writes to standard
+## output. Nothing extracted leaves only the header. A file that cannot be
+## written is lld's error.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as a.ll -o a.o
+# RUN: llvm-as b.ll -o b.o
+# RUN: llvm-as c.ll -o c.o
+# RUN: llvm-ar rcs liba.a a.o
+# RUN: llvm-ar rcs libbc.a b.o c.o
+
+# DEFINE: %{fc} = FileCheck %s --match-full-lines --strict-whitespace
+
+## Nothing extracted: the header alone.
+# RUN: msil-ld --lto-emit-asm main.o a.o b.o libbc.a -o p1.il --why-extract=why1.txt 2>&1 | count 0
+# RUN: %{fc} --check-prefix=CHECK1 --input-file=why1.txt
+
+#      CHECK1:reference	extracted	symbol
+#  CHECK1-NOT:{{.}}
+
+## main.o extracts a.o, which extracts b.o.
+# RUN: msil-ld --lto-emit-asm main.o liba.a libbc.a -o p2.il --why-extract=why2.txt 2>&1 | count 0
+# RUN: %{fc} --check-prefix=CHECK2 --input-file=why2.txt
+
+#      CHECK2:reference	extracted	symbol
+# CHECK2-NEXT:main.o	liba.a(a.o)	a
+# CHECK2-NEXT:liba.a(a.o)	libbc.a(b.o)	b
+#  CHECK2-NOT:{{.}}
+
+## Backward references are fine; '-' is standard output.
+# RUN: msil-ld --lto-emit-asm libbc.a liba.a main.o -o p3.il --why-extract=- | %{fc} --check-prefix=CHECK3
+
+#      CHECK3:reference	extracted	symbol
+# CHECK3-NEXT:liba.a(a.o)	libbc.a(b.o)	b
+# CHECK3-NEXT:main.o	liba.a(a.o)	a
+#  CHECK3-NOT:{{.}}
+
+## -u extracts c.o.
+# RUN: msil-ld --lto-emit-asm main.o liba.a libbc.a -u c -o p4.il --why-extract=- | %{fc} --check-prefix=UNDEF
+
+#      UNDEF:reference	extracted	symbol
+# UNDEF-DAG:-u c	libbc.a(c.o)	c
+
+# RUN: not msil-ld --lto-emit-asm main.o liba.a libbc.a -o p5.il --why-extract=%t 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ERR --implicit-check-not="PLEASE submit"
+
+# ERR: {{^}}msil-ld: error: cannot open --why-extract= file {{.*}}: {{.+}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @a()
+  ret i32 %r
+}
+
+declare i32 @a()
+
+#--- a.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @a() {
+  %r = call i32 @b()
+  ret i32 %r
+}
+
+declare i32 @b()
+
+#--- b.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @b() {
+  ret i32 2
+}
+
+#--- c.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @c() {
+  ret i32 3
+}

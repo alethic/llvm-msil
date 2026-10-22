@@ -1,0 +1,197 @@
+## Kind checks after each insertion (ImplementationPlan.md 5.9.5; 5.9.14's
+## texts): a function and data of one name are
+##   symbol type mismatch: <s>
+##   >>> defined as function in <file>
+##   >>> defined as data in <file>
+## (wasm-ld's rule and wording, also for a reference; lld/ELF does not check
+## kinds), and thread-local against non-thread-local is
+##   TLS attribute mismatch: <s>
+##   >>> in <file>
+##   >>> in <file>
+## (lld/ELF InputFiles.cpp:1398), each in both input orders, with the files
+## in the order they were loaded. A WEAK data definition and a function
+## definition are no duplicate, only a mismatch. The link stops before LTO,
+## so the backend's thread-local error never shows. A WEAK function reference
+## and a data definition are a mismatch whether or not an archive member that
+## also defines the data stays lazy in between: the weak reference leaves the
+## member unextracted (5.9.5's Lazy row), and the later definition is checked
+## against the reference.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as fn-def.ll -o fn-def.o
+# RUN: llvm-as data-ref.ll -o data-ref.o
+# RUN: llvm-as data-def.ll -o data-def.o
+# RUN: llvm-as fn-ref.ll -o fn-ref.o
+# RUN: llvm-as weak-data.ll -o weak-data.o
+# RUN: llvm-as tls-def.ll -o tls-def.o
+# RUN: llvm-as plain-ref.ll -o plain-ref.o
+# RUN: llvm-as w.ll -o w.o
+# RUN: llvm-as d.ll -o d.o
+# RUN: llvm-as d2.ll -o d2.o
+# RUN: llvm-ar rcs libd.a d.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not=duplicate --implicit-check-not="not supported"
+
+## A function definition and a data reference.
+# RUN: not msil-ld --lto-emit-asm fn-def.o data-ref.o -o x.il 2>&1 | %{fc} --check-prefix=FD
+# RUN: not msil-ld --lto-emit-asm data-ref.o fn-def.o -o x.il 2>&1 | %{fc} --check-prefix=DF
+
+# FD:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# FD-NEXT: {{^}}>>> defined as function in fn-def.o{{$}}
+# FD-NEXT: {{^}}>>> defined as data in data-ref.o{{$}}
+# DF:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# DF-NEXT: {{^}}>>> defined as data in data-ref.o{{$}}
+# DF-NEXT: {{^}}>>> defined as function in fn-def.o{{$}}
+
+## A data definition and a function reference (a call).
+# RUN: not msil-ld --lto-emit-asm data-def.o fn-ref.o -o x.il 2>&1 | %{fc} --check-prefix=DF2
+# RUN: not msil-ld --lto-emit-asm fn-ref.o data-def.o -o x.il 2>&1 | %{fc} --check-prefix=FD2
+
+# DF2:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# DF2-NEXT: {{^}}>>> defined as data in data-def.o{{$}}
+# DF2-NEXT: {{^}}>>> defined as function in fn-ref.o{{$}}
+# FD2:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# FD2-NEXT: {{^}}>>> defined as function in fn-ref.o{{$}}
+# FD2-NEXT: {{^}}>>> defined as data in data-def.o{{$}}
+
+## Two definitions, one of them weak; a mismatch, not a duplicate.
+# RUN: not msil-ld --lto-emit-asm fn-def.o weak-data.o -o x.il 2>&1 | %{fc} --check-prefix=WEAK
+# WEAK:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# WEAK-NEXT: {{^}}>>> defined as function in fn-def.o{{$}}
+# WEAK-NEXT: {{^}}>>> defined as data in weak-data.o{{$}}
+
+## Thread-local data and a non-thread-local reference.
+# RUN: not msil-ld --lto-emit-asm tls-def.o plain-ref.o -o x.il 2>&1 | %{fc} --check-prefix=TLS
+# RUN: not msil-ld --lto-emit-asm plain-ref.o tls-def.o -o x.il 2>&1 | %{fc} --check-prefix=TLS-REV
+
+# TLS:          {{^}}msil-ld: error: TLS attribute mismatch: tv{{$}}
+# TLS-NEXT:     {{^}}>>> in tls-def.o{{$}}
+# TLS-NEXT:     {{^}}>>> in plain-ref.o{{$}}
+# TLS-REV:      {{^}}msil-ld: error: TLS attribute mismatch: tv{{$}}
+# TLS-REV-NEXT: {{^}}>>> in plain-ref.o{{$}}
+# TLS-REV-NEXT: {{^}}>>> in tls-def.o{{$}}
+
+## A WEAK function reference (w.o), a data definition (d2.o) and an archive
+## member defining the same data (libd.a(d.o)), in six orders. Without the
+## archive, or with it after both files, the reference and the definition
+## meet directly. With the archive first or in between, the weak reference
+## leaves the member lazy (no extraction, so libd.a(d.o) is never named), and
+## d2.o's definition is still a mismatch with w.o's reference.
+# DEFINE: %{fc1} = %{fc} --implicit-check-not=error: --implicit-check-not=">>>" \
+# DEFINE:   --implicit-check-not=libd.a
+# RUN: not msil-ld --lto-emit-asm w.o d2.o -o x.il 2>&1 | %{fc1} --check-prefix=WD
+# RUN: not msil-ld --lto-emit-asm w.o d2.o libd.a -o x.il 2>&1 | %{fc1} --check-prefix=WD
+# RUN: not msil-ld --lto-emit-asm w.o libd.a d2.o -o x.il 2>&1 | %{fc1} --check-prefix=WD
+# RUN: not msil-ld --lto-emit-asm libd.a w.o d2.o -o x.il 2>&1 | %{fc1} --check-prefix=WD
+# RUN: not msil-ld --lto-emit-asm d2.o w.o -o x.il 2>&1 | %{fc1} --check-prefix=DW
+# RUN: not msil-ld --lto-emit-asm d2.o libd.a w.o -o x.il 2>&1 | %{fc1} --check-prefix=DW
+
+# WD:      {{^}}msil-ld: error: symbol type mismatch: x{{$}}
+# WD-NEXT: {{^}}>>> defined as function in w.o{{$}}
+# WD-NEXT: {{^}}>>> defined as data in d2.o{{$}}
+# DW:      {{^}}msil-ld: error: symbol type mismatch: x{{$}}
+# DW-NEXT: {{^}}>>> defined as data in d2.o{{$}}
+# DW-NEXT: {{^}}>>> defined as function in w.o{{$}}
+
+#--- fn-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @s() {
+  ret i32 1
+}
+
+define i32 @main() {
+  %r = call i32 @s()
+  ret i32 %r
+}
+
+#--- data-ref.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@s = external global i32
+
+define i32 @read_s() {
+  %v = load i32, ptr @s
+  ret i32 %v
+}
+
+#--- data-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@s = global i32 2, align 4
+
+define i32 @main() {
+  %v = load i32, ptr @s
+  ret i32 %v
+}
+
+#--- fn-ref.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @call_s() {
+  %r = call i32 @s()
+  ret i32 %r
+}
+
+declare i32 @s()
+
+#--- weak-data.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@s = weak global i32 3, align 4
+
+#--- tls-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@tv = thread_local global i32 4, align 4
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- plain-ref.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@tv = external global i32
+
+define i32 @read_tv() {
+  %v = load i32, ptr @tv
+  ret i32 %v
+}
+
+#--- w.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare extern_weak void @x()
+
+define i32 @main() {
+  %c = icmp ne ptr @x, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+#--- d.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@x = global i32 3, align 4
+
+#--- d2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@x = global i32 4, align 4
+
+define i32 @y() {
+  %v = load i32, ptr @x
+  ret i32 %v
+}

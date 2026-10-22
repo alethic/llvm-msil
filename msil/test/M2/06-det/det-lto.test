@@ -1,0 +1,67 @@
+# Two LTO builds of one multi-TU program give identical objects, archives and --lto-emit-asm text.
+# %{msil_det} builds the program twice, in two directories, from relative
+# paths with -fdebug-compilation-dir=., and compares every bitcode object, the
+# archive and msil-ld's --lto-emit-asm text byte for byte (not ilasm's image,
+# which ilasm stamps; plan 5.12.4). The program has what can make a linker's
+# output depend on hash order or addresses: static functions and variables of
+# the same name in several TUs (renamed by the IR linker), identical string
+# literals (COMDATs on windows-msvc), weak and strong definitions, common
+# symbols, constructors of several priorities, function pointer tables across
+# TUs, a stock-clang TU, and an archive with lazily extracted and unused
+# members. The first RUN line is %{msil_det} (-O2); the second repeats it at
+# -O0, where LTO runs no optimization and keeps every function.
+# Recon tests-p2 3.7, plan 5.12.5 (M14: --lto-emit-asm text; M20: objects and PE).
+# REQUIRES: msil-ar
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/b.c %t/c.c
+# REDEFINE: %{msil_stock_srcs} = %t/stock.c
+# REDEFINE: %{msil_archives} = parts=%t/p1.c,%t/p2.c,%t/p3.c
+# RUN: %{msil_det}
+# RUN: %msil_prog_build --det --level O0 --workdir %t.det0.d --src %{msil_srcs} --stock-src %{msil_stock_srcs} --archives=%{msil_archives}
+#--- main.c
+#include "msil_test.h"
+static int state = 1;
+__attribute__((noinline)) static int helper(int x) { return x + state++; }
+__attribute__((weak)) int pick(void) { return 1; }
+int shared __attribute__((common));
+int b_fn(int), c_fn(int), p1_fn(int), stock_fn(int);
+extern int (*const table[])(int);
+__attribute__((constructor(150))) static void init_main(void) { shared += 1; }
+int main(void) {
+  int r = helper(1) + b_fn(2) + c_fn(3) + pick();
+  for (int i = 0; i < 4; ++i)
+    r += table[i](i);
+  put_str("shared literal");
+  put_i64(r + p1_fn(4) + stock_fn(5) + shared);
+  return r & 0xff;
+}
+#--- b.c
+int puts(const char *);
+static int state = 10;
+__attribute__((noinline)) static int helper(int x) { return x * state++; }
+int pick(void) { return 2; }
+int shared __attribute__((common));
+__attribute__((constructor(120))) static void init_b(void) { shared += 10; }
+int b_fn(int x) {
+  puts("shared literal");
+  return helper(x);
+}
+#--- c.c
+static int state = 100;
+__attribute__((noinline)) static int helper(int x) { return x - state--; }
+int b_fn(int);
+int stock_fn(int);
+int c_fn(int x) { return helper(x); }
+static int local_add(int x) { return x + 7; }
+int (*const table[])(int) = {b_fn, c_fn, local_add, stock_fn};
+__attribute__((constructor)) static void init_c(void) {}
+#--- stock.c
+int stock_fn(int x) { return x * 3; }
+#--- p1.c
+int p2_fn(int);
+int p1_fn(int x) { return p2_fn(x) + 1; }
+#--- p2.c
+static const char text[] = "p2";
+int p2_fn(int x) { return x + text[0]; }
+#--- p3.c
+int p3_unused(int x) { return x - 1; }

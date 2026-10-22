@@ -1,0 +1,259 @@
+## -l search in M14 (ImplementationPlan.md 5.10.9, M14's subset; 5.9.14):
+## - the candidate names depend on the triple: lib<n>.a, <n>.lib, <n>.dll on
+##   windows-msvc; lib<n>.a, <n>.dll, lib<n>.dll, lib<n>.so on ELF triples;
+##   lib<n>.a, lib<n>.dll.a, <n>.dll.a, <n>.lib, lib<n>.dll, <n>.dll on
+##   windows-gnu;
+## - the -L directories are searched in order and the first one that holds a
+##   candidate wins; inside it a static library (an archive with bitcode
+##   members) wins over a native one (Design.md 5.2's static-first rule, the
+##   opposite of GNU ld);
+## - a native candidate (an import library, a DLL, a shared object or its
+##   linker script) is accepted without being read: M15 reads them, and until
+##   then the code generator binds only the D14 imports, so a function that
+##   only a native library provides is still undefined;
+## - -l:<file> takes that exact name from the -L directories;
+## - anything else is 'unable to find library -l<name>'.
+## The driver's default libraries (5.10.4) are found this way.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p d1 d2 both nat stat winlib lnxlib gnulib
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as main-lnx.ll -o main-lnx.o
+# RUN: llvm-as hello.ll -o hello.o
+# RUN: llvm-as hello-lnx.ll -o hello-lnx.o
+# RUN: llvm-as hello-gnu.ll -o hello-gnu.o
+# RUN: llvm-as foo1.ll -o foo1.o
+# RUN: llvm-as foo2.ll -o foo2.o
+# RUN: llvm-as foo-lnx.ll -o foo-lnx.o
+# RUN: llvm-ar rcs d1/libfoo.a foo1.o
+# RUN: llvm-ar rcs d2/libfoo.a foo2.o
+# RUN: llvm-ar rcs both/libfoo.a foo1.o
+# RUN: llvm-lib /def:foo.def /machine:x64 /out:both/foo.lib
+# RUN: llvm-lib /def:foo.def /machine:x64 /out:nat/foo.lib
+# RUN: llvm-ar rcs stat/libfoo.a foo2.o
+# RUN: llvm-ar rcs d1/custom.name foo1.o
+# RUN: llvm-lib /def:ucrt.def /machine:x64 /out:winlib/ucrt.lib
+# RUN: llvm-lib /def:kernel32.def /machine:x64 /out:winlib/kernel32.lib
+# RUN: llvm-lib /def:oldnames.def /machine:x64 /out:winlib/oldnames.lib
+# RUN: %python %S/Inputs/make-pe.py --dll winlib/winonly.dll
+# RUN: llvm-ar rcs lnxlib/libfoo.a foo-lnx.o
+# RUN: %python %S/Inputs/make-pe.py --dll lnxlib/foo.dll
+# RUN: llvm-dlltool -m i386:x86-64 -d msvcrt.def -l gnulib/libmsvcrt.a
+# RUN: llvm-dlltool -m i386:x86-64 -d kernel32.def -l gnulib/libkernel32.dll.a
+
+# DEFINE: %{why} = FileCheck %s --match-full-lines --strict-whitespace
+
+## The first directory with a candidate wins.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L d1 -L d2 -lfoo -o d12.il --why-extract=d12.why 2>&1 | count 0
+# RUN: %{why} --check-prefix=WHY1 --input-file=d12.why
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -Ld2 -Ld1 -lfoo -o d21.il --why-extract=d21.why 2>&1 | count 0
+# RUN: %{why} --check-prefix=WHY2 --input-file=d21.why
+
+#      WHY1:reference	extracted	symbol
+# WHY1-NEXT:main.o	d1{{[/\\]}}libfoo.a(foo1.o)	foo_fn
+#      WHY2:reference	extracted	symbol
+# WHY2-NEXT:main.o	d2{{[/\\]}}libfoo.a(foo2.o)	foo_fn
+
+## In one directory the static library wins over the import library.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L both -lfoo -o both.il --why-extract=both.why 2>&1 | count 0
+# RUN: %{why} --check-prefix=WHY-BOTH --input-file=both.why
+
+#      WHY-BOTH:reference	extracted	symbol
+# WHY-BOTH-NEXT:main.o	both{{[/\\]}}libfoo.a(foo1.o)	foo_fn
+
+## Across directories the first one wins even with a native candidate only:
+## the import library is accepted unread and foo_fn stays undefined.
+# RUN: not msil-ld --lto-emit-asm main.o -L nat -L stat -lfoo -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NATIVE-FIRST --implicit-check-not="PLEASE submit"
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L stat -L nat -lfoo -o stat.il 2>&1 | count 0
+
+# NATIVE-FIRST: {{^}}msil-ld: error: undefined symbol: foo_fn{{$}}
+
+## -l: takes the exact name.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L d1 -l:custom.name -o exact.il --why-extract=exact.why 2>&1 \
+# RUN:   | count 0
+# RUN: %{why} --check-prefix=WHY-EXACT --input-file=exact.why
+# RUN: not msil-ld --lto-emit-asm main.o -L d1 -l:libfoo -o x.il 2>&1 | FileCheck %s --check-prefix=NO-EXACT --implicit-check-not="PLEASE submit"
+
+#      WHY-EXACT:reference	extracted	symbol
+# WHY-EXACT-NEXT:main.o	d1{{[/\\]}}custom.name(foo1.o)	foo_fn
+# NO-EXACT: {{^}}msil-ld: error: unable to find library -l:libfoo{{$}}
+
+## -L=<dir> is sysroot-relative (5.10.9, lld's rule): with --sysroot=sysroot,
+## -L=/lib and -L=lib both name sysroot/lib. Without --sysroot the '=' names
+## the empty sysroot, so -L=/lib is the root's lib directory, and a plain -L
+## is never sysroot-relative.
+# RUN: mkdir -p sysroot/lib
+# RUN: llvm-ar rcs sysroot/lib/libsysfoo.a foo1.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 --sysroot=sysroot main.o -L=/lib -lsysfoo -o sys1.il \
+# RUN:   --why-extract=sys1.why 2>&1 | count 0
+# RUN: %{why} --check-prefix=WHY-SYS --input-file=sys1.why
+# RUN: msil-ld --lto-emit-asm --lto-O0 --sysroot sysroot main.o -L=lib -lsysfoo -o sys2.il \
+# RUN:   --why-extract=sys2.why 2>&1 | count 0
+# RUN: %{why} --check-prefix=WHY-SYS --input-file=sys2.why
+# RUN: not msil-ld --lto-emit-asm main.o -L=/lib -lsysfoo -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOLIB-SYS --implicit-check-not="PLEASE submit"
+# RUN: not msil-ld --lto-emit-asm --sysroot=sysroot main.o -L lib -lsysfoo -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOLIB-SYS --implicit-check-not="PLEASE submit"
+
+#      WHY-SYS:reference	extracted	symbol
+# WHY-SYS-NEXT:main.o	sysroot{{[/\\]}}lib{{[/\\]}}libsysfoo.a(foo1.o)	foo_fn
+# NOLIB-SYS: {{^}}msil-ld: error: unable to find library -lsysfoo{{$}}
+
+# RUN: not msil-ld --lto-emit-asm main.o -L d1 -lnosuch -o x.il 2>&1 | FileCheck %s --check-prefix=NOLIB --implicit-check-not="PLEASE submit"
+# RUN: not msil-ld --lto-emit-asm main.o -lfoo -o x.il 2>&1 | FileCheck %s --check-prefix=NOLIB-FOO --implicit-check-not="PLEASE submit"
+# NOLIB:     {{^}}msil-ld: error: unable to find library -lnosuch{{$}}
+# NOLIB-FOO: {{^}}msil-ld: error: unable to find library -lfoo{{$}}
+
+## windows-msvc: the driver's default libraries are import libraries, and a
+## DLL is a candidate; puts is a D14 import.
+# RUN: msil-ld --lto-emit-asm hello.o -L winlib -lucrt -lkernel32 -loldnames -lwinonly -o win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WIN --input-file=win.il
+# RUN: not msil-ld --lto-emit-asm hello.o -lucrt -o x.il 2>&1 | FileCheck %s --check-prefix=NOUCRT --implicit-check-not="PLEASE submit"
+
+# WIN: pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int)
+# NOUCRT: {{^}}msil-ld: error: unable to find library -lucrt{{$}}
+
+## ELF triples: lib<n>.so (here glibc's linker scripts) and <n>.dll; .lib is
+## not a candidate. A bitcode lib<n>.a wins over <n>.dll.
+# RUN: msil-ld --lto-emit-asm hello-lnx.o -L lnxlib -lc -lm -o lnx.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LNX --input-file=lnx.il
+# RUN: not msil-ld --lto-emit-asm hello-lnx.o -L winlib -lkernel32 -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOLIB-LNX --implicit-check-not="PLEASE submit"
+# RUN: msil-ld --lto-emit-asm --lto-O0 main-lnx.o -L lnxlib -lfoo -o lnxfoo.il --why-extract=lnxfoo.why 2>&1 \
+# RUN:   | count 0
+# RUN: %{why} --check-prefix=WHY-LNX --input-file=lnxfoo.why
+
+# LNX: pinvokeimpl("libc" cdecl) int32 'puts'(native int)
+# NOLIB-LNX: {{^}}msil-ld: error: unable to find library -lkernel32{{$}}
+#      WHY-LNX:reference	extracted	symbol
+# WHY-LNX-NEXT:main-lnx.o	lnxlib{{[/\\]}}libfoo.a(foo-lnx.o)	foo_fn
+
+## windows-gnu: MinGW import archives lib<n>.a and lib<n>.dll.a.
+# RUN: msil-ld --lto-emit-asm hello-gnu.o -L gnulib -lmsvcrt -lkernel32 -o gnu.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=GNU --input-file=gnu.il
+# RUN: not msil-ld --lto-emit-asm hello.o -L gnulib -lkernel32 -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOLIB-MSVC --implicit-check-not="PLEASE submit"
+
+# GNU: pinvokeimpl("msvcrt" cdecl) int32 'puts'(native int)
+# NOLIB-MSVC: {{^}}msil-ld: error: unable to find library -lkernel32{{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @foo_fn()
+  ret i32 %r
+}
+
+declare i32 @foo_fn()
+
+#--- main-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @foo_fn()
+  ret i32 %r
+}
+
+declare i32 @foo_fn()
+
+#--- hello.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  ret i32 0
+}
+
+declare i32 @puts(ptr)
+
+#--- hello-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  ret i32 0
+}
+
+declare i32 @puts(ptr)
+
+#--- hello-gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  ret i32 0
+}
+
+declare i32 @puts(ptr)
+
+#--- foo1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @foo_fn() {
+  ret i32 1
+}
+
+#--- foo2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @foo_fn() {
+  ret i32 2
+}
+
+#--- foo-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @foo_fn() {
+  ret i32 3
+}
+
+#--- foo.def
+LIBRARY foo.dll
+EXPORTS
+  foo_fn
+
+#--- ucrt.def
+LIBRARY api-ms-win-crt-stdio-l1-1-0.dll
+EXPORTS
+  puts
+
+#--- kernel32.def
+LIBRARY kernel32.dll
+EXPORTS
+  GetTickCount
+
+#--- oldnames.def
+LIBRARY oldnames.dll
+EXPORTS
+  strdup
+
+#--- msvcrt.def
+LIBRARY msvcrt.dll
+EXPORTS
+  puts
+
+#--- lnxlib/libc.so
+/* GNU ld script, as glibc installs it */
+OUTPUT_FORMAT(elf64-x86-64)
+GROUP ( /lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a  AS_NEEDED ( /lib64/ld-linux-x86-64.so.2 ) )
+
+#--- lnxlib/libm.so
+/* GNU ld script, as glibc installs it */
+OUTPUT_FORMAT(elf64-x86-64)
+GROUP ( /lib/x86_64-linux-gnu/libm.so.6  AS_NEEDED ( /lib/x86_64-linux-gnu/libmvec.so.1 ) )

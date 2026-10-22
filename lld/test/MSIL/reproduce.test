@@ -1,0 +1,73 @@
+## --reproduce=<file> (ImplementationPlan.md 5.9.14): lld's tar, named after
+## the file's stem: <name>/response.txt (the command line, input paths
+## rewritten to the tar's tree by lld/Common/Reproduce.cpp, -o reduced to its
+## file name), <name>/version.txt, and every file msil-ld read: here the
+## objects and the archives, also those found by -l. Paths use '/' on every
+## host. Only the listing, response.txt and version.txt are read back, so the
+## tree's long paths are never extracted (lld's reproduce tests are not run on
+## Windows for that reason).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p build/lib
+# RUN: llvm-as main.ll -o build/main.o
+# RUN: llvm-as helper.ll -o build/helper.o
+# RUN: llvm-ar rcs build/lib/libhelper.a build/helper.o
+
+# RUN: msil-ld --lto-emit-asm build/main.o -L build/lib -lhelper -o build/prog.il \
+# RUN:   --reproduce=repro.tar 2>&1 | count 0
+# RUN: tar tf repro.tar | FileCheck %s --check-prefix=TAR -DPATH='repro/%:t'
+# RUN: tar xOf repro.tar repro/response.txt | FileCheck %s --check-prefix=RSP -DPATH='%:t'
+# RUN: tar xOf repro.tar repro/version.txt | FileCheck %s --check-prefix=VERSION
+
+# TAR-DAG: {{^}}repro/response.txt{{$}}
+# TAR-DAG: {{^}}repro/version.txt{{$}}
+# TAR-DAG: {{^}}[[PATH]]/build/main.o{{$}}
+# TAR-DAG: {{^}}[[PATH]]/build/lib/libhelper.a{{$}}
+
+# RSP-DAG: {{^}}--lto-emit-asm{{$}}
+# RSP-DAG: {{^}}-o prog.il{{$}}
+# RSP-DAG: {{^}}{{.*}}[[PATH]]/build/main.o{{$}}
+# RSP-DAG: {{^}}-L{{ ?}}{{.*}}build{{[/\\]}}lib{{$}}
+# RSP-DAG: {{^}}-lhelper{{$}}
+
+# VERSION: {{^}}LLD {{.+}}
+
+## --sysroot is rewritten to the tar's tree like an input path, and a library
+## found through a sysroot-relative -L=<dir> is in the tar.
+# RUN: mkdir -p sysroot/lib
+# RUN: llvm-ar rcs sysroot/lib/libsyshelper.a build/helper.o
+# RUN: msil-ld --lto-emit-asm --sysroot=sysroot build/main.o -L=/lib -lsyshelper -o build/sys.il \
+# RUN:   --reproduce=sysrepro.tar 2>&1 | count 0
+# RUN: tar tf sysrepro.tar | FileCheck %s --check-prefix=SYS-TAR -DPATH='sysrepro/%:t'
+# RUN: tar xOf sysrepro.tar sysrepro/response.txt | FileCheck %s --check-prefix=SYS-RSP -DPATH='%:t'
+
+# SYS-TAR-DAG: {{^}}sysrepro/response.txt{{$}}
+# SYS-TAR-DAG: {{^}}[[PATH]]/build/main.o{{$}}
+# SYS-TAR-DAG: {{^}}[[PATH]]/sysroot/lib/libsyshelper.a{{$}}
+
+# SYS-RSP-DAG: {{^}}--sysroot{{[= ]}}{{.*}}[[PATH]]/sysroot{{$}}
+# SYS-RSP-DAG: {{^}}-lsyshelper{{$}}
+
+## The link itself is unchanged by --reproduce.
+# RUN: mkdir plain
+# RUN: msil-ld --lto-emit-asm build/main.o -L build/lib -lhelper -o plain/prog.il 2>&1 | count 0
+# RUN: cmp build/prog.il plain/prog.il
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @helper()
+  ret i32 %r
+}
+
+declare i32 @helper()
+
+#--- helper.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @helper() {
+  ret i32 4
+}

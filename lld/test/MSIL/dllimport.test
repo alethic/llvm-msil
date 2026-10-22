@@ -1,0 +1,88 @@
+## A dllimport reference to a symbol that another bitcode input defines
+## (ImplementationPlan.md 5.9.13's Resolutions bullet, section 12 row '5.9.13's
+## Resolutions bullet amended (review-r2 finding 1)'). A dllimport declaration
+## is named '__imp_<name>' in the bitcode symbol table, and msil-ld binds it to
+## '<name>' as lld-link does; it also marks the symbol as used by a regular
+## object ('lld/COFF/InputFiles.cpp:1422-1434'), so the bitcode definition is
+## VisibleToRegularObj and survives LTO, positional or extracted from an
+## archive, in either input order. The link that the native windows-msvc link
+## completes (LNK4217) therefore succeeds, and the --lto-emit-asm text defines
+## both: the variable as a public address field with its initializer bytes
+## (1234567 = 0x0012D687), the function as a public method.
+##
+## The inputs carry a full-LTO module summary (module flag ThinLTO = 0 and
+## 'opt -module-summary'), as 'clang -flto=full' writes them: LTO's
+## summary-based liveness is what dropped the definition before the fix, and
+## then the backend reported "external global variable 'gdata' is not
+## supported (phase 2 linker)" for the merged module's leftover declaration.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir lib
+# RUN: opt -module-summary ref.ll -o ref.o
+# RUN: opt -module-summary gdata.ll -o gdata.o
+# RUN: opt -module-summary foo.ll -o foo.o
+# RUN: llvm-ar rcs lib/libdef.a gdata.o foo.o
+
+# DEFINE: %{quiet} = FileCheck %s --check-prefix=QUIET --allow-empty \
+# DEFINE:   --implicit-check-not='is not supported' --implicit-check-not="PLEASE submit" \
+# DEFINE:   --implicit-check-not="Stack dump" --implicit-check-not="LLVM ERROR"
+# DEFINE: %{il} = FileCheck %s --check-prefix=IL --implicit-check-not=pinvokeimpl \
+# DEFINE:   --implicit-check-not='is not supported'
+
+## Positional definitions, after and before the reference.
+# RUN: msil-ld --lto-emit-asm ref.o gdata.o foo.o -o after.il 2>&1 | %{quiet}
+# RUN: %{il} --input-file=after.il
+# RUN: msil-ld --lto-emit-asm gdata.o foo.o ref.o -o before.il 2>&1 | %{quiet}
+# RUN: %{il} --input-file=before.il
+
+## Definitions in archive members found by -L/-l: each member is extracted by
+## its '__imp_' reference.
+# RUN: msil-ld --lto-emit-asm ref.o -L lib -ldef -o archive.il 2>&1 | %{quiet}
+# RUN: %{il} --input-file=archive.il
+
+# QUIET-NOT: error:
+
+# IL-DAG:  {{^}}.method public static int32 'main'() cil managed{{$}}
+# IL-DAG:  {{^}}.method public static int32 'foo'(int32) cil managed{{$}}
+# IL-DAG:  ldsfld native int 'gdata'
+# IL:      {{^}}.data cil '<msil>image_d' = bytearray ({{$}}
+# IL-NEXT: {{^}}  87 D6 12 00 )
+# IL:      {{^}}.field public static initonly native int 'gdata'
+
+#--- ref.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@gdata = external dllimport global i32
+
+declare dllimport i32 @foo(i32)
+
+define i32 @main() {
+  %v = load i32, ptr @gdata
+  %r = call i32 @foo(i32 %v)
+  ret i32 %r
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"ThinLTO", i32 0}
+
+#--- gdata.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@gdata = global i32 1234567, align 4
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"ThinLTO", i32 0}
+
+#--- foo.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @foo(i32 %x) {
+  %r = mul i32 %x, 3
+  ret i32 %r
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"ThinLTO", i32 0}

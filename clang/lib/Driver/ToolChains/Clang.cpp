@@ -9337,9 +9337,10 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
   const std::string &TripleStr = Triple.getTriple();
   const auto &D = getToolChain().getDriver();
 
-  // The MSIL target has no object writer yet (-save-temps -c, .s inputs).
+  // No assembler turns ILAsm text into an MSIL object: .s inputs, -x
+  // assembler, and the assemble step of -save-temps, -via-file-asm and /FA.
   if (Triple.isOSBinFormatMSIL())
-    D.Diag(diag::err_drv_msil_no_object_output) << TripleStr;
+    D.Diag(diag::err_drv_msil_ilasm_input) << TripleStr;
 
   // Don't warn about "clang -w -c foo.s"
   Args.ClaimAllArgs(options::OPT_w);

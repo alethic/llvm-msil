@@ -1,0 +1,159 @@
+## LTO options of M14 (ImplementationPlan.md 5.9.3, 5.9.13):
+## - --lto-O<n> sets the LTO optimization level (default 2): at -O0 every
+##   method stays, -O1 removes dead code, and from -O2 on the callee is
+##   inlined and folded;
+##   --lto-CGO<n> sets the code generation level;
+## - --save-temps writes LTO's temporaries next to -o, among them
+##   <output>.resolution.txt, whose flags show which symbols msil-ld keeps
+##   visible to regular objects ('x'): the entry symbol, -u symbols and
+##   NO_STRIP symbols (those in llvm.used), while the winning definitions are
+##   prevailing ('p'); symbols referenced by CIL objects (M20) and -shared
+##   exports (M22) join the visible ones later;
+## - -mllvm <opt> and --mllvm=<opt> reach the MSIL code generator that runs
+##   inside msil-ld;
+## - --disable-verify, --thinlto-jobs=<n>, --thinlto-cache-dir=<dir> and
+##   --lto-partitions=1 are accepted (ThinLTO and more partitions need CIL
+##   objects, M20; lto-object-output-error.test).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as add.ll -o add.o
+# RUN: llvm-as used.ll -o used.o
+# RUN: mkdir o0 o1 o2 o3 dflt st stu acc cgo su
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o add.o -o o0/prog.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=O0 --input-file=o0/prog.il
+# RUN: msil-ld --lto-emit-asm --lto-O1 main.o add.o -o o1/prog.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=O1 --implicit-check-not="'helper'" --input-file=o1/prog.il
+# RUN: msil-ld --lto-emit-asm main.o add.o -o dflt/prog.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=OPT --implicit-check-not="'add3'" --implicit-check-not="'helper'" \
+# RUN:   --input-file=dflt/prog.il
+# RUN: msil-ld --lto-emit-asm --lto-O2 main.o add.o -o o2/prog.il 2>&1 | count 0
+# RUN: cmp dflt/prog.il o2/prog.il
+# RUN: msil-ld --lto-emit-asm --lto-O3 main.o add.o -o o3/prog.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=OPT --implicit-check-not="'add3'" --implicit-check-not="'helper'" \
+# RUN:   --input-file=o3/prog.il
+
+## -O0: nothing is removed, so the unreferenced (internalized) helper stays.
+# O0-LABEL:   {{^}}.method public static int32 'main'() cil managed{{$}}
+# O0:         call int32 'add3'(int32)
+# O0-LABEL:   {{^}}.method assembly static int32 'add3'(int32) cil managed{{$}}
+# O0-LABEL:   {{^}}.method assembly static int32 'helper'(int32) cil managed{{$}}
+
+## -O1: dead code is removed, add3 is still called.
+# O1-LABEL:   {{^}}.method public static int32 'main'() cil managed{{$}}
+# O1:         call int32 'add3'(int32)
+# O1-LABEL:   {{^}}.method assembly static int32 'add3'(int32) cil managed{{$}}
+
+## -O2 (the default) and -O3: add3 is inlined and folded.
+# OPT-LABEL:  {{^}}.method public static int32 'main'() cil managed{{$}}
+# OPT:        {{^}}  ldc.i4.7{{$}}
+# OPT-NEXT:   {{^}}  ret{{$}}
+
+## --lto-CGO<n> is accepted at every level.
+# RUN: msil-ld --lto-emit-asm --lto-O0 --lto-CGO0 main.o add.o -o cgo/0.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O2 --lto-CGO3 main.o add.o -o cgo/3.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=O0 --input-file=cgo/0.il
+# RUN: FileCheck %s --check-prefix=OPT --input-file=cgo/3.il
+
+## --save-temps and the resolutions msil-ld gives LTO.
+# RUN: msil-ld --lto-emit-asm --save-temps main.o add.o -o st/prog.il 2>&1 | count 0
+# RUN: ls st | FileCheck %s --check-prefix=TEMPS
+# RUN: FileCheck %s --check-prefix=RES --input-file=st/prog.il.resolution.txt
+
+# TEMPS-DAG:  {{^}}prog.il{{$}}
+# TEMPS-DAG:  {{^}}prog.il.0.0.preopt.bc{{$}}
+# TEMPS-DAG:  {{^}}prog.il.0.5.precodegen.bc{{$}}
+# TEMPS-DAG:  {{^}}prog.il.resolution.txt{{$}}
+
+# RES:        {{^}}main.o{{$}}
+# RES-NEXT:   {{^}}-r=main.o,main,p{{l?}}x{{$}}
+# RES-NEXT:   {{^}}-r=main.o,add3,{{l?}}{{$}}
+# RES-NEXT:   {{^}}add.o{{$}}
+# RES-NEXT:   {{^}}-r=add.o,add3,p{{l?}}{{$}}
+# RES-NEXT:   {{^}}-r=add.o,helper,p{{l?}}{{$}}
+
+## -u keeps a symbol visible: add3 stays a public method even at -O2.
+# RUN: msil-ld --lto-emit-asm --save-temps -u add3 main.o add.o -o stu/prog.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=RES-U --input-file=stu/prog.il.resolution.txt
+# RUN: FileCheck %s --check-prefix=IL-U --input-file=stu/prog.il
+
+# RES-U:      {{^}}add.o{{$}}
+# RES-U-NEXT: {{^}}-r=add.o,add3,p{{l?}}x{{$}}
+# RES-U-NEXT: {{^}}-r=add.o,helper,p{{l?}}{{$}}
+# IL-U:       {{^}}.method public static int32 'add3'(int32) cil managed{{$}}
+
+## NO_STRIP: a function and a variable in llvm.used are visible to regular
+## objects ('x'); the unreferenced plain function and variable are only
+## prevailing. The resolutions are the check that matters: LTO keeps the
+## llvm.used members in the IL at -O2 even without 'x'.
+# RUN: msil-ld --lto-emit-asm --save-temps used.o -o su/prog.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=RES-USED --input-file=su/prog.il.resolution.txt
+# RUN: FileCheck %s --check-prefix=IL-USED --input-file=su/prog.il
+
+# RES-USED:      {{^}}used.o{{$}}
+# RES-USED-NEXT: {{^}}-r=used.o,keptfn,p{{l?}}x{{$}}
+# RES-USED-NEXT: {{^}}-r=used.o,plain,p{{l?}}{{$}}
+# RES-USED-NEXT: {{^}}-r=used.o,main,p{{l?}}x{{$}}
+# RES-USED-NEXT: {{^}}-r=used.o,kept,p{{l?}}x{{$}}
+# RES-USED-NEXT: {{^}}-r=used.o,plain_g,p{{l?}}{{$}}
+# IL-USED-DAG:   {{^}}.method public static int32 'keptfn'(int32) cil managed{{$}}
+# IL-USED-DAG:   {{^}}.field public static initonly native int 'kept'
+
+## Backend options reach the code generator in both spellings.
+# RUN: msil-ld --lto-emit-asm -mllvm -msil-assembly-name=viaopt main.o add.o -o acc/m1.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=MLLVM1 --input-file=acc/m1.il
+# RUN: msil-ld --lto-emit-asm --mllvm=-msil-assembly-name=viaeq main.o add.o -o acc/m2.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=MLLVM2 --input-file=acc/m2.il
+
+# MLLVM1:     {{^}}.assembly 'viaopt' { .ver 0:0:0:0 }{{$}}
+# MLLVM2:     {{^}}.assembly 'viaeq' { .ver 0:0:0:0 }{{$}}
+
+## Accepted options that change nothing for a full-LTO link.
+# RUN: msil-ld --lto-emit-asm --disable-verify --thinlto-jobs=2 --thinlto-cache-dir=cache \
+# RUN:   --lto-partitions=1 main.o add.o -o acc/prog.il 2>&1 | count 0
+# RUN: cmp dflt/prog.il acc/prog.il
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @add3(i32 4)
+  ret i32 %r
+}
+
+declare i32 @add3(i32)
+
+#--- add.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @add3(i32 %x) {
+  %r = add i32 %x, 3
+  ret i32 %r
+}
+
+define i32 @helper(i32 %x) {
+  ret i32 %x
+}
+
+#--- used.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@kept = global i32 5
+@plain_g = global i32 6
+@llvm.used = appending global [2 x ptr] [ptr @kept, ptr @keptfn], section "llvm.metadata"
+
+define i32 @keptfn(i32 %x) {
+  ret i32 %x
+}
+
+define i32 @plain(i32 %x) {
+  ret i32 %x
+}
+
+define i32 @main() {
+  ret i32 0
+}

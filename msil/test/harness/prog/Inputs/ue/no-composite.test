@@ -1,0 +1,2 @@
+# No composite RUN line: update-expected.py skips it.
+# RUN: true

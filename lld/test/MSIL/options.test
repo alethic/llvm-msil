@@ -1,0 +1,133 @@
+## msil-ld's command line in M14 (ImplementationPlan.md 5.9.3 and 5.9.14;
+## the still valid cases of M13's stub.test moved here):
+## - --version prints the lld version and skips input processing, so a
+##   missing input does not matter; -v without inputs prints it too and exits
+##   0, and -v with inputs prints it and links;
+## - --help prints the option table, which holds M14's options and none of a
+##   later milestone's (until its milestone such an option is an unknown
+##   argument);
+## - without inputs: 'no input files';
+## - -r and --relocatable are 'error: -r is not supported', reported while
+##   the options are read, so -r alone prints only that (the one msil-ld-only
+##   error Phase 2 never retires; dispatch.test identifies msil-ld by it);
+## - -shared and --shared are recognized and rejected, 'error: -shared is not
+##   supported yet' (M14-M21), because the clang driver already passes
+##   --shared for -shared;
+## - -s and --strip-all are accepted and ignored (the driver passes them), and
+##   the other M14 options are accepted.
+## Every diagnostic starts with 'msil-ld: '. No run may crash.
+##
+## LLD_IN_TEST=2 runs the driver twice in one process and fails if the two
+## exit codes differ: msil-ld resets its state for each call (5.9.1).
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" \
+# DEFINE:   --implicit-check-not="Stack dump" --implicit-check-not="LLVM ERROR"
+# DEFINE: %{one} = --implicit-check-not=error: --implicit-check-not=warning:
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+
+# RUN: msil-ld --version 2>&1 | %{fc} %{one} --check-prefix=VERSION
+# RUN: msil-ld --version missing.o 2>&1 | %{fc} %{one} --check-prefix=VERSION
+# RUN: msil-ld -v 2>&1 | %{fc} %{one} --check-prefix=VERSION
+# RUN: msil-ld -v --lto-emit-asm main.o -o v.il 2>&1 | %{fc} %{one} --check-prefix=VERSION
+# RUN: FileCheck %s --check-prefix=IL-V --input-file=v.il
+
+# VERSION:      {{^}}LLD {{.+}}
+# IL-V:         {{^}}.assembly 'v' { .ver 0:0:0:0 }{{$}}
+
+# RUN: msil-ld --help 2>&1 | %{fc} %{one} --check-prefix=HELP \
+# RUN:   --implicit-check-not=--reference --implicit-check-not=--print-imports \
+# RUN:   --implicit-check-not=--ucrtbase-imports --implicit-check-not=gc-sections \
+# RUN:   --implicit-check-not=--export-class --implicit-check-not=--no-dependent-libraries \
+# RUN:   --implicit-check-not=--print-bcl --implicit-check-not=--interface-only
+
+# HELP:         OVERVIEW:
+# HELP:         USAGE: {{.*}}msil-ld{{.*}} [options] file...
+# HELP:         OPTIONS:
+# HELP-DAG:     --allow-multiple-definition
+# HELP-DAG:     --help
+# HELP-DAG:     --lto-emit-asm
+# HELP-DAG:     --reproduce
+# HELP-DAG:     --start-lib
+# HELP-DAG:     --trace
+# HELP-DAG:     --version
+# HELP-DAG:     --whole-archive
+# HELP-DAG:     --why-extract
+
+# RUN: not msil-ld 2>&1 | %{fc} %{one} --check-prefix=NOINPUT
+# RUN: not msil-ld --lto-emit-asm -o x.il 2>&1 | %{fc} %{one} --check-prefix=NOINPUT
+
+# NOINPUT:      {{^}}msil-ld: error: no input files{{$}}
+
+## -r is rejected while the options are read: alone, with a missing input,
+## and with a valid input, which adds no other diagnostic.
+# RUN: not msil-ld -r 2>&1 | %{fc} %{one} --check-prefix=RELOC
+# RUN: not msil-ld --relocatable 2>&1 | %{fc} %{one} --check-prefix=RELOC
+# RUN: not msil-ld -r missing.o 2>&1 | %{fc} --check-prefix=RELOC
+# RUN: not msil-ld -r --lto-emit-asm main.o -o r.il 2>&1 | %{fc} %{one} --check-prefix=RELOC
+
+# RELOC:        {{^}}msil-ld: error: -r is not supported{{$}}
+
+# RUN: not msil-ld -shared --lto-emit-asm main.o -o s.il 2>&1 | %{fc} %{one} --check-prefix=SHARED
+# RUN: not msil-ld --shared --lto-emit-asm main.o -o s.il 2>&1 | %{fc} %{one} --check-prefix=SHARED
+
+# SHARED:       {{^}}msil-ld: error: -shared is not supported yet{{$}}
+
+## Options of later milestones are unknown arguments (5.9.3).
+# RUN: not msil-ld --no-such-option --lto-emit-asm main.o -o u.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--no-such-option
+# RUN: not msil-ld --gc-sections --lto-emit-asm main.o -o u.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--gc-sections
+# RUN: not msil-ld --ucrtbase-imports --lto-emit-asm main.o -o u.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--ucrtbase-imports
+# RUN: not msil-ld --print-imports --lto-emit-asm main.o -o u.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--print-imports
+# RUN: not msil-ld --reference=refs --lto-emit-asm main.o -o u.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--reference=refs
+# RUN: not msil-ld --export-class=Contoso.Native --lto-emit-asm main.o -o u.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--export-class=Contoso.Native
+# RUN: not msil-ld --no-dependent-libraries --lto-emit-asm main.o -o u.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--no-dependent-libraries
+
+# UNKNOWN:      {{^}}msil-ld: error: unknown argument: [[OPT]]
+
+## -s and --strip-all change nothing.
+# RUN: mkdir plain strip1 strip2
+# RUN: msil-ld --lto-emit-asm main.o -o plain/prog.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm -s main.o -o strip1/prog.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --strip-all main.o -o strip2/prog.il 2>&1 | count 0
+# RUN: cmp plain/prog.il strip1/prog.il
+# RUN: cmp plain/prog.il strip2/prog.il
+
+## The other M14 options are accepted in both spellings (joined '=' and
+## separate) where lld has both.
+# RUN: mkdir sysroot lib
+# RUN: msil-ld --lto-emit-asm --target=x86_64-pc-windows-msvc-msil --sysroot=sysroot \
+# RUN:   -L lib -Llib --color-diagnostics --fatal-warnings --error-limit=5 --warn-common \
+# RUN:   --allow-multiple-definition -u main --undefined=main -e main --entry=main \
+# RUN:   --assembly-name=accepted main.o -o all.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=IL-ALL --input-file=all.il
+# RUN: msil-ld --lto-emit-asm --target x86_64-pc-windows-msvc-msil --entry main --undefined main \
+# RUN:   --assembly-name accepted main.o -o all2.il 2>&1 | count 0
+# RUN: cmp all.il all2.il
+# RUN: msil-ld --lto-emit-asm --verbose main.o -o verbose.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=NODIAG --allow-empty
+
+# IL-ALL:       {{^}}.assembly 'accepted' { .ver 0:0:0:0 }{{$}}
+# NODIAG-NOT:   {{error:|warning:}}
+
+# RUN: env LLD_IN_TEST=2 msil-ld --version 2>&1 | %{fc} %{one} --check-prefix=VERSION
+# RUN: env LLD_IN_TEST=2 not msil-ld 2>&1 | %{fc} %{one} --check-prefix=NOINPUT
+# RUN: env LLD_IN_TEST=2 not msil-ld -r 2>&1 | %{fc} %{one} --check-prefix=RELOC
+# RUN: mkdir twice
+# RUN: env LLD_IN_TEST=2 msil-ld --lto-emit-asm main.o -o twice/prog.il 2>&1 | count 0
+# RUN: cmp plain/prog.il twice/prog.il
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 42
+}

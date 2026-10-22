@@ -96,12 +96,18 @@ static cl::opt<std::string> MSILAssemblyName(
              "the module's source file name, or 'module')"),
     cl::value_desc("name"));
 
-/// The name of the assembly: -msil-assembly-name, else the stem of the
-/// source file name (decision D28). Windows separators are recognized on
-/// every host, so a module compiled on Windows gets the same name everywhere.
+/// The name of the assembly (decision D28 as amended for M14):
+/// -msil-assembly-name, else the module flag "msil-assembly-name", which
+/// msil-ld sets on its merged LTO module (named ld-temp.o), else the stem of
+/// the source file name. Windows separators are recognized on every host, so
+/// a module compiled on Windows gets the same name everywhere.
 static std::string getAssemblyName(const Module &M) {
   if (!MSILAssemblyName.empty())
     return MSILAssemblyName;
+  if (const auto *Flag =
+          dyn_cast_or_null<MDString>(M.getModuleFlag("msil-assembly-name"));
+      Flag && !Flag->getString().empty())
+    return Flag->getString().str();
   StringRef Stem =
       sys::path::stem(M.getSourceFileName(), sys::path::Style::windows);
   if (Stem.empty() || Stem == "." || Stem == "..")
@@ -701,16 +707,29 @@ static bool hasNativeSignature(const Function &F) {
   return true;
 }
 
+/// Whether \p M is the merged module of msil-ld's LTO, on which msil-ld sets
+/// the module flag "msil-lto" (i32 1). A value that is not an integer constant
+/// counts as absent.
+static bool isMSILLDModule(const Module &M) {
+  const auto *Flag =
+      mdconst::dyn_extract_or_null<ConstantInt>(M.getModuleFlag("msil-lto"));
+  return Flag && !Flag->isZero();
+}
+
 /// Reports the undefined function or library call \p Name, which is not a
 /// Phase-1 import (decision D14): Phase 1 has no linker that could resolve it.
 /// An undefined function of the module gets the same text whatever its name,
 /// the compiler-rt and __atomic_* helpers that clang and AtomicExpand declare
-/// included. A library call (\p IsLibCall) gets the text of LowerCall's
+/// included. In msil-ld's LTO module (\p Linked) the linker has bound every
+/// symbol it could, so such a function is msil-ld's 'undefined symbol'
+/// (plan 5.9.6). A library call (\p IsLibCall) gets the text of LowerCall's
 /// library-call policy, which rejects such calls before they are built, so
 /// that is only a backstop.
-static void reportNotImported(LLVMContext &Ctx, StringRef Name,
-                              bool IsLibCall) {
-  if (!IsLibCall)
+static void reportNotImported(LLVMContext &Ctx, StringRef Name, bool IsLibCall,
+                              bool Linked) {
+  if (!IsLibCall && Linked)
+    Ctx.emitError("undefined symbol: " + Name);
+  else if (!IsLibCall)
     Ctx.emitError("undefined function '" + Name +
                   "' is not defined in this module and is not a Phase-1 "
                   "import (puts, putchar, the C math library, "
@@ -726,6 +745,7 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
   const Triple &TT = TM.getTargetTriple();
   LLVMContext &Ctx = M.getContext();
   MSILTargetStreamer &TS = getTargetStreamer();
+  bool Linked = isMSILLDModule(M);
 
   // One declaration per method: a library call and a call of a declared
   // function of the same name and signature (sqrt from C and from the
@@ -765,7 +785,7 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     }
     std::optional<StringRef> Lib = MSIL::getPInvokeModule(TT, Name, F);
     if (!Lib) {
-      reportNotImported(Ctx, Name, /*IsLibCall=*/false);
+      reportNotImported(Ctx, Name, /*IsLibCall=*/false, Linked);
       continue;
     }
     // Only scalars cross the boundary as the native calling convention
@@ -797,7 +817,7 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     // LowerCall builds a library call only for a Phase-1 import (D14).
     std::optional<StringRef> Lib = MSIL::getPInvokeModule(TT, Name, F);
     if (!Lib) {
-      reportNotImported(Ctx, Name, /*IsLibCall=*/true);
+      reportNotImported(Ctx, Name, /*IsLibCall=*/true, Linked);
       continue;
     }
     Declare(F, Name, *Sig, *Lib, MSIL::getPInvokeEntry(Name, F));

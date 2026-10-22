@@ -1,0 +1,181 @@
+## The codegen triple and the triple check of bitcode inputs
+## (ImplementationPlan.md 5.9.3 --target, 5.8.9, 5.9.13). The codegen triple
+## is --target, else the first input's triple (with -msil appended to a
+## native one, stock-bitcode.test). Every bitcode input must have the codegen
+## triple's key: architecture, OS and environment without its version, object
+## format MSIL; the vendor and the MSVC version are ignored. A mismatch is
+## '<file>: target triple <t> is incompatible with <t0>', once for each
+## mismatching input in load order. The data model of a
+## bitcode input follows from its triple, so behind equal triple keys it
+## cannot differ (CIL objects check it from M20).
+## msil-ld links only D6's MSIL triples (section 12 row amending 5.9.3's
+## --target row and 5.9.14's triple row): a codegen triple whose architecture
+## is not x86_64 or aarch64, or that is neither Linux, windows-msvc nor
+## windows-gnu, is 'unsupported target triple '<codegen triple>' for MSIL',
+## reported once before the per-file checks, and the link stops there (no
+## triple error per file, no stock-bitcode warning, no LTO).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as win.ll -o win.o
+# RUN: llvm-as win-ver.ll -o win-ver.o
+# RUN: llvm-as win-unknown.ll -o win-unknown.o
+# RUN: llvm-as lnx.ll -o lnx.o
+# RUN: llvm-as lnxmain.ll -o lnxmain.o
+# RUN: llvm-as lnx2.ll -o lnx2.o
+# RUN: llvm-as gnu.ll -o gnu.o
+# RUN: llvm-as gnu-pc.ll -o gnu-pc.o
+# RUN: llvm-as a64.ll -o a64.o
+# RUN: llvm-as mac.ll -o mac.o
+# RUN: llvm-as i686.ll -o i686.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not=error: --implicit-check-not=warning: \
+# DEFINE:   --implicit-check-not="PLEASE submit" --implicit-check-not="LLVM ERROR"
+
+## The first input names the codegen triple.
+# RUN: msil-ld --lto-emit-asm win.o -o win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WIN --input-file=win.il
+# RUN: msil-ld --lto-emit-asm --target=x86_64-pc-windows-msvc-msil win.o -o win2.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WIN --input-file=win2.il
+# RUN: msil-ld --lto-emit-asm lnxmain.o lnx.o lnx2.o -o lnx.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LNX --input-file=lnx.il
+
+# WIN: {{^}}// target triple   = "x86_64-pc-windows-msvc-msil"{{$}}
+# LNX: {{^}}// target triple   = "x86_64-unknown-linux-gnu-msil"{{$}}
+
+## The MSVC version and the vendor are not part of the key. (The IR linker
+## ignores a MinGW vendor too, so neither link prints anything.)
+# RUN: msil-ld --lto-emit-asm win.o win-ver.o -o ver.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm win-ver.o win.o -o ver2.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=VER --input-file=ver2.il
+# RUN: msil-ld --lto-emit-asm gnu.o gnu-pc.o -o gnu.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=GNU --input-file=gnu.il
+
+# VER: {{^}}// target triple   = "x86_64-pc-windows-msvc{{(19.33.0)?}}-msil"{{$}}
+# GNU: {{^}}// target triple   = "x86_64-w64-windows-gnu-msil"{{$}}
+
+## A vendor difference on windows-msvc is no error either (the IR linker may
+## warn about it, which is upstream's business).
+# RUN: msil-ld --lto-emit-asm win.o win-unknown.o -o vendor.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOERR --allow-empty
+# RUN: FileCheck %s --check-prefix=WIN --input-file=vendor.il
+
+# NOERR-NOT: error:
+
+## Mismatches: OS, environment, architecture, and against --target.
+# RUN: not msil-ld --lto-emit-asm win.o lnx.o -o x.il 2>&1 | %{err} --check-prefix=OS
+# RUN: not msil-ld --lto-emit-asm lnx.o win.o -o x.il 2>&1 | %{err} --check-prefix=OS-REV
+# RUN: not msil-ld --lto-emit-asm win.o gnu.o -o x.il 2>&1 | %{err} --check-prefix=ENV
+# RUN: not msil-ld --lto-emit-asm lnxmain.o a64.o -o x.il 2>&1 | %{err} --check-prefix=ARCH
+# RUN: not msil-ld --lto-emit-asm win.o lnx.o lnx2.o -o x.il 2>&1 | %{err} --check-prefix=TWO
+# RUN: not msil-ld --lto-emit-asm --target=x86_64-unknown-linux-gnu-msil win.o lnx.o -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=TARGET
+
+# OS:      {{^}}msil-ld: error: lnx.o: target triple x86_64-unknown-linux-gnu-msil is incompatible with x86_64-pc-windows-msvc-msil{{$}}
+# OS-REV:  {{^}}msil-ld: error: win.o: target triple x86_64-pc-windows-msvc-msil is incompatible with x86_64-unknown-linux-gnu-msil{{$}}
+# ENV:     {{^}}msil-ld: error: gnu.o: target triple x86_64-w64-windows-gnu-msil is incompatible with x86_64-pc-windows-msvc-msil{{$}}
+# ARCH:    {{^}}msil-ld: error: a64.o: target triple aarch64-unknown-linux-gnu-msil is incompatible with x86_64-unknown-linux-gnu-msil{{$}}
+# TWO:     {{^}}msil-ld: error: lnx.o: target triple x86_64-unknown-linux-gnu-msil is incompatible with x86_64-pc-windows-msvc-msil{{$}}
+# TWO-NEXT: {{^}}msil-ld: error: lnx2.o: target triple x86_64-unknown-linux-gnu-msil is incompatible with x86_64-pc-windows-msvc-msil{{$}}
+# TARGET:  {{^}}msil-ld: error: win.o: target triple x86_64-pc-windows-msvc-msil is incompatible with x86_64-unknown-linux-gnu-msil{{$}}
+
+## Codegen triples outside D6. Stock Darwin and i686 bitcode name the codegen
+## triple (with -msil appended) and are rejected by name, rather than failing
+## as 'undefined symbol: main' (Mach-O and i686 Windows spell it '_main'); a
+## --target outside D6 is rejected before any input is compared with it.
+# DEFINE: %{bad} = %{err} --implicit-check-not="undefined symbol"
+# RUN: not msil-ld --lto-emit-asm mac.o -o x.il 2>&1 | %{bad} --check-prefix=MAC
+# RUN: not msil-ld --lto-emit-asm i686.o -o x.il 2>&1 | %{bad} --check-prefix=I686
+# RUN: not msil-ld --lto-emit-asm --target=x86_64-apple-darwin-msil win.o -o x.il 2>&1 \
+# RUN:   | %{bad} --check-prefix=DARWIN --implicit-check-not=incompatible
+
+# MAC:     {{^}}msil-ld: error: unsupported target triple 'x86_64-apple-macosx10.15.0-msil' for MSIL{{$}}
+# I686:    {{^}}msil-ld: error: unsupported target triple 'i686-pc-windows-msvc-msil' for MSIL{{$}}
+# DARWIN:  {{^}}msil-ld: error: unsupported target triple 'x86_64-apple-darwin{{[0-9.]*}}-msil' for MSIL{{$}}
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- win-ver.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc19.33.0-msil"
+
+define i32 @f_ver() {
+  ret i32 1
+}
+
+#--- win-unknown.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-windows-msvc-msil"
+
+define i32 @f_unknown() {
+  ret i32 2
+}
+
+#--- lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @f_lnx() {
+  ret i32 6
+}
+
+#--- lnxmain.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- lnx2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @f_lnx2() {
+  ret i32 3
+}
+
+#--- gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+define i32 @f_gnu() {
+  ret i32 7
+}
+
+#--- gnu-pc.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-gnu-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- a64.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu-msil"
+
+define i32 @f_a64() {
+  ret i32 5
+}
+
+#--- mac.ll
+target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-apple-macosx10.15.0"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- i686.ll
+target datalayout = "e-m:x-p:32:32-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32-a:0:32-S32"
+target triple = "i686-pc-windows-msvc"
+
+define i32 @main() {
+  ret i32 0
+}

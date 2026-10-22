@@ -1,0 +1,13 @@
+# Run in a nested lit by ../../../roundtrip.test: %{msil_prog} of two sources
+# at every level of msil_opt_levels, built by msil-prog.py with the stand-ins
+# of ../../prog-cc.py (which read the values below). With --param
+# msil_roundtrip=1 the round-trip leg reassembles each level's
+# <t>.<L>.d/prog.exe into <t>.<L>.rt.exe and runs it against rt-prog.expected.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# RUN: %{msil_prog}
+
+#--- main.c
+// prog-value: 5
+#--- util.c
+// prog-value: 6

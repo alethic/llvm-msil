@@ -1,0 +1,56 @@
+# Static functions and variables of the same name in three translation units stay distinct.
+# Each TU defines a static 'helper' (kept out of line), a static 'counter' and
+# a static string 'tag' with different values; each TU's helper must keep using
+# its own counter (the private <Module> methods and fields must not merge or
+# collide when the modules are linked), the three helpers' addresses differ,
+# and each is still the right function when called through a pointer from
+# another TU. Recon tests-p2 3.1, plan 5.12.5 (M14 lto; M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c %t/c.c
+# RUN: %{msil_prog}
+#--- a.c
+#include "msil_test.h"
+static int counter = 10;
+static const char tag[] = "tag of a.c";
+__attribute__((noinline)) static int helper(int x) { return x + counter++; }
+
+int b_call(int);
+int c_call(int);
+int (*b_helper(void))(int);
+int (*c_helper(void))(int);
+const char *b_tag(void);
+const char *c_tag(void);
+
+int main(void) {
+  put_i64(helper(1));
+  put_i64(b_call(1));
+  put_i64(c_call(1));
+  put_i64(helper(1));
+  put_i64(b_call(1));
+  put_i64(c_call(1));
+  int (*fa)(int) = helper;
+  int (*fb)(int) = b_helper();
+  int (*fc)(int) = c_helper();
+  put_i64(fa != fb && fb != fc && fa != fc);
+  put_i64(fb(3));
+  put_i64(fc(3));
+  put_i64(fa(3));
+  put_str(tag);
+  put_str(b_tag());
+  put_str(c_tag());
+  return counter;
+}
+#--- b.c
+static int counter = 100;
+static const char tag[] = "tag of b.c";
+__attribute__((noinline)) static int helper(int x) { return x * 2 + counter++; }
+int b_call(int x) { return helper(x); }
+int (*b_helper(void))(int) { return helper; }
+const char *b_tag(void) { return tag; }
+#--- c.c
+static int counter = 1000;
+static const char tag[] = "tag of c.c";
+__attribute__((noinline)) static int helper(int x) { return x * 3 + counter--; }
+int c_call(int x) { return helper(x); }
+int (*c_helper(void))(int) { return helper; }
+const char *c_tag(void) { return tag; }

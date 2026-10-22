@@ -1,0 +1,49 @@
+# Weak and strong definitions across translation units, in both link orders.
+# weak.c, linked second, has weak definitions of the function 'pick' and the
+# variable 'level', which the strong definitions of strong.c (linked third)
+# replace, and weak definitions of 'early' and 'early_data', which the strong
+# ones of main.c (linked first) keep out; 'only_weak' and 'only_weak_data'
+# have no strong definition, so the weak ones stay. weak_view() reads every
+# symbol from inside weak.c, whose own weak copies must not be used once a
+# strong definition wins (lld/ELF resolution, plan 5.9.5: Defined WEAK is
+# replaced by a GLOBAL definition, a GLOBAL definition stays).
+# Recon tests-p2 3.1, plan 5.12.5 (M14 lto; M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/weak.c %t/strong.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+int pick(void);
+extern int level;
+int only_weak(void);
+extern int only_weak_data;
+long long weak_view(void);
+
+int early(void) { return 3; }
+int early_data = 30;
+
+int main(void) {
+  put_kv("pick", pick());
+  put_kv("level", level);
+  put_kv("early", early());
+  put_kv("early_data", early_data);
+  put_kv("only_weak", only_weak());
+  put_kv("only_weak_data", only_weak_data);
+  put_kv("weak_view", weak_view());
+  return pick() + level + early();
+}
+#--- weak.c
+__attribute__((weak)) int pick(void) { return 1; }
+__attribute__((weak)) int level = 1;
+__attribute__((weak)) int early(void) { return 4; }
+__attribute__((weak)) int early_data = 40;
+__attribute__((weak)) int only_weak(void) { return 5; }
+__attribute__((weak)) int only_weak_data = 6;
+
+long long weak_view(void) {
+  return pick() + level * 10 + early() * 100 + early_data * 1000LL +
+         only_weak() * 100000LL + only_weak_data * 1000000LL;
+}
+#--- strong.c
+int pick(void) { return 2; }
+int level = 2;

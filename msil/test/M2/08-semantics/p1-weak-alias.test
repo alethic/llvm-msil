@@ -1,0 +1,31 @@
+# Matrix case p1-weak-alias: a strong definition beats a weak function alias (native 144).
+# recon/p2/judge-c-fidelity-files/probes/p1a.c, linked first, defines hook as
+# a weak alias of a static function (musl's idiom) and arr_alias as an alias
+# of an array; p1b.c defines a strong hook, which wins (plan 5.9.5: an alias
+# resolves like a definition of its kind, Defined WEAK is replaced by a GLOBAL
+# definition), so p1a.c's own call gets 4. The data alias and its aliasee
+# have one address at run time. Plan 5.9.16 row p1-weak-alias (M14, M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p1a.c %t/p1b.c
+# RUN: %{msil_prog}
+#--- p1a.c
+/* p1a.c: musl-style weak alias overridden by a strong definition in p1b.c,
+   plus a data alias whose identity is checked. */
+static int dummy_hook(void) { return 1; }
+extern int hook(void) __attribute__((weak, alias("dummy_hook")));
+int base_arr[4] = { 1, 2, 3, 4 };
+extern int arr_alias[4] __attribute__((alias("base_arr")));
+int other_hook(void);                       /* p1b.c or p1c.c */
+int *volatile pa = arr_alias, *volatile pb = base_arr;   /* address identity at run time */
+int main(void) {
+  int r = hook() * 10;                      /* strong hook in p1b.c: 40; weak alias alone: 10 */
+  r += (pa == pb) ? 1 : 0;                  /* data alias identity: 1 */
+  r += arr_alias[2];                        /* 3 */
+  r += other_hook();                        /* 100 */
+  return r;                                 /* with p1b.c: 144; with p1c.c: 114 */
+}
+#--- p1b.c
+/* p1b.c: the strong definition that must beat p1a.c's weak alias */
+int hook(void) { return 4; }
+extern int base_arr[4];
+int other_hook(void) { return base_arr[0] * 100; }

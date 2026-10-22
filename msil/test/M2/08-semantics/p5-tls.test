@@ -1,0 +1,23 @@
+# Matrix case p5-tls: a thread-local variable used across objects is a named diagnostic.
+# recon/p2/judge-c-fidelity-files/probes/p5a.c defines the _Thread_local tcount
+# and p5b.c increments it through an extern _Thread_local declaration (native
+# 12). Both sides are thread-local, so msil-ld's TLS attribute check passes
+# (plan 5.9.5) and the merged module reaches code generation, where a
+# thread-local variable is an error until phase 3 (D26), printed by msil-ld;
+# the link fails with exit status 1. Plan 5.9.16 row p5-tls (M14 lto, M20 obj;
+# 12 from P3-A).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p5a.c %t/p5b.c
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# LTO:     msil-ld: error: {{.*}}thread-local variable @tcount is not supported for MSIL yet
+# LTO:     clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- p5a.c
+/* p5a.c: thread_local defined in one object, used from another */
+_Thread_local int tcount = 5;
+int bump(void);
+int main(void) { int a = bump(); return a + tcount; }   /* 6 + 6 = 12 */
+#--- p5b.c
+/* p5b.c */
+extern _Thread_local int tcount;
+int bump(void) { return ++tcount; }

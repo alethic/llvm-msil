@@ -1,0 +1,9 @@
+# Features that update-expected.py does not decide count as present when
+# required and absent when unsupported.
+# REQUIRES: msil-exec, msil-ld && !msil-prog-pipeline=obj
+# UNSUPPORTED: a-feature-nobody-sets
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c
+# RUN: %{msil_prog_O2}
+#--- a.c
+// prog-value: 23

@@ -1,0 +1,34 @@
+# An archive of stock-clang and MSIL bitcode members, linked lazily (Q12).
+# libmixed.a holds s_used.c and s_unused.c compiled by stock clang for the
+# native triple (the 'stock:' members of %{msil_archives}) and m_used.c
+# compiled for the MSIL triple. main.c calls s_used.c, whose reference
+# extracts m_used.c; s_unused.c resolves nothing (its value() duplicates
+# main.c's), so it is not linked and its constructor never prints. The second
+# RUN line pins msil-ld's warning for the stock member, once per link (plan
+# 5.9.13). Recon tests-p2 3.3, plan 5.12.3 (M14 lto).
+# REQUIRES: msil-ar
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_archives} = mixed=stock:%t/s_used.c,%t/m_used.c,stock:%t/s_unused.c
+# RUN: %{msil_prog}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.d --src %{msil_srcs} --archives=%{msil_archives} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# LTO:     msil-ld: warning: {{.*}}s_used.o{{.*}}: linking bitcode for x86_64-{{[^ ]+}} as x86_64-{{[^ ]+}}-msil; stock-clang bitcode is a compatibility path
+# LTO-NOT: stock-clang bitcode is a compatibility path
+#--- main.c
+#include "msil_test.h"
+int s_entry(int);
+int value(void) { return 9; }
+int main(void) {
+  put_kv("s_entry", s_entry(5));
+  put_kv("value", value());
+  return s_entry(1);
+}
+#--- s_used.c
+int m_twice(int);
+int s_entry(int x) { return m_twice(x) + 1; }
+#--- m_used.c
+int m_twice(int x) { return x * 2; }
+#--- s_unused.c
+int puts(const char *);
+int value(void) { return 99; }
+__attribute__((constructor)) static void s_unused_ctor(void) { puts("s_unused linked"); }

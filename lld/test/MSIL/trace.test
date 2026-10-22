@@ -1,0 +1,92 @@
+## --trace and --trace-symbol/-y keep lld's semantics and texts
+## (ImplementationPlan.md 5.9.3; the resolver port of lld/ELF prints the
+## symbol traces, 5.9.5 and M14.b):
+## - --trace prints each input file as it is loaded, an archive member as
+##   'lib.a(m.o)' when it is extracted; members never extracted are not
+##   printed;
+## - -y <sym> and --trace-symbol=<sym> print '<file>: reference to <sym>',
+##   '<file>: lazy definition of <sym>', '<file>: common definition of <sym>'
+##   and '<file>: definition of <sym>' as the symbol meets each file, and
+##   nothing for other symbols.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as h1.ll -o h1.o
+# RUN: llvm-as h2.ll -o h2.o
+# RUN: llvm-as com.ll -o com.o
+# RUN: llvm-as usecom.ll -o usecom.o
+# RUN: llvm-ar rcs libhelp.a h1.o h2.o
+
+# RUN: msil-ld --lto-emit-asm main.o libhelp.a -o t.il --trace 2>&1 | FileCheck %s --check-prefix=TRACE
+
+# TRACE:      {{^}}main.o{{$}}
+# TRACE-NEXT: {{^}}libhelp.a(h1.o){{$}}
+# TRACE-NOT:  h2.o
+
+## The reference comes first, then the extracted definition.
+# RUN: msil-ld --lto-emit-asm main.o libhelp.a -o y.il -y helper 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=REF-FIRST --implicit-check-not=never_used --implicit-check-not=cbuf
+
+# REF-FIRST:      {{^}}main.o: reference to helper{{$}}
+# REF-FIRST-NEXT: {{^}}libhelp.a(h1.o): definition of helper{{$}}
+
+## The archive first: a lazy definition, then the reference extracts it.
+# RUN: msil-ld --lto-emit-asm libhelp.a main.o -o y2.il --trace-symbol=helper 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LAZY-FIRST
+
+# LAZY-FIRST:      {{^}}libhelp.a(h1.o): lazy definition of helper{{$}}
+# LAZY-FIRST-NEXT: {{^}}main.o: reference to helper{{$}}
+# LAZY-FIRST-NEXT: {{^}}libhelp.a(h1.o): definition of helper{{$}}
+
+## A common, and two symbols at once.
+# RUN: msil-ld --lto-emit-asm com.o usecom.o -o y3.il -y cbuf -y main 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=COMMON --implicit-check-not=helper
+
+# COMMON-DAG: {{^}}com.o: common definition of cbuf{{$}}
+# COMMON-DAG: {{^}}usecom.o: definition of main{{$}}
+# COMMON-DAG: {{^}}usecom.o: reference to cbuf{{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @helper()
+  ret i32 %r
+}
+
+declare i32 @helper()
+
+#--- h1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @helper() {
+  ret i32 1
+}
+
+#--- h2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @never_used() {
+  ret i32 3
+}
+
+#--- com.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@cbuf = common global [16 x i8] zeroinitializer, align 16
+
+#--- usecom.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@cbuf = external global [16 x i8]
+
+define i32 @main() {
+  %c = load i8, ptr @cbuf
+  %r = zext i8 %c to i32
+  ret i32 %r
+}

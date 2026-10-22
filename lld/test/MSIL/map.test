@@ -1,0 +1,116 @@
+## The map file in M14 (ImplementationPlan.md 5.9.14): -Map=<file>, and
+## --print-map or -M on standard output, write the header line
+##   msil-ld map of <output> (<codegen triple>)
+## then 'Inputs:', the loaded files and extracted archive members in load
+## order, and 'Symbols:', a table with the columns Kind, Binding, Input and
+## Symbol (the kinds of 5.9.5) that shows commons with their size and
+## alignment. Unextracted members are no inputs.
+## M15 adds native libraries, M20 the 'Image:', 'Methods:', 'Fields:' and
+## 'Imports:' sections, so this test does not pin what follows 'Symbols:'.
+## The plan fixes the section names and columns, not the spacing or the
+## spelling of a binding, so the rows are matched loosely.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as com.ll -o com.o
+# RUN: llvm-as h1.ll -o h1.o
+# RUN: llvm-as h2.ll -o h2.o
+# RUN: llvm-ar rcs libhelp.a h1.o h2.o
+
+# RUN: msil-ld --lto-emit-asm main.o com.o libhelp.a -o prog.il -Map=prog.map 2>&1 | count 0
+# RUN: FileCheck %s --input-file=prog.map
+# RUN: FileCheck %s --check-prefix=ROWS --input-file=prog.map
+# RUN: FileCheck %s --check-prefix=NOT-LAZY --input-file=prog.map
+
+## (Whether the archive itself has a line of its own before its members is
+## not fixed.)
+# CHECK:      {{^}}msil-ld map of prog.il (x86_64-pc-windows-msvc-msil){{$}}
+# CHECK-NEXT: {{^}}Inputs:{{$}}
+# CHECK-NEXT: {{^ *}}main.o{{$}}
+# CHECK-NEXT: {{^ *}}com.o{{$}}
+# CHECK:      {{^ *}}libhelp.a(h1.o){{$}}
+# CHECK-NEXT: {{^}}Symbols:{{$}}
+
+# ROWS:      {{^}}Symbols:{{$}}
+# ROWS-DAG:  {{^ *}}DefinedFunction{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}main.o{{[[:space:]]+}}main{{$}}
+# ROWS-DAG:  {{^ *}}DefinedFunction{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}libhelp.a(h1.o){{[[:space:]]+}}helper{{$}}
+# ROWS-DAG:  {{^ *}}DefinedData{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}com.o{{[[:space:]]+}}table{{$}}
+# ROWS-DAG:  {{^ *}}DefinedFunction{{[[:space:]]+}}{{[Ww][Ee][Aa][Kk]}}{{[[:space:]]+}}com.o{{[[:space:]]+}}weak_fn{{$}}
+# ROWS-DAG:  {{^ *}}CommonSymbol{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}com.o{{[[:space:]]+}}cbuf{{.*(48.*16|16.*48).*$}}
+
+# NOT-LAZY:     {{^}}Inputs:{{$}}
+# NOT-LAZY-NOT: h2.o
+# NOT-LAZY:     {{^}}Symbols:{{$}}
+
+## --print-map and -M write the same map to standard output.
+# RUN: msil-ld --lto-emit-asm main.o com.o libhelp.a -o prog.il --print-map > print.map 2>&1
+# RUN: diff --strip-trailing-cr prog.map print.map
+# RUN: msil-ld --lto-emit-asm main.o com.o libhelp.a -o prog.il -M > m.map 2>&1
+# RUN: diff --strip-trailing-cr prog.map m.map
+
+## The header names the output and the codegen triple.
+# RUN: llvm-as lnx.ll -o lnx.o
+# RUN: msil-ld --lto-emit-asm lnx.o -o lnx-out.il -Map=lnx.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LNX --input-file=lnx.map
+
+# LNX:      {{^}}msil-ld map of lnx-out.il (x86_64-unknown-linux-gnu-msil){{$}}
+# LNX-NEXT: {{^}}Inputs:{{$}}
+# LNX-NEXT: {{^ *}}lnx.o{{$}}
+# LNX-NEXT: {{^}}Symbols:{{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@table = external global [4 x i32]
+@cbuf = external global [48 x i8]
+
+define i32 @main() {
+  %h = call i32 @helper()
+  %w = call i32 @weak_fn()
+  %t = load i32, ptr @table
+  %c = load i8, ptr @cbuf
+  %c32 = zext i8 %c to i32
+  %a = add i32 %h, %w
+  %b = add i32 %a, %t
+  %r = add i32 %b, %c32
+  ret i32 %r
+}
+
+declare i32 @helper()
+declare i32 @weak_fn()
+
+#--- com.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@table = global [4 x i32] [i32 1, i32 2, i32 3, i32 4], align 4
+@cbuf = common global [48 x i8] zeroinitializer, align 16
+
+define weak i32 @weak_fn() {
+  ret i32 5
+}
+
+#--- h1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @helper() {
+  ret i32 1
+}
+
+#--- h2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @never_used() {
+  ret i32 3
+}
+
+#--- lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  ret i32 0
+}

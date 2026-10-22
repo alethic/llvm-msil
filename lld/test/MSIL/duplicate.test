@@ -1,0 +1,137 @@
+## Two GLOBAL definitions of one symbol (ImplementationPlan.md 5.9.5, lld/ELF's
+## checkDuplicate; 5.9.14's text):
+##   duplicate symbol: <s>
+##   >>> defined in <first file>
+##   >>> defined in <second file>
+## for functions and for data, in either order, also when the second copy
+## comes from an archive member that another symbol extracted (named
+## 'lib.a(m.o)'). --allow-multiple-definition keeps the first definition
+## instead. --error-limit stops after that many errors, as in lld.
+## WEAK and common definitions are never duplicates (resolve-weak.test,
+## resolve-common.test).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as main2.ll -o main2.o
+# RUN: llvm-as a.ll -o a.o
+# RUN: llvm-as b.ll -o b.o
+# RUN: llvm-as m.ll -o m.o
+# RUN: llvm-ar rcs lib.a m.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump"
+
+## The order of the two errors is not fixed; each one is checked on its own.
+# RUN: not msil-ld --lto-emit-asm main.o a.o b.o -o x.il > ab.txt 2>&1
+# RUN: %{fc} --check-prefix=AB-F --input-file=ab.txt
+# RUN: %{fc} --check-prefix=AB-D --input-file=ab.txt
+# RUN: not msil-ld --lto-emit-asm main.o b.o a.o -o x.il > ba.txt 2>&1
+# RUN: %{fc} --check-prefix=BA-F --input-file=ba.txt
+# RUN: %{fc} --check-prefix=BA-D --input-file=ba.txt
+# RUN: FileCheck %s --check-prefix=TWO --input-file=ab.txt
+
+# AB-F:      {{^}}msil-ld: error: duplicate symbol: f{{$}}
+# AB-F-NEXT: {{^}}>>> defined in a.o{{$}}
+# AB-F-NEXT: {{^}}>>> defined in b.o{{$}}
+# AB-D:      {{^}}msil-ld: error: duplicate symbol: d{{$}}
+# AB-D-NEXT: {{^}}>>> defined in a.o{{$}}
+# AB-D-NEXT: {{^}}>>> defined in b.o{{$}}
+# BA-F:      {{^}}msil-ld: error: duplicate symbol: f{{$}}
+# BA-F-NEXT: {{^}}>>> defined in b.o{{$}}
+# BA-F-NEXT: {{^}}>>> defined in a.o{{$}}
+# BA-D:      {{^}}msil-ld: error: duplicate symbol: d{{$}}
+# BA-D-NEXT: {{^}}>>> defined in b.o{{$}}
+# BA-D-NEXT: {{^}}>>> defined in a.o{{$}}
+# TWO-COUNT-2: {{^}}msil-ld: error: duplicate symbol:
+# TWO-NOT:   error:
+
+## main2.o references g, which only lib.a(m.o) defines; m.o also defines f.
+# RUN: not msil-ld --lto-emit-asm main2.o a.o lib.a -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=MEMBER --implicit-check-not=error:
+
+# MEMBER:      {{^}}msil-ld: error: duplicate symbol: f{{$}}
+# MEMBER-NEXT: {{^}}>>> defined in a.o{{$}}
+# MEMBER-NEXT: {{^}}>>> defined in lib.a(m.o){{$}}
+
+## --allow-multiple-definition: the first definitions stay, in both orders
+## the first file's (f returns 1 or 2, d holds 1 or 2).
+# RUN: msil-ld --lto-emit-asm --lto-O0 --allow-multiple-definition main.o a.o b.o -o ab.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefixes=MULTI,MULTI-A --input-file=ab.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 --allow-multiple-definition main.o b.o a.o -o ba.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefixes=MULTI,MULTI-B --input-file=ba.il
+
+# MULTI-LABEL: {{^}}.method {{.*}}static int32 'f'() cil managed{{$}}
+# MULTI-A:     {{^}}  ldc.i4.1{{$}}
+# MULTI-B:     {{^}}  ldc.i4.2{{$}}
+# MULTI-NOT:   {{^}}.method {{.*}}'f'()
+# MULTI:       {{^}}// ---- data segment: 4 bytes (4 initialized + 0 zero), align 16 ----{{$}}
+# MULTI-A:     {{^}}  01 00 00 00 ){{ *}}// 0x0000{{$}}
+# MULTI-B:     {{^}}  02 00 00 00 ){{ *}}// 0x0000{{$}}
+
+## --error-limit=1 stops after the first error.
+# RUN: not msil-ld --lto-emit-asm --error-limit=1 main.o a.o b.o -o x.il 2>&1 | %{fc} --check-prefix=LIMIT
+
+# LIMIT:     {{^}}msil-ld: error: duplicate symbol: {{[fd]}}{{$}}
+# LIMIT-NOT: duplicate symbol
+# LIMIT:     {{^}}msil-ld: error: too many errors emitted, stopping now (use --error-limit=0 to see all errors){{$}}
+# LIMIT-NOT: duplicate symbol
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@d = external global i32
+
+define i32 @main() {
+  %a = call i32 @f()
+  %b = load i32, ptr @d
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+declare i32 @f()
+
+#--- main2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %a = call i32 @f()
+  %b = call i32 @g()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+declare i32 @f()
+declare i32 @g()
+
+#--- a.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@d = global i32 1, align 4
+
+define i32 @f() {
+  ret i32 1
+}
+
+#--- b.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@d = global i32 2, align 4
+
+define i32 @f() {
+  ret i32 2
+}
+
+#--- m.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @f() {
+  ret i32 3
+}
+
+define i32 @g() {
+  ret i32 4
+}

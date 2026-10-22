@@ -1,0 +1,144 @@
+## Weak definitions and weak references (ImplementationPlan.md 5.9.5, the
+## lld/ELF port; 5.9.6 for what stays undefined), in both input orders:
+## - a GLOBAL definition replaces a WEAK one, and of two WEAK definitions the
+##   first stays; LTO compiles only the winner;
+## - a WEAK reference that nothing defines stays for the backend, which calls
+##   the trap stub '<msil>undef_<name>' (M12's whole-program lowering); a
+##   definition satisfies a WEAK reference;
+## - an undefined symbol's binding is GLOBAL as soon as one reference is
+##   GLOBAL, whatever the order, so data that is referenced GLOBAL somewhere
+##   and defined nowhere is 'undefined symbol', while WEAK-only data is null.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as weak1.ll -o weak1.o
+# RUN: llvm-as weak2.ll -o weak2.o
+# RUN: llvm-as strong3.ll -o strong3.o
+# RUN: llvm-as maybe-ref.ll -o maybe-ref.o
+# RUN: llvm-as maybe-def.ll -o maybe-def.o
+# RUN: llvm-as wdata.ll -o wdata.o
+# RUN: llvm-as gdata.ll -o gdata.o
+
+# DEFINE: %{f} = FileCheck %s --check-prefix=F --implicit-check-not="ldc.i4.1" \
+# DEFINE:   --implicit-check-not="ldc.i4.2" --implicit-check-not="ldc.i4.3"
+
+## The GLOBAL definition wins in both orders.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o weak1.o strong3.o -o ws.il 2>&1 | count 0
+# RUN: %{f} -DV=3 --input-file=ws.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o strong3.o weak1.o -o sw.il 2>&1 | count 0
+# RUN: %{f} -DV=3 --input-file=sw.il
+
+## Two WEAK definitions: the first one stays.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o weak1.o weak2.o -o w12.il 2>&1 | count 0
+# RUN: %{f} -DV=1 --input-file=w12.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o weak2.o weak1.o -o w21.il 2>&1 | count 0
+# RUN: %{f} -DV=2 --input-file=w21.il
+
+# F-LABEL: {{^}}.method {{.*}}static int32 'f'() cil managed{{$}}
+# F:       {{^}}  ldc.i4.[[V]]{{$}}
+# F-NEXT:  {{^}}  ret{{$}}
+
+## A WEAK reference that nothing defines.
+# RUN: msil-ld --lto-emit-asm --lto-O0 maybe-ref.o -o undef-weak.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=NULL --input-file=undef-weak.il
+
+# NULL:     call int32 '<msil>undef_maybe'()
+# NULL:     {{^}}.method {{.*}}'<msil>undef_maybe'(){{.*}}
+# NULL-NOT: pinvokeimpl
+
+## A definition satisfies it, in both orders. LTO's merged module keeps the
+## input order, so 'maybe' comes before or after main: DAG checks.
+# RUN: msil-ld --lto-emit-asm --lto-O0 maybe-ref.o maybe-def.o -o def-weak.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEF --implicit-check-not=undef_maybe --input-file=def-weak.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 maybe-def.o maybe-ref.o -o def-weak2.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEF --implicit-check-not=undef_maybe --input-file=def-weak2.il
+
+# DEF-DAG:  call int32 'maybe'()
+# DEF-DAG:  {{^}}.method {{.*}}static int32 'maybe'() cil managed{{$}}
+
+## WEAK-only data is null; a GLOBAL reference anywhere makes it an error.
+# RUN: msil-ld --lto-emit-asm --lto-O0 wdata.o -o wdata.il 2>&1 | count 0
+# RUN: not msil-ld --lto-emit-asm --lto-O0 wdata.o gdata.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=GDATA --implicit-check-not="PLEASE submit"
+# RUN: not msil-ld --lto-emit-asm --lto-O0 gdata.o wdata.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=GDATA --implicit-check-not="PLEASE submit"
+
+# GDATA:      {{^}}msil-ld: error: undefined symbol: d{{$}}
+# GDATA:      {{^}}>>> referenced by gdata.o:(read_d){{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @f()
+  ret i32 %r
+}
+
+declare i32 @f()
+
+#--- weak1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define weak i32 @f() {
+  ret i32 1
+}
+
+#--- weak2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define weak i32 @f() {
+  ret i32 2
+}
+
+#--- strong3.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @f() {
+  ret i32 3
+}
+
+#--- maybe-ref.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @maybe()
+  ret i32 %r
+}
+
+declare extern_weak i32 @maybe()
+
+#--- maybe-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @maybe() {
+  ret i32 9
+}
+
+#--- wdata.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@d = extern_weak global i32
+
+define i32 @main() {
+  %c = icmp eq ptr @d, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+#--- gdata.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@d = external global i32
+
+define i32 @read_d() {
+  %v = load i32, ptr @d
+  ret i32 %v
+}

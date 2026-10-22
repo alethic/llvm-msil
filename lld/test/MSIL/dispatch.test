@@ -8,10 +8,15 @@
 ## msil-ld and not the GNU flavor, as it was before M13. Only whole components
 ## count: 'msilx-ld' is still the GNU flavor (from its 'ld' component), and
 ## 'ld.lld' and 'x86_64-unknown-linux-gnu-ld' stay GNU. Plain 'lld' is the
-## generic driver, whose message now names msil-ld. The stub's own texts are
-## checked in stub.test; here they only show which driver ran: msil-ld names
-## itself 'msil-ld' whatever the program name, while the GNU flavor names
-## itself after the program and calls itself compatible with GNU linkers.
+## generic driver, whose message names msil-ld.
+##
+## msil-ld is identified by two texts (5.9.3, from M14): --version prints the
+## bare lld version, while the GNU flavor adds '(compatible with GNU
+## linkers)'; and -r prints 'msil-ld: error: -r is not supported', the one
+## msil-ld-only error Phase 2 never retires, while the GNU flavor reads -r as
+## --relocatable and only misses its inputs. msil-ld also names itself
+## 'msil-ld' whatever the program name, while the GNU flavor names itself
+## after the program.
 ##
 ## The renamed programs are hard links to this build's lld in a fresh %t
 ## directory (Inputs/make-links.py), so a run costs no disk space. On Windows,
@@ -27,50 +32,55 @@
 # DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" \
 # DEFINE:   --implicit-check-not="Stack dump" --implicit-check-not="LLVM ERROR" \
 # DEFINE:   --implicit-check-not=error: --implicit-check-not=warning:
+# DEFINE: %{msil} = FileCheck %s --implicit-check-not="PLEASE submit" \
+# DEFINE:   --implicit-check-not="Stack dump" --implicit-check-not="LLVM ERROR" \
+# DEFINE:   --implicit-check-not=error: --implicit-check-not=warning: \
+# DEFINE:   --implicit-check-not="compatible with GNU linkers"
 
-# RUN: msil-ld --version 2>&1 | %{fc} --check-prefix=VERSION
-# RUN: %lld_exe -flavor msil --version 2>&1 | %{fc} --check-prefix=VERSION
-# RUN: not %lld_exe -flavor msil 2>&1 | %{fc} --check-prefix=NOINPUT
-# RUN: not %lld_exe -flavor msil %s 2>&1 | %{fc} --check-prefix=LINK
+# RUN: msil-ld --version 2>&1 | %{msil} --check-prefix=VERSION
+# RUN: not msil-ld -r 2>&1 | %{msil} --check-prefix=RELOC
+# RUN: %lld_exe -flavor msil --version 2>&1 | %{msil} --check-prefix=VERSION
+# RUN: not %lld_exe -flavor msil 2>&1 | %{msil} --check-prefix=NOINPUT
+# RUN: not %lld_exe -flavor msil -r 2>&1 | %{msil} --check-prefix=RELOC
 
 # RUN: rm -rf %t && mkdir %t
 # RUN: %python %S/Inputs/make-links.py %lld_exe %t x86_64-unknown-linux-gnu-msil-ld \
 # RUN:   x86_64-w64-windows-gnu-msil-ld aarch64-pc-windows-msvc-msil-ld aarch64-unknown-linux-gnu-MSIL-ld \
 # RUN:   msilx-ld x86_64-unknown-linux-gnu-ld
 
-# RUN: %t/x86_64-unknown-linux-gnu-msil-ld --version 2>&1 | %{fc} --check-prefix=VERSION
-# RUN: not %t/x86_64-unknown-linux-gnu-msil-ld 2>&1 | %{fc} --check-prefix=NOINPUT
-# RUN: not %t/x86_64-unknown-linux-gnu-msil-ld %s 2>&1 | %{fc} --check-prefix=LINK
-# RUN: %t/x86_64-w64-windows-gnu-msil-ld --version 2>&1 | %{fc} --check-prefix=VERSION
-# RUN: not %t/x86_64-w64-windows-gnu-msil-ld 2>&1 | %{fc} --check-prefix=NOINPUT
-# RUN: not %t/x86_64-w64-windows-gnu-msil-ld %s 2>&1 | %{fc} --check-prefix=LINK
-# RUN: not %t/aarch64-pc-windows-msvc-msil-ld %s 2>&1 | %{fc} --check-prefix=LINK
-# RUN: not %t/aarch64-unknown-linux-gnu-MSIL-ld %s 2>&1 | %{fc} --check-prefix=LINK
+# RUN: %t/x86_64-unknown-linux-gnu-msil-ld --version 2>&1 | %{msil} --check-prefix=VERSION
+# RUN: not %t/x86_64-unknown-linux-gnu-msil-ld 2>&1 | %{msil} --check-prefix=NOINPUT
+# RUN: not %t/x86_64-unknown-linux-gnu-msil-ld -r 2>&1 | %{msil} --check-prefix=RELOC
+# RUN: %t/x86_64-w64-windows-gnu-msil-ld --version 2>&1 | %{msil} --check-prefix=VERSION
+# RUN: not %t/x86_64-w64-windows-gnu-msil-ld 2>&1 | %{msil} --check-prefix=NOINPUT
+# RUN: not %t/x86_64-w64-windows-gnu-msil-ld -r 2>&1 | %{msil} --check-prefix=RELOC
+# RUN: not %t/aarch64-pc-windows-msvc-msil-ld -r 2>&1 | %{msil} --check-prefix=RELOC
+# RUN: not %t/aarch64-unknown-linux-gnu-MSIL-ld -r 2>&1 | %{msil} --check-prefix=RELOC
 
-## Not msil-ld.
+## Not msil-ld: -r is --relocatable there, so only the inputs are missing.
 # RUN: %python %S/Inputs/make-links.py %lld_exe %t/upper MSILx-ld
 # RUN: not ld.lld 2>&1 | %{fc} --check-prefix=GNU -DNAME=ld.lld
+# RUN: not ld.lld -r 2>&1 | %{fc} --check-prefix=GNU -DNAME=ld.lld
 # RUN: not %t/msilx-ld 2>&1 | %{fc} --check-prefix=GNU -DNAME=msilx-ld
-# RUN: not %t/upper/MSILx-ld 2>&1 | %{fc} --check-prefix=GNU -DNAME=MSILx-ld
-# RUN: not %t/x86_64-unknown-linux-gnu-ld 2>&1 | %{fc} --check-prefix=GNU -DNAME=x86_64-unknown-linux-gnu-ld
+# RUN: not %t/msilx-ld -r 2>&1 | %{fc} --check-prefix=GNU -DNAME=msilx-ld
+# RUN: not %t/upper/MSILx-ld -r 2>&1 | %{fc} --check-prefix=GNU -DNAME=MSILx-ld
+# RUN: not %t/x86_64-unknown-linux-gnu-ld -r 2>&1 | %{fc} --check-prefix=GNU -DNAME=x86_64-unknown-linux-gnu-ld
+# RUN: ld.lld --version 2>&1 | %{fc} --check-prefix=GNU-VERSION
 # RUN: %t/msilx-ld --version 2>&1 | %{fc} --check-prefix=GNU-VERSION
 # RUN: not %lld_exe 2>&1 | %{fc} --check-prefix=GENERIC
 # RUN: not %lld_exe --version 2>&1 | %{fc} --check-prefix=GENERIC
 
 ## The other flavors dispatch as before (their --version texts cannot show
-## it, because lld-link, ld64.lld, wasm-ld and msil-ld print the same line).
-## lld-link and 'lld -flavor link' reach the COFF flavor, which still misses
-## only inputs when given /machine:x64, a COFF option that the GNU flavor and
-## msil-ld read as an input file. ld64.lld and 'lld -flavor darwin' reach the
-## Mach-O flavor, the only one that asks for -arch. wasm-ld and 'lld -flavor
-## wasm' reach the wasm flavor, which still misses only inputs when given
-## --no-entry, an option that the GNU flavor and msil-ld reject. -flavor maps
-## only 'msil' to msil-ld (5.9.1), so 'ld-msil' is an unknown flavor. The
-## -flavor forms name the program 'lld'.
-# RUN: not lld-link 2>&1 | %{fc} --check-prefix=COFF -DNAME=lld-link
-# RUN: not lld-link /machine:x64 2>&1 | %{fc} --check-prefix=COFF -DNAME=lld-link
-# RUN: not %lld_exe -flavor link 2>&1 | %{fc} --check-prefix=COFF -DNAME=lld
-# RUN: not %lld_exe -flavor link /machine:x64 2>&1 | %{fc} --check-prefix=COFF -DNAME=lld
+## it, because ld64.lld, wasm-ld and msil-ld print the same line). The COFF
+## flavor (lld-link, 'lld -flavor link') is checked in dispatch-coff.test: it
+## reports 'no input files' through Fatal(), which prints nothing with
+## LLD_IN_TEST=2, so that test is unsupported in that mode, while this one
+## runs in both. ld64.lld and 'lld -flavor darwin' reach the Mach-O flavor,
+## the only one that asks for -arch. wasm-ld and 'lld -flavor wasm' reach the
+## wasm flavor, which still misses only inputs when given --no-entry, an
+## option that the GNU flavor and msil-ld reject. -flavor maps only 'msil' to
+## msil-ld (5.9.1), so 'ld-msil' is an unknown flavor. The -flavor forms name
+## the program 'lld'.
 # RUN: not ld64.lld 2>&1 | %{fc} --check-prefix=MACHO -DNAME=ld64.lld
 # RUN: not %lld_exe -flavor darwin 2>&1 | %{fc} --check-prefix=MACHO -DNAME=lld
 # RUN: not wasm-ld --no-entry 2>&1 | %{fc} --check-prefix=WASM -DNAME=wasm-ld
@@ -81,7 +91,7 @@
 
 # NOINPUT:      {{^}}msil-ld: error: no input files{{$}}
 
-# LINK:         {{^}}msil-ld: error: linking is not implemented yet{{$}}
+# RELOC:        {{^}}msil-ld: error: -r is not supported{{$}}
 
 # GNU:          {{^}}[[NAME]]: error: no input files{{$}}
 
@@ -89,8 +99,6 @@
 
 # GENERIC:      {{^}}lld is a generic driver.{{$}}
 # GENERIC-NEXT: {{^}}Invoke {{.+}}, msil-ld (MSIL) instead{{$}}
-
-# COFF:         {{^}}[[NAME]]: error: no input files{{$}}
 
 # MACHO:        {{^}}[[NAME]]: error: must specify -arch{{$}}
 

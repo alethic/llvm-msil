@@ -31,6 +31,7 @@
 #include "ToolChains/LFILinux.h"
 #include "ToolChains/Lanai.h"
 #include "ToolChains/Linux.h"
+#include "ToolChains/MSIL.h"
 #include "ToolChains/MSP430.h"
 #include "ToolChains/MSVC.h"
 #include "ToolChains/Managarm.h"
@@ -3449,6 +3450,7 @@ void Driver::handleArguments(Compilation &C, DerivedArgList &Args,
         !C.getDefaultToolChain().getTriple().isSPIRV())
       Diag(clang::diag::err_drv_emit_llvm_link);
     if (C.getDefaultToolChain().getTriple().isWindowsMSVCEnvironment() &&
+        !C.getDefaultToolChain().getTriple().isOSBinFormatMSIL() &&
         C.getDefaultToolChain().isUsingLTO(Args) &&
         !Args.getLastArgValue(options::OPT_fuse_ld_EQ)
              .starts_with_insensitive("lld"))
@@ -5459,6 +5461,8 @@ InputInfoList Driver::BuildJobsForActionNoCache(
 
 const char *Driver::getDefaultImageName() const {
   llvm::Triple Target(llvm::Triple::normalize(TargetTriple));
+  if (Target.isOSBinFormatMSIL())
+    return "a.exe";
   return Target.isOSWindows() ? "a.exe" : "a.out";
 }
 
@@ -6169,6 +6173,8 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
                                       const llvm::Triple &Target) const {
 
   auto &TC = ToolChains[Target.str()];
+  if (!TC && Target.isOSBinFormatMSIL())
+    TC = toolchains::createMSILToolChain(*this, Target, Args);
   if (!TC) {
     switch (Target.getOS()) {
     case llvm::Triple::AIX:

@@ -1,0 +1,60 @@
+# %{msil_prog} at every level of msil_opt_levels (plan 5.12.3), with the
+# stand-ins of lit.local.cfg: each level builds the program with msil-prog.py
+# (two sources, a stock-clang source, two archives, one with a stock-clang
+# member, and an MSIL-only link argument), assembles prog.il into prog.exe,
+# verifies, force-JITs and runs it against composite.expected. Where they can
+# run, the native-oracle leg (msil-prog.py --mode native) and the .NET
+# Framework leg (the same prog.exe) compare with the same file. Each source
+# adds a different power of two to the exit status, so '[exit 127]' says that
+# every input reached each link; the checks after the composite show that
+# every leg of every level ran, and the stand-in's record of the MSIL link
+# (prog.il.inputs) shows the link order of plan 5.12.4: the objects, then the
+# stock objects, then each archive in the order of %{msil_archives}, then
+# %{msil_libs}, while the native link leaves %{msil_libs} out.
+# RUN: rm -rf %t && split-file %s %t
+# RUN: rm -f %t.*.out
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# REDEFINE: %{msil_stock_srcs} = %t/stock.c
+# REDEFINE: %{msil_archives} = one=%t/a1.c,%t/a2.c;two=%t/b1.c,stock:%t/b2.c
+# REDEFINE: %{msil_libs} = -Wl,--stand-in-extra
+# RUN: %{msil_prog}
+# RUN: %if msil-opt-O0 %{ %{harness_check} equals %t.O0.out "[exit 127]" %}
+# RUN: %if msil-opt-O1 %{ %{harness_check} equals %t.O1.out "[exit 127]" %}
+# RUN: %if msil-opt-O2 %{ %{harness_check} equals %t.O2.out "[exit 127]" %}
+# RUN: %if msil-opt-O3 %{ %{harness_check} equals %t.O3.out "[exit 127]" %}
+# RUN: %if msil-opt-Os %{ %{harness_check} equals %t.Os.out "[exit 127]" %}
+# RUN: %if msil-opt-Oz %{ %{harness_check} equals %t.Oz.out "[exit 127]" %}
+# RUN: %if msil-native-oracle && msil-opt-O0 %{ %{harness_check} equals %t.O0.native.out "[exit 127]" %}
+# RUN: %if msil-native-oracle && msil-opt-O1 %{ %{harness_check} equals %t.O1.native.out "[exit 127]" %}
+# RUN: %if msil-native-oracle && msil-opt-O2 %{ %{harness_check} equals %t.O2.native.out "[exit 127]" %}
+# RUN: %if msil-native-oracle && msil-opt-O3 %{ %{harness_check} equals %t.O3.native.out "[exit 127]" %}
+# RUN: %if msil-native-oracle && msil-opt-Os %{ %{harness_check} equals %t.Os.native.out "[exit 127]" %}
+# RUN: %if msil-native-oracle && msil-opt-Oz %{ %{harness_check} equals %t.Oz.native.out "[exit 127]" %}
+# RUN: %if msil-run-netfx && msil-opt-O0 %{ %{harness_check} equals %t.O0.netfx.out "[exit 127]" %}
+# RUN: %if msil-run-netfx && msil-opt-O1 %{ %{harness_check} equals %t.O1.netfx.out "[exit 127]" %}
+# RUN: %if msil-run-netfx && msil-opt-O2 %{ %{harness_check} equals %t.O2.netfx.out "[exit 127]" %}
+# RUN: %if msil-run-netfx && msil-opt-O3 %{ %{harness_check} equals %t.O3.netfx.out "[exit 127]" %}
+# RUN: %if msil-run-netfx && msil-opt-Os %{ %{harness_check} equals %t.Os.netfx.out "[exit 127]" %}
+# RUN: %if msil-run-netfx && msil-opt-Oz %{ %{harness_check} equals %t.Oz.netfx.out "[exit 127]" %}
+
+# The MSIL link of the first level (O0 unless msil_opt_levels leaves it out,
+# then O2), and the native link of the same level where the leg ran.
+# RUN: %if msil-opt-O0 %{ %{harness_check} contains %t.O0.d/prog.il.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/libone\.a a1\.o 8\nmember ar/one/libone\.a a2\.o 16\nmember ar/two/libtwo\.a b1\.o 32\nmember ar/two/libtwo\.a b2\.o 64\narg -Wl,--stand-in-extra\nld-path \S+\n\Z" %}
+# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.O2.d/prog.il.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/libone\.a a1\.o 8\nmember ar/one/libone\.a a2\.o 16\nmember ar/two/libtwo\.a b1\.o 32\nmember ar/two/libtwo\.a b2\.o 64\narg -Wl,--stand-in-extra\nld-path \S+\n\Z" %}
+# RUN: %if msil-native-oracle && msil-opt-O0 %{ %{harness_check} contains %t.O0.native.d/prog.%{prog_native_ext}.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/\S+ a1\.o 8\nmember ar/one/\S+ a2\.o 16\nmember ar/two/\S+ b1\.o 32\nmember ar/two/\S+ b2\.o 64\n" %}
+# RUN: %if msil-native-oracle && msil-opt-O0 %{ %{harness_check} lacks %t.O0.native.d/prog.%{prog_native_ext}.inputs "stand-in-extra" %}
+
+#--- main.c
+// prog-value: 1
+#--- util.c
+// prog-value: 2
+#--- stock.c
+// prog-value: 4
+#--- a1.c
+// prog-value: 8
+#--- a2.c
+// prog-value: 16
+#--- b1.c
+// prog-value: 32
+#--- b2.c
+// prog-value: 64

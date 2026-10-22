@@ -1,0 +1,58 @@
+# K&R function definitions called from another translation unit without a prototype.
+# defs.c defines functions in the old style (-std=gnu17), with int, char,
+# short, float and pointer parameters; main.c declares them without
+# prototypes, so its calls pass the default argument promotions (int, double).
+# Every call matches its definition after promotion (C11 6.5.2.2p6: a char or
+# short parameter receives an int, a float parameter a double), so this is
+# defined behaviour; mismatched K&R calls are the matrix case p2-knr.
+# Recon tests-p2 3.1, plan 5.12.5 (M14 lto; M20 obj).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/defs.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+int scale();
+int widen();
+int halfi();
+long long mix();
+int pick_last();
+
+int main(void) {
+  put_i64(scale(6, 7));
+  put_i64(widen(65));
+  put_i64(halfi(2.5f));
+  put_i64(halfi(-7.25));
+  put_i64(mix("knr", 3, 7));
+  put_i64(pick_last(1, 2.0, 3));
+  return scale(3, 5);
+}
+#--- defs.c
+int scale(a, b)
+int a;
+int b;
+{ return a * b; }
+
+int widen(c)
+char c;
+{ return c + 1; }
+
+int halfi(x)
+float x;
+{ return (int)(x * 2.0f); }
+
+long long mix(p, n, s)
+const char *p;
+int n;
+short s;
+{
+  long long r = 0;
+  for (int i = 0; i < n; ++i)
+    r = r * 31 + p[i];
+  return r + s;
+}
+
+int pick_last(a, d, b)
+int a;
+double d;
+int b;
+{ return a + (int)d * 10 + b * 100; }

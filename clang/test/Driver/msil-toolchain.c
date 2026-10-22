@@ -1,13 +1,15 @@
-// Driver behavior for '<native triple>-msil' targets in Phase 1
-// (Design.md sections 3 and 5.5; ImplementationPlan.md M1.c): the native
-// toolchain is used, the cc1 triple keeps the '-msil' suffix, -S (ILAsm text)
-// and bitcode output work, and the actions below that would write an object
-// file are errors until phase 2. Object-format-specific flags for ELF and COFF
-// are not passed, and clang-cl does not turn /GS on by default (section 12 row
-// 'D25 amended'). Basic block sections, late function splitting, the basic
-// block address map and static data partitioning need an ELF (the address map
-// also an x86-64 COFF) object file, so they are 'unsupported option' errors for
-// every MSIL triple (section 12 row 'D8 amended (function splitting)').
+// Driver behavior for '<native triple>-msil' targets (Design.md sections 3
+// and 5.5; ImplementationPlan.md M1.c, 5.10 and 5.12.13): the MSIL toolchain
+// wraps the native one (MSILToolChain<NativeTC>, M14), the cc1 triple keeps
+// the '-msil' suffix, -S (ILAsm text) and bitcode output work, -c writes LLVM
+// bitcode until CIL objects exist (M19), and links run msil-ld (msil-link.c,
+// msil-lto.c, msil-header-search.c). Object-format-specific flags for ELF and
+// COFF are not passed, and clang-cl does not turn /GS on by default (section
+// 12 row 'D25 amended'). Basic block sections, late function splitting, the
+// basic block address map and static data partitioning need an ELF (the
+// address map also an x86-64 COFF) object file, so they are 'unsupported
+// option' errors for every MSIL triple (section 12 row 'D8 amended (function
+// splitting)').
 
 // RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -S %s -o %t.il 2>&1 \
 // RUN:   | FileCheck --check-prefix=LNX --implicit-check-not=error: --implicit-check-not=warning: \
@@ -60,7 +62,8 @@
 // triples, which have no stack protector (decision D25; section 12 row 'D25
 // amended'). An explicit /GS is still passed, and MSILPrepareIR strips it with
 // a warning (CodeGen/MSIL/stack-protector-warning.ll). The native triple keeps
-// the default. /c is rejected for MSIL (below), so these runs use /clang:-S.
+// the default. These runs check the cc1 line of ILAsm output (/clang:-S); /c
+// writes bitcode (below).
 // RUN: %clang_cl -### --target=x86_64-pc-windows-msvc-msil /clang:-S -- %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=CL --implicit-check-not=error: --implicit-check-not=warning: \
 // RUN:     --implicit-check-not=-stack-protector %s
@@ -109,79 +112,96 @@
 // RUN:   | FileCheck --check-prefix=WIN32 --implicit-check-not="PLEASE submit" %s
 // WIN32: error: unknown target triple 'x86_64-pc-windows-msil'
 
-// Object files are not supported until phase 2. With the integrated assembler
-// (the default) and with an external one (-fno-integrated-as), each of these
-// reports err_drv_msil_no_object_output: -c on x86_64 Linux, MinGW and MSVC;
-// and on x86_64 Linux a link, -save-temps=obj -c and -c of assembler input.
-// With the integrated assembler, -c on aarch64 Linux too. Every link is
-// rejected, with or without LTO (below): it reports the error once and plans
-// no link job.
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -c %s -o %t.o 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX %s
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil %s -o %t.dll 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX --implicit-check-not=error: --implicit-check-not='"ld"' %s
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -save-temps=obj -c %s -o %t.o 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX %s
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -c -x assembler %s -o %t.o 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX %s
-// OBJ-LNX: error: CIL object files are not supported for MSIL target 'x86_64-unknown-linux-gnu-msil' yet; use -flto to write LLVM bitcode objects, or -S to write ILAsm text
-// RUN: not %clang -### --target=aarch64-unknown-linux-gnu-msil -c %s -o %t.o 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-A64 %s
-// OBJ-A64: error: CIL object files are not supported for MSIL target 'aarch64-unknown-linux-gnu-msil' yet;
-// RUN: not %clang -### --target=x86_64-w64-windows-gnu-msil -c %s -o %t.o 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-MINGW %s
-// OBJ-MINGW: error: CIL object files are not supported for MSIL target 'x86_64-w64-windows-gnu-msil' yet;
-// RUN: not %clang -### --target=x86_64-pc-windows-msvc-msil -fms-compatibility-version=19.40 -c %s -o %t.o 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-WIN %s
-// OBJ-WIN: error: CIL object files are not supported for MSIL target 'x86_64-pc-windows-msvc{{[0-9.]*}}-msil' yet;
-
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as -c %s -o %t.o 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX %s
-// RUN: not %clang -### --target=x86_64-w64-windows-gnu-msil -fno-integrated-as -c %s -o %t.o 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-MINGW %s
-// RUN: not %clang -### --target=x86_64-pc-windows-msvc-msil -fms-compatibility-version=19.40 -fno-integrated-as \
-// RUN:   -c %s -o %t.o 2>&1 | FileCheck --check-prefix=OBJ-WIN %s
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as -save-temps=obj -c %s -o %t.o 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX %s
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as %s -o %t.dll 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX --implicit-check-not=error: --implicit-check-not='"ld"' \
+// Until M19 (CIL objects), -c writes LLVM bitcode for every MSIL triple
+// (ImplementationPlan.md 5.10.5, Q6): the toolchain's LTO mode is full LTO
+// unless -S or -emit-llvm is given, so -c is one 'cc1 -emit-llvm-bc
+// -flto=full' job and no assembler runs, also with -fno-integrated-as and with
+// -save-temps=obj (whose preprocessed temporary still compiles to bitcode). A
+// link compiles to bitcode and plans msil-ld, never 'ld' (msil-link.c and
+// msil-lto.c check the link jobs; this file's former LTO-link block moved
+// there). Assembling ILAsm text (-c -x assembler) is err_drv_msil_ilasm_input
+// with the integrated assembler and err_no_external_assembler without it,
+// and -fno-lto -c asks for a CIL object file, err_drv_msil_no_object_output.
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ-LNX --implicit-check-not=error: --implicit-check-not=-cc1as \
+// RUN:     --implicit-check-not=msil-ld %s
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ-LNX --implicit-check-not=error: --implicit-check-not=-cc1as \
+// RUN:     --implicit-check-not='"as"' --implicit-check-not=msil-ld %s
+// OBJ-LNX: "-cc1" "-triple" "x86_64-unknown-linux-gnu-msil"
+// OBJ-LNX-SAME: "-emit-llvm-bc"
+// OBJ-LNX-SAME: "-flto=full"
+// OBJ-LNX-SAME: "-o" "{{[^"]*}}.o"
+// RUN: %clang -### --target=aarch64-unknown-linux-gnu-msil -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ-A64 --implicit-check-not=error: --implicit-check-not=-cc1as %s
+// OBJ-A64: "-cc1" "-triple" "aarch64-unknown-linux-gnu-msil"
+// OBJ-A64-SAME: "-emit-llvm-bc"
+// OBJ-A64-SAME: "-flto=full"
+// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ-MINGW --implicit-check-not=error: --implicit-check-not=-cc1as %s
+// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil -fno-integrated-as -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ-MINGW --implicit-check-not=error: --implicit-check-not=-cc1as \
 // RUN:     --implicit-check-not='"as"' %s
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as -c -x assembler %s -o %t.o 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX %s
+// OBJ-MINGW: "-cc1" "-triple" "x86_64-w64-windows-gnu-msil"
+// OBJ-MINGW-SAME: "-emit-llvm-bc"
+// OBJ-MINGW-SAME: "-flto=full"
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -fms-compatibility-version=19.40 -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ-WIN --implicit-check-not=error: --implicit-check-not=-cc1as %s
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -fms-compatibility-version=19.40 -fno-integrated-as \
+// RUN:   -c %s -o %t.o 2>&1 | FileCheck --check-prefix=OBJ-WIN --implicit-check-not=error: \
+// RUN:     --implicit-check-not=-cc1as %s
+// RUN: %clang_cl -### --target=x86_64-pc-windows-msvc-msil -fms-compatibility-version=19.40 /c -- %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=OBJ-WIN --implicit-check-not=error: --implicit-check-not=-cc1as %s
+// OBJ-WIN: "-cc1" "-triple" "x86_64-pc-windows-msvc19.40.0-msil"
+// OBJ-WIN-SAME: "-emit-llvm-bc"
+// OBJ-WIN-SAME: "-flto=full"
 
-// LTO links are rejected too: Phase 1 has no MSIL linker, and no native linker
-// can link MSIL bitcode (Design.md section 5.5; section 12 row 'fix-loop
-// ownership: clang/lib/Driver/ToolChain.cpp -> fix-6'), so the driver plans
-// neither GNU ld with the LLVMgold plugin nor lld. This holds for full and thin
-// LTO, -fuse-ld=lld, bitcode input, and the Linux (glibc, musl, aarch64), MinGW
-// and MSVC toolchains. The native MSVC toolchain requires lld for LTO
-// (err_drv_lto_without_lld), so the MSVC run names it.
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -flto %s -o %t.dll 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX --implicit-check-not=error: --implicit-check-not='"ld"' \
-// RUN:     --implicit-check-not=-plugin --implicit-check-not=LLVMgold %s
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -flto=thin %s -o %t.dll 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX --implicit-check-not=error: --implicit-check-not='"ld"' \
-// RUN:     --implicit-check-not=-plugin --implicit-check-not=LLVMgold %s
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -flto -fuse-ld=lld %s -o %t.dll 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX --implicit-check-not=error: --implicit-check-not='"ld"' \
-// RUN:     --implicit-check-not=-plugin --implicit-check-not=LLVMgold --implicit-check-not=ld.lld %s
-// RUN: not %clang -### --target=x86_64-unknown-linux-musl-msil -flto %s -o %t.dll 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-MUSL --implicit-check-not=error: --implicit-check-not='"ld"' \
-// RUN:     --implicit-check-not=-plugin --implicit-check-not=LLVMgold %s
-// OBJ-MUSL: error: CIL object files are not supported for MSIL target 'x86_64-unknown-linux-musl-msil' yet;
-// RUN: not %clang -### --target=aarch64-unknown-linux-gnu-msil -flto %s -o %t.dll 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-A64 --implicit-check-not=error: --implicit-check-not='"ld"' \
-// RUN:     --implicit-check-not=-plugin --implicit-check-not=LLVMgold %s
-// RUN: %clang --target=x86_64-unknown-linux-gnu-msil -c -emit-llvm %s -o %t.lto-input.bc
-// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -flto %t.lto-input.bc -o %t.dll 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-LNX --implicit-check-not=error: --implicit-check-not='"ld"' \
-// RUN:     --implicit-check-not=-plugin --implicit-check-not=LLVMgold %s
-// RUN: not %clang -### --target=x86_64-w64-windows-gnu-msil -flto %s -o %t.dll 2>&1 \
-// RUN:   | FileCheck --check-prefix=OBJ-MINGW --implicit-check-not=error: --implicit-check-not='"ld"' \
-// RUN:     --implicit-check-not=-plugin --implicit-check-not=LLVMgold %s
-// RUN: not %clang -### --target=x86_64-pc-windows-msvc-msil -fms-compatibility-version=19.40 -flto -fuse-ld=lld \
-// RUN:   %s -o %t.dll 2>&1 | FileCheck --check-prefix=OBJ-WIN --implicit-check-not=error: --implicit-check-not='"ld"' \
-// RUN:     --implicit-check-not=-plugin --implicit-check-not=LLVMgold --implicit-check-not=lld-link %s
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -save-temps=obj -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=SAVE --implicit-check-not=error: --implicit-check-not=-cc1as %s
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as -save-temps=obj -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=SAVE --implicit-check-not=error: --implicit-check-not=-cc1as \
+// RUN:     --implicit-check-not='"as"' %s
+// SAVE: "-cc1" "-triple" "x86_64-unknown-linux-gnu-msil" {{.*}}"-E"
+// SAVE: "-cc1" "-triple" "x86_64-unknown-linux-gnu-msil" {{.*}}"-emit-llvm-bc"{{.*}} "-flto=full"
+
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil %s -o %t.dll 2>&1 \
+// RUN:   | FileCheck --check-prefix=LINK --implicit-check-not=error: --implicit-check-not='"ld"' %s
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as %s -o %t.dll 2>&1 \
+// RUN:   | FileCheck --check-prefix=LINK --implicit-check-not=error: --implicit-check-not='"ld"' \
+// RUN:     --implicit-check-not='"as"' %s
+// LINK: "-cc1" "-triple" "x86_64-unknown-linux-gnu-msil"
+// LINK-SAME: "-emit-llvm-bc"
+// LINK-SAME: "-flto=full"
+// LINK: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-gnu-msil"
+// LINK-SAME: "-o" "{{[^"]*}}.dll"
+
+// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -c -x assembler %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=ILASM --implicit-check-not="PLEASE submit" %s
+// ILASM: error: assembling ILAsm text is not supported for MSIL target 'x86_64-unknown-linux-gnu-msil'; compile C or LLVM IR sources instead, or use -S to write ILAsm text
+// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as -c -x assembler %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=NO-AS --implicit-check-not="PLEASE submit" --implicit-check-not='"as"' %s
+// NO-AS: error: there is no external assembler that can be used on this platform
+
+// The options that keep the assemble step from being collapsed (clang-cl /FA
+// and /Fa<file>, -via-file-asm) also turn the bitcode default off when no
+// -flto, -flto= or -fno-lto is given, as -S and -emit-llvm do (5.10.5's
+// getLTOMode rule, section 12 row of 2026-10-22): the assemble step stays and
+// reports err_drv_msil_ilasm_input, and no bitcode job is planned.
+// DEFINE: %{no_bc} = --implicit-check-not="PLEASE submit" --implicit-check-not=-emit-llvm-bc
+// RUN: not %clang_cl -### --target=x86_64-pc-windows-msvc-msil /FA /c -- %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=ILASM-WIN %{no_bc} %s
+// RUN: not %clang_cl -### --target=x86_64-pc-windows-msvc-msil /Fa%t.asm /c -- %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=ILASM-WIN %{no_bc} %s
+// RUN: not %clang -### --target=x86_64-pc-windows-msvc-msil -via-file-asm -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=ILASM-WIN %{no_bc} %s
+// ILASM-WIN: error: assembling ILAsm text is not supported for MSIL target 'x86_64-pc-windows-msvc{{[0-9.]*}}-msil'; compile C or LLVM IR sources instead, or use -S to write ILAsm text
+
+// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-lto -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=NO-LTO %s
+// NO-LTO: error: CIL object files are not supported for MSIL target 'x86_64-unknown-linux-gnu-msil' yet; use -flto to write LLVM bitcode objects, or -S to write ILAsm text
+// RUN: not %clang -### --target=x86_64-pc-windows-msvc-msil -fno-lto -c %s -o %t.o 2>&1 \
+// RUN:   | FileCheck --check-prefix=NO-LTO-WIN %s
+// NO-LTO-WIN: error: CIL object files are not supported for MSIL target 'x86_64-pc-windows-msvc{{[0-9.]*}}-msil' yet;
 
 // -S needs no assembler, so -fno-integrated-as -S works.
 // RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as -S %s -o %t.il 2>&1 \

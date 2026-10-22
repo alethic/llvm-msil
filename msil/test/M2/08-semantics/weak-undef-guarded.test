@@ -1,0 +1,44 @@
+# Matrix case weak-undef-guarded: weak undefined symbols tested before use.
+# main.c and other.c reference functions and a variable that are declared
+# weak and defined nowhere, and use them only when their address is not null:
+# natively every address is null, so no guarded call runs. Each name is
+# referenced from one object only: lld-link rejects the same weak undefined
+# name in two objects ('duplicate symbol', the weak externals' defaults), so
+# that has no Windows transcript. msil-ld leaves an
+# undefined WEAK symbol to the backend (plan 5.9.6, M14), which makes its
+# address null (M12's whole-program lowering of extern_weak), in both objects;
+# the program must take the same branches and never run a trap stub.
+# Plan 5.9.16 row weak-undef-guarded (M14, M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/other.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+extern void hook(void) __attribute__((weak));
+extern int weak_data __attribute__((weak));
+int other_probe(void);
+int main(void) {
+  int r = 0;
+  if (&hook) {
+    hook();
+    r |= 1;
+  } else {
+    put_str("hook absent");
+  }
+  if (&weak_data)
+    r |= 2 + weak_data;
+  else
+    put_str("weak_data absent");
+  r |= other_probe();
+  put_i64(r);
+  return r;
+}
+#--- other.c
+int puts(const char *);
+extern int other_fn(int) __attribute__((weak));
+int other_probe(void) {
+  if (&other_fn)
+    return other_fn(1) & 7;
+  puts("other_fn absent");
+  return 4;
+}

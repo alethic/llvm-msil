@@ -1,0 +1,88 @@
+## Common symbols (ImplementationPlan.md 5.9.5, the lld/ELF port of
+## Symbols.cpp:607-650), each case in both input orders:
+## - two commons merge: the size of the larger and the larger alignment;
+## - a GLOBAL definition replaces a common, and a common never replaces it;
+## - a common replaces a WEAK definition, and a WEAK definition never
+##   replaces a common;
+## - --warn-common notes 'multiple common of <s>' and 'common <s> is
+##   overridden' (lld's texts).
+## The merged module's data segment shows the result: its size, alignment
+## and initialized bytes (decision D12).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as com4.ll -o com4.o
+# RUN: llvm-as com48.ll -o com48.o
+# RUN: llvm-as def.ll -o def.o
+# RUN: llvm-as weakdef.ll -o weakdef.o
+
+# DEFINE: %{warn} = FileCheck %s --implicit-check-not=warning: --implicit-check-not=error: \
+# DEFINE:   --implicit-check-not="PLEASE submit"
+
+## Two commons: 48 bytes, aligned 32, in both orders.
+# RUN: msil-ld --lto-emit-asm --lto-O0 --warn-common main.o com4.o com48.o -o cc.il 2>&1 \
+# RUN:   | %{warn} --check-prefix=MULTIPLE
+# RUN: FileCheck %s --check-prefix=MERGED --input-file=cc.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 --warn-common main.o com48.o com4.o -o cc2.il 2>&1 \
+# RUN:   | %{warn} --check-prefix=MULTIPLE
+# RUN: FileCheck %s --check-prefix=MERGED --input-file=cc2.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o com4.o com48.o -o quiet.il 2>&1 | count 0
+
+# MULTIPLE: {{^}}msil-ld: warning: multiple common of c{{$}}
+# MERGED:   {{^}}// ---- data segment: 48 bytes (0 initialized + 48 zero), align 32 ----{{$}}
+# MERGED:   {{^}}.field {{.*}}static initonly native int 'c'{{( // [+]0)?$}}
+
+## A GLOBAL definition wins over the common in both orders.
+# RUN: msil-ld --lto-emit-asm --lto-O0 --warn-common main.o com4.o def.o -o cd.il 2>&1 \
+# RUN:   | %{warn} --check-prefix=OVERRIDDEN
+# RUN: FileCheck %s --check-prefix=DEFINED --input-file=cd.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 --warn-common main.o def.o com4.o -o dc.il 2>&1 \
+# RUN:   | %{warn} --check-prefix=OVERRIDDEN
+# RUN: FileCheck %s --check-prefix=DEFINED --input-file=dc.il
+
+# OVERRIDDEN: {{^}}msil-ld: warning: common c is overridden{{$}}
+# DEFINED:    {{^}}// ---- data segment: 4 bytes (4 initialized + 0 zero), align 16 ----{{$}}
+# DEFINED:    {{^}}  05 00 00 00 ){{ *}}// 0x0000{{$}}
+
+## The common wins over a WEAK definition in both orders: zero, not 7.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o weakdef.o com4.o -o wc.il
+# RUN: FileCheck %s --check-prefix=COMMON --implicit-check-not=bytearray --input-file=wc.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o com4.o weakdef.o -o cw.il
+# RUN: FileCheck %s --check-prefix=COMMON --implicit-check-not=bytearray --input-file=cw.il
+
+# COMMON:     {{^}}// ---- data segment: 4 bytes (0 initialized + 4 zero), align 32 ----{{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@c = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @c
+  ret i32 %v
+}
+
+#--- com4.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@c = common global i32 0, align 32
+
+#--- com48.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@c = common global [48 x i8] zeroinitializer, align 8
+
+#--- def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@c = global i32 5, align 4
+
+#--- weakdef.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@c = weak global i32 7, align 4

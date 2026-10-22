@@ -41,16 +41,20 @@ set(MSIL_PEVERIFY_EXECUTABLE "${_msil_peverify}" CACHE FILEPATH
 # configuration (clang without LLVM_ENABLE_PROJECTS=clang, say) are left out
 # instead of breaking the configure step.
 set(MSIL_TEST_DEPS)
-foreach(_msil_dep clang llc opt FileCheck not count split-file llvm-config)
+# msil/test/M2 and the lto pipeline link with msil-ld (lld) and archive with
+# the tree's llvm-ar; %msil_nm is llvm-nm (M14).
+foreach(_msil_dep clang llc opt FileCheck not count split-file llvm-config lld
+    llvm-ar llvm-nm)
   if(TARGET ${_msil_dep})
     list(APPEND MSIL_TEST_DEPS ${_msil_dep})
   endif()
 endforeach()
 # check-msil also runs lld/test/MSIL, which needs lld (it makes msil-ld too),
-# and llvm/test/CodeGen/MSIL/irsymtab-linker-options.ll, which needs llvm-as
-# and llvm-bcanalyzer (M13).
+# llvm-as, llvm-ar and the llvm-lib and llvm-dlltool copies of llvm-ar for its
+# inputs, and llvm/test/CodeGen/MSIL/irsymtab-linker-options.ll, which needs
+# llvm-as and llvm-bcanalyzer (M13, M14).
 set(_msil_check_deps ${MSIL_TEST_DEPS})
-foreach(_msil_dep lld llvm-as llvm-bcanalyzer)
+foreach(_msil_dep llvm-as llvm-bcanalyzer llvm-lib llvm-dlltool)
   if(TARGET ${_msil_dep})
     list(APPEND _msil_check_deps ${_msil_dep})
   endif()
@@ -95,9 +99,13 @@ if(TARGET clang AND LLVM_EXTERNAL_CLANG_SOURCE_DIR)
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/CodeGen/MSIL
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Preprocessor/init-msil.c
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-toolchain.c
+    # The MSIL toolchain's link, LTO and header-search tests (M14).
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-link.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-lto.c
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-header-search.c
     )
 endif()
-# msil-ld's tests (M13): the lld flavor msil and its stub.
+# msil-ld's tests (M13, M14): the lld flavor msil.
 if(TARGET lld AND LLVM_EXTERNAL_LLD_SOURCE_DIR)
   list(APPEND _msil_lit_paths ${LLVM_EXTERNAL_LLD_SOURCE_DIR}/test/MSIL)
 endif()

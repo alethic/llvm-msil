@@ -1,0 +1,19 @@
+# Matrix case p6-ctors: constructors with priorities in two objects (native BCDM).
+# recon/p2/judge-c-fidelity-files/probes/p6a.c and p6b.c without their
+# destructors: p6b.c's constructors of priority 120 ('B') and p6a.c's of
+# priority 150 ('C') run by priority across the objects, then p6b.c's
+# constructor without a priority ('D'), then main ('M'). The output has no
+# newline. Plan 5.9.16 row p6-ctors (M14, M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p6a.c %t/p6b.c
+# RUN: %{msil_prog}
+#--- p6a.c
+/* p6a.c: constructors with priorities across objects (destructors removed) */
+int putchar(int);
+__attribute__((constructor(150))) static void c150(void) { putchar('C'); }
+int main(void) { putchar('M'); return 0; }
+#--- p6b.c
+/* p6b.c */
+int putchar(int);
+__attribute__((constructor(120))) static void c120(void) { putchar('B'); }
+__attribute__((constructor)) static void cdef(void) { putchar('D'); }

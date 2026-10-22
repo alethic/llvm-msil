@@ -1,0 +1,318 @@
+## COMDAT groups of bitcode inputs (ImplementationPlan.md 5.9.5, the port of
+## lld/ELF InputFiles.cpp:1905-1912):
+## - the first file that presents a group name keeps the group; in later
+##   files every member of the group (functions and data) is discarded, so
+##   one copy of each member reaches the output, all from the same file;
+## - a reference that resolves only to a member of a discarded copy (one that
+##   the kept copy lacks) is 5.9.14's
+##     relocation refers to a symbol in a discarded section: <s>
+##     >>> defined in <file>
+##     >>> referenced by <file>:(<method>)
+##   (lld/ELF Relocations.cpp:381-405), for a function and for data alike;
+## - NoDeduplicate groups are always kept, so two GLOBAL definitions in them
+##   are a duplicate;
+## - the selection kinds ExactMatch, Largest and SameSize are errors:
+##   comdat '<g>' in <file> uses selection kind '<k>', which msil-ld does not
+##   support
+## (the plan does not fix the spelling of <k>; either the IR keyword or the
+## enumerator is accepted).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as c1.ll -o c1.o
+# RUN: llvm-as c2.ll -o c2.o
+# RUN: llvm-as nd1.ll -o nd1.o
+# RUN: llvm-as nd2.ll -o nd2.o
+# RUN: llvm-as exact.ll -o exact.o
+# RUN: llvm-as largest.ll -o largest.o
+# RUN: llvm-as samesize.ll -o samesize.o
+
+## The first file's copies win, in both orders.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o c1.o c2.o -o c12.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefixes=CHECK,C1 --input-file=c12.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o c2.o c1.o -o c21.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefixes=CHECK,C2 --input-file=c21.il
+
+## inl returns 1 in c1.o and 2 in c2.o; c1.o's table holds 10 (0x0a), c2.o's
+## 20 (0x14), and it is the only data.
+# CHECK-LABEL: {{^}}.method public static int32 'main'() cil managed{{$}}
+# CHECK-LABEL: {{^}}.method {{.*}}static int32 'inl'() cil managed{{$}}
+# C1:          {{^}}  ldc.i4.1{{$}}
+# C2:          {{^}}  ldc.i4.2{{$}}
+# CHECK-NOT:   {{^}}.method {{.*}}'inl'()
+# CHECK:       {{^}}// ---- data segment: 4 bytes (4 initialized + 0 zero), align 16 ----{{$}}
+# C1:          {{^}}  0A 00 00 00 ){{ *}}// 0x0000{{$}}
+# C2:          {{^}}  14 00 00 00 ){{ *}}// 0x0000{{$}}
+
+## NoDeduplicate: both copies are kept.
+# RUN: not msil-ld --lto-emit-asm --lto-O0 main.o nd1.o nd2.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ND --implicit-check-not=error: --implicit-check-not="PLEASE submit"
+
+# ND:          {{^}}msil-ld: error: duplicate symbol: nd{{$}}
+# ND-NEXT:     {{^}}>>> defined in nd1.o{{$}}
+# ND-NEXT:     {{^}}>>> defined in nd2.o{{$}}
+
+# RUN: not msil-ld --lto-emit-asm main.o exact.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=EXACT --implicit-check-not="PLEASE submit"
+# RUN: not msil-ld --lto-emit-asm main.o largest.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LARGEST --implicit-check-not="PLEASE submit"
+# RUN: not msil-ld --lto-emit-asm main.o samesize.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=SAMESIZE --implicit-check-not="PLEASE submit"
+
+# EXACT:       {{^}}msil-ld: error: comdat 'ex' in exact.o uses selection kind '{{exactmatch|ExactMatch}}', which msil-ld does not support{{$}}
+# LARGEST:     {{^}}msil-ld: error: comdat 'big' in largest.o uses selection kind '{{largest|Largest}}', which msil-ld does not support{{$}}
+# SAMESIZE:    {{^}}msil-ld: error: comdat 'same' in samesize.o uses selection kind '{{samesize|SameSize}}', which msil-ld does not support{{$}}
+
+## Discarded copies (the files of discard/). c1.o, c2.o and c3.o each hold a
+## copy of the group grp; c2.o's copy also holds the function only_in_c2 and
+## c3.o's the variable only_data. With c1.o first, the later copy is discarded
+## with those members, and main.o's call or main2.o's load refers to a
+## discarded symbol, whether the reference comes before or after the copies.
+# RUN: cd %t/discard
+# RUN: llvm-as c1.ll -o c1.o
+# RUN: llvm-as c2.ll -o c2.o
+# RUN: llvm-as c3.ll -o c3.o
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as main2.ll -o main2.o
+
+# DEFINE: %{disc} = FileCheck %s --implicit-check-not=error: --implicit-check-not="PLEASE submit" \
+# DEFINE:   --implicit-check-not=">>>"
+# RUN: not msil-ld --lto-emit-asm --lto-O0 main.o c1.o c2.o -o x.il 2>&1 | %{disc} --check-prefix=DISC-FN
+# RUN: not msil-ld --lto-emit-asm --lto-O0 c1.o c2.o main.o -o x.il 2>&1 | %{disc} --check-prefix=DISC-FN
+# RUN: not msil-ld --lto-emit-asm --lto-O0 main2.o c1.o c3.o -o x.il 2>&1 | %{disc} --check-prefix=DISC-DATA
+# RUN: not msil-ld --lto-emit-asm --lto-O0 c1.o c3.o main2.o -o x.il 2>&1 | %{disc} --check-prefix=DISC-DATA
+
+# DISC-FN:        {{^}}msil-ld: error: relocation refers to a symbol in a discarded section: only_in_c2{{$}}
+# DISC-FN-NEXT:   {{^}}>>> defined in c2.o{{$}}
+# DISC-FN-NEXT:   {{^}}>>> referenced by main.o:(main){{$}}
+# DISC-DATA:      {{^}}msil-ld: error: relocation refers to a symbol in a discarded section: only_data{{$}}
+# DISC-DATA-NEXT: {{^}}>>> defined in c3.o{{$}}
+# DISC-DATA-NEXT: {{^}}>>> referenced by main2.o:(main){{$}}
+
+## With the member's copy first, that copy is kept, and so is the member.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o c2.o c1.o -o kept-fn.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=KEPT-FN --input-file=kept-fn.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main2.o c3.o c1.o -o kept-data.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=KEPT-DATA --input-file=kept-data.il
+
+# KEPT-FN:       call int32 'only_in_c2'()
+# KEPT-FN-LABEL: {{^}}.method {{.*}}static int32 'only_in_c2'() cil managed{{$}}
+# KEPT-FN:       {{^}}  ldc.i4.5{{$}}
+# KEPT-DATA:     ldsfld native int 'only_data'
+# KEPT-DATA:     {{^}}  07 00 00 00 ){{ *}}// 0x0000{{$}}
+# KEPT-DATA:     {{^}}.field {{.*}}native int 'only_data'
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %a = call i32 @use1()
+  %b = call i32 @use2()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+declare i32 @use1()
+declare i32 @use2()
+
+#--- c1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$inl = comdat any
+$tbl = comdat any
+
+@tbl = linkonce_odr global i32 10, comdat, align 4
+
+define linkonce_odr i32 @inl() comdat {
+  ret i32 1
+}
+
+define linkonce_odr i32 @tbl_get() comdat($tbl) {
+  %v = load i32, ptr @tbl
+  ret i32 %v
+}
+
+define i32 @use1() {
+  %a = call i32 @inl()
+  %b = call i32 @tbl_get()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+#--- c2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$inl = comdat any
+$tbl = comdat any
+
+@tbl = linkonce_odr global i32 20, comdat, align 4
+
+define linkonce_odr i32 @inl() comdat {
+  ret i32 2
+}
+
+define linkonce_odr i32 @tbl_get() comdat($tbl) {
+  %v = load i32, ptr @tbl
+  ret i32 %v
+}
+
+define i32 @use2() {
+  %a = call i32 @inl()
+  %b = call i32 @tbl_get()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+#--- nd1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$nd = comdat nodeduplicate
+
+define i32 @nd() comdat {
+  ret i32 1
+}
+
+define i32 @use1() {
+  %r = call i32 @nd()
+  ret i32 %r
+}
+
+#--- nd2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$nd = comdat nodeduplicate
+
+define i32 @nd() comdat {
+  ret i32 2
+}
+
+define i32 @use2() {
+  %r = call i32 @nd()
+  ret i32 %r
+}
+
+#--- exact.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$ex = comdat exactmatch
+
+@ex = global i32 1, comdat
+
+define i32 @use1() {
+  %v = load i32, ptr @ex
+  ret i32 %v
+}
+
+define i32 @use2() {
+  ret i32 0
+}
+
+#--- largest.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$big = comdat largest
+
+@big = global i32 1, comdat
+
+define i32 @use1() {
+  %v = load i32, ptr @big
+  ret i32 %v
+}
+
+define i32 @use2() {
+  ret i32 0
+}
+
+#--- samesize.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$same = comdat samesize
+
+@same = global i32 1, comdat
+
+define i32 @use1() {
+  %v = load i32, ptr @same
+  ret i32 %v
+}
+
+define i32 @use2() {
+  ret i32 0
+}
+
+#--- discard/c1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$grp = comdat any
+
+define linkonce_odr i32 @grp() comdat {
+  ret i32 1
+}
+
+define i32 @use1() {
+  %r = call i32 @grp()
+  ret i32 %r
+}
+
+#--- discard/c2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$grp = comdat any
+
+define linkonce_odr i32 @grp() comdat {
+  ret i32 2
+}
+
+define i32 @only_in_c2() comdat($grp) {
+  ret i32 5
+}
+
+#--- discard/c3.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$grp = comdat any
+
+define linkonce_odr i32 @grp() comdat {
+  ret i32 3
+}
+
+@only_data = global i32 7, comdat($grp), align 4
+
+#--- discard/main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %a = call i32 @use1()
+  %b = call i32 @only_in_c2()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+declare i32 @use1()
+declare i32 @only_in_c2()
+
+#--- discard/main2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@only_data = external global i32
+
+define i32 @main() {
+  %a = call i32 @use1()
+  %b = load i32, ptr @only_data
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+declare i32 @use1()

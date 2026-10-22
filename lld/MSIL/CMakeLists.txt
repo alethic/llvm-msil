@@ -4,9 +4,23 @@ add_public_tablegen_target(MSILOptionsTableGen)
 
 add_lld_library(lldMSIL
   Driver.cpp
+  InputFiles.cpp
+  LTO.cpp
+  MapFile.cpp
+  SymbolTable.cpp
+  Symbols.cpp
 
   LINK_COMPONENTS
+  ${LLVM_TARGETS_TO_BUILD}
+  BinaryFormat
+  BitWriter
+  BitReader
+  Core
+  LTO
+  MC
+  Object
   Option
+  Passes
   Support
   TargetParser
 
@@ -15,4 +29,5 @@ add_lld_library(lldMSIL
 
   DEPENDS
   MSILOptionsTableGen
+  intrinsics_gen
   )

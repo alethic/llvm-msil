@@ -1,0 +1,7 @@
+one_value=10
+two_value=50
+one_value=11
+two_value=49
+one_extra=12000
+data=102
+[exit 61]

@@ -1,0 +1,54 @@
+# --param msil_roundtrip=1 (the round-trip leg, Design.md 5.5; plan 5.12.3
+# lists it among the %if legs of %{msil_prog}) makes %{msil_prog} disassemble
+# each level's program image <t>.<L>.d/prog.exe, reassemble the listing with
+# the .NET ildasm and ilasm that msil/utils/tools/msil-tools.proj pins into an
+# EXE, <t>.<L>.rt.exe (not the .rt.dll of %{msil_c} under asm, which
+# ../legs/roundtrip-composites.test covers), require the two listings to match
+# (msil-verify.py --roundtrip) and run <t>.<L>.rt.exe against the test's own
+# .expected file into <t>.<L>.rt.out. %{msil_c} under msil_pipeline=lto is
+# %{msil_prog} of its one source and does the same. The leg passes whenever
+# its tests pass, so a lit.cfg.py that dropped the round trip from
+# prog_pipeline, wrote the image back as a DLL or ran something else than
+# the reassembled image would leave it green without round-tripping the
+# program. A nested lit with -a prints every command it ran, so for each
+# level that msil_opt_levels selects (features msil-opt-<L> of
+# lit.local.cfg) the output must show both commands:
+# (1) for Inputs/nested/roundtrip/rt-prog.test, %{msil_prog} of two sources
+#     under the default pipeline (asm), and
+# (2) for Inputs/nested/roundtrip/rt-c.c, %{msil_c} under
+#     msil_pipeline=lto (which needs msil-ld and llvm-ar configured, as
+#     lit-config.test's (7) shows);
+# and the tests must pass. (3) The control: without msil_roundtrip=1 the same
+# %{msil_prog} runs no round trip. The stand-ins of lit.local.cfg build the
+# programs (no clang or msil-ld runs), and the nested runs use the local
+# runner, as in pipelines.test. msil_roundtrip=1 is a configuration error
+# without the pinned tools, so the test needs them (feature
+# msil-roundtrip-tools of lit.local.cfg; the gates and CI restore them).
+# REQUIRES: msil-roundtrip-tools
+
+# (1)
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_roundtrip=1 %S/Inputs/nested/roundtrip/rt-prog.test > %t.prog.log 2>&1
+# RUN: %{harness_check} contains %t.prog.log "^PASS: MSIL :: harness/prog/Inputs/nested/roundtrip/rt-prog\.test "
+# RUN: %if msil-opt-O0 %{ %{harness_check} contains %t.prog.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-prog\.test\.tmp\.O0\.rt\.exe'? '?.*rt-prog\.test\.tmp\.O0\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-prog'? --out '?.*rt-prog\.test\.tmp\.O0\.rt\.out'? '?.*rt-prog\.test\.tmp\.O0\.rt\.exe'?$" %}
+# RUN: %if msil-opt-O1 %{ %{harness_check} contains %t.prog.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-prog\.test\.tmp\.O1\.rt\.exe'? '?.*rt-prog\.test\.tmp\.O1\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-prog'? --out '?.*rt-prog\.test\.tmp\.O1\.rt\.out'? '?.*rt-prog\.test\.tmp\.O1\.rt\.exe'?$" %}
+# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.prog.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-prog\.test\.tmp\.O2\.rt\.exe'? '?.*rt-prog\.test\.tmp\.O2\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-prog'? --out '?.*rt-prog\.test\.tmp\.O2\.rt\.out'? '?.*rt-prog\.test\.tmp\.O2\.rt\.exe'?$" %}
+# RUN: %if msil-opt-O3 %{ %{harness_check} contains %t.prog.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-prog\.test\.tmp\.O3\.rt\.exe'? '?.*rt-prog\.test\.tmp\.O3\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-prog'? --out '?.*rt-prog\.test\.tmp\.O3\.rt\.out'? '?.*rt-prog\.test\.tmp\.O3\.rt\.exe'?$" %}
+# RUN: %if msil-opt-Os %{ %{harness_check} contains %t.prog.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-prog\.test\.tmp\.Os\.rt\.exe'? '?.*rt-prog\.test\.tmp\.Os\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-prog'? --out '?.*rt-prog\.test\.tmp\.Os\.rt\.out'? '?.*rt-prog\.test\.tmp\.Os\.rt\.exe'?$" %}
+# RUN: %if msil-opt-Oz %{ %{harness_check} contains %t.prog.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-prog\.test\.tmp\.Oz\.rt\.exe'? '?.*rt-prog\.test\.tmp\.Oz\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-prog'? --out '?.*rt-prog\.test\.tmp\.Oz\.rt\.out'? '?.*rt-prog\.test\.tmp\.Oz\.rt\.exe'?$" %}
+# RUN: %{harness_check} lacks %t.prog.log "\.rt\.dll"
+
+# (2)
+# RUN: %if msil-ld && msil-ar %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_roundtrip=1 %S/Inputs/nested/roundtrip/rt-c.c > %t.c.log 2>&1 %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.c.log "^PASS: MSIL :: harness/prog/Inputs/nested/roundtrip/rt-c\.c " %}
+# RUN: %if msil-ld && msil-ar && msil-opt-O0 %{ %{harness_check} contains %t.c.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-c\.c\.tmp\.O0\.rt\.exe'? '?.*rt-c\.c\.tmp\.O0\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-c'? --out '?.*rt-c\.c\.tmp\.O0\.rt\.out'? '?.*rt-c\.c\.tmp\.O0\.rt\.exe'?$" %}
+# RUN: %if msil-ld && msil-ar && msil-opt-O1 %{ %{harness_check} contains %t.c.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-c\.c\.tmp\.O1\.rt\.exe'? '?.*rt-c\.c\.tmp\.O1\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-c'? --out '?.*rt-c\.c\.tmp\.O1\.rt\.out'? '?.*rt-c\.c\.tmp\.O1\.rt\.exe'?$" %}
+# RUN: %if msil-ld && msil-ar && msil-opt-O2 %{ %{harness_check} contains %t.c.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-c\.c\.tmp\.O2\.rt\.exe'? '?.*rt-c\.c\.tmp\.O2\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-c'? --out '?.*rt-c\.c\.tmp\.O2\.rt\.out'? '?.*rt-c\.c\.tmp\.O2\.rt\.exe'?$" %}
+# RUN: %if msil-ld && msil-ar && msil-opt-O3 %{ %{harness_check} contains %t.c.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-c\.c\.tmp\.O3\.rt\.exe'? '?.*rt-c\.c\.tmp\.O3\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-c'? --out '?.*rt-c\.c\.tmp\.O3\.rt\.out'? '?.*rt-c\.c\.tmp\.O3\.rt\.exe'?$" %}
+# RUN: %if msil-ld && msil-ar && msil-opt-Os %{ %{harness_check} contains %t.c.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-c\.c\.tmp\.Os\.rt\.exe'? '?.*rt-c\.c\.tmp\.Os\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-c'? --out '?.*rt-c\.c\.tmp\.Os\.rt\.out'? '?.*rt-c\.c\.tmp\.Os\.rt\.exe'?$" %}
+# RUN: %if msil-ld && msil-ar && msil-opt-Oz %{ %{harness_check} contains %t.c.log "^# executed command: .*msil-verify\.py'? --roundtrip --ildasm .* --ilasm .* '?--output=.*rt-c\.c\.tmp\.Oz\.rt\.exe'? '?.*rt-c\.c\.tmp\.Oz\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?.*\Wroundtrip\Wrt-c'? --out '?.*rt-c\.c\.tmp\.Oz\.rt\.out'? '?.*rt-c\.c\.tmp\.Oz\.rt\.exe'?$" %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} lacks %t.c.log "\.rt\.dll" %}
+
+# (3)
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O2 %S/Inputs/nested/roundtrip/rt-prog.test > %t.off.log 2>&1
+# RUN: %{harness_check} contains %t.off.log "^PASS: MSIL :: harness/prog/Inputs/nested/roundtrip/rt-prog\.test " "^# executed command: .*msil-run\.py'? --expect-os .* --out '?.*rt-prog\.test\.tmp\.O2\.out'? '?.*rt-prog\.test\.tmp\.O2\.d/prog\.exe'?$"
+# RUN: %{harness_check} lacks %t.off.log "--roundtrip" "\.rt\.exe" "\.rt\.out"

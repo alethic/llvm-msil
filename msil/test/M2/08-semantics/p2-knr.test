@@ -1,0 +1,27 @@
+# Matrix case p2-knr: calls through K&R declarations across objects (native 23).
+# recon/p2/judge-c-fidelity-files/probes/p2a.c calls f, g and h through
+# declarations without prototypes; p2b.c defines them (-std=gnu17, as
+# %{msil_cflags} has it): f takes one argument but gets two (natively cdecl
+# ignores the extra one), and h is a K&R definition with a float parameter
+# that receives the promoted double. Under LTO the merged module calls f with
+# a type that differs from its definition, which MSILFixFunctionBitcasts
+# adapts. Plan 5.9.16 row p2-knr (M14 lto; M20 obj: adapter and warning).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p2a.c %t/p2b.c
+# RUN: %{msil_prog}
+#--- p2a.c
+/* p2a.c: calls through K&R (unprototyped) declarations; definitions in p2b.c (-std=gnu17) */
+int f();                  /* defined as int f(int): one argument too many below */
+int g();                  /* defined as int g(int, int) */
+double h();               /* defined K&R style with a float parameter (promoted to double) */
+int main(void) {
+  int r = f(1, 2);        /* native cdecl ignores the extra argument: 11 */
+  r += g(3, 4);           /* 7 */
+  r += (int)h(2.5f);      /* 5 */
+  return r;               /* 23 */
+}
+#--- p2b.c
+/* p2b.c */
+int f(int a) { return a + 10; }
+int g(int a, int b) { return a + b; }
+double h(x) float x; { return x * 2; }

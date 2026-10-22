@@ -1,0 +1,19 @@
+# Matrix case p4-selectany: __declspec(selectany) data defined in two objects (native 15).
+# recon/p2/judge-c-fidelity-files/probes/p4a.c and p4b.c both define sel with
+# __declspec(selectany) (a COMDAT with selection 'any'): the link keeps the
+# first object's copy and discards the other (plan 5.9.5, COMDAT groups), so
+# p4a.c's increment is seen in p4b.c: 7 + 8 = 15. __declspec needs a Windows
+# triple. Plan 5.9.16 row p4-selectany (Windows; M14, M20).
+# REQUIRES: msil-triple-windows
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p4a.c %t/p4b.c
+# RUN: %{msil_prog}
+#--- p4a.c
+/* p4a.c: __declspec(selectany) data (COMDAT any) defined in two objects */
+__declspec(selectany) int sel = 7;
+int ga(void) { return sel++; }
+#--- p4b.c
+/* p4b.c */
+__declspec(selectany) int sel = 7;
+int ga(void);
+int main(void) { int a = ga(); return a + sel; }   /* one copy: 7 + 8 = 15 */

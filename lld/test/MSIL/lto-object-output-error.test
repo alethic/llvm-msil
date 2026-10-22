@@ -1,0 +1,46 @@
+## Before M20, msil-ld has no CIL object output, so every LTO link that would
+## have to write objects is one error (ImplementationPlan.md 5.9.13, 5.9.14
+## 'LTO before M20'): a link without --lto-emit-asm, --lto-partitions above 1,
+## and ThinLTO input (a module with a summary). The error names the way out:
+## --lto-emit-asm, spelled for clang too. Nothing crashes, and no other
+## error is printed. --lto-partitions=1 and full-LTO input with
+## --lto-emit-asm link.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: opt -module-summary main.ll -o thin.o
+# RUN: opt -module-summary other.ll -o thin-other.o
+
+# DEFINE: %{err} = FileCheck %s --check-prefix=ERR --implicit-check-not=error: \
+# DEFINE:   --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: not msil-ld main.o -o prog.exe 2>&1 | %{err}
+# RUN: not msil-ld main.o 2>&1 | %{err}
+# RUN: not msil-ld --lto-O0 main.o -o prog.il 2>&1 | %{err}
+# RUN: not msil-ld --lto-emit-asm --lto-partitions=2 main.o -o prog.il 2>&1 | %{err}
+# RUN: not msil-ld --lto-emit-asm thin.o -o prog.il 2>&1 | %{err}
+# RUN: not msil-ld --lto-emit-asm main.o thin-other.o -o prog.il 2>&1 | %{err}
+
+# ERR: {{^}}msil-ld: error: ThinLTO, --lto-partitions and LTO without --lto-emit-asm need CIL object output, which this msil-ld does not have; use --lto-emit-asm (clang: -Wl,--lto-emit-asm) to write ILAsm text{{$}}
+
+# RUN: msil-ld --lto-emit-asm --lto-partitions=1 main.o -o one.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=IL --input-file=one.il
+
+# IL: {{^}}.assembly 'one' { .ver 0:0:0:0 }{{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- other.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @other() {
+  ret i32 1
+}

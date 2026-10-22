@@ -1,0 +1,160 @@
+## Bitcode for the native triple, as stock clang writes it, is a compatibility
+## path (ImplementationPlan.md 5.9.13, Q12; recon p2/lld-flavor.md 3.3): an
+## input whose triple is the native form of the codegen triple is accepted
+## with one warning per link, naming the first such input:
+##   <file>: linking bitcode for <native triple> as <msil triple>; stock-clang
+##   bitcode is a compatibility path
+## LTO compiles it for the MSIL triple (lto::Config::OverrideTriple), and the
+## IR linker does not warn about the '-msil' suffix (Triple::isCompatibleWith,
+## M13). When the first input is native, the codegen triple is its triple
+## with '-msil' appended. --fatal-warnings makes the warning an error. A
+## stock input from an archive member is named as a member.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as msil.ll -o msil.o
+# RUN: llvm-as msil-defs.ll -o msil-defs.o
+# RUN: llvm-as stock1.ll -o stock1.o
+# RUN: llvm-as stock2.ll -o stock2.o
+# RUN: llvm-as stock-main.ll -o stock-main.o
+# RUN: llvm-as lnx-stock.ll -o lnx-stock.o
+# RUN: llvm-as lnx-stock-helper.ll -o lnx-stock-helper.o
+# RUN: llvm-ar rcs libstock.a lnx-stock-helper.o
+
+# DEFINE: %{one} = --implicit-check-not=warning: --implicit-check-not=error: \
+# DEFINE:   --implicit-check-not="PLEASE submit"
+
+## MSIL bitcode first, then two stock inputs: one warning.
+# RUN: msil-ld --lto-emit-asm --lto-O0 msil.o stock1.o stock2.o -o mixed.il 2>&1 \
+# RUN:   | FileCheck %s %{one} --check-prefix=WARN1
+# RUN: FileCheck %s --check-prefix=MIXED --input-file=mixed.il
+
+# WARN1: {{^}}msil-ld: warning: stock1.o: linking bitcode for x86_64-pc-windows-msvc as x86_64-pc-windows-msvc-msil; stock-clang bitcode is a compatibility path{{$}}
+
+# MIXED:       {{^}}// target triple   = "x86_64-pc-windows-msvc-msil"{{$}}
+# MIXED-LABEL: {{^}}.method public static int32 'main'() cil managed{{$}}
+# MIXED:       call int32 'twice'(int32)
+# MIXED:       call int32 'thrice'(int32)
+# MIXED-LABEL: {{^}}.method assembly static int32 'twice'(int32) cil managed{{$}}
+# MIXED-LABEL: {{^}}.method assembly static int32 'thrice'(int32) cil managed{{$}}
+
+## A stock first input names the codegen triple; the warning names it.
+# RUN: msil-ld --lto-emit-asm --lto-O0 stock-main.o stock1.o -o stock.il 2>&1 \
+# RUN:   | FileCheck %s %{one} --check-prefix=WARN-MAIN
+# RUN: FileCheck %s --check-prefix=MIXED-TRIPLE --input-file=stock.il
+
+# WARN-MAIN: {{^}}msil-ld: warning: stock-main.o: linking bitcode for x86_64-pc-windows-msvc as x86_64-pc-windows-msvc-msil; stock-clang bitcode is a compatibility path{{$}}
+# MIXED-TRIPLE: {{^}}// target triple   = "x86_64-pc-windows-msvc-msil"{{$}}
+# MIXED-TRIPLE: {{^}}.method public static int32 'main'() cil managed{{$}}
+# MIXED-TRIPLE: .entrypoint
+
+## Linux: stock bitcode alone and from an archive member; puts is a P/Invoke
+## of the Linux C library (D14).
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx-stock.o libstock.a -o lnx.il 2>&1 \
+# RUN:   | FileCheck %s %{one} --check-prefix=WARN-LNX
+# RUN: FileCheck %s --check-prefix=LNX --input-file=lnx.il
+# RUN: llvm-as lnx-msil-main.ll -o lnx-msil-main.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx-msil-main.o libstock.a -o lnx2.il 2>&1 \
+# RUN:   | FileCheck %s %{one} --check-prefix=WARN-MEMBER
+
+# WARN-LNX:    {{^}}msil-ld: warning: lnx-stock.o: linking bitcode for x86_64-unknown-linux-gnu as x86_64-unknown-linux-gnu-msil; stock-clang bitcode is a compatibility path{{$}}
+# WARN-MEMBER: {{^}}msil-ld: warning: libstock.a(lnx-stock-helper.o): linking bitcode for x86_64-unknown-linux-gnu as x86_64-unknown-linux-gnu-msil; stock-clang bitcode is a compatibility path{{$}}
+# LNX:         {{^}}// target triple   = "x86_64-unknown-linux-gnu-msil"{{$}}
+# LNX:         pinvokeimpl("libc" cdecl) int32 'puts'(native int)
+
+## An all-MSIL link prints nothing (msil-defs.o defines what msil.o calls),
+## and --fatal-warnings turns the warning into an error.
+# RUN: msil-ld --lto-emit-asm msil.o msil-defs.o -o quiet.il 2>&1 | count 0
+# RUN: not msil-ld --lto-emit-asm --fatal-warnings msil.o stock1.o stock2.o -o fatal.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=FATAL --implicit-check-not=warning: --implicit-check-not="PLEASE submit"
+
+# FATAL: {{^}}msil-ld: error: stock1.o: linking bitcode for x86_64-pc-windows-msvc as x86_64-pc-windows-msvc-msil; stock-clang bitcode is a compatibility path{{$}}
+
+#--- msil.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %a = call i32 @twice(i32 3)
+  %b = call i32 @thrice(i32 %a)
+  ret i32 %b
+}
+
+declare i32 @twice(i32)
+declare i32 @thrice(i32)
+
+#--- msil-defs.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @twice(i32 %x) {
+  %r = shl i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @thrice(i32 %x) {
+  %r = mul i32 %x, 3
+  ret i32 %r
+}
+
+#--- stock1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+
+define i32 @twice(i32 %x) {
+  %r = shl i32 %x, 1
+  ret i32 %r
+}
+
+#--- stock2.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc19.33.0"
+
+define i32 @thrice(i32 %x) {
+  %r = mul i32 %x, 3
+  ret i32 %r
+}
+
+#--- stock-main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+
+define i32 @main() {
+  %a = call i32 @twice(i32 3)
+  ret i32 %a
+}
+
+declare i32 @twice(i32)
+
+#--- lnx-stock.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+@msg = private constant [6 x i8] c"stock\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  %h = call i32 @helper()
+  ret i32 %h
+}
+
+declare i32 @puts(ptr)
+declare i32 @helper()
+
+#--- lnx-stock-helper.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @helper() {
+  ret i32 0
+}
+
+#--- lnx-msil-main.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %h = call i32 @helper()
+  ret i32 %h
+}
+
+declare i32 @helper()

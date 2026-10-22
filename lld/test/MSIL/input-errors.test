@@ -1,0 +1,121 @@
+## Input files msil-ld cannot link in M14 (ImplementationPlan.md 5.9.4, M14's
+## subset; 5.9.14; 5.10.5 for ILAsm text given to a link):
+## - a file that does not exist: lld's 'cannot open <file>: <reason>';
+## - a file of no known kind (text, ILAsm text, an empty file): 'unknown file
+##   type: <file>';
+## - a PE with a CLI header (a CIL object or a .NET assembly): '<file>:
+##   linking CIL object files and .NET assemblies is not supported yet' (M20
+##   links CIL objects, M21 and M22 assemblies);
+## - a native PE is a native library, accepted without being read (M15 reads
+##   it);
+## - an archive member that is not LLVM bitcode is the warning
+##   '<archive>(<member>): not LLVM bitcode; ignored', and the link goes on;
+## - bitcode with module-level inline assembly, positional or an archive
+##   member, with --whole-archive or lazy (msil-ld reads no archive index
+##   and reads every member), is '<file>: module-level inline assembly is
+##   not supported for MSIL' (D26's text) with exit code 1, never
+##   ModuleSymbolTable's assertion or a stack dump (5.9.14, section 12 row
+##   '5.9.14 gains a diagnostic (review-r2 finding 5)' and its amendment for
+##   lazy members). No MSIL triple has an asm parser, so the bitcode writer
+##   stores no symbol table for such a module, and LTO's InputFile would
+##   rebuild it and assert. Its archive is written without an index ('S')
+##   and in GNU format: the tree's llvm-ar asserts on this bitcode when it
+##   builds an index, or when it picks the COFF format a windows-msvc member
+##   suggests (an upstream-generic limit of targets without an asm parser
+##   that M14 leaves alone).
+## The PE inputs are written by Inputs/make-pe.py; nothing here needs ilasm.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as helper.ll -o helper.o
+# RUN: %python %S/Inputs/make-pe.py --cli cil.dll
+# RUN: %python %S/Inputs/make-pe.py --cli cilobj.o
+# RUN: %python %S/Inputs/make-pe.py --dll native.dll
+# RUN: llvm-ar rcs mixed.a helper.o notes.txt
+# RUN: echo -n > empty.o
+# RUN: llvm-as modasm.ll -o modasm.bc
+# RUN: llvm-as modasm-helper.ll -o modasm-helper.o
+# RUN: llvm-ar --format=gnu rcS noidx.a modasm-helper.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: not msil-ld --lto-emit-asm main.o missing.o -o x.il 2>&1 | %{fc} --check-prefix=MISSING
+# MISSING: {{^}}msil-ld: error: cannot open missing.o: {{.+}}
+
+# RUN: not msil-ld --lto-emit-asm main.o notes.txt -o x.il 2>&1 | %{fc} --check-prefix=TEXT
+# RUN: not msil-ld --lto-emit-asm main.o prog.il -o x.il 2>&1 | %{fc} --check-prefix=IL
+# RUN: not msil-ld --lto-emit-asm main.o empty.o -o x.il 2>&1 | %{fc} --check-prefix=EMPTY
+# TEXT:  {{^}}msil-ld: error: unknown file type: notes.txt{{$}}
+# IL:    {{^}}msil-ld: error: unknown file type: prog.il{{$}}
+# EMPTY: {{^}}msil-ld: error: unknown file type: empty.o{{$}}
+
+# RUN: not msil-ld --lto-emit-asm main.o cil.dll -o x.il 2>&1 | %{fc} --check-prefix=CLI -DFILE=cil.dll
+# RUN: not msil-ld --lto-emit-asm main.o cilobj.o -o x.il 2>&1 | %{fc} --check-prefix=CLI -DFILE=cilobj.o
+# CLI: {{^}}msil-ld: error: [[FILE]]: linking CIL object files and .NET assemblies is not supported yet{{$}}
+
+# RUN: msil-ld --lto-emit-asm main.o helper.o native.dll -o native.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=NATIVE --input-file=native.il
+# NATIVE: {{^}}.method public static int32 'main'() cil managed{{$}}
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o mixed.a -o mixed.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=MEMBER --implicit-check-not=warning: --implicit-check-not=error:
+# RUN: FileCheck %s --check-prefix=MIXED --input-file=mixed.il
+# MEMBER: {{^}}msil-ld: warning: mixed.a(notes.txt): not LLVM bitcode; ignored{{$}}
+# MIXED:  {{^}}.method assembly static int32 'helper'() cil managed{{$}}
+
+# RUN: not msil-ld --lto-emit-asm modasm.bc -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=MODASM --implicit-check-not=Assertion
+# RUN: not msil-ld --lto-emit-asm main.o --whole-archive noidx.a -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=MODASM-MEMBER --implicit-check-not=Assertion
+# RUN: not msil-ld --lto-emit-asm main.o noidx.a -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=MODASM-MEMBER --implicit-check-not=Assertion
+# MODASM:        {{^}}msil-ld: error: modasm.bc: module-level inline assembly is not supported for MSIL{{$}}
+# MODASM-MEMBER: {{^}}msil-ld: error: noidx.a(modasm-helper.o{{[^)]*}}): module-level inline assembly is not supported for MSIL{{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @helper()
+  ret i32 %r
+}
+
+declare i32 @helper()
+
+#--- helper.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @helper() {
+  ret i32 1
+}
+
+#--- notes.txt
+Not an input file.
+
+#--- prog.il
+// MSIL module generated by LLVM
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'prog' { .ver 0:0:0:0 }
+
+#--- modasm.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+module asm ".globl foo"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- modasm-helper.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+module asm ".globl helper_asm"
+
+define i32 @helper() {
+  ret i32 1
+}

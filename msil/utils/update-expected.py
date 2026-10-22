@@ -65,10 +65,31 @@ such a test would pass on one OS by accident. Nothing is written for them, and
 is not '[exit N]' (a crash, a signal, a timeout) is refused as well: a native
 run that does not finish normally is not an oracle.
 
-Directories are searched for .c and .ll files outside Inputs/ and Output/
-whose RUN lines use %{msil_c...} or %{msil_ll...} (the pipelines with a
-native-oracle leg); tests with other RUN lines are skipped. Files named on the
-command line are always processed.
+Directories are searched for .c, .ll and .test files outside Inputs/ and
+Output/ whose RUN lines use %{msil_c...} or %{msil_ll...} (the pipelines with
+a native-oracle leg) or %{msil_prog} and %{msil_prog_<L>} (plan 5.12.4, M14);
+tests with other RUN lines are skipped, among them the tests whose only
+composites are %{msil_prog_fail_<L>} (a named diagnostic, no transcript) or
+%{msil_det} (a determinism check). .c and .ll files named on the command line
+are always processed as %{msil_c} or %{msil_ll} tests.
+
+A %{msil_prog} test (a .test file in the format of plan 5.12.5) is built the
+way the native-oracle leg of %{msil_prog} builds it: its split-file parts are
+written into a temporary directory (split-file, default next to --clang, else
+on PATH; or --split-file), its REDEFINE: lines give %{msil_srcs} (default:
+the test file), %{msil_stock_srcs} and %{msil_archives} with %s, %S, %p, %t
+and %{s:stem} replaced (%t is that directory), and 'msil-prog.py --mode
+native' builds them at --opt with --cflags, the --target triple's
+-lm/compiler-rt rule and the archiver --ar (default llvm-ar next to --clang,
+else on PATH); on a Windows host --os linux uses the E7 recipe. %{msil_libs}
+belongs to the MSIL link only and is not read. A REQUIRES: line that is false,
+or an UNSUPPORTED: line that is true, for the oracle skips a test of any kind
+when the features the oracle knows decide it whatever the other features are:
+msil-triple-windows, msil-triple-linux and msil-triple=<target>-msil follow
+--target, system-<host os> the host and msil-wsl the E7 oracle.
+
+--clang may also be a command line (a stand-in compiler of the harness
+self-tests, written as msil-prog.py's --clang takes it).
 
 Windows: run from a VS x64 developer prompt (the Windows native link needs
 LIB; msil-env.ps1 sets it up). Exit status: 0 if everything was written or
@@ -92,6 +113,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 TEST_ROOT = os.path.join(os.path.dirname(HERE), "test")
 ORACLE_RUN_RE = re.compile(r"RUN:.*%\{msil_(c|ll)(_O[0-3sz])?\}")
+# %{msil_prog} tests, and the composites that need no .expected file.
+PROG_RUN_RE = re.compile(r"RUN:.*%\{msil_prog(_O[0-3sz])?\}")
+FAIL_RUN_RE = re.compile(r"RUN:.*%\{msil_prog_fail_O[0-3sz]\}")
+DET_RUN_RE = re.compile(r"RUN:.*%\{msil_det\}")
+# lit's directives (a keyword not inside a longer word).
+DIRECTIVE_RE = re.compile(r"(?<![\w-])(REQUIRES|UNSUPPORTED|REDEFINE):(.*)$")
+REDEFINE_RE = re.compile(r"^\s*(%\{[_a-zA-Z][-_:0-9a-zA-Z]*\})\s*=(.*)$")
+# The features whose truth the oracle knows (see the module documentation).
+KNOWN_FEATURE_PREFIXES = ("msil-triple", "system-", "msil-wsl")
 EXIT_RE = re.compile(r"^\[exit (\d+)\]$")
 # The C flags of %{msil_cflags} (lit.cfg.py), without -I.
 DEFAULT_CFLAGS = "-std=gnu17 -ffreestanding -Werror=return-type"
@@ -100,18 +130,17 @@ E7_LIBS = ("libm.so.6", "libc.so.6", "libgcc_s.so.1")
 DEFAULT_LINUX_SYSROOT = r"C:\llvm-msil-scratch\linux-sysroot"
 
 
-def load_msil_run():
+def load_script(name, file):
     # No __pycache__ next to the scripts in the source tree.
     sys.dont_write_bytecode = True
-    spec = importlib.util.spec_from_file_location(
-        "msil_run", os.path.join(HERE, "msil-run.py")
-    )
+    spec = importlib.util.spec_from_file_location(name, os.path.join(HERE, file))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-msil_run = load_msil_run()
+msil_run = load_script("msil_run", "msil-run.py")
+msil_prog = load_script("msil_prog", "msil-prog.py")
 
 
 def host_arch():
@@ -189,12 +218,118 @@ def find_ld_lld(clang):
     return None
 
 
-def has_oracle_run_line(path):
+def find_tool_next_to(command, name):
+    """<name> in the directory of the first word of command (the clang
+    command), else on PATH, else None."""
+    exe = name + (".exe" if os.name == "nt" else "")
+    first = command[0] if command else ""
+    candidates = [os.path.join(os.path.dirname(os.path.abspath(first)), exe)]
+    candidates.append(shutil.which(name))
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return os.path.normpath(c)
+    return None
+
+
+class TestInfo:
+    """What update-expected.py reads from a test file: the kind of test
+    ('single' for %{msil_c}/%{msil_ll}, 'prog' for %{msil_prog}, 'fail' and
+    'det' for the composites without a transcript, None), its REQUIRES: and
+    UNSUPPORTED: expressions and its REDEFINE: values."""
+
+    def __init__(self, path):
+        self.path = path
+        self.kind = None
+        self.requires = []
+        self.unsupported = []
+        self.redefines = {}
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            return
+        single = prog = fail = det = False
+        pending = None  # a REDEFINE: body continued with a trailing '\'
+        for line in lines:
+            single = single or bool(ORACLE_RUN_RE.search(line))
+            prog = prog or bool(PROG_RUN_RE.search(line))
+            fail = fail or bool(FAIL_RUN_RE.search(line))
+            det = det or bool(DET_RUN_RE.search(line))
+            m = DIRECTIVE_RE.search(line)
+            if not m:
+                continue
+            keyword, text = m.group(1), m.group(2)
+            if keyword == "REDEFINE":
+                # lit's continuation: the '\' and the blanks around it become
+                # one blank.
+                body = text
+                if pending is not None:
+                    body = pending.rstrip()[:-1].rstrip() + " " + text.lstrip()
+                if body.rstrip().endswith("\\"):
+                    pending = body
+                    continue
+                pending = None
+                d = REDEFINE_RE.match(body)
+                if d:
+                    self.redefines[d.group(1)] = d.group(2).strip()
+                continue
+            exprs = [e.strip() for e in text.split(",") if e.strip()]
+            (self.requires if keyword == "REQUIRES" else self.unsupported).extend(exprs)
+        if prog:
+            self.kind = "prog"
+        elif single and path.endswith((".c", ".ll")):
+            self.kind = "single"
+        elif fail:
+            self.kind = "fail"
+        elif det:
+            self.kind = "det"
+
+    def skip_reason(self, features):
+        """Why the oracle skips this test (REQUIRES:/UNSUPPORTED:), or None."""
+        for expr in self.requires:
+            if not evaluate(expr, features, unknown=True):
+                return "REQUIRES: %s" % expr
+        for expr in self.unsupported:
+            if evaluate(expr, features, unknown=False):
+                return "UNSUPPORTED: %s" % expr
+        return None
+
+
+def evaluate(expr, features, unknown):
+    """lit's boolean expression expr as far as the features the oracle knows
+    (KNOWN_FEATURE_PREFIXES; true when they are in features) decide it:
+    True or False when every value of the other features gives that result,
+    else unknown. So is an expression with a regular expression, one with
+    more than ten other features, or one that lit cannot parse."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            return any(ORACLE_RUN_RE.search(line) for line in f)
-    except OSError:
-        return False
+        sys.path.insert(0, os.path.join(REPO, "llvm", "utils", "lit"))
+        from lit.BooleanExpression import BooleanExpression
+    except ImportError:
+        return unknown
+    finally:
+        sys.path.pop(0)
+    try:
+        tokens = [
+            t
+            for t in BooleanExpression.tokenize(expr)
+            if t is not BooleanExpression.END and t not in ("(", ")", "&&", "||", "!")
+        ]
+        if any("{{" in t for t in tokens):
+            return unknown
+        known = {t for t in tokens if t.startswith(KNOWN_FEATURE_PREFIXES)}
+        others = sorted({t for t in tokens if t not in known} - {"true"})
+        if len(others) > 10:
+            return unknown
+        true = {t for t in known if t in features}
+        results = {
+            BooleanExpression.evaluate(
+                expr, true | {t for i, t in enumerate(others) if mask >> i & 1}
+            )
+            for mask in range(1 << len(others))
+        }
+    except ValueError:
+        return unknown
+    return results.pop() if len(results) == 1 else unknown
 
 
 def collect(paths):
@@ -204,7 +339,7 @@ def collect(paths):
             for root, dirs, files in os.walk(p):
                 dirs[:] = sorted(d for d in dirs if d not in ("Inputs", "Output"))
                 for f in sorted(files):
-                    if f.endswith((".c", ".ll")):
+                    if f.endswith((".c", ".ll", ".test")):
                         yield os.path.join(root, f), False
         else:
             yield p, True
@@ -243,13 +378,14 @@ class Oracle:
     """The settings every test shares: the parsed arguments and what main()
     derived from them."""
 
-    def __init__(self, args, osname, e7, native_ldflags, ld_lld, libs):
+    def __init__(self, args, osname, e7, native_ldflags, ld_lld, libs, features):
         self.args = args
         self.osname = osname
         self.e7 = e7
         self.native_ldflags = native_ldflags
         self.ld_lld = ld_lld
         self.libs = libs
+        self.features = features
         self.start_o = None
         self.env = dict(os.environ)
 
@@ -291,14 +427,14 @@ class Oracle:
             lang = args.cflags.split() + ["-I", os.path.join(TEST_ROOT, "Inputs")]
         if not self.e7:
             exe = os.path.join(work, name + ".exe")
-            cmd = [args.clang, "--target=" + args.target, args.opt] + lang
+            cmd = [*args.clang_cmd, "--target=" + args.target, args.opt] + lang
             cmd += [src, *self.native_ldflags, "-o", exe]
             if not self.step(cmd, "the native compile", log):
                 return None, None
             return exe, ["--native"]
         obj = os.path.join(work, name + ".o")
         exe = os.path.join(work, name + ".elf")
-        cmd = [args.clang, "--target=" + E7_TARGET, "-fno-pic"] + lang
+        cmd = [*args.clang_cmd, "--target=" + E7_TARGET, "-fno-pic"] + lang
         cmd += [args.opt, "-c", src, "-o", obj]
         if not self.step(cmd, "the E7 compile", log):
             return None, None
@@ -306,23 +442,114 @@ class Oracle:
         cmd += ["--as-needed", self.start_o, obj, *self.libs, "-o", exe]
         if not self.step(cmd, "the E7 link", log):
             return None, None
-        return exe, [
+        return exe, self.run_mode()
+
+    def run_mode(self):
+        """The msil-run.py options that run a native program."""
+        if not self.e7:
+            return ["--native"]
+        return [
             "--native",
             "--runner",
             "wsl",
             "--wsl-distro",
-            args.wsl_distro,
+            self.args.wsl_distro,
             "--expect-os",
             "linux",
         ]
+
+    def build_prog(self, info, work, log):
+        """The native program of the %{msil_prog} test info in the directory
+        work, built as the native-oracle leg of %{msil_prog} builds it
+        (msil-prog.py --mode native), and the msil-run.py options that run
+        it, or (None, None)."""
+        args, src = self.args, info.path
+        t = os.path.join(work, "t")
+        if not args.split_file_cmd:
+            log.err("update-expected: no split-file found; pass --split-file PATH\n")
+            return None, None
+        if not self.step([*args.split_file_cmd, src, t], "split-file", log):
+            return None, None
+        test_dir = os.path.dirname(os.path.abspath(src))
+        stem = os.path.splitext(os.path.basename(src))[0]
+
+        def value(name, default, words):
+            """The REDEFINE: value of name; for a list of words, a path with
+            a blank (a temporary directory) is quoted for split_words."""
+            text = info.redefines.get(name, default)
+            for key, sub in (
+                ("%{s:stem}", stem),
+                ("%s", os.path.abspath(src)),
+                ("%S", test_dir),
+                ("%p", test_dir),
+                ("%t", t),
+            ):
+                text = text.replace(key, msil_prog.quote_word(sub) if words else sub)
+            return text
+
+        try:
+            srcs = msil_prog.split_words(value("%{msil_srcs}", "%s", True))
+            stock = msil_prog.split_words(value("%{msil_stock_srcs}", "", True))
+        except msil_prog.UsageError as e:
+            log.err("update-expected: %s: %s\n" % (src, e))
+            return None, None
+        exe = os.path.join(work, "prog." + ("elf" if self.e7 else "exe"))
+        # -I<dir> as one word, as %{msil_cflags} writes it.
+        cflags = args.cflags.split() + ["-I" + os.path.join(TEST_ROOT, "Inputs")]
+        cmd = [sys.executable, os.path.join(HERE, "msil-prog.py"), "--mode", "native"]
+        cmd += ["--triple", args.target + "-msil", "--level", args.opt[1:]]
+        cmd += ["--clang=" + args.clang, "--cflags=" + msil_prog.join_words(cflags)]
+        if args.ar:
+            cmd.append("--ar=" + args.ar)
+        if self.e7:
+            cmd += ["--ld-lld=" + self.ld_lld, "--linux-sysroot=" + args.linux_sysroot]
+            cmd.append("--start=" + self.start_o)
+        else:
+            cmd.append("--native-ldflags=" + msil_prog.join_words(self.native_ldflags))
+        cmd += ["--timeout", repr(args.timeout * 10)]
+        cmd += ["--mem-limit-mb", str(args.mem_limit_mb)]
+        cmd += ["--workdir", os.path.join(work, "prog"), "--out", exe]
+        cmd += ["--src", *srcs, "--stock-src", *stock]
+        cmd.append("--archives=" + value("%{msil_archives}", "", False))
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except OSError as e:
+            log.err("update-expected: cannot run msil-prog.py: %s\n" % e)
+            return None, None
+        if res.returncode != 0:
+            # The commands msil-prog.py printed and the tools' messages.
+            log.out(res.stdout)
+            log.err(res.stderr)
+            log.err(
+                "update-expected: the native build (msil-prog.py) failed (exit "
+                "status %s)\n" % res.returncode
+            )
+            return None, None
+        return exe, self.run_mode()
 
     def process(self, src, explicit, work):
         """Build and run one test in the directory work, then compare or
         write its expected file: (its Log, 1 if it failed else 0)."""
         args, osname = self.args, self.osname
         log = Log()
-        if not explicit and not has_oracle_run_line(src):
-            log.out("skip (no %%{msil_c}/%%{msil_ll} RUN line): %s\n" % src)
+        info = TestInfo(src)
+        kind = info.kind
+        if explicit and src.endswith((".c", ".ll")) and kind != "prog":
+            kind = "single"
+        if kind == "fail":
+            log.out("skip (fail-only: %%{msil_prog_fail_<L>}): %s\n" % src)
+            return log, 0
+        if kind == "det":
+            log.out("skip (det: %%{msil_det}): %s\n" % src)
+            return log, 0
+        if kind is None:
+            log.out(
+                "skip (no %%{msil_c}/%%{msil_ll}/%%{msil_prog} RUN line): %s\n" % src
+            )
+            return log, 0
+        why = info.skip_reason(self.features)
+        if why:
+            log.out("skip (%s, for %s): %s\n" % (why, args.target, src))
             return log, 0
         stem = os.path.splitext(src)[0]
         base = stem + ".expected"
@@ -330,7 +557,10 @@ class Oracle:
         if not args.check and osname == "windows" and os.path.exists(override):
             log.out("skip (has a %s override): %s\n" % (osname, src))
             return log, 0
-        exe, run_mode = self.build(src, work, log)
+        if kind == "prog":
+            exe, run_mode = self.build_prog(info, work, log)
+        else:
+            exe, run_mode = self.build(src, work, log)
         if not exe:
             log.out("FAIL (native compile): %s\n" % src)
             return log, 1
@@ -398,7 +628,9 @@ class Oracle:
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter, description=__doc__
+    )
     ap.add_argument(
         "--clang",
         default=default_clang(),
@@ -448,6 +680,16 @@ def main():
         default="Ubuntu",
         help="E7: the WSL distribution that runs the programs (default: %(default)s)",
     )
+    ap.add_argument(
+        "--ar",
+        help="%%{msil_prog} tests: the archiver for %%{msil_archives} (default: "
+        "llvm-ar next to --clang, else on PATH)",
+    )
+    ap.add_argument(
+        "--split-file",
+        help="%%{msil_prog} tests: split-file (default: next to --clang, else on "
+        "PATH)",
+    )
     ap.add_argument("--check", action="store_true", help="compare, do not write")
     ap.add_argument(
         "-j",
@@ -470,15 +712,33 @@ def main():
         default=msil_run.DEFAULT_MEM_LIMIT_MB,
         help="memory cap in MiB (default %d)" % msil_run.DEFAULT_MEM_LIMIT_MB,
     )
-    ap.add_argument("tests", nargs="+", help=".c/.ll files or directories")
+    ap.add_argument("tests", nargs="+", help=".c/.ll/.test files or directories")
     args = ap.parse_args()
 
-    if not args.clang or not os.path.isfile(args.clang):
+    try:
+        args.clang_cmd = (
+            msil_prog.program(args.clang, "--clang") if args.clang else None
+        )
+    except msil_prog.UsageError as e:
+        ap.error(str(e))
+    if not args.clang_cmd or not (
+        os.path.isfile(args.clang_cmd[0]) or shutil.which(args.clang_cmd[0])
+    ):
         ap.error("no clang found; build clang or pass --clang PATH")
     if args.jobs < 1:
         ap.error("--jobs must be at least 1")
     if not args.opt.startswith("-"):
         args.opt = "-" + args.opt
+    if args.opt[1:] not in msil_prog.LEVELS:
+        ap.error("--opt %s: use one of %s" % (args.opt, ", ".join(msil_prog.LEVELS)))
+    args.ar = args.ar or find_tool_next_to(args.clang_cmd, "llvm-ar")
+    split_file = args.split_file or find_tool_next_to(args.clang_cmd, "split-file")
+    try:
+        args.split_file_cmd = (
+            msil_prog.program(split_file, "--split-file") if split_file else None
+        )
+    except msil_prog.UsageError as e:
+        ap.error(str(e))
     host = msil_run.host_os()
     osname = args.os or host
     if osname not in ("windows", "linux"):
@@ -524,7 +784,7 @@ def main():
 
     ld_lld = libs = None
     if e7:
-        ld_lld = args.ld_lld or find_ld_lld(args.clang)
+        ld_lld = args.ld_lld or find_ld_lld(args.clang_cmd[0])
         if not ld_lld or not os.path.isfile(ld_lld):
             ap.error("no ld.lld found for the E7 Linux oracle; pass --ld-lld PATH")
         sysroot = os.path.abspath(args.linux_sysroot)
@@ -538,12 +798,23 @@ def main():
                 % (args.linux_sysroot, ", ".join(lacking), args.linux_sysroot)
             )
 
-    oracle = Oracle(args, osname, e7, native_ldflags, ld_lld, libs)
+    # The features whose truth the oracle knows (KNOWN_FEATURE_PREFIXES), as
+    # lit.cfg.py sets them for a run of the triple <target>-msil.
+    parts = args.target.split("-")
+    features = {"msil-triple=%s-msil" % args.target, "system-" + host}
+    if "windows" in parts:
+        features.add("msil-triple-windows")
+    if "linux" in parts:
+        features.add("msil-triple-linux")
+    if e7:
+        features.add("msil-wsl")
+    oracle = Oracle(args, osname, e7, native_ldflags, ld_lld, libs, features)
     failures = 0
     with tempfile.TemporaryDirectory(prefix="msil-update-expected-") as tmp:
         if e7:
             oracle.start_o = os.path.join(tmp, "start.o")
-            cmd = [args.clang, "--target=" + E7_TARGET, "-ffreestanding", "-fno-pic"]
+            cmd = [*args.clang_cmd, "--target=" + E7_TARGET, "-ffreestanding"]
+            cmd += ["-fno-pic"]
             cmd += ["-O2", "-c", os.path.join(HERE, "linux-oracle", "start.c")]
             cmd += ["-o", oracle.start_o]
             log = Log()

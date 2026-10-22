@@ -1,0 +1,39 @@
+# Archive members that define C library names win over the library imports.
+# libmylibc.a defines puts and fdim, two of the Phase-1 imports (D14: the C
+# library and the C math library), with behaviour that differs from the C
+# library's: puts writes '> ' before each line, character by character with
+# putchar, and fdim scales its result by 100. Every line main.c prints goes
+# through the archive's puts, and its fdim calls get the archive's results,
+# natively and on MSIL: objects and archive members come before any import
+# (Design.md 5.2, plan 5.9.6), so puts and fdim are not P/Invokes, and
+# putchar, which the archive's puts calls, still is. (putchar itself cannot be
+# overridden natively on windows-msvc: the static UCRT defines it with fputc.)
+# Recon tests-p2 3.2, plan 5.12.5 (M14 lto; M20 obj).
+# REQUIRES: msil-ar
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_archives} = mylibc=%t/puts.c,%t/fdim.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+double fdim(double x, double y);
+int main(void) {
+  puts("first line");
+  put_i64((int)fdim(9.0, 4.0));
+  put_i64((int)fdim(1.0, 4.0));
+  put_kv("puts result", puts("last line"));
+  return (int)fdim(3.0, 2.5) & 0xff;
+}
+#--- puts.c
+int putchar(int c);
+int puts(const char *s) {
+  int n = 0;
+  putchar('>');
+  putchar(' ');
+  for (; *s; ++s, ++n)
+    putchar(*s);
+  putchar('\n');
+  return n;
+}
+#--- fdim.c
+double fdim(double x, double y) { return x > y ? (x - y) * 100.0 : 0.0; }

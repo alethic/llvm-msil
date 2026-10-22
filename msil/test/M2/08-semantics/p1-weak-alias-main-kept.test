@@ -1,0 +1,33 @@
+# Matrix case p1-weak-alias: aliases in a TU without main and no strong hook (native 114).
+# recon/p2/judge-c-fidelity-files/probes/p1m.c (main) calls hook and reads
+# arr_alias, which p1w.c defines as a weak function alias and a data alias;
+# p1c.c defines no hook, so the call from p1m.c binds to p1w.c's weak alias of
+# its static dummy_hook. Plan 5.9.16 row p1-weak-alias, p1m.c/p1w.c variants
+# (M14, M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p1m.c %t/p1w.c %t/p1c.c
+# RUN: %{msil_prog}
+#--- p1m.c
+/* p1m.c: main; links with p1w.c and either p1b.c (strong hook: 144) or p1c.c (114) */
+int hook(void);
+extern int base_arr[4], arr_alias[4];
+int other_hook(void);
+int *volatile pa = arr_alias, *volatile pb = base_arr;
+int main(void) {
+  int r = hook() * 10;
+  r += (pa == pb) ? 1 : 0;
+  r += arr_alias[2];
+  r += other_hook();
+  return r;
+}
+#--- p1w.c
+/* p1w.c: the weak function alias and the data alias, not used in this TU
+   (the option-2 emulation cannot keep in-TU uses of an alias) */
+static int dummy_hook(void) { return 1; }
+extern int hook(void) __attribute__((weak, alias("dummy_hook")));
+int base_arr[4] = { 1, 2, 3, 4 };
+extern int arr_alias[4] __attribute__((alias("base_arr")));
+#--- p1c.c
+/* p1c.c: no strong hook, so p1a.c's weak alias stays */
+extern int base_arr[4];
+int other_hook(void) { return base_arr[0] * 100; }

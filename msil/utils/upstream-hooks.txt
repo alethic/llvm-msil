@@ -114,11 +114,20 @@
 
 # M11 set 280 for its 301 inputs (288 PASS, 11 UNSUPPORTED and 2 XFAIL on the development
 # host); M13 adds 25 inputs that pass there (24 upstream tests and lld/test/MSIL/dispatch.test):
-# 305 = 280 + 25.
-min-pass 305
+# 305 = 280 + 25. M14 drops 2 inputs that pass there (integrated-as.c and
+# spirv-openmp-toolchain.c, whose ToolChain.cpp hunks it removes) and adds 3 that pass there
+# (linux-ld-args.c, msvc-link.c and mingw.cpp for Driver.cpp; cl-options.c was already an
+# input): 306 = 305 - 2 + 3.
+min-pass 306
 
 fork-only .github/workflows/msil-ci.yml
 fork-only clang/lib/Basic/Targets/MSIL.h
+# The clang MSIL toolchain (plan 5.10.1, M14) and its driver tests (5.6.4).
+fork-only clang/lib/Driver/ToolChains/MSIL.cpp
+fork-only clang/lib/Driver/ToolChains/MSIL.h
+fork-only clang/test/Driver/msil-header-search.c
+fork-only clang/test/Driver/msil-link.c
+fork-only clang/test/Driver/msil-lto.c
 fork-only clang/test/Driver/msil-toolchain.c
 fork-only clang/test/Preprocessor/init-msil.c
 # The ECMA-335 format headers (plan 5.7.2) and the link-info record v1 (5.8.11), header-only.
@@ -247,19 +256,37 @@ hook clang/lib/CodeGen/TargetBuiltins/X86.cpp
   lit clang/test/Headers/__cpuidex_conflict.c
   fork clang/test/CodeGen/MSIL/inline-asm.c
 
+hook clang/lib/Driver/CMakeLists.txt
+  none CMake list: the fork's ToolChains/MSIL.cpp (MSILToolChain, plan 5.10.1) next to ToolChains/WebAssembly.cpp
+  fork clang/test/Driver/msil-toolchain.c
+
+hook clang/lib/Driver/Driver.cpp
+  # The four hunks of plan 5.10.2 (M14): ToolChains/MSIL.h, createMSILToolChain at the top of
+  # getToolChain, no err_drv_lto_without_lld for MSIL triples, and a.exe as the MSIL default
+  # image name. cl-options.c reaches err_drv_lto_without_lld, linux-ld-args.c the default
+  # image name, and msvc-link.c and mingw.cpp the toolchain selection of native triples
+  # (linux-ld.c and gcc_forward.c are slower siblings).
+  lit clang/test/Driver/cl-options.c
+  lit clang/test/Driver/linux-ld-args.c
+  lit clang/test/Driver/msvc-link.c
+  lit clang/test/Driver/mingw.cpp
+  fork clang/test/Driver/msil-toolchain.c
+  fork clang/test/Driver/msil-link.c
+  fork clang/test/Driver/msil-lto.c
+
 hook clang/lib/Driver/ToolChain.cpp
-  # fsanitize.c also passes but takes about 250 s; fsanitize-cfi.c covers the KCFI hunk.
-  # spirv-openmp-toolchain.c builds a clang-linker-wrapper job: the only test here that reaches
-  # getLinkerWrapper, the one hunk that changes control flow for native triples.
-  lit clang/test/Driver/integrated-as.c
+  # Only the KCFI line differs from upstream since M14 (plan 5.10.2): MSIL triples do not
+  # offer -fsanitize=kcfi. fsanitize.c also passes but takes about 250 s; fsanitize-cfi.c
+  # covers the KCFI hunk.
   lit clang/test/Driver/fsanitize-cfi.c
-  lit clang/test/Driver/spirv-openmp-toolchain.c
   fork clang/test/Driver/msil-toolchain.c
 
 hook clang/lib/Driver/ToolChains/Clang.cpp
   # cl-options.c (/GS default, /volatile:ms) and clang_f_opts.c (-fms-volatile) are the only
   # upstream tests of those hunks; they need llvm-profdata, an M11 build target.
-  # embed-bitcode-wasm.c needs llvm-readobj, a build target from M13.
+  # embed-bitcode-wasm.c needs llvm-readobj, a build target from M13. From M14 ClangAs reports
+  # err_drv_msil_ilasm_input for MSIL triples (plan 5.10.2); as-options.s and integrated-as.s
+  # run ClangAs for native triples.
   lit clang/test/Driver/embed-bitcode.c
   lit clang/test/Driver/fembed-bitcode.c
   lit clang/test/Driver/embed-bitcode-wasm.c
