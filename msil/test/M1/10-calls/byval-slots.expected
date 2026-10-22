@@ -1,0 +1,9 @@
+ten calls=323168
+loop=323168
+take2(a0, a1)=124032
+take2(a2, a2)=74976
+take(bump(a4))=58024
+take2(bump(a5), bump(bump(a6)))=101904
+forward(a7)=9088
+rec(a8)=922
+[exit 0]

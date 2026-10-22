@@ -1,0 +1,47 @@
+# The configuration errors of the E7 and native-oracle parameters (plan
+# 5.12.8): lit.cfg.py rejects a parameter that cannot work instead of quietly
+# dropping a leg, so a nested lit stops with lit's fatal-error status 2 and
+# names the parameter for each of
+# (1) msil_wsl_dotnet without msil_runner=wsl;
+# (2) an msil_wsl_dotnet that is neither 'private' nor an absolute path
+#     inside WSL (rejected before WSL is started; msil_runner=wsl needs a
+#     Windows host);
+# (3) an msil_native_rtlib that names no file;
+# (4) an explicit msil_linux_sysroot without libc.so.6 and libm.so.6;
+# (5) msil_native_oracle=required for an MSVC triple with the compiler-rt
+#     builtins disabled (Windows only).
+# %{harness_lit} passes on the outer run's msil_triple and msil_runner (the
+# wsl-net10 leg runs this suite), so the cases that need the local runner or
+# an MSVC triple set them; later parameters win. The control loads the same
+# configuration without a bad parameter. --show-tests ends every nested lit
+# after discovery, so no test of Inputs/nested-ok runs, and the control and
+# (5) pass an empty msil_linux_sysroot (no Linux sysroot), so the nested
+# configuration compiles no E7 start.o: this test writes nothing outside %t.
+
+# RUN: rm -rf %t.d
+# RUN: mkdir -p %t.d/empty-sysroot
+
+# The control: no bad parameter, the configuration loads and lists the test.
+# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= %S/Inputs/nested-ok > %t.ok.log 2>&1
+# RUN: %{harness_check} contains %t.ok.log "^\s*MSIL :: harness/Inputs/nested-ok/exit-42\.test$"
+# RUN: %{harness_check} lacks %t.ok.log "fatal:"
+
+# (1)
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=local --param msil_wsl_dotnet=private %S/Inputs/nested-ok > %t.1.log 2>&1
+# RUN: %{harness_check} contains %t.1.log "fatal: msil: --param msil_wsl_dotnet needs --param msil_runner=wsl$"
+
+# (2)
+# RUN: %if system-windows %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=wsl --param msil_wsl_dotnet=relative/path %S/Inputs/nested-ok > %t.2.log 2>&1 %}
+# RUN: %if system-windows %{ %{harness_check} contains %t.2.log "fatal: msil: --param msil_wsl_dotnet=relative/path: use private or an absolute path inside WSL$" %}
+
+# (3)
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_native_rtlib=%t.d/no-such.lib %S/Inputs/nested-ok > %t.3.log 2>&1
+# RUN: %{harness_check} contains %t.3.log "fatal: msil: --param msil_native_rtlib=\S*no-such\.lib: no such file$"
+
+# (4)
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot=%t.d/empty-sysroot %S/Inputs/nested-ok > %t.4.log 2>&1
+# RUN: %{harness_check} contains %t.4.log "fatal: msil: msil_linux_sysroot=\S*empty-sysroot has no libc\.so\.6 or libm\.so\.6 in usr/lib/x86_64-linux-gnu"
+
+# (5)
+# RUN: %if system-windows %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local --param msil_native_oracle=required --param msil_native_rtlib=none --param msil_linux_sysroot= %S/Inputs/nested-ok > %t.5.log 2>&1 %}
+# RUN: %if system-windows %{ %{harness_check} contains %t.5.log "fatal: msil: native oracle unavailable: .*\bthe Windows native oracle needs compiler-rt: disabled by --param msil_native_rtlib=none" %}

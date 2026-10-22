@@ -2736,34 +2736,194 @@ public:
 
 } // namespace clang
 
-/// MSIL has no machine code to put assembly into. The only form accepted is
-/// an empty GNU asm statement (string empty after trimming; no outputs, inputs
-/// or labels; any clobbers; volatile or implicitly volatile), such as the
-/// barrier idiom `asm volatile("" ::: "memory")` or the spin-wait body
-/// `asm volatile("")`. It becomes a compiler-only fence followed by a call to
-/// llvm.sideeffect: the fence keeps native clang's opaque-memory semantics
-/// (memory is re-read around the statement, as for native `asm sideeffect ""`)
-/// and llvm.sideeffect keeps loops whose only side effect is the statement,
-/// which the fence alone does not. SelectionDAG and FastISel drop
-/// llvm.sideeffect. Any other GNU asm statement (including asm goto) and every
-/// Microsoft-style asm statement is an error. Only emitted functions get here,
-/// so unused asm in system headers (for example intrin.h) is accepted.
-static void emitMSILAsmStmt(CodeGenFunction &CGF, const AsmStmt &S) {
+/// Returns true if MSILPrepareIR lowers the indirect output \p OutExpr of an
+/// empty asm statement, written with one alternative and tied to the input
+/// \p InExpr whose constraint is \p InInfo (the output itself for `"+rm"`),
+/// as EmitAsmStmt emits them: when the input is passed by address
+/// (EmitAsmInput; `"=m"` with `"0"`), the memory keeps its contents; when it
+/// is passed by value, MSILPrepareIR stores it into the output's memory as
+/// native x86 code does (isStorableTie in MSILPrepareIR.cpp): as it is when
+/// the store sizes are equal (a long long input for a _Complex int output),
+/// truncated when it is an integer wider than the integer memory type (an
+/// int input for a char output). \p Extend is true for a tie by number,
+/// whose input HandleInputConstraints widens to a larger output type. Any
+/// other pair (a float output tied to a double input) is not lowered.
+static bool isStorableIndirectTie(CodeGenFunction &CGF,
+                                  const TargetInfo::ConstraintInfo &InInfo,
+                                  const Expr *InExpr, const Expr *OutExpr,
+                                  bool Extend) {
+  ASTContext &Ctx = CGF.getContext();
+  const llvm::DataLayout &DL = CGF.CGM.getDataLayout();
+  // The type of the value that EmitAsmInput and EmitAsmInputLValue pass.
+  bool ByValue = InInfo.allowsRegister() || !InInfo.allowsMemory();
+  QualType InTy = InExpr->getType();
+  llvm::Type *ArgTy;
+  if ((ByValue && CodeGenFunction::hasScalarEvaluationKind(InTy)) ||
+      InExpr->getStmtClass() == Expr::CXXThisExprClass) {
+    ArgTy = CGF.ConvertType(InTy);
+  } else {
+    if (!ByValue)
+      return true;
+    llvm::Type *Ty =
+        CGF.ConvertType(InExpr->IgnoreParenNoopCasts(Ctx)->getType());
+    uint64_t Size = DL.getTypeSizeInBits(Ty);
+    if ((Size > 64 || !llvm::isPowerOf2_64(Size)) &&
+        !CGF.CGM.getTargetCodeGenInfo().isScalarizableAsmOperand(CGF, Ty))
+      return true;
+    ArgTy = llvm::IntegerType::get(CGF.getLLVMContext(), Size);
+  }
+  // HandleInputConstraints widens it to a larger output type; it cannot
+  // widen an integer to a floating-point type or the reverse.
+  QualType OutTy = OutExpr->getType();
+  if (Extend && Ctx.getTypeSize(OutTy) > Ctx.getTypeSize(InTy)) {
+    if (ArgTy->isPointerTy())
+      ArgTy = CGF.IntPtrTy;
+    llvm::Type *OutConvTy = CGF.ConvertType(OutTy);
+    if (OutConvTy->isIntegerTy() || OutConvTy->isPointerTy()) {
+      if (!ArgTy->isIntegerTy())
+        return false;
+      ArgTy = OutConvTy->isIntegerTy() ? OutConvTy : CGF.IntPtrTy;
+    } else if (OutConvTy->isFloatingPointTy()) {
+      if (!ArgTy->isFloatingPointTy())
+        return false;
+      ArgTy = OutConvTy;
+    }
+  }
+  // The element type of the output's address (HandleOutputConstraints).
+  QualType MemQTy = OutExpr->IgnoreParenNoopCasts(Ctx)->getType();
+  llvm::Type *MemTy = isa<MatrixType>(MemQTy.getCanonicalType())
+                          ? CGF.ConvertType(MemQTy)
+                          : CGF.ConvertTypeForMem(MemQTy);
+  if (DL.getTypeStoreSize(ArgTy) == DL.getTypeStoreSize(MemTy))
+    return true;
+  return ArgTy->isIntegerTy() && MemTy->isIntegerTy() &&
+         ArgTy->getIntegerBitWidth() > MemTy->getIntegerBitWidth();
+}
+
+/// Returns true if every output of the GNU asm statement \p S holds after an
+/// empty asm string what native x86 code leaves in it, and MSILPrepareIR
+/// lowers the IR that EmitAsmStmt emits for it
+/// (isEmptyAsmWithOperands in MSILPrepareIR.cpp). An output passed by value
+/// (not memory and of scalar or aggregate type, as HandleOutputConstraints
+/// decides) is read-write (`"+r"`) or tied by an input (`"=r"` with `"0"`,
+/// `"=r,r"` with `"0,0"` or `"r,0"`), and holds the input. An output passed
+/// by address is memory only (`"=m"`), which keeps its contents, or tied:
+/// with several alternatives, one of them memory (`"=r,m"` with `"0,0"`,
+/// `"+r,m"`), native code takes that one and the memory keeps its contents;
+/// with one alternative (`"=rm"`, `"=g"` or `"=X"` with `"0"`, `"+rm"`,
+/// `"=r"` on a _Complex int), it holds the tied input
+/// (isStorableIndirectTie). A condition-flag output (`"=@ccz"`, `"+@cceq"`)
+/// is set from the flags after the statement and is never kept.
+static bool hasOnlyKeptOutputs(CodeGenFunction &CGF, const GCCAsmStmt &S) {
+  const TargetInfo &Target = CGF.getTarget();
+  ASTContext &Ctx = CGF.getContext();
+  SmallVector<TargetInfo::ConstraintInfo, 4> Outputs;
+  for (unsigned I = 0, E = S.getNumOutputs(); I != E; ++I) {
+    TargetInfo::ConstraintInfo Info(S.getOutputConstraint(I),
+                                    S.getOutputName(I));
+    if (!Target.validateOutputConstraint(Info))
+      return false;
+    Outputs.push_back(Info);
+  }
+  // Validating an input that names an output marks that output as tied.
+  SmallVector<TargetInfo::ConstraintInfo, 4> Inputs;
+  for (unsigned I = 0, E = S.getNumInputs(); I != E; ++I) {
+    TargetInfo::ConstraintInfo Info(S.getInputConstraint(I), S.getInputName(I));
+    if (!Target.validateInputConstraint(Outputs, Info))
+      return false;
+    Inputs.push_back(Info);
+  }
+  for (unsigned I = 0, E = Outputs.size(); I != E; ++I) {
+    const TargetInfo::ConstraintInfo &Info = Outputs[I];
+    std::string Constraint = S.getOutputConstraint(I);
+    // A condition flag in any alternative.
+    if (StringRef(Constraint).contains("@cc"))
+      return false;
+    bool Tied = Info.isReadWrite() || Info.hasMatchingInput();
+    const Expr *OutExpr = S.getOutputExpr(I);
+    QualType OutTy = OutExpr->IgnoreParenNoopCasts(Ctx)->getType();
+    // Passed by value.
+    if (!Info.allowsMemory() &&
+        (CodeGenFunction::hasScalarEvaluationKind(OutTy) ||
+         CodeGenFunction::hasAggregateEvaluationKind(OutTy))) {
+      if (!Tied)
+        return false;
+      continue;
+    }
+    // Passed by address.
+    if (!Tied) {
+      if (!Info.allowsMemory() || Info.allowsRegister())
+        return false;
+      continue;
+    }
+    if (StringRef(Constraint).contains(',')) {
+      if (!Info.allowsMemory())
+        return false;
+      continue;
+    }
+    // The input of a read-write output is its old value.
+    if (Info.isReadWrite()) {
+      if (!isStorableIndirectTie(CGF, Info, OutExpr, OutExpr,
+                                 /*Extend=*/false))
+        return false;
+      continue;
+    }
+    const auto *In =
+        llvm::find_if(Inputs, [&](const TargetInfo::ConstraintInfo &InInfo) {
+          return InInfo.hasTiedOperand() && InInfo.getTiedOperand() == I;
+        });
+    assert(In != Inputs.end() && "no input is tied to the output");
+    if (!isStorableIndirectTie(CGF, *In, S.getInputExpr(In - Inputs.begin()),
+                               OutExpr, /*Extend=*/true))
+      return false;
+  }
+  return true;
+}
+
+/// MSIL has no machine code to put assembly into, so only empty GNU asm
+/// statements (string empty after trimming, no labels) are accepted; returns
+/// true if \p S was emitted or reported here. Without outputs and inputs,
+/// such as the barrier idiom `asm volatile("" ::: "memory")` or the
+/// spin-wait body `asm volatile("")`, the statement becomes a compiler-only
+/// fence followed by a call to llvm.sideeffect: the fence keeps native
+/// clang's opaque-memory semantics (memory is re-read around the statement,
+/// as for native `asm sideeffect ""`) and llvm.sideeffect keeps loops whose
+/// only side effect is the statement, which the fence alone does not.
+/// SelectionDAG and FastISel drop llvm.sideeffect. With operands, as in
+/// `asm volatile("" : : "r"(v) : "memory")` (DoNotOptimize) or `"+r"(x)`,
+/// whose outputs hold what native code leaves in them (hasOnlyKeptOutputs),
+/// the statement takes the native path, so its IR is the native target's and
+/// the optimizer keeps it opaque. The backend (MSILPrepareIR) then lowers
+/// every IR shape that path emits for such a statement, including the ties of
+/// different types (a `_Bool`'s i1 input and i8 output, a pointer and a
+/// pointer-width integer), ties written with alternatives, the register ties
+/// of local register variables (`"={eax},{eax}"`) and the stores of a tied
+/// input into an output passed by address (`"=rm"` with `"0"`), so no
+/// statement accepted here fails later. Any other GNU asm statement (asm
+/// goto included) and every Microsoft-style asm statement is an error. Only
+/// emitted functions get here, so unused asm in system headers (for example
+/// intrin.h) is accepted.
+static bool emitMSILAsmStmt(CodeGenFunction &CGF, const AsmStmt &S) {
   if (const auto *GS = dyn_cast<GCCAsmStmt>(&S);
-      GS && GS->getNumOutputs() == 0 && GS->getNumInputs() == 0 &&
-      GS->getNumLabels() == 0 && StringRef(GS->getAsmString()).trim().empty()) {
-    CGF.Builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
-                            llvm::SyncScope::SingleThread);
-    CGF.Builder.CreateCall(CGF.CGM.getIntrinsic(llvm::Intrinsic::sideeffect));
-    return;
+      GS && GS->getNumLabels() == 0 &&
+      StringRef(GS->getAsmString()).trim().empty()) {
+    if (GS->getNumOutputs() == 0 && GS->getNumInputs() == 0) {
+      CGF.Builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                              llvm::SyncScope::SingleThread);
+      CGF.Builder.CreateCall(CGF.CGM.getIntrinsic(llvm::Intrinsic::sideeffect));
+      return true;
+    }
+    if (hasOnlyKeptOutputs(CGF, *GS))
+      return false;
   }
   CGF.CGM.getDiags().Report(S.getAsmLoc(), diag::err_msil_asm_unsupported)
       << (isa<MSAsmStmt>(S) ? 1 : 0) << CGF.getTarget().getTriple().str();
+  return true;
 }
 
 void CodeGenFunction::EmitAsmStmt(const AsmStmt &S) {
-  if (getTarget().getTriple().isOSBinFormatMSIL())
-    return emitMSILAsmStmt(*this, S);
+  if (getTarget().getTriple().isOSBinFormatMSIL() && emitMSILAsmStmt(*this, S))
+    return;
 
   // Pop all cleanup blocks at the end of the asm statement.
   CodeGenFunction::RunCleanupsScope Cleanups(*this);

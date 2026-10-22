@@ -2,7 +2,8 @@
 ; section 2 'Diagnostics leave well-formed output', M4.a, M4.c, M8.a, M8.c;
 ; decisions D14, D19; section 12 rows 'M4.a extended', 'Plan 5.3
 ; (MSILISelLowering.h) extended, M4.b', the two M4 fix-loop ownership rows of
-; fix-1, the two M5 rows of fix-3, the M8 rows and the M9 row for this file).
+; fix-1, the two M5 rows of fix-3, the M8 rows, the M9 row and the M12 rows
+; of 2026-10-21 for this file).
 ; Each one is reported exactly once, naming the caller (%{diag} rejects every
 ; other 'error:' and 'warning:' line, so each expected error is checked; the
 ; errors of STRUCTMM and the end-of-module errors of EXTMULTI are matched as a
@@ -25,15 +26,18 @@
 ;   ("unknown intrinsic '<name>' is not supported for MSIL") and an
 ;   ExternalSymbol callee that is a runtime helper, whose name starts with
 ;   '__' ("runtime helper '<name>' is not available for MSIL yet (phase 3)",
-;   D14 and M8.a; here the i128 to floating-point conversions __floattidf and
-;   __floatuntisf, which return one value; libcall-policy.ll has the library
-;   calls that are imports).
-; - i128 division and remainder never reach LowerCall: the type legalizer
-;   (ReplaceNodeResults) reports the same runtime helper text before any call
-;   is built, because their libcalls return two values. Only a variable
-;   divisor, or a non-exact division or a remainder by a constant that is not a
-;   power of two, gets there; division and remainder by a power of two and
-;   exact division by any constant expand inline (i128.ll).
+;   D14 and M8.a; fp-expand.ll has the half and bfloat conversions and
+;   i128-divrem.ll the constrained i128 conversions that still ask for one;
+;   libcall-policy.ll has the library calls that are imports).
+; - Since M12 (Q36; section 12, 'D14/D33 note and P3-B text'), i128 division
+;   and remainder by a variable or by any constant, and the plain conversions
+;   between i128 and float32 or float64, ask for no runtime helper at all:
+;   MSILTargetLowering sets setMaxDivRemBitWidthSupported(64) and
+;   setMaxLargeFPConvertBitWidthSupported(64), so ExpandIRInsts expands them
+;   inline before instruction selection. The LIBCALL and LIBCALLFP parts, which
+;   pinned their __divti3, __udivti3, __modti3, __umodti3, __floattidf and
+;   __floatuntisf errors until M12, now compile with no diagnostic and no call
+;   (i128-divrem.ll has all of them).
 ; - A rejected call whose result needs more than one value (i128,
 ;   { i64, i64 }) is demoted to a frame slot around LowerCall (frames exist
 ;   since M7) and reported once. Since M9, MSILFixFunctionBitcasts erases
@@ -46,9 +50,12 @@
 ; - A call of a definition whose body MSILPrepareIR deleted after a diagnostic
 ;   (here inline assembly) is erased too, so the only error is the real one.
 ;   The same holds for invokes, which share a landing pad with a PHI.
-; - Aliases and ifuncs are errors of their own (D26); their callers compile,
-;   with an undefined result, and add no error, also when the call-site
-;   result needs two values.
+; - An ifunc is an error of its own (D26); its callers compile, with an
+;   undefined result, and add no error. Since M12 (D26 amended, alias.ll) an
+;   alias of a defined function is lowered in whole-program mode: its callers
+;   call the aliasee, and a call whose type differs from the aliasee's,
+;   including one whose result needs two values, calls MSILFixFunctionBitcasts'
+;   wrapper; the ALIAS part keeps only the ifunc error.
 ; - A call of a function that is only declared is built. If the function is
 ;   not a Phase-1 import (D14; pinvoke.ll has the imports), the end of the
 ;   module reports "undefined function '<name>' is not defined in this module
@@ -78,7 +85,9 @@
 ; that M9 makes valid (mismatched scalar call types: wrappers in
 ; function-bitcasts.ll; byval at a call site: byval.ll), kept LowerCall's
 ; mismatch check as a backstop with struct-typed mismatches (STRUCTMM) and
-; added the byval call of an import (BYVALIMP).
+; added the byval call of an import (BYVALIMP); M12.c made LIBCALL and
+; LIBCALLFP error-free (inline i128 division and conversions) and lowered the
+; aliases of ALIAS.
 
 ; DEFINE: %{diag} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
 ; DEFINE:   --implicit-check-not=error: --implicit-check-not=warning:
@@ -116,34 +125,29 @@
 ; RUN: FileCheck %s --check-prefix=VMULTI-IL --input-file=%t/variadic-multi.win.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/variadic-multi.dll %t/variadic-multi.win.il %}
 
-; Runtime library calls.
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/libcall.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=LIBCALL
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/libcall.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=LIBCALL
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/libcall.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=LIBCALL
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libcall.ll \
-; RUN:   > %t/libcall.lnx.il
+; i128 division and remainder: inline since M12, so no diagnostic and no call.
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libcall.ll \
+; RUN:   -o %t/libcall.lnx.il 2>&1 | count 0
 ; RUN: FileCheck %s --check-prefix=LIBCALL-IL --input-file=%t/libcall.lnx.il
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/libcall.ll \
-; RUN:   > %t/libcall.win.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/libcall.ll \
+; RUN:   -o %t/libcall.win.il 2>&1 | count 0
 ; RUN: FileCheck %s --check-prefix=LIBCALL-IL --input-file=%t/libcall.win.il
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/libcall.ll \
+; RUN:   -o %t/libcall.lnx.o0.il 2>&1 | count 0
+; RUN: FileCheck %s --check-prefix=LIBCALL-IL --input-file=%t/libcall.lnx.o0.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/libcall.dll %t/libcall.lnx.il %}
 
-; Runtime library calls that LowerCall sees as ExternalSymbol callees.
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/libcall-fp.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=LIBCALLFP
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/libcall-fp.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=LIBCALLFP
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/libcall-fp.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=LIBCALLFP
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libcall-fp.ll \
-; RUN:   > %t/libcall-fp.lnx.il
+; i128 to floating point, which LowerCall saw as ExternalSymbol callees until
+; M12: inline as well, no diagnostic and no call.
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libcall-fp.ll \
+; RUN:   -o %t/libcall-fp.lnx.il 2>&1 | count 0
 ; RUN: FileCheck %s --check-prefix=LIBCALLFP-IL --input-file=%t/libcall-fp.lnx.il
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/libcall-fp.ll \
-; RUN:   > %t/libcall-fp.win.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/libcall-fp.ll \
+; RUN:   -o %t/libcall-fp.win.il 2>&1 | count 0
 ; RUN: FileCheck %s --check-prefix=LIBCALLFP-IL --input-file=%t/libcall-fp.win.il
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/libcall-fp.ll \
+; RUN:   -o %t/libcall-fp.lnx.o0.il 2>&1 | count 0
+; RUN: FileCheck %s --check-prefix=LIBCALLFP-IL --input-file=%t/libcall-fp.lnx.o0.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/libcall-fp.dll %t/libcall-fp.win.il %}
 
 ; Call-site types that differ from the callee's in a struct type, which
@@ -256,7 +260,7 @@
 ; RUN: FileCheck %s --check-prefix=INVOKE-IL --input-file=%t/invoke.win.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/invoke.dll %t/invoke.win.il %}
 
-; Callers of a diagnosed alias and ifunc.
+; Callers of two lowered aliases and of a diagnosed ifunc.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/alias-callers.ll -o /dev/null 2>&1 \
 ; RUN:   | %{diag} --check-prefix=ALIAS
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/alias-callers.ll -o /dev/null 2>&1 \
@@ -425,42 +429,30 @@ define i64 @after_variadic_multi(i64 %a, i64 %b) {
 
 ;--- libcall.ll
 ; i128 division and remainder by a variable, and by 10 (not a power of two),
-; need __divti3, __udivti3, __modti3 and __umodti3. The type legalizer reports
-; them (ReplaceNodeResults) before any call is built; no ExternalSymbol node
-; reaches LowerCall.
-; LIBCALL:      error: {{.*}}div128{{.*}}runtime helper '__divti3' is not available for MSIL yet (phase 3)
-; LIBCALL:      error: {{.*}}urem128{{.*}}runtime helper '__umodti3' is not available for MSIL yet (phase 3)
-; LIBCALL:      error: {{.*}}udiv128{{.*}}runtime helper '__udivti3' is not available for MSIL yet (phase 3)
-; LIBCALL:      error: {{.*}}srem128{{.*}}runtime helper '__modti3' is not available for MSIL yet (phase 3)
-; LIBCALL:      error: {{.*}}sdiv128_by_10{{.*}}runtime helper '__divti3' is not available for MSIL yet (phase 3)
-; LIBCALL:      error: {{.*}}udiv128_by_10{{.*}}runtime helper '__udivti3' is not available for MSIL yet (phase 3)
+; needed __divti3, __udivti3, __modti3 and __umodti3, which the type legalizer
+; reported as runtime helpers until M12. ExpandIRInsts now expands all of them
+; inline: llc reports nothing, and no method calls anything.
 
 ; LIBCALL-IL-LABEL: .method {{.*}}'div128'(
 ; LIBCALL-IL-SAME:  native int, native int, native int, native int) cil managed{{$}}
 ; LIBCALL-IL-NOT:   {{^}}  call
-; LIBCALL-IL:       {{^}}  ret{{$}}
-; LIBCALL-IL-NEXT:  {{^}}} // end of method 'div128'{{$}}
+; LIBCALL-IL:       {{^}}} // end of method 'div128'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'urem128'(
 ; LIBCALL-IL-NOT:   {{^}}  call
-; LIBCALL-IL:       {{^}}  ret{{$}}
-; LIBCALL-IL-NEXT:  {{^}}} // end of method 'urem128'{{$}}
+; LIBCALL-IL:       {{^}}} // end of method 'urem128'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'udiv128'(
 ; LIBCALL-IL-NOT:   {{^}}  call
-; LIBCALL-IL:       {{^}}  ret{{$}}
-; LIBCALL-IL-NEXT:  {{^}}} // end of method 'udiv128'{{$}}
+; LIBCALL-IL:       {{^}}} // end of method 'udiv128'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'srem128'(
 ; LIBCALL-IL-NOT:   {{^}}  call
-; LIBCALL-IL:       {{^}}  ret{{$}}
-; LIBCALL-IL-NEXT:  {{^}}} // end of method 'srem128'{{$}}
+; LIBCALL-IL:       {{^}}} // end of method 'srem128'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'sdiv128_by_10'(
 ; LIBCALL-IL-SAME:  native int, native int) cil managed{{$}}
 ; LIBCALL-IL-NOT:   {{^}}  call
-; LIBCALL-IL:       {{^}}  ret{{$}}
-; LIBCALL-IL-NEXT:  {{^}}} // end of method 'sdiv128_by_10'{{$}}
+; LIBCALL-IL:       {{^}}} // end of method 'sdiv128_by_10'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'udiv128_by_10'(
 ; LIBCALL-IL-NOT:   {{^}}  call
-; LIBCALL-IL:       {{^}}  ret{{$}}
-; LIBCALL-IL-NEXT:  {{^}}} // end of method 'udiv128_by_10'{{$}}
+; LIBCALL-IL:       {{^}}} // end of method 'udiv128_by_10'{{$}}
 ; LIBCALL-IL-LABEL: .method {{.*}}'after_libcall'(
 ; LIBCALL-IL:       {{^}}  ldarg.0{{$}}
 ; LIBCALL-IL-NEXT:  {{^}}  ldarg.1{{$}}
@@ -511,21 +503,19 @@ define i64 @after_libcall(i64 %a, i64 %b) {
 }
 
 ;--- libcall-fp.ll
-; i128 to floating point is a runtime library call with one result, so it
-; reaches LowerCall as an ExternalSymbol callee.
-; LIBCALLFP:    error: {{.*}}sitofp128{{.*}}runtime helper '__floattidf' is not available for MSIL yet (phase 3)
-; LIBCALLFP:    error: {{.*}}uitofp128{{.*}}runtime helper '__floatuntisf' is not available for MSIL yet (phase 3)
+; i128 to floating point was a runtime library call with one result, which
+; reached LowerCall as an ExternalSymbol callee (__floattidf, __floatuntisf)
+; until M12; ExpandIRInsts now expands it inline, so nothing is reported and
+; nothing is called.
 
 ; LIBCALLFP-IL-LABEL: .method {{.*}}'sitofp128'(
 ; LIBCALLFP-IL-SAME:  native int, native int) cil managed{{$}}
 ; LIBCALLFP-IL-NOT:   {{^}}  call
-; LIBCALLFP-IL:       {{^}}  ret{{$}}
-; LIBCALLFP-IL-NEXT:  {{^}}} // end of method 'sitofp128'{{$}}
+; LIBCALLFP-IL:       {{^}}} // end of method 'sitofp128'{{$}}
 ; LIBCALLFP-IL-LABEL: .method {{.*}}'uitofp128'(
 ; LIBCALLFP-IL-SAME:  native int, native int) cil managed{{$}}
 ; LIBCALLFP-IL-NOT:   {{^}}  call
-; LIBCALLFP-IL:       {{^}}  ret{{$}}
-; LIBCALLFP-IL-NEXT:  {{^}}} // end of method 'uitofp128'{{$}}
+; LIBCALLFP-IL:       {{^}}} // end of method 'uitofp128'{{$}}
 ; LIBCALLFP-IL-LABEL: .method {{.*}}'after_libcall_fp'(
 ; LIBCALLFP-IL:       {{^}}  ldarg.0{{$}}
 ; LIBCALLFP-IL-NEXT:  {{^}}  ldarg.1{{$}}
@@ -844,20 +834,24 @@ define i32 @after_invoke(i32 %a, i32 %b) {
 
 ;--- alias-callers.ll
 ; Calls of an alias whose result is used by an add, of an ifunc, and of an
-; alias whose call-site result is i128 (truncated to i64; a function that
-; returns i128 itself needs stores, M7). The errors are the alias and ifunc
-; definitions, in module order; their callers call nothing and return an
-; undefined value, an uninitialized local at -O2.
-; ALIAS:        error: {{.*}}alias @alias_fn is not supported for MSIL
-; ALIAS:        error: {{.*}}alias @alias128 is not supported for MSIL
+; alias whose call-site result is i128 (truncated to i64; the i128 result is
+; demoted to a frame slot). Since M12 the two aliases of 'target' are lowered
+; (alias.ll), so the only error is the ifunc's: the caller of the ifunc calls
+; nothing and returns an undefined value, an uninitialized local at -O2; the
+; first alias's caller calls 'target', and the i128 call, whose type differs
+; from target's in a way no cast can bridge, calls MSILFixFunctionBitcasts'
+; invalid wrapper (function-bitcasts.ll), which traps. Both aliases are
+; external, so they also leave forwarding methods (alias.ll checks them).
 ; ALIAS:        error: {{.*}}ifunc @ifunc_fn is not supported for MSIL
 
 ; ALIAS-IL-LABEL: .method {{.*}}'calls_alias'(
 ; ALIAS-IL-SAME:  int32) cil managed{{$}}
 ; ALIAS-IL-NEXT:  {{^\{$}}
-; ALIAS-IL-NEXT:  {{^}}  .maxstack 1{{$}}
-; ALIAS-IL-NEXT:  {{^}}  .locals (int32){{$}}
-; ALIAS-IL-NEXT:  {{^}}  ldloc.0{{$}}
+; ALIAS-IL-NEXT:  {{^}}  .maxstack 2{{$}}
+; ALIAS-IL-NEXT:  {{^}}  ldarg.0{{$}}
+; ALIAS-IL-NEXT:  {{^}}  call int32 'target'(int32){{$}}
+; ALIAS-IL-NEXT:  {{^}}  ldc.i4.1{{$}}
+; ALIAS-IL-NEXT:  {{^}}  add{{$}}
 ; ALIAS-IL-NEXT:  {{^}}  ret{{$}}
 ; ALIAS-IL-NEXT:  {{^}}} // end of method 'calls_alias'{{$}}
 ; ALIAS-IL-LABEL: .method {{.*}}'calls_ifunc'(
@@ -868,11 +862,11 @@ define i32 @after_invoke(i32 %a, i32 %b) {
 ; ALIAS-IL-NEXT:  {{^}}  ldloc.0{{$}}
 ; ALIAS-IL-NEXT:  {{^}}  ret{{$}}
 ; ALIAS-IL-NEXT:  {{^}}} // end of method 'calls_ifunc'{{$}}
-; Since M9 the call is not erased before ISel: the i128 result is read back
-; from its demoted frame slot (section 12, M4 fix-1 row: from M7 on the slot
-; compiles; the frame is a localloc), and nothing is called.
+; The i128 result is read back from its demoted frame slot (a localloc).
 ; ALIAS-IL-LABEL: .method {{.*}}'calls_alias_i128'(
 ; ALIAS-IL-SAME:  native int) cil managed{{$}}
+; ALIAS-IL-NOT:   {{^}}  call
+; ALIAS-IL:       {{^}}  call void 'target_bitcast_invalid'(native int, native int){{$}}
 ; ALIAS-IL-NOT:   {{^}}  call
 ; ALIAS-IL:       {{^}}  ret{{$}}
 ; ALIAS-IL-NEXT:  {{^}}} // end of method 'calls_alias_i128'{{$}}

@@ -12,15 +12,20 @@
 ; (decision D34). Every result is passed to @use128, because an i128 return
 ; value would be demoted to a hidden pointer, and stores arrive in M7; the
 ; divisions return one native int half instead. sdiv and srem by a power of
-; two expand inline into shifts and adds, as on native x86-64:
-; isIntDivCheap is false above 64 bits (plan section 12, row 'Plan 5.3
-; amended (D33 query hook), M4.b'), so the DAGCombiner rewrites them before
-; type legalization, with the sign of the high half ('ldc.i4.s 63; shr') as
-; the rounding bias (no __divti3 or __modti3). udiv and urem by a power of two
-; become a shift and a mask, and an exact sdiv or udiv by any constant becomes
-; a shift and a multiply by the inverse; every other i128 division or remainder
-; (a variable divisor, or a non-exact division or a remainder by a constant
-; that is not a power of two) needs a helper and is an error (call-errors.ll).
+; two expand inline into shifts and adds, as on native x86-64, with the sign
+; of the high half ('ldc.i4.s 63; shr') as the rounding bias (no __divti3 or
+; __modti3), and udiv and urem by a power of two become a shift and a mask.
+; Until M12 the DAGCombiner did this (isIntDivCheap is false above 64 bits,
+; plan section 12, row 'Plan 5.3 amended (D33 query hook), M4.b'), an exact
+; sdiv or udiv by any constant became a shift and a multiply by the inverse,
+; and every other i128 division or remainder needed a helper and was an error.
+; Since M12 (Q36; section 12, 'D14/D33 note and P3-B text') MSILTargetLowering
+; sets setMaxDivRemBitWidthSupported(64), so ExpandIRInsts rewrites every
+; i128 division and remainder in IR before instruction selection: by a power
+; of two into the same shifts, adds and masks, and by anything else, an exact
+; division by a constant included, into the generic shift-and-subtract
+; expansion, with no call and no 'div' or 'rem' (i128-divrem.ll has the
+; divisions by a variable).
 ;
 ; llc must succeed: any helper call would be a 'runtime library call ... is
 ; not supported' error (exit 1).
@@ -423,20 +428,16 @@ define i64 @urem128_by_16(i64 %lo, i64 %hi) {
   ret i64 %r
 }
 
-; An exact division by 10 shifts right by one (arithmetically for sdiv, so
-; the high half is shifted with 'shr' right before it is multiplied;
-; logically for udiv, which has no 'shr') and multiplies by the inverse of 5
-; modulo 2^128, 0xCCCC...CCCD, whose low half is ldc.i8 -3689348814741910323.
+; An exact division by 10 shifted right by one and multiplied by the inverse
+; of 5 modulo 2^128 until M12 (ldc.i8 -3689348814741910323, the low half of
+; 0xCCCC...CCCD). Since M12 ExpandIRInsts expands it like any other i128
+; division by a constant that is not a power of two, before the DAGCombiner
+; sees it: the generic expansion, which still calls nothing and uses no 'div'
+; or 'rem', but no longer multiplies by the inverse.
 ; CHECK-LABEL: .method {{.*}}'sdiv128_exact_by_10'(
 ; CHECK-SAME:  native int, native int) cil managed{{$}}
-; CHECK-NOT:   {{^}}  {{call|div|rem}}
-; CHECK:       {{^}}  shr{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i8 -3689348814741910323{{$}}
-; CHECK-NEXT:  {{^}}  conv.i{{$}}
-; CHECK-NEXT:  {{^}}  mul{{$}}
-; CHECK-NOT:   {{^}}  {{call|div|rem}}
-; CHECK:       {{^}}  ret{{$}}
-; CHECK-NEXT:  {{^}}} // end of method 'sdiv128_exact_by_10'{{$}}
+; CHECK-NOT:   {{^}}  {{call|div|rem|ldc.i8 -3689348814741910323}}
+; CHECK:       {{^}}} // end of method 'sdiv128_exact_by_10'{{$}}
 define i64 @sdiv128_exact_by_10(i64 %lo, i64 %hi) {
   %l = zext i64 %lo to i128
   %h = zext i64 %hi to i128
@@ -452,13 +453,8 @@ define i64 @sdiv128_exact_by_10(i64 %lo, i64 %hi) {
 
 ; CHECK-LABEL: .method {{.*}}'udiv128_exact_by_10'(
 ; CHECK-SAME:  native int, native int) cil managed{{$}}
-; CHECK-NOT:   {{^}}  {{call|div|rem|shr$}}
-; CHECK:       {{^}}  ldc.i8 -3689348814741910323{{$}}
-; CHECK-NEXT:  {{^}}  conv.i{{$}}
-; CHECK-NEXT:  {{^}}  mul{{$}}
-; CHECK-NOT:   {{^}}  {{call|div|rem|shr$}}
-; CHECK:       {{^}}  ret{{$}}
-; CHECK-NEXT:  {{^}}} // end of method 'udiv128_exact_by_10'{{$}}
+; CHECK-NOT:   {{^}}  {{call|div|rem|ldc.i8 -3689348814741910323}}
+; CHECK:       {{^}}} // end of method 'udiv128_exact_by_10'{{$}}
 define i64 @udiv128_exact_by_10(i64 %lo, i64 %hi) {
   %l = zext i64 %lo to i128
   %h = zext i64 %hi to i128

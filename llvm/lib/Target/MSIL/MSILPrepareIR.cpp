@@ -32,8 +32,46 @@
 /// - A function definition with a garbage collection strategy is an error;
 ///   its body and its strategy are deleted before any pass runs
 ///   (doInitialization).
-/// - A function definition that is variadic, calls inline assembly, calls a
-///   target intrinsic (llvm.x86.*, llvm.aarch64.*, ...), accesses a named
+///
+/// Then, before any function is checked, the module is lowered as the whole
+/// program, which it is in -S output, in llc's and in msil-ld's
+/// --lto-emit-asm text (lowerWholeProgramSymbols, decision D26 as amended for
+/// Phase 2):
+/// - An alias of a defined function (offset 0) or of a global variable (any
+///   constant offset) is replaced by its aliasee in every use and erased. A
+///   function alias with non-local linkage leaves a forwarding definition
+///   under its name, which calls the aliasee.
+/// - An extern_weak function declaration that is not a Phase-1 import
+///   (MSIL::getPInvokeModule) is null: its calls, invokes and
+///   llvm.global_ctors entries call an internal trap stub
+///   '<msil>undef_<name>', and its other uses become null. An extern_weak
+///   variable is null in every use and is erased, unless it is thread-local
+///   (an error below).
+/// - A section on a global variable definition (llvm.metadata excepted) is an
+///   error; the variable stays ordinary data.
+///
+/// Then the discardable function definitions that the program cannot reach
+/// lose their bodies, decided by reachability as GlobalDCE does
+/// (dropUnreferencedDiscardableFunctions): the candidates are the linkonce
+/// and linkonce_odr definitions and the internal and private definitions
+/// their bodies refer to, directly or through other candidates; a candidate
+/// is live when something other than a candidate's body uses it (a function
+/// that is not a candidate, a global initializer, llvm.used,
+/// llvm.global_ctors, any other global) or a live candidate's body refers to
+/// it, and every other candidate is dropped, dead cycles included. Global
+/// variables and the local functions that no linkonce function reaches stay.
+/// A definition from a header that the program does not use is not compiled,
+/// and therefore not diagnosed. Then, in each function definition, an empty
+/// inline asm statement with operands becomes a compiler fence, a fake use of
+/// each input and llvm.sideeffect; an indirect output tied to a by-value
+/// input gets the input stored through its pointer (truncated when it is a
+/// wider integer), and each direct output becomes its tied input, converted
+/// by zext, inttoptr or ptrtoint where clang ties different types
+/// (lowerEmptyInlineAsm), before its checks. The checks and what follows
+/// them:
+/// - A function definition that is variadic, calls other inline assembly, has
+///   a va_arg instruction of a struct or array type, calls a target
+///   intrinsic (llvm.x86.*, llvm.aarch64.*, ...), accesses a named
 ///   register, reads the thread pointer (llvm.thread.pointer), records a
 ///   stack map (stackmap, patchpoint, statepoint), has deoptimization state
 ///   ("deopt" operand bundles), makes a preallocated call
@@ -64,9 +102,9 @@
 ///   llvm.ubsantrap without a "trap-func-name") in its block is replaced by
 ///   'unreachable', which also drops the block's successor edges: the trap
 ///   becomes the TRAP terminator, so nothing after it runs.
-/// - An alias, an ifunc, a global variable in a non-zero address space or one
-///   whose type has a target extension type is an error; its uses become
-///   poison and it is erased.
+/// - An alias that is not lowered (above), an ifunc, a global variable in a
+///   non-zero address space or one whose type has a target extension type is
+///   an error; its uses become poison and it is erased.
 /// - A thread-local variable is an error; it becomes an ordinary global.
 /// - A non-empty llvm.global_dtors is an error, and it is erased.
 /// - An "exception-model" module flag is reset to "none", the model the
@@ -81,6 +119,7 @@
 
 #include "MSIL.h"
 #include "MSILUtilities.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -88,13 +127,17 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalIFunc.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/Instructions.h"
@@ -528,6 +571,380 @@ static bool diagnoseILNameLength(const Function &F, const TargetMachine &TM) {
   return true;
 }
 
+/// Returns the type of the direct output \p OutNo of the inline asm call
+/// \p CI: one direct output is the result, several are the fields of a
+/// struct.
+static Type *getDirectOutputType(const CallInst &CI, unsigned OutNo,
+                                 unsigned NumDirect) {
+  Type *RetTy = CI.getType();
+  return NumDirect == 1 ? RetTy
+                        : cast<StructType>(RetTy)->getElementType(OutNo);
+}
+
+/// Returns true if an empty asm statement leaves in a direct output of type
+/// \p OutTy the value of its tied input of type \p InTy, as the native code
+/// does, and convertTiedInput can give it: the types are equal; the input is
+/// an integer narrower than the integer output, which then holds the input
+/// zero-extended (clang ties an i1 input to an i8 output for `"+r"` on a
+/// _Bool); or one is a pointer and the other an integer of the pointer's
+/// width, which hold the same bits (`"=r"(Ptr) : "0"(Int)`; clang widens the
+/// narrower side of other integer and pointer ties itself). An input wider
+/// than its output, and every other pair, has no such value.
+static bool isConvertibleTie(Type *InTy, Type *OutTy, const DataLayout &DL) {
+  if (InTy == OutTy)
+    return true;
+  if (InTy->isIntegerTy() && OutTy->isIntegerTy())
+    return InTy->getIntegerBitWidth() < OutTy->getIntegerBitWidth();
+  if (InTy->isPointerTy() && OutTy->isIntegerTy())
+    return OutTy->getIntegerBitWidth() == DL.getPointerTypeSizeInBits(InTy);
+  if (InTy->isIntegerTy() && OutTy->isPointerTy())
+    return InTy->getIntegerBitWidth() == DL.getPointerTypeSizeInBits(OutTy);
+  return false;
+}
+
+/// Returns the value of type \p OutTy that an empty asm statement leaves in a
+/// direct output tied to the input \p In (isConvertibleTie), inserting a cast
+/// with the debug location \p DL before \p IP when the types differ.
+static Value *convertTiedInput(Value *In, Type *OutTy, BasicBlock::iterator IP,
+                               const DebugLoc &DL) {
+  Type *InTy = In->getType();
+  if (InTy == OutTy)
+    return In;
+  Instruction::CastOps Op = InTy->isPointerTy()    ? Instruction::PtrToInt
+                            : OutTy->isPointerTy() ? Instruction::IntToPtr
+                                                   : Instruction::ZExt;
+  auto *Cast = CastInst::Create(Op, In, OutTy, "", IP);
+  Cast->setDebugLoc(DL);
+  return Cast;
+}
+
+/// Returns the index in \p Constraints of the input that the direct output
+/// \p Out, a local register variable, is tied to, or -1: the last input not
+/// in \p Used whose constraint is exactly \p Out's own register. For `"+r"`
+/// on `register int x asm("eax")` clang emits `"={eax},{eax}"` instead of a
+/// numeric tie, and appends that input after the statement's own inputs (a
+/// `"r"(x)` among them has the same constraint); clang rejects two outputs in
+/// one register, and ties an early-clobber one by number. An empty asm
+/// statement leaves the input's value in the register.
+static int findRegisterTie(const InlineAsm::ConstraintInfoVector &Constraints,
+                           const InlineAsm::ConstraintInfo &Out,
+                           ArrayRef<bool> Used) {
+  if (Out.isEarlyClobber || Out.isMultipleAlternative ||
+      Out.Codes.size() != 1 || !StringRef(Out.Codes.front()).starts_with("{"))
+    return -1;
+  for (int I = static_cast<int>(Constraints.size()) - 1; I >= 0; --I) {
+    const InlineAsm::ConstraintInfo &In = Constraints[I];
+    if (In.Type == InlineAsm::isInput && !In.isIndirect &&
+        !In.isMultipleAlternative && !Used[I] && In.Codes == Out.Codes)
+      return I;
+  }
+  return -1;
+}
+
+/// Returns the index in the constraints of the input that the output \p Out
+/// is tied to by number, or -1: that of its matching constraint ('=r,0',
+/// clang's '+r') or, when the tie is written with alternatives, that of its
+/// first alternative that has one ('=r|r,0|0' from `"=r,r"` with `"0,0"`,
+/// '=r|r,r|0' from `"r,0"`). InlineAsm::ConstraintInfo::Parse records the
+/// match of an input with alternatives only in the output's alternatives.
+static int getTiedInput(const InlineAsm::ConstraintInfo &Out) {
+  if (Out.hasMatchingInput())
+    return Out.MatchingInput;
+  for (const InlineAsm::SubConstraintInfo &Alt : Out.multipleAlternatives)
+    if (Alt.MatchingInput >= 0)
+      return Alt.MatchingInput;
+  return -1;
+}
+
+/// Returns true if an alternative of the output \p Out is a condition flag
+/// ('{@ccz}' from x86's `"=@ccz"`, '{@cceq}' from AArch64's `"=@cceq"`):
+/// native code sets it from the flags after the statement (sete), so neither
+/// a tied input nor the old value is its value.
+static bool isFlagOutput(const InlineAsm::ConstraintInfo &Out) {
+  auto IsFlag = [](const std::string &Code) {
+    return StringRef(Code).starts_with("{@cc");
+  };
+  return any_of(Out.Codes, IsFlag) ||
+         any_of(Out.multipleAlternatives,
+                [&](const InlineAsm::SubConstraintInfo &Alt) {
+                  return any_of(Alt.Codes, IsFlag);
+                });
+}
+
+/// Returns true if an alternative of the output \p Out, which has several,
+/// is a memory operand: it has one of the codes 'm', 'o', 'V', '<', '>' or
+/// 'X' (clang turns 'g' into 'imr'), or AArch64's 'Q', the codes for which
+/// clang's TargetInfo::ConstraintInfo::allowsMemory holds.
+static bool hasMemoryAlternative(const InlineAsm::ConstraintInfo &Out,
+                                 const Triple &TT) {
+  auto IsMemory = [&](const std::string &Code) {
+    return Code == "m" || Code == "o" || Code == "V" || Code == "<" ||
+           Code == ">" || Code == "X" || (Code == "Q" && TT.isAArch64());
+  };
+  return any_of(Out.multipleAlternatives,
+                [&](const InlineAsm::SubConstraintInfo &Alt) {
+                  return any_of(Alt.Codes, IsMemory);
+                });
+}
+
+/// Returns true if an empty asm statement leaves in the memory of an
+/// indirect output whose operand has the element type \p ElemTy the value of
+/// its tied input of type \p InTy, as native x86 code does when it takes the
+/// register alternative, and lowerEmptyInlineAsm can store it: as it is when
+/// the store sizes are equal (an i64 input for a _Complex int output tied to
+/// a long long), truncated when it is an integer wider than the integer
+/// element type (a char output tied to an int input gets the low byte).
+/// Clang zero-extends an integer input narrower than its scalar output
+/// itself. Every other pair has no such value (a float output tied to a
+/// double input, which native x86 instruction selection cannot handle).
+static bool isStorableTie(Type *InTy, Type *ElemTy, const DataLayout &DL) {
+  if (!InTy->isSized() || !ElemTy->isSized())
+    return false;
+  if (DL.getTypeStoreSize(InTy) == DL.getTypeStoreSize(ElemTy))
+    return true;
+  return InTy->isIntegerTy() && ElemTy->isIntegerTy() &&
+         InTy->getIntegerBitWidth() > ElemTy->getIntegerBitWidth();
+}
+
+namespace {
+/// An indirect output of an empty asm statement and the by-value input tied
+/// to it: lowerEmptyInlineAsm stores the input through the output's pointer,
+/// call argument ArgNo.
+struct TiedStore {
+  unsigned ArgNo;
+  Value *In;
+};
+} // end anonymous namespace
+
+/// Returns true if \p CI calls an empty inline asm statement that
+/// lowerEmptyInlineAsm lowers, and appends to \p Results the input tied to
+/// each of its direct outputs, in order, and to \p Stores each indirect
+/// output that is to hold its input: an asm string that is empty after
+/// trimming, inputs of any kind, outputs that are not condition flags
+/// (isFlagOutput), indirect ('=*m') or direct and tied to an input whose type
+/// isConvertibleTie accepts, any clobbers and no label. A direct output is
+/// tied to the input of its matching constraint (getTiedInput) or, for a
+/// local register variable, to the input in its own register
+/// (findRegisterTie); each input is tied to one output at most. Such an asm
+/// reads its inputs and writes nothing but its outputs, which hold after it
+/// what native x86 code leaves in them: a direct output the value of its
+/// input. An indirect output that no input is tied to by number keeps its
+/// memory's contents ('=*m'), as does one tied to an indirect input
+/// ('=*m,*0') or one with several alternatives, one of them memory, which
+/// native code takes ('=*r|m,0|0' from `"=r,m"` with `"0,0"`, '=*r|m,0'
+/// from `"+r,m"`). An indirect output with one alternative tied to a by-value
+/// input ('=*rm,0' from `"=rm"` with `"0"`, '=*imr,0' from `"=g"`, '=*X,0',
+/// '=*r,0' from `"=r"` on a _Complex int, clang's `"+rm"`) holds the input
+/// (isStorableTie), as native code takes the register alternative. Any
+/// other tie of an indirect output, and an untied direct output, has no
+/// value to keep. These are the IR shapes that clang's native path emits for
+/// the empty statements it lets through (hasOnlyKeptOutputs in CGStmt.cpp).
+static bool isEmptyAsmWithOperands(const CallInst &CI,
+                                   SmallVectorImpl<Value *> &Results,
+                                   SmallVectorImpl<TiedStore> &Stores) {
+  const auto *IA = dyn_cast<InlineAsm>(CI.getCalledOperand());
+  if (!IA || !IA->getAsmString().trim().empty())
+    return false;
+  InlineAsm::ConstraintInfoVector Constraints = IA->ParseConstraints();
+  if (Constraints.empty() && !IA->getConstraintString().empty())
+    return false;
+
+  // The call argument of each constraint that has one (the inputs and the
+  // indirect outputs, in order), and the number of direct outputs.
+  SmallVector<int, 8> ArgNos;
+  unsigned NumArgs = 0;
+  unsigned NumDirect = 0;
+  for (const InlineAsm::ConstraintInfo &C : Constraints) {
+    if (C.Type == InlineAsm::isLabel)
+      return false;
+    ArgNos.push_back(C.hasArg() ? NumArgs++ : -1);
+    if (C.Type == InlineAsm::isOutput && !C.isIndirect)
+      ++NumDirect;
+  }
+  if (NumArgs != CI.arg_size())
+    return false;
+  // One direct output is the result; several are the fields of a struct.
+  Type *RetTy = CI.getType();
+  auto *STy = dyn_cast<StructType>(RetTy);
+  if (NumDirect == 0
+          ? !RetTy->isVoidTy()
+          : NumDirect > 1 && (!STy || STy->getNumElements() != NumDirect))
+    return false;
+
+  const DataLayout &DL = CI.getDataLayout();
+  const Triple &TT = CI.getModule()->getTargetTriple();
+  // The inputs tied to an output so far.
+  SmallVector<bool, 8> Used(Constraints.size());
+  unsigned OutNo = 0;
+  for (unsigned CNo = 0, E = Constraints.size(); CNo != E; ++CNo) {
+    const InlineAsm::ConstraintInfo &C = Constraints[CNo];
+    if (C.Type != InlineAsm::isOutput)
+      continue;
+    if (isFlagOutput(C))
+      return false;
+    int InNo = getTiedInput(C);
+    if (C.isIndirect) {
+      // Untied: the memory keeps its contents.
+      if (InNo < 0)
+        continue;
+      // Native code takes the memory alternative.
+      if (C.isMultipleAlternative) {
+        if (!hasMemoryAlternative(C, TT))
+          return false;
+        continue;
+      }
+      const InlineAsm::ConstraintInfo &In = Constraints[InNo];
+      if (In.Type != InlineAsm::isInput)
+        return false;
+      // '=*m,*0': the memory keeps its contents.
+      if (In.isIndirect)
+        continue;
+      if (Used[InNo])
+        return false;
+      Used[InNo] = true;
+      Value *InV = CI.getArgOperand(ArgNos[InNo]);
+      Type *ElemTy = CI.getParamElementType(ArgNos[CNo]);
+      if (!ElemTy || !isStorableTie(InV->getType(), ElemTy, DL))
+        return false;
+      Stores.push_back({static_cast<unsigned>(ArgNos[CNo]), InV});
+      continue;
+    }
+    if (InNo < 0)
+      InNo = findRegisterTie(Constraints, C, Used);
+    if (InNo < 0 || Constraints[InNo].Type != InlineAsm::isInput ||
+        Constraints[InNo].isIndirect || Used[InNo])
+      return false;
+    Used[InNo] = true;
+    Value *In = CI.getArgOperand(ArgNos[InNo]);
+    if (!isConvertibleTie(In->getType(),
+                          getDirectOutputType(CI, OutNo, NumDirect), DL))
+      return false;
+    Results.push_back(In);
+    ++OutNo;
+  }
+  return true;
+}
+
+/// Returns true if lowerEmptyInlineAsm keeps a value of type \p Ty alive
+/// with llvm.fake.use: a type that is one CIL value (decision D2).
+static bool isFakeUseType(const Type *Ty) {
+  if (const auto *ITy = dyn_cast<IntegerType>(Ty))
+    return ITy->getBitWidth() <= 64;
+  return Ty->isPointerTy() || Ty->isFloatTy() || Ty->isDoubleTy();
+}
+
+/// Lowers each call in \p F of an empty inline asm statement with operands
+/// (isEmptyAsmWithOperands), the optimization barrier of Rust's black_box
+/// and of C's DoNotOptimize idioms (backlog 2.3), into the compiler fence of
+/// an empty asm statement without operands (decision D36), a call of
+/// llvm.fake.use for each input that is not a constant and is one CIL value,
+/// and a call of llvm.sideeffect, which keeps a loop around the statement;
+/// then each indirect output with one alternative that is tied to a by-value
+/// input gets the input stored through its pointer, as it is when the store
+/// sizes are equal and truncated when it is a wider integer (isStorableTie),
+/// and the memory of every other indirect output keeps its contents; each
+/// direct output becomes its tied input: the input itself when the types are
+/// equal, zero-extended when it is a narrower integer (the i1 of a _Bool
+/// tied to an i8 output), and converted by inttoptr or ptrtoint when one is
+/// a pointer and the other an integer of the pointer's width. The optimizer
+/// has already run with the asm opaque, which is the point of the barrier.
+/// Clang emits these statements as the native target does
+/// (CodeGenFunction::EmitAsmStmt), and every IR shape it emits for them is
+/// lowered here: numeric ties, ties written with alternatives, the register
+/// ties of local register variables and the type pairs above. Every other
+/// inline asm stays, and diagnoseDefinition reports it. Returns true if \p F
+/// changed.
+static bool lowerEmptyInlineAsm(Function &F) {
+  SmallVector<CallInst *, 4> ToLower;
+  SmallVector<Value *, 2> Results;
+  SmallVector<TiedStore, 2> Stores;
+  for (Instruction &I : instructions(F)) {
+    auto *CI = dyn_cast<CallInst>(&I);
+    if (!CI || !CI->isInlineAsm())
+      continue;
+    Results.clear();
+    Stores.clear();
+    if (isEmptyAsmWithOperands(*CI, Results, Stores))
+      ToLower.push_back(CI);
+  }
+  if (ToLower.empty())
+    return false;
+
+  Module &M = *F.getParent();
+  LLVMContext &Ctx = F.getContext();
+  const DataLayout &Layout = M.getDataLayout();
+  Function *FakeUse =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::fake_use);
+  Function *SideEffect =
+      Intrinsic::getOrInsertDeclaration(&M, Intrinsic::sideeffect);
+  for (CallInst *CI : ToLower) {
+    // Ask again: a tied input may be the result of an asm lowered before.
+    Results.clear();
+    Stores.clear();
+    [[maybe_unused]] bool Lowerable =
+        isEmptyAsmWithOperands(*CI, Results, Stores);
+    assert(Lowerable && "replacing an operand changed the constraints");
+    BasicBlock::iterator IP = CI->getIterator();
+    const DebugLoc &DL = CI->getDebugLoc();
+    auto *Fence = new FenceInst(Ctx, AtomicOrdering::SequentiallyConsistent,
+                                SyncScope::SingleThread, IP);
+    Fence->setDebugLoc(DL);
+    unsigned ArgNo = 0;
+    for (const InlineAsm::ConstraintInfo &C :
+         cast<InlineAsm>(CI->getCalledOperand())->ParseConstraints()) {
+      if (!C.hasArg())
+        continue;
+      Value *V = CI->getArgOperand(ArgNo++);
+      if (C.Type == InlineAsm::isInput && !isa<Constant>(V) &&
+          isFakeUseType(V->getType()))
+        CallInst::Create(FakeUse, {V}, "", IP)->setDebugLoc(DL);
+    }
+    CallInst::Create(SideEffect, {}, "", IP)->setDebugLoc(DL);
+
+    // The memory of an indirect output tied to a by-value input holds the
+    // input, as native code leaves it.
+    for (const TiedStore &S : Stores) {
+      Value *Ptr = CI->getArgOperand(S.ArgNo);
+      Type *ElemTy = CI->getParamElementType(S.ArgNo);
+      Value *V = S.In;
+      if (Layout.getTypeStoreSize(V->getType()) !=
+          Layout.getTypeStoreSize(ElemTy)) {
+        auto *Trunc = new TruncInst(V, ElemTy, "", IP);
+        Trunc->setDebugLoc(DL);
+        V = Trunc;
+      }
+      auto *Store = new StoreInst(V, Ptr, /*isVolatile=*/false,
+                                  getKnownAlignment(Ptr, Layout, CI), IP);
+      Store->setDebugLoc(DL);
+    }
+
+    if (!CI->getType()->isVoidTy()) {
+      unsigned NumDirect = Results.size();
+      for (unsigned OutNo = 0; OutNo != NumDirect; ++OutNo)
+        Results[OutNo] = convertTiedInput(
+            Results[OutNo], getDirectOutputType(*CI, OutNo, NumDirect), IP, DL);
+      Value *Result = Results.front();
+      if (NumDirect > 1) {
+        Result = PoisonValue::get(CI->getType());
+        for (auto [Idx, V] : enumerate(Results)) {
+          auto *IV = InsertValueInst::Create(
+              Result, V, static_cast<unsigned>(Idx), "", IP);
+          IV->setDebugLoc(DL);
+          Result = IV;
+        }
+      }
+      CI->replaceAllUsesWith(Result);
+    }
+    CI->eraseFromParent();
+  }
+  return true;
+}
+
+/// The error for a va_arg instruction, the text of MSILISelLowering.cpp's
+/// VAArgUnsupported, which reports the scalar and vector ones.
+static constexpr const char *VAArgUnsupported =
+    "the va_arg instruction is not supported for MSIL yet (phase 3 variadics)";
+
 /// Reports every construct in the definition \p F that MSIL cannot compile.
 /// Returns true if there was one.
 static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
@@ -578,6 +995,8 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
 
   for (Instruction &I : instructions(F)) {
     if (auto *CB = dyn_cast<CallBase>(&I)) {
+      // lowerEmptyInlineAsm has lowered every empty asm statement that MSIL
+      // can keep; any other asm needs machine code.
       if (CB->isInlineAsm()) {
         Ctx.diagnose(DiagnosticInfoUnsupported(
             F, "inline assembly is not supported for MSIL", I.getDebugLoc()));
@@ -713,6 +1132,16 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
               I.getDebugLoc()));
         HasError = true;
       }
+    } else if (auto *VA = dyn_cast<VAArgInst>(&I);
+               VA &&
+               (VA->getType()->isStructTy() || VA->getType()->isArrayTy())) {
+      // SelectionDAGBuilder::visitVAArg asks for the value type of a struct
+      // or array and crashes ('Unknown type!'), for native targets too. A
+      // scalar or vector va_arg reaches instruction selection, which reports
+      // it with the same text (decision D19; variadics are phase 3).
+      Ctx.diagnose(
+          DiagnosticInfoUnsupported(F, VAArgUnsupported, I.getDebugLoc()));
+      HasError = true;
     }
     if (!ASTy && (ASTy = ASFinder.inInstruction(I)))
       ASLoc = DiagnosticLocation(I.getDebugLoc());
@@ -898,16 +1327,17 @@ static void replaceThreadLocalAddressCalls(GlobalValue &GV,
 }
 
 /// no_cfi and dso_local_equivalent constants only take a global value as
-/// their operand: replace each one on \p GV by poison and destroy it, before
-/// GV itself is replaced by poison.
-static void replaceGlobalValueWrappers(GlobalValue &GV) {
+/// their operand: replace each one on \p GV by poison (by null if \p ByNull)
+/// and destroy it, before GV itself is replaced.
+static void replaceGlobalValueWrappers(GlobalValue &GV, bool ByNull = false) {
   // Collect them first: replacing them changes the use list of GV.
   SmallVector<Constant *, 2> Wrappers;
   for (User *U : GV.users())
     if (isa<NoCFIValue, DSOLocalEquivalent>(U))
       Wrappers.push_back(cast<Constant>(U));
   for (Constant *C : Wrappers) {
-    C->replaceAllUsesWith(PoisonValue::get(C->getType()));
+    C->replaceAllUsesWith(ByNull ? Constant::getNullValue(C->getType())
+                                 : PoisonValue::get(C->getType()));
     C->destroyConstant();
   }
 }
@@ -989,6 +1419,446 @@ static void dropModuleContents(Module &M) {
   eraseGlobalValues(M, ToErase);
 }
 
+//===----------------------------------------------------------------------===//
+// Whole-program lowerings: the module is the whole program (-S, llc and
+// msil-ld's --lto-emit-asm text), so no other module can define a symbol that
+// it leaves undefined or preempt one that it defines (decision D26 as amended
+// for Phase 2). CIL objects keep aliases, weak references and sections as
+// symbols instead (plan 5.8.10).
+//===----------------------------------------------------------------------===//
+
+/// Returns the global object that \p GA aliases, through chains of aliases,
+/// and sets \p Offset to the constant byte offset into it. Returns null if
+/// the aliasee is not a global object plus a constant offset.
+static GlobalObject *getAliasedObject(GlobalAlias &GA, APInt &Offset) {
+  const DataLayout &DL = GA.getDataLayout();
+  Offset = APInt(DL.getIndexTypeSizeInBits(GA.getType()), 0);
+  // stripAndAccumulateConstantOffsets looks only through the aliases that
+  // cannot be interposed, but in the whole program a weak alias is final
+  // too.
+  SmallPtrSet<const GlobalAlias *, 4> Visited;
+  Visited.insert(&GA);
+  Value *V = GA.getAliasee();
+  while (true) {
+    V = V->stripAndAccumulateConstantOffsets(DL, Offset,
+                                             /*AllowNonInbounds=*/true);
+    auto *Next = dyn_cast<GlobalAlias>(V);
+    if (!Next)
+      return dyn_cast<GlobalObject>(V);
+    if (!Visited.insert(Next).second)
+      return nullptr;
+    V = Next->getAliasee();
+  }
+}
+
+/// Defines \p Fwd, which a function alias of \p Aliasee left behind under its
+/// name, as a forwarder: one plain call of \p Aliasee with the arguments of
+/// \p Fwd, returning its result. A 'jmp' would forward with less code, but
+/// ILVerify and PEVerify reject it. When the types are equal, the forwarder
+/// and its call get the parameter and result attributes of \p Aliasee
+/// (byval, sret, zeroext, ...), so that the forwarder has its ABI; otherwise
+/// MSILFixFunctionBitcasts adapts the call, as it adapts any other.
+static void defineForwarder(Function &Fwd, Function &Aliasee) {
+  LLVMContext &Ctx = Fwd.getContext();
+  FunctionType *FTy = Fwd.getFunctionType();
+  Fwd.setCallingConv(Aliasee.getCallingConv());
+  BasicBlock *BB = BasicBlock::Create(Ctx, "entry", &Fwd);
+  SmallVector<Value *, 8> Args(make_pointer_range(Fwd.args()));
+  CallInst *Call = CallInst::Create(FTy, &Aliasee, Args, "", BB);
+  Call->setCallingConv(Aliasee.getCallingConv());
+  if (FTy == Aliasee.getFunctionType()) {
+    // A preallocated or inalloca argument needs the call sequence of its
+    // own, which a forwarder cannot repeat (and MSIL diagnoses).
+    AttributeList AL = Aliasee.getAttributes();
+    SmallVector<AttributeSet, 8> ParamAttrs;
+    for (unsigned I = 0, E = FTy->getNumParams(); I != E; ++I)
+      ParamAttrs.push_back(AL.getParamAttrs(I)
+                               .removeAttribute(Ctx, Attribute::Preallocated)
+                               .removeAttribute(Ctx, Attribute::InAlloca));
+    AttributeList Attrs =
+        AttributeList::get(Ctx, AttributeSet(), AL.getRetAttrs(), ParamAttrs);
+    Fwd.setAttributes(Attrs);
+    Call->setAttributes(Attrs);
+  }
+  ReturnInst::Create(Ctx, FTy->getReturnType()->isVoidTy() ? nullptr : Call,
+                     BB);
+}
+
+/// llvm.threadlocal.address only takes a thread-local global value, not the
+/// aliasee of a thread-local alias at an offset: replaces each call of it on
+/// \p GA, which aliases the thread-local variable \p GV at \p Offset
+/// (through any chain of aliases), by a call of it on GV plus the offset.
+static void replaceAliasThreadLocalAddressCalls(GlobalAlias &GA,
+                                                GlobalVariable &GV,
+                                                const APInt &Offset) {
+  for (User *U : make_early_inc_range(GA.users())) {
+    auto *II = dyn_cast<IntrinsicInst>(U);
+    if (!II || II->getIntrinsicID() != Intrinsic::threadlocal_address)
+      continue;
+    IRBuilder<> Builder(II);
+    Value *Addr = Builder.CreateThreadLocalAddress(&GV);
+    if (!Offset.isZero())
+      Addr = Builder.CreatePtrAdd(Addr, Builder.getInt(Offset));
+    Addr = Builder.CreatePointerBitCastOrAddrSpaceCast(Addr, II->getType());
+    II->replaceAllUsesWith(Addr);
+    II->eraseFromParent();
+  }
+}
+
+/// Lowers the aliases that the whole program can do without (backlog 2.1,
+/// judge-c-fidelity F5): an alias of a defined function, whose value type is
+/// a function type, at offset 0, or of a global variable, whose value type is
+/// not, at any constant offset. Every use of such an alias (in code, in
+/// initializers, in llvm.global_ctors, in other aliases) becomes its aliasee,
+/// and the alias is erased, so callers call the aliasee and the address of
+/// the alias is that of the aliasee (one '<msil>fn_' field per function). A
+/// call whose type differs from the aliasee's is left to
+/// MSILFixFunctionBitcasts. A function alias with non-local linkage first
+/// leaves a definition under its name, with its type, linkage, visibility,
+/// DLL storage class and unnamed_addr, that forwards to the aliasee: nothing
+/// in the module calls it, but the name stays a public method (an entry point
+/// named main, an export). A linkonce or linkonce_odr forwarder is then
+/// dropped as unreferenced. A llvm.threadlocal.address call on a
+/// thread-local alias becomes one on the aliased variable plus the offset
+/// (replaceAliasThreadLocalAddressCalls). Every other alias (with an offset
+/// into a function, a value type of the other kind, an ifunc as its aliasee,
+/// or thread-local while the aliased variable is not) stays, and runOnModule
+/// reports it.
+static bool lowerAliases(Module &M) {
+  struct Forwarder {
+    std::string Name;
+    FunctionType *Ty;
+    GlobalValue::LinkageTypes Linkage;
+    GlobalValue::VisibilityTypes Visibility;
+    GlobalValue::DLLStorageClassTypes DLLStorage;
+    GlobalValue::UnnamedAddr UnnamedAddr;
+    unsigned AddrSpace;
+    Function *Aliasee;
+  };
+  SmallVector<GlobalAlias *, 4> Lowered;
+  SmallVector<Forwarder, 4> Forwarders;
+  for (GlobalAlias &GA : M.aliases()) {
+    APInt Offset;
+    GlobalObject *GO = getAliasedObject(GA, Offset);
+    bool IsFunctionType = GA.getValueType()->isFunctionTy();
+    if (auto *F = dyn_cast_or_null<Function>(GO)) {
+      if (F->isDeclaration() || !IsFunctionType || !Offset.isZero())
+        continue;
+      if (!GA.hasLocalLinkage())
+        Forwarders.push_back(
+            {GA.getName().str(), cast<FunctionType>(GA.getValueType()),
+             GA.getLinkage(), GA.getVisibility(), GA.getDLLStorageClass(),
+             GA.getUnnamedAddr(), GA.getAddressSpace(), F});
+    } else if (auto *GV = dyn_cast_or_null<GlobalVariable>(GO);
+               !GV || IsFunctionType ||
+               (GA.isThreadLocal() && !GV->isThreadLocal())) {
+      continue;
+    } else if (GA.isThreadLocal()) {
+      // Before any alias is replaced, while the calls name GA.
+      replaceAliasThreadLocalAddressCalls(GA, *GV, Offset);
+    }
+    Lowered.push_back(&GA);
+  }
+  if (Lowered.empty())
+    return false;
+
+  // llvm.used and llvm.compiler.used may only list global values.
+  SmallPtrSet<const Constant *, 4> LoweredSet(Lowered.begin(), Lowered.end());
+  removeFromUsedLists(M, [&](Constant *C) { return LoweredSet.contains(C); });
+  // Every alias of a chain is replaced, in any order: an alias whose aliasee
+  // names another alias of the list gets that one's aliasee in turn.
+  for (GlobalAlias *GA : Lowered)
+    GA->replaceAllUsesWith(GA->getAliasee());
+  for (GlobalAlias *GA : Lowered)
+    GA->eraseFromParent();
+
+  // The names are free now.
+  for (const Forwarder &Fw : Forwarders) {
+    Function *Fwd =
+        Function::Create(Fw.Ty, Fw.Linkage, Fw.AddrSpace, Fw.Name, &M);
+    assert(Fwd->getName() == Fw.Name && "the alias kept its name");
+    Fwd->setVisibility(Fw.Visibility);
+    Fwd->setDLLStorageClass(Fw.DLLStorage);
+    Fwd->setUnnamedAddr(Fw.UnnamedAddr);
+    defineForwarder(*Fwd, *Fw.Aliasee);
+  }
+  return true;
+}
+
+/// Creates the trap stub that replaces the unresolved extern_weak function
+/// \p F as a callee: an internal definition named '<msil>undef_<IL name>'
+/// whose body is llvm.trap, printed 'ldnull' and 'throw' (msil-ld's name and
+/// body for the calls of an unresolved weak function, plan 5.9.6). It has the
+/// type of \p F, without the variable arguments of a variadic one: a
+/// variadic definition is an error (decision D19), and MSILFixFunctionBitcasts
+/// turns a variadic call of a function that is not variadic into a call of
+/// all of its arguments.
+static Function *createUndefStub(Function &F, const TargetMachine &TM) {
+  Module &M = *F.getParent();
+  LLVMContext &Ctx = F.getContext();
+  FunctionType *FTy = F.getFunctionType();
+  if (FTy->isVarArg())
+    FTy = FunctionType::get(FTy->getReturnType(), FTy->params(),
+                            /*isVarArg=*/false);
+  Function *Stub =
+      Function::Create(FTy, GlobalValue::InternalLinkage, F.getAddressSpace(),
+                       "<msil>undef_" + MSIL::getILName(F, TM), &M);
+  Stub->setCallingConv(F.getCallingConv());
+  BasicBlock *BB = BasicBlock::Create(Ctx, "entry", Stub);
+  CallInst::Create(Intrinsic::getOrInsertDeclaration(&M, Intrinsic::trap), {},
+                   "", BB);
+  new UnreachableInst(Ctx, BB);
+  return Stub;
+}
+
+/// Makes every llvm.global_ctors entry whose function is \p F call the
+/// function that \p GetReplacement returns instead.
+static void replaceGlobalCtor(Module &M, const Function &F,
+                              function_ref<Function *()> GetReplacement) {
+  GlobalVariable *Ctors = M.getNamedGlobal("llvm.global_ctors");
+  if (!Ctors || !Ctors->hasInitializer())
+    return;
+  auto *Init = dyn_cast<ConstantArray>(Ctors->getInitializer());
+  if (!Init)
+    return;
+  SmallVector<Constant *, 8> Entries;
+  bool Changed = false;
+  for (const Use &Op : Init->operands()) {
+    auto *Entry = cast<Constant>(Op.get());
+    auto *CS = dyn_cast<ConstantStruct>(Entry);
+    if (CS && CS->getNumOperands() >= 2 &&
+        CS->getOperand(1)->stripPointerCasts() == &F) {
+      SmallVector<Constant *, 3> Fields;
+      for (const Use &Field : CS->operands())
+        Fields.push_back(cast<Constant>(Field.get()));
+      Fields[1] = ConstantExpr::getPointerBitCastOrAddrSpaceCast(
+          GetReplacement(), Fields[1]->getType());
+      Entry = ConstantStruct::get(CS->getType(), Fields);
+      Changed = true;
+    }
+    Entries.push_back(Entry);
+  }
+  if (Changed)
+    Ctors->setInitializer(ConstantArray::get(Init->getType(), Entries));
+}
+
+/// Lowers the extern_weak declarations: nothing in the whole program defines
+/// them, so their address is null, as a native link makes it (judge-c-fidelity
+/// F5). A function that the import policy resolves (MSIL::getPInvokeModule:
+/// a Phase-1 import or the "msil-import-module" attribute) stays a P/Invoke.
+/// For any other function, its calls and invokes (undefined behavior, which a
+/// native program usually guards with 'if (f)') and the llvm.global_ctors
+/// entries naming it call the trap stub (createUndefStub), created once and
+/// only if needed; every other use (compares, initializers, stored addresses,
+/// the no_cfi and dso_local_equivalent wrappers) becomes null. The function
+/// leaves llvm.used and llvm.compiler.used and stays an unused declaration,
+/// which metadata may still name. A variable is null in every use and is
+/// erased, except a thread-local one, which stays: like any other
+/// thread-local variable it is an error (runOnModule) until phase 3 (P3-A).
+static bool lowerExternWeak(Module &M, const TargetMachine &TM) {
+  const Triple &TT = TM.getTargetTriple();
+  SmallVector<Function *, 4> Fns;
+  for (Function &F : M)
+    if (F.hasExternalWeakLinkage() && !F.isIntrinsic() &&
+        !MSIL::getPInvokeModule(TT, MSIL::getILName(F, TM), &F))
+      Fns.push_back(&F);
+  SmallVector<GlobalVariable *, 4> Vars;
+  for (GlobalVariable &GV : M.globals())
+    if (GV.hasExternalWeakLinkage() && !GV.isThreadLocal())
+      Vars.push_back(&GV);
+  if (Fns.empty() && Vars.empty())
+    return false;
+
+  // llvm.used and llvm.compiler.used may only list global values.
+  SmallPtrSet<const Constant *, 8> Weak(Fns.begin(), Fns.end());
+  Weak.insert_range(Vars);
+  removeFromUsedLists(M, [&](Constant *C) { return Weak.contains(C); });
+
+  for (Function *F : Fns) {
+    Function *Stub = nullptr;
+    auto GetStub = [&] {
+      if (!Stub)
+        Stub = createUndefStub(*F, TM);
+      return Stub;
+    };
+    for (Use &U : make_early_inc_range(F->uses()))
+      if (auto *CB = dyn_cast<CallBase>(U.getUser()); CB && CB->isCallee(&U))
+        U.set(GetStub());
+    replaceGlobalCtor(M, *F, GetStub);
+    // The old constructor list is dead now.
+    F->removeDeadConstantUsers();
+    replaceGlobalValueWrappers(*F, /*ByNull=*/true);
+    F->replaceNonMetadataUsesWith(Constant::getNullValue(F->getType()));
+  }
+  for (GlobalVariable *GV : Vars) {
+    Constant *Null = Constant::getNullValue(GV->getType());
+    replaceGlobalValueWrappers(*GV, /*ByNull=*/true);
+    GV->replaceAllUsesWith(Null);
+    GV->eraseFromParent();
+  }
+  return true;
+}
+
+/// Reports every global variable definition with an explicit section
+/// (judge-c-fidelity F4). A native link gives a section its meaning (the
+/// constructor tables .init_array and .CRT$XCU, a list between __start_ and
+/// __stop_ symbols), but the one data segment of a module has no sections:
+/// the variable would silently lose it, and a constructor registered so would
+/// never run. The variable stays ordinary data, so the output stays well
+/// formed. The special llvm.* globals and the llvm.metadata section hold no
+/// program data, a declaration has no data here, and a section on a function
+/// means nothing to a method.
+static void diagnoseGlobalSections(Module &M) {
+  for (GlobalVariable &GV : M.globals())
+    if (GV.hasSection() && !GV.isDeclarationForLinker() &&
+        !MSIL::isSpecialLLVMGlobal(GV))
+      M.getContext().emitError("global variable " + MSIL::getIRName(GV) +
+                               " in section \"" + GV.getSection() +
+                               "\" is not supported for MSIL yet (phase 2 CIL "
+                               "objects)");
+}
+
+/// The lowerings that hold only when the module is the whole program:
+/// aliases, extern_weak declarations and sections, in that order. Returns
+/// true if the module changed.
+static bool lowerWholeProgramSymbols(Module &M, const TargetMachine &TM) {
+  bool Changed = lowerAliases(M);
+  Changed |= lowerExternWeak(M, TM);
+  diagnoseGlobalSections(M);
+  return Changed;
+}
+
+/// Returns true if \p V, a function or a constant that refers to one, has a
+/// use outside the bodies of the functions in \p Bodies: in another function,
+/// in a global variable initializer (llvm.used, llvm.compiler.used and
+/// llvm.global_ctors included), in an alias or any other global value (the
+/// prefix or prologue data of a function, the personality of a function not
+/// in \p Bodies). The personality of a function in \p Bodies is part of its
+/// body, as for collectReferencedFunctions. A constant that nothing uses does
+/// not count. \p Visited holds the constants already walked.
+static bool isUsedOutside(const Value &V,
+                          const SmallPtrSetImpl<const Function *> &Bodies,
+                          SmallPtrSetImpl<const Constant *> &Visited) {
+  for (const User *U : V.users()) {
+    if (const auto *I = dyn_cast<Instruction>(U)) {
+      if (!Bodies.contains(I->getFunction()))
+        return true;
+      continue;
+    }
+    if (const auto *G = dyn_cast<Function>(U)) {
+      if (!Bodies.contains(G) || !G->hasPersonalityFn() ||
+          G->getPersonalityFn() != &V)
+        return true;
+      continue;
+    }
+    const auto *C = dyn_cast<Constant>(U);
+    if (!C || isa<GlobalValue>(C))
+      return true;
+    if (Visited.insert(C).second && isUsedOutside(*C, Bodies, Visited))
+      return true;
+  }
+  return false;
+}
+
+/// Adds to \p Refs the functions that the body of \p F refers to, directly or
+/// through constants (not through the initializers of global variables), and
+/// its personality function.
+static void collectReferencedFunctions(Function &F,
+                                       SmallVectorImpl<Function *> &Refs) {
+  SmallPtrSet<const Constant *, 16> Visited;
+  SmallVector<Constant *, 16> Worklist;
+  auto Add = [&](Value *V) {
+    if (auto *C = dyn_cast<Constant>(V); C && Visited.insert(C).second)
+      Worklist.push_back(C);
+  };
+  for (Instruction &I : instructions(F))
+    for (Use &Op : I.operands())
+      Add(Op.get());
+  if (F.hasPersonalityFn())
+    Add(F.getPersonalityFn());
+  while (!Worklist.empty()) {
+    Constant *C = Worklist.pop_back_val();
+    if (auto *G = dyn_cast<Function>(C))
+      Refs.push_back(G);
+    else if (!isa<GlobalValue>(C))
+      for (Use &Op : C->operands())
+        Add(Op.get());
+  }
+}
+
+/// Deletes the body of every discardable function definition that the
+/// program cannot reach, deciding by reachability as GlobalDCE does
+/// (driver-toolchain 5.4). The candidates are every linkonce and linkonce_odr
+/// function definition and every internal or private definition that the
+/// body of a candidate refers to, directly or through other candidates
+/// (collectReferencedFunctions). A candidate is live when something other
+/// than the body of a candidate uses it (isUsedOutside: a function that is
+/// not a candidate, a global variable initializer, llvm.used,
+/// llvm.compiler.used, llvm.global_ctors, any other global value), and when
+/// the body of a live candidate refers to it; every other candidate loses
+/// its body. So a dead cycle (two linkonce_odr functions that call each
+/// other, a linkonce_odr function that calls a cycle of internal functions)
+/// is dropped. Every module may drop such a definition (another module that
+/// uses it has its own copy, or the definition was local), and headers
+/// define many: the UCRT stdio.h of a -O0 compile defines the variadic
+/// sprintf and its helpers in every module, and a definition that is not
+/// compiled is not diagnosed. As for a diagnosed definition, the function
+/// stays as a declaration without a comdat. Global variables are never
+/// dropped, and a local function that no linkonce function reaches (one
+/// that nothing used from the start, a cycle of local functions) is not a
+/// candidate and stays, as before. Returns true if a body was deleted.
+static bool dropUnreferencedDiscardableFunctions(Module &M) {
+  // The candidates, the linkonce definitions first.
+  SmallPtrSet<const Function *, 16> Candidates;
+  SmallVector<Function *, 16> Order;
+  for (Function &F : M)
+    if (!F.isDeclaration() && F.hasLinkOnceLinkage()) {
+      Candidates.insert(&F);
+      Order.push_back(&F);
+    }
+  for (unsigned I = 0; I != Order.size(); ++I) {
+    SmallVector<Function *, 8> Refs;
+    collectReferencedFunctions(*Order[I], Refs);
+    for (Function *G : Refs)
+      if (!G->isDeclaration() && G->hasLocalLinkage() &&
+          Candidates.insert(G).second)
+        Order.push_back(G);
+  }
+
+  // The live candidates: the ones used outside the candidates' bodies, then
+  // every candidate that the body of a live one refers to.
+  SmallPtrSet<const Function *, 16> Live;
+  SmallVector<Function *, 16> Worklist;
+  for (Function *F : Order) {
+    SmallPtrSet<const Constant *, 8> Visited;
+    if (isUsedOutside(*F, Candidates, Visited)) {
+      Live.insert(F);
+      Worklist.push_back(F);
+    }
+  }
+  while (!Worklist.empty()) {
+    SmallVector<Function *, 8> Refs;
+    collectReferencedFunctions(*Worklist.pop_back_val(), Refs);
+    for (Function *G : Refs)
+      if (Candidates.contains(G) && Live.insert(G).second)
+        Worklist.push_back(G);
+  }
+
+  SmallVector<Function *, 16> Dropped;
+  for (Function *F : Order) {
+    if (Live.contains(F))
+      continue;
+    F->deleteBody();
+    // A declaration may not be in a comdat.
+    F->setComdat(nullptr);
+    Dropped.push_back(F);
+  }
+  // The constants that only the deleted bodies used refer to them still.
+  for (Function *F : Dropped)
+    F->removeDeadConstantUsers();
+  return !Dropped.empty();
+}
+
 // AsmPrinter::doInitialization creates a pseudo probe handler, which prints
 // .pseudoprobe directives into the method bodies, when the module has
 // !llvm.pseudo_probe_desc, and GC lowering's doInitialization instantiates
@@ -1022,6 +1892,13 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
   bool Changed = resetExceptionModel(M);
   Changed |= disableMetadataSections(M, TM);
 
+  // The module is the whole program until CIL objects (plan 5.8.10); then
+  // only whole-program mode lowers these.
+  Changed |= lowerWholeProgramSymbols(M, TM);
+
+  // Before any definition is diagnosed: one that is dropped is not compiled.
+  Changed |= dropUnreferencedDiscardableFunctions(M);
+
   AddrSpaceFinder ASFinder;
   FPTypeFinder FPFinder;
   ScalableOrTargetExtTypeFinder STFinder;
@@ -1048,6 +1925,7 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
       }
       continue;
     }
+    Changed |= lowerEmptyInlineAsm(F);
     bool HasError = diagnoseILNameLength(F, TM);
     HasError |= diagnoseDefinition(F, ASFinder, FPFinder, STFinder);
     if (!HasError) {
@@ -1099,6 +1977,8 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
       Changed = true;
     }
   }
+  // lowerAliases has lowered every alias of a definition plus a constant
+  // offset that fits its kind.
   for (GlobalAlias &GA : M.aliases()) {
     Ctx.emitError("alias " + MSIL::getIRName(GA) +
                   " is not supported for MSIL");

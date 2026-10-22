@@ -1195,8 +1195,10 @@ void MSILAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
 }
 
 void MSILAsmPrinter::emitGlobalAlias(const Module &M, const GlobalAlias &GA) {
-  // MSILPrepareIR replaces aliases by poison and erases them (decision D26),
-  // so only a pipeline that skips it gets here.
+  // MSILPrepareIR replaces an alias of a defined function (offset 0) or of a
+  // global variable (any constant offset) by its aliasee, every other alias by
+  // poison, and erases them all (decision D26 as amended for Phase 2), so only
+  // a pipeline that skips it gets here.
   GA.getContext().emitError("alias " + MSIL::getIRName(GA) +
                             " is not supported for MSIL");
 }

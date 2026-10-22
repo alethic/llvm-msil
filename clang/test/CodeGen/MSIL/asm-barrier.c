@@ -18,6 +18,17 @@
 // succeeds without a diagnostic, on Linux as well, and at -O0, where every
 // parameter is spilled to the static frame (M7).
 //
+// The BBOX runs (M12, plan section 12 row 'D36 amended'; backlog 2.3) compile
+// the black_box form 'asm volatile("" : : "r"(v) : "memory")' with -O2 -S:
+// clang emits it as the native triples do, and MSILPrepareIR lowers it to the
+// same singlethread fence, an llvm.fake.use of v and llvm.sideeffect. In
+// bbox() the asm comes after a computation, whose only use is the asm, and a
+// store, and before a second store to the same address: the product is still
+// computed (BBOXV), the first store, which the second would make dead without
+// the barrier, is kept before the MEMBARRIER line, and the second follows it
+// (BBOX). The function is compiled only under -DBBOX, so the TAB count above
+// stays three.
+//
 // This test does not assemble its output:
 // llvm/test/CodeGen/MSIL/fence.ll runs llc and ilasm on a copy of the IR that
 // clang emits for barrier() here (function 'asm_barrier_clang'), and
@@ -48,6 +59,16 @@
 // RUN: %clang --target=x86_64-unknown-linux-gnu-msil -O0 -fno-verbose-asm -S -o %t.lnx.o0.il %s 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=DIAG --allow-empty
 // RUN: FileCheck %s --input-file=%t.lnx.o0.il --check-prefix=O0
+
+// The black_box form (bbox below).
+// RUN: %clang --target=x86_64-pc-windows-msvc-msil -O2 -fno-verbose-asm -S -DBBOX -o %t.bbox.win.il %s 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=DIAG --allow-empty
+// RUN: FileCheck %s --input-file=%t.bbox.win.il --check-prefix=BBOX
+// RUN: FileCheck %s --input-file=%t.bbox.win.il --check-prefix=BBOXV
+// RUN: %clang --target=x86_64-unknown-linux-gnu-msil -O2 -fno-verbose-asm -S -DBBOX -o %t.bbox.lnx.il %s 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=DIAG --allow-empty
+// RUN: FileCheck %s --input-file=%t.bbox.lnx.il --check-prefix=BBOX
+// RUN: FileCheck %s --input-file=%t.bbox.lnx.il --check-prefix=BBOXV
 
 // DIAG-NOT: {{warning:|error:|LLVM ERROR|PLEASE submit}}
 
@@ -132,3 +153,25 @@ void fences(int *p) {
 // EXACT-NEXT:  {{^}}  stind.i4{{$}}
 // EXACT-NEXT:  {{^}}  ret{{$}}
 // EXACT-NEXT:  {{^}}} // end of method 'fences'{{$}}
+
+#ifdef BBOX
+void bbox(int *p, int x, int y) {
+  int v = x * y;
+  *p = 1;
+  __asm__ volatile("" : : "r"(v) : "memory");
+  *p = 2;
+}
+#endif
+
+// BBOX-LABEL:  .method {{.*}}'bbox'(
+// BBOX:        {{^}}  ldc.i4.1{{$}}
+// BBOX-NEXT:   {{^}}  stind.i4{{$}}
+// BBOX:        {{^[[:blank:]]+//MEMBARRIER$}}
+// BBOX:        {{^}}  ldc.i4.2{{$}}
+// BBOX-NEXT:   {{^}}  stind.i4{{$}}
+// BBOX:        {{^}}  ret{{$}}
+// BBOX-NEXT:   {{^}}} // end of method 'bbox'{{$}}
+
+// BBOXV-LABEL: .method {{.*}}'bbox'(
+// BBOXV:       {{^}}  mul{{$}}
+// BBOXV:       {{^}}} // end of method 'bbox'{{$}}

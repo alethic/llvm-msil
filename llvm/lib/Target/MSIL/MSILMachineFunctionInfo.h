@@ -21,6 +21,7 @@
 
 #include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "llvm/ADT/BitVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MIRYamlMapping.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineRegisterInfo.h"
@@ -61,6 +62,12 @@ class MSILFunctionInfo final : public MachineFunctionInfo {
 
   // The .maxstack of the method, computed by MSILStackCheck.
   unsigned MaxStack = 0;
+
+  // MSIL only (WebAssembly makes a new frame object for every byval copy):
+  // the frame indices of the byval slots, one per argument position, which
+  // getByvalSlot creates on first use (-1 until then). Not serialized to MIR:
+  // the frame objects themselves are.
+  SmallVector<int, 4> ByvalSlots;
 
 public:
   explicit MSILFunctionInfo(const Function &F, const TargetSubtargetInfo *STI) {
@@ -139,6 +146,16 @@ public:
 
   unsigned getMaxStack() const { return MaxStack; }
   void setMaxStack(unsigned N) { MaxStack = N; }
+
+  /// Returns the frame index of this function's \p Index-th byval slot, into
+  /// which LowerCall copies the \p Index-th byval argument of every call. The
+  /// slot is created on first use and grown to the largest \p Size and
+  /// \p Alignment asked for. A copy is dead once its callee returns (C ends a
+  /// byval parameter's lifetime there), so the calls share the slot; the
+  /// byval arguments of one call use different indices and therefore
+  /// different slots.
+  int getByvalSlot(MachineFrameInfo &MFI, unsigned Index, uint64_t Size,
+                   Align Alignment);
 };
 
 namespace MSIL {

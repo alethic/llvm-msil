@@ -7,7 +7,9 @@
 ; that passes one to puts loads that field. linkonce, weak, weak_odr and common
 ; globals and a linkonce_odr function in a COMDAT are public; an internal
 ; global in a function's COMDAT is assembly; a common global is
-; zero-initialized. No linkage or COMDAT text reaches the output, nothing is
+; zero-initialized. Since M12 MSILPrepareIR drops a linkonce or linkonce_odr
+; function that nothing uses (discardable-defs.ll), so 'inl' has a caller,
+; 'call_inl'. No linkage or COMDAT text reaches the output, nothing is
 ; reported, both triples (the COMDATs are written as clang writes them for
 ; windows-msvc; the IR is the same for the Linux triple), -O2 and -O0, and the
 ; output assembles.
@@ -77,6 +79,14 @@ define i32 @sum_linkages() {
   %s2 = add i32 %s1, %c
   %s3 = add i32 %s2, %d
   ret i32 %s3
+}
+
+; CHECK-LABEL: {{^}}.method public static int32 'call_inl'(int32) cil managed{{$}}
+; CHECK:       {{^}}  call int32 'inl'(int32){{$}}
+; CHECK:       {{^}}} // end of method 'call_inl'{{$}}
+define i32 @call_inl(i32 %x) {
+  %r = call i32 @inl(i32 %x)
+  ret i32 %r
 }
 
 declare i32 @puts(ptr)

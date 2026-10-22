@@ -17,7 +17,10 @@
 ; ldnull; throw (TrapUnreachable, decision D8), never by falling off its end.
 ; Access is 'public' for every non-local linkage (linkonce and weak
 ; definitions are ordinary definitions, decision D26) and 'assembly' for
-; internal and private functions. The body checks run at llc's default -O2;
+; internal and private functions. Since M12 MSILPrepareIR drops a linkonce or
+; linkonce_odr definition that nothing uses (discardable-defs.ll), so
+; ret_linkonce_odr has a caller; the internal and private functions, which
+; nothing uses either, stay. The body checks run at llc's default -O2;
 ; the -O0 runs check the headers, the undef and poison bodies (O0) and that
 ; the output assembles.
 
@@ -84,6 +87,7 @@
 ; SIG:      {{^}}.method public static int32 'ret_linkonce_odr'() cil managed{{$}}
 ; SIG:      {{^}}.method public static int32 'ret_weak'() cil managed{{$}}
 ; SIG:      {{^}}.method public static int32 'ret_hidden'() cil managed{{$}}
+; SIG:      {{^}}.method public static int32 'call_ret_linkonce_odr'() cil managed{{$}}
 ; SIG-NOT:  .method
 
 source_filename = "ret.c"
@@ -480,4 +484,13 @@ define weak i32 @ret_weak() {
 ; CHECK-NEXT:  {{^}}} // end of method 'ret_hidden'{{$}}
 define hidden i32 @ret_hidden() {
   ret i32 5
+}
+
+; CHECK-LABEL: .method {{.*}}'call_ret_linkonce_odr'(
+; CHECK:       {{^}}  call int32 'ret_linkonce_odr'(){{$}}
+; CHECK-NEXT:  {{^}}  ret{{$}}
+; CHECK-NEXT:  {{^}}} // end of method 'call_ret_linkonce_odr'{{$}}
+define i32 @call_ret_linkonce_odr() {
+  %r = call i32 @ret_linkonce_odr()
+  ret i32 %r
 }

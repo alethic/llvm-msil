@@ -18,7 +18,7 @@ package files. Section 5 shows how to write the runtimeconfig yourself.
 | Building | Visual Studio 2026 with the bundled clang-cl, lld-link and llvm-lib (any C++17 compiler works with the plain CMake route), CMake, Ninja, Python 3 | a C++17 compiler (clang or gcc), CMake, Ninja, Python 3 |
 | Assembling | the .NET Framework ilasm, `%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\ilasm.exe` (always present), or the NuGet `runtime.win-x64.Microsoft.NETCore.ILAsm` | the NuGet package `runtime.linux-x64.Microsoft.NETCore.ILAsm` (10.0.12 is what the tests use) |
 | Running | .NET 8 or later; .NET Framework 4.8 for Windows triples | .NET 8 or later |
-| Running the tests | everything above, plus a .NET SDK (it builds the `jitall` checker), the dotnet tool `dotnet-ilverify`, ildasm and PEVerify (Windows SDK, `NETFX 4.8 Tools`), and optionally WSL Ubuntu with .NET 10 and python3 for the Linux leg | everything above, plus the .NET SDK, `dotnet-ilverify` and the NuGet `runtime.linux-x64.Microsoft.NETCore.ILDAsm` |
+| Running the tests | everything above, plus a .NET SDK (it builds the `jitall` checker), the dotnet tool `dotnet-ilverify`, ildasm and PEVerify (Windows SDK, `NETFX 4.8 Tools`), the Visual Studio "C++ Clang tools" (their compiler-rt builtins and `ld.lld` serve the native oracles), and optionally WSL Ubuntu with python3 and curl or wget for the Linux legs (the legs' own .NET runtimes and Linux libraries come from the host setup of section 7, without root) | everything above, plus the .NET SDK, `dotnet-ilverify` and the NuGet `runtime.linux-x64.Microsoft.NETCore.ILDAsm` |
 
 The NuGet ilasm and ildasm do not need a .NET project of yours. The repository has a
 download-only project for them:
@@ -67,8 +67,8 @@ pwsh -NoProfile -File msil/utils/build/msil-configure.ps1 -Experimental MSIL
 pwsh -NoProfile -File msil/utils/build/msil-build.ps1 llc opt clang FileCheck not count split-file llvm-config llvm-profdata TargetParserTests MCTests MSILTests
 ```
 
-The second line builds everything the tests need (the build targets of milestone M11, which
-`msil/utils/ci/build.ps1` and `build.sh` also build): the tools, the lit helpers and the unit
+The second line builds everything the tests need (the build targets of milestones M11 and M12,
+which `msil/utils/ci/build.ps1` and `build.sh` also build): the tools, the lit helpers and the unit
 tests (`LLVM_BUILD_TESTS` is off, so unit tests are built only when named). `llvm-profdata` is
 there for two upstream clang driver tests of the upstream-hooks check (section 7), and the whole
 of `TargetParserTests` and `MCTests` runs in that check too. A first build compiles about 3,500
@@ -186,8 +186,8 @@ dotnet exec --runtimeconfig fib.runtimeconfig.json fib.dll   # same; the file ma
 - Arguments after the assembly reach `main`: `dotnet fib.dll a b` gives `argc` 3, and `argv[0]`
   is the path of the `.dll` (`Environment.GetCommandLineArgs()`).
 - The exit status is `main`'s return value. Linux keeps only its low 8 bits, as for native
-  programs. A trap (`__builtin_trap`, or reaching `__builtin_unreachable`) ends in an unhandled
-  `System.NullReferenceException`.
+  programs. A trap (`__builtin_trap`, reaching `__builtin_unreachable`, or a call of a `weak`
+  function that nothing defines) ends in an unhandled `System.NullReferenceException`.
 
 .NET Framework 4.8 (Windows triples only) runs the `.exe` directly, with no configuration file:
 
@@ -240,8 +240,8 @@ depth of every instruction and the exact `.maxstack` and stops the compile on a 
 | Unit tests | `llvm/unittests/Target/MSIL`, plus the MSIL cases of `TargetParserTests` and `MCTests` | type mapping, name quoting, stack effects, target machine, streamer, triples, target selection |
 | llc and MIR tests | `llvm/test/CodeGen/MSIL` | the emitted IL, FileCheck'ed on both x86_64 triples (and the aarch64 ones where the ABI differs), and assembled with ilasm when it is available; the pass pipeline and the MIR at llc's stop points |
 | clang tests | `clang/test/CodeGen/MSIL`, `clang/test/Preprocessor/init-msil.c`, `clang/test/Driver/msil-toolchain.c` | the clang wrapper, predefines, driver errors (the ELF-only section options among them), `-mllvm` options, `-cc1as`, Design.md 12's literal command |
-| Execution tests | `msil/test/M1/<NN-area>/` | C and IR programs compiled at `-O0` and `-O2` (and in the `more-levels` leg at the other levels; see below), assembled, verified, force-JITted, run and compared with checked-in transcripts and with a native build; `11-programs/` is the Design.md 12 program corpus |
-| Harness self-tests | `msil/test/harness/` | the runner, verifier and JIT checker themselves |
+| Execution tests | `msil/test/M1/<NN-area>/` | C and IR programs compiled at `-O0` and `-O2` (and in the `more-levels` leg at the other levels; see below), assembled, verified, force-JITted, run and compared with checked-in transcripts and with a native build (the *native oracle*, below); `11-programs/` is the Design.md 12 program corpus |
+| Harness self-tests | `msil/test/harness/` | the runner, verifier and JIT checker themselves, `update-expected.py`, the E7 Linux oracle, and lit's configuration errors (bad `msil_*` parameters stop lit with exit status 2) |
 | Upstream regression tests | the upstream lit tests and unit tests named in `msil/utils/upstream-hooks.txt` | the upstream behaviour of every upstream file the fork changes (the upstream-hooks check, below) |
 
 ```sh
@@ -266,33 +266,116 @@ The execution suite takes lit parameters (all of them are in
 (the names are those of `msil/utils/ci/lit-legs.ps1`). Every lit leg also passes
 `--param msil_require_verify=1 --param msil_require_exec=1`, which turn a missing verifier,
 ildasm, jitall, PEVerify (Windows), ilasm, runtime or MSIL-enabled clang into an error instead of
-skipped steps or UNSUPPORTED tests:
+skipped steps or UNSUPPORTED tests. *WSL* below stands for
+`msil_runner=wsl msil_triple=x86_64-unknown-linux-gnu-msil msil_wsl_dotnet=private
+msil_dotnet_runtime=10` (the private .NET 10 in WSL), *E7* for
+`msil_native_oracle=required msil_linux_sysroot=<sysroot>` (the E7 Linux oracle; both are
+described under "Native oracles and the WSL runtime" below), and the legs
+marked `-Wsl` run only when `lit-legs.ps1` gets `-Wsl` (or names them with `-Leg`):
 
 | Leg | Paths | Extra `--param`s |
 |---|---|---|
-| `net8` | `llvm/test/CodeGen/MSIL`, the clang MSIL tests, `msil/test` | `msil_dotnet_runtime=8 msil_native_oracle=required msil_run_netfx=1` (.NET 8, the native oracle and .NET Framework 4.8; the native link needs `LIB`: use a VS x64 developer prompt, or `msil-lit.ps1`, which enters that environment) |
+| `net8` | `llvm/test/CodeGen/MSIL`, the clang MSIL tests, `msil/test` | `msil_dotnet_runtime=8 msil_native_oracle=required msil_run_netfx=1` (.NET 8, the native oracle with the compiler-rt builtins, and .NET Framework 4.8; the native link needs `LIB`: use a VS x64 developer prompt, or `msil-lit.ps1`, which enters that environment) |
 | `net10` | `msil/test/M1` | `msil_dotnet_runtime=10` |
 | `net8-tc0` | `msil/test/M1` | `msil_dotnet_runtime=8 msil_dotnet_env=DOTNET_TieredCompilation=0` (optimizing JIT) |
 | `more-levels` | `msil/test/M1` | `msil_dotnet_runtime=8 msil_opt_levels=O1,O3,Os,Oz`: the four levels the other legs leave out (they run `-O0` and `-O2`); `.ll` tests that use `%{msil_ll}` run at `-O1` and `-O3` only, because llc has no `-Os` or `-Oz`. The three trap tests (`01-int/trap-call-before-div.ll`, `01-int/trap-call-before-rem.ll`, `03-control/trap.ll`) and `01-int/calls-arith-debug-info.test` have explicit RUN lines that pin `-O0` and `-O2` in every leg |
-| `wsl-net10` | `msil/test/M1`, `msil/test/harness` | `msil_runner=wsl msil_triple=x86_64-unknown-linux-gnu-msil msil_dotnet_runtime=10` |
-| `wsl-net10-tc0` | `msil/test/M1` | the `wsl-net10` parameters plus `msil_dotnet_env=DOTNET_TieredCompilation=0` |
-| `wsl-ilasm` | `msil/test/M1/11-programs` | the `wsl-net10` parameters plus `msil_wsl_ilasm=<the NuGet linux-x64 ilasm>`: assembled by the Linux ilasm inside WSL |
+| `wsl-net10` (`-Wsl`) | `msil/test/M1`, `msil/test/harness` | *WSL* and *E7* |
+| `wsl-net10-tc0` (`-Wsl`) | `msil/test/M1` | *WSL* plus `msil_dotnet_env=DOTNET_TieredCompilation=0` |
+| `wsl-ilasm` (`-Wsl`) | `msil/test/M1/11-programs` | *WSL* plus `msil_wsl_ilasm=<the NuGet linux-x64 ilasm>`: assembled by the Linux ilasm inside WSL |
+| `wsl-quick` (`-Wsl`) | `msil/test/M1/11-programs`, `msil/test/harness`, and `msil/test/M2` once it exists | *WSL* and *E7*: the short WSL leg that every Phase 2 milestone gate runs from M13 on (plan 5.12.10) |
 | `modern-ilasm` | `msil/test/M1/11-programs` | `msil_ilasm=<the NuGet win-x64 ilasm.exe>` |
 | `roundtrip` | `msil/test/M1/11-programs` | `msil_roundtrip=1`: every assembly goes through ildasm and ilasm (Design.md 5.5) and the reassembled one runs |
-| `expected` | `msil/test/M1` | not lit: `update-expected.py --check` |
+| `expected` | `msil/test/M1` | not lit: `update-expected.py --check` (the Windows native oracle, with the compiler-rt builtins) |
+| `expected-linux` (`-Wsl`) | `msil/test/M1` | not lit: `update-expected.py --check --os linux --linux-sysroot <sysroot>` (the E7 oracle, against `<stem>.linux.expected` where one exists, else `<stem>.expected`) |
 | `utc` | six tests of `llvm/test/tools/UpdateTestChecks/update_llc_test_checks` | not lit: `msil/utils/run-utc-tests.py --llc <build>/bin/llc msil-basic x86-basic x86-mir-only x86-asm-mir-mixed x86-constant-pool asm-show-inst` runs their RUN lines (lit reports them UNSUPPORTED on Windows: `llvm/test/tools/UpdateTestChecks/lit.local.cfg` sets the `llc-binary` feature they require only when a file named exactly `llc` exists); the log is `build/lit-results/utc.log` |
-| `all-levels` (nightly) | `msil/test` | `msil_opt_levels=O0,O1,O2,O3,Os,Oz` |
+| `all-levels` (nightly, `-Full`) | `msil/test` | `msil_opt_levels=O0,O1,O2,O3,Os,Oz` |
+
+`<sysroot>` is `$MSIL_LINUX_SYSROOT`, else `C:\llvm-msil-scratch\linux-sysroot`. Each lit leg
+writes its lit arguments one per line (`--param=<name>=<value>`, `--xunit-xml-output=<file>`)
+into the response file `build/lit-results/<leg>.params.rsp` and runs
+`msil-lit.ps1 -LitArgs:"-sv @<file>"`; lit reads the file itself, so a parameter value may
+contain blanks (a NuGet ilasm under a profile directory with a space, for example). The build
+directory may not, because `msil-lit.ps1` splits `-LitArgs` at blanks; the leg then fails naming
+it.
 
 Expected transcripts (`<test>.expected`) are generated from a native build, never written by
 hand, and CI checks that they are current:
 
 ```sh
 python msil/utils/update-expected.py msil/test/M1/11-programs/fib.c   # write
-python msil/utils/update-expected.py --check msil/test/M1             # check
+python msil/utils/update-expected.py --check msil/test/M1             # check (Windows oracle)
+python msil/utils/update-expected.py --check --os linux msil/test/M1  # check (E7 Linux oracle)
 ```
+
+The script compiles C with the flags of `%{msil_cflags}` (`-std=gnu17 -ffreestanding
+-Werror=return-type`) and runs the native builds in parallel (`-j`, default one per CPU). On
+Windows its MSVC builds link the compiler-rt builtins (`--rtlib`, default `auto`, as
+`msil_native_rtlib` below). `--os linux` uses the E7 oracle (`--linux-sysroot`, `--ld-lld`,
+`--wsl-distro`); writing then creates `<stem>.linux.expected` only for a transcript that differs
+from `<stem>.expected`, and removes one that no longer differs. No test of `msil/test/M1` needs
+one today. `--check` compares with `<stem>.<os>.expected` where it exists, else with
+`<stem>.expected`, the file the test itself picks for that OS.
 
 How to add a test, what each status line means and how to reproduce a failure step by step is in
 [msil/test/README.md](../../../msil/test/README.md).
+
+### Native oracles and the WSL runtime
+
+With `--param msil_native_oracle=1` or `required` (`required` in the `net8`, `wsl-net10` and
+`wsl-quick` legs), every execution test also builds its source for the native triple
+(`x86_64-pc-windows-msvc` for `x86_64-pc-windows-msvc-msil`, and so on), runs it, and compares
+its transcript with the same `.expected` file as the MSIL build's.
+
+- **Windows: compiler-rt.** A native MSVC build of an `__int128` test calls compiler-rt helpers
+  (`__udivti3`, `__fixdfti`, ...) that no MSVC library has, and the fork builds no compiler-rt.
+  `--param msil_native_rtlib=auto` (the default) links the newest
+  `clang_rt.builtins-x86_64.lib` of the Visual Studio LLVM
+  (`%VCINSTALLDIR%Tools\Llvm\x64\lib\clang\<version>\lib\windows`, from the "C++ Clang tools"
+  component), else of the LLVM whose `clang-cl` or `lld-link` is on `PATH`; a path names
+  another library and `none` turns it off. It applies to MSVC triples on a Windows host. When
+  the library is missing, `msil_native_oracle=required` is a configuration error; lit prints
+  `msil: native rtlib: <path>` when it found one.
+- **Linux triple under WSL: the E7 oracle.** It needs no C compiler, no C headers and no root
+  inside WSL (the distribution has none of the first two). The tree's clang compiles each test
+  on Windows for `x86_64-unknown-linux-gnu` with `-fno-pic -c`; `ld.lld` (the tree's, else the
+  one on `PATH`, else the Visual Studio LLVM's) links it as
+  `ld.lld -dynamic-linker /lib64/ld-linux-x86-64.so.2 --as-needed start.o <test>.o libm.so.6
+  libc.so.6 libgcc_s.so.1`, where `start.o` is `msil/utils/linux-oracle/start.c` (a minimal
+  `_start` that runs the program's `.init_array` constructors, then `exit(main(argc, argv))`,
+  compiled once per lit run) and the libraries are the WSL distribution's own, copied into
+  `<sysroot>` by `make-linux-sysroot.py`. `libgcc_s.so.1` provides the `__int128` helpers that
+  `libc.so.6` does not export; `--as-needed` keeps it out of programs that do not call them.
+  `msil-run.py --native --runner wsl` then runs the program inside WSL, with the limits and the
+  private directory of every other run. `--param msil_linux_sysroot=<dir>` names the sysroot
+  (default as `<sysroot>` above, or `/` on a Linux host); a named one without `libc.so.6` and
+  `libm.so.6` is a configuration error. With `msil_runner=wsl` and the native oracle on, lit
+  prints `msil: native oracle: E7 (<ld.lld>, sysroot <dir>)`. On the Linux CI job, which runs
+  the Linux triple natively, the native oracle is simply clang and the system linker.
+- **The private WSL runtime.** The WSL legs pass `msil_wsl_dotnet=private`: programs and jitall
+  run on `$HOME/.dotnet-msil/dotnet` inside WSL, where `msil-wsl-dotnet.sh` installed
+  Microsoft.NETCore.App 8.0.31 and 10.0.13 with Microsoft's `dotnet-install.sh`, so an
+  unattended upgrade of the distribution's own dotnet packages never changes the runtime under
+  test. lit prints `msil: WSL dotnet (private): <path> (WSL Ubuntu, Microsoft.NETCore.App
+  <versions>)`; when `private` is named but not installed, the run stops with a configuration
+  error that names the script. Without the parameter lit takes the private runtime when it is
+  installed, else the distribution's `dotnet` on `PATH`, and says so. An absolute WSL path
+  names any other dotnet host.
+
+**Host setup.** The private runtimes and the E7 sysroot are made once per host, by idempotent
+commands that need no root, change no system setting and write nothing inside the repository
+(they take seconds once done; the first run downloads the two runtimes):
+
+```powershell
+wsl -d Ubuntu --cd <repository> --exec bash msil/utils/msil-wsl-dotnet.sh   # the private runtimes
+python msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot # the E7 sysroot
+```
+
+`make-linux-sysroot.py` copies `libc.so.6`, `libm.so.6`, `libgcc_s.so.1` and the dynamic loader
+out of the distribution (symbolic links resolved, SHA-256 checked) into
+`usr/lib/x86_64-linux-gnu/` and `lib64/`, writes the linker scripts `libc.so` and `libm.so` and
+a stamp with the distribution's glibc version, rewrites only files that changed, and refuses a
+directory inside the repository. From M15 `msil-ld` uses the same directory as `--sysroot`.
+`run-m1-gate.ps1` runs both as its `host-setup` step.
 
 ### The milestone-1 gate and CI
 
@@ -305,32 +388,47 @@ pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List                          
 `run-m1-gate.ps1` runs the scripts in `msil/utils/ci/` in the order the CI workflow
 `.github/workflows/msil-ci.yml` runs them: `configure.ps1`, `build.ps1` (the build targets of
 section 2 and jitall), `unit-tests.ps1` (`TargetParserTests`, `MCTests` and `MSILTests`, no
-skipped test allowed), `lit-legs.ps1 -Wsl` (the legs above) and `upstream-hooks.ps1` (the
-upstream-hooks check below, every leg; the gate checks that each of them has a row). The gate's
-`-NoWsl` leaves out `-Wsl` and with it the three WSL legs, `-Full` adds `all-levels`, `-Leg` runs
-only the named legs, `-SkipUpstreamHooks` leaves out the upstream-hooks step, and
-`-SkipConfigure`, `-SkipBuild` and `-SkipUnitTests` reuse what is there. Unless `-NoWsl`, a
-`ci-sh` row smoke-checks the Linux job's scripts inside WSL (`bash -n` on
-`msil/utils/ci/*.sh`, `lit-legs.sh --list` against its header, and a non-zero exit with FAIL
-rows against an empty build directory); the Linux job's configure, build, unit-test and lit
-steps themselves run only in CI. A child script that exits non-zero without a FAIL row, and
-every selected leg without a row, add FAIL rows. A failed configure or build stops the unit
-tests, the legs and the upstream-hooks step (`ci-sh` needs no build and still runs); every leg
-runs even after another one failed. A lit leg passes when lit exits 0 and at least one test
-passed, `expected` and `utc` when their script exits 0; the lit log and xunit file of a leg are
-`build/lit-results/<leg>.log` and `<leg>.xml`. The run ends with a summary table with one row
-per step or leg and exits 0 only when every row passed. A full run takes well over an hour.
+skipped test allowed), then, on the development host only, the `host-setup` step (the two
+commands of the host setup above, as the rows `host-setup/wsl-dotnet` and
+`host-setup/linux-sysroot`), then `lit-legs.ps1 -Wsl` (the legs above) and `upstream-hooks.ps1`
+(the upstream-hooks check below, every leg; the gate checks that each of them has a row). A
+failed `host-setup` row does not stop the legs; the WSL legs that need what it makes then fail
+with a configuration error that names it. The gate's `-NoWsl` leaves out `host-setup`, `-Wsl`
+and with it the five `-Wsl` legs, `-Full` adds `all-levels`, `-Leg` runs only the named legs,
+`-SkipUpstreamHooks` leaves out the upstream-hooks step, and `-SkipConfigure`, `-SkipBuild` and
+`-SkipUnitTests` reuse what is there. Unless `-NoWsl`, a `ci-sh` row smoke-checks the Linux
+job's scripts inside WSL (`bash -n` on `msil/utils/ci/*.sh`, `lit-legs.sh --list` against its
+header, and a non-zero exit with FAIL rows against an empty build directory); the Linux job's
+configure, build, unit-test and lit steps themselves run only in CI. A child script that exits
+non-zero without a FAIL row, and every selected leg without a row, add FAIL rows. A failed
+configure or build stops `host-setup`, the unit tests, the legs and the upstream-hooks step
+(`ci-sh` needs no build and still runs); every leg runs even after another one failed. A lit leg
+passes when lit exits 0 and at least one test passed, `expected` and `expected-linux` when their
+script exits 0 and at least one test matched, `utc` when its script exits 0; the lit log, xunit
+file and response file of a leg are `build/lit-results/<leg>.log`, `<leg>.xml` and
+`<leg>.params.rsp`. The run ends with a summary table with one row per step or leg and exits 0
+only when every row passed. A full run takes well over an hour.
+
+From M12 on, each milestone's own gate runs a part of this in about 30 minutes (plan 5.12.10:
+the `net8` leg, `wsl-quick`, the upstream-hooks `manifest` and `pins` legs, or all of the check
+when the milestone changes an upstream file, and the milestone's own legs; M12's gate runs
+`net8`, `net10`, `wsl-net10` instead of `wsl-quick`, `roundtrip`, `expected-linux` and the whole
+upstream-hooks check), and `run-m1-gate.ps1` runs in full after the commits of M12, M15, M18
+and M20.
 
 The Windows CI job runs the same scripts, except that `configure.ps1 -Ci` configures with the
-cache file instead of `msil-configure.ps1`, `lit-legs.ps1` runs without `-Wsl` (a GitHub
-runner has no WSL), and `upstream-hooks.ps1` runs as `-NoCompile -NoManifest -MinPass 250`
-whenever the build passed (also after failed unit tests or legs). The Linux job runs their
-`.sh` twins, whose legs cover `x86_64-unknown-linux-gnu-msil` natively on .NET 8 and .NET 10,
-including `more-levels` and `utc` (`bash msil/utils/ci/lit-legs.sh --list`); its `--full` legs
-add `all-levels` and `upstream`, which builds and runs all of `ninja check-llvm check-clang`.
-The workflow is committed with a manual trigger only (`workflow_dispatch`, whose `full` input
-selects the full legs, as a nightly schedule would); enabling push, pull-request or nightly runs
-is the repository owner's decision.
+cache file instead of `msil-configure.ps1`, there is no `host-setup`, `lit-legs.ps1` runs
+without `-Wsl` (a GitHub runner has no WSL), and `upstream-hooks.ps1` runs as `-NoCompile
+-NoManifest -MinPass 250` whenever the build passed (also after failed unit tests or legs). The
+Linux job runs their `.sh` twins, whose legs cover `x86_64-unknown-linux-gnu-msil` natively on
+.NET 8 and .NET 10, including `more-levels` and `utc` (`bash msil/utils/ci/lit-legs.sh --list`);
+its `expected` leg is the native Linux oracle (`update-expected.py --check` on Linux, against
+`<stem>.linux.expected` where one exists), and its `--full` legs add `all-levels` and
+`upstream`, which builds and runs all of `ninja check-llvm check-clang`. Both jobs install .NET
+with `actions/setup-dotnet` pinned at v5.4.0
+(`26b0ec14cb23fa6904739307f278c14f94c95bf1`). The workflow is committed with a manual trigger
+only (`workflow_dispatch`, whose `full` input selects the full legs, as a nightly schedule
+would); enabling push, pull-request or nightly runs is the repository owner's decision.
 
 ### The upstream-hooks check
 
@@ -459,7 +557,7 @@ about 1,000 unrelated TUs), and never deletes or cleans the tree: for a broken c
 `cmake --fresh` on it by hand or point `MSIL_HOOKS_BUILD_DIR` at a new directory. What stays
 uncovered: the lldb file is only syntax-checked, and no ARM or lldb test runs.
 
-**Where it runs.** `run-m1-gate.ps1` runs every leg (step 5, after the lit legs;
+**Where it runs.** `run-m1-gate.ps1` runs every leg (step 6, after the lit legs;
 `-SkipUpstreamHooks` leaves it out). The Windows CI job runs `-NoCompile -NoManifest -MinPass
 250`: its shallow checkout has no merge commit for the manifest leg, the hooks tree is a
 development-host cost, and its build has no WebAssembly target, so the list's WebAssembly tests
@@ -474,9 +572,13 @@ manual full CI runs.
 |---|---|
 | `emitting object files is not yet supported for MSIL target` | `-S` is missing; Phase 1 has no object files or linker |
 | `undefined function 'f' is not defined in this module and is not a Phase-1 import` | every function must be defined in the same file, except `puts`, `putchar` and the C math library (Status.md) |
-| `runtime helper '__divti3' is not available for MSIL yet (phase 3)` | the code needs a compiler-rt helper that the backend would call: `__int128` division and conversions to or from floating point, `_Float16` arithmetic (Status.md section 3). Helpers that clang itself calls (`__muldc3` for `_Complex` multiplication, `__atomic_*` for atomics) are reported as undefined functions instead |
+| `runtime helper '__fixdfti' is not available for MSIL yet (phase 3)` | the code needs a compiler-rt helper that the backend would call: conversions between floating point and `__int128` under strict floating point, `_Float16`/`__bf16` arithmetic and conversions (`__extendhfsf2`), `__bf16` parameters, arguments and return values (`__truncsfbf2`, `__extendbfsf2`) (Status.md section 3). `__int128` division and the ordinary conversions are expanded inline since M12, so a build from before M12 also names `__divti3`, `__udivti3`, `__floattidf`, ... here. Helpers that clang itself calls (`__muldc3` for `_Complex` multiplication, `__atomic_*` for atomics) are reported as undefined functions instead |
 | `unknown target triple '...-msil'` | Darwin and i686 MSIL triples come in later phases; Windows MSIL triples name `msvc` or `gnu` |
 | `... is not supported for MSIL yet` | a Phase-1 limitation; Status.md lists them |
+| `global variable @p_init in section ".CRT$XCU" is not supported for MSIL yet (phase 2 CIL objects)` | a variable with `__attribute__((section(...)))` or `__declspec(allocate(...))`; the section would be lost, and a constructor registered in `.init_array` or `.CRT$XCU` would never run. Use `__attribute__((constructor))`, or drop the section (Status.md section 3) |
+| `alias @a is not supported for MSIL`, `ifunc @f is not supported for MSIL` | only aliases of a defined function (at offset 0) and of a variable are lowered (Status.md section 2); ifuncs are never supported |
+| `inline assembly is not supported for the MSIL target '...'` (clang) or `inline assembly is not supported for MSIL` (llc) | only empty `asm` statements work: with no operands, or with inputs, read-write (`"+r"`), tied (`"0"`) and memory outputs. An output that is not tied to an input (`"=r"`) gets no value from an empty `asm` and is rejected, and so is a condition-flag output (`"=@ccz"`, `"+@ccz"`), which native code sets from the flags after the statement (Status.md section 2) |
+| `the va_arg instruction is not supported for MSIL yet (phase 3 variadics)` | LLVM IR with a `va_arg` instruction (variadic functions are phase 3); before M12 one of a struct or array type crashed llc instead |
 | `The library 'hostpolicy.dll' required to execute the application was not found` (Windows) or `The library 'libhostpolicy.so' required to execute the application was not found` (Linux), exit `0x80008083` or 131 | no `<name>.runtimeconfig.json` next to the `.dll` (section 5) |
 | `You must install or update .NET to run this application` | the runtimeconfig names a runtime that is not installed; install it or add `"rollForward": "Major"` |
 | `System.DllNotFoundException` naming `libc`, `libm.so.6`, `ucrtbase` or `msvcrt` | the assembly was built for another OS than the one running it |

@@ -21,6 +21,7 @@
 #include "MSILSubtarget.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/CodeGen/Analysis.h"
+#include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/Target/TargetMachine.h"
@@ -32,6 +33,8 @@ MachineFunctionInfo *
 MSILFunctionInfo::clone(BumpPtrAllocator &Allocator, MachineFunction &DestMF,
                         const DenseMap<MachineBasicBlock *, MachineBasicBlock *>
                             &Src2DstMBB) const {
+  // The copy keeps the byval slots: a cloned function has the same frame
+  // objects.
   return DestMF.cloneInfo<MSILFunctionInfo>(*this);
 }
 
@@ -39,6 +42,31 @@ void MSILFunctionInfo::initWARegs(MachineRegisterInfo &MRI) {
   assert(WARegs.empty());
   unsigned Reg = MSIL::UnusedReg;
   WARegs.resize(MRI.getNumVirtRegs(), Reg);
+}
+
+int MSILFunctionInfo::getByvalSlot(MachineFrameInfo &MFI, unsigned Index,
+                                   uint64_t Size, Align Alignment) {
+  if (Index >= ByvalSlots.size())
+    ByvalSlots.resize(Index + 1, -1);
+  int &FI = ByvalSlots[Index];
+  if (FI == -1) {
+    FI = MFI.CreateStackObject(Size, Alignment, /*isSpillSlot=*/false);
+    return FI;
+  }
+  if (MFI.getObjectAlign(FI) < Alignment) {
+    // A frame that cannot be realigned (the "no-realign-stack" attribute)
+    // clamps the alignment of every new object to the stack alignment, and
+    // MachineFrameInfo asserts if an object's alignment grows past it. Its
+    // maximum alignment never exceeds the stack alignment, so up to that the
+    // slot may grow; a copy that needs more gets an object of its own, which
+    // CreateStackObject clamps as it clamps any other.
+    if (!MFI.isStackRealignable() && Alignment > MFI.getMaxAlign())
+      return MFI.CreateStackObject(Size, Alignment, /*isSpillSlot=*/false);
+    MFI.setObjectAlignment(FI, Alignment);
+  }
+  if (static_cast<uint64_t>(MFI.getObjectSize(FI)) < Size)
+    MFI.setObjectSize(FI, Size);
+  return FI;
 }
 
 void llvm::MSIL::computeLegalValueVTs(const MSILTargetLowering &TLI,

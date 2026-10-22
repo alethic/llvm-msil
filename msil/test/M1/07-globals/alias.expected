@@ -1,0 +1,11 @@
+init
+calias=0
+chain_alias(99)=100
+table of aliases=105
+fn_ptr(7)=8
+table[1]=20
+table_alias[2]=30
+*table_ptr=30
+from_ctor=42
+counter=15
+[exit 0]

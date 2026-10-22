@@ -5,18 +5,22 @@
 ; sees an ordinary native int parameter, reads and writes through it, and
 ; gets no diagnostic (M3's 'byval arguments are not supported for MSIL yet'
 ; is gone for parameters and for call sites). At a call, each byval argument
-; is copied into a new object of the caller's static frame (one localloc at
+; is copied into an object of the caller's static frame (one localloc at
 ; entry, D13), sized and aligned as the byval type, before the call, and the
 ; call gets the copy's address, never the original pointer: a second call
-; gets a second copy, so a callee that writes to its parameter cannot change
-; the caller's aggregate. The copy is a memcpy, which may be cpblk (with
-; 'unaligned. N' below 8-byte alignment) or loads and stores; both are
-; accepted, so each copy is checked by its source (the original pointer is
-; read) and by the frame address that the call receives, matched together
-; with the call as one multi-line pattern. Objects are laid out downwards
-; from the top of the frame in creation order (frame-index.ll): one 24-byte
-; copy lives at FP + 8 of a 32-byte frame, two at FP + 24 and FP + 0 of a
-; 48-byte frame; an object aligned to 16 makes the frame over-allocate by 8
+; makes a second copy, so a callee that writes to its parameter cannot change
+; the caller's aggregate. Since M12 (section 12, 'M9.a byval amended') the
+; K-th byval argument of every call reuses the function's K-th byval slot,
+; grown to the largest size and alignment (byval-slot-reuse.ll), so the two
+; calls of call_bump_twice copy into one slot, while the two byval arguments
+; of one call (call_two) still get two. The copy is a memcpy, which may be
+; cpblk (with 'unaligned. N' below 8-byte alignment) or loads and stores;
+; both are accepted, so each copy is checked by its source (the original
+; pointer is read) and by the frame address that the call receives, matched
+; together with the call as one multi-line pattern. Objects are laid out
+; downwards from the top of the frame in creation order (frame-index.ll): one
+; 24-byte copy lives at FP + 8 of a 32-byte frame, two at FP + 24 and FP + 0
+; of a 48-byte frame; an object aligned to 16 makes the frame over-allocate by 8
 ; and align its base up (D13). A byval argument of an indirect call is copied
 ; the same way. A zero-size byval argument is passed as it is, with no copy
 ; and no frame (WebAssembly's LowerCall copies only a non-zero byval size).
@@ -122,21 +126,21 @@ define i64 @call_sum(ptr %p) {
   ret i64 %r
 }
 
-; Two calls with the same aggregate: two copies (FP + 24 and FP + 0), each
-; filled from %p right before its call, so the second callee does not see
-; the first one's write.
+; Two calls with the same aggregate: one slot since M12, a copy at FP + 8 of
+; a 32-byte frame, filled from %p again right before each call, so the second
+; callee does not see the first one's write.
 ; CHECK-LABEL: .method {{.*}}'call_bump_twice'(
 ; CHECK-SAME:  native int) cil managed{{$}}
-; CHECK:       {{^}}  ldc.i4.s 48{{$}}
+; CHECK:       {{^}}  ldc.i4.s 32{{$}}
 ; CHECK-NEXT:  {{^}}  localloc{{$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 24[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'bump_s'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'bump_s'\(native int\)$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+(ldloc(\.[0-9]|\.s [0-9]+)[[:space:]]+)?ldloc\.0[[:space:]]+call native int 'bump_s'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+(ldloc(\.[0-9]|\.s [0-9]+)[[:space:]]+)?ldloc\.0[[:space:]]+ldc\.i4 8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'bump_s'\(native int\)$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define i64 @call_bump_twice(ptr %p) {

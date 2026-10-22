@@ -161,10 +161,13 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // is keyed on the operand type too: int64 -> f64 and int32 sources stay a
   // single conv.r8 or conv.r4.
   setOperationAction(ISD::SINT_TO_FP, MVT::i64, Custom);
-  // FP -> i128 would call __fixsfti, __fixdfti, __fixunssfti or
-  // __fixunsdfti, whose two-value result CanLowerReturn demotes to a stack
-  // slot even after LowerCall's diagnostic; ReplaceNodeResults reports the
-  // libcall instead, as it does for i128 division.
+  // FP -> i128: ExpandIRInsts expands the plain conversions before
+  // instruction selection (setMaxLargeFPConvertBitWidthSupported below), so
+  // only the constrained ones get here. They would call __fixsfti,
+  // __fixdfti, __fixunssfti or __fixunsdfti, whose two-value result
+  // CanLowerReturn demotes to a stack slot even after LowerCall's diagnostic;
+  // ReplaceNodeResults reports the libcall instead, as it does for i128
+  // division.
   setOperationAction({ISD::FP_TO_SINT, ISD::FP_TO_UINT, ISD::STRICT_FP_TO_SINT,
                       ISD::STRICT_FP_TO_UINT},
                      MVT::i128, Custom);
@@ -341,15 +344,16 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // builds *_PARTS nodes instead of calling __ashlti3, __lshrti3 or __ashrti3.
   setOperationAction({ISD::SHL_PARTS, ISD::SRA_PARTS, ISD::SRL_PARTS}, MVT::i64,
                      Custom);
-  // i128 division and remainder: DAGCombiner expands a division by a power of
-  // two (and an 'exact' division by any constant) inline before type
-  // legalization, because isIntDivCheap is false above 64 bits. Every other
-  // i128 division would call __divti3, __udivti3, __modti3 or __umodti3, and
-  // such '__' helpers are errors until phase 3 (decision D14), so it reaches
-  // ReplaceNodeResults. The helper's i128 result needs two values, so
-  // CanLowerReturn would make LowerCallTo demote it to a stack slot (a
-  // FrameIndex) even after LowerCall's diagnostic. ReplaceNodeResults reports
-  // the libcall in the type legalizer instead, before any call is built.
+  // i128 division and remainder: ExpandIRInsts expands every one in the IR
+  // inline before instruction selection (setMaxDivRemBitWidthSupported
+  // below), so this is a backstop for a division that SelectionDAG itself
+  // builds. Such a division would call __divti3, __udivti3, __modti3 or
+  // __umodti3, and such '__' helpers are errors until phase 3 (decision D14),
+  // so it reaches ReplaceNodeResults. The helper's i128 result needs two
+  // values, so CanLowerReturn would make LowerCallTo demote it to a stack slot
+  // (a FrameIndex) even after LowerCall's diagnostic. ReplaceNodeResults
+  // reports the libcall in the type legalizer instead, before any call is
+  // built.
   setOperationAction({ISD::SDIV, ISD::UDIV, ISD::SREM, ISD::UREM}, MVT::i128,
                      Custom);
 
@@ -387,6 +391,18 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // No atomics yet: AtomicExpand turns every atomic operation into a call of
   // an __atomic_* function, which is not a Phase-1 import (decision D14).
   setMaxAtomicSizeInBitsSupported(0);
+
+  // Integer division and remainder wider than 64 bits, and the conversions
+  // between such integers and floating point, are expanded inline by
+  // ExpandIRInsts before instruction selection (NVPTX and AMDGPU do the same),
+  // so i128 division, the plain f32 and f64 <-> i128 conversions (saturating
+  // ones included) and bf16 -> i128 (expanded on the value's 16-bit pattern)
+  // call no __divti3, __fixdfti, ... helper, which would be an error until
+  // phase 3 (decision D14). Still named: f16 -> i128 (__extendhfsf2),
+  // i128 -> f16 (__truncsfhf2), i128 -> bf16 (__extendbfsf2 and
+  // __truncsfbf2) and the constrained conversions (the i128 helpers).
+  setMaxDivRemBitWidthSupported(64);
+  setMaxLargeFPConvertBitWidthSupported(64);
 }
 
 //===----------------------------------------------------------------------===//

@@ -1,11 +1,12 @@
 ; i128 sdiv and srem by constant powers of two, udiv and urem by 16, and exact
 ; sdiv and udiv by 10 (Milestone 4). With no runtime helper (__divti3,
-; __modti3, __udivti3, __umodti3) the backend must expand these inline: sdiv
-; and srem by a power of two into shifts, as LLVM's generic lowering does when
-; integer division is not cheap (MSIL's isIntDivCheap is false above 64 bits),
-; udiv and urem by a power of two into a shift and a mask, and an exact
-; division into a shift and a multiply by the inverse (plan section 12, rows
-; 'Plan 5.3 amended (D33 query hook), M4.b' and its correction). C rounds the
+; __modti3, __udivti3, __umodti3) the backend must expand these inline. Since
+; M12, MSILTargetLowering's setMaxDivRemBitWidthSupported(64) (Q36; plan
+; section 12, row 'D14/D33 note and P3-B text') makes ExpandIRInsts expand
+; every i128 division and remainder inline before instruction selection: a
+; power-of-two divisor, negative ones included, becomes shifts and masks
+; (expandPow2DivRem), and every other divisor, exact divisions included, goes
+; through the generic expansion (expandDivision, expandRemainder). C rounds the
 ; quotient toward zero, so -7 / 4 is -1 and -7 % 4 is -3, never the -2 and 1
 ; of a plain arithmetic shift and mask. Divisors 2, 4, -4, 2^64 (the quotient
 ; comes from the high half) and 2^126, and an exact sdiv by 4; unsigned
@@ -497,8 +498,8 @@ define internal i32 @divrem_u16() noinline {
   ret i32 %o11
 }
 
-; Bit 7: exact / 10, signed and unsigned (a shift by one and a multiply by the
-; inverse of 5), negative multiples and multiples with the top bit set included.
+; Bit 7: exact / 10, signed and unsigned (the generic expansion), negative
+; multiples and multiples with the top bit set included.
 define internal i32 @div_exact_10() noinline {
   ; -30 / 10 = -3
   %r0 = call i32 @sdiv_exact_10(i64 -30, i64 -1, i64 -3, i64 -1)

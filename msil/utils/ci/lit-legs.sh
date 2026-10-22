@@ -8,8 +8,10 @@
 #   bash msil/utils/ci/lit-legs.sh [--full] [--leg NAME[,NAME...]] [--list] [BUILD_DIR]
 #
 # Legs, in order (lit-legs.ps1 has the Windows legs and the WSL legs of the development host,
-# the gate steps 5-12 (M10 and M11) and 20-21 (M11) of plan section 6); the triple is
-# x86_64-unknown-linux-gnu-msil, the triple of Design.md section 12:
+# the gate steps 5-12 (M10 and M11) and 20-21 (M11) of plan section 6, and M12's legs; this
+# job has no WSL legs: it runs the Linux triple natively, with msil_linux_sysroot=/, lit.cfg.py's
+# default on Linux); the triple is x86_64-unknown-linux-gnu-msil, the triple of Design.md
+# section 12:
 #   net8         llc/clang FileCheck tests, harness and msil/test/M1 on .NET 8 (tiered), -O0 and
 #                -O2, native oracle required (check-msil's paths)
 #   net10        msil/test/M1 on .NET 10
@@ -19,7 +21,11 @@
 #                tests run at O1 and O3 only); the Windows leg of the same name is M11 gate
 #                step 21, and step 22 runs this triple at these levels under WSL (.NET 10)
 #   roundtrip    msil/test/M1/11-programs through ildasm -> ilasm, then run (Design.md 5.5)
-#   expected     update-expected.py --check msil/test/M1 (.expected files vs a native build)
+#   expected     update-expected.py --check msil/test/M1: the Linux job's native Linux oracle
+#                (a native build of each test with the tree's clang and the system linker, run
+#                on the runner) against <stem>.linux.expected where the Linux transcript
+#                differs, else <stem>.expected (plan 5.12.11); on the development host,
+#                lit-legs.ps1's expected-linux leg makes the same check through the E7 oracle
 #   utc          run-utc-tests.py with the six update_llc_test_checks tests of lit-legs.ps1's
 #                utc leg (M11 gate step 20): the same list, so both jobs check the same files,
 #                and a test whose target the build lacks fails instead of being UNSUPPORTED

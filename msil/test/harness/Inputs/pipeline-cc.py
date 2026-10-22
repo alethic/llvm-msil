@@ -17,8 +17,8 @@ M0 builds no compiler, so harness/pipeline/lit.local.cfg replaces %clang_msil,
 substitution of lit.cfg.py alone. It checks the arguments that the composite
 substitutions (%{msil_c}, %{msil_ll}, %{msil_c_<L>}, ...) pass: exactly one
 -O<level>, which also matches the '.O<level>.' part of the output name when
-there is one; the MSIL triple and -S for clang; %{msil_cflags}
-(-ffreestanding, -Werror=return-type and an -I directory that holds
+there is one; the MSIL triple and -S for clang; %{msil_cflags} (-std=gnu17
+ahead of -ffreestanding, -Werror=return-type and an -I directory that holds
 msil_test.h) for C sources. Then it "compiles" SRC by copying the prepared
 <SRC without extension>.il.in to OUT, or for clang-native assembles that file
 with 'ILASM -exe' into a .NET Framework executable, which runs directly on
@@ -102,9 +102,14 @@ def main(argv):
     if mode == "llc-msil" and flags:
         return fail("unexpected llc options %r" % flags)
     if ext == ".c":
-        for need in ("-ffreestanding", "-Werror=return-type"):
+        for need in ("-std=gnu17", "-ffreestanding", "-Werror=return-type"):
             if need not in flags:
                 return fail("%s without %s (%%{msil_cflags})" % (mode, need))
+        if flags.index("-std=gnu17") > flags.index("-ffreestanding"):
+            return fail(
+                "%s with -std=gnu17 after -ffreestanding (%%{msil_cflags} starts "
+                "with it)" % mode
+            )
         includes = [f[2:] for f in flags if f.startswith("-I")]
         if not any(os.path.isfile(os.path.join(d, "msil_test.h")) for d in includes):
             return fail(

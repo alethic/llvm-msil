@@ -1,0 +1,56 @@
+# update-expected.py --os linux (plan M12.e (3), 5.12.4 and 5.12.5): on a
+# Windows host it runs the E7 Linux oracle (plan 5.12.8) and owns the per-OS
+# override <stem>.linux.expected. --check compares with that file when it
+# exists, else with <stem>.expected (the file msil-run.py --expect picks for a
+# Linux triple). A write run creates it only for a transcript that differs
+# from <stem>.expected, which it leaves alone, and removes it once the
+# transcript equals <stem>.expected again. Until tests with a differing Linux
+# transcript exist (M14, M15), nothing else runs these rules, so this test
+# drives each of them on a scratch copy of a program that exits with 3:
+# (1) with only a wrong t.expected, --check compares with it and fails;
+# (2) a write run creates t.linux.expected and keeps t.expected;
+# (3) --check then passes against the override although t.expected is wrong;
+# (4) a wrong override fails --check although t.expected is right;
+# (5) a write run whose transcript equals t.expected removes the override.
+# The diff header of each mismatch names the file that was compared, and (1)
+# and (4) require update-expected.py's mismatch status 1, so a usage or
+# configuration error (status 2) cannot pass for a mismatch. Every call takes
+# %{msil_e7_args}: the clang, Linux sysroot (msil_linux_sysroot), WSL
+# distribution (msil_wsl_distro) and ld.lld of the lit configuration that
+# enabled msil-linux-oracle, never update-expected.py's own defaults, so a
+# sysroot that breaks linux-oracle.test breaks this test too.
+# REQUIRES: system-windows, msil-linux-oracle
+
+# RUN: rm -rf %t.d
+# RUN: mkdir -p %t.d
+# RUN: %{harness_check} write %t.d/t.c "int main(void) { return 3; }"
+
+# (1) No override and a wrong t.expected: --check fails against t.expected.
+# RUN: %{harness_check} write %t.d/t.expected "[exit 4]"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --os linux %{msil_e7_args} --check %t.d/t.c > %t.1.log 2>&1
+# RUN: %{harness_check} contains %t.1.log "^MISMATCH: .*/t\.c$" "^--- .*/t\.expected$" "^-\[exit 4\]$" "^\+\[exit 3\]$"
+# RUN: %{harness_check} missing %t.d/t.linux.expected
+
+# (2) A write run: the Linux transcript differs from t.expected, so it goes
+# to t.linux.expected, and t.expected stays as it was.
+# RUN: %{harness_update_expected} --os linux %{msil_e7_args} %t.d/t.c > %t.2.log 2>&1
+# RUN: %{harness_check} contains %t.2.log "^wrote .*/t\.linux\.expected \(differs from t\.expected\)$"
+# RUN: %{harness_check} equals %t.d/t.linux.expected "[exit 3]"
+# RUN: %{harness_check} equals %t.d/t.expected "[exit 4]"
+
+# (3) --check prefers the override.
+# RUN: %{harness_update_expected} --os linux %{msil_e7_args} --check %t.d/t.c > %t.3.log 2>&1
+# RUN: %{harness_check} contains %t.3.log "^ok: .*/t\.c$"
+
+# (4) A wrong override fails --check even though t.expected is right.
+# RUN: %{harness_check} write %t.d/t.expected "[exit 3]"
+# RUN: %{harness_check} write %t.d/t.linux.expected "[exit 5]"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --os linux %{msil_e7_args} --check %t.d/t.c > %t.4.log 2>&1
+# RUN: %{harness_check} contains %t.4.log "^MISMATCH: .*/t\.c$" "^--- .*/t\.linux\.expected$" "^-\[exit 5\]$" "^\+\[exit 3\]$"
+
+# (5) A write run whose transcript equals t.expected removes the override and
+# leaves t.expected alone.
+# RUN: %{harness_update_expected} --os linux %{msil_e7_args} %t.d/t.c > %t.5.log 2>&1
+# RUN: %{harness_check} contains %t.5.log "^removed .*/t\.linux\.expected \(the transcript equals .*/t\.expected\)$"
+# RUN: %{harness_check} missing %t.d/t.linux.expected
+# RUN: %{harness_check} equals %t.d/t.expected "[exit 3]"

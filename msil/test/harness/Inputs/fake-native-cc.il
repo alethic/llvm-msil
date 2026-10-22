@@ -5,8 +5,9 @@
 // and (8), as the native-oracle legs of %{msil_c} and %{msil_ll} build it:
 //   one source file, '-o <exe>' and a native '--target=<triple>' (not an
 //   -msil triple);
-//   a .c source: -ffreestanding, -Werror=return-type and an -I directory
-//   (either '-I <dir>' or '-I<dir>') that holds msil_test.h (%{msil_cflags});
+//   a .c source: -std=gnu17 ahead of -ffreestanding, -Werror=return-type
+//   and an -I directory (either '-I <dir>' or '-I<dir>') that holds
+//   msil_test.h (%{msil_cflags}, which starts with -std=gnu17);
 //   a .ll source: -Wno-override-module;
 //   the native link (%{msil_native_ldflags}): for a --target that is not a
 //   Windows triple, -lm after the source file (GNU ld resolves a library
@@ -36,7 +37,8 @@
   .locals init (int32 i, string arg, string target, string output,
                 string source, int32 sources, bool freestanding,
                 bool returntype, bool include, bool nooverride,
-                bool libm, bool libmfirst, string problem)
+                bool libm, bool libmfirst, bool stdgnu17,
+                bool freestandingfirst, string problem)
   ldc.i4.0
   stloc i
 @LOOP:
@@ -117,11 +119,24 @@
   br @NEXT
 @NOT_TARGET:
   ldloc arg
+  ldstr "-std=gnu17"
+  call bool [mscorlib]System.String::op_Equality(string, string)
+  brfalse @NOT_STD
+  ldc.i4.1
+  stloc stdgnu17
+  br @NEXT
+@NOT_STD:
+  // -ffreestanding, and whether it comes before -std=gnu17 (checked below).
+  ldloc arg
   ldstr "-ffreestanding"
   call bool [mscorlib]System.String::op_Equality(string, string)
   brfalse @NOT_FREESTANDING
   ldc.i4.1
   stloc freestanding
+  ldloc stdgnu17
+  brtrue @NEXT
+  ldc.i4.1
+  stloc freestandingfirst
   br @NEXT
 @NOT_FREESTANDING:
   ldloc arg
@@ -248,6 +263,12 @@
   stloc problem
   br @FAIL
 @C_SOURCE:
+  ldloc stdgnu17
+  brtrue @HAS_STD
+  ldstr "a C source without -std=gnu17 (%{msil_cflags})"
+  stloc problem
+  br @FAIL
+@HAS_STD:
   ldloc freestanding
   brtrue @HAS_FREESTANDING
   ldstr "a C source without -ffreestanding (%{msil_cflags})"
@@ -260,6 +281,12 @@
   stloc problem
   br @FAIL
 @HAS_RETURNTYPE:
+  ldloc freestandingfirst
+  brfalse @STD_FIRST
+  ldstr "a C source with -std=gnu17 after -ffreestanding (%{msil_cflags} starts with it)"
+  stloc problem
+  br @FAIL
+@STD_FIRST:
   ldloc include
   brtrue @COPY
   ldstr "a C source without -I <a directory with msil_test.h> (%{msil_cflags})"

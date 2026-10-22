@@ -33,10 +33,11 @@
 # 44 is the in-range control that proves the fake toolchain works. As the
 # compiler (Inputs/fake-native-cc.il, assembled into both) it accepts only the
 # oracle command line of plan M0.b items (6) and (8): a native --target, and
-# for C %{msil_cflags} (-ffreestanding, -Werror=return-type and an -I
-# directory that holds msil_test.h), for IR -Wno-override-module. So the .c
-# and .ll runs below also check the command line update-expected.py builds;
-# the first two show that the stand-in rejects one without these flags.
+# for C %{msil_cflags} (-std=gnu17 ahead of -ffreestanding, -Werror=return-type
+# and an -I directory that holds msil_test.h), for IR -Wno-override-module.
+# So the .c and .ll runs below also check the command line update-expected.py
+# builds; the first two show that the stand-in rejects one without these
+# flags.
 # RUN: rm -rf %t.d
 # RUN: mkdir -p %t.d
 # RUN: %ilasm -exe -output=%t.d/fake-native-44.exe %S/Inputs/fake-native-44.il %S/Inputs/fake-native-cc.il

@@ -1,0 +1,28 @@
+# The E7 Linux native oracle (plan 5.12.8): the native twin of a test, built
+# on Windows for x86_64-unknown-linux-gnu by clang (%{msil_linux_cc}), linked
+# by ld.lld with msil/utils/linux-oracle/start.c against the libraries of
+# msil/utils/make-linux-sysroot.py (%{msil_linux_ld}, %{msil_linux_libs}),
+# and run under WSL by msil-run.py --native --runner wsl (%{msil_linux_exec}):
+# what the native-oracle legs of %{msil_c} and %{msil_ll} do with
+# msil_runner=wsl. Inputs/linux-oracle.c has a C constructor (start.c must
+# run .init_array before main), puts output (libc.so.6 through the dynamic
+# loader), an unsigned __int128 division (__udivti3 from libgcc_s.so.1) and a
+# non-zero exit status (exit(main(...)) must pass it on); its .expected file
+# is the Windows oracle's transcript, so both native oracles agree. A wrong
+# expected file must fail the comparison, and the transcript comes back from
+# WSL with the program's exit status.
+# REQUIRES: system-windows, msil-linux-oracle
+
+# RUN: %{msil_linux_cc} %{msil_cflags} -O0 -c %S/Inputs/linux-oracle.c -o %t.O0.o
+# RUN: %{msil_linux_ld} %t.O0.o %{msil_linux_libs} -o %t.O0.elf
+# RUN: %{msil_linux_exec} --expect %S/Inputs/linux-oracle --out %t.O0.out %t.O0.elf
+# RUN: %{harness_check} contains %t.O0.out "^constructor ran$" "^main sees the constructor$" "^\[exit 42\]$"
+
+# RUN: %{msil_linux_cc} %{msil_cflags} -O2 -c %S/Inputs/linux-oracle.c -o %t.O2.o
+# RUN: %{msil_linux_ld} %t.O2.o %{msil_linux_libs} -o %t.O2.elf
+# RUN: %{msil_linux_exec} --expect %S/Inputs/linux-oracle --out %t.O2.out %t.O2.elf
+
+# RUN: %{harness_check} write %t.wrong.expected "constructor ran" "[exit 0]"
+# RUN: not %{msil_linux_exec} --expect %t.wrong --out %t.wrong.out %t.O2.elf 2> %t.wrong.log
+# RUN: %{harness_check} contains %t.wrong.log "does not match .*wrong\.expected"
+# RUN: %{harness_check} contains %t.wrong.out "^\[exit 42\]$"

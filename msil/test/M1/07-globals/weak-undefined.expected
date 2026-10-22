@@ -1,0 +1,12 @@
+maybe called=0
+maybe is null=1
+&weak_data is null=1
+fp_init is null=1
+dp_init is null=1
+refs_init.fn is null=1
+refs_init.data is null=1
+refs_init.tag=7
+volatile fn is null=1
+volatile data is null=1
+through volatile=-1
+[exit 0]

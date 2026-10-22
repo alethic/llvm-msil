@@ -4,9 +4,12 @@
 ; amendment-log rows of 2026-10-12 for inline asm, named registers and address
 ; spaces; M2.d for module asm). llc keeps running after an error, so
 ; MSILPrepareIR neutralizes what it diagnosed: a diagnosed definition loses its
-; body, an alias, ifunc or global in a non-zero address space is replaced by
-; poison in all its uses and erased, a thread_local global becomes an ordinary
-; global, and llvm.global_dtors is erased. Each case runs the whole pipeline on
+; body, an alias that it does not lower, an ifunc or a global in a non-zero
+; address space is replaced by poison in all its uses and erased, a
+; thread_local global becomes an ordinary global, and llvm.global_dtors is
+; erased. Since M12 (decision D26 as amended; alias.ll) whole-program mode
+; lowers an alias of a defined function or variable instead of reporting it,
+; so the alias.ll part below compiles. Each case runs the whole pipeline on
 ; two triples, and once with -stop-after=msil-prepare-ir to check the
 ; diagnostics of MSILPrepareIR alone and the IR it leaves behind. M3 adds the
 ; identifier length limit (D11 amended), garbage collection strategies and the
@@ -28,17 +31,17 @@
 ; DEFINE: %{nocrash} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
 ; RUN: split-file %s %t
 
-; Alias (D26), used by a function and by a global initializer.
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/alias.ll 2>&1 | %{nocrash} --check-prefix=ALIAS
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/alias.ll 2>&1 | %{nocrash} --check-prefix=ALIAS
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/alias.ll -o - 2>%t/alias.err \
+; An alias of a variable, used by a function and by a global initializer: since
+; M12 it is lowered (D26 amended, alias.ll), so both uses become the aliasee,
+; the alias is erased and nothing is reported.
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/alias.ll -o /dev/null 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/alias.ll -o /dev/null 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/alias.ll -o - \
 ; RUN:   | FileCheck %s --check-prefix=ALIAS-IR --implicit-check-not=msil_alias_sym
-; RUN: FileCheck %s --check-prefix=ALIAS --input-file=%t/alias.err
-; ALIAS: error: {{.*}}msil_alias_sym
 ; ALIAS-IR: @msil_alias_target = global i32 7
-; ALIAS-IR: @msil_alias_ref = global ptr poison
+; ALIAS-IR: @msil_alias_ref = global ptr @msil_alias_target
 ; ALIAS-IR: define available_externally i32 @msil_alias_user()
-; ALIAS-IR-NEXT: %v = load i32, ptr poison
+; ALIAS-IR-NEXT: %v = load i32, ptr @msil_alias_target
 
 ; IFunc (D26), called by a function.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/ifunc.ll 2>&1 | %{nocrash} --check-prefix=IFUNC
@@ -172,8 +175,10 @@
 ; The diagnosed globals above are replaced by poison in every use, including
 ; uses through the 'no_cfi' and 'dso_local_equivalent' constants
 ; (__builtin_function_start and relative vtables), which can wrap only a
-; GlobalValue and must therefore be replaced as a whole. The aliasees are
-; variables, because a function definition would reach the M2 lowering stubs.
+; GlobalValue and must therefore be replaced as a whole. The aliases are
+; function-typed aliases of variables, a kind that stays an error after M12
+; (alias.ll), and the aliasees are variables, because a function definition
+; would reach the M2 lowering stubs.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/nocfi-alias.ll 2>&1 | %{nocrash} --check-prefix=NOCFI-ALIAS
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/nocfi-alias.ll 2>&1 | %{nocrash} --check-prefix=NOCFI-ALIAS
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/nocfi-alias.ll -o - 2>%t/nocfi-alias.err \

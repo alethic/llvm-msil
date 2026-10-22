@@ -15,11 +15,11 @@
 // through their caller's slot. At -O2 on the linux-gnu triple clang marks
 // i128_ident's argument 'returned' and its callers use the argument instead of
 // the result, so i128_pick carries the argument-to-result check there. No
-// i128 division or remainder: they are compiler-rt calls (__divti3,
-// __udivti3), errors under plan D14, and the MSVC native oracle has no such
-// functions. No aggregate or string initializers (plan 5.5, until M8). Inputs
-// are derived from argc (1 when run without arguments), and no function is
-// called twice with the same arguments, so that -O2 cannot merge the calls.
+// i128 division or remainder: since M12 they are expanded inline (plan Q36)
+// and 01-int/i128-divrem.c tests them. No aggregate or string initializers
+// (plan 5.5, until M8). Inputs are derived from argc (1 when run without
+// arguments), and no function is called twice with the same arguments, so
+// that -O2 cannot merge the calls.
 // MSIL_EXPECT returns 1 + (line % 255) at the first failed check; main
 // returns 0 when every check passes.
 // RUN: %{msil_c}

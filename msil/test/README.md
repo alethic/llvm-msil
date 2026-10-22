@@ -29,10 +29,25 @@ prog.c --clang --target=<triple> -S-->  %t.<L>.il  --ilasm -dll-->  %t.<L>.dll
   [--> .NET Framework] ilasm -exe and run on .NET Framework 4.8
 ```
 
+The native oracle (`--param msil_native_oracle=1` or `required`) builds the
+test for the native triple with the same clang and `%{msil_cflags}`: on
+Windows linked by the MSVC linker with the compiler-rt builtins of the Visual
+Studio LLVM (`msil_native_rtlib`, for the `__int128` helpers `__udivti3`,
+`__fixdfti`, ... that a native build calls), on Linux by the system linker
+with `-lm`, and with `msil_runner=wsl` by the *E7 Linux oracle*: compiled on
+Windows for `x86_64-unknown-linux-gnu` (`-fno-pic -c`), linked by `ld.lld`
+with `msil/utils/linux-oracle/start.c` against the distribution's
+`libm.so.6`, `libc.so.6` and `libgcc_s.so.1` (copied into
+`msil_linux_sysroot` by `msil/utils/make-linux-sysroot.py`; `--as-needed`), and
+run inside WSL by `msil-run.py --native --runner wsl`. WSL needs no compiler,
+headers or root for it. `llvm/docs/MSIL/GettingStarted.md` section 7 has the
+details and the host setup.
+
 jitall runs on the host with the local runner and inside WSL (on the WSL .NET
-runtime the programs use) with `msil_runner=wsl`: the module initializer of a
-linux-triple program calls libc and libm, which exist only there. ILVerify,
-PEVerify, ildasm and ilasm run on the host, except that
+runtime the programs use: the private one of `msil/utils/msil-wsl-dotnet.sh`,
+`$HOME/.dotnet-msil`, in every gate leg) with `msil_runner=wsl`: the module
+initializer of a linux-triple program calls libc and libm, which exist only
+there. ILVerify, PEVerify, ildasm and ilasm run on the host, except that
 `--param msil_wsl_ilasm` makes `%ilasm` the Linux ilasm inside WSL (the
 neutralized pass of msil-verify.py still reassembles with the host ilasm).
 
@@ -79,17 +94,21 @@ failing directory names the earliest broken capability:
 | Directory | Since | Covers |
 |---|---|---|
 | `00-smoke/` | M3 | return values, `argc`, leaf methods |
-| `01-int/` | M4 | integer arithmetic of every width, `__int128`, compares, select, direct calls |
-| `02-fp/` | M5 | `float`/`double` arithmetic, NaN compares, conversions and their rounding, min/max |
+| `01-int/` | M4 | integer arithmetic of every width, `__int128` (its division inline since M12), compares, select, direct calls |
+| `02-fp/` | M5 | `float`/`double` arithmetic, NaN compares, conversions and their rounding (to and from `__int128` since M12), min/max |
 | `03-control/` | M6 | branches, loops, `switch` (dense, sparse, 64-bit), irreducible control flow, computed `goto`, traps |
 | `04-frames/` | M7 | address-taken locals, local arrays, over-aligned frames, recursion with frames |
 | `05-memory/` | M7 | loads and stores of every width, unaligned and volatile accesses, `memcpy`/`memset`/`memmove`, fences, bit builtins |
 | `06-output/` | M8 | `puts`, `putchar` and the C math library through P/Invoke |
-| `07-globals/` | M8 | globals, string tables, relocations, constructors, BSS |
+| `07-globals/` | M8 | globals, string tables, relocations, constructors, BSS; aliases and undefined weak symbols (M12) |
 | `08-fnptr/` | M9 | function pointers, dispatch tables, callbacks, pointers to imports |
 | `09-structs/` | M9 | structs by value and returned, bit-fields, unions, nested aggregates |
-| `10-calls/` | M9 | K&R calls, many arguments, mutual and deep recursion |
+| `10-calls/` | M9 | K&R calls, many arguments, mutual and deep recursion; shared byval slots, empty `asm` with operands (`black_box`) and a Rust-shaped IR module (M12) |
 | `11-programs/` | M10 | the Design.md section 12 program corpus: 20 complete programs (fib, sieve, quicksort, a string table with relocations, a function-pointer VM, ...) |
+
+`M1/` has 143 tests: 99 C programs, 43 IR files (40 of them use
+`%{msil_ll}`; the three trap tests pin their levels) and one `.test` that
+compiles a C program with `-g`.
 
 ## Running the tests
 
@@ -118,15 +137,22 @@ The milestone-1 gate runs this suite in several legs, each a lit run with
 `--param msil_require_verify=1` plus the parameters of its leg (.NET 8 with
 the native oracle and .NET Framework 4.8, .NET 10, `TieredCompilation=0`,
 the four extra optimization levels of `more-levels`, WSL with the linux
-triple, the Linux and the modern Windows ilasm, the ildasm round trip), and
-two legs that are not lit runs: `expected` (`update-expected.py --check`) and
-`utc`; `llvm/docs/MSIL/GettingStarted.md` section 7 lists them. Each lit leg
-also passes `--param msil_require_exec=1`, and a lit leg passes only when lit
-exits 0 and at least one test passed. `pwsh -NoProfile -File
-msil/utils/run-m1-gate.ps1` runs every leg in order through the same
-`msil/utils/ci/` scripts as `msil-ci.yml` and prints one summary row per
-leg; `msil/utils/ci/lit-legs.ps1 -List` names the legs, and each leg leaves
-its lit log and xunit file in `build/lit-results/<leg>.{log,xml}`.
+triple on the private runtime (`msil_wsl_dotnet=private`) and, in
+`wsl-net10` and `wsl-quick`, the E7 oracle required, the Linux and the modern
+Windows ilasm, the ildasm round trip), and three legs that are not lit runs:
+`expected` (`update-expected.py --check`), `expected-linux`
+(`update-expected.py --check --os linux`, the E7 oracle) and `utc`;
+`llvm/docs/MSIL/GettingStarted.md` section 7 lists them. Each lit leg also
+passes `--param msil_require_exec=1`, and a lit leg passes only when lit
+exits 0 and at least one test passed. `lit-legs.ps1` writes a leg's lit
+arguments one per line into `build/lit-results/<leg>.params.rsp` and passes
+`@<file>` to lit, so a parameter value may contain blanks. `pwsh -NoProfile
+-File msil/utils/run-m1-gate.ps1` runs every leg in order through the same
+`msil/utils/ci/` scripts as `msil-ci.yml`, after a `host-setup` step that
+installs the private WSL runtimes and the E7 sysroot (both idempotent, no
+root), and prints one summary row per leg; `msil/utils/ci/lit-legs.ps1
+-List` names the legs, and each leg leaves its lit log and xunit file in
+`build/lit-results/<leg>.{log,xml}`.
 
 ## Adding a test
 
@@ -149,23 +175,33 @@ its lit log and xunit file in `build/lit-results/<leg>.{log,xml}`.
    ```text
    python msil/utils/update-expected.py msil/test/M1/02-fp/<name>.c
    python msil/utils/update-expected.py --check msil/test/M1      (what CI checks)
+   python msil/utils/update-expected.py --os linux msil/test/M1/02-fp/<name>.c
+   python msil/utils/update-expected.py --check --os linux msil/test/M1
    ```
 
    On Windows run it from a VS x64 developer prompt (the native link needs
-   `LIB`). `.expected` files are never edited by hand; a per-OS override
-   `<name>.windows.expected` / `<name>.linux.expected` is the only exception
-   and carries a comment in the test explaining it.
+   `LIB`); its MSVC builds link the compiler-rt builtins (`--rtlib`, default
+   `auto`, as `msil_native_rtlib`). `--os linux` is the E7 Linux oracle on a
+   Windows host (it needs the host setup of GettingStarted.md section 7) and
+   the host's own build on Linux. Written with `--os linux`,
+   `<name>.linux.expected` appears only when the Linux transcript differs
+   from `<name>.expected` (a stale one is removed); review it and say in the
+   test why it differs. `-j N` sets the number of parallel native builds
+   (default one per CPU). `.expected` files are never edited by hand; a
+   `<name>.windows.expected` override is the only exception and carries a
+   comment in the test explaining it.
 
-Rules (plan 5.5, D14, D32, D37): UB-free C11 that behaves the same natively
-at every level; `main` always returns explicitly (`-ffreestanding` turns off
-its implicit `return 0` on Linux triples, and `-Werror=return-type` makes
-falling off it an error there; MSVCRT triples keep the implicit return); the
-exit status is 0..255 (bitmasks use at most 8 bits, checksums are masked with
-`& 0xff`); no `long`, `long double`, varargs, printing of addresses or of
-floating-point values; no library calls other than the Phase-1 imports (D14:
-`puts`, `putchar` and the C math library; `M1/06-output/` tests them), and
-output goes through `msil_test.h`.
-Every Phase-1 capability exists since M9, so a new test may use all of them
+Rules (plan 5.5, D14, D32, D37): UB-free GNU C17 (`%{msil_cflags}` pins
+`-std=gnu17`, so a change of clang's default dialect cannot break the corpus)
+that behaves the same natively at every level; `main` always returns
+explicitly (`-ffreestanding` turns off its implicit `return 0` on Linux
+triples, and `-Werror=return-type` makes falling off it an error there; MSVCRT
+triples keep the implicit return); the exit status is 0..255 (bitmasks use at
+most 8 bits, checksums are masked with `& 0xff`); no `long`, `long double`,
+varargs, printing of addresses or of floating-point values; no library calls
+other than the Phase-1 imports (D14: `puts`, `putchar` and the C math library;
+`M1/06-output/` tests them), and output goes through `msil_test.h`. Every
+Phase-1 capability exists since M9, so a new test may use all of them
 (`MSIL_EXPECT(cond)`, the `put_*` helpers, frames, globals, function
 pointers). The capability table of plan 5.5 only limited what each milestone's
 tests could use; that is why tests in `01-int/` and `02-fp/` accumulate
@@ -179,9 +215,12 @@ results branch-free with `MSIL_CHECK(acc, bit, cond)` and `return acc;`.
 | `msil_opt_levels` | `O0,O2` | levels `%{msil_c}` / `%{msil_ll}` run (`O0,O1,O2,O3,Os,Oz`; `%{msil_ll}` skips `Os` and `Oz`); the `more-levels` leg passes `O1,O3,Os,Oz` |
 | `msil_dotnet_runtime` | `8` (`10` with `msil_runner=wsl`), else the newest | Microsoft.NETCore.App major the programs run on; a missing one is an error |
 | `msil_dotnet_env` | empty | `VAR=VALUE[;VAR=VALUE...]` for programs and jitall, e.g. `DOTNET_TieredCompilation=0` (D38) |
-| `msil_native_oracle` | `0` | `1`: also build natively and compare when possible; `required`: an error when it is not possible (CI) |
+| `msil_native_oracle` | `0` | `1`: also build natively and compare when possible; `required`: an error when it is not possible (CI). With `msil_runner=wsl` it is the E7 Linux oracle (feature `msil-linux-oracle`), for `x86_64-unknown-linux-gnu-msil` only |
+| `msil_native_rtlib` | `auto` | the compiler-rt builtins the Windows native oracle links for MSVC triples (`__udivti3`, `__fixdfti`, ...): `auto` takes the newest `clang_rt.builtins-<arch>.lib` of the Visual Studio LLVM (`%VCINSTALLDIR%Tools\Llvm\x64\lib\clang\*\lib\windows`), else of the LLVM whose `clang-cl` or `lld-link` is on `PATH`; a path names one; empty or `none` disables it. Missing under `msil_native_oracle=required`, it is a configuration error |
+| `msil_linux_sysroot` | `$MSIL_LINUX_SYSROOT`, else `C:\llvm-msil-scratch\linux-sysroot` if it exists (Windows), else `/` (Linux) | the Linux libraries of the E7 oracle, in the layout of `msil/utils/make-linux-sysroot.py`; a named directory without `usr/lib/x86_64-linux-gnu/libc.so.6` and `libm.so.6` is a configuration error; empty disables it |
 | `msil_run_netfx` | `0` | `1`: also `ilasm -exe` and run on .NET Framework 4.8 (Windows, local runner) |
 | `msil_runner` | `local` | `wsl`: run programs in WSL (`wsl.exe -d Ubuntu`), on .NET 10 by default |
+| `msil_wsl_dotnet` | the private runtime if installed, else the distribution's `dotnet` (with a note) | with `msil_runner=wsl`: the dotnet host inside WSL that runs the programs and jitall. `private` is `$HOME/.dotnet-msil/dotnet`, which `msil/utils/msil-wsl-dotnet.sh` installs; when it is not installed that is a configuration error naming the script. An absolute WSL path names another host. Every WSL gate leg passes `private` |
 | `msil_require_verify` | `0` | `1` (every gate): a missing ILVerify, ildasm, jitall, (Windows) PEVerify, ilasm or .NET runtime of the runner is a configuration error, even when an empty override disabled it |
 | `msil_require_exec` | `0` | `1` (every gate leg): `M1/` without the feature `msil-exec` is a configuration error, not UNSUPPORTED |
 | `msil_roundtrip` | `0` | `1`: `%{msil_c}` and `%{msil_ll}` also round-trip every assembly through the .NET ildasm and ilasm at the version msil/utils/tools/msil-tools.proj pins (MsilILAsmVersion) from the NuGet global-packages folder (a missing one is a configuration error naming the version) (`msil-verify.py --roundtrip`; the listings must match) and run the reassembled image against the same `.expected` (Design.md 5.5; not the Framework ildasm, which prints infinite constants as `inf`) |
@@ -203,7 +242,11 @@ the runner), `msil-ilverify`, `msil-peverify`, `msil-ildasm` (msil-verify.py
 runs its neutralized pass), `msil-jitall` (jitall.dll is built and the runner
 has a runtime), `msil-netfx`,
 `msil-run-netfx`, `msil-wsl`, `msil-wsl-ilasm`, `msil-roundtrip`,
-`msil-native-oracle`, `msil-registered-target`,
+`msil-native-oracle`, `msil-native-rtlib` (the compiler-rt builtins were
+found), `msil-linux-sysroot` (a complete `msil_linux_sysroot`),
+`msil-linux-oracle` (E7 can run: the sysroot with `libgcc_s.so.1`,
+`ld.lld`, clang with the X86 target and a compiled `start.o`),
+`msil-registered-target`,
 `msil-triple=<triple>`, and `msil-triple-windows` / `msil-triple-linux`. The
 last two follow the effective triple, not the host: the WSL runner executes a
 linux triple from Windows, so a Windows-only P/Invoke test says
@@ -216,13 +259,27 @@ Substitutions: `%msil_triple`, `%clang_msil`, `%llc_msil`, `%clang_native`,
 found), `%msil_jitall` (msil-jitall.py, with `--runner wsl` under
 `msil_runner=wsl`), `%msil_roundtrip` (`msil-verify.py --roundtrip` with the
 .NET ildasm and ilasm),
-`%msil_inputs`, `%{msil_cflags}` (`-ffreestanding -Werror=return-type
--I msil/test/Inputs`), `%{msil_native_ldflags}` (`-lm` when the native triple
-is not Windows, else empty: glibc keeps the C math library out of libc and
-clang does not add `-lm` for C; the native-oracle legs put it after the
-source, and `update-expected.py` follows the same rule), `%{msil_c}`,
-`%{msil_ll}`, `%{msil_c_O0}` .. `%{msil_c_Oz}` and `%{msil_ll_O0}` ..
-`%{msil_ll_O3}`. Everything works in lit's internal shell.
+`%msil_inputs`, `%{msil_cflags}` (`-std=gnu17 -ffreestanding
+-Werror=return-type -I msil/test/Inputs`), `%{msil_native_ldflags}` (`-lm`
+when the native triple is not Windows: glibc keeps the C math library out of
+libc and clang does not add `-lm` for C; `"-l<path>.lib"` of the compiler-rt
+builtins for MSVC triples when `msil_native_rtlib` found them; else empty;
+the native-oracle legs put it after the source, and `update-expected.py`
+follows the same rule), the E7 pieces `%{msil_linux_cc}` (clang
+`--target=x86_64-unknown-linux-gnu -fno-pic`), `%{msil_linux_ld}` (`ld.lld
+-dynamic-linker /lib64/ld-linux-x86-64.so.2 --as-needed <start.o>`),
+`%{msil_linux_libs}` (the sysroot's `libm.so.6`, `libc.so.6` and
+`libgcc_s.so.1`), `%{msil_linux_exec}` (`%msil_exec --native --runner wsl
+--wsl-distro <distro> --expect-os linux`) and `%{msil_e7_args}` (`--clang
+<clang> --linux-sysroot <sysroot> --wsl-distro <distro> --ld-lld <ld.lld>`:
+lit's own E7 configuration as `update-expected.py --os linux` options, so a
+test that runs `update-expected.py` uses the clang, sysroot, WSL distribution
+and ld.lld that enabled `msil-linux-oracle` and not the script's defaults; an
+absent sysroot or ld.lld is a `*-not-found` placeholder), `%ld_lld` and
+`%lld_link` (the tree's linkers, else `PATH`, else the Visual Studio LLVM's),
+`%{msil_c}`, `%{msil_ll}`,
+`%{msil_c_O0}` .. `%{msil_c_Oz}` and `%{msil_ll_O0}` .. `%{msil_ll_O3}`.
+Everything works in lit's internal shell.
 
 ## Transcripts
 
@@ -247,7 +304,8 @@ with `eol=lf` (`msil/.gitattributes`). The status lines are:
 `[no newline at end of output]` precedes the status when stdout does not end
 in a newline. `<stem>.<os>.expected` wins over `<stem>.expected`; `<os>` comes
 from the target triple, because the triple decides `sizeof(long)` and the
-import libraries.
+import libraries (lit passes it as `--expect-os`; msil-run.py's own default
+is `linux` under `--runner wsl`, else the host's OS).
 
 A program that the dotnet host or CoreCLR does not start at all (a missing
 framework, an invalid runtimeconfig.json, 'Failed to create CoreCLR') is a
@@ -308,11 +366,12 @@ or (Windows) PEVerify into a configuration error.
 
 `lit -v` prints every command it ran with the substitutions expanded. The
 intermediate files are next to the test in the build tree:
-`build/tools/msil/test/<dir>/Output/<name>.c.tmp.<L>.{il,dll,out}`. Re-run one
-step by copying its command line, for example
-`python msil/utils/msil-run.py --show-stderr --dotnet ... --runtimeconfig
-build/tools/msil/test/msil-net8.runtimeconfig.json <dll>` to see the
-program's stderr, `python msil/utils/msil-jitall.py <dll>` to find the
-method the JIT rejects, or `python msil/utils/msil-verify.py ... --keep-copy
-<dir> <dll>` to see the neutralized copy that pass 2 of msil-verify.py
-verified.
+`build/tools/msil/test/<dir>/Output/<name>.c.tmp.<L>.{il,dll,out}`, and the
+native oracle's next to them (`.native.exe` and `.native.out`; under the E7
+oracle `.native.o`, `.native.elf` and `.native.out`). Re-run one step by
+copying its command line, for example `python msil/utils/msil-run.py
+--show-stderr --dotnet ... --runtimeconfig
+build/tools/msil/test/msil-net8.runtimeconfig.json <dll>` to see the program's
+stderr, `python msil/utils/msil-jitall.py <dll>` to find the method the JIT
+rejects, or `python msil/utils/msil-verify.py ... --keep-copy <dir> <dll>` to
+see the neutralized copy that pass 2 of msil-verify.py verified.

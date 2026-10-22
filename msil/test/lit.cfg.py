@@ -15,6 +15,17 @@
 # the Linux ilasm inside WSL. msil/utils/ci/lit-legs.ps1 and lit-legs.sh run
 # every leg of the milestone-1 gate (plan M10) with these parameters.
 #
+# The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
+# the native triple: on Windows by clang and link.exe, with the VS clang's
+# compiler-rt builtins for the i128 helpers (msil_native_rtlib); on Linux by
+# clang and the system linker; and with msil_runner=wsl by the E7 Linux
+# oracle: clang compiles for x86_64-unknown-linux-gnu, ld.lld links with
+# msil/utils/linux-oracle/start.c against the libraries that
+# msil/utils/make-linux-sysroot.py copies out of the WSL distribution
+# (msil_linux_sysroot), and the program runs under WSL. The WSL runner runs
+# the programs on the private runtime of msil/utils/msil-wsl-dotnet.sh
+# ($HOME/.dotnet-msil inside WSL, msil_wsl_dotnet).
+#
 # Nothing here is fatal when a tool is absent: directories that need it mark
 # themselves UNSUPPORTED, so check-all keeps working everywhere. Exceptions:
 # --param msil_require_verify=1 (every gate passes it, plan D38) makes a
@@ -450,17 +461,56 @@ else:
 ilasm_flags = {"x86_64": " -pe64 -x64", "aarch64": " -pe64 -arm64"}.get(triple_arch, "")
 
 # ---------------------------------------------------------------- execution runtime
+# --param msil_wsl_dotnet (plan 5.12.8, Q39): the dotnet host inside WSL that
+# runs the programs and jitall with msil_runner=wsl. 'private' is
+# $HOME/.dotnet-msil/dotnet, the runtimes that msil/utils/msil-wsl-dotnet.sh
+# installs without root, so an unattended upgrade of the distribution's
+# packages never changes the runtime under test; an explicit 'private' that
+# is not installed is a configuration error. An absolute WSL path names
+# another host. Unset: 'private' when it is installed, else the dotnet on the
+# distribution's PATH, with a note. Every WSL leg of lit-legs.ps1 passes
+# msil_wsl_dotnet=private.
 wsl_dotnet = None
+wsl_dotnet_param = params.get("msil_wsl_dotnet")
+if wsl_dotnet_param is not None:
+    if runner != "wsl":
+        fatal("--param msil_wsl_dotnet needs --param msil_runner=wsl")
+    if wsl_dotnet_param != "private" and not wsl_dotnet_param.startswith("/"):
+        fatal(
+            "--param msil_wsl_dotnet=%s: use private or an absolute path inside WSL"
+            % wsl_dotnet_param
+        )
 if runner == "wsl":
     wsl = lit.util.which("wsl.exe") or os.path.join(windir, "System32", "wsl.exe")
     # msil-run.py runs itself inside WSL (python3) to apply its limits there.
+    # The probe picks the dotnet host ($1: private, auto or a path), says
+    # which kind it is and lists its runtimes.
     probe = (
         "command -v python3 >/dev/null || { echo 'python3 not found'; exit 3; }; "
-        'echo "dotnet: $(command -v dotnet)" && dotnet --list-runtimes'
+        'p="$HOME/.dotnet-msil/dotnet"; '
+        'case "$1" in '
+        'private) if [ -x "$p" ]; then d=$p; k=private; '
+        'else echo "missing: $p"; exit 4; fi ;; '
+        'auto) if [ -x "$p" ]; then d=$p; k=private; '
+        "else d=$(command -v dotnet) || { echo 'dotnet not found on PATH'; exit 5; }; "
+        "k=path; fi ;; "
+        '*) d=$1; k=explicit; [ -x "$d" ] || { echo "not executable: $d"; exit 6; } ;; '
+        "esac; "
+        'echo "dotnet: $d"; echo "kind: $k"; "$d" --list-runtimes'
     )
     try:
         res = subprocess.run(
-            [wsl, "-d", wsl_distro, "--exec", "sh", "-c", probe],
+            [
+                wsl,
+                "-d",
+                wsl_distro,
+                "--exec",
+                "sh",
+                "-c",
+                probe,
+                "sh",
+                wsl_dotnet_param or "auto",
+            ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -469,23 +519,48 @@ if runner == "wsl":
         rc, out, err = res.returncode, decode(res.stdout), decode(res.stderr)
     except (OSError, subprocess.SubprocessError) as e:
         rc, out, err = None, "", str(e)
-    m = re.search(r"^dotnet: (/\S+)$", out, re.M)
-    if rc != 0 or not m:
+    if rc == 4:
         fatal(
-            "msil_runner=wsl, but 'wsl.exe -d %s -- dotnet --list-runtimes' failed "
-            "(status %s):\n%s%s" % (wsl_distro, rc, out, err)
+            "--param msil_wsl_dotnet=private, but the private .NET runtime is not "
+            "installed in WSL %s (%s): run 'wsl -d %s --cd <repository> --exec bash "
+            "msil/utils/msil-wsl-dotnet.sh' (plan 5.12.8)"
+            % (wsl_distro, out.strip(), wsl_distro)
+        )
+    m = re.search(r"^dotnet: (/\S+)$", out, re.M)
+    kind = re.search(r"^kind: (\w+)$", out, re.M)
+    if rc != 0 or not m or not kind:
+        fatal(
+            "msil_runner=wsl, but probing the dotnet host in WSL %s "
+            "(msil_wsl_dotnet=%s) failed (status %s):\n%s%s"
+            % (wsl_distro, wsl_dotnet_param or "<unset>", rc, out, err)
         )
     wsl_dotnet = m.group(1)
     exec_runtimes = list_runtimes(out)
     features.add("msil-wsl")
-    note(
-        "WSL %s: %s (Microsoft.NETCore.App %s)"
-        % (
-            wsl_distro,
-            wsl_dotnet,
-            ", ".join(v for v, _ in exec_runtimes.values()) or "none",
+    versions = (
+        ", ".join(
+            v
+            for v, _ in sorted(exec_runtimes.values(), key=lambda x: version_key(x[0]))
         )
+        or "none"
     )
+    if kind.group(1) == "private":
+        note(
+            "WSL dotnet (private): %s (WSL %s, Microsoft.NETCore.App %s)"
+            % (wsl_dotnet, wsl_distro, versions)
+        )
+    elif kind.group(1) == "path":
+        note(
+            "WSL dotnet: %s (WSL %s, Microsoft.NETCore.App %s), the distribution's "
+            "own from PATH: $HOME/.dotnet-msil has no private runtime "
+            "(msil/utils/msil-wsl-dotnet.sh installs it)"
+            % (wsl_dotnet, wsl_distro, versions)
+        )
+    else:
+        note(
+            "WSL dotnet: %s (WSL %s, Microsoft.NETCore.App %s)"
+            % (wsl_dotnet, wsl_distro, versions)
+        )
     default_major = 10  # WSL runs .NET 10 (plan D22)
 else:
     exec_runtimes = local_runtimes
@@ -813,9 +888,10 @@ if require_verify:
     if "msil-dotnet" not in features:
         if runner == "wsl":
             missing.append(
-                ".NET runtime: WSL distribution %s has no Microsoft.NETCore.App "
-                "(install .NET 10 there, or pick another with --param "
-                "msil_wsl_distro=NAME)" % wsl_distro
+                ".NET runtime: the dotnet host %s in WSL distribution %s has no "
+                "Microsoft.NETCore.App (run msil/utils/msil-wsl-dotnet.sh there "
+                "for the private runtimes, or pick another distribution with "
+                "--param msil_wsl_distro=NAME)" % (wsl_dotnet, wsl_distro)
             )
         else:
             missing.append(
@@ -833,22 +909,239 @@ if require_verify:
             "msil_require_verify=1, but tools are missing:\n  " + "\n  ".join(missing)
         )
 
+# ---------------------------------------------------------------- native toolchains
+# The Visual Studio LLVM (clang-cl, lld-link, ld.lld and the compiler-rt
+# builtins), which msil-env.ps1 and the CI's msvc-dev-cmd put in the
+# environment through %VCINSTALLDIR%.
+vc_dir = os.environ.get("VCINSTALLDIR") if is_windows else None
+vs_llvm = os.path.join(vc_dir, "Tools", "Llvm", "x64") if vc_dir else None
+
+
+def find_linker(name):
+    """%ld_lld and %lld_link (plan 5.12.3): the tree's own lld (M13 builds it),
+    else PATH, else the Visual Studio LLVM."""
+    candidates = [os.path.join(config.llvm_tools_dir, name + exe_ext)]
+    candidates.append(lit.util.which(name))
+    if vs_llvm:
+        candidates.append(os.path.join(vs_llvm, "bin", name + exe_ext))
+    for candidate in candidates:
+        if is_runnable(candidate):
+            return os.path.normpath(candidate)
+    return None
+
+
+ld_lld = find_linker("ld.lld")
+lld_link = find_linker("lld-link")
+clang_path = getattr(config, "clang", None)
+
+# --param msil_native_rtlib=auto|PATH (plan 5.12.8): the compiler-rt builtins
+# library that the Windows native oracle links, for the i128 helpers
+# (__udivti3, __fixdfti, ...) that a native MSVC build calls and that no MSVC
+# library has (the fork builds no compiler-rt). 'auto' (the default) takes
+# the newest <llvm>/lib/clang/<version>/lib/windows/
+# clang_rt.builtins-<arch>.lib of the Visual Studio LLVM (%VCINSTALLDIR%
+# Tools\Llvm\x64), else of the LLVM whose clang-cl is on PATH; an empty value
+# or 'none' disables it. It applies to MSVC triples on a Windows host only
+# (MinGW and Linux link libgcc; E7 links libgcc_s.so.1). Missing under
+# msil_native_oracle=required, that native oracle is a configuration error.
+native_triple_env = triple_parts[3] if len(triple_parts) > 3 else "msvc"
+msvc_native = triple_os == "windows" and native_triple_env.startswith("msvc")
+rtlib_param = params.get("msil_native_rtlib", "auto")
+native_rtlib = None
+rtlib_name = "clang_rt.builtins-%s.lib" % triple_arch
+rtlib_why = None
+if rtlib_param.lower() in ("", "none"):
+    rtlib_why = "disabled by --param msil_native_rtlib=%s" % rtlib_param
+elif rtlib_param.lower() == "auto":
+    if is_windows and msvc_native:
+        roots = [vs_llvm] if vs_llvm else []
+        for tool in ("clang-cl", "lld-link"):
+            found = lit.util.which(tool)
+            if found:
+                roots.append(os.path.dirname(os.path.dirname(found)))
+        hits = []
+        for root in roots:
+            hits += glob.glob(
+                os.path.join(root, "lib", "clang", "*", "lib", "windows", rtlib_name)
+            )
+
+        def clang_dir_key(path):
+            # <llvm>/lib/clang/<version>/lib/windows/<lib>: '22' or '17.0.1'
+            ver = os.path.basename(
+                os.path.dirname(os.path.dirname(os.path.dirname(path)))
+            )
+            return tuple(int(x) for x in re.findall(r"\d+", ver))
+
+        # The first root wins (Visual Studio's), then the newest version.
+        for root in roots:
+            mine = [
+                h
+                for h in hits
+                if os.path.normcase(h).startswith(os.path.normcase(root))
+            ]
+            if mine:
+                native_rtlib = os.path.normpath(max(mine, key=clang_dir_key))
+                break
+        if not native_rtlib:
+            rtlib_why = (
+                "no %s under %s (msil_native_rtlib=auto; install the Visual Studio "
+                "'C++ Clang tools' or pass --param msil_native_rtlib=PATH)"
+                % (
+                    rtlib_name,
+                    " or ".join(
+                        slashes(os.path.join(r, "lib", "clang", "*", "lib", "windows"))
+                        for r in roots
+                    )
+                    or "%VCINSTALLDIR%Tools/Llvm/x64 (VCINSTALLDIR is not set)",
+                )
+            )
+else:
+    if not os.path.isfile(rtlib_param):
+        fatal("--param msil_native_rtlib=%s: no such file" % rtlib_param)
+    native_rtlib = os.path.normpath(os.path.abspath(rtlib_param))
+if native_rtlib:
+    features.add("msil-native-rtlib")
+    note("native rtlib: " + native_rtlib)
+
+# --param msil_linux_sysroot=DIR (plan 5.12.2, 5.12.8): the Linux libraries
+# of the E7 oracle (and, from M15, msil-ld's --sysroot for Linux links), in
+# the layout of msil/utils/make-linux-sysroot.py. Default $MSIL_LINUX_SYSROOT,
+# else C:\llvm-msil-scratch\linux-sysroot on Windows when it exists, else '/'
+# on Linux; an empty value disables it. An explicit value (parameter or
+# variable) without libc.so.6 and libm.so.6 is a configuration error, so a
+# leg that names the sysroot cannot quietly lose its oracle. Feature
+# msil-linux-sysroot. Feature msil-linux-oracle (E7) also needs
+# libgcc_s.so.1 there, ld.lld (%ld_lld), clang with the X86 target and
+# start.o, which is compiled here once per lit run into
+# <exec root>/linux-oracle/.
+LINUX_LIBDIR = ("usr", "lib", "x86_64-linux-gnu")
+linux_sysroot = params.get("msil_linux_sysroot")
+sysroot_explicit = linux_sysroot is not None
+if linux_sysroot is None and "MSIL_LINUX_SYSROOT" in os.environ:
+    linux_sysroot = os.environ["MSIL_LINUX_SYSROOT"]
+    sysroot_explicit = True
+if linux_sysroot is None:
+    default_sysroot = r"C:\llvm-msil-scratch\linux-sysroot" if is_windows else "/"
+    linux_sysroot = default_sysroot if os.path.isdir(default_sysroot) else ""
+linux_libdir = None
+if linux_sysroot:
+    linux_sysroot = os.path.abspath(linux_sysroot)
+    libdir = os.path.join(linux_sysroot, *LINUX_LIBDIR)
+    lacking = [
+        n
+        for n in ("libc.so.6", "libm.so.6")
+        if not os.path.isfile(os.path.join(libdir, n))
+    ]
+    if lacking:
+        if sysroot_explicit:
+            fatal(
+                "msil_linux_sysroot=%s has no %s in usr/lib/x86_64-linux-gnu; "
+                "run 'python msil/utils/make-linux-sysroot.py --out %s'"
+                % (slashes(linux_sysroot), " or ".join(lacking), slashes(linux_sysroot))
+            )
+        note("linux sysroot %s is incomplete; ignored" % slashes(linux_sysroot))
+    else:
+        linux_libdir = libdir
+        features.add("msil-linux-sysroot")
+        note("linux sysroot: " + slashes(linux_sysroot))
+
+e7_why = None
+e7_start = None
+if not linux_libdir:
+    e7_why = "no Linux sysroot (msil_linux_sysroot; msil/utils/make-linux-sysroot.py)"
+elif not os.path.isfile(os.path.join(linux_libdir, "libgcc_s.so.1")):
+    e7_why = "%s has no libgcc_s.so.1 (rerun make-linux-sysroot.py)" % slashes(
+        linux_libdir
+    )
+elif not ld_lld:
+    e7_why = "no ld.lld (<build>/bin, PATH or %VCINSTALLDIR%Tools/Llvm/x64/bin)"
+elif not clang_path:
+    e7_why = "clang is not built"
+elif "X86" not in config.targets_to_build:
+    e7_why = "the X86 target is not built"
+else:
+    # start.o, once per lit run. Another lit run may be linking with the
+    # current copy: replace it only when the new one differs.
+    start_dir = os.path.join(config.test_exec_root, "linux-oracle")
+    os.makedirs(start_dir, exist_ok=True)
+    e7_start = os.path.join(start_dir, "start.o")
+    tmp = "%s.%d.tmp" % (e7_start, os.getpid())
+    rc, out = run_quietly(
+        [
+            clang_path,
+            "--target=x86_64-unknown-linux-gnu",
+            "-ffreestanding",
+            "-fno-pic",
+            "-O2",
+            "-c",
+            os.path.join(utils_dir, "linux-oracle", "start.c"),
+            "-o",
+            tmp,
+        ],
+        300,
+    )
+    if rc != 0 or not os.path.isfile(tmp):
+        e7_why = "cannot compile msil/utils/linux-oracle/start.c (status %s): %s" % (
+            rc,
+            out.strip(),
+        )
+        e7_start = None
+    else:
+        try:
+            with open(tmp, "rb") as f:
+                new = f.read()
+            try:
+                with open(e7_start, "rb") as f:
+                    same = f.read() == new
+            except OSError:
+                same = False
+            if not same:
+                os.replace(tmp, e7_start)
+        except OSError as e:
+            e7_why = "cannot write %s: %s" % (e7_start, e)
+            e7_start = None
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+if e7_start:
+    features.add("msil-linux-oracle")
+    note(
+        "E7 Linux oracle available: %s, sysroot %s"
+        % (slashes(ld_lld), slashes(linux_sysroot))
+    )
+
 # ---------------------------------------------------------------- native oracle
+# --param msil_native_oracle=1|required: the composites also build the test
+# for the native triple and compare its transcript with the same .expected
+# file. With msil_runner=local that is clang for the native triple (and
+# msil_native_rtlib on MSVC triples); with msil_runner=wsl it is the E7 Linux
+# oracle (feature msil-linux-oracle). 'required' turns every reason it cannot
+# run into a configuration error.
 oracle = params.get("msil_native_oracle", "0")
 oracle_required = oracle.lower() == "required"
+e7_oracle = False
 if oracle_required or bool_param("msil_native_oracle"):
     host_target = {"x86_64": "X86", "aarch64": "AArch64"}.get(triple_arch)
     problems = []
-    if not getattr(config, "clang", None):
+    if not clang_path:
         problems.append("clang is not built")
     if host_target not in config.targets_to_build:
         problems.append("the %s target is not built" % host_target)
-    if runner != "local":
-        problems.append("it runs only with msil_runner=local")
-    if is_windows and not os.environ.get("LIB"):
-        problems.append("LIB is not set (run from a VS x64 developer prompt)")
-    if not is_windows and not lit.util.which("ld"):
-        problems.append("no system linker (ld)")
+    if runner == "wsl":
+        if native_triple != "x86_64-unknown-linux-gnu":
+            problems.append(
+                "the E7 Linux oracle of msil_runner=wsl builds "
+                "x86_64-unknown-linux-gnu only, not %s" % native_triple
+            )
+        if "msil-linux-oracle" not in features:
+            problems.append("the E7 Linux oracle of msil_runner=wsl needs " + e7_why)
+    else:
+        if is_windows and not os.environ.get("LIB"):
+            problems.append("LIB is not set (run from a VS x64 developer prompt)")
+        if not is_windows and not lit.util.which("ld"):
+            problems.append("no system linker (ld)")
+        if is_windows and msvc_native and not native_rtlib:
+            problems.append("the Windows native oracle needs compiler-rt: " + rtlib_why)
     if problems:
         msg = "msil: native oracle unavailable: " + "; ".join(problems)
         if oracle_required:
@@ -856,6 +1149,16 @@ if oracle_required or bool_param("msil_native_oracle"):
         lit_config.warning(msg)
     else:
         features.add("msil-native-oracle")
+        if runner == "wsl":
+            e7_oracle = True
+            note(
+                "native oracle: E7 (%s, sysroot %s)"
+                % (slashes(ld_lld), slashes(linux_sysroot))
+            )
+        elif native_rtlib and msvc_native:
+            note("native oracle: %s with %s" % (native_triple, slashes(native_rtlib)))
+        else:
+            note("native oracle: " + native_triple)
 
 # Everything needed to compile and run C programs.
 if {"clang", "msil-registered-target", "msil-ilasm", "msil-dotnet"} <= features:
@@ -879,6 +1182,7 @@ for var in (
     "WINDIR",
     "LIBPATH",
     "MSIL_BUILD_DIR",
+    "MSIL_LINUX_SYSROOT",
 ):
     if var in os.environ:
         config.environment[var] = os.environ[var]
@@ -973,21 +1277,78 @@ if rt_ildasm:
         limits,
     )
 
-clang = getattr(config, "clang", None) or "clang-not-found"
+clang = clang_path or "clang-not-found"
 llc = lit.util.which("llc", config.llvm_tools_dir) or "llc-not-found"
 
 # %{msil_native_ldflags}: the libraries of the native link (the native-oracle
 # legs), placed after the source because GNU ld resolves a library only for
 # the inputs before it. It is -lm when the native triple is not Windows: the C
 # math functions are Phase-1 imports (D14), glibc keeps them in libm (not
-# libc), and the clang driver does not add -lm for C. It is empty for Windows
-# triples (MSVC and MinGW alike link ucrtbase or msvcrt, which hold the math
-# functions), and the composites then leave it out, so their expansion on
-# Windows is exactly what it was before (harness/pipeline checks the
-# arguments). update-expected.py builds its native command line by the same
-# rule.
-native_ldflags = "" if triple_os == "windows" else "-lm"
+# libc), and the clang driver does not add -lm for C. For MSVC triples it is
+# the compiler-rt builtins (msil_native_rtlib), written as
+# '-l<path>.lib', which the MSVC driver passes to the linker unchanged and
+# which, being an option, leaves a single source argument (the stand-in
+# compilers of harness/pipeline and update-expected.py's self-tests count
+# them). It is empty for MinGW (msvcrt holds the math functions, libgcc the
+# helpers) and when the builtins are disabled; the composites then leave it
+# out. update-expected.py builds its native command line by the same rule.
+if triple_os != "windows":
+    native_ldflags = "-lm"
+elif msvc_native and native_rtlib:
+    native_ldflags = quote("-l" + native_rtlib)
+else:
+    native_ldflags = ""
 native_link = " %{msil_native_ldflags}" if native_ldflags else ""
+
+# The E7 Linux oracle (msil_runner=wsl, plan 5.12.8): compile for
+# x86_64-unknown-linux-gnu without PIC, link start.o, the test and the
+# sysroot's libm, libc and libgcc_s (--as-needed keeps libgcc_s.so.1 out of
+# programs that do not call it) with ld.lld, and run the program under WSL
+# through msil-run.py --native --runner wsl. linux-oracle.test uses the same
+# substitutions with the local runner.
+linux_cc = "%s --target=x86_64-unknown-linux-gnu -fno-pic" % quote(clang)
+linux_ld = "%s -dynamic-linker /lib64/ld-linux-x86-64.so.2 --as-needed %s" % (
+    quote(ld_lld or "ld.lld-not-found"),
+    quote(e7_start or "linux-oracle-start.o-not-built"),
+)
+linux_libs = " ".join(
+    quote(os.path.join(linux_libdir or "linux-sysroot-not-found", n))
+    for n in ("libm.so.6", "libc.so.6", "libgcc_s.so.1")
+)
+# %{msil_e7_args}: the E7 configuration of this lit run as update-expected.py
+# options, so a test that runs update-expected.py --os linux uses the clang,
+# the sysroot (after msil_linux_sysroot > $MSIL_LINUX_SYSROOT > the default;
+# a sysroot lit ignored counts as absent), the WSL distribution and the
+# ld.lld that decided feature msil-linux-oracle, not the script's own
+# defaults ($MSIL_BUILD_DIR, $MSIL_LINUX_SYSROOT, PATH).
+e7_args = "--clang %s --linux-sysroot %s --wsl-distro %s --ld-lld %s" % (
+    quote(clang),
+    quote(linux_sysroot if linux_libdir else "linux-sysroot-not-found"),
+    wsl_distro,
+    quote(ld_lld or "ld.lld-not-found"),
+)
+
+
+def native_leg(t, level, compile_flags):
+    """The native-oracle leg of a composite: <compile_flags> are the C or IR
+    flags before -<level>."""
+    if e7_oracle:
+        build = (
+            f"%{{msil_linux_cc}} {compile_flags} -{level} -c %s -o {t}.native.o"
+            f" && %{{msil_linux_ld}} {t}.native.o %{{msil_linux_libs}}"
+            f" -o {t}.native.elf"
+        )
+        exe = f"{t}.native.elf"
+    else:
+        build = (
+            f"%clang_native {compile_flags} -{level} %s{native_link} -o {t}.native.exe"
+        )
+        exe = f"{t}.native.exe"
+    return (
+        f" %if msil-native-oracle %{{ && {build}"
+        f" && %msil_exec --native --expect %S/%{{s:stem}}"
+        f" --out {t}.native.out {exe} %}}"
+    )
 
 
 def roundtrip_leg(t):
@@ -1010,12 +1371,7 @@ def c_pipeline(level):
         f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {t}.dll"
     )
     cmd += roundtrip_leg(t)
-    cmd += (
-        f" %if msil-native-oracle %{{ && %clang_native %{{msil_cflags}} -{level}"
-        f" %s{native_link} -o {t}.native.exe"
-        f" && %msil_exec --native --expect %S/%{{s:stem}}"
-        f" --out {t}.native.out {t}.native.exe %}}"
-    )
+    cmd += native_leg(t, level, "%{msil_cflags}")
     cmd += (
         f" %if msil-run-netfx %{{ && %ilasm -exe -output={t}.exe {t}.il"
         f" && %msil_exec --netfx --expect %S/%{{s:stem}} --out {t}.netfx.out {t}.exe %}}"
@@ -1036,12 +1392,7 @@ def ll_pipeline(level):
         f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {t}.dll"
     )
     cmd += roundtrip_leg(t)
-    cmd += (
-        f" %if msil-native-oracle %{{ && %clang_native -Wno-override-module -{level}"
-        f" %s{native_link} -o {t}.native.exe"
-        f" && %msil_exec --native --expect %S/%{{s:stem}}"
-        f" --out {t}.native.out {t}.native.exe %}}"
-    )
+    cmd += native_leg(t, level, "-Wno-override-module")
     cmd += (
         f" %if msil-run-netfx %{{ && %ilasm -exe -output={t}.exe {t}.il"
         f" && %msil_exec --netfx --expect %S/%{{s:stem}} --out {t}.netfx.out {t}.exe %}}"
@@ -1061,13 +1412,37 @@ substitutions = [
         for o in ("O0", "O1", "O2", "O3", "Os", "Oz")
     ],
     *[("%%{msil_ll_%s}" % o, ll_pipeline(o)) for o in ("O0", "O1", "O2", "O3")],
-    # -ffreestanding turns off main's implicit 'return 0' (FunctionDecl::isMain
-    # in clang/lib/AST/Decl.cpp), so falling off main must be an error; MSVCRT
-    # triples keep the implicit return (isMSVCRTEntryPoint), natively and for
-    # MSIL alike. Directories may replace this (hosted C in phase 3).
-    ("%{msil_cflags}", "-ffreestanding -Werror=return-type -I" + quote(inputs_dir)),
-    # -lm for non-Windows native triples, else empty (see native_ldflags).
+    # -std=gnu17 pins the C dialect against a change of clang's default
+    # (C23 rejects the K&R definitions of 11-programs/kr-legacy.c; backlog
+    # 3.4). -ffreestanding turns off main's implicit 'return 0'
+    # (FunctionDecl::isMain in clang/lib/AST/Decl.cpp), so falling off main
+    # must be an error; MSVCRT triples keep the implicit return
+    # (isMSVCRTEntryPoint), natively and for MSIL alike. Directories may
+    # replace this (hosted C in phase 3). update-expected.py uses the same
+    # flags.
+    (
+        "%{msil_cflags}",
+        "-std=gnu17 -ffreestanding -Werror=return-type -I" + quote(inputs_dir),
+    ),
+    # -lm for non-Windows native triples, the compiler-rt builtins for MSVC
+    # triples, else empty (see native_ldflags).
     ("%{msil_native_ldflags}", native_ldflags),
+    # The E7 Linux oracle (see linux_cc): compiler, linker with start.o, the
+    # sysroot's libraries, and the WSL run of the result.
+    ("%{msil_linux_cc}", linux_cc),
+    # update-expected.py --os linux with the same E7 configuration.
+    ("%{msil_e7_args}", e7_args),
+    ("%{msil_linux_ld}", linux_ld),
+    ("%{msil_linux_libs}", linux_libs),
+    (
+        "%{msil_linux_exec}",
+        "%%msil_exec --native --runner wsl --wsl-distro %s --expect-os linux"
+        % wsl_distro,
+    ),
+    # ld.lld and lld-link (plan 5.12.3): the tree's, else PATH, else the
+    # Visual Studio LLVM's (before M13 builds lld).
+    ("%ld_lld", quote(ld_lld or "ld.lld-not-found")),
+    ("%lld_link", quote(lld_link or "lld-link-not-found")),
     ("%msil_triple", msil_triple),
     ("%clang_msil", "%s --target=%s" % (quote(clang), msil_triple)),
     ("%clang_native", "%s --target=%s" % (quote(clang), native_triple)),

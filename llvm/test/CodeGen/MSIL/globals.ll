@@ -38,12 +38,15 @@
 ;
 ; The error parts: an external global variable that emitted code or data
 ; refers to is an error ("external global variable '<name>' is not supported
-; (phase 2 linker)", M8.c), once per global, also for extern_weak and for a
-; use in an initializer; one that is never used is not, and neither is one
-; that only the body of an available_externally function uses, since that
-; body is never emitted (availext.ll: llc exits with 0, and there is no field
-; for it). A thread_local global is reported by MSILPrepareIR (M2) and becomes
-; an ordinary global, so its uses compile to its address field and the module
+; (phase 2 linker)", M8.c), once per global, also for a use in an
+; initializer; an extern_weak one is not, since M12 (decision D26 amended,
+; extern-weak.ll): whole-program mode makes it null in every use and erases
+; it, so its reader loads through a null pointer; one that is never used is
+; not an error either, and neither is one that only the body of an
+; available_externally function uses, since that body is never emitted
+; (availext.ll: llc exits with 0, and there is no field for it). A
+; thread_local global is reported by MSILPrepareIR (M2) and becomes an
+; ordinary global, so its uses compile to its address field and the module
 ; still assembles. Code that reads a global in section "llvm.metadata", which
 ; has no field, is an error naming the function and the global by their IL
 ; names (plan section 12, 'M8.a and M8.c amended (IL names of `<Module>`
@@ -86,6 +89,9 @@
 ; RUN:   | %{diag} --check-prefix=EXTERN
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/extern.ll -o /dev/null 2>&1 \
 ; RUN:   | %{diag} --check-prefix=EXTERN
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/extern.ll \
+; RUN:   > %t/extern.lnx.il
+; RUN: FileCheck %s --check-prefix=EXTERN-IL --input-file=%t/extern.lnx.il --implicit-check-not=ext_weak
 ; An external global referenced only from an initializer is an error as well.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/extern-data.ll -o /dev/null 2>&1 \
 ; RUN:   | FileCheck %s --check-prefix=EXTDATA --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
@@ -464,13 +470,20 @@ define i64 @izero_elem1() {
 ; VERBOSE:       {{^}}  stsfld native int 'izero'
 
 ;--- extern.ll
-; Two used declarations (one extern_weak) and one that is never used. The
-; order of the two errors is not pinned (they are matched as a group, and any
+; Two used declarations (one extern_weak) and one that is never used. Since
+; M12 the extern_weak one is null, so ext_counter's is the only error (any
 ; other error fails the check); the functions that use them still compile.
 source_filename = "extern.c"
 
-; EXTERN-DAG: {{^}}error: {{.*}}external global variable 'ext_counter' is not supported (phase 2 linker){{$}}
-; EXTERN-DAG: {{^}}error: {{.*}}external global variable 'ext_weak' is not supported (phase 2 linker){{$}}
+; EXTERN: {{^}}error: {{.*}}external global variable 'ext_counter' is not supported (phase 2 linker){{$}}
+
+; EXTERN-IL-LABEL: {{^}}.method public static native int 'read_weak'() cil managed{{$}}
+; EXTERN-IL-NEXT:  {{^\{$}}
+; EXTERN-IL-NEXT:  {{^}}  .maxstack 1{{$}}
+; EXTERN-IL-NEXT:  {{^}}  ldc.i4 0{{$}}
+; EXTERN-IL-NEXT:  {{^}}  conv.i{{$}}
+; EXTERN-IL-NEXT:  {{^}}  ldind.i{{$}}
+; EXTERN-IL-NEXT:  {{^}}  ret{{$}}
 
 @ext_counter = external global i32, align 4
 @ext_unused = external global i32, align 4

@@ -12,6 +12,7 @@
     msil-run.py [OPTIONS] --runner wsl [--dotnet D] --runtimeconfig C [--] prog.dll
     msil-run.py [OPTIONS] --netfx [--] prog.exe [ARGS...]      (.NET Framework)
     msil-run.py [OPTIONS] --native [--] prog.exe [ARGS...]     (native oracle)
+    msil-run.py [OPTIONS] --native --runner wsl [--] prog.elf  (E7 Linux oracle)
     msil-run.py --tool [--timeout S] [--mem-limit-mb N] -- TOOL [ARGS...]
     msil-run.py --tool --runner wsl [--wsl-distro D] [LIMITS] -- TOOL [ARGS...]
 
@@ -51,14 +52,23 @@ so the timeout, the memory cap and the private directory apply inside Linux,
 where 'dotnet exec' really runs. --dotnet is then the dotnet of the
 distribution (default 'dotnet') and --runtimeconfig a Windows path.
 
+--native --runner wsl runs a Linux executable the same way: the native twin
+of a test that the E7 Linux oracle (plan 5.12.8) linked on Windows with
+ld.lld against the libraries of msil/utils/make-linux-sysroot.py. The copy
+of this script inside WSL runs it with --native from its own private
+directory (an executable copy), under the timeout and the memory cap, and
+the transcript comes back to Windows, where --expect compares it (lit passes
+--expect-os linux). --dotnet and --runtimeconfig are not used.
+
 --env VAR=VALUE (repeatable) sets an environment variable for the program in
 every mode (for example DOTNET_TieredCompilation=0, plan D38).
 
 With --expect STEM the transcript is compared with STEM.<os>.expected if that
 file exists, else STEM.expected; <os> (windows, linux or darwin) comes from
---expect-os, which lit sets from the target triple. A mismatch prints a unified
-diff and exits 1. --out FILE also writes the transcript to FILE. Without
---expect the transcript goes to stdout.
+--expect-os, which lit sets from the target triple (default: linux with
+--runner wsl, else the host's). A mismatch prints a unified diff and exits 1.
+--out FILE also writes the transcript to FILE. Without --expect the
+transcript goes to stdout.
 
 --tool runs any other program (ilasm, a verifier, a compiler) under the same
 timeout and memory cap, from the current directory, passing its output and
@@ -608,6 +618,10 @@ def run_local(args):
         name = os.path.basename(prog)
         copy = os.path.join(private, name)
         shutil.copy2(prog, copy)
+        if args.native and not IS_WINDOWS:
+            # A program on a DrvFs mount with 'metadata' and a restrictive
+            # fmask (the E7 oracle's, under --runner wsl) is not executable.
+            os.chmod(copy, 0o755)
         if dotnet:
             config = os.path.join(
                 private, os.path.splitext(name)[0] + ".runtimeconfig.json"
@@ -641,10 +655,13 @@ def run_local(args):
 
 
 def run_wsl(args):
-    """Run 'dotnet exec' in WSL through a copy of this script running there."""
+    """Run 'dotnet exec' (or, with --native, a Linux executable) in WSL
+    through a copy of this script running there."""
     if not IS_WINDOWS:
         raise ConfigError("--runner wsl needs a Windows host")
-    if not args.runtimeconfig or not os.path.isfile(args.runtimeconfig):
+    if not args.native and (
+        not args.runtimeconfig or not os.path.isfile(args.runtimeconfig)
+    ):
         raise ConfigError(
             "--runtimeconfig FILE is required with --runner wsl (got %r)"
             % args.runtimeconfig
@@ -655,6 +672,15 @@ def run_wsl(args):
     wsl = wsl_exe()
     assignments = ["%s=%s" % kv for kv in DOTNET_DEFAULTS]
     assignments += ["%s=%s" % kv for kv in parse_env_args(args.env)]
+    if args.native:
+        mode = ["--native"]
+    else:
+        mode = [
+            "--dotnet",
+            args.dotnet or "dotnet",
+            "--runtimeconfig",
+            to_wsl_path(args.runtimeconfig),
+        ]
     cmd = (
         [wsl, "-d", args.wsl_distro, "--exec", "env"]
         + assignments
@@ -665,12 +691,9 @@ def run_wsl(args):
             repr(args.timeout),
             "--mem-limit-mb",
             str(args.mem_limit_mb),
-            "--dotnet",
-            args.dotnet or "dotnet",
-            "--runtimeconfig",
-            to_wsl_path(args.runtimeconfig),
-            "--show-stderr",
         ]
+        + mode
+        + ["--show-stderr"]
     )
     if args.stdin:
         cmd += ["--stdin", to_wsl_path(args.stdin)]
@@ -807,7 +830,7 @@ def parse_args(argv):
         "--runner",
         choices=("local", "wsl"),
         default="local",
-        help="where to run a .dll or a --tool (default: local)",
+        help="where to run a .dll, a --native program or a --tool (default: local)",
     )
     p.add_argument(
         "--wsl-distro",
@@ -843,10 +866,9 @@ def parse_args(argv):
     p.add_argument("--expect", metavar="STEM", help="compare with STEM[.<os>].expected")
     p.add_argument(
         "--expect-os",
-        default=host_os(),
         help="<os> for STEM.<os>.expected: the OS of the target triple "
         "(it decides sizeof(long) and the import libraries); "
-        "default: the host",
+        "default: linux with --runner wsl, else the host",
     )
     p.add_argument(
         "--show-stderr", action="store_true", help="always echo the program's stderr"
@@ -873,10 +895,12 @@ def parse_args(argv):
     args.program, args.args = rest[0], rest[1:]
     if args.timeout <= 0 or args.mem_limit_mb <= 0:
         p.error("--timeout and --mem-limit-mb must be positive")
-    if args.runner == "wsl" and (args.native or args.netfx):
-        p.error("--runner wsl runs .dll programs and --tool only")
+    if args.runner == "wsl" and args.netfx:
+        p.error("--runner wsl runs .dll programs, --native programs and --tool only")
     if args.stage and not args.tool:
         p.error("--stage needs --tool")
+    if args.expect_os is None:
+        args.expect_os = "linux" if args.runner == "wsl" else host_os()
     if args.netfx and not IS_WINDOWS:
         p.error("--netfx is only available on Windows")
     return args

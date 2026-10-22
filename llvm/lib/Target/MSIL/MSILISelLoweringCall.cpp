@@ -28,10 +28,12 @@
 /// method) or CALL_INDIRECT ('calli' through an address, a managed call whose
 /// signature MSILMCInstLower takes from the call's own operands).
 ///
-/// A byval argument is copied into a new object of the caller's static frame,
+/// A byval argument is copied into an object of the caller's static frame,
 /// and the callee receives the address of the copy, as in WebAssembly: the
-/// callee sees an ordinary pointer parameter. An sret argument is an ordinary
-/// pointer argument too.
+/// callee sees an ordinary pointer parameter. Unlike WebAssembly, which makes
+/// a new object for every copy, the calls of a function share one frame slot
+/// per byval argument position. An sret argument is an ordinary pointer
+/// argument too.
 ///
 /// A library call, which SelectionDAG makes for an operation that it cannot
 /// expand inline, names its callee by an external symbol. Phase 1 has no
@@ -338,17 +340,25 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   // static frame (decision D13), made just before the call, so the callee may
   // change its argument without changing the caller's object. The copy is a
   // cpblk (decision D15, MSILSelectionDAGInfo::EmitTargetCodeForMemcpy),
-  // never a library call. An empty aggregate needs no copy.
+  // never a library call. An empty aggregate needs no copy. A copy is dead
+  // once the callee returns, and nothing else would merge the copies of
+  // different calls (LowerCall makes no lifetime markers, and StackColoring
+  // runs only from -O1), so the K-th byval argument of every call uses the
+  // function's K-th byval slot (MSILFunctionInfo::getByvalSlot): the copies
+  // of one call never share a slot, and those of different calls are ordered
+  // by the chain.
   MVT PtrVT = getPointerTy(MF.getDataLayout());
+  MachineFrameInfo &MFI = MF.getFrameInfo();
+  auto *FuncInfo = MF.getInfo<MSILFunctionInfo>();
   SDValue Chain = CLI.Chain;
+  unsigned NumByvalCopies = 0;
   for (unsigned I = 0, E = CLI.Outs.size(); I != E; ++I) {
     const ISD::OutputArg &Out = CLI.Outs[I];
     if (!Out.Flags.isByVal() || Out.Flags.getByValSize() == 0)
       continue;
-    MachineFrameInfo &MFI = MF.getFrameInfo();
     Align Alignment = Out.Flags.getNonZeroByValAlign();
-    int FI = MFI.CreateStackObject(Out.Flags.getByValSize(), Alignment,
-                                   /*isSpillSlot=*/false);
+    int FI = FuncInfo->getByvalSlot(MFI, NumByvalCopies++,
+                                    Out.Flags.getByValSize(), Alignment);
     SDValue SizeNode = DAG.getConstant(Out.Flags.getByValSize(), DL, PtrVT);
     SDValue FINode = DAG.getFrameIndex(FI, PtrVT);
     Chain = DAG.getMemcpy(Chain, DL, FINode, CLI.OutVals[I], SizeNode,

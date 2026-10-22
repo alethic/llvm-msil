@@ -9,47 +9,60 @@
 #   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1                  # everything
 #   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Leg roundtrip
 #
-# Steps (the Windows job of .github/workflows/msil-ci.yml runs the same scripts in the same order):
+# Steps (the Windows job of .github/workflows/msil-ci.yml runs the same scripts in the same order,
+# except host-setup, which only the development host needs):
 #   1. msil/utils/ci/configure.ps1   msil-configure.ps1 -Experimental MSIL (the only step that
 #                                    differs from CI, which configures with -C MSIL.cmake)
 #   2. msil/utils/ci/build.ps1       ninja targets of the M11 gate (TargetParserTests and
 #                                    llvm-profdata among them), jitall
 #   3. msil/utils/ci/unit-tests.ps1  TargetParserTests, MCTests, MSILTests (no skipped tests)
-#   4. msil/utils/ci/lit-legs.ps1 -Wsl
-#        net8 (.NET 8 + .NET Framework 4.8 + native oracle, all MSIL lit tests), net10,
-#        net8-tc0 (DOTNET_TieredCompilation=0), more-levels (msil/test/M1 at O1, O3, Os and Oz
-#        on .NET 8; M11), wsl-net10 (msil/test/M1 and the harness self-tests under the WSL
-#        runner), wsl-net10-tc0, wsl-ilasm (Linux ilasm inside WSL), modern-ilasm (.NET ilasm on
-#        Windows), roundtrip (ildasm -> ilasm), expected (update-expected.py --check), utc
-#        (run-utc-tests.py with six update_llc_test_checks tests; M11); -Full adds all-levels.
-#   5. msil/utils/ci/upstream-hooks.ps1 (M11; not with -SkipUpstreamHooks)
+#   4. host-setup (not with -NoWsl; M12, plan 5.12.8 and the gates' step G0), idempotent: rows
+#        wsl-dotnet (msil/utils/msil-wsl-dotnet.sh inside WSL installs the private .NET
+#        runtimes of the WSL legs into $HOME/.dotnet-msil; the first run downloads them) and
+#        linux-sysroot (msil/utils/make-linux-sysroot.py copies the E7 Linux oracle's
+#        libraries out of WSL into $env:MSIL_LINUX_SYSROOT, else
+#        C:\llvm-msil-scratch\linux-sysroot). Seconds once done; no root, no system setting.
+#   5. msil/utils/ci/lit-legs.ps1 -Wsl
+#        net8 (.NET 8 + .NET Framework 4.8 + native oracle with compiler-rt, all MSIL lit
+#        tests), net10, net8-tc0 (DOTNET_TieredCompilation=0), more-levels (msil/test/M1 at O1,
+#        O3, Os and Oz on .NET 8; M11), wsl-net10 (msil/test/M1 and the harness self-tests under
+#        the WSL runner on the private runtime, E7 Linux oracle required), wsl-net10-tc0,
+#        wsl-ilasm (Linux ilasm inside WSL), wsl-quick (11-programs, the harness and
+#        msil/test/M2 under WSL with E7; M12), modern-ilasm (.NET ilasm on Windows), roundtrip
+#        (ildasm -> ilasm), expected (update-expected.py --check), expected-linux
+#        (update-expected.py --check --os linux, the E7 oracle; M12), utc (run-utc-tests.py with
+#        six update_llc_test_checks tests; M11); -Full adds all-levels.
+#   6. msil/utils/ci/upstream-hooks.ps1 (M11; not with -SkipUpstreamHooks)
 #        manifest (msil/utils/upstream-hooks.txt lists every upstream file the fork changes, and
 #        every object-format switch has an MSIL case), pins (action pins as upstream's), lit
 #        (the upstream lit tests of the hooked files), gtest (all of TargetParserTests and
 #        MCTests), compile (ARMAsmParser.cpp and lldb's GDBRemoteCommunicationClient.cpp in the
 #        private hooks build tree on C:). CI runs it with -NoCompile -NoManifest -MinPass 250.
-#   6. ci-sh (not with -NoWsl)       a smoke check of the Linux job's scripts inside WSL: bash -n
+#   7. ci-sh (not with -NoWsl)       a smoke check of the Linux job's scripts inside WSL: bash -n
 #                                    on every msil/utils/ci/*.sh, 'lit-legs.sh --list' must print
 #                                    the legs its header documents, and lit-legs.sh and
 #                                    unit-tests.sh must fail (exit non-zero, FAIL rows) against an
 #                                    empty build directory. The Linux job's configure, build,
 #                                    unit-test and lit steps themselves are not run here (they
 #                                    need a Linux build tree); only the CI runs them.
-# A failed configure or build stops steps 3, 4 and 5 (nothing in them could pass); ci-sh needs
-# no build and still runs. The unit tests and every leg run even after a failure. The summary table
-# has one row per step or leg; the exit status is 0 only if every row is PASS. A child script
-# that ends with a non-zero exit status without a FAIL row (an exception before its first leg,
-# for example an unknown -Leg, or a killed process) gets a FAIL row, and so does every expected
-# leg without a row of its own (the legs of 'lit-legs.ps1 -List' that -NoWsl, -Full and -Leg
-# select), so a run that died part-way never passes.
+# A failed configure or build stops steps 3 to 6 (nothing in them could pass); ci-sh needs no
+# build and still runs. A failed host-setup row does not stop the legs: the WSL legs that need
+# what it makes then fail with a configuration error that names it. The unit tests and every leg
+# run even after a failure. The summary table has one row per step or leg; the exit status is 0
+# only if every row is PASS. A child script that ends with a non-zero exit status without a FAIL
+# row (an exception before its first leg, for example an unknown -Leg, or a killed process) gets a
+# FAIL row, and so does every expected leg without a row of its own (the legs of
+# 'lit-legs.ps1 -List' that -NoWsl, -Full and -Leg select), so a run that died part-way never
+# passes.
 #
 # Build agent or gate agent only: steps 1 and 2 take the exclusive build-dir lock (cmake, ninja).
 # The whole run takes an hour or more on this host, so start it with run_in_background and wait
 # for it (a background job dies with the agent's turn). -SkipConfigure/-SkipBuild reuse the
 # current build; -Leg runs only the named lit legs (see lit-legs.ps1 -List); -SkipUpstreamHooks
-# leaves out step 5. The upstream-hooks step always runs all of its legs, and the gate checks
-# that each of them (manifest, pins, lit, gtest, compile) has a row. The format and scope checks
-# of the gate (plan M11 gate steps 25 and 26) are not legs and are not run here.
+# leaves out step 6; -NoWsl leaves out host-setup, the -Wsl legs and ci-sh. The upstream-hooks
+# step always runs all of its legs, and the gate checks that each of them (manifest, pins, lit,
+# gtest, compile) has a row. The format and scope checks of the gate (plan M11 gate
+# steps 25 and 26) are not legs and are not run here.
 [CmdletBinding()]
 param(
   [switch]$SkipConfigure,
@@ -69,6 +82,8 @@ $ci = Join-Path $PSScriptRoot 'ci'
 # The distribution of the WSL legs (lit.cfg.py's default --param msil_wsl_distro; lit-legs.ps1
 # passes none).
 $wslDistro = 'Ubuntu'
+# The E7 Linux oracle's sysroot, as lit-legs.ps1 and lit.cfg.py default it.
+$linuxSysroot = if ($env:MSIL_LINUX_SYSROOT) { $env:MSIL_LINUX_SYSROOT } else { 'C:\llvm-msil-scratch\linux-sysroot' }
 
 $resultsFile = Join-Path ([System.IO.Path]::GetTempPath()) "msil-m1-gate-$PID.tsv"
 Set-Content -LiteralPath $resultsFile -Value @() -Encoding utf8
@@ -158,7 +173,48 @@ function Get-ExpectedLegs {
   return [pscustomobject]@{ Expected = $expected; Known = @($all | ForEach-Object { $_.Name }) }
 }
 
-# Step 6: the Linux job's scripts inside WSL (see the header). Returns the failures.
+# Step 4: the private WSL runtimes and the E7 sysroot (see the header), one row each. Runs a
+# command, echoes its output and returns @{ Rc; Lines }.
+function Invoke-SetupCommand([string]$Exe, [string[]]$Arguments) {
+  $lines = [System.Collections.Generic.List[string]]::new()
+  $env:WSL_UTF8 = '1'               # wsl.exe's own messages in UTF-8, not UTF-16
+  try {
+    & $Exe @Arguments 2>&1 | ForEach-Object { $s = "$_"; $lines.Add($s); Write-Host $s }
+    $rc = $LASTEXITCODE
+  } catch {
+    $lines.Add("$_"); $rc = -1
+  }
+  return @{ Rc = $rc; Lines = $lines.ToArray() }
+}
+
+function Invoke-HostSetup {
+  Write-Host ''
+  Write-Host "==== $(Get-Date -Format s) host-setup: private WSL runtimes and the E7 Linux sysroot ===="
+  $wsl = Get-Command wsl.exe -CommandType Application -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty Source
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  if (-not $wsl) {
+    Add-GateRow 'host-setup' 'wsl-dotnet' 'FAIL' 'wsl.exe not found' $sw.Elapsed.TotalSeconds
+  } else {
+    $r = Invoke-SetupCommand $wsl @('-d', $wslDistro, '--cd', $MsilRepo, '--exec', 'bash',
+                                    'msil/utils/msil-wsl-dotnet.sh')
+    $have = @($r.Lines | Where-Object { $_ -match '^msil-wsl-dotnet\.sh: Microsoft\.NETCore\.App \S+ (installed|present) in ' } |
+              ForEach-Object { ($_ -replace '^msil-wsl-dotnet\.sh: Microsoft\.NETCore\.App ', '') -replace ' in .*$', '' })
+    $detail = if ($have.Count -gt 0) { "Microsoft.NETCore.App $($have -join ', ') in `$HOME/.dotnet-msil (WSL $wslDistro)" }
+              else { 'no runtime reported' }
+    $status = if ($r.Rc -eq 0 -and $have.Count -gt 0) { 'PASS' } else { 'FAIL' }
+    Add-GateRow 'host-setup' 'wsl-dotnet' $status "$detail; msil-wsl-dotnet.sh exited $($r.Rc)" $sw.Elapsed.TotalSeconds
+  }
+  $sw.Restart()
+  $r = Invoke-SetupCommand $MsilPython @((Join-Path $PSScriptRoot 'make-linux-sysroot.py'), '--out', $linuxSysroot,
+                                         '--distro', $wslDistro)
+  $summary = @($r.Lines | Where-Object { $_ -match '^make-linux-sysroot: .*file\(s\) updated$' } | Select-Object -Last 1)
+  $detail = if ($summary.Count -gt 0) { $summary[0] -replace '^make-linux-sysroot: ', '' } else { 'no summary' }
+  $status = if ($r.Rc -eq 0 -and $summary.Count -gt 0) { 'PASS' } else { 'FAIL' }
+  Add-GateRow 'host-setup' 'linux-sysroot' $status "$detail; make-linux-sysroot.py exited $($r.Rc)" $sw.Elapsed.TotalSeconds
+}
+
+# Step 7: the Linux job's scripts inside WSL (see the header). Returns the failures.
 function Invoke-CiShSmoke {
   $problems = [System.Collections.Generic.List[string]]::new()
   $wsl = Get-Command wsl.exe -CommandType Application -ErrorAction SilentlyContinue |
@@ -241,6 +297,7 @@ if (-not $stop) {
     $rc = Invoke-CiScript 'unit-tests.ps1' @()
     Test-ChildRows 'unit-tests' 'unit-tests.ps1' $rc @()
   }
+  if (-not $NoWsl) { Invoke-HostSetup }
   $legArgs = @()
   if (-not $NoWsl) { $legArgs += '-Wsl' }
   if ($Full) { $legArgs += '-Full' }

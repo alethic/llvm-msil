@@ -1,0 +1,15 @@
+launder=82
+buffer[1]=5
+buffer[2]=6
+swap_halves=9007
+0x123456789abcdef
+sum_squares(100)=338350
+unused_product=13
+launder_bool=1010
+buffer[3]=8
+launder_g=77
+tie_rm=77
+tie_rm_wide=99
+0xfffffffe
+tie_alt=-77
+[exit 42]

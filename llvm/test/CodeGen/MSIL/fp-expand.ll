@@ -31,15 +31,27 @@
 ;   x86_64-unknown-linux-gnu-msil 'frexpf' and 'ldexpf', and modf is 'modff'
 ;   on both (row 'M5.a extended (float32 frexp and ldexp on windows-msvc)');
 ;   never '?' and never a frame index.
-; - fptosi and fptoui from float32 and float64 to i128, plain, constrained
-;   and saturating, are the compiler-rt calls __fixsfti, __fixdfti,
-;   __fixunssfti and __fixunsdfti; their two-value results would be demoted
+; - Since M12 (Q36; section 12, 'D14/D33 note and P3-B text', as the row
+;   "Row 'D14/D33 note and P3-B text' (2026-10-21) and M12.b (1) corrected"
+;   states) the plain and saturating fptosi and fptoui from float32 and
+;   float64 to i128 expand inline: MSILTargetLowering sets
+;   setMaxLargeFPConvertBitWidthSupported(64), so ExpandIRInsts rewrites them
+;   before instruction selection, nothing is reported and nothing is called
+;   (i128-divrem.ll has the other direction). The expansion also covers
+;   fptosi and fptoui from bfloat, on the value's 16-bit pattern (a bitcast to
+;   i16, lshr and and for the exponent and significand, bias 127) with no
+;   call, so a bfloat operand is no error either; a half operand is widened
+;   by the compiler-rt call __extendhfsf2, which LowerCall reports with the
+;   runtime helper text (I128). (i128 to half and to bfloat still name their
+;   helpers: i128-divrem.ll's helpers part.) The constrained conversions are
+;   not expanded: they are still the compiler-rt calls __fixsfti, __fixdfti,
+;   __fixunssfti and __fixunsdfti, whose two-value results would be demoted
 ;   to a stack slot, so ReplaceNodeResults reports them with the runtime
-;   helper text and returns UNDEF (row 'M5.a extended'). From half and
-;   bfloat, plain and constrained, they name the float32 functions __fixsfti
-;   and __fixunssfti, which the legalizer calls after it extends the operand
-;   to float32; never '?' and never __fixhfti (row "Row 'M5.a extended'
-;   (floating point to i128) amended").
+;   helper text and returns UNDEF (row 'M5.a extended'); from half and bfloat
+;   they name the float32 functions __fixsfti and __fixunssfti, which the
+;   legalizer calls after it extends the operand to float32; never '?' and
+;   never __fixhfti (row "Row 'M5.a extended' (floating point to i128)
+;   amended") (I128S).
 ; - CIL rounds only to nearest (row 'M5.a extended (constrained floating
 ;   point and rounding mode)'): llvm.set.rounding, and llvm.fptrunc.round with
 ;   any other mode than round.tonearest, report "changing the floating-point
@@ -178,7 +190,8 @@
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/multi.lnx.dll %t/multi.lnx.il %}
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/multi.win.dll %t/multi.win.il %}
 
-; Floating point to i128: plain, constrained and saturating.
+; Floating point to i128: plain (only half is an error since M12),
+; constrained (unchanged) and saturating (no error since M12).
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/i128.ll -o /dev/null 2>&1 \
 ; RUN:   | %{diag} --check-prefix=I128
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/i128.ll -o /dev/null 2>&1 \
@@ -205,20 +218,18 @@
 ; RUN:   > %t/i128-strict.win.il
 ; RUN: FileCheck %s --check-prefix=I128S-IL --implicit-check-not=__fix --input-file=%t/i128-strict.win.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/i128-strict.dll %t/i128-strict.lnx.il %}
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/i128-sat.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=I128SAT
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/i128-sat.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=I128SAT
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/i128-sat.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=I128SAT
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/i128-sat.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=I128SAT
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/i128-sat.ll \
-; RUN:   > %t/i128-sat.lnx.il
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/i128-sat.ll \
+; RUN:   -o %t/i128-sat.lnx.il 2>&1 | count 0
 ; RUN: FileCheck %s --check-prefix=I128SAT-IL --implicit-check-not=__fix --input-file=%t/i128-sat.lnx.il
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/i128-sat.ll \
-; RUN:   > %t/i128-sat.win.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/i128-sat.ll \
+; RUN:   -o %t/i128-sat.win.il 2>&1 | count 0
 ; RUN: FileCheck %s --check-prefix=I128SAT-IL --implicit-check-not=__fix --input-file=%t/i128-sat.win.il
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/i128-sat.ll \
+; RUN:   -o %t/i128-sat.lnx.o0.il 2>&1 | count 0
+; RUN: FileCheck %s --check-prefix=I128SAT-IL --implicit-check-not=__fix --input-file=%t/i128-sat.lnx.o0.il
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/i128-sat.ll \
+; RUN:   -o %t/i128-sat.win.o0.il 2>&1 | count 0
+; RUN: FileCheck %s --check-prefix=I128SAT-IL --implicit-check-not=__fix --input-file=%t/i128-sat.win.o0.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/i128-sat.dll %t/i128-sat.win.il %}
 
 ; Rounding modes.
@@ -1238,53 +1249,40 @@ declare { float, i32 } @llvm.frexp.f32.i32(float)
 declare { float, float } @llvm.modf.f32(float)
 
 ;--- i128.ll
-; fptosi and fptoui to i128: the RTLIB helper is named in the error.
+; fptosi and fptoui to i128 expand inline since M12 (ExpandIRInsts); only the
+; half operands still need a helper, the half-to-float32 extension
+; __extendhfsf2 that the expansion starts with, which is named in the error.
 source_filename = "fp-expand-i128.c"
 
-; I128:     error: {{.*}}in function fptosi_f32_i128 {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
-; I128:     error: {{.*}}in function fptosi_f64_i128 {{.*}}: runtime helper '__fixdfti' is not available for MSIL yet (phase 3)
-; I128:     error: {{.*}}in function fptoui_f32_i128 {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
-; I128:     error: {{.*}}in function fptoui_f64_i128 {{.*}}: runtime helper '__fixunsdfti' is not available for MSIL yet (phase 3)
-; The legalizer converts a half or bfloat operand to float32 first.
-; I128:     error: {{.*}}in function fptosi_f16_i128 {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
-; I128:     error: {{.*}}in function fptoui_f16_i128 {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
-; I128:     error: {{.*}}in function fptosi_bf16_i128 {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
-; I128:     error: {{.*}}in function fptoui_bf16_i128 {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
+; I128:     error: {{.*}}in function fptosi_f16_i128 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+; I128:     error: {{.*}}in function fptoui_f16_i128 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
 
 ; I128-IL-LABEL: .method {{.*}}'use128'(
 ; I128-IL-SAME:  native int, native int) cil managed{{$}}
 ; I128-IL-LABEL: .method {{.*}}'fptosi_f32_i128'(
 ; I128-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128-IL:       {{^}}  ret{{$}}
-; I128-IL-NEXT:  {{^}}} // end of method 'fptosi_f32_i128'{{$}}
+; I128-IL:       {{^}}} // end of method 'fptosi_f32_i128'{{$}}
 ; I128-IL-LABEL: .method {{.*}}'fptosi_f64_i128'(
 ; I128-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128-IL:       {{^}}  ret{{$}}
-; I128-IL-NEXT:  {{^}}} // end of method 'fptosi_f64_i128'{{$}}
+; I128-IL:       {{^}}} // end of method 'fptosi_f64_i128'{{$}}
 ; I128-IL-LABEL: .method {{.*}}'fptoui_f32_i128'(
 ; I128-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128-IL:       {{^}}  ret{{$}}
-; I128-IL-NEXT:  {{^}}} // end of method 'fptoui_f32_i128'{{$}}
+; I128-IL:       {{^}}} // end of method 'fptoui_f32_i128'{{$}}
 ; I128-IL-LABEL: .method {{.*}}'fptoui_f64_i128'(
 ; I128-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128-IL:       {{^}}  ret{{$}}
-; I128-IL-NEXT:  {{^}}} // end of method 'fptoui_f64_i128'{{$}}
+; I128-IL:       {{^}}} // end of method 'fptoui_f64_i128'{{$}}
 ; I128-IL-LABEL: .method {{.*}}'fptosi_f16_i128'(
 ; I128-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128-IL:       {{^}}  ret{{$}}
-; I128-IL-NEXT:  {{^}}} // end of method 'fptosi_f16_i128'{{$}}
+; I128-IL:       {{^}}} // end of method 'fptosi_f16_i128'{{$}}
 ; I128-IL-LABEL: .method {{.*}}'fptoui_f16_i128'(
 ; I128-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128-IL:       {{^}}  ret{{$}}
-; I128-IL-NEXT:  {{^}}} // end of method 'fptoui_f16_i128'{{$}}
+; I128-IL:       {{^}}} // end of method 'fptoui_f16_i128'{{$}}
 ; I128-IL-LABEL: .method {{.*}}'fptosi_bf16_i128'(
 ; I128-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128-IL:       {{^}}  ret{{$}}
-; I128-IL-NEXT:  {{^}}} // end of method 'fptosi_bf16_i128'{{$}}
+; I128-IL:       {{^}}} // end of method 'fptosi_bf16_i128'{{$}}
 ; I128-IL-LABEL: .method {{.*}}'fptoui_bf16_i128'(
 ; I128-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128-IL:       {{^}}  ret{{$}}
-; I128-IL-NEXT:  {{^}}} // end of method 'fptoui_bf16_i128'{{$}}
+; I128-IL:       {{^}}} // end of method 'fptoui_bf16_i128'{{$}}
 ; I128-IL-LABEL: .method {{.*}}'after_i128'(
 ; I128-IL-NEXT:  {{^\{$}}
 ; I128-IL-NEXT:  {{^}}  .maxstack 1{{$}}
@@ -1488,33 +1486,25 @@ declare i128 @llvm.experimental.constrained.fptoui.i128.bf16(bfloat, metadata)
 attributes #0 = { strictfp }
 
 ;--- i128-sat.ll
-; The saturating conversions to i128 expand around a plain fptosi or
-; fptoui to i128 (compares and selects): the same errors.
+; The saturating conversions to i128 expanded around a plain fptosi or fptoui
+; to i128 (compares and selects) and gave the same errors until M12;
+; ExpandIRInsts now expands them inline, so nothing is reported.
 source_filename = "fp-expand-i128-sat.c"
-
-; I128SAT:  error: {{.*}}in function fptosi_f32_i128_sat {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
-; I128SAT:  error: {{.*}}in function fptosi_f64_i128_sat {{.*}}: runtime helper '__fixdfti' is not available for MSIL yet (phase 3)
-; I128SAT:  error: {{.*}}in function fptoui_f32_i128_sat {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
-; I128SAT:  error: {{.*}}in function fptoui_f64_i128_sat {{.*}}: runtime helper '__fixunsdfti' is not available for MSIL yet (phase 3)
 
 ; I128SAT-IL-LABEL: .method {{.*}}'use128'(
 ; I128SAT-IL-SAME:  native int, native int) cil managed{{$}}
 ; I128SAT-IL-LABEL: .method {{.*}}'fptosi_f32_i128_sat'(
 ; I128SAT-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128SAT-IL:       {{^}}  ret{{$}}
-; I128SAT-IL-NEXT:  {{^}}} // end of method 'fptosi_f32_i128_sat'{{$}}
+; I128SAT-IL:       {{^}}} // end of method 'fptosi_f32_i128_sat'{{$}}
 ; I128SAT-IL-LABEL: .method {{.*}}'fptosi_f64_i128_sat'(
 ; I128SAT-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128SAT-IL:       {{^}}  ret{{$}}
-; I128SAT-IL-NEXT:  {{^}}} // end of method 'fptosi_f64_i128_sat'{{$}}
+; I128SAT-IL:       {{^}}} // end of method 'fptosi_f64_i128_sat'{{$}}
 ; I128SAT-IL-LABEL: .method {{.*}}'fptoui_f32_i128_sat'(
 ; I128SAT-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128SAT-IL:       {{^}}  ret{{$}}
-; I128SAT-IL-NEXT:  {{^}}} // end of method 'fptoui_f32_i128_sat'{{$}}
+; I128SAT-IL:       {{^}}} // end of method 'fptoui_f32_i128_sat'{{$}}
 ; I128SAT-IL-LABEL: .method {{.*}}'fptoui_f64_i128_sat'(
 ; I128SAT-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128SAT-IL:       {{^}}  ret{{$}}
-; I128SAT-IL-NEXT:  {{^}}} // end of method 'fptoui_f64_i128_sat'{{$}}
+; I128SAT-IL:       {{^}}} // end of method 'fptoui_f64_i128_sat'{{$}}
 ; I128SAT-IL-LABEL: .method {{.*}}'after_i128_sat'(
 ; I128SAT-IL-NEXT:  {{^\{$}}
 ; I128SAT-IL-NEXT:  {{^}}  .maxstack 1{{$}}

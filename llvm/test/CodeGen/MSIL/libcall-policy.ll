@@ -14,10 +14,13 @@
 ; - A runtime helper, whose name starts with '__' (compiler-rt; __atomic_*
 ;   helpers in atomic-errors.ll), is an error until phase 3: "runtime helper
 ;   '<name>' is not available for MSIL yet (phase 3)", reported by LowerCall
-;   (__floattidf for sitofp i128 to double) or, for i128 division, by the type
-;   legalizer with the same text (__divti3). powi is __powidf2 on the Linux
-;   triple (an error) and pow of the converted exponent on windows-msvc (a
-;   P/Invoke).
+;   (or, for a helper with a two-value result, by the type legalizer with the
+;   same text). powi is __powidf2 on the Linux triple (an error) and pow of
+;   the converted exponent on windows-msvc (a P/Invoke). Since M12 (Q36) i128
+;   division and the conversions between i128 and float32 or float64 ask for
+;   no helper: ExpandIRInsts expands them inline (i128-divrem.ll), so
+;   helpers.ll's div128 and sitofp128, which named __divti3 and __floattidf
+;   until then, compile with no error and no call, and neither name appears.
 ; - Any other library function is an error: "library call '<name>' is not a
 ;   Phase-1 import" (lround, exp10). On x86_64-w64-windows-gnu-msil the import
 ;   set is msvcrt.dll's (D14 as amended in plan section 12, 'Windows import
@@ -263,22 +266,20 @@ attributes #0 = { "msil-import-module"="custom.dll" "msil-import-name"="custom_e
 ;--- helpers.ll
 source_filename = "libcall-helpers.c"
 
-; HELPER: {{^}}error: {{.*}}in function div128 {{.*}}: runtime helper '__divti3' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function sitofp128 {{.*}}: runtime helper '__floattidf' is not available for MSIL yet (phase 3){{$}}
 ; HELPER: {{^}}error: {{.*}}in function lround64 {{.*}}: library call 'lround' is not a Phase-1 import{{$}}
 ; HELPER: {{^}}error: {{.*}}in function exp10_f64 {{.*}}: library call 'exp10' is not a Phase-1 import{{$}}
 
 ; HELPER-IL-LABEL: .method {{.*}}'div128'(
-; HELPER-IL-NOT:   call
+; HELPER-IL-NOT:   {{^}}  call
 ; HELPER-IL:       {{^}}} // end of method 'div128'{{$}}
 ; HELPER-IL-LABEL: .method {{.*}}'sitofp128'(
-; HELPER-IL-NOT:   call
+; HELPER-IL-NOT:   {{^}}  call
 ; HELPER-IL:       {{^}}} // end of method 'sitofp128'{{$}}
 ; HELPER-IL-LABEL: .method {{.*}}'lround64'(
-; HELPER-IL-NOT:   call
+; HELPER-IL-NOT:   {{^}}  call
 ; HELPER-IL:       {{^}}} // end of method 'lround64'{{$}}
 ; HELPER-IL-LABEL: .method {{.*}}'exp10_f64'(
-; HELPER-IL-NOT:   call
+; HELPER-IL-NOT:   {{^}}  call
 ; HELPER-IL:       {{^}}} // end of method 'exp10_f64'{{$}}
 ; HELPER-IL-LABEL: .method {{.*}}'after_helpers'(
 ; HELPER-IL-NEXT:  {{^\{$}}
