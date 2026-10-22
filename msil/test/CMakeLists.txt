@@ -46,6 +46,15 @@ foreach(_msil_dep clang llc opt FileCheck not count split-file llvm-config)
     list(APPEND MSIL_TEST_DEPS ${_msil_dep})
   endif()
 endforeach()
+# check-msil also runs lld/test/MSIL, which needs lld (it makes msil-ld too),
+# and llvm/test/CodeGen/MSIL/irsymtab-linker-options.ll, which needs llvm-as
+# and llvm-bcanalyzer (M13).
+set(_msil_check_deps ${MSIL_TEST_DEPS})
+foreach(_msil_dep lld llvm-as llvm-bcanalyzer)
+  if(TARGET ${_msil_dep})
+    list(APPEND _msil_check_deps ${_msil_dep})
+  endif()
+endforeach()
 
 configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in
@@ -88,9 +97,13 @@ if(TARGET clang AND LLVM_EXTERNAL_CLANG_SOURCE_DIR)
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-toolchain.c
     )
 endif()
+# msil-ld's tests (M13): the lld flavor msil and its stub.
+if(TARGET lld AND LLVM_EXTERNAL_LLD_SOURCE_DIR)
+  list(APPEND _msil_lit_paths ${LLVM_EXTERNAL_LLD_SOURCE_DIR}/test/MSIL)
+endif()
 list(APPEND _msil_lit_paths ${CMAKE_CURRENT_BINARY_DIR})
-# Phase 2 adds ${LLVM_MAIN_SRC_DIR}/test/MC/MSIL and lld/test/MSIL here.
+# Phase 2 adds ${LLVM_MAIN_SRC_DIR}/test/MC/MSIL here (M18).
 add_lit_target(check-msil "Running all MSIL tests"
   ${_msil_lit_paths}
-  DEPENDS ${MSIL_TEST_DEPS}
+  DEPENDS ${_msil_check_deps}
   )

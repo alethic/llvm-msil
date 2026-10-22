@@ -38,6 +38,7 @@
 #include "llvm/MC/MCSymbolCOFF.h"
 #include "llvm/MC/MCSymbolELF.h"
 #include "llvm/MC/MCSymbolGOFF.h"
+#include "llvm/MC/MCSymbolMSIL.h"
 #include "llvm/MC/MCSymbolMachO.h"
 #include "llvm/MC/MCSymbolWasm.h"
 #include "llvm/MC/MCSymbolXCOFF.h"
@@ -290,6 +291,8 @@ MCSymbol *MCContext::createSymbolImpl(const MCSymbolTableEntry *Name,
                 "MCSymbol classes must be trivially destructible");
   static_assert(std::is_trivially_destructible<MCSymbolMachO>(),
                 "MCSymbol classes must be trivially destructible");
+  static_assert(std::is_trivially_destructible<MCSymbolMSIL>(),
+                "MCSymbol classes must be trivially destructible");
   static_assert(std::is_trivially_destructible<MCSymbolWasm>(),
                 "MCSymbol classes must be trivially destructible");
   static_assert(std::is_trivially_destructible<MCSymbolXCOFF>(),
@@ -313,9 +316,7 @@ MCSymbol *MCContext::createSymbolImpl(const MCSymbolTableEntry *Name,
   case MCContext::IsSPIRV:
     return new (Name, *this) MCSymbol(Name, IsTemporary);
   case MCContext::IsMSIL:
-    // A later phase may add MCSymbolMSIL (typed signatures, like
-    // MCSymbolWasm); that only touches this switch and a new header.
-    return new (Name, *this) MCSymbol(Name, IsTemporary);
+    return new (Name, *this) MCSymbolMSIL(Name, IsTemporary);
   }
   return new (Name, *this) MCSymbol(Name, IsTemporary);
 }

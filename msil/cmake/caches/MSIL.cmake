@@ -2,12 +2,14 @@
 #   cmake -G Ninja -S llvm -B build -C msil/cmake/caches/MSIL.cmake
 # Anything here can be overridden with -D on the same command line.
 # (On the development host msil/utils/build/msil-configure.ps1 is used instead;
-# it adds lld, WebAssembly and the clang-cl toolchain.)
+# it adds WebAssembly and the clang-cl toolchain.)
 set(CMAKE_BUILD_TYPE Release CACHE STRING "")
 set(LLVM_ENABLE_ASSERTIONS ON CACHE BOOL "")
-# lld is not needed until phase 2 (msil-ld); the native oracle links with the
-# system linker (ld on Linux, link.exe from the VS environment on Windows).
-set(LLVM_ENABLE_PROJECTS "clang" CACHE STRING "")
+# lld from M13 (plan 5.12.12, D9): msil-ld is the msil flavor of lld, and the
+# build-target list (msil/utils/ci/build-targets.txt) has lld, its copies and
+# LLDAsLibAllTests. The native oracle still links with the system linker (ld
+# on Linux, link.exe from the VS environment on Windows).
+set(LLVM_ENABLE_PROJECTS "clang;lld" CACHE STRING "")
 # X86 stays built: clang passes x86 -mllvm options for x86 triples
 # (registry-tm.md 2.5), and the native oracle needs a host backend.
 set(LLVM_TARGETS_TO_BUILD "X86" CACHE STRING "")

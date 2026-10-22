@@ -141,7 +141,9 @@ Error Builder::addModule(Module *M) {
   Mod.UncBegin = Uncommons.size();
   Mods.push_back(Mod);
 
-  if (TT.isOSBinFormatCOFF()) {
+  // MSIL modules carry their native platform's linker options (-l<name> or
+  // /DEFAULTLIB:<name>), which msil-ld reads like COFF's.
+  if (TT.isOSBinFormatCOFF() || TT.isOSBinFormatMSIL()) {
     if (auto E = M->materializeMetadata())
       return E;
     if (NamedMDNode *LinkerOptions =

@@ -492,6 +492,11 @@ def TargetX86_64 : TargetArch<["x86_64"]>;
 def TargetAnyX86 : TargetArch<["x86", "x86_64"]>;
 def TargetSPIRV : TargetArch<["spirv", "spirv32", "spirv64"]>;
 def TargetWebAssembly : TargetArch<["wasm32", "wasm64"]>;
+// MSIL triples have native architectures (x86_64, aarch64) and the MSIL object
+// format; they share WebAssembly's import attributes.
+def TargetWebAssemblyOrMSIL : TargetSpec {
+  let CustomCode = [{ T.isWasm() || T.isOSBinFormatMSIL() }];
+}
 def TargetNVPTX : TargetArch<["nvptx", "nvptx64"]>;
 def TargetWindows : TargetSpec {
   let OSes = ["Win32"];
@@ -2623,7 +2628,7 @@ def WebAssemblyExportName : InheritableAttr,
 }
 
 def WebAssemblyImportModule : InheritableAttr,
-                              TargetSpecificAttr<TargetWebAssembly> {
+                              TargetSpecificAttr<TargetWebAssemblyOrMSIL> {
   let Spellings = [Clang<"import_module">];
   let Args = [StringArgument<"ImportModule">];
   let Documentation = [WebAssemblyImportModuleDocs];
@@ -2631,7 +2636,7 @@ def WebAssemblyImportModule : InheritableAttr,
 }
 
 def WebAssemblyImportName : InheritableAttr,
-                            TargetSpecificAttr<TargetWebAssembly> {
+                            TargetSpecificAttr<TargetWebAssemblyOrMSIL> {
   let Spellings = [Clang<"import_name">];
   let Args = [StringArgument<"ImportName">];
   let Documentation = [WebAssemblyImportNameDocs];

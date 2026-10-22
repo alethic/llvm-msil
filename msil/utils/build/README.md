@@ -75,12 +75,18 @@ pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-configure.ps1 -Experime
 `ninja -C <build> <targets>`. Drops to `-j 4` below 16 GB of free RAM and `-j 2` below 6 GB
 unless `-Jobs` is given; `-KeepGoing` adds `-k 0`.
 
-The build targets of milestone M11 (the same list as `msil/utils/ci/build.ps1` and `build.sh`;
-`llvm-profdata` serves two upstream clang driver tests of the upstream-hooks check, which also
-runs all of `TargetParserTests` and `MCTests`):
+`-Standard` (from M13) builds every target of `msil/utils/ci/build-targets.txt`, in the file's
+order, then the targets named on the command line (one already on the list is not named twice);
+the targets may then be left out. That file is the one build-target list (plan 5.6.11): gate
+step G1 is `msil-build.ps1 -Standard`, `msil/utils/ci/build.ps1` runs the same command, and
+`build.sh` reads the same file. It has one target per line, `#` comments and blank lines; a line
+with two names is an error. Without `-Standard` the script builds exactly the targets it is given
+and needs at least one, as before.
 
 ```powershell
-pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 llc opt clang FileCheck not count split-file llvm-config llvm-profdata TargetParserTests MCTests MSILTests
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard llvm-mc
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 llc FileCheck
 ```
 
 ### msil-lit.ps1 (shared)

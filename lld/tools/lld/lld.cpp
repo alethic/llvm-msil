@@ -19,6 +19,7 @@
 //  - ld64:      Mach-O (macOS)
 //  - lld-link:  COFF (Windows)
 //  - ld-wasm:   WebAssembly
+//  - msil-ld:   MSIL (.NET)
 //
 // lld can be invoked as "lld" along with "-flavor" option. This is for
 // backward compatibility and not recommended.
@@ -71,6 +72,7 @@ LLD_HAS_DRIVER(elf)
 LLD_HAS_DRIVER(mingw)
 LLD_HAS_DRIVER(macho)
 LLD_HAS_DRIVER(wasm)
+LLD_HAS_DRIVER(msil)
 
 int lld_main(int argc, char **argv, const llvm::ToolContext &) {
   sys::Process::UseANSIEscapeCodes(true);

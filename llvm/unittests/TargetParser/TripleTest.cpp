@@ -3613,6 +3613,121 @@ TEST(TripleTest, MSILObjectFormat) {
                 .merge(Triple("aarch64-apple-macosx14.0.0")));
 }
 
+TEST(TripleTest, MSILIsCompatibleWith) {
+  // Decision D3 as amended in M13 (ImplementationPlan.md section 12; recon
+  // p2/lld-flavor.md 3.3 item 7): when either triple is MSIL,
+  // isCompatibleWith compares the two getNativeFormatTriple()s. An MSIL triple
+  // is therefore compatible with its native triple and with every MSIL or
+  // native triple that its native triple is compatible with, so IRMover does
+  // not warn 'Linking two modules of different target triples' when msil-ld
+  // links stock-clang bitcode with MSIL bitcode. Everything else that the
+  // native rule compares still has to match: architecture, OS, environment,
+  // the vendor (outside MinGW, where it is ignored) and an explicit object
+  // format other than MSIL.
+  struct {
+    const char *A;
+    const char *B;
+    bool Result;
+  } Cases[] = {
+      // An MSIL triple and its native triple.
+      {"x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu-msil", true},
+      {"x86_64-unknown-linux-musl", "x86_64-unknown-linux-musl-msil", true},
+      {"aarch64-unknown-linux-gnu", "aarch64-unknown-linux-gnu-msil", true},
+      {"x86_64-pc-windows-msvc", "x86_64-pc-windows-msvc-msil", true},
+      {"aarch64-pc-windows-msvc", "aarch64-pc-windows-msvc-msil", true},
+      {"x86_64-w64-windows-gnu", "x86_64-w64-windows-gnu-msil", true},
+      {"x86_64-unknown-linux-gnu-msil", "x86_64-unknown-linux-gnu-msil", true},
+      // MSVC versions are not compared (the environment kind is).
+      {"x86_64-pc-windows-msvc19.33.0", "x86_64-pc-windows-msvc19.51.0-msil",
+       true},
+      {"x86_64-pc-windows-msvc19.33.0-msil",
+       "x86_64-pc-windows-msvc19.51.0-msil", true},
+      {"x86_64-pc-windows-msvc-msil", "x86_64-pc-windows-msvc19.40.0", true},
+      // MinGW ignores the vendor, with or without the MSIL format.
+      {"x86_64-w64-windows-gnu-msil", "x86_64-pc-windows-gnu", true},
+      {"x86_64-pc-windows-gnu-msil", "x86_64-w64-windows-gnu-msil", true},
+      {"aarch64-w64-windows-gnu", "aarch64-pc-windows-gnu-msil", true},
+
+      // Another OS.
+      {"x86_64-unknown-linux-gnu-msil", "x86_64-unknown-hurd-gnu", false},
+      {"x86_64-unknown-linux-gnu-msil", "x86_64-w64-windows-gnu-msil", false},
+      {"x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc-msil", false},
+      // Another environment.
+      {"x86_64-pc-windows-msvc-msil", "x86_64-pc-windows-gnu", false},
+      {"x86_64-pc-windows-msvc-msil", "x86_64-pc-windows-gnu-msil", false},
+      {"x86_64-unknown-linux-gnu-msil", "x86_64-unknown-linux-musl", false},
+      {"x86_64-unknown-linux-gnu-msil", "x86_64-unknown-linux-musl-msil",
+       false},
+      // Another architecture.
+      {"x86_64-unknown-linux-gnu-msil", "aarch64-unknown-linux-gnu-msil",
+       false},
+      {"aarch64-unknown-linux-gnu-msil", "x86_64-unknown-linux-gnu", false},
+      {"x86_64-pc-windows-msvc-msil", "i686-pc-windows-msvc", false},
+      // Another vendor outside MinGW.
+      {"x86_64-pc-windows-msvc-msil", "x86_64-unknown-windows-msvc", false},
+      // An explicit native object format other than the default one.
+      {"x86_64-pc-windows-msvc-msil", "x86_64-pc-windows-msvc-elf", false},
+  };
+
+  auto DoTest = [](const char *A, const char *B,
+                   bool Result) -> testing::AssertionResult {
+    if (Triple(A).isCompatibleWith(Triple(B)) != Result) {
+      return testing::AssertionFailure()
+             << llvm::formatv("Triple {0} and {1} were expected to be {2}", A,
+                              B, Result ? "compatible" : "incompatible");
+    }
+    return testing::AssertionSuccess();
+  };
+  for (const auto &C : Cases) {
+    EXPECT_TRUE(DoTest(C.A, C.B, C.Result));
+    // The relation is symmetric.
+    EXPECT_TRUE(DoTest(C.B, C.A, C.Result));
+  }
+
+  // The rule itself, over every pair of these triples: a pair with an MSIL
+  // triple is compatible exactly when the two native triples are (the native
+  // rule is upstream's and is tested by isCompatibleWith above).
+  const char *Triples[] = {
+      "x86_64-unknown-linux-gnu",      "x86_64-unknown-linux-gnu-msil",
+      "x86_64-unknown-linux-musl",     "x86_64-unknown-linux-musl-msil",
+      "aarch64-unknown-linux-gnu",     "aarch64-unknown-linux-gnu-msil",
+      "x86_64-pc-windows-msvc",        "x86_64-pc-windows-msvc-msil",
+      "x86_64-pc-windows-msvc19.40.0", "x86_64-pc-windows-msvc19.40.0-msil",
+      "aarch64-pc-windows-msvc",       "aarch64-pc-windows-msvc-msil",
+      "x86_64-w64-windows-gnu",        "x86_64-w64-windows-gnu-msil",
+      "x86_64-pc-windows-gnu",         "x86_64-pc-windows-gnu-msil",
+      "x86_64-unknown-windows-msvc",   "x86_64-pc-windows-msvc-elf",
+      "x86_64-unknown-hurd-gnu",       "i686-pc-windows-msvc",
+  };
+  for (const char *A : Triples) {
+    for (const char *B : Triples) {
+      Triple TA(A), TB(B);
+      if (!TA.isOSBinFormatMSIL() && !TB.isOSBinFormatMSIL())
+        continue;
+      Triple NA = TA.getNativeFormatTriple(), NB = TB.getNativeFormatTriple();
+      EXPECT_FALSE(NA.isOSBinFormatMSIL()) << A;
+      EXPECT_EQ(NA.isCompatibleWith(NB), TA.isCompatibleWith(TB))
+          << A << " and " << B;
+    }
+  }
+
+  // IRMover gives the linked module SrcTriple.merge(DstTriple) once the two
+  // are compatible: merge() keeps the destination's triple, whichever of the
+  // two is the MSIL one.
+  EXPECT_EQ("x86_64-unknown-linux-gnu-msil",
+            Triple("x86_64-unknown-linux-gnu")
+                .merge(Triple("x86_64-unknown-linux-gnu-msil")));
+  EXPECT_EQ("x86_64-unknown-linux-gnu",
+            Triple("x86_64-unknown-linux-gnu-msil")
+                .merge(Triple("x86_64-unknown-linux-gnu")));
+  EXPECT_EQ("x86_64-pc-windows-msvc19.51.0-msil",
+            Triple("x86_64-pc-windows-msvc19.33.0")
+                .merge(Triple("x86_64-pc-windows-msvc19.51.0-msil")));
+  EXPECT_EQ("x86_64-w64-windows-gnu",
+            Triple("x86_64-pc-windows-gnu-msil")
+                .merge(Triple("x86_64-w64-windows-gnu")));
+}
+
 TEST(TripleTest, SupportsDebugEntryValues) {
   EXPECT_TRUE(Triple("i686-unknown-linux-gnu").supportsDebugEntryValues());
   EXPECT_TRUE(Triple("x86_64-apple-macosx").supportsDebugEntryValues());
@@ -4198,11 +4313,6 @@ TEST(TripleTest, isCompatibleWith) {
       {"x86_64-unknown-linux-gnu", "x86_64h-unknown-linux-gnu", true},
       {"x86_64-pc-windows-gnu", "x86_64-pc-windows-msvc", false},
       {"x86_64-pc-windows-msvc", "x86_64-pc-windows-msvc-elf", false},
-      {"x86_64-unknown-linux-gnu", "x86_64-unknown-linux-gnu-msil", false},
-      {"x86_64-pc-windows-msvc", "x86_64-pc-windows-msvc-msil", false},
-      {"aarch64-unknown-linux-gnu", "aarch64-unknown-linux-gnu-msil", false},
-      {"x86_64-unknown-linux-gnu-msil", "x86_64-unknown-linux-gnu-msil", true},
-      {"x86_64-pc-windows-msvc-msil", "x86_64-pc-windows-gnu-msil", false},
       {"i686-w64-windows-gnu", "i386-w64-windows-gnu", true},
       {"x86_64-w64-windows-gnu", "x86_64-pc-windows-gnu", true},
       {"armv7-w64-windows-gnu", "thumbv7-pc-windows-gnu", true},

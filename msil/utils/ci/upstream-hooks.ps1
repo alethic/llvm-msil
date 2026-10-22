@@ -23,9 +23,10 @@
 #             '[MSIL] Merge upstream llvm-project main at ' merge), no fork-only line names a
 #             file of the base, every 'compile' line names a compile-leg file or a header one
 #             of them #includes directly, every utc name is on the utc leg's list (equal in
-#             lit-legs.ps1 and lit-legs.sh), and every exhaustive object-format switch of the
-#             monorepo has an MSIL case in that same switch (switch-default and switch-other
-#             exempt per switch) (about 11-20 s)
+#             lit-legs.ps1 and lit-legs.sh), every gtest line names a binary of the gtest leg
+#             below (whose list must equal GTEST_BINARIES), and every exhaustive
+#             object-format switch of the monorepo has an MSIL case in that same switch
+#             (switch-default and switch-other exempt per switch) (about 11-20 s)
 #   pins      check-action-pins.py: the msil-*.yml workflows pin each action as upstream's
 #             workflows do, every uses: line of theirs is a pin it can read or a local or
 #             docker:// one, and msil-ci.yml's windows job runs this script's CI command after
@@ -37,13 +38,16 @@
 #             lit writes upstream-hooks.json (-o) and .xml there, and the log is
 #             upstream-hooks.log; check-upstream-hooks.py --lit-verdict judges the JSON report:
 #             every FAIL allow-listed, no stale allow entry, no UNRESOLVED, TIMEOUT or XPASS,
-#             every input run, and at least min-pass PASS results (the manifest's, or -MinPass)
+#             every input run, a PASS for every input under a fork prefix (lld/test/MSIL/
+#             today), and at least min-pass PASS results (the manifest's, or -MinPass)
 #             (about 1 min)
 #   gtest     msil-gtest.ps1 -NoSkip on TargetParserTests (-MinTests 700) without the host-gated
-#             HostTest cases, and on MCTests (-MinTests 40) without
+#             HostTest cases, on MCTests (-MinTests 40) without
 #             TargetRegistry.MSILLookupWithoutTarget (it skips whenever MSIL is built) and the
 #             Disassembler test of a target that 'llvm-config --targets-built' does not list (it
-#             calls GTEST_SKIP, and -NoSkip fails a skip) (10-25 s)
+#             calls GTEST_SKIP, and -NoSkip fails a skip), and from M13 on all of
+#             LLDAsLibAllTests (-MinTests 1: AsLib.AllDrivers, every lld flavor msil-ld included,
+#             in-process) (10-25 s)
 #   compile   compile coverage of the two hooked upstream files that the main build never
 #             compiles, llvm/lib/Target/ARM/AsmParser/ARMAsmParser.cpp and
 #             lldb/source/Plugins/Process/gdb-remote/GDBRemoteCommunicationClient.cpp (the list
@@ -68,8 +72,9 @@
 # merge commit, and the hooks tree is a development-host cost). -MinPass overrides the
 # manifest's min-pass (the CI build lacks WebAssembly, so the list's WebAssembly tests are
 # UNSUPPORTED there). -SelfTest runs only the self-tests (rows of step 'upstream-hooks-self-test'):
-# check-upstream-hooks.py --self-test (planted manifest, fork-only, per-switch coverage and
-# exemption, utc-list, compile-line, allow-list, MERGE_HEAD and lit-verdict defects),
+# check-upstream-hooks.py --self-test (planted manifest, fork-only, fork-prefix, per-switch
+# coverage and exemption, utc-list, gtest-list, compile-line, allow-list, MERGE_HEAD and
+# lit-verdict defects, the lld suite's test names among them),
 # check-action-pins.py --self-test (planted .github trees: stale unquoted, quoted and
 # comment-less pins, an unparsable uses: line, and a misspelled or missing step id or a missing
 # upstream-hooks step in msil-ci.yml fail, the clean tree passes), the MCTests filter for the
@@ -227,10 +232,16 @@ function Invoke-GtestLeg {
   }
   $ok = $true
   $parts = @()
+  # The binaries are GTEST_BINARIES of check-upstream-hooks.py (the manifest's gtest lines may
+  # name only these): its --check fails unless the Exe entries below are exactly that list.
   foreach ($t in @(@{ Name = 'TargetParserTests'; Exe = 'unittests/TargetParser/TargetParserTests.exe'
                       Filter = $targetParserFilter; Min = 700 },
                    @{ Name = 'MCTests'; Exe = 'unittests/MC/MCTests.exe'
-                      Filter = (Get-McTestsFilter $targets); Min = 40 })) {
+                      Filter = (Get-McTestsFilter $targets); Min = 40 },
+                   # AsLib.AllDrivers runs every lld flavor in-process, msil-ld included (plan
+                   # 5.6.3, M13): the test of lld's AllDrivers.cpp hook.
+                   @{ Name = 'LLDAsLibAllTests'; Exe = 'tools/lld/unittests/AsLibAll/LLDAsLibAllTests.exe'
+                      Filter = '*'; Min = 1 })) {
     $r = Invoke-Tool -Exe 'pwsh' -Log (Join-Path $results "upstream-hooks-gtest-$($t.Name).log") `
            -Arguments @('-NoProfile', '-File', $msilGtest, '-Exe', (Join-Path $BuildDir $t.Exe),
                         '-Filter', $t.Filter, '-NoSkip', '-MinTests', "$($t.Min)", '-BuildDir', $BuildDir)

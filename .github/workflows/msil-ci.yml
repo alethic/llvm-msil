@@ -15,9 +15,12 @@
 # upstream-hooks legs that CI skips. The Linux job's scripts need a
 # Linux build tree, so the gate only smoke-checks them inside WSL (its ci-sh
 # row: bash -n, the leg list of lit-legs.sh, and their failure exit status
-# against an empty build directory). The scripts build clang, llc and the
-# unit tests with the X86 and experimental MSIL targets, run the MSIL unit
-# tests and then the test legs: the llc/clang FileCheck tests and the
+# against an empty build directory). The scripts build the targets of
+# msil/utils/ci/build-targets.txt, the one build-target list of the gates
+# and both jobs (clang, llc, lld with msil-ld, llvm-ar and its copies, the
+# binary tools and the unit tests; projects clang and lld, the X86 and
+# experimental MSIL targets), run the MSIL unit tests (CLITests among them)
+# and then the test legs: the llc/clang FileCheck tests and the
 # execution tests in msil/test, compiled to IL, assembled, verified (ILVerify,
 # jitall, and PEVerify on Windows), run on .NET and compared with checked-in
 # transcripts and a native build (the native oracle).

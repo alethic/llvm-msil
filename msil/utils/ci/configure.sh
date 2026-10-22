@@ -7,7 +7,7 @@
 #
 #   bash msil/utils/ci/configure.sh [BUILD_DIR]        (default <repo>/build)
 #
-# cmake -C msil/cmake/caches/MSIL.cmake (Release + assertions, clang, X86 + experimental MSIL,
+# cmake -C msil/cmake/caches/MSIL.cmake (Release + assertions, clang and lld, X86 + experimental MSIL,
 # the msil/ external project) with clang/clang++ ($CC/$CXX if set), lld when ld.lld is on PATH,
 # PCH off and, when sccache is on PATH, sccache launchers (sccache cannot cache PCHs; upstream
 # CI turns PCH off too). configure.ps1 is the Windows counterpart.

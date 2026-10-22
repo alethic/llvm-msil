@@ -8,21 +8,28 @@
 #   bash msil/utils/ci/unit-tests.sh [BUILD_DIR]       (default <repo>/build)
 #
 # The same checks as unit-tests.ps1 (msil-gtest.ps1 -NoSkip -MinTests 1): TargetParserTests,
-# MCTests and MSILTests with the filter below; a binary fails on a non-zero exit, on a
-# '[  SKIPPED ]' line (GTEST_SKIP exits 0) and when no '[  PASSED  ] N test(s).' line with N >= 1
-# is printed. The filter excludes TargetRegistry.MSILLookupWithoutTarget, which M1.e requires to
-# skip whenever the msil target is registered (always, from M2 on; plan section 12). Every
-# binary runs even after a failure.
+# MCTests and MSILTests with the filter below, and from M13 CLITests with the filter '*' (its
+# suites are named CLI<Topic> without 'MSIL', plan 5.7.13); a binary fails on a non-zero exit,
+# on a '[  SKIPPED ]' line (GTEST_SKIP exits 0) and when no '[  PASSED  ] N test(s).' line with
+# N >= 1 is printed. The filter excludes TargetRegistry.MSILLookupWithoutTarget, which M1.e
+# requires to skip whenever the msil target is registered (always, from M2 on; plan section
+# 12). Every binary runs even after a failure.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/ci-common.sh"
 build=${1:-$MSIL_REPO/build}
 
-filter='*MSIL*:TargetRegistry.*:-TargetRegistry.MSILLookupWithoutTarget'
-binaries=(unittests/TargetParser/TargetParserTests unittests/MC/MCTests unittests/Target/MSIL/MSILTests)
+msil_filter='*MSIL*:TargetRegistry.*:-TargetRegistry.MSILLookupWithoutTarget'
+# <binary> <gtest filter>
+binaries=("unittests/TargetParser/TargetParserTests $msil_filter"
+          "unittests/MC/MCTests $msil_filter"
+          "unittests/Target/MSIL/MSILTests $msil_filter"
+          "unittests/CLI/CLITests *")
 logs=$(mktemp -d)
 trap 'rm -rf "$logs"' EXIT
 
-for b in "${binaries[@]}"; do
+for entry in "${binaries[@]}"; do
+  b=${entry%% *}
+  filter=${entry#* }
   name=$(basename "$b")
   log=$logs/$name.log
   start=$SECONDS

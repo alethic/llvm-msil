@@ -34,7 +34,8 @@ contains this script). The manifest format is documented in the manifest's heade
                  for a path that the base lacks;
                - every hook block has a lit, gtest, compile, utc or none line, every 'none'
                  has a reason, every lit pattern matches a file, every fork test exists, every
-                 gtest binary is one the gtest leg of upstream-hooks.ps1 runs, and every utc
+                 gtest binary is one the gtest leg of upstream-hooks.ps1 runs (GTEST_BINARIES,
+                 which must equal the "Exe = '<binary>'" entries of that script), and every utc
                  test exists and is one of the utc leg's tests: the list '$utcTests = @(...)'
                  of msil/utils/ci/lit-legs.ps1 and 'utc_tests=(...)' of
                  msil/utils/ci/lit-legs.sh (UTC_LEG_SCRIPTS), which must both parse and be
@@ -77,9 +78,11 @@ contains this script). The manifest format is documented in the manifest's heade
                'Clang :: Driver/cl-options.c' map to repository paths (clang/test/Driver/
                cl-options.c). Fails when a FAIL is not on the allow-list, an allow-listed test
                passed (a stale entry) or has no result, a test is UNRESOLVED, TIMEOUT or XPASS,
-               a lit input has no result (lit did not run it as a test), or there are fewer PASS
-               results (XFAIL does not count) than the manifest's min-pass or --min-pass. One
-               line per problem, then the counts.
+               a lit input has no result (lit did not run it as a test), a lit input under
+               FORK_PREFIXES (a fork test on a lit line, such as lld/test/MSIL/*.test) did not
+               PASS (UNSUPPORTED, XFAIL or FAIL, even an allow-listed FAIL), or there are fewer
+               PASS results (XFAIL does not count) than the manifest's min-pass or --min-pass.
+               One line per problem, then the counts.
 --self-test    Plants every defect above in a temporary git repository (with synthetic leg
                scripts) and synthetic lit reports outside the repository (removed afterwards)
                and checks that each one is reported, and that the clean variants pass.
@@ -104,7 +107,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 MANIFEST_RELPATH = "msil/utils/upstream-hooks.txt"
-# Changed paths under these prefixes are fork files, never hooks.
+# Changed paths under these prefixes are fork files, never hooks. The Phase 2 directories
+# (plan 5.6.1 rule 1, 5.7.1): msil-ld and its tests, the ECMA-335 library and its unit tests,
+# its two tools with their tests, and the MSIL encoder tests.
 FORK_PREFIXES = (
     "llvm/lib/Target/MSIL/",
     "llvm/test/CodeGen/MSIL/",
@@ -113,6 +118,16 @@ FORK_PREFIXES = (
     "clang/test/CodeGen/MSIL/",
     "msil/",
     ".github/msil/",
+    "lld/MSIL/",
+    "lld/test/MSIL/",
+    "llvm/include/llvm/CLI/",
+    "llvm/lib/CLI/",
+    "llvm/unittests/CLI/",
+    "llvm/tools/llvm-cil-dump/",
+    "llvm/test/tools/llvm-cil-dump/",
+    "llvm/tools/llvm-cil-copy/",
+    "llvm/test/tools/llvm-cil-copy/",
+    "llvm/test/MC/MSIL/",
 )
 MERGE_SUBJECT = "[MSIL] Merge upstream llvm-project main at "
 MERGE_GREP = "^" + re.sub(r"([\[\]])", r"\\\1", MERGE_SUBJECT)
@@ -135,8 +150,12 @@ MSIL_LABEL_RE = re.compile(r"\bcase\s+(?:(?:llvm::)?Triple::MSIL|(?:llvm::)?MCCo
 # A 'default:' label in code: it covers the XCOFF case labels of its own switch in a file with a
 # switch-default line.
 DEFAULT_LABEL_RE = re.compile(r"\bdefault\s*:(?!:)")
-# The binaries the gtest leg of upstream-hooks.ps1 runs.
-GTEST_BINARIES = ("unittests/TargetParser/TargetParserTests.exe", "unittests/MC/MCTests.exe")
+# The binaries the gtest leg of upstream-hooks.ps1 runs. --check compares them with the
+# "Exe = '<binary>'" entries of that script (GTEST_LEG_SCRIPT), so the two lists stay equal.
+GTEST_BINARIES = ("unittests/TargetParser/TargetParserTests.exe", "unittests/MC/MCTests.exe",
+                  "tools/lld/unittests/AsLibAll/LLDAsLibAllTests.exe")
+GTEST_LEG_SCRIPT = "msil/utils/ci/upstream-hooks.ps1"
+GTEST_LEG_EXE_RE = re.compile(r"\bExe\s*=\s*'([^'\n]+)'")
 # The translation units of the compile leg of upstream-hooks.ps1, which reads this list through
 # --list-compile: the hooked upstream files that the main build never compiles. A 'compile' line
 # is valid on these and on the files they #include directly.
@@ -157,8 +176,9 @@ UTC_LEG_SCRIPTS = (
 UTC_NAME_RE = re.compile(r"[\w.+-]+")
 # A quoted or bare word, or a comma, of such a list.
 _UTC_TOKEN_RE = re.compile(r"'([^'\n]*)'|\"([^\"\n]*)\"|[^\s,'\"]+|,")
-# lit suite name -> source root of the suite, for --lit-verdict.
-SUITE_ROOTS = {"LLVM": "llvm/test", "Clang": "clang/test", "MSIL": "msil/test"}
+# lit suite name (config.name of the suite's lit.cfg.py) -> source root of the suite, for
+# --lit-verdict.
+SUITE_ROOTS = {"LLVM": "llvm/test", "Clang": "clang/test", "MSIL": "msil/test", "lld": "lld/test"}
 KINDS = ("lit", "gtest", "compile", "utc", "none")
 GLOB_CHARS = "*?["
 
@@ -492,6 +512,20 @@ def utc_leg_tests(repo: str) -> Tuple[Optional[List[str]], List[str]]:
     return sorted(shared), problems
 
 
+def gtest_leg_problems(repo: str) -> List[str]:
+    """The gtest leg of GTEST_LEG_SCRIPT must run exactly GTEST_BINARIES, the binaries that the
+    manifest's gtest lines may name."""
+    text = _read_text(repo, GTEST_LEG_SCRIPT)
+    if text is None:
+        return [f"gtest leg: cannot read {GTEST_LEG_SCRIPT}"]
+    run = set(GTEST_LEG_EXE_RE.findall(text))
+    if run == set(GTEST_BINARIES):
+        return []
+    return [f"gtest leg: {GTEST_LEG_SCRIPT} runs {' '.join(sorted(run)) or 'no binary'}, but "
+            f"GTEST_BINARIES of check-upstream-hooks.py is {' '.join(sorted(GTEST_BINARIES))}; "
+            "keep them equal"]
+
+
 # --------------------------------------------------------------------------- C/C++ source
 
 
@@ -741,6 +775,7 @@ def check(m: Manifest, repo: str, env: Mapping[str, str],
     problems += lit_problems
     utc_tests, utc_problems = utc_leg_tests(repo)
     problems += utc_problems
+    problems += gtest_leg_problems(repo)
     for p, h in m.hooks.items():
         if not h.has_kind():
             problems.append(f"hook {p} (line {h.line}): no lit, gtest, compile, utc or none line")
@@ -847,6 +882,11 @@ def lit_verdict(m: Manifest, repo: str, results: Sequence[Tuple[str, str]],
     for i in inputs:
         if i not in seen:
             problems.append(f"no result for the lit input {i} (lit did not run it as a test)")
+        elif i.startswith(FORK_PREFIXES) and seen[i] != "PASS":
+            # A fork test on a lit line is the only runnable check of its hook (the feature
+            # map of lld/test/lit.cfg.py): UNSUPPORTED means that the hook stopped working.
+            problems.append(f"fork lit input {i}: {seen[i]}, not PASS (a fork test on a lit "
+                            "line must pass)")
     n_pass = counts.get("PASS", 0)
     want = m.min_pass if min_pass is None else min_pass
     if n_pass < want:
@@ -949,7 +989,25 @@ SELF_TEST_FORK = {
     "msil/utils/ci/lit-legs.ps1": "# the utc leg\n$utcTests = @('x86-basic',\n"
                                   "              \"asm-show-inst\")\n",
     "msil/utils/ci/lit-legs.sh": "# the utc leg\nutc_tests=(asm-show-inst 'x86-basic')\n",
+    # A lit input of the lld suite ('lld :: MSIL/x.test'), under a Phase 2 fork prefix.
+    "lld/test/MSIL/x.test": "# x\n",
+    # The gtest leg's binaries, as upstream-hooks.ps1 writes them (LLDAsLibAllTests from M13).
+    "msil/utils/ci/upstream-hooks.ps1":
+        "foreach ($t in @(@{ Name = 'TargetParserTests'; Exe = "
+        "'unittests/TargetParser/TargetParserTests.exe' },\n"
+        "                 @{ Name = 'MCTests'; Exe = 'unittests/MC/MCTests.exe' },\n"
+        "                 @{ Name = 'LLDAsLibAllTests'; Exe = "
+        "'tools/lld/unittests/AsLibAll/LLDAsLibAllTests.exe' })) { }\n",
 }
+# The fork directories that plan 5.6.1 rule 1 adds in M13, spelled out here rather than taken
+# from FORK_PREFIXES: a fork file under each of them needs no hook block, so dropping one from
+# FORK_PREFIXES fails the clean case.
+SELF_TEST_PHASE2_PREFIXES = (
+    "lld/MSIL/", "lld/test/MSIL/", "llvm/include/llvm/CLI/", "llvm/lib/CLI/", "llvm/unittests/CLI/",
+    "llvm/tools/llvm-cil-dump/", "llvm/test/tools/llvm-cil-dump/", "llvm/tools/llvm-cil-copy/",
+    "llvm/test/tools/llvm-cil-copy/", "llvm/test/MC/MSIL/")
+SELF_TEST_FORK.update({p + "Phase2Fork.cpp": "// under a Phase 2 fork prefix\n"
+                       for p in SELF_TEST_PHASE2_PREFIXES})
 # The compile leg's translation units in the self-test repository (COMPILE_FILES in the real one).
 SELF_TEST_COMPILE = ("llvm/lib/CompileLeg.cpp",)
 SELF_TEST_MANIFEST = """\
@@ -963,7 +1021,9 @@ hook llvm/lib/Hooked.cpp
   lit llvm/test/T/*.ll
   lit clang/test/X/c.c
   gtest unittests/MC/MCTests.exe
+  gtest tools/lld/unittests/AsLibAll/LLDAsLibAllTests.exe
   fork msil/test/fork-test.c
+  fork lld/test/MSIL/x.test
   utc x86-basic asm-show-inst
 hook llvm/lib/Covered.cpp
   none switch coverage only
@@ -1160,6 +1220,11 @@ def self_test() -> int:
         expect(r.problems == [], f"clean manifest passes {r.problems}")
         expect(r.summary.startswith(f"base {b[:12]} (second parent of "),
                f"base is the merged upstream commit ({r.summary})")
+        # Every file of the fork commit is a changed path; only the four with hook blocks are
+        # hooks: none under a fork prefix (the Phase 2 ones included) and not the fork-only one.
+        expect(f"; {len(SELF_TEST_FORK)} changed path(s), 4 hooked, 4 hook block(s), " in r.summary,
+               "a file under each Phase 2 fork prefix (lld/MSIL/, llvm/lib/CLI/, ...) needs no "
+               f"hook block, and the lld gtest binary is known ({r.summary})")
         inputs, unmatched = expand_lit(clean, repo)
         expect(inputs == ["clang/test/X/c.c", "llvm/test/T/a.ll", "llvm/test/T/b.ll"]
                and not unmatched, f"lit inputs expanded and sorted {inputs}")
@@ -1232,6 +1297,25 @@ def self_test() -> int:
         r = chk(clean)
         expect(r.problems == [], f"utc leg scripts restored: clean {r.problems}")
 
+        # 3b. The gtest leg of upstream-hooks.ps1 runs exactly GTEST_BINARIES: a binary missing
+        # from the script, or an extra one, and a missing script fail; the restored one passes.
+        gtest_script = GTEST_LEG_SCRIPT
+        for what, text, needles in (
+                ("a binary the script does not run",
+                 SELF_TEST_FORK[gtest_script].replace("LLDAsLibAllTests.exe", "Other.exe"),
+                 (f"gtest leg: {gtest_script} runs ", "Other.exe", "keep them equal")),
+                ("no binary", "# no gtest leg\n", (f"gtest leg: {gtest_script} runs no binary",))):
+            _write(repo, {gtest_script: text})
+            r = chk(clean)
+            expect(has(r.problems, *needles), f"gtest leg, {what}: reported {r.problems}")
+        os.remove(os.path.join(repo, gtest_script))
+        r = chk(clean)
+        expect(has(r.problems, f"gtest leg: cannot read {gtest_script}"),
+               f"gtest leg, no script: reported {r.problems}")
+        _write(repo, {gtest_script: SELF_TEST_FORK[gtest_script]})
+        r = chk(clean)
+        expect(r.problems == [], f"gtest leg script restored: clean {r.problems}")
+
         # 4. Planted defects.
         _write(repo, {
             "llvm/lib/Unchanged2.cpp": "int unchanged2() { return 2; }\n",   # modified, unlisted
@@ -1242,6 +1326,9 @@ def self_test() -> int:
             "bolt/Unqual.cpp":
                 f"void u(Environment E) {{ switch (E) {{ case Is{_X}: break; }} }}\n",
             "lld/OtherComment.cpp": f"// case {_X}: is only in a comment here\nint x;\n",
+            # Beside a fork prefix, not under it: a prefix matches whole directory names.
+            "llvm/lib/CLIUtils/Near.cpp": "int near;\n",
+            "lld/MSILx/Near.cpp": "int near;\n",
         })
         _write(repo, {f: text for f, (text, _) in SELF_TEST_SWITCH_DEFECTS.items()})
         _write(repo, {f: v[0] for f, v in SELF_TEST_EXEMPT_DEFECTS.items()})
@@ -1286,6 +1373,9 @@ switch-other lld/OtherComment.cpp its label is in a comment
         expect(has(r.problems, "unlisted hook: llvm/lib/Untracked.cpp",
                    "or 'fork-only llvm/lib/Untracked.cpp' for a fork file"),
                "untracked unlisted hook (the base lacks it: fork-only offered)")
+        expect(has(r.problems, "unlisted hook: llvm/lib/CLIUtils/Near.cpp")
+               and has(r.problems, "unlisted hook: lld/MSILx/Near.cpp"),
+               "a file beside a fork prefix (llvm/lib/CLIUtils/, lld/MSILx/) needs a block")
         expect(has(r.problems, "fork-only llvm/lib/Upstream.cpp (line ", "exists in the upstream "
                    f"base {b[:12]}; it needs a hook block")
                and not has(r.problems, "unlisted hook: llvm/lib/Upstream.cpp"),
@@ -1416,6 +1506,30 @@ switch-other lld/OtherComment.cpp its label is in a comment
             expect(False, "a missing report is an error")
         except ReportError:
             expect(True, "a missing report is an error")
+
+        # 7a. Test names of every suite map to repository paths; the lld suite (from M13) too.
+        for name, want in (("LLVM :: T/a.ll", "llvm/test/T/a.ll"),
+                           ("Clang :: X/c.c", "clang/test/X/c.c"),
+                           ("MSIL :: harness/h.test", "msil/test/harness/h.test"),
+                           ("lld :: MSIL/x.test", "lld/test/MSIL/x.test"),
+                           ("Other :: y.test", "Other :: y.test")):
+            expect(test_path(name) == want, f"lit test name '{name}' -> '{test_path(name)}'")
+        lld_manifest = parse_manifest("min-pass 1\nhook llvm/lib/Hooked.cpp\n"
+                                      "  lit lld/test/MSIL/x.test\n", "lld-manifest")
+        lld_report = os.path.join(tmp, "lld-report.json")
+        for code, needle in (("PASS", None), ("FAIL", "unexpected FAIL: lld/test/MSIL/x.test"),
+                             ("UNSUPPORTED", "fork lit input lld/test/MSIL/x.test: UNSUPPORTED"),
+                             ("XFAIL", "fork lit input lld/test/MSIL/x.test: XFAIL")):
+            with open(lld_report, "w", encoding="utf-8") as f:
+                json.dump({"__version__": [0], "elapsed": 1.0,
+                           "tests": [{"name": "lld :: MSIL/x.test", "code": code, "output": "",
+                                      "elapsed": 0.1}]}, f)
+            v = lit_verdict(lld_manifest, repo, read_report(lld_report), None)
+            what = f"lit verdict of the lld suite's 'lld :: MSIL/x.test' {code}"
+            if needle is None:
+                expect(v.problems == [] and v.n_pass == 1, f"{what}: PASS {v.problems}")
+            else:
+                expect(has(v.problems, needle), f"{what}: FAIL with '{needle}' {v.problems}")
 
         # 8. strip_code, switch attribution and the counting fallback.
         sample = ('a = "}\\"{"; b = \'{\'; c = 1\'000 + 0xFF\'FF; // }\n'

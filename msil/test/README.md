@@ -120,6 +120,13 @@ ninja -C build check-msil-m1-02-fp   (one directory)
 ninja -C build check-msil            (every MSIL test in the tree, lean dependencies)
 ```
 
+`check-msil` runs this suite and the MSIL lit tests outside `msil/`:
+`llvm/test/CodeGen/MSIL`, `clang/test/CodeGen/MSIL`,
+`clang/test/Preprocessor/init-msil.c`, `clang/test/Driver/msil-toolchain.c`
+and, from M13 when lld is built, `lld/test/MSIL` (the `msil-ld` dispatch and
+stub tests); it depends on `lld`, `llvm-as` and `llvm-bcanalyzer` besides
+the tools of this suite.
+
 Source paths work because `llvm-lit` maps `msil/test/lit.cfg.py` to the
 generated `build/tools/msil/test/lit.site.cfg.py`. At configuration time
 `lit.cfg.py` runs `msil/utils/jitall/build-jitall.py`, which builds jitall into

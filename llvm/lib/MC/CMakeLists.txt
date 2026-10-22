@@ -44,6 +44,8 @@ add_llvm_component_library(LLVMMC
   MCLinkerOptimizationHint.cpp
   MCMachOStreamer.cpp
   MCMachObjectTargetWriter.cpp
+  MCMSILObjectWriter.cpp
+  MCMSILStreamer.cpp
   MCNullStreamer.cpp
   MCObjectFileInfo.cpp
   MCObjectStreamer.cpp

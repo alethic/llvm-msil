@@ -474,6 +474,7 @@ void Parser::initializePragmaHandlers() {
 
   if (getLangOpts().MicrosoftExt ||
       getTargetInfo().getTriple().isOSBinFormatELF() ||
+      getTargetInfo().getTriple().isOSBinFormatMSIL() ||
       getTargetInfo().getTriple().isOSAIX()) {
     MSCommentHandler = std::make_unique<PragmaCommentHandler>(Actions);
     PP.AddPragmaHandler(MSCommentHandler.get());
@@ -602,6 +603,7 @@ void Parser::resetPragmaHandlers() {
 
   if (getLangOpts().MicrosoftExt ||
       getTargetInfo().getTriple().isOSBinFormatELF() ||
+      getTargetInfo().getTriple().isOSBinFormatMSIL() ||
       getTargetInfo().getTriple().isOSAIX()) {
     PP.RemovePragmaHandler(MSCommentHandler.get());
     MSCommentHandler.reset();
@@ -3270,7 +3272,12 @@ void PragmaCommentHandler::HandlePragma(Preprocessor &PP,
     return;
   }
 
-  if (PP.getTargetInfo().getTriple().isOSBinFormatELF() && Kind != PCK_Lib) {
+  // MSIL triples for non-Windows OSes accept only 'lib', as ELF does; Windows
+  // MSIL triples accept every kind, as MSVC triples do.
+  if ((PP.getTargetInfo().getTriple().isOSBinFormatELF() ||
+       (PP.getTargetInfo().getTriple().isOSBinFormatMSIL() &&
+        !PP.getTargetInfo().getTriple().isOSWindows())) &&
+      Kind != PCK_Lib) {
     PP.Diag(Tok.getLocation(), diag::warn_pragma_comment_ignored)
         << II->getName();
     return;

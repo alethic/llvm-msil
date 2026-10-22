@@ -1,0 +1,55 @@
+# build-targets.txt - the one build-target list of the MSIL fork (plan 5.6.11): the ninja
+# targets that every gate and both CI jobs build, one per line, in this order.
+#
+# Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+#
+# Read by msil/utils/ci/build.ps1, msil/utils/ci/build.sh and
+# 'msil/utils/build/msil-build.ps1 -Standard' (gate step G1 from M13 on); none of them keeps a
+# list of its own. A '#' starts a comment that runs to the end of the line, and blank lines are
+# skipped. The list only grows, and every milestone builds all of it, so no gate runs a stale
+# binary: M15 appends yaml2obj and llvm-mc, M17 llvm-cil-dump and llvm-cil-copy. Each
+# milestone's Build targets line spells out its row of plan 5.6.11, and the work package that
+# edits this file checks it against that row.
+
+# The M11 set: the tools and lit helpers the tests use, llvm-profdata for two upstream clang
+# driver tests of the upstream-hooks check, and the unit tests (LLVM_BUILD_TESTS is off, so
+# they are built only when named).
+llc
+opt
+clang
+FileCheck
+not
+count
+split-file
+llvm-config
+llvm-profdata
+TargetParserTests
+MCTests
+MSILTests
+
+# M13. lld builds lld.exe and its copies msil-ld, ld.lld, lld-link, ld64.lld and wasm-ld
+# (add_lld_symlink passes ALWAYS_GENERATE).
+lld
+llvm-ar
+# llvm-ranlib, llvm-lib and llvm-dlltool are copies of llvm-ar that 'ninja llvm-ar' does not
+# build: llvm/tools/llvm-ar/CMakeLists.txt calls add_llvm_tool_symlink without
+# ALWAYS_GENERATE, so each copy is a custom target of its own. Without them lit would find the
+# Visual Studio llvm-lib on msil-env.ps1's PATH ('llvm-lib /def:' in lld/test/MSIL, M14 and
+# M15), and the Linux CI job has none at all.
+llvm-ranlib
+llvm-lib
+llvm-dlltool
+llvm-nm
+llvm-objdump
+llvm-readobj
+# llvm-as and llvm-bcanalyzer for the IRSymtab.cpp hook's upstream tests and
+# llvm/test/CodeGen/MSIL/irsymtab-linker-options.ll, llvm-lto2 for its
+# LTO/Resolution/X86/symtab*.ll tests.
+llvm-as
+llvm-bcanalyzer
+llvm-lto2
+CLITests
+# The test of lld's AllDrivers.cpp hook (the gtest leg of msil/utils/ci/upstream-hooks.ps1).
+LLDAsLibAllTests

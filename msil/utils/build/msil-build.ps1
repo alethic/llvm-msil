@@ -6,13 +6,23 @@
 #
 #   pwsh -NoProfile -File msil-build.ps1 llc FileCheck not count
 #   pwsh -NoProfile -File msil-build.ps1 -Jobs 4 clang
+#   pwsh -NoProfile -File msil-build.ps1 -Standard            # the one build-target list
+#   pwsh -NoProfile -File msil-build.ps1 -Standard llvm-mc    # that list, then llvm-mc
+# -Standard builds every target of msil/utils/ci/build-targets.txt (plan 5.6.11; gate step G1
+# from M13 on), in the file's order, then the targets named on the command line (a target
+# already on the list is not named twice); with it the target list may be empty. Without
+# -Standard the targets are required, as they always were.
 # Long builds: start it with run_in_background and poll the log; never in a foreground
 # tool call (those time out after 2-10 minutes). A background job dies with the agent's
 # turn, so the agent that started a build waits for it.
 # Build agent only: takes the EXCLUSIVE build-dir lock (msil-lock.ps1).
-[CmdletBinding(PositionalBinding = $false)]
+[CmdletBinding(PositionalBinding = $false, DefaultParameterSetName = 'Named')]
 param(
-  [Parameter(Mandatory, ValueFromRemainingArguments)][string[]]$Targets,
+  [Parameter(Mandatory, ValueFromRemainingArguments, ParameterSetName = 'Named')]
+  [Parameter(ValueFromRemainingArguments, ParameterSetName = 'Standard')]
+  [string[]]$Targets = @(),
+  [Parameter(Mandatory, ParameterSetName = 'Standard')]
+  [switch]$Standard,              # build-targets.txt first (see above)
   [string]$BuildDir = '',         # default: $env:MSIL_BUILD_DIR, else <repo>\build
   [int]$Jobs = 0,                 # 0 = ninja default (logical CPUs + 2), capped by the CMake job pools
   [double]$WaitMinutes = 240,     # how long to queue behind another agent's build
@@ -22,6 +32,25 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'msil-env.ps1')
 . (Join-Path $PSScriptRoot 'msil-lock.ps1')
 if (-not $BuildDir) { $BuildDir = $MsilBuild }
+
+if ($Standard) {
+  # The format of build-targets.txt: one target per line; '#' starts a comment that runs to the
+  # end of the line; blank lines are skipped (build.ps1 and build.sh read it the same way).
+  $listFile = Join-Path $MsilRepo 'msil/utils/ci/build-targets.txt'
+  $listed = [System.Collections.Generic.List[string]]::new()
+  $n = 0
+  foreach ($line in [System.IO.File]::ReadAllLines($listFile)) {
+    $n++
+    $t = ($line -replace '#.*$', '').Trim()
+    if (-not $t) { continue }
+    if ($t -match '\s') { throw "${listFile}:${n}: one target per line, not '$t'" }
+    $listed.Add($t)
+  }
+  if ($listed.Count -eq 0) { throw "$listFile names no target" }
+  $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  $Targets = @(@($listed) + @($Targets) | Where-Object { $seen.Add($_) })
+  Write-Host "[msil-build] -Standard: the $($listed.Count) target(s) of $listFile, then $($Targets.Count - $listed.Count) named one(s)"
+}
 
 $ninjaArgs = @('-C', $BuildDir)
 if ($Jobs -gt 0) { $ninjaArgs += @('-j', "$Jobs") }

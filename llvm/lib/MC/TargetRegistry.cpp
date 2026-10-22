@@ -14,6 +14,7 @@
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCInstPrinter.h"
 #include "llvm/MC/MCLFI.h"
+#include "llvm/MC/MCMSILStreamer.h"
 #include "llvm/MC/MCObjectStreamer.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/Support/raw_ostream.h"
@@ -91,9 +92,9 @@ MCStreamer *Target::createMCObjectStreamer(
                                   std::move(Emitter));
     break;
   case Triple::MSIL:
-    // The MSIL target emits ILAsm text only. It registers no MCCodeEmitter, so
-    // CodeGenTargetMachineImpl::createMCStreamer fails before it gets here.
-    reportFatalUsageError("MSIL object file emission is not implemented");
+    S = createMSILStreamer(Ctx, std::move(TAB), std::move(OW),
+                           std::move(Emitter));
+    break;
   }
   if (ObjectTargetStreamerCtorFn)
     ObjectTargetStreamerCtorFn(*S, STI);

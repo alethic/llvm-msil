@@ -32,6 +32,7 @@ static Flavor getFlavor(StringRef s) {
   return StringSwitch<Flavor>(s)
       .CasesLower({"ld", "ld.lld", "gnu"}, Gnu)
       .CasesLower({"wasm", "ld-wasm"}, Wasm)
+      .CaseLower("msil", MSIL)
       .CaseLower("link", WinLink)
       .CasesLower({"ld64", "ld64.lld", "darwin"}, Darwin)
       .Default(Invalid);
@@ -88,6 +89,10 @@ static Flavor parseProgname(StringRef progname) {
   // Progname may be something like "lld-gnu". Parse it.
   SmallVector<StringRef, 3> v;
   progname.split(v, "-");
+  // An "msil" component wins over the others, so that a triple-prefixed name
+  // such as "x86_64-unknown-linux-gnu-msil-ld" is msil-ld and not ld.lld.
+  if (llvm::any_of(v, [](StringRef s) { return s.equals_insensitive("msil"); }))
+    return MSIL;
   for (StringRef s : v)
     if (Flavor f = getFlavor(s))
       return f;
@@ -118,7 +123,7 @@ parseFlavorWithoutMinGW(llvm::SmallVectorImpl<const char *> &argsV) {
   if (f == Invalid) {
     err("lld is a generic driver.\n"
         "Invoke ld.lld (Unix), ld64.lld (macOS), lld-link (Windows), wasm-ld"
-        " (WebAssembly) instead");
+        " (WebAssembly), msil-ld (MSIL) instead");
     return Invalid;
   }
   return f;

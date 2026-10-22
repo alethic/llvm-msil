@@ -12,6 +12,7 @@
 #include "llvm/MC/MCDXContainerWriter.h"
 #include "llvm/MC/MCELFObjectWriter.h"
 #include "llvm/MC/MCGOFFObjectWriter.h"
+#include "llvm/MC/MCMSILObjectWriter.h"
 #include "llvm/MC/MCMachObjectWriter.h"
 #include "llvm/MC/MCObjectWriter.h"
 #include "llvm/MC/MCSPIRVObjectWriter.h"
@@ -57,6 +58,9 @@ MCAsmBackend::createObjectWriter(raw_pwrite_stream &OS) const {
   case Triple::DXContainer:
     return std::make_unique<DXContainerObjectWriter>(
         cast<MCDXContainerTargetWriter>(std::move(TW)), OS);
+  case Triple::MSIL:
+    return createMSILObjectWriter(cast<MCMSILObjectTargetWriter>(std::move(TW)),
+                                  OS);
   default:
     llvm_unreachable("unexpected object format");
   }

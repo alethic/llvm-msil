@@ -7419,6 +7419,19 @@ name, which typically identifies a field from that module to import. By
 default, module names for C/C++ symbols are assigned automatically by the
 linker. This attribute can be used to override the default behavior, and
 request a specific module name be used instead.
+
+The attribute is also supported for MSIL targets (triples whose object format
+is MSIL, such as ``x86_64-pc-windows-msvc-msil``), on a function declaration
+or an external variable declaration. There it names the native library that
+implements the symbol: the linker does not look the symbol up in the native
+libraries it is given, and imports the export that ``import_name`` names, or
+else the C name of the symbol, from that library. A function is imported
+through a platform invoke (P/Invoke). An external variable is bound to the
+address of that export when the program starts; this works only when the
+program is linked with msil-ld, and ``-S`` and llc, which do not link, reject a
+reference to an external variable. Clang records the library name in the
+``msil-import-module`` IR attribute of the declaration; a definition is never
+imported.
   }];
 }
 
@@ -7436,6 +7449,24 @@ name, which typically identifies a field from that module to import. By
 default, field names for C/C++ symbols are the same as their C/C++ symbol
 names. This attribute can be used to override the default behavior, and
 request a specific field name be used instead.
+
+The attribute is also supported for MSIL targets (triples whose object format
+is MSIL, such as ``x86_64-pc-windows-msvc-msil``), on a function declaration
+or an external variable declaration. There it names the native export that
+the declaration imports, in the library that ``import_module`` names or,
+without ``import_module``, in the native library that the linker finds
+exporting that name. A function is imported through a platform invoke
+(P/Invoke) of the export; an external variable is bound to the address of the
+export when the program starts, which works only when the program is linked
+with msil-ld. In ``-S`` and llc output, which is not linked, ``puts``,
+``putchar`` and the C math functions (such as ``sqrt`` and ``cbrt``) are
+imported from the C runtime libraries without an attribute, and on one of them
+``import_name`` alone renames the entry point imported from its library, for
+example ``pinvokeimpl("libm.so.6" as "my_cbrt" cdecl)`` for ``cbrt`` on
+``x86_64-unknown-linux-gnu-msil``; ``import_name`` alone does not make any
+other function an import there, and msil-ld resolves it. Clang records the
+export name in the ``msil-import-name`` IR attribute of the declaration; a
+definition is never imported.
   }];
 }
 

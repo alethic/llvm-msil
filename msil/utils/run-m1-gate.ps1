@@ -13,9 +13,10 @@
 # except host-setup, which only the development host needs):
 #   1. msil/utils/ci/configure.ps1   msil-configure.ps1 -Experimental MSIL (the only step that
 #                                    differs from CI, which configures with -C MSIL.cmake)
-#   2. msil/utils/ci/build.ps1       ninja targets of the M11 gate (TargetParserTests and
-#                                    llvm-profdata among them), jitall
-#   3. msil/utils/ci/unit-tests.ps1  TargetParserTests, MCTests, MSILTests (no skipped tests)
+#   2. msil/utils/ci/build.ps1       msil-build.ps1 -Standard: the targets of
+#                                    msil/utils/ci/build-targets.txt (plan 5.6.11), jitall
+#   3. msil/utils/ci/unit-tests.ps1  TargetParserTests, MCTests, MSILTests, CLITests
+#                                    (no skipped tests)
 #   4. host-setup (not with -NoWsl; M12, plan 5.12.8 and the gates' step G0), idempotent: rows
 #        wsl-dotnet (msil/utils/msil-wsl-dotnet.sh inside WSL installs the private .NET
 #        runtimes of the WSL legs into $HOME/.dotnet-msil; the first run downloads them) and

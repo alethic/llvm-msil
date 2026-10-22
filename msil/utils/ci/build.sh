@@ -7,25 +7,53 @@
 #
 #   bash msil/utils/ci/build.sh [BUILD_DIR]            (default <repo>/build)
 #
-# The same targets as build.ps1 (the two scripts keep the same list): the M11 build targets
-# (plan M11), clang llc opt FileCheck not count split-file llvm-config llvm-profdata
-# TargetParserTests MCTests MSILTests. TargetParserTests and MCTests are for unit-tests.sh;
-# llvm-profdata is for the upstream lit tests that need it (upstream-hooks.ps1 runs them in the
-# Windows job). jitall (msil/utils/jitall/build-jitall.py) is then compiled offline into
-# <build>/tools/msil/jitall.
+# The ninja targets are those of msil/utils/ci/build-targets.txt, the one build-target list
+# (plan 5.6.11), which build.ps1 and 'msil-build.ps1 -Standard' build on Windows: from M13 the
+# M11 set, then lld and its copies, llvm-ar and its three copies, the binary tools, CLITests
+# and LLDAsLibAllTests. One target per line; '#' starts a comment that runs to the end of the
+# line, and blank lines are skipped. jitall (msil/utils/jitall/build-jitall.py) is then
+# compiled offline into <build>/tools/msil/jitall.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/ci-common.sh"
 build=${1:-$MSIL_REPO/build}
 
-targets=(clang llc opt FileCheck not count split-file llvm-config llvm-profdata TargetParserTests MCTests
-         MSILTests)
+list_file=$MSIL_REPO/msil/utils/ci/build-targets.txt
+targets=()
+problem=
+if [[ ! -r $list_file ]]; then
+  problem="cannot read $list_file"
+else
+  n=0
+  while IFS= read -r line || [[ -n $line ]]; do
+    n=$((n + 1))
+    line=${line%$'\r'}
+    line=${line%%#*}
+    # Trim leading and trailing blanks.
+    line=${line#"${line%%[![:space:]]*}"}
+    line=${line%"${line##*[![:space:]]}"}
+    [[ -n $line ]] || continue
+    if [[ $line =~ [[:space:]] ]]; then
+      problem="$list_file:$n: one target per line, not '$line'"
+      break
+    fi
+    targets+=("$line")
+  done < "$list_file"
+  if [[ -z $problem && ${#targets[@]} -eq 0 ]]; then
+    problem="$list_file names no target"
+  fi
+fi
 
 start=$SECONDS
 rc=0
-ninja -C "$build" "${targets[@]}" || rc=$?
-status=PASS
-((rc == 0)) || status=FAIL
-ci_result build ninja "$status" $((SECONDS - start)) "${targets[*]} (exit $rc)"
+if [[ -n $problem ]]; then
+  rc=1
+  ci_result build ninja FAIL $((SECONDS - start)) "$problem"
+else
+  ninja -C "$build" "${targets[@]}" || rc=$?
+  status=PASS
+  ((rc == 0)) || status=FAIL
+  ci_result build ninja "$status" $((SECONDS - start)) "build-targets.txt: ${targets[*]} (exit $rc)"
+fi
 
 if ((rc == 0)); then
   start=$SECONDS

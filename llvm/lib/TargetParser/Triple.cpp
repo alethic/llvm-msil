@@ -2302,6 +2302,19 @@ unsigned Triple::getDefaultWCharSize() const {
 }
 
 bool Triple::isCompatibleWith(const Triple &Other) const {
+  // An MSIL triple is compatible with the native triple it derives from, and
+  // two MSIL triples are compatible when their native triples are, so the IR
+  // linker mixes stock and MSIL bitcode without a triple mismatch warning
+  // (llvm/docs/MSIL: plan D3, recon lld-flavor 3.3 item 7). A malformed
+  // triple whose native form is still MSIL (x86_64-unknown-linux-msil-msil)
+  // takes the plain comparison below instead of recursing.
+  if (isOSBinFormatMSIL() || Other.isOSBinFormatMSIL()) {
+    Triple Native = getNativeFormatTriple();
+    Triple OtherNative = Other.getNativeFormatTriple();
+    if (!Native.isOSBinFormatMSIL() && !OtherNative.isOSBinFormatMSIL())
+      return Native.isCompatibleWith(OtherNative);
+  }
+
   // On MinGW, C code is usually built with a "w64" vendor, while Rust
   // often uses a "pc" vendor.
   bool IgnoreVendor = isWindowsGNUEnvironment();

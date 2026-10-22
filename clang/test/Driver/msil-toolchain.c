@@ -124,16 +124,16 @@
 // RUN:   | FileCheck --check-prefix=OBJ-LNX %s
 // RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -c -x assembler %s -o %t.o 2>&1 \
 // RUN:   | FileCheck --check-prefix=OBJ-LNX %s
-// OBJ-LNX: error: emitting object files is not yet supported for MSIL target 'x86_64-unknown-linux-gnu-msil'; use -S to produce ILAsm text, or -emit-llvm or -flto to produce bitcode
+// OBJ-LNX: error: CIL object files are not supported for MSIL target 'x86_64-unknown-linux-gnu-msil' yet; use -flto to write LLVM bitcode objects, or -S to write ILAsm text
 // RUN: not %clang -### --target=aarch64-unknown-linux-gnu-msil -c %s -o %t.o 2>&1 \
 // RUN:   | FileCheck --check-prefix=OBJ-A64 %s
-// OBJ-A64: error: emitting object files is not yet supported for MSIL target 'aarch64-unknown-linux-gnu-msil'
+// OBJ-A64: error: CIL object files are not supported for MSIL target 'aarch64-unknown-linux-gnu-msil' yet;
 // RUN: not %clang -### --target=x86_64-w64-windows-gnu-msil -c %s -o %t.o 2>&1 \
 // RUN:   | FileCheck --check-prefix=OBJ-MINGW %s
-// OBJ-MINGW: error: emitting object files is not yet supported for MSIL target 'x86_64-w64-windows-gnu-msil'
+// OBJ-MINGW: error: CIL object files are not supported for MSIL target 'x86_64-w64-windows-gnu-msil' yet;
 // RUN: not %clang -### --target=x86_64-pc-windows-msvc-msil -fms-compatibility-version=19.40 -c %s -o %t.o 2>&1 \
 // RUN:   | FileCheck --check-prefix=OBJ-WIN %s
-// OBJ-WIN: error: emitting object files is not yet supported for MSIL target 'x86_64-pc-windows-msvc{{[0-9.]*}}-msil'
+// OBJ-WIN: error: CIL object files are not supported for MSIL target 'x86_64-pc-windows-msvc{{[0-9.]*}}-msil' yet;
 
 // RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as -c %s -o %t.o 2>&1 \
 // RUN:   | FileCheck --check-prefix=OBJ-LNX %s
@@ -168,7 +168,7 @@
 // RUN: not %clang -### --target=x86_64-unknown-linux-musl-msil -flto %s -o %t.dll 2>&1 \
 // RUN:   | FileCheck --check-prefix=OBJ-MUSL --implicit-check-not=error: --implicit-check-not='"ld"' \
 // RUN:     --implicit-check-not=-plugin --implicit-check-not=LLVMgold %s
-// OBJ-MUSL: error: emitting object files is not yet supported for MSIL target 'x86_64-unknown-linux-musl-msil'
+// OBJ-MUSL: error: CIL object files are not supported for MSIL target 'x86_64-unknown-linux-musl-msil' yet;
 // RUN: not %clang -### --target=aarch64-unknown-linux-gnu-msil -flto %s -o %t.dll 2>&1 \
 // RUN:   | FileCheck --check-prefix=OBJ-A64 --implicit-check-not=error: --implicit-check-not='"ld"' \
 // RUN:     --implicit-check-not=-plugin --implicit-check-not=LLVMgold %s

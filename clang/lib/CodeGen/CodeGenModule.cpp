@@ -42,6 +42,7 @@
 #include "clang/Basic/CodeGenOptions.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticFrontend.h"
+#include "clang/Basic/DiagnosticSema.h"
 #include "clang/Basic/Module.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/TargetInfo.h"
@@ -1183,6 +1184,25 @@ CodeGenModule::StackProtectorAttribute(const Decl *D) const {
   return std::nullopt;
 }
 
+/// Gives the IR declaration \p GO of \p D the IR attributes of an MSIL import
+/// (a P/Invoke) for WebAssembly's import attributes, which MSIL shares. They
+/// are read from the most recent declaration, which inherits them from the
+/// earlier ones (SemaWasm::mergeImportModuleAttr and mergeImportNameAttr), so
+/// a use before a redeclaration still gets the redeclaration's attributes.
+static void addMSILImportAttributes(const Decl &D, llvm::GlobalObject &GO) {
+  auto Add = [&GO](StringRef Key, StringRef Value) {
+    if (auto *F = dyn_cast<llvm::Function>(&GO))
+      F->addFnAttr(Key, Value);
+    else
+      cast<llvm::GlobalVariable>(GO).addAttribute(Key, Value);
+  };
+  const Decl *Latest = D.getMostRecentDecl();
+  if (const auto *Attr = Latest->getAttr<WebAssemblyImportModuleAttr>())
+    Add("msil-import-module", Attr->getImportModule());
+  if (const auto *Attr = Latest->getAttr<WebAssemblyImportNameAttr>())
+    Add("msil-import-name", Attr->getImportName());
+}
+
 void CodeGenModule::Release() {
   Module *Primary = getContext().getCurrentNamedModule();
   if (CXX20ModuleInits && Primary && !Primary->isHeaderLikeModule())
@@ -1193,6 +1213,31 @@ void CodeGenModule::Release() {
   EmitVTablesOpportunistically();
   applyGlobalValReplacements();
   applyReplacements();
+
+  // MSIL: a block-scope redeclaration of a function or an 'extern' variable
+  // never reaches EmitGlobal, so an import attribute that it adds after a use
+  // has created the IR declaration is added here: each IR declaration of an
+  // entity that the translation unit does not define gets the import
+  // attributes of the entity's most recent declaration. A definition never
+  // gets them, nor does a C inline definition that stays an IR declaration.
+  if (getTriple().isOSBinFormatMSIL()) {
+    for (const auto &[GD, Name] : MangledDeclNames) {
+      const Decl *D = GD.getDecl();
+      if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
+        if (FD->isDefined())
+          continue;
+      } else if (const auto *VD = dyn_cast<VarDecl>(D)) {
+        if (VD->hasDefinition() != VarDecl::DeclarationOnly)
+          continue;
+      } else {
+        continue;
+      }
+      if (auto *GO = dyn_cast_or_null<llvm::GlobalObject>(GetGlobalValue(Name));
+          GO && GO->isDeclaration())
+        addMSILImportAttributes(*D, *GO);
+    }
+  }
+
   emitMultiVersionFunctions();
   emitPFPFieldsWithEvaluatedOffset();
   emitGlobalDeleteForwardingBodies();
@@ -3588,6 +3633,88 @@ bool CodeGenModule::GetCPUAndFeaturesAttributes(GlobalDecl GD,
   return AddedAttr;
 }
 
+/// When \p GD, a body-less function declaration or an 'extern' variable
+/// declaration, carries an import attribute and an earlier use has already
+/// created the entity's IR declaration, gives that declaration the IR
+/// attributes of an MSIL import, as EmitGlobal updates the annotations of a
+/// function already used. A definition never gets them.
+static void updateMSILImportAttributes(CodeGenModule &CGM, GlobalDecl GD) {
+  const Decl *D = GD.getDecl();
+  if (!D->hasAttr<WebAssemblyImportModuleAttr>() &&
+      !D->hasAttr<WebAssemblyImportNameAttr>())
+    return;
+  if (const auto *FD = dyn_cast<FunctionDecl>(D)) {
+    if (FD->doesThisDeclarationHaveABody())
+      return;
+  } else if (cast<VarDecl>(D)->isThisDeclarationADefinition() !=
+             VarDecl::DeclarationOnly) {
+    return;
+  }
+  if (auto *GO = dyn_cast_or_null<llvm::GlobalObject>(
+          CGM.GetGlobalValue(CGM.getMangledName(GD)));
+      GO && GO->isDeclaration())
+    addMSILImportAttributes(*D, *GO);
+}
+
+/// Whether \p GO, the definition of \p GD, is the first IR function defined
+/// for its declaration: true unless \p GD is a constructor or destructor and
+/// \p MangledDeclNames (CodeGenModule's) names another of its variants whose
+/// IR function is already defined.
+static bool isFirstDefinedVariant(
+    GlobalDecl GD, const llvm::GlobalObject &GO, CodeGenModule &CGM,
+    const llvm::MapVector<GlobalDecl, StringRef> &MangledDeclNames) {
+  auto IsDefined = [&](GlobalDecl Other) {
+    auto It = MangledDeclNames.find(Other.getCanonicalDecl());
+    if (It == MangledDeclNames.end())
+      return false;
+    auto *F = dyn_cast_or_null<llvm::Function>(CGM.GetGlobalValue(It->second));
+    return F && F != &GO && !F->isDeclaration();
+  };
+  if (isa<CXXConstructorDecl>(GD.getDecl()))
+    return !IsDefined(GD.getWithCtorType(Ctor_Complete)) &&
+           !IsDefined(GD.getWithCtorType(Ctor_Base));
+  if (isa<CXXDestructorDecl>(GD.getDecl()))
+    return !IsDefined(GD.getWithDtorType(Dtor_Deleting)) &&
+           !IsDefined(GD.getWithDtorType(Dtor_Complete)) &&
+           !IsDefined(GD.getWithDtorType(Dtor_Base)) &&
+           !IsDefined(GD.getWithDtorType(Dtor_VectorDeleting));
+  return true;
+}
+
+/// An MSIL definition is never an import. Drops the IR attributes of an MSIL
+/// import from the definition \p GO of \p GD, which a declaration used earlier
+/// in the translation unit gave it (addMSILImportAttributes), and warns about
+/// an import attribute written on the definition itself, which Sema accepts
+/// before it sees the body or the initializer. A constructor or destructor
+/// emitted as several variants (Itanium C1 and C2, D0 to D2; MSVC ??1 and
+/// ??_G) warns once, for the first variant defined, as a C function does.
+static void dropMSILImportAttributes(
+    GlobalDecl GD, llvm::GlobalObject &GO, CodeGenModule &CGM,
+    const llvm::MapVector<GlobalDecl, StringRef> &MangledDeclNames) {
+  const Decl &D = *GD.getDecl();
+  unsigned IsVar = isa<VarDecl>(D);
+  auto First = [&] {
+    return isFirstDefinedVariant(GD, GO, CGM, MangledDeclNames);
+  };
+  if (const auto *Attr = D.getAttr<WebAssemblyImportModuleAttr>();
+      Attr && !Attr->isInherited() && First())
+    CGM.getDiags().Report(Attr->getLocation(), diag::warn_import_on_definition)
+        << 0 << IsVar;
+  if (const auto *Attr = D.getAttr<WebAssemblyImportNameAttr>();
+      Attr && !Attr->isInherited() && First())
+    CGM.getDiags().Report(Attr->getLocation(), diag::warn_import_on_definition)
+        << 1 << IsVar;
+
+  llvm::AttributeMask Keys;
+  Keys.addAttribute("msil-import-module");
+  Keys.addAttribute("msil-import-name");
+  if (auto *F = dyn_cast<llvm::Function>(&GO))
+    F->removeFnAttrs(Keys);
+  else if (auto *GV = dyn_cast<llvm::GlobalVariable>(&GO))
+    GV->setAttributes(
+        GV->getAttributes().removeAttributes(GV->getContext(), Keys));
+}
+
 void CodeGenModule::setNonAliasAttributes(GlobalDecl GD,
                                           llvm::GlobalObject *GO) {
   const Decl *D = GD.getDecl();
@@ -3633,6 +3760,9 @@ void CodeGenModule::setNonAliasAttributes(GlobalDecl GD,
       GO->setSection(CSA->getName());
     else if (const auto *SA = D->getAttr<SectionAttr>())
       GO->setSection(SA->getName());
+
+    if (getTriple().isOSBinFormatMSIL())
+      dropMSILImportAttributes(GD, *GO, *this, MangledDeclNames);
   }
 
   getTargetCodeGenInfo().setTargetAttributes(D, GO, *this);
@@ -3837,6 +3967,11 @@ void CodeGenModule::SetFunctionAttributes(GlobalDecl GD, llvm::Function *F,
     if (getTriple().isOSBinFormatMSIL() &&
         !FD->doesThisDeclarationHaveABody() && !FD->hasPrototype())
       F->addFnAttr("no-prototype");
+
+    // For the same reason, map WebAssembly's import attributes, which MSIL
+    // shares, to the IR attributes of an MSIL import (a P/Invoke) here.
+    if (getTriple().isOSBinFormatMSIL() && !FD->doesThisDeclarationHaveABody())
+      addMSILImportAttributes(*FD, *F);
   }
 
   if (const auto *CSA = FD->getAttr<CodeSegAttr>())
@@ -4863,6 +4998,12 @@ void CodeGenModule::EmitGlobal(GlobalDecl GD) {
       return;
     }
   }
+
+  // MSIL: a body-less function or 'extern' variable declaration gives the IR
+  // declaration that an earlier use created its import attributes, as the
+  // annotations of a function already used are updated below.
+  if (getTriple().isOSBinFormatMSIL())
+    updateMSILImportAttributes(*this, GD);
 
   // Ignore declarations, they will be emitted on their first use.
   if (const auto *FD = dyn_cast<FunctionDecl>(Global)) {
@@ -6236,6 +6377,11 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName, llvm::Type *Ty,
   if (D &&
       D->isThisDeclarationADefinition(Context) == VarDecl::DeclarationOnly) {
     getTargetCodeGenInfo().setTargetAttributes(D, GV, *this);
+    // An external MSIL variable with WebAssembly's import attributes, which
+    // MSIL shares, is a data import; MSIL selects its TargetCodeGenInfo by
+    // architecture, so map them to its IR attributes here.
+    if (getTriple().isOSBinFormatMSIL())
+      addMSILImportAttributes(*D, *GV);
     // External HIP managed variables needed to be recorded for transformation
     // in both device and host compilations.
     if (getLangOpts().CUDA && D && D->hasAttr<HIPManagedAttr>() &&

@@ -104,6 +104,8 @@ module LLVM_BinaryFormat {
     textual header "llvm/BinaryFormat/ELFRelocs/Xtensa.def"
     textual header "llvm/BinaryFormat/WasmRelocs.def"
     textual header "llvm/BinaryFormat/MsgPack.def"
+    textual header "llvm/BinaryFormat/CLITables.def"
+    textual header "llvm/BinaryFormat/CILOpcodes.def"
 }
 
 module LLVM_CAS {
