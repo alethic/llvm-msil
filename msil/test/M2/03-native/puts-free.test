@@ -1,0 +1,31 @@
+# A program without output: its exit status alone shows that strlen, abs, malloc and free bind natively.
+# Nothing here calls puts, so the program does not depend on the C library's
+# output path or on any former D14 import; the native libraries of the
+# driver's default libraries supply every call (plan 5.10.4, 5.10.10). The
+# status is a bitmask of failed checks (0: all passed), at most 8 bits (D37).
+# Plan 5.10.15 (puts-free programs), native-imports 9.3, M15.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+typedef __SIZE_TYPE__ size_t;
+size_t strlen(const char *s);
+int abs(int v);
+void *malloc(size_t n);
+void free(void *p);
+
+int main(void) {
+  unsigned failed = 0;
+  char *p = malloc(16);
+  if (!p)
+    return 255;
+  for (int i = 0; i < 15; ++i)
+    p[i] = (char)('a' + i);
+  p[15] = 0;
+  failed |= (strlen(p) != 15) << 0;
+  failed |= (strlen(p + 5) != 10) << 1;
+  failed |= (abs(-2147483647) != 2147483647) << 2;
+  failed |= (abs(0) != 0) << 3;
+  free(p);
+  return (int)failed;
+}

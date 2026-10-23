@@ -1,0 +1,108 @@
+# -Wl,--print-imports on the host libraries, and the P/Invokes of the linked text.
+# A program linked through the driver (its default libraries and, on Linux
+# triples, the sysroot of %{msil_ldflags}) with -Wl,--lto-emit-asm and
+# -Wl,--print-imports. msil-ld prints one line per bound symbol,
+# '<symbol> -> <module>!<entry> [function|data, <version>|-]', sorted by
+# symbol (byte order, so GetTickCount comes first), then for each ELF module
+# '<module>: version floor <highest default version>' (plan 5.10.14). Every
+# P/Invoke of the output is listed, the library functions that code
+# generation calls included, and their versions count for the version floors
+# (plan 5.10.13 and 5.10.14 as amended by the section 12 row of 2026-10-22):
+# main.c rounds a value computed from argc with __builtin_floor, which stays
+# llvm.floor.f64 under the -ffreestanding of %{msil_cflags} and becomes a call
+# of the library function floor only in code generation. So the rows are
+# exactly the P/Invokes of the linked text: as many rows (WIN-NUM, LNX-NUM) as
+# P/Invokes (WIN-ILNUM, LNX-ILNUM), each checked by name. On linux-gnu the
+# version floor of libm.so.6 is GLIBC_2.29, the highest default version of
+# exp (GLIBC_2.29), expf (GLIBC_2.27) and floor (an IFUNC, GLIBC_2.2.5), and
+# that of libc.so.6 GLIBC_2.2.5. The linked text declares each P/Invoke with
+# 'assembly' access and the module and entry that --print-imports shows (plan
+# 5.10.11, 5.10.13): on windows-msvc the API-set DLLs of ucrt.lib,
+# KERNEL32.dll, WS2_32.dll with an ordinal entry, ucrtbase.dll from
+# --ucrtbase-imports and _strdup through oldnames; on linux-gnu libc.so.6 and
+# libm.so.6 by their DT_SONAME. Plan 5.10.15 (-Wl,--print-imports on the host
+# libraries), M15.
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %clang_msil %{msil_cflags} -flto -O2 -c %t/main.c -o %t/main.o
+# RUN: %if msil-triple-windows %{ %clang_msil %t/main.o -O2 -lws2_32 -Wl,--lto-emit-asm -Wl,--print-imports -o %t/prog.il > %t/imports.txt 2>&1 %} %else %{ %clang_msil %{msil_ldflags} %t/main.o -O2 -Wl,--lto-emit-asm -Wl,--print-imports -o %t/prog.il > %t/imports.txt 2>&1 %}
+# RUN: %if msil-triple-windows %{ FileCheck %s --check-prefix=WIN --implicit-check-not=error: --implicit-check-not=warning: --input-file=%t/imports.txt %} %else %{ FileCheck %s --check-prefix=LNX --implicit-check-not=error: --implicit-check-not=warning: --input-file=%t/imports.txt %}
+# RUN: %if msil-triple-windows %{ FileCheck %s --check-prefix=WIN-NUM --input-file=%t/imports.txt %} %else %{ FileCheck %s --check-prefix=LNX-NUM --input-file=%t/imports.txt %}
+# RUN: %if msil-triple-windows %{ FileCheck %s --check-prefix=WIN-IL --input-file=%t/prog.il %} %else %{ FileCheck %s --check-prefix=LNX-IL --input-file=%t/prog.il %}
+# RUN: %if msil-triple-windows %{ FileCheck %s --check-prefix=WIN-ILNUM --input-file=%t/prog.il %} %else %{ FileCheck %s --check-prefix=LNX-ILNUM --input-file=%t/prog.il %}
+# The symbol lines in sorted order.
+# WIN: {{^}}GetTickCount -> KERNEL32.dll!GetTickCount [function, -]{{$}}
+# WIN: {{^}}exp -> api-ms-win-crt-math-l1-1-0.dll!exp [function, -]{{$}}
+# WIN: {{^}}floor -> api-ms-win-crt-math-l1-1-0.dll!floor [function, -]{{$}}
+# WIN: {{^}}htons -> WS2_32.dll!#9 [function, -]{{$}}
+# WIN: {{^}}puts -> api-ms-win-crt-stdio-l1-1-0.dll!puts [function, -]{{$}}
+# WIN: {{^}}strchr -> ucrtbase.dll!strchr [function, -]{{$}}
+# WIN: {{^}}strdup -> api-ms-win-crt-string-l1-1-0.dll!_strdup [function, -]{{$}}
+# WIN: {{^}}strlen -> api-ms-win-crt-string-l1-1-0.dll!strlen [function, -]{{$}}
+# WIN-NOT: version floor
+# LNX: {{^}}exp -> libm.so.6!exp [function, GLIBC_2.29]{{$}}
+# LNX: {{^}}expf -> libm.so.6!expf [function, GLIBC_2.27]{{$}}
+# LNX: {{^}}floor -> libm.so.6!floor [function, GLIBC_2.2.5]{{$}}
+# LNX: {{^}}free -> libc.so.6!free [function, GLIBC_2.2.5]{{$}}
+# LNX: {{^}}malloc -> libc.so.6!malloc [function, GLIBC_2.2.5]{{$}}
+# LNX: {{^}}puts -> libc.so.6!puts [function, GLIBC_2.2.5]{{$}}
+# LNX: {{^}}strlen -> libc.so.6!strlen [function, GLIBC_2.2.5]{{$}}
+# LNX-DAG: {{^}}libc.so.6: version floor GLIBC_2.2.5{{$}}
+# LNX-DAG: {{^}}libm.so.6: version floor GLIBC_2.29{{$}}
+# Exactly the rows above: eight on windows-msvc, seven on linux-gnu.
+# WIN-NUM-COUNT-8: {{^[^ ]+ -> [^ ]+ \[}}
+# WIN-NUM-NOT:     {{ -> }}
+# LNX-NUM-COUNT-7: {{^[^ ]+ -> [^ ]+ \[}}
+# LNX-NUM-NOT:     {{ -> }}
+# The P/Invokes, one per row.
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'exp'(float64) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" as "#9" cdecl) int32 'htons'(int32) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'strchr'(native int, int32) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("KERNEL32.dll" cdecl) int32 'GetTickCount'() cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'exp'(float64) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float32 'expf'(float32) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) void 'free'(native int) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# WIN-ILNUM-COUNT-8: pinvokeimpl(
+# WIN-ILNUM-NOT:     pinvokeimpl
+# LNX-ILNUM-COUNT-7: pinvokeimpl(
+# LNX-ILNUM-NOT:     pinvokeimpl
+#--- main.c
+typedef __SIZE_TYPE__ size_t;
+int puts(const char *s);
+size_t strlen(const char *s);
+double exp(double x);
+
+#ifdef _WIN32
+char *strdup(const char *s);
+char *strchr(const char *s, int c);
+unsigned short htons(unsigned short v);
+unsigned GetTickCount(void);
+
+int main(int argc, char **argv) {
+  char *s = strdup("windows");
+  puts(strchr(s, 'd'));
+  return (int)strlen(s) + (int)exp(1.0) + htons(1) + (GetTickCount() == 0) +
+         (int)__builtin_floor(argc * 0.5);
+}
+#else
+float expf(float x);
+void *malloc(size_t n);
+void free(void *p);
+
+int main(int argc, char **argv) {
+  char *s = malloc(8);
+  s[0] = 'l';
+  s[1] = 0;
+  puts(s);
+  free(s);
+  return (int)strlen("linux") + (int)exp(1.0) + (int)expf(1.0f) +
+         (int)__builtin_floor(argc * 0.5);
+}
+#endif

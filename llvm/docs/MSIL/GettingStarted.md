@@ -6,8 +6,11 @@ Design.md section 12) compiles one C file to ILAsm text with `clang -S`; `ilasm`
 into an assembly, and `dotnet` (or .NET Framework 4.8) runs it. Since milestone M14 a program
 can also have several files and archives: `clang -c` writes LLVM bitcode, and the linker
 `msil-ld` links it into one ILAsm module, which `ilasm` assembles (section 3, "Programs of
-several files"). There are no CIL object files yet (M19), and `msil-ld` writes no assembly
-image of its own yet (M20). What works and what does not is in [Status.md](Status.md); how
+several files"). Since M15 `msil-ld` binds the functions that no file defines to the native
+libraries a native link of the same program reads, so a linked program calls the C library, the
+Win32 API and native libraries of your own through P/Invoke (section 3, "Native libraries and
+P/Invokes"). There are no CIL object files yet (M19), and `msil-ld` writes no assembly image of
+its own yet (M20). What works and what does not is in [Status.md](Status.md); how
 the work was planned and built is in [ImplementationPlan.md](ImplementationPlan.md).
 
 Like LLVM itself, the project ships compiler tools only (Design.md, scope line). The compiler
@@ -74,11 +77,11 @@ pwsh -NoProfile -File msil/utils/build/msil-build.ps1 -Standard
 ```
 
 The second line builds everything the tests need: with `-Standard`, `msil-build.ps1` builds the
-targets of `msil/utils/ci/build-targets.txt`, in the file's order, and then any target named after
-the switch (`msil-build.ps1 -Standard llvm-mc`). That file is the one build-target list of the
-gates and of CI (plan 5.6.11): `msil/utils/ci/build.ps1` builds it the same way, and on Linux
-`bash msil/utils/ci/build.sh build` builds it with ninja (both then build jitall, section 7). Its
-comments say why each target is there. Since milestone M13 it holds:
+targets of `msil/utils/ci/build-targets.txt`, in the file's order, and then any target named
+after the switch (`msil-build.ps1 -Standard llvm-dwarfdump`). That file is the one build-target
+list of the gates and of CI (plan 5.6.11): `msil/utils/ci/build.ps1` builds it the same way,
+and on Linux `bash msil/utils/ci/build.sh build` builds it with ninja (both then build jitall,
+section 7). Its comments say why each target is there. Since milestone M15 it holds:
 
 - the tools and lit helpers: `llc`, `opt`, `clang`, `FileCheck`, `not`, `count`, `split-file`,
   `llvm-config`, and `llvm-profdata`, which two upstream clang driver tests of the
@@ -90,7 +93,10 @@ comments say why each target is there. Since milestone M13 it holds:
   own that `ninja llvm-ar` does not build (without them lit would find the Visual Studio
   `llvm-lib` on `PATH`);
 - `llvm-nm`, `llvm-objdump`, `llvm-readobj`, `llvm-as`, `llvm-bcanalyzer` and `llvm-lto2`, for
-  the upstream tests of hooked upstream files and for the MSIL tests of the bitcode symbol table.
+  the upstream tests of hooked upstream files and for the MSIL tests of the bitcode symbol table;
+- `yaml2obj` and `llvm-mc` (M15), which make the native libraries of the `msil-ld` tests in
+  `lld/test/MSIL`: ELF shared objects with symbol versions, and MinGW's long-format import
+  members.
 
 A first build compiles about 3,700 steps; afterwards a change in `llvm/lib/Target/MSIL` rebuilds
 the target and relinks in minutes. `llc --version` lists `msil - MSIL (.NET CIL as ILAsm text)`
@@ -98,13 +104,17 @@ when the target is in.
 
 ## 3. Compile a C program
 
-Programs are freestanding C, in one file with `clang -S` or in several that `msil-ld` links
-(below). The only library functions they may call are the Phase-1 imports: `puts`, `putchar`
-and the C math library (Status.md lists them per triple), and functions declared with
-`import_module` (optionally with `import_name` for the entry point; below); `msil-ld` binds
-calls of other native functions from M15.
-Declare them yourself or use clang's freestanding headers (`stdint.h`, `stddef.h`, `stdbool.h`,
-`limits.h`, `float.h`); there is no sysroot or libc header set yet.
+Programs are C, in one file with `clang -S` or in several that `msil-ld` links (below). With
+`clang -S` the only library functions a program may call are the standalone imports `puts`,
+`putchar` and the C math library (Status.md lists them per triple) and functions declared with
+`import_module` (optionally with `import_name` for the entry point; below). A program that
+`msil-ld` links may also call the functions of the native libraries of the link, the C library
+and the Win32 API among them, except variadic ones such as `printf` and those that take a
+function pointer, such as `qsort` (M15; below, "Native libraries and P/Invokes"). Declare them
+yourself or use clang's freestanding headers (`stdint.h`, `stddef.h`, `stdbool.h`, `limits.h`,
+`float.h`). A C library's own headers work through the native triple's header search
+(`--sysroot`, the `INCLUDE` of a Visual Studio developer prompt; the `hosted` leg of section 7
+compiles glibc's and the UCRT's), but the examples of this guide are freestanding.
 
 ```c
 // fib.c
@@ -136,19 +146,23 @@ clang --target=x86_64-pc-windows-msvc-msil   -O2 -ffreestanding -S fib.c -o fib.
 - An MSIL triple is the native triple plus `-msil`. clang uses the native target's ABI and
   predefines (`__x86_64__`, `__linux__` or `_WIN64`, ...) and adds `__MSIL__`; `long double` is
   `double` on every MSIL triple (natively it is wider on Linux and x86_64 MinGW; Status.md
-  section 3). The P/Invoke library names come from the triple (`libc` and `libm.so.6` on glibc,
-  `ucrtbase` on windows-msvc), so build for the OS you run on.
+  section 3). With `-S` the P/Invoke library names come from the triple (`libc` and `libm.so.6`
+  on glibc, `ucrtbase` on windows-msvc), and `msil-ld` takes them from the libraries it links
+  (`libc.so.6`, `api-ms-win-crt-stdio-l1-1-0.dll`, ...): either way, build for the OS you run
+  on.
 - Every optimization level works (`-O0` to `-O3`, `-Os`, `-Oz`); the execution tests run at
   `-O0` and `-O2` in most legs, and the `more-levels` leg runs most of them at the other levels
   (C programs at all four, IR tests at `-O1` and `-O3`; section 7).
-- `-ffreestanding` keeps the optimizer from introducing libc calls that are not Phase-1 imports.
+- `-ffreestanding` keeps the optimizer from introducing libc calls that `-S` cannot import
+  (`msil-ld` binds those that LTO introduces, such as `puts` for `printf("...\n")`, natively).
   It also turns off `main`'s implicit `return 0` on Linux triples, so return explicitly.
 - WebAssembly's import attributes import a function from a native library you name (milestone
   M13): `int beep(int) __attribute__((import_module("mylib"), import_name("real_beep")));`
   becomes `pinvokeimpl("mylib" as "real_beep" cdecl)`; without `import_name` the entry point is
   the C name. `import_name` alone makes no other function an import in `-S` and `llc` output:
-  the function is still `not a Phase-1 import`, and `msil-ld` resolves its entry point in the
-  native libraries (from M15). On a Phase-1 import (`puts`, `putchar`, the C math functions)
+  the function is still `not a Phase-1 import`. `msil-ld` keeps an `import_module` as given,
+  unchecked, and looks the entry point of an `import_name` alone up in the native libraries of
+  the link (below). On a Phase-1 import (`puts`, `putchar`, the C math functions)
   `import_name` alone renames the entry point imported from that function's Phase-1 library:
   `double cbrt(double) __attribute__((import_name("my_cbrt")));` becomes
   `pinvokeimpl("libm.so.6" as "my_cbrt" cdecl)` on glibc. An attribute written
@@ -189,7 +203,7 @@ bitcode with LTO and writes the whole program as one ILAsm module. `ilasm -exe` 
 and the `.exe` runs on modern .NET and on .NET Framework 4.8 alike:
 
 ```sh
-# main.c calls fib (fib.c) and bump (bump.c); nothing calls unused.c.
+# main.c calls fib (fib.c), bump (bump.c) and puts; nothing calls unused.c.
 clang --target=x86_64-pc-windows-msvc-msil -O2 -ffreestanding -c main.c fib.c bump.c unused.c
 llvm-ar rcs libutil.a bump.o unused.o        # the tree's build/bin/llvm-ar
 clang --target=x86_64-pc-windows-msvc-msil -O2 main.o fib.o -L. -lutil \
@@ -216,7 +230,8 @@ prog.exe              # .NET Framework 4.8 (Windows triples)
   between `-Wl,--start-lib` and `-Wl,--end-lib` behave as members of one archive. `-l<name>`
   searches the `-L` directories in order for `lib<name>.a` (on Windows triples also `<name>.lib`
   and DLL names; on Linux triples `lib<name>.so`); in the first directory that has one, an
-  archive with bitcode members wins, and `-l:<file>` takes that exact file.
+  archive with bitcode members wins over a native library, and `-l:<file>` takes that exact
+  file (the whole rule is under "Native libraries and P/Invokes" below).
 - **Linking.** Every MSIL link runs `msil-ld`, the copy of `lld` next to clang
   (`build/bin/msil-ld`), never `ld`, `link.exe` or `lld-link`. `-fuse-ld=lld`, `-fuse-ld=ld` and
   `-fuse-ld=msil-ld` name it too, `--ld-path=<program>` and an absolute `-fuse-ld=<path>` run
@@ -242,7 +257,10 @@ prog.exe              # .NET Framework 4.8 (Windows triples)
   work across files. On the link line, `-mllvm <option>` reaches the code generator inside
   `msil-ld` (as `--mllvm=<option>`), and `-save-temps` keeps LTO's bitcode after each stage
   (`<output>.0.0.preopt.bc`, `.0.2.internalize.bc`, `.0.4.opt.bc`, `.0.5.precodegen.bc`) and
-  its symbol resolutions (`<output>.resolution.txt`).
+  its symbol resolutions (`<output>.resolution.txt`). `.0.5.precodegen.bc` is written after
+  `msil-ld` has checked the native bindings (below) but before it annotates the module with
+  them, so it has no `msil-linked` flag, and it is not written when that check reports an
+  error.
 - **The assembly name** is the stem of `-o` (`prog`; never LTO's `ld-temp`), or
   `-Wl,--assembly-name=<name>` (the same as `-Wl,-soname,<name>`); `-mllvm
   -msil-assembly-name=<name>` on the link line overrides both. `msil-ld` hands the name to the
@@ -257,12 +275,13 @@ prog.exe              # .NET Framework 4.8 (Windows triples)
   first); a function and a variable of one name are `symbol type mismatch: <name>`; a
   thread-local and a plain variable of one name are `TLS attribute mismatch: <name>`.
   `-Wl,--warn-common` warns about common symbols.
-- **Undefined symbols.** A variable that no input defines is `undefined symbol: <name>`,
-  with `>>> referenced by <file>` lines, and a hidden symbol `undefined hidden symbol:
-  <name>`. A function that no input defines is still bound through the Phase-1 import table
-  (`puts`, `putchar`, the C math library, `import_module`), as with `-S`; any other one is
-  `msil-ld: error: undefined symbol: <name>`, reported by the code generator. M15 binds such
-  functions to the native libraries of the link instead.
+- **Undefined symbols.** A function that no input defines binds to a native library of the
+  link (below). A symbol that binds nowhere is `msil-ld: error: undefined symbol: <name>`,
+  followed by `>>> referenced by <file>:(<function>)` lines. `msil-ld` reports it after LTO,
+  so only the references that the optimized program still makes count, and a name that only
+  the optimizer introduced is `>>> referenced by ld-temp.o`. A hidden reference is `undefined
+  hidden symbol: <name>`, reported before LTO. (In M14, before native libraries, such a
+  function could bind only through the Phase-1 import table of `-S`.)
 - **Default libraries.** Unless `-nostdlib` or `-nodefaultlibs` is given, clang adds the C
   library of the triple (plan 5.10.4), as a native link does. `-nostartfiles` is accepted
   silently, because MSIL has no crt files (as are `-static-libgcc` on the Linux and MinGW
@@ -272,73 +291,81 @@ prog.exe              # .NET Framework 4.8 (Windows triples)
   |---|---|
   | `*-linux-gnu-msil` | `-lc -lm` (with `-pthread`, `-lpthread` first) |
   | `*-linux-musl-msil` | `-lc` |
-  | `*-windows-msvc-msil` | `-lucrt -lkernel32 -loldnames` |
+  | `*-windows-msvc-msil` | `-lucrt -lkernel32 -loldnames --ucrtbase-imports` (M15 added `--ucrtbase-imports`; below) |
   | `*-windows-gnu-msil` | `-lmsvcrt -ladvapi32 -lshell32 -luser32 -lkernel32` (with `-pthread`, `-lpthread` after `-lmsvcrt`, also with `-nolibc`); a `-lmsvcr*`, `-lucrt*` or `-lcrtdll*` of yours takes the place of `-lmsvcrt` |
 
-  In M14 `msil-ld` only has to find them: a native library (an import library, an archive
-  without bitcode members, a DLL, a shared object, or a linker script that `-l` finds) is
-  accepted without being read, and functions still bind through the Phase-1 import table
-  (M15 reads the libraries). A library that is not found is `unable to find library
-  -l<name>`. On windows-msvc, clang passes each `%LIB%` directory of a Visual Studio developer
-  prompt as `-L` (`msil-ld`, a GNU-style linker, does not read `LIB`), and otherwise the VC,
-  UCRT and Windows SDK library directories it detects or that `/winsysroot`-style options
-  name. A Windows host has no Linux C library, so for a Linux triple link with `-nodefaultlibs`, or
-  give clang `--sysroot=<dir>` of a Linux system, such as the E7 sysroot of
-  `make-linux-sysroot.py` (section 7), where `msil-ld` finds `libc.so` and `libm.so`. The test
-  harness links with `-nodefaultlibs` in M14. Header search is the native triple's too
-  (Phase 2 needs no hosted headers, plan Q16): `--sysroot`, a developer prompt's `INCLUDE`,
-  `-Xmicrosoft-windows-sys-root` or clang-cl's `/winsysroot`; the freestanding programs of this
-  guide need none.
+  Since M15 `msil-ld` reads these libraries and binds the program's library calls in them
+  (below); in M14 it only had to find them. A library that is not found is `unable to find
+  library -l<name>`. On windows-msvc, clang passes each `%LIB%` directory of a Visual Studio
+  developer prompt as `-L` (`msil-ld`, a GNU-style linker, does not read `LIB`), and otherwise
+  the VC, UCRT and Windows SDK library directories it detects or that `/winsysroot`-style
+  options name. A Windows host has no Linux C library, so for a Linux triple give clang
+  `--sysroot=<dir>` of a Linux system: the E7 sysroot that `make-linux-sysroot.py` writes
+  (section 7; `libc.so.6`, `libm.so.6` and the scripts `libc.so` and `libm.so`, which is what
+  the test harness links with), the glibc sysroot of `make-glibc-sysroot.sh` (section 7;
+  glibc's real headers and scripts, `libc_nonshared.a` included), or a Linux root. On
+  windows-gnu `msil-ld` needs the mingw-w64 import libraries, from a `--sysroot` or `-L`
+  directory. `-nodefaultlibs` leaves the libraries out, for a program that calls no native
+  function (the test harness linked that way in M14). Header search is the native triple's
+  too (Phase 2 needs no hosted headers, plan Q16): `--sysroot`, a developer prompt's
+  `INCLUDE`, `-Xmicrosoft-windows-sys-root` or clang-cl's `/winsysroot`; the freestanding
+  programs of this guide need none.
 - **Stock-clang bitcode** (plan Q12). Bitcode that clang writes for the native triple
   (`clang --target=x86_64-pc-windows-msvc -flto -c`) links too: `msil-ld` compiles it for the
   MSIL triple with the rest and warns once per link, `<file>: linking bitcode for <native
   triple> as <msil triple>; stock-clang bitcode is a compatibility path`. Its limits (recon
   `p2/lld-flavor.md` 3.3): on windows-msvc compile it with `-fno-ms-volatile`, or its
-  `volatile` accesses are atomics and the link stops with `undefined symbol: __atomic_load_4`
-  (atomics are phase 3); in stock bitcode for x86_64 Linux and MinGW `long double` is
-  `x86_fp80`, which the backend rejects where code uses it, and a struct that contains one has
-  another layout than in MSIL files, without a diagnostic; the file sees the native predefines
-  (no `__MSIL__`, and `__ELF__` on Linux); and the native cost model vectorized it, which makes
-  its IL larger (by about a quarter in the recon's corpus). Every input must have the link's
-  architecture, OS and environment (the vendor and the MSVC version do not count), or it is
-  `<file>: target triple <t> is incompatible with <t0>`; the link's triple is clang's
-  `--target`, else the first bitcode input's with `-msil` appended to a native triple. That
-  triple must be one of D6's (x86_64 or aarch64 on Linux, windows-msvc or windows-gnu): any
-  other, such as that of stock bitcode for Darwin (`x86_64-apple-macosx`) or i686, stops the
-  link before the checks of each input with `msil-ld: error: unsupported target triple
-  '<codegen triple>' for MSIL`.
+  `volatile` accesses are atomics and the link stops with `runtime helper '__atomic_load_4' is
+  not available for MSIL yet (phase 3)` (atomics are phase 3, plan D36); in stock bitcode for
+  x86_64 Linux and MinGW `long double` is `x86_fp80`, which the backend rejects where code uses
+  it, and a struct that contains one has another layout than in MSIL files, without a
+  diagnostic; the file sees the native predefines (no `__MSIL__`, and `__ELF__` on Linux); and
+  the native cost model vectorized it, which makes its IL larger (by about a quarter in the
+  recon's corpus). Every input must have the link's architecture, OS and environment (the
+  vendor and the MSVC version do not count), or it is `<file>: target triple <t> is
+  incompatible with <t0>`; the link's triple is clang's `--target`, else the first bitcode
+  input's with `-msil` appended to a native triple. That triple must be one of D6's (x86_64 or
+  aarch64 on Linux, windows-msvc or windows-gnu): any other, such as that of stock bitcode for
+  Darwin (`x86_64-apple-macosx`) or i686, stops the link before the checks of each input with
+  `msil-ld: error: unsupported target triple '<codegen triple>' for MSIL`.
 - **Other inputs.** A .NET assembly or a CIL object is `<file>: linking CIL object files and
   .NET assemblies is not supported yet` (M20-M22), and anything that is neither bitcode, an
-  archive nor a native library (an `.il` file, a linker script given as an input) is
-  `unknown file type: <file>`.
+  archive, a native library nor a GNU ld script (an `.il` file, a native object file) is
+  `unknown file type: <file>`. Native libraries and linker scripts are inputs like any other
+  since M15 (below).
 
-`msil-ld`'s options in M14, with lld's spellings (pass them through clang as `-Wl,<option>`;
+`msil-ld`'s options in M15, with lld's spellings (pass them through clang as `-Wl,<option>`;
 plan 5.9.3):
 
 | Option | Meaning |
 |---|---|
 | `-o <file>` | the output; with `--lto-emit-asm` ILAsm text, which ilasm assembles with `-exe` |
 | `--target=<triple>` | the code-generation triple (clang always passes it); one of D6's MSIL triples, else `unsupported target triple '<triple>' for MSIL` |
-| `-L <dir>`, `-l <name>`, `-l:<file>`, `--sysroot=<dir>` | library search as above; `-L=<dir>` is relative to `--sysroot` |
+| `-L <dir>`, `-l <name>`, `-l:<file>`, `--sysroot=<dir>` | library search as above and under "Native libraries and P/Invokes" below; `-L=<dir>` is relative to `--sysroot` |
+| `-Bstatic`, `-Bdynamic` | after `-Bstatic`, `-l` takes only static libraries (archives with bitcode members) and skips native ones; `-Bdynamic`, the default, takes both again (M15) |
+| `--ucrtbase-imports` | a built-in import library, read where the option stands, that binds `memcpy`, `memset`, `memmove`, `memcmp`, `memchr`, `strchr`, `strrchr`, `strstr`, `wcschr`, `wcsrchr` and `wcsstr` to `ucrtbase.dll`; Windows targets only (M15) |
+| `--print-imports` | print each native binding and the version floor of each ELF library (M15; below) |
+| `--no-dependent-libraries`, `--dependent-libraries` | ignore, or read (the default), the linker options of the inputs: `#pragma comment(lib)`, `/DEFAULTLIB`, ... (M15) |
 | `--whole-archive`, `--no-whole-archive`, `--start-lib`, `--end-lib` | as in lld |
 | `-u <sym>`, `--undefined=<sym>` | a reference to `<sym>`: it extracts the archive member that defines it and stays visible after LTO |
 | `-e <sym>`, `--entry=<sym>` | only `main` until M20: `--entry=<sym>: an entry point other than main is not supported yet` |
 | `--lto-emit-asm` | write the program's ILAsm text to `-o` (required in M14) |
 | `--lto-O<n>`, `--lto-CGO<n>`, `--save-temps`, `--disable-verify`, `-mllvm <option>`, `--mllvm=<option>` | LTO, as in lld; `--lto-partitions=<n>`, `--thinlto-jobs=<n>` and `--thinlto-cache-dir=<dir>` are accepted, but more than one partition, and ThinLTO, are M20's |
 | `--assembly-name=<name>`, `-soname <name>` | the assembly name (default: the stem of `-o`) |
-| `-Map=<file>`, `--print-map`, `-M` | the link map: the inputs in load order, then each defined symbol with its kind, binding and input |
+| `-Map=<file>`, `--print-map`, `-M` | the link map: the inputs in load order, native libraries included, then each defined symbol with its kind, binding and input, and each natively bound one (`NativeFunction`, `NativeData`) with its library |
 | `--why-extract=<file>` | why each archive member was linked, in lld's format (`-` is standard output) |
 | `--reproduce=<file>` | a tar of every input with a `response.txt` that links them again, as lld writes it |
-| `--trace`, `--trace-symbol=<sym>`, `-y <sym>` | print each input file and extracted archive member, and each reference to and definition of `<sym>` |
-| `--allow-multiple-definition`, `--warn-common`, `--fatal-warnings`, `--error-limit=<n>`, `--verbose`, `--color-diagnostics` | as in lld |
+| `--trace`, `--trace-symbol=<sym>`, `-y <sym>` | print each input file and extracted archive member, and each reference to and definition of `<sym>`, a native one as `<library>: shared definition of <sym>` |
+| `--allow-multiple-definition`, `--warn-common`, `--fatal-warnings`, `--error-limit=<n>`, `--verbose`, `--color-diagnostics` | as in lld; `--verbose` also notes each skipped native archive and each ignored C runtime library request |
 | `-s`, `--strip-all` | accepted and ignored |
 | `-shared`, `--shared` | `-shared is not supported yet` (library assemblies are M22's) |
 | `-r`, `--relocatable` | always `-r is not supported` |
 | `--version`, `-v`, `--help` | lld's version, and this list |
 
 Every other option is `unknown argument: <option>` until the milestone that adds it: for
-example `-Bstatic` and `-Bdynamic` (M15), `--gc-sections` (M20) and `--reference=` (M21). The
-map of the example above (`-Wl,-Map=prog.map`):
+example `--gc-sections` (M20) and `--reference=` (M21). The map of the example above
+(`-Wl,-Map=prog.map`, from a developer prompt; the library paths are shortened), in which
+`main` also prints through `puts`:
 
 ```text
 msil-ld map of prog.il (x86_64-pc-windows-msvc-msil)
@@ -346,13 +373,151 @@ Inputs:
   main.o
   fib.o
   .\libutil.a(bump.o)
+  <SDK>\lib\<ver>\ucrt\x64\ucrt.lib
+  <SDK>\lib\<ver>\um\x64\kernel32.lib
+  <VC>\lib\x64\oldnames.lib
+  --ucrtbase-imports
 Symbols:
-  Kind            Binding Input               Symbol
-  DefinedFunction Global  main.o              main
-  DefinedData     Global  main.o              counter
-  DefinedFunction Global  fib.o               fib
-  DefinedFunction Global  .\libutil.a(bump.o) bump
+  Kind            Binding Input                             Symbol
+  DefinedFunction Global  main.o                            main
+  DefinedData     Global  main.o                            counter
+  DefinedData     Weak    main.o                            ??_C@_03NADLHBLG@fib?$AA@
+  DefinedFunction Global  fib.o                             fib
+  DefinedFunction Global  .\libutil.a(bump.o)               bump
+  NativeFunction  Global  <SDK>\lib\<ver>\ucrt\x64\ucrt.lib puts
 ```
+
+The default libraries are inputs even when nothing binds to them; `??_C@...` is the MSVC
+string literal `"fib"`, a COMDAT.
+
+### Native libraries and P/Invokes (M15)
+
+A function that no input of the link defines becomes a P/Invoke of the native library that
+defines it, found the way a native link of the same program finds it: the driver's default
+libraries, the `-l` options and library files on the command line, and the libraries that the
+program names with `#pragma comment(lib)`. `-Wl,--print-imports` shows each binding:
+
+```sh
+# Windows triple, from a Visual Studio x64 developer prompt (LIB):
+clang --target=x86_64-pc-windows-msvc-msil -O2 -ffreestanding -c main.c
+clang --target=x86_64-pc-windows-msvc-msil -O2 main.o -Wl,--print-imports \
+  -Wl,--lto-emit-asm -o prog.il
+# Linux triple, on Windows or Linux: a sysroot with the C library (section 7).
+clang --target=x86_64-unknown-linux-gnu-msil -O2 -ffreestanding -c main.c
+clang --target=x86_64-unknown-linux-gnu-msil -O2 main.o \
+  --sysroot=C:/llvm-msil-scratch/linux-sysroot -Wl,--print-imports \
+  -Wl,--lto-emit-asm -o prog.il
+```
+
+For a `main.c` that calls `puts`, `strlen`, `strdup` and `sqrt`, the two links print:
+
+```text
+puts -> api-ms-win-crt-stdio-l1-1-0.dll!puts [function, -]
+sqrt -> api-ms-win-crt-math-l1-1-0.dll!sqrt [function, -]
+strdup -> api-ms-win-crt-string-l1-1-0.dll!_strdup [function, -]
+strlen -> api-ms-win-crt-string-l1-1-0.dll!strlen [function, -]
+```
+
+```text
+puts -> libc.so.6!puts [function, GLIBC_2.2.5]
+sqrt -> libm.so.6!sqrt [function, GLIBC_2.2.5]
+strdup -> libc.so.6!strdup [function, GLIBC_2.2.5]
+strlen -> libc.so.6!strlen [function, GLIBC_2.2.5]
+libc.so.6: version floor GLIBC_2.2.5
+libm.so.6: version floor GLIBC_2.2.5
+```
+
+and `prog.il` declares, for example on Windows,
+
+```text
+.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" cdecl) native int 'strdup'(native int) cil managed preservesig {}
+```
+
+- **What `msil-ld` reads.** The native libraries of the triple's object format, given on the
+  command line or found by `-l`: on the Linux triples ELF shared objects (`.so`) and GNU ld
+  scripts (glibc's `libc.so`); on the Windows triples Windows import libraries (`.lib`, and
+  MinGW's `.dll.a`), `oldnames.lib`'s aliases and native DLLs; and archives of native objects.
+  A library of the other format is an error, as in lld-link and ld.lld: `<path>: ELF file
+  cannot be imported for target <triple>` on a Windows triple, `<path>: PE/COFF file cannot be
+  imported for target <triple>` on a Linux one (section 8); `-l` passes over it. Their machine
+  (and ELF class) must match the triple. Pass a library of your own as a file (`libnative.so`
+  on Linux, `native.lib` or `native.dll` on Windows) or as `-L<dir> -lnative`.
+- **`-l<name>`** searches the `-L` directories in order (the driver adds the triple's library
+  directories after yours) for, on windows-msvc, `lib<name>.a`, `<name>.lib` and `<name>.dll`;
+  on windows-gnu also `lib<name>.dll.a`, `<name>.dll.a`, `lib<name>.dll`; on Linux
+  `lib<name>.a` and `lib<name>.so` (`<name>.dll` and `lib<name>.dll` count there only as .NET
+  libraries, M22's, so `-lfoo` takes `libfoo.so` over a native `foo.dll`, as ld.lld does).
+  The first directory that has an acceptable one wins, and in it an archive with bitcode
+  members wins over an import library or a shared library (Design.md 5.2: static first, the
+  opposite of GNU ld's default). An archive of native objects only is skipped
+  (`-Wl,--verbose` notes `skipping native static archive <path> (no CIL or bitcode
+  members)`), and so is a library of the other object format (`skipping <path>: ...`) and a
+  .NET assembly, with a warning (`<path>: skipping the .NET assembly that -l<name> found; use
+  --reference for .NET reference assemblies`). `-Wl,-Bstatic` makes the following `-l`
+  options take static libraries only, until `-Wl,-Bdynamic`; `-l:<file>` takes that exact
+  file of any kind (one of the other object format is the error above).
+- **Linker scripts** are read as lld/ELF reads them (`GROUP`, `INPUT`, `AS_NEEDED`, `-l`): a
+  name in a script is looked up under the sysroot when it starts with `=`, or when it is
+  absolute and the script lies inside the sysroot (so glibc's `libc.so`, which names
+  `/usr/lib/x86_64-linux-gnu/libc.so.6`, works under `--sysroot`); a relative name in the
+  script's own directory, the current directory, then the `-L` directories. A missing one is
+  lld/ELF's `unable to find <name>` error, and an input that leads back to a script still
+  being read is `<script>:<line>: there is a cycle in linker script inputs` (section 8).
+- **Which definition binds.** Definitions in the program and its archives first; then the
+  native libraries in command-line order, where the first bindable definition wins. A
+  P/Invoke can only reach what `dlsym` or `GetProcAddress` reaches: the default (`@@`) or
+  unversioned version of an ELF symbol, never thread-local data or `GLIBC_PRIVATE`; a COFF
+  import of the right kind. A program's own `malloc` (or any other name) wins over the
+  library's for the program's code; native code keeps calling its own.
+- **Module and entry names** are those a native link records (plan Q13): the `DT_SONAME`
+  (`libc.so.6`), else the file name of a shared object; the DLL name of an import library
+  exactly as it stores it (`KERNEL32.dll`, the API sets `api-ms-win-crt-*-l1-1-0.dll` of
+  `ucrt.lib`); the file name of a DLL as `msil-ld` found it (`native.dll`), not the name in
+  its export table; `#<n>` for an import by ordinal only (`htons` is `#9` of `WS2_32.dll`); the
+  alias target of `oldnames.lib` (`strdup` is `_strdup`).
+- **Default libraries.** On windows-msvc the driver's last library is `--ucrtbase-imports`,
+  an import library built into `msil-ld` that binds the 11 memory and string functions that
+  native programs take from vcruntime (`memcpy`, `memset`, `memmove`, `memcmp`, `memchr`,
+  `strchr`, `strrchr`, `strstr`, `wcschr`, `wcsrchr`, `wcsstr`) to `ucrtbase.dll`, because
+  `ucrt.lib` lacks them; `-lvcruntime` on your command line comes first and wins. On other
+  targets the option is `--ucrtbase-imports needs a Windows target, not <triple>`.
+- **Libraries the program names.** `#pragma comment(lib, "<name>")` (clang records
+  `/DEFAULTLIB:<name>.lib` on Windows triples and `-l<name>` on Linux ones) and the other
+  linker options in the bitcode are read when the file joins the link, an archive member's
+  when it is extracted. Requests for the MSVC C runtime (`libcmt`, which clang names in every
+  windows-msvc object, `msvcrt`, `ucrt`, `vcruntime`, ...) are ignored with a `--verbose`
+  note, because the default libraries supply the C runtime; `/alternatename:` and
+  `/failifmismatch:` work as in lld-link; any other option is ignored with the warning
+  `ignoring linker option '<option>' in <file>`. `-Wl,--no-dependent-libraries` ignores them
+  all.
+- **Checked after LTO.** `msil-ld` binds what the program still calls after LTO, and reports
+  there: an unbindable or unresolved function is a link error, with `>>> referenced by
+  <file>:(<function>)` lines unless the code generator reports it (section 8 lists the texts),
+  never a `DllNotFoundException` or `EntryPointNotFoundException` at run time. A call that the
+  optimizer removed is not reported, and a library call that it introduced (`puts` for a
+  `printf("...\n")`) is bound like any other.
+- **What does not work yet** (Status.md section 2, "Native libraries and P/Invokes"): native
+  variables (`environ`, `stderr`; M20), variadic native functions (`printf`), native functions
+  that take or return a struct by value, an `__int128`, a vector or a `_Float16`, the native
+  `long double` functions (`sqrtl`, `strtold`, ...) on x86_64 and aarch64 Linux and x86_64
+  MinGW, `atexit`, and the native functions that take C function pointers (`qsort`, `bsearch`,
+  `signal`, `pthread_create`, `CreateThread`, `_beginthreadex`, ...): all of them are link
+  errors until phase 3 (native data until M20). A function address passed to any other native
+  function (a library's own callback API, a Win32 callback) is not diagnosed and fails at run
+  time until phase 3 (P3-B). For a call that passes no function of the program, such as
+  `signal(SIGPIPE, SIG_IGN)`, declare the function with an explicit `import_module`, which
+  `msil-ld` keeps as given.
+- **Running.** The P/Invoke names only the library, so the library must be where the runtime's
+  loader finds it: next to the program for a library of your own (.NET and .NET Framework load
+  it from there; the test harness copies it there with `msil-run.py --dep`), the system's
+  for the C library and the Win32 API. A P/Invoke has no symbol version: on Linux it binds the
+  default version of the library that runs it, whatever version `msil-ld` saw (the version
+  floor of `--print-imports` is the newest version the link bound in each library).
+- **The linked text.** `msil-ld` annotates the module it compiles with the module flag
+  `msil-linked`, the attributes `msil-import-module` and `msil-import-name` on each bound
+  function and the named metadata `!msil.imports` for the library functions that code
+  generation may call, and the backend prints P/Invokes from these alone, with `assembly`
+  access (plan 5.10.13). `clang -S` and llc keep the standalone table and `public` P/Invokes.
 
 ## 4. Assemble with ilasm
 
@@ -405,7 +570,9 @@ dotnet exec --runtimeconfig fib.runtimeconfig.json fib.dll   # same; the file ma
   back to a newer major version when .NET 8 is missing, or `"rollForward": "LatestMajor"` to
   always take the newest installed runtime. `tfm` is optional.
 - The output (also `msil-ld`'s) references only `mscorlib`, so the same `.dll` runs on .NET 8, 9
-  and 10, and the `.exe` on .NET Framework 4.8.
+  and 10, and the `.exe` on .NET Framework 4.8. A program that `msil-ld` linked against a
+  native library of your own needs that library next to it when it runs (section 3, "Native
+  libraries and P/Invokes").
 - Arguments after the assembly reach `main`: `dotnet fib.dll a b` gives `argc` 3, and `argv[0]`
   is the path of the `.dll` (`Environment.GetCommandLineArgs()`).
 - The exit status is `main`'s return value. Linux keeps only its low 8 bits, as for native
@@ -460,12 +627,12 @@ depth of every instruction and the exact `.maxstack` and stops the compile on a 
 
 | Suite | Where | What |
 |---|---|---|
-| Unit tests | `llvm/unittests/Target/MSIL`, plus the MSIL cases of `TargetParserTests` and `MCTests`, and `llvm/unittests/CLI` (`CLITests`, all of it) | type mapping, name quoting, stack effects, target machine, streamer, the MC object hooks (`MSILMCObjectHooks.*`), triples and their compatibility, target selection; `CLITests`: the ECMA-335 format headers, the metadata table schema and the link-info record (suites `CLIFormatTest`, `CLITableSchemaTest`, `CLIMSILLinkTest`) |
-| llc and MIR tests | `llvm/test/CodeGen/MSIL` | the emitted IL, FileCheck'ed on both x86_64 triples (and the aarch64 ones where the ABI differs), and assembled with ilasm when it is available; the pass pipeline and the MIR at llc's stop points; the linker options in the bitcode symbol table of MSIL modules (`irsymtab-linker-options.ll`); the module flags `msil-assembly-name` and `msil-lto` that `msil-ld` sets (`lto-module-flags.ll`) |
-| clang tests | `clang/test/CodeGen/MSIL`, `clang/test/Preprocessor/init-msil.c`, `clang/test/Driver/msil-toolchain.c`, `msil-link.c`, `msil-lto.c` and `msil-header-search.c` | the clang wrapper, predefines, driver errors (the ELF-only section options among them), `-mllvm` options, `-cc1as`, the import attributes and `#pragma comment(lib)`, Design.md 12's literal command; the MSIL toolchain (M14): `-c` as bitcode, the `msil-ld` command line, the default libraries, `-fuse-ld` and `--ld-path=`, the LTO options and the cc1 lines (`-###` only) |
-| `msil-ld` tests | `lld/test/MSIL` | 25 tests (M14): which program names and `-flavor` values reach `msil-ld` (`dispatch.test`) and that `lld-link` and `-flavor link` still reach the COFF flavor (`dispatch-coff.test`), its options and their errors, symbol resolution in both input orders (weak, common, COMDAT, archives, `--whole-archive`, duplicates, undefined and mismatched symbols), the triple checks and the stock-bitcode warning, library search, the LTO options and `--lto-emit-asm` text, the map file, `--why-extract`, `--reproduce`, `--trace` and response files; inputs come from the tree's `llvm-as`, `llvm-ar` and `llvm-lib /def:`. In `check-msil` and the `net8` leg; the milestone gates also run them with `--param RUN_LLD_MAIN_TWICE=1` (`LLD_IN_TEST=2`: every link runs twice in one process, as for the other lld flavors; `dispatch-coff.test` is unsupported there, because the COFF flavor's `no input files` exits from the silenced first run) |
-| Execution tests | `msil/test/M1/<NN-area>/`, `msil/test/M2/<NN-area>/` | C and IR programs compiled at `-O0` and `-O2` (and in the `more-levels` leg at the other levels; see below), assembled, verified, force-JITted, run and compared with checked-in transcripts and with a native build (the *native oracle*, below); `M1/11-programs/` is the Design.md 12 program corpus. `M2/` (M14) holds programs of several files, archives and stock-clang bitcode that `msil/utils/msil-prog.py` builds through clang and `msil-ld`, and the link-semantics matrix (`M2/08-semantics/`, Status.md section 2) |
-| Harness self-tests | `msil/test/harness/` | the runner, verifier and JIT checker themselves, `update-expected.py`, the E7 Linux oracle, and lit's configuration errors (bad `msil_*` parameters stop lit with exit status 2); `prog/` pins the expansions of `%{msil_prog}` and `%{msil_c}` and the commands of `msil-prog.py` with stand-in tools |
+| Unit tests | `llvm/unittests/Target/MSIL`, plus the MSIL cases of `TargetParserTests` and `MCTests`, and `llvm/unittests/CLI` (`CLITests`, all of it) | type mapping, name quoting, stack effects, target machine, streamer, the MC object hooks (`MSILMCObjectHooks.*`), the standalone import table and the linked import mode (`MSILImportsTest`, M15), triples and their compatibility, target selection; `CLITests`: the ECMA-335 format headers, the metadata table schema and the link-info record (suites `CLIFormatTest`, `CLITableSchemaTest`, `CLIMSILLinkTest`) |
+| llc and MIR tests | `llvm/test/CodeGen/MSIL` | the emitted IL, FileCheck'ed on both x86_64 triples (and the aarch64 ones where the ABI differs), and assembled with ilasm when it is available; the pass pipeline and the MIR at llc's stop points; the linker options in the bitcode symbol table of MSIL modules (`irsymtab-linker-options.ll`); the module flags `msil-assembly-name` and `msil-lto` that `msil-ld` sets (`lto-module-flags.ll`); the linked import mode, `msil-linked`, with its `assembly` P/Invokes and errors, against the standalone table (`imports-linked.ll`, M15) |
+| clang tests | `clang/test/CodeGen/MSIL`, `clang/test/Preprocessor/init-msil.c`, `clang/test/Driver/msil-toolchain.c`, `msil-link.c`, `msil-lto.c` and `msil-header-search.c` | the clang wrapper, predefines, driver errors (the ELF-only section options among them), `-mllvm` options, `-cc1as`, the import attributes and `#pragma comment(lib)`, Design.md 12's literal command; the MSIL toolchain (M14): `-c` as bitcode, the `msil-ld` command line, the default libraries (with `--ucrtbase-imports` on windows-msvc since M15), `-fuse-ld` and `--ld-path=`, the LTO options and the cc1 lines (`-###` only) |
+| `msil-ld` tests | `lld/test/MSIL` | 47 tests: which program names and `-flavor` values reach `msil-ld` (`dispatch.test`) and that `lld-link` and `-flavor link` still reach the COFF flavor (`dispatch-coff.test`), its options and their errors, symbol resolution in both input orders (weak, common, COMDAT, archives, `--whole-archive`, duplicates, undefined and mismatched symbols), the triple checks and the stock-bitcode warning, library search, the LTO options and `--lto-emit-asm` text, the map file, `--why-extract`, `--reproduce`, `--trace` and response files (M14); and the 21 `native-*.test` of M15: each native-library reader, the `-l` rules, scripts under `--sysroot`, binding and its order, the linker options of bitcode, `--ucrtbase-imports`, `--print-imports`, and every error of section 8 that names a native symbol. Inputs come from the tree's `llvm-as`, `llvm-ar`, `llvm-lib /def:` and `llvm-dlltool`, and for the native libraries `yaml2obj`, `llvm-mc` (the tests that need it require the X86 target), `ld.lld -shared` and `lld-link -dll`. In `check-msil` and the `net8` leg; the milestone gates also run them with `--param RUN_LLD_MAIN_TWICE=1` (`LLD_IN_TEST=2`: every link runs twice in one process, as for the other lld flavors; `dispatch-coff.test` is unsupported there, because the COFF flavor's `no input files` exits from the silenced first run) |
+| Execution tests | `msil/test/M1/<NN-area>/`, `msil/test/M2/<NN-area>/` | C and IR programs compiled at `-O0` and `-O2` (and in the `more-levels` leg at the other levels; see below), assembled, verified, force-JITted, run and compared with checked-in transcripts and with a native build (the *native oracle*, below); `M1/11-programs/` is the Design.md 12 program corpus. `M2/` (M14) holds programs of several files, archives and stock-clang bitcode that `msil/utils/msil-prog.py` builds through clang and `msil-ld`, programs that call native libraries (`M2/03-native/`, M15), the link-semantics matrix (`M2/08-semantics/`, Status.md section 2) and the compile-only hosted tests (`M2/09-hosted/`, M15; the `hosted` leg below) |
+| Harness self-tests | `msil/test/harness/` | 72 tests: the runner, verifier and JIT checker themselves, `update-expected.py`, the E7 Linux oracle, the dependencies that `--dep` ships with a program (`dep-local.test`, `dep-wsl.test`, M15), the comparison of `il-snapshot.py` (`il-snapshot.test`, M15; below), and lit's configuration errors (bad `msil_*` parameters stop lit with exit status 2); `prog/` pins the expansions of `%{msil_prog}` and `%{msil_c}` (with `%{msil_native_libs}` and `%{msil_deps}` since M15) and the commands of `msil-prog.py` with stand-in tools |
 | Upstream regression tests | the upstream lit tests and unit tests named in `msil/utils/upstream-hooks.txt` | the upstream behaviour of every upstream file the fork changes (the upstream-hooks check, below) |
 
 ```sh
@@ -484,7 +651,10 @@ under the shared build lock. Through `pwsh -File`, a value that starts with `-` 
 call fails with "Missing an argument for parameter 'LitArgs'": write `-LitArgs:"-sv ..."` or
 start the value with a blank (`-LitArgs " -sv ..."`). Execution tests need clang with the MSIL
 target, ilasm and a .NET runtime, and `msil/test/M2` also `msil-ld` (its archive tests the
-tree's `llvm-ar`); without them they are UNSUPPORTED rather than failing.
+tree's `llvm-ar`); without them they are UNSUPPORTED rather than failing. The compile-only
+tests of `msil/test/M2/09-hosted` need only clang with the MSIL target, plus a glibc sysroot
+(feature `msil-glibc-sysroot`) or the UCRT headers on `INCLUDE` (`msil-ucrt-headers`), and
+`msil-ld` for the two that link.
 `--param msil_pipeline=lto` builds every C test of `msil/test/M1` through `clang -c` and
 `msil-ld` instead of `clang -S` (the `lto` leg below).
 
@@ -503,7 +673,7 @@ marked `-Wsl` run only when `lit-legs.ps1` gets `-Wsl` (or names them with `-Leg
 
 | Leg | Paths | Extra `--param`s |
 |---|---|---|
-| `net8` | `llvm/test/CodeGen/MSIL`, the clang MSIL tests (the driver tests included), `lld/test/MSIL`, `msil/test` (M1, M2 and the harness) | `msil_dotnet_runtime=8 msil_native_oracle=required msil_run_netfx=1` (.NET 8, the native oracle with the compiler-rt builtins, and .NET Framework 4.8; the native link needs `LIB`: use a VS x64 developer prompt, or `msil-lit.ps1`, which enters that environment) |
+| `net8` | `llvm/test/CodeGen/MSIL`, the clang MSIL tests (the driver tests included), `lld/test/MSIL`, `msil/test` (M1, M2 and the harness) | `msil_dotnet_runtime=8 msil_native_oracle=required msil_run_netfx=1` (.NET 8, the native oracle with the compiler-rt builtins, and .NET Framework 4.8; the native link and, since M15, the default libraries of the MSIL link need `LIB`: use a VS x64 developer prompt, or `msil-lit.ps1`, which enters that environment) |
 | `net10` | `msil/test/M1` | `msil_dotnet_runtime=10` |
 | `net8-tc0` | `msil/test/M1` | `msil_dotnet_runtime=8 msil_dotnet_env=DOTNET_TieredCompilation=0` (optimizing JIT) |
 | `more-levels` | `msil/test/M1` | `msil_dotnet_runtime=8 msil_opt_levels=O1,O3,Os,Oz`: the four levels the other legs leave out (they run `-O0` and `-O2`); `.ll` tests that use `%{msil_ll}` run at `-O1` and `-O3` only, because llc has no `-Os` or `-Oz`. The three trap tests (`01-int/trap-call-before-div.ll`, `01-int/trap-call-before-rem.ll`, `03-control/trap.ll`) and `01-int/calls-arith-debug-info.test` have explicit RUN lines that pin `-O0` and `-O2` in every leg |
@@ -513,6 +683,7 @@ marked `-Wsl` run only when `lit-legs.ps1` gets `-Wsl` (or names them with `-Leg
 | `wsl-net10-tc0` (`-Wsl`) | `msil/test/M1` | *WSL* plus `msil_dotnet_env=DOTNET_TieredCompilation=0` |
 | `wsl-ilasm` (`-Wsl`) | `msil/test/M1/11-programs` | *WSL* plus `msil_wsl_ilasm=<the NuGet linux-x64 ilasm>`: assembled by the Linux ilasm inside WSL |
 | `wsl-quick` (`-Wsl`) | `msil/test/M1/11-programs`, `msil/test/harness`, `msil/test/M2` | *WSL* and *E7*: the short WSL leg that every Phase 2 milestone gate runs from M13 on (plan 5.12.10) |
+| `hosted` (`-Wsl`, optional) | `msil/test/M2/09-hosted` | `msil_glibc_sysroot=<glibc sysroot>` (M15, plan Q16): the hosted compile-only tests (glibc's headers and its real `libc.so` scripts, the UCRT headers) with the glibc sysroot required, so a missing one is a configuration error and the leg cannot pass by skipping. The other legs run these tests only where the default glibc sysroot exists and, for the UCRT test, `INCLUDE` holds the UCRT headers. Marked `-Wsl` because its sysroot is made through WSL (below); the CI never runs it |
 | `modern-ilasm` | `msil/test/M1/11-programs` | `msil_ilasm=<the NuGet win-x64 ilasm.exe>` |
 | `roundtrip` | `msil/test/M1/11-programs` | `msil_roundtrip=1`: every assembly goes through ildasm and ilasm (Design.md 5.5) and the reassembled one runs |
 | `expected` | `msil/test/M1`, `msil/test/M2` | not lit: `update-expected.py --check` (the Windows native oracle, with the compiler-rt builtins) |
@@ -520,7 +691,8 @@ marked `-Wsl` run only when `lit-legs.ps1` gets `-Wsl` (or names them with `-Leg
 | `utc` | six tests of `llvm/test/tools/UpdateTestChecks/update_llc_test_checks` | not lit: `msil/utils/run-utc-tests.py --llc <build>/bin/llc msil-basic x86-basic x86-mir-only x86-asm-mir-mixed x86-constant-pool asm-show-inst` runs their RUN lines (lit reports them UNSUPPORTED on Windows: `llvm/test/tools/UpdateTestChecks/lit.local.cfg` sets the `llc-binary` feature they require only when a file named exactly `llc` exists); the log is `build/lit-results/utc.log` |
 | `all-levels` (nightly, `-Full`) | `msil/test` | `msil_opt_levels=O0,O1,O2,O3,Os,Oz` |
 
-`<sysroot>` is `$MSIL_LINUX_SYSROOT`, else `C:\llvm-msil-scratch\linux-sysroot`. Each lit leg
+`<sysroot>` is `$MSIL_LINUX_SYSROOT`, else `C:\llvm-msil-scratch\linux-sysroot`, and `<glibc
+sysroot>` is `$MSIL_GLIBC_SYSROOT`, else `C:\llvm-msil-scratch\glibc-sysroot`. Each lit leg
 writes its lit arguments one per line (`--param=<name>=<value>`, `--xunit-xml-output=<file>`)
 into the response file `build/lit-results/<leg>.params.rsp` and runs
 `msil-lit.ps1 -LitArgs:"-sv @<file>"`; lit reads the file itself, so a parameter value may
@@ -546,8 +718,11 @@ from `<stem>.expected`, and removes one that no longer differs. No test of `msil
 `M2` needs one today. `--check` compares with `<stem>.<os>.expected` where it exists, else with
 `<stem>.expected`, the file the test itself picks for that OS. An `M2` test (a `.test` file whose
 RUN line is `%{msil_prog}`) is built natively by `msil-prog.py --mode native` from its
-split-file parts and `REDEFINE:` lines; tests that only pin a diagnostic or check determinism
-have no transcript and are skipped.
+split-file parts and `REDEFINE:` lines, with the libraries of `%{msil_native_libs}` and, for
+the run, the files of `%{msil_deps}` next to the program (M15); the RUN lines before the
+first composite, which build a test's own native library, run first in lit's internal shell
+with the oracle's tools. Tests that only pin a diagnostic or check determinism have no
+transcript and are skipped.
 
 How to add a test, what each status line means and how to reproduce a failure step by step is in
 [msil/test/README.md](../../../msil/test/README.md).
@@ -560,7 +735,10 @@ triple (`x86_64-pc-windows-msvc` for `x86_64-pc-windows-msvc-msil`, and so on), 
 compares its transcript with the same `.expected` file as the MSIL build's. A program of several
 files (`msil/test/M2`) is built natively from the same sources and archives by
 `msil-prog.py --mode native`: on Windows through clang with `-fuse-ld=lld`, so that archives
-resolve by lld's rules as they do in `msil-ld`, and under WSL by the E7 recipe below.
+resolve by lld's rules as they do in `msil-ld`, and under WSL by the E7 recipe below. Both
+builds link the test's native libraries (`%{msil_native_libs}`, M15), and both runs get the
+files of `%{msil_deps}` (a test-built `native.dll` or `libnative.so`) next to the program; the
+E7 link adds `-rpath $ORIGIN`, so the native program finds such a library there too.
 
 - **Windows: compiler-rt.** A native MSVC build of an `__int128` test calls compiler-rt helpers
   (`__udivti3`, `__fixdfti`, ...) that no MSVC library has, and the fork builds no compiler-rt.
@@ -610,8 +788,27 @@ python msil/utils/make-linux-sysroot.py --out C:/llvm-msil-scratch/linux-sysroot
 out of the distribution (symbolic links resolved, SHA-256 checked) into
 `usr/lib/x86_64-linux-gnu/` and `lib64/`, writes the linker scripts `libc.so` and `libm.so` and
 a stamp with the distribution's glibc version, rewrites only files that changed, and refuses a
-directory inside the repository. From M15 `msil-ld` uses the same directory as `--sysroot`.
-`run-m1-gate.ps1` runs both as its `host-setup` step.
+directory inside the repository. From M15 `msil-ld` uses the same directory as `--sysroot`
+(the harness's `%{msil_ldflags}` on Linux triples), and its two scripts are what lets the
+driver's `-lc -lm` find `libc.so.6` and `libm.so.6`. `run-m1-gate.ps1` runs both commands, and
+the third one below, as its `host-setup` step.
+
+The optional `hosted` leg (M15) needs a glibc sysroot with headers, which a third command
+makes, also without root (`apt-get download` of `libc6-dev`, `linux-libc-dev`, `libc6` and
+`libgcc-s1` into `$MSIL_GLIBC_DEBS`, else `$HOME/.cache/msil/glibc-debs`, unpacked with
+`dpkg-deb -x`; it downloads only the packages that are missing and copies nothing when the
+stamp `msil-glibc-sysroot.stamp` lists the same packages):
+
+```powershell
+wsl -d Ubuntu --cd <repository> --exec bash msil/utils/make-glibc-sysroot.sh /mnt/c/llvm-msil-scratch/glibc-sysroot
+```
+
+The result holds glibc's own `usr/include`, `libc.so.6`, `libm.so.6`, `libc_nonshared.a` and
+its real linker scripts `libc.so` and `libm.so`, with every symbolic link copied as a file (a
+Windows drive keeps none). It replaces the directory only when it is empty or holds the stamp.
+Every milestone gate from M15 runs it in its step G0, and `run-m1-gate.ps1`'s `host-setup` runs
+it into `$MSIL_GLIBC_SYSROOT`, else `C:\llvm-msil-scratch\glibc-sysroot` (the `<glibc sysroot>`
+of the `hosted` leg), so that leg needs no sysroot made beforehand.
 
 ### The milestone-1 gate and CI
 
@@ -625,13 +822,14 @@ pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List                          
 `.github/workflows/msil-ci.yml` runs them: `configure.ps1`, `build.ps1` (`msil-build.ps1
 -Standard`, the targets of `build-targets.txt` of section 2, and jitall), `unit-tests.ps1`
 (`TargetParserTests`, `MCTests` and `MSILTests` with the MSIL filter and all of `CLITests`, no
-skipped test allowed), then, on the development host only, the `host-setup` step (the two
-commands of the host setup above, as the rows `host-setup/wsl-dotnet` and
-`host-setup/linux-sysroot`), then `lit-legs.ps1 -Wsl` (the legs above) and `upstream-hooks.ps1`
-(the upstream-hooks check below, every leg; the gate checks that each of them has a row). A
-failed `host-setup` row does not stop the legs; the WSL legs that need what it makes then fail
-with a configuration error that names it. The gate's `-NoWsl` leaves out `host-setup`, `-Wsl`
-and with it the five `-Wsl` legs, `-Full` adds `all-levels`, `-Leg` runs only the named legs,
+skipped test allowed), then, on the development host only, the `host-setup` step (the three
+commands of the host setup above, as the rows `host-setup/wsl-dotnet`,
+`host-setup/linux-sysroot` and `host-setup/glibc-sysroot`), then `lit-legs.ps1 -Wsl` (the legs
+above) and `upstream-hooks.ps1` (the upstream-hooks check below, every leg; the gate checks that
+each of them has a row). A failed `host-setup` row does not stop the legs; the WSL legs that
+need what it makes then fail with a configuration error that names it. The gate's `-NoWsl`
+leaves out `host-setup`, `-Wsl` and with it the six `-Wsl` legs (`hosted` among them), `-Full`
+adds `all-levels`, `-Leg` runs only the named legs,
 `-SkipUpstreamHooks` leaves out the upstream-hooks step, and `-SkipConfigure`, `-SkipBuild` and
 `-SkipUnitTests` reuse what is there. Unless `-NoWsl`, a `ci-sh` row smoke-checks the Linux
 job's scripts inside WSL (`bash -n` on `msil/utils/ci/*.sh`, `lit-legs.sh --list` against its
@@ -652,8 +850,11 @@ the `net8` leg, `wsl-quick`, the upstream-hooks `manifest` and `pins` legs, or a
 when the milestone changes an upstream file, and the milestone's own legs; M12's gate runs
 `net8`, `net10`, `wsl-net10` instead of `wsl-quick`, `roundtrip`, `expected-linux` and the whole
 upstream-hooks check; M14's adds `lto`, `det`, `lld/test/MSIL` with `LLD_IN_TEST=2` and
-`update-expected.py --check msil/test/M2`), and `run-m1-gate.ps1` runs in full after the commits
-of M12, M15, M18 and M20.
+`update-expected.py --check msil/test/M2`; M15's adds `make-glibc-sysroot.sh` to its host setup,
+`lld/test/MSIL` with `LLD_IN_TEST=2`, `lto` runs of `msil/test/M1/06-output` and
+`08-fnptr/fnptr-to-libm.c` on both triples with the default libraries, `update-expected.py
+--check` of the new M2 tests on both oracles, the `hosted` leg and the IL snapshot below), and
+`run-m1-gate.ps1` runs in full after the commits of M12, M15, M18 and M20.
 
 The Windows CI job runs the same scripts, except that `configure.ps1 -Ci` configures with the
 cache file instead of `msil-configure.ps1`, there is no `host-setup`, `lit-legs.ps1` runs
@@ -664,11 +865,53 @@ Linux job runs their `.sh` twins, whose legs cover `x86_64-unknown-linux-gnu-msi
 msil/utils/ci/lit-legs.sh --list`); its `expected` leg is the native Linux oracle
 (`update-expected.py --check` on Linux, against `<stem>.linux.expected` where one exists), and
 its `--full` legs add `all-levels` and `upstream`, which builds and runs all of `ninja
-check-llvm check-clang`. Both jobs install .NET
-with `actions/setup-dotnet` pinned at v5.4.0
+check-llvm check-clang`. `lit-legs.sh --leg hosted` runs the optional `hosted` leg against the
+host's own glibc (`msil_glibc_sysroot=${MSIL_GLIBC_SYSROOT:-/}`); no CI step names it. Both jobs
+install .NET with `actions/setup-dotnet` pinned at v5.4.0
 (`26b0ec14cb23fa6904739307f278c14f94c95bf1`). The workflow is committed with a manual trigger
 only (`workflow_dispatch`, whose `full` input selects the full legs, as a nightly schedule
 would); enabling push, pull-request or nightly runs is the repository owner's decision.
+
+### The IL snapshot (`il-snapshot.py`)
+
+The standalone import table is frozen (D14), and a change in the backend or the driver must
+not change what `clang -S` and llc write. `msil/utils/il-snapshot.py` (M15) proves it: it
+compiles every C and IR input under the given paths that `HEAD` tracks, at `-O0` and `-O2` for
+`x86_64-pc-windows-msvc-msil` and `x86_64-unknown-linux-gnu-msil` and at `-O2` for
+`x86_64-w64-windows-gnu-msil` and `x86_64-unknown-linux-musl-msil`, and keeps each output and
+its diagnostics; a second snapshot is compared with a first one. Run it from the repository
+root, writing outside the repository:
+
+```powershell
+# Before a change, with the build of HEAD:
+python msil/utils/il-snapshot.py --build build --jobs 6 --out C:/llvm-msil-scratch/il-before `
+  --exclude llvm/test/CodeGen/MSIL/imports-linked.ll msil/test/M1 llvm/test/CodeGen/MSIL
+# After it, with the new build: exit 1 and the differences when anything changed.
+python msil/utils/il-snapshot.py --build build --jobs 6 --out C:/llvm-msil-scratch/il-after `
+  --compare C:/llvm-msil-scratch/il-before `
+  --exclude llvm/test/CodeGen/MSIL/imports-linked.ll msil/test/M1 llvm/test/CodeGen/MSIL
+```
+
+- A `.c` file is compiled with `clang -S` and the flags of `%{msil_cflags}`, a `.ll` file
+  with llc, and each `;--- <name>.ll` part of a split-file test separately, from its own
+  directory under a relative name. The list of inputs comes from `git ls-tree` of `HEAD`
+  (without the `--exclude` paths; a directory excludes its subtree), their contents from the
+  working tree, so a test that a change adds is not compared.
+- The output is `<out>/<triple>/<level>/<path>.il` and `.err`, the stderr with CRLF folded,
+  the tool's path replaced by its name and a crash report cut to `[crash: stack dump
+  omitted]`, then a status line (`[exit N]`, `[timeout]` or `[memory limit]`). Include and
+  library variables (`INCLUDE`, `LIB`, `CPATH`, ...) are removed from the compilers'
+  environment, so a snapshot taken in a developer prompt equals one taken outside it.
+- `--out` is emptied first; it may not lie inside the repository or overlap `--compare`, and a
+  non-empty one must hold the `il-snapshot.json` stamp that every snapshot writes, so no other
+  directory is ever emptied. `--compare DIR` lists every file that differs, is missing or is
+  extra, shows the first differences, and exits 1; usage errors exit 2. The harness self-test
+  `msil/test/harness/il-snapshot.test` pins this comparison on the fixture trees of
+  `msil/test/harness/Inputs/il-snapshot/`: exit 1 naming a changed `.il`, a changed `.err`, a
+  missing and an extra file, and exit 2 for usage errors.
+- M15's gate compares the 2,634 compiles of the 439 inputs (files and split-file parts) that
+  the commands above select with a snapshot of M14's build; M18, M19 and M20 repeat the check
+  against their own baselines (plan 5.12.4).
 
 ### The upstream-hooks check
 
@@ -793,8 +1036,9 @@ environment failure of that single test file (a tool or runtime the build cannot
 the reason names the tool; never a glob, a directory or a real FileCheck mismatch. An
 allow-listed test that passes is stale and fails the leg. A real failure is fixed in the fork,
 or the test is dropped from its `lit` line with a comment. The list is empty today; tests that
-need tools this build lacks (`llvm-mc` until M15, `llvm-dwarfdump`, `llvm-objcopy`) are left out
-of the manifest instead.
+need tools this build lacks (`llvm-dwarfdump`, `llvm-objcopy`) are left out of the manifest
+instead, and so, so far, are the two that need `llvm-mc`, which the build has had only since
+M15 (the manifest's comments name them).
 
 **The private hooks tree.** The compile leg works in `-HooksBuildDir`, else
 `$env:MSIL_HOOKS_BUILD_DIR`, else `C:\llvm-msil-hooks-build`: projects clang and lldb, the ARM
@@ -824,16 +1068,31 @@ manual full CI runs.
 |---|---|
 | `CIL object files are not supported for MSIL target '...' yet; use -flto to write LLVM bitcode objects, or -S to write ILAsm text` (before M13: `emitting object files is not yet supported for MSIL target`) | `-fno-lto -c`: there are no CIL object files before M19. Drop `-fno-lto` (`-c` writes bitcode, which `msil-ld` links; section 3) or use `-S`. Before M14 every `-c` and every link stopped here |
 | `msil-ld: error: ThinLTO, --lto-partitions and LTO without --lto-emit-asm need CIL object output, which this msil-ld does not have; use --lto-emit-asm (clang: -Wl,--lto-emit-asm) to write ILAsm text` | the link has no `-Wl,--lto-emit-asm`, or its inputs are ThinLTO bitcode (`-flto=thin`), or it asks for several LTO partitions (`-flto-partitions=`): until M20 `msil-ld` writes only the ILAsm text of the whole program. Link with `-Wl,--lto-emit-asm -o prog.il` and assemble with `ilasm -exe` (section 3). M13's stub said `linking is not implemented yet` for every link |
-| `msil-ld: error: undefined symbol: <name>` | no input defines `<name>`. A function that is not a Phase-1 import (D14) binds to the native libraries only from M15; a variable is followed by `>>> referenced by <file>` lines. `undefined hidden symbol` is the same for a hidden reference |
-| `msil-ld: error: unable to find library -l<name>` | no `-L` directory has the library: often one of the driver's default libraries (section 3). On Windows link from a Visual Studio developer prompt (`LIB`); for a Linux triple on Windows add `-nodefaultlibs`, or `--sysroot=<a Linux sysroot>` |
+| `msil-ld: error: undefined symbol: <name>` | neither an input nor a native library of the link defines `<name>`. Add the library that defines it (`-l<name>`, a library file, the right `--sysroot`; `-Wl,--print-imports` shows what bound where). The `>>> referenced by <file>:(<function>)` lines name the live references after LTO, and `ld-temp.o` a call that the optimizer introduced. `undefined hidden symbol` is the same for a hidden reference. Before M15 every function that was not a Phase-1 import (D14) ended here |
+| `msil-ld: error: unable to find library -l<name>` | no `-L` directory has the library: often one of the driver's default libraries (section 3). On Windows link from a Visual Studio developer prompt (`LIB`); for a Linux triple on Windows add `--sysroot=<a Linux sysroot>` (section 7's E7 or glibc sysroot), or `-nodefaultlibs` when the program calls no native function. After `-Wl,-Bstatic` only static libraries (archives with bitcode members) count; a native archive, a library of the other OS's object format (a native DLL or a COFF import library for a Linux triple) and a .NET assembly are skipped (`-Wl,--verbose` says so) |
+| `msil-ld: error: unable to find library from dependent library specifier: <name>`, `>>> requested by <file>` | a `#pragma comment(lib, "<name>")` (or another linker option in the bitcode) names a library that no `-L` directory has: add its directory, or link with `-Wl,--no-dependent-libraries` |
+| `msil-ld: error: native function 'qsort' (<module>) takes a C function pointer; passing functions to native code needs phase 3 thunks` | the program calls, or takes the address of, a native function of the callback list (`qsort`, `bsearch`, `signal`, `pthread_create`, `CreateThread`, ...; Status.md section 2), whose native code could call back into the program, which needs phase 3. The message names the symbol that glibc's headers make of the call: `signal` is `__sysv_signal` under `-std=c99`, `c11` or `c17`, and `ftw`, `nftw` and `scandir` are `ftw64`, `nftw64` and `scandir64` with `-D_FILE_OFFSET_BITS=64`. Write the function in C (a `qsort` of your own wins over the library's), or, when no function of the program is passed (`signal(SIGPIPE, SIG_IGN)`), declare it with an explicit `import_module` |
+| `msil-ld: error: native function 'printf' (<module>) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3)` | a P/Invoke cannot pass C variadic arguments (phase 3). Call a non-variadic function (`puts`, `fputs`) instead |
+| `msil-ld: error: native function '<name>' (<module>) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)` | the native function passes a struct by value, an `__int128`, a vector or a `_Float16`; wrap it in a native function that takes pointers. On x86_64 and aarch64 Linux and x86_64 MinGW it is also a native `long double` function (`sqrtl`, `expl`, `powl`, `strtold`, `nexttoward`, ..., and glibc's `_Float64x` and `_Float128` functions such as `sqrtf64x`, `strtof64x` and `sqrtf128`; with `>>> referenced by` lines), whose native `long double` is not the `double` that `long double` is in MSIL (Status.md section 3): call the `double` function (`sqrt`, `strtod`), which is the same function in an MSIL program. windows-msvc and `aarch64-w64-windows-gnu` bind them |
+| `msil-ld: error: importing native data symbol '<name>' (<module>) is not supported yet` | the program uses a variable that a native library defines (`environ`, `stderr`, ...), or an `extern` variable with `import_module`; native data imports come with M20. `'<name>' in <module> is data, but <file> calls it as a function` is a function declaration that binds to native data (a call skips a COFF `DATA` or `CONST` import and a DLL's data export, and binds the function of a later library when there is one) |
+| `msil-ld: error: symbol '<name>' is defined only in native object code (<archive>(<member>)); MSIL cannot link machine code` | the only definition is machine code in a native archive (glibc's `atexit` in `libc_nonshared.a`, a static library of native objects): build that code for the MSIL triple, or link a shared library or DLL of it |
+| `msil-ld: error: symbol '<name>' in <module> has only the non-default version <name>@<ver>, which a P/Invoke cannot bind`, `... is thread-local data and cannot be imported` (for `errno` followed by `; use <errno.h>`), `... is <ver> (GLIBC_PRIVATE) and cannot be bound` | the library defines the name only in a form that `dlsym` does not return: a hidden version, thread-local data (`errno`: include `<errno.h>`, whose `errno` calls `__errno_location`; other thread-local data, such as `h_errno` or a library's own `__thread` variable, gets the text without the advice), or glibc's private interface |
+| `msil-ld: error: <file>: ELF machine <EM_x> does not match target <triple>` (also `COFF machine` and `PE machine`) | a native library of another architecture (or ELF class) than the triple: an AArch64 or 32-bit library in an x86_64 link, say. Point `-L` or `--sysroot` at the triple's libraries |
+| `msil-ld: error: <path>: ELF file cannot be imported for target <triple>`, `<path>: PE/COFF file cannot be imported for target <triple>` | a native library of the other OS's object format, given as a file, by `-l:<file>` or by a linker script: an ELF `.so` in a link for a Windows triple, a DLL or an import library in a link for a Linux triple. As lld-link and ld.lld do, `msil-ld` reads PE/COFF libraries for a Windows triple and ELF ones for a Linux triple (section 3): a P/Invoke of the other kind would fail to load at run time. Link against the triple's libraries; `-l<name>` passes over such a file (`-Wl,--verbose`: `skipping <path>: ...`) |
+| `msil-ld: error: <script>:<line>: there is a cycle in linker script inputs` | an `INPUT` or `GROUP` name or a `-l<name>` of a GNU ld script (the `>>>` lines show it) leads back to a script that is still being read: a script that names itself, or two scripts that name each other, directly or through `-l`. That input is skipped; remove it. A script read again after it was read to its end (`-lc` given twice) is no cycle |
+| `msil-ld: error: --ucrtbase-imports needs a Windows target, not <triple>` | `--ucrtbase-imports` (the driver passes it on windows-msvc) given for a Linux triple |
+| `msil-ld: warning: <path>: skipping the .NET assembly that -l<name> found; use --reference for .NET reference assemblies` | `-l` found a managed `.dll`; `msil-ld` links .NET assemblies from M21 (references) and M22 (libraries) |
+| `msil-ld: error: library call '<name>' was not resolved by msil-ld` | code generation calls a library function that no native library of the link defines: `floor`, `ceil` or `round` (`llvm.floor` and its kin at `-O2`), `sqrt` or `exp` under `-fno-math-errno`, ..., typically in a link with `-nodefaultlibs` or without the C or math library. Add that library (drop `-nodefaultlibs`, or add `-lm`, `-lc` or the library file) |
+| `msil-ld: error: runtime helper '<name>' is not available for MSIL yet (phase 3)` | code generation needs a compiler-rt helper (those of the `runtime helper '__fixdfti'` row below) or an `__atomic_*` function, which atomic operations become (`_Atomic` variables, the `__atomic_*` builtins, and the `volatile` accesses of windows-msvc stock bitcode without `-fno-ms-volatile`, section 3). Both come with phase 3 (atomics: plan D36). A helper that clang itself calls (`__muldc3` for `_Complex` multiplication) is `undefined symbol: <name>` in a link, unless a native library of the link defines it |
+| `msil-ld: error: undefined function '<name>' was not resolved by msil-ld` | the backend found, in `msil-ld`'s text, a function that the link did not bind, a backstop that `msil-ld`'s own errors normally precede; please report it with the inputs (`-Wl,--reproduce=<file>.tar`) |
 | `msil-ld: error: <file>: target triple <t> is incompatible with <t0>` | the inputs were compiled for different MSIL triples (another architecture, OS or environment); compile every file for the triple of the link |
 | `msil-ld: error: unsupported target triple '<codegen triple>' for MSIL` | the link's triple (`--target`, else the first bitcode input's with `-msil` appended) is not one of D6's: stock-clang bitcode for Darwin or i686, say (section 3). Compile the inputs for an x86_64 or aarch64 Linux, windows-msvc or windows-gnu triple |
 | `msil-ld: warning: <file>: linking bitcode for <triple> as <triple>-msil; stock-clang bitcode is a compatibility path` | an input is bitcode for the native triple (plan Q12); it links, with the limits of section 3 (on windows-msvc compile it with `-fno-ms-volatile`) |
 | `msil-ld: error: <file>: linking CIL object files and .NET assemblies is not supported yet` | a .NET assembly or a CIL object is an input of the link: `msil-ld` links CIL objects from M20, takes reference assemblies from M21 and libraries of this toolchain from M22 |
 | `assembling ILAsm text is not supported for MSIL target '...'; compile C or LLVM IR sources instead, or use -S to write ILAsm text` | an assembler input (`-x assembler`, a `.s` or `.S` file) or an assemble step (`-via-file-asm`, clang-cl `/FA` or `/Fa`): ILAsm text goes to ilasm, not to clang (sections 3 and 4); use `-S` for the IL |
 | `invalid linker name in argument '-fuse-ld=...'` | MSIL links run only `msil-ld`: use no `-fuse-ld`, `-fuse-ld=lld`, an absolute path, or `--ld-path=` (section 3) |
-| `undefined function 'f' is not defined in this module and is not a Phase-1 import` | with `-S` and `llc`, every function must be defined in the same file, except `puts`, `putchar` and the C math library (Status.md) and functions declared with `import_module`, optionally with `import_name` for the entry point (section 3; `import_name` alone needs `msil-ld`, from M15). Functions of other files link with `msil-ld` (section 3) |
-| `runtime helper '__fixdfti' is not available for MSIL yet (phase 3)` | the code needs a compiler-rt helper that the backend would call: conversions between floating point and `__int128` under strict floating point, `_Float16`/`__bf16` arithmetic and conversions (`__extendhfsf2`), `__bf16` parameters, arguments and return values (`__truncsfbf2`, `__extendbfsf2`) (Status.md section 3). `__int128` division and the ordinary conversions are expanded inline since M12, so a build from before M12 also names `__divti3`, `__udivti3`, `__floattidf`, ... here. Helpers that clang itself calls (`__muldc3` for `_Complex` multiplication, `__atomic_*` for atomics) are reported as undefined functions instead |
+| `undefined function 'f' is not defined in this module and is not a Phase-1 import` | with `-S` and `llc`, every function must be defined in the same file, except `puts`, `putchar` and the C math library (Status.md) and functions declared with `import_module`, optionally with `import_name` for the entry point (section 3; `import_name` alone needs `msil-ld`). Functions of other files and of native libraries link with `msil-ld` (section 3) |
+| `runtime helper '__fixdfti' is not available for MSIL yet (phase 3)` | the code needs a compiler-rt helper that the backend would call: conversions between floating point and `__int128` under strict floating point, `_Float16`/`__bf16` arithmetic and conversions (`__extendhfsf2`), `__bf16` parameters, arguments and return values (`__truncsfbf2`, `__extendbfsf2`) (Status.md section 3). `__int128` division and the ordinary conversions are expanded inline since M12, so a build from before M12 also names `__divti3`, `__udivti3`, `__floattidf`, ... here. Helpers that clang itself calls (`__muldc3` for `_Complex` multiplication, `__atomic_*` for atomics) are reported as undefined functions instead. In a program that `msil-ld` links, see the `msil-ld` rows above |
 | `unknown target triple '...-msil'` | Darwin and i686 MSIL triples come in later phases; Windows MSIL triples name `msvc` or `gnu`. Any MSIL triple that is not a Linux, windows-msvc or windows-gnu one (Darwin, FreeBSD, Cygwin, ...) gets this error, also for a command that only links |
 | `... is not supported for MSIL yet` | a Phase-1 limitation; Status.md lists them |
 | `global variable @p_init in section ".CRT$XCU" is not supported for MSIL yet (phase 2 CIL objects)` | a variable with `__attribute__((section(...)))` or `__declspec(allocate(...))`; the section would be lost, and a constructor registered in `.init_array` or `.CRT$XCU` would never run. Use `__attribute__((constructor))`, or drop the section (Status.md section 3) |
@@ -842,7 +1101,7 @@ manual full CI runs.
 | `the va_arg instruction is not supported for MSIL yet (phase 3 variadics)` | LLVM IR with a `va_arg` instruction (variadic functions are phase 3); before M12 one of a struct or array type crashed llc instead |
 | `The library 'hostpolicy.dll' required to execute the application was not found` (Windows) or `The library 'libhostpolicy.so' required to execute the application was not found` (Linux), exit `0x80008083` or 131 | no `<name>.runtimeconfig.json` next to the `.dll` (section 5) |
 | `You must install or update .NET to run this application` | the runtimeconfig names a runtime that is not installed; install it or add `"rollForward": "Major"` |
-| `System.DllNotFoundException` naming `libc`, `libm.so.6`, `ucrtbase` or `msvcrt` | the assembly was built for another OS than the one running it |
+| `System.DllNotFoundException` naming `libc`, `libm.so.6`, `ucrtbase` or `msvcrt` (or, for `msil-ld`'s output, `libc.so.6`, `api-ms-win-crt-...dll`, ...) | the assembly was built for another OS than the one running it. For a native library of your own: it is not next to the program (section 3, "Native libraries and P/Invokes") |
 | `System.BadImageFormatException` / `FileLoadException` at start-up | the image's machine (`-x64`, `-arm64`) does not match the process |
 | `System.InvalidProgramException` | a backend bug: the JIT rejected a method. `msil-jitall.py` names it; please report it with the `.il` |
 | `error: unsupported option '-fsplit-machine-functions' for target '...-msil'`, and the same for `-fbasic-block-sections=all` or `=list=`, `-fbasic-block-address-map` and `-fpartition-static-data-sections` | these options put functions, blocks or data in ELF sections, and CIL methods have no sections; drop the option (Status.md section 3). `-fbasic-block-sections=none` is accepted |

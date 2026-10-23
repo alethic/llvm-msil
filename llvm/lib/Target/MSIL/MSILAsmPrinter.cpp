@@ -60,6 +60,7 @@
 #include "llvm/IR/GlobalIFunc.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInst.h"
@@ -400,6 +401,8 @@ bool MSILAsmPrinter::doInitialization(Module &M) {
   Ctors.clear();
   UsedFuncAddrs.clear();
   FuncAddrs.clear();
+  LinkedPInvokes.clear();
+  LinkedPInvokeNames.clear();
 
   // The base class would copy module-level inline assembly into the output
   // verbatim. The legacy pass manager initializes the AsmPrinter before any
@@ -455,6 +458,25 @@ bool MSILAsmPrinter::runOnMachineFunction(MachineFunction &MF) {
   return false;
 }
 
+bool MSILAsmPrinter::doFinalization(Module &M) {
+  // The base class prints the module trailer (emitEndOfAsmFile).
+  bool Changed = AsmPrinter::doFinalization(M);
+  // Only code generation knows which library calls it made, so msil-ld's
+  // --print-imports (MSILLinkHooksPass::doFinalization, which runs after
+  // this) reads the P/Invokes of its linked text from here (plan 5.10.13,
+  // 5.10.14). The IL is already printed; a standalone module, M14's
+  // "msil-lto" module included, never gets the node. A node the input
+  // already had is replaced.
+  if (!MSIL::isLinkedModule(M))
+    return Changed;
+  LLVMContext &Ctx = M.getContext();
+  NamedMDNode *Used = M.getOrInsertNamedMetadata("msil.imports.used");
+  Used->clearOperands();
+  for (StringRef Name : LinkedPInvokes)
+    Used->addOperand(MDNode::get(Ctx, MDString::get(Ctx, Name)));
+  return true;
+}
+
 void MSILAsmPrinter::emitMethodEnd() {
   assert(InMethod && "no method to close");
   getTargetStreamer().emitMethodEnd(MSIL::getILName(MF->getFunction(), TM));
@@ -471,7 +493,8 @@ void MSILAsmPrinter::emitStartOfAsmFile(Module &M) {
   // header comments escape non-ASCII bytes, so only the text that is printed
   // raw matters: the assembly name, the global names, and the library and
   // entry point strings of the P/Invoke declarations, which come from the
-  // "msil-import-*" attributes (the names of library calls are ASCII).
+  // "msil-import-*" attributes (the names of library calls are ASCII) and,
+  // in msil-ld's linked text, from the strings of !msil.imports.
   std::string AssemblyName = getAssemblyName(M);
   auto HasNonASCIIImport = [](const Function &F) {
     for (StringRef Kind : {"msil-import-module", "msil-import-name"})
@@ -479,11 +502,22 @@ void MSILAsmPrinter::emitStartOfAsmFile(Module &M) {
         return true;
     return false;
   };
+  auto HasNonASCIILinkedImport = [&M]() {
+    const NamedMDNode *Imports = M.getNamedMetadata("msil.imports");
+    if (!Imports || !MSIL::isLinkedModule(M))
+      return false;
+    for (const MDNode *Op : Imports->operands())
+      for (const MDOperand &S : Op->operands())
+        if (const auto *Str = dyn_cast_or_null<MDString>(S.get());
+            Str && !isASCII(Str->getString()))
+          return true;
+    return false;
+  };
   bool BOM =
       !isASCII(AssemblyName) ||
       any_of(M.global_values(),
              [](const GlobalValue &GV) { return !isASCII(GV.getName()); }) ||
-      any_of(M.functions(), HasNonASCIIImport);
+      any_of(M.functions(), HasNonASCIIImport) || HasNonASCIILinkedImport();
 
   MSILTargetStreamer &TS = getTargetStreamer();
   TS.emitFileHeader(BOM, M.getSourceFileName(), TM.getTargetTriple().str());
@@ -716,18 +750,20 @@ static bool isMSILLDModule(const Module &M) {
   return Flag && !Flag->isZero();
 }
 
-/// Reports the undefined function or library call \p Name, which is not a
-/// Phase-1 import (decision D14): Phase 1 has no linker that could resolve it.
-/// An undefined function of the module gets the same text whatever its name,
-/// the compiler-rt and __atomic_* helpers that clang and AtomicExpand declare
-/// included. In msil-ld's LTO module (\p Linked) the linker has bound every
-/// symbol it could, so such a function is msil-ld's 'undefined symbol'
-/// (plan 5.9.6). A library call (\p IsLibCall) gets the text of LowerCall's
-/// library-call policy, which rejects such calls before they are built, so
-/// that is only a backstop.
+/// Reports the undefined function or library call \p Name of a standalone
+/// module, which is not a Phase-1 import of the standalone import table
+/// (decision D14, frozen): no linker resolves it. An undefined function of
+/// the module gets the same text whatever its name, the compiler-rt and
+/// __atomic_* helpers that clang and AtomicExpand declare included. In
+/// msil-ld's LTO module without msil-ld's import annotations (\p LTO: the
+/// module flag "msil-lto" without "msil-linked", as M14 wrote it) the linker
+/// has bound every symbol it could, so such a function is msil-ld's
+/// 'undefined symbol' (plan 5.9.6). A library call (\p IsLibCall) gets the
+/// text of LowerCall's library-call policy, which rejects such calls before
+/// they are built, so that is only a backstop.
 static void reportNotImported(LLVMContext &Ctx, StringRef Name, bool IsLibCall,
-                              bool Linked) {
-  if (!IsLibCall && Linked)
+                              bool LTO) {
+  if (!IsLibCall && LTO)
     Ctx.emitError("undefined symbol: " + Name);
   else if (!IsLibCall)
     Ctx.emitError("undefined function '" + Name +
@@ -745,7 +781,13 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
   const Triple &TT = TM.getTargetTriple();
   LLVMContext &Ctx = M.getContext();
   MSILTargetStreamer &TS = getTargetStreamer();
-  bool Linked = isMSILLDModule(M);
+  // msil-ld's linked text (plan 5.10.13) takes every import from msil-ld's
+  // annotations (MSIL::getLinkedImport) and never consults the standalone
+  // import table; its P/Invokes are 'assembly' (plan 5.10.11). Any other
+  // module, msil-ld's LTO module without the annotations included, is
+  // standalone.
+  bool Linked = MSIL::isLinkedModule(M);
+  bool LTO = !Linked && isMSILLDModule(M);
 
   // One declaration per method: a library call and a call of a declared
   // function of the same name and signature (sqrt from C and from the
@@ -755,17 +797,24 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
                      const MSIL::Signature &Sig, StringRef Lib,
                      StringRef Entry) {
     if (isReservedMethodName(Name)) {
-      assert(F && "the import table has no constructor names");
+      assert(F && "library calls have no constructor names");
       reportReservedMethodName(*F, Name);
       return;
     }
     if (!Declared.insert({Name, Sig}).second)
       return;
+    // The symbol name (the IL name) of each P/Invoke of linked text, once
+    // per name, for !msil.imports.used (doFinalization).
+    if (Linked) {
+      auto [It, New] = LinkedPInvokeNames.insert(Name);
+      if (New)
+        LinkedPInvokes.push_back(It->getKey());
+    }
     if (Declared.size() == 1)
       TS.emitILLine("// ---- undefined external functions: P/Invoke ----");
     // Blittable parameters only (int32, native int, float32, float64), so
     // 'preservesig' is all the marshaller needs (decision D10).
-    TS.emitPInvoke({Name, &Sig, /*Public=*/true}, Lib, Entry);
+    TS.emitPInvoke({Name, &Sig, /*Public=*/!Linked}, Lib, Entry);
   };
 
   for (const auto &[F, Sig] : ExternFuncs) {
@@ -776,6 +825,44 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     // already reach that method, and a P/Invoke would duplicate it.
     if (Methods.count({Name, *Sig}))
       continue;
+    if (Linked) {
+      // msil-ld reports an unresolved symbol first; this is a backstop. A
+      // native callee is checked after native resolution, so the texts name
+      // its module (plan 5.10.13, 5.10.14); LowerCall reports the calls of a
+      // variadic one.
+      // AtomicExpand declares the __atomic_* helpers during code generation,
+      // after msil-ld's import analysis: like every '__' helper they wait
+      // for the phase-3 runtime library, even when !msil.imports lists one
+      // (plan 5.10.13), as in the library-call loop below and in LowerCall.
+      // A '__' declaration that msil-ld bound carries its import attributes
+      // (__errno_location) and is a P/Invoke.
+      if (Name.starts_with("__") && !MSIL::hasImportModule(F)) {
+        Ctx.emitError("runtime helper '" + Name +
+                      "' is not available for MSIL yet (phase 3)");
+        continue;
+      }
+      std::optional<MSIL::NativeImport> Import =
+          MSIL::getLinkedImport(M, Name, F);
+      if (!Import) {
+        Ctx.emitError("undefined function '" + Name +
+                      "' was not resolved by msil-ld");
+        continue;
+      }
+      if (F->isVarArg()) {
+        Ctx.emitError("native function '" + Name + "' (" + Import->Module +
+                      ") is variadic; calls of native variadic functions are "
+                      "not supported for MSIL yet (phase 3)");
+        continue;
+      }
+      if (!hasNativeSignature(*F)) {
+        Ctx.emitError("native function '" + Name + "' (" + Import->Module +
+                      ") takes or returns a value that a P/Invoke cannot "
+                      "pass natively yet (phase 3)");
+        continue;
+      }
+      Declare(F, Name, *Sig, Import->Module, Import->Entry);
+      continue;
+    }
     // The variable arguments of a native variadic function need the calling
     // convention support of phase 3 (decisions D14 and D19).
     if (F->isVarArg()) {
@@ -785,7 +872,7 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     }
     std::optional<StringRef> Lib = MSIL::getPInvokeModule(TT, Name, F);
     if (!Lib) {
-      reportNotImported(Ctx, Name, /*IsLibCall=*/false, Linked);
+      reportNotImported(Ctx, Name, /*IsLibCall=*/false, LTO);
       continue;
     }
     // Only scalars cross the boundary as the native calling convention
@@ -807,17 +894,41 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
       continue;
     // A function of the same IL name takes part only if its method has this
     // signature, as in LowerCall (matchesSignature): a declaration supplies
-    // its "msil-import-*" attributes. Otherwise the library and the entry
-    // point come from the import table alone.
-    const Function *F = MSIL::getFunctionByILName(M, Name);
-    if (F && (F->isIntrinsic() || getSignature(*F) != *Sig))
-      F = nullptr;
+    // its "msil-import-*" attributes. Otherwise, in a standalone module, the
+    // library and the entry point come from the import table alone.
+    const Function *Named = MSIL::getFunctionByILName(M, Name);
+    if (Named && Named->isIntrinsic())
+      Named = nullptr;
+    const Function *F = Named && getSignature(*Named) == *Sig ? Named : nullptr;
     if (F && !F->isDeclarationForLinker())
       continue;
+    if (Linked) {
+      // LowerCall builds a library call only for an import; this is a
+      // backstop. A symbol binds to one native function, whatever the
+      // signature, so a declaration of that name supplies the module and the
+      // entry point even when its method has another signature, as in
+      // LowerCall.
+      const Function *Decl =
+          Named && Named->isDeclarationForLinker() ? Named : nullptr;
+      if (Name.starts_with("__") && !MSIL::hasImportModule(Decl)) {
+        Ctx.emitError("runtime helper '" + Name +
+                      "' is not available for MSIL yet (phase 3)");
+        continue;
+      }
+      std::optional<MSIL::NativeImport> Import =
+          MSIL::getLinkedImport(M, Name, Decl);
+      if (!Import) {
+        Ctx.emitError("library call '" + Name +
+                      "' was not resolved by msil-ld");
+        continue;
+      }
+      Declare(F, Name, *Sig, Import->Module, Import->Entry);
+      continue;
+    }
     // LowerCall builds a library call only for a Phase-1 import (D14).
     std::optional<StringRef> Lib = MSIL::getPInvokeModule(TT, Name, F);
     if (!Lib) {
-      reportNotImported(Ctx, Name, /*IsLibCall=*/true, Linked);
+      reportNotImported(Ctx, Name, /*IsLibCall=*/true, LTO);
       continue;
     }
     Declare(F, Name, *Sig, *Lib, MSIL::getPInvokeEntry(Name, F));

@@ -1,0 +1,47 @@
+{
+  "cflags": [
+    "-std=gnu17",
+    "-ffreestanding",
+    "-Werror=return-type",
+    "-Imsil/test/Inputs"
+  ],
+  "compiles": 12,
+  "configs": [
+    [
+      "x86_64-pc-windows-msvc-msil",
+      [
+        "O0",
+        "O2"
+      ]
+    ],
+    [
+      "x86_64-unknown-linux-gnu-msil",
+      [
+        "O0",
+        "O2"
+      ]
+    ],
+    [
+      "x86_64-w64-windows-gnu-msil",
+      [
+        "O2"
+      ]
+    ],
+    [
+      "x86_64-unknown-linux-musl-msil",
+      [
+        "O2"
+      ]
+    ]
+  ],
+  "exclude": [],
+  "files": 2,
+  "head": "0000000000000000000000000000000000000000",
+  "inputs": 2,
+  "paths": [
+    "msil/test/M1",
+    "llvm/test/CodeGen/MSIL"
+  ],
+  "split-parts": 0,
+  "tool": "msil/utils/il-snapshot.py"
+}

@@ -1,0 +1,32 @@
+# POSIX names through oldnames.lib's weak aliases: strdup binds to the UCRT's _strdup.
+# oldnames.lib, a default library on windows-msvc (plan 5.10.4), holds one
+# object per old name whose weak external (IMAGE_WEAK_EXTERN_SEARCH_ALIAS)
+# points at the underscored function: strdup -> _strdup, stricmp -> _stricmp,
+# strrev -> _strrev. msil-ld follows the alias and binds the target, so the
+# P/Invoke names the module of _strdup (api-ms-win-crt-string-l1-1-0.dll) and
+# the entry '_strdup' (plan 5.10.8, 5.10.11, native-imports 2.3), which
+# ucrtbase.dll exports; the oracle links the same aliases. Plan 5.10.15 (an
+# oldnames alias), M15.
+# REQUIRES: msil-triple-windows
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+
+char *strdup(const char *s);
+int stricmp(const char *a, const char *b);
+char *strrev(char *s);
+void free(void *p);
+
+int main(void) {
+  char *copy = strdup("aliased names");
+  if (!copy)
+    return 1;
+  puts(copy);
+  puts(strrev(copy));
+  put_i64(stricmp("ALIAS", "alias"));
+  put_i64(stricmp("alias", "aliaz") < 0);
+  free(copy);
+  return 0;
+}

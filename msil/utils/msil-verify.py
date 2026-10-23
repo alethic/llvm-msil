@@ -11,8 +11,8 @@
     msil-verify.py --ilverify PATH --runtime-dir DIR [--allow FILE]
                    [--peverify PATH] [--ildasm PATH --ilasm PATH]
                    [--keep-copy DIR] [--timeout S] [--mem-limit-mb N] [-v]
-                   prog.dll
-    msil-verify.py --skip prog.dll        (no verifier configured: a no-op)
+                   [--dep FILE...]... [--] prog.dll
+    msil-verify.py --skip [--dep FILE...] [--] prog.dll   (no verifier: a no-op)
     msil-verify.py --roundtrip --output OUT.dll --ildasm PATH --ilasm PATH
                    [--keep-copy DIR] [--timeout S] [--mem-limit-mb N] [-v]
                    prog.dll              (the ildasm -> ilasm round trip)
@@ -111,6 +111,17 @@ crash, a load failure, an error count that does not match the error lines)
 fails too. Every child process (ildasm, ilasm, ILVerify, PEVerify) runs under
 the timeout and memory cap of msil-run.py. An empty --peverify or --ildasm
 means that tool is not available.
+
+--dep FILE... (one or more files; repeatable; plan 5.12.4, M15) names the
+files the assembly needs beside it: the assemblies it references and the
+native libraries it calls. Each managed one (a PE file with a CLI header) is
+a reference assembly of ILVerify ('-r FILE') in both passes, and every one is
+copied next to the assembly that PEVerify checks: pass 1 then verifies a copy
+of prog.dll in a private directory, pass 2 the neutralized copy, beside the
+copies of the dependencies. A native library is only copied. A missing file,
+or two of one name (or one named like the assembly), is a usage error.
+--dep takes every argument up to the next option, so the lit composites pass
+'--dep %{msil_deps} --' before the assembly; an empty list is allowed.
 
 --roundtrip does not verify. It checks that the assembly survives the
 ildasm -> ilasm round trip that Design.md 5.5 asks of the backend's output
@@ -288,12 +299,38 @@ def check_counts(name, res, output, nerrors, ok_status):
     )
 
 
+def is_managed(path):
+    """Whether path is a PE file with a CLI header (data directory 14), that
+    is, an assembly or a module rather than a native library."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(4096)
+    except OSError:
+        return False
+    if data[:2] != b"MZ" or len(data) < 0x40:
+        return False
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    opt = pe + 24
+    if data[pe : pe + 4] != b"PE\0\0" or len(data) < opt + 2:
+        return False
+    magic = struct.unpack_from("<H", data, opt)[0]
+    count_at, dirs_at = {0x10B: (92, 96), 0x20B: (108, 112)}.get(magic, (None, None))
+    if count_at is None or len(data) < opt + dirs_at + 15 * 8:
+        return False
+    if struct.unpack_from("<I", data, opt + count_at)[0] <= 14:
+        return False
+    rva, size = struct.unpack_from("<II", data, opt + dirs_at + 14 * 8)
+    return rva != 0 and size != 0
+
+
 def run_ilverify(args, assembly, allow, label, calli_methods=None):
     """ILVerify one assembly; returns (failures, notes). calli_methods: names of
     the methods that still contain calli (pass 2), or None (pass 1)."""
     cmd = [args.ilverify, assembly]
     for d in args.runtime_dir:
         cmd += ["-r", os.path.join(d, "*.dll")]
+    for dep in args.managed_deps:
+        cmd += ["-r", os.path.abspath(dep)]
     res, output, limit = run(cmd, args)
     if limit:
         return ["%s: %s" % (label, limit)], []
@@ -725,6 +762,13 @@ def run_copy_pass(args, private, listing_text):
                 or "unchanged",
             )
         )
+    # PEVerify resolves the references of the copy from its directory.
+    msil_run.copy_deps(
+        args.dep,
+        [],
+        private,
+        [os.path.basename(p) for p in (copy_il, copy_dll)] + [stem + ".ildasm.il"],
+    )
     bad, notes = run_ilverify(
         args, copy_dll, [], "ilverify (%s)" % label, calli_methods
     )
@@ -829,6 +873,30 @@ def roundtrip(args, private):
     return []
 
 
+def run_peverify_with_deps(args, listing):
+    """Pass 1 of PEVerify: on the assembly itself, or with --dep on a copy in
+    a private directory beside copies of the dependencies, where PEVerify
+    resolves its references."""
+    if not args.dep:
+        return run_peverify(
+            args, args.assembly, PEVERIFY_ALLOWED, "peverify", listing=listing
+        )
+    beside = tempfile.mkdtemp(prefix="msil-verify-deps-")
+    try:
+        name = os.path.basename(args.assembly)
+        shutil.copy2(args.assembly, os.path.join(beside, name))
+        msil_run.copy_deps(args.dep, [], beside, [name])
+        return run_peverify(
+            args,
+            os.path.join(beside, name),
+            PEVERIFY_ALLOWED,
+            "peverify",
+            listing=listing,
+        )
+    finally:
+        msil_run.remove_tree(beside)
+
+
 def verify(args, allow, private):
     """Both passes; private is the directory of pass 2 (None: no pass 2).
     Returns (failures, notes)."""
@@ -838,9 +906,7 @@ def verify(args, allow, private):
     listing = Listing(listing_text) if listing_text is not None else None
     bad, notes = run_ilverify(args, args.assembly, allow, "ilverify")
     if args.peverify:
-        pbad, pnotes = run_peverify(
-            args, args.assembly, PEVERIFY_ALLOWED, "peverify", listing=listing
-        )
+        pbad, pnotes = run_peverify_with_deps(args, listing)
         bad += pbad
         notes += pnotes
     if not private:
@@ -949,8 +1015,32 @@ def main():
         % msil_run.DEFAULT_MEM_LIMIT_MB,
     )
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument(
+        "--dep",
+        nargs="*",
+        action="extend",
+        default=[],
+        metavar="FILE",
+        help="files the assembly needs beside it: managed ones become ILVerify "
+        "references, all are copied next to it for PEVerify (repeatable; takes "
+        "every argument up to the next option, so end with '--')",
+    )
     p.add_argument("assembly")
     args = p.parse_args()
+    try:
+        msil_run.check_deps(args.dep, [])
+    except msil_run.ConfigError as e:
+        p.error(str(e))
+    names = {}
+    for f in args.dep + [args.assembly]:
+        key = os.path.normcase(os.path.basename(f))
+        if key in names:
+            p.error(
+                "dependency %s and %s have the same name %s"
+                % (f, names[key], os.path.basename(f))
+            )
+        names[key] = f
+    args.managed_deps = [d for d in args.dep if is_managed(d)]
 
     if args.roundtrip:
         return main_roundtrip(p, args)
@@ -975,7 +1065,7 @@ def main():
     private = tempfile.mkdtemp(prefix="msil-verify-") if args.ildasm else None
     try:
         bad, notes = verify(args, allow, private)
-    except OSError as e:
+    except (OSError, msil_run.ConfigError) as e:
         sys.stderr.write("msil-verify: error: %s\n" % e)
         return 2
     finally:

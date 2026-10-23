@@ -1,0 +1,41 @@
+# glibc's IFUNC string functions bound as ordinary functions on the Linux triple.
+# In libc.so.6 strlen, strchr, strrchr, strstr, strcmp, memchr and memcmp are
+# STT_GNU_IFUNC symbols, whose address a resolver picks at load time; dlsym,
+# and so a P/Invoke, runs the resolver, so msil-ld binds them as functions
+# (plan 5.10.8, native-imports 4). They run under WSL .NET 10 against the E7
+# oracle. Windows triples get these functions from ucrt.lib and
+# --ucrtbase-imports instead (ucrtbase-imports.test). Plan 5.10.15 (IFUNC),
+# M15.
+# REQUIRES: msil-triple-linux
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+
+typedef __SIZE_TYPE__ size_t;
+size_t strlen(const char *s);
+char *strchr(const char *s, int c);
+char *strrchr(const char *s, int c);
+char *strstr(const char *h, const char *n);
+int strcmp(const char *a, const char *b);
+void *memchr(const void *s, int c, size_t n);
+int memcmp(const void *a, const void *b, size_t n);
+
+static int sign(int v) { return (v > 0) - (v < 0); }
+
+int main(void) {
+  const char *text = "the quick brown fox jumps over the lazy dog";
+  put_i64((long long)strlen(text));
+  put_i64(strchr(text, 'q') - text);
+  put_i64(strrchr(text, 'o') - text);
+  put_i64(strstr(text, "fox") - text);
+  put_i64(strstr(text, "cat") == 0);
+  put_i64(sign(strcmp("lazy", "lazz")));
+  put_i64((const char *)memchr(text, 'z', strlen(text)) - text);
+  put_i64(memchr(text, '!', strlen(text)) == 0);
+  put_i64(sign(memcmp("abcd", "abce", 4)));
+  put_i64(memcmp("abcd", "abce", 3));
+  puts(strchr(text, 'j'));
+  return 0;
+}

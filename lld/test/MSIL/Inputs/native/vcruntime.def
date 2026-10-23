@@ -1,0 +1,13 @@
+LIBRARY VCRUNTIME140.dll
+EXPORTS
+  memcpy
+  memset
+  memmove
+  memcmp
+  memchr
+  strchr
+  strrchr
+  strstr
+  wcschr
+  wcsrchr
+  wcsstr

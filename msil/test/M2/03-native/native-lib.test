@@ -1,0 +1,58 @@
+# A native library built by the test, bound by msil-ld and shipped with the program.
+# native.c is compiled for the native triple and linked into native.dll
+# (lld-link -dll -noentry -nodefaultlib, which also writes the import library
+# native.lib) on Windows triples, or into libnative.so (ld.lld -shared
+# -soname libnative.so) on Linux triples (plan 5.12.5, recon tests-p2 2.5).
+# %{msil_native_libs} gives both the MSIL link and the native oracle
+# '-L%t -lnative'; msil-ld binds add3, mul64, greeting and fill to the module
+# that a native link records (Q13: the DLL name 'native.dll' from the import
+# library, the DT_SONAME 'libnative.so'), and %{msil_deps} copies the library
+# next to the program for verification, the force-JIT and every run (.NET 8,
+# Framework and WSL .NET 10, plan 5.12.4). The program passes and returns
+# integers and 64-bit integers, writes through a pointer into its own frame and
+# prints a string that lives in the library's data. Plan 5.10.15, M15.
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %if msil-triple-windows %{ %clang_native -O2 -c %t/native.c -o %t/native.obj && %lld_link -dll -noentry -nodefaultlib %t/native.obj -out:%t/native.dll %} %else %{ %clang_native -O2 -fPIC -c %t/native.c -o %t/native.o && %ld_lld -shared -soname libnative.so %t/native.o -o %t/libnative.so %}
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_native_libs} = -L%t -lnative
+# REDEFINE: %{msil_deps} = %if msil-triple-windows %{%t/native.dll%} %else %{%t/libnative.so%}
+# RUN: %{msil_prog}
+#--- native.c
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT __attribute__((visibility("default")))
+#endif
+
+static const char text[] = "hello from the native library";
+
+EXPORT int add3(int a, int b, int c) { return a + b + c; }
+EXPORT long long mul64(long long a, long long b) { return a * b; }
+EXPORT const char *greeting(void) { return text; }
+EXPORT void fill(int *p, int n, int first) {
+  for (int i = 0; i < n; ++i)
+    p[i] = first + 3 * i;
+}
+#--- main.c
+#include "msil_test.h"
+
+int add3(int a, int b, int c);
+long long mul64(long long a, long long b);
+const char *greeting(void);
+void fill(int *p, int n, int first);
+
+int main(void) {
+  int v[5];
+  int sum = 0;
+  put_i64(add3(1, 20, 300));
+  put_i64(add3(-7, 2, -40));
+  put_i64(mul64(123456789LL, 1000003LL));
+  put_i64(mul64(-4294967296LL, 3LL));
+  puts(greeting());
+  fill(v, 5, 10);
+  for (int i = 0; i < 5; ++i) {
+    put_i64(v[i]);
+    sum += v[i];
+  }
+  return sum & 0xff;
+}

@@ -1,0 +1,77 @@
+## oldnames.lib's weak aliases (ImplementationPlan.md 5.10.8 'COFF object with
+## weak externals IMAGE_WEAK_EXTERN_SEARCH_ALIAS', 5.10.11 'the alias target
+## for oldnames aliases'; recon p2 native-imports 2.3). A member whose weak
+## external 'strdup' searches '_strdup' makes strdup resolve as _strdup does:
+## the UCRT import member binds it, so the P/Invoke keeps the C name and
+## takes the alias target as its entry:
+##   pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" cdecl) ... 'strdup'
+## An archive of such members is no native-only archive: -loldnames finds it
+## (the windows-msvc driver passes -lucrt -lkernel32 -loldnames, 5.10.4), in
+## either order of the libraries. An alias whose target nothing defines
+## leaves the symbol undefined. A plain import of the same name (strlen) is
+## unaffected.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-string.def /out:lib/ucrt.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/kernel32.def /out:lib/kernel32.lib
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/oldnames.yaml -o strdup.obj
+# RUN: yaml2obj --docnum=2 %S/Inputs/native/oldnames.yaml -o lfind.obj
+# RUN: yaml2obj --docnum=3 %S/Inputs/native/oldnames.yaml -o getpid.obj
+# RUN: llvm-ar rcs lib/oldnames.lib strdup.obj lfind.obj getpid.obj
+# RUN: llvm-nm lib/oldnames.lib | FileCheck %s --check-prefix=NM
+# NM-DAG: W strdup
+# NM-DAG: U _strdup
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as getpid.ll -o getpid.o
+
+# DEFINE: %{il} = FileCheck %s --check-prefix=ALIAS --implicit-check-not="'_strdup'"
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L lib -lucrt -lkernel32 -loldnames -o after.il 2>&1 | count 0
+# RUN: %{il} --input-file=after.il
+# RUN: FileCheck %s --check-prefix=ALIAS-NONE --input-file=after.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L lib -loldnames -lucrt -lkernel32 -o before.il 2>&1 | count 0
+# RUN: %{il} --input-file=before.il
+# RUN: FileCheck %s --check-prefix=ALIAS-NONE --input-file=before.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o lib/oldnames.lib lib/ucrt.lib -o pos.il 2>&1 | count 0
+# RUN: %{il} --input-file=pos.il
+# RUN: FileCheck %s --check-prefix=ALIAS-NONE --input-file=pos.il
+# ALIAS-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
+# ALIAS-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# ALIAS-DAG: call native int 'strdup'(native int)
+## No method '_strdup' anywhere in the file: for a prefix made only of -DAG
+## lines, --implicit-check-not checks only the text before the first match.
+# ALIAS-NONE-NOT: '_strdup'
+
+# RUN: not msil-ld --lto-emit-asm getpid.o -L lib -lucrt -lkernel32 -loldnames -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOTARGET --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
+# NOTARGET:      {{^}}msil-ld: error: undefined symbol: getpid{{$}}
+# NOTARGET-NEXT: {{^}}>>> referenced by getpid.o:(main){{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %p = call ptr @strdup(ptr @msg)
+  %n = call i64 @strlen(ptr %p)
+  %r = trunc i64 %n to i32
+  ret i32 %r
+}
+
+declare ptr @strdup(ptr)
+declare i64 @strlen(ptr)
+
+#--- getpid.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @getpid()
+  ret i32 %r
+}
+
+declare i32 @getpid()

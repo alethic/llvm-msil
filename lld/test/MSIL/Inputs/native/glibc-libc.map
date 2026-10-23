@@ -1,0 +1,10 @@
+GLIBC_2.2.5 {
+  global: puts; printf; fputs; malloc; free; abs; exit; qsort; bsearch; lfind;
+          signal; __errno_location; strlen; strchr; memchr; stdout; stderr;
+          environ; optind;
+};
+GLIBC_2.14 { global: memcpy; } GLIBC_2.2.5;
+GLIBC_2.33 { global: fstat; } GLIBC_2.14;
+GLIBC_2.34 { global: pthread_create; dlopen; dlsym; } GLIBC_2.33;
+GLIBC_2.43 { global: newest_fn; } GLIBC_2.34;
+GLIBC_PRIVATE { global: errno; __libc_dlopen_mode; };

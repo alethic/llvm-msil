@@ -1,0 +1,54 @@
+# C library functions outside the standalone import table, bound from the host C library.
+# None of strlen, strcmp, strncmp, strcpy, abs, atoi, toupper, malloc, calloc
+# and free is a D14 import, so before M15 a link failed on them; msil-ld now
+# binds each through the default libraries of the driver (plan 5.10.4): on
+# windows-msvc the API-set DLLs of ucrt.lib (api-ms-win-crt-string-l1-1-0.dll,
+# -heap-, -utility-, -convert-), on linux-gnu libc.so.6 through the sysroot's
+# libc.so script (%{msil_ldflags} gives --sysroot). strcmp's sign only is
+# printed: the UCRT returns -1, 0 or 1, glibc the byte difference. Plan
+# 5.10.15 (puts-free and strlen/abs/malloc programs), recon tests-p2 3.5, M15.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+
+typedef __SIZE_TYPE__ size_t;
+size_t strlen(const char *s);
+int strcmp(const char *a, const char *b);
+int strncmp(const char *a, const char *b, size_t n);
+char *strcpy(char *d, const char *s);
+int abs(int v);
+int atoi(const char *s);
+int toupper(int c);
+void *malloc(size_t n);
+void *calloc(size_t n, size_t size);
+void free(void *p);
+
+static int sign(int v) { return (v > 0) - (v < 0); }
+
+int main(void) {
+  const char *word = "native imports";
+  char *copy = malloc(strlen(word) + 1);
+  int *zeros = calloc(8, sizeof(int));
+  int zsum = 0;
+  if (!copy || !zeros)
+    return 1;
+  strcpy(copy, word);
+  for (char *p = copy; *p; ++p)
+    *p = (char)toupper((unsigned char)*p);
+  puts(copy);
+  put_i64((long long)strlen(copy));
+  put_i64(sign(strcmp("abc", "abd")));
+  put_i64(sign(strcmp("abc", "abc")));
+  put_i64(sign(strcmp("b", "abc")));
+  put_i64(strncmp("prefix-one", "prefix-two", 7));
+  put_i64(abs(-12345));
+  put_i64(atoi("  -4096xyz"));
+  for (int i = 0; i < 8; ++i)
+    zsum += zeros[i];
+  put_i64(zsum);
+  free(zeros);
+  free(copy);
+  return 7;
+}

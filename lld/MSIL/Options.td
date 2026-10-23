@@ -9,9 +9,9 @@
 // Derived from lld/wasm/Options.td at 64f50ffd4f1c.
 //
 // The options of msil-ld: the rows of llvm/docs/MSIL/ImplementationPlan.md
-// 5.9.3 that M13 and M14 implement, with lld's spellings. Every option of a
-// later milestone is an unknown argument until that milestone adds it, except
-// -shared, which the clang driver already passes and msil-ld rejects.
+// 5.9.3 that M13, M14 and M15 implement, with lld's spellings. Every option of
+// a later milestone is an unknown argument until that milestone adds it,
+// except -shared, which the clang driver already passes and msil-ld rejects.
 //
 //===----------------------------------------------------------------------===//
 
@@ -57,12 +57,22 @@ defm allow_multiple_definition: B<"allow-multiple-definition",
     "Allow multiple definitions",
     "Do not allow multiple definitions (default)">;
 
+def Bdynamic: F<"Bdynamic">,
+  HelpText<"Link against native libraries (default)">;
+
+def Bstatic: F<"Bstatic">,
+  HelpText<"Do not link against native libraries: -l finds static libraries only">;
+
 defm color_diagnostics: B<"color-diagnostics",
   "Alias for --color-diagnostics=always",
   "Alias for --color-diagnostics=never">;
 def color_diagnostics_eq: J<"color-diagnostics=">,
   HelpText<"Use colors in diagnostics (default: auto)">,
   MetaVarName<"[auto,always,never]">;
+
+defm dependent_libraries: BB<"dependent-libraries",
+  "Process the linker options and dependent libraries of input files (default)",
+  "Ignore the linker options and dependent libraries of input files">;
 
 def end_lib: F<"end-lib">,
   HelpText<"End a grouping of objects that should be treated as if they were together in an archive">;
@@ -138,9 +148,16 @@ def why_extract: JJ<"why-extract=">, HelpText<"Print to a file about why archive
 defm assembly_name: EEq<"assembly-name",
   "Name of the output assembly (default: the stem of the output file)">;
 
+def print_imports: FF<"print-imports">,
+  HelpText<"Print the native imports and the ELF version floor of each library">;
+
 defm target: EEq<"target",
   "Code generation triple (default: the first input's triple, with -msil "
   "appended to a native one)">;
+
+def ucrtbase_imports: FF<"ucrtbase-imports">,
+  HelpText<"Import memcpy, memset, memmove, memcmp, memchr, strchr, strrchr, "
+  "strstr, wcschr, wcsrchr and wcsstr from ucrtbase.dll (Windows targets)">;
 
 // Aliases
 def: JoinedOrSeparate<["-"], "e">, Alias<entry>;

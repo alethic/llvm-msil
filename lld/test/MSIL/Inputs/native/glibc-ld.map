@@ -1,0 +1,2 @@
+GLIBC_2.3 { global: __tls_get_addr; };
+GLIBC_PRIVATE { global: _dl_argv; };

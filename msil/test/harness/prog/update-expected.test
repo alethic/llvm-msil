@@ -11,6 +11,11 @@
 #     features that name the oracle's triple (msil-triple-windows on a Windows
 #     host, msil-triple-linux on a Linux one), while features it does not
 #     decide count as present when required and absent when unsupported;
+#     for native-lib.test (M15) it first runs the commands before the
+#     composite, which build a native library with %clang_native and
+#     %msil_ar (lit's %if/%else decided by the oracle's triple), links it
+#     through %{msil_native_libs} and copies %{msil_deps} next to the native
+#     program, so its transcript holds the library's value;
 # (2) --check passes against what it wrote;
 # (3) --check of a wrong two.expected fails with status 1 and the diff.
 # The stand-in's native program is a .NET Framework executable for a Windows
@@ -27,12 +32,15 @@
 # RUN: cat %S/Inputs/ue/linux-only.test > %t.d/linux-only.test
 # RUN: cat %S/Inputs/ue/unknown-features.test > %t.d/unknown-features.test
 # RUN: cat %S/Inputs/ue/no-composite.test > %t.d/no-composite.test
+# RUN: cat %S/Inputs/ue/native-lib.test > %t.d/native-lib.test
 
 # (1)
 # RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none %t.d > %t.1.log 2>&1
 # RUN: %{harness_check} contains %t.1.log "^wrote \S+two\.expected$" "^skip \(fail-only: %\{msil_prog_fail_<L>\}\): \S+fail-only\.test$" "^skip \(det: %\{msil_det\}\): \S+det-only\.test$" "^skip \(no %\{msil_c\}/%\{msil_ll\}/%\{msil_prog\} RUN line\): \S+no-composite\.test$" "^wrote \S+unknown-features\.expected$"
 # RUN: %{harness_check} equals %t.d/two.expected "[exit 31]"
 # RUN: %{harness_check} equals %t.d/unknown-features.expected "[exit 23]"
+# RUN: %{harness_check} contains %t.1.log "^wrote \S+native-lib\.expected$" "^update-expected: prepare: .*prog-cc\.py\"? --as cc .*--target=x86_64-\S+ -std=gnu17 -ffreestanding -Werror=return-type -I\"\S+Inputs\" -O2 -c \S+/t/lib\.c -o \S+/t/lib\.o$" "^update-expected: prepare: .*prog-cc\.py\"? --as ar rcs \S+/t/(native\.lib|libnative\.a) \S+/t/lib\.o$"
+# RUN: %{harness_check} equals %t.d/native-lib.expected "[exit 65]"
 # RUN: %{harness_check} missing %t.d/fail-only.expected
 # RUN: %{harness_check} missing %t.d/det-only.expected
 # RUN: %{harness_check} missing %t.d/no-composite.expected
@@ -46,7 +54,7 @@
 
 # (2)
 # RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none --check %t.d > %t.2.log 2>&1
-# RUN: %{harness_check} contains %t.2.log "^ok: \S+two\.test$" "^ok: \S+unknown-features\.test$"
+# RUN: %{harness_check} contains %t.2.log "^ok: \S+two\.test$" "^ok: \S+unknown-features\.test$" "^ok: \S+native-lib\.test$"
 
 # (3)
 # RUN: %{harness_check} write %t.d/two.expected "[exit 99]"

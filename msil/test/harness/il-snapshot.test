@@ -1,0 +1,35 @@
+# il-snapshot.py --compare (plan 5.12.4) is the proof that a milestone leaves
+# the IL and diagnostics of 'clang -S' and llc byte-identical (D14 frozen,
+# 5.10.13: M15 gate step 19; the M18, M19 and M20 gates too). A gate only
+# compares snapshots that should be equal, so a comparison that looked at the
+# file names or sizes alone, or skipped the .err files, would pass every gate.
+# Inputs/il-snapshot/il-snapshot-selftest.py loads the script as a module and
+# runs compare() on copies of the fixture snapshot Inputs/il-snapshot/baseline
+# made under %t: equal trees, and trees that differ only in il-snapshot.json,
+# give 0; a changed .il (one byte, same size), a changed .err (its exit
+# status), an .il with CRLF line endings, a file only in the old tree and
+# files only in the new one give a nonzero result and list each file as
+# 'differs: <name>', 'missing: <name> (only in <old>)' or
+# 'extra: <name> (only in <new>)'. It also checks that main() exits 2,
+# naming the problem and creating no --out, on usage errors: --compare
+# naming a missing directory, --out inside --compare, --out inside the
+# repository or holding it (%t lies in the repository with the usual build
+# directory, so the selftest names repository paths itself), no PATH,
+# --jobs 0. The input list (only files HEAD tracks, minus each --exclude; a
+# directory excludes its subtree) is checked through tracked_inputs() with
+# the module's git() replaced by a fake 'ls-tree -r -z --name-only HEAD'
+# listing: a file exclude removes that file and a directory exclude its
+# subtree (each with the number of inputs it removed), msil/test/M1/00 does
+# not exclude msil/test/M1/00-smoke, an exclude that matches nothing counts
+# 0, tracked files that are not .c or .ll are no inputs, overlapping paths
+# give each input once, the list is sorted, and git is asked for HEAD once
+# per path; find_inputs() prints 'note: --exclude <path> matches no input'
+# for exactly the excludes that removed nothing. Nothing runs git, clang or
+# llc. M18 and M20 extend the script; their options get cases here.
+
+# RUN: rm -rf %t
+# RUN: %python %S/Inputs/il-snapshot/il-snapshot-selftest.py %S/../../utils/il-snapshot.py %t > %t.log
+# RUN: %{harness_check} contains %t.log "^ok: compare equal$" "^ok: compare stamp-only$" "^ok: compare changed-il$" "^ok: compare changed-err$" "^ok: compare changed-eol$" "^ok: compare missing$" "^ok: compare extra$" "^ok: compare mixed$"
+# RUN: %{harness_check} contains %t.log "^ok: usage compare-not-a-directory$" "^ok: usage out-inside-compare$" "^ok: usage out-inside-repository$" "^ok: usage out-holds-repository$" "^ok: usage no-path$" "^ok: usage jobs-zero$"
+# RUN: %{harness_check} contains %t.log "^ok: exclude file$" "^ok: exclude directory$" "^ok: exclude boundary$" "^ok: exclude no-match$" "^ok: exclude non-input$" "^ok: exclude duplicates$" "^ok: exclude sorted$" "^ok: exclude note$"
+# RUN: %{harness_check} lacks %t.log "^FAIL"

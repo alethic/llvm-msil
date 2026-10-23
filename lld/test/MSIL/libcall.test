@@ -13,9 +13,19 @@
 ## member after LTO. The files of printf/ port lld/test/ELF/lto/
 ## libcall-archive-bitcode.test: main calls printf("foo\n"), which LTO's
 ## optimizer turns into puts("foo") only when puts.o is a regular input; with
-## puts.o lazy, the call stays a variadic call, an error of the backend until
-## phase 3 (D19). (A dropped setBitcodeLibFuncs would rewrite the call there
-## too and link it as the D14 P/Invoke of puts.)
+## puts.o lazy, the call stays a variadic call of printf, which msvcrt.lib
+## binds natively and which is an error until phase 3 (5.10.14's native
+## variadic text). msvcrt.lib also binds puts, so a dropped
+## setBitcodeLibFuncs would rewrite the call and link it silently as a
+## P/Invoke of puts.
+## Library calls in linked text (5.10.13; M15.a item 5, M15.b item 2): a
+## library call the code generator emits (pow for llvm.pow.f64) is a
+## P/Invoke when a native library on the command line binds its name
+## (msil-ld lists it in !msil.imports): 'assembly' access and the library's
+## module (5.10.11). Without one it is the backend's 'library call '<name>'
+## was not resolved by msil-ld', never D14's public P/Invoke of "ucrtbase" or
+## "libm.so.6". A compiler-rt helper ('__' name, __powidf2 for llvm.powi on
+## Linux) keeps its phase 3 error even when a native library defines it.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: llvm-as main.ll -o main.o
@@ -23,8 +33,9 @@
 # RUN: llvm-as other.ll -o other.o
 # RUN: llvm-ar rcs libc.a memcpy.o other.o
 
-# DEFINE: %{vararg} = --check-prefix=VARARG --implicit-check-not=error: --implicit-check-not=puts \
-# DEFINE:   --implicit-check-not="PLEASE submit"
+# DEFINE: %{vararg} = --check-prefix=VARARG --implicit-check-not=puts --implicit-check-not="undefined symbol" \
+# DEFINE:   --implicit-check-not="not resolved" --implicit-check-not="PLEASE submit" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump" --implicit-check-not=error:
 
 # RUN: msil-ld --lto-emit-asm --lto-O0 main.o libc.a -o lib.il --why-extract=lib.why 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=WHY --match-full-lines --strict-whitespace --input-file=lib.why
@@ -52,18 +63,54 @@
 # RUN: llvm-as main.ll -o main.o
 # RUN: llvm-as puts.ll -o puts.o
 # RUN: llvm-ar rcs libc.a puts.o
-# RUN: not msil-ld --lto-emit-asm main.o libc.a -o x.il 2>&1 | FileCheck %s %{vararg}
-# RUN: not msil-ld --lto-emit-asm main.o --start-lib puts.o --end-lib -o x.il 2>&1 | FileCheck %s %{vararg}
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/msvcrt.def /out:msvcrt.lib
+# RUN: not msil-ld --lto-emit-asm main.o libc.a msvcrt.lib -o x.il 2>&1 | FileCheck %s %{vararg}
+# RUN: not msil-ld --lto-emit-asm main.o --start-lib puts.o --end-lib msvcrt.lib -o x.il 2>&1 \
+# RUN:   | FileCheck %s %{vararg}
 # RUN: msil-ld --lto-emit-asm main.o puts.o -o puts.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=PUTS --implicit-check-not=pinvokeimpl --implicit-check-not=printf \
 # RUN:   --input-file=puts.il
 
-# VARARG: {{^}}msil-ld: error: <unknown>:0:0: in function main i32 (): calls to variadic functions are not supported for MSIL yet{{$}}
+## The native variadic text of 5.10.14, naming msvcrt.dll, which binds
+## printf: in linked text never D19's standalone call-site error, and with
+## no '<unknown>:0:0: in function ...' prefix (5.9.14).
+# VARARG: {{^}}msil-ld: error: native function 'printf' (msvcrt.dll) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
 
 # PUTS-LABEL: {{^}}.method public static int32 'main'() cil managed{{$}}
 # PUTS:       call int32 'puts'(native int)
 # PUTS-LABEL: {{^}}.method {{.*}}static int32 'puts'(native int) cil managed{{$}}
 # PUTS:       {{^}}  ldc.i4.7{{$}}
+
+## Linked library calls: pow binds through the native library that defines
+## it, on both triples, and is the backend's error without one; __powidf2
+## stays a phase 3 helper on Linux although libhelper.so defines it.
+# RUN: cd %t/linked
+# RUN: llvm-as pow-win.ll -o pow-win.o
+# RUN: llvm-as pow-lnx.ll -o pow-lnx.o
+# RUN: llvm-as powi-lnx.ll -o powi-lnx.o
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-math.def /out:math.lib
+# RUN: yaml2obj --docnum=2 %S/Inputs/native/glibc.yaml -o libm.o
+# RUN: ld.lld -shared -soname libm.so.6 --version-script %S/Inputs/native/glibc-libm.map libm.o -o libm.so.6
+# RUN: yaml2obj helper.yaml -o helper.o
+# RUN: ld.lld -shared -soname libhelper.so helper.o -o libhelper.so
+# RUN: msil-ld --lto-emit-asm --lto-O0 pow-win.o math.lib -o pow-win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=POW -DMOD=api-ms-win-crt-math-l1-1-0.dll --input-file=pow-win.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 pow-lnx.o libm.so.6 -o pow-lnx.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=POW -DMOD=libm.so.6 --input-file=pow-lnx.il
+# POW-DAG: call float64 'pow'(float64, float64)
+# POW-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) float64 'pow'(float64, float64) cil managed preservesig {}{{$}}
+# RUN: not msil-ld --lto-emit-asm --lto-O0 pow-win.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOPOW --implicit-check-not="PLEASE submit" --implicit-check-not=ucrtbase \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump" --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm --lto-O0 pow-lnx.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOPOW --implicit-check-not="PLEASE submit" --implicit-check-not=libm.so.6 \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump" --implicit-check-not=error:
+## Linked text has no '<unknown>:0:0: in function' prefix (5.9.14).
+# NOPOW: {{^}}msil-ld: error: library call 'pow' was not resolved by msil-ld{{$}}
+# RUN: not msil-ld --lto-emit-asm --lto-O0 powi-lnx.o libm.so.6 libhelper.so -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=POWI --implicit-check-not="PLEASE submit" --implicit-check-not=pinvokeimpl \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump" --implicit-check-not=error:
+# POWI: {{^}}msil-ld: error: runtime helper '__powidf2' is not available for MSIL yet (phase 3){{$}}
 
 #--- main.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
@@ -115,3 +162,69 @@ define i32 @puts(ptr nocapture readonly %0) noinline {
   store volatile i32 1, ptr @puts_calls, align 4
   ret i32 7
 }
+
+#--- linked/pow-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define double @main_pow(double %a, double %b) {
+  %r = call double @llvm.pow.f64(double %a, double %b)
+  ret double %r
+}
+
+define i32 @main() {
+  %r = call double @main_pow(double 2.0, double 3.0)
+  %i = fptosi double %r to i32
+  ret i32 %i
+}
+
+declare double @llvm.pow.f64(double, double)
+
+#--- linked/pow-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define double @main_pow(double %a, double %b) {
+  %r = call double @llvm.pow.f64(double %a, double %b)
+  ret double %r
+}
+
+define i32 @main() {
+  %r = call double @main_pow(double 2.0, double 3.0)
+  %i = fptosi double %r to i32
+  ret i32 %i
+}
+
+declare double @llvm.pow.f64(double, double)
+
+#--- linked/powi-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define double @main_powi(double %a, i32 %n) {
+  %r = call double @llvm.powi.f64.i32(double %a, i32 %n)
+  ret double %r
+}
+
+define i32 @main() {
+  %r = call double @main_powi(double 2.0, i32 3)
+  %i = fptosi double %r to i32
+  ret i32 %i
+}
+
+declare double @llvm.powi.f64.i32(double, i32)
+
+#--- linked/helper.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: __powidf2, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }

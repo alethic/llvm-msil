@@ -36,10 +36,13 @@
 /// argument too.
 ///
 /// A library call, which SelectionDAG makes for an operation that it cannot
-/// expand inline, names its callee by an external symbol. Phase 1 has no
-/// linker and no runtime library, so LowerCall applies the library-call
-/// policy of decision D14 to it: a call of a function of this module, a
-/// P/Invoke of a Phase-1 import, or an error.
+/// expand inline, names its callee by an external symbol. There is no runtime
+/// library yet, so LowerCall applies a library-call policy to it: a call of a
+/// function of this module, a P/Invoke, or an error. In a standalone module
+/// ('clang -S', llc) the P/Invokes are those of the standalone import table
+/// (decision D14, frozen); in msil-ld's linked text (MSIL::isLinkedModule)
+/// they are the natively bound functions that msil-ld annotated
+/// (MSIL::getLinkedImport, plan 5.10.13).
 ///
 //===----------------------------------------------------------------------===//
 
@@ -59,6 +62,7 @@
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/InstrTypes.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
@@ -195,16 +199,27 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     fail(DL, DAG, Msg);
     return DropCall();
   };
+  // In msil-ld's linked text the import errors are link errors, which
+  // msil-ld prints as 'msil-ld: error: <text>' (plan 5.9.14), as the module
+  // trailer reports the references that are not calls
+  // (MSILAsmPrinter::emitPInvokeDeclarations): plain texts, without the
+  // location and the function of DiagnosticInfoUnsupported.
+  auto RejectLinked = [&](const Twine &Msg) -> SDValue {
+    DAG.getContext()->emitError(Msg);
+    return DropCall();
+  };
 
   // The callee of a direct call: a function of the module, or the external
   // symbol of a library call that becomes a P/Invoke declaration.
   const Function *F = nullptr;
   const char *LibCallee = nullptr;
+  const Module &M = *MF.getFunction().getParent();
 
   // SelectionDAG calls a library function, named by an external symbol, for
   // an operation that it cannot expand inline (sqrt, fmin, an i128 to
-  // floating-point conversion, ...). Phase 1 has no linker and no runtime
-  // library, so the library-call policy of decision D14 applies.
+  // floating-point conversion, ...). There is no runtime library yet, so the
+  // library-call policy applies: the standalone import table (decision D14),
+  // or in linked text msil-ld's annotations.
   if (const auto *ES = dyn_cast<ExternalSymbolSDNode>(Callee)) {
     StringRef Name = ES->getSymbol();
     auto Mismatch = [&]() {
@@ -214,8 +229,7 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     };
     // Methods are named by their IL name, so a function @"\01sqrt" is the
     // one a call to 'sqrt' binds to.
-    const Function *Named =
-        MSIL::getFunctionByILName(*MF.getFunction().getParent(), Name);
+    const Function *Named = MSIL::getFunctionByILName(M, Name);
     if (Named && Named->isIntrinsic())
       Named = nullptr;
     if (Named && !Named->isDeclarationForLinker()) {
@@ -226,8 +240,32 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
       if (!matchesSignature(*Named, CLI))
         return Mismatch();
       F = Named;
+    } else if (MSIL::isLinkedModule(M)) {
+      // msil-ld's linked text: the module and entry come from the
+      // declaration's "msil-import-*" attributes, else from !msil.imports
+      // (MSIL::getLinkedImport); the standalone import table is never
+      // consulted. The compiler-rt helpers wait for the phase-3 runtime
+      // library even when !msil.imports lists one; an explicit import of the
+      // declaration is used unchecked (plan 5.10.7), as in a standalone
+      // module.
+      if (Name.starts_with("__") && !MSIL::hasImportModule(Named))
+        return RejectLinked(Twine("runtime helper '") + Name +
+                            "' is not available for MSIL yet (phase 3)");
+      if (!MSIL::getLinkedImport(M, Name, Named))
+        return RejectLinked(Twine("library call '") + Name +
+                            "' was not resolved by msil-ld");
+      // A symbol binds to one native function, whatever the signature: a
+      // declaration of the module supplies the call's P/Invoke declaration
+      // if its method has the call's signature, and the external symbol
+      // (MSILAsmPrinter::noteExternalSymbol) another one, with the same
+      // module and entry, otherwise.
+      if (Named && matchesSignature(*Named, CLI))
+        F = Named;
+      else
+        LibCallee = ES->getSymbol();
     } else {
-      // Otherwise it must be a Phase-1 import: puts, putchar, the C math
+      // A standalone module: it must be a Phase-1 import of the standalone
+      // import table (decision D14, frozen): puts, putchar, the C math
       // library, or a declaration with "msil-import-module". The compiler-rt
       // helpers (__divti3, __mulsc3, __extendhfsf2, __atomic_*, ...) wait for
       // the phase-3 runtime library.
@@ -245,7 +283,7 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
       // the module's own calls. Any other import becomes a P/Invoke
       // declaration of the external symbol
       // (MSILAsmPrinter::noteExternalSymbol), whose library comes from the
-      // import table alone.
+      // standalone import table alone.
       if (Named && matchesSignature(*Named, CLI))
         F = Named;
       else if (MSIL::getPInvokeModule(TT, Name))
@@ -318,8 +356,27 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     CLI.RetSExt = false;
   }
 
-  if (CLI.IsVarArg)
+  if (CLI.IsVarArg) {
+    // In linked text an undefined callee is native code that msil-ld bound,
+    // or unresolved, and the native-callee checks happen at link time, after
+    // native resolution (plan 5.10.13): the texts of 5.10.14, as the module
+    // trailer gives them for the references that are not calls
+    // (MSILAsmPrinter::emitPInvokeDeclarations). No call is built, so the
+    // trailer never sees this one.
+    if (F && F->isDeclarationForLinker() && MSIL::isLinkedModule(M)) {
+      StringRef Name = MSIL::getILName(*F, DAG.getTarget());
+      if (std::optional<MSIL::NativeImport> Import =
+              MSIL::getLinkedImport(M, Name, F))
+        return RejectLinked(Twine("native function '") + Name + "' (" +
+                            Import->Module +
+                            ") is variadic; calls of native variadic "
+                            "functions are not supported for MSIL yet "
+                            "(phase 3)");
+      return RejectLinked(Twine("undefined function '") + Name +
+                          "' was not resolved by msil-ld");
+    }
     return Reject("calls to variadic functions are not supported for MSIL yet");
+  }
 
   for (const ISD::OutputArg &Out : CLI.Outs) {
     // SelectionDAG also sets the byval flag for inalloca and preallocated

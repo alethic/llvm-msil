@@ -13,7 +13,8 @@
         [--ar AR] [--ld MSIL-LD] [--ilasm=CMD] [--out FILE] [--also-il FILE]
         [--cflags=FLAGS] [--ldflags=FLAGS] [--native-ldflags=FLAGS]
         [--src FILE...]... [--stock-src FILE...]... [--archives=SPEC]
-        [--lib=ARGS]... [--ld-lld LD.LLD --linux-sysroot DIR --start START]
+        [--lib=ARGS]... [--native-lib=ARGS]...
+        [--ld-lld LD.LLD --linux-sysroot DIR --start START]
         [--det] [--timeout S] [--mem-limit-mb N]
 
 This is the build step of the %{msil_prog} composites of msil/test/lit.cfg.py
@@ -36,7 +37,8 @@ with the pipeline --pipeline lto and the link output --link-output il (plan
   4. the link through the clang driver, which runs msil-ld (--ld MSIL-LD
      becomes --ld-path=MSIL-LD):
        CLANG --target=<triple> [--ld-path=MSIL-LD] -<L> LDFLAGS obj/... stock/...
-         -Lar/NAME -lNAME ... LIB-ARGS -Wl,--lto-emit-asm -o prog.il
+         -Lar/NAME -lNAME ... LIB-ARGS NATIVE-LIB-ARGS -Wl,--lto-emit-asm
+         -o prog.il
   5. ILASM-CMD -exe -output=<out> <workdir>/prog.il (with --ilasm): the
      program is always an EXE image, which runs under 'dotnet exec' and on the
      .NET Framework alike (plan 5.12.1, Q19); --also-il FILE also copies
@@ -45,23 +47,29 @@ with the pipeline --pipeline lto and the link output --link-output il (plan
 --mode native builds the same program for the native triple, the oracle of
 plan 5.12.6 (O1): every --src, --stock-src and archive member is an ordinary
 source (no -flto), and the link takes no LDFLAGS and no LIB-ARGS (they belong
-to the MSIL link; %{msil_ldflags} has -nodefaultlibs in M14):
+to the MSIL link; %{msil_ldflags} names msil-ld's --sysroot on Linux triples),
+but it takes NATIVE-LIB-ARGS:
 
   - with --ld-lld, --linux-sysroot and --start (all three): the E7 Linux oracle
     of plan 5.12.8 for x86_64-unknown-linux-gnu, which builds on Windows and
     runs under WSL: CLANG --target=x86_64-unknown-linux-gnu -fno-pic CFLAGS -<L>
     -c, archives libNAME.a, and
-      LD.LLD -dynamic-linker /lib64/ld-linux-x86-64.so.2 --as-needed START.o
-        obj/... stock/... -Lar/NAME -lNAME ... <sysroot>/usr/lib/x86_64-linux-gnu/
+      LD.LLD -dynamic-linker /lib64/ld-linux-x86-64.so.2 --as-needed
+        -rpath $ORIGIN START.o obj/... stock/... -Lar/NAME -lNAME ...
+        NATIVE-LIB-ARGS <sysroot>/usr/lib/x86_64-linux-gnu/
         {libm.so.6,libc.so.6,libgcc_s.so.1} -o <out>
     START is msil/utils/linux-oracle/start.c (compiled into the build
-    directory) or its object; NATIVE-LDFLAGS are not used;
+    directory) or its object; NATIVE-LDFLAGS are not used, and a
+    NATIVE-LIB-ARGS word -Wl,A,B... (written for the clang driver) is passed
+    as A B...; -rpath $ORIGIN (plan M15.c) lets the dynamic loader find a
+    test-built shared library that msil-run.py --dep copied next to the
+    program;
   - otherwise the clang driver with lld, so archives and their cycles resolve
     as msil-ld resolves them (lld's rules, not GNU ld's): CLANG
     --target=<native> CFLAGS -<L> -c, archives NAME.lib for windows-msvc (the
     MSVC driver turns -lNAME into NAME.lib) and libNAME.a otherwise, and
       CLANG --target=<native> -fuse-ld=lld obj/... stock/... -Lar/NAME -lNAME
-        ... NATIVE-LDFLAGS -o <out>
+        ... NATIVE-LIB-ARGS NATIVE-LDFLAGS -o <out>
     NATIVE-LDFLAGS is %{msil_native_ldflags}: the compiler-rt builtins of
     msil_native_rtlib for MSVC triples, -lm for Linux triples.
 
@@ -80,8 +88,13 @@ letters, digits and '_', '.', '+', '-'; sources may not contain ',' or ';'.
 --src and --stock-src take one or more files each and may be repeated; files
 keep their order, and the stock objects follow the --src objects on the link
 line. --lib ARGS (repeatable; %{msil_libs}) are further link arguments of the
-MSIL link, after the objects and archives. --cflags, --ldflags,
---native-ldflags, --lib and --ilasm take one string that is split into words
+MSIL link, after the objects and archives. --native-lib ARGS (repeatable;
+%{msil_native_libs}, plan 5.12.3, M15) are link arguments of both modes: the
+native libraries of the program (for example -L<dir> -lnative for a
+test-built native.dll or libnative.so), after the --lib arguments in MSIL
+mode and after the archives in native mode. --cflags, --ldflags,
+--native-ldflags, --lib, --native-lib and --ilasm take one string that is
+split into words
 at blanks, where "..." and '...' quote (with no escape characters, so Windows
 paths keep their backslashes) and a quoted part joins the text next to it;
 write them as --cflags=VALUE (VALUE may start with '-'). --clang, --ar and
@@ -348,7 +361,7 @@ def build_msil(b, bdir, det):
     if args.ld:
         link.append("--ld-path=" + args.ld)
     link += [level, *args.ldflags_words, *objects, *lib_args, *args.lib_words]
-    link += ["-Wl,--lto-emit-asm", "-o", "prog.il"]
+    link += args.native_lib_words + ["-Wl,--lto-emit-asm", "-o", "prog.il"]
     b.run(link, bdir, "the link", "prog.il")
     il = os.path.join(bdir, "prog.il")
     if not args.ilasm_cmd:
@@ -429,13 +442,25 @@ def build_native(b, bdir):
             start = start_o
         libdir = os.path.join(args.linux_sysroot, *E7_LIBDIR)
         cmd = [*args.ld_lld_cmd, "-dynamic-linker", E7_DYNAMIC_LINKER, "--as-needed"]
-        cmd += [start, *objects, *lib_args]
+        cmd += ["-rpath", "$ORIGIN", start, *objects, *lib_args]
+        cmd += linker_words(args.native_lib_words)
         cmd += [os.path.join(libdir, n) for n in E7_LIBS] + ["-o", out]
         b.run(cmd, bdir, "the E7 link", out)
     else:
         cmd = [*clang, "--target=" + native, "-fuse-ld=lld", *objects, *lib_args]
-        cmd += args.native_ldflags_words + ["-o", out]
+        cmd += args.native_lib_words + args.native_ldflags_words + ["-o", out]
         b.run(cmd, bdir, "the native link", out)
+    return out
+
+
+def linker_words(words):
+    """Driver link arguments for ld.lld itself: -Wl,A,B becomes A B."""
+    out = []
+    for w in words:
+        if w.startswith("-Wl,"):
+            out += [x for x in w[len("-Wl,") :].split(",") if x]
+        else:
+            out.append(w)
     return out
 
 
@@ -517,6 +542,12 @@ def parse_args(argv):
     )
     p.add_argument("--archives", default="", help="NAME=SRC[,SRC...][;...]")
     p.add_argument("--lib", action="append", default=[], help="MSIL link arguments")
+    p.add_argument(
+        "--native-lib",
+        action="append",
+        default=[],
+        help="link arguments of both modes (%%{msil_native_libs})",
+    )
     p.add_argument("--workdir", required=True)
     p.add_argument("--out", help="the program (default <workdir>/prog.exe)")
     p.add_argument("--also-il", help="also copy the --lto-emit-asm text here")
@@ -585,6 +616,7 @@ def check_args(args):
     args.ldflags_words = split_words(args.ldflags)
     args.native_ldflags_words = split_words(args.native_ldflags)
     args.lib_words = [w for lib in args.lib for w in split_words(lib)]
+    args.native_lib_words = [w for lib in args.native_lib for w in split_words(lib)]
     args.archive_list = parse_archives(args.archives)
     if args.archive_list and not args.ar_cmd:
         raise UsageError("--archives needs --ar")

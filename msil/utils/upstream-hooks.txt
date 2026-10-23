@@ -491,7 +491,7 @@ hook llvm/lib/TargetParser/Triple.cpp
   fork llvm/unittests/TargetParser/TripleTest.cpp
 
 hook llvm/lib/Transforms/Instrumentation/AddressSanitizer.cpp
-  # X86/asm_mov_no_instrumentation.s needs llvm-mc (not built).
+  # X86/asm_mov_no_instrumentation.s needs llvm-mc (a build target from M15).
   lit llvm/test/Instrumentation/AddressSanitizer/*.ll
   lit llvm/test/Instrumentation/AddressSanitizer/X86/*.ll
 

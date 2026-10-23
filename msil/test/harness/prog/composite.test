@@ -10,13 +10,17 @@
 # every leg of every level ran, and the stand-in's record of the MSIL link
 # (prog.il.inputs) shows the link order of plan 5.12.4: the objects, then the
 # stock objects, then each archive in the order of %{msil_archives}, then
-# %{msil_libs}, while the native link leaves %{msil_libs} out.
+# %{msil_libs}, then %{msil_native_libs} (M15), while the native link leaves
+# %{msil_libs} out and keeps %{msil_native_libs}. Every run gets the files of
+# %{msil_deps} (M15; deps.test shows the commands), which exist here.
 # RUN: rm -rf %t && split-file %s %t
 # RUN: rm -f %t.*.out
 # REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
 # REDEFINE: %{msil_stock_srcs} = %t/stock.c
 # REDEFINE: %{msil_archives} = one=%t/a1.c,%t/a2.c;two=%t/b1.c,stock:%t/b2.c
 # REDEFINE: %{msil_libs} = -Wl,--stand-in-extra
+# REDEFINE: %{msil_native_libs} = -Wl,--stand-in-native
+# REDEFINE: %{msil_deps} = %t/dep-a.txt %t/dep-b.txt
 # RUN: %{msil_prog}
 # RUN: %if msil-opt-O0 %{ %{harness_check} equals %t.O0.out "[exit 127]" %}
 # RUN: %if msil-opt-O1 %{ %{harness_check} equals %t.O1.out "[exit 127]" %}
@@ -39,10 +43,11 @@
 
 # The MSIL link of the first level (O0 unless msil_opt_levels leaves it out,
 # then O2), and the native link of the same level where the leg ran.
-# RUN: %if msil-opt-O0 %{ %{harness_check} contains %t.O0.d/prog.il.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/libone\.a a1\.o 8\nmember ar/one/libone\.a a2\.o 16\nmember ar/two/libtwo\.a b1\.o 32\nmember ar/two/libtwo\.a b2\.o 64\narg -Wl,--stand-in-extra\nld-path \S+\n\Z" %}
-# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.O2.d/prog.il.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/libone\.a a1\.o 8\nmember ar/one/libone\.a a2\.o 16\nmember ar/two/libtwo\.a b1\.o 32\nmember ar/two/libtwo\.a b2\.o 64\narg -Wl,--stand-in-extra\nld-path \S+\n\Z" %}
+# RUN: %if msil-opt-O0 %{ %{harness_check} contains %t.O0.d/prog.il.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/libone\.a a1\.o 8\nmember ar/one/libone\.a a2\.o 16\nmember ar/two/libtwo\.a b1\.o 32\nmember ar/two/libtwo\.a b2\.o 64\narg -Wl,--stand-in-extra\narg -Wl,--stand-in-native\nld-path \S+\n\Z" %}
+# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.O2.d/prog.il.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/libone\.a a1\.o 8\nmember ar/one/libone\.a a2\.o 16\nmember ar/two/libtwo\.a b1\.o 32\nmember ar/two/libtwo\.a b2\.o 64\narg -Wl,--stand-in-extra\narg -Wl,--stand-in-native\nld-path \S+\n\Z" %}
 # RUN: %if msil-native-oracle && msil-opt-O0 %{ %{harness_check} contains %t.O0.native.d/prog.%{prog_native_ext}.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/\S+ a1\.o 8\nmember ar/one/\S+ a2\.o 16\nmember ar/two/\S+ b1\.o 32\nmember ar/two/\S+ b2\.o 64\n" %}
 # RUN: %if msil-native-oracle && msil-opt-O0 %{ %{harness_check} lacks %t.O0.native.d/prog.%{prog_native_ext}.inputs "stand-in-extra" %}
+# RUN: %if msil-native-oracle && msil-opt-O0 %{ %{harness_check} contains %t.O0.native.d/prog.%{prog_native_ext}.inputs "^arg (-Wl,)?--stand-in-native$" %}
 
 #--- main.c
 // prog-value: 1
@@ -58,3 +63,7 @@
 // prog-value: 32
 #--- b2.c
 // prog-value: 64
+#--- dep-a.txt
+A file every run gets beside the program.
+#--- dep-b.txt
+Another one.

@@ -1,0 +1,2 @@
+error: global destructor @msil_dtor_fn is not supported for MSIL yet
+[exit 1]

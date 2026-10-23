@@ -1,13 +1,26 @@
-## Input files msil-ld cannot link in M14 (ImplementationPlan.md 5.9.4, M14's
-## subset; 5.9.14; 5.10.5 for ILAsm text given to a link):
+## Input files msil-ld cannot link (ImplementationPlan.md 5.9.4; 5.9.14;
+## 5.10.5 for ILAsm text given to a link; 5.10.8 and 5.10.14 for native
+## libraries from M15):
 ## - a file that does not exist: lld's 'cannot open <file>: <reason>';
 ## - a file of no known kind (text, ILAsm text, an empty file): 'unknown file
 ##   type: <file>';
 ## - a PE with a CLI header (a CIL object or a .NET assembly): '<file>:
 ##   linking CIL object files and .NET assemblies is not supported yet' (M20
 ##   links CIL objects, M21 and M22 assemblies);
-## - a native PE is a native library, accepted without being read (M15 reads
-##   it);
+## - a native PE is a native library: M15 reads its export table (this one
+##   has none, so it binds nothing and changes nothing);
+## - a native library that does not parse is an error naming the file (a
+##   shared object and an import library cut short, which still have their
+##   magic), and so is one for another machine (5.10.14), never a crash;
+## - a shared object whose DT_SONAME lies outside its string table is
+##   '<file>: invalid DT_SONAME entry', and an import library whose short
+##   import member has a SizeOfData past the member or an unknown name type
+##   is '<lib>(<member>): broken import library' (lld-link's text);
+## - a DLL whose export directory gives a count that runs its table past the
+##   image (NumberOfNamePointers 0x80000001, AddressTableEntries 0x40000001,
+##   which overflow a 32-bit size) is '<file>: malformed export table' (the
+##   section 12 row of 2026-10-22 for 5.10.8), never a misleading error, a
+##   binding read from unvalidated bytes or a crash;
 ## - an archive member that is not LLVM bitcode is the warning
 ##   '<archive>(<member>): not LLVM bitcode; ignored', and the link goes on;
 ## - bitcode with module-level inline assembly, positional or an archive
@@ -36,6 +49,15 @@
 # RUN: llvm-as modasm.ll -o modasm.bc
 # RUN: llvm-as modasm-helper.ll -o modasm-helper.o
 # RUN: llvm-ar --format=gnu rcS noidx.a modasm-helper.o
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: %python %S/Inputs/native/truncate.py libfoo.so.1 bad.so 100
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/kernel32.def /out:kernel32.lib
+# RUN: %python %S/Inputs/native/truncate.py kernel32.lib bad.lib 300
+# RUN: yaml2obj -D MACHINE=EM_AARCH64 %S/Inputs/native/libfoo.yaml -o arm64.so
+# RUN: yaml2obj -D SONAME=0xffff %S/Inputs/native/libfoo.yaml -o badsoname.so
+# RUN: %python %S/Inputs/native/patch-import.py kernel32.lib badsize.lib size
+# RUN: %python %S/Inputs/native/patch-import.py kernel32.lib badtype.lib nametype
+# RUN: llvm-as lnx.ll -o lnx.o
 
 # DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR"
@@ -55,8 +77,42 @@
 # CLI: {{^}}msil-ld: error: [[FILE]]: linking CIL object files and .NET assemblies is not supported yet{{$}}
 
 # RUN: msil-ld --lto-emit-asm main.o helper.o native.dll -o native.il 2>&1 | count 0
-# RUN: FileCheck %s --check-prefix=NATIVE --input-file=native.il
+# RUN: FileCheck %s --check-prefix=NATIVE --implicit-check-not=pinvokeimpl --input-file=native.il
 # NATIVE: {{^}}.method public static int32 'main'() cil managed{{$}}
+
+# RUN: not msil-ld --lto-emit-asm lnx.o bad.so -o x.il 2>&1 | %{fc} --check-prefix=BAD-SO
+# RUN: not msil-ld --lto-emit-asm main.o helper.o bad.lib -o x.il 2>&1 | %{fc} --check-prefix=BAD-LIB
+# RUN: not msil-ld --lto-emit-asm lnx.o arm64.so -o x.il 2>&1 | %{fc} --check-prefix=MACHINE
+# BAD-SO:  {{^}}msil-ld: error: {{.*}}bad.so
+# BAD-LIB: {{^}}msil-ld: error: {{.*}}bad.lib
+# MACHINE: {{^}}msil-ld: error: arm64.so: ELF machine EM_AARCH64 does not match target x86_64-unknown-linux-gnu-msil{{$}}
+
+## A DT_SONAME offset past .dynstr, and broken short import members.
+# RUN: not msil-ld --lto-emit-asm lnx.o badsoname.so -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=BAD-SONAME --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm main.o helper.o badsize.lib -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=BAD-IMPORT -DLIB=badsize.lib --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm main.o helper.o badtype.lib -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=BAD-IMPORT -DLIB=badtype.lib --implicit-check-not=error:
+# BAD-SONAME: {{^}}msil-ld: error: badsoname.so: invalid DT_SONAME entry{{$}}
+# BAD-IMPORT: {{^}}msil-ld: error: [[LIB]](KERNEL32.dll): broken import library{{$}}
+
+## Export counts past the image. The unpatched DLL binds fn1.
+# RUN: yaml2obj %S/Inputs/native/coff-code.yaml -o code.obj
+# RUN: lld-link -dll -noentry -out:exports.dll code.obj -export:fn1 -export:fn2
+# RUN: %python patch-exports.py exports.dll bad-names.dll names 0x80000001
+# RUN: %python patch-exports.py exports.dll bad-addrs.dll addresses 0x40000001
+# RUN: llvm-as callfn1.ll -o callfn1.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 callfn1.o exports.dll -o exports.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=EXPORTS --input-file=exports.il
+# EXPORTS: {{^}}.method assembly hidebysig static pinvokeimpl("exports.dll" cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
+# RUN: not msil-ld --lto-emit-asm --lto-O0 callfn1.o bad-names.dll -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=BAD-EXPORTS -DFILE=bad-names.dll --implicit-check-not="Exception Code:" \
+# RUN:     --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm --lto-O0 callfn1.o bad-addrs.dll -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=BAD-EXPORTS -DFILE=bad-addrs.dll --implicit-check-not="Exception Code:" \
+# RUN:     --implicit-check-not=error:
+# BAD-EXPORTS: {{^}}msil-ld: error: [[FILE]]: malformed export table{{$}}
 
 # RUN: msil-ld --lto-emit-asm --lto-O0 main.o mixed.a -o mixed.il 2>&1 \
 # RUN:   | %{fc} --check-prefix=MEMBER --implicit-check-not=warning: --implicit-check-not=error:
@@ -119,3 +175,58 @@ module asm ".globl helper_asm"
 define i32 @helper() {
   ret i32 1
 }
+
+#--- lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @foo(i32 1)
+  ret i32 %r
+}
+
+declare i32 @foo(i32)
+
+#--- callfn1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @fn1()
+  ret i32 %r
+}
+
+declare i32 @fn1()
+
+#--- patch-exports.py
+"""Patch one count of a PE DLL's export directory.
+
+Usage: patch-exports.py <in> <out> names|addresses <value>
+
+'names' sets NumberOfNamePointers (export directory + 24), 'addresses'
+AddressTableEntries (+ 20). The directory's file offset is found through
+e_lfanew, data directory 0 of the optional header and the section table.
+"""
+
+import struct
+import sys
+
+src, dst, field, value = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4], 0)
+with open(src, "rb") as f:
+    data = bytearray(f.read())
+pe = struct.unpack_from("<I", data, 0x3C)[0]
+nsec = struct.unpack_from("<H", data, pe + 6)[0]
+optsize = struct.unpack_from("<H", data, pe + 20)[0]
+opt = pe + 24
+magic = struct.unpack_from("<H", data, opt)[0]
+erva = struct.unpack_from("<I", data, opt + (112 if magic == 0x20B else 96))[0]
+for i in range(nsec):
+    vsize, va, rawsize, rawptr = struct.unpack_from("<IIII", data, opt + optsize + 40 * i + 8)
+    if va <= erva < va + max(vsize, rawsize):
+        off = erva - va + rawptr
+        break
+else:
+    sys.exit("patch-exports.py: no section holds the export directory")
+struct.pack_into("<I", data, off + {"names": 24, "addresses": 20}[field], value)
+with open(dst, "wb") as f:
+    f.write(data)

@@ -41,12 +41,13 @@
 ///   constant offset) is replaced by its aliasee in every use and erased. A
 ///   function alias with non-local linkage leaves a forwarding definition
 ///   under its name, which calls the aliasee.
-/// - An extern_weak function declaration that is not a Phase-1 import
-///   (MSIL::getPInvokeModule) is null: its calls, invokes and
-///   llvm.global_ctors entries call an internal trap stub
-///   '<msil>undef_<name>', and its other uses become null. An extern_weak
-///   variable is null in every use and is erased, unless it is thread-local
-///   (an error below).
+/// - An extern_weak function declaration that has no import (in a standalone
+///   module a Phase-1 import, MSIL::getPInvokeModule; in msil-ld's linked
+///   text an "msil-import-module" attribute or an !msil.imports entry,
+///   MSIL::getLinkedImport) is null: its calls, invokes and llvm.global_ctors
+///   entries call an internal trap stub '<msil>undef_<name>', and its other
+///   uses become null. An extern_weak variable is null in every use and is
+///   erased, unless it is thread-local (an error below).
 /// - A section on a global variable definition (llvm.metadata excepted) is an
 ///   error; the variable stays ordinary data.
 ///
@@ -1644,8 +1645,14 @@ static void replaceGlobalCtor(Module &M, const Function &F,
 
 /// Lowers the extern_weak declarations: nothing in the whole program defines
 /// them, so their address is null, as a native link makes it (judge-c-fidelity
-/// F5). A function that the import policy resolves (MSIL::getPInvokeModule:
-/// a Phase-1 import or the "msil-import-module" attribute) stays a P/Invoke.
+/// F5). A function that the import policy resolves stays a P/Invoke: in a
+/// standalone module a Phase-1 import or the "msil-import-module" attribute
+/// (MSIL::getPInvokeModule), in msil-ld's linked text only the attribute or
+/// an !msil.imports entry (MSIL::getLinkedImport): msil-ld turns every
+/// natively bound extern_weak declaration into an external one, so one that
+/// is still extern_weak there is unresolved, whatever the standalone import
+/// table says, and keeps the null-plus-trap lowering (plan 5.9.6 step 3,
+/// 5.10.13).
 /// For any other function, its calls and invokes (undefined behavior, which a
 /// native program usually guards with 'if (f)') and the llvm.global_ctors
 /// entries naming it call the trap stub (createUndefStub), created once and
@@ -1657,10 +1664,15 @@ static void replaceGlobalCtor(Module &M, const Function &F,
 /// thread-local variable it is an error (runOnModule) until phase 3 (P3-A).
 static bool lowerExternWeak(Module &M, const TargetMachine &TM) {
   const Triple &TT = TM.getTargetTriple();
+  bool Linked = MSIL::isLinkedModule(M);
+  auto HasImport = [&](const Function &F) {
+    StringRef Name = MSIL::getILName(F, TM);
+    return Linked ? MSIL::getLinkedImport(M, Name, &F).has_value()
+                  : MSIL::getPInvokeModule(TT, Name, &F).has_value();
+  };
   SmallVector<Function *, 4> Fns;
   for (Function &F : M)
-    if (F.hasExternalWeakLinkage() && !F.isIntrinsic() &&
-        !MSIL::getPInvokeModule(TT, MSIL::getILName(F, TM), &F))
+    if (F.hasExternalWeakLinkage() && !F.isIntrinsic() && !HasImport(F))
       Fns.push_back(&F);
   SmallVector<GlobalVariable *, 4> Vars;
   for (GlobalVariable &GV : M.globals())

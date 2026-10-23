@@ -2,7 +2,9 @@
 # %{msil_c} keeps Phase 1's expansion (clang -S, ilasm -dll; ../pipeline pins
 # it in detail) and never runs msil-prog.py; under lto it is %{msil_prog} of
 # the one source (msil-prog.py, which compiles with -flto -c and links through
-# the driver, then ilasm -exe of prog.il), and the program still passes
+# the driver, then ilasm -exe of prog.il, with the default libraries: no
+# -nodefaultlibs from M15, and none of the placeholders of %{msil_prog}, so
+# no --dep), and the program still passes
 # against the same .expected file. Under both, %{msil_prog} is lto's, which
 # the feature msil-prog-pipeline=lto says, and msil-link-output=il, msil-ld
 # and msil-ar are set; msil-pipeline=<p> follows the parameter. A nested lit
@@ -24,9 +26,9 @@
 
 # RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=lto %S/Inputs/nested/one-source.c %S/Inputs/nested/features.test > %t.lto.log 2>&1
 # RUN: %{harness_check} contains %t.lto.log "^PASS: MSIL :: harness/prog/Inputs/nested/one-source\.c " "^PASS: MSIL :: harness/prog/Inputs/nested/features\.test "
-# RUN: %{harness_check} contains %t.lto.log "^# executed command: .*msil-prog\.py'? .* --level O2 --workdir '?\S*one-source\.c\.tmp\.O2\.d'? --out '?\S*one-source\.c\.tmp\.O2\.d/prog\.exe'? --src '?\S*one-source\.c'?$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 .* -O2 -flto -c \S*one-source\.c -o obj/one-source\.o$" "^# \| msil-prog: .* -O2 -nodefaultlibs obj/one-source\.o -Wl,--lto-emit-asm -o prog\.il$" "^# \| msil-prog: .* -exe -output=\S+prog\.exe \S+prog\.il$"
+# RUN: %{harness_check} contains %t.lto.log "^# executed command: .*msil-prog\.py'? .* --level O2 --workdir '?\S*one-source\.c\.tmp\.O2\.d'? --out '?\S*one-source\.c\.tmp\.O2\.d/prog\.exe'? --src '?\S*one-source\.c'?$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 .* -O2 -flto -c \S*one-source\.c -o obj/one-source\.o$" "^# \| msil-prog: .* -O2 obj/one-source\.o -Wl,--lto-emit-asm -o prog\.il$" "^# \| msil-prog: .* -exe -output=\S+prog\.exe \S+prog\.il$"
 # RUN: %{harness_check} contains %t.lto.log "^# \| feature msil-pipeline=lto$" "^# \| feature msil-prog-pipeline=lto$" "^# \| feature msil-link-output=il$"
-# RUN: %{harness_check} lacks %t.lto.log "--as clang-msil" " -dll " "^# \| feature msil-pipeline=asm$"
+# RUN: %{harness_check} lacks %t.lto.log "--as clang-msil" " -dll " "^# \| feature msil-pipeline=asm$" "nodefaultlibs" "--dep "
 
 # RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O2 --param msil_pipeline=asm %S/Inputs/nested/one-ir.ll > %t.ll-asm.log 2>&1
 # RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O2 --param msil_pipeline=lto %S/Inputs/nested/one-ir.ll > %t.ll-lto.log 2>&1

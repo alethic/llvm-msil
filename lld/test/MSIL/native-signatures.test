@@ -1,0 +1,81 @@
+## Two prototypes of one native function (ImplementationPlan.md 5.10.11 'one
+## canonical stub per symbol ... the declared prototype if any, else the
+## first signature in input order'; 5.9.6; recon p2 native-imports 9.1). In
+## linked text, the IR linker keeps the first input's declaration of nf, so
+## the P/Invoke has the first prototype's signature, and the call of the
+## other input, whose call type differs, goes through
+## MSILFixFunctionBitcasts' wrapper 'nf_bitcast' (M9.b), which calls the
+## P/Invoke with its own signature. The function's address field
+## '<msil>fn_nf' takes the P/Invoke's address ('ldftn' of that signature).
+## Either input order works, with the signatures swapped. Both prototypes
+## bind to the one native definition; nothing is reported.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj nf.yaml -o nf.o
+# RUN: ld.lld -shared -soname libnf.so.1 nf.o -o libnf.so.1
+# RUN: llvm-as a.ll -o a.o
+# RUN: llvm-as b.ll -o b.o
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 a.o b.o libnf.so.1 -o ab.il 2>&1 | count 0
+# RUN: FileCheck %s -DFIRST=int32 -DSECOND=float32 --input-file=ab.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 b.o a.o libnf.so.1 -o ba.il 2>&1 | count 0
+# RUN: FileCheck %s -DFIRST=float32 -DSECOND=int32 --input-file=ba.il
+# RUN: FileCheck %s --check-prefix=ONE --input-file=ab.il
+# RUN: FileCheck %s --check-prefix=ONE --input-file=ba.il
+
+# CHECK-DAG: call int32 'nf'([[FIRST]])
+# CHECK-DAG: call int32 'nf_bitcast'([[SECOND]])
+# CHECK-DAG: {{^}}.method assembly static int32 'nf_bitcast'([[SECOND]]) cil managed
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libnf.so.1" cdecl) int32 'nf'([[FIRST]]) cil managed preservesig {}{{$}}
+# CHECK-DAG: ldftn int32 'nf'([[FIRST]])
+# CHECK-DAG: stsfld native int '<msil>fn_nf'
+
+## One P/Invoke, whatever the number of prototypes.
+# ONE-COUNT-1: pinvokeimpl
+# ONE-NOT:     pinvokeimpl
+
+#--- nf.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: nf, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- a.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@fp = global ptr @nf
+
+define i32 @main() {
+  %a = call i32 @nf(i32 1)
+  %b = call i32 @other()
+  %f = load ptr, ptr @fp
+  %c = icmp eq ptr %f, null
+  %z = zext i1 %c to i32
+  %s1 = add i32 %a, %b
+  %s2 = add i32 %s1, %z
+  ret i32 %s2
+}
+
+declare i32 @nf(i32)
+declare i32 @other()
+
+#--- b.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @other() {
+  %r = call i32 @nf(float 2.0)
+  ret i32 %r
+}
+
+declare i32 @nf(float)

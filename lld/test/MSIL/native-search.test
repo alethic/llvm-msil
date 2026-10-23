@@ -1,0 +1,255 @@
+## -l search with native libraries (ImplementationPlan.md 5.10.9; 5.9.3;
+## recon p2 native-imports 7.2). M15 reads and classifies every candidate:
+## - kinds: static (an archive with a bitcode or CIL member, or a linker
+##   script under a static name that names one), managed (a PE with a CLI
+##   header), import (an archive of import members), native-shared (an ELF
+##   shared object, a script under a shared name, a native DLL), native-only
+##   (an archive of native objects only);
+## - candidates per -L directory: lib<n>.a, <n>.dll, lib<n>.dll, lib<n>.so on
+##   ELF triples; lib<n>.a, <n>.lib, <n>.dll on windows-msvc; lib<n>.a,
+##   lib<n>.dll.a, <n>.dll.a, <n>.lib, lib<n>.dll, <n>.dll on windows-gnu;
+## - a native library is read only in the object format of the triple's OS
+##   (the section 12 row of 2026-10-23 for 5.10.8-5.10.14): on ELF triples
+##   <n>.dll and lib<n>.dll are candidates only as .NET assemblies (M22's
+##   managed kind), and a native DLL or an archive of COFF import members is
+##   never accepted there: -l goes on with the next candidate and directory,
+##   and --verbose prints 'skipping <path>: PE/COFF file cannot be imported
+##   for target <triple>', so a directory holding foo.dll, foo.lib and
+##   libfoo.so binds libfoo.so, as ld.lld does;
+## - the directories are searched in order and the first one with an
+##   acceptable candidate wins; inside it static beats managed beats
+##   import/native-shared, which go by list order;
+## - a native-only archive is skipped ('--verbose': 'skipping native static
+##   archive <path> (no CIL or bitcode members)'), so it never hides a later
+##   candidate or directory;
+## - a .NET assembly is skipped with the warning '<path>: skipping the .NET
+##   assembly that -l<name> found; use --reference for .NET reference
+##   assemblies' (managed libraries arrive in M22), on an ELF triple too;
+## - -Bstatic accepts only static candidates until -Bdynamic; -l:<file> takes
+##   the exact name, of any kind.
+## The bitcode foo_fn returns 1; each native library binds foo_fn under its
+## own module, which the P/Invoke names.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p st natonly d1 d2 mng scr wmsvc wdll wgnu1 wgnu2 wgnu3 mixed coffa
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as foo-bc.ll -o foo-bc.o
+# RUN: yaml2obj foo-rel.yaml -o foo-rel.o
+# RUN: yaml2obj nat.yaml -o nat.o
+# RUN: llvm-ar rcs st/libfoo.a foo-bc.o
+# RUN: ld.lld -shared -soname libfoo-st.so.1 foo-rel.o -o st/libfoo.so
+# RUN: llvm-ar rcs natonly/libfoo.a nat.o
+# RUN: ld.lld -shared -soname libfoo-natonly.so.1 foo-rel.o -o natonly/libfoo.so
+# RUN: ld.lld -shared -soname libfoo-d1.so.1 foo-rel.o -o d1/libfoo.so
+# RUN: ld.lld -shared -soname libfoo-d2.so.1 foo-rel.o -o d2/libfoo.so
+# RUN: %python %S/Inputs/make-pe.py --cli --dll mng/foo.dll
+# RUN: ld.lld -shared -soname libfoo-mng.so.1 foo-rel.o -o mng/libfoo.so
+
+# DEFINE: %{why} = FileCheck %s --match-full-lines --strict-whitespace
+# DEFINE: %{so} = FileCheck %s --check-prefix=SO --implicit-check-not=pinvokeimpl
+# SO: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'foo_fn'() cil managed preservesig {}{{$}}
+
+## A bitcode archive beats a shared object in its directory.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L st -lfoo -o st.il --why-extract=st.why 2>&1 | count 0
+# RUN: %{why} --check-prefix=WHY-ST --input-file=st.why
+# RUN: FileCheck %s --check-prefix=BC --implicit-check-not=pinvokeimpl --input-file=st.il
+#      WHY-ST:reference	extracted	symbol
+# WHY-ST-NEXT:main.o	st{{[/\\]}}libfoo.a(foo-bc.o)	foo_fn
+# BC: {{^}}  ldc.i4.1{{$}}
+
+## A native-only archive is skipped: the shared object of its directory, or
+## of the next directory, is found.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L natonly -lfoo -o natonly.il --verbose 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=SKIP
+# RUN: %{so} -DMOD=libfoo-natonly.so.1 --input-file=natonly.il
+# SKIP: {{^}}{{(msil-ld: )?}}skipping native static archive natonly{{[/\\]}}libfoo.a (no CIL or bitcode members){{$}}
+# RUN: mkdir -p natonly2 && cp natonly/libfoo.a natonly2/libfoo.a
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L natonly2 -L d2 -lfoo -o natonly2.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libfoo-d2.so.1 --input-file=natonly2.il
+
+## The first directory with a candidate wins.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L d1 -L d2 -lfoo -o d12.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libfoo-d1.so.1 --input-file=d12.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L d2 -L d1 -lfoo -o d21.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libfoo-d2.so.1 --input-file=d21.il
+
+## A .NET assembly found by -l is skipped with a warning.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L mng -lfoo -o mng.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=MANAGED --implicit-check-not=error:
+# RUN: %{so} -DMOD=libfoo-mng.so.1 --input-file=mng.il
+# MANAGED: {{^}}msil-ld: warning: mng{{[/\\]}}foo.dll: skipping the .NET assembly that -lfoo found; use --reference for .NET reference assemblies{{$}}
+
+## -Bstatic: only static candidates, until -Bdynamic.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L st -Bstatic -lfoo -o bst.il --why-extract=bst.why 2>&1 \
+# RUN:   | count 0
+# RUN: %{why} --check-prefix=WHY-ST --input-file=bst.why
+# RUN: not msil-ld --lto-emit-asm main.o -L d1 -Bstatic -lfoo -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=BSTATIC-NONE --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
+# RUN: not msil-ld --lto-emit-asm main.o -L natonly -Bstatic -lfoo -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=BSTATIC-NONE --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
+# BSTATIC-NONE: {{^}}msil-ld: error: unable to find library -lfoo{{$}}
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L d1 -Bstatic -Bdynamic -lfoo -o bdyn.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libfoo-d1.so.1 --input-file=bdyn.il
+## Under -Bstatic, d1 (a shared object only) has no acceptable candidate, so
+## the search goes on to st.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L d1 -L st -Bstatic -lfoo -o bst2.il --why-extract=bst2.why \
+# RUN:   2>&1 | count 0
+# RUN: %{why} --check-prefix=WHY-ST --input-file=bst2.why
+
+## A script under a static name that names a bitcode archive is static.
+# RUN: llvm-ar rcs scr/libfooimpl.a foo-bc.o
+# RUN: cp static-script.txt scr/libfoo.a
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L scr -Bstatic -lfoo -o scr.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=BC --implicit-check-not=pinvokeimpl --input-file=scr.il
+
+## -l: takes the exact name of any kind.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L st -l:libfoo.so -o exact.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libfoo-st.so.1 --input-file=exact.il
+
+## windows-msvc: <n>.lib comes before <n>.dll; a DLL alone is found; a .so
+## is no candidate.
+# RUN: llvm-as main-win.ll -o main-win.o
+# RUN: llvm-lib /machine:x64 /def:implib.def /out:wmsvc/foo.lib
+# RUN: yaml2obj -D FN1=foo_fn %S/Inputs/native/coff-code.yaml -o foodll.obj
+# RUN: lld-link -dll -noentry -out:wdll/foo.dll foodll.obj -export:foo_fn
+# RUN: cp wdll/foo.dll wmsvc/foo.dll
+# RUN: msil-ld --lto-emit-asm --lto-O0 main-win.o -L wmsvc -lfoo -o wmsvc.il 2>&1 | count 0
+# RUN: %{so} -DMOD=implib.dll --input-file=wmsvc.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main-win.o -L wdll -lfoo -o wdll.il 2>&1 | count 0
+# RUN: %{so} -DMOD=foo.dll --input-file=wdll.il
+# RUN: not msil-ld --lto-emit-asm main-win.o -L d1 -lfoo -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOSO --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
+# NOSO: {{^}}msil-ld: error: unable to find library -lfoo{{$}}
+
+## windows-gnu: lib<n>.a, then lib<n>.dll.a, then <n>.dll.a, then <n>.lib,
+## by list order among import libraries.
+# RUN: llvm-as main-gnu.ll -o main-gnu.o
+# RUN: llvm-dlltool -m i386:x86-64 -d gnu-a.def -l wgnu1/libfoo.a
+# RUN: llvm-dlltool -m i386:x86-64 -d gnu-dlla.def -l wgnu1/libfoo.dll.a
+# RUN: llvm-dlltool -m i386:x86-64 -d gnu-dlla.def -l wgnu2/libfoo.dll.a
+# RUN: llvm-dlltool -m i386:x86-64 -d gnu-plain.def -l wgnu2/foo.dll.a
+# RUN: llvm-dlltool -m i386:x86-64 -d gnu-plain.def -l wgnu3/foo.dll.a
+# RUN: llvm-lib /machine:x64 /def:implib.def /out:wgnu3/foo.lib
+# RUN: msil-ld --lto-emit-asm --lto-O0 main-gnu.o -L wgnu1 -lfoo -o gnu1.il 2>&1 | count 0
+# RUN: %{so} -DMOD=gnu-a.dll --input-file=gnu1.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main-gnu.o -L wgnu2 -lfoo -o gnu2.il 2>&1 | count 0
+# RUN: %{so} -DMOD=gnu-dlla.dll --input-file=gnu2.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main-gnu.o -L wgnu3 -lfoo -o gnu3.il 2>&1 | count 0
+# RUN: %{so} -DMOD=gnu-plain.dll --input-file=gnu3.il
+
+## The object format on an ELF triple: foo.dll (a native DLL) and foo.lib (an
+## import library) beside libfoo.so; the DLL is skipped and libfoo.so binds.
+## A libfoo.a of COFF import members is no candidate either.
+# RUN: cp wdll/foo.dll mixed/foo.dll
+# RUN: cp wmsvc/foo.lib mixed/foo.lib
+# RUN: ld.lld -shared -soname libfoo-mixed.so.1 foo-rel.o -o mixed/libfoo.so
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L mixed -lfoo -o mixed.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libfoo-mixed.so.1 --input-file=mixed.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L mixed -lfoo -o mixed-v.il --verbose 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=SKIP-DLL --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: %{so} -DMOD=libfoo-mixed.so.1 --input-file=mixed-v.il
+# SKIP-DLL: {{^}}msil-ld: skipping mixed{{[/\\]}}foo.dll: PE/COFF file cannot be imported for target x86_64-unknown-linux-gnu-msil{{$}}
+# RUN: llvm-dlltool -m i386:x86-64 -d gnu-a.def -l coffa/libfoo.a
+# RUN: ld.lld -shared -soname libfoo-coffa.so.1 foo-rel.o -o coffa/libfoo.so
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L coffa -lfoo -o coffa.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libfoo-coffa.so.1 --input-file=coffa.il
+
+#--- main.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @foo_fn()
+  ret i32 %r
+}
+
+declare i32 @foo_fn()
+
+#--- foo-bc.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @foo_fn() {
+  ret i32 1
+}
+
+#--- main-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @foo_fn()
+  ret i32 %r
+}
+
+declare i32 @foo_fn()
+
+#--- main-gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @foo_fn()
+  ret i32 %r
+}
+
+declare i32 @foo_fn()
+
+#--- foo-rel.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: foo_fn, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- nat.yaml
+## A native object for a native-only archive: it defines foo_fn too, which
+## must not matter, because the archive is never read for -l.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: foo_fn, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- static-script.txt
+/* A static library's name, naming a bitcode archive. */
+INPUT ( libfooimpl.a )
+
+#--- implib.def
+LIBRARY implib.dll
+EXPORTS
+  foo_fn
+
+#--- gnu-a.def
+LIBRARY gnu-a.dll
+EXPORTS
+  foo_fn
+
+#--- gnu-dlla.def
+LIBRARY gnu-dlla.dll
+EXPORTS
+  foo_fn
+
+#--- gnu-plain.def
+LIBRARY gnu-plain.dll
+EXPORTS
+  foo_fn

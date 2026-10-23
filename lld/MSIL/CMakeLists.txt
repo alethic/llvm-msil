@@ -7,6 +7,7 @@ add_lld_library(lldMSIL
   InputFiles.cpp
   LTO.cpp
   MapFile.cpp
+  NativeLibraries.cpp
   SymbolTable.cpp
   Symbols.cpp
 

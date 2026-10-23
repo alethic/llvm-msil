@@ -11,11 +11,17 @@
     msil-jitall.py [--jitall DIR] [--dotnet PATH] [--runtimeconfig FILE]
                    [--runner {local,wsl}] [--wsl-distro D]
                    [--timeout S] [--mem-limit-mb N] [--env VAR=VALUE]...
-                   [--filter TEXT] prog.dll
+                   [--filter TEXT] [--dep FILE...]... [--] prog.dll
 
 Runs 'dotnet exec --runtimeconfig <cfg> <DIR>/jitall.dll prog.dll' from a
 private temporary directory that holds a copy of prog.dll, so that assemblies
-with the same name never meet (llvm/docs/MSIL/recon/asmprinter.md 0.9). jitall
+with the same name never meet (llvm/docs/MSIL/recon/asmprinter.md 0.9), and
+a copy of each --dep FILE (plan 5.12.4, M15): the assemblies prog.dll
+references, which jitall loads from that directory to JIT the methods that
+use them, and the native libraries the module initializer calls. --dep takes
+one or more files, may be repeated, and takes every argument up to the next
+option, so the lit composites pass '--dep %{msil_deps} --' before prog.dll; a
+missing file, or two of one name, is a configuration error. jitall
 JIT-compiles every method that has an IL body and calls none of them. Its
 output is copied to stdout with LF line endings: one 'JIT FAIL <type>::<method>:
 <exception>' line per rejected method, then 'jitall: N ok, M failed'.
@@ -152,10 +158,12 @@ def run_local(args, jitall_dll, runtimeconfig):
             else "no dotnet host found (pass --dotnet or set DOTNET_ROOT)"
         )
     env = msil_run.child_env(args.env)
+    msil_run.check_deps(args.dep, [])
     private = tempfile.mkdtemp(prefix="msil-jitall-")
     try:
         target = os.path.join(private, os.path.basename(args.dll))
         shutil.copyfile(args.dll, target)
+        msil_run.copy_deps(args.dep, [], private, [os.path.basename(args.dll)])
         cmd = [dotnet, "exec", "--runtimeconfig", runtimeconfig, jitall_dll, target]
         if args.filter is not None:
             cmd.append(args.filter)
@@ -235,6 +243,10 @@ def run_wsl(args, jitall_dir, runtimeconfig):
     )
     if args.filter is not None:
         cmd.append("--filter=" + args.filter)
+    # The copy inside WSL copies them next to its private copy of the dll.
+    msil_run.check_deps(args.dep, [])
+    for dep in args.dep:
+        cmd += ["--dep", msil_run.to_wsl_path(dep)]
     cmd += ["--", msil_run.to_wsl_path(args.dll)]
     env = dict(os.environ)
     msil_run.set_env_var(env, "WSL_UTF8", "1")  # wsl.exe's own messages, not UTF-16
@@ -312,6 +324,15 @@ def main():
     )
     p.add_argument(
         "--filter", metavar="TEXT", help="only JIT methods whose name contains TEXT"
+    )
+    p.add_argument(
+        "--dep",
+        nargs="*",
+        action="extend",
+        default=[],
+        metavar="FILE",
+        help="copy these files next to the assembly (repeatable; takes every "
+        "argument up to the next option, so end with '--' before the assembly)",
     )
     p.add_argument("dll", help="assembly to check")
     args = p.parse_args()

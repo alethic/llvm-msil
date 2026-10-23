@@ -1,0 +1,87 @@
+# glibc's asm-label spellings of callback-list functions are named link errors too.
+# glibc's headers select some functions through an asm label (__REDIRECT), so
+# that standard C code references another exported name than the one it
+# calls: signal is __sysv_signal without __USE_MISC (-std=c17 here, as with
+# -std=c99, -std=c11, -ansi or _POSIX_C_SOURCE alone), and ftw, nftw and
+# scandir are ftw64, nftw64 and scandir64 with -D_FILE_OFFSET_BITS=64. Each
+# takes a C function pointer that native code calls without a reverse
+# P/Invoke transition, so the callback list names these spellings too (plan
+# 5.10.10 and 5.10.14 as amended by the section 12 row of 2026-10-23), and
+# every live reference that binds to one is the link error 'native function
+# '<name>' (libc.so.6) takes a C function pointer; passing functions to
+# native code needs phase 3 thunks', with '<name>' the referenced symbol
+# (never the C name of the call) and a '>>> referenced by <file>:(<function>)'
+# line (plan 5.9.14), reported after LTO. sig.c's other calls (raise, puts)
+# bind and are no error. walk.c has three such references: each is reported
+# once (WALK counts them, in any order), each with its '>>> referenced by'
+# line, and nothing else is an error. Linked to text against the real
+# libc.so script of %{msil_glibc_sysroot}, as glibc-link.test is. Plan
+# 5.12.8 (hosted leg, Q16), 5.10.10, 5.10.14, M15.
+# REQUIRES: msil-glibc-sysroot, msil-ld
+# RUN: rm -rf %t && split-file %s %t
+# RUN: not %clang --target=x86_64-unknown-linux-gnu-msil --sysroot=%{msil_glibc_sysroot} -std=c17 -O2 -flto %t/sig.c -Wl,--lto-emit-asm -o %t/sig.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=SIG --implicit-check-not=error: --implicit-check-not=pinvokeimpl --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: not %clang --target=x86_64-unknown-linux-gnu-msil --sysroot=%{msil_glibc_sysroot} -D_FILE_OFFSET_BITS=64 -O2 -flto %t/walk.c -Wl,--lto-emit-asm -o %t/walk.il > %t/walk.txt 2>&1
+# RUN: FileCheck %s --check-prefix=WALK --implicit-check-not=error: --implicit-check-not=pinvokeimpl --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --input-file=%t/walk.txt
+# RUN: FileCheck %s --check-prefix=FTW64 --input-file=%t/walk.txt
+# RUN: FileCheck %s --check-prefix=NFTW64 --input-file=%t/walk.txt
+# RUN: FileCheck %s --check-prefix=SCANDIR64 --input-file=%t/walk.txt
+# SIG:      {{^}}msil-ld: error: native function '__sysv_signal' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# SIG-NEXT: {{^}}>>> referenced by {{.+}}:(main){{$}}
+# SIG:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# WALK-COUNT-3: {{^}}msil-ld: error: native function '{{ftw64|nftw64|scandir64}}' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# WALK:         clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# FTW64:          {{^}}msil-ld: error: native function 'ftw64' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# FTW64-NEXT:     {{^}}>>> referenced by {{.+}}:(main){{$}}
+# NFTW64:         {{^}}msil-ld: error: native function 'nftw64' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# NFTW64-NEXT:    {{^}}>>> referenced by {{.+}}:(main){{$}}
+# SCANDIR64:      {{^}}msil-ld: error: native function 'scandir64' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# SCANDIR64-NEXT: {{^}}>>> referenced by {{.+}}:(main){{$}}
+#--- sig.c
+#include <signal.h>
+#include <stdio.h>
+
+static volatile sig_atomic_t hits;
+
+static void on_int(int sig) { hits += sig; }
+
+int main(void) {
+  signal(SIGINT, on_int);
+  raise(SIGINT);
+  puts(hits ? "handled" : "not handled");
+  return 0;
+}
+#--- walk.c
+#define _XOPEN_SOURCE 700
+#include <dirent.h>
+#include <ftw.h>
+#include <stdio.h>
+
+static int on_ftw(const char *path, const struct stat *st, int flag) {
+  (void)st;
+  (void)flag;
+  puts(path);
+  return 1;
+}
+
+static int on_nftw(const char *path, const struct stat *st, int flag,
+                   struct FTW *ftw) {
+  (void)st;
+  (void)flag;
+  (void)ftw;
+  puts(path);
+  return 1;
+}
+
+static int select_all(const struct dirent *entry) {
+  (void)entry;
+  return 1;
+}
+
+int main(void) {
+  struct dirent **list;
+  int r = ftw(".", on_ftw, 4);
+  r += nftw(".", on_nftw, 4, 0);
+  r += scandir(".", &list, select_all, 0);
+  return r & 0xff;
+}

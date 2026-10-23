@@ -34,7 +34,9 @@
 ///   diagnosed, because its signature cannot be derived. CIL calli does not
 ///   check signatures, so a call through the address of a P/Invoke with the
 ///   fallback signature 'T ()' would pass garbage arguments to the native
-///   callee; WebAssembly traps on such a call instead.
+///   callee; WebAssembly traps on such a call instead. In msil-ld's linked
+///   text (MSIL::isLinkedModule) the error names the native module that
+///   binds the declaration, its "msil-import-module" attribute.
 /// - Malformed "no-prototype" declarations are diagnosed rather than fatal,
 ///   and are left unchanged. A call that does not fit the sret parameter of a
 ///   declaration (its first argument is not a pointer, or its result is not
@@ -44,6 +46,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
+#include "MSILUtilities.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/LLVMContext.h"
@@ -216,11 +219,22 @@ static bool addMissingPrototypes(Module &M) {
       // Dead constant users, such as those left when MSILPrepareIR deletes
       // the body of a diagnosed definition, do not use it.
       F.removeDeadConstantUsers();
-      if (hasAddressUse(F))
+      if (hasAddressUse(F)) {
+        // In msil-ld's linked text the check runs after native resolution
+        // and names the native module that binds F (plan 5.10.13,
+        // native-imports 6). The standalone text is frozen (D14).
+        std::string Module;
+        if (MSIL::isLinkedModule(M) && MSIL::hasImportModule(&F))
+          Module =
+              (" (" +
+               F.getFnAttribute("msil-import-module").getValueAsString() + ")")
+                  .str();
         M.getContext().emitError(
-            "the signature of prototype-less function '" + F.getName() +
-            "' cannot be derived: its address is used, but it is never called "
+            "the signature of prototype-less function '" + F.getName() + "'" +
+            Module +
+            " cannot be derived: its address is used, but it is never called "
             "directly; declare it with a prototype");
+      }
       // We could not derive a type for this function.  In this case strip
       // the isVarArg and make it a simple function of its fixed parameters
       // (none, or the sret pointer of a function returning a struct, whose

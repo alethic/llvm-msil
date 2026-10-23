@@ -1,0 +1,226 @@
+## Native data (ImplementationPlan.md 5.10.12 'M15-M19', 5.10.14 and 5.9.6;
+## M15.a item 5; recon p2 native-imports 5.1). Until M20 writes the
+## data-import helper, a variable that binds to native data is the link
+## error
+##   importing native data symbol '<name>' (<module>) is not supported yet
+## with '>>> referenced by' lines: ELF STT_OBJECT (glibc's stdout, and the
+## WEAK environ), a COFF DATA import member (msvcrt's _iob) and a PE data
+## export (native-pe-dll.test). Calling data is
+##   '<name>' in <module> is data, but <file> calls it as a function
+## (the SIGSEGV of recon 3.2 becomes a link error). An extern variable that
+## an ELF STT_FUNC defines is msil-ld's 'symbol type mismatch'. Between ELF
+## libraries the first definition in command-line order wins, whatever its
+## type, as in ld.so (the section 12 row of 2026-10-22 for 5.10.10): with
+## libOBJECT.so.1 (foo STT_OBJECT) first a call of foo is the data-call text
+## and a variable foo native data; with libFUNC.so.1 (foo STT_FUNC) first
+## the call binds libFUNC.so.1 and the variable is the type mismatch.
+## Only live references count: a reference that LTO deletes with its dead
+## function is no error.
+## A function used as data (its address in a table) is no data import: it
+## gets its P/Invoke and the address field '<msil>fn_<name>' (M9).
+## (5.10.14's 'data symbol ... cannot be imported: no reference defines
+## System.Runtime.InteropServices.NativeLibrary ...' belongs to M20's data
+## imports and cannot occur before them.)
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/msvcrt.def /out:msvcrt.lib
+# RUN: llvm-as stdout.ll -o stdout.o
+# RUN: llvm-as environ.ll -o environ.o
+# RUN: llvm-as call.ll -o call.o
+# RUN: llvm-as iob.ll -o iob.o
+# RUN: llvm-as dead.ll -o dead.o
+# RUN: llvm-as fnaddr.ll -o fnaddr.o
+# RUN: yaml2obj --docnum=1 kind.yaml -o kind-obj.o
+# RUN: ld.lld -shared -soname libOBJECT.so.1 kind-obj.o -o libOBJECT.so.1
+# RUN: yaml2obj --docnum=2 kind.yaml -o kind-fn.o
+# RUN: ld.lld -shared -soname libFUNC.so.1 kind-fn.o -o libFUNC.so.1
+# RUN: llvm-as var-foo.ll -o var-foo.o
+# RUN: llvm-as call-foo.ll -o call-foo.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="undefined symbol"
+
+# RUN: not msil-ld --lto-emit-asm stdout.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=STDOUT
+# RUN: not msil-ld --lto-emit-asm environ.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=ENVIRON
+# RUN: not msil-ld --lto-emit-asm iob.o msvcrt.lib -o x.il 2>&1 | %{err} --check-prefix=IOB
+# STDOUT:       {{^}}msil-ld: error: importing native data symbol 'stdout' (libc.so.6) is not supported yet{{$}}
+# STDOUT-NEXT:  {{^}}>>> referenced by stdout.o:(main){{$}}
+# ENVIRON:      {{^}}msil-ld: error: importing native data symbol 'environ' (libc.so.6) is not supported yet{{$}}
+# ENVIRON-NEXT: {{^}}>>> referenced by environ.o:(main){{$}}
+# IOB:          {{^}}msil-ld: error: importing native data symbol '_iob' (msvcrt.dll) is not supported yet{{$}}
+# IOB-NEXT:     {{^}}>>> referenced by iob.o:(main){{$}}
+
+# RUN: not msil-ld --lto-emit-asm call.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=CALL
+# CALL:      {{^}}msil-ld: error: 'stdout' in libc.so.6 is data, but call.o calls it as a function{{$}}
+# CALL-NEXT: {{^}}>>> referenced by call.o:(main){{$}}
+
+## A variable bound to an ELF function: the type mismatch, alone and with
+## the function first.
+# RUN: not msil-ld --lto-emit-asm var-foo.o libFUNC.so.1 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=MISMATCH --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm var-foo.o libFUNC.so.1 libOBJECT.so.1 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=MISMATCH --implicit-check-not=error:
+# MISMATCH:      {{^}}msil-ld: error: symbol type mismatch: foo{{$}}
+# MISMATCH-NEXT: {{^}}>>> defined as function in libFUNC.so.1{{$}}
+# MISMATCH-NEXT: {{^}}>>> defined as data in var-foo.o{{$}}
+
+## ELF: the first library wins whatever the type.
+# RUN: not msil-ld --lto-emit-asm var-foo.o libOBJECT.so.1 libFUNC.so.1 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=OBJ-VAR --implicit-check-not=error:
+# OBJ-VAR:      {{^}}msil-ld: error: importing native data symbol 'foo' (libOBJECT.so.1) is not supported yet{{$}}
+# OBJ-VAR-NEXT: {{^}}>>> referenced by var-foo.o:(main){{$}}
+# RUN: not msil-ld --lto-emit-asm call-foo.o libOBJECT.so.1 libFUNC.so.1 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=OBJ-CALL --implicit-check-not=error:
+# OBJ-CALL:      {{^}}msil-ld: error: 'foo' in libOBJECT.so.1 is data, but call-foo.o calls it as a function{{$}}
+# OBJ-CALL-NEXT: {{^}}>>> referenced by call-foo.o:(main){{$}}
+# RUN: msil-ld --lto-emit-asm --lto-O0 call-foo.o libFUNC.so.1 libOBJECT.so.1 -o fn-call.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=FN-CALL --input-file=fn-call.il
+# FN-CALL:     {{^}}.method assembly hidebysig static pinvokeimpl("libFUNC.so.1" cdecl) int32 'foo'() cil managed preservesig {}{{$}}
+# FN-CALL-NOT: libOBJECT
+
+## The reference dies with its function at the default -O2.
+# RUN: msil-ld --lto-emit-asm dead.o libc.so.6 -o dead.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEAD --input-file=dead.il
+# DEAD-NOT: stdout
+# DEAD:     {{^}}.method public static int32 'main'() cil managed
+# DEAD-NOT: stdout
+
+## A function's address stored in data.
+# RUN: msil-ld --lto-emit-asm --lto-O0 fnaddr.o libc.so.6 -o fnaddr.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=FNADDR --input-file=fnaddr.il
+# FNADDR-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# FNADDR-DAG: ldftn int32 'puts'(native int)
+# FNADDR-DAG: stsfld native int '<msil>fn_puts'
+
+#--- kind.yaml
+## foo as data (libOBJECT.so.1) and as a function (libFUNC.so.1).
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .data
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_WRITE ]
+    Size:  0x10
+Symbols:
+  - { Name: foo, Type: STT_OBJECT, Section: .data, Binding: STB_GLOBAL, Value: 0x0, Size: 4 }
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: foo, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 4 }
+
+#--- var-foo.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@foo = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @foo
+  ret i32 %v
+}
+
+#--- call-foo.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @foo()
+  ret i32 %r
+}
+
+declare i32 @foo()
+
+#--- stdout.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@stdout = external global ptr
+
+define i32 @main() {
+  %f = load ptr, ptr @stdout
+  %c = icmp eq ptr %f, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+#--- environ.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@environ = external global ptr
+
+define i32 @main() {
+  %e = load ptr, ptr @environ
+  %c = icmp eq ptr %e, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+#--- call.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @stdout()
+  ret i32 %r
+}
+
+declare i32 @stdout()
+
+#--- iob.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@_iob = external global [3 x [48 x i8]]
+
+define i32 @main() {
+  %p = getelementptr inbounds [3 x [48 x i8]], ptr @_iob, i64 0, i64 1
+  %b = load i8, ptr %p
+  %r = zext i8 %b to i32
+  ret i32 %r
+}
+
+#--- dead.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@stdout = external global ptr
+
+define i32 @main() {
+  ret i32 0
+}
+
+define ptr @dead() {
+  %f = load ptr, ptr @stdout
+  ret ptr %f
+}
+
+#--- fnaddr.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@tbl = global [1 x ptr] [ptr @puts]
+
+define i32 @main() {
+  %f = load ptr, ptr @tbl
+  %c = icmp eq ptr %f, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare i32 @puts(ptr)

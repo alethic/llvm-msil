@@ -8,7 +8,13 @@
 # (5) msil_require_link=1 with msil-ld disabled, and (6) with llvm-ar
 #     disabled (an empty --param is an explicit 'none');
 # (7) msil_pipeline=lto with msil-ld disabled: every %{msil_c} links;
-# (8) an msil_ld that names no program.
+# (8) an msil_ld that names no program;
+# (9) an explicit msil_glibc_sysroot without usr/include/stdio.h (M15), so
+#     the hosted leg, which names its sysroot, never passes by skipping.
+#     With the header the nested configuration has the feature
+#     msil-glibc-sysroot and %{msil_glibc_sysroot} names the directory (a
+#     nested run of Inputs/nested/features.test echoes both), and an empty
+#     value turns the feature off.
 # The control loads the configuration with msil_require_link=1 and
 # msil_pipeline=lto. --show-tests ends every nested lit after discovery, so
 # no test of Inputs/nested runs, and an empty msil_linux_sysroot keeps the
@@ -44,3 +50,14 @@
 # (8)
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_ld=%t.no-such-msil-ld %S/Inputs/nested > %t.8.log 2>&1
 # RUN: %{harness_check} contains %t.8.log "fatal: msil: msil_ld=\S*no-such-msil-ld: no such program$"
+
+# (9)
+# RUN: rm -rf %t.glibc && mkdir -p %t.glibc/usr/include
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_glibc_sysroot=%t.glibc %S/Inputs/nested > %t.9.log 2>&1
+# RUN: %{harness_check} contains %t.9.log "fatal: msil: msil_glibc_sysroot=\S*glibc has no usr/include/stdio\.h; make it with 'bash msil/utils/make-glibc-sysroot\.sh <dir>' inside WSL \(plan 5\.12\.8\)$"
+# RUN: %{harness_check} write %t.glibc/usr/include/stdio.h
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_glibc_sysroot=%t.glibc %S/Inputs/nested/features.test > %t.9ok.log 2>&1
+# RUN: %{harness_check} contains %t.9ok.log "^PASS: MSIL :: harness/prog/Inputs/nested/features\.test " "^# \| feature msil-glibc-sysroot \S*glibc$"
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_glibc_sysroot= %S/Inputs/nested/features.test > %t.9off.log 2>&1
+# RUN: %{harness_check} contains %t.9off.log "^PASS: MSIL :: harness/prog/Inputs/nested/features\.test "
+# RUN: %{harness_check} lacks %t.9off.log "feature msil-glibc-sysroot"

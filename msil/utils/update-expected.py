@@ -82,7 +82,20 @@ and %{s:stem} replaced (%t is that directory), and 'msil-prog.py --mode
 native' builds them at --opt with --cflags, the --target triple's
 -lm/compiler-rt rule and the archiver --ar (default llvm-ar next to --clang,
 else on PATH); on a Windows host --os linux uses the E7 recipe. %{msil_libs}
-belongs to the MSIL link only and is not read. A REQUIRES: line that is false,
+belongs to the MSIL link only and is not read. %{msil_native_libs} goes to
+both builds, so the native build gets it (msil-prog.py --native-lib; plan
+M15), and the files of %{msil_deps} are copied next to the native program
+when it runs (msil-run.py --dep), as the native-oracle leg does; a
+REDEFINE: value may use lit's %if and %else (decided as below), and a
+wildcard in %{msil_deps} is expanded, as lit's shell expands it. RUN:
+commands before the test's first composite, other than 'rm -rf %t &&
+split-file %s %t', prepare its inputs (a test-built native library, plan
+5.12.5): they run first, in lit's internal shell (llvm/utils/lit), with %if
+decided by the features below and with the oracle's values of %clang_native
+and %clang (--clang; %clang_native with --target), %ld_lld and %lld_link
+(next to --clang, PATH, then the Visual Studio LLVM), %msil_ar (--ar),
+%msil_triple, %python, %{msil_cflags}, %{msil_native_ldflags}, %s, %S, %p,
+%t and %{s:stem}; a command that uses another substitution fails the test. A REQUIRES: line that is false,
 or an UNSUPPORTED: line that is true, for the oracle skips a test of any kind
 when the features the oracle knows decide it whatever the other features are:
 msil-triple-windows, msil-triple-linux and msil-triple=<target>-msil follow
@@ -108,6 +121,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
@@ -119,6 +133,15 @@ FAIL_RUN_RE = re.compile(r"RUN:.*%\{msil_prog_fail_O[0-3sz]\}")
 DET_RUN_RE = re.compile(r"RUN:.*%\{msil_det\}")
 # lit's directives (a keyword not inside a longer word).
 DIRECTIVE_RE = re.compile(r"(?<![\w-])(REQUIRES|UNSUPPORTED|REDEFINE):(.*)$")
+RUN_RE = re.compile(r"(?<![\w-])RUN:(.*)$")
+# Any composite of msil/test/lit.cfg.py: the RUN: commands before the first
+# one prepare the test's inputs (see Oracle.prepare).
+COMPOSITE_RE = re.compile(r"%\{msil_(?:prog|det|c|ll)(?:_\w+)?\}")
+# The preparation every %{msil_prog} test starts with, which build_prog does
+# itself.
+SPLIT_ONLY_RE = re.compile(r"^rm\s+-rf\s+%t\s+&&\s+split-file\s+%s\s+%t$")
+# A substitution of lit.cfg.py that the preparation does not know.
+UNKNOWN_SUBST_RE = re.compile(r"%(?:\{[^}]*\}|[A-Za-z_][\w]*)")
 REDEFINE_RE = re.compile(r"^\s*(%\{[_a-zA-Z][-_:0-9a-zA-Z]*\})\s*=(.*)$")
 # The features whose truth the oracle knows (see the module documentation).
 KNOWN_FEATURE_PREFIXES = ("msil-triple", "system-", "msil-wsl")
@@ -128,6 +151,8 @@ DEFAULT_CFLAGS = "-std=gnu17 -ffreestanding -Werror=return-type"
 E7_TARGET = "x86_64-unknown-linux-gnu"
 E7_LIBS = ("libm.so.6", "libc.so.6", "libgcc_s.so.1")
 DEFAULT_LINUX_SYSROOT = r"C:\llvm-msil-scratch\linux-sysroot"
+# lit's internal shell runs one preparation at a time (Oracle.prepare).
+PREPARE_LOCK = threading.Lock()
 
 
 def load_script(name, file):
@@ -206,10 +231,12 @@ def find_rtlib(arch):
     return None
 
 
-def find_ld_lld(clang):
-    exe = "ld.lld" + (".exe" if os.name == "nt" else "")
+def find_ld_lld(clang, name="ld.lld"):
+    """ld.lld (or lld-link) next to clang, on PATH, or in the Visual Studio
+    LLVM, as lit.cfg.py finds %ld_lld and %lld_link."""
+    exe = name + (".exe" if os.name == "nt" else "")
     candidates = [os.path.join(os.path.dirname(os.path.abspath(clang)), exe)]
-    candidates.append(shutil.which("ld.lld"))
+    candidates.append(shutil.which(name))
     if vs_llvm_dir():
         candidates.append(os.path.join(vs_llvm_dir(), "bin", exe))
     for c in candidates:
@@ -243,6 +270,9 @@ class TestInfo:
         self.requires = []
         self.unsupported = []
         self.redefines = {}
+        # The RUN: commands before the first composite (continuation lines
+        # joined as lit joins them): what a test runs to prepare its inputs.
+        self.prep = []
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
                 lines = f.read().splitlines()
@@ -250,11 +280,20 @@ class TestInfo:
             return
         single = prog = fail = det = False
         pending = None  # a REDEFINE: body continued with a trailing '\'
+        runs, composite_seen = [], False
         for line in lines:
             single = single or bool(ORACLE_RUN_RE.search(line))
             prog = prog or bool(PROG_RUN_RE.search(line))
             fail = fail or bool(FAIL_RUN_RE.search(line))
             det = det or bool(DET_RUN_RE.search(line))
+            r = RUN_RE.search(line)
+            if r:
+                text = r.group(1).rstrip()
+                if runs and runs[-1].endswith("\\"):
+                    runs[-1] = runs[-1][:-1] + text
+                else:
+                    runs.append(text)
+                continue
             m = DIRECTIVE_RE.search(line)
             if not m:
                 continue
@@ -275,6 +314,10 @@ class TestInfo:
                 continue
             exprs = [e.strip() for e in text.split(",") if e.strip()]
             (self.requires if keyword == "REQUIRES" else self.unsupported).extend(exprs)
+        for cmd in runs:
+            composite_seen = composite_seen or bool(COMPOSITE_RE.search(cmd))
+            if not composite_seen:
+                self.prep.append(cmd.strip())
         if prog:
             self.kind = "prog"
         elif single and path.endswith((".c", ".ll")):
@@ -293,6 +336,18 @@ class TestInfo:
             if evaluate(expr, features, unknown=False):
                 return "UNSUPPORTED: %s" % expr
         return None
+
+
+def load_lit():
+    """lit's ShUtil and TestRunner modules from llvm/utils/lit (the internal
+    shell and the %if substitution of the RUN: lines); raises ImportError."""
+    sys.path.insert(0, os.path.join(REPO, "llvm", "utils", "lit"))
+    try:
+        import lit.ShUtil
+        import lit.TestRunner
+    finally:
+        sys.path.pop(0)
+    return lit.ShUtil, lit.TestRunner
 
 
 def evaluate(expr, features, unknown):
@@ -388,6 +443,9 @@ class Oracle:
         self.features = features
         self.start_o = None
         self.env = dict(os.environ)
+        # The linkers of a preparation (prepare).
+        self.prep_ld_lld = ld_lld or find_ld_lld(args.clang_cmd[0])
+        self.prep_lld_link = find_ld_lld(args.clang_cmd[0], "lld-link")
 
     def step(self, cmd, what, log):
         """Run one compile or link step under the limits; False (after
@@ -475,8 +533,12 @@ class Oracle:
 
         def value(name, default, words):
             """The REDEFINE: value of name; for a list of words, a path with
-            a blank (a temporary directory) is quoted for split_words."""
+            a blank (a temporary directory) is quoted for split_words. A
+            value with lit's %if (and %else) is decided as prepare decides
+            it."""
             text = info.redefines.get(name, default)
+            if "%if " in text:
+                text = self.decide_if(text)
             for key, sub in (
                 ("%{s:stem}", stem),
                 ("%s", os.path.abspath(src)),
@@ -487,12 +549,24 @@ class Oracle:
                 text = text.replace(key, msil_prog.quote_word(sub) if words else sub)
             return text
 
+        prep = [c for c in info.prep if not SPLIT_ONLY_RE.match(c)]
+        if prep and not self.prepare(prep, src, stem, t, work, log):
+            return None, None
         try:
             srcs = msil_prog.split_words(value("%{msil_srcs}", "%s", True))
             stock = msil_prog.split_words(value("%{msil_stock_srcs}", "", True))
-        except msil_prog.UsageError as e:
+            deps = msil_prog.split_words(value("%{msil_deps}", "", True))
+            archives = value("%{msil_archives}", "", False)
+            native_libs = value("%{msil_native_libs}", "", True)
+        except (msil_prog.UsageError, ValueError) as e:
             log.err("update-expected: %s: %s\n" % (src, e))
             return None, None
+        # lit's internal shell expands a wildcard in a run's --dep list.
+        deps = [
+            m
+            for d in deps
+            for m in (sorted(glob.glob(d)) if glob.has_magic(d) else [d]) or [d]
+        ]
         exe = os.path.join(work, "prog." + ("elf" if self.e7 else "exe"))
         # -I<dir> as one word, as %{msil_cflags} writes it.
         cflags = args.cflags.split() + ["-I" + os.path.join(TEST_ROOT, "Inputs")]
@@ -510,7 +584,8 @@ class Oracle:
         cmd += ["--mem-limit-mb", str(args.mem_limit_mb)]
         cmd += ["--workdir", os.path.join(work, "prog"), "--out", exe]
         cmd += ["--src", *srcs, "--stock-src", *stock]
-        cmd.append("--archives=" + value("%{msil_archives}", "", False))
+        cmd.append("--archives=" + archives)
+        cmd.append("--native-lib=" + native_libs)
         try:
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         except OSError as e:
@@ -525,7 +600,137 @@ class Oracle:
                 "status %s)\n" % res.returncode
             )
             return None, None
-        return exe, self.run_mode()
+        # %{msil_deps}: copied next to the native program, as the composite's
+        # native-oracle leg does (msil-run.py --dep).
+        return exe, self.run_mode() + (["--dep", *deps] if deps else [])
+
+    def decide_if(self, text):
+        """text with lit's %if/%else decided by the features the oracle knows
+        (unknown ones are false), as prepare decides them; raises ValueError
+        when lit cannot parse it or is missing."""
+        try:
+            _, lit_runner = load_lit()
+        except ImportError as e:
+            raise ValueError("cannot load lit to decide %%if: %s" % e)
+        conditions = {f: True for f in self.features}
+        return lit_runner.applySubstitutions([text], [], conditions)[0]
+
+    def prepare(self, commands, src, stem, t, work, log):
+        """Run the RUN: commands that come before the composite of the
+        %{msil_prog} test src (after the usual 'rm -rf %t && split-file %s
+        %t', which build_prog does): the commands that build its test-built
+        native libraries. They run in lit's internal shell, with %if decided
+        by the features the oracle knows (unknown ones are false), and with
+        the substitutions of msil/test/lit.cfg.py for the oracle's triple:
+        %clang_native, %clang, %ld_lld, %lld_link, %msil_ar, %msil_triple,
+        %python, %{msil_cflags}, %{msil_native_ldflags}, %s, %S, %p, %t and
+        %{s:stem}; any other substitution fails the test. False (after
+        logging why) when a command fails."""
+        args = self.args
+        try:
+            lit_shutil, lit_runner = load_lit()
+        except ImportError as e:
+            log.err("update-expected: cannot load lit's shell: %s\n" % e)
+            return False
+        test_dir = os.path.dirname(os.path.abspath(src))
+
+        def q(path):
+            return '"%s"' % path.replace("\\", "/")
+
+        clang = msil_prog.join_words([w.replace("\\", "/") for w in args.clang_cmd])
+        # --ar may be a command line too (a stand-in of the self-tests).
+        try:
+            ar_cmd = msil_prog.program(args.ar, "--ar") if args.ar else None
+        except msil_prog.UsageError as e:
+            log.err("update-expected: %s\n" % e)
+            return False
+        ar = (
+            msil_prog.join_words([w.replace("\\", "/") for w in ar_cmd])
+            if ar_cmd
+            else "llvm-ar-not-found"
+        )
+        target = E7_TARGET if self.e7 else args.target
+        # The values are written as lit.cfg.py writes them: %t, %s, %S and %p
+        # unquoted (with '/'), the -I directory of %{msil_cflags} and the
+        # tools quoted.
+        cflags = " ".join(
+            args.cflags.split() + ["-I" + q(os.path.join(TEST_ROOT, "Inputs"))]
+        )
+
+        def p(path):
+            return path.replace("\\", "/")
+
+        subs = [
+            ("%{msil_cflags}", cflags),
+            (
+                "%{msil_native_ldflags}",
+                " ".join(q(w) for w in self.native_ldflags),
+            ),
+            ("%{s:stem}", stem),
+            (r"%clang_native(?!\w)", "%s --target=%s" % (clang, target)),
+            (r"%clang(?!\w)", clang),
+            (r"%ld_lld(?!\w)", q(self.prep_ld_lld or "ld.lld-not-found")),
+            (r"%lld_link(?!\w)", q(self.prep_lld_link or "lld-link-not-found")),
+            (r"%msil_ar(?!\w)", ar),
+            (r"%msil_triple(?!\w)", target + "-msil"),
+            (r"%python(?!\w)", q(sys.executable)),
+            ("%s", p(os.path.abspath(src))),
+            ("%S", p(test_dir)),
+            ("%p", p(test_dir)),
+            ("%t", p(t)),
+        ]
+        conditions = {f: True for f in self.features}
+        env = dict(self.env)
+        # split-file and the other tools of the build, as lit finds them.
+        path_dirs = [os.path.dirname(os.path.abspath(args.clang_cmd[0]))]
+        if args.split_file_cmd:
+            path_dirs.insert(
+                0, os.path.dirname(os.path.abspath(args.split_file_cmd[0]))
+            )
+        msil_run.set_env_var(
+            env, "PATH", os.pathsep.join(path_dirs + [env.get("PATH", "")])
+        )
+        for command in commands:
+            try:
+                line = lit_runner.applySubstitutions(
+                    [command], list(subs), conditions, recursion_limit=10
+                )[0]
+            except ValueError as e:
+                log.err("update-expected: %s: RUN: %s: %s\n" % (src, command, e))
+                return False
+            unknown = UNKNOWN_SUBST_RE.findall(line)
+            if unknown:
+                log.err(
+                    "update-expected: %s: cannot run 'RUN: %s': no oracle value "
+                    "for %s\n" % (src, command, ", ".join(sorted(set(unknown))))
+                )
+                return False
+            if not line:
+                continue
+            log.out("update-expected: prepare: %s\n" % line)
+            try:
+                parsed = lit_shutil.ShParser(line, os.name == "nt", True).parse()
+            except Exception as e:  # lit's parser raises plain ValueErrors
+                log.err("update-expected: %s: cannot parse '%s': %s\n" % (src, line, e))
+                return False
+            results = []
+            with PREPARE_LOCK:
+                shenv = lit_runner.ShellEnvironment(work, env)
+                try:
+                    rc, _ = lit_runner.executeShCmd(parsed, shenv, results)
+                except Exception as e:  # InternalShellError and friends
+                    log.err("update-expected: %s: '%s' failed: %s\n" % (src, line, e))
+                    return False
+            for r in results:
+                log.out(r.stdout)
+                log.err(r.stderr)
+            if rc != 0:
+                log.err(
+                    "update-expected: %s: preparing failed (exit status %s): %s\n"
+                    % (src, rc, line)
+                )
+                return False
+        return True
 
     def process(self, src, explicit, work):
         """Build and run one test in the directory work, then compare or

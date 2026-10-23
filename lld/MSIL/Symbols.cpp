@@ -41,6 +41,10 @@ std::string toString(msil::Symbol::Kind kind) {
     return "Undefined";
   case msil::Symbol::LazyKind:
     return "LazySymbol";
+  case msil::Symbol::NativeFunctionKind:
+    return "NativeFunction";
+  case msil::Symbol::NativeDataKind:
+    return "NativeData";
   }
   llvm_unreachable("invalid symbol kind");
 }
@@ -57,6 +61,7 @@ void Symbol::extract() const {
 }
 
 // Print out a log message for --trace-symbol (lld/ELF/Symbols.cpp:297-311).
+// A native definition is lld/ELF's shared definition.
 void printTraceSymbol(const Symbol &sym, StringRef name) {
   std::string s;
   if (sym.isUndefined())
@@ -65,6 +70,8 @@ void printTraceSymbol(const Symbol &sym, StringRef name) {
     s = ": lazy definition of ";
   else if (sym.isCommon())
     s = ": common definition of ";
+  else if (sym.isNative())
+    s = ": shared definition of ";
   else
     s = ": definition of ";
 
@@ -106,9 +113,12 @@ void Symbol::resolve(const Symbol &other) {
   case LazyKind:
     return resolve(cast<LazySymbol>(other));
   case PlaceholderKind:
+  case NativeFunctionKind:
+  case NativeDataKind:
     break;
   }
-  llvm_unreachable("a placeholder is never resolved against");
+  llvm_unreachable("placeholders and native symbols (which bind late) are "
+                   "never resolved against");
 }
 
 // Derived from lld/ELF/Symbols.cpp at 64f50ffd4f1c.

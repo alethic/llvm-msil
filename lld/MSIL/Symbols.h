@@ -14,9 +14,11 @@
 // STB_WEAK; local symbols never enter the symbol table), an ELF visibility
 // (STV_*), a type (function or data), a TLS bit and the flags below.
 //
-// M14 has the kinds of bitcode linking. M20 adds the payloads of CIL objects
-// (an InputMethod for a DefinedFunction, an InputSegment and offset for a
-// DefinedData) and SyntheticData; M15 and M22 add the late-bound kinds.
+// M14 has the kinds of bitcode linking and M15 the late-bound native kinds
+// (NativeFunction, NativeData; plan 5.9.6 step 2, 5.10). M20 adds the
+// payloads of CIL objects (an InputMethod for a DefinedFunction, an
+// InputSegment and offset for a DefinedData) and SyntheticData, and M22 the
+// managed late-bound kinds.
 //
 //===----------------------------------------------------------------------===//
 
@@ -32,6 +34,7 @@
 namespace lld {
 namespace msil {
 class InputFile;
+struct NativeExport;
 class Undefined;
 class CommonSymbol;
 class Defined;
@@ -54,6 +57,11 @@ public:
     CommonKind,
     UndefinedKind,
     LazyKind,
+    // Late-bound definitions in native libraries (plan 5.9.6 step 2), which
+    // SymbolTable::bindLateSymbols() creates after every input is loaded and
+    // which never enter the table through resolution.
+    NativeFunctionKind,
+    NativeDataKind,
   };
 
   Kind kind() const { return static_cast<Kind>(symbolKind); }
@@ -135,6 +143,9 @@ public:
   bool isUndefined() const { return symbolKind == UndefinedKind; }
   bool isCommon() const { return symbolKind == CommonKind; }
   bool isLazy() const { return symbolKind == LazyKind; }
+  bool isNative() const {
+    return symbolKind == NativeFunctionKind || symbolKind == NativeDataKind;
+  }
 
   bool isGlobal() const { return binding == llvm::ELF::STB_GLOBAL; }
   bool isWeak() const { return binding == llvm::ELF::STB_WEAK; }
@@ -313,6 +324,58 @@ public:
   InputFile *weakRefFile = nullptr;
 };
 
+// A definition in a native library that late binding chose for a symbol
+// that no input defines (plan 5.9.6 step 2, 5.10.10): the first bindable
+// definition in link order. It keeps the symbol's binding and visibility; its
+// file is the native library. Native definitions bind late, so they never
+// preempt a definition or extract an archive member.
+class NativeSymbol : public Symbol {
+public:
+  static bool classof(const Symbol *s) { return s->isNative(); }
+
+  void overwrite(Symbol &sym) const {
+    Symbol::overwrite(sym, kind());
+    static_cast<NativeSymbol &>(sym).nativeExport = nativeExport;
+  }
+
+  // The definition: its module, entry, kind and version.
+  const NativeExport *nativeExport;
+
+protected:
+  NativeSymbol(Kind k, InputFile *file, StringRef name, uint8_t binding,
+               uint8_t visibility, uint8_t type,
+               const NativeExport *nativeExport)
+      : Symbol(k, file, name, binding, visibility, type, /*tls=*/false),
+        nativeExport(nativeExport) {}
+};
+
+// A native function: an ELF function or IFUNC, a COFF code import or a DLL's
+// code export.
+class NativeFunction : public NativeSymbol {
+public:
+  NativeFunction(InputFile *file, StringRef name, uint8_t binding,
+                 uint8_t visibility, const NativeExport *nativeExport)
+      : NativeSymbol(NativeFunctionKind, file, name, binding, visibility,
+                     llvm::ELF::STT_FUNC, nativeExport) {}
+
+  static bool classof(const Symbol *s) {
+    return s->kind() == NativeFunctionKind;
+  }
+};
+
+// Native data: an ELF object, a COFF data or const import or a DLL's data
+// export. Importing it needs M20's data-import helper (plan 5.10.12); until
+// then the import-annotation pass reports every live reference.
+class NativeData : public NativeSymbol {
+public:
+  NativeData(InputFile *file, StringRef name, uint8_t binding,
+             uint8_t visibility, const NativeExport *nativeExport)
+      : NativeSymbol(NativeDataKind, file, name, binding, visibility,
+                     llvm::ELF::STT_OBJECT, nativeExport) {}
+
+  static bool classof(const Symbol *s) { return s->kind() == NativeDataKind; }
+};
+
 // A buffer class that is large enough to hold any Symbol-derived
 // object. SymbolTable::insert() allocates every table entry as one, so that
 // overwrite() can turn the entry into a symbol of any kind.
@@ -322,6 +385,8 @@ union SymbolUnion {
   alignas(CommonSymbol) char c[sizeof(CommonSymbol)];
   alignas(Undefined) char d[sizeof(Undefined)];
   alignas(LazySymbol) char e[sizeof(LazySymbol)];
+  alignas(NativeFunction) char f[sizeof(NativeFunction)];
+  alignas(NativeData) char g[sizeof(NativeData)];
 };
 
 // It is important to keep the size of SymbolUnion small for performance and

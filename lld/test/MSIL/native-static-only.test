@@ -1,0 +1,177 @@
+## Symbols that only native machine code defines (ImplementationPlan.md
+## 5.10.8 'any other ELF or COFF object', 5.10.10 and 5.10.14; recon p2
+## native-imports 2.2, 2.3 and 7.2). An archive member that is a native ELF
+## or COFF object is never linked: its definitions are recorded only for the
+## diagnostic
+##   symbol '<name>' is defined only in native object code
+##   (<archive>(<member>)); MSIL cannot link machine code
+## with '>>> referenced by' lines, after LTO. This is glibc's
+## libc_nonshared.a (atexit, at_quick_exit, pthread_atfork), the native part
+## of MSVC's msvcrt.lib beside its import members (atexit), and a native
+## member of an archive that also holds bitcode, whose bitcode members link
+## as usual. A native-only definition is no definition: a later library that
+## binds the symbol wins (5.10.10 'rejected definitions are kept for the
+## diagnostic').
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj --docnum=5 %S/Inputs/native/glibc.yaml -o atexit.oS
+# RUN: llvm-ar rcs libc_nonshared.a atexit.oS
+# RUN: yaml2obj nat.yaml -o nat.o
+# RUN: llvm-as helper.ll -o helper.o
+# RUN: llvm-ar rcs libmix.a helper.o nat.o
+# RUN: yaml2obj natso.yaml -o natso.o
+# RUN: ld.lld -shared -soname libnat.so.1 natso.o -o libnat.so.1
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/msvcrt.def /out:msvcrt-imp.lib
+# RUN: yaml2obj -D FN1=atexit -D FN2=_onexit -D DATA=_fmode %S/Inputs/native/coff-code.yaml -o crt.obj
+# RUN: llvm-lib /out:msvcrt.lib msvcrt-imp.lib crt.obj
+# RUN: llvm-as atexit.ll -o atexit.o
+# RUN: llvm-as quick.ll -o quick.o
+# RUN: llvm-as mix.ll -o mix.o
+# RUN: llvm-as mixnat.ll -o mixnat.o
+# RUN: llvm-as win.ll -o win.o
+# RUN: llvm-as win-atexit.ll -o win-atexit.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="undefined symbol"
+
+# RUN: not msil-ld --lto-emit-asm atexit.o libc_nonshared.a -o x.il 2>&1 | %{err} --check-prefix=ATEXIT
+# RUN: not msil-ld --lto-emit-asm quick.o libc_nonshared.a -o x.il 2>&1 | %{err} --check-prefix=QUICK
+# ATEXIT:      {{^}}msil-ld: error: symbol 'atexit' is defined only in native object code (libc_nonshared.a(atexit.oS)); MSIL cannot link machine code{{$}}
+# ATEXIT-NEXT: {{^}}>>> referenced by atexit.o:(main){{$}}
+# QUICK:       {{^}}msil-ld: error: symbol 'at_quick_exit' is defined only in native object code (libc_nonshared.a(atexit.oS)); MSIL cannot link machine code{{$}}
+# QUICK-NEXT:  {{^}}>>> referenced by quick.o:(main){{$}}
+
+## An archive with a bitcode member is a static library: the bitcode member
+## links, the native member's nat_fn is native code only. (Whether a native
+## member still draws M14's warning 'not LLVM bitcode; ignored' is not
+## pinned: it is no longer ignored.)
+# DEFINE: %{noerr} = FileCheck %s --check-prefix=NOERR --allow-empty --implicit-check-not="PLEASE submit"
+# NOERR-NOT: error:
+# RUN: msil-ld --lto-emit-asm --lto-O0 mix.o libmix.a -o mix.il 2>&1 | %{noerr}
+# RUN: FileCheck %s --check-prefix=MIX --implicit-check-not=pinvokeimpl --input-file=mix.il
+# MIX: {{^}}.method {{.*}}static int32 'helper'() cil managed
+# RUN: not msil-ld --lto-emit-asm mixnat.o libmix.a -o x.il 2>&1 | %{err} --check-prefix=MIXNAT
+# MIXNAT:      {{^}}msil-ld: error: symbol 'nat_fn' is defined only in native object code (libmix.a(nat.o)); MSIL cannot link machine code{{$}}
+# MIXNAT-NEXT: {{^}}>>> referenced by mixnat.o:(main){{$}}
+
+## A later shared object that defines nat_fn binds it.
+# RUN: msil-ld --lto-emit-asm --lto-O0 mixnat.o libmix.a libnat.so.1 -o later.il 2>&1 | %{noerr}
+# RUN: FileCheck %s --check-prefix=LATER --input-file=later.il
+# LATER: {{^}}.method assembly hidebysig static pinvokeimpl("libnat.so.1" cdecl) int32 'nat_fn'() cil managed preservesig {}{{$}}
+
+## msvcrt.lib: puts and printf are import members, atexit is native code.
+# RUN: msil-ld --lto-emit-asm --lto-O0 win.o msvcrt.lib -o win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WIN --input-file=win.il
+# WIN: {{^}}.method assembly hidebysig static pinvokeimpl("msvcrt.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# RUN: not msil-ld --lto-emit-asm win-atexit.o msvcrt.lib -o x.il 2>&1 | %{err} --check-prefix=WIN-ATEXIT
+# WIN-ATEXIT:      {{^}}msil-ld: error: symbol 'atexit' is defined only in native object code (msvcrt.lib(crt.obj)); MSIL cannot link machine code{{$}}
+# WIN-ATEXIT-NEXT: {{^}}>>> referenced by win-atexit.o:(main){{$}}
+
+#--- nat.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: nat_fn, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- natso.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: nat_fn, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- helper.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @helper() {
+  ret i32 5
+}
+
+#--- atexit.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @atexit(ptr null)
+  ret i32 %r
+}
+
+declare i32 @atexit(ptr)
+
+#--- quick.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @at_quick_exit(ptr null)
+  ret i32 %r
+}
+
+declare i32 @at_quick_exit(ptr)
+
+#--- mix.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @helper()
+  ret i32 %r
+}
+
+declare i32 @helper()
+
+#--- mixnat.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %a = call i32 @helper()
+  %b = call i32 @nat_fn()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+declare i32 @helper()
+declare i32 @nat_fn()
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  ret i32 %r
+}
+
+declare i32 @puts(ptr)
+
+#--- win-atexit.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @atexit(ptr null)
+  ret i32 %r
+}
+
+declare i32 @atexit(ptr)

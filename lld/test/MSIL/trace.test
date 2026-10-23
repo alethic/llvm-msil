@@ -7,7 +7,11 @@
 ## - -y <sym> and --trace-symbol=<sym> print '<file>: reference to <sym>',
 ##   '<file>: lazy definition of <sym>', '<file>: common definition of <sym>'
 ##   and '<file>: definition of <sym>' as the symbol meets each file, and
-##   nothing for other symbols.
+##   nothing for other symbols;
+## - from M15 a native library that binds a traced symbol prints
+##   '<file>: shared definition of <sym>' (lld/ELF's text for a shared
+##   object), after the reference, because native definitions bind late
+##   (5.9.6, M15.a item 4).
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: llvm-as main.ll -o main.o
@@ -39,12 +43,32 @@
 # LAZY-FIRST-NEXT: {{^}}libhelp.a(h1.o): definition of helper{{$}}
 
 ## A common, and two symbols at once.
-# RUN: msil-ld --lto-emit-asm com.o usecom.o -o y3.il -y cbuf -y main 2>&1 \
-# RUN:   | FileCheck %s --check-prefix=COMMON --implicit-check-not=helper
+# RUN: msil-ld --lto-emit-asm com.o usecom.o -o y3.il -y cbuf -y main > y3.txt 2>&1
+# RUN: FileCheck %s --check-prefix=COMMON --implicit-check-not=helper --input-file=y3.txt
+# RUN: FileCheck %s --check-prefix=COMMON-NONE --input-file=y3.txt
 
 # COMMON-DAG: {{^}}com.o: common definition of cbuf{{$}}
 # COMMON-DAG: {{^}}usecom.o: definition of main{{$}}
 # COMMON-DAG: {{^}}usecom.o: reference to cbuf{{$}}
+## Nothing for helper anywhere in the output: for a prefix made only of -DAG
+## lines, --implicit-check-not checks only the text before the first match.
+# COMMON-NONE-NOT: helper
+
+## Native definitions: a shared object and an import library.
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: llvm-as puts-lnx.ll -o puts-lnx.o
+# RUN: msil-ld --lto-emit-asm puts-lnx.o libc.so.6 -o y4.il -y puts 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=SHARED --implicit-check-not=strlen
+# SHARED:      {{^}}puts-lnx.o: reference to puts{{$}}
+# SHARED-NEXT: {{^}}libc.so.6: shared definition of puts{{$}}
+
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/kernel32.def /out:kernel32.lib
+# RUN: llvm-as tick.ll -o tick.o
+# RUN: msil-ld --lto-emit-asm tick.o kernel32.lib -o y5.il --trace-symbol=GetTickCount 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=SHARED-COFF
+# SHARED-COFF:      {{^}}tick.o: reference to GetTickCount{{$}}
+# SHARED-COFF-NEXT: {{^}}kernel32.lib{{.*}}: shared definition of GetTickCount{{$}}
 
 #--- main.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
@@ -90,3 +114,29 @@ define i32 @main() {
   %r = zext i8 %c to i32
   ret i32 %r
 }
+
+#--- puts-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  %n = call i64 @strlen(ptr @msg)
+  ret i32 %r
+}
+
+declare i32 @puts(ptr)
+declare i64 @strlen(ptr)
+
+#--- tick.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @GetTickCount()
+  ret i32 %r
+}
+
+declare i32 @GetTickCount()

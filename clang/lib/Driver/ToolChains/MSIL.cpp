@@ -123,8 +123,13 @@ static void addDefaultLibs(const ToolChain &TC, const ArgList &Args,
   }
   if (T.isWindowsMSVCEnvironment()) {
     // ucrt.lib names the api-ms-win-crt-*.dll sets; native programs get
-    // kernel32 and oldnames from the CRT's /DEFAULTLIB directives.
-    for (const char *Lib : {"-lucrt", "-lkernel32", "-loldnames"})
+    // kernel32 and oldnames from the CRT's /DEFAULTLIB directives. The
+    // memory and string functions that native programs take from vcruntime
+    // (memcpy, memset, strchr, ...) are not in ucrt.lib: --ucrtbase-imports,
+    // an import library built into msil-ld, binds them to ucrtbase.dll, which
+    // exports all of them. It comes last, so a user -lvcruntime wins.
+    for (const char *Lib :
+         {"-lucrt", "-lkernel32", "-loldnames", "--ucrtbase-imports"})
       CmdArgs.push_back(Lib);
     return;
   }

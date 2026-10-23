@@ -1,0 +1,28 @@
+# Win32 API functions bound from kernel32.lib, a default library on windows-msvc.
+# The driver's windows-msvc default libraries end with -lkernel32 (plan
+# 5.10.4), whose short import members name the DLL 'KERNEL32.dll'; msil-ld
+# binds MulDiv, lstrlenA, lstrcmpiA and GetCurrentProcessId there with that
+# module string verbatim (Q13, plan 5.10.11), and the programs run on .NET 8
+# and Framework 4.8 against the native oracle. The process id is only
+# compared with 0. Plan 5.10.15 (kernel32), recon tests-p2 3.5, M15.
+# REQUIRES: msil-triple-windows
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+
+int MulDiv(int number, int numerator, int denominator);
+int lstrlenA(const char *s);
+int lstrcmpiA(const char *a, const char *b);
+unsigned GetCurrentProcessId(void);
+
+int main(void) {
+  put_i64(MulDiv(1000000, 3000, 7));
+  put_i64(MulDiv(-50, 3, 4));
+  put_i64(MulDiv(1, 2, 0));
+  put_i64(lstrlenA("kernel32 import"));
+  put_i64(lstrcmpiA("NATIVE", "native"));
+  put_i64(GetCurrentProcessId() != 0);
+  return 32;
+}

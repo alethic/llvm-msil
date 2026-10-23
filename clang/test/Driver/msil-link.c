@@ -26,35 +26,41 @@
 // RUN:     --implicit-check-not=crtbegin --implicit-check-not=crtn.o --implicit-check-not=-dynamic-linker \
 // RUN:     --implicit-check-not='"-pie"' --implicit-check-not=-plugin --implicit-check-not=LLVMgold \
 // RUN:     --implicit-check-not=ld.lld --implicit-check-not='"ld"' --implicit-check-not=error: \
-// RUN:     --implicit-check-not=--lto-emit-asm --implicit-check-not=ilasm %s
+// RUN:     --implicit-check-not=--lto-emit-asm --implicit-check-not=ilasm \
+// RUN:     --implicit-check-not=--ucrtbase-imports %s
 // LNX: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-gnu-msil"
 // LNX-SAME: "--sysroot=[[SYSROOT:[^"]+]]"
 // LNX-SAME: "-L[[SYSROOT]]/usr/lib/x86_64-linux-gnu"
 // LNX-SAME: "{{[^"]*}}.o"
 // LNX-SAME: "-lc" "-lm" "-o" "a.exe"
 
-// musl keeps libm in libc.
+// musl keeps libm in libc. --ucrtbase-imports belongs to windows-msvc only
+// (msil-ld rejects it on non-Windows targets, 5.9.3).
 // RUN: %clang -### --target=x86_64-unknown-linux-musl-msil %s 2>&1 \
-// RUN:   | FileCheck --check-prefix=MUSL --implicit-check-not=-lm --implicit-check-not=error: %s
+// RUN:   | FileCheck --check-prefix=MUSL --implicit-check-not=-lm --implicit-check-not=error: \
+// RUN:     --implicit-check-not=--ucrtbase-imports %s
 // MUSL: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-musl-msil"
 // MUSL-SAME: "-lc" "-o" "a.exe"
 
 // RUN: %clang -### --target=aarch64-unknown-linux-gnu-msil %s 2>&1 \
-// RUN:   | FileCheck --check-prefix=A64 --implicit-check-not=error: %s
+// RUN:   | FileCheck --check-prefix=A64 --implicit-check-not=error: \
+// RUN:     --implicit-check-not=--ucrtbase-imports %s
 // A64: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=aarch64-unknown-linux-gnu-msil"
 // A64-SAME: "-lc" "-lm" "-o" "a.exe"
 
 // windows-msvc: msil-ld is a GNU-style flavor and does not read %LIB%, so the
 // driver passes the detected VC, UCRT and SDK library directories (here from
-// a /winsysroot tree) and the import libraries ucrt, kernel32 and oldnames;
-// --ucrtbase-imports follows in M15. The target triple has no MSVC version.
-// No 'LTO requires -fuse-ld=lld' (err_drv_lto_without_lld), no link.exe, no
-// /DEFAULTLIB, never msvcrt.lib, libcmt.lib or vcruntime.lib.
+// a /winsysroot tree), the import libraries ucrt, kernel32 and oldnames, and
+// last --ucrtbase-imports (5.10.4, M15): msil-ld's built-in import library
+// that binds memcpy, memset, memmove, memcmp, memchr, strchr, strrchr,
+// strstr, wcschr, wcsrchr and wcsstr, which ucrt.lib does not have, to
+// ucrtbase.dll. The target triple has no MSVC version. No 'LTO requires
+// -fuse-ld=lld' (err_drv_lto_without_lld), no link.exe, no /DEFAULTLIB, never
+// msvcrt.lib, libcmt.lib or vcruntime.lib.
 // RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -Xmicrosoft-windows-sys-root %t %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=WIN --implicit-check-not=link.exe --implicit-check-not=lld-link \
 // RUN:     --implicit-check-not=-defaultlib --implicit-check-not=-lmsvcrt --implicit-check-not=-llibcmt \
-// RUN:     --implicit-check-not=-lvcruntime --implicit-check-not=--ucrtbase-imports \
-// RUN:     --implicit-check-not=error: %s
+// RUN:     --implicit-check-not=-lvcruntime --implicit-check-not=error: %s
 // RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -flto -Xmicrosoft-windows-sys-root %t %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=WIN --implicit-check-not=link.exe --implicit-check-not=lld-link \
 // RUN:     --implicit-check-not=error: %s
@@ -62,7 +68,7 @@
 // WIN-SAME: "-L[[ROOT:[^"]*]]{{/|\\\\}}VC{{/|\\\\}}Tools{{/|\\\\}}MSVC{{/|\\\\}}27.1828.18284{{/|\\\\}}lib{{/|\\\\}}x64"
 // WIN-SAME: "-L[[ROOT]]{{/|\\\\}}Windows Kits{{/|\\\\}}10{{/|\\\\}}Lib{{/|\\\\}}10.0.19041.0{{/|\\\\}}ucrt{{/|\\\\}}x64"
 // WIN-SAME: "-L[[ROOT]]{{/|\\\\}}Windows Kits{{/|\\\\}}10{{/|\\\\}}Lib{{/|\\\\}}10.0.19041.0{{/|\\\\}}um{{/|\\\\}}x64"
-// WIN-SAME: "-lucrt" "-lkernel32" "-loldnames" "-o" "a.exe"
+// WIN-SAME: "-lucrt" "-lkernel32" "-loldnames" "--ucrtbase-imports" "-o" "a.exe"
 
 // With LIB set and no /winsysroot-style option, its entries are the library
 // directories.
@@ -71,7 +77,16 @@
 // RUN:   | FileCheck --check-prefix=WIN-LIB --implicit-check-not=error: %s
 // WIN-LIB: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-pc-windows-msvc-msil"
 // WIN-LIB-SAME: "-L{{[^"]*}}libenv"
-// WIN-LIB-SAME: "-lucrt" "-lkernel32" "-loldnames" "-o" "a.exe"
+// WIN-LIB-SAME: "-lucrt" "-lkernel32" "-loldnames" "--ucrtbase-imports" "-o" "a.exe"
+
+// A library the user names comes before the default libraries, so a user
+// vcruntime import library binds memcpy and the like before
+// --ucrtbase-imports does (5.10.4), and --ucrtbase-imports appears once.
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -Xmicrosoft-windows-sys-root %t %s \
+// RUN:   -lvcruntime 2>&1 | FileCheck --check-prefix=WIN-USER --implicit-check-not=error: %s
+// WIN-USER: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-pc-windows-msvc-msil"
+// WIN-USER-SAME: "-lvcruntime" "-lucrt" "-lkernel32" "-loldnames" "--ucrtbase-imports" "-o" "a.exe"
+// WIN-USER-NOT: --ucrtbase-imports
 
 // clang-cl: /Fe names the output, inputs compile to bitcode '.obj' files.
 // RUN: %clang_cl -### --target=x86_64-pc-windows-msvc-msil /winsysroot %t /Fe:prog.exe -- %s 2>&1 \
@@ -80,14 +95,15 @@
 // CL-SAME: "-emit-llvm-bc"
 // CL: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-pc-windows-msvc-msil"
 // CL-SAME: "{{[^"]*}}.obj"
-// CL-SAME: "-lucrt" "-lkernel32" "-loldnames" "-o" "prog.exe"
+// CL-SAME: "-lucrt" "-lkernel32" "-loldnames" "--ucrtbase-imports" "-o" "prog.exe"
 
 // MinGW: msvcrt and the system libraries native MinGW programs get; a C
 // runtime the user names (-lucrt, -lmsvcr*, -lcrtdll) replaces msvcrt in
 // place (MinGW.cpp's rule).
 // RUN: %clang -### --target=x86_64-w64-windows-gnu-msil %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=MINGW --implicit-check-not=crt2.o --implicit-check-not=-lmingw32 \
-// RUN:     --implicit-check-not=-lgcc --implicit-check-not=-lmingwex --implicit-check-not=error: %s
+// RUN:     --implicit-check-not=-lgcc --implicit-check-not=-lmingwex --implicit-check-not=error: \
+// RUN:     --implicit-check-not=--ucrtbase-imports %s
 // MINGW: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-w64-windows-gnu-msil"
 // MINGW-SAME: "-lmsvcrt" "-ladvapi32" "-lshell32" "-luser32" "-lkernel32" "-o" "a.exe"
 // RUN: %clang -### --target=x86_64-w64-windows-gnu-msil %s -lucrt 2>&1 \
@@ -105,7 +121,10 @@
 // RUN:   | FileCheck --check-prefix=NOSTD --implicit-check-not=-lc --implicit-check-not=-lm %s
 // RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -nodefaultlibs %s -o p.exe 2>&1 \
 // RUN:   | FileCheck --check-prefix=NOSTD --implicit-check-not=-lucrt --implicit-check-not=-lkernel32 \
-// RUN:     --implicit-check-not=-loldnames %s
+// RUN:     --implicit-check-not=-loldnames --implicit-check-not=--ucrtbase-imports %s
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -nostdlib %s -o p.exe 2>&1 \
+// RUN:   | FileCheck --check-prefix=NOSTD --implicit-check-not=-lucrt --implicit-check-not=-lkernel32 \
+// RUN:     --implicit-check-not=-loldnames --implicit-check-not=--ucrtbase-imports %s
 // RUN: %clang -### --target=x86_64-w64-windows-gnu-msil -nostdlib %s -o p.exe 2>&1 \
 // RUN:   | FileCheck --check-prefix=NOSTD --implicit-check-not=-lmsvcrt --implicit-check-not=-lkernel32 %s
 // NOSTD: "{{[^"]*}}msil-ld{{(\.exe)?}}"

@@ -28,6 +28,11 @@
 #   det          msil/test/M2/06-det: objects, archives and --lto-emit-asm text built twice and
 #                compared (%{msil_det})
 #   roundtrip    msil/test/M1/11-programs through ildasm -> ilasm, then run (Design.md 5.5)
+#   hosted       optional, runs only when named with --leg hosted (plan Q16, 5.12.11):
+#                msil/test/M2/09-hosted, the hosted compile-only tests, with msil_glibc_sysroot
+#                given ($MSIL_GLIBC_SYSROOT, else /, the runner's own glibc headers and
+#                libraries), so a sysroot without usr/include/stdio.h is a configuration error;
+#                lit-legs.ps1's hosted leg is the development host's
 #   expected     update-expected.py --check msil/test/M1 msil/test/M2: the Linux job's native
 #                Linux oracle (a native build of each test with the tree's clang and the system
 #                linker, of M2's %{msil_prog} tests by msil-prog.py --mode native with lld, run
@@ -93,9 +98,10 @@ m2=()
 programs=("$MSIL_REPO/msil/test/M1/11-programs")
 tc0=msil_dotnet_env=DOTNET_TieredCompilation=0
 
-# name:kind (kind: lit, expected, utc, upstream; a 'full' suffix marks --full legs)
+# name:kind (kind: lit, expected, utc, upstream; a 'full' suffix marks --full legs, an
+# 'optional' suffix legs that run only when --leg names them)
 legs=(net8:lit net10:lit net8-tc0:lit net10-tc0:lit more-levels:lit lto:lit det:lit roundtrip:lit
-  expected:expected utc:utc all-levels:lit:full upstream:upstream:full)
+  hosted:lit:optional expected:expected utc:utc all-levels:lit:full upstream:upstream:full)
 
 # The tests of the utc leg; lit-legs.ps1 has the same list (keep the two the same).
 # wasm-function-name is left out: it needs WebAssembly, which msil/cmake/caches/MSIL.cmake does
@@ -109,6 +115,7 @@ leg_paths() {
     lto) printf '%s\n' "${m1[@]}" "${m2[@]}" ;;
     det) echo "$MSIL_REPO/msil/test/M2/06-det" ;;
     roundtrip) printf '%s\n' "${programs[@]}" ;;
+    hosted) echo "$MSIL_REPO/msil/test/M2/09-hosted" ;;
     all-levels) echo "$MSIL_REPO/msil/test" ;;
   esac
 }
@@ -123,6 +130,7 @@ leg_params() {
     lto) printf '%s\n' msil_pipeline=lto msil_dotnet_runtime=8 msil_native_oracle=required ;;
     det) echo msil_dotnet_runtime=8 ;;
     roundtrip) echo msil_roundtrip=1 ;;
+    hosted) echo "msil_glibc_sysroot=${MSIL_GLIBC_SYSROOT:-/}" ;;
     all-levels) echo msil_opt_levels=O0,O1,O2,O3,Os,Oz ;;
   esac
 }
@@ -211,6 +219,8 @@ for l in "${legs[@]}"; do
   if ((${#selected[@]})); then
     [[ " ${selected[*]} " == *" $name "* ]] || continue
   elif [[ $l == *:full ]] && ((!full)); then
+    continue
+  elif [[ $l == *:optional ]]; then
     continue
   fi
   start=$SECONDS

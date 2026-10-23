@@ -1,0 +1,45 @@
+# The dependencies of a program on the Linux triple (plan 5.12.4, M15;
+# recon p2/tests-p2 2.5, E5): dep-local.test's program with a managed
+# dependency (mylib.dll) and a native one built here for Linux
+# (libnative.so: %clang_native -fPIC and %ld_lld -shared -soname
+# libnative.so), given with --dep FILE... (ended by '--') or --dep-dir DIR.
+# On Windows this runs with the WSL runner (--param msil_runner=wsl), which
+# copies the files into its Linux temporary directory next to the program; a
+# Linux host runs it directly:
+# (1) msil-verify.py --dep (ILVerify references mylib.dll; libnative.so,
+#     which is no PE file, is only copied);
+# (2) msil-jitall.py --dep, where the programs run; without mylib.dll the
+#     method that calls it fails;
+# (3) msil-run.py --dep and --dep-dir: the program returns 42; without
+#     mylib.dll it stops with a FileNotFoundException, without libnative.so
+#     with a DllNotFoundException;
+# (4) a missing --dep file is a configuration error (status 2).
+# REQUIRES: msil-triple-linux, msil-wsl || system-linux, clang, x86-registered-target, msil-ld-lld
+
+# RUN: rm -rf %t && mkdir -p %t/deps
+# RUN: %ilasm -dll -output=%t/deps/mylib.dll %S/Inputs/dep/mylib.il
+# RUN: %ilasm -dll -output=%t/prog.dll %S/Inputs/dep/prog.il
+# RUN: %clang_native -fPIC -O2 -c %S/Inputs/dep/native.c -o %t/native.o
+# RUN: %ld_lld -shared -soname libnative.so %t/native.o -o %t/deps/libnative.so
+
+# (1)
+# RUN: %msil_verify --dep %t/deps/mylib.dll %t/deps/libnative.so -- %t/prog.dll
+
+# (2)
+# RUN: %if msil-jitall %{ %msil_jitall --dep %t/deps/mylib.dll %t/deps/libnative.so -- %t/prog.dll > %t/jitall.log %}
+# RUN: %if msil-jitall %{ %{harness_check} contains %t/jitall.log "^jitall: 2 ok, 0 failed$" %}
+# RUN: %if msil-jitall %{ not %msil_jitall %t/prog.dll > %t/jitall-nodep.log 2>&1 %}
+# RUN: %if msil-jitall %{ %{harness_check} contains %t/jitall-nodep.log "^JIT FAIL <Module>::main: FileNotFoundException: Could not load file or assembly 'mylib" %}
+
+# (3)
+# RUN: %msil_exec --expect %S/Inputs/dep/prog --out %t/dep.out --dep %t/deps/mylib.dll %t/deps/libnative.so -- %t/prog.dll
+# RUN: %msil_exec --expect %S/Inputs/dep/prog --out %t/dir.out --dep-dir %t/deps %t/prog.dll
+# RUN: %{harness_check} equals %t/dir.out "[exit 42]"
+# RUN: not %msil_exec --expect %S/Inputs/dep/prog --out %t/none.out %t/prog.dll
+# RUN: %{harness_check} equals %t/none.out "[unhandled exception: System.IO.FileNotFoundException]"
+# RUN: not %msil_exec --expect %S/Inputs/dep/prog --out %t/managed.out --dep %t/deps/mylib.dll -- %t/prog.dll
+# RUN: %{harness_check} equals %t/managed.out "[unhandled exception: System.DllNotFoundException]"
+
+# (4)
+# RUN: %{harness_check} exits 2 %msil_exec --dep %t/deps/missing.so -- %t/prog.dll > %t/missing.log 2>&1
+# RUN: %{harness_check} contains %t/missing.log "^msil-run: error: --dep \S*missing\.so: no such file$"

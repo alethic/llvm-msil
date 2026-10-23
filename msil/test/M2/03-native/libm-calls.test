@@ -1,0 +1,39 @@
+# C math functions bound from the host math library, glibc's at their default symbol versions.
+# On linux-gnu msil-ld reads libm.so.6 (through the sysroot's libm.so script)
+# and binds each name to its default ('@@') definition, the one dlsym and so
+# a P/Invoke reach: exp, log and pow at GLIBC_2.29, expf, logf and powf at
+# GLIBC_2.27 (all three IFUNCs there), each next to a hidden
+# GLIBC_2.2.5 compatibility version that a P/Invoke cannot bind
+# (native-imports 4); cbrt, hypot and fmod come from the same library. On
+# windows-msvc they come from api-ms-win-crt-math-l1-1-0.dll through
+# ucrt.lib. The results are printed as integers (no floating-point printing,
+# plan 5.5), far from any rounding boundary. Plan 5.10.15 (versioned libm),
+# native-imports 9.3, M15.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+
+double exp(double x);
+double log(double x);
+double pow(double x, double y);
+float expf(float x);
+float logf(float x);
+float powf(float x, float y);
+double cbrt(double x);
+double hypot(double x, double y);
+double fmod(double x, double y);
+
+int main(void) {
+  put_i64((long long)(exp(1.0) * 1000000.0));
+  put_i64((long long)(log(1000.0) * 1000.0));
+  put_i64((long long)pow(2.0, 40.0));
+  put_i64((long long)(expf(2.0f) * 1000.0f));
+  put_i64((long long)(logf(10.0f) * 1000.0f));
+  put_i64((long long)powf(3.0f, 5.5f));
+  put_i64((long long)(cbrt(-1001.0) * 10.0));
+  put_i64((long long)(hypot(3.0, 4.5) * 10.0));
+  put_i64((long long)(fmod(100.5, 7.0) * 10.0));
+  return 0;
+}

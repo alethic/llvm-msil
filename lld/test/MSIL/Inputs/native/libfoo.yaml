@@ -1,0 +1,84 @@
+## A shared object written directly (no program headers, no code), for the
+## ELF reader of msil-ld (ImplementationPlan.md 5.10.8; recon p2
+## native-imports 2.2 and 9.1, elf-libfoo-min.yaml): DT_SONAME libfoo.so.1,
+## version definitions V1 and V2 with their absolute marker symbols (as GNU
+## ld writes them, st_shndx SHN_ABS), and the dynamic symbols
+##   foo     FUNC        foo@@V1
+##   bar     OBJECT      bar@@V1
+##   tlsvar  TLS         tlsvar@@V1
+##   ifn     GNU_IFUNC   ifn@@V1
+##   newf    FUNC        newf@V1 (hidden) and newf@@V2
+##   oldf    FUNC        oldf@V1 (hidden) only
+##   wfn     FUNC, WEAK  wfn@@V1
+##   unv     FUNC        unversioned (VER_NDX_GLOBAL)
+##   V1, V2  OBJECT, ABS the version markers
+##   ext_ref             undefined (a reference, no definition)
+## The DT_SONAME value is the offset of "libfoo.so.1" in the .dynstr that
+## yaml2obj builds; tests that use this file pin it with
+## 'llvm-readobj --dynamic-table'. -D MACHINE=..., -D CLASS=... and -D
+## DATA=... make the same library for another machine, ELF class or data
+## encoding, and -D SONAME=<offset> points DT_SONAME elsewhere.
+--- !ELF
+FileHeader:
+  Class:   [[CLASS=ELFCLASS64]]
+  Data:    [[DATA=ELFDATA2LSB]]
+  Type:    ET_DYN
+  Machine: [[MACHINE=EM_X86_64]]
+Sections:
+  - Name:    .text
+    Type:    SHT_PROGBITS
+    Flags:   [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:    0x60
+  - Name:    .data
+    Type:    SHT_PROGBITS
+    Flags:   [ SHF_ALLOC, SHF_WRITE ]
+    Size:    0x10
+  - Name:    .tbss
+    Type:    SHT_NOBITS
+    Flags:   [ SHF_ALLOC, SHF_WRITE, SHF_TLS ]
+    Size:    0x4
+  - Name:    .gnu.version
+    Type:    SHT_GNU_versym
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynsym
+    AddressAlign: 0x2
+    ## null, foo V1, bar V1, tlsvar V1, ifn V1, newf V1 hidden (0x8000 | 2),
+    ## newf V2, oldf V1 hidden, V1 marker, V2 marker, wfn V1, unv global (1),
+    ## ext_ref (0).
+    Entries: [ 0, 2, 2, 2, 2, 32770, 3, 32770, 2, 3, 2, 1, 0 ]
+  - Name:    .gnu.version_d
+    Type:    SHT_GNU_verdef
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynstr
+    AddressAlign: 0x4
+    Entries:
+      - Flags:      1
+        VersionNdx: 1
+        Names:      [ libfoo.so.1 ]
+      - VersionNdx: 2
+        Names:      [ V1 ]
+      - VersionNdx: 3
+        Names:      [ V2, V1 ]
+  - Name:    .dynamic
+    Type:    SHT_DYNAMIC
+    Flags:   [ SHF_ALLOC, SHF_WRITE ]
+    Link:    .dynstr
+    AddressAlign: 0x8
+    Entries:
+      - Tag:   DT_SONAME
+        Value: [[SONAME=0x34]]
+      - Tag:   DT_NULL
+        Value: 0
+DynamicSymbols:
+  - { Name: foo,        Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x0,  Size: 4 }
+  - { Name: bar,        Type: STT_OBJECT,    Section: .data, Binding: STB_GLOBAL, Value: 0x0,  Size: 4 }
+  - { Name: tlsvar,     Type: STT_TLS,       Section: .tbss, Binding: STB_GLOBAL, Value: 0x0,  Size: 4 }
+  - { Name: ifn,        Type: STT_GNU_IFUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: newf,       Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 6 }
+  - { Name: 'newf (1)', Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 6 }
+  - { Name: oldf,       Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 6 }
+  - { Name: V1,         Type: STT_OBJECT,    Index: SHN_ABS, Binding: STB_GLOBAL, Value: 0x0,  Size: 0 }
+  - { Name: V2,         Type: STT_OBJECT,    Index: SHN_ABS, Binding: STB_GLOBAL, Value: 0x0,  Size: 0 }
+  - { Name: wfn,        Type: STT_FUNC,      Section: .text, Binding: STB_WEAK,   Value: 0x40, Size: 4 }
+  - { Name: unv,        Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x50, Size: 4 }
+  - { Name: ext_ref,    Type: STT_FUNC,                      Binding: STB_GLOBAL }

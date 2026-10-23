@@ -1,0 +1,15 @@
+# Run in a nested lit by ../../deps.test: %{msil_prog_O2} of one source with
+# a native library argument for both builds (%{msil_native_libs}) and two
+# files that every run gets beside the program (%{msil_deps}), one chosen by
+# lit's %if and one named by a wildcard, which lit's shell expands.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_native_libs} = -Wl,--stand-in-native
+# REDEFINE: %{msil_deps} = %if msil-triple-windows %{ %t/dep-a.txt %} %else %{ %t/dep-a.txt %} %t/more/*
+# RUN: %{msil_prog_O2}
+#--- main.c
+// prog-value: 5
+#--- dep-a.txt
+A file every run gets beside the program.
+#--- more/dep-b.txt
+Another one.

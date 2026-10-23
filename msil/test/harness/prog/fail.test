@@ -13,9 +13,9 @@
 # (1)
 # REDEFINE: %{msil_srcs} = %t/main.c %t/undef.c
 # RUN: %{msil_prog_fail_O0} > %t/1.O0.log 2>&1
-# RUN: %{harness_check} contains %t/1.O0.log "^msil-prog: .* -O0 -nodefaultlibs obj/main\.o obj/undef\.o -Wl,--lto-emit-asm -o prog\.il$" "^msil-ld: error: undefined symbol: nowhere$" "^msil-prog: error: the link failed \(exit status 1\)$"
+# RUN: %{harness_check} contains %t/1.O0.log "^msil-prog: .* -O0 (--sysroot=\S+ )?obj/main\.o obj/undef\.o -Wl,--lto-emit-asm -o prog\.il$" "^msil-ld: error: undefined symbol: nowhere$" "^msil-prog: error: the link failed \(exit status 1\)$"
 # RUN: %{msil_prog_fail_O2} > %t/1.O2.log 2>&1
-# RUN: %{harness_check} contains %t/1.O2.log "^msil-prog: .* -O2 -nodefaultlibs obj/main\.o obj/undef\.o -Wl,--lto-emit-asm -o prog\.il$" "^msil-ld: error: undefined symbol: nowhere$"
+# RUN: %{harness_check} contains %t/1.O2.log "^msil-prog: .* -O2 (--sysroot=\S+ )?obj/main\.o obj/undef\.o -Wl,--lto-emit-asm -o prog\.il$" "^msil-ld: error: undefined symbol: nowhere$"
 # RUN: %{harness_check} lacks %t/1.O2.log " -exe -output=" "LLVM ERROR" "PLEASE submit"
 
 # (2)

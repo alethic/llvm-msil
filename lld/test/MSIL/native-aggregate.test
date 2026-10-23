@@ -1,0 +1,502 @@
+## Native functions whose signature a P/Invoke cannot pass yet
+## (ImplementationPlan.md 5.10.13, 5.10.14; M15.b item 3; recon p2
+## native-imports 6). Phase 1 marshals int32, native int, float32 and
+## float64 values and void results; a natively bound function that takes or
+## returns anything else (a two-value aggregate, an i128, a byval aggregate,
+## an sret result, a vector, half) is the backend's error
+##   native function '<name>' (<module>) takes or returns a value that a
+##   P/Invoke cannot pass natively yet (phase 3)
+## once per function, whether code calls it or an initializer takes its
+## address, with the module it bound to. The function of the same library
+## with a plain signature gets its P/Invoke as usual (its text is not
+## written, since the link fails, so only the errors are checked).
+## Native long double functions get the same text (the section 12 row of
+## 2026-10-22 for 5.10.10 and 5.10.14): MSIL triples map long double to
+## double, so the IR says 'double @sqrtl(double)', but where the native long
+## double is x87 extended (x86_64 Linux, x86_64 windows-gnu) the native ABI
+## passes another value. msil-ld reports a live call that native lookup binds
+## to a name of its long double list (sqrtl in libm.so.6, strtold in
+## libc.so.6) after LTO, with '>>> referenced by' lines, and never binds it.
+## The list also names nexttoward and nexttowardf (a long double parameter)
+## and wcstold, and a reference that only takes the address of a listed
+## function (expl kept in a global) is reported too, naming the global. A
+## name in which 'f64x' or 'f128' is followed by the end of the name or by
+## '_' is a native long double function as well (the section 12 row of
+## 2026-10-23: glibc's _Float64x and _Float128 functions sqrtf64x,
+## lgammaf64x_r, strtof64x_l, the narrowing f32addf64x, sqrtf128), whatever
+## the IR signature says (double here), on x86_64 and aarch64 Linux alike
+## (an EM_AARCH64 shared object for the aarch64 triple); sqrtf64 and
+## sqrtf32x (_Float64 and _Float32x are double) bind as usual.
+## On windows-msvc long double is double, and the same call binds; an
+## explicit msil-import-module import is exempt (5.10.7: unchecked).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj agg.yaml -o agg.o
+# RUN: ld.lld -shared -soname libagg.so.1 agg.o -o libagg.so.1
+# RUN: llvm-as main.ll -o main.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: not msil-ld --lto-emit-asm --lto-O0 main.o libagg.so.1 -o x.il > out.txt 2>&1
+# RUN: %{err} --implicit-check-not="'plain'" --input-file=out.txt
+# RUN: FileCheck %s --check-prefix=ONCE --input-file=out.txt
+# RUN: FileCheck %s --check-prefix=SEVEN --implicit-check-not=error: --implicit-check-not="'plain'" \
+# RUN:   --input-file=out.txt
+# RUN: FileCheck %s --check-prefixes=ERR-NONE,PLAIN-NONE --input-file=out.txt
+
+## Linked text has no '<unknown>:0:0: in function' prefix (5.9.14).
+# CHECK-DAG: {{^}}msil-ld: error: native function 'ret_pair' (libagg.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# CHECK-DAG: {{^}}msil-ld: error: native function 'take_i128' (libagg.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# CHECK-DAG: {{^}}msil-ld: error: native function 'take_byval' (libagg.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# CHECK-DAG: {{^}}msil-ld: error: native function 'make_sret' (libagg.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# CHECK-DAG: {{^}}msil-ld: error: native function 'ret_vec' (libagg.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# CHECK-DAG: {{^}}msil-ld: error: native function 'ret_half' (libagg.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# CHECK-DAG: {{^}}msil-ld: error: native function 'addr_i128' (libagg.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+
+## Once per function, although ret_pair has two calls.
+# ONCE-COUNT-1: 'ret_pair' (libagg.so.1)
+# ONCE-NOT:     'ret_pair' (libagg.so.1)
+## Exactly seven errors: the seven above, and none for plain.
+# SEVEN-COUNT-7: {{^}}msil-ld: error: {{.+}}
+## The implicit patterns nowhere in the file: for a prefix made only of -DAG
+## lines, --implicit-check-not checks only the text before the first match,
+## and a COUNT line does not check them between its matches.
+# ERR-NONE-NOT:   PLEASE submit
+# ERR-NONE-NOT:   Stack dump
+# ERR-NONE-NOT:   LLVM ERROR
+# PLAIN-NONE-NOT: 'plain'
+
+## The same on windows-msvc, with an import library.
+# RUN: llvm-lib /machine:x64 /def:agg.def /out:agg.lib
+# RUN: llvm-as win.ll -o win.o
+# RUN: not msil-ld --lto-emit-asm --lto-O0 win.o agg.lib -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=WIN --implicit-check-not="'plain'" --implicit-check-not=error:
+# WIN: {{^}}msil-ld: error: native function 'ret_pair' (agg.dll) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+
+## Native long double functions: sqrtl from libm.so.6 and strtold from
+## libc.so.6 on x86_64 Linux, sqrtl from an import library on x86_64
+## windows-gnu, are link errors.
+# RUN: yaml2obj --docnum=1 ld.yaml -o ldm.o
+# RUN: ld.lld -shared -soname libm.so.6 ldm.o -o libm.so.6
+# RUN: yaml2obj --docnum=2 ld.yaml -o ldc.o
+# RUN: ld.lld -shared -soname libc.so.6 ldc.o -o libc.so.6
+# RUN: llvm-lib /machine:x64 /def:ldmath.def /out:ldmath.lib
+# RUN: llvm-as ld-sqrtl.ll -o ld-sqrtl.o
+# RUN: llvm-as ld-strtold.ll -o ld-strtold.o
+# RUN: llvm-as ld-gnu.ll -o ld-gnu.o
+# RUN: llvm-as ld-msvc.ll -o ld-msvc.o
+# RUN: llvm-as ld-explicit.ll -o ld-explicit.o
+# RUN: not msil-ld --lto-emit-asm --lto-O0 ld-sqrtl.o libc.so.6 libm.so.6 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-SQRTL --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm --lto-O0 ld-strtold.o libc.so.6 libm.so.6 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-STRTOLD --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm --lto-O0 ld-gnu.o ldmath.lib -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-GNU --implicit-check-not=error:
+# LD-SQRTL:        {{^}}msil-ld: error: native function 'sqrtl' (libm.so.6) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LD-SQRTL-NEXT:   {{^}}>>> referenced by ld-sqrtl.o:(main){{$}}
+# LD-STRTOLD:      {{^}}msil-ld: error: native function 'strtold' (libc.so.6) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LD-STRTOLD-NEXT: {{^}}>>> referenced by ld-strtold.o:(main){{$}}
+# LD-GNU:          {{^}}msil-ld: error: native function 'sqrtl' (ldmath.dll) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LD-GNU-NEXT:     {{^}}>>> referenced by ld-gnu.o:(main){{$}}
+
+## windows-msvc binds sqrtl (long double is double there), and an explicit
+## import of sqrtl binds on Linux although libm.so.6 is on the command line.
+# RUN: msil-ld --lto-emit-asm --lto-O0 ld-msvc.o ldmath.lib -o ld-msvc.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LD-MSVC --input-file=ld-msvc.il
+# LD-MSVC-DAG: call float64 'sqrtl'(float64)
+# LD-MSVC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ldmath.dll" cdecl) float64 'sqrtl'(float64) cil managed preservesig {}{{$}}
+# RUN: msil-ld --lto-emit-asm --lto-O0 ld-explicit.o libc.so.6 libm.so.6 -o ld-explicit.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LD-EXPLICIT --input-file=ld-explicit.il
+# LD-EXPLICIT: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'sqrtl'(float64) cil managed preservesig {}{{$}}
+
+## More long double functions, the f64x and f128 names included, on x86_64
+## and aarch64 Linux: each call is an error (8 in all), the address-only
+## reference to expl too, and the _Float64 and _Float32x controls bind.
+# RUN: mkdir -p x64 a64
+# RUN: yaml2obj -D MACHINE=EM_X86_64 ldx.yaml -o x64/ldx.o
+# RUN: ld.lld -shared -soname libldx.so.1 x64/ldx.o -o x64/libldx.so.1
+# RUN: yaml2obj -D MACHINE=EM_AARCH64 ldx.yaml -o a64/ldx.o
+# RUN: ld.lld -shared -soname libldx.so.1 a64/ldx.o -o a64/libldx.so.1
+# RUN: llvm-readobj --file-headers a64/libldx.so.1 | FileCheck %s --check-prefix=LDX-A64
+# LDX-A64: Machine: EM_AARCH64
+# RUN: llvm-as ldx-x64.ll -o ldx-x64.o
+# RUN: llvm-as ldx-a64.ll -o ldx-a64.o
+# RUN: llvm-as ldaddr-x64.ll -o ldaddr-x64.o
+# RUN: llvm-as ldaddr-a64.ll -o ldaddr-a64.o
+# RUN: llvm-as ldctl-x64.ll -o ldctl-x64.o
+# RUN: llvm-as ldctl-a64.ll -o ldctl-a64.o
+# RUN: not msil-ld --error-limit=0 --lto-emit-asm --lto-O0 ldx-x64.o x64/libldx.so.1 -o - > ldx-x64.txt 2>&1
+# RUN: not msil-ld --error-limit=0 --lto-emit-asm --lto-O0 ldx-a64.o a64/libldx.so.1 -o - > ldx-a64.txt 2>&1
+# RUN: %{err} --check-prefix=LDX --implicit-check-not=pinvokeimpl --input-file=ldx-x64.txt
+# RUN: %{err} --check-prefix=LDX --implicit-check-not=pinvokeimpl --input-file=ldx-a64.txt
+# RUN: FileCheck %s --check-prefix=LDX-ERRS --implicit-check-not=error: --implicit-check-not=pinvokeimpl \
+# RUN:   --input-file=ldx-x64.txt
+# RUN: FileCheck %s --check-prefix=LDX-ERRS --implicit-check-not=error: --implicit-check-not=pinvokeimpl \
+# RUN:   --input-file=ldx-a64.txt
+# RUN: FileCheck %s --check-prefix=LDX-REFS -DOBJ=ldx-x64.o --input-file=ldx-x64.txt
+# RUN: FileCheck %s --check-prefix=LDX-ANYREF --implicit-check-not=">>>" --input-file=ldx-x64.txt
+# RUN: FileCheck %s --check-prefix=LDX-REFS -DOBJ=ldx-a64.o --input-file=ldx-a64.txt
+# RUN: FileCheck %s --check-prefix=LDX-ANYREF --implicit-check-not=">>>" --input-file=ldx-a64.txt
+# RUN: FileCheck %s --check-prefixes=ERR-NONE,PINV-NONE --input-file=ldx-x64.txt
+# RUN: FileCheck %s --check-prefixes=ERR-NONE,PINV-NONE --input-file=ldx-a64.txt
+# LDX-DAG: {{^}}msil-ld: error: native function 'nexttoward' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'nexttowardf' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'wcstold' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'sqrtf64x' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'lgammaf64x_r' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'strtof64x_l' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'f32addf64x' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'sqrtf128' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+## Exactly these eight errors, each with one '>>> referenced by <file>:(main)'.
+# LDX-ERRS-COUNT-8:   {{^}}msil-ld: error: {{.+}}
+# LDX-REFS-COUNT-8:   {{^}}>>> referenced by [[OBJ]]:(main){{$}}
+# LDX-ANYREF-COUNT-8: {{^}}>>>
+## No P/Invoke anywhere in the file (ERR-NONE is above).
+# PINV-NONE-NOT: pinvokeimpl
+# RUN: not msil-ld --lto-emit-asm --lto-O0 ldaddr-x64.o x64/libldx.so.1 -o - 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-ADDR -DOBJ=ldaddr-x64.o --implicit-check-not=error: --implicit-check-not=pinvokeimpl
+# RUN: not msil-ld --lto-emit-asm --lto-O0 ldaddr-a64.o a64/libldx.so.1 -o - 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-ADDR -DOBJ=ldaddr-a64.o --implicit-check-not=error: --implicit-check-not=pinvokeimpl
+# LD-ADDR:      {{^}}msil-ld: error: native function 'expl' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# LD-ADDR-NEXT: {{^}}>>> referenced by [[OBJ]]:(keep_expl){{$}}
+# RUN: msil-ld --lto-emit-asm --lto-O0 ldctl-x64.o x64/libldx.so.1 -o ldctl-x64.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O0 ldctl-a64.o a64/libldx.so.1 -o ldctl-a64.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LDX-CTL --input-file=ldctl-x64.il
+# RUN: FileCheck %s --check-prefix=LDX-CTL2 --input-file=ldctl-x64.il
+# RUN: FileCheck %s --check-prefix=LDX-CTL --input-file=ldctl-a64.il
+# RUN: FileCheck %s --check-prefix=LDX-CTL2 --input-file=ldctl-a64.il
+# LDX-CTL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libldx.so.1" cdecl) float64 'sqrtf64'(float64) cil managed preservesig {}{{$}}
+# LDX-CTL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libldx.so.1" cdecl) float64 'sqrtf32x'(float64) cil managed preservesig {}{{$}}
+## Exactly those two P/Invokes.
+# LDX-CTL2-COUNT-2: pinvokeimpl
+# LDX-CTL2-NOT:     pinvokeimpl
+
+#--- agg.def
+LIBRARY agg.dll
+EXPORTS
+  ret_pair
+  plain
+
+#--- agg.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x80
+Symbols:
+  - { Name: ret_pair,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x00, Size: 8 }
+  - { Name: take_i128,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x08, Size: 8 }
+  - { Name: take_byval, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: make_sret,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+  - { Name: ret_vec,    Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 8 }
+  - { Name: ret_half,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 8 }
+  - { Name: addr_i128,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 8 }
+  - { Name: plain,      Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x38, Size: 8 }
+
+#--- main.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+%struct.big = type { i64, i64, i64 }
+
+@b = global %struct.big { i64 1, i64 2, i64 3 }
+@fp = global ptr @addr_i128
+
+define i32 @main() {
+  %p1 = call { double, double } @ret_pair()
+  %p2 = call { double, double } @ret_pair()
+  %x = extractvalue { double, double } %p1, 0
+  %y = extractvalue { double, double } %p2, 1
+  call void @take_i128(i128 5)
+  call void @take_byval(ptr byval(%struct.big) align 8 @b)
+  %s = alloca %struct.big, align 8
+  call void @make_sret(ptr sret(%struct.big) align 8 %s)
+  %v = call <2 x float> @ret_vec()
+  %h = call half @ret_half()
+  %q = call i32 @plain(i32 1)
+  %f = load ptr, ptr @fp
+  %c = icmp eq ptr %f, null
+  %z = zext i1 %c to i32
+  %d = fadd double %x, %y
+  %i = fptosi double %d to i32
+  %r1 = add i32 %i, %q
+  %r2 = add i32 %r1, %z
+  ret i32 %r2
+}
+
+declare { double, double } @ret_pair()
+declare void @take_i128(i128)
+declare void @take_byval(ptr byval(%struct.big) align 8)
+declare void @make_sret(ptr sret(%struct.big) align 8)
+declare <2 x float> @ret_vec()
+declare half @ret_half()
+declare i32 @plain(i32)
+declare void @addr_i128(i128)
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %p = call { double, double } @ret_pair()
+  %x = extractvalue { double, double } %p, 0
+  %q = call i32 @plain(i32 1)
+  %i = fptosi double %x to i32
+  %r = add i32 %i, %q
+  ret i32 %r
+}
+
+declare { double, double } @ret_pair()
+declare i32 @plain(i32)
+
+#--- ldmath.def
+LIBRARY ldmath.dll
+EXPORTS
+  sqrtl
+
+#--- ld.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: sqrtl, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: sqrt,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x8, Size: 8 }
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: strtold, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: strtod,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x8, Size: 8 }
+
+#--- ld-sqrtl.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; long double sqrtl(long double): long double is double on MSIL triples.
+define i32 @main() {
+  %r = call double @sqrtl(double 16.0)
+  %i = fptosi double %r to i32
+  ret i32 %i
+}
+
+declare double @sqrtl(double)
+
+#--- ld-strtold.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@s = private constant [4 x i8] c"2.5\00"
+
+define i32 @main() {
+  %r = call double @strtold(ptr @s, ptr null)
+  %i = fptosi double %r to i32
+  ret i32 %i
+}
+
+declare double @strtold(ptr, ptr)
+
+#--- ld-gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+define i32 @main() {
+  %r = call double @sqrtl(double 16.0)
+  %i = fptosi double %r to i32
+  ret i32 %i
+}
+
+declare double @sqrtl(double)
+
+#--- ld-msvc.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call double @sqrtl(double 16.0)
+  %i = fptosi double %r to i32
+  ret i32 %i
+}
+
+declare double @sqrtl(double)
+
+#--- ld-explicit.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; __attribute__((import_module("libm.so.6"))) long double sqrtl(long double);
+define i32 @main() {
+  %r = call double @sqrtl(double 16.0)
+  %i = fptosi double %r to i32
+  ret i32 %i
+}
+
+declare double @sqrtl(double) #0
+
+attributes #0 = { "msil-import-module"="libm.so.6" }
+
+#--- ldx.yaml
+## The functions of libldx.so.1 (ld.lld links it), for x86_64 and aarch64.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: [[MACHINE]]
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x58
+Symbols:
+  - { Name: nexttoward,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x00, Size: 8 }
+  - { Name: nexttowardf,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x08, Size: 8 }
+  - { Name: wcstold,      Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: sqrtf64x,     Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+  - { Name: lgammaf64x_r, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 8 }
+  - { Name: strtof64x_l,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 8 }
+  - { Name: f32addf64x,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 8 }
+  - { Name: sqrtf128,     Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x38, Size: 8 }
+  - { Name: expl,         Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x40, Size: 8 }
+  - { Name: sqrtf64,      Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x48, Size: 8 }
+  - { Name: sqrtf32x,     Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x50, Size: 8 }
+
+#--- ldx-x64.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; long double and _Float64x are double on MSIL triples, and _Float128
+;; has no MSIL form: the IR signatures say double, and only the names
+;; make these native long double functions.
+define i32 @main() {
+  %nexttoward = call double @nexttoward(double 1.0, double 2.0)
+  %nexttowardf = call float @nexttowardf(float 1.0, double 2.0)
+  %wcstold = call double @wcstold(ptr null, ptr null)
+  %sqrtf64x = call double @sqrtf64x(double 16.0)
+  %lgammaf64x_r = call double @lgammaf64x_r(double 2.0, ptr null)
+  %strtof64x_l = call double @strtof64x_l(ptr null, ptr null, ptr null)
+  %f32addf64x = call float @f32addf64x(double 1.0, double 2.0)
+  %sqrtf128 = call double @sqrtf128(double 16.0)
+  ret i32 0
+}
+
+declare double @nexttoward(double, double)
+declare float @nexttowardf(float, double)
+declare double @wcstold(ptr, ptr)
+declare double @sqrtf64x(double)
+declare double @lgammaf64x_r(double, ptr)
+declare double @strtof64x_l(ptr, ptr, ptr)
+declare float @f32addf64x(double, double)
+declare double @sqrtf128(double)
+
+#--- ldaddr-x64.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; Only the address of expl is taken; the volatile load keeps it live.
+@keep_expl = global ptr @expl
+
+define i32 @main() {
+  %f = load volatile ptr, ptr @keep_expl
+  %c = icmp eq ptr %f, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare double @expl(double)
+
+#--- ldctl-x64.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; _Float64 and _Float32x are double: these bind.
+define i32 @main() {
+  %a = call double @sqrtf64(double 16.0)
+  %b = call double @sqrtf32x(double %a)
+  %i = fptosi double %b to i32
+  ret i32 %i
+}
+
+declare double @sqrtf64(double)
+declare double @sqrtf32x(double)
+
+#--- ldx-a64.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu-msil"
+
+;; long double and _Float64x are double on MSIL triples, and _Float128
+;; has no MSIL form: the IR signatures say double, and only the names
+;; make these native long double functions.
+define i32 @main() {
+  %nexttoward = call double @nexttoward(double 1.0, double 2.0)
+  %nexttowardf = call float @nexttowardf(float 1.0, double 2.0)
+  %wcstold = call double @wcstold(ptr null, ptr null)
+  %sqrtf64x = call double @sqrtf64x(double 16.0)
+  %lgammaf64x_r = call double @lgammaf64x_r(double 2.0, ptr null)
+  %strtof64x_l = call double @strtof64x_l(ptr null, ptr null, ptr null)
+  %f32addf64x = call float @f32addf64x(double 1.0, double 2.0)
+  %sqrtf128 = call double @sqrtf128(double 16.0)
+  ret i32 0
+}
+
+declare double @nexttoward(double, double)
+declare float @nexttowardf(float, double)
+declare double @wcstold(ptr, ptr)
+declare double @sqrtf64x(double)
+declare double @lgammaf64x_r(double, ptr)
+declare double @strtof64x_l(ptr, ptr, ptr)
+declare float @f32addf64x(double, double)
+declare double @sqrtf128(double)
+
+#--- ldaddr-a64.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu-msil"
+
+;; Only the address of expl is taken; the volatile load keeps it live.
+@keep_expl = global ptr @expl
+
+define i32 @main() {
+  %f = load volatile ptr, ptr @keep_expl
+  %c = icmp eq ptr %f, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare double @expl(double)
+
+#--- ldctl-a64.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu-msil"
+
+;; _Float64 and _Float32x are double: these bind.
+define i32 @main() {
+  %a = call double @sqrtf64(double 16.0)
+  %b = call double @sqrtf32x(double %a)
+  %i = fptosi double %b to i32
+  ret i32 %i
+}
+
+declare double @sqrtf64(double)
+declare double @sqrtf32x(double)

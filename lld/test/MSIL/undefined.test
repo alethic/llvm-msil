@@ -1,19 +1,30 @@
-## Undefined symbols in M14 (ImplementationPlan.md 5.9.6, 'When it runs',
-## M14; 5.9.14's texts). msil-ld reads no native library yet, so after every
-## input is loaded:
-## - undefined GLOBAL data is msil-ld's error 'undefined symbol: <s>' with
-##   '>>> referenced by <file>:(<method>)' lines, at most three, then
-##   '>>> referenced <n> more times' (lld's form);
+## Undefined symbols from M15 on (ImplementationPlan.md 5.9.6 'When it runs',
+## M15-M19; 5.9.14's texts; 5.10.10). msil-ld binds every undefined symbol
+## of the bitcode to the native libraries on its command line (late binding,
+## before LTO, by name), and reports what stays unresolved after LTO
+## optimization, on the merged module, as lld/ELF and lld/wasm report
+## undefined symbols after LTO:
+## - an undefined GLOBAL function or variable is 'undefined symbol: <s>'
+##   with '>>> referenced by <file>:(<method>)' lines, at most three, then
+##   '>>> referenced <n> more times' (lld's form); a name that LTO's
+##   optimizer introduced (printf("hi\n") -> puts) is '>>> referenced by
+##   ld-temp.o';
+## - a libc or libm function binds only through a native input: without
+##   one, puts and sqrt are undefined symbols like any other function (M14's
+##   frozen D14 table made them 'public' P/Invokes of "ucrtbase", "libc" and
+##   "libm.so.6"; linked text never consults it), and with one they are
+##   'assembly' P/Invokes of the library's module (5.10.11);
 ## - an undefined HIDDEN symbol, data or function, is 'undefined hidden
-##   symbol: <s>' and never binds late;
-## - an undefined GLOBAL function goes to LTO code generation, where the
-##   frozen D14 table imports it if it is a Phase-1 import (puts, putchar, the
-##   C math library; 'pinvokeimpl', the library depending on the triple);
-##   otherwise the backend reports 'undefined symbol: <name>', because
-##   msil-ld sets the module flag msil-lto (printed as msil-ld's error, the
-##   first line of 5.9.14's text, so the matrix case stays stable when M15
-##   moves the report into msil-ld);
-## - an undefined WEAK symbol stays for the backend (resolve-weak.test).
+##   symbol: <s>' and never binds late, not even to a native library that
+##   defines it;
+## - an undefined WEAK symbol that nothing defines stays null for the
+##   backend (resolve-weak.test, native-weak-undef.test);
+## - on non-Windows triples an undefined __start_X or __stop_X is neither
+##   reported nor bound when a bitcode definition names section X (5.9.6
+##   'When it runs', M15-M19: whole-program code generation defines it), not
+##   even by a native library that defines the name; for another section it
+##   is an ordinary symbol (native data, or undefined), and on Windows it is
+##   reported.
 ## A HIDDEN reference to a symbol defined elsewhere links.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -26,6 +37,14 @@
 # RUN: llvm-as imports-lnx.ll -o imports-lnx.o
 # RUN: llvm-as data-def.ll -o data-def.o
 # RUN: llvm-ar rcs libdata.a data-def.o
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-stdio.def /out:stdio.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-math.def /out:math.lib
+# RUN: llvm-lib /out:ucrt.lib stdio.lib math.lib
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: yaml2obj --docnum=2 %S/Inputs/native/glibc.yaml -o libm.o
+# RUN: ld.lld -shared -soname libm.so.6 --version-script %S/Inputs/native/glibc-libm.map libm.o -o libm.so.6
+# RUN: llvm-lib /machine:x64 /def:hidden.def /out:hidden.lib
 
 # DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR"
@@ -36,9 +55,13 @@
 
 ## lld's limit: three '>>> referenced by <file>:(<method>)' lines, then
 ## '>>> referenced <n> more times' for the rest (here f3 and the initializer
-## of the global ptr).
+## of the global ptr, which main reads), at the default -O2 and at -O0. The
+## lines follow the order of the merged module (5.9.4: the output depends
+## only on the inputs and options).
 # RUN: llvm-as many.ll -o many.o
 # RUN: not msil-ld --lto-emit-asm many.o -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=MANY --implicit-check-not=error: --implicit-check-not=">>>"
+# RUN: not msil-ld --lto-emit-asm --lto-O0 many.o -o x.il 2>&1 \
 # RUN:   | %{err} --check-prefix=MANY --implicit-check-not=error: --implicit-check-not=">>>"
 # MANY:      {{^}}msil-ld: error: undefined symbol: ext_data{{$}}
 # MANY-NEXT: {{^}}>>> referenced by many.o:(main){{$}}
@@ -51,8 +74,11 @@
 # RUN: FileCheck %s --check-prefix=DATA-OK --input-file=data.il
 # DATA-OK:   ldsfld native int 'ext_data'
 
+## Hidden references never bind late, also when a library defines them.
 # RUN: not msil-ld --lto-emit-asm hidden-fn.o -o x.il 2>&1 | %{err} --check-prefix=HIDDEN-FN
 # RUN: not msil-ld --lto-emit-asm hidden-data.o -o x.il 2>&1 | %{err} --check-prefix=HIDDEN-DATA
+# RUN: not msil-ld --lto-emit-asm hidden-fn.o hidden.lib -o x.il 2>&1 | %{err} --check-prefix=HIDDEN-FN
+# RUN: not msil-ld --lto-emit-asm hidden-data.o hidden.lib -o x.il 2>&1 | %{err} --check-prefix=HIDDEN-DATA
 # HIDDEN-FN:   {{^}}msil-ld: error: undefined hidden symbol: hidden_fn{{$}}
 # HIDDEN-DATA: {{^}}msil-ld: error: undefined hidden symbol: hidden_data{{$}}
 
@@ -61,50 +87,202 @@
 
 ## Two references to one never-defined name merge their visibility to the most
 ## constraining non-default one (5.9.5 'Also ported', lld/ELF Symbols.cpp
-## :424-427), in either input order. For puts, a D14 import, a lost merge
-## would be a silent P/Invoke and exit code 0; for data, the GLOBAL
-## 'undefined symbol' error. Hidden is more constraining than protected, and
-## default + protected is lld/ELF's 'undefined protected symbol'.
+## :424-427), in either input order. ucrt.lib, which binds puts, is on every
+## command line: a lost merge would be a silent P/Invoke and exit code 0. For
+## data, the GLOBAL 'undefined symbol' error. Hidden is more constraining
+## than protected, and default + protected is lld/ELF's 'undefined
+## protected symbol'.
 # RUN: llvm-as vis-fn-default.ll -o vis-fn-default.o
 # RUN: llvm-as vis-fn-hidden.ll -o vis-fn-hidden.o
 # RUN: llvm-as vis-fn-protected.ll -o vis-fn-protected.o
 # RUN: llvm-as vis-data-default.ll -o vis-data-default.o
 # RUN: llvm-as vis-data-hidden.ll -o vis-data-hidden.o
 # DEFINE: %{vis} = %{err} --implicit-check-not='undefined symbol'
-# RUN: not msil-ld --lto-emit-asm vis-fn-default.o vis-fn-hidden.o -o x.il 2>&1 | %{vis} --check-prefix=VIS-HIDDEN-FN
-# RUN: not msil-ld --lto-emit-asm vis-fn-hidden.o vis-fn-default.o -o x.il 2>&1 | %{vis} --check-prefix=VIS-HIDDEN-FN
+# RUN: not msil-ld --lto-emit-asm vis-fn-default.o vis-fn-hidden.o ucrt.lib -o x.il 2>&1 | %{vis} --check-prefix=VIS-HIDDEN-FN
+# RUN: not msil-ld --lto-emit-asm vis-fn-hidden.o vis-fn-default.o ucrt.lib -o x.il 2>&1 | %{vis} --check-prefix=VIS-HIDDEN-FN
 # RUN: not msil-ld --lto-emit-asm vis-data-default.o vis-data-hidden.o -o x.il 2>&1 | %{vis} --check-prefix=VIS-HIDDEN-DATA
 # RUN: not msil-ld --lto-emit-asm vis-data-hidden.o vis-data-default.o -o x.il 2>&1 | %{vis} --check-prefix=VIS-HIDDEN-DATA
-# RUN: not msil-ld --lto-emit-asm vis-fn-default.o vis-fn-protected.o -o x.il 2>&1 \
+# RUN: not msil-ld --lto-emit-asm vis-fn-default.o vis-fn-protected.o ucrt.lib -o x.il 2>&1 \
 # RUN:   | %{vis} --check-prefix=VIS-PROTECTED-FN --implicit-check-not='undefined hidden'
-# RUN: not msil-ld --lto-emit-asm vis-fn-protected.o vis-fn-default.o -o x.il 2>&1 \
+# RUN: not msil-ld --lto-emit-asm vis-fn-protected.o vis-fn-default.o ucrt.lib -o x.il 2>&1 \
 # RUN:   | %{vis} --check-prefix=VIS-PROTECTED-FN --implicit-check-not='undefined hidden'
-# RUN: not msil-ld --lto-emit-asm vis-fn-default.o vis-fn-hidden.o vis-fn-protected.o -o x.il 2>&1 \
+# RUN: not msil-ld --lto-emit-asm vis-fn-default.o vis-fn-hidden.o vis-fn-protected.o ucrt.lib -o x.il 2>&1 \
 # RUN:   | %{vis} --check-prefix=VIS-HIDDEN-FN --implicit-check-not='undefined protected'
-# RUN: not msil-ld --lto-emit-asm vis-fn-protected.o vis-fn-hidden.o vis-fn-default.o -o x.il 2>&1 \
+# RUN: not msil-ld --lto-emit-asm vis-fn-protected.o vis-fn-hidden.o vis-fn-default.o ucrt.lib -o x.il 2>&1 \
 # RUN:   | %{vis} --check-prefix=VIS-HIDDEN-FN --implicit-check-not='undefined protected'
 # VIS-HIDDEN-FN:    {{^}}msil-ld: error: undefined hidden symbol: puts{{$}}
 # VIS-HIDDEN-DATA:  {{^}}msil-ld: error: undefined hidden symbol: d{{$}}
 # VIS-PROTECTED-FN: {{^}}msil-ld: error: undefined protected symbol: puts{{$}}
 
-## A function: the backend's report under msil-lto, on both triples.
-# RUN: not msil-ld --lto-emit-asm fn.o -o x.il 2>&1 | %{err} --check-prefix=FN
+## A function: msil-ld's report after LTO, on both triples, with its
+## '>>> referenced by' line (M14 had only the backend's first line).
+# RUN: not msil-ld --lto-emit-asm fn.o -o x.il 2>&1 | %{err} --check-prefix=FN -DFILE=fn.o
 # RUN: llvm-as fn-lnx.ll -o fn-lnx.o
-# RUN: not msil-ld --lto-emit-asm fn-lnx.o -o x.il 2>&1 | %{err} --check-prefix=FN
+# RUN: not msil-ld --lto-emit-asm fn-lnx.o -o x.il 2>&1 | %{err} --check-prefix=FN -DFILE=fn-lnx.o
 # FN:        {{^}}msil-ld: error: undefined symbol: ext_fn{{$}}
+# FN-NEXT:   {{^}}>>> referenced by [[FILE]]:(main){{$}}
 # FN-NOT:    Phase 1 has no linker
 
-## Phase-1 imports are P/Invokes: ucrtbase on windows-msvc, libc and
-## libm.so.6 on linux-gnu (D14).
-# RUN: msil-ld --lto-emit-asm --lto-O0 imports-win.o -o win.il 2>&1 | count 0
-# RUN: FileCheck %s --check-prefix=WIN --input-file=win.il
-# RUN: msil-ld --lto-emit-asm --lto-O0 imports-lnx.o -o lnx.il 2>&1 | count 0
-# RUN: FileCheck %s --check-prefix=LNX --input-file=lnx.il
+## puts and sqrt without native libraries: undefined, on both triples.
+# RUN: not msil-ld --lto-emit-asm --lto-O0 imports-win.o -o x.il > win.err 2>&1
+# RUN: not msil-ld --lto-emit-asm --lto-O0 imports-lnx.o -o x.il > lnx.err 2>&1
+# RUN: %{err} --check-prefix=NOLIB-PUTS -DFILE=imports-win.o --implicit-check-not=pinvokeimpl --input-file=win.err
+# RUN: %{err} --check-prefix=NOLIB-SQRT -DFILE=imports-win.o --input-file=win.err
+# RUN: %{err} --check-prefix=NOLIB-PUTS -DFILE=imports-lnx.o --implicit-check-not=pinvokeimpl --input-file=lnx.err
+# RUN: %{err} --check-prefix=NOLIB-SQRT -DFILE=imports-lnx.o --input-file=lnx.err
+# NOLIB-PUTS:      {{^}}msil-ld: error: undefined symbol: puts{{$}}
+# NOLIB-PUTS-NEXT: {{^}}>>> referenced by [[FILE]]:(main){{$}}
+# NOLIB-SQRT:      {{^}}msil-ld: error: undefined symbol: sqrt{{$}}
+# NOLIB-SQRT-NEXT: {{^}}>>> referenced by [[FILE]]:(main){{$}}
 
-# WIN-DAG:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-# WIN-DAG:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-# LNX-DAG:   {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-# LNX-DAG:   {{^}}.method public hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+## With native libraries: the UCRT's API sets on windows-msvc, glibc's
+## libc.so.6 and libm.so.6 on linux-gnu; 'assembly', never D14's spelling.
+# RUN: msil-ld --lto-emit-asm --lto-O0 imports-win.o ucrt.lib -o win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WIN --implicit-check-not='"ucrtbase"' \
+# RUN:   --implicit-check-not="public hidebysig static pinvokeimpl" --input-file=win.il
+# RUN: FileCheck %s --check-prefix=WIN-NONE --input-file=win.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 imports-lnx.o libc.so.6 libm.so.6 -o lnx.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LNX --implicit-check-not='"libc"' \
+# RUN:   --implicit-check-not="public hidebysig static pinvokeimpl" --input-file=lnx.il
+# RUN: FileCheck %s --check-prefix=LNX-NONE --input-file=lnx.il
+
+# WIN-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# WIN-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+# LNX-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# LNX-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+## The implicit patterns nowhere in the file: for a prefix made only of -DAG
+## lines, --implicit-check-not checks only the text before the first match.
+# WIN-NONE-NOT: "ucrtbase"
+# WIN-NONE-NOT: public hidebysig static pinvokeimpl
+# LNX-NONE-NOT: "libc"
+# LNX-NONE-NOT: public hidebysig static pinvokeimpl
+
+## A name that LTO's optimizer introduces: printf("hi\n") becomes puts("hi")
+## at -O2, and the report names the merged module; with a library that
+## binds puts the program links.
+# RUN: llvm-as printf.ll -o printf.o
+# RUN: not msil-ld --lto-emit-asm printf.o -o x.il 2>&1 | %{err} --check-prefix=LTO-NAME --implicit-check-not=printf
+# LTO-NAME:      {{^}}msil-ld: error: undefined symbol: puts{{$}}
+# LTO-NAME-NEXT: {{^}}>>> referenced by ld-temp.o
+# RUN: msil-ld --lto-emit-asm printf.o ucrt.lib -o puts.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WIN-PUTS --implicit-check-not=printf --input-file=puts.il
+# WIN-PUTS: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+
+## __start_myreg and __stop_myreg with a bitcode definition in section
+## "myreg" (ss.ll): on linux-gnu, with libss.so (which defines both names) or
+## without it, msil-ld neither reports them nor binds them, so --trace-symbol
+## shows no shared definition. Until M20 the backend's M12 texts for the
+## section global and the external globals still fail the link. For section
+## "other" (ns.ll) they are native data with libss.so and undefined without
+## it; on windows-msvc they are undefined although ss-win.ll names "myreg".
+# RUN: yaml2obj ss.yaml -o ss-lib.o
+# RUN: ld.lld -shared -soname libss.so.1 ss-lib.o -o libss.so
+# RUN: llvm-as ss.ll -o ss.o
+# RUN: llvm-as ns.ll -o ns.o
+# RUN: llvm-as ss-win.ll -o ss-win.o
+# DEFINE: %{ss} = %{err} --implicit-check-not='undefined symbol' --implicit-check-not='shared definition' \
+# DEFINE:   --implicit-check-not='importing native data'
+# RUN: not msil-ld --lto-emit-asm ss.o libss.so --trace-symbol=__start_myreg --trace-symbol=__stop_myreg \
+# RUN:   -o x.il > ss-lib.txt 2>&1
+# RUN: not msil-ld --lto-emit-asm ss.o -o x.il > ss-nolib.txt 2>&1
+# RUN: %{ss} --check-prefixes=SS-TRACE,SS-M12 --input-file=ss-lib.txt
+# RUN: %{ss} --check-prefix=SS-M12 --input-file=ss-nolib.txt
+# RUN: FileCheck %s --check-prefix=SS-ABSENT --input-file=ss-lib.txt
+# RUN: FileCheck %s --check-prefix=SS-ABSENT --input-file=ss-nolib.txt
+# SS-TRACE-DAG: {{^}}ss.o: reference to __start_myreg{{$}}
+# SS-TRACE-DAG: {{^}}ss.o: reference to __stop_myreg{{$}}
+# SS-M12-DAG:   {{^}}msil-ld: error: global variable @entry in section "myreg" is not supported for MSIL yet (phase 2 CIL objects){{$}}
+# SS-M12-DAG:   {{^}}msil-ld: error: external global variable '__start_myreg' is not supported (phase 2 linker){{$}}
+# SS-M12-DAG:   {{^}}msil-ld: error: external global variable '__stop_myreg' is not supported (phase 2 linker){{$}}
+## Nowhere in the output (the implicit checks above guard only the text
+## before the first CHECK-DAG match).
+# SS-ABSENT-NOT: undefined symbol
+# SS-ABSENT-NOT: shared definition
+# SS-ABSENT-NOT: importing native data
+# SS-ABSENT-NOT: PLEASE submit
+# SS-ABSENT-NOT: Stack dump
+# SS-ABSENT-NOT: LLVM ERROR
+# RUN: not msil-ld --lto-emit-asm ns.o libss.so --trace-symbol=__start_myreg -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=NS-LIB --implicit-check-not='undefined symbol'
+# NS-LIB:      {{^}}libss.so: shared definition of __start_myreg{{$}}
+# NS-LIB:      {{^}}msil-ld: error: importing native data symbol '__start_myreg' (libss.so.1) is not supported yet{{$}}
+# NS-LIB-NEXT: {{^}}>>> referenced by ns.o:(main){{$}}
+# NS-LIB:      {{^}}msil-ld: error: importing native data symbol '__stop_myreg' (libss.so.1) is not supported yet{{$}}
+# NS-LIB-NEXT: {{^}}>>> referenced by ns.o:(main){{$}}
+# RUN: not msil-ld --lto-emit-asm ns.o -o x.il 2>&1 | %{err} --check-prefix=SS-UNDEF -DFILE=ns.o
+# RUN: not msil-ld --lto-emit-asm ss-win.o -o x.il 2>&1 | %{err} --check-prefix=SS-UNDEF -DFILE=ss-win.o
+# SS-UNDEF:      {{^}}msil-ld: error: undefined symbol: __start_myreg{{$}}
+# SS-UNDEF-NEXT: {{^}}>>> referenced by [[FILE]]:(main){{$}}
+# SS-UNDEF:      {{^}}msil-ld: error: undefined symbol: __stop_myreg{{$}}
+# SS-UNDEF-NEXT: {{^}}>>> referenced by [[FILE]]:(main){{$}}
+
+#--- ss.yaml
+## libss.so defines __start_myreg and __stop_myreg as data.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .data
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_WRITE ]
+    Size:  0x2
+Symbols:
+  - { Name: __start_myreg, Type: STT_OBJECT, Section: .data, Binding: STB_GLOBAL, Value: 0x0, Size: 1 }
+  - { Name: __stop_myreg,  Type: STT_OBJECT, Section: .data, Binding: STB_GLOBAL, Value: 0x1, Size: 1 }
+
+#--- ss.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@__start_myreg = external global i8
+@__stop_myreg = external global i8
+@entry = global i32 7, section "myreg"
+@llvm.used = appending global [1 x ptr] [ptr @entry], section "llvm.metadata"
+
+define i32 @main() {
+  %a = ptrtoint ptr @__start_myreg to i64
+  %b = ptrtoint ptr @__stop_myreg to i64
+  %d = sub i64 %b, %a
+  %r = trunc i64 %d to i32
+  ret i32 %r
+}
+
+#--- ns.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@__start_myreg = external global i8
+@__stop_myreg = external global i8
+@entry = global i32 7, section "other"
+@llvm.used = appending global [1 x ptr] [ptr @entry], section "llvm.metadata"
+
+define i32 @main() {
+  %a = ptrtoint ptr @__start_myreg to i64
+  %b = ptrtoint ptr @__stop_myreg to i64
+  %d = sub i64 %b, %a
+  %r = trunc i64 %d to i32
+  ret i32 %r
+}
+
+#--- ss-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@__start_myreg = external global i8
+@__stop_myreg = external global i8
+@entry = global i32 7, section "myreg"
+@llvm.used = appending global [1 x ptr] [ptr @entry], section "llvm.metadata"
+
+define i32 @main() {
+  %a = ptrtoint ptr @__start_myreg to i64
+  %b = ptrtoint ptr @__stop_myreg to i64
+  %d = sub i64 %b, %a
+  %r = trunc i64 %d to i32
+  ret i32 %r
+}
 
 #--- data.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
@@ -126,7 +304,16 @@ target triple = "x86_64-pc-windows-msvc-msil"
 
 define i32 @main() {
   %v = load i32, ptr @ext_data
-  ret i32 %v
+  %a = call i32 @f1()
+  %b = call i32 @f2()
+  %c = call i32 @f3()
+  %p = load ptr, ptr @ptr
+  %w = load i32, ptr %p
+  %s1 = add i32 %v, %a
+  %s2 = add i32 %s1, %b
+  %s3 = add i32 %s2, %c
+  %s4 = add i32 %s3, %w
+  ret i32 %s4
 }
 
 define i32 @f1() {
@@ -179,6 +366,12 @@ target triple = "x86_64-pc-windows-msvc-msil"
 define i32 @hidden_fn() {
   ret i32 6
 }
+
+#--- hidden.def
+LIBRARY hidden.dll
+EXPORTS
+  hidden_fn
+  hidden_data DATA
 
 #--- fn.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
@@ -235,6 +428,19 @@ define i32 @main() {
 
 declare i32 @puts(ptr)
 declare double @sqrt(double)
+
+#--- printf.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@str = private constant [4 x i8] c"hi\0A\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, ...) @printf(ptr @str)
+  ret i32 0
+}
+
+declare i32 @printf(ptr, ...)
 
 #--- vis-fn-default.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"

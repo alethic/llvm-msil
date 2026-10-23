@@ -11,21 +11,34 @@
 // LTO compiles the bitcode inputs for the codegen triple (plan 5.9.13):
 // stock-clang bitcode for the native triple is compiled for its '-msil' twin
 // (lto::Config::OverrideTriple), and MSILLinkHooksPass hands msil-ld's
-// decisions to the MSIL backend as module flags of the merged module.
+// decisions to the MSIL backend as module flags of the merged module. Under
+// --lto-emit-asm it is also the import-annotation pass of plan 5.10.13: the
+// merged module's declarations are bound to the native libraries (or
+// reported, after LTO, as lld/ELF and lld/wasm report undefined symbols), and
+// the backend prints P/Invokes from the annotations alone.
 //
 //===----------------------------------------------------------------------===//
 
 #include "LTO.h"
 #include "Config.h"
 #include "InputFiles.h"
+#include "NativeLibraries.h"
+#include "SymbolTable.h"
 #include "Symbols.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Strings.h"
 #include "lld/Common/TargetOptionsCommandFlags.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Instruction.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Mangler.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/LTO/Config.h"
@@ -38,10 +51,14 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Threading.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace llvm;
@@ -49,46 +66,228 @@ using namespace lld::msil;
 using namespace lld;
 
 namespace {
+// One line of --print-imports.
+struct PrintedImport {
+  std::string symbol;
+  std::string module;
+  std::string entry;
+  bool isData;
+  std::string version;
+  // True for a library read from an ELF shared object (version floor).
+  bool isELF;
+};
+} // namespace
+
+// The dotted numbers after the last '_' of an ELF version (GLIBC_2.2.5 ->
+// 2, 2, 5), which --print-imports compares for the version floor.
+static SmallVector<unsigned, 4> getVersionNumbers(StringRef version) {
+  size_t underscore = version.rfind('_');
+  if (underscore != StringRef::npos)
+    version = version.drop_front(underscore + 1);
+  SmallVector<StringRef, 4> parts;
+  version.split(parts, '.');
+  SmallVector<unsigned, 4> numbers;
+  for (StringRef part : parts) {
+    unsigned n = 0;
+    if (part.getAsInteger(10, n))
+      n = 0;
+    numbers.push_back(n);
+  }
+  return numbers;
+}
+
+// --print-imports (plan 5.10.14): one line per bound symbol, sorted by
+// symbol, then one line per ELF module with the highest default version of
+// its bound symbols, the oldest library version the output can run with.
+static void printImports(std::vector<PrintedImport> &rows) {
+  llvm::sort(rows, [](const PrintedImport &a, const PrintedImport &b) {
+    return std::tie(a.symbol, a.module, a.entry) <
+           std::tie(b.symbol, b.module, b.entry);
+  });
+  std::map<std::string, std::string> floors;
+  for (const PrintedImport &row : rows) {
+    message(row.symbol + " -> " + row.module + "!" + row.entry + " [" +
+            (row.isData ? "data" : "function") + ", " +
+            (row.version.empty() ? "-" : row.version) + "]");
+    if (!row.isELF)
+      continue;
+    std::string &floor = floors[row.module];
+    if (row.version.empty())
+      continue;
+    if (floor.empty() ||
+        std::make_pair(getVersionNumbers(floor), StringRef(floor)) <
+            std::make_pair(getVersionNumbers(row.version),
+                           StringRef(row.version)))
+      floor = row.version;
+  }
+  for (const auto &[module, floor] : floors)
+    message(module + ": version floor " + (floor.empty() ? "-" : floor));
+}
+
+namespace {
+/// What the import annotation decided for the merged module (plan 5.10.13).
+/// The analysis runs in lto::Config::PreCodeGenModuleHook, which reports the
+/// unresolved and unbindable references and skips code generation after an
+/// error, so that the backend's backstop does not report them again;
+/// MSILLinkHooksPass applies the result to the module.
+struct ImportAnnotation {
+  /// A declaration bound natively: its IR name, module and entry.
+  struct Binding {
+    std::string irName;
+    std::string module;
+    std::string entry;
+  };
+  std::vector<Binding> bindings;
+  /// /alternatename: a declaration (IR name) whose uses go to a definition
+  /// of the merged module (IR name).
+  std::vector<std::pair<std::string, std::string>> replacements;
+  /// The kind-0 operands of !msil.imports: symbol, module and entry.
+  std::vector<std::array<std::string, 3>> libcalls;
+  /// --print-imports: the rows of the declarations that the merged module
+  /// refers to, explicit imports included.
+  std::vector<PrintedImport> printed;
+  /// --print-imports: the rows of the functions that only code generation
+  /// may call, by symbol name: the kind-0 operands, the declarations bound
+  /// quietly and the unused explicit imports. Each becomes a line when the
+  /// AsmPrinter declares a P/Invoke for it (!msil.imports.used).
+  StringMap<PrintedImport> codegenRows;
+};
+
 /// msil-ld's hooks in LTO's code generator (plan 5.9.13), a legacy pass that
 /// lto::Config::PreCodeGenPassesHook adds ahead of the MSIL backend's passes.
-/// In M14 it sets two module flags of the merged module and nothing else:
-/// "msil-assembly-name" (MDString, behavior Override), the assembly name that
-/// the AsmPrinter prints (decision D28 as amended for M14; LTO names the
-/// merged module ld-temp.o), and "msil-lto" (i32 1, behavior Override), which
-/// makes the backend report an undefined function that the standalone import
-/// table does not import as msil-ld's "undefined symbol: <name>" (plan
-/// 5.9.6). M15 makes it the import-annotation pass of plan 5.10.13.
+/// It sets module flags of the merged module: "msil-assembly-name" (MDString,
+/// behavior Override), the assembly name that the AsmPrinter prints (decision
+/// D28 as amended for M14; LTO names the merged module ld-temp.o), and
+/// "msil-lto" (i32 1, behavior Override). Under --lto-emit-asm it is also
+/// the import-annotation pass (plan 5.10.13): the flag "msil-linked" (i32 1,
+/// Override), "msil-import-module"/"msil-import-name" on every natively
+/// bound declaration (an extern_weak one becomes external), /alternatename
+/// replacements, and the named metadata !msil.imports for the library
+/// functions that the code generator may call; available_externally
+/// functions and variables become declarations, which the output does not
+/// define (plan 5.8.10). After code generation it prints --print-imports.
 class MSILLinkHooksPass final : public ModulePass {
 public:
   static char ID;
 
-  explicit MSILLinkHooksPass(std::string assemblyName)
-      : ModulePass(ID), assemblyName(std::move(assemblyName)) {}
+  MSILLinkHooksPass(std::string assemblyName,
+                    std::shared_ptr<const ImportAnnotation> imports)
+      : ModulePass(ID), assemblyName(std::move(assemblyName)),
+        imports(std::move(imports)) {}
 
   StringRef getPassName() const override { return "msil-ld link hooks"; }
 
-  // The flags are set while the pass manager initializes its passes, not in
-  // runOnModule: the legacy pass manager initializes every pass of the code
-  // generator before it runs the first one, and the AsmPrinter prints the
-  // assembly name when it is initialized (emitStartOfAsmFile). This pass
-  // comes first, so its initialization runs first.
+  // The flags and annotations are set while the pass manager initializes its
+  // passes, not in runOnModule: the legacy pass manager initializes every
+  // pass of the code generator before it runs the first one, and the
+  // AsmPrinter prints the assembly name, and decides on a byte order mark
+  // from the names it will print, when it is initialized
+  // (emitStartOfAsmFile). This pass comes first, so its initialization runs
+  // first.
   bool doInitialization(Module &m) override {
     LLVMContext &context = m.getContext();
     if (!assemblyName.empty())
       m.setModuleFlag(Module::Override, "msil-assembly-name",
                       MDString::get(context, assemblyName));
     m.setModuleFlag(Module::Override, "msil-lto", 1);
+    if (imports)
+      annotate(m);
     return true;
   }
 
   bool runOnModule(Module &) override { return false; }
+
+  // --print-imports (plan 5.10.13, 5.10.14) comes after code generation,
+  // which alone knows the library functions it calls: the legacy pass
+  // manager finalizes its passes in reverse order, so this pass, the first,
+  // is finalized after the AsmPrinter, which records in !msil.imports.used
+  // every P/Invoke it declared. The lines are the import analysis's and one
+  // for each such function that a kind-0 !msil.imports operand or a quiet
+  // binding bound.
+  bool doFinalization(Module &m) override {
+    if (!imports || !ctx.arg.printImports)
+      return false;
+    std::vector<PrintedImport> rows = imports->printed;
+    StringSet<> symbols;
+    for (const PrintedImport &row : rows)
+      symbols.insert(row.symbol);
+    if (const NamedMDNode *used = m.getNamedMetadata("msil.imports.used")) {
+      for (const MDNode *op : used->operands()) {
+        auto *name = op->getNumOperands()
+                         ? dyn_cast<MDString>(op->getOperand(0))
+                         : nullptr;
+        if (!name)
+          continue;
+        auto it = imports->codegenRows.find(name->getString());
+        if (it != imports->codegenRows.end() &&
+            symbols.insert(name->getString()).second)
+          rows.push_back(it->second);
+      }
+    }
+    printImports(rows);
+    return false;
+  }
 
   void getAnalysisUsage(AnalysisUsage &au) const override {
     au.setPreservesAll();
   }
 
 private:
+  void annotate(Module &m) {
+    LLVMContext &context = m.getContext();
+    m.setModuleFlag(Module::Override, "msil-linked", 1);
+
+    // The import analysis took available_externally functions and variables
+    // for declarations, and the references in their bodies and initializers
+    // for none (annotateImports), as the LTO pipeline's
+    // EliminateAvailableExternally does from -O2: do what it does.
+    for (GlobalVariable &gv : m.globals()) {
+      if (!gv.hasAvailableExternallyLinkage())
+        continue;
+      gv.setInitializer(nullptr);
+      gv.removeDeadConstantUsers();
+      gv.setLinkage(GlobalValue::ExternalLinkage);
+    }
+    for (Function &f : m.functions()) {
+      if (f.isDeclaration() || !f.hasAvailableExternallyLinkage())
+        continue;
+      f.deleteBody();
+      f.removeDeadConstantUsers();
+    }
+
+    for (const ImportAnnotation::Binding &b : imports->bindings) {
+      Function *f = m.getFunction(b.irName);
+      if (!f)
+        continue;
+      f->addFnAttr("msil-import-module", b.module);
+      f->addFnAttr("msil-import-name", b.entry);
+      if (f->hasExternalWeakLinkage())
+        f->setLinkage(GlobalValue::ExternalLinkage);
+    }
+
+    for (const auto &[declName, defName] : imports->replacements) {
+      GlobalValue *decl = m.getNamedValue(declName);
+      GlobalValue *def = m.getNamedValue(defName);
+      if (!decl || !def || decl == def || !decl->isDeclaration())
+        continue;
+      decl->replaceAllUsesWith(def);
+      decl->eraseFromParent();
+    }
+
+    if (imports->libcalls.empty())
+      return;
+    NamedMDNode *md = m.getOrInsertNamedMetadata("msil.imports");
+    Type *i32 = Type::getInt32Ty(context);
+    for (const std::array<std::string, 3> &op : imports->libcalls)
+      md->addOperand(MDNode::get(
+          context,
+          {MDString::get(context, op[0]), MDString::get(context, op[1]),
+           MDString::get(context, op[2]),
+           ConstantAsMetadata::get(ConstantInt::get(i32, 0))}));
+  }
+
   std::string assemblyName;
+  std::shared_ptr<const ImportAnnotation> imports;
 };
 } // namespace
 
@@ -104,6 +303,364 @@ static std::string getAssemblyName() {
   if (stem.empty())
     stem = sys::path::filename(ctx.arg.outputFile);
   return stem.str();
+}
+
+// The linker name of \p gv, as the bitcode symbol table names it (without
+// the '\1' prefix).
+static std::string getSymbolName(const GlobalValue &gv) {
+  std::string name;
+  raw_string_ostream os(name);
+  Mangler().getNameWithPrefix(os, &gv, /*CannotUsePrivateLabel=*/false);
+  return name;
+}
+
+// The 5.10.14 text for a native definition that a P/Invoke cannot bind.
+static std::string getRejectedMessage(StringRef name, const NativeExport &e) {
+  switch (e.Why) {
+  case NotBindable::NativeCodeOnly:
+    return ("symbol '" + name + "' is defined only in native object code (" +
+            toString(e.File) + "); MSIL cannot link machine code")
+        .str();
+  case NotBindable::HiddenVersion:
+    return ("symbol '" + name + "' in " + e.Module +
+            " has only the non-default version " + e.Entry + "@" + e.Version +
+            ", which a P/Invoke cannot bind")
+        .str();
+  case NotBindable::ThreadLocal:
+    // Only errno has another spelling, <errno.h>'s macro, that reaches it
+    // without importing the variable (plan 5.10.14).
+    return ("symbol '" + name + "' in " + e.Module +
+            " is thread-local data and cannot be imported" +
+            (name == "errno" ? "; use <errno.h>" : ""))
+        .str();
+  case NotBindable::PrivateVersion:
+    return ("symbol '" + name + "' in " + e.Module + " is " + e.Version +
+            " (GLIBC_PRIVATE) and cannot be bound")
+        .str();
+  case NotBindable::None:
+    break;
+  }
+  llvm_unreachable("a bindable definition is not rejected");
+}
+
+// True if \p name is __start_<X> or __stop_<X> on a non-Windows triple and a
+// definition of \p m is in section <X>: whole-program code generation defines
+// such a name (plan 5.9.6, 5.9.9), so it is neither bound nor reported.
+static bool isSectionBoundary(const Module &m, StringRef name) {
+  if (ctx.arg.target.isOSWindows())
+    return false;
+  StringRef section = name;
+  if (!section.consume_front("__start_") && !section.consume_front("__stop_"))
+    return false;
+  return any_of(m.global_objects(), [&](const GlobalObject &go) {
+    return !go.isDeclarationForLinker() && go.getSection() == section;
+  });
+}
+
+// True if the output refers to \p gv: a use in a function or variable that
+// the output defines, directly or through constants. An available_externally
+// function or variable is not part of the output (code generation emits
+// none, its symbol is undefined: plan 5.8.10, and MSILLinkHooksPass drops its
+// body or initializer), so the uses in it are not references. A constant
+// that nothing uses counts as a reference, as Value::use_empty() counts it.
+static bool hasLiveUses(const GlobalValue &gv) {
+  SmallPtrSet<const User *, 8> visited;
+  SmallVector<const User *, 8> worklist(gv.users());
+  while (!worklist.empty()) {
+    const User *u = worklist.pop_back_val();
+    if (!visited.insert(u).second)
+      continue;
+    if (const auto *inst = dyn_cast<Instruction>(u)) {
+      const Function *f = inst->getFunction();
+      if (!f || !f->hasAvailableExternallyLinkage())
+        return true;
+      continue;
+    }
+    if (const auto *g = dyn_cast<GlobalValue>(u)) {
+      if (!g->hasAvailableExternallyLinkage())
+        return true;
+      continue;
+    }
+    if (u->use_empty())
+      return true;
+    append_range(worklist, u->users());
+  }
+  return false;
+}
+
+// True if the unbound declaration \p gv, whose linker name is \p name, keeps
+// M12's null-plus-trap lowering (plan 5.9.6 step 3): its symbol's binding is
+// WEAK, which it is only if every reference is weak (lld/ELF's rule,
+// Symbol::resolve). The merged module's linkage cannot tell: LTO's IRMover
+// keeps the first input's declaration, so an extern_weak declaration stays
+// extern_weak when a later input's GLOBAL reference is linked in. Only a name
+// that the symbol table does not know, a library function that the optimizer
+// added, is decided by its declaration.
+static bool isUnboundWeak(const GlobalValue &gv, StringRef name) {
+  if (const Symbol *sym = symtab->find(name))
+    return sym->isWeak();
+  return gv.hasExternalWeakLinkage();
+}
+
+// The import annotation of plan 5.10.13 and the post-LTO report of plan
+// 5.9.6, on the merged module \p m: every declaration that the module still
+// refers to is bound or reported, and the library functions that the code
+// generator may call are listed for !msil.imports. Errors use the texts of
+// plan 5.9.14 and 5.10.14 with ">>> referenced by" lines. An
+// available_externally function or variable is a declaration here: the
+// output does not define it (plan 5.8.10), and MSILLinkHooksPass drops its
+// body or initializer.
+static void annotateImports(const Module &m, ImportAnnotation &out) {
+  auto getRow = [](StringRef symbol, StringRef module, StringRef entry,
+                   bool isData, const NativeExport *e) -> PrintedImport {
+    auto *native = e ? dyn_cast_or_null<NativeLibraryFile>(e->File) : nullptr;
+    return {symbol.str(),
+            module.str(),
+            entry.str(),
+            isData,
+            e ? e->Version.str() : std::string(),
+            native && native->format == NativeLibraryFile::ELFShared};
+  };
+  // A P/Invoke of a reference of the module.
+  auto record = [&](StringRef symbol, StringRef module, StringRef entry,
+                    bool isData, const NativeExport *e) {
+    if (ctx.arg.printImports)
+      out.printed.push_back(getRow(symbol, module, entry, isData, e));
+  };
+  // A function that only code generation may call: a line once the
+  // AsmPrinter declares its P/Invoke (MSILLinkHooksPass::doFinalization).
+  auto recordCodegen = [&](StringRef symbol, StringRef module, StringRef entry,
+                           const NativeExport *e) {
+    if (ctx.arg.printImports)
+      out.codegenRows.try_emplace(
+          symbol, getRow(symbol, module, entry, /*isData=*/false, e));
+  };
+
+  // Looks up \p lookupName in the native libraries, or reuses late binding's
+  // result for the symbol \p name (step 2 looked the symbol name up).
+  auto lookup = [&](StringRef name, StringRef lookupName,
+                    SmallVectorImpl<const NativeExport *> &rejected,
+                    bool isFunctionReference) -> const NativeExport * {
+    if (lookupName == name)
+      if (auto *sym = dyn_cast_or_null<NativeSymbol>(symtab->find(name)))
+        return sym->nativeExport;
+    return ctx.nativeIndex.lookup(lookupName, rejected, isFunctionReference);
+  };
+
+  // Reports the reference \p name that no native library binds: undefined,
+  // or the first definition that the lookup passed over: one that a P/Invoke
+  // cannot bind, or data of a COFF import library or DLL, which a function
+  // reference skips (plan 5.10.10).
+  auto reportUnbound = [&](StringRef name,
+                           ArrayRef<const NativeExport *> rejected) {
+    if (rejected.empty())
+      symtab->reportReference(("undefined symbol: " + name).str(), name);
+    else if (rejected[0]->Why == NotBindable::None)
+      symtab->reportReference((Twine("'") + name + "' in " +
+                               rejected[0]->Module + " is data, but " +
+                               symtab->getReferencingFile(name) +
+                               " calls it as a function")
+                                  .str(),
+                              name);
+    else
+      symtab->reportReference(getRejectedMessage(name, *rejected[0]), name);
+  };
+
+  // A P/Invoke cannot pass a native `long double` where it is wider than
+  // double (plan 5.10.10).
+  bool wideLongDouble = hasWideNativeLongDouble(ctx.arg.target);
+  auto isNotPassable = [&](StringRef name) {
+    return wideLongDouble && isNativeLongDoubleFunction(name);
+  };
+
+  // The definition of the merged module that /alternatename makes \p name
+  // resolve to, or the name to look up natively instead.
+  auto getAlternate = [&](StringRef name) -> StringRef {
+    auto it = ctx.appliedAlternateNames.find(name);
+    return it == ctx.appliedAlternateNames.end() ? StringRef() : it->second;
+  };
+  auto findDefinition = [&](StringRef name) -> const GlobalValue * {
+    for (const GlobalValue &gv : m.global_values())
+      if (!gv.isDeclarationForLinker() && getSymbolName(gv) == name)
+        return &gv;
+    return nullptr;
+  };
+
+  for (const Function &f : m.functions()) {
+    if (!f.isDeclarationForLinker() || f.isIntrinsic())
+      continue;
+    std::string name = getSymbolName(f);
+    if (isSectionBoundary(m, name))
+      continue;
+    bool isUsed = hasLiveUses(f);
+
+    // An explicit import module is used as it is, unchecked (plan 5.10.7),
+    // and exempt from the callback and `long double` checks.
+    StringRef module =
+        f.getFnAttribute("msil-import-module").getValueAsString();
+    StringRef importName =
+        f.getFnAttribute("msil-import-name").getValueAsString();
+    if (!module.empty()) {
+      StringRef entry = importName.empty() ? StringRef(name) : importName;
+      if (isUsed)
+        record(name, module, entry, /*isData=*/false, nullptr);
+      else
+        recordCodegen(name, module, entry, nullptr);
+      continue;
+    }
+
+    // An import name equal to the name counts as none (plan 5.9.6 step 2).
+    StringRef lookupName = name;
+    if (!importName.empty())
+      lookupName = importName;
+    if (StringRef to = getAlternate(name); !to.empty()) {
+      if (const GlobalValue *def = findDefinition(to)) {
+        out.replacements.push_back({f.getName().str(), def->getName().str()});
+        continue;
+      }
+      lookupName = to;
+    }
+
+    SmallVector<const NativeExport *, 2> rejected;
+    const NativeExport *e =
+        lookup(name, lookupName, rejected, /*isFunctionReference=*/true);
+    // Whether the symbol, lookup or entry name is in a list.
+    auto isListed = [&](function_ref<bool(StringRef)> isInList) {
+      return isInList(name) || isInList(lookupName) || isInList(e->Entry);
+    };
+
+    // A declaration that nothing refers to is neither reported nor checked,
+    // but the code generator may still call it as a library function, with
+    // its attributes, so it is bound quietly when a native library defines it
+    // as a function, unless it is on the callback list or a P/Invoke cannot
+    // pass its `long double`.
+    if (!isUsed) {
+      if (e &&
+          (e->Kind == NativeKind::Function || e->Kind == NativeKind::NoType) &&
+          !isListed(isNativeCallbackFunction) && !isListed(isNotPassable)) {
+        out.bindings.push_back(
+            {f.getName().str(), e->Module.str(), e->Entry.str()});
+        recordCodegen(name, e->Module, e->Entry, e);
+      }
+      continue;
+    }
+
+    if (!e) {
+      // An unbound weak symbol keeps M12's lowering: null, and a trap stub
+      // for calls (plan 5.9.6 step 3). An extern_weak declaration of a GLOBAL
+      // symbol is reported here, so it never reaches that lowering.
+      if (!isUnboundWeak(f, name))
+        reportUnbound(name, rejected);
+      continue;
+    }
+    // Data here comes from an ELF library, where the first definition in
+    // link order binds whatever its type, as with ld.so (plan 5.10.10).
+    if (e->Kind == NativeKind::Data) {
+      symtab->reportReference(
+          (Twine("'") + name + "' in " + e->Module + " is data, but " +
+           symtab->getReferencingFile(name) + " calls it as a function")
+              .str(),
+          name);
+      continue;
+    }
+    // Native code cannot call a managed function before phase 3's thunks
+    // (plan 5.10.10): the functions of the callback list are errors, whether
+    // or not the call passes a function.
+    if (isListed(isNativeCallbackFunction)) {
+      symtab->reportReference(
+          (Twine("native function '") + name + "' (" + e->Module +
+           ") takes a C function pointer; passing functions to native code "
+           "needs phase 3 thunks")
+              .str(),
+          name);
+      continue;
+    }
+    // The IR signature of a native `long double` function says double
+    // (decision D3), but the native function takes or returns an x87 or
+    // binary128 value (plan 5.10.10).
+    if (isListed(isNotPassable)) {
+      symtab->reportReference(
+          (Twine("native function '") + name + "' (" + e->Module +
+           ") takes or returns a value that a P/Invoke cannot pass natively "
+           "yet (phase 3)")
+              .str(),
+          name);
+      continue;
+    }
+    out.bindings.push_back(
+        {f.getName().str(), e->Module.str(), e->Entry.str()});
+    record(name, e->Module, e->Entry, /*isData=*/false, e);
+  }
+
+  // Undefined variables (plan 5.10.12): native data cannot be imported before
+  // M20, extern variables with import attributes included.
+  for (const GlobalVariable &gv : m.globals()) {
+    if (!gv.isDeclarationForLinker() || gv.getName().starts_with("llvm.") ||
+        !hasLiveUses(gv))
+      continue;
+    std::string name = getSymbolName(gv);
+    if (isSectionBoundary(m, name))
+      continue;
+    StringRef module = gv.getAttribute("msil-import-module").getValueAsString();
+    StringRef importName =
+        gv.getAttribute("msil-import-name").getValueAsString();
+    StringRef lookupName = importName.empty() ? StringRef(name) : importName;
+    if (StringRef to = getAlternate(name); !to.empty()) {
+      if (const GlobalValue *def = findDefinition(to)) {
+        out.replacements.push_back({gv.getName().str(), def->getName().str()});
+        continue;
+      }
+      lookupName = to;
+    }
+
+    SmallVector<const NativeExport *, 2> rejected;
+    const NativeExport *e =
+        module.empty()
+            ? lookup(name, lookupName, rejected, /*isFunctionReference=*/false)
+            : nullptr;
+    if (!module.empty() || (e && e->Kind != NativeKind::Function)) {
+      symtab->reportReference((Twine("importing native data symbol '") + name +
+                               "' (" + (module.empty() ? e->Module : module) +
+                               ") is not supported yet")
+                                  .str(),
+                              name);
+      continue;
+    }
+    if (e) {
+      symtab->reportReference((Twine("symbol type mismatch: ") + name +
+                               "\n>>> defined as function in " +
+                               toString(e->File) + "\n>>> defined as data in " +
+                               symtab->getReferencingFile(name))
+                                  .str(),
+                              name);
+      continue;
+    }
+    if (!isUnboundWeak(gv, name))
+      reportUnbound(name, rejected);
+  }
+
+  // The library functions that the code generator may call (plan 5.10.13):
+  // each name of RuntimeLibcalls without a '__' prefix (those are phase 3's
+  // helpers) that the module neither defines nor declares and that a native
+  // library binds as a function, unless a P/Invoke cannot pass its
+  // `long double`.
+  StringSet<> seen;
+  for (const char *libcall :
+       lto::LTO::getRuntimeLibcallSymbols(ctx.arg.target)) {
+    StringRef name(libcall);
+    if (name.starts_with("__") || m.getNamedValue(name) ||
+        !seen.insert(name).second)
+      continue;
+    SmallVector<const NativeExport *, 2> rejected;
+    const NativeExport *e =
+        ctx.nativeIndex.lookup(name, rejected, /*isFunctionReference=*/true);
+    if (!e ||
+        (e->Kind != NativeKind::Function && e->Kind != NativeKind::NoType) ||
+        isNotPassable(name) || isNotPassable(e->Entry))
+      continue;
+    out.libcalls.push_back({name.str(), e->Module.str(), e->Entry.str()});
+    recordCodegen(name, e->Module, e->Entry, e);
+  }
 }
 
 static lto::Config createConfig() {
@@ -140,8 +697,29 @@ static lto::Config createConfig() {
     c.Options.MCOptions.AsmVerbose = true;
   }
 
-  c.PreCodeGenPassesHook = [name = getAssemblyName()](legacy::PassManager &pm) {
-    pm.add(new MSILLinkHooksPass(name));
+  // Under --lto-emit-asm the merged module is the whole program: bind its
+  // declarations and report what stays unresolved after LTO optimization,
+  // before code generation, which an error skips (plan 5.9.6, 5.10.13). From
+  // M20 an object-producing LTO link sets only the module flags.
+  std::shared_ptr<ImportAnnotation> imports;
+  if (ctx.arg.ltoEmitAsm) {
+    imports = std::make_shared<ImportAnnotation>();
+    c.PreCodeGenModuleHook = [imports](unsigned, const Module &m) {
+      size_t errorsBefore = errorCount();
+      *imports = ImportAnnotation();
+      annotateImports(m, *imports);
+      if (errorCount() == errorsBefore)
+        return true;
+      // Code generation, and with it MSILLinkHooksPass::doFinalization, does
+      // not run: --print-imports prints the analysis's lines here.
+      if (ctx.arg.printImports)
+        printImports(imports->printed);
+      return false;
+    };
+  }
+  c.PreCodeGenPassesHook = [name = getAssemblyName(),
+                            imports](legacy::PassManager &pm) {
+    pm.add(new MSILLinkHooksPass(name, imports));
   };
 
   if (ctx.arg.saveTemps)
@@ -238,8 +816,10 @@ SmallVector<InputFile *, 0> BitcodeCompiler::compile() {
   // one task, the merged module: ThinLTO input and more than one partition
   // give one module per task, which only CIL objects can link, and the driver
   // reports them before LTO runs. Like lld's writers, msil-ld writes no
-  // output after an error (the backend reports undefined functions), and the
-  // runs of LLD_IN_TEST that print nothing do not write standard output.
+  // output after an error (msil-ld's import analysis reports unresolved
+  // references and skips code generation; the backend reports errors found
+  // during code generation, such as calls of native variadic functions), and
+  // the runs of LLD_IN_TEST that print nothing do not write standard output.
   if (ctx.arg.ltoEmitAsm) {
     assert(maxTasks == 1 && "ThinLTO and LTO partitions need CIL objects");
     if (errorCount() == 0 &&

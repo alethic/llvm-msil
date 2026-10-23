@@ -1,0 +1,136 @@
+## Relocatable objects from which tests build a small glibc 2.43-like set of
+## shared objects with 'ld.lld -shared -soname <name> --version-script
+## glibc-<lib>.map' (ImplementationPlan.md 5.10.8; recon p2 native-imports
+## 2.2: the names, kinds and versions are glibc's, the code is not). A symbol
+## named '<name>@<version>' is a hidden (non-default) version of <name>, as an
+## assembler writes it for '.symver'. -D MACHINE=... builds them for another
+## machine. Documents (yaml2obj --docnum):
+##   1  libc.so.6
+##   2  libm.so.6
+##   3  ld-linux-x86-64.so.2
+##   4  libmvec.so.1
+##   5  libc_nonshared.a's member atexit.oS (native code only)
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: [[MACHINE=EM_X86_64]]
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x200
+  - Name:  .data
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_WRITE ]
+    Size:  0x20
+  - Name:  .tbss
+    Type:  SHT_NOBITS
+    Flags: [ SHF_ALLOC, SHF_WRITE, SHF_TLS ]
+    Size:  0x4
+Symbols:
+  - { Name: puts,                         Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x000, Size: 8 }
+  - { Name: printf,                       Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x008, Size: 8 }
+  - { Name: fputs,                        Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x010, Size: 8 }
+  - { Name: malloc,                       Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x018, Size: 8 }
+  - { Name: free,                         Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x020, Size: 8 }
+  - { Name: abs,                          Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x028, Size: 8 }
+  - { Name: exit,                         Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x030, Size: 8 }
+  - { Name: qsort,                        Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x038, Size: 8 }
+  - { Name: bsearch,                      Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x040, Size: 8 }
+  - { Name: lfind,                        Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x048, Size: 8 }
+  - { Name: signal,                       Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x050, Size: 8 }
+  - { Name: __errno_location,             Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x058, Size: 8 }
+  - { Name: strlen,                       Type: STT_GNU_IFUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x060, Size: 8 }
+  - { Name: strchr,                       Type: STT_GNU_IFUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x068, Size: 8 }
+  - { Name: memchr,                       Type: STT_GNU_IFUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x070, Size: 8 }
+  - { Name: 'memcpy@GLIBC_2.2.5',         Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x078, Size: 8 }
+  - { Name: memcpy,                       Type: STT_GNU_IFUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x080, Size: 8 }
+  - { Name: fstat,                        Type: STT_FUNC,      Section: .text, Binding: STB_WEAK,   Value: 0x088, Size: 8 }
+  - { Name: 'pthread_create@GLIBC_2.2.5', Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x090, Size: 8 }
+  - { Name: pthread_create,               Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x098, Size: 8 }
+  - { Name: 'dlopen@GLIBC_2.2.5',         Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x0a0, Size: 8 }
+  - { Name: dlopen,                       Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x0a8, Size: 8 }
+  - { Name: dlsym,                        Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x0b0, Size: 8 }
+  - { Name: newest_fn,                    Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x0b8, Size: 8 }
+  - { Name: __libc_dlopen_mode,           Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x0c0, Size: 8 }
+  - { Name: stdout,                       Type: STT_OBJECT,    Section: .data, Binding: STB_GLOBAL, Value: 0x00,  Size: 8 }
+  - { Name: stderr,                       Type: STT_OBJECT,    Section: .data, Binding: STB_GLOBAL, Value: 0x08,  Size: 8 }
+  - { Name: environ,                      Type: STT_OBJECT,    Section: .data, Binding: STB_WEAK,   Value: 0x10,  Size: 8 }
+  - { Name: optind,                       Type: STT_OBJECT,    Section: .data, Binding: STB_GLOBAL, Value: 0x18,  Size: 4 }
+  - { Name: errno,                        Type: STT_TLS,       Section: .tbss, Binding: STB_GLOBAL, Value: 0x0,   Size: 4 }
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: [[MACHINE=EM_X86_64]]
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x100
+  - Name:  .data
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_WRITE ]
+    Size:  0x8
+Symbols:
+  - { Name: sqrt,                  Type: STT_FUNC,      Section: .text, Binding: STB_WEAK,   Value: 0x00, Size: 8 }
+  - { Name: floor,                 Type: STT_GNU_IFUNC, Section: .text, Binding: STB_WEAK,   Value: 0x08, Size: 8 }
+  - { Name: cbrt,                  Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: 'pow@GLIBC_2.2.5',     Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+  - { Name: pow,                   Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 8 }
+  - { Name: 'exp@GLIBC_2.2.5',     Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 8 }
+  - { Name: exp,                   Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 8 }
+  - { Name: 'sqrtf@GLIBC_2.2.5',   Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x38, Size: 8 }
+  - { Name: sqrtf,                 Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x40, Size: 8 }
+  - { Name: 'matherr@GLIBC_2.2.5', Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x48, Size: 8 }
+  - { Name: signgam,               Type: STT_OBJECT,    Section: .data, Binding: STB_WEAK,   Value: 0x0,  Size: 4 }
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: [[MACHINE=EM_X86_64]]
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+  - Name:  .data
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_WRITE ]
+    Size:  0x8
+Symbols:
+  - { Name: __tls_get_addr, Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: _dl_argv,       Type: STT_OBJECT, Section: .data, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: [[MACHINE=EM_X86_64]]
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: _ZGVbN2v_sin, Type: STT_GNU_IFUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: [[MACHINE=EM_X86_64]]
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x20
+Symbols:
+  - { Name: atexit,                 Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x00, Size: 8 }
+  - { Name: at_quick_exit,          Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x08, Size: 8 }
+  - { Name: pthread_atfork,         Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: __stack_chk_fail_local, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8, Other: [ STV_HIDDEN ] }

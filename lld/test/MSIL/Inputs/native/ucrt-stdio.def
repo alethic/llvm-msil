@@ -1,0 +1,5 @@
+LIBRARY api-ms-win-crt-stdio-l1-1-0.dll
+EXPORTS
+  puts
+  fputs
+  __acrt_iob_func

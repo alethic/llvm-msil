@@ -1,0 +1,1 @@
+GLIBC_2.22 { global: _ZGVbN2v_sin; };

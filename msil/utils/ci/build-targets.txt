@@ -53,3 +53,8 @@ llvm-lto2
 CLITests
 # The test of lld's AllDrivers.cpp hook (the gtest leg of msil/utils/ci/upstream-hooks.ps1).
 LLDAsLibAllTests
+
+# M15. yaml2obj and llvm-mc make the native-library inputs of lld/test/MSIL (ELF shared
+# objects with symbol versions, COFF import libraries; recon p2/native-imports 9.1).
+yaml2obj
+llvm-mc

@@ -1,6 +1,7 @@
 # Run in a nested lit by ../../pipelines.test and listed by
 # ../../lit-config.test: it prints the pipeline features of the
-# configuration (plan 5.12.2).
+# configuration (plan 5.12.2), and the glibc sysroot of the hosted tests
+# (M15).
 # REQUIRES: msil-prog-pipeline=lto, msil-link-output=il
 # RUN: %if msil-pipeline=asm %{ echo feature msil-pipeline=asm %}
 # RUN: %if msil-pipeline=lto %{ echo feature msil-pipeline=lto %}
@@ -8,3 +9,4 @@
 # RUN: %if msil-link-output=il %{ echo feature msil-link-output=il %}
 # RUN: %if msil-ld %{ echo feature msil-ld %}
 # RUN: %if msil-ar %{ echo feature msil-ar %}
+# RUN: %if msil-glibc-sysroot %{ echo feature msil-glibc-sysroot %{msil_glibc_sysroot} %}

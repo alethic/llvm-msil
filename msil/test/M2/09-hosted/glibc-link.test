@@ -1,0 +1,76 @@
+# A hosted glibc program linked to ILAsm text against the real libc.so and libm.so scripts.
+# prog.c includes stdio.h, stdlib.h, string.h, ctype.h, errno.h and math.h
+# from the glibc sysroot and calls puts, strlen, strcpy, malloc, free, sqrt,
+# isalpha (glibc: __ctype_b_loc) and errno (glibc: __errno_location): only
+# non-variadic functions and no data symbol, which M15 can bind. The driver
+# links with --sysroot and -lc -lm (plan 5.10.4). The sysroot's libc.so is the
+# real GNU ld script, 'GROUP ( /usr/lib/x86_64-linux-gnu/libc.so.6
+# /usr/lib/x86_64-linux-gnu/libc_nonshared.a AS_NEEDED (
+# /lib64/ld-linux-x86-64.so.2 ) )', and libm.so names libm.so.6 and libmvec
+# the same way: absolute paths in a script inside the sysroot resolve under
+# it (plan 5.10.8), so msil-ld reads glibc's own libc.so.6, libc_nonshared.a
+# and libm.so.6 and binds each call to its DT_SONAME and default version.
+# -Wl,--print-imports shows the bindings, the linked text the P/Invokes
+# ('assembly', plan 5.10.11). The output is deterministic: exactly eight rows,
+# sorted by symbol (byte order, so the '__' names come first), one per
+# P/Invoke of the linked text (IMPORTS-NUM, IL-NUM), then the version floor of
+# each ELF module (plan 5.10.14): GLIBC_2.3 for libc.so.6, the default version
+# of __ctype_b_loc and the highest of its six rows, and GLIBC_2.2.5 for
+# libm.so.6 (sqrt). Plan 5.12.8 (hosted leg, Q16), 5.10.15, M15.
+# REQUIRES: msil-glibc-sysroot, msil-ld
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %clang --target=x86_64-unknown-linux-gnu-msil --sysroot=%{msil_glibc_sysroot} -O2 -flto %t/prog.c -Wl,--lto-emit-asm -Wl,--print-imports -o %t/prog.il > %t/imports.txt 2>&1
+# RUN: FileCheck %s --check-prefix=IMPORTS --implicit-check-not=error: --implicit-check-not=warning: --input-file=%t/imports.txt
+# RUN: FileCheck %s --check-prefix=IMPORTS-NUM --input-file=%t/imports.txt
+# RUN: FileCheck %s --check-prefix=IL --input-file=%t/prog.il
+# RUN: FileCheck %s --check-prefix=IL-NUM --input-file=%t/prog.il
+# The symbol rows in sorted order, then the two version floors.
+# IMPORTS:     {{^}}__ctype_b_loc -> libc.so.6!__ctype_b_loc [function, GLIBC_2.3]{{$}}
+# IMPORTS:     {{^}}__errno_location -> libc.so.6!__errno_location [function, GLIBC_2.2.5]{{$}}
+# IMPORTS:     {{^}}free -> libc.so.6!free [function, GLIBC_2.2.5]{{$}}
+# IMPORTS:     {{^}}malloc -> libc.so.6!malloc [function, GLIBC_2.2.5]{{$}}
+# IMPORTS:     {{^}}puts -> libc.so.6!puts [function, GLIBC_2.2.5]{{$}}
+# IMPORTS:     {{^}}sqrt -> libm.so.6!sqrt [function, GLIBC_2.2.5]{{$}}
+# IMPORTS:     {{^}}strcpy -> libc.so.6!strcpy [function, GLIBC_2.2.5]{{$}}
+# IMPORTS:     {{^}}strlen -> libc.so.6!strlen [function, GLIBC_2.2.5]{{$}}
+# IMPORTS-DAG: {{^}}libc.so.6: version floor GLIBC_2.3{{$}}
+# IMPORTS-DAG: {{^}}libm.so.6: version floor GLIBC_2.2.5{{$}}
+# Exactly the eight rows above, then exactly the two floors.
+# IMPORTS-NUM-COUNT-8: {{^[^ ]+ -> [^ ]+ \[}}
+# IMPORTS-NUM-NOT:     {{ -> |version floor}}
+# IMPORTS-NUM-COUNT-2: {{^[^ ]+: version floor GLIBC_[0-9.]+$}}
+# IMPORTS-NUM-NOT:     {{ -> |version floor}}
+# The P/Invokes, one per row.
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int '__ctype_b_loc'() cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int '__errno_location'() cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) void 'free'(native int) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'strcpy'(native int, native int) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# IL-NUM-COUNT-8: pinvokeimpl(
+# IL-NUM-NOT:     pinvokeimpl
+#--- prog.c
+#include <ctype.h>
+#include <errno.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int main(int argc, char **argv) {
+  const char *word = argc > 1 ? argv[1] : "hosted";
+  char *copy = malloc(strlen(word) + 1);
+  if (!copy)
+    return 1;
+  strcpy(copy, word);
+  puts(copy);
+  errno = 0;
+  double r = sqrt((double)strlen(copy));
+  int letters = 0;
+  for (const char *p = copy; *p; ++p)
+    letters += isalpha((unsigned char)*p) != 0;
+  free(copy);
+  return (int)r + letters + (errno != 0);
+}

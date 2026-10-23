@@ -1,0 +1,290 @@
+## GNU ld scripts as native library inputs (ImplementationPlan.md 5.10.8,
+## 5.10.9 'Sysroot inputs' and 5.9.14; M15.a items 1 and 2; recon p2
+## native-imports 2.2 and 7.1). msil-ld reads a script found by -l or given
+## on the command line as lld/ELF does (ScriptParser::addFile):
+## - GROUP, INPUT and AS_NEEDED name inputs, and -l<name> inside them is
+##   searched like -l; OUTPUT_FORMAT and SEARCH_DIR are ignored; comments are
+##   comments;
+## - an absolute path in a script that lies inside --sysroot is taken under
+##   the sysroot (GNU ld's rule; glibc's libc.so names
+##   /lib/x86_64-linux-gnu/libc.so.6), and a missing one is lld/ELF's error
+##   'cannot find <path> inside <sysroot>';
+## - '=<path>' is sysroot-relative;
+## - a relative name is looked up in the script's own directory, then in the
+##   -L directories; a missing one is lld/ELF's 'unable to find <name>', a
+##   missing -l<name> 'unable to find library -l<name>';
+## - an input that leads back to a script whose expansion has not ended is
+##   the error '<script>:<line>: there is a cycle in linker script inputs'
+##   with the two '>>>' lines of 'unable to find <name>', for the input of the
+##   script that re-enters, and that input is skipped (the section 12 row of
+##   2026-10-23 for 5.10.8 and 5.10.14; lld/ELF's 'there is a cycle in linker
+##   script INCLUDEs' is the model): a script naming itself, given on the
+##   command line or found by -l, and two scripts naming each other end with
+##   exit 1, never a stack overflow. A script read again after its expansion
+##   ended (-lc given twice, a script given twice) is no cycle.
+## The libraries the script names are bound like any other: libc.so.6,
+## libm.so.6, the AS_NEEDED ld-linux-x86-64.so.2 and libmvec.so.1, and
+## libc_nonshared.a, whose atexit is native code only. Every file read is
+## real: glibc's scripts, shared objects linked by ld.lld from
+## Inputs/native/glibc.yaml, and an archive of a native ELF object.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p sys/lib/x86_64-linux-gnu sys/lib64 sys/usr/lib/x86_64-linux-gnu
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: yaml2obj --docnum=2 %S/Inputs/native/glibc.yaml -o libm.o
+# RUN: yaml2obj --docnum=3 %S/Inputs/native/glibc.yaml -o ld.o
+# RUN: yaml2obj --docnum=4 %S/Inputs/native/glibc.yaml -o mvec.o
+# RUN: yaml2obj --docnum=5 %S/Inputs/native/glibc.yaml -o atexit.oS
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o \
+# RUN:   -o sys/lib/x86_64-linux-gnu/libc.so.6
+# RUN: ld.lld -shared -soname libm.so.6 --version-script %S/Inputs/native/glibc-libm.map libm.o \
+# RUN:   -o sys/lib/x86_64-linux-gnu/libm.so.6
+# RUN: ld.lld -shared -soname ld-linux-x86-64.so.2 --version-script %S/Inputs/native/glibc-ld.map ld.o \
+# RUN:   -o sys/lib64/ld-linux-x86-64.so.2
+# RUN: ld.lld -shared -soname libmvec.so.1 --version-script %S/Inputs/native/glibc-libmvec.map mvec.o \
+# RUN:   -o sys/lib/x86_64-linux-gnu/libmvec.so.1
+# RUN: llvm-ar rcs sys/usr/lib/x86_64-linux-gnu/libc_nonshared.a atexit.oS
+# RUN: cp libc.so.txt sys/usr/lib/x86_64-linux-gnu/libc.so
+# RUN: cp libm.so.txt sys/usr/lib/x86_64-linux-gnu/libm.so
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as atexit.ll -o atexit.o
+
+# DEFINE: %{il} = FileCheck %s --implicit-check-not='"libc"' --implicit-check-not='"libc.so"' \
+# DEFINE:   --implicit-check-not='"libm.so"' --implicit-check-not="public hidebysig static pinvokeimpl"
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## The driver's line for glibc: -L=<dir> under --sysroot, -lc -lm.
+# RUN: msil-ld --lto-emit-asm --lto-O0 --sysroot=sys -L=/usr/lib/x86_64-linux-gnu main.o -lc -lm \
+# RUN:   -o glibc.il 2>&1 | count 0
+# RUN: %{il} --check-prefix=GLIBC --input-file=glibc.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=glibc.il
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'cbrt'(float64) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ld-linux-x86-64.so.2" cdecl) native int '__tls_get_addr'(native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libmvec.so.1" cdecl) float64 '_ZGVbN2v_sin'(float64) cil managed preservesig {}{{$}}
+## The %{il} patterns nowhere in the file: for a prefix made only of -DAG
+## lines, --implicit-check-not checks only the text before the first match.
+# IL-NONE-NOT: "libc"
+# IL-NONE-NOT: "libc.so"
+# IL-NONE-NOT: "libm.so"
+# IL-NONE-NOT: public hidebysig static pinvokeimpl
+
+## The same scripts given on the command line.
+# RUN: msil-ld --lto-emit-asm --lto-O0 --sysroot=sys main.o sys/usr/lib/x86_64-linux-gnu/libc.so \
+# RUN:   sys/usr/lib/x86_64-linux-gnu/libm.so -o pos.il 2>&1 | count 0
+# RUN: %{il} --check-prefix=GLIBC --input-file=pos.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=pos.il
+
+## libc_nonshared.a is read through the script: atexit is native code only.
+# RUN: not msil-ld --lto-emit-asm --sysroot=sys -L=/usr/lib/x86_64-linux-gnu atexit.o -lc -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=ATEXIT
+# ATEXIT:      {{^}}msil-ld: error: symbol 'atexit' is defined only in native object code ({{.*}}libc_nonshared.a(atexit.oS)); MSIL cannot link machine code{{$}}
+# ATEXIT-NEXT: {{^}}>>> referenced by atexit.o:(main){{$}}
+
+## A script inside the sysroot whose absolute input is missing there.
+# RUN: cp missing-abs.txt sys/usr/lib/x86_64-linux-gnu/libmissing.so
+# RUN: not msil-ld --lto-emit-asm --sysroot=sys -L=/usr/lib/x86_64-linux-gnu main.o -lc -lm -lmissing \
+# RUN:   -o x.il 2>&1 | %{err} --check-prefix=MISSING-ABS
+# MISSING-ABS: {{^}}msil-ld: error: {{.*}}cannot find /lib/x86_64-linux-gnu/libnothere.so.1 inside sys{{$}}
+
+## INPUT with a relative name in the script's directory and -l<name>
+## searched in -L, '=' sysroot-relative paths, SEARCH_DIR ignored.
+# RUN: mkdir -p grp other
+# RUN: yaml2obj one.yaml -o one.o
+# RUN: ld.lld -shared -soname libone.so.1 one.o -o grp/libone.so.1
+# RUN: yaml2obj two.yaml -o two.o
+# RUN: ld.lld -shared -soname libtwo.so.2 two.o -o other/libtwo.so
+# RUN: yaml2obj three.yaml -o three.o
+# RUN: ld.lld -shared -soname libthree.so.3 three.o -o other/libthree.so.3
+# RUN: cp grp.txt grp/libgrp.so
+# RUN: llvm-as grp.ll -o grp.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 --sysroot=sys grp.o -L grp -L other -lgrp -o grp.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=GRP --input-file=grp.il
+# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libone.so.1" cdecl) int32 'one'() cil managed preservesig {}{{$}}
+# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libtwo.so.2" cdecl) int32 'two'() cil managed preservesig {}{{$}}
+# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libthree.so.3" cdecl) int32 'three'() cil managed preservesig {}{{$}}
+# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'cbrt'(float64) cil managed preservesig {}{{$}}
+
+## A relative name found nowhere, and a -l<name> found nowhere.
+# RUN: cp norel.txt grp/libnorel.so
+# RUN: cp nolib.txt grp/libnolib.so
+# RUN: not msil-ld --lto-emit-asm grp.o -L grp -L other -lnorel -o x.il 2>&1 | %{err} --check-prefix=NOREL
+# RUN: not msil-ld --lto-emit-asm grp.o -L grp -L other -lnolib -o x.il 2>&1 | %{err} --check-prefix=NOLIB
+# NOREL: {{^}}msil-ld: error: {{.*}}unable to find libnothere.so.1{{$}}
+# NOLIB: {{^}}msil-ld: error: {{.*}}unable to find library -lnothere{{$}}
+
+## Cycles: a script naming itself, on the command line and through -l, and
+## two scripts naming each other (the error is libb.so's, whose input
+## re-enters liba.so). empty.o references nothing, so the cycle is the only
+## error.
+# RUN: llvm-as empty.ll -o empty.o
+# RUN: not msil-ld --lto-emit-asm empty.o cyc/libloop.so -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=LOOP --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm empty.o -L%t/cyc -lloop -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=LOOP --implicit-check-not=error:
+# LOOP:      {{^}}msil-ld: error: {{(.*[/\\])?}}libloop.so:1: there is a cycle in linker script inputs{{$}}
+# LOOP-NEXT: {{^}}>>> INPUT(libloop.so){{$}}
+# LOOP-NEXT: {{^}}>>>       ^{{$}}
+# RUN: not msil-ld --lto-emit-asm empty.o cyc/liba.so -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=AB --implicit-check-not=error:
+# AB:      {{^}}msil-ld: error: {{(.*[/\\])?}}libb.so:1: there is a cycle in linker script inputs{{$}}
+# AB-NEXT: {{^}}>>> INPUT(liba.so){{$}}
+# AB-NEXT: {{^}}>>>       ^{{$}}
+
+## Not a cycle: a script read again after its expansion ended.
+# RUN: msil-ld --lto-emit-asm --lto-O0 --sysroot=sys -L=/usr/lib/x86_64-linux-gnu main.o -lc -lc -lm \
+# RUN:   -o twice.il 2>&1 | count 0
+# RUN: %{il} --check-prefix=GLIBC --input-file=twice.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=twice.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 --sysroot=sys grp.o -L grp -L other grp/libgrp.so grp/libgrp.so \
+# RUN:   -o twice2.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=GRP --input-file=twice2.il
+
+#--- cyc/libloop.so
+INPUT(libloop.so)
+
+#--- cyc/liba.so
+INPUT(libb.so)
+
+#--- cyc/libb.so
+INPUT(liba.so)
+
+#--- empty.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- libc.so.txt
+/* GNU ld script
+   Use the shared library, but some functions are only in
+   the static library, so try that secondarily.  */
+OUTPUT_FORMAT(elf64-x86-64)
+GROUP ( /lib/x86_64-linux-gnu/libc.so.6 /usr/lib/x86_64-linux-gnu/libc_nonshared.a  AS_NEEDED ( /lib64/ld-linux-x86-64.so.2 ) )
+
+#--- libm.so.txt
+/* GNU ld script
+*/
+OUTPUT_FORMAT(elf64-x86-64)
+GROUP ( /lib/x86_64-linux-gnu/libm.so.6  AS_NEEDED ( /lib/x86_64-linux-gnu/libmvec.so.1 ) )
+
+#--- missing-abs.txt
+/* GNU ld script */
+GROUP ( /lib/x86_64-linux-gnu/libnothere.so.1 )
+
+#--- grp.txt
+/* INPUT names a file in this directory and a library in -L; '=' is the
+   sysroot; SEARCH_DIR is ignored. */
+SEARCH_DIR("=/nowhere")
+INPUT ( libone.so.1 -ltwo )
+GROUP ( libthree.so.3 =/lib/x86_64-linux-gnu/libm.so.6 )
+
+#--- norel.txt
+INPUT ( libnothere.so.1 )
+
+#--- nolib.txt
+INPUT ( -lnothere )
+
+#--- one.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: one,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- two.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: two,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- three.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: three, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- main.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  %c = call double @cbrt(double 8.0)
+  %t = call ptr @__tls_get_addr(ptr null)
+  %v = call double @_ZGVbN2v_sin(double 0.0)
+  %s = fadd double %c, %v
+  %i = fptosi double %s to i32
+  %x = add i32 %r, %i
+  ret i32 %x
+}
+
+declare i32 @puts(ptr)
+declare double @cbrt(double)
+declare ptr @__tls_get_addr(ptr)
+;; libmvec's vector function, with a scalar prototype: only its binding
+;; matters here.
+declare double @_ZGVbN2v_sin(double)
+
+#--- atexit.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @atexit(ptr null)
+  ret i32 %r
+}
+
+declare i32 @atexit(ptr)
+
+#--- grp.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %a = call i32 @one()
+  %b = call i32 @two()
+  %c = call i32 @three()
+  %d = call double @cbrt(double 8.0)
+  %e = fptosi double %d to i32
+  %s1 = add i32 %a, %b
+  %s2 = add i32 %s1, %c
+  %s3 = add i32 %s2, %e
+  ret i32 %s3
+}
+
+declare i32 @one()
+declare i32 @two()
+declare i32 @three()
+declare double @cbrt(double)

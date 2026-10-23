@@ -1,0 +1,296 @@
+## MinGW import libraries (ImplementationPlan.md 5.10.8 'GNU long-format
+## import object' and 5.10.9's windows-gnu names; M15.a item 1; recon p2
+## native-imports 2.5). GNU dlltool writes each import as a COFF object: the
+## function's jump stub in .text, its __imp_ slot in .idata$5, its hint and
+## name in .idata$6, and in .idata$7 a reference to the archive's head
+## member (_head_<lib>), whose .idata$2 names the DLL through the tail
+## member's .idata$7 string. msil-ld follows that chain: the P/Invoke's
+## module is the tail's DLL name (foo.dll, KERNEL32.dll) and its entry the
+## .idata$6 name, and the stub's .text does not make the function native
+## code only. A member whose .idata$5 slot holds IMAGE_ORDINAL_FLAG64 and
+## an ordinal, with no .idata$6 (gord, ordinal 5; recon p2 native-imports
+## 2.5), is the ordinal-only entry '#5' (5.10.11), and a member whose
+## .idata$6 names another export (galias -> real_name) binds that entry.
+## A plain native object in the same archive (mingw-w64's
+## libmsvcrt.a has many) is native code only. llvm-dlltool's short-format
+## libraries bind as lld-link's do. The members are lld/test/COFF's
+## gnu-implib-*.s in dlltool's x86_64 shape, assembled by llvm-mc.
+# REQUIRES: x86
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p lib
+# RUN: llvm-mc -triple=x86_64-windows-gnu -filetype=obj foo-h.s -o foo-h.o
+# RUN: llvm-mc -triple=x86_64-windows-gnu -filetype=obj foo-s00000.s -o foo-s00000.o
+# RUN: llvm-mc -triple=x86_64-windows-gnu -filetype=obj foo-s00001.s -o foo-s00001.o
+# RUN: llvm-mc -triple=x86_64-windows-gnu -filetype=obj foo-s00002.s -o foo-s00002.o
+# RUN: llvm-mc -triple=x86_64-windows-gnu -filetype=obj foo-s00003.s -o foo-s00003.o
+# RUN: llvm-mc -triple=x86_64-windows-gnu -filetype=obj foo-t.s -o foo-t.o
+# RUN: yaml2obj -D FN1=nat_fn %S/Inputs/native/coff-code.yaml -o nat.o
+# RUN: llvm-ar rcs lib/libfoo.dll.a foo-h.o foo-s00000.o foo-s00001.o foo-s00002.o foo-s00003.o foo-t.o nat.o
+# RUN: llvm-mc -triple=x86_64-windows-gnu -filetype=obj k32-h.s -o k32-h.o
+# RUN: llvm-mc -triple=x86_64-windows-gnu -filetype=obj k32-s00000.s -o k32-s00000.o
+# RUN: llvm-mc -triple=x86_64-windows-gnu -filetype=obj k32-t.s -o k32-t.o
+# RUN: llvm-ar rcs lib/libkernel32.a k32-h.o k32-s00000.o k32-t.o
+# RUN: llvm-dlltool -m i386:x86-64 -d %S/Inputs/native/msvcrt.def -l lib/libmsvcrt.a
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as nat.ll -o nat-ref.o
+# RUN: llvm-as ord.ll -o ord.o
+
+# DEFINE: %{il} = FileCheck %s --implicit-check-not="public hidebysig static pinvokeimpl" \
+# DEFINE:   --implicit-check-not='"foo"' --implicit-check-not='"msvcrt"'
+
+## Found by -l on windows-gnu (libfoo.dll.a, libkernel32.a, libmsvcrt.a), and
+## given on the command line.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L lib -lfoo -lmsvcrt -lkernel32 -o l.il 2>&1 | count 0
+# RUN: %{il} --input-file=l.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=l.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o lib/libfoo.dll.a lib/libmsvcrt.a lib/libkernel32.a -o pos.il \
+# RUN:   2>&1 | count 0
+# RUN: %{il} --input-file=pos.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=pos.il
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" cdecl) int32 'gfn1'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" cdecl) int32 'gfn2'(int32) cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("KERNEL32.dll" cdecl) int32 'GetTickCount'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("msvcrt.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+## The %{il} patterns nowhere in the file: for a prefix made only of -DAG
+## lines, --implicit-check-not checks only the text before the first match.
+# IL-NONE-NOT: public hidebysig static pinvokeimpl
+# IL-NONE-NOT: "foo"
+# IL-NONE-NOT: "msvcrt"
+
+## The ordinal-only member and the renamed entry, with their
+## --print-imports rows.
+# RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports ord.o -L lib -lfoo -o ord.il > ord.txt 2>&1
+# RUN: FileCheck %s --check-prefix=ORD-ROWS --match-full-lines --input-file=ord.txt
+# RUN: %{il} --check-prefix=ORD --input-file=ord.il
+# RUN: FileCheck %s --check-prefix=ORD-PINV --input-file=ord.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=ord.il
+# ORD-ROWS:      galias -> foo.dll!real_name [function, -]
+# ORD-ROWS-NEXT: gord -> foo.dll!#5 [function, -]
+# ORD-ROWS-NOT:  {{.}}
+# ORD-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "#5" cdecl) int32 'gord'() cil managed preservesig {}{{$}}
+# ORD-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "real_name" cdecl) int32 'galias'(int32) cil managed preservesig {}{{$}}
+## Exactly those two P/Invokes.
+# ORD-PINV-COUNT-2: pinvokeimpl
+# ORD-PINV-NOT:     pinvokeimpl
+
+## The plain native object of the archive.
+# RUN: not msil-ld --lto-emit-asm nat-ref.o -L lib -lfoo -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NATIVE --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
+# NATIVE:      {{^}}msil-ld: error: symbol 'nat_fn' is defined only in native object code ({{.*}}libfoo.dll.a(nat.o)); MSIL cannot link machine code{{$}}
+# NATIVE-NEXT: {{^}}>>> referenced by nat-ref.o:(main){{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %a = call i32 @gfn1()
+  %b = call i32 @gfn2(i32 %a)
+  %c = call i32 @GetTickCount()
+  %d = call i32 @puts(ptr @msg)
+  %s1 = add i32 %b, %c
+  %s2 = add i32 %s1, %d
+  ret i32 %s2
+}
+
+declare i32 @gfn1()
+declare i32 @gfn2(i32)
+declare dllimport i32 @GetTickCount()
+declare i32 @puts(ptr)
+
+#--- nat.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @nat_fn()
+  ret i32 %r
+}
+
+declare i32 @nat_fn()
+
+#--- ord.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+define i32 @main() {
+  %a = call i32 @gord()
+  %b = call i32 @galias(i32 %a)
+  ret i32 %b
+}
+
+declare i32 @gord()
+declare i32 @galias(i32)
+
+#--- foo-h.s
+        .section        .idata$2
+        .global         _head_libfoo_dll_a
+_head_libfoo_dll_a:
+        .rva            hname
+        .long           0
+        .long           0
+        .rva            __libfoo_dll_a_iname
+        .rva            fthunk
+
+        .section        .idata$5
+fthunk:
+        .section        .idata$4
+hname:
+
+#--- foo-t.s
+        .section        .idata$4
+        .long           0
+        .long           0
+        .section        .idata$5
+        .long           0
+        .long           0
+
+        .section        .idata$7
+        .global         __libfoo_dll_a_iname
+__libfoo_dll_a_iname:
+        .asciz          "foo.dll"
+
+#--- foo-s00000.s
+        .text
+        .global         gfn1
+        .global         __imp_gfn1
+gfn1:
+        jmp             *__imp_gfn1(%rip)
+
+        .section        .idata$7
+        .rva            _head_libfoo_dll_a
+
+        .section        .idata$5
+__imp_gfn1:
+        .rva            .Lhint_name
+        .long           0
+
+        .section        .idata$4
+        .rva            .Lhint_name
+        .long           0
+
+        .section        .idata$6
+.Lhint_name:
+        .short          0
+        .asciz          "gfn1"
+
+#--- foo-s00001.s
+        .text
+        .global         gfn2
+        .global         __imp_gfn2
+gfn2:
+        jmp             *__imp_gfn2(%rip)
+
+        .section        .idata$7
+        .rva            _head_libfoo_dll_a
+
+        .section        .idata$5
+__imp_gfn2:
+        .rva            .Lhint_name
+        .long           0
+
+        .section        .idata$4
+        .rva            .Lhint_name
+        .long           0
+
+        .section        .idata$6
+.Lhint_name:
+        .short          1
+        .asciz          "gfn2"
+
+#--- foo-s00002.s
+        .text
+        .global         gord
+        .global         __imp_gord
+gord:
+        jmp             *__imp_gord(%rip)
+
+        .section        .idata$7
+        .rva            _head_libfoo_dll_a
+
+        .section        .idata$5
+__imp_gord:
+        .quad           0x8000000000000005
+
+        .section        .idata$4
+        .quad           0x8000000000000005
+
+#--- foo-s00003.s
+        .text
+        .global         galias
+        .global         __imp_galias
+galias:
+        jmp             *__imp_galias(%rip)
+
+        .section        .idata$7
+        .rva            _head_libfoo_dll_a
+
+        .section        .idata$5
+__imp_galias:
+        .rva            .Lhint_name
+        .long           0
+
+        .section        .idata$4
+        .rva            .Lhint_name
+        .long           0
+
+        .section        .idata$6
+.Lhint_name:
+        .short          2
+        .asciz          "real_name"
+
+#--- k32-h.s
+        .section        .idata$2
+        .global         _head_lib64_libkernel32_a
+_head_lib64_libkernel32_a:
+        .rva            hname
+        .long           0
+        .long           0
+        .rva            __lib64_libkernel32_a_iname
+        .rva            fthunk
+
+        .section        .idata$5
+fthunk:
+        .section        .idata$4
+hname:
+
+#--- k32-t.s
+        .section        .idata$4
+        .long           0
+        .long           0
+        .section        .idata$5
+        .long           0
+        .long           0
+
+        .section        .idata$7
+        .global         __lib64_libkernel32_a_iname
+__lib64_libkernel32_a_iname:
+        .asciz          "KERNEL32.dll"
+
+#--- k32-s00000.s
+        .text
+        .global         GetTickCount
+        .global         __imp_GetTickCount
+GetTickCount:
+        jmp             *__imp_GetTickCount(%rip)
+
+        .section        .idata$7
+        .rva            _head_lib64_libkernel32_a
+
+        .section        .idata$5
+__imp_GetTickCount:
+        .rva            .Lhint_name
+        .long           0
+
+        .section        .idata$4
+        .rva            .Lhint_name
+        .long           0
+
+        .section        .idata$6
+.Lhint_name:
+        .short          0x2f5
+        .asciz          "GetTickCount"

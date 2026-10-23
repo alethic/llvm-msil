@@ -14,6 +14,7 @@
 #include "Config.h"
 #include "InputFiles.h"
 #include "LTO.h"
+#include "NativeLibraries.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -23,6 +24,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Support/StringSaver.h"
+#include <optional>
 
 #define DEBUG_TYPE "lld"
 
@@ -35,7 +37,18 @@ SymbolTable *symtab;
 void SymbolTable::addFile(InputFile *file, StringRef symName) {
   log("Processing: " + toString(file));
 
-  // M14's only inputs are LLVM bitcode files (M20 adds CIL objects).
+  // A native library: its definitions bind late, after every input is loaded
+  // (plan 5.9.6 step 2), so it adds nothing to the symbol table.
+  if (auto *f = dyn_cast<NativeLibraryFile>(file)) {
+    if (ctx.arg.trace)
+      message(toString(file));
+    ctx.nativeLibraryFiles.push_back(f);
+    ctx.loadedFiles.push_back(f);
+    ctx.nativeIndex.addFile(*f, ctx.arg.target);
+    return;
+  }
+
+  // The other inputs are LLVM bitcode files (M20 adds CIL objects).
   auto *f = cast<BitcodeFile>(file);
 
   // Lazy object file
@@ -58,6 +71,7 @@ void SymbolTable::addFile(InputFile *file, StringRef symName) {
   // This order, first adding to `bitcodeFiles` and then parsing is necessary.
   // See https://github.com/llvm/llvm-project/pull/73095
   ctx.bitcodeFiles.push_back(f);
+  ctx.loadedFiles.push_back(f);
   f->parse();
 }
 
@@ -235,26 +249,18 @@ void SymbolTable::trace(StringRef name) {
     symVector[p.first->second]->traced = true;
 }
 
-namespace {
-// An input file that refers to an undefined symbol, and the symbol's name in
-// that file's IR.
-struct Reference {
-  BitcodeFile *file;
-  StringRef irName;
-};
-} // namespace
-
 // Returns the definitions in \p file whose code or initializer uses the global
 // value \p irName, in module order: the methods (and data) of ">>> referenced
 // by <file>:(<method>)". A bitcode symbol table does not record them, so the
-// file's IR is read again; this runs only for a diagnostic.
+// file's IR is read again; this runs only for a diagnostic, also after LTO
+// has taken the file's lto::InputFile.
 static SmallVector<std::string, 0>
 findReferencingDefinitions(BitcodeFile &file, StringRef irName) {
   SmallVector<std::string, 0> ret;
-  if (!file.obj || irName.empty())
+  if (irName.empty())
     return ret;
   Expected<std::vector<BitcodeModule>> modsOrErr =
-      getBitcodeModuleList(file.obj->getFileBuffer());
+      getBitcodeModuleList(file.getMemoryBufferRef());
   if (!modsOrErr) {
     consumeError(modsOrErr.takeError());
     return ret;
@@ -298,8 +304,8 @@ findReferencingDefinitions(BitcodeFile &file, StringRef irName) {
 // Reports an unresolved symbol in lld/ELF's form (reportUndefinedSymbol,
 // lld/ELF/Relocations.cpp:550-634): \p msg, then up to three ">>> referenced
 // by" lines and the number of further references.
-static void reportUnresolved(std::string msg, ArrayRef<Reference> refs,
-                             bool isEntry) {
+void SymbolTable::reportUnresolved(std::string msg, ArrayRef<Reference> refs,
+                                   bool isEntry) {
   SmallVector<std::string, 0> locs;
   if (isEntry)
     locs.push_back("the entry point");
@@ -337,32 +343,103 @@ static std::string getUnresolvedMessage(const Symbol &sym) {
   }
 }
 
-void SymbolTable::bindLateSymbols() {
+ArrayRef<SymbolTable::Reference> SymbolTable::getReferences(const Symbol *sym) {
   // The inputs that refer to each symbol, in load order: the undefined
-  // symbols of the bitcode files' symbol tables. Collected on first use, since
-  // a link without unresolved symbols needs none.
-  DenseMap<const Symbol *, SmallVector<Reference, 1>> refs;
-  bool haveRefs = false;
-  auto getRefs = [&](const Symbol *sym) -> ArrayRef<Reference> {
-    if (!haveRefs) {
-      haveRefs = true;
-      for (BitcodeFile *f : ctx.bitcodeFiles) {
-        if (!f->obj)
-          continue;
-        ArrayRef<Symbol *> syms = f->getSymbols();
-        for (auto [i, irSym] : llvm::enumerate(f->obj->symbols()))
-          if (irSym.isUndefined() && i < syms.size() && syms[i])
-            refs[syms[i]].push_back({f, irSym.getIRName()});
-      }
+  // symbols of the bitcode files' symbol tables. Collected once, before LTO
+  // takes the files' lto::InputFiles; the IR names are saved for the same
+  // reason.
+  if (!haveReferences) {
+    haveReferences = true;
+    for (BitcodeFile *f : ctx.bitcodeFiles) {
+      if (!f->obj)
+        continue;
+      ArrayRef<Symbol *> syms = f->getSymbols();
+      for (auto [i, irSym] : llvm::enumerate(f->obj->symbols()))
+        if (irSym.isUndefined() && i < syms.size() && syms[i])
+          references[syms[i]].push_back({f, saver().save(irSym.getIRName())});
     }
-    auto it = refs.find(sym);
-    if (it == refs.end())
-      return {};
-    return it->second;
+  }
+  auto it = references.find(sym);
+  if (it == references.end())
+    return {};
+  return it->second;
+}
+
+void SymbolTable::reportReference(std::string msg, StringRef name) {
+  Symbol *sym = find(name);
+  ArrayRef<Reference> refs = sym ? getReferences(sym) : ArrayRef<Reference>();
+  if (refs.empty()) {
+    error(msg + "\n>>> referenced by ld-temp.o");
+    return;
+  }
+  reportUnresolved(std::move(msg), refs, /*isEntry=*/false);
+}
+
+std::string SymbolTable::getReferencingFile(StringRef name) {
+  Symbol *sym = find(name);
+  ArrayRef<Reference> refs = sym ? getReferences(sym) : ArrayRef<Reference>();
+  if (refs.empty())
+    return "ld-temp.o";
+  return toString(refs.front().file);
+}
+
+// Step 2 of plan 5.9.6: binds \p sym to the first bindable definition of its
+// name in the native libraries, in link order (plan 5.10.10). A definition
+// without a type takes the kind of the reference, and a reference without a
+// type (-u) takes a function: it is a function reference, which passes over
+// the data of COFF import libraries and DLLs.
+static void bindNative(Symbol &sym) {
+  SmallVector<const NativeExport *, 2> rejected;
+  const NativeExport *e = ctx.nativeIndex.lookup(
+      sym.getName(), rejected, /*isFunctionReference=*/!sym.isData());
+  if (!e)
+    return;
+  bool isFunction = e->Kind == NativeKind::Function ||
+                    (e->Kind == NativeKind::NoType && !sym.isData());
+  if (isFunction)
+    NativeFunction(e->File, sym.getName(), sym.binding, sym.visibility(), e)
+        .overwrite(sym);
+  else
+    NativeData(e->File, sym.getName(), sym.binding, sym.visibility(), e)
+        .overwrite(sym);
+}
+
+// The sections that definitions of the loaded bitcode files name (their
+// irsymtab section names).
+static DenseSet<StringRef> getDefinedSections() {
+  DenseSet<StringRef> sections;
+  for (BitcodeFile *f : ctx.bitcodeFiles) {
+    if (!f->obj)
+      continue;
+    for (const lto::InputFile::Symbol &irSym : f->obj->symbols())
+      if (!irSym.isUndefined() && !irSym.getSectionName().empty())
+        sections.insert(saver().save(irSym.getSectionName()));
+  }
+  return sections;
+}
+
+void SymbolTable::bindLateSymbols() {
+  // Record the references now: LTO takes the inputs' symbol tables, and the
+  // import-annotation pass reports with them after LTO.
+  (void)getReferences(nullptr);
+
+  // On non-Windows triples whole-program code generation defines
+  // __start_<X> and __stop_<X> when a definition is in section <X>, so they
+  // are neither bound nor reported (plan 5.9.6, 5.9.9).
+  std::optional<DenseSet<StringRef>> definedSections;
+  auto isSectionBoundary = [&](StringRef name) {
+    if (ctx.arg.target.isOSWindows())
+      return false;
+    if (!name.consume_front("__start_") && !name.consume_front("__stop_"))
+      return false;
+    if (!definedSections)
+      definedSections = getDefinedSections();
+    return definedSections->contains(name);
   };
 
   // The entry symbol must be defined (plan 5.9.6). Without -shared the driver
-  // names it, main by default, and adds it with addUndefined().
+  // names it, main by default, and adds it with addUndefined(). It never
+  // binds late.
   Symbol *entrySym = nullptr;
   if (!ctx.arg.entry.empty() && !ctx.arg.shared) {
     entrySym = find(ctx.arg.entry);
@@ -370,31 +447,39 @@ void SymbolTable::bindLateSymbols() {
       reportUnresolved("undefined symbol: " + ctx.arg.entry.str(), {},
                        /*isEntry=*/true);
     else if (entrySym->isUndefined() || entrySym->isLazy())
-      reportUnresolved(getUnresolvedMessage(*entrySym), getRefs(entrySym),
+      reportUnresolved(getUnresolvedMessage(*entrySym), getReferences(entrySym),
                        /*isEntry=*/true);
   }
 
   for (Symbol *sym : symVector) {
-    // Defined and common symbols are resolved. A lazy symbol is one that
-    // nothing or only weak references met: it stays undefined, as an undefined
-    // weak symbol does.
-    if (!sym->isUndefined() || sym == entrySym)
+    if (sym == entrySym)
       continue;
-    // An undefined weak symbol stays for the backend: its address is null
-    // and a direct call reaches a trap stub (M12's whole-program lowering).
-    // As in lld/ELF (maybeReportUndefined), a weak symbol is never reported.
+    // Defined and common symbols are resolved. A lazy symbol that only weak
+    // references met is an undefined weak symbol; a lazy symbol that nothing
+    // referred to stays as it is.
+    bool weakLazy = sym->isLazy() && sym->isWeak();
+    if (!sym->isUndefined() && !weakLazy)
+      continue;
+    auto *u = dyn_cast<Undefined>(sym);
+    bool discarded = u && u->discarded;
+
+    // Step 2: the native libraries, by the symbol name. Whatever stays
+    // undefined goes to LTO: a weak symbol keeps M12's lowering (null, and a
+    // trap stub for calls), and the import-annotation pass reports any other
+    // that the merged module still refers to (plan 5.9.6, 5.10.13).
+    if (!discarded && sym->visibility() == STV_DEFAULT) {
+      if (!isSectionBoundary(sym->getName()))
+        bindNative(*sym);
+      continue;
+    }
+
+    // A weak symbol is never reported, as in lld/ELF (maybeReportUndefined).
     if (sym->isWeak())
       continue;
-    // Nothing refers to it: a -u symbol that no input defines, or a
-    // discarded COMDAT copy that nothing else refers to.
-    ArrayRef<Reference> symRefs = getRefs(sym);
+    // Nothing refers to it: a discarded COMDAT copy that nothing else refers
+    // to.
+    ArrayRef<Reference> symRefs = getReferences(sym);
     if (symRefs.empty())
-      continue;
-    // An undefined global function goes to LTO code generation. The backend
-    // imports it through the D14 table, or reports "undefined symbol" because
-    // the module flag msil-lto is set (plan 5.9.6, M14).
-    if (!cast<Undefined>(sym)->discarded && sym->visibility() == STV_DEFAULT &&
-        sym->isFunc())
       continue;
     reportUnresolved(getUnresolvedMessage(*sym), symRefs, /*isEntry=*/false);
   }

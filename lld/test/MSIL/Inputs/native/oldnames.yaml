@@ -1,0 +1,70 @@
+## oldnames.lib-style members (ImplementationPlan.md 5.10.8; recon p2
+## native-imports 2.3, coff-weak-alias.yaml): machine-independent COFF objects
+## whose only content is a weak external with IMAGE_WEAK_EXTERN_SEARCH_ALIAS,
+## '<name>' -> '_<name>', as in MSVC's oldnames.lib. llvm-lib rejects their
+## machine ("unknown machine: 0"), so tests archive them with llvm-ar.
+## Documents (yaml2obj --docnum): 1 strdup -> _strdup, 2 lfind -> _lfind,
+## 3 getpid -> _getpid (an alias whose target no library defines).
+--- !COFF
+header:
+  Machine:         IMAGE_FILE_MACHINE_UNKNOWN
+  Characteristics: [  ]
+sections:        []
+symbols:
+  - Name:            _strdup
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            strdup
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_WEAK_EXTERNAL
+    WeakExternal:
+      TagIndex:        0
+      Characteristics: IMAGE_WEAK_EXTERN_SEARCH_ALIAS
+--- !COFF
+header:
+  Machine:         IMAGE_FILE_MACHINE_UNKNOWN
+  Characteristics: [  ]
+sections:        []
+symbols:
+  - Name:            _lfind
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            lfind
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_WEAK_EXTERNAL
+    WeakExternal:
+      TagIndex:        0
+      Characteristics: IMAGE_WEAK_EXTERN_SEARCH_ALIAS
+--- !COFF
+header:
+  Machine:         IMAGE_FILE_MACHINE_UNKNOWN
+  Characteristics: [  ]
+sections:        []
+symbols:
+  - Name:            _getpid
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            getpid
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_WEAK_EXTERNAL
+    WeakExternal:
+      TagIndex:        0
+      Characteristics: IMAGE_WEAK_EXTERN_SEARCH_ALIAS

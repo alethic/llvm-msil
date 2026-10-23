@@ -1,0 +1,56 @@
+# The 38 glibc headers of the header survey compile cleanly for x86_64-unknown-linux-gnu-msil.
+# The 29 headers of C11/C17 (tgmath.h, threads.h, stdatomic.h, complex.h,
+# fenv.h and uchar.h among them) and nine POSIX headers (unistd.h, pthread.h,
+# fcntl.h, sys/stat.h, sys/types.h, sys/time.h, dirent.h, dlfcn.h, sys/mman.h)
+# from the glibc sysroot of %{msil_glibc_sysroot}: the driver searches
+# <sysroot>/usr/include/x86_64-linux-gnu and <sysroot>/usr/include, as for the
+# native triple (recon driver-toolchain 5.1-5.2: 38 of 38 clean, as natively).
+# -fsyntax-only in three language modes with -Werror. Plan 5.12.8 (hosted
+# leg, Q16), M15.
+# REQUIRES: msil-glibc-sysroot
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %clang --target=x86_64-unknown-linux-gnu-msil --sysroot=%{msil_glibc_sysroot} -fsyntax-only -std=gnu17 -Wall -Werror %t/headers.c
+# RUN: %clang --target=x86_64-unknown-linux-gnu-msil --sysroot=%{msil_glibc_sysroot} -fsyntax-only -std=c11 -Werror %t/headers.c
+# RUN: %clang --target=x86_64-unknown-linux-gnu-msil --sysroot=%{msil_glibc_sysroot} -fsyntax-only -std=c17 -D_GNU_SOURCE -Werror %t/headers.c
+#--- headers.c
+#include <assert.h>
+#include <complex.h>
+#include <ctype.h>
+#include <errno.h>
+#include <fenv.h>
+#include <float.h>
+#include <inttypes.h>
+#include <iso646.h>
+#include <limits.h>
+#include <locale.h>
+#include <math.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <stdalign.h>
+#include <stdarg.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdnoreturn.h>
+#include <string.h>
+#include <tgmath.h>
+#include <threads.h>
+#include <time.h>
+#include <uchar.h>
+#include <wchar.h>
+#include <wctype.h>
+
+#include <dirent.h>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+int main(void) { return 0; }

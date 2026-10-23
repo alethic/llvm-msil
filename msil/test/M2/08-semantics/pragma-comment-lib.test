@@ -1,0 +1,46 @@
+# Matrix case pragma-comment-lib: #pragma comment(lib, "native") names a library built by the test.
+# The test builds native.dll (and its import library native.lib) or
+# libnative.so as M2/03-native/native-lib.test does; the link gets only the
+# directory (-L%t, %{msil_native_libs}), and the library itself comes from
+# the pragma in main.c. On Windows MSIL triples clang records it as
+# /DEFAULTLIB:native.lib in the bitcode's linker options, on Linux MSIL
+# triples as -lnative (plan 5.10.6), and msil-ld reads both from the bitcode
+# symbol table and searches the -L directories as for -l:native.lib and
+# -lnative; natively lld-link reads the same directive, and ld.lld the
+# .deplibs entry of the ELF object. The program prints what the library
+# computes and a string from its data. Plan 5.9.16 row pragma-comment-lib
+# (M15 lto, M20 obj), 5.10.6.
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %if msil-triple-windows %{ %clang_native -O2 -c %t/native.c -o %t/native.obj && %lld_link -dll -noentry -nodefaultlib %t/native.obj -out:%t/native.dll %} %else %{ %clang_native -O2 -fPIC -c %t/native.c -o %t/native.o && %ld_lld -shared -soname libnative.so %t/native.o -o %t/libnative.so %}
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# REDEFINE: %{msil_native_libs} = -L%t
+# REDEFINE: %{msil_deps} = %if msil-triple-windows %{%t/native.dll%} %else %{%t/libnative.so%}
+# RUN: %{msil_prog}
+#--- native.c
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT __attribute__((visibility("default")))
+#endif
+
+static const char banner[] = "native library loaded by pragma";
+
+EXPORT int scale(int v, int by) { return v * by; }
+EXPORT const char *native_banner(void) { return banner; }
+#--- main.c
+#include "msil_test.h"
+#pragma comment(lib, "native")
+
+int scale(int v, int by);
+const char *native_banner(void);
+int twice_scaled(int v);
+
+int main(void) {
+  puts(native_banner());
+  put_i64(scale(21, 2));
+  put_i64(twice_scaled(5));
+  return scale(3, 4);
+}
+#--- util.c
+int scale(int v, int by);
+int twice_scaled(int v) { return scale(scale(v, 2), 2); }

@@ -1,0 +1,54 @@
+# The UCRT, Visual C++ and Windows SDK headers compile cleanly for x86_64-pc-windows-msvc-msil.
+# The C11/C17 headers but tgmath.h, and windows.h, io.h, process.h, direct.h,
+# conio.h and malloc.h, found through INCLUDE as for the native MSVC triple
+# (feature msil-ucrt-headers: INCLUDE has corecrt.h). tgmath.h is left out:
+# clang's tgmath.h passes '_Complex float' where the UCRT's complex.h wants
+# its _Fcomplex struct, an error for the native triple too (recon
+# driver-toolchain 5.2: 34 of 35 clean, as natively). stdnoreturn.h comes
+# last, because its 'noreturn' macro breaks the UCRT's own
+# __declspec(noreturn) (natively too). -fsyntax-only with -Werror. Plan
+# 5.12.8 (hosted leg, Q16), M15.
+# REQUIRES: msil-ucrt-headers
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %clang --target=x86_64-pc-windows-msvc-msil -fsyntax-only -std=gnu17 -Wall -Werror %t/headers.c
+# RUN: %clang --target=x86_64-pc-windows-msvc-msil -fsyntax-only -std=c11 -Werror %t/headers.c
+# RUN: %clang --target=x86_64-pc-windows-msvc-msil -fsyntax-only -std=c17 -Werror %t/headers.c
+#--- headers.c
+#include <assert.h>
+#include <complex.h>
+#include <ctype.h>
+#include <errno.h>
+#include <fenv.h>
+#include <float.h>
+#include <inttypes.h>
+#include <iso646.h>
+#include <limits.h>
+#include <locale.h>
+#include <math.h>
+#include <setjmp.h>
+#include <signal.h>
+#include <stdalign.h>
+#include <stdarg.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <threads.h>
+#include <time.h>
+#include <uchar.h>
+#include <wchar.h>
+#include <wctype.h>
+
+#include <conio.h>
+#include <direct.h>
+#include <io.h>
+#include <malloc.h>
+#include <process.h>
+#include <windows.h>
+
+#include <stdnoreturn.h>
+
+int main(void) { return 0; }

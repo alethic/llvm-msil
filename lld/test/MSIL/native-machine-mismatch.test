@@ -1,0 +1,166 @@
+## A native library for another machine is an error (ImplementationPlan.md
+## 5.10.8 'machine and class checked against the triple', 5.10.14; recon p2
+## native-imports 8.5):
+##   <path>: ELF machine <EM_x> does not match target <triple>
+## and the COFF and PE forms for import libraries and DLLs (whose exact
+## wording the plan leaves open: the file, the word 'machine' and the
+## target are pinned). A P/Invoke into a library of another machine could
+## never load. The same libraries link for their own machine: aarch64 MSIL
+## triples bind EM_AARCH64 shared objects and ARM64 import libraries, as
+## x86_64 ones bind EM_X86_64 and AMD64 ones.
+## The ELF class and data encoding are checked too:
+##   <path>: ELF machine <EM_x> (ELFCLASS32) does not match target <triple>
+##   <path>: ELF machine <EM_x> (ELFDATA2MSB) does not match target <triple>
+## A native library is read only in the object format of the triple's OS
+## (the section 12 row of 2026-10-23 for 5.10.8-5.10.14): ELF on Linux,
+## PE/COFF on Windows. A file of the other format given on the command line
+## or by -l:<file> is
+##   <path>: ELF file cannot be imported for target <triple>
+## on windows-msvc and windows-gnu (lld-link rejects an ELF input), and
+##   <path>: PE/COFF file cannot be imported for target <triple>
+## on Linux (an import library, a native DLL, a MinGW import library), never
+## a P/Invoke that fails at run time.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o x64.so
+# RUN: yaml2obj -D MACHINE=EM_AARCH64 %S/Inputs/native/libfoo.yaml -o a64.so
+# RUN: yaml2obj -D CLASS=ELFCLASS32 -D MACHINE=EM_386 %S/Inputs/native/libfoo.yaml -o i386.so
+# RUN: llvm-lib /machine:x64 /def:foo.def /out:x64.lib
+# RUN: llvm-lib /machine:arm64 /def:foo.def /out:arm64.lib
+# RUN: yaml2obj -D FN1=foo -D MACHINE=IMAGE_FILE_MACHINE_ARM64 %S/Inputs/native/coff-code.yaml -o arm64.obj
+## lld-link's own import library would overwrite arm64.lib (LIBRARY foo.dll).
+# RUN: lld-link -dll -noentry -out:arm64.dll -implib:arm64-dll.lib arm64.obj -export:foo
+# RUN: llvm-readobj --file-headers arm64.dll | FileCheck %s --check-prefix=ARM64-PE
+# ARM64-PE: Machine: IMAGE_FILE_MACHINE_ARM64
+# RUN: llvm-as lnx.ll -o lnx.o
+# RUN: llvm-as a64.ll -o a64.o
+# RUN: llvm-as win.ll -o win.o
+# RUN: llvm-as a64win.ll -o a64win.o
+# RUN: llvm-as gnu.ll -o gnu.o
+# RUN: yaml2obj -D CLASS=ELFCLASS32 %S/Inputs/native/libfoo.yaml -o x32.so
+# RUN: yaml2obj -D DATA=ELFDATA2MSB %S/Inputs/native/libfoo.yaml -o msb.so
+# RUN: mkdir -p elf
+# RUN: cp x64.so libfoo.so
+# RUN: cp x64.so elf/libfoo.so
+# RUN: cp x64.lib foo.lib
+# RUN: yaml2obj -D FN1=foo %S/Inputs/native/coff-code.yaml -o foo.obj
+# RUN: lld-link -dll -noentry -out:foo.dll -implib:foo-dll.lib foo.obj -export:foo
+# RUN: llvm-dlltool -m i386:x86-64 -d foo.def -l libfoo.dll.a
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: not msil-ld --lto-emit-asm lnx.o a64.so -o x.il 2>&1 | %{err} --check-prefix=LNX-A64
+# RUN: not msil-ld --lto-emit-asm lnx.o i386.so -o x.il 2>&1 | %{err} --check-prefix=LNX-I386
+# RUN: not msil-ld --lto-emit-asm a64.o x64.so -o x.il 2>&1 | %{err} --check-prefix=A64-X64
+# LNX-A64:  {{^}}msil-ld: error: a64.so: ELF machine EM_AARCH64 does not match target x86_64-unknown-linux-gnu-msil{{$}}
+# LNX-I386: {{^}}msil-ld: error: i386.so: ELF machine EM_386 does not match target x86_64-unknown-linux-gnu-msil{{$}}
+# A64-X64:  {{^}}msil-ld: error: x64.so: ELF machine EM_X86_64 does not match target aarch64-unknown-linux-gnu-msil{{$}}
+
+## The ELF class and the data encoding.
+# RUN: not msil-ld --lto-emit-asm lnx.o x32.so -o x.il 2>&1 | %{err} --check-prefix=LNX-X32
+# RUN: not msil-ld --lto-emit-asm lnx.o msb.so -o x.il 2>&1 | %{err} --check-prefix=LNX-MSB
+# LNX-X32: {{^}}msil-ld: error: x32.so: ELF machine EM_X86_64 (ELFCLASS32) does not match target x86_64-unknown-linux-gnu-msil{{$}}
+# LNX-MSB: {{^}}msil-ld: error: msb.so: ELF machine EM_X86_64 (ELFDATA2MSB) does not match target x86_64-unknown-linux-gnu-msil{{$}}
+
+# RUN: not msil-ld --lto-emit-asm win.o arm64.lib -o x.il 2>&1 | %{err} --check-prefix=WIN-LIB
+# RUN: not msil-ld --lto-emit-asm win.o arm64.dll -o x.il 2>&1 | %{err} --check-prefix=WIN-DLL
+# RUN: not msil-ld --lto-emit-asm a64win.o x64.lib -o x.il 2>&1 | %{err} --check-prefix=A64WIN-LIB
+# WIN-LIB:    {{^}}msil-ld: error: arm64.lib{{.*}} machine {{.+}} does not match target x86_64-pc-windows-msvc-msil{{$}}
+# WIN-DLL:    {{^}}msil-ld: error: arm64.dll{{.*}} machine {{.+}} does not match target x86_64-pc-windows-msvc-msil{{$}}
+# A64WIN-LIB: {{^}}msil-ld: error: x64.lib{{.*}} machine {{.+}} does not match target aarch64-pc-windows-msvc-msil{{$}}
+
+## The other object format: an ELF shared object on windows-msvc and
+## windows-gnu, on the command line and by -l:; an import library, a native
+## DLL and a MinGW import library on Linux.
+# DEFINE: %{fmt} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=pinvokeimpl
+# RUN: not msil-ld --lto-emit-asm win.o libfoo.so -o - 2>&1 \
+# RUN:   | %{fmt} --check-prefix=ELF-POS -DTRIPLE=x86_64-pc-windows-msvc-msil
+# RUN: not msil-ld --lto-emit-asm gnu.o libfoo.so -o - 2>&1 \
+# RUN:   | %{fmt} --check-prefix=ELF-POS -DTRIPLE=x86_64-w64-windows-gnu-msil
+# RUN: not msil-ld --lto-emit-asm win.o -L elf -l:libfoo.so -o - 2>&1 \
+# RUN:   | %{fmt} --check-prefix=ELF-L -DTRIPLE=x86_64-pc-windows-msvc-msil
+# RUN: not msil-ld --lto-emit-asm gnu.o -L elf -l:libfoo.so -o - 2>&1 \
+# RUN:   | %{fmt} --check-prefix=ELF-L -DTRIPLE=x86_64-w64-windows-gnu-msil
+# ELF-POS: {{^}}msil-ld: error: libfoo.so: ELF file cannot be imported for target [[TRIPLE]]{{$}}
+# ELF-L:   {{^}}msil-ld: error: elf{{[/\\]}}libfoo.so: ELF file cannot be imported for target [[TRIPLE]]{{$}}
+# RUN: not msil-ld --lto-emit-asm lnx.o foo.lib -o - 2>&1 | %{fmt} --check-prefix=PE -DFILE=foo.lib
+# RUN: not msil-ld --lto-emit-asm lnx.o foo.dll -o - 2>&1 | %{fmt} --check-prefix=PE -DFILE=foo.dll
+# RUN: not msil-ld --lto-emit-asm lnx.o libfoo.dll.a -o - 2>&1 | %{fmt} --check-prefix=PE -DFILE=libfoo.dll.a
+# PE: {{^}}msil-ld: error: [[FILE]]: PE/COFF file cannot be imported for target x86_64-unknown-linux-gnu-msil{{$}}
+
+## Each library binds on its own machine.
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx.o x64.so -o lnx.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O0 a64.o a64.so -o a64.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O0 win.o x64.lib -o win.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O0 a64win.o arm64.lib -o a64win.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O0 a64win.o arm64.dll -o a64dll.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefixes=ELF,A64TRIPLE --input-file=a64.il
+# RUN: FileCheck %s --check-prefix=ELF --input-file=lnx.il
+# RUN: FileCheck %s --check-prefix=COFF -DMOD=foo.dll --input-file=win.il
+# RUN: FileCheck %s --check-prefix=COFF -DMOD=foo.dll --input-file=a64win.il
+# RUN: FileCheck %s --check-prefix=COFF -DMOD=arm64.dll --input-file=a64dll.il
+# A64TRIPLE: {{^}}// target triple   = "aarch64-unknown-linux-gnu-msil"{{$}}
+# ELF:       {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+# COFF:      {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+
+#--- foo.def
+LIBRARY foo.dll
+EXPORTS
+  foo
+
+#--- lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @foo(i32 1)
+  ret i32 %r
+}
+
+declare i32 @foo(i32)
+
+#--- a64.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @foo(i32 1)
+  ret i32 %r
+}
+
+declare i32 @foo(i32)
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @foo(i32 1)
+  ret i32 %r
+}
+
+declare i32 @foo(i32)
+
+#--- gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @foo(i32 1)
+  ret i32 %r
+}
+
+declare i32 @foo(i32)
+
+#--- a64win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-p:64:64-i32:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @foo(i32 1)
+  ret i32 %r
+}
+
+declare i32 @foo(i32)

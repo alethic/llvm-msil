@@ -1,0 +1,306 @@
+## --print-imports (ImplementationPlan.md 5.10.14 and 5.9.3; M15.a item 6;
+## recon p2 native-imports 4 and 8.6) prints one line per natively bound
+## symbol, sorted by symbol,
+##   <symbol> -> <module>!<entry> [function|data, <version>|-]
+## with the ELF default version of the definition ('-' when there is none),
+## then one line per ELF module,
+##   <module>: version floor <highest default version>
+## the oldest library version an ELF system needs for these imports: the
+## highest default version among the module's bound symbols, compared on
+## the dotted numbers after the last '_' (GLIBC_2.34 > GLIBC_2.14 > GLIBC_2.2.5;
+## ZLIB_1.2.12 > ZLIB_1.2.9, against string order), never the newest version
+## the library defines (newest_fn@@GLIBC_2.43 and zlibNext@@ZLIB_1.3.1 are not
+## bound). Windows modules have no versions. The entry is the P/Invoke's
+## entry: '#9' for an ordinal, the EXPORTAS name, the alias target. Every
+## P/Invoke of the output has a line, the library functions that code
+## generation calls included (floor), and a function that the libraries
+## define but the program never calls has none.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj libs.yaml --docnum=1 -o c.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script c.map c.o -o libc.so.6
+# RUN: yaml2obj libs.yaml --docnum=2 -o m.o
+# RUN: ld.lld -shared -soname libm.so.6 --version-script m.map m.o -o libm.so.6
+# RUN: yaml2obj libs.yaml --docnum=3 -o z.o
+# RUN: ld.lld -shared -soname libz.so.1 --version-script z.map z.o -o libz.so.1
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-stdio.def /out:stdio.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-string.def /out:string.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ws2_32.def /out:ws2_32.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/coff-import.def /out:foo.lib
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/oldnames.yaml -o strdup.obj
+# RUN: llvm-ar rcs oldnames.lib strdup.obj
+# RUN: llvm-as lnx.ll -o lnx.o
+# RUN: llvm-as win.ll -o win.o
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports lnx.o libc.so.6 libm.so.6 libz.so.1 -o lnx.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LNX --match-full-lines
+# LNX:      cbrt -> libm.so.6!cbrt [function, GLIBC_2.2.5]
+# LNX-NEXT: crc32_combine_gen -> libz.so.1!crc32_combine_gen [function, ZLIB_1.2.12]
+# LNX-NEXT: crc32_z -> libz.so.1!crc32_z [function, ZLIB_1.2.9]
+# LNX-NEXT: dlopen -> libc.so.6!dlopen [function, GLIBC_2.34]
+# LNX-NEXT: fstat -> libc.so.6!fstat [function, GLIBC_2.33]
+# LNX-NEXT: memcpy -> libc.so.6!memcpy [function, GLIBC_2.14]
+# LNX-NEXT: pow -> libm.so.6!pow [function, GLIBC_2.29]
+# LNX-NEXT: puts -> libc.so.6!puts [function, GLIBC_2.2.5]
+# LNX-DAG:  libc.so.6: version floor GLIBC_2.34
+# LNX-DAG:  libm.so.6: version floor GLIBC_2.29
+# LNX-DAG:  libz.so.1: version floor ZLIB_1.2.12
+
+## The floor follows what is bound: without dlopen and fstat it is
+## GLIBC_2.14 (memcpy), not the string-greatest GLIBC_2.2.5.
+# RUN: llvm-as lnx-small.ll -o lnx-small.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports lnx-small.o libc.so.6 -o small.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=SMALL --match-full-lines
+# SMALL:      memcpy -> libc.so.6!memcpy [function, GLIBC_2.14]
+# SMALL-NEXT: puts -> libc.so.6!puts [function, GLIBC_2.2.5]
+# SMALL-NEXT: libc.so.6: version floor GLIBC_2.14
+
+## Every P/Invoke of the output is listed, including the library functions
+## that code generation calls (the section 12 row of 2026-10-22 for 5.10.13
+## and 5.10.14: kind-0 !msil.imports operands), and their versions count for
+## the floor: llvm.floor.f64 of a value known only at run time becomes a
+## library call of floor at --lto-O0, which libm.so.6 binds at GLIBC_2.31,
+## the highest version bound in libm.so.6 here. The line has its place in
+## the sorted list; pow, which libm.so.6 defines but the program never calls,
+## is not listed and its GLIBC_2.29 does not count.
+# RUN: llvm-as lnx-floor.ll -o lnx-floor.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports lnx-floor.o libc.so.6 libm.so.6 -o floor.il > floor.txt 2>&1
+# RUN: count 5 < floor.txt
+# RUN: FileCheck %s --check-prefix=FLOOR --match-full-lines --implicit-check-not=pow \
+# RUN:   --implicit-check-not=GLIBC_2.29 --input-file=floor.txt
+# FLOOR:      cbrt -> libm.so.6!cbrt [function, GLIBC_2.2.5]
+# FLOOR-NEXT: floor -> libm.so.6!floor [function, GLIBC_2.31]
+# FLOOR-NEXT: puts -> libc.so.6!puts [function, GLIBC_2.2.5]
+# FLOOR-DAG:  libc.so.6: version floor GLIBC_2.2.5
+# FLOOR-DAG:  libm.so.6: version floor GLIBC_2.31
+# RUN: FileCheck %s --check-prefix=FLOOR-IL --input-file=floor.il
+# FLOOR-IL-DAG: call float64 'floor'(float64)
+# FLOOR-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
+
+## Windows: no versions, no floor lines.
+# RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports win.o stdio.lib oldnames.lib string.lib ws2_32.lib foo.lib \
+# RUN:   --ucrtbase-imports -o win.il 2>&1 | FileCheck %s --check-prefix=WIN --match-full-lines \
+# RUN:   --implicit-check-not="version floor"
+# WIN:      htons -> WS2_32.dll!#9 [function, -]
+# WIN-NEXT: memcpy -> ucrtbase.dll!memcpy [function, -]
+# WIN-NEXT: memmove -> ucrtbase.dll!memmove [function, -]
+# WIN-NEXT: memset -> ucrtbase.dll!memset [function, -]
+# WIN-NEXT: puts -> api-ms-win-crt-stdio-l1-1-0.dll!puts [function, -]
+# WIN-NEXT: renamed -> foo.dll!realname [function, -]
+# WIN-NEXT: strchr -> ucrtbase.dll!strchr [function, -]
+# WIN-NEXT: strdup -> api-ms-win-crt-string-l1-1-0.dll!_strdup [function, -]
+
+## floor from code generation on Windows, bound by the UCRT math import
+## library; pow, which it also exports, is not called and not listed.
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-math.def /out:math.lib
+# RUN: llvm-as win-floor.ll -o win-floor.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports win-floor.o stdio.lib math.lib -o win-floor.il \
+# RUN:   > win-floor.txt 2>&1
+# RUN: count 2 < win-floor.txt
+# RUN: FileCheck %s --check-prefix=WIN-FLOOR --match-full-lines --implicit-check-not=pow --input-file=win-floor.txt
+# WIN-FLOOR:      floor -> api-ms-win-crt-math-l1-1-0.dll!floor [function, -]
+# WIN-FLOOR-NEXT: puts -> api-ms-win-crt-stdio-l1-1-0.dll!puts [function, -]
+# RUN: FileCheck %s --check-prefix=WIN-FLOOR-IL --input-file=win-floor.il
+# WIN-FLOOR-IL: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
+
+## Without --print-imports nothing is printed.
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx.o libc.so.6 libm.so.6 libz.so.1 -o quiet.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx-floor.o libc.so.6 libm.so.6 -o quiet-floor.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O0 win-floor.o stdio.lib math.lib -o quiet-win-floor.il 2>&1 | count 0
+
+#--- libs.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x80
+Symbols:
+  - { Name: puts,                 Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x00, Size: 8 }
+  - { Name: 'memcpy@GLIBC_2.2.5', Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x08, Size: 8 }
+  - { Name: memcpy,               Type: STT_GNU_IFUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: fstat,                Type: STT_FUNC,      Section: .text, Binding: STB_WEAK,   Value: 0x18, Size: 8 }
+  - { Name: 'dlopen@GLIBC_2.2.5', Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 8 }
+  - { Name: dlopen,               Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 8 }
+  - { Name: newest_fn,            Type: STT_FUNC,      Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 8 }
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x20
+Symbols:
+  - { Name: cbrt,              Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x00, Size: 8 }
+  - { Name: 'pow@GLIBC_2.2.5', Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x08, Size: 8 }
+  - { Name: pow,               Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: floor,             Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x20
+Symbols:
+  - { Name: crc32_z,           Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x00, Size: 8 }
+  - { Name: crc32_combine_gen, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x08, Size: 8 }
+  - { Name: zlibNext,          Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+
+#--- c.map
+GLIBC_2.2.5 { global: puts; };
+GLIBC_2.14 { global: memcpy; } GLIBC_2.2.5;
+GLIBC_2.33 { global: fstat; } GLIBC_2.14;
+GLIBC_2.34 { global: dlopen; } GLIBC_2.33;
+GLIBC_2.43 { global: newest_fn; } GLIBC_2.34;
+
+#--- m.map
+GLIBC_2.2.5 { global: cbrt; };
+GLIBC_2.29 { global: pow; } GLIBC_2.2.5;
+GLIBC_2.31 { global: floor; } GLIBC_2.29;
+
+#--- z.map
+ZLIB_1.2.9 { global: crc32_z; };
+ZLIB_1.2.12 { global: crc32_combine_gen; } ZLIB_1.2.9;
+ZLIB_1.3.1 { global: zlibNext; } ZLIB_1.2.12;
+
+#--- lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+@buf = global [4 x i8] zeroinitializer
+
+define i32 @main() {
+  %a = call i32 @puts(ptr @msg)
+  %p = call ptr @memcpy(ptr @buf, ptr @msg, i64 3)
+  %b = call i32 @fstat(i32 0, ptr null)
+  %h = call ptr @dlopen(ptr null, i32 1)
+  %c = call double @cbrt(double 8.0)
+  %d = call double @pow(double 2.0, double 3.0)
+  %z1 = call i64 @crc32_z(i64 0, ptr @msg, i64 2)
+  %z2 = call i64 @crc32_combine_gen(i64 2)
+  %s = fadd double %c, %d
+  %i = fptosi double %s to i32
+  %r1 = add i32 %a, %b
+  %r2 = add i32 %r1, %i
+  ret i32 %r2
+}
+
+declare i32 @puts(ptr)
+declare ptr @memcpy(ptr, ptr, i64)
+declare i32 @fstat(i32, ptr)
+declare ptr @dlopen(ptr, i32)
+declare double @cbrt(double)
+declare double @pow(double, double)
+declare i64 @crc32_z(i64, ptr, i64)
+declare i64 @crc32_combine_gen(i64)
+
+#--- lnx-small.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+@buf = global [4 x i8] zeroinitializer
+
+define i32 @main() {
+  %a = call i32 @puts(ptr @msg)
+  %p = call ptr @memcpy(ptr @buf, ptr @msg, i64 3)
+  ret i32 %a
+}
+
+declare i32 @puts(ptr)
+declare ptr @memcpy(ptr, ptr, i64)
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+@buf = global [4 x i8] zeroinitializer
+
+define i32 @main() {
+  %a = call i32 @puts(ptr @msg)
+  %p = call ptr @strdup(ptr @msg)
+  %h = call i32 @htons(i32 4660)
+  %r = call i32 @renamed()
+  %c = call ptr @strchr(ptr @msg, i32 105)
+  %m1 = call ptr @memcpy(ptr @buf, ptr @msg, i64 3)
+  %m2 = call ptr @memmove(ptr @buf, ptr @msg, i64 3)
+  %m3 = call ptr @memset(ptr @buf, i32 0, i64 3)
+  %s1 = add i32 %a, %h
+  %s2 = add i32 %s1, %r
+  ret i32 %s2
+}
+
+declare i32 @puts(ptr)
+declare ptr @strdup(ptr)
+declare i32 @htons(i32)
+declare i32 @renamed()
+declare ptr @strchr(ptr, i32)
+declare ptr @memcpy(ptr, ptr, i64)
+declare ptr @memmove(ptr, ptr, i64)
+declare ptr @memset(ptr, i32, i64)
+
+#--- lnx-floor.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+;; No call of floor before code generation: the intrinsic of a value that
+;; cbrt returns becomes one.
+define double @floor_of(double %x) {
+  %r = call double @llvm.floor.f64(double %x)
+  ret double %r
+}
+
+define i32 @main() {
+  %a = call i32 @puts(ptr @msg)
+  %c = call double @cbrt(double 8.0)
+  %f = call double @floor_of(double %c)
+  %i = fptosi double %f to i32
+  %r = add i32 %a, %i
+  ret i32 %r
+}
+
+declare i32 @puts(ptr)
+declare double @cbrt(double)
+declare double @llvm.floor.f64(double)
+
+#--- win-floor.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+@x = global double 2.5
+
+define double @floor_of(double %x) {
+  %r = call double @llvm.floor.f64(double %x)
+  ret double %r
+}
+
+define i32 @main() {
+  %a = call i32 @puts(ptr @msg)
+  %v = load double, ptr @x
+  %f = call double @floor_of(double %v)
+  %i = fptosi double %f to i32
+  %r = add i32 %a, %i
+  ret i32 %r
+}
+
+declare i32 @puts(ptr)
+declare double @llvm.floor.f64(double)

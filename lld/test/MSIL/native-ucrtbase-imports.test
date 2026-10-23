@@ -1,0 +1,163 @@
+## --ucrtbase-imports (ImplementationPlan.md 5.10.4 and 5.9.3; 5.10.8's
+## built-in reader; recon p2 native-imports 2.4 and 7.3). The windows-msvc
+## driver ends its default libraries with '-lucrt -lkernel32 -loldnames
+## --ucrtbase-imports': a built-in native import library, placed where the
+## option stands, that binds exactly memcpy, memset, memmove, memcmp,
+## memchr, strchr, strrchr, strstr, wcschr, wcsrchr and wcsstr to
+## ucrtbase.dll, which exports all 11 (the UCRT import library has none of
+## them; vcruntime.lib binds them to VCRUNTIME140.dll). A library earlier on
+## the command line wins (a user's -lvcruntime), a later one does not.
+## Nothing else binds through it (strlen stays undefined), and it is an
+## error on a non-Windows target; windows-gnu is a Windows target.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/vcruntime.def /out:lib/vcruntime.lib
+# RUN: llvm-as all.ll -o all.o
+# RUN: llvm-as strchr.ll -o strchr.o
+# RUN: llvm-as strlen.ll -o strlen.o
+# RUN: llvm-as strchr-gnu.ll -o strchr-gnu.o
+# RUN: llvm-as strchr-lnx.ll -o strchr-lnx.o
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 all.o --ucrtbase-imports -o all.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=ALL --implicit-check-not=VCRUNTIME140 --input-file=all.il
+# RUN: FileCheck %s --check-prefix=ELEVEN --input-file=all.il
+# RUN: FileCheck %s --check-prefix=ALL-NONE --input-file=all.il
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'memcpy'(native int, native int, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'memset'(native int, int32, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'memmove'(native int, native int, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) int32 'memcmp'(native int, native int, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'memchr'(native int, int32, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'strchr'(native int, int32) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'strrchr'(native int, int32) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'strstr'(native int, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'wcschr'(native int, int32) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'wcsrchr'(native int, int32) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'wcsstr'(native int, native int) cil managed preservesig {}{{$}}
+# ELEVEN-COUNT-11: pinvokeimpl("ucrtbase.dll" cdecl)
+# ELEVEN-NOT:      pinvokeimpl
+## No VCRUNTIME140 anywhere in the file: for a prefix made only of -DAG
+## lines, --implicit-check-not checks only the text before the first match.
+# ALL-NONE-NOT: VCRUNTIME140
+
+## An earlier vcruntime.lib wins; a later one does not.
+# RUN: msil-ld --lto-emit-asm --lto-O0 strchr.o -L lib -lvcruntime --ucrtbase-imports -o vc-first.il 2>&1 \
+# RUN:   | count 0
+# RUN: FileCheck %s --check-prefix=STRCHR -DMOD=VCRUNTIME140.dll --input-file=vc-first.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 strchr.o --ucrtbase-imports -L lib -lvcruntime -o vc-last.il 2>&1 \
+# RUN:   | count 0
+# RUN: FileCheck %s --check-prefix=STRCHR -DMOD=ucrtbase.dll --input-file=vc-last.il
+# STRCHR: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) native int 'strchr'(native int, int32) cil managed preservesig {}{{$}}
+
+## Only the 11 functions.
+# RUN: not msil-ld --lto-emit-asm --lto-O0 strlen.o --ucrtbase-imports -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=STRLEN --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
+# STRLEN:      {{^}}msil-ld: error: undefined symbol: strlen{{$}}
+# STRLEN-NEXT: {{^}}>>> referenced by strlen.o:(main){{$}}
+
+## windows-gnu accepts it; a Linux target does not.
+# RUN: msil-ld --lto-emit-asm --lto-O0 strchr-gnu.o --ucrtbase-imports -o gnu.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=STRCHR -DMOD=ucrtbase.dll --input-file=gnu.il
+# RUN: not msil-ld --lto-emit-asm strchr-lnx.o --ucrtbase-imports -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LNX --implicit-check-not="PLEASE submit" --implicit-check-not="unknown argument" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
+# RUN: not msil-ld --lto-emit-asm --target=x86_64-unknown-linux-gnu-msil --ucrtbase-imports strchr-lnx.o \
+# RUN:   -o x.il 2>&1 | FileCheck %s --check-prefix=LNX --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump" \
+# RUN:   --implicit-check-not="unknown argument"
+# LNX: {{^}}msil-ld: error: {{.*}}--ucrtbase-imports
+
+#--- all.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@a = global [16 x i8] zeroinitializer
+@b = global [16 x i8] zeroinitializer
+@w = global [8 x i16] zeroinitializer
+
+define i32 @main() {
+  %1 = call ptr @memcpy(ptr @a, ptr @b, i64 4)
+  %2 = call ptr @memset(ptr @a, i32 0, i64 4)
+  %3 = call ptr @memmove(ptr @a, ptr @b, i64 4)
+  %4 = call i32 @memcmp(ptr @a, ptr @b, i64 4)
+  %5 = call ptr @memchr(ptr @a, i32 1, i64 4)
+  %6 = call ptr @strchr(ptr @a, i32 1)
+  %7 = call ptr @strrchr(ptr @a, i32 1)
+  %8 = call ptr @strstr(ptr @a, ptr @b)
+  %9 = call ptr @wcschr(ptr @w, i32 1)
+  %10 = call ptr @wcsrchr(ptr @w, i32 1)
+  %11 = call ptr @wcsstr(ptr @w, ptr @w)
+  ret i32 %4
+}
+
+declare ptr @memcpy(ptr, ptr, i64)
+declare ptr @memset(ptr, i32, i64)
+declare ptr @memmove(ptr, ptr, i64)
+declare i32 @memcmp(ptr, ptr, i64)
+declare ptr @memchr(ptr, i32, i64)
+declare ptr @strchr(ptr, i32)
+declare ptr @strrchr(ptr, i32)
+declare ptr @strstr(ptr, ptr)
+declare ptr @wcschr(ptr, i32)
+declare ptr @wcsrchr(ptr, i32)
+declare ptr @wcsstr(ptr, ptr)
+
+#--- strchr.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %p = call ptr @strchr(ptr @msg, i32 105)
+  %c = icmp eq ptr %p, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare ptr @strchr(ptr, i32)
+
+#--- strlen.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %n = call i64 @strlen(ptr @msg)
+  %r = trunc i64 %n to i32
+  ret i32 %r
+}
+
+declare i64 @strlen(ptr)
+
+#--- strchr-gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %p = call ptr @strchr(ptr @msg, i32 105)
+  %c = icmp eq ptr %p, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare ptr @strchr(ptr, i32)
+
+#--- strchr-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %p = call ptr @strchr(ptr @msg, i32 105)
+  %c = icmp eq ptr %p, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare ptr @strchr(ptr, i32)

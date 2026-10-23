@@ -9,6 +9,10 @@
 ## Only the entry point main is visible to regular objects, so it stays
 ## 'public' and gets '<msil>Main' with .entrypoint (D27); every other symbol
 ## is internalized ('assembly'). The text is deterministic.
+## From M15 the text is linked text (5.10.13): a function that a native
+## library binds is an 'assembly' P/Invoke named after the library's module
+## (5.10.11), never one of D14's public P/Invokes; main stays the only public
+## method.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: llvm-as main.ll -o main.o
@@ -84,6 +88,22 @@
 # LNX:         {{^}}.method public static int32 'main'() cil managed{{$}}
 # LNX:         .entrypoint
 
+## Linked text with a native library: puts from ucrt.lib.
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-stdio.def /out:ucrt.lib
+# RUN: llvm-as hello.ll -o hello.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 hello.o ucrt.lib -o d1/hello.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O0 hello.o ucrt.lib -o d2/hello.il 2>&1 | count 0
+# RUN: cmp d1/hello.il d2/hello.il
+# RUN: FileCheck %s --check-prefix=NATIVE --implicit-check-not='"ucrtbase"' --input-file=d1/hello.il
+# RUN: FileCheck %s --check-prefix=PUBLIC --input-file=d1/hello.il
+
+# NATIVE:      {{^}}.assembly 'hello' { .ver 0:0:0:0 }{{$}}
+# NATIVE-DAG:  {{^}}.method public static int32 'main'() cil managed{{$}}
+# NATIVE-DAG:  call int32 'puts'(native int)
+# NATIVE-DAG:  {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# PUBLIC-COUNT-1: {{^}}.method public
+# PUBLIC-NOT:     {{^}}.method public
+
 #--- main.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc-msil"
@@ -111,3 +131,16 @@ target triple = "x86_64-unknown-linux-gnu-msil"
 define i32 @main() {
   ret i32 7
 }
+
+#--- hello.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  ret i32 0
+}
+
+declare i32 @puts(ptr)

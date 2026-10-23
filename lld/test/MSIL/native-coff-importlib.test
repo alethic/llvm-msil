@@ -1,0 +1,207 @@
+## COFF import libraries (ImplementationPlan.md 5.10.8 'COFF short import',
+## 5.10.11 and 5.10.14; recon p2 native-imports 2.3 and 3.3). Each short
+## import member names its DLL, which is the P/Invoke's module verbatim with
+## its suffix (foo.dll, KERNEL32.dll, WS2_32.dll; never 'foo' or 'ucrtbase'),
+## and its entry by the import name type:
+## - a name: the symbol name (fn1; fn3, exported with an ordinal and a name,
+##   binds by name);
+## - NONAME, ordinal only: '#<ordinal>' (fn2 -> #5, htons -> #9 in a
+##   ws2_32.lib-style library), printed with 'as';
+## - EXPORTAS ('renamed == realname'): the export name, with 'as';
+## - IMPORT_DATA (a .def DATA export) and IMPORT_CONST (CONSTANT, ucrt's
+##   _mbcasemap) are data: called as a function they are
+##   "'<name>' in <module> is data, but <file> calls it as a function", and
+##   referenced as data they are the M15-M19 error "importing native data
+##   symbol '<name>' (<module>) is not supported yet" (5.10.12).
+## A call skips an IMPORT_DATA member and binds a later IMPORT_CODE one, in
+## either order (the section 12 row of 2026-10-22 for 5.10.10); the reverse
+## case, a data reference with the code import first, keeps msil-ld's
+## 'symbol type mismatch' (lld-link binds the code thunk there too), and
+## with the data import first it is native data.
+## A dllimport declaration (bitcode symbol '__imp_<name>', as clang writes
+## the Windows SDK's WINBASEAPI functions) binds the same way. The libraries
+## come from 'llvm-lib /machine:x64 /def:'.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/coff-import.def /out:foo.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ws2_32.def /out:ws2_32.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/kernel32.def /out:kernel32.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-multibyte.def /out:ucrt.lib
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as call-data.ll -o call-data.o
+# RUN: llvm-as use-data.ll -o use-data.o
+# RUN: llvm-as use-const.ll -o use-const.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o foo.lib ws2_32.lib kernel32.lib -o main.il 2>&1 | count 0
+# RUN: FileCheck %s --implicit-check-not='"foo"' --implicit-check-not='"WS2_32"' \
+# RUN:   --implicit-check-not='"KERNEL32"' --implicit-check-not="public hidebysig static pinvokeimpl" \
+# RUN:   --input-file=main.il
+# RUN: FileCheck %s --check-prefix=SEVEN --input-file=main.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=main.il
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "#5" cdecl) int32 'fn2'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" cdecl) int32 'fn3'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "realname" cdecl) int32 'renamed'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" as "#9" cdecl) int32 'htons'(int32) cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" cdecl) int32 'ntohs'(int32) cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("KERNEL32.dll" cdecl) int32 'GetTickCount'() cil managed preservesig {}{{$}}
+# CHECK-DAG: call int32 'fn2'()
+# CHECK-DAG: call int32 'renamed'()
+# CHECK-DAG: call int32 'GetTickCount'()
+## Exactly the seven P/Invokes.
+# SEVEN-COUNT-7: pinvokeimpl
+# SEVEN-NOT:     pinvokeimpl
+## The implicit patterns nowhere in the file: for a prefix made only of -DAG
+## lines, --implicit-check-not checks only the text before the first match.
+# IL-NONE-NOT: "foo"
+# IL-NONE-NOT: "WS2_32"
+# IL-NONE-NOT: "KERNEL32"
+# IL-NONE-NOT: public hidebysig static pinvokeimpl
+
+# RUN: not msil-ld --lto-emit-asm call-data.o foo.lib -o x.il 2>&1 | %{err} --check-prefix=CALL-DATA
+# CALL-DATA:      {{^}}msil-ld: error: 'dataobj' in foo.dll is data, but call-data.o calls it as a function{{$}}
+# CALL-DATA-NEXT: {{^}}>>> referenced by call-data.o:(main){{$}}
+
+# RUN: not msil-ld --lto-emit-asm use-data.o foo.lib -o x.il 2>&1 | %{err} --check-prefix=USE-DATA
+# RUN: not msil-ld --lto-emit-asm use-const.o ucrt.lib -o x.il 2>&1 | %{err} --check-prefix=USE-CONST
+# USE-DATA:       {{^}}msil-ld: error: importing native data symbol 'dataobj' (foo.dll) is not supported yet{{$}}
+# USE-DATA-NEXT:  {{^}}>>> referenced by use-data.o:(main){{$}}
+# USE-CONST:      {{^}}msil-ld: error: importing native data symbol '_mbcasemap' (api-ms-win-crt-multibyte-l1-1-0.dll) is not supported yet{{$}}
+# USE-CONST-NEXT: {{^}}>>> referenced by use-const.o:(main){{$}}
+
+## A call never binds an IMPORT_DATA member (the section 12 row of
+## 2026-10-22 for 5.10.10, 'a COFF import or PE export of the right kind'):
+## lld-link defines foo only for an IMPORT_CODE member (a DATA member defines
+## only __imp_foo), so native lookup goes on to the next library, in either
+## order. The data import is kept as rejected: alone, it is the data-call
+## text.
+# RUN: llvm-lib /machine:x64 /def:adata.def /out:adata.lib
+# RUN: llvm-lib /machine:x64 /def:bcode.def /out:bcode.lib
+# RUN: llvm-as call-foo.ll -o call-foo.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 call-foo.o adata.lib bcode.lib -o kind-ab.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=KIND --input-file=kind-ab.il
+# RUN: FileCheck %s --check-prefix=NO-ADATA --input-file=kind-ab.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 call-foo.o bcode.lib adata.lib -o kind-ba.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=KIND --input-file=kind-ba.il
+# RUN: FileCheck %s --check-prefix=NO-ADATA --input-file=kind-ba.il
+# KIND-DAG: call int32 'foo'()
+# KIND-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("bcode.dll" cdecl) int32 'foo'() cil managed preservesig {}{{$}}
+# NO-ADATA-NOT: adata.dll
+# RUN: not msil-ld --lto-emit-asm --lto-O0 call-foo.o adata.lib -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=KIND-DATA --implicit-check-not=error:
+# KIND-DATA:      {{^}}msil-ld: error: 'foo' in adata.dll is data, but call-foo.o calls it as a function{{$}}
+
+## The reverse case: a variable foo against bcode.lib alone and before
+## adata.lib is msil-ld's symbol type mismatch; adata.lib first is native
+## data (until M20).
+# RUN: llvm-as use-foo.ll -o use-foo.o
+# RUN: not msil-ld --lto-emit-asm --lto-O0 use-foo.o bcode.lib -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=REV --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm --lto-O0 use-foo.o bcode.lib adata.lib -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=REV --implicit-check-not=error:
+# REV:      {{^}}msil-ld: error: symbol type mismatch: foo{{$}}
+# REV-NEXT: {{^}}>>> defined as function in bcode.lib{{$}}
+# REV-NEXT: {{^}}>>> defined as data in use-foo.o{{$}}
+# RUN: not msil-ld --lto-emit-asm --lto-O0 use-foo.o adata.lib bcode.lib -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=REV-DATA --implicit-check-not=error:
+# REV-DATA:      {{^}}msil-ld: error: importing native data symbol 'foo' (adata.dll) is not supported yet{{$}}
+# REV-DATA-NEXT: {{^}}>>> referenced by use-foo.o:(main){{$}}
+# KIND-DATA-NEXT: {{^}}>>> referenced by call-foo.o:(main){{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %a = call i32 @fn1()
+  %b = call i32 @fn2()
+  %c = call i32 @fn3()
+  %d = call i32 @renamed()
+  %e = call i32 @htons(i32 4660)
+  %f = call i32 @ntohs(i32 13330)
+  %g = call i32 @GetTickCount()
+  %s1 = add i32 %a, %b
+  %s2 = add i32 %s1, %c
+  %s3 = add i32 %s2, %d
+  %s4 = add i32 %s3, %e
+  %s5 = add i32 %s4, %f
+  %s6 = add i32 %s5, %g
+  ret i32 %s6
+}
+
+declare i32 @fn1()
+declare i32 @fn2()
+declare i32 @fn3()
+declare i32 @renamed()
+declare i32 @htons(i32)
+declare i32 @ntohs(i32)
+declare dllimport i32 @GetTickCount()
+
+#--- call-data.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @dataobj()
+  ret i32 %r
+}
+
+declare i32 @dataobj()
+
+#--- use-data.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@dataobj = external dllimport global i32
+
+define i32 @main() {
+  %v = load i32, ptr @dataobj
+  ret i32 %v
+}
+
+#--- use-const.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@_mbcasemap = external global [256 x i8]
+
+define i32 @main() {
+  %v = load i8, ptr @_mbcasemap
+  %r = zext i8 %v to i32
+  ret i32 %r
+}
+
+#--- adata.def
+LIBRARY adata.dll
+EXPORTS
+  foo DATA
+
+#--- bcode.def
+LIBRARY bcode.dll
+EXPORTS
+  foo
+
+#--- call-foo.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @foo()
+  ret i32 %r
+}
+
+declare i32 @foo()
+
+#--- use-foo.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@foo = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @foo
+  ret i32 %v
+}

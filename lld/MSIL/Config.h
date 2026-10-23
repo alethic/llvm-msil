@@ -16,12 +16,16 @@
 #ifndef LLD_MSIL_CONFIG_H
 #define LLD_MSIL_CONFIG_H
 
+#include "NativeLibraries.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/LibraryOptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
 #include <string>
 #include <tuple>
+#include <utility>
 
 namespace llvm {
 enum class CodeGenOptLevel;
@@ -30,6 +34,7 @@ enum class CodeGenOptLevel;
 namespace lld::msil {
 class InputFile;
 class BitcodeFile;
+class NativeLibraryFile;
 class Symbol;
 
 // This struct contains the global configuration for the linker.
@@ -41,15 +46,24 @@ class Symbol;
 // --whole-archive, --no-whole-archive, --start-lib and --end-lib (input
 // order), --trace-symbol and -y (SymbolTable::trace), --reproduce (tar),
 // --fatal-warnings, --error-limit, --verbose and --color-diagnostics
-// (lld's ErrorHandler), and the rejected -r.
+// (lld's ErrorHandler), and the rejected -r. -Bstatic and -Bdynamic set
+// isStatic while the driver reads the inputs (lld/ELF's member), and
+// --ucrtbase-imports adds its built-in library where it appears.
 struct Config {
   bool allowMultipleDefinition;
+  // --dependent-libraries (default) and --no-dependent-libraries.
+  bool dependentLibraries;
   bool disableVerify;
+  // -Bstatic: -l accepts static libraries only (plan 5.10.9).
+  bool isStatic = false;
   bool ltoEmitAsm;
+  bool printImports;
   bool saveTemps;
   bool shared;
   bool stripAll;
   bool trace;
+  // True if --ucrtbase-imports is given (an error on non-Windows targets).
+  bool ucrtbaseImports;
   bool warnCommon;
   unsigned ltoPartitions;
   unsigned ltoo;
@@ -81,6 +95,25 @@ struct Ctx {
 
   llvm::SmallVector<BitcodeFile *, 0> bitcodeFiles;
   llvm::SmallVector<BitcodeFile *, 0> lazyBitcodeFiles;
+  // The native libraries read, in load order (plan 5.10.10).
+  llvm::SmallVector<NativeLibraryFile *, 0> nativeLibraryFiles;
+  // Every loaded file (bitcode files, extracted archive members and native
+  // libraries) in load order: the Inputs: section of the map file.
+  llvm::SmallVector<InputFile *, 0> loadedFiles;
+
+  // The definitions of the native libraries (plan 5.10.8).
+  NativeIndex nativeIndex;
+
+  // The /alternatename:<from>=<to> linker options of the inputs (plan 5.9.4),
+  // in the order they were read, and the ones that apply because <from> is
+  // still undefined after every input is loaded (lld-link's rule); the
+  // import-annotation pass resolves <from> to <to>.
+  llvm::MapVector<llvm::StringRef, llvm::StringRef> alternateNames;
+  llvm::MapVector<llvm::StringRef, llvm::StringRef> appliedAlternateNames;
+
+  // The /failifmismatch:<key>=<value> linker options: the value of each key
+  // and the last input that gave it (lld-link's mustMatch).
+  llvm::StringMap<std::pair<llvm::StringRef, const InputFile *>> mustMatch;
 
   // linker-generated symbols
   struct MSILSym {

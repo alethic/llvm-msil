@@ -4,6 +4,7 @@ include_directories(
   )
 
 set(LLVM_LINK_COMPONENTS
+  AsmParser
   CodeGen
   CodeGenTypes
   Core
@@ -18,6 +19,7 @@ set(LLVM_LINK_COMPONENTS
   )
 
 add_llvm_target_unittest(MSILTests
+  MSILImportsTest.cpp
   MSILMCObjectHooksTest.cpp
   MSILNameQuotingTest.cpp
   MSILStackEffectTest.cpp

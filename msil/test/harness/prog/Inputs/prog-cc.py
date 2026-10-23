@@ -12,6 +12,7 @@ self-tests of %{msil_prog} and msil/utils/msil-prog.py (harness/prog).
     prog-cc.py --as cc [--ilasm ILASM] ARGS...   compile (-c) or link
     prog-cc.py --as ar rcs ARCHIVE MEMBER...
     prog-cc.py --as ld-lld ARGS...                  the E7 oracle's ld.lld
+                                                    (-rpath $ORIGIN from M15)
 
 harness/prog/lit.local.cfg puts them into %msil_prog_build, so every other
 step of the composites (ilasm, msil-verify, jitall, msil-run and the
@@ -31,10 +32,12 @@ An "object" is JSON (kind msil, stock or native, target, level, source,
 value); an archive is JSON with its members. The program's exit status is the
 sum of the values of every object and every archive member that the link sees
 (no lazy extraction: these are plumbing tests, not linker tests), modulo 256.
-An MSIL link (an MSIL --target, -Wl,--lto-emit-asm, -o X.il) writes ILAsm text
-of a program 'X' that returns that status, plus X.il.inputs, one line per
-input in link order: 'object <path> <source> <value>', 'member <archive>
-<member> <value>', 'arg <argument>' and 'ld-path <path>'. A native link (clang
+An MSIL link (an MSIL --target, -Wl,--lto-emit-asm, -o X.il; no
+-nodefaultlibs from M15, and --sysroot= only for a Linux triple) writes ILAsm
+text of a program 'X' that returns that status, plus X.il.inputs, one line
+per input in link order: 'object <path> <source> <value>', 'member <archive>
+<member> <value>', 'arg <argument>' and 'ld-path <path>' (-L and --sysroot=
+are not recorded). A native link (clang
 with -fuse-ld=lld, or ld-lld) writes a program with the same status: for a
 Windows target an EXE that ILASM assembles from the same text (it runs
 directly on Windows, as a native program would), else a shell script
@@ -292,12 +295,20 @@ def clang(argv, ilasm):
             raise Fail("an MSIL link without exactly one -O<level> (--lto-O<level>)")
         if "-Wl,--lto-emit-asm" not in o["flags"] or not o["out"].endswith(".il"):
             raise Fail("an MSIL link without -Wl,--lto-emit-asm -o <name>.il")
-        if "-nodefaultlibs" not in o["flags"]:
-            raise Fail("an MSIL link without -nodefaultlibs (%{msil_ldflags} in M14)")
+        if "-nodefaultlibs" in o["flags"]:
+            raise Fail(
+                "an MSIL link with -nodefaultlibs (%{msil_ldflags} of M14; from M15 "
+                "the link reads the default libraries)"
+            )
+        sysroots = [f for f in o["flags"] if f.startswith("--sysroot=")]
+        if sysroots and not target.split("-")[2:3] == ["linux"]:
+            raise Fail("--sysroot in the MSIL link of %s, not a Linux triple" % target)
         if "-fuse-ld=lld" in o["flags"]:
             raise Fail("-fuse-ld=lld in an MSIL link")
+        # -L and --sysroot= go to the search, not to the record.
+        o["raw"] = [a for a in o["raw"] if not a.startswith("--sysroot=")]
         seq = resolve(o, lambda n: ["lib%s.a" % n], ())
-        seq = [s for s in seq if s[1] not in ("-Wl,--lto-emit-asm", "-nodefaultlibs")]
+        seq = [s for s in seq if s[1] != "-Wl,--lto-emit-asm"]
         value, lines, plant, errors = total(seq, ("msil", "stock"), target)
         if errors:
             for e in errors:
@@ -325,9 +336,11 @@ def clang(argv, ilasm):
 
 
 def ld_lld(argv):
-    if argv[:3] != ["-dynamic-linker", "/lib64/ld-linux-x86-64.so.2", "--as-needed"]:
-        raise Fail("not the E7 command line: %r" % argv[:3])
-    rest = argv[3:]
+    e7 = ["-dynamic-linker", "/lib64/ld-linux-x86-64.so.2", "--as-needed"]
+    e7 += ["-rpath", "$ORIGIN"]
+    if argv[:5] != e7:
+        raise Fail("not the E7 command line: %r" % argv[:5])
+    rest = argv[5:]
     if "-o" not in rest:
         raise Fail("no -o")
     i = rest.index("-o")

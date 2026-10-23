@@ -1,0 +1,192 @@
+## The C import attributes in linked text (ImplementationPlan.md 5.10.7, 5.9.6
+## step 2 and 5.10.12; M15.a item 5). clang writes import_module and
+## import_name as the IR attributes "msil-import-module" and
+## "msil-import-name" on declarations:
+## - an explicit module bypasses native lookup: module and entry (the name
+##   when there is no import_name) are used unchecked, whether or not a
+##   library defines the entry, and even when a library on the command line
+##   defines the name;
+## - import_name alone renames the entry, and the module comes from native
+##   lookup under that entry (my_strlen -> libc.so.6!strlen);
+## - bitcode symbol tables carry no import attributes, so two bitcode
+##   declarations that disagree are no error until M20: the IR linker keeps
+##   the first declaration's attributes;
+## - a bitcode definition comes first: a declaration's attributes do not
+##   make a defined function an import;
+## - an extern variable with the attributes is native data, an error until
+##   M20 (5.10.12), with a module or without one:
+##   importing native data symbol '<name>' (<module>) is not supported yet
+##   with '>>> referenced by' lines, where <name> is the variable's own name
+##   (v_name), never its import name (bar; the section 12 row of 2026-10-22
+##   for 5.10.14).
+## Linked-text P/Invokes have 'assembly' access (5.10.11).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: llvm-as explicit.ll -o explicit.o
+# RUN: llvm-as entry.ll -o entry.o
+# RUN: llvm-as first.ll -o first.o
+# RUN: llvm-as second.ll -o second.o
+# RUN: llvm-as decl.ll -o decl.o
+# RUN: llvm-as def.ll -o def.o
+# RUN: llvm-as var-mod.ll -o var-mod.o
+# RUN: llvm-as var-name.ll -o var-name.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## Explicit modules, without any library and with libc.so.6, which defines
+## strlen and puts: the attributes win.
+# RUN: msil-ld --lto-emit-asm --lto-O0 explicit.o -o explicit.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=EXPLICIT --input-file=explicit.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 explicit.o libc.so.6 -o explicit-libc.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=EXPLICIT --input-file=explicit-libc.il
+# RUN: FileCheck %s --check-prefix=NOT-LIBC --input-file=explicit-libc.il
+# NOT-LIBC-NOT: "libc.so.6" cdecl) native int 'strlen'
+# EXPLICIT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("custom.dll" as "custom_puts" cdecl) int32 'my_puts'(native int) cil managed preservesig {}{{$}}
+# EXPLICIT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# EXPLICIT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("mylibc.so" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+
+## import_name alone: the entry binds natively, under the C name.
+# RUN: msil-ld --lto-emit-asm --lto-O0 entry.o libc.so.6 -o entry.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=ENTRY --input-file=entry.il
+# ENTRY: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" as "strlen" cdecl) native int 'my_strlen'(native int) cil managed preservesig {}{{$}}
+
+## Two declarations that disagree: the first input's attributes.
+# RUN: msil-ld --lto-emit-asm --lto-O0 first.o second.o -o first-second.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=MISMATCH -DMOD=first.dll --input-file=first-second.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 second.o first.o -o second-first.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=MISMATCH -DMOD=second.dll --input-file=second-first.il
+# MISMATCH: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'shared_imp'(int32) cil managed preservesig {}{{$}}
+
+## A definition wins over a declaration with import attributes.
+# RUN: msil-ld --lto-emit-asm --lto-O0 decl.o def.o -o defined.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEFINED --implicit-check-not=pinvokeimpl --input-file=defined.il
+# DEFINED: {{^}}.method {{.*}}static int32 'imp_or_def'(int32) cil managed
+
+## Extern variables with import attributes are native data.
+# RUN: not msil-ld --lto-emit-asm var-mod.o -o x.il 2>&1 | %{err} --check-prefix=VAR-MOD
+# RUN: not msil-ld --lto-emit-asm var-name.o libfoo.so.1 -o x.il 2>&1 | %{err} --check-prefix=VAR-NAME
+# VAR-MOD:       {{^}}msil-ld: error: importing native data symbol 'v_mod' (mylib.dll) is not supported yet{{$}}
+# VAR-MOD-NEXT:  {{^}}>>> referenced by var-mod.o:(main){{$}}
+# VAR-NAME:      {{^}}msil-ld: error: importing native data symbol 'v_name' (libfoo.so.1) is not supported yet{{$}}
+# VAR-NAME-NEXT: {{^}}>>> referenced by var-name.o:(main){{$}}
+
+#--- explicit.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %a = call i32 @my_puts(ptr @msg)
+  %b = call i32 @puts(ptr @msg)
+  %n = call i64 @strlen(ptr @msg)
+  %c = trunc i64 %n to i32
+  %s1 = add i32 %a, %b
+  %s2 = add i32 %s1, %c
+  ret i32 %s2
+}
+
+declare i32 @my_puts(ptr) #0
+declare i32 @puts(ptr) #1
+declare i64 @strlen(ptr) #2
+
+attributes #0 = { "msil-import-module"="custom.dll" "msil-import-name"="custom_puts" }
+attributes #1 = { "msil-import-module"="libc.so.6" }
+attributes #2 = { "msil-import-module"="mylibc.so" }
+
+#--- entry.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %n = call i64 @my_strlen(ptr @msg)
+  %r = trunc i64 %n to i32
+  ret i32 %r
+}
+
+declare i64 @my_strlen(ptr) #0
+
+attributes #0 = { "msil-import-name"="strlen" }
+
+#--- first.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %a = call i32 @shared_imp(i32 1)
+  %b = call i32 @use_second()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+declare i32 @shared_imp(i32) #0
+declare i32 @use_second()
+
+attributes #0 = { "msil-import-module"="first.dll" }
+
+#--- second.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @use_second() {
+  %r = call i32 @shared_imp(i32 2)
+  ret i32 %r
+}
+
+declare i32 @shared_imp(i32) #0
+
+attributes #0 = { "msil-import-module"="second.dll" }
+
+#--- decl.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @imp_or_def(i32 1)
+  ret i32 %r
+}
+
+declare i32 @imp_or_def(i32) #0
+
+attributes #0 = { "msil-import-module"="nowhere.dll" }
+
+#--- def.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @imp_or_def(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+#--- var-mod.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@v_mod = external global i32, align 4 #0
+
+define i32 @main() {
+  %v = load i32, ptr @v_mod
+  ret i32 %v
+}
+
+attributes #0 = { "msil-import-module"="mylib.dll" }
+
+#--- var-name.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@v_name = external global i32, align 4 #0
+
+define i32 @main() {
+  %v = load i32, ptr @v_name
+  ret i32 %v
+}
+
+attributes #0 = { "msil-import-name"="bar" }

@@ -17,22 +17,28 @@
 #                                    msil/utils/ci/build-targets.txt (plan 5.6.11), jitall
 #   3. msil/utils/ci/unit-tests.ps1  TargetParserTests, MCTests, MSILTests, CLITests
 #                                    (no skipped tests)
-#   4. host-setup (not with -NoWsl; M12, plan 5.12.8 and the gates' step G0), idempotent: rows
-#        wsl-dotnet (msil/utils/msil-wsl-dotnet.sh inside WSL installs the private .NET
-#        runtimes of the WSL legs into $HOME/.dotnet-msil; the first run downloads them) and
+#   4. host-setup (not with -NoWsl; M12, plan 5.12.8 and the gates' step G0), idempotent: three
+#        rows, wsl-dotnet (msil/utils/msil-wsl-dotnet.sh inside WSL installs the private .NET
+#        runtimes of the WSL legs into $HOME/.dotnet-msil; the first run downloads them),
 #        linux-sysroot (msil/utils/make-linux-sysroot.py copies the E7 Linux oracle's
 #        libraries out of WSL into $env:MSIL_LINUX_SYSROOT, else
-#        C:\llvm-msil-scratch\linux-sysroot). Seconds once done; no root, no system setting.
+#        C:\llvm-msil-scratch\linux-sysroot) and glibc-sysroot (M15:
+#        msil/utils/make-glibc-sysroot.sh inside WSL builds the hosted leg's glibc sysroot into
+#        $env:MSIL_GLIBC_SYSROOT, else C:\llvm-msil-scratch\glibc-sysroot; it downloads only
+#        missing packages). Seconds once done; no root, no system setting.
 #   5. msil/utils/ci/lit-legs.ps1 -Wsl
 #        net8 (.NET 8 + .NET Framework 4.8 + native oracle with compiler-rt, all MSIL lit
 #        tests), net10, net8-tc0 (DOTNET_TieredCompilation=0), more-levels (msil/test/M1 at O1,
-#        O3, Os and Oz on .NET 8; M11), wsl-net10 (msil/test/M1 and the harness self-tests under
-#        the WSL runner on the private runtime, E7 Linux oracle required), wsl-net10-tc0,
-#        wsl-ilasm (Linux ilasm inside WSL), wsl-quick (11-programs, the harness and
-#        msil/test/M2 under WSL with E7; M12), modern-ilasm (.NET ilasm on Windows), roundtrip
-#        (ildasm -> ilasm), expected (update-expected.py --check), expected-linux
-#        (update-expected.py --check --os linux, the E7 oracle; M12), utc (run-utc-tests.py with
-#        six update_llc_test_checks tests; M11); -Full adds all-levels.
+#        O3, Os and Oz on .NET 8; M11), lto (msil/test/M1 and msil/test/M2 through clang -flto
+#        and msil-ld; M14), det (msil/test/M2/06-det; M14), wsl-net10 (msil/test/M1 and the
+#        harness self-tests under the WSL runner on the private runtime, E7 Linux oracle
+#        required), wsl-net10-tc0, wsl-ilasm (Linux ilasm inside WSL), wsl-quick (11-programs,
+#        the harness and msil/test/M2 under WSL with E7; M12), hosted (-Wsl:
+#        msil/test/M2/09-hosted, compile-only, needs the glibc sysroot of step 4; M15),
+#        modern-ilasm (.NET ilasm on Windows), roundtrip (ildasm -> ilasm), expected
+#        (update-expected.py --check), expected-linux (update-expected.py --check --os linux,
+#        the E7 oracle; M12), utc (run-utc-tests.py with six update_llc_test_checks tests; M11);
+#        -Full adds all-levels.
 #   6. msil/utils/ci/upstream-hooks.ps1 (M11; not with -SkipUpstreamHooks)
 #        manifest (msil/utils/upstream-hooks.txt lists every upstream file the fork changes, and
 #        every object-format switch has an MSIL case), pins (action pins as upstream's), lit
@@ -85,6 +91,8 @@ $ci = Join-Path $PSScriptRoot 'ci'
 $wslDistro = 'Ubuntu'
 # The E7 Linux oracle's sysroot, as lit-legs.ps1 and lit.cfg.py default it.
 $linuxSysroot = if ($env:MSIL_LINUX_SYSROOT) { $env:MSIL_LINUX_SYSROOT } else { 'C:\llvm-msil-scratch\linux-sysroot' }
+# The hosted leg's glibc sysroot (make-glibc-sysroot.sh), as lit-legs.ps1 defaults it.
+$glibcSysroot = if ($env:MSIL_GLIBC_SYSROOT) { $env:MSIL_GLIBC_SYSROOT } else { 'C:\llvm-msil-scratch\glibc-sysroot' }
 
 $resultsFile = Join-Path ([System.IO.Path]::GetTempPath()) "msil-m1-gate-$PID.tsv"
 Set-Content -LiteralPath $resultsFile -Value @() -Encoding utf8
@@ -174,8 +182,8 @@ function Get-ExpectedLegs {
   return [pscustomobject]@{ Expected = $expected; Known = @($all | ForEach-Object { $_.Name }) }
 }
 
-# Step 4: the private WSL runtimes and the E7 sysroot (see the header), one row each. Runs a
-# command, echoes its output and returns @{ Rc; Lines }.
+# Step 4: the private WSL runtimes, the E7 sysroot and the hosted leg's glibc sysroot (see the
+# header), one row each. Runs a command, echoes its output and returns @{ Rc; Lines }.
 function Invoke-SetupCommand([string]$Exe, [string[]]$Arguments) {
   $lines = [System.Collections.Generic.List[string]]::new()
   $env:WSL_UTF8 = '1'               # wsl.exe's own messages in UTF-8, not UTF-16
@@ -188,9 +196,18 @@ function Invoke-SetupCommand([string]$Exe, [string[]]$Arguments) {
   return @{ Rc = $rc; Lines = $lines.ToArray() }
 }
 
+# X:\a\b -> /mnt/x/a/b, the form a command inside WSL takes; $null for a path without a drive
+# letter.
+function ConvertTo-WslPath([string]$Path) {
+  try { $full = [System.IO.Path]::GetFullPath($Path) } catch { return $null }
+  $m = [regex]::Match($full, '^([A-Za-z]):(\\.*)?$')
+  if (-not $m.Success) { return $null }
+  return "/mnt/$($m.Groups[1].Value.ToLowerInvariant())$($m.Groups[2].Value.Replace('\', '/'))"
+}
+
 function Invoke-HostSetup {
   Write-Host ''
-  Write-Host "==== $(Get-Date -Format s) host-setup: private WSL runtimes and the E7 Linux sysroot ===="
+  Write-Host "==== $(Get-Date -Format s) host-setup: private WSL runtimes, the E7 Linux sysroot, the glibc sysroot ===="
   $wsl = Get-Command wsl.exe -CommandType Application -ErrorAction SilentlyContinue |
     Select-Object -First 1 -ExpandProperty Source
   $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -213,6 +230,24 @@ function Invoke-HostSetup {
   $detail = if ($summary.Count -gt 0) { $summary[0] -replace '^make-linux-sysroot: ', '' } else { 'no summary' }
   $status = if ($r.Rc -eq 0 -and $summary.Count -gt 0) { 'PASS' } else { 'FAIL' }
   Add-GateRow 'host-setup' 'linux-sysroot' $status "$detail; make-linux-sysroot.py exited $($r.Rc)" $sw.Elapsed.TotalSeconds
+  $sw.Restart()
+  $glibcWsl = ConvertTo-WslPath $glibcSysroot
+  if (-not $wsl) {
+    Add-GateRow 'host-setup' 'glibc-sysroot' 'FAIL' 'wsl.exe not found' $sw.Elapsed.TotalSeconds
+  } elseif (-not $glibcWsl) {
+    Add-GateRow 'host-setup' 'glibc-sysroot' 'FAIL' "cannot translate '$glibcSysroot' into a WSL path" $sw.Elapsed.TotalSeconds
+  } else {
+    $r = Invoke-SetupCommand $wsl @('-d', $wslDistro, '--cd', $MsilRepo, '--exec', 'bash',
+                                    'msil/utils/make-glibc-sysroot.sh', $glibcWsl)
+    $summary = @($r.Lines | Where-Object { $_ -match '^make-glibc-sysroot: .* is up to date \(.*\)$' -or
+                                           $_ -match '^make-glibc-sysroot: wrote ' } | Select-Object -Last 1)
+    $errors = @($r.Lines | Where-Object { $_ -match '^make-glibc-sysroot: error: ' } | Select-Object -Last 1)
+    $detail = if ($summary.Count -gt 0) { $summary[0] -replace '^make-glibc-sysroot: ', '' }
+              elseif ($errors.Count -gt 0) { $errors[0] -replace '^make-glibc-sysroot: ', '' }
+              else { 'no summary' }
+    $status = if ($r.Rc -eq 0 -and $summary.Count -gt 0) { 'PASS' } else { 'FAIL' }
+    Add-GateRow 'host-setup' 'glibc-sysroot' $status "$detail; make-glibc-sysroot.sh exited $($r.Rc)" $sw.Elapsed.TotalSeconds
+  }
 }
 
 # Step 7: the Linux job's scripts inside WSL (see the header). Returns the failures.

@@ -14,7 +14,8 @@
 /// \file
 /// This file contains the declaration of the MSIL-specific utility functions:
 /// the IL name of a global value, the helpers the MachineInstr passes share,
-/// and the Phase-1 import table.
+/// the standalone import table (decision D14, frozen) and the imports of
+/// msil-ld's linked text.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -85,11 +86,14 @@ unsigned getCopyOpcodeForRegClass(const TargetRegisterClass *RC);
 /// ScheduleDAG scheduler can put an ARGUMENT after other instructions.
 bool moveArgumentsToTop(MachineFunction &MF);
 
-/// The Phase-1 import table (decision D14). Phase 1 has no linker, so an
-/// undefined function can only be called through a P/Invoke into a native
-/// library. Returns the library of the P/Invoke that implements \p Name (the
-/// IL name of an undefined function, or the external symbol of a library
-/// call) on the target \p TT:
+/// The standalone import table (decision D14, frozen): the import policy of a
+/// module that no linker resolves, the output of 'clang -S' and of llc (plan
+/// 5.10.13). No entry is added or removed until the end of Phase 2. msil-ld's
+/// linked text (isLinkedModule) never consults it: getLinkedImport takes its
+/// place there. In a standalone module an undefined function can only be
+/// called through a P/Invoke into a native library. Returns the library of
+/// the P/Invoke that implements \p Name (the IL name of an undefined
+/// function, or the external symbol of a library call) on the target \p TT:
 /// - for a function \p F with a non-empty "msil-import-module" attribute, its
 ///   value, whatever the name and the triple;
 /// - for puts and putchar, the C library: "libc" on linux-gnu and
@@ -110,6 +114,43 @@ std::optional<StringRef> getPInvokeModule(const Triple &TT, StringRef Name,
 /// "msil-import-name" attribute of \p F when it has a non-empty one, else
 /// \p Name itself. \p F may be null (a library call).
 StringRef getPInvokeEntry(StringRef Name, const Function *F);
+
+/// Whether \p F, which may be null, has a non-empty "msil-import-module"
+/// attribute: an import that names its native module itself, in every mode.
+bool hasImportModule(const Function *F);
+
+/// Whether \p M is msil-ld's linked text (plan 5.10.13): its module flag
+/// "msil-linked" (i32 1, behaviour Override) is 1. msil-ld's import
+/// annotation (MSILLinkHooksPass) sets it on the merged LTO module, together
+/// with the "msil-import-module" and "msil-import-name" attributes of every
+/// natively bound declaration and the named metadata !msil.imports. A flag
+/// with another value, or one that is not an integer constant, counts as
+/// absent. A module with the flag "msil-lto" but without this one keeps the
+/// standalone import table.
+bool isLinkedModule(const Module &M);
+
+/// The native function that a P/Invoke of linked text calls (plan 5.10.11):
+/// the module string of its ImplMap row, verbatim (a DT_SONAME such as
+/// "libc.so.6", or a DLL name such as "KERNEL32.dll"), and the entry point
+/// (an export name, an ordinal '#<n>', or an alias target).
+struct NativeImport {
+  StringRef Module;
+  StringRef Entry;
+};
+
+/// The import of the undefined function or library call \p Name (an IL name
+/// or an external symbol) in msil-ld's linked text \p M (isLinkedModule):
+/// - for a function \p F with a non-empty "msil-import-module" attribute, that
+///   module, with the "msil-import-name" value as the entry, else \p Name;
+/// - else the kind-0 (function) operand of !msil.imports for \p Name,
+///   !{!"<symbol>", !"<module>", !"<entry>", i32 0}, which msil-ld writes for
+///   the library functions that the merged module does not declare (an empty
+///   entry is \p Name);
+/// - else std::nullopt: msil-ld did not resolve the symbol.
+/// The standalone import table is never consulted. The strings live as long
+/// as \p F's attributes and \p M's metadata, or as \p Name.
+std::optional<NativeImport> getLinkedImport(const Module &M, StringRef Name,
+                                            const Function *F);
 
 } // end namespace MSIL
 

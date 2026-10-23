@@ -1,0 +1,448 @@
+## Library requests and linker options embedded in bitcode
+## (ImplementationPlan.md 5.10.6, 5.9.4 'Linker options' and 5.9.14; M15.a
+## item 3; section 12 row of 2026-10-22 for M15.a item 3). msil-ld reads the
+## linker options (lto::InputFile::getCOFFLinkerOpts, where clang's
+## '#pragma comment(lib)' arrives as !llvm.linker.options on every MSIL
+## triple, tokenized as lld-link's directives) and the dependent libraries
+## (getDependentLibraries) of each bitcode input as it loads it:
+## - '-l<name>' is searched like -l<name>, '-l:<file>' like -l:<file>;
+## - '/DEFAULTLIB:<name>' and '-defaultlib:<name>', in any case, get '.lib'
+##   when the name has no extension and are searched like -l:<name>;
+## - a dependent library 'x' (!llvm.dependent-libraries, which the bitcode
+##   symbol table records for ELF triples only, so it comes with stock ELF
+##   bitcode, 5.10.6) is searched like -lx;
+## - a request for an MSVC C runtime library (libcmt, which clang requests
+##   on windows-msvc by default) is ignored, with the --verbose note
+##   'ignoring C runtime library request '<name>' from <file>'; other
+##   requests, oldnames.lib among them, are searched;
+## - a request found nowhere is lld/ELF's 'unable to find library from
+##   dependent library specifier: <name>', then '>>> requested by <file>'
+##   (an archive member as '<archive>(<member>)'), and the request of an
+##   archive member that is never extracted is never made;
+## - '/alternatename:a=b' resolves a still undefined a as b (lld-link);
+##   without '=' it is '/alternatename: invalid argument: <arg>', and a
+##   second a=c for the same a is '/alternatename: conflicts: <arg>' (the
+##   same a=b twice is no conflict);
+## - '/FAILIFMISMATCH:k=v' is lld-link's error when two inputs disagree;
+##   without '=' it is '/failifmismatch: invalid argument: <arg>';
+## - any other option is the warning 'ignoring linker option '<opt>' in
+##   <file>';
+## - --no-dependent-libraries drops every embedded request.
+## On Linux MSIL triples clang writes '#pragma comment(lib, "my lib")' as the
+## unquoted '-lmy lib', and the bitcode symbol table joins the options with
+## spaces; msil-ld still finds 'libmy lib.so' for a bitcode file it loads
+## (the row of 2026-10-22).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p lib wlib
+# RUN: yaml2obj lnxlib.yaml -o lnxlib.o
+# RUN: ld.lld -shared -soname libfoo-dep.so.1 lnxlib.o -o lib/libfoo.so
+# RUN: ld.lld -shared -soname libbar-dep.so.2 lnxlib.o -o lib/libbar.so.2
+# RUN: ld.lld -shared -soname libdep-dep.so.3 lnxlib.o -o lib/libdep.so
+# RUN: ld.lld -shared -soname libmylib.so.1 lnxlib.o -o "lib/libmy lib.so"
+# RUN: llvm-lib /machine:x64 /def:wfoo.def /out:wlib/wfoo.lib
+# RUN: llvm-lib /machine:x64 /def:wbar.def /out:wlib/wbar.lib
+# RUN: llvm-lib /machine:x64 /def:wqux.def /out:wlib/wqux.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-string.def /out:wlib/ucrt.lib
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/oldnames.yaml -o strdup.obj
+# RUN: llvm-ar rcs wlib/oldnames.lib strdup.obj
+# RUN: llvm-as lnx-foo.ll -o lnx-foo.o
+# RUN: llvm-as lnx-bar.ll -o lnx-bar.o
+# RUN: llvm-as lnx-dep.ll -o lnx-dep.o
+# RUN: llvm-as lnx-space.ll -o lnx-space.o
+# RUN: llvm-as lnx-missing.ll -o lnx-missing.o
+# RUN: llvm-as win.ll -o win.o
+# RUN: llvm-as win-alt.ll -o win-alt.o
+# RUN: llvm-as b-def.ll -o b-def.o
+# RUN: llvm-as fim-a.ll -o fim-a.o
+# RUN: llvm-as fim-b.ll -o fim-b.o
+# RUN: llvm-as fim-c.ll -o fim-c.o
+# RUN: llvm-as other-opt.ll -o other-opt.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{so} = FileCheck %s --check-prefix=SO
+
+## Linux: -l<name>, -l:<file>, a dependent library, a name with a space.
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx-foo.o -L lib -o foo.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libfoo-dep.so.1 --input-file=foo.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx-bar.o -L lib -o bar.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libbar-dep.so.2 --input-file=bar.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx-dep.o -L lib -o dep.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=STOCK --implicit-check-not=error: --implicit-check-not=warning:
+# STOCK: {{^}}msil-ld: warning: lnx-dep.o: linking bitcode for x86_64-unknown-linux-gnu as x86_64-unknown-linux-gnu-msil; stock-clang bitcode is a compatibility path{{$}}
+# RUN: %{so} -DMOD=libdep-dep.so.3 --input-file=dep.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx-space.o -L lib -o space.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libmylib.so.1 --input-file=space.il
+# SO: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'lib_fn'() cil managed preservesig {}{{$}}
+
+## A request found nowhere: lld/ELF's text, then the requesting file
+## (5.10.6).
+# RUN: not msil-ld --lto-emit-asm lnx-missing.o -L lib -o x.il 2>&1 | %{err} --check-prefix=MISSING
+# MISSING:      {{^}}msil-ld: error: unable to find library from dependent library specifier: nosuch{{$}}
+# MISSING-NEXT: {{^}}>>> requested by lnx-missing.o{{$}}
+
+## Linker options are processed when their file is loaded (5.9.4): an
+## archive member's request is made only when the member is extracted, and
+## then names the member.
+# RUN: llvm-as mem.ll -o mem.o
+# RUN: llvm-ar rcs libmem.a mem.o
+# RUN: llvm-as lnx-main.ll -o lnx-main.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx-main.o libmem.a -o mem.il 2>&1 | count 0
+# RUN: not msil-ld --lto-emit-asm --lto-O0 lnx-main.o libmem.a -u unused_fn -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=MEMBER
+# MEMBER:      {{^}}msil-ld: error: unable to find library from dependent library specifier: nosuchlib{{$}}
+# MEMBER-NEXT: {{^}}>>> requested by libmem.a(mem.o){{$}}
+
+## --no-dependent-libraries: the request is not made, lib_fn stays undefined.
+# RUN: not msil-ld --lto-emit-asm --no-dependent-libraries lnx-foo.o -L lib -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=NODEP
+# RUN: msil-ld --lto-emit-asm --lto-O0 --no-dependent-libraries lnx-missing.o lib/libfoo.so -o nodep.il 2>&1 \
+# RUN:   | count 0
+# NODEP: {{^}}msil-ld: error: undefined symbol: lib_fn{{$}}
+
+## windows-msvc: /DEFAULTLIB in its spellings, libcmt ignored, oldnames
+## searched (strdup -> _strdup in ucrt.lib, which the command line gives).
+# RUN: msil-ld --lto-emit-asm --lto-O0 win.o -L wlib wlib/ucrt.lib -o win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WIN --input-file=win.il
+# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("wfoo.dll" cdecl) int32 'wfoo_fn'() cil managed preservesig {}{{$}}
+# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("wbar.dll" cdecl) int32 'wbar_fn'() cil managed preservesig {}{{$}}
+# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("wqux.dll" cdecl) int32 'wqux_fn'() cil managed preservesig {}{{$}}
+# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
+# RUN: msil-ld --lto-emit-asm --lto-O0 --verbose win.o -L wlib wlib/ucrt.lib -o win-verbose.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LIBCMT
+# LIBCMT: {{^}}msil-ld: ignoring C runtime library request 'libcmt.lib' from win.o{{$}}
+
+## More of 5.10.6's MSVC runtime names, in any case and spelling, and an
+## -l request: each is ignored with the note (none of them exists in wlib,
+## so a search would fail the link).
+# RUN: llvm-as win-crt.ll -o win-crt.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 win-crt.o -L wlib -o win-crt.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --lto-O0 --verbose win-crt.o -L wlib -o win-crt.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CRT --implicit-check-not=error: --implicit-check-not=warning:
+# CRT: {{^}}msil-ld: ignoring C runtime library request 'msvcrt' from win-crt.o{{$}}
+# CRT: {{^}}msil-ld: ignoring C runtime library request 'vcruntime.lib' from win-crt.o{{$}}
+# CRT: {{^}}msil-ld: ignoring C runtime library request 'LIBCMT.LIB' from win-crt.o{{$}}
+# CRT: {{^}}msil-ld: ignoring C runtime library request 'libucrtd' from win-crt.o{{$}}
+# CRT: {{^}}msil-ld: ignoring C runtime library request 'ucrt' from win-crt.o{{$}}
+
+## /alternatename: a_fn is undefined after all inputs, so it is b_fn.
+# RUN: msil-ld --lto-emit-asm --lto-O0 win-alt.o b-def.o -o alt.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=ALT --implicit-check-not=pinvokeimpl --implicit-check-not=undef_ --input-file=alt.il
+# ALT: {{^}}.method {{.*}}static int32 'b_fn'() cil managed
+
+## /FAILIFMISMATCH, with lld-link's text; an equal value is no error.
+# RUN: not msil-ld --lto-emit-asm fim-a.o fim-b.o -o x.il 2>&1 | %{err} --check-prefix=FIM
+# RUN: msil-ld --lto-emit-asm --lto-O0 fim-a.o fim-c.o -o fim.il 2>&1 | count 0
+# FIM:      {{^}}msil-ld: error: /failifmismatch: mismatch detected for '_MSC_VER':{{$}}
+# FIM-NEXT: {{^}}>>> fim-a.o has value 1900{{$}}
+# FIM-NEXT: {{^}}>>> fim-b.o has value 1910{{$}}
+
+## lld-link's texts for a malformed and a conflicting /alternatename and a
+## malformed /failifmismatch; the same /alternatename twice links.
+# RUN: llvm-as alt-noeq.ll -o alt-noeq.o
+# RUN: llvm-as alt-conflict.ll -o alt-conflict.o
+# RUN: llvm-as alt-same.ll -o alt-same.o
+# RUN: llvm-as fim-novalue.ll -o fim-novalue.o
+# RUN: not msil-ld --lto-emit-asm alt-noeq.o -o x.il 2>&1 | %{err} --check-prefix=ALT-NOEQ --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm alt-conflict.o -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=ALT-CONFLICT --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm fim-novalue.o -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=FIM-NOVALUE --implicit-check-not=error:
+# ALT-NOEQ:     {{^}}msil-ld: error: /alternatename: invalid argument: a_fn{{$}}
+# ALT-CONFLICT: {{^}}msil-ld: error: /alternatename: conflicts: a_fn=c_fn{{$}}
+# FIM-NOVALUE:  {{^}}msil-ld: error: /failifmismatch: invalid argument: novalue{{$}}
+# RUN: msil-ld --lto-emit-asm --lto-O0 alt-same.o b-def.o -o alt-same.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=ALT --implicit-check-not=pinvokeimpl --implicit-check-not=undef_ --input-file=alt-same.il
+
+## Any other option is a warning.
+# RUN: msil-ld --lto-emit-asm --lto-O0 other-opt.o -o other.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=OTHER --implicit-check-not=error:
+# OTHER: {{^}}msil-ld: warning: ignoring linker option '/merge:.a=.b' in other-opt.o{{$}}
+
+#--- lnxlib.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: lib_fn, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- wfoo.def
+LIBRARY wfoo.dll
+EXPORTS
+  wfoo_fn
+
+#--- wbar.def
+LIBRARY wbar.dll
+EXPORTS
+  wbar_fn
+
+#--- wqux.def
+LIBRARY wqux.dll
+EXPORTS
+  wqux_fn
+
+#--- lnx-foo.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-lfoo"}
+
+#--- lnx-bar.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-l:libbar.so.2"}
+
+#--- lnx-dep.ll
+;; Stock clang bitcode for the native triple: clang records
+;; '#pragma comment(lib, "dep")' as a dependent library on ELF triples.
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+!llvm.dependent-libraries = !{!0}
+!0 = !{!"dep"}
+
+#--- lnx-space.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-lmy lib"}
+
+#--- lnx-missing.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-lnosuch"}
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %a = call i32 @wfoo_fn()
+  %b = call i32 @wbar_fn()
+  %c = call i32 @wqux_fn()
+  %p = call ptr @strdup(ptr @msg)
+  %s1 = add i32 %a, %b
+  %s2 = add i32 %s1, %c
+  ret i32 %s2
+}
+
+declare i32 @wfoo_fn()
+declare i32 @wbar_fn()
+declare i32 @wqux_fn()
+declare ptr @strdup(ptr)
+
+!llvm.linker.options = !{!0, !1, !2, !3, !4}
+!0 = !{!"/DEFAULTLIB:wfoo.lib"}
+!1 = !{!"/DEFAULTLIB:wbar"}
+!2 = !{!"-defaultlib:wqux.lib"}
+!3 = !{!"/DEFAULTLIB:libcmt.lib"}
+!4 = !{!"/defaultlib:oldnames.lib"}
+
+#--- win-alt.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @a_fn()
+  ret i32 %r
+}
+
+declare i32 @a_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/alternatename:a_fn=b_fn"}
+
+#--- b-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @b_fn() {
+  ret i32 11
+}
+
+#--- fim-a.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/FAILIFMISMATCH:\22_MSC_VER=1900\22"}
+
+#--- fim-b.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @other_b() {
+  ret i32 1
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/FAILIFMISMATCH:\22_MSC_VER=1910\22"}
+
+#--- fim-c.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @other_c() {
+  ret i32 1
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/FAILIFMISMATCH:\22_MSC_VER=1900\22"}
+
+#--- alt-noeq.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/alternatename:a_fn"}
+
+#--- alt-conflict.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+define i32 @b_fn() {
+  ret i32 1
+}
+
+define i32 @c_fn() {
+  ret i32 2
+}
+
+!llvm.linker.options = !{!0, !1}
+!0 = !{!"/alternatename:a_fn=b_fn"}
+!1 = !{!"/alternatename:a_fn=c_fn"}
+
+#--- alt-same.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @a_fn()
+  ret i32 %r
+}
+
+declare i32 @a_fn()
+
+!llvm.linker.options = !{!0, !1}
+!0 = !{!"/alternatename:a_fn=b_fn"}
+!1 = !{!"/alternatename:a_fn=b_fn"}
+
+#--- fim-novalue.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/failifmismatch:novalue"}
+
+#--- other-opt.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/merge:.a=.b"}
+
+#--- mem.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @unused_fn() {
+  ret i32 1
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-lnosuchlib"}
+
+#--- lnx-main.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- win-crt.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+!llvm.linker.options = !{!0, !1, !2, !3, !4}
+!0 = !{!"/DEFAULTLIB:msvcrt"}
+!1 = !{!"-defaultlib:vcruntime.lib"}
+!2 = !{!"/DEFAULTLIB:LIBCMT.LIB"}
+!3 = !{!"/defaultlib:libucrtd"}
+!4 = !{!"-lucrt"}

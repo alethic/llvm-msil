@@ -5,8 +5,11 @@
 ## order, and 'Symbols:', a table with the columns Kind, Binding, Input and
 ## Symbol (the kinds of 5.9.5) that shows commons with their size and
 ## alignment. Unextracted members are no inputs.
-## M15 adds native libraries, M20 the 'Image:', 'Methods:', 'Fields:' and
-## 'Imports:' sections, so this test does not pin what follows 'Symbols:'.
+## M15 adds native libraries: the native libraries read are inputs, and a
+## symbol that binds natively is a row of kind NativeFunction or NativeData
+## with the library as its input; there is no 'Imports:' section yet (its
+## tokens exist only in M20's PE). M20 adds 'Image:', 'Methods:', 'Fields:'
+## and 'Imports:', so this test does not pin what follows 'Symbols:'.
 ## The plan fixes the section names and columns, not the spacing or the
 ## spelling of a binding, so the rows are matched loosely.
 
@@ -57,6 +60,40 @@
 # LNX-NEXT: {{^}}Inputs:{{$}}
 # LNX-NEXT: {{^ *}}lnx.o{{$}}
 # LNX-NEXT: {{^}}Symbols:{{$}}
+
+## Native libraries (M15). native.o calls foo of libfoo.so.1; bar, data of
+## the same library, is referenced only from a function that LTO deletes at
+## -O2, so it is bound (NativeData) and is no error. The import library's fn1
+## binds the same way.
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: llvm-as native.ll -o native.o
+# RUN: msil-ld --lto-emit-asm native.o libfoo.so.1 -o native.il -Map=native.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=NATIVE --input-file=native.map
+# RUN: FileCheck %s --check-prefix=NATIVE-ROWS --input-file=native.map
+# RUN: FileCheck %s --check-prefix=NO-IMPORTS --input-file=native.map
+
+# NATIVE:      {{^}}msil-ld map of native.il (x86_64-unknown-linux-gnu-msil){{$}}
+# NATIVE-NEXT: {{^}}Inputs:{{$}}
+# NATIVE-NEXT: {{^ *}}native.o{{$}}
+# NATIVE-NEXT: {{^ *}}libfoo.so.1{{$}}
+# NATIVE-NEXT: {{^}}Symbols:{{$}}
+
+# NATIVE-ROWS:     {{^}}Symbols:{{$}}
+# NATIVE-ROWS-DAG: {{^ *}}NativeFunction{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}libfoo.so.1{{[[:space:]]+}}foo{{$}}
+# NATIVE-ROWS-DAG: {{^ *}}NativeData{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}libfoo.so.1{{[[:space:]]+}}bar{{$}}
+# NO-IMPORTS-NOT:  Imports:
+
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/coff-import.def /out:imp.lib
+# RUN: llvm-as native-win.ll -o native-win.o
+# RUN: msil-ld --lto-emit-asm native-win.o imp.lib -o native-win.il -Map=native-win.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=NATIVE-WIN --input-file=native-win.map
+# RUN: FileCheck %s --check-prefix=NO-IMPORTS --input-file=native-win.map
+
+# NATIVE-WIN:      {{^}}Inputs:{{$}}
+# NATIVE-WIN-NEXT: {{^ *}}native-win.o{{$}}
+# NATIVE-WIN-NEXT: {{^ *}}imp.lib{{.*}}
+# NATIVE-WIN:      {{^}}Symbols:{{$}}
+# NATIVE-WIN:      {{^ *}}NativeFunction{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}imp.lib{{.*}}{{[[:space:]]+}}fn1{{$}}
 
 #--- main.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
@@ -114,3 +151,32 @@ target triple = "x86_64-unknown-linux-gnu-msil"
 define i32 @main() {
   ret i32 0
 }
+
+#--- native.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@bar = external global i32
+
+define i32 @main() {
+  %r = call i32 @foo(i32 1)
+  ret i32 %r
+}
+
+define i32 @dead() {
+  %v = load i32, ptr @bar
+  ret i32 %v
+}
+
+declare i32 @foo(i32)
+
+#--- native-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @fn1()
+  ret i32 %r
+}
+
+declare i32 @fn1()

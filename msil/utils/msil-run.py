@@ -9,6 +9,7 @@
 """Run a program built by the MSIL test suite and normalize what it did.
 
     msil-run.py [OPTIONS] --dotnet D --runtimeconfig C [--] prog.dll [ARGS...]
+    msil-run.py [OPTIONS] --dep FILE... [--dep-dir DIR] ... -- prog.dll [ARGS...]
     msil-run.py [OPTIONS] --runner wsl [--dotnet D] --runtimeconfig C [--] prog.dll
     msil-run.py [OPTIONS] --netfx [--] prog.exe [ARGS...]      (.NET Framework)
     msil-run.py [OPTIONS] --native [--] prog.exe [ARGS...]     (native oracle)
@@ -39,7 +40,7 @@ newline. Linux keeps only the low 8 bits of an exit status, so a status above
 (0x80000000..0xEFFFFFFF, for example 0xC0000005), which are hexadecimal.
 
 The program runs from a fresh private directory that holds only a copy of it
-(and of its runtimeconfig.json): two assemblies with the same name in one
+(and of its runtimeconfig.json and --dep files): two assemblies with the same name in one
 directory silently run the wrong code (llvm/docs/MSIL/recon/asmprinter.md 0.9).
 It runs under a wall-clock timeout (--timeout, default 60 s) and a memory cap
 on committed memory (--mem-limit-mb, default 4096): a Windows Job Object, or
@@ -62,6 +63,17 @@ the transcript comes back to Windows, where --expect compares it (lit passes
 
 --env VAR=VALUE (repeatable) sets an environment variable for the program in
 every mode (for example DOTNET_TieredCompilation=0, plan D38).
+
+--dep FILE... (one or more files; repeatable) copies each FILE into the
+private directory next to the program, and --dep-dir DIR (repeatable) copies
+everything in DIR there (plan 5.12.4, M15): the managed assemblies and the
+native libraries a program needs at run time, in every mode (.dll, --netfx,
+--native; with --runner wsl into the Linux temporary directory, where the
+copy of this script inside WSL runs the program). A missing FILE or DIR, and
+two files of one name (or one named like the program), are configuration
+errors. --dep takes every argument up to the next option, so the lit
+composites pass '--dep %{msil_deps} --' before the program; an empty list is
+allowed.
 
 With --expect STEM the transcript is compared with STEM.<os>.expected if that
 file exists, else STEM.expected; <os> (windows, linux or darwin) comes from
@@ -169,8 +181,9 @@ def host_startup_failure(stderr_text):
 
 
 # run_limited(), OOM_RE, host_startup_failure(), child_env(), remove_tree(),
-# to_wsl_path(), text_of(), fold_newlines() (the transcript newline rule) and
-# WSL_GRACE are shared: msil-verify.py, msil-jitall.py and
+# to_wsl_path(), text_of(), fold_newlines() (the transcript newline rule),
+# check_deps(), copy_deps() and WSL_GRACE are shared: msil-verify.py,
+# msil-jitall.py, il-snapshot.py and
 # update-expected.py import this file, so they stay module-level, and
 # importing it must not do anything else.
 if IS_WINDOWS:
@@ -594,6 +607,50 @@ def check_stdin(args):
         raise ConfigError("--stdin %s: no such file" % args.stdin)
 
 
+def check_deps(deps, dep_dirs):
+    """--dep files and --dep-dir directories must exist."""
+    for dep in deps:
+        if not os.path.isfile(dep):
+            raise ConfigError("--dep %s: no such file" % dep)
+    for d in dep_dirs:
+        if not os.path.isdir(d):
+            raise ConfigError("--dep-dir %s: no such directory" % d)
+
+
+def copy_deps(deps, dep_dirs, directory, taken):
+    """Copy each --dep file and the contents of each --dep-dir directory into
+    directory, next to the files named in taken (the program; msil-verify.py
+    and msil-jitall.py use this too). Two entries of one name are a
+    configuration error: one would silently replace the other."""
+    check_deps(deps, dep_dirs)
+    names = {(n.lower() if IS_WINDOWS else n): n for n in taken}
+
+    def claim(name, source):
+        key = name.lower() if IS_WINDOWS else name
+        if key in names:
+            raise ConfigError(
+                "dependency %s and %s have the same name %s"
+                % (source, names[key], name)
+            )
+        names[key] = source
+
+    try:
+        for dep in deps:
+            name = os.path.basename(dep)
+            claim(name, dep)
+            shutil.copy2(dep, os.path.join(directory, name))
+        for d in dep_dirs:
+            for name in sorted(os.listdir(d)):
+                source = os.path.join(d, name)
+                claim(name, source)
+                if os.path.isdir(source):
+                    shutil.copytree(source, os.path.join(directory, name))
+                else:
+                    shutil.copy2(source, os.path.join(directory, name))
+    except OSError as e:
+        raise ConfigError("cannot copy a dependency: %s" % e)
+
+
 def run_local(args):
     """Run the program from a private directory; return (transcript, stderr)."""
     prog = os.path.abspath(args.program)
@@ -608,6 +665,7 @@ def run_local(args):
                 % args.runtimeconfig
             )
     check_stdin(args)
+    check_deps(args.dep, args.dep_dir)
     env = child_env(args.env)
     try:
         stdin = open(args.stdin, "rb") if args.stdin else None
@@ -622,11 +680,15 @@ def run_local(args):
             # A program on a DrvFs mount with 'metadata' and a restrictive
             # fmask (the E7 oracle's, under --runner wsl) is not executable.
             os.chmod(copy, 0o755)
+        taken = [name]
         if dotnet:
             config = os.path.join(
                 private, os.path.splitext(name)[0] + ".runtimeconfig.json"
             )
             shutil.copyfile(args.runtimeconfig, config)
+            taken.append(os.path.basename(config))
+        copy_deps(args.dep, args.dep_dir, private, taken)
+        if dotnet:
             cmd = [dotnet, "exec", "--runtimeconfig", config, copy] + args.args
         else:
             cmd = [copy] + args.args
@@ -697,6 +759,12 @@ def run_wsl(args):
     )
     if args.stdin:
         cmd += ["--stdin", to_wsl_path(args.stdin)]
+    # The copy inside WSL copies them into its private Linux directory.
+    check_deps(args.dep, args.dep_dir)
+    for dep in args.dep:
+        cmd += ["--dep", to_wsl_path(dep)]
+    for d in args.dep_dir:
+        cmd += ["--dep-dir", to_wsl_path(d)]
     cmd += ["--", to_wsl_path(args.program)] + args.args
     env = dict(os.environ)
     set_env_var(env, "WSL_UTF8", "1")  # wsl.exe's own messages, not UTF-16
@@ -851,6 +919,22 @@ def parse_args(argv):
     )
     p.add_argument("--stdin", help="file to feed on stdin (default: empty)")
     p.add_argument(
+        "--dep",
+        nargs="*",
+        action="extend",
+        default=[],
+        metavar="FILE",
+        help="copy these files next to the program (repeatable; takes every "
+        "argument up to the next option, so end with '--' before the program)",
+    )
+    p.add_argument(
+        "--dep-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="copy everything in DIR next to the program (repeatable)",
+    )
+    p.add_argument(
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
@@ -891,8 +975,15 @@ def parse_args(argv):
         args = p.parse_args(argv)
         rest = args.command
     if not rest:
+        if args.dep:
+            p.error(
+                "no program given (--dep takes every argument up to the next "
+                "option: put '--' before the program)"
+            )
         p.error("no program given")
     args.program, args.args = rest[0], rest[1:]
+    if args.tool and (args.dep or args.dep_dir):
+        p.error("--dep and --dep-dir copy files next to a program, not a --tool")
     if args.timeout <= 0 or args.mem_limit_mb <= 0:
         p.error("--timeout and --mem-limit-mb must be positive")
     if args.runner == "wsl" and args.netfx:

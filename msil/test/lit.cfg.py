@@ -20,7 +20,12 @@
 # -flto -c and links through the clang driver and msil-ld
 # (-Wl,--lto-emit-asm, then ilasm -exe), and runs it like %{msil_c};
 # msil_pipeline=lto makes %{msil_c} a one-source %{msil_prog} (see "linker"
-# and "%{msil_prog}" below).
+# and "%{msil_prog}" below). From M15 the links read the driver's default
+# libraries (the native libraries of plan 5.10.4; Linux triples through
+# --sysroot=<msil_linux_sysroot>), a test adds its own native libraries to
+# both builds with %{msil_native_libs} and ships run-time files with each
+# run with %{msil_deps}, and msil_glibc_sysroot enables the optional hosted
+# compile-only tests of msil/test/M2/09-hosted (plan Q16).
 #
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
@@ -974,6 +979,12 @@ def find_linker(name):
 
 ld_lld = find_linker("ld.lld")
 lld_link = find_linker("lld-link")
+# Features for tests that build their own native libraries (plan 5.12.5):
+# %ld_lld -shared, %lld_link -dll.
+if ld_lld:
+    features.add("msil-ld-lld")
+if lld_link:
+    features.add("msil-lld-link")
 clang_path = getattr(config, "clang", None)
 
 # --param msil_native_rtlib=auto|PATH (plan 5.12.8): the compiler-rt builtins
@@ -1086,6 +1097,67 @@ if linux_sysroot:
         linux_libdir = libdir
         features.add("msil-linux-sysroot")
         note("linux sysroot: " + slashes(linux_sysroot))
+
+# %{msil_ldflags} (plan 5.12.3, M15): the harness's flags of the MSIL link.
+# The link reads the driver's default libraries of the triple (plan 5.10.4),
+# which msil-ld resolves from the native libraries: on a Windows triple from
+# the import libraries of LIB (msil-env.ps1 or a VS developer prompt), on a
+# Linux triple from the sysroot msil_linux_sysroot (msil-ld's --sysroot, the
+# libraries the E7 oracle links). Without that sysroot a Linux-triple link
+# has no --sysroot, and msil-ld names each library it cannot find.
+if triple_os == "linux":
+    msil_ldflags = "--sysroot=" + quote(linux_sysroot) if linux_libdir else ""
+    if not linux_libdir:
+        note(
+            "Linux-triple links get no --sysroot: no msil_linux_sysroot "
+            "(msil/utils/make-linux-sysroot.py)"
+        )
+else:
+    msil_ldflags = ""
+
+# --param msil_glibc_sysroot=DIR (plan 5.12.2, 5.12.8, Q16): a glibc sysroot
+# with headers (usr/include/stdio.h), as msil/utils/make-glibc-sysroot.sh
+# makes it, for the optional hosted compile-only tests of
+# msil/test/M2/09-hosted (feature msil-glibc-sysroot, substitution
+# %{msil_glibc_sysroot}). Default $MSIL_GLIBC_SYSROOT, else
+# C:\llvm-msil-scratch\glibc-sysroot on Windows when it holds
+# usr/include/stdio.h; an empty value disables it. An explicit value
+# (parameter or variable) without usr/include/stdio.h is a configuration
+# error, so the hosted leg, which names the sysroot, cannot pass by skipping.
+# Feature msil-ucrt-headers: a directory of INCLUDE holds corecrt.h (the
+# UCRT headers of a VS developer prompt; lit passes INCLUDE on).
+GLIBC_STDIO = ("usr", "include", "stdio.h")
+glibc_sysroot = params.get("msil_glibc_sysroot")
+glibc_explicit = glibc_sysroot is not None
+if glibc_sysroot is None and "MSIL_GLIBC_SYSROOT" in os.environ:
+    glibc_sysroot = os.environ["MSIL_GLIBC_SYSROOT"]
+    glibc_explicit = True
+if glibc_sysroot is None:
+    default_glibc = r"C:\llvm-msil-scratch\glibc-sysroot" if is_windows else ""
+    glibc_sysroot = (
+        default_glibc
+        if default_glibc and os.path.isfile(os.path.join(default_glibc, *GLIBC_STDIO))
+        else ""
+    )
+if glibc_sysroot:
+    glibc_sysroot = os.path.abspath(glibc_sysroot)
+    if not os.path.isfile(os.path.join(glibc_sysroot, *GLIBC_STDIO)):
+        if glibc_explicit:
+            fatal(
+                "msil_glibc_sysroot=%s has no usr/include/stdio.h; make it with "
+                "'bash msil/utils/make-glibc-sysroot.sh <dir>' inside WSL "
+                "(plan 5.12.8)" % slashes(glibc_sysroot)
+            )
+        glibc_sysroot = ""
+    else:
+        features.add("msil-glibc-sysroot")
+        note("glibc sysroot: " + slashes(glibc_sysroot))
+if any(
+    d and os.path.isfile(os.path.join(d, "corecrt.h"))
+    for d in os.environ.get("INCLUDE", "").split(os.pathsep)
+):
+    features.add("msil-ucrt-headers")
+    note("UCRT headers found through INCLUDE")
 
 e7_why = None
 e7_start = None
@@ -1285,6 +1357,7 @@ for var in (
     "LIBPATH",
     "MSIL_BUILD_DIR",
     "MSIL_LINUX_SYSROOT",
+    "MSIL_GLIBC_SYSROOT",
 ):
     if var in os.environ:
         config.environment[var] = os.environ[var]
@@ -1453,15 +1526,16 @@ def native_leg(t, level, compile_flags):
     )
 
 
-def roundtrip_leg(t, image=None):
+def roundtrip_leg(t, image=None, dep=""):
     """msil_roundtrip: the ildasm -> ilasm round trip of <t>.dll (or of the
     program image of %{msil_prog}, written back as <t>.rt.exe), then a run of
-    the reassembled image against the same .expected file."""
+    the reassembled image against the same .expected file. dep: the
+    dependency options of the run (dep_args)."""
     rt = f"{t}.rt.exe" if image else f"{t}.rt.dll"
     image = image or f"{t}.dll"
     return (
         f" %if msil-roundtrip %{{ && %msil_roundtrip --output={rt} {image}"
-        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.rt.out {rt} %}}"
+        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.rt.out{dep} {rt} %}}"
     )
 
 
@@ -1520,9 +1594,25 @@ ll_levels = [o for o in opt_levels if o in ("O0", "O1", "O2", "O3")] or ["O2"]
 #                       per NAME, linked as -L<dir> -lNAME (a SRC written
 #                       stock:SRC is compiled as a stock source)
 #   %{msil_libs}        further arguments of the MSIL link (not the oracle's)
+#   %{msil_native_libs} link arguments of both builds, the MSIL link and the
+#                       native oracle's (msil-prog.py --native-lib; M15): the
+#                       native libraries of the program, for example
+#                       -L%t -lnative for a test-built native.dll (with its
+#                       import library native.lib) or libnative.so
+#   %{msil_deps}        files that every run needs beside the program (a
+#                       test-built native library, a managed assembly):
+#                       msil-verify.py, msil-jitall.py and every msil-run.py
+#                       run (the MSIL program, the native oracle, the .NET
+#                       Framework run and the round trip) get them as
+#                       '--dep %{msil_deps} --' before the program (M15);
+#                       the value may use lit's %if (native.dll on Windows
+#                       triples, libnative.so on Linux ones) and wildcards,
+#                       which the internal shell expands
 # and a directory may redefine %{msil_cflags} and %{msil_ldflags}, the MSIL
-# link's flags (-nodefaultlibs in M14: the driver's default libraries are
-# M15's). Each level builds in a fresh %t.<L>.d into %t.<L>.d/prog.exe (an EXE,
+# link's flags (from M15 empty on Windows triples and
+# --sysroot=<msil_linux_sysroot> on Linux triples, so the link reads the
+# driver's default libraries of plan 5.10.4; M14 had -nodefaultlibs). Each
+# level builds in a fresh %t.<L>.d into %t.<L>.d/prog.exe (an EXE,
 # so the same image runs under 'dotnet exec' and on the .NET Framework, plan
 # 5.12.1), then %msil_verify, %msil_jitall and %msil_exec --expect
 # %S/%{s:stem}, and the %if legs: the round trip of the image, the native
@@ -1534,7 +1624,9 @@ ll_levels = [o for o in opt_levels if o in ("O0", "O1", "O2", "O3")] or ["O2"]
 # %if msil-prog-pipeline=<p>. %{msil_det} builds twice at -O2 and compares
 # (msil-prog.py --det). The placeholders sit inside single quotes on the
 # command line (the archive list has ';'), so their values may not contain a
-# single quote, and one value may not contain ',' or ';' in a path.
+# single quote, and one value may not contain ',' or ';' in a path;
+# %{msil_srcs}, %{msil_stock_srcs} and %{msil_deps} are lists of words on
+# the command line (quote a path with a blank).
 # %msil_prog_build is everything but the level, the directories and the
 # inputs: the template with @TOOLS@ replaced by the tool arguments, sorted by
 # name. harness/prog/lit.local.cfg rebuilds it from config.msil_prog_template
@@ -1568,7 +1660,7 @@ config.msil_prog_tool_args = prog_tool_args
 config.msil_prog_template = prog_template
 
 
-def prog_inputs(srcs, stock, archives, libs, native=False):
+def prog_inputs(srcs, stock, archives, libs, native_libs, native=False):
     """The input options of msil-prog.py (a None part is left out)."""
     text = f" --src {srcs}"
     if stock is not None:
@@ -1577,6 +1669,8 @@ def prog_inputs(srcs, stock, archives, libs, native=False):
         text += f" --archives='{archives}'"
     if libs is not None and not native:
         text += f" --lib='{libs}'"
+    if native_libs is not None:
+        text += f" --native-lib='{native_libs}'"
     return text
 
 
@@ -1585,7 +1679,16 @@ PROG_PLACEHOLDERS = (
     "%{msil_stock_srcs}",
     "%{msil_archives}",
     "%{msil_libs}",
+    "%{msil_native_libs}",
 )
+
+
+def dep_args(deps):
+    """The dependency options of a run, placed right before the program:
+    every file of deps after one --dep (msil-run.py, msil-verify.py and
+    msil-jitall.py take one or more files after it), then '--', which ends
+    the list (an empty list is allowed). Empty when deps is None."""
+    return "" if deps is None else f" --dep {deps} --"
 
 
 def prog_build(level, inputs, fail=False):
@@ -1598,37 +1701,39 @@ def prog_build(level, inputs, fail=False):
     return ("not " + cmd if fail else cmd), exe
 
 
-def prog_pipeline(level, inputs=PROG_PLACEHOLDERS):
+def prog_pipeline(level, inputs=PROG_PLACEHOLDERS, deps="%{msil_deps}"):
     """%{msil_prog} at -<level>: build, verify, force-JIT, run and compare,
-    then the legs."""
+    then the legs. deps: the files every run gets (dep_args), or None."""
     t = "%t." + level
     build, exe = prog_build(level, inputs)
+    dep = dep_args(deps)
     cmd = (
-        f"{build} && %msil_verify {exe}"
-        f" %if msil-jitall %{{ && %msil_jitall {exe} %}}"
-        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {exe}"
+        f"{build} && %msil_verify{dep} {exe}"
+        f" %if msil-jitall %{{ && %msil_jitall{dep} {exe} %}}"
+        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out{dep} {exe}"
     )
-    cmd += roundtrip_leg(t, exe)
+    cmd += roundtrip_leg(t, exe, dep)
     native = f"{t}.native.d/prog.{'elf' if e7_oracle else 'exe'}"
     cmd += (
         f" %if msil-native-oracle %{{ && %msil_prog_build --mode native"
         f" --level {level} --workdir {t}.native.d --out {native}"
         + prog_inputs(*inputs, native=True)
         + f" && %msil_exec --native --expect %S/%{{s:stem}}"
-        f" --out {t}.native.out {native} %}}"
+        f" --out {t}.native.out{dep} {native} %}}"
     )
     cmd += (
         f" %if msil-run-netfx %{{ && %msil_exec --netfx --expect %S/%{{s:stem}}"
-        f" --out {t}.netfx.out {exe} %}}"
+        f" --out {t}.netfx.out{dep} {exe} %}}"
     )
     return cmd
 
 
 def c_composite(level):
     """%{msil_c_<level>}: Phase 1's pipeline under msil_pipeline=asm, the
-    one-source %{msil_prog} under lto."""
+    one-source %{msil_prog} under lto (without the placeholders of
+    %{msil_prog}: no archives, libraries or dependencies)."""
     if pipeline == "lto":
-        return prog_pipeline(level, ("%s", None, None, None))
+        return prog_pipeline(level, ("%s", None, None, None, None), deps=None)
     return c_pipeline(level)
 
 
@@ -1657,9 +1762,17 @@ substitutions = [
     ("%{msil_stock_srcs}", ""),
     ("%{msil_archives}", ""),
     ("%{msil_libs}", ""),
-    # The MSIL link's harness flags: -nodefaultlibs in M14 (plan 5.12.3; M15
-    # links the default libraries of plan 5.10.4 through --sysroot instead).
-    ("%{msil_ldflags}", "-nodefaultlibs"),
+    ("%{msil_native_libs}", ""),
+    ("%{msil_deps}", ""),
+    # The MSIL link's harness flags (plan 5.12.3, M15; see msil_ldflags):
+    # empty on Windows triples, --sysroot=<msil_linux_sysroot> on Linux
+    # triples, so the link reads the default libraries of plan 5.10.4.
+    ("%{msil_ldflags}", msil_ldflags),
+    # The glibc sysroot of the hosted tests (msil_glibc_sysroot).
+    (
+        "%{msil_glibc_sysroot}",
+        quote(glibc_sysroot) if glibc_sysroot else "glibc-sysroot-not-found",
+    ),
     # msil-ld under msil-run.py's limits, and the tree's llvm-ar and llvm-nm.
     (
         "%msil_ld",

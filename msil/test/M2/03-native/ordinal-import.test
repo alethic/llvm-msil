@@ -1,0 +1,26 @@
+# Imports by ordinal: htons and htonl from ws2_32.lib, which imports them as '#9' and '#8'.
+# The Windows SDK's ws2_32.lib describes htons and htonl with short import
+# members of name type 'ordinal' (ordinals 9 and 8 of WS2_32.dll), so msil-ld
+# writes the P/Invokes with the entry '#9' and '#8' (plan 5.10.11, Q13), which
+# the P/Invoke loader resolves by ordinal on .NET 8 and on Framework 4.8
+# (native-imports 3.1). -lws2_32 reaches the MSIL link and the native oracle
+# through %{msil_native_libs}. Plan 5.10.15 (an ordinal htons), recon
+# tests-p2 3.5, native-imports 9.3, M15.
+# REQUIRES: msil-triple-windows
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_native_libs} = -lws2_32
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+
+unsigned short htons(unsigned short v);
+unsigned int htonl(unsigned int v);
+
+int main(void) {
+  put_hex(htons(0x1234));
+  put_hex(htons(0x00ff));
+  put_hex(htonl(0x01020304u));
+  put_hex(htonl(0xdeadbeefu));
+  return htons(0x0100) & 0xff;
+}

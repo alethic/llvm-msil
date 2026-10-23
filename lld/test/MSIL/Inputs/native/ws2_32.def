@@ -1,0 +1,5 @@
+LIBRARY WS2_32.dll
+EXPORTS
+  htons @9 NONAME
+  socket @23 NONAME
+  ntohs @15

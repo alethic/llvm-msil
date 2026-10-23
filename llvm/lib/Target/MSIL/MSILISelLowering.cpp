@@ -226,23 +226,25 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
     setOperationAction(ISD::FPTRUNC_ROUND, T, Custom);
   // The MSVC C runtime has no ldexpf and no frexpf (RuntimeLibcalls.td), and
   // native clang calls ldexp and frexp there. msvcrt.dll, the C runtime of
-  // windows-gnu, does not export them either (MinGW links its own), so they
-  // are not Phase-1 imports there (MSIL::getPInvokeModule). Wherever the
-  // float32 function is not an import and the double one is, call the double
-  // one, instead of the generic expansions, which work on the integer bits
-  // through a stack slot, or a diagnosed call: the double result of ldexp
-  // rounds once to float, and the fraction that frexp returns for a float
-  // fits in a float, so the values do not change.
-  auto IsImport = [&](RTLIB::Libcall LC) {
-    RTLIB::LibcallImpl Impl = getLibcallImpl(LC);
-    return Impl != RTLIB::Unsupported &&
-           MSIL::getPInvokeModule(TM.getTargetTriple(),
-                                  getLibcallImplName(Impl));
+  // windows-gnu, does not export them either (MinGW links its own from
+  // libmingwex), although RuntimeLibcalls lists them for MinGW. Wherever the
+  // C runtime lacks the float32 function and the double libcall exists, call
+  // the double one, instead of the generic expansions, which work on the
+  // integer bits through a stack slot, or a call that cannot be resolved:
+  // the double result of ldexp rounds once to float, and the fraction that
+  // frexp returns for a float fits in a float, so the values do not change.
+  // This depends on RuntimeLibcalls and the triple only, never on an import
+  // policy, so that standalone, linked and object code agree (plan 5.10.13).
+  bool NoFloatLdexpFrexp = TM.getTargetTriple().isWindowsGNUEnvironment();
+  auto HasLibcall = [&](RTLIB::Libcall LC) {
+    return getLibcallImpl(LC) != RTLIB::Unsupported;
   };
-  if (!IsImport(RTLIB::LDEXP_F32) && IsImport(RTLIB::LDEXP_F64))
+  if ((NoFloatLdexpFrexp || !HasLibcall(RTLIB::LDEXP_F32)) &&
+      HasLibcall(RTLIB::LDEXP_F64))
     setOperationPromotedToType({ISD::FLDEXP, ISD::STRICT_FLDEXP}, MVT::f32,
                                MVT::f64);
-  if (!IsImport(RTLIB::FREXP_F32) && IsImport(RTLIB::FREXP_F64))
+  if ((NoFloatLdexpFrexp || !HasLibcall(RTLIB::FREXP_F32)) &&
+      HasLibcall(RTLIB::FREXP_F64))
     setOperationPromotedToType(ISD::FFREXP, MVT::f32, MVT::f64);
 
   // SETCC stays Legal for i32, i64, f32 and f64: every integer and floating-

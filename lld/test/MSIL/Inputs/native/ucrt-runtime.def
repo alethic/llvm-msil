@@ -1,0 +1,7 @@
+LIBRARY api-ms-win-crt-runtime-l1-1-0.dll
+EXPORTS
+  exit
+  _errno
+  _beginthreadex
+  _crt_atexit
+  signal

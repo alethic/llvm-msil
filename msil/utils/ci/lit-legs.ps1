@@ -38,6 +38,14 @@
 #   wsl-quick      -Wsl: msil/test/M1/11-programs, msil/test/harness and msil/test/M2 (once it
 #                  exists) on WSL .NET 10, E7 Linux oracle required (plan 5.12.10 G4: the WSL
 #                  step of every Phase 2 gate from M13 on; the M12 gate runs wsl-net10 instead)
+#   hosted         -Wsl, optional (plan Q16, 5.12.11): msil/test/M2/09-hosted, the hosted
+#                  compile-only tests (glibc headers and libc.so, UCRT headers), with
+#                  msil_glibc_sysroot given: $env:MSIL_GLIBC_SYSROOT, else
+#                  C:\llvm-msil-scratch\glibc-sysroot, which msil/utils/make-glibc-sysroot.sh
+#                  builds inside WSL (step G0 of the gates from M15), so a missing sysroot is a
+#                  configuration error, never a leg of UNSUPPORTED tests. It is not in the
+#                  default set: like the WSL legs it needs what only the development host has (a
+#                  sysroot made through the WSL distribution); the CI never runs it   (M15 20)
 #   modern-ilasm   11-programs assembled by the .NET ilasm (win-x64), not Framework's  (step 11)
 #   roundtrip      11-programs through ildasm -> ilasm, then run (Design.md 5.5)       (M12 13)
 #   expected       update-expected.py --check msil/test/M1 msil/test/M2: .expected vs the Windows
@@ -114,6 +122,9 @@ $linuxSysroot = if ($env:MSIL_LINUX_SYSROOT) { $env:MSIL_LINUX_SYSROOT } else { 
 $wslRuntime = @('msil_runner=wsl', $linux, 'msil_wsl_dotnet=private', 'msil_dotnet_runtime=10')
 # The legs that require the E7 Linux oracle.
 $e7 = @('msil_native_oracle=required', "msil_linux_sysroot=$($linuxSysroot.Replace('\', '/'))")
+# The glibc sysroot of the hosted leg (msil/utils/make-glibc-sysroot.sh), defaulted as lit.cfg.py
+# defaults it on Windows.
+$glibcSysroot = if ($env:MSIL_GLIBC_SYSROOT) { $env:MSIL_GLIBC_SYSROOT } else { 'C:\llvm-msil-scratch\glibc-sysroot' }
 
 # Params and Paths are script blocks: tool paths are resolved when the leg runs, so a missing
 # package fails that leg only, and msil/test/M2 joins wsl-quick once it exists.
@@ -136,6 +147,8 @@ $legs = @(
   @{ Name = 'wsl-quick'; Wsl = $true; Params = { $wslRuntime + $e7 }
      Paths = { 'msil/test/M1/11-programs', 'msil/test/harness'
                if (Test-Path -LiteralPath (Join-Path $MsilRepo 'msil/test/M2')) { 'msil/test/M2' } } }
+  @{ Name = 'hosted'; Paths = { 'msil/test/M2/09-hosted' }; Wsl = $true
+     Params = { "msil_glibc_sysroot=$($glibcSysroot.Replace('\', '/'))" } }
   @{ Name = 'modern-ilasm'; Paths = { $programs }
      Params = { "msil_ilasm=$(Get-MsilNuGetTool -Repo $MsilRepo -Rid win-x64 -Tool ilasm)" } }
   @{ Name = 'roundtrip'; Paths = { $programs }; Params = { 'msil_roundtrip=1' } }

@@ -1,0 +1,52 @@
+# The vcruntime string and memory functions, which ucrt.lib lacks, bound by --ucrtbase-imports.
+# memcpy, memset, memmove, memcmp, memchr, strchr, strrchr, strstr, wcschr,
+# wcsrchr and wcsstr live in vcruntime140.dll (and the static vcruntime) in a
+# native MSVC link, not in the UCRT import library; the driver's
+# windows-msvc link ends with --ucrtbase-imports (plan 5.10.4), msil-ld's
+# built-in import library that binds all eleven to ucrtbase.dll, which
+# exports them (native-imports 2.4). -ffreestanding keeps every call a call of
+# the C function. The native oracle links the static vcruntime. Plan 5.10.15
+# (--ucrtbase-imports), M15.
+# REQUIRES: msil-triple-windows
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+
+typedef __SIZE_TYPE__ size_t;
+typedef __WCHAR_TYPE__ wchar_t;
+void *memcpy(void *d, const void *s, size_t n);
+void *memset(void *d, int c, size_t n);
+void *memmove(void *d, const void *s, size_t n);
+int memcmp(const void *a, const void *b, size_t n);
+void *memchr(const void *s, int c, size_t n);
+char *strchr(const char *s, int c);
+char *strrchr(const char *s, int c);
+char *strstr(const char *h, const char *n);
+wchar_t *wcschr(const wchar_t *s, wchar_t c);
+wchar_t *wcsrchr(const wchar_t *s, wchar_t c);
+wchar_t *wcsstr(const wchar_t *h, const wchar_t *n);
+
+int main(void) {
+  char buf[32];
+  const char *text = "abcdefghij";
+  const char *dots = "a.b.c";
+  const wchar_t *wide = L"one two one";
+  memset(buf, '-', 31);
+  buf[31] = 0;
+  memcpy(buf + 2, text, 10);
+  puts(buf);
+  memmove(buf + 4, buf + 2, 10);
+  puts(buf);
+  put_i64(memcmp(buf, "--ab", 4) == 0);
+  put_i64((const char *)memchr(text, 'e', 10) - text);
+  put_i64(strchr(text, 'c') - text);
+  put_i64(strrchr(dots, '.') - dots);
+  puts(strstr(text, "def"));
+  put_i64(wcschr(wide, L't') - wide);
+  put_i64(wcsrchr(wide, L'o') - wide);
+  put_i64(wcsstr(wide, L"one") == wide);
+  put_i64(wcsstr(wide + 1, L"one") - wide);
+  return 11;
+}

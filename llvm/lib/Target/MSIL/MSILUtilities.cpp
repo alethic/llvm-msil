@@ -24,9 +24,11 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSymbol.h"
@@ -141,7 +143,7 @@ bool MSIL::moveArgumentsToTop(MachineFunction &MF) {
 }
 
 //===----------------------------------------------------------------------===//
-// The Phase-1 import table (decision D14)
+// The standalone import table (decision D14, frozen)
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -166,7 +168,8 @@ struct MathImport {
 
 /// The C math functions of decision D14: those that clang calls for the math
 /// builtins and that the legalizer calls for the floating-point operations
-/// without a CIL opcode.
+/// without a CIL opcode. The table is frozen until the end of Phase 2 (plan
+/// 5.10.13): no entry is added or removed.
 ///
 /// ucrtbase.dll and msvcrt.dll do not export all of them: the UCRT headers
 /// implement frexpf, ldexpf and hypotf inline (on frexp, ldexp and _hypotf),
@@ -305,4 +308,54 @@ StringRef MSIL::getPInvokeEntry(StringRef Name, const Function *F) {
       return Entry;
   }
   return Name;
+}
+
+bool MSIL::hasImportModule(const Function *F) {
+  return F &&
+         !F->getFnAttribute("msil-import-module").getValueAsString().empty();
+}
+
+//===----------------------------------------------------------------------===//
+// The imports of msil-ld's linked text (plan 5.10.13)
+//===----------------------------------------------------------------------===//
+
+bool MSIL::isLinkedModule(const Module &M) {
+  const auto *Flag =
+      mdconst::dyn_extract_or_null<ConstantInt>(M.getModuleFlag("msil-linked"));
+  return Flag && Flag->isOne();
+}
+
+std::optional<MSIL::NativeImport>
+MSIL::getLinkedImport(const Module &M, StringRef Name, const Function *F) {
+  // An import that the declaration names: an explicit import_module, used
+  // unchecked (plan 5.10.7), or the module and entry with which msil-ld
+  // annotated a natively bound declaration.
+  if (hasImportModule(F))
+    return NativeImport{
+        F->getFnAttribute("msil-import-module").getValueAsString(),
+        getPInvokeEntry(Name, F)};
+
+  // A library function that the merged module does not declare, which msil-ld
+  // bound natively: !{!"<symbol>", !"<module>", !"<entry>", i32 <kind>}. Kind
+  // 1 (data) is reserved until M20, and a malformed operand binds nothing.
+  const NamedMDNode *Imports = M.getNamedMetadata("msil.imports");
+  if (!Imports)
+    return std::nullopt;
+  for (const MDNode *Op : Imports->operands()) {
+    if (Op->getNumOperands() != 4)
+      continue;
+    const auto *Symbol = dyn_cast_or_null<MDString>(Op->getOperand(0));
+    if (!Symbol || Symbol->getString() != Name)
+      continue;
+    const auto *Kind =
+        mdconst::dyn_extract_or_null<ConstantInt>(Op->getOperand(3));
+    const auto *Module = dyn_cast_or_null<MDString>(Op->getOperand(1));
+    const auto *Entry = dyn_cast_or_null<MDString>(Op->getOperand(2));
+    if (!Kind || !Kind->isZero() || !Module || Module->getString().empty() ||
+        !Entry)
+      continue;
+    return NativeImport{Module->getString(),
+                        Entry->getString().empty() ? Name : Entry->getString()};
+  }
+  return std::nullopt;
 }

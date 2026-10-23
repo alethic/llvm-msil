@@ -1,0 +1,394 @@
+## Binding undefined functions to an ELF shared object (ImplementationPlan.md
+## 5.10.8, 5.10.10, 5.10.11 and 5.10.14; recon p2 native-imports 2.2, 3.3
+## and 4). msil-ld binds each undefined function of the bitcode to the first
+## bindable definition of the native libraries on its command line, and the
+## --lto-emit-asm text declares it as a P/Invoke:
+##   .method assembly hidebysig static pinvokeimpl("<module>" cdecl) ...
+## with the library's DT_SONAME verbatim as the module (libfoo.so.1, not
+## 'libfoo' or 'libfoo.so'), the symbol name as the entry ('as' is printed
+## only for another entry name), access 'assembly' (linked text, 5.10.11)
+## and no 'nomangle' until M18. Bindable is what dlsym reaches: an
+## unversioned or default-version ('@@') definition of a FUNC or a GNU_IFUNC
+## (dlsym runs the resolver), GLOBAL or WEAK; a hidden ('@') version beside
+## the default one changes nothing (newf). Not bindable, each a named link
+## error with '>>> referenced by' lines, reported after LTO:
+## - only a hidden version (oldf@V1): lld/ELF's rule for the bare name
+##   (InputFiles.cpp, 'ver == idx');
+## - thread-local data (tlsvar; errno, which is also GLIBC_PRIVATE, gets the
+##   advice to use <errno.h>);
+## - a GLIBC_PRIVATE version (__libc_dlopen_mode).
+## The absolute version markers (st_shndx SHN_ABS, V1 and V2) and the
+## library's own undefined symbols (ext_ref) define nothing. The libraries:
+## Inputs/native/libfoo.yaml (written directly), Inputs/native/glibc.yaml
+## (linked by ld.lld with a version script), and libver.so.1, which ld.lld
+## links from assembly with '.symver' (llvm-mc).
+# REQUIRES: x86
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: llvm-readobj --dynamic-table libfoo.so.1 | FileCheck %s --check-prefix=SONAME
+# SONAME: SONAME Library soname: [libfoo.so.1]
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: llvm-mc -filetype=obj -triple=x86_64-unknown-linux-gnu ver.s -o ver.o
+# RUN: ld.lld -shared -soname libver.so.1 --version-script ver.map ver.o -o libver.so.1
+# RUN: llvm-readobj --dyn-syms libver.so.1 | FileCheck %s --check-prefix=VERSYMS
+# VERSYMS-DAG: Name: foo@@V1
+# VERSYMS-DAG: Name: ifn@@V1
+# VERSYMS-DAG: Name: newf@V1
+# VERSYMS-DAG: Name: newf@@V2
+# VERSYMS-DAG: Name: oldf@V1
+
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as oldf.ll -o oldf.o
+# RUN: llvm-as tls.ll -o tls.o
+# RUN: llvm-as errno.ll -o errno.o
+# RUN: llvm-as private.ll -o private.o
+# RUN: llvm-as marker.ll -o marker.o
+# RUN: llvm-as extref.ll -o extref.o
+
+# DEFINE: %{il} = FileCheck %s --implicit-check-not="public hidebysig static pinvokeimpl" \
+# DEFINE:   --implicit-check-not='"libfoo"' --implicit-check-not='"libfoo.so"' --implicit-check-not=nomangle
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## Every bindable kind, at -O0 and at the default -O2.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o libfoo.so.1 -o o0.il 2>&1 | count 0
+# RUN: %{il} --check-prefixes=CHECK,O0 --input-file=o0.il
+# RUN: FileCheck %s --check-prefix=FIVE --input-file=o0.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=o0.il
+# RUN: msil-ld --lto-emit-asm main.o libfoo.so.1 -o o2.il 2>&1 | count 0
+# RUN: %{il} --input-file=o2.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=o2.il
+
+# O0-DAG:    {{^}}.method public static int32 'main'() cil managed
+# O0-DAG:    call int32 'foo'(int32)
+# O0-DAG:    call int32 'ifn'()
+# O0-DAG:    call int32 'newf'()
+# O0-DAG:    call int32 'wfn'()
+# O0-DAG:    call int32 'unv'()
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'ifn'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'newf'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'wfn'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'unv'() cil managed preservesig {}{{$}}
+## Exactly the five P/Invokes.
+# FIVE-COUNT-5: pinvokeimpl
+# FIVE-NOT:     pinvokeimpl
+## The %{il} patterns nowhere in the file: for a prefix made only of -DAG
+## lines, --implicit-check-not checks only the text before the first match.
+# IL-NONE-NOT: public hidebysig static pinvokeimpl
+# IL-NONE-NOT: "libfoo"
+# IL-NONE-NOT: "libfoo.so"
+# IL-NONE-NOT: nomangle
+
+## The same functions from the library ld.lld linked: its SONAME, the same
+## rules.
+# RUN: llvm-as main-ver.ll -o main-ver.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 main-ver.o libver.so.1 -o ver.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=VER --implicit-check-not=pinvokeimpl --input-file=ver.il
+# RUN: FileCheck %s --check-prefix=VER-PINV --input-file=ver.il
+# VER-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libver.so.1" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+# VER-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libver.so.1" cdecl) int32 'ifn'() cil managed preservesig {}{{$}}
+# VER-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libver.so.1" cdecl) int32 'newf'() cil managed preservesig {}{{$}}
+## Exactly those three P/Invokes.
+# VER-PINV-COUNT-3: pinvokeimpl
+# VER-PINV-NOT:     pinvokeimpl
+
+## glibc's shape: IFUNC strlen and the 2.14 IFUNC memcpy beside the hidden
+## 2.2.5 one, and a WEAK fstat@@GLIBC_2.33; module 'libc.so.6' (never "libc",
+## D14's spelling).
+# RUN: llvm-as glibc.ll -o glibc.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 glibc.o libc.so.6 -o glibc.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=GLIBC --implicit-check-not='"libc"' \
+# RUN:   --implicit-check-not="public hidebysig static pinvokeimpl" --input-file=glibc.il
+# RUN: FileCheck %s --check-prefix=GLIBC-NONE --input-file=glibc.il
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'memcpy'(native int, native int, native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'fstat'(int32, native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# GLIBC-NONE-NOT: "libc"
+# GLIBC-NONE-NOT: public hidebysig static pinvokeimpl
+
+## Only a hidden version.
+# RUN: not msil-ld --lto-emit-asm oldf.o libfoo.so.1 -o x.il 2>&1 | %{err} --check-prefix=OLDF
+# RUN: not msil-ld --lto-emit-asm oldf.o libver.so.1 -o x.il 2>&1 | %{err} --check-prefix=OLDF-VER
+# OLDF:          {{^}}msil-ld: error: symbol 'oldf' in libfoo.so.1 has only the non-default version oldf@V1, which a P/Invoke cannot bind{{$}}
+# OLDF-NEXT:     {{^}}>>> referenced by oldf.o:(main){{$}}
+# OLDF-VER:      {{^}}msil-ld: error: symbol 'oldf' in libver.so.1 has only the non-default version oldf@V1, which a P/Invoke cannot bind{{$}}
+# OLDF-VER-NEXT: {{^}}>>> referenced by oldf.o:(main){{$}}
+
+## Thread-local data, and errno (TLS and GLIBC_PRIVATE): the TLS text, which
+## ends '; use <errno.h>' for errno only (the section 12 row of 2026-10-23
+## for 5.10.14): a library's own __thread variable gets no advice.
+# RUN: not msil-ld --lto-emit-asm tls.o libfoo.so.1 -o x.il 2>&1 | %{err} --check-prefix=TLS
+# RUN: not msil-ld --lto-emit-asm errno.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=ERRNO \
+# RUN:   --implicit-check-not=GLIBC_PRIVATE
+# TLS:        {{^}}msil-ld: error: symbol 'tlsvar' in libfoo.so.1 is thread-local data and cannot be imported{{$}}
+# TLS-NEXT:   {{^}}>>> referenced by tls.o:(main){{$}}
+# ERRNO:      {{^}}msil-ld: error: symbol 'errno' in libc.so.6 is thread-local data and cannot be imported; use <errno.h>{{$}}
+# ERRNO-NEXT: {{^}}>>> referenced by errno.o:(main){{$}}
+
+## A GLIBC_PRIVATE function.
+# RUN: not msil-ld --lto-emit-asm private.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=PRIVATE
+# PRIVATE:      {{^}}msil-ld: error: symbol '__libc_dlopen_mode' in libc.so.6 is {{.*}}GLIBC_PRIVATE (GLIBC_PRIVATE) and cannot be bound{{$}}
+# PRIVATE-NEXT: {{^}}>>> referenced by private.o:(main){{$}}
+
+## Version markers and the library's undefined symbols define nothing.
+# RUN: not msil-ld --lto-emit-asm marker.o libfoo.so.1 -o x.il 2>&1 | %{err} --check-prefix=MARKER
+# RUN: not msil-ld --lto-emit-asm extref.o libfoo.so.1 -o x.il 2>&1 | %{err} --check-prefix=EXTREF
+# MARKER:      {{^}}msil-ld: error: undefined symbol: V1{{$}}
+# MARKER-NEXT: {{^}}>>> referenced by marker.o:(main){{$}}
+# EXTREF:      {{^}}msil-ld: error: undefined symbol: ext_ref{{$}}
+# EXTREF-NEXT: {{^}}>>> referenced by extref.o:(main){{$}}
+
+## An available_externally definition is only a copy for inlining: a
+## reference to it is UNDEFINED (5.8.10's row for available_externally).
+## At --lto-O0 and --lto-O1, where LTO does not inline foo, the call binds to
+## libfoo.so.1 like a call of a declaration; without the library it is
+## msil-ld's own 'undefined symbol' report with '>>> referenced by' lines,
+## never the backend's 'was not resolved by msil-ld' backstop. An
+## available_externally variable is native data, an error until M20
+## (5.10.12), or undefined without the library.
+# RUN: llvm-as availext.ll -o availext.o
+# RUN: llvm-as availvar.ll -o availvar.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 availext.o libfoo.so.1 -o availext0.il 2>&1 | count 0
+# RUN: %{il} --check-prefix=AVAIL --input-file=availext0.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=availext0.il
+# RUN: msil-ld --lto-emit-asm --lto-O1 availext.o libfoo.so.1 -o availext1.il 2>&1 | count 0
+# RUN: %{il} --check-prefix=AVAIL --input-file=availext1.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=availext1.il
+# AVAIL-DAG: call int32 'foo'(int32)
+# AVAIL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+# RUN: not msil-ld --lto-emit-asm --lto-O0 availext.o -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=AVAIL-UNDEF --implicit-check-not=error: --implicit-check-not="not resolved"
+# RUN: not msil-ld --lto-emit-asm --lto-O1 availext.o -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=AVAIL-UNDEF --implicit-check-not=error: --implicit-check-not="not resolved"
+# AVAIL-UNDEF:      {{^}}msil-ld: error: undefined symbol: foo{{$}}
+# AVAIL-UNDEF-NEXT: {{^}}>>> referenced by availext.o:(main){{$}}
+# RUN: not msil-ld --lto-emit-asm --lto-O0 availvar.o libfoo.so.1 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=AVAIL-DATA --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm --lto-O0 availvar.o -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=AVAIL-NODATA --implicit-check-not=error:
+# AVAIL-DATA:        {{^}}msil-ld: error: importing native data symbol 'bar' (libfoo.so.1) is not supported yet{{$}}
+# AVAIL-DATA-NEXT:   {{^}}>>> referenced by availvar.o:(main){{$}}
+# AVAIL-NODATA:      {{^}}msil-ld: error: undefined symbol: bar{{$}}
+# AVAIL-NODATA-NEXT: {{^}}>>> referenced by availvar.o:(main){{$}}
+
+#--- main.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %a = call i32 @foo(i32 1)
+  %b = call i32 @ifn()
+  %c = call i32 @newf()
+  %d = call i32 @wfn()
+  %e = call i32 @unv()
+  %s1 = add i32 %a, %b
+  %s2 = add i32 %s1, %c
+  %s3 = add i32 %s2, %d
+  %s4 = add i32 %s3, %e
+  ret i32 %s4
+}
+
+declare i32 @foo(i32)
+declare i32 @ifn()
+declare i32 @newf()
+declare i32 @wfn()
+declare i32 @unv()
+
+#--- main-ver.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %a = call i32 @foo(i32 1)
+  %b = call i32 @ifn()
+  %c = call i32 @newf()
+  %s1 = add i32 %a, %b
+  %s2 = add i32 %s1, %c
+  ret i32 %s2
+}
+
+declare i32 @foo(i32)
+declare i32 @ifn()
+declare i32 @newf()
+
+#--- glibc.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+@buf = global [3 x i8] zeroinitializer
+
+define i32 @main() {
+  %n = call i64 @strlen(ptr @msg)
+  %p = call ptr @memcpy(ptr @buf, ptr @msg, i64 %n)
+  %f = call i32 @fstat(i32 0, ptr null)
+  %r = call i32 @puts(ptr %p)
+  %t = add i32 %r, %f
+  ret i32 %t
+}
+
+declare i64 @strlen(ptr)
+declare ptr @memcpy(ptr, ptr, i64)
+declare i32 @fstat(i32, ptr)
+declare i32 @puts(ptr)
+
+#--- oldf.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @oldf()
+  ret i32 %r
+}
+
+declare i32 @oldf()
+
+#--- tls.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@tlsvar = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @tlsvar
+  ret i32 %v
+}
+
+#--- errno.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; 'extern int errno;', which predates <errno.h>'s macro.
+@errno = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @errno
+  ret i32 %v
+}
+
+#--- private.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %p = call ptr @__libc_dlopen_mode(ptr null, i32 1)
+  %c = icmp eq ptr %p, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare ptr @__libc_dlopen_mode(ptr, i32)
+
+#--- marker.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @V1()
+  ret i32 %r
+}
+
+declare i32 @V1()
+
+#--- extref.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @ext_ref()
+  ret i32 %r
+}
+
+declare i32 @ext_ref()
+
+#--- ver.s
+## elf-libfoo-versioned.c of recon p2 native-imports, in assembly: '.symver'
+## gives newf a hidden V1 and a default V2 version, and oldf only a hidden V1
+## version; ifn is an IFUNC.
+        .text
+        .globl  foo
+        .type   foo,@function
+foo:
+        leal    1(%rdi), %eax
+        retq
+
+        .type   impl,@function
+impl:
+        movl    $7, %eax
+        retq
+
+        .type   resolve_ifn,@function
+resolve_ifn:
+        leaq    impl(%rip), %rax
+        retq
+
+        .globl  ifn
+        .type   ifn,@gnu_indirect_function
+        .set    ifn, resolve_ifn
+
+        .globl  new_v1
+        .type   new_v1,@function
+new_v1:
+        movl    $1, %eax
+        retq
+        .symver new_v1, newf@V1
+
+        .globl  new_v2
+        .type   new_v2,@function
+new_v2:
+        movl    $2, %eax
+        retq
+        .symver new_v2, newf@@V2
+
+        .globl  old_v1
+        .type   old_v1,@function
+old_v1:
+        movl    $3, %eax
+        retq
+        .symver old_v1, oldf@V1
+
+        .data
+        .globl  bar
+        .type   bar,@object
+        .p2align 2
+bar:
+        .long   42
+
+        .section .tbss,"awT",@nobits
+        .globl  tlsvar
+        .type   tlsvar,@object
+        .p2align 2
+tlsvar:
+        .zero   4
+
+#--- ver.map
+V1 { global: foo; bar; tlsvar; ifn; };
+V2 { } V1;
+
+#--- availext.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define available_externally i32 @foo(i32 %x) {
+  ret i32 %x
+}
+
+define i32 @main() {
+  %r = call i32 @foo(i32 3)
+  ret i32 %r
+}
+
+#--- availvar.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@bar = available_externally global i32 5
+
+define i32 @main() {
+  %r = load volatile i32, ptr @bar
+  ret i32 %r
+}

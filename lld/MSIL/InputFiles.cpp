@@ -22,13 +22,16 @@
 #include "llvm/IR/Comdat.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/StringTableBuilder.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/IRSymtab.h"
 #include "llvm/Support/Allocator.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TarWriter.h"
+#include "llvm/TargetParser/Triple.h"
 #include <optional>
 
 #define DEBUG_TYPE "lld"
@@ -74,12 +77,14 @@ InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName,
   file_magic magic = identify_magic(mb.getBuffer());
   if (magic == file_magic::bitcode) {
     auto *f = make<BitcodeFile>(mb, archiveName, offsetInArchive, lazy);
-    // A file the constructor rejected (module-level inline assembly) has no
-    // lto::InputFile; its error is reported and no caller sees it.
+    // A file the constructor rejected (module-level inline assembly, a
+    // malformed file) has no lto::InputFile; its error is reported and no
+    // caller sees it.
     return f->obj ? f : nullptr;
   }
 
-  // CIL objects are M20's; until then an archive member that is not bitcode
+  // CIL objects are M20's; until then an archive member that is neither
+  // bitcode nor native (the driver gives native members to the native index)
   // is skipped (plan 5.9.4).
   if (!archiveName.empty()) {
     warn(archiveName + "(" + mb.getBufferIdentifier() +
@@ -194,7 +199,14 @@ BitcodeFile::BitcodeFile(MemoryBufferRef m, StringRef archiveName,
           ": module-level inline assembly is not supported for MSIL");
     return;
   }
-  obj = CHECK(lto::InputFile::create(mbref), this);
+  // A malformed file is lld's CHECK text, also as an error().
+  Expected<std::unique_ptr<lto::InputFile>> objOrErr =
+      lto::InputFile::create(mbref);
+  if (!objOrErr) {
+    error(toString(this) + ": " + toString(objOrErr.takeError()));
+    return;
+  }
+  obj = std::move(*objOrErr);
 }
 
 static uint8_t mapVisibility(GlobalValue::VisibilityTypes gvVisibility) {
@@ -333,6 +345,56 @@ void BitcodeFile::parseLazy() {
     if (!lazy)
       break;
   }
+}
+
+// The linker options of the file (plan 5.9.4, 5.10.6). Windows triples
+// record each library request quoted (/DEFAULTLIB:"my lib.lib"), so the
+// irsymtab's string is tokenized as lld-link's parseDirectives tokenizes a
+// .drectve section. Other MSIL triples record "-l<name>" unquoted, and
+// IRSymtab joins the options with spaces (section 12 of 2026-10-22), so the
+// module's !llvm.linker.options is read string by string instead; only a
+// module that cannot be read falls back to tokenizing.
+SmallVector<std::string, 0> BitcodeFile::getLinkerOptions() const {
+  SmallVector<std::string, 0> ret;
+  StringRef opts = obj->getCOFFLinkerOpts();
+  if (opts.empty())
+    return ret;
+  auto tokenize = [&] {
+    ret.clear();
+    SmallVector<StringRef, 16> tokens;
+    cl::TokenizeWindowsCommandLineNoCopy(opts, saver(), tokens);
+    for (StringRef tok : tokens)
+      ret.push_back(tok.str());
+    return ret;
+  };
+  if (Triple(obj->getTargetTriple()).isOSWindows())
+    return tokenize();
+
+  Expected<std::vector<BitcodeModule>> modsOrErr = getBitcodeModuleList(mb);
+  if (!modsOrErr) {
+    consumeError(modsOrErr.takeError());
+    return tokenize();
+  }
+  for (BitcodeModule &bm : *modsOrErr) {
+    LLVMContext context;
+    Expected<std::unique_ptr<llvm::Module>> mOrErr =
+        bm.getLazyModule(context, /*ShouldLazyLoadMetadata=*/true,
+                         /*IsImporting=*/false);
+    if (!mOrErr) {
+      consumeError(mOrErr.takeError());
+      return tokenize();
+    }
+    if (Error e = (*mOrErr)->materializeMetadata()) {
+      consumeError(std::move(e));
+      return tokenize();
+    }
+    if (NamedMDNode *md = (*mOrErr)->getNamedMetadata("llvm.linker.options"))
+      for (const MDNode *node : md->operands())
+        for (const MDOperand &op : node->operands())
+          if (auto *str = dyn_cast_or_null<MDString>(op.get()))
+            ret.push_back(str->getString().str());
+  }
+  return ret;
 }
 } // namespace msil
 } // namespace lld

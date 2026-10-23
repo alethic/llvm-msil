@@ -37,17 +37,20 @@ namespace lld::msil {
 // plan 5.9.5); addSymbol() applies them and checks that one name is not used
 // for a function and for data, or for TLS and non-TLS data.
 //
-// The driver's order (plan 5.9.6): addFile() for every input and extracted
-// member, addUndefined() for -u and the entry, then bindLateSymbols() and
-// compileBitcodeFiles().
+// The driver's order (plan 5.9.6): addFile() for every input, extracted
+// member and native library, addUndefined() for -u and the entry, then
+// bindLateSymbols() and compileBitcodeFiles(). The import-annotation pass
+// (plan 5.10.13) reports unresolved references after LTO through
+// reportReference().
 class SymbolTable {
 public:
   // Every symbol in the table, in insertion order.
   ArrayRef<Symbol *> symbols() const { return symVector; }
 
-  // Parses \p file: a lazy file adds lazy symbols, any other file its
-  // symbols. \p symName names the symbol whose lazy definition extracted the
-  // file, for diagnostics.
+  // Parses \p file: a lazy file adds lazy symbols, a bitcode file its
+  // symbols, and a native library its definitions to ctx.nativeIndex (they
+  // bind late). \p symName names the symbol whose lazy definition extracted
+  // the file, for diagnostics.
   void addFile(InputFile *file, StringRef symName = {});
 
   // This function is where all the optimizations of link-time
@@ -56,20 +59,42 @@ public:
   void compileBitcodeFiles();
 
   // The plan 5.9.6 rules for the symbols that are still undefined after every
-  // input is loaded, in M14 (bitcode only, no native or managed libraries):
-  // - an undefined weak symbol stays undefined, for the backend (null, and a
-  //   trap stub for calls);
+  // input is loaded (M15: bitcode inputs and native libraries; managed
+  // libraries are M22's step 1):
+  // - step 2: an undefined symbol of default visibility, weak or global (a
+  //   lazy symbol that only weak references met included), binds to the first
+  //   bindable definition of its name in the native libraries, in link order
+  //   (NativeFunction or NativeData); --trace-symbol prints "<file>: shared
+  //   definition of <sym>". Bitcode symbol tables carry no import names, so
+  //   the symbol name is looked up;
+  // - an undefined weak symbol that nothing binds stays undefined, for the
+  //   backend (null, and a trap stub for calls; step 3);
   // - a definition whose COMDAT copy was discarded and that an input still
   //   refers to is "relocation refers to a symbol in a discarded section";
   // - an undefined hidden (or internal) symbol is "undefined hidden symbol"
-  //   and an undefined protected one "undefined protected symbol";
-  // - undefined data is "undefined symbol", with ">>> referenced by" lines;
-  // - an undefined function goes to LTO code generation, which imports it
-  //   through the D14 table or reports "undefined symbol" (msil-lto);
+  //   and an undefined protected one "undefined protected symbol"; neither
+  //   binds late;
+  // - any other undefined symbol, function or data, goes to LTO, whose
+  //   import-annotation pass binds or reports what the merged module still
+  //   refers to (plan 5.9.6 "When it runs", 5.10.13);
   // - an entry symbol (ctx.arg.entry, unless -shared) that is not defined is
   //   "undefined symbol: <entry>" with ">>> referenced by the entry point".
   //   The driver does not report it again.
+  // It also records which inputs refer to each symbol, for reportReference(),
+  // because LTO takes the inputs' symbol tables.
   void bindLateSymbols();
+
+  // Reports the error \p msg about the symbol \p name, which LTO's merged
+  // module refers to, in lld/ELF's form: up to three ">>> referenced by
+  // <file>:(<definition>)" lines for the inputs whose symbol tables refer to
+  // it, or ">>> referenced by ld-temp.o" for a name that only the merged
+  // module refers to (a library function the optimizer introduced; plan
+  // 5.9.6, 5.10.14).
+  void reportReference(std::string msg, StringRef name);
+
+  // The first input whose symbol table refers to \p name, or "ld-temp.o" (as
+  // reportReference() names them).
+  std::string getReferencingFile(StringRef name);
 
   // Returns the symbol of \p name, or null if no input has presented it.
   Symbol *find(StringRef name);
@@ -103,6 +128,24 @@ public:
   void trace(StringRef name);
 
 private:
+  // An input file that refers to a symbol, and the symbol's name in that
+  // file's IR.
+  struct Reference {
+    BitcodeFile *file;
+    StringRef irName;
+  };
+
+  // The inputs that refer to \p sym, in load order.
+  ArrayRef<Reference> getReferences(const Symbol *sym);
+
+  void reportUnresolved(std::string msg, ArrayRef<Reference> refs,
+                        bool isEntry);
+
+  // The undefined symbols of the bitcode files' symbol tables, by symbol,
+  // collected once every input is loaded.
+  llvm::DenseMap<const Symbol *, SmallVector<Reference, 1>> references;
+  bool haveReferences = false;
+
   // Maps symbol names to index into the symVector.  -1 means that symbols
   // is to not yet in the vector but it should have tracing enabled if it is
   // ever added.

@@ -9,11 +9,12 @@
 // Derived from lld/wasm/Driver.cpp at 64f50ffd4f1c.
 //
 // The msil-ld driver: the "msil" flavor of lld, which links C programs into
-// .NET assemblies (llvm/docs/MSIL/ImplementationPlan.md 5.9). In M14 its
-// inputs are LLVM bitcode files and archives of them, which LTO compiles for
-// the codegen triple; --lto-emit-asm writes the whole program as ILAsm text,
-// and ilasm turns that into an assembly (msil-ld writes PE files from M20).
-// Native libraries are accepted without being read (M15 reads them).
+// .NET assemblies (llvm/docs/MSIL/ImplementationPlan.md 5.9). Its inputs are
+// LLVM bitcode files and archives of them, which LTO compiles for the codegen
+// triple, and the native libraries that a native link of the same program
+// reads (plan 5.10): undefined functions bind to them late and become
+// P/Invokes. --lto-emit-asm writes the whole program as ILAsm text, and ilasm
+// turns that into an assembly (msil-ld writes PE files from M20).
 //
 //===----------------------------------------------------------------------===//
 
@@ -21,6 +22,7 @@
 #include "Config.h"
 #include "InputFiles.h"
 #include "MapFile.h"
+#include "NativeLibraries.h"
 #include "SymbolTable.h"
 #include "lld/Common/Args.h"
 #include "lld/Common/CommonLinkerContext.h"
@@ -30,7 +32,9 @@
 #include "lld/Common/Reproduce.h"
 #include "lld/Common/Strings.h"
 #include "lld/Common/Version.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/MSILLink.h"
@@ -42,6 +46,7 @@
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TarWriter.h"
 #include "llvm/Support/TargetSelect.h"
@@ -67,6 +72,12 @@ void Ctx::reset() {
   new (&arg) Config();
   bitcodeFiles.clear();
   lazyBitcodeFiles.clear();
+  nativeLibraryFiles.clear();
+  loadedFiles.clear();
+  nativeIndex.clear();
+  alternateNames.clear();
+  appliedAlternateNames.clear();
+  mustMatch.clear();
   whyExtractRecords.clear();
   sym = MSILSym{};
 }
@@ -91,13 +102,6 @@ static void initLLVM() {
   InitializeAllAsmParsers();
 }
 
-// A library that -l found: its path, and whether it is a static library
-// (plan 5.10.9).
-struct FoundLibrary {
-  std::string path;
-  bool isStatic;
-};
-
 class LinkerDriver {
 public:
   LinkerDriver(Ctx &);
@@ -107,8 +111,13 @@ private:
   void createFiles(opt::InputArgList &args);
   void addFile(StringRef path);
   void addLibrary(StringRef name);
-  void addNativeLibrary(StringRef path);
+  void addLinkerScript(MemoryBufferRef mb, std::optional<sys::fs::UniqueID> id);
   void addInputFile(InputFile *file);
+  void addPendingFiles();
+  void addLinkerOptions(BitcodeFile &f);
+  void addRequestedLibrary(StringRef name, std::optional<std::string> path,
+                           const InputFile &f);
+  void applyAlternateNames();
 
   Ctx &ctx;
 
@@ -118,10 +127,25 @@ private:
   // True if we are in --start-lib and --end-lib.
   bool inLib = false;
 
-  // True if an input is a native library, which is not an InputFile in M14.
-  bool hasNativeLibrary = false;
-
+  // The inputs in command-line order, then the libraries that the linker
+  // options of loaded files request, in the order those files are loaded
+  // (plan 5.9.4). addPendingFiles() loads them into the symbol table.
   std::vector<InputFile *> files;
+  size_t numLoadedFiles = 0;
+  // The bitcode files (ctx.bitcodeFiles) whose linker options are read.
+  size_t numLinkerOptionFiles = 0;
+
+  // The files read, so that a library that several inputs request (clang's
+  // /DEFAULTLIB:oldnames.lib in every windows-msvc input) is read once, as
+  // lld-link reads it.
+  DenseSet<sys::fs::UniqueID> visitedFiles;
+
+  // The GNU ld scripts whose inputs addLinkerScript() is adding (inserted
+  // when it starts and erased when it ends), and for each of them, innermost
+  // last, the script and the offset of the input it is adding, so that an
+  // input leading back to one of them is reported as a cycle (plan 5.10.8).
+  DenseSet<sys::fs::UniqueID> activeScripts;
+  SmallVector<std::pair<MemoryBufferRef, size_t>, 4> scriptInputs;
 };
 } // anonymous namespace
 
@@ -234,25 +258,37 @@ opt::InputArgList MSILOptTable::parse(ArrayRef<const char *> argv) {
 }
 
 // Returns slices of MB by parsing MB as an archive file.
-// Each slice consists of a member file in the archive.
-std::vector<std::pair<MemoryBufferRef, uint64_t>> static getArchiveMembers(
-    MemoryBufferRef mb) {
-  std::unique_ptr<Archive> file =
-      CHECK(Archive::create(mb),
-            mb.getBufferIdentifier() + ": failed to parse archive");
+// Each slice consists of a member file in the archive. A malformed archive
+// (a truncated import library, say) is an error(), not lld's fatal(), so that
+// the printing iteration of LLD_IN_TEST=2 still reports it (plan 5.9.1);
+// it then contributes nothing.
+static std::optional<std::vector<std::pair<MemoryBufferRef, uint64_t>>>
+getArchiveMembers(MemoryBufferRef mb) {
+  Expected<std::unique_ptr<Archive>> fileOrErr = Archive::create(mb);
+  if (!fileOrErr) {
+    error(mb.getBufferIdentifier() +
+          ": failed to parse archive: " + toString(fileOrErr.takeError()));
+    return std::nullopt;
+  }
+  std::unique_ptr<Archive> file = std::move(*fileOrErr);
 
   std::vector<std::pair<MemoryBufferRef, uint64_t>> v;
   Error err = Error::success();
   for (const Archive::Child &c : file->children(err)) {
-    MemoryBufferRef mbref =
-        CHECK(c.getMemoryBufferRef(),
-              mb.getBufferIdentifier() +
-                  ": could not get the buffer for a child of the archive");
-    v.push_back(std::make_pair(mbref, c.getChildOffset()));
+    Expected<MemoryBufferRef> mbrefOrErr = c.getMemoryBufferRef();
+    if (!mbrefOrErr) {
+      error(mb.getBufferIdentifier() +
+            ": could not get the buffer for a child of the archive: " +
+            toString(mbrefOrErr.takeError()));
+      continue;
+    }
+    v.push_back(std::make_pair(*mbrefOrErr, c.getChildOffset()));
   }
-  if (err)
-    fatal(mb.getBufferIdentifier() +
+  if (err) {
+    error(mb.getBufferIdentifier() +
           ": Archive::children failed: " + toString(std::move(err)));
+    return std::nullopt;
+  }
 
   // Take ownership of memory buffers created for members of thin archives.
   for (std::unique_ptr<MemoryBuffer> &mb : file->takeThinBuffers())
@@ -285,43 +321,118 @@ static bool isBitcodeOrCILObject(MemoryBufferRef mb) {
   return isBitcode(mb) || hasCLIHeader(mb);
 }
 
-// Returns true if the file at \p path is a static library (plan 5.10.9): an
-// archive with at least one LLVM bitcode or CIL object member, or a bitcode
-// file. Other files that -l finds are native libraries. The candidate is read
-// only to be classified; addFile() reads the one -l chooses.
-static bool isStaticLibrary(StringRef path) {
+// lld/ELF/Driver.cpp's isUnderSysroot: true if \p path is inside the
+// --sysroot directory. An absolute path in a linker script found there is
+// resolved under the sysroot (GNU ld's rule).
+static bool isUnderSysroot(StringRef path) {
+  if (ctx.arg.sysroot.empty())
+    return false;
+  for (; !path.empty(); path = path::parent_path(path))
+    if (fs::equivalent(ctx.arg.sysroot, path))
+      return true;
+  return false;
+}
+
+static std::optional<std::string> findFromSearchPaths(StringRef path);
+
+// Resolves the file name \p s of the linker script \p script as lld/ELF's
+// ScriptParser::addFile does (lld/ELF/ScriptParser.cpp:319-360): an absolute
+// path inside the sysroot when the script is in the sysroot, an absolute path
+// as it is, '=' relative to the sysroot, else the script's directory, the
+// current directory and the -L directories. Returns the path, or nullopt
+// with lld/ELF's text in \p msg.
+static std::optional<std::string> resolveScriptPath(StringRef script,
+                                                    bool underSysroot,
+                                                    StringRef s,
+                                                    std::string &msg) {
+  if (underSysroot && s.starts_with("/")) {
+    std::string path = (ctx.arg.sysroot + s).str();
+    if (fs::exists(path))
+      return path;
+    msg = ("cannot find " + s + " inside " + ctx.arg.sysroot).str();
+    return std::nullopt;
+  }
+
+  // Case 1: s is an absolute path. Just open it.
+  if (s.starts_with("/") || path::is_absolute(s))
+    return s.str();
+  // Case 2: relative to the sysroot.
+  if (s.starts_with("=")) {
+    if (ctx.arg.sysroot.empty())
+      return s.substr(1).str();
+    return (ctx.arg.sysroot + "/" + s.substr(1)).str();
+  }
+  // Case 4: s is a relative path. Search in the directory of the script file.
+  StringRef directory = path::parent_path(script);
+  if (!directory.empty()) {
+    SmallString<128> path(directory);
+    path::append(path, s);
+    if (fs::exists(path))
+      return std::string(path);
+  }
+  // Then search in the current working directory.
+  if (fs::exists(s))
+    return s.str();
+  // Finally, search in the list of library paths.
+  if (std::optional<std::string> path = findFromSearchPaths(s))
+    return path;
+  msg = ("unable to find " + s).str();
+  return std::nullopt;
+}
+
+// True for a name under which a linker script stands for a shared library
+// (lib<n>.so; plan 5.10.9).
+static bool isSharedLibraryName(StringRef path) {
+  StringRef name = path::filename(path);
+  return name.ends_with(".so") || name.contains(".so.") ||
+         name.ends_with_insensitive(".dll");
+}
+
+// Returns the kind (plan 5.10.9) of the library candidate at \p path, which
+// -l found, for the codegen triple (a native library of the other object
+// format is OtherFormat). The candidate is read only to be classified;
+// addFile() reads the one -l chooses, through readFile() (--reproduce). A
+// linker script under a shared name is a native shared library; one under a
+// static name has the best kind of the files it names.
+static LibraryKind classifyCandidate(StringRef path, unsigned depth = 0) {
   ErrorOr<std::unique_ptr<MemoryBuffer>> mbOrErr =
       MemoryBuffer::getFile(path, /*IsText=*/false,
                             /*RequiresNullTerminator=*/false);
   if (!mbOrErr)
-    return false;
+    return LibraryKind::NativeShared; // reading it reports the error
   MemoryBufferRef mb = (*mbOrErr)->getMemBufferRef();
-  file_magic magic = identify_magic(mb.getBuffer());
-  if (magic == file_magic::bitcode)
-    return true;
-  if (magic != file_magic::archive)
-    return false;
+  if (identify_magic(mb.getBuffer()) != file_magic::unknown ||
+      !isLinkerScript(mb))
+    return classifyLibrary(mb, ctx.arg.target);
+  if (isSharedLibraryName(path) || depth >= 4)
+    return LibraryKind::NativeShared;
 
-  Expected<std::unique_ptr<Archive>> file = Archive::create(mb);
-  if (!file) {
-    consumeError(file.takeError());
-    return false;
-  }
-  bool found = false;
-  Error err = Error::success();
-  for (const Archive::Child &c : (*file)->children(err)) {
-    Expected<MemoryBufferRef> member = c.getMemoryBufferRef();
-    if (!member) {
-      consumeError(member.takeError());
+  SmallVector<LinkerScriptInput, 4> inputs;
+  consumeError(readLinkerScript(mb, inputs));
+  bool underSysroot = isUnderSysroot(path);
+  bool hasNative = false;
+  for (const LinkerScriptInput &input : inputs) {
+    if (input.isLibrary)
       continue;
-    }
-    if (isBitcodeOrCILObject(*member)) {
-      found = true;
+    std::string msg;
+    std::optional<std::string> file =
+        resolveScriptPath(path, underSysroot, input.name, msg);
+    if (!file)
+      continue;
+    switch (classifyCandidate(*file, depth + 1)) {
+    case LibraryKind::Static:
+      return LibraryKind::Static;
+    case LibraryKind::Import:
+    case LibraryKind::NativeShared:
+      hasNative = true;
+      break;
+    case LibraryKind::Managed:
+    case LibraryKind::NativeOnly:
+    case LibraryKind::OtherFormat:
       break;
     }
   }
-  consumeError(std::move(err));
-  return found;
+  return hasNative ? LibraryKind::NativeShared : LibraryKind::NativeOnly;
 }
 
 // The codegen triple for a triple that --target or the first input names: an
@@ -356,34 +467,35 @@ void LinkerDriver::addInputFile(InputFile *file) {
   files.push_back(file);
 }
 
-// Native libraries (import libraries, DLLs, shared objects and their linker
-// scripts, archives of native objects) are M15's (plan 5.10.8): msil-ld
-// accepts them without reading their contents, and the code generator binds
-// undefined functions through the D14 table until then (plan 5.9.6).
-void LinkerDriver::addNativeLibrary(StringRef path) {
-  log(path + ": native library, accepted without reading it");
-  hasNativeLibrary = true;
-}
-
 void LinkerDriver::addFile(StringRef path) {
   std::optional<MemoryBufferRef> buffer = readFile(path);
   if (!buffer)
     return;
   MemoryBufferRef mbref = *buffer;
+  std::optional<sys::fs::UniqueID> id;
+  if (sys::fs::UniqueID uid; !sys::fs::getUniqueID(path, uid)) {
+    id = uid;
+    visitedFiles.insert(uid);
+  }
 
   switch (identify_magic(mbref.getBuffer())) {
   case file_magic::archive: {
-    auto members = getArchiveMembers(mbref);
+    std::optional<std::vector<std::pair<MemoryBufferRef, uint64_t>>>
+        maybeMembers = getArchiveMembers(mbref);
+    if (!maybeMembers)
+      return;
+    auto &members = *maybeMembers;
 
     // An archive without LLVM bitcode or CIL object members (an import
-    // library, or an archive of native objects) is a native library (plan
-    // 5.9.4, 5.10.9).
+    // library, oldnames.lib, an archive of native objects) is a native
+    // library (plan 5.9.4, 5.10.8).
     if (none_of(members,
                 [](const auto &p) { return isBitcodeOrCILObject(p.first); })) {
-      addNativeLibrary(path);
+      addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::Archive));
       return;
     }
 
+    bool hasNativeMembers = false;
     for (const auto &[m, offset] : members) {
       if (hasCLIHeader(m)) {
         error(path + "(" + m.getBufferIdentifier() +
@@ -391,10 +503,17 @@ void LinkerDriver::addFile(StringRef path) {
               "supported yet");
         continue;
       }
+      // Import members and native objects are the native index's.
+      if (isNativeArchiveMember(m)) {
+        hasNativeMembers = true;
+        continue;
+      }
       // Handle -whole-archive. Any other member is lazy. A member that is not
       // LLVM bitcode is reported and skipped by createObjectFile().
       addInputFile(createObjectFile(m, path, offset, !inWholeArchive));
     }
+    if (hasNativeMembers)
+      addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::Archive));
     return;
   }
   case file_magic::bitcode:
@@ -406,14 +525,67 @@ void LinkerDriver::addFile(StringRef path) {
                    "supported yet");
       return;
     }
-    addNativeLibrary(path);
+    addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::PEDll));
     return;
   case file_magic::elf_shared_object:
-    addNativeLibrary(path);
+    addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::ELFShared));
     return;
+  case file_magic::unknown:
+    // A GNU ld script (glibc's libc.so) names the files to read instead.
+    if (isLinkerScript(mbref)) {
+      addLinkerScript(mbref, id);
+      return;
+    }
+    [[fallthrough]];
   default:
     error("unknown file type: " + mbref.getBufferIdentifier());
   }
+}
+
+// Reads the inputs of the GNU ld script \p mb (plan 5.10.8): file names
+// resolved as lld/ELF's ScriptParser::addFile resolves them, and -l<name>
+// searched like -l, in the script's order and at its place on the command
+// line. Errors use lld/ELF's texts. \p id is the script's file ID, if known.
+void LinkerDriver::addLinkerScript(MemoryBufferRef mb,
+                                   std::optional<sys::fs::UniqueID> id) {
+  // An input that leads back to a script whose inputs are still being added
+  // is a cycle (lld/ELF's "there is a cycle in linker script INCLUDEs" is the
+  // model), reported at that input of the innermost script and skipped. A
+  // script read again after its inputs were added is no cycle.
+  if (id && activeScripts.contains(*id)) {
+    assert(!scriptInputs.empty() && "an active script adds an input");
+    auto [script, offset] = scriptInputs.back();
+    error(getScriptDiagnostic(script, offset,
+                              "there is a cycle in linker script inputs"));
+    return;
+  }
+  if (id)
+    activeScripts.insert(*id);
+  scriptInputs.push_back({mb, 0});
+
+  StringRef script = mb.getBufferIdentifier();
+  SmallVector<LinkerScriptInput, 8> inputs;
+  Error err = readLinkerScript(mb, inputs);
+  bool underSysroot = isUnderSysroot(script);
+  for (const LinkerScriptInput &input : inputs) {
+    scriptInputs.back().second = input.offset;
+    if (input.isLibrary) {
+      addLibrary(input.name);
+      continue;
+    }
+    std::string msg;
+    if (std::optional<std::string> path =
+            resolveScriptPath(script, underSysroot, input.name, msg))
+      addFile(saver().save(*path));
+    else
+      error(getScriptDiagnostic(mb, input.offset, msg));
+  }
+
+  scriptInputs.pop_back();
+  if (id)
+    activeScripts.erase(*id);
+  if (err)
+    error(toString(std::move(err)));
 }
 
 static std::optional<std::string> findFromSearchPaths(StringRef path) {
@@ -425,7 +597,11 @@ static std::optional<std::string> findFromSearchPaths(StringRef path) {
 
 // The file names that -l<name> looks for in each -L directory, in the order of
 // plan 5.10.9, for the codegen triple. Until a --target or a bitcode input
-// names it, every triple's names are candidates.
+// names it, every triple's names are candidates. On a non-Windows triple
+// <name>.dll and lib<name>.dll are candidates only for the managed kind (a
+// .NET assembly, which gets the --reference warning): a native DLL there is
+// OtherFormat (plan 5.10.8), so a directory with foo.dll and libfoo.so gives
+// libfoo.so, as with ld.lld.
 static SmallVector<std::string, 0> getLibraryCandidates(StringRef name) {
   const Triple &tt = ctx.arg.target;
   if (tt.str().empty())
@@ -445,10 +621,14 @@ static SmallVector<std::string, 0> getLibraryCandidates(StringRef name) {
 }
 
 // This is for -l<basename> (plan 5.10.9). The -L directories are searched in
-// order, and the first one that holds a candidate wins. Inside it a static
-// library wins (Design.md 5.2's static-first rule, the opposite of GNU ld's),
-// then the first candidate in list order, which is a native library.
-static std::optional<FoundLibrary> searchLibraryBaseName(StringRef name) {
+// order, and the first one that holds an acceptable candidate wins. Inside it
+// a static library wins (Design.md 5.2's static-first rule, the opposite of
+// GNU ld's), then the first import library or native shared library in list
+// order, of the object format that the codegen triple reads (plan 5.10.8).
+// Archives of machine code and native libraries of the other format are
+// skipped (noted under --verbose), and so are .NET assemblies until msil-ld
+// links managed libraries (M22). -Bstatic accepts static libraries only.
+static std::optional<std::string> searchLibraryBaseName(StringRef name) {
   SmallVector<std::string, 0> candidates = getLibraryCandidates(name);
   for (StringRef dir : ctx.arg.searchPaths) {
     std::optional<std::string> native;
@@ -456,39 +636,237 @@ static std::optional<FoundLibrary> searchLibraryBaseName(StringRef name) {
       std::optional<std::string> s = findFile(dir, candidate);
       if (!s)
         continue;
-      if (isStaticLibrary(*s))
-        return FoundLibrary{std::move(*s), true};
-      if (!native)
-        native = std::move(s);
+      switch (classifyCandidate(*s)) {
+      case LibraryKind::Static:
+        return s;
+      case LibraryKind::Managed:
+        warn(*s + ": skipping the .NET assembly that -l" + name +
+             " found; use --reference for .NET reference assemblies");
+        break;
+      case LibraryKind::NativeOnly:
+        log("skipping native static archive " + *s +
+            " (no CIL or bitcode members)");
+        break;
+      case LibraryKind::OtherFormat:
+        log("skipping " + getOtherFormatMessage(*s, ctx.arg.target));
+        break;
+      case LibraryKind::Import:
+      case LibraryKind::NativeShared:
+        if (!ctx.arg.isStatic && !native)
+          native = std::move(s);
+        break;
+      }
     }
     if (native)
-      return FoundLibrary{std::move(*native), false};
+      return native;
   }
   return std::nullopt;
 }
 
-// This is for -l<namespec>. -l:<file> takes that file of any kind.
-static std::optional<FoundLibrary> searchLibrary(StringRef name) {
-  if (name.starts_with(":")) {
-    if (std::optional<std::string> s = findFromSearchPaths(name.substr(1)))
-      return FoundLibrary{*s, isStaticLibrary(*s)};
-    return std::nullopt;
-  }
+// This is for -l<namespec>. -l:<file> takes that file of any kind, also
+// under -Bstatic, as lld/ELF does.
+static std::optional<std::string> searchLibrary(StringRef name) {
+  if (name.starts_with(":"))
+    return findFromSearchPaths(name.substr(1));
   return searchLibraryBaseName(name);
 }
 
 // Add a given library by searching it from input search paths.
 void LinkerDriver::addLibrary(StringRef name) {
-  std::optional<FoundLibrary> lib = searchLibrary(name);
-  if (!lib) {
+  std::optional<std::string> path = searchLibrary(name);
+  if (!path) {
     error("unable to find library -l" + name, ErrorTag::LibNotFound, {name});
     return;
   }
-  StringRef path = saver().save(lib->path);
-  if (lib->isStatic)
-    addFile(path);
-  else if (readFile(path)) // For --reproduce.
-    addNativeLibrary(path);
+  addFile(saver().save(*path));
+}
+
+// The MSVC C and C++ runtime libraries, which embedded requests name (the
+// clang driver passes --dependent-lib=libcmt on windows-msvc) and msil-ld
+// ignores, because the default libraries supply the C runtime (plan 5.10.6).
+static bool isMSVCRuntimeLibrary(StringRef name) {
+  StringRef stem = path::filename(name);
+  if (stem.ends_with_insensitive(".lib"))
+    stem = stem.drop_back(4);
+  return StringSwitch<bool>(stem.lower())
+      .Cases({"libcmt", "libcmtd", "msvcrt", "msvcrtd", "libucrt", "libucrtd",
+              "ucrt", "ucrtd", "libvcruntime", "libvcruntimed", "vcruntime",
+              "vcruntimed", "msvcprt", "msvcprtd", "libcpmt", "libcpmtd"},
+             true)
+      .Default(false);
+}
+
+// Adds the library that an embedded request of \p f names (\p name as the
+// request spells it) and that the search found at \p path. A library that is
+// read already is not read again.
+void LinkerDriver::addRequestedLibrary(StringRef name,
+                                       std::optional<std::string> path,
+                                       const InputFile &f) {
+  if (!path) {
+    error("unable to find library from dependent library specifier: " + name +
+          "\n>>> requested by " + toString(&f));
+    return;
+  }
+  sys::fs::UniqueID id;
+  if (!sys::fs::getUniqueID(*path, id) && visitedFiles.contains(id))
+    return;
+  addFile(saver().save(*path));
+}
+
+// /alternatename:<from>=<to> (lld-link's parseAlternateName, with lld-link's
+// texts).
+static void parseAlternateName(StringRef arg) {
+  auto [from, to] = arg.split('=');
+  if (from.empty() || to.empty()) {
+    error("/alternatename: invalid argument: " + arg);
+    return;
+  }
+  auto it = ctx.alternateNames.find(from);
+  if (it != ctx.alternateNames.end()) {
+    if (it->second != to)
+      error("/alternatename: conflicts: " + arg);
+    return;
+  }
+  ctx.alternateNames.insert({from, to});
+}
+
+// /failifmismatch:<key>=<value> (lld/COFF/DriverUtils.cpp:684-697: two inputs
+// that give one key different values are an error, with lld-link's text).
+static void checkFailIfMismatch(StringRef arg, const InputFile &source) {
+  auto [k, v] = arg.split('=');
+  if (k.empty() || v.empty()) {
+    error("/failifmismatch: invalid argument: " + arg);
+    return;
+  }
+  auto it = ctx.mustMatch.find(k);
+  if (it != ctx.mustMatch.end() && v != it->second.first) {
+    error("/failifmismatch: mismatch detected for '" + k + "':\n>>> " +
+          toString(it->second.second) + " has value " + it->second.first +
+          "\n>>> " + toString(&source) + " has value " + v);
+    return;
+  }
+  ctx.mustMatch[k] = {v, &source};
+}
+
+// Returns true if \p opt starts with one of \p prefixes, ignoring case, and
+// sets \p value to the rest.
+static bool consumePrefix(StringRef opt, ArrayRef<StringRef> prefixes,
+                          StringRef &value) {
+  for (StringRef prefix : prefixes) {
+    if (opt.starts_with_insensitive(prefix)) {
+      value = opt.drop_front(prefix.size());
+      return true;
+    }
+  }
+  return false;
+}
+
+// The embedded library requests and linker options of a loaded bitcode file
+// (plan 5.9.4, 5.10.6), unless --no-dependent-libraries: the dependent
+// libraries of stock ELF bitcode (searched as lld/ELF searches them), and the
+// options -l<name>, -l:<file>, /DEFAULTLIB:<name> (.lib appended to a name
+// without an extension, then searched like -l:), /alternatename:<a>=<b> and
+// /failifmismatch:<k>=<v>. Requests naming an MSVC C runtime library are
+// ignored with a --verbose note; any other option is a warning. The
+// libraries are read after the inputs that are already on the list.
+void LinkerDriver::addLinkerOptions(BitcodeFile &f) {
+  if (!ctx.arg.dependentLibraries || !f.obj)
+    return;
+
+  // lld/ELF/InputFiles.cpp:380-395 (addDependentLibrary).
+  for (StringRef spec : f.obj->getDependentLibraries()) {
+    if (isMSVCRuntimeLibrary(spec)) {
+      log("ignoring C runtime library request '" + spec + "' from " +
+          toString(&f));
+      continue;
+    }
+    std::optional<std::string> path = searchLibraryBaseName(spec);
+    if (!path)
+      path = findFromSearchPaths(spec);
+    if (!path && fs::exists(spec))
+      path = spec.str();
+    addRequestedLibrary(spec, std::move(path), f);
+  }
+
+  for (const std::string &optString : f.getLinkerOptions()) {
+    StringRef opt = saver().save(optString);
+    StringRef value;
+    if (opt.starts_with("-l") && opt.size() > 2) {
+      StringRef name = opt.drop_front(2);
+      if (isMSVCRuntimeLibrary(name.starts_with(":") ? name.drop_front(1)
+                                                     : name)) {
+        log("ignoring C runtime library request '" + name + "' from " +
+            toString(&f));
+        continue;
+      }
+      addRequestedLibrary(name, searchLibrary(name), f);
+    } else if (consumePrefix(opt, {"/defaultlib:", "-defaultlib:"}, value) &&
+               !value.empty()) {
+      if (isMSVCRuntimeLibrary(value)) {
+        log("ignoring C runtime library request '" + value + "' from " +
+            toString(&f));
+        continue;
+      }
+      // lld-link: a name without an extension gets .lib, and an absolute path
+      // is taken as it is.
+      std::string name = value.str();
+      if (!path::has_extension(name))
+        name += ".lib";
+      std::optional<std::string> path;
+      if (path::is_absolute(name) && fs::exists(name))
+        path = name;
+      else
+        path = findFromSearchPaths(name);
+      addRequestedLibrary(value, std::move(path), f);
+    } else if (consumePrefix(opt, {"/alternatename:", "-alternatename:"},
+                             value)) {
+      parseAlternateName(value);
+    } else if (consumePrefix(opt, {"/failifmismatch:", "-failifmismatch:"},
+                             value)) {
+      checkFailIfMismatch(value, f);
+    } else {
+      warn("ignoring linker option '" + opt + "' in " + toString(&f));
+    }
+  }
+}
+
+// Loads the inputs that are not loaded yet into the symbol table, in order,
+// and reads the linker options of every bitcode file as soon as it is loaded,
+// extracted archive members included; the libraries they request go to the
+// end of the list (lld/ELF's order).
+void LinkerDriver::addPendingFiles() {
+  while (true) {
+    if (numLinkerOptionFiles < ctx.bitcodeFiles.size()) {
+      addLinkerOptions(*ctx.bitcodeFiles[numLinkerOptionFiles++]);
+      continue;
+    }
+    if (numLoadedFiles < files.size()) {
+      symtab->addFile(files[numLoadedFiles++]);
+      continue;
+    }
+    break;
+  }
+}
+
+// lld-link's rule for /alternatename:<from>=<to>: when <from> is still
+// undefined after every input is loaded, and no native library defines it
+// (an import of the right kind is a definition for lld-link), its references
+// resolve to <to>.
+// <to> becomes a reference of the command line, so that an archive member
+// that defines it is extracted and LTO keeps the definition; the
+// import-annotation pass resolves <from> after LTO.
+void LinkerDriver::applyAlternateNames() {
+  for (const auto &[from, to] : ctx.alternateNames) {
+    Symbol *sym = symtab->find(from);
+    if (!sym || !sym->isUndefined())
+      continue;
+    SmallVector<const NativeExport *, 2> rejected;
+    if (ctx.nativeIndex.lookup(from, rejected,
+                               /*isFunctionReference=*/!sym->isData()))
+      continue;
+    ctx.appliedAlternateNames.insert({from, to});
+    symtab->addUndefined(to, saver().save("/alternatename:" + from + "=" + to));
+  }
 }
 
 void LinkerDriver::createFiles(opt::InputArgList &args) {
@@ -499,6 +877,18 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
       break;
     case OPT_INPUT:
       addFile(arg->getValue());
+      break;
+    case OPT_Bstatic:
+      ctx.arg.isStatic = true;
+      break;
+    case OPT_Bdynamic:
+      ctx.arg.isStatic = false;
+      break;
+    case OPT_ucrtbase_imports:
+      // The built-in import library of plan 5.10.4, where the option appears.
+      addInputFile(
+          make<NativeLibraryFile>(MemoryBufferRef("", "--ucrtbase-imports"),
+                                  NativeLibraryFile::Builtin));
       break;
     case OPT_whole_archive:
       inWholeArchive = true;
@@ -518,7 +908,7 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
       break;
     }
   }
-  if (files.empty() && !hasNativeLibrary && errorCount() == 0)
+  if (files.empty() && errorCount() == 0)
     error("no input files");
 }
 
@@ -542,6 +932,8 @@ static void readConfigs(opt::InputArgList &args) {
       OPT_allow_multiple_definition, OPT_no_allow_multiple_definition, false);
   if (auto *arg = args.getLastArg(OPT_assembly_name, OPT_soname))
     ctx.arg.assemblyName = arg->getValue();
+  ctx.arg.dependentLibraries =
+      args.hasFlag(OPT_dependent_libraries, OPT_no_dependent_libraries, true);
   ctx.arg.disableVerify = args.hasArg(OPT_disable_verify);
   ctx.arg.entry = getEntry(args);
   ctx.arg.ltoEmitAsm = args.hasArg(OPT_lto_emit_asm);
@@ -557,6 +949,7 @@ static void readConfigs(opt::InputArgList &args) {
   ctx.arg.ltoPartitions = args::getInteger(args, OPT_lto_partitions, 1);
   ctx.arg.mapFile = args.getLastArgValue(OPT_Map);
   ctx.arg.outputFile = args.getLastArgValue(OPT_o);
+  ctx.arg.printImports = args.hasArg(OPT_print_imports);
   ctx.arg.saveTemps = args.hasArg(OPT_save_temps);
   ctx.arg.searchPaths = args::getStrings(args, OPT_library_path);
   ctx.arg.shared = args.hasArg(OPT_shared);
@@ -567,6 +960,7 @@ static void readConfigs(opt::InputArgList &args) {
   ctx.arg.trace = args.hasArg(OPT_trace);
   ctx.arg.thinLTOCacheDir = args.getLastArgValue(OPT_thinlto_cache_dir);
   ctx.arg.thinLTOJobs = args.getLastArgValue(OPT_thinlto_jobs);
+  ctx.arg.ucrtbaseImports = args.hasArg(OPT_ucrtbase_imports);
   ctx.arg.undefined = args::getStrings(args, OPT_undefined);
   ctx.arg.warnCommon = args.hasFlag(OPT_warn_common, OPT_no_warn_common, false);
   ctx.arg.whyExtract = args.getLastArgValue(OPT_why_extract);
@@ -859,6 +1253,15 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     return;
   }
 
+  // The built-in import library binds functions to ucrtbase.dll, a Windows
+  // DLL (plan 5.10.4).
+  if (ctx.arg.ucrtbaseImports && !ctx.arg.target.str().empty() &&
+      !ctx.arg.target.isOSWindows()) {
+    error("--ucrtbase-imports needs a Windows target, not " +
+          ctx.arg.target.str());
+    return;
+  }
+
   checkOptions();
   if (errorCount())
     return;
@@ -878,9 +1281,10 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     symtab->trace(arg->getValue());
 
   // Add all files to the symbol table. This will add almost all
-  // symbols that we need to the symbol table.
-  for (InputFile *f : files)
-    symtab->addFile(f);
+  // symbols that we need to the symbol table. The native libraries go to the
+  // native index, and the libraries that the linker options of bitcode files
+  // request follow the command line.
+  addPendingFiles();
   if (errorCount())
     return;
 
@@ -893,6 +1297,7 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   // if nothing defines it.
   if (!ctx.arg.entry.empty())
     symtab->addUndefined(ctx.arg.entry, "--entry");
+  addPendingFiles();
   if (errorCount())
     return;
 
@@ -905,6 +1310,14 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (!ctx.bitcodeFiles.empty())
     for (auto *s : lto::LTO::getRuntimeLibcallSymbols(ctx.arg.target))
       handleLibcall(s);
+  addPendingFiles();
+  if (errorCount())
+    return;
+
+  // Every input is loaded: /alternatename applies to the names that are
+  // still undefined, and may extract the members that define the targets.
+  applyAlternateNames();
+  addPendingFiles();
   if (errorCount())
     return;
 
@@ -919,9 +1332,9 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     return;
   }
 
-  // The symbols that are still undefined (plan 5.9.6, M14): undefined data,
-  // hidden symbols and the entry point are errors here, and undefined
-  // functions go to LTO, which imports them through the D14 table.
+  // The symbols that are still undefined (plan 5.9.6): the native libraries
+  // bind what they define (step 2); hidden symbols and the entry point are
+  // errors here, and the import-annotation pass reports the rest after LTO.
   symtab->bindLateSymbols();
   if (errorCount())
     return;

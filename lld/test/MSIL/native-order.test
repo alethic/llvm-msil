@@ -1,0 +1,263 @@
+## The order of resolution (ImplementationPlan.md 5.10.10 and 5.9.6; Design.md
+## 5.2; recon p2 native-imports 8.2):
+## 1. bitcode definitions, positional or archive members, come first, by
+##    lld/ELF's rules, wherever the native libraries stand on the command
+##    line; a WEAK bitcode definition too; native definitions bind late and
+##    never preempt a definition or block an archive extraction (an
+##    object's own malloc replaces libc's for our code);
+## 3. then the native libraries in command-line order: the first bindable
+##    definition wins, a WEAK one as much as a GLOBAL one, with no
+##    duplicate-definition error between libraries; an unbindable
+##    definition (only a hidden version, native code only) is skipped for a
+##    later bindable one.
+## (Step 2, libraries built by this toolchain, is M22's.) libone.so.1 and
+## libtwo.so.2 both define shared_fn and malloc; the bitcode shared_fn
+## returns 7.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj lib.yaml -o lib.o
+# RUN: ld.lld -shared -soname libone.so.1 lib.o -o libone.so.1
+# RUN: ld.lld -shared -soname libtwo.so.2 lib.o -o libtwo.so.2
+# RUN: yaml2obj weaklib.yaml -o weaklib.o
+# RUN: ld.lld -shared -soname libweak.so.1 weaklib.o -o libweak.so.1
+# RUN: yaml2obj hidlib.yaml -o hidlib.o
+# RUN: ld.lld -shared -soname libhid.so.1 --version-script hid.map hidlib.o -o libhid.so.1
+# RUN: llvm-readobj --dyn-syms libhid.so.1 | FileCheck %s --check-prefix=HIDSYM
+# HIDSYM: Name: shared_fn@V1 (
+# RUN: yaml2obj nat.yaml -o nat.o
+# RUN: llvm-ar rcs libnat.a nat.o
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as def.ll -o def.o
+# RUN: llvm-as weakdef.ll -o weakdef.o
+# RUN: llvm-ar rcs libdef.a def.o
+
+# DEFINE: %{bc} = FileCheck %s --check-prefix=BC --implicit-check-not=pinvokeimpl
+# DEFINE: %{so} = FileCheck %s --check-prefix=SO --implicit-check-not=pinvokeimpl
+## For a prefix made only of -DAG lines, --implicit-check-not checks only the
+## text before the first match, so each such run has a companion over the
+## whole file: BC-NONE, SO-PINV and LAZYWEAK-NONE.
+
+## Bitcode first: before or after the libraries, positional or extracted.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o libone.so.1 def.o -o bc1.il 2>&1 | count 0
+# RUN: %{bc} --input-file=bc1.il
+# RUN: FileCheck %s --check-prefix=BC-NONE --input-file=bc1.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 libone.so.1 main.o def.o libtwo.so.2 -o bc2.il 2>&1 | count 0
+# RUN: %{bc} --input-file=bc2.il
+# RUN: FileCheck %s --check-prefix=BC-NONE --input-file=bc2.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o libone.so.1 libdef.a -o bc3.il --why-extract=bc3.why 2>&1 \
+# RUN:   | count 0
+# RUN: %{bc} --input-file=bc3.il
+# RUN: FileCheck %s --check-prefix=BC-NONE --input-file=bc3.il
+# RUN: FileCheck %s --check-prefix=WHY --match-full-lines --strict-whitespace --input-file=bc3.why
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o libone.so.1 weakdef.o -o bc4.il 2>&1 | count 0
+# RUN: %{bc} --input-file=bc4.il
+# RUN: FileCheck %s --check-prefix=BC-NONE --input-file=bc4.il
+# BC-DAG: {{^}}.method {{.*}}static int32 'shared_fn'() cil managed
+# BC-DAG: {{^}}.method {{.*}}static native int 'malloc'(native int) cil managed
+# BC-DAG: {{^}}  ldc.i4.7{{$}}
+# BC-NONE-NOT: pinvokeimpl
+#      WHY:reference	extracted	symbol
+# WHY-NEXT:main.o	libdef.a(def.o)	{{shared_fn|malloc}}
+
+## The first library wins, in either order, without a duplicate error.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o libone.so.1 libtwo.so.2 -o one.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libone.so.1 --input-file=one.il
+# RUN: FileCheck %s --check-prefix=SO-PINV --input-file=one.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o libtwo.so.2 libone.so.1 -o two.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libtwo.so.2 --input-file=two.il
+# RUN: FileCheck %s --check-prefix=SO-PINV --input-file=two.il
+# SO-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'shared_fn'() cil managed preservesig {}{{$}}
+# SO-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
+## Exactly those two P/Invokes.
+# SO-PINV-COUNT-2: pinvokeimpl
+# SO-PINV-NOT:     pinvokeimpl
+
+## A WEAK definition in the first library wins over a GLOBAL one later.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o libweak.so.1 libtwo.so.2 -o weak.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WEAK --input-file=weak.il
+# WEAK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libweak.so.1" cdecl) int32 'shared_fn'() cil managed preservesig {}{{$}}
+# WEAK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libtwo.so.2" cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
+
+## The first bindable definition: libhid.so.1 has only shared_fn@V1 and
+## libnat.a only native code, so libtwo.so.2 binds shared_fn.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o libhid.so.1 libnat.a libtwo.so.2 -o skip.il 2>&1 | count 0
+# RUN: %{so} -DMOD=libtwo.so.2 --input-file=skip.il
+# RUN: FileCheck %s --check-prefix=SO-PINV --input-file=skip.il
+
+## Late binding never extracts: a WEAK reference does not extract the lazy
+## member of libmaybedef.a that defines maybe (5.9.5), and the native
+## definition in libmaybe.so.1 binds late without extracting it either
+## (5.10.10), before or after the archive on the command line. The
+## --why-extract file holds only its header, and the guarded call is a
+## P/Invoke of libmaybe.so.1.
+# RUN: yaml2obj maybelib.yaml -o maybelib.o
+# RUN: ld.lld -shared -soname libmaybe.so.1 maybelib.o -o libmaybe.so.1
+# RUN: llvm-as weakfn.ll -o weakfn.o
+# RUN: llvm-as maybedef.ll -o maybedef.o
+# RUN: llvm-ar rcs libmaybedef.a maybedef.o
+# RUN: msil-ld --lto-emit-asm weakfn.o libmaybedef.a libmaybe.so.1 -o lazyweak1.il \
+# RUN:   --why-extract=lazyweak1.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LAZYWEAK-WHY --match-full-lines --strict-whitespace --input-file=lazyweak1.why
+# RUN: FileCheck %s --check-prefix=LAZYWEAK --implicit-check-not=undef_maybe --input-file=lazyweak1.il
+# RUN: FileCheck %s --check-prefix=LAZYWEAK-NONE --input-file=lazyweak1.il
+# RUN: msil-ld --lto-emit-asm weakfn.o libmaybe.so.1 libmaybedef.a -o lazyweak2.il \
+# RUN:   --why-extract=lazyweak2.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LAZYWEAK-WHY --match-full-lines --strict-whitespace --input-file=lazyweak2.why
+# RUN: FileCheck %s --check-prefix=LAZYWEAK --implicit-check-not=undef_maybe --input-file=lazyweak2.il
+# RUN: FileCheck %s --check-prefix=LAZYWEAK-NONE --input-file=lazyweak2.il
+#      LAZYWEAK-WHY:reference	extracted	symbol
+#  LAZYWEAK-WHY-NOT:{{.}}
+# LAZYWEAK-DAG: call int32 'maybe'()
+# LAZYWEAK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libmaybe.so.1" cdecl) int32 'maybe'() cil managed preservesig {}{{$}}
+# LAZYWEAK-NONE-NOT: undef_maybe
+
+#--- lib.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: shared_fn, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: malloc,    Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x8, Size: 8 }
+
+#--- weaklib.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: shared_fn, Type: STT_FUNC, Section: .text, Binding: STB_WEAK, Value: 0x0, Size: 8 }
+
+#--- hidlib.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: 'shared_fn@V1', Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- hid.map
+V1 { };
+
+#--- nat.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: shared_fn, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- main.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %a = call i32 @shared_fn()
+  %p = call ptr @malloc(i64 8)
+  %c = icmp eq ptr %p, null
+  %z = zext i1 %c to i32
+  %r = add i32 %a, %z
+  ret i32 %r
+}
+
+declare i32 @shared_fn()
+declare ptr @malloc(i64)
+
+#--- def.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@pool = global [64 x i8] zeroinitializer, align 16
+
+define i32 @shared_fn() {
+  ret i32 7
+}
+
+define ptr @malloc(i64 %n) {
+  ret ptr @pool
+}
+
+#--- weakdef.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@pool = global [64 x i8] zeroinitializer, align 16
+
+define weak i32 @shared_fn() {
+  ret i32 7
+}
+
+define weak ptr @malloc(i64 %n) {
+  ret ptr @pool
+}
+
+#--- maybelib.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: maybe, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- weakfn.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; if (maybe) return maybe(); with maybe declared weak.
+define i32 @main() {
+entry:
+  %has = icmp ne ptr @maybe, null
+  br i1 %has, label %call, label %none
+
+call:
+  %r = call i32 @maybe()
+  ret i32 %r
+
+none:
+  ret i32 0
+}
+
+declare extern_weak i32 @maybe()
+
+#--- maybedef.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @maybe() {
+  ret i32 42
+}

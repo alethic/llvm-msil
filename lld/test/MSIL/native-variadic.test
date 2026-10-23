@@ -1,0 +1,136 @@
+## Native variadic functions (ImplementationPlan.md 5.10.13 'In linked and
+## object mode the Phase-1 compile-time checks for native callees ... become
+## link-time checks after native resolution', 5.10.14; M15.b item 3; recon p2
+## native-imports 6). A P/Invoke cannot pass C variadic arguments, so a
+## natively bound variadic function is the backend's error
+##   native function '<name>' (<module>) is variadic; calls of native
+##   variadic functions are not supported for MSIL yet (phase 3)
+## naming the module it bound to (libc.so.6 on glibc, msvcrt.dll, whose
+## printf is exported, on Windows), for an address-only reference and for a
+## call alike: in linked text the call gets 5.10.14's text, not D19's
+## standalone call-site error, and no '<unknown>:0:0: in function ...'
+## prefix (5.9.14: the prefix is 'msil-ld: error: '). No P/Invoke is
+## written and msil-ld exits with 1, never with a run-time failure. Each
+## link reports exactly one error.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/msvcrt.def /out:msvcrt.lib
+# RUN: llvm-as addr-lnx.ll -o addr-lnx.o
+# RUN: llvm-as addr-win.ll -o addr-win.o
+# RUN: llvm-as call-lnx.ll -o call-lnx.o
+# RUN: llvm-as call-win.ll -o call-win.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="undefined symbol" --implicit-check-not=error:
+
+# RUN: not msil-ld --lto-emit-asm --lto-O0 addr-lnx.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=ADDR-LNX
+# RUN: not msil-ld --lto-emit-asm --lto-O0 addr-win.o msvcrt.lib -o x.il 2>&1 | %{err} --check-prefix=ADDR-WIN
+# ADDR-LNX: {{^}}msil-ld: error: native function 'printf' (libc.so.6) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
+# ADDR-WIN: {{^}}msil-ld: error: native function 'printf' (msvcrt.dll) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
+
+# RUN: not msil-ld --lto-emit-asm --lto-O0 call-lnx.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=CALL-LNX
+# RUN: not msil-ld --lto-emit-asm --lto-O0 call-win.o msvcrt.lib -o x.il 2>&1 | %{err} --check-prefix=CALL-WIN
+# CALL-LNX: {{^}}msil-ld: error: native function 'printf' (libc.so.6) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
+# CALL-WIN: {{^}}msil-ld: error: native function 'printf' (msvcrt.dll) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
+
+## A prototype-less function whose address is used but which is never called
+## directly (5.10.13: in linked mode the Phase-1 check becomes a link-time
+## check after native resolution, with native-imports 6's text, which names
+## the module the function bound to): its IL signature cannot be derived,
+## so the link fails although libfoo.so.1 defines foo. Another bitcode input
+## that defines foo with a prototype gives the signature, and the link
+## succeeds without a P/Invoke.
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: llvm-as noproto.ll -o noproto.o
+# RUN: llvm-as noproto-def.ll -o noproto-def.o
+# RUN: not msil-ld --lto-emit-asm --lto-O0 noproto.o libfoo.so.1 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=NOPROTO
+# NOPROTO: {{^}}msil-ld: error: the signature of prototype-less function 'foo' (libfoo.so.1) cannot be derived: its address is used, but it is never called directly; declare it with a prototype{{$}}
+# RUN: msil-ld --lto-emit-asm --lto-O0 noproto.o noproto-def.o libfoo.so.1 -o noproto-def.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=NOPROTO-DEF --implicit-check-not=pinvokeimpl --input-file=noproto-def.il
+# NOPROTO-DEF: {{^}}.method {{.*}}static int32 'foo'(int32) cil managed{{$}}
+
+#--- addr-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@fp = global ptr @printf
+
+define i32 @main() {
+  %f = load ptr, ptr @fp
+  %c = icmp eq ptr %f, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare i32 @printf(ptr, ...)
+
+#--- addr-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@fp = global ptr @printf
+
+define i32 @main() {
+  %f = load ptr, ptr @fp
+  %c = icmp eq ptr %f, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare i32 @printf(ptr, ...)
+
+#--- call-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@fmt = private constant [4 x i8] c"%d\0A\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, ...) @printf(ptr @fmt, i32 42)
+  ret i32 0
+}
+
+declare i32 @printf(ptr, ...)
+
+#--- call-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@fmt = private constant [4 x i8] c"%d\0A\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, ...) @printf(ptr @fmt, i32 42)
+  ret i32 0
+}
+
+declare i32 @printf(ptr, ...)
+
+#--- noproto.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; int foo(); with only its address taken: clang marks a K&R declaration
+;; "no-prototype".
+@keep = global ptr @foo
+
+define i32 @main() {
+  %f = load ptr, ptr @keep
+  %c = icmp eq ptr %f, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare i32 @foo(...) #0
+
+attributes #0 = { "no-prototype" }
+
+#--- noproto-def.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @foo(i32 %x) noinline {
+  ret i32 %x
+}

@@ -1,0 +1,65 @@
+# The dependencies of a program (plan 5.12.4, M15; recon p2/tests-p2 2.5): a
+# managed one (mylib.dll, which Inputs/dep/prog.il calls) and a native one
+# (native.dll, built here from Inputs/dep/native.c with %clang_native and
+# %lld_link -dll -noentry -nodefaultlib, which prog.il P/Invokes), given with
+# --dep FILE... (ended by '--') or --dep-dir DIR, on the local runner (.NET)
+# and, with the .NET Framework, on the netfx runner:
+# (1) msil-verify.py --dep: ILVerify takes mylib.dll as a reference and
+#     PEVerify checks copies beside both; without them both verifiers fail
+#     to load mylib;
+# (2) msil-jitall.py --dep: every method JITs; without mylib.dll the method
+#     that calls it fails;
+# (3) msil-run.py --dep and --dep-dir: the program returns 42; without
+#     mylib.dll it stops with a FileNotFoundException, without native.dll
+#     with a DllNotFoundException;
+# (4) the same on the .NET Framework (an EXE image, --netfx);
+# (5) a missing --dep file, and two of one name, are configuration errors
+#     (status 2), and --dep without '--' before the program is a usage
+#     error. dep-wsl.test runs the WSL runner.
+# REQUIRES: msil-triple-windows, system-windows, clang, x86-registered-target, msil-lld-link
+
+# RUN: rm -rf %t && mkdir -p %t/deps
+# RUN: %ilasm -dll -output=%t/deps/mylib.dll %S/Inputs/dep/mylib.il
+# RUN: %ilasm -dll -output=%t/prog.dll %S/Inputs/dep/prog.il
+# RUN: %clang_native -O2 -c %S/Inputs/dep/native.c -o %t/native.o
+# RUN: %lld_link -dll -noentry -nodefaultlib %t/native.o -out:%t/deps/native.dll
+
+# (1)
+# RUN: %msil_verify --dep %t/deps/mylib.dll %t/deps/native.dll -- %t/prog.dll
+# RUN: %if msil-ilverify %{ not %msil_verify %t/prog.dll > %t/verify-nodep.log 2>&1 %}
+# RUN: %if msil-ilverify %{ %{harness_check} contains %t/verify-nodep.log "^ilverify: \[FileLoadErrorGeneric\] .* Failed to load assembly 'mylib'$" %}
+# RUN: %if msil-peverify %{ %{harness_check} contains %t/verify-nodep.log "^peverify: .*FileNotFoundException: Could not load file or assembly 'mylib" %}
+
+# (2)
+# RUN: %if msil-jitall %{ %msil_jitall --dep %t/deps/mylib.dll %t/deps/native.dll -- %t/prog.dll > %t/jitall.log %}
+# RUN: %if msil-jitall %{ %{harness_check} contains %t/jitall.log "^jitall: 2 ok, 0 failed$" %}
+# RUN: %if msil-jitall %{ not %msil_jitall %t/prog.dll > %t/jitall-nodep.log 2>&1 %}
+# RUN: %if msil-jitall %{ %{harness_check} contains %t/jitall-nodep.log "^JIT FAIL <Module>::main: FileNotFoundException: Could not load file or assembly 'mylib" %}
+
+# (3)
+# RUN: %msil_exec --expect %S/Inputs/dep/prog --out %t/dep.out --dep %t/deps/mylib.dll %t/deps/native.dll -- %t/prog.dll
+# RUN: %msil_exec --expect %S/Inputs/dep/prog --out %t/dep-twice.out --dep %t/deps/mylib.dll --dep %t/deps/native.dll -- %t/prog.dll
+# RUN: %msil_exec --expect %S/Inputs/dep/prog --out %t/dir.out --dep-dir %t/deps %t/prog.dll
+# RUN: %{harness_check} equals %t/dir.out "[exit 42]"
+# RUN: not %msil_exec --expect %S/Inputs/dep/prog --out %t/none.out %t/prog.dll
+# RUN: %{harness_check} equals %t/none.out "[unhandled exception: System.IO.FileNotFoundException]"
+# RUN: not %msil_exec --expect %S/Inputs/dep/prog --out %t/managed.out --dep %t/deps/mylib.dll -- %t/prog.dll
+# RUN: %{harness_check} equals %t/managed.out "[unhandled exception: System.DllNotFoundException]"
+
+# (4)
+# RUN: %if msil-netfx %{ %ilasm -exe -output=%t/prog.exe %S/Inputs/dep/prog.il %}
+# RUN: %if msil-netfx %{ %msil_exec --netfx --expect %S/Inputs/dep/prog --out %t/netfx.out --dep %t/deps/mylib.dll %t/deps/native.dll -- %t/prog.exe %}
+# RUN: %if msil-netfx %{ not %msil_exec --netfx --expect %S/Inputs/dep/prog --out %t/netfx-none.out %t/prog.exe %}
+# RUN: %if msil-netfx %{ %{harness_check} equals %t/netfx-none.out "[unhandled exception: System.IO.FileNotFoundException]" %}
+
+# (5)
+# RUN: %{harness_check} exits 2 %msil_exec --dep %t/deps/missing.dll -- %t/prog.dll > %t/missing.log 2>&1
+# RUN: %{harness_check} contains %t/missing.log "^msil-run: error: --dep \S*missing\.dll: no such file$"
+# RUN: %{harness_check} exits 2 %msil_exec --dep %t/deps/mylib.dll --dep-dir %t/deps -- %t/prog.dll > %t/twice.log 2>&1
+# RUN: %{harness_check} contains %t/twice.log "^msil-run: error: dependency \S+ and \S+ have the same name mylib\.dll$"
+# RUN: %{harness_check} exits 2 %msil_exec --dep %t/deps/mylib.dll %t/prog.dll > %t/no-dashes.log 2>&1
+# RUN: %{harness_check} contains %t/no-dashes.log "error: no program given \(--dep takes every argument up to the next option: put '--' before the program\)$"
+# RUN: %{harness_check} exits 2 %msil_verify --dep %t/deps/missing.dll -- %t/prog.dll > %t/verify-missing.log 2>&1
+# RUN: %{harness_check} contains %t/verify-missing.log "--dep \S*missing\.dll: no such file$"
+# RUN: %if msil-jitall %{ %{harness_check} exits 2 %msil_jitall --dep %t/deps/missing.dll -- %t/prog.dll > %t/jitall-missing.log 2>&1 %}
+# RUN: %if msil-jitall %{ %{harness_check} contains %t/jitall-missing.log "^msil-jitall: error: --dep \S*missing\.dll: no such file$" %}

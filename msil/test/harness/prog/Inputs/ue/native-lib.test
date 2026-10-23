@@ -1,0 +1,19 @@
+# A %{msil_prog} test with a test-built native library (plan 5.12.5) for
+# ../../update-expected.test: the commands before the composite build the
+# library (lit's %if and %else, %clang_native, %{msil_cflags}, %msil_ar and
+# %t), %{msil_native_libs} links it into the native program, and the files
+# of %{msil_deps} (chosen by %if, named by a wildcard) go next to that
+# program when it runs.
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %clang_native %{msil_cflags} -O2 -c %t/lib.c -o %t/lib.o
+# RUN: %if msil-triple-windows %{ %msil_ar rcs %t/native.lib %t/lib.o %} %else %{ %msil_ar rcs %t/libnative.a %t/lib.o %}
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_native_libs} = -L%t -lnative
+# REDEFINE: %{msil_deps} = %if msil-triple-windows %{ %t/deps/* %} %else %{ %t/deps/* %}
+# RUN: %{msil_prog}
+#--- main.c
+// prog-value: 1
+#--- lib.c
+// prog-value: 64
+#--- deps/dep.txt
+Copied next to the native program.

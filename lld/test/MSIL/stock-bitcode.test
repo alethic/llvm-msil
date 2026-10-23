@@ -47,9 +47,12 @@
 # MIXED-TRIPLE: {{^}}.method public static int32 'main'() cil managed{{$}}
 # MIXED-TRIPLE: .entrypoint
 
-## Linux: stock bitcode alone and from an archive member; puts is a P/Invoke
-## of the Linux C library (D14).
-# RUN: msil-ld --lto-emit-asm --lto-O0 lnx-stock.o libstock.a -o lnx.il 2>&1 \
+## Linux: stock bitcode alone and from an archive member; puts binds to the
+## C library given on the command line, libc.so.6 (5.10.11; M14's frozen D14
+## table made it a public P/Invoke of "libc").
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: msil-ld --lto-emit-asm --lto-O0 lnx-stock.o libstock.a libc.so.6 -o lnx.il 2>&1 \
 # RUN:   | FileCheck %s %{one} --check-prefix=WARN-LNX
 # RUN: FileCheck %s --check-prefix=LNX --input-file=lnx.il
 # RUN: llvm-as lnx-msil-main.ll -o lnx-msil-main.o
@@ -59,7 +62,7 @@
 # WARN-LNX:    {{^}}msil-ld: warning: lnx-stock.o: linking bitcode for x86_64-unknown-linux-gnu as x86_64-unknown-linux-gnu-msil; stock-clang bitcode is a compatibility path{{$}}
 # WARN-MEMBER: {{^}}msil-ld: warning: libstock.a(lnx-stock-helper.o): linking bitcode for x86_64-unknown-linux-gnu as x86_64-unknown-linux-gnu-msil; stock-clang bitcode is a compatibility path{{$}}
 # LNX:         {{^}}// target triple   = "x86_64-unknown-linux-gnu-msil"{{$}}
-# LNX:         pinvokeimpl("libc" cdecl) int32 'puts'(native int)
+# LNX:         {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 
 ## An all-MSIL link prints nothing (msil-defs.o defines what msil.o calls),
 ## and --fatal-warnings turns the warning into an error.

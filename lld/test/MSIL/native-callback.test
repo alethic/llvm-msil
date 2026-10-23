@@ -1,0 +1,679 @@
+## Native functions that take a C function pointer (ImplementationPlan.md
+## 5.10.10 'Native callbacks', 5.10.14; M15.a item 5 'Callbacks'). Native
+## code that calls an '<msil>fn_' address enters managed code without a
+## reverse-P/Invoke transition, so until P3-B's thunks every live call or
+## address reference that native lookup binds to a name of the callback list
+## (a sorted table behind lld::msil::isNativeCallbackFunction: qsort,
+## pthread_create, _beginthreadex, CreateThread, lfind, _lfind, signal, ...)
+## is the link error
+##   native function '<name>' (<module>) takes a C function pointer;
+##   passing functions to native code needs phase 3 thunks
+## with '>>> referenced by' lines, after LTO. It holds:
+## - for qsort from an ELF shared object, also when the call passes no
+##   function (signal(SIGPIPE, SIG_IGN));
+## - for pthread_create from a MinGW import library, _beginthreadex and
+##   CreateThread from MSVC import libraries;
+## - for lfind through oldnames' alias to _lfind (both names are listed);
+## - for each of the 46 names of the list on its own (the section 12 rows of
+##   2026-10-22 and 2026-10-23 for 5.10.10 and 5.10.14: the 36 names of
+##   5.10.14 and glibc's other spellings __sysv_signal, bsd_signal, ftw64,
+##   nftw64, scandir64, scandirat, scandirat64, sigset, ssignal and
+##   sysv_signal), from an ELF shared object on x86_64 Linux and from an
+##   import library on windows-msvc: one error per name, each naming the
+##   symbol that the bitcode calls, and no P/Invoke (so lfind and _lfind are
+##   each proven, which the alias case alone cannot tell apart);
+## - for an address-only reference;
+## - for a declaration that import_name alone binds to qsort.
+## The text names the symbol that the bitcode references, never the import
+## entry (the section 12 row of 2026-10-22 for 5.10.14): 'my_sort' for the
+## import_name declaration, 'lfind' for the alias.
+## No error for an explicit import_module qsort (explicit imports are the
+## workaround), for a listed name that bitcode defines, or for a listed
+## declaration that no code references after LTO.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-runtime.def /out:runtime.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-utility.def /out:utility.lib
+# RUN: llvm-lib /out:ucrt.lib runtime.lib utility.lib
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/kernel32.def /out:kernel32.lib
+# RUN: yaml2obj --docnum=2 %S/Inputs/native/oldnames.yaml -o lfind.obj
+# RUN: llvm-ar rcs oldnames.lib lfind.obj
+# RUN: llvm-dlltool -m i386:x86-64 -d pthread.def -l libpthread.dll.a
+# RUN: llvm-as qsort.ll -o qsort.o
+# RUN: llvm-as signal.ll -o signal.o
+# RUN: llvm-as addr.ll -o addr.o
+# RUN: llvm-as entry.ll -o entry.o
+# RUN: llvm-as pthread.ll -o pthread.o
+# RUN: llvm-as beginthread.ll -o beginthread.o
+# RUN: llvm-as createthread.ll -o createthread.o
+# RUN: llvm-as lfind.ll -o lfind-ref.o
+# RUN: llvm-as explicit.ll -o explicit.o
+# RUN: llvm-as defined.ll -o defined.o
+# RUN: llvm-as dead.ll -o dead.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="undefined symbol"
+
+# RUN: not msil-ld --lto-emit-asm qsort.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=QSORT
+# QSORT:      {{^}}msil-ld: error: native function 'qsort' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# QSORT-NEXT: {{^}}>>> referenced by qsort.o:(main){{$}}
+
+# RUN: not msil-ld --lto-emit-asm signal.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=SIGNAL
+# SIGNAL:      {{^}}msil-ld: error: native function 'signal' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# SIGNAL-NEXT: {{^}}>>> referenced by signal.o:(main){{$}}
+
+# RUN: not msil-ld --lto-emit-asm addr.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=ADDR
+# ADDR:      {{^}}msil-ld: error: native function 'qsort' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# ADDR-NEXT: {{^}}>>> referenced by addr.o:(sorter){{$}}
+
+# RUN: not msil-ld --lto-emit-asm entry.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=ENTRY
+# ENTRY:      {{^}}msil-ld: error: native function 'my_sort' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# ENTRY-NEXT: {{^}}>>> referenced by entry.o:(main){{$}}
+
+# RUN: not msil-ld --lto-emit-asm pthread.o libpthread.dll.a -o x.il 2>&1 | %{err} --check-prefix=PTHREAD
+# PTHREAD:      {{^}}msil-ld: error: native function 'pthread_create' (libwinpthread-1.dll) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# PTHREAD-NEXT: {{^}}>>> referenced by pthread.o:(main){{$}}
+
+# RUN: not msil-ld --lto-emit-asm beginthread.o ucrt.lib kernel32.lib -o x.il 2>&1 | %{err} --check-prefix=BEGIN
+# BEGIN:      {{^}}msil-ld: error: native function '_beginthreadex' (api-ms-win-crt-runtime-l1-1-0.dll) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# BEGIN-NEXT: {{^}}>>> referenced by beginthread.o:(main){{$}}
+
+# RUN: not msil-ld --lto-emit-asm createthread.o ucrt.lib kernel32.lib -o x.il 2>&1 | %{err} --check-prefix=CREATE
+# CREATE:      {{^}}msil-ld: error: native function 'CreateThread' (KERNEL32.dll) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# CREATE-NEXT: {{^}}>>> referenced by createthread.o:(main){{$}}
+
+# RUN: not msil-ld --lto-emit-asm lfind-ref.o ucrt.lib kernel32.lib oldnames.lib -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=LFIND
+# LFIND:      {{^}}msil-ld: error: native function 'lfind' (api-ms-win-crt-utility-l1-1-0.dll) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# LFIND-NEXT: {{^}}>>> referenced by lfind-ref.o:(main){{$}}
+
+## The whole list, one call per name (Inputs: cb.yaml, cb.def, table.ll,
+## table-win.ll). --error-limit=0 reports all 46 errors (20 by default).
+# RUN: yaml2obj cb.yaml -o cb.o
+# RUN: ld.lld -shared -soname libcb.so.1 cb.o -o libcb.so.1
+# RUN: llvm-lib /machine:x64 /def:cb.def /out:cb.lib
+# RUN: llvm-as table.ll -o table.o
+# RUN: llvm-as table-win.ll -o table-win.o
+# RUN: not msil-ld --error-limit=0 --lto-emit-asm table.o libcb.so.1 -o - > table.txt 2>&1
+# RUN: %{err} --check-prefix=TABLE -DMOD=libcb.so.1 --implicit-check-not=pinvokeimpl --input-file=table.txt
+# RUN: FileCheck %s --check-prefix=ERRS --implicit-check-not=error: --implicit-check-not=pinvokeimpl --input-file=table.txt
+# RUN: FileCheck %s --check-prefix=REFS -DOBJ=table.o --input-file=table.txt
+# RUN: FileCheck %s --check-prefix=ANYREF --implicit-check-not=">>>" --input-file=table.txt
+# RUN: FileCheck %s --check-prefix=TABLE-NONE --input-file=table.txt
+# RUN: not msil-ld --error-limit=0 --lto-emit-asm table-win.o cb.lib -o - > table-win.txt 2>&1
+# RUN: %{err} --check-prefix=TABLE -DMOD=cb.dll --implicit-check-not=pinvokeimpl --input-file=table-win.txt
+# RUN: FileCheck %s --check-prefix=ERRS --implicit-check-not=error: --implicit-check-not=pinvokeimpl --input-file=table-win.txt
+# RUN: FileCheck %s --check-prefix=REFS -DOBJ=table-win.o --input-file=table-win.txt
+# RUN: FileCheck %s --check-prefix=ANYREF --implicit-check-not=">>>" --input-file=table-win.txt
+# RUN: FileCheck %s --check-prefix=TABLE-NONE --input-file=table-win.txt
+# TABLE-DAG: {{^}}msil-ld: error: native function 'CreateThread' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function '__sysv_signal' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function '_beginthread' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function '_beginthreadex' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function '_lfind' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function '_lfind_s' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function '_lsearch' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function '_lsearch_s' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function '_onexit' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'at_quick_exit' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'atexit' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'bsd_signal' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'bsearch' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'bsearch_s' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'call_once' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'ftw' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'ftw64' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'lfind' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'lsearch' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'nftw' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'nftw64' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'on_exit' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'pthread_atfork' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'pthread_create' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'pthread_key_create' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'pthread_once' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'qsort' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'qsort_r' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'qsort_s' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'scandir' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'scandir64' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'scandirat' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'scandirat64' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'sigaction' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'signal' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'sigset' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'ssignal' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'sysv_signal' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'tdelete' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'tdestroy' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'tfind' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'thrd_create' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'tsearch' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'tss_create' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'twalk' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# TABLE-DAG: {{^}}msil-ld: error: native function 'twalk_r' ([[MOD]]) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+## Exactly 46 errors (the 46 above, so no other error), and 46 '>>>' lines,
+## each '>>> referenced by <file>:(main)'.
+# ERRS-COUNT-46:   {{^}}msil-ld: error: {{.+}}
+# REFS-COUNT-46:   {{^}}>>> referenced by [[OBJ]]:(main){{$}}
+# ANYREF-COUNT-46: {{^}}>>>
+## The implicit patterns of the TABLE run nowhere in the file: for a prefix
+## made only of -DAG lines, --implicit-check-not checks only the text before
+## the first match, and a COUNT line does not check them between its matches.
+# TABLE-NONE-NOT: PLEASE submit
+# TABLE-NONE-NOT: Stack dump
+# TABLE-NONE-NOT: LLVM ERROR
+# TABLE-NONE-NOT: undefined symbol
+# TABLE-NONE-NOT: pinvokeimpl
+
+## No error: an explicit import, a bitcode definition, a dead reference.
+# RUN: msil-ld --lto-emit-asm --lto-O0 explicit.o libc.so.6 -o explicit.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=EXPLICIT --input-file=explicit.il
+# EXPLICIT: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) void 'qsort'(native int, native int, native int, native int) cil managed preservesig {}{{$}}
+# RUN: msil-ld --lto-emit-asm --lto-O0 defined.o libc.so.6 -o defined.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEFINED --implicit-check-not=pinvokeimpl --input-file=defined.il
+# DEFINED: {{^}}.method {{.*}}static void 'qsort'(native int, native int, native int, native int) cil managed
+# RUN: msil-ld --lto-emit-asm dead.o libc.so.6 -o dead.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEAD --input-file=dead.il
+# DEAD-NOT: qsort
+# DEAD:     {{^}}.method public static int32 'main'() cil managed
+# DEAD-NOT: qsort
+
+#--- cb.yaml
+## Every name of the callback list as a function (ld.lld links libcb.so.1).
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x170
+Symbols:
+  - { Name: CreateThread,       Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: __sysv_signal,      Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x8, Size: 8 }
+  - { Name: _beginthread,       Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: _beginthreadex,     Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+  - { Name: _lfind,             Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 8 }
+  - { Name: _lfind_s,           Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 8 }
+  - { Name: _lsearch,           Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 8 }
+  - { Name: _lsearch_s,         Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x38, Size: 8 }
+  - { Name: _onexit,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x40, Size: 8 }
+  - { Name: at_quick_exit,      Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x48, Size: 8 }
+  - { Name: atexit,             Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x50, Size: 8 }
+  - { Name: bsd_signal,         Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x58, Size: 8 }
+  - { Name: bsearch,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x60, Size: 8 }
+  - { Name: bsearch_s,          Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x68, Size: 8 }
+  - { Name: call_once,          Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x70, Size: 8 }
+  - { Name: ftw,                Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x78, Size: 8 }
+  - { Name: ftw64,              Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x80, Size: 8 }
+  - { Name: lfind,              Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x88, Size: 8 }
+  - { Name: lsearch,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x90, Size: 8 }
+  - { Name: nftw,               Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x98, Size: 8 }
+  - { Name: nftw64,             Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xa0, Size: 8 }
+  - { Name: on_exit,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xa8, Size: 8 }
+  - { Name: pthread_atfork,     Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xb0, Size: 8 }
+  - { Name: pthread_create,     Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xb8, Size: 8 }
+  - { Name: pthread_key_create, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xc0, Size: 8 }
+  - { Name: pthread_once,       Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xc8, Size: 8 }
+  - { Name: qsort,              Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xd0, Size: 8 }
+  - { Name: qsort_r,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xd8, Size: 8 }
+  - { Name: qsort_s,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xe0, Size: 8 }
+  - { Name: scandir,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xe8, Size: 8 }
+  - { Name: scandir64,          Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xf0, Size: 8 }
+  - { Name: scandirat,          Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0xf8, Size: 8 }
+  - { Name: scandirat64,        Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x100, Size: 8 }
+  - { Name: sigaction,          Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x108, Size: 8 }
+  - { Name: signal,             Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x110, Size: 8 }
+  - { Name: sigset,             Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x118, Size: 8 }
+  - { Name: ssignal,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x120, Size: 8 }
+  - { Name: sysv_signal,        Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x128, Size: 8 }
+  - { Name: tdelete,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x130, Size: 8 }
+  - { Name: tdestroy,           Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x138, Size: 8 }
+  - { Name: tfind,              Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x140, Size: 8 }
+  - { Name: thrd_create,        Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x148, Size: 8 }
+  - { Name: tsearch,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x150, Size: 8 }
+  - { Name: tss_create,         Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x158, Size: 8 }
+  - { Name: twalk,              Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x160, Size: 8 }
+  - { Name: twalk_r,            Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x168, Size: 8 }
+
+#--- cb.def
+LIBRARY cb.dll
+EXPORTS
+  CreateThread
+  __sysv_signal
+  _beginthread
+  _beginthreadex
+  _lfind
+  _lfind_s
+  _lsearch
+  _lsearch_s
+  _onexit
+  at_quick_exit
+  atexit
+  bsd_signal
+  bsearch
+  bsearch_s
+  call_once
+  ftw
+  ftw64
+  lfind
+  lsearch
+  nftw
+  nftw64
+  on_exit
+  pthread_atfork
+  pthread_create
+  pthread_key_create
+  pthread_once
+  qsort
+  qsort_r
+  qsort_s
+  scandir
+  scandir64
+  scandirat
+  scandirat64
+  sigaction
+  signal
+  sigset
+  ssignal
+  sysv_signal
+  tdelete
+  tdestroy
+  tfind
+  thrd_create
+  tsearch
+  tss_create
+  twalk
+  twalk_r
+
+#--- table.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; One call of each name of the callback list.
+define i32 @main() {
+  call void @CreateThread()
+  call void @__sysv_signal()
+  call void @_beginthread()
+  call void @_beginthreadex()
+  call void @_lfind()
+  call void @_lfind_s()
+  call void @_lsearch()
+  call void @_lsearch_s()
+  call void @_onexit()
+  call void @at_quick_exit()
+  call void @atexit()
+  call void @bsd_signal()
+  call void @bsearch()
+  call void @bsearch_s()
+  call void @call_once()
+  call void @ftw()
+  call void @ftw64()
+  call void @lfind()
+  call void @lsearch()
+  call void @nftw()
+  call void @nftw64()
+  call void @on_exit()
+  call void @pthread_atfork()
+  call void @pthread_create()
+  call void @pthread_key_create()
+  call void @pthread_once()
+  call void @qsort()
+  call void @qsort_r()
+  call void @qsort_s()
+  call void @scandir()
+  call void @scandir64()
+  call void @scandirat()
+  call void @scandirat64()
+  call void @sigaction()
+  call void @signal()
+  call void @sigset()
+  call void @ssignal()
+  call void @sysv_signal()
+  call void @tdelete()
+  call void @tdestroy()
+  call void @tfind()
+  call void @thrd_create()
+  call void @tsearch()
+  call void @tss_create()
+  call void @twalk()
+  call void @twalk_r()
+  ret i32 0
+}
+
+declare void @CreateThread()
+declare void @__sysv_signal()
+declare void @_beginthread()
+declare void @_beginthreadex()
+declare void @_lfind()
+declare void @_lfind_s()
+declare void @_lsearch()
+declare void @_lsearch_s()
+declare void @_onexit()
+declare void @at_quick_exit()
+declare void @atexit()
+declare void @bsd_signal()
+declare void @bsearch()
+declare void @bsearch_s()
+declare void @call_once()
+declare void @ftw()
+declare void @ftw64()
+declare void @lfind()
+declare void @lsearch()
+declare void @nftw()
+declare void @nftw64()
+declare void @on_exit()
+declare void @pthread_atfork()
+declare void @pthread_create()
+declare void @pthread_key_create()
+declare void @pthread_once()
+declare void @qsort()
+declare void @qsort_r()
+declare void @qsort_s()
+declare void @scandir()
+declare void @scandir64()
+declare void @scandirat()
+declare void @scandirat64()
+declare void @sigaction()
+declare void @signal()
+declare void @sigset()
+declare void @ssignal()
+declare void @sysv_signal()
+declare void @tdelete()
+declare void @tdestroy()
+declare void @tfind()
+declare void @thrd_create()
+declare void @tsearch()
+declare void @tss_create()
+declare void @twalk()
+declare void @twalk_r()
+
+#--- table-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; One call of each name of the callback list.
+define i32 @main() {
+  call void @CreateThread()
+  call void @__sysv_signal()
+  call void @_beginthread()
+  call void @_beginthreadex()
+  call void @_lfind()
+  call void @_lfind_s()
+  call void @_lsearch()
+  call void @_lsearch_s()
+  call void @_onexit()
+  call void @at_quick_exit()
+  call void @atexit()
+  call void @bsd_signal()
+  call void @bsearch()
+  call void @bsearch_s()
+  call void @call_once()
+  call void @ftw()
+  call void @ftw64()
+  call void @lfind()
+  call void @lsearch()
+  call void @nftw()
+  call void @nftw64()
+  call void @on_exit()
+  call void @pthread_atfork()
+  call void @pthread_create()
+  call void @pthread_key_create()
+  call void @pthread_once()
+  call void @qsort()
+  call void @qsort_r()
+  call void @qsort_s()
+  call void @scandir()
+  call void @scandir64()
+  call void @scandirat()
+  call void @scandirat64()
+  call void @sigaction()
+  call void @signal()
+  call void @sigset()
+  call void @ssignal()
+  call void @sysv_signal()
+  call void @tdelete()
+  call void @tdestroy()
+  call void @tfind()
+  call void @thrd_create()
+  call void @tsearch()
+  call void @tss_create()
+  call void @twalk()
+  call void @twalk_r()
+  ret i32 0
+}
+
+declare void @CreateThread()
+declare void @__sysv_signal()
+declare void @_beginthread()
+declare void @_beginthreadex()
+declare void @_lfind()
+declare void @_lfind_s()
+declare void @_lsearch()
+declare void @_lsearch_s()
+declare void @_onexit()
+declare void @at_quick_exit()
+declare void @atexit()
+declare void @bsd_signal()
+declare void @bsearch()
+declare void @bsearch_s()
+declare void @call_once()
+declare void @ftw()
+declare void @ftw64()
+declare void @lfind()
+declare void @lsearch()
+declare void @nftw()
+declare void @nftw64()
+declare void @on_exit()
+declare void @pthread_atfork()
+declare void @pthread_create()
+declare void @pthread_key_create()
+declare void @pthread_once()
+declare void @qsort()
+declare void @qsort_r()
+declare void @qsort_s()
+declare void @scandir()
+declare void @scandir64()
+declare void @scandirat()
+declare void @scandirat64()
+declare void @sigaction()
+declare void @signal()
+declare void @sigset()
+declare void @ssignal()
+declare void @sysv_signal()
+declare void @tdelete()
+declare void @tdestroy()
+declare void @tfind()
+declare void @thrd_create()
+declare void @tsearch()
+declare void @tss_create()
+declare void @twalk()
+declare void @twalk_r()
+
+#--- pthread.def
+LIBRARY libwinpthread-1.dll
+EXPORTS
+  pthread_create
+
+#--- qsort.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@a = global [3 x i32] [i32 3, i32 1, i32 2]
+
+define internal i32 @cmp(ptr %x, ptr %y) {
+  %a = load i32, ptr %x
+  %b = load i32, ptr %y
+  %r = sub i32 %a, %b
+  ret i32 %r
+}
+
+define i32 @main() {
+  call void @qsort(ptr @a, i64 3, i64 4, ptr @cmp)
+  %v = load i32, ptr @a
+  ret i32 %v
+}
+
+declare void @qsort(ptr, i64, i64, ptr)
+
+#--- signal.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; signal(SIGPIPE, SIG_IGN): no function is passed, and it is still an error.
+define i32 @main() {
+  %old = call ptr @signal(i32 13, ptr inttoptr (i64 1 to ptr))
+  ret i32 0
+}
+
+declare ptr @signal(i32, ptr)
+
+#--- addr.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; LTO internalizes @sorter; the volatile load keeps GlobalOpt from folding
+;; it to @qsort, so its initializer's reference to qsort stays live at -O2.
+@sorter = global ptr @qsort
+
+define i32 @main() {
+  %f = load volatile ptr, ptr @sorter
+  %c = icmp eq ptr %f, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare void @qsort(ptr, i64, i64, ptr)
+
+#--- entry.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@a = global [3 x i32] [i32 3, i32 1, i32 2]
+
+define i32 @main() {
+  call void @my_sort(ptr @a, i64 3, i64 4, ptr null)
+  ret i32 0
+}
+
+declare void @my_sort(ptr, i64, i64, ptr) #0
+
+attributes #0 = { "msil-import-name"="qsort" }
+
+#--- pthread.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+define internal ptr @worker(ptr %arg) {
+  ret ptr null
+}
+
+define i32 @main() {
+  %t = alloca i64, align 8
+  %r = call i32 @pthread_create(ptr %t, ptr null, ptr @worker, ptr null)
+  ret i32 %r
+}
+
+declare i32 @pthread_create(ptr, ptr, ptr, ptr)
+
+#--- beginthread.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define internal i32 @worker(ptr %arg) {
+  ret i32 0
+}
+
+define i32 @main() {
+  %h = call i64 @_beginthreadex(ptr null, i32 0, ptr @worker, ptr null, i32 0, ptr null)
+  %r = trunc i64 %h to i32
+  ret i32 %r
+}
+
+declare i64 @_beginthreadex(ptr, i32, ptr, ptr, i32, ptr)
+
+#--- createthread.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define internal i32 @worker(ptr %arg) {
+  ret i32 0
+}
+
+define i32 @main() {
+  %h = call ptr @CreateThread(ptr null, i64 0, ptr @worker, ptr null, i32 0, ptr null)
+  %c = icmp eq ptr %h, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)
+
+#--- lfind.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@a = global [3 x i32] [i32 3, i32 1, i32 2]
+@n = global i32 3
+
+define i32 @main() {
+  %p = call ptr @lfind(ptr @n, ptr @a, ptr @n, i64 4, ptr null)
+  %c = icmp eq ptr %p, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare ptr @lfind(ptr, ptr, ptr, i64, ptr)
+
+#--- explicit.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@a = global [3 x i32] [i32 3, i32 1, i32 2]
+
+define i32 @main() {
+  call void @qsort(ptr @a, i64 3, i64 4, ptr null)
+  ret i32 0
+}
+
+declare void @qsort(ptr, i64, i64, ptr) #0
+
+attributes #0 = { "msil-import-module"="libc.so.6" }
+
+#--- defined.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@a = global [3 x i32] [i32 3, i32 1, i32 2]
+
+define void @qsort(ptr %base, i64 %n, i64 %size, ptr %cmp) {
+  ret void
+}
+
+define i32 @main() {
+  call void @qsort(ptr @a, i64 3, i64 4, ptr null)
+  ret i32 0
+}
+
+#--- dead.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@a = global [3 x i32] [i32 3, i32 1, i32 2]
+
+define i32 @main() {
+  ret i32 0
+}
+
+define void @unused() {
+  call void @qsort(ptr @a, i64 3, i64 4, ptr null)
+  ret void
+}
+
+declare void @qsort(ptr, i64, i64, ptr)

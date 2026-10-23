@@ -1,0 +1,33 @@
+# atexit from glibc's headers is a named link error: glibc defines it only in libc_nonshared.a.
+# glibc's libc.so.6 does not export atexit; the libc.so script adds the native
+# static archive libc_nonshared.a, whose member atexit.oS defines it in
+# machine code. A P/Invoke cannot bind it (dlsym does not find it either:
+# native-imports 3.2, EntryPointNotFoundException), so msil-ld reports the
+# symbol with the archive member that defines it (plan 5.10.10, 5.10.14):
+# 'symbol 'atexit' is defined only in native object code
+# (<archive>(<member>)); MSIL cannot link machine code'. atexit stays
+# unbound until phase 3 intercepts it (backlog 5); being unbound, it is not
+# also reported as a native function that takes a C function pointer. The
+# program links once the call is gone, which shows that nothing else in it
+# is the error. Plan 5.12.8 (hosted leg, Q16), M15.
+# REQUIRES: msil-glibc-sysroot, msil-ld
+# RUN: rm -rf %t && split-file %s %t
+# RUN: not %clang --target=x86_64-unknown-linux-gnu-msil --sysroot=%{msil_glibc_sysroot} -O2 -flto %t/prog.c -Wl,--lto-emit-asm -o %t/prog.il 2>&1 \
+# RUN:   | FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="phase 3 thunks"
+# RUN: %clang --target=x86_64-unknown-linux-gnu-msil --sysroot=%{msil_glibc_sysroot} -O2 -flto -DNO_ATEXIT %t/prog.c -Wl,--lto-emit-asm -o %t/prog-ok.il
+# CHECK: {{^}}msil-ld: error: symbol 'atexit' is defined only in native object code ({{.*}}libc_nonshared.a(atexit.oS)); MSIL cannot link machine code{{$}}
+# CHECK: clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- prog.c
+#include <stdio.h>
+#include <stdlib.h>
+
+static void goodbye(void) { puts("goodbye"); }
+
+int main(void) {
+#ifndef NO_ATEXIT
+  if (atexit(goodbye) != 0)
+    return 1;
+#endif
+  puts("hello");
+  return 0;
+}

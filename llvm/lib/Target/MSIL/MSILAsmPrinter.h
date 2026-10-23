@@ -30,6 +30,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/Allocator.h"
@@ -116,6 +117,12 @@ private:
   /// UsedFuncAddrs in module order, set by emitEndOfAsmFile: the order of
   /// their address fields and of the module initializer code that sets them.
   SmallVector<const Function *, 0> FuncAddrs;
+  /// In msil-ld's linked text, the symbol name of every P/Invoke that
+  /// emitPInvokeDeclarations declared, once each, in declaration order (the
+  /// names point into the set's keys, which never move): the operands of
+  /// !msil.imports.used, which doFinalization adds (plan 5.10.13).
+  StringSet<> LinkedPInvokeNames;
+  SmallVector<StringRef, 0> LinkedPInvokes;
 
 public:
   MSILAsmPrinter(TargetMachine &TM, std::unique_ptr<MCStreamer> Streamer)
@@ -144,8 +151,10 @@ public:
   /// Records that the undefined function \p F (a declaration, or an
   /// available_externally definition, which gets no method) is referenced
   /// from code or data, so that the module trailer declares it as a P/Invoke
-  /// if it is a Phase-1 import (MSIL::getPInvokeModule, decision D14), and
-  /// reports it as an error otherwise: Phase 1 has no linker.
+  /// if it has an import, and reports it as an error otherwise: in a
+  /// standalone module a Phase-1 import of the standalone import table
+  /// (MSIL::getPInvokeModule, decision D14), in msil-ld's linked text a
+  /// natively bound function (MSIL::getLinkedImport, plan 5.10.13).
   void noteExternFunction(const Function &F);
 
   /// Records that the external symbol \p Name (a library call) is called with
@@ -184,6 +193,14 @@ public:
 
   bool doInitialization(Module &M) override;
   bool runOnMachineFunction(MachineFunction &MF) override;
+  /// Prints the module trailer (AsmPrinter::doFinalization), then, in
+  /// msil-ld's linked text (MSIL::isLinkedModule), records the P/Invokes it
+  /// declared in the named metadata !msil.imports.used, one operand
+  /// !{!"<symbol>"} per symbol name in declaration order, for msil-ld's
+  /// --print-imports (MSILLinkHooksPass::doFinalization, which the legacy
+  /// pass manager runs after this one; plan 5.10.13, 5.10.14). The IL does
+  /// not change, and a standalone module never gets the node.
+  bool doFinalization(Module &M) override;
 
   //===------------------------------------------------------------------===//
   // AsmPrinter Implementation.
@@ -238,9 +255,14 @@ private:
   SmallVector<const Function *, 8> collectConstructors();
 
   /// Emits the P/Invoke declarations of the undefined functions and external
-  /// symbols that are Phase-1 imports (decision D14), and diagnoses the rest.
-  /// Those with the IL name and signature of a method of the module get none:
-  /// they bind to that method, as a native link binds the symbol.
+  /// symbols that have an import, and diagnoses the rest: in a standalone
+  /// module the Phase-1 imports of the standalone import table (decision
+  /// D14, frozen), 'public'; in msil-ld's linked text the natively bound
+  /// functions, with msil-ld's module and entry strings, 'assembly' (plan
+  /// 5.10.11, 5.10.13), where the native-callee checks name the module (plan
+  /// 5.10.14), and whose names it records in LinkedPInvokes. Those with the
+  /// IL name and signature of a method of the module get none: they bind to
+  /// that method, as a native link binds the symbol.
   void emitPInvokeDeclarations(const Module &M);
 
   /// Emits the data image and the address fields (decision D12).

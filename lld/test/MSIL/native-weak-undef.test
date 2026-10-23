@@ -1,0 +1,100 @@
+## Weak undefined symbols and native libraries (ImplementationPlan.md 5.9.6
+## steps 2 and 3, 5.10.10 step 4 and 5.10.13; M15.a item 5):
+## - a WEAK reference that a native library defines binds to it like any
+##   other: msil-ld turns the extern_weak declaration into an external one
+##   with the import attributes, so the call is a P/Invoke call, never a
+##   call of M12's trap stub;
+## - a WEAK reference that nothing defines keeps M12's lowering: null, and
+##   calls go to the trap stub '<msil>undef_<name>' (ldnull; throw), with no
+##   P/Invoke and no error, also with native libraries on the command line;
+## - WEAK data that a native library defines is native data, an error until
+##   M20 (5.10.12).
+## The program is 'if (&maybe) return maybe(); return 0;'.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj lib.yaml -o lib.o
+# RUN: ld.lld -shared -soname libmaybe.so.1 lib.o -o libmaybe.so.1
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: llvm-as weakfn.ll -o weakfn.o
+# RUN: llvm-as weakdata.ll -o weakdata.o
+
+## Bound.
+# RUN: msil-ld --lto-emit-asm --lto-O0 weakfn.o libmaybe.so.1 -o bound.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=BOUND --implicit-check-not=undef_maybe --input-file=bound.il
+# RUN: FileCheck %s --check-prefix=BOUND-NONE --input-file=bound.il
+# BOUND-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libmaybe.so.1" cdecl) int32 'maybe'() cil managed preservesig {}{{$}}
+# BOUND-DAG: call int32 'maybe'()
+## No trap stub anywhere in the file: for a prefix made only of -DAG lines,
+## --implicit-check-not checks only the text before the first match.
+# BOUND-NONE-NOT: undef_maybe
+
+## Unbound, with and without native libraries.
+# RUN: msil-ld --lto-emit-asm --lto-O0 weakfn.o -o unbound.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=UNBOUND --implicit-check-not=pinvokeimpl --input-file=unbound.il
+# RUN: FileCheck %s --check-prefix=UNBOUND-NONE --input-file=unbound.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 weakfn.o libfoo.so.1 -o unbound2.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=UNBOUND --implicit-check-not=pinvokeimpl --input-file=unbound2.il
+# RUN: FileCheck %s --check-prefix=UNBOUND-NONE --input-file=unbound2.il
+# UNBOUND-DAG: call int32 '<msil>undef_maybe'()
+# UNBOUND-DAG: {{^}}.method {{.*}}'<msil>undef_maybe'(){{.*}}
+# UNBOUND-NONE-NOT: pinvokeimpl
+
+## WEAK data defined natively.
+# RUN: not msil-ld --lto-emit-asm weakdata.o libfoo.so.1 -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=DATA --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
+# DATA:      {{^}}msil-ld: error: importing native data symbol 'bar' (libfoo.so.1) is not supported yet{{$}}
+# DATA-NEXT: {{^}}>>> referenced by weakdata.o:(main){{$}}
+
+#--- lib.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: maybe, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- weakfn.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+entry:
+  %has = icmp ne ptr @maybe, null
+  br i1 %has, label %call, label %none
+
+call:
+  %r = call i32 @maybe()
+  ret i32 %r
+
+none:
+  ret i32 0
+}
+
+declare extern_weak i32 @maybe()
+
+#--- weakdata.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@bar = extern_weak global i32
+
+define i32 @main() {
+entry:
+  %has = icmp ne ptr @bar, null
+  br i1 %has, label %load, label %none
+
+load:
+  %v = load i32, ptr @bar
+  ret i32 %v
+
+none:
+  ret i32 0
+}

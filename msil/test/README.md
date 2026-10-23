@@ -5,7 +5,8 @@ This directory holds the end-to-end tests of the MSIL backend
 assembled with ilasm, verified, force-JIT-compiled, run on .NET, and its
 transcript is compared with a checked-in expected file. Since M14, programs
 of several files, archives and stock-clang bitcode are also linked by
-`msil-ld` (`M2/`, `%{msil_prog}`). It is an LLVM external
+`msil-ld` (`M2/`, `%{msil_prog}`), and since M15 they call native libraries
+through the P/Invokes that `msil-ld` binds. It is an LLVM external
 project (`-DLLVM_EXTERNAL_PROJECTS=msil -DLLVM_EXTERNAL_MSIL_SOURCE_DIR=<repo>/msil`,
 set by `msil/utils/build/msil-configure.ps1` and `msil/cmake/caches/MSIL.cmake`),
 so it needs no upstream CMake change. Plan section 5.5 has the rules every test
@@ -65,23 +66,32 @@ then checks and runs `prog.exe` as `%{msil_c}` does:
 %{msil_srcs}        --clang -c (bitcode)-->                    obj/<stem>.o
 %{msil_stock_srcs}  --clang --target=<native> -flto -c-->      stock/<stem>.o
 %{msil_archives}    --clang -c, then llvm-ar rcs-->            ar/<NAME>/lib<NAME>.a
-  --clang -<L> -nodefaultlibs <objects> -Lar/<NAME> -l<NAME> %{msil_libs}
-     -Wl,--lto-emit-asm (clang runs msil-ld)-->  prog.il  --ilasm -exe-->  prog.exe
-  --> msil-verify.py, msil-jitall.py, msil-run.py   as for %{msil_c}
+  --clang -<L> %{msil_ldflags} <objects> -Lar/<NAME> -l<NAME> %{msil_libs}
+     %{msil_native_libs} -Wl,--lto-emit-asm (clang runs msil-ld, which also
+     reads the driver's default libraries)-->  prog.il  --ilasm -exe-->  prog.exe
+  --> msil-verify.py, msil-jitall.py, msil-run.py   as for %{msil_c}, each
+                        with --dep %{msil_deps} -- before the program
   [--> round trip]      of prog.exe (msil_roundtrip=1)
-  [--> native oracle]   msil-prog.py --mode native: the same sources and
-                        archives built for the native triple (clang
-                        -fuse-ld=lld; the E7 recipe in WSL)
+  [--> native oracle]   msil-prog.py --mode native: the same sources, archives
+                        and %{msil_native_libs} built for the native triple
+                        (clang -fuse-ld=lld; the E7 recipe in WSL, with
+                        -rpath $ORIGIN), run with the same --dep files
   [--> .NET Framework]  the same prog.exe, run by the Framework
 ```
 
 `prog.exe` is an EXE image, so the one file runs under `dotnet exec` and on the
 .NET Framework. Stock sources are compiled by the tree's clang for the native
 triple (with `-fno-ms-volatile` on windows-msvc), as stock-clang bitcode (plan
-Q12); natively every source is an ordinary one. `%{msil_ldflags}` is
-`-nodefaultlibs` in M14: the driver's default libraries only have to exist in
-M14, and a Windows host has no Linux C library (M15 links them through
-`--sysroot`).
+Q12); natively every source is an ordinary one. The MSIL link reads the
+driver's default libraries of the triple (M15): on a Windows triple the import
+libraries of `LIB` (a VS developer prompt, or `msil-lit.ps1`), on a Linux
+triple the E7 sysroot, which `%{msil_ldflags}` names as
+`--sysroot=<msil_linux_sysroot>` (it is empty on Windows triples; it was
+`-nodefaultlibs` in M14, when the default libraries only had to exist). A
+test's own native libraries go in `%{msil_native_libs}`, which both builds
+link, and the files a run needs next to the program (a test-built
+`native.dll` or `libnative.so`) in `%{msil_deps}`, which `msil-verify.py`,
+`msil-jitall.py` and every `msil-run.py` run copy there (`--dep`).
 
 `--param msil_pipeline` (feature `msil-pipeline=<p>`) picks how `%{msil_c}`
 builds: `asm` (the default) is the Phase 1 flow above, and `lto` builds the one
@@ -127,7 +137,10 @@ configuration error instead of UNSUPPORTED. `M2/` also needs the feature
 `msil-ld` (the tree's `msil-ld`), and its archive tests `msil-ar` (the tree's
 `llvm-ar`); `--param msil_require_link=1` (every gate leg) makes a missing
 `msil-ld` or `llvm-ar` a configuration error, and so does
-`msil_pipeline=lto`.
+`msil_pipeline=lto`. The compile-only tests of `M2/09-hosted/` need only
+clang with the MSIL target, and the feature `msil-glibc-sysroot` (glibc) or
+`msil-ucrt-headers` (UCRT) of their C library; the `hosted` leg names the
+glibc sysroot, so there a missing one is a configuration error.
 
 ## Directories
 
@@ -156,31 +169,46 @@ compiles a C program with `-g`.
 
 `M2/` (Phase 2, from M14) holds programs of several files that `msil-ld`
 links (`%{msil_prog}`), in the tiers of plan 5.12.5; the numbers that are
-missing belong to later milestones (`03-native/` M15, `04-shared/` M22,
-`05-refs/` M21, `07-equiv/` M20, `09-hosted/` M15):
+missing belong to later milestones (`04-shared/` M22, `05-refs/` M21,
+`07-equiv/` M20):
 
 | Directory | Since | Covers |
 |---|---|---|
 | `00-link/` | M14 | two or more files: calls and data across them, `static` functions and variables of one name, weak and strong definitions, inline functions (COMDATs), common symbols, constructor priorities across files, structs by value and returned across files, K&R definitions across files, `main` in a later file, a file with data only |
-| `01-archive/` | M14 | archives: lazy members, members with data only, members of one name in two archives, two archives that need each other (no group needed, as in lld), members that define `puts` and `fdim` and win over the Phase-1 imports |
+| `01-archive/` | M14 | archives: lazy members, members with data only, members of one name in two archives, two archives that need each other (no group needed, as in lld), members that define `puts` and `fdim` and win over the C library |
 | `02-lto/` | M14 | stock-clang bitcode for the native triple, also inside an archive, and `msil-ld`'s once-per-link warning about it |
+| `03-native/` | M15 | native libraries: C library functions outside the standalone table (`strlen`, `strcmp`, `atoi`, `malloc`, ...) and a program without output, glibc's versioned libm functions and its IFUNCs (Linux triple), `kernel32.lib`, `htons` imported by ordinal, `strdup` through an oldnames alias and the functions of `--ucrtbase-imports` (Windows triple), a `native.dll` or `libnative.so` that the test builds and ships (`%{msil_native_libs}`, `%{msil_deps}`), `-Wl,--print-imports` and the linked text's P/Invokes, and the named errors for an undefined function and for `-Bstatic` |
 | `06-det/` | M14 | determinism: `%{msil_det}` builds a program twice and compares the bitcode objects, the archive and the `--lto-emit-asm` text |
-| `08-semantics/` | M14 | the link-semantics matrix of plan 5.9.16, LTO rows (`llvm/docs/MSIL/Status.md` section 2): native transcripts, or named diagnostics for duplicate, undefined and mismatched symbols, thread-local variables and destructors |
+| `08-semantics/` | M14 | the link-semantics matrix of plan 5.9.16, LTO rows (`llvm/docs/MSIL/Status.md` section 2): native transcripts, or named diagnostics for duplicate, undefined and mismatched symbols, thread-local variables and destructors; since M15 a library named by `#pragma comment(lib)` (`pragma-comment-lib`) and `qsort` with a C comparator, a named error until phase 3 (`native-callback`) |
+| `09-hosted/` | M15 | the optional hosted leg (plan Q16), compile-only: glibc's 38 C and POSIX headers and the UCRT's headers with `-fsyntax-only`, a hosted glibc program linked to text against glibc's real `libc.so` and `libm.so` scripts, and `atexit`, which glibc defines only in `libc_nonshared.a`, as a named error. Its `lit.local.cfg` needs only clang with the MSIL target |
 
-`M2/` has 38 tests (10, 5, 2, 1 and 20); 32 compare a transcript, five pin a
-named diagnostic and `06-det/det-lto.test` checks determinism. Every
+`M2/` has 56 tests (10, 5, 2, 12, 1, 22 and 4); 42 compare a transcript,
+eight pin a named diagnostic, `06-det/det-lto.test` checks determinism,
+`03-native/print-imports.test` checks `msil-ld`'s `--print-imports` and
+linked text, and the four of `09-hosted/` only compile and link. Every
 transcript is the same on Windows and on the E7 Linux oracle, so there is no
-`.linux.expected` file. `08-semantics/p4-selectany.test` (`__declspec`)
-requires a Windows triple.
+`.linux.expected` file. `08-semantics/p4-selectany.test` (`__declspec`) and
+`03-native/kernel32`, `ordinal-import`, `oldnames-alias` and
+`ucrtbase-imports` require a Windows triple, `03-native/ifunc` a Linux one.
 
 `harness/` holds the self-tests of the runner, the verifier, jitall,
-`update-expected.py` and lit's configuration. `harness/prog/` (M14) pins the
-expansions of `%{msil_prog}`, `%{msil_c}` under both pipelines and
-`%{msil_ldflags}`, and the commands of `msil-prog.py` (every leg and level,
-archive specifications, `--det` catching a planted difference, the usage and
-configuration errors, `update-expected.py` on `%{msil_prog}` tests) with
-stand-ins for clang, `msil-ld`, `llvm-ar` and `ld.lld`, so it needs neither a
-compiler nor a linker.
+`update-expected.py`, `il-snapshot.py` and lit's configuration: 72 tests, 10
+of them in `prog/`, 10 in `legs/` and 3 in `pipeline/`. `dep-local.test` and
+`dep-wsl.test` (M15) ship a managed and a native dependency with a program
+through `--dep` to `msil-verify.py`, `msil-jitall.py` and `msil-run.py`, and
+`--dep-dir` to `msil-run.py` (local and .NET Framework runners, and WSL), and
+check that a missing one fails. `il-snapshot.test` (M15) pins the comparison of
+`msil/utils/il-snapshot.py --compare` on the fixture trees of
+`Inputs/il-snapshot/`: exit status 1 naming a changed `.il`, a changed
+`.err`, a missing and an extra file, and 2 for usage errors.
+`harness/prog/` (M14) pins the expansions of `%{msil_prog}`, `%{msil_c}`
+under both pipelines, `%{msil_ldflags}` and,
+since M15, `%{msil_native_libs}` and `%{msil_deps}` (`deps.test`), and the
+commands of `msil-prog.py` (every leg and level, archive specifications,
+`--det` catching a planted difference, the usage and configuration errors,
+`update-expected.py` on `%{msil_prog}` tests, one of which builds its own
+native library) with stand-ins for clang, `msil-ld`, `llvm-ar` and
+`ld.lld`, so it needs neither a compiler nor a linker.
 
 ## Running the tests
 
@@ -200,8 +228,11 @@ python build/bin/llvm-lit.py -sv --param msil_pipeline=lto msil/test/M1/11-progr
 `msil-header-search.c`, and, when lld is built, `lld/test/MSIL` (the
 `msil-ld` tests). This suite depends on `lld` (which makes `msil-ld`),
 `llvm-ar` and `llvm-nm` besides clang, llc and the lit tools, and
-`check-msil` also on `llvm-as`, `llvm-bcanalyzer` and `llvm-lib`, which
-build the inputs of `lld/test/MSIL`.
+`check-msil` also on `llvm-as`, `llvm-bcanalyzer`, `llvm-lib` and
+`llvm-dlltool`, which build the inputs of `lld/test/MSIL`, and on `yaml2obj`,
+`llvm-mc` and `llvm-readobj`, which make and inspect the native libraries of
+its native-library tests (M15). `llvm-lit` run directly builds nothing: build
+the tools first (`msil-build.ps1 -Standard` builds every tool the tests use).
 
 Source paths work because `llvm-lit` maps `msil/test/lit.cfg.py` to the
 generated `build/tools/msil/test/lit.site.cfg.py`. At configuration time
@@ -224,7 +255,8 @@ the four extra optimization levels of `more-levels`, `lto`
 oracle required), `det` (`M2/06-det`), WSL with the linux triple on the
 private runtime (`msil_wsl_dotnet=private`) and, in `wsl-net10` and
 `wsl-quick`, the E7 oracle required, the Linux and the modern Windows ilasm,
-the ildasm round trip), and three legs that are not lit runs: `expected`
+the ildasm round trip, and the optional `hosted` leg (`M2/09-hosted` with
+`msil_glibc_sysroot` given, M15), and three legs that are not lit runs: `expected`
 (`update-expected.py --check` of `M1/` and `M2/`), `expected-linux`
 (`update-expected.py --check --os linux`, the E7 oracle) and `utc`;
 `llvm/docs/MSIL/GettingStarted.md` section 7 lists them. Each lit leg also
@@ -235,10 +267,10 @@ a lit leg passes only when lit exits 0 and at least one test passed.
 parameter value may contain blanks. `pwsh -NoProfile -File
 msil/utils/run-m1-gate.ps1` runs every leg in order through the same
 `msil/utils/ci/` scripts as `msil-ci.yml`, after a `host-setup` step that
-installs the private WSL runtimes and the E7 sysroot (both idempotent, no
-root), and prints one summary row per leg; `msil/utils/ci/lit-legs.ps1
--List` names the legs, and each leg leaves its lit log and xunit file in
-`build/lit-results/<leg>.{log,xml}`.
+installs the private WSL runtimes, the E7 sysroot and the glibc sysroot of
+the `hosted` leg (all idempotent, no root), and prints one summary row per
+leg; `msil/utils/ci/lit-legs.ps1 -List` names the legs, and each leg leaves
+its lit log and xunit file in `build/lit-results/<leg>.{log,xml}`.
 
 ## Adding a test
 
@@ -322,7 +354,29 @@ int helper(void) { return 100; }
   The values sit inside single quotes on the command line: no `'` in them,
   and no `,` or `;` in a path.
 - A test that builds an archive says `REQUIRES: msil-ar`; one that needs a
-  Windows triple (`__declspec`) says `REQUIRES: msil-triple-windows`.
+  Windows triple (`__declspec`, a Win32 function) says
+  `REQUIRES: msil-triple-windows`.
+- Unlike `M1/`, whose tests also compile with `clang -S`, an `M2/` test may
+  call any non-variadic native function that binds through the driver's
+  default libraries (M15; `03-native/`), and `%{msil_native_libs}` adds
+  libraries to both builds (`-lws2_32`, say). A test that needs a native
+  library of its own builds it with RUN lines before its composite (plan
+  5.12.5), and ships it with the program:
+
+  ```text
+  # RUN: rm -rf %t && split-file %s %t
+  # RUN: %if msil-triple-windows %{ %clang_native -O2 -c %t/native.c -o %t/native.obj && %lld_link -dll -noentry -nodefaultlib %t/native.obj -out:%t/native.dll %} %else %{ %clang_native -O2 -fPIC -c %t/native.c -o %t/native.o && %ld_lld -shared -soname libnative.so %t/native.o -o %t/libnative.so %}
+  # REDEFINE: %{msil_srcs} = %t/main.c
+  # REDEFINE: %{msil_native_libs} = -L%t -lnative
+  # REDEFINE: %{msil_deps} = %if msil-triple-windows %{%t/native.dll%} %else %{%t/libnative.so%}
+  # RUN: %{msil_prog}
+  ```
+
+  `lld-link -dll` also writes the import library `native.lib`, which
+  `-lnative` finds on Windows triples; `%{msil_deps}` may use `%if` and
+  wildcards, and `update-expected.py` runs the RUN lines before the first
+  composite (other than `rm -rf %t && split-file %s %t`) itself, with the
+  oracle's tools (`03-native/native-lib.test`).
 - Common symbols use `__attribute__((common))`, not `-fcommon`, which the
   native oracle would not get, and no RUN line uses a plain `clang -c`: what
   `-c` writes changes in M19.
@@ -336,9 +390,10 @@ int helper(void) { return 100; }
   (`python msil/utils/update-expected.py msil/test/M2/00-link/<name>.test`):
   it splits the test into a temporary directory, reads the `REDEFINE:` lines
   and builds the program natively with `msil-prog.py --mode native` (`--ar`
-  and `--split-file` name the tools; by default the ones next to `--clang`).
-  Tests whose only composites are `%{msil_prog_fail_<L>}` or `%{msil_det}`
-  have no transcript and are skipped.
+  and `--split-file` name the tools; by default the ones next to `--clang`),
+  with `%{msil_native_libs}` and, for the run, the `%{msil_deps}` files next
+  to the program. Tests whose only composites are `%{msil_prog_fail_<L>}` or
+  `%{msil_det}` have no transcript and are skipped.
 
 ## Parameters and features
 
@@ -366,6 +421,7 @@ int helper(void) { return 100; }
 | `msil_link_output` | `il` | what `msil-ld` writes for `%{msil_prog}` (feature `msil-link-output=<x>`): `il`, ILAsm text that `ilasm -exe` assembles; `pe` is a configuration error until M20 |
 | `msil_ld`, `msil_ar`, `msil_nm` | `<build>/bin/msil-ld`, `llvm-ar`, `llvm-nm` | the tree's linker, archiver and symbol lister (also `$MSIL_LD`, `$MSIL_AR`, `$MSIL_NM`), never ones from `PATH`: the Visual Studio `llvm-ar` cannot index this LLVM's bitcode. A named path that does not exist is a configuration error; empty disables the tool |
 | `msil_require_link` | `0` | `1` (every gate leg): a missing `msil-ld` or `llvm-ar` is a configuration error, and so is an `M2/` that cannot run; `msil_pipeline=lto` requires both as well |
+| `msil_glibc_sysroot` | `$MSIL_GLIBC_SYSROOT`, else `C:\llvm-msil-scratch\glibc-sysroot` on Windows when it holds `usr/include/stdio.h`; empty disables it | a glibc sysroot with headers, as `msil/utils/make-glibc-sysroot.sh` makes it, for the hosted tests of `M2/09-hosted/` (feature `msil-glibc-sysroot`, substitution `%{msil_glibc_sysroot}`; M15). A value given explicitly, as the `hosted` leg gives it, without `usr/include/stdio.h` is a configuration error |
 
 Tool search order: `--param msil_<tool>=PATH`, `$MSIL_<TOOL>`, the value CMake
 found, well-known places (the .NET Framework ilasm, and the ildasm of the
@@ -386,7 +442,10 @@ built and the runner has a runtime), `msil-netfx`,
 found), `msil-linux-sysroot` (a complete `msil_linux_sysroot`),
 `msil-linux-oracle` (E7 can run: the sysroot with `libgcc_s.so.1`,
 `ld.lld`, clang with the X86 target and a compiled `start.o`),
-`msil-registered-target`,
+`msil-registered-target`, `msil-ld-lld` and `msil-lld-link` (`%ld_lld` and
+`%lld_link` were found, for tests that build native libraries; M15),
+`msil-glibc-sysroot` (a glibc sysroot with headers, `msil_glibc_sysroot`;
+M15), `msil-ucrt-headers` (a directory of `INCLUDE` holds `corecrt.h`; M15),
 `msil-triple=<triple>`, and `msil-triple-windows` / `msil-triple-linux`. The
 last two follow the effective triple, not the host: the WSL runner executes a
 linux triple from Windows, so a Windows-only P/Invoke test says
@@ -425,11 +484,18 @@ and `llvm-nm`), `%msil_prog_build` (`msil-prog.py` with the tools, the triple,
 `%{msil_cflags}`, `%{msil_ldflags}` and `%{msil_native_ldflags}`; add
 `--level`, `--workdir` and the inputs), the placeholders `%{msil_srcs}`
 (default `%s`), `%{msil_stock_srcs}`, `%{msil_archives}` and `%{msil_libs}`
-(default empty), `%{msil_ldflags}` (`-nodefaultlibs` in M14), the composites
-`%{msil_prog}` (every level of `msil_opt_levels`) and `%{msil_prog_O0}` ..
-`%{msil_prog_Oz}`, `%{msil_prog_fail_O0}` .. `%{msil_prog_fail_Oz}` (`not`
-and the build of that level only, for named diagnostics) and `%{msil_det}`
-(`msil-prog.py --det` at `-O2` in `%t.det.d`).
+(default empty), `%{msil_native_libs}` (default empty: link arguments of
+both builds, `msil-prog.py --native-lib`; M15) and `%{msil_deps}` (default
+empty: files that verification, the force-JIT and every run get next to the
+program, passed as `--dep %{msil_deps} --`; M15), `%{msil_ldflags}` (the
+MSIL link's flags: empty on Windows triples and
+`--sysroot=<msil_linux_sysroot>` on Linux triples since M15,
+`-nodefaultlibs` in M14), the composites `%{msil_prog}` (every level of
+`msil_opt_levels`) and `%{msil_prog_O0}` .. `%{msil_prog_Oz}`,
+`%{msil_prog_fail_O0}` .. `%{msil_prog_fail_Oz}` (`not` and the build of
+that level only, for named diagnostics) and `%{msil_det}` (`msil-prog.py
+--det` at `-O2` in `%t.det.d`), and `%{msil_glibc_sysroot}` (the quoted
+glibc sysroot of the hosted tests, else `glibc-sysroot-not-found`; M15).
 Everything works in lit's internal shell.
 
 ## Transcripts
@@ -537,5 +603,9 @@ transcripts are `<name>.test.tmp.<L>.out` (and `.native.out`, `.netfx.out`,
 the sources relative to that directory, so a step can be re-run from there;
 `clang -###` on the link line shows the `msil-ld` command, and
 `-Wl,-Map=<file>`, `-Wl,--why-extract=<file>` or `-Wl,--trace` added to it
-show what `msil-ld` linked and why. `python msil/utils/msil-prog.py --help`
+show what `msil-ld` linked and why; `-Wl,--print-imports` shows which native
+library each P/Invoke binds to (M15). A run that needs `%{msil_deps}` copies
+them into the private directory of that run, so re-run it with the same
+`--dep FILE... --` options before the program (`msil-run.py --dep-dir DIR`
+copies every file of a directory). `python msil/utils/msil-prog.py --help`
 describes every option.

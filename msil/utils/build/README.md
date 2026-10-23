@@ -42,7 +42,11 @@ Dot-source it: `. D:/llvm-msil/msil/utils/build/msil-env.ps1`. Enters the VS 202
 developer environment (cached in `%TEMP%\msil-vsenv-x64.json`, about 0.1 s after the first
 5 s; delete the file after a Visual Studio update) and sets `$MsilRepo`, `$MsilBuild`
 (`MSIL_BUILD_DIR`), `$MsilPython` (`MSIL_PYTHON`, always with forward slashes because CMake
-pastes it into `lit.site.cfg.py`), `$MsilLlvmBin`, `$MsilIlasm` and `$MsilIldasm`.
+pastes it into `lit.site.cfg.py`), `$MsilLlvmBin`, `$MsilIlasm` and `$MsilIldasm`. The
+developer environment's `LIB` and `INCLUDE` matter beyond the build since M15: clang passes
+each `LIB` directory to `msil-ld`, which binds the windows-msvc default libraries (`ucrt.lib`,
+`kernel32.lib`, `oldnames.lib`) from there, and lit's `msil-ucrt-headers` feature looks for
+the UCRT headers in `INCLUDE`; `msil-lit.ps1` enters the environment itself.
 
 ```powershell
 . D:/llvm-msil/msil/utils/build/msil-env.ps1; & $MsilPython --version
@@ -82,13 +86,15 @@ step G1 is `msil-build.ps1 -Standard`, `msil/utils/ci/build.ps1` runs the same c
 `build.sh` reads the same file. It has one target per line, `#` comments and blank lines; a line
 with two names is an error. Among its targets are `lld`, which also makes `msil-ld` (lld's
 `msil` flavor, the linker clang runs for MSIL triples), and `llvm-ar` with its copies, which
-`msil/test/M2` and `lld/test/MSIL` need (M14). Without `-Standard` the script builds exactly the
-targets it is given and needs at least one, as before: after a change in `lld/MSIL` or in clang's
-MSIL toolchain, `lld clang` relinks `msil-ld` and clang.
+`msil/test/M2` and `lld/test/MSIL` need (M14), and `yaml2obj` and `llvm-mc`, which make the
+native libraries of `lld/test/MSIL`'s native-library tests (M15; about 5-8 minutes and 0.2 GB
+the first time). Without `-Standard` the script builds exactly the targets it is given and
+needs at least one, as before: after a change in `lld/MSIL` or in clang's MSIL toolchain, `lld
+clang` relinks `msil-ld` and clang.
 
 ```powershell
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard
-pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard llvm-mc
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard llvm-dwarfdump
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 lld clang
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 llc FileCheck
 ```
@@ -101,6 +107,14 @@ spaces, `-Jobs` adds `-j`.
 ```powershell
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param msil_require_verify=1" msil/test/harness
 ```
+
+The gates run `lld/test/MSIL` a second time with `-LitArgs "-sv --param
+RUN_LLD_MAIN_TWICE=1"`, which makes every link run twice in one process (`LLD_IN_TEST=2`), so
+global state of `msil-ld` that is not reset between links (M15's native index, say) fails a
+test. The hosted tests (M15) run with `msil-lit.ps1 -LitArgs:"-sv --param
+msil_glibc_sysroot=C:/llvm-msil-scratch/glibc-sysroot" msil/test/M2/09-hosted` (the colon after
+`-LitArgs`, because the value holds a drive path; see `msil/test/README.md`), or as the `hosted`
+leg of `msil/utils/ci/lit-legs.ps1`.
 
 ### msil-run.ps1 (shared)
 
@@ -128,8 +142,8 @@ pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-syntax.ps1 lld/MSIL/Sym
 ```
 
 A source file that a CMake list gained since the last configure has no entry yet and borrows the
-flags of a TU in its directory, as M14's new `lld/MSIL` files borrowed `Driver.cpp`'s before the
-gate configured them.
+flags of a TU in its directory, as M14's new `lld/MSIL` files (and M15's `NativeLibraries.cpp`)
+borrowed `Driver.cpp`'s before the gate configured them.
 
 ### msil-tblgen.ps1 (no lock)
 

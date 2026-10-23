@@ -1,0 +1,44 @@
+# Matrix case native-callback: qsort called with a C comparator is a named link error until phase 3.
+# One TU sorts an int array with the C library's qsort and a comparator
+# defined in the program (natively the sorted transcript). Native code that
+# calls a '<msil>fn_' address enters managed code without a reverse P/Invoke
+# transition, which needs P3-B's native-callable thunks, so every live
+# reference that native lookup binds to a function of 5.10.14's callback list
+# is a link error after LTO (plan 5.10.10): 'native function 'qsort'
+# (<module>) takes a C function pointer; passing functions to native code
+# needs phase 3 thunks' with '>>> referenced by <file>:(<function>)' lines
+# (plan 5.9.14), never a crash at run time. '<name>' is the symbol that the
+# bitcode references and the module the one qsort binds to (plan 5.10.14 as
+# amended by the section 12 row of 2026-10-22): api-ms-win-crt-utility-l1-1-0.dll
+# through ucrt.lib on windows-msvc (LTO-WIN), libc.so.6 on linux-gnu (LTO-LNX),
+# and the reference is main's. The check runs at -O0 and -O2 on both triples
+# when %{msil_prog} links bitcode; the object link's check comes with M20.
+# Plan 5.9.16 row native-callback (M15 lto, M20 obj; the transcript from
+# P3-B), 5.10.14.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefixes=LTO,%if msil-triple-windows %{LTO-WIN%} %else %{LTO-LNX%} --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="undefined symbol" %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefixes=LTO,%if msil-triple-windows %{LTO-WIN%} %else %{LTO-LNX%} --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="undefined symbol" %}
+# LTO-WIN:  {{^}}msil-ld: error: native function 'qsort' (api-ms-win-crt-utility-l1-1-0.dll) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# LTO-LNX:  {{^}}msil-ld: error: native function 'qsort' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# LTO-NEXT: {{^}}>>> referenced by {{.+}}:(main){{$}}
+# LTO:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- main.c
+#include "msil_test.h"
+
+typedef __SIZE_TYPE__ size_t;
+void qsort(void *base, size_t n, size_t size,
+           int (*cmp)(const void *, const void *));
+
+static int by_value(const void *a, const void *b) {
+  int x = *(const int *)a, y = *(const int *)b;
+  return (x > y) - (x < y);
+}
+
+int main(void) {
+  int v[8] = {42, -7, 19, 0, 1000, -7, 3, 256};
+  qsort(v, 8, sizeof v[0], by_value);
+  for (int i = 0; i < 8; ++i)
+    put_i64(v[i]);
+  return 0;
+}

@@ -50,11 +50,16 @@
 ## input order, so 'maybe' comes before or after main: DAG checks.
 # RUN: msil-ld --lto-emit-asm --lto-O0 maybe-ref.o maybe-def.o -o def-weak.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=DEF --implicit-check-not=undef_maybe --input-file=def-weak.il
+# RUN: FileCheck %s --check-prefix=DEF-NONE --input-file=def-weak.il
 # RUN: msil-ld --lto-emit-asm --lto-O0 maybe-def.o maybe-ref.o -o def-weak2.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=DEF --implicit-check-not=undef_maybe --input-file=def-weak2.il
+# RUN: FileCheck %s --check-prefix=DEF-NONE --input-file=def-weak2.il
 
 # DEF-DAG:  call int32 'maybe'()
 # DEF-DAG:  {{^}}.method {{.*}}static int32 'maybe'() cil managed{{$}}
+## No trap stub anywhere in the file: for a prefix made only of -DAG lines,
+## --implicit-check-not checks only the text before the first match.
+# DEF-NONE-NOT: undef_maybe
 
 ## WEAK-only data is null; a GLOBAL reference anywhere makes it an error.
 # RUN: msil-ld --lto-emit-asm --lto-O0 wdata.o -o wdata.il 2>&1 | count 0

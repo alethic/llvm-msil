@@ -1,0 +1,28 @@
+# -Bstatic accepts only static libraries: a native library that -l would find is an error under it.
+# The test builds native.dll (with its import library native.lib) or
+# libnative.so as native-lib.test does. Linked with '-L%t -lnative' the
+# program binds add3 there (native-lib.test); with -Wl,-Bstatic before
+# -lnative, msil-ld accepts only a static candidate (an archive with bitcode
+# or CIL members, plan 5.10.9), skips the import library, the DLL and the
+# shared object, and reports lld/ELF's 'unable to find library -lnative';
+# -Wl,-Bdynamic restores the default for the driver's default libraries,
+# which follow. This is an msil-ld error before LTO; the check runs where
+# %{msil_prog} links bitcode, as the other link diagnostics of M2 do. Plan
+# 5.10.9 (-Bstatic), 5.10.15, recon tests-p2 3.5, M15.
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %if msil-triple-windows %{ %clang_native -O2 -c %t/native.c -o %t/native.obj && %lld_link -dll -noentry -nodefaultlib %t/native.obj -out:%t/native.dll %} %else %{ %clang_native -O2 -fPIC -c %t/native.c -o %t/native.o && %ld_lld -shared -soname libnative.so %t/native.o -o %t/libnative.so %}
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_libs} = -L%t -Wl,-Bstatic -lnative -Wl,-Bdynamic
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="unable to find library -l{{[^n]}}" %}
+# LTO:      {{^}}msil-ld: error: unable to find library -lnative{{$}}
+# LTO:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- native.c
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT __attribute__((visibility("default")))
+#endif
+EXPORT int add3(int a, int b, int c) { return a + b + c; }
+#--- main.c
+int add3(int a, int b, int c);
+int main(void) { return add3(1, 2, 3); }

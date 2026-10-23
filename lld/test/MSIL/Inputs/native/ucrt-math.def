@@ -1,0 +1,6 @@
+LIBRARY api-ms-win-crt-math-l1-1-0.dll
+EXPORTS
+  sqrt
+  pow
+  floor
+  _hypotf

@@ -1,0 +1,157 @@
+## A native DLL as a link input (ImplementationPlan.md 5.10.8 'PE without a
+## CLI header', 5.10.11 and 5.10.14; recon p2 native-imports 2.4). msil-ld
+## reads the export table (COFFObjectFile::export_directories):
+## - the module is the DLL's file name as found, verbatim, never the Name
+##   field of its export directory (the section 12 row of 2026-10-23 for
+##   5.10.11): lld-link writes pedll.dll into the export directory, and the
+##   same DLL copied to Renamed.DLL or found as other.dll by -lother is
+##   pinvokeimpl("Renamed.DLL") or pinvokeimpl("other.dll");
+## - a named export binds under its name; whether it is data or code is the
+##   exporting section's IMAGE_SCN_CNT_CODE, so dataobj in .data is data:
+##   "'dataobj' in pedll.dll is data, but <file> calls it as a function", and
+##   "importing native data symbol 'dataobj' (pedll.dll) is not supported
+##   yet" when it is used as data (until M20); a call skips the data export
+##   and binds a later library that exports dataobj as code (the section 12
+##   row of 2026-10-22 for 5.10.10, 'a COFF import or PE export of the right
+##   kind'), and the data-call text appears only when none does;
+## - a forwarder (fwd -> KERNEL32.GetTickCount) binds by its own name, which
+##   GetProcAddress follows;
+## - an export without a name (fn2, ordinal 5, NONAME) is invisible to name
+##   lookup, while the DLL's import library, which lld-link writes beside
+##   it, binds it as '#5'.
+## A native PE without an export table defines nothing. The DLL is linked by
+## 'lld-link -dll -noentry' from Inputs/native/coff-code.yaml.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p dlldir
+# RUN: yaml2obj %S/Inputs/native/coff-code.yaml -o code.obj
+# RUN: lld-link -dll -noentry -out:pedll.dll code.obj -export:fn1 -export:fn2,@5,NONAME \
+# RUN:   -export:dataobj,DATA -export:fwd=KERNEL32.GetTickCount
+# RUN: llvm-readobj --coff-exports pedll.dll | FileCheck %s --check-prefix=EXPORTS
+# EXPORTS:      Ordinal: 5
+# EXPORTS-NEXT: Name:{{ *$}}
+# EXPORTS:      Name: dataobj
+# EXPORTS:      Name: fn1
+# EXPORTS:      Name: fwd
+# EXPORTS-NEXT: ForwardedTo: KERNEL32.GetTickCount
+# RUN: cp pedll.dll dlldir/pedll.dll
+# RUN: mkdir -p dd
+# RUN: cp pedll.dll Renamed.DLL
+# RUN: cp pedll.dll dd/other.dll
+## The export directory of the copy still names pedll.dll (its Name string
+## is in .rdata, where lld-link puts the export directory).
+# RUN: llvm-readobj --string-dump=.rdata Renamed.DLL | FileCheck %s --check-prefix=EXPNAME
+# EXPNAME: {{^}}[{{ *[0-9a-f]+}}] pedll.dll{{$}}
+# RUN: %python %S/Inputs/make-pe.py --dll noexports.dll
+# RUN: llvm-as main.ll -o main.o
+# RUN: llvm-as noname.ll -o noname.o
+# RUN: llvm-as call-data.ll -o call-data.o
+# RUN: llvm-as use-data.ll -o use-data.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{il} = FileCheck %s --implicit-check-not='"pedll"' --implicit-check-not='"KERNEL32.dll"' \
+# DEFINE:   --implicit-check-not="public hidebysig static pinvokeimpl"
+
+## On the command line, after a PE without exports, and found by -l.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o noexports.dll pedll.dll -o pos.il 2>&1 | count 0
+# RUN: %{il} --input-file=pos.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=pos.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L dlldir -lpedll -o l.il 2>&1 | count 0
+# RUN: %{il} --input-file=l.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=l.il
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("pedll.dll" cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("pedll.dll" cdecl) int32 'fwd'() cil managed preservesig {}{{$}}
+## The %{il} patterns nowhere in the file: for a prefix made only of -DAG
+## lines, --implicit-check-not checks only the text before the first match.
+# IL-NONE-NOT: "pedll"
+# IL-NONE-NOT: "KERNEL32.dll"
+# IL-NONE-NOT: public hidebysig static pinvokeimpl
+
+## A renamed DLL: its file name as found, whatever its export directory says.
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o Renamed.DLL -o renamed.il 2>&1 | count 0
+# RUN: %{il} --check-prefix=RENAMED -DMOD=Renamed.DLL --input-file=renamed.il
+# RUN: FileCheck %s --check-prefix=NO-PEDLL --input-file=renamed.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=renamed.il
+# RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L dd -lother -o other.il 2>&1 | count 0
+# RUN: %{il} --check-prefix=RENAMED -DMOD=other.dll --input-file=other.il
+# RUN: FileCheck %s --check-prefix=NO-PEDLL --input-file=other.il
+# RUN: FileCheck %s --check-prefix=IL-NONE --input-file=other.il
+# RENAMED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
+# RENAMED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'fwd'() cil managed preservesig {}{{$}}
+# NO-PEDLL-NOT: "pedll.dll"
+# NO-PEDLL-NOT: "pedll"
+
+## The NONAME export: undefined for the DLL, '#5' through its import library.
+# RUN: not msil-ld --lto-emit-asm noname.o pedll.dll -o x.il 2>&1 | %{err} --check-prefix=NONAME-DLL
+# NONAME-DLL:      {{^}}msil-ld: error: undefined symbol: fn2{{$}}
+# NONAME-DLL-NEXT: {{^}}>>> referenced by noname.o:(main){{$}}
+# RUN: msil-ld --lto-emit-asm --lto-O0 noname.o pedll.lib -o noname.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=NONAME-LIB --input-file=noname.il
+# NONAME-LIB: {{^}}.method assembly hidebysig static pinvokeimpl("pedll.dll" as "#5" cdecl) int32 'fn2'() cil managed preservesig {}{{$}}
+
+## Data exports.
+# RUN: not msil-ld --lto-emit-asm call-data.o pedll.dll -o x.il 2>&1 | %{err} --check-prefix=CALL-DATA
+# RUN: not msil-ld --lto-emit-asm use-data.o pedll.dll -o x.il 2>&1 | %{err} --check-prefix=USE-DATA
+# CALL-DATA:      {{^}}msil-ld: error: 'dataobj' in pedll.dll is data, but call-data.o calls it as a function{{$}}
+# CALL-DATA-NEXT: {{^}}>>> referenced by call-data.o:(main){{$}}
+# USE-DATA:       {{^}}msil-ld: error: importing native data symbol 'dataobj' (pedll.dll) is not supported yet{{$}}
+# USE-DATA-NEXT:  {{^}}>>> referenced by use-data.o:(main){{$}}
+
+## A call skips pedll.dll's DATA export and binds other.lib's code import.
+# RUN: llvm-lib /machine:x64 /def:other.def /out:other.lib
+# RUN: msil-ld --lto-emit-asm --lto-O0 call-data.o pedll.dll other.lib -o skip.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=SKIP-DATA --implicit-check-not='"pedll.dll"' --input-file=skip.il
+# SKIP-DATA: {{^}}.method assembly hidebysig static pinvokeimpl("other.dll" cdecl) int32 'dataobj'() cil managed preservesig {}{{$}}
+
+#--- other.def
+LIBRARY other.dll
+EXPORTS
+  dataobj
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %a = call i32 @fn1()
+  %b = call i32 @fwd()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+declare i32 @fn1()
+declare i32 @fwd()
+
+#--- noname.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @fn2()
+  ret i32 %r
+}
+
+declare i32 @fn2()
+
+#--- call-data.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @dataobj()
+  ret i32 %r
+}
+
+declare i32 @dataobj()
+
+#--- use-data.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@dataobj = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @dataobj
+  ret i32 %v
+}

@@ -2,10 +2,12 @@
 ## the file's stem: <name>/response.txt (the command line, input paths
 ## rewritten to the tar's tree by lld/Common/Reproduce.cpp, -o reduced to its
 ## file name), <name>/version.txt, and every file msil-ld read: here the
-## objects and the archives, also those found by -l. Paths use '/' on every
-## host. Only the listing, response.txt and version.txt are read back, so the
-## tree's long paths are never extracted (lld's reproduce tests are not run on
-## Windows for that reason).
+## objects and the archives, also those found by -l, and from M15 the native
+## libraries (a linker script found by -l and the shared object it names,
+## an import library; 5.10.8 'Every file is read through the driver').
+## Paths use '/' on every host. Only the listing, response.txt and
+## version.txt are read back, so the tree's long paths are never extracted
+## (lld's reproduce tests are not run on Windows for that reason).
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: mkdir -p build/lib
@@ -53,6 +55,26 @@
 # RUN: msil-ld --lto-emit-asm build/main.o -L build/lib -lhelper -o plain/prog.il 2>&1 | count 0
 # RUN: cmp build/prog.il plain/prog.il
 
+## Native libraries.
+# RUN: mkdir -p lnx/lib
+# RUN: llvm-as lnx-main.ll -o lnx/main.o
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o \
+# RUN:   -o lnx/lib/libc.so.6
+# RUN: cp libc.so.txt lnx/lib/libc.so
+# RUN: msil-ld --lto-emit-asm lnx/main.o -L lnx/lib -lc -o lnx/prog.il --reproduce=native.tar 2>&1 | count 0
+# RUN: tar tf native.tar | FileCheck %s --check-prefix=NATIVE-TAR -DPATH='native/%:t'
+# NATIVE-TAR-DAG: {{^}}[[PATH]]/lnx/main.o{{$}}
+# NATIVE-TAR-DAG: {{^}}[[PATH]]/lnx/lib/libc.so{{$}}
+# NATIVE-TAR-DAG: {{^}}[[PATH]]/lnx/lib/libc.so.6{{$}}
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-stdio.def /out:build/lib/ucrt.lib
+# RUN: llvm-as hello.ll -o build/hello.o
+# RUN: msil-ld --lto-emit-asm build/hello.o -L build/lib -lucrt -o build/hello.il --reproduce=win.tar 2>&1 \
+# RUN:   | count 0
+# RUN: tar tf win.tar | FileCheck %s --check-prefix=WIN-TAR -DPATH='win/%:t'
+# WIN-TAR-DAG: {{^}}[[PATH]]/build/hello.o{{$}}
+# WIN-TAR-DAG: {{^}}[[PATH]]/build/lib/ucrt.lib{{$}}
+
 #--- main.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc-msil"
@@ -71,3 +93,33 @@ target triple = "x86_64-pc-windows-msvc-msil"
 define i32 @helper() {
   ret i32 4
 }
+
+#--- libc.so.txt
+/* A linker script whose input lies in its own directory. */
+GROUP ( libc.so.6 )
+
+#--- lnx-main.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  ret i32 0
+}
+
+declare i32 @puts(ptr)
+
+#--- hello.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  ret i32 0
+}
+
+declare i32 @puts(ptr)

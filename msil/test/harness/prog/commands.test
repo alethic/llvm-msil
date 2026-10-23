@@ -6,21 +6,27 @@
 #     (-fno-ms-volatile on windows-msvc only); each archive member into
 #     ar/<NAME>/ and 'rcs ar/<NAME>/lib<NAME>.a' in member order; the link
 #     through the clang driver with --ld-path=<msil-ld>, -<L>,
-#     %{msil_ldflags}, the objects, the stock objects, -Lar/<NAME> -l<NAME>,
-#     the --lib arguments in order, -Wl,--lto-emit-asm and -o prog.il; then
-#     ilasm -exe of prog.il into --out, and --also-il copies prog.il;
+#     %{msil_ldflags} (from M15 no -nodefaultlibs: empty on a Windows triple,
+#     --sysroot=<msil_linux_sysroot> on a Linux triple), the objects, the
+#     stock objects, -Lar/<NAME> -l<NAME>, the --lib arguments in order, the
+#     --native-lib arguments (%{msil_native_libs}), -Wl,--lto-emit-asm and
+#     -o prog.il; then ilasm -exe of prog.il into --out, and --also-il copies
+#     prog.il;
 # (2) native mode through the driver for a Linux triple: ordinary compiles
 #     for the native triple (no -flto, also for stock sources and members),
-#     archives lib<NAME>.a, and -fuse-ld=lld with %{msil_native_ldflags} at
-#     the end and no MSIL link argument;
+#     archives lib<NAME>.a, and -fuse-ld=lld with the --native-lib arguments
+#     and then %{msil_native_ldflags} at the end and no MSIL link argument;
 # (3) the same for windows-msvc, where the archive is <NAME>.lib (the MSVC
 #     driver turns -l<NAME> into <NAME>.lib); a Windows host only, because
 #     the stand-in's Windows program is a .NET Framework executable;
 # (4) native mode with the E7 Linux oracle (plan 5.12.8): compiles for
 #     x86_64-unknown-linux-gnu with -fno-pic, start.c compiled as the E7
 #     oracle compiles it, and ld.lld -dynamic-linker
-#     /lib64/ld-linux-x86-64.so.2 --as-needed start.o <objects> <archives>
-#     followed by the sysroot's libm.so.6, libc.so.6 and libgcc_s.so.1.
+#     /lib64/ld-linux-x86-64.so.2 --as-needed -rpath $ORIGIN start.o
+#     <objects> <archives> <the --native-lib arguments, -Wl,A,B written as
+#     A B> followed by the sysroot's libm.so.6, libc.so.6 and libgcc_s.so.1
+#     (-rpath $ORIGIN: a test-built shared library that msil-run.py --dep
+#     copies next to the program is found there; M15).
 # The later --triple, --native-ldflags, --ld-lld, --linux-sysroot and
 # --start options win over those of %msil_prog_build, which names the E7
 # oracle under the WSL runner; empty ones cancel them for (2) and (3).
@@ -32,31 +38,34 @@
 # RUN: %{harness_check} write %t/sysroot/usr/lib/x86_64-linux-gnu/libgcc_s.so.1
 
 # (1)
-# RUN: %msil_prog_build --level O1 --workdir %t/m --out %t/m/prog.exe --also-il %t/also.il --src %t/main.c %t/util.c --stock-src %t/stock.c --archives='one=%t/a1.c,stock:%t/a2.c' --lib='-Wl,--stand-in-extra -Wl,--another' > %t/m.log 2>&1
+# RUN: %msil_prog_build --level O1 --workdir %t/m --out %t/m/prog.exe --also-il %t/also.il --src %t/main.c %t/util.c --stock-src %t/stock.c --archives='one=%t/a1.c,stock:%t/a2.c' --lib='-Wl,--stand-in-extra -Wl,--another' --native-lib='-Wl,--stand-in-native' > %t/m.log 2>&1
 # RUN: %{harness_check} contains %t/m.log "^msil-prog: .*prog-cc\.py\"? --as cc .*--target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \"?-I\S*Inputs\"? -O1 -flto -c \.\./main\.c -o obj/main\.o$" "^msil-prog: .*prog-cc\.py\"? --as cc .*--target=\S+-msil -std=gnu17 \S.* -O1 -flto -c \.\./util\.c -o obj/util\.o$"
 # RUN: %if msil-triple-windows %{ %{harness_check} contains %t/m.log "^msil-prog: .* --as cc .*--target=x86_64-pc-windows-msvc -std=gnu17 \S.* -O1 -flto -fno-ms-volatile -c \.\./stock\.c -o stock/stock\.o$" "^msil-prog: .* --as cc .*--target=x86_64-pc-windows-msvc -std=gnu17 \S.* -O1 -flto -fno-ms-volatile -c \.\./a2\.c -o ar/one/a2\.o$" %}
 # RUN: %if msil-triple-linux %{ %{harness_check} contains %t/m.log "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -std=gnu17 \S.* -O1 -flto -c \.\./stock\.c -o stock/stock\.o$" "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -std=gnu17 \S.* -O1 -flto -c \.\./a2\.c -o ar/one/a2\.o$" %}
 # RUN: %{harness_check} contains %t/m.log "^msil-prog: .* --as cc .*--target=\S+-msil -std=gnu17 \S.* -O1 -flto -c \.\./a1\.c -o ar/one/a1\.o$" "^msil-prog: .* --as ar rcs ar/one/libone\.a ar/one/a1\.o ar/one/a2\.o$"
-# RUN: %{harness_check} contains %t/m.log "^msil-prog: .* --as cc .*--target=\S+-msil --ld-path=\S+ -O1 -nodefaultlibs obj/main\.o obj/util\.o stock/stock\.o -Lar/one -lone -Wl,--stand-in-extra -Wl,--another -Wl,--lto-emit-asm -o prog\.il$"
+# RUN: %if msil-triple-windows || !msil-linux-sysroot %{ %{harness_check} contains %t/m.log "^msil-prog: .* --as cc .*--target=\S+-msil --ld-path=\S+ -O1 obj/main\.o obj/util\.o stock/stock\.o -Lar/one -lone -Wl,--stand-in-extra -Wl,--another -Wl,--stand-in-native -Wl,--lto-emit-asm -o prog\.il$" %}
+# RUN: %if msil-triple-linux && msil-linux-sysroot %{ %{harness_check} contains %t/m.log "^msil-prog: .* --as cc .*--target=\S+-msil --ld-path=\S+ -O1 --sysroot=\S+ obj/main\.o obj/util\.o stock/stock\.o -Lar/one -lone -Wl,--stand-in-extra -Wl,--another -Wl,--stand-in-native -Wl,--lto-emit-asm -o prog\.il$" %}
+# RUN: %if msil-triple-windows %{ %{harness_check} lacks %t/m.log "--sysroot" %}
 # RUN: %{harness_check} contains %t/m.log "^msil-prog: .*msil-run\.py\"? --tool .* -nologo -quiet( -pe64 -x64)? -exe -output=\S+prog\.exe \S+prog\.il$"
-# RUN: %{harness_check} lacks %t/m.log "fuse-ld" "-fdebug-compilation-dir" "msil-prog: error"
+# RUN: %{harness_check} lacks %t/m.log "fuse-ld" "-fdebug-compilation-dir" "msil-prog: error" "nodefaultlibs"
+# RUN: %{harness_check} contains %t/m/prog.il.inputs "^arg -Wl,--another\narg -Wl,--stand-in-native\nld-path "
 # RUN: %{harness_check} contains %t/also.il "^\.assembly 'prog' " "ldc\.i4 31$"
 
 # (2)
-# RUN: %msil_prog_build --mode native --triple x86_64-unknown-linux-gnu-msil --ld-lld= --linux-sysroot= --start= --native-ldflags=-lm --level O2 --workdir %t/n --out %t/n/prog.exe --src %t/main.c %t/util.c --stock-src %t/stock.c --archives='one=%t/a1.c,stock:%t/a2.c' --lib='-Wl,--stand-in-extra' > %t/n.log 2>&1
+# RUN: %msil_prog_build --mode native --triple x86_64-unknown-linux-gnu-msil --ld-lld= --linux-sysroot= --start= --native-ldflags=-lm --level O2 --workdir %t/n --out %t/n/prog.exe --src %t/main.c %t/util.c --stock-src %t/stock.c --archives='one=%t/a1.c,stock:%t/a2.c' --lib='-Wl,--stand-in-extra' --native-lib='-Wl,--stand-in-native' > %t/n.log 2>&1
 # RUN: %{harness_check} contains %t/n.log "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -std=gnu17 \S.* -O2 -c \.\./main\.c -o obj/main\.o$" "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -std=gnu17 \S.* -O2 -c \.\./stock\.c -o stock/stock\.o$" "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -std=gnu17 \S.* -O2 -c \.\./a2\.c -o ar/one/a2\.o$" "^msil-prog: .* --as ar rcs ar/one/libone\.a ar/one/a1\.o ar/one/a2\.o$"
-# RUN: %{harness_check} contains %t/n.log "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -fuse-ld=lld obj/main\.o obj/util\.o stock/stock\.o -Lar/one -lone -lm -o \S+prog\.exe$"
-# RUN: %{harness_check} lacks %t/n.log "-flto" "-fno-ms-volatile" "stand-in-extra" "nodefaultlibs" "lto-emit-asm" "--ld-path" "ilasm\.exe\"? -nologo"
-# RUN: %{harness_check} contains %t/n/prog.exe.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/libone\.a a1\.o 8\nmember ar/one/libone\.a a2\.o 16\narg -lm\n\Z"
+# RUN: %{harness_check} contains %t/n.log "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -fuse-ld=lld obj/main\.o obj/util\.o stock/stock\.o -Lar/one -lone -Wl,--stand-in-native -lm -o \S+prog\.exe$"
+# RUN: %{harness_check} lacks %t/n.log "-flto" "-fno-ms-volatile" "stand-in-extra" "nodefaultlibs" "--sysroot" "lto-emit-asm" "--ld-path" "ilasm\.exe\"? -nologo"
+# RUN: %{harness_check} contains %t/n/prog.exe.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/libone\.a a1\.o 8\nmember ar/one/libone\.a a2\.o 16\narg -Wl,--stand-in-native\narg -lm\n\Z"
 
 # (3)
-# RUN: %if system-windows %{ %msil_prog_build --mode native --triple x86_64-pc-windows-msvc-msil --ld-lld= --linux-sysroot= --start= --native-ldflags=-lD:/rt/clang_rt.builtins-x86_64.lib --level O0 --workdir %t/w --out %t/w/prog.exe --src %t/main.c --archives='one=%t/a1.c' > %t/w.log 2>&1 %}
-# RUN: %if system-windows %{ %{harness_check} contains %t/w.log "^msil-prog: .* --as ar rcs ar/one/one\.lib ar/one/a1\.o$" "^msil-prog: .* --as cc .*--target=x86_64-pc-windows-msvc -fuse-ld=lld obj/main\.o -Lar/one -lone -lD:/rt/clang_rt\.builtins-x86_64\.lib -o \S+prog\.exe$" %}
+# RUN: %if system-windows %{ %msil_prog_build --mode native --triple x86_64-pc-windows-msvc-msil --ld-lld= --linux-sysroot= --start= --native-ldflags=-lD:/rt/clang_rt.builtins-x86_64.lib --level O0 --workdir %t/w --out %t/w/prog.exe --src %t/main.c --archives='one=%t/a1.c' --native-lib='-Wl,--stand-in-native' > %t/w.log 2>&1 %}
+# RUN: %if system-windows %{ %{harness_check} contains %t/w.log "^msil-prog: .* --as ar rcs ar/one/one\.lib ar/one/a1\.o$" "^msil-prog: .* --as cc .*--target=x86_64-pc-windows-msvc -fuse-ld=lld obj/main\.o -Lar/one -lone -Wl,--stand-in-native -lD:/rt/clang_rt\.builtins-x86_64\.lib -o \S+prog\.exe$" %}
 
 # (4)
-# RUN: %msil_prog_build --mode native --triple x86_64-unknown-linux-gnu-msil --ld-lld='%{prog_cc} --as ld-lld' --linux-sysroot=%t/sysroot --start=%S/../../../utils/linux-oracle/start.c --level O3 --workdir %t/e --out %t/e/prog.elf --src %t/main.c %t/util.c --archives='one=%t/a1.c' > %t/e.log 2>&1
+# RUN: %msil_prog_build --mode native --triple x86_64-unknown-linux-gnu-msil --ld-lld='%{prog_cc} --as ld-lld' --linux-sysroot=%t/sysroot --start=%S/../../../utils/linux-oracle/start.c --level O3 --workdir %t/e --out %t/e/prog.elf --src %t/main.c %t/util.c --archives='one=%t/a1.c' --native-lib='-Wl,--stand-in-native,--second' > %t/e.log 2>&1
 # RUN: %{harness_check} contains %t/e.log "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -fno-pic -std=gnu17 \S.* -O3 -c \.\./main\.c -o obj/main\.o$" "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -ffreestanding -fno-pic -O2 -c \S+start\.c -o start\.o$" "^msil-prog: .* --as ar rcs ar/one/libone\.a ar/one/a1\.o$"
-# RUN: %{harness_check} contains %t/e.log "^msil-prog: .* --as ld-lld -dynamic-linker /lib64/ld-linux-x86-64\.so\.2 --as-needed start\.o obj/main\.o obj/util\.o -Lar/one -lone \S+sysroot.usr.lib.x86_64-linux-gnu.libm\.so\.6 \S+sysroot.usr.lib.x86_64-linux-gnu.libc\.so\.6 \S+sysroot.usr.lib.x86_64-linux-gnu.libgcc_s\.so\.1 -o \S+prog\.elf$"
+# RUN: %{harness_check} contains %t/e.log "^msil-prog: .* --as ld-lld -dynamic-linker /lib64/ld-linux-x86-64\.so\.2 --as-needed -rpath [$]ORIGIN start\.o obj/main\.o obj/util\.o -Lar/one -lone --stand-in-native --second \S+sysroot.usr.lib.x86_64-linux-gnu.libm\.so\.6 \S+sysroot.usr.lib.x86_64-linux-gnu.libc\.so\.6 \S+sysroot.usr.lib.x86_64-linux-gnu.libgcc_s\.so\.1 -o \S+prog\.elf$"
 # RUN: %{harness_check} lacks %t/e.log "fuse-ld" "-flto" "msil-prog: error"
 # RUN: %{harness_check} contains %t/e/prog.elf "\A#!/bin/sh\nexit 11\n\Z"
 

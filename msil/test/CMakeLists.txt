@@ -52,9 +52,12 @@ endforeach()
 # check-msil also runs lld/test/MSIL, which needs lld (it makes msil-ld too),
 # llvm-as, llvm-ar and the llvm-lib and llvm-dlltool copies of llvm-ar for its
 # inputs, and llvm/test/CodeGen/MSIL/irsymtab-linker-options.ll, which needs
-# llvm-as and llvm-bcanalyzer (M13, M14).
+# llvm-as and llvm-bcanalyzer (M13, M14). M15's native-library tests in
+# lld/test/MSIL also need yaml2obj, llvm-mc and llvm-readobj to make and
+# inspect their native inputs.
 set(_msil_check_deps ${MSIL_TEST_DEPS})
-foreach(_msil_dep llvm-as llvm-bcanalyzer llvm-lib llvm-dlltool)
+foreach(_msil_dep llvm-as llvm-bcanalyzer llvm-lib llvm-dlltool yaml2obj
+    llvm-mc llvm-readobj)
   if(TARGET ${_msil_dep})
     list(APPEND _msil_check_deps ${_msil_dep})
   endif()
