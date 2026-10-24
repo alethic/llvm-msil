@@ -1,14 +1,17 @@
 # --param msil_require_verify=1 (every gate passes it, plan D38) turns a
-# missing verifier into a configuration error instead of silently dropping
-# the step: a nested lit with ILVerify disabled ('--param msil_ilverify=')
-# stops with lit's fatal-error status 2 and names ILVerify. The control run
+# missing verifier or canonical lister into a configuration error instead of
+# silently dropping the step: a nested lit with ILVerify disabled
+# ('--param msil_ilverify=') or mdcanon disabled ('--param msil_mdcanon=')
+# stops with lit's fatal-error status 2 and names the tool. The control run
 # with every tool present loads and passes, so this needs every tool that
 # msil_require_verify=1 demands; without one of them the test is UNSUPPORTED
 # (plan M0: optional tools degrade to UNSUPPORTED).
-# REQUIRES: msil-ilverify, msil-ildasm, msil-jitall
+# REQUIRES: msil-ilverify, msil-ildasm, msil-jitall, msil-mdcanon
 # REQUIRES: msil-peverify || !system-windows
 
 # RUN: %{harness_lit} --param msil_require_verify=1 %S/Inputs/nested-ok > %t.ok.log 2>&1
 # RUN: %{harness_check} contains %t.ok.log "^PASS: MSIL :: harness/Inputs/nested-ok/exit-42\.test"
 # RUN: %{harness_check} exits 2 %{harness_lit} --param msil_require_verify=1 --param msil_ilverify= %S/Inputs/nested-ok > %t.ilverify.log 2>&1
 # RUN: %{harness_check} contains %t.ilverify.log "fatal: .*msil_require_verify=1" "ILVerify"
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_require_verify=1 --param msil_mdcanon= %S/Inputs/nested-ok > %t.mdcanon.log 2>&1
+# RUN: %{harness_check} contains %t.mdcanon.log "fatal: .*msil_require_verify=1" "mdcanon"

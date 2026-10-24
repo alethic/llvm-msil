@@ -25,7 +25,10 @@
 # --sysroot=<msil_linux_sysroot>), a test adds its own native libraries to
 # both builds with %{msil_native_libs} and ships run-time files with each
 # run with %{msil_deps}, and msil_glibc_sysroot enables the optional hosted
-# compile-only tests of msil/test/M2/09-hosted (plan Q16).
+# compile-only tests of msil/test/M2/09-hosted (plan Q16). From M16,
+# %msil_canon prints the canonical listing of an assembly (plan 5.7.10,
+# 5.12.3; mdcanon, see "mdcanon" below), which harness/canon-listing.test
+# pins and later milestones compare.
 #
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
@@ -42,8 +45,8 @@
 # themselves UNSUPPORTED, so check-all keeps working everywhere. Exceptions:
 # --param msil_require_verify=1 (every gate passes it, plan D38) makes a
 # missing ILVerify, ildasm (msil-verify.py's neutralized pass), jitall,
-# (on Windows) PEVerify, ilasm or .NET runtime for the selected runner a
-# configuration error, even when an empty --param msil_<tool>= or
+# mdcanon, (on Windows) PEVerify, ilasm or .NET runtime for the selected
+# runner a configuration error, even when an empty --param msil_<tool>= or
 # $MSIL_<TOOL> disabled it on purpose, so a gate never passes with its
 # verification or every harness test UNSUPPORTED; --param msil_require_exec=1
 # (the gate legs of msil/utils/ci pass it) does the same for msil-exec, which
@@ -882,6 +885,91 @@ if jitall_param != "":
             % (jitall_dir, runner)
         )
 
+# ---------------------------------------------------------------- mdcanon
+# mdcanon (msil/utils/mdtools/mdcanon.cs, plan 5.7.11) prints canonical
+# listing v1 (plan 5.7.10), the layout-independent text of an assembly's
+# metadata and IL, over System.Reflection.Metadata; from M17 llvm-cil-dump
+# --canonical prints the same text. --param msil_mdcanon (plan 5.12.2):
+# unset, lit builds mdump and mdcanon into <build>/tools/msil/mdtools with
+# msil/utils/mdtools/build-mdtools.py, offline and only when a source
+# changed, as it builds jitall; a directory names a build of the tools that
+# lit uses as it is (it must hold mdcanon.dll and its runtimeconfig.json);
+# empty disables mdcanon. Feature msil-mdcanon. mdcanon only reads files, so
+# it runs on the host's dotnet (any runtime from the runtimeconfig's major
+# on, rollForward Major), also with msil_runner=wsl. Under
+# msil_require_verify=1 a failed build is a configuration error, and so is
+# an mdcanon that is disabled or cannot run (see below).
+mdcanon_param = params.get("msil_mdcanon")
+mdcanon_dir = None
+mdcanon_why = None  # why the feature msil-mdcanon is missing
+build_mdtools = os.path.join(utils_dir, "mdtools", "build-mdtools.py")
+if mdcanon_param == "":
+    mdcanon_why = "disabled by an empty --param msil_mdcanon="
+elif mdcanon_param:
+    mdcanon_dir = os.path.abspath(mdcanon_param)
+else:
+    mdcanon_dir = os.path.join(config.llvm_obj_root, "tools", "msil", "mdtools")
+    if not dotnet:
+        mdcanon_why = "no dotnet host to build and run it"
+    elif not os.path.isfile(build_mdtools):
+        mdcanon_why = "%s is missing" % slashes(build_mdtools)
+    else:
+        rc, out = run_quietly(
+            [sys.executable, build_mdtools, "--out", mdcanon_dir, "--dotnet", dotnet],
+            600,
+        )
+        if rc == 0:
+            note(out.strip().replace("\n", "; "))
+        else:
+            msg = "msil: %s failed (status %s):\n%s" % (build_mdtools, rc, out)
+            if require_verify:
+                lit_config.fatal(
+                    msg + "\nmsil_require_verify=1 makes a failed mdtools build a "
+                    "configuration error (plan 5.12.2)"
+                )
+            lit_config.warning(msg)
+            # What the directory holds may predate the sources: not used.
+            mdcanon_why = "build-mdtools.py failed (see the warning above)"
+mdcanon_dll = mdcanon_config = None
+if mdcanon_dir and not mdcanon_why:
+    mdcanon_dll = os.path.join(mdcanon_dir, "mdcanon.dll")
+    mdcanon_config = os.path.join(mdcanon_dir, "mdcanon.runtimeconfig.json")
+    lacking = [p for p in (mdcanon_dll, mdcanon_config) if not os.path.isfile(p)]
+    if lacking and mdcanon_param:
+        fatal(
+            "--param msil_mdcanon=%s has no %s; build the tools there with "
+            "'python %s --out %s'"
+            % (
+                mdcanon_param,
+                " or ".join(os.path.basename(p) for p in lacking),
+                slashes(build_mdtools),
+                slashes(mdcanon_dir),
+            )
+        )
+    if lacking:
+        mdcanon_why = "%s was not built" % slashes(mdcanon_dll)
+    elif not dotnet:
+        mdcanon_why = "no dotnet host to run it"
+    else:
+        # The runtimeconfig names Microsoft.NETCore.App <major>.0.0 with
+        # rollForward Major: any host runtime of that major or newer runs it.
+        try:
+            with open(mdcanon_config, encoding="utf-8") as f:
+                framework = json.load(f)["runtimeOptions"]["framework"]
+            need = version_key(framework["version"])[0]
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            fatal("cannot read %s: %s" % (slashes(mdcanon_config), e))
+        if any(major >= need for major in local_runtimes):
+            features.add("msil-mdcanon")
+            note("mdcanon: %s (host dotnet %s)" % (slashes(mdcanon_dll), dotnet))
+        else:
+            mdcanon_why = (
+                "the host dotnet %s has no Microsoft.NETCore.App %d.x or newer "
+                "for it" % (dotnet, need)
+            )
+if mdcanon_why:
+    note("mdcanon is not available: " + mdcanon_why)
+
 if require_verify:
     # Name the tool and what fixes it. An explicitly empty override is still
     # an error here: a gate must not pass with a step switched off.
@@ -919,6 +1007,19 @@ if require_verify:
                 if jitall_param == ""
                 else "",
                 slashes(os.path.join(utils_dir, "jitall", "build-jitall.py")),
+            )
+        )
+    if "msil-mdcanon" not in features:
+        missing.append(
+            "mdcanon%s: %s; build it with 'python %s' (a .NET SDK and the "
+            "Microsoft.NETCore.App.Ref 8.x targeting pack) or pass "
+            "--param msil_mdcanon=DIR"
+            % (
+                " (%s/mdcanon.dll, run on the host)" % slashes(mdcanon_dir)
+                if mdcanon_dir
+                else "",
+                mdcanon_why,
+                slashes(build_mdtools),
             )
         )
     if is_windows and "msil-peverify" not in features:
@@ -1442,6 +1543,22 @@ else:
         jitall_cmd += " --runtimeconfig " + quote(local_runtimeconfig)
 jitall_cmd += env_args
 
+# %msil_mdcanon (plan 5.12.3): mdcanon on the host's dotnet, under the limits
+# of every other tool; callers add the options and files. %msil_canon is the
+# canonical listing a test compares: mdcanon until M17, which makes it
+# 'llvm-cil-dump --canonical' when the feature msil-cil-dump is present.
+# Without msil-mdcanon the command names a placeholder, so a test that runs
+# it without 'REQUIRES: msil-mdcanon' fails instead of passing.
+have_mdcanon = "msil-mdcanon" in features
+mdcanon_cmd = "%s --tool%s -- %s exec --runtimeconfig %s %s" % (
+    script("msil-run.py"),
+    limits,
+    quote(dotnet if have_mdcanon else "dotnet-not-found"),
+    quote(mdcanon_config if have_mdcanon else "mdcanon-not-found.runtimeconfig.json"),
+    quote(mdcanon_dll if have_mdcanon else "mdcanon-not-found.dll"),
+)
+canon_cmd = mdcanon_cmd
+
 # Without msil_roundtrip=1 nothing runs it (the composites test the feature),
 # and msil-verify.py rejects --roundtrip without the tools.
 roundtrip_cmd = script("msil-verify.py") + " --roundtrip"
@@ -1822,6 +1939,8 @@ substitutions = [
     ("%msil_verify", verify_cmd),
     ("%msil_jitall", jitall_cmd),
     ("%msil_roundtrip", roundtrip_cmd),
+    ("%msil_mdcanon", mdcanon_cmd),
+    ("%msil_canon", canon_cmd),
     ("%msil_inputs", slashes(inputs_dir)),
 ]
 # lit treats each name as a regular expression; none of these names contains a

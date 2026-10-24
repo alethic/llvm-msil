@@ -1,0 +1,431 @@
+# %msil_canon and %msil_mdcanon (plan 5.12.3; M16): canonical listing v1 of
+# an assembly (plan 5.7.10), the layout-independent text that later
+# milestones compare between assemblers, dumpers and linkers. Until M17
+# %msil_canon is mdcanon (msil/utils/mdtools/mdcanon.cs, plan 5.7.11) on the
+# host's dotnet; from M17 it is llvm-cil-dump --canonical, which must print
+# the same bytes. Inputs/canon-listing.il has one of each construct that the
+# 5.12.6 normalizations act on and more (its header comment lists them); it
+# is assembled with %ilasm -dll and listed three times:
+# (DEF)  the default options: header lines in 5.7.10's order, members sorted
+#        by name and signature, operands and clauses as 5.7.10 spells them;
+# (DECL) --order=decl --forms=canon: members in table order, short branches
+#        and ldc.i4.s in their long forms;
+# (NORM) the five plan 5.12.6 normalizations that an ilasm image exercises:
+#        hash=* (--assembly-hash=ignore), no .param line for a Param row with
+#        Flags 0 (--params=drop; the [opt] one stays), no ' initlocals'
+#        without .locals (--initlocals=ignore-without-locals), '*' for the
+#        P/Invoke module and no moduleref line (--pinvoke-module=strip), and
+#        the P/Invoke method's access bits cleared (--pinvoke-access=ignore).
+#        --snan=quiet needs an image with a float32 signaling NaN, which ilasm
+#        never writes (M17.f patches one).
+# The second input, coverage.il at the end of this file (split-file), has the
+# rest of what the listing prints; its header comment lists it. %python
+# prepends the UTF-8 BOM that ilasm needs to read the names a～ and a😀 as
+# UTF-8, and it is assembled with %ilasm -exe and listed so:
+# (COV)   the default options: the entrypoint header line, a namespaced class
+#         with a nested class, an interface, a literal field and a property,
+#         an explicit layout, escaped names, UTF-8 (not UTF-16) name order,
+#         general arrays as plan section 12's row '5.7.10 amended (`<type>` in
+#         signatures, general arrays)' spells them, float and negative integer
+#         operands, a MethodSpec, TypeSpec and nested TypeRef tokens, an
+#         escaped ldstr, and a filter and a finally clause;
+# (STRIP) --scopes=strip: '[*]' for AssemblyRef scopes, in signatures too,
+#         no '[mscorlib]' left and no assemblyref line (one line fewer);
+# (STATS) --stats-only: a line per present table in id order, the four heaps
+#         and the image; the numbers are regexes, because they depend on the
+#         ilasm (Framework or NuGet). --stats appends exactly these lines to
+#         the default listing.
+# The expected lines were written from 5.7.10, 5.12.6 and that row; the
+# Framework and the NuGet ilasm's images both give them. FileCheck runs with
+# --match-full-lines --strict-whitespace, so a pattern starts right after
+# the colon and pins the indentation, and each listing's line count pins its
+# end. Last, %msil_mdcanon --out-dir (one process for many files) must write
+# the same bytes as the default listings on stdout.
+# REQUIRES: msil-mdcanon
+
+# RUN: rm -rf %t.d && split-file %s %t.d
+# RUN: %ilasm -dll -output=%t.d/canon.dll %S/Inputs/canon-listing.il
+# RUN: %msil_canon %t.d/canon.dll > %t.d/default.canon
+# RUN: FileCheck --input-file=%t.d/default.canon %s --check-prefix=DEF --match-full-lines --strict-whitespace
+# RUN: count 44 < %t.d/default.canon
+# RUN: %msil_canon --order=decl --forms=canon %t.d/canon.dll > %t.d/decl.canon
+# RUN: FileCheck --input-file=%t.d/decl.canon %s --check-prefix=DECL --match-full-lines --strict-whitespace
+# RUN: count 44 < %t.d/decl.canon
+# RUN: %msil_canon --assembly-hash=ignore --params=drop --initlocals=ignore-without-locals --pinvoke-module=strip --pinvoke-access=ignore %t.d/canon.dll > %t.d/norm.canon
+# RUN: FileCheck --input-file=%t.d/norm.canon %s --check-prefix=NORM --match-full-lines --strict-whitespace
+# RUN: count 41 < %t.d/norm.canon
+# RUN: %python -c "import sys; d = open(sys.argv[1], 'rb').read(); open(sys.argv[2], 'wb').write(b'\xef\xbb\xbf' + d)" %t.d/coverage.il %t.d/coverage-bom.il
+# RUN: %ilasm -exe -output=%t.d/coverage.exe %t.d/coverage-bom.il
+# RUN: %msil_canon %t.d/coverage.exe > %t.d/coverage.canon
+# RUN: FileCheck --input-file=%t.d/coverage.canon %s --check-prefix=COV --match-full-lines --strict-whitespace
+# RUN: count 79 < %t.d/coverage.canon
+# RUN: %msil_canon --scopes=strip %t.d/coverage.exe > %t.d/strip.canon
+# RUN: FileCheck --input-file=%t.d/strip.canon %s --check-prefix=STRIP --match-full-lines --strict-whitespace --implicit-check-not=assemblyref '--implicit-check-not=[mscorlib]'
+# RUN: count 78 < %t.d/strip.canon
+# RUN: %msil_canon --stats-only %t.d/coverage.exe > %t.d/stats.canon
+# RUN: FileCheck --input-file=%t.d/stats.canon %s --check-prefix=STATS --match-full-lines --strict-whitespace
+# RUN: count 24 < %t.d/stats.canon
+# RUN: %msil_canon --stats %t.d/coverage.exe > %t.d/stats-append.canon
+# RUN: cat %t.d/coverage.canon %t.d/stats.canon > %t.d/stats-expected.canon
+# RUN: diff %t.d/stats-expected.canon %t.d/stats-append.canon
+# RUN: %msil_mdcanon --out-dir %t.d/out %t.d/canon.dll %t.d/coverage.exe
+# RUN: diff %t.d/default.canon %t.d/out/canon.dll.canon
+# RUN: diff %t.d/coverage.canon %t.d/out/coverage.exe.canon
+
+# DEF:pe PE32+ machine=0x{{[0-9A-F]+}} dll subsystem=3
+# DEF-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# DEF-NEXT:assembly 'canon' ver 1.2.3.4 flags=0x00000000 hash=0x00008004 culture='' key=-
+# DEF-NEXT:module 'canon.dll'
+# DEF-NEXT:assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# DEF-NEXT:moduleref 'libc'
+# DEF-EMPTY:
+# DEF-NEXT:.class '<Module>' flags=0x00000000
+# DEF-NEXT:  .field 'rva' int64 flags=0x0116
+# DEF-NEXT:    .data 8 bytes
+# DEF-NEXT:      01 02 03 04 05 06 07 08
+# DEF-NEXT:  .method 'guarded' int32() flags=0x0016 impl=0x0000
+# DEF-NEXT:    .maxstack 1 initlocals
+# DEF-NEXT:    .locals (int32)
+# DEF-NEXT:    L0: ldsfld int64 '<Module>'::'rva'
+# DEF-NEXT:    L1: conv.i4
+# DEF-NEXT:    L2: stloc.0
+# DEF-NEXT:    L3: leave.s L8
+# DEF-NEXT:    L4: pop
+# DEF-NEXT:    L5: ldc.i4.m1
+# DEF-NEXT:    L6: stloc.0
+# DEF-NEXT:    L7: leave.s L8
+# DEF-NEXT:    L8: ldloc.0
+# DEF-NEXT:    L9: ret
+# DEF-NEXT:    .try L0 to L4 catch [mscorlib]System.Exception handler L4 to L8
+# DEF-NEXT:  .method 'pick' int32(int32, int32) flags=0x0016 impl=0x0000
+# DEF-NEXT:    .param 1 'sel' flags=0x0000
+# DEF-NEXT:    .param 2 'A_1' flags=0x0010
+# DEF-NEXT:    .custom instance void(string) [mscorlib]System.ObsoleteAttribute::'.ctor' = 01 00 03 6F 6C 64 00 00
+# DEF-NEXT:    .maxstack 2 initlocals
+# DEF-NEXT:    L0: ldarg.0
+# DEF-NEXT:    L1: switch L4, L6
+# DEF-NEXT:    L2: ldarg.1
+# DEF-NEXT:    L3: ret
+# DEF-NEXT:    L4: ldc.i4.s 100
+# DEF-NEXT:    L5: br.s L9
+# DEF-NEXT:    L6: ldstr "\u00E9t\u00E9"
+# DEF-NEXT:    L7: pop
+# DEF-NEXT:    L8: call int32() '<Module>'::'guarded'
+# DEF-NEXT:    L9: ret
+# DEF-NEXT:  .method 'puts' int32(native int) flags=0x2016 impl=0x0080
+# DEF-NEXT:    .pinvokeimpl 'libc' entry 'puts' flags=0x0200
+# DEF-NEXT:    .param 1 'A_0' flags=0x0000
+# DEF-NEXT:assembly .custom instance void(string) [mscorlib]System.Reflection.AssemblyTitleAttribute::'.ctor' = 01 00 03 61 62 63 00 00
+
+# DECL:pe PE32+ machine=0x{{[0-9A-F]+}} dll subsystem=3
+# DECL-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# DECL-NEXT:assembly 'canon' ver 1.2.3.4 flags=0x00000000 hash=0x00008004 culture='' key=-
+# DECL-NEXT:module 'canon.dll'
+# DECL-NEXT:assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# DECL-NEXT:moduleref 'libc'
+# DECL-EMPTY:
+# DECL-NEXT:.class '<Module>' flags=0x00000000
+# DECL-NEXT:  .field 'rva' int64 flags=0x0116
+# DECL-NEXT:    .data 8 bytes
+# DECL-NEXT:      01 02 03 04 05 06 07 08
+# DECL-NEXT:  .method 'puts' int32(native int) flags=0x2016 impl=0x0080
+# DECL-NEXT:    .pinvokeimpl 'libc' entry 'puts' flags=0x0200
+# DECL-NEXT:    .param 1 'A_0' flags=0x0000
+# DECL-NEXT:  .method 'pick' int32(int32, int32) flags=0x0016 impl=0x0000
+# DECL-NEXT:    .param 1 'sel' flags=0x0000
+# DECL-NEXT:    .param 2 'A_1' flags=0x0010
+# DECL-NEXT:    .custom instance void(string) [mscorlib]System.ObsoleteAttribute::'.ctor' = 01 00 03 6F 6C 64 00 00
+# DECL-NEXT:    .maxstack 2 initlocals
+# DECL-NEXT:    L0: ldarg.0
+# DECL-NEXT:    L1: switch L4, L6
+# DECL-NEXT:    L2: ldarg.1
+# DECL-NEXT:    L3: ret
+# DECL-NEXT:    L4: ldc.i4 100
+# DECL-NEXT:    L5: br L9
+# DECL-NEXT:    L6: ldstr "\u00E9t\u00E9"
+# DECL-NEXT:    L7: pop
+# DECL-NEXT:    L8: call int32() '<Module>'::'guarded'
+# DECL-NEXT:    L9: ret
+# DECL-NEXT:  .method 'guarded' int32() flags=0x0016 impl=0x0000
+# DECL-NEXT:    .maxstack 1 initlocals
+# DECL-NEXT:    .locals (int32)
+# DECL-NEXT:    L0: ldsfld int64 '<Module>'::'rva'
+# DECL-NEXT:    L1: conv.i4
+# DECL-NEXT:    L2: stloc.0
+# DECL-NEXT:    L3: leave L8
+# DECL-NEXT:    L4: pop
+# DECL-NEXT:    L5: ldc.i4.m1
+# DECL-NEXT:    L6: stloc.0
+# DECL-NEXT:    L7: leave L8
+# DECL-NEXT:    L8: ldloc.0
+# DECL-NEXT:    L9: ret
+# DECL-NEXT:    .try L0 to L4 catch [mscorlib]System.Exception handler L4 to L8
+# DECL-NEXT:assembly .custom instance void(string) [mscorlib]System.Reflection.AssemblyTitleAttribute::'.ctor' = 01 00 03 61 62 63 00 00
+
+# NORM:pe PE32+ machine=0x{{[0-9A-F]+}} dll subsystem=3
+# NORM-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# NORM-NEXT:assembly 'canon' ver 1.2.3.4 flags=0x00000000 hash=* culture='' key=-
+# NORM-NEXT:module 'canon.dll'
+# NORM-NEXT:assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# NORM-EMPTY:
+# NORM-NEXT:.class '<Module>' flags=0x00000000
+# NORM-NEXT:  .field 'rva' int64 flags=0x0116
+# NORM-NEXT:    .data 8 bytes
+# NORM-NEXT:      01 02 03 04 05 06 07 08
+# NORM-NEXT:  .method 'guarded' int32() flags=0x0016 impl=0x0000
+# NORM-NEXT:    .maxstack 1 initlocals
+# NORM-NEXT:    .locals (int32)
+# NORM-NEXT:    L0: ldsfld int64 '<Module>'::'rva'
+# NORM-NEXT:    L1: conv.i4
+# NORM-NEXT:    L2: stloc.0
+# NORM-NEXT:    L3: leave.s L8
+# NORM-NEXT:    L4: pop
+# NORM-NEXT:    L5: ldc.i4.m1
+# NORM-NEXT:    L6: stloc.0
+# NORM-NEXT:    L7: leave.s L8
+# NORM-NEXT:    L8: ldloc.0
+# NORM-NEXT:    L9: ret
+# NORM-NEXT:    .try L0 to L4 catch [mscorlib]System.Exception handler L4 to L8
+# NORM-NEXT:  .method 'pick' int32(int32, int32) flags=0x0016 impl=0x0000
+# NORM-NEXT:    .param 2 'A_1' flags=0x0010
+# NORM-NEXT:    .custom instance void(string) [mscorlib]System.ObsoleteAttribute::'.ctor' = 01 00 03 6F 6C 64 00 00
+# NORM-NEXT:    .maxstack 2
+# NORM-NEXT:    L0: ldarg.0
+# NORM-NEXT:    L1: switch L4, L6
+# NORM-NEXT:    L2: ldarg.1
+# NORM-NEXT:    L3: ret
+# NORM-NEXT:    L4: ldc.i4.s 100
+# NORM-NEXT:    L5: br.s L9
+# NORM-NEXT:    L6: ldstr "\u00E9t\u00E9"
+# NORM-NEXT:    L7: pop
+# NORM-NEXT:    L8: call int32() '<Module>'::'guarded'
+# NORM-NEXT:    L9: ret
+# NORM-NEXT:  .method 'puts' int32(native int) flags=0x2010 impl=0x0080
+# NORM-NEXT:    .pinvokeimpl '*' entry 'puts' flags=0x0200
+# NORM-NEXT:assembly .custom instance void(string) [mscorlib]System.Reflection.AssemblyTitleAttribute::'.ctor' = 01 00 03 61 62 63 00 00
+
+# COV:pe PE32+ machine=0x{{[0-9A-F]+}} exe subsystem=3
+# COV-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# COV-NEXT:entrypoint int32() '<Module>'::'main'
+# COV-NEXT:assembly 'coverage' ver 0.0.0.0 flags=0x00000000 hash=0x00000000 culture='' key=-
+# COV-NEXT:module 'coverage.exe'
+# COV-NEXT:assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# COV-EMPTY:
+# COV-NEXT:.class '<Module>' flags=0x00000000
+# COV-NEXT:  .field 'q\'\x01\\\x7F' int32 flags=0x0016
+# COV-NEXT:  .method 'G' <1> !!0(!!0) flags=0x0016 impl=0x0000
+# COV-NEXT:    .param 1 'x' flags=0x0000
+# COV-NEXT:    .maxstack 8
+# COV-NEXT:    L0: ldarg.0
+# COV-NEXT:    L1: ret
+# COV-NEXT:  .method 'arrays' void(int32[], int32[...], int32[0...], int32[5...10], int32[0...4], int32[,], int32[0...3,0...4], int32[0...3,-1...]) flags=0x0016 impl=0x0000
+# COV-NEXT:    .param 1 'a' flags=0x0000
+# COV-NEXT:    .param 2 'b' flags=0x0000
+# COV-NEXT:    .param 3 'c' flags=0x0000
+# COV-NEXT:    .param 4 'd' flags=0x0000
+# COV-NEXT:    .param 5 'e' flags=0x0000
+# COV-NEXT:    .param 6 'f' flags=0x0000
+# COV-NEXT:    .param 7 'g' flags=0x0000
+# COV-NEXT:    .param 8 'h' flags=0x0000
+# COV-NEXT:    .maxstack 8
+# COV-NEXT:    L0: ret
+# COV-NEXT:  .method 'a～' void() flags=0x0016 impl=0x0000
+# COV-NEXT:    .maxstack 8
+# COV-NEXT:    L0: ret
+# COV-NEXT:  .method 'a😀' void() flags=0x0016 impl=0x0000
+# COV-NEXT:    .maxstack 8
+# COV-NEXT:    L0: ret
+# COV-NEXT:  .method 'main' int32() flags=0x0016 impl=0x0000
+# COV-NEXT:    .maxstack 2
+# COV-NEXT:    L0: ldc.r4 float32(0xBFC00000)
+# COV-NEXT:    L1: pop
+# COV-NEXT:    L2: ldc.r8 float64(0x3FB999999999999A)
+# COV-NEXT:    L3: pop
+# COV-NEXT:    L4: ldc.i8 -2
+# COV-NEXT:    L5: pop
+# COV-NEXT:    L6: ldc.i4.s -3
+# COV-NEXT:    L7: call <1> !!0(!!0) '<Module>'::'G'<int32>
+# COV-NEXT:    L8: stsfld int32 '<Module>'::'q\'\x01\\\x7F'
+# COV-NEXT:    L9: ldtoken int32[]
+# COV-NEXT:    L10: pop
+# COV-NEXT:    L11: ldtoken class [mscorlib]System.Collections.Generic.List`1<int32>
+# COV-NEXT:    L12: pop
+# COV-NEXT:    L13: ldtoken [mscorlib]System.Environment/SpecialFolder
+# COV-NEXT:    L14: pop
+# COV-NEXT:    L15: ldstr "q\"\\\u000A"
+# COV-NEXT:    L16: pop
+# COV-NEXT:    L17: leave.s L24
+# COV-NEXT:    L18: pop
+# COV-NEXT:    L19: ldc.i4.1
+# COV-NEXT:    L20: endfilter
+# COV-NEXT:    L21: pop
+# COV-NEXT:    L22: leave.s L24
+# COV-NEXT:    L23: endfinally
+# COV-NEXT:    L24: ldsfld int32 '<Module>'::'q\'\x01\\\x7F'
+# COV-NEXT:    L25: ret
+# COV-NEXT:    .try L0 to L18 filter L18 handler L21 to L23
+# COV-NEXT:    .try L0 to L23 finally handler L23 to L24
+# COV-EMPTY:
+# COV-NEXT:.class 'NS.IShape' flags=0x000000A1
+# COV-EMPTY:
+# COV-NEXT:.class 'NS.Lay' flags=0x00000111 extends [mscorlib]System.ValueType
+# COV-NEXT:  .layout pack 4 size 16
+# COV-NEXT:  .field 'x' int32 flags=0x0006 offset 8
+# COV-EMPTY:
+# COV-NEXT:.class 'NS.Outer' flags=0x00000101 extends [mscorlib]System.Object
+# COV-NEXT:  .implements 'NS.IShape'
+# COV-NEXT:  .field 'K' int32 flags=0x8056 const 07 00 00 00
+# COV-NEXT:  .property 'P' instance int32() flags=0x0000
+# COV-NEXT:    .get instance int32() 'NS.Outer'::'get_P'
+# COV-NEXT:  .method 'get_P' instance int32() flags=0x0806 impl=0x0000
+# COV-NEXT:    .maxstack 8
+# COV-NEXT:    L0: ldc.i4.s -5
+# COV-NEXT:    L1: ret
+# COV-EMPTY:
+# COV-NEXT:.class 'NS.Outer/Inner' flags=0x00000102 extends [mscorlib]System.Object
+
+# STRIP:pe PE32+ machine=0x{{[0-9A-F]+}} exe subsystem=3
+# STRIP-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# STRIP-NEXT:entrypoint int32() '<Module>'::'main'
+# STRIP-NEXT:assembly 'coverage' ver 0.0.0.0 flags=0x00000000 hash=0x00000000 culture='' key=-
+# STRIP-NEXT:module 'coverage.exe'
+# STRIP-EMPTY:
+# STRIP-NEXT:.class '<Module>' flags=0x00000000
+# STRIP:    L11: ldtoken class [*]System.Collections.Generic.List`1<int32>
+# STRIP-NEXT:    L12: pop
+# STRIP-NEXT:    L13: ldtoken [*]System.Environment/SpecialFolder
+# STRIP:.class 'NS.Lay' flags=0x00000111 extends [*]System.ValueType
+# STRIP:.class 'NS.Outer' flags=0x00000101 extends [*]System.Object
+# STRIP:.class 'NS.Outer/Inner' flags=0x00000102 extends [*]System.Object
+
+# STATS:# table Module rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table TypeRef rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table TypeDef rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table Field rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table MethodDef rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table Param rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table InterfaceImpl rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table Constant rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table ClassLayout rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table FieldLayout rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table PropertyMap rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table Property rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table MethodSemantics rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table TypeSpec rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table Assembly rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table AssemblyRef rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table NestedClass rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table GenericParam rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# table MethodSpec rows={{[1-9][0-9]*}} rowsize={{[0-9]+}}
+# STATS-NEXT:# heap #Strings size={{[0-9]+}}
+# STATS-NEXT:# heap #US size={{[0-9]+}}
+# STATS-NEXT:# heap #GUID size={{[0-9]+}}
+# STATS-NEXT:# heap #Blob size={{[0-9]+}}
+# STATS-NEXT:# image size={{[0-9]+}} sections=.text{{(,[.a-z]+)*}}
+
+#--- coverage.il
+// The second input of canon-listing.test: what canonical listing v1 prints
+// (plan 5.7.10) beyond Inputs/canon-listing.il. The test prepends a UTF-8
+// BOM and assembles it with %ilasm -exe.
+//
+// - an entry point (the 'entrypoint' header line);
+// - NS.Outer: a namespaced class with a nested class ('NS.Outer/Inner'),
+//   the interface NS.IShape (.implements), a literal field (const) and a
+//   property with a getter (.property, .get);
+// - NS.Lay: explicit layout (.layout pack/size, the field's offset);
+// - a field name with a quote, a control byte, a backslash and DEL (\' \x01
+//   \\ \x7F); ilasm reads octal escapes in quoted names;
+// - 'a😀' declared before 'a～': UTF-8 order lists 'a' U+FF5E first, and a
+//   UTF-16 ordinal comparison (U+D83D before U+FF5E) would not;
+// - 'arrays': an SZARRAY (int32[]) and general arrays of every shape that
+//   ilasm writes; ilasm's int32[5] is lower bound 0 and size 5 (int32[0...4]);
+// - 'main': ldc.r4, ldc.r8, ldc.i8, a negative ldc.i4.s, a generic method
+//   call (a MethodSpec), ldtoken of two TypeSpecs and of a nested TypeRef, an
+//   ldstr with a quote, a backslash and a newline (a byte array, because ilasm
+//   drops an escaped backslash), and a filter clause inside a finally clause.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly coverage { }
+.module coverage.exe
+
+.class interface public abstract auto ansi NS.IShape { }
+
+.class public auto ansi sealed NS.Outer extends [mscorlib]System.Object implements NS.IShape
+{
+  .field public static literal int32 'K' = int32(7)
+  .class nested public auto ansi sealed Inner extends [mscorlib]System.Object { }
+  .method public specialname instance int32 get_P() cil managed
+  {
+    ldc.i4.s -5
+    ret
+  }
+  .property instance int32 P() { .get instance int32 NS.Outer::get_P() }
+}
+
+.class public explicit ansi sealed NS.Lay extends [mscorlib]System.ValueType
+{
+  .pack 4
+  .size 16
+  .field [8] public int32 'x'
+}
+
+.field public static int32 'q\'\001\134\177'
+
+.method public static void 'a😀'() cil managed { ret }
+.method public static void 'a～'() cil managed { ret }
+
+.method public static void 'arrays'(int32[] a, int32[...] b, int32[0...] c, int32[5...10] d,
+                                    int32[5] e, int32[,] f, int32[0...3,0...4] g,
+                                    int32[0...3,-1...] h) cil managed { ret }
+
+.method public static !!0 'G'<T>(!!0 x) cil managed
+{
+  ldarg.0
+  ret
+}
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 2
+  .try
+  {
+    .try
+    {
+      ldc.r4 -1.5
+      pop
+      ldc.r8 0.1
+      pop
+      ldc.i8 -2
+      pop
+      ldc.i4.s -3
+      call !!0 'G'<int32>(!!0)
+      stsfld int32 'q\'\001\134\177'
+      ldtoken int32[]
+      pop
+      ldtoken class [mscorlib]System.Collections.Generic.List`1<int32>
+      pop
+      ldtoken [mscorlib]System.Environment/SpecialFolder
+      pop
+      ldstr bytearray (71 00 22 00 5C 00 0A 00)  // q"\ and a newline
+      pop
+      leave.s L_out
+    }
+    filter
+    {
+      pop
+      ldc.i4.1
+      endfilter
+    }
+    {
+      pop
+      leave.s L_out
+    }
+  }
+  finally
+  {
+    endfinally
+  }
+L_out:
+  ldsfld int32 'q\'\001\134\177'
+  ret
+}

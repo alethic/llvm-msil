@@ -54,6 +54,19 @@ there. ILVerify, PEVerify, ildasm and ilasm run on the host, except that
 `--param msil_wsl_ilasm` makes `%ilasm` the Linux ilasm inside WSL (the
 neutralized pass of msil-verify.py still reassembles with the host ilasm).
 
+`%msil_canon` (M16) prints the canonical listing of an assembly: canonical
+listing v1 of plan 5.7.10, the text of its metadata and IL without tokens,
+heap offsets, RVAs, header forms or anything else that depends on how the
+image was laid out, so two images of the same program compare equal whoever
+wrote them. Until M17 it is `mdcanon` (`msil/utils/mdtools/mdcanon.cs`, also
+`%msil_mdcanon`), which lit builds on configuration and runs on the host's
+dotnet, also with `msil_runner=wsl`; from M17 it is `llvm-cil-dump
+--canonical`, which prints the same bytes. Its options (`--order=decl`,
+`--forms=canon`, `--scopes=strip` and the six normalizations of plan 5.12.6,
+such as `--params=drop`) remove the differences that a comparison allows.
+`harness/canon-listing.test` pins it; the oracles of later milestones compare
+with it.
+
 `%{msil_ll}` is the same for hand-written IR run through `llc` (`O0`..`O3`
 only; `.ll` files carry no target triple or datalayout). `llc` does no IPO, so
 values passed to `noinline` functions stay opaque even at `-O2`.
@@ -126,21 +139,22 @@ The .NET 10 JIT was seen growing past 40 GB on bad IL
 
 What makes a test UNSUPPORTED: `M1/` needs the feature `msil-exec` (clang with
 the MSIL target, ilasm and a .NET runtime); `harness/` needs `msil-ilasm` and
-`msil-dotnet`. Without them `check-all` still passes. With
-`--param msil_require_verify=1` (every gate) a missing ILVerify, ildasm,
-jitall, PEVerify (Windows), ilasm or .NET runtime for the selected runner is a
-configuration error instead, also when an empty `--param msil_<tool>=` or
-`$MSIL_<TOOL>` switched it off, so a gate cannot pass with every harness test
-UNSUPPORTED. `--param msil_require_exec=1` (every gate leg) does the same for
+`msil-dotnet`, and `harness/canon-listing.test` also `msil-mdcanon`. Without
+them `check-all` still passes. With `--param msil_require_verify=1` (every
+gate) a missing ILVerify, ildasm, jitall, mdcanon, PEVerify (Windows), ilasm
+or .NET runtime for the selected runner is a configuration error instead, also
+when an empty `--param msil_<tool>=` or `$MSIL_<TOOL>` switched it off, so a
+gate cannot pass with every harness test UNSUPPORTED; so is a failed mdcanon
+build. `--param msil_require_exec=1` (every gate leg) does the same for
 `msil-exec`: `M1/` without clang, the MSIL target, ilasm or a runtime is a
 configuration error instead of UNSUPPORTED. `M2/` also needs the feature
 `msil-ld` (the tree's `msil-ld`), and its archive tests `msil-ar` (the tree's
 `llvm-ar`); `--param msil_require_link=1` (every gate leg) makes a missing
-`msil-ld` or `llvm-ar` a configuration error, and so does
-`msil_pipeline=lto`. The compile-only tests of `M2/09-hosted/` need only
-clang with the MSIL target, and the feature `msil-glibc-sysroot` (glibc) or
-`msil-ucrt-headers` (UCRT) of their C library; the `hosted` leg names the
-glibc sysroot, so there a missing one is a configuration error.
+`msil-ld` or `llvm-ar` a configuration error, and so does `msil_pipeline=lto`.
+The compile-only tests of `M2/09-hosted/` need only clang with the MSIL
+target, and the feature `msil-glibc-sysroot` (glibc) or `msil-ucrt-headers`
+(UCRT) of their C library; the `hosted` leg names the glibc sysroot, so there
+a missing one is a configuration error.
 
 ## Directories
 
@@ -192,23 +206,41 @@ transcript is the same on Windows and on the E7 Linux oracle, so there is no
 `ucrtbase-imports` require a Windows triple, `03-native/ifunc` a Linux one.
 
 `harness/` holds the self-tests of the runner, the verifier, jitall,
-`update-expected.py`, `il-snapshot.py` and lit's configuration: 72 tests, 10
-of them in `prog/`, 10 in `legs/` and 3 in `pipeline/`. `dep-local.test` and
-`dep-wsl.test` (M15) ship a managed and a native dependency with a program
-through `--dep` to `msil-verify.py`, `msil-jitall.py` and `msil-run.py`, and
-`--dep-dir` to `msil-run.py` (local and .NET Framework runners, and WSL), and
-check that a missing one fails. `il-snapshot.test` (M15) pins the comparison of
+`update-expected.py`, `il-snapshot.py`, `%msil_canon` and lit's configuration:
+73 tests, 10 of them in `prog/`, 10 in `legs/` and 3 in `pipeline/`.
+`canon-listing.test` (M16) assembles `Inputs/canon-listing.il` (an assembly
+with a hash algorithm, a field with RVA data, a P/Invoke, methods with and
+without `.locals`, a named and an `[opt]` parameter, a branch, a switch, a
+non-ASCII `ldstr`, a try/catch and custom attributes) and checks every line of
+three listings of `%msil_canon`: the default one, `--order=decl
+--forms=canon`, and the five plan 5.12.6 normalizations that an ilasm image
+exercises (`--assembly-hash=ignore --params=drop
+--initlocals=ignore-without-locals --pinvoke-module=strip
+--pinvoke-access=ignore`). Its second input, `coverage.il` (split from the
+test, with a UTF-8 BOM prepended for ilasm), is an `-exe` with the rest of
+the listing: the entry point, nested, interface and explicit-layout types, a
+generic method, a literal field, a property, escaped and non-ASCII names in
+UTF-8 order, general arrays, float and negative operands, MethodSpec, TypeSpec
+and nested TypeRef tokens, an escaped `ldstr`, and filter and finally clauses.
+Its default listing is checked line by line, `--scopes=strip` for `[*]` scopes
+without `assemblyref` lines, and `--stats-only` for the table, heap and image
+lines (their numbers as regexes), which `--stats` appends to the listing. Last,
+`%msil_mdcanon --out-dir` must write both default listings' bytes.
+`dep-local.test` and `dep-wsl.test` (M15) ship a
+managed and a native dependency with a program through `--dep` to
+`msil-verify.py`, `msil-jitall.py` and `msil-run.py`, and `--dep-dir` to
+`msil-run.py` (local and .NET Framework runners, and WSL), and check that a
+missing one fails. `il-snapshot.test` (M15) pins the comparison of
 `msil/utils/il-snapshot.py --compare` on the fixture trees of
-`Inputs/il-snapshot/`: exit status 1 naming a changed `.il`, a changed
-`.err`, a missing and an extra file, and 2 for usage errors.
-`harness/prog/` (M14) pins the expansions of `%{msil_prog}`, `%{msil_c}`
-under both pipelines, `%{msil_ldflags}` and,
-since M15, `%{msil_native_libs}` and `%{msil_deps}` (`deps.test`), and the
-commands of `msil-prog.py` (every leg and level, archive specifications,
-`--det` catching a planted difference, the usage and configuration errors,
-`update-expected.py` on `%{msil_prog}` tests, one of which builds its own
-native library) with stand-ins for clang, `msil-ld`, `llvm-ar` and
-`ld.lld`, so it needs neither a compiler nor a linker.
+`Inputs/il-snapshot/`: exit status 1 naming a changed `.il`, a changed `.err`,
+a missing and an extra file, and 2 for usage errors. `harness/prog/` (M14)
+pins the expansions of `%{msil_prog}`, `%{msil_c}` under both pipelines,
+`%{msil_ldflags}` and, since M15, `%{msil_native_libs}` and `%{msil_deps}`
+(`deps.test`), and the commands of `msil-prog.py` (every leg and level,
+archive specifications, `--det` catching a planted difference, the usage and
+configuration errors, `update-expected.py` on `%{msil_prog}` tests, one of
+which builds its own native library) with stand-ins for clang, `msil-ld`,
+`llvm-ar` and `ld.lld`, so it needs neither a compiler nor a linker.
 
 ## Running the tests
 
@@ -237,7 +269,10 @@ the tools first (`msil-build.ps1 -Standard` builds every tool the tests use).
 Source paths work because `llvm-lit` maps `msil/test/lit.cfg.py` to the
 generated `build/tools/msil/test/lit.site.cfg.py`. At configuration time
 `lit.cfg.py` runs `msil/utils/jitall/build-jitall.py`, which builds jitall into
-`build/tools/msil/jitall` when it is missing or out of date. The
+`build/tools/msil/jitall` when it is missing or out of date, and
+`msil/utils/mdtools/build-mdtools.py`, which builds `mdump` and `mdcanon` into
+`build/tools/msil/mdtools` the same way (M16; both need a .NET SDK and the
+`Microsoft.NETCore.App.Ref` 8.x targeting pack, and download nothing). The
 `check-msil-m1-<dir>` targets are created by CMake, so a new directory gets
 its target at the next configure.
 
@@ -409,12 +444,13 @@ int helper(void) { return 100; }
 | `msil_run_netfx` | `0` | `1`: also `ilasm -exe` and run on .NET Framework 4.8 (Windows, local runner) |
 | `msil_runner` | `local` | `wsl`: run programs in WSL (`wsl.exe -d Ubuntu`), on .NET 10 by default |
 | `msil_wsl_dotnet` | the private runtime if installed, else the distribution's `dotnet` (with a note) | with `msil_runner=wsl`: the dotnet host inside WSL that runs the programs and jitall. `private` is `$HOME/.dotnet-msil/dotnet`, which `msil/utils/msil-wsl-dotnet.sh` installs; when it is not installed that is a configuration error naming the script. An absolute WSL path names another host. Every WSL gate leg passes `private` |
-| `msil_require_verify` | `0` | `1` (every gate): a missing ILVerify, ildasm, jitall, (Windows) PEVerify, ilasm or .NET runtime of the runner is a configuration error, even when an empty override disabled it |
+| `msil_require_verify` | `0` | `1` (every gate): a missing ILVerify, ildasm, jitall, mdcanon, (Windows) PEVerify, ilasm or .NET runtime of the runner is a configuration error, even when an empty override disabled it; so is a failed `build-mdtools.py` run |
 | `msil_require_exec` | `0` | `1` (every gate leg): `M1/` without the feature `msil-exec` is a configuration error, not UNSUPPORTED |
 | `msil_roundtrip` | `0` | `1`: `%{msil_c}` and `%{msil_ll}` also round-trip every assembly through the .NET ildasm and ilasm at the version msil/utils/tools/msil-tools.proj pins (MsilILAsmVersion) from the NuGet global-packages folder (a missing one is a configuration error naming the version) (`msil-verify.py --roundtrip`; the listings must match) and run the reassembled image against the same `.expected` (Design.md 5.5; not the Framework ildasm, which prints infinite constants as `inf`) |
 | `msil_wsl_ilasm` | unset | with `msil_runner=wsl`: `%ilasm` runs this Linux ilasm (a Windows path) inside WSL through `msil-run.py --tool --runner wsl`, which stages an executable copy; `nuget` picks the newest NuGet `runtime.linux-x64.Microsoft.NETCore.ILAsm` |
 | `msil_ilasm`, `msil_ildasm`, `msil_dotnet`, `msil_ilverify`, `msil_peverify` | auto | tool path; empty disables the tool; `msil_ilasm=nuget` picks the newest NuGet `runtime.<rid>.Microsoft.NETCore.ILAsm` |
 | `msil_jitall` | `<build>/tools/msil/jitall` | jitall directory; empty disables jitall |
+| `msil_mdcanon` | `<build>/tools/msil/mdtools`, which lit builds on configuration with `msil/utils/mdtools/build-mdtools.py` (only when a source changed; a failed build is a warning, and a configuration error under `msil_require_verify=1`) | the directory of `mdcanon.dll` and `mdcanon.runtimeconfig.json` (M16, plan 5.12.2): a named one is used as it is, and one without those files is a configuration error; empty disables mdcanon. The host's dotnet runs it, also with `msil_runner=wsl` (feature `msil-mdcanon`; `%msil_mdcanon`, `%msil_canon`) |
 | `msil_timeout`, `msil_mem_limit_mb` | `60`, `4096` | limits for every child process |
 | `msil_wsl_distro` | `Ubuntu` | WSL distribution of `msil_runner=wsl` |
 | `msil_pipeline` | `asm` | how `%{msil_c}` builds (feature `msil-pipeline=<p>`): `asm` with `clang -S` and `ilasm -dll`, `lto` as a one-source `%{msil_prog}` through `msil-ld` (M14); `obj` is a configuration error until M20 |
@@ -436,7 +472,8 @@ found), `msil-pipeline=<asm|lto>`, `msil-prog-pipeline=lto` (the pipeline
 `%{msil_prog}` uses; `lto` under both pipelines in M14, see "What runs"),
 `msil-link-output=il`, `msil-ilverify`, `msil-peverify`, `msil-ildasm`
 (msil-verify.py runs its neutralized pass), `msil-jitall` (jitall.dll is
-built and the runner has a runtime), `msil-netfx`,
+built and the runner has a runtime), `msil-mdcanon` (mdcanon.dll is built and
+the host's dotnet has a runtime for it; M16), `msil-netfx`,
 `msil-run-netfx`, `msil-wsl`, `msil-wsl-ilasm`, `msil-roundtrip`,
 `msil-native-oracle`, `msil-native-rtlib` (the compiler-rt builtins were
 found), `msil-linux-sysroot` (a complete `msil_linux_sysroot`),
@@ -457,7 +494,12 @@ Substitutions: `%msil_triple`, `%clang_msil`, `%llc_msil`, `%clang_native`,
 `%msil_verify` (msil-verify.py, with `--ildasm`/`--ilasm` when ildasm was
 found), `%msil_jitall` (msil-jitall.py, with `--runner wsl` under
 `msil_runner=wsl`), `%msil_roundtrip` (`msil-verify.py --roundtrip` with the
-.NET ildasm and ilasm),
+.NET ildasm and ilasm), `%msil_mdcanon` (M16: `mdcanon` on the host's dotnet,
+under the limits of `msil-run.py --tool`; add the options and files),
+`%msil_canon` (the canonical listing a test compares: the `%msil_mdcanon`
+command until M17, then `llvm-cil-dump --canonical` when the feature
+`msil-cil-dump` is present; without `msil-mdcanon` both name a placeholder,
+so a test needs `REQUIRES: msil-mdcanon`),
 `%msil_inputs`, `%{msil_cflags}` (`-std=gnu17 -ffreestanding
 -Werror=return-type -I msil/test/Inputs`), `%{msil_native_ldflags}` (`-lm`
 when the native triple is not Windows: glibc keeps the C math library out of
