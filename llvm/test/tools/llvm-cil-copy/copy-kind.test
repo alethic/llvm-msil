@@ -1,0 +1,263 @@
+## llvm-cil-copy takes the kind and the machine of its output from the input
+## (plan 5.7.10): an entry point means Executable, an Assembly row means
+## Library, otherwise Module, and the machine is the input's. The inputs are
+## yaml2obj copies of ilasm (.NET Framework 4.8) images: lib.il assembled
+## with -dll -pe64 -x64 (an Assembly row and no entry point), exit42.il with
+## -dll -pe64 -x64 (a DLL with an entry point, the shape of D31's lit
+## pipeline) and exit42.il with -dll (PE32). Every copy is canonically equal
+## to its input, except for the 'pe' line of the DLL with an entry point.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/lib.yaml -o %t/lib.dll
+# RUN: yaml2obj %t/exit42.yaml -o %t/exit42.dll
+# RUN: yaml2obj %t/pe32.yaml -o %t/exit42-pe32.dll
+
+## A Library: a DLL (characteristics 0x2022) at the image base of a DLL
+## (5.7.7), with no entry point.
+# RUN: llvm-cil-copy %t/lib.dll -o %t/lib.copy.dll
+# RUN: llvm-cil-dump --headers %t/lib.copy.dll \
+# RUN:   | FileCheck %s --check-prefix=LIB-HEADERS --match-full-lines --strict-whitespace
+# LIB-HEADERS:Format: PE32+ machine=0x8664 dll
+# LIB-HEADERS-NEXT:COFF: sections=1 timestamp=0x{{([0-9A-F]{8})}} characteristics=0x2022 symbols=0
+# LIB-HEADERS-NEXT:Optional: imagebase=0x0000000180000000 sectionalign=0x2000 filealign=0x200 subsystem=3 dllchars=0x8540 stack=0x400000,0x4000 heap=0x100000,0x2000
+# LIB-HEADERS-NEXT:Section: .text rva=0x00002000 vsize=0x{{[0-9A-F]+}} raw=0x200 rawsize=0x{{[0-9A-F]+}} flags=0x60000020
+# LIB-HEADERS-NEXT:CLI: flags=0x00000001 entrypoint=0x00000000 metadata=0x{{([0-9A-F]{8})}},0x{{[0-9A-F]+}} runtime=2.5
+# RUN: llvm-cil-dump --canonical %t/lib.dll > %t/lib.txt
+# RUN: llvm-cil-dump --canonical %t/lib.copy.dll > %t/lib.copy.txt
+# RUN: diff %t/lib.txt %t/lib.copy.txt
+# RUN: FileCheck %s --input-file=%t/lib.copy.txt --check-prefix=LIB-CANON \
+# RUN:   --match-full-lines --strict-whitespace --implicit-check-not=entrypoint
+# LIB-CANON:pe PE32+ machine=0x8664 dll subsystem=3
+# LIB-CANON-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# LIB-CANON-NEXT:assembly 'lib' ver 1.2.0.0 flags=0x00000000 hash=0x00000000 culture='' key=-
+# LIB-CANON-NEXT:module 'lib.dll'
+
+## A DLL with an entry point becomes an Executable (section 12, '5.7.10 and
+## 5.7.13 clarified (a DLL with an entry point)'): characteristics 0x2022
+## become 0x0022, the image base is an EXE's, and the canonical 'pe' line
+## says 'exe' where the input's says 'dll'. Nothing else in the listing
+## changes.
+# RUN: llvm-cil-copy %t/exit42.dll -o %t/exit42.copy.dll
+# RUN: llvm-cil-dump --headers %t/exit42.dll \
+# RUN:   | FileCheck %s --check-prefix=ENTRY-INPUT --match-full-lines --strict-whitespace
+# ENTRY-INPUT:Format: PE32+ machine=0x8664 dll
+# ENTRY-INPUT-NEXT:COFF: sections=2 timestamp=0x00000000 characteristics=0x2022 symbols=0
+# RUN: llvm-cil-dump --headers %t/exit42.copy.dll \
+# RUN:   | FileCheck %s --check-prefix=ENTRY-HEADERS --match-full-lines --strict-whitespace
+# ENTRY-HEADERS:Format: PE32+ machine=0x8664 exe
+# ENTRY-HEADERS-NEXT:COFF: sections=1 timestamp=0x{{([0-9A-F]{8})}} characteristics=0x0022 symbols=0
+# ENTRY-HEADERS-NEXT:Optional: imagebase=0x0000000140000000 sectionalign=0x2000 filealign=0x200 subsystem=3 dllchars=0x8540 stack=0x400000,0x4000 heap=0x100000,0x2000
+# ENTRY-HEADERS-NEXT:Section: .text rva=0x00002000 vsize=0x{{[0-9A-F]+}} raw=0x200 rawsize=0x{{[0-9A-F]+}} flags=0x60000020
+# ENTRY-HEADERS-NEXT:CLI: flags=0x00000001 entrypoint=0x06000001 metadata=0x{{([0-9A-F]{8})}},0x{{[0-9A-F]+}} runtime=2.5
+# RUN: llvm-cil-dump --canonical %t/exit42.dll > %t/exit42.txt
+# RUN: llvm-cil-dump --canonical %t/exit42.copy.dll > %t/exit42.copy.txt
+# RUN: FileCheck %s --input-file=%t/exit42.txt --check-prefix=ENTRY-PE-DLL \
+# RUN:   --match-full-lines --strict-whitespace
+# ENTRY-PE-DLL:pe PE32+ machine=0x8664 dll subsystem=3
+# ENTRY-PE-DLL-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# ENTRY-PE-DLL-NEXT:entrypoint int32() '<Module>'::'main'
+# RUN: FileCheck %s --input-file=%t/exit42.copy.txt --check-prefix=ENTRY-PE-EXE \
+# RUN:   --match-full-lines --strict-whitespace
+# ENTRY-PE-EXE:pe PE32+ machine=0x8664 exe subsystem=3
+# ENTRY-PE-EXE-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# ENTRY-PE-EXE-NEXT:entrypoint int32() '<Module>'::'main'
+# RUN: sed -e "1s/ dll / exe /" %t/exit42.txt > %t/exit42.expected.txt
+# RUN: diff %t/exit42.expected.txt %t/exit42.copy.txt
+
+## The machine comes from the input: lib.yaml with IMAGE_FILE_MACHINE_ARM64
+## copies to an ARM64 Library.
+# RUN: sed -e "s/IMAGE_FILE_MACHINE_AMD64/IMAGE_FILE_MACHINE_ARM64/" %t/lib.yaml > %t/arm64.yaml
+# RUN: yaml2obj %t/arm64.yaml -o %t/arm64.dll
+# RUN: llvm-cil-copy %t/arm64.dll -o %t/arm64.copy.dll
+# RUN: llvm-cil-dump --headers %t/arm64.copy.dll \
+# RUN:   | FileCheck %s --check-prefix=ARM64-HEADERS --match-full-lines --strict-whitespace
+# ARM64-HEADERS:Format: PE32+ machine=0xAA64 dll
+# ARM64-HEADERS-NEXT:COFF: sections=1 timestamp=0x{{([0-9A-F]{8})}} characteristics=0x2022 symbols=0
+# ARM64-HEADERS-NEXT:Optional: imagebase=0x0000000180000000 {{.+}}
+# RUN: llvm-cil-dump --canonical %t/arm64.dll > %t/arm64.txt
+# RUN: llvm-cil-dump --canonical %t/arm64.copy.dll > %t/arm64.copy.txt
+# RUN: diff %t/arm64.txt %t/arm64.copy.txt
+# RUN: FileCheck %s --input-file=%t/arm64.copy.txt --check-prefix=ARM64-CANON \
+# RUN:   --match-full-lines --strict-whitespace
+# ARM64-CANON:pe PE32+ machine=0xAA64 dll subsystem=3
+
+## A PE32 input is refused, because only PE32+ images are written until
+## phase 5 (5.7.7).
+# RUN: not llvm-cil-copy %t/exit42-pe32.dll -o %t/exit42-pe32.copy.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=PE32 -DFILE=%t/exit42-pe32.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# PE32:llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': cannot write PE image: machine 0x014C is not supported until phase 5
+
+#--- lib.il
+// A library: an Assembly row and no entry point.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'lib' { .ver 1:2:0:0 }
+.module 'lib.dll'
+
+.class public auto ansi abstract sealed NS.Api extends [mscorlib]System.Object
+{
+  .field public static int32 'count'
+  .method public static int32 'answer'() cil managed
+  {
+    .maxstack 8
+    ldsfld int32 NS.Api::'count'
+    ldc.i4.s 42
+    add
+    ret
+  }
+}
+#--- lib.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8766
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8680
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     586
+    SectionData:     2022000000000000000000000000000048000000020005006C2000007C01000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000267E010000041F2A582A000042534A4201000100000000000C00000076342E302E33303331390000000005006C000000A0000000237E00000C0100004400000023537472696E67730000000050010000080000002355530058010000100000002347554944000000680100001400000023426C6F620000000000000002000001570000000900000000FA2533001600000100000001000000020000000100000001000000010000000100000000001800010000000000060011000A0000000000010000000000010001008101000029002D00050001000100160030000A00602000000000160036000D0001000000000001000200000000000000000000003D00000004000000000000000000000001002000000000000000003C4D6F64756C653E0053797374656D004F626A656374006C69622E646C6C006D73636F726C696200417069004E5300636F756E7400616E73776572006C696200000000000320000000000002493068CB5D8744A7F4C3AF76A05E7A0008B77A5C561934E089020608030000080000001022000000000000000000002E2200000020000000000000000000000000000000000000000000002022000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000040A20000
+symbols:         []
+...
+#--- exit42.il
+// A Phase-1-shaped module: one method with the entry point.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'exit42' { }
+.module 'exit42.dll'
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldc.i4.s 42
+  ret
+}
+#--- exit42.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8702
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8616
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     522
+    SectionData:     E021000000000000000000000000000048000000020005006420000040010000010000000100000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000E1F2A2A42534A4201000100000000000C00000076342E302E33303331390000000005006C00000080000000237E0000EC0000002C00000023537472696E67730000000018010000080000002355530020010000100000002347554944000000300100001000000023426C6F620000000000000002000001450000000900000000FA253300160000010000000100000001000000010000000100000000000A00010000000000000000000100000000000100010060200000000016001E000A00010000000000000000000000000000000000000023000000040000000000000000000000010015000000000000000000003C4D6F64756C653E006578697434322E646C6C006D73636F726C6962006D61696E006578697434320000000003200000000000A8083568E4BFE14A8F5FCA5B0419E8960008B77A5C561934E08903000008000000000000D02100000000000000000000EE210000002000000000000000000000000000000000000000000000E021000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000000A20000
+symbols:         []
+...
+#--- pe32.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8686
+  ImageBase:       4194304
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 1048576
+  SizeOfStackCommit: 4096
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 4096
+  ImportTable:
+    RelativeVirtualAddress: 8596
+    Size:            87
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            8
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8200
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_I386
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_32BIT_MACHINE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     500
+    SectionData:     D0210000000000004800000002000500542000004001000001000000010000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000E1F2A2A42534A4201000100000000000C00000076342E302E33303331390000000005006C00000080000000237E0000EC0000002C00000023537472696E67730000000018010000080000002355530020010000100000002347554944000000300100001000000023426C6F620000000000000002000001450000000900000000FA253300160000010000000100000001000000010000000100000000000A00010000000000000000000100000000000100010050200000000016001E000A00010000000000000000000000000000000000000023000000040000000000000000000000010015000000000000000000003C4D6F64756C653E006578697434322E646C6C006D73636F726C6962006D61696E006578697434320000000003200000000000C1B145E76AD7BD4FA5A49B7B917A68360008B77A5C561934E089030000080000BC2100000000000000000000DE210000002000000000000000000000000000000000000000000000D02100000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C0000000000FF2500204000
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C000000F0310000
+symbols:         []
+...

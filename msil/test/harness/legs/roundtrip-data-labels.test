@@ -1,0 +1,60 @@
+# msil-verify.py --roundtrip (%msil_roundtrip) renumbers ildasm's RVA data
+# labels ('.field ... at I_<RVA>', '.data cil I_<RVA> = bytearray (') in the
+# order of their first appearance before it compares the two listings, since
+# where the data lies is the image's layout (writePEImage, plan 5.7.7, puts
+# it elsewhere than ilasm). In Inputs/roundtrip-rva.il a data block that no
+# field uses comes before the data of the RVA fields g1 and g2; ildasm drops
+# it, so the reassembled image has g1's and g2's data lower. The control, the
+# round trip with the real ilasm, must pass although the labels of its two
+# listings differ (--keep-copy keeps both; the RVAs depend on the flags of
+# %ilasm, so the checks read them from the listing instead of naming them).
+# The renumbering must keep what the labels say, so with the stand-in ilasm
+# Inputs/fake-ilasm.py editing the listing before the real ilasm reassembles
+# it:
+# - a changed data byte ('05 06 07 08' to '05 06 07 09') fails, with the
+#   changed line under '.data cil I_1' in the diff;
+# - g1 and g2 swapping labels fails, though the data blocks and the order of
+#   their labels stay as they were: the fields keep their numbers and the
+#   data blocks trade theirs. A comparison that dropped the labels, or that
+#   numbered the '.field' and the '.data' labels apart, would pass it;
+# - the field and the method named I_0000ABCD are names, not labels: ildasm
+#   prints them unquoted, and renaming them to I_0000ABCE fails, which a
+#   renumbering of every I_ and 8 hex digits would hide.
+# The tools are those of msil-verify.py's neutralized pass (%{legs_ildasm},
+# %{legs_ilasm}), as in roundtrip-mismatch.test.
+# REQUIRES: msil-ilverify, msil-ildasm
+
+# RUN: rm -rf %t.d && mkdir %t.d
+# RUN: %ilasm -dll -output=%t.d/rva.dll %S/Inputs/roundtrip-rva.il
+
+# The control. The first listing has both labels, both data blocks (not the
+# unused one) and the names; g1's label differs between the two listings.
+# RUN: %msil_roundtrip --ildasm %{legs_ildasm} --ilasm %{legs_ilasm} --keep-copy %t.d/keep --output=%t.d/rva.same.dll %t.d/rva.dll
+# RUN: %{harness_check} contains %t.d/keep/rva.ildasm.il "^\.field public static valuetype S4 g1 at I_[0-9A-F]{8}$" "^\.field public static valuetype S4 g2 at I_[0-9A-F]{8}$" "^\.data cil I_[0-9A-F]{8} = bytearray \(\s*\n\s+01 02 03 04\)\s*$" "^\.data cil I_[0-9A-F]{8} = bytearray \(\s*\n\s+05 06 07 08\)\s*$" "^\.field public static int32 I_0000ABCD$" "^\.method public static int32\s+I_0000ABCD\(\) cil managed$" "^\s+IL_[0-9a-f]+:\s+ldsfld\s+int32 I_0000ABCD$" "^\s+IL_[0-9a-f]+:\s+call\s+int32 I_0000ABCD\(\)$"
+# RUN: %{harness_check} lacks %t.d/keep/rva.ildasm.il "AA BB CC DD"
+# RUN: %python -c "import re, sys; \
+# RUN:   g1 = [re.search(r'^\.field .* g1 at (I_[0-9A-F]{8})$', open(p, encoding='utf-8-sig').read(), re.M).group(1) for p in sys.argv[1:]]; \
+# RUN:   print('g1 at', *g1); sys.exit(g1[0] == g1[1])" \
+# RUN:   %t.d/keep/rva.ildasm.il %t.d/keep/rva.same.ildasm.il
+
+# A changed data byte.
+# RUN: %python %S/Inputs/fake-ilasm.py make %t.d/bytes.cmd --replace "05 06 07 08" "05 06 07 09" -- %{legs_ilasm}
+# RUN: %{harness_check} exits 1 %msil_roundtrip --ildasm %{legs_ildasm} --ilasm %t.d/bytes.cmd --output=%t.d/rva.bytes.dll %t.d/rva.dll > %t.d/bytes.log 2>&1
+# RUN: %{harness_check} contains %t.d/bytes.log "^round trip: the disassembly of the reassembled rva\.bytes\.dll differs from that of rva\.dll:$" "^--- ildasm rva\.dll$" "^\+\+\+ ildasm rva\.bytes\.dll$" "^ \.data cil I_1 = bytearray \(\s*\n-\s+05 06 07 08\)\s*\n\+\s+05 06 07 09\)\s*$"
+# RUN: %{harness_check} lacks %t.d/bytes.log "^[-+]\s+01 02 03 04\)" "^[-+]\.field"
+
+# g1 and g2 swap labels: fake-ilasm.py gets the labels of the listing.
+# RUN: %python -c "import re, subprocess, sys; \
+# RUN:   listing = open(sys.argv[1], encoding='utf-8-sig').read(); \
+# RUN:   g1, g2 = (re.search(r'^\.field .* ' + f + r' at (I_[0-9A-F]{8})$', listing, re.M).group(1) for f in ('g1', 'g2')); \
+# RUN:   sys.exit(subprocess.call([sys.executable] + sys.argv[2:5] + ['--replace', 'g1 at ' + g1, 'g1 at ' + g2, '--replace', 'g2 at ' + g2, 'g2 at ' + g1] + sys.argv[5:]))" \
+# RUN:   %t.d/keep/rva.ildasm.il %S/Inputs/fake-ilasm.py make %t.d/swap.cmd -- %{legs_ilasm}
+# RUN: %{harness_check} exits 1 %msil_roundtrip --ildasm %{legs_ildasm} --ilasm %t.d/swap.cmd --output=%t.d/rva.swap.dll %t.d/rva.dll > %t.d/swap.log 2>&1
+# RUN: %{harness_check} contains %t.d/swap.log "^round trip: the disassembly of the reassembled rva\.swap\.dll differs from that of rva\.dll:$" "^-\.data cil I_1 = bytearray \($" "^\+\.data cil I_1 = bytearray \($"
+# RUN: %{harness_check} lacks %t.d/swap.log "^[-+]\.field"
+
+# The names that look like labels are compared as they are.
+# RUN: %python %S/Inputs/fake-ilasm.py make %t.d/name.cmd --replace I_0000ABCD I_0000ABCE -- %{legs_ilasm}
+# RUN: %{harness_check} exits 1 %msil_roundtrip --ildasm %{legs_ildasm} --ilasm %t.d/name.cmd --output=%t.d/rva.name.dll %t.d/rva.dll > %t.d/name.log 2>&1
+# RUN: %{harness_check} contains %t.d/name.log "^round trip: the disassembly of the reassembled rva\.name\.dll differs from that of rva\.dll:$" "^-\.field public static int32 I_0000ABCD$" "^\+\.field public static int32 I_0000ABCE$" "^-\.method public static int32\s+I_0000ABCD\(\) cil managed$" "^\+\.method public static int32\s+I_0000ABCE\(\) cil managed$" "^-\s+IL_[0-9a-f]+:\s+ldsfld\s+int32 I_0000ABCD$" "^\+\s+IL_[0-9a-f]+:\s+ldsfld\s+int32 I_0000ABCE$" "^-\s+IL_[0-9a-f]+:\s+call\s+int32 I_0000ABCD\(\)$" "^\+\s+IL_[0-9a-f]+:\s+call\s+int32 I_0000ABCE\(\)$"
+# RUN: %{harness_check} lacks %t.d/name.log "^[-+]\.field .* at I_" "^[-+]\.data"

@@ -130,7 +130,9 @@ leg): --ildasm disassembles prog.dll, --ilasm reassembles that listing
 unchanged into --output (an image of the same kind), and --ildasm
 disassembles the result again. Both listings must be equal apart from the
 lines that differ between any two builds of one module ('// MVID:' and
-'// Image base:'); a difference is printed as a unified diff. The only edit
+'// Image base:') and the RVA data labels I_<RVA>, which are renumbered in
+order of first appearance (where the data lies is the image's layout); a
+difference is printed as a unified diff. The only edit
 to the listing is that an image layout directive whose value ildasm did not
 format ('.imagebase 0x%016I64x' from the Linux ildasm 10.0.12) is dropped,
 because ilasm rejects it; ilasm then uses its default, which is what the
@@ -800,6 +802,17 @@ UNFORMATTED_LAYOUT_RE = re.compile(
 )
 # Listing lines that differ between two builds of the same module.
 BUILD_SPECIFIC_RE = re.compile(r"^\s*//\s*(?:MVID|Image base):")
+# ildasm names RVA data after its RVA ('.data cil I_00002060 = bytearray (',
+# '.field ... at I_00002060'). Where the data lies is the image's layout: ilasm
+# puts it first in .text, writePEImage (plan 5.7.7) last, so the labels are
+# renumbered in the order of their first appearance before the listings are
+# compared. Only these two forms are labels: a field or method named like one
+# is left alone, though ildasm prints its name unquoted ('.field public static
+# int32 I_0000ABCD', 'ldsfld int32 I_0000ABCD'), as
+# msil/test/harness/legs/roundtrip-data-labels.test checks.
+DATA_LABEL_RE = re.compile(
+    r"^(\s*\.data\s+(?:\w+\s+)?|\s*\.field\b.*\sat\s+)(I_[0-9A-F]{8})(?=\s*(?:=|$))"
+)
 
 
 def roundtrip(args, private):
@@ -849,7 +862,17 @@ def roundtrip(args, private):
         return [failure]
 
     def comparable(listing):
-        return [l for l in listing.splitlines(True) if not BUILD_SPECIFIC_RE.match(l)]
+        labels = {}
+
+        def renumber(m):
+            label = labels.setdefault(m.group(2), "I_%d" % len(labels))
+            return m.group(1) + label
+
+        return [
+            DATA_LABEL_RE.sub(renumber, l)
+            for l in listing.splitlines(True)
+            if not BUILD_SPECIFIC_RE.match(l)
+        ]
 
     a, b = comparable(first), comparable(second)
     if a != b:

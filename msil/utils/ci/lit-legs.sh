@@ -12,9 +12,10 @@
 # job has no WSL legs: it runs the Linux triple natively, with msil_linux_sysroot=/, lit.cfg.py's
 # default on Linux); the triple is x86_64-unknown-linux-gnu-msil, the triple of Design.md
 # section 12:
-#   net8         llc/clang FileCheck tests (lld/test/MSIL and the clang driver tests included),
-#                harness, msil/test/M1 and msil/test/M2 on .NET 8 (tiered), -O0 and -O2, native
-#                oracle required (check-msil's paths)
+#   net8         llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests and, from M17,
+#                the llvm-cil-dump and llvm-cil-copy tests included), harness, msil/test/M1 and
+#                msil/test/M2 on .NET 8 (tiered), -O0 and -O2, native oracle required
+#                (check-msil's paths)
 #   net10        msil/test/M1 on .NET 10
 #   net8-tc0     msil/test/M1 on .NET 8 with DOTNET_TieredCompilation=0 (optimizing JIT)
 #   net10-tc0    msil/test/M1 on .NET 10 with DOTNET_TieredCompilation=0
@@ -86,10 +87,12 @@ while (($#)); do
 done
 build=${build:-$MSIL_REPO/build}
 
+# check-msil's paths (msil/test/CMakeLists.txt); lit-legs.ps1's $checkMsil is the same list.
 check_msil=("$MSIL_REPO/llvm/test/CodeGen/MSIL" "$MSIL_REPO/clang/test/CodeGen/MSIL"
   "$MSIL_REPO/clang/test/Preprocessor/init-msil.c" "$MSIL_REPO/clang/test/Driver/msil-toolchain.c"
   "$MSIL_REPO/clang/test/Driver/msil-link.c" "$MSIL_REPO/clang/test/Driver/msil-lto.c"
   "$MSIL_REPO/clang/test/Driver/msil-header-search.c" "$MSIL_REPO/lld/test/MSIL"
+  "$MSIL_REPO/llvm/test/tools/llvm-cil-dump" "$MSIL_REPO/llvm/test/tools/llvm-cil-copy"
   "$MSIL_REPO/msil/test")
 m1=("$MSIL_REPO/msil/test/M1")
 # msil/test/M2 (plan 5.12.5, from M14) where it exists.

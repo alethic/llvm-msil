@@ -42,9 +42,11 @@ set(MSIL_PEVERIFY_EXECUTABLE "${_msil_peverify}" CACHE FILEPATH
 # instead of breaking the configure step.
 set(MSIL_TEST_DEPS)
 # msil/test/M2 and the lto pipeline link with msil-ld (lld) and archive with
-# the tree's llvm-ar; %msil_nm is llvm-nm (M14).
+# the tree's llvm-ar; %msil_nm is llvm-nm (M14). %msil_canon is llvm-cil-dump
+# --canonical (M17), and check-msil's llvm/test/tools/llvm-cil-dump and
+# llvm-cil-copy run both tools on images that yaml2obj makes.
 foreach(_msil_dep clang llc opt FileCheck not count split-file llvm-config lld
-    llvm-ar llvm-nm)
+    llvm-ar llvm-nm llvm-cil-dump llvm-cil-copy yaml2obj)
   if(TARGET ${_msil_dep})
     list(APPEND MSIL_TEST_DEPS ${_msil_dep})
   endif()
@@ -53,11 +55,11 @@ endforeach()
 # llvm-as, llvm-ar and the llvm-lib and llvm-dlltool copies of llvm-ar for its
 # inputs, and llvm/test/CodeGen/MSIL/irsymtab-linker-options.ll, which needs
 # llvm-as and llvm-bcanalyzer (M13, M14). M15's native-library tests in
-# lld/test/MSIL also need yaml2obj, llvm-mc and llvm-readobj to make and
-# inspect their native inputs.
+# lld/test/MSIL also need yaml2obj (in MSIL_TEST_DEPS since M17), llvm-mc and
+# llvm-readobj to make and inspect their native inputs.
 set(_msil_check_deps ${MSIL_TEST_DEPS})
-foreach(_msil_dep llvm-as llvm-bcanalyzer llvm-lib llvm-dlltool yaml2obj
-    llvm-mc llvm-readobj)
+foreach(_msil_dep llvm-as llvm-bcanalyzer llvm-lib llvm-dlltool llvm-mc
+    llvm-readobj)
   if(TARGET ${_msil_dep})
     list(APPEND _msil_check_deps ${_msil_dep})
   endif()
@@ -112,6 +114,12 @@ endif()
 if(TARGET lld AND LLVM_EXTERNAL_LLD_SOURCE_DIR)
   list(APPEND _msil_lit_paths ${LLVM_EXTERNAL_LLD_SOURCE_DIR}/test/MSIL)
 endif()
+# The tests of the ECMA-335 tools llvm-cil-dump and llvm-cil-copy (M17).
+foreach(_msil_tool llvm-cil-dump llvm-cil-copy)
+  if(TARGET ${_msil_tool})
+    list(APPEND _msil_lit_paths ${LLVM_MAIN_SRC_DIR}/test/tools/${_msil_tool})
+  endif()
+endforeach()
 list(APPEND _msil_lit_paths ${CMAKE_CURRENT_BINARY_DIR})
 # Phase 2 adds ${LLVM_MAIN_SRC_DIR}/test/MC/MSIL here (M18).
 add_lit_target(check-msil "Running all MSIL tests"

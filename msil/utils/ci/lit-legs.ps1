@@ -14,11 +14,11 @@
 # Legs, in order. The numbers are the gate steps of plan section 6 that run the same command:
 # 'M14 n' for the M14 gate, 'M12 n' for the M12 gate, plain numbers for the M10 and M11 gates
 # (steps 5-12 the same in both, 20 and 21 M11's); lit-legs.sh has the Linux job's legs:
-#   net8           llc/clang FileCheck tests (lld/test/MSIL and the clang driver tests
-#                  included), harness, msil/test/M1 and msil/test/M2 on .NET 8 (tiered) and on
-#                  the .NET Framework 4.8, -O0 and -O2, native oracle required (with the VS
-#                  clang's compiler-rt builtins, lit's msil_native_rtlib=auto)
-#                                                                  (M14 11; M12 9; step 5)
+#   net8           llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests and, from
+#                  M17, the llvm-cil-dump and llvm-cil-copy tests included), harness,
+#                  msil/test/M1 and msil/test/M2 on .NET 8 (tiered) and on the .NET Framework
+#                  4.8, -O0 and -O2, native oracle required (with the VS clang's compiler-rt
+#                  builtins, lit's msil_native_rtlib=auto)          (M14 11; M12 9; step 5)
 #   net10          msil/test/M1 on .NET 10                                       (M12 10; step 6)
 #   net8-tc0       msil/test/M1 on .NET 8, DOTNET_TieredCompilation=0 (optimizing JIT)  (step 7)
 #   more-levels    msil/test/M1 on .NET 8 at O1,O3,Os,Oz (O0 and O2 run in the other legs; .ll
@@ -103,10 +103,12 @@ $ErrorActionPreference = 'Stop'
 if (-not $BuildDir) { $BuildDir = $MsilBuild }
 $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
 
+# check-msil's paths (msil/test/CMakeLists.txt); lit-legs.sh's check_msil is the same list.
 $checkMsil = @('llvm/test/CodeGen/MSIL', 'clang/test/CodeGen/MSIL', 'clang/test/Preprocessor/init-msil.c',
                'clang/test/Driver/msil-toolchain.c', 'clang/test/Driver/msil-link.c',
                'clang/test/Driver/msil-lto.c', 'clang/test/Driver/msil-header-search.c',
-               'lld/test/MSIL', 'msil/test')
+               'lld/test/MSIL', 'llvm/test/tools/llvm-cil-dump', 'llvm/test/tools/llvm-cil-copy',
+               'msil/test')
 $m1 = @('msil/test/M1')
 # msil/test/M2 (plan 5.12.5, from M14) where it exists.
 function Get-M2Paths {

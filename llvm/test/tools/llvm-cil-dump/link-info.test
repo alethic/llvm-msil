@@ -1,0 +1,587 @@
+## llvm-cil-dump --link-info (plan 5.7.10, 5.8.11): printLinkInfo's lines for
+## the link-info record of a CIL object's Module row (5.8.7), in record order,
+## with the entity name of each SIGNATURES token (a reader is given). The
+## object is the ilasm (.NET Framework 4.8, -dll -pe64 -x64) image of
+## object.il, object-form text (5.8.4) whose record was encoded by hand from
+## 5.8.8 (426 bytes):
+##   4D 53 4C 4B 01 00 00 1B 78 38 36 5F 36 34 2D 70 63 2D 77 69 6E 64 6F 77
+##   73 2D 6D 73 76 63 2D 6D 73 69 6C 01 00 00 08 04 02 08 01 D7 01 0E 01 00
+##   05 74 61 62 6C 65 01 00 00 04 00 00 18 01 82 01 07 63 6F 75 6E 74 65 72
+##   02 00 00 04 01 00 04 01 80 02 05 74 6C 73 5F 76 03 00 00 04 02 00 04 01
+##   03 08 63 6F 6D 6D 6F 6E 5F 63 04 00 00 04 04 02 01 90 10 0A 6D 79 5F 63
+##   6F 75 6E 74 65 72 00 0E 6E 61 74 69 76 65 5F 63 6F 75 6E 74 65 72 01 91
+##   08 08 65 78 74 5F 64 61 74 61 00 20 04 6D 61 69 6E 01 00 00 06 00 01 06
+##   77 65 61 6B 66 6E 02 00 00 06 00 02 06 63 74 6F 72 5F 61 03 00 00 06 00
+##   10 04 61 64 64 33 00 50 04 74 69 63 6B 00 81 04 04 68 6F 6F 6B 07 01 88
+##   04 08 74 61 62 6C 65 5F 68 69 00 08 08 01 90 10 08 6D 6F 64 5F 64 61 74
+##   61 09 6C 69 62 66 6F 6F 2E 73 6F 08 66 6F 6F 5F 64 61 74 61 02 35 03 07
+##   2E 72 6F 64 61 74 61 10 03 18 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+##   00 00 01 02 03 04 05 06 07 08 04 2E 62 73 73 08 02 04 05 2E 74 62 73 73
+##   0A 02 04 03 12 03 02 00 00 09 00 01 00 08 01 04 04 00 0C 00 78 04 01 04
+##   0C 01 06 77 65 61 6B 66 6E 00 01 00 07 05 05 01 00 65 08 00 06 13 02 02
+##   00 00 06 04 0C 02 01 01 08 03 01 00 00 0A 03 01 00 07 2A 02 00 01 6D 01
+##   02 16 2F 44 45 46 41 55 4C 54 4C 49 42 3A 77 73 32 5F 33 32 2E 6C 69 62
+##   0C 2F 69 6E 63 6C 75 64 65 3A 66 6F 6F 45 03 01 02 03
+## It has every symbol kind, binding and flag (an IMPORT data symbol with an
+## empty and one with a non-empty ImportModule among them), a READONLY, a
+## ZERO and a TLS|ZERO segment, FNADDR64, ADDR32 and DIFF relocations, a
+## comdat, an INIT entry, an SRET+byval and a NO_PROTOTYPE+VARARG signature,
+## both linker-option kinds and a skippable subsection (kind 0x45), and it
+## satisfies C1-C8 (5.8.5). The input is a yaml2obj copy of that image.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/object.yaml -o %t/a.o
+# RUN: llvm-cil-dump --link-info %t/a.o \
+# RUN:   | FileCheck %s --match-full-lines --strict-whitespace
+
+# CHECK:LinkInfo v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 abiflags=0x0 features=0x0 datamodel=8,4,2,8
+# CHECK-NEXT:Symbol 0 DATA GLOBAL DEFAULT 'table' field=0x04000001 segment=0 offset=0 size=24
+# CHECK-NEXT:Symbol 1 DATA LOCAL DEFAULT NO_STRIP 'counter' field=0x04000002 segment=1 offset=0 size=4
+# CHECK-NEXT:Symbol 2 DATA GLOBAL DEFAULT TLS 'tls_v' field=0x04000003 segment=2 offset=0 size=4
+# CHECK-NEXT:Symbol 3 DATA COMMON DEFAULT 'common_c' field=0x04000004 size=4 align=4
+# CHECK-NEXT:Symbol 4 DATA GLOBAL DEFAULT UNDEFINED IMPORT 'my_counter' import_module='' import_name='native_counter'
+# CHECK-NEXT:Symbol 5 DATA WEAK DEFAULT UNDEFINED DLLIMPORT 'ext_data'
+# CHECK-NEXT:Symbol 6 FUNCTION GLOBAL DEFAULT DLLEXPORT 'main' method=0x06000001
+# CHECK-NEXT:Symbol 7 FUNCTION WEAK DEFAULT 'weakfn' method=0x06000002
+# CHECK-NEXT:Symbol 8 FUNCTION LOCAL DEFAULT 'ctor_a' method=0x06000003
+# CHECK-NEXT:Symbol 9 FUNCTION GLOBAL DEFAULT UNDEFINED 'add3'
+# CHECK-NEXT:Symbol 10 FUNCTION GLOBAL DEFAULT UNDEFINED EXPLICIT_IMPORT 'tick'
+# CHECK-NEXT:Symbol 11 FUNCTION WEAK DEFAULT ALIAS 'hook' aliasee=7
+# CHECK-NEXT:Symbol 12 DATA GLOBAL HIDDEN ALIAS 'table_hi' aliasee=0 offset=8 size=8
+# CHECK-NEXT:Symbol 13 DATA GLOBAL DEFAULT UNDEFINED IMPORT 'mod_data' import_module='libfoo.so' import_name='foo_data'
+# CHECK-NEXT:Segment 0 '.rodata' align=8 size=24 flags=READONLY
+# CHECK-NEXT:  00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01 02 03 04 05 06 07 08
+# CHECK-NEXT:Segment 1 '.bss' align=4 size=4 flags=ZERO
+# CHECK-NEXT:Segment 2 '.tbss' align=4 size=4 flags=TLS|ZERO
+# CHECK-NEXT:Reloc FNADDR64 segment=0 offset=0 symbol=9 'add3' addend=0
+# CHECK-NEXT:Reloc ADDR32 segment=0 offset=8 symbol=1 'counter' addend=4
+# CHECK-NEXT:Reloc DIFF width=4 segment=0 offset=12 symbol=0 'table' symbol2=1 'counter' addend=-8
+# CHECK-NEXT:Comdat 'weakfn' ANY function=7
+# CHECK-NEXT:Init priority=101 symbol=8 'ctor_a'
+# CHECK-NEXT:Signature 0x06000002 'weakfn' SRET size=12 align=4 byval=1:8:8
+# CHECK-NEXT:Signature 0x0A000001 'add3' NO_PROTOTYPE VARARG fixed=1
+# CHECK-NEXT:LinkerOption DEPENDENT_LIB 'm'
+# CHECK-NEXT:LinkerOption LINKER_OPTION '/DEFAULTLIB:ws2_32.lib' '/include:foo'
+# CHECK-NEXT:Optional kind=0x45 size=3
+# CHECK-NOT:{{.}}
+
+## The record also travels as the Module row's custom attribute in the
+## canonical listing.
+# RUN: llvm-cil-dump --canonical %t/a.o \
+# RUN:   | FileCheck %s --check-prefix=CANON --match-full-lines --strict-whitespace
+# CANON:module 'a.c'
+# CANON:module .custom instance void(uint8[]) [msil.link]<msil>LinkInfo::'.ctor' = 01 00 {{([0-9A-F]{2} )+}}00 00
+
+## An image with neither a link-info record nor a symbol table.
+# RUN: yaml2obj %t/exit42.yaml -o %t/exit42.dll
+# RUN: not llvm-cil-dump --link-info %t/exit42.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NONE -DFILE=%t/exit42.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# NONE:llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': no link-info record or symbol table
+
+## A library's symbol tables (5.9.15): printSymbolTable's lines for each
+## '<msil>SymbolTable' payload on the Assembly row, in CustomAttribute table
+## order (section 12, '5.7.9, 5.8.11 and M17.c item (7) clarified (printer
+## spellings left open)'), which here is not the order of the lines' text.
+## The input is a yaml2obj copy of the ilasm (.NET Framework 4.8, -dll -pe64
+## -x64) image of symtab.il, whose two payloads were encoded by hand from
+## M17.c item 8: every data-symbol and function flag, alignments 2^2 to 2^4,
+## two export classes in the first payload and none of the lists in the
+## second.
+# RUN: yaml2obj %t/symtab.yaml -o %t/symtab.dll
+# RUN: llvm-cil-dump --link-info %t/symtab.dll \
+# RUN:   | FileCheck %s --check-prefix=SYMTAB --match-full-lines --strict-whitespace
+# SYMTAB:SymbolTable v1.0 triple=x86_64-unknown-linux-gnu-msil abi=1 runtime='c' datamodel=8,8,4,8
+# SYMTAB-NEXT:ExportClass 'libdemo'
+# SYMTAB-NEXT:ExportClass 'NS.Exports'
+# SYMTAB-NEXT:Data 'counter' size=4 align=4
+# SYMTAB-NEXT:Data CONST 'table' size=24 align=8
+# SYMTAB-NEXT:Data TLS 'tls_v' size=4 align=4
+# SYMTAB-NEXT:Data CONST WEAK 'wk' size=8 align=8
+# SYMTAB-NEXT:Data CONST TLS WEAK 'all' size=16 align=16
+# SYMTAB-NEXT:Function VARARG 'printf_like'
+# SYMTAB-NEXT:Function WEAK 'weakfn'
+# SYMTAB-NEXT:Function VARARG WEAK 'both'
+# SYMTAB-NEXT:SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8
+# SYMTAB-NEXT:ExportClass 'Other'
+# SYMTAB-NOT:{{.}}
+
+## A payload of another major version is refused. The YAML of symtab.il is
+## patched where the second payload starts ("MSYM", major 1, minor 0, flags
+## 0, ABI 1, a triple of 27 bytes), so that its major version is 2.
+# RUN: sed -e "s/4D53594D010000011B/4D53594D020000011B/" %t/symtab.yaml > %t/symtab-v2.yaml
+# RUN: yaml2obj %t/symtab-v2.yaml -o %t/symtab-v2.dll
+# RUN: not llvm-cil-dump --link-info %t/symtab-v2.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=V2 -DFILE=%t/symtab-v2.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# V2:llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': invalid symbol table: version 2 is newer than this toolchain supports (1)
+
+## Both carriers in one image: both.il is object.il with symtab.il's
+## Assembly row (its two '<msil>SymbolTable' payloads) and attribute class
+## added, so the record's MethodDef and MemberRef tokens are unchanged. The
+## record's lines come first, then each payload's block in CustomAttribute
+## table order (section 12, '5.7.9, 5.8.11 and M17.c item (7) clarified
+## (printer spellings left open)'): exactly the output for a.o followed by
+## the output for symtab.dll. The input is a yaml2obj copy of the ilasm
+## (.NET Framework 4.8, -dll -pe64 -x64) image of both.il.
+# RUN: yaml2obj %t/both.yaml -o %t/both.dll
+# RUN: llvm-cil-dump --link-info %t/both.dll > %t/both.txt
+# RUN: llvm-cil-dump --link-info %t/a.o > %t/record.txt
+# RUN: llvm-cil-dump --link-info %t/symtab.dll > %t/symtabs.txt
+# RUN: cat %t/record.txt %t/symtabs.txt > %t/both-expected.txt
+# RUN: diff %t/both-expected.txt %t/both.txt
+# RUN: FileCheck %s --input-file=%t/both.txt --check-prefix=BOTH \
+# RUN:   --match-full-lines --strict-whitespace
+# BOTH:LinkInfo v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 abiflags=0x0 features=0x0 datamodel=8,4,2,8
+# BOTH-NEXT:Symbol 0 DATA GLOBAL DEFAULT 'table' field=0x04000001 segment=0 offset=0 size=24
+# BOTH:Signature 0x06000002 'weakfn' SRET size=12 align=4 byval=1:8:8
+# BOTH-NEXT:Signature 0x0A000001 'add3' NO_PROTOTYPE VARARG fixed=1
+# BOTH:Optional kind=0x45 size=3
+# BOTH-NEXT:SymbolTable v1.0 triple=x86_64-unknown-linux-gnu-msil abi=1 runtime='c' datamodel=8,8,4,8
+# BOTH-NEXT:ExportClass 'libdemo'
+# BOTH:Function VARARG WEAK 'both'
+# BOTH-NEXT:SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8
+# BOTH-NEXT:ExportClass 'Other'
+# BOTH-NOT:{{.}}
+
+#--- object.il
+// A CIL object in object-form text (plan 5.8.4) whose link-info record
+// (5.8.7, 5.8.8) was encoded by hand: every symbol kind, binding and flag,
+// three segments, ADDR32, FNADDR64 and DIFF relocations, a comdat, an init
+// entry, two signature entries, both linker-option kinds and a skippable
+// subsection (kind 0x45).
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+
+.method public static int32 'main'() cil managed
+{
+  .maxstack 8
+  ldc.i4.1
+  call int32 [msil.extern]'<msil>Symbols'::'add3'(int32)
+  pop
+  ldsfld native int [msil.extern]'<msil>FnAddr'::'weakfn'
+  pop
+  ldsfld native int [msil.extern]'<msil>Symbols'::'my_counter'
+  pop
+  call int32 'tick'()
+  ret
+}
+.method public static void 'weakfn'(native int, native int) cil managed
+{
+  .maxstack 8
+  ret
+}
+.method assembly static void 'ctor_a'() cil managed
+{
+  .maxstack 8
+  ret
+}
+.field public static initonly native int 'table'
+.field assembly static initonly native int 'counter'
+.field public static initonly native int 'tls_v'
+.field public static initonly native int 'common_c'
+.method public hidebysig static pinvokeimpl("kernel32.dll" as "GetTickCount" nomangle cdecl) int32 'tick'() cil managed preservesig {}
+
+.module 'a.c'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = (
+    01 00 AA 01 00 00 4D 53 4C 4B 01 00 00 1B 78 38
+    36 5F 36 34 2D 70 63 2D 77 69 6E 64 6F 77 73 2D
+    6D 73 76 63 2D 6D 73 69 6C 01 00 00 08 04 02 08
+    01 D7 01 0E 01 00 05 74 61 62 6C 65 01 00 00 04
+    00 00 18 01 82 01 07 63 6F 75 6E 74 65 72 02 00
+    00 04 01 00 04 01 80 02 05 74 6C 73 5F 76 03 00
+    00 04 02 00 04 01 03 08 63 6F 6D 6D 6F 6E 5F 63
+    04 00 00 04 04 02 01 90 10 0A 6D 79 5F 63 6F 75
+    6E 74 65 72 00 0E 6E 61 74 69 76 65 5F 63 6F 75
+    6E 74 65 72 01 91 08 08 65 78 74 5F 64 61 74 61
+    00 20 04 6D 61 69 6E 01 00 00 06 00 01 06 77 65
+    61 6B 66 6E 02 00 00 06 00 02 06 63 74 6F 72 5F
+    61 03 00 00 06 00 10 04 61 64 64 33 00 50 04 74
+    69 63 6B 00 81 04 04 68 6F 6F 6B 07 01 88 04 08
+    74 61 62 6C 65 5F 68 69 00 08 08 01 90 10 08 6D
+    6F 64 5F 64 61 74 61 09 6C 69 62 66 6F 6F 2E 73
+    6F 08 66 6F 6F 5F 64 61 74 61 02 35 03 07 2E 72
+    6F 64 61 74 61 10 03 18 00 00 00 00 00 00 00 00
+    00 00 00 00 00 00 00 00 01 02 03 04 05 06 07 08
+    04 2E 62 73 73 08 02 04 05 2E 74 62 73 73 0A 02
+    04 03 12 03 02 00 00 09 00 01 00 08 01 04 04 00
+    0C 00 78 04 01 04 0C 01 06 77 65 61 6B 66 6E 00
+    01 00 07 05 05 01 00 65 08 00 06 13 02 02 00 00
+    06 04 0C 02 01 01 08 03 01 00 00 0A 03 01 00 07
+    2A 02 00 01 6D 01 02 16 2F 44 45 46 41 55 4C 54
+    4C 49 42 3A 77 73 32 5F 33 32 2E 6C 69 62 0C 2F
+    69 6E 63 6C 75 64 65 3A 66 6F 6F 45 03 01 02 03
+    00 00
+)
+#--- object.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 9518
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 9424
+    Size:            91
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     1338
+    SectionData:     102500000000000000000000000000004800000002000500802000004C040000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006617280100000A267E0200000A267E0300000A2628040000062A062A062A000042534A4201000100000000000C00000076342E302E33303331390000000005006C00000030010000237E00009C010000C400000023537472696E6773000000006002000008000000235553006802000010000000234755494400000078020000D401000023426C6F620000000000000002000001571500140800000000FA25330016000001000000030000000100000004000000040000000200000004000000010000000100000001000000030000000000510001000000000006000A00000006001D0000000E003C000000000000000100000000000100010036008100060033008700060036008F00060036009500060060200000000016009E00C30101007A200000000016002A00C70101007C20000000001300AB00CD0103000000000080009620B200C301030000000100A30000000200A70009001800010011002A00060009003100060019004B000900270023000F00550001020900B7000100000000000000000000000000000062000000000000000000000000000000000000006E000000000000000000000000000000000000007700000000000000003C4D6F64756C653E003C6D73696C3E53796D626F6C730061646433003C6D73696C3E466E41646472007765616B666E006D795F636F756E746572003C6D73696C3E4C696E6B496E666F002E63746F7200612E63006B65726E656C33322E646C6C006D73696C2E65787465726E006D73696C2E62636C006D73696C2E6C696E6B007461626C6500636F756E74657200746C735F7600636F6D6D6F6E5F63006D61696E00415F3000415F310063746F725F61007469636B004765745469636B436F756E74000003200000000000C3FA1C22C7A5E045B7F945D9C1EB32ED000400010808020618052001011D0581B20100AA0100004D534C4B0100001B7838365F36342D70632D77696E646F77732D6D7376632D6D73696C0100000804020801D7010E0100057461626C650100000400001801820107636F756E7465720200000401000401800205746C735F7603000004020004010308636F6D6D6F6E5F630400000404020190100A6D795F636F756E746572000E6E61746976655F636F756E746572019108086578745F646174610020046D61696E010000060001067765616B666E0200000600020663746F725F6103000006001004616464330050047469636B00810404686F6F6B07018804087461626C655F6869000808019010086D6F645F64617461096C6962666F6F2E736F08666F6F5F64617461023503072E726F64617461100318000000000000000000000000000000000102030405060708042E627373080204052E746273730A02040312030200000900010008010404000C00780401040C01067765616B666E000100070505010065080006130202000006040C02010108030100000A030100072A0200016D0102162F44454641554C544C49423A7773325F33322E6C69620C2F696E636C7564653A666F6F45030102030000030000080500020118180300000100000000000000F824000000000000000000001E25000000200000000000000000000000000000000000000000000010250000000000000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000030A50000
+symbols:         []
+...
+#--- exit42.il
+// A Phase-1-shaped module: one method with the entry point.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'exit42' { }
+.module 'exit42.dll'
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldc.i4.s 42
+  ret
+}
+#--- exit42.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8702
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8616
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     522
+    SectionData:     E021000000000000000000000000000048000000020005006420000040010000010000000100000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000E1F2A2A42534A4201000100000000000C00000076342E302E33303331390000000005006C00000080000000237E0000EC0000002C00000023537472696E67730000000018010000080000002355530020010000100000002347554944000000300100001000000023426C6F620000000000000002000001450000000900000000FA253300160000010000000100000001000000010000000100000000000A00010000000000000000000100000000000100010060200000000016001E000A00010000000000000000000000000000000000000023000000040000000000000000000000010015000000000000000000003C4D6F64756C653E006578697434322E646C6C006D73636F726C6962006D61696E006578697434320000000003200000000000E07A7BBA2D8F4B46BA9538BBD986D1F50008B77A5C561934E08903000008000000000000D02100000000000000000000EE210000002000000000000000000000000000000000000000000000E021000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000000A20000
+symbols:         []
+...
+#--- symtab.il
+// A library with two '<msil>SymbolTable' attributes on its Assembly row
+// (plan 5.9.15). Their payloads were encoded by hand from M17.c item 8; each
+// value is the byte-array framing: 01 00, the u32 payload size, the payload
+// and 00 00.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'lib'
+{
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = (
+    01 00 87 00 00 00
+    4D 53 59 4D 01 00 00 01                   // "MSYM", v1.0, flags 0, ABI 1
+    1D 78 38 36 5F 36 34 2D 75 6E 6B 6E 6F 77 6E 2D
+    6C 69 6E 75 78 2D 67 6E 75 2D 6D 73 69 6C // 'x86_64-unknown-linux-gnu-msil'
+    01 63                                     // C runtime 'c'
+    08 08 04 08                               // data model 8,8,4,8
+    02                                        // 2 export classes:
+    07 6C 69 62 64 65 6D 6F                   //   'libdemo'
+    0A 4E 53 2E 45 78 70 6F 72 74 73          //   'NS.Exports'
+    05                                        // 5 data symbols:
+    07 63 6F 75 6E 74 65 72 04 02 00          //   'counter' size 4, 2^2
+    05 74 61 62 6C 65 18 03 01                //   'table' size 24, 2^3, const
+    05 74 6C 73 5F 76 04 02 02                //   'tls_v' size 4, 2^2, thread-local
+    02 77 6B 08 03 05                         //   'wk' size 8, 2^3, const weak
+    03 61 6C 6C 10 04 07                      //   'all' size 16, 2^4, all three
+    03                                        // 3 flagged functions:
+    0B 70 72 69 6E 74 66 5F 6C 69 6B 65 01    //   'printf_like' variadic
+    06 77 65 61 6B 66 6E 02                   //   'weakfn' weak
+    04 62 6F 74 68 03                         //   'both' variadic weak
+    00 00
+  )
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = (
+    01 00 36 00 00 00
+    4D 53 59 4D 01 00 00 01                   // "MSYM", v1.0, flags 0, ABI 1
+    1B 78 38 36 5F 36 34 2D 70 63 2D 77 69 6E
+    64 6F 77 73 2D 6D 73 76 63 2D 6D 73 69 6C // 'x86_64-pc-windows-msvc-msil'
+    04 6E 6F 6E 65                            // C runtime 'none'
+    08 04 02 08                               // data model 8,4,2,8
+    01 05 4F 74 68 65 72                      // 1 export class: 'Other'
+    00                                        // no data symbols
+    00                                        // no flagged functions
+    00 00
+  )
+}
+.module 'lib.dll'
+
+.class private auto ansi sealed '<msil>SymbolTable' extends [mscorlib]System.Attribute
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor(uint8[] 'payload') cil managed
+  {
+    .maxstack 8
+    ret
+  }
+}
+#--- symtab.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8990
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8904
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     810
+    SectionData:     002300000000000000000000000000004800000002000500642000006402000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000062A000042534A4201000100000000000C00000076342E302E33303331390000000005006C000000B0000000237E00001C0100005000000023537472696E6773000000006C01000008000000235553007401000010000000234755494400000084010000E000000023426C6F620000000000000002000001471100000900000000FA253300160000010000000100000002000000010000000100000002000000010000000100000000001B00010000000000060011000A000000000001000000000001000100000100002C00000005000100010060200000000086183E000A0001000000010044002E000A0010002E000A00A1000000000000000000000000000000000000004C00000004000000000000000000000001002300000000000000003C4D6F64756C653E0053797374656D00417474726962757465006C69622E646C6C006D73636F726C6962003C6D73696C3E53796D626F6C5461626C65002E63746F72007061796C6F6164006C6962000003200000000000A052ECF3E5BC5F41AECAC13119839B190008B77A5C561934E089052001011D05808F0100870000004D53594D010000011D7838365F36342D756E6B6E6F776E2D6C696E75782D676E752D6D73696C01630808040802076C696264656D6F0A4E532E4578706F7274730507636F756E746572040200057461626C6518030105746C735F7604020202776B08030503616C6C100407030B7072696E74665F6C696B6501067765616B666E0204626F74680300003E0100360000004D53594D010000011B7838365F36342D70632D77696E646F77732D6D7376632D6D73696C046E6F6E650804020801054F7468657200000000F022000000000000000000000E2300000020000000000000000000000000000000000000000000000023000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000020A30000
+symbols:         []
+...
+#--- both.il
+// A CIL object (object.il) that also carries symtab.il's two
+// '<msil>SymbolTable' payloads on an Assembly row, with their attribute
+// class: --link-info prints the Module-row record, then each payload.
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'lib'
+{
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = (
+    01 00 87 00 00 00
+    4D 53 59 4D 01 00 00 01                   // "MSYM", v1.0, flags 0, ABI 1
+    1D 78 38 36 5F 36 34 2D 75 6E 6B 6E 6F 77 6E 2D
+    6C 69 6E 75 78 2D 67 6E 75 2D 6D 73 69 6C // 'x86_64-unknown-linux-gnu-msil'
+    01 63                                     // C runtime 'c'
+    08 08 04 08                               // data model 8,8,4,8
+    02                                        // 2 export classes:
+    07 6C 69 62 64 65 6D 6F                   //   'libdemo'
+    0A 4E 53 2E 45 78 70 6F 72 74 73          //   'NS.Exports'
+    05                                        // 5 data symbols:
+    07 63 6F 75 6E 74 65 72 04 02 00          //   'counter' size 4, 2^2
+    05 74 61 62 6C 65 18 03 01                //   'table' size 24, 2^3, const
+    05 74 6C 73 5F 76 04 02 02                //   'tls_v' size 4, 2^2, thread-local
+    02 77 6B 08 03 05                         //   'wk' size 8, 2^3, const weak
+    03 61 6C 6C 10 04 07                      //   'all' size 16, 2^4, all three
+    03                                        // 3 flagged functions:
+    0B 70 72 69 6E 74 66 5F 6C 69 6B 65 01    //   'printf_like' variadic
+    06 77 65 61 6B 66 6E 02                   //   'weakfn' weak
+    04 62 6F 74 68 03                         //   'both' variadic weak
+    00 00
+  )
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = (
+    01 00 36 00 00 00
+    4D 53 59 4D 01 00 00 01                   // "MSYM", v1.0, flags 0, ABI 1
+    1B 78 38 36 5F 36 34 2D 70 63 2D 77 69 6E
+    64 6F 77 73 2D 6D 73 76 63 2D 6D 73 69 6C // 'x86_64-pc-windows-msvc-msil'
+    04 6E 6F 6E 65                            // C runtime 'none'
+    08 04 02 08                               // data model 8,4,2,8
+    01 05 4F 74 68 65 72                      // 1 export class: 'Other'
+    00                                        // no data symbols
+    00                                        // no flagged functions
+    00 00
+  )
+}
+
+.method public static int32 'main'() cil managed
+{
+  .maxstack 8
+  ldc.i4.1
+  call int32 [msil.extern]'<msil>Symbols'::'add3'(int32)
+  pop
+  ldsfld native int [msil.extern]'<msil>FnAddr'::'weakfn'
+  pop
+  ldsfld native int [msil.extern]'<msil>Symbols'::'my_counter'
+  pop
+  call int32 'tick'()
+  ret
+}
+.method public static void 'weakfn'(native int, native int) cil managed
+{
+  .maxstack 8
+  ret
+}
+.method assembly static void 'ctor_a'() cil managed
+{
+  .maxstack 8
+  ret
+}
+.field public static initonly native int 'table'
+.field assembly static initonly native int 'counter'
+.field public static initonly native int 'tls_v'
+.field public static initonly native int 'common_c'
+.method public hidebysig static pinvokeimpl("kernel32.dll" as "GetTickCount" nomangle cdecl) int32 'tick'() cil managed preservesig {}
+
+.module 'a.c'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = (
+    01 00 AA 01 00 00 4D 53 4C 4B 01 00 00 1B 78 38
+    36 5F 36 34 2D 70 63 2D 77 69 6E 64 6F 77 73 2D
+    6D 73 76 63 2D 6D 73 69 6C 01 00 00 08 04 02 08
+    01 D7 01 0E 01 00 05 74 61 62 6C 65 01 00 00 04
+    00 00 18 01 82 01 07 63 6F 75 6E 74 65 72 02 00
+    00 04 01 00 04 01 80 02 05 74 6C 73 5F 76 03 00
+    00 04 02 00 04 01 03 08 63 6F 6D 6D 6F 6E 5F 63
+    04 00 00 04 04 02 01 90 10 0A 6D 79 5F 63 6F 75
+    6E 74 65 72 00 0E 6E 61 74 69 76 65 5F 63 6F 75
+    6E 74 65 72 01 91 08 08 65 78 74 5F 64 61 74 61
+    00 20 04 6D 61 69 6E 01 00 00 06 00 01 06 77 65
+    61 6B 66 6E 02 00 00 06 00 02 06 63 74 6F 72 5F
+    61 03 00 00 06 00 10 04 61 64 64 33 00 50 04 74
+    69 63 6B 00 81 04 04 68 6F 6F 6B 07 01 88 04 08
+    74 61 62 6C 65 5F 68 69 00 08 08 01 90 10 08 6D
+    6F 64 5F 64 61 74 61 09 6C 69 62 66 6F 6F 2E 73
+    6F 08 66 6F 6F 5F 64 61 74 61 02 35 03 07 2E 72
+    6F 64 61 74 61 10 03 18 00 00 00 00 00 00 00 00
+    00 00 00 00 00 00 00 00 01 02 03 04 05 06 07 08
+    04 2E 62 73 73 08 02 04 05 2E 74 62 73 73 0A 02
+    04 03 12 03 02 00 00 09 00 01 00 08 01 04 04 00
+    0C 00 78 04 01 04 0C 01 06 77 65 61 6B 66 6E 00
+    01 00 07 05 05 01 00 65 08 00 06 13 02 02 00 00
+    06 04 0C 02 01 01 08 03 01 00 00 0A 03 01 00 07
+    2A 02 00 01 6D 01 02 16 2F 44 45 46 41 55 4C 54
+    4C 49 42 3A 77 73 32 5F 33 32 2E 6C 69 62 0C 2F
+    69 6E 63 6C 75 64 65 3A 66 6F 6F 45 03 01 02 03
+    00 00
+)
+
+.class private auto ansi sealed '<msil>SymbolTable' extends [mscorlib]System.Attribute
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor(uint8[] 'payload') cil managed
+  {
+    .maxstack 8
+    ret
+  }
+}
+#--- both.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 9886
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 9792
+    Size:            91
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     1706
+    SectionData:     80260000000000000000000000000000480000000200050080200000C0050000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006617280100000A267E0200000A267E0300000A2628040000062A062A062A062A42534A4201000100000000000C00000076342E302E33303331390000000005006C00000094010000237E000000020000FC00000023537472696E677300000000FC02000008000000235553000403000010000000234755494400000014030000AC02000023426C6F620000000000000002000001571500140900000000FA2533001600000100000004000000020000000400000005000000030000000400000003000000010000000100000001000000040000000000620001000000000006000A00000006001D0000000E003C0000001200580051000000000001000000000001000100000100009B0000001100050005003600AD0006003300B30006003600BB0006003600C10006006020000000001600CA00CC0101007A200000000016002A00D00101007C20000000001300D700D60103000000000080009620DE00CC0103007E200000000086184B000900030000000100CF0000000200D30000000100F00009001800010011002A00060009003100060019004B000900270023000F002E002A00DA012E002A006B02660001020900E3000100000000000000000000000000000000000000F8000000000000000000000000000000000073000000000000000000000000000000000000007F00000000000000000000000000000000000000880000000000040000000000000000000000C30192000000000000000000003C4D6F64756C653E003C6D73696C3E53796D626F6C730061646433003C6D73696C3E466E41646472007765616B666E006D795F636F756E746572003C6D73696C3E4C696E6B496E666F002E63746F720053797374656D0041747472696275746500612E63006B65726E656C33322E646C6C006D73696C2E65787465726E006D73696C2E62636C006D73696C2E6C696E6B006D73636F726C6962003C6D73696C3E53796D626F6C5461626C65007461626C6500636F756E74657200746C735F7600636F6D6D6F6E5F63006D61696E00415F3000415F310063746F725F61007469636B004765745469636B436F756E74007061796C6F6164006C6962000003200000000000E7F7D4F925977E4E9FC50D5DE7BB3E6B000400010808020618052001011D0581B20100AA0100004D534C4B0100001B7838365F36342D70632D77696E646F77732D6D7376632D6D73696C0100000804020801D7010E0100057461626C650100000400001801820107636F756E7465720200000401000401800205746C735F7603000004020004010308636F6D6D6F6E5F630400000404020190100A6D795F636F756E746572000E6E61746976655F636F756E746572019108086578745F646174610020046D61696E010000060001067765616B666E0200000600020663746F725F6103000006001004616464330050047469636B00810404686F6F6B07018804087461626C655F6869000808019010086D6F645F64617461096C6962666F6F2E736F08666F6F5F64617461023503072E726F64617461100318000000000000000000000000000000000102030405060708042E627373080204052E746273730A02040312030200000900010008010404000C00780401040C01067765616B666E000100070505010065080006130202000006040C02010108030100000A030100072A0200016D0102162F44454641554C544C49423A7773325F33322E6C69620C2F696E636C7564653A666F6F4503010203000008B77A5C561934E0890300000805000201181803000001808F0100870000004D53594D010000011D7838365F36342D756E6B6E6F776E2D6C696E75782D676E752D6D73696C01630808040802076C696264656D6F0A4E532E4578706F7274730507636F756E746572040200057461626C6518030105746C735F7604020202776B08030503616C6C100407030B7072696E74665F6C696B6501067765616B666E0204626F74680300003E0100360000004D53594D010000011B7838365F36342D70632D77696E646F77732D6D7376632D6D73696C046E6F6E650804020801054F746865720000000000006826000000000000000000008E26000000200000000000000000000000000000000000000000000080260000000000000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C000000A0A60000
+symbols:         []
+...

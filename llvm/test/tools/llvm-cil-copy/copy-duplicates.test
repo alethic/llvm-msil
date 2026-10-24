@@ -1,0 +1,125 @@
+## llvm-cil-copy merges duplicate rows (plan M17.d: rows are rebuilt in
+## table order with an old-to-new token map, and merged duplicates map to one
+## row): MetadataBuilder keeps one TypeRef row per scope and name and one
+## MemberRef row per parent, name and signature, and every use of a
+## duplicate refers to the row that is kept. The input is a yaml2obj copy of
+## the ilasm (.NET Framework 4.8, -exe -pe64 -x64) image of dup.il, whose
+## YAML was patched in its #~ stream so that it holds duplicates, which
+## ilasm never writes:
+##   TypeRef rows 1-2 (System.Console, System.Math), from
+##     06 00 11 00 0A 00 06 00 23 00 0A 00 to
+##     06 00 11 00 0A 00 06 00 11 00 0A 00 (TypeName 'Console' twice);
+##   MemberRef rows 1-2 (WriteLine(), WriteLine(int32)), from
+##     09 00 19 00 01 00 09 00 19 00 05 00 to
+##     09 00 19 00 01 00 09 00 19 00 01 00 (Signature 00 00 01 twice).
+## The copy has one TypeRef and one MemberRef row fewer, and it is
+## canonically equal to its input.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/dup.yaml -o %t/dup.exe
+# RUN: llvm-cil-copy %t/dup.exe -o %t/dup.copy.exe
+
+## The input's duplicates.
+# RUN: llvm-cil-dump --tables %t/dup.exe \
+# RUN:   | FileCheck %s --check-prefix=INPUT --match-full-lines --strict-whitespace
+# INPUT:Table: TypeRef rows=2 rowsize=6
+# INPUT-NEXT:  TypeRef[1]: ResolutionScope=0x23000001 TypeName='Console' TypeNamespace='System'
+# INPUT-NEXT:  TypeRef[2]: ResolutionScope=0x23000001 TypeName='Console' TypeNamespace='System'
+# INPUT:Table: MemberRef rows=3 rowsize=6
+# INPUT-NEXT:  MemberRef[1]: Class=0x01000001 Name='WriteLine' Signature=00 00 01
+# INPUT-NEXT:  MemberRef[2]: Class=0x01000001 Name='WriteLine' Signature=00 00 01
+# INPUT-NEXT:  MemberRef[3]: Class=0x01000002 Name='Abs' Signature=00 01 08 08
+
+## The copy keeps the first row of each pair, and 'Abs' refers to the
+## TypeRef that is kept.
+# RUN: llvm-cil-dump --tables %t/dup.copy.exe \
+# RUN:   | FileCheck %s --check-prefix=COPY --match-full-lines --strict-whitespace
+# COPY:Table: TypeRef rows=1 rowsize=6
+# COPY-NEXT:  TypeRef[1]: ResolutionScope=0x23000001 TypeName='Console' TypeNamespace='System'
+# COPY-NEXT:Table: TypeDef rows=1 rowsize=14
+# COPY:Table: MemberRef rows=2 rowsize=6
+# COPY-NEXT:  MemberRef[1]: Class=0x01000001 Name='WriteLine' Signature=00 00 01
+# COPY-NEXT:  MemberRef[2]: Class=0x01000001 Name='Abs' Signature=00 01 08 08
+# COPY-NEXT:Table: {{.+}}
+
+## Canonically equal: both calls of WriteLine name the same method, and Abs
+## is a member of [mscorlib]System.Console in both images.
+# RUN: llvm-cil-dump --canonical %t/dup.exe > %t/dup.txt
+# RUN: llvm-cil-dump --canonical %t/dup.copy.exe > %t/dup.copy.txt
+# RUN: diff %t/dup.txt %t/dup.copy.txt
+# RUN: FileCheck %s --input-file=%t/dup.copy.txt --check-prefix=CANON \
+# RUN:   --match-full-lines --strict-whitespace
+# CANON:    L0: call void() [mscorlib]System.Console::'WriteLine'
+# CANON-NEXT:    L1: ldc.i4.1
+# CANON-NEXT:    L2: call void() [mscorlib]System.Console::'WriteLine'
+# CANON-NEXT:    L3: ldc.i4.m1
+# CANON-NEXT:    L4: call int32(int32) [mscorlib]System.Console::'Abs'
+# CANON-NEXT:    L5: ret
+
+#--- dup.il
+// Two TypeRefs (System.Console, System.Math) and three MemberRefs
+// (Console::WriteLine(), Console::WriteLine(int32), Math::Abs(int32)). The
+// YAML is patched so that the second TypeRef names System.Console and the
+// second MemberRef has the signature of the first.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'dup' { }
+.module 'dup.exe'
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  call void [mscorlib]System.Console::WriteLine()
+  ldc.i4.1
+  call void [mscorlib]System.Console::WriteLine(int32)
+  ldc.i4.m1
+  call int32 [mscorlib]System.Math::Abs(int32)
+  ret
+}
+#--- dup.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8798
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8704
+    Size:            91
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     618
+    SectionData:     402200000000000000000000000000004800000002000500742000008C010000010000000100000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004A280100000A17280200000A15280300000A2A0042534A4201000100000000000C00000076342E302E33303331390000000005006C000000A4000000237E0000100100004800000023537472696E67730000000058010000080000002355530060010000100000002347554944000000700100001C00000023426C6F620000000000000002000001470400000900000000FA2533001600000100000002000000010000000100000003000000010000000100000000002C00010000000000060011000A00060011000A00000000000100000000000100010060200000000016003D0018000100090019000100090019000100110028000A00000000000000000000000000000000000000420000000400000000000000000000000F003400000000000000003C4D6F64756C653E0053797374656D00436F6E736F6C650057726974654C696E65004D61746800416273006475702E657865006D73636F726C6962006D61696E0064757000000000032000000000009AF1AD58DC89054A83A594FEDF6861AB00030000010400010108040001080808B77A5C561934E089030000082822000000000000000000004E22000000200000000000000000000000000000000000000000000040220000000000000000000000000000000000000000000000005F436F724578654D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000060A20000
+symbols:         []
+...

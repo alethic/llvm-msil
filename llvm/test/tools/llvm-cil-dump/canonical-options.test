@@ -1,0 +1,648 @@
+## The options of llvm-cil-dump --canonical (plan 5.7.10) and the six
+## normalizations of plan 5.12.6, each on an input where it changes the
+## listing. The six apply while the listing is produced, before sorting, so
+## --scopes=strip also reorders the two fields named 'f' of NS.Alpha. Every
+## expected line is mdcanon's (M16) for the same image. The input is a
+## yaml2obj copy of the ilasm (.NET Framework 4.8, -dll -pe64 -x64) image of
+## options.il, whose YAML was patched in one place: the ldc.r4 operand of
+## 'snan' is the float32 signaling NaN 0x7F80ABCD (bit 22 clear), which ilasm
+## would have quieted to 0x7FC0ABCD (the source has the quiet one). What
+## --snan=quiet leaves unchanged is checked on a second input, snan.il,
+## assembled and patched the same way.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/opts.yaml -o %t/opts.dll
+
+## Defaults.
+# RUN: llvm-cil-dump --canonical %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=DEFAULT --match-full-lines --strict-whitespace
+
+# DEFAULT:pe PE32+ machine=0x8664 dll subsystem=3
+# DEFAULT-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# DEFAULT-NEXT:entrypoint int32() '<Module>'::'main'
+# DEFAULT-NEXT:assembly 'opts' ver 1.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-
+# DEFAULT-NEXT:module 'opts.dll'
+# DEFAULT-NEXT:assemblyref 'aaa' ver 1.0.0.0 flags=0x00000000 key=- culture=''
+# DEFAULT-NEXT:assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# DEFAULT-NEXT:assemblyref 'zzz' ver 1.0.0.0 flags=0x00000000 key=- culture=''
+# DEFAULT-NEXT:moduleref 'native.dll'
+# DEFAULT-NEXT:moduleref 'other.netmodule'
+# DEFAULT-EMPTY:
+# DEFAULT-NEXT:.class '<Module>' flags=0x00000000
+# DEFAULT-NEXT:  .method 'forms' int32(int32) flags=0x0016 impl=0x0000
+# DEFAULT-NEXT:    .param 1 'a' flags=0x0000
+# DEFAULT-NEXT:    .maxstack 2 initlocals
+# DEFAULT-NEXT:    .locals (int32)
+# DEFAULT-NEXT:    L0: ldarg.s 0
+# DEFAULT-NEXT:    L1: starg.s 0
+# DEFAULT-NEXT:    L2: ldarga.s 0
+# DEFAULT-NEXT:    L3: pop
+# DEFAULT-NEXT:    L4: ldc.i4.s 5
+# DEFAULT-NEXT:    L5: stloc.s 0
+# DEFAULT-NEXT:    L6: ldloca.s 0
+# DEFAULT-NEXT:    L7: pop
+# DEFAULT-NEXT:    L8: ldloc.s 0
+# DEFAULT-NEXT:    L9: brtrue.s L11
+# DEFAULT-NEXT:    L10: br.s L11
+# DEFAULT-NEXT:    L11: ldloc.0
+# DEFAULT-NEXT:    L12: ret
+# DEFAULT-NEXT:  .method 'main' int32() flags=0x0016 impl=0x0000
+# DEFAULT-NEXT:    .maxstack 8
+# DEFAULT-NEXT:    L0: ldc.i4.0
+# DEFAULT-NEXT:    L1: ret
+# DEFAULT-NEXT:  .method 'puts' int32(native int) flags=0x2016 impl=0x0080
+# DEFAULT-NEXT:    .pinvokeimpl 'native.dll' entry 'puts' flags=0x0200
+# DEFAULT-NEXT:    .param 1 'A_0' flags=0x0000
+# DEFAULT-NEXT:  .method 'small' int32(int32, int32&) flags=0x0016 impl=0x0000
+# DEFAULT-NEXT:    .param 1 'A_0' flags=0x0000
+# DEFAULT-NEXT:    .param 2 'o' flags=0x0002
+# DEFAULT-NEXT:    .maxstack 2 initlocals
+# DEFAULT-NEXT:    L0: ldarg.1
+# DEFAULT-NEXT:    L1: ldarg.0
+# DEFAULT-NEXT:    L2: stind.i4
+# DEFAULT-NEXT:    L3: ldc.i4.0
+# DEFAULT-NEXT:    L4: ret
+# DEFAULT-NEXT:  .method 'snan' float32() flags=0x0016 impl=0x0000
+# DEFAULT-NEXT:    .maxstack 1 initlocals
+# DEFAULT-NEXT:    L0: ldc.r4 float32(0x7F80ABCD)
+# DEFAULT-NEXT:    L1: ret
+# DEFAULT-EMPTY:
+# DEFAULT-NEXT:.class 'NS.Alpha' flags=0x00000001 extends [mscorlib]System.Object
+# DEFAULT-NEXT:  .field 'f' class [aaa]NS.Z flags=0x0016
+# DEFAULT-NEXT:  .field 'f' class [zzz]NS.A flags=0x0016
+# DEFAULT-EMPTY:
+# DEFAULT-NEXT:.class 'NS.Zeta' flags=0x00000001 extends [mscorlib]System.Object
+# DEFAULT-NEXT:  .field 'remote' class [.module other.netmodule]NS.Remote flags=0x0016
+# DEFAULT-NOT:{{.}}
+
+## --scopes=strip: AssemblyRef scopes print [*] and the assemblyref lines go;
+## [.module <m>] scopes stay. The fields 'f' are sorted on the stripped text.
+# RUN: llvm-cil-dump --scopes=strip %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=SCOPES --match-full-lines --strict-whitespace \
+# RUN:       --implicit-check-not=assemblyref --implicit-check-not=[mscorlib]
+# SCOPES:module 'opts.dll'
+# SCOPES-NEXT:moduleref 'native.dll'
+# SCOPES-NEXT:moduleref 'other.netmodule'
+# SCOPES:.class 'NS.Alpha' flags=0x00000001 extends [*]System.Object
+# SCOPES-NEXT:  .field 'f' class [*]NS.A flags=0x0016
+# SCOPES-NEXT:  .field 'f' class [*]NS.Z flags=0x0016
+# SCOPES-EMPTY:
+# SCOPES-NEXT:.class 'NS.Zeta' flags=0x00000001 extends [*]System.Object
+# SCOPES-NEXT:  .field 'remote' class [.module other.netmodule]NS.Remote flags=0x0016
+
+## --order=decl: header lists, types and members in table order.
+# RUN: llvm-cil-dump --order=decl %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=DECL --match-full-lines --strict-whitespace
+
+# DECL:pe PE32+ machine=0x8664 dll subsystem=3
+# DECL-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# DECL-NEXT:entrypoint int32() '<Module>'::'main'
+# DECL-NEXT:assembly 'opts' ver 1.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-
+# DECL-NEXT:module 'opts.dll'
+# DECL-NEXT:assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# DECL-NEXT:assemblyref 'aaa' ver 1.0.0.0 flags=0x00000000 key=- culture=''
+# DECL-NEXT:assemblyref 'zzz' ver 1.0.0.0 flags=0x00000000 key=- culture=''
+# DECL-NEXT:moduleref 'native.dll'
+# DECL-NEXT:moduleref 'other.netmodule'
+# DECL-EMPTY:
+# DECL-NEXT:.class '<Module>' flags=0x00000000
+# DECL-NEXT:  .method 'puts' int32(native int) flags=0x2016 impl=0x0080
+# DECL-NEXT:    .pinvokeimpl 'native.dll' entry 'puts' flags=0x0200
+# DECL-NEXT:    .param 1 'A_0' flags=0x0000
+# DECL-NEXT:  .method 'small' int32(int32, int32&) flags=0x0016 impl=0x0000
+# DECL-NEXT:    .param 1 'A_0' flags=0x0000
+# DECL-NEXT:    .param 2 'o' flags=0x0002
+# DECL-NEXT:    .maxstack 2 initlocals
+# DECL-NEXT:    L0: ldarg.1
+# DECL-NEXT:    L1: ldarg.0
+# DECL-NEXT:    L2: stind.i4
+# DECL-NEXT:    L3: ldc.i4.0
+# DECL-NEXT:    L4: ret
+# DECL-NEXT:  .method 'snan' float32() flags=0x0016 impl=0x0000
+# DECL-NEXT:    .maxstack 1 initlocals
+# DECL-NEXT:    L0: ldc.r4 float32(0x7F80ABCD)
+# DECL-NEXT:    L1: ret
+# DECL-NEXT:  .method 'forms' int32(int32) flags=0x0016 impl=0x0000
+# DECL-NEXT:    .param 1 'a' flags=0x0000
+# DECL-NEXT:    .maxstack 2 initlocals
+# DECL-NEXT:    .locals (int32)
+# DECL-NEXT:    L0: ldarg.s 0
+# DECL-NEXT:    L1: starg.s 0
+# DECL-NEXT:    L2: ldarga.s 0
+# DECL-NEXT:    L3: pop
+# DECL-NEXT:    L4: ldc.i4.s 5
+# DECL-NEXT:    L5: stloc.s 0
+# DECL-NEXT:    L6: ldloca.s 0
+# DECL-NEXT:    L7: pop
+# DECL-NEXT:    L8: ldloc.s 0
+# DECL-NEXT:    L9: brtrue.s L11
+# DECL-NEXT:    L10: br.s L11
+# DECL-NEXT:    L11: ldloc.0
+# DECL-NEXT:    L12: ret
+# DECL-NEXT:  .method 'main' int32() flags=0x0016 impl=0x0000
+# DECL-NEXT:    .maxstack 8
+# DECL-NEXT:    L0: ldc.i4.0
+# DECL-NEXT:    L1: ret
+# DECL-EMPTY:
+# DECL-NEXT:.class 'NS.Zeta' flags=0x00000001 extends [mscorlib]System.Object
+# DECL-NEXT:  .field 'remote' class [.module other.netmodule]NS.Remote flags=0x0016
+# DECL-EMPTY:
+# DECL-NEXT:.class 'NS.Alpha' flags=0x00000001 extends [mscorlib]System.Object
+# DECL-NEXT:  .field 'f' class [zzz]NS.A flags=0x0016
+# DECL-NEXT:  .field 'f' class [aaa]NS.Z flags=0x0016
+# DECL-NOT:{{.}}
+
+## --forms=canon: short branches and the .s forms of the variable and
+## ldc.i4.s instructions print as their long forms.
+# RUN: llvm-cil-dump --forms=canon %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=FORMS --match-full-lines --strict-whitespace
+# FORMS:  .method 'forms' int32(int32) flags=0x0016 impl=0x0000
+# FORMS-NEXT:    .param 1 'a' flags=0x0000
+# FORMS-NEXT:    .maxstack 2 initlocals
+# FORMS-NEXT:    .locals (int32)
+# FORMS-NEXT:    L0: ldarg 0
+# FORMS-NEXT:    L1: starg 0
+# FORMS-NEXT:    L2: ldarga 0
+# FORMS-NEXT:    L3: pop
+# FORMS-NEXT:    L4: ldc.i4 5
+# FORMS-NEXT:    L5: stloc 0
+# FORMS-NEXT:    L6: ldloca 0
+# FORMS-NEXT:    L7: pop
+# FORMS-NEXT:    L8: ldloc 0
+# FORMS-NEXT:    L9: brtrue L11
+# FORMS-NEXT:    L10: br L11
+# FORMS-NEXT:    L11: ldloc.0
+# FORMS-NEXT:    L12: ret
+
+## --assembly-hash=ignore: the assembly line prints hash=*.
+# RUN: llvm-cil-dump --assembly-hash=ignore %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=HASH --match-full-lines --strict-whitespace \
+# RUN:       --implicit-check-not=hash=0x
+# HASH:assembly 'opts' ver 1.0.0.0 flags=0x00000000 hash=* culture='' key=-
+
+## --params=drop: no .param line for a Param row with flags 0 and neither a
+## FieldMarshal nor a Constant row, whatever its name ('A_0' of ilasm, 'a').
+# RUN: llvm-cil-dump --params=drop %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=PARAMS --match-full-lines --strict-whitespace \
+# RUN:       --implicit-check-not=.param
+# PARAMS:  .method 'forms' int32(int32) flags=0x0016 impl=0x0000
+# PARAMS-NEXT:    .maxstack 2 initlocals
+# PARAMS:  .method 'puts' int32(native int) flags=0x2016 impl=0x0080
+# PARAMS-NEXT:    .pinvokeimpl 'native.dll' entry 'puts' flags=0x0200
+# PARAMS-NEXT:  .method 'small' int32(int32, int32&) flags=0x0016 impl=0x0000
+# PARAMS-NEXT:    .param 2 'o' flags=0x0002
+# PARAMS-NEXT:    .maxstack 2 initlocals
+
+## --initlocals=ignore-without-locals: bodies without a local signature lose
+## ' initlocals'; 'forms', which has locals, keeps it.
+# RUN: llvm-cil-dump --initlocals=ignore-without-locals %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=INITLOCALS --match-full-lines --strict-whitespace
+# INITLOCALS:  .method 'forms' int32(int32) flags=0x0016 impl=0x0000
+# INITLOCALS-NEXT:    .param 1 'a' flags=0x0000
+# INITLOCALS-NEXT:    .maxstack 2 initlocals
+# INITLOCALS-NEXT:    .locals (int32)
+# INITLOCALS:  .method 'small' int32(int32, int32&) flags=0x0016 impl=0x0000
+# INITLOCALS-NEXT:    .param 1 'A_0' flags=0x0000
+# INITLOCALS-NEXT:    .param 2 'o' flags=0x0002
+# INITLOCALS-NEXT:    .maxstack 2
+# INITLOCALS-NEXT:    L0: ldarg.1
+# INITLOCALS:  .method 'snan' float32() flags=0x0016 impl=0x0000
+# INITLOCALS-NEXT:    .maxstack 1
+# INITLOCALS-NEXT:    L0: ldc.r4 float32(0x7F80ABCD)
+
+## --snan=quiet: a float32 signaling NaN operand prints with bit 22 set.
+# RUN: llvm-cil-dump --snan=quiet %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=SNAN --match-full-lines --strict-whitespace \
+# RUN:       --implicit-check-not=0x7F80ABCD
+# SNAN:  .method 'snan' float32() flags=0x0016 impl=0x0000
+# SNAN-NEXT:    .maxstack 1 initlocals
+# SNAN-NEXT:    L0: ldc.r4 float32(0x7FC0ABCD)
+# SNAN-NEXT:    L1: ret
+
+## --snan=quiet changes float32 operands only (5.12.6: 'float64 operands,
+## Constant blobs and data bytes are unchanged'). snan.il has signaling NaNs
+## in a float32 and a float64 Constant blob, in float32 and float64 FieldRVA
+## data and in an ldc.r8 operand, all of which ilasm keeps, a float32
+## infinity, and the ldc.r4 operand of 'snan32', which its YAML patches to
+## the signaling NaN 0x7F80ABCD (ilasm quiets it to 0x7FC0ABCD). The whole
+## listing is checked with and without the option: only that operand
+## differs.
+# RUN: yaml2obj %t/snan.yaml -o %t/snan.dll
+# RUN: llvm-cil-dump %t/snan.dll \
+# RUN:   | FileCheck %s --check-prefixes=SNANX,SNANX-KEEP --match-full-lines --strict-whitespace
+# RUN: llvm-cil-dump --snan=quiet %t/snan.dll \
+# RUN:   | FileCheck %s --check-prefixes=SNANX,SNANX-QUIET --match-full-lines --strict-whitespace
+# SNANX:pe PE32+ machine=0x8664 dll subsystem=3
+# SNANX-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# SNANX-NEXT:assembly 'snan' ver 0.0.0.0 flags=0x00000000 hash=0x00000000 culture='' key=-
+# SNANX-NEXT:module 'snan.dll'
+# SNANX-NEXT:assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# SNANX-EMPTY:
+# SNANX-NEXT:.class '<Module>' flags=0x00000000
+# SNANX-NEXT:  .method 'inf32' float32() flags=0x0016 impl=0x0000
+# SNANX-NEXT:    .maxstack 1 initlocals
+# SNANX-NEXT:    L0: ldc.r4 float32(0x7F800000)
+# SNANX-NEXT:    L1: ret
+# SNANX-NEXT:  .method 'snan32' float32() flags=0x0016 impl=0x0000
+# SNANX-NEXT:    .maxstack 1 initlocals
+# SNANX-KEEP-NEXT:    L0: ldc.r4 float32(0x7F80ABCD)
+# SNANX-QUIET-NEXT:    L0: ldc.r4 float32(0x7FC0ABCD)
+# SNANX-NEXT:    L1: ret
+# SNANX-NEXT:  .method 'snan64' float64() flags=0x0016 impl=0x0000
+# SNANX-NEXT:    .maxstack 1 initlocals
+# SNANX-NEXT:    L0: ldc.r8 float64(0x7FF0000000000001)
+# SNANX-NEXT:    L1: ret
+# SNANX-EMPTY:
+# SNANX-NEXT:.class 'NS.C' flags=0x00000001 extends [mscorlib]System.Object
+# SNANX-NEXT:  .field 'd32' float32 flags=0x0116
+# SNANX-NEXT:    .data 4 bytes
+# SNANX-NEXT:      CD AB 80 7F
+# SNANX-NEXT:  .field 'd64' float64 flags=0x0116
+# SNANX-NEXT:    .data 8 bytes
+# SNANX-NEXT:      01 00 00 00 00 00 F0 7F
+# SNANX-NEXT:  .field 'k32' float32 flags=0x8056 const CD AB 80 7F
+# SNANX-NEXT:  .field 'k64' float64 flags=0x8056 const 01 00 00 00 00 00 F0 7F
+# SNANX-NOT:{{.}}
+
+## --pinvoke-module=strip: '.pinvokeimpl '*'' and no moduleref lines; the
+## [.module other.netmodule] TypeRef scope is unchanged.
+# RUN: llvm-cil-dump --pinvoke-module=strip %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=PMODULE --match-full-lines --strict-whitespace \
+# RUN:       --implicit-check-not=moduleref --implicit-check-not=native.dll
+# PMODULE:module 'opts.dll'
+# PMODULE-NEXT:assemblyref 'aaa' ver 1.0.0.0 flags=0x00000000 key=- culture=''
+# PMODULE:  .method 'puts' int32(native int) flags=0x2016 impl=0x0080
+# PMODULE-NEXT:    .pinvokeimpl '*' entry 'puts' flags=0x0200
+# PMODULE:  .field 'remote' class [.module other.netmodule]NS.Remote flags=0x0016
+
+## --pinvoke-access=ignore: MemberAccess (0x0007) is cleared in the flags of
+## a method with PinvokeImpl (0x2000) only.
+# RUN: llvm-cil-dump --pinvoke-access=ignore %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=PACCESS --match-full-lines --strict-whitespace \
+# RUN:       --implicit-check-not=flags=0x2016
+# PACCESS:  .method 'main' int32() flags=0x0016 impl=0x0000
+# PACCESS:  .method 'puts' int32(native int) flags=0x2010 impl=0x0080
+# PACCESS-NEXT:    .pinvokeimpl 'native.dll' entry 'puts' flags=0x0200
+# PACCESS-NEXT:    .param 1 'A_0' flags=0x0000
+# PACCESS-NEXT:  .method 'small' int32(int32, int32&) flags=0x0016 impl=0x0000
+
+## All six and --scopes=strip, as cli-corpus-check.py --mode dumpers runs
+## them.
+# RUN: llvm-cil-dump --assembly-hash=ignore --params=drop \
+# RUN:   --initlocals=ignore-without-locals --snan=quiet --pinvoke-module=strip \
+# RUN:   --pinvoke-access=ignore --scopes=strip %t/opts.dll \
+# RUN:   | FileCheck %s --check-prefix=ALL --match-full-lines --strict-whitespace
+
+# ALL:pe PE32+ machine=0x8664 dll subsystem=3
+# ALL-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# ALL-NEXT:entrypoint int32() '<Module>'::'main'
+# ALL-NEXT:assembly 'opts' ver 1.0.0.0 flags=0x00000000 hash=* culture='' key=-
+# ALL-NEXT:module 'opts.dll'
+# ALL-EMPTY:
+# ALL-NEXT:.class '<Module>' flags=0x00000000
+# ALL-NEXT:  .method 'forms' int32(int32) flags=0x0016 impl=0x0000
+# ALL-NEXT:    .maxstack 2 initlocals
+# ALL-NEXT:    .locals (int32)
+# ALL-NEXT:    L0: ldarg.s 0
+# ALL-NEXT:    L1: starg.s 0
+# ALL-NEXT:    L2: ldarga.s 0
+# ALL-NEXT:    L3: pop
+# ALL-NEXT:    L4: ldc.i4.s 5
+# ALL-NEXT:    L5: stloc.s 0
+# ALL-NEXT:    L6: ldloca.s 0
+# ALL-NEXT:    L7: pop
+# ALL-NEXT:    L8: ldloc.s 0
+# ALL-NEXT:    L9: brtrue.s L11
+# ALL-NEXT:    L10: br.s L11
+# ALL-NEXT:    L11: ldloc.0
+# ALL-NEXT:    L12: ret
+# ALL-NEXT:  .method 'main' int32() flags=0x0016 impl=0x0000
+# ALL-NEXT:    .maxstack 8
+# ALL-NEXT:    L0: ldc.i4.0
+# ALL-NEXT:    L1: ret
+# ALL-NEXT:  .method 'puts' int32(native int) flags=0x2010 impl=0x0080
+# ALL-NEXT:    .pinvokeimpl '*' entry 'puts' flags=0x0200
+# ALL-NEXT:  .method 'small' int32(int32, int32&) flags=0x0016 impl=0x0000
+# ALL-NEXT:    .param 2 'o' flags=0x0002
+# ALL-NEXT:    .maxstack 2
+# ALL-NEXT:    L0: ldarg.1
+# ALL-NEXT:    L1: ldarg.0
+# ALL-NEXT:    L2: stind.i4
+# ALL-NEXT:    L3: ldc.i4.0
+# ALL-NEXT:    L4: ret
+# ALL-NEXT:  .method 'snan' float32() flags=0x0016 impl=0x0000
+# ALL-NEXT:    .maxstack 1
+# ALL-NEXT:    L0: ldc.r4 float32(0x7FC0ABCD)
+# ALL-NEXT:    L1: ret
+# ALL-EMPTY:
+# ALL-NEXT:.class 'NS.Alpha' flags=0x00000001 extends [*]System.Object
+# ALL-NEXT:  .field 'f' class [*]NS.A flags=0x0016
+# ALL-NEXT:  .field 'f' class [*]NS.Z flags=0x0016
+# ALL-EMPTY:
+# ALL-NEXT:.class 'NS.Zeta' flags=0x00000001 extends [*]System.Object
+# ALL-NEXT:  .field 'remote' class [.module other.netmodule]NS.Remote flags=0x0016
+# ALL-NOT:{{.}}
+
+## --stats appends the stats lines to the listing; --stats-only prints them
+## alone: one '# table' line per present table in id order, the four heaps,
+## and the image's SizeOfImage and section names (here yaml2obj's image).
+# RUN: llvm-cil-dump --stats %t/opts.dll > %t/stats.txt
+# RUN: llvm-cil-dump --stats-only %t/opts.dll > %t/stats-only.txt
+# RUN: FileCheck %s --input-file=%t/stats.txt --check-prefix=STATS \
+# RUN:   --match-full-lines --strict-whitespace
+# RUN: FileCheck %s --input-file=%t/stats-only.txt --check-prefix=ONLY \
+# RUN:   --match-full-lines --strict-whitespace
+# STATS:  .field 'remote' class [.module other.netmodule]NS.Remote flags=0x0016
+# STATS-NEXT:# table Module rows=1 rowsize=10
+# STATS-NEXT:# table TypeRef rows=4 rowsize=6
+# STATS-NEXT:# table TypeDef rows=3 rowsize=14
+# STATS-NEXT:# table Field rows=3 rowsize=6
+# STATS-NEXT:# table MethodDef rows=5 rowsize=14
+# STATS-NEXT:# table Param rows=4 rowsize=6
+# STATS-NEXT:# table StandAloneSig rows=1 rowsize=2
+# STATS-NEXT:# table ModuleRef rows=2 rowsize=2
+# STATS-NEXT:# table ImplMap rows=1 rowsize=8
+# STATS-NEXT:# table Assembly rows=1 rowsize=22
+# STATS-NEXT:# table AssemblyRef rows=3 rowsize=20
+# STATS-NEXT:# heap #Strings size=152
+# STATS-NEXT:# heap #US size=8
+# STATS-NEXT:# heap #GUID size=16
+# STATS-NEXT:# heap #Blob size=52
+# STATS-NEXT:# image size=24576 sections=.text,.reloc
+# STATS-NOT:{{.}}
+
+# ONLY:# table Module rows=1 rowsize=10
+# ONLY-NEXT:# table TypeRef rows=4 rowsize=6
+# ONLY-NEXT:# table TypeDef rows=3 rowsize=14
+# ONLY-NEXT:# table Field rows=3 rowsize=6
+# ONLY-NEXT:# table MethodDef rows=5 rowsize=14
+# ONLY-NEXT:# table Param rows=4 rowsize=6
+# ONLY-NEXT:# table StandAloneSig rows=1 rowsize=2
+# ONLY-NEXT:# table ModuleRef rows=2 rowsize=2
+# ONLY-NEXT:# table ImplMap rows=1 rowsize=8
+# ONLY-NEXT:# table Assembly rows=1 rowsize=22
+# ONLY-NEXT:# table AssemblyRef rows=3 rowsize=20
+# ONLY-NEXT:# heap #Strings size=152
+# ONLY-NEXT:# heap #US size=8
+# ONLY-NEXT:# heap #GUID size=16
+# ONLY-NEXT:# heap #Blob size=52
+# ONLY-NEXT:# image size=24576 sections=.text,.reloc
+# ONLY-NOT:{{.}}
+
+## Either stats option selects the canonical mode, also next to another mode
+## option, and a file's modes print in the order canonical, headers, tables,
+## link-info (section 12, '5.7.10 clarified (`--stats` and `--stats-only`
+## select the canonical mode)'). --stats-only --headers prints the '# '
+## lines, then the --headers lines, and no listing line; --stats --tables
+## prints the listing and its '# ' lines, then the --tables lines. Each
+## output is exactly the two single-mode outputs one after the other.
+# RUN: llvm-cil-dump --stats-only --headers %t/opts.dll > %t/stats-only-headers.txt
+# RUN: llvm-cil-dump --headers %t/opts.dll > %t/headers.txt
+# RUN: cat %t/stats-only.txt %t/headers.txt > %t/stats-only-headers-expected.txt
+# RUN: diff %t/stats-only-headers-expected.txt %t/stats-only-headers.txt
+# RUN: FileCheck %s --input-file=%t/stats-only-headers.txt \
+# RUN:   --check-prefix=ONLY-HEADERS --match-full-lines --strict-whitespace \
+# RUN:   --implicit-check-not=.class --implicit-check-not=Table:
+# ONLY-HEADERS:# table Module rows=1 rowsize=10
+# ONLY-HEADERS-NEXT:# table TypeRef rows=4 rowsize=6
+# ONLY-HEADERS:# heap #Blob size=52
+# ONLY-HEADERS-NEXT:# image size=24576 sections=.text,.reloc
+# ONLY-HEADERS-NEXT:Format: PE32+ machine=0x8664 dll
+# ONLY-HEADERS-NEXT:COFF: sections=2 timestamp=0x{{([0-9A-F]{8})}} characteristics=0x2022 symbols=0
+# ONLY-HEADERS:Mvid: {{([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})}}
+# ONLY-HEADERS-NOT:{{.}}
+
+# RUN: llvm-cil-dump --stats --tables %t/opts.dll > %t/stats-tables.txt
+# RUN: llvm-cil-dump --tables %t/opts.dll > %t/tables.txt
+# RUN: cat %t/stats.txt %t/tables.txt > %t/stats-tables-expected.txt
+# RUN: diff %t/stats-tables-expected.txt %t/stats-tables.txt
+# RUN: FileCheck %s --input-file=%t/stats-tables.txt --check-prefix=STATS-TABLES \
+# RUN:   --match-full-lines --strict-whitespace
+# STATS-TABLES:pe PE32+ machine=0x8664 dll subsystem=3
+# STATS-TABLES:  .field 'remote' class [.module other.netmodule]NS.Remote flags=0x0016
+# STATS-TABLES-NEXT:# table Module rows=1 rowsize=10
+# STATS-TABLES:# image size=24576 sections=.text,.reloc
+# STATS-TABLES-NEXT:Table: Module rows=1 rowsize=10
+# STATS-TABLES-NEXT:  Module[1]: {{.*}}
+# STATS-TABLES:Table: AssemblyRef rows=3 rowsize=20
+# STATS-TABLES-NEXT:  AssemblyRef[1]: {{.*}}
+# STATS-TABLES-NEXT:  AssemblyRef[2]: {{.*}}
+# STATS-TABLES-NEXT:  AssemblyRef[3]: {{.*}}
+# STATS-TABLES-NOT:{{.}}
+
+#--- options.il
+// Inputs for the listing options of plan 5.7.10 and 5.12.6.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly extern 'aaa' { .ver 1:0:0:0 }
+.assembly extern 'zzz' { .ver 1:0:0:0 }
+.assembly 'opts'
+{
+  .hash algorithm 0x00008004
+  .ver 1:0:0:0
+}
+.module 'opts.dll'
+.module extern 'native.dll'
+.module extern 'other.netmodule'
+
+// Declared before NS.Alpha: --order=decl lists it first.
+.class public auto ansi NS.Zeta extends [mscorlib]System.Object
+{
+  .field public static class [.module other.netmodule]NS.Remote 'remote'
+}
+
+// Two fields named 'f': their order flips under --scopes=strip, which
+// applies before sorting.
+.class public auto ansi NS.Alpha extends [mscorlib]System.Object
+{
+  .field public static class [zzz]NS.A 'f'
+  .field public static class [aaa]NS.Z 'f'
+}
+
+.method public static pinvokeimpl("native.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}
+
+// No locals and .maxstack below 8: ilasm sets InitLocals. The unnamed
+// parameter gets an ilasm Param row 'A_0' with flags 0.
+.method public static int32 'small'(int32, [out] int32& 'o') cil managed
+{
+  .maxstack 2
+  ldarg.1
+  ldarg.0
+  stind.i4
+  ldc.i4.0
+  ret
+}
+
+// The operand is a quiet NaN here; the test's YAML patches it to the
+// signaling NaN 0x7F80ABCD, which ilasm would have quieted.
+.method public static float32 'snan'() cil managed
+{
+  .maxstack 1
+  ldc.r4 float32(0x7FC0ABCD)
+  ret
+}
+
+// Short forms, and a body with locals (InitLocals kept by every option).
+.method public static int32 'forms'(int32 'a') cil managed
+{
+  .maxstack 2
+  .locals init (int32 V_0)
+  ldarg.s 0
+  starg.s 0
+  ldarga.s 0
+  pop
+  ldc.i4.s 5
+  stloc.s 0
+  ldloca.s 0
+  pop
+  ldloc.s 0
+  brtrue.s L_end
+  br.s L_end
+L_end:
+  ldloc.0
+  ret
+}
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldc.i4.0
+  ret
+}
+#--- opts.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 9150
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 9064
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     970
+    SectionData:     A02300000000000000000000000000004800000002000500B0200000B402000001000000050000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000133002000500000000000000030254162A00000013300100060000000000000022CDAB807F2A00001330020016000000010000110E0010000F00261F05130012002611002D022B00062A0A162A00000042534A4201000100000000000C00000076342E302E33303331390000000005006C00000064010000237E0000D00100009800000023537472696E67730000000068020000080000002355530070020000100000002347554944000000800200003400000023426C6F620000000000000002000001570102140900000000FA253300160000010000000400000003000000030000000500000004000000010000000200000001000000010000000300000000002600010000000000060011000A0009001B0018000E00220018000A00240018000000000001000000000001000100010000005B0018000500010006000100000060001800050002000600160089002300160090002700160090002B00000000008000162066000A00010060200000000016006F000F000200742000000000160077001600040088200000000016007C001A000400AA2000000000160084001F000500000001006B00000001006B000200020075000000010082002F002F003A0000020300660001000480000001000000000000000000000000009200000004000000000000000000000001004A00000000000100000000000000000000000000530000000000010000000000000000000000000057000000000000000000003C4D6F64756C653E0053797374656D004F626A656374004E530052656D6F74650041005A006F7074732E646C6C006E61746976652E646C6C006F746865722E6E65746D6F64756C65006D73636F726C696200616161007A7A7A005A65746100416C706861007075747300415F3000736D616C6C006F00736E616E00666F726D730061006D61696E0072656D6F74650066006F70747300000003200000000000881E5432FE4EBB4D930C8C275FF396F90008B77A5C561934E0890400010818060002080810080300000C040001080803000008030612090306120D03061211030701080000000000902300000000000000000000AE230000002000000000000000000000000000000000000000000000A023000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C000000C0A30000
+symbols:         []
+...
+#--- snan.il
+// --snan=quiet changes float32 operands only (plan 5.12.6). The YAML is
+// patched so that the ldc.r4 operand of 'snan32' is the float32 signaling
+// NaN 0x7F80ABCD, which ilasm would quiet (the source has the quiet one).
+// The Constant blobs, the FieldRVA data and the ldc.r8 operand hold
+// signaling NaNs that ilasm keeps, and 'inf32' an infinity (not a NaN).
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'snan' { }
+.module 'snan.dll'
+
+.class public auto ansi NS.C extends [mscorlib]System.Object
+{
+  .field public static literal float32 'k32' = float32(0x7F80ABCD)
+  .field public static literal float64 'k64' = float64(0x7FF0000000000001)
+  .field public static float32 'd32' at D32
+  .field public static float64 'd64' at D64
+}
+.data D32 = bytearray (CD AB 80 7F)
+.data D64 = bytearray (01 00 00 00 00 00 F0 7F)
+
+.method public static float32 'snan32'() cil managed
+{
+  .maxstack 1
+  ldc.r4 float32(0x7FC0ABCD)
+  ret
+}
+.method public static float32 'inf32'() cil managed
+{
+  .maxstack 1
+  ldc.r4 float32(0x7F800000)
+  ret
+}
+.method public static float64 'snan64'() cil managed
+{
+  .maxstack 1
+  ldc.r8 float64(0x7FF0000000000001)
+  ret
+}
+#--- snan.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8942
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8856
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 24576
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     762
+    SectionData:     D02200000000000000000000000000004800000002000500A0200000F40100000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000013300100060000000000000022CDAB807F2A0000133001000600000000000000220000807F2A0000133001000A0000000000000023010000000000F07F2A000042534A4201000100000000000C00000076342E302E33303331390000000005006C000000F0000000237E00005C0100005800000023537472696E677300000000B40100000800000023555300BC010000100000002347554944000000CC0100002800000023426C6F620000000000000002000001570800200900000000FA25330016000001000000010000000200000004000000030000000200000002000000010000000100000000001800010000000000060011000A000000000001000000000001000100010000002A002C00050001000400568043001200568047001A0016014B00120016014F001A0060200000000016002F000A000100742000000000160036000A00010088200000000016003C000E0001000C00040015000D0008001D0000400000030004400000040000000000000000000000000000000000000053000000040000000000000000000000010021000000000000000000003C4D6F64756C653E0053797374656D004F626A65637400736E616E2E646C6C006D73636F726C69620043004E5300736E616E333200696E66333200736E616E3634006B3332006B3634006433320064363400736E616E0000032000000000002769578F97FFD949B45A3D7900FE4F450008B77A5C561934E0890300000C0300000D02060C04CDAB807F02060D08010000000000F07F000000000000C02200000000000000000000DE220000002000000000000000000000000000000000000000000000D022000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .sdata
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     CDAB807F010000000000F07F
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  24576
+    VirtualSize:     12
+    SectionData:     002000000C000000F0A20000
+symbols:         []
+...

@@ -1,0 +1,367 @@
+## llvm-cil-copy (plan 5.7.10) copies an IL-only image through the reader,
+## MetadataBuilder and writePEImage. The input is a yaml2obj copy of the
+## ilasm (.NET Framework 4.8, -exe -pe64 -x64) image of copy.il, an
+## executable with rows in every table of 5.7.6's writer set. The copy must be
+## canonically equal to its input (5.7.13), byte-identical across runs and
+## directories, and an Executable (it has an entry point) for the input's
+## machine, written in Roslyn's envelope (5.7.7): one .text section, no
+## imports or relocations.
+
+# RUN: rm -rf %t && split-file %s %t && mkdir %t/a %t/b
+# RUN: yaml2obj %t/copy.yaml -o %t/copyme.exe
+# RUN: llvm-cil-copy %t/copyme.exe -o %t/a/copy.exe
+
+## Canonically equal (the listing has no tokens, offsets, RVAs, header kinds,
+## MVID or layout); anchor lines show that the listing covers the header,
+## the types, the FieldRVA data, the strings, the EH clauses and the trailer.
+# RUN: llvm-cil-dump --canonical %t/copyme.exe > %t/input.txt
+# RUN: llvm-cil-dump --canonical %t/a/copy.exe > %t/copy.txt
+# RUN: diff %t/input.txt %t/copy.txt
+# RUN: FileCheck %s --input-file=%t/copy.txt --check-prefix=CANON --match-full-lines --strict-whitespace
+# CANON:entrypoint int32() '<Module>'::'main'
+# CANON:assembly 'copyme' ver 1.2.3.4 flags=0x00000000 hash=0x00000000 culture='' key=-
+# CANON:module 'copyme.exe'
+# CANON:assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# CANON:moduleref 'native.dll'
+# CANON:moduleref 'other.netmodule'
+# CANON:.class '<Module>' flags=0x00000000
+# CANON:    L14: ldstr "caf\u00E9 \u4E2D"
+# CANON:    L16: ldstr "caf\u00E9 \u4E2D"
+# CANON:    .try L44 to L49 catch [mscorlib]System.DivideByZeroException handler L49 to L51
+# CANON:    .try L44 to L52 finally handler L52 to L53
+# CANON:    .try L53 to L54 filter L54 handler L57 to L59
+# CANON:    .try L59 to L60 fault handler L60 to L61
+# CANON:.class 'NS.Base' flags=0x00100001 extends [mscorlib]System.Object
+# CANON:    .data 4 bytes
+# CANON:      07 00 00 00
+# CANON:    .data 12 bytes
+# CANON:      01 00 00 00 02 00 00 00 03 00 00 00
+# CANON:    .data 8 bytes
+# CANON:      00 00 00 00 00 00 04 40
+# CANON:.class 'NS.Base/Inner' flags=0x0000010A extends [mscorlib]System.ValueType
+# CANON:.class 'NS.Pair' flags=0x00000109 extends [mscorlib]System.ValueType
+# CANON:.class 'Union' flags=0x00000111 extends [mscorlib]System.ValueType
+# CANON:assembly .custom instance void(string) [mscorlib]System.Reflection.AssemblyTitleAttribute::'.ctor' = 01 00 05 74 69 74 6C 65 00 00
+# CANON:module .custom instance void(bool) [mscorlib]System.CLSCompliantAttribute::'.ctor' = 01 00 01 00 00
+
+## Deterministic: a second run from another directory, with another output
+## name, writes the same bytes.
+# RUN: cd %t/b && llvm-cil-copy ../copyme.exe -o other.exe
+# RUN: cmp %t/a/copy.exe %t/b/other.exe
+
+## The envelope: an EXE (characteristics 0x0022) for AMD64 with the input's
+## entry point token, one .text section, only the CLR data directory.
+# RUN: llvm-cil-dump --headers %t/a/copy.exe \
+# RUN:   | FileCheck %s --check-prefix=HEADERS --match-full-lines --strict-whitespace
+# HEADERS:Format: PE32+ machine=0x8664 exe
+# HEADERS-NEXT:COFF: sections=1 timestamp=0x{{([0-9A-F]{8})}} characteristics=0x0022 symbols=0
+# HEADERS-NEXT:Optional: imagebase=0x0000000140000000 sectionalign=0x2000 filealign=0x200 subsystem=3 dllchars=0x8540 stack=0x400000,0x4000 heap=0x100000,0x2000
+# HEADERS-NEXT:Section: .text rva=0x00002000 vsize=0x{{[0-9A-F]+}} raw=0x200 rawsize=0x{{[0-9A-F]+}} flags=0x60000020
+# HEADERS-NEXT:CLI: flags=0x00000001 entrypoint=0x06000005 metadata=0x{{([0-9A-F]{8})}},0x{{[0-9A-F]+}} runtime=2.5
+# HEADERS-NEXT:Metadata: version='v4.0.30319' heapsizes=0x{{([0-9A-F]{2})}} valid=0x00000A093DA39557 sorted=0x{{([0-9A-F]{16})}}
+# HEADERS-NEXT:Stream: #~ offset=0x{{[0-9A-F]+}} size=0x{{[0-9A-F]+}}
+# HEADERS-NEXT:Stream: #Strings offset=0x{{[0-9A-F]+}} size=0x{{[0-9A-F]+}}
+# HEADERS-NEXT:Stream: #US offset=0x{{[0-9A-F]+}} size=0x{{[0-9A-F]+}}
+# HEADERS-NEXT:Stream: #GUID offset=0x{{[0-9A-F]+}} size=0x{{[0-9A-F]+}}
+# HEADERS-NEXT:Stream: #Blob offset=0x{{[0-9A-F]+}} size=0x{{[0-9A-F]+}}
+# HEADERS-NEXT:Mvid: {{([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})}}
+# HEADERS-NOT:{{.}}
+
+## Every row survives: the same tables with the same row counts.
+# RUN: llvm-cil-dump --stats-only %t/copyme.exe | grep "^# table" > %t/input-tables.txt
+# RUN: llvm-cil-dump --stats-only %t/a/copy.exe | grep "^# table" > %t/copy-tables.txt
+# RUN: diff %t/input-tables.txt %t/copy-tables.txt
+
+## FieldRVA data is copied 8-aligned (plan M17.d): every RVA in the copy's
+## FieldRVA table ends in 0 or 8, although the input's data blocks start at
+## 0x4000, 0x4004 and 0x4010 (the 12 bytes of 'pair' follow the 4 bytes of
+## 'counter').
+# RUN: llvm-cil-dump --tables %t/copyme.exe \
+# RUN:   | FileCheck %s --check-prefix=FIELDRVA-IN --match-full-lines --strict-whitespace
+# FIELDRVA-IN:Table: FieldRVA rows=3 rowsize=6
+# FIELDRVA-IN-NEXT:  FieldRVA[1]: RVA=0x00004000 Field=0x04000003
+# FIELDRVA-IN-NEXT:  FieldRVA[2]: RVA=0x00004004 Field=0x04000004
+# FIELDRVA-IN-NEXT:  FieldRVA[3]: RVA=0x00004010 Field=0x04000005
+# RUN: llvm-cil-dump --tables %t/a/copy.exe \
+# RUN:   | FileCheck %s --check-prefix=FIELDRVA --match-full-lines --strict-whitespace
+# FIELDRVA:Table: FieldRVA rows=3 rowsize=6
+# FIELDRVA-NEXT:  FieldRVA[1]: RVA=0x{{([0-9A-F]{7}[08])}} Field=0x04000003
+# FIELDRVA-NEXT:  FieldRVA[2]: RVA=0x{{([0-9A-F]{7}[08])}} Field=0x04000004
+# FIELDRVA-NEXT:  FieldRVA[3]: RVA=0x{{([0-9A-F]{7}[08])}} Field=0x04000005
+# FIELDRVA-NEXT:Table: {{.+}}
+
+## In place over a memory-mapped input ('llvm-cil-copy x -o x'), which must
+## work on Windows as on Linux. MemoryBuffer maps a file of 16 KiB or more,
+## so the input gets an overlay of 20,000 zero bytes after its last section,
+## which the reader ignores (the listing does not change). The file copied
+## in place ends up with the bytes of a copy to another file.
+# RUN: cp %t/copyme.exe %t/big.exe
+# RUN: %python -c "import sys; open(sys.argv[1], 'ab').write(bytes(20000))" %t/big.exe
+# RUN: llvm-cil-dump --canonical %t/big.exe > %t/big.txt
+# RUN: diff %t/input.txt %t/big.txt
+# RUN: llvm-cil-copy %t/big.exe -o %t/big.copy.exe
+# RUN: cp %t/big.exe %t/inplace.exe
+# RUN: llvm-cil-copy %t/inplace.exe -o %t/inplace.exe
+# RUN: cmp %t/big.copy.exe %t/inplace.exe
+# RUN: llvm-cil-dump --canonical %t/inplace.exe > %t/inplace.txt
+# RUN: diff %t/copy.txt %t/inplace.txt
+
+#--- copy.il
+// An executable that uses only the tables of plan 5.7.6's writer set, with
+// rows of every one of them: nested and explicit-layout types, FieldRVA data,
+// a property, a P/Invoke, a TypeSpec, a MethodSpec, a ModuleRef-scoped
+// TypeRef, a vararg call site, custom attributes, ldstr and EH clauses.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'copyme'
+{
+  .custom instance void [mscorlib]System.Reflection.AssemblyTitleAttribute::.ctor(string) = ( 01 00 05 74 69 74 6C 65 00 00 )
+  .ver 1:2:3:4
+}
+.module 'copyme.exe'
+.custom instance void [mscorlib]System.CLSCompliantAttribute::.ctor(bool) = ( 01 00 01 00 00 )
+.module extern 'native.dll'
+.module extern 'other.netmodule'
+
+.class public auto ansi beforefieldinit NS.Base extends [mscorlib]System.Object
+{
+  .custom instance void [mscorlib]System.ObsoleteAttribute::.ctor(string) = ( 01 00 03 6F 6C 64 00 00 )
+  .field public int32 'x'
+  .field public static class [.module other.netmodule]NS.Remote 'remote'
+  .field private static int32 'counter' at D_1
+  .custom instance void [mscorlib]System.ObsoleteAttribute::.ctor() = ( 01 00 00 00 )
+  .field public static valuetype NS.Pair 'pair' at D_2
+  .field public static float64 'scale' at D_3
+
+  .method public specialname rtspecialname instance void .ctor() cil managed
+  {
+    .maxstack 8
+    ldarg.0
+    call instance void [mscorlib]System.Object::.ctor()
+    ret
+  }
+  .method public hidebysig specialname instance int32 get_Value() cil managed
+  {
+    .maxstack 8
+    ldarg.0
+    ldfld int32 NS.Base::x
+    ret
+  }
+  .method public hidebysig specialname instance void set_Value(int32 'value') cil managed
+  {
+    .maxstack 8
+    ldarg.0
+    ldarg.1
+    stfld int32 NS.Base::x
+    ret
+  }
+  .property instance int32 Value()
+  {
+    .custom instance void [mscorlib]System.ObsoleteAttribute::.ctor() = ( 01 00 00 00 )
+    .get instance int32 NS.Base::get_Value()
+    .set instance void NS.Base::set_Value(int32)
+  }
+  .class nested public sequential ansi sealed Inner extends [mscorlib]System.ValueType
+  {
+    .pack 8
+    .size 16
+    .field public int64 'a'
+  }
+}
+
+.class public sequential ansi sealed NS.Pair extends [mscorlib]System.ValueType
+{
+  .pack 4
+  .size 12
+  .field public int32 'p'
+  .field public int32 'q'
+  .field public int32 'r'
+}
+
+.class public explicit ansi sealed 'Union' extends [mscorlib]System.ValueType
+{
+  .field [0] public int32 'i'
+  .field [4] public float32 'f'
+}
+
+.data D_1 = int32(7)
+.data D_2 = bytearray(01 00 00 00 02 00 00 00 03 00 00 00)
+.data D_3 = float64(2.5)
+
+.method public static pinvokeimpl("native.dll" as "native_puts" cdecl) int32 'puts'(native int) cil managed preservesig {}
+
+.method public static vararg void 'va'(int32 'n') cil managed
+{
+  .maxstack 8
+  ret
+}
+
+.method public static int32 'callee'(int32 'v') cil managed
+{
+  .maxstack 8
+  ldarg.0
+  ret
+}
+
+.method public static int32 'work'(int32 'a', int32 'b') cil managed
+{
+  .custom instance void [mscorlib]System.ObsoleteAttribute::.ctor() = ( 01 00 00 00 )
+  .maxstack 4
+  .locals init (int32 V_0, float64 V_1, class [mscorlib]System.Collections.Generic.List`1<int32> V_2,
+                int32[] V_3, valuetype NS.Base/Inner V_4)
+  ldarg.0
+  ldarg.1
+  add
+  stloc.0
+  ldc.i4 100000
+  conv.i8
+  ldc.i8 -1234567890123
+  add
+  pop
+  ldc.r4 1.5
+  conv.r8
+  ldsfld float64 NS.Base::scale
+  add
+  stloc.1
+  ldstr "café 中"
+  pop
+  ldstr "café 中"
+  pop
+  newobj instance void class [mscorlib]System.Collections.Generic.List`1<int32>::.ctor()
+  stloc.2
+  ldloc.2
+  ldc.i4.7
+  callvirt instance void class [mscorlib]System.Collections.Generic.List`1<int32>::Add(!0)
+  call !!0[] [mscorlib]System.Array::Empty<int32>()
+  stloc.3
+  ldc.i4.1
+  ldc.i4.2
+  call vararg void 'va'(int32, ..., int32)
+  ldc.i4.3
+  ldftn int32 'callee'(int32)
+  calli int32(int32)
+  pop
+  ldtoken NS.Base
+  pop
+  ldsfld class [.module other.netmodule]NS.Remote NS.Base::remote
+  pop
+  ldloc.0
+  switch (L_one, L_two)
+  br.s L_two
+L_one:
+  ldc.i4.1
+  stloc.0
+  br L_try
+L_two:
+  ldc.i4.2
+  stloc.0
+L_try:
+  .try
+  {
+    .try
+    {
+      ldloc.0
+      ldc.i4.1
+      div
+      stloc.0
+      leave.s L_inner
+    }
+    catch [mscorlib]System.DivideByZeroException
+    {
+      pop
+      leave.s L_inner
+    }
+  L_inner:
+    leave.s L_filter
+  }
+  finally
+  {
+    endfinally
+  }
+L_filter:
+  .try
+  {
+    leave.s L_fault
+  }
+  filter
+  {
+    pop
+    ldc.i4.1
+    endfilter
+  }
+  {
+    pop
+    leave.s L_fault
+  }
+L_fault:
+  .try
+  {
+    leave.s L_end
+  }
+  fault
+  {
+    endfault
+  }
+L_end:
+  ldloc.0
+  ret
+}
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldc.i4.0
+  ret
+}
+#--- copy.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 10030
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 9936
+    Size:            91
+  BaseRelocationTable:
+    RelativeVirtualAddress: 24576
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     1850
+    SectionData:     102700000000000000000000000000004800000002000500582100007405000001000000050000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000062A0A022A0000001B30040094000000020000110203580A20A08601006A2135FB048EE0FEFFFF5826220000C03F6C7E05000004580B720100007026720100007026730600000A0C081D6F0700000A280100002B0D1718280900000A19FE0603000006290100001126D002000002267E020000042606450200000002000000090000002B07170A3802000000180A06175B0ADE0326DE00DE01DCDE072617FE1126DE00DE01DC062A0134000000007A00068000030900000102007A000B8500010000000001008600028C00038800000004008F0002910001000000000A162A1E02280500000A2A1E027B010000042A2202037D010000042A42534A4201000100000000000C00000076342E302E33303331390000000005006C000000B8020000237E0000240300009001000023537472696E677300000000B40400001000000023555300C4040000100000002347554944000000D4040000A000000023426C6F6200000000000000020000015795A33D090A000000FA2533001600000100000009000000050000000B0000000800000006000000090000000600000003000000020000000200000001000000010000000200000002000000010000000100000003000000010000000100000001000000010000000000CB0001000000000006001C000A0006004000390006005600390006005D003900090072006F0006007900390006009E0083000600A90039000600B5003900000000000100000000000100010001001000FA006F000D000100060009010000FF006F001900060009000A01000004010000190009000900110100000A01000019000A000900060041015C00160043015F0011014A015C00160152016300160157016700060077015C00060079015C0006007B015C0006003801730006007D015C0006007F0176000000000080001620100143000100602000000000160025014800020062200000000016002A012C000300682000000000160033014D0004003C210000000016003C01580006003F2100000000061833001100060047210000000086085D016A0006004F2100000000860867016E000600000001002101000001002801000001003101000001003801000002003A010000010071010900330001001100330006002100330001002100330011001900330011000C00330011000C00A5001B004100AF002100130025017900270013000B002900230053002E000B00840043001B003A0061002300530080002300530004000C000000030008001000000004000000000000000500000000000A00040000000B002C008F0002000100000081018000020007000300010008000300D600E10015000002030015010100004000000300044000000400104000000500000000000100020003000400000000000000870100000400000000000000000000003100F1000000000004000200110028000000003C4D6F64756C653E0053797374656D2E5265666C656374696F6E00417373656D626C795469746C65417474726962757465002E63746F720053797374656D00434C53436F6D706C69616E74417474726962757465004F626A656374004F62736F6C657465417474726962757465004E530052656D6F74650056616C7565547970650053797374656D2E436F6C6C656374696F6E732E47656E65726963004C69737460310041646400417272617900456D7074790044697669646542795A65726F457863657074696F6E00636F70796D652E657865006E61746976652E646C6C006F746865722E6E65746D6F64756C65006D73636F726C69620042617365005061697200496E6E657200556E696F6E0070757473006E61746976655F7075747300415F30007661006E0063616C6C6565007600776F726B00610062006D61696E00780072656D6F746500636F756E7465720070616972007363616C65006765745F56616C7565007365745F56616C75650076616C7565007000710072006900660056616C756500636F70796D65000000000D630061006600E90020002D4E0100EC1BA78A801F0845B4B08FE6CD9545C900042001010E0420010102050100010000032000010515121D0108052001011300061001001D1E00030A0108040001080808B77A5C561934E089080100036F6C64000004000108180405010108050002080808040100000003000008020608030612150306110C02060D03200008042001010802060A02060C06050201084108032800080A0100057469746C6500000D0705080D15121D01081D08111000000000000000F826000000000000000000001E27000000200000000000000000000000000000000000000000000010270000000000000000000000000000000000000000000000005F436F724578654D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .sdata
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    VirtualAddress:  16384
+    VirtualSize:     24
+    SectionData:     070000000100000002000000030000000000000000000440
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  24576
+    VirtualSize:     12
+    SectionData:     002000000C00000030A70000
+symbols:         []
+...

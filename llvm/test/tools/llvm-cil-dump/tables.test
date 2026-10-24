@@ -1,0 +1,140 @@
+## llvm-cil-dump --tables (plan 5.7.10): per present table in id order
+## 'Table: <Name> rows=<n> rowsize=<n>', then one line per row with every
+## column in ECMA order: U16 0x<4X>, U32 0x<8X>, StringIdx '<string>', BlobIdx
+## the blob's bytes ('-' when empty), GuidIdx {8-4-4-4-12} (0 for none),
+## TableIdx and CodedIdx the token 0x<8X> (0 for nil). Rows are numbered from
+## 1, as tokens are. The input is a yaml2obj copy of the ilasm (.NET Framework
+## 4.8, -dll -pe64 -x64) image of tables.il; the expected rows were read from
+## that image by an independent reader (ECMA-335 II.22-II.24).
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/tables.yaml -o %t/tables.dll
+# RUN: llvm-cil-dump --tables %t/tables.dll \
+# RUN:   | FileCheck %s --match-full-lines --strict-whitespace
+
+# CHECK:Table: Module rows=1 rowsize=10
+# CHECK-NEXT:  Module[1]: Generation=0x0000 Name='tables.dll' Mvid={{[{][0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}[}]}} EncId=0 EncBaseId=0
+# CHECK-NEXT:Table: TypeRef rows=3 rowsize=6
+# CHECK-NEXT:  TypeRef[1]: ResolutionScope=0x23000001 TypeName='CLSCompliantAttribute' TypeNamespace='System'
+# CHECK-NEXT:  TypeRef[2]: ResolutionScope=0x23000001 TypeName='ValueType' TypeNamespace='System'
+# CHECK-NEXT:  TypeRef[3]: ResolutionScope=0x23000001 TypeName='Console' TypeNamespace='System'
+# CHECK-NEXT:Table: TypeDef rows=2 rowsize=14
+# CHECK-NEXT:  TypeDef[1]: Flags=0x00000000 TypeName='<Module>' TypeNamespace='' Extends=0 FieldList=0x04000001 MethodList=0x06000001
+# CHECK-NEXT:  TypeDef[2]: Flags=0x00000109 TypeName='Point' TypeNamespace='NS' Extends=0x01000002 FieldList=0x04000002 MethodList=0x06000003
+# CHECK-NEXT:Table: Field rows=3 rowsize=6
+# CHECK-NEXT:  Field[1]: Flags=0x0116 Name='counter' Signature=06 08
+# CHECK-NEXT:  Field[2]: Flags=0x0006 Name='X' Signature=06 08
+# CHECK-NEXT:  Field[3]: Flags=0x0006 Name='Y' Signature=06 08
+# CHECK-NEXT:Table: MethodDef rows=2 rowsize=14
+# CHECK-NEXT:  MethodDef[1]: RVA=0x00000000 ImplFlags=0x0080 Flags=0x2016 Name='puts' Signature=00 01 08 18 ParamList=0x08000001
+# CHECK-NEXT:  MethodDef[2]: RVA=0x00002060 ImplFlags=0x0000 Flags=0x0016 Name='main' Signature=00 00 08 ParamList=0x08000002
+# CHECK-NEXT:Table: Param rows=1 rowsize=6
+# CHECK-NEXT:  Param[1]: Flags=0x0000 Sequence=0x0001 Name='s'
+# CHECK-NEXT:Table: MemberRef rows=2 rowsize=6
+# CHECK-NEXT:  MemberRef[1]: Class=0x01000001 Name='.ctor' Signature=20 01 01 02
+# CHECK-NEXT:  MemberRef[2]: Class=0x01000003 Name='WriteLine' Signature=00 01 01 0E
+# CHECK-NEXT:Table: CustomAttribute rows=1 rowsize=6
+# CHECK-NEXT:  CustomAttribute[1]: Parent=0x20000001 Type=0x0A000001 Value=01 00 01 00 00
+# CHECK-NEXT:Table: ClassLayout rows=1 rowsize=8
+# CHECK-NEXT:  ClassLayout[1]: PackingSize=0x0004 ClassSize=0x00000008 Parent=0x02000002
+# CHECK-NEXT:Table: StandAloneSig rows=1 rowsize=2
+# CHECK-NEXT:  StandAloneSig[1]: Signature=07 01 08
+# CHECK-NEXT:Table: ModuleRef rows=1 rowsize=2
+# CHECK-NEXT:  ModuleRef[1]: Name='native.dll'
+# CHECK-NEXT:Table: ImplMap rows=1 rowsize=8
+# CHECK-NEXT:  ImplMap[1]: MappingFlags=0x0200 MemberForwarded=0x06000001 ImportName='puts' ImportScope=0x1A000001
+# CHECK-NEXT:Table: FieldRVA rows=1 rowsize=6
+# CHECK-NEXT:  FieldRVA[1]: RVA=0x00004000 Field=0x04000001
+# CHECK-NEXT:Table: Assembly rows=1 rowsize=22
+# CHECK-NEXT:  Assembly[1]: HashAlgId=0x00000000 MajorVersion=0x0001 MinorVersion=0x0002 BuildNumber=0x0003 RevisionNumber=0x0004 Flags=0x00000000 PublicKey=- Name='tables' Culture=''
+# CHECK-NEXT:Table: AssemblyRef rows=1 rowsize=20
+# CHECK-NEXT:  AssemblyRef[1]: MajorVersion=0x0004 MinorVersion=0x0000 BuildNumber=0x0000 RevisionNumber=0x0000 Flags=0x00000000 PublicKeyOrToken=B7 7A 5C 56 19 34 E0 89 Name='mscorlib' Culture='' HashValue=-
+# CHECK-NOT:{{.}}
+
+#--- tables.il
+// A small assembly whose rows cover every column kind of --tables:
+// U16, U32, StringIdx, BlobIdx, GuidIdx, TableIdx and CodedIdx.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'tables'
+{
+  .custom instance void [mscorlib]System.CLSCompliantAttribute::.ctor(bool) = ( 01 00 01 00 00 )
+  .ver 1:2:3:4
+}
+.module 'tables.dll'
+.module extern 'native.dll'
+
+.class public sequential ansi sealed NS.Point extends [mscorlib]System.ValueType
+{
+  .pack 4
+  .size 8
+  .field public int32 'X'
+  .field public int32 'Y'
+}
+
+.field public static int32 'counter' at D_1
+.data D_1 = int32(7)
+
+.method public static pinvokeimpl("native.dll" cdecl) int32 'puts'(native int 's') cil managed preservesig {}
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 2
+  .locals init (int32 V_0)
+  ldstr "hi"
+  call void [mscorlib]System.Console::WriteLine(string)
+  ldsfld int32 'counter'
+  ret
+}
+#--- tables.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 9006
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8920
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 24576
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     826
+    SectionData:     1023000000000000000000000000000048000000020005007C20000058020000010000000200000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001330020010000000010000117201000070280200000A7E010000042A42534A4201000100000000000C00000076342E302E33303331390000000005006C00000018010000237E0000840100009000000023537472696E6773000000001402000008000000235553001C0200001000000023475549440000002C0200002C00000023426C6F620000000000000002000001579502340900000000FA25330016000001000000030000000200000003000000020000000100000002000000010000000100000001000000010000000100000001000000010000000100000000004900010000000000060011000A0006002D000A00060037000A0000000000010000000000010001000901000068006E000900020003001601710014000600850014000600870014000000000080001620790017000100602000000000160080001C000200000001007E0009002700010019003F0006002E000B0020000400080000000200260054000002030079000100004000000100000000000100020003000400000000000000890000000400000000000000000000000B005F00000000000000003C4D6F64756C653E0053797374656D00434C53436F6D706C69616E74417474726962757465002E63746F720056616C75655479706500436F6E736F6C650057726974654C696E65007461626C65732E646C6C006E61746976652E646C6C006D73636F726C696200506F696E74004E5300636F756E74657200707574730073006D61696E00580059007461626C6573000005680069000000CD950C2207D3A54C9900A49DD495EAD7000420010102040001010E08B77A5C561934E089020608040001081803000008050100010000030701080000000000000023000000000000000000001E2300000020000000000000000000000000000000000000000000001023000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .sdata
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    VirtualAddress:  16384
+    VirtualSize:     4
+    SectionData:     07000000
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  24576
+    VirtualSize:     12
+    SectionData:     002000000C00000030A30000
+symbols:         []
+...

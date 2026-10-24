@@ -27,8 +27,10 @@
 # run with %{msil_deps}, and msil_glibc_sysroot enables the optional hosted
 # compile-only tests of msil/test/M2/09-hosted (plan Q16). From M16,
 # %msil_canon prints the canonical listing of an assembly (plan 5.7.10,
-# 5.12.3; mdcanon, see "mdcanon" below), which harness/canon-listing.test
-# pins and later milestones compare.
+# 5.12.3), which harness/canon-listing.test pins and later milestones
+# compare: mdcanon in M16 (see "mdcanon" below), and from M17 the tree's
+# llvm-cil-dump --canonical (see "llvm-cil-dump" below), which
+# harness/canon-agree.test compares with mdcanon byte for byte.
 #
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
@@ -45,15 +47,15 @@
 # themselves UNSUPPORTED, so check-all keeps working everywhere. Exceptions:
 # --param msil_require_verify=1 (every gate passes it, plan D38) makes a
 # missing ILVerify, ildasm (msil-verify.py's neutralized pass), jitall,
-# mdcanon, (on Windows) PEVerify, ilasm or .NET runtime for the selected
-# runner a configuration error, even when an empty --param msil_<tool>= or
-# $MSIL_<TOOL> disabled it on purpose, so a gate never passes with its
-# verification or every harness test UNSUPPORTED; --param msil_require_exec=1
-# (the gate legs of msil/utils/ci pass it) does the same for msil-exec, which
-# M1/ needs (clang with the MSIL target, ilasm and a .NET runtime; see
-# M1/lit.local.cfg); --param msil_require_link=1 (and msil_pipeline=lto) does
-# the same for msil-ld and llvm-ar; and an explicitly requested runner,
-# runtime, leg or tool that cannot be used is one too.
+# mdcanon, llvm-cil-dump (from M17), (on Windows) PEVerify, ilasm or .NET
+# runtime for the selected runner a configuration error, even when an empty
+# --param msil_<tool>= or $MSIL_<TOOL> disabled it on purpose, so a gate
+# never passes with its verification or every harness test UNSUPPORTED;
+# --param msil_require_exec=1 (the gate legs of msil/utils/ci pass it) does
+# the same for msil-exec, which M1/ needs (clang with the MSIL target, ilasm
+# and a .NET runtime; see M1/lit.local.cfg); --param msil_require_link=1 (and
+# msil_pipeline=lto) does the same for msil-ld and llvm-ar; and an explicitly
+# requested runner, runtime, leg or tool that cannot be used is one too.
 
 import glob
 import json
@@ -970,6 +972,51 @@ if mdcanon_dir and not mdcanon_why:
 if mdcanon_why:
     note("mdcanon is not available: " + mdcanon_why)
 
+# ---------------------------------------------------------------- llvm-cil-dump
+# llvm-cil-dump (llvm/tools/llvm-cil-dump, plan 5.7.10; M17) prints canonical
+# listing v1 with --canonical, the same bytes as mdcanon, and an image's
+# headers, tables and link-info record. --param msil_cil_dump (or
+# $MSIL_CIL_DUMP) names it (plan 5.12.2); by default it is the tree's
+# <build>/bin/llvm-cil-dump, never one from PATH; empty disables it. Feature
+# msil-cil-dump, substitution %msil_cil_dump; with the feature, %msil_canon is
+# 'llvm-cil-dump --canonical' instead of mdcanon (see %msil_mdcanon below).
+# A named path that does not exist is a configuration error. From M17 it is
+# the lister of %msil_canon, so under msil_require_verify=1 a disabled or
+# missing llvm-cil-dump is a configuration error too, as mdcanon is (plan
+# section 12, '5.12.2 and M17.g clarified'); without that parameter
+# %msil_canon falls back to mdcanon. It only reads files, so it runs on the
+# host, also with msil_runner=wsl.
+cil_dump_param = params.get("msil_cil_dump")
+if cil_dump_param is None:
+    cil_dump_param = os.environ.get("MSIL_CIL_DUMP")
+msil_cil_dump = None
+cil_dump_why = None  # why the feature msil-cil-dump is missing
+if cil_dump_param == "":
+    cil_dump_why = "disabled by an empty --param msil_cil_dump= or $MSIL_CIL_DUMP"
+elif cil_dump_param is not None:
+    found = (
+        cil_dump_param
+        if is_runnable(cil_dump_param)
+        else lit.util.which(cil_dump_param)
+    )
+    if found:
+        msil_cil_dump = os.path.normpath(found)
+    else:
+        cil_dump_why = "msil_cil_dump=%s: no such program" % cil_dump_param
+        if not require_verify:
+            fatal(cil_dump_why)
+else:
+    candidate = os.path.join(config.llvm_tools_dir, "llvm-cil-dump" + exe_ext)
+    if is_runnable(candidate):
+        msil_cil_dump = os.path.normpath(candidate)
+    else:
+        cil_dump_why = "%s was not built" % slashes(candidate)
+if msil_cil_dump:
+    features.add("msil-cil-dump")
+    note("llvm-cil-dump: %s" % msil_cil_dump)
+elif not require_verify:
+    note("llvm-cil-dump is not available: %s; %%msil_canon is mdcanon" % cil_dump_why)
+
 if require_verify:
     # Name the tool and what fixes it. An explicitly empty override is still
     # an error here: a gate must not pass with a step switched off.
@@ -1021,6 +1068,12 @@ if require_verify:
                 mdcanon_why,
                 slashes(build_mdtools),
             )
+        )
+    if "msil-cil-dump" not in features:
+        missing.append(
+            "llvm-cil-dump, the lister of %%msil_canon from M17: %s; build the "
+            "llvm-cil-dump target or pass --param msil_cil_dump=PATH (or set "
+            "$MSIL_CIL_DUMP)" % cil_dump_why
         )
     if is_windows and "msil-peverify" not in features:
         missing.append(
@@ -1544,11 +1597,13 @@ else:
 jitall_cmd += env_args
 
 # %msil_mdcanon (plan 5.12.3): mdcanon on the host's dotnet, under the limits
-# of every other tool; callers add the options and files. %msil_canon is the
-# canonical listing a test compares: mdcanon until M17, which makes it
-# 'llvm-cil-dump --canonical' when the feature msil-cil-dump is present.
-# Without msil-mdcanon the command names a placeholder, so a test that runs
-# it without 'REQUIRES: msil-mdcanon' fails instead of passing.
+# of every other tool; callers add the options and files. %msil_cil_dump
+# (M17): the tree's llvm-cil-dump under the same limits. %msil_canon is the
+# canonical listing a test compares: '%msil_cil_dump --canonical' when the
+# feature msil-cil-dump is present (M17 on), else the %msil_mdcanon command.
+# Without the tool's feature a command names a placeholder, so a test that
+# runs it without 'REQUIRES: msil-mdcanon' (or msil-cil-dump) fails instead
+# of passing.
 have_mdcanon = "msil-mdcanon" in features
 mdcanon_cmd = "%s --tool%s -- %s exec --runtimeconfig %s %s" % (
     script("msil-run.py"),
@@ -1557,7 +1612,14 @@ mdcanon_cmd = "%s --tool%s -- %s exec --runtimeconfig %s %s" % (
     quote(mdcanon_config if have_mdcanon else "mdcanon-not-found.runtimeconfig.json"),
     quote(mdcanon_dll if have_mdcanon else "mdcanon-not-found.dll"),
 )
-canon_cmd = mdcanon_cmd
+cil_dump_cmd = "%s --tool%s -- %s" % (
+    script("msil-run.py"),
+    limits,
+    quote(msil_cil_dump or "llvm-cil-dump-not-found"),
+)
+canon_cmd = (
+    cil_dump_cmd + " --canonical" if "msil-cil-dump" in features else mdcanon_cmd
+)
 
 # Without msil_roundtrip=1 nothing runs it (the composites test the feature),
 # and msil-verify.py rejects --roundtrip without the tools.
@@ -1940,6 +2002,7 @@ substitutions = [
     ("%msil_jitall", jitall_cmd),
     ("%msil_roundtrip", roundtrip_cmd),
     ("%msil_mdcanon", mdcanon_cmd),
+    ("%msil_cil_dump", cil_dump_cmd),
     ("%msil_canon", canon_cmd),
     ("%msil_inputs", slashes(inputs_dir)),
 ]

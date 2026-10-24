@@ -1,0 +1,230 @@
+# The two implementations of canonical listing v1 (plan 5.7.10) agree byte for
+# byte (plan 5.12.3, M17): %msil_canon, which is the tree's llvm-cil-dump
+# --canonical from M17 on (feature msil-cil-dump), and %msil_mdcanon, the C#
+# mdcanon of M16 (msil/utils/mdtools/mdcanon.cs, plan 5.7.11), which reads the
+# same image through System.Reflection.Metadata. canon-listing.test pins the
+# listing's text; this test pins the agreement on seven inputs, each
+# assembled with %ilasm -dll:
+#   canon-listing.il        a hash algorithm, RVA data, a P/Invoke, named and
+#                           [opt] parameters, a switch, a non-ASCII ldstr, a
+#                           try/catch and custom attributes;
+#   calli-ok.il             ldftn, a managed calli and a join;
+#   cctor-puts-windows.il   a module initializer, a data segment address field
+#                           and a ucrtbase P/Invoke;
+#   d12-image.il            plan D12's data segment: an explicit-layout image
+#                           type with .pack and .size, the RVA blob, cpblk,
+#                           initblk and relocations through ldftn;
+#   exit-42.il              the Phase-1 module shape with its entry point;
+#   fp-special-constants.il infinities, NaNs with payloads and quieted float32
+#                           signaling NaNs as float32 and float64 operands;
+#   canon-edges.il          (at the end of this file, split-file) the
+#                           constructs of plan section 12's row '5.7.10
+#                           clarified (canonical listing v1 ...)' that ilasm
+#                           writes; its header comment lists them.
+# Each image is listed by both dumpers with three option sets, and every pair
+# of listings must be equal:
+#   (default) no options;
+#   (strip)   %{agree_strip};
+#   (norm)    the six normalizations of plan 5.12.6, all on.
+# mdcanon lists the seven images of an option set in one process (--out-dir
+# writes <dir>/<file name>.canon, no 'File:' lines), llvm-cil-dump each image
+# on its own; a dumper that fails on an image fails its RUN line.
+# (TOOL) Before the comparisons, %msil_canon must be 'llvm-cil-dump
+# --canonical', not a second mdcanon (with mdcanon on both sides every diff
+# below is empty): it lists exit-42.dll with --headers, which mdcanon refuses
+# (unknown option, exit 2) and llvm-cil-dump prints after the listing, so the
+# output has the listing's pe line and then the headers' Format and Mvid
+# lines.
+# (EDGE) The default listing of canon-edges.dll keeps that row's orders: the
+# .implements lines and the .try clauses in table order, and members sorted
+# by their raw names ('a' before 'a$', although the quoted 'a$' sorts
+# first); a .other accessor, and a switch without targets printed alone; no
+# line for the event, the MethodImpl, the DeclSecurity row or the Param
+# custom attribute.
+# REQUIRES: msil-cil-dump, msil-mdcanon
+
+# DEFINE: %{agree_images} = %t.d/canon-listing.dll %t.d/calli-ok.dll %t.d/cctor-puts-windows.dll %t.d/d12-image.dll %t.d/exit-42.dll %t.d/fp-special-constants.dll %t.d/canon-edges.dll
+# DEFINE: %{agree_strip} = --scopes=strip --order=decl --forms=canon --stats
+# DEFINE: %{agree_norm} = --assembly-hash=ignore --params=drop --initlocals=ignore-without-locals --snan=quiet --pinvoke-module=strip --pinvoke-access=ignore
+
+# RUN: rm -rf %t.d && mkdir -p %t.d/default %t.d/strip %t.d/norm
+# RUN: split-file %s %t.d/split
+# RUN: %ilasm -dll -output=%t.d/canon-listing.dll %S/Inputs/canon-listing.il
+# RUN: %ilasm -dll -output=%t.d/calli-ok.dll %S/Inputs/calli-ok.il
+# RUN: %ilasm -dll -output=%t.d/cctor-puts-windows.dll %S/Inputs/cctor-puts-windows.il
+# RUN: %ilasm -dll -output=%t.d/d12-image.dll %S/Inputs/d12-image.il
+# RUN: %ilasm -dll -output=%t.d/exit-42.dll %S/Inputs/exit-42.il
+# RUN: %ilasm -dll -output=%t.d/fp-special-constants.dll %S/Inputs/fp-special-constants.il
+# RUN: %ilasm -dll -output=%t.d/canon-edges.dll %t.d/split/canon-edges.il
+
+# (TOOL)
+# RUN: %msil_canon --headers %t.d/exit-42.dll > %t.d/tool.txt
+# RUN: FileCheck --input-file=%t.d/tool.txt %s --check-prefix=TOOL --match-full-lines --strict-whitespace
+
+# TOOL:pe PE32+ machine=0x{{[0-9A-F]+}} dll subsystem=3
+# TOOL:Format: PE32+ machine=0x{{[0-9A-F]+}} dll
+# TOOL:Mvid: {{[0-9a-f-]+}}
+
+# (EDGE)
+# RUN: %msil_canon %t.d/canon-edges.dll > %t.d/edges.txt
+# RUN: FileCheck --input-file=%t.d/edges.txt %s --check-prefix=EDGE --match-full-lines --strict-whitespace --implicit-check-not=.event --implicit-check-not=.override --implicit-check-not=Obsolete --implicit-check-not=SecurityPermission
+
+# EDGE:.class 'NS.C' flags=0x{{[0-9A-F]+}} extends [mscorlib]System.Object
+# EDGE-NEXT:  .implements 'NS.IB'
+# EDGE-NEXT:  .implements 'NS.IA'
+# EDGE-NEXT:  .field 'a' int32 flags=0x0016
+# EDGE-NEXT:  .field 'a$' int32 flags=0x0016
+# EDGE-NEXT:  .property 'S' int32() flags=0x0000
+# EDGE-NEXT:    .get int32() 'NS.C'::'get_S'
+# EDGE-NEXT:    .other void() 'NS.C'::'other_S'
+# EDGE:  .method 'a' void() flags=0x0016 impl=0x0000
+# EDGE:  .method 'a$' void() flags=0x0016 impl=0x0000
+# EDGE:  .method 'sw' void(int32) flags=0x0016 impl=0x0000
+# EDGE:    L1: switch
+# EDGE-NEXT:    L2: ret
+# EDGE:  .method 't' void() flags=0x0016 impl=0x0000
+# EDGE:    .try L1 to L3 catch [mscorlib]System.Exception handler L3 to L5
+# EDGE-NEXT:    .try L0 to L6 finally handler L6 to L7
+
+# (default)
+# RUN: %msil_mdcanon --out-dir %t.d/default %{agree_images}
+# RUN: %msil_canon %t.d/canon-listing.dll > %t.d/default/canon-listing.cil-dump
+# RUN: diff %t.d/default/canon-listing.dll.canon %t.d/default/canon-listing.cil-dump
+# RUN: %msil_canon %t.d/calli-ok.dll > %t.d/default/calli-ok.cil-dump
+# RUN: diff %t.d/default/calli-ok.dll.canon %t.d/default/calli-ok.cil-dump
+# RUN: %msil_canon %t.d/cctor-puts-windows.dll > %t.d/default/cctor-puts-windows.cil-dump
+# RUN: diff %t.d/default/cctor-puts-windows.dll.canon %t.d/default/cctor-puts-windows.cil-dump
+# RUN: %msil_canon %t.d/d12-image.dll > %t.d/default/d12-image.cil-dump
+# RUN: diff %t.d/default/d12-image.dll.canon %t.d/default/d12-image.cil-dump
+# RUN: %msil_canon %t.d/exit-42.dll > %t.d/default/exit-42.cil-dump
+# RUN: diff %t.d/default/exit-42.dll.canon %t.d/default/exit-42.cil-dump
+# RUN: %msil_canon %t.d/fp-special-constants.dll > %t.d/default/fp-special-constants.cil-dump
+# RUN: diff %t.d/default/fp-special-constants.dll.canon %t.d/default/fp-special-constants.cil-dump
+# RUN: %msil_canon %t.d/canon-edges.dll > %t.d/default/canon-edges.cil-dump
+# RUN: diff %t.d/default/canon-edges.dll.canon %t.d/default/canon-edges.cil-dump
+
+# (strip)
+# RUN: %msil_mdcanon %{agree_strip} --out-dir %t.d/strip %{agree_images}
+# RUN: %msil_canon %{agree_strip} %t.d/canon-listing.dll > %t.d/strip/canon-listing.cil-dump
+# RUN: diff %t.d/strip/canon-listing.dll.canon %t.d/strip/canon-listing.cil-dump
+# RUN: %msil_canon %{agree_strip} %t.d/calli-ok.dll > %t.d/strip/calli-ok.cil-dump
+# RUN: diff %t.d/strip/calli-ok.dll.canon %t.d/strip/calli-ok.cil-dump
+# RUN: %msil_canon %{agree_strip} %t.d/cctor-puts-windows.dll > %t.d/strip/cctor-puts-windows.cil-dump
+# RUN: diff %t.d/strip/cctor-puts-windows.dll.canon %t.d/strip/cctor-puts-windows.cil-dump
+# RUN: %msil_canon %{agree_strip} %t.d/d12-image.dll > %t.d/strip/d12-image.cil-dump
+# RUN: diff %t.d/strip/d12-image.dll.canon %t.d/strip/d12-image.cil-dump
+# RUN: %msil_canon %{agree_strip} %t.d/exit-42.dll > %t.d/strip/exit-42.cil-dump
+# RUN: diff %t.d/strip/exit-42.dll.canon %t.d/strip/exit-42.cil-dump
+# RUN: %msil_canon %{agree_strip} %t.d/fp-special-constants.dll > %t.d/strip/fp-special-constants.cil-dump
+# RUN: diff %t.d/strip/fp-special-constants.dll.canon %t.d/strip/fp-special-constants.cil-dump
+# RUN: %msil_canon %{agree_strip} %t.d/canon-edges.dll > %t.d/strip/canon-edges.cil-dump
+# RUN: diff %t.d/strip/canon-edges.dll.canon %t.d/strip/canon-edges.cil-dump
+
+# (norm)
+# RUN: %msil_mdcanon %{agree_norm} --out-dir %t.d/norm %{agree_images}
+# RUN: %msil_canon %{agree_norm} %t.d/canon-listing.dll > %t.d/norm/canon-listing.cil-dump
+# RUN: diff %t.d/norm/canon-listing.dll.canon %t.d/norm/canon-listing.cil-dump
+# RUN: %msil_canon %{agree_norm} %t.d/calli-ok.dll > %t.d/norm/calli-ok.cil-dump
+# RUN: diff %t.d/norm/calli-ok.dll.canon %t.d/norm/calli-ok.cil-dump
+# RUN: %msil_canon %{agree_norm} %t.d/cctor-puts-windows.dll > %t.d/norm/cctor-puts-windows.cil-dump
+# RUN: diff %t.d/norm/cctor-puts-windows.dll.canon %t.d/norm/cctor-puts-windows.cil-dump
+# RUN: %msil_canon %{agree_norm} %t.d/d12-image.dll > %t.d/norm/d12-image.cil-dump
+# RUN: diff %t.d/norm/d12-image.dll.canon %t.d/norm/d12-image.cil-dump
+# RUN: %msil_canon %{agree_norm} %t.d/exit-42.dll > %t.d/norm/exit-42.cil-dump
+# RUN: diff %t.d/norm/exit-42.dll.canon %t.d/norm/exit-42.cil-dump
+# RUN: %msil_canon %{agree_norm} %t.d/fp-special-constants.dll > %t.d/norm/fp-special-constants.cil-dump
+# RUN: diff %t.d/norm/fp-special-constants.dll.canon %t.d/norm/fp-special-constants.cil-dump
+# RUN: %msil_canon %{agree_norm} %t.d/canon-edges.dll > %t.d/norm/canon-edges.cil-dump
+# RUN: diff %t.d/norm/canon-edges.dll.canon %t.d/norm/canon-edges.cil-dump
+
+#--- canon-edges.il
+// The seventh input of canon-agree.test: the constructs of plan section 12's
+// row '5.7.10 clarified (canonical listing v1 ...)' that ilasm can write,
+// which the two dumpers must list alike (the M1 corpus has none of them):
+// - NS.C implements NS.IB, then NS.IA, where NS.IA is the earlier TypeDef:
+//   ilasm keeps the text order in the InterfaceImpl table, so the
+//   .implements lines are in neither name nor TypeDef order;
+// - nested .try blocks in 't': the inner clause comes first in the table,
+//   and its try block starts one instruction after the outer one's, so the
+//   clauses are in neither text nor sorted order;
+// - a field and a method each named 'a' and 'a$': the raw names sort 'a'
+//   first, the quoted ones 'a$' first (the quote sorts after '$');
+// - the static property S (no 'instance') with a .get and a .other
+//   accessor (MethodSemantics 0x0004);
+// - the event E, the MethodImpl of 'NS.IA.M' (.override) and a DeclSecurity
+//   row on NS.C, none of which the listing shows. The DeclSecurity row comes
+//   from .permissionset with a SecurityPermissionAttribute: the NuGet ilasm
+//   refuses '.permission' ('Failed to define security attribute set');
+// - a custom attribute on the Param row of 'p', which the listing omits;
+// - 'sw': a switch without targets.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'canon-edges' { }
+.module 'canon-edges.dll'
+
+.class interface public abstract auto ansi NS.IA
+{
+  .method public hidebysig newslot abstract virtual instance void M() cil managed { }
+}
+.class interface public abstract auto ansi NS.IB { }
+
+.class public auto ansi NS.C extends [mscorlib]System.Object implements NS.IB, NS.IA
+{
+  .permissionset demand = {[mscorlib]System.Security.Permissions.SecurityPermissionAttribute = {property bool 'Unrestricted' = bool(true)}}
+  .field public static int32 'a$'
+  .field public static int32 'a'
+  .method private hidebysig newslot virtual final instance void 'NS.IA.M'() cil managed
+  {
+    .override NS.IA::M
+    ret
+  }
+  .method public static int32 get_S() cil managed { ldc.i4.0 ret }
+  .method public static void other_S() cil managed { ret }
+  .property int32 S() { .get int32 NS.C::get_S() .other void NS.C::other_S() }
+  .method public specialname instance void add_E(class [mscorlib]System.EventHandler h) cil managed { ret }
+  .method public specialname instance void remove_E(class [mscorlib]System.EventHandler h) cil managed { ret }
+  .event [mscorlib]System.EventHandler E
+  {
+    .addon instance void NS.C::add_E(class [mscorlib]System.EventHandler)
+    .removeon instance void NS.C::remove_E(class [mscorlib]System.EventHandler)
+  }
+  .method public static void 'a$'() cil managed { ret }
+  .method public static void 'a'() cil managed { ret }
+  .method public static void p(int32 x) cil managed
+  {
+    .param [1]
+    .custom instance void [mscorlib]System.ObsoleteAttribute::.ctor() = (01 00 00 00)
+    ret
+  }
+  .method public static void t() cil managed
+  {
+    .maxstack 8
+    .try
+    {
+      nop
+      .try
+      {
+        nop
+        leave.s L2
+      }
+      catch [mscorlib]System.Exception
+      {
+        pop
+        leave.s L2
+      }
+    L2:
+      leave.s L3
+    }
+    finally
+    {
+      endfinally
+    }
+  L3:
+    ret
+  }
+  .method public static void sw(int32 x) cil managed
+  {
+    ldarg.0
+    switch ()
+    ret
+  }
+}

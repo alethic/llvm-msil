@@ -1,0 +1,454 @@
+## Canonical listing v1 rules that section 12's row '5.7.10 clarified
+## (canonical listing v1: details its table leaves open, ...)' settles and
+## the other tests do not reach. Every listing line is mdcanon's (M16) for
+## the same image. The input is a yaml2obj copy of the ilasm (.NET Framework
+## 4.8, -dll -pe64 -x64) image of edges.il, whose YAML was patched in three
+## places that ilasm cannot write:
+##   - 'branches': the br.s displacement is -10 (F6) in place of 0, so its
+##     target is offset -2, before the code;
+##   - the signature of field 'via63' (06 12 1D, CLASS System.Version) names
+##     TypeSpec row 1 (06 12 06);
+##   - .sdata has 0x200 bytes of raw data and VirtualSize 0x208, its last
+##     four raw bytes are 01 02 03 04 (the low half of 'tail''s int64), and
+##     the FieldRVA of 'tail' is 0x41FC.
+## The cases after the listing patch the YAML once more with sed (each
+## pattern occurs once in it). The error cases pin the 'llvm-cil-dump:
+## error: '<file>': ' prefix and the prefix of plan 5.7.12, not the wording.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/edges.yaml -o %t/edges.dll
+# RUN: llvm-cil-dump --canonical %t/edges.dll > %t/edges.txt
+# RUN: FileCheck %s --input-file=%t/edges.txt --match-full-lines --strict-whitespace
+# CHECK:pe PE32+ machine=0x8664 dll subsystem=3
+# CHECK-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+
+## The entry point line; the NATEP case below has none.
+# CHECK-NEXT:entrypoint int32() '<Module>'::'main'
+# CHECK-NEXT:assembly 'edges' ver 0.0.0.0 flags=0x00000000 hash=0x00000000 culture='' key=-
+# CHECK-NEXT:module 'edges.dll'
+# CHECK-NEXT:assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# CHECK-EMPTY:
+# CHECK-NEXT:.class '<Module>' flags=0x00000000
+# CHECK-NEXT:  .method 'main' int32() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ldc.i4.s 42
+# CHECK-NEXT:    L1: ret
+# CHECK-NEXT:  .method 'tokens' void() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+
+## TypeSpec rows named outside a signature (here IL operands) start at
+## depth 0: row 1 is int32 inside 63 PTRs, row 2 int32 inside 64 (the
+## most a type may have; more than 64 constructors is an error) and row
+## 3 int32*.
+# CHECK-NEXT:    L0: ldtoken int32***************************************************************
+# CHECK-NEXT:    L1: pop
+# CHECK-NEXT:    L2: ldtoken int32****************************************************************
+# CHECK-NEXT:    L3: pop
+# CHECK-NEXT:    L4: ldtoken int32*
+# CHECK-NEXT:    L5: pop
+# CHECK-NEXT:    L6: ret
+# CHECK-EMPTY:
+# CHECK-NEXT:.class 'C' flags=0x00000001 extends [mscorlib]System.Object
+
+## .implements lines keep InterfaceImpl order under --order=sorted: IB
+## before IA.
+# CHECK-NEXT:  .implements 'IB'
+# CHECK-NEXT:  .implements 'IA'
+
+## <propsig> is [instance ]<type>(<p>, ...): 'P' has HASTHIS, the static
+## 'S' does not. MethodSemantics 0x0002 prints .get and any value other
+## than 0x0001 and 0x0002 (here 0x0004, ilasm's .other) prints .other.
+## The event 'E' and its AddOn and RemoveOn rows are not listed.
+# CHECK-NEXT:  .property 'P' instance int32() flags=0x0000
+# CHECK-NEXT:    .get instance int32() 'C'::'get_P'
+# CHECK-NEXT:  .property 'S' int32() flags=0x0000
+# CHECK-NEXT:    .get int32() 'C'::'get_S'
+# CHECK-NEXT:    .other void() 'C'::'other_S'
+
+## The MethodImpl row of 'IA.M' (its .override) is not listed.
+# CHECK-NEXT:  .method 'IA.M' instance void() flags=0x01E1 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+
+## Sort keys use the raw names: 'a' (key "a void()") sorts before 'a$'
+## ("a$ void()"), although the quoted names sort the other way.
+# CHECK-NEXT:  .method 'a' void() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'a$' void() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'add_E' instance void(class [mscorlib]System.EventHandler) flags=0x0006 impl=0x0000
+# CHECK-NEXT:    .param 1 'h' flags=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'branches' void(int32) flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .param 1 'x' flags=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ldarg.0
+
+## A switch without targets prints switch alone, and a branch target
+## before the code (offset -2) prints <offset -0x2>.
+# CHECK-NEXT:    L1: switch
+# CHECK-NEXT:    L2: br.s <offset -0x2>
+# CHECK-NEXT:    L3: ret
+# CHECK-NEXT:  .method 'get_P' instance int32() flags=0x0006 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ldc.i4.1
+# CHECK-NEXT:    L1: ret
+# CHECK-NEXT:  .method 'get_S' int32() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ldc.i4.0
+# CHECK-NEXT:    L1: ret
+# CHECK-NEXT:  .method 'other_S' void() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+
+## The method's custom attribute is listed; the one on its Param row is
+## not.
+# CHECK-NEXT:  .method 'p' void(int32) flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .param 1 'x' flags=0x0000
+# CHECK-NEXT:    .custom instance void() [mscorlib]System.ObsoleteAttribute::'.ctor' = 01 00 00 00
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'remove_E' instance void(class [mscorlib]System.EventHandler) flags=0x0006 impl=0x0000
+# CHECK-NEXT:    .param 1 'h' flags=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+
+## The DeclSecurity row of 'sec' is not listed (its flags keep
+## HasSecurity, 0x4000).
+# CHECK-NEXT:  .method 'sec' void() flags=0x4016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 't' void() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: nop
+# CHECK-NEXT:    L1: nop
+# CHECK-NEXT:    L2: leave.s L5
+# CHECK-NEXT:    L3: pop
+# CHECK-NEXT:    L4: leave.s L5
+# CHECK-NEXT:    L5: leave.s L7
+# CHECK-NEXT:    L6: endfinally
+# CHECK-NEXT:    L7: ret
+
+## .try clauses keep table order (the inner clause first, ECMA-335 II.19)
+## under --order=sorted, although their text sorts the other way.
+# CHECK-NEXT:    .try L1 to L3 catch [mscorlib]System.Exception handler L3 to L5
+# CHECK-NEXT:    .try L0 to L6 finally handler L6 to L7
+# CHECK-EMPTY:
+# CHECK-NEXT:.class 'F' flags=0x00000001 extends [mscorlib]System.Object
+
+## valuetype Guid inside 64 PTRs: the deepest type a signature may hold.
+# CHECK-NEXT:  .field 'deep' valuetype [mscorlib]System.Guid**************************************************************** flags=0x0016
+# CHECK-NEXT:  .field 'head' int32 flags=0x0116
+# CHECK-NEXT:    .data 4 bytes
+# CHECK-NEXT:      44 33 22 11
+# CHECK-NEXT:  .field 'tail' int64 flags=0x0116
+
+## 'tail' starts four bytes before the end of .sdata's raw data (0x200
+## bytes), and its VirtualSize (0x208) covers the rest: those bytes read
+## as zeros.
+# CHECK-NEXT:    .data 8 bytes
+# CHECK-NEXT:      01 02 03 04 00 00 00 00
+
+## A TypeSpec named inside a signature continues its depth: TypeSpec row 1
+## after CLASS starts one level down, so its int32 is inside 64 levels.
+# CHECK-NEXT:  .field 'via63' class int32*************************************************************** flags=0x0016
+# CHECK-NEXT:  .field 'via64' class [mscorlib]System.Random flags=0x0016
+# CHECK-EMPTY:
+# CHECK-NEXT:.class 'IA' flags=0x000000A1
+# CHECK-NEXT:  .method 'M' instance void() flags=0x05C6 impl=0x0000
+# CHECK-EMPTY:
+# CHECK-NEXT:.class 'IB' flags=0x000000A1
+# CHECK-NOT:{{.}}
+
+## No entrypoint line when CorFlags has COMIMAGE_FLAGS_NATIVE_ENTRYPOINT
+## (0x10): the CLI header's Flags are patched from 0x1 to 0x11.
+# RUN: sed -e "s/05000001000000010000/05000011000000010000/" %t/edges.yaml > %t/natep.yaml
+# RUN: yaml2obj %t/natep.yaml -o %t/natep.dll
+# RUN: llvm-cil-dump --canonical %t/natep.dll \
+# RUN:   | FileCheck %s --check-prefix=NATEP --match-full-lines --strict-whitespace \
+# RUN:       --implicit-check-not=entrypoint
+# NATEP:pe PE32+ machine=0x8664 dll subsystem=3
+# NATEP-NEXT:cor flags=0x00000011 runtime=2.5 metadata-version=v4.0.30319
+# NATEP-NEXT:assembly 'edges' ver 0.0.0.0 flags=0x00000000 hash=0x00000000 culture='' key=-
+
+## An entry point token that is not a MethodDef is an error: the CLI
+## header's EntryPointToken is patched from 0x06000001 to 0x0A000001
+## (MemberRef row 1).
+# RUN: sed -e "s/0000010000060000/00000100000A0000/" %t/edges.yaml > %t/eptok.yaml
+# RUN: yaml2obj %t/eptok.yaml -o %t/eptok.dll
+# RUN: not llvm-cil-dump --canonical %t/eptok.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=EPTOK -DFILE=%t/eptok.dll --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# EPTOK:llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': invalid CLI metadata: {{.+}}
+
+## An RVA outside every section is an error: the FieldRVA of 'tail' is
+## patched from 0x41FC to 0x9000, past SizeOfImage.
+# RUN: sed -e "s/0400FC4100000500/0400009000000500/" %t/edges.yaml > %t/rva.yaml
+# RUN: yaml2obj %t/rva.yaml -o %t/rva.dll
+# RUN: not llvm-cil-dump --canonical %t/rva.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=RVA -DFILE=%t/rva.dll --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RVA:llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': invalid CLI image: {{.+}}
+
+## A type inside more than 64 constructors is an error: the signature of
+## 'deep' ends in 0F 08 (int32 inside 65 PTRs) in place of 11 19 (valuetype
+## Guid inside 64), at the same length.
+# RUN: sed -e "s/0F0F0F1119030612/0F0F0F0F08030612/" %t/edges.yaml > %t/deep.yaml
+# RUN: yaml2obj %t/deep.yaml -o %t/deep.dll
+# RUN: not llvm-cil-dump --canonical %t/deep.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=DEEP -DFILE=%t/deep.dll --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# DEEP:llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': invalid signature: {{.+}}
+
+## The depth continues across blobs: the signature of 'via64' (06 12 21,
+## CLASS System.Random) names TypeSpec row 2 (06 12 0A), whose int32 inside
+## 64 PTRs is listed above as an IL operand but here starts one level below
+## the field's type: 65 levels.
+# RUN: sed -e "s/060306122102060802/060306120A02060802/" %t/edges.yaml > %t/cont.yaml
+# RUN: yaml2obj %t/cont.yaml -o %t/cont.dll
+# RUN: not llvm-cil-dump --canonical %t/cont.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CONT -DFILE=%t/cont.dll --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# CONT:llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': invalid signature: {{.+}}
+
+## A TypeSpec cycle is bounded by the same count: TypeSpec row 3 (0F 08,
+## int32*) is patched to CLASS TypeSpec row 3 (12 0E), so each hop goes one
+## level deeper until more than 64 are reached.
+# RUN: sed -e "s/0F08020F0808B77A/0F0802120E08B77A/" %t/edges.yaml > %t/cycle.yaml
+# RUN: yaml2obj %t/cycle.yaml -o %t/cycle.dll
+# RUN: not llvm-cil-dump --canonical %t/cycle.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CYCLE -DFILE=%t/cycle.dll --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# CYCLE:llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': invalid signature: {{.+}}
+
+#--- edges.il
+// Listing rules of section 12 row '5.7.10 clarified (canonical listing v1
+// ...)'. canonical-edges.test patches its image in the places it names.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'edges' { }
+.module 'edges.dll'
+
+.class interface public abstract auto ansi 'IB'
+{
+}
+.class interface public abstract auto ansi 'IA'
+{
+  .method public hidebysig newslot abstract virtual instance void 'M'() cil managed
+  {
+  }
+}
+
+// InterfaceImpl rows IB, IA: not their text order.
+.class public auto ansi 'C' extends [mscorlib]System.Object implements 'IB', 'IA'
+{
+  .method public static int32 'get_S'() cil managed
+  {
+    .maxstack 8
+    ldc.i4.0
+    ret
+  }
+  .method public static void 'other_S'() cil managed
+  {
+    .maxstack 8
+    ret
+  }
+  // A static property: its signature has no HASTHIS.
+  .property int32 'S'()
+  {
+    .get int32 'C'::'get_S'()
+    .other void 'C'::'other_S'()
+  }
+  .method public instance int32 'get_P'() cil managed
+  {
+    .maxstack 8
+    ldc.i4.1
+    ret
+  }
+  .property instance int32 'P'()
+  {
+    .get instance int32 'C'::'get_P'()
+  }
+  .method public instance void 'add_E'(class [mscorlib]System.EventHandler 'h') cil managed
+  {
+    .maxstack 8
+    ret
+  }
+  .method public instance void 'remove_E'(class [mscorlib]System.EventHandler 'h') cil managed
+  {
+    .maxstack 8
+    ret
+  }
+  .event [mscorlib]System.EventHandler 'E'
+  {
+    .addon instance void 'C'::'add_E'(class [mscorlib]System.EventHandler)
+    .removeon instance void 'C'::'remove_E'(class [mscorlib]System.EventHandler)
+  }
+  // A MethodImpl row.
+  .method private hidebysig newslot virtual final instance void 'IA.M'() cil managed
+  {
+    .override 'IA'::'M'
+    .maxstack 8
+    ret
+  }
+  // Sort keys use raw names: 'a' sorts before 'a$' ("a " < "a$"), though
+  // their quoted forms sort the other way ("'a$'" < "'a'").
+  .method public static void 'a$'() cil managed
+  {
+    .maxstack 8
+    ret
+  }
+  .method public static void 'a'() cil managed
+  {
+    .maxstack 8
+    ret
+  }
+  // A custom attribute on a Param row is not listed; the one on the method is.
+  .method public static void 'p'(int32 'x') cil managed
+  {
+    .custom instance void [mscorlib]System.ObsoleteAttribute::.ctor() = (01 00 00 00)
+    .param [1]
+    .custom instance void [mscorlib]System.CLSCompliantAttribute::.ctor(bool) = (01 00 01 00 00)
+    .maxstack 8
+    ret
+  }
+  // A DeclSecurity row.
+  .method public static void 'sec'() cil managed
+  {
+    .permissionset demand = (01 02 03)
+    .maxstack 8
+    ret
+  }
+  // The inner (catch) clause starts after the outer (finally) one: table
+  // order (inner first, ECMA II.19) differs from the order of the lines.
+  .method public static void 't'() cil managed
+  {
+    .maxstack 8
+    .try
+    {
+      nop
+      .try
+      {
+        nop
+        leave.s L2
+      }
+      catch [mscorlib]System.Exception
+      {
+        pop
+        leave.s L2
+      }
+      L2: leave.s L3
+    }
+    finally
+    {
+      endfinally
+    }
+    L3: ret
+  }
+  .method public static void 'branches'(int32 'x') cil managed
+  {
+    .maxstack 8
+    ldarg.0
+    switch ()
+    br.s B0
+    B0: ret
+  }
+}
+
+// Field signatures and FieldRVA data.
+.class public auto ansi 'F' extends [mscorlib]System.Object
+{
+  // valuetype Guid inside 64 PTRs: the deepest type a signature may hold.
+  .field public static valuetype [mscorlib]System.Guid**************************************************************** 'deep'
+  // The YAML names TypeSpec row 1 (int32 inside 63 PTRs) in place of
+  // System.Version; the 'cont' variant names TypeSpec row 2 in place of
+  // System.Random.
+  .field public static class [mscorlib]System.Version 'via63'
+  .field public static class [mscorlib]System.Random 'via64'
+  .field public static int32 'head' at D_head
+  .field public static int64 'tail' at D_tail
+}
+.data D_head = int32(0x11223344)
+.data D_tail = int64(0x0807060504030201)
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldc.i4.s 42
+  ret
+}
+
+// TypeSpec rows, named from IL (outside a signature): 1 is int32 inside 63
+// PTRs, 2 int32 inside 64 PTRs, 3 int32* (the 'cycle' variant makes it
+// CLASS TypeSpec 3).
+.method public static void 'tokens'() cil managed
+{
+  .maxstack 8
+  ldtoken int32***************************************************************
+  pop
+  ldtoken int32****************************************************************
+  pop
+  ldtoken int32*
+  pop
+  ret
+}
+#--- edges.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 9838
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 9744
+    Size:            91
+  BaseRelocationTable:
+    RelativeVirtualAddress: 24576
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     1658
+    SectionData:     502600000000000000000000000000004800000002000500D02000003C050000010000000100000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000E1F2A2A4ED00100001B26D00200001B26D00300001B262A0A162A062A0A172A062A062A062A062A062A062A062A00000B3008000B000000000000000000DE0326DE00DE01DC2A00011C0000000001000304000305000001020000000909000100000000260245000000002BF62A000042534A4201000100000000000C00000076342E302E33303331390000000005006C00000094020000237E0000000300000801000023537472696E67730000000008040000080000002355530010040000100000002347554944000000200400001C01000023426C6F6200000000000000020000015757B42B0900000000FA253300160000010000000800000005000000050000000F00000004000000020000000200000002000000010000000100000001000000010000000200000005000000010000000300000002000000010000000100000000007100010000000000060011000A00060018000A00060025000A0006003D000A00060053000A0006005D000A00060062000A0006006A000A000000000001000000000001000100A100000084000000000001000300A100000087000000000001000300010000008A000000050001000400010000008C0000000500010010001600DE00BF001600E30003011600E90007011601EF000B011601F4000E0160200000000016008E0099000100642000000000160093009D000100000000000000C6059A000100010078200000000016009C00990001007B20000000001600A2009D0001007D20000000000600AA00A10001008020000000000600B000A50001008220000000000600B800A5000200842000000000E101C100010003008620000000001600C6009D0003008820000000001600C9009D0003008A20000000001600CB00AB0003008C20000000001640CF009D0004009020000000001600D3009D000400C420000000001600D500AB00040000000100B60000000100B60000000100CD0000000100CD000400080004000C0019003700010021003700050064001300B00080010B00B60002003500BB00040001000000F9000900040001000000FB0011010000FD0015010800070002001000080002000200040003000400050003000200060005000400120006000A004B008D00004000000400FC4100000500000000000000000000000000000000000000FF00000004000000000000000000000090007B000000000000000000003C4D6F64756C653E0053797374656D004F626A656374004576656E7448616E646C6572004F62736F6C657465417474726962757465002E63746F7200434C53436F6D706C69616E7441747472696275746500457863657074696F6E00477569640056657273696F6E0052616E646F6D0065646765732E646C6C006D73636F726C696200494200494100430046006D61696E00746F6B656E73004D006765745F53006F746865725F53006765745F50006164645F4500680072656D6F76655F450049412E4D006124006100700078007365630074006272616E6368657300646565700076696136330076696136340068656164007461696C004500530050006564676573000000000003200000000000EFDB62186969E34EA37133095BE2BF2D00032000010420010102400F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F08410F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F08020F0808B77A5C561934E089030000080300000103200008052001011209040001010805010001000004010000000301020343060F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F1119030612060306122102060802060A0308000803280008000000000000003826000000000000000000005E26000000200000000000000000000000000000000000000000000050260000000000000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .sdata
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    VirtualAddress:  16384
+    VirtualSize:     520
+    SectionData:     4433221101020304050607080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001020304
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  24576
+    VirtualSize:     12
+    SectionData:     002000000C00000070A60000
+symbols:         []
+...

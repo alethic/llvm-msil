@@ -1,0 +1,435 @@
+## llvm-cil-copy errors (plan 5.7.10, 5.7.12): a missing input, an input that
+## is not a CLI image, FieldRVA data whose size the rule of the listing's
+## '.data' line cannot give (a native int field) and an ldstr string that
+## addUserString cannot represent are errors with exit status 1, never a
+## crash (section 2: the guards against 'LLVM ERROR' and 'PLEASE submit'
+## catch an abort(), which plain 'not' accepts on Windows). The inputs are
+## yaml2obj copies of the ilasm (.NET Framework 4.8, -exe -pe64 -x64) images
+## of rvasize.il and us.il. The copier's other refusals (section 12, '5.7.10
+## amended (`llvm-cil-copy`'s other refusals)') follow, on fwd.il and on
+## patched copies of patch.il's YAML.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/rvasize.yaml -o %t/rvasize.exe
+# RUN: yaml2obj %t/us.yaml -o %t/us.exe
+
+# RUN: not llvm-cil-copy %t/missing.exe -o %t/missing.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=MISSING -DFILE=%t/missing.exe -DMSG=%errc_ENOENT \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# MISSING: {{.*}}error: {{.*}}'[[FILE]]': [[MSG]]
+
+# RUN: not llvm-cil-copy %t/rvasize.il -o %t/text.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOTPE \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# NOTPE: {{.*}}error: {{.*}}invalid CLI image: {{.+}}
+
+## The field 'ptr' is a native int with FieldRVA data: its size is unknown.
+# RUN: llvm-cil-dump --canonical %t/rvasize.exe | FileCheck %s --check-prefix=DATA
+# DATA:      .field 'ptr' native int flags=0x0116
+# DATA-NEXT:   .data (unknown size)
+# RUN: not llvm-cil-copy %t/rvasize.exe -o %t/rvasize.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=SIZE -DFILE=%t/rvasize.exe \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# SIZE: llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': the FieldRVA data of field 'ptr' has no known size
+
+## A #US entry with a lone UTF-16 surrogate is valid metadata (ECMA-335
+## II.24.2.4 stores UTF-16 code units, and the runtime runs the image), so
+## the listing shows it, but MetadataBuilder::addUserString takes UTF-8 and
+## cannot hold it: llvm-cil-copy refuses it (section 12, '5.7.10 amended
+## (`llvm-cil-copy` and lone surrogates)'). The entry is the first of the
+## heap, at #US offset 1.
+# RUN: llvm-cil-dump --canonical %t/us.exe \
+# RUN:   | FileCheck %s --check-prefix=US-LISTING --match-full-lines --strict-whitespace
+# US-LISTING:    L0: ldstr "\uD800A"
+# RUN: not llvm-cil-copy %t/us.exe -o %t/us.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=US -DFILE=%t/us.exe --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# US:llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': unsupported user string at #US offset 0x00000001: it holds a lone UTF-16 surrogate
+
+## The copier's other refusals (section 12, '5.7.10 amended
+## (`llvm-cil-copy`'s other refusals)'): each is an error with exit status 1
+## that leaves no output file. Names print raw and row numbers in decimal.
+## patch.il's own image copies (the control), so each patched input below
+## differs from a good one only where its sed command patches the YAML.
+# RUN: yaml2obj %t/patch.yaml -o %t/patch.exe
+# RUN: llvm-cil-copy %t/patch.exe -o %t/patch.copy.exe
+# RUN: llvm-cil-dump --canonical %t/patch.exe > %t/patch.txt
+# RUN: llvm-cil-dump --canonical %t/patch.copy.exe > %t/patch.copy.txt
+# RUN: diff %t/patch.txt %t/patch.copy.txt
+
+## (1) A forward Extends: 'Derived' (TypeDef row 2) precedes its base 'Base'
+## (row 3). The image is valid and lists, but MetadataBuilder::addTypeDef
+## takes only an Extends row that already exists.
+# RUN: yaml2obj %t/fwd.yaml -o %t/fwd.exe
+# RUN: llvm-cil-dump --canonical %t/fwd.exe \
+# RUN:   | FileCheck %s --check-prefix=FWD-LISTING --match-full-lines --strict-whitespace
+# FWD-LISTING:.class 'Derived' flags=0x00000001 extends 'Base'
+# RUN: not llvm-cil-copy %t/fwd.exe -o %t/fwd.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=FWD -DFILE=%t/fwd.exe --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not ls %t/fwd.copy.exe
+# FWD:llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': type 'Derived' (TypeDef row 2) extends a later TypeDef, row 3
+
+## (2) A TypeDef nested in a later TypeDef: the NestedClass row (NestedClass
+## 3, EnclosingClass 2) is patched to name row 4, 'Last', as the enclosing
+## class.
+# RUN: sed -e "s/03000200/03000400/" %t/patch.yaml > %t/nested.yaml
+# RUN: yaml2obj %t/nested.yaml -o %t/nested.exe
+# RUN: not llvm-cil-copy %t/nested.exe -o %t/nested.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NESTED -DFILE=%t/nested.exe --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not ls %t/nested.copy.exe
+# NESTED:llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': type 'Inner' (TypeDef row 3) is nested in a later TypeDef, row 4
+
+## (3) TypeDef row 1 is not the plain '<Module>': its Flags (the first four
+## bytes of the row) are patched from 0 to 1.
+# RUN: sed -e "s/0000000001000000000001000100/0100000001000000000001000100/" %t/patch.yaml > %t/module.yaml
+# RUN: yaml2obj %t/module.yaml -o %t/module.exe
+# RUN: not llvm-cil-copy %t/module.exe -o %t/module.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=MODULE -DFILE=%t/module.exe --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not ls %t/module.copy.exe
+# MODULE:llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': TypeDef row 1 is not the '<Module>' type that MetadataBuilder writes (flags 0, no base type)
+
+## (4) A body that is not IL: the ImplFlags of 'main' (MethodDef row 1, RVA
+## 0x2060) are patched from 0 (IL) to 1 (Native), its CodeTypeMask bits.
+# RUN: sed -e "s/602000000000160049000F000100/602000000100160049000F000100/" %t/patch.yaml > %t/native.yaml
+# RUN: yaml2obj %t/native.yaml -o %t/native.exe
+# RUN: not llvm-cil-copy %t/native.exe -o %t/native.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NATIVE -DFILE=%t/native.exe --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not ls %t/native.copy.exe
+# NATIVE:llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': method 'main' (MethodDef row 1) has a body that is not IL
+
+## (5)-(7) patch the CLI header (cb 0x48, runtime 2.5, the metadata
+## directory, Flags 0x00000001 and EntryPointToken 0x06000001). (5) CorFlags
+## without COMIMAGE_FLAGS_ILONLY.
+# RUN: sed -e "s/48000000020005006C200000B80100000100000001000006/48000000020005006C200000B80100000000000001000006/" %t/patch.yaml > %t/notilonly.yaml
+# RUN: yaml2obj %t/notilonly.yaml -o %t/notilonly.exe
+# RUN: not llvm-cil-copy %t/notilonly.exe -o %t/notilonly.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOTILONLY -DFILE=%t/notilonly.exe --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not ls %t/notilonly.copy.exe
+# NOTILONLY:llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': not an IL-only image (CorFlags 0x00000000)
+
+## (6) CorFlags with COMIMAGE_FLAGS_NATIVE_ENTRYPOINT (0x10).
+# RUN: sed -e "s/48000000020005006C200000B80100000100000001000006/48000000020005006C200000B80100001100000001000006/" %t/patch.yaml > %t/natep.yaml
+# RUN: yaml2obj %t/natep.yaml -o %t/natep.exe
+# RUN: not llvm-cil-copy %t/natep.exe -o %t/natep.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NATEP -DFILE=%t/natep.exe --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not ls %t/natep.copy.exe
+# NATEP:llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': the entry point is native code (CorFlags 0x00000011)
+
+## (7) An entry point token that is not a MethodDef: MemberRef row 1
+## (GC::KeepAlive).
+# RUN: sed -e "s/48000000020005006C200000B80100000100000001000006/48000000020005006C200000B8010000010000000100000A/" %t/patch.yaml > %t/eptok.yaml
+# RUN: yaml2obj %t/eptok.yaml -o %t/eptok.exe
+# RUN: not llvm-cil-copy %t/eptok.exe -o %t/eptok.copy.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=EPTOK -DFILE=%t/eptok.exe --match-full-lines \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not ls %t/eptok.copy.exe
+# EPTOK:llvm-cil-copy{{(\.exe)?}}: error: '[[FILE]]': the entry point token 0x0A000001 is not a MethodDef
+
+#--- rvasize.il
+// FieldRVA data on a native int field: the size rule of plan 5.7.10's
+// '.data' line gives no size, so llvm-cil-copy cannot copy it.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'rvasize' { }
+.module 'rvasize.dll'
+
+.field public static native int 'ptr' at D_1
+.data D_1 = int64(0)
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldc.i4.0
+  ret
+}
+#--- rvasize.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8734
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8640
+    Size:            91
+  BaseRelocationTable:
+    RelativeVirtualAddress: 24576
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     554
+    SectionData:     002200000000000000000000000000004800000002000500642000005C010000010000000100000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000A162A0042534A4201000100000000000C00000076342E302E33303331390000000005006C00000094000000237E0000000100003000000023537472696E67730000000030010000080000002355530038010000100000002347554944000000480100001400000023426C6F620000000000000002000001550000200900000000FA2533001600000100000001000000010000000100000001000000010000000100000000000A00010000000000000000000100000000000100010016011F000A00602000000000160023000D00010000400000010000000000000000000000000000000000000028000000040000000000000000000000010016000000000000000000003C4D6F64756C653E0072766173697A652E646C6C006D73636F726C696200707472006D61696E0072766173697A6500000320000000000049D92E97098D364E8D917365A9F54E350008B77A5C561934E08902061803000008000000E821000000000000000000000E22000000200000000000000000000000000000000000000000000000220000000000000000000000000000000000000000000000005F436F724578654D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .sdata
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    VirtualAddress:  16384
+    VirtualSize:     8
+    SectionData:     0000000000000000
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  24576
+    VirtualSize:     12
+    SectionData:     002000000C00000020A20000
+symbols:         []
+...
+#--- us.il
+// An ldstr whose #US entry is not well-formed UTF-16: the bytes 00 D8 41 00
+// are the lone high surrogate U+D800 and 'A'. ilasm keeps them.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'us' { }
+.module 'us.exe'
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldstr bytearray (00 D8 41 00)
+  callvirt instance int32 [mscorlib]System.String::get_Length()
+  ret
+}
+#--- us.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8750
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8664
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     570
+    SectionData:     1022000000000000000000000000000048000000020005006C20000068010000010000000100000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002E72010000706F0100000A2A42534A4201000100000000000C00000076342E302E33303331390000000005006C00000094000000237E0000000100003C00000023537472696E6773000000003C010000080000002355530044010000100000002347554944000000540100001400000023426C6F620000000000000002000001470400000900000000FA2533001600000100000001000000010000000100000001000000010000000100000000002300010000000000060011000A000000000001000000000001000100602000000000160033000E0001000900180001000000000000000000000000000000000000003800000004000000000000000000000005002A000000000000000000003C4D6F64756C653E0053797374656D00537472696E67006765745F4C656E6774680075732E657865006D73636F726C6962006D61696E0075730000000500D84100010070D75149A0E8AD4D838F08273FE8C3E6000320000808B77A5C561934E089030000080000000000000022000000000000000000001E2200000020000000000000000000000000000000000000000000001022000000000000000000000000000000005F436F724578654D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000030A20000
+symbols:         []
+...
+#--- fwd.il
+// A derived class whose TypeDef row precedes its base's: valid ECMA-335
+// (ilasm and Roslyn write such forward Extends, and the image runs), but
+// MetadataBuilder::addTypeDef takes only an Extends row that exists.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'fwd' { }
+.module 'fwd.exe'
+
+.class public auto ansi 'Derived' extends 'Base'
+{
+  .method public specialname rtspecialname instance void .ctor() cil managed
+  {
+    .maxstack 8
+    ldarg.0
+    call instance void 'Base'::.ctor()
+    ret
+  }
+}
+.class public auto ansi 'Base' extends [mscorlib]System.Object
+{
+  .method public specialname rtspecialname instance void .ctor() cil managed
+  {
+    .maxstack 8
+    ldarg.0
+    call instance void [mscorlib]System.Object::.ctor()
+    ret
+  }
+}
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  newobj instance void 'Derived'::.ctor()
+  pop
+  ldc.i4.s 42
+  ret
+}
+#--- fwd.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8830
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8744
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     650
+    SectionData:     6022000000000000000000000000000048000000020005007C200000AC01000001000000010000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000267302000006261F2A2A1E0228030000062A1E02280100000A2A000042534A4201000100000000000C00000076342E302E33303331390000000005006C000000CC000000237E0000380100004800000023537472696E67730000000080010000080000002355530088010000100000002347554944000000980100001400000023426C6F620000000000000002000001470400000900000000FA2533001600000100000001000000030000000300000001000000010000000100000000001E00010000000000060011000A000000000001000000000001000100010000002F0000000C0001000200010000003700000005000100030060200000000016003C000E0001006A20000000000618180001000100722000000000061818000100010009001800010000000000000000000000000000000000000041000000040000000000000000000000050026000000000000000000003C4D6F64756C653E0053797374656D004F626A656374002E63746F72006677642E657865006D73636F726C696200446572697665640042617365006D61696E00667764000000000003200000000000AA257F13F0ECCF48A785AA037E594CD5000320000108B77A5C561934E0890300000800005022000000000000000000006E2200000020000000000000000000000000000000000000000000006022000000000000000000000000000000005F436F724578654D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000080A20000
+symbols:         []
+...
+#--- patch.il
+// An image that llvm-cil-copy copies; errors.test patches its YAML into the
+// inputs that the copier refuses. TypeDef rows: 1 '<Module>', 2 'Outer',
+// 3 'Inner' (nested in row 2), 4 'Last'; MethodDef row 1 is 'main', the
+// entry point, and MemberRef row 1 is GC::KeepAlive.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'patch' { }
+.module 'patch.exe'
+
+.class public auto ansi 'Outer' extends [mscorlib]System.Object
+{
+  .class nested public auto ansi 'Inner' extends [mscorlib]System.Object
+  {
+  }
+}
+.class public auto ansi 'Last' extends [mscorlib]System.Object
+{
+}
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldnull
+  call void [mscorlib]System.GC::KeepAlive(object)
+  ldc.i4.s 42
+  ret
+}
+#--- patch.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8830
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8744
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     650
+    SectionData:     6022000000000000000000000000000048000000020005006C200000B8010000010000000100000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002614280100000A1F2A2A000042534A4201000100000000000C00000076342E302E33303331390000000005006C000000CC000000237E0000380100005400000023537472696E6773000000008C010000080000002355530094010000100000002347554944000000A40100001400000023426C6F620000000000000002000001470400000902000000FA253300160000010000000200000004000000010000000100000001000000010000000100000000002500010000000000060011000A00060018000A0000000000010000000000010001000100000038000000050001000200020000003E0000000500010002000100000044000000050001000200602000000000160049000F00010011001B0001000000000000000000000000000000000000004E00000004000000000000000000000006002F00000000000300020000000000003C4D6F64756C653E0053797374656D004F626A656374004743004B656570416C6976650070617463682E657865006D73636F726C6962004F7574657200496E6E6572004C617374006D61696E007061746368000003200000000000B6B7702FD3F02349BE2171F58778272100040001011C08B77A5C561934E0890300000800000000005022000000000000000000006E2200000020000000000000000000000000000000000000000000006022000000000000000000000000000000005F436F724578654D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000080A20000
+symbols:         []
+...

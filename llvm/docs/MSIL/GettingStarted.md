@@ -10,8 +10,10 @@ several files"). Since M15 `msil-ld` binds the functions that no file defines to
 libraries a native link of the same program reads, so a linked program calls the C library, the
 Win32 API and native libraries of your own through P/Invoke (section 3, "Native libraries and
 P/Invokes"). There are no CIL object files yet (M19), and `msil-ld` writes no assembly image of
-its own yet (M20). What works and what does not is in [Status.md](Status.md); how
-the work was planned and built is in [ImplementationPlan.md](ImplementationPlan.md).
+its own yet (M20); since M17 the tools `llvm-cil-dump` and `llvm-cil-copy` read assemblies and
+write them again without ilasm (section 6). What works and what does not is in
+[Status.md](Status.md); how the work was planned and built is in
+[ImplementationPlan.md](ImplementationPlan.md).
 
 Like LLVM itself, the project ships compiler tools only (Design.md, scope line). The compiler
 writes the `.il` file and nothing else: no `runtimeconfig.json`, no `.exe.config`, no project or
@@ -81,7 +83,7 @@ targets of `msil/utils/ci/build-targets.txt`, in the file's order, and then any 
 after the switch (`msil-build.ps1 -Standard llvm-dwarfdump`). That file is the one build-target
 list of the gates and of CI (plan 5.6.11): `msil/utils/ci/build.ps1` builds it the same way,
 and on Linux `bash msil/utils/ci/build.sh build` builds it with ninja (both then build jitall,
-section 7). Its comments say why each target is there. Since milestone M15 it holds:
+section 7). Its comments say why each target is there. Since milestone M17 it holds:
 
 - the tools and lit helpers: `llc`, `opt`, `clang`, `FileCheck`, `not`, `count`, `split-file`,
   `llvm-config`, and `llvm-profdata`, which two upstream clang driver tests of the
@@ -96,7 +98,9 @@ section 7). Its comments say why each target is there. Since milestone M15 it ho
   the upstream tests of hooked upstream files and for the MSIL tests of the bitcode symbol table;
 - `yaml2obj` and `llvm-mc` (M15), which make the native libraries of the `msil-ld` tests in
   `lld/test/MSIL`: ELF shared objects with symbol versions, and MinGW's long-format import
-  members.
+  members (`yaml2obj` also makes the images of the `llvm-cil-dump` and `llvm-cil-copy` tests);
+- `llvm-cil-dump` and `llvm-cil-copy` (M17), the tools of the ECMA-335 library in
+  `llvm/lib/CLI` (section 6).
 
 A first build compiles about 3,700 steps; afterwards a change in `llvm/lib/Target/MSIL` rebuilds
 the target and relinks in minutes. `llc --version` lists `msil - MSIL (.NET CIL as ILAsm text)`
@@ -623,16 +627,118 @@ python msil/utils/msil-jitall.py fib.dll
 Every module the backend writes has also passed `MSILStackCheck`, which recomputes the stack
 depth of every instruction and the exact `.maxstack` and stops the compile on a mismatch.
 
+### Read and rewrite an assembly: `llvm-cil-dump` and `llvm-cil-copy`
+
+The ECMA-335 library of the fork (`llvm/lib/CLI`, M16 and M17; Status.md section 2) comes with
+two tools (`ninja -C build llvm-cil-dump llvm-cil-copy`; both are on the build-target list).
+`llvm-cil-dump` reads the PE images of .NET assemblies and netmodules, whoever wrote them, and
+prints them in one or more modes, in this order whatever the order of the options:
+
+```sh
+llvm-cil-dump fib.exe                # = --canonical: canonical listing v1
+llvm-cil-dump --headers fib.exe      # PE, COFF, CLI and metadata headers, streams, MVID
+llvm-cil-dump --tables fib.exe       # every row of every metadata table, columns in ECMA order
+llvm-cil-dump --link-info obj.o      # a CIL object's link-info record (M19 writes them)
+llvm-cil-dump --canonical --headers a.exe b.dll   # several modes and files
+```
+
+- `--canonical` (the default mode) prints *canonical listing v1* (plan 5.7.10): the assembly's
+  metadata and IL as text without anything that depends on how the image was laid out (tokens,
+  heap offsets, RVAs, header forms, the MVID, time stamps), in UTF-8 with LF line ends, types
+  and members sorted by name. Two images of one program list alike whichever assembler or
+  writer laid them out, which is how the tests compare images (`%msil_canon`, section 7). Its
+  options are those of `mdcanon` (section 7, "The metadata oracles"), which prints the same
+  bytes:
+  - `--order=sorted|decl` (table order with `decl`), `--forms=exact|canon` (short branches and
+    the `.s` forms printed as their long forms), `--scopes=keep|strip` (`[*]` for every
+    assembly scope and no `assemblyref` lines);
+  - the six normalizations of plan 5.12.6, each of which removes one known difference between
+    ilasm's images and the linker's: `--assembly-hash=ignore` (`hash=*`), `--params=drop` (no
+    `.param` line for a parameter row with flags 0 and nothing attached),
+    `--initlocals=ignore-without-locals` (no ` initlocals` on a body without locals),
+    `--snan=quiet` (a float32 signaling NaN operand printed quieted, as ilasm stores it),
+    `--pinvoke-module=strip` (`'*'` for the P/Invoke module, no `moduleref` lines) and
+    `--pinvoke-access=ignore` (P/Invoke flags without the member access); each defaults to
+    `keep`;
+  - `--stats` appends the size of every table and heap and the image's, and `--stats-only`
+    prints only those lines. Either one selects the canonical mode as `--canonical` does, also
+    next to another mode: `--stats-only --headers` prints the statistics, then the headers, and
+    `--stats --tables` the listing with its statistics, then the tables.
+- `--headers` and `--tables` print the image as it is laid out, numbers in hexadecimal: the
+  machine, the section table, the CLI header, the metadata root and its streams, the MVID, and
+  each table's rows with tokens, heap strings, blobs and GUIDs.
+- `--link-info` prints the link-info record of a CIL object (plan 5.8.11: one line per symbol,
+  segment, relocation, COMDAT group, constructor, signature and linker option) and the symbol
+  tables of a `-shared` library (M22). A file with neither is an error.
+
+With several files each one's output starts with `File: <path>`. A file that cannot be read
+prints `llvm-cil-dump: error: '<file>': <message>` on stderr and the tool goes on with the next
+one; the exit status is 1 when any file failed. A malformed image is an error that names the
+problem (`invalid CLI image: ...`, `invalid CLI metadata: ...`), never a crash, and no partial
+listing is printed for it.
+
+`llvm-cil-copy <input> -o <output>` reads an IL-only PE32+ image and writes it again through
+the library: every row is rebuilt with `MetadataBuilder` (table order kept, tokens renumbered),
+every method body re-encoded with its tokens rewritten, and the image written by the PE writer
+that `msil-ld` will use (M20), in the envelope of the C# compiler's images. Duplicate TypeRef
+and MemberRef rows, which ilasm never writes, become one row. The kind and the machine come
+from the input: an image with an entry point is copied as an executable, one with an Assembly
+row as a library, anything else as a netmodule, and the machine (x86_64 or ARM64) is kept. So a
+DLL with an entry point (ilasm `-dll` of a program with `.entrypoint`, the shape of the lit
+tests) becomes an executable, characteristics 0x0022 instead of 0x2022, and its canonical `pe`
+line says `exe` where the input's says `dll`; compare a copy with an image that ilasm wrote
+with `-exe` when the program has an entry point. A copy of a CIL object keeps its link-info
+record as it is, so `--link-info` prints the same lines, but drops the COFF symbol view (plan
+5.8.6): the copy has the one section `.text` and no symbol table, and `llvm-nm` lists nothing
+in it. The copy lists exactly like its input and runs the same way:
+
+```sh
+clang --target=x86_64-pc-windows-msvc-msil -O2 -S hello.c -o hello.il
+ilasm -nologo -quiet -exe -pe64 -x64 -output=hello.exe hello.il
+llvm-cil-copy hello.exe -o hello-copy.exe
+llvm-cil-dump hello.exe > a.canon && llvm-cil-dump hello-copy.exe > b.canon && diff a.canon b.canon
+dotnet hello-copy.exe        # with hello-copy.runtimeconfig.json (section 5); prints and exits alike
+```
+
+Copying the same input twice gives the same bytes (the MVID and the time stamp are a hash of
+the image). The tool refuses what the library's writer cannot rebuild, each time with
+`llvm-cil-copy: error: '<input>': <message>`, exit status 1 and no output file (names print
+raw, row numbers in decimal):
+
+- a row of a table that the writer does not write (plan 5.7.6; `Constant`, `InterfaceImpl` and
+  `GenericParam` among them): `unsupported table <Name> (<n> rows)`;
+- FieldRVA data whose size the field's type does not give (a `native int` or pointer field):
+  `the FieldRVA data of field '<name>' has no known size`, and FieldRVA data above 4 GiB in
+  all: `the FieldRVA data is larger than 4 GiB`;
+- an `ldstr` string that holds an unpaired UTF-16 surrogate, which the runtime accepts but
+  `MetadataBuilder` cannot write: `unsupported user string at #US offset 0x<8X>: it holds a
+  lone UTF-16 surrogate`;
+- a class that extends, or is nested in, a later TypeDef row (valid ECMA-335; ilasm writes one
+  when a derived class comes before its base): `type '<name>' (TypeDef row <r>) extends a later
+  TypeDef, row <s>` and `type '<name>' (TypeDef row <r>) is nested in a later TypeDef, row <s>`;
+- a first TypeDef row other than `<Module>` with flags 0 and no base type: `TypeDef row 1 is not
+  the '<Module>' type that MetadataBuilder writes (flags 0, no base type)`;
+- a method body that is not IL: `method '<name>' (MethodDef row <r>) has a body that is not
+  IL`;
+- an image that is not IL-only, `not an IL-only image (CorFlags 0x<8X>)`, or whose entry point
+  is native code, `the entry point is native code (CorFlags 0x<8X>)`, or an entry point token
+  that is not a MethodDef, `the entry point token 0x<8X> is not a MethodDef`;
+- the accessors of an event, which are not copied: `MethodSemantics row <r> is not a
+  property's (events are not copied)`;
+- a PE32 image (only PE32+ images are written until phase 5), such as ilasm's x86 one:
+  `cannot write PE image: machine 0x014C is not supported until phase 5`.
+
 ## 7. Run the tests
 
 | Suite | Where | What |
 |---|---|---|
-| Unit tests | `llvm/unittests/Target/MSIL`, plus the MSIL cases of `TargetParserTests` and `MCTests`, and `llvm/unittests/CLI` (`CLITests`, all of it) | type mapping, name quoting, stack effects, target machine, streamer, the MC object hooks (`MSILMCObjectHooks.*`), the standalone import table and the linked import mode (`MSILImportsTest`, M15), triples and their compatibility, target selection; `CLITests` (12 suites; at least 110 tests, the M16 gate's floor): the ECMA-335 format headers, the metadata table schema and the link-info record (suites `CLIFormatTest`, `CLITableSchemaTest`, `CLIMSILLinkTest`, M13), and the writer half of the ECMA-335 library (M16): blobs and compressed integers (`CLIBlobTest`), signatures (`CLISignatureTest`), custom-attribute blobs (`CLICustomAttributeTest`), the opcode table (`CLIOpcodesTest`), the IL builder with its short forms, branch relaxation and `.maxstack` (`CLIILBuilderTest`), the IL decoder and token rewriter (`CLIILDecoderTest`), method bodies (`CLIMethodBodyTest`), the metadata heaps (`CLIHeapsTest`) and `MetadataBuilder` (`CLIMetadataBuilderTest`) |
+| Unit tests | `llvm/unittests/Target/MSIL`, plus the MSIL cases of `TargetParserTests` and `MCTests`, and `llvm/unittests/CLI` (`CLITests`, all of it) | type mapping, name quoting, stack effects, target machine, streamer, the MC object hooks (`MSILMCObjectHooks.*`), the standalone import table and the linked import mode (`MSILImportsTest`, M15), triples and their compatibility, target selection; `CLITests` (18 suites; at least 170 tests, the M17 gate's floor): the ECMA-335 format headers, the metadata table schema and the link-info record (suites `CLIFormatTest`, `CLITableSchemaTest`, `CLIMSILLinkTest`, M13), the writer half of the ECMA-335 library (M16): blobs and compressed integers (`CLIBlobTest`), signatures (`CLISignatureTest`), custom-attribute blobs (`CLICustomAttributeTest`), the opcode table (`CLIOpcodesTest`), the IL builder with its short forms, branch relaxation and `.maxstack` (`CLIILBuilderTest`), the IL decoder and token rewriter (`CLIILDecoderTest`), method bodies (`CLIMethodBodyTest`), the metadata heaps (`CLIHeapsTest`) and `MetadataBuilder` (`CLIMetadataBuilderTest`), and its reader half and codecs (M17): the PE writer with its envelope per image kind, COFF symbol view and content ID (`CLIPEWriterTest`), the PE image reader (`CLIPEImageTest`), the metadata reader with every malformation and wide indexes (`CLIMetadataReaderTest`), a writer-reader round trip with canonical listings (`CLIRoundTripTest`), the link-info record's codec, checks, validation, COFF view and printer (`CLILinkInfoTest`) and the symbol-table attribute (`CLISymbolTableTest`) |
 | llc and MIR tests | `llvm/test/CodeGen/MSIL` | the emitted IL, FileCheck'ed on both x86_64 triples (and the aarch64 ones where the ABI differs), and assembled with ilasm when it is available; the pass pipeline and the MIR at llc's stop points; the linker options in the bitcode symbol table of MSIL modules (`irsymtab-linker-options.ll`); the module flags `msil-assembly-name` and `msil-lto` that `msil-ld` sets (`lto-module-flags.ll`); the linked import mode, `msil-linked`, with its `assembly` P/Invokes and errors, against the standalone table (`imports-linked.ll`, M15) |
 | clang tests | `clang/test/CodeGen/MSIL`, `clang/test/Preprocessor/init-msil.c`, `clang/test/Driver/msil-toolchain.c`, `msil-link.c`, `msil-lto.c` and `msil-header-search.c` | the clang wrapper, predefines, driver errors (the ELF-only section options among them), `-mllvm` options, `-cc1as`, the import attributes and `#pragma comment(lib)`, Design.md 12's literal command; the MSIL toolchain (M14): `-c` as bitcode, the `msil-ld` command line, the default libraries (with `--ucrtbase-imports` on windows-msvc since M15), `-fuse-ld` and `--ld-path=`, the LTO options and the cc1 lines (`-###` only) |
 | `msil-ld` tests | `lld/test/MSIL` | 47 tests: which program names and `-flavor` values reach `msil-ld` (`dispatch.test`) and that `lld-link` and `-flavor link` still reach the COFF flavor (`dispatch-coff.test`), its options and their errors, symbol resolution in both input orders (weak, common, COMDAT, archives, `--whole-archive`, duplicates, undefined and mismatched symbols), the triple checks and the stock-bitcode warning, library search, the LTO options and `--lto-emit-asm` text, the map file, `--why-extract`, `--reproduce`, `--trace` and response files (M14); and the 21 `native-*.test` of M15: each native-library reader, the `-l` rules, scripts under `--sysroot`, binding and its order, the linker options of bitcode, `--ucrtbase-imports`, `--print-imports`, and every error of section 8 that names a native symbol. Inputs come from the tree's `llvm-as`, `llvm-ar`, `llvm-lib /def:` and `llvm-dlltool`, and for the native libraries `yaml2obj`, `llvm-mc` (the tests that need it require the X86 target), `ld.lld -shared` and `lld-link -dll`. In `check-msil` and the `net8` leg; the milestone gates also run them with `--param RUN_LLD_MAIN_TWICE=1` (`LLD_IN_TEST=2`: every link runs twice in one process, as for the other lld flavors; `dispatch-coff.test` is unsupported there, because the COFF flavor's `no input files` exits from the silenced first run) |
+| ECMA-335 tool tests | `llvm/test/tools/llvm-cil-dump`, `llvm/test/tools/llvm-cil-copy` | 14 tests (M17; 8 of `llvm-cil-dump`, 6 of `llvm-cil-copy`) on `yaml2obj` copies of images that ilasm wrote from IL kept in each test: `llvm-cil-dump`'s `--headers` (PE32+, PE32, and a CIL object with its marker sections and COFF symbols), `--tables`, `--canonical` with every option and normalization, `--stats` and `--stats-only` alone and next to `--headers` and `--tables`, the details of canonical listing v1 that plan section 12's row '5.7.10 clarified (canonical listing v1 ...)' settles (`canonical-edges.test`: `.implements` and `.try` clauses in table order, sort keys on raw names, static properties and `.other`, what the listing leaves out, a `switch` without targets, a branch target before the code, data past a section's raw data, no `entrypoint` line for a native entry point, the limit of 64 type constructors across TypeSpecs, and the errors for an entry point that is not a MethodDef, an RVA outside every section and deeper types), `--link-info` on a hand-encoded record, on a library's symbol tables and on an image that carries both, several files and the errors of damaged images; `llvm-cil-copy` on an assembly with rows in every table the writer supports and on a CIL object (the same listing and record, the same bytes from two directories, and no COFF view in the copy), the kind and machine it takes from the input (`copy-kind.test`: a library, a DLL with an entry point that becomes an executable, an ARM64 image kept ARM64, and a PE32 image refused), duplicate TypeRef and MemberRef rows merged into one (`copy-duplicates.test`), and its refusals (unsupported tables, data of unknown size, a lone surrogate in a user string, a base type or enclosing type in a later row and the other refusals of section 6). `check-msil` builds both tools and runs these tests, and so does the `net8` leg. To run them alone (`build/bin/llvm-lit -sv llvm/test/tools/llvm-cil-dump`), build the tools first with `ninja -C build llvm-cil-dump llvm-cil-copy`: `check-llvm` and `check-llvm-tools-llvm-cil-dump` (or `-copy`) do not build them, and each directory's `lit.local.cfg` reports its tests UNSUPPORTED while they are missing |
 | Execution tests | `msil/test/M1/<NN-area>/`, `msil/test/M2/<NN-area>/` | C and IR programs compiled at `-O0` and `-O2` (and in the `more-levels` leg at the other levels; see below), assembled, verified, force-JITted, run and compared with checked-in transcripts and with a native build (the *native oracle*, below); `M1/11-programs/` is the Design.md 12 program corpus. `M2/` (M14) holds programs of several files, archives and stock-clang bitcode that `msil/utils/msil-prog.py` builds through clang and `msil-ld`, programs that call native libraries (`M2/03-native/`, M15), the link-semantics matrix (`M2/08-semantics/`, Status.md section 2) and the compile-only hosted tests (`M2/09-hosted/`, M15; the `hosted` leg below) |
-| Harness self-tests | `msil/test/harness/` | 73 tests: the runner, verifier and JIT checker themselves, `update-expected.py`, the E7 Linux oracle, the dependencies that `--dep` ships with a program (`dep-local.test`, `dep-wsl.test`, M15), the comparison of `il-snapshot.py` (`il-snapshot.test`, M15; below), the canonical listing of `%msil_canon` (`canon-listing.test`, M16; below), and lit's configuration errors (bad `msil_*` parameters stop lit with exit status 2); `prog/` pins the expansions of `%{msil_prog}` and `%{msil_c}` (with `%{msil_native_libs}` and `%{msil_deps}` since M15) and the commands of `msil-prog.py` with stand-in tools |
+| Harness self-tests | `msil/test/harness/` | 75 tests: the runner, verifier and JIT checker themselves (among them the renumbering of ildasm's `I_<rva>` data labels in `msil-verify.py --roundtrip`, `legs/roundtrip-data-labels.test`, M17), `update-expected.py`, the E7 Linux oracle, the dependencies that `--dep` ships with a program (`dep-local.test`, `dep-wsl.test`, M15), the comparison of `il-snapshot.py` (`il-snapshot.test`, M15; below), the canonical listing of `%msil_canon` (`canon-listing.test`, M16, and from M17 on `llvm-cil-dump`) and its agreement with `mdcanon` (`canon-agree.test`, M17; below), and lit's configuration errors (bad `msil_*` parameters, and under `msil_require_verify=1` a missing verifier or lister, stop lit with exit status 2); `prog/` pins the expansions of `%{msil_prog}` and `%{msil_c}` (with `%{msil_native_libs}` and `%{msil_deps}` since M15) and the commands of `msil-prog.py` with stand-in tools |
 | Upstream regression tests | the upstream lit tests and unit tests named in `msil/utils/upstream-hooks.txt` | the upstream behaviour of every upstream file the fork changes (the upstream-hooks check, below) |
 
 ```sh
@@ -662,9 +768,9 @@ The execution suite takes lit parameters (all of them are in
 [msil/test/README.md](../../../msil/test/README.md)). The milestone-1 gate runs it in these legs
 (the names are those of `msil/utils/ci/lit-legs.ps1`). Every lit leg also passes
 `--param msil_require_verify=1 --param msil_require_exec=1 --param msil_require_link=1`, which
-turn a missing verifier, ildasm, jitall, mdcanon (M16), PEVerify (Windows), ilasm, runtime,
-MSIL-enabled clang, `msil-ld` or `llvm-ar` into an error instead of skipped steps or UNSUPPORTED
-tests. *WSL* below stands for
+turn a missing verifier, ildasm, jitall, mdcanon (M16), `llvm-cil-dump` (M17), PEVerify
+(Windows), ilasm, runtime, MSIL-enabled clang, `msil-ld` or `llvm-ar` into an error instead of
+skipped steps or UNSUPPORTED tests. *WSL* below stands for
 `msil_runner=wsl msil_triple=x86_64-unknown-linux-gnu-msil msil_wsl_dotnet=private
 msil_dotnet_runtime=10` (the private .NET 10 in WSL), *E7* for
 `msil_native_oracle=required msil_linux_sysroot=<sysroot>` (the E7 Linux oracle; both are
@@ -673,7 +779,7 @@ marked `-Wsl` run only when `lit-legs.ps1` gets `-Wsl` (or names them with `-Leg
 
 | Leg | Paths | Extra `--param`s |
 |---|---|---|
-| `net8` | `llvm/test/CodeGen/MSIL`, the clang MSIL tests (the driver tests included), `lld/test/MSIL`, `msil/test` (M1, M2 and the harness) | `msil_dotnet_runtime=8 msil_native_oracle=required msil_run_netfx=1` (.NET 8, the native oracle with the compiler-rt builtins, and .NET Framework 4.8; the native link and, since M15, the default libraries of the MSIL link need `LIB`: use a VS x64 developer prompt, or `msil-lit.ps1`, which enters that environment) |
+| `net8` | `llvm/test/CodeGen/MSIL`, the clang MSIL tests (the driver tests included), `lld/test/MSIL`, `llvm/test/tools/llvm-cil-dump` and `llvm-cil-copy` (M17), `msil/test` (M1, M2 and the harness) | `msil_dotnet_runtime=8 msil_native_oracle=required msil_run_netfx=1` (.NET 8, the native oracle with the compiler-rt builtins, and .NET Framework 4.8; the native link and, since M15, the default libraries of the MSIL link need `LIB`: use a VS x64 developer prompt, or `msil-lit.ps1`, which enters that environment) |
 | `net10` | `msil/test/M1` | `msil_dotnet_runtime=10` |
 | `net8-tc0` | `msil/test/M1` | `msil_dotnet_runtime=8 msil_dotnet_env=DOTNET_TieredCompilation=0` (optimizing JIT) |
 | `more-levels` | `msil/test/M1` | `msil_dotnet_runtime=8 msil_opt_levels=O1,O3,Os,Oz`: the four levels the other legs leave out (they run `-O0` and `-O2`); `.ll` tests that use `%{msil_ll}` run at `-O1` and `-O3` only, because llc has no `-Os` or `-Oz`. The three trap tests (`01-int/trap-call-before-div.ll`, `01-int/trap-call-before-rem.ll`, `03-control/trap.ll`) and `01-int/calls-arith-debug-info.test` have explicit RUN lines that pin `-O0` and `-O2` in every leg |
@@ -855,8 +961,11 @@ upstream-hooks check; M14's adds `lto`, `det`, `lld/test/MSIL` with `LLD_IN_TEST
 `08-fnptr/fnptr-to-libm.c` on both triples with the default libraries, `update-expected.py
 --check` of the new M2 tests on both oracles, the `hosted` leg and the IL snapshot below; M16's
 raises the `CLITests` floor to 110 and adds `build-mdtools.py --force`, `check-cil-defs.py`,
-`cli-corpus-check.py --mode ilasm` and `canon-listing.test`, the metadata oracles below), and
-`run-m1-gate.ps1` runs in full after the commits of M12, M15, M18 and M20.
+`cli-corpus-check.py --mode ilasm` and `canon-listing.test`, the metadata oracles below; M17's
+raises the floor to 170 and adds the tests of `llvm-cil-dump` and `llvm-cil-copy`,
+`canon-agree.test` and `cli-corpus-check.py --mode dumpers,copy,stats` over all of
+`msil/test/M1`), and `run-m1-gate.ps1` runs in full after the commits of M12, M15, M18 and
+M20.
 
 The Windows CI job runs the same scripts, except that `configure.ps1 -Ci` configures with the
 cache file instead of `msil-configure.ps1`, there is no `host-setup`, `lit-legs.ps1` runs
@@ -919,9 +1028,10 @@ python msil/utils/il-snapshot.py --build build --jobs 6 --out C:/llvm-msil-scrat
 
 The ECMA-335 library in `llvm/lib/CLI` (M13 and M16: blobs, signatures, custom attributes, the
 opcode table, the IL builder and decoder, method bodies, the metadata heaps and
-`MetadataBuilder`; its reader, dumper and PE writer follow in M17) is checked from outside by two
-small C# tools over System.Reflection.Metadata, which the repository keeps as source and builds
-offline (M16, plan 5.7.11):
+`MetadataBuilder`; M17: the PE writer, the reader, the link-info codecs and the dumper of
+`llvm-cil-dump` and `llvm-cil-copy`, section 6) is checked from outside by two small C# tools
+over System.Reflection.Metadata, which the repository keeps as source and builds offline (M16,
+plan 5.7.11):
 
 - `mdcanon` prints *canonical listing v1* (plan 5.7.10): the metadata and IL of an assembly or
   module as text without tokens, heap offsets, RVAs, header forms, the MVID or anything else
@@ -932,8 +1042,8 @@ offline (M16, plan 5.7.11):
   (`--assembly-hash=ignore`, `--params=drop`, `--initlocals=ignore-without-locals`,
   `--snan=quiet`, `--pinvoke-module=strip`, `--pinvoke-access=ignore`) remove one known
   difference each; `--stats` appends table and heap sizes, and `--out-dir DIR` writes
-  `DIR/<file name>.canon` for many files in one process. From M17 `llvm-cil-dump --canonical`
-  prints the same bytes.
+  `DIR/<file name>.canon` for many files in one process. `llvm-cil-dump --canonical` (M17,
+  section 6) implements the same specification in C++ and must print the same bytes.
 - `mdump` prints a raw listing of headers, tables and bodies for people (`--no-pe`,
   `--no-bodies`), the opcode table of `System.Reflection.Emit.OpCodes` (`--opcodes`), and the
   content ID (MVID and time stamp) that `BlobContentId.FromHash` makes of a hash
@@ -953,6 +1063,10 @@ python msil/utils/mdtools/check-cil-defs.py
 # clang -S of every program with an .expected file, assembled by the Framework ilasm and by the
 # NuGet ilasm: the two listings of each must be equal (40 of 40 for 11-programs at -O0 and -O2).
 python msil/utils/mdtools/cli-corpus-check.py --mode ilasm --levels O0,O2 msil/test/M1/11-programs
+# M17: both dumpers on every program and its copy, the copies verified, force-JIT-compiled
+# and run, and both dumpers on four framework assemblies (M17's gate step; about 10 minutes).
+python msil/utils/mdtools/cli-corpus-check.py --mode dumpers,copy,stats --levels O0,O2 `
+  --work C:/llvm-msil-scratch/cli-corpus msil/test/M1
 ```
 
 `build-mdtools.py` compiles each tool with the newest installed SDK's C# compiler against the newest
@@ -966,19 +1080,61 @@ takes test directories or `.c` files, compiles with the tree's clang (`--clang`,
 `$HOME/llvm-msil-scratch/cli-corpus` elsewhere, never inside the repository), dumps each set with
 one `mdcanon --out-dir` run and prints the first differing lines of a program whose listings differ;
 `--ilasm-framework` and `--ilasm-nuget` name the assemblers (the NuGet one at `MsilILAsmVersion` of
-`msil/utils/tools/msil-tools.proj` by default). M17-M19 add its modes `copy`, `dumpers`, `stats`,
-`encoder`, `object` and `gnu-tools`. The run over `11-programs` takes 4-12 seconds on the
-development host; over all of `msil/test/M1` (198 listings per assembler) about a minute and a
-quarter.
+`msil/utils/tools/msil-tools.proj` by default). The run over `11-programs` takes 4-12 seconds on
+the development host; over all of `msil/test/M1` (198 listings per assembler) about a minute and
+a quarter.
 
-In lit, `%msil_canon` is the listing that tests compare (`mdcanon` until M17) and
-`%msil_mdcanon` is `mdcanon` itself; lit builds the tools on configuration as it builds jitall,
-and `--param msil_mdcanon=DIR` names another build of them
+M17 added three modes, which share one compile and one assembly of the inputs (each program
+with `ilasm -exe` when it has an entry point, else `-dll`; the Framework ilasm on Windows, the
+NuGet ilasm elsewhere) and one copy of each image with `llvm-cil-copy` (`--cil-dump` and
+`--cil-copy` name the tools, by default those of `<build>/bin`):
+
+- `dumpers`: `llvm-cil-dump --canonical` and `mdcanon` print the same bytes for every image and
+  for its copy, once with the default options and once with the six normalizations and
+  `--scopes=strip`; the first differing lines are printed.
+- `copy`: every copy lists exactly like its image, and a second copy made from another
+  directory is the same byte for byte. The copies of the programs of `11-programs` at `-O2`
+  are then verified as `%msil_verify` verifies (`--ilverify`, `--peverify`,
+  `--ildasm-framework` name the tools), force-JIT-compiled with `msil-jitall.py` as
+  `%msil_jitall` does, under lit's limits, which completes the verification policy (D21;
+  `--jitall DIR` names the jitall build, by default `<build>/tools/msil/jitall`, which the
+  script builds or refreshes as lit does), checked with PEVerify `/md` (no message for a copy
+  that its image does not also get), round-tripped through the NuGet ildasm and ilasm
+  (`--ildasm-nuget`), and run with their `.expected` transcripts on .NET 8; `crc32`,
+  `dispatch-vm`, `quicksort`, `string-table` and `struct-sim` also on .NET 10, the .NET
+  Framework 4.8 and WSL .NET 10 (`--wsl-distro`, `--wsl-dotnet`; compiled again for the Linux
+  triple, and those copies verified as the Windows ones are). The triple's OS must be the
+  host's.
+- `stats`: `--stats-only` of both dumpers agrees on the .NET Framework `mscorlib.dll` and the
+  `System.Runtime.dll` and `System.Private.CoreLib.dll` of the newest installed .NET 8, and so
+  do their `--canonical` listings, on the same three files and on the `System.Runtime.dll` of
+  the newest installed `Microsoft.NETCore.App.Ref` 8.x reference pack (the one M21 binds
+  against; skipped with a note when no pack is installed), so every row, signature and body of
+  these files is decoded.
+
+The modes `encoder` (M18), `object` and `gnu-tools` (M19) follow.
+
+In lit, `%msil_canon` is the listing that tests compare: `llvm-cil-dump --canonical` from M17 on
+(the tree's `llvm-cil-dump`, or `--param msil_cil_dump=PATH`; feature `msil-cil-dump`), and
+`mdcanon` when there is no `llvm-cil-dump`, except under `--param msil_require_verify=1`, where
+a missing or disabled `llvm-cil-dump` is a configuration error (lit exits with status 2).
+`%msil_mdcanon` is `mdcanon` itself and `%msil_cil_dump` is `llvm-cil-dump`; lit builds the C#
+tools on configuration as it builds jitall, and `--param msil_mdcanon=DIR` names another build
+of them
 ([msil/test/README.md](../../../msil/test/README.md)). The harness self-test
 `msil/test/harness/canon-listing.test` assembles two small modules with every construct of the
 listing and checks every line of their default listings, of `--order=decl --forms=canon` and of
 the five normalizations that an ilasm image exercises, plus `--scopes=strip` and the
-`--stats`/`--stats-only` lines.
+`--stats`/`--stats-only` lines; `canon-agree.test` (M17) lists six harness images and a
+module kept in the test with the canonical-listing details of plan section 12's row '5.7.10
+clarified (canonical listing v1 ...)' that ilasm can write (`.implements` and `.try` clauses
+out of name and text order, names whose raw and quoted orders differ, a static property with a
+`.other` accessor, an event, a MethodImpl, a DeclSecurity row, a parameter's custom attribute
+and a `switch` without targets) with both dumpers, with the default options, with
+`--scopes=strip --order=decl --forms=canon --stats` and with the six normalizations, and
+requires the same bytes; it also checks that module's default listing for that row's orders.
+Both tests also run `%msil_canon --headers`, which `mdcanon` refuses, and check the listing and
+then the headers, so they fail unless `%msil_canon` is `llvm-cil-dump --canonical`.
 
 ### The upstream-hooks check
 

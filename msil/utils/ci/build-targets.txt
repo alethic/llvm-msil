@@ -58,3 +58,9 @@ LLDAsLibAllTests
 # objects with symbol versions, COFF import libraries; recon p2/native-imports 9.1).
 yaml2obj
 llvm-mc
+
+# M17. The ECMA-335 tools of llvm/lib/CLI: llvm-cil-dump (canonical listing v1, lit's
+# %msil_canon; headers, tables and the link-info record) and llvm-cil-copy (rebuilds an IL-only
+# image through MetadataBuilder and the PE writer), with their tests in llvm/test/tools.
+llvm-cil-dump
+llvm-cil-copy

@@ -1,0 +1,365 @@
+## llvm-cil-dump --headers (plan 5.7.10): the PE, COFF, optional, section, CLI
+## header and metadata root fields, in this order, hex digits uppercase, the
+## MVID as a lowercase GUID. The inputs are yaml2obj copies of the ilasm
+## (.NET Framework 4.8) images of exit42.il: '-dll -pe64 -x64' (a Phase-1
+## shaped DLL with an entry point), '-exe -pe64 -x64' and '-dll' (PE32). The
+## YAML keeps the images' headers, data directories and sections; yaml2obj
+## writes a zero TimeDateStamp and its own DOS stub and file offsets. A
+## fourth input is a CIL object in 5.8.6's shape (object.il, see below).
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/dll.yaml -o %t/exit42.dll
+# RUN: yaml2obj %t/exe.yaml -o %t/exit42.exe
+# RUN: yaml2obj %t/pe32.yaml -o %t/exit42-pe32.dll
+
+# RUN: llvm-cil-dump --headers %t/exit42.dll \
+# RUN:   | FileCheck %s --check-prefix=DLL --match-full-lines --strict-whitespace
+# RUN: llvm-cil-dump --headers %t/exit42.exe \
+# RUN:   | FileCheck %s --check-prefix=EXE --match-full-lines --strict-whitespace
+# RUN: llvm-cil-dump --headers %t/exit42-pe32.dll \
+# RUN:   | FileCheck %s --check-prefix=PE32 --match-full-lines --strict-whitespace
+
+## The canonical listing of the PE32 image starts with its own pe line.
+# RUN: llvm-cil-dump --canonical %t/exit42-pe32.dll \
+# RUN:   | FileCheck %s --check-prefix=CANON32 --match-full-lines --strict-whitespace
+
+# DLL:Format: PE32+ machine=0x8664 dll
+# DLL-NEXT:COFF: sections=2 timestamp=0x00000000 characteristics=0x2022 symbols=0
+# DLL-NEXT:Optional: imagebase=0x0000000140000000 sectionalign=0x2000 filealign=0x200 subsystem=3 dllchars=0x8540 stack=0x400000,0x4000 heap=0x100000,0x2000
+# DLL-NEXT:Section: .text rva=0x00002000 vsize=0x20A raw=0x200 rawsize=0x400 flags=0x60000020
+# DLL-NEXT:Section: .reloc rva=0x00004000 vsize=0xC raw=0x600 rawsize=0x200 flags=0x42000040
+# DLL-NEXT:CLI: flags=0x00000001 entrypoint=0x06000001 metadata=0x00002064,0x140 runtime=2.5
+# DLL-NEXT:Metadata: version='v4.0.30319' heapsizes=0x00 valid=0x0000000900000045 sorted=0x000016003325FA00
+# DLL-NEXT:Stream: #~ offset=0x6C size=0x80
+# DLL-NEXT:Stream: #Strings offset=0xEC size=0x2C
+# DLL-NEXT:Stream: #US offset=0x118 size=0x8
+# DLL-NEXT:Stream: #GUID offset=0x120 size=0x10
+# DLL-NEXT:Stream: #Blob offset=0x130 size=0x10
+# DLL-NEXT:Mvid: ba7b7ae0-8f2d-464b-ba95-38bbd986d1f5
+# DLL-NOT:{{.}}
+
+# EXE:Format: PE32+ machine=0x8664 exe
+# EXE-NEXT:COFF: sections=2 timestamp=0x00000000 characteristics=0x0022 symbols=0
+# EXE-NEXT:Optional: imagebase=0x0000000140000000 sectionalign=0x2000 filealign=0x200 subsystem=3 dllchars=0x8540 stack=0x400000,0x4000 heap=0x100000,0x2000
+# EXE-NEXT:Section: .text rva=0x00002000 vsize=0x20A raw=0x200 rawsize=0x400 flags=0x60000020
+# EXE-NEXT:Section: .reloc rva=0x00004000 vsize=0xC raw=0x600 rawsize=0x200 flags=0x42000040
+# EXE-NEXT:CLI: flags=0x00000001 entrypoint=0x06000001 metadata=0x00002064,0x140 runtime=2.5
+# EXE-NEXT:Metadata: version='v4.0.30319' heapsizes=0x00 valid=0x0000000900000045 sorted=0x000016003325FA00
+# EXE-NEXT:Stream: #~ offset=0x6C size=0x80
+# EXE-NEXT:Stream: #Strings offset=0xEC size=0x2C
+# EXE-NEXT:Stream: #US offset=0x118 size=0x8
+# EXE-NEXT:Stream: #GUID offset=0x120 size=0x10
+# EXE-NEXT:Stream: #Blob offset=0x130 size=0x10
+# EXE-NEXT:Mvid: e1ba8845-6179-4231-a313-7ef69931ad0d
+# EXE-NOT:{{.}}
+
+# PE32:Format: PE32 machine=0x014C dll
+# PE32-NEXT:COFF: sections=2 timestamp=0x00000000 characteristics=0x2102 symbols=0
+# PE32-NEXT:Optional: imagebase=0x0000000000400000 sectionalign=0x2000 filealign=0x200 subsystem=3 dllchars=0x8540 stack=0x100000,0x1000 heap=0x100000,0x1000
+# PE32-NEXT:Section: .text rva=0x00002000 vsize=0x1F4 raw=0x200 rawsize=0x200 flags=0x60000020
+# PE32-NEXT:Section: .reloc rva=0x00004000 vsize=0xC raw=0x400 rawsize=0x200 flags=0x42000040
+# PE32-NEXT:CLI: flags=0x00000001 entrypoint=0x06000001 metadata=0x00002054,0x140 runtime=2.5
+# PE32-NEXT:Metadata: version='v4.0.30319' heapsizes=0x00 valid=0x0000000900000045 sorted=0x000016003325FA00
+# PE32-NEXT:Stream: #~ offset=0x6C size=0x80
+# PE32-NEXT:Stream: #Strings offset=0xEC size=0x2C
+# PE32-NEXT:Stream: #US offset=0x118 size=0x8
+# PE32-NEXT:Stream: #GUID offset=0x120 size=0x10
+# PE32-NEXT:Stream: #Blob offset=0x130 size=0x10
+# PE32-NEXT:Mvid: 99c13f3e-ab85-45c8-9b0e-4462e4649a83
+# PE32-NOT:{{.}}
+
+# CANON32:pe PE32 machine=0x014C dll subsystem=3
+# CANON32-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+
+## A CIL object with 5.8.6's COFF view: the ilasm (.NET Framework 4.8, -dll
+## -pe64 -x64) image of object.il with .reloc and its data directory dropped,
+## then the three marker sections .data (0xC0000040), .rdata (0x40000040) and
+## .bss (0xC0000080) at the next section-aligned RVA, each with VirtualSize,
+## SizeOfRawData and PointerToRawData 0, and one COFF symbol per SYMTAB entry
+## of its link-info record ('value' in .data, 'get' in .text, 'abort' and
+## 'my_labs' undefined functions). Four section headers need SizeOfHeaders
+## 0x400, so .text's raw data starts there.
+# RUN: yaml2obj %t/object.yaml -o %t/object.o
+# RUN: llvm-cil-dump --headers %t/object.o \
+# RUN:   | FileCheck %s --check-prefix=OBJ --match-full-lines --strict-whitespace
+# OBJ:Format: PE32+ machine=0x8664 dll
+# OBJ-NEXT:COFF: sections=4 timestamp=0x00000000 characteristics=0x2022 symbols=4
+# OBJ-NEXT:Optional: imagebase=0x0000000140000000 sectionalign=0x2000 filealign=0x200 subsystem=3 dllchars=0x8540 stack=0x400000,0x4000 heap=0x100000,0x2000
+# OBJ-NEXT:Section: .text rva=0x00002000 vsize=0x3AA raw=0x400 rawsize=0x400 flags=0x60000020
+# OBJ-NEXT:Section: .data rva=0x00004000 vsize=0x0 raw=0x0 rawsize=0x0 flags=0xC0000040
+# OBJ-NEXT:Section: .rdata rva=0x00004000 vsize=0x0 raw=0x0 rawsize=0x0 flags=0x40000040
+# OBJ-NEXT:Section: .bss rva=0x00004000 vsize=0x0 raw=0x0 rawsize=0x0 flags=0xC0000080
+# OBJ-NEXT:CLI: flags=0x00000001 entrypoint=0x00000000 metadata=0x00002080,0x2BC runtime=2.5
+# OBJ-NEXT:Metadata: version='v4.0.30319' heapsizes=0x00 valid=0x0000000814001557 sorted=0x000016003325FA00
+# OBJ-NEXT:Stream: #~ offset=0x6C size=0xF8
+# OBJ-NEXT:Stream: #Strings offset=0x164 size=0xAC
+# OBJ-NEXT:Stream: #US offset=0x210 size=0x10
+# OBJ-NEXT:Stream: #GUID offset=0x220 size=0x10
+# OBJ-NEXT:Stream: #Blob offset=0x230 size=0x8C
+# OBJ-NEXT:Mvid: 2761e41f-be3d-44cd-a261-02c70af0adde
+# OBJ-NOT:{{.}}
+
+#--- exit42.il
+// A Phase-1-shaped module: one method with the entry point.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'exit42' { }
+.module 'exit42.dll'
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldc.i4.s 42
+  ret
+}
+#--- dll.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8702
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8616
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     522
+    SectionData:     E021000000000000000000000000000048000000020005006420000040010000010000000100000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000E1F2A2A42534A4201000100000000000C00000076342E302E33303331390000000005006C00000080000000237E0000EC0000002C00000023537472696E67730000000018010000080000002355530020010000100000002347554944000000300100001000000023426C6F620000000000000002000001450000000900000000FA253300160000010000000100000001000000010000000100000000000A00010000000000000000000100000000000100010060200000000016001E000A00010000000000000000000000000000000000000023000000040000000000000000000000010015000000000000000000003C4D6F64756C653E006578697434322E646C6C006D73636F726C6962006D61696E006578697434320000000003200000000000E07A7BBA2D8F4B46BA9538BBD986D1F50008B77A5C561934E08903000008000000000000D02100000000000000000000EE210000002000000000000000000000000000000000000000000000E021000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000000A20000
+symbols:         []
+...
+#--- exe.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8702
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8616
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     522
+    SectionData:     E021000000000000000000000000000048000000020005006420000040010000010000000100000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000E1F2A2A42534A4201000100000000000C00000076342E302E33303331390000000005006C00000080000000237E0000EC0000002C00000023537472696E67730000000018010000080000002355530020010000100000002347554944000000300100001000000023426C6F620000000000000002000001450000000900000000FA253300160000010000000100000001000000010000000100000000000A00010000000000000000000100000000000100010060200000000016001E000A00010000000000000000000000000000000000000023000000040000000000000000000000010015000000000000000000003C4D6F64756C653E006578697434322E646C6C006D73636F726C6962006D61696E0065786974343200000000032000000000004588BAE179613142A3137EF69931AD0D0008B77A5C561934E08903000008000000000000D02100000000000000000000EE210000002000000000000000000000000000000000000000000000E021000000000000000000000000000000005F436F724578654D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000000A20000
+symbols:         []
+...
+#--- pe32.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8686
+  ImageBase:       4194304
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 1048576
+  SizeOfStackCommit: 4096
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 4096
+  ImportTable:
+    RelativeVirtualAddress: 8596
+    Size:            87
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            8
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8200
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_I386
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_32BIT_MACHINE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     500
+    SectionData:     D0210000000000004800000002000500542000004001000001000000010000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000E1F2A2A42534A4201000100000000000C00000076342E302E33303331390000000005006C00000080000000237E0000EC0000002C00000023537472696E67730000000018010000080000002355530020010000100000002347554944000000300100001000000023426C6F620000000000000002000001450000000900000000FA253300160000010000000100000001000000010000000100000000000A00010000000000000000000100000000000100010050200000000016001E000A00010000000000000000000000000000000000000023000000040000000000000000000000010015000000000000000000003C4D6F64756C653E006578697434322E646C6C006D73636F726C6962006D61696E0065786974343200000000032000000000003E3FC19985ABC8459B0E4462E4649A830008B77A5C561934E089030000080000BC2100000000000000000000DE210000002000000000000000000000000000000000000000000000D02100000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C0000000000FF2500204000
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C000000F0310000
+symbols:         []
+...
+#--- object.il
+// A CIL object (a netmodule: no Assembly row) in object-form text, with a
+// hand-encoded link-info record whose header sets HAS_DEBUG_INFO.
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+
+.field public static initonly native int 'value'
+.method public static int32 'get'() cil managed
+{
+  .maxstack 8
+  ldstr "hello"
+  pop
+  call void [msil.bcl]System.Threading.Interlocked::MemoryBarrier()
+  ldc.i4.m1
+  call int32 'my_labs'(int32)
+  pop
+  call void [msil.extern]'<msil>Symbols'::'abort'()
+  ldsfld native int 'value'
+  ldind.i4
+  ret
+}
+.method public hidebysig static pinvokeimpl("msil.unresolved" as "labs" nomangle cdecl) int32 'my_labs'(int32) cil managed preservesig {}
+
+.module 'b.c'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = (
+    01 00 6A 00 00 00 4D 53 4C 4B 01 00 01 1D 78 38
+    36 5F 36 34 2D 75 6E 6B 6E 6F 77 6E 2D 6C 69 6E
+    75 78 2D 67 6E 75 2D 6D 73 69 6C 01 00 00 08 08
+    04 08 01 2C 04 01 00 05 76 61 6C 75 65 01 00 00
+    04 00 00 04 00 00 03 67 65 74 01 00 00 06 00 10
+    05 61 62 6F 72 74 00 10 07 6D 79 5F 6C 61 62 73
+    02 0E 01 05 2E 64 61 74 61 00 02 04 2A 00 00 00
+    00 00
+)
+#--- object.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 9118
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 9024
+    Size:            91
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     938
+    SectionData:     80230000000000000000000000000000480000000200050080200000BC020000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007A720100007026280100000A15280200000626280200000A7E010000044A2A0042534A4201000100000000000C00000076342E302E33303331390000000005006C000000F8000000237E000064010000AC00000023537472696E67730000000010020000100000002355530020020000100000002347554944000000300200008C00000023426C6F620000000000000002000001571500140800000000FA253300160000010000000300000001000000010000000200000001000000030000000100000001000000010000000300000000005E000100000000000A001B000A000600350000000E00490000000000000001000000000001000100360091007E00602000000000160097008100010000000000800096209B008500010000000100A80009002700010011004300010019005800050027001B000B00620001020500A3000100000000000000000000000000000072000000000000000000000000000000000000007E0000000000000000000000000000000000000087000000000000000000003C4D6F64756C653E0053797374656D2E546872656164696E6700496E7465726C6F636B6564004D656D6F727942617272696572003C6D73696C3E53796D626F6C730061626F7274003C6D73696C3E4C696E6B496E666F002E63746F7200622E63006D73696C2E756E7265736F6C766564006D73696C2E65787465726E006D73696C2E62636C006D73696C2E6C696E6B0076616C756500676574006D795F6C616273006C61627300415F3000000B680065006C006C006F00000000001FE461273DBECD44A26102C70AF0ADDE0003000001052001011D057201006A0000004D534C4B0100011D7838365F36342D756E6B6E6F776E2D6C696E75782D676E752D6D73696C01000008080408012C0401000576616C7565010000040000040000036765740100000600100561626F72740010076D795F6C616273020E01052E646174610002042A00000000000206180300000804000108080000000000006823000000000000000000008E23000000200000000000000000000000000000000000000000000080230000000000000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .data
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    VirtualAddress:  16384
+    VirtualSize:     0
+  - Name:            .rdata
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     0
+  - Name:            .bss
+    Characteristics: [ IMAGE_SCN_CNT_UNINITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    VirtualAddress:  16384
+    VirtualSize:     0
+symbols:
+  - Name:            value
+    Value:           0
+    SectionNumber:   2
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            get
+    Value:           0
+    SectionNumber:   1
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_FUNCTION
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            abort
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_FUNCTION
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            my_labs
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_FUNCTION
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+...

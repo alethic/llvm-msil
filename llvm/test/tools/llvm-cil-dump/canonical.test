@@ -1,0 +1,566 @@
+## llvm-cil-dump --canonical (plan 5.7.10, canonical listing v1): the header
+## lines, every type with its layout, interfaces, custom attributes, fields
+## (offsets, constants, marshalling, FieldRVA data of known and unknown size),
+## properties and methods (P/Invoke, parameters, bodies with every operand
+## kind, EH clauses of every kind), the trailer; names quoted and escaped,
+## sorted by UTF-8 bytes. The expected listing is mdcanon's (M16) for the same
+## image, reviewed against 5.7.10; both dumpers must print it byte for byte.
+## The input is a yaml2obj copy of the ilasm (.NET Framework 4.8, -dll -pe64
+## -x64) image of canon.il.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/canon.yaml -o %t/canon.dll
+
+## --canonical is the default mode, and the defaults are --scopes=keep,
+## --order=sorted, --forms=exact and keep for the six 5.12.6 options.
+# RUN: llvm-cil-dump %t/canon.dll > %t/default.txt
+# RUN: llvm-cil-dump --canonical %t/canon.dll > %t/canonical.txt
+# RUN: diff %t/default.txt %t/canonical.txt
+# RUN: llvm-cil-dump --canonical --scopes=keep --order=sorted --forms=exact \
+# RUN:   --assembly-hash=keep --params=keep --initlocals=keep --snan=keep \
+# RUN:   --pinvoke-module=keep --pinvoke-access=keep %t/canon.dll > %t/keep.txt
+# RUN: diff %t/default.txt %t/keep.txt
+# RUN: FileCheck %s --input-file=%t/canonical.txt --match-full-lines --strict-whitespace
+
+# CHECK:pe PE32+ machine=0x8664 dll subsystem=3
+# CHECK-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# CHECK-NEXT:entrypoint int32() '<Module>'::'main'
+# CHECK-NEXT:assembly 'canon' ver 1.2.3.4 flags=0x00000000 hash=0x00008004 culture='' key=-
+# CHECK-NEXT:module 'canon.dll'
+# CHECK-NEXT:assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# CHECK-NEXT:assemblyref 'other' ver 1.2.3.4 flags=0x00000000 key=- culture='de-DE'
+# CHECK-NEXT:moduleref 'native.dll'
+# CHECK-NEXT:file 'readme.txt'
+# CHECK-NEXT:exportedtype 'NS.Exported'
+# CHECK-NEXT:resource 'res.bin'
+# CHECK-EMPTY:
+# CHECK-NEXT:.class '<Module>' flags=0x00000000
+# CHECK-NEXT:  .method 'back\\slash' void() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'café' void() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'callee' int32(int32) flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .param 1 'v' flags=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ldarg.0
+# CHECK-NEXT:    L1: ret
+# CHECK-NEXT:  .method 'ctl\x01name' void() flags=0x0013 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'it\'s' void() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'main' int32() flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ldc.i4.0
+# CHECK-NEXT:    L1: ret
+# CHECK-NEXT:  .method 'outp' void(int32&, int32) flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .param 1 'o' flags=0x0002
+# CHECK-NEXT:    .param 2 'b' flags=0x1010 const 05 00 00 00
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ldarg.0
+# CHECK-NEXT:    L1: ldc.i4.0
+# CHECK-NEXT:    L2: stind.i4
+# CHECK-NEXT:    L3: ret
+# CHECK-NEXT:  .method 'puts' int32(native int) flags=0x2016 impl=0x0080
+# CHECK-NEXT:    .pinvokeimpl 'native.dll' entry 'native_puts' flags=0x0200
+# CHECK-NEXT:    .param 1 'A_0' flags=0x0000
+# CHECK-NEXT:  .method 'sig' void(bool, char, int8, uint8, int16, uint16, int32, uint32, int64, uint64, float32, float64, native int, native uint, string, object, int32*, int32&, method int32(int32), float64[,], int32[5...10]) flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .param 1 'A_0' flags=0x0000
+# CHECK-NEXT:    .param 2 'A_1' flags=0x0000
+# CHECK-NEXT:    .param 3 'A_2' flags=0x0000
+# CHECK-NEXT:    .param 4 'A_3' flags=0x0000
+# CHECK-NEXT:    .param 5 'A_4' flags=0x0000
+# CHECK-NEXT:    .param 6 'A_5' flags=0x0000
+# CHECK-NEXT:    .param 7 'A_6' flags=0x0000
+# CHECK-NEXT:    .param 8 'A_7' flags=0x0000
+# CHECK-NEXT:    .param 9 'A_8' flags=0x0000
+# CHECK-NEXT:    .param 10 'A_9' flags=0x0000
+# CHECK-NEXT:    .param 11 'A_10' flags=0x0000
+# CHECK-NEXT:    .param 12 'A_11' flags=0x0000
+# CHECK-NEXT:    .param 13 'A_12' flags=0x0000
+# CHECK-NEXT:    .param 14 'A_13' flags=0x0000
+# CHECK-NEXT:    .param 15 'A_14' flags=0x0000
+# CHECK-NEXT:    .param 16 'A_15' flags=0x0000
+# CHECK-NEXT:    .param 17 'A_16' flags=0x0000
+# CHECK-NEXT:    .param 18 'A_17' flags=0x0000
+# CHECK-NEXT:    .param 19 'A_18' flags=0x0000
+# CHECK-NEXT:    .param 20 'A_19' flags=0x0000
+# CHECK-NEXT:    .param 21 'A_20' flags=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'va' vararg void(int32) flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .param 1 'n' flags=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'work' int32(int32, int32) flags=0x0016 impl=0x0000
+# CHECK-NEXT:    .param 1 'a' flags=0x0000
+# CHECK-NEXT:    .param 2 'b' flags=0x0000
+# CHECK-NEXT:    .custom instance void() [mscorlib]System.ObsoleteAttribute::'.ctor' = 01 00 00 00
+# CHECK-NEXT:    .maxstack 4 initlocals
+# CHECK-NEXT:    .locals (int32, float64, class [mscorlib]System.Collections.Generic.List`1<int32>, int32[], int32& pinned, typedref)
+# CHECK-NEXT:    L0: ldarg.0
+# CHECK-NEXT:    L1: ldarg.1
+# CHECK-NEXT:    L2: add
+# CHECK-NEXT:    L3: stloc.0
+# CHECK-NEXT:    L4: ldc.i4.m1
+# CHECK-NEXT:    L5: ldc.i4.s -5
+# CHECK-NEXT:    L6: add
+# CHECK-NEXT:    L7: ldc.i4 100000
+# CHECK-NEXT:    L8: add
+# CHECK-NEXT:    L9: conv.i8
+# CHECK-NEXT:    L10: ldc.i8 -1234567890123
+# CHECK-NEXT:    L11: add
+# CHECK-NEXT:    L12: pop
+# CHECK-NEXT:    L13: ldc.r4 float32(0x3FC00000)
+# CHECK-NEXT:    L14: conv.r8
+# CHECK-NEXT:    L15: ldc.r8 float64(0xC002000000000000)
+# CHECK-NEXT:    L16: add
+# CHECK-NEXT:    L17: stloc.1
+# CHECK-NEXT:    L18: ldstr "quote\" back\\ nl\u000A tab\u0009 caf\u00E9 ctl\u0001"
+# CHECK-NEXT:    L19: call int32(native int) '<Module>'::'puts'
+# CHECK-NEXT:    L20: pop
+# CHECK-NEXT:    L21: newobj instance void() class [mscorlib]System.Collections.Generic.List`1<int32>::'.ctor'
+# CHECK-NEXT:    L22: stloc.2
+# CHECK-NEXT:    L23: ldloc.2
+# CHECK-NEXT:    L24: ldc.i4.7
+# CHECK-NEXT:    L25: callvirt instance void(!0) class [mscorlib]System.Collections.Generic.List`1<int32>::'Add'
+# CHECK-NEXT:    L26: call <1> !!0[]() [mscorlib]System.Array::'Empty'<int32>
+# CHECK-NEXT:    L27: stloc.3
+# CHECK-NEXT:    L28: ldc.i4.1
+# CHECK-NEXT:    L29: ldc.i4.2
+# CHECK-NEXT:    L30: call vararg void(int32, ..., int32) vararg void(int32) '<Module>'::'va'::'va'
+# CHECK-NEXT:    L31: ldc.i4.3
+# CHECK-NEXT:    L32: ldftn int32(int32) '<Module>'::'callee'
+# CHECK-NEXT:    L33: calli int32(int32)
+# CHECK-NEXT:    L34: pop
+# CHECK-NEXT:    L35: ldc.i4.4
+# CHECK-NEXT:    L36: ldsfld native int 'NS.Base'::'ptr'
+# CHECK-NEXT:    L37: calli unmanaged cdecl int32(int32)
+# CHECK-NEXT:    L38: pop
+# CHECK-NEXT:    L39: ldtoken 'NS.Base'
+# CHECK-NEXT:    L40: pop
+# CHECK-NEXT:    L41: volatile.
+# CHECK-NEXT:    L42: ldsfld int32 'NS.Base'::'counter'
+# CHECK-NEXT:    L43: pop
+# CHECK-NEXT:    L44: ldloca.s 0
+# CHECK-NEXT:    L45: unaligned. 1
+# CHECK-NEXT:    L46: ldind.i4
+# CHECK-NEXT:    L47: pop
+# CHECK-NEXT:    L48: ldloc.0
+# CHECK-NEXT:    L49: switch L51, L54
+# CHECK-NEXT:    L50: br.s L54
+# CHECK-NEXT:    L51: ldc.i4.1
+# CHECK-NEXT:    L52: stloc.0
+# CHECK-NEXT:    L53: br L56
+# CHECK-NEXT:    L54: ldc.i4.2
+# CHECK-NEXT:    L55: stloc.0
+# CHECK-NEXT:    L56: ldloc.0
+# CHECK-NEXT:    L57: ldc.i4.1
+# CHECK-NEXT:    L58: div
+# CHECK-NEXT:    L59: stloc.0
+# CHECK-NEXT:    L60: leave.s L63
+# CHECK-NEXT:    L61: pop
+# CHECK-NEXT:    L62: leave.s L63
+# CHECK-NEXT:    L63: leave.s L65
+# CHECK-NEXT:    L64: endfinally
+# CHECK-NEXT:    L65: leave.s L71
+# CHECK-NEXT:    L66: pop
+# CHECK-NEXT:    L67: ldc.i4.1
+# CHECK-NEXT:    L68: endfilter
+# CHECK-NEXT:    L69: pop
+# CHECK-NEXT:    L70: leave.s L71
+# CHECK-NEXT:    L71: leave.s L73
+# CHECK-NEXT:    L72: endfinally
+# CHECK-NEXT:    L73: ldloc.0
+# CHECK-NEXT:    L74: ret
+# CHECK-NEXT:    .try L56 to L61 catch [mscorlib]System.DivideByZeroException handler L61 to L63
+# CHECK-NEXT:    .try L56 to L64 finally handler L64 to L65
+# CHECK-NEXT:    .try L65 to L66 filter L66 handler L69 to L71
+# CHECK-NEXT:    .try L71 to L72 fault handler L72 to L73
+# CHECK-EMPTY:
+# CHECK-NEXT:.class 'NS.Base' flags=0x00100001 extends [mscorlib]System.Object
+# CHECK-NEXT:  .implements [mscorlib]System.IDisposable
+# CHECK-NEXT:  .custom instance void(string) [mscorlib]System.ObsoleteAttribute::'.ctor' = 01 00 03 6F 6C 64 00 00
+# CHECK-NEXT:  .field 'Answer' int32 flags=0x8056 const 2A 00 00 00
+# CHECK-NEXT:  .field 'counter' int32 flags=0x0111
+# CHECK-NEXT:    .data 4 bytes
+# CHECK-NEXT:      07 00 00 00
+# CHECK-NEXT:  .field 'grid' int32[0...,0...] flags=0x0016
+# CHECK-NEXT:  .field 'marshalled' int32 flags=0x1006 marshal 07
+# CHECK-NEXT:  .field 'pair' valuetype 'NS.Pair' flags=0x0116
+# CHECK-NEXT:    .data 12 bytes
+# CHECK-NEXT:      01 00 00 00 02 00 00 00 03 00 00 00
+# CHECK-NEXT:  .field 'ptr' native int flags=0x0116
+# CHECK-NEXT:    .custom instance void() [mscorlib]System.ObsoleteAttribute::'.ctor' = 01 00 00 00
+# CHECK-NEXT:    .data (unknown size)
+# CHECK-NEXT:  .field 'vol' int32 modopt([mscorlib]System.Runtime.CompilerServices.IsVolatile) flags=0x0016
+# CHECK-NEXT:  .field 'x' int32 flags=0x0006
+# CHECK-NEXT:  .property 'Value' instance int32() flags=0x0000
+# CHECK-NEXT:    .get instance int32() 'NS.Base'::'get_Value'
+# CHECK-NEXT:    .set instance void(int32) 'NS.Base'::'set_Value'
+# CHECK-NEXT:    .custom instance void() [mscorlib]System.ObsoleteAttribute::'.ctor' = 01 00 00 00
+# CHECK-NEXT:  .method '.ctor' instance void() flags=0x1806 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ldarg.0
+# CHECK-NEXT:    L1: call instance void() [mscorlib]System.Object::'.ctor'
+# CHECK-NEXT:    L2: ret
+# CHECK-NEXT:  .method 'Dispose' instance void() flags=0x01E6 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ret
+# CHECK-NEXT:  .method 'get_Value' instance int32() flags=0x0886 impl=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ldarg.0
+# CHECK-NEXT:    L1: ldfld int32 'NS.Base'::'x'
+# CHECK-NEXT:    L2: ret
+# CHECK-NEXT:  .method 'set_Value' instance void(int32) flags=0x0886 impl=0x0000
+# CHECK-NEXT:    .param 1 'value' flags=0x0000
+# CHECK-NEXT:    .maxstack 8
+# CHECK-NEXT:    L0: ldarg.0
+# CHECK-NEXT:    L1: ldarg.1
+# CHECK-NEXT:    L2: stfld int32 'NS.Base'::'x'
+# CHECK-NEXT:    L3: ret
+# CHECK-EMPTY:
+# CHECK-NEXT:.class 'NS.Base/Inner' flags=0x0000010A extends [mscorlib]System.ValueType
+# CHECK-NEXT:  .layout pack 8 size 16
+# CHECK-NEXT:  .field 'a' int64 flags=0x0006
+# CHECK-EMPTY:
+# CHECK-NEXT:.class 'NS.Pair' flags=0x00000109 extends [mscorlib]System.ValueType
+# CHECK-NEXT:  .layout pack 4 size 12
+# CHECK-NEXT:  .field 'p' int32 flags=0x0006
+# CHECK-NEXT:  .field 'q' int32 flags=0x0006
+# CHECK-NEXT:  .field 'r' int32 flags=0x0006
+# CHECK-EMPTY:
+# CHECK-NEXT:.class 'Union' flags=0x00000111 extends [mscorlib]System.ValueType
+# CHECK-NEXT:  .layout pack 0 size 0
+# CHECK-NEXT:  .field 'f' float32 flags=0x0006 offset 4
+# CHECK-NEXT:  .field 'i' int32 flags=0x0006 offset 0
+# CHECK-NEXT:assembly .custom instance void(string) [mscorlib]System.Reflection.AssemblyTitleAttribute::'.ctor' = 01 00 05 74 69 74 6C 65 00 00
+# CHECK-NEXT:module .custom instance void(bool) [mscorlib]System.CLSCompliantAttribute::'.ctor' = 01 00 01 00 00
+# CHECK-NOT:{{.}}
+
+#--- canon.il
+// Canonical listing v1 (plan 5.7.10): header lines, types, members, bodies.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly extern 'other' { .ver 1:2:3:4 .locale "de-DE" }
+.assembly 'canon'
+{
+  .custom instance void [mscorlib]System.Reflection.AssemblyTitleAttribute::.ctor(string) = ( 01 00 05 74 69 74 6C 65 00 00 )
+  .hash algorithm 0x00008004
+  .ver 1:2:3:4
+}
+.file nometadata 'readme.txt' .hash = (01 02 03 04)
+.class extern public NS.Exported { .file 'readme.txt' }
+.mresource public 'res.bin' { .file 'readme.txt' at 0 }
+.module 'canon.dll'
+.custom instance void [mscorlib]System.CLSCompliantAttribute::.ctor(bool) = ( 01 00 01 00 00 )
+.module extern 'native.dll'
+
+.class public auto ansi beforefieldinit NS.Base extends [mscorlib]System.Object
+       implements [mscorlib]System.IDisposable
+{
+  .custom instance void [mscorlib]System.ObsoleteAttribute::.ctor(string) = ( 01 00 03 6F 6C 64 00 00 )
+  .field public static literal int32 'Answer' = int32(42)
+  .field public int32 'x'
+  .field public marshal(int32) int32 'marshalled'
+  .field public static int32 modopt([mscorlib]System.Runtime.CompilerServices.IsVolatile) 'vol'
+  .field private static int32 'counter' at D_1
+  .field public static valuetype NS.Pair 'pair' at D_2
+  .field public static native int 'ptr' at D_3
+  .custom instance void [mscorlib]System.ObsoleteAttribute::.ctor() = ( 01 00 00 00 )
+  .field public static int32[0...,0...] 'grid'
+
+  .method public specialname rtspecialname instance void .ctor() cil managed
+  {
+    .maxstack 8
+    ldarg.0
+    call instance void [mscorlib]System.Object::.ctor()
+    ret
+  }
+  .method public hidebysig newslot virtual final instance void Dispose() cil managed
+  {
+    .maxstack 8
+    ret
+  }
+  .method public hidebysig specialname instance int32 get_Value() cil managed
+  {
+    .maxstack 8
+    ldarg.0
+    ldfld int32 NS.Base::x
+    ret
+  }
+  .method public hidebysig specialname instance void set_Value(int32 'value') cil managed
+  {
+    .maxstack 8
+    ldarg.0
+    ldarg.1
+    stfld int32 NS.Base::x
+    ret
+  }
+  .property instance int32 Value()
+  {
+    .custom instance void [mscorlib]System.ObsoleteAttribute::.ctor() = ( 01 00 00 00 )
+    .get instance int32 NS.Base::get_Value()
+    .set instance void NS.Base::set_Value(int32)
+  }
+  .class nested public sequential ansi sealed Inner extends [mscorlib]System.ValueType
+  {
+    .pack 8
+    .size 16
+    .field public int64 'a'
+  }
+}
+
+.class public sequential ansi sealed NS.Pair extends [mscorlib]System.ValueType
+{
+  .pack 4
+  .size 12
+  .field public int32 'p'
+  .field public int32 'q'
+  .field public int32 'r'
+}
+
+.class public explicit ansi sealed 'Union' extends [mscorlib]System.ValueType
+{
+  .field [0] public int32 'i'
+  .field [4] public float32 'f'
+}
+
+.data D_1 = int32(7)
+.data D_2 = bytearray(01 00 00 00 02 00 00 00 03 00 00 00)
+.data D_3 = int64(0)
+
+.method public static pinvokeimpl("native.dll" as "native_puts" cdecl) int32 'puts'(native int) cil managed preservesig {}
+
+.method public static vararg void 'va'(int32 'n') cil managed
+{
+  .maxstack 8
+  ret
+}
+
+.method public static int32 'callee'(int32 'v') cil managed
+{
+  .maxstack 8
+  ldarg.0
+  ret
+}
+
+.method public static void 'it\'s'() cil managed
+{
+  .maxstack 8
+  ret
+}
+
+.method public static void 'back\134slash'() cil managed
+{
+  .maxstack 8
+  ret
+}
+
+.method public static void 'café'() cil managed
+{
+  .maxstack 8
+  ret
+}
+
+.method assembly static void 'ctl\001name'() cil managed
+{
+  .maxstack 8
+  ret
+}
+
+.method public static void 'sig'(bool, char, int8, uint8, int16, uint16, int32, uint32, int64, uint64,
+                                 float32, float64, native int, native uint, string, object,
+                                 int32*, int32&, method int32 *(int32), float64[,], int32[5...10]) cil managed
+{
+  .maxstack 8
+  ret
+}
+
+.method public static void 'outp'([out] int32& 'o', [opt] int32 'b') cil managed
+{
+  .param [2] = int32(5)
+  .maxstack 8
+  ldarg.0
+  ldc.i4.0
+  stind.i4
+  ret
+}
+
+.method public static int32 'work'(int32 'a', int32 'b') cil managed
+{
+  .custom instance void [mscorlib]System.ObsoleteAttribute::.ctor() = ( 01 00 00 00 )
+  .maxstack 4
+  .locals init (int32 V_0, float64 V_1, class [mscorlib]System.Collections.Generic.List`1<int32> V_2,
+                int32[] V_3, int32& pinned V_4, typedref V_5)
+  ldarg.0
+  ldarg.1
+  add
+  stloc.0
+  ldc.i4.m1
+  ldc.i4.s -5
+  add
+  ldc.i4 100000
+  add
+  conv.i8
+  ldc.i8 -1234567890123
+  add
+  pop
+  ldc.r4 1.5
+  conv.r8
+  ldc.r8 -2.25
+  add
+  stloc.1
+  ldstr "quote\" back\134 nl\n tab\t café ctl\001"
+  call int32 'puts'(native int)
+  pop
+  newobj instance void class [mscorlib]System.Collections.Generic.List`1<int32>::.ctor()
+  stloc.2
+  ldloc.2
+  ldc.i4.7
+  callvirt instance void class [mscorlib]System.Collections.Generic.List`1<int32>::Add(!0)
+  call !!0[] [mscorlib]System.Array::Empty<int32>()
+  stloc.3
+  ldc.i4.1
+  ldc.i4.2
+  call vararg void 'va'(int32, ..., int32)
+  ldc.i4.3
+  ldftn int32 'callee'(int32)
+  calli int32(int32)
+  pop
+  ldc.i4.4
+  ldsfld native int NS.Base::ptr
+  calli unmanaged cdecl int32(int32)
+  pop
+  ldtoken NS.Base
+  pop
+  volatile.
+  ldsfld int32 NS.Base::counter
+  pop
+  ldloca.s V_0
+  unaligned. 1
+  ldind.i4
+  pop
+  ldloc.0
+  switch (L_one, L_two)
+  br.s L_two
+L_one:
+  ldc.i4.1
+  stloc.0
+  br L_try
+L_two:
+  ldc.i4.2
+  stloc.0
+L_try:
+  .try
+  {
+    .try
+    {
+      ldloc.0
+      ldc.i4.1
+      div
+      stloc.0
+      leave.s L_inner
+    }
+    catch [mscorlib]System.DivideByZeroException
+    {
+      pop
+      leave.s L_inner
+    }
+  L_inner:
+    leave.s L_filter
+  }
+  finally
+  {
+    endfinally
+  }
+L_filter:
+  .try
+  {
+    leave.s L_fault
+  }
+  filter
+  {
+    pop
+    ldc.i4.1
+    endfilter
+  }
+  {
+    pop
+    leave.s L_fault
+  }
+L_fault:
+  .try
+  {
+    leave.s L_end
+  }
+  fault
+  {
+    endfault
+  }
+L_end:
+  ldloc.0
+  ret
+}
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldc.i4.0
+  ret
+}
+#--- canon.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 10798
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 10704
+    Size:            91
+  BaseRelocationTable:
+    RelativeVirtualAddress: 24576
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     2618
+    SectionData:     102A000000000000000000000000000048000000020005008821000048080000010000000B0000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000062A0A022A062A062A062A062A062A120216542A1B300400B1000000030000110203580A151FFB5820A0860100586A2135FB048EE0FEFFFF5826220000C03F6C2300000000000002C0580B7201000070280100000626730600000A0C081D6F0700000A280100002B0D1718280900000A19FE06030000062901000011261A7E07000004290200001126D00200000226FE137E05000004261200FE12014A2606450200000002000000090000002B07170A3802000000180A06175B0ADE0326DE00DE01DCDE072617FE1126DE00DE01DC062A0000000134000000009700069D00030A000001020097000BA20001000000000100A30002A90003A50000000400AC0002AE0001000000000A162A1E02280500000A2A062A1E027B020000042A2202037D020000042A000042534A4201000100000000000C00000076342E302E33303331390000000005006C00000020040000237E00008C0400007402000023537472696E6773000000000007000044000000235553004407000010000000234755494400000054070000F400000023426C6F62000000000000000200000157BFA33DC90B000000FA253300160000010000000A000000050000000E0000000F0000001D000000010000000900000002000000060000000100000003000000020000000300000001000000010000000200000001000000010000000100000003000000010000000200000001000000010000000100000001000000010000000000F80001000000000006001C000A0006004000390006005600390006005D00390006006900390006009B007B000600A60039000600CB00B0000600D60039000600E2003900000000000100000000000100010001001000220127010D0001000C00090100002A0127011D00090010000A0100002F0100001D000C00100011010000350100001D000D0010005680F1019A000600F8019A000610FA019A0016000502A400110109029A0016011102A90016011602AD0016001A02B000060041029A00060043029A00060045029A000600EA01C200060047029A0006004902C50000000000800016203B0148000100602000000000160050014D000200622000000000160055012C00030065200000000016005E0152000400672000000000160063015200040069200000000016006E01520004006B200000000013007401520004006D200000000016007D01560004006F20000000001600DC017F0019007420000000001600E5018B001B006821000000001600EC0196001D006B21000000000618330011001D00732100000000E6011F0211001D0075210000000086082702B9001D007D210000000086083102BD001D00000001004C01000001005301000001005C01000001004C01000002008101000003008501000004008901000005008D01000006009101000007009501000008009901000009009D0100000A00A10100000B00A50100000C00AA0100000D00AF0100000E00B40100000F00B90100001000BE0100001100C30100001200C80100001300CD0100001400D20100001500D70102000100E10110100200E30100000100EA0100000200E301000001003B02020011000900330001001100330006002900330001002900330011001900330011000C00330011000C00D2001B004900DC00210013005001C800080004009D00080069008600270013000B002900230091002E000B00D80043001B003F00E100230091004001230091000600A20004000C000000030008001000000004000000000000000500000000000D00040000000E002C003100E3000200010000004B02CF0002000E00030001000F0003000201150000020300400101000040000005000440000006001040000007000480000001000200030004000000000000005C02000004000000000000000000000036000D0100000000010002000300040000000000000016011C010000010000005102D300010000000000000062022701040000000000010000006B020400040002001100280000000000003C4D6F64756C653E0053797374656D2E5265666C656374696F6E00417373656D626C795469746C65417474726962757465002E63746F720053797374656D00434C53436F6D706C69616E74417474726962757465004F626A6563740049446973706F7361626C65004F62736F6C6574654174747269627574650053797374656D2E52756E74696D652E436F6D70696C65725365727669636573004973566F6C6174696C650056616C7565547970650053797374656D2E436F6C6C656374696F6E732E47656E65726963004C69737460310041646400417272617900456D7074790044697669646542795A65726F457863657074696F6E0063616E6F6E2E646C6C006E61746976652E646C6C006D73636F726C6962006F746865720064652D44450042617365004E53005061697200496E6E657200556E696F6E0070757473006E61746976655F7075747300415F30007661006E0063616C6C656500760069742773006261636B5C736C61736800636166C3A90063746C016E616D650073696700415F3100415F3200415F3300415F3400415F3500415F3600415F3700415F3800415F3900415F313000415F313100415F313200415F313300415F313400415F313500415F313600415F313700415F313800415F313900415F3230006F757470006F006200776F726B0061006D61696E00416E737765720078006D61727368616C6C656400766F6C00636F756E746572007061697200707472006772696400446973706F7365006765745F56616C7565007365745F56616C75650076616C7565007000710072006900660056616C756500726561646D652E7478740063616E6F6E004578706F72746564007265732E62696E0000003F710075006F0074006500220020006200610063006B005C0020006E006C000A00200074006100620009002000630061006600E9002000630074006C0001000100000019D3086AEFF9494D9D6EDEF8D3972B6E00042001010E042001010205010001000003200001051512210108052001011300061001001D1E00030A01080400010808040101080808B77A5C561934E089080100036F6C64000004000108180405010108030000012800150102030405060708090A0B0C0D18190E1C0F0810081B00010808140D0200001408010106010A060002011008080405000000050002080808040100000003000008020608042A000000010704062019080306110C02061808061408020002000003200008042001010802060A02060C060502010841080328000804010203040A0100057469746C6500000F0706080D15122101081D084510081600F829000000000000000000001E2A0000002000000000000000000000000000000000000000000000102A0000000000000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .sdata
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    VirtualAddress:  16384
+    VirtualSize:     24
+    SectionData:     070000000100000002000000030000000000000000000000
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  24576
+    VirtualSize:     12
+    SectionData:     002000000C00000030AA0000
+symbols:         []
+...

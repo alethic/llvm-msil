@@ -1,0 +1,218 @@
+## llvm-cil-copy refuses a row of a table outside the writer set of plan
+## 5.7.6 (Constant, InterfaceImpl and GenericParam among them; they are read
+## but not written until a later milestone): 'unsupported table <Name> (<n>
+## rows)' (5.7.10) and exit status 1, never a crash (section 2: the guards
+## against 'LLVM ERROR' and 'PLEASE submit' catch an abort(), which plain
+## 'not' accepts on Windows). The inputs are yaml2obj copies of the ilasm
+## (.NET Framework 4.8, -dll -pe64 -x64) images of constant.il, interface.il
+## and generic.il, each with rows in exactly one table outside the writer
+## set.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/constant.yaml -o %t/constant.dll
+# RUN: yaml2obj %t/interface.yaml -o %t/interface.dll
+# RUN: yaml2obj %t/generic.yaml -o %t/generic.dll
+
+# RUN: not llvm-cil-copy %t/constant.dll -o %t/constant.copy.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CONSTANT \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# CONSTANT: {{.*}}error: {{.*}}unsupported table Constant (2 rows)
+
+# RUN: not llvm-cil-copy %t/interface.dll -o %t/interface.copy.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=INTERFACE \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# INTERFACE: {{.*}}error: {{.*}}unsupported table InterfaceImpl (1 rows)
+
+# RUN: not llvm-cil-copy %t/generic.dll -o %t/generic.copy.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=GENERIC \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# GENERIC: {{.*}}error: {{.*}}unsupported table GenericParam (1 rows)
+
+#--- constant.il
+// Two Constant rows (a literal field and a parameter default): the Constant
+// table is outside the writer set of plan 5.7.6.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'constant' { }
+.module 'constant.dll'
+
+.class public auto ansi NS.K extends [mscorlib]System.Object
+{
+  .field public static literal int32 'Answer' = int32(42)
+}
+
+.method public static int32 'f'([opt] int32 'b') cil managed
+{
+  .param [1] = int32(5)
+  .maxstack 8
+  ldarg.0
+  ret
+}
+#--- constant.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8798
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8712
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     618
+    SectionData:     40220000000000000000000000000000480000000200050064200000A4010000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000A022A0042534A4201000100000000000C00000076342E302E33303331390000000005006C000000BC000000237E0000280100004800000023537472696E67730000000070010000080000002355530078010000100000002347554944000000880100001C00000023426C6F620000000000000002000001570900000900000000FA25330016000001000000010000000200000001000000010000000100000002000000010000000100000000001800010000000000060011000A000000000001000000000001000100010000002E003000050001000200568037001400602000000000160033000A000100101001003500080004001700080005000F000000000000000000000000000000000000003E000000040000000000000000000000010025000000000000000000003C4D6F64756C653E0053797374656D004F626A65637400636F6E7374616E742E646C6C006D73636F726C6962004B004E530066006200416E7377657200636F6E7374616E7400000003200000000000D982531D4E163B409D61CD115D8BD6830008B77A5C561934E08904000108080405000000020608042A0000003022000000000000000000004E2200000020000000000000000000000000000000000000000000004022000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000060A20000
+symbols:         []
+...
+#--- interface.il
+// One InterfaceImpl row: the table is outside the writer set of plan 5.7.6.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'interface' { }
+.module 'interface.dll'
+
+.class public auto ansi NS.D extends [mscorlib]System.Object
+       implements [mscorlib]System.IDisposable
+{
+  .method public hidebysig newslot virtual final instance void Dispose() cil managed
+  {
+    .maxstack 8
+    ret
+  }
+}
+#--- interface.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8782
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8688
+    Size:            91
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     602
+    SectionData:     302200000000000000000000000000004800000002000500642000008C01000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000062A000042534A4201000100000000000C00000076342E302E33303331390000000005006C000000A4000000237E0000100100005400000023537472696E6773000000006401000008000000235553006C0100001000000023475549440000007C0100001000000023426C6F620000000000000002000001470200000900000000FA2533001600000100000002000000020000000100000001000000010000000100000000002400010000000000060011000A00060018000A000000000001000000000001000100010000003B003D00050001000100602000000000E60140000A000100020009000000000000000000000000000000000000004800000004000000000000000000000001003200000000000000003C4D6F64756C653E0053797374656D004F626A6563740049446973706F7361626C6500696E746572666163652E646C6C006D73636F726C69620044004E5300446973706F736500696E746572666163650000000003200000000000A75B82208A2B9947A17018C7A1AAB64C0008B77A5C561934E0890320000100001822000000000000000000003E22000000200000000000000000000000000000000000000000000030220000000000000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000050A20000
+symbols:         []
+...
+#--- generic.il
+// One GenericParam row: the table is outside the writer set of plan 5.7.6.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'generic' { }
+.module 'generic.dll'
+
+.class public auto ansi NS.Box`1<T> extends [mscorlib]System.Object
+{
+  .field public !T 'item'
+}
+#--- generic.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8750
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8664
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     570
+    SectionData:     10220000000000000000000000000000480000000200050060200000780100000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000042534A4201000100000000000C00000076342E302E33303331390000000005006C0000009C000000237E0000080100004800000023537472696E67730000000050010000080000002355530058010000100000002347554944000000680100001000000023426C6F620000000000000002000001170000000904000000FA2533001600000100000001000000020000000100000001000000010000000100000000001800010000000000060011000A000000000001000000000001000100010000002D003300050001000100060038000A000000000000000000000000000000000000003D0000000400000000000000000000000100240000000000000000000400360000000000003C4D6F64756C653E0053797374656D004F626A6563740067656E657269632E646C6C006D73636F726C696200426F786031004E530054006974656D0067656E657269630000000000032000000000002A1B63E1087A804E8DB79A71E85731A50008B77A5C561934E0890306130000000022000000000000000000001E2200000020000000000000000000000000000000000000000000001022000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000030A20000
+symbols:         []
+...

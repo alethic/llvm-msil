@@ -1,0 +1,271 @@
+## llvm-cil-copy of a netmodule (no Assembly row, plan 5.7.10): the copy is a
+## Module image, a DLL (characteristics 0x2022) with entry point token 0 and
+## the netmodule image base 0x180000000 (5.7.7, 5.8.2 O1), canonically equal
+## to the input and byte-identical across runs. Custom-attribute blobs are
+## copied verbatim, so the link-info record of this CIL object (object-form
+## text, 5.8.4, with a hand-encoded record whose header sets HAS_DEBUG_INFO)
+## reads back unchanged. The input is a yaml2obj copy of the ilasm (.NET
+## Framework 4.8, -dll -pe64 -x64) image of netmod.il. A second input gives
+## the same object 5.8.6's COFF view, which the copy drops.
+
+# RUN: rm -rf %t && split-file %s %t && mkdir %t/a %t/b
+# RUN: yaml2obj %t/netmod.yaml -o %t/b.o
+# RUN: llvm-cil-copy %t/b.o -o %t/a/b.o
+# RUN: cd %t/b && llvm-cil-copy ../b.o -o copy.o
+# RUN: cmp %t/a/b.o %t/b/copy.o
+
+# RUN: llvm-cil-dump --canonical %t/b.o > %t/input.txt
+# RUN: llvm-cil-dump --canonical %t/a/b.o > %t/copy.txt
+# RUN: diff %t/input.txt %t/copy.txt
+# RUN: FileCheck %s --input-file=%t/copy.txt --check-prefix=CANON --match-full-lines --strict-whitespace
+
+# CANON:pe PE32+ machine=0x8664 dll subsystem=3
+# CANON-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
+# CANON-NEXT:module 'b.c'
+# CANON-NEXT:assemblyref 'msil.bcl' ver 0.0.0.0 flags=0x00000000 key=- culture=''
+# CANON-NEXT:assemblyref 'msil.extern' ver 0.0.0.0 flags=0x00000000 key=- culture=''
+# CANON-NEXT:assemblyref 'msil.link' ver 0.0.0.0 flags=0x00000000 key=- culture=''
+# CANON-NEXT:moduleref 'msil.unresolved'
+# CANON-EMPTY:
+# CANON-NEXT:.class '<Module>' flags=0x00000000
+# CANON-NEXT:  .field 'value' native int flags=0x0036
+# CANON-NEXT:  .method 'get' int32() flags=0x0016 impl=0x0000
+# CANON-NEXT:    .maxstack 8
+# CANON-NEXT:    L0: ldstr "hello"
+# CANON-NEXT:    L1: pop
+# CANON-NEXT:    L2: call void() [msil.bcl]System.Threading.Interlocked::'MemoryBarrier'
+# CANON-NEXT:    L3: ldc.i4.m1
+# CANON-NEXT:    L4: call int32(int32) '<Module>'::'my_labs'
+# CANON-NEXT:    L5: pop
+# CANON-NEXT:    L6: call void() [msil.extern]<msil>Symbols::'abort'
+# CANON-NEXT:    L7: ldsfld native int '<Module>'::'value'
+# CANON-NEXT:    L8: ldind.i4
+# CANON-NEXT:    L9: ret
+# CANON-NEXT:  .method 'my_labs' int32(int32) flags=0x2096 impl=0x0080
+# CANON-NEXT:    .pinvokeimpl 'msil.unresolved' entry 'labs' flags=0x0201
+# CANON-NEXT:    .param 1 'A_0' flags=0x0000
+# CANON-NEXT:module .custom instance void(uint8[]) [msil.link]<msil>LinkInfo::'.ctor' = 01 00 6A 00 00 00 4D 53 4C 4B 01 00 01 1D 78 38 36 5F 36 34 2D 75 6E 6B 6E 6F 77 6E 2D 6C 69 6E 75 78 2D 67 6E 75 2D 6D 73 69 6C 01 00 00 08 08 04 08 01 2C 04 01 00 05 76 61 6C 75 65 01 00 00 04 00 00 04 00 00 03 67 65 74 01 00 00 06 00 10 05 61 62 6F 72 74 00 10 07 6D 79 5F 6C 61 62 73 02 0E 01 05 2E 64 61 74 61 00 02 04 2A 00 00 00 00 00
+# CANON-NOT:{{.}}
+
+# RUN: llvm-cil-dump --link-info %t/b.o > %t/input-link-info.txt
+# RUN: llvm-cil-dump --link-info %t/a/b.o > %t/copy-link-info.txt
+# RUN: diff %t/input-link-info.txt %t/copy-link-info.txt
+# RUN: FileCheck %s --input-file=%t/copy-link-info.txt --check-prefix=LINK \
+# RUN:   --match-full-lines --strict-whitespace
+
+# LINK:LinkInfo v1.0 triple=x86_64-unknown-linux-gnu-msil abi=1 abiflags=0x0 features=0x0 datamodel=8,8,4,8 flags=HAS_DEBUG_INFO
+# LINK-NEXT:Symbol 0 DATA GLOBAL DEFAULT 'value' field=0x04000001 segment=0 offset=0 size=4
+# LINK-NEXT:Symbol 1 FUNCTION GLOBAL DEFAULT 'get' method=0x06000001
+# LINK-NEXT:Symbol 2 FUNCTION GLOBAL DEFAULT UNDEFINED 'abort'
+# LINK-NEXT:Symbol 3 FUNCTION GLOBAL DEFAULT UNDEFINED 'my_labs'
+# LINK-NEXT:Segment 0 '.data' align=4 size=4 flags=0
+# LINK-NEXT:  2A 00 00 00
+# LINK-NOT:{{.}}
+
+# RUN: llvm-cil-dump --headers %t/a/b.o \
+# RUN:   | FileCheck %s --check-prefix=HEADERS --match-full-lines --strict-whitespace
+# HEADERS:Format: PE32+ machine=0x8664 dll
+# HEADERS-NEXT:COFF: sections=1 timestamp=0x{{([0-9A-F]{8})}} characteristics=0x2022 symbols=0
+# HEADERS-NEXT:Optional: imagebase=0x0000000180000000 sectionalign=0x2000 filealign=0x200 subsystem=3 dllchars=0x8540 stack=0x400000,0x4000 heap=0x100000,0x2000
+# HEADERS-NEXT:Section: .text rva=0x00002000 vsize=0x{{[0-9A-F]+}} raw=0x200 rawsize=0x{{[0-9A-F]+}} flags=0x60000020
+# HEADERS-NEXT:CLI: flags=0x00000001 entrypoint=0x00000000 metadata=0x{{([0-9A-F]{8})}},0x{{[0-9A-F]+}} runtime=2.5
+# HEADERS-NEXT:Metadata: version='v4.0.30319' heapsizes=0x{{([0-9A-F]{2})}} valid=0x0000000814001557 sorted=0x{{([0-9A-F]{16})}}
+
+## The same object with 5.8.6's COFF view (netmod-view.yaml): .text, then the
+## three marker sections .data, .rdata and .bss with VirtualSize,
+## SizeOfRawData and PointerToRawData 0, and one COFF symbol per SYMTAB entry
+## of its record ('value' in .data, 'get' in .text, 'abort' and 'my_labs'
+## undefined functions); .reloc and its data directory are dropped. Its
+## metadata and .text bytes are those of netmod.yaml. llvm-cil-copy writes no
+## COFF view (section 12, '5.7.10 clarified (`llvm-cil-copy` and the COFF
+## view)'): the copy has the one section .text and no symbol table, keeps the
+## record verbatim and is canonically equal to the input, so it is also
+## byte-identical to the copy of the object without the view.
+# RUN: yaml2obj %t/netmod-view.yaml -o %t/view.o
+# RUN: llvm-cil-copy %t/view.o -o %t/view-copy.o
+# RUN: llvm-cil-dump --headers %t/view.o \
+# RUN:   | FileCheck %s --check-prefix=VIEW --match-full-lines --strict-whitespace
+# VIEW:Format: PE32+ machine=0x8664 dll
+# VIEW-NEXT:COFF: sections=4 timestamp=0x{{([0-9A-F]{8})}} characteristics=0x2022 symbols=4
+# VIEW-NEXT:Optional: imagebase=0x{{([0-9A-F]{16})}} {{.*}}
+# VIEW-NEXT:Section: .text rva=0x00002000 vsize=0x3AA raw=0x400 rawsize=0x400 flags=0x60000020
+# VIEW-NEXT:Section: .data rva=0x00004000 vsize=0x0 raw=0x0 rawsize=0x0 flags=0xC0000040
+# VIEW-NEXT:Section: .rdata rva=0x00004000 vsize=0x0 raw=0x0 rawsize=0x0 flags=0x40000040
+# VIEW-NEXT:Section: .bss rva=0x00004000 vsize=0x0 raw=0x0 rawsize=0x0 flags=0xC0000080
+# VIEW-NEXT:CLI: flags=0x00000001 entrypoint=0x00000000 metadata=0x{{([0-9A-F]{8})}},0x{{[0-9A-F]+}} runtime=2.5
+
+# RUN: llvm-cil-dump --headers %t/view-copy.o \
+# RUN:   | FileCheck %s --check-prefix=VIEWCOPY --match-full-lines --strict-whitespace
+# VIEWCOPY:Format: PE32+ machine=0x8664 dll
+# VIEWCOPY-NEXT:COFF: sections=1 timestamp=0x{{([0-9A-F]{8})}} characteristics=0x2022 symbols=0
+# VIEWCOPY-NEXT:Optional: imagebase=0x0000000180000000 {{.*}}
+# VIEWCOPY-NEXT:Section: .text rva=0x00002000 vsize=0x{{[0-9A-F]+}} raw=0x200 rawsize=0x{{[0-9A-F]+}} flags=0x60000020
+# VIEWCOPY-NEXT:CLI: flags=0x00000001 entrypoint=0x00000000 metadata=0x{{([0-9A-F]{8})}},0x{{[0-9A-F]+}} runtime=2.5
+
+# RUN: llvm-cil-dump --canonical %t/view.o > %t/view.txt
+# RUN: llvm-cil-dump --canonical %t/view-copy.o > %t/view-copy.txt
+# RUN: diff %t/view.txt %t/view-copy.txt
+# RUN: diff %t/input.txt %t/view.txt
+# RUN: llvm-cil-dump --link-info %t/view.o > %t/view-link-info.txt
+# RUN: llvm-cil-dump --link-info %t/view-copy.o > %t/view-copy-link-info.txt
+# RUN: diff %t/view-link-info.txt %t/view-copy-link-info.txt
+# RUN: diff %t/input-link-info.txt %t/view-link-info.txt
+# RUN: cmp %t/a/b.o %t/view-copy.o
+
+#--- netmod.il
+// A CIL object (a netmodule: no Assembly row) in object-form text, with a
+// hand-encoded link-info record whose header sets HAS_DEBUG_INFO.
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+
+.field public static initonly native int 'value'
+.method public static int32 'get'() cil managed
+{
+  .maxstack 8
+  ldstr "hello"
+  pop
+  call void [msil.bcl]System.Threading.Interlocked::MemoryBarrier()
+  ldc.i4.m1
+  call int32 'my_labs'(int32)
+  pop
+  call void [msil.extern]'<msil>Symbols'::'abort'()
+  ldsfld native int 'value'
+  ldind.i4
+  ret
+}
+.method public hidebysig static pinvokeimpl("msil.unresolved" as "labs" nomangle cdecl) int32 'my_labs'(int32) cil managed preservesig {}
+
+.module 'b.c'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = (
+    01 00 6A 00 00 00 4D 53 4C 4B 01 00 01 1D 78 38
+    36 5F 36 34 2D 75 6E 6B 6E 6F 77 6E 2D 6C 69 6E
+    75 78 2D 67 6E 75 2D 6D 73 69 6C 01 00 00 08 08
+    04 08 01 2C 04 01 00 05 76 61 6C 75 65 01 00 00
+    04 00 00 04 00 00 03 67 65 74 01 00 00 06 00 10
+    05 61 62 6F 72 74 00 10 07 6D 79 5F 6C 61 62 73
+    02 0E 01 05 2E 64 61 74 61 00 02 04 2A 00 00 00
+    00 00
+)
+#--- netmod.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 9118
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 9024
+    Size:            91
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     938
+    SectionData:     80230000000000000000000000000000480000000200050080200000BC020000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007A720100007026280100000A15280200000626280200000A7E010000044A2A0042534A4201000100000000000C00000076342E302E33303331390000000005006C000000F8000000237E000064010000AC00000023537472696E67730000000010020000100000002355530020020000100000002347554944000000300200008C00000023426C6F620000000000000002000001571500140800000000FA253300160000010000000300000001000000010000000200000001000000030000000100000001000000010000000300000000005E000100000000000A001B000A000600350000000E00490000000000000001000000000001000100360091007E00602000000000160097008100010000000000800096209B008500010000000100A80009002700010011004300010019005800050027001B000B00620001020500A3000100000000000000000000000000000072000000000000000000000000000000000000007E0000000000000000000000000000000000000087000000000000000000003C4D6F64756C653E0053797374656D2E546872656164696E6700496E7465726C6F636B6564004D656D6F727942617272696572003C6D73696C3E53796D626F6C730061626F7274003C6D73696C3E4C696E6B496E666F002E63746F7200622E63006D73696C2E756E7265736F6C766564006D73696C2E65787465726E006D73696C2E62636C006D73696C2E6C696E6B0076616C756500676574006D795F6C616273006C61627300415F3000000B680065006C006C006F00000000001FE461273DBECD44A26102C70AF0ADDE0003000001052001011D057201006A0000004D534C4B0100011D7838365F36342D756E6B6E6F776E2D6C696E75782D676E752D6D73696C01000008080408012C0401000576616C7565010000040000040000036765740100000600100561626F72740010076D795F6C616273020E01052E646174610002042A00000000000206180300000804000108080000000000006823000000000000000000008E23000000200000000000000000000000000000000000000000000080230000000000000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C000000A0A30000
+symbols:         []
+...
+#--- netmod-view.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 9118
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 9024
+    Size:            91
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     938
+    SectionData:     80230000000000000000000000000000480000000200050080200000BC020000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007A720100007026280100000A15280200000626280200000A7E010000044A2A0042534A4201000100000000000C00000076342E302E33303331390000000005006C000000F8000000237E000064010000AC00000023537472696E67730000000010020000100000002355530020020000100000002347554944000000300200008C00000023426C6F620000000000000002000001571500140800000000FA253300160000010000000300000001000000010000000200000001000000030000000100000001000000010000000300000000005E000100000000000A001B000A000600350000000E00490000000000000001000000000001000100360091007E00602000000000160097008100010000000000800096209B008500010000000100A80009002700010011004300010019005800050027001B000B00620001020500A3000100000000000000000000000000000072000000000000000000000000000000000000007E0000000000000000000000000000000000000087000000000000000000003C4D6F64756C653E0053797374656D2E546872656164696E6700496E7465726C6F636B6564004D656D6F727942617272696572003C6D73696C3E53796D626F6C730061626F7274003C6D73696C3E4C696E6B496E666F002E63746F7200622E63006D73696C2E756E7265736F6C766564006D73696C2E65787465726E006D73696C2E62636C006D73696C2E6C696E6B0076616C756500676574006D795F6C616273006C61627300415F3000000B680065006C006C006F00000000001FE461273DBECD44A26102C70AF0ADDE0003000001052001011D057201006A0000004D534C4B0100011D7838365F36342D756E6B6E6F776E2D6C696E75782D676E752D6D73696C01000008080408012C0401000576616C7565010000040000040000036765740100000600100561626F72740010076D795F6C616273020E01052E646174610002042A00000000000206180300000804000108080000000000006823000000000000000000008E23000000200000000000000000000000000000000000000000000080230000000000000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .data
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    VirtualAddress:  16384
+    VirtualSize:     0
+  - Name:            .rdata
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     0
+  - Name:            .bss
+    Characteristics: [ IMAGE_SCN_CNT_UNINITIALIZED_DATA, IMAGE_SCN_MEM_READ, IMAGE_SCN_MEM_WRITE ]
+    VirtualAddress:  16384
+    VirtualSize:     0
+symbols:
+  - Name:            value
+    Value:           0
+    SectionNumber:   2
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_NULL
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            get
+    Value:           0
+    SectionNumber:   1
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_FUNCTION
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            abort
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_FUNCTION
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+  - Name:            my_labs
+    Value:           0
+    SectionNumber:   0
+    SimpleType:      IMAGE_SYM_TYPE_NULL
+    ComplexType:     IMAGE_SYM_DTYPE_FUNCTION
+    StorageClass:    IMAGE_SYM_CLASS_EXTERNAL
+...

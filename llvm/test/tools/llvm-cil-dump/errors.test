@@ -1,0 +1,226 @@
+## llvm-cil-dump on malformed images (plan 5.7.8, 5.7.10, 5.7.12): every
+## damage is an error with its prefix ('invalid CLI image: ' from the PE
+## reader, 'invalid CLI metadata: ' from the metadata reader), reported as
+## 'llvm-cil-dump: error: '<file>': <message>' with exit status 1, never a
+## crash or an assertion (section 2: the guards against 'LLVM ERROR' and
+## 'PLEASE submit' catch an abort(), which plain 'not' accepts on Windows).
+## mkbad.py derives the variants from a yaml2obj copy of the ilasm (.NET
+## Framework 4.8, -dll -pe64 -x64) image of exit42.il.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: yaml2obj %t/exit42.yaml -o %t/exit42.dll
+# RUN: %python %t/mkbad.py %t/exit42.dll %t
+
+## The unmodified image is fine.
+# RUN: llvm-cil-dump %t/exit42.dll | FileCheck %s --check-prefix=GOOD
+# GOOD: module 'exit42.dll'
+
+# RUN: not llvm-cil-dump %t/missing.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=MISSING -DFILE=%t/missing.dll -DMSG=%errc_ENOENT \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# MISSING: llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': [[MSG]]
+
+# RUN: not llvm-cil-dump %t/empty.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=IMAGE -DFILE=%t/empty.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not llvm-cil-dump %t/text.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=IMAGE -DFILE=%t/text.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not llvm-cil-dump %t/truncated-dos.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=IMAGE -DFILE=%t/truncated-dos.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not llvm-cil-dump %t/bad-lfanew.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=IMAGE -DFILE=%t/bad-lfanew.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not llvm-cil-dump %t/bad-signature.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=IMAGE -DFILE=%t/bad-signature.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not llvm-cil-dump %t/bad-sections.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=IMAGE -DFILE=%t/bad-sections.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not llvm-cil-dump %t/unmapped-cli-header.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=IMAGE -DFILE=%t/unmapped-cli-header.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# IMAGE: llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': invalid CLI image: {{.+}}
+
+## A PE without a CLI header (data directory 14 zero) is not a CLI image.
+# RUN: not llvm-cil-dump %t/no-cli-header.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOCLI -DFILE=%t/no-cli-header.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# NOCLI: llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': invalid CLI {{image|metadata}}: {{.+}}
+
+# RUN: not llvm-cil-dump %t/bad-root.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=METADATA -DFILE=%t/bad-root.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not llvm-cil-dump %t/no-tables.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=METADATA -DFILE=%t/no-tables.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not llvm-cil-dump %t/stream-bounds.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=METADATA -DFILE=%t/stream-bounds.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not llvm-cil-dump %t/row-count.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=METADATA -DFILE=%t/row-count.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# METADATA: llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': invalid CLI metadata: {{.+}}
+
+# RUN: not llvm-cil-dump %t/uncompressed.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=UNCOMPRESSED -DFILE=%t/uncompressed.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# UNCOMPRESSED: llvm-cil-dump{{(\.exe)?}}: error: '[[FILE]]': invalid CLI metadata: uncompressed metadata (#-) is not supported
+
+## A heap index out of range fails when the row is read: the listing and the
+## table dump both need the Module row's name.
+# RUN: not llvm-cil-dump --canonical %t/string-index.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=METADATA -DFILE=%t/string-index.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+# RUN: not llvm-cil-dump --tables %t/string-index.dll 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=METADATA -DFILE=%t/string-index.dll \
+# RUN:       --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:       --implicit-check-not="Stack dump"
+
+## Errors do not stop the other files; the exit status is still 1.
+# RUN: not llvm-cil-dump %t/text.dll %t/exit42.dll %t/bad-root.dll > %t/out.txt 2> %t/err.txt
+# RUN: FileCheck %s --input-file=%t/out.txt --check-prefix=CONTINUE-OUT -DFILE=%t/exit42.dll
+# RUN: FileCheck %s --input-file=%t/err.txt --check-prefix=CONTINUE-ERR \
+# RUN:   -DA=%t/text.dll -DB=%t/bad-root.dll \
+# RUN:   --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# RUN:   --implicit-check-not="Stack dump"
+# CONTINUE-OUT: File: [[FILE]]
+# CONTINUE-OUT-NEXT: pe PE32+ machine=0x8664 dll subsystem=3
+# CONTINUE-ERR: error: '[[A]]': invalid CLI image:
+# CONTINUE-ERR: error: '[[B]]': invalid CLI metadata:
+
+#--- mkbad.py
+# Writes malformed variants of the PE32+ image argv[1] into the directory
+# argv[2], one per kind of damage that llvm-cil-dump must report as an error.
+import os
+import struct
+import sys
+
+src, out = sys.argv[1], sys.argv[2]
+with open(src, "rb") as f:
+    data = bytes(f.read())
+
+
+def write(name, b):
+    with open(os.path.join(out, name), "wb") as f:
+        f.write(bytes(b))
+
+
+def patched(offset, new):
+    b = bytearray(data)
+    b[offset : offset + len(new)] = new
+    return b
+
+
+lfanew = struct.unpack_from("<I", data, 0x3C)[0]
+opt = lfanew + 24
+assert struct.unpack_from("<H", data, opt)[0] == 0x20B, "not PE32+"
+cli_dir = opt + 112 + 14 * 8
+root = data.index(b"BSJB")
+version_len = struct.unpack_from("<I", data, root + 12)[0]
+p = root + 16 + version_len + 4
+streams = {}
+for _ in range(struct.unpack_from("<H", data, root + 16 + version_len + 2)[0]):
+    off, size = struct.unpack_from("<II", data, p)
+    end = data.index(b"\0", p + 8)
+    streams[data[p + 8 : end].decode()] = (p, off, size)
+    p = (end + 4) & ~3
+tables = root + streams["#~"][1]
+
+write("empty.dll", b"")
+write("text.dll", b"this is not a PE image\n")
+write("truncated-dos.dll", data[:0x20])
+write("bad-lfanew.dll", patched(0x3C, struct.pack("<I", len(data) + 0x100)))
+write("bad-signature.dll", patched(lfanew, b"PX\0\0"))
+# NumberOfSections 0x0F00: the section table runs past the end of the file.
+write("bad-sections.dll", patched(lfanew + 6, struct.pack("<H", 0x0F00)))
+write("no-cli-header.dll", patched(cli_dir, bytes(8)))
+write("unmapped-cli-header.dll", patched(cli_dir, struct.pack("<I", 0x00F00000)))
+write("bad-root.dll", patched(root, b"BSJX"))
+# The '#~' stream renamed: there are no tables.
+write("no-tables.dll", patched(streams["#~"][0] + 8, b"#X\0\0"))
+# The '#US' stream renamed '#-': uncompressed metadata.
+write("uncompressed.dll", patched(streams["#US"][0] + 8, b"#-\0\0"))
+# The '#Blob' stream's size runs past the metadata.
+write("stream-bounds.dll", patched(streams["#Blob"][0] + 4, struct.pack("<I", 0x7FFFFFF0)))
+# 0xFFFFFF Module rows: the table data runs past the '#~' stream.
+write("row-count.dll", patched(tables + 24, struct.pack("<I", 0x00FFFFFF)))
+# The Module row's Name (2-byte #Strings index) points past '#Strings'.
+nvalid = bin(struct.unpack_from("<Q", data, tables + 8)[0]).count("1")
+write("string-index.dll", patched(tables + 24 + 4 * nvalid + 2, struct.pack("<H", 0xFFFF)))
+#--- exit42.il
+// A Phase-1-shaped module: one method with the entry point.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'exit42' { }
+.module 'exit42.dll'
+
+.method public static int32 'main'() cil managed
+{
+  .entrypoint
+  .maxstack 8
+  ldc.i4.s 42
+  ret
+}
+#--- exit42.yaml
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8702
+  ImageBase:       5368709120
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 4194304
+  SizeOfStackCommit: 16384
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 8192
+  ImportTable:
+    RelativeVirtualAddress: 8616
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            16
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8208
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_LARGE_ADDRESS_AWARE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     522
+    SectionData:     E021000000000000000000000000000048000000020005006420000040010000010000000100000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000E1F2A2A42534A4201000100000000000C00000076342E302E33303331390000000005006C00000080000000237E0000EC0000002C00000023537472696E67730000000018010000080000002355530020010000100000002347554944000000300100001000000023426C6F620000000000000002000001450000000900000000FA253300160000010000000100000001000000010000000100000000000A00010000000000000000000100000000000100010060200000000016001E000A00010000000000000000000000000000000000000023000000040000000000000000000000010015000000000000000000003C4D6F64756C653E006578697434322E646C6C006D73636F726C6962006D61696E006578697434320000000003200000000000E07A7BBA2D8F4B46BA9538BBD986D1F50008B77A5C561934E08903000008000000000000D02100000000000000000000EE210000002000000000000000000000000000000000000000000000E021000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C000000000048A10020004001000000FFE0
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000000A20000
+symbols:         []
+...

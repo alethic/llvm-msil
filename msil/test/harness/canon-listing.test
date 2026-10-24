@@ -1,11 +1,14 @@
-# %msil_canon and %msil_mdcanon (plan 5.12.3; M16): canonical listing v1 of
-# an assembly (plan 5.7.10), the layout-independent text that later
-# milestones compare between assemblers, dumpers and linkers. Until M17
-# %msil_canon is mdcanon (msil/utils/mdtools/mdcanon.cs, plan 5.7.11) on the
-# host's dotnet; from M17 it is llvm-cil-dump --canonical, which must print
-# the same bytes. Inputs/canon-listing.il has one of each construct that the
-# 5.12.6 normalizations act on and more (its header comment lists them); it
-# is assembled with %ilasm -dll and listed three times:
+# %msil_canon and %msil_mdcanon (plan 5.12.3; M16, M17): canonical listing
+# v1 of an assembly (plan 5.7.10), the layout-independent text that later
+# milestones compare between assemblers, dumpers and linkers. In M16
+# %msil_canon was mdcanon (msil/utils/mdtools/mdcanon.cs, plan 5.7.11) on the
+# host's dotnet; from M17 it is the tree's llvm-cil-dump --canonical, so this
+# test needs the feature msil-cil-dump, and its hand-written expectations
+# (the normalized listing included) pin llvm-cil-dump; canon-agree.test
+# compares the two dumpers on more inputs. Inputs/canon-listing.il has one of
+# each construct that the 5.12.6 normalizations act on and more (its header
+# comment lists them); it is assembled with %ilasm -dll and listed three
+# times:
 # (DEF)  the default options: header lines in 5.7.10's order, members sorted
 #        by name and signature, operands and clauses as 5.7.10 spells them;
 # (DECL) --order=decl --forms=canon: members in table order, short branches
@@ -18,6 +21,11 @@
 #        the P/Invoke method's access bits cleared (--pinvoke-access=ignore).
 #        --snan=quiet needs an image with a float32 signaling NaN, which ilasm
 #        never writes (M17.f patches one).
+# (TOOL) --headers, an llvm-cil-dump mode that mdcanon refuses (unknown
+#        option, exit 2): the default listing to its last line, then the
+#        headers' Format and Mvid lines. So %msil_canon is 'llvm-cil-dump
+#        --canonical', and these expectations never pass with mdcanon (whose
+#        listings they equal) in its place.
 # The second input, coverage.il at the end of this file (split-file), has the
 # rest of what the listing prints; its header comment lists it. %python
 # prepends the UTF-8 BOM that ilasm needs to read the names a～ and a😀 as
@@ -40,8 +48,8 @@
 # --match-full-lines --strict-whitespace, so a pattern starts right after
 # the colon and pins the indentation, and each listing's line count pins its
 # end. Last, %msil_mdcanon --out-dir (one process for many files) must write
-# the same bytes as the default listings on stdout.
-# REQUIRES: msil-mdcanon
+# the same bytes as llvm-cil-dump's default listings on stdout.
+# REQUIRES: msil-cil-dump, msil-mdcanon
 
 # RUN: rm -rf %t.d && split-file %s %t.d
 # RUN: %ilasm -dll -output=%t.d/canon.dll %S/Inputs/canon-listing.il
@@ -54,6 +62,8 @@
 # RUN: %msil_canon --assembly-hash=ignore --params=drop --initlocals=ignore-without-locals --pinvoke-module=strip --pinvoke-access=ignore %t.d/canon.dll > %t.d/norm.canon
 # RUN: FileCheck --input-file=%t.d/norm.canon %s --check-prefix=NORM --match-full-lines --strict-whitespace
 # RUN: count 41 < %t.d/norm.canon
+# RUN: %msil_canon --headers %t.d/canon.dll > %t.d/tool.canon
+# RUN: FileCheck --input-file=%t.d/tool.canon %s --check-prefix=TOOL --match-full-lines --strict-whitespace
 # RUN: %python -c "import sys; d = open(sys.argv[1], 'rb').read(); open(sys.argv[2], 'wb').write(b'\xef\xbb\xbf' + d)" %t.d/coverage.il %t.d/coverage-bom.il
 # RUN: %ilasm -exe -output=%t.d/coverage.exe %t.d/coverage-bom.il
 # RUN: %msil_canon %t.d/coverage.exe > %t.d/coverage.canon
@@ -203,6 +213,11 @@
 # NORM-NEXT:  .method 'puts' int32(native int) flags=0x2010 impl=0x0080
 # NORM-NEXT:    .pinvokeimpl '*' entry 'puts' flags=0x0200
 # NORM-NEXT:assembly .custom instance void(string) [mscorlib]System.Reflection.AssemblyTitleAttribute::'.ctor' = 01 00 03 61 62 63 00 00
+
+# TOOL:pe PE32+ machine=0x{{[0-9A-F]+}} dll subsystem=3
+# TOOL:assembly .custom instance void(string) [mscorlib]System.Reflection.AssemblyTitleAttribute::'.ctor' = 01 00 03 61 62 63 00 00
+# TOOL-NEXT:Format: PE32+ machine=0x{{[0-9A-F]+}} dll
+# TOOL:Mvid: {{[0-9a-f-]+}}
 
 # COV:pe PE32+ machine=0x{{[0-9A-F]+}} exe subsystem=3
 # COV-NEXT:cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319
