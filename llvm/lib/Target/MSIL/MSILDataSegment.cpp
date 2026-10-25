@@ -22,6 +22,7 @@
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
+#include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/LLVMContext.h"
@@ -82,6 +83,19 @@ static StringRef findUnsupportedConstant(const Constant *Init) {
   return {};
 }
 
+/// Whether \p C holds only zeros and undefs: upstream's isNullOrUndef
+/// (file-static in TargetLoweringObjectFile.cpp), the test by which
+/// getKindForGlobal puts a global in BSS.
+static bool isNullOrUndef(const Constant *C) {
+  if (C->isNullValue() || isa<UndefValue>(C))
+    return true;
+  if (!isa<ConstantAggregate>(C))
+    return false;
+  return all_of(C->operand_values(), [](const Value *Op) {
+    return isNullOrUndef(cast<Constant>(Op));
+  });
+}
+
 //===----------------------------------------------------------------------===//
 // MSILDataSegment
 //===----------------------------------------------------------------------===//
@@ -100,12 +114,20 @@ void MSILDataSegment::addGlobal(const GlobalVariable &GV, AsmPrinter &AP,
   MaxAlign = std::max(MaxAlign, Alignment);
 
   const Constant *Init = GV.getInitializer();
-  if (Init->isNullValue() || isa<UndefValue>(Init)) {
+  // An object flags a segment ZERO (SHT_NOBITS, plan 5.8.8) by the test that
+  // names it '.bss', which also accepts an aggregate of zeros and undefs; the
+  // whole-program layout keeps its top-level test.
+  if (Init->isNullValue() || isa<UndefValue>(Init) ||
+      (ObjectMode && isNullOrUndef(Init))) {
     Zero.push_back({&GV, Size, Alignment});
     return;
   }
 
-  Image.resize(alignTo(Image.size(), Alignment), 0);
+  // An object's segments are laid out by msil-ld from the alignment in the
+  // record, so their bytes are packed here without padding, which would cost
+  // as much memory as the alignment.
+  if (!ObjectMode)
+    Image.resize(alignTo(Image.size(), Alignment), 0);
   uint64_t Offset = Image.size();
   Entries.push_back({&GV, Offset, Size});
 
@@ -143,16 +165,20 @@ void MSILDataSegment::finalize() {
   InitSize = Image.size();
   uint64_t End = InitSize;
   for (const ZeroEntry &Z : Zero) {
-    End = alignTo(End, Z.Alignment);
-    Entries.push_back({Z.GV, End, Z.Size});
+    // Packed in an object, as in addGlobal.
+    if (!ObjectMode)
+      End = alignTo(End, Z.Alignment);
+    Entries.push_back({Z.GV, End, Z.Size, /*IsZero=*/true});
     End += Z.Size;
   }
   TotalSize = End;
 
-  if (Diffs.empty())
+  // An object leaves the differences to msil-ld, which lays out the
+  // segments (DIFF relocations, plan 5.8.8).
+  if (Diffs.empty() || ObjectMode)
     return;
   assert(TM && "symbol differences come from addGlobal, which sets TM");
-  DenseMap<const GlobalVariable *, uint64_t> Offsets;
+  DenseMap<const GlobalValue *, uint64_t> Offsets;
   for (const Entry &E : Entries)
     Offsets.try_emplace(E.GV, E.Offset);
   for (const MSILDiff &D : Diffs) {
@@ -255,29 +281,39 @@ void MSILDataCollector::emitValueImpl(const MCExpr *Value, unsigned Size,
     return appendZeros(Size);
   }
 
+  // In object mode an alias is a symbol of the object (plan 5.8.10), data
+  // or function by its value type.
+  const auto *Alias = Seg.ObjectMode ? dyn_cast<GlobalAlias>(Target) : nullptr;
+  auto IsData = [&](const GlobalValue *GV) {
+    if (const auto *GA = Seg.ObjectMode ? dyn_cast<GlobalAlias>(GV) : nullptr)
+      return !GA->getValueType()->isFunctionTy();
+    return isa<GlobalVariable>(GV);
+  };
+
   if (const MCSymbol *SubSym = V.getSubSym()) {
     // A relative table entry: both ends must be data of this segment, whose
-    // offsets finalize() knows.
-    const auto *A = dyn_cast<GlobalVariable>(Target);
-    const auto *B = dyn_cast_or_null<GlobalVariable>(SymToGV.lookup(SubSym));
-    if (!A || !B || Size > 16) {
+    // offsets finalize() knows; in an object, data symbols of any kind, whose
+    // addresses msil-ld knows (DIFF, plan 5.8.8).
+    const GlobalValue *B = SymToGV.lookup(SubSym);
+    if (!IsData(Target) || !B || !IsData(B) || Size > 16) {
       fail("symbol difference across non-data symbols");
       return appendZeros(Size);
     }
     Seg.Diffs.push_back(
-        {Site, A, B, V.getConstant(), static_cast<uint8_t>(Size), &Cur});
+        {Site, Target, B, V.getConstant(), static_cast<uint8_t>(Size), &Cur});
     return appendZeros(Size);
   }
 
-  if (!isa<GlobalVariable, Function>(Target)) {
-    // MSILPrepareIR erases aliases and ifuncs (decision D26).
+  if (!isa<GlobalVariable, Function>(Target) && !Alias) {
+    // MSILPrepareIR erases aliases (except in object mode) and ifuncs
+    // (decision D26).
     fail("address of an alias or ifunc");
     return appendZeros(Size);
   }
   // The relocation stores the value of the function's address field, which
   // the module initializer sets once with ldftn, so the value is still the
   // method itself: an offset into it means nothing.
-  if (isa<Function>(Target) && V.getConstant()) {
+  if (!IsData(Target) && V.getConstant()) {
     fail("function address + offset");
     return appendZeros(Size);
   }
@@ -286,7 +322,7 @@ void MSILDataCollector::emitValueImpl(const MCExpr *Value, unsigned Size,
     return appendZeros(Size);
   }
   Seg.Relocs.push_back(
-      {Site, Target, V.getConstant(), static_cast<uint8_t>(Size)});
+      {Site, Target, V.getConstant(), static_cast<uint8_t>(Size), &Cur});
   appendZeros(Size);
 }
 

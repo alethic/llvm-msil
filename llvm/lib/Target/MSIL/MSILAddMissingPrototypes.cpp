@@ -42,11 +42,23 @@
 ///   declaration (its first argument is not a pointer, or its result is not
 ///   void) is diagnosed too, and the declaration gets the type it gets without
 ///   calls, which keeps its sret attribute valid.
+/// - In object mode (MSILTargetMachine::isObjectMode(), plan 5.8.10, R3) the
+///   pass changes nothing: every prototype-less declaration keeps its variadic
+///   type and its attribute, without diagnostics. Each call names the symbol
+///   with its own call-site signature and the link-info record marks it
+///   NO_PROTOTYPE; msil-ld, which sees the definition, adapts the calls, and
+///   the check for a declaration whose address is used but that is never
+///   called is msil-ld's (plan 5.10.13). The pass asks for the mode when it
+///   runs, through the TargetPassConfig: CodeGenTargetMachineImpl adds the IR
+///   passes before it creates the streamer that decides the mode. Without a
+///   TargetPassConfig (opt) it keeps the whole-program behaviour.
 ///
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
+#include "MSILTargetMachine.h"
 #include "MSILUtilities.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/LLVMContext.h"
@@ -268,5 +280,10 @@ static bool addMissingPrototypes(Module &M) {
 }
 
 bool MSILAddMissingPrototypesLegacy::runOnModule(Module &M) {
+  // Asked here, when the pass runs, not when it is added (see the file
+  // comment).
+  if (auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();
+      TPC && TPC->getTM<MSILTargetMachine>().isObjectMode())
+    return false;
   return addMissingPrototypes(M);
 }

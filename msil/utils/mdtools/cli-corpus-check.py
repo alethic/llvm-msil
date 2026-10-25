@@ -14,7 +14,7 @@
         [--cil-copy PATH] [--ilverify PATH] [--peverify PATH]
         [--ildasm-framework PATH] [--ildasm-nuget PATH] [--jitall DIR]
         [--wsl-distro NAME] [--wsl-dotnet PATH] [--llc PATH]
-        [--min-methods N] <dir-or-.c>...
+        [--min-methods N] [--llvm-nm PATH] [--llvm-ar PATH] <dir-or-.c>...
 
 Inputs are C programs: a .c file named on the command line, or every .c file
 under a directory (recursively) that has a <stem>.expected beside it, as in
@@ -172,6 +172,81 @@ copied once with 'llvm-cil-copy <image> -o <work>/copies/run1/<file>'
           than --min-methods methods (default 1) fails the mode; the first
           differences of each method are printed.
 
+The modes of plan M19 (5.7.11, 5.12.6) check CIL objects (plan 5.8.2-5.8.8:
+an ECMA-335 netmodule, the link-info record v1 in the Module row's custom
+attribute, and the COFF symbol view). Each program is compiled at each level
+with 'clang -c' and the flags above.
+
+  object  The object oracle of plan 5.12.6, canon(clang -c) ==
+          canon(ilasm(object-form text)) (leg obj-text of lit-legs.ps1).
+          In <work>/object/<triple>, each program at each level is compiled
+            - with 'clang -c' twice, into obj1/<name>.<level>.o (an absolute
+              -o) and, from the directory obj2/<name>.<level>, into the
+              relative 'again.o': the two objects must be byte-identical
+              (determinism; plan 5.8.2 O3 and O4);
+            - with '-S -mllvm -msil-object-form' (object-form text, plan
+              5.8.4), which the .NET Framework ilasm (-nologo -quiet -dll
+              -pe64 -x64; the NuGet ilasm off Windows) assembles into an
+              object of its own.
+          Then each clang object, and ilasm's object where a check names it,
+          is checked:
+            - canonical: 'llvm-cil-dump --canonical --params=drop
+              --initlocals=ignore-without-locals --snan=quiet' (5.12.6's
+              entries ilasm-params, ilasm-initlocals and snan-quiet) prints
+              byte-equal listings of the two objects; the record travels in
+              the Module row's custom attribute, so its bytes are compared;
+            - link-info: the unnormalized 'llvm-cil-dump --link-info' of the
+              two objects is byte-equal;
+            - mdcanon: one 'mdcanon --out-dir' batch over every object
+              (System.Reflection.Metadata opens it) prints the listing of
+              'llvm-cil-dump --canonical', both with the default options;
+            - envelope, from 'llvm-cil-dump --headers' and the default
+              listing: the machine of the triple's architecture (0x8664 for
+              x86_64, 0xAA64 for aarch64), a PE32+ dll with characteristics
+              0x2022 and entry point token 0 (O1), the sections .text, .data,
+              .rdata and .bss, the last three with the marker flags of plan
+              5.8.6 (0xC0000040, 0x40000040, 0xC0000080) and no size or raw
+              data, one COFF symbol per SYMTAB symbol (5.8.6), the module row
+              'module '<file name of the source>'' (O3) and no
+              '.maxstack <n> initlocals' (O7);
+            - consistency: C1-C5 and C7 of plan 5.8.5 hold between
+              'llvm-cil-dump --tables' and '--link-info', for the clang
+              object and for ilasm's object (whose rows ilasm numbers by R6,
+              so the record's tokens must name them too);
+            - llvm-nm: 'llvm-nm --no-sort' (--llvm-nm, default
+              <build>/bin/llvm-nm[.exe]) lists one symbol per SYMTAB symbol,
+              in SYMTAB order, with the letter of plan 5.8.6 applied to the
+              record: U undefined, C common, T a defined function (aliases
+              included), R, B and D defined data in a READONLY, a ZERO or
+              another segment (a data alias takes its aliasee's segment),
+              lower case for LOCAL;
+            - llvm-ar: the index of 'llvm-ar rcs <name>.<level>.a <object>'
+              (--llvm-ar, default <build>/bin/llvm-ar[.exe]), read with
+              'llvm-nm --print-armap', lists exactly the defined non-local
+              symbols and the commons;
+            - ildasm, at every level: the .NET Framework ildasm ('-text
+              -nobar -utf8', --ildasm-framework) and the NuGet ildasm at
+              MsilILAsmVersion ('-utf8', --ildasm-nuget; the only one off
+              Windows) open the object: exit status 0, no 'error :' line and
+              one '.method' line per MethodDef row.
+          A failing step skips the later checks of its object, which count
+          as failed. The mode fails unless every check of every object
+          passes (and at least one object was built).
+
+  gnu-tools  GNU nm and ar read the COFF view (judge-dotnet-value J2, with
+          the marker sections of plan 5.8.6; leg obj-text-wsl of
+          lit-legs.ps1 -Wsl). In <work>/gnu-tools/<triple>, each program at
+          each level is compiled with 'clang -c' into obj/<name>.<level>.o
+          and listed with 'llvm-nm --no-sort' and 'llvm-cil-dump
+          --link-info'. One bash script then runs, inside WSL on Windows
+          (--wsl-distro, default Ubuntu) and natively elsewhere: 'nm -p' on
+          every object, and for each level 'ar rcs <level>.a' of that
+          level's objects, 'ar t <level>.a' and 'nm -p -s <level>.a'. GNU nm
+          must print llvm-nm's letters and names in llvm-nm's order, 'ar t'
+          must list the objects in order, and the 'Archive index:' of 'nm
+          -s' must list exactly the defined non-local symbols and the commons
+          of each member, as its record gives them.
+
 Every mode ends with a summary line '<script>: <mode>: <n> of <m> ...'. Exit
 status: 0 when every requested mode passes; 2 on a usage error (an unknown
 option or mode, a bad --levels value, a --work inside the repository, a
@@ -179,9 +254,9 @@ triple whose OS does not run on this host with --mode copy, a --jobs or
 --min-methods below 1, or inputs that are not directories or .c files or
 hold no C programs), which is reported before anything runs; 1 when a mode
 fails or a tool is missing or cannot be set up (dotnet, clang, llc, mdtools,
-either ilasm, llvm-cil-dump, llvm-cil-copy, the verifiers, jitall, the
-runtimes or WSL that a mode needs). dotnet is found as build-mdtools.py
-finds it.
+either ilasm or ildasm, llvm-cil-dump, llvm-cil-copy, llvm-nm, llvm-ar, the
+verifiers, jitall, the runtimes, WSL, or GNU nm and ar that a mode needs).
+dotnet is found as build-mdtools.py finds it.
 """
 
 import argparse
@@ -193,6 +268,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -696,6 +772,30 @@ class Context:
     def cil_copy(self):
         return self.built_tool("cil_copy", "llvm-cil-copy")
 
+    def llvm_nm(self):
+        return self.built_tool("llvm_nm", "llvm-nm")
+
+    def llvm_ar(self):
+        return self.built_tool("llvm_ar", "llvm-ar")
+
+    def clang_compile(self, clang, program, level, mode_args, out, cwd=None):
+        """clang with %{msil_cflags} of program at level, with mode_args (-c,
+        or -S and its options), into out (relative to cwd when cwd is given);
+        CheckError on failure."""
+        target = os.path.join(cwd, out) if cwd else out
+        if os.path.exists(target):
+            os.remove(target)
+        cmd = [clang, "--target=" + self.triple] + CFLAGS
+        cmd += ["-I", os.path.join(REPO, "msil", "test", "Inputs"), "-" + level]
+        cmd += list(mode_args) + [program.source, "-o", out]
+        rc, text = run(cmd, 600, cwd=cwd)
+        if rc != 0 or not os.path.isfile(target):
+            raise CheckError(
+                "clang -%s %s %s failed (%s):\n%s"
+                % (level, " ".join(mode_args), program.source, rc, tail(text))
+            )
+        return target
+
     def jitall(self):
         """The directory of jitall.dll: --jitall, else
         <build>/tools/msil/jitall. As msil/test/lit.cfg.py does, it is built
@@ -860,7 +960,9 @@ class Context:
         )
         path = shutil.which("wsl.exe") or os.path.join(windir, "System32", "wsl.exe")
         if not os.path.isfile(path):
-            raise SetupError("wsl.exe not found: the WSL runs of --mode copy need WSL")
+            raise SetupError(
+                "wsl.exe not found: the WSL runs of --mode copy and --mode gnu-tools need WSL"
+            )
         return path
 
     def wsl_dotnet(self):
@@ -2746,7 +2848,1173 @@ class EncoderMode(Mode):
         return None  # other classes: the table alone (no Phase 1 code has them)
 
 
-MODES = {m.name: m for m in (IlasmMode, DumpersMode, CopyMode, StatsMode, EncoderMode)}
+# ---------------------------------------------------------------- object modes
+#
+# --mode object and --mode gnu-tools (plan M19.f): CIL objects, ECMA-335
+# netmodules with the link-info record v1 and the COFF symbol view (plan
+# 5.8.2-5.8.8), written by 'clang -c'. Everything that is read from a dump
+# is kept as bytes, as the encoder mode keeps it.
+
+# 5.12.6's normalizations of the object oracle: the entries ilasm-params,
+# ilasm-initlocals and snan-quiet.
+OBJECT_NORMALIZE = [
+    "--params=drop",
+    "--initlocals=ignore-without-locals",
+    "--snan=quiet",
+]
+# 5.8.2 O1: the COFF Machine of each triple architecture, and the
+# characteristics EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE | DLL.
+OBJECT_MACHINES = {"x86_64": 0x8664, "aarch64": 0xAA64}
+OBJECT_CHARACTERISTICS = 0x2022
+# 5.8.6: the sections of a CIL object, .text and then the COFF view's marker
+# sections with their flags (no size, no raw data).
+OBJECT_SECTIONS = [
+    (b".text", None),
+    (b".data", 0xC0000040),
+    (b".rdata", 0x40000040),
+    (b".bss", 0xC0000080),
+]
+# 5.8.3 and MSILLink.h: the scaffolding rows that C5 and C7 name.
+EXTERN_ASSEMBLY = b"msil.extern"
+SYMBOLS_TYPE = b"<msil>Symbols"
+FNADDR_TYPE = b"<msil>FnAddr"
+UNRESOLVED_MODULE = b"msil.unresolved"
+TABLE_FIELD = 0x04
+TABLE_METHODDEF = 0x06
+TABLE_MEMBERREF = 0x0A
+OBJ_SHOWN_PER_CHECK = 12  # lines of a difference printed for one check
+
+LI_HEADER_RE = re.compile(rb"^LinkInfo v\d+\.\d+ ")
+LI_SYMBOL_RE = re.compile(
+    rb"^Symbol (\d+) (\S+) (\S+) (\S+)((?: (?:[A-Z][A-Z_]*|0x[0-9A-F]+))*) "
+    rb"'((?:[^'\\]|\\.)*)'(.*)$"
+)
+LI_SEGMENT_RE = re.compile(
+    rb"^Segment (\d+) '(?:[^'\\]|\\.)*' align=\S+ size=\d+ flags=(\S+)$"
+)
+LI_SIGNATURE_RE = re.compile(rb"^Signature 0x([0-9A-F]{8})\b")
+LI_QUOTED_RE = re.compile(rb"'(?:[^'\\]|\\.)*'")
+DUMP_FORMAT_RE = re.compile(rb"^Format: (\S+) machine=0x([0-9A-F]+) (\S+)$")
+DUMP_COFF_RE = re.compile(
+    rb"^COFF: sections=(\d+) timestamp=0x[0-9A-F]+ characteristics=0x([0-9A-F]+) "
+    rb"symbols=(\d+)$"
+)
+DUMP_SECTION_RE = re.compile(
+    rb"^Section: (\S*) rva=0x[0-9A-F]+ vsize=0x([0-9A-F]+) raw=0x([0-9A-F]+) "
+    rb"rawsize=0x([0-9A-F]+) flags=0x([0-9A-F]+)$"
+)
+DUMP_CLI_RE = re.compile(rb"^CLI: flags=0x[0-9A-F]+ entrypoint=0x([0-9A-F]+) ")
+# One symbol line of llvm-nm or GNU nm: an optional value, the letter, the
+# name (names of C symbols have no blanks); llvm-nm prints a bitcode
+# symbol's value as dashes.
+NM_LINE_RE = re.compile(rb"^\s*([0-9A-Fa-f-]*)\s+(\S)\s(\S.*)$")
+ARMAP_LINE_RE = re.compile(rb"^(\S.*) in (\S.*)$")
+ILDASM_ERROR_RE = re.compile(rb"^\s*error\s*:", re.I | re.M)
+ILDASM_METHOD_RE = re.compile(rb"^\s*\.method\b", re.M)
+
+
+def quote_dump_string(name):
+    """name (bytes) in llvm-cil-dump's quoting (plan 5.7.10), with quotes."""
+    out = bytearray(b"'")
+    for b in name:
+        if b == 0x5C:
+            out += b"\\\\"
+        elif b == 0x27:
+            out += b"\\'"
+        elif b < 0x20 or b == 0x7F:
+            out += b"\\x%02X" % b
+        else:
+            out.append(b)
+    return bytes(out + b"'")
+
+
+def show(name):
+    return name.decode("utf-8", "replace")
+
+
+class LinkSymbol:
+    """One 'Symbol' line of 'llvm-cil-dump --link-info'."""
+
+    def __init__(self, m):
+        self.kind = m.group(2)  # FUNCTION or DATA
+        self.binding = m.group(3)  # GLOBAL, WEAK, LOCAL or COMMON
+        self.flags = set(m.group(5).split())
+        self.name = unescape_dump_string(m.group(6))
+        rest = LI_QUOTED_RE.sub(b"''", m.group(7))
+        token = re.search(rb" (?:method|field)=0x([0-9A-F]{8})\b", rest)
+        self.token = int(token.group(1), 16) if token else None
+        segment = re.search(rb" segment=(\d+)\b", rest)
+        self.segment = int(segment.group(1)) if segment else None
+        aliasee = re.search(rb" aliasee=(\d+)\b", rest)
+        self.aliasee = int(aliasee.group(1)) if aliasee else None
+
+    @property
+    def undefined(self):
+        return b"UNDEFINED" in self.flags
+
+    @property
+    def alias(self):
+        return b"ALIAS" in self.flags
+
+    @property
+    def common(self):
+        return self.binding == b"COMMON"
+
+    @property
+    def function(self):
+        return self.kind == b"FUNCTION"
+
+
+class LinkInfo:
+    """The record of a CIL object as 'llvm-cil-dump --link-info' prints it
+    (printLinkInfo, plan 5.8.11): its symbols, segment flags and SIGNATURES
+    tokens."""
+
+    def __init__(self, text):
+        self.symbols = []
+        self.segments = {}
+        self.signatures = []
+        header = False
+        for line in text.split(b"\n"):
+            line = line.rstrip(b"\r")
+            if LI_HEADER_RE.match(line):
+                header = True
+                continue
+            m = LI_SYMBOL_RE.match(line)
+            if m:
+                self.symbols.append(LinkSymbol(m))
+                continue
+            m = LI_SEGMENT_RE.match(line)
+            if m:
+                self.segments[int(m.group(1))] = set(m.group(2).split(b"|"))
+                continue
+            m = LI_SIGNATURE_RE.match(line)
+            if m:
+                self.signatures.append(int(m.group(1), 16))
+        if not header:
+            raise CheckError("the --link-info output has no 'LinkInfo v' line")
+        self.by_name = {}
+        for s in self.symbols:
+            self.by_name.setdefault(s.name, s)
+
+    def nm_letter(self, s):
+        """The llvm-nm letter of plan 5.8.6 for symbol s."""
+        if s.undefined:
+            return b"U"
+        if s.common:
+            return b"C"
+        if s.function:
+            letter = b"T"
+        else:
+            segment = s.segment
+            if s.alias:
+                target = (
+                    self.symbols[s.aliasee]
+                    if s.aliasee is not None and s.aliasee < len(self.symbols)
+                    else None
+                )
+                segment = target.segment if target else None
+            flags = self.segments.get(segment, set()) if segment is not None else set()
+            if b"READONLY" in flags:
+                letter = b"R"
+            elif b"ZERO" in flags:
+                letter = b"B"
+            else:
+                letter = b"D"
+        return letter.lower() if s.binding == b"LOCAL" else letter
+
+    def nm_lines(self):
+        """[(letter, name)] of llvm-nm --no-sort: one per symbol, in SYMTAB
+        order."""
+        return [(self.nm_letter(s), s.name) for s in self.symbols]
+
+    def index_names(self):
+        """The names an archive index lists: the defined non-local symbols
+        and the commons, sorted."""
+        return sorted(
+            s.name for s in self.symbols if not s.undefined and s.binding != b"LOCAL"
+        )
+
+
+def parse_nm(text):
+    """[(letter, name)] of the symbol lines of nm output for one file."""
+    found = []
+    for line in text.split(b"\n"):
+        line = line.rstrip(b"\r")
+        if not line.strip():
+            continue
+        m = NM_LINE_RE.match(line)
+        if not m:
+            raise CheckError("cannot read the nm line %r" % show(line))
+        found.append((m.group(2), m.group(3)))
+    return found
+
+
+def parse_armap(text, heading):
+    """[(symbol, member)] of the archive index that follows the line
+    heading ('Archive map' for llvm-nm --print-armap, 'Archive index:' for
+    GNU nm -s), up to the next empty line; [] without the heading."""
+    lines = [l.rstrip(b"\r") for l in text.split(b"\n")]
+    if heading not in lines:
+        return []
+    found = []
+    for line in lines[lines.index(heading) + 1 :]:
+        if not line.strip():
+            break
+        m = ARMAP_LINE_RE.match(line)
+        if not m:
+            raise CheckError("cannot read the archive index line %r" % show(line))
+        found.append((m.group(1), m.group(2)))
+    return found
+
+
+def nm_difference(want, got, want_label, got_label):
+    """None when the two [(letter, name)] lists are equal, else the first
+    difference."""
+    if want == got:
+        return None
+    rows = ["%s: %d symbols, %s: %d" % (want_label, len(want), got_label, len(got))]
+    for i in range(max(len(want), len(got))):
+        a = want[i] if i < len(want) else None
+        b = got[i] if i < len(got) else None
+        if a != b:
+            rows.append(
+                "first difference at symbol %d: %s %s, %s %s"
+                % (
+                    i,
+                    want_label,
+                    "%s %s" % (show(a[0]), show(a[1])) if a else "(none)",
+                    got_label,
+                    "%s %s" % (show(b[0]), show(b[1])) if b else "(none)",
+                )
+            )
+            break
+    return "; ".join(rows)
+
+
+def index_difference(want, got, label):
+    """None when the two sorted lists are equal, else what is missing and
+    what is extra."""
+    if want == got:
+        return None
+    missing, extra = list(want), []
+    for x in got:
+        if x in missing:
+            missing.remove(x)
+        else:
+            extra.append(x)
+
+    def text(items):
+        names = [
+            " in ".join(show(p) for p in x) if isinstance(x, tuple) else show(x)
+            for x in items[:OBJ_SHOWN_PER_CHECK]
+        ]
+        more = len(items) - len(names)
+        return ", ".join(names) + (" and %d more" % more if more > 0 else "")
+
+    rows = []
+    if missing:
+        rows.append("%s lacks %s" % (label, text(missing)))
+    if extra:
+        rows.append("%s also lists %s" % (label, text(extra)))
+    return "; ".join(rows)
+
+
+def split_dump(data):
+    """(headers and tables, link-info) of 'llvm-cil-dump --headers --tables
+    --link-info' output: the link-info lines start at the 'LinkInfo v' line."""
+    lines = data.split(b"\n")
+    for i, line in enumerate(lines):
+        if LI_HEADER_RE.match(line):
+            return b"\n".join(lines[:i]), b"\n".join(lines[i:])
+    raise CheckError("the dump has no 'LinkInfo v' line (no link-info record)")
+
+
+def check_envelope(dump, li, arch, listing, source):
+    """5.8.2's envelope and 5.8.6's section table and symbol count, from
+    '--headers' (dump), the record (li) and the default canonical listing:
+    a list of problems."""
+    problems = []
+    fmt = coff = cli = None
+    sections = []
+    for line in dump.split(b"\n"):
+        line = line.rstrip(b"\r")
+        fmt = fmt or DUMP_FORMAT_RE.match(line)
+        coff = coff or DUMP_COFF_RE.match(line)
+        cli = cli or DUMP_CLI_RE.match(line)
+        m = DUMP_SECTION_RE.match(line)
+        if m:
+            sections.append(m)
+    if not fmt or not coff or not cli:
+        return ["the --headers output lacks its Format, COFF or CLI line"]
+    machine = OBJECT_MACHINES.get(arch)
+    if fmt.group(1) != b"PE32+" or fmt.group(3) != b"dll":
+        problems.append(
+            "O1: %s %s, not a PE32+ dll" % (show(fmt.group(1)), show(fmt.group(3)))
+        )
+    if machine is not None and int(fmt.group(2), 16) != machine:
+        problems.append(
+            "O1: machine 0x%s, not 0x%04X for %s" % (show(fmt.group(2)), machine, arch)
+        )
+    if int(coff.group(2), 16) != OBJECT_CHARACTERISTICS:
+        problems.append(
+            "O1: characteristics 0x%s, not 0x%04X"
+            % (show(coff.group(2)), OBJECT_CHARACTERISTICS)
+        )
+    if int(cli.group(1), 16) != 0:
+        problems.append("O1: entry point token 0x%s, not 0" % show(cli.group(1)))
+    names = [m.group(1) for m in sections]
+    if names != [n for n, _ in OBJECT_SECTIONS]:
+        problems.append(
+            "O1: sections %s, not %s"
+            % (
+                " ".join(show(n) for n in names),
+                " ".join(show(n) for n, _ in OBJECT_SECTIONS),
+            )
+        )
+    else:
+        for m, (name, flags) in zip(sections, OBJECT_SECTIONS):
+            if flags is None:
+                continue
+            sizes = [int(m.group(i), 16) for i in (2, 3, 4)]
+            if int(m.group(5), 16) != flags or any(sizes):
+                problems.append(
+                    "5.8.6: marker section %s has vsize=0x%X raw=0x%X rawsize=0x%X "
+                    "flags=0x%s, not flags 0x%08X without size or raw data"
+                    % (
+                        show(name),
+                        sizes[0],
+                        sizes[1],
+                        sizes[2],
+                        show(m.group(5)),
+                        flags,
+                    )
+                )
+    if int(coff.group(3)) != len(li.symbols):
+        problems.append(
+            "5.8.6: %s COFF symbol(s) for %d SYMTAB symbol(s)"
+            % (show(coff.group(3)), len(li.symbols))
+        )
+    module = b"module " + quote_dump_string(os.path.basename(source).encode("utf-8"))
+    rows = [l.rstrip(b"\r") for l in listing.split(b"\n")]
+    if module not in rows:
+        found = [l for l in rows if l.startswith(b"module '")]
+        problems.append(
+            "O3: the module row is %s, not %s"
+            % (show(found[0]) if found else "missing", show(module))
+        )
+    initlocals = [l for l in rows if re.match(rb"^\s+\.maxstack \d+ initlocals$", l)]
+    if initlocals:
+        problems.append("O7: %d method body(ies) set InitLocals" % len(initlocals))
+    return problems
+
+
+def module_range(image, table, column):
+    """The rows of <Module> (TypeDef row 1) in table (its first row from
+    column, up to the next TypeDef's)."""
+    types = image.tables.get("TypeDef", {})
+    count = len(image.tables.get(table, {}))
+    if 1 not in types:
+        return range(0)
+    first = int(types[1].get(column, b"0"), 16) & 0xFFFFFF or 1
+    last = count
+    if 2 in types:
+        last = (int(types[2].get(column, b"0"), 16) & 0xFFFFFF or count + 1) - 1
+    return range(first, last + 1)
+
+
+def check_consistency(image, li):
+    """C1-C5 and C7 of plan 5.8.5 between the tables (an ILImage of
+    '--tables') and the record (LinkInfo): a list of problems."""
+    problems = []
+    methods = image.tables.get("MethodDef", {})
+    fields = image.tables.get("Field", {})
+    memberrefs = image.tables.get("MemberRef", {})
+
+    def token_row(token, table_id, rows):
+        if token is None or token >> 24 != table_id:
+            return None
+        return rows.get(token & 0xFFFFFF)
+
+    # C1 and C2: each defined (or COMMON) non-alias symbol's token.
+    module_fields = module_range(image, "Field", "FieldList")
+    for s in li.symbols:
+        if s.undefined or s.alias:
+            continue
+        if s.function and not s.common:
+            row = token_row(s.token, TABLE_METHODDEF, methods)
+            if row is None:
+                problems.append(
+                    "C1: FUNCTION '%s' has token %s, which is no MethodDef"
+                    % (show(s.name), "0x%08X" % s.token if s.token else "none")
+                )
+            elif int(row.get("RVA", b"0"), 16) == 0:
+                problems.append(
+                    "C1: FUNCTION '%s' names MethodDef 0x%08X, which has no body"
+                    % (show(s.name), s.token)
+                )
+            elif row.get("Name") != s.name:
+                problems.append(
+                    "C1: FUNCTION '%s' names MethodDef 0x%08X '%s'"
+                    % (show(s.name), s.token, show(row.get("Name", b"")))
+                )
+        elif not s.function:
+            row = token_row(s.token, TABLE_FIELD, fields)
+            if row is None:
+                problems.append(
+                    "C2: DATA '%s' has token %s, which is no FieldDef"
+                    % (show(s.name), "0x%08X" % s.token if s.token else "none")
+                )
+            elif (s.token & 0xFFFFFF) not in module_fields:
+                problems.append(
+                    "C2: DATA '%s' names FieldDef 0x%08X, which <Module> does not own"
+                    % (show(s.name), s.token)
+                )
+            elif row.get("Signature") != b"06 18" or row.get("Name") != s.name:
+                problems.append(
+                    "C2: DATA '%s' names FieldDef 0x%08X '%s' with signature %s, not "
+                    "'%s' with 06 18 (FIELD native int)"
+                    % (
+                        show(s.name),
+                        s.token,
+                        show(row.get("Name", b"")),
+                        show(row.get("Signature", b"")),
+                        show(s.name),
+                    )
+                )
+
+    # C3: every MethodDef with a body and every FieldDef is the token of
+    # exactly one symbol of its kind.
+    owners = {}
+    for s in li.symbols:
+        if s.token is not None and not s.undefined and not s.alias:
+            owners.setdefault((s.function, s.token), []).append(s.name)
+    for number, row in sorted(methods.items()):
+        if int(row.get("RVA", b"0"), 16) == 0:
+            continue
+        token = (TABLE_METHODDEF << 24) | number
+        names = owners.get((True, token), [])
+        if len(names) != 1:
+            problems.append(
+                "C3: MethodDef 0x%08X '%s' is the token of %d FUNCTION symbols"
+                % (token, show(row.get("Name", b"")), len(names))
+            )
+    for number, row in sorted(fields.items()):
+        token = (TABLE_FIELD << 24) | number
+        names = owners.get((False, token), [])
+        if len(names) != 1:
+            problems.append(
+                "C3: FieldDef 0x%08X '%s' is the token of %d DATA symbols"
+                % (token, show(row.get("Name", b"")), len(names))
+            )
+
+    # C4: every body-less MethodDef is an import stub of an UNDEFINED
+    # FUNCTION; the stubs of one symbol agree on module and import name.
+    implmaps = {}
+    for row in image.tables.get("ImplMap", {}).values():
+        implmaps[int(row.get("MemberForwarded", b"0"), 16)] = row
+    modulerefs = image.tables.get("ModuleRef", {})
+    stubs = {}
+    for number, row in sorted(methods.items()):
+        if int(row.get("RVA", b"0"), 16) != 0:
+            continue
+        token = (TABLE_METHODDEF << 24) | number
+        name = row.get("Name", b"")
+        implmap = implmaps.get(token)
+        if implmap is None:
+            problems.append(
+                "C4: body-less MethodDef 0x%08X '%s' has no ImplMap row"
+                % (token, show(name))
+            )
+            continue
+        scope = int(implmap.get("ImportScope", b"0"), 16)
+        moduleref = modulerefs.get(scope & 0xFFFFFF) if scope >> 24 == 0x1A else None
+        module = moduleref.get("Name", b"") if moduleref else None
+        entry = implmap.get("ImportName", b"")
+        s = li.by_name.get(name)
+        if s is None or not s.function or not s.undefined:
+            problems.append(
+                "C4: import stub 0x%08X '%s' is no UNDEFINED FUNCTION symbol"
+                % (token, show(name))
+            )
+            continue
+        explicit = b"EXPLICIT_IMPORT" in s.flags
+        if module is None:
+            problems.append(
+                "C4: the ImplMap of stub '%s' names no ModuleRef" % show(name)
+            )
+        elif (module == UNRESOLVED_MODULE) == explicit:
+            problems.append(
+                "C4: stub '%s' on module '%s' %s EXPLICIT_IMPORT"
+                % (show(name), show(module), "has" if explicit else "lacks")
+            )
+        if not entry:
+            problems.append("C4: stub '%s' has an empty import name" % show(name))
+        stubs.setdefault(name, set()).add((module, entry))
+    for name, forms in sorted(stubs.items()):
+        if len(forms) > 1:
+            problems.append(
+                "C4: the stubs of '%s' name %s"
+                % (
+                    show(name),
+                    ", ".join(
+                        "'%s' as '%s'" % (show(m or b"?"), show(e))
+                        for m, e in sorted(forms)
+                    ),
+                )
+            )
+
+    # C5: the placeholder MemberRefs name symbols of the matching kind.
+    def placeholder(parent):
+        """'symbols', 'fnaddr' or None for a MemberRef's Class."""
+        value = int(parent or b"0", 16)
+        if value >> 24 != 0x01:
+            return None
+        row = image.row("TypeRef", value & 0xFFFFFF)
+        if not row or row.get("TypeNamespace", b"") != b"":
+            return None
+        if image.type_scope("0x%08X" % value) != EXTERN_ASSEMBLY:
+            return None
+        return {SYMBOLS_TYPE: "symbols", FNADDR_TYPE: "fnaddr"}.get(row.get("TypeName"))
+
+    symbols_refs = {}
+    for number, row in sorted(memberrefs.items()):
+        kind = placeholder(row.get("Class"))
+        if kind is None:
+            continue
+        name = row.get("Name", b"")
+        sig_kind = image.member_kind(row.get("Signature", b""))
+        s = li.by_name.get(name)
+        if kind == "symbols":
+            symbols_refs[number] = sig_kind
+            want_function = sig_kind == "method"
+            if s is None or s.function != want_function:
+                problems.append(
+                    "C5: MemberRef 0x%08X '%s' on '<msil>Symbols' (%s signature) names "
+                    "no %s symbol"
+                    % (
+                        (TABLE_MEMBERREF << 24) | number,
+                        show(name),
+                        sig_kind or "unknown",
+                        "FUNCTION" if want_function else "DATA",
+                    )
+                )
+        elif s is None or not s.function:
+            problems.append(
+                "C5: MemberRef 0x%08X '%s' on '<msil>FnAddr' names no FUNCTION symbol"
+                % ((TABLE_MEMBERREF << 24) | number, show(name))
+            )
+
+    # C7: SIGNATURES tokens are MethodDefs or method MemberRefs on
+    # '<msil>Symbols', at most one entry per token.
+    seen = set()
+    for token in li.signatures:
+        if token in seen:
+            problems.append(
+                "C7: token 0x%08X has more than one SIGNATURES entry" % token
+            )
+        seen.add(token)
+        if token >> 24 == TABLE_METHODDEF and (token & 0xFFFFFF) in methods:
+            continue
+        if (
+            token >> 24 == TABLE_MEMBERREF
+            and symbols_refs.get(token & 0xFFFFFF) == "method"
+        ):
+            continue
+        problems.append(
+            "C7: SIGNATURES token 0x%08X is neither a MethodDef nor a method MemberRef "
+            "on '<msil>Symbols'" % token
+        )
+    return problems
+
+
+def ildasm_problem(text, rc, methods):
+    """None when an ildasm listing shows that the image opened: exit 0, no
+    error line and one '.method' per MethodDef row; else why not."""
+    if rc != 0:
+        return "exit status %s:\n%s" % (rc, tail(text.decode("utf-8", "replace")))
+    error = ILDASM_ERROR_RE.search(text)
+    if error:
+        line = text[error.start() : text.find(b"\n", error.start())]
+        return "it printed %r" % show(line.strip())
+    count = len(ILDASM_METHOD_RE.findall(text))
+    if count != methods:
+        return "%d .method line(s) for %d MethodDef row(s)" % (count, methods)
+    return None
+
+
+def to_wsl_path(path):
+    """C:\\x\\y -> /mnt/c/x/y (as msil-run.py translates paths)."""
+    full = os.path.realpath(os.path.abspath(path))
+    drive, rest = os.path.splitdrive(full)
+    if len(drive) != 2 or drive[1] != ":":
+        raise SetupError("cannot translate %r into a WSL path" % full)
+    return "/mnt/" + drive[0].lower() + rest.replace("\\", "/")
+
+
+class ObjectMode(Mode):
+    name = "object"
+    help = (
+        "canon(clang -c) == canon(ilasm(object-form text)); record, determinism, "
+        "SRM, ildasm, C1-C5/C7, llvm-nm, llvm-ar (M19)"
+    )
+    # The checks of one object, in report order.
+    CHECKS = (
+        "compile",
+        "determinism",
+        "ilasm",
+        "canonical",
+        "link-info",
+        "mdcanon",
+        "envelope",
+        "consistency",
+        "consistency of ilasm's object",
+        "llvm-nm",
+        "llvm-ar",
+        "ildasm",
+    )
+
+    @staticmethod
+    def add_arguments(parser):
+        parser.add_argument(
+            "--llvm-nm",
+            help="llvm-nm for --mode object and gnu-tools (default <build>/bin/llvm-nm%s)"
+            % EXE,
+        )
+        parser.add_argument(
+            "--llvm-ar",
+            help="llvm-ar for --mode object (default <build>/bin/llvm-ar%s)" % EXE,
+        )
+
+    def run(self, ctx):
+        start = time.time()
+        # Every tool first, so that a missing one is a setup error.
+        clang, cil_dump = ctx.clang(), ctx.cil_dump()
+        nm, ar = ctx.llvm_nm(), ctx.llvm_ar()
+        ilasm = ctx.image_ilasm()
+        ctx.mdtool("mdcanon")
+        ildasms = self.ildasms(ctx)
+        base = ctx.prepare(os.path.join("object", ctx.triple))
+        dirs = {
+            k: os.path.join(base, k)
+            for k in ("obj1", "obj2", "text", "ilasm", "canon", "dump", "ar")
+        }
+        for d in dirs.values():
+            os.makedirs(d)
+        items = ctx.items()
+        note(
+            "object: %d programs at %s for %s (%d objects) through clang -c and "
+            "-msil-object-form text assembled by %s, in %s"
+            % (
+                len(ctx.programs),
+                ",".join(ctx.levels),
+                ctx.triple,
+                len(items),
+                ilasm,
+                base,
+            )
+        )
+        arch = ILASM_ARCH_FLAGS.get(ctx.arch, [])
+
+        def dump(args, path, out):
+            rc, data, err = run_split([cil_dump] + args + [path], 600)
+            if rc != 0:
+                raise CheckError(
+                    "llvm-cil-dump %s %s failed (%s):\n%s"
+                    % (" ".join(args), path, rc, tail(err))
+                )
+            with open(out, "wb") as f:
+                f.write(data)
+            return data
+
+        def differ(what, a, b, a_data, b_data):
+            """None when a_data == b_data, else the first difference of the
+            files a (clang -c) and b (ilasm)."""
+            if a_data == b_data:
+                return None
+            return "%s differ:\n%s" % (
+                what,
+                first_difference(
+                    a, b, "clang -c", "ilasm(object-form text)", OBJ_SHOWN_PER_CHECK + 4
+                ),
+            )
+
+        def one(item):
+            """({check: None or why}, the default listing or None) of one
+            program and level. A failing step ends the item; its later
+            checks count as not run."""
+            p, level = item
+            stem = "%s.%s" % (p.name, level)
+            results = {}
+            listing_path = None
+            obj = os.path.join(dirs["obj1"], stem + ".o")
+            again_dir = os.path.join(dirs["obj2"], stem)
+            os.makedirs(again_dir)
+            text = os.path.join(dirs["text"], stem + ".il")
+            theirs = os.path.join(dirs["ilasm"], stem + ".o")
+
+            def out(d, suffix):
+                return os.path.join(dirs[d], stem + suffix)
+
+            step = "compile"
+            try:
+                # Two objects: an absolute -o, and a relative one from
+                # another directory (5.8.2 O3, O4).
+                ctx.clang_compile(clang, p, level, ["-c"], obj)
+                ctx.clang_compile(clang, p, level, ["-c"], "again.o", cwd=again_dir)
+                ctx.clang_compile(
+                    clang, p, level, ["-S", "-mllvm", "-msil-object-form"], text
+                )
+                results["compile"] = None
+                again = os.path.join(again_dir, "again.o")
+                results["determinism"] = (
+                    None
+                    if same_bytes(obj, again)
+                    else "%s and %s differ (plan 5.8.2 O3, O4)" % (obj, again)
+                )
+                step = "ilasm"
+                cmd = [ilasm, "-nologo", "-quiet", "-dll"] + arch
+                rc, log = run(cmd + ["-output=" + theirs, text], 600)
+                if rc != 0 or not os.path.isfile(theirs):
+                    raise CheckError(
+                        "ilasm %s failed (%s):\n%s" % (text, rc, tail(log))
+                    )
+                results["ilasm"] = None
+                # The object oracle (5.12.6): equal normalized listings, the
+                # record's bytes included.
+                step = "canonical"
+                options = ["--canonical"] + OBJECT_NORMALIZE
+                a, b = out("canon", ".clang.canon"), out("canon", ".ilasm.canon")
+                results["canonical"] = differ(
+                    "the listings",
+                    a,
+                    b,
+                    dump(options, obj, a),
+                    dump(options, theirs, b),
+                )
+                step = "link-info"
+                ours = dump(
+                    ["--headers", "--tables", "--link-info"],
+                    obj,
+                    out("dump", ".clang.txt"),
+                )
+                other = dump(
+                    ["--tables", "--link-info"], theirs, out("dump", ".ilasm.txt")
+                )
+                headers, ours_li = split_dump(ours)
+                other_tables, other_li = split_dump(other)
+                a, b = out("dump", ".clang.link-info"), out("dump", ".ilasm.link-info")
+                for path, data in ((a, ours_li), (b, other_li)):
+                    with open(path, "wb") as f:
+                        f.write(data)
+                results["link-info"] = differ(
+                    "the --link-info outputs", a, b, ours_li, other_li
+                )
+                step = "envelope"
+                listing_path = out("canon", ".default.canon")
+                listing = dump(["--canonical"], obj, listing_path)
+                li = LinkInfo(ours_li)
+                image = ILImage(headers, b"")
+                results["envelope"] = (
+                    "; ".join(check_envelope(headers, li, ctx.arch, listing, p.source))
+                    or None
+                )
+                step = "consistency"
+                results["consistency"] = (
+                    "; ".join(check_consistency(image, li)[:OBJ_SHOWN_PER_CHECK])
+                    or None
+                )
+                step = "consistency of ilasm's object"
+                results[step] = (
+                    "; ".join(
+                        check_consistency(
+                            ILImage(other_tables, b""), LinkInfo(other_li)
+                        )[:OBJ_SHOWN_PER_CHECK]
+                    )
+                    or None
+                )
+                results["llvm-nm"] = self.check_nm(nm, obj, li)
+                results["llvm-ar"] = self.check_ar(ar, nm, obj, out("ar", ".a"), li)
+                step = "ildasm"
+                methods = len(image.tables.get("MethodDef", {}))
+                results["ildasm"] = self.check_ildasm(ildasms, obj, methods)
+            except CheckError as e:
+                results[step] = str(e)
+            return results, listing_path
+
+        with concurrent.futures.ThreadPoolExecutor(ctx.jobs) as pool:
+            outcomes = list(zip(items, pool.map(one, items)))
+        # SRM opens every object: one mdcanon --out-dir batch, with the
+        # default options, must print llvm-cil-dump --canonical's listing.
+        listed = {}
+        for (p, level), (results, listing_path) in outcomes:
+            if listing_path and os.path.isfile(listing_path):
+                path = os.path.join(dirs["obj1"], "%s.%s.o" % (p.name, level))
+                listed[path] = (results, listing_path)
+        reference = (
+            ctx.mdcanon_batch(sorted(listed), os.path.join(base, "mdcanon"))
+            if listed
+            else {}
+        )
+        for path, (results, listing_path) in listed.items():
+            got = reference.get(path)
+            if isinstance(got, CheckError):
+                results["mdcanon"] = str(got)
+            elif same_bytes(got, listing_path):
+                results["mdcanon"] = None
+            else:
+                results["mdcanon"] = "the listings differ:\n" + first_difference(
+                    got,
+                    listing_path,
+                    "mdcanon",
+                    "llvm-cil-dump",
+                    OBJ_SHOWN_PER_CHECK + 4,
+                )
+        counts = {c: [0, 0] for c in self.CHECKS}
+        passed = 0
+        for (p, level), (results, _) in outcomes:
+            failed, skipped = [], []
+            for c in self.CHECKS:
+                counts[c][1] += 1
+                if c not in results:
+                    skipped.append(c)
+                elif results[c] is None:
+                    counts[c][0] += 1
+                else:
+                    failed.append(c)
+            for c in failed:
+                note("object: FAIL %s -%s (%s): %s" % (p.name, level, c, results[c]))
+            if skipped:
+                note(
+                    "object: FAIL %s -%s: not run after that failure: %s"
+                    % (p.name, level, ", ".join(skipped))
+                )
+            passed += not failed and not skipped
+        note(
+            "object: %d of %d objects passed every check (%s at %s): %s; in %.0f s"
+            % (
+                passed,
+                len(items),
+                ctx.triple,
+                ",".join(ctx.levels),
+                ", ".join(
+                    "%s %d/%d" % (c, ok, total)
+                    for c, (ok, total) in counts.items()
+                    if total
+                ),
+                time.time() - start,
+            )
+        )
+        return len(items) > 0 and passed == len(items)
+
+    @staticmethod
+    def ildasms(ctx):
+        """[(label, ildasm, options)]: on Windows the .NET Framework ildasm
+        (-text sends its listing to the console) and the NuGet ildasm at
+        MsilILAsmVersion, elsewhere the NuGet ildasm."""
+        found = []
+        if IS_WINDOWS:
+            found.append(
+                (
+                    "the .NET Framework ildasm",
+                    ctx.ildasm_framework(),
+                    ["-text", "-nobar", "-utf8"],
+                )
+            )
+        found.append(("the NuGet ildasm", ctx.ildasm_nuget(), ["-utf8"]))
+        return found
+
+    @staticmethod
+    def check_ildasm(ildasms, obj, methods):
+        """None when every ildasm opens obj, else why not."""
+        problems = []
+        for label, tool, options in ildasms:
+            rc, data, err = run_split([tool] + options + [obj], 600)
+            why = ildasm_problem(data + err.encode("utf-8"), rc, methods)
+            if why:
+                problems.append("%s: %s" % (label, why))
+        return "; ".join(problems) or None
+
+    @staticmethod
+    def check_nm(nm, obj, li):
+        """llvm-nm --no-sort lists the record's symbols with 5.8.6's
+        letters, in SYMTAB order."""
+        rc, data, err = run_split([nm, "--no-sort", obj], 600)
+        if rc != 0:
+            return "llvm-nm %s failed (%s):\n%s" % (obj, rc, tail(err))
+        try:
+            got = parse_nm(data)
+        except CheckError as e:
+            return str(e)
+        return nm_difference(li.nm_lines(), got, "the record (5.8.6)", "llvm-nm")
+
+    @staticmethod
+    def check_ar(ar, nm, obj, archive, li):
+        """The index of 'llvm-ar rcs' of the object lists exactly its defined
+        non-local symbols and commons."""
+        if os.path.exists(archive):
+            os.remove(archive)
+        rc, out = run([ar, "rcs", archive, obj], 600)
+        if rc != 0 or not os.path.isfile(archive):
+            return "llvm-ar rcs %s failed (%s):\n%s" % (archive, rc, tail(out))
+        rc, data, err = run_split([nm, "--print-armap", archive], 600)
+        if rc != 0:
+            return "llvm-nm --print-armap %s failed (%s):\n%s" % (
+                archive,
+                rc,
+                tail(err),
+            )
+        try:
+            index = parse_armap(data, b"Archive map")
+        except CheckError as e:
+            return str(e)
+        member = os.path.basename(obj).encode("utf-8")
+        strays = sorted({m for _, m in index if m != member})
+        if strays:
+            return "the index names the members %s, not only %s" % (
+                ", ".join(show(m) for m in strays),
+                show(member),
+            )
+        return index_difference(
+            li.index_names(), sorted(s for s, _ in index), "the llvm-ar index"
+        )
+
+
+class GnuToolsMode(Mode):
+    name = "gnu-tools"
+    help = (
+        "GNU nm and ar (inside WSL on Windows) read the COFF view of CIL objects (M19)"
+    )
+
+    def run(self, ctx):
+        start = time.time()
+        # Every tool first, so that a missing one is a setup error.
+        clang, cil_dump, nm = ctx.clang(), ctx.cil_dump(), ctx.llvm_nm()
+        if IS_WINDOWS:
+            runner = [ctx.wsl_exe(), "-d", ctx.args.wsl_distro, "--exec", "bash"]
+            where, host_path = "WSL %s" % ctx.args.wsl_distro, to_wsl_path
+        else:
+            runner = ["bash"]
+            where, host_path = "this host", os.path.abspath
+        base = ctx.prepare(os.path.join("gnu-tools", ctx.triple))
+        obj_dir, out_dir = os.path.join(base, "obj"), os.path.join(base, "gnu")
+        os.makedirs(obj_dir)
+        os.makedirs(out_dir)
+        items = ctx.items()
+        note(
+            "gnu-tools: %d programs at %s for %s (%d objects) through clang -c, GNU nm "
+            "and ar on %s, in %s"
+            % (
+                len(ctx.programs),
+                ",".join(ctx.levels),
+                ctx.triple,
+                len(items),
+                where,
+                base,
+            )
+        )
+
+        def one(item):
+            """(object file name, llvm-nm lines, record) of one program and
+            level, or a CheckError."""
+            p, level = item
+            name = "%s.%s.o" % (p.name, level)
+            obj = os.path.join(obj_dir, name)
+            try:
+                ctx.clang_compile(clang, p, level, ["-c"], obj)
+                rc, data, err = run_split([nm, "--no-sort", obj], 600)
+                if rc != 0:
+                    raise CheckError(
+                        "llvm-nm %s failed (%s):\n%s" % (obj, rc, tail(err))
+                    )
+                lines = parse_nm(data)
+                rc, data, err = run_split([cil_dump, "--link-info", obj], 600)
+                if rc != 0:
+                    raise CheckError(
+                        "llvm-cil-dump --link-info %s failed (%s):\n%s"
+                        % (obj, rc, tail(err))
+                    )
+                return name, lines, LinkInfo(data)
+            except CheckError as e:
+                return e
+
+        with concurrent.futures.ThreadPoolExecutor(ctx.jobs) as pool:
+            built = list(zip(items, pool.map(one, items)))
+        failures = []
+        checks = 0
+        objects = {lv: [] for lv in ctx.levels}  # level: [(name, lines, record)]
+        for (p, level), result in built:
+            if isinstance(result, CheckError):
+                checks += 1
+                failures.append("%s -%s (object): %s" % (p.name, level, result))
+            else:
+                objects[level].append(result)
+
+        # One bash script runs every GNU tool: WSL starts in about a second.
+        q = shlex.quote
+        script_lines = [
+            "# Written by %s --mode gnu-tools: GNU nm and ar on CIL objects." % SCRIPT,
+            "set -u",
+            "cd %s || exit 1" % q(host_path(obj_dir)),
+            "out=%s" % q(host_path(out_dir)),
+            '{ nm --version | head -n 1; ar --version | head -n 1; } > "$out/versions.txt" 2>&1',
+        ]
+        for level, found in objects.items():
+            if not found:
+                continue
+            script_lines += [
+                "objs=(%s)" % " ".join(q(name) for name, _, _ in found),
+                'for f in "${objs[@]}"; do echo "== $f"; nm -p "$f" 2>&1; '
+                'echo "== rc $?"; done > "$out/nm.%s.txt"' % level,
+                'rm -f "$out/%s.a"' % level,
+                'ar rcs "$out/%s.a" "${objs[@]}" > "$out/ar.%s.txt" 2>&1; '
+                'echo "$?" > "$out/ar.%s.rc"' % (level, level, level),
+                'ar t "$out/%s.a" > "$out/art.%s.txt" 2>&1' % (level, level),
+                'nm -p -s "$out/%s.a" > "$out/nms.%s.txt" 2>&1' % (level, level),
+            ]
+        script_path = os.path.join(base, "gnu-tools.sh")
+        with open(script_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(script_lines) + "\n")
+        rc, log = run(runner + [host_path(script_path)], 1800)
+        # wsl.exe writes its own errors in UTF-16.
+        log = (log or "").replace("\0", "")
+
+        def read(name):
+            try:
+                with open(os.path.join(out_dir, name), "rb") as f:
+                    return f.read()
+            except OSError as e:
+                raise SetupError(
+                    "the GNU tools on %s wrote no %s (bash exited %s: %s): %s"
+                    % (where, name, rc, tail(log, 5), e)
+                )
+
+        versions = read("versions.txt").decode("utf-8", "replace").strip().splitlines()
+        if rc != 0 or not versions or not versions[0].startswith("GNU nm"):
+            raise SetupError(
+                "GNU nm and ar did not run on %s (bash exited %s): %s"
+                % (where, rc, " / ".join(versions) or tail(log, 5))
+            )
+        passed = 0
+        for level, found in objects.items():
+            if not found:
+                continue
+            # GNU nm prints llvm-nm's letters and names, in order.
+            blocks, current = {}, None
+            for line in read("nm.%s.txt" % level).split(b"\n"):
+                line = line.rstrip(b"\r")
+                if line.startswith(b"== rc ") and current is not None:
+                    blocks[current][1] = line[6:].strip()
+                    current = None
+                elif line.startswith(b"== "):
+                    current = line[3:]
+                    blocks[current] = [[], None]
+                elif current is not None:
+                    blocks[current][0].append(line)
+            for name, lines, _ in found:
+                checks += 1
+                block = blocks.get(name.encode("utf-8"))
+                if block is None or block[1] is None:
+                    why = "GNU nm did not finish on it"
+                elif block[1] != b"0":
+                    why = "GNU nm exited %s:\n%s" % (
+                        show(block[1]),
+                        tail(b"\n".join(block[0]).decode("utf-8", "replace")),
+                    )
+                else:
+                    try:
+                        why = nm_difference(
+                            lines, parse_nm(b"\n".join(block[0])), "llvm-nm", "GNU nm"
+                        )
+                    except CheckError as e:
+                        why = str(e)
+                if why:
+                    failures.append("%s (GNU nm): %s" % (name, why))
+                else:
+                    passed += 1
+            # ar t lists the members in order.
+            names = [name for name, _, _ in found]
+            checks += 1
+            ar_rc = read("ar.%s.rc" % level).strip()
+            members = read("art.%s.txt" % level).decode("utf-8", "replace").split()
+            if ar_rc != b"0":
+                failures.append(
+                    "%s.a (ar rcs): exit %s:\n%s"
+                    % (
+                        level,
+                        show(ar_rc),
+                        tail(read("ar.%s.txt" % level).decode("utf-8", "replace")),
+                    )
+                )
+            elif members != names:
+                failures.append(
+                    "%s.a (ar t): %d member(s) for %d object(s); first difference: %s"
+                    % (
+                        level,
+                        len(members),
+                        len(names),
+                        next(
+                            (
+                                "%s, not %s" % (m, n)
+                                for m, n in zip(members, names)
+                                if m != n
+                            ),
+                            "a member is missing or extra",
+                        ),
+                    )
+                )
+            else:
+                passed += 1
+            # The index of nm -s: each member's defined non-local symbols and
+            # commons, as its record gives them.
+            checks += 1
+            want = sorted(
+                (symbol, name.encode("utf-8"))
+                for name, _, li in found
+                for symbol in li.index_names()
+            )
+            try:
+                why = index_difference(
+                    want,
+                    sorted(parse_armap(read("nms.%s.txt" % level), b"Archive index:")),
+                    "the nm -s index of %s.a" % level,
+                )
+            except CheckError as e:
+                why = str(e)
+            if why:
+                failures.append("%s.a (nm -s): %s" % (level, why))
+            else:
+                passed += 1
+        for text in failures:
+            note("gnu-tools: FAIL " + text)
+        note(
+            "gnu-tools: %d of %d checks passed (GNU nm against llvm-nm on %d objects, "
+            "ar t and the nm -s index of %d archive(s); %s on %s) in %.0f s"
+            % (
+                passed,
+                checks,
+                sum(len(found) for found in objects.values()),
+                len([found for found in objects.values() if found]),
+                versions[0],
+                where,
+                time.time() - start,
+            )
+        )
+        return checks > 0 and passed == checks
+
+
+MODES = {
+    m.name: m
+    for m in (
+        IlasmMode,
+        DumpersMode,
+        CopyMode,
+        StatsMode,
+        EncoderMode,
+        ObjectMode,
+        GnuToolsMode,
+    )
+}
 
 
 def main():
@@ -2756,7 +4024,7 @@ def main():
         description=__doc__.splitlines()[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="modes:\n"
-        + "\n".join("  %-8s %s" % (m.name, m.help) for m in MODES.values()),
+        + "\n".join("  %-9s %s" % (m.name, m.help) for m in MODES.values()),
     )
     p.add_argument(
         "--mode", required=True, help="comma-separated modes: " + ", ".join(MODES)
@@ -2810,13 +4078,13 @@ def main():
     )
     p.add_argument(
         "--ildasm-framework",
-        help="the ildasm of msil-verify.py's neutralized pass (default: the Windows "
-        "SDK's NETFX 4.x Tools ildasm; the NuGet ildasm elsewhere)",
+        help="the ildasm of msil-verify.py's neutralized pass and of --mode object "
+        "(default: the Windows SDK's NETFX 4.x Tools ildasm; the NuGet ildasm elsewhere)",
     )
     p.add_argument(
         "--ildasm-nuget",
-        help="the NuGet ildasm of the round trip (default: MsilILAsmVersion from the "
-        "NuGet cache)",
+        help="the NuGet ildasm of the round trip and of --mode object (default: "
+        "MsilILAsmVersion from the NuGet cache)",
     )
     p.add_argument(
         "--jitall",
@@ -2827,7 +4095,8 @@ def main():
     p.add_argument(
         "--wsl-distro",
         default="Ubuntu",
-        help="WSL distribution of --mode copy's WSL runs (default Ubuntu)",
+        help="WSL distribution of --mode copy's WSL runs and of --mode gnu-tools on "
+        "Windows (default Ubuntu)",
     )
     p.add_argument(
         "--wsl-dotnet",

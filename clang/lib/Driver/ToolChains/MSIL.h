@@ -11,8 +11,9 @@
 // '<native triple>-msil' triple is the native toolchain (Linux, MSVC or
 // MinGW) for everything that shapes the compile: header search, sysroot,
 // effective triple and cc1 options. It differs where the output does: msil-ld
-// links, there is no external assembler, no PIC and no unwind tables, and
-// compiles write LLVM bitcode until msil-ld links CIL objects.
+// links, there is no external assembler, no PIC and no unwind tables, -c
+// writes CIL objects, and compile-and-link compiles to LLVM bitcode until
+// msil-ld links CIL objects.
 //
 //===----------------------------------------------------------------------===//
 
@@ -78,10 +79,12 @@ public:
   ToolChain::RuntimeLibType GetDefaultRuntimeLibType() const override {
     return ToolChain::RLT_CompilerRT;
   }
-  /// -c writes LLVM bitcode until msil-ld links CIL objects: without -flto,
-  /// -flto= or -fno-lto, every compile is a full-LTO compile, except -S and
-  /// -emit-llvm, which keep their non-LTO output, and -via-file-asm, /FA and
-  /// /Fa, which keep the assemble step that rejects ILAsm text.
+  /// Compile-and-link compiles to LLVM bitcode until msil-ld links CIL
+  /// objects (M20, which removes this override): without -flto, -flto= or
+  /// -fno-lto, every compile is a full-LTO compile, except -c (clang-cl /c),
+  /// which writes a CIL object, -S and -emit-llvm, which keep their non-LTO
+  /// output, and -via-file-asm, /FA and /Fa, which keep the assemble step that
+  /// rejects ILAsm text.
   LTOKind
   getLTOMode(const llvm::opt::ArgList &Args,
              Action::OffloadKind Kind = Action::OFK_None) const override;

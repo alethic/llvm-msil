@@ -77,10 +77,15 @@ MCAsmBackend *createMSILAsmBackend(const Target &T, const MCSubtargetInfo &STI,
                                    const MCTargetOptions &Options);
 
 /// The target object writer that MSILAsmBackend gives the MSIL object writer
-/// (llvm/MC/MCMSILObjectWriter.h). Until M19 writes CIL objects this is
-/// M13's default MCMSILObjectTargetWriter, whose writeObject reports that CIL
-/// object files are not supported yet.
+/// (llvm/MC/MCMSILObjectWriter.h): an MSILObjectWriter, which writes CIL
+/// objects (MSILObjectWriter.cpp).
 std::unique_ptr<MCObjectTargetWriter> createMSILObjectTargetWriter();
+
+/// The target streamer of object files (MSILTargetObjectStreamer.cpp): it
+/// passes the AsmPrinter's object events to the MSILObjectWriter of the
+/// streamer's asm backend (MSIL::getObjectTargetWriter).
+MCTargetStreamer *createMSILObjectTargetStreamer(MCStreamer &S,
+                                                 const MCSubtargetInfo &STI);
 
 namespace MSIL {
 

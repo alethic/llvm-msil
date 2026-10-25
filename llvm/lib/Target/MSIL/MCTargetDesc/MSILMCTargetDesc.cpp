@@ -14,10 +14,10 @@
 ///
 /// \file
 /// This file provides MSIL-specific target descriptions and registers the MC
-/// layer (as WebAssemblyMCTargetDesc.cpp does): the ILAsm printer and target
-/// streamers, the CIL encoder and the asm backend. There is no object target
-/// streamer yet, and the object writer reports that CIL objects are not
-/// supported (createMSILObjectTargetWriter, until M19).
+/// layer (as WebAssemblyMCTargetDesc.cpp does): the ILAsm printer, the target
+/// streamers of text, object files and -filetype=null, the CIL encoder and
+/// the asm backend, whose object writer writes CIL objects
+/// (createMSILObjectTargetWriter, MSILObjectWriter.cpp).
 ///
 //===----------------------------------------------------------------------===//
 
@@ -27,7 +27,6 @@
 #include "MCTargetDesc/MSILTargetStreamer.h"
 #include "TargetInfo/MSILTargetInfo.h"
 #include "llvm/MC/MCInstrInfo.h"
-#include "llvm/MC/MCMSILObjectWriter.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -107,13 +106,6 @@ MCTargetStreamer *llvm::createMSILNullTargetStreamer(MCStreamer &S) {
   return new MSILTargetNullStreamer(S);
 }
 
-std::unique_ptr<MCObjectTargetWriter> llvm::createMSILObjectTargetWriter() {
-  // M13's default writer: writeObject reports "CIL object files are not
-  // supported for MSIL target '<triple>' yet". M19 returns the CIL object
-  // writer instead.
-  return std::make_unique<MCMSILObjectTargetWriter>();
-}
-
 // Force static initialization.
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMSILTargetMC() {
   Target &T = getTheMSILTarget();
@@ -138,6 +130,10 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMSILTargetMC() {
 
   // Register the MC asm backend.
   TargetRegistry::RegisterMCAsmBackend(T, createMSILAsmBackend);
+
+  // Register the object target streamer.
+  TargetRegistry::RegisterObjectTargetStreamer(T,
+                                               createMSILObjectTargetStreamer);
 
   // Register the asm target streamer.
   TargetRegistry::RegisterAsmTargetStreamer(T, createMSILAsmTargetStreamer);

@@ -12,15 +12,15 @@
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List
 #
 # Legs, in order. The numbers are the gate steps of plan section 6 that run the same command:
-# 'M18 n' for the M18 gate, 'M14 n' for the M14 gate, 'M12 n' for the M12 gate, plain numbers
-# for the M10 and M11 gates (steps 5-12 the same in both, 20 and 21 M11's); lit-legs.sh has the
-# Linux job's legs:
+# 'M19 n' for the M19 gate, 'M18 n' for the M18 gate, 'M14 n' for the M14 gate, 'M12 n' for the
+# M12 gate, plain numbers for the M10 and M11 gates (steps 5-12 the same in both, 20 and 21
+# M11's); lit-legs.sh has the Linux job's legs:
 #   net8           llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests, from M17
-#                  the llvm-cil-dump and llvm-cil-copy tests and from M18 llvm/test/MC/MSIL
-#                  included), harness, msil/test/M1 and msil/test/M2 on .NET 8 (tiered) and on
-#                  the .NET Framework 4.8, -O0 and -O2, native oracle required (with the VS
-#                  clang's compiler-rt builtins, lit's msil_native_rtlib=auto)
-#                                                          (M18 15; M14 11; M12 9; step 5)
+#                  the llvm-cil-dump and llvm-cil-copy tests, from M18 llvm/test/MC/MSIL and
+#                  from M19 clang/test/Driver/msil-object.c included), harness, msil/test/M1 and
+#                  msil/test/M2 on .NET 8 (tiered) and on the .NET Framework 4.8, -O0 and -O2,
+#                  native oracle required (with the VS clang's compiler-rt builtins, lit's
+#                  msil_native_rtlib=auto)                 (M19 13; M18 15; M14 11; M12 9; step 5)
 #   net10          msil/test/M1 on .NET 10                                       (M12 10; step 6)
 #   net8-tc0       msil/test/M1 on .NET 8, DOTNET_TieredCompilation=0 (optimizing JIT)  (step 7)
 #   more-levels    msil/test/M1 on .NET 8 at O1,O3,Os,Oz (O0 and O2 run in the other legs; .ll
@@ -40,6 +40,7 @@
 #   wsl-quick      -Wsl: msil/test/M1/11-programs, msil/test/harness and msil/test/M2 (once it
 #                  exists) on WSL .NET 10, E7 Linux oracle required (plan 5.12.10 G4: the WSL
 #                  step of every Phase 2 gate from M13 on; the M12 gate runs wsl-net10 instead)
+#                                                                                    (M19 14)
 #   hosted         -Wsl, optional (plan Q16, 5.12.11): msil/test/M2/09-hosted, the hosted
 #                  compile-only tests (glibc headers and libc.so, UCRT headers), with
 #                  msil_glibc_sysroot given: $env:MSIL_GLIBC_SYSROOT, else
@@ -74,6 +75,32 @@
 #                  jitall and M18's gate step 14; at least 2,600 methods
 #                  (2,819 in the 99 C programs of M18's msil/test/M1). Windows only (the
 #                  Framework ilasm); not in lit-legs.sh                            (M18 19)
+#   obj-text       the object oracle of CIL objects (plan M19.f, 5.12.6, 5.12.11):
+#                  msil/utils/mdtools/cli-corpus-check.py --mode object over msil/test/M1 at -O0
+#                  and -O2, then over msil/test/M1/11-programs for the Linux triple
+#                  x86_64-unknown-linux-gnu-msil (also -O0 and -O2). For every program and
+#                  level, canon(clang -c) == canon(ilasm(object-form text)): the
+#                  'llvm-cil-dump --canonical --params=drop --initlocals=ignore-without-locals
+#                  --snan=quiet' listings of the clang -c object and of the .NET Framework
+#                  ilasm's object of the -mllvm -msil-object-form text are equal (the link-info
+#                  record's bytes included), and so are their --link-info lines; two clang -c
+#                  runs from different directories give byte-identical objects; mdcanon (one
+#                  System.Reflection.Metadata batch) lists every object as llvm-cil-dump does,
+#                  and both ildasms open every object; the envelope (machine,
+#                  characteristics 0x2022, no entry point, the .text section and the COFF
+#                  view's marker sections, the module name, no InitLocals) and C1-C5 and C7 hold
+#                  (for ilasm's object too); and the COFF view gives plan 5.8.6's llvm-nm letters
+#                  and an llvm-ar index of exactly the defined non-local symbols and the
+#                  commons. mdcanon is built or refreshed first with
+#                  msil/utils/mdtools/build-mdtools.py (nothing happens when it is up to date).
+#                  Windows only (the Framework ilasm); not in lit-legs.sh          (M19 15)
+#   obj-text-wsl   -Wsl: cli-corpus-check.py --mode gnu-tools over msil/test/M1 at -O0 and -O2,
+#                  then over msil/test/M1/11-programs for the Linux triple
+#                  x86_64-unknown-linux-gnu-msil (also -O0 and -O2), as obj-text does (plan
+#                  M19.f, judge-dotnet-value J2): GNU nm inside the WSL distribution prints
+#                  llvm-nm's letters for every clang -c object, and GNU ar t and nm -s list
+#                  the members and the index of an archive of each level's objects, as their
+#                  link-info records give them; not in lit-legs.sh                 (M19 16)
 #   all-levels     -Full: msil/test at O0,O1,O2,O3,Os,Oz (nightly)
 # The WSL legs need a WSL distribution (only the development host has one; the Linux CI job
 # covers the Linux triple natively) with the private .NET runtimes of
@@ -89,6 +116,9 @@
 # (MsilILAsmVersion), from the NuGet global-packages folder ('dotnet restore
 # msil/utils/tools/msil-tools.proj -p:MsilToolsRid=win-x64', and linux-x64 for wsl-ilasm); a newer
 # version in that folder is never used, and a missing one fails the leg; nothing here downloads.
+# obj-text takes the NuGet ildasm the same way, and the .NET Framework ildasm from the Windows
+# SDK's NETFX 4.x Tools; obj-text-wsl needs only GNU nm and ar (binutils) in the distribution
+# Ubuntu, the one cli-corpus-check.py and lit.cfg.py use by default.
 #
 # Every lit leg runs msil/utils/build/msil-lit.ps1 (shared build-dir lock, the command of the gate
 # steps) with --param msil_require_verify=1 (plan D38), --param msil_require_exec=1 and --param
@@ -101,10 +131,11 @@
 # may contain blanks (a NuGet ilasm under a profile directory with a space; backlog 3.5); the
 # build directory itself may not, because msil-lit.ps1 splits -LitArgs at blanks, and the leg
 # fails naming it. A leg passes when lit exits 0 and at least one test passed. expected,
-# expected-linux, utc and encoder-parity are not lit legs: each runs its script under the shared
-# build-dir lock, writes <build>/lit-results/<leg>.log and passes when the script exits 0 (and,
-# for the expected legs, at least one test matched; for encoder-parity, it printed its summary
-# line). Every selected leg runs even after a failure; the exit status is 1 if any failed.
+# expected-linux, utc, encoder-parity, obj-text and obj-text-wsl are not lit legs: each runs its
+# script under the shared build-dir lock, writes <build>/lit-results/<leg>.log and passes when
+# the script exits 0 (and, for the expected legs, at least one test matched; for encoder-parity,
+# obj-text and obj-text-wsl, every run printed its summary line). Every selected leg runs even
+# after a failure; the exit status is 1 if any failed.
 [CmdletBinding()]
 param(
   [string]$BuildDir = '',         # default: $env:MSIL_BUILD_DIR, else <repo>\build
@@ -125,8 +156,8 @@ $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
 $checkMsil = @('llvm/test/CodeGen/MSIL', 'clang/test/CodeGen/MSIL', 'clang/test/Preprocessor/init-msil.c',
                'clang/test/Driver/msil-toolchain.c', 'clang/test/Driver/msil-link.c',
                'clang/test/Driver/msil-lto.c', 'clang/test/Driver/msil-header-search.c',
-               'lld/test/MSIL', 'llvm/test/tools/llvm-cil-dump', 'llvm/test/tools/llvm-cil-copy',
-               'llvm/test/MC/MSIL', 'msil/test')
+               'clang/test/Driver/msil-object.c', 'lld/test/MSIL', 'llvm/test/tools/llvm-cil-dump',
+               'llvm/test/tools/llvm-cil-copy', 'llvm/test/MC/MSIL', 'msil/test')
 $m1 = @('msil/test/M1')
 # msil/test/M2 (plan 5.12.5, from M14) where it exists.
 function Get-M2Paths {
@@ -176,6 +207,8 @@ $legs = @(
   @{ Name = 'expected-linux'; Expected = 'linux'; Wsl = $true }
   @{ Name = 'utc'; Utc = $true }
   @{ Name = 'encoder-parity'; Encoder = $true }
+  @{ Name = 'obj-text'; ObjText = 'object' }
+  @{ Name = 'obj-text-wsl'; ObjText = 'gnu-tools'; Wsl = $true }
   @{ Name = 'all-levels'; Paths = { 'msil/test' }; Full = $true
      Params = { 'msil_opt_levels=O0,O1,O2,O3,Os,Oz' } }
 )
@@ -326,11 +359,67 @@ function Invoke-EncoderLeg($l) {
   return @{ Ok = ($rc -eq 0 -and $summary.Count -gt 0); Detail = "$detail (exit $rc)" }
 }
 
+function Invoke-ObjTextLeg($l) {
+  # The object checks (plan M19.f): obj-text runs cli-corpus-check.py --mode object over
+  # msil/test/M1 at -O0 and -O2, then over msil/test/M1/11-programs for the Linux triple;
+  # obj-text-wsl runs --mode gnu-tools, with GNU nm and ar inside WSL, over the same two inputs
+  # (exit criterion 4 of M19). Every run uses this build's clang, llvm-cil-dump, llvm-nm and
+  # llvm-ar under the shared build-dir lock, and every run must exit 0 and print its summary
+  # line, so the leg needs both summary lines of its mode. --mode object needs mdcanon,
+  # which build-mdtools.py builds or refreshes first, as lit does (nothing when it is up to date).
+  if (-not $IsWindows) {
+    throw "$($l.Name) runs only on Windows (the .NET Framework ilasm, or WSL for GNU nm and ar)"
+  }
+  $log = Join-Path $results "$($l.Name).log"
+  [System.IO.File]::WriteAllText($log, '')
+  $bin = Join-Path $BuildDir 'bin'
+  $mdtools = Join-Path $BuildDir 'tools/msil/mdtools'
+  $m1Dir = Join-Path $MsilRepo 'msil/test/M1'
+  $tools = @('--clang', (Join-Path $bin 'clang.exe'), '--cil-dump', (Join-Path $bin 'llvm-cil-dump.exe'),
+             '--llvm-nm', (Join-Path $bin 'llvm-nm.exe'))
+  $mode = $l.ObjText
+  $modeArgs = @('--mode', $mode, '--levels', 'O0,O2') + $tools
+  if ($mode -eq 'object') {
+    $modeArgs += @('--llvm-ar', (Join-Path $bin 'llvm-ar.exe'), '--mdtools', $mdtools)
+  }
+  $runs = @(
+    @{ What = "cli-corpus-check.py --mode $mode msil/test/M1"; Args = $modeArgs + @($m1Dir) }
+    @{ What = "cli-corpus-check.py --mode $mode --triple x86_64-unknown-linux-gnu-msil msil/test/M1/11-programs"
+       Args = $modeArgs + @('--triple', 'x86_64-unknown-linux-gnu-msil',
+                            (Join-Path $MsilRepo 'msil/test/M1/11-programs')) }
+  )
+  $script = Join-Path $MsilRepo 'msil/utils/mdtools/cli-corpus-check.py'
+  $codes = @()
+  $lock = Enter-MsilBuildLock -BuildDir $BuildDir -Shared -What "lit-legs $($l.Name)"
+  try {
+    if ($mode -eq 'object') {
+      & $MsilPython (Join-Path $MsilRepo 'msil/utils/mdtools/build-mdtools.py') --out $mdtools 2>&1 |
+        ForEach-Object { "$_" } | Tee-Object -FilePath $log -Append | Out-Host
+      if ($LASTEXITCODE -ne 0) {
+        return @{ Ok = $false; Detail = "build-mdtools.py --out $mdtools exited $LASTEXITCODE" }
+      }
+    }
+    foreach ($r in $runs) {
+      Write-Host "[msil-ci] leg $($l.Name): $($r.What)"
+      & $MsilPython $script @($r.Args) 2>&1 | ForEach-Object { "$_" } |
+        Tee-Object -FilePath $log -Append | Out-Host
+      $codes += $LASTEXITCODE
+    }
+  } finally { $lock.Dispose() }
+  $summaries = @(Select-String -LiteralPath $log -Pattern "^cli-corpus-check\.py: $mode`: \d+ of \d+ " |
+                 ForEach-Object { $_.Line -replace '^cli-corpus-check\.py: ', '' -replace '\): .*$', ')' })
+  $failed = @($codes | Where-Object { $_ -ne 0 })
+  $detail = if ($summaries.Count -gt 0) { $summaries -join ' | ' } else { 'no summary' }
+  return @{ Ok = ($failed.Count -eq 0 -and $summaries.Count -eq $runs.Count)
+            Detail = "$detail (exit $($codes -join ', '))" }
+}
+
 foreach ($l in $run) {
   $sw = [Diagnostics.Stopwatch]::StartNew()
   try {
     $r = if ($l.Expected) { Invoke-ExpectedLeg $l } elseif ($l.Utc) { Invoke-UtcLeg $l }
-         elseif ($l.Encoder) { Invoke-EncoderLeg $l } else { Invoke-LitLeg $l }
+         elseif ($l.Encoder) { Invoke-EncoderLeg $l } elseif ($l.ObjText) { Invoke-ObjTextLeg $l }
+         else { Invoke-LitLeg $l }
   } catch {
     $r = @{ Ok = $false; Detail = "$_" }
   }

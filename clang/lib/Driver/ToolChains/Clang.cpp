@@ -5538,9 +5538,6 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         CmdArgs.push_back("-fdirectives-only");
     }
   } else if (isa<AssembleJobAction>(JA)) {
-    // The MSIL target emits ILAsm text only; there is no object writer yet.
-    if (Triple.isOSBinFormatMSIL())
-      D.Diag(diag::err_drv_msil_no_object_output) << TripleStr;
     CmdArgs.push_back("-emit-obj");
 
     CollectArgsForIntegratedAssembler(C, Args, CmdArgs, D);

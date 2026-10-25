@@ -19,6 +19,13 @@
 /// AsmPrinter's OutStreamer with an MSILDataCollector, which appends plain
 /// bytes to the image and turns every symbolic value into a relocation record.
 ///
+/// In object mode (MSILDataSegment::ObjectMode, plan 5.8.10) the AsmPrinter
+/// writes each defined global as a segment of its own in the link-info record
+/// (decision D12 as amended for Phase 2): the entries keep their bytes (a
+/// slice of the image, without alignment padding), relocations may also name
+/// aliases, and symbol differences are left unfolded, as DIFF relocations,
+/// because msil-ld lays the segments out.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_MSIL_MSILDATASEGMENT_H
@@ -55,13 +62,16 @@ using MSILSymbolMap = DenseMap<const MCSymbol *, const GlobalValue *>;
 struct MSILReloc {
   /// The offset of the slot in the data segment (always inside the image).
   uint64_t Site;
-  /// A global variable or a function, defined in the module or not. The
-  /// addend of a function address is always 0.
+  /// A global variable or a function, defined in the module or not, or in
+  /// object mode an alias. The addend of a function address (a function or
+  /// an alias with a function type) is always 0.
   const GlobalValue *Target;
   int64_t Addend;
   /// The width of the slot in bytes: 8 (a pointer on the 64-bit triples) or
   /// 4 (an address truncated to 32 bits).
   uint8_t Size;
+  /// The global variable whose initializer contains the slot.
+  const GlobalVariable *Owner;
 };
 
 /// A slot of the data image that holds the difference of the addresses of two
@@ -71,8 +81,10 @@ struct MSILReloc {
 struct MSILDiff {
   /// The offset of the slot in the data segment (always inside the image).
   uint64_t Site;
-  const GlobalVariable *A;
-  const GlobalVariable *B;
+  /// Global variables; in object mode also declarations and aliases of
+  /// variables (data symbols).
+  const GlobalValue *A;
+  const GlobalValue *B;
   int64_t Addend;
   /// The width of the slot in bytes (1 to 16).
   uint8_t Size;
@@ -81,6 +93,12 @@ struct MSILDiff {
 };
 
 /// The layout and the initial contents of the module's global variables.
+///
+/// In object mode the same layout serves as a store of per-global bytes: each
+/// entry's segment is [Offset, Offset + Size) of the image, or zeros
+/// (IsZero), and finalize() leaves the symbol differences to the record. The
+/// entries follow each other without padding: the record carries each
+/// segment's alignment, and msil-ld lays the segments out.
 ///
 /// The segment is [0, TotalSize). Its initialized part [0, InitSize) is Image:
 /// the initialized globals in the order of addGlobal calls, each at an offset
@@ -96,6 +114,8 @@ struct MSILDataSegment {
     uint64_t Offset;
     /// The allocation size of the global's value type.
     uint64_t Size;
+    /// Whether the global is zero-initialized (its bytes are not in Image).
+    bool IsZero = false;
   };
   /// A zero-initialized global that finalize() has not placed yet.
   struct ZeroEntry {
@@ -130,10 +150,16 @@ struct MSILDataSegment {
   /// The target machine of the AsmPrinter that addGlobal receives, which
   /// names globals in diagnostics (MSIL::getILName); set by every addGlobal.
   const TargetMachine *TM = nullptr;
+  /// Object mode (MSILTargetMachine::isObjectMode()): relocations may name
+  /// aliases and undefined data, and finalize() does not fold the symbol
+  /// differences.
+  bool ObjectMode = false;
 
   /// Adds the definition \p GV (any linkage) to the segment. A zero or undef
-  /// initializer only reserves space; any other initializer is captured into
-  /// Image through AsmPrinter::emitGlobalConstant, which \p AP runs with an
+  /// initializer (in object mode also an aggregate of zeros and undefs, as
+  /// getKindForGlobal's BSS test accepts it) only reserves space; any other
+  /// initializer is captured into Image through
+  /// AsmPrinter::emitGlobalConstant, which \p AP runs with an
   /// MSILDataCollector in place of its OutStreamer. \p SymToGV covers every
   /// global value of the module and turns symbolic initializer values into
   /// relocations. An initializer value that the segment cannot represent is
@@ -143,15 +169,17 @@ struct MSILDataSegment {
                  const MSILSymbolMap &SymToGV);
 
   /// Places the zero-initialized globals after the image, sets InitSize and
-  /// TotalSize, and writes the value of every symbol difference into Image.
-  /// Called once, after the last addGlobal.
+  /// TotalSize, and, except in object mode, writes the value of every symbol
+  /// difference into Image. Called once, after the last addGlobal.
   void finalize();
 };
 
 /// An MCStreamer that receives the output of AsmPrinter::emitGlobalConstant
 /// for one global variable and appends it to the image of an MSILDataSegment:
 /// bytes, fills and integers become image bytes, and every value that names a
-/// global becomes an MSILReloc or MSILDiff over zero bytes. Directives that
+/// global becomes an MSILReloc or MSILDiff over zero bytes (in object mode
+/// also one that names an alias, or a difference of undefined data).
+/// Directives that
 /// AsmPrinter::emitGlobalConstant never emits (labels, alignment, '.fill',
 /// LEB128, common symbols, instructions) are internal errors.
 class MSILDataCollector final : public MCStreamer {

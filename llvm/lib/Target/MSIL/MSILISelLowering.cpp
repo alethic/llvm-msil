@@ -30,6 +30,7 @@
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Target/TargetMachine.h"
@@ -431,8 +432,11 @@ bool MSILTargetLowering::isOffsetFoldingLegal(
     const GlobalAddressSDNode *GA) const {
   // The address of a global variable is its address field plus an offset
   // ('ldsfld' then 'ldc.i4; add'); a function address (the function's
-  // address field, which holds the value of 'ldftn') takes no offset.
-  return !isa<Function>(GA->getGlobal());
+  // address field, which holds the value of 'ldftn') takes no offset, nor
+  // does the address of a function alias (object mode only).
+  const GlobalValue *GV = GA->getGlobal();
+  return !isa<Function>(GV) &&
+         !(isa<GlobalAlias>(GV) && GV->getValueType()->isFunctionTy());
 }
 
 bool MSILTargetLowering::isLegalAddressingMode(const DataLayout & /*DL*/,
@@ -842,11 +846,19 @@ SDValue MSILTargetLowering::LowerGlobalAddress(SDValue Op,
   EVT VT = Op.getValueType();
   assert(GA->getTargetFlags() == 0 && "MSIL doesn't set target flags");
 
+  // In object mode (MSILTargetMachine::isObjectMode(), plan 5.8.10) an alias
+  // is a symbol of the object, which MSILPrepareIR has checked: the address
+  // of an alias of a function, like a function's, is its FnAddr placeholder
+  // (FUNC_ADDR), and that of an alias of a variable is its placeholder field
+  // plus the offset (DATA_ADDR). Whole-program mode has no aliases left.
+  const auto *Alias = dyn_cast<GlobalAlias>(GV);
+  bool IsFunctionAlias = Alias && Alias->getValueType()->isFunctionTy();
+
   // A function used as a value: its address field, which <Module>::.cctor
   // sets with 'ldftn' of its method, or of its P/Invoke declaration when it
   // is not defined in this module. The field takes no offset
   // (isOffsetFoldingLegal), so one that SelectionDAG built anyway is added.
-  if (isa<Function>(GV)) {
+  if (isa<Function>(GV) || IsFunctionAlias) {
     SDValue Addr = DAG.getNode(MSILISD::FUNC_ADDR, DL, VT,
                                DAG.getTargetGlobalAddress(GV, DL, VT));
     if (int64_t Offset = GA->getOffset())
@@ -855,9 +867,9 @@ SDValue MSILTargetLowering::LowerGlobalAddress(SDValue Op,
     return Addr;
   }
 
-  // MSILPrepareIR reports and erases every alias and ifunc; this is a
-  // backstop.
-  if (!isa<GlobalVariable>(GV)) {
+  // MSILPrepareIR reports and erases every ifunc, and every alias in
+  // whole-program mode; this is a backstop.
+  if (!isa<GlobalVariable>(GV) && !Alias) {
     std::string Msg = (Twine("the address of '") + GV->getName() +
                        "' is not supported for MSIL")
                           .str();

@@ -1,0 +1,27 @@
+# Matrix case knr-two-arities: one K&R declaration called with two argument
+# lists (native 3). a.c declares 'int f();' without a prototype and calls
+# f(1, 2), then f(1) only when the first result is 0, which never happens;
+# b.c defines f with two parameters, so the program prints 3 natively.
+# Phase 1 ran MSILAddMissingPrototypes and MSILFixFunctionBitcasts in every
+# mode, which could derive one prototype from the first call and lose an
+# argument (1 instead of 3); in object mode (M19) each call signature becomes
+# its own MemberRef with NO_PROTOTYPE and no wrapper, which
+# llvm/test/CodeGen/MSIL/object-calls.ll pins in both call orders. Plan 5.8.10
+# ('The prototype passes in object mode') and 5.9.16 row knr-two-arities (M19
+# lto; M20 obj, where f(1) gets the missing-argument adapter and its warning).
+# Both oracles print 3, so there is no .linux.expected.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+#--- a.c
+#include "msil_test.h"
+int f();                  /* defined in b.c as int f(int, int) */
+int main(void) {
+  int r = f(1, 2);        /* 3 */
+  if (!r)
+    return f(1);          /* never runs */
+  put_i64(r);
+  return 0;
+}
+#--- b.c
+int f(int a, int b) { return a + b; }

@@ -19,6 +19,14 @@
 /// site, 'ldftn', 'calli' and P/Invoke declaration spells a signature the same
 /// way.
 ///
+/// In object mode (MSILTargetMachine::isObjectMode(), plan 5.8) it writes a
+/// CIL object instead, through the same streamer calls (MSILTargetStreamer's
+/// object event order): the object header, the methods, the address fields
+/// of the defined globals, the import stubs and the link-info record, which
+/// it builds (plan 5.8.8, 5.8.10) with every token numbered by row order R6,
+/// as ilasm numbers the object-form text and as MSILObjectWriter checks.
+/// There is no module initializer, entry point, data image or trailer.
+///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_MSIL_MSILASMPRINTER_H
@@ -35,6 +43,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
+#include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/Allocator.h"
@@ -43,6 +52,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 
 namespace llvm {
@@ -51,6 +61,7 @@ class GlobalAlias;
 class GlobalIFunc;
 class GlobalValue;
 class GlobalVariable;
+class MCInst;
 class MCSymbol;
 class MSILFunctionInfo;
 class MSILSubtarget;
@@ -96,6 +107,10 @@ private:
   /// The method of every function this module defines, by IL name and
   /// signature (what a call or 'ldftn' names), set by emitFunctionEntryLabel.
   std::map<std::pair<StringRef, MSIL::Signature>, const Function *> Methods;
+  /// The functions that emitFunctionEntryLabel reported because an earlier
+  /// method has their IL name and signature; an object leaves their symbols
+  /// out without a second error (emitObjectEnd).
+  SmallPtrSet<const Function *, 2> ClashingMethods;
   /// The global variables that hold no program data and that the code of the
   /// function being printed refers to (reported once each).
   SmallPtrSet<const GlobalVariable *, 2> NonDataRefs;
@@ -131,14 +146,57 @@ private:
   StringSet<> LinkedPInvokeNames;
   SmallVector<StringRef, 0> LinkedPInvokes;
 
+  //===------------------------------------------------------------------===//
+  // Object mode (plan 5.8).
+  //===------------------------------------------------------------------===//
+
+  /// Whether the printer writes a CIL object (MSILTargetMachine::isObjectMode),
+  /// set by doInitialization.
+  bool ObjectMode = false;
+  /// The MethodDef row of the method of each function this object defines,
+  /// numbered in emission order (rule R6), set by emitFunctionEntryLabel.
+  DenseMap<const Function *, unsigned> MethodRows;
+  /// The functions of MethodRows in row order.
+  SmallVector<const Function *, 0> MethodOrder;
+  /// The identity of a MemberRef row (rule R3: parent, name, signature): the
+  /// placeholder class (ObjectRefClass), the IL name, the signature of a
+  /// method reference, and the BCL member of a BCL reference.
+  using MemberRefKey =
+      std::tuple<uint8_t, std::string, MSIL::Signature, unsigned>;
+  /// The MemberRef row of each MemberRef the emitted token operands name,
+  /// numbered by first appearance (rule R6).
+  std::map<MemberRefKey, unsigned> MemberRefRows;
+  /// The method MemberRefs on '<msil>Symbols' (calls of undefined functions,
+  /// of aliases and of library calls) in row order, with their IL names and
+  /// signatures: the references that SIGNATURES describes.
+  SmallVector<std::tuple<unsigned, std::string, MSIL::Signature>, 0>
+      SymbolMethodRefs;
+  /// The import stubs that calls name (plan 5.8.3 R7: an undefined function
+  /// with "msil-import-module" or "msil-import-name", per call signature), in
+  /// first-use order.
+  SmallVector<std::pair<const Function *, const MSIL::Signature *>, 4>
+      CallStubs;
+  std::set<std::pair<const Function *, MSIL::Signature>> CallStubSet;
+  /// The global values and the external symbols that direct calls name.
+  SmallPtrSet<const GlobalValue *, 16> CalledValues;
+  StringSet<> CalledNames;
+  /// The ABI descriptor (CallFlags, sret and byval) of the IR calls of
+  /// undefined functions and of aliases, by IL name and call-site IL
+  /// signature: the first call wins (rule R3). The flag says that a later
+  /// call conflicted, and was reported.
+  std::map<std::pair<std::string, MSIL::Signature>,
+           std::pair<MSILLink::SignatureInfo, bool>>
+      CallABIs;
+
 public:
   MSILAsmPrinter(TargetMachine &TM, std::unique_ptr<MCStreamer> Streamer)
       : AsmPrinter(TM, std::move(Streamer), ID) {}
 
   StringRef getPassName() const override { return "MSIL Assembly Printer"; }
 
-  /// The streamer for ILAsm directives (an MSILTargetAsmStreamer, or an
-  /// MSILTargetNullStreamer for -filetype=null).
+  /// The streamer for ILAsm directives (an MSILTargetAsmStreamer, the object
+  /// target streamer of -filetype=obj, or an MSILTargetNullStreamer for
+  /// -filetype=null).
   MSILTargetStreamer &getTargetStreamer();
 
   /// The CIL signature of \p F, a definition or a declaration alike, computed
@@ -161,20 +219,23 @@ public:
   /// if it has an import, and reports it as an error otherwise: in a
   /// standalone module a Phase-1 import of the standalone import table
   /// (MSIL::getPInvokeModule, decision D14), in msil-ld's linked text a
-  /// natively bound function (MSIL::getLinkedImport, plan 5.10.13).
+  /// natively bound function (MSIL::getLinkedImport, plan 5.10.13). In object
+  /// mode it is an undefined symbol of the link-info record instead.
   void noteExternFunction(const Function &F);
 
   /// Records that the external symbol \p Name (a library call) is called with
   /// signature \p S and returns the printer's copy of it, which the P/Invoke
   /// declaration of that name and signature prints. A symbol called with
-  /// several signatures gets one declaration per signature.
+  /// several signatures gets one declaration per signature. In object mode
+  /// it is an undefined symbol of the record, in first-reference order.
   const MSIL::Signature &noteExternalSymbol(StringRef Name,
                                             const MSIL::Signature &S);
 
   /// Records that the code refers to the global variable \p GV, which this
   /// module does not define (a declaration, or an available_externally
   /// definition, which gets no data), so that the module trailer reports it:
-  /// Phase 1 has no linker.
+  /// Phase 1 has no linker. In object mode it is an undefined symbol of the
+  /// record instead.
   void noteExternGlobal(const GlobalVariable &GV);
 
   /// Reports that the code of the function being printed refers to \p GV, a
@@ -189,7 +250,10 @@ public:
   /// the P/Invoke declaration:
   /// on .NET Framework, 'ldftn' in a method that the JIT compiles before the
   /// target first ran yields another value than in one compiled after, and
-  /// two pointers to one C function must compare equal.
+  /// two pointers to one C function must compare equal. In object mode the
+  /// address is the function's FnAddr placeholder, and an undefined function
+  /// whose address is used but that is never called gets an address-only
+  /// import stub (plan 5.8.3).
   std::string noteFunctionAddress(const Function &F);
 
   /// The name of the address field of a function whose IL name is \p ILName.
@@ -292,6 +356,20 @@ private:
   /// function \p Main (decision D27), built with cli::ILBuilder, or diagnoses
   /// an unsupported signature.
   void emitEntryPoint(const Function &Main);
+
+  /// Object mode: records the ABI descriptors of the IR calls in \p Caller
+  /// (CallABIs) and warns about a call that conflicts with an earlier one of
+  /// the same name and IL signature (rule R3).
+  void collectCallABIs(const Function &Caller);
+
+  /// Object mode: numbers the MemberRefs that the CIL instructions \p Insts
+  /// of \p MI name (rule R6), and records the import stubs and the callees
+  /// that \p MI calls.
+  void noteObjectTokens(const MachineInstr &MI, ArrayRef<MCInst> Insts);
+
+  /// Object mode: builds the link-info record (plan 5.8.8) and emits the
+  /// address fields, the import stubs and the record (emitLinkInfo).
+  void emitObjectEnd(Module &M);
 };
 
 } // end namespace llvm

@@ -47,11 +47,36 @@
 /// LowerCall stays the backstop for the calls that keep a mismatched type
 /// (struct types, see createWrapper).
 ///
+/// In object mode (MSILTargetMachine::isObjectMode(), plan 5.8.10, R3) the
+/// callee of a call may be defined in another object, which only msil-ld
+/// sees, so:
+/// - A call of a declaration for the linker (a declaration, extern_weak or
+///   available_externally: Function::isDeclarationForLinker) gets no wrapper.
+///   It stays a direct call with its own type, LowerCall builds it with the
+///   call-site signature, and the object names the symbol with that
+///   signature (one MemberRef per name and signature); msil-ld adapts it to
+///   the definition.
+/// - A call with a variadic type of a prototype-less declaration (it keeps its
+///   variadic type and its "no-prototype" attribute in object mode,
+///   MSILAddMissingPrototypes) becomes the non-variadic call of all of its
+///   arguments, as a variadic call of a function that is not variadic does.
+/// - A call through an alias keeps the alias as its callee: the alias is a
+///   symbol of the object, and a weak one must stay overridable (plan 5.8.3
+///   R1).
+/// Calls of definitions keep their wrappers, and calls of truly variadic
+/// functions are left to LowerCall's error (decision D19). The pass asks for
+/// the mode when it runs, through the TargetPassConfig
+/// (CodeGenTargetMachineImpl adds the IR passes before it creates the
+/// streamer that decides the mode); without one (opt) it keeps the
+/// whole-program behaviour.
+///
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
+#include "MSILTargetMachine.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -92,14 +117,16 @@ ModulePass *llvm::createMSILFixFunctionBitcastsLegacyPass() {
 }
 
 // Recursively descend the def-use lists from V to find non-bitcast users of
-// bitcasts of V.
+// bitcasts of V. In object mode a call through an alias keeps the alias (see
+// the file comment), so aliases are not looked through.
 static void findUses(Value *V, Function &F,
-                     SmallVectorImpl<std::pair<CallBase *, Function *>> &Uses) {
+                     SmallVectorImpl<std::pair<CallBase *, Function *>> &Uses,
+                     bool ObjectMode) {
   for (User *U : V->users()) {
     if (auto *BC = dyn_cast<BitCastOperator>(U))
-      findUses(BC, F, Uses);
-    else if (auto *A = dyn_cast<GlobalAlias>(U))
-      findUses(A, F, Uses);
+      findUses(BC, F, Uses, ObjectMode);
+    else if (auto *A = dyn_cast<GlobalAlias>(U); A && !ObjectMode)
+      findUses(A, F, Uses, ObjectMode);
     else if (auto *CB = dyn_cast<CallBase>(U)) {
       Value *Callee = CB->getCalledOperand();
       if (Callee != V)
@@ -270,7 +297,42 @@ static Function *createWrapper(Function *F, FunctionType *Ty) {
   return Wrapper;
 }
 
-static bool fixFunctionBitcasts(Module &M) {
+/// Returns the type of a call with the variadic type \p Ty and the arguments
+/// of \p CB as a non-variadic call: \p Ty without the variadic flag, so that
+/// every argument is a fixed parameter (MSILAddMissingPrototypes'
+/// getNonVariadicCallType computes the same type).
+static FunctionType *getNonVariadicType(FunctionType *Ty, const CallBase &CB) {
+  SmallVector<Type *, 8> ArgTys;
+  for (const Use &Arg : CB.args())
+    ArgTys.push_back(Arg->getType());
+  return FunctionType::get(Ty->getReturnType(), ArgTys, /*isVarArg=*/false);
+}
+
+/// Object mode: makes every call with a variadic type of the prototype-less
+/// declaration \p F (variadic, "no-prototype") the non-variadic call of all
+/// of its arguments (a K&R call from IR that uses the native x86-64 SysV
+/// convention, see the file comment). The call's type may be F's own type
+/// ('i32 (...)' for a call without arguments), so every call counts, not
+/// only those that findUses collects.
+static void makeKnRCallsNonVariadic(Function &F) {
+  SmallVector<Value *, 4> Worklist = {&F};
+  while (!Worklist.empty()) {
+    Value *V = Worklist.pop_back_val();
+    for (User *U : V->users()) {
+      if (auto *BC = dyn_cast<BitCastOperator>(U)) {
+        Worklist.push_back(BC);
+        continue;
+      }
+      auto *CB = dyn_cast<CallBase>(U);
+      if (!CB || CB->getCalledOperand() != V ||
+          !CB->getFunctionType()->isVarArg())
+        continue;
+      CB->mutateFunctionType(getNonVariadicType(CB->getFunctionType(), *CB));
+    }
+  }
+}
+
+static bool fixFunctionBitcasts(Module &M, bool ObjectMode) {
   LLVM_DEBUG(dbgs() << "********** Fix Function Bitcasts **********\n");
 
   SmallVector<std::pair<CallBase *, Function *>, 0> Uses;
@@ -285,9 +347,15 @@ static bool fixFunctionBitcasts(Module &M) {
       continue;
     // Calls of variadic functions are not supported yet. Leave them to
     // MSILTargetLowering::LowerCall, which diagnoses them in the caller.
-    if (F.isVarArg())
+    // Object mode keeps prototype-less declarations variadic, and their K&R
+    // calls become fixed-arity calls.
+    if (F.isVarArg()) {
+      if (ObjectMode && F.isDeclarationForLinker() &&
+          F.hasFnAttribute("no-prototype"))
+        makeKnRCallsNonVariadic(F);
       continue;
-    findUses(&F, F, Uses);
+    }
+    findUses(&F, F, Uses, ObjectMode);
   }
 
   DenseMap<std::pair<Function *, FunctionType *>, Function *> Wrappers;
@@ -301,14 +369,17 @@ static bool fixFunctionBitcasts(Module &M) {
     // uses the native x86-64 SysV convention (see the file comment): make it
     // a non-variadic call of all of its arguments.
     if (Ty->isVarArg()) {
-      SmallVector<Type *, 8> ArgTys;
-      for (const Use &Arg : CB->args())
-        ArgTys.push_back(Arg->getType());
-      Ty = FunctionType::get(Ty->getReturnType(), ArgTys, /*isVarArg=*/false);
+      Ty = getNonVariadicType(Ty, *CB);
       CB->mutateFunctionType(Ty);
       if (Ty == F->getFunctionType())
         continue;
     }
+
+    // In object mode the definition of an undefined callee is in another
+    // object: the call keeps its own type, and the object names the symbol
+    // with the call-site signature (see the file comment).
+    if (ObjectMode && F->isDeclarationForLinker())
+      continue;
 
     auto Pair = Wrappers.try_emplace(std::make_pair(F, Ty));
     if (Pair.second)
@@ -325,5 +396,9 @@ static bool fixFunctionBitcasts(Module &M) {
 }
 
 bool MSILFixFunctionBitcastsLegacy::runOnModule(Module &M) {
-  return fixFunctionBitcasts(M);
+  // Asked here, when the pass runs, not when it is added (see the file
+  // comment).
+  auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();
+  return fixFunctionBitcasts(
+      M, TPC && TPC->getTM<MSILTargetMachine>().isObjectMode());
 }

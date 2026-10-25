@@ -45,7 +45,9 @@ set(MSIL_TEST_DEPS)
 # the tree's llvm-ar; %msil_nm is llvm-nm (M14). %msil_canon is llvm-cil-dump
 # --canonical (M17), and check-msil's llvm/test/tools/llvm-cil-dump and
 # llvm-cil-copy run both tools on images that yaml2obj makes. check-msil's
-# llvm/test/MC/MSIL runs llvm-mc (M18).
+# llvm/test/MC/MSIL runs llvm-mc (M18). The CIL object tests of
+# llvm/test/CodeGen/MSIL and clang/test/Driver/msil-object.c read the COFF
+# symbol view with llvm-nm and llvm-ar (M19).
 foreach(_msil_dep clang llc opt FileCheck not count split-file llvm-config lld
     llvm-ar llvm-nm llvm-cil-dump llvm-cil-copy yaml2obj llvm-mc)
   if(TARGET ${_msil_dep})
@@ -109,6 +111,8 @@ if(TARGET clang AND LLVM_EXTERNAL_CLANG_SOURCE_DIR)
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-link.c
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-lto.c
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-header-search.c
+    # clang -c writes CIL objects (M19).
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-object.c
     )
 endif()
 # msil-ld's tests (M13, M14): the lld flavor msil.

@@ -1,9 +1,10 @@
 // LTO for '<native triple>-msil' targets (ImplementationPlan.md 5.10.3 item 5
-// and 5.10.5; recon p2/driver-toolchain.md 4.8 and 6). Until M19, -c writes
-// LLVM bitcode, so every compile is an LTO compile ('-emit-llvm-bc
+// and 5.10.5; recon p2/driver-toolchain.md 4.8 and 6). Until M20, every
+// compile of a compile-and-link is an LTO compile ('-emit-llvm-bc
 // -flto=full', also without -flto) and every link runs msil-ld, where LTO and
 // the MSIL code generator run. -S and -emit-llvm keep their Phase 1 cc1 lines
-// (no -flto). -fno-lto -c is an error (msil-toolchain.c). The options that
+// (no -flto), and from M19 -c without -flto writes a CIL object
+// (msil-object.c). The options that
 // steer code generation reach msil-ld in lld's spellings, never through
 // tools::addLTOOptions: no gold plugin, no -plugin-opt=, and the driver never
 // passes --lto-emit-asm (the harness does, 5.9.13). -O0 is --lto-O0, -O1 and

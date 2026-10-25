@@ -11,6 +11,8 @@ add_llvm_component_library(LLVMMSILDesc
   MSILMCExpr.cpp
   MSILMCTargetDesc.cpp
   MSILMCTypeUtilities.cpp
+  MSILObjectWriter.cpp
+  MSILTargetObjectStreamer.cpp
   MSILTargetStreamer.cpp
 
   LINK_COMPONENTS

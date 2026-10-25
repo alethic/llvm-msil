@@ -42,7 +42,18 @@
 /// ('clang -S', llc) the P/Invokes are those of the standalone import table
 /// (decision D14, frozen); in msil-ld's linked text (MSIL::isLinkedModule)
 /// they are the natively bound functions that msil-ld annotated
-/// (MSIL::getLinkedImport, plan 5.10.13).
+/// (MSIL::getLinkedImport, plan 5.10.13). In object mode
+/// (MSILTargetMachine::isObjectMode(), plan 5.8.10, 5.10.13) there is no
+/// policy: a library call, a compiler-rt helper included, is a direct call
+/// of the symbol, which msil-ld resolves.
+///
+/// In object mode a direct call of a function that this object does not
+/// define (Function::isDeclarationForLinker: a declaration, extern_weak or
+/// available_externally) uses the call site's signature, which may differ
+/// from the callee's type (a K&R call of a prototype-less declaration, or a
+/// call through another function type): the object names the symbol with
+/// that signature (plan 5.8.3 R3) and msil-ld checks it against the
+/// definition. A call of an alias is a direct call of the alias's symbol.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -51,6 +62,7 @@
 #include "MSILMachineFunctionInfo.h"
 #include "MSILSelectionDAGInfo.h"
 #include "MSILSubtarget.h"
+#include "MSILTargetMachine.h"
 #include "MSILUtilities.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
@@ -61,6 +73,7 @@
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/InstrTypes.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -210,10 +223,14 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   };
 
   // The callee of a direct call: a function of the module, or the external
-  // symbol of a library call that becomes a P/Invoke declaration.
+  // symbol of a library call that becomes a P/Invoke declaration, or in
+  // object mode an alias of a function.
   const Function *F = nullptr;
+  const GlobalAlias *AliasCallee = nullptr;
   const char *LibCallee = nullptr;
   const Module &M = *MF.getFunction().getParent();
+  bool ObjectMode =
+      static_cast<const MSILTargetMachine &>(DAG.getTarget()).isObjectMode();
 
   // SelectionDAG calls a library function, named by an external symbol, for
   // an operation that it cannot expand inline (sqrt, fmin, an i128 to
@@ -232,7 +249,21 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     const Function *Named = MSIL::getFunctionByILName(M, Name);
     if (Named && Named->isIntrinsic())
       Named = nullptr;
-    if (Named && !Named->isDeclarationForLinker()) {
+    if (ObjectMode) {
+      // An object: no import policy (plan 5.10.13). A function of that name
+      // that this object defines with the call's signature is called
+      // directly (rule R1). A declaration of that name names the symbol, with
+      // the call's signature: one MemberRef per signature, or the import stub
+      // of that signature for a declaration with "msil-import-module" or
+      // "msil-import-name" (rule R7). Anything else, a definition of another
+      // signature included, is a call of the symbol through its placeholder
+      // MemberRef, which msil-ld resolves and checks.
+      if (Named &&
+          (Named->isDeclarationForLinker() || matchesSignature(*Named, CLI)))
+        F = Named;
+      else
+        LibCallee = ES->getSymbol();
+    } else if (Named && !Named->isDeclarationForLinker()) {
       // A function of that name defined in this module is the one a linker
       // would bind the call to (a freestanding program's own sqrt, or the
       // function of -ftrap-function), and a P/Invoke of that name would clash
@@ -310,9 +341,18 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   // Any other callee is an address: a value in a register, a global
   // variable's address, or a function's address plus an offset, called with
   // 'calli'.
-  if (const auto *GA = dyn_cast<GlobalAddressSDNode>(Callee))
-    if (GA->getOffset() == 0)
+  if (const auto *GA = dyn_cast<GlobalAddressSDNode>(Callee)) {
+    if (GA->getOffset() == 0) {
       F = dyn_cast<Function>(GA->getGlobal());
+      // In object mode an alias of a function (MSILPrepareIR has checked
+      // that it aliases a function definition) is a symbol of its own: the
+      // call names it, so that a weak alias stays overridable (plan 5.8.3
+      // R1). Whole-program mode has lowered every alias.
+      if (const auto *Alias = dyn_cast<GlobalAlias>(GA->getGlobal());
+          Alias && ObjectMode && Alias->getValueType()->isFunctionTy())
+        AliasCallee = Alias;
+    }
+  }
 
   // SelectionDAGBuilder lowers every recognized intrinsic itself, so only an
   // 'llvm.*' name that LLVM does not know reaches this point. It has no CIL
@@ -326,7 +366,10 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   // callee's own type (MSILAsmPrinter::getSignature), while the arguments and
   // results here come from the call site's type. If the two differ, the call
   // token would not match the method and the JIT would reject the call.
-  if (F && CLI.CB && CLI.CB->getFunctionType() != F->getFunctionType()) {
+  // In object mode a function that this object does not define is named
+  // with the call site's signature (rule R3), so its call may have any type.
+  if (F && CLI.CB && CLI.CB->getFunctionType() != F->getFunctionType() &&
+      !(ObjectMode && F->isDeclarationForLinker())) {
     // MSILFixFunctionBitcasts makes a call of a function agree with the
     // function's type before ISel; this is the backstop.
     if (isa<Function>(CLI.CB->getCalledOperand()))
@@ -433,6 +476,8 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   // only with ldftn, of methods and of P/Invoke declarations alike).
   if (F)
     Callee = DAG.getTargetGlobalAddress(F, DL, PtrVT);
+  else if (AliasCallee)
+    Callee = DAG.getTargetGlobalAddress(AliasCallee, DL, PtrVT);
   else if (LibCallee)
     Callee = DAG.getTargetExternalSymbol(LibCallee, PtrVT);
 

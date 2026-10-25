@@ -785,12 +785,14 @@ protected:
     return B;
   }
 
-  // The errors other than the default target writer's "CIL object files are
-  // not supported" (M13; M19 replaces that writer).
+  // The errors other than MSILObjectWriter's for an object without the code
+  // generator's events (M19): these streamers emit instructions only, never
+  // emitObjectHeader or emitLinkInfo.
   std::vector<std::string> fixupErrors() const {
     std::vector<std::string> E;
     for (const std::string &M : errors())
-      if (!StringRef(M).contains("CIL object files are not supported"))
+      if (!StringRef(M).starts_with("MSIL: a CIL object is written from the "
+                                    "events of the code generator"))
         E.push_back(M);
     return E;
   }
@@ -855,8 +857,8 @@ TEST_F(MSILAsmBackend, NoRelaxationAndNopPadding) {
 }
 
 // The backend remembers the target writer it created last, which M19's
-// streamer reaches through MSIL::getObjectTargetWriter; in M18 it is M13's
-// MSIL-format writer.
+// streamer reaches through MSIL::getObjectTargetWriter; from M19 it is an
+// MSILObjectWriter.
 TEST_F(MSILAsmBackend, RemembersItsObjectTargetWriter) {
   EXPECT_EQ(nullptr, MSIL::getObjectTargetWriter(*MAB));
   SmallString<16> Buf1, Buf2;

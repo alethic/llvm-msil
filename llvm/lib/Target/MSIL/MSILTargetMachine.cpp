@@ -24,6 +24,7 @@
 #include "MSILTargetObjectFile.h"
 #include "MSILTargetTransformInfo.h"
 #include "TargetInfo/MSILTargetInfo.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/CodeGen/MIRParser/MIParser.h"
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
@@ -32,6 +33,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/PassRegistry.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Target/TargetOptions.h"
@@ -39,6 +41,12 @@
 #include <optional>
 
 using namespace llvm;
+
+static cl::opt<bool> MSILObjectForm(
+    "msil-object-form",
+    cl::desc("MSIL: compile in object mode and write the CIL object as ILAsm "
+             "text (object-form text) instead of whole-program text"),
+    cl::init(false));
 
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMSILTarget() {
   // Register the target.
@@ -206,14 +214,27 @@ TargetPassConfig *MSILTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new MSILPassConfig(*this, PM);
 }
 
+bool MSILTargetMachine::isObjectMode() const {
+  if (OutputFileType == CodeGenFileType::ObjectFile)
+    return true;
+  if (OutputFileType == CodeGenFileType::Null)
+    return false;
+  return MSILObjectForm;
+}
+
 Expected<std::unique_ptr<MCStreamer>>
 MSILTargetMachine::createMCStreamer(raw_pwrite_stream &Out,
                                     raw_pwrite_stream *DwoOut,
                                     CodeGenFileType FileType, MCContext &Ctx) {
-  if (FileType == CodeGenFileType::ObjectFile)
-    return make_error<StringError>(
-        "MSIL object file emission is not implemented; use -S (ILAsm text)",
-        inconvertibleErrorCode());
+  // CodeGenTargetMachineImpl::addPassesToEmitFile calls this after
+  // addIRPasses has added the IR passes and before any pass runs, so the IR
+  // passes see the mode when they run.
+  OutputFileType = FileType;
+  // Object-form text prints the token operands in object form: placeholder
+  // MemberRefs on [msil.extern] and BCL members in [msil.bcl].
+  if (FileType == CodeGenFileType::AssemblyFile && isObjectMode() &&
+      !is_contained(Options.MCOptions.InstPrinterOptions, "object-form"))
+    Options.MCOptions.InstPrinterOptions.push_back("object-form");
   return CodeGenTargetMachineImpl::createMCStreamer(Out, DwoOut, FileType, Ctx);
 }
 

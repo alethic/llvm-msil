@@ -51,6 +51,36 @@
 /// - A section on a global variable definition (llvm.metadata excepted) is an
 ///   error; the variable stays ordinary data.
 ///
+/// In object mode (MSILTargetMachine::isObjectMode(): a CIL object or its
+/// object-form text, plan 5.8.10) the module is one object of a link instead,
+/// so none of these three lowerings applies: aliases, extern_weak declarations,
+/// external globals and sections stay symbols of the object
+/// (checkObjectSymbols). It reports instead:
+/// - an alias that is not a definition plus a constant offset (a function
+///   definition at offset 0, or a global variable definition that is not
+///   common, with the alias's bytes inside it), which is erased;
+/// - a comdat whose selection kind is not any or nodeduplicate, whose members
+///   leave it;
+/// - a symbol whose IL name starts with '<msil>', which the object's
+///   scaffolding reserves (rule R5): a definition loses its body or is erased,
+///   and the calls and the other uses of a declaration go as for a definition
+///   that lost its body;
+/// - an alias, a global variable definition or a used global variable
+///   declaration whose IL name is longer than ilasm accepts, which a CIL
+///   object cannot hold in its rows either: it is erased;
+/// - a used function declaration whose IL name (as below), whose
+///   "msil-import-module" or whose "msil-import-name" string is longer than
+///   that (a CIL object's ModuleRef and ImplMap import names): its calls and
+///   its other uses go as for a definition that lost its body, so it gets no
+///   import stub.
+/// The errors for llvm.global_dtors, thread_local, ifuncs, module asm and
+/// variadic definitions stay, and an alias goes with the definition it
+/// aliases when that one is erased or loses its body. The prefix data,
+/// prologue data and function sanitizer metadata of a compiled definition are
+/// reported here and removed, so that its method stays for the calls that
+/// name it (whole-program mode reports them in the AsmPrinter, which skips
+/// the method).
+///
 /// Then the discardable function definitions that the program cannot reach
 /// lose their bodies, decided by reachability as GlobalDCE does
 /// (dropUnreferencedDiscardableFunctions): the candidates are the linkonce
@@ -119,6 +149,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
+#include "MSILTargetMachine.h"
 #include "MSILUtilities.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
@@ -129,6 +160,7 @@
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/Comdat.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -454,6 +486,26 @@ static bool stripZeroCallUsedRegs(Function &F) {
   return true;
 }
 
+/// Object mode: reports the prefix data, the prologue data and the
+/// -fsanitize=function signature (!func_sanitize) of the compiled definition
+/// \p F, which AsmPrinter would print as raw data in front of the method, and
+/// removes them. The method stays, so that the object's calls of it still
+/// name a method of the object (plan section 2). Whole-program mode reports
+/// the same error in MSILAsmPrinter::runOnMachineFunction, which skips the
+/// method; that output is never assembled.
+static bool stripFunctionData(Function &F) {
+  if (!F.hasPrefixData() && !F.hasPrologueData() &&
+      !F.getMetadata(LLVMContext::MD_func_sanitize))
+    return false;
+  F.getContext().diagnose(DiagnosticInfoUnsupported(
+      F, "prefix data, prologue data and function sanitizer metadata are "
+         "not supported for MSIL"));
+  F.setPrefixData(nullptr);
+  F.setPrologueData(nullptr);
+  F.setMetadata(LLVMContext::MD_func_sanitize, nullptr);
+  return true;
+}
+
 /// Erases the pseudo probes of -fpseudo-probe-for-profiling, the
 /// llvm.pseudoprobe calls and the !llvm.pseudo_probe_desc descriptors, with
 /// a warning: MSIL has no pseudo probe sections for a profiler to read.
@@ -570,6 +622,46 @@ static bool diagnoseILNameLength(const Function &F, const TargetMachine &TM) {
           Twine(MSIL::MaxILNameBytes) + " bytes ilasm accepts",
       DiagnosticLocation(F.getSubprogram())));
   return true;
+}
+
+/// Object mode: reports \p GV, an alias or global variable that the object
+/// names in its rows, if its IL name is longer than ilasm accepts: the name
+/// of a MemberRef or FieldDef row, which a CIL object holds no longer than
+/// that either (cli::MetadataBuilder). Returns true if it was reported.
+static bool diagnoseObjectILNameLength(const GlobalValue &GV,
+                                       const TargetMachine &TM) {
+  size_t Size = MSIL::getILName(GV, TM).size();
+  if (Size <= MSIL::MaxILNameBytes)
+    return false;
+  GV.getContext().emitError(
+      (isa<GlobalVariable>(GV) ? "global variable " : "") +
+      MSIL::getIRName(GV) + ": identifier of " + Twine(Size) +
+      " bytes is longer than the " + Twine(MSIL::MaxILNameBytes) +
+      " bytes ilasm accepts");
+  return true;
+}
+
+/// Object mode: reports \p F, a used function declaration, for each string
+/// of its import stubs (plan 5.8.3) that is longer than a CIL object's
+/// metadata strings can be (MSIL::MaxILNameBytes, as cli::MetadataBuilder
+/// checks them): "msil-import-module" names the stubs' ModuleRef, and
+/// "msil-import-name" is their ImplMap import name. Once per declaration,
+/// however many stubs its calls give it. Returns true if one was reported.
+static bool diagnoseImportStrings(const Function &F) {
+  bool Reported = false;
+  for (auto [Attr, What] :
+       {std::pair<StringRef, StringRef>("msil-import-module", "module"),
+        std::pair<StringRef, StringRef>("msil-import-name", "name")}) {
+    size_t Size = F.getFnAttribute(Attr).getValueAsString().size();
+    if (Size <= MSIL::MaxILNameBytes)
+      continue;
+    F.getContext().emitError(
+        "function " + MSIL::getIRName(F) + ": import " + What + " of " +
+        Twine(Size) + " bytes is longer than the " +
+        Twine(MSIL::MaxILNameBytes) + " bytes an MSIL object allows");
+    Reported = true;
+  }
+  return Reported;
 }
 
 /// Returns the type of the direct output \p OutNo of the inline asm call
@@ -1740,6 +1832,185 @@ static bool lowerWholeProgramSymbols(Module &M, const TargetMachine &TM) {
   return Changed;
 }
 
+//===----------------------------------------------------------------------===//
+// Object mode: the module is one object of a link (a CIL object, plan 5.8),
+// so aliases, extern_weak declarations, external globals and sections stay
+// symbols of the object (plan 5.8.10); what an object cannot carry is
+// reported here.
+//===----------------------------------------------------------------------===//
+
+/// The IR spelling of the comdat selection kind \p K.
+static StringRef getSelectionKindName(Comdat::SelectionKind K) {
+  switch (K) {
+  case Comdat::Any:
+    return "any";
+  case Comdat::ExactMatch:
+    return "exactmatch";
+  case Comdat::Largest:
+    return "largest";
+  case Comdat::NoDeduplicate:
+    return "nodeduplicate";
+  case Comdat::SameSize:
+    return "samesize";
+  }
+  llvm_unreachable("unknown comdat selection kind");
+}
+
+/// Reports every comdat whose selection kind is neither any nor
+/// nodeduplicate, once, and takes its members out of it: the link-info
+/// record carries those two kinds only (plan 5.8.8, COMDATS), as C produces
+/// only any. Returns true if a member changed.
+static bool diagnoseComdatSelections(Module &M) {
+  SmallPtrSet<const Comdat *, 4> Reported;
+  bool Changed = false;
+  for (GlobalObject &GO : M.global_objects()) {
+    const Comdat *C = GO.getComdat();
+    if (!C)
+      continue;
+    Comdat::SelectionKind K = C->getSelectionKind();
+    if (K == Comdat::Any || K == Comdat::NoDeduplicate)
+      continue;
+    if (Reported.insert(C).second)
+      M.getContext().emitError(
+          "comdat '" + C->getName() + "' uses selection kind '" +
+          getSelectionKindName(K) + "', which MSIL does not support");
+    GO.setComdat(nullptr);
+    Changed = true;
+  }
+  return Changed;
+}
+
+/// Reports every symbol of the object whose IL name starts with '<msil>'
+/// (rule R5: the object's scaffolding, '<msil>Symbols', '<msil>FnAddr' and
+/// '<msil>LinkInfo', and msil-ld's generated members own the prefix): every
+/// function and global variable definition, every used declaration and every
+/// alias. A function definition loses its body, and it and a used function
+/// declaration are added to \p DeletedBodies, so that their calls are erased
+/// and their other uses become poison, as for a definition with an error; a
+/// global variable or alias is added to \p ToErase. Returns true if a body
+/// was deleted.
+static bool diagnoseReservedNames(Module &M, const TargetMachine &TM,
+                                  SmallVectorImpl<Function *> &DeletedBodies,
+                                  SmallVectorImpl<GlobalValue *> &ToErase) {
+  auto IsReserved = [&](const GlobalValue &GV) {
+    if (!MSIL::getILName(GV, TM).starts_with("<msil>"))
+      return false;
+    M.getContext().emitError("symbol '" + MSIL::getILName(GV, TM) +
+                             "' starts with '<msil>', which MSIL reserves for "
+                             "the names it generates");
+    return true;
+  };
+  bool Changed = false;
+  for (Function &F : M) {
+    if (F.isIntrinsic() || (F.isDeclarationForLinker() && F.use_empty()))
+      continue;
+    if (!IsReserved(F))
+      continue;
+    if (!F.isDeclaration()) {
+      F.deleteBody();
+      // A declaration may not be in a comdat.
+      F.setComdat(nullptr);
+      Changed = true;
+    }
+    DeletedBodies.push_back(&F);
+  }
+  for (GlobalVariable &GV : M.globals())
+    if (!MSIL::isSpecialLLVMGlobal(GV) &&
+        (!GV.isDeclarationForLinker() || !GV.use_empty()) && IsReserved(GV))
+      ToErase.push_back(&GV);
+  for (GlobalAlias &GA : M.aliases())
+    if (IsReserved(GA))
+      ToErase.push_back(&GA);
+  return Changed;
+}
+
+/// Returns true if \p GA is a symbol that a CIL object can carry (plan
+/// 5.8.10): an alias of a definition plus a constant offset, through any chain
+/// of aliases (getAliasedObject). That is a function definition at offset 0,
+/// with a function value type, or a global variable definition that is not
+/// common (a common symbol has no place in the object) and holds the
+/// alias's bytes: an offset of at least 0 and at most the variable's size
+/// minus the alias's. A thread-local alias is not one (thread_local stays an
+/// error until phase 3, decision D26).
+static bool isObjectAlias(GlobalAlias &GA) {
+  APInt Offset;
+  GlobalObject *GO = getAliasedObject(GA, Offset);
+  if (!GO || GO->isDeclarationForLinker() || GA.isThreadLocal())
+    return false;
+  bool IsFunctionType = GA.getValueType()->isFunctionTy();
+  if (isa<Function>(GO))
+    return IsFunctionType && Offset.isZero();
+  auto *GV = dyn_cast<GlobalVariable>(GO);
+  if (!GV || IsFunctionType || GV->hasCommonLinkage() ||
+      MSIL::isSpecialLLVMGlobal(*GV) || Offset.isNegative())
+    return false;
+  const DataLayout &DL = GA.getDataLayout();
+  uint64_t Size = GV->getGlobalSize(DL);
+  uint64_t AliasSize =
+      GA.getValueType()->isSized() ? DL.getTypeAllocSize(GA.getValueType()) : 0;
+  return Offset.ule(Size) && AliasSize <= Size - Offset.getZExtValue();
+}
+
+/// Returns true if the chain of aliases that starts at \p GA, constant
+/// offsets stripped, reaches one of \p Values.
+static bool aliasChainReaches(const GlobalAlias &GA,
+                              const SmallPtrSetImpl<const Value *> &Values) {
+  const DataLayout &DL = GA.getDataLayout();
+  SmallPtrSet<const GlobalAlias *, 4> Visited;
+  const GlobalAlias *Cur = &GA;
+  while (Cur && Visited.insert(Cur).second) {
+    APInt Offset(DL.getIndexTypeSizeInBits(Cur->getType()), 0);
+    const Value *V = Cur->getAliasee()->stripAndAccumulateConstantOffsets(
+        DL, Offset, /*AllowNonInbounds=*/true);
+    if (Values.contains(V))
+      return true;
+    Cur = dyn_cast<GlobalAlias>(V);
+  }
+  return false;
+}
+
+/// Object mode: reports the comdats and the names that an object cannot carry
+/// and every alias that is not an object alias (isObjectAlias), and adds the
+/// global values to erase to \p ToErase (an erased alias's uses become
+/// poison, as in whole-program mode). Aliases, extern_weak declarations,
+/// external globals and sections stay. Returns true if the module changed.
+static bool checkObjectSymbols(Module &M, const TargetMachine &TM,
+                               SmallVectorImpl<Function *> &DeletedBodies,
+                               SmallVectorImpl<GlobalValue *> &ToErase) {
+  bool Changed = diagnoseComdatSelections(M);
+  Changed |= diagnoseReservedNames(M, TM, DeletedBodies, ToErase);
+  for (GlobalAlias &GA : M.aliases()) {
+    if (is_contained(ToErase, &GA))
+      continue;
+    if (!isObjectAlias(GA)) {
+      M.getContext().emitError("alias '" + MSIL::getILName(GA, TM) +
+                               "' must point to a definition plus a constant "
+                               "offset for MSIL");
+      ToErase.push_back(&GA);
+      continue;
+    }
+    // The calls and the addresses of an alias name it in MemberRef rows.
+    if (diagnoseObjectILNameLength(GA, TM))
+      ToErase.push_back(&GA);
+  }
+  return Changed;
+}
+
+/// Object mode: adds to \p ToErase every alias whose chain reaches one of
+/// \p Gone (definitions that lost their body, global values about to be
+/// erased) and that is not there yet: an alias may only alias a definition,
+/// and its aliasee would otherwise become poison. The definition's own error
+/// covers the alias.
+static void collectAliasesOf(Module &M, ArrayRef<const Value *> Gone,
+                             SmallVectorImpl<GlobalValue *> &ToErase) {
+  SmallPtrSet<const Value *, 8> GoneSet(Gone.begin(), Gone.end());
+  if (GoneSet.empty())
+    return;
+  for (GlobalAlias &GA : M.aliases())
+    if (!is_contained(ToErase, &GA) && aliasChainReaches(GA, GoneSet))
+      ToErase.push_back(&GA);
+}
+
 /// Returns true if \p V, a function or a constant that refers to one, has a
 /// use outside the bodies of the functions in \p Bodies: in another function,
 /// in a global variable initializer (llvm.used, llvm.compiler.used and
@@ -1904,9 +2175,17 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
   bool Changed = resetExceptionModel(M);
   Changed |= disableMetadataSections(M, TM);
 
-  // The module is the whole program until CIL objects (plan 5.8.10); then
-  // only whole-program mode lowers these.
-  Changed |= lowerWholeProgramSymbols(M, TM);
+  // Whole-program mode (-S, llc and msil-ld's --lto-emit-asm text) lowers
+  // the symbols that need another module; object mode keeps them and checks
+  // what an object can carry (plan 5.8.10). The mode is known now that the
+  // pipeline runs (MSILTargetMachine::isObjectMode).
+  bool ObjectMode = static_cast<const MSILTargetMachine &>(TM).isObjectMode();
+  // Object mode: the global values to erase, reported by checkObjectSymbols.
+  SmallVector<GlobalValue *, 4> ObjectErase;
+  if (ObjectMode)
+    Changed |= checkObjectSymbols(M, TM, DeletedBodies, ObjectErase);
+  else
+    Changed |= lowerWholeProgramSymbols(M, TM);
 
   // Before any definition is diagnosed: one that is dropped is not compiled.
   Changed |= dropUnreferencedDiscardableFunctions(M);
@@ -1920,6 +2199,11 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
   // doInitialization are declarations now, and their uses are replaced
   // anyway.
   SmallVector<Function *, 4> STDecls;
+  // Object mode: the used declarations reported for their IL names or import
+  // strings. An object names them in MemberRef rows and import stubs, so
+  // they go as a definition that lost its body goes: the writer is never
+  // handed a string that a CIL object cannot hold.
+  SmallVector<Function *, 4> ObjectDecls;
   for (Function &F : M) {
     Changed |= stripStackProtector(F);
     Changed |= stripEntryInstrumentation(F);
@@ -1930,10 +2214,14 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
     // name of a used declaration is printed in references to it.
     if (F.isDeclaration() || F.hasAvailableExternallyLinkage()) {
       if (!F.isIntrinsic() && !F.use_empty()) {
-        diagnoseILNameLength(F, TM);
+        bool HasError = diagnoseILNameLength(F, TM);
+        if (ObjectMode)
+          HasError |= diagnoseImportStrings(F);
         if (STFinder.inType(F.getFunctionType()) &&
             !is_contained(DeletedBodies, &F))
           STDecls.push_back(&F);
+        if (ObjectMode && HasError)
+          ObjectDecls.push_back(&F);
       }
       continue;
     }
@@ -1942,6 +2230,8 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
     HasError |= diagnoseDefinition(F, ASFinder, FPFinder, STFinder);
     if (!HasError) {
       Changed |= endBlocksAtTraps(F);
+      if (ObjectMode)
+        Changed |= stripFunctionData(F);
       continue;
     }
     F.deleteBody();
@@ -1954,7 +2244,34 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
   // Every definition that loses its body is known now, and so is every
   // declaration whose address is still taken.
   Changed |= diagnoseAddressTakenDeclarations(STDecls, STFinder, DeletedBodies);
+  for (Function *F : ObjectDecls) {
+    if (is_contained(DeletedBodies, F))
+      continue;
+    if (!F->isDeclaration()) {
+      F->deleteBody();
+      // A declaration may not be in a comdat.
+      F->setComdat(nullptr);
+    }
+    DeletedBodies.push_back(F);
+    Changed = true;
+  }
   Changed |= eraseCallsOf(DeletedBodies);
+
+  // Object mode: an alias of a definition that lost its body goes too, before
+  // poisonAddressesOf would make its aliasee poison.
+  if (ObjectMode) {
+    SmallVector<GlobalValue *, 4> DeadAliases;
+    SmallVector<const Value *, 4> Gone(DeletedBodies.begin(),
+                                       DeletedBodies.end());
+    collectAliasesOf(M, Gone, DeadAliases);
+    // Except the ones reported already, which ObjectErase erases below.
+    erase_if(DeadAliases,
+             [&](GlobalValue *GV) { return is_contained(ObjectErase, GV); });
+    if (!DeadAliases.empty()) {
+      eraseGlobalValues(M, DeadAliases);
+      Changed = true;
+    }
+  }
 
   Changed |= diagnoseGlobalDtors(M);
 
@@ -1988,13 +2305,33 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
       GV.setThreadLocal(false);
       Changed = true;
     }
+    // Object mode: a definition's address field (a FieldDef row) and a used
+    // declaration's '<msil>Symbols' MemberRef carry the IL name, so a name
+    // that is too long goes with the variable (the AsmPrinter's error in
+    // whole-program mode). A variable erased above, or reported by
+    // checkObjectSymbols, is not reported again.
+    if (ObjectMode && (ToErase.empty() || ToErase.back() != &GV) &&
+        !is_contained(ObjectErase, &GV) &&
+        (!GV.isDeclarationForLinker() || !GV.use_empty()) &&
+        diagnoseObjectILNameLength(GV, TM))
+      ToErase.push_back(&GV);
   }
-  // lowerAliases has lowered every alias of a definition plus a constant
-  // offset that fits its kind.
-  for (GlobalAlias &GA : M.aliases()) {
-    Ctx.emitError("alias " + MSIL::getIRName(GA) +
-                  " is not supported for MSIL");
-    ToErase.push_back(&GA);
+  if (ObjectMode) {
+    // checkObjectSymbols has reported the aliases that an object cannot
+    // carry; an alias also goes with the global value it aliases.
+    for (GlobalValue *GV : ObjectErase)
+      if (!is_contained(ToErase, GV))
+        ToErase.push_back(GV);
+    SmallVector<const Value *, 8> Gone(ToErase.begin(), ToErase.end());
+    collectAliasesOf(M, Gone, ToErase);
+  } else {
+    // lowerAliases has lowered every alias of a definition plus a constant
+    // offset that fits its kind.
+    for (GlobalAlias &GA : M.aliases()) {
+      Ctx.emitError("alias " + MSIL::getIRName(GA) +
+                    " is not supported for MSIL");
+      ToErase.push_back(&GA);
+    }
   }
   for (GlobalIFunc &GI : M.ifuncs()) {
     Ctx.emitError("ifunc " + MSIL::getIRName(GI) +

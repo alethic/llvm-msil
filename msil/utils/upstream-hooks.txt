@@ -122,12 +122,14 @@ min-pass 306
 
 fork-only .github/workflows/msil-ci.yml
 fork-only clang/lib/Basic/Targets/MSIL.h
-# The clang MSIL toolchain (plan 5.10.1, M14) and its driver tests (5.6.4).
+# The clang MSIL toolchain (plan 5.10.1, M14) and its driver tests (5.6.4); msil-object.c
+# (M19) pins that -c writes CIL objects.
 fork-only clang/lib/Driver/ToolChains/MSIL.cpp
 fork-only clang/lib/Driver/ToolChains/MSIL.h
 fork-only clang/test/Driver/msil-header-search.c
 fork-only clang/test/Driver/msil-link.c
 fork-only clang/test/Driver/msil-lto.c
+fork-only clang/test/Driver/msil-object.c
 fork-only clang/test/Driver/msil-toolchain.c
 fork-only clang/test/Preprocessor/init-msil.c
 # The ECMA-335 format headers (plan 5.7.2) and the link-info record v1 (5.8.11), header-only.
@@ -175,8 +177,8 @@ hook clang/include/clang/Basic/DiagnosticCommonKinds.td
   fork clang/test/CodeGen/MSIL/ms-inline-asm.c
 
 hook clang/include/clang/Basic/DiagnosticDriverKinds.td
-  none adds the errors err_drv_msil_no_object_output (reworded in M13) and err_drv_msil_ilasm_input (first reported in M14) only, in no group (as DiagnosticCommonKinds.td)
-  fork clang/test/Driver/msil-toolchain.c
+  none adds the errors err_drv_msil_no_object_output (reworded in M13; defined but unused from M19, its removal deferred to a later edit of this file: plan 5.10.5, M19.c) and err_drv_msil_ilasm_input (first reported in M14) only, in no group (as DiagnosticCommonKinds.td)
+  fork clang/test/Driver/msil-object.c
 
 hook clang/lib/Basic/Targets.cpp
   # init.c (112 s) and predefined-arch-macros.c (174 s) also pass, but are too slow for the
@@ -188,8 +190,15 @@ hook clang/lib/Basic/Targets.cpp
   fork clang/test/Preprocessor/init-msil.c
 
 hook clang/lib/CodeGen/BackendUtil.cpp
+  # The MSIL case of asanUseGlobalsGC's object-format switch, and RunCodegenPipeline consuming
+  # the Error of a failed codegen before err_fe_unable_to_interface_with_target, where an
+  # assertions build would otherwise abort on the unchecked Error. Since M19 plain -emit-obj
+  # writes CIL objects; codegen still fails for MSIL triples when -mllvm -force-new-pm-codegen
+  # forces the new-PM codegen path, because MSILTargetMachine does not override
+  # buildCodeGenPipeline and TargetMachine's default returns a StringError. That run of
+  # emit-obj.c pins the MSIL side of the hunk.
   lit clang/test/CodeGen/asan-globals-gc.cpp
-  fork clang/test/CodeGen/MSIL/emit-obj-unsupported.c
+  fork clang/test/CodeGen/MSIL/emit-obj.c
 
 hook clang/lib/CodeGen/CGBuiltin.cpp
   lit clang/test/CodeGen/bittest-intrin.c
@@ -282,11 +291,15 @@ hook clang/lib/Driver/ToolChain.cpp
   fork clang/test/Driver/msil-toolchain.c
 
 hook clang/lib/Driver/ToolChains/Clang.cpp
-  # cl-options.c (/GS default, /volatile:ms) and clang_f_opts.c (-fms-volatile) are the only
-  # upstream tests of those hunks; they need llvm-profdata, an M11 build target.
-  # embed-bitcode-wasm.c needs llvm-readobj, a build target from M13. From M14 ClangAs reports
-  # err_drv_msil_ilasm_input for MSIL triples (plan 5.10.2); as-options.s and integrated-as.s
-  # run ClangAs for native triples.
+  # The hunks: -fembed-bitcode is an error for MSIL triples (embed-bitcode.c,
+  # fembed-bitcode.c and embed-bitcode-wasm.c run the code around it); MSIL triples get
+  # neither -fms-volatile nor clang-cl's /GS stack protector by default (cl-options.c for /GS
+  # and /volatile:ms, clang_f_opts.c for -fms-volatile: the only upstream tests of those
+  # hunks); and from M14 ClangAs reports err_drv_msil_ilasm_input for them (plan 5.10.2;
+  # as-options.s and integrated-as.s run ClangAs for native triples). Since M19 the
+  # AssembleJobAction branch has no MSIL hunk: -c writes CIL objects (msil-object.c).
+  # cl-options.c and clang_f_opts.c need llvm-profdata, an M11 build target;
+  # embed-bitcode-wasm.c needs llvm-readobj, a build target from M13.
   lit clang/test/Driver/embed-bitcode.c
   lit clang/test/Driver/fembed-bitcode.c
   lit clang/test/Driver/embed-bitcode-wasm.c
@@ -295,6 +308,7 @@ hook clang/lib/Driver/ToolChains/Clang.cpp
   lit clang/test/Driver/cl-options.c
   lit clang/test/Driver/clang_f_opts.c
   fork clang/test/Driver/msil-toolchain.c
+  fork clang/test/Driver/msil-object.c
 
 hook clang/lib/Parse/ParsePragma.cpp
   # #pragma comment for MSIL triples (plan 5.10.6): the handler is installed and removed as for

@@ -31,6 +31,8 @@ class MSILTargetMachine final : public CodeGenTargetMachineImpl {
   std::unique_ptr<TargetLoweringObjectFile> TLOF;
   /// Subtargets keyed on the native CPU and feature strings of each function.
   mutable StringMap<std::unique_ptr<MSILSubtarget>> SubtargetMap;
+  /// The file type of the last createMCStreamer call, if any.
+  std::optional<CodeGenFileType> OutputFileType;
 
 public:
   MSILTargetMachine(const Target &T, const Triple &TT, StringRef CPU,
@@ -67,11 +69,23 @@ public:
                                 SMDiagnostic &Error,
                                 SMRange &SourceRange) const override;
 
-  /// Only textual output (ILAsm) is supported: an object file request is an
-  /// error.
+  /// Records whether the output is an object file (isObjectMode), and in
+  /// object mode makes assembly output object-form text (the InstPrinter
+  /// option 'object-form', plan 5.8.4); otherwise the base class's streamer.
   Expected<std::unique_ptr<MCStreamer>>
   createMCStreamer(raw_pwrite_stream &Out, raw_pwrite_stream *DwoOut,
                    CodeGenFileType FileType, MCContext &Ctx) override;
+
+  /// Whether the code generator writes a CIL object (plan 5.8.1): an object
+  /// file (CodeGenFileType::ObjectFile), or its ILAsm form, object-form
+  /// text, when the output is assembly and -msil-object-form is set. Object
+  /// mode replaces the whole-program rules of -S, llc and msil-ld's
+  /// --lto-emit-asm text by symbols (plan 5.8.10). -filetype=null and
+  /// assembly output without the option are whole-program. The mode is known
+  /// once createMCStreamer has run, and CodeGenTargetMachineImpl's
+  /// addPassesToEmitFile adds the IR passes before it calls it, so a pass
+  /// asks when it runs (runOnModule, runOnFunction), never when it is added.
+  bool isObjectMode() const;
 };
 
 } // end namespace llvm

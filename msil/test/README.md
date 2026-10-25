@@ -88,9 +88,9 @@ transcripts, not IL.
 then checks and runs `prog.exe` as `%{msil_c}` does:
 
 ```text
-%{msil_srcs}        --clang -c (bitcode)-->                    obj/<stem>.o
+%{msil_srcs}        --clang -flto -c (bitcode)-->              obj/<stem>.o
 %{msil_stock_srcs}  --clang --target=<native> -flto -c-->      stock/<stem>.o
-%{msil_archives}    --clang -c, then llvm-ar rcs-->            ar/<NAME>/lib<NAME>.a
+%{msil_archives}    --clang -flto -c, then llvm-ar rcs-->      ar/<NAME>/lib<NAME>.a
   --clang -<L> %{msil_ldflags} <objects> -Lar/<NAME> -l<NAME> %{msil_libs}
      %{msil_native_libs} -Wl,--lto-emit-asm (clang runs msil-ld, which also
      reads the driver's default libraries)-->  prog.il  --ilasm -exe-->  prog.exe
@@ -149,7 +149,25 @@ program of `M1/` that has an `.expected` file at `O0` and `O2` with
 with the .NET Framework ilasm, and requires the bytes that the encoding
 comments give for each method to equal ilasm's (code bytes, the token at each
 fixup and `.maxstack`), for at least 2,600 methods (2,819 at M18); its log is
-`build/lit-results/encoder-parity.log`.
+`build/lit-results/encoder-parity.log`. Nor are the `obj-text` and
+`obj-text-wsl` legs (M19): `obj-text` (Windows only) runs
+`cli-corpus-check.py --mode object` over every C program of `M1/` with an
+`.expected` file at `O0` and `O2`, and over `M1/11-programs` for
+`x86_64-unknown-linux-gnu-msil`. It compiles each with `clang -c` into a CIL
+object twice, from two directories, and with
+`-S -mllvm -msil-object-form`, which the .NET Framework ilasm assembles into
+an object too, and requires the two compiles to give the same bytes, the
+object to list exactly like ilasm's (`llvm-cil-dump --canonical
+--params=drop --initlocals=ignore-without-locals --snan=quiet`, the
+link-info record included) with the same `--link-info` lines, `mdcanon` and
+both ildasms to open it, the netmodule envelope, the consistency rules C1-C5
+and C7 between its metadata and its record (and between ilasm's object and
+the same record), and the `llvm-nm` letters and `llvm-ar` index of its COFF
+symbol view that the record gives. `obj-text-wsl` (`-Wsl`) runs
+`--mode gnu-tools` at `O0` and `O2` over `M1/`, and over `M1/11-programs`
+for `x86_64-unknown-linux-gnu-msil`: GNU `nm` and `ar` inside WSL must read
+those objects as `llvm-nm` does. Their logs are
+`build/lit-results/obj-text.log` and `obj-text-wsl.log`.
 
 Every child process (ilasm, ildasm, ILVerify, PEVerify, jitall, dotnet, native
 programs) runs under a wall-clock timeout (60 s) and a cap on committed memory
@@ -215,15 +233,15 @@ missing belong to later milestones (`04-shared/` M22, `05-refs/` M21,
 | `02-lto/` | M14 | stock-clang bitcode for the native triple, also inside an archive, and `msil-ld`'s once-per-link warning about it |
 | `03-native/` | M15 | native libraries: C library functions outside the standalone table (`strlen`, `strcmp`, `atoi`, `malloc`, ...) and a program without output, glibc's versioned libm functions and its IFUNCs (Linux triple), `kernel32.lib`, `htons` imported by ordinal, `strdup` through an oldnames alias and the functions of `--ucrtbase-imports` (Windows triple), a `native.dll` or `libnative.so` that the test builds and ships (`%{msil_native_libs}`, `%{msil_deps}`), `-Wl,--print-imports` and the linked text's P/Invokes, and the named errors for an undefined function and for `-Bstatic` |
 | `06-det/` | M14 | determinism: `%{msil_det}` builds a program twice and compares the bitcode objects, the archive and the `--lto-emit-asm` text |
-| `08-semantics/` | M14 | the link-semantics matrix of plan 5.9.16, LTO rows (`llvm/docs/MSIL/Status.md` section 2): native transcripts, or named diagnostics for duplicate, undefined and mismatched symbols, thread-local variables and destructors; since M15 a library named by `#pragma comment(lib)` (`pragma-comment-lib`) and `qsort` with a C comparator, a named error until phase 3 (`native-callback`) |
-| `09-hosted/` | M15 | the optional hosted leg (plan Q16), compile-only: glibc's 38 C and POSIX headers and the UCRT's headers with `-fsyntax-only`, a hosted glibc program linked to text against glibc's real `libc.so` and `libm.so` scripts, and `atexit`, which glibc defines only in `libc_nonshared.a`, as a named error. Its `lit.local.cfg` needs only clang with the MSIL target |
+| `08-semantics/` | M14 | the link-semantics matrix of plan 5.9.16, LTO rows (`llvm/docs/MSIL/Status.md` section 2): native transcripts, or named diagnostics for duplicate, undefined and mismatched symbols, thread-local variables and destructors; since M15 a library named by `#pragma comment(lib)` (`pragma-comment-lib`) and `qsort` with a C comparator, a named error until phase 3 (`native-callback`); since M19 a declaration without a prototype called with two argument lists (`knr-two-arities`), which runs on `lto` until its object row comes with M20 |
+| `09-hosted/` | M15 | the optional hosted leg (plan Q16), compile-only: glibc's 38 C and POSIX headers and the UCRT's headers with `-fsyntax-only`, a hosted glibc program linked to text against glibc's real `libc.so` and `libm.so` scripts, `atexit`, which glibc defines only in `libc_nonshared.a`, as a named error, and the spellings that glibc's headers give functions of the callback list (`__sysv_signal`, `ftw64`, `nftw64`, `scandir64`) as named errors too. Its `lit.local.cfg` needs only clang with the MSIL target |
 
-`M2/` has 56 tests (10, 5, 2, 12, 1, 22 and 4); 42 compare a transcript,
+`M2/` has 58 tests (10, 5, 2, 12, 1, 23 and 5); 43 compare a transcript,
 eight pin a named diagnostic, `06-det/det-lto.test` checks determinism,
 `03-native/print-imports.test` checks `msil-ld`'s `--print-imports` and
-linked text, and the four of `09-hosted/` only compile and link. Every
-transcript is the same on Windows and on the E7 Linux oracle, so there is no
-`.linux.expected` file. `08-semantics/p4-selectany.test` (`__declspec`) and
+linked text, and the five of `09-hosted/` only compile and link (two of
+them to a named link error). Every transcript is the same on Windows and on
+the E7 Linux oracle, so there is no `.linux.expected` file. `08-semantics/p4-selectany.test` (`__declspec`) and
 `03-native/kernel32`, `ordinal-import`, `oldnames-alias` and
 `ucrtbase-imports` require a Windows triple, `03-native/ifunc` a Linux one.
 
@@ -303,10 +321,11 @@ python build/bin/llvm-lit.py -sv --param msil_pipeline=lto msil/test/M1/11-progr
 ```
 
 `check-msil` runs this suite and the MSIL lit tests outside `msil/`:
-`llvm/test/CodeGen/MSIL`, `clang/test/CodeGen/MSIL`,
-`clang/test/Preprocessor/init-msil.c`, the driver tests
-`clang/test/Driver/msil-toolchain.c`, `msil-link.c`, `msil-lto.c` and
-`msil-header-search.c`, when lld is built `lld/test/MSIL` (the `msil-ld`
+`llvm/test/CodeGen/MSIL` (with the CIL object tests `object-*.ll` of M19),
+`clang/test/CodeGen/MSIL`, `clang/test/Preprocessor/init-msil.c`, the driver
+tests `clang/test/Driver/msil-toolchain.c`, `msil-link.c`, `msil-lto.c`,
+`msil-header-search.c` and `msil-object.c` (M19: `clang -c` writes CIL
+objects), when lld is built `lld/test/MSIL` (the `msil-ld`
 tests), `llvm/test/MC/MSIL` (M18: the encodings, fixups and operand
 spellings of `llc -show-mc-encoding` and `-M object-form`), and
 `llvm/test/tools/llvm-cil-dump` and `llvm/test/tools/llvm-cil-copy` (M17),
@@ -314,8 +333,16 @@ whose tools `check-msil` builds; `check-llvm` and
 `check-llvm-tools-llvm-cil-dump` (or `-copy`) do not, so run those two
 directories alone only after `ninja -C build llvm-cil-dump llvm-cil-copy`
 (their `lit.local.cfg` reports the tests UNSUPPORTED while a tool is missing).
+The CIL object tests `object-*.ll` of `llvm/test/CodeGen/MSIL` and
+`clang/test/CodeGen/MSIL/emit-obj.c` (M19) read objects with `llvm-cil-dump`
+too: they require the lit feature `llvm-cil-dump`, which
+`llvm/test/CodeGen/MSIL/lit.local.cfg` sets when the tool is built, so
+`check-llvm`, `check-clang` and `check-llvm-codegen-msil`, which do not build
+it, report them UNSUPPORTED on a tree without it (under
+`msil_require_verify=1` a missing tool is a configuration error).
 This suite depends on `lld` (which makes `msil-ld`), `llvm-ar`,
-`llvm-nm`, `llvm-cil-dump` (`%msil_canon`), `llvm-cil-copy`, `yaml2obj`
+`llvm-nm` (both also read the COFF view of CIL objects, M19), `llvm-cil-dump`
+(`%msil_canon`), `llvm-cil-copy`, `yaml2obj`
 (which makes the tools' test images) and, since M18, `llvm-mc` (which
 `llvm/test/MC/MSIL` runs) besides clang, llc and the lit tools, and
 `check-msil` also on `llvm-as`, `llvm-bcanalyzer`, `llvm-lib` and
@@ -350,10 +377,11 @@ oracle required), `det` (`M2/06-det`), WSL with the linux triple on the
 private runtime (`msil_wsl_dotnet=private`) and, in `wsl-net10` and
 `wsl-quick`, the E7 oracle required, the Linux and the modern Windows ilasm,
 the ildasm round trip, and the optional `hosted` leg (`M2/09-hosted` with
-`msil_glibc_sysroot` given, M15), and four legs that are not lit runs: `expected`
-(`update-expected.py --check` of `M1/` and `M2/`), `expected-linux`
-(`update-expected.py --check --os linux`, the E7 oracle), `utc` and
-`encoder-parity` (M18, above);
+`msil_glibc_sysroot` given, M15), and six legs that are not lit runs:
+`expected` (`update-expected.py --check` of `M1/` and `M2/`), `expected-linux`
+(`update-expected.py --check --os linux`, the E7 oracle), `utc`,
+`encoder-parity` (M18, above), and `obj-text` and `obj-text-wsl` (M19,
+above);
 `llvm/docs/MSIL/GettingStarted.md` section 7 lists them. Each lit leg also
 passes `--param msil_require_exec=1` and `--param msil_require_link=1`, and
 a lit leg passes only when lit exits 0 and at least one test passed.
@@ -473,8 +501,9 @@ int helper(void) { return 100; }
   composite (other than `rm -rf %t && split-file %s %t`) itself, with the
   oracle's tools (`03-native/native-lib.test`).
 - Common symbols use `__attribute__((common))`, not `-fcommon`, which the
-  native oracle would not get, and no RUN line uses a plain `clang -c`: what
-  `-c` writes changes in M19.
+  native oracle would not get, and no RUN line uses a plain `clang -c`: since
+  M19 it writes a CIL object, which `msil-ld` links only from M20, so
+  `msil-prog.py` compiles with `clang -flto -c`.
 - A case that must stop with a named diagnostic runs
   `%if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s
   --check-prefix=LTO --implicit-check-not="LLVM ERROR"
