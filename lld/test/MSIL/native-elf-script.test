@@ -59,10 +59,10 @@
 # RUN:   -o glibc.il 2>&1 | count 0
 # RUN: %{il} --check-prefix=GLIBC --input-file=glibc.il
 # RUN: FileCheck %s --check-prefix=IL-NONE --input-file=glibc.il
-# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'cbrt'(float64) cil managed preservesig {}{{$}}
-# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ld-linux-x86-64.so.2" cdecl) native int '__tls_get_addr'(native int) cil managed preservesig {}{{$}}
-# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libmvec.so.1" cdecl) float64 '_ZGVbN2v_sin'(float64) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'cbrt'(float64) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ld-linux-x86-64.so.2" nomangle cdecl) native int '__tls_get_addr'(native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libmvec.so.1" nomangle cdecl) float64 '_ZGVbN2v_sin'(float64) cil managed preservesig {}{{$}}
 ## The %{il} patterns nowhere in the file: for a prefix made only of -DAG
 ## lines, --implicit-check-not checks only the text before the first match.
 # IL-NONE-NOT: "libc"
@@ -101,10 +101,10 @@
 # RUN: llvm-as grp.ll -o grp.o
 # RUN: msil-ld --lto-emit-asm --lto-O0 --sysroot=sys grp.o -L grp -L other -lgrp -o grp.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=GRP --input-file=grp.il
-# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libone.so.1" cdecl) int32 'one'() cil managed preservesig {}{{$}}
-# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libtwo.so.2" cdecl) int32 'two'() cil managed preservesig {}{{$}}
-# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libthree.so.3" cdecl) int32 'three'() cil managed preservesig {}{{$}}
-# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'cbrt'(float64) cil managed preservesig {}{{$}}
+# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libone.so.1" nomangle cdecl) int32 'one'() cil managed preservesig {}{{$}}
+# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libtwo.so.2" nomangle cdecl) int32 'two'() cil managed preservesig {}{{$}}
+# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libthree.so.3" nomangle cdecl) int32 'three'() cil managed preservesig {}{{$}}
+# GRP-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'cbrt'(float64) cil managed preservesig {}{{$}}
 
 ## A relative name found nowhere, and a -l<name> found nowhere.
 # RUN: cp norel.txt grp/libnorel.so

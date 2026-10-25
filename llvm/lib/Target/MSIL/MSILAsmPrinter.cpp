@@ -41,6 +41,12 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/CLI.h"
+#include "llvm/CLI/BCLMembers.h"
+#include "llvm/CLI/Handles.h"
+#include "llvm/CLI/ILBuilder.h"
+#include "llvm/CLI/Opcodes.h"
+#include "llvm/CLI/Signature.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -63,6 +69,8 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -73,6 +81,7 @@
 #include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
@@ -167,18 +176,6 @@ static constexpr StringRef ImageTypeName = "<msil>image_t";
 static constexpr StringRef ImageFieldName = "<msil>image";
 static constexpr StringRef ImageLabel = "<msil>image_d";
 
-/// The prefix of the address field of a function whose address is used: the
-/// field '<msil>fn_<IL name>' holds the value of 'ldftn' (plan section 12,
-/// 'Phase-1 function addresses'). An asm label can give a global variable
-/// such a name (checkAddressFieldNames).
-static constexpr StringRef FuncFieldPrefix = "<msil>fn_";
-
-/// The BCL method that allocates the data segment. It works on every runtime
-/// of decision D10, and its memory is neither zeroed nor freed.
-static constexpr StringRef AllocHGlobal =
-    "call native int [mscorlib]System.Runtime.InteropServices."
-    "Marshal::AllocHGlobal(native int)";
-
 /// Whether \p Name is a constructor name, which no method or P/Invoke of a
 /// function may have: the runtime runs '<Module>::.cctor', which the printer
 /// generates (emitModuleInitializer), as the module initializer, and refuses
@@ -194,89 +191,172 @@ static void reportReservedMethodName(const Function &F, StringRef Name) {
                            " has the reserved IL name '" + Name + "'");
 }
 
-/// An 'ldc.i4' of \p Value: in its shortest form, as MSILInstPrinter prints
-/// CONST_I32, if \p ShortForm, else always 'ldc.i4 <Value>', as it prints the
-/// offset of GLOBAL_ADDR.
-static std::string getLdcI4(int32_t Value, bool ShortForm = true) {
-  if (ShortForm && Value == -1)
-    return "ldc.i4.m1";
-  if (ShortForm && Value >= 0 && Value <= 8)
-    return ("ldc.i4." + Twine(Value)).str();
-  if (ShortForm && isInt<8>(Value))
-    return ("ldc.i4.s " + Twine(Value)).str();
-  return ("ldc.i4 " + Twine(Value)).str();
+/// The CIL type of a local of type \p T (canonical listing v1's spelling is
+/// ILAsm's for these).
+static cli::TypeSig toTypeSig(MSIL::ValType T) {
+  switch (T) {
+  case MSIL::ValType::I32:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_I4);
+  case MSIL::ValType::NativeInt:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_I);
+  case MSIL::ValType::I64:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_I8);
+  case MSIL::ValType::F32:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_R4);
+  case MSIL::ValType::F64:
+    return cli::TypeSig::get(cli::ELEMENT_TYPE_R8);
+  }
+  llvm_unreachable("MSIL: unknown value type");
 }
 
 namespace {
 /// The body of a method that the printer writes itself ('<msil>Main', and the
-/// module initializer): CIL lines with their stack effects, so that the
-/// .maxstack of the method is computed, not guessed (the JIT rejects a method
-/// whose .maxstack is too small with InvalidProgramException).
-class SynthesizedBody {
-  SmallVector<std::string, 0> Lines;
-  unsigned Depth = 0;
-  unsigned MaxStack = 0;
+/// module initializer), built with cli::ILBuilder (plan M18.a (7)): it
+/// computes .maxstack (the JIT rejects a method whose .maxstack is too small
+/// with InvalidProgramException), chooses the shortest forms and the branch
+/// forms, and the printer emits each instruction as a CIL_ MCInst, like the
+/// instructions of a compiled function. Token operands are
+/// TokenRef::getExternal(i), the index of an MSILMemberRefExpr in this body's
+/// table; labels are MCSymbols.
+class SynthesizedMethod {
+  cli::ILBuilder Builder;
+  SmallVector<const MSILMemberRefExpr *, 16> Tokens;
+  /// The symbol of each label, by ILLabel::Id.
+  SmallVector<MCSymbol *, 2> LabelSyms;
+
+  cli::TokenRef getToken(const MSILMemberRefExpr *Ref) {
+    Tokens.push_back(Ref);
+    return cli::TokenRef::getExternal(Tokens.size() - 1);
+  }
 
 public:
-  /// One CIL instruction that pops \p Pops values and then pushes \p Pushes.
-  void addInst(const Twine &Text, unsigned Pops, unsigned Pushes) {
-    assert(Depth >= Pops && "synthesized code underflows the stack");
-    Depth = Depth - Pops + Pushes;
-    MaxStack = std::max(MaxStack, Depth);
-    Lines.push_back(("  " + Text).str());
+  explicit SynthesizedMethod(bool ReturnsValue) : Builder(ReturnsValue) {}
+
+  cli::ILBuilder &builder() { return Builder; }
+
+  /// A new label, printed as \p Sym.
+  cli::ILLabel createLabel(MCSymbol *Sym) {
+    cli::ILLabel L = Builder.createLabel();
+    assert(L.Id == LabelSyms.size() && "labels are numbered densely");
+    LabelSyms.push_back(Sym);
+    return L;
   }
 
-  /// A branch that pops \p Pops values. Synthesized code branches and joins
-  /// with an empty evaluation stack only, so every label has depth 0.
-  void addBranch(const Twine &Text, unsigned Pops) {
-    addInst(Text, Pops, 0);
-    assert(Depth == 0 && "synthesized code branches with a non-empty stack");
+  /// An instruction with a token operand and a fixed stack effect (ldsfld,
+  /// stsfld, ldsflda, ldftn).
+  void emitToken(cli::Opcode Op, const MSILMemberRefExpr *Ref) {
+    Builder.emitToken(Op, getToken(Ref));
   }
 
-  /// A branch target (see addBranch).
-  void addLabel(StringRef Name) {
-    assert(Depth == 0 && "synthesized code joins with a non-empty stack");
-    Lines.push_back((Name + ":").str());
+  /// 'call' of \p Callee, which pops \p Pops values and pushes \p Pushes.
+  void emitCall(const MSILMemberRefExpr *Callee, unsigned Pops,
+                unsigned Pushes) {
+    Builder.emitCall(cli::Opcode::Call, getToken(Callee), Pops, Pushes);
   }
 
-  /// Pushes \p Value as a native int (decision D2): 'ldc.i4' (see getLdcI4
-  /// for \p ShortForm) or 'ldc.i8', then 'conv.i'.
-  void addNativeInt(int64_t Value, bool ShortForm) {
+  /// Pushes \p Value as a native int (decision D2): the shortest 'ldc.i4'
+  /// form or 'ldc.i8', then 'conv.i', as code does for CONST_I64.
+  void emitNativeInt(int64_t Value) {
     if (isInt<32>(Value))
-      addInst(getLdcI4(static_cast<int32_t>(Value), ShortForm), 0, 1);
+      Builder.emitLdcI4(static_cast<int32_t>(Value));
     else
-      addInst("ldc.i8 " + Twine(Value), 0, 1);
-    addInst("conv.i", 1, 1);
+      Builder.emitImm(cli::Opcode::Ldc_i8, Value);
+    Builder.emit(cli::Opcode::Conv_i);
   }
 
-  /// Adds \p Offset to the native int on top of the stack, exactly as
-  /// MSILInstPrinter does after the 'ldsfld' of GLOBAL_ADDR; nothing for 0.
-  void addOffset(int64_t Offset) {
+  /// Adds \p Offset to the native int on top of the stack, exactly as code
+  /// does after the 'ldsfld' of GLOBAL_ADDR; nothing for 0.
+  void emitOffset(int64_t Offset) {
     if (Offset == 0)
       return;
     if (isInt<32>(Offset)) {
-      addInst(getLdcI4(static_cast<int32_t>(Offset), /*ShortForm=*/false), 0,
-              1);
+      Builder.emitLdcI4(static_cast<int32_t>(Offset));
     } else {
-      addInst("ldc.i8 " + Twine(Offset), 0, 1);
-      addInst("conv.i", 1, 1);
+      Builder.emitImm(cli::Opcode::Ldc_i8, Offset);
+      Builder.emit(cli::Opcode::Conv_i);
     }
-    addInst("add", 2, 1);
+    Builder.emit(cli::Opcode::Add);
   }
 
-  /// Writes .maxstack, the .locals line for \p Locals (the comma-separated
-  /// types; nothing if empty) and the instructions.
-  void emit(MSILTargetStreamer &TS, StringRef Locals) const {
-    assert(Depth == 0 && "synthesized code falls off the end of the method");
-    TS.emitMaxStack(MaxStack);
-    // Never 'init' (decision D13): every local is written before it is read.
-    if (!Locals.empty())
-      TS.emitILLine("  .locals (" + Locals + ")");
-    for (const std::string &Line : Lines)
-      TS.emitILLine(Line);
-  }
+  /// Lays the body out and emits .maxstack, the .locals of \p Locals and the
+  /// instructions with their labels.
+  void emit(MSILAsmPrinter &AP, ArrayRef<cli::TypeSig> Locals);
 };
 } // end anonymous namespace
+
+void SynthesizedMethod::emit(MSILAsmPrinter &AP,
+                             ArrayRef<cli::TypeSig> Locals) {
+  if (Error E = Builder.layout())
+    reportFatalInternalError(Twine("MSIL: synthesized method: ") +
+                             toString(std::move(E)));
+  MSILTargetStreamer &TS = AP.getTargetStreamer();
+  TS.emitMaxStack(Builder.getMaxStack());
+  // Never 'init' (decision D13): every local is written before it is read.
+  TS.emitLocals(Locals);
+
+  MCContext &Ctx = AP.OutContext;
+  auto Label = [&](cli::ILLabel L) {
+    assert(L.isValid() && L.Id < LabelSyms.size() && "unknown label");
+    return MCOperand::createExpr(MCSymbolRefExpr::create(LabelSyms[L.Id], Ctx));
+  };
+  // The labels in offset order, each emitted before the instruction at its
+  // offset (or after the last one).
+  SmallVector<std::pair<uint32_t, unsigned>, 2> LabelOffsets;
+  for (unsigned Id = 0, E = LabelSyms.size(); Id != E; ++Id)
+    LabelOffsets.push_back({Builder.getLabelOffset(cli::ILLabel{Id}), Id});
+  llvm::sort(LabelOffsets);
+  auto *NextLabel = LabelOffsets.begin();
+  auto EmitLabelsUpTo = [&](uint32_t Offset) {
+    for (; NextLabel != LabelOffsets.end() && NextLabel->first <= Offset;
+         ++NextLabel)
+      AP.OutStreamer->emitLabel(LabelSyms[NextLabel->second]);
+  };
+
+  for (const cli::ILInstr &I : Builder.instructions()) {
+    EmitLabelsUpTo(I.Offset);
+    MCInst Inst;
+    Inst.setOpcode(MSIL::getMCOpcodeForCIL(I.Op));
+    switch (cli::getOpcodeInfo(I.Op).Operand) {
+    case cli::OperandKind::InlineNone:
+      break;
+    case cli::OperandKind::ShortInlineVar:
+    case cli::OperandKind::InlineVar:
+    case cli::OperandKind::ShortInlineI:
+    case cli::OperandKind::InlineI:
+    case cli::OperandKind::InlineI8:
+      Inst.addOperand(MCOperand::createImm(I.Imm));
+      break;
+    case cli::OperandKind::ShortInlineR:
+      Inst.addOperand(MCOperand::createSFPImm(static_cast<uint32_t>(I.FPBits)));
+      break;
+    case cli::OperandKind::InlineR:
+      Inst.addOperand(MCOperand::createDFPImm(I.FPBits));
+      break;
+    case cli::OperandKind::ShortInlineBrTarget:
+    case cli::OperandKind::InlineBrTarget:
+      Inst.addOperand(Label(I.Target));
+      break;
+    case cli::OperandKind::InlineMethod:
+    case cli::OperandKind::InlineField:
+    case cli::OperandKind::InlineType:
+    case cli::OperandKind::InlineTok:
+    case cli::OperandKind::InlineSig:
+    case cli::OperandKind::InlineString:
+      assert(I.Token.getKind() == cli::TokenRef::Kind::External &&
+             I.Token.getValue() < Tokens.size() && "unknown token");
+      Inst.addOperand(MCOperand::createExpr(Tokens[I.Token.getValue()]));
+      break;
+    case cli::OperandKind::InlineSwitch:
+      for (cli::ILLabel L : Builder.getSwitchTargets(I))
+        Inst.addOperand(Label(L));
+      break;
+    }
+    // The module trailer has no MachineFunction: the TargetMachine's
+    // subtarget (MSIL has one processor and no features, decision D7).
+    AP.OutStreamer->emitInstruction(Inst, AP.TM.getMCSubtargetInfo());
+  }
+  EmitLabelsUpTo(Builder.getCodeSize());
+}
 
 //===----------------------------------------------------------------------===//
 // Signature services.
@@ -373,7 +453,7 @@ std::string MSILAsmPrinter::noteFunctionAddress(const Function &F) {
 }
 
 std::string MSILAsmPrinter::getFunctionAddressFieldName(StringRef ILName) {
-  return (FuncFieldPrefix + ILName).str();
+  return (Twine(MSIL::FnAddrFieldPrefix) + ILName).str();
 }
 
 std::string MSILAsmPrinter::getFunctionAddressField(const Function &F) const {
@@ -403,6 +483,7 @@ bool MSILAsmPrinter::doInitialization(Module &M) {
   FuncAddrs.clear();
   LinkedPInvokes.clear();
   LinkedPInvokeNames.clear();
+  MCInstLowering = std::make_unique<MSILMCInstLower>(OutContext, *this);
 
   // The base class would copy module-level inline assembly into the output
   // verbatim. The legacy pass manager initializes the AsmPrinter before any
@@ -616,7 +697,7 @@ void MSILAsmPrinter::collectFunctionAddresses(const Module &M) {
     // name that is too long by itself is reported with its function
     // (MSILPrepareIR).
     StringRef ILName = MSIL::getILName(F, TM);
-    size_t Size = FuncFieldPrefix.size() + ILName.size();
+    size_t Size = MSIL::FnAddrFieldPrefix.size() + ILName.size();
     if (ILName.size() <= MSIL::MaxILNameBytes && Size > MSIL::MaxILNameBytes)
       F.getContext().emitError(
           "function " + MSIL::getIRName(F) + ": address field identifier of " +
@@ -811,7 +892,7 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
         LinkedPInvokes.push_back(It->getKey());
     }
     if (Declared.size() == 1)
-      TS.emitILLine("// ---- undefined external functions: P/Invoke ----");
+      TS.emitComment("---- undefined external functions: P/Invoke ----");
     // Blittable parameters only (int32, native int, float32, float64), so
     // 'preservesig' is all the marshaller needs (decision D10).
     TS.emitPInvoke({Name, &Sig, /*Public=*/!Linked}, Lib, Entry);
@@ -934,7 +1015,7 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     Declare(F, Name, *Sig, *Lib, MSIL::getPInvokeEntry(Name, F));
   }
   if (!Declared.empty())
-    TS.emitILLine("");
+    TS.emitBlankLine();
 }
 
 void MSILAsmPrinter::emitDataSegment() {
@@ -942,10 +1023,10 @@ void MSILAsmPrinter::emitDataSegment() {
   if (!Data->Entries.empty()) {
     uint64_t InitSize = Data->InitSize;
     uint64_t TotalSize = Data->TotalSize;
-    TS.emitILLine("// ---- data segment: " + Twine(TotalSize) + " bytes (" +
-                  Twine(InitSize) + " initialized + " +
-                  Twine(TotalSize - InitSize) + " zero), align " +
-                  Twine(Data->MaxAlign.value()) + " ----");
+    TS.emitComment("---- data segment: " + Twine(TotalSize) + " bytes (" +
+                   Twine(InitSize) + " initialized + " +
+                   Twine(TotalSize - InitSize) + " zero), align " +
+                   Twine(Data->MaxAlign.value()) + " ----");
     // The image is only read (the module initializer copies it): RVA memory
     // is never written, and it never holds '&(label)' (decision D12).
     if (!Data->Image.empty())
@@ -964,7 +1045,7 @@ void MSILAsmPrinter::emitDataSegment() {
   for (const GlobalVariable *GV : ExternGlobals)
     TS.emitAddressField(MSIL::getILName(*GV, TM), /*Public=*/true);
   if (!Data->Entries.empty() || !ExternGlobals.empty())
-    TS.emitILLine("");
+    TS.emitBlankLine();
 }
 
 void MSILAsmPrinter::emitFunctionAddressFields() {
@@ -973,7 +1054,7 @@ void MSILAsmPrinter::emitFunctionAddressFields() {
     TS.emitAddressField(getFunctionAddressField(*F), /*Public=*/false,
                         /*Generated=*/true);
   if (!FuncAddrs.empty())
-    TS.emitILLine("");
+    TS.emitBlankLine();
 }
 
 void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
@@ -981,23 +1062,29 @@ void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
   if (!HasData && FuncAddrs.empty() && CtorFns.empty())
     return;
 
-  // The member references print exactly as in code (MSILMemberRefExpr).
+  // The member references are the operands code uses (MSILMemberRefExpr).
   auto FieldRef = [&](StringRef Name) {
-    std::string Str;
-    raw_string_ostream OS(Str);
-    MAI.printExpr(OS, *MSILMemberRefExpr::createField(Name, 0, OutContext));
-    return Str;
+    return MSILMemberRefExpr::createField(Name, OutContext);
+  };
+  auto GlobalRef = [&](const GlobalValue &GV) {
+    StringRef Name = MSIL::getILName(GV, TM);
+    return GV.isDeclarationForLinker()
+               ? MSILMemberRefExpr::createExternField(Name, OutContext)
+               : MSILMemberRefExpr::createField(Name, OutContext);
+  };
+  auto FnAddrRef = [&](const Function &F) {
+    return MSILMemberRefExpr::createFnAddr(MSIL::getILName(F, TM), OutContext);
   };
   auto MethodRef = [&](const Function &F) {
-    std::string Str;
-    raw_string_ostream OS(Str);
-    MAI.printExpr(OS, *MSILMemberRefExpr::createMethod(MSIL::getILName(F, TM),
-                                                       &getSignature(F),
-                                                       OutContext));
-    return Str;
+    return MSILMCInstLower::createMethodRef(F, MSIL::getILName(F, TM),
+                                            getSignature(F), OutContext);
+  };
+  auto BCLRef = [&](cli::BCLMemberId Id) {
+    return MSILMemberRefExpr::createBCL(Id, OutContext);
   };
 
-  SynthesizedBody Body;
+  SynthesizedMethod Body(/*ReturnsValue=*/false);
+  cli::ILBuilder &B = Body.builder();
   // The address field of every function whose address is used, which code
   // (FUNC_ADDR) and the relocations read: the module's only 'ldftn' of each
   // function, so every pointer to it has one value. On .NET Framework, the
@@ -1006,8 +1093,8 @@ void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
   // undefined function's is the 'ldftn' of its P/Invoke declaration.
   auto AddFunctionAddresses = [&] {
     for (const Function *F : FuncAddrs) {
-      Body.addInst("ldftn " + MethodRef(*F), 0, 1);
-      Body.addInst("stsfld " + FieldRef(getFunctionAddressField(*F)), 1, 0);
+      Body.emitToken(cli::Opcode::Ldftn, MethodRef(*F));
+      Body.emitToken(cli::Opcode::Stsfld, FnAddrRef(*F));
     }
   };
 
@@ -1021,64 +1108,54 @@ void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
     if (!isInt<32>(Data->TotalSize + Alignment - 1))
       Ctx.emitError("the data segment of " + Twine(Data->TotalSize) +
                     " bytes is larger than MSIL supports (2 GiB)");
-    std::string Base = "ldsfld " + FieldRef(DataFieldName);
+    const MSILMemberRefExpr *Base = FieldRef(DataFieldName);
     // 'unaligned. N' before an access to Base + Offset that may be less
     // aligned than the instruction assumes (Natural), with N the largest of
     // 1, 2 and 4 that the address guarantees, as MSILSetMemFlags decides it
     // for code (decision D24, ECMA-335 III.2.5). Base is aligned to MaxAlign.
-    // The prefix has no stack effect.
     auto AddUnaligned = [&](uint64_t Offset, uint64_t Natural) {
       uint64_t A = commonAlignment(Data->MaxAlign, Offset).value();
       if (A < Natural)
-        Body.addInst("unaligned. " + Twine(std::min<uint64_t>(A, 4)), 0, 0);
+        B.emitImm(cli::Opcode::Unaligned, std::min<uint64_t>(A, 4));
     };
     unsigned PointerSize = getDataLayout().getPointerSize();
 
     // Base = (AllocHGlobal(TotalSize + MaxAlign - 1) + MaxAlign - 1) &
-    // -MaxAlign. AllocHGlobal only guarantees malloc's alignment. The
-    // constants are spelled as in recon/asmprinter.md 7.3: sizes and offsets
-    // as 'ldc.i4 N', the alignment mask in its short form.
-    Body.addNativeInt(Data->TotalSize + Alignment - 1, /*ShortForm=*/false);
-    Body.addInst(AllocHGlobal, 1, 1);
-    Body.addNativeInt(Alignment - 1, /*ShortForm=*/true);
-    Body.addInst("add", 2, 1);
-    Body.addNativeInt(-Alignment, /*ShortForm=*/true);
-    Body.addInst("and", 2, 1);
-    Body.addInst("stsfld " + FieldRef(DataFieldName), 1, 0);
+    // -MaxAlign. AllocHGlobal only guarantees malloc's alignment, and its
+    // memory is neither zeroed nor freed.
+    Body.emitNativeInt(Data->TotalSize + Alignment - 1);
+    Body.emitCall(BCLRef(cli::BCLMemberId::Marshal_AllocHGlobal), 1, 1);
+    Body.emitNativeInt(Alignment - 1);
+    B.emit(cli::Opcode::Add);
+    Body.emitNativeInt(-Alignment);
+    B.emit(cli::Opcode::And);
+    Body.emitToken(cli::Opcode::Stsfld, Base);
 
     // Copy the initialized part from the RVA blob.
     if (InitSize != 0) {
-      SmallString<64> Image;
-      raw_svector_ostream ImageOS(Image);
-      ImageOS << "ldsflda valuetype ";
-      MSIL::printQuotedName(ImageOS, ImageTypeName);
-      ImageOS << ' ';
-      MSIL::printQuotedName(ImageOS, ImageFieldName);
-      Body.addInst(Base, 0, 1);
-      Body.addInst(Image, 0, 1);
-      Body.addInst(getLdcI4(static_cast<int32_t>(InitSize),
-                            /*ShortForm=*/false),
-                   0, 1);
-      Body.addInst("cpblk", 3, 0);
+      Body.emitToken(cli::Opcode::Ldsfld, Base);
+      Body.emitToken(cli::Opcode::Ldsflda,
+                     MSILMemberRefExpr::createValueTypeField(
+                         ImageFieldName, ImageTypeName, OutContext));
+      B.emitLdcI4(static_cast<int32_t>(InitSize));
+      B.emit(cli::Opcode::Cpblk);
     }
     // AllocHGlobal does not zero its memory.
     if (ZeroSize != 0) {
-      Body.addInst(Base, 0, 1);
-      Body.addOffset(InitSize);
-      Body.addInst("ldc.i4.0", 0, 1);
-      Body.addInst(getLdcI4(static_cast<int32_t>(ZeroSize),
-                            /*ShortForm=*/false),
-                   0, 1);
+      Body.emitToken(cli::Opcode::Ldsfld, Base);
+      Body.emitOffset(InitSize);
+      B.emitLdcI4(0);
+      B.emitLdcI4(static_cast<int32_t>(ZeroSize));
       AddUnaligned(InitSize, PointerSize);
-      Body.addInst("initblk", 3, 0);
+      B.emit(cli::Opcode::Initblk);
     }
 
     // The address field of every global, which code reads (GLOBAL_ADDR).
     SmallPtrSet<const GlobalVariable *, 16> HasField;
     for (const MSILDataSegment::Entry &E : Data->Entries) {
-      Body.addInst(Base, 0, 1);
-      Body.addOffset(E.Offset);
-      Body.addInst("stsfld " + FieldRef(MSIL::getILName(*E.GV, TM)), 1, 0);
+      Body.emitToken(cli::Opcode::Ldsfld, Base);
+      Body.emitOffset(E.Offset);
+      Body.emitToken(cli::Opcode::Stsfld, GlobalRef(*E.GV));
       HasField.insert(E.GV);
     }
     HasField.insert_range(ExternGlobals);
@@ -1087,29 +1164,30 @@ void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
     // The relocations, now that every address is known: the address of a
     // global plus its addend, or the address field of a function.
     for (const MSILReloc &R : Data->Relocs) {
-      Body.addInst(Base, 0, 1);
-      Body.addOffset(R.Site);
+      Body.emitToken(cli::Opcode::Ldsfld, Base);
+      Body.emitOffset(R.Site);
       if (const auto *F = dyn_cast<Function>(R.Target)) {
         assert(R.Addend == 0 && "the collector rejects function + offset");
-        Body.addInst("ldsfld " + FieldRef(getFunctionAddressField(*F)), 0, 1);
+        Body.emitToken(cli::Opcode::Ldsfld, FnAddrRef(*F));
       } else {
         const auto *GV = dyn_cast<GlobalVariable>(R.Target);
         if (!GV || !HasField.contains(GV))
           Ctx.emitError("the initializer of a global variable refers to '" +
                         MSIL::getILName(*R.Target, TM) +
                         "', which is not program data");
-        Body.addInst("ldsfld " + FieldRef(MSIL::getILName(*R.Target, TM)), 0,
-                     1);
-        Body.addOffset(R.Addend);
+        Body.emitToken(cli::Opcode::Ldsfld,
+                       GV ? GlobalRef(*GV)
+                          : FieldRef(MSIL::getILName(*R.Target, TM)));
+        Body.emitOffset(R.Addend);
       }
       if (R.Size == 4) {
-        Body.addInst("conv.i4", 1, 1);
+        B.emit(cli::Opcode::Conv_i4);
         AddUnaligned(R.Site, 4);
-        Body.addInst("stind.i4", 2, 0);
+        B.emit(cli::Opcode::Stind_i4);
       } else {
         assert(R.Size == 8 && "relocations hold 4 or 8 bytes");
         AddUnaligned(R.Site, PointerSize);
-        Body.addInst("stind.i", 2, 0);
+        B.emit(cli::Opcode::Stind_i);
       }
     }
   } else {
@@ -1121,18 +1199,20 @@ void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
   // place.
   for (const Function *F : CtorFns) {
     unsigned NumResults = getSignature(*F).Results.size();
-    Body.addInst("call " + MethodRef(*F), 0, NumResults);
+    Body.emitCall(MethodRef(*F), 0, NumResults);
     if (NumResults != 0)
-      Body.addInst("pop", 1, 0);
+      B.emit(cli::Opcode::Pop);
   }
-  Body.addInst("ret", 0, 0);
+  B.emitRet();
 
   MSILTargetStreamer &TS = getTargetStreamer();
-  TS.emitILLine(".method private hidebysig specialname rtspecialname static "
-                "void .cctor() cil managed");
-  TS.emitILLine("{");
-  Body.emit(TS, "");
-  TS.emitMethodEnd(".cctor");
+  MSILMethodDecl Decl;
+  Decl.Name = ".cctor";
+  Decl.Public = false;
+  Decl.Kind = MSILMethodKind::ModuleInitializer;
+  TS.emitMethodBegin(Decl);
+  Body.emit(*this, {});
+  TS.emitMethodEnd(Decl.Name);
 }
 
 void MSILAsmPrinter::emitEntryPoint(const Function &Main) {
@@ -1155,14 +1235,10 @@ void MSILAsmPrinter::emitEntryPoint(const Function &Main) {
   assert(Sig.Results.size() == 1 && Sig.Results.front() == MSIL::ValType::I32 &&
          Sig.Params.size() == FTy->getNumParams() &&
          "main's CIL signature does not match its IR type");
-  SmallString<64> Call;
-  raw_svector_ostream CallOS(Call);
-  CallOS << "call ";
-  MAI.printExpr(CallOS, *MSILMemberRefExpr::createMethod(
-                            MSIL::getILName(Main, TM), &Sig, OutContext));
 
-  SynthesizedBody Body;
-  SmallString<64> Locals;
+  SynthesizedMethod Body(/*ReturnsValue=*/true);
+  cli::ILBuilder &B = Body.builder();
+  SmallVector<cli::TypeSig, 4> Locals;
   if (HasArgs) {
     // argc and a NULL-terminated argv as a native main gets them:
     // Environment.GetCommandLineArgs() starts with the program (the .dll),
@@ -1170,85 +1246,93 @@ void MSILAsmPrinter::emitEntryPoint(const Function &Main) {
     // (UTF-8 on Unix, the ANSI code page on Windows). The strings and the
     // array are never freed: they live as long as the program.
     // Locals: 0 = the string[], 1 = argc, 2 = argv, 3 = i.
-    MSIL::ValType PtrType = Sig.Params[1];
-    Locals = "string[], int32, ";
-    Locals += MSIL::getValTypeName(PtrType);
-    Locals += ", int32";
-    std::string PtrSize =
-        ("ldc.i4." + Twine(Main.getDataLayout().getPointerSize())).str();
+    Locals = {
+        cli::TypeSig::getSZArray(cli::TypeSig::get(cli::ELEMENT_TYPE_STRING)),
+        cli::TypeSig::get(cli::ELEMENT_TYPE_I4), toTypeSig(Sig.Params[1]),
+        cli::TypeSig::get(cli::ELEMENT_TYPE_I4)};
+    unsigned PtrSize = Main.getDataLayout().getPointerSize();
+    // Method-local labels, temporary symbols like the block labels: never
+    // the symbol of a C function or variable of the same IL name. Text names
+    // them '@argv_loop' and '@argv_cond' (MCAsmInfo's InternalSymbolPrefix).
+    cli::ILLabel Loop = Body.createLabel(
+        OutContext.createTempSymbol("argv_loop", /*AlwaysAddSuffix=*/false));
+    cli::ILLabel Cond = Body.createLabel(
+        OutContext.createTempSymbol("argv_cond", /*AlwaysAddSuffix=*/false));
     // Pushes the address of argv[<IndexLocal>].
-    auto AddArgvSlotAddress = [&](StringRef IndexLocal) {
-      Body.addInst("ldloc.2", 0, 1);
-      Body.addInst(IndexLocal, 0, 1);
-      Body.addInst("conv.i", 1, 1);
-      Body.addInst(PtrSize, 0, 1);
-      Body.addInst("mul", 2, 1);
-      Body.addInst("add", 2, 1);
+    auto AddArgvSlotAddress = [&](unsigned IndexLocal) {
+      B.emitLdloc(2);
+      B.emitLdloc(IndexLocal);
+      B.emit(cli::Opcode::Conv_i);
+      B.emitLdcI4(PtrSize);
+      B.emit(cli::Opcode::Mul);
+      B.emit(cli::Opcode::Add);
     };
 
-    Body.addInst(
-        "call string[] [mscorlib]System.Environment::GetCommandLineArgs()", 0,
-        1);
-    Body.addInst("stloc.0", 1, 0);
+    Body.emitCall(
+        MSILMemberRefExpr::createBCL(
+            cli::BCLMemberId::Environment_GetCommandLineArgs, OutContext),
+        0, 1);
+    B.emitStloc(0);
     // argc = args.Length
-    Body.addInst("ldloc.0", 0, 1);
-    Body.addInst("ldlen", 1, 1);
-    Body.addInst("conv.i4", 1, 1);
-    Body.addInst("stloc.1", 1, 0);
+    B.emitLdloc(0);
+    B.emit(cli::Opcode::Ldlen);
+    B.emit(cli::Opcode::Conv_i4);
+    B.emitStloc(1);
     // argv = AllocHGlobal((argc + 1) * sizeof(char *))
-    Body.addInst("ldloc.1", 0, 1);
-    Body.addInst("ldc.i4.1", 0, 1);
-    Body.addInst("add", 2, 1);
-    Body.addInst("conv.i", 1, 1);
-    Body.addInst(PtrSize, 0, 1);
-    Body.addInst("mul", 2, 1);
-    Body.addInst("call native int [mscorlib]System.Runtime.InteropServices."
-                 "Marshal::AllocHGlobal(native int)",
-                 1, 1);
-    Body.addInst("stloc.2", 1, 0);
+    B.emitLdloc(1);
+    B.emitLdcI4(1);
+    B.emit(cli::Opcode::Add);
+    B.emit(cli::Opcode::Conv_i);
+    B.emitLdcI4(PtrSize);
+    B.emit(cli::Opcode::Mul);
+    Body.emitCall(MSILMemberRefExpr::createBCL(
+                      cli::BCLMemberId::Marshal_AllocHGlobal, OutContext),
+                  1, 1);
+    B.emitStloc(2);
     // for (i = 0; i < argc; ++i) argv[i] = StringToHGlobalAnsi(args[i])
-    Body.addInst("ldc.i4.0", 0, 1);
-    Body.addInst("stloc.3", 1, 0);
-    Body.addBranch("br @argv_cond", 0);
-    Body.addLabel("@argv_loop");
-    AddArgvSlotAddress("ldloc.3");
-    Body.addInst("ldloc.0", 0, 1);
-    Body.addInst("ldloc.3", 0, 1);
-    Body.addInst("ldelem.ref", 2, 1);
-    Body.addInst("call native int [mscorlib]System.Runtime.InteropServices."
-                 "Marshal::StringToHGlobalAnsi(string)",
-                 1, 1);
-    Body.addInst("stind.i", 2, 0);
-    Body.addInst("ldloc.3", 0, 1);
-    Body.addInst("ldc.i4.1", 0, 1);
-    Body.addInst("add", 2, 1);
-    Body.addInst("stloc.3", 1, 0);
-    Body.addLabel("@argv_cond");
-    Body.addInst("ldloc.3", 0, 1);
-    Body.addInst("ldloc.1", 0, 1);
-    Body.addBranch("blt @argv_loop", 2);
+    B.emitLdcI4(0);
+    B.emitStloc(3);
+    B.emitBranch(cli::Opcode::Br, Cond);
+    B.placeLabel(Loop);
+    AddArgvSlotAddress(3);
+    B.emitLdloc(0);
+    B.emitLdloc(3);
+    B.emit(cli::Opcode::Ldelem_ref);
+    Body.emitCall(
+        MSILMemberRefExpr::createBCL(
+            cli::BCLMemberId::Marshal_StringToHGlobalAnsi, OutContext),
+        1, 1);
+    B.emit(cli::Opcode::Stind_i);
+    B.emitLdloc(3);
+    B.emitLdcI4(1);
+    B.emit(cli::Opcode::Add);
+    B.emitStloc(3);
+    B.placeLabel(Cond);
+    B.emitLdloc(3);
+    B.emitLdloc(1);
+    B.emitBranch(cli::Opcode::Blt, Loop);
     // argv[argc] = NULL
-    AddArgvSlotAddress("ldloc.1");
-    Body.addInst("ldc.i4.0", 0, 1);
-    Body.addInst("conv.i", 1, 1);
-    Body.addInst("stind.i", 2, 0);
+    AddArgvSlotAddress(1);
+    B.emitLdcI4(0);
+    B.emit(cli::Opcode::Conv_i);
+    B.emit(cli::Opcode::Stind_i);
     // return main(argc, argv)
-    Body.addInst("ldloc.1", 0, 1);
-    Body.addInst("ldloc.2", 0, 1);
+    B.emitLdloc(1);
+    B.emitLdloc(2);
   }
-  Body.addInst(Call, Sig.Params.size(), 1);
-  Body.addInst("ret", 1, 0);
+  Body.emitCall(MSILMemberRefExpr::createMethod(MSIL::getILName(Main, TM), &Sig,
+                                                OutContext),
+                Sig.Params.size(), 1);
+  B.emitRet();
 
   MSILTargetStreamer &TS = getTargetStreamer();
-  SmallString<64> Header;
-  raw_svector_ostream HeaderOS(Header);
-  HeaderOS << ".method private hidebysig static int32 ";
-  MSIL::printQuotedName(HeaderOS, EntryPointName);
-  HeaderOS << "(string[] args) cil managed";
-  TS.emitILLine(Header);
-  TS.emitILLine("{");
+  MSILMethodDecl Decl;
+  Decl.Name = EntryPointName;
+  Decl.Public = false;
+  Decl.Kind = MSILMethodKind::EntryPoint;
+  TS.emitMethodBegin(Decl);
   TS.emitEntryPoint();
-  Body.emit(TS, Locals);
+  Body.emit(*this, Locals);
   TS.emitMethodEnd(EntryPointName);
 }
 
@@ -1376,25 +1460,30 @@ void MSILAsmPrinter::emitFunctionBodyStart() {
   MSILTargetStreamer &TS = getTargetStreamer();
   TS.emitMaxStack(MFI->getMaxStack());
   unsigned PointerSizeInBits = F.getDataLayout().getPointerSizeInBits();
-  SmallVector<MSIL::ValType, 16> Locals;
+  SmallVector<cli::TypeSig, 16> Locals;
   for (MVT VT : MFI->getLocals())
-    Locals.push_back(MSIL::toValType(VT, PointerSizeInBits));
+    Locals.push_back(toTypeSig(MSIL::toValType(VT, PointerSizeInBits)));
   TS.emitLocals(Locals);
+
+  // msil-ld never relaxes branches (plan 5.8), so their forms are chosen
+  // once, before the first instruction is emitted.
+  MCInstLowering->computeBranchForms(*MF);
 }
 
 void MSILAsmPrinter::emitInstruction(const MachineInstr *MI) {
-  // The ARGUMENT_* pseudos only give the incoming arguments virtual
-  // registers; MSILExplicitLocals has turned their uses into ldarg.
-  if (MSIL::isArgument(MI->getOpcode()))
-    return;
-
   assert(matchesCalleeSignature(*MI, *this) &&
          "a direct call does not match its callee's signature");
 
-  MSILMCInstLower MCInstLowering(OutContext, *this);
-  MCInst TmpInst;
-  MCInstLowering.lower(MI, TmpInst);
-  EmitToStreamer(*OutStreamer, TmpInst);
+  // One MCInst per CIL instruction. Every instruction goes through lower(),
+  // which emits code for exactly the instructions that computeBranchForms
+  // laid out (MSILMCInstLower::isLowered), so the branch forms it chose fit:
+  // nothing for the ARGUMENT_* pseudos, and an internal error for any other
+  // instruction (a target-independent one that AsmPrinter does not handle
+  // itself, such as FENTRY_CALL).
+  SmallVector<MCInst, 4> Insts;
+  MCInstLowering->lower(*MI, Insts);
+  for (const MCInst &Inst : Insts)
+    EmitToStreamer(*OutStreamer, Inst);
 }
 
 char MSILAsmPrinter::ID = 0;

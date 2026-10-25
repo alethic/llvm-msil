@@ -81,8 +81,8 @@
 //
 // The -S run (MSIL backend) compiles only the PINVOKE part: six imported
 // functions become the pinvokeimpl declarations of pinvoke.ll,
-// 'pinvokeimpl("<module>" cdecl)' and 'pinvokeimpl("<module>" as "<entry>"
-// cdecl)': p_mod, p_both and p_c23 as their attributes give; p_redecl, whose
+// 'pinvokeimpl("<module>" nomangle cdecl)' and 'pinvokeimpl("<module>" as "<entry>"
+// nomangle cdecl)': p_mod, p_both and p_c23 as their attributes give; p_redecl, whose
 // name comes from a redeclaration after its use in p_early(); p_block, whose
 // name comes from a block-scope redeclaration inside p_blate() after its use
 // in p_bearly(); and putchar, a function of D14's table renamed with
@@ -372,9 +372,9 @@ int call_imports(int x) {
 // WASM:      attributes [[F_MOD]] = { {{.*}}"wasm-import-module"="mod_f"{{.*}} }
 // WASM:      attributes [[F_BOTH]] = { {{.*}}"wasm-import-module"="mod_b" "wasm-import-name"="entry_b"{{.*}} }
 
-// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("mylib" cdecl) void 'p_mod'(int32) cil managed preservesig {}{{$}}
-// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("mylib" as "real_name" cdecl) int32 'p_both'(int32) cil managed preservesig {}{{$}}
-// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("mylib2" as "entry2" cdecl) int32 'p_c23'() cil managed preservesig {}{{$}}
-// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("mylib3" as "real_redecl" cdecl) int32 'p_redecl'(int32) cil managed preservesig {}{{$}}
-// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("mylib4" as "real_block" cdecl) int32 'p_block'(int32) cil managed preservesig {}{{$}}
-// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" as "my_putchar" cdecl) int32 'putchar'(int32) cil managed preservesig {}{{$}}
+// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) void 'p_mod'(int32) cil managed preservesig {}{{$}}
+// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("mylib" as "real_name" nomangle cdecl) int32 'p_both'(int32) cil managed preservesig {}{{$}}
+// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("mylib2" as "entry2" nomangle cdecl) int32 'p_c23'() cil managed preservesig {}{{$}}
+// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("mylib3" as "real_redecl" nomangle cdecl) int32 'p_redecl'(int32) cil managed preservesig {}{{$}}
+// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("mylib4" as "real_block" nomangle cdecl) int32 'p_block'(int32) cil managed preservesig {}{{$}}
+// IL-DAG: {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" as "my_putchar" nomangle cdecl) int32 'putchar'(int32) cil managed preservesig {}{{$}}

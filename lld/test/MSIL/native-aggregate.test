@@ -105,10 +105,10 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 ld-msvc.o ldmath.lib -o ld-msvc.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=LD-MSVC --input-file=ld-msvc.il
 # LD-MSVC-DAG: call float64 'sqrtl'(float64)
-# LD-MSVC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ldmath.dll" cdecl) float64 'sqrtl'(float64) cil managed preservesig {}{{$}}
+# LD-MSVC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ldmath.dll" nomangle cdecl) float64 'sqrtl'(float64) cil managed preservesig {}{{$}}
 # RUN: msil-ld --lto-emit-asm --lto-O0 ld-explicit.o libc.so.6 libm.so.6 -o ld-explicit.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=LD-EXPLICIT --input-file=ld-explicit.il
-# LD-EXPLICIT: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'sqrtl'(float64) cil managed preservesig {}{{$}}
+# LD-EXPLICIT: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'sqrtl'(float64) cil managed preservesig {}{{$}}
 
 ## More long double functions, the f64x and f128 names included, on x86_64
 ## and aarch64 Linux: each call is an error (8 in all), the address-only
@@ -166,8 +166,8 @@
 # RUN: FileCheck %s --check-prefix=LDX-CTL2 --input-file=ldctl-x64.il
 # RUN: FileCheck %s --check-prefix=LDX-CTL --input-file=ldctl-a64.il
 # RUN: FileCheck %s --check-prefix=LDX-CTL2 --input-file=ldctl-a64.il
-# LDX-CTL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libldx.so.1" cdecl) float64 'sqrtf64'(float64) cil managed preservesig {}{{$}}
-# LDX-CTL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libldx.so.1" cdecl) float64 'sqrtf32x'(float64) cil managed preservesig {}{{$}}
+# LDX-CTL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libldx.so.1" nomangle cdecl) float64 'sqrtf64'(float64) cil managed preservesig {}{{$}}
+# LDX-CTL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libldx.so.1" nomangle cdecl) float64 'sqrtf32x'(float64) cil managed preservesig {}{{$}}
 ## Exactly those two P/Invokes.
 # LDX-CTL2-COUNT-2: pinvokeimpl
 # LDX-CTL2-NOT:     pinvokeimpl

@@ -57,12 +57,12 @@
 ## A later shared object that defines nat_fn binds it.
 # RUN: msil-ld --lto-emit-asm --lto-O0 mixnat.o libmix.a libnat.so.1 -o later.il 2>&1 | %{noerr}
 # RUN: FileCheck %s --check-prefix=LATER --input-file=later.il
-# LATER: {{^}}.method assembly hidebysig static pinvokeimpl("libnat.so.1" cdecl) int32 'nat_fn'() cil managed preservesig {}{{$}}
+# LATER: {{^}}.method assembly hidebysig static pinvokeimpl("libnat.so.1" nomangle cdecl) int32 'nat_fn'() cil managed preservesig {}{{$}}
 
 ## msvcrt.lib: puts and printf are import members, atexit is native code.
 # RUN: msil-ld --lto-emit-asm --lto-O0 win.o msvcrt.lib -o win.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=WIN --input-file=win.il
-# WIN: {{^}}.method assembly hidebysig static pinvokeimpl("msvcrt.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# WIN: {{^}}.method assembly hidebysig static pinvokeimpl("msvcrt.dll" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 # RUN: not msil-ld --lto-emit-asm win-atexit.o msvcrt.lib -o x.il 2>&1 | %{err} --check-prefix=WIN-ATEXIT
 # WIN-ATEXIT:      {{^}}msil-ld: error: symbol 'atexit' is defined only in native object code (msvcrt.lib(crt.obj)); MSIL cannot link machine code{{$}}
 # WIN-ATEXIT-NEXT: {{^}}>>> referenced by win-atexit.o:(main){{$}}

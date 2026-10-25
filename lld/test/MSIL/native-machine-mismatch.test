@@ -102,8 +102,8 @@
 # RUN: FileCheck %s --check-prefix=COFF -DMOD=foo.dll --input-file=a64win.il
 # RUN: FileCheck %s --check-prefix=COFF -DMOD=arm64.dll --input-file=a64dll.il
 # A64TRIPLE: {{^}}// target triple   = "aarch64-unknown-linux-gnu-msil"{{$}}
-# ELF:       {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
-# COFF:      {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+# ELF:       {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" nomangle cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+# COFF:      {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
 
 #--- foo.def
 LIBRARY foo.dll

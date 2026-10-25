@@ -47,7 +47,7 @@
 
 # DEFINE: %{why} = FileCheck %s --match-full-lines --strict-whitespace
 # DEFINE: %{so} = FileCheck %s --check-prefix=SO --implicit-check-not=pinvokeimpl
-# SO: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'foo_fn'() cil managed preservesig {}{{$}}
+# SO: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) int32 'foo_fn'() cil managed preservesig {}{{$}}
 
 ## A bitcode archive beats a shared object in its directory.
 # RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L st -lfoo -o st.il --why-extract=st.why 2>&1 | count 0

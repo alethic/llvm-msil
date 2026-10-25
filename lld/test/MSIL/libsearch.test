@@ -103,7 +103,7 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L stat -L nat -lfoo -o stat.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=STAT-FIRST --implicit-check-not=pinvokeimpl --input-file=stat.il
 
-# NATIVE-FIRST: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" cdecl) int32 'foo_fn'() cil managed preservesig {}{{$}}
+# NATIVE-FIRST: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" nomangle cdecl) int32 'foo_fn'() cil managed preservesig {}{{$}}
 # STAT-FIRST:   {{^}}  ldc.i4.2{{$}}
 
 ## A native-only archive and a .NET assembly are skipped; the search goes on.
@@ -187,7 +187,7 @@
 # RUN: not msil-ld --lto-emit-asm hello.o -lucrt -o x.il 2>&1 | FileCheck %s --check-prefix=NOUCRT --implicit-check-not="PLEASE submit" \
 # RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
 
-# WIN: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# WIN: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 # NOUCRT: {{^}}msil-ld: error: unable to find library -lucrt{{$}}
 
 ## ELF triples: lib<n>.so (here glibc's linker scripts); .lib is not a
@@ -203,7 +203,7 @@
 # RUN:   | count 0
 # RUN: %{why} --check-prefix=WHY-LNX --input-file=lnxfoo.why
 
-# LNX: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# LNX: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 # NOLIB-LNX: {{^}}msil-ld: error: unable to find library -lkernel32{{$}}
 #      WHY-LNX:reference	extracted	symbol
 # WHY-LNX-NEXT:main-lnx.o	lnxlib{{[/\\]}}libfoo.a(foo-lnx.o)	foo_fn
@@ -215,7 +215,7 @@
 # RUN:   | FileCheck %s --check-prefix=NOLIB-MSVC --implicit-check-not="PLEASE submit" \
 # RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
 
-# GNU: {{^}}.method assembly hidebysig static pinvokeimpl("msvcrt.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# GNU: {{^}}.method assembly hidebysig static pinvokeimpl("msvcrt.dll" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 # NOLIB-MSVC: {{^}}msil-ld: error: unable to find library -lkernel32{{$}}
 
 #--- main.ll

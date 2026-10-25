@@ -12,14 +12,14 @@
 ; operand is false: isCheapToSpeculateCtlz/Cttz keep the default false in
 ; Phase 1 (D33, plan section 12 'D16 clarified'), so at -O2 CodeGenPrepare
 ; wraps the expansion in a zero test that returns the width 32 or 64. From M6
-; the zero test is one long-form conditional branch to an '@BB<f>_<b>' label,
+; the zero test is one short conditional branch to an '@BB<f>_<b>' label,
 ; which branch folding and tail duplication may invert or duplicate (the join
 ; that returns the width is copied into its predecessor), so the checks pin
 ; neither the branch sense nor the block order. At -O0, and with
 ; is_zero_poison true, the expansions stay straight-line. br.ll pins the
-; printing of br, brtrue and brfalse (always the long forms with
-; '@BB<f>_<b>' labels, plan 5.1); here a short branch form ('br.s',
-; 'brtrue.s', 'bne.un.s', ...) is an implicit negative check.
+; printing of br, brtrue and brfalse (their shortest forms with
+; '@BB<f>_<b>' labels, Q26); the bodies here are small, so every branch
+; is a short form ('br.s', 'brtrue.s', 'bne.un.s', ...).
 ; 0 - x is 'neg' and x ^ -1 is 'not' (NEG_{I32,I64} and NOT_{I32,I64}, plan
 ; section 12 row 'Plan 5.4 records added, M4.b'). Division and remainder are
 ; in div-rem.ll, shifts in int-shifts.ll, compares in int-compare.ll and
@@ -30,8 +30,7 @@
 ; exactly at -O2 (O2) and only for its key opcodes at -O0 (O0), where
 ; MSILRegStackify moves nothing and the ISel order decides what is stackified.
 
-; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 \
-; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}"
+; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check} --check-prefixes=CHECK,O2
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %s \
@@ -534,7 +533,7 @@ define i64 @ctpop_i64(i64 %x) {
 ; With is_zero_poison false the zero input must give the width. -O0 keeps the
 ; generic expansion straight-line; at -O2 CodeGenPrepare puts it behind a zero
 ; test (isCheapToSpeculateCtlz is false, see the header). The zero test is one
-; long-form conditional branch to an '@BB<f>_<b>' label, and tail duplication
+; short conditional branch to an '@BB<f>_<b>' label, and tail duplication
 ; copies the join into the block that returns the width, so one path is the
 ; width and 'ret' and the other is the expansion. Branch folding and block
 ; placement choose the branch sense and which path falls through, so the O2
@@ -547,7 +546,7 @@ define i64 @ctpop_i64(i64 %x) {
 ; O0:          {{^}}  ret{{$}}
 ; O0-NEXT:     {{^}}} // end of method 'ctlz_i32'{{$}}
 ; O2-NOT:      {{call|switch|ldind|stind|localloc}}
-; O2:          {{^}}  {{brtrue|brfalse}} @BB{{[0-9]+}}_{{[0-9]+}}{{$}}
+; O2:          {{^}}  {{brtrue|brfalse}}.s @BB{{[0-9]+}}_{{[0-9]+}}{{$}}
 ; O2-NOT:      {{call|b(rtrue|rfalse|eq|ne|lt|le|gt|ge)|switch|ldind|stind|localloc}}
 ; O2:          {{^}}  ldc.i4{{(\.s)?}} 32{{$}}
 ; O2-NEXT:     {{^}}  ret{{$}}
@@ -567,7 +566,7 @@ define i32 @ctlz_i32(i32 %x) {
 ; O0:          {{^}}  ret{{$}}
 ; O0-NEXT:     {{^}}} // end of method 'cttz_i64'{{$}}
 ; O2-NOT:      {{call|switch|ldind|stind|localloc}}
-; O2:          {{^}}  {{beq|bne\.un|brtrue|brfalse}} @BB{{[0-9]+}}_{{[0-9]+}}{{$}}
+; O2:          {{^}}  {{beq|bne\.un|brtrue|brfalse}}.s @BB{{[0-9]+}}_{{[0-9]+}}{{$}}
 ; O2-NOT:      {{call|b(rtrue|rfalse|eq|ne|lt|le|gt|ge)|switch|ldind|stind|localloc}}
 ; O2:          {{^}}  ldc.i4{{(\.s)?}} 64{{$}}
 ; O2-NEXT:     {{^}}  conv.i{{$}}
@@ -581,9 +580,9 @@ define i64 @cttz_i64(i64 %x) {
 
 ; With is_zero_poison true there is no zero test: branch-free at -O0 and -O2.
 ; CHECK-LABEL: .method {{.*}}'ctlz_zero_poison_i32'(
-; CHECK-NOT:   {{call|brtrue|brfalse|switch|ldind|stind|localloc|br }}
+; CHECK-NOT:   {{call|brtrue|brfalse|switch|ldind|stind|localloc|br(\.s)? }}
 ; CHECK:       {{^}}  shr.un{{$}}
-; CHECK-NOT:   {{call|brtrue|brfalse|switch|ldind|stind|localloc|br }}
+; CHECK-NOT:   {{call|brtrue|brfalse|switch|ldind|stind|localloc|br(\.s)? }}
 ; CHECK:       {{^}}} // end of method 'ctlz_zero_poison_i32'{{$}}
 define i32 @ctlz_zero_poison_i32(i32 %x) {
   %r = call i32 @llvm.ctlz.i32(i32 %x, i1 true)
@@ -591,9 +590,9 @@ define i32 @ctlz_zero_poison_i32(i32 %x) {
 }
 
 ; CHECK-LABEL: .method {{.*}}'cttz_zero_poison_i64'(
-; CHECK-NOT:   {{call|brtrue|brfalse|switch|ldind|stind|localloc|br }}
+; CHECK-NOT:   {{call|brtrue|brfalse|switch|ldind|stind|localloc|br(\.s)? }}
 ; CHECK:       {{^}}  shr.un{{$}}
-; CHECK-NOT:   {{call|brtrue|brfalse|switch|ldind|stind|localloc|br }}
+; CHECK-NOT:   {{call|brtrue|brfalse|switch|ldind|stind|localloc|br(\.s)? }}
 ; CHECK:       {{^}}} // end of method 'cttz_zero_poison_i64'{{$}}
 define i64 @cttz_zero_poison_i64(i64 %x) {
   %r = call i64 @llvm.cttz.i64(i64 %x, i1 true)

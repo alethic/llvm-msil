@@ -12,8 +12,10 @@
 //===----------------------------------------------------------------------===//
 ///
 /// \file
-/// MSIL control-flow code-gen constructs. Branches always use the long CIL
-/// forms; block labels are basic-block symbols.
+/// MSIL control-flow code-gen constructs. Block labels are basic-block
+/// symbols. Branches take the shortest form that fits (Q26):
+/// MSILMCInstLower::computeBranchForms picks each branch's short or long CIL
+/// form once per method, before emission (msil-ld never relaxes a branch).
 ///
 //===----------------------------------------------------------------------===//
 
@@ -136,8 +138,10 @@ defm : CompareBranchPats<[SETOGE, SETGE], "BGE", [F32, F64]>;
 defm : CompareBranchPats<[SETUGE], "BGE_UN", [F32, F64]>;
 
 // CIL 'switch' on an int32 index. The variable operands are the jump-table
-// entries and then the first entry again, which MSILInstPrinter prints as
-// 'switch (L0, L1, ...)' followed by 'br L0'. That last target is a dummy
+// entries and then the first entry again. MSILMCInstLower lowers it to a
+// CIL_Switch over the table entries, which MSILInstPrinter prints as
+// 'switch (L0, L1, ...)', then a separate CIL_Br or CIL_Br_s to the first
+// entry (computeBranchForms picks its form). That last target is a dummy
 // that is already a successor, not the switch's default: it never executes,
 // because the range check before the table, which is never removed (decision
 // D35), sends every out-of-range value to the default, and when the default

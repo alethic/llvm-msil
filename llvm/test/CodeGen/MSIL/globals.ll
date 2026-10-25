@@ -480,7 +480,7 @@ source_filename = "extern.c"
 ; EXTERN-IL-LABEL: {{^}}.method public static native int 'read_weak'() cil managed{{$}}
 ; EXTERN-IL-NEXT:  {{^\{$}}
 ; EXTERN-IL-NEXT:  {{^}}  .maxstack 1{{$}}
-; EXTERN-IL-NEXT:  {{^}}  ldc.i4 0{{$}}
+; EXTERN-IL-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; EXTERN-IL-NEXT:  {{^}}  conv.i{{$}}
 ; EXTERN-IL-NEXT:  {{^}}  ldind.i{{$}}
 ; EXTERN-IL-NEXT:  {{^}}  ret{{$}}

@@ -76,6 +76,13 @@ two dumpers, and the oracles of later milestones compare with it.
 only; `.ll` files carry no target triple or datalayout). `llc` does no IPO, so
 values passed to `noinline` functions stay opaque even at `-O2`.
 
+Since M18 the `.il` that these steps assemble uses the shortest instruction
+forms (short branches where the target is in reach, `ldc.i4.<n>` and
+`ldc.i4.s`) and `nomangle cdecl` in every P/Invoke (plan Q26 and 5.10.11),
+which the ilasm of each leg (the Framework's, the NuGet Windows one, the Linux
+one) must accept; the tests themselves did not change, because they compare
+transcripts, not IL.
+
 `%{msil_prog}` (M14) builds a program of several files with
 `msil/utils/msil-prog.py` (`%msil_prog_build`) in a fresh `%t.<L>.d` per level,
 then checks and runs `prog.exe` as `%{msil_c}` does:
@@ -134,7 +141,15 @@ of this suite: `msil/utils/run-utc-tests.py` runs six tests of
 `x86-basic`, `x86-mir-only`, `x86-asm-mir-mixed`, `x86-constant-pool`,
 `asm-show-inst`) without lit, which reports them UNSUPPORTED on Windows
 (`llvm/test/tools/UpdateTestChecks/lit.local.cfg` sets the `llc-binary`
-feature they require only when a file named exactly `llc` exists).
+feature they require only when a file named exactly `llc` exists). Neither is
+the `encoder-parity` leg (M18, Windows only):
+`msil/utils/mdtools/cli-corpus-check.py --mode encoder` compiles every C
+program of `M1/` that has an `.expected` file at `O0` and `O2` with
+`clang -S -emit-llvm` and `llc -show-mc-encoding`, assembles the same text
+with the .NET Framework ilasm, and requires the bytes that the encoding
+comments give for each method to equal ilasm's (code bytes, the token at each
+fixup and `.maxstack`), for at least 2,600 methods (2,819 at M18); its log is
+`build/lit-results/encoder-parity.log`.
 
 Every child process (ilasm, ildasm, ILVerify, PEVerify, jitall, dotnet, native
 programs) runs under a wall-clock timeout (60 s) and a cap on committed memory
@@ -292,20 +307,23 @@ python build/bin/llvm-lit.py -sv --param msil_pipeline=lto msil/test/M1/11-progr
 `clang/test/Preprocessor/init-msil.c`, the driver tests
 `clang/test/Driver/msil-toolchain.c`, `msil-link.c`, `msil-lto.c` and
 `msil-header-search.c`, when lld is built `lld/test/MSIL` (the `msil-ld`
-tests), and `llvm/test/tools/llvm-cil-dump` and `llvm/test/tools/llvm-cil-copy`
-(M17), whose tools `check-msil` builds; `check-llvm` and
+tests), `llvm/test/MC/MSIL` (M18: the encodings, fixups and operand
+spellings of `llc -show-mc-encoding` and `-M object-form`), and
+`llvm/test/tools/llvm-cil-dump` and `llvm/test/tools/llvm-cil-copy` (M17),
+whose tools `check-msil` builds; `check-llvm` and
 `check-llvm-tools-llvm-cil-dump` (or `-copy`) do not, so run those two
 directories alone only after `ninja -C build llvm-cil-dump llvm-cil-copy`
 (their `lit.local.cfg` reports the tests UNSUPPORTED while a tool is missing).
 This suite depends on `lld` (which makes `msil-ld`), `llvm-ar`,
-`llvm-nm`, `llvm-cil-dump` (`%msil_canon`), `llvm-cil-copy` and `yaml2obj`
-(which makes the tools' test images) besides clang, llc and the lit tools,
-and `check-msil` also on `llvm-as`, `llvm-bcanalyzer`, `llvm-lib` and
-`llvm-dlltool`, which build the inputs of `lld/test/MSIL`, and on `llvm-mc`
-and `llvm-readobj`, which with `yaml2obj` make and inspect the native
-libraries of its native-library tests (M15). `llvm-lit` run directly builds
-nothing: build the tools first (`msil-build.ps1 -Standard` builds every tool
-the tests use).
+`llvm-nm`, `llvm-cil-dump` (`%msil_canon`), `llvm-cil-copy`, `yaml2obj`
+(which makes the tools' test images) and, since M18, `llvm-mc` (which
+`llvm/test/MC/MSIL` runs) besides clang, llc and the lit tools, and
+`check-msil` also on `llvm-as`, `llvm-bcanalyzer`, `llvm-lib` and
+`llvm-dlltool`, which build the inputs of `lld/test/MSIL`, and on
+`llvm-readobj`, which with `yaml2obj` and `llvm-mc` makes and inspects the
+native libraries of its native-library tests (M15). `llvm-lit` run directly
+builds nothing: build the tools first (`msil-build.ps1 -Standard` builds every
+tool the tests use).
 
 Source paths work because `llvm-lit` maps `msil/test/lit.cfg.py` to the
 generated `build/tools/msil/test/lit.site.cfg.py`. At configuration time
@@ -332,9 +350,10 @@ oracle required), `det` (`M2/06-det`), WSL with the linux triple on the
 private runtime (`msil_wsl_dotnet=private`) and, in `wsl-net10` and
 `wsl-quick`, the E7 oracle required, the Linux and the modern Windows ilasm,
 the ildasm round trip, and the optional `hosted` leg (`M2/09-hosted` with
-`msil_glibc_sysroot` given, M15), and three legs that are not lit runs: `expected`
+`msil_glibc_sysroot` given, M15), and four legs that are not lit runs: `expected`
 (`update-expected.py --check` of `M1/` and `M2/`), `expected-linux`
-(`update-expected.py --check --os linux`, the E7 oracle) and `utc`;
+(`update-expected.py --check --os linux`, the E7 oracle), `utc` and
+`encoder-parity` (M18, above);
 `llvm/docs/MSIL/GettingStarted.md` section 7 lists them. Each lit leg also
 passes `--param msil_require_exec=1` and `--param msil_require_link=1`, and
 a lit leg passes only when lit exits 0 and at least one test passed.

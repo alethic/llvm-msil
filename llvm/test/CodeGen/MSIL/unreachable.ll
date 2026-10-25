@@ -27,7 +27,7 @@
 ; same cases below (*_ret_void and *_in_loop).
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=switch \
-; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}" --implicit-check-not=Debugger
+; DEFINE:   --implicit-check-not=Debugger
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check} --check-prefixes=CHECK,O2
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %s \
@@ -208,8 +208,8 @@ define i32 @other_instruction_after_trap(i32 %x, i32 %b) {
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
-; CHECK-NEXT:  {{^}}  blt @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  blt.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -232,7 +232,7 @@ trap:
 ; CHECK-LABEL: .method {{.*}}'abort_on_zero'(
 ; CHECK-SAME:  int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[DIE:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[DIE:[0-9]+]]{{$}}
 ; CHECK:       {{^}}  div{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}@BB[[F]]_[[DIE]]:{{$}}
@@ -264,7 +264,7 @@ die:
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F:[0-9]+]]_[[L:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F:[0-9]+]]_[[L:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[L]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldnull{{$}}
 ; CHECK-NEXT:  {{^}}  throw{{$}}
@@ -294,7 +294,7 @@ exit:
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F:[0-9]+]]_[[L:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F:[0-9]+]]_[[L:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[L]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldnull{{$}}
 ; CHECK-NEXT:  {{^}}  throw{{$}}
@@ -329,7 +329,7 @@ exit:
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F:[0-9]+]]_[[L:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F:[0-9]+]]_[[L:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[L]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldnull{{$}}
 ; CHECK-NEXT:  {{^}}  throw{{$}}
@@ -364,8 +364,8 @@ exit:
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bne.un @BB[[F:[0-9]+]]_[[J:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[T:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bne.un.s @BB[[F:[0-9]+]]_[[J:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[T:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[T]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldnull{{$}}
 ; CHECK-NEXT:  {{^}}  throw{{$}}

@@ -1,8 +1,9 @@
-# Output through puts, imported as pinvokeimpl("ucrtbase" cdecl) the way the
-# backend declares it for windows-msvc triples (plan D14). Windows puts writes
-# CRLF; the transcript folds it to LF. The import library follows the target
-# triple, so this test is selected by the triple, not by the host OS
-# (puts-wsl.test is the linux twin).
+# Output through puts, imported as pinvokeimpl("ucrtbase" nomangle cdecl)
+# (ImplMap flags 0x0201) the way the backend declares it for windows-msvc
+# triples (plan D14 as amended for M18, 5.10.11). Windows puts writes CRLF;
+# the transcript folds it to LF. The import library follows the target triple,
+# so this test is selected by the triple, not by the host OS (puts-wsl.test is
+# the linux twin).
 # REQUIRES: msil-triple-windows
 
 # RUN: %ilasm -dll -output=%t.dll %S/Inputs/puts-windows.il

@@ -105,7 +105,7 @@
 # RUN: llvm-as callfn1.ll -o callfn1.o
 # RUN: msil-ld --lto-emit-asm --lto-O0 callfn1.o exports.dll -o exports.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=EXPORTS --input-file=exports.il
-# EXPORTS: {{^}}.method assembly hidebysig static pinvokeimpl("exports.dll" cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
+# EXPORTS: {{^}}.method assembly hidebysig static pinvokeimpl("exports.dll" nomangle cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
 # RUN: not msil-ld --lto-emit-asm --lto-O0 callfn1.o bad-names.dll -o x.il 2>&1 \
 # RUN:   | %{fc} --check-prefix=BAD-EXPORTS -DFILE=bad-names.dll --implicit-check-not="Exception Code:" \
 # RUN:     --implicit-check-not=error:

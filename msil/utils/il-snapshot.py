@@ -9,7 +9,8 @@
 """Compile every C and IR input of the MSIL tests and keep IL and diagnostics.
 
     python msil/utils/il-snapshot.py --build DIR --out DIR [--compare DIR]
-        [--exclude PATH]... [--jobs N] [--timeout S] PATH...
+        [--normalize forms] [--exclude PATH]... [--jobs N] [--timeout S]
+        PATH...
 
 Plan 5.12.4 (M15; M18 and M20 extend it): the proof that a change leaves the
 text of 'clang -S' and llc byte-identical (5.10.13, D14 frozen). It runs from
@@ -73,6 +74,27 @@ shown as unified diffs, and the exit status is 1. The usual use is a
 baseline written with the build of HEAD before a milestone's build, and a
 second snapshot with the new build compared against it.
 
+--normalize forms (M18, plan 5.12.4; only with --compare) compares the .il
+files of both snapshots after the encoding forms that plan Q26 and 5.10.11
+changed are mapped back to Phase 1's, line by line (line endings and every
+other byte are kept, and the .err files are compared exactly):
+
+  * short branches become long ones: 'br.s', 'brfalse.s', 'brtrue.s',
+    'beq.s', 'bge.s', 'bgt.s', 'ble.s', 'blt.s', 'bne.un.s', 'bge.un.s',
+    'bgt.un.s', 'ble.un.s', 'blt.un.s' and 'leave.s' lose their '.s';
+  * 'ldc.i4.m1' and 'ldc.i4.<n>' (n 0-8) become 'ldc.i4 -1' and
+    'ldc.i4 <n>', and 'ldc.i4.s <n>' becomes 'ldc.i4 <n>';
+  * 'nomangle cdecl' becomes 'cdecl'.
+
+A mnemonic is rewritten only as a whole word (whitespace or the start or end
+of the line on both sides). normalize_forms() is the same rewrite on any
+text, and leaves FileCheck '{{...}}' regular expressions and '[[...]]'
+variables as they are (IL text has neither); msil/utils/check-il-forms-diff.py
+applies it to FileCheck lines and adds the same rewrite in escaped spelling
+inside '{{...}}' (its docstring gives the rules). A difference that remains
+is listed and diffed as above, with the diff taken between the normalized
+texts.
+
 Exit status: 0 on success (with --compare: no difference); 1 when --compare
 finds a difference; 2 on a usage error or when the snapshot cannot be taken
 (a missing tool, git failing, an input that cannot be split or read).
@@ -127,6 +149,53 @@ STRIPPED_ENV = (
 )
 DIFF_FILES = 5  # unified diffs shown by --compare
 DIFF_LINES = 40  # lines of each
+
+# --normalize (M18): the kinds, and the rewrites of 'forms' (plan Q26 and
+# 5.10.11; the module docstring lists them). A mnemonic is a whole word: no
+# non-blank character right before or after it.
+NORMALIZATIONS = ("forms",)
+SHORT_BRANCH_RE = re.compile(
+    r"(?<!\S)(br|brfalse|brtrue|beq|bge|bgt|ble|blt|bne\.un|bge\.un|bgt\.un|"
+    r"ble\.un|blt\.un|leave)\.s(?!\S)"
+)
+LDC_I4_M1_RE = re.compile(r"(?<!\S)ldc\.i4\.[mM]1(?!\S)")
+LDC_I4_N_RE = re.compile(r"(?<!\S)ldc\.i4\.([0-8])(?!\S)")
+LDC_I4_S_RE = re.compile(r"(?<!\S)ldc\.i4\.s(?!\S)")
+NOMANGLE_RE = re.compile(r"(?<!\S)nomangle[ \t]+(?=cdecl(?![\w.]))")
+# FileCheck's '{{regex}}' and '[[variable]]' blocks, which normalize_forms()
+# leaves alone.
+FILECHECK_BLOCK_RE = re.compile(r"\{\{.*?\}\}|\[\[.*?\]\]")
+
+
+def normalize_plain(text):
+    text = SHORT_BRANCH_RE.sub(r"\1", text)
+    text = LDC_I4_M1_RE.sub("ldc.i4 -1", text)
+    text = LDC_I4_N_RE.sub(r"ldc.i4 \1", text)
+    text = LDC_I4_S_RE.sub("ldc.i4", text)
+    return NOMANGLE_RE.sub("", text)
+
+
+def normalize_forms(text):
+    """text with the Q26 forms mapped back to Phase 1's ('--normalize
+    forms'): short branches long, 'ldc.i4.m1', 'ldc.i4.<n>' and 'ldc.i4.s'
+    as 'ldc.i4 <n>', 'nomangle cdecl' as 'cdecl'. FileCheck '{{...}}' and
+    '[[...]]' blocks are kept as they are; every other character, line
+    endings included, is unchanged."""
+    out, pos = [], 0
+    for m in FILECHECK_BLOCK_RE.finditer(text):
+        out.append(normalize_plain(text[pos : m.start()]))
+        out.append(m.group(0))
+        pos = m.end()
+    out.append(normalize_plain(text[pos:]))
+    return "".join(out)
+
+
+def normalize_bytes(data, kinds):
+    """The bytes of an .il file after the --normalize kinds."""
+    if "forms" not in kinds:
+        return data
+    text = data.decode("utf-8", errors="surrogateescape")
+    return normalize_forms(text).encode("utf-8", errors="surrogateescape")
 
 
 def load_msil_run():
@@ -433,11 +502,13 @@ def read_stamp(directory):
         return None
 
 
-def compare(new, old):
-    """Compare snapshot new with snapshot old; returns the number of
-    differences."""
+def compare(new, old, normalize=()):
+    """Compare snapshot new with snapshot old, the .il files after the
+    --normalize kinds in normalize; returns the number of differences."""
     fa, fb = tree_files(new), tree_files(old)
     differs, missing, extra = [], [], []
+    normalized = {}  # name -> (old text, new text) of a normalized .il file
+    equal_after = 0  # .il files equal only after normalizing
     for name in sorted(set(fa) | set(fb)):
         if name not in fa:
             missing.append(name)
@@ -448,6 +519,12 @@ def compare(new, old):
                 a = f.read()
             with open(fb[name], "rb") as f:
                 b = f.read()
+            if a != b and normalize and name.endswith(".il"):
+                a, b = normalize_bytes(a, normalize), normalize_bytes(b, normalize)
+                if a == b:
+                    equal_after += 1
+                else:
+                    normalized[name] = (b, a)
             if a != b:
                 differs.append(name)
     for name in differs:
@@ -457,16 +534,28 @@ def compare(new, old):
     for name in extra:
         print("extra: %s (only in %s)" % (name, new.replace("\\", "/")))
     for name in differs[:DIFF_FILES]:
-        with open(fb[name], encoding="utf-8", errors="backslashreplace") as f:
-            a = f.read().splitlines(True)
-        with open(fa[name], encoding="utf-8", errors="backslashreplace") as f:
-            b = f.read().splitlines(True)
+        if name in normalized:
+            a, b = (
+                t.decode("utf-8", errors="backslashreplace").splitlines(True)
+                for t in normalized[name]
+            )
+        else:
+            with open(fb[name], encoding="utf-8", errors="backslashreplace") as f:
+                a = f.read().splitlines(True)
+            with open(fa[name], encoding="utf-8", errors="backslashreplace") as f:
+                b = f.read().splitlines(True)
         diff = list(difflib.unified_diff(a, b, "old/" + name, "new/" + name))
         for line in diff[:DIFF_LINES]:
             sys.stdout.write(line if line.endswith("\n") else line + "\n")
         if len(diff) > DIFF_LINES:
             print("... (%d more diff lines)" % (len(diff) - DIFF_LINES))
     total = len(differs) + len(missing) + len(extra)
+    if normalize:
+        say(
+            "--normalize %s: the .il files of both snapshots were compared "
+            "normalized; %d of them differ only in those forms"
+            % (",".join(normalize), equal_after)
+        )
     say(
         "compared %d files with %s: %d differ, %d missing, %d extra"
         % (
@@ -526,6 +615,14 @@ def parse_args(argv):
     p.add_argument("--out", required=True, help="snapshot directory (emptied first)")
     p.add_argument("--compare", metavar="DIR", help="compare with this snapshot")
     p.add_argument(
+        "--normalize",
+        action="append",
+        default=[],
+        choices=NORMALIZATIONS,
+        help="with --compare: compare the .il files after this normalization "
+        "('forms': short branches, short ldc.i4 forms, nomangle; repeatable)",
+    )
+    p.add_argument(
         "--exclude",
         action="append",
         default=[],
@@ -550,6 +647,9 @@ def parse_args(argv):
 def check_args(args):
     args.build = os.path.abspath(args.build)
     args.out = os.path.abspath(args.out)
+    args.normalize = [k for k in NORMALIZATIONS if k in args.normalize]
+    if args.normalize and not args.compare:
+        raise UsageError("--normalize applies to --compare, which is missing")
     if args.compare:
         args.compare = os.path.abspath(args.compare)
         if not os.path.isdir(args.compare):
@@ -591,11 +691,13 @@ def main(argv=None):
         "cflags": list(CFLAGS),
         **counts,
     }
+    if args.normalize:
+        stamp["normalize"] = args.normalize
     with open(os.path.join(args.out, STAMP), "w", encoding="utf-8", newline="\n") as f:
         json.dump(stamp, f, indent=2, sort_keys=True)
         f.write("\n")
     if args.compare:
-        return 1 if compare(args.out, args.compare) else 0
+        return 1 if compare(args.out, args.compare, args.normalize) else 0
     return 0
 
 

@@ -1,7 +1,7 @@
 ; Fused floating-point compare-and-branch (ImplementationPlan.md M6.a/M6.b,
 ; plan 5.1 and 5.4 'Control'; recon isel.md 3.2, 5.3, 10.7 and 11.7). A
 ; brcond on an fcmp of two float32 or float64 values selects one fused branch
-; B<cc>_{F32,F64} and prints its long form: beq (oeq), bne.un (une), blt (olt),
+; B<cc>_{F32,F64} and prints its short form: beq (oeq), bne.un (une), blt (olt),
 ; blt.un (ult), ble (ole), ble.un (ule), bgt (ogt), bgt.un (ugt), bge (oge) and
 ; bge.un (uge). The ordered CIL branches are not taken and the .un branches
 ; are taken when an operand is NaN (isel.md 3.2), so each mnemonic has the
@@ -33,7 +33,7 @@
 ; selection, which is the same at -O0 and -O2.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=conv. \
-; DEFINE:   --implicit-check-not=switch --implicit-check-not="{{^ +b[a-z.]+\.s }}" \
+; DEFINE:   --implicit-check-not=switch \
 ; DEFINE:   --implicit-check-not=throw
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check} --check-prefixes=CHECK,O2
@@ -71,8 +71,8 @@ source_filename = "brcond-fp.c"
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  beq @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  beq.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -105,8 +105,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bne.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bne.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -139,8 +139,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  blt @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  blt.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -173,8 +173,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  blt.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  blt.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -207,8 +207,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  ble @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  ble.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -241,8 +241,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  ble.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  ble.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -275,8 +275,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bgt @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bgt.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -309,8 +309,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bgt.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -343,8 +343,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bge @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bge.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -377,8 +377,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bge.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bge.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -404,8 +404,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bge.un @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bge.un.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -429,8 +429,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bgt @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bgt.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -454,8 +454,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  ble.un @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  ble.un.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -479,8 +479,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  blt @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  blt.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -515,8 +515,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  beq @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  beq.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -549,8 +549,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bne.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bne.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -583,8 +583,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  blt @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  blt.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -617,8 +617,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  blt.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  blt.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -651,8 +651,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  ble @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  ble.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -685,8 +685,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  ble.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  ble.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -719,8 +719,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bgt @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bgt.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -753,8 +753,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bgt.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -787,8 +787,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bge @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bge.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -821,8 +821,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bge.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bge.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -848,8 +848,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bne.un @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bne.un.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -873,8 +873,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  beq @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  beq.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -898,8 +898,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bge.un @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bge.un.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -923,8 +923,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bge @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bge.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -948,8 +948,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bgt.un @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -973,8 +973,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bgt @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bgt.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -998,8 +998,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  ble.un @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  ble.un.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -1023,8 +1023,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  ble @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  ble.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -1048,8 +1048,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  blt.un @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  blt.un.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -1073,8 +1073,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  blt @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  blt.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -1109,8 +1109,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  blt @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  blt.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -1143,8 +1143,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  bge.un @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bge.un.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -1179,8 +1179,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  blt @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  blt.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -1204,8 +1204,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bge @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bge.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -1238,8 +1238,8 @@ f:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  ble @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  ble.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -1263,8 +1263,8 @@ t:
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  bgt @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  bgt.s @BB[[F:[0-9]+]]_[[E:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -1287,8 +1287,8 @@ f:
 ; CHECK-LABEL: .method {{.*}}'loop_oeq_f64'(
 ; CHECK-SAME:  float64, float64, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1296,11 +1296,11 @@ f:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  beq @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  beq.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  bne.un @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  bne.un.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1325,8 +1325,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_une_f64'(
 ; CHECK-SAME:  float64, float64, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1334,11 +1334,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  bne.un @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  bne.un.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  beq @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  beq.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1363,8 +1363,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_olt_f64'(
 ; CHECK-SAME:  float64, float64, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1372,11 +1372,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  blt @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  blt.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  bge.un @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  bge.un.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1401,8 +1401,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_ult_f64'(
 ; CHECK-SAME:  float64, float64, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1410,11 +1410,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  blt.un @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  blt.un.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  bge @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  bge.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1439,8 +1439,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_ole_f64'(
 ; CHECK-SAME:  float64, float64, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1448,11 +1448,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  ble @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  ble.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  bgt.un @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  bgt.un.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1477,8 +1477,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_ule_f64'(
 ; CHECK-SAME:  float64, float64, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1486,11 +1486,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  ble.un @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  ble.un.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  bgt @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  bgt.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1515,8 +1515,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_ogt_f64'(
 ; CHECK-SAME:  float64, float64, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1524,11 +1524,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  bgt @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  bgt.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  ble.un @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  ble.un.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1553,8 +1553,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_ugt_f64'(
 ; CHECK-SAME:  float64, float64, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1562,11 +1562,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  bgt.un @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  bgt.un.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  ble @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  ble.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1591,8 +1591,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_oge_f64'(
 ; CHECK-SAME:  float64, float64, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1600,11 +1600,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  bge @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  bge.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  blt.un @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  blt.un.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1629,8 +1629,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_uge_f64'(
 ; CHECK-SAME:  float64, float64, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1638,11 +1638,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  bge.un @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  bge.un.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  blt @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  blt.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1667,8 +1667,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_oeq_f32'(
 ; CHECK-SAME:  float32, float32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1676,11 +1676,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  beq @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  beq.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  bne.un @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  bne.un.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1705,8 +1705,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_une_f32'(
 ; CHECK-SAME:  float32, float32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1714,11 +1714,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  bne.un @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  bne.un.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  beq @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  beq.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1743,8 +1743,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_olt_f32'(
 ; CHECK-SAME:  float32, float32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1752,11 +1752,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  blt @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  blt.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  bge.un @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  bge.un.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1781,8 +1781,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_ult_f32'(
 ; CHECK-SAME:  float32, float32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1790,11 +1790,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  blt.un @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  blt.un.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  bge @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  bge.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1819,8 +1819,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_ole_f32'(
 ; CHECK-SAME:  float32, float32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1828,11 +1828,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  ble @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  ble.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  bgt.un @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  bgt.un.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1857,8 +1857,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_ule_f32'(
 ; CHECK-SAME:  float32, float32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1866,11 +1866,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  ble.un @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  ble.un.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  bgt @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  bgt.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1895,8 +1895,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_ogt_f32'(
 ; CHECK-SAME:  float32, float32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1904,11 +1904,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  bgt @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  bgt.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  ble.un @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  ble.un.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1933,8 +1933,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_ugt_f32'(
 ; CHECK-SAME:  float32, float32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1942,11 +1942,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  bgt.un @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  bgt.un.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  ble @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  ble.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -1971,8 +1971,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_oge_f32'(
 ; CHECK-SAME:  float32, float32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -1980,11 +1980,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  bge @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  bge.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  blt.un @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  blt.un.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -2009,8 +2009,8 @@ exit:
 ; CHECK-LABEL: .method {{.*}}'loop_uge_f32'(
 ; CHECK-SAME:  float32, float32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[MID:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[LOOP]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -2018,11 +2018,11 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; O0:          {{^}}  bge.un @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[LOOP]]{{$}}
+; O0:          {{^}}  bge.un.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[LOOP]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
 ; O0:          {{^}}@BB[[F]]_[[EXIT]]:{{$}}
-; O2:          {{^}}  blt @BB[[F]]_[[LOOP]]{{$}}
+; O2:          {{^}}  blt.s @BB[[F]]_[[LOOP]]{{$}}
 ; O2-NOT:      {{^}}@
 ; O2:          {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_[[MID]]:{{$}}
@@ -2053,7 +2053,7 @@ exit:
 ; CHECK-SAME:  float64, float64) cil managed{{$}}
 ; CHECK:       {{^}}  and{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  {{brtrue}} @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
+; CHECK:       {{^}}  {{brtrue}}.s @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[D]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -2072,7 +2072,7 @@ t:
 ; CHECK-SAME:  float64, float64) cil managed{{$}}
 ; CHECK:       {{^}}  or{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  {{brtrue}} @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
+; CHECK:       {{^}}  {{brtrue}}.s @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[D]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -2091,7 +2091,7 @@ f:
 ; CHECK-SAME:  float64, float64) cil managed{{$}}
 ; CHECK:       {{^}}  or{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  {{brtrue}} @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
+; CHECK:       {{^}}  {{brtrue}}.s @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[D]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -2110,7 +2110,7 @@ t:
 ; CHECK-SAME:  float64, float64) cil managed{{$}}
 ; CHECK:       {{^}}  and{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  {{brtrue}} @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
+; CHECK:       {{^}}  {{brtrue}}.s @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[D]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -2129,7 +2129,7 @@ f:
 ; CHECK-SAME:  float64, float64) cil managed{{$}}
 ; CHECK:       {{^}}  or{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  {{brtrue}} @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
+; CHECK:       {{^}}  {{brtrue}}.s @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[D]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -2148,7 +2148,7 @@ t:
 ; CHECK-SAME:  float64, float64) cil managed{{$}}
 ; CHECK:       {{^}}  or{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  {{bne\.un|brfalse}} @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
+; CHECK:       {{^}}  {{bne\.un|brfalse}}.s @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[D]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -2167,7 +2167,7 @@ f:
 ; CHECK-SAME:  float64, float64) cil managed{{$}}
 ; CHECK:       {{^}}  or{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  {{bne\.un|brfalse}} @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
+; CHECK:       {{^}}  {{bne\.un|brfalse}}.s @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[D]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -2186,7 +2186,7 @@ t:
 ; CHECK-SAME:  float64, float64) cil managed{{$}}
 ; CHECK:       {{^}}  or{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  {{brtrue}} @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
+; CHECK:       {{^}}  {{brtrue}}.s @BB[[F:[0-9]+]]_[[D:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[D]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}

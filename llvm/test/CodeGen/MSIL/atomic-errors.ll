@@ -132,7 +132,7 @@ define i32 @armw(ptr %p, i32 %v) {
 ; IL-NEXT:  {{^}}  stloc.0{{$}}
 ; IL-NOT:   {{ldind|stind}}
 ; IL:       {{^}}  ldloc.0{{$}}
-; IL-NEXT:  {{^}}  ldc.i4 [[CAS:[0-9]+]]{{$}}
+; IL-NEXT:  {{^}}  ldc.i4.s [[CAS:[0-9]+]]{{$}}
 ; IL-NEXT:  {{^}}  conv.i{{$}}
 ; IL-NEXT:  {{^}}  add{{$}}
 ; IL-NEXT:  {{^}}  ldarg.1{{$}}
@@ -140,7 +140,7 @@ define i32 @armw(ptr %p, i32 %v) {
 ; IL-NOT:   {{ldind|stind}}
 ; IL:       {{^}}  ldarg.0{{$}}
 ; IL-NEXT:  {{^}}  ldloc.0{{$}}
-; IL-NEXT:  {{^}}  ldc.i4 [[CAS]]{{$}}
+; IL-NEXT:  {{^}}  ldc.i4.s [[CAS]]{{$}}
 ; IL-NEXT:  {{^}}  conv.i{{$}}
 ; IL-NEXT:  {{^}}  add{{$}}
 ; IL-NEXT:  {{^}}  ldarg.2{{$}}
@@ -149,7 +149,7 @@ define i32 @armw(ptr %p, i32 %v) {
 ; IL-NEXT:  {{^}}  call int32 '__atomic_compare_exchange_4'(native int, native int, int32, int32, int32){{$}}
 ; IL-NEXT:  {{^}}  pop{{$}}
 ; IL-NEXT:  {{^}}  ldloc.0{{$}}
-; IL-NEXT:  {{^}}  ldc.i4 [[CAS]]{{$}}
+; IL-NEXT:  {{^}}  ldc.i4.s [[CAS]]{{$}}
 ; IL-NEXT:  {{^}}  conv.i{{$}}
 ; IL-NEXT:  {{^}}  add{{$}}
 ; IL-NEXT:  {{^}}  ldind.i4{{$}}
@@ -170,17 +170,17 @@ define i32 @acas(ptr %p, i32 %e, i32 %n) {
 ; IL:       {{^}}  localloc{{$}}
 ; IL-NEXT:  {{^}}  stloc.0{{$}}
 ; IL-NOT:   {{ldind|stind}}
-; IL:       {{^}}  ldc.i4 4{{$}}
+; IL:       {{^}}  ldc.i4.4{{$}}
 ; IL-NEXT:  {{^}}  conv.i{{$}}
 ; IL-NEXT:  {{^}}  ldarg.0{{$}}
 ; IL-NEXT:  {{^}}  ldloc.0{{$}}
-; IL-NEXT:  {{^}}  ldc.i4 [[RES:[0-9]+]]{{$}}
+; IL-NEXT:  {{^}}  ldc.i4.s [[RES:[0-9]+]]{{$}}
 ; IL-NEXT:  {{^}}  conv.i{{$}}
 ; IL-NEXT:  {{^}}  add{{$}}
 ; IL-NEXT:  {{^}}  {{ldc.i4.5|ldloc.1}}{{$}}
 ; IL-NEXT:  {{^}}  call void '__atomic_load'(native int, native int, native int, int32){{$}}
 ; IL-NEXT:  {{^}}  ldloc.0{{$}}
-; IL-NEXT:  {{^}}  ldc.i4 [[RES]]{{$}}
+; IL-NEXT:  {{^}}  ldc.i4.s [[RES]]{{$}}
 ; IL-NEXT:  {{^}}  conv.i{{$}}
 ; IL-NEXT:  {{^}}  add{{$}}
 ; IL-NEXT:  {{^}}  ldind.i4{{$}}

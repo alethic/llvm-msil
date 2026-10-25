@@ -12,13 +12,15 @@
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List
 #
 # Legs, in order. The numbers are the gate steps of plan section 6 that run the same command:
-# 'M14 n' for the M14 gate, 'M12 n' for the M12 gate, plain numbers for the M10 and M11 gates
-# (steps 5-12 the same in both, 20 and 21 M11's); lit-legs.sh has the Linux job's legs:
-#   net8           llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests and, from
-#                  M17, the llvm-cil-dump and llvm-cil-copy tests included), harness,
-#                  msil/test/M1 and msil/test/M2 on .NET 8 (tiered) and on the .NET Framework
-#                  4.8, -O0 and -O2, native oracle required (with the VS clang's compiler-rt
-#                  builtins, lit's msil_native_rtlib=auto)          (M14 11; M12 9; step 5)
+# 'M18 n' for the M18 gate, 'M14 n' for the M14 gate, 'M12 n' for the M12 gate, plain numbers
+# for the M10 and M11 gates (steps 5-12 the same in both, 20 and 21 M11's); lit-legs.sh has the
+# Linux job's legs:
+#   net8           llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests, from M17
+#                  the llvm-cil-dump and llvm-cil-copy tests and from M18 llvm/test/MC/MSIL
+#                  included), harness, msil/test/M1 and msil/test/M2 on .NET 8 (tiered) and on
+#                  the .NET Framework 4.8, -O0 and -O2, native oracle required (with the VS
+#                  clang's compiler-rt builtins, lit's msil_native_rtlib=auto)
+#                                                          (M18 15; M14 11; M12 9; step 5)
 #   net10          msil/test/M1 on .NET 10                                       (M12 10; step 6)
 #   net8-tc0       msil/test/M1 on .NET 8, DOTNET_TieredCompilation=0 (optimizing JIT)  (step 7)
 #   more-levels    msil/test/M1 on .NET 8 at O1,O3,Os,Oz (O0 and O2 run in the other legs; .ll
@@ -31,8 +33,8 @@
 #   det            msil/test/M2/06-det: %{msil_det}, objects, archives and --lto-emit-asm text
 #                  built twice and compared                                          (M14 13)
 #   wsl-net10      -Wsl: msil/test/M1 and msil/test/harness (the WSL runner's own checks),
-#                  x86_64-unknown-linux-gnu-msil, WSL .NET 10, E7 Linux oracle required (M12 11,
-#                  and M12 12 checks its response file and log; step 8)
+#                  x86_64-unknown-linux-gnu-msil, WSL .NET 10, E7 Linux oracle required (M18 16;
+#                  M12 11, and M12 12 checks its response file and log; step 8)
 #   wsl-net10-tc0  -Wsl: msil/test/M1 with DOTNET_TieredCompilation=0                   (step 9)
 #   wsl-ilasm      -Wsl: 11-programs assembled by the Linux ilasm inside WSL           (step 10)
 #   wsl-quick      -Wsl: msil/test/M1/11-programs, msil/test/harness and msil/test/M2 (once it
@@ -46,8 +48,10 @@
 #                  configuration error, never a leg of UNSUPPORTED tests. It is not in the
 #                  default set: like the WSL legs it needs what only the development host has (a
 #                  sysroot made through the WSL distribution); the CI never runs it   (M15 20)
-#   modern-ilasm   11-programs assembled by the .NET ilasm (win-x64), not Framework's  (step 11)
-#   roundtrip      11-programs through ildasm -> ilasm, then run (Design.md 5.5)       (M12 13)
+#   modern-ilasm   11-programs assembled by the .NET ilasm (win-x64), not Framework's
+#                                                                         (M18 17; step 11)
+#   roundtrip      11-programs through ildasm -> ilasm, then run (Design.md 5.5)
+#                                                                         (M18 17; M12 13)
 #   expected       update-expected.py --check msil/test/M1 msil/test/M2: .expected vs the Windows
 #                  native oracle, with the compiler-rt builtins (M2's %{msil_prog} tests built by
 #                  msil-prog.py --mode native)                              (M14 15; step 12)
@@ -55,7 +59,21 @@
 #                  Linux oracle vs <stem>.linux.expected, else <stem>.expected        (M12 14)
 #   utc            run-utc-tests.py with six tests of llvm/test/tools/UpdateTestChecks/
 #                  update_llc_test_checks, which lit reports UNSUPPORTED on Windows (it looks
-#                  for a file named 'llc'; plan M5.b and section 12)                   (step 20)
+#                  for a file named 'llc'; plan M5.b and section 12)          (M18 18; step 20)
+#   encoder-parity msil/utils/mdtools/cli-corpus-check.py --mode encoder (plan M18.f, 5.12.11):
+#                  every msil/test/M1 program at -O0 and -O2 through clang -S -emit-llvm and
+#                  llc -show-mc-encoding, the bytes of every method rebuilt from the encoding
+#                  comments (PC-relative fixups resolved from the label offsets) and compared
+#                  with the .NET Framework ilasm's image of the same text: equal code bytes
+#                  (a float32 signaling NaN that ilasm quiets counts apart), token kinds and
+#                  names matching each fixup, and equal .maxstack, which only confirms that
+#                  ilasm kept the listing's directive: the Framework ilasm writes it into a
+#                  fat header without checking it against the code (a '.maxstack 1' over a
+#                  body of stack depth 3 assembles silently), so it is no independent
+#                  evidence of the stack depth, which rests on MSILStackCheck (plan D20),
+#                  jitall and M18's gate step 14; at least 2,600 methods
+#                  (2,819 in the 99 C programs of M18's msil/test/M1). Windows only (the
+#                  Framework ilasm); not in lit-legs.sh                            (M18 19)
 #   all-levels     -Full: msil/test at O0,O1,O2,O3,Os,Oz (nightly)
 # The WSL legs need a WSL distribution (only the development host has one; the Linux CI job
 # covers the Linux triple natively) with the private .NET runtimes of
@@ -83,10 +101,10 @@
 # may contain blanks (a NuGet ilasm under a profile directory with a space; backlog 3.5); the
 # build directory itself may not, because msil-lit.ps1 splits -LitArgs at blanks, and the leg
 # fails naming it. A leg passes when lit exits 0 and at least one test passed. expected,
-# expected-linux and utc are not lit legs: each runs its script under the shared build-dir lock,
-# writes <build>/lit-results/<leg>.log and passes when the script exits 0 (and, for the expected
-# legs, at least one test matched). Every selected leg runs even after a failure; the exit
-# status is 1 if any failed.
+# expected-linux, utc and encoder-parity are not lit legs: each runs its script under the shared
+# build-dir lock, writes <build>/lit-results/<leg>.log and passes when the script exits 0 (and,
+# for the expected legs, at least one test matched; for encoder-parity, it printed its summary
+# line). Every selected leg runs even after a failure; the exit status is 1 if any failed.
 [CmdletBinding()]
 param(
   [string]$BuildDir = '',         # default: $env:MSIL_BUILD_DIR, else <repo>\build
@@ -108,7 +126,7 @@ $checkMsil = @('llvm/test/CodeGen/MSIL', 'clang/test/CodeGen/MSIL', 'clang/test/
                'clang/test/Driver/msil-toolchain.c', 'clang/test/Driver/msil-link.c',
                'clang/test/Driver/msil-lto.c', 'clang/test/Driver/msil-header-search.c',
                'lld/test/MSIL', 'llvm/test/tools/llvm-cil-dump', 'llvm/test/tools/llvm-cil-copy',
-               'msil/test')
+               'llvm/test/MC/MSIL', 'msil/test')
 $m1 = @('msil/test/M1')
 # msil/test/M2 (plan 5.12.5, from M14) where it exists.
 function Get-M2Paths {
@@ -157,6 +175,7 @@ $legs = @(
   @{ Name = 'expected'; Expected = 'windows' }
   @{ Name = 'expected-linux'; Expected = 'linux'; Wsl = $true }
   @{ Name = 'utc'; Utc = $true }
+  @{ Name = 'encoder-parity'; Encoder = $true }
   @{ Name = 'all-levels'; Paths = { 'msil/test' }; Full = $true
      Params = { 'msil_opt_levels=O0,O1,O2,O3,Os,Oz' } }
 )
@@ -167,6 +186,11 @@ $legs = @(
 # test whose target is missing instead of skipping it. lit-legs.sh has the same list.
 $utcTests = @('msil-basic', 'x86-basic', 'x86-mir-only', 'x86-asm-mir-mixed', 'x86-constant-pool',
               'asm-show-inst')
+
+# The encoder-parity leg's floor (plan M18.f): msil/test/M1 at -O0 and -O2 had 2,670 method
+# bodies in llvm/docs/MSIL/recon/p2/mc-streamer.md (E2, 93 C programs) and has 2,819 at M18
+# (99 C programs).
+$encoderMinMethods = 2600
 
 $selected = @($Leg | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $known = $legs | ForEach-Object { $_.Name }
@@ -275,11 +299,38 @@ function Invoke-UtcLeg($l) {
   return @{ Ok = ($rc -eq 0); Detail = "run-utc-tests.py: $what (exit $rc)" }
 }
 
+function Invoke-EncoderLeg($l) {
+  # The encoder parity check (plan M18.f): cli-corpus-check.py --mode encoder over msil/test/M1
+  # at -O0 and -O2 with this build's clang, llc and llvm-cil-dump, under the shared build-dir
+  # lock. The script fails when a method differs from ilasm's, a program cannot be compiled or
+  # assembled, or fewer than $encoderMinMethods methods were compared.
+  if (-not $IsWindows) { throw 'encoder-parity runs only on Windows (it needs the .NET Framework ilasm)' }
+  $log = Join-Path $results "$($l.Name).log"
+  $bin = Join-Path $BuildDir 'bin'
+  $what = 'cli-corpus-check.py --mode encoder msil/test/M1'
+  $lock = Enter-MsilBuildLock -BuildDir $BuildDir -Shared -What $what
+  try {
+    & $MsilPython (Join-Path $MsilRepo 'msil/utils/mdtools/cli-corpus-check.py') --mode encoder `
+      --levels O0,O2 --min-methods $encoderMinMethods --clang (Join-Path $bin 'clang.exe') `
+      --llc (Join-Path $bin 'llc.exe') --cil-dump (Join-Path $bin 'llvm-cil-dump.exe') `
+      (Join-Path $MsilRepo 'msil/test/M1') 2>&1 | ForEach-Object { "$_" } |
+      Tee-Object -FilePath $log | Out-Host
+    $rc = $LASTEXITCODE
+  } finally { $lock.Dispose() }
+  $summary = @(if (Test-Path -LiteralPath $log) {
+                 Select-String -LiteralPath $log -Pattern '^cli-corpus-check\.py: encoder: \d+ of \d+ methods' |
+                   Select-Object -Last 1
+               })
+  $detail = if ($summary.Count -gt 0) { $summary[0].Line -replace '^cli-corpus-check\.py: ', '' }
+            else { 'no summary' }
+  return @{ Ok = ($rc -eq 0 -and $summary.Count -gt 0); Detail = "$detail (exit $rc)" }
+}
+
 foreach ($l in $run) {
   $sw = [Diagnostics.Stopwatch]::StartNew()
   try {
     $r = if ($l.Expected) { Invoke-ExpectedLeg $l } elseif ($l.Utc) { Invoke-UtcLeg $l }
-         else { Invoke-LitLeg $l }
+         elseif ($l.Encoder) { Invoke-EncoderLeg $l } else { Invoke-LitLeg $l }
   } catch {
     $r = @{ Ok = $false; Detail = "$_" }
   }

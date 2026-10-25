@@ -55,10 +55,10 @@ define ptr @get_putchar() {
 }
 
 ; CHECK-NOT:   {{^}}.method {{(public|assembly) static}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" cdecl) int32 'putchar'(int32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" as "real_name" cdecl) native int 'renamed'(native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" nomangle cdecl) int32 'putchar'(int32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" as "real_name" nomangle cdecl) native int 'renamed'(native int) cil managed preservesig {}{{$}}
 ; CHECK:        {{^}}.class private explicit ansi sealed '<msil>image_t' extends [mscorlib]System.ValueType
 ; CHECK:        {{^ *}}.pack 1{{( |$)}}
 ; CHECK:        {{^ *}}.size 40{{( |$)}}

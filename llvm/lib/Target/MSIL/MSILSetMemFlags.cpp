@@ -15,8 +15,8 @@
 /// This file sets the memflags operands of loads, stores, cpblk and initblk
 /// (decision D24): instruction selection leaves them 0, and this pass, right
 /// after it, copies the alignment and volatility of each instruction's memory
-/// operands into the immediate, which MSILInstPrinter prints as the
-/// 'unaligned. N' and 'volatile.' prefixes.
+/// operands into the immediate, which MSILMCInstLower turns into CIL_Unaligned
+/// and CIL_Volatile prefix instructions ahead of the access.
 ///
 //===----------------------------------------------------------------------===//
 

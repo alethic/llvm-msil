@@ -586,27 +586,27 @@ define float @after_libm32(float %a, float %b) {
 
 ; One P/Invoke per function, in the math library.
 ; LIBM32-NOT:   {{^}}.method {{(public|assembly) static}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'fmaf'(float32, float32, float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'sqrtf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'floorf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'ceilf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'truncf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'rintf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'nearbyintf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'roundf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'fminf'(float32, float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'fmaxf'(float32, float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'sinf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'cosf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'tanf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'powf'(float32, float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'expf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'exp2f'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'logf'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'log2f'(float32) cil managed preservesig {}{{$}}
-; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'log10f'(float32) cil managed preservesig {}{{$}}
-; LIBM32-LNX-DAG: {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'ldexpf'(float32, int32) cil managed preservesig {}{{$}}
-; LIBM32-WIN-DAG: {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'fmaf'(float32, float32, float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'sqrtf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'floorf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'ceilf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'truncf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'rintf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'nearbyintf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'roundf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'fminf'(float32, float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'fmaxf'(float32, float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'sinf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'cosf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'tanf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'powf'(float32, float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'expf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'exp2f'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'logf'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'log2f'(float32) cil managed preservesig {}{{$}}
+; LIBM32-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'log10f'(float32) cil managed preservesig {}{{$}}
+; LIBM32-LNX-DAG: {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'ldexpf'(float32, int32) cil managed preservesig {}{{$}}
+; LIBM32-WIN-DAG: {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
 ; LIBM32-NOT:   {{^}}.method
 
 ; NLIBM32-COUNT-20: pinvokeimpl
@@ -982,33 +982,33 @@ define double @after_libm64(double %a, double %b) {
 }
 
 ; LIBM64-NOT:   {{^}}.method {{(public|assembly) static}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'fma'(float64, float64, float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'ceil'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'trunc'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'rint'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'nearbyint'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'round'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'fmin'(float64, float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'fmax'(float64, float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sin'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'cos'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'tan'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'pow'(float64, float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'exp'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'exp2'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'log'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'log2'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'log10'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'asin'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'acos'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'atan'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'atan2'(float64, float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sinh'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'cosh'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'tanh'(float64) cil managed preservesig {}{{$}}
-; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'fma'(float64, float64, float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'ceil'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'trunc'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'rint'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'nearbyint'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'round'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'fmin'(float64, float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'fmax'(float64, float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'sin'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'cos'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'tan'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'pow'(float64, float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'exp'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'exp2'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'log'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'log2'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'log10'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'asin'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'acos'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'atan'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'atan2'(float64, float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'sinh'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'cosh'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'tanh'(float64) cil managed preservesig {}{{$}}
+; LIBM64-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
 ; LIBM64-NOT:   {{^}}.method
 
 ; NLIBM64-COUNT-27: pinvokeimpl
@@ -1223,14 +1223,14 @@ define double @after_multi(double %a, double %b) {
 }
 
 ; MULTI-NOT:     {{^}}.method {{(public|assembly) static}}
-; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sin'(float64) cil managed preservesig {}{{$}}
-; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'cos'(float64) cil managed preservesig {}{{$}}
-; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
-; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'modf'(float64, native int) cil managed preservesig {}{{$}}
-; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'sinf'(float32) cil managed preservesig {}{{$}}
-; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'cosf'(float32) cil managed preservesig {}{{$}}
-; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'modff'(float32, native int) cil managed preservesig {}{{$}}
-; MULTI-LNX-DAG: {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'frexpf'(float32, native int) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'sin'(float64) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'cos'(float64) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'modf'(float64, native int) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'sinf'(float32) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'cosf'(float32) cil managed preservesig {}{{$}}
+; MULTI-DAG:     {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'modff'(float32, native int) cil managed preservesig {}{{$}}
+; MULTI-LNX-DAG: {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'frexpf'(float32, native int) cil managed preservesig {}{{$}}
 ; MULTI-NOT:     {{^}}.method
 
 ; NMULTI-LNX-COUNT-8: pinvokeimpl

@@ -354,7 +354,7 @@ define i32 @tied_bool(i32 %x) {
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; O0-NEXT:     {{^}}  .locals (native int){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 16{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 16{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:     {{^}}  starg.s 0{{$}}
@@ -385,7 +385,7 @@ define ptr @tied_inttoptr(i64 %n) {
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; O0-NEXT:     {{^}}  .locals (native int){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 16{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 16{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:     {{^}}  starg.s 0{{$}}
@@ -572,7 +572,7 @@ define i32 @tied_out_g(ptr %x, i32 %y) {
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 5{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}
 ; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}

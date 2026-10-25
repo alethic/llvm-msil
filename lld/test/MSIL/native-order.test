@@ -66,8 +66,8 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 main.o libtwo.so.2 libone.so.1 -o two.il 2>&1 | count 0
 # RUN: %{so} -DMOD=libtwo.so.2 --input-file=two.il
 # RUN: FileCheck %s --check-prefix=SO-PINV --input-file=two.il
-# SO-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'shared_fn'() cil managed preservesig {}{{$}}
-# SO-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
+# SO-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) int32 'shared_fn'() cil managed preservesig {}{{$}}
+# SO-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
 ## Exactly those two P/Invokes.
 # SO-PINV-COUNT-2: pinvokeimpl
 # SO-PINV-NOT:     pinvokeimpl
@@ -75,8 +75,8 @@
 ## A WEAK definition in the first library wins over a GLOBAL one later.
 # RUN: msil-ld --lto-emit-asm --lto-O0 main.o libweak.so.1 libtwo.so.2 -o weak.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=WEAK --input-file=weak.il
-# WEAK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libweak.so.1" cdecl) int32 'shared_fn'() cil managed preservesig {}{{$}}
-# WEAK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libtwo.so.2" cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
+# WEAK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libweak.so.1" nomangle cdecl) int32 'shared_fn'() cil managed preservesig {}{{$}}
+# WEAK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libtwo.so.2" nomangle cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
 
 ## The first bindable definition: libhid.so.1 has only shared_fn@V1 and
 ## libnat.a only native code, so libtwo.so.2 binds shared_fn.
@@ -108,7 +108,7 @@
 #      LAZYWEAK-WHY:reference	extracted	symbol
 #  LAZYWEAK-WHY-NOT:{{.}}
 # LAZYWEAK-DAG: call int32 'maybe'()
-# LAZYWEAK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libmaybe.so.1" cdecl) int32 'maybe'() cil managed preservesig {}{{$}}
+# LAZYWEAK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libmaybe.so.1" nomangle cdecl) int32 'maybe'() cil managed preservesig {}{{$}}
 # LAZYWEAK-NONE-NOT: undef_maybe
 
 #--- lib.yaml

@@ -96,13 +96,13 @@
 // RUN:   | FileCheck %s --check-prefix=NOSINK
 // SINK-LABEL:   {{^}}.method public static void 'g'(int32, int32, int32) cil managed{{$}}
 // SINK-NOT:     {{^}}  div{{$}}
-// SINK:         {{^}}  brfalse @BB
+// SINK:         {{^}}  brfalse.s @BB
 // SINK:         {{^}}  div{{$}}
 // SINK:         {{^}}  call void 'use'(int32){{$}}
 // NOSINK-LABEL: {{^}}.method public static void 'g'(int32, int32, int32) cil managed{{$}}
-// NOSINK-NOT:   {{^}}  brfalse @BB
+// NOSINK-NOT:   {{^}}  brfalse{{(\.s)?}} @BB
 // NOSINK:       {{^}}  div{{$}}
-// NOSINK:       {{^}}  brfalse @BB
+// NOSINK:       {{^}}  brfalse.s @BB
 // NOSINK:       {{^}}  call void 'use'(int32){{$}}
 
 int f(int a, int b) { return a < b ? a : b; }

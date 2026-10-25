@@ -74,7 +74,7 @@
 # RUN: %{so} -DMOD=libdep-dep.so.3 --input-file=dep.il
 # RUN: msil-ld --lto-emit-asm --lto-O0 lnx-space.o -L lib -o space.il 2>&1 | count 0
 # RUN: %{so} -DMOD=libmylib.so.1 --input-file=space.il
-# SO: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'lib_fn'() cil managed preservesig {}{{$}}
+# SO: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) int32 'lib_fn'() cil managed preservesig {}{{$}}
 
 ## A request found nowhere: lld/ELF's text, then the requesting file
 ## (5.10.6).
@@ -105,10 +105,10 @@
 ## searched (strdup -> _strdup in ucrt.lib, which the command line gives).
 # RUN: msil-ld --lto-emit-asm --lto-O0 win.o -L wlib wlib/ucrt.lib -o win.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=WIN --input-file=win.il
-# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("wfoo.dll" cdecl) int32 'wfoo_fn'() cil managed preservesig {}{{$}}
-# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("wbar.dll" cdecl) int32 'wbar_fn'() cil managed preservesig {}{{$}}
-# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("wqux.dll" cdecl) int32 'wqux_fn'() cil managed preservesig {}{{$}}
-# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
+# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("wfoo.dll" nomangle cdecl) int32 'wfoo_fn'() cil managed preservesig {}{{$}}
+# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("wbar.dll" nomangle cdecl) int32 'wbar_fn'() cil managed preservesig {}{{$}}
+# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("wqux.dll" nomangle cdecl) int32 'wqux_fn'() cil managed preservesig {}{{$}}
+# WIN-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" nomangle cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
 # RUN: msil-ld --lto-emit-asm --lto-O0 --verbose win.o -L wlib wlib/ucrt.lib -o win-verbose.il 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=LIBCMT
 # LIBCMT: {{^}}msil-ld: ignoring C runtime library request 'libcmt.lib' from win.o{{$}}

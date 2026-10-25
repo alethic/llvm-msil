@@ -8,14 +8,14 @@
 #   bash msil/utils/ci/lit-legs.sh [--full] [--leg NAME[,NAME...]] [--list] [BUILD_DIR]
 #
 # Legs, in order (lit-legs.ps1 has the Windows legs and the WSL legs of the development host,
-# the gate steps 5-12 (M10 and M11) and 20-21 (M11) of plan section 6, and M12's legs; this
-# job has no WSL legs: it runs the Linux triple natively, with msil_linux_sysroot=/, lit.cfg.py's
-# default on Linux); the triple is x86_64-unknown-linux-gnu-msil, the triple of Design.md
-# section 12:
-#   net8         llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests and, from M17,
-#                the llvm-cil-dump and llvm-cil-copy tests included), harness, msil/test/M1 and
-#                msil/test/M2 on .NET 8 (tiered), -O0 and -O2, native oracle required
-#                (check-msil's paths)
+# the gate steps 5-12 (M10 and M11) and 20-21 (M11) of plan section 6, M12's legs and M18's
+# Windows-only encoder-parity leg; this job has no WSL legs: it runs the Linux triple natively,
+# with msil_linux_sysroot=/, lit.cfg.py's default on Linux); the triple is
+# x86_64-unknown-linux-gnu-msil, the triple of Design.md section 12:
+#   net8         llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests, from M17 the
+#                llvm-cil-dump and llvm-cil-copy tests and from M18 llvm/test/MC/MSIL included),
+#                harness, msil/test/M1 and msil/test/M2 on .NET 8 (tiered), -O0 and -O2, native
+#                oracle required (check-msil's paths)
 #   net10        msil/test/M1 on .NET 10
 #   net8-tc0     msil/test/M1 on .NET 8 with DOTNET_TieredCompilation=0 (optimizing JIT)
 #   net10-tc0    msil/test/M1 on .NET 10 with DOTNET_TieredCompilation=0
@@ -93,7 +93,7 @@ check_msil=("$MSIL_REPO/llvm/test/CodeGen/MSIL" "$MSIL_REPO/clang/test/CodeGen/M
   "$MSIL_REPO/clang/test/Driver/msil-link.c" "$MSIL_REPO/clang/test/Driver/msil-lto.c"
   "$MSIL_REPO/clang/test/Driver/msil-header-search.c" "$MSIL_REPO/lld/test/MSIL"
   "$MSIL_REPO/llvm/test/tools/llvm-cil-dump" "$MSIL_REPO/llvm/test/tools/llvm-cil-copy"
-  "$MSIL_REPO/msil/test")
+  "$MSIL_REPO/llvm/test/MC/MSIL" "$MSIL_REPO/msil/test")
 m1=("$MSIL_REPO/msil/test/M1")
 # msil/test/M2 (plan 5.12.5, from M14) where it exists.
 m2=()

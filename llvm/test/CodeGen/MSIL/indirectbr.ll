@@ -12,7 +12,7 @@
 ; -verify-machineinstrs and assembles.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=calli \
-; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}" --implicit-check-not=throw \
+; DEFINE:   --implicit-check-not=throw \
 ; DEFINE:   --implicit-check-not=ldftn --implicit-check-not=JTI
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check} --check-prefixes=CHECK,O2
@@ -42,8 +42,8 @@ source_filename = "indirectbr.c"
 ; CHECK-LABEL: .method {{.*}}'ibr2'(
 ; CHECK-SAME:  int32) cil managed{{$}}
 ; CHECK-NOT:   switch
-; CHECK:       {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[A:[0-9]+]]{{$}}
+; CHECK:       {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[A:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[A]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.s 10{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -79,12 +79,12 @@ b:
 ; CHECK-LABEL: .method {{.*}}'ibr5'(
 ; CHECK-SAME:  int32) cil managed{{$}}
 ; O0:          {{^}}  conv.i4{{$}}
-; CHECK:       {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
+; CHECK:       {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
 ; O2:          {{^}}  conv.i4{{$}}
 ; O2-NEXT:     {{^}}  switch ([[L1:@BB[0-9]+_[0-9]+]], [[L2:@BB[0-9]+_[0-9]+]], [[L3:@BB[0-9]+_[0-9]+]], [[L4:@BB[0-9]+_[0-9]+]]){{$}}
 ; O0-NOT:      conv.
 ; O0:          {{^}}  switch ([[L1:@BB[0-9]+_[0-9]+]], [[L2:@BB[0-9]+_[0-9]+]], [[L3:@BB[0-9]+_[0-9]+]], [[L4:@BB[0-9]+_[0-9]+]]){{$}}
-; CHECK-NEXT:  {{^}}  br [[L1]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s [[L1]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[DEF]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.s 100{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -134,8 +134,8 @@ b4:
 ; CHECK:       {{^}}  .locals ({{.*}}native int{{.*}}){{$}}
 ; CHECK:       {{^}}@BB[[F:[0-9]+]]_[[D:[0-9]+]]:{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  bge @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; CHECK-DAG:   {{^}}  br @BB[[F]]_[[D]]{{$}}
+; CHECK:       {{^}}  bge{{(\.s)?}} @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; CHECK-DAG:   {{^}}  br.s @BB[[F]]_[[D]]{{$}}
 ; CHECK-DAG:   {{^}}@BB[[F]]_[[EXIT]]:{{$}}
 ; CHECK-NOT:   switch
 ; CHECK:       {{^}}} // end of method 'ibr_loop'{{$}}

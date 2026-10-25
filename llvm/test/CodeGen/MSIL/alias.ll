@@ -360,7 +360,7 @@ define i32 @read_d0() {
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int 'table'{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 16{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 16{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i4{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -396,24 +396,24 @@ define internal i32 @real_main() {
 ; CHECK:       {{^}}  ldftn int32 'impl'(int32){{$}}
 ; CHECK-NEXT:  {{^}}  stsfld native int '<msil>fn_impl'{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>data'{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 32{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 32{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int 'table'{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>data'{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 40{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 40{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int 'table'{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 16{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 16{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>data'{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 48{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 48{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>fn_impl'{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>data'{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 56{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 56{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>fn_impl'{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}

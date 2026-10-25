@@ -254,10 +254,10 @@ declare i32 @imp(i32) #0
 attributes #0 = { "msil-import-module"="custom.dll" "msil-import-name"="custom_entry" }
 
 ; CHECK-NOT:   {{^}}.method {{(public|assembly) static}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'sqrtf'(float32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("custom.dll" as "custom_entry" cdecl) int32 'imp'(int32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'sqrtf'(float32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("custom.dll" as "custom_entry" nomangle cdecl) int32 'imp'(int32) cil managed preservesig {}{{$}}
 ; CHECK-NOT:   {{^}}.method
 
 ; NPINV-COUNT-4: pinvokeimpl
@@ -330,7 +330,7 @@ source_filename = "libcall-powi.c"
 ; POWI-WIN:       {{^}}  conv.r8{{$}}
 ; POWI-WIN:       {{^}}  call float64 'pow'(float64, float64){{$}}
 ; POWI-WIN:       {{^}}} // end of method 'powi_f64'{{$}}
-; POWI-WIN:       {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) float64 'pow'(float64, float64) cil managed preservesig {}{{$}}
+; POWI-WIN:       {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) float64 'pow'(float64, float64) cil managed preservesig {}{{$}}
 ; POWI-WIN-NOT:   {{pinvokeimpl|__powidf2}}
 
 define double @powi_f64(double %a, i32 %n) {
@@ -396,10 +396,10 @@ define void @trap_sqrt() {
 }
 
 ; TWO-NOT:   {{^}}.method {{(public|assembly) static}}
-; TWO-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
-; TWO-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'ldexp'(float64, native int) cil managed preservesig {}{{$}}
-; TWO-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-; TWO-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) void 'sqrt'() cil managed preservesig {}{{$}}
+; TWO-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
+; TWO-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'ldexp'(float64, native int) cil managed preservesig {}{{$}}
+; TWO-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; TWO-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) void 'sqrt'() cil managed preservesig {}{{$}}
 ; TWO-NOT:   {{^}}.method
 
 ; NTWO-COUNT-4: pinvokeimpl
@@ -442,8 +442,8 @@ define float @sqrt_import(float %x) {
 }
 
 ; MIX-NOT:   {{^}}.method {{(public|assembly) static}}
-; MIX-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" as "mysqrtf" cdecl) float32 'sqrt'(float32) cil managed preservesig {}{{$}}
-; MIX-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; MIX-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" as "mysqrtf" nomangle cdecl) float32 'sqrt'(float32) cil managed preservesig {}{{$}}
+; MIX-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
 ; MIX-NOT:   {{^}}.method
 
 ; NMIX-COUNT-2: pinvokeimpl
@@ -552,7 +552,7 @@ source_filename = "libcall-mingw.c"
 ; MINGW-IL-NEXT:  {{^}}  conv.r4{{$}}
 ; MINGW-IL-NEXT:  {{^}}  ret{{$}}
 ; MINGW-IL-NEXT:  {{^}}} // end of method 'ldexp_f32'{{$}}
-; MINGW-IL:       {{^}}.method public hidebysig static pinvokeimpl("msvcrt" cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
+; MINGW-IL:       {{^}}.method public hidebysig static pinvokeimpl("msvcrt" nomangle cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
 
 define double @round_f64(double %x) {
   %r = call double @llvm.round.f64(double %x)

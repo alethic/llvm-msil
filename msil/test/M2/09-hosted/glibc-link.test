@@ -41,14 +41,14 @@
 # IMPORTS-NUM-COUNT-2: {{^[^ ]+: version floor GLIBC_[0-9.]+$}}
 # IMPORTS-NUM-NOT:     {{ -> |version floor}}
 # The P/Invokes, one per row.
-# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int '__ctype_b_loc'() cil managed preservesig {}{{$}}
-# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int '__errno_location'() cil managed preservesig {}{{$}}
-# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) void 'free'(native int) cil managed preservesig {}{{$}}
-# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
-# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'strcpy'(native int, native int) cil managed preservesig {}{{$}}
-# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int '__ctype_b_loc'() cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int '__errno_location'() cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) void 'free'(native int) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int 'strcpy'(native int, native int) cil managed preservesig {}{{$}}
+# IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
 # IL-NUM-COUNT-8: pinvokeimpl(
 # IL-NUM-NOT:     pinvokeimpl
 #--- prog.c

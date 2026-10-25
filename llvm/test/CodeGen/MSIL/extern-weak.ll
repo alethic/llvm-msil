@@ -189,7 +189,7 @@ lp:
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 0{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -206,7 +206,7 @@ define void @sink(ptr %p) noinline {
 ; CHECK-LABEL: {{^}}.method public static void 'pass_address'() cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 0{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'sink'(native int){{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -218,7 +218,7 @@ define void @pass_address() {
 ; CHECK-LABEL: {{^}}.method public static native int 'nocfi_address'() cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 0{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define ptr @nocfi_address() {
@@ -228,7 +228,7 @@ define ptr @nocfi_address() {
 ; CHECK-LABEL: {{^}}.method public static native int 'dsole_address'() cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 0{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define ptr @dsole_address() {
@@ -249,7 +249,7 @@ define i1 @data_present() {
 ; CHECK-LABEL: {{^}}.method public static native int 'data_address'() cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 0{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define ptr @data_address() {
@@ -293,9 +293,9 @@ attributes #0 = { "msil-import-module"="mylib" "msil-import-name"="entry_point" 
 ; The P/Invokes, then the data: 'str' and 'after' are initialized, and the
 ; two pointers that held weak addresses are in the zero tail; .cctor stores no
 ; address into them and runs the constructor through its stub.
-; LNX:         {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; WIN:         {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; CHECK-NEXT:  {{^}}.method public hidebysig static pinvokeimpl("mylib" as "entry_point" cdecl) int32 'imported'(int32) cil managed preservesig {}{{$}}
+; LNX:         {{^}}.method public hidebysig static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; WIN:         {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; CHECK-NEXT:  {{^}}.method public hidebysig static pinvokeimpl("mylib" as "entry_point" nomangle cdecl) int32 'imported'(int32) cil managed preservesig {}{{$}}
 ; CHECK:       {{^}}// ---- data segment: 24 bytes (8 initialized + 16 zero), align 16 ----{{$}}
 ; CHECK:       {{^}}.field assembly static initonly native int 'str'{{$}}
 ; CHECK-NEXT:  {{^}}.field public static initonly native int 'after'{{$}}

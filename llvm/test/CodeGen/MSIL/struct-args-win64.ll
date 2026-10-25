@@ -265,7 +265,7 @@ entry:
 ; O2-NEXT:  {{^}}  localloc{{$}}
 ; O2-NEXT:  {{^}}  stloc.0{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 4{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.4{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldarg.0{{$}}
@@ -273,7 +273,7 @@ entry:
 ; O2-NEXT:  {{^}}  unaligned. 4{{$}}
 ; O2-NEXT:  {{^}}  cpblk{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 4{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.4{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  call int32 'take_i3'(native int){{$}}
@@ -368,7 +368,7 @@ entry:
 ; O2-NEXT:  {{^}}  localloc{{$}}
 ; O2-NEXT:  {{^}}  stloc.0{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 4{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.4{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldarg.0{{$}}
@@ -376,7 +376,7 @@ entry:
 ; O2-NEXT:  {{^}}  unaligned. 4{{$}}
 ; O2-NEXT:  {{^}}  cpblk{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 4{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.4{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  call float32 'take_f3'(native int){{$}}
@@ -430,7 +430,7 @@ entry:
 ; O2-NEXT:  {{^}}  localloc{{$}}
 ; O2-NEXT:  {{^}}  stloc.0{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 13{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.s 13{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldarg.0{{$}}
@@ -438,7 +438,7 @@ entry:
 ; O2-NEXT:  {{^}}  unaligned. 1{{$}}
 ; O2-NEXT:  {{^}}  cpblk{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 13{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.s 13{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  call int32 'take_c3'(native int){{$}}
@@ -500,14 +500,14 @@ entry:
 ; O2-NEXT:  {{^}}  localloc{{$}}
 ; O2-NEXT:  {{^}}  stloc.0{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldarg.0{{$}}
 ; O2-NEXT:  {{^}}  ldc.i4.s 24{{$}}
 ; O2-NEXT:  {{^}}  cpblk{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  call native int 'take_big'(native int){{$}}
@@ -535,31 +535,31 @@ entry:
 ; O2-NEXT:  {{^}}  localloc{{$}}
 ; O2-NEXT:  {{^}}  stloc.0{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldarg.0{{$}}
 ; O2-NEXT:  {{^}}  stind.i{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 16{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.s 16{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldarg.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 1{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  stind.i{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 24{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.s 24{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldarg.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 2{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.2{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  stind.i{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  call native int 'take_big'(native int){{$}}
@@ -593,7 +593,7 @@ entry:
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'ret_l2'(native int, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 8{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i{{$}}
@@ -621,7 +621,7 @@ entry:
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'ret_d2'(native int, float64){{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 8{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.r8{{$}}
@@ -650,7 +650,7 @@ entry:
 ; O2-NEXT:  {{^}}  localloc{{$}}
 ; O2-NEXT:  {{^}}  stloc.0{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 12{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.s 12{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldarg.0{{$}}
@@ -660,7 +660,7 @@ entry:
 ; O2-NEXT:  {{^}}  conv.i4{{$}}
 ; O2-NEXT:  {{^}}  stind.i4{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 12{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.s 12{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldind.r4{{$}}
@@ -683,13 +683,13 @@ entry:
 ; CHECK-NEXT:  {{^}}  localloc{{$}}
 ; CHECK-NEXT:  {{^}}  stloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 8{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'ret_big'(native int, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 24{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 24{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i{{$}}
@@ -714,13 +714,13 @@ entry:
 ; CHECK-NEXT:  {{^}}  localloc{{$}}
 ; CHECK-NEXT:  {{^}}  stloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 4{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.4{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'ret_i3'(native int, int32){{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 12{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 12{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i4{{$}}
@@ -748,14 +748,14 @@ entry:
 ; O2-NEXT:  {{^}}  localloc{{$}}
 ; O2-NEXT:  {{^}}  stloc.0{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldarg.1{{$}}
 ; O2-NEXT:  {{^}}  call void 'ret_big'(native int, native int){{$}}
 ; O2-NEXT:  {{^}}  ldarg.0{{$}}
 ; O2-NEXT:  {{^}}  ldloc.0{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:  {{^}}  ldc.i4.s 24{{$}}

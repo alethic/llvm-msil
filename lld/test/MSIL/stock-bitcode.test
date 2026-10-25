@@ -62,7 +62,7 @@
 # WARN-LNX:    {{^}}msil-ld: warning: lnx-stock.o: linking bitcode for x86_64-unknown-linux-gnu as x86_64-unknown-linux-gnu-msil; stock-clang bitcode is a compatibility path{{$}}
 # WARN-MEMBER: {{^}}msil-ld: warning: libstock.a(lnx-stock-helper.o): linking bitcode for x86_64-unknown-linux-gnu as x86_64-unknown-linux-gnu-msil; stock-clang bitcode is a compatibility path{{$}}
 # LNX:         {{^}}// target triple   = "x86_64-unknown-linux-gnu-msil"{{$}}
-# LNX:         {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# LNX:         {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 
 ## An all-MSIL link prints nothing (msil-defs.o defines what msil.o calls),
 ## and --fatal-warnings turns the warning into an error.

@@ -3,7 +3,7 @@
 ; 5.3; ImplementationPlan.md decisions D6 and D14, plan 5.1). An undefined
 ; function that a module calls and that is a Phase-1 import gets one
 ; declaration after the methods,
-;   .method public hidebysig static pinvokeimpl("<lib>" cdecl) <ret> '<name>'(<params>) cil managed preservesig {}
+;   .method public hidebysig static pinvokeimpl("<lib>" nomangle cdecl) <ret> '<name>'(<params>) cil managed preservesig {}
 ; and <lib> depends only on the operating system and the environment of the
 ; triple, not on the architecture:
 ;   triple environment     puts (C library)    sqrt, sqrtf (C math library)
@@ -138,7 +138,7 @@ define float @rootf_intrinsic(float %x) {
 ; nothing follows them: no data segment, no module initializer and no entry
 ; point in a module without globals and without main.
 ; CHECK-LABEL: {{^}}// ---- undefined external functions: P/Invoke ----{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'sqrtf'(float32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'sqrtf'(float32) cil managed preservesig {}{{$}}
 ; CHECK-NOT:   {{.}}

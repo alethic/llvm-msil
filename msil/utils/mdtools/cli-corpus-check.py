@@ -9,11 +9,12 @@
 """Run the ECMA-335 library's oracles over C programs of the test corpus.
 
     python cli-corpus-check.py --mode <m>[,<m>...] [--clang PATH] [--triple T]
-        [--levels O0,O2] [--work DIR] [--mdtools DIR] [--dotnet PATH]
+        [--levels O0,O2] [--work DIR] [--jobs N] [--mdtools DIR] [--dotnet PATH]
         [--ilasm-framework PATH] [--ilasm-nuget PATH] [--cil-dump PATH]
         [--cil-copy PATH] [--ilverify PATH] [--peverify PATH]
         [--ildasm-framework PATH] [--ildasm-nuget PATH] [--jitall DIR]
-        [--wsl-distro NAME] [--wsl-dotnet PATH] <dir-or-.c>...
+        [--wsl-distro NAME] [--wsl-dotnet PATH] [--llc PATH]
+        [--min-methods N] <dir-or-.c>...
 
 Inputs are C programs: a .c file named on the command line, or every .c file
 under a directory (recursively) that has a <stem>.expected beside it, as in
@@ -29,7 +30,8 @@ levels O0,O2, clang <build>/bin/clang[.exe], mdcanon and mdump in
 <build>/tools/msil/mdtools (build-mdtools.py builds them; this script does
 not), and the work directory C:\\llvm-msil-scratch\\cli-corpus on Windows
 ($HOME/llvm-msil-scratch/cli-corpus elsewhere), which must be outside the
-repository. <build> is $MSIL_BUILD_DIR, else <repo>/build.
+repository. <build> is $MSIL_BUILD_DIR, else <repo>/build. --jobs N runs N
+tools at once (default: the number of CPUs, at most 4).
 
 Modes (plan 5.7.11; a mode framework that later milestones extend):
 
@@ -109,15 +111,77 @@ copied once with 'llvm-cil-copy <image> -o <work>/copies/run1/<file>'
           bound of 120 s (a lookup that is quadratic in the row count shows
           as a timeout).
 
+  encoder The MC code emitter equals ilasm (plan M18.f, 5.7.11; leg
+          encoder-parity of lit-legs.ps1, Windows only). Each program is
+          compiled at each level with 'clang -S -emit-llvm' (the flags
+          above) and 'llc -show-mc-encoding -O<n>' (--llc, default
+          <build>/bin/llc[.exe]; -O2 for Os and Oz), and that text, encoding
+          comments and all, is assembled by the .NET Framework ilasm
+          (-nologo -quiet -dll -pe64 -x64). That holds up to a switch of
+          191 targets: MCAsmStreamer prints the letter of fixup i as
+          char('A' + i), so the 192nd fixup (index 191) prints as a NUL
+          byte and later ones also as LF and CR, and ilasm stops with a
+          syntax error on such a line (the plain -S text assembles; plan
+          D35 allows 4096 entries). A listing with a switch of more than
+          191 targets is therefore not assembled: it fails its program and
+          level with a line that names the switch's method and its target
+          count. For every method with a body,
+          its bytes are rebuilt from the 'encoding: [...]' comments of its
+          instructions (MCAsmStreamer's format: a fixup's bytes print as its
+          letter, each fixup on its own '//   fixup <c> - offset: <n>,
+          value: <expr>, kind: <kind>' line); a PC-relative fixup
+          (FK_PCRel_1, FK_PCRel_4) on '<label>[+-<n>]' is resolved as
+          MCAssembler resolves it, label offset plus addend minus the
+          fixup's offset in the method, and must fit its size. ilasm's body
+          of the same method (by name) is read from the image with the
+          sections and the MethodDef rows of 'llvm-cil-dump --headers
+          --tables' (--cil-dump), tiny and fat headers alike. They must
+          have equal code bytes, with the 4 bytes of each token fixup
+          (fixup_cil_<class>_token) left out and the token ilasm wrote there
+          checked instead: its table must suit the fixup class (method:
+          MethodDef, MemberRef or MethodSpec; field: Field or MemberRef;
+          sig: StandAloneSig; type: TypeDef, TypeRef or TypeSpec; tok: any
+          of these; string: UserString), and a MethodDef, Field,
+          StandAloneSig or MemberRef token must match the fixup's value in
+          whole-program form: a MethodDef's name is the quoted name before
+          '(', a Field's the last quoted name, a StandAloneSig's signature
+          blob decodes to the value, and a MemberRef matches
+          '[<scope>]<Namespace>.<Type>::<Name>' with its Name, its parent
+          TypeRef's namespace and name, and as the scope the name of the
+          AssemblyRef ('.module <name>' for a ModuleRef) that the TypeRef's
+          ResolutionScope names. The first byte of a MemberRef's Signature
+          blob must also suit the fixup (ECMA-335 II.23.2.1, II.23.2.4):
+          kind (byte & 0x0F) FIELD, 0x06, for a field token, one of the
+          method kinds 0x00-0x05 (with any of the GENERIC 0x10, HASTHIS
+          0x20 and EXPLICITTHIS 0x40 flags) for a method token, either for
+          a tok token. The rest of a MemberRef's signature is not compared,
+          nor is a method's or field's signature in the value, and other
+          tokens are checked by their table alone. The methods must also
+          have equal .maxstack (8 for a tiny header), which only confirms
+          that ilasm kept the listing's directive: the Framework ilasm
+          writes it into a fat header without checking it against the code
+          (a '.maxstack 1' over a body of stack depth 3 assembles
+          silently), so it is no independent evidence of the stack depth,
+          which rests on MSILStackCheck (plan D20), jitall and M18's gate
+          step 14. A float32 signaling NaN operand of 'ldc.r4'
+          that ilasm wrote with the quiet bit set is counted as
+          'snan-quiet' (plan 5.12.6) instead of as a difference. A method
+          whose instructions have no encoding comments, a program that
+          cannot be compiled, assembled or dumped, a listing with a switch
+          of more than 191 targets, any difference, or fewer
+          than --min-methods methods (default 1) fails the mode; the first
+          differences of each method are printed.
+
 Every mode ends with a summary line '<script>: <mode>: <n> of <m> ...'. Exit
 status: 0 when every requested mode passes; 2 on a usage error (an unknown
 option or mode, a bad --levels value, a --work inside the repository, a
-triple whose OS does not run on this host with --mode copy, or inputs that
-are not directories or .c files or hold no C programs), which is reported
-before anything runs; 1 when a mode fails or a tool is missing or cannot be
-set up (dotnet, clang, mdtools, either ilasm, llvm-cil-dump, llvm-cil-copy,
-the verifiers, jitall, the runtimes or WSL that a mode needs). dotnet is
-found as build-mdtools.py finds it.
+triple whose OS does not run on this host with --mode copy, a --jobs or
+--min-methods below 1, or inputs that are not directories or .c files or
+hold no C programs), which is reported before anything runs; 1 when a mode
+fails or a tool is missing or cannot be set up (dotnet, clang, llc, mdtools,
+either ilasm, llvm-cil-dump, llvm-cil-copy, the verifiers, jitall, the
+runtimes or WSL that a mode needs). dotnet is found as build-mdtools.py
+finds it.
 """
 
 import argparse
@@ -125,6 +189,7 @@ import concurrent.futures
 import difflib
 import glob
 import importlib.util
+import io
 import json
 import os
 import re
@@ -200,8 +265,35 @@ class SetupError(Exception):
     run stops with exit status 1."""
 
 
+def escape_unencodable_output():
+    """Let sys.stdout and sys.stderr escape what their encoding cannot spell
+    (errors=backslashreplace) instead of raising UnicodeEncodeError. Tool
+    output is decoded with errors='replace', so a FAIL line can hold U+FFFD,
+    and on Windows a pipe or a file is cp1252 (the encoder-parity leg of
+    lit-legs.ps1 pipes through Tee-Object); one such line must not cost the
+    rest of the FAIL lines and the summary line. A stream without
+    reconfigure (io.StringIO in a self-test) is left as it is."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError, io.UnsupportedOperation):
+            pass
+
+
 def note(msg):
-    print("%s: %s" % (SCRIPT, msg), flush=True)
+    line = "%s: %s" % (SCRIPT, msg)
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        # A stream that escape_unencodable_output() could not reconfigure.
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(
+            line.encode(encoding, "backslashreplace").decode(encoding, "replace"),
+            flush=True,
+        )
 
 
 def run(cmd, timeout, cwd=None):
@@ -292,7 +384,9 @@ class Context:
                 "--work %s is inside the repository %s" % (self.work, REPO)
             )
         self.programs = self._programs(args.inputs)
-        self.jobs = max(1, min(4, os.cpu_count() or 1))
+        if args.jobs is not None and args.jobs < 1:
+            raise UsageError("--jobs must be at least 1")
+        self.jobs = args.jobs or max(1, min(4, os.cpu_count() or 1))
         self._dotnet = None
         self._clang = None
         self._il = {}
@@ -1612,10 +1706,1051 @@ class StatsMode(Mode):
         return equal
 
 
-MODES = {m.name: m for m in (IlasmMode, DumpersMode, CopyMode, StatsMode)}
+# --------------------------------------------------------------- encoder mode
+#
+# --mode encoder (plan M18.f): the bytes that 'llc -show-mc-encoding' prints
+# against the bytes that the .NET Framework ilasm assembles from the same
+# text. Everything below reads bytes: MCAsmStreamer prints the letter of a
+# fixup as char('A' + index), which leaves ASCII from the 64th fixup (index
+# 63) on (a 68-way switch of msil/test/M1 has 68), and ']' is the 29th. The
+# char wraps at index 191 (the 192nd fixup) to a NUL byte, and later indices
+# also print as LF (201, which splits the comment) and CR (204); ilasm stops
+# with a syntax error on a switch line that holds a NUL, so a switch of more
+# than 191 targets (ENC_MAX_SWITCH_TARGETS) fails its program and level
+# before ilasm runs (find_unspellable_switches). Past about 254 fixups the
+# comment no longer marks the fixup bytes at all: FixupMap's entries are
+# uint8_t (1 + index), so index 254 meets the 0xFF "mixed bits" sentinel
+# (printed as binary), index 255 wraps to 0 (no fixup) and later indices
+# reuse the letters from 'A' on.
+
+# MCAsmStreamer::addEncodingComment's lines.
+ENC_COMMENT = b"// encoding: ["
+ENC_FIXUP_RE = re.compile(
+    rb"^\s*//\s+fixup (.) - offset: (\d+), value: (.*), kind: (\S+)\s*$", re.S
+)
+ENC_LABEL_RE = re.compile(rb'^"?([^\s"/][^\s"]*?)"?:(?:\s|$)')
+ENC_METHOD_NAME_RE = re.compile(rb"'((?:[^'\\]|\\.)*)'\(|(?<![\w.'])(\.cctor)\(")
+ENC_MAXSTACK_RE = re.compile(rb"^\.maxstack\s+(\d+)\s*(?://.*)?$")
+# The largest switch whose encoding comment ilasm can read: the letter of
+# fixup 191 (the 192nd entry) is char('A' + 191), a NUL byte.
+ENC_MAX_SWITCH_TARGETS = 191
+ENC_SWITCH_RE = re.compile(rb"^\s*switch\s*\(")
+ENC_VALUE_RE = re.compile(rb'^\(?"?(.+?)"?\)?(?:([+-])(\d+))?$')
+# A name in whole-program form: a quoted IL name, a member of a scope.
+IL_QUOTED_RE = re.compile(rb"'((?:[^'\\]|\\.)*)'")
+IL_SCOPED_MEMBER_RE = re.compile(
+    rb"\[(?P<scope>[^\]]+)\](?P<type>[^\s\[\]:']+)::(?P<name>[^\s(]+)"
+)
+# The PC-relative and data fixup kinds of branches and switch entries, with
+# their sizes; MCAsmStreamer prints a PC-relative FK_Data_<n> as FK_PCRel_<n>.
+ENC_DATA_FIXUPS = {
+    b"FK_PCRel_1": (1, True),
+    b"FK_PCRel_4": (4, True),
+    b"FK_Data_1": (1, False),
+    b"FK_Data_4": (4, False),
+}
+# The token fixups of plan 5.5 / mc-streamer 5.5 and the tables a token of
+# each class may name.
+ENC_TOKEN_FIXUPS = {
+    b"fixup_cil_method_token": ("MethodDef", "MemberRef", "MethodSpec"),
+    b"fixup_cil_field_token": ("Field", "MemberRef"),
+    b"fixup_cil_sig_token": ("StandAloneSig",),
+    b"fixup_cil_type_token": ("TypeDef", "TypeRef", "TypeSpec"),
+    b"fixup_cil_tok_token": (
+        "TypeDef",
+        "TypeRef",
+        "TypeSpec",
+        "MethodDef",
+        "MemberRef",
+        "Field",
+        "MethodSpec",
+    ),
+    b"fixup_cil_string_token": ("UserString",),
+}
+# The member kinds whose MemberRef a token of each class may name, by the
+# first byte of the MemberRef's Signature blob (ECMA-335 II.23.2.1 and
+# II.23.2.4): FIELD (0x06) is a field; DEFAULT, C, STDCALL, THISCALL,
+# FASTCALL and VARARG (0x00-0x05), with any of the GENERIC (0x10), HASTHIS
+# (0x20) and EXPLICITTHIS (0x40) flags, a method.
+ENC_MEMBERREF_KINDS = {
+    b"fixup_cil_method_token": ("method",),
+    b"fixup_cil_field_token": ("field",),
+    b"fixup_cil_tok_token": ("method", "field"),
+}
+SIG_KIND_MASK = 0x0F
+SIG_FIELD = 0x06
+SIG_METHOD_KINDS = range(0x00, 0x06)
+SIG_METHOD_FLAGS = 0x10 | 0x20 | 0x40
+# ECMA-335 II.22 table numbers of a TypeRef's ResolutionScope.
+SCOPE_MODULEREF = 0x1A
+SCOPE_TYPEREF = 0x01
+SCOPE_ASSEMBLYREF = 0x23
+# ECMA-335 II.22 table numbers of the tokens IL can hold.
+TOKEN_TABLES = {
+    0x01: "TypeRef",
+    0x02: "TypeDef",
+    0x04: "Field",
+    0x06: "MethodDef",
+    0x0A: "MemberRef",
+    0x11: "StandAloneSig",
+    0x1B: "TypeSpec",
+    0x2B: "MethodSpec",
+    0x70: "UserString",
+}
+OP_LDC_R4 = 0x22
+# llc takes -O0..-O3 only.
+LLC_LEVELS = {
+    "O0": "-O0",
+    "O1": "-O1",
+    "O2": "-O2",
+    "O3": "-O3",
+    "Os": "-O2",
+    "Oz": "-O2",
+}
+# ECMA-335 II.23.1.16 element types that signatures print by name.
+ELEMENT_TYPES = {
+    0x01: "void",
+    0x02: "bool",
+    0x03: "char",
+    0x04: "int8",
+    0x05: "uint8",
+    0x06: "int16",
+    0x07: "uint16",
+    0x08: "int32",
+    0x09: "uint32",
+    0x0A: "int64",
+    0x0B: "uint64",
+    0x0C: "float32",
+    0x0D: "float64",
+    0x0E: "string",
+    0x16: "typedref",
+    0x18: "native int",
+    0x19: "native uint",
+    0x1C: "object",
+}
+CALLING_CONVENTIONS = {
+    0x0: "",
+    0x1: "unmanaged cdecl ",
+    0x2: "unmanaged stdcall ",
+    0x3: "unmanaged thiscall ",
+    0x4: "unmanaged fastcall ",
+    0x5: "vararg ",
+    0x9: "unmanaged ",
+}
+ENC_SHOWN_PER_METHOD = 3  # differences printed for one method
+ENC_SHOWN_METHODS = 40  # methods whose differences are printed in full
+
+
+def unescape_il_name(text):
+    """The bytes of a name that MSIL::printQuotedName quoted ('\\'' and
+    three-digit octal escapes), without its quotes."""
+    out, i = bytearray(), 0
+    while i < len(text):
+        c = text[i : i + 1]
+        if c == b"\\" and i + 1 < len(text):
+            octal = text[i + 1 : i + 4]
+            if len(octal) == 3 and all(48 <= b <= 55 for b in octal):
+                out.append(int(octal, 8) & 0xFF)
+                i += 4
+                continue
+            out += text[i + 1 : i + 2]
+            i += 2
+            continue
+        out += c
+        i += 1
+    return bytes(out)
+
+
+def unescape_dump_string(text):
+    """The bytes of a string that llvm-cil-dump quoted ('\\\\', '\\'' and
+    '\\xHH', plan 5.7.10), without its quotes."""
+    out, i = bytearray(), 0
+    while i < len(text):
+        c = text[i : i + 1]
+        if c == b"\\" and i + 1 < len(text):
+            nxt = text[i + 1 : i + 2]
+            if nxt == b"x" and i + 4 <= len(text):
+                out.append(int(text[i + 2 : i + 4], 16))
+                i += 4
+                continue
+            out += nxt
+            i += 2
+            continue
+        out += c
+        i += 1
+    return bytes(out)
+
+
+class EncodedInst:
+    def __init__(self, offset, text, data, markers):
+        self.offset = offset  # in the method's code
+        self.text = text
+        self.data = data  # bytearray; fixup bytes are 0
+        self.markers = markers  # byte index -> fixup letter
+        self.fixups = []  # (offset in the instruction, value, kind)
+
+
+class EncodedMethod:
+    def __init__(self, name):
+        self.name = name
+        self.insts = []
+        self.labels = {}
+        self.maxstack = None
+        self.size = 0
+        self.unencoded = []  # lines that look like code but have no encoding
+        self.pending = None  # an instruction line whose encoding may follow
+
+
+def parse_encoding_list(text):
+    """(bytearray, {index: marker}) of the text inside 'encoding: [...]'."""
+    data, markers = bytearray(), {}
+    if not text:
+        return data, markers
+    for item in text.split(b","):
+        if re.fullmatch(rb"0x[0-9a-fA-F]{2}", item):
+            data.append(int(item[2:], 16))
+        elif re.fullmatch(rb"0x[0-9a-fA-F]{2}'.'", item, re.S):
+            markers[len(data)] = item[5:6]
+            data.append(int(item[2:4], 16))
+        elif len(item) == 1:
+            markers[len(data)] = item
+            data.append(0)
+        elif item.startswith(b"0b") and len(item) == 10:
+            value = 0
+            for bit in item[2:]:
+                value <<= 1
+                if bit == 0x31:
+                    value |= 1
+                elif bit != 0x30:
+                    markers[len(data)] = bytes([bit])
+            data.append(value)
+        else:
+            raise CheckError("cannot read the encoding element %r" % item)
+    return data, markers
+
+
+def parse_encoded_listing(data):
+    """[EncodedMethod] of an 'llc -show-mc-encoding' listing."""
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    methods, cur = [], None
+
+    def flush_pending(m):
+        if m.pending is not None:
+            m.unencoded.append(m.pending)
+            m.pending = None
+
+    for raw in data.split(b"\n"):
+        line = raw.rstrip(b"\r")
+        s = line.strip()
+        if cur is None:
+            if (
+                s.startswith(b".method ")
+                and not s.endswith(b"{}")
+                and b" pinvokeimpl(" not in s
+            ):
+                m = ENC_METHOD_NAME_RE.search(s)
+                if not m:
+                    raise CheckError("cannot read the method name of %r" % s)
+                name = (
+                    unescape_il_name(m.group(1))
+                    if m.group(1) is not None
+                    else m.group(2)
+                )
+                cur = EncodedMethod(name)
+                methods.append(cur)
+            continue
+        if line.startswith(b"}"):
+            flush_pending(cur)
+            cur = None
+            continue
+        fixup = ENC_FIXUP_RE.match(line)
+        if fixup:
+            if not cur.insts:
+                raise CheckError("a fixup line before any instruction: %r" % s)
+            kind = fixup.group(4)
+            cur.insts[-1].fixups.append(
+                (int(fixup.group(2)), fixup.group(3).strip(), kind)
+            )
+            continue
+        at = line.rfind(ENC_COMMENT)
+        if at >= 0:
+            end = line.rfind(b"]")
+            if end < at + len(ENC_COMMENT):
+                raise CheckError("an unterminated encoding comment: %r" % s)
+            text = line[:at].strip()
+            if not text and cur.pending is not None:
+                text, cur.pending = cur.pending, None
+            else:
+                flush_pending(cur)
+            code, markers = parse_encoding_list(line[at + len(ENC_COMMENT) : end])
+            inst = EncodedInst(cur.size, text, code, markers)
+            cur.insts.append(inst)
+            cur.size += len(code)
+            continue
+        if not s or s.startswith(b"//"):
+            continue
+        label = ENC_LABEL_RE.match(s)
+        if label and not line[:1].isspace():
+            flush_pending(cur)
+            cur.labels[label.group(1)] = cur.size
+            continue
+        maxstack = ENC_MAXSTACK_RE.match(s)
+        if maxstack:
+            cur.maxstack = int(maxstack.group(1))
+            continue
+        if s.startswith((b"{", b".locals", b".entrypoint", b".custom")):
+            continue
+        flush_pending(cur)
+        cur.pending = s.split(b"//", 1)[0].strip() if b"//" in s else s
+    if cur is not None:
+        raise CheckError("the listing ends inside the method %r" % cur.name)
+    return methods
+
+
+def count_switch_targets(line, start):
+    """(number of labels, offset after ')') of the switch label list whose
+    '(' is line[start], or None when the list does not close on the line.
+    Quoted names ('...' or "...") may hold commas and parentheses."""
+    commas, nonempty, quote, i = 0, False, None, start + 1
+    while i < len(line):
+        c = line[i : i + 1]
+        if quote is not None:
+            if c == b"\\":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+        elif c in (b"'", b'"'):
+            quote, nonempty = c, True
+        elif c == b",":
+            commas += 1
+        elif c == b")":
+            return (commas + 1 if nonempty or commas else 0), i + 1
+        elif not c.isspace():
+            nonempty = True
+        i += 1
+    return None
+
+
+def find_unspellable_switches(data):
+    """[(line number, method name, target count)] of the encoded switch
+    instructions of an 'llc -show-mc-encoding' listing that have more than
+    ENC_MAX_SWITCH_TARGETS targets, whose encoding comment ilasm cannot
+    read. It reads the raw listing: on a switch's line the label list
+    precedes the '// encoding: [' comment, and only the list is read (the
+    comment after it may hold NUL, LF and CR bytes)."""
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
+    found, method = [], b"?"
+    for number, raw in enumerate(data.split(b"\n"), 1):
+        s = raw.strip()
+        if s.startswith(b".method "):
+            m = ENC_METHOD_NAME_RE.search(s)
+            if not m:
+                method = s
+            elif m.group(1) is not None:
+                method = unescape_il_name(m.group(1))
+            else:
+                method = m.group(2)
+            continue
+        switch = ENC_SWITCH_RE.match(raw)
+        if not switch:
+            continue
+        counted = count_switch_targets(raw, switch.end() - 1)
+        if counted is None:
+            continue
+        targets, end = counted
+        if targets > ENC_MAX_SWITCH_TARGETS and raw.find(ENC_COMMENT, end) >= 0:
+            found.append((number, method, targets))
+    return found
+
+
+class ILImage:
+    """The sections, tables and method bodies of an image, from
+    'llvm-cil-dump --headers --tables' and the file's bytes."""
+
+    SECTION_RE = re.compile(
+        rb"^Section: (\S*) rva=0x([0-9A-F]+) vsize=0x([0-9A-F]+) raw=0x([0-9A-F]+) "
+        rb"rawsize=0x([0-9A-F]+)"
+    )
+    ROW_RE = re.compile(rb"^  ([A-Za-z]+)\[(\d+)\]: (.*)$")
+    COLUMN_RE = re.compile(rb"([A-Za-z][A-Za-z0-9]*)=")
+
+    def __init__(self, dump, data):
+        self.data = data
+        self.sections = []
+        self.tables = {}
+        for line in dump.split(b"\n"):
+            line = line.rstrip(b"\r")
+            m = self.SECTION_RE.match(line)
+            if m:
+                rva, vsize, raw, rawsize = (int(m.group(i), 16) for i in range(2, 6))
+                self.sections.append((rva, max(vsize, rawsize), raw))
+                continue
+            m = self.ROW_RE.match(line)
+            if m:
+                table = m.group(1).decode("ascii")
+                self.tables.setdefault(table, {})[int(m.group(2))] = self.columns(
+                    m.group(3)
+                )
+
+    @classmethod
+    def columns(cls, text):
+        """{column: value bytes} of one '--tables' row: quoted strings are
+        unescaped; other values run to the next ' <Column>='."""
+        cols, i = {}, 0
+        while i < len(text):
+            m = cls.COLUMN_RE.match(text, i)
+            if not m:
+                raise CheckError("cannot read the table row %r" % text)
+            name, i = m.group(1).decode("ascii"), m.end()
+            if text[i : i + 1] == b"'":
+                j = i + 1
+                while j < len(text) and text[j : j + 1] != b"'":
+                    j += 2 if text[j : j + 1] == b"\\" else 1
+                cols[name] = unescape_dump_string(text[i + 1 : j])
+                i = j + 1
+            else:
+                nxt = re.search(rb" [A-Za-z][A-Za-z0-9]*=", text[i:])
+                j = i + nxt.start() if nxt else len(text)
+                cols[name] = text[i:j]
+                i = j
+            while text[i : i + 1] == b" ":
+                i += 1
+        return cols
+
+    def row(self, table, number):
+        return self.tables.get(table, {}).get(number)
+
+    def file_offset(self, rva):
+        for start, size, raw in self.sections:
+            if start <= rva < start + size:
+                return raw + rva - start
+        raise CheckError("RVA 0x%X lies in no section" % rva)
+
+    def body(self, rva):
+        """(max stack, code bytes) of the method body at rva."""
+        off = self.file_offset(rva)
+        first = self.data[off]
+        if first & 3 == 2:  # tiny header
+            return 8, self.data[off + 1 : off + 1 + (first >> 2)]
+        if first & 3 != 3:
+            raise CheckError("no method header at RVA 0x%X" % rva)
+        flags = int.from_bytes(self.data[off : off + 2], "little")
+        size = (flags >> 12) * 4
+        maxstack = int.from_bytes(self.data[off + 2 : off + 4], "little")
+        code_size = int.from_bytes(self.data[off + 4 : off + 8], "little")
+        return maxstack, self.data[off + size : off + size + code_size]
+
+    def methods(self):
+        """{name bytes: [(max stack, code)]} of the MethodDef rows with a
+        body, in row order."""
+        found = {}
+        for number in sorted(self.tables.get("MethodDef", {})):
+            row = self.tables["MethodDef"][number]
+            rva = int(row.get("RVA", b"0"), 16)
+            if rva:
+                found.setdefault(row.get("Name", b""), []).append(self.body(rva))
+        return found
+
+    def type_name(self, token):
+        """'<Namespace>.<Name>' of a TypeRef or TypeDef token ('0x01000005')."""
+        value = int(token, 16)
+        table = TOKEN_TABLES.get(value >> 24)
+        row = (
+            self.row(table, value & 0xFFFFFF)
+            if table in ("TypeRef", "TypeDef")
+            else None
+        )
+        if row is None:
+            return None
+        ns, name = row.get("TypeNamespace", b""), row.get("TypeName", b"")
+        return ns + b"." + name if ns else name
+
+    def type_scope(self, token, depth=8):
+        """The scope of a TypeRef token ('0x01000005') in whole-program
+        form: the name of the AssemblyRef that its ResolutionScope names,
+        '.module <name>' for a ModuleRef, the scope of the enclosing TypeRef
+        for a nested type; None for another token or scope."""
+        value = int(token, 16)
+        row = (
+            self.row("TypeRef", value & 0xFFFFFF)
+            if TOKEN_TABLES.get(value >> 24) == "TypeRef"
+            else None
+        )
+        if row is None:
+            return None
+        scope = int(row.get("ResolutionScope", b"0"), 16)
+        table, number = scope >> 24, scope & 0xFFFFFF
+        if table == SCOPE_ASSEMBLYREF:
+            ref = self.row("AssemblyRef", number)
+            return ref.get("Name") if ref else None
+        if table == SCOPE_MODULEREF:
+            ref = self.row("ModuleRef", number)
+            return b".module " + ref.get("Name", b"") if ref else None
+        if table == SCOPE_TYPEREF and number and depth:
+            return self.type_scope("0x%08X" % scope, depth - 1)
+        return None
+
+    @staticmethod
+    def member_kind(blob):
+        """'field' or 'method' by the first byte of a MemberRef's Signature
+        blob ('00 04 01 ...'), else None (ENC_MEMBERREF_KINDS)."""
+        head = blob.split()[:1]
+        if not head:
+            return None
+        try:
+            first = int(head[0], 16)
+        except ValueError:
+            return None
+        if first & SIG_KIND_MASK == SIG_FIELD:
+            return "field"
+        if first & SIG_KIND_MASK in SIG_METHOD_KINDS and not (
+            first & ~(SIG_KIND_MASK | SIG_METHOD_FLAGS)
+        ):
+            return "method"
+        return None
+
+    def decode_signature(self, blob):
+        """The ILAsm text of a method signature blob (a StandAloneSig of
+        calli): '[instance ][<callconv> ]<ret>(<param>, ...)'."""
+        data = bytes.fromhex(blob.decode("ascii").replace(" ", ""))
+        pos = [0]
+
+        def byte():
+            if pos[0] >= len(data):
+                raise CheckError("signature %s ends early" % blob.decode())
+            pos[0] += 1
+            return data[pos[0] - 1]
+
+        def compressed():
+            b = byte()
+            if b & 0x80 == 0:
+                return b
+            if b & 0xC0 == 0x80:
+                return ((b & 0x3F) << 8) | byte()
+            return ((b & 0x1F) << 24) | (byte() << 16) | (byte() << 8) | byte()
+
+        def type_def_or_ref():
+            value = compressed()
+            table = (
+                ("TypeDef", "TypeRef", "TypeSpec")[value & 3] if value & 3 < 3 else None
+            )
+            row = self.row(table, value >> 2) if table else None
+            if table == "TypeDef" and row:
+                ns, name = row.get("TypeNamespace", b""), row.get("TypeName", b"")
+                return "'%s'" % (ns + b"." + name if ns else name).decode(
+                    "utf-8", "replace"
+                )
+            if table == "TypeRef" and row:
+                full = self.type_name("0x%08X" % (0x01000000 | (value >> 2)))
+                scope = row.get("ResolutionScope", b"0")
+                ref = (
+                    self.row("AssemblyRef", int(scope, 16) & 0xFFFFFF)
+                    if scope != b"0"
+                    else None
+                )
+                prefix = "[%s]" % ref["Name"].decode("utf-8", "replace") if ref else ""
+                return prefix + full.decode("utf-8", "replace")
+            raise CheckError("signature %s names an unsupported type" % blob.decode())
+
+        def type_text():
+            b = byte()
+            if b in ELEMENT_TYPES:
+                return ELEMENT_TYPES[b]
+            if b == 0x0F:
+                return type_text() + "*"
+            if b == 0x10:
+                return type_text() + "&"
+            if b == 0x1D:
+                return type_text() + "[]"
+            if b in (0x11, 0x12):
+                return ("valuetype " if b == 0x11 else "class ") + type_def_or_ref()
+            if b == 0x1B:
+                return "method " + method_text()
+            raise CheckError(
+                "signature %s has element type 0x%02X" % (blob.decode(), b)
+            )
+
+        def method_text():
+            head = byte()
+            text = "instance " if head & 0x20 else ""
+            if head & 0x0F not in CALLING_CONVENTIONS:
+                raise CheckError(
+                    "signature %s has calling convention 0x%02X" % (blob.decode(), head)
+                )
+            text += CALLING_CONVENTIONS[head & 0x0F]
+            if head & 0x10:
+                compressed()  # generic parameter count
+            count = compressed()
+            ret = type_text()
+            params = [type_text() for _ in range(count)]
+            return "%s%s(%s)" % (text, ret, ", ".join(params))
+
+        text = method_text()
+        if pos[0] != len(data):
+            raise CheckError("signature %s has trailing bytes" % blob.decode())
+        return text
+
+
+def quiet_snan32(value):
+    """value with the quiet bit set when it is a float32 signaling NaN."""
+    if (value >> 23) & 0xFF == 0xFF and value & 0x7FFFFF and not value & 0x400000:
+        return value | 0x400000
+    return None
+
+
+def collapse(text):
+    return re.sub(r"\s+", " ", text).strip()
+
+
+class EncoderMode(Mode):
+    name = "encoder"
+    help = "llc -show-mc-encoding bytes equal ilasm's on every method (M18)"
+
+    @staticmethod
+    def add_arguments(parser):
+        parser.add_argument(
+            "--llc", help="llc for --mode encoder (default <build>/bin/llc%s)" % EXE
+        )
+        parser.add_argument(
+            "--min-methods",
+            type=int,
+            default=1,
+            metavar="N",
+            help="--mode encoder fails below N compared methods (default 1)",
+        )
+
+    def check_usage(self, ctx):
+        if ctx.args.min_methods < 1:
+            raise UsageError("--min-methods must be at least 1")
+
+    @staticmethod
+    def llc(ctx):
+        path = ctx.args.llc or os.path.join(ctx.build, "bin", "llc" + EXE)
+        if not os.path.isfile(path):
+            raise SetupError("llc %s not found (pass --llc PATH)" % path)
+        return os.path.abspath(path)
+
+    def run(self, ctx):
+        start = time.time()
+        clang, llc = ctx.clang(), self.llc(ctx)
+        ilasm, cil_dump = ctx.ilasm_framework(), ctx.cil_dump()
+        base = ctx.prepare("encoder")
+        dirs = {k: os.path.join(base, k) for k in ("ll", "enc", "dll", "dump")}
+        for d in dirs.values():
+            os.makedirs(d)
+        items = ctx.items()
+        note(
+            "encoder: %d programs at %s (%d modules) through clang -emit-llvm, "
+            "llc -show-mc-encoding and the Framework ilasm, in %s"
+            % (len(ctx.programs), ",".join(ctx.levels), len(items), base)
+        )
+        inputs = os.path.join(REPO, "msil", "test", "Inputs")
+        arch = ILASM_ARCH_FLAGS.get(ctx.arch, [])
+
+        def one(item):
+            p, level = item
+            stem = "%s.%s" % (p.name, level)
+            ll = os.path.join(dirs["ll"], stem + ".ll")
+            enc = os.path.join(dirs["enc"], stem + ".il")
+            dll = os.path.join(dirs["dll"], stem + ".dll")
+            steps = (
+                (
+                    "clang -S -emit-llvm",
+                    [clang, "--target=" + ctx.triple]
+                    + CFLAGS
+                    + [
+                        "-I",
+                        inputs,
+                        "-" + level,
+                        "-S",
+                        "-emit-llvm",
+                        p.source,
+                        "-o",
+                        ll,
+                    ],
+                    ll,
+                ),
+                (
+                    "llc -show-mc-encoding",
+                    [llc, LLC_LEVELS[level], "-show-mc-encoding", ll, "-o", enc],
+                    enc,
+                ),
+                (
+                    "ilasm",
+                    [ilasm, "-nologo", "-quiet", "-dll"]
+                    + arch
+                    + ["-output=" + dll, enc],
+                    dll,
+                ),
+            )
+            for what, cmd, out in steps:
+                if what == "ilasm":
+                    # ilasm cannot read the encoding comment of a switch of
+                    # more than 191 targets; name it instead of assembling.
+                    try:
+                        with open(enc, "rb") as f:
+                            unspellable = find_unspellable_switches(f.read())
+                    except OSError as e:
+                        return CheckError("cannot read %s: %s" % (enc, e))
+                    if unspellable:
+                        return CheckError(
+                            "\n".join(
+                                "switch of %d targets in '%s': -show-mc-encoding "
+                                "cannot spell the fixups of more than %d entries "
+                                "(line %d of %s)"
+                                % (
+                                    targets,
+                                    method.decode("utf-8", "replace"),
+                                    ENC_MAX_SWITCH_TARGETS,
+                                    number,
+                                    enc,
+                                )
+                                for number, method, targets in unspellable
+                            )
+                        )
+                rc, text = run(cmd, 600)
+                if rc != 0 or not os.path.isfile(out):
+                    return CheckError(
+                        "%s of %s failed (%s):\n%s" % (what, p.source, rc, tail(text))
+                    )
+            rc, dump, err = run_split([cil_dump, "--headers", "--tables", dll], 600)
+            if rc != 0:
+                return CheckError(
+                    "llvm-cil-dump %s failed (%s):\n%s" % (dll, rc, tail(err))
+                )
+            with open(os.path.join(dirs["dump"], stem + ".txt"), "wb") as f:
+                f.write(dump)
+            try:
+                with open(enc, "rb") as f:
+                    listing = parse_encoded_listing(f.read())
+                with open(dll, "rb") as f:
+                    image = ILImage(dump, f.read())
+                return self.compare_module(listing, image)
+            except CheckError as e:
+                return CheckError("%s: %s" % (enc, e))
+            except (ValueError, IndexError, KeyError, OverflowError) as e:
+                # An image or listing this mode cannot read is a failure,
+                # never a pass.
+                return CheckError(
+                    "%s: cannot compare: %s: %s" % (enc, type(e).__name__, e)
+                )
+
+        totals = {"methods": 0, "equal": 0, "snan": 0, "tokens": 0, "branches": 0}
+        mismatches, failed = [], []
+        with concurrent.futures.ThreadPoolExecutor(ctx.jobs) as pool:
+            for (p, level), result in zip(items, pool.map(one, items)):
+                if isinstance(result, CheckError):
+                    failed.append((p.name, level, str(result)))
+                    continue
+                for key in ("methods", "equal", "snan", "tokens", "branches"):
+                    totals[key] += result[key]
+                for name, why in result["mismatches"]:
+                    mismatches.append((p.name, level, name, why))
+        for name, level, text in failed:
+            note("encoder: FAIL %s -%s: %s" % (name, level, text))
+        for i, (prog, level, method, why) in enumerate(mismatches):
+            if i < ENC_SHOWN_METHODS:
+                note(
+                    "encoder: FAIL %s -%s method '%s': %s" % (prog, level, method, why)
+                )
+            else:
+                note("encoder: FAIL %s -%s method '%s'" % (prog, level, method))
+        ok = totals["equal"] + totals["snan"]
+        note(
+            "encoder: %d of %d methods equal to ilasm (%d of them up to a float32 "
+            "signaling NaN that ilasm quiets: snan-quiet), %d mismatches; %d token and "
+            "%d branch fixups checked; %d of %d modules compared, at %s, in %.0f s"
+            % (
+                ok,
+                totals["methods"],
+                totals["snan"],
+                len(mismatches),
+                totals["tokens"],
+                totals["branches"],
+                len(items) - len(failed),
+                len(items),
+                ",".join(ctx.levels),
+                time.time() - start,
+            )
+        )
+        if totals["methods"] < ctx.args.min_methods:
+            note(
+                "encoder: FAIL only %d methods were compared, fewer than --min-methods %d"
+                % (totals["methods"], ctx.args.min_methods)
+            )
+        return (
+            not failed and not mismatches and totals["methods"] >= ctx.args.min_methods
+        )
+
+    def compare_module(self, listing, image):
+        """Counts and mismatches of one module."""
+        result = {"methods": 0, "equal": 0, "snan": 0, "tokens": 0, "branches": 0}
+        result["mismatches"] = []
+        bodies = image.methods()
+        used = {}
+        for method in listing:
+            name = method.name.decode("utf-8", "replace")
+            result["methods"] += 1
+            candidates = bodies.get(method.name, [])
+            index = used.get(method.name, 0)
+            used[method.name] = index + 1
+            if index >= len(candidates):
+                result["mismatches"].append((name, "ilasm's image has no body for it"))
+                continue
+            why, snan, tokens, branches = self.compare_method(
+                method, candidates[index], image
+            )
+            result["tokens"] += tokens
+            result["branches"] += branches
+            if why:
+                result["mismatches"].append((name, why))
+            elif snan:
+                result["snan"] += 1
+            else:
+                result["equal"] += 1
+        for name, found in bodies.items():
+            extra = len(found) - used.get(name, 0)
+            if extra > 0:
+                result["mismatches"].append(
+                    (
+                        name.decode("utf-8", "replace"),
+                        "%d body(ies) in ilasm's image that the listing does not have"
+                        % extra,
+                    )
+                )
+        return result
+
+    def compare_method(self, method, body, image):
+        """(None or the differences, sNaN quieted, token fixups, branch
+        fixups) of one method."""
+        maxstack, theirs = body
+        theirs = bytearray(theirs)
+        problems = []
+        if method.pending is not None:
+            method.unencoded.append(method.pending)
+        if method.unencoded:
+            problems.append(
+                "%d line(s) without an encoding comment, first %r"
+                % (
+                    len(method.unencoded),
+                    method.unencoded[0].decode("utf-8", "replace"),
+                )
+            )
+        if not method.insts:
+            problems.append("no instruction has an encoding comment")
+        ours = bytearray()
+        token_slots = []  # (offset, value, kind, instruction)
+        branches = 0
+        for inst in method.insts:
+            code = bytearray(inst.data)
+            covered = set()
+            for off, value, kind in inst.fixups:
+                if kind in ENC_TOKEN_FIXUPS:
+                    size = 4
+                elif kind in ENC_DATA_FIXUPS:
+                    size = ENC_DATA_FIXUPS[kind][0]
+                else:
+                    problems.append(
+                        "unknown fixup kind %s in %r"
+                        % (kind.decode(), inst.text.decode())
+                    )
+                    continue
+                if off + size > len(code):
+                    problems.append("a fixup past the end of %r" % inst.text.decode())
+                    continue
+                covered.update(range(off, off + size))
+                if kind in ENC_TOKEN_FIXUPS:
+                    code[off : off + size] = b"\0" * size
+                    token_slots.append((inst.offset + off, value, kind, inst))
+                    continue
+                branches += 1
+                m = ENC_VALUE_RE.match(value.replace(b" ", b""))
+                label = m and method.labels.get(m.group(1))
+                if label is None:
+                    problems.append(
+                        "the fixup value %r of %r names no label of the method"
+                        % (value.decode(), inst.text.decode())
+                    )
+                    continue
+                addend = int(m.group(3) or 0) * (-1 if m.group(2) == b"-" else 1)
+                resolved = label + addend
+                if ENC_DATA_FIXUPS[kind][1]:
+                    resolved -= inst.offset + off
+                low, high = -(1 << (8 * size - 1)), (1 << (8 * size - 1)) - 1
+                if not low <= resolved <= high:
+                    problems.append(
+                        "%r: the fixup value %d does not fit %d byte(s)"
+                        % (inst.text.decode(), resolved, size)
+                    )
+                    continue
+                code[off : off + size] = resolved.to_bytes(size, "little", signed=True)
+            if set(inst.markers) - covered:
+                problems.append(
+                    "fixup bytes without a fixup in %r" % inst.text.decode()
+                )
+            ours += code
+        if problems:
+            return (
+                "; ".join(problems[:ENC_SHOWN_PER_METHOD]),
+                False,
+                len(token_slots),
+                branches,
+            )
+        # Tokens: ilasm's token in each slot must suit the fixup.
+        for off, value, kind, inst in token_slots:
+            if off + 4 > len(theirs):
+                problems.append(
+                    "ilasm's code ends before the token of %r" % inst.text.decode()
+                )
+                continue
+            token = int.from_bytes(theirs[off : off + 4], "little")
+            why = self.check_token(token, value, kind, image)
+            if why:
+                problems.append("%r at offset %d: %s" % (inst.text.decode(), off, why))
+            theirs[off : off + 4] = b"\0\0\0\0"
+        # A float32 signaling NaN that ilasm quieted.
+        snan = False
+        for inst in method.insts:
+            if (
+                len(inst.data) == 5
+                and inst.data[0] == OP_LDC_R4
+                and inst.offset + 5 <= len(theirs)
+            ):
+                mine = int.from_bytes(ours[inst.offset + 1 : inst.offset + 5], "little")
+                got = int.from_bytes(
+                    theirs[inst.offset + 1 : inst.offset + 5], "little"
+                )
+                if got != mine and quiet_snan32(mine) == got:
+                    theirs[inst.offset + 1 : inst.offset + 5] = mine.to_bytes(
+                        4, "little"
+                    )
+                    snan = True
+        if bytes(ours) != bytes(theirs):
+            k = next(
+                (i for i in range(min(len(ours), len(theirs))) if ours[i] != theirs[i]),
+                min(len(ours), len(theirs)),
+            )
+            inst = next(
+                (x for x in method.insts if x.offset <= k < x.offset + len(x.data)),
+                None,
+            )
+            problems.append(
+                "code differs at offset %d of %d (ilasm: %d bytes)%s: ours %s, ilasm %s"
+                % (
+                    k,
+                    len(ours),
+                    len(theirs),
+                    " in %r" % inst.text.decode("utf-8", "replace") if inst else "",
+                    ours[k : k + 8].hex(" "),
+                    theirs[k : k + 8].hex(" "),
+                )
+            )
+        if method.maxstack is None:
+            problems.append("the listing has no .maxstack")
+        elif method.maxstack != maxstack:
+            problems.append(".maxstack %d, ilasm's %d" % (method.maxstack, maxstack))
+        why = "; ".join(problems[:ENC_SHOWN_PER_METHOD]) if problems else None
+        if len(problems) > ENC_SHOWN_PER_METHOD:
+            why += "; and %d more" % (len(problems) - ENC_SHOWN_PER_METHOD)
+        return why, snan, len(token_slots), branches
+
+    @staticmethod
+    def check_token(token, value, kind, image):
+        """None when ilasm's token suits the fixup's class and value, else
+        why not."""
+        table = TOKEN_TABLES.get(token >> 24)
+        allowed = ENC_TOKEN_FIXUPS[kind]
+        if table not in allowed:
+            return "ilasm wrote a %s token 0x%08X for %s" % (
+                table or "unknown",
+                token,
+                kind.decode(),
+            )
+        row = image.row(table, token & 0xFFFFFF) if table != "UserString" else {}
+        if row is None:
+            return "ilasm's token 0x%08X names no row" % token
+        member = IL_SCOPED_MEMBER_RE.search(value)
+        if table == "MemberRef":
+            if not member:
+                return (
+                    "a MemberRef for %r, which names no '[scope]Type::Member'"
+                    % value.decode()
+                )
+            # The member kind of its signature must suit the fixup class.
+            sig = row.get("Signature", b"")
+            member_kind = image.member_kind(sig)
+            if member_kind not in ENC_MEMBERREF_KINDS.get(kind, ()):
+                return "MemberRef 0x%08X with a %s signature (%s...) for %s" % (
+                    token,
+                    member_kind or "neither field nor method",
+                    sig[:2].decode("ascii", "replace") or "empty",
+                    kind.decode(),
+                )
+            parent_token = row.get("Class", b"0")
+            parent = image.type_name(parent_token)
+            scope = image.type_scope(parent_token)
+            want_scope = member.group("scope").strip()
+            if want_scope[:1] == b"'" and want_scope[-1:] == b"'":
+                want_scope = unescape_il_name(want_scope[1:-1])
+            want_scope = re.sub(rb"\s+", b" ", want_scope)
+            if row.get("Name") != member.group("name") or parent != member.group(
+                "type"
+            ):
+                return "MemberRef %s::%s for %r" % (
+                    (parent or b"?").decode("utf-8", "replace"),
+                    row.get("Name", b"").decode("utf-8", "replace"),
+                    value.decode("utf-8", "replace"),
+                )
+            if scope != want_scope:
+                return "MemberRef [%s]%s::%s for %r" % (
+                    (scope or b"?").decode("utf-8", "replace"),
+                    (parent or b"?").decode("utf-8", "replace"),
+                    row.get("Name", b"").decode("utf-8", "replace"),
+                    value.decode("utf-8", "replace"),
+                )
+            return None
+        if table == "MethodDef":
+            m = ENC_METHOD_NAME_RE.search(value)
+            want = (
+                (unescape_il_name(m.group(1)) if m.group(1) is not None else m.group(2))
+                if m
+                else None
+            )
+            if member or want is None or row.get("Name") != want:
+                return "MethodDef '%s' for %r" % (
+                    row.get("Name", b"").decode("utf-8", "replace"),
+                    value.decode("utf-8", "replace"),
+                )
+            return None
+        if table == "Field":
+            names = IL_QUOTED_RE.findall(value)
+            if member or not names or row.get("Name") != unescape_il_name(names[-1]):
+                return "Field '%s' for %r" % (
+                    row.get("Name", b"").decode("utf-8", "replace"),
+                    value.decode("utf-8", "replace"),
+                )
+            return None
+        if table == "StandAloneSig":
+            # The fixup's value is the signature that the object writer
+            # (M19) encodes, so it must be ilasm's.
+            sig = image.decode_signature(row.get("Signature", b""))
+            if collapse(sig) != collapse(value.decode("utf-8", "replace")):
+                return "StandAloneSig '%s' for %r" % (
+                    sig,
+                    value.decode("utf-8", "replace"),
+                )
+            return None
+        return None  # other classes: the table alone (no Phase 1 code has them)
+
+
+MODES = {m.name: m for m in (IlasmMode, DumpersMode, CopyMode, StatsMode, EncoderMode)}
 
 
 def main():
+    escape_unencodable_output()
     p = argparse.ArgumentParser(
         prog=SCRIPT,
         description=__doc__.splitlines()[0],
@@ -1638,6 +2773,12 @@ def main():
         "--levels", default="O0,O2", help="optimization levels (default O0,O2)"
     )
     p.add_argument("--work", help="work directory outside the repository")
+    p.add_argument(
+        "--jobs",
+        type=int,
+        metavar="N",
+        help="tools run at once (default: the number of CPUs, at most 4)",
+    )
     p.add_argument(
         "--mdtools",
         help="directory of mdcanon.dll and mdump.dll (default <build>/tools/msil/mdtools)",

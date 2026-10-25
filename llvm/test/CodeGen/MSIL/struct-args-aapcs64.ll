@@ -314,7 +314,7 @@ entry:
 ; O2-NEXT:   {{^}}  unaligned. 1{{$}}
 ; O2-NEXT:   {{^}}  ldind.u2{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 2{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.2{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.u1{{$}}
@@ -366,7 +366,7 @@ entry:
 ; O2-NEXT:   {{^}}  ldind.i4{{$}}
 ; O2-NEXT:   {{^}}  conv.u{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 4{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.4{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.u1{{$}}
@@ -401,7 +401,7 @@ entry:
 ; O2-NEXT:   {{^}}  ldind.i4{{$}}
 ; O2-NEXT:   {{^}}  conv.u{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 4{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.4{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.u2{{$}}
@@ -437,13 +437,13 @@ entry:
 ; O2-NEXT:   {{^}}  ldind.i4{{$}}
 ; O2-NEXT:   {{^}}  conv.u{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 4{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.4{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  unaligned. 1{{$}}
 ; O2-NEXT:   {{^}}  ldind.u2{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 6{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.6{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.u1{{$}}
@@ -505,7 +505,7 @@ entry:
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
 ; O2-NEXT:   {{^}}  ldind.i{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.i{{$}}
@@ -539,7 +539,7 @@ entry:
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
 ; O2-NEXT:   {{^}}  ldind.i{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.i{{$}}
@@ -571,19 +571,19 @@ entry:
 ; O2-NEXT:   {{^}}  localloc{{$}}
 ; O2-NEXT:   {{^}}  stloc.0{{$}}
 ; O2-NEXT:   {{^}}  ldloc.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
 ; O2-NEXT:   {{^}}  ldind.r4{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 4{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.4{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.r4{{$}}
 ; O2-NEXT:   {{^}}  call void 'fh2'(native int, float32, float32){{$}}
 ; O2-NEXT:   {{^}}  ldloc.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.r4{{$}}
@@ -614,17 +614,17 @@ entry:
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
 ; O2-NEXT:   {{^}}  ldind.r8{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 8{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.8{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.r8{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 16{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.s 16{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.r8{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 24{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.s 24{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.r8{{$}}
@@ -668,13 +668,13 @@ entry:
 ; O2-NEXT:   {{^}}  unaligned. 4{{$}}
 ; O2-NEXT:   {{^}}  cpblk{{$}}
 ; O2-NEXT:   {{^}}  ldloc.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 24{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.s 24{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldloc.0{{$}}
 ; O2-NEXT:   {{^}}  call void 'fs24'(native int, native int){{$}}
 ; O2-NEXT:   {{^}}  ldloc.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 24{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.s 24{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.i4{{$}}
@@ -704,7 +704,7 @@ entry:
 ; O2-NEXT:   {{^}}  unaligned. 1{{$}}
 ; O2-NEXT:   {{^}}  ldind.u2{{$}}
 ; O2-NEXT:   {{^}}  ldarg.0{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 2{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.2{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.u1{{$}}
@@ -717,7 +717,7 @@ entry:
 ; O2-NEXT:   {{^}}  ldind.i4{{$}}
 ; O2-NEXT:   {{^}}  conv.u{{$}}
 ; O2-NEXT:   {{^}}  ldarg.1{{$}}
-; O2-NEXT:   {{^}}  ldc.i4 4{{$}}
+; O2-NEXT:   {{^}}  ldc.i4.4{{$}}
 ; O2-NEXT:   {{^}}  conv.i{{$}}
 ; O2-NEXT:   {{^}}  add{{$}}
 ; O2-NEXT:   {{^}}  ldind.u1{{$}}

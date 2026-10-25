@@ -54,21 +54,21 @@
 # LNX-NUM-COUNT-7: {{^[^ ]+ -> [^ ]+ \[}}
 # LNX-NUM-NOT:     {{ -> }}
 # The P/Invokes, one per row.
-# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'exp'(float64) cil managed preservesig {}{{$}}
-# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
-# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" as "#9" cdecl) int32 'htons'(int32) cil managed preservesig {}{{$}}
-# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'strchr'(native int, int32) cil managed preservesig {}{{$}}
-# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
-# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
-# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("KERNEL32.dll" cdecl) int32 'GetTickCount'() cil managed preservesig {}{{$}}
-# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'exp'(float64) cil managed preservesig {}{{$}}
-# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float32 'expf'(float32) cil managed preservesig {}{{$}}
-# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
-# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) void 'free'(native int) cil managed preservesig {}{{$}}
-# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
-# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" nomangle cdecl) float64 'exp'(float64) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" nomangle cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" as "#9" nomangle cdecl) int32 'htons'(int32) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'strchr'(native int, int32) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" nomangle cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" nomangle cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# WIN-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("KERNEL32.dll" nomangle cdecl) int32 'GetTickCount'() cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'exp'(float64) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float32 'expf'(float32) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) void 'free'(native int) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int 'malloc'(native int) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# LNX-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
 # WIN-ILNUM-COUNT-8: pinvokeimpl(
 # WIN-ILNUM-NOT:     pinvokeimpl
 # LNX-ILNUM-COUNT-7: pinvokeimpl(

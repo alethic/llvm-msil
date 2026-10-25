@@ -272,9 +272,9 @@ attributes #2 = { "no-prototype" }
 ; P/Invoke declarations with the fixed signatures; the declaration that is
 ; never called and never used gets none.
 ; CHECK:      {{^}}// ---- undefined external functions: P/Invoke ----{{$}}
-; CHECK-DAG:  {{^}}.method public hidebysig static pinvokeimpl("mylib" cdecl) native int 'foo'(int32) cil managed preservesig {}{{$}}
-; LNX-DAG:    {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; WIN-DAG:    {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:  {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) native int 'foo'(int32) cil managed preservesig {}{{$}}
+; LNX-DAG:    {{^}}.method public hidebysig static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; WIN-DAG:    {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 ; CHECK-NOT:  func_not_called
 ; The fixed import has one address field, after the data segment's fields;
 ; the .cctor sets it with the ldftn of the fixed signature, after foo_addr's
@@ -390,8 +390,8 @@ define i32 @use_knr_puts(ptr %s) {
 }
 
 ; KNR:       {{^}}// ---- undefined external functions: P/Invoke ----{{$}}
-; KNR-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" cdecl) int32 'knr_import'(int32, float64) cil managed preservesig {}{{$}}
-; KNR-DAG:   {{^}}.method public hidebysig static pinvokeimpl("{{libc|ucrtbase}}" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; KNR-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) int32 'knr_import'(int32, float64) cil managed preservesig {}{{$}}
+; KNR-DAG:   {{^}}.method public hidebysig static pinvokeimpl("{{libc|ucrtbase}}" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 declare i32 @knr_import(...) #1
 declare i32 @puts(...) #2
 
@@ -423,7 +423,7 @@ define i32 @with_i64(i64 %x) {
   ret i32 %r
 }
 
-; CONFLICT: {{^}}.method public hidebysig static pinvokeimpl("mylib" cdecl) int32 'conflict'(native int) cil managed preservesig {}{{$}}
+; CONFLICT: {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) int32 'conflict'(native int) cil managed preservesig {}{{$}}
 declare i32 @conflict(...) #1
 
 attributes #1 = { "no-prototype" "msil-import-module"="mylib" }

@@ -9,7 +9,7 @@
 ; assembles and passes -verify-machineinstrs at -O0 and -O2.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=switch \
-; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}" --implicit-check-not=throw
+; DEFINE:   --implicit-check-not=throw
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check} --check-prefixes=CHECK,O2
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %s \
@@ -42,8 +42,8 @@ source_filename = "irreducible.c"
 
 ; CHECK-LABEL: .method {{.*}}'irr'(
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
-; CHECK:       {{^}}  bgt @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[A:[0-9]+]]{{$}}
+; CHECK:       {{^}}  bgt.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[A:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[A]]:{{$}}
 ; O2-NEXT:     {{^}}  ldc.i4.0{{$}}
 ; O2-NEXT:     {{^}}  {{stloc|starg}}
@@ -51,14 +51,14 @@ source_filename = "irreducible.c"
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  bge @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[B]]{{$}}
+; CHECK:       {{^}}  bge.s @BB[[F]]_[[EXIT:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[B]]{{$}}
 ; CHECK-NEXT:  {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  mul{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  blt @BB[[F]]_[[A]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[EXIT]]{{$}}
+; CHECK:       {{^}}  blt.s @BB[[F]]_[[A]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[EXIT]]{{$}}
 ; CHECK-NEXT:  {{^}}@BB[[F]]_[[EXIT]]:{{$}}
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  ret{{$}}
@@ -98,13 +98,13 @@ exit:
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldc.i4.7{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
-; CHECK:       {{^}}  bge.un @BB[[F:[0-9]+]]_[[EXIT:[0-9]+]]{{$}}
+; CHECK:       {{^}}  bge.un.s @BB[[F:[0-9]+]]_[[EXIT:[0-9]+]]{{$}}
 ; CHECK:       {{^}}  ldc.i4.s 9{{$}}
 ; CHECK-NEXT:  {{^}}  xor{{$}}
-; CHECK:       {{^}}  bgt.un @BB[[F]]_[[EXIT]]{{$}}
+; CHECK:       {{^}}  bgt.un.s @BB[[F]]_[[EXIT]]{{$}}
 ; CHECK:       {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  shl{{$}}
-; CHECK:       {{^}}  brtrue @BB[[F]]_{{[0-9]+}}{{$}}
+; CHECK:       {{^}}  brtrue.s @BB[[F]]_{{[0-9]+}}{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[EXIT]]:{{$}}
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  ret{{$}}

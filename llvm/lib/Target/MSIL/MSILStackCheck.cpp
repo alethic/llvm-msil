@@ -14,11 +14,13 @@
 /// After MSILExplicitLocals every explicit register operand of an instruction
 /// is a value on the CIL evaluation stack: the instruction pops its explicit
 /// register uses in operand order (the last use is on top) and pushes its
-/// explicit register def, if any. Instructions that print as several CIL
-/// opcodes declare the extra transient depth they need in the StackPeakExtra
-/// field of TSFlags. RegStackify builds trees inside a block only, so the
-/// stack is empty at every block boundary and one linear walk per block finds
-/// the exact peak; no dataflow is needed.
+/// explicit register def, if any. A record that MSILMCInstLower::lowerImpl
+/// expands into several CIL_ instructions can go above max(pops, pushes)
+/// while they run; that extra depth is the StackPeakExtra field of TSFlags
+/// (MSILInstrFormats.td), which this pass reads instead of the expansion.
+/// RegStackify builds trees inside a block only, so the stack is empty at
+/// every block boundary and one linear walk per block finds the exact peak; no
+/// dataflow is needed.
 ///
 /// A violation is an internal compiler error. Printing the method anyway would
 /// only turn it into an InvalidProgramException at run time, far from the
@@ -75,9 +77,9 @@ FunctionPass *llvm::createMSILStackCheckLegacyPass() {
   return new MSILStackCheckLegacy();
 }
 
-/// Returns the extra evaluation-stack depth that the CIL text of \p MI needs
-/// while it executes, above max(depth before, depth after): the
-/// StackPeakExtra field of TSFlags (bits 1-0).
+/// Returns the extra evaluation-stack depth, above max(depth before, depth
+/// after), reached by the CIL_ instructions that MSILMCInstLower::lowerImpl
+/// expands \p MI into: the StackPeakExtra field of TSFlags (bits 1-0).
 static unsigned getStackPeakExtra(const MachineInstr &MI) {
   return MI.getDesc().TSFlags & MSILII::StackPeakExtraMask;
 }
@@ -183,10 +185,10 @@ static bool stackCheck(MachineFunction &MF) {
       if (MI.getOpcode() == MSIL::LOCALLOC && Depth != 1)
         fail(MF, &MI, "'localloc' with a non-empty evaluation stack");
 
-      // The CIL text of MI starts at Depth and ends at DepthAfter; a record
-      // that prints as several opcodes goes StackPeakExtra above the larger
-      // of the two while it runs (for example 'ldsfld; ldc.i4; add' of
-      // GLOBAL_ADDR peaks one above its result).
+      // The CIL_ instructions that MSILMCInstLower::lowerImpl expands MI into
+      // start at Depth and end at DepthAfter, and go StackPeakExtra above the
+      // larger of the two while they run (for example 'ldsfld', 'ldc.i4' and
+      // 'add' of GLOBAL_ADDR with an offset peak one above its result).
       const unsigned DepthAfter = Depth - Pops + Pushes;
       MaxStack = std::max(MaxStack,
                           std::max(Depth, DepthAfter) + getStackPeakExtra(MI));

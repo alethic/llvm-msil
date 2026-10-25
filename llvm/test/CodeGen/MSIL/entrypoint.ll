@@ -123,10 +123,10 @@ define i32 @main() {
 ; ARGV-NEXT:   {{^}}  mul{{$}}
 ; ARGV-NEXT:   {{^}}  call native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int){{$}}
 ; ARGV-NEXT:   {{^}}  stloc.2{{$}}
-;   i = 0, then the loop test at the bottom (long branch forms, plan 5.1)
+;   i = 0, then the loop test at the bottom (short branch forms, Q26)
 ; ARGV-NEXT:   {{^}}  ldc.i4.0{{$}}
 ; ARGV-NEXT:   {{^}}  stloc.3{{$}}
-; ARGV-NEXT:   {{^}}  br [[COND:@[^ :]+]]{{$}}
+; ARGV-NEXT:   {{^}}  br.s [[COND:@[^ :]+]]{{$}}
 ;   *(argv + i * 8) = StringToHGlobalAnsi(cl[i])
 ; ARGV-NEXT:   {{^}}[[LOOP:@[^ :]+]]:{{$}}
 ; ARGV-NEXT:   {{^}}  ldloc.2{{$}}
@@ -148,7 +148,7 @@ define i32 @main() {
 ; ARGV-NEXT:   {{^}}[[COND]]:{{$}}
 ; ARGV-NEXT:   {{^}}  ldloc.3{{$}}
 ; ARGV-NEXT:   {{^}}  ldloc.1{{$}}
-; ARGV-NEXT:   {{^}}  blt [[LOOP]]{{$}}
+; ARGV-NEXT:   {{^}}  blt.s [[LOOP]]{{$}}
 ;   *(argv + argc * 8) = NULL
 ; ARGV-NEXT:   {{^}}  ldloc.2{{$}}
 ; ARGV-NEXT:   {{^}}  ldloc.1{{$}}

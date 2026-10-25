@@ -12,9 +12,12 @@
 /// global method per function, and the module trailer: the P/Invoke
 /// declarations, the data segment of the global variables with their address
 /// fields, the address fields of the functions whose address is used, the
-/// module initializer and the entry point. It also owns the module's table of
-/// CIL method signatures, so every method header, call site, 'ldftn', 'calli'
-/// and P/Invoke declaration spells a signature the same way.
+/// module initializer and the entry point. It emits only CIL_ MCInsts (one
+/// per CIL instruction), labels and structured MSILTargetStreamer calls, so
+/// the text and an object are two encodings of one event stream. It also owns
+/// the module's table of CIL method signatures, so every method header, call
+/// site, 'ldftn', 'calli' and P/Invoke declaration spells a signature the same
+/// way.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -23,6 +26,7 @@
 
 #include "MCTargetDesc/MSILMCTypeUtilities.h"
 #include "MSILDataSegment.h"
+#include "MSILMCInstLower.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/MapVector.h"
@@ -66,6 +70,9 @@ private:
   MSILFunctionInfo *MFI = nullptr;
   /// True from the method header of that function to its closing brace.
   bool InMethod = false;
+  /// Lowers MachineInstrs to CIL_ MCInsts, with the branch forms of the
+  /// function being printed.
+  std::unique_ptr<MSILMCInstLower> MCInstLowering;
 
   /// Owns every signature handed out by the services below. They outlive the
   /// MCInsts and MSILMemberRefExprs that point to them.
@@ -177,8 +184,9 @@ public:
 
   /// Records that the address of \p F is used (FUNC_ADDR, or a relocation of
   /// the data segment) and returns the name of its address field,
-  /// '<msil>fn_<IL name>', which every use reads. <Module>::.cctor sets the
-  /// field once, with 'ldftn' of the method or of the P/Invoke declaration:
+  /// '<msil>fn_<IL name>' (MSIL::FnAddrFieldPrefix), which every use reads.
+  /// <Module>::.cctor sets the field once, with 'ldftn' of the method or of
+  /// the P/Invoke declaration:
   /// on .NET Framework, 'ldftn' in a method that the JIT compiles before the
   /// target first ran yields another value than in one compiled after, and
   /// two pointers to one C function must compare equal.
@@ -217,7 +225,11 @@ public:
   void emitJumpTableInfo() override;
   void emitGlobalVariable(const GlobalVariable *GV) override;
   void emitFunctionEntryLabel() override;
+  /// Emits .maxstack and .locals, and chooses the branch forms of the
+  /// function (MSILMCInstLower::computeBranchForms).
   void emitFunctionBodyStart() override;
+  /// Emits the CIL_ MCInsts of \p MI (MSILMCInstLower::lower), which exist
+  /// for exactly the instructions that computeBranchForms laid out.
   void emitInstruction(const MachineInstr *MI) override;
 
 protected:
@@ -271,13 +283,14 @@ private:
   /// Emits the address fields of the functions whose address is used.
   void emitFunctionAddressFields();
 
-  /// Emits <Module>::.cctor: it allocates and fills the data segment, sets the
-  /// address fields of the globals and of the functions, applies the
-  /// relocations and calls \p CtorFns.
+  /// Emits <Module>::.cctor, built with cli::ILBuilder: it allocates and fills
+  /// the data segment, sets the address fields of the globals and of the
+  /// functions, applies the relocations and calls \p CtorFns.
   void emitModuleInitializer(ArrayRef<const Function *> CtorFns);
 
   /// Emits '<msil>Main'(string[]), the .entrypoint method that calls the C
-  /// function \p Main (decision D27), or diagnoses an unsupported signature.
+  /// function \p Main (decision D27), built with cli::ILBuilder, or diagnoses
+  /// an unsupported signature.
   void emitEntryPoint(const Function &Main);
 };
 

@@ -3,11 +3,11 @@
 ## and 4). msil-ld binds each undefined function of the bitcode to the first
 ## bindable definition of the native libraries on its command line, and the
 ## --lto-emit-asm text declares it as a P/Invoke:
-##   .method assembly hidebysig static pinvokeimpl("<module>" cdecl) ...
+##   .method assembly hidebysig static pinvokeimpl("<module>" nomangle cdecl) ...
 ## with the library's DT_SONAME verbatim as the module (libfoo.so.1, not
 ## 'libfoo' or 'libfoo.so'), the symbol name as the entry ('as' is printed
 ## only for another entry name), access 'assembly' (linked text, 5.10.11)
-## and no 'nomangle' until M18. Bindable is what dlsym reaches: an
+## and 'nomangle' from M18 on. Bindable is what dlsym reaches: an
 ## unversioned or default-version ('@@') definition of a FUNC or a GNU_IFUNC
 ## (dlsym runs the resolver), GLOBAL or WEAK; a hidden ('@') version beside
 ## the default one changes nothing (newf). Not bindable, each a named link
@@ -48,7 +48,7 @@
 # RUN: llvm-as extref.ll -o extref.o
 
 # DEFINE: %{il} = FileCheck %s --implicit-check-not="public hidebysig static pinvokeimpl" \
-# DEFINE:   --implicit-check-not='"libfoo"' --implicit-check-not='"libfoo.so"' --implicit-check-not=nomangle
+# DEFINE:   --implicit-check-not='"libfoo"' --implicit-check-not='"libfoo.so"'
 # DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR"
 
@@ -67,11 +67,11 @@
 # O0-DAG:    call int32 'newf'()
 # O0-DAG:    call int32 'wfn'()
 # O0-DAG:    call int32 'unv'()
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'ifn'() cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'newf'() cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'wfn'() cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'unv'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" nomangle cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" nomangle cdecl) int32 'ifn'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" nomangle cdecl) int32 'newf'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" nomangle cdecl) int32 'wfn'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" nomangle cdecl) int32 'unv'() cil managed preservesig {}{{$}}
 ## Exactly the five P/Invokes.
 # FIVE-COUNT-5: pinvokeimpl
 # FIVE-NOT:     pinvokeimpl
@@ -80,7 +80,6 @@
 # IL-NONE-NOT: public hidebysig static pinvokeimpl
 # IL-NONE-NOT: "libfoo"
 # IL-NONE-NOT: "libfoo.so"
-# IL-NONE-NOT: nomangle
 
 ## The same functions from the library ld.lld linked: its SONAME, the same
 ## rules.
@@ -88,9 +87,9 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 main-ver.o libver.so.1 -o ver.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=VER --implicit-check-not=pinvokeimpl --input-file=ver.il
 # RUN: FileCheck %s --check-prefix=VER-PINV --input-file=ver.il
-# VER-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libver.so.1" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
-# VER-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libver.so.1" cdecl) int32 'ifn'() cil managed preservesig {}{{$}}
-# VER-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libver.so.1" cdecl) int32 'newf'() cil managed preservesig {}{{$}}
+# VER-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libver.so.1" nomangle cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+# VER-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libver.so.1" nomangle cdecl) int32 'ifn'() cil managed preservesig {}{{$}}
+# VER-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libver.so.1" nomangle cdecl) int32 'newf'() cil managed preservesig {}{{$}}
 ## Exactly those three P/Invokes.
 # VER-PINV-COUNT-3: pinvokeimpl
 # VER-PINV-NOT:     pinvokeimpl
@@ -103,10 +102,10 @@
 # RUN: FileCheck %s --check-prefix=GLIBC --implicit-check-not='"libc"' \
 # RUN:   --implicit-check-not="public hidebysig static pinvokeimpl" --input-file=glibc.il
 # RUN: FileCheck %s --check-prefix=GLIBC-NONE --input-file=glibc.il
-# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
-# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) native int 'memcpy'(native int, native int, native int) cil managed preservesig {}{{$}}
-# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'fstat'(int32, native int) cil managed preservesig {}{{$}}
-# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int 'memcpy'(native int, native int, native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'fstat'(int32, native int) cil managed preservesig {}{{$}}
+# GLIBC-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 # GLIBC-NONE-NOT: "libc"
 # GLIBC-NONE-NOT: public hidebysig static pinvokeimpl
 
@@ -159,7 +158,7 @@
 # RUN: %{il} --check-prefix=AVAIL --input-file=availext1.il
 # RUN: FileCheck %s --check-prefix=IL-NONE --input-file=availext1.il
 # AVAIL-DAG: call int32 'foo'(int32)
-# AVAIL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+# AVAIL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" nomangle cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
 # RUN: not msil-ld --lto-emit-asm --lto-O0 availext.o -o x.il 2>&1 \
 # RUN:   | %{err} --check-prefix=AVAIL-UNDEF --implicit-check-not=error: --implicit-check-not="not resolved"
 # RUN: not msil-ld --lto-emit-asm --lto-O1 availext.o -o x.il 2>&1 \

@@ -23,18 +23,18 @@
 # RUN: FileCheck %s --check-prefix=ALL --implicit-check-not=VCRUNTIME140 --input-file=all.il
 # RUN: FileCheck %s --check-prefix=ELEVEN --input-file=all.il
 # RUN: FileCheck %s --check-prefix=ALL-NONE --input-file=all.il
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'memcpy'(native int, native int, native int) cil managed preservesig {}{{$}}
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'memset'(native int, int32, native int) cil managed preservesig {}{{$}}
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'memmove'(native int, native int, native int) cil managed preservesig {}{{$}}
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) int32 'memcmp'(native int, native int, native int) cil managed preservesig {}{{$}}
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'memchr'(native int, int32, native int) cil managed preservesig {}{{$}}
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'strchr'(native int, int32) cil managed preservesig {}{{$}}
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'strrchr'(native int, int32) cil managed preservesig {}{{$}}
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'strstr'(native int, native int) cil managed preservesig {}{{$}}
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'wcschr'(native int, int32) cil managed preservesig {}{{$}}
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'wcsrchr'(native int, int32) cil managed preservesig {}{{$}}
-# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" cdecl) native int 'wcsstr'(native int, native int) cil managed preservesig {}{{$}}
-# ELEVEN-COUNT-11: pinvokeimpl("ucrtbase.dll" cdecl)
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'memcpy'(native int, native int, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'memset'(native int, int32, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'memmove'(native int, native int, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) int32 'memcmp'(native int, native int, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'memchr'(native int, int32, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'strchr'(native int, int32) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'strrchr'(native int, int32) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'strstr'(native int, native int) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'wcschr'(native int, int32) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'wcsrchr'(native int, int32) cil managed preservesig {}{{$}}
+# ALL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("ucrtbase.dll" nomangle cdecl) native int 'wcsstr'(native int, native int) cil managed preservesig {}{{$}}
+# ELEVEN-COUNT-11: pinvokeimpl("ucrtbase.dll" nomangle cdecl)
 # ELEVEN-NOT:      pinvokeimpl
 ## No VCRUNTIME140 anywhere in the file: for a prefix made only of -DAG
 ## lines, --implicit-check-not checks only the text before the first match.
@@ -47,7 +47,7 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 strchr.o --ucrtbase-imports -L lib -lvcruntime -o vc-last.il 2>&1 \
 # RUN:   | count 0
 # RUN: FileCheck %s --check-prefix=STRCHR -DMOD=ucrtbase.dll --input-file=vc-last.il
-# STRCHR: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) native int 'strchr'(native int, int32) cil managed preservesig {}{{$}}
+# STRCHR: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) native int 'strchr'(native int, int32) cil managed preservesig {}{{$}}
 
 ## Only the 11 functions.
 # RUN: not msil-ld --lto-emit-asm --lto-O0 strlen.o --ucrtbase-imports -o x.il 2>&1 \

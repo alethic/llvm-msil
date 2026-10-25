@@ -100,7 +100,7 @@
 # NATIVE:      {{^}}.assembly 'hello' { .ver 0:0:0:0 }{{$}}
 # NATIVE-DAG:  {{^}}.method public static int32 'main'() cil managed{{$}}
 # NATIVE-DAG:  call int32 'puts'(native int)
-# NATIVE-DAG:  {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# NATIVE-DAG:  {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 # PUBLIC-COUNT-1: {{^}}.method public
 # PUBLIC-NOT:     {{^}}.method public
 

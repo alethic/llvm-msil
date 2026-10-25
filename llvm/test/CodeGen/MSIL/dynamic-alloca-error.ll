@@ -264,7 +264,7 @@ define void @big_frame() {
 ; IL:       .method {{.*}} native int 'stack_address'() cil managed{{$}}
 ; IL-NEXT:  {{^\{$}}
 ; IL-NEXT:  {{^}}  .maxstack 1{{$}}
-; IL-NEXT:  {{^}}  ldc.i4 0{{$}}
+; IL-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; IL-NEXT:  {{^}}  conv.i{{$}}
 ; IL-NEXT:  {{^}}  ret{{$}}
 ; IL-NEXT:  {{^}}} // end of method 'stack_address'{{$}}

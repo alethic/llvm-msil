@@ -60,8 +60,8 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 main.o -L dlldir -lpedll -o l.il 2>&1 | count 0
 # RUN: %{il} --input-file=l.il
 # RUN: FileCheck %s --check-prefix=IL-NONE --input-file=l.il
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("pedll.dll" cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("pedll.dll" cdecl) int32 'fwd'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("pedll.dll" nomangle cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("pedll.dll" nomangle cdecl) int32 'fwd'() cil managed preservesig {}{{$}}
 ## The %{il} patterns nowhere in the file: for a prefix made only of -DAG
 ## lines, --implicit-check-not checks only the text before the first match.
 # IL-NONE-NOT: "pedll"
@@ -77,8 +77,8 @@
 # RUN: %{il} --check-prefix=RENAMED -DMOD=other.dll --input-file=other.il
 # RUN: FileCheck %s --check-prefix=NO-PEDLL --input-file=other.il
 # RUN: FileCheck %s --check-prefix=IL-NONE --input-file=other.il
-# RENAMED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
-# RENAMED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'fwd'() cil managed preservesig {}{{$}}
+# RENAMED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
+# RENAMED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) int32 'fwd'() cil managed preservesig {}{{$}}
 # NO-PEDLL-NOT: "pedll.dll"
 # NO-PEDLL-NOT: "pedll"
 
@@ -88,7 +88,7 @@
 # NONAME-DLL-NEXT: {{^}}>>> referenced by noname.o:(main){{$}}
 # RUN: msil-ld --lto-emit-asm --lto-O0 noname.o pedll.lib -o noname.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=NONAME-LIB --input-file=noname.il
-# NONAME-LIB: {{^}}.method assembly hidebysig static pinvokeimpl("pedll.dll" as "#5" cdecl) int32 'fn2'() cil managed preservesig {}{{$}}
+# NONAME-LIB: {{^}}.method assembly hidebysig static pinvokeimpl("pedll.dll" as "#5" nomangle cdecl) int32 'fn2'() cil managed preservesig {}{{$}}
 
 ## Data exports.
 # RUN: not msil-ld --lto-emit-asm call-data.o pedll.dll -o x.il 2>&1 | %{err} --check-prefix=CALL-DATA
@@ -102,7 +102,7 @@
 # RUN: llvm-lib /machine:x64 /def:other.def /out:other.lib
 # RUN: msil-ld --lto-emit-asm --lto-O0 call-data.o pedll.dll other.lib -o skip.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=SKIP-DATA --implicit-check-not='"pedll.dll"' --input-file=skip.il
-# SKIP-DATA: {{^}}.method assembly hidebysig static pinvokeimpl("other.dll" cdecl) int32 'dataobj'() cil managed preservesig {}{{$}}
+# SKIP-DATA: {{^}}.method assembly hidebysig static pinvokeimpl("other.dll" nomangle cdecl) int32 'dataobj'() cil managed preservesig {}{{$}}
 
 #--- other.def
 LIBRARY other.dll

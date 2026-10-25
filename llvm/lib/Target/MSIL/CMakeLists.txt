@@ -51,6 +51,7 @@ add_llvm_target(MSILCodeGen
   LINK_COMPONENTS
   Analysis
   AsmPrinter
+  CLI
   CodeGen
   CodeGenTypes
   Core

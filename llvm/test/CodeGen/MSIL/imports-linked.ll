@@ -21,9 +21,9 @@
 ;   defines calls that definition. Each of these texts is a plain
 ;   'error: <text>' line (LLVMContext::emitError), whether LowerCall reports
 ;   it for a call or the AsmPrinter for a declaration.
-;   Linked P/Invokes have 'assembly' access (5.10.11) and, until M18, no
+;   Linked P/Invokes have 'assembly' access (5.10.11) and, from M18 on,
 ;   'nomangle':
-;     .method assembly hidebysig static pinvokeimpl("<module>" [as "<entry>"] cdecl) <ret> '<name>'(<params>) cil managed preservesig {}
+;     .method assembly hidebysig static pinvokeimpl("<module>" [as "<entry>"] nomangle cdecl) <ret> '<name>'(<params>) cil managed preservesig {}
 ;   with 'as "<entry>"' only when the entry differs from the IL name. Module
 ;   and entry strings are copied verbatim, whatever the triple (Q13: an
 ;   ordinal entry '#9', a DLL name with its suffix, an ELF DT_SONAME). The
@@ -320,14 +320,14 @@ define i32 @weak_call() {
 }
 
 ; LINKED:     {{^}}.method {{.*}}'<msil>undef_maybe'(){{.*}}
-; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
-; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" as "#9" cdecl) int32 'htons'(int32) cil managed preservesig {}{{$}}
-; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("native.dll" cdecl) int32 'mylib_add'(int32, int32) cil managed preservesig {}{{$}}
-; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libevents.so.2" cdecl) void 'on_event'(int32) cil managed preservesig {}{{$}}
-; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'pow'(float64, float64) cil managed preservesig {}{{$}}
-; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("mymath.dll" as "my_trunc" cdecl) float64 'trunc'(float64) cil managed preservesig {}{{$}}
+; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" nomangle cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
+; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" as "#9" nomangle cdecl) int32 'htons'(int32) cil managed preservesig {}{{$}}
+; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("native.dll" nomangle cdecl) int32 'mylib_add'(int32, int32) cil managed preservesig {}{{$}}
+; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libevents.so.2" nomangle cdecl) void 'on_event'(int32) cil managed preservesig {}{{$}}
+; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" nomangle cdecl) float64 'pow'(float64, float64) cil managed preservesig {}{{$}}
+; LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("mymath.dll" as "my_trunc" nomangle cdecl) float64 'trunc'(float64) cil managed preservesig {}{{$}}
 
 ; Eight P/Invokes, none for fmax, cbrt or maybe.
 ; NLINKED-COUNT-8: {{^}}.method assembly hidebysig static pinvokeimpl(
@@ -496,7 +496,7 @@ declare double @llvm.sqrt.f64(double)
 ; The IL keeps every method; only okfn gets a P/Invoke.
 ; ERR-IL-LABEL: {{^}}.method public static int32 'use_okfn'(int32) cil managed{{$}}
 ; ERR-IL:       {{^}}  call int32 'okfn'(int32){{$}}
-; ERR-IL:       {{^}}.method assembly hidebysig static pinvokeimpl("libok.so.1" cdecl) int32 'okfn'(int32) cil managed preservesig {}{{$}}
+; ERR-IL:       {{^}}.method assembly hidebysig static pinvokeimpl("libok.so.1" nomangle cdecl) int32 'okfn'(int32) cil managed preservesig {}{{$}}
 
 define i32 @use_ext(i32 %x) {
   %r = call i32 @ext(i32 %x)
@@ -571,10 +571,10 @@ declare double @llvm.sqrt.f64(double)
 ; SA:        {{^}}  call int32 'puts'(native int){{$}}
 ; SA-LABEL:  {{^}}.method public static float64 'root'(float64) cil managed{{$}}
 ; SA:        {{^}}  call float64 'sqrt'(float64){{$}}
-; SA-LNX-DAG: {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; SA-LNX-DAG: {{^}}.method public hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-; SA-WIN-DAG: {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; SA-WIN-DAG: {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; SA-LNX-DAG: {{^}}.method public hidebysig static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; SA-LNX-DAG: {{^}}.method public hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; SA-WIN-DAG: {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; SA-WIN-DAG: {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
 ; SA-NOT:    pinvokeimpl
 ; SA-NOT:    assembly hidebysig
 
@@ -688,14 +688,14 @@ define i32 @exponent(float %x) {
   ret i32 %e
 }
 
-; F32-PUB-DAG:    {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'ldexpf'(float32, int32) cil managed preservesig {}{{$}}
-; F32-PUB-DAG:    {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'frexpf'(float32, native int) cil managed preservesig {}{{$}}
-; F64-PUB-DAG:    {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
-; F64-PUB-DAG:    {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
-; F32-LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float32 'ldexpf'(float32, int32) cil managed preservesig {}{{$}}
-; F32-LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float32 'frexpf'(float32, native int) cil managed preservesig {}{{$}}
-; F64-LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
-; F64-LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
+; F32-PUB-DAG:    {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'ldexpf'(float32, int32) cil managed preservesig {}{{$}}
+; F32-PUB-DAG:    {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'frexpf'(float32, native int) cil managed preservesig {}{{$}}
+; F64-PUB-DAG:    {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
+; F64-PUB-DAG:    {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
+; F32-LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float32 'ldexpf'(float32, int32) cil managed preservesig {}{{$}}
+; F32-LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float32 'frexpf'(float32, native int) cil managed preservesig {}{{$}}
+; F64-LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" nomangle cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
+; F64-LINKED-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" nomangle cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
 
 ;--- f32-float.ll
 ; f32.ll linked, with only ldexpf and frexpf bound.
@@ -778,7 +778,7 @@ declare double @llvm.sqrt.f64(double)
 ; BOM-NOT:  {{.}}
 ; BOM:      {{^}}{{\xEF\xBB\xBF}}// MSIL module generated by LLVM{{$}}
 ; BOM:      {{^}}  call float64 'sqrt'(float64){{$}}
-; BOM:      {{^}}.method assembly hidebysig static pinvokeimpl("caf{{\xC3\xA9}}.so" as "entr{{\xC3\xA9}}e" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; BOM:      {{^}}.method assembly hidebysig static pinvokeimpl("caf{{\xC3\xA9}}.so" as "entr{{\xC3\xA9}}e" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
 
 define double @root(double %x) {
   %r = call double @llvm.sqrt.f64(double %x)
@@ -844,8 +844,8 @@ define i32 @weak_say() {
 ; WEAKSA-LABEL: {{^}}.method public static int32 'weak_present'() cil managed{{$}}
 ; WEAKSA:       {{^}}  ldsfld native int '<msil>fn_puts'{{$}}
 ; WEAKSA:       {{^}}} // end of method 'weak_present'{{$}}
-; WEAKSA-LNX:   {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; WEAKSA-WIN:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; WEAKSA-LNX:   {{^}}.method public hidebysig static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; WEAKSA-WIN:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 ; WEAKSA-NOT:   pinvokeimpl
 ; WEAKSA-NOT:   assembly hidebysig
 define i1 @weak_present() {

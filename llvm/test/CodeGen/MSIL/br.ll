@@ -5,9 +5,9 @@
 ; block) selects BR_UNLESS ('brfalse'), so no compare-as-value (ceq, cgt) is
 ; left in front of a branch on a boolean or on an int32 zero test. A plain i1
 ; argument is masked first ('ldc.i4.1; and'); a zeroext one is used as it is.
-; Branches always print their long forms with '@BB<function>_<block>' labels
-; (never 'br.s', 'brtrue.s' or 'brfalse.s'), and a block that is reached only
-; by falling through has no label.
+; Branches print their shortest forms with '@BB<function>_<block>' labels
+; (here always 'br.s', 'brtrue.s' or 'brfalse.s', Q26), and a block that is
+; reached only by falling through has no label.
 ;
 ; SelectionDAG always emits the branch to the false block, even when that
 ; block comes next. At -O0 it stays ('br' to the next label); at -O2
@@ -23,7 +23,7 @@
 ; instruction selection, which is the same at -O0 and -O2.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=switch \
-; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}" --implicit-check-not=throw \
+; DEFINE:   --implicit-check-not=throw \
 ; DEFINE:   --implicit-check-not=ceq --implicit-check-not=cgt
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check} --check-prefixes=CHECK,O2
@@ -57,8 +57,8 @@ source_filename = "br.c"
 ; CHECK-LABEL: .method {{.*}}'diamond_zext'(
 ; CHECK-SAME:  int32, int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[ELSE:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[THEN:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[ELSE:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[THEN:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[THEN]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.2{{$}}
@@ -99,8 +99,8 @@ j:
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  and{{$}}
-; CHECK-NEXT:  {{^}}  brtrue @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.3{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -129,8 +129,8 @@ t:
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.3{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -159,8 +159,8 @@ t:
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.3{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -188,8 +188,8 @@ t:
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brtrue @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[N:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[N:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[N]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.3{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -212,7 +212,7 @@ t:
 ; single branch to the true block and no compare-as-value.
 ; CHECK-LABEL: .method {{.*}}'eqz_i64'(
 ; CHECK-SAME:  native int) cil managed{{$}}
-; CHECK:       {{^}}  {{beq|brfalse}} @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; CHECK:       {{^}}  {{beq|brfalse}}.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[T]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.4{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -229,7 +229,7 @@ t:
 
 ; CHECK-LABEL: .method {{.*}}'nez_ptr'(
 ; CHECK-SAME:  native int) cil managed{{$}}
-; CHECK:       {{^}}  {{bne\.un|brtrue}} @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
+; CHECK:       {{^}}  {{bne\.un|brtrue}}.s @BB[[F:[0-9]+]]_[[T:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[T]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.4{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -254,14 +254,14 @@ t:
 ; CHECK-LABEL: .method {{.*}}'cond_elsewhere'(
 ; CHECK-SAME:  int32, int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
-; CHECK-NEXT:  {{^}}  {{brfalse|brtrue}} @BB[[F:[0-9]+]]_{{[0-9]+}}{{$}}
+; CHECK-NEXT:  {{^}}  {{brfalse|brtrue}}.s @BB[[F:[0-9]+]]_{{[0-9]+}}{{$}}
 ; CHECK:       {{^}}  mul{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[MID:[0-9]+]]:{{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
 ; O2-NEXT:     {{^}}  ldarg.1{{$}}
-; O2-NEXT:     {{^}}  blt @BB[[F]]_[[T:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  blt.s @BB[[F]]_[[T:[0-9]+]]{{$}}
 ; O0:          {{^}}  and{{$}}
-; O0-NEXT:     {{^}}  brtrue @BB[[F]]_[[T:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  brtrue.s @BB[[F]]_[[T:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[T]]:{{$}}
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -284,20 +284,20 @@ t:
   ret i32 %r
 }
 
-; The join is too large to duplicate, so the then-arm ends with the long
-; unconditional 'br' to it at -O0 and -O2; the else-arm falls through to it
+; The join is too large to duplicate, so the then-arm ends with the
+; unconditional 'br.s' to it at -O0 and -O2; the else-arm falls through to it
 ; at -O2 and branches to it at -O0.
 ; CHECK-LABEL: .method {{.*}}'big_join'(
 ; CHECK-SAME:  int32, int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[ELSE:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[ELSE:[0-9]+]]{{$}}
 ; CHECK:       {{^}}  add{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  br @BB[[F]]_[[J:[0-9]+]]{{$}}
+; CHECK:       {{^}}  br.s @BB[[F]]_[[J:[0-9]+]]{{$}}
 ; CHECK-NEXT:  {{^}}@BB[[F]]_[[ELSE]]:{{$}}
 ; CHECK:       {{^}}  sub{{$}}
-; O2-NOT:      {{^}}  br @
-; O0:          {{^}}  br @BB[[F]]_[[J]]{{$}}
+; O2-NOT:      {{^}}  br{{(\.s)?}} @
+; O0:          {{^}}  br.s @BB[[F]]_[[J]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[J]]:{{$}}
 ; CHECK:       {{^}}  mul{{$}}
 ; CHECK:       {{^}}  xor{{$}}
@@ -331,10 +331,10 @@ j:
 
 ; CHECK-LABEL: .method {{.*}}'spin'(
 ; CHECK-SAME:  ) cil managed{{$}}
-; O0:          {{^}}  br @BB[[F:[0-9]+]]_[[L:[0-9]+]]{{$}}
+; O0:          {{^}}  br.s @BB[[F:[0-9]+]]_[[L:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[L]]:{{$}}
 ; O2:          {{^}}@BB[[F:[0-9]+]]_[[L:[0-9]+]]:{{$}}
-; CHECK-NEXT:  {{^}}  br @BB[[F]]_[[L]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s @BB[[F]]_[[L]]{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'spin'{{$}}
 define void @spin() {
 entry:

@@ -41,13 +41,13 @@
 # RUN:   --input-file=main.il
 # RUN: FileCheck %s --check-prefix=SEVEN --input-file=main.il
 # RUN: FileCheck %s --check-prefix=IL-NONE --input-file=main.il
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "#5" cdecl) int32 'fn2'() cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" cdecl) int32 'fn3'() cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "realname" cdecl) int32 'renamed'() cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" as "#9" cdecl) int32 'htons'(int32) cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" cdecl) int32 'ntohs'(int32) cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("KERNEL32.dll" cdecl) int32 'GetTickCount'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" nomangle cdecl) int32 'fn1'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "#5" nomangle cdecl) int32 'fn2'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" nomangle cdecl) int32 'fn3'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "realname" nomangle cdecl) int32 'renamed'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" as "#9" nomangle cdecl) int32 'htons'(int32) cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("WS2_32.dll" nomangle cdecl) int32 'ntohs'(int32) cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("KERNEL32.dll" nomangle cdecl) int32 'GetTickCount'() cil managed preservesig {}{{$}}
 # CHECK-DAG: call int32 'fn2'()
 # CHECK-DAG: call int32 'renamed'()
 # CHECK-DAG: call int32 'GetTickCount'()
@@ -88,7 +88,7 @@
 # RUN: FileCheck %s --check-prefix=KIND --input-file=kind-ba.il
 # RUN: FileCheck %s --check-prefix=NO-ADATA --input-file=kind-ba.il
 # KIND-DAG: call int32 'foo'()
-# KIND-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("bcode.dll" cdecl) int32 'foo'() cil managed preservesig {}{{$}}
+# KIND-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("bcode.dll" nomangle cdecl) int32 'foo'() cil managed preservesig {}{{$}}
 # NO-ADATA-NOT: adata.dll
 # RUN: not msil-ld --lto-emit-asm --lto-O0 call-foo.o adata.lib -o x.il 2>&1 \
 # RUN:   | %{err} --check-prefix=KIND-DATA --implicit-check-not=error:

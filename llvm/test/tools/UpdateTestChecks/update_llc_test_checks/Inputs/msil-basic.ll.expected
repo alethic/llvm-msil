@@ -36,9 +36,9 @@ define i32 @caller(i32 %x) {
 ; CHECK-NEXT:    ldarg.0
 ; CHECK-NEXT:    ldc.i4.7
 ; CHECK-NEXT:    call int32 'add'(int32, int32)
-; CHECK-NEXT:    ldc.i4 1
+; CHECK-NEXT:    ldc.i4.1
 ; CHECK-NEXT:    conv.i
-; CHECK-NEXT:    ldc.i4 2
+; CHECK-NEXT:    ldc.i4.2
 ; CHECK-NEXT:    conv.i
 ; CHECK-NEXT:    call native int 'add.i64'(native int, native int)
 ; CHECK-NEXT:    conv.i4
@@ -50,9 +50,9 @@ define i32 @caller(i32 %x) {
 ; MARCH-NEXT:    ldarg.0
 ; MARCH-NEXT:    ldc.i4.7
 ; MARCH-NEXT:    call int32 'add'(int32, int32)
-; MARCH-NEXT:    ldc.i4 1
+; MARCH-NEXT:    ldc.i4.1
 ; MARCH-NEXT:    conv.i
-; MARCH-NEXT:    ldc.i4 2
+; MARCH-NEXT:    ldc.i4.2
 ; MARCH-NEXT:    conv.i
 ; MARCH-NEXT:    call native int 'add.i64'(native int, native int)
 ; MARCH-NEXT:    conv.i4
@@ -129,7 +129,7 @@ define i32 @"sel$ect"(i32 %c, i32 %a, i32 %b) {
 ; CHECK-NEXT:    ldarg.0
 ; CHECK-NEXT:    ldc.i4.0
 ; CHECK-NEXT:    cgt.un
-; CHECK-NEXT:    brtrue @BB3_2
+; CHECK-NEXT:    brtrue.s @BB3_2
 ; CHECK-NEXT:  // %bb.1:
 ; CHECK-NEXT:    ldarg.2
 ; CHECK-NEXT:    starg.s 1
@@ -142,7 +142,7 @@ define i32 @"sel$ect"(i32 %c, i32 %a, i32 %b) {
 ; MARCH-NEXT:    ldarg.0
 ; MARCH-NEXT:    ldc.i4.0
 ; MARCH-NEXT:    cgt.un
-; MARCH-NEXT:    brtrue @BB3_2
+; MARCH-NEXT:    brtrue.s @BB3_2
 ; MARCH-NEXT:    ldarg.2
 ; MARCH-NEXT:    starg.s 1
 ; MARCH-NEXT:  @BB3_2:

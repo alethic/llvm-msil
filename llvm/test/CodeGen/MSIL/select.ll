@@ -7,7 +7,7 @@
 ; custom inserter builds the successor lists and the PHI explicitly and does
 ; not rely on branch analysis; -verify-machineinstrs, which checks every PHI
 ; against the predecessor lists, runs on every llc line here. In the CIL every
-; select is a 'brtrue' to an '@BB<f>_<b>' label (long form, never brfalse)
+; select is a 'brtrue.s' to an '@BB<f>_<b>' label (never brfalse)
 ; and no SELECT pseudo survives. The only other branches are the zero tests
 ; of the ctlz and cttz expansions in sel_then_ctlz and sel_then_cttz, which
 ; branch folding may invert at -O2, so only their O2 lines accept 'brfalse'
@@ -26,12 +26,11 @@
 ; value the PHI takes from which block: $t from the entry block, whose BR_IF
 ; jumps straight to the join, and $f from the empty false block. The CIL
 ; lines check the branch, its label and the code after the join at -O2 and
-; -O0; branches are always long forms (plan 5.1), so the short forms are
-; implicit negative checks.
+; -O0; branches use their shortest forms (Q26), which in these small bodies
+; are always the short ones.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=brfalse \
-; DEFINE:   --implicit-check-not=SELECT --implicit-check-not=call \
-; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}"
+; DEFINE:   --implicit-check-not=SELECT --implicit-check-not=call
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check} --check-prefixes=CHECK,O2
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %s \
@@ -88,7 +87,7 @@ source_filename = "select.c"
 ; The first function of the module has number 0, so its labels are @BB0_<b>.
 ; CHECK-LABEL: .method {{.*}}'select_i32'(
 ; CHECK-SAME:  int32, int32, int32) cil managed{{$}}
-; CHECK:       {{^}}  brtrue @BB0_[[B:[0-9]+]]{{$}}
+; CHECK:       {{^}}  brtrue.s @BB0_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB0_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'select_i32'{{$}}
@@ -101,8 +100,8 @@ define i32 @select_i32(i32 %c, i32 %t, i32 %f) {
 ; CHECK-LABEL: .method {{.*}}'select_i64'(
 ; CHECK-SAME:  native int, native int, native int, native int) cil managed{{$}}
 ; CHECK:       {{^}}  clt.un{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'select_i64'{{$}}
@@ -115,8 +114,8 @@ define i64 @select_i64(i64 %a, i64 %b, i64 %t, i64 %f) {
 ; CHECK-LABEL: .method {{.*}}'select_f32'(
 ; CHECK-SAME:  int32, int32, float32, float32) cil managed{{$}}
 ; CHECK:       {{^}}  ceq{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'select_f32'{{$}}
@@ -129,8 +128,8 @@ define float @select_f32(i32 %a, i32 %b, float %t, float %f) {
 ; CHECK-LABEL: .method {{.*}}'select_f64'(
 ; CHECK-SAME:  native int, native int, float64, float64) cil managed{{$}}
 ; CHECK:       {{^}}  cgt{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'select_f64'{{$}}
@@ -144,7 +143,7 @@ define double @select_f64(i64 %a, i64 %b, double %t, double %f) {
 ; CHECK-LABEL: .method {{.*}}'select_ptr'(
 ; CHECK-SAME:  int32, native int, native int) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'select_ptr'{{$}}
@@ -159,10 +158,10 @@ define ptr @select_ptr(i1 zeroext %c, ptr %t, ptr %f) {
 ; O2:          {{^}}  ldarg.0{{$}}
 ; O2-NEXT:     {{^}}  ldc.i4.1{{$}}
 ; O2-NEXT:     {{^}}  and{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; O0:          {{^}}  ldc.i4.1{{$}}
 ; O0-NEXT:     {{^}}  and{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'select_i1_noext'{{$}}
@@ -175,7 +174,7 @@ define i32 @select_i1_noext(i1 %c, i32 %t, i32 %f) {
 ; CHECK-LABEL: .method {{.*}}'select_consts'(
 ; CHECK-SAME:  int32) cil managed{{$}}
 ; CHECK-DAG:   {{^}}  ldc.i4.s 100{{$}}
-; CHECK-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; CHECK-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK-DAG:   {{^}}  ldc.i4.7{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
@@ -189,8 +188,8 @@ define i32 @select_consts(i1 zeroext %c) {
 ; CHECK-LABEL: .method {{.*}}'select_then_add'(
 ; CHECK-SAME:  int32, int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  clt{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ldarg.2{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
@@ -207,9 +206,9 @@ define i32 @select_then_add(i32 %a, i32 %b, i32 %c) {
 ; block.
 ; CHECK-LABEL: .method {{.*}}'two_selects'(
 ; CHECK-SAME:  int32, int32, int32, int32) cil managed{{$}}
-; CHECK:       {{^}}  brtrue @BB[[F:[0-9]+]]_[[B1:[0-9]+]]{{$}}
+; CHECK:       {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B1:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B1]]:{{$}}
-; CHECK:       {{^}}  brtrue @BB[[F]]_[[B2:[0-9]+]]{{$}}
+; CHECK:       {{^}}  brtrue.s @BB[[F]]_[[B2:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B2]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'two_selects'{{$}}
@@ -234,7 +233,7 @@ define i32 @two_selects(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; of the original block, and the PHI in cond.end names the join block as its
 ; predecessor, not the entry block (MIRO2). In the CIL the select's brtrue and
 ; label stay as they are. Branch folding and tail duplication turn the zero
-; test into one long-form conditional branch and copy cond.end, which returns
+; test into one short conditional branch and copy cond.end, which returns
 ; the width, into its predecessor, so both paths end in 'ret' and the method
 ; has an early return. The O2 lines check that branch, then the width with its
 ; 'ret' and the other path's 'ret' in either order (CHECK-DAG; the first
@@ -267,13 +266,13 @@ define i32 @two_selects(i32 %a, i32 %b, i32 %c, i32 %d) {
 ; CHECK-LABEL: .method {{.*}}'sel_then_ctlz'(
 ; CHECK-SAME:  int32, int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  cgt.un{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; O0-NOT:      {{b(rtrue|rfalse|eq|ne|lt|le|gt|ge)|switch}}
 ; O0:          {{^}}  ret{{$}}
 ; O0-NEXT:     {{^}}} // end of method 'sel_then_ctlz'{{$}}
-; O2:          {{^}}  {{brtrue|brfalse}} @BB[[F]]_{{[0-9]+}}{{$}}
+; O2:          {{^}}  {{brtrue|brfalse}}.s @BB[[F]]_{{[0-9]+}}{{$}}
 ; O2-NOT:      {{b(rtrue|rfalse|eq|ne|lt|le|gt|ge)|switch}}
 ; O2-DAG:      {{^}}  ldc.i4{{(\.s)?}} 32{{[[:space:]]+}}ret{{$}}
 ; O2-DAG:      {{^}}  ret{{$}}
@@ -311,13 +310,13 @@ define i32 @sel_then_ctlz(i32 %c, i32 %x, i32 %y) {
 ; CHECK-LABEL: .method {{.*}}'sel_then_cttz'(
 ; CHECK-SAME:  native int, native int, native int) cil managed{{$}}
 ; CHECK:       {{^}}  clt.un{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; O0-NOT:      {{b(rtrue|rfalse|eq|ne|lt|le|gt|ge)|switch}}
 ; O0:          {{^}}  ret{{$}}
 ; O0-NEXT:     {{^}}} // end of method 'sel_then_cttz'{{$}}
-; O2:          {{^}}  {{beq|bne\.un|brtrue|brfalse}} @BB[[F]]_{{[0-9]+}}{{$}}
+; O2:          {{^}}  {{beq|bne\.un|brtrue|brfalse}}.s @BB[[F]]_{{[0-9]+}}{{$}}
 ; O2-NOT:      {{b(rtrue|rfalse|eq|ne|lt|le|gt|ge)|switch}}
 ; O2-DAG:      {{^}}  ldc.i4{{(\.s)?}} 64{{[[:space:]]+}}conv.i{{[[:space:]]+}}ret{{$}}
 ; O2-DAG:      {{^}}  ret{{$}}
@@ -353,8 +352,8 @@ define i64 @sel_then_cttz(i64 %c, i64 %x, i64 %y) {
 ; CHECK-LABEL: .method {{.*}}'smin_i32'(
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  clt{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'smin_i32'{{$}}
@@ -366,8 +365,8 @@ define i32 @smin_i32(i32 %a, i32 %b) {
 ; CHECK-LABEL: .method {{.*}}'smax_i32'(
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  cgt{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'smax_i32'{{$}}
@@ -379,8 +378,8 @@ define i32 @smax_i32(i32 %a, i32 %b) {
 ; CHECK-LABEL: .method {{.*}}'umin_i32'(
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  clt.un{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'umin_i32'{{$}}
@@ -392,8 +391,8 @@ define i32 @umin_i32(i32 %a, i32 %b) {
 ; CHECK-LABEL: .method {{.*}}'umax_i32'(
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
 ; CHECK:       {{^}}  cgt.un{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'umax_i32'{{$}}
@@ -405,8 +404,8 @@ define i32 @umax_i32(i32 %a, i32 %b) {
 ; CHECK-LABEL: .method {{.*}}'smin_i64'(
 ; CHECK-SAME:  native int, native int) cil managed{{$}}
 ; CHECK:       {{^}}  clt{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'smin_i64'{{$}}
@@ -418,8 +417,8 @@ define i64 @smin_i64(i64 %a, i64 %b) {
 ; CHECK-LABEL: .method {{.*}}'umax_i64'(
 ; CHECK-SAME:  native int, native int) cil managed{{$}}
 ; CHECK:       {{^}}  cgt.un{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0:          {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0:          {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'umax_i64'{{$}}

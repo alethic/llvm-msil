@@ -17,6 +17,8 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/CLI/BCLMembers.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -72,14 +74,29 @@ void MSILTargetAsmStreamer::emitAssembly(StringRef Name) {
 }
 
 void MSILTargetAsmStreamer::emitMethodBegin(const MSILMethodDecl &M) {
-  assert(M.Sig && "a method needs a signature");
   SmallString<128> Str;
   raw_svector_ostream OS(Str);
-  OS << ".method " << (M.Public ? "public" : "assembly") << " static ";
-  MSIL::printResult(OS, *M.Sig);
-  OS << ' ';
-  MSIL::printQuotedName(OS, M.Name);
-  MSIL::printParamList(OS, *M.Sig);
+  switch (M.Kind) {
+  case MSILMethodKind::Function:
+    assert(M.Sig && "a method needs a signature");
+    OS << ".method " << (M.Public ? "public" : "assembly") << " static ";
+    MSIL::printResult(OS, *M.Sig);
+    OS << ' ';
+    MSIL::printQuotedName(OS, M.Name);
+    MSIL::printParamList(OS, *M.Sig);
+    break;
+  case MSILMethodKind::ModuleInitializer:
+    // The runtime runs <Module>::.cctor before any code of the module.
+    OS << ".method private hidebysig specialname rtspecialname static void "
+          ".cctor()";
+    break;
+  case MSILMethodKind::EntryPoint:
+    // The only method that takes a managed array (decision D27).
+    OS << ".method private hidebysig static int32 ";
+    MSIL::printQuotedName(OS, M.Name);
+    OS << "(string[] args)";
+    break;
+  }
   // One raw text for both lines: a pending verbose-asm comment ("-- Begin
   // function") then goes after the brace and the header line stays exact.
   OS << " cil managed\n{";
@@ -92,15 +109,19 @@ void MSILTargetAsmStreamer::emitMaxStack(unsigned N) {
   emitLine("  .maxstack " + Twine(N));
 }
 
-void MSILTargetAsmStreamer::emitLocals(ArrayRef<MSIL::ValType> Locals) {
+void MSILTargetAsmStreamer::emitLocals(ArrayRef<cli::TypeSig> Locals) {
   if (Locals.empty())
     return;
   SmallString<128> Str;
   raw_svector_ostream OS(Str);
-  // Never 'init' (decision D13).
+  // Never 'init' (decision D13). Locals are primitive types and arrays of
+  // them, which canonical listing v1 spells as ILAsm does.
   OS << "  .locals (";
-  interleaveComma(Locals, OS,
-                  [&OS](MSIL::ValType T) { MSIL::printValType(OS, T); });
+  interleaveComma(Locals, OS, [&OS](const cli::TypeSig &T) {
+    cli::printTypeSig(OS, T, [](raw_ostream &, uint32_t) {
+      reportFatalInternalError("MSIL: a local of a class or value type");
+    });
+  });
   OS << ')';
   emitLine(OS.str());
 }
@@ -126,10 +147,12 @@ void MSILTargetAsmStreamer::emitPInvoke(const MSILMethodDecl &M, StringRef Lib,
     OS << " as ";
     MSIL::printQuotedString(OS, Entry);
   }
-  // 64-bit targets have one native convention; stdcall is for 32-bit Windows
-  // in a later phase.
-  OS << (M.Sig->CC == MSIL::CallConv::UnmanagedStdcall ? " stdcall) "
-                                                       : " cdecl) ");
+  // The entry point is bound exactly as given (nomangle: no A/W or
+  // decorated-name probing; ImplMap flags 0x0201, plan 5.10.11). 64-bit
+  // targets have one native convention; stdcall is for 32-bit Windows in a
+  // later phase.
+  OS << (M.Sig->CC == MSIL::CallConv::UnmanagedStdcall ? " nomangle stdcall) "
+                                                       : " nomangle cdecl) ");
   MSIL::printResult(OS, *M.Sig);
   OS << ' ';
   MSIL::printQuotedName(OS, M.Name);
@@ -148,7 +171,9 @@ void MSILTargetAsmStreamer::emitDataImage(StringRef TypeName,
   // A value type exactly as large as the image, so the RVA field covers it.
   OS << ".class private explicit ansi sealed ";
   MSIL::printQuotedName(OS, TypeName);
-  OS << " extends [mscorlib]System.ValueType";
+  OS << " extends ";
+  cli::printBCLMemberRef(OS, cli::BCLMemberId::ValueType,
+                         cli::MscorlibAssembly);
   emitLine(OS.str());
   emitLine("{");
   emitLine("  .pack 1");
@@ -201,4 +226,8 @@ void MSILTargetAsmStreamer::emitAddressField(StringRef Name, bool Public,
   emitLine(OS.str());
 }
 
-void MSILTargetAsmStreamer::emitILLine(const Twine &Line) { emitLine(Line); }
+void MSILTargetAsmStreamer::emitComment(const Twine &Text) {
+  emitLine("// " + Text);
+}
+
+void MSILTargetAsmStreamer::emitBlankLine() { emitLine(""); }

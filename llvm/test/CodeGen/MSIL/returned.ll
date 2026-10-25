@@ -81,7 +81,7 @@ define i32 @do_something_else(i32 %a, i32 returned %b) {
 ; O2-LABEL: .method {{.*}}'_Z3foov'(
 ; O2-NEXT:  {{^\{$}}
 ; O2-NEXT:  {{^}}  .maxstack 1{{$}}
-; O2-NEXT:  {{^}}  ldc.i4 1{{$}}
+; O2-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; O2-NEXT:  {{^}}  conv.i{{$}}
 ; O2-NEXT:  {{^}}  call native int '_Znwm'(native int){{$}}
 ; O2-NEXT:  {{^}}  call native int '_ZN5AppleC1Ev'(native int){{$}}
@@ -90,7 +90,7 @@ define i32 @do_something_else(i32 %a, i32 returned %b) {
 ; O0-NEXT:  {{^\{$}}
 ; O0-NEXT:  {{^}}  .maxstack 1{{$}}
 ; O0-NEXT:  {{^}}  .locals (native int){{$}}
-; O0-NEXT:  {{^}}  ldc.i4 1{{$}}
+; O0-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; O0-NEXT:  {{^}}  conv.i{{$}}
 ; O0-NEXT:  {{^}}  call native int '_Znwm'(native int){{$}}
 ; O0-NEXT:  {{^}}  stloc.0{{$}}

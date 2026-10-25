@@ -92,7 +92,7 @@ int main(void) {
 // module initializer fills in), the function's address field, the module
 // initializer and the entry point.
 // CHECK:      {{^}}// ---- undefined external functions: P/Invoke ----{{$}}
-// CHECK-NEXT: {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+// CHECK-NEXT: {{^}}.method public hidebysig static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 // CHECK-EMPTY:
 // CHECK-NEXT: {{^}}// ---- data segment: 56 bytes (56 initialized + 0 zero), align {{[0-9]+}} ----{{$}}
 // CHECK-NEXT: {{^}}.class private explicit ansi sealed '<msil>image_t' extends [mscorlib]System.ValueType{{$}}
@@ -121,23 +121,23 @@ int main(void) {
 // CHECK:      {{^}}  stsfld native int '<msil>data'{{$}}
 // CHECK-NEXT: {{^}}  ldsfld native int '<msil>data'{{$}}
 // CHECK-NEXT: {{^}}  ldsflda valuetype '<msil>image_t' '<msil>image'{{$}}
-// CHECK-NEXT: {{^}}  ldc.i4 56{{$}}
+// CHECK-NEXT: {{^}}  ldc.i4.s 56{{$}}
 // CHECK-NEXT: {{^}}  cpblk{{$}}
 // CHECK:      {{^}}  stsfld native int 'fib_fn'{{$}}
 // CHECK-NEXT: {{^}}  ldftn int32 'fib'(int32){{$}}
 // CHECK-NEXT: {{^}}  stsfld native int '<msil>fn_fib'{{$}}
 // CHECK-NEXT: {{^}}  ldsfld native int '<msil>data'{{$}}
-// CHECK-NEXT: {{^}}  ldc.i4 32{{$}}
+// CHECK-NEXT: {{^}}  ldc.i4.s 32{{$}}
 // CHECK-NEXT: {{^}}  add{{$}}
 // CHECK-NEXT: {{^}}  ldsfld native int '.str'{{$}}
 // CHECK-NEXT: {{^}}  stind.i{{$}}
 // CHECK-NEXT: {{^}}  ldsfld native int '<msil>data'{{$}}
-// CHECK-NEXT: {{^}}  ldc.i4 40{{$}}
+// CHECK-NEXT: {{^}}  ldc.i4.s 40{{$}}
 // CHECK-NEXT: {{^}}  add{{$}}
 // CHECK-NEXT: {{^}}  ldsfld native int '.str.1'{{$}}
 // CHECK-NEXT: {{^}}  stind.i{{$}}
 // CHECK-NEXT: {{^}}  ldsfld native int '<msil>data'{{$}}
-// CHECK-NEXT: {{^}}  ldc.i4 48{{$}}
+// CHECK-NEXT: {{^}}  ldc.i4.s 48{{$}}
 // CHECK-NEXT: {{^}}  add{{$}}
 // CHECK-NEXT: {{^}}  ldsfld native int '<msil>fn_fib'{{$}}
 // CHECK-NEXT: {{^}}  stind.i{{$}}

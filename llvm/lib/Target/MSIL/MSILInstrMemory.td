@@ -13,8 +13,10 @@
 /// An address is one native int (I64) operand: CIL has no offset or index
 /// operands, so address arithmetic is explicit (isLegalAddressingMode accepts
 /// [reg] only). The memflags_op operand holds the 'unaligned.' and 'volatile.'
-/// prefixes (MSIL::MemFlags); instruction selection sets it to 0 and
-/// MSILSetMemFlags fills it from the instruction's memory operands.
+/// prefixes (MSIL::MemFlags); instruction selection sets it to 0,
+/// MSILSetMemFlags fills it from the instruction's memory operands, and
+/// MSILMCInstLower emits the prefixes as CIL_Unaligned and CIL_Volatile
+/// before the access.
 ///
 //===----------------------------------------------------------------------===//
 
@@ -60,7 +62,7 @@ def MSILmemmove : SDNode<"MSILISD::MEMMOVE", SDT_MSILMemMove,
 multiclass Load<MSILRegClass rc, string name, bits<16> cilop> {
   let hasSideEffects = 0, mayLoad = 1, mayStore = 0 in
   defm "" : I<(outs rc:$dst), (ins memflags_op:$flags, I64:$addr), [],
-              "${flags}" # name, cilop>;
+              name, cilop>;
 }
 
 defm LDIND_I1 : Load<I32, "ldind.i1", 0x46>;
@@ -77,7 +79,7 @@ defm LDIND_R8 : Load<F64, "ldind.r8", 0x4F>;
 multiclass Store<MSILRegClass rc, string name, bits<16> cilop> {
   let hasSideEffects = 0, mayLoad = 0, mayStore = 1 in
   defm "" : I<(outs), (ins memflags_op:$flags, I64:$addr, rc:$val), [],
-              "${flags}" # name, cilop>;
+              name, cilop>;
 }
 
 defm STIND_I1 : Store<I32, "stind.i1", 0x52>;
@@ -126,11 +128,11 @@ def : StorePat<i32, I32, truncstorei16, STIND_I2>;
 // III.3.36); MSILSetMemFlags sets it from the memory operands.
 let hasSideEffects = 0, mayLoad = 1, mayStore = 1 in
 defm CPBLK : I<(outs), (ins memflags_op:$flags, I64:$dst, I64:$src, I32:$len),
-               [], "${flags}cpblk", 0xFE17>;
+               [], "cpblk", 0xFE17>;
 let hasSideEffects = 0, mayLoad = 0, mayStore = 1 in
 defm INITBLK : I<(outs),
                  (ins memflags_op:$flags, I64:$dst, I32:$val, I32:$len),
-                 [], "${flags}initblk", 0xFE18>;
+                 [], "initblk", 0xFE18>;
 
 def : Pat<(MSILcpblk I64:$dst, I64:$src, I32:$len),
           (CPBLK 0, I64:$dst, I64:$src, I32:$len)>;
@@ -143,12 +145,13 @@ def : Pat<(MSILinitblk I64:$dst, I32:$val, I32:$len),
 // runtime. 'conv.i8; dup' turns the native int length into both int64
 // arguments (the destination size and the byte count); the addresses stay
 // native int (PEVerify's allowed 'Unexpected type on the stack', decision
-// D21). It takes no prefixes: a volatile memmove is an ordinary call.
+// D21). It takes no prefixes: a volatile memmove is an ordinary call. The
+// callee is the BCL member Buffer_MemoryCopy (llvm/CLI/BCLMembers.def), which
+// MSILMCInstLower names.
 let hasSideEffects = 0, mayLoad = 1, mayStore = 1, StackPeakExtra = 1 in
 defm MEMMOVE : I<(outs), (ins I64:$src, I64:$dst, I64:$len),
                  [(MSILmemmove I64:$src, I64:$dst, I64:$len)],
-                 "conv.i8\n  dup\n  call void [mscorlib]System.Buffer::"
-                 "MemoryCopy(void*, void*, int64, int64)">;
+                 "conv.i8\n  dup\n  call">;
 
 //===----------------------------------------------------------------------===//
 // Fences (decision D36).
@@ -160,11 +163,11 @@ defm MEMMOVE : I<(outs), (ins I64:$src, I64:$dst, I64:$len),
 // keeps every memory access on its side: MachineInstr::hasOrderedMemoryRef is
 // true, the schedulers treat it as a barrier, and MSILRegStackify's query()
 // counts it as a write with side effects. (mayStore = 1 would not match the
-// atomic_fence pattern, which TableGen checks.)
+// atomic_fence pattern, which TableGen checks.) The callee is the BCL member
+// Interlocked_MemoryBarrier (llvm/CLI/BCLMembers.def), which MSILMCInstLower
+// names.
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
-defm MEMORY_BARRIER : I<(outs), (ins), [],
-                        "call void [mscorlib]System.Threading.Interlocked::"
-                        "MemoryBarrier()", 0x28>;
+defm MEMORY_BARRIER : I<(outs), (ins), [], "call", 0x28>;
 
 // atomic_fence (ordering, scope). A single-thread fence (scope 0, clang's
 // translation of 'asm volatile("" ::: "memory")' and of

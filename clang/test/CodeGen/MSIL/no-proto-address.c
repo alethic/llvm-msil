@@ -50,7 +50,7 @@
 // OPT-LABEL: {{^}}.method {{.*}} 'call'(
 // OPT:       {{^}}  call int32 'puts'(native int){{$}}
 // OPT:       {{^}}} // end of method 'call'{{$}}
-// OPT:       {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+// OPT:       {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 
 int puts();
 

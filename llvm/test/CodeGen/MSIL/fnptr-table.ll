@@ -166,7 +166,7 @@ define i32 @call_slot2(i32 %a, i32 %b) {
 ; O2-NEXT:     {{^}}  ldsfld native int 'vt'{{$}}
 ; O2-NEXT:     {{^}}  ldind.i4{{$}}
 ; O2-NEXT:     {{^}}  ldsfld native int 'vt'{{$}}
-; O2-NEXT:     {{^}}  {{ldc\.i4(\.s)? 8$}}
+; O2-NEXT:     {{^}}  {{ldc\.i4\.8$}}
 ; O2-NEXT:     {{^}}  add{{$}}
 ; O2-NEXT:     {{^}}  ldind.i{{$}}
 ; O0:          {{^}}  ldind.i4{{$}}
@@ -229,7 +229,7 @@ define void @set_slot0() {
 ; CHECK-NEXT:  {{^}}  ldind.i{{$}}
 ; CHECK-NEXT:  {{^}}  calli [[BIN_RET]][[BIN_PARAMS]]{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
-; CHECK:       {{^}}  bne.un @BB{{[0-9]+}}_1{{$}}
+; CHECK:       {{^}}  bne.un.s @BB{{[0-9]+}}_1{{$}}
 ; CHECK:       {{^}}} // end of method 'sum_all'{{$}}
 define i32 @sum_all(i32 %a, i32 %b) {
 entry:
@@ -251,8 +251,8 @@ exit:
 ; ---- module trailer ---------------------------------------------------------
 
 ; CHECK:       {{^}}// ---- undefined external functions: P/Invoke ----{{$}}
-; LNX-NEXT:    {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'putchar'(int32) cil managed preservesig {}{{$}}
-; WIN-NEXT:    {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'putchar'(int32) cil managed preservesig {}{{$}}
+; LNX-NEXT:    {{^}}.method public hidebysig static pinvokeimpl("libc" nomangle cdecl) int32 'putchar'(int32) cil managed preservesig {}{{$}}
+; WIN-NEXT:    {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) int32 'putchar'(int32) cil managed preservesig {}{{$}}
 
 ; Every slot of the image that holds a function address is zero; only the
 ; i32 of vt is data.
@@ -292,7 +292,7 @@ exit:
 ; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>fn_op_add'{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>data'{{$}}
-; CHECK-NEXT:  {{^}}  {{ldc\.i4(\.s)? 8$}}
+; CHECK-NEXT:  {{^}}  {{ldc\.i4\.8$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>fn_op_sub'{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}

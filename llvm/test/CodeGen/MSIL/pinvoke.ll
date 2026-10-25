@@ -2,7 +2,7 @@
 ; decision D14, M8.a and M8.c, plan 5.1; recon cil-runtime.md e08): every
 ; undefined function that the module calls and that is a Phase-1 import gets
 ; one declaration after the methods,
-;   .method public hidebysig static pinvokeimpl("<lib>" cdecl) <ret> '<name>'(<params>) cil managed preservesig {}
+;   .method public hidebysig static pinvokeimpl("<lib>" nomangle cdecl) <ret> '<name>'(<params>) cil managed preservesig {}
 ; with the same blittable signature as its call sites ('call <ret>
 ; '<name>'(<params>)'): int32, native int, float32, float64 or void, and i8 or
 ; i16 arguments and results widened to int32. The library depends on the
@@ -335,7 +335,7 @@ define i32 @call_nflag(i32 %x) {
 ; CHECK-NEXT:  {{^}}  call int32 'nflag'(int32){{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  and{{$}}
-; CHECK-NEXT:  {{^}}  {{(brfalse|brtrue) @BB[0-9]+_[0-9]+$}}
+; CHECK-NEXT:  {{^}}  {{(brfalse|brtrue)\.s @BB[0-9]+_[0-9]+$}}
 ; CHECK:       {{^}}} // end of method 'branch_nflag'{{$}}
 define i32 @branch_nflag(i32 %x) {
 entry:
@@ -395,24 +395,24 @@ define void @call_quoted(ptr %p) {
 ; HYPOTF-NEXT:  {{^}}} // end of method 'math_hypotf'{{$}}
 
 ; CHECK-NOT:   {{^}}.method {{(public|assembly) static}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" cdecl) int32 'putchar'(int32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-; HYPOT-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'hypot'(float64, float64) cil managed preservesig {}{{$}}
-; HYPOTF-DAG:  {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'hypotf'(float32, float32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'floorf'(float32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" cdecl) float32 'fmodf'(float32, float32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" cdecl) int32 'mylib_add'(int32, int32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" as "real_name" cdecl) native int 'renamed'(native int) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("native.lib.so.2" cdecl) void 'log_msg'(native int) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" cdecl) int32 'narrow'(int32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" cdecl) int32 'nbyte'(int32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" cdecl) int32 'nsbyte'(int32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" cdecl) int32 'nflag'(int32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("C:\134libs\134foo.dll" cdecl) int32 'winpath'(int32) cil managed preservesig {}{{$}}
-; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("my\042lib" as "entry\134name" cdecl) void 'quoted'(native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[CLIB]]" nomangle cdecl) int32 'putchar'(int32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; HYPOT-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'hypot'(float64, float64) cil managed preservesig {}{{$}}
+; HYPOTF-DAG:  {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'hypotf'(float32, float32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'floorf'(float32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("[[MLIB]]" nomangle cdecl) float32 'fmodf'(float32, float32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) int32 'mylib_add'(int32, int32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" as "real_name" nomangle cdecl) native int 'renamed'(native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("native.lib.so.2" nomangle cdecl) void 'log_msg'(native int) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) int32 'narrow'(int32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) int32 'nbyte'(int32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) int32 'nsbyte'(int32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) int32 'nflag'(int32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("C:\134libs\134foo.dll" nomangle cdecl) int32 'winpath'(int32) cil managed preservesig {}{{$}}
+; CHECK-DAG:   {{^}}.method public hidebysig static pinvokeimpl("my\042lib" as "entry\134name" nomangle cdecl) void 'quoted'(native int) cil managed preservesig {}{{$}}
 ; CHECK-NOT:   {{^}}.method
 
 ; NPINV-COUNT-17:    pinvokeimpl
@@ -462,7 +462,7 @@ source_filename = "pinvoke-nonascii.c"
 ; NONASCII-NEXT: {{^}}  call int32 'myabs'(int32){{$}}
 ; NONASCII-NEXT: {{^}}  ret{{$}}
 ; NONASCII-NEXT: {{^}}} // end of method 'call_myabs'{{$}}
-; NONASCII:      {{^}}.method public hidebysig static pinvokeimpl("caf{{\xC3\xA9}}" as "entr{{\xC3\xA9}}e" cdecl) int32 'myabs'(int32) cil managed preservesig {}{{$}}
+; NONASCII:      {{^}}.method public hidebysig static pinvokeimpl("caf{{\xC3\xA9}}" as "entr{{\xC3\xA9}}e" nomangle cdecl) int32 'myabs'(int32) cil managed preservesig {}{{$}}
 
 declare i32 @myabs(i32) #0
 

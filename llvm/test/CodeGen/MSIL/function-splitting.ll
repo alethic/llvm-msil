@@ -111,7 +111,7 @@
 ; blocks return directly; at -O0 they branch to the block of the phi.
 ; IL-LABEL: .method {{.*}}'foo1'(
 ; IL-SAME:  int32) cil managed{{$}}
-; IL:       brfalse [[COLD:@BB[0-9_]+]]
+; IL:       brfalse.s [[COLD:@BB[0-9_]+]]
 ; IL:       call int32 'bar'()
 ; O2-NEXT:  ret
 ; O2-NEXT:  {{^}}[[COLD]]:

@@ -44,9 +44,10 @@ set(MSIL_TEST_DEPS)
 # msil/test/M2 and the lto pipeline link with msil-ld (lld) and archive with
 # the tree's llvm-ar; %msil_nm is llvm-nm (M14). %msil_canon is llvm-cil-dump
 # --canonical (M17), and check-msil's llvm/test/tools/llvm-cil-dump and
-# llvm-cil-copy run both tools on images that yaml2obj makes.
+# llvm-cil-copy run both tools on images that yaml2obj makes. check-msil's
+# llvm/test/MC/MSIL runs llvm-mc (M18).
 foreach(_msil_dep clang llc opt FileCheck not count split-file llvm-config lld
-    llvm-ar llvm-nm llvm-cil-dump llvm-cil-copy yaml2obj)
+    llvm-ar llvm-nm llvm-cil-dump llvm-cil-copy yaml2obj llvm-mc)
   if(TARGET ${_msil_dep})
     list(APPEND MSIL_TEST_DEPS ${_msil_dep})
   endif()
@@ -55,11 +56,11 @@ endforeach()
 # llvm-as, llvm-ar and the llvm-lib and llvm-dlltool copies of llvm-ar for its
 # inputs, and llvm/test/CodeGen/MSIL/irsymtab-linker-options.ll, which needs
 # llvm-as and llvm-bcanalyzer (M13, M14). M15's native-library tests in
-# lld/test/MSIL also need yaml2obj (in MSIL_TEST_DEPS since M17), llvm-mc and
-# llvm-readobj to make and inspect their native inputs.
+# lld/test/MSIL also need yaml2obj (in MSIL_TEST_DEPS since M17), llvm-mc (in
+# MSIL_TEST_DEPS since M18) and llvm-readobj to make and inspect their native
+# inputs.
 set(_msil_check_deps ${MSIL_TEST_DEPS})
-foreach(_msil_dep llvm-as llvm-bcanalyzer llvm-lib llvm-dlltool llvm-mc
-    llvm-readobj)
+foreach(_msil_dep llvm-as llvm-bcanalyzer llvm-lib llvm-dlltool llvm-readobj)
   if(TARGET ${_msil_dep})
     list(APPEND _msil_check_deps ${_msil_dep})
   endif()
@@ -120,8 +121,10 @@ foreach(_msil_tool llvm-cil-dump llvm-cil-copy)
     list(APPEND _msil_lit_paths ${LLVM_MAIN_SRC_DIR}/test/tools/${_msil_tool})
   endif()
 endforeach()
+# The MC tests of the MSIL target: encodings, fixups and object-form operand
+# spellings (M18).
+list(APPEND _msil_lit_paths ${LLVM_MAIN_SRC_DIR}/test/MC/MSIL)
 list(APPEND _msil_lit_paths ${CMAKE_CURRENT_BINARY_DIR})
-# Phase 2 adds ${LLVM_MAIN_SRC_DIR}/test/MC/MSIL here (M18).
 add_lit_target(check-msil "Running all MSIL tests"
   ${_msil_lit_paths}
   DEPENDS ${_msil_check_deps}

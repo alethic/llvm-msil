@@ -48,10 +48,10 @@
 # RUN:   2>&1 | count 0
 # RUN: %{il} --input-file=pos.il
 # RUN: FileCheck %s --check-prefix=IL-NONE --input-file=pos.il
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" cdecl) int32 'gfn1'() cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" cdecl) int32 'gfn2'(int32) cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("KERNEL32.dll" cdecl) int32 'GetTickCount'() cil managed preservesig {}{{$}}
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("msvcrt.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" nomangle cdecl) int32 'gfn1'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" nomangle cdecl) int32 'gfn2'(int32) cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("KERNEL32.dll" nomangle cdecl) int32 'GetTickCount'() cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("msvcrt.dll" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 ## The %{il} patterns nowhere in the file: for a prefix made only of -DAG
 ## lines, --implicit-check-not checks only the text before the first match.
 # IL-NONE-NOT: public hidebysig static pinvokeimpl
@@ -68,8 +68,8 @@
 # ORD-ROWS:      galias -> foo.dll!real_name [function, -]
 # ORD-ROWS-NEXT: gord -> foo.dll!#5 [function, -]
 # ORD-ROWS-NOT:  {{.}}
-# ORD-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "#5" cdecl) int32 'gord'() cil managed preservesig {}{{$}}
-# ORD-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "real_name" cdecl) int32 'galias'(int32) cil managed preservesig {}{{$}}
+# ORD-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "#5" nomangle cdecl) int32 'gord'() cil managed preservesig {}{{$}}
+# ORD-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" as "real_name" nomangle cdecl) int32 'galias'(int32) cil managed preservesig {}{{$}}
 ## Exactly those two P/Invokes.
 # ORD-PINV-COUNT-2: pinvokeimpl
 # ORD-PINV-NOT:     pinvokeimpl

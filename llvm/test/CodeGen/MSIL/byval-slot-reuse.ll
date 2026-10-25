@@ -179,7 +179,7 @@ define void @ten_calls(ptr %p) {
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.1{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 64[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+ldloc\.0[[:space:]]+call void 'take64x2'\(native int, native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.s 64[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+ldloc\.0[[:space:]]+call void 'take64x2'\(native int, native int\)$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define void @two_in_one_call(ptr %p, ptr %q) {
   call void @take64x2(ptr byval(%struct.S64) align 8 %p, ptr byval(%struct.S64) align 8 %q)
@@ -196,17 +196,17 @@ define void @two_in_one_call(ptr %p, ptr %q) {
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 64[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take64'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.s 64[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take64'\(native int\)$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.1{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 64[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+ldloc\.0[[:space:]]+call void 'take64x2'\(native int, native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.s 64[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+ldloc\.0[[:space:]]+call void 'take64x2'\(native int, native int\)$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.1{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 64[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take64'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.s 64[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take64'\(native int\)$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define void @one_and_two(ptr %p, ptr %q) {
   call void @take64(ptr byval(%struct.S64) align 8 %p)
@@ -224,15 +224,15 @@ define void @one_and_two(ptr %p, ptr %q) {
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take24'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take24'\(native int\)$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.1{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take40'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take40'\(native int\)$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take24'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take24'\(native int\)$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define void @grow(ptr %p, ptr %q) {
   call void @take24(ptr byval(%struct.S24) align 8 %p)
@@ -249,10 +249,10 @@ define void @grow(ptr %p, ptr %q) {
 ; CHECK-NEXT:  {{^}}  localloc{{$}}
 ; CHECK-NEXT:  {{^}}  stloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 15{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 15{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 -16{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s -16{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  and{{$}}
 ; CHECK-NOT:   {{^}}  call
@@ -277,16 +277,16 @@ define void @realign(ptr %p, ptr %q) {
 ; CHECK-NEXT:  {{^}}  localloc{{$}}
 ; CHECK-NEXT:  {{^}}  stloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 15{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 15{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 -16{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s -16{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  and{{$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.[[:digit:]][[:space:]]+ldc\.i4 24[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take24'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.[[:digit:]][[:space:]]+ldc\.i4\.s 24[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take24'\(native int\)$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.1{{$}}
 ; CHECK-NOT:   {{^}}  call
@@ -305,16 +305,16 @@ define void @no_realign16(ptr %p, ptr %q) #0 {
 ; CHECK-NEXT:  {{^}}  localloc{{$}}
 ; CHECK-NEXT:  {{^}}  stloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 15{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 15{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 -16{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s -16{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  and{{$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.[[:digit:]][[:space:]]+ldc\.i4 40[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take24'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.[[:digit:]][[:space:]]+ldc\.i4\.s 40[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call void 'take24'\(native int\)$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.1{{$}}
 ; CHECK-NOT:   {{^}}  call

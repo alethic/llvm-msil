@@ -4,7 +4,7 @@
 ## external 'strdup' searches '_strdup' makes strdup resolve as _strdup does:
 ## the UCRT import member binds it, so the P/Invoke keeps the C name and
 ## takes the alias target as its entry:
-##   pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" cdecl) ... 'strdup'
+##   pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" nomangle cdecl) ... 'strdup'
 ## An archive of such members is no native-only archive: -loldnames finds it
 ## (the windows-msvc driver passes -lucrt -lkernel32 -loldnames, 5.10.4), in
 ## either order of the libraries. An alias whose target nothing defines
@@ -36,8 +36,8 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 main.o lib/oldnames.lib lib/ucrt.lib -o pos.il 2>&1 | count 0
 # RUN: %{il} --input-file=pos.il
 # RUN: FileCheck %s --check-prefix=ALIAS-NONE --input-file=pos.il
-# ALIAS-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
-# ALIAS-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# ALIAS-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" nomangle cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
+# ALIAS-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" nomangle cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
 # ALIAS-DAG: call native int 'strdup'(native int)
 ## No method '_strdup' anywhere in the file: for a prefix made only of -DAG
 ## lines, --implicit-check-not checks only the text before the first match.

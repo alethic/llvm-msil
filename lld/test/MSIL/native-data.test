@@ -77,7 +77,7 @@
 # OBJ-CALL-NEXT: {{^}}>>> referenced by call-foo.o:(main){{$}}
 # RUN: msil-ld --lto-emit-asm --lto-O0 call-foo.o libFUNC.so.1 libOBJECT.so.1 -o fn-call.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=FN-CALL --input-file=fn-call.il
-# FN-CALL:     {{^}}.method assembly hidebysig static pinvokeimpl("libFUNC.so.1" cdecl) int32 'foo'() cil managed preservesig {}{{$}}
+# FN-CALL:     {{^}}.method assembly hidebysig static pinvokeimpl("libFUNC.so.1" nomangle cdecl) int32 'foo'() cil managed preservesig {}{{$}}
 # FN-CALL-NOT: libOBJECT
 
 ## The reference dies with its function at the default -O2.
@@ -90,7 +90,7 @@
 ## A function's address stored in data.
 # RUN: msil-ld --lto-emit-asm --lto-O0 fnaddr.o libc.so.6 -o fnaddr.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=FNADDR --input-file=fnaddr.il
-# FNADDR-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# FNADDR-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 # FNADDR-DAG: ldftn int32 'puts'(native int)
 # FNADDR-DAG: stsfld native int '<msil>fn_puts'
 

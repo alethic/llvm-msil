@@ -259,7 +259,7 @@ define void @shl128_64(i128 %a) {
 
 ; CHECK-LABEL: .method {{.*}}'shl128_var'(
 ; CHECK-SAME:  native int, native int, int32) cil managed{{$}}
-; CHECK:       {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; CHECK:       {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  call void 'use128'(native int, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -273,7 +273,7 @@ define void @shl128_var(i128 %a, i32 %n) {
 
 ; CHECK-LABEL: .method {{.*}}'lshr128_var'(
 ; CHECK-SAME:  native int, native int, int32) cil managed{{$}}
-; CHECK:       {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; CHECK:       {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  call void 'use128'(native int, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -287,7 +287,7 @@ define void @lshr128_var(i128 %a, i32 %n) {
 
 ; CHECK-LABEL: .method {{.*}}'ashr128_var'(
 ; CHECK-SAME:  native int, native int, int32) cil managed{{$}}
-; CHECK:       {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; CHECK:       {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  call void 'use128'(native int, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -303,7 +303,7 @@ define void @ashr128_var(i128 %a, i32 %n) {
 ; CHECK-LABEL: .method {{.*}}'shl128_var128'(
 ; CHECK-SAME:  native int, native int, native int, native int) cil managed{{$}}
 ; CHECK:       {{^}}  conv.i4{{$}}
-; CHECK:       {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; CHECK:       {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; CHECK:       {{^}}  call void 'use128'(native int, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}

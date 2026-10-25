@@ -26,7 +26,7 @@
 # CHECK-DAG: call int32 'nf'([[FIRST]])
 # CHECK-DAG: call int32 'nf_bitcast'([[SECOND]])
 # CHECK-DAG: {{^}}.method assembly static int32 'nf_bitcast'([[SECOND]]) cil managed
-# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libnf.so.1" cdecl) int32 'nf'([[FIRST]]) cil managed preservesig {}{{$}}
+# CHECK-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libnf.so.1" nomangle cdecl) int32 'nf'([[FIRST]]) cil managed preservesig {}{{$}}
 # CHECK-DAG: ldftn int32 'nf'([[FIRST]])
 # CHECK-DAG: stsfld native int '<msil>fn_nf'
 

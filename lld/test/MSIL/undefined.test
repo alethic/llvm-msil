@@ -146,10 +146,10 @@
 # RUN:   --implicit-check-not="public hidebysig static pinvokeimpl" --input-file=lnx.il
 # RUN: FileCheck %s --check-prefix=LNX-NONE --input-file=lnx.il
 
-# WIN-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-# WIN-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
-# LNX-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-# LNX-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+# WIN-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# WIN-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+# LNX-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# LNX-DAG:   {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
 ## The implicit patterns nowhere in the file: for a prefix made only of -DAG
 ## lines, --implicit-check-not checks only the text before the first match.
 # WIN-NONE-NOT: "ucrtbase"
@@ -166,7 +166,7 @@
 # LTO-NAME-NEXT: {{^}}>>> referenced by ld-temp.o
 # RUN: msil-ld --lto-emit-asm printf.o ucrt.lib -o puts.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=WIN-PUTS --implicit-check-not=printf --input-file=puts.il
-# WIN-PUTS: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# WIN-PUTS: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 
 ## __start_myreg and __stop_myreg with a bitcode definition in section
 ## "myreg" (ss.ll): on linux-gnu, with libss.so (which defines both names) or

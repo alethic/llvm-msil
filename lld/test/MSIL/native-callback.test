@@ -171,7 +171,7 @@
 ## No error: an explicit import, a bitcode definition, a dead reference.
 # RUN: msil-ld --lto-emit-asm --lto-O0 explicit.o libc.so.6 -o explicit.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=EXPLICIT --input-file=explicit.il
-# EXPLICIT: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) void 'qsort'(native int, native int, native int, native int) cil managed preservesig {}{{$}}
+# EXPLICIT: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) void 'qsort'(native int, native int, native int, native int) cil managed preservesig {}{{$}}
 # RUN: msil-ld --lto-emit-asm --lto-O0 defined.o libc.so.6 -o defined.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=DEFINED --implicit-check-not=pinvokeimpl --input-file=defined.il
 # DEFINED: {{^}}.method {{.*}}static void 'qsort'(native int, native int, native int, native int) cil managed

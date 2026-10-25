@@ -721,7 +721,7 @@ define i32 @sink_readonly_call_past_load(ptr %p) {
 ; O2-NEXT:     {{^}}  ldc.i4.2{{$}}
 ; O2-NEXT:     {{^}}  clt{{$}}
 ; O2-NEXT:     {{^}}  xor{{$}}
-; O2-NEXT:     {{^}}  beq @BB[[F:[0-9]+]]_2{{$}}
+; O2-NEXT:     {{^}}  beq.s @BB[[F:[0-9]+]]_2{{$}}
 ; O2-NEXT:     {{^}}  ldc.i4.0{{$}}
 ; O2-NEXT:     {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_2:{{$}}
@@ -757,8 +757,8 @@ define i32 @sink_readonly_call_past_load(ptr %p) {
 ; O0-NEXT:     {{^}}  ldloc.s 4{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 5{{$}}
 ; O0-NEXT:     {{^}}  xor{{$}}
-; O0-NEXT:     {{^}}  beq @BB[[F:[0-9]+]]_2{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_1{{$}}
+; O0-NEXT:     {{^}}  beq.s @BB[[F:[0-9]+]]_2{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_1{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_1:{{$}}
 ; O0-NEXT:     {{^}}  ldc.i4.0{{$}}
 ; O0-NEXT:     {{^}}  ret{{$}}
@@ -799,10 +799,10 @@ false:
 ; O2-NEXT:     {{^}}  dup{{$}}
 ; O2-NEXT:     {{^}}  stloc.1{{$}}
 ; O2-NEXT:     {{^}}  ldarg.1{{$}}
-; O2-NEXT:     {{^}}  bge.un @BB[[F:[0-9]+]]_3{{$}}
+; O2-NEXT:     {{^}}  bge.un.s @BB[[F:[0-9]+]]_3{{$}}
 ; O2-NEXT:     {{^}}  ldloc.1{{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
-; O2-NEXT:     {{^}}  blt.un @BB[[F]]_3{{$}}
+; O2-NEXT:     {{^}}  blt.un.s @BB[[F]]_3{{$}}
 ; O2-NEXT:     {{^}}  ldarg.2{{$}}
 ; O2-NEXT:     {{^}}  ldloc.0{{$}}
 ; O2-NEXT:     {{^}}  stind.i4{{$}}
@@ -812,7 +812,7 @@ false:
 ; O0-NEXT:     {{^\{$}}
 ; O0-NEXT:     {{^}}  .maxstack 2{{$}}
 ; O0-NEXT:     {{^}}  .locals (int32, native int){{$}}
-; O0-NEXT:     {{^}}  br @BB[[F:[0-9]+]]_1{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F:[0-9]+]]_1{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_1:{{$}}
 ; O0-NEXT:     {{^}}  ldarg.2{{$}}
 ; O0-NEXT:     {{^}}  ldind.i4{{$}}
@@ -822,22 +822,22 @@ false:
 ; O0-NEXT:     {{^}}  stloc.1{{$}}
 ; O0-NEXT:     {{^}}  ldloc.1{{$}}
 ; O0-NEXT:     {{^}}  ldarg.1{{$}}
-; O0-NEXT:     {{^}}  bge.un @BB[[F]]_4{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_2{{$}}
+; O0-NEXT:     {{^}}  bge.un.s @BB[[F]]_4{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_2{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_2:{{$}}
 ; O0-NEXT:     {{^}}  ldloc.1{{$}}
 ; O0-NEXT:     {{^}}  ldarg.0{{$}}
-; O0-NEXT:     {{^}}  blt.un @BB[[F]]_4{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_3{{$}}
+; O0-NEXT:     {{^}}  blt.un.s @BB[[F]]_4{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_3{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_3:{{$}}
 ; O0-NEXT:     {{^}}  ldarg.2{{$}}
 ; O0-NEXT:     {{^}}  ldloc.0{{$}}
 ; O0-NEXT:     {{^}}  stind.i4{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_4{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_4{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_4:{{$}}
 ; O0-NEXT:     {{^}}  ldc.i4.0{{$}}
-; O0-NEXT:     {{^}}  brtrue @BB[[F]]_1{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_5{{$}}
+; O0-NEXT:     {{^}}  brtrue.s @BB[[F]]_1{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_5{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_5:{{$}}
 ; O0-NEXT:     {{^}}  ret{{$}}
 ; O0-NEXT:     {{^}}} // end of method 'multiple_uses'{{$}}
@@ -942,7 +942,7 @@ entry:
 ; O2-NEXT:     {{^}}@BB[[F:[0-9]+]]_1:{{$}}
 ; O2-NEXT:     {{^}}  ldloc.1{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x40373C083126E979){{$}}
-; O2-NEXT:     {{^}}  bge.un @BB[[F]]_9{{$}}
+; O2-NEXT:     {{^}}  bge.un.s @BB[[F]]_9{{$}}
 ; O2-NEXT:     {{^}}  ldloc.1{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0xBFF0000000000000){{$}}
 ; O2-NEXT:     {{^}}  add{{$}}
@@ -955,7 +955,7 @@ entry:
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0xC0C62CC8F5C28F5C){{$}}
 ; O2-NEXT:     {{^}}  stloc.3{{$}}
 ; O2-NEXT:     {{^}}  ldarg.2{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F]]_5{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F]]_5{{$}}
 ; O2-NEXT:     {{^}}  ldloc.2{{$}}
 ; O2-NEXT:     {{^}}  stloc.3{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_5:{{$}}
@@ -966,11 +966,11 @@ entry:
 ; O2-NEXT:     {{^}}  ldloc.2{{$}}
 ; O2-NEXT:     {{^}}  stloc.3{{$}}
 ; O2-NEXT:     {{^}}  ldarg.3{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F]]_8{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F]]_8{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0xC0C62CC8F5C28F5C){{$}}
 ; O2-NEXT:     {{^}}  stloc.3{{$}}
 ; O2-NEXT:     {{^}}  ldarg.1{{$}}
-; O2-NEXT:     {{^}}  brtrue @BB[[F]]_8{{$}}
+; O2-NEXT:     {{^}}  brtrue.s @BB[[F]]_8{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0xBFCE147AE147B000){{$}}
 ; O2-NEXT:     {{^}}  stloc.3{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_8:{{$}}
@@ -980,14 +980,14 @@ entry:
 ; O2-NEXT:     {{^}}  stloc.3{{$}}
 ; O2-NEXT:     {{^}}  ldloc.1{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x40373C083126E979){{$}}
-; O2-NEXT:     {{^}}  blt @BB[[F]]_3{{$}}
+; O2-NEXT:     {{^}}  blt.s @BB[[F]]_3{{$}}
 ; O2-NEXT:     {{^}}@BB[[F]]_9:{{$}}
 ; O2-NEXT:     {{^}}  ldloc.1{{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x3FF0000000000000){{$}}
 ; O2-NEXT:     {{^}}  add{{$}}
 ; O2-NEXT:     {{^}}  stloc.1{{$}}
 ; O2-NEXT:     {{^}}  ldarg.s 4{{$}}
-; O2-NEXT:     {{^}}  brfalse @BB[[F]]_1{{$}}
+; O2-NEXT:     {{^}}  brfalse.s @BB[[F]]_1{{$}}
 ; O2-NEXT:     {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}} // end of method 'multiple_defs'{{$}}
 ; O0-NEXT:     {{^\{$}}
@@ -999,7 +999,7 @@ entry:
 ; O0-NEXT:     {{^}}  stloc.1{{$}}
 ; O0-NEXT:     {{^}}  ldloc.0{{$}}
 ; O0-NEXT:     {{^}}  stloc.2{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F:[0-9]+]]_1{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F:[0-9]+]]_1{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_1:{{$}}
 ; O0-NEXT:     {{^}}  ldloc.2{{$}}
 ; O0-NEXT:     {{^}}  stloc.3{{$}}
@@ -1014,7 +1014,7 @@ entry:
 ; O0-NEXT:     {{^}}  ldloc.3{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 5{{$}}
 ; O0-NEXT:     {{^}}  bge.un @BB[[F]]_9{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_2{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_2{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_2:{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 6{{$}}
 ; O0-NEXT:     {{^}}  stloc.s 8{{$}}
@@ -1031,7 +1031,7 @@ entry:
 ; O0-NEXT:     {{^}}  ldc.r8 float64(0xC0C62CC8F5C28F5C){{$}}
 ; O0-NEXT:     {{^}}  stloc.s 12{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 11{{$}}
-; O0-NEXT:     {{^}}  brtrue @BB[[F]]_4{{$}}
+; O0-NEXT:     {{^}}  brtrue.s @BB[[F]]_4{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 9{{$}}
 ; O0-NEXT:     {{^}}  stloc.s 12{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_4:{{$}}
@@ -1046,8 +1046,8 @@ entry:
 ; O0-NEXT:     {{^}}  ldloc.s 9{{$}}
 ; O0-NEXT:     {{^}}  stloc.s 15{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 14{{$}}
-; O0-NEXT:     {{^}}  brtrue @BB[[F]]_8{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_5{{$}}
+; O0-NEXT:     {{^}}  brtrue.s @BB[[F]]_8{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_5{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_5:{{$}}
 ; O0-NEXT:     {{^}}  ldarg.1{{$}}
 ; O0-NEXT:     {{^}}  ldc.i4.2{{$}}
@@ -1060,13 +1060,13 @@ entry:
 ; O0-NEXT:     {{^}}  ldc.r8 float64(0xC0C62CC8F5C28F5C){{$}}
 ; O0-NEXT:     {{^}}  stloc.s 18{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 16{{$}}
-; O0-NEXT:     {{^}}  brtrue @BB[[F]]_7{{$}}
+; O0-NEXT:     {{^}}  brtrue.s @BB[[F]]_7{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 17{{$}}
 ; O0-NEXT:     {{^}}  stloc.s 18{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_7:{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 18{{$}}
 ; O0-NEXT:     {{^}}  stloc.s 15{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_8{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_8{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_8:{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 15{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 13{{$}}
@@ -1081,7 +1081,7 @@ entry:
 ; O0-NEXT:     {{^}}  ldloc.3{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 20{{$}}
 ; O0-NEXT:     {{^}}  blt @BB[[F]]_2{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_9{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_9{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_9:{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 7{{$}}
 ; O0-NEXT:     {{^}}  stloc.s 21{{$}}
@@ -1099,7 +1099,7 @@ entry:
 ; O0-NEXT:     {{^}}  stloc.2{{$}}
 ; O0-NEXT:     {{^}}  ldloc.s 23{{$}}
 ; O0-NEXT:     {{^}}  brfalse @BB[[F]]_1{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_10{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_10{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_10:{{$}}
 ; O0-NEXT:     {{^}}  ret{{$}}
 ; O0-NEXT:     {{^}}} // end of method 'multiple_defs'{{$}}
@@ -1276,7 +1276,7 @@ define i32 @stackify_past_epilogue() {
 ; O2-NEXT:     {{^}}  add{{$}}
 ; O2-NEXT:     {{^}}  dup{{$}}
 ; O2-NEXT:     {{^}}  stloc.0{{$}}
-; O2-NEXT:     {{^}}  bne.un @BB[[F]]_1{{$}}
+; O2-NEXT:     {{^}}  bne.un.s @BB[[F]]_1{{$}}
 ; O2-NEXT:     {{^}}  ret{{$}}
 ; O2-NEXT:     {{^}}} // end of method 'stackify_indvar'{{$}}
 ; O0-NEXT:     {{^\{$}}
@@ -1284,7 +1284,7 @@ define i32 @stackify_past_epilogue() {
 ; O0-NEXT:     {{^}}  .locals (int32, int32, int32){{$}}
 ; O0-NEXT:     {{^}}  ldc.i4.0{{$}}
 ; O0-NEXT:     {{^}}  stloc.0{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F:[0-9]+]]_1{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F:[0-9]+]]_1{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_1:{{$}}
 ; O0-NEXT:     {{^}}  ldloc.0{{$}}
 ; O0-NEXT:     {{^}}  stloc.1{{$}}
@@ -1304,8 +1304,8 @@ define i32 @stackify_past_epilogue() {
 ; O0-NEXT:     {{^}}  stloc.0{{$}}
 ; O0-NEXT:     {{^}}  ldloc.2{{$}}
 ; O0-NEXT:     {{^}}  ldarg.0{{$}}
-; O0-NEXT:     {{^}}  bne.un @BB[[F]]_1{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_2{{$}}
+; O0-NEXT:     {{^}}  bne.un.s @BB[[F]]_1{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_2{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_2:{{$}}
 ; O0-NEXT:     {{^}}  ret{{$}}
 ; O0-NEXT:     {{^}}} // end of method 'stackify_indvar'{{$}}

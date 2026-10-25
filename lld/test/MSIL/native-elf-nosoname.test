@@ -28,11 +28,11 @@
 # RUN: %{il} --check-prefix=SO -DMOD=libbar.so.2 --input-file=exact.il
 # RUN: msil-ld --lto-emit-asm --lto-O0 main.o libz.so.1.3.1 -o z.il 2>&1 | count 0
 # RUN: %{il} --check-prefix=SO -DMOD=libz.so.1.3.1 --input-file=z.il
-# SO: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'bar_fn'(int32) cil managed preservesig {}{{$}}
+# SO: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) int32 'bar_fn'(int32) cil managed preservesig {}{{$}}
 
 # RUN: msil-ld --lto-emit-asm --lto-O0 foo.o renamed.so -o renamed.il 2>&1 | count 0
 # RUN: %{il} --check-prefix=RENAMED --implicit-check-not=renamed.so --input-file=renamed.il
-# RENAMED: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
+# RENAMED: {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" nomangle cdecl) int32 'foo'(int32) cil managed preservesig {}{{$}}
 
 #--- bar.yaml
 --- !ELF

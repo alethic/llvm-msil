@@ -8,9 +8,10 @@
 # clang/test/Driver/msil-toolchain.c). Every MSIL triple of plan decision D6
 # takes the same path, whether assembly output (-filetype asm) or none
 # (-filetype null) is asked for, and the result is a clean error, not a crash.
-# '-filetype obj' is not tested: cc1as asserts that the target has an
-# MCAsmBackend before it creates the parser, which is true of every target
-# without one, not only MSIL.
+# From M18 the target registers MSILAsmBackend and MSILMCCodeEmitter, so
+# '-filetype obj' passes the assertion of cc1as that the target has an
+# MCAsmBackend and reaches the same IsMSIL error. M18's gate step 20 checks
+# that on the four D6 triples, and M19 adds the test lines for it here.
 
 # REQUIRES: msil-registered-target
 

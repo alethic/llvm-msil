@@ -44,22 +44,22 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 explicit.o libc.so.6 -o explicit-libc.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=EXPLICIT --input-file=explicit-libc.il
 # RUN: FileCheck %s --check-prefix=NOT-LIBC --input-file=explicit-libc.il
-# NOT-LIBC-NOT: "libc.so.6" cdecl) native int 'strlen'
-# EXPLICIT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("custom.dll" as "custom_puts" cdecl) int32 'my_puts'(native int) cil managed preservesig {}{{$}}
-# EXPLICIT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-# EXPLICIT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("mylibc.so" cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# NOT-LIBC-NOT: "libc.so.6" nomangle cdecl) native int 'strlen'
+# EXPLICIT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("custom.dll" as "custom_puts" nomangle cdecl) int32 'my_puts'(native int) cil managed preservesig {}{{$}}
+# EXPLICIT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+# EXPLICIT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("mylibc.so" nomangle cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
 
 ## import_name alone: the entry binds natively, under the C name.
 # RUN: msil-ld --lto-emit-asm --lto-O0 entry.o libc.so.6 -o entry.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=ENTRY --input-file=entry.il
-# ENTRY: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" as "strlen" cdecl) native int 'my_strlen'(native int) cil managed preservesig {}{{$}}
+# ENTRY: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" as "strlen" nomangle cdecl) native int 'my_strlen'(native int) cil managed preservesig {}{{$}}
 
 ## Two declarations that disagree: the first input's attributes.
 # RUN: msil-ld --lto-emit-asm --lto-O0 first.o second.o -o first-second.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=MISMATCH -DMOD=first.dll --input-file=first-second.il
 # RUN: msil-ld --lto-emit-asm --lto-O0 second.o first.o -o second-first.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=MISMATCH -DMOD=second.dll --input-file=second-first.il
-# MISMATCH: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) int32 'shared_imp'(int32) cil managed preservesig {}{{$}}
+# MISMATCH: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) int32 'shared_imp'(int32) cil managed preservesig {}{{$}}
 
 ## A definition wins over a declaration with import attributes.
 # RUN: msil-ld --lto-emit-asm --lto-O0 decl.o def.o -o defined.il 2>&1 | count 0

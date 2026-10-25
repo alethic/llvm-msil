@@ -25,11 +25,23 @@
 # give each input once, the list is sorted, and git is asked for HEAD once
 # per path; find_inputs() prints 'note: --exclude <path> matches no input'
 # for exactly the excludes that removed nothing. Nothing runs git, clang or
-# llc. M18 and M20 extend the script; their options get cases here.
+# llc. M18's --normalize forms (5.12.4, M18 gate step 14: on both sides short
+# branches become long ones, 'ldc.i4.m1', 'ldc.i4.<n>' and 'ldc.i4.s <n>'
+# become 'ldc.i4 <n>' and ' nomangle cdecl' becomes ' cdecl') is checked on
+# an old and a new copy of the fixture: an .il whose copies differ only in
+# those forms, in both directions, gives 0, lists nothing and prints
+# '--normalize forms: ... 1 of them differ only in those forms' (without
+# --normalize the same trees differ); with a branch label changed as well it
+# is listed and diffed between the normalized texts, while another .il that
+# differs only in a form is counted, not listed; the same kinds of change in
+# an .err file are listed (only .il files are normalized); --normalize
+# without --compare exits 2 and creates no --out. M20 extends the script
+# too; its options get cases here.
 
 # RUN: rm -rf %t
 # RUN: %python %S/Inputs/il-snapshot/il-snapshot-selftest.py %S/../../utils/il-snapshot.py %t > %t.log
 # RUN: %{harness_check} contains %t.log "^ok: compare equal$" "^ok: compare stamp-only$" "^ok: compare changed-il$" "^ok: compare changed-err$" "^ok: compare changed-eol$" "^ok: compare missing$" "^ok: compare extra$" "^ok: compare mixed$"
 # RUN: %{harness_check} contains %t.log "^ok: usage compare-not-a-directory$" "^ok: usage out-inside-compare$" "^ok: usage out-inside-repository$" "^ok: usage out-holds-repository$" "^ok: usage no-path$" "^ok: usage jobs-zero$"
 # RUN: %{harness_check} contains %t.log "^ok: exclude file$" "^ok: exclude directory$" "^ok: exclude boundary$" "^ok: exclude no-match$" "^ok: exclude non-input$" "^ok: exclude duplicates$" "^ok: exclude sorted$" "^ok: exclude note$"
+# RUN: %{harness_check} contains %t.log "^ok: compare normalize-forms$" "^ok: compare normalize-real-difference$" "^ok: compare normalize-err-exact$" "^ok: usage normalize-without-compare$"
 # RUN: %{harness_check} lacks %t.log "^FAIL"

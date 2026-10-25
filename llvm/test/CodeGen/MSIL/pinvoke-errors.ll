@@ -180,8 +180,8 @@ source_filename = "undef.c"
 ; UNDEF-IL-LABEL: .method {{.*}}'say'(
 ; UNDEF-IL:       {{^}}  call int32 'puts'(native int){{$}}
 ; UNDEF-IL-NOT:   pinvokeimpl
-; UNDEF-LNX:      {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; UNDEF-WIN:      {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; UNDEF-LNX:      {{^}}.method public hidebysig static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; UNDEF-WIN:      {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 ; UNDEF-IL-NOT:   pinvokeimpl
 ; UNDEF-IL:       {{^}}.field public static initonly native int 'on_error'{{( |$)}}
 ; UNDEF-IL-EMPTY:
@@ -298,7 +298,7 @@ source_filename = "mingw-math.c"
 ; MINGW-IL:       {{^}}  call float32 'frexpf'(float32, native int){{$}}
 ; MINGW-IL-LABEL: .method {{.*}}'use_sqrt'(
 ; MINGW-IL:       {{^}}  call float64 'sqrt'(float64){{$}}
-; MINGW-IL:       {{^}}.method public hidebysig static pinvokeimpl("msvcrt" cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
+; MINGW-IL:       {{^}}.method public hidebysig static pinvokeimpl("msvcrt" nomangle cdecl) float64 'sqrt'(float64) cil managed preservesig {}{{$}}
 
 declare double @hypot(double, double)
 declare double @round(double)
@@ -363,9 +363,9 @@ source_filename = "msvc-math.c"
 ; MSVC-IL:       {{^}}  call float64 'ldexp'(float64, int32){{$}}
 ; MSVC-IL:       {{^}}  call float64 'frexp'(float64, native int){{$}}
 ; MSVC-IL:       {{^}}} // end of method 'use_double'{{$}}
-; MSVC-IL-DAG:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) float64 'hypot'(float64, float64) cil managed preservesig {}{{$}}
-; MSVC-IL-DAG:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
-; MSVC-IL-DAG:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
+; MSVC-IL-DAG:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) float64 'hypot'(float64, float64) cil managed preservesig {}{{$}}
+; MSVC-IL-DAG:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) float64 'ldexp'(float64, int32) cil managed preservesig {}{{$}}
+; MSVC-IL-DAG:   {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) float64 'frexp'(float64, native int) cil managed preservesig {}{{$}}
 
 declare float @hypotf(float, float)
 declare float @ldexpf(float, i32)
@@ -412,7 +412,7 @@ source_filename = "sig.c"
 
 ; SIG-IL-LABEL: .method {{.*}}'use_okfn'(
 ; SIG-IL:       {{^}}  call int32 'okfn'(int32){{$}}
-; SIG-IL:       {{^}}.method public hidebysig static pinvokeimpl("mylib" cdecl) int32 'okfn'(int32) cil managed preservesig {}{{$}}
+; SIG-IL:       {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) int32 'okfn'(int32) cil managed preservesig {}{{$}}
 
 %S = type { i64, i64 }
 

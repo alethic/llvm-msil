@@ -12,7 +12,7 @@
 ; tests are only checked for their target, not for their mnemonic.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 \
-; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}" --implicit-check-not=throw
+; DEFINE:   --implicit-check-not=throw
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check}
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %s \
@@ -154,8 +154,8 @@ exit:
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  mul{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  bgt @BB[[F]]_[[EARLY:[0-9]+]]{{$}}
-; CHECK:       {{^}}  blt @BB[[F]]_[[L]]{{$}}
+; CHECK:       {{^}}  bgt.s @BB[[F]]_[[EARLY:[0-9]+]]{{$}}
+; CHECK:       {{^}}  blt.s @BB[[F]]_[[L]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[EARLY]]:{{$}}
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  neg{{$}}
@@ -222,9 +222,9 @@ define void @foo0() noinline {
 ; CHECK-NOT:   {{^}}@
 ; CHECK:       {{^}}  xor{{$}}
 ; CHECK-NOT:   {{^}}@
-; CHECK:       {{^}}  bgt.un @BB[[F]]_{{[0-9]+}}{{$}}
+; CHECK:       {{^}}  bgt.un.s @BB[[F]]_{{[0-9]+}}{{$}}
 ; CHECK:       {{^}}  switch (@BB[[F]]_[[S0:[0-9]+]], @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}){{$}}
-; CHECK-NEXT:  {{^}}  br @BB[[F]]_[[S0]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s @BB[[F]]_[[S0]]{{$}}
 ; CHECK:       {{^}}  b{{[a-z.]+}} @BB[[F]]_[[L]]{{$}}
 ; CHECK:       {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'switch_loop'{{$}}

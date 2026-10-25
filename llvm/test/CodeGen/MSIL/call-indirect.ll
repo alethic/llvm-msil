@@ -262,11 +262,11 @@ define i32 @call_indirect_narrow(ptr %callee, i32 %a, i32 %b) {
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 6{{$}}
 ; O2-NEXT:     {{^}}  ldc.i4.7{{$}}
-; O2-NEXT:     {{^}}  ldc.i4 -1{{$}}
+; O2-NEXT:     {{^}}  ldc.i4.m1{{$}}
 ; O2-NEXT:     {{^}}  conv.i{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x3FC00000){{$}}
 ; O2-NEXT:     {{^}}  ldc.r8 float64(0x4000000000000000){{$}}
-; O2-NEXT:     {{^}}  ldc.i4 0{{$}}
+; O2-NEXT:     {{^}}  ldc.i4.0{{$}}
 ; O2-NEXT:     {{^}}  conv.i{{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
 ; O0:          {{^}}  ldarg.0{{$}}
@@ -313,7 +313,7 @@ define i64 @i128_arg(ptr %f, i128 %x) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  calli void(native int, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 8{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i{{$}}

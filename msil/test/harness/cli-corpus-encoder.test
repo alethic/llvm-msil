@@ -1,0 +1,43 @@
+# cli-corpus-check.py --mode encoder (plan M18.f, 5.7.11) is the proof that
+# the MC code emitter equals ilasm (M18 exit criterion 3; gate step 19, leg
+# encoder-parity): every method's bytes rebuilt from 'llc -show-mc-encoding'
+# must equal ilasm's body of the same text, each token fixup must hold a
+# token whose table, member kind and name suit it, and .maxstack must agree.
+# Gate step 19 only ever compares listings with ilasm's images of the same
+# text, which are equal, so a comparison that never reported a difference
+# would pass every gate. Inputs/cli-corpus-encoder/cli-corpus-encoder-selftest.py
+# loads the script as a module and runs parse_encoded_listing(), ILImage and
+# EncoderMode.compare_module() on a fixture module that it holds (an encoded
+# listing of five methods, and ilasm's image of it as hand-assembled bodies
+# and 'llvm-cil-dump --headers --tables' rows) with one change per case. The
+# unchanged fixture is equal; one code byte changed, ilasm's code one byte
+# longer, a token from a table that does not suit the fixup class (a Field
+# token for fixup_cil_method_token, a MethodDef token for
+# fixup_cil_field_token), a MemberRef whose signature is a field signature
+# (0x06) under fixup_cil_method_token, a wrong MethodDef, MemberRef, parent
+# type, scope, Field or StandAloneSig signature, a short branch whose value
+# does not fit, an instruction line without an encoding comment (in the
+# middle and at the end of a method), a body missing from and an extra body
+# in ilasm's image, and a .maxstack difference (fat and tiny header) each
+# report exactly the changed method for that reason; a float32 signaling
+# NaN that ilasm quieted counts as snan-quiet, while the quiet bit set on
+# 1.0 and another NaN payload are differences. main() runs with fake tools
+# (the module's run() and run_split() answer from the fixture; nothing is
+# executed): exit 0 with '5 of 5 methods equal' at --min-methods 5, exit 1
+# at --min-methods 6, for a changed code byte and when ilasm fails, and
+# exit 2 for --min-methods 0 before any tool runs. tool-failure-cp1252 is
+# that ilasm failure with output that cp1252 cannot spell (U+FFFD from
+# invalid UTF-8, as run() decodes it, and other characters) on strict
+# cp1252 stdout and stderr streams, as a pipe or a file is on Windows: exit
+# 1 with the FAIL line and the summary line, and no 'Traceback' or
+# 'UnicodeEncodeError'. No clang, llc, ilasm or llvm-cil-dump runs, so this
+# passes wherever msil/test/harness runs.
+
+# RUN: rm -rf %t
+# RUN: %python %S/Inputs/cli-corpus-encoder/cli-corpus-encoder-selftest.py %S/../../utils/mdtools/cli-corpus-check.py %t > %t.log
+# RUN: %{harness_check} contains %t.log "^ok: compare equal$" "^ok: compare code-byte$" "^ok: compare code-length$" "^ok: compare token-table$" "^ok: compare token-table-field$" "^ok: compare memberref-kind$"
+# RUN: %{harness_check} contains %t.log "^ok: compare wrong-methoddef$" "^ok: compare wrong-memberref$" "^ok: compare wrong-parent$" "^ok: compare wrong-scope$" "^ok: compare wrong-field$" "^ok: compare wrong-sig$"
+# RUN: %{harness_check} contains %t.log "^ok: compare branch-too-far$" "^ok: compare unencoded$" "^ok: compare unencoded-last$" "^ok: compare body-missing$" "^ok: compare body-extra$" "^ok: compare maxstack$" "^ok: compare maxstack-tiny$"
+# RUN: %{harness_check} contains %t.log "^ok: compare snan-quiet$" "^ok: compare float-quiet-bit$" "^ok: compare float-snan-other$"
+# RUN: %{harness_check} contains %t.log "^ok: main equal$" "^ok: main min-methods$" "^ok: main mismatch$" "^ok: main tool-failure$" "^ok: main tool-failure-cp1252$" "^ok: usage min-methods-zero$"
+# RUN: %{harness_check} lacks %t.log "^FAIL"

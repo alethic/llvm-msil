@@ -22,7 +22,7 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 weakfn.o libmaybe.so.1 -o bound.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=BOUND --implicit-check-not=undef_maybe --input-file=bound.il
 # RUN: FileCheck %s --check-prefix=BOUND-NONE --input-file=bound.il
-# BOUND-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libmaybe.so.1" cdecl) int32 'maybe'() cil managed preservesig {}{{$}}
+# BOUND-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libmaybe.so.1" nomangle cdecl) int32 'maybe'() cil managed preservesig {}{{$}}
 # BOUND-DAG: call int32 'maybe'()
 ## No trap stub anywhere in the file: for a prefix made only of -DAG lines,
 ## --implicit-check-not checks only the text before the first match.

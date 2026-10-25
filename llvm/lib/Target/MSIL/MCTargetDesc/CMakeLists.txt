@@ -4,14 +4,17 @@ include_directories(
   )
 
 add_llvm_component_library(LLVMMSILDesc
+  MSILAsmBackend.cpp
   MSILInstPrinter.cpp
   MSILMCAsmInfo.cpp
+  MSILMCCodeEmitter.cpp
   MSILMCExpr.cpp
   MSILMCTargetDesc.cpp
   MSILMCTypeUtilities.cpp
   MSILTargetStreamer.cpp
 
   LINK_COMPONENTS
+  CLI
   CodeGenTypes
   MC
   Support

@@ -309,11 +309,11 @@ define double @call_mixed_ptr(ptr %f, i32 %a, i64 %b, float %c, double %d, ptr %
 ; O0:          {{^}}  .locals (native int, native int, float32, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ldsfld native int '<msil>fn_mixed'{{$}}
 ; O2-NEXT:     {{^}}  ldc.i4.1{{$}}
-; O2-NEXT:     {{^}}  ldc.i4 2{{$}}
+; O2-NEXT:     {{^}}  ldc.i4.2{{$}}
 ; O2-NEXT:     {{^}}  conv.i{{$}}
 ; O2-NEXT:     {{^}}  ldc.r4 float32(0x40400000){{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
-; O2-NEXT:     {{^}}  ldc.i4 0{{$}}
+; O2-NEXT:     {{^}}  ldc.i4.0{{$}}
 ; O2-NEXT:     {{^}}  conv.i{{$}}
 ; O2-NEXT:     {{^}}  call float64 'call_mixed_ptr'(native int, int32, native int, float32, float64, native int){{$}}
 ; O0:          {{^}}  call float64 'call_mixed_ptr'(native int, int32, native int, float32, float64, native int){{$}}
@@ -374,7 +374,7 @@ define i32 @call_narrow(i32 %a) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  calli [[PAIR_RET]][[PAIR_PARAMS]]{{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 8{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i{{$}}
@@ -427,8 +427,8 @@ define i32 @call_puts(ptr %s) {
 
 ; The only P/Invoke is puts, with the signature its ldftn and calli used.
 ; CHECK:       {{^}}// ---- undefined external functions: P/Invoke ----{{$}}
-; LNX-NEXT:    {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; WIN-NEXT:    {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; LNX-NEXT:    {{^}}.method public hidebysig static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; WIN-NEXT:    {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 ; CHECK-EMPTY:
 
 ; No data segment: the address fields come next, one per used function in

@@ -1,8 +1,8 @@
-# Output through puts, imported as pinvokeimpl("libc" cdecl) the way the
-# backend declares it for linux-gnu triples (plan D14). On Windows this runs
-# with the WSL runner (--param msil_runner=wsl, which implies the linux triple);
-# a Linux host runs it directly. The transcript is the same as on Windows
-# (puts-windows.test).
+# Output through puts, imported as pinvokeimpl("libc" nomangle cdecl) (ImplMap
+# flags 0x0201) the way the backend declares it for linux-gnu triples (plan D14
+# as amended for M18, 5.10.11). On Windows this runs with the WSL runner
+# (--param msil_runner=wsl, which implies the linux triple); a Linux host runs
+# it directly. The transcript is the same as on Windows (puts-windows.test).
 # REQUIRES: msil-triple-linux, msil-wsl || system-linux
 
 # RUN: %ilasm -dll -output=%t.dll %S/Inputs/puts-wsl.il

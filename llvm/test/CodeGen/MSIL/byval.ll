@@ -118,7 +118,7 @@ define i64 @take_a(ptr byval(%struct.A) align 16 %s) {
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'sum_s'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'sum_s'\(native int\)$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'call_sum'{{$}}
 define i64 @call_sum(ptr %p) {
@@ -136,11 +136,11 @@ define i64 @call_sum(ptr %p) {
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'bump_s'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'bump_s'\(native int\)$}}
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+(ldloc(\.[0-9]|\.s [0-9]+)[[:space:]]+)?ldloc\.0[[:space:]]+ldc\.i4 8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'bump_s'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+(ldloc(\.[0-9]|\.s [0-9]+)[[:space:]]+)?ldloc\.0[[:space:]]+ldc\.i4\.8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'bump_s'\(native int\)$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define i64 @call_bump_twice(ptr %p) {
@@ -158,7 +158,7 @@ define i64 @call_bump_twice(ptr %p) {
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'sum_s'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call native int 'sum_s'\(native int\)$}}
 define i64 @forward(ptr byval(%struct.S) align 8 %s) {
   %r = call i64 @sum_s(ptr byval(%struct.S) align 8 %s)
   ret i64 %r
@@ -175,7 +175,7 @@ define i64 @forward(ptr byval(%struct.S) align 8 %s) {
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.2{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 24[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+ldarg\.1[[:space:]]+ldloc\.0[[:space:]]+call native int 'two'\(native int, int32, native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.s 24[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+ldarg\.1[[:space:]]+ldloc\.0[[:space:]]+call native int 'two'\(native int, int32, native int\)$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define i64 @call_two(ptr %p, i32 %x, ptr %q) {
   %r = call i64 @two(ptr byval(%struct.S) align 8 %p, i32 %x, ptr byval(%struct.S) align 8 %q)
@@ -190,7 +190,7 @@ define i64 @call_two(ptr %p, i32 %x, ptr %q) {
 ; CHECK-NOT:   {{^}}  call
 ; CHECK:       {{^}}  ldarg.0{{$}}
 ; CHECK-NOT:   {{^}}  call
-; CHECK:       {{^  (cpblk|stind\.i4?)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 4[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call int32 'take_p'\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i4?)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.4[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+call int32 'take_p'\(native int\)$}}
 define i32 @call_p(ptr %p) {
   %r = call i32 @take_p(ptr byval(%struct.P) align 4 %p)
   ret i32 %r
@@ -204,10 +204,10 @@ define i32 @call_p(ptr %p) {
 ; CHECK-NEXT:  {{^}}  localloc{{$}}
 ; CHECK-NEXT:  {{^}}  stloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 15{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 15{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 -16{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s -16{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  and{{$}}
 ; CHECK-NOT:   {{^}}  call
@@ -227,7 +227,7 @@ define i64 @call_a(ptr %p) {
 ; CHECK-NOT:   {{^}}  calli
 ; CHECK:       {{^}}  ldarg.1{{$}}
 ; CHECK-NOT:   {{^}}  calli
-; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4 8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+ldarg\.0[[:space:]]+calli native int\(native int\)$}}
+; CHECK:       {{^  (cpblk|stind\.i)[[:space:]]+ldloc\.0[[:space:]]+ldc\.i4\.8[[:space:]]+conv\.i[[:space:]]+add[[:space:]]+ldarg\.0[[:space:]]+calli native int\(native int\)$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define i64 @call_indirect(ptr %f, ptr %p) {
   %r = call i64 %f(ptr byval(%struct.S) align 8 %p)

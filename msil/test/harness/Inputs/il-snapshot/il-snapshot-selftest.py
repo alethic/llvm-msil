@@ -24,11 +24,26 @@ keeps __pycache__ out of the source tree) and checks:
     old/<name> to new/<name>), a changed .err (only its exit status), an .il
     whose line endings changed, a file only in the old tree, files only in
     the new tree, and all three kinds at once.
+  * compare(new, old, ['forms']), --normalize forms (M18, plan 5.12.4: on
+    both sides short branches become long ones, 'ldc.i4.m1', 'ldc.i4.<n>'
+    and 'ldc.i4.s <n>' become 'ldc.i4 <n>' and ' nomangle cdecl' becomes
+    ' cdecl'; only the .il files are normalized), on an old and a new copy
+    of the baseline made for each case: an .il whose copies differ only in
+    those forms, each in both directions (in the fixture's 'main' and in a
+    method with branches, ldc.i4 constants and P/Invokes appended to each
+    copy), gives 0, lists nothing and prints '--normalize forms: ... 1 of
+    them differ only in those forms', and compare(new, old) lists it and
+    gives nonzero; with a branch label changed as well it is listed
+    (nonzero) and diffed between the normalized texts, exactly that line
+    removed and added, while another .il that differs only in a form is
+    counted, not listed; the same kinds of change in an .err file are listed
+    (nonzero) with their diff as they are.
   * main(argv) returns or exits with 2 on usage errors, names the problem on
     stderr and creates no --out: --compare naming a missing directory, --out
     inside --compare, --out inside the repository or holding it, no PATH,
-    --jobs 0. Each run names a --build that does not exist, so even a check
-    that stopped working could neither compile nor empty anything.
+    --jobs 0, --normalize without --compare. Each run names a --build that
+    does not exist, so even a check that stopped working could neither
+    compile nor empty anything.
   * tracked_inputs(paths, excludes), the input list (plan 5.12.4: the files
     HEAD tracks, minus each --exclude; a directory excludes its subtree),
     with the module's git() replaced by a fake that answers
@@ -119,6 +134,16 @@ def replace_last(root, name, old, new):
     write(root, name, data[:i] + new + data[i + len(old) :])
 
 
+def substitute(root, name, old, new):
+    """Replace the one occurrence of old in the file; the size may change."""
+    data = read(root, name)
+    if data.count(old) != 1:
+        raise SetupError(
+            "%r occurs %d times in %s, expected once" % (old, data.count(old), name)
+        )
+    write(root, name, data.replace(old, new))
+
+
 def remove(root, name):
     os.remove(fixture_path(root, name))
 
@@ -200,10 +225,13 @@ COMPARE_CASES = (
 )
 
 
-def run_compare(module, new, old):
+def run_compare(module, new, old, normalize=None):
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
-        result = module.compare(new, old)
+        if normalize is None:
+            result = module.compare(new, old)
+        else:
+            result = module.compare(new, old, normalize)
     return result, out.getvalue()
 
 
@@ -212,6 +240,13 @@ def check_compare(module, work, old, label, mutate):
     shutil.copytree(BASELINE, new)
     differs, missing, extra, lines = mutate(new)
     result, output = run_compare(module, new, old)
+    errors = verify_compare(result, output, new, old, differs, missing, extra, lines)
+    return errors, output
+
+
+def verify_compare(result, output, new, old, differs, missing, extra, lines):
+    """The errors of compare(new, old)'s result and output against the
+    names it must list and the lines that must appear besides the listing."""
     got = output.splitlines()
     want = (
         ["differs: %s" % n for n in sorted(differs)]
@@ -242,7 +277,167 @@ def check_compare(module, work, old, label, mutate):
     for line in lines:
         if line not in got:
             errors.append("no line %r in the output" % line)
-    return errors, output
+    return errors
+
+
+# ---------------------------------------------------------- normalize cases
+# --normalize forms (M18, plan 5.12.4) rewrites the .il files of both trees:
+# short branches become long ones, 'ldc.i4.m1', 'ldc.i4.<n>' and
+# 'ldc.i4.s <n>' become 'ldc.i4 <n>', ' nomangle cdecl' becomes ' cdecl'.
+# Each case changes fresh copies of the baseline, a new and an old tree, and
+# gives the runs of compare(new, old[, normalize]) to check: (normalize, or
+# None for compare(new, old); the names it must list as differing; the N of
+# its one line '--normalize forms: ... N of them differ only in those forms',
+# or None to skip that check; the exact '-' and '+' lines of its diffs, or
+# None to skip that check).
+
+NORMALIZE_RE = re.compile(
+    r"^il-snapshot: --normalize forms: .* (\d+) of them differ only in those forms$"
+)
+
+
+def pinvoke(flags, result, name):
+    return (
+        '.method public static pinvokeimpl("libc.so.6" %s) %s %s(native int) '
+        "cil managed preservesig" % (flags, result, name)
+    )
+
+
+# A method that the old and the new tree print in different forms: (old
+# line, new line), or one string for a line that both print. Every pair
+# differs only in the forms, some in each direction.
+FORMS_METHOD = (
+    ".method public static int32 'pick'(int32 'x') cil managed",
+    "{",
+    "  .maxstack 2",
+    "  ldarg.0",
+    ("  brfalse.s @BB1_3", "  brfalse @BB1_3"),
+    "  ldarg.0",
+    ("  ldc.i4.m1", "  ldc.i4 -1"),
+    ("  beq @BB1_2", "  beq.s @BB1_2"),
+    "  ldarg.0",
+    ("  ldc.i4.s 100", "  ldc.i4 100"),
+    ("  bge.un.s @BB1_2", "  bge.un @BB1_2"),
+    ("  br @BB1_1", "  br.s @BB1_1"),
+    "@BB1_1:",
+    ("  ldc.i4 8", "  ldc.i4.8"),
+    "  ret",
+    "@BB1_2:",
+    ("  ldc.i4 -5", "  ldc.i4.s -5"),
+    "  ret",
+    "@BB1_3:",
+    ("  ldc.i4.3", "  ldc.i4 3"),
+    "  ret",
+    "} // end of method 'pick'",
+    "",
+    (pinvoke("cdecl", "int32", "puts"), pinvoke("nomangle cdecl", "int32", "puts")),
+    "{",
+    "}",
+    "",
+    (
+        pinvoke("nomangle cdecl", "native int", "strlen"),
+        pinvoke("cdecl", "native int", "strlen"),
+    ),
+    "{",
+    "}",
+    "",
+)
+# Lines of the fixture's 'main' in WIN_O0_IL (the old tree's) and the forms
+# the new tree prints instead.
+FORMS_IN_MAIN = (
+    (b"  ldc.i4.s 16\n", b"  ldc.i4 16\n"),
+    (b"  ldc.i4.0\n", b"  ldc.i4 0\n"),
+    (b"  ldc.i4 12\n", b"  ldc.i4.s 12\n"),
+)
+
+
+def side(table, which):
+    """The text of one tree (0 old, 1 new) of a table like FORMS_METHOD."""
+    lines = [l if isinstance(l, str) else l[which] for l in table]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def forms_only(new, old):
+    """WIN_O0_IL of the two trees differs only in the forms."""
+    for a, b in FORMS_IN_MAIN:
+        substitute(new, WIN_O0_IL, a, b)
+    write(old, WIN_O0_IL, read(old, WIN_O0_IL) + side(FORMS_METHOD, 0))
+    write(new, WIN_O0_IL, read(new, WIN_O0_IL) + side(FORMS_METHOD, 1))
+
+
+def case_normalize_forms(new, old):
+    forms_only(new, old)
+    return [
+        (["forms"], [], 1, []),
+        # Without --normalize the same trees differ.
+        (None, [WIN_O0_IL], None, None),
+    ]
+
+
+def case_normalize_real_difference(new, old):
+    forms_only(new, old)
+    # A branch label is no form: after normalization one line remains, and
+    # the diff is taken between the normalized texts.
+    substitute(new, WIN_O0_IL, b"  br.s @BB1_1\n", b"  br.s @BB1_2\n")
+    # Another .il that differs only in a form is counted, not listed.
+    substitute(new, WIN_O2_IL, b"  ldc.i4.0\n", b"  ldc.i4 0\n")
+    return [(["forms"], [WIN_O0_IL], 1, ["-  br @BB1_1", "+  br @BB1_2"])]
+
+
+def case_normalize_err_exact(new, old):
+    # The .err files are compared as they are, with --normalize too.
+    lines = (
+        ("  br @BB0_1", "  br.s @BB0_1"),
+        ("  ldc.i4 0", "  ldc.i4.0"),
+        ("  ldc.i4 -1", "  ldc.i4.m1"),
+        ('  pinvokeimpl("x" cdecl)', '  pinvokeimpl("x" nomangle cdecl)'),
+    )
+    write(old, WIN_O0_ERR, side(lines, 0) + read(old, WIN_O0_ERR))
+    write(new, WIN_O0_ERR, side(lines, 1) + read(new, WIN_O0_ERR))
+    substitute(new, WIN_O2_IL, b"  ldc.i4.0\n", b"  ldc.i4 0\n")
+    diff = ["-" + a for a, b in lines] + ["+" + b for a, b in lines]
+    return [(["forms"], [WIN_O0_ERR], 1, diff)]
+
+
+NORMALIZE_CASES = (
+    ("normalize-forms", case_normalize_forms),
+    ("normalize-real-difference", case_normalize_real_difference),
+    ("normalize-err-exact", case_normalize_err_exact),
+)
+
+
+def check_normalize(module, work, label, mutate):
+    new = os.path.join(work, label, "new")
+    old = os.path.join(work, label, "old")
+    shutil.copytree(BASELINE, new)
+    shutil.copytree(BASELINE, old)
+    errors, outputs = [], []
+    for normalize, differs, forms, diff in mutate(new, old):
+        result, output = run_compare(module, new, old, normalize)
+        what = "compare(new, old%s)" % ("" if normalize is None else ", %r" % normalize)
+        outputs.append("%s gave %r:\n%s" % (what, result, output))
+        got = output.splitlines()
+        errs = verify_compare(result, output, new, old, differs, [], [], [])
+        counts = [m.group(1) for m in map(NORMALIZE_RE.match, got) if m]
+        if forms is not None and counts != [str(forms)]:
+            errs.append(
+                "expected one line '--normalize forms: ... %d of them differ "
+                "only in those forms', got the counts %r" % (forms, counts)
+            )
+        if diff is not None:
+            changed = [
+                l
+                for l in got
+                if l.startswith(("-", "+"))
+                and not l.startswith(("--- old/", "+++ new/"))
+            ]
+            if sorted(changed) != sorted(diff):
+                errs.append(
+                    "diff lines differ\n  expected: %r\n  got:      %r"
+                    % (sorted(diff), sorted(changed))
+                )
+        errors += ["%s: %s" % (what, e) for e in errs]
+    return errors, "".join(outputs)
 
 
 # -------------------------------------------------------------- usage cases
@@ -317,6 +512,12 @@ def usage_cases(work, repo):
             "jobs-zero",
             ["--build", build, "--out", out, "--jobs", "0", "msil/test/M1"],
             r"error: --jobs must be at least 1$",
+            out,
+        ),
+        (
+            "normalize-without-compare",
+            ["--build", build, "--out", out, "--normalize", "forms", "msil/test/M1"],
+            r"^il-snapshot: error: --normalize applies to --compare, which is missing$",
             out,
         ),
     )
@@ -593,6 +794,13 @@ def main(argv):
         label = "compare " + label
         try:
             errors, output = check_compare(module, work, old, label.split()[1], mutate)
+        except SetupError as e:
+            errors, output = ["setup: %s" % e], ""
+        report(label, errors, output)
+    for label, mutate in NORMALIZE_CASES:
+        label = "compare " + label
+        try:
+            errors, output = check_normalize(module, work, label.split()[1], mutate)
         except SetupError as e:
             errors, output = ["setup: %s" % e], ""
         report(label, errors, output)

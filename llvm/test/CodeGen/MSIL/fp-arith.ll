@@ -516,7 +516,7 @@ source_filename = "fp-arith-minmax.c"
 ; MINMAX-SAME:  float32, float32) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'minimum_f32'{{$}}
@@ -529,7 +529,7 @@ define float @minimum_f32(float %a, float %b) {
 ; MINMAX-SAME:  float32, float32) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'maximum_f32'{{$}}
@@ -543,7 +543,7 @@ define float @maximum_f32(float %a, float %b) {
 ; MINMAX-SAME:  float32, float32) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'minimumnum_f32'{{$}}
@@ -556,7 +556,7 @@ define float @minimumnum_f32(float %a, float %b) {
 ; MINMAX-SAME:  float32, float32) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'maximumnum_f32'{{$}}
@@ -569,7 +569,7 @@ define float @maximumnum_f32(float %a, float %b) {
 ; MINMAX-SAME:  float64, float64) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'minimum_f64'{{$}}
@@ -582,7 +582,7 @@ define double @minimum_f64(double %a, double %b) {
 ; MINMAX-SAME:  float64, float64) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'maximum_f64'{{$}}
@@ -595,7 +595,7 @@ define double @maximum_f64(double %a, double %b) {
 ; MINMAX-SAME:  float64, float64) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'minimumnum_f64'{{$}}
@@ -608,7 +608,7 @@ define double @minimumnum_f64(double %a, double %b) {
 ; MINMAX-SAME:  float64, float64) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'maximumnum_f64'{{$}}
@@ -623,7 +623,7 @@ define double @maximumnum_f64(double %a, double %b) {
 ; MINMAX-SAME:  float32, float32) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'strict_minimum_f32'{{$}}
@@ -636,7 +636,7 @@ define float @strict_minimum_f32(float %a, float %b) #0 {
 ; MINMAX-SAME:  float32, float32) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'strict_maximum_f32'{{$}}
@@ -649,7 +649,7 @@ define float @strict_maximum_f32(float %a, float %b) #0 {
 ; MINMAX-SAME:  float64, float64) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'strict_minimum_f64'{{$}}
@@ -662,7 +662,7 @@ define double @strict_minimum_f64(double %a, double %b) #0 {
 ; MINMAX-SAME:  float64, float64) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
 ; MINMAX-DAG:   {{^}}  div{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'strict_maximum_f64'{{$}}
@@ -677,7 +677,7 @@ define double @strict_maximum_f64(double %a, double %b) #0 {
 ; MINMAX-LABEL: .method {{.*}}'minnum_nnan_nsz_f64'(
 ; MINMAX-SAME:  float64, float64) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'minnum_nnan_nsz_f64'{{$}}
@@ -689,7 +689,7 @@ define double @minnum_nnan_nsz_f64(double %a, double %b) {
 ; MINMAX-LABEL: .method {{.*}}'maxnum_nnan_f32'(
 ; MINMAX-SAME:  float32, float32) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'maxnum_nnan_f32'{{$}}
@@ -701,7 +701,7 @@ define float @maxnum_nnan_f32(float %a, float %b) {
 ; MINMAX-LABEL: .method {{.*}}'minnum_nnan_f32'(
 ; MINMAX-SAME:  float32, float32) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'minnum_nnan_f32'{{$}}
@@ -713,7 +713,7 @@ define float @minnum_nnan_f32(float %a, float %b) {
 ; MINMAX-LABEL: .method {{.*}}'maxnum_nnan_nsz_f64'(
 ; MINMAX-SAME:  float64, float64) cil managed{{$}}
 ; MINMAX-DAG:   {{^}}  {{c(eq|gt|lt)(\.un)?}}{{$}}
-; MINMAX-DAG:   {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX-DAG:   {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX-DAG:   {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'maxnum_nnan_nsz_f64'{{$}}
@@ -731,7 +731,7 @@ define double @maxnum_nnan_nsz_f64(double %a, double %b) {
 ; MINMAX-NOT:   {{^}}  c{{(eq|gt|lt)}}
 ; MINMAX:       {{^}}  clt.un{{$}}
 ; MINMAX-NOT:   {{^}}  c{{(eq|gt|lt)}}
-; MINMAX:       {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX:       {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'minimum_x_1_f64'{{$}}
@@ -741,7 +741,7 @@ define double @maxnum_nnan_nsz_f64(double %a, double %b) {
 ; MMO2-NEXT:    {{^}}  ldarg.0{{$}}
 ; MMO2-NEXT:    {{^}}  ldc.r8 float64(0x3FF0000000000000){{$}}
 ; MMO2-NEXT:    {{^}}  clt.un{{$}}
-; MMO2-NEXT:    {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MMO2-NEXT:    {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MMO2-NEXT:    {{^}}  ldc.r8 float64(0x3FF0000000000000){{$}}
 ; MMO2-NEXT:    {{^}}  starg.s 0{{$}}
 ; MMO2-NEXT:    {{^}}@BB[[F]]_[[B]]:{{$}}
@@ -758,7 +758,7 @@ define double @minimum_x_1_f64(double %x) {
 ; MINMAX-NOT:   {{^}}  c{{(eq|gt|lt)}}
 ; MINMAX:       {{^}}  cgt.un{{$}}
 ; MINMAX-NOT:   {{^}}  c{{(eq|gt|lt)}}
-; MINMAX:       {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX:       {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'maximum_x_1_f32'{{$}}
@@ -768,7 +768,7 @@ define double @minimum_x_1_f64(double %x) {
 ; MMO2-NEXT:    {{^}}  ldarg.0{{$}}
 ; MMO2-NEXT:    {{^}}  ldc.r4 float32(0x3F800000){{$}}
 ; MMO2-NEXT:    {{^}}  cgt.un{{$}}
-; MMO2-NEXT:    {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MMO2-NEXT:    {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MMO2-NEXT:    {{^}}  ldc.r4 float32(0x3F800000){{$}}
 ; MMO2-NEXT:    {{^}}  starg.s 0{{$}}
 ; MMO2-NEXT:    {{^}}@BB[[F]]_[[B]]:{{$}}
@@ -785,7 +785,7 @@ define float @maximum_x_1_f32(float %x) {
 ; MINMAX-NOT:   {{^}}  c{{(eq|gt|lt)}}
 ; MINMAX:       {{^}}  clt{{$}}
 ; MINMAX-NOT:   {{^}}  c{{(eq|gt|lt)}}
-; MINMAX:       {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX:       {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'minimumnum_1_x_f64'{{$}}
@@ -795,7 +795,7 @@ define float @maximum_x_1_f32(float %x) {
 ; MMO2-NEXT:    {{^}}  ldarg.0{{$}}
 ; MMO2-NEXT:    {{^}}  ldc.r8 float64(0x3FF0000000000000){{$}}
 ; MMO2-NEXT:    {{^}}  clt{{$}}
-; MMO2-NEXT:    {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MMO2-NEXT:    {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MMO2-NEXT:    {{^}}  ldc.r8 float64(0x3FF0000000000000){{$}}
 ; MMO2-NEXT:    {{^}}  starg.s 0{{$}}
 ; MMO2-NEXT:    {{^}}@BB[[F]]_[[B]]:{{$}}
@@ -812,7 +812,7 @@ define double @minimumnum_1_x_f64(double %x) {
 ; MINMAX-NOT:   {{^}}  c{{(eq|gt|lt)}}
 ; MINMAX:       {{^}}  cgt{{$}}
 ; MINMAX-NOT:   {{^}}  c{{(eq|gt|lt)}}
-; MINMAX:       {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MINMAX:       {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MINMAX:       {{^}}@BB[[F]]_[[B]]:{{$}}
 ; MINMAX:       {{^}}  ret{{$}}
 ; MINMAX-NEXT:  {{^}}} // end of method 'maximumnum_1_x_f32'{{$}}
@@ -822,7 +822,7 @@ define double @minimumnum_1_x_f64(double %x) {
 ; MMO2-NEXT:    {{^}}  ldarg.0{{$}}
 ; MMO2-NEXT:    {{^}}  ldc.r4 float32(0x3F800000){{$}}
 ; MMO2-NEXT:    {{^}}  cgt{{$}}
-; MMO2-NEXT:    {{^}}  brtrue @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; MMO2-NEXT:    {{^}}  brtrue.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
 ; MMO2-NEXT:    {{^}}  ldc.r4 float32(0x3F800000){{$}}
 ; MMO2-NEXT:    {{^}}  starg.s 0{{$}}
 ; MMO2-NEXT:    {{^}}@BB[[F]]_[[B]]:{{$}}

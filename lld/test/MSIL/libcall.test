@@ -98,7 +98,7 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 pow-lnx.o libm.so.6 -o pow-lnx.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=POW -DMOD=libm.so.6 --input-file=pow-lnx.il
 # POW-DAG: call float64 'pow'(float64, float64)
-# POW-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" cdecl) float64 'pow'(float64, float64) cil managed preservesig {}{{$}}
+# POW-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" nomangle cdecl) float64 'pow'(float64, float64) cil managed preservesig {}{{$}}
 # RUN: not msil-ld --lto-emit-asm --lto-O0 pow-win.o -o x.il 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=NOPOW --implicit-check-not="PLEASE submit" --implicit-check-not=ucrtbase \
 # RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump" --implicit-check-not=error:

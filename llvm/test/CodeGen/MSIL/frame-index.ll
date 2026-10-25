@@ -399,7 +399,7 @@ define void @gep_shared_const(ptr %q) {
 ; CHECK-NEXT:  {{^}}  ldc.i4.s 16{{$}}
 ; CHECK-NEXT:  {{^}}  localloc{{$}}
 ; CHECK-NEXT:  {{^}}  stloc.[[F:[0-9]]]{{$}}
-; CHECK:       {{^}}  {{brtrue|brfalse|beq|bne\.un}} @BB{{[0-9_]+$}}
+; CHECK:       {{^}}  {{brtrue|brfalse|beq|bne\.un}}.s @BB{{[0-9_]+$}}
 ; CHECK:       {{^}}  ldloc.[[F]]{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'sink'(native int){{$}}
 ; CHECK:       {{^}}} // end of method 'slot_in_branch'{{$}}

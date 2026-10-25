@@ -18,7 +18,7 @@
 ; '{{[[:space:]]}}' matches the newline between 'ret' and the end of method.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=switch \
-; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}" --implicit-check-not=throw
+; DEFINE:   --implicit-check-not=throw
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check} --check-prefixes=CHECK,O2
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %s \
@@ -156,8 +156,8 @@ X:                                                ; preds = %0, C
 ; CHECK-LABEL: .method {{.*}}'undef_i32_on_path'(
 ; CHECK-SAME:  int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[A:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[A:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[A]]:{{$}}
 ; O0-NEXT:     {{^}}  ldc.i4.0{{$}}
 ; O2-NEXT:     {{^}}  {{ldc|ldloc|ldarg}}{{.*}}
@@ -181,8 +181,8 @@ b:
 ; CHECK-LABEL: .method {{.*}}'poison_i64_on_path'(
 ; CHECK-SAME:  int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[A:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[A:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[A]]:{{$}}
 ; O0-NEXT:     {{^}}  ldc.i4{{(\.0| 0)}}{{$}}
 ; O0-NEXT:     {{^}}  conv.i{{$}}
@@ -207,8 +207,8 @@ b:
 ; CHECK-LABEL: .method {{.*}}'undef_f32_on_path'(
 ; CHECK-SAME:  int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[A:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[A:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[A]]:{{$}}
 ; O0-NEXT:     {{^}}  ldc.r4 float32(0x00000000){{$}}
 ; CHECK:       {{^}}  ret{{$}}
@@ -231,8 +231,8 @@ b:
 ; CHECK-LABEL: .method {{.*}}'undef_f64_on_path'(
 ; CHECK-SAME:  int32) cil managed{{$}}
 ; CHECK:       {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  brfalse @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
-; O0-NEXT:     {{^}}  br @BB[[F]]_[[A:[0-9]+]]{{$}}
+; CHECK-NEXT:  {{^}}  brfalse.s @BB[[F:[0-9]+]]_[[B:[0-9]+]]{{$}}
+; O0-NEXT:     {{^}}  br.s @BB[[F]]_[[A:[0-9]+]]{{$}}
 ; O0-NEXT:     {{^}}@BB[[F]]_[[A]]:{{$}}
 ; O0-NEXT:     {{^}}  ldc.r8 float64(0x0000000000000000){{$}}
 ; CHECK:       {{^}}  ret{{$}}

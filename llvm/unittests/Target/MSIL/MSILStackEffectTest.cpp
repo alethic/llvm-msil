@@ -11,7 +11,9 @@
 // MSILExplicitLocals every explicit register use of an instruction pops one
 // value and every explicit register def pushes one, in operand order, and
 // MSILStackCheck computes .maxstack from exactly that, plus the StackPeakExtra
-// field (TSFlags bits 1-0) of records that print as several CIL opcodes. So:
+// field (TSFlags bits 1-0): the extra depth, above max(pops, pushes), reached
+// by the CIL_ instructions that MSILMCInstLower::lowerImpl expands a record
+// into. So:
 //   - no record pushes more than one value (TEE_<RC>, which exists only
 //     before ExplicitLocals turns it into LOCAL_TEE_<RC>, is the exception);
 //   - the operand lists of the structural records are those of plan 5.4,
@@ -253,10 +255,12 @@ TEST_F(MSILStackEffectTest, MSILRegisterOperandsUseTheFourClasses) {
   }
 }
 
-// TSFlags holds StackPeakExtra (bits 1-0) and TrapsOnlyOnUB (bit 2) and
-// nothing else (MSILInstrFormats.td and MSILII must stay in sync).
+// TSFlags holds StackPeakExtra (bits 1-0), TrapsOnlyOnUB (bit 2) and the CIL
+// opcode (bits 18-3, M18) and nothing else (MSILInstrFormats.td and MSILII
+// must stay in sync).
 TEST_F(MSILStackEffectTest, MSILTSFlagsUseOnlyTheDefinedBits) {
-  const uint64_t Known = MSILII::StackPeakExtraMask | MSILII::TrapsOnlyOnUB;
+  const uint64_t Known = MSILII::StackPeakExtraMask | MSILII::TrapsOnlyOnUB |
+                         MSILII::CILOpcodeMask;
   for (unsigned Opc : targetOpcodes()) {
     SCOPED_TRACE(MII->getName(Opc).str());
     EXPECT_EQ(0u, MII->get(Opc).TSFlags & ~Known);

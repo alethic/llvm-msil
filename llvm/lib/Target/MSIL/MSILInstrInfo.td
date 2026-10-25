@@ -17,10 +17,13 @@
 /// included at the end hold the rest.
 ///
 /// Record names follow WebAssembly where the meaning is the same, so the
-/// passes derived from WebAssembly keep their opcode names. Asm strings name
-/// only immediate and symbol operands. Records that print as several CIL
-/// opcodes separate them with a newline and the two-space indent, and set
-/// StackPeakExtra (see MSILInstrFormats.td).
+/// passes derived from WebAssembly keep their opcode names. These
+/// MachineInstr-level records never reach MC: MSILMCInstLower expands each one
+/// into the CIL_ records of MSILInstrCIL.td, included at the end. Their asm
+/// strings only document the CIL they stand for; records that stand for
+/// several CIL instructions separate them with a newline and the two-space
+/// indent. Records whose expansion goes deeper on the evaluation stack than
+/// max(pops, pushes) set StackPeakExtra (see MSILInstrFormats.td).
 ///
 //===----------------------------------------------------------------------===//
 
@@ -87,9 +90,9 @@ def f64imm_op : Operand<f64> {
   let PrintMethod = "printF64ImmOperand";
 }
 
-// A function: a function symbol until MSILMCInstLower turns it into an
-// MSILMemberRefExpr that prints the method reference (the callee of a call)
-// or the function's address field (FUNC_ADDR).
+// A function: a function symbol until MSILMCInstLower turns it into the
+// MSILMemberRefExpr token of the method (the callee of a call) or of the
+// function's address field (FUNC_ADDR).
 let OperandType = "OPERAND_METHOD" in
 def function_op : Operand<i64>;
 
@@ -98,11 +101,18 @@ let OperandType = "OPERAND_DATA" in
 def data_op : Operand<i64>;
 
 // Memory access flags (filled by MSILSetMemFlags): bits 0-2 hold the
-// 'unaligned.' value N (0 = no prefix, 1, 2 or 4), bit 3 'volatile.'. The
-// printer prints the prefix lines.
+// 'unaligned.' value N (0 = no prefix, 1, 2 or 4), bit 3 'volatile.'.
+// MSILMCInstLower turns them into the prefix instructions CIL_Unaligned and
+// CIL_Volatile.
 let OperandType = "OPERAND_MEMFLAGS" in
-def memflags_op : Operand<i32> {
-  let PrintMethod = "printMemFlagsOperand";
+def memflags_op : Operand<i32>;
+
+// The metadata token of a CIL_ record (MSILInstrCIL.td): an MSILMemberRefExpr,
+// which prints the member in whole-program or object form, or an immediate
+// that holds a final token.
+let OperandType = "OPERAND_TOKEN" in
+def cil_token_op : Operand<i32> {
+  let PrintMethod = "printTokenOperand";
 }
 
 } // OperandNamespace = "MSIL"
@@ -192,8 +202,9 @@ defm "" : LOCAL<F64>;
 // Constants.
 //===----------------------------------------------------------------------===//
 
-// CONST_I64 is native int (D2): 'ldc.i8 N; conv.i' (the printer may choose
-// 'ldc.i4 N; conv.i' for small values). FP constants are bit-exact.
+// CONST_I64 is native int (D2): 'ldc.i8 N; conv.i', or the shortest 'ldc.i4'
+// form of N and 'conv.i' when N fits in 32 bits (MSILMCInstLower). FP
+// constants are bit-exact.
 let isMoveImm = 1, isAsCheapAsAMove = 1, isReMaterializable = 1 in {
 defm CONST_I32 : I<(outs I32:$res), (ins i32imm_op:$imm),
                    [(set I32:$res, imm:$imm)],
@@ -216,8 +227,8 @@ defm CONST_F64 : I<(outs F64:$res), (ins f64imm_op:$imm),
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0, isAsCheapAsAMove = 1,
     isReMaterializable = 1 in {
 // Address of a global variable: 'ldsfld native int <address field>', plus
-// 'ldc.i4 <offset>; add' when the operand has an offset (printed by
-// MSILInstPrinter). The address field is initonly and set before any code
+// '<shortest ldc.i4 of the offset>; add' when the operand has an offset
+// (MSILMCInstLower). The address field is initonly and set before any code
 // runs, so this does not count as a load.
 let StackPeakExtra = 1 in
 defm GLOBAL_ADDR : I<(outs I64:$res), (ins data_op:$addr), [],
@@ -256,3 +267,9 @@ include "MSILInstrMemory.td"
 include "MSILInstrControl.td"
 include "MSILInstrCall.td"
 include "MSILInstrFrame.td"
+
+//===----------------------------------------------------------------------===//
+// MC-level CIL instructions.
+//===----------------------------------------------------------------------===//
+
+include "MSILInstrCIL.td"

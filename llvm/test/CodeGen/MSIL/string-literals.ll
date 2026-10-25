@@ -99,8 +99,8 @@ define i32 @utf8_lead() {
 declare i32 @puts(ptr)
 
 ; CHECK-NOT:   {{^}}.method {{(public|assembly) static}}
-; LNX:         {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; WIN:         {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; LNX:         {{^}}.method public hidebysig static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; WIN:         {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 ; CHECK:        {{^}}.class private explicit ansi sealed '<msil>image_t' extends [mscorlib]System.ValueType
 ; CHECK:        {{^ *}}.pack 1{{( |$)}}
 ; CHECK:        {{^ *}}.size 80{{( |$)}}

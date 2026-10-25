@@ -326,8 +326,8 @@ declare void @llvm.va_start.p0(ptr)
 declare void @llvm.va_end.p0(ptr)
 
 ; One P/Invoke (puts); the data keeps the internal global's field.
-; LNX:         {{^}}.method public hidebysig static pinvokeimpl("libc" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
-; WIN:         {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; LNX:         {{^}}.method public hidebysig static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+; WIN:         {{^}}.method public hidebysig static pinvokeimpl("ucrtbase" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
 ; CHECK:       {{^}}.field private static valuetype '<msil>image_t' '<msil>image' at '<msil>image_d'{{$}}
 ; CHECK-NEXT:  {{^}}.field private static initonly native int '<msil>data'{{$}}
 ; CHECK-NEXT:  {{^}}.field public static initonly native int '??_C@_05CJBACGMB@hello?$AA@'{{$}}

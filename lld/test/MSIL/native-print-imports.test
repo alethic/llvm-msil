@@ -75,7 +75,7 @@
 # FLOOR-DAG:  libm.so.6: version floor GLIBC_2.31
 # RUN: FileCheck %s --check-prefix=FLOOR-IL --input-file=floor.il
 # FLOOR-IL-DAG: call float64 'floor'(float64)
-# FLOOR-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
+# FLOOR-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
 
 ## Windows: no versions, no floor lines.
 # RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports win.o stdio.lib oldnames.lib string.lib ws2_32.lib foo.lib \
@@ -101,7 +101,7 @@
 # WIN-FLOOR:      floor -> api-ms-win-crt-math-l1-1-0.dll!floor [function, -]
 # WIN-FLOOR-NEXT: puts -> api-ms-win-crt-stdio-l1-1-0.dll!puts [function, -]
 # RUN: FileCheck %s --check-prefix=WIN-FLOOR-IL --input-file=win-floor.il
-# WIN-FLOOR-IL: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
+# WIN-FLOOR-IL: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-math-l1-1-0.dll" nomangle cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}
 
 ## Without --print-imports nothing is printed.
 # RUN: msil-ld --lto-emit-asm --lto-O0 lnx.o libc.so.6 libm.so.6 libz.so.1 -o quiet.il 2>&1 | count 0

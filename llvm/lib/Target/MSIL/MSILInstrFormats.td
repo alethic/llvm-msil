@@ -15,22 +15,26 @@
 /// MSIL instruction format definitions.
 ///
 /// Unlike WebAssembly there is one record per instruction, with no
-/// register/stack twins: MachineInstrs keep their virtual-register operands,
-/// MSILMCInstLower turns them into placeholder operands in the same positions,
-/// and the asm strings name only immediate and symbol operands.
+/// register/stack twins: MachineInstrs keep their virtual-register operands
+/// until the end of code generation. They never reach MC: MSILMCInstLower
+/// expands each one into MC-level records (CILInst, MSILInstrCIL.td), one per
+/// CIL instruction, whose only operand is the instruction's inline operand.
 ///
 //===----------------------------------------------------------------------===//
 
 // MSIL instruction format.
 class MSILInst<bits<16> cilop, string asmstr> : Instruction {
   // CIL opcode: 0x00XX for one-byte opcodes, 0xFEXX for two-byte opcodes, and
-  // 0xFFFF for pseudos and for records that print as several opcodes.
+  // 0xFFFF for pseudos and for records that stand for several opcodes.
   bits<16> Inst = cilop;
 
-  // Extra evaluation-stack depth needed while the CIL text of this record
-  // executes, above max(pops, pushes). Non-zero only for records that print
-  // as several opcodes (for example 'dup; stloc' is 1). MSILStackCheck reads
-  // it to compute .maxstack.
+  // Extra evaluation-stack depth, above max(pops, pushes), reached by the
+  // CIL_ instructions that MSILMCInstLower::lowerImpl expands this
+  // MachineInstr-level record into: LOCAL_TEE, expanded to 'dup' and
+  // 'stloc', is 1. Non-zero only for records whose expansion goes above
+  // max(pops, pushes); CONST_I64 ('ldc' and 'conv.i') and BR_TABLE_I32
+  // ('switch' and 'br') expand to two instructions and stay 0. MSILStackCheck
+  // reads it, not the expansion, to compute .maxstack.
   bits<2> StackPeakExtra = 0;
 
   // Division and remainder: has side effects only because it traps on
@@ -44,6 +48,8 @@ class MSILInst<bits<16> cilop, string asmstr> : Instruction {
   // Keep in sync with MSILII in MCTargetDesc/MSILMCTargetDesc.h.
   let TSFlags{1-0} = StackPeakExtra;
   let TSFlags{2} = TrapsOnlyOnUB;
+  // The CIL opcode, which MSILMCCodeEmitter encodes (MSILII::CILOpcodeMask).
+  let TSFlags{18-3} = Inst;
 }
 
 // Normal instructions. Default instantiation of an MSILInst.
@@ -62,4 +68,20 @@ class NI<dag oops, dag iops, list<dag> pattern, string asmstr = "",
 multiclass I<dag oops, dag iops, list<dag> pattern, string asmstr = "",
              bits<16> cilop = 0xFFFF> {
   def "" : NI<oops, iops, pattern, asmstr, cilop>;
+}
+
+// One CIL instruction at the MC level (MSILInstrCIL.td): the only records that
+// MSILMCInstLower emits, MSILInstPrinter prints and MSILMCCodeEmitter
+// encodes. The operand list is the inline operand of the opcode alone (none,
+// an immediate, a label, a token, or the labels of a switch); values on the
+// evaluation stack have no operands. No pass analyzes these records, so their
+// properties are the conservative ones TableGen would guess, and they keep
+// NI's implicit def of ARGUMENTS like every other record that is not an
+// ARGUMENT_<RC>.
+class CILInst<bits<16> cilop, dag iops, string asmstr>
+    : NI<(outs), iops, [], asmstr, cilop> {
+  let isCodeGenOnly = 1;
+  let hasSideEffects = 1;
+  let mayLoad = 0;
+  let mayStore = 0;
 }

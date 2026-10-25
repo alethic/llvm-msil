@@ -14,8 +14,10 @@
 ///
 /// \file
 /// This file provides MSIL-specific target descriptions and registers the MC
-/// layer (as WebAssemblyMCTargetDesc.cpp does). MSIL emits ILAsm text only:
-/// there is no code emitter, asm backend or object target streamer.
+/// layer (as WebAssemblyMCTargetDesc.cpp does): the ILAsm printer and target
+/// streamers, the CIL encoder and the asm backend. There is no object target
+/// streamer yet, and the object writer reports that CIL objects are not
+/// supported (createMSILObjectTargetWriter, until M19).
 ///
 //===----------------------------------------------------------------------===//
 
@@ -25,6 +27,7 @@
 #include "MCTargetDesc/MSILTargetStreamer.h"
 #include "TargetInfo/MSILTargetInfo.h"
 #include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCMSILObjectWriter.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -104,6 +107,13 @@ MCTargetStreamer *llvm::createMSILNullTargetStreamer(MCStreamer &S) {
   return new MSILTargetNullStreamer(S);
 }
 
+std::unique_ptr<MCObjectTargetWriter> llvm::createMSILObjectTargetWriter() {
+  // M13's default writer: writeObject reports "CIL object files are not
+  // supported for MSIL target '<triple>' yet". M19 returns the CIL object
+  // writer instead.
+  return std::make_unique<MCMSILObjectTargetWriter>();
+}
+
 // Force static initialization.
 extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMSILTargetMC() {
   Target &T = getTheMSILTarget();
@@ -122,6 +132,12 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMSILTargetMC() {
 
   // Register the MCInstPrinter.
   TargetRegistry::RegisterMCInstPrinter(T, createMSILMCInstPrinter);
+
+  // Register the MC code emitter.
+  TargetRegistry::RegisterMCCodeEmitter(T, createMSILMCCodeEmitter);
+
+  // Register the MC asm backend.
+  TargetRegistry::RegisterMCAsmBackend(T, createMSILAsmBackend);
 
   // Register the asm target streamer.
   TargetRegistry::RegisterAsmTargetStreamer(T, createMSILAsmTargetStreamer);

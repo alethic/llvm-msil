@@ -52,7 +52,7 @@
 ; compares, which takes over ten seconds with -verify-machineinstrs.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=JTI \
-; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}" --implicit-check-not=throw \
+; DEFINE:   --implicit-check-not=throw \
 ; DEFINE:   --implicit-check-not=.data --implicit-check-not=bytearray
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check} --check-prefixes=CHECK,O2
@@ -144,7 +144,7 @@ define void @foo5() noinline {
 ; O0:          {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
 ; CHECK-NOT:   conv.
 ; CHECK:       {{^}}  switch ([[L0:@BB[0-9]+_[0-9]+]], [[L0]], [[L0]], [[L0]], [[L0]], [[L0]], [[L0]], [[L1:@BB[0-9]+_[0-9]+]], [[L1]], [[L1]], [[L1]], [[L1]], [[L1]], [[L1]], [[L1]], [[L2:@BB[0-9]+_[0-9]+]], [[L2]], [[L2]], [[L2]], [[L2]], [[L2]], [[L3:@BB[0-9]+_[0-9]+]], [[L4:@BB[0-9]+_[0-9]+]], [[L5:@BB[0-9]+_[0-9]+]]){{$}}
-; CHECK-NEXT:  {{^}}  br [[L0]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s [[L0]]{{$}}
 ; CHECK:       {{^}}[[L0]]:{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'foo0'(){{$}}
 ; CHECK:       {{^}}[[L1]]:{{$}}
@@ -236,12 +236,12 @@ sw.epilog:
 ; O2:          {{^}}  ldc.i4.s -10{{$}}
 ; O2-NEXT:     {{^}}  add{{$}}
 ; O2:          {{^}}  ldc.i4.5{{$}}
-; O2-NEXT:     {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
 ; O0:          {{^}}  add{{$}}
-; O0:          {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
+; O0:          {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
 ; CHECK-NOT:   conv.
 ; CHECK:       {{^}}  switch ([[L10:@BB[0-9]+_[0-9]+]], [[L11:@BB[0-9]+_[0-9]+]], [[L12:@BB[0-9]+_[0-9]+]], [[L13:@BB[0-9]+_[0-9]+]], [[L14:@BB[0-9]+_[0-9]+]], [[L15:@BB[0-9]+_[0-9]+]]){{$}}
-; CHECK-NEXT:  {{^}}  br [[L10]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s [[L10]]{{$}}
 ; CHECK:       {{^}}[[L10]]:{{$}}
 ; CHECK:       {{^}}  ldc.i4.7{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
@@ -300,12 +300,12 @@ def:
 ; O2:          {{^}}  ldc.i4.3{{$}}
 ; O2-NEXT:     {{^}}  add{{$}}
 ; O2:          {{^}}  ldc.i4.5{{$}}
-; O2-NEXT:     {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
 ; O0:          {{^}}  add{{$}}
-; O0:          {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
+; O0:          {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
 ; CHECK-NOT:   conv.
 ; CHECK:       {{^}}  switch ([[A:@BB[0-9]+_[0-9]+]], [[B:@BB[0-9]+_[0-9]+]], [[A]], [[C:@BB[0-9]+_[0-9]+]], [[B]], [[D:@BB[0-9]+_[0-9]+]]){{$}}
-; CHECK-NEXT:  {{^}}  br [[A]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s [[A]]{{$}}
 ; CHECK:       {{^}}[[A]]:{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'foo0'(){{$}}
 ; CHECK:       {{^}}[[B]]:{{$}}
@@ -350,11 +350,11 @@ def:
 ; CHECK-NOT:   conv.
 ; O2:          {{^}}  ldarg.0{{$}}
 ; O2-NEXT:     {{^}}  ldc.i4.4{{$}}
-; O2-NEXT:     {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
-; O0:          {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
+; O0:          {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
 ; CHECK-NOT:   conv.
 ; CHECK:       {{^}}  switch ([[A:@BB[0-9]+_[0-9]+]], [[B:@BB[0-9]+_[0-9]+]], [[C:@BB[0-9]+_[0-9]+]], [[D:@BB[0-9]+_[0-9]+]], [[E:@BB[0-9]+_[0-9]+]]){{$}}
-; CHECK-NEXT:  {{^}}  br [[A]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s [[A]]{{$}}
 ; CHECK:       {{^}}[[A]]:{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'foo0'(){{$}}
 ; CHECK:       {{^}}[[E]]:{{$}}
@@ -404,13 +404,13 @@ def:
 ; CHECK-SAME:  native int) cil managed{{$}}
 ; CHECK:       {{^}}  ldc.i4{{(\.4| 4)}}{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
-; O2-NEXT:     {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
+; O2-NEXT:     {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
 ; O2-NEXT:     {{^}}  conv.i4{{$}}
-; O0:          {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
+; O0:          {{^}}  bgt.un.s @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
 ; O0-NOT:      conv.
 ; CHECK:       {{^}}  switch (@BB[[F]]_[[W0:[0-9]+]], @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}){{$}}
-; CHECK-NEXT:  {{^}}  br @BB[[F]]_[[W0]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s @BB[[F]]_[[W0]]{{$}}
 ; CHECK:       {{^}}@BB[[F]]_[[DEF]]:{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'wide64'{{$}}
@@ -465,17 +465,17 @@ def:
 ; CHECK-SAME:  int32) cil managed{{$}}
 ; CHECK-NOT:   switch
 ; O2:          {{^}}  ldc.i4 999{{$}}
-; O2-NEXT:     {{^}}  bgt @BB{{[0-9]+_[0-9]+}}{{$}}
+; O2-NEXT:     {{^}}  bgt.s @BB{{[0-9]+_[0-9]+}}{{$}}
 ; O0:          {{^}}  ldc.i4.1{{$}}
-; O0-NEXT:     {{^}}  beq @BB{{[0-9]+_[0-9]+}}{{$}}
+; O0-NEXT:     {{^}}  beq.s @BB{{[0-9]+_[0-9]+}}{{$}}
 ; O0:          {{^}}  ldc.i4.s 100{{$}}
-; O0-NEXT:     {{^}}  beq @BB{{[0-9]+_[0-9]+}}{{$}}
+; O0-NEXT:     {{^}}  beq.s @BB{{[0-9]+_[0-9]+}}{{$}}
 ; O0:          {{^}}  ldc.i4 1000{{$}}
-; O0-NEXT:     {{^}}  beq @BB{{[0-9]+_[0-9]+}}{{$}}
+; O0-NEXT:     {{^}}  beq.s @BB{{[0-9]+_[0-9]+}}{{$}}
 ; O0:          {{^}}  ldc.i4 10000{{$}}
-; O0-NEXT:     {{^}}  beq @BB{{[0-9]+_[0-9]+}}{{$}}
+; O0-NEXT:     {{^}}  beq.s @BB{{[0-9]+_[0-9]+}}{{$}}
 ; O0:          {{^}}  ldc.i4 100000{{$}}
-; O0-NEXT:     {{^}}  beq @BB{{[0-9]+_[0-9]+}}{{$}}
+; O0-NEXT:     {{^}}  beq.s @BB{{[0-9]+_[0-9]+}}{{$}}
 ; CHECK-NOT:   switch
 ; CHECK:       {{^}}} // end of method 'sparse32'{{$}}
 define i32 @sparse32(i32 %n) {
@@ -514,12 +514,12 @@ def:
 
 ; CHECK-LABEL: .method {{.*}}'two_switches'(
 ; CHECK-SAME:  int32, int32) cil managed{{$}}
-; CHECK:       {{^}}  bgt.un @BB[[F:[0-9]+]]_{{[0-9]+}}{{$}}
+; CHECK:       {{^}}  bgt.un.s @BB[[F:[0-9]+]]_{{[0-9]+}}{{$}}
 ; CHECK:       {{^}}  switch (@BB[[F]]_[[X0:[0-9]+]], @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}){{$}}
-; CHECK-NEXT:  {{^}}  br @BB[[F]]_[[X0]]{{$}}
-; CHECK:       {{^}}  bgt.un @BB[[F]]_{{[0-9]+}}{{$}}
+; CHECK-NEXT:  {{^}}  br.s @BB[[F]]_[[X0]]{{$}}
+; CHECK:       {{^}}  bgt.un.s @BB[[F]]_{{[0-9]+}}{{$}}
 ; CHECK:       {{^}}  switch (@BB[[F]]_[[Y0:[0-9]+]], @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}, @BB[[F]]_{{[0-9]+}}){{$}}
-; CHECK-NEXT:  {{^}}  br @BB[[F]]_[[Y0]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s @BB[[F]]_[[Y0]]{{$}}
 ; CHECK-NOT:   switch
 ; CHECK:       {{^}}} // end of method 'two_switches'{{$}}
 define i32 @two_switches(i32 %x, i32 %y) {
@@ -582,7 +582,7 @@ out:
 ; JT4096-NEXT:  {{^}}  bgt.un @BB[[F:[0-9]+]]_[[DEF:[0-9]+]]{{$}}
 ; JT4096-NEXT:  {{^}}  ldarg.0{{$}}
 ; JT4096-NEXT:  {{^}}  switch ([[LO:@BB[0-9]+_[0-9]+]], {{.*}}){{$}}
-; JT4096-NEXT:  {{^}}  br [[LO]]{{$}}
+; JT4096-NEXT:  {{^}}  br.s [[LO]]{{$}}
 ; JT4096:       {{^}}[[LO]]:{{$}}
 ; JT4096-NEXT:  {{^}}  call void 'lo'(){{$}}
 ; JT4096:       {{^}}@BB[[F]]_[[DEF]]:{{$}}
@@ -630,8 +630,8 @@ out:
 ;PY     # count: copies the CIL from stdin, then prints the number of targets
 ;PY     # of every 'switch' in 'big' and whether the calls of lo and hi are
 ;PY     # reachable from its entry: 'switch' and branches go to their labels,
-;PY     # and every instruction but 'br', 'ret' and 'throw' also falls through
-;PY     # to the next one.
+;PY     # and every instruction but 'br', 'br.s', 'ret' and 'throw' also falls
+;PY     # through to the next one.
 ;PY     il = sys.stdin.read()
 ;PY     sys.stdout.write(il)
 ;PY     lines = il.split('\n')
@@ -653,7 +653,7 @@ out:
 ;PY             continue
 ;PY         seen.add(i)
 ;PY         todo += [at[t] for t in re.findall(r'@BB[0-9]+_[0-9]+', code[i])]
-;PY         if code[i].split()[0] not in ('br', 'ret', 'throw'):
+;PY         if code[i].split()[0] not in ('br', 'br.s', 'ret', 'throw'):
 ;PY             todo.append(i + 1)
 ;PY     for l in code:
 ;PY         if l.startswith('switch '):

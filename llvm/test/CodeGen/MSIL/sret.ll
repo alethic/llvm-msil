@@ -42,19 +42,19 @@ source_filename = "sret.c"
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 8{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 1{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 16{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 16{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 7{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.7{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -96,13 +96,13 @@ define void @method(ptr %this, ptr sret(%struct.S) align 8 %r) {
 ; CHECK-NEXT:  {{^}}  localloc{{$}}
 ; CHECK-NEXT:  {{^}}  stloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 8{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'make'(native int, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 16{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 16{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i{{$}}
@@ -154,12 +154,12 @@ define void @into(ptr %out, i64 %a) {
 ; CHECK-NEXT:  {{^}}  stloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 8{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'method'(native int, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 8{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i{{$}}
@@ -194,14 +194,14 @@ define ptr @addr_make() {
 ; CHECK-NEXT:  {{^}}  localloc{{$}}
 ; CHECK-NEXT:  {{^}}  stloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 8{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.8{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  calli void(native int, native int){{$}}
 ; CHECK-NEXT:  {{^}}  ldloc.0{{$}}
-; CHECK-NEXT:  {{^}}  ldc.i4 24{{$}}
+; CHECK-NEXT:  {{^}}  ldc.i4.s 24{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i{{$}}

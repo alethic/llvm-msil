@@ -69,10 +69,11 @@ public:
 
   const MachineOperand &getCalleeOperand(const MachineInstr &MI) const override;
 
-  /// Returns the extra evaluation-stack depth that the CIL text of \p Opc
-  /// needs while it executes, above the larger of the depths before and after
-  /// it (the StackPeakExtra field of TSFlags). It is non-zero only for records
-  /// that print as several CIL opcodes, such as 'dup; stloc'.
+  /// Returns the extra evaluation-stack depth, above the larger of the depths
+  /// before and after it, reached by the CIL_ instructions that
+  /// MSILMCInstLower::lowerImpl expands \p Opc into (the StackPeakExtra field
+  /// of TSFlags). It is non-zero only for records whose expansion goes above
+  /// that larger depth, such as LOCAL_TEE ('dup' and 'stloc', 1).
   unsigned getStackPeakExtra(unsigned Opc) const;
 };
 

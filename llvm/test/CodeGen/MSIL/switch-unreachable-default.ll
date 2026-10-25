@@ -17,8 +17,7 @@
 ; blocks end in 'ldnull; throw' (TrapUnreachable). The MIR lines check that
 ; nothing but the BR_TABLE_I32 terminates the switch block.
 
-; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=JTI \
-; DEFINE:   --implicit-check-not="{{^ +b[a-z.]+\.s }}"
+; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=JTI
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %s \
 ; RUN:   | %{check}
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %s \
@@ -133,7 +132,7 @@ return:
 ; CHECK-SAME:  int32) cil managed{{$}}
 ; CHECK-NOT:   {{^}}  {{b[a-z.]+|conv.*}}
 ; CHECK:       {{^}}  switch ([[A:@BB[0-9]+_[0-9]+]], [[B:@BB[0-9]+_[0-9]+]], [[C:@BB[0-9]+_[0-9]+]], [[D:@BB[0-9]+_[0-9]+]], [[E:@BB[0-9]+_[0-9]+]]){{$}}
-; CHECK-NEXT:  {{^}}  br [[A]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s [[A]]{{$}}
 ; CHECK-NOT:   throw
 ; CHECK:       {{^}}[[A]]:{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'foo0'(){{$}}
@@ -197,7 +196,7 @@ unreachable:
 ; CHECK:       {{^}}  conv.i4{{$}}
 ; CHECK-NOT:   {{^}}  b{{[a-z.]+}}
 ; CHECK:       {{^}}  switch ([[A:@BB[0-9]+_[0-9]+]], [[B:@BB[0-9]+_[0-9]+]], [[C:@BB[0-9]+_[0-9]+]], [[D:@BB[0-9]+_[0-9]+]], [[E:@BB[0-9]+_[0-9]+]]){{$}}
-; CHECK-NEXT:  {{^}}  br [[A]]{{$}}
+; CHECK-NEXT:  {{^}}  br.s [[A]]{{$}}
 ; CHECK-NOT:   throw
 ; CHECK:       {{^}}[[A]]:{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'foo0'(){{$}}

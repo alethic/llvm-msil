@@ -154,7 +154,7 @@ declare void @llvm.va_end.p0(ptr)
 ; VAARG-IL-SAME:  native int) cil managed{{$}}
 ; VAARG-IL-NEXT:  {{^\{$}}
 ; VAARG-IL-NEXT:  {{^}}  .maxstack 1{{$}}
-; VAARG-IL-NEXT:  {{^}}  ldc.i4 0{{$}}
+; VAARG-IL-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; VAARG-IL-NEXT:  {{^}}  conv.i{{$}}
 ; VAARG-IL-NEXT:  {{^}}  ret{{$}}
 ; VAARG-IL-NEXT:  {{^}}} // end of method 'arg_ptr'{{$}}

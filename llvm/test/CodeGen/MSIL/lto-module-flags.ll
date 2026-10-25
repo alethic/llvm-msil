@@ -90,8 +90,8 @@
 ; RUN: FileCheck %s --check-prefixes=OK,OK-WIN --input-file=%t/lto-ok.win.il
 ; OK: {{^}}.assembly 'ok' { .ver 0:0:0:0 }{{$}}
 ; OK: {{^}}.method {{.*}}'<msil>undef_maybe'(){{.*}}
-; OK-LNX: pinvokeimpl("libc" cdecl) int32 'puts'(native int)
-; OK-WIN: pinvokeimpl("ucrtbase" cdecl) int32 'puts'(native int)
+; OK-LNX: pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int)
+; OK-WIN: pinvokeimpl("ucrtbase" nomangle cdecl) int32 'puts'(native int)
 ; OK: .entrypoint
 
 ; A malformed msil-lto flag counts as absent: an MDString ("yes") or a value

@@ -1,0 +1,77 @@
+//===- BCLMembers.def - BCL entities the MSIL toolchain uses ----*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// The one list of base class library types and members that generated code
+// and msil-ld's synthesized code use (ImplementationPlan.md 5.7.2, 5.11.7):
+// the MSIL target prints its BCL references from it, and the trailer builder
+// and the reference binder bind them by it. Two X-macros:
+//
+//   CLI_BCL_TYPE(Id, Namespace, Name, MscorlibSafe)
+//   CLI_BCL_METHOD(Id, OwnerType, Name, HasThis, Return, Params, Strength,
+//                  Fallback, MscorlibSafe)
+//
+//   Id         the cli::BCLMemberId enumerator; methods are named
+//              <OwnerType>_<Name>;
+//   Namespace  the type's namespace ("" for none);
+//   Name       the type's name (a nested type as "Outer/Inner") or the
+//              method's name;
+//   OwnerType  the Id of the CLI_BCL_TYPE entry that declares the method;
+//   HasThis    true for an instance method;
+//   Return, Params
+//              the signature as canonical listing v1 text (plan 5.7.10): the
+//              return type, and the parameter types joined by ", " ("" for
+//              none);
+//   Strength   a cli::BCLStrength enumerator (plan 5.11.5): what a link does
+//              when the references do not define the member;
+//   Fallback   for OptionalSubstitute, the helper symbol that is called
+//              instead; "" otherwise;
+//   MscorlibSafe
+//              true when the entry exists in mscorlib 4.0.0.0 on .NET
+//              Framework 4.8, .NET 8 and .NET 10, so that msil-ld's built-in
+//              [mscorlib] table (plan 5.11.7) contains it.
+//
+// Each macro is expanded only when it is defined; the file #undef's both at
+// the end. Entries are only ever added (M20, M21 and M22 add theirs); the
+// order fixes the BCLMemberId values.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef CLI_BCL_TYPE
+#define CLI_BCL_TYPE(Id, Namespace, Name, MscorlibSafe)
+#endif
+#ifndef CLI_BCL_METHOD
+#define CLI_BCL_METHOD(Id, OwnerType, Name, HasThis, Return, Params, Strength, \
+                       Fallback, MscorlibSafe)
+#endif
+
+// The base type of the data image's value type (decision D12).
+CLI_BCL_TYPE(ValueType, "System", "ValueType", true)
+// The owner types of Phase 1's members (decision D10).
+CLI_BCL_TYPE(Marshal, "System.Runtime.InteropServices", "Marshal", true)
+CLI_BCL_TYPE(Environment, "System", "Environment", true)
+CLI_BCL_TYPE(Buffer, "System", "Buffer", true)
+CLI_BCL_TYPE(Interlocked, "System.Threading", "Interlocked", true)
+
+// The data segment and argv allocations (D12, D27): neither zeroed nor freed.
+CLI_BCL_METHOD(Marshal_AllocHGlobal, Marshal, "AllocHGlobal", false,
+               "native int", "native int", Required, "", true)
+// argv strings in the native narrow encoding (D27).
+CLI_BCL_METHOD(Marshal_StringToHGlobalAnsi, Marshal, "StringToHGlobalAnsi",
+               false, "native int", "string", Required, "", true)
+// argv (D27).
+CLI_BCL_METHOD(Environment_GetCommandLineArgs, Environment,
+               "GetCommandLineArgs", false, "string[]", "", Required, "", true)
+// memmove and variable-length memcpy (D15).
+CLI_BCL_METHOD(Buffer_MemoryCopy, Buffer, "MemoryCopy", false, "void",
+               "void*, void*, int64, int64", Required, "", true)
+// Fences that are not single-threaded (D36).
+CLI_BCL_METHOD(Interlocked_MemoryBarrier, Interlocked, "MemoryBarrier", false,
+               "void", "", Required, "", true)
+
+#undef CLI_BCL_TYPE
+#undef CLI_BCL_METHOD
