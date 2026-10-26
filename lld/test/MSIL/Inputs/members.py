@@ -1,7 +1,7 @@
 """List the classes of a canonical listing and their members, for
 lld/test/MSIL's spill-class tests.
 
-Usage: members.py [--limit N] <listing>
+Usage: members.py [--limit N] [--spill-base TYPE] <listing>
 
 <listing> is llvm-cil-dump's canonical listing (ImplementationPlan.md
 5.7.10). The script prints, per class in listing order,
@@ -11,10 +11,13 @@ Usage: members.py [--limit N] <listing>
   field <class>::<name> flags=<flags>         (one per field)
   count <class> methods=<n> fields=<n>
 
-and with --limit N a last line 'limit N ok' when no class has more than N
+and with --limit N a line 'limit N ok' when no class has more than N
 methods or N fields (5.9.12's per-type limits, lowered by
 --msil-type-member-limit), else 'limit N exceeded by <class>' and exit
-status 1.
+status 1. With --spill-base TYPE a last line 'spill base TYPE ok (<n>
+classes)' when there is a '<msil>Spill<N>' class and every one extends TYPE
+(the listing's text, such as [mscorlib]System.Object), else 'spill base
+TYPE: <class> extends <type>' (or 'no spill class') and exit status 1.
 """
 
 import re
@@ -22,13 +25,18 @@ import sys
 
 CLASS = re.compile(r"^\.class '((?:[^'\\]|\\.)*)' flags=(0x[0-9A-F]+)(?: extends (.*))?$")
 MEMBER = re.compile(r"^  \.(method|field) '((?:[^'\\]|\\.)*)' .* flags=(0x[0-9A-F]+)(?: impl=0x[0-9A-F]+)?$")
+SPILL = re.compile(r"^<msil>Spill[0-9]+$")
 
 
 def main():
     args = sys.argv[1:]
     limit = None
-    if args and args[0] == "--limit":
-        limit = int(args[1])
+    spill_base = None
+    while args and args[0] in ("--limit", "--spill-base"):
+        if args[0] == "--limit":
+            limit = int(args[1])
+        else:
+            spill_base = args[1]
         args = args[2:]
     lines = open(args[0], encoding="utf-8").read().splitlines()
     classes = []
@@ -53,6 +61,16 @@ def main():
             print("limit %d exceeded by %s" % (limit, bad))
             sys.exit(1)
         print("limit %d ok" % limit)
+    if spill_base is not None:
+        spills = [(name, base) for name, _, base, _, _ in classes if SPILL.match(name)]
+        if not spills:
+            print("spill base %s: no spill class" % spill_base)
+            sys.exit(1)
+        for name, base in spills:
+            if base != spill_base:
+                print("spill base %s: %s extends %s" % (spill_base, name, base))
+                sys.exit(1)
+        print("spill base %s ok (%d classes)" % (spill_base, len(spills)))
 
 
 if __name__ == "__main__":

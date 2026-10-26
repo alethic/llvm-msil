@@ -35,9 +35,11 @@ and exits 1. A lister that fails, or an image that ilasm cannot build, exits
                   justification is required) or a skip line
                   'skip <oracle>[@<triple>][:<level>] <test path> <reason>'
                   (plan section 12, 'Plan 5.12.6 amended (skip lines)'), whose
-                  oracle is O3 or O4, whose optional triple is an MSIL triple
-                  (it ends in '-msil') and whose optional level is one of O0,
-                  O1, O2, O3, Os and Oz, as in
+                  oracle is O3, O4 or O6 (O6 lines are msil-verify.py's: this
+                  script compares O3 and O4 only and never matches them),
+                  whose optional triple is an MSIL triple (it ends in '-msil')
+                  and whose optional level is one of O0, O1, O2, O3, Os and
+                  Oz, as in
                   'skip O3@x86_64-pc-windows-msvc-msil:O2 <path> <reason>'.
                   A malformed line, or a name given twice, is a usage error.
   --allow NAME    allow the entry NAME (repeatable); a name that is not an
@@ -92,6 +94,10 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 ORACLES = ("O3", "O4")
+# Skip lines may name O3, O4 and O6: msil-verify.py --md-baseline --equiv-skip
+# reads the O6 lines (plan section 12, 'M21.c extended'), while --oracle stays
+# O3 or O4.
+SKIP_ORACLES = ORACLES + ("O6",)
 LEVELS = ("O0", "O1", "O2", "O3", "Os", "Oz")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 # The word after 'skip': <oracle>[@<triple>][:<level>] (plan section 12,
@@ -134,10 +140,11 @@ class Allowed:
             words = text.split()
             if words[0] == "skip":
                 key = SKIP_KEY_RE.match(words[1]) if len(words) >= 4 else None
-                if not key or key.group("oracle") not in ORACLES:
+                if not key or key.group("oracle") not in SKIP_ORACLES:
                     raise UsageError(
                         "%s: expected 'skip <oracle>[@<triple>][:<level>] "
-                        "<test path> <reason>' with the oracle O3 or O4" % where
+                        "<test path> <reason>' with the oracle O3, O4 or O6"
+                        % where
                     )
                 triple, level = key.group("triple"), key.group("level")
                 if triple is not None and not triple.endswith("-msil"):

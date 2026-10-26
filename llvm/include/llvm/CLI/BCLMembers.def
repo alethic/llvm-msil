@@ -86,5 +86,17 @@ CLI_BCL_METHOD(EntryPointNotFoundException_ctor, EntryPointNotFoundException,
 // M20: the base type of msil-ld's '<msil>Spill<N>' classes (plan 5.9.12).
 CLI_BCL_TYPE(Object, "System", "Object", true)
 
+// M21: the data-import helper's first choice (plan 5.10.12), Load(string)
+// then GetExport(native int, string), both throwing on failure. msil-ld
+// requests them only when the references define both
+// (BCLBinder::isDefined), so they are not mscorlib-safe and never part of
+// the built-in table.
+CLI_BCL_TYPE(NativeLibrary, "System.Runtime.InteropServices", "NativeLibrary",
+             false)
+CLI_BCL_METHOD(NativeLibrary_Load, NativeLibrary, "Load", false, "native int",
+               "string", Required, "", false)
+CLI_BCL_METHOD(NativeLibrary_GetExport, NativeLibrary, "GetExport", false,
+               "native int", "native int, string", Required, "", false)
+
 #undef CLI_BCL_TYPE
 #undef CLI_BCL_METHOD

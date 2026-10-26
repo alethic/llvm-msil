@@ -1,0 +1,18 @@
+# Run in nested lits by ../../../../ref-flags.test (M21): it prints the
+# reference features and substitutions of the configuration (plan 5.12.2,
+# 5.12.3): msil-ref=<name>, msil-refpack=<name> with %{msil_ref_dir_<name>},
+# %{msil_ref_flags} and %{msil_ldflags} (each between brackets, so an empty
+# one shows), the %msil_verify command and the %msil_check_mscorlib_safe
+# command.
+# RUN: %if msil-ref=none %{ echo feature msil-ref=none %}
+# RUN: %if msil-ref=net48 %{ echo feature msil-ref=net48 %}
+# RUN: %if msil-ref=net8 %{ echo feature msil-ref=net8 %}
+# RUN: %if msil-ref=net10 %{ echo feature msil-ref=net10 %}
+# RUN: %if msil-ref=path %{ echo feature msil-ref=path %}
+# RUN: %if msil-refpack=net48 %{ echo feature msil-refpack=net48 %{msil_ref_dir_net48} %}
+# RUN: %if msil-refpack=net8 %{ echo feature msil-refpack=net8 %{msil_ref_dir_net8} %}
+# RUN: %if msil-refpack=net10 %{ echo feature msil-refpack=net10 %{msil_ref_dir_net10} %}
+# RUN: echo ref-flags [%{msil_ref_flags}]
+# RUN: echo ldflags [%{msil_ldflags}]
+# RUN: echo verify %msil_verify
+# RUN: echo mscorlib-safe %msil_check_mscorlib_safe

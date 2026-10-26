@@ -1,0 +1,68 @@
+## --reproduce and reference assemblies (ImplementationPlan.md 5.9.14: the
+## tar holds every file msil-ld read, reference assemblies included; M21.a
+## item 3: every file is read through the driver). A directory given with
+## --reference contributes each assembly in it, a file given with
+## --reference and a positional reference are read too, and each is in the
+## tar under its path rewritten by lld/Common/Reproduce.cpp, as the objects
+## are (reproduce.test). The response file keeps the --reference options,
+## and the link is unchanged by --reproduce.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p build pack extra pos
+# RUN: llc -filetype=obj p1.ll -o build/p1.o
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o pack/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibrary.yaml -o extra/FakeNativeLibrary.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeFacade.yaml -o pos/FakeFacade.dll
+
+# RUN: msil-ld build/p1.o --reference=pack --reference=extra/FakeNativeLibrary.dll pos/FakeFacade.dll \
+# RUN:   -o build/prog.exe --reproduce=repro.tar 2>&1 | count 0
+# RUN: tar tf repro.tar | FileCheck %s --check-prefix=TAR -DPATH='repro/%:t'
+# RUN: tar xOf repro.tar repro/response.txt | FileCheck %s --check-prefix=RSP -DPATH='%:t'
+
+# TAR-DAG: {{^}}repro/response.txt{{$}}
+# TAR-DAG: {{^}}repro/version.txt{{$}}
+# TAR-DAG: {{^}}[[PATH]]/build/p1.o{{$}}
+# TAR-DAG: {{^}}[[PATH]]/pack/FakeCore.dll{{$}}
+# TAR-DAG: {{^}}[[PATH]]/pack/FakeInterop.dll{{$}}
+# TAR-DAG: {{^}}[[PATH]]/pack/FakeThreading.dll{{$}}
+# TAR-DAG: {{^}}[[PATH]]/extra/FakeNativeLibrary.dll{{$}}
+# TAR-DAG: {{^}}[[PATH]]/pos/FakeFacade.dll{{$}}
+
+# RSP-DAG: {{^}}-o prog.exe{{$}}
+# RSP-DAG: {{^}}{{.*}}[[PATH]]/build/p1.o{{$}}
+# RSP-DAG: {{^}}--reference{{[= ]}}{{.*}}pack{{$}}
+# RSP-DAG: {{^}}--reference{{[= ]}}{{.*}}extra{{[/\\]}}FakeNativeLibrary.dll{{$}}
+# RSP-DAG: {{^}}{{.*}}pos{{[/\\]}}FakeFacade.dll{{$}}
+
+## The same link without --reproduce.
+# RUN: mkdir plain
+# RUN: msil-ld build/p1.o --reference=pack --reference=extra/FakeNativeLibrary.dll pos/FakeFacade.dll \
+# RUN:   -o plain/prog.exe 2>&1 | count 0
+# RUN: cmp build/prog.exe plain/prog.exe
+
+#--- p1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@buf = global [16 x i8] c"0123456789abcdef", align 1
+@ptr = global ptr @buf, align 8
+
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+
+define void @shift(i64 %n) {
+  %p = load ptr, ptr @ptr
+  %q = getelementptr i8, ptr %p, i64 1
+  call void @llvm.memmove.p0.p0.i64(ptr %q, ptr %p, i64 %n, i1 false)
+  fence seq_cst
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %a = sext i32 %argc to i64
+  call void @shift(i64 %a)
+  %p = load ptr, ptr @ptr
+  %c = load i8, ptr %p
+  %r = zext i8 %c to i32
+  ret i32 %r
+}

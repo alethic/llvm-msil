@@ -9,7 +9,7 @@
 // Derived from lld/wasm/Options.td at 64f50ffd4f1c.
 //
 // The options of msil-ld: the rows of llvm/docs/MSIL/ImplementationPlan.md
-// 5.9.3 that M13, M14, M15 and M20 implement, with lld's spellings. Every
+// 5.9.3 that M13, M14, M15, M20 and M21 implement, with lld's spellings. Every
 // option of a later milestone is an unknown argument until that milestone
 // adds it, except -shared, which the clang driver already passes and msil-ld
 // rejects.
@@ -166,8 +166,23 @@ def msil_type_member_limit: JJ<"msil-type-member-limit=">,
   HelpText<"Move members past <n> methods or fields of a type to spill "
   "classes when <n> is below the real limits (for tests)">;
 
+def print_bcl_binding: JJ<"print-bcl-binding=">, MetaVarName<"<request>">,
+  Flags<[HelpHidden]>,
+  HelpText<"Print how the reference assemblies bind <request> "
+  "(type:<Ns>.<Name>[/<Nested>], member:<BCLMemberId>[:drop|:substitute], "
+  "typename:<name> or attr:(<params>):<hex>) "
+  "and exit (for tests)">;
+
+def print_bcl_table: FF<"print-bcl-table">,
+  HelpText<"Print the built-in [mscorlib] table of .NET members and exit">;
+
 def print_imports: FF<"print-imports">,
   HelpText<"Print the native imports and the ELF version floor of each library">;
+
+// No short form: lld's -r is --relocatable and -R is --rpath.
+defm reference: EEq<"reference",
+  "Bind .NET types and members against this reference assembly, or every "
+  "assembly in this directory">;
 
 defm target: EEq<"target",
   "Code generation triple (default: the first input's triple, with -msil "

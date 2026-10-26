@@ -1,0 +1,70 @@
+# Reference assemblies given as positional link inputs bind exactly as --reference does: the images are cmp-equal.
+# A positional managed .dll without the toolchain's symbol-table attribute is
+# a reference assembly, the same as --reference=<file> (plan 5.11.1; Design.md
+# 5.2 step 2.2), and a --reference directory contributes its *.dll files with
+# CLI metadata (not recursively), so a link that names only the assemblies
+# it binds to and a link that names their whole directory bind the same
+# definitions; the output depends only on what is bound, never on the order
+# of the references (plan 5.11.6). The composite links p1prog with the
+# Framework v4.8 mscorlib.dll as a positional input and no --reference
+# (%{msil_libs} reaches only the MSIL link, plan 5.12.3) and runs it in every
+# leg, the .NET Framework included. The RUN lines after it link it at -O2
+# with that positional input, with --reference=<the v4.8 directory>, with
+# --reference=<mscorlib.dll> and with '--reference <mscorlib.dll>' (the
+# separate-argument spelling), and require byte-identical images. With the
+# .NET 8 pack (msil-refpack=net8) the positional System.Threading.dll,
+# System.Runtime.InteropServices.dll and System.Runtime.dll (out of their
+# first-use order), the same three as --reference files in another order,
+# and --reference=<the net8.0 directory> give one image too; it is not run
+# here (rows-net8.test runs that binding). Plan 5.11.1, 5.11.6.
+# REQUIRES: msil-refpack=net48
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p1prog.c
+# REDEFINE: %{msil_ref_flags} =
+# REDEFINE: %{msil_libs} = %{msil_ref_dir_net48}/mscorlib.dll
+# RUN: %{msil_prog}
+# DEFINE: %{pos_name} = pos
+# DEFINE: %{pos_build} = \
+# DEFINE:   rm -rf %t.%{pos_name}.d \
+# DEFINE:   && %msil_prog_build --level O2 --link-output pe --workdir %t.%{pos_name}.d \
+# DEFINE:      --out %t.%{pos_name}.d/prog.exe --src %t/p1prog.c
+# RUN: %{pos_build} --lib='%{msil_ref_dir_net48}/mscorlib.dll'
+# REDEFINE: %{pos_name} = dir
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net48}
+# RUN: %{pos_build}
+# REDEFINE: %{pos_name} = file
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net48}/mscorlib.dll
+# RUN: %{pos_build}
+# REDEFINE: %{pos_name} = separate
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference,%{msil_ref_dir_net48}/mscorlib.dll
+# RUN: %{pos_build}
+# RUN: cmp %t.pos.d/prog.exe %t.dir.d/prog.exe
+# RUN: cmp %t.pos.d/prog.exe %t.file.d/prog.exe
+# RUN: cmp %t.pos.d/prog.exe %t.separate.d/prog.exe
+# REDEFINE: %{pos_name} = net8pos
+# REDEFINE: %{msil_ref_flags} =
+# RUN: %if msil-refpack=net8 %{ %{pos_build} --lib='%{msil_ref_dir_net8}/System.Threading.dll %{msil_ref_dir_net8}/System.Runtime.InteropServices.dll %{msil_ref_dir_net8}/System.Runtime.dll' %}
+# REDEFINE: %{pos_name} = net8files
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net8}/System.Runtime.InteropServices.dll -Wl,--reference=%{msil_ref_dir_net8}/System.Runtime.dll -Wl,--reference=%{msil_ref_dir_net8}/System.Threading.dll
+# RUN: %if msil-refpack=net8 %{ %{pos_build} %}
+# REDEFINE: %{pos_name} = net8dir
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net8}
+# RUN: %if msil-refpack=net8 %{ %{pos_build} && cmp %t.net8pos.d/prog.exe %t.net8dir.d/prog.exe && cmp %t.net8files.d/prog.exe %t.net8dir.d/prog.exe %}
+#--- p1prog.c
+/* llvm/docs/MSIL/recon/p2/bcl-binding-files/runtime/p1prog.c, the program of
+   bcl-binding 1.2 and 3.2. */
+/* Exercises every BCL member Phase 1 emits: the data segment (AllocHGlobal
+   and the RVA image type extending System.ValueType), argv
+   (GetCommandLineArgs, AllocHGlobal, StringToHGlobalAnsi), a variable-length
+   memmove (Buffer::MemoryCopy) and a fence (Interlocked::MemoryBarrier). */
+#include <stddef.h>
+int puts(const char *);
+static char buf[64] = "hello";
+const char *table[] = {buf, "world"};
+int main(int argc, char **argv) {
+  size_t n = (size_t)argc + 3;
+  __builtin_memmove(buf + 1, buf, n);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  puts(table[1]);
+  return argv[0][0] != 0 ? 42 : 1;
+}

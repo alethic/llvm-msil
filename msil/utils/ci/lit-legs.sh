@@ -40,6 +40,18 @@
 #                image of the -S text, canonically; O6 needs PEVerify, which Linux lacks, so
 #                msil-verify.py skips it with a note); no msil_scale_tests (lit-legs.ps1's
 #                obj leg alone sets it, plan 5.12.2)
+#   refs-net48   msil/test/M1/11-programs, msil/test/M2/00-link and msil/test/M2/05-refs with
+#                msil_pipeline=obj and msil_references=net48 (plan 5.11.10, 5.12.11, M21): every
+#                link binds the BCL against the .NET Framework 4.8 reference assemblies, here the
+#                NuGet package microsoft.netframework.referenceassemblies.net48 that
+#                msil/utils/tools/msil-tools.proj pins ($MSIL_REF_NET48, which msil-ci.yml
+#                exports), with msil_equiv=1 (O3 with the scopes entry of equiv-allowed.txt; no
+#                O6 without PEVerify), on .NET 8; lit-legs.ps1's refs-net48 also runs the .NET
+#                Framework 4.8, which Linux lacks
+#   refs-net8    the same paths with msil_references=net8 (the newest Microsoft.NETCore.App.Ref
+#                8.x pack) on .NET 8; msil-verify.py runs ILVerify against the pack (PEVerify,
+#                which cannot load such an image, does not exist here anyway)
+#   refs-net10   the same with msil_references=net10 (the newest 10.x pack) on .NET 10
 #   roundtrip    msil/test/M1/11-programs through ildasm -> ilasm, then run (Design.md 5.5)
 #   hosted       optional, runs only when named with --leg hosted (plan Q16, 5.12.11):
 #                msil/test/M2/09-hosted, the hosted compile-only tests, with msil_glibc_sysroot
@@ -111,12 +123,16 @@ m1=("$MSIL_REPO/msil/test/M1")
 m2=()
 [[ ! -d $MSIL_REPO/msil/test/M2 ]] || m2=("$MSIL_REPO/msil/test/M2")
 programs=("$MSIL_REPO/msil/test/M1/11-programs")
+# The paths of the reference legs (plan 5.12.11, M21); lit-legs.ps1's $refs is the same list.
+refs=("$MSIL_REPO/msil/test/M1/11-programs" "$MSIL_REPO/msil/test/M2/00-link"
+  "$MSIL_REPO/msil/test/M2/05-refs")
 tc0=msil_dotnet_env=DOTNET_TieredCompilation=0
 
 # name:kind (kind: lit, expected, utc, upstream; a 'full' suffix marks --full legs, an
 # 'optional' suffix legs that run only when --leg names them)
-legs=(net8:lit net10:lit net8-tc0:lit net10-tc0:lit more-levels:lit lto:lit det:lit obj:lit roundtrip:lit
-  hosted:lit:optional expected:expected utc:utc all-levels:lit:full upstream:upstream:full)
+legs=(net8:lit net10:lit net8-tc0:lit net10-tc0:lit more-levels:lit lto:lit det:lit obj:lit
+  refs-net48:lit refs-net8:lit refs-net10:lit roundtrip:lit hosted:lit:optional expected:expected
+  utc:utc all-levels:lit:full upstream:upstream:full)
 
 # The tests of the utc leg; lit-legs.ps1 has the same list (keep the two the same).
 # wasm-function-name is left out: it needs WebAssembly, which msil/cmake/caches/MSIL.cmake does
@@ -129,6 +145,7 @@ leg_paths() {
     net10 | net8-tc0 | net10-tc0 | more-levels) printf '%s\n' "${m1[@]}" ;;
     lto | obj) printf '%s\n' "${m1[@]}" "${m2[@]}" ;;
     det) echo "$MSIL_REPO/msil/test/M2/06-det" ;;
+    refs-net48 | refs-net8 | refs-net10) printf '%s\n' "${refs[@]}" ;;
     roundtrip) printf '%s\n' "${programs[@]}" ;;
     hosted) echo "$MSIL_REPO/msil/test/M2/09-hosted" ;;
     all-levels) echo "$MSIL_REPO/msil/test" ;;
@@ -145,6 +162,9 @@ leg_params() {
     lto) printf '%s\n' msil_pipeline=lto msil_dotnet_runtime=8 msil_native_oracle=required ;;
     det) echo msil_dotnet_runtime=8 ;;
     obj) printf '%s\n' msil_pipeline=obj msil_equiv=1 msil_dotnet_runtime=8 msil_native_oracle=required ;;
+    refs-net48) printf '%s\n' msil_pipeline=obj msil_references=net48 msil_equiv=1 ;;
+    refs-net8) printf '%s\n' msil_pipeline=obj msil_references=net8 msil_dotnet_runtime=8 ;;
+    refs-net10) printf '%s\n' msil_pipeline=obj msil_references=net10 msil_dotnet_runtime=10 ;;
     roundtrip) echo msil_roundtrip=1 ;;
     hosted) echo "msil_glibc_sysroot=${MSIL_GLIBC_SYSROOT:-/}" ;;
     all-levels) echo msil_opt_levels=O0,O1,O2,O3,Os,Oz ;;

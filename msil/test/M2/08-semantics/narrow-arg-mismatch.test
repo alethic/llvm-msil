@@ -1,4 +1,4 @@
-# Matrix case narrow-arg-mismatch: narrow arguments through prototypes against wider parameters (native 200 and -56).
+# Matrix case narrow-arg-mismatch: narrow arguments through prototypes against wider parameters, the same on the obj and lto pipelines (native 200 and -56).
 # a.c declares int ui(unsigned char) and long long ul(unsigned char) and, on
 # the Linux triple, int si(signed char) and long long sl(signed char), and
 # calls them with 200 and -56; b.c defines them with int and long long
@@ -14,7 +14,17 @@
 # only bool: zero-extended, 200; signext: -56), and the LTO path's wrappers
 # do the same (section 12 row 'Plan 5.9.8 (LTO path) and 5.9.16 clarified'),
 # so both pipelines print the native transcript, never the sign-extended -56
-# for ui(200) and ul(200) that the LTO path printed before M20's fix.
+# for ui(200) and ul(200) that the LTO path printed before M20's fix (M20.a's
+# counterexample, long long h(unsigned char) against long long h(long long),
+# is ul). The composite builds the program the leg's way (msil-prog-pipeline)
+# and compares it with the native build. Since the object and LTO paths must
+# agree on every triple (plan 5.9.8, 'so the object and LTO paths agree';
+# section 12, 2026-10-26, 'M21.e extended' and 'M21.b extended' item 2), the
+# RUN lines after it build the program on both pipelines in every leg, so the
+# Linux triple's LTO path, which no Phase 2 leg runs through the composite
+# before M23, is checked in the WSL legs too: at -O0 and -O2, the object
+# link and the LTO link each give exactly their warnings, verify, force-JIT
+# and print the native transcript, and the two transcripts are equal.
 # Natively the test observes only what both ABIs define. Win64 passes a char
 # in cl alone and leaves the rest of rcx unspecified (clang -O2 writes just
 # 'mov cl, -56'), so clear(0) runs before each unsigned call and zeroes rcx:
@@ -23,15 +33,34 @@
 # extends to 32 bits only, so the signed case reads sl's argument through
 # its low 32 bits (natively rdi holds 4294967240), and it stays off the
 # Windows triple, where a signed char's upper bits are not defined either:
-# narrow-arg-mismatch.linux.expected holds its two lines. Plan 5.9.8 ('so
-# the object and LTO paths agree') and 5.9.16.
+# narrow-arg-mismatch.linux.expected holds its two lines. Plan 5.9.8
+# ('so the object and LTO paths agree') and 5.9.16.
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
 # RUN: %{msil_prog}
-# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefixes=LINK,OBJ%if msil-triple-linux %{,OBJ-LNX%} --implicit-check-not="warning:" --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
-# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefixes=LINK,OBJ%if msil-triple-linux %{,OBJ-LNX%} --implicit-check-not="warning:" --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
-# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefixes=LINK,LTO%if msil-triple-linux %{,LTO-LNX%} --implicit-check-not="warning:" --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
-# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefixes=LINK,LTO%if msil-triple-linux %{,LTO-LNX%} --implicit-check-not="warning:" --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# DEFINE: %{narrow_level} = O0
+# DEFINE: %{narrow_both} = \
+# DEFINE:   rm -rf %t.obj.%{narrow_level}.d %t.lto.%{narrow_level}.d \
+# DEFINE:   && %msil_prog_build --pipeline obj --link-output pe --level %{narrow_level} \
+# DEFINE:      --workdir %t.obj.%{narrow_level}.d --out %t.obj.%{narrow_level}.d/prog.exe --src %{msil_srcs} 2>&1 \
+# DEFINE:   | FileCheck %s --check-prefixes=LINK,OBJ%if msil-triple-linux %{,OBJ-LNX%} \
+# DEFINE:      --implicit-check-not="warning:" --implicit-check-not="signature mismatch" \
+# DEFINE:      --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# DEFINE:   && %msil_prog_build --pipeline lto --link-output pe --level %{narrow_level} \
+# DEFINE:      --workdir %t.lto.%{narrow_level}.d --out %t.lto.%{narrow_level}.d/prog.exe --src %{msil_srcs} 2>&1 \
+# DEFINE:   | FileCheck %s --check-prefixes=LINK,LTO%if msil-triple-linux %{,LTO-LNX%} \
+# DEFINE:      --implicit-check-not="warning:" --implicit-check-not="signature mismatch" \
+# DEFINE:      --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
+# DEFINE:   && %msil_verify %t.obj.%{narrow_level}.d/prog.exe \
+# DEFINE:   && %msil_verify %t.lto.%{narrow_level}.d/prog.exe \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %t.obj.%{narrow_level}.d/prog.exe \
+# DEFINE:      && %msil_jitall %t.lto.%{narrow_level}.d/prog.exe %} \
+# DEFINE:   && %msil_exec --expect %S/%{s:stem} --out %t.obj.%{narrow_level}.out %t.obj.%{narrow_level}.d/prog.exe \
+# DEFINE:   && %msil_exec --expect %S/%{s:stem} --out %t.lto.%{narrow_level}.out %t.lto.%{narrow_level}.d/prog.exe \
+# DEFINE:   && diff %t.obj.%{narrow_level}.out %t.lto.%{narrow_level}.out
+# RUN: %{narrow_both}
+# REDEFINE: %{narrow_level} = O2
+# RUN: %{narrow_both}
 # LINK:         {{^}}msil-prog: {{.*}} obj/a.o obj/b.o -o prog.exe{{$}}
 # OBJ:          {{^}}msil-ld: warning: function signature mismatch: ul{{$}}
 # OBJ-NEXT:     {{^}}>>> defined as native int(native int) in {{.*}}b.o{{$}}

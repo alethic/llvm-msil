@@ -117,8 +117,9 @@ InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName,
     return f->obj ? f : nullptr;
   }
 
-  // A PE with a CLI header: a CIL object, or a .NET assembly, which the
-  // ObjFile constructor reports (plan 5.9.4).
+  // A PE with a CLI header: a CIL object. The driver classifies .NET
+  // assemblies before it gets here (plan 5.9.4); the ObjFile constructor
+  // skips one in an archive.
   if (isCLIImage(mb)) {
     auto *f = make<ObjFile>(mb, archiveName, lazy);
     return f->isValid() ? f : nullptr;
@@ -154,10 +155,15 @@ ObjFile::ObjFile(MemoryBufferRef m, StringRef archiveName, bool lazy)
   }
   reader = std::move(*mdOrErr);
 
-  // .NET assemblies are reference assemblies (M21) or libraries of this
-  // toolchain (M22).
+  // .NET assemblies are reference assemblies or libraries of this
+  // toolchain, which the driver classifies before it creates input files
+  // (plan 5.9.4, 5.11.1). An archive member that is one is not linked.
   if (reader->isAssembly()) {
-    error(toString(this) + ": .NET assembly inputs are not supported yet");
+    if (!archiveName.empty())
+      warn(toString(this) +
+           ": .NET assemblies in archives are not linked; ignored");
+    else
+      error(toString(this) + ": a .NET assembly is not a CIL object");
     return;
   }
 

@@ -24,8 +24,8 @@
 #     level only covers every triple at that level; an unqualified line
 #     covers the test whatever --triple and --level say;
 # (7) a skip line whose triple is not an MSIL triple, whose level is not one
-#     of O0, O1, O2, O3, Os and Oz, or whose oracle is neither O3 nor O4 is
-#     a usage error (status 2);
+#     of O0, O1, O2, O3, Os and Oz, or whose oracle is none of O3, O4 and O6
+#     is a usage error (status 2);
 # (8) the real file skips O3 of msil/test/M1/11-programs/crc32.c on
 #     x86_64-pc-windows-msvc-msil at -O2 only: not at -O0, and not on
 #     x86_64-unknown-linux-gnu-msil at -O2 (plan 5.9.9 rule 6; the two sides
@@ -94,7 +94,7 @@
 # RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-level.txt --test %s --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/7b.log 2>&1
 # RUN: %{harness_check} contains %t/7b.log "^msil-equiv: error: \S*bad-level\.txt:1: the level O4 of the skip line is not one of O0, O1, O2, O3, Os, Oz$"
 # RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-oracle.txt --test %s --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/7c.log 2>&1
-# RUN: %{harness_check} contains %t/7c.log "^msil-equiv: error: \S*bad-oracle\.txt:1: expected 'skip <oracle>\[@<triple>\]\[:<level>\] <test path> <reason>' with the oracle O3 or O4$"
+# RUN: %{harness_check} contains %t/7c.log "^msil-equiv: error: \S*bad-oracle\.txt:1: expected 'skip <oracle>\[@<triple>\]\[:<level>\] <test path> <reason>' with the oracle O3, O4 or O6$"
 
 # (8)
 # RUN: %msil_equiv --oracle O3 --test %S/../../M1/11-programs/crc32.c --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/8a.log

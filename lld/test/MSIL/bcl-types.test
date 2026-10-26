@@ -1,0 +1,125 @@
+## Type lookup (ImplementationPlan.md 5.11.4, M21.b item 2; texts of
+## 5.11.9). The candidates for a name are the public TypeDefs with exactly
+## that full name; a nested type counts only when every enclosing type is
+## public or nested-public:
+## - one candidate binds (Fake.Widget: FakeTypesB's is not public);
+## - two are 'type '<Ns.Type>' is defined in two references: <identity> (<path>) and <identity> (<path>)',
+##   with the same text in either reference order (Fake.Dup);
+## - three or more (section 12 row 2026-10-26, '5.11.9 clarified (three or
+##   more candidates)') are 'type '<Ns.Type>' is defined in <n> references: <list>',
+##   <n> in digits and every candidate as '<identity> (<path>)' in
+##   ReferenceSet's rank order (the identity text ignoring case), joined by
+##   ', ' with ' and ' before the last, in either reference order (Fake.Dup
+##   with FakeTypesC, FakeTypesB.il's variant TYPES_C, besides);
+## - a nested type binds through its enclosing type (Fake.Outer/Inner from
+##   FakeTypesA; FakeTypesB's has a non-public enclosing type, and its
+##   Fake.Box/Inner is nested-private, so neither counts);
+## - a generic type's name carries its arity (Fake.Gen`1; Fake.Gen is not
+##   defined);
+## - nothing is 'type '<Ns.Type>' is not defined in the references (<n> assemblies)'.
+## Phase 2 makes no request for such types, so the lookup is reached through
+## msil-ld's hidden --print-bcl-binding=type:<Ns>.<Name>[/<Nested>] (5.11.5),
+## which prints '<request> -> <result>' (the bound type or the error text).
+## Each request runs on its own, so that its whole output is checked. The
+## links themselves need nothing from the references (ret42.o).
+## A link that binds an ambiguous type fails the same way: fence.o's
+## Interlocked::MemoryBarrier finds Interlocked in FakeThreading and in
+## System.Private.FakeLib.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj ret42.ll -o ret42.o
+# RUN: mkdir ab b
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesA.yaml -o ab/FakeTypesA.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesB.yaml -o ab/FakeTypesB.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesB.yaml -o b/FakeTypesB.dll
+
+# DEFINE: %{bind} = msil-ld ret42.o --reference=FakeCore.dll --reference=ab -o out.exe
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning:
+# DEFINE: %{bound} = %{fc} --implicit-check-not="defined in two" --implicit-check-not="not defined"
+
+## One public definition.
+# RUN: %{bind} --print-bcl-binding=type:Fake.Widget 2>&1 | %{bound} --check-prefix=WIDGET --implicit-check-not=FakeTypesB
+# WIDGET: {{^}}type:Fake.Widget -> {{.*(FakeTypesA.*Fake.Widget|Fake.Widget.*FakeTypesA).*$}}
+# RUN: %{bind} --print-bcl-binding=type:System.Object 2>&1 | %{bound} --check-prefix=OBJECT --implicit-check-not=FakeTypes
+# OBJECT: {{^}}type:System.Object -> {{.*(FakeCore.*System.Object|System.Object.*FakeCore).*$}}
+
+## Two public definitions, in either order of the references.
+# RUN: %{bind} --print-bcl-binding=type:Fake.Dup > dup-ab.txt 2>&1
+# RUN: msil-ld ret42.o --reference=ab/FakeTypesB.dll --reference=ab/FakeTypesA.dll --reference=FakeCore.dll \
+# RUN:   --print-bcl-binding=type:Fake.Dup -o out.exe > dup-ba.txt 2>&1
+# RUN: %{fc} --check-prefix=DUP --input-file=dup-ab.txt
+# RUN: diff dup-ab.txt dup-ba.txt
+# DUP: {{^}}type:Fake.Dup -> type 'Fake.Dup' is defined in two references: {{(.*FakeTypesA.* \(.*\) and .*FakeTypesB.* \(.*\)|.*FakeTypesB.* \(.*\) and .*FakeTypesA.* \(.*\))$}}
+
+## Three public definitions, in either order of the references.
+# RUN: mkdir abc
+# RUN: cp ab/FakeTypesA.dll ab/FakeTypesB.dll abc
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesC.yaml -o abc/FakeTypesC.dll
+# RUN: msil-ld ret42.o --reference=FakeCore.dll --reference=abc --print-bcl-binding=type:Fake.Dup -o out.exe \
+# RUN:   > dup-abc.txt 2>&1
+# RUN: msil-ld ret42.o --reference=abc/FakeTypesC.dll --reference=abc/FakeTypesB.dll --reference=abc/FakeTypesA.dll \
+# RUN:   --reference=FakeCore.dll --print-bcl-binding=type:Fake.Dup -o out.exe > dup-cba.txt 2>&1
+# RUN: %{fc} --check-prefix=DUP3 --input-file=dup-abc.txt
+# RUN: diff dup-abc.txt dup-cba.txt
+# DUP3: {{^}}type:Fake.Dup -> type 'Fake.Dup' is defined in 3 references: FakeTypesA 1.2.3.4 [b03f5f7f11d50a3a] (abc/FakeTypesA.dll), FakeTypesB 1.0.0.0 [null] (abc/FakeTypesB.dll) and FakeTypesC 1.0.0.0 [null] (abc/FakeTypesC.dll){{$}}
+
+## Nested types: through a public enclosing type only.
+# RUN: %{bind} --print-bcl-binding=type:Fake.Outer/Inner 2>&1 | %{bound} --check-prefix=NESTED --implicit-check-not=FakeTypesB
+# NESTED: {{^}}type:Fake.Outer/Inner -> {{.*(FakeTypesA.*Inner|Inner.*FakeTypesA).*$}}
+# RUN: %{bind} --print-bcl-binding=type:Fake.Box/Lid 2>&1 | %{bound} --check-prefix=LID --implicit-check-not=FakeTypesA
+# LID: {{^}}type:Fake.Box/Lid -> {{.*(FakeTypesB.*Lid|Lid.*FakeTypesB).*$}}
+# RUN: %{bind} --print-bcl-binding=type:Fake.Box/Inner 2>&1 | %{fc} --check-prefix=PRIVATE
+# PRIVATE: {{^}}type:Fake.Box/Inner -> type '{{.*}}Inner' is not defined in the references (3 assemblies){{$}}
+# RUN: msil-ld ret42.o --reference=FakeCore.dll --reference=b --print-bcl-binding=type:Fake.Outer/Inner -o out.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=HIDDEN-OUTER
+# HIDDEN-OUTER: {{^}}type:Fake.Outer/Inner -> type 'Fake.Outer{{.*}}' is not defined in the references (2 assemblies){{$}}
+
+## A generic type by its metadata name.
+# RUN: %{bind} '--print-bcl-binding=type:Fake.Gen`1' 2>&1 | %{bound} --check-prefix=GENERIC --implicit-check-not=FakeTypesB
+# GENERIC: {{^}}type:Fake.Gen`1 -> {{.*(FakeTypesA.*Gen`1|Gen`1.*FakeTypesA).*$}}
+# RUN: %{bind} --print-bcl-binding=type:Fake.Gen 2>&1 | %{fc} --check-prefix=NO-ARITY
+# NO-ARITY: {{^}}type:Fake.Gen -> type 'Fake.Gen' is not defined in the references (3 assemblies){{$}}
+
+## Not defined anywhere.
+# RUN: %{bind} --print-bcl-binding=type:Fake.Missing 2>&1 | %{fc} --check-prefix=MISSING
+# MISSING: {{^}}type:Fake.Missing -> type 'Fake.Missing' is not defined in the references (3 assemblies){{$}}
+
+## Several requests print in request order.
+# RUN: %{bind} --print-bcl-binding=type:Fake.Missing --print-bcl-binding=type:Fake.Widget 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ORDER
+# ORDER:      {{^}}type:Fake.Missing -> {{.*$}}
+# ORDER-NEXT: {{^}}type:Fake.Widget -> {{.*$}}
+
+## A link that binds Interlocked, defined by FakeThreading and by
+## System.Private.FakeLib, in either order.
+# RUN: llc -filetype=obj fence.ll -o fence.o
+# RUN: mkdir t1 t2
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o t1/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/System.Private.FakeLib.yaml -o t2/System.Private.FakeLib.dll
+# RUN: not msil-ld fence.o --reference=FakeCore.dll --reference=t1 --reference=t2 -o x.exe > two-12.txt 2>&1
+# RUN: not msil-ld fence.o --reference=t2 --reference=t1 --reference=FakeCore.dll -o x.exe > two-21.txt 2>&1
+# RUN: %{fc} --check-prefix=TWO-LINK --input-file=two-12.txt
+# RUN: diff two-12.txt two-21.txt
+# TWO-LINK: {{^}}msil-ld: error: type 'System.Threading.Interlocked' is defined in two references: {{(.*FakeThreading.* \(.*\) and .*System.Private.FakeLib.* \(.*\)|.*System.Private.FakeLib.* \(.*\) and .*FakeThreading.* \(.*\))$}}
+
+#--- ret42.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 42
+}
+
+#--- fence.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @barrier() {
+  fence seq_cst
+  ret void
+}
+
+define i32 @main() {
+  call void @barrier()
+  ret i32 0
+}

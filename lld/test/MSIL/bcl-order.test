@@ -1,0 +1,81 @@
+## The output depends on the reference set, never on its order
+## (ImplementationPlan.md 5.11.4, 5.11.6 and 5.9.4; bcl-binding 5.12): the
+## same references given in other orders, split across
+## directories in either order, mixed with positional ones before or after
+## the objects, or linked by a driver that runs twice in one process, give
+## byte-identical PEs. The set holds references that bind
+## nothing (a facade, FakeNativeLibrary, FakeTypesA), which must not change
+## the result either. p1.o binds every Phase 1 member.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj p1.ll -o p1.o
+# RUN: mkdir d1 d2 all
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o d1/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o d1/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeFacade.yaml -o d1/FakeFacade.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o d2/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibrary.yaml -o d2/FakeNativeLibrary.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesA.yaml -o d2/FakeTypesA.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o all/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o all/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeFacade.yaml -o all/FakeFacade.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o all/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibrary.yaml -o all/FakeNativeLibrary.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesA.yaml -o all/FakeTypesA.dll
+
+# RUN: mkdir o1 o2 o3 o4 o5 o6 o7
+# RUN: msil-ld p1.o --reference=all -o o1/prog.exe 2>&1 | count 0
+# RUN: msil-ld p1.o --reference=d1 --reference=d2 -o o2/prog.exe 2>&1 | count 0
+# RUN: msil-ld p1.o --reference=d2 --reference=d1 -o o3/prog.exe 2>&1 | count 0
+# RUN: msil-ld p1.o --reference=d1/FakeCore.dll --reference=d1/FakeInterop.dll --reference=d1/FakeFacade.dll \
+# RUN:   --reference=d2/FakeThreading.dll --reference=d2/FakeNativeLibrary.dll --reference=d2/FakeTypesA.dll \
+# RUN:   -o o4/prog.exe 2>&1 | count 0
+# RUN: msil-ld p1.o --reference=d2/FakeTypesA.dll --reference=d2/FakeNativeLibrary.dll --reference=d2/FakeThreading.dll \
+# RUN:   --reference=d1/FakeFacade.dll --reference=d1/FakeInterop.dll --reference=d1/FakeCore.dll \
+# RUN:   -o o5/prog.exe 2>&1 | count 0
+# RUN: msil-ld d2/FakeThreading.dll d1/FakeInterop.dll p1.o --reference=d2 d1/FakeCore.dll d1/FakeFacade.dll \
+# RUN:   -o o6/prog.exe 2>&1 | count 0
+# RUN: msil-ld --reference=d1/FakeFacade.dll d1/FakeCore.dll p1.o d1/FakeInterop.dll --reference=d2 \
+# RUN:   -o o7/prog.exe 2>&1 | count 0
+# RUN: cmp o1/prog.exe o2/prog.exe
+# RUN: cmp o1/prog.exe o3/prog.exe
+# RUN: cmp o1/prog.exe o4/prog.exe
+# RUN: cmp o1/prog.exe o5/prog.exe
+# RUN: cmp o1/prog.exe o6/prog.exe
+# RUN: cmp o1/prog.exe o7/prog.exe
+
+## The driver run twice in one process (LLD_IN_TEST=2, 5.9.1) resets the
+## reference set and the binder: the same PE, and no diagnostic.
+# RUN: mkdir o8
+# RUN: env LLD_IN_TEST=2 msil-ld p1.o --reference=d2 --reference=d1 -o o8/prog.exe 2>&1 | count 0
+# RUN: cmp o1/prog.exe o8/prog.exe
+
+## The references were used: the PE is bound, not the built-in table's.
+# RUN: mkdir none
+# RUN: msil-ld p1.o -o none/prog.exe 2>&1 | count 0
+# RUN: not cmp o1/prog.exe none/prog.exe
+
+#--- p1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@buf = global [16 x i8] c"0123456789abcdef", align 1
+@ptr = global ptr @buf, align 8
+
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+
+define void @shift(i64 %n) {
+  %p = load ptr, ptr @ptr
+  %q = getelementptr i8, ptr %p, i64 1
+  call void @llvm.memmove.p0.p0.i64(ptr %q, ptr %p, i64 %n, i1 false)
+  fence seq_cst
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %a = sext i32 %argc to i64
+  call void @shift(i64 %a)
+  %p = load ptr, ptr @ptr
+  %c = load i8, ptr %p
+  %r = zext i8 %c to i32
+  ret i32 %r
+}

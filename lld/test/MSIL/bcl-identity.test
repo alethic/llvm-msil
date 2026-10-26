@@ -1,0 +1,171 @@
+## Reference identities (ImplementationPlan.md 5.11.2, M21.a item 5; texts of
+## 5.11.9). An identity is the Assembly row's name, version and culture and
+## the token of its public key (cli::computePublicKeyToken):
+## - two files with the same full identity and the same bytes: the first is
+##   kept, with the warning
+##   '<path> has the same identity as <path> (<identity>); using the first',
+##   and the link is the same as with one copy, in either order; a directory
+##   names its files '<dir>/<file>' with '/' on every host (M21 review-r1
+##   finding 5), so a pack holding FakeCore.dll and a copy FakeCoreCopy.dll
+##   warns about pack/FakeCoreCopy.dll;
+## - two files with the same full identity and different contents are the
+##   error (section 12 row 2026-10-26, '5.11.2 and 5.11.9 amended (duplicate
+##   identities, order independence)')
+##   'references <path> and <path> have the same identity (<identity>) but different contents',
+##   the paths in ReferenceSet's rank order (the normalized path: one/ before
+##   plus/), so the text does not depend on the command-line order;
+## - the same simple name with another version, or another key, is the error
+##   'references <path> (<identity>) and <path> (<identity>) have the same name but different versions or keys'
+##   (no version unification, Roslyn's r15);
+## - a binding that lands in a System.Private.* assembly without
+##   [assembly: ReferenceAssembly] (an implementation assembly, as in a
+##   runtime's shared framework directory) gives the warning
+##   '<path> is not a reference assembly; binding '<Ns.Type>' to <identity> ties the output to one runtime build',
+##   and still binds; the same type from a reference assembly gives none,
+##   and so does each condition alone: an assembly without
+##   [ReferenceAssembly] whose name is not System.Private.* (FakeThreadingImpl)
+##   and a System.Private.* reference assembly (System.Private.FakeLibRef).
+## FakeInterop, FakeInteropV9 (9.0.0.0) and FakeInteropK2 (token
+## 31bf3856ad364e35 instead of b03f5f7f11d50a3a) are all named FakeInterop;
+## FakeInteropExtra has FakeInterop's Assembly row and one more type;
+## System.Private.FakeLib defines Interlocked without [ReferenceAssembly]
+## (Inputs/fakepack/FakeThreading.il, variant PRIVATE), FakeThreadingImpl
+## (variant NOREFASM) is FakeThreading without it, and
+## System.Private.FakeLibRef (variant PRIVREF) is System.Private.FakeLib with
+## it.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj p1.ll -o p1.o
+# RUN: llc -filetype=obj fence.ll -o fence.o
+# RUN: mkdir base one two v9 k2 priv plus pack impl privref
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o base/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o base/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o one/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o two/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInteropV9.yaml -o v9/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInteropK2.yaml -o k2/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInteropExtra.yaml -o plus/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o priv/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/System.Private.FakeLib.yaml -o priv/System.Private.FakeLib.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o impl/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingImpl.yaml -o impl/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o privref/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/System.Private.FakeLibRef.yaml -o privref/System.Private.FakeLib.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## One copy.
+# RUN: mkdir single dup dup-rev
+# RUN: msil-ld p1.o --reference=base --reference=one/FakeInterop.dll -o single/prog.exe 2>&1 | count 0
+
+## Two copies with one identity: a warning naming the second, and the same
+## PE.
+# RUN: msil-ld p1.o --reference=base --reference=one/FakeInterop.dll --reference=two/FakeInterop.dll \
+# RUN:   -o dup/prog.exe 2>&1 | %{fc} --check-prefix=DUP -DFIRST=one -DSECOND=two \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: msil-ld p1.o --reference=base --reference=two/FakeInterop.dll --reference=one/FakeInterop.dll \
+# RUN:   -o dup-rev/prog.exe 2>&1 | %{fc} --check-prefix=DUP -DFIRST=two -DSECOND=one \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# DUP: {{^}}msil-ld: warning: [[SECOND]]/FakeInterop.dll has the same identity as [[FIRST]]/FakeInterop.dll (FakeInterop 8.0.0.0 [b03f5f7f11d50a3a]); using the first{{$}}
+# RUN: cmp single/prog.exe dup/prog.exe
+# RUN: cmp single/prog.exe dup-rev/prog.exe
+
+## The same through a directory: a copy of FakeCore.dll next to it, named
+## with '/' on every host.
+# RUN: cp base/FakeCore.dll base/FakeThreading.dll one/FakeInterop.dll pack
+# RUN: cp base/FakeCore.dll pack/FakeCoreCopy.dll
+# RUN: mkdir scan
+# RUN: msil-ld p1.o --reference=pack -o scan/prog.exe 2>&1 | %{fc} --check-prefix=SCAN \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# SCAN: {{^}}msil-ld: warning: pack/FakeCoreCopy.dll has the same identity as pack/FakeCore.dll (FakeCore 8.0.0.0 [b03f5f7f11d50a3a]); using the first{{$}}
+# RUN: cmp single/prog.exe scan/prog.exe
+
+## The same identity with other contents: an error, the same in either
+## order.
+# RUN: not msil-ld p1.o --reference=base --reference=one/FakeInterop.dll --reference=plus/FakeInterop.dll \
+# RUN:   -o x.exe 2>&1 | %{fc} --check-prefix=CONTENTS --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: not msil-ld p1.o --reference=base --reference=plus/FakeInterop.dll --reference=one/FakeInterop.dll \
+# RUN:   -o x.exe 2>&1 | %{fc} --check-prefix=CONTENTS --implicit-check-not=error: --implicit-check-not=warning:
+# CONTENTS: {{^}}msil-ld: error: references one/FakeInterop.dll and plus/FakeInterop.dll have the same identity (FakeInterop 8.0.0.0 [b03f5f7f11d50a3a]) but different contents{{$}}
+
+## The same name with another version or another key.
+# RUN: not msil-ld p1.o --reference=base --reference=one/FakeInterop.dll --reference=v9/FakeInterop.dll \
+# RUN:   -o x.exe 2>&1 | %{fc} --check-prefix=NAME-V9 --implicit-check-not=error:
+# RUN: not msil-ld p1.o --reference=base --reference=v9/FakeInterop.dll --reference=one/FakeInterop.dll \
+# RUN:   -o x.exe 2>&1 | %{fc} --check-prefix=NAME-V9 --implicit-check-not=error:
+# RUN: not msil-ld p1.o --reference=base --reference=one/FakeInterop.dll --reference=k2/FakeInterop.dll \
+# RUN:   -o x.exe 2>&1 | %{fc} --check-prefix=NAME-K2 --implicit-check-not=error:
+# NAME-V9: {{^}}msil-ld: error: references {{(one|v9)}}/FakeInterop.dll ({{.*}}FakeInterop{{.*}}) and {{(one|v9)}}/FakeInterop.dll ({{.*}}FakeInterop{{.*}}) have the same name but different versions or keys{{$}}
+# NAME-K2: {{^}}msil-ld: error: references {{(one|k2)}}/FakeInterop.dll ({{.*}}FakeInterop{{.*}}) and {{(one|k2)}}/FakeInterop.dll ({{.*}}FakeInterop{{.*}}) have the same name but different versions or keys{{$}}
+
+## The error names both files, whatever the order.
+# RUN: not msil-ld p1.o --reference=base --reference=one/FakeInterop.dll --reference=v9/FakeInterop.dll \
+# RUN:   -o x.exe 2>&1 | FileCheck %s --check-prefix=BOTH
+# BOTH: {{(one.*v9|v9.*one)}}
+
+## The identities differ, so the version and key show in the AssemblyRef of
+## each binding.
+# RUN: msil-ld p1.o --reference=base --reference=v9/FakeInterop.dll -o v9.exe 2>&1 | count 0
+# RUN: llvm-cil-dump v9.exe | FileCheck %s --check-prefix=V9
+# V9: {{^}}assemblyref 'FakeInterop' ver 9.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# RUN: msil-ld p1.o --reference=base --reference=k2/FakeInterop.dll -o k2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump k2.exe | FileCheck %s --check-prefix=K2
+# K2: {{^}}assemblyref 'FakeInterop' ver 8.0.0.0 flags=0x00000000 key=31 BF 38 56 AD 36 4E 35 culture=''{{$}}
+
+## A binding in System.Private.FakeLib, an implementation assembly: a
+## warning, and the binding. From FakeThreading, a reference assembly: none.
+# RUN: msil-ld fence.o --reference=priv -o priv.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=PRIVATE --implicit-check-not=error: --implicit-check-not=warning:
+# PRIVATE: {{^}}msil-ld: warning: priv/System.Private.FakeLib.dll is not a reference assembly; binding 'System.Threading.Interlocked' to {{.*}}System.Private.FakeLib{{.*}} ties the output to one runtime build{{$}}
+# RUN: llvm-cil-dump priv.exe | FileCheck %s --check-prefix=PRIVATE-BOUND
+# PRIVATE-BOUND: {{^}}    L{{[0-9]+}}: call void() [System.Private.FakeLib]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+# RUN: msil-ld fence.o --reference=base -o ref.exe 2>&1 | count 0
+
+## The warning needs both conditions: without [ReferenceAssembly] but not
+## named System.Private.*, and named System.Private.* with
+## [ReferenceAssembly], each binds with no diagnostic.
+# RUN: msil-ld fence.o --reference=impl -o impl.exe 2>&1 | count 0
+# RUN: llvm-cil-dump impl.exe | FileCheck %s --check-prefix=IMPL-BOUND
+# IMPL-BOUND: {{^}}    L{{[0-9]+}}: call void() [FakeThreading]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+# RUN: msil-ld fence.o --reference=privref -o privref.exe 2>&1 | count 0
+# RUN: llvm-cil-dump privref.exe | FileCheck %s --check-prefix=PRIVATE-BOUND
+
+#--- p1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@buf = global [16 x i8] c"0123456789abcdef", align 1
+@ptr = global ptr @buf, align 8
+
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+
+define void @shift(i64 %n) {
+  %p = load ptr, ptr @ptr
+  %q = getelementptr i8, ptr %p, i64 1
+  call void @llvm.memmove.p0.p0.i64(ptr %q, ptr %p, i64 %n, i1 false)
+  fence seq_cst
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %a = sext i32 %argc to i64
+  call void @shift(i64 %a)
+  %p = load ptr, ptr @ptr
+  %c = load i8, ptr %p
+  %r = zext i8 %c to i32
+  ret i32 %r
+}
+
+#--- fence.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @barrier() {
+  fence seq_cst
+  ret void
+}
+
+define i32 @main() {
+  call void @barrier()
+  ret i32 0
+}

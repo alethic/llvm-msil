@@ -4,17 +4,20 @@
 ## - a file that does not exist: lld's 'cannot open <file>: <reason>';
 ## - a file of no known kind (text, ILAsm text, an empty file): 'unknown file
 ##   type: <file>';
-## - a PE with a CLI header (5.9.4): from M20 a CIL object links (obj-*.test),
-##   a .NET assembly (an Assembly row, here an EXE msil-ld wrote) is
-##   '<file>: .NET assembly inputs are not supported yet' (M21 binds
-##   reference assemblies, M22 links libraries), and a module without the
-##   link-info record (a netmodule ilasm writes from text without
-##   '.assembly') is '<file>: not a CIL object (no link-info record)'; M14's
-##   one error for CIL objects and assemblies is gone. make-pe.py's minimal
-##   CLI image (a metadata root without streams) is no object either: the
-##   metadata reader's error, with 5.7.12's prefix 'invalid CLI metadata: ',
-##   names the file and the missing '#~' stream (obj-input-errors.test
-##   covers the record and object errors);
+## - a PE with a CLI header (5.9.4): from M20 a CIL object links (obj-*.test);
+##   from M21 a .NET assembly without the toolchain's symbol table (an
+##   Assembly row, here an EXE msil-ld wrote) is a reference assembly
+##   (5.11.1, bcl-*.test). asm.exe defines no System.Object, so as the only
+##   reference it leaves the link without a core library (5.11.3); next to
+##   one (Inputs/fakepack's FakeCore) the link binds, and asm.exe, which
+##   defines nothing the program uses, gets no AssemblyRef. A module
+##   without the link-info record (a netmodule ilasm writes from text
+##   without '.assembly') is '<file>: not a CIL object (no link-info
+##   record)'; M14's one error for CIL objects and assemblies is gone.
+##   make-pe.py's minimal CLI image (a metadata root without streams) is
+##   neither: the metadata reader's error, with 5.7.12's prefix
+##   'invalid CLI metadata: ', names the file and the missing '#~' stream
+##   (obj-input-errors.test covers the record and object errors);
 ## - a native PE is a native library: M15 reads its export table (this one
 ##   has none, so it binds nothing and changes nothing);
 ## - a native library that does not parse is an error naming the file (a
@@ -85,8 +88,8 @@
 # RUN: not msil-ld --lto-emit-asm main.o cilobj.o -o x.il 2>&1 | %{fc} --check-prefix=CLI -DFILE=cilobj.o
 # CLI: {{^}}msil-ld: error: [[FILE]]: invalid CLI metadata: the metadata root has no #~ stream{{$}}
 
-## A .NET assembly that msil-ld itself wrote, and a CIL module without the
-## record.
+## A .NET assembly that msil-ld itself wrote, as a reference, and a CIL
+## module without the record.
 # RUN: llc -filetype=obj helper.ll -o helper-cil.o
 # RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil main.ll -o main-cil.o
 # RUN: msil-ld main-cil.o helper-cil.o -o asm.exe 2>&1 | count 0
@@ -94,7 +97,13 @@
 # RUN:   | %{fc} --check-prefix=ASSEMBLY --implicit-check-not=error:
 # RUN: not msil-ld main-cil.o helper-cil.o asm.exe -o x.exe 2>&1 \
 # RUN:   | %{fc} --check-prefix=ASSEMBLY --implicit-check-not=error:
-# ASSEMBLY: {{^}}msil-ld: error: asm.exe: .NET assembly inputs are not supported yet{{$}}
+# ASSEMBLY: {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: {{.*}}asm{{.*$}}
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o FakeCore.dll
+# RUN: msil-ld --lto-emit-asm main.o helper.o asm.exe FakeCore.dll -o asm-ref.il 2>&1 | count 0
+# RUN: msil-ld main-cil.o helper-cil.o asm.exe FakeCore.dll -o asm-ref.exe 2>&1 | count 0
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump asm-ref.exe | FileCheck %s --check-prefix=ASSEMBLY-REF \
+# RUN:   --implicit-check-not="assemblyref 'asm'" --implicit-check-not="assemblyref 'mscorlib'" %}
+# ASSEMBLY-REF: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
 # RUN: %if ilasm %{ %ilasm-verify -output=plain.o netmodule.il %}
 # RUN: %if ilasm %{ not msil-ld main-cil.o plain.o -o x.exe 2>&1 | %{fc} --check-prefix=NETMODULE --implicit-check-not=error: %}
 # NETMODULE: {{^}}msil-ld: error: plain.o: not a CIL object (no link-info record){{$}}

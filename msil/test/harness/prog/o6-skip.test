@@ -1,0 +1,146 @@
+# The skip lines of oracle O6 (plan 5.12.6; section 12, 'M21.c extended'):
+# a 'skip O6[@<triple>][:<level>] <test path> <reason>' line of
+# msil/utils/equiv-allowed.txt names a test whose msil-ld image has members
+# that its -S build lacks by design (plan 5.8.10), so the PEVerify /md
+# messages of the image that runs cannot all be the baseline's. msil-verify.py
+# --md-baseline with --equiv-skip FILE --test PATH [--triple T] [--level L]
+# matches the lines exactly as msil-equiv.py matches O3's and O4's, prints
+# 'O6 skipped: <reason>' and does not run O6; O6 is never weakened for any
+# other test. b.exe has a metadata message (a literal field without a
+# constant, 0x80131B17) that a.exe lacks, so O6 of b.exe against a.exe fails
+# wherever it runs (o6-md-baseline.test of ../equiv has the images):
+# (1) a 'skip O6' line that names this test (or a directory above it) skips
+#     O6, and the run passes;
+# (2) lines that do not cover the test leave O6 running, and it still fails
+#     on the unexpected message: an O6 line for another test, an O3 line for
+#     this test (each line covers its own oracle only), an O6 line for
+#     another triple or level, and no --equiv-skip at all;
+# (3) a qualified line covers the test for its triple and level only;
+# (4) the real equiv-allowed.txt skips O6 of msil/test/M1/07-globals/alias.c
+#     and weak-undefined.c (ALIAS address fields, UNDEFINED WEAK zero fields)
+#     at every triple and level, and not of msil/test/M1/11-programs/crc32.c,
+#     whose O3 line (Windows, -O2) does not reach O6;
+# (5) usage errors (status 2): --equiv-skip without --md-baseline, --equiv-skip
+#     without --test, and a skip line whose oracle is none of O3, O4 and O6;
+# (6) msil-prog.py --equiv-skip under obj still builds the equivalence link
+#     when the only line naming the test is an O6 line: O6 lines skip
+#     nothing there;
+# (7) the composite: a nested lit under msil_pipeline=obj with msil_equiv=1
+#     runs the stand-in program of Inputs/nested/refs/o6-c.c; msil-verify
+#     gets --equiv-skip <equiv-allowed.txt> --test <the test> --triple
+#     <triple> --level O2 before --md-baseline <its -S build>, and O6 runs and
+#     passes; with msil_references=<a directory> (M21) O3 also allows the
+#     scopes entry ('--allow pinvoke-access --allow scopes').
+# REQUIRES: msil-ilasm, msil-ilverify, msil-peverify
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %ilasm -exe -output=%t/a.exe %t/a.il
+# RUN: %ilasm -exe -output=%t/b.exe %t/b.il
+# RUN: %{harness_check} write %t/o6-qualified.txt "skip O6@%msil_triple:O2 msil/test/harness/prog/o6-skip.test this triple at -O2"
+
+# (1)
+# RUN: %msil_verify --equiv-skip %t/o6-this.txt --test %s --md-baseline %t/a.exe %t/b.exe > %t/1a.log 2>&1
+# RUN: %{harness_check} contains %t/1a.log "^O6 skipped: the reason of the O6 line$"
+# RUN: %{harness_check} lacks %t/1a.log "^O6: " "^msil-verify: O6: " "disallowed"
+# RUN: %msil_verify --equiv-skip %t/o6-dir.txt --test %s --md-baseline %t/a.exe %t/b.exe > %t/1b.log 2>&1
+# RUN: %{harness_check} contains %t/1b.log "^O6 skipped: every test of harness/prog$"
+
+# (2)
+# RUN: %{harness_check} exits 1 %msil_verify --equiv-skip %t/o6-other.txt --test %s --md-baseline %t/a.exe %t/b.exe > %t/2a.log 2>&1
+# RUN: %{harness_check} exits 1 %msil_verify --equiv-skip %t/o3-this.txt --test %s --md-baseline %t/a.exe %t/b.exe > %t/2b.log 2>&1
+# RUN: %{harness_check} exits 1 %msil_verify --equiv-skip %t/o6-qualified.txt --test %s --triple %msil_triple --level O0 --md-baseline %t/a.exe %t/b.exe > %t/2c.log 2>&1
+# RUN: %{harness_check} exits 1 %msil_verify --equiv-skip %t/o6-qualified.txt --test %s --triple other-%msil_triple --level O2 --md-baseline %t/a.exe %t/b.exe > %t/2d.log 2>&1
+# RUN: %{harness_check} exits 1 %msil_verify --md-baseline %t/a.exe %t/b.exe > %t/2e.log 2>&1
+# RUN: %{harness_check} contains %t/2a.log "^O6: peverify /md: \[MD\]\(0x80131B17\): .* \[Field 'D'::'w'\] \(not reported for the baseline a\.exe\)$"
+# RUN: %{harness_check} contains %t/2b.log "^O6: peverify /md: \[MD\]\(0x80131B17\): .* \[Field 'D'::'w'\]"
+# RUN: %{harness_check} contains %t/2c.log "^O6: peverify /md: \[MD\]\(0x80131B17\): .* \[Field 'D'::'w'\]"
+# RUN: %{harness_check} contains %t/2d.log "^O6: peverify /md: \[MD\]\(0x80131B17\): .* \[Field 'D'::'w'\]"
+# RUN: %{harness_check} contains %t/2e.log "^O6: peverify /md: \[MD\]\(0x80131B17\): .* \[Field 'D'::'w'\]"
+# RUN: %{harness_check} lacks %t/2a.log "skipped"
+# RUN: %{harness_check} lacks %t/2b.log "skipped"
+# RUN: %{harness_check} lacks %t/2c.log "skipped"
+# RUN: %{harness_check} lacks %t/2d.log "skipped"
+
+# (3)
+# RUN: %msil_verify --equiv-skip %t/o6-qualified.txt --test %s --triple %msil_triple --level O2 --md-baseline %t/a.exe %t/b.exe > %t/3.log 2>&1
+# RUN: %{harness_check} contains %t/3.log "^O6 skipped: this triple at -O2$"
+
+# (4)
+# RUN: %msil_verify --equiv-skip %S/../../../utils/equiv-allowed.txt --test %S/../../M1/07-globals/alias.c --triple %msil_triple --level O0 --md-baseline %t/a.exe %t/b.exe > %t/4a.log 2>&1
+# RUN: %{harness_check} contains %t/4a.log "^O6 skipped: aliases: msil-ld's image has the address fields counter_alias and table_alias "
+# RUN: %msil_verify --equiv-skip %S/../../../utils/equiv-allowed.txt --test %S/../../M1/07-globals/weak-undefined.c --triple x86_64-unknown-linux-gnu-msil --level O2 --md-baseline %t/a.exe %t/b.exe > %t/4b.log 2>&1
+# RUN: %{harness_check} contains %t/4b.log "^O6 skipped: extern_weak: msil-ld's image has the zero fields '<msil>fn_maybe' and weak_data "
+# RUN: %{harness_check} exits 1 %msil_verify --equiv-skip %S/../../../utils/equiv-allowed.txt --test %S/../../M1/11-programs/crc32.c --triple x86_64-pc-windows-msvc-msil --level O2 --md-baseline %t/a.exe %t/b.exe > %t/4c.log 2>&1
+# RUN: %{harness_check} contains %t/4c.log "^O6: peverify /md: "
+# RUN: %{harness_check} lacks %t/4c.log "skipped"
+
+# (5)
+# RUN: %{harness_check} exits 2 %msil_verify --equiv-skip %t/o6-this.txt --test %s %t/b.exe > %t/5a.log 2>&1
+# RUN: %{harness_check} contains %t/5a.log "error: --equiv-skip selects the 'skip O6' lines; it needs --md-baseline$"
+# RUN: %{harness_check} exits 2 %msil_verify --equiv-skip %t/o6-this.txt --md-baseline %t/a.exe %t/b.exe > %t/5b.log 2>&1
+# RUN: %{harness_check} contains %t/5b.log "error: --equiv-skip and --test go together$"
+# RUN: %{harness_check} exits 2 %msil_verify --equiv-skip %t/bad-oracle.txt --test %s --md-baseline %t/a.exe %t/b.exe > %t/5c.log 2>&1
+# RUN: %{harness_check} contains %t/5c.log "^msil-verify: error: --equiv-skip: \S*bad-oracle\.txt:1: expected 'skip <oracle>"
+
+# (6)
+# RUN: %msil_prog_build --level O2 --workdir %t/p --out %t/p/prog.exe --equiv-out %t/p-equiv.exe --equiv-skip %t/o6-this.txt --test %s --src %t/main.c --pipeline obj > %t/6.log 2>&1
+# RUN: %{harness_check} contains %t/6.log " -Wl,--no-gc-sections -o equiv/prog\.exe$"
+# RUN: %{harness_check} lacks %t/6.log "skipped"
+
+# (7)
+# RUN: %if msil-cil-dump && msil-ld && msil-ar %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_equiv=1 %S/Inputs/nested/refs/o6-c.c > %t/7a.log 2>&1 %}
+# RUN: %if msil-cil-dump && msil-ld && msil-ar %{ %{harness_check} contains %t/7a.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/o6-c\.c " "^# executed command: .*msil-verify\.py'? .* --equiv-skip '?\S*equiv-allowed\.txt'? --test '?\S*o6-c\.c'? --triple \S+-msil --level O2 --md-baseline '?\S*o6-c\.c\.tmp\.O2\.d/asm/prog\.exe'? '?\S*o6-c\.c\.tmp\.O2\.d/prog\.exe'?$" "^# \| msil-verify: O6: the \d+ PEVerify /md messages of prog\.exe are among the \d+ of " "--allow pinvoke-access '?\S*o6-c\.c\.tmp\.O2\.d/equiv/prog\.exe" %}
+# RUN: %if msil-cil-dump && msil-ld && msil-ar %{ %{harness_check} lacks %t/7a.log "skipped" "--allow scopes" %}
+# RUN: %if msil-cil-dump && msil-ld && msil-ar %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_equiv=1 --param msil_references=%t %S/Inputs/nested/refs/o6-c.c > %t/7b.log 2>&1 %}
+# RUN: %if msil-cil-dump && msil-ld && msil-ar %{ %{harness_check} contains %t/7b.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/o6-c\.c " "^# executed command: .*msil-equiv\.py'? .* --oracle O3 .* --allow pinvoke-module --allow pinvoke-access --allow scopes '?\S*o6-c\.c\.tmp\.O2\.d/equiv/prog\.exe'? " "^# \| msil-equiv: O3: \S+ and \S+ are equal \(\d+ lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access, scopes\)$" %}
+
+#--- o6-this.txt
+# A skip line for this test's O6 oracle.
+skip O6 msil/test/harness/prog/o6-skip.test the reason of the O6 line
+#--- o6-dir.txt
+skip O6 msil/test/harness/prog/ every test of harness/prog
+#--- o6-other.txt
+skip O6 msil/test/harness/prog/other.test another test
+skip O6 msil/test/harness/pro/ a directory that only starts like this one
+#--- o3-this.txt
+skip O3 msil/test/harness/prog/o6-skip.test an O3 line for this test
+skip O4 msil/test/harness/prog/o6-skip.test an O4 line for this test
+#--- bad-oracle.txt
+skip O7 msil/test/harness/prog/o6-skip.test no such oracle
+#--- main.c
+// prog-value: 1
+#--- a.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly prog { }
+.module prog.exe
+.class public auto ansi sealed beforefieldinit C extends [mscorlib]System.Object
+{
+  .field public static literal int32 z
+  .method public static int32 main() cil managed
+  {
+    .entrypoint
+    .maxstack 1
+    ldc.i4.0
+    ret
+  }
+}
+#--- b.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly prog { }
+.module prog.exe
+.class public auto ansi sealed beforefieldinit D extends [mscorlib]System.Object
+{
+  .field public static int32 v
+  .field public static literal int32 w
+}
+.class public auto ansi sealed beforefieldinit C extends [mscorlib]System.Object
+{
+  .field public static literal int32 z
+  .method public static int32 main() cil managed
+  {
+    .entrypoint
+    .maxstack 1
+    ldc.i4.0
+    ret
+  }
+}

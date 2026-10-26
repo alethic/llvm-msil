@@ -1,0 +1,123 @@
+## Forwarders (ImplementationPlan.md 5.11.4, 5.11.6; M21.b item 2; texts of
+## 5.11.9; bcl-binding 2.3 and 5.4 step 3). msil-ld binds definitions only,
+## never a facade's forwarder:
+## - with the destination in the set the definition binds, and the
+##   AssemblyRef carries the version of the destination's own Assembly row
+##   (8.0.0.0, 8.1.2.3, 1.2.3.4), not the 0.0.0.0 of the facade's
+##   AssemblyRef; the facade binds nothing, so the PE is the one linked
+##   without it;
+## - a name only forwarded, to an assembly that is not among the references,
+##   is 'type '<Ns.Type>' is forwarded by <identity> to <assembly>, which is not among the references';
+## - a nested forwarder (an ExportedType without the forwarder bit whose
+##   Implementation is its enclosing ExportedType) is followed the same way:
+##   FakeFacade forwards Fake.Outer and Fake.Outer/Inner to FakeTypesA, and
+##   the error names the nested type, not its enclosing one; a nested name
+##   that the facade does not forward (Fake.Outer/Nope) is not defined, even
+##   though its enclosing type is forwarded.
+## p1.o binds every Phase 1 member; fence.o binds Interlocked only; named.o
+## (Inputs/fakepack/named-obj.il) calls Fake.Outer/Inner::Ping() and
+## [Contoso]System.Threading.Interlocked::MemoryBarrier().
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj p1.ll -o p1.o
+# RUN: llc -filetype=obj fence.ll -o fence.o
+# RUN: llc -filetype=obj main-named.ll -o main-named.o
+# RUN: yaml2obj %S/Inputs/fakepack/named-obj.yaml -o named.o
+# RUN: mkdir pack partial
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o pack/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesA.yaml -o FakeTypesA.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeFacade.yaml -o FakeFacade.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o partial/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o partial/FakeInterop.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning:
+
+## Destinations in the set: the facade changes nothing.
+# RUN: mkdir with without
+# RUN: msil-ld p1.o --reference=pack --reference=FakeFacade.dll -o with/prog.exe 2>&1 | count 0
+# RUN: msil-ld p1.o --reference=pack -o without/prog.exe 2>&1 | count 0
+# RUN: cmp with/prog.exe without/prog.exe
+# RUN: llvm-cil-dump --tables with/prog.exe | FileCheck %s --check-prefix=VERSIONS --implicit-check-not=FakeFacade
+# VERSIONS:     {{^}}Table: AssemblyRef rows=3 rowsize={{[0-9]+}}{{$}}
+# VERSIONS-DAG: {{^}}  AssemblyRef[{{[1-3]}}]: MajorVersion=0x0008 MinorVersion=0x0000 BuildNumber=0x0000 RevisionNumber=0x0000 Flags=0x00000000 PublicKeyOrToken=B0 3F 5F 7F 11 D5 0A 3A Name='FakeCore' Culture='' HashValue=-{{$}}
+# VERSIONS-DAG: {{^}}  AssemblyRef[{{[1-3]}}]: MajorVersion=0x0008 MinorVersion=0x0000 BuildNumber=0x0000 RevisionNumber=0x0000 Flags=0x00000000 PublicKeyOrToken=B0 3F 5F 7F 11 D5 0A 3A Name='FakeInterop' Culture='' HashValue=-{{$}}
+# VERSIONS-DAG: {{^}}  AssemblyRef[{{[1-3]}}]: MajorVersion=0x0008 MinorVersion=0x0001 BuildNumber=0x0002 RevisionNumber=0x0003 Flags=0x00000000 PublicKeyOrToken=31 BF 38 56 AD 36 4E 35 Name='FakeThreading' Culture='' HashValue=-{{$}}
+
+## Forwarded to an assembly that is missing: FakeThreading.
+# RUN: not msil-ld fence.o --reference=partial --reference=FakeFacade.dll -o x.exe 2>&1 | %{fc} --check-prefix=MISSING
+# MISSING: {{^}}msil-ld: error: type 'System.Threading.Interlocked' is forwarded by {{.*}}FakeFacade{{.*}} to {{.*}}FakeThreading{{.*}}, which is not among the references{{$}}
+## Without the facade the name is simply not defined.
+# RUN: not msil-ld fence.o --reference=partial -o x.exe 2>&1 | %{fc} --check-prefix=UNDEFINED
+# UNDEFINED: {{^}}msil-ld: error: type 'System.Threading.Interlocked' is not defined in the references (2 assemblies){{$}}
+
+## A nested forwarder, through --print-bcl-binding and through a link.
+# RUN: msil-ld fence.o --reference=pack --reference=FakeFacade.dll \
+# RUN:   --print-bcl-binding=type:Fake.Outer/Inner -o x.exe 2>&1 | %{fc} --check-prefix=NESTED-BINDING
+# NESTED-BINDING: {{^}}type:Fake.Outer/Inner -> type 'Fake.Outer/Inner' is forwarded by {{.*}}FakeFacade{{.*}} to {{.*}}FakeTypesA{{.*}}, which is not among the references{{$}}
+# RUN: not msil-ld main-named.o named.o --reference=pack --reference=FakeFacade.dll -o x.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NESTED-LINK
+# NESTED-LINK: {{^}}msil-ld: error: type 'Fake.Outer/Inner' is forwarded by {{.*}}FakeFacade{{.*}} to {{.*}}FakeTypesA{{.*}}, which is not among the references{{$}}
+## The control: only Fake.Outer and its nested Inner are forwarded.
+# RUN: msil-ld fence.o --reference=pack --reference=FakeFacade.dll \
+# RUN:   --print-bcl-binding=type:Fake.Outer/Nope -o x.exe 2>&1 | %{fc} --check-prefix=NESTED-NOPE --implicit-check-not=forwarded
+# NESTED-NOPE: {{^}}type:Fake.Outer/Nope -> type 'Fake.Outer/Nope' is not defined in the references (4 assemblies){{$}}
+
+## With FakeTypesA the nested type binds to its definition, at FakeTypesA's
+## own version.
+# RUN: msil-ld main-named.o named.o --reference=pack --reference=FakeFacade.dll --reference=FakeTypesA.dll \
+# RUN:   -o named.exe 2>&1 | count 0
+# RUN: llvm-cil-dump named.exe | FileCheck %s --check-prefix=NAMED --implicit-check-not=FakeFacade
+# NAMED: {{^}}assemblyref 'FakeTypesA' ver 1.2.3.4 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# NAMED: {{^}}    L{{[0-9]+}}: call void() [FakeTypesA]Fake.Outer/Inner::'Ping'{{$}}
+
+#--- p1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@buf = global [16 x i8] c"0123456789abcdef", align 1
+@ptr = global ptr @buf, align 8
+
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+
+define void @shift(i64 %n) {
+  %p = load ptr, ptr @ptr
+  %q = getelementptr i8, ptr %p, i64 1
+  call void @llvm.memmove.p0.p0.i64(ptr %q, ptr %p, i64 %n, i1 false)
+  fence seq_cst
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %a = sext i32 %argc to i64
+  call void @shift(i64 %a)
+  %p = load ptr, ptr @ptr
+  %c = load i8, ptr %p
+  %r = zext i8 %c to i32
+  ret i32 %r
+}
+
+#--- fence.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @barrier() {
+  fence seq_cst
+  ret void
+}
+
+define i32 @main() {
+  call void @barrier()
+  ret i32 0
+}
+
+#--- main-named.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare void @named()
+
+define i32 @main() {
+  call void @named()
+  ret i32 0
+}

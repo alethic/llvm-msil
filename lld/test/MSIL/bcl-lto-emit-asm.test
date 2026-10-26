@@ -1,0 +1,127 @@
+## References and --lto-emit-asm (ImplementationPlan.md 5.11.8; M21.a item
+## 7): the text of the whole-program LTO module is never bound. It keeps
+## the [mscorlib] scopes of -S and llc (D10 as amended), whatever the
+## references, so it is byte-identical to the text without them, also when
+## the references lack a member the text uses (nothing is bound). msil-ld
+## still loads the references and applies the same checks, so a bad set
+## fails: no core library, two core libraries, two versions of one name, a
+## file that is no .NET assembly, and a --reference that adds no file (an
+## empty directory: 'given: no references', section 12 row 2026-10-26,
+## '5.11.7 clarified'). The PE of the same LTO link (without --lto-emit-asm)
+## is bound like an object link.
+## Since the text is never bound, a native data import that the native
+## libraries cannot serve (bar from libfoo.so.1, M15's Inputs/native, which
+## defines no dlopen/dlsym) cannot use NativeLibrary even when the references
+## define it (section 12 row 2026-10-26, '5.10.14 and 5.11.8 amended'): on
+## x86_64-unknown-linux-gnu-msil, with references, it is the error
+##   data symbol '<name>' in <module> cannot be imported: --lto-emit-asm text is never bound to the references, and the native libraries define no dlopen/dlsym
+## and without references 5.10.14's 'no reference defines
+## System.Runtime.InteropServices.NativeLibrary' text.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as p1.ll -o p1.bc
+# RUN: llvm-as bar.ll -o bar.bc
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: mkdir pack nob bad-two bad-name empty nl
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o pack/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o nob/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o nob/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingNoBarrier.yaml -o nob/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeFacade.yaml -o FakeFacade.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o bad-two/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeMscorlib.yaml -o bad-two/mscorlib.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o bad-name/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o bad-name/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInteropV9.yaml -o FakeInteropV9.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o nl/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o nl/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibrary.yaml -o nl/FakeNativeLibrary.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error:
+
+## The same text with and without references.
+# RUN: mkdir none refs refs-nob
+# RUN: msil-ld --lto-emit-asm p1.bc -o none/prog.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm p1.bc --reference=pack -o refs/prog.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm p1.bc --reference=nob -o refs-nob/prog.il 2>&1 | count 0
+# RUN: cmp none/prog.il refs/prog.il
+# RUN: cmp none/prog.il refs-nob/prog.il
+# RUN: FileCheck %s --check-prefix=TEXT --input-file=refs/prog.il --implicit-check-not=FakeCore \
+# RUN:   --implicit-check-not=FakeInterop --implicit-check-not=FakeThreading
+# TEXT-DAG: {{^}}.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }{{$}}
+# TEXT-DAG: {{^}}  call native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int){{$}}
+# TEXT-DAG: {{^}}  call void [mscorlib]System.Threading.Interlocked::MemoryBarrier(){{$}}
+
+## A bad set fails the text link too.
+# RUN: not msil-ld --lto-emit-asm p1.bc --reference=FakeFacade.dll -o x.il 2>&1 | %{fc} --check-prefix=NO-CORE
+# NO-CORE: {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: {{.*}}FakeFacade{{.*$}}
+# RUN: not msil-ld --lto-emit-asm p1.bc --reference=bad-two -o x.il 2>&1 | %{fc} --check-prefix=TWO-CORES
+# TWO-CORES: {{^}}msil-ld: error: the references mix two core libraries: {{.*$}}
+# RUN: not msil-ld --lto-emit-asm p1.bc --reference=bad-name --reference=FakeInteropV9.dll -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=NAME
+# NAME: {{^}}msil-ld: error: references {{.*}}FakeInterop{{.*}} have the same name but different versions or keys{{$}}
+# RUN: not msil-ld --lto-emit-asm p1.bc --reference=pack --reference=p1.ll -o x.il 2>&1 | %{fc} --check-prefix=NOT-NET
+# NOT-NET: {{^}}msil-ld: error: p1.ll: not a .NET assembly{{$}}
+# RUN: not msil-ld --lto-emit-asm p1.bc --reference=empty -o x.il 2>&1 | %{fc} --check-prefix=NO-REFS
+# NO-REFS: {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: no references{{$}}
+
+## A native data import without dlopen/dlsym: the text cannot use the
+## references' NativeLibrary.
+# RUN: not msil-ld --lto-emit-asm bar.bc libfoo.so.1 --reference=nl -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=DATA-REFS --implicit-check-not="PLEASE submit" \
+# RUN:   --implicit-check-not="Stack dump" --implicit-check-not="LLVM ERROR"
+# DATA-REFS-NOT: error:
+# DATA-REFS:     {{^}}msil-ld: error: data symbol 'bar' in libfoo.so.1 cannot be imported: --lto-emit-asm text is never bound to the references, and the native libraries define no dlopen/dlsym{{$}}
+# RUN: not msil-ld --lto-emit-asm bar.bc libfoo.so.1 -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=DATA-NONE --implicit-check-not="PLEASE submit" \
+# RUN:   --implicit-check-not="Stack dump" --implicit-check-not="LLVM ERROR"
+# DATA-NONE-NOT: error:
+# DATA-NONE:     {{^}}msil-ld: error: data symbol 'bar' in libfoo.so.1 cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym{{$}}
+
+## The PE of an LTO link binds.
+# RUN: msil-ld p1.bc --reference=pack -o lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lto.exe | FileCheck %s --check-prefix=LTO-PE --implicit-check-not=mscorlib
+# LTO-PE-DAG: {{^}}assemblyref 'FakeInterop' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# LTO-PE-DAG: {{^}}    L{{[0-9]+}}: call native int(native int) [FakeInterop]System.Runtime.InteropServices.Marshal::'AllocHGlobal'{{$}}
+# LTO-PE-DAG: {{^}}    L{{[0-9]+}}: call void() [FakeThreading]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+
+#--- bar.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@bar = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @bar
+  ret i32 %v
+}
+
+#--- p1.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@buf = global [16 x i8] c"0123456789abcdef", align 1
+@ptr = global ptr @buf, align 8
+
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+
+define void @shift(i64 %n) noinline {
+  %p = load ptr, ptr @ptr
+  %q = getelementptr i8, ptr %p, i64 1
+  call void @llvm.memmove.p0.p0.i64(ptr %q, ptr %p, i64 %n, i1 false)
+  fence seq_cst
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %a = sext i32 %argc to i64
+  call void @shift(i64 %a)
+  %p = load ptr, ptr @ptr
+  %c = load i8, ptr %p
+  %r = zext i8 %c to i32
+  ret i32 %r
+}

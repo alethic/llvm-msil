@@ -9,8 +9,10 @@
 """Check an assembly with ILVerify (and PEVerify on Windows) for real IL errors.
 
     msil-verify.py --ilverify PATH --runtime-dir DIR [--allow FILE]
-                   [--peverify PATH] [--ildasm PATH --ilasm PATH]
-                   [--md-baseline FILE] [--keep-copy DIR] [--timeout S]
+                   [--peverify PATH] [--skip-peverify REASON]
+                   [--ildasm PATH --ilasm PATH]
+                   [--md-baseline FILE [--equiv-skip FILE --test PATH
+                   [--triple T] [--level L]]] [--keep-copy DIR] [--timeout S]
                    [--mem-limit-mb N] [-v] [--dep FILE...]... [--] prog.dll
     msil-verify.py --skip [--dep FILE...] [--] prog.dll   (no verifier: a no-op)
     msil-verify.py --roundtrip --output OUT.dll --ildasm PATH --ilasm PATH
@@ -147,6 +149,34 @@ baseline has, never the reverse. Without PEVerify (--peverify empty, every
 host but Windows) O6 is skipped with a note. Pass 1's PEVerify runs with
 '/il' and never prints the metadata messages.
 
+--equiv-skip FILE --test PATH [--triple T] [--level L] (with --md-baseline;
+both or neither of the first two; plan section 12, 'M21.c extended'): when
+FILE (msil/utils/equiv-allowed.txt) has a
+'skip O6[@<triple>][:<level>] <path> <reason>' line that covers PATH (lit's
+%s) for this build's triple and level, O6 prints 'O6 skipped: <reason>' and
+does not run; both passes still do. The lines are matched exactly as
+msil-equiv.py matches its O3 and O4 lines (the same parser: a repository-
+relative path or a directory above it ending in '/'; a line that names a
+triple or a level covers only that triple or level), so O6 is skipped only
+for a test that names its own difference, never weakened for another one.
+They name the images in which msil-ld has, by design, members that the -S
+build lacks (plan 5.8.10: the address fields of ALIAS symbols and the zero
+fields of UNDEFINED WEAK ones), which PEVerify /md reports in an environment
+where it reports every field.
+
+--skip-peverify REASON (M21, plan 5.11.10) leaves PEVerify out of both passes
+and out of O6, and prints 'PEVerify skipped: REASON' (with --md-baseline
+also 'msil-verify: note: O6 skipped: PEVerify skipped: REASON'), whatever
+--peverify says. PEVerify cannot load an image bound to .NET 8 or later
+reference assemblies (llvm/docs/MSIL/recon/p2/bcl-binding.md 3.5): it stops
+with 'The system cannot find the file specified' after metadata errors and
+verifies no IL. lit's reference legs refs-net8 and refs-net10 (and
+msil_references=<the path of a .NET pack>, whose System.Runtime gives <n>)
+pass '--skip-peverify "bound to .NET <n> references"' and the reference pack
+as --runtime-dir, so ILVerify checks the image against the assemblies it was
+bound to; the same programs' PEVerify runs in every other leg. REASON must
+not be empty.
+
 --roundtrip does not verify. It checks that the assembly survives the
 ildasm -> ilasm round trip that Design.md 5.5 asks of the backend's output
 (lit parameter msil_roundtrip, feature msil-roundtrip, the M10 round-trip
@@ -156,7 +186,17 @@ disassembles the result again. Both listings must be equal apart from the
 lines that differ between any two builds of one module ('// MVID:' and
 '// Image base:') and the RVA data labels I_<RVA>, which are renumbered in
 order of first appearance (where the data lies is the image's layout); a
-difference is printed as a unified diff. The only edit
+difference is printed as a unified diff. One difference
+is accepted, and only line for line: an 'ldc.r4' whose float32 operand is a
+signaling NaN (exponent bits all ones, fraction nonzero, bit 22 clear) in the
+first listing may come back as the same instruction with bit 22 set, the
+quiet NaN of the same payload, because both ilasms quiet float32 signaling
+NaN constants while the MC encoder and msil-ld keep their bits (plan 5.12.6,
+the 'snan-quiet' entry, and section 12, 'M21.c extended'); ildasm prints such
+an operand as its bytes, '(01 00 80 7F)' coming back as '(01 00 C0 7F)', or
+as 'float32(0x7F800001)'. A float64 operand, a quiet NaN that changes, a
+payload that changes otherwise and every other line still fail; -v counts the
+quieted constants. The only edit
 to the listing is that an image layout directive whose value ildasm did not
 format ('.imagebase 0x%016I64x' from the Linux ildasm 10.0.12) is dropped,
 because ilasm rejects it; ilasm then uses its default, which is what the
@@ -261,6 +301,18 @@ def load_msil_run():
 
 
 msil_run = load_msil_run()
+
+
+def load_msil_equiv():
+    """msil-equiv.py, whose allow-list parser and test-path rule the O6 skip
+    lines share with O3 and O4 (msil-prog.py --equiv-skip uses them too).
+    Loaded only for --equiv-skip."""
+    spec = importlib.util.spec_from_file_location(
+        "msil_equiv", os.path.join(HERE, "msil-equiv.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def load_allow(path):
@@ -857,6 +909,68 @@ BUILD_SPECIFIC_RE = re.compile(r"^\s*//\s*(?:MVID|Image base):")
 DATA_LABEL_RE = re.compile(
     r"^(\s*\.data\s+(?:\w+\s+)?|\s*\.field\b.*\sat\s+)(I_[0-9A-F]{8})(?=\s*(?:=|$))"
 )
+# An ldc.r4 line of an ildasm listing with its operand as bytes ('(01 00 80
+# 7F)', little-endian; how ildasm prints a NaN) or as 'float32(0x7F800001)'.
+LDC_R4_RE = re.compile(
+    r"^(?P<lead>\s*IL_[0-9A-Fa-f]+:\s*ldc\.r4\s+)"
+    r"(?:\((?P<bytes>[0-9A-Fa-f]{2}(?:\s+[0-9A-Fa-f]{2}){3})\)"
+    r"|float32\(0x(?P<hex>[0-9A-Fa-f]{8})\))\s*$"
+)
+FLOAT32_EXPONENT = 0x7F800000
+FLOAT32_FRACTION = 0x007FFFFF
+FLOAT32_QUIET = 0x00400000
+
+
+def ldc_r4_operand(line):
+    """(lead, form, bits) of an ildasm ldc.r4 line whose operand is bytes
+    or float32(0x...), else None."""
+    m = LDC_R4_RE.match(line.rstrip("\r\n"))
+    if not m:
+        return None
+    if m.group("bytes"):
+        bits = int.from_bytes(
+            bytes(int(b, 16) for b in m.group("bytes").split()), "little"
+        )
+        return m.group("lead"), "bytes", bits
+    return m.group("lead"), "hex", int(m.group("hex"), 16)
+
+
+def is_float32_snan(bits):
+    """A float32 signaling NaN: exponent all ones, fraction nonzero, quiet
+    bit (22) clear."""
+    return (
+        bits & FLOAT32_EXPONENT == FLOAT32_EXPONENT
+        and bits & FLOAT32_FRACTION != 0
+        and not bits & FLOAT32_QUIET
+    )
+
+
+def snan_quieted(first, second):
+    """Whether the listing line second is the line first with its ldc.r4
+    float32 signaling NaN quieted (bit 22 set) and nothing else changed:
+    the one difference --roundtrip accepts (ilasm quiets such constants)."""
+    a, b = ldc_r4_operand(first), ldc_r4_operand(second)
+    if not a or not b or a[:2] != b[:2]:
+        return False
+    return is_float32_snan(a[2]) and b[2] == a[2] | FLOAT32_QUIET
+
+
+def compare_listings(first, second):
+    """Compare two comparable ildasm listings (lists of lines) for
+    --roundtrip. Returns (count of float32 signaling NaN constants that the
+    second listing has quieted, the lines of the first listing with those
+    quieted lines taken from the second, or None when the listings are
+    equal up to that quieting). Only a line-for-line quieting counts."""
+    if len(first) != len(second):
+        return 0, first
+    quieted, merged = 0, []
+    for a, b in zip(first, second):
+        if a != b and snan_quieted(a, b):
+            quieted += 1
+            merged.append(b)
+        else:
+            merged.append(a)
+    return quieted, (None if merged == second else merged)
 
 
 def roundtrip(args, private):
@@ -919,10 +1033,13 @@ def roundtrip(args, private):
         ]
 
     a, b = comparable(first), comparable(second)
-    if a != b:
+    quieted, differing = compare_listings(a, b)
+    if differing is not None:
+        # The diff shows the first listing with the accepted quieting
+        # already applied, so it names only the real differences.
         diff = "".join(
             difflib.unified_diff(
-                a,
+                differing,
                 b,
                 "ildasm %s" % os.path.basename(args.assembly),
                 "ildasm %s" % os.path.basename(output),
@@ -934,8 +1051,17 @@ def roundtrip(args, private):
         ]
     if args.verbose:
         print(
-            "msil-verify: %s: %s -> %s, %d listing lines identical"
-            % (label, args.assembly, args.output, len(a))
+            "msil-verify: %s: %s -> %s, %d listing lines identical%s"
+            % (
+                label,
+                args.assembly,
+                args.output,
+                len(a),
+                " up to %d float32 signaling NaN constant%s that ilasm quieted"
+                % (quieted, "" if quieted == 1 else "s")
+                if quieted
+                else "",
+            )
         )
     return []
 
@@ -1049,10 +1175,11 @@ MD_NAME_COLUMNS = {
 class MetadataNames:
     """The rows of an image's metadata tables, enough to name the row that a
     metadata token designates (O6 compares PEVerify /md messages of two
-    images whose row order differs). Raises ValueError for a file that is
-    not an IL image."""
+    images whose row order differs). only: the numbers of the tables whose
+    rows are decoded (every table when None); the others are only counted.
+    Raises ValueError for a file that is not an IL image."""
 
-    def __init__(self, path):
+    def __init__(self, path, only=None):
         with open(path, "rb") as f:
             self.data = data = f.read()
         u16 = lambda o: struct.unpack_from("<H", data, o)[0]
@@ -1128,6 +1255,9 @@ class MetadataNames:
                 continue
             widths = [size(k) for k in MD_SCHEMA[n]]
             rowsize = sum(widths)
+            if only is not None and n not in only:
+                at += rowsize * self.rows[n]
+                continue
             rows = []
             for r in range(self.rows[n]):
                 cols, o = [], at + r * rowsize
@@ -1194,6 +1324,23 @@ class MetadataNames:
         return text
 
 
+def assembly_row(path):
+    """The name and version (major, minor, build, revision) of the Assembly
+    row of the IL image at path; raises OSError when the file cannot be read
+    and ValueError when it is not an IL image with an Assembly row.
+    msil/test/lit.cfg.py reads the .NET major of a pack named by
+    msil_references=<path> with it."""
+    try:
+        md = MetadataNames(path, only=(0x20,))
+        rows = md.table_rows.get(0x20)
+        if not rows:
+            raise ValueError("%s has no Assembly row" % path)
+        row = rows[0]
+        return md.string(row[7]), tuple(row[1:5])
+    except (struct.error, IndexError) as e:
+        raise ValueError("%s is not a well-formed IL image (%s)" % (path, e))
+
+
 def md_messages(args, image):
     """The PEVerify /md messages of image, each token named after its row;
     raises ValueError when PEVerify fails or the image cannot be read."""
@@ -1226,6 +1373,10 @@ def md_messages(args, image):
 def check_md_baseline(args):
     """O6 (plan 5.12.6): every PEVerify /md message of the assembly is one of
     the baseline's. Returns (failures, notes)."""
+    if args.skip_peverify is not None:
+        return [], [
+            "msil-verify: note: O6 skipped: PEVerify skipped: %s" % args.skip_peverify
+        ]
     if not args.peverify:
         return [], ["msil-verify: note: O6 skipped: no PEVerify (--peverify)"]
     try:
@@ -1348,6 +1499,12 @@ def main():
     )
     p.add_argument("--peverify", help="also run PEVerify (Windows); empty: no PEVerify")
     p.add_argument(
+        "--skip-peverify",
+        metavar="REASON",
+        help="run no PEVerify (pass 1, pass 2 and O6) and print 'PEVerify "
+        "skipped: REASON', e.g. for an image bound to .NET 8 references",
+    )
+    p.add_argument(
         "--ildasm",
         help="ildasm for the neutralized pass (pass 2) or --roundtrip; empty: "
         "skip pass 2",
@@ -1360,6 +1517,21 @@ def main():
         metavar="FILE",
         help="O6: every PEVerify /md message of the assembly must be one of "
         "this image's (the ilasm build of the same program)",
+    )
+    p.add_argument(
+        "--equiv-skip",
+        metavar="FILE",
+        help="with --md-baseline: equiv-allowed.txt, whose 'skip O6' lines "
+        "covering --test skip O6",
+    )
+    p.add_argument("--test", help="the test's path, for --equiv-skip (lit's %%s)")
+    p.add_argument(
+        "--triple", help="the MSIL triple of the build, for qualified skip lines"
+    )
+    p.add_argument(
+        "--level",
+        choices=("O0", "O1", "O2", "O3", "Os", "Oz"),
+        help="the optimization level of the build, for qualified skip lines",
     )
     p.add_argument(
         "--keep-copy",
@@ -1420,14 +1592,30 @@ def main():
             )
         names[key] = f
     args.managed_deps = [d for d in args.dep if is_managed(d)]
+    if args.skip_peverify is not None and not args.skip_peverify.strip():
+        p.error("--skip-peverify needs a reason")
+    if bool(args.equiv_skip) != bool(args.test):
+        p.error("--equiv-skip and --test go together")
+    if args.equiv_skip and not args.md_baseline:
+        p.error("--equiv-skip selects the 'skip O6' lines; it needs --md-baseline")
 
     if args.roundtrip:
         if args.md_baseline:
             p.error("--md-baseline and --roundtrip exclude each other")
+        if args.skip_peverify is not None:
+            p.error("--skip-peverify and --roundtrip exclude each other")
         return main_roundtrip(p, args)
     if args.output:
         p.error("--output needs --roundtrip")
+    skipped_note = []
+    if args.skip_peverify is not None:
+        # Both passes and O6 test args.peverify; O6 also says why it is off.
+        args.skip_peverify = args.skip_peverify.strip()
+        args.peverify = None
+        skipped_note = ["PEVerify skipped: %s" % args.skip_peverify]
     if args.skip:
+        for n in skipped_note:
+            print(n)
         print("msil-verify: skipped (no ILVerify configured)")
         return 0
     if not args.ilverify:
@@ -1447,11 +1635,26 @@ def main():
     except (OSError, re.error) as e:
         sys.stderr.write("msil-verify: error: cannot read %s: %s\n" % (args.allow, e))
         return 2
+    o6_skip = None
+    if args.equiv_skip:
+        # The O6 skip lines of the allow-list (plan section 12, 'M21.c
+        # extended'), matched as msil-equiv.py matches O3's and O4's.
+        msil_equiv = load_msil_equiv()
+        try:
+            o6_skip = msil_equiv.Allowed(args.equiv_skip).skip_reason(
+                "O6", msil_equiv.test_path(args.test), args.triple, args.level
+            )
+        except msil_equiv.UsageError as e:
+            sys.stderr.write("msil-verify: error: --equiv-skip: %s\n" % e)
+            return 2
 
     private = tempfile.mkdtemp(prefix="msil-verify-") if args.ildasm else None
     try:
         bad, notes = verify(args, allow, private)
-        if args.md_baseline:
+        notes = skipped_note + notes
+        if args.md_baseline and o6_skip is not None:
+            notes.append("O6 skipped: %s" % o6_skip)
+        elif args.md_baseline:
             mbad, mnotes = check_md_baseline(args)
             bad += mbad
             notes += mnotes

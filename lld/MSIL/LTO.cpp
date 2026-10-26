@@ -29,6 +29,7 @@
 #include "Config.h"
 #include "InputFiles.h"
 #include "NativeLibraries.h"
+#include "ReferenceSet.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "lld/Common/CommonLinkerContext.h"
@@ -362,6 +363,17 @@ static bool isSectionBoundary(const Module &m, StringRef name) {
   });
 }
 
+// True if \p gv, a declaration named \p name, is a strong hidden or protected
+// reference to __start_<X> or __stop_<X> on a non-Windows triple: a name that
+// only the output can define, which never binds natively (plan 5.9.6).
+static bool isHiddenSectionBoundaryReference(const GlobalValue &gv,
+                                             StringRef name) {
+  if (ctx.arg.target.isOSWindows() || gv.hasDefaultVisibility() ||
+      gv.hasExternalWeakLinkage())
+    return false;
+  return name.starts_with("__start_") || name.starts_with("__stop_");
+}
+
 // True if the output refers to \p gv: a use in a function or variable that
 // the output defines, directly or through constants. An available_externally
 // function or variable is not part of the output (code generation emits
@@ -607,6 +619,18 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
     std::string name = getSymbolName(gv);
     if (isSectionBoundary(m, name))
       continue;
+    // A hidden or protected __start_<X> or __stop_<X> that late binding left
+    // to code generation, because a local definition was in section <X>
+    // before LTO removed it, binds nothing natively: it is reported as the
+    // writer reports it for the LTO object without that segment (plan 5.9.6,
+    // 5.9.9). A weak one keeps M12's null.
+    if (isHiddenSectionBoundaryReference(gv, name)) {
+      StringRef what = gv.hasProtectedVisibility()
+                           ? "undefined protected symbol: "
+                           : "undefined hidden symbol: ";
+      symtab->reportReference((what + name).str(), name);
+      continue;
+    }
     StringRef module = gv.getAttribute("msil-import-module").getValueAsString();
     StringRef importName =
         gv.getAttribute("msil-import-name").getValueAsString();
@@ -651,7 +675,9 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
   // The data-import helper (plan 5.10.12): on Windows triples LoadLibraryW
   // and GetProcAddress from kernel32.dll, elsewhere dlopen and dlsym as the
   // native libraries define them (findDataImportFunctions, which the output
-  // writer shares); without them the imports are errors.
+  // writer shares); without them the imports are errors. The text is never
+  // bound to the references (plan 5.11.8), so in a link with references the
+  // error says so instead of naming NativeLibrary (plan 5.10.14).
   if (!out.dataImports.empty()) {
     SmallVector<DataImportFunction, 2> helpers;
     if (findDataImportFunctions(ctx.arg.target, ctx.nativeIndex, helpers)) {
@@ -661,8 +687,14 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
       }
     } else {
       for (const std::array<std::string, 3> &op : out.dataImports)
-        symtab->reportReference(getDataImportUnavailableText(op[0], op[1]),
-                                op[0]);
+        symtab->reportReference(
+            ctx.references->empty()
+                ? getDataImportUnavailableText(op[0], op[1])
+                : "data symbol '" + op[0] + "' in " + op[1] +
+                      " cannot be imported: --lto-emit-asm text is never "
+                      "bound to the references, and the native libraries "
+                      "define no dlopen/dlsym",
+            op[0]);
     }
   }
 

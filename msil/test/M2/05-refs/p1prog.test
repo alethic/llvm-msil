@@ -1,0 +1,74 @@
+# bcl-binding's p1prog.c, which uses every BCL member Phase 1 emits, runs in every leg, bound to the leg's references.
+# p1prog.c (bcl-binding 1.2 and 3.2) has a data image with a relocation
+# (Marshal::AllocHGlobal, and '<msil>image_t' extending System.ValueType),
+# argv (Environment::GetCommandLineArgs, Marshal::StringToHGlobalAnsi), a
+# variable-length memmove (Buffer::MemoryCopy) and a fence
+# (Interlocked::MemoryBarrier), and prints 'world' and exits 42 on every
+# runtime when it is bound correctly (bcl-binding 3.2). The composite links
+# it with %{msil_ldflags}, which holds the leg's %{msil_ref_flags} (plan
+# 5.12.3: -Wl,--reference=<pack> under --param msil_references=<pack>), and
+# runs it on the leg's runtimes against the native transcript. The RUN lines
+# after it link it once more at -O2 and pin the AssemblyRef rows that the
+# leg must give, so a reference leg cannot pass on the built-in table (plan
+# 5.11.6, 5.11.7, 5.11.10): without references (msil-ref=none) and with the
+# Framework v4.8 reference assemblies (msil-ref=net48) one row, mscorlib
+# 4.0.0.0 b77a5c561934e089, scoping every TypeRef; with the .NET 8 and .NET
+# 10 packs three rows, System.Runtime, System.Runtime.InteropServices and
+# System.Threading 8.0.0.0 or 10.0.0.0 with the token b03f5f7f11d50a3a taken
+# from their Assembly rows (never the 0.0.0.0 of a facade's AssemblyRef,
+# bcl-binding 2.3), Marshal scoped to System.Runtime.InteropServices,
+# Interlocked to System.Threading and the other types to System.Runtime
+# (bcl-binding 1.2, 2.2), in first-use order (Inputs/refrows.py). A
+# reference path of another kind (msil-ref=path) gets no row check.
+# REQUIRES: msil-cil-dump
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p1prog.c
+# RUN: %{msil_prog}
+# RUN: rm -rf %t.rows %t.rows.d && mkdir -p %t.rows
+# RUN: %msil_prog_build --level O2 --link-output pe --workdir %t.rows.d --out %t.rows.d/prog.exe --src %t/p1prog.c
+# RUN: %msil_cil_dump --tables %t.rows.d/prog.exe > %t.rows/tables.txt
+# RUN: %python %S/Inputs/refrows.py %t.rows/tables.txt > %t.rows/rows.txt
+# RUN: %if msil-ref=none || msil-ref=net48 %{ FileCheck %s --check-prefix=ONE --input-file=%t.rows/tables.txt %}
+# RUN: %if msil-ref=none || msil-ref=net48 %{ FileCheck %s --check-prefix=MSCORLIB --input-file=%t.rows/rows.txt --implicit-check-not="-> System" --implicit-check-not="-> nested" --implicit-check-not="-> 0x" %}
+# RUN: %if msil-ref=net8 || msil-ref=net10 %{ FileCheck %s --check-prefix=THREE --input-file=%t.rows/tables.txt %}
+# RUN: %if msil-ref=net8 %{ FileCheck %s --check-prefixes=NET,NET8 --input-file=%t.rows/rows.txt --implicit-check-not="-> mscorlib" --implicit-check-not="-> nested" --implicit-check-not="-> 0x" %}
+# RUN: %if msil-ref=net10 %{ FileCheck %s --check-prefixes=NET,NET10 --input-file=%t.rows/rows.txt --implicit-check-not="-> mscorlib" --implicit-check-not="-> nested" --implicit-check-not="-> 0x" %}
+# ONE:        {{^}}Table: AssemblyRef rows=1 rowsize={{[0-9]+}}{{$}}
+# MSCORLIB:   {{^}}assemblyref 1 mscorlib 4.0.0.0 token=b77a5c561934e089 flags=0x00000000 culture='' hash=-{{$}}
+# MSCORLIB-DAG: {{^}}typeref System.Buffer -> mscorlib{{$}}
+# MSCORLIB-DAG: {{^}}typeref System.Threading.Interlocked -> mscorlib{{$}}
+# MSCORLIB-DAG: {{^}}typeref System.Runtime.InteropServices.Marshal -> mscorlib{{$}}
+# MSCORLIB-DAG: {{^}}typeref System.Environment -> mscorlib{{$}}
+# MSCORLIB-DAG: {{^}}typeref System.ValueType -> mscorlib{{$}}
+# MSCORLIB:   {{^}}first use: mscorlib{{$}}
+# THREE:      {{^}}Table: AssemblyRef rows=3 rowsize={{[0-9]+}}{{$}}
+# NET8-DAG:   {{^}}assemblyref {{[1-3]}} System.Runtime 8.0.0.0 token=b03f5f7f11d50a3a flags=0x00000000 culture='' hash=-{{$}}
+# NET8-DAG:   {{^}}assemblyref {{[1-3]}} System.Runtime.InteropServices 8.0.0.0 token=b03f5f7f11d50a3a flags=0x00000000 culture='' hash=-{{$}}
+# NET8-DAG:   {{^}}assemblyref {{[1-3]}} System.Threading 8.0.0.0 token=b03f5f7f11d50a3a flags=0x00000000 culture='' hash=-{{$}}
+# NET10-DAG:  {{^}}assemblyref {{[1-3]}} System.Runtime 10.0.0.0 token=b03f5f7f11d50a3a flags=0x00000000 culture='' hash=-{{$}}
+# NET10-DAG:  {{^}}assemblyref {{[1-3]}} System.Runtime.InteropServices 10.0.0.0 token=b03f5f7f11d50a3a flags=0x00000000 culture='' hash=-{{$}}
+# NET10-DAG:  {{^}}assemblyref {{[1-3]}} System.Threading 10.0.0.0 token=b03f5f7f11d50a3a flags=0x00000000 culture='' hash=-{{$}}
+# NET-DAG:    {{^}}typeref System.Buffer -> System.Runtime{{$}}
+# NET-DAG:    {{^}}typeref System.Threading.Interlocked -> System.Threading{{$}}
+# NET-DAG:    {{^}}typeref System.Runtime.InteropServices.Marshal -> System.Runtime.InteropServices{{$}}
+# NET-DAG:    {{^}}typeref System.Environment -> System.Runtime{{$}}
+# NET-DAG:    {{^}}typeref System.ValueType -> System.Runtime{{$}}
+# NET:        {{^}}first use: {{.+}}{{$}}
+#--- p1prog.c
+/* llvm/docs/MSIL/recon/p2/bcl-binding-files/runtime/p1prog.c, the program of
+   bcl-binding 1.2 and 3.2. */
+/* Exercises every BCL member Phase 1 emits: the data segment (AllocHGlobal
+   and the RVA image type extending System.ValueType), argv
+   (GetCommandLineArgs, AllocHGlobal, StringToHGlobalAnsi), a variable-length
+   memmove (Buffer::MemoryCopy) and a fence (Interlocked::MemoryBarrier). */
+#include <stddef.h>
+int puts(const char *);
+static char buf[64] = "hello";
+const char *table[] = {buf, "world"};
+int main(int argc, char **argv) {
+  size_t n = (size_t)argc + 3;
+  __builtin_memmove(buf + 1, buf, n);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  puts(table[1]);
+  return argv[0][0] != 0 ? 42 : 1;
+}

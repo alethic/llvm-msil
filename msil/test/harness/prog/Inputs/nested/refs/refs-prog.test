@@ -1,0 +1,17 @@
+# Run in a nested lit by ../../../../ref-flags.test (M21): %{msil_prog_O2} of
+# two sources, built by msil-prog.py with the stand-ins of ../../prog-cc.py,
+# whose msil-ld records the arguments of each link in prog.exe.inputs. The
+# MSIL link has -Wl,--reference=<dir> exactly when msil_references is not
+# none; the native oracle's link (a Windows triple on the local runner, where
+# it runs) never has one. The record of the MSIL link is printed too.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# RUN: %{msil_prog_O2}
+# RUN: cat %t.O2.d/prog.exe.inputs
+# RUN: %if msil-ref=none %{ %{harness_check} lacks %t.O2.d/prog.exe.inputs "reference" %} %else %{ %{harness_check} contains %t.O2.d/prog.exe.inputs "^arg -Wl,--reference=\S+$" %}
+# RUN: %if msil-native-oracle %{ %{harness_check} contains %t.O2.native.d/prog.exe.inputs "^object obj/main\.o main\.c 3$" %}
+# RUN: %if msil-native-oracle %{ %{harness_check} lacks %t.O2.native.d/prog.exe.inputs "reference" %}
+#--- main.c
+// prog-value: 3
+#--- util.c
+// prog-value: 4

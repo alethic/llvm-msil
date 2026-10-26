@@ -1,0 +1,149 @@
+## What a bound link emits (ImplementationPlan.md 5.11.6, M21.b items 3 and
+## 6; Roslyn's rows, bcl-binding 4.3):
+## - one AssemblyRef per defining assembly used: the version, culture and
+##   name of its Assembly row, Flags 0, PublicKeyOrToken the 8-byte token of
+##   its public key (b03f5f7f11d50a3a, 31bf3856ad364e35) and an empty
+##   HashValue;
+## - in first-use order: named.o binds FakeTypesA (Ping) and then
+##   FakeThreading (MemoryBarrier), barrier.o binds FakeThreading, so linked
+##   'barrier.o named.o' FakeThreading's row comes before FakeTypesA's and
+##   linked 'named.o barrier.o' after it;
+## - no row for a reference that binds nothing (FakeInterop,
+##   FakeNativeLibrary and FakeTypesB here, and the core library FakeCore:
+##   these links have no data, no argv and no memmove, so nothing binds a
+##   FakeCore type); a fence alone gives the one row FakeThreading;
+## - a nested type is a TypeRef scoped to its enclosing TypeRef
+##   ([FakeTypesA]Fake.Outer/Inner), and a TypeRef of an object scoped to an
+##   AssemblyRef other than the placeholders binds by name like a [msil.bcl]
+##   one: named.o's [Contoso]System.Threading.Interlocked becomes
+##   FakeThreading's, and no Contoso row is written;
+## - rows are deduplicated: barrier.o and barrier2.o both call
+##   Interlocked::MemoryBarrier(), and the PE has one TypeRef, one MemberRef
+##   and one AssemblyRef for it.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj main-both.ll -o main-both.o
+# RUN: llc -filetype=obj barrier.ll -o barrier.o
+# RUN: llc -filetype=obj barrier2.ll -o barrier2.o
+# RUN: llc -filetype=obj main-twice.ll -o main-twice.o
+# RUN: llc -filetype=obj fence.ll -o fence.o
+# RUN: yaml2obj %S/Inputs/fakepack/named-obj.yaml -o named.o
+# RUN: mkdir pack fr
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o pack/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibrary.yaml -o pack/FakeNativeLibrary.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesA.yaml -o pack/FakeTypesA.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesB.yaml -o pack/FakeTypesB.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o fr/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingFr.yaml -o fr/FakeThreading.dll
+
+# DEFINE: %{unused} = --implicit-check-not=FakeInterop --implicit-check-not=FakeNativeLibrary \
+# DEFINE:   --implicit-check-not=FakeTypesB --implicit-check-not=Contoso --implicit-check-not=mscorlib \
+# DEFINE:   --implicit-check-not=FakeCore
+
+## The columns, and first use: barrier.o first.
+# RUN: msil-ld main-both.o barrier.o named.o --reference=pack -o bn.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --tables bn.exe > bn.txt
+# RUN: FileCheck %s --check-prefix=BARRIER-FIRST %{unused} --input-file=bn.txt
+# BARRIER-FIRST:      {{^}}Table: AssemblyRef rows=2 rowsize={{[0-9]+}}{{$}}
+# BARRIER-FIRST-NEXT: {{^}}  AssemblyRef[1]: MajorVersion=0x0008 MinorVersion=0x0001 BuildNumber=0x0002 RevisionNumber=0x0003 Flags=0x00000000 PublicKeyOrToken=31 BF 38 56 AD 36 4E 35 Name='FakeThreading' Culture='' HashValue=-{{$}}
+# BARRIER-FIRST-NEXT: {{^}}  AssemblyRef[2]: MajorVersion=0x0001 MinorVersion=0x0002 BuildNumber=0x0003 RevisionNumber=0x0004 Flags=0x00000000 PublicKeyOrToken=B0 3F 5F 7F 11 D5 0A 3A Name='FakeTypesA' Culture='' HashValue=-{{$}}
+
+## named.o first.
+# RUN: msil-ld main-both.o named.o barrier.o --reference=pack -o nb.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --tables nb.exe > nb.txt
+# RUN: FileCheck %s --check-prefix=NAMED-FIRST %{unused} --input-file=nb.txt
+# NAMED-FIRST:      {{^}}Table: AssemblyRef rows=2 rowsize={{[0-9]+}}{{$}}
+# NAMED-FIRST-NEXT: {{^}}  AssemblyRef[1]: {{.*}} Name='FakeTypesA' Culture='' HashValue=-{{$}}
+# NAMED-FIRST-NEXT: {{^}}  AssemblyRef[2]: {{.*}} Name='FakeThreading' Culture='' HashValue=-{{$}}
+
+## The nested scope, and the Contoso scope bound by name.
+# RUN: llvm-cil-dump nb.exe | FileCheck %s --check-prefix=NAMED %{unused}
+# NAMED: {{^}}assemblyref 'FakeTypesA' ver 1.2.3.4 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# NAMED: {{^}}  .method 'barrier' void() flags=0x0016 impl=0x0000{{$}}
+# NAMED: {{^}}    L{{[0-9]+}}: call void() [FakeThreading]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+# NAMED: {{^}}  .method 'named' void() flags=0x0016 impl=0x0000{{$}}
+# NAMED-NEXT: {{^}}    .maxstack {{[0-9]+}}{{( initlocals)?$}}
+# NAMED-NEXT: {{^}}    L0: call void() [FakeTypesA]Fake.Outer/Inner::'Ping'{{$}}
+# NAMED-NEXT: {{^}}    L1: call void() [FakeThreading]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+# NAMED-NEXT: {{^}}    L2: ret{{$}}
+# RUN: FileCheck %s --check-prefix=NESTED-ROWS --input-file=nb.txt
+# NESTED-ROWS-DAG: {{^}}  TypeRef[{{[0-9]+}}]: ResolutionScope=0x23{{[0-9A-F]+}} TypeName='Outer' TypeNamespace='Fake'{{$}}
+# NESTED-ROWS-DAG: {{^}}  TypeRef[{{[0-9]+}}]: ResolutionScope=0x01{{[0-9A-F]+}} TypeName='Inner' TypeNamespace=''{{$}}
+
+## Deduplicated rows.
+# RUN: msil-ld main-twice.o barrier.o barrier2.o --reference=pack -o twice.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --tables twice.exe | FileCheck %s --check-prefix=DEDUP %{unused} \
+# RUN:   --implicit-check-not="TypeName='Interlocked'" --implicit-check-not="Name='MemoryBarrier'" \
+# RUN:   --implicit-check-not="Name='FakeThreading'"
+## (--tables prints TypeRef, MemberRef and AssemblyRef in this order.)
+# DEDUP: {{^}}  TypeRef[{{[0-9]+}}]: ResolutionScope=0x23{{[0-9A-F]+}} TypeName='Interlocked' TypeNamespace='System.Threading'{{$}}
+# DEDUP: {{^}}  MemberRef[{{[0-9]+}}]: Class=0x01{{[0-9A-F]+}} Name='MemoryBarrier' Signature=00 00 01{{$}}
+# DEDUP: {{^}}  AssemblyRef[{{[0-9]+}}]: {{.*}} Name='FakeThreading' Culture='' HashValue=-{{$}}
+
+## The culture of the defining Assembly row.
+# RUN: msil-ld fence.o --reference=fr -o fr.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --tables fr.exe | FileCheck %s --check-prefix=CULTURE --implicit-check-not=FakeCore
+# CULTURE: {{^}}  AssemblyRef[{{[0-9]+}}]: MajorVersion=0x0008 MinorVersion=0x0001 BuildNumber=0x0002 RevisionNumber=0x0003 Flags=0x00000000 PublicKeyOrToken=31 BF 38 56 AD 36 4E 35 Name='FakeThreading' Culture='fr' HashValue=-{{$}}
+
+## Nothing for the core library when nothing binds one of its types: a fence
+## linked against FakeCore and FakeThreading has exactly one row.
+# RUN: msil-ld fence.o --reference=pack/FakeCore.dll --reference=pack/FakeThreading.dll -o fence.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --tables fence.exe | FileCheck %s --check-prefix=FENCE --implicit-check-not=FakeCore
+# FENCE:      {{^}}Table: AssemblyRef rows=1 rowsize={{[0-9]+}}{{$}}
+# FENCE-NEXT: {{^}}  AssemblyRef[1]: MajorVersion=0x0008 MinorVersion=0x0001 BuildNumber=0x0002 RevisionNumber=0x0003 Flags=0x00000000 PublicKeyOrToken=31 BF 38 56 AD 36 4E 35 Name='FakeThreading' Culture='' HashValue=-{{$}}
+
+#--- main-both.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare void @barrier()
+declare void @named()
+
+define i32 @main() {
+  call void @barrier()
+  call void @named()
+  ret i32 0
+}
+
+#--- barrier.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @barrier() {
+  fence seq_cst
+  ret void
+}
+
+#--- barrier2.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @barrier2() {
+  fence seq_cst
+  ret void
+}
+
+#--- main-twice.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare void @barrier()
+declare void @barrier2()
+
+define i32 @main() {
+  call void @barrier()
+  call void @barrier2()
+  ret i32 0
+}
+
+#--- fence.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @barrier() {
+  fence seq_cst
+  ret void
+}
+
+define i32 @main() {
+  call void @barrier()
+  ret i32 0
+}

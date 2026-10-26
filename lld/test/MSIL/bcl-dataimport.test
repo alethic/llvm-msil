@@ -1,0 +1,180 @@
+## The data-import helper and the references (ImplementationPlan.md 5.10.12,
+## M21.b items 6-7): '<msil>dataimport'(string module, string name) uses
+## System.Runtime.InteropServices.NativeLibrary when the references define
+## both members, with the body
+##   ldarg.0; call NativeLibrary::Load(string); ldarg.1;
+##   call NativeLibrary::GetExport(native int, string); ret
+## ahead of M20's choices, which stay otherwise: on Windows triples the
+## Kernel32 body (Marshal::StringToHGlobalUni and LoadLibraryW, then
+## Marshal::StringToHGlobalAnsi and GetProcAddress), on ELF triples dlopen and
+## dlsym from the native libraries, and without them 5.10.14's error. Every
+## BCL member the helper and '<msil>init_dataimports' use is bound like any
+## other, here to FakeInterop and FakeCore. Without references the built-in
+## table has no NativeLibrary entry, so M20's choices apply
+## (obj-data-import.test). The data symbols are M15's native inputs: _iob
+## from msvcrt.lib on x86_64-pc-windows-msvc-msil, and bar from libfoo.so.1
+## (which defines no dlopen/dlsym) or libc.so.6's stdout on
+## x86_64-unknown-linux-gnu-msil. Inputs/dataimports.py prints what the
+## initializer stores.
+## The references define NativeLibrary only when they define both members
+## with their signatures, public (M21.b item 6: isDefined holds for both):
+## a pack whose NativeLibrary has Load(string) only, GetExport(native int,
+## string) only, GetExport(native int, char*) instead, or a non-public
+## GetExport (Inputs/fakepack/FakeNativeLibrary.il's variants) gives M20's
+## choices, the Kernel32 body with no FakeNativeLibrary row on Windows and
+## 5.10.14's error on ELF without dlopen/dlsym.
+## Constructors are not inherited (section 12 row 2026-10-26, '5.11.4 amended
+## (the base-type member search)' item 1): with FakeCoreNoCtor, whose
+## EntryPointNotFoundException has .ctor() but not the .ctor(string) that its
+## base System.Exception defines, the Kernel32 body's
+## EntryPointNotFoundException::.ctor(string) is the undefined-member error,
+## listing only EntryPointNotFoundException's own constructor, and nothing is
+## linked (bcl-members.test checks the same request through
+## --print-bcl-binding).
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj win.ll -o win.o
+# RUN: llc -filetype=obj bar.ll -o bar.o
+# RUN: llc -filetype=obj stdout.ll -o stdout.o
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/msvcrt.def /out:msvcrt.lib
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: mkdir nl plain nl-load nl-export nl-sig nl-priv noctor
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o nl/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o nl/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibrary.yaml -o nl/FakeNativeLibrary.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o plain/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o plain/FakeInterop.dll
+# RUN: cp plain/FakeCore.dll plain/FakeInterop.dll nl-load
+# RUN: cp plain/FakeCore.dll plain/FakeInterop.dll nl-export
+# RUN: cp plain/FakeCore.dll plain/FakeInterop.dll nl-sig
+# RUN: cp plain/FakeCore.dll plain/FakeInterop.dll nl-priv
+# RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibraryLoadOnly.yaml -o nl-load/FakeNativeLibrary.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibraryExportOnly.yaml -o nl-export/FakeNativeLibrary.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibraryWrongSig.yaml -o nl-sig/FakeNativeLibrary.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibraryPrivExport.yaml -o nl-priv/FakeNativeLibrary.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCoreNoCtor.yaml -o noctor/FakeCore.dll
+# RUN: cp plain/FakeInterop.dll noctor
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{none} = --implicit-check-not=kernel32 --implicit-check-not=LoadLibraryW \
+# DEFINE:   --implicit-check-not=GetProcAddress --implicit-check-not=dlopen --implicit-check-not=dlsym \
+# DEFINE:   --implicit-check-not=mscorlib
+
+## Windows with NativeLibrary: its body, and no kernel32 P/Invoke.
+# RUN: msil-ld win.o msvcrt.lib --reference=nl -o win-nl.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win-nl.exe > win-nl.txt
+# RUN: FileCheck %s --check-prefix=NL %{none} --input-file=win-nl.txt
+# RUN: %python %S/Inputs/dataimports.py win-nl.txt | FileCheck %s --check-prefix=WIN-IMPORTS
+# NL:      {{^}}assemblyref 'FakeNativeLibrary' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# NL:      {{^}}  .method '<msil>dataimport' native int(string, string) flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# NL-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# NL-NEXT: {{^}}    L0: ldarg.0{{$}}
+# NL-NEXT: {{^}}    L1: call native int(string) [FakeNativeLibrary]System.Runtime.InteropServices.NativeLibrary::'Load'{{$}}
+# NL-NEXT: {{^}}    L2: ldarg.1{{$}}
+# NL-NEXT: {{^}}    L3: call native int(native int, string) [FakeNativeLibrary]System.Runtime.InteropServices.NativeLibrary::'GetExport'{{$}}
+# NL-NEXT: {{^}}    L4: ret{{$}}
+# WIN-IMPORTS: {{^}}import _iob = msvcrt.dll!_iob{{$}}
+
+## Windows without it: the Kernel32 body, bound to the references.
+# RUN: msil-ld win.o msvcrt.lib --reference=plain -o win-k32.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win-k32.exe > win-k32.txt
+# RUN: FileCheck %s --check-prefix=K32 --input-file=win-k32.txt --implicit-check-not=NativeLibrary \
+# RUN:   --implicit-check-not=mscorlib
+# RUN: %python %S/Inputs/dataimports.py win-k32.txt | FileCheck %s --check-prefix=WIN-IMPORTS
+# K32:      {{^}}  .method '<msil>dataimport' native int(string, string) flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# K32-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# K32-NEXT: {{^}}    L0: ldarg.0{{$}}
+# K32-NEXT: {{^}}    L1: call native int(string) [FakeInterop]System.Runtime.InteropServices.Marshal::'StringToHGlobalUni'{{$}}
+# K32-NEXT: {{^}}    L2: call native int(native int) '<Module>'::'LoadLibraryW'{{$}}
+# K32-NEXT: {{^}}    L3: ldarg.1{{$}}
+# K32-NEXT: {{^}}    L4: call native int(string) [FakeInterop]System.Runtime.InteropServices.Marshal::'StringToHGlobalAnsi'{{$}}
+# K32-NEXT: {{^}}    L5: call native int(native int, native int) '<Module>'::'GetProcAddress'{{$}}
+# K32-NEXT: {{^}}    L6: ret{{$}}
+# K32:      {{^}}  .method '<msil>init_dataimports' void() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# K32:      {{^}}    L{{[0-9]+}}: newobj instance void(string) [FakeCore]System.EntryPointNotFoundException::'.ctor'{{$}}
+# K32:      {{^}}    .pinvokeimpl 'kernel32.dll' entry 'GetProcAddress' flags=0x0201{{$}}
+# K32:      {{^}}    .pinvokeimpl 'kernel32.dll' entry 'LoadLibraryW' flags=0x0201{{$}}
+
+## Windows without NativeLibrary, and without EntryPointNotFoundException's
+## .ctor(string): the base type's does not count.
+# RUN: mkdir out
+# RUN: not msil-ld win.o msvcrt.lib --reference=noctor -o out/win-noctor.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=NO-CTOR --implicit-check-not=error: --implicit-check-not=System.Exception
+# NO-CTOR: {{^}}msil-ld: error: undefined .NET member 'instance void System.EntryPointNotFoundException::.ctor(string)' (requested by {{[^)]+}}); 'System.EntryPointNotFoundException' is defined in FakeCore 8.0.0.0 [b03f5f7f11d50a3a] (noctor/FakeCore.dll) but has no such member; overloads present: instance void .ctor(){{$}}
+# RUN: not ls out/win-noctor.exe
+
+## Linux with NativeLibrary: no dlopen needed, and NativeLibrary also wins
+## over the dlopen/dlsym that libc.so.6 defines.
+# RUN: msil-ld bar.o libfoo.so.1 --reference=nl -o lnx-nl.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lnx-nl.exe > lnx-nl.txt
+# RUN: FileCheck %s --check-prefix=NL %{none} --input-file=lnx-nl.txt
+# RUN: %python %S/Inputs/dataimports.py lnx-nl.txt | FileCheck %s --check-prefix=LNX-BAR
+# LNX-BAR: {{^}}import bar = libfoo.so.1!bar{{$}}
+# RUN: msil-ld stdout.o libc.so.6 --reference=nl -o lnx-libc.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lnx-libc.exe > lnx-libc.txt
+# RUN: FileCheck %s --check-prefix=NL %{none} --input-file=lnx-libc.txt
+# RUN: %python %S/Inputs/dataimports.py lnx-libc.txt | FileCheck %s --check-prefix=LNX-STDOUT
+# LNX-STDOUT: {{^}}import stdout = libc.so.6!stdout{{$}}
+
+## Linux without NativeLibrary: dlopen/dlsym from libc.so.6, or the error.
+# RUN: msil-ld stdout.o libc.so.6 --reference=plain -o lnx-dl.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lnx-dl.exe | FileCheck %s --check-prefix=DLFCN --implicit-check-not=NativeLibrary
+# DLFCN-DAG: {{^}}    .pinvokeimpl 'libc.so.6' entry 'dlopen' flags=0x0201{{$}}
+# DLFCN-DAG: {{^}}    .pinvokeimpl 'libc.so.6' entry 'dlsym' flags=0x0201{{$}}
+# RUN: not msil-ld bar.o libfoo.so.1 --reference=plain -o x.exe 2>&1 | %{fc} --check-prefix=NODL \
+# RUN:   --implicit-check-not=error:
+# NODL: {{^}}msil-ld: error: data symbol 'bar' in libfoo.so.1 cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym{{$}}
+
+## Only one member, a wrong signature, or a non-public member: no
+## NativeLibrary, on Windows (Kernel32) and on ELF (the error).
+# DEFINE: %{k32} = FileCheck %s --check-prefix=K32 --implicit-check-not=NativeLibrary --implicit-check-not=mscorlib
+# DEFINE: %{nodl} = %{fc} --check-prefix=NODL --implicit-check-not=error:
+# RUN: msil-ld win.o msvcrt.lib --reference=nl-load -o win-load.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win-load.exe | %{k32}
+# RUN: not msil-ld bar.o libfoo.so.1 --reference=nl-load -o x.exe 2>&1 | %{nodl}
+# RUN: msil-ld win.o msvcrt.lib --reference=nl-export -o win-export.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win-export.exe | %{k32}
+# RUN: not msil-ld bar.o libfoo.so.1 --reference=nl-export -o x.exe 2>&1 | %{nodl}
+# RUN: msil-ld win.o msvcrt.lib --reference=nl-sig -o win-sig.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win-sig.exe | %{k32}
+# RUN: not msil-ld bar.o libfoo.so.1 --reference=nl-sig -o x.exe 2>&1 | %{nodl}
+# RUN: msil-ld win.o msvcrt.lib --reference=nl-priv -o win-priv.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win-priv.exe | %{k32}
+# RUN: not msil-ld bar.o libfoo.so.1 --reference=nl-priv -o x.exe 2>&1 | %{nodl}
+
+#--- win.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@_iob = external global [3 x [48 x i8]]
+
+define i32 @main() {
+  %b = load i8, ptr @_iob
+  %r = zext i8 %b to i32
+  ret i32 %r
+}
+
+#--- bar.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@bar = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @bar
+  ret i32 %v
+}
+
+#--- stdout.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@stdout = external global ptr
+
+define i32 @main() {
+  %f = load ptr, ptr @stdout
+  %c = icmp eq ptr %f, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}

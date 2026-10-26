@@ -1,0 +1,68 @@
+# Bound to the .NET Framework v4.8 reference assemblies, p1prog has the canonical listing of the link without references, and it runs on every runtime.
+# The Framework v4.8 reference directory (%{msil_ref_dir_net48}, feature
+# msil-refpack=net48: 'Reference Assemblies\Microsoft\Framework\.NETFramework
+# \v4.8', on Linux the net48 NuGet package's build/.NETFramework/v4.8) has
+# mscorlib, which defines System.Object and references nothing, so it is the
+# core library (plan 5.11.3), and it defines every type p1prog needs
+# (bcl-binding 2.2). msil-ld binds them there: one AssemblyRef, mscorlib
+# 4.0.0.0 with the token b77a5c561934e089 computed from its Assembly row's
+# public key (plan 5.11.6), which is exactly the built-in table's row (plan
+# 5.11.7), and the member signatures are mscorlib's blobs, which equal the
+# built-in ones (bcl-binding 1.2). So the canonical listing (%msil_canon,
+# plan 5.7.10) of the bound image equals that of the link without references
+# at -O0 and -O2, with no normalization; only the order of the TypeRef rows
+# may differ, which the listing does not show. The composite runs the bound
+# image in every leg: on .NET 8 and .NET 10, in WSL and, with
+# msil_run_netfx=1 (refs-net48, net8), on the .NET Framework. Plan 5.11.6,
+# 5.11.7, 5.11.10.
+# REQUIRES: msil-refpack=net48, msil-cil-dump
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p1prog.c
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net48}
+# RUN: %{msil_prog}
+# DEFINE: %{n48_level} = O0
+# DEFINE: %{n48_build} = \
+# DEFINE:   rm -rf %t.net48.%{n48_level}.d \
+# DEFINE:   && %msil_prog_build --level %{n48_level} --link-output pe --workdir %t.net48.%{n48_level}.d \
+# DEFINE:      --out %t.net48.%{n48_level}.d/prog.exe --src %t/p1prog.c
+# DEFINE: %{n48_compare} = \
+# DEFINE:   rm -rf %t.none.%{n48_level}.d %t.cmp.%{n48_level} \
+# DEFINE:   && %msil_prog_build --level %{n48_level} --link-output pe --workdir %t.none.%{n48_level}.d \
+# DEFINE:      --out %t.none.%{n48_level}.d/prog.exe --src %t/p1prog.c \
+# DEFINE:   && mkdir -p %t.cmp.%{n48_level} \
+# DEFINE:   && %msil_canon %t.none.%{n48_level}.d/prog.exe > %t.cmp.%{n48_level}/none.txt \
+# DEFINE:   && %msil_canon %t.net48.%{n48_level}.d/prog.exe > %t.cmp.%{n48_level}/net48.txt \
+# DEFINE:   && diff %t.cmp.%{n48_level}/none.txt %t.cmp.%{n48_level}/net48.txt \
+# DEFINE:   && FileCheck %s --check-prefix=CANON --input-file=%t.cmp.%{n48_level}/net48.txt \
+# DEFINE:      --implicit-check-not=assemblyref \
+# DEFINE:   && %msil_cil_dump --tables %t.net48.%{n48_level}.d/prog.exe > %t.cmp.%{n48_level}/tables.txt \
+# DEFINE:   && FileCheck %s --check-prefix=ONE --input-file=%t.cmp.%{n48_level}/tables.txt
+# RUN: %{n48_build}
+# REDEFINE: %{n48_level} = O2
+# RUN: %{n48_build}
+# REDEFINE: %{msil_ref_flags} =
+# REDEFINE: %{n48_level} = O0
+# RUN: %{n48_compare}
+# REDEFINE: %{n48_level} = O2
+# RUN: %{n48_compare}
+# CANON:      {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+# CANON:      {{^}}.class '<msil>image_t' flags=0x{{[0-9A-F]+}} extends [mscorlib]System.ValueType{{$}}
+# ONE:        {{^}}Table: AssemblyRef rows=1 rowsize={{[0-9]+}}{{$}}
+#--- p1prog.c
+/* llvm/docs/MSIL/recon/p2/bcl-binding-files/runtime/p1prog.c, the program of
+   bcl-binding 1.2 and 3.2. */
+/* Exercises every BCL member Phase 1 emits: the data segment (AllocHGlobal
+   and the RVA image type extending System.ValueType), argv
+   (GetCommandLineArgs, AllocHGlobal, StringToHGlobalAnsi), a variable-length
+   memmove (Buffer::MemoryCopy) and a fence (Interlocked::MemoryBarrier). */
+#include <stddef.h>
+int puts(const char *);
+static char buf[64] = "hello";
+const char *table[] = {buf, "world"};
+int main(int argc, char **argv) {
+  size_t n = (size_t)argc + 3;
+  __builtin_memmove(buf + 1, buf, n);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  puts(table[1]);
+  return argv[0][0] != 0 ? 42 : 1;
+}

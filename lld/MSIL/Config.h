@@ -24,6 +24,7 @@
 #include "llvm/Support/LibraryOptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -37,6 +38,7 @@ class InputFile;
 class BitcodeFile;
 class NativeLibraryFile;
 class ObjFile;
+class ReferenceSet;
 class Symbol;
 class SyntheticData;
 class SyntheticSegment;
@@ -51,8 +53,10 @@ class SyntheticSegment;
 // order), --trace-symbol and -y (SymbolTable::trace), --reproduce (tar),
 // --fatal-warnings, --error-limit, --verbose and --color-diagnostics
 // (lld's ErrorHandler), and the rejected -r. -Bstatic and -Bdynamic set
-// isStatic while the driver reads the inputs (lld/ELF's member), and
-// --ucrtbase-imports adds its built-in library where it appears.
+// isStatic while the driver reads the inputs (lld/ELF's member),
+// --ucrtbase-imports adds its built-in library where it appears, and
+// --reference adds its file or directory to ctx.references where it appears
+// (references keeps the values too).
 struct Config {
   bool allowMultipleDefinition;
   // --dependent-libraries (default) and --no-dependent-libraries.
@@ -63,6 +67,9 @@ struct Config {
   // -Bstatic: -l accepts static libraries only (plan 5.10.9).
   bool isStatic = false;
   bool ltoEmitAsm;
+  // --print-bcl-table (plan 5.11.1): print the built-in [mscorlib] table and
+  // exit.
+  bool printBclTable;
   bool printGcSections;
   bool printImports;
   bool saveTemps;
@@ -101,6 +108,11 @@ struct Config {
   // --target: the codegen triple, an MSIL triple.
   llvm::Triple target;
 
+  // --print-bcl-binding=<request> (hidden, plan 5.11.5), in command-line
+  // order: print how the references bind each request and exit.
+  llvm::SmallVector<llvm::StringRef, 0> printBclBinding;
+  // --reference=<file|dir> (plan 5.11.1), in command-line order.
+  llvm::SmallVector<llvm::StringRef, 0> references;
   llvm::SmallVector<llvm::StringRef, 0> searchPaths;
   // -u and --undefined, in command-line order.
   llvm::SmallVector<llvm::StringRef, 0> undefined;
@@ -131,6 +143,15 @@ struct Ctx {
 
   // The definitions of the native libraries (plan 5.10.8).
   NativeIndex nativeIndex;
+
+  // The reference assemblies (plan 5.11.2): --reference files and
+  // directories and the positional .NET assemblies without the toolchain's
+  // symbol table, in command-line order. Never null; Ctx::reset() makes a
+  // new, empty set, so that every link (LLD_IN_TEST=2) starts from none.
+  // ReferenceSet.h defines the class: Config.h does not include it, so that
+  // its lld::msil::AssemblyIdentity stays out of the TUs that use
+  // llvm::cli's under a using-directive.
+  std::unique_ptr<ReferenceSet> references;
 
   // The /alternatename:<from>=<to> linker options of the inputs (plan 5.9.4),
   // in the order they were read, and the ones that apply because <from> is

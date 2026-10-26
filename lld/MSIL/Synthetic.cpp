@@ -6,13 +6,14 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// The output model of msil-ld, the BCL stand-in and the trailer sink (see
+// The output model of msil-ld, its BCL requests and the trailer sink (see
 // Synthetic.h).
 //
 //===----------------------------------------------------------------------===//
 
 #include "Synthetic.h"
 #include "InputFiles.h"
+#include "ReferenceSet.h"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
@@ -76,7 +77,7 @@ EntityRef OutputModule::getTokenEntity(uint32_t token) {
 Expected<uint32_t> OutputModule::resolveEntity(EntityRef ref) const {
   if (ref == 0 || ref > entities.size())
     return createStringError(inconvertibleErrorCode(),
-                             "msil-ld: unknown trailer entity " + Twine(ref));
+                             "unknown trailer entity " + Twine(ref));
   const Entity &e = entities[ref - 1];
   switch (e.kind) {
   case Entity::Method:
@@ -124,60 +125,54 @@ uint32_t OutputModule::addLocalSig(ArrayRef<TypeSig> locals) {
 }
 
 //===----------------------------------------------------------------------===//
-// The BCL stand-in (plan 5.9.7)
+// BCL references (plan 5.9.7, 5.11)
 //===----------------------------------------------------------------------===//
 
-// [mscorlib] 4.0.0.0, public key token b77a5c561934e089, flags 0 (D10).
-uint32_t OutputModule::getMscorlib() {
-  if (mscorlib)
-    return mscorlib;
-  AssemblyRefInfo ref;
-  ref.Name = MscorlibAssembly.str();
-  ref.Version.Major = 4;
-  static constexpr uint8_t token[] = {0xB7, 0x7A, 0x5C, 0x56,
-                                      0x19, 0x34, 0xE0, 0x89};
-  ref.PublicKeyOrToken.assign(std::begin(token), std::end(token));
-  mscorlib = mb.getToken(mb.addAssemblyRef(ref));
-  return mscorlib;
-}
-
-uint32_t OutputModule::getBCLType(BCLMemberId id) {
-  const BCLMemberInfo &info = getBCLMemberInfo(id);
-  assert(info.isType() && "not a BCL type");
-  uint32_t &token = bclTokens[static_cast<unsigned>(id)];
-  if (token)
-    return token;
-  // A nested type 'Outer/Inner' is scoped to its enclosing type's TypeRef.
-  SmallVector<StringRef, 2> names;
-  StringRef(info.Name).split(names, '/');
-  EntityHandle scope{getMscorlib()};
-  EntityHandle ref = mb.addTypeRef(scope, info.Namespace, names[0]);
-  for (StringRef inner : drop_begin(names))
-    ref = mb.addTypeRef(ref, "", inner);
-  token = ref.Value;
-  return token;
-}
-
 // A type of BCLMembers.def's signature text (canonical listing v1): a
-// primitive, a pointer or an SZARRAY of one.
-static std::optional<TypeSig> parseBCLType(StringRef text, bool allowVoid) {
+// primitive, a pointer or an SZARRAY of one, or a class or value type that
+// \p bindType binds. \p what names the signature in errors.
+static Expected<TypeSig> parseBCLType(StringRef text, bool allowVoid,
+                                      BCLTypeBinder bindType, StringRef what) {
+  auto fail = [&]() {
+    return createStringError(inconvertibleErrorCode(),
+                             "cannot read the signature of " + what + " at '" +
+                                 text + "'");
+  };
   text = text.trim();
   if (text.consume_back("*")) {
-    std::optional<TypeSig> pointee = parseBCLType(text, /*allowVoid=*/true);
+    Expected<TypeSig> pointee =
+        parseBCLType(text, /*allowVoid=*/true, bindType, what);
     if (!pointee)
-      return std::nullopt;
+      return pointee.takeError();
     return TypeSig::getPointer(*pointee);
   }
   if (text.consume_back("[]")) {
-    std::optional<TypeSig> element = parseBCLType(text, /*allowVoid=*/false);
+    Expected<TypeSig> element =
+        parseBCLType(text, /*allowVoid=*/false, bindType, what);
     if (!element)
-      return std::nullopt;
+      return element.takeError();
     return TypeSig::getSZArray(*element);
   }
   if (text == "void") {
     if (!allowVoid)
-      return std::nullopt;
+      return fail();
     return TypeSig();
+  }
+  bool isValueType = text.consume_front("valuetype ");
+  if (isValueType || text.consume_front("class ")) {
+    // "Ns.Name", a nested type as "Ns.Outer/Inner".
+    StringRef full = text.trim();
+    auto [ns, name] = splitTypeName(full);
+    if (!bindType)
+      return createStringError(inconvertibleErrorCode(),
+                               "the signature of " + what +
+                                   " names the type '" + full +
+                                   "', which is not bound here");
+    Expected<uint32_t> token = bindType(ns, name, isValueType);
+    if (!token)
+      return token.takeError();
+    return isValueType ? TypeSig::getValueType(*token)
+                       : TypeSig::getClass(*token);
   }
   static constexpr std::pair<StringLiteral, ElementType> primitives[] = {
       {"bool", ELEMENT_TYPE_BOOLEAN},
@@ -201,108 +196,168 @@ static std::optional<TypeSig> parseBCLType(StringRef text, bool allowVoid) {
   for (const auto &[name, type] : primitives)
     if (text == name)
       return TypeSig::get(type);
-  return std::nullopt;
+  return fail();
 }
 
-uint32_t OutputModule::getBCLMember(BCLMemberId id) {
-  const BCLMemberInfo &info = getBCLMemberInfo(id);
-  if (info.isType())
-    return getBCLType(id);
-  uint32_t &token = bclTokens[static_cast<unsigned>(id)];
-  if (token)
-    return token;
+Expected<MethodSig> lld::msil::parseBCLMethodSig(StringRef ret,
+                                                 StringRef params, bool hasThis,
+                                                 StringRef what,
+                                                 BCLTypeBinder bindType) {
   MethodSig sig;
-  sig.Header = info.HasThis ? SIG_HASTHIS : SIG_DEFAULT;
-  std::optional<TypeSig> ret = parseBCLType(info.Return, /*allowVoid=*/true);
-  bool ok = ret.has_value();
-  if (ret)
-    sig.Return = *ret;
-  StringRef params = StringRef(info.Params).trim();
+  sig.Header = hasThis ? SIG_HASTHIS : SIG_DEFAULT;
+  Expected<TypeSig> retType =
+      parseBCLType(ret, /*allowVoid=*/true, bindType, what);
+  if (!retType)
+    return retType.takeError();
+  sig.Return = *retType;
+  params = params.trim();
   if (!params.empty()) {
     SmallVector<StringRef, 4> parts;
     params.split(parts, ',');
     for (StringRef part : parts) {
-      std::optional<TypeSig> type = parseBCLType(part, /*allowVoid=*/false);
-      ok &= type.has_value();
-      if (type)
-        sig.Params.push_back(*type);
+      Expected<TypeSig> type =
+          parseBCLType(part, /*allowVoid=*/false, bindType, what);
+      if (!type)
+        return type.takeError();
+      sig.Params.push_back(*type);
     }
   }
-  if (!ok)
-    reportFatalInternalError(
-        Twine("msil-ld: cannot encode the signature of BCL member '") +
-        info.IdName + "'");
-  SmallVector<uint8_t, 16> blob;
-  encodeMethodSig(sig, blob);
-  EntityHandle parent{getBCLType(info.Owner)};
-  token = mb.getToken(mb.addMemberRef(parent, info.Name, mb.addBlob(blob)));
-  return token;
+  return sig;
+}
+
+Expected<MethodSig> lld::msil::parseBCLMemberSig(const BCLMemberInfo &info,
+                                                 BCLTypeBinder bindType) {
+  assert(info.isMethod() && "not a BCL method");
+  return parseBCLMethodSig(info.Return, info.Params, info.HasThis,
+                           ("BCL member '" + info.IdName + "'").str(),
+                           bindType);
+}
+
+Expected<BCLRequest> lld::msil::getBCLMemberRequest(BCLMemberId id,
+                                                    BCLTypeBinder bindType) {
+  const BCLMemberInfo &info = getBCLMemberInfo(id);
+  BCLRequest r;
+  if (info.isType()) {
+    r.K = BCLRequest::Type;
+    r.Namespace = info.Namespace;
+    r.Name = info.Name;
+    return r;
+  }
+  const BCLMemberInfo &owner = getBCLMemberInfo(info.Owner);
+  r.K = BCLRequest::Method;
+  r.Strength = static_cast<RequestStrength>(info.Strength);
+  r.Namespace = owner.Namespace;
+  r.Name = owner.Name;
+  r.Member = info.Name;
+  Expected<MethodSig> sig = parseBCLMemberSig(info, bindType);
+  if (!sig)
+    return sig.takeError();
+  r.MethodSignature = std::move(*sig);
+  return r;
+}
+
+void OutputModule::reportOnce(const Twine &msg) {
+  std::string s = msg.str();
+  if (reported.try_emplace(s, true).second)
+    error(s);
 }
 
 void OutputModule::reportUnsupported(ObjFile &f, const Twine &what) {
-  std::string msg = (toString(&f) + ": " + what).str();
-  if (reported.try_emplace(msg, true).second)
-    error(msg);
+  reportOnce(toString(&f) + ": " + what);
 }
 
-// A TypeRef row of \p f in the output (\p depth bounds a cycle of nested
-// TypeRefs in a malformed object).
-uint32_t OutputModule::mapTypeRef(ObjFile &f, uint32_t token, unsigned depth) {
-  auto key = std::make_pair(static_cast<const ObjFile *>(&f), token);
-  if (auto it = typeTokens.find(key); it != typeTokens.end())
-    return it->second;
+uint32_t OutputModule::bind(const BCLRequest &r) {
+  assert(binder && "the writer sets the binder before it binds a token");
+  Expected<std::optional<EntityHandle>> handle = binder->bind(r);
+  if (!handle) {
+    handleAllErrors(handle.takeError(),
+                    [&](const ErrorInfoBase &e) { reportOnce(e.message()); });
+    return 0;
+  }
+  // The objects' requests and msil-ld's own are Required: they never fall
+  // back (plan 5.11.5).
+  assert(*handle && "a Required request fell back");
+  return *handle ? (*handle)->Value : 0;
+}
+
+uint32_t OutputModule::getBCLType(BCLMemberId id) {
+  assert(getBCLMemberInfo(id).isType() && "not a BCL type");
+  return getBCLMember(id);
+}
+
+uint32_t OutputModule::getBCLMember(BCLMemberId id) {
+  assert(binder && "the writer sets the binder before the trailer");
+  Expected<EntityHandle> handle = binder->bindMember(id);
+  if (!handle) {
+    handleAllErrors(handle.takeError(),
+                    [&](const ErrorInfoBase &e) { reportOnce(e.message()); });
+    return 0;
+  }
+  return handle->Value;
+}
+
+Expected<std::pair<std::string, std::string>>
+OutputModule::getTypeRefName(ObjFile &f, uint32_t token) {
   const MetadataReader &md = f.getReader();
-  Expected<TypeRefRow> row = md.getTypeRef(getTokenRow(token));
-  if (!row) {
-    reportUnsupported(f, toString(row.takeError()));
-    return 0;
-  }
-  uint32_t scope = row->ResolutionScope;
-  uint32_t result = 0;
-  switch (static_cast<TableId>(getTokenType(scope))) {
-  case TableId::AssemblyRef: {
+  // The outermost TypeRef must be scoped to an assembly other than the
+  // placeholders msil.extern and msil.link.
+  for (uint32_t outer = token, depth = 0;; ++depth) {
+    Expected<TypeRefRow> row = md.getTypeRef(getTokenRow(outer));
+    if (!row)
+      return row.takeError();
+    if (depth > maxTypeNestingDepth)
+      return createStringError(inconvertibleErrorCode(),
+                               "nested type reference '" + row->Name +
+                                   "' is too deep");
+    uint32_t scope = row->ResolutionScope;
+    TableId table = static_cast<TableId>(getTokenType(scope));
+    if (table == TableId::TypeRef && getTokenRow(scope) != 0) {
+      outer = scope;
+      continue;
+    }
+    if (table != TableId::AssemblyRef || getTokenRow(scope) == 0)
+      return createStringError(inconvertibleErrorCode(),
+                               "type reference '" + row->Name +
+                                   "' is not scoped to an assembly");
     Expected<AssemblyRefRow> asmRef = md.getAssemblyRef(getTokenRow(scope));
-    if (!asmRef) {
-      reportUnsupported(f, toString(asmRef.takeError()));
-      return 0;
-    }
-    if (asmRef->Name != MSILLink::BCLAssembly) {
-      reportUnsupported(f, "reference to assembly '" + asmRef->Name +
-                               "' needs --reference, which this msil-ld "
-                               "does not support yet");
-      return 0;
-    }
-    result = mb.getToken(
-        mb.addTypeRef(EntityHandle{getMscorlib()}, row->Namespace, row->Name));
+    if (!asmRef)
+      return asmRef.takeError();
+    if (asmRef->Name == MSILLink::ExternAssembly ||
+        asmRef->Name == MSILLink::LinkInfoAssembly)
+      return createStringError(inconvertibleErrorCode(),
+                               "type reference '" + row->Name + "' of [" +
+                                   asmRef->Name + "] is not a .NET type");
     break;
   }
-  case TableId::TypeRef: {
-    if (depth > 64) {
-      reportUnsupported(f, "nested type reference '" + row->Name +
-                               "' is too deep");
-      return 0;
-    }
-    uint32_t outer = mapTypeRef(f, scope, depth + 1);
-    if (!outer)
-      return 0;
-    result = mb.getToken(
-        mb.addTypeRef(EntityHandle{outer}, row->Namespace, row->Name));
-    break;
-  }
-  default:
-    reportUnsupported(f, "type reference '" + row->Name +
-                             "' is not scoped to an assembly, which this "
-                             "msil-ld does not support yet");
-    return 0;
-  }
-  typeTokens[key] = result;
-  return result;
+  // The names as the reference set's index spells them ("Outer/Inner", each
+  // nested part with its namespace).
+  return getIndexTypeName(md, token);
 }
 
 uint32_t OutputModule::mapTypeToken(ObjFile &f, uint32_t token) {
+  auto key = std::make_pair(static_cast<const ObjFile *>(&f), token);
   switch (static_cast<TableId>(getTokenType(token))) {
-  case TableId::TypeRef:
-    return mapTypeRef(f, token, 0);
+  case TableId::TypeRef: {
+    if (auto it = typeTokens.find(key); it != typeTokens.end())
+      return it->second;
+    uint32_t result = 0;
+    Expected<std::pair<std::string, std::string>> name =
+        getTypeRefName(f, token);
+    if (!name) {
+      reportUnsupported(f, toString(name.takeError()));
+    } else {
+      // A type request, bound by name whatever the AssemblyRef says (plan
+      // 5.11.5; msil.bcl in llc's objects).
+      BCLRequest r;
+      r.K = BCLRequest::Type;
+      r.RequestedBy = &f;
+      r.Namespace = name->first;
+      r.Name = name->second;
+      result = bind(r);
+    }
+    typeTokens[key] = result;
+    return result;
+  }
   case TableId::TypeDef:
     // Phase 2 objects define only '<Module>' (plan 5.8.2).
     if (getTokenRow(token) == 1)
@@ -311,7 +366,6 @@ uint32_t OutputModule::mapTypeToken(ObjFile &f, uint32_t token) {
                          "supported yet");
     return 0;
   case TableId::TypeSpec: {
-    auto key = std::make_pair(static_cast<const ObjFile *>(&f), token);
     if (auto it = typeTokens.find(key); it != typeTokens.end())
       return it->second;
     const MetadataReader &md = f.getReader();
@@ -336,11 +390,14 @@ uint32_t OutputModule::mapTypeToken(ObjFile &f, uint32_t token) {
       failed |= r == 0;
       return r ? r : t;
     });
-    if (failed)
-      return 0;
-    SmallVector<uint8_t, 16> bytes;
-    encodeTypeSpec(mapped, bytes);
-    uint32_t result = mb.getToken(mb.addTypeSpec(mb.addBlob(bytes)));
+    uint32_t result = 0;
+    if (!failed) {
+      BCLRequest r;
+      r.K = BCLRequest::TypeSpec;
+      r.RequestedBy = &f;
+      r.FieldOrSpec = std::move(mapped);
+      result = bind(r);
+    }
     typeTokens[key] = result;
     return result;
   }
@@ -371,17 +428,22 @@ uint32_t OutputModule::mapBCLToken(ObjFile &f, uint32_t token) {
       reportUnsupported(f, toString(row.takeError()));
       return 0;
     }
-    uint8_t parentType = getTokenType(row->Parent);
-    if (parentType != static_cast<uint8_t>(TableId::TypeRef) &&
-        parentType != static_cast<uint8_t>(TableId::TypeSpec)) {
+    if (getTokenType(row->Parent) != static_cast<uint8_t>(TableId::TypeRef)) {
       reportUnsupported(f, "member reference '" + row->Name +
-                               "' has a parent that this msil-ld does not "
-                               "support yet");
+                               "' has a parent other than a type reference, "
+                               "which is not supported yet");
       return 0;
     }
-    uint32_t parent = mapTypeToken(f, row->Parent);
-    if (!parent)
+    // The parent's TypeRef first, as M20's stand-in made it, so that a link
+    // without references keeps its row order (plan 5.11.7).
+    if (!mapTypeToken(f, row->Parent))
       return 0;
+    Expected<std::pair<std::string, std::string>> parent =
+        getTypeRefName(f, row->Parent);
+    if (!parent) {
+      reportUnsupported(f, toString(parent.takeError()));
+      return 0;
+    }
     Expected<ArrayRef<uint8_t>> blob = md.getBlob(row->Signature);
     if (!blob) {
       reportUnsupported(f, toString(blob.takeError()));
@@ -393,7 +455,13 @@ uint32_t OutputModule::mapBCLToken(ObjFile &f, uint32_t token) {
       failed |= r == 0;
       return r ? r : t;
     };
-    SmallVector<uint8_t, 16> bytes;
+    // A method or field request on the parent, with the object's signature
+    // in output tokens (plan 5.11.4, 5.11.5).
+    BCLRequest r;
+    r.RequestedBy = &f;
+    r.Namespace = parent->first;
+    r.Name = parent->second;
+    r.Member = row->Name;
     if (!blob->empty() && ((*blob)[0] & SIG_KIND_MASK) == SIG_FIELD) {
       Expected<TypeSig> type = decodeFieldSig(*blob);
       if (!type) {
@@ -401,7 +469,8 @@ uint32_t OutputModule::mapBCLToken(ObjFile &f, uint32_t token) {
                           "'" + row->Name + "': " + toString(type.takeError()));
         return 0;
       }
-      encodeFieldSig(mapTypeRefs(*type, map), bytes);
+      r.K = BCLRequest::Field;
+      r.FieldOrSpec = mapTypeRefs(*type, map);
     } else {
       Expected<MethodSig> sig = decodeMethodSig(*blob);
       if (!sig) {
@@ -409,18 +478,19 @@ uint32_t OutputModule::mapBCLToken(ObjFile &f, uint32_t token) {
                           "'" + row->Name + "': " + toString(sig.takeError()));
         return 0;
       }
-      encodeMethodSig(mapTypeRefs(*sig, map), bytes);
+      r.K = BCLRequest::Method;
+      r.MethodSignature = mapTypeRefs(*sig, map);
     }
     if (failed)
       return 0;
-    return mb.getToken(
-        mb.addMemberRef(EntityHandle{parent}, row->Name, mb.addBlob(bytes)));
+    return bind(r);
   }
   default:
-    // MethodSpecs (generic instantiations) do not occur in C (plan 5.9.7).
+    // MethodSpecs (generic method instantiations) do not occur in C (plan
+    // 5.9.7).
     reportUnsupported(f, "token 0x" + utohexstr(token, false, 8) +
-                             " names a generic instantiation, which this "
-                             "msil-ld does not support yet");
+                             " names a generic method instantiation, which "
+                             "is not supported yet");
     return 0;
   }
 }

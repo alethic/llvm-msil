@@ -1,14 +1,13 @@
-## msil-ld's command line in M20 (ImplementationPlan.md 5.9.3 and 5.9.14;
+## msil-ld's command line in M21 (ImplementationPlan.md 5.9.3 and 5.9.14;
 ## the still valid cases of M13's stub.test moved here):
 ## - --version prints the lld version and skips input processing, so a
 ##   missing input does not matter; -v without inputs prints it too and exits
 ##   0, and -v with inputs prints it and links;
-## - --help prints the option table, which holds the options up to M20's and
+## - --help prints the option table, which holds the options up to M21's and
 ##   none of a later milestone's (until its milestone such an option is an
-##   unknown argument: --reference, --print-bcl-table, --export-class,
-##   --interface-only); M20's hidden test options
-##   --msil-reloc-loop-threshold and --msil-type-member-limit are accepted
-##   but not listed;
+##   unknown argument: --export-class, --interface-only); M20's hidden test
+##   options --msil-reloc-loop-threshold and --msil-type-member-limit and
+##   M21's hidden --print-bcl-binding are accepted but not listed;
 ## - without inputs: 'no input files';
 ## - -r and --relocatable are 'error: -r is not supported', reported while
 ##   the options are read, so -r alone prints only that (the one msil-ld-only
@@ -35,7 +34,12 @@
 ##   reloc.o's three data relocations (tab = {&a, &b, &c}) go through the
 ##   '<msil>relocs' loop at 0 in the text as in the PE of the same link, and
 ##   stay straight-line at the default (32) and under
-##   -mllvm -msil-reloc-loop-threshold=1000.
+##   -mllvm -msil-reloc-loop-threshold=1000;
+## - M21 adds --reference=<path> (both spellings), --print-bcl-table and the
+##   hidden --print-bcl-binding=<request> (5.11.1, 5.11.5; their behaviour is
+##   in bcl-*.test): --reference and --print-bcl-table are listed by --help,
+##   and a --reference naming a path that does not exist is an error, no
+##   longer an unknown argument.
 ## Every diagnostic starts with 'msil-ld: '. No run may crash.
 ##
 ## LLD_IN_TEST=2 runs the driver twice in one process and fails if the two
@@ -62,8 +66,8 @@
 ## table; HELP-NONE, made only of -NOT lines, checks the whole output
 ## (M15 open issue 13).
 # RUN: msil-ld --help > help.txt 2>&1
-# RUN: %{fc} %{one} --check-prefix=HELP --implicit-check-not=--reference \
-# RUN:   --implicit-check-not=--export-class --implicit-check-not=--print-bcl \
+# RUN: %{fc} %{one} --check-prefix=HELP \
+# RUN:   --implicit-check-not=--export-class --implicit-check-not=--print-bcl-binding \
 # RUN:   --implicit-check-not=--interface-only --input-file=help.txt
 # RUN: FileCheck %s --check-prefix=HELP-NONE --input-file=help.txt
 
@@ -72,9 +76,8 @@
 # HELP-NONE-NOT: LLVM ERROR
 # HELP-NONE-NOT: error:
 # HELP-NONE-NOT: warning:
-# HELP-NONE-NOT: --reference
 # HELP-NONE-NOT: --export-class
-# HELP-NONE-NOT: --print-bcl
+# HELP-NONE-NOT: --print-bcl-binding
 # HELP-NONE-NOT: --interface-only
 # HELP-NONE-NOT: msil-reloc-loop-threshold
 # HELP-NONE-NOT: msil-type-member-limit
@@ -99,6 +102,8 @@
 # HELP-DAG:     --gc-sections
 # HELP-DAG:     --no-gc-sections
 # HELP-DAG:     --print-gc-sections
+# HELP-DAG:     --reference
+# HELP-DAG:     --print-bcl-table
 
 # RUN: not msil-ld 2>&1 | %{fc} %{one} --check-prefix=NOINPUT
 # RUN: not msil-ld --lto-emit-asm -o x.il 2>&1 | %{fc} %{one} --check-prefix=NOINPUT
@@ -119,11 +124,16 @@
 
 # SHARED:       {{^}}msil-ld: error: -shared is not supported yet{{$}}
 
-## Options of later milestones are unknown arguments (5.9.3).
+## Options of later milestones are unknown arguments (5.9.3); M21's are not.
 # RUN: not msil-ld --no-such-option --lto-emit-asm main.o -o u.il 2>&1 \
 # RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--no-such-option
 # RUN: not msil-ld --reference=refs --lto-emit-asm main.o -o u.il 2>&1 \
-# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--reference=refs
+# RUN:   | %{fc} --check-prefix=REFERENCE --implicit-check-not="unknown argument"
+# RUN: not msil-ld --reference refs --lto-emit-asm main.o -o u.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=REFERENCE --implicit-check-not="unknown argument"
+# REFERENCE:    {{^}}msil-ld: error: {{.*}}refs
+# RUN: msil-ld --print-bcl-table 2>&1 | %{fc} %{one} --check-prefix=TABLE
+# TABLE:        {{^}}type [mscorlib]System.ValueType{{$}}
 # RUN: not msil-ld --export-class=Contoso.Native --lto-emit-asm main.o -o u.il 2>&1 \
 # RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--export-class=Contoso.Native
 

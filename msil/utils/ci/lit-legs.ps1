@@ -12,9 +12,9 @@
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List
 #
 # Legs, in order. The numbers are the gate steps of plan section 6 that run the same command:
-# 'M20 n' for the M20 gate, 'M19 n' for the M19 gate, 'M18 n' for the M18 gate, 'M14 n' for the
-# M14 gate, 'M12 n' for the M12 gate, plain numbers for the M10 and M11 gates (steps 5-12 the
-# same in both, 20 and 21 M11's); lit-legs.sh has the Linux job's legs:
+# 'M21 n' for the M21 gate, 'M20 n' for the M20 gate, 'M19 n' for the M19 gate, 'M18 n' for the
+# M18 gate, 'M14 n' for the M14 gate, 'M12 n' for the M12 gate, plain numbers for the M10 and
+# M11 gates (steps 5-12 the same in both, 20 and 21 M11's); lit-legs.sh has the Linux job's legs:
 #   net8           llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests, from M17
 #                  the llvm-cil-dump and llvm-cil-copy tests, from M18 llvm/test/MC/MSIL and
 #                  from M19 clang/test/Driver/msil-object.c included), harness, msil/test/M1 and
@@ -22,7 +22,7 @@
 #                  native oracle required (with the VS clang's compiler-rt builtins, lit's
 #                  msil_native_rtlib=auto); M1 through -S and ilasm, M2 through CIL objects and
 #                  msil-ld's image (from M20 %{msil_prog} links objects under the default
-#                  pipeline asm)                    (M20 17; M19 13; M18 15; M14 11; M12 9; step 5)
+#                  pipeline asm)           (M21 13; M20 17; M19 13; M18 15; M14 11; M12 9; step 5)
 #   net10          msil/test/M1 on .NET 10                                       (M12 10; step 6)
 #   net8-tc0       msil/test/M1 on .NET 8, DOTNET_TieredCompilation=0 (optimizing JIT)  (step 7)
 #   more-levels    msil/test/M1 on .NET 8 at O1,O3,Os,Oz (O0 and O2 run in the other legs; .ll
@@ -43,7 +43,20 @@
 #                  ilasm image) and msil_scale_tests=1 (msil/test/M2/00-link/spill-limits.test,
 #                  65,600 functions and globals; only this leg sets it, plan 5.12.2); M20's gate
 #                  runs its parameters on M1 alone (step 18), the post-commit run-m1-gate.ps1
-#                  the whole leg                                                     (M20 18)
+#                  and M21's gate the whole leg                             (M21 17; M20 18)
+#   refs-net48     msil/test/M1/11-programs, msil/test/M2/00-link and msil/test/M2/05-refs with
+#                  msil_pipeline=obj and msil_references=net48 (plan 5.11.10, 5.12.11, M21): every
+#                  link binds the BCL against the .NET Framework 4.8 reference assemblies (lit.cfg.py
+#                  finds them: $env:MSIL_REF_NET48, the Reference Assemblies directory, or the NuGet
+#                  package that msil/utils/tools/msil-tools.proj pins), with msil_equiv=1 (O3 with
+#                  the scopes entry of equiv-allowed.txt, O6) and msil_run_netfx=1, on .NET 8 and on
+#                  the .NET Framework 4.8                                            (M21 15)
+#   refs-net8      the same paths with msil_references=net8 (the newest Microsoft.NETCore.App.Ref
+#                  8.x pack) on .NET 8; msil-verify.py runs ILVerify against the pack and skips
+#                  PEVerify, which cannot load such an image ('bound to .NET 8 references')
+#                                                                                    (M21 16)
+#   refs-net10     the same with msil_references=net10 (the newest 10.x pack) on .NET 10
+#                                                                                    (M21 17)
 #   wsl-net10      -Wsl: msil/test/M1 and msil/test/harness (the WSL runner's own checks),
 #                  x86_64-unknown-linux-gnu-msil, WSL .NET 10, E7 Linux oracle required (M18 16;
 #                  M12 11, and M12 12 checks its response file and log; step 8)
@@ -52,7 +65,7 @@
 #   wsl-quick      -Wsl: msil/test/M1/11-programs, msil/test/harness and msil/test/M2 (once it
 #                  exists) on WSL .NET 10, E7 Linux oracle required (plan 5.12.10 G4: the WSL
 #                  step of every Phase 2 gate from M13 on; the M12 gate runs wsl-net10 instead,
-#                  the M20 gate obj-wsl)                                             (M19 14)
+#                  the M20 gate obj-wsl)                                    (M21 14; M19 14)
 #   obj-wsl        -Wsl: msil/test/M1/11-programs and msil/test/M2 with msil_pipeline=obj and
 #                  msil_equiv=1 (O3 and O6; PEVerify and ilasm run on the host) on WSL .NET 10,
 #                  E7 Linux oracle required (plan 5.12.11, M20; no .NET Framework run and no
@@ -180,6 +193,8 @@ function Get-M2Paths {
   if (Test-Path -LiteralPath (Join-Path $MsilRepo 'msil/test/M2')) { 'msil/test/M2' }
 }
 $programs = @('msil/test/M1/11-programs')
+# The paths of the reference legs (plan 5.12.11, M21); lit-legs.sh's refs is the same list.
+$refs = @('msil/test/M1/11-programs', 'msil/test/M2/00-link', 'msil/test/M2/05-refs')
 $linux = 'msil_triple=x86_64-unknown-linux-gnu-msil'
 $tc0 = 'msil_dotnet_env=DOTNET_TieredCompilation=0'
 # The E7 Linux oracle's sysroot (msil/utils/make-linux-sysroot.py), defaulted as lit.cfg.py and
@@ -208,6 +223,12 @@ $legs = @(
   @{ Name = 'obj'; Paths = { $m1 + @(Get-M2Paths) }
      Params = { 'msil_pipeline=obj', 'msil_equiv=1', 'msil_dotnet_runtime=8', 'msil_native_oracle=required',
                 'msil_run_netfx=1', 'msil_scale_tests=1' } }
+  @{ Name = 'refs-net48'; Paths = { $refs }
+     Params = { 'msil_pipeline=obj', 'msil_references=net48', 'msil_equiv=1', 'msil_run_netfx=1' } }
+  @{ Name = 'refs-net8'; Paths = { $refs }
+     Params = { 'msil_pipeline=obj', 'msil_references=net8', 'msil_dotnet_runtime=8' } }
+  @{ Name = 'refs-net10'; Paths = { $refs }
+     Params = { 'msil_pipeline=obj', 'msil_references=net10', 'msil_dotnet_runtime=10' } }
   @{ Name = 'wsl-net10'; Paths = { 'msil/test/M1', 'msil/test/harness' }; Wsl = $true
      Params = { $wslRuntime + $e7 } }
   @{ Name = 'wsl-net10-tc0'; Paths = { $m1 }; Wsl = $true; Params = { $wslRuntime + $tc0 } }

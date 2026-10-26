@@ -1,0 +1,120 @@
+## System.Type values in custom-attribute blobs (ImplementationPlan.md 5.11.6,
+## M21.b item 4; bcl-binding 4.4), through the request
+## attr:(<params>):<hex> of the hidden --print-bcl-binding (section 12 row
+## 2026-10-26, '5.11.5 amended (--print-bcl-binding requests)'). The request
+## runs BCLBinder::rewriteAttributeBlob for the constructor
+## 'instance void .ctor(<params>)' on the blob <hex> and prints
+## '<request> -> <hex>', the rewritten blob in uppercase hex, or the error
+## text. Every System.Type value, wherever the blob holds one, binds like a
+## type request (the assembly part of the name is ignored) and is written as
+## the assembly-qualified name of the definition, Roslyn's form
+## (bcl-binding-files/roslyn/uco-blob.txt):
+##   Ns.Name[+Nested], <Name>, Version=<a.b.c.d>, Culture=neutral, PublicKeyToken=<hex|null>
+## The blobs (ECMA-335 II.23.3) cover:
+## - a fixed Type argument naming a nested type (Fake.Outer+Inner);
+## - a fixed Type argument with an assembly part, which is ignored;
+## - a named Type property (Fake.Box, from FakeTypesB, which has no public
+##   key: PublicKeyToken=null);
+## - a Type boxed in an 'object' argument;
+## - a 'class System.Type[]' argument, whose second name becomes longer than
+##   127 bytes, so its length prefix takes two bytes;
+## - a 'valuetype Fake.Color' fixed argument: the enum's underlying type
+##   (int16, from FakeTypesA's definition) sizes the value, and the named
+##   Type field after it is found and rewritten;
+## - an enum named in a named argument (its type name is written
+##   assembly-qualified as well);
+## - an unknown type name: 5.11.9's error text.
+## No Phase 2 input reaches this code (CIL objects carry no attribute that
+## the output copies). blobs.py builds each blob and its expected rewrite
+## from the strings below, and writes the requests into a response file and
+## the expected lines into a FileCheck file.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj ret42.ll -o ret42.o
+# RUN: mkdir pack
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesA.yaml -o pack/FakeTypesA.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesB.yaml -o pack/FakeTypesB.dll
+# RUN: %python blobs.py requests.rsp expected.txt
+# RUN: msil-ld ret42.o --reference=pack @requests.rsp -o x.exe > out.txt 2>&1
+# RUN: FileCheck expected.txt --input-file=out.txt --implicit-check-not="PLEASE submit" \
+# RUN:   --implicit-check-not="Stack dump" --implicit-check-not="LLVM ERROR" --implicit-check-not=error: \
+# RUN:   --implicit-check-not=warning:
+
+#--- blobs.py
+import struct
+import sys
+
+CORE = ", FakeCore, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a"
+A = ", FakeTypesA, Version=1.2.3.4, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a"
+B = ", FakeTypesB, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null"
+PROLOG = b"\x01\x00"
+FIELD, PROPERTY = b"\x53", b"\x54"
+TYPE, ENUM = b"\x50", b"\x55"
+
+
+def ser(text):
+    """A SerString: the compressed length, then the UTF-8 bytes."""
+    data = text.encode("utf-8")
+    n = len(data)
+    if n < 0x80:
+        return bytes([n]) + data
+    assert n < 0x4000
+    return bytes([0x80 | (n >> 8), n & 0xFF]) + data
+
+
+def u16(n):
+    return struct.pack("<H", n)
+
+
+def i16(n):
+    return struct.pack("<h", n)
+
+
+def u32(n):
+    return struct.pack("<I", n)
+
+
+def cases():
+    """(constructor params, blob, rewritten blob or the error text)."""
+    nested = "Fake.Outer+Inner"
+    yield ("class System.Type", PROLOG + ser(nested) + u16(0), PROLOG + ser(nested + A) + u16(0))
+    yield ("class System.Type", PROLOG + ser("Fake.Widget, Bogus, Version=9.9.9.9") + u16(0),
+           PROLOG + ser("Fake.Widget" + A) + u16(0))
+    yield ("", PROLOG + u16(1) + PROPERTY + TYPE + ser("Kind") + ser("Fake.Box"),
+           PROLOG + u16(1) + PROPERTY + TYPE + ser("Kind") + ser("Fake.Box" + B))
+    cdecl = "System.Runtime.CompilerServices.CallConvCdecl"
+    yield ("object", PROLOG + TYPE + ser(cdecl) + u16(0), PROLOG + TYPE + ser(cdecl + CORE) + u16(0))
+    preview = "System.Runtime.Versioning.RequiresPreviewFeaturesAttribute"
+    assert len((preview + CORE).encode()) > 127
+    yield ("class System.Type[]", PROLOG + u32(2) + ser("Fake.Widget") + ser(preview) + u16(0),
+           PROLOG + u32(2) + ser("Fake.Widget" + A) + ser(preview + CORE) + u16(0))
+    yield ("valuetype Fake.Color",
+           PROLOG + i16(2) + u16(1) + FIELD + TYPE + ser("Shade") + ser("Fake.Box+Lid"),
+           PROLOG + i16(2) + u16(1) + FIELD + TYPE + ser("Shade") + ser("Fake.Box+Lid" + B))
+    yield ("", PROLOG + u16(1) + PROPERTY + ENUM + ser("Fake.Color") + ser("Tint") + i16(1),
+           PROLOG + u16(1) + PROPERTY + ENUM + ser("Fake.Color" + A) + ser("Tint") + i16(1))
+    yield ("class System.Type", PROLOG + ser("Fake.Nope") + u16(0),
+           "type 'Fake.Nope' is not defined in the references (3 assemblies)")
+
+
+def main():
+    rsp, expected = sys.argv[1:]
+    with open(rsp, "w", encoding="utf-8", newline="\n") as r, \
+         open(expected, "w", encoding="utf-8", newline="\n") as e:
+        for i, (params, blob, result) in enumerate(cases()):
+            request = "attr:(%s):%s" % (params, blob.hex().upper())
+            if isinstance(result, bytes):
+                result = result.hex().upper()
+            r.write('"--print-bcl-binding=%s"\n' % request)
+            e.write("CHECK%s: {{^}}%s -> %s{{$}}\n" % ("-NEXT" if i else "", request, result))
+
+
+main()
+
+#--- ret42.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 42
+}

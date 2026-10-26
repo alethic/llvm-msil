@@ -223,6 +223,20 @@
 # SS-UNDEF-NEXT: {{^}}>>> referenced by [[FILE]]:(main){{$}}
 # SS-UNDEF:      {{^}}msil-ld: error: undefined symbol: __stop_myreg{{$}}
 # SS-UNDEF-NEXT: {{^}}>>> referenced by [[FILE]]:(main){{$}}
+## A hidden or protected __start_myreg/__stop_myreg links as a default one
+## does: code generation defines both fields whatever the reference's
+## visibility (5.9.6, 5.9.9), as the PE links of the same input do (the
+## section 12 row 'M21.d extended (M20 follow-ups, lld/test/MSIL)' item 3).
+## Without a definition in section "myreg" (ns-hidden.ll) it stays
+## 'undefined hidden'.
+# RUN: llvm-as ss-hidden.ll -o ss-hidden.o
+# RUN: llvm-as ns-hidden.ll -o ns-hidden.o
+# RUN: msil-ld --lto-emit-asm ss-hidden.o -o ss-hidden.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=SS-IL --input-file=ss-hidden.il
+# RUN: not msil-ld --lto-emit-asm ns-hidden.o -o x.il 2>&1 | %{err} --check-prefix=NS-HIDDEN \
+# RUN:   --implicit-check-not=error:
+# NS-HIDDEN:      {{^}}msil-ld: error: undefined hidden symbol: __start_myreg{{$}}
+# NS-HIDDEN-NEXT: {{^}}>>> referenced by ns-hidden.o:(main){{$}}
 
 #--- ss.yaml
 ## libss.so defines __start_myreg and __stop_myreg as data.
@@ -272,6 +286,37 @@ define i32 @main() {
   %b = ptrtoint ptr @__stop_myreg to i64
   %d = sub i64 %b, %a
   %r = trunc i64 %d to i32
+  ret i32 %r
+}
+
+#--- ss-hidden.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@__start_myreg = external hidden global i8
+@__stop_myreg = external protected global i8
+@entry = global i32 7, section "myreg"
+@llvm.used = appending global [1 x ptr] [ptr @entry], section "llvm.metadata"
+
+define i32 @main() {
+  %a = ptrtoint ptr @__start_myreg to i64
+  %b = ptrtoint ptr @__stop_myreg to i64
+  %d = sub i64 %b, %a
+  %r = trunc i64 %d to i32
+  ret i32 %r
+}
+
+#--- ns-hidden.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@__start_myreg = external hidden global i8
+@entry = global i32 7, section "other"
+@llvm.used = appending global [1 x ptr] [ptr @entry], section "llvm.metadata"
+
+define i32 @main() {
+  %a = ptrtoint ptr @__start_myreg to i64
+  %r = trunc i64 %a to i32
   ret i32 %r
 }
 

@@ -1,0 +1,77 @@
+## Request strengths (ImplementationPlan.md 5.11.5, Q11; M21.b items 1, 2
+## and 8). A Required member that the references do not define is an
+## error; an optional one falls back: OptionalDrop omits what needs it, and
+## OptionalSubstitute calls the entry's helper symbol instead, each reported
+## under --verbose as
+##   note: '<member>' is not defined by the references; <omitted|using helper '<symbol>'> (requested by <file> for <switch>)
+## Phase 2 has no producer of optional requests (record v1 keeps
+## MANAGED_REQUESTS reserved), so the mechanism is tested through the hidden
+## --print-bcl-binding=member:<BCLMemberId>[:drop|:substitute], which prints
+## '<request> -> <result>': the MemberRef text, 'omitted',
+## 'helper '<symbol>'' or the error text.
+## FakeThreadingNoBarrier defines Interlocked without MemoryBarrier; with
+## FakeThreading the three strengths bind alike. The Required request of an
+## object (fence.o's fence) names its file.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj ret42.ll -o ret42.o
+# RUN: llc -filetype=obj fence.ll -o fence.o
+# RUN: mkdir nob full
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o nob/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o nob/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingNoBarrier.yaml -o nob/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o full/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o full/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o full/FakeThreading.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{requests} = --print-bcl-binding=member:Interlocked_MemoryBarrier:drop \
+# DEFINE:   --print-bcl-binding=member:Interlocked_MemoryBarrier:substitute \
+# DEFINE:   --print-bcl-binding=member:Interlocked_MemoryBarrier
+
+## Missing: omitted, a helper, and the Required error.
+# RUN: msil-ld ret42.o --reference=nob %{requests} -o x.exe > nob.txt 2>&1
+# RUN: %{fc} --check-prefix=MISSING --input-file=nob.txt --implicit-check-not=error: --implicit-check-not=note:
+# MISSING:      {{^}}member:Interlocked_MemoryBarrier:drop -> omitted{{$}}
+# MISSING-NEXT: {{^}}member:Interlocked_MemoryBarrier:substitute -> helper '{{[^']*}}'{{$}}
+# MISSING-NEXT: {{^}}member:Interlocked_MemoryBarrier -> undefined .NET member '{{.*}}MemoryBarrier()' {{.*}}'System.Threading.Interlocked' is defined in {{.*}}FakeThreading{{.*}} but has no such member; overloads present: {{.*$}}
+
+## --verbose reports each fallback.
+# RUN: msil-ld --verbose ret42.o --reference=nob %{requests} -o x.exe > verbose.txt 2>&1
+# RUN: FileCheck %s --check-prefix=NOTE --input-file=verbose.txt
+# NOTE-DAG: {{note: '.*MemoryBarrier.*' is not defined by the references; omitted}}
+# NOTE-DAG: {{note: '.*MemoryBarrier.*' is not defined by the references; using helper '[^']*'}}
+
+## Defined: every strength binds the member.
+# RUN: msil-ld ret42.o --reference=full %{requests} -o x.exe > full.txt 2>&1
+# RUN: %{fc} --check-prefix=DEFINED --input-file=full.txt --implicit-check-not=error: \
+# RUN:   --implicit-check-not=omitted --implicit-check-not=helper
+# DEFINED:      {{^}}member:Interlocked_MemoryBarrier:drop -> {{.*(FakeThreading.*Interlocked::'?MemoryBarrier|Interlocked::'?MemoryBarrier.*FakeThreading).*$}}
+# DEFINED-NEXT: {{^}}member:Interlocked_MemoryBarrier:substitute -> {{.*(FakeThreading.*Interlocked::'?MemoryBarrier|Interlocked::'?MemoryBarrier.*FakeThreading).*$}}
+# DEFINED-NEXT: {{^}}member:Interlocked_MemoryBarrier -> {{.*(FakeThreading.*Interlocked::'?MemoryBarrier|Interlocked::'?MemoryBarrier.*FakeThreading).*$}}
+
+## An object's request is Required: a link error naming the object.
+# RUN: not msil-ld fence.o --reference=nob -o x.exe 2>&1 | %{fc} --check-prefix=REQUIRED --implicit-check-not=error:
+# REQUIRED: {{^}}msil-ld: error: undefined .NET member '{{.*}}MemoryBarrier()' (requested by fence.o); 'System.Threading.Interlocked' is defined in {{.*}}FakeThreading{{.*}} (nob{{[/\\]}}FakeThreading.dll) but has no such member; overloads present: {{.*$}}
+# RUN: msil-ld fence.o --reference=full -o ok.exe 2>&1 | count 0
+
+#--- ret42.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 42
+}
+
+#--- fence.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @barrier() {
+  fence seq_cst
+  ret void
+}
+
+define i32 @main() {
+  call void @barrier()
+  ret i32 0
+}

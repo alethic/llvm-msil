@@ -1,0 +1,104 @@
+## Custom modifiers (ImplementationPlan.md 5.11.4, 5.11.6; M21.b items 2-3;
+## bcl-binding 3.4): they are ignored when a member is matched and copied
+## into the MemberRef's signature, which is the definition's blob re-encoded
+## with output tokens; a missing modreq is a MissingMethodException at run
+## time. Every type of a bound signature binds too, modifiers included:
+## - FakeInteropMods defines
+##     native int modreq([FakeCore]System.Runtime.InteropServices.InAttribute)
+##       AllocHGlobal(native int modopt([FakeCore]System.Runtime.CompilerServices.IsVolatile))
+##   so the trailer's AllocHGlobal(native int) request binds it, and both of
+##   its call sites ('.cctor' and '<msil>Main') call one MemberRef with both
+##   modifiers, whose types are TypeRefs scoped to FakeCore;
+## - FakeThreadingTwo defines void MemoryBarrier() and
+##   void modopt(IsVolatile) MemoryBarrier(), which are two matches once
+##   modifiers are ignored: the error (section 12 row 2026-10-26, '5.11.9
+##   clarified (member texts ...)')
+##   '.NET member '<signature>' (requested by <file>[ for <switch>]) matches several members of '<Ns.Type>' in <identity> (<path>) when custom modifiers are ignored: <list>';
+## - a modifier's type binds like any other type of the signature: with
+##   FakeCoreNoInAttr, which lacks InAttribute, AllocHGlobal's modreq is
+##   'type '<Ns.Type>' is not defined in the references (<n> assemblies)'.
+## p1.o requests every Phase 1 member; fence.o Interlocked::MemoryBarrier().
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj p1.ll -o p1.o
+# RUN: llc -filetype=obj fence.ll -o fence.o
+# RUN: mkdir mods two noin
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o mods/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInteropMods.yaml -o mods/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o mods/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o two/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingTwo.yaml -o two/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCoreNoInAttr.yaml -o noin/FakeCore.dll
+# RUN: cp mods/FakeInterop.dll mods/FakeThreading.dll noin
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## Both modifiers copied, at both call sites.
+# RUN: msil-ld p1.o --reference=mods -o mods.exe 2>&1 | count 0
+# RUN: llvm-cil-dump mods.exe > mods.txt
+# RUN: FileCheck %s --check-prefix=MODS --input-file=mods.txt \
+# RUN:   --implicit-check-not="call native int(native int) [FakeInterop]System.Runtime.InteropServices.Marshal::'AllocHGlobal'"
+# MODS:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# MODS:      {{^}}    L{{[0-9]+}}: call native int modreq([FakeCore]System.Runtime.InteropServices.InAttribute)(native int modopt([FakeCore]System.Runtime.CompilerServices.IsVolatile)) [FakeInterop]System.Runtime.InteropServices.Marshal::'AllocHGlobal'{{$}}
+# MODS:      {{^}}  .method '<msil>Main' int32(string[]) flags=0x0091 impl=0x0000{{$}}
+# MODS:      {{^}}    L{{[0-9]+}}: call native int modreq([FakeCore]System.Runtime.InteropServices.InAttribute)(native int modopt([FakeCore]System.Runtime.CompilerServices.IsVolatile)) [FakeInterop]System.Runtime.InteropServices.Marshal::'AllocHGlobal'{{$}}
+# MODS:      {{^}}    L{{[0-9]+}}: call native int(string) [FakeInterop]System.Runtime.InteropServices.Marshal::'StringToHGlobalAnsi'{{$}}
+
+## One MemberRef, and the modifiers' types are TypeRefs scoped to an
+## AssemblyRef (FakeCore's).
+# RUN: llvm-cil-dump --tables mods.exe | FileCheck %s --check-prefix=ROWS
+# ROWS-DAG: {{^}}  TypeRef[{{[0-9]+}}]: ResolutionScope=0x23{{[0-9A-F]+}} TypeName='InAttribute' TypeNamespace='System.Runtime.InteropServices'{{$}}
+# ROWS-DAG: {{^}}  TypeRef[{{[0-9]+}}]: ResolutionScope=0x23{{[0-9A-F]+}} TypeName='IsVolatile' TypeNamespace='System.Runtime.CompilerServices'{{$}}
+# ROWS-DAG: {{^}}  MemberRef[{{[0-9]+}}]: Class=0x01{{[0-9A-F]+}} Name='AllocHGlobal' Signature=00 01 1F {{.*}} 18 20 {{.*}} 18{{$}}
+# RUN: llvm-cil-dump --tables mods.exe | FileCheck %s --check-prefix=ONE-REF --implicit-check-not="Name='AllocHGlobal'"
+# ONE-REF: {{^}}  MemberRef[{{[0-9]+}}]: Class=0x01{{[0-9A-F]+}} Name='AllocHGlobal' Signature={{.*$}}
+
+## Two matches once modifiers are ignored.
+# RUN: not msil-ld fence.o --reference=two -o x.exe 2>&1 | %{fc} --check-prefix=TWO --implicit-check-not=error:
+# TWO: {{^}}msil-ld: error: .NET member 'void System.Threading.Interlocked::MemoryBarrier()' (requested by fence.o) matches several members of 'System.Threading.Interlocked' in FakeThreading 8.1.2.3 [31bf3856ad364e35] ({{.*}}FakeThreading.dll) when custom modifiers are ignored: {{.+$}}
+
+## A modreq type that no reference defines: its own type error, and no
+## output.
+# RUN: not msil-ld p1.o --reference=noin -o noin.exe 2>&1 | %{fc} --check-prefix=NO-IN --implicit-check-not=error:
+# NO-IN: {{^}}msil-ld: error: type 'System.Runtime.InteropServices.InAttribute' is not defined in the references (3 assemblies){{$}}
+# RUN: not ls noin.exe
+
+#--- p1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@buf = global [16 x i8] c"0123456789abcdef", align 1
+@ptr = global ptr @buf, align 8
+
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+
+define void @shift(i64 %n) {
+  %p = load ptr, ptr @ptr
+  %q = getelementptr i8, ptr %p, i64 1
+  call void @llvm.memmove.p0.p0.i64(ptr %q, ptr %p, i64 %n, i1 false)
+  fence seq_cst
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %a = sext i32 %argc to i64
+  call void @shift(i64 %a)
+  %p = load ptr, ptr @ptr
+  %c = load i8, ptr %p
+  %r = zext i8 %c to i32
+  ret i32 %r
+}
+
+#--- fence.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @barrier() {
+  fence seq_cst
+  ret void
+}
+
+define i32 @main() {
+  call void @barrier()
+  ret i32 0
+}

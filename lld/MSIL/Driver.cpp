@@ -14,18 +14,24 @@
 // objects for the codegen triple, archives of either, and the native
 // libraries that a native link of the same program reads (plan 5.10):
 // undefined symbols bind to them late and become P/Invokes and data imports.
-// The writer links the objects into a PE image (writeResult). Under
-// --lto-emit-asm msil-ld writes the whole program of its bitcode inputs as
-// ILAsm text instead, which ilasm turns into an assembly.
+// .NET reference assemblies (--reference and positional assemblies, plan
+// 5.11) form the reference set against which the writer binds the BCL types
+// and members of the output; without references it binds them to msil-ld's
+// built-in [mscorlib] table. The writer links the objects into a PE image
+// (writeResult). Under --lto-emit-asm msil-ld writes the whole program of its
+// bitcode inputs as ILAsm text instead, which ilasm turns into an assembly.
 //
 //===----------------------------------------------------------------------===//
 
 #include "lld/Common/Driver.h"
+#include "AssemblyFiles.h"
+#include "BCLBinder.h"
 #include "Config.h"
 #include "InputFiles.h"
 #include "MapFile.h"
 #include "MarkLive.h"
 #include "NativeLibraries.h"
+#include "ReferenceSet.h"
 #include "SymbolTable.h"
 #include "Writer.h"
 #include "lld/Common/Args.h"
@@ -44,6 +50,7 @@
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/CLI/MetadataBuilder.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Option/Arg.h"
@@ -68,7 +75,7 @@ using namespace llvm::sys;
 namespace lld::msil {
 Ctx ctx;
 
-Ctx::Ctx() {}
+Ctx::Ctx() : references(std::make_unique<ReferenceSet>()) {}
 
 void Ctx::reset() {
   arg.~Config();
@@ -80,6 +87,7 @@ void Ctx::reset() {
   nativeLibraryFiles.clear();
   loadedFiles.clear();
   nativeIndex.clear();
+  references = std::make_unique<ReferenceSet>();
   alternateNames.clear();
   appliedAlternateNames.clear();
   mustMatch.clear();
@@ -115,6 +123,8 @@ public:
 private:
   void createFiles(opt::InputArgList &args);
   void addFile(StringRef path);
+  void addReference(StringRef path);
+  void addReferenceFile(MemoryBufferRef mb);
   void addLibrary(StringRef name);
   void addLinkerScript(MemoryBufferRef mb, std::optional<sys::fs::UniqueID> id);
   void addInputFile(InputFile *file);
@@ -520,13 +530,25 @@ void LinkerDriver::addFile(StringRef path) {
     addInputFile(createObjectFile(mbref, "", 0, inLib));
     return;
   case file_magic::pecoff_executable:
-    // A CIL object (or a .NET assembly, which createObjectFile() reports).
-    if (isCLIImage(mbref)) {
-      addInputFile(createObjectFile(mbref, "", 0, inLib));
+    if (!isCLIImage(mbref)) {
+      addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::PEDll));
       return;
     }
-    addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::PEDll));
-    return;
+    // A PE with a CLI header (plan 5.9.4): a CIL object (createObjectFile()
+    // reports a C# netmodule), a reference assembly, or a library built by
+    // this toolchain, which only createManagedLibraryFile() reads.
+    switch (classifyCLIImage(mbref)) {
+    case CLIImageKind::Object:
+      addInputFile(createObjectFile(mbref, "", 0, inLib));
+      return;
+    case CLIImageKind::ReferenceAssembly:
+      addReferenceFile(mbref);
+      return;
+    case CLIImageKind::ToolchainLibrary:
+      addInputFile(createManagedLibraryFile(mbref));
+      return;
+    }
+    llvm_unreachable("unknown CLI image kind");
   case file_magic::elf_shared_object:
     addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::ELFShared));
     return;
@@ -540,6 +562,25 @@ void LinkerDriver::addFile(StringRef path) {
   default:
     error("unknown file type: " + mbref.getBufferIdentifier());
   }
+}
+
+// Reports each error of \p e on its own line, as lld reports errors.
+static void reportErrors(Error e) {
+  handleAllErrors(std::move(e),
+                  [](const ErrorInfoBase &eib) { error(eib.message()); });
+}
+
+// --reference=<path> (plan 5.11.1): a reference assembly, or every .NET
+// assembly in a directory, added to the reference set where the option
+// appears.
+void LinkerDriver::addReference(StringRef path) {
+  reportErrors(ctx.references->addPath(path, /*explicitPath=*/true));
+}
+
+// A positional .NET assembly without the toolchain's symbol table is a
+// reference, as with --reference (plan 5.9.4, Design.md 5.2).
+void LinkerDriver::addReferenceFile(MemoryBufferRef mb) {
+  reportErrors(ctx.references->addFile(mb, /*explicitPath=*/true));
 }
 
 // Reads the inputs of the GNU ld script \p mb (plan 5.10.8): file names
@@ -893,6 +934,9 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
     case OPT_INPUT:
       addFile(arg->getValue());
       break;
+    case OPT_reference:
+      addReference(arg->getValue());
+      break;
     case OPT_Bstatic:
       ctx.arg.isStatic = true;
       break;
@@ -923,7 +967,8 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
       break;
     }
   }
-  if (files.empty() && errorCount() == 0)
+  // --print-bcl-binding needs only references (plan 5.11.5).
+  if (files.empty() && errorCount() == 0 && ctx.arg.printBclBinding.empty())
     error("no input files");
 }
 
@@ -987,8 +1032,11 @@ static void readConfigs(opt::InputArgList &args) {
   ctx.arg.msilTypeMemberLimit =
       getUnsigned(args, OPT_msil_type_member_limit, UINT32_MAX);
   ctx.arg.outputFile = args.getLastArgValue(OPT_o);
+  ctx.arg.printBclBinding = args::getStrings(args, OPT_print_bcl_binding);
+  ctx.arg.printBclTable = args.hasArg(OPT_print_bcl_table);
   ctx.arg.printGcSections = args.hasArg(OPT_print_gc_sections);
   ctx.arg.printImports = args.hasArg(OPT_print_imports);
+  ctx.arg.references = args::getStrings(args, OPT_reference);
   ctx.arg.saveTemps = args.hasArg(OPT_save_temps);
   ctx.arg.searchPaths = args::getStrings(args, OPT_library_path);
   ctx.arg.shared = args.hasArg(OPT_shared);
@@ -1111,6 +1159,12 @@ static std::string createResponseFile(const opt::InputArgList &args) {
     case OPT_library:
       // -l<name>, the spelling the clang driver uses.
       os << arg->getSpelling() << quote(arg->getValue()) << "\n";
+      break;
+    case OPT_reference:
+      // The reference assemblies read, a directory's included, are in the
+      // archive under their paths (plan 5.9.14).
+      os << arg->getSpelling() << " " << quote(relativeToRoot(arg->getValue()))
+         << "\n";
       break;
     case OPT_library_path:
     case OPT_sysroot:
@@ -1311,9 +1365,28 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (args.hasArg(OPT_version))
     return;
 
+  // --print-bcl-table prints the built-in table and exits; it needs no input
+  // (plan 5.11.1).
+  if (ctx.arg.printBclTable) {
+    printBuiltinBCLTable(errHandler.outs());
+    return;
+  }
+
   createFiles(args);
   if (errorCount())
     return;
+
+  // --print-bcl-binding prints how the reference set (or, without
+  // references, the built-in table) binds each request, each through its own
+  // binder over a scratch metadata builder, and exits (plan 5.11.5).
+  if (!ctx.arg.printBclBinding.empty()) {
+    for (StringRef request : ctx.arg.printBclBinding) {
+      cli::MetadataBuilder scratch;
+      BCLBinder binder(*ctx.references, scratch);
+      binder.printBinding(request, errHandler.outs());
+    }
+    return;
+  }
 
   // The codegen triple is fixed now, by --target or by the first bitcode
   // input. An unsupported one stops the link before the per-file triple and
@@ -1412,6 +1485,19 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     if (any_of(ctx.bitcodeFiles, isThinLTO)) {
       reportSeveralLTOModules();
       return;
+    }
+
+    // The whole-program text binds nothing: it keeps [mscorlib] scopes. The
+    // references are still loaded and checked, with the diagnostics of a
+    // link that binds (plan 5.11.8): every program has a module initializer
+    // or Main, so its link needs a core library (plan 5.11.3).
+    if (!ctx.references->empty()) {
+      Expected<const ReferenceAssemblyFile *> core =
+          ctx.references->coreLibrary();
+      if (!core) {
+        error(toString(core.takeError()));
+        return;
+      }
     }
 
     // The symbols that are still undefined (plan 5.9.6): the native

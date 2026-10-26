@@ -18,7 +18,8 @@
 //    call (5.10.14);
 // 4. every token of every kept body is bound (5.9.7): a definition, an
 //    adapter or a trap stub (5.9.8), a P/Invoke stub (5.10.11), an address
-//    or '<msil>fn_' field, or the BCL stand-in's [mscorlib] row;
+//    or '<msil>fn_' field, or what the BCL binder binds (5.11: against the
+//    references, or the built-in [mscorlib] table without them);
 // 5. the data relocations, the constructor list and the entry point, then
 //    the trailer (cli::buildTrailer, shared with -S, 5.9.10);
 // 6. names (colliding LOCAL members become '<name><msil><n>'), access, the
@@ -31,11 +32,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "Writer.h"
+#include "BCLBinder.h"
 #include "Config.h"
 #include "InputChunks.h"
 #include "InputFiles.h"
 #include "MapFile.h"
 #include "OutputSegment.h"
+#include "ReferenceSet.h"
 #include "Relocations.h"
 #include "Signatures.h"
 #include "SymbolTable.h"
@@ -344,8 +347,14 @@ void Writer::assignOwners() {
 
   owners.push_back(out.mb.getModuleType());
   // 'private abstract sealed auto ansi', extending the core library's
-  // System.Object (BCLMembers.def's Object, bound by the stand-in).
-  EntityHandle object{out.getBCLType(BCLMemberId::Object)};
+  // System.Object (BCLMembers.def's Object) as the binder binds it. The
+  // built-in table binds it whatever the count, as M20's stand-in did, so
+  // that a link without references keeps its rows (plan 5.11.7); with
+  // references only spill classes ask for it, so a link binds nothing it
+  // does not use (plan 5.11.6).
+  EntityHandle object;
+  if (numClasses || ctx.references->empty())
+    object = EntityHandle{out.getBCLType(BCLMemberId::Object)};
   for (uint32_t n = 1; n <= numClasses; ++n)
     owners.push_back(out.mb.addTypeDef(
         TypeAttributes::NotPublic | TypeAttributes::AutoLayout |
@@ -359,8 +368,11 @@ void Writer::addRows() {
 
   // The RVA data's value types after the spill classes (plan 5.9.12): Phase
   // 1's '.class private explicit ansi sealed ... extends
-  // [mscorlib]System.ValueType { .pack 1 .size <n> }'.
-  EntityHandle valueType{out.getBCLType(BCLMemberId::ValueType)};
+  // [mscorlib]System.ValueType { .pack 1 .size <n> }'. System.ValueType is
+  // bound like System.Object above.
+  EntityHandle valueType;
+  if (!out.rvaData.empty() || ctx.references->empty())
+    valueType = EntityHandle{out.getBCLType(BCLMemberId::ValueType)};
   for (OutputModule::RVAData &d : out.rvaData) {
     d.type = mb.addTypeDef(
         TypeAttributes::NotPublic | TypeAttributes::ExplicitLayout |
@@ -430,7 +442,7 @@ void Writer::addRows() {
 
   // The Assembly row: the assembly name, version 0.0.0.0, HashAlgId SHA1,
   // no public key; the Module row names the output file (plan 5.9.12).
-  AssemblyIdentity id;
+  cli::AssemblyIdentity id;
   id.Name = getAssemblyName();
   mb.setAssembly(id);
   mb.setModuleName(sys::path::filename(ctx.arg.outputFile));
@@ -589,6 +601,21 @@ void Writer::fillMap() {
 }
 
 void Writer::run() {
+  // One binder per output, after the inputs and LTO and before any row
+  // (plan 5.11): every BCL type and member of the output goes through it.
+  BCLBinder binder(*ctx.references, out.mb);
+  out.binder = &binder;
+  // Every program has a module initializer or a Main, so its link needs a
+  // core library whenever it has references (plan 5.11.3).
+  if (!ctx.references->empty()) {
+    Expected<const ReferenceAssemblyFile *> core =
+        ctx.references->coreLibrary();
+    if (!core) {
+      error(toString(core.takeError()));
+      return;
+    }
+  }
+
   // 1-3: the kept methods and fields, the image, the references.
   addObjectMethods();
   symbols.addObjectFields();
@@ -623,11 +650,16 @@ void Writer::run() {
     symbols.printImports();
   RowTrailerSink sink(out);
   buildTrailer(in, sink);
+  // A BCL member that the trailer needs may have failed to bind.
+  if (errorCount())
+    return;
 
   // 6: names, owners, rows, bodies and the PE.
   assignNames();
   assignOwners();
   addRows();
+  if (errorCount())
+    return;
   MethodBodyStream bodies;
   if (Error e = out.mb.finalize(bodies)) {
     error(toString(std::move(e)));

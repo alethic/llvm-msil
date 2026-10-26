@@ -1,0 +1,174 @@
+## The core-library rule (ImplementationPlan.md 5.11.3, M21.a item 6; texts
+## of 5.11.9): the core library is the unique reference that defines
+## top-level System.Object and has no AssemblyRef row (Roslyn's
+## IndexOfCorLibrary). Every link with a module initializer or a Main needs
+## one, so even a program that uses no BCL member fails without it:
+## - none: only a facade (FakeFacade forwards System.Object to FakeCore and,
+##   having AssemblyRefs, never qualifies), only a non-core assembly, or a
+##   candidate with an AssemblyRef (IlasmCore defines System.Object, but
+##   ilasm gave it an AssemblyRef to mscorlib) is
+##   'the references contain no core library (an assembly that defines System.Object and references no other assembly); given: <list>',
+##   where <list> (section 12 row 2026-10-26, '5.11.9 clarified') names each
+##   reference that defines or forwards top-level System.Object, as its
+##   identity '<name> <version> [<token>]' followed by its note
+##   ('(facade, forwards System.Object to <name>)', '(defines System.Object
+##   but references <names>)' or '(defines System.Object with a base type)'),
+##   and leaves out every other reference; only when no reference defines or
+##   forwards System.Object is every reference named, with no note; the list
+##   is in identity order whatever the command-line order (section 12 row
+##   2026-10-26, 'Row 5.11.9 clarified ... corrected': the identity text
+##   compared ignoring case, then exactly, then the normalized path);
+## - two: FakeCore and an mscorlib that defines its own System.Object is
+##   'the references mix two core libraries: <identity> (<path>) and <identity> (<path>)',
+##   in the same identity order;
+## - three or more (section 12 row 2026-10-26, '5.11.9 clarified (three or
+##   more candidates)'): CoreA, CoreB and CoreC (Inputs/fakepack/MiniCore.il)
+##   are 'the references mix <n> core libraries: <list>', <n> in digits and
+##   every candidate as '<identity> (<path>)' in the same identity order,
+##   joined by ', ' with ' and ' before the last;
+## - IlasmCore next to FakeCore is no second core library: FakeCore is the
+##   unique one and the link succeeds (System.Object is still defined twice,
+##   which only matters to a link that binds it, bcl-types.test);
+## - nor is BaseCore, which has no AssemblyRef but whose System.Object
+##   extends the class Fake.Root (gen.py patches its TypeDef table): alone it
+##   is the no-core-library error with the note '(defines System.Object with
+##   a base type)', and next to FakeCore the link succeeds;
+## - a --reference that adds no file still turns the built-in table off
+##   (section 12 row 2026-10-26, '5.11.7 clarified ('the link has no
+##   reference' ...)'): an empty directory, a directory holding only a native
+##   DLL, or only a toolchain library (skipped with its warning) is the error
+##   with the list 'no references', and no output is written; a
+##   --print-bcl-binding request then prints that error, not the built-in
+##   table's 'pass --reference=<reference assemblies>' text.
+## ret42.o's main returns 42 and uses nothing from the BCL; fence.o calls
+## Interlocked::MemoryBarrier.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj ret42.ll -o ret42.o
+# RUN: llc -filetype=obj fence.ll -o fence.o
+# RUN: mkdir pack
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeFacade.yaml -o FakeFacade.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/IlasmCore.yaml -o IlasmCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeMscorlib.yaml -o mscorlib.dll
+# RUN: yaml2obj %S/Inputs/fakepack/BaseCore.yaml -o BaseCore.dll
+# RUN: mkdir three
+# RUN: yaml2obj %S/Inputs/fakepack/CoreA.yaml -o three/CoreA.dll
+# RUN: yaml2obj %S/Inputs/fakepack/CoreB.yaml -o three/CoreB.dll
+# RUN: yaml2obj %S/Inputs/fakepack/CoreC.yaml -o three/CoreC.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error:
+
+## No core library.
+# RUN: not msil-ld ret42.o --reference=FakeFacade.dll -o x.exe 2>&1 | %{fc} --check-prefix=FACADE
+# RUN: not msil-ld fence.o --reference=FakeFacade.dll -o x.exe 2>&1 | %{fc} --check-prefix=FACADE
+# FACADE: {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: {{.*}}FakeFacade{{.*}}(facade, forwards System.Object to FakeCore){{.*$}}
+# RUN: not msil-ld ret42.o --reference=FakeInterop.dll -o x.exe 2>&1 | %{fc} --check-prefix=NONE -DNAME=FakeInterop
+# RUN: not msil-ld ret42.o --reference=IlasmCore.dll -o x.exe 2>&1 | %{fc} --check-prefix=NONE -DNAME=IlasmCore
+# RUN: not msil-ld ret42.o IlasmCore.dll -o x.exe 2>&1 | %{fc} --check-prefix=NONE -DNAME=IlasmCore
+# NONE: {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: {{.*}}[[NAME]]{{.*$}}
+
+## The list (section 12 row 2026-10-26, '5.11.9 clarified') names only the
+## references that define or forward System.Object, each with its note:
+## FakeFacade and IlasmCore, but not FakeInterop, which does neither. The
+## list is in identity order whatever the command-line order (section 12 row
+## 2026-10-26, 'Row 5.11.9 clarified ... corrected'), so the reversed
+## command line gives the same line.
+# RUN: not msil-ld ret42.o --reference=FakeFacade.dll --reference=FakeInterop.dll --reference=IlasmCore.dll \
+# RUN:   -o x.exe 2>&1 | %{fc} --check-prefix=LIST
+# LIST:      {{^}}msil-ld: error: the references contain no core library {{.*}}; given:
+# LIST-SAME: FakeFacade
+# LIST-SAME: (facade, forwards System.Object to FakeCore)
+# RUN: not msil-ld ret42.o --reference=FakeFacade.dll --reference=FakeInterop.dll --reference=IlasmCore.dll \
+# RUN:   -o x.exe 2>&1 | %{fc} --check-prefix=LIST-ALL
+# RUN: not msil-ld ret42.o --reference=IlasmCore.dll --reference=FakeInterop.dll --reference=FakeFacade.dll \
+# RUN:   -o x.exe 2>&1 | %{fc} --check-prefix=LIST-ALL
+# LIST-ALL: {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: FakeFacade 4.0.0.0 [b77a5c561934e089] (facade, forwards System.Object to FakeCore), IlasmCore 8.0.0.0 [b77a5c561934e089] (defines System.Object but references mscorlib){{$}}
+# RUN: not msil-ld ret42.o --reference=FakeFacade.dll --reference=FakeInterop.dll --reference=IlasmCore.dll \
+# RUN:   -o x.exe 2>&1 | FileCheck %s --check-prefix=LIST-ILASM
+# LIST-ILASM: {{^}}msil-ld: error: the references contain no core library {{.*}}IlasmCore{{.*$}}
+
+## When no reference defines or forwards System.Object, the list names every
+## reference, without a note (FakeInterop and FakeThreading have neither a
+## System.Object TypeDef nor an ExportedType), again in identity order in
+## either command-line order.
+# RUN: not msil-ld ret42.o --reference=FakeInterop.dll --reference=pack/FakeThreading.dll -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=LIST-NONE
+# RUN: not msil-ld ret42.o --reference=pack/FakeThreading.dll --reference=FakeInterop.dll -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=LIST-NONE
+# LIST-NONE: {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: FakeInterop 8.0.0.0 [b03f5f7f11d50a3a], FakeThreading 8.1.2.3 [31bf3856ad364e35]{{$}}
+
+## Two core libraries, in either command-line order; the error names them in
+## identity order ('fakecore' before 'mscorlib'). A file that a directory
+## contributes is named '<dir>/<file>' with '/' on every host (M21 review-r1
+## finding 5), as bcl-identity.test checks too.
+# RUN: not msil-ld ret42.o --reference=pack --reference=mscorlib.dll -o x.exe 2>&1 | %{fc} --check-prefix=TWO
+# RUN: not msil-ld ret42.o --reference=mscorlib.dll --reference=pack -o x.exe 2>&1 | %{fc} --check-prefix=TWO
+# TWO: {{^}}msil-ld: error: the references mix two core libraries: FakeCore 8.0.0.0 [b03f5f7f11d50a3a] (pack/FakeCore.dll) and mscorlib 4.0.0.0 [b77a5c561934e089] (mscorlib.dll){{$}}
+
+## Three core libraries: counted, and listed in identity order, through a
+## directory and through files in the reverse order.
+# RUN: not msil-ld ret42.o --reference=three -o x.exe 2>&1 | %{fc} --check-prefix=THREE
+# RUN: not msil-ld ret42.o --reference=three/CoreC.dll --reference=three/CoreB.dll --reference=three/CoreA.dll \
+# RUN:   -o x.exe 2>&1 | %{fc} --check-prefix=THREE
+# THREE: {{^}}msil-ld: error: the references mix 3 core libraries: CoreA 1.0.0.0 [null] (three/CoreA.dll), CoreB 1.0.0.0 [null] (three/CoreB.dll) and CoreC 1.0.0.0 [null] (three/CoreC.dll){{$}}
+
+## A candidate with an AssemblyRef is no core library, so FakeCore is the
+## only one.
+# RUN: msil-ld ret42.o --reference=pack --reference=IlasmCore.dll -o ok1.exe 2>&1 | count 0
+# RUN: msil-ld fence.o --reference=pack --reference=IlasmCore.dll -o ok2.exe 2>&1 | count 0
+
+## Nor is a System.Object with a base type: alone it is named with its note;
+## next to FakeCore it is no second core library.
+# RUN: not msil-ld ret42.o --reference=BaseCore.dll -o x.exe 2>&1 | %{fc} --check-prefix=BASETYPE
+# BASETYPE: {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: BaseCore 1.0.0.0 [null] (defines System.Object with a base type){{$}}
+# RUN: msil-ld ret42.o --reference=pack/FakeCore.dll --reference=BaseCore.dll -o ok5.exe 2>&1 | count 0
+# RUN: msil-ld ret42.o --reference=BaseCore.dll --reference=pack/FakeCore.dll -o ok6.exe 2>&1 | count 0
+
+## With the core library alone a program without BCL members links, and so
+## does one whose references hold a facade besides.
+# RUN: msil-ld ret42.o --reference=pack/FakeCore.dll -o ok3.exe 2>&1 | count 0
+# RUN: msil-ld fence.o --reference=pack --reference=FakeFacade.dll -o ok4.exe 2>&1 | count 0
+
+## A --reference that adds no file: no references, which has no core
+## library, and no output.
+# RUN: mkdir empty nativedir tooldir out
+# RUN: %python %S/Inputs/make-pe.py --dll nativedir/native.dll
+# RUN: yaml2obj %S/Inputs/fakepack/ToolLib.yaml -o tooldir/toollib.dll
+# RUN: not msil-ld ret42.o --reference=empty -o out/empty.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=NO-REFS --implicit-check-not=warning:
+# RUN: not msil-ld ret42.o --reference=nativedir -o out/native.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=NO-REFS --implicit-check-not=warning:
+# RUN: not msil-ld ret42.o --reference=tooldir -o out/tool.exe 2>&1 \
+# RUN:   | %{fc} --check-prefixes=TOOL-SKIP,NO-REFS --implicit-check-not=warning:
+# TOOL-SKIP: {{^}}msil-ld: warning: tooldir/toollib.dll is a library built by this toolchain; pass it as a link input instead{{$}}
+# NO-REFS:   {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: no references{{$}}
+# RUN: not ls out/empty.exe
+# RUN: not ls out/native.exe
+# RUN: not ls out/tool.exe
+# RUN: msil-ld --reference=empty --print-bcl-binding=member:NativeLibrary_Load 2>&1 \
+# RUN:   | %{fc} --check-prefix=NO-REFS-BINDING --implicit-check-not="pass --reference"
+# NO-REFS-BINDING: {{^}}member:NativeLibrary_Load -> the references contain no core library (an assembly that defines System.Object and references no other assembly); given: no references{{$}}
+
+#--- ret42.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 42
+}
+
+#--- fence.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @barrier() {
+  fence seq_cst
+  ret void
+}
+
+define i32 @main() {
+  call void @barrier()
+  ret i32 0
+}

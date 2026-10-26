@@ -1,0 +1,81 @@
+# Without references msil-ld binds every BCL request through its built-in table: one AssemblyRef, mscorlib 4.0.0.0 b77a5c561934e089.
+# A link with no --reference and no positional reference assembly uses the
+# built-in [mscorlib] table (plan 5.11.7, Q10; D10 as amended for M21): every
+# BCL type and member the output needs binds to mscorlib 4.0.0.0 with the
+# public key token b77a5c561934e089, flags 0, no culture and no hash, the
+# row Phase 1's -S text names (.assembly extern mscorlib), and the output is
+# the one M20 wrote, so O3 keeps holding. p1prog.c (bcl-binding 1.2)
+# uses every member Phase 1 emits: Marshal::AllocHGlobal and
+# '<msil>image_t' extending System.ValueType for its data image, argv
+# (Environment::GetCommandLineArgs, Marshal::StringToHGlobalAnsi), a
+# variable-length memmove (Buffer::MemoryCopy) and a fence
+# (Interlocked::MemoryBarrier). The composite runs it in every leg without
+# references. The RUN lines after it link it at -O0 and -O2: the image has
+# exactly one AssemblyRef row, that one, and every BCL TypeRef is scoped to
+# it (Inputs/refrows.py prints the rows from 'llvm-cil-dump --tables'); and
+# its --no-gc-sections link equals ilasm's image of the same source's -S
+# text under O3's six normalizations of msil/utils/equiv-allowed.txt but
+# without 'scopes' (plan 5.12.6), so the AssemblyRef columns and every
+# [mscorlib] scope compare exactly. Plan 5.11.7, 5.12.6.
+# REQUIRES: msil-ref=none, msil-cil-dump
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p1prog.c
+# RUN: %{msil_prog}
+# DEFINE: %{rows_level} = O0
+# DEFINE: %{rows_none} = \
+# DEFINE:   rm -rf %t.none.%{rows_level} %t.none.%{rows_level}.d \
+# DEFINE:   && %msil_prog_build --level %{rows_level} --link-output pe --workdir %t.none.%{rows_level}.d \
+# DEFINE:      --out %t.none.%{rows_level}.d/prog.exe --src %t/p1prog.c \
+# DEFINE:   && mkdir -p %t.none.%{rows_level}/asm \
+# DEFINE:   && %msil_cil_dump --tables %t.none.%{rows_level}.d/prog.exe > %t.none.%{rows_level}/tables.txt \
+# DEFINE:   && FileCheck %s --check-prefix=ONE --input-file=%t.none.%{rows_level}/tables.txt \
+# DEFINE:   && %python %S/Inputs/refrows.py %t.none.%{rows_level}/tables.txt > %t.none.%{rows_level}/rows.txt \
+# DEFINE:   && FileCheck %s --check-prefix=ROWS --input-file=%t.none.%{rows_level}/rows.txt \
+# DEFINE:      --implicit-check-not="-> System" --implicit-check-not="-> nested" --implicit-check-not="-> 0x" \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{rows_level} -c %t/p1prog.c -o %t.none.%{rows_level}/p1prog.o \
+# DEFINE:   && %clang_msil %{msil_ldflags} -Wl,--no-gc-sections %t.none.%{rows_level}/p1prog.o \
+# DEFINE:      -o %t.none.%{rows_level}/equiv.exe \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{rows_level} -S %t/p1prog.c -mllvm -msil-assembly-name=equiv \
+# DEFINE:      -o %t.none.%{rows_level}/asm/equiv.il \
+# DEFINE:   && FileCheck %s --check-prefix=TEXT --input-file=%t.none.%{rows_level}/asm/equiv.il \
+# DEFINE:      --implicit-check-not=".assembly extern" \
+# DEFINE:   && %ilasm -exe -output=%t.none.%{rows_level}/asm/equiv.exe %t.none.%{rows_level}/asm/equiv.il \
+# DEFINE:   && %msil_equiv --oracle O3 --test %s --triple %msil_triple --level %{rows_level} \
+# DEFINE:      --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet \
+# DEFINE:      --allow pinvoke-module --allow pinvoke-access \
+# DEFINE:      %t.none.%{rows_level}/equiv.exe %t.none.%{rows_level}/asm/equiv.exe
+# RUN: %{rows_none}
+# REDEFINE: %{rows_level} = O2
+# RUN: %{rows_none}
+# One AssemblyRef row.
+# ONE:       {{^}}Table: AssemblyRef rows=1 rowsize={{[0-9]+}}{{$}}
+# The row of D10, and the TypeRefs of p1prog's members and of the image
+# type's base, all scoped to it.
+# ROWS:      {{^}}assemblyref 1 mscorlib 4.0.0.0 token=b77a5c561934e089 flags=0x00000000 culture='' hash=-{{$}}
+# ROWS-DAG:  {{^}}typeref System.Buffer -> mscorlib{{$}}
+# ROWS-DAG:  {{^}}typeref System.Threading.Interlocked -> mscorlib{{$}}
+# ROWS-DAG:  {{^}}typeref System.Runtime.InteropServices.Marshal -> mscorlib{{$}}
+# ROWS-DAG:  {{^}}typeref System.Environment -> mscorlib{{$}}
+# ROWS-DAG:  {{^}}typeref System.ValueType -> mscorlib{{$}}
+# ROWS:      {{^}}first use: mscorlib{{$}}
+# -S text names the same assembly, and only it.
+# TEXT:      {{^}}.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }{{$}}
+# TEXT:      call void [mscorlib]System.Buffer::MemoryCopy(void*, void*, int64, int64){{$}}
+#--- p1prog.c
+/* llvm/docs/MSIL/recon/p2/bcl-binding-files/runtime/p1prog.c, the program of
+   bcl-binding 1.2 and 3.2. */
+/* Exercises every BCL member Phase 1 emits: the data segment (AllocHGlobal
+   and the RVA image type extending System.ValueType), argv
+   (GetCommandLineArgs, AllocHGlobal, StringToHGlobalAnsi), a variable-length
+   memmove (Buffer::MemoryCopy) and a fence (Interlocked::MemoryBarrier). */
+#include <stddef.h>
+int puts(const char *);
+static char buf[64] = "hello";
+const char *table[] = {buf, "world"};
+int main(int argc, char **argv) {
+  size_t n = (size_t)argc + 3;
+  __builtin_memmove(buf + 1, buf, n);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  puts(table[1]);
+  return argv[0][0] != 0 ? 42 : 1;
+}

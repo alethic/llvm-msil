@@ -1047,6 +1047,36 @@ void MSILAsmPrinter::checkAddressFieldNames(const Module &M) {
   }
 }
 
+/// True if the 8-byte slot at \p Off of the constructor-table global \p T
+/// is NULL: its bytes are zero (a zero-initialized global has none in the
+/// image) and no relocation or symbol difference fills them. msil-ld's
+/// isNullSlot sees both as relocations of the object's segment and takes
+/// each as 8 bytes wide, so one that starts up to 7 bytes before the slot
+/// counts here too, and the two agree on every slot.
+static bool
+isNullConstructorSlot(const MSILDataSegment &Data,
+                      const MSILDataSegment::Entry &T, uint64_t Off,
+                      const DenseMap<uint64_t, const MSILReloc *> &RelocAt) {
+  if (T.Size - Off < 8)
+    return false;
+  uint64_t Begin = T.Offset + (Off < 7 ? 0 : Off - 7);
+  uint64_t End = T.Offset + Off + 8;
+  for (uint64_t Site = Begin; Site != End; ++Site)
+    if (RelocAt.count(Site))
+      return false;
+  if (any_of(Data.Diffs, [&](const MSILDiff &D) {
+        return D.Site >= Begin && D.Site < End;
+      }))
+    return false;
+  if (T.IsZero)
+    return true;
+  ArrayRef<uint8_t> Image = Data.getImage();
+  if (End > Image.size())
+    return false;
+  return all_of(Image.slice(T.Offset + Off, 8),
+                [](uint8_t B) { return B == 0; });
+}
+
 SmallVector<const Function *, 8>
 MSILAsmPrinter::collectConstructors(const Module &M) {
   cli::SectionRules Rules = getSectionRules();
@@ -1110,6 +1140,13 @@ MSILAsmPrinter::collectConstructors(const Module &M) {
           T->Size - Off >= 8 ? RelocAt.lookup(T->Offset + Off) : nullptr;
       const auto *F =
           R && R->Size == 8 ? dyn_cast<Function>(R->Target) : nullptr;
+      // A NULL slot is skipped on Windows triples, as the MSVC CRT's
+      // _initterm skips it; glibc calls every .init_array entry, so ELF
+      // triples keep the error (msil-ld agrees, section 12 'M21.b extended
+      // (M20 follow-ups)').
+      if (!R && cli::skipsNullConstructorSlots(Rules) &&
+          isNullConstructorSlot(*Data, *T, Off, RelocAt))
+        continue;
       if (!F || F->isIntrinsic()) {
         M.getContext().emitError(
             "constructor table entry at " + T->Section + "+" + Twine(Off) +

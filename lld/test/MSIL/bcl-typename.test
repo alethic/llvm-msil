@@ -1,0 +1,48 @@
+## System.Type values in custom-attribute blobs (ImplementationPlan.md
+## 5.11.5's TypeName requests, 5.11.6; M21.b item 4; bcl-binding 4.4). The
+## binder parses the value as Ns.Name[+Nested][, assembly part], ignores the
+## assembly part, binds the type like any other and writes the
+## assembly-qualified name of the definition, the form Roslyn writes
+## (bcl-binding-files/roslyn/uco-blob.txt):
+##   Ns.Name[+Nested], <Name>, Version=<a.b.c.d>, Culture=neutral, PublicKeyToken=<hex|null>
+## with the token in lowercase hex, and 'null' for an assembly without a
+## public key (FakeTypesB). Phase 2 writes no such attribute, so the requests
+## go through msil-ld's hidden --print-bcl-binding=typename:<name>, which
+## prints '<request> -> <result>'. A type that is not defined, a nested
+## private one included, is 5.11.9's error text.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj ret42.ll -o ret42.o
+# RUN: mkdir pack
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesA.yaml -o pack/FakeTypesA.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeTypesB.yaml -o pack/FakeTypesB.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning:
+
+# RUN: msil-ld ret42.o --reference=pack -o x.exe \
+# RUN:   --print-bcl-binding=typename:Fake.Outer+Inner \
+# RUN:   '--print-bcl-binding=typename:System.Runtime.CompilerServices.CallConvCdecl, System.Runtime, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a' \
+# RUN:   '--print-bcl-binding=typename:Fake.Widget, Bogus' \
+# RUN:   --print-bcl-binding=typename:Fake.Box \
+# RUN:   --print-bcl-binding=typename:Fake.Box+Lid \
+# RUN:   --print-bcl-binding=typename:System.Object \
+# RUN:   --print-bcl-binding=typename:Fake.Nope \
+# RUN:   --print-bcl-binding=typename:Fake.Box+Inner 2>&1 | %{fc}
+
+# CHECK:      {{^}}typename:Fake.Outer+Inner -> Fake.Outer+Inner, FakeTypesA, Version=1.2.3.4, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a{{$}}
+# CHECK-NEXT: {{^}}typename:System.Runtime.CompilerServices.CallConvCdecl, System.Runtime, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a -> System.Runtime.CompilerServices.CallConvCdecl, FakeCore, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a{{$}}
+# CHECK-NEXT: {{^}}typename:Fake.Widget, Bogus -> Fake.Widget, FakeTypesA, Version=1.2.3.4, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a{{$}}
+# CHECK-NEXT: {{^}}typename:Fake.Box -> Fake.Box, FakeTypesB, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null{{$}}
+# CHECK-NEXT: {{^}}typename:Fake.Box+Lid -> Fake.Box+Lid, FakeTypesB, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null{{$}}
+# CHECK-NEXT: {{^}}typename:System.Object -> System.Object, FakeCore, Version=8.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a{{$}}
+# CHECK-NEXT: {{^}}typename:Fake.Nope -> type 'Fake.Nope' is not defined in the references (3 assemblies){{$}}
+# CHECK-NEXT: {{^}}typename:Fake.Box+Inner -> type '{{.*}}Inner' is not defined in the references (3 assemblies){{$}}
+
+#--- ret42.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 42
+}

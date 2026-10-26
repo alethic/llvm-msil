@@ -1,0 +1,124 @@
+## Links without references use msil-ld's built-in [mscorlib] table
+## (ImplementationPlan.md 5.11.7, decision D10 as amended for M21; M21.b
+## item 5):
+## - every BCL type and member binds to one AssemblyRef, mscorlib 4.0.0.0
+##   with token b77a5c561934e089, Flags 0, no culture and no hash, and the
+##   rows are exactly the ones M20's stand-in wrote (the TypeRef and
+##   MemberRef rows below were read from M20's msil-ld for this p1.o), so
+##   links without references stay byte-identical;
+## - a request outside the table is
+##   '.NET member '<signature>' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>':
+##   M21's NativeLibrary entries are not mscorlib-safe, and named.o's
+##   Fake.Outer/Inner is no BCL entry at all, while its
+##   [Contoso]System.Threading.Interlocked::MemoryBarrier() binds by name to
+##   the table's entry;
+## - --print-bcl-binding (5.11.5) reaches the same binder;
+## - any reference turns the table off, and a reference set whose core
+##   library is an mscorlib 4.0.0.0 with the ECMA key, like the .NET
+##   Framework v4.8 directory, gives the same canonical listing.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj p1.ll -o p1.o
+# RUN: llc -filetype=obj ret42.ll -o ret42.o
+# RUN: llc -filetype=obj main-named.ll -o main-named.o
+# RUN: yaml2obj %S/Inputs/fakepack/named-obj.yaml -o named.o
+# RUN: yaml2obj %S/Inputs/fakepack/FakeMscorlib.yaml -o mscorlib.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## M20's rows.
+# RUN: msil-ld p1.o -o p1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --tables p1.exe | FileCheck %s --check-prefix=ROWS
+# ROWS:      {{^}}Table: TypeRef rows=6 rowsize={{[0-9]+}}{{$}}
+# ROWS-NEXT: {{^}}  TypeRef[1]: ResolutionScope=0x23000001 TypeName='Buffer' TypeNamespace='System'{{$}}
+# ROWS-NEXT: {{^}}  TypeRef[2]: ResolutionScope=0x23000001 TypeName='Interlocked' TypeNamespace='System.Threading'{{$}}
+# ROWS-NEXT: {{^}}  TypeRef[3]: ResolutionScope=0x23000001 TypeName='Marshal' TypeNamespace='System.Runtime.InteropServices'{{$}}
+# ROWS-NEXT: {{^}}  TypeRef[4]: ResolutionScope=0x23000001 TypeName='Environment' TypeNamespace='System'{{$}}
+# ROWS-NEXT: {{^}}  TypeRef[5]: ResolutionScope=0x23000001 TypeName='Object' TypeNamespace='System'{{$}}
+# ROWS-NEXT: {{^}}  TypeRef[6]: ResolutionScope=0x23000001 TypeName='ValueType' TypeNamespace='System'{{$}}
+# ROWS:      {{^}}  TypeDef[2]: Flags=0x00000110 TypeName='<msil>image_t' TypeNamespace='' Extends=0x01000006 {{.*$}}
+# ROWS:      {{^}}Table: MemberRef rows=5 rowsize={{[0-9]+}}{{$}}
+# ROWS-NEXT: {{^}}  MemberRef[1]: Class=0x01000001 Name='MemoryCopy' Signature=00 04 01 0F 01 0F 01 0A 0A{{$}}
+# ROWS-NEXT: {{^}}  MemberRef[2]: Class=0x01000002 Name='MemoryBarrier' Signature=00 00 01{{$}}
+# ROWS-NEXT: {{^}}  MemberRef[3]: Class=0x01000003 Name='AllocHGlobal' Signature=00 01 18 18{{$}}
+# ROWS-NEXT: {{^}}  MemberRef[4]: Class=0x01000004 Name='GetCommandLineArgs' Signature=00 00 1D 0E{{$}}
+# ROWS-NEXT: {{^}}  MemberRef[5]: Class=0x01000003 Name='StringToHGlobalAnsi' Signature=00 01 18 0E{{$}}
+# ROWS:      {{^}}Table: AssemblyRef rows=1 rowsize={{[0-9]+}}{{$}}
+# ROWS-NEXT: {{^}}  AssemblyRef[1]: MajorVersion=0x0004 MinorVersion=0x0000 BuildNumber=0x0000 RevisionNumber=0x0000 Flags=0x00000000 PublicKeyOrToken=B7 7A 5C 56 19 34 E0 89 Name='mscorlib' Culture='' HashValue=-{{$}}
+# ROWS-NOT:  {{.}}
+
+## A program that uses no BCL member still has the one row.
+# RUN: msil-ld ret42.o -o ret42.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ret42.exe | FileCheck %s --check-prefix=ONE-ROW --implicit-check-not=assemblyref
+# ONE-ROW: {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+
+## Outside the table.
+# RUN: msil-ld ret42.o --print-bcl-binding=member:NativeLibrary_Load --print-bcl-binding=member:NativeLibrary_GetExport \
+# RUN:   --print-bcl-binding=type:Fake.Widget -o x.exe 2>&1 | %{fc} --check-prefix=OUTSIDE
+# OUTSIDE:      {{^}}member:NativeLibrary_Load -> .NET member '{{.*}}NativeLibrary::Load(string)' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+# OUTSIDE-NEXT: {{^}}member:NativeLibrary_GetExport -> .NET member '{{.*}}NativeLibrary::GetExport(native int, string)' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+# OUTSIDE-NEXT: {{^}}type:Fake.Widget -> .NET member '{{.*}}Fake.Widget' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+# RUN: not msil-ld main-named.o named.o -o x.exe 2>&1 | %{fc} --check-prefix=OUTSIDE-LINK --implicit-check-not=MemoryBarrier
+# OUTSIDE-LINK: {{^}}msil-ld: error: {{.*}}.NET member '{{.*}}Fake.Outer{{.*}}' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+
+## Inside the table.
+# RUN: msil-ld ret42.o --print-bcl-binding=member:Marshal_AllocHGlobal --print-bcl-binding=type:System.Object \
+# RUN:   --print-bcl-binding=typename:System.Object -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=INSIDE --implicit-check-not="not in msil-ld"
+# INSIDE:      {{^}}member:Marshal_AllocHGlobal -> {{.*(mscorlib.*Marshal::'?AllocHGlobal|Marshal::'?AllocHGlobal.*mscorlib).*$}}
+# INSIDE-NEXT: {{^}}type:System.Object -> {{.*(mscorlib.*System.Object|System.Object.*mscorlib).*$}}
+# INSIDE-NEXT: {{^}}typename:System.Object -> System.Object, mscorlib, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089{{$}}
+
+## A reference set with its own mscorlib 4.0.0.0: the same listing.
+# RUN: mkdir bound
+# RUN: msil-ld p1.o --reference=mscorlib.dll -o bound/p1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump p1.exe > p1.txt
+# RUN: llvm-cil-dump bound/p1.exe > bound.txt
+# RUN: diff p1.txt bound.txt
+# RUN: FileCheck %s --check-prefix=MSCORLIB --input-file=bound.txt
+# MSCORLIB: {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+# MSCORLIB: {{^}}    L{{[0-9]+}}: call void() [mscorlib]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+
+#--- p1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@buf = global [16 x i8] c"0123456789abcdef", align 1
+@ptr = global ptr @buf, align 8
+
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+
+define void @shift(i64 %n) {
+  %p = load ptr, ptr @ptr
+  %q = getelementptr i8, ptr %p, i64 1
+  call void @llvm.memmove.p0.p0.i64(ptr %q, ptr %p, i64 %n, i1 false)
+  fence seq_cst
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %a = sext i32 %argc to i64
+  call void @shift(i64 %a)
+  %p = load ptr, ptr @ptr
+  %c = load i8, ptr %p
+  %r = zext i8 %c to i32
+  ret i32 %r
+}
+
+#--- ret42.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 42
+}
+
+#--- main-named.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare void @named()
+
+define i32 @main() {
+  call void @named()
+  ret i32 0
+}

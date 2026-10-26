@@ -1,0 +1,71 @@
+# Every entry of msil-ld's built-in [mscorlib] table resolves through [mscorlib] on every runtime of the leg; an entry that is not mscorlib-safe fails the probe.
+# Without references msil-ld binds the BCL types and members of its output
+# through its built-in table (plan 5.11.7, Q10; D10 as amended for M21): the
+# mscorlib-safe entries of llvm/include/llvm/CLI/BCLMembers.def, bound to
+# mscorlib 4.0.0.0 b77a5c561934e089, which 'msil-ld --print-bcl-table'
+# prints (plan 5.11.1). %msil_check_mscorlib_safe (plan 5.12.3;
+# msil/utils/check-mscorlib-safe.py) writes an ILAsm probe that loads the
+# token of every entry through [mscorlib], assembles it and runs it on every
+# runtime the leg has (with the local runner the .NET Framework where it is
+# installed, .NET 8 and .NET 10 where they are installed, and the leg's own
+# .NET runtime; under msil_runner=wsl the leg's runtime inside WSL); a
+# TypeLoadException or MissingMethodException fails it with the entry. The
+# table it checked (DIR/table.txt) is Phase 2's (plan 5.11.7):
+# M18's System.ValueType, the four owner types and Phase 1's five members
+# (D10), and M20's Marshal::StringToHGlobalUni, EntryPointNotFoundException
+# with its constructor, and System.Object; none of M21's NativeLibrary
+# entries, which are Required but not mscorlib-safe. The second run shows
+# that the probe catches an entry that is not safe: through [mscorlib],
+# NativeLibrary::Load is a TypeLoadException on every runtime (the .NET
+# mscorlib facade forwards no NativeLibrary, and the Framework has none;
+# bcl-binding 2.2, 2.4), while System.ValueType still resolves. The third run
+# shows that the probe loads the member, not only its type: Marshal exists
+# through [mscorlib] on every runtime (the Framework defines it, the .NET
+# facade forwards it), but it has no AllocHGlobal(int64) (only native int and
+# int32 overloads), so that entry is a MissingMethodException everywhere; a
+# probe that loaded only the owner type of a member entry would pass the
+# first two runs and fail this one. Gate step 12 runs the script on all four
+# runtimes of plan 5.11.7. Plan 5.11.7.
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %msil_check_mscorlib_safe --out %t/builtin > %t/builtin.out
+# RUN: FileCheck %s --check-prefixes=SAFE%if msil-netfx && !msil-wsl %{,NETFX%}%if dotnet-runtime-8 && !msil-wsl %{,NET8%}%if dotnet-runtime-10 && !msil-wsl %{,NET10%}%if msil-wsl %{,WSL%} --input-file=%t/builtin.out --implicit-check-not=FAIL --implicit-check-not=failing
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=%t/builtin/table.txt --implicit-check-not=NativeLibrary
+# RUN: count 14 < %t/builtin/table.txt
+# RUN: not %msil_check_mscorlib_safe --out %t/unsafe --table %t/unsafe.txt > %t/unsafe.out 2> %t/unsafe.err
+# RUN: FileCheck %s --check-prefix=UNSAFE-OUT --input-file=%t/unsafe.out --implicit-check-not="2 of 2" --implicit-check-not="every entry resolves"
+# RUN: FileCheck %s --check-prefix=UNSAFE-ERR --input-file=%t/unsafe.err --implicit-check-not="entry 1"
+# RUN: not %msil_check_mscorlib_safe --out %t/wrongsig --table %t/wrongsig.txt > %t/wrongsig.out 2> %t/wrongsig.err
+# RUN: FileCheck %s --check-prefix=WRONGSIG-OUT --input-file=%t/wrongsig.out --implicit-check-not="2 of 2" --implicit-check-not="every entry resolves" --implicit-check-not=TypeLoadException
+# RUN: FileCheck %s --check-prefix=WRONGSIG-ERR --input-file=%t/wrongsig.err --implicit-check-not="entry 1" --implicit-check-not=TypeLoadException
+# SAFE:       {{^}}check-mscorlib-safe: 14 entries from msil-ld{{(\.exe)?}} --print-bcl-table{{$}}
+# NETFX-DAG:  {{^}}check-mscorlib-safe: netfx (.NET Framework 4.{{.+}}): 14 of 14 entries resolve{{$}}
+# NET8-DAG:   {{^}}check-mscorlib-safe: net8 (Microsoft.NETCore.App 8.{{.+}}): 14 of 14 entries resolve{{$}}
+# NET10-DAG:  {{^}}check-mscorlib-safe: net10 (Microsoft.NETCore.App 10.{{.+}}): 14 of 14 entries resolve{{$}}
+# WSL-DAG:    {{^}}check-mscorlib-safe: wsl-net{{[0-9]+}} ({{.+}}): 14 of 14 entries resolve{{$}}
+# SAFE:       {{^}}check-mscorlib-safe: every entry resolves through [mscorlib] on {{.+}}{{$}}
+# TABLE-DAG:  {{^}}type [mscorlib]System.ValueType{{$}}
+# TABLE-DAG:  {{^}}type [mscorlib]System.Runtime.InteropServices.Marshal{{$}}
+# TABLE-DAG:  {{^}}type [mscorlib]System.Environment{{$}}
+# TABLE-DAG:  {{^}}type [mscorlib]System.Buffer{{$}}
+# TABLE-DAG:  {{^}}type [mscorlib]System.Threading.Interlocked{{$}}
+# TABLE-DAG:  {{^}}method native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int){{$}}
+# TABLE-DAG:  {{^}}method native int [mscorlib]System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string){{$}}
+# TABLE-DAG:  {{^}}method string[] [mscorlib]System.Environment::GetCommandLineArgs(){{$}}
+# TABLE-DAG:  {{^}}method void [mscorlib]System.Buffer::MemoryCopy(void*, void*, int64, int64){{$}}
+# TABLE-DAG:  {{^}}method void [mscorlib]System.Threading.Interlocked::MemoryBarrier(){{$}}
+# TABLE-DAG:  {{^}}method native int [mscorlib]System.Runtime.InteropServices.Marshal::StringToHGlobalUni(string){{$}}
+# TABLE-DAG:  {{^}}type [mscorlib]System.EntryPointNotFoundException{{$}}
+# TABLE-DAG:  {{^}}method instance void [mscorlib]System.EntryPointNotFoundException::.ctor(string){{$}}
+# TABLE-DAG:  {{^}}type [mscorlib]System.Object{{$}}
+# UNSAFE-OUT: {{^}}check-mscorlib-safe: 2 entries from {{.*}}unsafe.txt{{$}}
+# UNSAFE-OUT: {{^}}check-mscorlib-safe: {{[a-z0-9-]+}} ({{.+}}): 1 of 2 entries resolve; failing: entry 2 (System.TypeLoadException){{$}}
+# UNSAFE-ERR: {{^}}check-mscorlib-safe: FAIL: {{[a-z0-9-]+}}: entry 2 'method native int [mscorlib]System.Runtime.InteropServices.NativeLibrary::Load(string)': System.TypeLoadException: Could not load type 'System.Runtime.InteropServices.NativeLibrary' from assembly 'mscorlib, Version=4.0.0.0, {{.+}}{{$}}
+# WRONGSIG-OUT: {{^}}check-mscorlib-safe: 2 entries from {{.*}}wrongsig.txt{{$}}
+# WRONGSIG-OUT: {{^}}check-mscorlib-safe: {{[a-z0-9-]+}} ({{.+}}): 1 of 2 entries resolve; failing: entry 2 (System.MissingMethodException){{$}}
+# WRONGSIG-ERR: {{^}}check-mscorlib-safe: FAIL: {{[a-z0-9-]+}}: entry 2 'method native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(int64)': System.MissingMethodException: Method not found: 'IntPtr System.Runtime.InteropServices.Marshal.AllocHGlobal(Int64)'.{{$}}
+#--- unsafe.txt
+type [mscorlib]System.ValueType
+method native int [mscorlib]System.Runtime.InteropServices.NativeLibrary::Load(string)
+#--- wrongsig.txt
+type [mscorlib]System.ValueType
+method native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(int64)

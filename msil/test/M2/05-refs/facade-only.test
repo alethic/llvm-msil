@@ -1,0 +1,52 @@
+# References without a core library stop the link: a facade that forwards System.Object never is one.
+# The core library is the one reference that defines top-level System.Object
+# and has no AssemblyRef rows (Roslyn's rule, plan 5.11.3); a facade
+# references the assemblies it forwards to, so it never qualifies, and msil-ld
+# never binds through a facade's forwarder when the destination is missing
+# (plan 5.11.4). A link that binds a type (every program: Main and the module
+# initializer) and whose references hold no core library fails with 5.11.9's
+# text, which names each candidate that only forwards System.Object as
+# '(facade, forwards System.Object to <name>)' (M21.a item 6). The cases,
+# each a reference set from the real packs: the .NET 8 pack's mscorlib.dll
+# alone (a facade: it forwards System.Object to System.Runtime, bcl-binding
+# 2.3), its netstandard.dll and mscorlib.dll together (two facades), its
+# System.Threading.dll alone (it defines types, but not System.Object, and
+# references System.Runtime), and, with the Framework pack, v4.8's
+# Facades/System.Runtime.dll (it forwards System.Object to mscorlib). The
+# link fails cleanly through %{msil_prog_fail_O2} on either pipeline: under
+# lto msil-ld checks the references before it binds, and --lto-emit-asm text
+# too (plan 5.11.8). Plan 5.11.3, 5.11.9.
+# REQUIRES: msil-refpack=net8
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p1prog.c
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net8}/mscorlib.dll
+# RUN: %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefixes=MSCORLIB,LINK --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net8}/netstandard.dll -Wl,--reference=%{msil_ref_dir_net8}/mscorlib.dll
+# RUN: %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefixes=TWO,LINK --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net8}/System.Threading.dll
+# RUN: %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefixes=THREADING,LINK --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="(facade"
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net48}/Facades/System.Runtime.dll
+# RUN: %if msil-refpack=net48 %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefixes=NET48,LINK --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# MSCORLIB:  {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: {{.*}}mscorlib{{.*}} (facade, forwards System.Object to System.Runtime){{.*}}{{$}}
+# TWO:       {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: {{(.*netstandard.* \(facade, forwards System\.Object to System\.Runtime\).*mscorlib.* \(facade, forwards System\.Object to System\.Runtime\)|.*mscorlib.* \(facade, forwards System\.Object to System\.Runtime\).*netstandard.* \(facade, forwards System\.Object to System\.Runtime\))}}{{.*}}{{$}}
+# THREADING: {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: {{.*}}System.Threading{{.*}}{{$}}
+# NET48:     {{^}}msil-ld: error: the references contain no core library (an assembly that defines System.Object and references no other assembly); given: {{.*}}System.Runtime{{.*}} (facade, forwards System.Object to mscorlib){{.*}}{{$}}
+# LINK:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- p1prog.c
+/* llvm/docs/MSIL/recon/p2/bcl-binding-files/runtime/p1prog.c, the program of
+   bcl-binding 1.2 and 3.2. */
+/* Exercises every BCL member Phase 1 emits: the data segment (AllocHGlobal
+   and the RVA image type extending System.ValueType), argv
+   (GetCommandLineArgs, AllocHGlobal, StringToHGlobalAnsi), a variable-length
+   memmove (Buffer::MemoryCopy) and a fence (Interlocked::MemoryBarrier). */
+#include <stddef.h>
+int puts(const char *);
+static char buf[64] = "hello";
+const char *table[] = {buf, "world"};
+int main(int argc, char **argv) {
+  size_t n = (size_t)argc + 3;
+  __builtin_memmove(buf + 1, buf, n);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  puts(table[1]);
+  return argv[0][0] != 0 ? 42 : 1;
+}

@@ -37,7 +37,12 @@
 # 5.12.3), which harness/canon-listing.test pins and later milestones
 # compare: mdcanon in M16 (see "mdcanon" below), and from M17 the tree's
 # llvm-cil-dump --canonical (see "llvm-cil-dump" below), which
-# harness/canon-agree.test compares with mdcanon byte for byte.
+# harness/canon-agree.test compares with mdcanon byte for byte. From M21,
+# msil_references=net48, net8, net10 or a path links every MSIL program
+# against reference assemblies (%{msil_ref_flags} in %{msil_ldflags}; the
+# legs refs-net48, refs-net8 and refs-net10 of msil/utils/ci), and
+# %msil_check_mscorlib_safe proves msil-ld's built-in [mscorlib] table on
+# the runtimes (see "reference assemblies" below).
 #
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
@@ -66,6 +71,7 @@
 # one too.
 
 import glob
+import importlib.util
 import json
 import os
 import platform
@@ -502,21 +508,26 @@ def nuget_tools(tool, rid=host_rid):
     ]
 
 
-def pinned_tools_version():
-    """MsilILAsmVersion of msil/utils/tools/msil-tools.proj: the ilasm and
-    ildasm version that the CI restores and the gate legs use (read the way
-    msil/utils/ci/ci-common.ps1 and msil-ci.yml read it; the project file is
-    the only place that sets it)."""
+def tools_proj_version(name):
+    """The version property <name> of msil/utils/tools/msil-tools.proj (read
+    the way msil/utils/ci/ci-common.ps1 and msil-ci.yml read it; the project
+    file is the only place that sets it)."""
     proj = os.path.join(utils_dir, "tools", "msil-tools.proj")
     try:
         with open(proj, encoding="utf-8") as f:
             text = f.read()
     except OSError as e:
         fatal("cannot read %s: %s" % (proj, e))
-    m = re.search(r"<MsilILAsmVersion[^>]*>\s*([0-9.]+)\s*</MsilILAsmVersion>", text)
+    m = re.search(r"<%s[^>]*>\s*([0-9.]+)\s*</%s>" % (name, name), text)
     if not m:
-        fatal("cannot read MsilILAsmVersion from " + proj)
+        fatal("cannot read %s from %s" % (name, proj))
     return m.group(1)
+
+
+def pinned_tools_version():
+    """MsilILAsmVersion of msil/utils/tools/msil-tools.proj: the ilasm and
+    ildasm version that the CI restores and the gate legs use."""
+    return tools_proj_version("MsilILAsmVersion")
 
 
 def overridden(name):
@@ -1542,6 +1553,283 @@ note(
     )
 )
 
+# ---------------------------------------------------------------- reference assemblies
+# From M21 msil-ld binds every BCL type and member of its output against
+# reference assemblies (--reference=<file|dir>, plan 5.11); without one it
+# uses its built-in [mscorlib] table (5.11.7). The reference packs of the
+# reference legs (plan 5.11.10, 5.12.3):
+#   net48         the .NET Framework 4.8 reference directory: $MSIL_REF_NET48,
+#                 else %ProgramFiles(x86)%\Reference Assemblies\Microsoft\
+#                 Framework\.NETFramework\v4.8 on Windows, else
+#                 build/.NETFramework/v4.8 of the NuGet package
+#                 microsoft.netframework.referenceassemblies.net48 at the
+#                 version MsilNet48RefAssembliesVersion of
+#                 msil/utils/tools/msil-tools.proj in a NuGet global-packages
+#                 folder (the Linux CI job restores it and exports
+#                 MSIL_REF_NET48);
+#   net8, net10   ref/net<N>.0 of the newest Microsoft.NETCore.App.Ref <N>.x
+#                 targeting pack of a dotnet root (the host's directory,
+#                 $DOTNET_ROOT, the default installation directories);
+#                 $MSIL_REF_NET8 and $MSIL_REF_NET10 name another directory.
+# A directory that one of those variables names explicitly and that lacks the
+# pack's core library (mscorlib.dll, System.Runtime.dll) is a configuration
+# error. Each pack found gives the feature msil-refpack=<name> and
+# %{msil_ref_dir_<name>}, for tests that need a pack whatever the leg (the
+# substitution names a placeholder when the pack is missing, so such a test
+# needs 'REQUIRES: msil-refpack=<name>'). Nothing here downloads.
+#
+# --param msil_references=none|net48|net8|net10|<path> (default none; plan
+# 5.12.2; feature msil-ref=<name>, msil-ref=path for a path) selects the
+# references of every MSIL link: %{msil_ref_flags} is -Wl,--reference=<dir>
+# (empty for none) and is part of %{msil_ldflags}, so it reaches the MSIL
+# side of every link (%{msil_prog}, and %{msil_c} and %{msil_ll} under lto and
+# obj) and never the native oracle; a test with references of its own
+# REDEFINEs %{msil_ref_flags}. A path naming a .NET pack (System.Runtime.dll,
+# or a directory holding it, such as
+# <dotnet>/packs/Microsoft.NETCore.App.Ref/<v>/ref/net<N>.0) is handled as
+# net<N>, N being the major version of that System.Runtime's Assembly row
+# (5 or more: from .NET 5 on it is the .NET major; the .NET Framework's
+# facade and .NET Core 3's are 4.x, and such a path is any other path); a
+# System.Runtime.dll whose version cannot be read is a configuration error.
+# A value other than none under msil_pipeline=asm is a configuration error
+# (asm has no link, plan 5.12.1); so are a named pack that is not found, a
+# path that does not exist, a .NET Framework run (msil_run_netfx=1) of
+# programs bound to .NET <N> references (net8, net10 or a .NET pack's path),
+# which do not load there, a runtime older than .NET <N>, and msil_equiv=1
+# under msil_pipeline=lto with such references: O4 compares the link's
+# --lto-emit-asm text, which is never bound (plan 5.11.8), with an image
+# whose data-import helper calls NativeLibrary. With references, O3 and O4
+# also allow the 'scopes' entry of msil/utils/equiv-allowed.txt (plan
+# 5.12.6). With .NET <N> references, %msil_verify runs ILVerify against the
+# pack and skips PEVerify ('--skip-peverify "bound to .NET <N> references"'):
+# PEVerify cannot load such an image (bcl-binding 3.5).
+REF_PACKS = ("net48", "net8", "net10")
+REF_CORE = {"net48": "mscorlib.dll", "net8": "System.Runtime.dll"}
+REF_CORE["net10"] = REF_CORE["net8"]
+
+
+def explicit_ref_pack(name):
+    """$MSIL_REF_<NAME>, checked; None when it is not set."""
+    var = "MSIL_REF_" + name.upper()
+    value = os.environ.get(var)
+    if not value:
+        return None
+    path = os.path.abspath(value)
+    if not os.path.isfile(os.path.join(path, REF_CORE[name])):
+        fatal(
+            "$%s=%s has no %s, so it is not the %s reference pack"
+            % (var, slashes(value), REF_CORE[name], name)
+        )
+    return path
+
+
+def dotnet_roots():
+    """The dotnet installation directories that may hold targeting packs."""
+    roots = [os.path.dirname(os.path.realpath(dotnet))] if dotnet else []
+    roots += [os.environ.get(v) for v in ("DOTNET_ROOT", "DOTNET_ROOT_X64")]
+    roots += (
+        [r"C:\Program Files\dotnet"]
+        if is_windows
+        else ["/usr/share/dotnet", "/usr/lib/dotnet", "/usr/local/share/dotnet"]
+    )
+    roots.append(os.path.join(home, ".dotnet"))
+    unique = {}
+    for r in filter(None, roots):
+        unique.setdefault(os.path.normcase(os.path.normpath(r)), r)
+    return [r for r in unique.values() if os.path.isdir(r)]
+
+
+def find_ref_pack(name):
+    """The directory of the reference pack name (REF_PACKS), or None."""
+    explicit = explicit_ref_pack(name)
+    if explicit:
+        return explicit
+    core = REF_CORE[name]
+    if name == "net48":
+        candidates = []
+        if is_windows:
+            candidates.append(
+                os.path.join(
+                    os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                    "Reference Assemblies",
+                    "Microsoft",
+                    "Framework",
+                    ".NETFramework",
+                    "v4.8",
+                )
+            )
+        version = tools_proj_version("MsilNet48RefAssembliesVersion")
+        candidates += [
+            os.path.join(
+                root,
+                "microsoft.netframework.referenceassemblies.net48",
+                version,
+                "build",
+                ".NETFramework",
+                "v4.8",
+            )
+            for root in nuget_roots()
+        ]
+        return next(
+            (c for c in candidates if os.path.isfile(os.path.join(c, core))), None
+        )
+    major = int(name[3:])
+    hits = []
+    for root in dotnet_roots():
+        hits += glob.glob(
+            os.path.join(
+                root,
+                "packs",
+                "Microsoft.NETCore.App.Ref",
+                "%d.*" % major,
+                "ref",
+                "net%d.0" % major,
+            )
+        )
+    hits = [h for h in hits if os.path.isfile(os.path.join(h, core))]
+    # The newest <major>.x; the version is the directory above ref/.
+    return (
+        max(
+            hits,
+            key=lambda h: version_key(
+                os.path.basename(os.path.dirname(os.path.dirname(h)))
+            ),
+        )
+        if hits
+        else None
+    )
+
+
+ref_packs = {}
+for name in REF_PACKS:
+    found = find_ref_pack(name)
+    if found:
+        ref_packs[name] = os.path.normpath(found)
+        features.add("msil-refpack=" + name)
+note(
+    "reference packs: %s"
+    % (
+        "; ".join(
+            "%s %s" % (n, slashes(ref_packs[n])) for n in REF_PACKS if n in ref_packs
+        )
+        or "none found"
+    )
+)
+
+references = params.get("msil_references", "none")
+ref_dir = None
+if references != "none":
+    if references in REF_PACKS:
+        if references not in ref_packs:
+            fatal(
+                "--param msil_references=%s, but the %s reference pack is not found "
+                "(see 'reference assemblies' in msil/test/lit.cfg.py: %s)"
+                % (
+                    references,
+                    references,
+                    "$MSIL_REF_NET48, the .NET Framework 4.8 reference directory or "
+                    "the NuGet package microsoft.netframework.referenceassemblies.net48 "
+                    "('dotnet restore msil/utils/tools/msil-tools.proj' fetches it)"
+                    if references == "net48"
+                    else "$MSIL_REF_%s or a Microsoft.NETCore.App.Ref %s.x targeting "
+                    "pack, which the .NET %s SDK installs"
+                    % (references.upper(), references[3:], references[3:]),
+                )
+            )
+        ref_dir = ref_packs[references]
+    elif references and os.path.exists(references):
+        ref_dir = os.path.normpath(os.path.abspath(references))
+    else:
+        fatal(
+            "--param msil_references=%s: use none, net48, net8, net10 or the path of "
+            "a reference assembly or of a directory of them" % references
+        )
+    if pipeline == "asm":
+        fatal(
+            "--param msil_references=%s needs a link, which msil_pipeline=asm does "
+            "not have (plan 5.12.2); use msil_pipeline=obj or lto" % references
+        )
+ref_name = references if references in ("none",) + REF_PACKS else "path"
+features.add("msil-ref=" + ref_name)
+
+
+def system_runtime_major(path):
+    """The major version of the Assembly row of path, a System.Runtime.dll
+    (msil/utils/msil-verify.py reads it); a configuration error if it cannot
+    be read."""
+    saved = sys.dont_write_bytecode  # no __pycache__ in msil/utils
+    sys.dont_write_bytecode = True
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "msil_verify", os.path.join(utils_dir, "msil-verify.py")
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        name, version = module.assembly_row(path)
+        if name.lower() != "system.runtime":
+            raise ValueError("its Assembly row names %s, not System.Runtime" % name)
+        return version[0]
+    except (OSError, ValueError) as e:
+        fatal(
+            "--param msil_references=%s: cannot read the version of %s, so the "
+            ".NET pack's major is unknown: %s"
+            % (references, slashes(path), slashes(str(e)))
+        )
+    finally:
+        sys.dont_write_bytecode = saved
+
+
+# The .NET major of the references whose images only .NET <major> or newer
+# loads: net8, net10, and a path naming a .NET pack (see above); ILVerify
+# takes such images' references from ref_runtime_dir, the pack's directory.
+ref_net_major = int(references[3:]) if references in ("net8", "net10") else None
+ref_runtime_dir = ref_dir
+if ref_name == "path":
+    if os.path.isdir(ref_dir):
+        runtime_dll = os.path.join(ref_dir, "System.Runtime.dll")
+    else:
+        is_runtime = os.path.basename(ref_dir).lower() == "system.runtime.dll"
+        runtime_dll = ref_dir if is_runtime else None
+        ref_runtime_dir = os.path.dirname(ref_dir)
+    if runtime_dll and os.path.isfile(runtime_dll):
+        major = system_runtime_major(runtime_dll)
+        if major >= 5:
+            ref_net_major = major
+if ref_net_major is not None:
+    if run_netfx:
+        fatal(
+            "--param msil_run_netfx=1 with msil_references=%s: programs bound to "
+            ".NET %d reference assemblies do not load on the .NET Framework (plan "
+            "5.11.10)" % (references, ref_net_major)
+        )
+    if exec_major is not None and exec_major < ref_net_major:
+        fatal(
+            "--param msil_references=%s binds the programs to .NET %d reference "
+            "assemblies, which Microsoft.NETCore.App %d.x does not load; pass "
+            "--param msil_dotnet_runtime=%d"
+            % (references, ref_net_major, exec_major, ref_net_major)
+        )
+    if pipeline == "lto" and equiv:
+        fatal(
+            "--param msil_equiv=1 with msil_pipeline=lto and msil_references=%s: "
+            "O4 compares the link's --lto-emit-asm text, which is never bound to "
+            "the references (plan 5.11.8), with an image bound to .NET %d "
+            "reference assemblies, whose data-import helper calls NativeLibrary; "
+            "use msil_pipeline=obj, or msil_references=none or net48"
+            % (references, ref_net_major)
+        )
+if ref_dir:
+    note(
+        "references: %s (%s)%s"
+        % (
+            references if ref_name != "path" else "path",
+            slashes(ref_dir),
+            ", a .NET %d pack" % ref_net_major
+            if ref_name == "path" and ref_net_major is not None
+            else "",
+        )
+    )
+
 # Everything needed to compile and run C programs.
 if {"clang", "msil-registered-target", "msil-ilasm", "msil-dotnet"} <= features:
     features.add("msil-exec")
@@ -1614,14 +1902,19 @@ if exec_runtimeconfig:
 exec_cmd += env_args
 
 if "msil-ilverify" in features:
+    # An image bound to .NET <N> references (msil_references=net8, net10 or
+    # the path of a .NET pack) is verified against the pack it was bound to,
+    # without PEVerify, which cannot load it (plan 5.11.10, bcl-binding 3.5).
     verify_cmd = "%s --ilverify %s --runtime-dir %s --allow %s%s" % (
         script("msil-verify.py"),
         quote(ilverify),
-        quote(local_runtime_dir),
+        quote(ref_runtime_dir if ref_net_major is not None else local_runtime_dir),
         quote(os.path.join(utils_dir, "ilverify-allowed.txt")),
         limits,
     )
-    if peverify:
+    if ref_net_major is not None:
+        verify_cmd += ' --skip-peverify "bound to .NET %d references"' % ref_net_major
+    elif peverify:
         verify_cmd += " --peverify " + quote(peverify)
     # The neutralized pass (msil-verify.py pass 2) reassembles with %ilasm's
     # assembler; msil-verify.py applies the limits itself.
@@ -1683,6 +1976,42 @@ if rt_ildasm:
         quote(rt_ildasm),
         quote(rt_ilasm),
         limits,
+    )
+
+# %msil_check_mscorlib_safe (plan 5.11.7, 5.12.3; M21): the runtimes of this
+# run that the probe of msil/utils/check-mscorlib-safe.py runs on (its
+# --runtimes). With the local runner: the .NET Framework where it is
+# installed (feature msil-netfx), the host's .NET 8 and .NET 10, and the
+# programs' own runtime net<major> (msil_dotnet_runtime or the default one),
+# so the list is never empty where msil-exec holds; with the WSL runner: the
+# programs' runtime inside WSL (wsl-net<major>, on msil_wsl_dotnet's host).
+# The list is empty only without a .NET runtime for the programs, where
+# msil-exec does not hold and msil/test/M2's gate makes the tests that run
+# the script UNSUPPORTED; the command then has no --runtimes (never 'none',
+# which the script rejects) and names the script's default. The gate runs
+# the script with that default (Framework 4.8, .NET 8, .NET 10 and WSL
+# .NET 10) besides.
+if runner == "wsl":
+    safe_runtimes = ["wsl-net%d" % exec_major] if exec_major else []
+else:
+    safe_runtimes = ["netfx"] if "msil-netfx" in features else []
+    safe_majors = {m for m in (8, 10) if m in local_runtimes}
+    if exec_major is not None:
+        safe_majors.add(exec_major)
+    safe_runtimes += ["net%d" % m for m in sorted(safe_majors)]
+mscorlib_safe_cmd = "%s --msil-ld %s --ilasm %s%s%s" % (
+    script("check-mscorlib-safe.py"),
+    quote(msil_ld or "msil-ld-not-found"),
+    quote(ilasm or "ilasm-not-found"),
+    " --runtimes " + ",".join(safe_runtimes) if safe_runtimes else "",
+    limits,
+)
+if dotnet:
+    mscorlib_safe_cmd += " --dotnet " + quote(dotnet)
+if runner == "wsl":
+    mscorlib_safe_cmd += " --wsl-distro %s --wsl-dotnet %s" % (
+        wsl_distro,
+        quote(wsl_dotnet),
     )
 
 clang = clang_path or "clang-not-found"
@@ -1939,8 +2268,12 @@ def dep_args(deps):
 
 # The equivalence oracles (plan 5.12.6; msil_equiv=1): the entries of
 # msil/utils/equiv-allowed.txt that O3 and O4 allow ('scopes' joins both in
-# M21's reference legs).
+# M21's reference legs, msil_references other than none: -S and
+# --lto-emit-asm text print [mscorlib], the link binds to the references;
+# O4 never meets .NET <N> references, with which msil_equiv=1 under lto is a
+# configuration error, see "reference assemblies").
 equiv_allowed = os.path.join(utils_dir, "equiv-allowed.txt")
+REF_ALLOWED = ("scopes",) if ref_dir else ()
 O3_ALLOWED = (
     "assembly-hash",
     "ilasm-params",
@@ -1948,8 +2281,13 @@ O3_ALLOWED = (
     "snan-quiet",
     "pinvoke-module",
     "pinvoke-access",
-)
-O4_ALLOWED = ("assembly-hash", "ilasm-params", "ilasm-initlocals", "snan-quiet")
+) + REF_ALLOWED
+O4_ALLOWED = (
+    "assembly-hash",
+    "ilasm-params",
+    "ilasm-initlocals",
+    "snan-quiet",
+) + REF_ALLOWED
 
 
 def allow_args(names):
@@ -2008,20 +2346,25 @@ def prog_pipeline(level, inputs=PROG_PLACEHOLDERS, deps="%{msil_deps}", single=N
     dep = dep_args(deps)
     o3 = equiv and prog_pipeline_name == "obj" and single
     o4 = equiv and prog_pipeline_name == "lto"
+    # The test's triple and level select the qualified skip lines of
+    # equiv-allowed.txt, as msil-prog.py's --triple and --level do for
+    # --equiv-skip (plan section 12, 'Plan 5.12.6 amended (skip lines)').
+    skip_key = f"--test %s --triple {msil_triple} --level {level}"
     md = ""
     if o3:
         build += asm_reference(level, single)
-        md = f" --md-baseline {t}.d/asm/prog.exe"
+        # O6, unless a 'skip O6' line of equiv-allowed.txt names the test
+        # (plan section 12, 'M21.c extended').
+        md = (
+            f" --equiv-skip {quote(equiv_allowed)} {skip_key}"
+            f" --md-baseline {t}.d/asm/prog.exe"
+        )
     cmd = (
         f"{build} && %msil_verify{md}{dep} {exe}"
         f" %if msil-jitall %{{ && %msil_jitall{dep} {exe} %}}"
         f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out{dep} {exe}"
     )
     cmd += roundtrip_leg(t, exe, dep)
-    # The test's triple and level select the qualified skip lines of
-    # equiv-allowed.txt, as msil-prog.py's --triple and --level do for
-    # --equiv-skip (plan section 12, 'Plan 5.12.6 amended (skip lines)').
-    skip_key = f"--test %s --triple {msil_triple} --level {level}"
     if o3:
         cmd += (
             f" && %msil_equiv --oracle O3 {skip_key}{allow_args(O3_ALLOWED)}"
@@ -2111,9 +2454,30 @@ substitutions = [
     ("%{msil_native_libs}", ""),
     ("%{msil_deps}", ""),
     # The MSIL link's harness flags (plan 5.12.3, M15; see msil_ldflags):
-    # empty on Windows triples, --sysroot=<msil_linux_sysroot> on Linux
-    # triples, so the link reads the default libraries of plan 5.10.4.
-    ("%{msil_ldflags}", msil_ldflags),
+    # --sysroot=<msil_linux_sysroot> on Linux triples, so the link reads the
+    # default libraries of plan 5.10.4, and from M21 %{msil_ref_flags}, the
+    # references of msil_references (see "reference assemblies"). Under
+    # msil_references=none the expansion is M15's (on a Linux triple with a
+    # sysroot followed by a blank, which msil-prog.py and the shell drop).
+    (
+        "%{msil_ldflags}",
+        (msil_ldflags + " " if msil_ldflags else "") + "%{msil_ref_flags}",
+    ),
+    # -Wl,--reference=<dir> per msil_references, else empty (plan 5.12.3).
+    # It stays a placeholder inside %{msil_ldflags}, so a test REDEFINEs it.
+    (
+        "%{msil_ref_flags}",
+        "-Wl,--reference=" + quote(ref_dir) if ref_dir else "",
+    ),
+    # The reference packs for tests that need one whatever the leg
+    # (REQUIRES: msil-refpack=<name>; plan 5.12.3).
+    *[
+        (
+            "%%{msil_ref_dir_%s}" % n,
+            quote(ref_packs[n]) if n in ref_packs else "msil-ref-dir-%s-not-found" % n,
+        )
+        for n in REF_PACKS
+    ],
     # The glibc sysroot of the hosted tests (msil_glibc_sysroot).
     (
         "%{msil_glibc_sysroot}",
@@ -2127,6 +2491,11 @@ substitutions = [
     ),
     ("%msil_ar", quote(msil_ar or "llvm-ar-not-found")),
     ("%msil_nm", quote(msil_nm or "llvm-nm-not-found")),
+    # check-mscorlib-safe.py (plan 5.11.7, 5.12.3; M21): every entry of
+    # msil-ld --print-bcl-table touched through [mscorlib] by a probe that
+    # this configuration's ilasm assembles and that runs on the runtimes of
+    # this run (see mscorlib_safe_cmd); callers add --out and options.
+    ("%msil_check_mscorlib_safe", mscorlib_safe_cmd),
     # -std=gnu17 pins the C dialect against a change of clang's default
     # (C23 rejects the K&R definitions of 11-programs/kr-legacy.c; backlog
     # 3.4). -ffreestanding turns off main's implicit 'return 0'

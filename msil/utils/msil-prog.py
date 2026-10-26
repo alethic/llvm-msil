@@ -73,7 +73,11 @@ ilasm assembles, lto only):
      them all; plan section 12, 'Plan 5.12.6 amended (skip lines)'),
      neither output is built, and it prints
      'msil-prog: <oracle> skipped: <reason>'; msil-equiv.py --test with the
-     same --triple and --level then skips the comparison the same way.
+     same --triple and --level then skips the comparison the same way. A
+     'skip O6' line (plan section 12, 'M21.c extended') is msil-verify.py's:
+     O6 compares the image that runs with the composite's ilasm build, which
+     this script builds neither way, so it changes nothing here, and an O3
+     line does not skip O6.
 
 --mode native builds the same program for the native triple, the oracle of
 plan 5.12.6 (O1): every --src, --stock-src and archive member is an ordinary

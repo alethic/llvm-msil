@@ -570,8 +570,15 @@ static bool namesType(const cli::TypeSig &t) {
   }
 }
 
-// The sections that definitions of the loaded bitcode files name (their
-// irsymtab section names).
+// The sections that definitions of the loaded bitcode files name: their
+// irsymtab section names, and the sections of their local definitions, which
+// the irsymtab does not list. Code generation defines __start_<X> and
+// __stop_<X> for a definition in section <X> whatever its linkage, as the
+// writer does for the segment that a static variable gives an object (plan
+// 5.9.9), so a hidden reference to them links under --lto-emit-asm as it
+// does through objects and object-producing LTO (plan 5.9.6). The modules
+// are read lazily, without function bodies, and only when a link refers to
+// such a name.
 static DenseSet<StringRef> getDefinedSections() {
   DenseSet<StringRef> sections;
   for (BitcodeFile *f : ctx.bitcodeFiles) {
@@ -580,6 +587,27 @@ static DenseSet<StringRef> getDefinedSections() {
     for (const lto::InputFile::Symbol &irSym : f->obj->symbols())
       if (!irSym.isUndefined() && !irSym.getSectionName().empty())
         sections.insert(saver().save(irSym.getSectionName()));
+
+    Expected<std::vector<BitcodeModule>> modsOrErr =
+        getBitcodeModuleList(f->obj->getFileBuffer());
+    if (!modsOrErr) {
+      consumeError(modsOrErr.takeError());
+      continue;
+    }
+    for (BitcodeModule &bm : *modsOrErr) {
+      LLVMContext context;
+      Expected<std::unique_ptr<Module>> mOrErr =
+          bm.getLazyModule(context, /*ShouldLazyLoadMetadata=*/true,
+                           /*IsImporting=*/false);
+      if (!mOrErr) {
+        consumeError(mOrErr.takeError());
+        continue;
+      }
+      for (const GlobalObject &go : (*mOrErr)->global_objects())
+        if (go.hasLocalLinkage() && go.hasSection() &&
+            !go.isDeclarationForLinker())
+          sections.insert(saver().save(go.getSection()));
+    }
   }
   return sections;
 }

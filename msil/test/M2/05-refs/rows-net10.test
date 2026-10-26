@@ -1,0 +1,99 @@
+# The .NET 10 reference pack binds p1prog to System.Runtime, System.Runtime.InteropServices and System.Threading 10.0.0.0; it runs on .NET 10, and .NET 8 and .NET Framework cannot load it.
+# With -Wl,--reference=<the newest Microsoft.NETCore.App.Ref 10.x
+# ref/net10.0> (%{msil_ref_dir_net10}, feature msil-refpack=net10) msil-ld
+# binds p1prog as against the .NET 8 pack (rows-net8.test), with the
+# version 10.0.0.0 of the defining Assembly rows (plan 5.11.6; bcl-binding
+# 2.2): three AssemblyRefs with the token b03f5f7f11d50a3a in first-use
+# order, Marshal scoped to System.Runtime.InteropServices, Interlocked to
+# System.Threading, the other types to System.Runtime, and with the scopes
+# stripped the same canonical listing as the link without references. The
+# composite runs p1prog with the leg's references; the RUN lines after it
+# link it at -O0 and -O2 with the .NET 10 pack, verify it with ILVerify and
+# skip PEVerify (bcl-binding 3.5), force-JIT it on .NET 10 and run it there.
+# CoreCLR binds a framework reference only to an assembly of at least the
+# requested version (bcl-binding 3.3), so .NET 8, whose System.Runtime is
+# 8.0.0.0, cannot load the image: loading <Module>, whose field
+# '<msil>image' has the type '<msil>image_t', which extends
+# [System.Runtime]System.ValueType, fails with FileNotFoundException for
+# System.Runtime 10.0.0.0, and the host's entry-point lookup reports that as
+# System.MissingMethodException ('Entry point not found in assembly
+# 'prog''), before main runs (measured on .NET 8.0.33; bcl-binding 3.1's v03
+# gets FileNotFoundException because its failing type is not <Module>'s, and
+# a class extending [System.Runtime]System.Object 10.0.0.0 gives
+# FileNotFoundException on .NET 8 too). The .NET Framework stops with
+# System.IO.FileNotFoundException, as for the .NET 8 binding. Plan 5.11.6,
+# 5.11.10.
+# REQUIRES: msil-refpack=net10, msil-cil-dump
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p1prog.c
+# RUN: %{msil_prog}
+# DEFINE: %{net10_level} = O0
+# DEFINE: %{net10_none} = \
+# DEFINE:   rm -rf %t.none.%{net10_level}.d \
+# DEFINE:   && %msil_prog_build --level %{net10_level} --link-output pe --workdir %t.none.%{net10_level}.d \
+# DEFINE:      --out %t.none.%{net10_level}.d/prog.exe --src %t/p1prog.c
+# DEFINE: %{net10_check} = \
+# DEFINE:   rm -rf %t.net10.%{net10_level} %t.net10.%{net10_level}.d \
+# DEFINE:   && %msil_prog_build --level %{net10_level} --link-output pe --workdir %t.net10.%{net10_level}.d \
+# DEFINE:      --out %t.net10.%{net10_level}.d/prog.exe --src %t/p1prog.c \
+# DEFINE:   && mkdir -p %t.net10.%{net10_level} \
+# DEFINE:   && %msil_cil_dump --tables %t.net10.%{net10_level}.d/prog.exe > %t.net10.%{net10_level}/tables.txt \
+# DEFINE:   && FileCheck %s --check-prefix=THREE --input-file=%t.net10.%{net10_level}/tables.txt \
+# DEFINE:   && %python %S/Inputs/refrows.py %t.net10.%{net10_level}/tables.txt > %t.net10.%{net10_level}/rows.txt \
+# DEFINE:   && FileCheck %s --check-prefix=ROWS --input-file=%t.net10.%{net10_level}/rows.txt \
+# DEFINE:      --implicit-check-not="-> mscorlib" --implicit-check-not="-> nested" --implicit-check-not="-> 0x" \
+# DEFINE:   && %msil_canon --scopes=strip %t.none.%{net10_level}.d/prog.exe > %t.net10.%{net10_level}/none.txt \
+# DEFINE:   && %msil_canon --scopes=strip %t.net10.%{net10_level}.d/prog.exe > %t.net10.%{net10_level}/net10.txt \
+# DEFINE:   && diff %t.net10.%{net10_level}/none.txt %t.net10.%{net10_level}/net10.txt \
+# DEFINE:   && %msil_verify --skip-peverify "bound to .NET 10 references" %t.net10.%{net10_level}.d/prog.exe \
+# DEFINE:   %if dotnet-runtime-10 %{ %if msil-jitall %{ && %msil_jitall --runtimeconfig %S/Inputs/net10.runtimeconfig.json \
+# DEFINE:      %t.net10.%{net10_level}.d/prog.exe %} \
+# DEFINE:      && %msil_exec --runtimeconfig %S/Inputs/net10.runtimeconfig.json --expect %S/%{s:stem} \
+# DEFINE:      --out %t.net10.%{net10_level}/net10.out %t.net10.%{net10_level}.d/prog.exe %} \
+# DEFINE:   %if dotnet-runtime-8 %{ && %msil_exec --runtimeconfig %S/Inputs/net8.runtimeconfig.json \
+# DEFINE:      --out %t.net10.%{net10_level}/net8.out %t.net10.%{net10_level}.d/prog.exe \
+# DEFINE:      && FileCheck %s --check-prefix=NET8 --input-file=%t.net10.%{net10_level}/net8.out %} \
+# DEFINE:   %if msil-netfx && !msil-wsl %{ && %msil_exec --netfx --out %t.net10.%{net10_level}/netfx.out \
+# DEFINE:      %t.net10.%{net10_level}.d/prog.exe \
+# DEFINE:      && FileCheck %s --check-prefix=NETFX --input-file=%t.net10.%{net10_level}/netfx.out %}
+# REDEFINE: %{msil_ref_flags} =
+# RUN: %{net10_none}
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net10}
+# RUN: %{net10_check}
+# REDEFINE: %{net10_level} = O2
+# REDEFINE: %{msil_ref_flags} =
+# RUN: %{net10_none}
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net10}
+# RUN: %{net10_check}
+# THREE:      {{^}}Table: AssemblyRef rows=3 rowsize={{[0-9]+}}{{$}}
+# ROWS-DAG:   {{^}}assemblyref {{[1-3]}} System.Runtime 10.0.0.0 token=b03f5f7f11d50a3a flags=0x00000000 culture='' hash=-{{$}}
+# ROWS-DAG:   {{^}}assemblyref {{[1-3]}} System.Runtime.InteropServices 10.0.0.0 token=b03f5f7f11d50a3a flags=0x00000000 culture='' hash=-{{$}}
+# ROWS-DAG:   {{^}}assemblyref {{[1-3]}} System.Threading 10.0.0.0 token=b03f5f7f11d50a3a flags=0x00000000 culture='' hash=-{{$}}
+# ROWS-DAG:   {{^}}typeref System.Buffer -> System.Runtime{{$}}
+# ROWS-DAG:   {{^}}typeref System.Threading.Interlocked -> System.Threading{{$}}
+# ROWS-DAG:   {{^}}typeref System.Runtime.InteropServices.Marshal -> System.Runtime.InteropServices{{$}}
+# ROWS-DAG:   {{^}}typeref System.Environment -> System.Runtime{{$}}
+# ROWS-DAG:   {{^}}typeref System.ValueType -> System.Runtime{{$}}
+# ROWS:       {{^}}first use: {{.+}}{{$}}
+# NET8-NOT:   world
+# NET8:       {{^}}[unhandled exception: System.MissingMethodException]{{$}}
+# NETFX-NOT:  world
+# NETFX:      {{^}}[unhandled exception: System.IO.FileNotFoundException]{{$}}
+#--- p1prog.c
+/* llvm/docs/MSIL/recon/p2/bcl-binding-files/runtime/p1prog.c, the program of
+   bcl-binding 1.2 and 3.2. */
+/* Exercises every BCL member Phase 1 emits: the data segment (AllocHGlobal
+   and the RVA image type extending System.ValueType), argv
+   (GetCommandLineArgs, AllocHGlobal, StringToHGlobalAnsi), a variable-length
+   memmove (Buffer::MemoryCopy) and a fence (Interlocked::MemoryBarrier). */
+#include <stddef.h>
+int puts(const char *);
+static char buf[64] = "hello";
+const char *table[] = {buf, "world"};
+int main(int argc, char **argv) {
+  size_t n = (size_t)argc + 3;
+  __builtin_memmove(buf + 1, buf, n);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  puts(table[1]);
+  return argv[0][0] != 0 ? 42 : 1;
+}

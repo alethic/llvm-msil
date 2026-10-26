@@ -112,7 +112,8 @@ static MethodSig getVoidSig() { return MethodSig(); }
 
 /// '<msil>dataimport'(string module, string name) : native int, shaped as
 /// recon/p2/native-imports-files/data-win.il: the native library's handle,
-/// then the export's address (0 when either is missing).
+/// then the export's address (0 when either is missing, except that
+/// NativeLibrary's members throw instead).
 static void buildDataImportHelper(const DataImportHelper &H,
                                   const MethodSig &Sig, TrailerSink &Sink) {
   TrailerMethod M =
@@ -122,19 +123,31 @@ static void buildDataImportHelper(const DataImportHelper &H,
                  Sig);
   ILBuilder &B = M.Body;
   B.emitLdarg(0);
-  if (H.K == DataImportHelper::Kind::Kernel32) {
+  switch (H.K) {
+  case DataImportHelper::Kind::NativeLibrary:
+    // NativeLibrary::Load(string) and GetExport(native int, string) take the
+    // names as strings (M21).
+    B.emitCall(Opcode::Call, tok(H.Load), 1, 1);
+    B.emitLdarg(1);
+    B.emitCall(Opcode::Call, tok(H.GetSymbol), 2, 1);
+    B.emitRet();
+    finish(M, Sink);
+    return;
+  case DataImportHelper::Kind::Kernel32:
     // LoadLibraryW takes the module name in UTF-16.
     B.emitCall(Opcode::Call,
                tok(Sink.getBCLMember(BCLMemberId::Marshal_StringToHGlobalUni)),
                1, 1);
     B.emitCall(Opcode::Call, tok(H.Load), 1, 1);
-  } else {
+    break;
+  case DataImportHelper::Kind::Dlfcn:
     // dlopen(path, RTLD_LAZY): the path in the native narrow encoding.
     B.emitCall(Opcode::Call,
                tok(Sink.getBCLMember(BCLMemberId::Marshal_StringToHGlobalAnsi)),
                1, 1);
     B.emitLdcI4(1);
     B.emitCall(Opcode::Call, tok(H.Load), 2, 1);
+    break;
   }
   // GetProcAddress and dlsym take the export's name in ANSI. The strings
   // live as long as the program, like argv's (D27).
@@ -547,6 +560,10 @@ static void buildEntryPoint(const EntryPoint &E, TrailerSink &Sink) {
   B.emitCall(Opcode::Call, tok(E.Main), E.HasArgs ? 2 : 0, 1);
   B.emitRet();
   finish(M, Sink);
+}
+
+bool cli::skipsNullConstructorSlots(SectionRules Rules) {
+  return Rules == SectionRules::COFF;
 }
 
 unsigned cli::countAddressSlots(ArrayRef<RuntimeReloc> Relocs,

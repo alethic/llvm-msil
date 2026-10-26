@@ -323,6 +323,20 @@ void OutputImage::addRelocations(SymbolBinder &symbols, unsigned threshold,
   }
 }
 
+// True if the 8-byte constructor-table slot at \p off of \p seg is NULL: its
+// bytes are zero (a ZERO segment has none) and no relocation fills any of
+// them (relocation sites hold zeros).
+static bool isNullSlot(const InputSegment &seg, uint64_t off) {
+  if (seg.size - off < 8)
+    return false;
+  for (const MSILLink::Reloc &r : seg.relocs)
+    if (r.Offset < off + 8 && r.Offset + 8 > off)
+      return false;
+  if (seg.bytes.size() < off + 8)
+    return seg.bytes.empty();
+  return all_of(seg.bytes.slice(off, 8), [](uint8_t b) { return b == 0; });
+}
+
 std::vector<std::pair<uint32_t, bool>>
 OutputImage::getConstructors(SymbolBinder &symbols) {
   SmallVector<ConstructorEntry, 0> entries;
@@ -356,13 +370,16 @@ OutputImage::getConstructors(SymbolBinder &symbols) {
   for (auto [input, f] : llvm::enumerate(ctx.objectFiles)) {
     // The 8-byte slots of the constructor-table sections (.init_array* on
     // non-Windows triples, .CRT$XC* on Windows triples): each must hold an
-    // FNADDR64 relocation to a function.
+    // FNADDR64 relocation to a function, except that on Windows triples a
+    // NULL slot is skipped, as the MSVC CRT's _initterm skips it.
     for (InputSegment *seg : f->segments()) {
       if (!contains(seg) || classifySection(seg->sectionName, out.rules) !=
                                 SectionClass::ConstructorTable)
         continue;
       ConstructorKey key = getConstructorKey(seg->sectionName, out.rules);
       for (uint64_t off = 0; off < seg->size; off += 8) {
+        if (skipsNullConstructorSlots(out.rules) && isNullSlot(*seg, off))
+          continue;
         const MSILLink::Reloc *r = nullptr;
         if (seg->size - off >= 8)
           for (const MSILLink::Reloc &x : seg->relocs)

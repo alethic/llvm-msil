@@ -27,13 +27,18 @@
 #   linux:   x86_64-unknown-linux-gnu-msil; .NET 8 and .NET 10, each tiered
 #            and with DOTNET_TieredCompilation=0; msil/test/M1 also at O1,
 #            O3, Os and Oz (more-levels); NuGet ilasm and ildasm; the
-#            ildasm -> ilasm round trip; .expected files vs native; the
-#            update_llc_test_checks tests (utc, run-utc-tests.py)
+#            ildasm -> ilasm round trip; the reference legs (msil-ld binding
+#            the BCL against the .NET Framework 4.8 reference assemblies of
+#            the NuGet package that msil-tools.proj pins, exported as
+#            MSIL_REF_NET48, and against the .NET 8 and 10 targeting packs);
+#            .expected files vs native; the update_llc_test_checks tests (utc,
+#            run-utc-tests.py)
 #   windows: x86_64-pc-windows-msvc-msil; .NET 8 (tiered and
 #            TieredCompilation=0), .NET 10 and .NET Framework 4.8;
 #            msil/test/M1 at O1, O3, Os and Oz on .NET 8 (more-levels);
 #            Framework ilasm, ildasm and PEVerify; the .NET ilasm leg; the
-#            round trip; .expected files vs native; utc; then the upstream
+#            round trip; the reference legs; .expected files vs native; utc;
+#            then the upstream
 #            hook tests (msil/utils/ci/upstream-hooks.ps1 -NoCompile
 #            -NoManifest: action pins, the upstream lit tests of the upstream
 #            files the fork changes, full TargetParserTests and MCTests)
@@ -162,6 +167,24 @@ jobs:
 
           dotnet tool update --global dotnet-ilverify --version "$ilverify_version"
           echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Export the .NET Framework 4.8 reference assemblies (NuGet)
+        run: |
+          # The refs-net48 leg of lit-legs.sh links against them (msil_references=net48, plan
+          # 5.12.12); the restore above fetched microsoft.netframework.referenceassemblies.net48
+          # at MsilNet48RefAssembliesVersion, and lit.cfg.py reads MSIL_REF_NET48.
+          version=$(dotnet msbuild "$MSIL_TOOLS_PROJ" -getProperty:MsilNet48RefAssembliesVersion | tr -d '\r')
+          if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::cannot read MsilNet48RefAssembliesVersion from $MSIL_TOOLS_PROJ (got '$version')"
+            exit 1
+          fi
+          packages=${NUGET_PACKAGES:-$HOME/.nuget/packages}
+          net48=$packages/microsoft.netframework.referenceassemblies.net48/$version/build/.NETFramework/v4.8
+          if [[ ! -f $net48/mscorlib.dll ]]; then
+            echo "::error::$net48/mscorlib.dll not found after 'dotnet restore $MSIL_TOOLS_PROJ'"
+            exit 1
+          fi
+          echo "MSIL_REF_NET48=$net48" >> "$GITHUB_ENV"
 
       - name: Set up sccache
         uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24

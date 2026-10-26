@@ -13,8 +13,9 @@
 ##   under its ImplMap import name (my_fn1 -> foo.dll!fn1), and an
 ##   EXPLICIT_IMPORT stub: module and entry verbatim (mylib.dll!ext_entry);
 ##   both become msil-ld's P/Invoke stubs ('assembly', preservesig, 0x0201);
-## - a MemberRef on a TypeRef scoped to msil.bcl: the BCL stand-in's
-##   '[mscorlib]' member (Buffer::MemoryCopy, Interlocked::MemoryBarrier);
+## - a MemberRef on a TypeRef scoped to msil.bcl: without references the
+##   built-in table's '[mscorlib]' member (5.11.7; Buffer::MemoryCopy,
+##   Interlocked::MemoryBarrier);
 ## - a StandAloneSig: local signatures and the 'calli' signature, re-encoded
 ##   and deduplicated across objects: a.o has three distinct signatures (the
 ##   locals of loop and of main, the calli of indirect) and b.o one, b_ind's
@@ -23,6 +24,10 @@
 ##   a BCL TypeRef: no C code has them, so c.il is object-form text (5.8.4)
 ##   written by hand from llc -msil-object-form output (the record is the
 ##   one llc wrote for 'strings'), assembled by ilasm under '%if ilasm'.
+##   The clause's class, System.Exception, is not in the built-in table, so
+##   that link needs references (5.11.7's error names --reference): it binds
+##   against Inputs/fakepack (FakeCore, FakeInterop, FakeThreading), and
+##   every BCL member of the EXE with it.
 ## Bodies are copied byte for byte and only token operands change, so a
 ## body without tokens (branches, a switch and locals) has the same listing
 ## in the object and in the EXE (5.9.7: msil-ld never relaxes branches or
@@ -133,7 +138,14 @@
 
 ## A user string and an exception clause (object-form text through ilasm).
 # RUN: %if ilasm %{ %ilasm-verify -output=c.o c.il %}
-# RUN: %if ilasm %{ msil-ld --no-gc-sections a.o b.o c.o foo.lib -o eh.exe 2>&1 | count 0 %}
+# RUN: mkdir pack
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o pack/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack/FakeThreading.dll
+# RUN: %if ilasm %{ not msil-ld --no-gc-sections a.o b.o c.o foo.lib -o x.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=EH-TABLE --implicit-check-not=error: %}
+# EH-TABLE: {{^}}msil-ld: error: {{.*}}.NET member '{{.*}}System.Exception{{.*}}' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+# RUN: %if ilasm %{ msil-ld --no-gc-sections a.o b.o c.o foo.lib --reference=pack -o eh.exe 2>&1 | count 0 %}
 # RUN: %if ilasm %{ llvm-cil-dump eh.exe | %{fc} --check-prefix=EH %}
 # EH:      {{^}}  .method 'strings' int32() flags=0x0016 impl=0x0000{{$}}
 # EH-NEXT: {{^}}    .maxstack 1{{( initlocals)?$}}
@@ -144,7 +156,10 @@
 # EH-NEXT: {{^}}    L4: leave.s L5{{$}}
 # EH-NEXT: {{^}}    L5: ldc.i4.7{{$}}
 # EH-NEXT: {{^}}    L6: ret{{$}}
-# EH-NEXT: {{^}}    .try L0 to L3 catch [mscorlib]System.Exception handler L3 to L5{{$}}
+# EH-NEXT: {{^}}    .try L0 to L3 catch [FakeCore]System.Exception handler L3 to L5{{$}}
+# RUN: %if ilasm %{ llvm-cil-dump eh.exe | FileCheck %s --check-prefix=EH-BOUND --implicit-check-not=mscorlib %}
+# EH-BOUND: {{^}}    L{{[0-9]+}}: call void(void*, void*, int64, int64) [FakeCore]System.Buffer::'MemoryCopy'{{$}}
+# EH-BOUND-NEXT: {{^}}    L{{[0-9]+}}: call void() [FakeThreading]System.Threading.Interlocked::'MemoryBarrier'{{$}}
 
 #--- a.ll
 target triple = "x86_64-pc-windows-msvc-msil"

@@ -25,7 +25,7 @@
 # RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/no-why.txt %t/a.dll %t/b.dll > %t/2b.log 2>&1
 # RUN: %{harness_check} contains %t/2b.log "^msil-equiv: error: \S*no-why\.txt:1: entry unjustified has no '# <justification>'$"
 # RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-oracle.txt %t/a.dll %t/b.dll > %t/2c.log 2>&1
-# RUN: %{harness_check} contains %t/2c.log "^msil-equiv: error: \S*bad-oracle\.txt:1: expected 'skip <oracle>\[@<triple>\]\[:<level>\] <test path> <reason>' with the oracle O3 or O4$"
+# RUN: %{harness_check} contains %t/2c.log "^msil-equiv: error: \S*bad-oracle\.txt:1: expected 'skip <oracle>\[@<triple>\]\[:<level>\] <test path> <reason>' with the oracle O3, O4 or O6$"
 # RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/twice.txt %t/a.dll %t/b.dll > %t/2d.log 2>&1
 # RUN: %{harness_check} contains %t/2d.log "^msil-equiv: error: \S*twice\.txt:2: entry once is given twice$"
 

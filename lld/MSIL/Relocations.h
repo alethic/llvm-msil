@@ -12,7 +12,8 @@
 // role for native objects): the address field of every DATA symbol that the
 // output uses, one '<msil>fn_' field per resolved method, one P/Invoke stub
 // per natively bound function and IL signature, and the native data imports
-// with the data-import helper.
+// with the data-import helper (NativeLibrary when the references define it,
+// else the kernel32 or dlopen/dlsym P/Invokes).
 //
 // It also records which symbols the live methods and segments refer to
 // (plan 5.9.11: references from dead units are not reported, as in lld) and
@@ -124,8 +125,11 @@ public:
   // The trailer's '<msil>fn_' fields in 5.9.10's canonical order.
   void addFnAddrFields(llvm::cli::TrailerInput &in);
   // The trailer's data imports (plan 5.10.12), in the order of the objects'
-  // symbol tables, and the helper; reports 5.10.14's text when no helper
-  // is available. Returns false after an error.
+  // symbol tables, and the helper: NativeLibrary's Load and GetExport when
+  // the references define both (BCLBinder::isDefined, M21), else M20's
+  // kernel32 pair on Windows triples or dlopen/dlsym from the native
+  // libraries on ELF triples; reports 5.10.14's text when no helper is
+  // available. Returns false after an error.
   bool addDataImports(llvm::cli::TrailerInput &in);
   // Sets the image offsets of the address fields once the image is final.
   void setImageOffsets();
@@ -135,6 +139,10 @@ public:
 private:
   // The key of a '<msil>fn_' field: the definition's method, or the symbol.
   const void *getFnAddrKey(const Symbol *sym) const;
+  // The NativeLibrary helper (plan 5.10.12) when the references define
+  // NativeLibrary::Load(string) and GetExport(native int, string), bound;
+  // std::nullopt otherwise (and after an error, which is reported).
+  std::optional<llvm::cli::DataImportHelper> getNativeLibraryHelper();
 
   OutputModule &out;
   OutputImage &image;

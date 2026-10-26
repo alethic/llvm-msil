@@ -6,7 +6,8 @@
 ##   '<msil>Main' as its entry point, no COFF symbol table, the Assembly row
 ##   named after the stem of -o (version 0.0.0.0, HashAlgId SHA1 0x8004, no
 ##   public key) and the Module row named after the output file;
-## - the BCL stand-in (5.9.7): the trailer's members and every msil.bcl
+## - without references, msil-ld's built-in table (5.11.7, M21; M20's BCL
+##   stand-in before it): the trailer's members and every msil.bcl
 ##   reference become '[mscorlib]' 4.0.0.0 b77a5c561934e089 (D10), and no
 ##   placeholder survives: no msil.extern, msil.bcl, msil.link or
 ##   msil.unresolved scope, no '<msil>Symbols', '<msil>FnAddr' or

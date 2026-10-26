@@ -1,0 +1,77 @@
+## Hidden DATA references to linker-defined __start_X/__stop_X (M21.a's
+## follow-up of M20, the section 12 row 'M21.a extended (M20 follow-up 3)';
+## ImplementationPlan.md 5.9.6, 5.9.9, 5.9.11): the object link, the LTO
+## link and --lto-emit-asm of one input agree.
+## hiddata.c is
+##   __attribute__((section("foo"), used)) int x = 1;
+##   extern int __start_foo[] __attribute__((visibility("hidden")));
+##   extern int __stop_foo[] __attribute__((visibility("hidden")));
+##   int main(void) { return (int)(__stop_foo - __start_foo); }
+## (clang -O2 -S -emit-llvm; its IR below):
+## - on x86_64-unknown-linux-gnu-msil the section's bounds are defined by the
+##   link (lld/ELF's rule), so all three links succeed, and the text has the
+##   two address fields;
+## - on x86_64-pc-windows-msvc-msil nothing defines them, and all three
+##   report 'undefined hidden symbol: <s>' for both, naming main.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj lnx.ll -o lnx.o
+# RUN: llvm-as lnx.ll -o lnx.bc
+# RUN: llc -filetype=obj win.ll -o win.o
+# RUN: llvm-as win.ll -o win.bc
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error:
+
+## Linux: the three links succeed.
+# RUN: msil-ld lnx.o -o lnx.exe 2>&1 | count 0
+# RUN: msil-ld lnx.bc -o lnx-lto.exe 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm lnx.bc -o lnx.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=TEXT --input-file=lnx.il
+# TEXT-DAG: {{^}}.field {{.*}}static {{(initonly )?}}native int '__start_foo'
+# TEXT-DAG: {{^}}.field {{.*}}static {{(initonly )?}}native int '__stop_foo'
+# RUN: llvm-cil-dump lnx.exe | FileCheck %s --check-prefix=PE
+# RUN: llvm-cil-dump lnx-lto.exe | FileCheck %s --check-prefix=PE
+# PE-DAG: {{^}}  .field '__start_foo' native int flags=0x{{[0-9A-F]+}}{{$}}
+# PE-DAG: {{^}}  .field '__stop_foo' native int flags=0x{{[0-9A-F]+}}{{$}}
+
+## Windows: the same error from the three links.
+# RUN: not msil-ld win.o -o x.exe 2>&1 | %{fc} --check-prefix=WIN -DFILE=win.o
+# RUN: not msil-ld win.bc -o x.exe 2>&1 | %{fc} --check-prefix=WIN -DFILE=win.bc
+# RUN: not msil-ld --lto-emit-asm win.bc -o x.il 2>&1 | %{fc} --check-prefix=WIN -DFILE=win.bc
+# WIN-DAG: {{^}}msil-ld: error: undefined hidden symbol: __start_foo{{$}}
+# WIN-DAG: {{^}}msil-ld: error: undefined hidden symbol: __stop_foo{{$}}
+# WIN-DAG: {{^}}>>> referenced by [[FILE]]:(main){{$}}
+
+#--- lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@x = global i32 1, section "foo", align 4
+@__stop_foo = external hidden global [0 x i32], align 4
+@__start_foo = external hidden global [0 x i32], align 4
+@llvm.used = appending global [1 x ptr] [ptr @x], section "llvm.metadata"
+
+define i32 @main() {
+entry:
+  %sub.ptr.div = lshr exact i64 sub (i64 ptrtoaddr (ptr @__stop_foo to i64), i64 ptrtoaddr (ptr @__start_foo to i64)), 2
+  %conv = trunc i64 %sub.ptr.div to i32
+  ret i32 %conv
+}
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@x = global i32 1, section "foo", align 4
+@__stop_foo = external hidden global [0 x i32], align 4
+@__start_foo = external hidden global [0 x i32], align 4
+@llvm.used = appending global [1 x ptr] [ptr @x], section "llvm.metadata"
+
+define i32 @main() {
+entry:
+  %sub.ptr.div = lshr exact i64 sub (i64 ptrtoaddr (ptr @__stop_foo to i64), i64 ptrtoaddr (ptr @__start_foo to i64)), 2
+  %conv = trunc i64 %sub.ptr.div to i32
+  ret i32 %conv
+}

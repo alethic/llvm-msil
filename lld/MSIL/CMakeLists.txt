@@ -3,6 +3,8 @@ tablegen(LLVM Options.inc -gen-opt-parser-defs)
 add_public_tablegen_target(MSILOptionsTableGen)
 
 add_lld_library(lldMSIL
+  AssemblyFiles.cpp
+  BCLBinder.cpp
   Driver.cpp
   InputChunks.cpp
   InputFiles.cpp
@@ -11,6 +13,7 @@ add_lld_library(lldMSIL
   MarkLive.cpp
   NativeLibraries.cpp
   OutputSegment.cpp
+  ReferenceSet.cpp
   Relocations.cpp
   Signatures.cpp
   SymbolTable.cpp

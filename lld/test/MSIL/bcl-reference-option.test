@@ -1,0 +1,238 @@
+## Reference assemblies on msil-ld's command line (ImplementationPlan.md
+## 5.11.1, 5.9.3, 5.9.4, 5.11.2; M21.a items 2-5; texts of 5.9.14 and 5.11.9):
+## - --reference=<path> and --reference <path> (EEq, repeatable) take a file
+##   or a directory; a directory contributes every '*.dll' in it that has CLI
+##   metadata, not recursively, and skips other files silently (here a text
+##   file and a native DLL, both named '*.dll', and a '.txt' file); an
+##   assembly named Second.exe and a core library in a subdirectory, both a
+##   second core library, would make the link fail if they were read;
+## - an explicitly named file without CLI metadata is
+##   '<path>: not a .NET assembly', also when it lies in a directory that is
+##   given too, in either order (a directory skips it silently, an explicit
+##   name does not);
+## - the same path twice, or a file and its directory, is read once: no
+##   diagnostic, the same output;
+## - a positional .NET assembly without the toolchain's symbol table is a
+##   reference too, so positional and --reference inputs give equal PEs
+##   (M21 retires M20's error for such inputs);
+## - a library built by this toolchain (an Assembly-row uint8[] attribute of
+##   class '<msil>SymbolTable', Inputs/fakepack/ToolLib.il) is skipped under
+##   --reference with the warning
+##   '<path> is a library built by this toolchain; pass it as a link input instead'
+##   and given positionally is the error
+##   '<path>: linking .NET libraries built by this toolchain is not supported yet';
+## - a .NET assembly inside an archive, a reference or a toolchain library,
+##   is not a link input and never a reference (section 12 row 2026-10-26,
+##   '5.9.4 and 5.9.14 amended (.NET assemblies in archives ...)'): each such
+##   member gives the warning
+##   '<archive>(<member>): .NET assemblies in archives are not linked; ignored'
+##   with or without --whole-archive, and the link goes on without it, so it
+##   uses the built-in table and equals the link without the archive (refs.a
+##   holds the pack's three DLLs, tool.a toollib.dll, mix.a the CIL object
+##   helper.o, which main-helper.o needs, and FakeCore.dll);
+## - -r stays M14's error;
+## - --print-bcl-table needs no input and prints the built-in [mscorlib]
+##   table (5.11.7): one line per mscorlib-safe BCLMembers.def entry in .def
+##   order, 'type ' or 'method ' and cli::printBCLMemberRef's text for scope
+##   mscorlib. Those are M18's entries (System.ValueType, the four owner
+##   types, the five Phase 1 methods), then M20's (StringToHGlobalUni,
+##   EntryPointNotFoundException and its constructor, System.Object); M21's
+##   NativeLibrary entries are not mscorlib-safe and are not listed.
+## The pack is Inputs/fakepack (gen.py): FakeCore (the core library),
+## FakeInterop (Marshal) and FakeThreading (Interlocked). p1.o requests every
+## Phase 1 member (data with a relocation, a variable-length memmove, a fence
+## and main(int, char **)), so the link binds all three; with the pack its
+## listing equals the listing without references up to scopes.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj p1.ll -o p1.o
+# RUN: mkdir pack pack/sub
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o pack/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeMscorlib.yaml -o pack/sub/mscorlib.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeMscorlib.yaml -o pack/Second.exe
+# RUN: cp notes.txt pack/notes.dll
+# RUN: cp notes.txt pack/notes.txt
+# RUN: %python %S/Inputs/make-pe.py --dll pack/native.dll
+# RUN: %python %S/Inputs/make-pe.py --dll native.dll
+# RUN: yaml2obj %S/Inputs/fakepack/ToolLib.yaml -o toollib.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{one} = --implicit-check-not=error: --implicit-check-not=warning:
+
+## A directory, in both spellings.
+# RUN: mkdir dir sep files pos twice same tool
+# RUN: msil-ld p1.o --reference=pack -o dir/prog.exe 2>&1 | count 0
+# RUN: msil-ld p1.o --reference pack -o sep/prog.exe 2>&1 | count 0
+# RUN: cmp dir/prog.exe sep/prog.exe
+# RUN: llvm-cil-dump dir/prog.exe > dir.txt
+# RUN: FileCheck %s --check-prefix=BOUND --input-file=dir.txt --implicit-check-not='[mscorlib]' \
+# RUN:   --implicit-check-not="assemblyref 'mscorlib'"
+# BOUND:     {{^}}assemblyref 'FakeCore' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# BOUND-NEXT: {{^}}assemblyref 'FakeInterop' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# BOUND-NEXT: {{^}}assemblyref 'FakeThreading' ver 8.1.2.3 flags=0x00000000 key=31 BF 38 56 AD 36 4E 35 culture=''{{$}}
+# BOUND-EMPTY:
+# BOUND:     {{^}}    L{{[0-9]+}}: call native int(native int) [FakeInterop]System.Runtime.InteropServices.Marshal::'AllocHGlobal'{{$}}
+# BOUND:     {{^}}    L{{[0-9]+}}: call string[]() [FakeCore]System.Environment::'GetCommandLineArgs'{{$}}
+# BOUND:     {{^}}    L{{[0-9]+}}: call native int(string) [FakeInterop]System.Runtime.InteropServices.Marshal::'StringToHGlobalAnsi'{{$}}
+# BOUND:     {{^}}    L{{[0-9]+}}: call void(void*, void*, int64, int64) [FakeCore]System.Buffer::'MemoryCopy'{{$}}
+# BOUND-NEXT: {{^}}    L{{[0-9]+}}: call void() [FakeThreading]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+# BOUND:     {{^}}.class '<msil>image_t' flags=0x00000110 extends [FakeCore]System.ValueType{{$}}
+
+## Binding changes the scopes and nothing else: the listing without
+## references, scopes stripped (5.7.10 --scopes=strip), is the same.
+# RUN: mkdir none
+# RUN: msil-ld p1.o -o none/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --scopes=strip none/prog.exe > none-strip.txt
+# RUN: llvm-cil-dump --scopes=strip dir/prog.exe > dir-strip.txt
+# RUN: diff none-strip.txt dir-strip.txt
+
+## Each file named, both spellings mixed, and the same files positionally.
+# RUN: msil-ld p1.o --reference=pack/FakeCore.dll --reference pack/FakeInterop.dll \
+# RUN:   --reference=pack/FakeThreading.dll -o files/prog.exe 2>&1 | count 0
+# RUN: cmp dir/prog.exe files/prog.exe
+# RUN: msil-ld p1.o pack/FakeCore.dll pack/FakeInterop.dll pack/FakeThreading.dll -o pos/prog.exe 2>&1 | count 0
+# RUN: cmp dir/prog.exe pos/prog.exe
+
+## The same path twice, and a file of a directory also named on its own.
+# RUN: msil-ld p1.o --reference=pack --reference=pack -o twice/prog.exe 2>&1 | count 0
+# RUN: cmp dir/prog.exe twice/prog.exe
+# RUN: msil-ld p1.o --reference=pack/FakeCore.dll --reference=pack/FakeCore.dll --reference=pack \
+# RUN:   -o same/prog.exe 2>&1 | count 0
+# RUN: cmp dir/prog.exe same/prog.exe
+
+## A file without CLI metadata, named explicitly; a missing one.
+# RUN: not msil-ld p1.o --reference=pack --reference=notes.txt -o x.exe 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=NOT-NET -DFILE=notes.txt
+# RUN: not msil-ld p1.o --reference=pack --reference=native.dll -o x.exe 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=NOT-NET -DFILE=native.dll
+# NOT-NET: {{^}}msil-ld: error: [[FILE]]: not a .NET assembly{{$}}
+
+## The same files inside pack/, which the directory skips: named
+## explicitly they are the error whether pack comes first or last.
+# RUN: not msil-ld p1.o --reference=pack --reference=pack/notes.dll -o x.exe 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=NOT-NET -DFILE=pack/notes.dll
+# RUN: not msil-ld p1.o --reference=pack/notes.dll --reference=pack -o x.exe 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=NOT-NET -DFILE=pack/notes.dll
+# RUN: not msil-ld p1.o --reference=pack --reference=pack/native.dll -o x.exe 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=NOT-NET -DFILE=pack/native.dll
+# RUN: not msil-ld p1.o --reference=pack/native.dll --reference=pack -o x.exe 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=NOT-NET -DFILE=pack/native.dll
+# RUN: not msil-ld p1.o --reference=pack --reference=missing.dll -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=MISSING
+# MISSING: {{^}}msil-ld: error: {{.*}}missing.dll
+
+## A toolchain library: skipped with a warning under --reference, an error
+## as a link input.
+# RUN: msil-ld p1.o --reference=toollib.dll --reference=pack -o tool/prog.exe 2>&1 \
+# RUN:   | %{fc} --implicit-check-not=error: --check-prefix=TOOL-REF
+# TOOL-REF: {{^}}msil-ld: warning: toollib.dll is a library built by this toolchain; pass it as a link input instead{{$}}
+# RUN: cmp dir/prog.exe tool/prog.exe
+# RUN: not msil-ld p1.o toollib.dll --reference=pack -o x.exe 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=TOOL-INPUT
+# TOOL-INPUT: {{^}}msil-ld: error: toollib.dll: linking .NET libraries built by this toolchain is not supported yet{{$}}
+
+## .NET assemblies in archives: a warning per member, the built-in table,
+## and the same PE as without the archive (none/prog.exe for p1.o; for mix.a
+## the link that names helper.o directly), with and without --whole-archive.
+# RUN: llvm-ar rc refs.a pack/FakeCore.dll pack/FakeInterop.dll pack/FakeThreading.dll
+# RUN: llvm-ar rc tool.a toollib.dll
+# RUN: llc -filetype=obj main-helper.ll -o main-helper.o
+# RUN: llc -filetype=obj helper.ll -o helper.o
+# RUN: llvm-ar rc mix.a helper.o pack/FakeCore.dll
+# RUN: mkdir ar-refs ar-refs-w ar-tool ar-tool-w helper ar-mix ar-mix-w
+# RUN: msil-ld p1.o refs.a -o ar-refs/prog.exe 2>&1 | %{fc} %{one} --check-prefix=AR-REFS
+# RUN: msil-ld p1.o --whole-archive refs.a -o ar-refs-w/prog.exe 2>&1 | %{fc} %{one} --check-prefix=AR-REFS
+# AR-REFS:      {{^}}msil-ld: warning: refs.a(FakeCore.dll): .NET assemblies in archives are not linked; ignored{{$}}
+# AR-REFS-NEXT: {{^}}msil-ld: warning: refs.a(FakeInterop.dll): .NET assemblies in archives are not linked; ignored{{$}}
+# AR-REFS-NEXT: {{^}}msil-ld: warning: refs.a(FakeThreading.dll): .NET assemblies in archives are not linked; ignored{{$}}
+# RUN: cmp none/prog.exe ar-refs/prog.exe
+# RUN: cmp none/prog.exe ar-refs-w/prog.exe
+# RUN: msil-ld p1.o tool.a -o ar-tool/prog.exe 2>&1 | %{fc} %{one} --check-prefix=AR-TOOL
+# RUN: msil-ld p1.o --whole-archive tool.a -o ar-tool-w/prog.exe 2>&1 | %{fc} %{one} --check-prefix=AR-TOOL
+# AR-TOOL: {{^}}msil-ld: warning: tool.a(toollib.dll): .NET assemblies in archives are not linked; ignored{{$}}
+# RUN: cmp none/prog.exe ar-tool/prog.exe
+# RUN: cmp none/prog.exe ar-tool-w/prog.exe
+# RUN: msil-ld main-helper.o helper.o -o helper/prog.exe 2>&1 | count 0
+# RUN: msil-ld main-helper.o mix.a -o ar-mix/prog.exe 2>&1 | %{fc} %{one} --check-prefix=AR-MIX
+# RUN: msil-ld main-helper.o --whole-archive mix.a -o ar-mix-w/prog.exe 2>&1 | %{fc} %{one} --check-prefix=AR-MIX
+# AR-MIX: {{^}}msil-ld: warning: mix.a(FakeCore.dll): .NET assemblies in archives are not linked; ignored{{$}}
+# RUN: cmp helper/prog.exe ar-mix/prog.exe
+# RUN: cmp helper/prog.exe ar-mix-w/prog.exe
+# RUN: llvm-cil-dump ar-mix/prog.exe | FileCheck %s --check-prefix=AR-BUILTIN --implicit-check-not=FakeCore \
+# RUN:   --implicit-check-not=assemblyref
+# AR-BUILTIN: {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+# AR-BUILTIN: {{^}}    L{{[0-9]+}}: call void() [mscorlib]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+
+## -r is still rejected while the options are read.
+# RUN: not msil-ld --reference=pack -r p1.o -o x.exe 2>&1 | %{fc} %{one} --check-prefix=RELOC
+# RELOC: {{^}}msil-ld: error: -r is not supported{{$}}
+
+## --print-bcl-table: no input, exit status 0, nothing on stderr.
+# RUN: msil-ld --print-bcl-table > table.txt 2> table-err.txt
+# RUN: count 0 < table-err.txt
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=table.txt
+# TABLE:      {{^}}type [mscorlib]System.ValueType{{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Runtime.InteropServices.Marshal{{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Environment{{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Buffer{{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Threading.Interlocked{{$}}
+# TABLE-NEXT: {{^}}method native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int){{$}}
+# TABLE-NEXT: {{^}}method native int [mscorlib]System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string){{$}}
+# TABLE-NEXT: {{^}}method string[] [mscorlib]System.Environment::GetCommandLineArgs(){{$}}
+# TABLE-NEXT: {{^}}method void [mscorlib]System.Buffer::MemoryCopy(void*, void*, int64, int64){{$}}
+# TABLE-NEXT: {{^}}method void [mscorlib]System.Threading.Interlocked::MemoryBarrier(){{$}}
+# TABLE-NEXT: {{^}}method native int [mscorlib]System.Runtime.InteropServices.Marshal::StringToHGlobalUni(string){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.EntryPointNotFoundException{{$}}
+# TABLE-NEXT: {{^}}method instance void [mscorlib]System.EntryPointNotFoundException::.ctor(string){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Object{{$}}
+# TABLE-NOT:  {{.}}
+
+#--- notes.txt
+Not an assembly.
+
+#--- main-helper.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare void @helper()
+
+define i32 @main() {
+  call void @helper()
+  ret i32 0
+}
+
+#--- helper.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @helper() {
+  fence seq_cst
+  ret void
+}
+
+#--- p1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@buf = global [16 x i8] c"0123456789abcdef", align 1
+@ptr = global ptr @buf, align 8
+
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+
+define void @shift(i64 %n) {
+  %p = load ptr, ptr @ptr
+  %q = getelementptr i8, ptr %p, i64 1
+  call void @llvm.memmove.p0.p0.i64(ptr %q, ptr %p, i64 %n, i1 false)
+  fence seq_cst
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %a = sext i32 %argc to i64
+  call void @shift(i64 %a)
+  %p = load ptr, ptr @ptr
+  %c = load i8, ptr %p
+  %r = zext i8 %c to i32
+  ret i32 %r
+}

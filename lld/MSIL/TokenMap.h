@@ -60,7 +60,10 @@ struct TokenTarget {
     // share their target's).
     FnAddr,
     // A MemberRef on another TypeRef, a TypeRef, a TypeSpec or a MethodSpec:
-    // what the BCL binder (plan 5.11, M21) or M20's stand-in makes of it.
+    // what the BCL binder (BCLBinder.h, plan 5.11) makes of it. CIL objects
+    // carry no custom attribute that the output copies (the link-info
+    // carrier stays behind); one that a later input kind brings has its
+    // System.Type arguments rewritten by BCLBinder::rewriteAttributeBlob.
     BCL,
     // A TypeDef: in Phase 2 objects only '<Module>' (row 1).
     TypeDef,
@@ -104,8 +107,9 @@ struct TokenTarget {
   const llvm::cli::MethodSig *signature = nullptr;
   // Method: the row's SIGNATURES entry, or null.
   const llvm::MSILLink::SignatureInfo *signatureInfo = nullptr;
-  // BCL: the name of the AssemblyRef that scopes the row's TypeRef
-  // (msil.bcl for BCL requests; any other name needs --reference).
+  // BCL: the name of the AssemblyRef that scopes the row's TypeRef: msil.bcl
+  // in llc's objects; the binder binds any name but the placeholders' by the
+  // type's name (plan 5.11.5).
   StringRef scope;
   // StandAloneSig: the signature blob.
   ArrayRef<uint8_t> blob;

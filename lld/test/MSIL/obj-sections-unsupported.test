@@ -16,6 +16,8 @@
 ##   (a variable placed in a section named '.tdata' is one too);
 ## - an 8-byte constructor-table slot without an FNADDR64 relocation is
 ##     constructor table entry at <section>+<off> in <file> is not a function address
+##   (from M21 a NULL slot of a '.CRT$XC*' section on a Windows triple is
+##   skipped instead, as the MSVC CRT skips it: obj-ctors-null.test);
 ## Every such segment is kept alive here (llvm.used), so the errors cannot
 ## depend on --gc-sections. Without llvm.used, the '.preinit_array' slot is
 ## reported too: 5.9.11's table roots keep every segment of an unsupported

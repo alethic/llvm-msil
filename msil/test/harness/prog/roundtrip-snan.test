@@ -1,0 +1,127 @@
+# The ildasm -> ilasm round trip of msil-ld outputs (msil-verify.py
+# --roundtrip; Design.md 5.5, oracle O2 of plan 5.12.6; section 12, 'M21.c
+# extended'): both ilasms quiet a float32 signaling NaN constant, so the
+# reassembled image of a program whose ldc.r4 operand is one (msil-ld and the
+# MC encoder keep its bits) disassembles to the same instruction with bit 22
+# set: '(01 00 80 7F)' comes back as '(01 00 C0 7F)'
+# (msil/test/M2/07-equiv/o3-single.test under msil_pipeline=obj with
+# msil_roundtrip=1 failed on exactly that after M20). --roundtrip accepts that
+# quieting, line for line, and nothing else. Inputs/snan-roundtrip.py compare
+# runs msil-verify.py's listing comparison on two hand-written listings:
+# (1) accepted: a quieted operand printed as bytes; quieted operands printed
+#     as float32(0x...), one of them negative; an operand that the second
+#     listing keeps signaling (an ilasm that does not quiet);
+# (2) rejected, each with the unified diff --roundtrip prints: another payload,
+#     a quiet NaN that changes, the reverse change (quiet to signaling), a
+#     float64 operand (ilasm keeps those; ldc.r8), a change of form (bytes to
+#     float32(0x...)), the same bytes in a .data directive, another
+#     instruction offset, a listing of another length, and a quieted operand
+#     next to another changed line, where the diff names only that line;
+# (3) end to end, with the .NET ildasm and ilasm that msil-tools.proj pins
+#     (feature msil-roundtrip-tools, %{prog_roundtrip}): an image whose ldc.r4
+#     operand is patched to the signaling NaN 0x7F800001 after ilasm built it
+#     round-trips, msil-verify.py -v counts the quieted constant, and both
+#     images run.
+# REQUIRES: msil-ilasm, msil-dotnet
+
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{compare} = %python %S/Inputs/snan-roundtrip.py compare
+
+# (1)
+# RUN: %{compare} %t/q-bytes.a %t/q-bytes.b > %t/1a.log
+# RUN: %{harness_check} contains %t/1a.log "\Aequal up to 1 quieted float32 signaling NaN\n\Z"
+# RUN: %{compare} %t/q-hex.a %t/q-hex.b > %t/1b.log
+# RUN: %{harness_check} contains %t/1b.log "\Aequal up to 2 quieted float32 signaling NaNs\n\Z"
+# RUN: %{compare} %t/q-bytes.a %t/q-bytes.a > %t/1c.log
+# RUN: %{harness_check} contains %t/1c.log "\Aequal up to 0 quieted float32 signaling NaNs\n\Z"
+
+# (2)
+# RUN: %{harness_check} exits 1 %{compare} %t/q-bytes.a %t/n-payload.b > %t/2a.log
+# RUN: %{harness_check} contains %t/2a.log "\Adiffer\n" "^-  IL_0000:  ldc\.r4     \(01 00 80 7F\)$" "^\+  IL_0000:  ldc\.r4     \(02 00 C0 7F\)$"
+# RUN: %{harness_check} exits 1 %{compare} %t/n-qnan.a %t/n-qnan.b > %t/2b.log
+# RUN: %{harness_check} contains %t/2b.log "^\+  IL_0000:  ldc\.r4     \(03 00 C0 7F\)$"
+# RUN: %{harness_check} exits 1 %{compare} %t/n-qnan.a %t/q-bytes.a > %t/2c.log
+# RUN: %{harness_check} contains %t/2c.log "^\+  IL_0000:  ldc\.r4     \(01 00 80 7F\)$"
+# RUN: %{harness_check} exits 1 %{compare} %t/n-r8.a %t/n-r8.b > %t/2d.log
+# RUN: %{harness_check} contains %t/2d.log "^\+  IL_0000:  ldc\.r8     \(01 00 00 00 00 00 F8 7F\)$"
+# RUN: %{harness_check} exits 1 %{compare} %t/q-bytes.a %t/n-form.b > %t/2e.log
+# RUN: %{harness_check} contains %t/2e.log "^\+  IL_0000:  ldc\.r4     float32\(0x7FC00001\)$"
+# RUN: %{harness_check} exits 1 %{compare} %t/n-data.a %t/n-data.b > %t/2f.log
+# RUN: %{harness_check} contains %t/2f.log "^\+\.data cil I_0 = bytearray \(01 00 C0 7F\)$"
+# RUN: %{harness_check} exits 1 %{compare} %t/q-bytes.a %t/n-offset.b > %t/2g.log
+# RUN: %{harness_check} contains %t/2g.log "^\+  IL_0001:  ldc\.r4     \(01 00 C0 7F\)$"
+# RUN: %{harness_check} exits 1 %{compare} %t/q-bytes.a %t/n-length.b > %t/2h.log
+# RUN: %{harness_check} contains %t/2h.log "^\+  IL_0006:  ret$"
+# RUN: %{harness_check} exits 1 %{compare} %t/q-bytes.a %t/n-other.b > %t/2i.log
+# RUN: %{harness_check} contains %t/2i.log "^-  IL_0005:  pop$" "^\+  IL_0005:  dup$"
+# RUN: %{harness_check} lacks %t/2i.log "^[-+] .*ldc\.r4"
+
+# (3)
+# RUN: %ilasm -exe -output=%t/snan.exe %t/snan.il
+# RUN: %python %S/Inputs/snan-roundtrip.py patch %t/snan.exe 78563412 0100807F
+# RUN: %msil_exec --out %t/snan.out %t/snan.exe
+# RUN: %{harness_check} equals %t/snan.out "[exit 5]"
+# RUN: %if msil-roundtrip-tools %{ %{prog_roundtrip} -v --output=%t/snan.rt.exe %t/snan.exe > %t/3.log 2>&1 %}
+# RUN: %if msil-roundtrip-tools %{ %{harness_check} contains %t/3.log "^msil-verify: round trip: \S*snan\.exe -> \S*snan\.rt\.exe, \d+ listing lines identical up to 1 float32 signaling NaN constant that ilasm quieted$" %}
+# RUN: %if msil-roundtrip-tools %{ %msil_exec --out %t/snan.rt.out %t/snan.rt.exe %}
+# RUN: %if msil-roundtrip-tools %{ %{harness_check} equals %t/snan.rt.out "[exit 5]" %}
+
+#--- q-bytes.a
+  IL_0000:  ldc.r4     (01 00 80 7F)
+  IL_0005:  pop
+#--- q-bytes.b
+  IL_0000:  ldc.r4     (01 00 C0 7F)
+  IL_0005:  pop
+#--- q-hex.a
+  IL_0000:  ldc.r4     float32(0x7F800001)
+  IL_0005:  ldc.r4     float32(0xFFA00000)
+#--- q-hex.b
+  IL_0000:  ldc.r4     float32(0x7FC00001)
+  IL_0005:  ldc.r4     float32(0xFFE00000)
+#--- n-payload.b
+  IL_0000:  ldc.r4     (02 00 C0 7F)
+  IL_0005:  pop
+#--- n-qnan.a
+  IL_0000:  ldc.r4     (01 00 C0 7F)
+  IL_0005:  pop
+#--- n-qnan.b
+  IL_0000:  ldc.r4     (03 00 C0 7F)
+  IL_0005:  pop
+#--- n-r8.a
+  IL_0000:  ldc.r8     (01 00 00 00 00 00 F0 7F)
+  IL_0009:  pop
+#--- n-r8.b
+  IL_0000:  ldc.r8     (01 00 00 00 00 00 F8 7F)
+  IL_0009:  pop
+#--- n-form.b
+  IL_0000:  ldc.r4     float32(0x7FC00001)
+  IL_0005:  pop
+#--- n-data.a
+.data cil I_0 = bytearray (01 00 80 7F)
+#--- n-data.b
+.data cil I_0 = bytearray (01 00 C0 7F)
+#--- n-offset.b
+  IL_0001:  ldc.r4     (01 00 C0 7F)
+  IL_0005:  pop
+#--- n-length.b
+  IL_0000:  ldc.r4     (01 00 C0 7F)
+  IL_0005:  pop
+  IL_0006:  ret
+#--- n-other.b
+  IL_0000:  ldc.r4     (01 00 C0 7F)
+  IL_0005:  dup
+#--- snan.il
+// ldc.r4 of a marker that the test patches into the signaling NaN
+// 0x7F800001 after ilasm built the image (ilasm itself would quiet it).
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly snan { }
+.module snan.exe
+.method public static int32 main() cil managed
+{
+  .entrypoint
+  .maxstack 1
+  ldc.r4 float32(0x12345678)
+  pop
+  ldc.i4.5
+  ret
+}

@@ -4,7 +4,7 @@
 ## --msil-type-member-limit=<n> lowers both limits for tests. Past the
 ## limit, methods and fields move to '<msil>Spill<N>' classes (N from 1;
 ## 'private abstract sealed auto ansi', flags 0x180, extending
-## [mscorlib]System.Object through the BCL stand-in):
+## [mscorlib]System.Object through the built-in table, 5.11.7):
 ## - no class has more members than the limit;
 ## - '<Module>' keeps '.cctor', '<msil>Main' and the other private trailer
 ##   members ('<msil>data', '<msil>image');
@@ -15,9 +15,14 @@
 ##   code may read them), and 'private' (0x0031) without one, as -S writes
 ##   them (O3);
 ## - code names the members in their new classes, and the TypeDef rows are
-##   '<Module>', then the spill classes, then '<msil>image_t'.
+##   '<Module>', then the spill classes, then '<msil>image_t';
+## - with references the spill classes extend the bound System.Object
+##   (M21.b item 6, 5.11.6): every '<msil>Spill<N>' extends
+##   [FakeCore]System.Object of the fake pack (Inputs/fakepack), whose
+##   AssemblyRef row is written, and nothing names [mscorlib].
 ## msil/test/M2/00-link/spill-limits.test runs the real limits (M20.g).
-## Inputs/members.py lists the classes and members and checks the limit.
+## Inputs/members.py lists the classes and members and checks the limit and
+## the spill classes' base type.
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -25,7 +30,7 @@
 
 # RUN: msil-ld --msil-type-member-limit=6 sp.o -o spill.exe 2>&1 | count 0
 # RUN: llvm-cil-dump spill.exe > spill.txt
-# RUN: %python %S/Inputs/members.py --limit 6 spill.txt > members.txt
+# RUN: %python %S/Inputs/members.py --limit 6 --spill-base '[mscorlib]System.Object' spill.txt > members.txt
 # RUN: FileCheck %s --check-prefix=MEMBERS --input-file=members.txt
 # RUN: FileCheck %s --check-prefix=SPILL-NONE --input-file=members.txt
 # RUN: FileCheck %s --check-prefix=FNFIELD --input-file=members.txt
@@ -41,6 +46,7 @@
 # MEMBERS:     {{^}}class <msil>Spill1 flags=0x00000180 extends=[mscorlib]System.Object{{$}}
 # MEMBERS:     {{^}}field <msil>Spill{{[0-9]+}}::g{{[0-9]}} flags=0x0016{{$}}
 # MEMBERS:     {{^}}limit 6 ok{{$}}
+# MEMBERS-NEXT: {{^}}spill base [mscorlib]System.Object ok ({{[0-9]+}} classes){{$}}
 
 # FNFIELD: {{^}}field {{<Module>::<msil>fn_f0 flags=0x0033|<msil>Spill[0-9]+::<msil>fn_f0 flags=0x0013}}{{$}}
 
@@ -61,6 +67,25 @@
 # TYPES-NEXT: {{^}}  TypeDef[2]: Flags=0x00000180 TypeName='<msil>Spill1' TypeNamespace=''
 # TYPES:      {{^}}  TypeDef[{{[0-9]+}}]: Flags=0x00000110 TypeName='<msil>image_t' TypeNamespace=''
 # TYPES-NEXT: {{^}}Table: {{(Field|MethodDef)}} rows=
+
+## With references: every spill class extends the core library's
+## System.Object, and FakeCore's AssemblyRef row is written.
+# RUN: mkdir pack
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o pack/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack/FakeThreading.dll
+# RUN: msil-ld --msil-type-member-limit=6 sp.o --reference=pack -o spill-refs.exe 2>&1 | count 0
+# RUN: llvm-cil-dump spill-refs.exe > spill-refs.txt
+# RUN: FileCheck %s --check-prefix=REFS --input-file=spill-refs.txt --implicit-check-not=mscorlib
+# RUN: %python %S/Inputs/members.py --limit 6 --spill-base '[FakeCore]System.Object' spill-refs.txt \
+# RUN:   | FileCheck %s --check-prefix=REFS-SPILLS
+# RUN: llvm-cil-dump --tables spill-refs.exe | FileCheck %s --check-prefix=REFS-ROWS
+# REFS:            {{^}}assemblyref 'FakeCore' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# REFS:            {{^}}.class '<msil>Spill1' flags=0x00000180 extends [FakeCore]System.Object{{$}}
+# REFS-SPILLS:     {{^}}class <msil>Spill1 flags=0x00000180 extends=[FakeCore]System.Object{{$}}
+# REFS-SPILLS:     {{^}}limit 6 ok{{$}}
+# REFS-SPILLS-NEXT: {{^}}spill base [FakeCore]System.Object ok ({{[0-9]+}} classes){{$}}
+# REFS-ROWS:       {{^}}  AssemblyRef[{{[0-9]+}}]: MajorVersion=0x0008 MinorVersion=0x0000 BuildNumber=0x0000 RevisionNumber=0x0000 Flags=0x00000000 PublicKeyOrToken=B0 3F 5F 7F 11 D5 0A 3A Name='FakeCore' Culture='' HashValue=-{{$}}
 
 ## Without the lowered limit: no spill class, and the fn field is private.
 # RUN: msil-ld sp.o -o plain.exe 2>&1 | count 0

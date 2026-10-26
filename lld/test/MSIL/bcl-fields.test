@@ -1,0 +1,97 @@
+## Field lookup (ImplementationPlan.md 5.11.4 as amended by the section 12
+## row 2026-10-26 '5.11.4 amended (field requests search the requested type
+## only; ...)'; texts of 5.11.9). The runtime does not resolve a field
+## MemberRef through base types: ldsfld or ldfld of a field named on a type
+## whose base alone defines it throws MissingFieldException on .NET
+## Framework 4.8, .NET 8 and .NET 10, while the same field named on its
+## declaring type works. So a Field request searches the requested TypeDef
+## only, as a constructor request does (bcl-members.test), and a field
+## request never binds a base type's field:
+## - a public static field (S) and a public instance field (I) that only the
+##   base type Fake.FieldBase defines, requested on Fake.FieldDerived, are
+##   'undefined .NET member '<signature>' (requested by <file>[ for <switch>]); '<Ns.Type>' is defined in <identity> (<path>) but has no such member; overloads present: <list>'
+##   with the list 'none';
+## - when Fake.FieldDerived has non-public fields of that name, the list
+##   names only those, each with ' (not public)', and never the base type's
+##   public field: a private static field of the base field's type (P), a
+##   private instance field that differs from the base one only in a modreq
+##   (Q), and both kinds in one type (M: a private one of the base field's
+##   type, then an 'assembly' one with a modreq, in definition order);
+## - the same fields requested on their declaring type Fake.FieldBase bind,
+##   and the MemberRef parent is Fake.FieldBase (the TypeRef of the
+##   FakeFields AssemblyRef).
+## Only hand-written objects make field requests (BCLMembers.def has no
+## field entry): each Inputs/fakepack/field-obj.il variant reads one field
+## in 'void named()' (field-obj-base.o reads S and I on Fake.FieldBase), and
+## main-named.o calls it; the fields are Inputs/fakepack/FakeFields.il's.
+## Every request is Required and names its object.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj main-named.ll -o main-named.o
+# RUN: mkdir fields
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeFields.yaml -o fields/FakeFields.dll
+# RUN: yaml2obj %S/Inputs/fakepack/field-obj-s.yaml -o field-obj-s.o
+# RUN: yaml2obj %S/Inputs/fakepack/field-obj-i.yaml -o field-obj-i.o
+# RUN: yaml2obj %S/Inputs/fakepack/field-obj-p.yaml -o field-obj-p.o
+# RUN: yaml2obj %S/Inputs/fakepack/field-obj-q.yaml -o field-obj-q.o
+# RUN: yaml2obj %S/Inputs/fakepack/field-obj-m.yaml -o field-obj-m.o
+# RUN: yaml2obj %S/Inputs/fakepack/field-obj-base.yaml -o field-obj-base.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning: \
+# DEFINE:   --implicit-check-not=FieldBase
+
+## Only the base type defines the field: no field of that name is listed.
+# RUN: not msil-ld main-named.o field-obj-s.o --reference=FakeCore.dll --reference=fields -o s.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=NONE -DOBJ=field-obj-s.o -DFIELD=S
+# RUN: not ls s.exe
+# RUN: not msil-ld main-named.o field-obj-i.o --reference=FakeCore.dll --reference=fields -o i.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=NONE -DOBJ=field-obj-i.o -DFIELD=I
+# RUN: not ls i.exe
+# NONE: {{^}}msil-ld: error: undefined .NET member 'int32 Fake.FieldDerived::[[FIELD]]' (requested by [[OBJ]]); 'Fake.FieldDerived' is defined in FakeFields 1.0.0.0 [null] (fields/FakeFields.dll) but has no such member; overloads present: none{{$}}
+
+## The requested type's own non-public fields of that name are listed, and
+## the base type's public one is not.
+# RUN: not msil-ld main-named.o field-obj-p.o --reference=FakeCore.dll --reference=fields -o p.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=PRIVATE
+# PRIVATE: {{^}}msil-ld: error: undefined .NET member 'int32 Fake.FieldDerived::P' (requested by field-obj-p.o); 'Fake.FieldDerived' is defined in FakeFields 1.0.0.0 [null] (fields/FakeFields.dll) but has no such member; overloads present: {{(static )?}}int32 P (not public){{$}}
+# RUN: not msil-ld main-named.o field-obj-q.o --reference=FakeCore.dll --reference=fields -o q.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=MODREQ
+# MODREQ: {{^}}msil-ld: error: undefined .NET member 'int32 Fake.FieldDerived::Q' (requested by field-obj-q.o); 'Fake.FieldDerived' is defined in FakeFields 1.0.0.0 [null] (fields/FakeFields.dll) but has no such member; overloads present: {{(instance )?}}int32 modreq({{(\[FakeCore\])?}}System.Runtime.CompilerServices.IsVolatile) Q (not public){{$}}
+# RUN: not msil-ld main-named.o field-obj-m.o --reference=FakeCore.dll --reference=fields -o m.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=BOTH
+# BOTH: {{^}}msil-ld: error: undefined .NET member 'int32 Fake.FieldDerived::M' (requested by field-obj-m.o); 'Fake.FieldDerived' is defined in FakeFields 1.0.0.0 [null] (fields/FakeFields.dll) but has no such member; overloads present: {{(static )?}}int32 M (not public); {{(static )?}}int32 modreq({{(\[FakeCore\])?}}System.Runtime.CompilerServices.IsVolatile) M (not public){{$}}
+
+## Requested on the declaring type, the fields bind, with that type as the
+## MemberRef parent; Fake.FieldDerived is not named.
+# RUN: msil-ld main-named.o field-obj-base.o --reference=FakeCore.dll --reference=fields -o base.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --canonical base.exe | FileCheck %s --check-prefix=BASE --implicit-check-not=FieldDerived
+# BASE:      {{^}}assemblyref 'FakeFields' ver 1.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# BASE:      {{^}}  .method 'named' void() flags=0x0016 impl=0x0000{{$}}
+# BASE-NEXT: {{^}}    .maxstack 1{{( initlocals)?$}}
+# BASE-NEXT: {{^}}    L0: ldsfld int32 [FakeFields]Fake.FieldBase::'S'{{$}}
+# BASE-NEXT: {{^}}    L1: pop{{$}}
+# BASE-NEXT: {{^}}    L2: ldnull{{$}}
+# BASE-NEXT: {{^}}    L3: ldfld int32 [FakeFields]Fake.FieldBase::'I'{{$}}
+# BASE-NEXT: {{^}}    L4: pop{{$}}
+# BASE-NEXT: {{^}}    L5: ret{{$}}
+# RUN: llvm-cil-dump --tables base.exe | FileCheck %s --check-prefix=BASE-ROWS --implicit-check-not=FieldDerived
+# BASE-ROWS:      {{^}}Table: TypeRef rows=1 rowsize={{[0-9]+}}{{$}}
+# BASE-ROWS-NEXT: {{^}}  TypeRef[1]: ResolutionScope=0x23000001 TypeName='FieldBase' TypeNamespace='Fake'{{$}}
+# BASE-ROWS:      {{^}}Table: MemberRef rows=2 rowsize={{[0-9]+}}{{$}}
+# BASE-ROWS-DAG:  {{^}}  MemberRef[{{[12]}}]: Class=0x01000001 Name='S' Signature=06 08{{$}}
+# BASE-ROWS-DAG:  {{^}}  MemberRef[{{[12]}}]: Class=0x01000001 Name='I' Signature=06 08{{$}}
+# BASE-ROWS:      {{^}}Table: AssemblyRef rows=1 rowsize={{[0-9]+}}{{$}}
+# BASE-ROWS-NEXT: {{^}}  AssemblyRef[1]: MajorVersion=0x0001 MinorVersion=0x0000 BuildNumber=0x0000 RevisionNumber=0x0000 Flags=0x00000000 PublicKeyOrToken=- Name='FakeFields' Culture='' HashValue=-{{$}}
+
+#--- main-named.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare void @named()
+
+define i32 @main() {
+  call void @named()
+  ret i32 0
+}

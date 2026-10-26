@@ -1,0 +1,135 @@
+# The reference flags of lit parameter msil_references (plan 5.11.10, 5.12.2,
+# 5.12.3; M21): %{msil_ref_flags} is -Wl,--reference=<dir> and part of
+# %{msil_ldflags}, so it reaches the MSIL side of every link and never the
+# native oracle. Nested lits run the suite prog/Inputs/nested/refs, in which
+# prog/Inputs/prog-cc.py stands in for clang and for msil-ld behind it and
+# records the arguments of each link (prog.exe.inputs, which refs-prog.test
+# prints after its composite); refs-features.test echoes the features and
+# substitutions. Every nested run passes an empty msil_linux_sysroot, so
+# %{msil_ldflags} holds nothing but %{msil_ref_flags} on either triple.
+# (1) msil_references=<a directory> under obj: the MSIL link of %{msil_prog}
+#     (refs-prog.test) and of the one-source %{msil_c} (refs-c.c) passes
+#     -Wl,--reference=<the directory>, which the stand-in msil-ld records;
+#     the native oracle's link (a Windows triple on the local runner, where
+#     the stand-in's native program runs) does not; both programs pass; the
+#     feature is msil-ref=path, and %{msil_ref_flags} and %{msil_ldflags}
+#     echo the flag;
+# (2) msil_references=none (the default) under obj: no link has --reference,
+#     the feature is msil-ref=none, and %{msil_ref_flags} and %{msil_ldflags}
+#     are empty (the expansion of M15 with this sysroot);
+# (3) under lto the MSIL link gets the flag as well;
+# (4) packs named by $MSIL_REF_NET48, $MSIL_REF_NET8 and $MSIL_REF_NET10
+#     (directories that hold a file named like the pack's core library) give
+#     the features msil-refpack=<name> and %{msil_ref_dir_<name>}, and
+#     msil_references=net8 links with that directory (msil-ref=net8);
+# (5) %msil_check_mscorlib_safe runs check-mscorlib-safe.py with this
+#     configuration's msil-ld and ilasm and the runtimes of the run, which
+#     name the programs' own runtime as well: with msil_dotnet_runtime=9
+#     (where .NET 9 is installed) --runtimes has net9, though it is neither
+#     .NET 8 nor .NET 10, so a host with only .NET 9 never gets an empty list;
+# (6) configuration errors, each with lit's fatal-error status 2: a value
+#     other than none under msil_pipeline=asm (asm has no link), a path that
+#     does not exist, an explicitly named pack directory without its core
+#     library (also when msil_references is none), msil_run_netfx=1 with
+#     net8 (where the .NET Framework is installed: images bound to .NET 8
+#     references do not load there), net10 with msil_dotnet_runtime=8
+#     (where .NET 8 is installed), and msil_equiv=1 under msil_pipeline=lto
+#     with net8 or the path of a .NET pack (O4 would compare the unbound
+#     --lto-emit-asm text with an image whose data-import helper calls
+#     NativeLibrary), while net48 and none load under the same parameters;
+# (7) a path naming a .NET pack, System.Runtime.dll or a directory holding
+#     it (stand-ins that ilasm assembles from an Assembly row alone), is
+#     handled as net<N>, N being that row's major version: with 8.0.0.0
+#     (a directory, and the file itself) %msil_verify has the pack's
+#     directory as --runtime-dir and --skip-peverify "bound to .NET 8
+#     references"; with 10.0.0.0, msil_run_netfx=1 (where the .NET Framework
+#     is installed) and msil_dotnet_runtime=8 (where .NET 8 is installed) are
+#     the errors of net10; with the .NET Framework facade's 4.1.2.0 the path
+#     is any other path (PEVerify stays, the Framework run loads); a
+#     System.Runtime.dll whose version cannot be read is an error naming it.
+# REQUIRES: msil-ld, msil-ar
+
+# RUN: rm -rf %t && mkdir -p %t/pack %t/empty %t/fake48 %t/fake8 %t/fake10
+# RUN: %{harness_check} write %t/fake48/mscorlib.dll
+# RUN: %{harness_check} write %t/fake8/System.Runtime.dll
+# RUN: %{harness_check} write %t/fake10/System.Runtime.dll
+# RUN: mkdir -p %t/sr8 %t/sr10 %t/srfx %t/srbad
+# RUN: %{harness_check} write %t/sr8.il ".assembly System.Runtime { .ver 8:0:0:0 }"
+# RUN: %{harness_check} write %t/sr10.il ".assembly System.Runtime { .ver 10:0:0:0 }"
+# RUN: %{harness_check} write %t/srfx.il ".assembly System.Runtime { .ver 4:1:2:0 }"
+# RUN: %ilasm -dll -output=%t/sr8/System.Runtime.dll %t/sr8.il
+# RUN: %ilasm -dll -output=%t/sr10/System.Runtime.dll %t/sr10.il
+# RUN: %ilasm -dll -output=%t/srfx/System.Runtime.dll %t/srfx.il
+# RUN: %{harness_check} write %t/srbad/System.Runtime.dll
+
+# (1)
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=%t/pack %S/prog/Inputs/nested/refs/refs-prog.test %S/prog/Inputs/nested/refs/refs-c.c %S/prog/Inputs/nested/refs/refs-features.test > %t/1.log 2>&1
+# RUN: %{harness_check} contains %t/1.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-prog\.test " "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-c\.c " "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-features\.test "
+# RUN: %{harness_check} contains %t/1.log "note: msil: references: path \(\S*pack\)$"
+# RUN: %{harness_check} contains %t/1.log "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil --ld-path=\S+ -O2 -Wl,--reference=\S*pack obj/main\.o obj/util\.o -o prog\.exe$" "^# \| arg -Wl,--reference=\S*pack$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil --ld-path=\S+ -O2 -Wl,--reference=\S*pack obj/refs-c\.o -o prog\.exe$"
+# RUN: %{harness_check} contains %t/1.log "^# \| feature msil-ref=path$" "^# \| ref-flags \[-Wl,--reference=\S*pack\]$" "^# \| ldflags \[-Wl,--reference=\S*pack\]$"
+# RUN: %if msil-triple-windows && msil-netfx %{ %{harness_check} contains %t/1.log "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+ -fuse-ld=lld obj/main\.o obj/util\.o .*-o \S+prog\.exe$" %}
+# RUN: %{harness_check} lacks %t/1.log "-fuse-ld=lld .*--reference" "^# \| feature msil-ref=(none|net48|net8|net10)$"
+
+# (2)
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj %S/prog/Inputs/nested/refs/refs-prog.test %S/prog/Inputs/nested/refs/refs-c.c %S/prog/Inputs/nested/refs/refs-features.test > %t/2.log 2>&1
+# RUN: %{harness_check} contains %t/2.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-prog\.test " "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-c\.c " "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-features\.test "
+# RUN: %{harness_check} contains %t/2.log "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil --ld-path=\S+ -O2 obj/main\.o obj/util\.o -o prog\.exe$" "^# \| feature msil-ref=none$" "^# \| ref-flags \[\]$" "^# \| ldflags \[\]$"
+# RUN: %{harness_check} lacks %t/2.log "^# \| (msil-prog: |arg ).*--reference" "\[-Wl,--reference" "note: msil: references:" "^# \| feature msil-ref=(path|net48|net8|net10)$"
+
+# (3)
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_references=%t/pack %S/prog/Inputs/nested/refs/refs-prog.test > %t/3.log 2>&1
+# RUN: %{harness_check} contains %t/3.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-prog\.test " "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 .* -O2 -flto -c \S*main\.c -o obj/main\.o$" "^# \| msil-prog: .*--target=\S+-msil --ld-path=\S+ -O2 -Wl,--reference=\S*pack obj/main\.o obj/util\.o -o prog\.exe$"
+
+# (4)
+# RUN: env MSIL_REF_NET48=%t/fake48 MSIL_REF_NET8=%t/fake8 MSIL_REF_NET10=%t/fake10 %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=net8 %S/prog/Inputs/nested/refs/refs-features.test > %t/4.log 2>&1
+# RUN: %{harness_check} contains %t/4.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-features\.test " "^# \| feature msil-ref=net8$" "^# \| feature msil-refpack=net48 \S*fake48$" "^# \| feature msil-refpack=net8 \S*fake8$" "^# \| feature msil-refpack=net10 \S*fake10$" "^# \| ref-flags \[-Wl,--reference=\S*fake8\]$" "note: msil: references: net8 \(\S*fake8\)$" "note: msil: reference packs: net48 \S*fake48; net8 \S*fake8; net10 \S*fake10$"
+
+# (5)
+# RUN: %{harness_check} contains %t/1.log "^# \| mscorlib-safe .*check-mscorlib-safe\.py --msil-ld \S+ --ilasm \S+ --runtimes \S+ --timeout \S+ --mem-limit-mb \d+"
+# RUN: %if msil-netfx %{ %{harness_check} contains %t/1.log "^# \| mscorlib-safe .* --runtimes netfx" %}
+# RUN: %if dotnet-runtime-9 %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_dotnet_runtime=9 %S/prog/Inputs/nested/refs/refs-features.test > %t/5.log 2>&1 %}
+# RUN: %if dotnet-runtime-9 %{ %{harness_check} contains %t/5.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-features\.test " "^# \| mscorlib-safe .* --runtimes (netfx,)?(net8,)?net9(,net10)? --timeout " %}
+
+# (6)
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_references=%t/pack %S/prog/Inputs/nested/refs > %t/6a.log 2>&1
+# RUN: %{harness_check} contains %t/6a.log "fatal: msil: --param msil_references=\S*pack needs a link, which msil_pipeline=asm does not have \(plan 5\.12\.2\); use msil_pipeline=obj or lto$"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=%t/no-such-pack %S/prog/Inputs/nested/refs > %t/6b.log 2>&1
+# RUN: %{harness_check} contains %t/6b.log "fatal: msil: --param msil_references=\S*no-such-pack: use none, net48, net8, net10 or the path of a reference assembly or of a directory of them$"
+# RUN: env MSIL_REF_NET8=%t/empty %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= %S/prog/Inputs/nested/refs > %t/6c.log 2>&1
+# RUN: %{harness_check} contains %t/6c.log "fatal: msil: [$]MSIL_REF_NET8=\S*empty has no System\.Runtime\.dll, so it is not the net8 reference pack$"
+# RUN: %if msil-netfx %{ env MSIL_REF_NET8=%t/fake8 %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=net8 --param msil_run_netfx=1 %S/prog/Inputs/nested/refs > %t/6d.log 2>&1 %}
+# RUN: %if msil-netfx %{ %{harness_check} contains %t/6d.log "fatal: msil: --param msil_run_netfx=1 with msil_references=net8: programs bound to \.NET 8 reference assemblies do not load on the \.NET Framework \(plan 5\.11\.10\)$" %}
+# RUN: %if dotnet-runtime-8 %{ env MSIL_REF_NET10=%t/fake10 %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=net10 --param msil_dotnet_runtime=8 %S/prog/Inputs/nested/refs > %t/6e.log 2>&1 %}
+# RUN: %if dotnet-runtime-8 %{ %{harness_check} contains %t/6e.log "fatal: msil: --param msil_references=net10 binds the programs to \.NET 10 reference assemblies, which Microsoft\.NETCore\.App 8\.x does not load; pass --param msil_dotnet_runtime=10$" %}
+# RUN: %if msil-cil-dump || msil-mdcanon %{ env MSIL_REF_NET8=%t/fake8 %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_equiv=1 --param msil_references=net8 %S/prog/Inputs/nested/refs > %t/6f.log 2>&1 %}
+# RUN: %if msil-cil-dump || msil-mdcanon %{ %{harness_check} contains %t/6f.log "fatal: msil: --param msil_equiv=1 with msil_pipeline=lto and msil_references=net8: O4 compares the link's --lto-emit-asm text, which is never bound to the references \(plan 5\.11\.8\), with an image bound to \.NET 8 reference assemblies, whose data-import helper calls NativeLibrary; use msil_pipeline=obj, or msil_references=none or net48$" %}
+# RUN: %if msil-cil-dump || msil-mdcanon %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_equiv=1 --param msil_references=%t/sr8 %S/prog/Inputs/nested/refs > %t/6g.log 2>&1 %}
+# RUN: %if msil-cil-dump || msil-mdcanon %{ %{harness_check} contains %t/6g.log "fatal: msil: --param msil_equiv=1 with msil_pipeline=lto and msil_references=\S*sr8: O4 compares the link's --lto-emit-asm text, .* bound to \.NET 8 reference assemblies, whose data-import helper calls NativeLibrary; " %}
+# RUN: %if msil-cil-dump || msil-mdcanon %{ env MSIL_REF_NET48=%t/fake48 %{harness_lit} --show-tests --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_equiv=1 --param msil_references=net48 %S/prog/Inputs/nested/refs > %t/6h.log 2>&1 %}
+# RUN: %if msil-cil-dump || msil-mdcanon %{ %{harness_lit} --show-tests --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_equiv=1 %S/prog/Inputs/nested/refs > %t/6i.log 2>&1 %}
+# RUN: %if msil-cil-dump || msil-mdcanon %{ %{harness_check} contains %t/6h.log "^  MSIL :: harness/prog/Inputs/nested/refs/refs-features\.test$" "note: msil: references: net48 \(\S*fake48\)$" %}
+# RUN: %if msil-cil-dump || msil-mdcanon %{ %{harness_check} contains %t/6i.log "^  MSIL :: harness/prog/Inputs/nested/refs/refs-features\.test$" %}
+# RUN: %if msil-cil-dump || msil-mdcanon %{ %{harness_check} lacks %t/6h.log "fatal: " %}
+# RUN: %if msil-cil-dump || msil-mdcanon %{ %{harness_check} lacks %t/6i.log "fatal: " %}
+
+# (7)
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=%t/sr8 %S/prog/Inputs/nested/refs/refs-features.test > %t/7a.log 2>&1
+# RUN: %{harness_check} contains %t/7a.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-features\.test " "^# \| feature msil-ref=path$" "note: msil: references: path \(\S*sr8\), a \.NET 8 pack$" "^# \| ref-flags \[-Wl,--reference=\S*sr8\]$"
+# RUN: %if msil-ilverify %{ %{harness_check} contains %t/7a.log "^# \| verify .*msil-verify\.py --ilverify .* --runtime-dir \S*sr8 --allow .* --skip-peverify bound to \.NET 8 references( |$)" %}
+# RUN: %{harness_check} lacks %t/7a.log "^# \| verify .* --peverify "
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=%t/sr8/System.Runtime.dll %S/prog/Inputs/nested/refs/refs-features.test > %t/7b.log 2>&1
+# RUN: %{harness_check} contains %t/7b.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-features\.test " "note: msil: references: path \(\S*sr8/System\.Runtime\.dll\), a \.NET 8 pack$"
+# RUN: %if msil-ilverify %{ %{harness_check} contains %t/7b.log "^# \| verify .*msil-verify\.py --ilverify .* --runtime-dir \S*sr8 --allow .* --skip-peverify bound to \.NET 8 references( |$)" %}
+# RUN: %if msil-netfx %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=%t/sr10 --param msil_run_netfx=1 %S/prog/Inputs/nested/refs > %t/7c.log 2>&1 %}
+# RUN: %if msil-netfx %{ %{harness_check} contains %t/7c.log "fatal: msil: --param msil_run_netfx=1 with msil_references=\S*sr10: programs bound to \.NET 10 reference assemblies do not load on the \.NET Framework \(plan 5\.11\.10\)$" %}
+# RUN: %if dotnet-runtime-8 %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=%t/sr10 --param msil_dotnet_runtime=8 %S/prog/Inputs/nested/refs > %t/7d.log 2>&1 %}
+# RUN: %if dotnet-runtime-8 %{ %{harness_check} contains %t/7d.log "fatal: msil: --param msil_references=\S*sr10 binds the programs to \.NET 10 reference assemblies, which Microsoft\.NETCore\.App 8\.x does not load; pass --param msil_dotnet_runtime=10$" %}
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=%t/srfx %S/prog/Inputs/nested/refs/refs-features.test > %t/7e.log 2>&1
+# RUN: %{harness_check} contains %t/7e.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-features\.test " "note: msil: references: path \(\S*srfx\)$"
+# RUN: %{harness_check} lacks %t/7e.log "skip-peverify" "--runtime-dir \S*srfx"
+# RUN: %if msil-peverify %{ %{harness_check} contains %t/7e.log "^# \| verify .* --peverify " %}
+# RUN: %if msil-netfx %{ %{harness_lit} --show-tests --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=%t/srfx --param msil_run_netfx=1 %S/prog/Inputs/nested/refs > %t/7f.log 2>&1 %}
+# RUN: %if msil-netfx %{ %{harness_check} lacks %t/7f.log "fatal: " %}
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=%t/srbad %S/prog/Inputs/nested/refs > %t/7g.log 2>&1
+# RUN: %{harness_check} contains %t/7g.log "fatal: msil: --param msil_references=\S*srbad: cannot read the version of \S*srbad/System\.Runtime\.dll, so the \.NET pack's major is unknown: \S*System\.Runtime\.dll is not a PE file$"

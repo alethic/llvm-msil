@@ -1,0 +1,104 @@
+# msil-verify.py --skip-peverify REASON (plan 5.11.10, 5.12.4; M21): PEVerify
+# cannot load an image bound to .NET 8 or 10 reference assemblies
+# (llvm/docs/MSIL/recon/p2/bcl-binding.md 3.5), so the reference legs
+# refs-net8 and refs-net10 verify with ILVerify against the pack and print
+# 'PEVerify skipped: <reason>' instead of running PEVerify.
+# (1) ptr-int64-mix.dll adds a native int and an int64, which only PEVerify
+#     reports: without the option msil-verify fails on PEVerify's message in
+#     both passes (where PEVerify exists); with --skip-peverify "bound to .NET 8
+#     references" it passes and prints 'PEVerify skipped: bound to .NET 8
+#     references' first, and neither pass runs PEVerify, the neutralized copy
+#     included (no peverify line at all);
+# (2) with --md-baseline, O6 (PEVerify /md) is skipped too and says why, even
+#     against a baseline that lacks a message of the image (b.exe against
+#     a.exe fails O6 without the option, where PEVerify exists);
+# (3) blanks around the reason are dropped; an empty or blank reason, and
+#     --skip-peverify with --roundtrip, are usage errors (status 2);
+# (4) --skip (no ILVerify) prints the line too;
+# (5) lit: a nested lit with msil_references=net8 under obj, with this host's
+#     .NET 8 reference pack (feature msil-refpack=net8) and .NET 8, runs the
+#     stand-in program of prog/Inputs/nested/refs/skip-c.c: %msil_verify has
+#     --runtime-dir <the pack> (not the runtime's directory) and
+#     --skip-peverify "bound to .NET 8 references", msil-verify prints the
+#     line, and the program runs; under msil_references=none (the control)
+#     %msil_verify has the runtime directory, --peverify where PEVerify
+#     exists, and no --skip-peverify.
+# REQUIRES: msil-ilasm, msil-ilverify
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %ilasm -dll -output=%t/mix.dll %S/Inputs/ptr-int64-mix.il
+# RUN: %ilasm -exe -output=%t/a.exe %t/a.il
+# RUN: %ilasm -exe -output=%t/b.exe %t/b.il
+
+# (1)
+# RUN: %if msil-peverify %{ %{harness_check} exits 1 %msil_verify %t/mix.dll > %t/1a.log 2>&1 %}
+# RUN: %if msil-peverify %{ %{harness_check} contains %t/1a.log "^peverify: .*::mix\[offset 0x[0-9A-Fa-f]+\] \[found Native Int\]\[expected Long\] Unexpected type on the stack\.$" "^peverify \(neutralized copy\): " %}
+# RUN: %msil_verify --skip-peverify "bound to .NET 8 references" %t/mix.dll > %t/1b.log 2>&1
+# RUN: %{harness_check} contains %t/1b.log "\APEVerify skipped: bound to \.NET 8 references\n"
+# RUN: %{harness_check} lacks %t/1b.log "peverify" "disallowed"
+
+# (2)
+# RUN: %if msil-peverify %{ %{harness_check} exits 1 %msil_verify --md-baseline %t/a.exe %t/b.exe > %t/2a.log 2>&1 %}
+# RUN: %if msil-peverify %{ %{harness_check} contains %t/2a.log "^O6: peverify /md: " %}
+# RUN: %msil_verify --skip-peverify "bound to .NET 10 references" --md-baseline %t/a.exe %t/b.exe > %t/2b.log 2>&1
+# RUN: %{harness_check} contains %t/2b.log "^PEVerify skipped: bound to \.NET 10 references$" "^msil-verify: note: O6 skipped: PEVerify skipped: bound to \.NET 10 references$"
+# RUN: %{harness_check} lacks %t/2b.log "^O6: " "^msil-verify: O6: "
+
+# (3)
+# RUN: %msil_verify --skip-peverify "  padded reason  " %t/mix.dll > %t/3a.log 2>&1
+# RUN: %{harness_check} contains %t/3a.log "^PEVerify skipped: padded reason$"
+# RUN: %{harness_check} exits 2 %msil_verify --skip-peverify "" %t/mix.dll > %t/3b.log 2>&1
+# RUN: %{harness_check} contains %t/3b.log "error: --skip-peverify needs a reason$"
+# RUN: %{harness_check} exits 2 %msil_verify "--skip-peverify= " %t/mix.dll > %t/3c.log 2>&1
+# RUN: %{harness_check} contains %t/3c.log "error: --skip-peverify needs a reason$"
+# RUN: %{harness_check} exits 2 %msil_roundtrip --skip-peverify "a reason" --output=%t/rt.dll %t/mix.dll > %t/3d.log 2>&1
+# RUN: %{harness_check} contains %t/3d.log "error: --skip-peverify and --roundtrip exclude each other$"
+
+# (4)
+# RUN: %python %S/../../utils/msil-verify.py --skip --skip-peverify "no verifier here" %t/mix.dll > %t/4.log 2>&1
+# RUN: %{harness_check} contains %t/4.log "\APEVerify skipped: no verifier here\nmsil-verify: skipped \(no ILVerify configured\)\n\Z"
+
+# (5)
+# RUN: %if msil-refpack=net8 && dotnet-runtime-8 && msil-ld && msil-ar %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=net8 --param msil_dotnet_runtime=8 %S/prog/Inputs/nested/refs/skip-c.c > %t/5a.log 2>&1 %}
+# RUN: %if msil-refpack=net8 && dotnet-runtime-8 && msil-ld && msil-ar %{ %{harness_check} contains %t/5a.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/skip-c\.c " "^# executed command: .*msil-verify\.py'? --ilverify \S+ --runtime-dir '?[^']*/net8\.0'? .*--skip-peverify 'bound to \.NET 8 references' .*skip-c\.c\.tmp\.O2\.d/prog\.exe'?$" "^# \| PEVerify skipped: bound to \.NET 8 references$" %}
+# RUN: %if msil-refpack=net8 && dotnet-runtime-8 && msil-ld && msil-ar %{ %{harness_check} lacks %t/5a.log "--peverify" "^# executed command: .*msil-verify\.py'? .*Microsoft\.NETCore\.App/" %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj %S/prog/Inputs/nested/refs/skip-c.c > %t/5b.log 2>&1 %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t/5b.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/skip-c\.c " "^# executed command: .*msil-verify\.py'? --ilverify \S+ --runtime-dir '?[^']*Microsoft\.NETCore\.App/[^']*'? " %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} lacks %t/5b.log "skip-peverify" "PEVerify skipped" %}
+# RUN: %if msil-ld && msil-ar && msil-peverify %{ %{harness_check} contains %t/5b.log "^# executed command: .*msil-verify\.py'? .* --peverify " %}
+
+#--- a.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly prog { }
+.module prog.exe
+.class public auto ansi sealed beforefieldinit C extends [mscorlib]System.Object
+{
+  .field public static literal int32 z
+  .method public static int32 main() cil managed
+  {
+    .entrypoint
+    .maxstack 1
+    ldc.i4.0
+    ret
+  }
+}
+#--- b.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly prog { }
+.module prog.exe
+.class public auto ansi sealed beforefieldinit D extends [mscorlib]System.Object
+{
+  .field public static int32 v
+  .field public static literal int32 w
+}
+.class public auto ansi sealed beforefieldinit C extends [mscorlib]System.Object
+{
+  .field public static literal int32 z
+  .method public static int32 main() cil managed
+  {
+    .entrypoint
+    .maxstack 1
+    ldc.i4.0
+    ret
+  }
+}

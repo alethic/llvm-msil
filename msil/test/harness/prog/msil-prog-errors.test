@@ -5,8 +5,9 @@
 #     defaults from M20), and (2) the equivalence options where they cannot
 #     work: --also-il under obj (the text of an LTO link), --equiv-out with
 #     --link-output il, --equiv-skip without --test (and the reverse), a
-#     malformed --equiv-skip file (an oracle that is neither O3 nor O4, a
-#     qualified skip line whose triple is not an MSIL triple), --llc under
+#     malformed --equiv-skip file (an oracle that is none of O3, O4 and O6,
+#     whose skip lines the file may hold from M21, and a qualified skip line
+#     whose triple is not an MSIL triple), --llc under
 #     lto, --llc with a .ll source at -Os, and --equiv-out in native mode;
 # (3) a source that does not exist;
 # (4) a --workdir that holds a source (the build empties it first);
@@ -34,7 +35,7 @@
 # RUN: %{harness_check} exits 2 %msil_prog_build --test %s --level O2 --workdir %t/w --src %t/main.c > %t/2d.log 2>&1
 # RUN: %{harness_check} contains %t/2d.log "^msil-prog: error: --equiv-skip and --test go together$"
 # RUN: %{harness_check} exits 2 %msil_prog_build --equiv-skip %t/bad-allowed.txt --test %s --level O2 --workdir %t/w --src %t/main.c > %t/2e.log 2>&1
-# RUN: %{harness_check} contains %t/2e.log "^msil-prog: error: --equiv-skip: \S*bad-allowed\.txt:1: expected 'skip <oracle>\[@<triple>\]\[:<level>\] <test path> <reason>' with the oracle O3 or O4$"
+# RUN: %{harness_check} contains %t/2e.log "^msil-prog: error: --equiv-skip: \S*bad-allowed\.txt:1: expected 'skip <oracle>\[@<triple>\]\[:<level>\] <test path> <reason>' with the oracle O3, O4 or O6$"
 # RUN: %{harness_check} exits 2 %msil_prog_build --equiv-skip %t/bad-qualified.txt --test %s --level O2 --workdir %t/w --src %t/main.c > %t/2e2.log 2>&1
 # RUN: %{harness_check} contains %t/2e2.log "^msil-prog: error: --equiv-skip: \S*bad-qualified\.txt:1: the triple x86_64-pc-windows-msvc of the skip line is not an MSIL triple \(it does not end in -msil\)$"
 # RUN: %{harness_check} exits 2 %msil_prog_build --pipeline lto --llc=%t/main.c --level O2 --workdir %t/w --src %t/main.c > %t/2f.log 2>&1

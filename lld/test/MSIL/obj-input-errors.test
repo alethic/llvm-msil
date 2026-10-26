@@ -1,11 +1,15 @@
 ## Diagnostics for CIL-object inputs, their records and their symbols
 ## (ImplementationPlan.md 5.9.14's texts, each pinned in full; 5.8.5, 5.8.7,
 ## 5.8.9, 5.9.5, 5.9.6 step 2, 5.9.7, 5.9.9 rule 5, 5.10.7):
-## - the BCL stand-in (5.9.7) rewrites only TypeRefs scoped to msil.bcl. Any
-##   other AssemblyRef scope (here the class of a catch clause) is
-##   '<file>: reference to assembly '<n>' needs --reference, which this
-##   msil-ld does not support yet'. That is the only check that keeps the
-##   stand-in confined to msil.bcl until M21 binds references;
+## - BCL references (5.11, M21): the class of the catch clause in the
+##   objects below is System.Exception, which msil-ld's built-in [mscorlib]
+##   table (5.11.7) does not hold, so a link without references is
+##   '.NET member '<signature>' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>'
+##   and the links of this test that must succeed name a reference set
+##   (Inputs/fakepack's FakeCore, which defines it). A TypeRef scoped to an
+##   AssemblyRef other than the placeholders ([Foo]System.Exception) binds
+##   by name like a [msil.bcl] one (M21 retires M20's '<file>: reference to
+##   assembly '<n>' needs --reference' error);
 ## - the record (5.8.8, 5.8.9). Another major version is 'invalid link-info
 ##   record: version <n> is newer than this toolchain supports (1)'. A newer
 ##   minor version links (msil-ld accepts every minor of major 1), but one
@@ -53,6 +57,7 @@
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: llc -filetype=obj main.ll -o main.o
 # RUN: llc -filetype=obj tlsdef.ll -o tlsdef.o
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o FakeCore.dll
 
 # DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning:
@@ -81,12 +86,20 @@
 # RUN: %if ilasm %{ %{as} -output=trunc.o trunc.il && %{as} -output=tls.o tls.il %}
 
 ## The unchanged text links, and so does a v1.1 record that uses nothing new.
-# RUN: %if ilasm %{ msil-ld main.o ok.o -o ok.exe 2>&1 | count 0 %}
-# RUN: %if ilasm %{ msil-ld main.o minor.o -o minor.exe 2>&1 | count 0 %}
+# RUN: %if ilasm %{ msil-ld main.o ok.o --reference=FakeCore.dll -o ok.exe 2>&1 | count 0 %}
+# RUN: %if ilasm %{ msil-ld main.o minor.o --reference=FakeCore.dll -o minor.exe 2>&1 | count 0 %}
 
-## An AssemblyRef scope other than msil.bcl.
-# RUN: %if ilasm %{ not msil-ld main.o foo.o -o x.exe 2>&1 | %{err} --check-prefix=FOREIGN %}
-# FOREIGN: {{^}}msil-ld: error: foo.o: reference to assembly 'Foo' needs --reference, which this msil-ld does not support yet{{$}}
+## Without references System.Exception is outside the built-in table.
+# RUN: %if ilasm %{ not msil-ld main.o ok.o -o x.exe 2>&1 | %{err} --check-prefix=TABLE %}
+# TABLE: {{^}}msil-ld: error: {{.*}}.NET member '{{.*}}System.Exception{{.*}}' is not in msil-ld's built-in mscorlib table; pass --reference=<reference assemblies>{{$}}
+
+## An AssemblyRef scope other than msil.bcl binds by name.
+# RUN: %if ilasm %{ msil-ld main.o foo.o --reference=FakeCore.dll -o foo.exe 2>&1 | count 0 %}
+# RUN: %if ilasm && llvm-cil-dump %{ llvm-cil-dump foo.exe | FileCheck %s --check-prefix=FOREIGN \
+# RUN:   --implicit-check-not="assemblyref 'Foo'" %}
+# FOREIGN: {{^}}assemblyref 'FakeCore' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# FOREIGN: {{^}}    .try L0 to L3 catch [FakeCore]System.Exception handler L3 to L5{{$}}
+# RUN: %if ilasm %{ not msil-ld main.o foo.o -o x.exe 2>&1 | %{err} --check-prefix=TABLE %}
 
 ## Versions and framing.
 # RUN: %if ilasm %{ not msil-ld main.o v2.o -o x.exe 2>&1 | %{err} --check-prefix=MAJOR %}
@@ -107,7 +120,7 @@
 # ABI-REV: {{^}}msil-ld: error: main.o: toolchain ABI version 1 differs from 2 in abi.o{{$}}
 
 ## The debug carrier: one warning for two such inputs, and an EXE.
-# RUN: %if ilasm %{ msil-ld main.o dbg.o dbg2.o -o dbg.exe 2>&1 | %{err} --check-prefix=DEBUG %}
+# RUN: %if ilasm %{ msil-ld main.o dbg.o dbg2.o --reference=FakeCore.dll -o dbg.exe 2>&1 | %{err} --check-prefix=DEBUG %}
 # RUN: %if ilasm && llvm-cil-dump %{ llvm-cil-dump --headers dbg.exe | FileCheck %s --check-prefix=DEBUG-EXE %}
 # DEBUG:     {{^}}msil-ld: warning: debug information in dbg.o is ignored{{$}}
 # DEBUG-EXE: {{^}}Format: PE32+ machine=0x8664 exe{{$}}
@@ -299,7 +312,8 @@ Usage: mkobj.py <out.il> [options]
                     added to the SYMTAB subsection's payload size (framing)
   --extra-kind K    append an empty subsection of kind K after SYMTAB
   --scope S         the assembly that scopes the catch clause's
-                    System.Exception (default msil.bcl, the BCL stand-in's)
+                    System.Exception (default msil.bcl, the placeholder of
+                    BCL references)
   --body B          ok (a user string and a catch clause; returns 7),
                     badop (an unknown opcode at IL offset 1), badtok ('call'
                     with a TypeRef token at IL offset 1), trunc (the body

@@ -1,0 +1,244 @@
+## Member lookup (ImplementationPlan.md 5.11.4, M21.b item 2; texts of
+## 5.11.9). A member binds by name, then calling convention (static or
+## instance), generic arity, parameter count, return type and parameter
+## types; only public members count. A method other than a constructor that
+## only a base type defines is emitted on the requested type (msil-ld keeps
+## the requested parent, where Roslyn would name the declaring type), while
+## constructors and fields are looked up on the requested type only (section
+## 12 rows 2026-10-26, '5.11.4 amended (the base-type member search)' item 1
+## and '5.11.4 amended (field requests search the requested type only;
+## ...)'; the field requests are bcl-fields.test's):
+## - a return-type overload: int32 MemoryBarrier() is skipped and
+##   void MemoryBarrier() binds (FakeThreadingRet);
+## - no match is
+##   'undefined .NET member '<signature>' (requested by <file>[ for <switch>]); '<Ns.Type>' is defined in <identity> (<path>) but has no such member; overloads present: <list>',
+##   listing the members of that name (FakeThreadingOverloads: int32
+##   MemoryBarrier() and void MemoryBarrier(int32)), and an instance method
+##   does not match a static request (FakeThreadingInstance);
+## - FakeThreadingBase defines MemoryBarrier() only in Interlocked's base
+##   class InterlockedBase: it binds, and the MemberRef's parent is
+##   Interlocked;
+## - an [Obsolete] member binds with the warning
+##   ''<member>' is obsolete in <identity>' (FakeThreadingObsolete);
+## - a [RequiresPreviewFeatures] member is the error
+##   ''<member>' requires preview features' (FakeThreadingPreview).
+## The member texts of that error (section 12 row 2026-10-26, '5.11.9
+## clarified (member texts ...)'): the request and each entry of
+## 'overloads present' print the calling convention before the return type
+## ('[instance ][explicit ][vararg ]'), a generic method as '<name><<n>>' and a
+## non-public one with the suffix ' (not public)', so:
+## - a generic definition does not match a non-generic request
+##   (FakeThreadingGeneric: only void MemoryBarrier<T>(), listed as
+##   'void MemoryBarrier<1>()');
+## - a vararg definition does not match a default-convention request, and
+##   the two read differently (FakeThreadingVararg: only
+##   vararg void MemoryBarrier(), listed as 'vararg void MemoryBarrier()');
+##   nor does a default-convention definition match a vararg request
+##   (named-obj-vararg.o's 'vararg void ...::MemoryBarrier()' against
+##   FakeThreading);
+## - a non-public member never binds and is listed with ' (not public)'
+##   (FakeThreadingNonPublic: only an 'assembly' void MemoryBarrier());
+## - the base-type search (section 12 row 2026-10-26, '5.11.4 amended (the
+##   base-type member search)'):
+##   - item (2): the MemberRef's parent stays the requested type and the
+##     runtime resolves it from there, taking the first member of that name
+##     and signature, custom modifiers included, whatever its accessibility,
+##     so a non-public member of the requested type whose signature equals
+##     the public base-type match makes the request the undefined-member
+##     error, listing it with ' (not public)' (FakeThreadingHidden: an
+##     'assembly' MemoryBarrier() in Interlocked and a public one in
+##     InterlockedBase; bound, it throws MethodAccessException); a nearer
+##     non-public member that differs from the match only in a custom
+##     modifier does not stop the binding (FakeThreadingHiddenMod: an
+##     'assembly' void modopt(IsVolatile) MemoryBarrier() in Interlocked):
+##     the public one binds, on Interlocked;
+##   - item (1): constructors are not inherited, so a .ctor request searches
+##     the requested type only, and the list names only its own constructors
+##     (FakeCoreNoCtor: EntryPointNotFoundException has .ctor() only, its
+##     base System.Exception keeps .ctor(string); bcl-dataimport.test links
+##     the helper that needs it);
+##   - item (3): every needed base type binds by the type rules: the base
+##     type may be defined by another reference (FakeThreadingXBase:
+##     Interlocked extends [FakeBarrierBase]System.Threading.InterlockedBase,
+##     whose MemoryBarrier() is public): it binds with the parent Interlocked,
+##     and the output has no AssemblyRef for FakeBarrierBase, which defines
+##     nothing the output names; without FakeBarrierBase the request is
+##     'type '<Ns.Type>' is not defined in the references (<n> assemblies)'
+##     for InterlockedBase, never 'has no such member', and an optional
+##     (:drop) request is omitted; with InterlockedBase defined twice
+##     (FakeBarrierBase and FakeBarrierBaseCopy) it is
+##     'type '<Ns.Type>' is defined in two references: <identity> (<path>) and <identity> (<path>)'
+##     in either reference order, also for an optional request.
+## A different generic arity is not tested: an object cannot request a
+## generic method yet (Phase 2's objects have no MethodSpec).
+## fence.o requests Interlocked::MemoryBarrier() (a Required object request,
+## so the error names fence.o and no switch); every variant is named
+## FakeThreading (Inputs/fakepack/FakeThreading.il). Requests without an
+## object go through msil-ld's hidden --print-bcl-binding=member:<id>[:drop]
+## (5.11.5), which prints '<request> -> <result>'.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj fence.ll -o fence.o
+# RUN: llc -filetype=obj main-named.ll -o main-named.o
+# RUN: yaml2obj %S/Inputs/fakepack/named-obj-vararg.yaml -o named-vararg.o
+# RUN: mkdir ret ovl inst base obs prev gen va np hid hidmod xb xbonly copy noctor plain
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingRet.yaml -o ret/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingOverloads.yaml -o ovl/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingInstance.yaml -o inst/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingBase.yaml -o base/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingObsolete.yaml -o obs/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingPreview.yaml -o prev/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingGeneric.yaml -o gen/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingVararg.yaml -o va/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingNonPublic.yaml -o np/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingHidden.yaml -o hid/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingHiddenMod.yaml -o hidmod/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingXBase.yaml -o xb/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeBarrierBase.yaml -o xb/FakeBarrierBase.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingXBase.yaml -o xbonly/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeBarrierBaseCopy.yaml -o copy/FakeBarrierBaseCopy.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCoreNoCtor.yaml -o noctor/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o plain/FakeThreading.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning:
+
+## A return-type overload.
+# RUN: msil-ld fence.o --reference=FakeCore.dll --reference=ret -o ret.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ret.exe | FileCheck %s --check-prefix=BOUND
+# BOUND: {{^}}    L{{[0-9]+}}: call void() [FakeThreading]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+
+## No member of that signature: the members of that name are listed, and no
+## other member.
+# RUN: not msil-ld fence.o --reference=FakeCore.dll --reference=ovl -o x.exe > ovl.txt 2>&1
+# RUN: %{fc} --check-prefix=NO-MATCH -DDIR=ovl --input-file=ovl.txt \
+# RUN:   --implicit-check-not=MemoryBarrierProcessWide --implicit-check-not=Exchange
+# RUN: FileCheck %s --check-prefix=OVERLOADS --input-file=ovl.txt
+# NO-MATCH:  {{^}}msil-ld: error: undefined .NET member '{{.*}}MemoryBarrier()' (requested by fence.o); 'System.Threading.Interlocked' is defined in {{.*}}FakeThreading{{.*}} ([[DIR]]{{[/\\]}}FakeThreading.dll) but has no such member; overloads present: {{.+$}}
+# OVERLOADS: {{^}}msil-ld: error: undefined .NET member {{.*}}; overloads present: {{.*}}(int32){{.*$}}
+
+## Static against instance.
+# RUN: not msil-ld fence.o --reference=FakeCore.dll --reference=inst -o x.exe > inst.txt 2>&1
+# RUN: %{fc} --check-prefix=NO-MATCH -DDIR=inst --input-file=inst.txt
+# RUN: FileCheck %s --check-prefix=INSTANCE --input-file=inst.txt
+# INSTANCE: {{^}}msil-ld: error: undefined .NET member {{.*}}; overloads present: {{.*}}instance{{.*$}}
+
+## A method of the base type, emitted on the requested type.
+# RUN: msil-ld fence.o --reference=FakeCore.dll --reference=base -o base.exe 2>&1 | count 0
+# RUN: llvm-cil-dump base.exe | FileCheck %s --check-prefix=BOUND --implicit-check-not=InterlockedBase
+
+## Obsolete: a warning, and the binding.
+# RUN: msil-ld fence.o --reference=FakeCore.dll --reference=obs -o obs.exe 2>&1 | %{fc} --check-prefix=OBSOLETE
+# OBSOLETE: {{^}}msil-ld: warning: '{{.*}}MemoryBarrier{{.*}}' is obsolete in {{.*}}FakeThreading{{.*$}}
+# RUN: llvm-cil-dump obs.exe | FileCheck %s --check-prefix=BOUND
+
+## RequiresPreviewFeatures: refused.
+# RUN: not msil-ld fence.o --reference=FakeCore.dll --reference=prev -o x.exe 2>&1 | %{fc} --check-prefix=PREVIEW
+# PREVIEW: {{^}}msil-ld: error: '{{.*}}MemoryBarrier{{.*}}' requires preview features{{$}}
+
+## Only a generic MemoryBarrier<T>(): no match, listed with its arity.
+# RUN: not msil-ld fence.o --reference=FakeCore.dll --reference=gen -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=ENTRY -DDIR=gen "-DLIST=void MemoryBarrier<1>()"
+
+## Only vararg void MemoryBarrier(): no match for the default convention,
+## and the request reads without 'vararg'.
+# RUN: not msil-ld fence.o --reference=FakeCore.dll --reference=va -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=ENTRY -DDIR=va "-DLIST=vararg void MemoryBarrier()"
+
+## Only an 'assembly' MemoryBarrier(): listed, not bound.
+# RUN: not msil-ld fence.o --reference=FakeCore.dll --reference=np -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=ENTRY -DDIR=np "-DLIST=void MemoryBarrier() (not public)"
+# ENTRY: {{^}}msil-ld: error: undefined .NET member 'void System.Threading.Interlocked::MemoryBarrier()' (requested by fence.o); 'System.Threading.Interlocked' is defined in FakeThreading 8.1.2.3 [31bf3856ad364e35] ([[DIR]]/FakeThreading.dll) but has no such member; overloads present: [[LIST]]{{$}}
+
+## A vararg request against void MemoryBarrier(): no match, and the request
+## reads with 'vararg'.
+# RUN: not msil-ld main-named.o named-vararg.o --reference=FakeCore.dll --reference=plain -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=VARARG-REQUEST
+# VARARG-REQUEST: {{^}}msil-ld: error: undefined .NET member 'vararg void System.Threading.Interlocked::MemoryBarrier()' (requested by named-vararg.o); 'System.Threading.Interlocked' is defined in FakeThreading 8.1.2.3 [31bf3856ad364e35] (plain/FakeThreading.dll) but has no such member; overloads present: void MemoryBarrier(){{$}}
+
+## An 'assembly' MemoryBarrier() in Interlocked and a public one in its base:
+## the nearer one has the match's signature, so the request is the
+## undefined-member error that names it, through a link and through
+## --print-bcl-binding; the list may also name the base type's entry, which
+## carries its declaring type.
+# RUN: not msil-ld fence.o --reference=FakeCore.dll --reference=hid -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=HIDDEN-LINK
+# HIDDEN-LINK: {{^}}msil-ld: error: undefined .NET member 'void System.Threading.Interlocked::MemoryBarrier()' (requested by fence.o); 'System.Threading.Interlocked' is defined in FakeThreading 8.1.2.3 [31bf3856ad364e35] (hid/FakeThreading.dll) but has no such member; overloads present: void MemoryBarrier() (not public){{(; void System\.Threading\.InterlockedBase::MemoryBarrier\(\))?$}}
+# RUN: msil-ld --reference=FakeCore.dll --reference=hid --print-bcl-binding=member:Interlocked_MemoryBarrier 2>&1 \
+# RUN:   | %{fc} --check-prefix=HIDDEN-BINDING
+# HIDDEN-BINDING: {{^}}member:Interlocked_MemoryBarrier -> undefined .NET member 'void System.Threading.Interlocked::MemoryBarrier()' (requested by {{[^)]+}}); 'System.Threading.Interlocked' is defined in FakeThreading 8.1.2.3 [31bf3856ad364e35] (hid/FakeThreading.dll) but has no such member; overloads present: void MemoryBarrier() (not public){{(; void System\.Threading\.InterlockedBase::MemoryBarrier\(\))?$}}
+
+## The nearer 'assembly' member differs from the base one in a modopt only:
+## the runtime does not resolve to it, so the base one binds, on Interlocked,
+## with the base one's signature.
+# RUN: msil-ld fence.o --reference=FakeCore.dll --reference=hidmod -o hidmod.exe 2>&1 | count 0
+# RUN: llvm-cil-dump hidmod.exe | FileCheck %s --check-prefix=BOUND --implicit-check-not=InterlockedBase \
+# RUN:   --implicit-check-not=IsVolatile
+
+## The base type in another reference: bound on Interlocked, and the only
+## AssemblyRef is FakeThreading's.
+# RUN: msil-ld fence.o --reference=FakeCore.dll --reference=xb -o xb.exe 2>&1 | count 0
+# RUN: llvm-cil-dump xb.exe | FileCheck %s --check-prefix=BOUND --implicit-check-not=InterlockedBase \
+# RUN:   --implicit-check-not=FakeBarrierBase
+# RUN: llvm-cil-dump --tables xb.exe | FileCheck %s --check-prefix=XBASE-ROWS
+# XBASE-ROWS:      {{^}}Table: AssemblyRef rows=1 rowsize={{[0-9]+}}{{$}}
+# XBASE-ROWS-NEXT: {{^}}  AssemblyRef[1]: {{.*}} Name='FakeThreading' Culture='' HashValue=-{{$}}
+
+## The base type that the search needs is not among the references (the xb
+## set without FakeBarrierBase.dll): InterlockedBase's own type error, never
+## 'has no such member'; an optional request falls back.
+# RUN: not msil-ld fence.o --reference=FakeCore.dll --reference=xbonly -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=BASE-MISSING --implicit-check-not="no such member"
+# BASE-MISSING: {{^}}msil-ld: error: type 'System.Threading.InterlockedBase' is not defined in the references (2 assemblies){{$}}
+# RUN: msil-ld --reference=FakeCore.dll --reference=xbonly --print-bcl-binding=member:Interlocked_MemoryBarrier:drop \
+# RUN:   --print-bcl-binding=member:Interlocked_MemoryBarrier 2>&1 \
+# RUN:   | %{fc} --check-prefix=BASE-MISSING-BINDING --implicit-check-not="no such member"
+# BASE-MISSING-BINDING:      {{^}}member:Interlocked_MemoryBarrier:drop -> omitted{{$}}
+# BASE-MISSING-BINDING-NEXT: {{^}}member:Interlocked_MemoryBarrier -> type 'System.Threading.InterlockedBase' is not defined in the references (2 assemblies){{$}}
+
+## InterlockedBase defined twice (FakeBarrierBase and FakeBarrierBaseCopy):
+## the ambiguity error in either reference order, also for an optional
+## request.
+# RUN: not msil-ld fence.o --reference=FakeCore.dll --reference=xb/FakeThreading.dll --reference=xb/FakeBarrierBase.dll \
+# RUN:   --reference=copy/FakeBarrierBaseCopy.dll -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=BASE-TWO --implicit-check-not="no such member"
+# RUN: not msil-ld fence.o --reference=copy/FakeBarrierBaseCopy.dll --reference=xb/FakeBarrierBase.dll \
+# RUN:   --reference=xb/FakeThreading.dll --reference=FakeCore.dll -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=BASE-TWO --implicit-check-not="no such member"
+# BASE-TWO: {{^}}msil-ld: error: type 'System.Threading.InterlockedBase' is defined in two references: FakeBarrierBase 1.0.0.0 [null] (xb/FakeBarrierBase.dll) and FakeBarrierBaseCopy 1.0.0.0 [null] (copy/FakeBarrierBaseCopy.dll){{$}}
+# RUN: msil-ld --reference=copy/FakeBarrierBaseCopy.dll --reference=xb --reference=FakeCore.dll \
+# RUN:   --print-bcl-binding=member:Interlocked_MemoryBarrier:drop 2>&1 \
+# RUN:   | %{fc} --check-prefix=BASE-TWO-BINDING --implicit-check-not=omitted --implicit-check-not="no such member"
+# BASE-TWO-BINDING: {{^}}member:Interlocked_MemoryBarrier:drop -> type 'System.Threading.InterlockedBase' is defined in two references: FakeBarrierBase 1.0.0.0 [null] (xb/FakeBarrierBase.dll) and FakeBarrierBaseCopy 1.0.0.0 [null] (copy/FakeBarrierBaseCopy.dll){{$}}
+
+## A constructor request searches the requested type only: FakeCoreNoCtor's
+## EntryPointNotFoundException has .ctor() and no .ctor(string), which its
+## base System.Exception defines; the list names its own constructor only.
+# RUN: msil-ld --reference=noctor --print-bcl-binding=member:EntryPointNotFoundException_ctor 2>&1 \
+# RUN:   | %{fc} --check-prefix=NO-CTOR --implicit-check-not=System.Exception
+# NO-CTOR: {{^}}member:EntryPointNotFoundException_ctor -> undefined .NET member 'instance void System.EntryPointNotFoundException::.ctor(string)' (requested by {{[^)]+}}); 'System.EntryPointNotFoundException' is defined in FakeCore 8.0.0.0 [b03f5f7f11d50a3a] (noctor/FakeCore.dll) but has no such member; overloads present: instance void .ctor(){{$}}
+
+#--- fence.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define void @barrier() {
+  fence seq_cst
+  ret void
+}
+
+define i32 @main() {
+  call void @barrier()
+  ret i32 0
+}
+
+#--- main-named.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare void @named()
+
+define i32 @main() {
+  call void @named()
+  ret i32 0
+}

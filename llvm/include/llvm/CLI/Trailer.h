@@ -44,6 +44,7 @@ namespace llvm {
 namespace cli {
 
 struct ImageLayout;
+enum class SectionRules : uint8_t;
 
 /// A handle that the sink defines and later prints or encodes; 0 is none.
 using EntityRef = uint32_t;
@@ -84,13 +85,20 @@ struct DataImport {
   std::string Module, Entry;
 };
 
-/// The native functions that '<msil>dataimport' calls (5.10.12): Kernel32 on
-/// Windows triples, LoadLibraryW (native int(native int)) and GetProcAddress
-/// (native int(native int, native int)); Dlfcn on ELF triples, dlopen
-/// (native int(native int, int32)) and dlsym (native int(native int,
-/// native int)).
+/// The functions that '<msil>dataimport' calls (5.10.12): NativeLibrary when
+/// the references of an msil-ld link define them (M21),
+/// System.Runtime.InteropServices.NativeLibrary::Load(string) and
+/// GetExport(native int, string), BCL members that take the names as
+/// strings; else Kernel32 on Windows triples, the P/Invokes LoadLibraryW
+/// (native int(native int)) and GetProcAddress (native int(native int,
+/// native int)); else Dlfcn on ELF triples, dlopen (native int(native int,
+/// int32)) and dlsym (native int(native int, native int)).
 struct DataImportHelper {
-  enum class Kind : uint8_t { Kernel32, Dlfcn } K = Kind::Kernel32;
+  enum class Kind : uint8_t {
+    Kernel32,
+    Dlfcn,
+    NativeLibrary
+  } K = Kind::Kernel32;
   EntityRef Load = 0, GetSymbol = 0;
 };
 
@@ -178,6 +186,16 @@ public:
   /// instruction list of M.Body.
   virtual void emitMethod(const TrailerMethod &M) = 0;
 };
+
+/// Whether the startup code of a target with \p Rules skips a null entry of a
+/// constructor table: an 8-byte slot whose bytes are zero and that no
+/// relocation fills (5.9.9; section 12, 'M21.b extended (M20 follow-ups)').
+/// The MSVC CRT's _initterm skips NULL entries of .CRT$XC*, so on COFF such a
+/// slot is no constructor; glibc calls every .init_array entry, so on ELF it
+/// stays the error 'constructor table entry at <section>+<offset> in <file>
+/// is not a function address'. msil-ld and the whole-program trailer's
+/// constructor walk both ask this.
+LLVM_ABI bool skipsNullConstructorSlots(SectionRules Rules);
 
 /// The number of 8-byte address slots that the relocation loop needs
 /// (5.9.9 rule 4): none when there are at most RelocLoopThreshold

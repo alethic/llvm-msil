@@ -1,0 +1,147 @@
+## Null slots in constructor tables (M21.b's follow-up of M20, the section
+## 12 row 'M21.b extended (M20 follow-ups)' item 1; ImplementationPlan.md
+## 5.9.9's constructor list, 5.9.14): msil-ld and the whole-program trailer
+## of --lto-emit-asm agree on them:
+## - on Windows triples a NULL slot of a '.CRT$XC*' section is skipped, as
+##   the MSVC CRT's _initterm skips NULL entries: the link succeeds and
+##   '.cctor' calls only the real constructor (the slot stays data);
+## - on ELF triples a NULL slot of '.init_array' stays the error
+##   'constructor table entry at <section>+<off> in <file> is not a function address'
+##   (glibc calls every entry), in the object link, the LTO link (whose file
+##   is the LTO object) and --lto-emit-asm (whose file is ld-temp.o).
+## Each module has the NULL slot first and a slot that runs init(), which
+## stores 7 into log; both slots are kept by llvm.used.
+## A slot is NULL only if no relocation and no symbol difference fills any
+## of its bytes. msil-ld (isNullSlot) takes each relocation and difference
+## as 8 bytes wide, so one that starts up to 7 bytes before a slot fills it
+## too, and the trailer (isNullConstructorSlot) gives the same answer for
+## every slot. On Windows triples such a slot is not skipped but gets the
+## error above, in all three links:
+## - e-straddle.ll: a packed table whose relocation for init sits at +4 and
+##   straddles both slots, so neither is NULL (errors at +0 and +8);
+## - f-diff.ll: the first slot holds the difference g2 - g1 - 8 (error at
+##   +0), the second a real constructor.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj win.ll -o win.o
+# RUN: llc -filetype=obj lnx.ll -o lnx.o
+# RUN: llc -filetype=obj e-straddle.ll -o e-straddle.o
+# RUN: llc -filetype=obj f-diff.ll -o f-diff.o
+# RUN: llvm-as win.ll -o win.bc
+# RUN: llvm-as lnx.ll -o lnx.bc
+# RUN: llvm-as e-straddle.ll -o e-straddle.bc
+# RUN: llvm-as f-diff.ll -o f-diff.bc
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error:
+
+## Windows: skipped in every link.
+# RUN: msil-ld win.o -o win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win.exe > win.txt
+# RUN: %python %S/Inputs/cctor.py win.txt | FileCheck %s --check-prefix=WIN-CALLS
+# WIN-CALLS:     {{^}}call init{{$}}
+# WIN-CALLS-NOT: {{^}}call
+# RUN: msil-ld win.bc -o win-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win-lto.exe > win-lto.txt
+# RUN: %python %S/Inputs/cctor.py win-lto.txt | FileCheck %s --check-prefix=WIN-CALLS
+# RUN: msil-ld --lto-emit-asm win.bc -o win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WIN-TEXT --input-file=win.il
+# WIN-TEXT:     {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+# WIN-TEXT:     {{^}}  call void 'init'(){{$}}
+# WIN-TEXT-NOT: {{^}}  call{{ }}
+# WIN-TEXT:     {{^[}]}} // end of method '.cctor'{{$}}
+
+## ELF: the error, in every link.
+# RUN: not msil-ld lnx.o -o x.exe 2>&1 | %{fc} --check-prefix=LNX -DFILE=lnx.o
+# RUN: not msil-ld lnx.bc -o lnx-lto.exe 2>&1 | %{fc} --check-prefix=LNX -DFILE=lnx-lto.exe.lto.o
+# RUN: not msil-ld --lto-emit-asm lnx.bc -o x.il 2>&1 | %{fc} --check-prefix=LNX -DFILE=ld-temp.o
+# LNX: {{^}}msil-ld: error: constructor table entry at .init_array+0 in [[FILE]] is not a function address{{$}}
+
+## Windows: a relocation or a symbol difference fills the slot, the error in
+## every link; each link reports the slots in table order.
+# RUN: not msil-ld e-straddle.o -o x.exe 2>&1 | %{fc} --check-prefixes=COFF,STRADDLE -DFILE=e-straddle.o
+# RUN: not msil-ld e-straddle.bc -o e-straddle-lto.exe 2>&1 | %{fc} --check-prefixes=COFF,STRADDLE -DFILE=e-straddle-lto.exe.lto.o
+# RUN: not msil-ld --lto-emit-asm e-straddle.bc -o x.il 2>&1 | %{fc} --check-prefixes=COFF,STRADDLE -DFILE=ld-temp.o
+# RUN: not msil-ld f-diff.o -o x.exe 2>&1 | %{fc} --check-prefix=COFF -DFILE=f-diff.o
+# RUN: not msil-ld f-diff.bc -o f-diff-lto.exe 2>&1 | %{fc} --check-prefix=COFF -DFILE=f-diff-lto.exe.lto.o
+# RUN: not msil-ld --lto-emit-asm f-diff.bc -o x.il 2>&1 | %{fc} --check-prefix=COFF -DFILE=ld-temp.o
+# COFF:          {{^}}msil-ld: error: constructor table entry at .CRT$XCU+0 in [[FILE]] is not a function address{{$}}
+# STRADDLE-NEXT: {{^}}msil-ld: error: constructor table entry at .CRT$XCU+8 in [[FILE]] is not a function address{{$}}
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@nul = internal global ptr null, section ".CRT$XCU", align 8
+@slot = internal global ptr @init, section ".CRT$XCU", align 8
+@llvm.used = appending global [2 x ptr] [ptr @nul, ptr @slot], section "llvm.metadata"
+@log = global i32 0, align 4
+
+define internal void @init() {
+  store i32 7, ptr @log
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log
+  ret i32 %v
+}
+
+#--- lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@nul = internal global ptr null, section ".init_array", align 8
+@slot = internal global ptr @init, section ".init_array", align 8
+@llvm.used = appending global [2 x ptr] [ptr @nul, ptr @slot], section "llvm.metadata"
+@log = global i32 0, align 4
+
+define internal void @init() {
+  store i32 7, ptr @log
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log
+  ret i32 %v
+}
+
+#--- e-straddle.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@pk = internal global <{ i32, ptr, i32 }> <{ i32 0, ptr @init, i32 0 }>, section ".CRT$XCU", align 8
+@llvm.used = appending global [1 x ptr] [ptr @pk], section "llvm.metadata"
+@log = global i32 0, align 4
+
+define internal void @init() {
+  store i32 7, ptr @log
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log
+  ret i32 %v
+}
+
+#--- f-diff.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@g1 = internal global i64 5, align 8
+@g2 = internal global i64 6, align 8
+@df = internal global i64 add (i64 sub (i64 ptrtoint (ptr @g2 to i64), i64 ptrtoint (ptr @g1 to i64)), i64 -8), section ".CRT$XCU", align 8
+@slot = internal global ptr @init, section ".CRT$XCU", align 8
+@llvm.used = appending global [4 x ptr] [ptr @df, ptr @slot, ptr @g1, ptr @g2], section "llvm.metadata"
+@log = global i32 0, align 4
+
+define internal void @init() {
+  store i32 7, ptr @log
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @log
+  ret i32 %v
+}

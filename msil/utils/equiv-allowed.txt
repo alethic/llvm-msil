@@ -1,6 +1,7 @@
 # The normalizations of the equivalence oracles O3 and O4 (plan 5.12.6), read
 # by msil/utils/msil-equiv.py (%msil_equiv) and msil/utils/msil-prog.py
-# (--equiv-skip).
+# (--equiv-skip), and the skip lines of O3, O4 and O6, which
+# msil/utils/msil-verify.py (--md-baseline with --equiv-skip) reads for O6.
 #
 # O3: canon(clang -c + msil-ld --no-gc-sections) == canon(clang -S + ilasm),
 #     one translation unit (%{msil_c} and %{msil_ll} under msil_pipeline=obj
@@ -26,9 +27,14 @@
 # ilasm-params, ilasm-initlocals and snan-quiet directly.
 #
 # A 'skip <oracle>[@<triple>][:<level>] <test path> <reason>' line (oracle
-# O3 or O4) names a difference that no normalization removes: msil-equiv.py
-# --oracle <O> --test <path> prints '<O> skipped: <reason>' and passes, and
-# msil-prog.py --equiv-skip builds neither equivalence output for the test.
+# O3, O4 or O6) names a difference that no normalization removes:
+# msil-equiv.py --oracle <O> --test <path> prints '<O> skipped: <reason>' and
+# passes, and msil-prog.py --equiv-skip builds neither equivalence output for
+# the test (O3, O4); msil-verify.py --md-baseline with --equiv-skip and the
+# test's --test, --triple and --level prints 'O6 skipped: <reason>' instead of
+# comparing the PEVerify /md messages of the image that runs with those of
+# the -S build (O6; plan section 12, 'M21.c extended'). Each line covers its
+# own oracle only: an O3 line never skips O6, nor an O6 line O3.
 # The path is repository-relative; one that ends in '/' covers every test
 # below that directory. A line that names an MSIL triple ('@<triple>') or a
 # level (':<level>', one of O0, O1, O2, O3, Os and Oz) covers the test only
@@ -59,6 +65,8 @@ scopes --scopes=strip # -S and --lto-emit-asm text print [mscorlib], while msil-
 # and bytes), inside one object too (plan 5.9.9 rule 6).
 skip O3 msil/test/M1/07-globals/alias.c aliases: -S gives the function aliases chain_alias, pub_alias and weak_alias forwarding methods and replaces the data aliases by their aliasees, while the object's ALIAS symbols share the aliasee's method and give counter_alias and table_alias address fields of their own (plan 5.8.10)
 skip O3 msil/test/M1/07-globals/weak-undefined.c extern_weak: -S folds the extern_weak declarations to null with no field, while msil-ld gives the object's UNDEFINED WEAK symbols zero fields ('<msil>fn_maybe', weak_data) and zero bytes in the image, which the code then loads (plan 5.8.10, 5.9.6 step 3)
+skip O6 msil/test/M1/07-globals/alias.c aliases: msil-ld's image has the address fields counter_alias and table_alias of the object's ALIAS symbols, which the -S build replaces by their aliasees (plan 5.8.10), so PEVerify /md reports them (0x8013129D on Field '<Module>'::'counter_alias' and 'table_alias', at -O0 and -O2) and not for the baseline, in an environment where it reports every <Module> field of both images
+skip O6 msil/test/M1/07-globals/weak-undefined.c extern_weak: msil-ld's image has the zero fields '<msil>fn_maybe' and weak_data of the object's UNDEFINED WEAK symbols, which the -S build folds to null with no field (plan 5.8.10, 5.9.6 step 3), so PEVerify /md reports them (0x8013129D, at -O0 and -O2) and not for the baseline, in an environment where it reports every <Module> field of both images
 skip O3 msil/test/M1/10-calls/rust-shaped.ll aliases: llc's text gives the unnamed_addr alias sum_b a forwarding method that calls sum_a, while the object's ALIAS symbol shares sum_a's method (plan 5.8.10)
 skip O3@x86_64-pc-windows-msvc-msil:O2 msil/test/M1/11-programs/crc32.c unnamed_addr C strings: at -O2 on the Windows triple, msil-ld shares the equal STRINGS segments of the comdat string literal '??_C@_0BB@JCEFLFJE@0123456789abcdef?$AA@' and put_hex.digits (plan 5.9.9 rule 6), while -S keeps Phase 1's layout with one copy of each (plan 5.8.10), so the image's .data is 32 bytes smaller (1776 bytes against 1808) and every later field offset differs; at -O0 put_hex.digits is not unnamed_addr, and on the Linux triple ConstantMerge folds the private literal into put_hex.digits, so there both sides are equal
 skip O4 msil/test/M1/07-globals/alias.c aliases: the LTO object keeps the data aliases counter_alias and table_alias as ALIAS symbols with address fields of their own, which the image stores and loads, while the --lto-emit-asm text replaces them by their aliasees (plan 5.8.10)

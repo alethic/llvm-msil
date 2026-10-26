@@ -1,0 +1,118 @@
+# Native data imports go through NativeLibrary exactly when the references define it: with the .NET 8 pack, on .NET 8 and in WSL on .NET 10.
+# The program is msil/test/M2/03-native/data-import-testlib.test's: main.c
+# reads and writes the variables of a test-built native library (native.dll
+# on Windows triples, libnative.so on Linux triples) through their real
+# addresses. Each one is a native data import (plan 5.10.12, M20): its
+# address field is filled by '<msil>init_dataimports'(), which calls
+# '<msil>dataimport'(string module, string name) once per import. M20 gave
+# that helper the kernel32 body (Marshal::StringToHGlobalUni, LoadLibraryW,
+# Marshal::StringToHGlobalAnsi, GetProcAddress) on Windows triples and the
+# dlopen/dlsym body on Linux triples. From M21 the helper is
+# 'ldarg.0; call NativeLibrary::Load(string); ldarg.1; call
+# NativeLibrary::GetExport(native int, string); ret' whenever the references
+# define both members (M21.b item 6; the BCLMembers.def entries
+# NativeLibrary_Load and NativeLibrary_GetExport, which are not mscorlib-safe
+# and never in the built-in table), and M20's body otherwise. The composite
+# runs the program with the leg's references (none: M20's body). The RUN
+# lines after it link it against the .NET 8 pack, where NativeLibrary is
+# defined in System.Runtime.InteropServices (bcl-binding 2.2): the helper's
+# body is exactly that one, no kernel32 or libdl P/Invoke is left, and the
+# program verifies (PEVerify skipped, as for every .NET 8 binding), force-JITs
+# and runs against the same transcript on the leg's runtime (.NET 8 on
+# Windows, .NET 10 in WSL, where msil-run.py puts the --dep directory first in
+# LD_LIBRARY_PATH for the dlopen inside NativeLibrary::Load) and on .NET 8
+# wherever it is installed. Against the Framework v4.8 reference assemblies,
+# whose mscorlib has no NativeLibrary, the helper keeps M20's body, and the
+# canonical listing equals the link's without references. Plan 5.10.12,
+# 5.11.5 (the capability query), 5.11.6.
+# REQUIRES: msil-refpack=net8, msil-cil-dump
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %if msil-triple-windows %{ %clang_native -O2 -c %t/native.c -o %t/native.obj && %lld_link -dll -noentry -nodefaultlib %t/native.obj -out:%t/native.dll %} %else %{ %clang_native -O2 -fPIC -c %t/native.c -o %t/native.o && %ld_lld -shared -soname libnative.so %t/native.o -o %t/libnative.so %}
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_native_libs} = -L%t -lnative
+# REDEFINE: %{msil_deps} = %if msil-triple-windows %{%t/native.dll%} %else %{%t/libnative.so%}
+# RUN: %{msil_prog}
+# DEFINE: %{di_name} = net8
+# DEFINE: %{di_build} = \
+# DEFINE:   rm -rf %t.%{di_name} %t.%{di_name}.d \
+# DEFINE:   && %msil_prog_build --level O2 --link-output pe --workdir %t.%{di_name}.d --out %t.%{di_name}.d/prog.exe \
+# DEFINE:      --src %t/main.c --native-lib='-L%t -lnative' \
+# DEFINE:   && mkdir -p %t.%{di_name} \
+# DEFINE:   && %msil_canon %t.%{di_name}.d/prog.exe > %t.%{di_name}/canon.txt
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net8}
+# RUN: %{di_build}
+# RUN: FileCheck %s --check-prefix=NL --input-file=%t.net8/canon.txt --implicit-check-not=LoadLibraryW --implicit-check-not=GetProcAddress --implicit-check-not="'dlopen'" --implicit-check-not="'dlsym'"
+# RUN: %msil_verify --skip-peverify "bound to .NET 8 references" --dep %{msil_deps} -- %t.net8.d/prog.exe
+# RUN: %if msil-jitall %{ %msil_jitall --dep %{msil_deps} -- %t.net8.d/prog.exe %}
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t.net8/run.out --dep %{msil_deps} -- %t.net8.d/prog.exe
+# RUN: %if dotnet-runtime-8 %{ %msil_exec --runtimeconfig %S/Inputs/net8.runtimeconfig.json --expect %S/%{s:stem} --out %t.net8/net8.out --dep %{msil_deps} -- %t.net8.d/prog.exe %}
+# REDEFINE: %{di_name} = net48
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net48}
+# RUN: %if msil-refpack=net48 %{ %{di_build} && FileCheck %s --check-prefix=HELPER --input-file=%t.net48/canon.txt --implicit-check-not=NativeLibrary %}
+# REDEFINE: %{di_name} = none
+# REDEFINE: %{msil_ref_flags} =
+# RUN: %if msil-refpack=net48 %{ %{di_build} && diff %t.none/canon.txt %t.net48/canon.txt %}
+# The helper with NativeLibrary: no null check (the caller checks, plan
+# 5.10.12), each member throws on failure.
+# NL:      {{^}}  .method '<msil>dataimport' native int(string, string) flags=0x{{[0-9A-F]+}} impl=0x{{[0-9A-F]+}}{{$}}
+# NL-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# NL-NEXT: {{^}}    L0: ldarg.0{{$}}
+# NL-NEXT: {{^}}    L1: call native int(string) [System.Runtime.InteropServices]System.Runtime.InteropServices.NativeLibrary::'Load'{{$}}
+# NL-NEXT: {{^}}    L2: ldarg.1{{$}}
+# NL-NEXT: {{^}}    L3: call native int(native int, string) [System.Runtime.InteropServices]System.Runtime.InteropServices.NativeLibrary::'GetExport'{{$}}
+# NL-NEXT: {{^}}    L4: ret{{$}}
+# NL:      {{^}}  .method '<msil>init_dataimports' void() flags=0x{{[0-9A-F]+}} impl=0x{{[0-9A-F]+}}{{$}}
+# NL:      call native int(string, string) '<Module>'::'<msil>dataimport'{{$}}
+# M20's helper: kernel32's LoadLibraryW on Windows triples, dlopen on Linux
+# triples, then GetProcAddress or dlsym.
+# HELPER:      {{^}}  .method '<msil>dataimport' native int(string, string) flags=0x{{[0-9A-F]+}} impl=0x{{[0-9A-F]+}}{{$}}
+# HELPER:      call native int({{[^)]*}}) '<Module>'::'{{LoadLibraryW|dlopen}}'{{$}}
+# HELPER:      call native int({{[^)]*}}) '<Module>'::'{{GetProcAddress|dlsym}}'{{$}}
+#--- native.c
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT __attribute__((visibility("default")))
+#endif
+
+EXPORT int nat_counter = 5;
+EXPORT int nat_table[4] = {10, 20, 30, 40};
+EXPORT const char nat_text[] = "text in the native library";
+EXPORT int nat_get_counter(void) { return nat_counter; }
+EXPORT int nat_sum_table(void) {
+  return nat_table[0] + nat_table[1] + nat_table[2] + nat_table[3];
+}
+#--- main.c
+#include "msil_test.h"
+#if defined(_WIN32)
+#define IMPORT __declspec(dllimport)
+#else
+#define IMPORT
+#endif
+IMPORT extern int nat_counter;
+IMPORT extern int nat_table[4];
+IMPORT extern const char nat_text[];
+int nat_get_counter(void);
+int nat_sum_table(void);
+#if defined(_WIN32)
+int *counter_ptr;
+#else
+int *counter_ptr = &nat_counter;
+#endif
+
+int main(void) {
+#if defined(_WIN32)
+  counter_ptr = &nat_counter;
+#endif
+  put_kv("nat_counter", nat_counter);
+  put_kv("nat_table[2]", nat_table[2]);
+  put_str(nat_text);
+  nat_counter += 7;
+  nat_table[2] = 300;
+  put_kv("nat_get_counter", nat_get_counter());
+  put_kv("nat_sum_table", nat_sum_table());
+  *counter_ptr = 1;
+  put_kv("nat_get_counter", nat_get_counter());
+  put_kv("same address", counter_ptr == &nat_counter);
+  return nat_sum_table() & 0xff;
+}

@@ -1,0 +1,39 @@
+# References that hold two core libraries stop the link, whatever their order: the Framework's mscorlib and .NET 8's System.Runtime.
+# Both the Framework v4.8 mscorlib.dll and the .NET 8 pack's
+# System.Runtime.dll define top-level System.Object and reference no other
+# assembly, so each is a core library by Roslyn's rule (plan 5.11.3); a
+# reference set must hold exactly one, so mixing a .NET Framework and a .NET
+# pack fails with 5.11.9's text, which names both identities and paths. The
+# cases: the two files in either order, and the whole v4.8 directory (its
+# mscorlib; its System.Runtime is under Facades/, which a directory reference
+# does not search) with the .NET 8 System.Runtime.dll. The link fails cleanly
+# through %{msil_prog_fail_O2} on either pipeline. Plan 5.11.3, 5.11.9.
+# REQUIRES: msil-refpack=net48, msil-refpack=net8
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p1prog.c
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net48}/mscorlib.dll -Wl,--reference=%{msil_ref_dir_net8}/System.Runtime.dll
+# RUN: %{msil_prog_fail_O2} 2>&1 | FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net8}/System.Runtime.dll -Wl,--reference=%{msil_ref_dir_net48}/mscorlib.dll
+# RUN: %{msil_prog_fail_O2} 2>&1 | FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net48} -Wl,--reference=%{msil_ref_dir_net8}/System.Runtime.dll
+# RUN: %{msil_prog_fail_O2} 2>&1 | FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# CHECK:     {{^}}msil-ld: error: the references mix two core libraries: {{(.+ \(.*mscorlib\.dll\) and .+ \(.*System\.Runtime\.dll\)|.+ \(.*System\.Runtime\.dll\) and .+ \(.*mscorlib\.dll\))}}{{$}}
+# CHECK:     clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- p1prog.c
+/* llvm/docs/MSIL/recon/p2/bcl-binding-files/runtime/p1prog.c, the program of
+   bcl-binding 1.2 and 3.2. */
+/* Exercises every BCL member Phase 1 emits: the data segment (AllocHGlobal
+   and the RVA image type extending System.ValueType), argv
+   (GetCommandLineArgs, AllocHGlobal, StringToHGlobalAnsi), a variable-length
+   memmove (Buffer::MemoryCopy) and a fence (Interlocked::MemoryBarrier). */
+#include <stddef.h>
+int puts(const char *);
+static char buf[64] = "hello";
+const char *table[] = {buf, "world"};
+int main(int argc, char **argv) {
+  size_t n = (size_t)argc + 3;
+  __builtin_memmove(buf + 1, buf, n);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  puts(table[1]);
+  return argv[0][0] != 0 ? 42 : 1;
+}

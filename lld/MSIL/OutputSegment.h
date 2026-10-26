@@ -70,8 +70,10 @@ public:
 
   // The constructor list of 5.9.9 in run order: (method, returns a value).
   // A natively bound function is called through its canonical P/Invoke stub
-  // (\p symbols). Reports the slots that hold no function address and the
-  // constructors that take arguments.
+  // (\p symbols). A NULL slot is skipped on Windows triples, as the MSVC
+  // CRT's _initterm skips it (cli::skipsNullConstructorSlots). Reports the
+  // other slots that hold no function address and the constructors that
+  // take arguments.
   std::vector<std::pair<uint32_t, bool>> getConstructors(SymbolBinder &symbols);
 
   // True if the output has no data image (no segment or common symbol is

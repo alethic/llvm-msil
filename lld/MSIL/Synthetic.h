@@ -9,10 +9,12 @@
 // The output model of msil-ld's writer (llvm/docs/MSIL/ImplementationPlan.md
 // 5.9.12): the methods and fields of the output assembly before they become
 // metadata rows, the entities that the shared trailer builder names
-// (cli::EntityRef, plan 5.9.10), M20's BCL stand-in (plan 5.9.7: every BCL
-// reference binds to [mscorlib] 4.0.0.0, decision D10, until M21's binder),
-// and the cli::TrailerSink that turns the trailer's methods and RVA data into
-// that model (lld/wasm's SyntheticSections have the same role for wasm).
+// (cli::EntityRef, plan 5.9.10), the objects' BCL references as the BCL
+// binder binds them (BCLBinder.h, plan 5.9.7 and 5.11: against the link's
+// reference assemblies, or, without references, against the built-in
+// [mscorlib] table), and the cli::TrailerSink that turns the trailer's
+// methods and RVA data into that model (lld/wasm's SyntheticSections have the
+// same role for wasm).
 //
 // The writer collects every method and field first, in row order (5.9.12:
 // the kept methods by object in link order and row order, then the
@@ -26,8 +28,10 @@
 #ifndef LLD_MSIL_SYNTHETIC_H
 #define LLD_MSIL_SYNTHETIC_H
 
+#include "BCLBinder.h"
 #include "lld/Common/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
@@ -167,6 +171,9 @@ public:
 
   llvm::cli::MetadataBuilder mb;
   llvm::cli::SectionRules rules;
+  // The binder of every BCL type and member of the output (plan 5.11): one
+  // per output over mb, set by the writer before the first token is bound.
+  BCLBinder *binder = nullptr;
   SmallVector<OutputMethod, 0> methods;
   SmallVector<OutputField, 0> fields;
 
@@ -205,22 +212,25 @@ public:
   llvm::Expected<uint32_t> resolveToken(llvm::cli::TokenRef ref) const;
   uint32_t getToken(OutRef ref) const;
 
-  // The BCL stand-in (plan 5.9.7, 5.11.7): the TypeRef of a BCLMembers.def
-  // type in [mscorlib] 4.0.0.0 b77a5c561934e089, and the MemberRef of a
-  // method (a type gives its TypeRef).
+  // The output TypeRef of a BCLMembers.def type, and the MemberRef of a
+  // method (a type gives its TypeRef), as the binder binds them
+  // (BCLBinder::bindMember). Returns 0 after an error, which is reported.
   uint32_t getBCLType(llvm::cli::BCLMemberId id);
   uint32_t getBCLMember(llvm::cli::BCLMemberId id);
 
   // The output token of a type token (TypeDefOrRefOrSpec) of \p f: a TypeRef
-  // scoped to msil.bcl becomes the same type in [mscorlib], a nested TypeRef
-  // follows its enclosing one, '<Module>' is '<Module>' and a TypeSpec is
-  // re-encoded. Any other AssemblyRef scope is "<file>: reference to
-  // assembly '<n>' needs --reference, which this msil-ld does not support
-  // yet". Returns 0 after an error.
+  // scoped to an AssemblyRef other than the placeholders msil.extern and
+  // msil.link (msil.bcl, or any other name) is a type request that the
+  // binder binds by name, a nested TypeRef as 'Outer/Inner' under its
+  // outermost type's namespace (plan 5.11.4, 5.11.5); '<Module>' is
+  // '<Module>', and a TypeSpec is re-encoded with output tokens. Returns 0
+  // after an error, which is reported.
   uint32_t mapTypeToken(ObjFile &f, uint32_t token);
   // The output token of a BCL token of \p f (plan 5.9.7's 'MemberRef on
-  // another TypeRef, TypeRef, TypeSpec, MethodSpec'): a MemberRef is copied
-  // by name with its signature re-encoded. Returns 0 after an error.
+  // another TypeRef, TypeRef, TypeSpec, MethodSpec'): a MemberRef is a method
+  // or field request on its parent type, with the object's signature mapped
+  // to output tokens, which the binder binds by full signature. Returns 0
+  // after an error, which is reported.
   uint32_t mapBCLToken(ObjFile &f, uint32_t token);
   // A StandAloneSig of \p f (a local or calli signature), re-encoded and
   // deduplicated.
@@ -242,19 +252,56 @@ private:
     uint32_t value;
   };
   llvm::cli::EntityRef addEntity(Entity e);
-  uint32_t getMscorlib();
-  uint32_t mapTypeRef(ObjFile &f, uint32_t token, unsigned depth);
+  // The namespace and the name ('Outer/Inner' for a nested type) of the
+  // TypeRef \p token of \p f, which must be scoped, through its enclosing
+  // TypeRefs, to an AssemblyRef other than the placeholders.
+  llvm::Expected<std::pair<std::string, std::string>>
+  getTypeRefName(ObjFile &f, uint32_t token);
+  // The output token of the binder's result for \p r, or 0 after an error,
+  // which is reported.
+  uint32_t bind(const BCLRequest &r);
   void reportUnsupported(ObjFile &f, const llvm::Twine &what);
+  // Reports \p msg once.
+  void reportOnce(const llvm::Twine &msg);
 
   llvm::DenseMap<const InputMethod *, uint32_t> methodOf;
   std::vector<Entity> entities;
   llvm::DenseMap<uint32_t, llvm::cli::EntityRef> methodEntities, fieldEntities,
       tokenEntities;
-  uint32_t mscorlib = 0;
-  llvm::DenseMap<unsigned, uint32_t> bclTokens;
   llvm::DenseMap<std::pair<const ObjFile *, uint32_t>, uint32_t> typeTokens;
   llvm::StringMap<bool> reported;
 };
+
+// Binds the class or value type \p ns.\p name of a BCLMembers.def signature
+// to an output token (parseBCLMemberSig).
+using BCLTypeBinder = llvm::function_ref<llvm::Expected<uint32_t>(
+    StringRef ns, StringRef name, bool isValueType)>;
+
+// A method signature in BCLMembers.def's text (canonical listing v1, plan
+// 5.7.2): the return type \p ret and the comma-separated parameter types
+// \p params, each a primitive, a pointer or an SZARRAY of one, or
+// 'class <Ns.Name>' or 'valuetype <Ns.Name>', which \p bindType binds (an
+// Error without it); an instance method when \p hasThis. A type that does
+// not parse is an Error that names the signature as \p what (for example
+// "BCL member 'NativeLibrary_Load'").
+llvm::Expected<llvm::cli::MethodSig>
+parseBCLMethodSig(StringRef ret, StringRef params, bool hasThis, StringRef what,
+                  BCLTypeBinder bindType = nullptr);
+
+// The signature of the BCLMembers.def method \p info, from its canonical
+// listing v1 text (parseBCLMethodSig). An entry whose text does not parse is
+// an Error that names it.
+llvm::Expected<llvm::cli::MethodSig>
+parseBCLMemberSig(const llvm::cli::BCLMemberInfo &info,
+                  BCLTypeBinder bindType = nullptr);
+
+// The request for the BCLMembers.def entry \p id (plan 5.11.5): a Type
+// request for a type, a Method request for a method with the entry's
+// signature (parseBCLMemberSig with \p bindType), Required, from msil-ld's
+// own code (RequestedBy null).
+llvm::Expected<BCLRequest>
+getBCLMemberRequest(llvm::cli::BCLMemberId id,
+                    BCLTypeBinder bindType = nullptr);
 
 // The trailer sink of msil-ld (plan 5.9.10): the trailer's methods, fields,
 // RVA data, BCL members and strings become entries of an OutputModule; the

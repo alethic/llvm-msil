@@ -11,7 +11,10 @@
 // The input files of msil-ld (plan 5.9.4): CIL objects (ObjFile, plan 5.8)
 // and LLVM bitcode, as files, as archive members and between --start-lib and
 // --end-lib, the in-memory CIL objects that LTO writes, and native libraries
-// (NativeLibraryFile, plan 5.10.8). M21-M22 add .NET assemblies.
+// (NativeLibraryFile, plan 5.10.8). The driver classifies .NET assemblies
+// (AssemblyFiles.h): reference assemblies join the reference set (plan
+// 5.11), and libraries built by this toolchain go to
+// createManagedLibraryFile().
 //
 //===----------------------------------------------------------------------===//
 
@@ -96,8 +99,11 @@ private:
 // (cli::validateLinkInfo, C1-C7), decodes the method bodies, makes the
 // methods and segments and adds the symbols. The texts are plan 5.8.5's and
 // 5.9.14's:
-// - "<file>: .NET assembly inputs are not supported yet" for a PE with an
-//   Assembly row (M21 and M22 link them);
+// - for a PE with an Assembly row, which the driver never passes (it
+//   classifies .NET assemblies first, plan 5.9.4): the warning
+//   "<archive>(<member>): .NET assemblies in archives are not linked;
+//   ignored" for an archive member, else "<file>: a .NET assembly is not a
+//   CIL object";
 // - "<file>: not a CIL object (no link-info record)";
 // - "<file>: " and the reader's or the decoder's message
 //   ("invalid CLI image: ...", "invalid link-info record: ...");
@@ -258,7 +264,7 @@ public:
 // file is the error "unknown file type: <file>". Both return null, as do a
 // bitcode file with module-level inline assembly, after D26's error (plan
 // 5.9.14), and a PE with a CLI header that is no valid CIL object, after
-// ObjFile's error.
+// ObjFile's error or, for a .NET assembly in an archive, its warning.
 InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName = "",
                             uint64_t offsetInArchive = 0, bool lazy = false);
 

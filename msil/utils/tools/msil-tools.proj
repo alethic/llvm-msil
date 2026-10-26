@@ -1,7 +1,7 @@
 <!--
   msil-tools.proj: fetches the IL tools the MSIL tests need on hosts without
   the .NET Framework (Linux, macOS). Nothing is built; restore only downloads
-  the two packages below:
+  the three packages below:
 
     dotnet restore msil/utils/tools/msil-tools.proj -p:MsilToolsRid=linux-x64
 
@@ -13,10 +13,22 @@
   dotnet-ilverify, version MsilILVerifyVersion, installed by the CI workflow
   with 'dotnet tool update -g dotnet-ilverify'.
 
+  The third package is test tooling too (plan 5.12.12, M21): the .NET
+  Framework 4.8 reference assemblies,
+  microsoft.netframework.referenceassemblies.net48 at
+  MsilNet48RefAssembliesVersion, whose build/.NETFramework/v4.8 directory
+  the reference leg refs-net48 of msil/utils/ci/lit-legs.sh gives msil-ld
+  (lit parameter msil_references=net48). On Linux nothing else provides
+  them; msil-ci.yml exports the directory as MSIL_REF_NET48, and
+  msil/test/lit.cfg.py also finds it in the NuGet global-packages folder.
+  Windows uses the Reference Assemblies directory of the .NET Framework 4.8
+  targeting pack when it is installed.
+
   The versions are pinned to the ones in the local NuGet cache of the
-  development host (10.0.12, plan section 8). The workflow reads both version
-  properties from this file with 'dotnet msbuild -getProperty:<name>', so
-  this file is the only place to change them.
+  development host (10.0.12, plan section 8; 1.0.3 for the reference
+  assemblies). The workflow reads the version properties from this file with
+  'dotnet msbuild -getProperty:<name>', so this file is the only place to
+  change them.
 
   Restore state goes to the temporary directory, never into the source tree,
   so a local restore leaves 'git status' clean (the milestone scope check
@@ -36,6 +48,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <MsilILAsmVersion Condition="'$(MsilILAsmVersion)' == ''">10.0.12</MsilILAsmVersion>
     <MsilILVerifyVersion Condition="'$(MsilILVerifyVersion)' == ''">10.0.12</MsilILVerifyVersion>
+    <MsilNet48RefAssembliesVersion Condition="'$(MsilNet48RefAssembliesVersion)' == ''">1.0.3</MsilNet48RefAssembliesVersion>
     <!-- Download only the packages below: no targeting pack, no sources, no audit. -->
     <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
     <DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
@@ -47,6 +60,7 @@
   <ItemGroup>
     <PackageDownload Include="runtime.$(MsilToolsRid).Microsoft.NETCore.ILAsm" Version="[$(MsilILAsmVersion)]" />
     <PackageDownload Include="runtime.$(MsilToolsRid).Microsoft.NETCore.ILDAsm" Version="[$(MsilILAsmVersion)]" />
+    <PackageDownload Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="[$(MsilNet48RefAssembliesVersion)]" />
   </ItemGroup>
 
   <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />

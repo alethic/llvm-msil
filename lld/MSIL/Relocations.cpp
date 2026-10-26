@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Relocations.h"
+#include "BCLBinder.h"
 #include "Config.h"
 #include "InputChunks.h"
 #include "InputFiles.h"
@@ -385,6 +386,25 @@ bool SymbolBinder::addDataImports(TrailerInput &in) {
   }
   if (imports.empty())
     return true;
+  auto addImports = [&] {
+    for (const auto &[sym, index] : imports) {
+      const NativeExport &e = *cast<NativeData>(sym)->nativeExport;
+      in.DataImports.push_back(
+          {out.getFieldEntity(index), e.Module.str(), e.Entry.str()});
+    }
+  };
+
+  // The helper's first choice (plan 5.10.12, M21):
+  // System.Runtime.InteropServices.NativeLibrary when the references define
+  // both members; never in a link without references, whose built-in table
+  // has no NativeLibrary entry.
+  if (std::optional<DataImportHelper> helper = getNativeLibraryHelper()) {
+    in.ImportHelper = *helper;
+    addImports();
+    return true;
+  }
+  if (errorCount())
+    return false;
 
   SmallVector<DataImportFunction, 2> functions;
   if (!findDataImportFunctions(ctx.arg.target, ctx.nativeIndex, functions)) {
@@ -420,13 +440,32 @@ bool SymbolBinder::addDataImports(TrailerInput &in) {
   for (const DataImportFunction &fn : functions)
     helperFunctions.push_back(
         {fn.name.str(), fn.module.str(), fn.entry.str(), fn.def});
-
-  for (const auto &[sym, index] : imports) {
-    const NativeExport &e = *cast<NativeData>(sym)->nativeExport;
-    in.DataImports.push_back(
-        {out.getFieldEntity(index), e.Module.str(), e.Entry.str()});
-  }
+  addImports();
   return true;
+}
+
+std::optional<DataImportHelper> SymbolBinder::getNativeLibraryHelper() {
+  // A capability query first, which writes no row (BCLBinder::isDefined).
+  for (BCLMemberId id : {BCLMemberId::NativeLibrary_Load,
+                         BCLMemberId::NativeLibrary_GetExport}) {
+    Expected<BCLRequest> r = getBCLMemberRequest(id);
+    if (!r) {
+      // The entries' signatures name no class.
+      consumeError(r.takeError());
+      return std::nullopt;
+    }
+    if (!out.binder->isDefined(*r))
+      return std::nullopt;
+  }
+  uint32_t load = out.getBCLMember(BCLMemberId::NativeLibrary_Load);
+  uint32_t getExport = out.getBCLMember(BCLMemberId::NativeLibrary_GetExport);
+  if (!load || !getExport)
+    return std::nullopt;
+  DataImportHelper helper;
+  helper.K = DataImportHelper::Kind::NativeLibrary;
+  helper.Load = out.getTokenEntity(load);
+  helper.GetSymbol = out.getTokenEntity(getExport);
+  return helper;
 }
 
 void SymbolBinder::setImageOffsets() {
