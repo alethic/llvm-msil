@@ -1,0 +1,55 @@
+# The entry pinvoke-module of msil/utils/equiv-allowed.txt (plan 5.12.6;
+# M20): -S binds P/Invokes through the frozen D14 table and msil-ld through
+# native libraries with Q13 module strings (5.10.11, 5.10.13), so the
+# ImplMap scopes and ModuleRef rows of the two images differ. The pair: two
+# ilasm texts of the same program whose P/Invoke stub of puts names the
+# module "libc" (A) and "ucrtbase" (B), both assembled into prog.dll. With
+# every other entry allowed, msil-equiv.py fails (status 1) on exactly the
+# moduleref header line and the .pinvokeimpl line; with pinvoke-module
+# allowed too ('*' for the module, no moduleref lines), the images are equal
+# (the entry name and the ImplMap flags still compare).
+# REQUIRES: msil-cil-dump
+
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/a %t/b
+# RUN: %ilasm -dll -output=%t/a/prog.dll %t/a.il
+# RUN: %ilasm -dll -output=%t/b/prog.dll %t/b.il
+# RUN: not %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-access --allow scopes %t/a/prog.dll %t/b/prog.dll > %t/without.txt
+# RUN: FileCheck %s --check-prefix=WITHOUT --input-file=%t/without.txt
+# RUN: %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-access --allow scopes --allow pinvoke-module %t/a/prog.dll %t/b/prog.dll > %t/with.txt
+# RUN: FileCheck %s --check-prefix=WITH --input-file=%t/with.txt
+
+# WITHOUT:      msil-equiv: O3: {{.*}}prog.dll and {{.*}}prog.dll differ (4 differing lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-access, scopes); the first 4:
+# WITHOUT-NEXT: --- {{.*}}a{{[/\\]}}prog.dll
+# WITHOUT-NEXT: +++ {{.*}}b{{[/\\]}}prog.dll
+# WITHOUT-NEXT: @@ {{.*}} @@
+# WITHOUT-NEXT: -moduleref 'libc'
+# WITHOUT-NEXT: +moduleref 'ucrtbase'
+# WITHOUT-NEXT: @@ {{.*}} @@
+# WITHOUT-NEXT: -    .pinvokeimpl 'libc' entry 'puts' flags=0x0201
+# WITHOUT-NEXT: +    .pinvokeimpl 'ucrtbase' entry 'puts' flags=0x0201
+# WITHOUT-NOT:  {{.}}
+
+# WITH: msil-equiv: O3: {{.*}}prog.dll and {{.*}}prog.dll are equal ({{[0-9]+}} lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access, scopes)
+
+#--- a.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'prog' { .ver 0:0:0:0 }
+.method assembly static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) preservesig {}
+.method public static int32 'f'(native int) cil managed
+{
+  .maxstack 1
+  ldarg.0
+  call int32 'puts'(native int)
+  ret
+}
+#--- b.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'prog' { .ver 0:0:0:0 }
+.method assembly static pinvokeimpl("ucrtbase" nomangle cdecl) int32 'puts'(native int) preservesig {}
+.method public static int32 'f'(native int) cil managed
+{
+  .maxstack 1
+  ldarg.0
+  call int32 'puts'(native int)
+  ret
+}

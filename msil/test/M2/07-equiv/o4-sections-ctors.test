@@ -1,0 +1,113 @@
+# Oracle O4 with named sections, __start_/__stop_, constructor-table slots and constructor priorities.
+# The LTO PE (object output, --no-gc-sections) and ilasm of the
+# --lto-emit-asm text of the same bitcode must be equal canonically under the
+# four O4 normalizations (plan 5.12.6). Since M20 whole-program text lays
+# out named sections, defines a referenced __start_X/__stop_X on non-Windows
+# triples and runs constructor-table slots as a one-object link does, from
+# the same lib/CLI code that msil-ld uses for the LTO object (plan 5.8.10,
+# 5.9.9, 5.9.10); under --lto-emit-asm msil-ld leaves such a __start_ symbol
+# to code generation when a bitcode definition names the section (plan
+# 5.9.6). Two objects: records of one section group in both (o4sec on Linux
+# triples, walked from __start_o4sec to __stop_o4sec; 'o4sec$m' between
+# marker arrays in 'o4sec$a' and 'o4sec$z' on Windows triples), and four
+# initializers with four different keys, so the order does not depend on how
+# LTO merges the objects: b.c's constructor of priority 150, a.c's slot of
+# key 250 ('.init_array.250', or '.CRT$XCC00250' on Windows triples), a.c's
+# constructor of priority 300 ('.CRT$XCC00300' there) and b.c's slot of the
+# default key ('.init_array', '.CRT$XCU'). Natively they run in that order on
+# both OSes. The composite runs the program against the native transcript;
+# the RUN lines after it link both sides at -O0 and -O2, compare them and
+# run both images against the same transcript. Plan 5.12.6 (O4), 5.9.9
+# (M20).
+# REQUIRES: msil-cil-dump || msil-mdcanon
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+# DEFINE: %{equiv_o4} = %msil_equiv --oracle O4 --test %s --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet
+# RUN: mkdir -p %t/O0/pe %t/O0/il %t/O2/pe %t/O2/il
+# RUN: %clang_msil %{msil_cflags} -O0 -flto -c %t/a.c -o %t/O0/a.o
+# RUN: %clang_msil %{msil_cflags} -O0 -flto -c %t/b.c -o %t/O0/b.o
+# RUN: %clang_msil %{msil_ldflags} -O0 -Wl,--no-gc-sections %t/O0/a.o %t/O0/b.o -o %t/O0/pe/prog.exe
+# RUN: %clang_msil %{msil_ldflags} -O0 -Wl,--lto-emit-asm %t/O0/a.o %t/O0/b.o -o %t/O0/il/prog.il
+# RUN: %ilasm -exe -output=%t/O0/il/prog.exe %t/O0/il/prog.il
+# RUN: %{equiv_o4} %t/O0/pe/prog.exe %t/O0/il/prog.exe
+# RUN: %msil_verify %t/O0/pe/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O0/pe.out %t/O0/pe/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O0/il.out %t/O0/il/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -flto -c %t/a.c -o %t/O2/a.o
+# RUN: %clang_msil %{msil_cflags} -O2 -flto -c %t/b.c -o %t/O2/b.o
+# RUN: %clang_msil %{msil_ldflags} -O2 -Wl,--no-gc-sections %t/O2/a.o %t/O2/b.o -o %t/O2/pe/prog.exe
+# RUN: %clang_msil %{msil_ldflags} -O2 -Wl,--lto-emit-asm %t/O2/a.o %t/O2/b.o -o %t/O2/il/prog.il
+# RUN: %ilasm -exe -output=%t/O2/il/prog.exe %t/O2/il/prog.il
+# RUN: %{equiv_o4} %t/O2/pe/prog.exe %t/O2/il/prog.exe
+# RUN: %msil_verify %t/O2/pe/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O2/pe.out %t/O2/pe/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O2/il.out %t/O2/il/prog.exe
+#--- sec.h
+struct reg {
+  int v;
+};
+#if defined(_WIN32)
+#define O4SEC "o4sec$m"
+#else
+#define O4SEC "o4sec"
+#endif
+extern int trace;
+#--- a.c
+#include "msil_test.h"
+#include "sec.h"
+int trace;
+static const struct reg ra __attribute__((used, section(O4SEC))) = {1};
+static void a_slot(void) {
+  trace = trace * 10 + 2;
+  puts("a slot 250");
+}
+__attribute__((constructor(300))) static void a_ctor(void) {
+  trace = trace * 10 + 3;
+  puts("a constructor 300");
+}
+#if defined(_WIN32)
+const struct reg o4sec_first[1] __attribute__((section("o4sec$a"))) = {{0}};
+const struct reg o4sec_last[1] __attribute__((section("o4sec$z"))) = {{0}};
+#define O4SEC_BEGIN (o4sec_first + 1)
+#define O4SEC_END o4sec_last
+#pragma section(".CRT$XCC00250", read)
+__declspec(allocate(".CRT$XCC00250")) __attribute__((used)) static void (*p_a_slot)(void) = a_slot;
+#else
+extern const struct reg __start_o4sec[], __stop_o4sec[];
+#define O4SEC_BEGIN __start_o4sec
+#define O4SEC_END __stop_o4sec
+__attribute__((used, section(".init_array.250"))) static void (*p_a_slot)(void) = a_slot;
+#endif
+
+int main(void) {
+  int n = 0, s = 0;
+  for (const struct reg *p = O4SEC_BEGIN; p < O4SEC_END; ++p) {
+    ++n;
+    s += p->v;
+  }
+  puts("main");
+  put_kv("records", n);
+  put_kv("sum", s);
+  put_kv("trace", trace);
+  return (s + trace) & 0xff;
+}
+#--- b.c
+#include "sec.h"
+int puts(const char *);
+static const struct reg rb1 __attribute__((used, section(O4SEC))) = {2};
+static const struct reg rb2 __attribute__((used, section(O4SEC))) = {4};
+static void b_slot(void) {
+  trace = trace * 10 + 4;
+  puts("b slot (default key)");
+}
+__attribute__((constructor(150))) static void b_ctor(void) {
+  trace = trace * 10 + 1;
+  puts("b constructor 150");
+}
+#if defined(_WIN32)
+#pragma section(".CRT$XCU", read)
+__declspec(allocate(".CRT$XCU")) __attribute__((used)) static void (*p_b_slot)(void) = b_slot;
+#else
+__attribute__((used, section(".init_array"))) static void (*p_b_slot)(void) = b_slot;
+#endif

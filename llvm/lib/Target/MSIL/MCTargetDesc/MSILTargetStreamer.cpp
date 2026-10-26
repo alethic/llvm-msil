@@ -19,6 +19,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/CLI/BCLMembers.h"
 #include "llvm/CLI/LinkInfo.h"
+#include "llvm/CLI/Opcodes.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
@@ -30,6 +31,56 @@ using namespace llvm;
 MSILTargetStreamer::MSILTargetStreamer(MCStreamer &S) : MCTargetStreamer(S) {}
 
 MSILTargetStreamer::~MSILTargetStreamer() = default;
+
+/// Reports a trailer directive outside whole-program text (an internal
+/// error: objects have no trailer, plan 5.8.2).
+[[noreturn]] static void reportTrailerOnly(StringRef Directive) {
+  reportFatalInternalError("MSIL: " + Directive +
+                           " is whole-program output, which a CIL object does "
+                           "not contain");
+}
+
+void MSILTargetStreamer::emitHelperBegin(StringRef, cli::MethodAttributes,
+                                         const cli::MethodSig &) {
+  reportTrailerOnly("a synthesized helper method");
+}
+
+void MSILTargetStreamer::emitStringInstruction(cli::Opcode, StringRef) {
+  reportTrailerOnly("a string literal");
+}
+
+void MSILTargetStreamer::emitHelperInstruction(cli::Opcode, StringRef,
+                                               const cli::MethodSig &) {
+  reportTrailerOnly("a call of a synthesized helper method");
+}
+
+void MSILTargetStreamer::emitDataImportField(StringRef) {
+  reportTrailerOnly("the address field of a native data import");
+}
+
+/// Prints \p T as canonical listing v1 text, which ILAsm accepts for the
+/// primitive types and arrays of the synthesized methods; they have no type
+/// references.
+static void printSynthesizedType(raw_ostream &OS, const cli::TypeSig &T) {
+  cli::printTypeSig(OS, T, [](raw_ostream &, uint32_t) {
+    reportFatalInternalError("MSIL: a class or value type in a synthesized "
+                             "signature");
+  });
+}
+
+/// Prints "<ret> '<Name>'(<params>)", the spelling of a method in its header
+/// and in a call.
+static void printSynthesizedMethod(raw_ostream &OS, StringRef Name,
+                                   const cli::MethodSig &Sig) {
+  printSynthesizedType(OS, Sig.Return);
+  OS << ' ';
+  MSIL::printQuotedName(OS, Name);
+  OS << '(';
+  interleaveComma(Sig.Params, OS, [&OS](const cli::TypeSig &T) {
+    printSynthesizedType(OS, T);
+  });
+  OS << ')';
+}
 
 MSILTargetAsmStreamer::MSILTargetAsmStreamer(MCStreamer &S)
     : MSILTargetStreamer(S) {}
@@ -230,6 +281,14 @@ void MSILTargetAsmStreamer::emitAddressField(StringRef Name, bool Public,
   emitLine(OS.str());
 }
 
+void MSILTargetAsmStreamer::emitDataImportField(StringRef Name) {
+  SmallString<64> Str;
+  raw_svector_ostream OS(Str);
+  OS << ".field public static native int ";
+  MSIL::printQuotedName(OS, Name);
+  emitLine(OS.str());
+}
+
 void MSILTargetAsmStreamer::emitComment(const Twine &Text) {
   emitLine("// " + Text);
 }
@@ -264,6 +323,67 @@ void MSILTargetAsmStreamer::emitObjectHeader(bool BOM, StringRef SourceFile,
     emitLine(OS.str());
   }
   emitLine("");
+}
+
+void MSILTargetAsmStreamer::emitHelperBegin(StringRef Name,
+                                            cli::MethodAttributes Flags,
+                                            const cli::MethodSig &Sig) {
+  using cli::MethodAttributes;
+  auto Has = [Flags](MethodAttributes A) {
+    return (Flags & A) != MethodAttributes::PrivateScope;
+  };
+  SmallString<128> Str;
+  raw_svector_ostream OS(Str);
+  OS << ".method ";
+  switch (Flags & MethodAttributes::MemberAccessMask) {
+  case MethodAttributes::Private:
+    OS << "private";
+    break;
+  case MethodAttributes::Assembly:
+    OS << "assembly";
+    break;
+  case MethodAttributes::Public:
+    OS << "public";
+    break;
+  default:
+    reportFatalInternalError("MSIL: a synthesized method's access is not "
+                             "private, assembly or public");
+  }
+  if (Has(MethodAttributes::HideBySig))
+    OS << " hidebysig";
+  if (Has(MethodAttributes::SpecialName))
+    OS << " specialname";
+  if (Has(MethodAttributes::RTSpecialName))
+    OS << " rtspecialname";
+  if (Has(MethodAttributes::Static))
+    OS << " static";
+  OS << ' ';
+  printSynthesizedMethod(OS, Name, Sig);
+  // As in emitMethodBegin: both lines in one raw text.
+  OS << " cil managed\n{";
+  emitLine(OS.str());
+}
+
+void MSILTargetAsmStreamer::emitStringInstruction(cli::Opcode Op,
+                                                  StringRef UTF8) {
+  SmallString<64> Str;
+  raw_svector_ostream OS(Str);
+  // The escapes of the P/Invoke strings. A non-ASCII string needs the file's
+  // byte order mark (decision D11), which the AsmPrinter requests when an
+  // import string is not ASCII.
+  OS << "  " << cli::getOpcodeInfo(Op).Name << ' ';
+  MSIL::printQuotedString(OS, UTF8);
+  emitLine(OS.str());
+}
+
+void MSILTargetAsmStreamer::emitHelperInstruction(cli::Opcode Op,
+                                                  StringRef Name,
+                                                  const cli::MethodSig &Sig) {
+  SmallString<64> Str;
+  raw_svector_ostream OS(Str);
+  OS << "  " << cli::getOpcodeInfo(Op).Name << ' ';
+  printSynthesizedMethod(OS, Name, Sig);
+  emitLine(OS.str());
 }
 
 void MSILTargetAsmStreamer::emitLinkInfo(StringRef ModuleName,

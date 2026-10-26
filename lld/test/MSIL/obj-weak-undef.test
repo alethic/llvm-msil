@@ -1,0 +1,116 @@
+## Weak undefined symbols of CIL objects (ImplementationPlan.md 5.9.6 steps 2
+## and 3; wasm-ld's createUndefinedStub):
+## - a symbol still undefined and WEAK after native binding has address 0:
+##   its '<msil>fn_' field and its address field are never stored by
+##   '.cctor' (they stay 0), and data relocations against it leave their
+##   slots 0 (an FNADDR64 and an ADDR64 slot here: '.cctor' stores only the
+##   two address fields of the image);
+## - each direct call binds to a trap stub '<msil>undef_<name>' ('assembly',
+##   ldnull, throw) with the call's signature, one stub per call signature
+##   (two here: int32(int32) and native int(native int));
+## - native libraries come first (step 2): a weak undefined puts binds to
+##   ucrt.lib's module like any import, and without the library it is the
+##   trap stub. Nothing is reported.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj wu.ll -o wu.o
+# RUN: llc -filetype=obj wputs.ll -o wputs.o
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-stdio.def /out:ucrt.lib
+
+## (--no-gc-sections keeps slot and dslot, which nothing reads.)
+# RUN: msil-ld --no-gc-sections wu.o -o wu.exe 2>&1 | count 0
+# RUN: llvm-cil-dump wu.exe > wu.txt
+# RUN: FileCheck %s --check-prefix=WU --implicit-check-not="'<msil>fn_wf'" \
+# RUN:   --implicit-check-not="::'wf'" --implicit-check-not=stind --input-file=wu.txt
+
+# WU:      {{^}}  .field '<msil>data' native int flags=0x0031{{$}}
+# WU-NEXT: {{^}}  .field '<msil>fn_wf' native int flags=0x0031{{$}}
+# WU-NEXT: {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0111{{$}}
+# WU-NEXT: {{^}}    .data 16 bytes{{$}}
+# WU-NEXT: {{^}}      00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00{{$}}
+# WU-NEXT: {{^}}  .field 'dslot' native int flags=0x0036{{$}}
+# WU-NEXT: {{^}}  .field 'slot' native int flags=0x0036{{$}}
+# WU-NEXT: {{^}}  .field 'wd' native int flags=0x{{[0-9A-F]+}}{{$}}
+# WU-NEXT: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# WU:      {{^}}    L12: ldc.i4.s 16{{$}}
+# WU-NEXT: {{^}}    L13: cpblk{{$}}
+# WU-NEXT: {{^}}    L14: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# WU-NEXT: {{^}}    L15: stsfld native int '<Module>'::'slot'{{$}}
+# WU-NEXT: {{^}}    L16: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# WU-NEXT: {{^}}    L17: ldc.i4.8{{$}}
+# WU-NEXT: {{^}}    L18: add{{$}}
+# WU-NEXT: {{^}}    L19: stsfld native int '<Module>'::'dslot'{{$}}
+# WU-NEXT: {{^}}    L20: ret{{$}}
+# WU-NEXT: {{^}}  .method '<msil>Main' int32(string[]) flags=0x0091 impl=0x0000{{$}}
+# WU:      {{^}}  .method '<msil>undef_wf' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# WU-NEXT: {{^}}    .maxstack 1{{$}}
+# WU-NEXT: {{^}}    L0: ldnull{{$}}
+# WU-NEXT: {{^}}    L1: throw{{$}}
+# WU-NEXT: {{^}}  .method '<msil>undef_wf' native int(native int) flags=0x0013 impl=0x0000{{$}}
+# WU-NEXT: {{^}}    .maxstack 1{{$}}
+# WU-NEXT: {{^}}    L0: ldnull{{$}}
+# WU-NEXT: {{^}}    L1: throw{{$}}
+# WU-NEXT: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# WU-NEXT: {{^}}    .maxstack 2{{$}}
+# WU-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'<msil>fn_wf'{{$}}
+# WU:      {{^}}    L4: ldsfld native int '<Module>'::'wd'{{$}}
+# WU:      {{^}}    L11: call int32(int32) '<Module>'::'<msil>undef_wf'{{$}}
+# WU:      {{^}}    L14: call native int(native int) '<Module>'::'<msil>undef_wf'{{$}}
+# WU:      {{^}}    L18: ldsfld native int '<Module>'::'wd'{{$}}
+
+## A weak undefined puts: bound natively when a library defines it, else
+## the trap stub.
+# RUN: msil-ld wputs.o ucrt.lib -o bound.exe 2>&1 | count 0
+# RUN: llvm-cil-dump bound.exe | FileCheck %s --check-prefix=BOUND --implicit-check-not=undef_
+# RUN: msil-ld wputs.o -o trap.exe 2>&1 | count 0
+# RUN: llvm-cil-dump trap.exe | FileCheck %s --check-prefix=TRAP --implicit-check-not=pinvokeimpl
+# BOUND:      {{^}}    L1: call int32(native int) '<Module>'::'puts'{{$}}
+# BOUND:      {{^}}  .method 'puts' int32(native int) flags=0x2093 impl=0x0080{{$}}
+# BOUND-NEXT: {{^}}    .pinvokeimpl 'api-ms-win-crt-stdio-l1-1-0.dll' entry 'puts' flags=0x0201{{$}}
+# TRAP:       {{^}}  .method '<msil>undef_puts' int32(native int) flags=0x0013 impl=0x0000{{$}}
+# TRAP-NEXT:  {{^}}    .maxstack 1{{$}}
+# TRAP-NEXT:  {{^}}    L0: ldnull{{$}}
+# TRAP-NEXT:  {{^}}    L1: throw{{$}}
+# TRAP:       {{^}}    L1: call int32(native int) '<Module>'::'<msil>undef_puts'{{$}}
+
+#--- wu.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@wd = extern_weak global i32
+@slot = global ptr @wf, align 8
+@dslot = global ptr @wd, align 8
+
+declare extern_weak i32 @wf(i32)
+
+define i32 @main() {
+entry:
+  %hasf = icmp ne ptr @wf, null
+  br i1 %hasf, label %call, label %data
+call:
+  %a = call i32 @wf(i32 1)
+  %b = call i64 @wf(i64 2)
+  %b32 = trunc i64 %b to i32
+  %s = add i32 %a, %b32
+  ret i32 %s
+data:
+  %hasd = icmp ne ptr @wd, null
+  br i1 %hasd, label %load, label %none
+load:
+  %v = load i32, ptr @wd
+  ret i32 %v
+none:
+  ret i32 7
+}
+
+#--- wputs.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private unnamed_addr constant [3 x i8] c"hi\00", align 1
+
+declare extern_weak i32 @puts(ptr)
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  ret i32 0
+}

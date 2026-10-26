@@ -9,15 +9,23 @@
 # symbols, constructors of several priorities, function pointer tables across
 # TUs, a stock-clang TU, and an archive with lazily extracted and unused
 # members. The first RUN line is %{msil_det} (-O2); the second repeats it at
-# -O0, where LTO runs no optimization and keeps every function.
+# -O0, where LTO runs no optimization and keeps every function. From M20 the
+# sources are compiled with -flto on every pipeline (the REDEFINE of
+# %{msil_cflags}), so the test stays an LTO test where %{msil_prog} would
+# build CIL objects (det-obj.test covers those), and with
+# msil_link_output=pe the comparison includes msil-ld's image; the third RUN
+# line splits LTO code generation into four partitions, whose output must not
+# depend on how the partitions are scheduled (recon tests-p2 3.7).
 # Recon tests-p2 3.7, plan 5.12.5 (M14: --lto-emit-asm text; M20: objects and PE).
 # REQUIRES: msil-ar
 # RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_cflags} = -std=gnu17 -ffreestanding -Werror=return-type -I%msil_inputs -flto
 # REDEFINE: %{msil_srcs} = %t/main.c %t/b.c %t/c.c
 # REDEFINE: %{msil_stock_srcs} = %t/stock.c
 # REDEFINE: %{msil_archives} = parts=%t/p1.c,%t/p2.c,%t/p3.c
 # RUN: %{msil_det}
 # RUN: %msil_prog_build --det --level O0 --workdir %t.det0.d --src %{msil_srcs} --stock-src %{msil_stock_srcs} --archives=%{msil_archives}
+# RUN: %if msil-link-output=pe %{ %msil_prog_build --det --level O2 --workdir %t.det4.d --src %{msil_srcs} --stock-src %{msil_stock_srcs} --archives=%{msil_archives} --lib='-Wl,--lto-partitions=4' %}
 #--- main.c
 #include "msil_test.h"
 static int state = 1;

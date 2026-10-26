@@ -22,6 +22,13 @@
 /// visibility directives, alignment, constant pools, jump tables) is
 /// suppressed here or by MSILMCAsmInfo.
 ///
+/// The trailer is a one-object link with msil-ld's code (Q5, plan 5.9.9,
+/// 5.9.10): cli::layoutImage lays the globals out (MSILDataSegment), named
+/// sections included, and cli::buildTrailer builds the module initializer,
+/// the entry point and the data-import helpers, which MSILTrailerTextSink
+/// prints. Without named sections and with at most
+/// -msil-reloc-loop-threshold data relocations the text is Phase 1's.
+///
 /// In object mode (MSILTargetMachine::isObjectMode(), plan 5.8) the same
 /// methods are the methods of a CIL object (an object file, or its ILAsm
 /// form, object-form text), and emitEndOfAsmFile writes the rest of the
@@ -55,8 +62,10 @@
 #include "llvm/CLI/BCLMembers.h"
 #include "llvm/CLI/Handles.h"
 #include "llvm/CLI/ILBuilder.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/Opcodes.h"
 #include "llvm/CLI/Signature.h"
+#include "llvm/CLI/Trailer.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -101,6 +110,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
+#include "llvm/Support/StringSaver.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
@@ -108,6 +118,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <set>
 #include <string>
@@ -123,6 +134,30 @@ static cl::opt<std::string> MSILAssemblyName(
     cl::desc("MSIL: the name of the emitted assembly (default: the stem of "
              "the module's source file name, or 'module')"),
     cl::value_desc("name"));
+
+static cl::opt<unsigned> RelocLoopThreshold(
+    "msil-reloc-loop-threshold",
+    cl::desc("MSIL: apply the data relocations of the module initializer "
+             "through a table and a loop when there are more than this many "
+             "(plan 5.9.10)"),
+    cl::value_desc("count"), cl::init(32));
+
+/// The relocation-loop threshold of whole-program output (plan 5.9.10,
+/// section 12 row 'M20.a (4) and M20.b (6) clarified'):
+/// -msil-reloc-loop-threshold when given on the command line (also through
+/// -mllvm), else the module flag "msil-reloc-loop-threshold", which msil-ld
+/// sets on its merged module under --lto-emit-asm for its own
+/// --msil-reloc-loop-threshold, so that its text and its PE apply the
+/// relocations alike, else 32. A value that is not an integer constant
+/// counts as absent.
+static unsigned getRelocLoopThreshold(const Module &M) {
+  if (RelocLoopThreshold.getNumOccurrences() > 0)
+    return RelocLoopThreshold;
+  if (const auto *Flag = mdconst::dyn_extract_or_null<ConstantInt>(
+          M.getModuleFlag("msil-reloc-loop-threshold")))
+    return Flag->getLimitedValue(std::numeric_limits<unsigned>::max());
+  return RelocLoopThreshold;
+}
 
 /// The name of the assembly (decision D28 as amended for M14):
 /// -msil-assembly-name, else the module flag "msil-assembly-name", which
@@ -195,27 +230,19 @@ getFunctionInfoSignature(const MSILFunctionInfo &MFI,
 /// truncates larger ones. Index 0xFFFF is avoided.
 static constexpr size_t MaxArgsOrLocals = 0xFFFF;
 
-/// The name of the generated entry point (decision D27). The names that the
-/// printer generates start with '<msil>', but an asm label or the IR can
-/// spell any name: a function named '<msil>Main' is another method of that
-/// name, because no C function takes a string[].
-static constexpr StringRef EntryPointName = "<msil>Main";
-
-/// The names of the data segment (decision D12, plan section 5.1): the field
-/// that holds the segment's base address, and the RVA blob of its initialized
-/// part with its value type and its static field. No dots in the type name:
-/// ilasm would split it into a namespace and a name. Only DataFieldName can
-/// collide with the address field of a global variable
-/// (checkAddressFieldNames); the image field has a type of its own.
-static constexpr StringRef DataFieldName = "<msil>data";
-static constexpr StringRef ImageTypeName = "<msil>image_t";
-static constexpr StringRef ImageFieldName = "<msil>image";
+/// The label of the RVA blobs of the data image and of the relocation table
+/// (decision D12, plan 5.1 and 5.9.10). The other names of the trailer are
+/// cli::buildTrailer's (llvm/CLI/Trailer.h): no generated name can be a C
+/// function's or variable's, because none takes a string[] and only
+/// cli::DataFieldName can collide with the address field of a global variable
+/// (checkAddressFieldNames); the RVA fields have types of their own.
 static constexpr StringRef ImageLabel = "<msil>image_d";
+static constexpr StringRef RelocsLabel = "<msil>relocs_d";
 
 /// Whether \p Name is a constructor name, which no method or P/Invoke of a
 /// function may have: the runtime runs '<Module>::.cctor', which the printer
-/// generates (emitModuleInitializer), as the module initializer, and refuses
-/// to load a type with a static '.ctor'.
+/// generates (emitTrailer), as the module initializer, and refuses to load a
+/// type with a static '.ctor'.
 static bool isReservedMethodName(StringRef Name) {
   return Name == ".cctor" || Name == ".ctor";
 }
@@ -227,9 +254,7 @@ static void reportReservedMethodName(const Function &F, StringRef Name) {
                            " has the reserved IL name '" + Name + "'");
 }
 
-/// The CIL type of a local of type \p T (canonical listing v1's spelling is
-/// ILAsm's for these).
-static cli::TypeSig toTypeSig(MSIL::ValType T) {
+cli::TypeSig MSIL::toTypeSig(MSIL::ValType T) {
   switch (T) {
   case MSIL::ValType::I32:
     return cli::TypeSig::get(cli::ELEMENT_TYPE_I4);
@@ -245,101 +270,184 @@ static cli::TypeSig toTypeSig(MSIL::ValType T) {
   llvm_unreachable("MSIL: unknown value type");
 }
 
-namespace {
-/// The body of a method that the printer writes itself ('<msil>Main', and the
-/// module initializer), built with cli::ILBuilder (plan M18.a (7)): it
-/// computes .maxstack (the JIT rejects a method whose .maxstack is too small
-/// with InvalidProgramException), chooses the shortest forms and the branch
-/// forms, and the printer emits each instruction as a CIL_ MCInst, like the
-/// instructions of a compiled function. Token operands are
-/// TokenRef::getExternal(i), the index of an MSILMemberRefExpr in this body's
-/// table; labels are MCSymbols.
-class SynthesizedMethod {
-  cli::ILBuilder Builder;
-  SmallVector<const MSILMemberRefExpr *, 16> Tokens;
-  /// The symbol of each label, by ILLabel::Id.
-  SmallVector<MCSymbol *, 2> LabelSyms;
-
-  cli::TokenRef getToken(const MSILMemberRefExpr *Ref) {
-    Tokens.push_back(Ref);
-    return cli::TokenRef::getExternal(Tokens.size() - 1);
+cli::MethodSig MSIL::toMethodSig(const MSIL::Signature &S) {
+  cli::MethodSig M;
+  switch (S.CC) {
+  case MSIL::CallConv::Managed:
+    M.Header = cli::SIG_DEFAULT;
+    break;
+  case MSIL::CallConv::UnmanagedCdecl:
+    M.Header = cli::SIG_C;
+    break;
+  case MSIL::CallConv::UnmanagedStdcall:
+    M.Header = cli::SIG_STDCALL;
+    break;
   }
+  if (!S.Results.empty())
+    M.Return = toTypeSig(S.Results.front());
+  for (MSIL::ValType T : S.Params)
+    M.Params.push_back(toTypeSig(T));
+  return M;
+}
+
+/// The native functions of the data-import helper '<msil>dataimport' (plan
+/// 5.10.12) on \p TT: LoadLibraryW and GetProcAddress from kernel32 on
+/// Windows triples, dlopen and dlsym on the others, as cli::DataImportHelper
+/// calls them.
+static std::array<std::pair<StringRef, MSIL::Signature>, 2>
+getDataImportFunctions(const Triple &TT) {
+  using MSIL::ValType;
+  MSIL::Signature Load, GetSymbol;
+  Load.Results = {ValType::NativeInt};
+  GetSymbol.Results = {ValType::NativeInt};
+  GetSymbol.Params = {ValType::NativeInt, ValType::NativeInt};
+  if (TT.isOSWindows()) {
+    // HMODULE LoadLibraryW(LPCWSTR); FARPROC GetProcAddress(HMODULE, LPCSTR)
+    Load.Params = {ValType::NativeInt};
+    return {{{"LoadLibraryW", Load}, {"GetProcAddress", GetSymbol}}};
+  }
+  // void *dlopen(const char *, int); void *dlsym(void *, const char *)
+  Load.Params = {ValType::NativeInt, ValType::I32};
+  return {{{"dlopen", Load}, {"dlsym", GetSymbol}}};
+}
+
+namespace llvm {
+/// The text sink of cli::buildTrailer (plan 5.9.10). The trailer's entities
+/// are the MSILMemberRefExprs that code uses, so its instructions are CIL_
+/// MCInsts like those of a compiled function (MSILInstPrinter prints them,
+/// and plan 5.1's text keeps one owner); the data-import helpers and their
+/// string literals, which no MSILMemberRefExpr can spell (their signatures
+/// take strings), go through MSILTargetStreamer's helper calls instead. The
+/// sink records the RVA data and the methods, and the AsmPrinter emits them
+/// at their places in the trailer (emitDataSegment, emitMethods).
+class MSILTrailerTextSink final : public cli::TrailerSink {
+  MSILAsmPrinter &AP;
+  BumpPtrAllocator Alloc;
+  /// Owns the names that MSILMemberRefExprs refer to.
+  StringSaver Saver{Alloc};
+
+  struct Entity {
+    enum Kind : uint8_t { Member, Helper, String };
+    Kind K = Member;
+    /// Member: the operand of the instructions that name it.
+    const MSILMemberRefExpr *Ref = nullptr;
+    /// Helper: its name and signature; String: the literal.
+    std::string Name;
+    cli::MethodSig Sig;
+  };
+  /// EntityRef I is Entities[I - 1].
+  std::vector<Entity> Entities;
+  cli::EntityRef DataField = 0;
+  struct RVAData {
+    std::string FieldName;
+    std::vector<uint8_t> Bytes;
+  };
+  std::vector<RVAData> RVA;
+  std::vector<cli::TrailerMethod> Methods;
+
+  cli::EntityRef addEntity(Entity E) {
+    Entities.push_back(std::move(E));
+    return Entities.size();
+  }
+  void printMethod(const cli::TrailerMethod &M);
 
 public:
-  explicit SynthesizedMethod(bool ReturnsValue) : Builder(ReturnsValue) {}
+  explicit MSILTrailerTextSink(MSILAsmPrinter &AP) : AP(AP) {}
 
-  cli::ILBuilder &builder() { return Builder; }
-
-  /// A new label, printed as \p Sym.
-  cli::ILLabel createLabel(MCSymbol *Sym) {
-    cli::ILLabel L = Builder.createLabel();
-    assert(L.Id == LabelSyms.size() && "labels are numbered densely");
-    LabelSyms.push_back(Sym);
-    return L;
+  /// A member that MCInsts name.
+  cli::EntityRef add(const MSILMemberRefExpr *Ref) {
+    Entity E;
+    E.Ref = Ref;
+    return addEntity(std::move(E));
   }
 
-  /// An instruction with a token operand and a fixed stack effect (ldsfld,
-  /// stsfld, ldsflda, ldftn).
-  void emitToken(cli::Opcode Op, const MSILMemberRefExpr *Ref) {
-    Builder.emitToken(Op, getToken(Ref));
+  cli::EntityRef getDataField() override {
+    if (!DataField)
+      DataField = add(
+          MSILMemberRefExpr::createField(cli::DataFieldName, AP.OutContext));
+    return DataField;
+  }
+  cli::EntityRef addRVAData(StringRef TypeName, StringRef FieldName,
+                            ArrayRef<uint8_t> Bytes) override {
+    RVA.push_back({FieldName.str(), Bytes.vec()});
+    return add(MSILMemberRefExpr::createValueTypeField(
+        Saver.save(FieldName), Saver.save(TypeName), AP.OutContext));
+  }
+  cli::EntityRef getBCLMember(cli::BCLMemberId Id) override {
+    return add(MSILMemberRefExpr::createBCL(Id, AP.OutContext));
+  }
+  cli::EntityRef declareHelper(StringRef Name,
+                               const cli::MethodSig &Sig) override {
+    Entity E;
+    E.K = Entity::Helper;
+    E.Name = Name.str();
+    E.Sig = Sig;
+    return addEntity(std::move(E));
+  }
+  cli::EntityRef addUserString(StringRef UTF8) override {
+    Entity E;
+    E.K = Entity::String;
+    E.Name = UTF8.str();
+    return addEntity(std::move(E));
+  }
+  void emitMethod(const cli::TrailerMethod &M) override {
+    Methods.push_back(M);
   }
 
-  /// 'call' of \p Callee, which pops \p Pops values and pushes \p Pushes.
-  void emitCall(const MSILMemberRefExpr *Callee, unsigned Pops,
-                unsigned Pushes) {
-    Builder.emitCall(cli::Opcode::Call, getToken(Callee), Pops, Pushes);
+  /// The bytes of the RVA field \p FieldName; empty if there is none.
+  ArrayRef<uint8_t> getRVAData(StringRef FieldName) const {
+    for (const RVAData &D : RVA)
+      if (D.FieldName == FieldName)
+        return D.Bytes;
+    return {};
   }
 
-  /// Pushes \p Value as a native int (decision D2): the shortest 'ldc.i4'
-  /// form or 'ldc.i8', then 'conv.i', as code does for CONST_I64.
-  void emitNativeInt(int64_t Value) {
-    if (isInt<32>(Value))
-      Builder.emitLdcI4(static_cast<int32_t>(Value));
-    else
-      Builder.emitImm(cli::Opcode::Ldc_i8, Value);
-    Builder.emit(cli::Opcode::Conv_i);
+  /// Emits the methods in the order cli::buildTrailer made them: the
+  /// data-import helpers, <Module>::.cctor and '<msil>Main'.
+  void emitMethods() {
+    for (const cli::TrailerMethod &M : Methods)
+      printMethod(M);
   }
-
-  /// Adds \p Offset to the native int on top of the stack, exactly as code
-  /// does after the 'ldsfld' of GLOBAL_ADDR; nothing for 0.
-  void emitOffset(int64_t Offset) {
-    if (Offset == 0)
-      return;
-    if (isInt<32>(Offset)) {
-      Builder.emitLdcI4(static_cast<int32_t>(Offset));
-    } else {
-      Builder.emitImm(cli::Opcode::Ldc_i8, Offset);
-      Builder.emit(cli::Opcode::Conv_i);
-    }
-    Builder.emit(cli::Opcode::Add);
-  }
-
-  /// Lays the body out and emits .maxstack, the .locals of \p Locals and the
-  /// instructions with their labels.
-  void emit(MSILAsmPrinter &AP, ArrayRef<cli::TypeSig> Locals);
 };
-} // end anonymous namespace
+} // end namespace llvm
 
-void SynthesizedMethod::emit(MSILAsmPrinter &AP,
-                             ArrayRef<cli::TypeSig> Locals) {
-  if (Error E = Builder.layout())
-    reportFatalInternalError(Twine("MSIL: synthesized method: ") +
-                             toString(std::move(E)));
+void MSILTrailerTextSink::printMethod(const cli::TrailerMethod &M) {
   MSILTargetStreamer &TS = AP.getTargetStreamer();
-  TS.emitMaxStack(Builder.getMaxStack());
+  MSILMethodDecl Decl;
+  Decl.Name = M.Name;
+  Decl.Public = false;
+  if (M.Name == cli::ModuleInitializerName) {
+    Decl.Kind = MSILMethodKind::ModuleInitializer;
+    TS.emitMethodBegin(Decl);
+  } else if (M.Name == cli::EntryPointName) {
+    Decl.Kind = MSILMethodKind::EntryPoint;
+    TS.emitMethodBegin(Decl);
+    TS.emitEntryPoint();
+  } else {
+    TS.emitHelperBegin(M.Name, M.Flags, M.Sig);
+  }
+  const cli::ILBuilder &B = M.Body;
+  TS.emitMaxStack(B.getMaxStack());
   // Never 'init' (decision D13): every local is written before it is read.
-  TS.emitLocals(Locals);
+  TS.emitLocals(M.Locals);
 
+  // Method-local labels, temporary symbols like the block labels: never the
+  // symbol of a C function or variable of the same IL name. Text names them
+  // '@<name>' (MCAsmInfo's InternalSymbolPrefix), e.g. '@argv_loop'.
   MCContext &Ctx = AP.OutContext;
+  SmallVector<MCSymbol *, 4> LabelSyms;
+  SmallVector<std::pair<uint32_t, unsigned>, 4> LabelOffsets;
+  for (unsigned Id = 0, E = M.LabelNames.size(); Id != E; ++Id) {
+    LabelSyms.push_back(
+        Ctx.createTempSymbol(M.LabelNames[Id], /*AlwaysAddSuffix=*/false));
+    LabelOffsets.push_back({B.getLabelOffset(cli::ILLabel{Id}), Id});
+  }
   auto Label = [&](cli::ILLabel L) {
-    assert(L.isValid() && L.Id < LabelSyms.size() && "unknown label");
+    assert(L.isValid() && L.Id < LabelSyms.size() && "unnamed label");
     return MCOperand::createExpr(MCSymbolRefExpr::create(LabelSyms[L.Id], Ctx));
   };
   // The labels in offset order, each emitted before the instruction at its
   // offset (or after the last one).
-  SmallVector<std::pair<uint32_t, unsigned>, 2> LabelOffsets;
-  for (unsigned Id = 0, E = LabelSyms.size(); Id != E; ++Id)
-    LabelOffsets.push_back({Builder.getLabelOffset(cli::ILLabel{Id}), Id});
   llvm::sort(LabelOffsets);
   auto *NextLabel = LabelOffsets.begin();
   auto EmitLabelsUpTo = [&](uint32_t Offset) {
@@ -348,7 +456,7 @@ void SynthesizedMethod::emit(MSILAsmPrinter &AP,
       AP.OutStreamer->emitLabel(LabelSyms[NextLabel->second]);
   };
 
-  for (const cli::ILInstr &I : Builder.instructions()) {
+  for (const cli::ILInstr &I : B.instructions()) {
     EmitLabelsUpTo(I.Offset);
     MCInst Inst;
     Inst.setOpcode(MSIL::getMCOpcodeForCIL(I.Op));
@@ -377,13 +485,24 @@ void SynthesizedMethod::emit(MSILAsmPrinter &AP,
     case cli::OperandKind::InlineType:
     case cli::OperandKind::InlineTok:
     case cli::OperandKind::InlineSig:
-    case cli::OperandKind::InlineString:
+    case cli::OperandKind::InlineString: {
       assert(I.Token.getKind() == cli::TokenRef::Kind::External &&
-             I.Token.getValue() < Tokens.size() && "unknown token");
-      Inst.addOperand(MCOperand::createExpr(Tokens[I.Token.getValue()]));
+             I.Token.getValue() != 0 && I.Token.getValue() <= Entities.size() &&
+             "unknown entity");
+      const Entity &E = Entities[I.Token.getValue() - 1];
+      if (E.K == Entity::String) {
+        TS.emitStringInstruction(I.Op, E.Name);
+        continue;
+      }
+      if (E.K == Entity::Helper) {
+        TS.emitHelperInstruction(I.Op, E.Name, E.Sig);
+        continue;
+      }
+      Inst.addOperand(MCOperand::createExpr(E.Ref));
       break;
+    }
     case cli::OperandKind::InlineSwitch:
-      for (cli::ILLabel L : Builder.getSwitchTargets(I))
+      for (cli::ILLabel L : B.getSwitchTargets(I))
         Inst.addOperand(Label(L));
       break;
     }
@@ -391,7 +510,8 @@ void SynthesizedMethod::emit(MSILAsmPrinter &AP,
     // subtarget (MSIL has one processor and no features, decision D7).
     AP.OutStreamer->emitInstruction(Inst, AP.TM.getMCSubtargetInfo());
   }
-  EmitLabelsUpTo(Builder.getCodeSize());
+  EmitLabelsUpTo(B.getCodeSize());
+  TS.emitMethodEnd(M.Name);
 }
 
 //===----------------------------------------------------------------------===//
@@ -521,6 +641,8 @@ bool MSILAsmPrinter::doInitialization(Module &M) {
   FuncAddrs.clear();
   LinkedPInvokes.clear();
   LinkedPInvokeNames.clear();
+  StartStopFields.clear();
+  DataImportVars.clear();
   MCInstLowering = std::make_unique<MSILMCInstLower>(OutContext, *this);
   // CodeGenTargetMachineImpl created the streamer, which decides the mode,
   // before this pass.
@@ -642,8 +764,16 @@ void MSILAsmPrinter::emitStartOfAsmFile(Module &M) {
     return false;
   };
   auto HasNonASCIILinkedImport = [&M]() {
+    if (!MSIL::isLinkedModule(M))
+      return false;
+    // Native data imports print their module and entry as string literals
+    // (plan 5.10.12).
+    for (const GlobalVariable &GV : M.globals())
+      for (StringRef Kind : {"msil-import-module", "msil-import-name"})
+        if (!isASCII(GV.getAttribute(Kind).getValueAsString()))
+          return true;
     const NamedMDNode *Imports = M.getNamedMetadata("msil.imports");
-    if (!Imports || !MSIL::isLinkedModule(M))
+    if (!Imports)
       return false;
     for (const MDNode *Op : Imports->operands())
       for (const MDOperand &S : Op->operands())
@@ -682,8 +812,10 @@ void MSILAsmPrinter::emitEndOfAsmFile(Module &M) {
   // one before this hook). The layout comes first: a relocation can name a
   // function, whose address field it reads, and an undefined one, whose
   // 'ldftn' targets its P/Invoke declaration, as can a constructor, or an
-  // undefined global variable, which is an error.
-  Data->finalize();
+  // undefined global variable, which is an error unless it is a
+  // __start_/__stop_ symbol of an output section or native data.
+  Data->finalize(getSectionRules(), getRelocLoopThreshold(M));
+  checkSections(M);
   for (const MSILReloc &R : Data->Relocs) {
     if (const auto *F = dyn_cast<Function>(R.Target)) {
       noteFunctionAddress(*F);
@@ -704,22 +836,58 @@ void MSILAsmPrinter::emitEndOfAsmFile(Module &M) {
   collectExternGlobals(M);
   collectFunctionAddresses(M);
   checkAddressFieldNames(M);
-  SmallVector<const Function *, 8> CtorFns = collectConstructors();
+  SmallVector<const Function *, 8> CtorFns = collectConstructors(M);
 
   // ILAsm resolves forward references, so the order only serves the reader
   // (plan section 5.1): the P/Invoke declarations, the data segment with its
   // address fields, the address fields of functions, the module initializer
   // and the entry point.
   emitPInvokeDeclarations(M);
-  emitDataSegment();
-  emitFunctionAddressFields();
-  emitModuleInitializer(CtorFns);
+  emitTrailer(M, CtorFns);
+}
 
-  // An available_externally main has no method (no MachineFunction is
-  // emitted for it), so it gets no entry point either.
-  if (const Function *Main = M.getFunction("main");
-      Main && !Main->isDeclarationForLinker())
-    emitEntryPoint(*Main);
+cli::SectionRules MSILAsmPrinter::getSectionRules() const {
+  return TM.getTargetTriple().isOSWindows() ? cli::SectionRules::COFF
+                                            : cli::SectionRules::ELF;
+}
+
+void MSILAsmPrinter::checkSections(const Module &M) {
+  // In IR order, as an object lists its segments.
+  SmallVector<const MSILDataSegment::Entry *, 16> Entries;
+  for (const MSILDataSegment::Entry &E : Data->Entries)
+    Entries.push_back(&E);
+  llvm::sort(Entries, [](const MSILDataSegment::Entry *L,
+                         const MSILDataSegment::Entry *R) {
+    return L->Index < R->Index;
+  });
+  // The texts of msil-ld (plan 5.9.9, 5.9.14), with the module's source file
+  // name as the file. Such globals stay ordinary data (a thread-local
+  // section stays out of the image), so the output stays well formed.
+  LLVMContext &Ctx = M.getContext();
+  StringRef File = M.getSourceFileName();
+  cli::SectionRules Rules = getSectionRules();
+  for (const MSILDataSegment::Entry *E : Entries) {
+    switch (cli::classifySection(E->Section, Rules)) {
+    case cli::SectionClass::Data:
+    case cli::SectionClass::ConstructorTable:
+      break;
+    case cli::SectionClass::DestructorTable:
+      Ctx.emitError("global destructors are not supported yet: " +
+                    MSIL::getILName(*E->GV, TM) + " in " + File);
+      break;
+    case cli::SectionClass::Unsupported:
+      Ctx.emitError("section '" + E->Section + "' in " + File +
+                    " is not supported");
+      break;
+    case cli::SectionClass::TLS:
+      // A thread_local variable reaches here only without MSILPrepareIR,
+      // whose backstop in emitGlobalVariable has reported it.
+      if (!E->GV->isThreadLocal())
+        Ctx.emitError("thread-local storage is not supported yet: " +
+                      MSIL::getILName(*E->GV, TM) + " in " + File);
+      break;
+    }
+  }
 }
 
 const DenseMap<const MCSymbol *, const GlobalValue *> &
@@ -735,18 +903,69 @@ MSILAsmPrinter::getSymToGV(const Module &M) {
   return SymToGV;
 }
 
+/// The native data import of the external variable \p GV, named \p Name, in
+/// msil-ld's linked text (plan 5.10.12, 5.10.13): the module and the entry
+/// of its import attributes ("msil-import-module", "msil-import-name"; the
+/// entry defaults to the name), else of a kind-1 operand of !msil.imports,
+/// !{!"<symbol>", !"<module>", !"<entry>", i32 1}.
+static std::optional<std::pair<std::string, std::string>>
+getLinkedDataImport(const Module &M, const GlobalVariable &GV, StringRef Name) {
+  if (StringRef Module =
+          GV.getAttribute("msil-import-module").getValueAsString();
+      !Module.empty()) {
+    StringRef Entry = GV.getAttribute("msil-import-name").getValueAsString();
+    return std::make_pair(Module.str(), (Entry.empty() ? Name : Entry).str());
+  }
+  const NamedMDNode *Imports = M.getNamedMetadata("msil.imports");
+  if (!Imports)
+    return std::nullopt;
+  for (const MDNode *Op : Imports->operands()) {
+    if (Op->getNumOperands() != 4)
+      continue;
+    const auto *Symbol = dyn_cast_or_null<MDString>(Op->getOperand(0));
+    const auto *Module = dyn_cast_or_null<MDString>(Op->getOperand(1));
+    const auto *Entry = dyn_cast_or_null<MDString>(Op->getOperand(2));
+    const auto *Kind =
+        mdconst::dyn_extract_or_null<ConstantInt>(Op->getOperand(3));
+    if (!Symbol || Symbol->getString() != Name || !Module ||
+        Module->getString().empty() || !Entry || !Kind || !Kind->isOne())
+      continue;
+    return std::make_pair(
+        Module->getString().str(),
+        (Entry->getString().empty() ? Name : Entry->getString()).str());
+  }
+  return std::nullopt;
+}
+
 void MSILAsmPrinter::collectExternGlobals(const Module &M) {
-  // Phase 1 has no linker, so a variable that another module defines cannot
-  // be resolved (decision D26). Only a reference is an error (Design.md 5.2
+  // A variable that another module defines cannot be resolved without a
+  // linker (decision D26). Only a reference is an error (Design.md 5.2
   // step 4): a declaration that nothing emitted refers to (unused, or used
   // only by an available_externally function, which is not compiled) is
-  // not.
+  // not. Two kinds resolve here, as a one-object link resolves them (plan
+  // 5.9.9, 5.10.12): off Windows, __start_<X> and __stop_<X> of an output
+  // section <X> (Windows triples keep the error, as native links leave them
+  // undefined); and in msil-ld's linked text, native data.
+  bool StartStop = !TM.getTargetTriple().isOSWindows();
+  bool Linked = MSIL::isLinkedModule(M);
   for (const GlobalVariable &GV : M.globals()) {
     if (!UsedExternGlobals.contains(&GV))
       continue;
     StringRef ILName = MSIL::getILName(GV, TM);
-    GV.getContext().emitError("external global variable '" + ILName +
-                              "' is not supported (phase 2 linker)");
+    std::optional<uint64_t> Offset;
+    if (StartStop)
+      Offset = cli::getStartStopOffset(Data->Layout, ILName);
+    std::optional<std::pair<std::string, std::string>> Import;
+    if (!Offset && Linked)
+      Import = getLinkedDataImport(M, GV, ILName);
+    if (Offset)
+      StartStopFields.push_back({&GV, *Offset});
+    else if (Import)
+      DataImportVars.push_back(
+          {&GV, std::move(Import->first), std::move(Import->second)});
+    else
+      GV.getContext().emitError("external global variable '" + ILName +
+                                "' is not supported (phase 2 linker)");
     // The address field is a new place where the name is printed (D11).
     if (ILName.size() > MSIL::MaxILNameBytes)
       GV.getContext().emitError(
@@ -794,7 +1013,7 @@ void MSILAsmPrinter::checkAddressFieldNames(const Module &M) {
     if (!HasField.contains(&GV))
       continue;
     StringRef Name = MSIL::getILName(GV, TM);
-    if (Name == DataFieldName) {
+    if (Name == cli::DataFieldName) {
       GV.getContext().emitError("global variable " + MSIL::getIRName(GV) +
                                 " has the reserved IL name '" + Name + "'");
       continue;
@@ -828,9 +1047,32 @@ void MSILAsmPrinter::checkAddressFieldNames(const Module &M) {
   }
 }
 
-SmallVector<const Function *, 8> MSILAsmPrinter::collectConstructors() {
+SmallVector<const Function *, 8>
+MSILAsmPrinter::collectConstructors(const Module &M) {
+  cli::SectionRules Rules = getSectionRules();
+  // The constructors with their keys and positions (plan 5.9.9), sorted at
+  // the end; the Id of an entry is its function's index in Fns.
+  SmallVector<cli::ConstructorEntry, 8> Entries;
   SmallVector<const Function *, 8> Fns;
-  for (const Structor &S : Ctors) {
+  // The module initializer calls each constructor without arguments (C's
+  // __attribute__((constructor)) functions take none) and drops a result.
+  auto Add = [&](const Function &F, cli::ConstructorEntry E) {
+    if (!getSignature(F).Params.empty()) {
+      F.getContext().emitError("global constructor '" + MSIL::getILName(F, TM) +
+                               "' takes arguments, which MSIL does not pass");
+      return;
+    }
+    if (F.isDeclarationForLinker())
+      noteExternFunction(F);
+    E.Id = Fns.size();
+    Fns.push_back(&F);
+    Entries.push_back(std::move(E));
+  };
+
+  // llvm.global_ctors, sorted by priority (preprocessXXStructorList keeps
+  // the array order of equal priorities): the INIT entries.
+  for (unsigned I = 0, E = Ctors.size(); I != E; ++I) {
+    const Structor &S = Ctors[I];
     // MSILPrepareIR replaces a diagnosed alias or ifunc by poison.
     if (isa<UndefValue>(S.Func))
       continue;
@@ -841,19 +1083,53 @@ SmallVector<const Function *, 8> MSILAsmPrinter::collectConstructors() {
           "MSIL");
       continue;
     }
-    // The module initializer calls each constructor without arguments (C's
-    // __attribute__((constructor)) functions take none) and drops a result.
-    if (!getSignature(*F).Params.empty()) {
-      F->getContext().emitError("global constructor '" +
-                                MSIL::getILName(*F, TM) +
-                                "' takes arguments, which MSIL does not pass");
-      continue;
-    }
-    if (F->isDeclarationForLinker())
-      noteExternFunction(*F);
-    Fns.push_back(F);
+    cli::ConstructorEntry Entry;
+    Entry.Key = cli::getConstructorKey(S.Priority, Rules);
+    Entry.Offset = I;
+    Add(*F, std::move(Entry));
   }
-  return Fns;
+
+  // Every 8-byte slot of a constructor-table section (.init_array*,
+  // .CRT$XC*) is a constructor too: the address of a function, which the
+  // native startup code would call (plan 5.8.10, 5.9.9).
+  DenseMap<uint64_t, const MSILReloc *> RelocAt;
+  for (const MSILReloc &R : Data->Relocs)
+    RelocAt.try_emplace(R.Site, &R);
+  SmallVector<const MSILDataSegment::Entry *, 4> Tables;
+  for (const MSILDataSegment::Entry &E : Data->Entries)
+    if (E.InImage && cli::classifySection(E.Section, Rules) ==
+                         cli::SectionClass::ConstructorTable)
+      Tables.push_back(&E);
+  llvm::sort(Tables, [](const MSILDataSegment::Entry *L,
+                        const MSILDataSegment::Entry *R) {
+    return L->Index < R->Index;
+  });
+  for (const MSILDataSegment::Entry *T : Tables) {
+    for (uint64_t Off = 0; Off < T->Size; Off += 8) {
+      const MSILReloc *R =
+          T->Size - Off >= 8 ? RelocAt.lookup(T->Offset + Off) : nullptr;
+      const auto *F =
+          R && R->Size == 8 ? dyn_cast<Function>(R->Target) : nullptr;
+      if (!F || F->isIntrinsic()) {
+        M.getContext().emitError(
+            "constructor table entry at " + T->Section + "+" + Twine(Off) +
+            " in " + M.getSourceFileName() + " is not a function address");
+        continue;
+      }
+      cli::ConstructorEntry Entry;
+      Entry.Key = cli::getConstructorKey(T->Section, Rules);
+      Entry.IsSlot = true;
+      Entry.Segment = T->Index;
+      Entry.Offset = Off;
+      Add(*F, std::move(Entry));
+    }
+  }
+
+  cli::sortConstructors(Entries);
+  SmallVector<const Function *, 8> Sorted;
+  for (const cli::ConstructorEntry &E : Entries)
+    Sorted.push_back(Fns[E.Id]);
+  return Sorted;
 }
 
 /// Whether a native C function passes a parameter or returns a result of type
@@ -1086,11 +1362,37 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     }
     Declare(F, Name, *Sig, *Lib, MSIL::getPInvokeEntry(Name, F));
   }
+
+  // The native functions of the data-import helper (plan 5.10.12), which
+  // msil-ld binds like imports and lists as kind-0 operands of
+  // !msil.imports. Without one the data imports stay unset; msil-ld reports
+  // that first ('cannot be imported'), so this is a backstop.
+  if (!DataImportVars.empty()) {
+    bool Bound = true;
+    for (const auto &[Name, Sig] : getDataImportFunctions(TT)) {
+      const Function *Named = MSIL::getFunctionByILName(M, Name);
+      const Function *Decl =
+          Named && Named->isDeclarationForLinker() ? Named : nullptr;
+      std::optional<MSIL::NativeImport> Import =
+          MSIL::getLinkedImport(M, Name, Decl);
+      if (!Import) {
+        Ctx.emitError("library call '" + Name +
+                      "' was not resolved by msil-ld");
+        Bound = false;
+        continue;
+      }
+      const MSIL::Signature &S = internSignature(Sig);
+      if (!Methods.count({Name, S}))
+        Declare(Decl, Name, S, Import->Module, Import->Entry);
+    }
+    if (!Bound)
+      DataImportVars.clear();
+  }
   if (!Declared.empty())
     TS.emitBlankLine();
 }
 
-void MSILAsmPrinter::emitDataSegment() {
+void MSILAsmPrinter::emitDataSegment(const MSILTrailerTextSink &Sink) {
   MSILTargetStreamer &TS = getTargetStreamer();
   if (!Data->Entries.empty()) {
     uint64_t InitSize = Data->InitSize;
@@ -1099,23 +1401,39 @@ void MSILAsmPrinter::emitDataSegment() {
                    Twine(InitSize) + " initialized + " +
                    Twine(TotalSize - InitSize) + " zero), align " +
                    Twine(Data->MaxAlign.value()) + " ----");
-    // The image is only read (the module initializer copies it): RVA memory
-    // is never written, and it never holds '&(label)' (decision D12).
-    if (!Data->Image.empty())
-      TS.emitDataImage(ImageTypeName, ImageFieldName, ImageLabel, Data->Image);
-    TS.emitAddressField(DataFieldName, /*Public=*/false, /*Generated=*/true);
+    // The image and the relocation table are only read (the module
+    // initializer copies the image and walks the table): RVA memory is never
+    // written, and it never holds '&(label)' (decision D12).
+    if (ArrayRef<uint8_t> Image = Data->getImage(); !Image.empty())
+      TS.emitDataImage(cli::ImageTypeName, cli::ImageFieldName, ImageLabel,
+                       Image);
+    if (ArrayRef<uint8_t> Relocs = Sink.getRVAData(cli::RelocsFieldName);
+        !Relocs.empty())
+      TS.emitDataImage(cli::RelocsTypeName, cli::RelocsFieldName, RelocsLabel,
+                       Relocs);
+    TS.emitAddressField(cli::DataFieldName, /*Public=*/false,
+                        /*Generated=*/true);
     for (const MSILDataSegment::Entry &E : Data->Entries) {
-      if (isVerbose())
+      if (isVerbose() && E.InImage)
         OutStreamer->AddComment("+" + Twine(E.Offset));
       TS.emitAddressField(MSIL::getILName(*E.GV, TM),
                           /*Public=*/!E.GV->hasLocalLinkage());
     }
   }
-  // Referenced declarations are errors (collectExternGlobals). Their fields
-  // keep the code and the module initializer that refer to them well formed;
-  // nothing sets them.
-  for (const GlobalVariable *GV : ExternGlobals)
-    TS.emitAddressField(MSIL::getILName(*GV, TM), /*Public=*/true);
+  // Referenced declarations: __start_/__stop_ symbols of output sections,
+  // native data in msil-ld's linked text, whose fields
+  // '<msil>init_dataimports' stores (so they are not initonly), and errors
+  // (collectExternGlobals). The fields of the errors keep the code and the
+  // module initializer that refer to them well formed; nothing sets them.
+  SmallPtrSet<const GlobalVariable *, 2> Imported;
+  for (const DataImportVar &V : DataImportVars)
+    Imported.insert(V.GV);
+  for (const GlobalVariable *GV : ExternGlobals) {
+    if (Imported.contains(GV))
+      TS.emitDataImportField(MSIL::getILName(*GV, TM));
+    else
+      TS.emitAddressField(MSIL::getILName(*GV, TM), /*Public=*/true);
+  }
   if (!Data->Entries.empty() || !ExternGlobals.empty())
     TS.emitBlankLine();
 }
@@ -1129,283 +1447,180 @@ void MSILAsmPrinter::emitFunctionAddressFields() {
     TS.emitBlankLine();
 }
 
-void MSILAsmPrinter::emitModuleInitializer(ArrayRef<const Function *> CtorFns) {
-  bool HasData = !Data->Entries.empty();
-  if (!HasData && FuncAddrs.empty() && CtorFns.empty())
-    return;
+void MSILAsmPrinter::emitTrailer(Module &M,
+                                 ArrayRef<const Function *> CtorFns) {
+  LLVMContext &Ctx = M.getContext();
+  MSILTrailerTextSink Sink(*this);
+  cli::TrailerInput In;
+  In.RelocLoopThreshold = getRelocLoopThreshold(M);
 
-  // The member references are the operands code uses (MSILMemberRefExpr).
-  auto FieldRef = [&](StringRef Name) {
-    return MSILMemberRefExpr::createField(Name, OutContext);
+  // The member references are the operands code uses (MSILMemberRefExpr):
+  // one entity per field, so that the relocation loop has one address slot
+  // per field and addend, as MSILDataSegment::finalize reserved them.
+  DenseMap<const GlobalValue *, cli::EntityRef> FieldOf;
+  auto GlobalField = [&](const GlobalVariable &GV) {
+    auto [It, Inserted] = FieldOf.try_emplace(&GV, 0);
+    if (Inserted) {
+      StringRef Name = MSIL::getILName(GV, TM);
+      It->second =
+          Sink.add(GV.isDeclarationForLinker()
+                       ? MSILMemberRefExpr::createExternField(Name, OutContext)
+                       : MSILMemberRefExpr::createField(Name, OutContext));
+    }
+    return It->second;
   };
-  auto GlobalRef = [&](const GlobalValue &GV) {
-    StringRef Name = MSIL::getILName(GV, TM);
-    return GV.isDeclarationForLinker()
-               ? MSILMemberRefExpr::createExternField(Name, OutContext)
-               : MSILMemberRefExpr::createField(Name, OutContext);
-  };
-  auto FnAddrRef = [&](const Function &F) {
-    return MSILMemberRefExpr::createFnAddr(MSIL::getILName(F, TM), OutContext);
+  auto FnAddrField = [&](const Function &F) {
+    auto [It, Inserted] = FieldOf.try_emplace(&F, 0);
+    if (Inserted)
+      It->second = Sink.add(
+          MSILMemberRefExpr::createFnAddr(MSIL::getILName(F, TM), OutContext));
+    return It->second;
   };
   auto MethodRef = [&](const Function &F) {
-    return MSILMCInstLower::createMethodRef(F, MSIL::getILName(F, TM),
-                                            getSignature(F), OutContext);
-  };
-  auto BCLRef = [&](cli::BCLMemberId Id) {
-    return MSILMemberRefExpr::createBCL(Id, OutContext);
+    return Sink.add(MSILMCInstLower::createMethodRef(
+        F, MSIL::getILName(F, TM), getSignature(F), OutContext));
   };
 
-  SynthesizedMethod Body(/*ReturnsValue=*/false);
-  cli::ILBuilder &B = Body.builder();
-  // The address field of every function whose address is used, which code
-  // (FUNC_ADDR) and the relocations read: the module's only 'ldftn' of each
-  // function, so every pointer to it has one value. On .NET Framework, the
-  // 'ldftn' of a method that the JIT compiles before the target first ran
-  // yields the target's precode, and in one compiled after it its code. An
-  // undefined function's is the 'ldftn' of its P/Invoke declaration.
-  auto AddFunctionAddresses = [&] {
-    for (const Function *F : FuncAddrs) {
-      Body.emitToken(cli::Opcode::Ldftn, MethodRef(*F));
-      Body.emitToken(cli::Opcode::Stsfld, FnAddrRef(*F));
-    }
-  };
-
-  if (HasData) {
-    LLVMContext &Ctx = Data->Entries.front().GV->getContext();
-    uint64_t InitSize = Data->InitSize;
-    uint64_t ZeroSize = Data->TotalSize - InitSize;
-    int64_t Alignment = Data->MaxAlign.value();
+  if (!Data->Entries.empty()) {
     // Sizes and offsets are int32 constants: cpblk and initblk take an
-    // unsigned int32 size, and 'add' an int32 offset.
-    if (!isInt<32>(Data->TotalSize + Alignment - 1))
+    // unsigned int32 size, and 'add' an int32 offset (Phase 1's limit and
+    // text; the trailer is still written, so the output stays well formed).
+    if (!isInt<32>(Data->TotalSize + Data->MaxAlign.value() - 1))
       Ctx.emitError("the data segment of " + Twine(Data->TotalSize) +
                     " bytes is larger than MSIL supports (2 GiB)");
-    const MSILMemberRefExpr *Base = FieldRef(DataFieldName);
-    // 'unaligned. N' before an access to Base + Offset that may be less
-    // aligned than the instruction assumes (Natural), with N the largest of
-    // 1, 2 and 4 that the address guarantees, as MSILSetMemFlags decides it
-    // for code (decision D24, ECMA-335 III.2.5). Base is aligned to MaxAlign.
-    auto AddUnaligned = [&](uint64_t Offset, uint64_t Natural) {
-      uint64_t A = commonAlignment(Data->MaxAlign, Offset).value();
-      if (A < Natural)
-        B.emitImm(cli::Opcode::Unaligned, std::min<uint64_t>(A, 4));
-    };
-    unsigned PointerSize = getDataLayout().getPointerSize();
+    In.Image = &Data->Layout;
 
-    // Base = (AllocHGlobal(TotalSize + MaxAlign - 1) + MaxAlign - 1) &
-    // -MaxAlign. AllocHGlobal only guarantees malloc's alignment, and its
-    // memory is neither zeroed nor freed.
-    Body.emitNativeInt(Data->TotalSize + Alignment - 1);
-    Body.emitCall(BCLRef(cli::BCLMemberId::Marshal_AllocHGlobal), 1, 1);
-    Body.emitNativeInt(Alignment - 1);
-    B.emit(cli::Opcode::Add);
-    Body.emitNativeInt(-Alignment);
-    B.emit(cli::Opcode::And);
-    Body.emitToken(cli::Opcode::Stsfld, Base);
-
-    // Copy the initialized part from the RVA blob.
-    if (InitSize != 0) {
-      Body.emitToken(cli::Opcode::Ldsfld, Base);
-      Body.emitToken(cli::Opcode::Ldsflda,
-                     MSILMemberRefExpr::createValueTypeField(
-                         ImageFieldName, ImageTypeName, OutContext));
-      B.emitLdcI4(static_cast<int32_t>(InitSize));
-      B.emit(cli::Opcode::Cpblk);
-    }
-    // AllocHGlobal does not zero its memory.
-    if (ZeroSize != 0) {
-      Body.emitToken(cli::Opcode::Ldsfld, Base);
-      Body.emitOffset(InitSize);
-      B.emitLdcI4(0);
-      B.emitLdcI4(static_cast<int32_t>(ZeroSize));
-      AddUnaligned(InitSize, PointerSize);
-      B.emit(cli::Opcode::Initblk);
-    }
-
-    // The address field of every global, which code reads (GLOBAL_ADDR).
+    // The address field of every global, which code reads (GLOBAL_ADDR), and
+    // of the __start_/__stop_ symbols, in image-offset order.
+    DenseMap<const GlobalVariable *, uint64_t> ImageOffset;
     SmallPtrSet<const GlobalVariable *, 16> HasField;
     for (const MSILDataSegment::Entry &E : Data->Entries) {
-      Body.emitToken(cli::Opcode::Ldsfld, Base);
-      Body.emitOffset(E.Offset);
-      Body.emitToken(cli::Opcode::Stsfld, GlobalRef(*E.GV));
       HasField.insert(E.GV);
+      if (!E.InImage)
+        continue;
+      In.AddressFields.push_back({GlobalField(*E.GV), E.Offset});
+      ImageOffset.try_emplace(E.GV, E.Offset);
     }
+    for (const auto &[GV, Offset] : StartStopFields)
+      In.AddressFields.push_back({GlobalField(*GV), Offset});
+    llvm::stable_sort(In.AddressFields, [](const auto &L, const auto &R) {
+      return L.second < R.second;
+    });
     HasField.insert_range(ExternGlobals);
-    AddFunctionAddresses();
 
-    // The relocations, now that every address is known: the address of a
-    // global plus its addend, or the address field of a function.
+    // The relocations, in site order: the address of a global plus its
+    // addend (its field, and its offset when it lives in the image), or the
+    // address field of a function.
     for (const MSILReloc &R : Data->Relocs) {
-      Body.emitToken(cli::Opcode::Ldsfld, Base);
-      Body.emitOffset(R.Site);
+      cli::RuntimeReloc X;
+      X.Site = R.Site;
+      X.Width = R.Size;
       if (const auto *F = dyn_cast<Function>(R.Target)) {
         assert(R.Addend == 0 && "the collector rejects function + offset");
-        Body.emitToken(cli::Opcode::Ldsfld, FnAddrRef(*F));
+        X.Field = FnAddrField(*F);
       } else {
         const auto *GV = dyn_cast<GlobalVariable>(R.Target);
         if (!GV || !HasField.contains(GV))
           Ctx.emitError("the initializer of a global variable refers to '" +
                         MSIL::getILName(*R.Target, TM) +
                         "', which is not program data");
-        Body.emitToken(cli::Opcode::Ldsfld,
-                       GV ? GlobalRef(*GV)
-                          : FieldRef(MSIL::getILName(*R.Target, TM)));
-        Body.emitOffset(R.Addend);
+        if (GV) {
+          X.Field = GlobalField(*GV);
+          if (auto It = ImageOffset.find(GV); It != ImageOffset.end())
+            X.ImageOffset = It->second;
+        } else {
+          auto [It, Inserted] = FieldOf.try_emplace(R.Target, 0);
+          if (Inserted)
+            It->second = Sink.add(MSILMemberRefExpr::createField(
+                MSIL::getILName(*R.Target, TM), OutContext));
+          X.Field = It->second;
+        }
+        X.Addend = R.Addend;
       }
-      if (R.Size == 4) {
-        B.emit(cli::Opcode::Conv_i4);
-        AddUnaligned(R.Site, 4);
-        B.emit(cli::Opcode::Stind_i4);
-      } else {
-        assert(R.Size == 8 && "relocations hold 4 or 8 bytes");
-        AddUnaligned(R.Site, PointerSize);
-        B.emit(cli::Opcode::Stind_i);
-      }
+      In.Relocs.push_back(X);
     }
-  } else {
-    // Without a data segment, the function addresses come first.
-    AddFunctionAddresses();
   }
 
-  // The constructors last, in priority order: the data they may touch is in
-  // place.
-  for (const Function *F : CtorFns) {
-    unsigned NumResults = getSignature(*F).Results.size();
-    Body.emitCall(MethodRef(*F), 0, NumResults);
-    if (NumResults != 0)
-      B.emit(cli::Opcode::Pop);
-  }
-  B.emitRet();
+  // The address field of every function whose address is used, set with
+  // the module's only 'ldftn' of the function, so every pointer to it has
+  // one value; an undefined function's is the 'ldftn' of its P/Invoke
+  // declaration (M9).
+  for (const Function *F : FuncAddrs)
+    In.FnAddrFields.push_back({FnAddrField(*F), MethodRef(*F)});
 
-  MSILTargetStreamer &TS = getTargetStreamer();
-  MSILMethodDecl Decl;
-  Decl.Name = ".cctor";
-  Decl.Public = false;
-  Decl.Kind = MSILMethodKind::ModuleInitializer;
-  TS.emitMethodBegin(Decl);
-  Body.emit(*this, {});
-  TS.emitMethodEnd(Decl.Name);
-}
-
-void MSILAsmPrinter::emitEntryPoint(const Function &Main) {
-  // C's two portable shapes of main, 'int main(void)' and
-  // 'int main(int, char **)' (decision D27).
-  const FunctionType *FTy = Main.getFunctionType();
-  LLVMContext &Ctx = Main.getContext();
-  bool HasArgs = FTy->getNumParams() == 2 &&
-                 FTy->getParamType(0)->isIntegerTy(32) &&
-                 FTy->getParamType(1) == PointerType::getUnqual(Ctx);
-  if (!FTy->getReturnType()->isIntegerTy(32) || FTy->isVarArg() ||
-      (FTy->getNumParams() != 0 && !HasArgs)) {
-    Ctx.diagnose(
-        DiagnosticInfoUnsupported(Main, "unsupported signature for main"));
-    return;
-  }
-
-  // The call spells main's signature exactly as its method header does.
-  const MSIL::Signature &Sig = getSignature(Main);
-  assert(Sig.Results.size() == 1 && Sig.Results.front() == MSIL::ValType::I32 &&
-         Sig.Params.size() == FTy->getNumParams() &&
-         "main's CIL signature does not match its IR type");
-
-  SynthesizedMethod Body(/*ReturnsValue=*/true);
-  cli::ILBuilder &B = Body.builder();
-  SmallVector<cli::TypeSig, 4> Locals;
-  if (HasArgs) {
-    // argc and a NULL-terminated argv as a native main gets them:
-    // Environment.GetCommandLineArgs() starts with the program (the .dll),
-    // and Marshal.StringToHGlobalAnsi converts to the native narrow encoding
-    // (UTF-8 on Unix, the ANSI code page on Windows). The strings and the
-    // array are never freed: they live as long as the program.
-    // Locals: 0 = the string[], 1 = argc, 2 = argv, 3 = i.
-    Locals = {
-        cli::TypeSig::getSZArray(cli::TypeSig::get(cli::ELEMENT_TYPE_STRING)),
-        cli::TypeSig::get(cli::ELEMENT_TYPE_I4), toTypeSig(Sig.Params[1]),
-        cli::TypeSig::get(cli::ELEMENT_TYPE_I4)};
-    unsigned PtrSize = Main.getDataLayout().getPointerSize();
-    // Method-local labels, temporary symbols like the block labels: never
-    // the symbol of a C function or variable of the same IL name. Text names
-    // them '@argv_loop' and '@argv_cond' (MCAsmInfo's InternalSymbolPrefix).
-    cli::ILLabel Loop = Body.createLabel(
-        OutContext.createTempSymbol("argv_loop", /*AlwaysAddSuffix=*/false));
-    cli::ILLabel Cond = Body.createLabel(
-        OutContext.createTempSymbol("argv_cond", /*AlwaysAddSuffix=*/false));
-    // Pushes the address of argv[<IndexLocal>].
-    auto AddArgvSlotAddress = [&](unsigned IndexLocal) {
-      B.emitLdloc(2);
-      B.emitLdloc(IndexLocal);
-      B.emit(cli::Opcode::Conv_i);
-      B.emitLdcI4(PtrSize);
-      B.emit(cli::Opcode::Mul);
-      B.emit(cli::Opcode::Add);
+  // Native data (plan 5.10.12), through the helper's native functions.
+  if (!DataImportVars.empty()) {
+    const Triple &TT = TM.getTargetTriple();
+    cli::DataImportHelper H;
+    H.K = TT.isOSWindows() ? cli::DataImportHelper::Kind::Kernel32
+                           : cli::DataImportHelper::Kind::Dlfcn;
+    auto Functions = getDataImportFunctions(TT);
+    auto HelperRef = [&](unsigned I) {
+      return Sink.add(MSILMemberRefExpr::createMethod(
+          Functions[I].first, &internSignature(Functions[I].second),
+          OutContext));
     };
-
-    Body.emitCall(
-        MSILMemberRefExpr::createBCL(
-            cli::BCLMemberId::Environment_GetCommandLineArgs, OutContext),
-        0, 1);
-    B.emitStloc(0);
-    // argc = args.Length
-    B.emitLdloc(0);
-    B.emit(cli::Opcode::Ldlen);
-    B.emit(cli::Opcode::Conv_i4);
-    B.emitStloc(1);
-    // argv = AllocHGlobal((argc + 1) * sizeof(char *))
-    B.emitLdloc(1);
-    B.emitLdcI4(1);
-    B.emit(cli::Opcode::Add);
-    B.emit(cli::Opcode::Conv_i);
-    B.emitLdcI4(PtrSize);
-    B.emit(cli::Opcode::Mul);
-    Body.emitCall(MSILMemberRefExpr::createBCL(
-                      cli::BCLMemberId::Marshal_AllocHGlobal, OutContext),
-                  1, 1);
-    B.emitStloc(2);
-    // for (i = 0; i < argc; ++i) argv[i] = StringToHGlobalAnsi(args[i])
-    B.emitLdcI4(0);
-    B.emitStloc(3);
-    B.emitBranch(cli::Opcode::Br, Cond);
-    B.placeLabel(Loop);
-    AddArgvSlotAddress(3);
-    B.emitLdloc(0);
-    B.emitLdloc(3);
-    B.emit(cli::Opcode::Ldelem_ref);
-    Body.emitCall(
-        MSILMemberRefExpr::createBCL(
-            cli::BCLMemberId::Marshal_StringToHGlobalAnsi, OutContext),
-        1, 1);
-    B.emit(cli::Opcode::Stind_i);
-    B.emitLdloc(3);
-    B.emitLdcI4(1);
-    B.emit(cli::Opcode::Add);
-    B.emitStloc(3);
-    B.placeLabel(Cond);
-    B.emitLdloc(3);
-    B.emitLdloc(1);
-    B.emitBranch(cli::Opcode::Blt, Loop);
-    // argv[argc] = NULL
-    AddArgvSlotAddress(1);
-    B.emitLdcI4(0);
-    B.emit(cli::Opcode::Conv_i);
-    B.emit(cli::Opcode::Stind_i);
-    // return main(argc, argv)
-    B.emitLdloc(1);
-    B.emitLdloc(2);
+    H.Load = HelperRef(0);
+    H.GetSymbol = HelperRef(1);
+    In.ImportHelper = H;
+    for (const DataImportVar &V : DataImportVars)
+      In.DataImports.push_back({GlobalField(*V.GV), V.Module, V.Entry});
   }
-  Body.emitCall(MSILMemberRefExpr::createMethod(MSIL::getILName(Main, TM), &Sig,
-                                                OutContext),
-                Sig.Params.size(), 1);
-  B.emitRet();
 
-  MSILTargetStreamer &TS = getTargetStreamer();
-  MSILMethodDecl Decl;
-  Decl.Name = EntryPointName;
-  Decl.Public = false;
-  Decl.Kind = MSILMethodKind::EntryPoint;
-  TS.emitMethodBegin(Decl);
-  TS.emitEntryPoint();
-  Body.emit(*this, Locals);
-  TS.emitMethodEnd(EntryPointName);
+  // The constructors last, in run order: the data they may touch is in
+  // place.
+  for (const Function *F : CtorFns)
+    In.Ctors.push_back({MethodRef(*F), !getSignature(*F).Results.empty()});
+
+  // The entry function is main, or under msil-ld --lto-emit-asm --entry=<sym>
+  // the function that the module flag msil-entry names (plan 5.9.3, section
+  // 12 row 'M20.a (4) and M20.b (6)-(7) clarified'). Its CIL signature has
+  // one of the shapes of C's two portable mains, 'int main(void)' and 'int
+  // main(int, char **)' (decision D27, decided on the CIL signature as
+  // msil-ld's writer decides it, section 12 row 'D27 clarified'): so a narrow
+  // result (_Bool, char or short main), an int32 in CIL, qualifies, as does
+  // an IR (i32, i64) entry on a 64-bit triple. An available_externally entry
+  // has no method (no MachineFunction is emitted for it), so it gets no
+  // entry point either.
+  // In msil-ld's linked text the shape error is msil-ld's PE text, without
+  // the location prefix of DiagnosticInfoUnsupported (plan 5.9.14), and an
+  // entry that the flag names but the module does not define as a function
+  // (a variable, or nothing) is that error too, as in the PE (5.9.12).
+  StringRef EntryName = "main";
+  const auto *EntryFlag =
+      dyn_cast_or_null<MDString>(M.getModuleFlag("msil-entry"));
+  if (EntryFlag)
+    EntryName = EntryFlag->getString();
+  std::string EntryError = ("unsupported signature for " + EntryName).str();
+  const Function *Main = M.getFunction(EntryName);
+  if (EntryFlag && (!Main || Main->isDeclarationForLinker()))
+    Ctx.diagnose(DiagnosticInfoGeneric(EntryError));
+  if (Main && !Main->isDeclarationForLinker()) {
+    // The call spells the entry's signature exactly as its method header
+    // does.
+    const MSIL::Signature &Sig = getSignature(*Main);
+    unsigned PointerSize = Main->getDataLayout().getPointerSize();
+    std::optional<bool> HasArgs = cli::getEntryPointHasArgs(
+        MSIL::toMethodSig(Sig), Main->isVarArg(), PointerSize);
+    if (!HasArgs) {
+      if (MSIL::isLinkedModule(M))
+        Ctx.diagnose(DiagnosticInfoGeneric(EntryError));
+      else
+        Ctx.diagnose(DiagnosticInfoUnsupported(*Main, EntryError));
+    } else {
+      cli::EntryPoint E;
+      E.Main = Sink.add(MSILMemberRefExpr::createMethod(
+          MSIL::getILName(*Main, TM), &Sig, OutContext));
+      E.HasArgs = *HasArgs;
+      E.PointerSize = PointerSize;
+      In.Entry = E;
+    }
+  }
+
+  cli::buildTrailer(In, Sink);
+  emitDataSegment(Sink);
+  emitFunctionAddressFields();
+  Sink.emitMethods();
 }
 
 void MSILAsmPrinter::emitLinkage(const GlobalValue *GV, MCSymbol *GVSym) const {
@@ -1563,7 +1778,7 @@ void MSILAsmPrinter::emitFunctionBodyStart() {
   unsigned PointerSizeInBits = F.getDataLayout().getPointerSizeInBits();
   SmallVector<cli::TypeSig, 16> Locals;
   for (MVT VT : MFI->getLocals())
-    Locals.push_back(toTypeSig(MSIL::toValType(VT, PointerSizeInBits)));
+    Locals.push_back(MSIL::toTypeSig(MSIL::toValType(VT, PointerSizeInBits)));
   TS.emitLocals(Locals);
 
   // msil-ld never relaxes branches (plan 5.8), so their forms are chosen
@@ -1648,10 +1863,17 @@ static const GlobalObject *getAliasedObject(const GlobalAlias &GA,
 static MSIL::Signature getCallTypeSignature(const FunctionType *FTy,
                                             const Function &Caller,
                                             const TargetMachine &TM) {
+  return MSIL::getFunctionTypeSignature(FTy, nullptr, Caller, TM);
+}
+
+MSIL::Signature MSIL::getFunctionTypeSignature(const FunctionType *FTy,
+                                               const Function *TargetFunc,
+                                               const Function &Context,
+                                               const TargetMachine &TM) {
   SmallVector<MVT, 4> Params;
   SmallVector<MVT, 1> Results;
-  MSIL::computeSignatureVTs(FTy, nullptr, Caller, TM, Params, Results);
-  unsigned PointerSizeInBits = Caller.getDataLayout().getPointerSizeInBits();
+  computeSignatureVTs(FTy, TargetFunc, Context, TM, Params, Results);
+  unsigned PointerSizeInBits = Context.getDataLayout().getPointerSizeInBits();
   MSIL::Signature Sig;
   for (MVT VT : Results)
     Sig.Results.push_back(MSIL::toValType(VT, PointerSizeInBits));
@@ -1662,24 +1884,30 @@ static MSIL::Signature getCallTypeSignature(const FunctionType *FTy,
 
 /// The ABI descriptor (plan 5.8.8, SIGNATURES; its Token is left 0) of a call
 /// or definition of the IR function type \p FTy with the attributes \p Attrs:
-/// NO_PROTOTYPE if \p NoPrototype; SRET with the size and alignment of the
-/// returned aggregate for an sret first parameter (IL parameter 0); and the
-/// IL parameter index, size and alignment of each byval parameter. The IL
-/// parameters are those of MSIL::computeSignatureVTs over \p Context: a
-/// hidden leading pointer when the result takes more than one value, then the
-/// values of each IR parameter. A byval parameter's alignment is that of the
-/// copy LowerCall makes (the stack alignment, else the alignment, else the
-/// type's ABI alignment, as TargetLowering decides it). VARARG is never set
-/// (decision D19).
-static MSILLink::SignatureInfo getABIDescriptor(const FunctionType *FTy,
-                                                const AttributeList &Attrs,
-                                                bool NoPrototype,
-                                                const Function &Context,
-                                                const TargetMachine &TM) {
+/// NO_PROTOTYPE if \p NoPrototype; NATIVE_INCOMPATIBLE if the result (unless
+/// void) or a parameter is not a native scalar (isNativeScalar; plan 5.8.8 as
+/// the section 12 row of 2026-10-25 amends it); SRET with the size and
+/// alignment of the returned aggregate for an sret first parameter (IL
+/// parameter 0); and the IL parameter index, size and alignment of each byval
+/// parameter. The IL parameters are those of MSIL::computeSignatureVTs over
+/// \p Context: a hidden leading pointer when the result takes more than one
+/// value, then the values of each IR parameter. A byval parameter's alignment
+/// is that of the copy LowerCall makes (the stack alignment, else the
+/// alignment, else the type's ABI alignment, as TargetLowering decides it).
+/// VARARG is never set (decision D19).
+MSILLink::SignatureInfo MSIL::getABIDescriptor(const FunctionType *FTy,
+                                               const AttributeList &Attrs,
+                                               bool NoPrototype,
+                                               const Function &Context,
+                                               const TargetMachine &TM) {
   const DataLayout &DL = Context.getDataLayout();
   MSILLink::SignatureInfo SI = {};
   if (NoPrototype)
     SI.Flags |= MSILLink::NoPrototype;
+  if ((!FTy->getReturnType()->isVoidTy() &&
+       !isNativeScalar(FTy->getReturnType())) ||
+      any_of(FTy->params(), [](Type *T) { return !isNativeScalar(T); }))
+    SI.Flags |= MSILLink::NativeIncompatible;
   SmallVector<MVT, 2> Results;
   MSIL::computeLegalValueVTs(Context, TM, FTy->getReturnType(), Results);
   uint32_t ILIndex = Results.size() > 1 ? 1 : 0;
@@ -1712,7 +1940,9 @@ static MSILLink::SignatureInfo getABIDescriptor(const FunctionType *FTy,
 }
 
 /// Whether \p SI says anything: a MethodDef or MemberRef without a SIGNATURES
-/// entry is prototyped, not variadic, and has no sret or byval parameter.
+/// entry is prototyped, not variadic, native-compatible (a void or native
+/// scalar result and native scalar parameters), and has no sret or byval
+/// parameter.
 static bool hasABIInfo(const MSILLink::SignatureInfo &SI) {
   return SI.Flags != 0 || !SI.Byval.empty();
 }
@@ -1729,20 +1959,6 @@ static bool isSameABI(const MSILLink::SignatureInfo &A,
              });
 }
 
-/// The name of the segment of a global of kind \p Kind without a section
-/// (plan 5.8.8, SEGMENTS).
-static StringRef getSegmentName(SectionKind Kind) {
-  if (Kind.isThreadBSS())
-    return ".tbss";
-  if (Kind.isThreadData())
-    return ".tdata";
-  if (Kind.isBSS())
-    return ".bss";
-  if (Kind.isReadOnly() || Kind.isReadOnlyWithRel())
-    return ".rodata";
-  return ".data";
-}
-
 void MSILAsmPrinter::collectCallABIs(const Function &Caller) {
   for (const Instruction &I : instructions(Caller)) {
     const auto *CB = dyn_cast<CallBase>(&I);
@@ -1757,9 +1973,9 @@ void MSILAsmPrinter::collectCallABIs(const Function &Caller) {
     if (F ? F->isIntrinsic() || !F->isDeclarationForLinker()
           : !isa_and_nonnull<GlobalAlias>(Callee))
       continue;
-    MSILLink::SignatureInfo SI =
-        getABIDescriptor(CB->getFunctionType(), CB->getAttributes(),
-                         F && F->hasFnAttribute("no-prototype"), Caller, TM);
+    MSILLink::SignatureInfo SI = MSIL::getABIDescriptor(
+        CB->getFunctionType(), CB->getAttributes(),
+        F && F->hasFnAttribute("no-prototype"), Caller, TM);
     std::pair<std::string, MSIL::Signature> Key(
         MSIL::getILName(*Callee, TM).str(),
         getCallTypeSignature(CB->getFunctionType(), Caller, TM));
@@ -2070,8 +2286,7 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
       }
       SectionKind Kind = TargetLoweringObjectFile::getKindForGlobal(&GV, TM);
       Seg.emplace();
-      Seg->Name =
-          GV.hasSection() ? GV.getSection().str() : getSegmentName(Kind).str();
+      Seg->Name = MSILDataSegment::getSegmentName(GV, Kind);
       if (Kind.isMergeable1ByteCString())
         Seg->Flags |= MSILLink::SegStrings;
       if (Used.contains(&GV))
@@ -2387,8 +2602,8 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
   for (unsigned I = 0, E = MethodOrder.size(); I != E; ++I) {
     const Function &F = *MethodOrder[I];
     AddSignature(cli::makeToken(cli::TableId::MethodDef, I + 1),
-                 getABIDescriptor(F.getFunctionType(), F.getAttributes(),
-                                  /*NoPrototype=*/false, F, TM));
+                 MSIL::getABIDescriptor(F.getFunctionType(), F.getAttributes(),
+                                        /*NoPrototype=*/false, F, TM));
   }
   for (unsigned I = 0, E = Stubs.size(); I != E; ++I) {
     const ImportStub &St = Stubs[I];
@@ -2397,9 +2612,9 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
     if (I < NumCallStubs)
       AddSignature(Token, CallABIOf(MSIL::getILName(*St.F, TM), *St.Sig));
     else
-      AddSignature(Token, getABIDescriptor(St.F->getFunctionType(),
-                                           St.F->getAttributes(),
-                                           /*NoPrototype=*/false, *St.F, TM));
+      AddSignature(Token, MSIL::getABIDescriptor(
+                              St.F->getFunctionType(), St.F->getAttributes(),
+                              /*NoPrototype=*/false, *St.F, TM));
   }
   for (const auto &[Row, Name, Sig] : SymbolMethodRefs)
     AddSignature(cli::makeToken(cli::TableId::MemberRef, Row),

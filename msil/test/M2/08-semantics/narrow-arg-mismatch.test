@@ -1,0 +1,83 @@
+# Matrix case narrow-arg-mismatch: narrow arguments through prototypes against wider parameters (native 200 and -56).
+# a.c declares int ui(unsigned char) and long long ul(unsigned char) and, on
+# the Linux triple, int si(signed char) and long long sl(signed char), and
+# calls them with 200 and -56; b.c defines them with int and long long
+# parameters and returns what each received. In CIL a char argument and an
+# int parameter are both int32 (plan 5.9.8's value classes), so ui and si
+# are direct matches on both pipelines, with no warning; long long is native
+# int, so ul and sl get 5.9.8's 'int32 argument for a native int parameter'
+# adapter (conv.i) with one warning each (the object link names the objects,
+# the LTO link's text leaves out the ' in <file>' parts), at -O0 and -O2
+# (pinned below). The int32 holds the narrow value as the call site
+# materializes it on the object path, by the call's parameter attribute
+# (zeroext on Linux triples, none on Windows triples, where clang extends
+# only bool: zero-extended, 200; signext: -56), and the LTO path's wrappers
+# do the same (section 12 row 'Plan 5.9.8 (LTO path) and 5.9.16 clarified'),
+# so both pipelines print the native transcript, never the sign-extended -56
+# for ui(200) and ul(200) that the LTO path printed before M20's fix.
+# Natively the test observes only what both ABIs define. Win64 passes a char
+# in cl alone and leaves the rest of rcx unspecified (clang -O2 writes just
+# 'mov cl, -56'), so clear(0) runs before each unsigned call and zeroes rcx:
+# the callee then reads 200 in ecx and in rcx at every level (on Linux
+# triples clear zeroes rdi too, and the caller writes all of edi). SysV
+# extends to 32 bits only, so the signed case reads sl's argument through
+# its low 32 bits (natively rdi holds 4294967240), and it stays off the
+# Windows triple, where a signed char's upper bits are not defined either:
+# narrow-arg-mismatch.linux.expected holds its two lines. Plan 5.9.8 ('so
+# the object and LTO paths agree') and 5.9.16.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefixes=LINK,OBJ%if msil-triple-linux %{,OBJ-LNX%} --implicit-check-not="warning:" --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefixes=LINK,OBJ%if msil-triple-linux %{,OBJ-LNX%} --implicit-check-not="warning:" --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefixes=LINK,LTO%if msil-triple-linux %{,LTO-LNX%} --implicit-check-not="warning:" --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefixes=LINK,LTO%if msil-triple-linux %{,LTO-LNX%} --implicit-check-not="warning:" --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# LINK:         {{^}}msil-prog: {{.*}} obj/a.o obj/b.o -o prog.exe{{$}}
+# OBJ:          {{^}}msil-ld: warning: function signature mismatch: ul{{$}}
+# OBJ-NEXT:     {{^}}>>> defined as native int(native int) in {{.*}}b.o{{$}}
+# OBJ-NEXT:     {{^}}>>> called as native int(int32) in {{.*}}a.o{{$}}
+# OBJ-NEXT:     {{^}}>>> adapter: {{.+}}
+# OBJ-LNX:      {{^}}msil-ld: warning: function signature mismatch: sl{{$}}
+# OBJ-LNX-NEXT: {{^}}>>> defined as native int(native int) in {{.*}}b.o{{$}}
+# OBJ-LNX-NEXT: {{^}}>>> called as native int(int32) in {{.*}}a.o{{$}}
+# OBJ-LNX-NEXT: {{^}}>>> adapter: {{.+}}
+# LTO:          {{^}}msil-ld: warning: {{.*}}function signature mismatch: ul{{$}}
+# LTO-NEXT:     {{^}}>>> defined as native int(native int){{$}}
+# LTO-NEXT:     {{^}}>>> called as native int(int32){{$}}
+# LTO-NEXT:     {{^}}>>> adapter: {{.+}}
+# LTO-LNX:      {{^}}msil-ld: warning: {{.*}}function signature mismatch: sl{{$}}
+# LTO-LNX-NEXT: {{^}}>>> defined as native int(native int){{$}}
+# LTO-LNX-NEXT: {{^}}>>> called as native int(int32){{$}}
+# LTO-LNX-NEXT: {{^}}>>> adapter: {{.+}}
+#--- a.c
+#include "msil_test.h"
+long long clear(long long z);  /* defined in b.c: clear(0) zeroes rcx natively */
+int ui(unsigned char c);       /* defined in b.c as int ui(int c) */
+long long ul(unsigned char c); /* defined in b.c as long long ul(long long c) */
+#ifndef _WIN32
+int si(signed char c);         /* defined in b.c as int si(int c) */
+long long sl(signed char c);   /* defined in b.c as long long sl(long long c) */
+#endif
+int main(void) {
+  long long z = clear(0);
+  int a = ui(200);             /* 200 */
+  z += clear(0);
+  long long b = ul(200);       /* 200 */
+  put_kv("ui(200)", a);
+  put_kv("ul(200)", b);
+  int r = (int)(a + b + z);
+#ifndef _WIN32
+  int c = si(-56);             /* -56 */
+  int d = (int)sl(-56);        /* -56: SysV defines the low 32 bits only */
+  put_kv("si(-56)", c);
+  put_kv("sl(-56)", d);
+  r += c + d;
+#endif
+  return r & 0xff;
+}
+#--- b.c
+long long clear(long long z) { return z; }
+int ui(int c) { return c; }
+long long ul(long long c) { return c; }
+int si(int c) { return c; }
+long long sl(long long c) { return c; }

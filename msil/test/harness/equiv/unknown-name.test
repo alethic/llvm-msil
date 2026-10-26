@@ -1,0 +1,45 @@
+# msil-equiv.py's usage errors (plan 5.12.4, 5.12.6; M20): status 2 and a
+# message, before any image is read:
+# (1) an --allow name that is not an entry of the allow-list, alone and
+#     beside a known one; the message lists the entries of
+#     msil/utils/equiv-allowed.txt (its seven entries, in file order);
+# (2) a malformed allow-list: an entry without a dumper option, an entry
+#     without '# <justification>', a skip line for an oracle that does not
+#     exist, an entry given twice;
+# (3) an image that does not exist (and the test is not skipped).
+# None of these needs an image, so the operands name files that do not exist.
+
+# RUN: rm -rf %t && split-file %s %t
+
+# (1)
+# RUN: %{harness_check} exits 2 %msil_equiv --allow no-such-entry %t/a.dll %t/b.dll > %t/1a.log 2>&1
+# RUN: %{harness_check} contains %t/1a.log "^msil-equiv: error: unknown --allow name 'no-such-entry' \(the entries of \S*equiv-allowed\.txt: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access, scopes\)$"
+# RUN: %{harness_check} exits 2 %msil_equiv --allow assembly-hash --allow initlocals %t/a.dll %t/b.dll > %t/1b.log 2>&1
+# RUN: %{harness_check} contains %t/1b.log "^msil-equiv: error: unknown --allow name 'initlocals' "
+# RUN: %{harness_check} lacks %t/1a.log "^msil-equiv: O"
+# RUN: %{harness_check} lacks %t/1b.log "^msil-equiv: O"
+
+# (2)
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/no-option.txt %t/a.dll %t/b.dll > %t/2a.log 2>&1
+# RUN: %{harness_check} contains %t/2a.log "^msil-equiv: error: \S*no-option\.txt:2: entry lonely needs one or more dumper options \('--\.\.\.'\)$"
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/no-why.txt %t/a.dll %t/b.dll > %t/2b.log 2>&1
+# RUN: %{harness_check} contains %t/2b.log "^msil-equiv: error: \S*no-why\.txt:1: entry unjustified has no '# <justification>'$"
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-oracle.txt %t/a.dll %t/b.dll > %t/2c.log 2>&1
+# RUN: %{harness_check} contains %t/2c.log "^msil-equiv: error: \S*bad-oracle\.txt:1: expected 'skip <oracle>\[@<triple>\]\[:<level>\] <test path> <reason>' with the oracle O3 or O4$"
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/twice.txt %t/a.dll %t/b.dll > %t/2d.log 2>&1
+# RUN: %{harness_check} contains %t/2d.log "^msil-equiv: error: \S*twice\.txt:2: entry once is given twice$"
+
+# (3)
+# RUN: %{harness_check} exits 2 %msil_equiv --allow assembly-hash %t/a.dll %t/b.dll > %t/3.log 2>&1
+# RUN: %{harness_check} contains %t/3.log "^msil-equiv: error: \S*a\.dll: no such file$"
+
+#--- no-option.txt
+# An entry needs a dumper option.
+lonely # but it has none
+#--- no-why.txt
+unjustified --params=drop
+#--- bad-oracle.txt
+skip O5 msil/test/harness/equiv/unknown-name.test there is no O5
+#--- twice.txt
+once --params=drop # first
+once --snan=quiet # second

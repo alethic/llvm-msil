@@ -1,0 +1,12 @@
+# Run in a nested lit by ../../../equiv-lto.test with --param
+# msil_pipeline=lto and msil_equiv=1: %{msil_prog_O2} of two sources, which
+# msil-prog.py builds with the stand-ins of ../../prog-cc.py (which read the
+# values below) and compares under the oracle O4.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# RUN: %{msil_prog_O2}
+
+#--- main.c
+// prog-value: 20
+#--- util.c
+// prog-value: 22

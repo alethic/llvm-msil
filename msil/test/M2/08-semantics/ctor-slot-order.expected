@@ -1,0 +1,4 @@
+slot (init_array or .CRT$XCU)
+constructor
+main
+[exit 0]

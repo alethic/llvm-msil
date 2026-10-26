@@ -1,0 +1,305 @@
+## The IL token walker (ImplementationPlan.md 5.9.7): msil-ld decodes every
+## kept method body and maps each token operand to an output entity, one
+## class of 5.9.7's table at a time:
+## - a MethodDef with a body: this object's method (own_fn);
+## - a MemberRef on '<msil>Symbols': a method of another object (b_fn) or the
+##   address field of another object's variable (b_data);
+## - a FieldDef: this object's address field (own);
+## - a MemberRef on '<msil>FnAddr': the '<msil>fn_<name>' field of the
+##   resolved method, for another object's function and for this object's
+##   own; the trailer fills the fields in the canonical order of 5.9.10 (the
+##   order of the methods' first symbols, here IR order: b_fn, own_fn);
+## - a MethodDef stub on msil.unresolved (import_name only): bound natively
+##   under its ImplMap import name (my_fn1 -> foo.dll!fn1), and an
+##   EXPLICIT_IMPORT stub: module and entry verbatim (mylib.dll!ext_entry);
+##   both become msil-ld's P/Invoke stubs ('assembly', preservesig, 0x0201);
+## - a MemberRef on a TypeRef scoped to msil.bcl: the BCL stand-in's
+##   '[mscorlib]' member (Buffer::MemoryCopy, Interlocked::MemoryBarrier);
+## - a StandAloneSig: local signatures and the 'calli' signature, re-encoded
+##   and deduplicated across objects: a.o has three distinct signatures (the
+##   locals of loop and of main, the calli of indirect) and b.o one, b_ind's
+##   calli 'int32(int32)', equal to indirect's, so the EXE has three rows;
+## - a user string ('ldstr') and an exception clause whose class token names
+##   a BCL TypeRef: no C code has them, so c.il is object-form text (5.8.4)
+##   written by hand from llc -msil-object-form output (the record is the
+##   one llc wrote for 'strings'), assembled by ilasm under '%if ilasm'.
+## Bodies are copied byte for byte and only token operands change, so a
+## body without tokens (branches, a switch and locals) has the same listing
+## in the object and in the EXE (5.9.7: msil-ld never relaxes branches or
+## changes forms). --no-gc-sections keeps the functions that main does not
+## reach.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj a.ll -o a.o
+# RUN: llc -filetype=obj b.ll -o b.o
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/coff-import.def /out:foo.lib
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not=msil.extern --implicit-check-not=msil.bcl \
+# DEFINE:   --implicit-check-not=msil.unresolved --implicit-check-not='<msil>Symbols' \
+# DEFINE:   --implicit-check-not='<msil>FnAddr'
+
+# RUN: msil-ld --no-gc-sections a.o b.o foo.lib -o prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog.exe > prog.txt
+# RUN: %{fc} --check-prefix=CHECK --input-file=prog.txt
+# RUN: llvm-cil-dump --tables prog.exe | FileCheck %s --check-prefix=SIGS
+
+# CHECK:      {{^}}moduleref 'foo.dll'{{$}}
+# CHECK-NEXT: {{^}}moduleref 'mylib.dll'{{$}}
+# CHECK-EMPTY:
+# CHECK:      {{^}}  .field '<msil>fn_b_fn' native int flags=0x0031{{$}}
+# CHECK-NEXT: {{^}}  .field '<msil>fn_own_fn' native int flags=0x0031{{$}}
+# CHECK:      {{^}}  .field 'b_data' native int flags=0x0036{{$}}
+# CHECK-NEXT: {{^}}  .field 'own' native int flags=0x0036{{$}}
+# CHECK-NEXT: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# CHECK:      {{^}}    L{{[0-9]+}}: ldftn int32(int32) '<Module>'::'b_fn'{{$}}
+# CHECK-NEXT: {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'<msil>fn_b_fn'{{$}}
+# CHECK-NEXT: {{^}}    L{{[0-9]+}}: ldftn int32(int32) '<Module>'::'own_fn'{{$}}
+# CHECK-NEXT: {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'<msil>fn_own_fn'{{$}}
+# CHECK-NEXT: {{^}}    L{{[0-9]+}}: ret{{$}}
+# CHECK:      {{^}}  .method 'addr_b' native int() flags=0x0016 impl=0x0000{{$}}
+# CHECK-NEXT: {{^}}    .maxstack 1{{$}}
+# CHECK-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'<msil>fn_b_fn'{{$}}
+# CHECK-NEXT: {{^}}    L1: ret{{$}}
+# CHECK-NEXT: {{^}}  .method 'addr_own' native int() flags=0x0016 impl=0x0000{{$}}
+# CHECK-NEXT: {{^}}    .maxstack 1{{$}}
+# CHECK-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'<msil>fn_own_fn'{{$}}
+# CHECK-NEXT: {{^}}    L1: ret{{$}}
+# CHECK-NEXT: {{^}}  .method 'b_fn' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# CHECK:      {{^}}  .method 'ext_fn' int32(int32) flags=0x2093 impl=0x0080{{$}}
+# CHECK-NEXT: {{^}}    .pinvokeimpl 'mylib.dll' entry 'ext_entry' flags=0x0201{{$}}
+# CHECK-NEXT: {{^}}  .method 'indirect' int32(native int, int32) flags=0x0016 impl=0x0000{{$}}
+# CHECK-NEXT: {{^}}    .maxstack 2{{$}}
+# CHECK-NEXT: {{^}}    L0: ldarg.1{{$}}
+# CHECK-NEXT: {{^}}    L1: ldarg.0{{$}}
+# CHECK-NEXT: {{^}}    L2: calli int32(int32){{$}}
+# CHECK-NEXT: {{^}}    L3: ret{{$}}
+# CHECK-NEXT: {{^}}  .method 'loop' int32(int32, int32) flags=0x0016 impl=0x0000{{$}}
+# CHECK:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# CHECK-NEXT: {{^}}    .maxstack 3{{$}}
+# CHECK-NEXT: {{^}}    .locals (int32){{$}}
+# CHECK-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'own'{{$}}
+# CHECK-NEXT: {{^}}    L1: ldind.i4{{$}}
+# CHECK-NEXT: {{^}}    L2: call int32(int32) '<Module>'::'own_fn'{{$}}
+# CHECK-NEXT: {{^}}    L3: call int32(int32) '<Module>'::'b_fn'{{$}}
+# CHECK-NEXT: {{^}}    L4: ldsfld native int '<Module>'::'b_data'{{$}}
+# CHECK-NEXT: {{^}}    L5: ldind.i4{{$}}
+# CHECK-NEXT: {{^}}    L6: dup{{$}}
+# CHECK-NEXT: {{^}}    L7: stloc.0{{$}}
+# CHECK-NEXT: {{^}}    L8: add{{$}}
+# CHECK-NEXT: {{^}}    L9: call int32() '<Module>'::'my_fn1'{{$}}
+# CHECK-NEXT: {{^}}    L10: add{{$}}
+# CHECK-NEXT: {{^}}    L11: ldloc.0{{$}}
+# CHECK-NEXT: {{^}}    L12: call int32(int32) '<Module>'::'ext_fn'{{$}}
+# CHECK-NEXT: {{^}}    L13: add{{$}}
+# CHECK-NEXT: {{^}}    L14: ret{{$}}
+# CHECK-NEXT: {{^}}  .method 'move' void(native int, native int, native int) flags=0x0016 impl=0x0000{{$}}
+# CHECK-NEXT: {{^}}    .maxstack 4{{$}}
+# CHECK-NEXT: {{^}}    L0: ldarg.1{{$}}
+# CHECK-NEXT: {{^}}    L1: ldarg.0{{$}}
+# CHECK-NEXT: {{^}}    L2: ldarg.2{{$}}
+# CHECK-NEXT: {{^}}    L3: conv.i8{{$}}
+# CHECK-NEXT: {{^}}    L4: dup{{$}}
+# CHECK-NEXT: {{^}}    L5: call void(void*, void*, int64, int64) [mscorlib]System.Buffer::'MemoryCopy'{{$}}
+# CHECK-NEXT: {{^}}    L6: call void() [mscorlib]System.Threading.Interlocked::'MemoryBarrier'{{$}}
+# CHECK-NEXT: {{^}}    L7: ret{{$}}
+# CHECK-NEXT: {{^}}  .method 'my_fn1' int32() flags=0x2093 impl=0x0080{{$}}
+# CHECK-NEXT: {{^}}    .pinvokeimpl 'foo.dll' entry 'fn1' flags=0x0201{{$}}
+# CHECK-NEXT: {{^}}  .method 'own_fn' int32(int32) flags=0x0016 impl=0x0000{{$}}
+
+## Three distinct signatures: the locals of loop and of main, and the calli
+## signature (the trailer has no locals). b.o's one row, b_ind's calli
+## signature, equals a.o's and is not added again.
+# SIGS: {{^}}Table: StandAloneSig rows=3 rowsize={{[0-9]+}}{{$}}
+# RUN: llvm-cil-dump --tables a.o | FileCheck %s --check-prefix=SIGS
+# RUN: llvm-cil-dump --tables b.o | FileCheck %s --check-prefix=B-SIGS
+# RUN: llvm-cil-dump b.o | FileCheck %s --check-prefix=B-CALLI
+# RUN: FileCheck %s --check-prefix=B-CALLI --input-file=prog.txt
+# B-SIGS:  {{^}}Table: StandAloneSig rows=1 rowsize={{[0-9]+}}{{$}}
+# B-CALLI: {{^}}  .method 'b_ind' int32(native int, int32) flags=0x0016 impl=0x0000{{$}}
+# B-CALLI: {{^}}    L{{[0-9]+}}: calli int32(int32){{$}}
+
+## The body without tokens is unchanged.
+# RUN: llvm-cil-dump a.o > a.txt
+# RUN: %python body.py a.txt loop > loop-obj.txt
+# RUN: %python body.py prog.txt loop > loop-exe.txt
+# RUN: diff loop-obj.txt loop-exe.txt
+# RUN: FileCheck %s --check-prefix=LOOP --input-file=loop-exe.txt
+# LOOP:      {{^}}  .method 'loop' int32(int32, int32) flags=0x0016 impl=0x0000{{$}}
+# LOOP-NEXT: {{^}}    .maxstack 2{{$}}
+# LOOP-NEXT: {{^}}    .locals (int32, int32, int32){{$}}
+# LOOP:      {{^}}    L{{[0-9]+}}: switch L{{[0-9]+}}, L{{[0-9]+}}, L{{[0-9]+}}, L{{[0-9]+}}, L{{[0-9]+}}{{$}}
+# LOOP:      {{^}}    L{{[0-9]+}}: br.s L4{{$}}
+
+## A user string and an exception clause (object-form text through ilasm).
+# RUN: %if ilasm %{ %ilasm-verify -output=c.o c.il %}
+# RUN: %if ilasm %{ msil-ld --no-gc-sections a.o b.o c.o foo.lib -o eh.exe 2>&1 | count 0 %}
+# RUN: %if ilasm %{ llvm-cil-dump eh.exe | %{fc} --check-prefix=EH %}
+# EH:      {{^}}  .method 'strings' int32() flags=0x0016 impl=0x0000{{$}}
+# EH-NEXT: {{^}}    .maxstack 1{{( initlocals)?$}}
+# EH-NEXT: {{^}}    L0: ldstr "tokens"{{$}}
+# EH-NEXT: {{^}}    L1: pop{{$}}
+# EH-NEXT: {{^}}    L2: leave.s L5{{$}}
+# EH-NEXT: {{^}}    L3: pop{{$}}
+# EH-NEXT: {{^}}    L4: leave.s L5{{$}}
+# EH-NEXT: {{^}}    L5: ldc.i4.7{{$}}
+# EH-NEXT: {{^}}    L6: ret{{$}}
+# EH-NEXT: {{^}}    .try L0 to L3 catch [mscorlib]System.Exception handler L3 to L5{{$}}
+
+#--- a.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@own = global i32 3, align 4
+@b_data = external global i32
+
+declare i32 @b_fn(i32)
+declare i32 @my_fn1() #0
+declare i32 @ext_fn(i32) #1
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+
+define i32 @own_fn(i32 %x) {
+  %r = mul i32 %x, 2
+  ret i32 %r
+}
+
+define ptr @addr_b() {
+  ret ptr @b_fn
+}
+
+define ptr @addr_own() {
+  ret ptr @own_fn
+}
+
+define void @move(ptr %d, ptr %s, i64 %n) {
+  call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)
+  fence seq_cst
+  ret void
+}
+
+define i32 @indirect(ptr %f, i32 %x) {
+  %r = call i32 %f(i32 %x)
+  ret i32 %r
+}
+
+define i32 @loop(i32 %n, i32 %k) {
+entry:
+  br label %head
+head:
+  %i = phi i32 [ 0, %entry ], [ %i1, %join ]
+  %acc = phi i32 [ 0, %entry ], [ %acc1, %join ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %body, label %done
+body:
+  switch i32 %k, label %dflt [ i32 0, label %s0
+                               i32 1, label %s1
+                               i32 2, label %s2
+                               i32 3, label %s3
+                               i32 4, label %s4 ]
+s0:
+  br label %join
+s1:
+  br label %join
+s2:
+  br label %join
+s3:
+  br label %join
+s4:
+  br label %join
+dflt:
+  br label %join
+join:
+  %v = phi i32 [ 5, %s0 ], [ 7, %s1 ], [ 11, %s2 ], [ 17, %s3 ], [ 19, %s4 ], [ 13, %dflt ]
+  %acc1 = add i32 %acc, %v
+  %i1 = add i32 %i, 1
+  br label %head
+done:
+  ret i32 %acc
+}
+
+define i32 @main() {
+  %o = load i32, ptr @own
+  %a = call i32 @own_fn(i32 %o)
+  %b = call i32 @b_fn(i32 %a)
+  %d = load i32, ptr @b_data
+  %e = call i32 @my_fn1()
+  %f = call i32 @ext_fn(i32 %d)
+  %s1 = add i32 %b, %d
+  %s2 = add i32 %s1, %e
+  %s3 = add i32 %s2, %f
+  ret i32 %s3
+}
+
+attributes #0 = { "msil-import-name"="fn1" }
+attributes #1 = { "msil-import-module"="mylib.dll" "msil-import-name"="ext_entry" }
+
+#--- b.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@b_data = global i32 9, align 4
+
+define i32 @b_fn(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @b_ind(ptr %f, i32 %x) {
+  %r = call i32 %f(i32 %x)
+  ret i32 %r
+}
+
+#--- c.il
+// MSIL object generated by LLVM (llc -msil-object-form), then edited by
+// hand: 'strings' gained a user string and an exception clause whose class
+// is a BCL type. The record is unchanged: one GLOBAL FUNCTION symbol
+// 'strings', MethodDef 0x06000001.
+// source_filename = "c.ll"
+// target triple   = "x86_64-pc-windows-msvc-msil"
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+
+.method public static int32 'strings'() cil managed
+{
+  .maxstack 1
+  .try
+  {
+    ldstr "tokens"
+    pop
+    leave.s DONE
+  }
+  catch [msil.bcl]System.Exception
+  {
+    pop
+    leave.s DONE
+  }
+DONE:
+  ldc.i4.7
+  ret
+} // end of method 'strings'
+
+.module 'c.ll'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = ( 01 00 3B 00 00 00 4D 53 4C 4B 01 00 00 1B 78 38 36 5F 36 34 2D 70 63 2D 77 69 6E 64 6F 77 73 2D 6D 73 76 63 2D 6D 73 69 6C 01 00 00 08 04 02 08 01 0F 01 00 00 07 73 74 72 69 6E 67 73 01 00 00 06 00 00 )
+
+#--- body.py
+"""Print one method's block of a canonical listing (llvm-cil-dump, 5.7.10):
+its '.method' line and every following line indented deeper than it.
+
+Usage: body.py <listing> <method name>
+"""
+
+import sys
+
+path, name = sys.argv[1], sys.argv[2]
+out, inside = [], False
+with open(path, encoding="utf-8") as f:
+    for line in f:
+        line = line.rstrip("\r\n")
+        if line.startswith("  .method '%s' " % name):
+            inside = True
+        elif inside and not line.startswith("    "):
+            break
+        if inside:
+            out.append(line)
+if not out:
+    sys.exit("body.py: no method '%s' in %s" % (name, path))
+print("\n".join(out))

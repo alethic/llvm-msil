@@ -1,0 +1,76 @@
+# ThinLTO: per-module LTO back ends write CIL objects that msil-ld links into the PE (forced -flto=thin).
+# Before M20 ThinLTO was the error 'ThinLTO, --lto-partitions and LTO without
+# --lto-emit-asm need CIL object output' (plan 5.9.13); from M20 msil-ld
+# parses each back end's output as an in-memory CIL object. The program has
+# what ThinLTO's index and importing must keep straight: calls that cross
+# modules (and may be imported and inlined), static functions and variables
+# of the same name in two modules, a function pointer table, initialized
+# data that points into other modules, a constructor and string literals.
+# The composite compiles with -flto=thin (the REDEFINE of %{msil_cflags};
+# under msil_pipeline=lto msil-prog.py's own -flto follows it and makes that
+# leg full LTO). The RUN lines after it build the sources with -flto=thin on
+# every leg, link them through the driver at -O0 and -O2, and verify,
+# force-JIT and run the image against the same transcript. Whole-program
+# text has no ThinLTO form, so the test does not run with
+# msil_link_output=il. Recon tests-p2 3.3, plan 5.12.5 (M20).
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_cflags} = -std=gnu17 -ffreestanding -Werror=return-type -I%msil_inputs -flto=thin
+# REDEFINE: %{msil_srcs} = %t/main.c %t/b.c %t/c.c
+# RUN: %{msil_prog}
+# RUN: mkdir -p %t/thin/O0 %t/thin/O2
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/main.c -o %t/thin/main.O0.o
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/b.c -o %t/thin/b.O0.o
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/c.c -o %t/thin/c.O0.o
+# RUN: %clang_msil %{msil_ldflags} -O0 %t/thin/main.O0.o %t/thin/b.O0.o %t/thin/c.O0.o -o %t/thin/O0/prog.exe
+# RUN: %msil_verify %t/thin/O0/prog.exe
+# RUN: %if msil-jitall %{ %msil_jitall %t/thin/O0/prog.exe %}
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/thin/O0.out %t/thin/O0/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/main.c -o %t/thin/main.O2.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/b.c -o %t/thin/b.O2.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/c.c -o %t/thin/c.O2.o
+# RUN: %clang_msil %{msil_ldflags} -O2 %t/thin/main.O2.o %t/thin/b.O2.o %t/thin/c.O2.o -o %t/thin/O2/prog.exe
+# RUN: %msil_verify %t/thin/O2/prog.exe
+# RUN: %if msil-jitall %{ %msil_jitall %t/thin/O2/prog.exe %}
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/thin/O2.out %t/thin/O2/prog.exe
+#--- main.c
+#include "msil_test.h"
+int b_entry(int);
+int c_entry(int);
+int b_state(void);
+extern int (*const c_ops[3])(int);
+extern int *const b_ptr;
+static int state = 5;
+__attribute__((noinline)) static int helper(int x) { return x + state++; }
+int main(void) {
+  put_kv("helper(1)", helper(1));
+  put_kv("b_entry(2)", b_entry(2));
+  put_kv("c_entry(3)", c_entry(3));
+  for (int i = 0; i < 3; ++i)
+    put_kv("c_ops", c_ops[i](i + 1));
+  put_kv("*b_ptr", *b_ptr);
+  put_kv("b_state", b_state());
+  put_str("shared literal");
+  return (helper(2) + b_state()) & 0xff;
+}
+#--- b.c
+int puts(const char *);
+static int state = 100;
+__attribute__((noinline)) static int helper(int x) { return x * state--; }
+int b_value = 77;
+int *const b_ptr = &b_value;
+int c_twice(int);
+__attribute__((constructor)) static void b_init(void) { b_value += 1; }
+int b_entry(int x) {
+  puts("shared literal");
+  return helper(x) + c_twice(x);
+}
+int b_state(void) { return state; }
+#--- c.c
+static int state = 1000;
+__attribute__((noinline)) static int helper(int x) { return x - state; }
+int b_entry(int);
+int c_twice(int x) { return 2 * x; }
+int c_entry(int x) { return helper(x) + b_entry(1); }
+static int c_neg(int x) { return -x; }
+int (*const c_ops[3])(int) = {c_twice, c_neg, b_entry};

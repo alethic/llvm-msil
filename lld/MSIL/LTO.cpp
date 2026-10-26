@@ -11,11 +11,17 @@
 // LTO compiles the bitcode inputs for the codegen triple (plan 5.9.13):
 // stock-clang bitcode for the native triple is compiled for its '-msil' twin
 // (lto::Config::OverrideTriple), and MSILLinkHooksPass hands msil-ld's
-// decisions to the MSIL backend as module flags of the merged module. Under
-// --lto-emit-asm it is also the import-annotation pass of plan 5.10.13: the
-// merged module's declarations are bound to the native libraries (or
-// reported, after LTO, as lld/ELF and lld/wasm report undefined symbols), and
-// the backend prints P/Invokes from the annotations alone.
+// decisions to the MSIL backend as module flags of the merged module.
+// Without --lto-emit-asm, LTO writes in-memory CIL objects (ThinLTO and
+// --lto-partitions included), which msil-ld links like any object; the pass
+// then sets only the module flags. Under --lto-emit-asm it is also the
+// import-annotation pass of plan 5.10.13: the merged module's declarations
+// are bound to the native libraries (or reported, after LTO, as lld/ELF and
+// lld/wasm report undefined symbols), native data is imported through the
+// data-import helper (plan 5.10.12), and the backend prints P/Invokes from
+// the annotations alone; an entry point other than main reaches the backend
+// as the module flag msil-entry (plan 5.9.3), and --msil-reloc-loop-threshold
+// as the module flag msil-reloc-loop-threshold (plan 5.9.10).
 //
 //===----------------------------------------------------------------------===//
 
@@ -57,6 +63,7 @@
 #include <cstddef>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -64,19 +71,6 @@
 using namespace llvm;
 using namespace lld::msil;
 using namespace lld;
-
-namespace {
-// One line of --print-imports.
-struct PrintedImport {
-  std::string symbol;
-  std::string module;
-  std::string entry;
-  bool isData;
-  std::string version;
-  // True for a library read from an ELF shared object (version floor).
-  bool isELF;
-};
-} // namespace
 
 // The dotted numbers after the last '_' of an ELF version (GLIBC_2.2.5 ->
 // 2, 2, 5), which --print-imports compares for the version floor.
@@ -99,7 +93,7 @@ static SmallVector<unsigned, 4> getVersionNumbers(StringRef version) {
 // --print-imports (plan 5.10.14): one line per bound symbol, sorted by
 // symbol, then one line per ELF module with the highest default version of
 // its bound symbols, the oldest library version the output can run with.
-static void printImports(std::vector<PrintedImport> &rows) {
+void lld::msil::printImports(std::vector<PrintedImport> &rows) {
   llvm::sort(rows, [](const PrintedImport &a, const PrintedImport &b) {
     return std::tie(a.symbol, a.module, a.entry) <
            std::tie(b.symbol, b.module, b.entry);
@@ -141,8 +135,15 @@ struct ImportAnnotation {
   /// /alternatename: a declaration (IR name) whose uses go to a definition
   /// of the merged module (IR name).
   std::vector<std::pair<std::string, std::string>> replacements;
-  /// The kind-0 operands of !msil.imports: symbol, module and entry.
+  /// The kind-0 operands of !msil.imports: symbol, module and entry (the
+  /// library functions that code generation may call, and the data-import
+  /// helper's two functions).
   std::vector<std::array<std::string, 3>> libcalls;
+  /// The kind-1 operands of !msil.imports (plan 5.10.12): native data that
+  /// the output imports at startup, by symbol, module and entry.
+  std::vector<std::array<std::string, 3>> dataImports;
+  /// The natively bound variable declarations (IR names).
+  std::vector<std::string> boundVariables;
   /// --print-imports: the rows of the declarations that the merged module
   /// refers to, explicit imports included.
   std::vector<PrintedImport> printed;
@@ -163,16 +164,26 @@ struct ImportAnnotation {
 /// Override), "msil-import-module"/"msil-import-name" on every natively
 /// bound declaration (an extern_weak one becomes external), /alternatename
 /// replacements, and the named metadata !msil.imports for the library
-/// functions that the code generator may call; available_externally
-/// functions and variables become declarations, which the output does not
-/// define (plan 5.8.10). After code generation it prints --print-imports.
+/// functions that the code generator may call (kind 0) and the native data
+/// that the output imports (kind 1, with kind-0 operands for the data-import
+/// helper's functions, plan 5.10.12); available_externally functions and
+/// variables become declarations, which the output does not define (plan
+/// 5.8.10); and an entry point other than main is the module flag
+/// "msil-entry" (MDString, Override), around whose function the AsmPrinter
+/// builds D27's '<msil>Main' (plan 5.9.3), and a given
+/// --msil-reloc-loop-threshold=<n> is the module flag
+/// "msil-reloc-loop-threshold" (i32 <n>, Override), so that the text applies
+/// its data relocations as the PE of the same link does (plan 5.9.10). After
+/// code generation it prints --print-imports.
 class MSILLinkHooksPass final : public ModulePass {
 public:
   static char ID;
 
-  MSILLinkHooksPass(std::string assemblyName,
+  MSILLinkHooksPass(std::string assemblyName, std::string entry,
+                    std::optional<uint32_t> relocLoopThreshold,
                     std::shared_ptr<const ImportAnnotation> imports)
       : ModulePass(ID), assemblyName(std::move(assemblyName)),
+        entry(std::move(entry)), relocLoopThreshold(relocLoopThreshold),
         imports(std::move(imports)) {}
 
   StringRef getPassName() const override { return "msil-ld link hooks"; }
@@ -190,6 +201,14 @@ public:
       m.setModuleFlag(Module::Override, "msil-assembly-name",
                       MDString::get(context, assemblyName));
     m.setModuleFlag(Module::Override, "msil-lto", 1);
+    // Without the flag the AsmPrinter's '<msil>Main' calls main.
+    if (!entry.empty())
+      m.setModuleFlag(Module::Override, "msil-entry",
+                      MDString::get(context, entry));
+    // Without the flag the AsmPrinter uses llc's threshold (default 32).
+    if (relocLoopThreshold)
+      m.setModuleFlag(Module::Override, "msil-reloc-loop-threshold",
+                      *relocLoopThreshold);
     if (imports)
       annotate(m);
     return true;
@@ -264,6 +283,11 @@ private:
       if (f->hasExternalWeakLinkage())
         f->setLinkage(GlobalValue::ExternalLinkage);
     }
+    // A natively bound extern_weak variable is imported, not null.
+    for (const std::string &name : imports->boundVariables)
+      if (GlobalVariable *gv = m.getGlobalVariable(name, /*AllowLocal=*/true);
+          gv && gv->hasExternalWeakLinkage())
+        gv->setLinkage(GlobalValue::ExternalLinkage);
 
     for (const auto &[declName, defName] : imports->replacements) {
       GlobalValue *decl = m.getNamedValue(declName);
@@ -274,19 +298,29 @@ private:
       decl->eraseFromParent();
     }
 
-    if (imports->libcalls.empty())
+    if (imports->libcalls.empty() && imports->dataImports.empty())
       return;
     NamedMDNode *md = m.getOrInsertNamedMetadata("msil.imports");
     Type *i32 = Type::getInt32Ty(context);
-    for (const std::array<std::string, 3> &op : imports->libcalls)
+    auto addOperand = [&](const std::array<std::string, 3> &op, unsigned kind) {
       md->addOperand(MDNode::get(
           context,
           {MDString::get(context, op[0]), MDString::get(context, op[1]),
            MDString::get(context, op[2]),
-           ConstantAsMetadata::get(ConstantInt::get(i32, 0))}));
+           ConstantAsMetadata::get(ConstantInt::get(i32, kind))}));
+    };
+    for (const std::array<std::string, 3> &op : imports->libcalls)
+      addOperand(op, 0);
+    for (const std::array<std::string, 3> &op : imports->dataImports)
+      addOperand(op, 1);
   }
 
   std::string assemblyName;
+  /// --lto-emit-asm: the entry symbol when it is not main (else empty).
+  std::string entry;
+  /// --lto-emit-asm: the value of --msil-reloc-loop-threshold when it is
+  /// given.
+  std::optional<uint32_t> relocLoopThreshold;
   std::shared_ptr<const ImportAnnotation> imports;
 };
 } // namespace
@@ -312,35 +346,6 @@ static std::string getSymbolName(const GlobalValue &gv) {
   raw_string_ostream os(name);
   Mangler().getNameWithPrefix(os, &gv, /*CannotUsePrivateLabel=*/false);
   return name;
-}
-
-// The 5.10.14 text for a native definition that a P/Invoke cannot bind.
-static std::string getRejectedMessage(StringRef name, const NativeExport &e) {
-  switch (e.Why) {
-  case NotBindable::NativeCodeOnly:
-    return ("symbol '" + name + "' is defined only in native object code (" +
-            toString(e.File) + "); MSIL cannot link machine code")
-        .str();
-  case NotBindable::HiddenVersion:
-    return ("symbol '" + name + "' in " + e.Module +
-            " has only the non-default version " + e.Entry + "@" + e.Version +
-            ", which a P/Invoke cannot bind")
-        .str();
-  case NotBindable::ThreadLocal:
-    // Only errno has another spelling, <errno.h>'s macro, that reaches it
-    // without importing the variable (plan 5.10.14).
-    return ("symbol '" + name + "' in " + e.Module +
-            " is thread-local data and cannot be imported" +
-            (name == "errno" ? "; use <errno.h>" : ""))
-        .str();
-  case NotBindable::PrivateVersion:
-    return ("symbol '" + name + "' in " + e.Module + " is " + e.Version +
-            " (GLIBC_PRIVATE) and cannot be bound")
-        .str();
-  case NotBindable::None:
-    break;
-  }
-  llvm_unreachable("a bindable definition is not rejected");
 }
 
 // True if \p name is __start_<X> or __stop_<X> on a non-Windows triple and a
@@ -463,7 +468,7 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
                                   .str(),
                               name);
     else
-      symtab->reportReference(getRejectedMessage(name, *rejected[0]), name);
+      symtab->reportReference(getNativeRejectionText(name, *rejected[0]), name);
   };
 
   // A P/Invoke cannot pass a native `long double` where it is wider than
@@ -592,8 +597,9 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
     record(name, e->Module, e->Entry, /*isData=*/false, e);
   }
 
-  // Undefined variables (plan 5.10.12): native data cannot be imported before
-  // M20, extern variables with import attributes included.
+  // Undefined variables (plan 5.10.12): native data is imported at startup
+  // through the data-import helper; an explicit import module is used as it
+  // is, unchecked (plan 5.10.7).
   for (const GlobalVariable &gv : m.globals()) {
     if (!gv.isDeclarationForLinker() || gv.getName().starts_with("llvm.") ||
         !hasLiveUses(gv))
@@ -613,17 +619,20 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
       lookupName = to;
     }
 
+    if (!module.empty()) {
+      StringRef entry = importName.empty() ? StringRef(name) : importName;
+      out.dataImports.push_back({name, module.str(), entry.str()});
+      out.boundVariables.push_back(gv.getName().str());
+      record(name, module, entry, /*isData=*/true, nullptr);
+      continue;
+    }
     SmallVector<const NativeExport *, 2> rejected;
     const NativeExport *e =
-        module.empty()
-            ? lookup(name, lookupName, rejected, /*isFunctionReference=*/false)
-            : nullptr;
-    if (!module.empty() || (e && e->Kind != NativeKind::Function)) {
-      symtab->reportReference((Twine("importing native data symbol '") + name +
-                               "' (" + (module.empty() ? e->Module : module) +
-                               ") is not supported yet")
-                                  .str(),
-                              name);
+        lookup(name, lookupName, rejected, /*isFunctionReference=*/false);
+    if (e && e->Kind != NativeKind::Function) {
+      out.dataImports.push_back({name, e->Module.str(), e->Entry.str()});
+      out.boundVariables.push_back(gv.getName().str());
+      record(name, e->Module, e->Entry, /*isData=*/true, e);
       continue;
     }
     if (e) {
@@ -637,6 +646,24 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
     }
     if (!isUnboundWeak(gv, name))
       reportUnbound(name, rejected);
+  }
+
+  // The data-import helper (plan 5.10.12): on Windows triples LoadLibraryW
+  // and GetProcAddress from kernel32.dll, elsewhere dlopen and dlsym as the
+  // native libraries define them (findDataImportFunctions, which the output
+  // writer shares); without them the imports are errors.
+  if (!out.dataImports.empty()) {
+    SmallVector<DataImportFunction, 2> helpers;
+    if (findDataImportFunctions(ctx.arg.target, ctx.nativeIndex, helpers)) {
+      for (const DataImportFunction &h : helpers) {
+        out.libcalls.push_back({h.name.str(), h.module.str(), h.entry.str()});
+        recordCodegen(h.name, h.module, h.entry, h.def);
+      }
+    } else {
+      for (const std::array<std::string, 3> &op : out.dataImports)
+        symtab->reportReference(getDataImportUnavailableText(op[0], op[1]),
+                                op[0]);
+    }
   }
 
   // The library functions that the code generator may call (plan 5.10.13):
@@ -699,8 +726,9 @@ static lto::Config createConfig() {
 
   // Under --lto-emit-asm the merged module is the whole program: bind its
   // declarations and report what stays unresolved after LTO optimization,
-  // before code generation, which an error skips (plan 5.9.6, 5.10.13). From
-  // M20 an object-producing LTO link sets only the module flags.
+  // before code generation, which an error skips (plan 5.9.6, 5.10.13). An
+  // object-producing LTO link sets only the module flags: msil-ld binds the
+  // LTO objects' symbols after LTO, like any object's.
   std::shared_ptr<ImportAnnotation> imports;
   if (ctx.arg.ltoEmitAsm) {
     imports = std::make_shared<ImportAnnotation>();
@@ -717,9 +745,27 @@ static lto::Config createConfig() {
       return false;
     };
   }
-  c.PreCodeGenPassesHook = [name = getAssemblyName(),
+  // The whole-program text's '<msil>Main' calls the entry point (plan 5.9.3,
+  // D27): an entry other than main is the module flag msil-entry. The entry
+  // symbol is visible to regular objects (LinkerDriver::linkerMain adds it
+  // with SymbolTable::addUndefined), so LTO keeps its definition external.
+  // CIL objects carry no entry point: the writer's '<msil>Main' calls it.
+  std::string entry;
+  if (ctx.arg.ltoEmitAsm && !ctx.arg.shared && !ctx.arg.entry.empty() &&
+      ctx.arg.entry != "main")
+    entry = ctx.arg.entry.str();
+  // The text applies its data relocations through '<msil>relocs' above the
+  // threshold that the PE writer uses (plan 5.9.10, O4): a given
+  // --msil-reloc-loop-threshold reaches the AsmPrinter as a module flag,
+  // which llc's -msil-reloc-loop-threshold (also through -mllvm) overrides.
+  // The writer reads Config for the CIL objects' trailer, so object-producing
+  // LTO needs no flag.
+  std::optional<uint32_t> relocLoopThreshold;
+  if (ctx.arg.ltoEmitAsm && ctx.arg.msilRelocLoopThresholdGiven)
+    relocLoopThreshold = ctx.arg.msilRelocLoopThreshold;
+  c.PreCodeGenPassesHook = [name = getAssemblyName(), entry, relocLoopThreshold,
                             imports](legacy::PassManager &pm) {
-    pm.add(new MSILLinkHooksPass(name, imports));
+    pm.add(new MSILLinkHooksPass(name, entry, relocLoopThreshold, imports));
   };
 
   if (ctx.arg.saveTemps)
@@ -728,16 +774,41 @@ static lto::Config createConfig() {
   return c;
 }
 
+// lld/wasm/LTO.cpp's undefine: once LTO runs, the prevailing bitcode
+// definition is the LTO object's to define again. Nothing refers to the
+// undefined symbol until an object does: a definition that LTO internalized
+// or dropped stays unreferenced, so late binding and the undefined-symbol
+// reports pass it over.
+static void undefine(Symbol *sym) {
+  Undefined(sym->getFile(), sym->getName(), ELF::STB_GLOBAL, sym->visibility(),
+            sym->type, sym->tls)
+      .overwrite(*sym);
+  sym->referenced = false;
+}
+
 namespace lld::msil {
 BitcodeCompiler::BitcodeCompiler() {
-  // Initialize ltoObj. ThinLTO input is linked only into CIL objects (M20),
-  // and the driver rejects it before LTO runs.
+  // Initialize ltoObj. ThinLTO input and LTO partitions give one CIL object
+  // per module; under --lto-emit-asm the driver rejects them before LTO runs.
   auto onIndexWrite = [&](StringRef s) { thinIndices.erase(s); };
   lto::ThinBackend backend = lto::createInProcessThinBackend(
       llvm::heavyweight_hardware_concurrency(ctx.arg.thinLTOJobs),
       onIndexWrite);
   ltoObj = std::make_unique<lto::LTO>(createConfig(), backend,
                                       ctx.arg.ltoPartitions);
+
+  // The sections that __start_<X> and __stop_<X> name (lld/ELF/LTO.cpp's
+  // usedStartStop): their definitions stay visible, so that LTO keeps them
+  // and the output defines the symbols (plan 5.9.9). Windows triples do not
+  // define such symbols.
+  if (ctx.bitcodeFiles.empty() || ctx.arg.target.isOSWindows())
+    return;
+  for (Symbol *sym : symtab->symbols()) {
+    StringRef name = sym->getName();
+    for (StringRef prefix : {"__start_", "__stop_"})
+      if (name.starts_with(prefix))
+        usedStartStop.insert(name.substr(prefix.size()));
+  }
 }
 
 BitcodeCompiler::~BitcodeCompiler() = default;
@@ -766,13 +837,19 @@ void BitcodeCompiler::add(BitcodeFile &f) {
     r.Prevailing = !objSym.isUndefined() &&
                    (sym->isDefined() || sym->isCommon()) &&
                    sym->getFile() == &f;
-    // Only the entry symbol, -u symbols and NO_STRIP symbols stay visible:
-    // every other definition is internal to the merged module. There is no
-    // --wrap (LinkerRedefined) in msil-ld.
-    r.VisibleToRegularObj = sym->isUsedInRegularObj || sym->isNoStrip();
+    // Only the symbols that CIL objects refer to or define, the entry
+    // symbol, -u symbols, NO_STRIP symbols and the definitions in a section
+    // that __start_ or __stop_ names stay visible: every other definition is
+    // internal to the merged module. There is no --wrap (LinkerRedefined) in
+    // msil-ld.
+    r.VisibleToRegularObj = sym->isUsedInRegularObj || sym->isNoStrip() ||
+                            (!objSym.getSectionName().empty() &&
+                             usedStartStop.contains(objSym.getSectionName()));
     // lld/wasm undefines the prevailing symbol here, so that the LTO object
     // defines it. Under --lto-emit-asm there is no LTO object, and the map
-    // file shows the bitcode definitions; M20 parses LTO objects.
+    // file shows the bitcode definitions.
+    if (r.Prevailing && !ctx.arg.ltoEmitAsm)
+      undefine(sym);
   }
   checkError(ltoObj->add(std::move(f.obj), resols));
 }
@@ -828,6 +905,10 @@ SmallVector<InputFile *, 0> BitcodeCompiler::compile() {
     return {};
   }
 
+  // Code generation reported an error: its objects may be incomplete.
+  if (errorCount())
+    return {};
+
   SmallVector<InputFile *, 0> ret;
   for (unsigned i = 0; i != maxTasks; ++i) {
     StringRef objBuf = buf[i].second;
@@ -869,7 +950,6 @@ SmallVector<InputFile *, 0> BitcodeCompiler::compile() {
     }
     if (ctx.arg.saveTemps)
       saveBuffer(objBuf, ltoObjName);
-    // CIL objects are M20's: until then createObjectFile reports them.
     if (InputFile *obj = createObjectFile(MemoryBufferRef(objBuf, ltoObjName)))
       ret.push_back(obj);
   }

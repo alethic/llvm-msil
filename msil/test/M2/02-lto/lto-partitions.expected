@@ -1,0 +1,14 @@
+step0(1)=18
+steps=5
+steps=12
+steps=11
+steps=20
+steps=23
+steps=26
+data=11
+data=33
+data=23
+partition data
+partition literal
+ctor_trace=12
+[exit 32]

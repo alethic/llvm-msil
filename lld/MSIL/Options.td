@@ -9,9 +9,10 @@
 // Derived from lld/wasm/Options.td at 64f50ffd4f1c.
 //
 // The options of msil-ld: the rows of llvm/docs/MSIL/ImplementationPlan.md
-// 5.9.3 that M13, M14 and M15 implement, with lld's spellings. Every option of
-// a later milestone is an unknown argument until that milestone adds it,
-// except -shared, which the clang driver already passes and msil-ld rejects.
+// 5.9.3 that M13, M14, M15 and M20 implement, with lld's spellings. Every
+// option of a later milestone is an unknown argument until that milestone
+// adds it, except -shared, which the clang driver already passes and msil-ld
+// rejects.
 //
 //===----------------------------------------------------------------------===//
 
@@ -87,6 +88,10 @@ defm fatal_warnings: B<"fatal-warnings",
     "Treat warnings as errors",
     "Do not treat warnings as errors (default)">;
 
+defm gc_sections: B<"gc-sections",
+    "Enable garbage collection of unused sections (default)",
+    "Disable garbage collection of unused sections">;
+
 def help: F<"help">, HelpText<"Print option help">;
 
 def library: JoinedOrSeparate<["-"], "l">, MetaVarName<"<libName>">,
@@ -101,6 +106,9 @@ defm Map: Eq<"Map", "Print a link map to the specified file">;
 
 def o: JoinedOrSeparate<["-"], "o">, MetaVarName<"<path>">,
   HelpText<"Path to file to write output">;
+
+def print_gc_sections: F<"print-gc-sections">,
+  HelpText<"List removed unused sections">;
 
 def print_map: F<"print-map">,
   HelpText<"Print a link map to the standard output">;
@@ -147,6 +155,16 @@ def why_extract: JJ<"why-extract=">, HelpText<"Print to a file about why archive
 
 defm assembly_name: EEq<"assembly-name",
   "Name of the output assembly (default: the stem of the output file)">;
+
+def msil_reloc_loop_threshold: JJ<"msil-reloc-loop-threshold=">,
+  MetaVarName<"<n>">, Flags<[HelpHidden]>,
+  HelpText<"Apply more than <n> data relocations through the relocation loop "
+  "(default 32; for tests)">;
+
+def msil_type_member_limit: JJ<"msil-type-member-limit=">,
+  MetaVarName<"<n>">, Flags<[HelpHidden]>,
+  HelpText<"Move members past <n> methods or fields of a type to spill "
+  "classes when <n> is below the real limits (for tests)">;
 
 def print_imports: FF<"print-imports">,
   HelpText<"Print the native imports and the ELF version floor of each library">;

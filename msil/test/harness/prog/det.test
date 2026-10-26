@@ -1,44 +1,64 @@
 # %{msil_det} and msil-prog.py --det (plan 5.12.4, 3.7 of recon tests-p2):
 # the program is built twice, in <workdir>/a and <workdir>/b, with the same
 # relative command lines and -fdebug-compilation-dir=. on every compile, and
-# every file of the two build directories is compared byte for byte except
-# ilasm's image prog.exe (ilasm stamps it):
-# (1) a deterministic build passes and says how many files it compared;
+# every file of the two build directories is compared byte for byte. From M20
+# (msil_link_output=pe, %{msil_det} under the default pipeline asm builds
+# through CIL objects) that includes msil-ld's image prog.exe, which must be
+# deterministic; under il, ilasm's image prog.exe is left out (ilasm stamps
+# it) and the --lto-emit-asm text is compared:
+# (1) a deterministic build passes and says how many files it compared:
+#     the objects, the archive and its member, prog.exe and the stand-in's
+#     record of the link; --out receives build a's image, which runs;
 # (2) a source whose object records the build directory (the stand-in's
 #     'prog-plant: object') fails with status 1 and names the object, and
 #     only it;
-# (3) a source whose linked text records it ('prog-plant: il') fails naming
-#     prog.il, and only it;
-# (4) --det has no native mode (a usage error, status 2).
-# --out and --also-il receive build a's image and text.
+# (3) a source whose linked output records it ('prog-plant: il': the
+#     stand-in's msil-ld writes it into the image) fails naming prog.exe,
+#     and only it;
+# (4) under lto with link output il (M14's form) a deterministic build
+#     compares the objects and the text and leaves out ilasm's image, and
+#     --out and --also-il receive build a's image and text;
+# (5) --det has no native mode (a usage error, status 2).
 
 # RUN: rm -rf %t && split-file %s %t
 
 # (1)
 # REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
 # REDEFINE: %{msil_archives} = one=%t/a1.c
-# RUN: %{msil_det} --out %t/det.exe --also-il %t/det.il > %t/1.log 2>&1
-# RUN: %{harness_check} contains %t/1.log "^msil-prog: --det: the 6 files of builds a and b are identical \(ilasm's image prog\.exe not compared\)$"
-# RUN: %{harness_check} contains %t/1.log "^msil-prog: .* -O2 -flto -fdebug-compilation-dir=\. -c \.\./\.\./\S+/main\.c -o obj/main\.o$" "^msil-prog: .* -O2 -flto -fdebug-compilation-dir=\. -c \.\./\.\./\S+/a1\.c -o ar/one/a1\.o$" "-exe -output=\S+det\.d.a.prog\.exe " "-exe -output=\S+det\.d.b.prog\.exe "
-# RUN: %{harness_check} contains %t/det.il "ldc\.i4 7$"
-# RUN: %{harness_check} lacks %t/1.log "differs" "msil-prog: error"
+# RUN: %{msil_det} --out %t/det.exe > %t/1.log 2>&1
+# RUN: %{harness_check} contains %t/1.log "^msil-prog: --det: the 6 files of builds a and b are identical$"
+# RUN: %{harness_check} contains %t/1.log "^msil-prog: .* -O2 -fdebug-compilation-dir=\. -c \.\./\.\./\S+/main\.c -o obj/main\.o$" "^msil-prog: .* -O2 -fdebug-compilation-dir=\. -c \.\./\.\./\S+/a1\.c -o ar/one/a1\.o$" "^msil-prog: .* -O2 (--sysroot=\S+ )?obj/main\.o obj/util\.o -Lar/one -lone -o prog\.exe$"
+# RUN: %{harness_check} lacks %t/1.log "differs" "msil-prog: error" " -flto" "lto-emit-asm" " -exe -output="
+# RUN: %msil_exec --out %t/1.out %t/det.exe
+# RUN: %{harness_check} equals %t/1.out "[exit 7]"
 
 # (2)
 # REDEFINE: %{msil_srcs} = %t/main.c %t/plant-obj.c
 # REDEFINE: %{msil_archives} =
 # RUN: %{harness_check} exits 1 %{msil_det} > %t/2.log 2>&1
 # RUN: %{harness_check} contains %t/2.log "^msil-prog: --det: obj/plant-obj\.o differs between a and b \(\d+ and \d+ bytes, first difference at offset \d+\)$" "^msil-prog: error: --det: builds a and b differ \(see above\)$"
-# RUN: %{harness_check} lacks %t/2.log "main\.o differs" "prog\.il differs" "identical"
+# RUN: %{harness_check} lacks %t/2.log "main\.o differs" "prog\.exe differs" "identical"
 
 # (3)
 # REDEFINE: %{msil_srcs} = %t/main.c %t/plant-il.c
 # RUN: %{harness_check} exits 1 %{msil_det} > %t/3.log 2>&1
-# RUN: %{harness_check} contains %t/3.log "^msil-prog: --det: prog\.il differs between a and b " "^msil-prog: error: --det: builds a and b differ"
-# RUN: %{harness_check} lacks %t/3.log "\.o differs" "\.a differs"
+# RUN: %{harness_check} contains %t/3.log "^msil-prog: --det: prog\.exe differs between a and b " "^msil-prog: error: --det: builds a and b differ"
+# RUN: %{harness_check} lacks %t/3.log "\.o differs" "\.a differs" "inputs differs"
 
 # (4)
-# RUN: %{harness_check} exits 2 %{msil_det} --mode native > %t/4.log 2>&1
-# RUN: %{harness_check} contains %t/4.log "^msil-prog: error: --det compares MSIL builds; it has no native mode$"
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# REDEFINE: %{msil_archives} = one=%t/a1.c
+# RUN: %{msil_det} --pipeline lto --link-output il --out %t/det-il.exe --also-il %t/det.il > %t/4.log 2>&1
+# RUN: %{harness_check} contains %t/4.log "^msil-prog: --det: the 6 files of builds a and b are identical \(ilasm's image prog\.exe not compared\)$"
+# RUN: %{harness_check} contains %t/4.log "^msil-prog: .* -O2 -flto -fdebug-compilation-dir=\. -c \.\./\.\./\S+/main\.c -o obj/main\.o$" "-exe -output=\S+det\.d.a.prog\.exe " "-exe -output=\S+det\.d.b.prog\.exe "
+# RUN: %{harness_check} contains %t/det.il "ldc\.i4 7$"
+# RUN: %msil_exec --out %t/4.out %t/det-il.exe
+# RUN: %{harness_check} equals %t/4.out "[exit 7]"
+# RUN: %{harness_check} lacks %t/4.log "differs" "msil-prog: error"
+
+# (5)
+# RUN: %{harness_check} exits 2 %{msil_det} --mode native > %t/5.log 2>&1
+# RUN: %{harness_check} contains %t/5.log "^msil-prog: error: --det compares MSIL builds; it has no native mode$"
 
 #--- main.c
 // prog-value: 1

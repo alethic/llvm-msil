@@ -1,0 +1,191 @@
+# Oracle O3 above the relocation-loop threshold, from C (clang) and from IR (llc), with 4-byte sites.
+# With more than 32 data relocations (-msil-reloc-loop-threshold and
+# --msil-reloc-loop-threshold, default 32) both -S and msil-ld write the
+# '<msil>relocs' table and the loop that applies it, from the one trailer
+# builder of lib/CLI (plan 5.9.10, 5.1 as amended for M20), so the one-object
+# link and the -S build must still be equal canonically: the table's bytes
+# (an RVA field of '<msil>relocs_t'), the address slots, the loop and the
+# straight-line part that fills the slots. many.c has 45 relocations:
+# string literals, data with addends, function pointers (address slots, kind
+# 2) and pointers at unaligned offsets in packed records; its composite runs
+# the program against the native transcript, and the RUN lines compare the
+# two builds with the O3 normalizations at -O0 and -O2 and run both images.
+# r4.ll, through llc -filetype=obj (linked with --no-gc-sections) and llc
+# text (ilasm), adds what C cannot write: 4-byte sites that hold the low 32
+# bits of an image address (kind 1) and of a function's address (kind 3),
+# aligned and unaligned, next to 36 pointer-sized relocations; its main
+# returns 0 when every site holds its value. Both IR images run, and their
+# transcripts must be equal and end in '[exit 0]'. Plan 5.12.6 (O3, for
+# %{msil_c} and %{msil_ll}, M20).
+# REQUIRES: msil-cil-dump || msil-mdcanon
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/many.c
+# RUN: %{msil_prog}
+# DEFINE: %{equiv_o3} = %msil_equiv --oracle O3 --test %s --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access
+# RUN: mkdir -p %t/O0/obj %t/O0/asm %t/O2/obj %t/O2/asm
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/many.c -o %t/O0/obj/many.o
+# RUN: %clang_msil %{msil_ldflags} -Wl,--no-gc-sections %t/O0/obj/many.o -o %t/O0/obj/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O0 -S %t/many.c -mllvm -msil-assembly-name=prog -o %t/O0/asm/prog.il
+# RUN: %ilasm -exe -output=%t/O0/asm/prog.exe %t/O0/asm/prog.il
+# RUN: %{equiv_o3} %t/O0/obj/prog.exe %t/O0/asm/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O0/obj.out %t/O0/obj/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O0/asm.out %t/O0/asm/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/many.c -o %t/O2/obj/many.o
+# RUN: %clang_msil %{msil_ldflags} -Wl,--no-gc-sections %t/O2/obj/many.o -o %t/O2/obj/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -S %t/many.c -mllvm -msil-assembly-name=prog -o %t/O2/asm/prog.il
+# RUN: %ilasm -exe -output=%t/O2/asm/prog.exe %t/O2/asm/prog.il
+# RUN: %{equiv_o3} %t/O2/obj/prog.exe %t/O2/asm/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O2/obj.out %t/O2/obj/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O2/asm.out %t/O2/asm/prog.exe
+# RUN: mkdir -p %t/ll/O0/obj %t/ll/O0/asm %t/ll/O2/obj %t/ll/O2/asm
+# RUN: %llc_msil -O0 -filetype=obj %t/r4.ll -o %t/ll/O0/obj/r4.o
+# RUN: %clang_msil %{msil_ldflags} -Wl,--no-gc-sections %t/ll/O0/obj/r4.o -o %t/ll/O0/obj/prog.exe
+# RUN: %llc_msil -O0 -msil-assembly-name=prog %t/r4.ll -o %t/ll/O0/asm/prog.il
+# RUN: %ilasm -exe -output=%t/ll/O0/asm/prog.exe %t/ll/O0/asm/prog.il
+# RUN: %{equiv_o3} %t/ll/O0/obj/prog.exe %t/ll/O0/asm/prog.exe
+# RUN: %msil_verify %t/ll/O0/obj/prog.exe
+# RUN: %msil_exec --out %t/ll/O0/obj.out %t/ll/O0/obj/prog.exe
+# RUN: %msil_exec --out %t/ll/O0/asm.out %t/ll/O0/asm/prog.exe
+# RUN: diff %t/ll/O0/obj.out %t/ll/O0/asm.out
+# RUN: FileCheck %s --check-prefix=LLEXIT --input-file=%t/ll/O0/obj.out
+# RUN: %llc_msil -O2 -filetype=obj %t/r4.ll -o %t/ll/O2/obj/r4.o
+# RUN: %clang_msil %{msil_ldflags} -Wl,--no-gc-sections %t/ll/O2/obj/r4.o -o %t/ll/O2/obj/prog.exe
+# RUN: %llc_msil -O2 -msil-assembly-name=prog %t/r4.ll -o %t/ll/O2/asm/prog.il
+# RUN: %ilasm -exe -output=%t/ll/O2/asm/prog.exe %t/ll/O2/asm/prog.il
+# RUN: %{equiv_o3} %t/ll/O2/obj/prog.exe %t/ll/O2/asm/prog.exe
+# RUN: %msil_verify %t/ll/O2/obj/prog.exe
+# RUN: %msil_exec --out %t/ll/O2/obj.out %t/ll/O2/obj/prog.exe
+# RUN: %msil_exec --out %t/ll/O2/asm.out %t/ll/O2/asm/prog.exe
+# RUN: diff %t/ll/O2/obj.out %t/ll/O2/asm.out
+# RUN: FileCheck %s --check-prefix=LLEXIT --input-file=%t/ll/O2/obj.out
+# LLEXIT: {{^}}[exit 0]{{$}}
+#--- many.c
+#include "msil_test.h"
+struct __attribute__((packed)) urec {
+  char tag;
+  const char *name;
+  int *value;
+  char mid;
+  int (*fn)(int);
+};
+static int vals[8] = {10, 11, 12, 13, 14, 15, 16, 17};
+int ext_vals[4] = {40, 41, 42, 43};
+static int twice(int x) { return 2 * x; }
+int negate(int x) { return -x; }
+static int square(int x) { return x * x; }
+
+const char *const names[10] = {"m0", "m1", "m2", "m3", "m4",
+                               "m5", "m6", "m7", "m8", "m9"};
+int *const ptrs[12] = {&vals[0], &vals[1], &vals[2], &vals[3],
+                       &vals[4], &vals[5], &vals[6], &vals[7],
+                       &ext_vals[0], &ext_vals[1], &ext_vals[2], &ext_vals[3]};
+int (*const fns[8])(int) = {twice, negate, square, twice,
+                            negate, square, twice, negate};
+struct urec urecs[5] = {
+    {1, "u0", &vals[3], 'a', twice},  {2, "u1", &ext_vals[1], 'b', negate},
+    {3, "u2", &vals[6], 'c', square}, {4, "u3", &ext_vals[3], 'd', twice},
+    {5, "u4", &vals[0], 'e', negate},
+};
+
+int main(void) {
+  int sum = 0;
+  for (int i = 0; i < 10; ++i)
+    put_str(names[i]);
+  for (int i = 0; i < 12; ++i)
+    sum += *ptrs[i];
+  put_kv("ptrs", sum);
+  for (int i = 0; i < 8; ++i)
+    put_kv("fn", fns[i](i + 1));
+  for (int i = 0; i < 5; ++i) {
+    put_str(urecs[i].name);
+    put_kv("value", *urecs[i].value);
+    put_kv("call", urecs[i].fn(i + 2));
+    sum += urecs[i].tag + urecs[i].mid;
+  }
+  return sum & 0xff;
+}
+#--- r4.ll
+; 36 pointer-sized relocations into @arr (offsets cycling through its 8
+; elements), two function pointers, one at an unaligned offset, and 4-byte
+; sites: the low 32 bits of @arr (+ 8, + 12) and of @fn, aligned and
+; unaligned. main returns a bitmask of the checks that fail.
+@arr = global [8 x i32] [i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7], align 4
+@ptrs = global [36 x ptr] [ptr @arr, ptr getelementptr (i8, ptr @arr, i64 4), ptr getelementptr (i8, ptr @arr, i64 8), ptr getelementptr (i8, ptr @arr, i64 12), ptr getelementptr (i8, ptr @arr, i64 16), ptr getelementptr (i8, ptr @arr, i64 20), ptr getelementptr (i8, ptr @arr, i64 24), ptr getelementptr (i8, ptr @arr, i64 28), ptr @arr, ptr getelementptr (i8, ptr @arr, i64 4), ptr getelementptr (i8, ptr @arr, i64 8), ptr getelementptr (i8, ptr @arr, i64 12), ptr getelementptr (i8, ptr @arr, i64 16), ptr getelementptr (i8, ptr @arr, i64 20), ptr getelementptr (i8, ptr @arr, i64 24), ptr getelementptr (i8, ptr @arr, i64 28), ptr @arr, ptr getelementptr (i8, ptr @arr, i64 4), ptr getelementptr (i8, ptr @arr, i64 8), ptr getelementptr (i8, ptr @arr, i64 12), ptr getelementptr (i8, ptr @arr, i64 16), ptr getelementptr (i8, ptr @arr, i64 20), ptr getelementptr (i8, ptr @arr, i64 24), ptr getelementptr (i8, ptr @arr, i64 28), ptr @arr, ptr getelementptr (i8, ptr @arr, i64 4), ptr getelementptr (i8, ptr @arr, i64 8), ptr getelementptr (i8, ptr @arr, i64 12), ptr getelementptr (i8, ptr @arr, i64 16), ptr getelementptr (i8, ptr @arr, i64 20), ptr getelementptr (i8, ptr @arr, i64 24), ptr getelementptr (i8, ptr @arr, i64 28), ptr @arr, ptr getelementptr (i8, ptr @arr, i64 4), ptr getelementptr (i8, ptr @arr, i64 8), ptr getelementptr (i8, ptr @arr, i64 12)], align 8
+@lo4 = global [3 x i32] [i32 trunc (i64 ptrtoint (ptr @arr to i64) to i32), i32 trunc (i64 ptrtoint (ptr getelementptr (i8, ptr @arr, i64 8) to i64) to i32), i32 trunc (i64 ptrtoint (ptr @fn to i64) to i32)], align 4
+@packed = global <{ i8, ptr, i8, i32, i16, i32 }> <{ i8 1, ptr @fn, i8 2, i32 trunc (i64 ptrtoint (ptr getelementptr (i8, ptr @arr, i64 12) to i64) to i32), i16 3, i32 trunc (i64 ptrtoint (ptr @fn to i64) to i32) }>, align 1
+@fnp = global ptr @fn, align 8
+
+define i32 @fn(i32 %x) {
+  %r = mul i32 %x, 3
+  ret i32 %r
+}
+
+define i32 @main() {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i64 [ 0, %entry ], [ %i.next, %loop ]
+  %acc = phi i32 [ 0, %entry ], [ %acc.next, %loop ]
+  %slot = getelementptr [36 x ptr], ptr @ptrs, i64 0, i64 %i
+  %p = load ptr, ptr %slot, align 8
+  %v = load i32, ptr %p, align 4
+  %acc.next = add i32 %acc, %v
+  %i.next = add i64 %i, 1
+  %done = icmp eq i64 %i.next, 36
+  br i1 %done, label %check, label %loop
+
+check:
+  ; 4 * (0 + ... + 7) + (0 + 1 + 2 + 3) = 118
+  %c0 = icmp ne i32 %acc.next, 118
+  %t = ptrtoint ptr @arr to i64
+  %t32 = trunc i64 %t to i32
+  %t8 = add i32 %t32, 8
+  %t12 = add i32 %t32, 12
+  %f = ptrtoint ptr @fn to i64
+  %f32 = trunc i64 %f to i32
+  %l0 = load i32, ptr @lo4, align 4
+  %p1 = getelementptr i8, ptr @lo4, i64 4
+  %l1 = load i32, ptr %p1, align 4
+  %p2 = getelementptr i8, ptr @lo4, i64 8
+  %l2 = load i32, ptr %p2, align 4
+  %q0 = getelementptr i8, ptr @packed, i64 1
+  %pf = load ptr, ptr %q0, align 1
+  %q1 = getelementptr i8, ptr @packed, i64 10
+  %u1 = load i32, ptr %q1, align 1
+  %q2 = getelementptr i8, ptr @packed, i64 16
+  %u2 = load i32, ptr %q2, align 1
+  %fp = load ptr, ptr @fnp, align 8
+  %r1 = call i32 %pf(i32 5)
+  %r2 = call i32 %fp(i32 7)
+  %c1 = icmp ne i32 %l0, %t32
+  %c2 = icmp ne i32 %l1, %t8
+  %c3 = icmp ne i32 %l2, %f32
+  %c4 = icmp ne i32 %u1, %t12
+  %c5 = icmp ne i32 %u2, %f32
+  %c6 = icmp ne i32 %r1, 15
+  %c7 = icmp ne i32 %r2, 21
+  %b0 = zext i1 %c0 to i32
+  %z1 = zext i1 %c1 to i32
+  %b1 = shl i32 %z1, 1
+  %z2 = zext i1 %c2 to i32
+  %b2 = shl i32 %z2, 2
+  %z3 = zext i1 %c3 to i32
+  %b3 = shl i32 %z3, 3
+  %z4 = zext i1 %c4 to i32
+  %b4 = shl i32 %z4, 4
+  %z5 = zext i1 %c5 to i32
+  %b5 = shl i32 %z5, 5
+  %z6 = zext i1 %c6 to i32
+  %b6 = shl i32 %z6, 6
+  %z7 = zext i1 %c7 to i32
+  %b7 = shl i32 %z7, 7
+  %m1 = or i32 %b0, %b1
+  %m2 = or i32 %m1, %b2
+  %m3 = or i32 %m2, %b3
+  %m4 = or i32 %m3, %b4
+  %m5 = or i32 %m4, %b5
+  %m6 = or i32 %m5, %b6
+  %m7 = or i32 %m6, %b7
+  ret i32 %m7
+}

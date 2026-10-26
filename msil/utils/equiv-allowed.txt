@@ -1,0 +1,83 @@
+# The normalizations of the equivalence oracles O3 and O4 (plan 5.12.6), read
+# by msil/utils/msil-equiv.py (%msil_equiv) and msil/utils/msil-prog.py
+# (--equiv-skip).
+#
+# O3: canon(clang -c + msil-ld --no-gc-sections) == canon(clang -S + ilasm),
+#     one translation unit (%{msil_c} and %{msil_ll} under msil_pipeline=obj
+#     with msil_equiv=1).
+# O4: canon(msil-ld LTO image, --no-gc-sections) ==
+#     canon(ilasm(msil-ld --lto-emit-asm)), several translation units
+#     (%{msil_prog} under msil_pipeline=lto, msil_link_output=pe, with
+#     msil_equiv=1).
+# canon is canonical listing v1 (plan 5.7.10: llvm-cil-dump --canonical, or
+# mdcanon); everything else in it (.maxstack, locals, EH clauses, data bytes,
+# P/Invoke rows, encoding forms and every operand) must match exactly.
+#
+# An entry is '<name> <option>[ <option>]... # <justification>': each option
+# is a dumper option of canonical listing v1 whose default ('keep') is the
+# listing unchanged, and it applies while the listing is produced, before
+# sorting. A comparison names the entries it allows (--allow <name>):
+#   O3: assembly-hash ilasm-params ilasm-initlocals snan-quiet pinvoke-module
+#       pinvoke-access, plus scopes in the reference legs (msil_references);
+#   O4: assembly-hash ilasm-params ilasm-initlocals snan-quiet, plus scopes in
+#       the reference legs.
+# The object oracle of M19 (cli-corpus-check.py --mode object,
+# llvm/test/CodeGen/MSIL/object-form-text.ll) uses the options of
+# ilasm-params, ilasm-initlocals and snan-quiet directly.
+#
+# A 'skip <oracle>[@<triple>][:<level>] <test path> <reason>' line (oracle
+# O3 or O4) names a difference that no normalization removes: msil-equiv.py
+# --oracle <O> --test <path> prints '<O> skipped: <reason>' and passes, and
+# msil-prog.py --equiv-skip builds neither equivalence output for the test.
+# The path is repository-relative; one that ends in '/' covers every test
+# below that directory. A line that names an MSIL triple ('@<triple>') or a
+# level (':<level>', one of O0, O1, O2, O3, Os and Oz) covers the test only
+# for that triple or level (the composites pass the test's --triple and
+# --level to both scripts); a line that names neither covers every triple
+# and level (plan section 12, 'Plan 5.12.6 amended (skip lines)'). A skipped
+# test stays in every other check. msil/test/README.md lists every line of
+# this file.
+
+assembly-hash --assembly-hash=ignore # msil-ld writes the Assembly row's HashAlgId as SHA1 (0x8004, plan 5.9.12, as Roslyn does); ilasm writes 0 without a '.hash algorithm' directive, which -S and --lto-emit-asm text never print (metadata-writer 2)
+ilasm-params --params=drop # ilasm adds one Param row per parameter (A_<n> when unnamed, the text's name otherwise, 'args' on the entry point, A_0 on P/Invoke stubs); codegen and msil-ld write none, and the rows it drops have Flags 0 and no FieldMarshal or Constant row
+ilasm-initlocals --initlocals=ignore-without-locals # both ilasms keep an explicit .maxstack below 8 on a small body without .locals and EH clauses by writing a fat header with InitLocals set (plan section 12, M16 row of 2026-10-23); codegen and msil-ld never set InitLocals (D13), and bodies with a local signature are compared as they are
+snan-quiet --snan=quiet # both ilasms quiet float32 signaling-NaN constants (ldc.r4), while the MC encoder and msil-ld keep their bits; float64 operands, Constant blobs and data bytes are compared as they are (metadata-writer 3.4, mc-streamer E4)
+pinvoke-module --pinvoke-module=strip # -S binds P/Invokes through the frozen D14 table, msil-ld through native libraries with Q13 module strings (plan 5.10.11, 5.10.13), so the ImplMap scopes and ModuleRef rows differ; entry names, ImplMap flags and signatures are compared as they are
+pinvoke-access --pinvoke-access=ignore # -S prints D14 P/Invokes public, msil-ld writes its P/Invoke stubs assembly (plan 5.10.11); only MemberAccess of methods with PinvokeImpl is cleared
+scopes --scopes=strip # -S and --lto-emit-asm text print [mscorlib], while msil-ld's reference legs bind the BCL to the reference packs (plan 5.11.8); allowed only when msil_references is not none
+
+# Differences no entry removes (plan 5.12.6).
+#
+# Plan 5.8.10's whole-program differences: -S, llc and --lto-emit-asm text
+# keep M12's aliases (a forwarding method for each external or weak function
+# alias, data aliases replaced by their aliasees) and fold extern_weak
+# declarations to null, while an object has ALIAS symbols, which share the
+# aliasee's method and get address fields of their own, and UNDEFINED WEAK
+# symbols, for which msil-ld creates zero fields (plan 5.9.6 step 3). The
+# text also keeps Phase 1's layout of unnamed_addr C strings, one copy each,
+# while msil-ld shares equal live STRINGS segments (name, flags, alignment
+# and bytes), inside one object too (plan 5.9.9 rule 6).
+skip O3 msil/test/M1/07-globals/alias.c aliases: -S gives the function aliases chain_alias, pub_alias and weak_alias forwarding methods and replaces the data aliases by their aliasees, while the object's ALIAS symbols share the aliasee's method and give counter_alias and table_alias address fields of their own (plan 5.8.10)
+skip O3 msil/test/M1/07-globals/weak-undefined.c extern_weak: -S folds the extern_weak declarations to null with no field, while msil-ld gives the object's UNDEFINED WEAK symbols zero fields ('<msil>fn_maybe', weak_data) and zero bytes in the image, which the code then loads (plan 5.8.10, 5.9.6 step 3)
+skip O3 msil/test/M1/10-calls/rust-shaped.ll aliases: llc's text gives the unnamed_addr alias sum_b a forwarding method that calls sum_a, while the object's ALIAS symbol shares sum_a's method (plan 5.8.10)
+skip O3@x86_64-pc-windows-msvc-msil:O2 msil/test/M1/11-programs/crc32.c unnamed_addr C strings: at -O2 on the Windows triple, msil-ld shares the equal STRINGS segments of the comdat string literal '??_C@_0BB@JCEFLFJE@0123456789abcdef?$AA@' and put_hex.digits (plan 5.9.9 rule 6), while -S keeps Phase 1's layout with one copy of each (plan 5.8.10), so the image's .data is 32 bytes smaller (1776 bytes against 1808) and every later field offset differs; at -O0 put_hex.digits is not unnamed_addr, and on the Linux triple ConstantMerge folds the private literal into put_hex.digits, so there both sides are equal
+skip O4 msil/test/M1/07-globals/alias.c aliases: the LTO object keeps the data aliases counter_alias and table_alias as ALIAS symbols with address fields of their own, which the image stores and loads, while the --lto-emit-asm text replaces them by their aliasees (plan 5.8.10)
+skip O4 msil/test/M1/07-globals/weak-undefined.c extern_weak: msil-ld gives the LTO object's UNDEFINED WEAK symbols zero fields ('<msil>fn_maybe', weak_data) and zero bytes in the image, which the code then loads, while the --lto-emit-asm text folds them to null with no field (plan 5.8.10, 5.9.6 step 3)
+skip O4 msil/test/M2/08-semantics/p1-weak-alias.test aliases: the LTO object keeps the data alias arr_alias as an ALIAS symbol with an address field of its own, which the image stores and loads, while the --lto-emit-asm text replaces it by its aliasee base_arr (plan 5.8.10)
+skip O4 msil/test/M2/08-semantics/p1-weak-alias-kept.test aliases: the LTO object keeps the data alias arr_alias as an ALIAS symbol with an address field of its own, which the image stores and loads, while the --lto-emit-asm text replaces it by its aliasee base_arr (plan 5.8.10)
+skip O4 msil/test/M2/08-semantics/p1-weak-alias-main.test aliases: the LTO object keeps the data alias arr_alias as an ALIAS symbol with an address field of its own, which the image stores and loads, while the --lto-emit-asm text replaces it by its aliasee base_arr (plan 5.8.10)
+skip O4 msil/test/M2/08-semantics/p1-weak-alias-main-kept.test aliases: the LTO object keeps the data alias arr_alias as an ALIAS symbol with an address field of its own, which the image stores and loads, while the --lto-emit-asm text replaces it by its aliasee base_arr (plan 5.8.10)
+skip O4 msil/test/M2/08-semantics/p1-weak-alias-reversed.test aliases: the LTO object keeps the data alias arr_alias as an ALIAS symbol with an address field of its own, which the image stores and loads, while the --lto-emit-asm text replaces it by its aliasee base_arr (plan 5.8.10)
+skip O4 msil/test/M2/08-semantics/weak-undef-guarded.test extern_weak: msil-ld gives the LTO object's UNDEFINED WEAK symbols zero fields ('<msil>fn_hook', '<msil>fn_other_fn', weak_data) that the guards load, while the --lto-emit-asm text folds them to null with no field and the guards to constants (plan 5.8.10, 5.9.6 step 3)
+skip O4 msil/test/M2/08-semantics/zoo.test extern_weak: msil-ld gives the LTO object's UNDEFINED WEAK symbol maybe the zero field '<msil>fn_maybe', while the --lto-emit-asm text folds it to null with no field (plan 5.8.10, 5.9.6 step 3)
+skip O4 msil/test/M2/08-semantics/zoo-archive.test extern_weak: msil-ld gives the LTO object's UNDEFINED WEAK symbol maybe the zero field '<msil>fn_maybe', while the --lto-emit-asm text folds it to null with no field (plan 5.8.10, 5.9.6 step 3)
+#
+# Spill classes (plan 5.9.12).
+skip O4 msil/test/M2/00-link/spill-limits.test spill classes: --lto-emit-asm text has no per-type limit, so msil-ld's image moves members into '<msil>Spill<N>' classes that the text does not have (plan 5.9.12)
+#
+# Links that --lto-emit-asm cannot write as one text module (plan section 12,
+# 'Plan 5.12.6 amended (skip lines)'): prebuilt CIL objects or archives of
+# them, ThinLTO and --lto-partitions.
+skip O4 msil/test/M2/00-link/reloc-loop.test prebuilt CIL objects: the composite links the CIL object r4.o in libr4.a, so its --also-il link stops with '--lto-emit-asm cannot link CIL objects' and there is no text to compare (plan 5.9.13)
+skip O4 msil/test/M2/02-lto/mixed-objects-bitcode.test prebuilt CIL objects: the composite links CIL objects (objpart.o, and arobj.o in libmixedpre.a) beside bitcode, so its --also-il link stops with '--lto-emit-asm cannot link CIL objects' and there is no text to compare (plan 5.9.13)
+skip O4 msil/test/M2/02-lto/lto-partitions.test --lto-partitions=2: the composite's link writes two partitions, so its --also-il link stops with 'ThinLTO and --lto-partitions cannot write ILAsm text' and there is no text to compare (plan 5.9.13)

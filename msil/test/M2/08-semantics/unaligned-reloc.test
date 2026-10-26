@@ -1,0 +1,70 @@
+# Matrix case unaligned-reloc: pointers at unaligned offsets in initialized data, across objects (native).
+# a.c's packed records hold, at odd offsets, pointers to b.c's variables and
+# array elements (addends), to a.c's static variable, to string literals and
+# to functions of both objects (b_twice and the static local_fn); another
+# packed object holds a pointer to one of those records, and b.c's own packed
+# records point into b.c. Every pointer is a data relocation whose site is
+# not 8-aligned, which <Module>::.cctor applies with 'unaligned. 1' stores
+# (plan 5.9.10 rules for relocations; D24). The program has fewer than 32
+# data relocations, so they are stored straight-line (Phase 1's sequence);
+# 00-link/reloc-loop.test covers the same sites in the relocation loop. The
+# program reads every field through the records and calls through the stored
+# function pointers. Recon tests-p2 3.1, plan 5.9.16 row unaligned-reloc
+# (M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+#--- a.c
+#include "msil_test.h"
+struct __attribute__((packed)) rec {
+  char tag;
+  int *p;
+  short s;
+  const char *name;
+  char z;
+  int (*fn)(int);
+};
+extern int b_val, b_arr[4];
+int b_twice(int);
+int b_check(void);
+static int local_val = 7;
+static int local_fn(int x) { return x + 100; }
+
+struct rec recs[3] = {
+    {1, &b_val, 10, "first", 'x', b_twice},
+    {2, &b_arr[2], 20, "second", 'y', local_fn},
+    {3, &local_val, 30, "third", 'z', b_twice},
+};
+struct __attribute__((packed)) {
+  char pad[3];
+  struct rec *self;
+  char tail;
+} back = {{4, 5, 6}, &recs[1], 9};
+
+int main(void) {
+  int sum = 0;
+  for (int i = 0; i < 3; ++i) {
+    put_str(recs[i].name);
+    put_kv("value", *recs[i].p);
+    put_kv("call", recs[i].fn(i + 1));
+    sum += recs[i].tag + recs[i].s + recs[i].z;
+  }
+  put_kv("back tag", back.self->tag);
+  put_kv("back value", *back.self->p);
+  put_kv("back tail", back.tail);
+  put_kv("b", b_check());
+  return (sum + back.self->tag) & 0xff;
+}
+#--- b.c
+int b_val = 41;
+int b_arr[4] = {5, 6, 7, 8};
+int b_twice(int x) { return 2 * x; }
+static int b_local = 13;
+struct __attribute__((packed)) brec {
+  char c;
+  int *p;
+};
+struct brec b_recs[3] = {{'p', &b_val}, {'q', &b_arr[3]}, {'r', &b_local}};
+int b_check(void) {
+  return *b_recs[0].p * 10000 + *b_recs[1].p * 100 + *b_recs[2].p + b_recs[2].c;
+}

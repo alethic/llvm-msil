@@ -1,0 +1,43 @@
+# Matrix case p8-section-ctor: a constructor registered through a named section runs (native 42).
+# recon/p2/judge-c-fidelity-files/probes/p8.c: a pointer to init_fn in the
+# constructor-table section, '.init_array' on Linux triples and '.CRT$XCU'
+# (#pragma section and __declspec(allocate)) on Windows triples, which the
+# native startup code runs before main. Phase 1 silently dropped the section
+# and returned 3 (judge-c-fidelity J6, F4); M12 made it a diagnostic. From
+# M20 each 8-byte slot of such a section runs as a constructor from
+# <Module>::.cctor (plan 5.9.9 'Constructor list'): on the object path and
+# the LTO path through msil-ld, and on the asm path (clang -S, ilasm) through
+# the whole-program layout that -S shares with a one-object link (plan
+# 5.8.10, 5.9.10). The composite runs %{msil_prog} (the object or the LTO
+# pipeline, per msil-prog-pipeline); the RUN lines after it build the one
+# source with clang -S at -O0 and -O2 on every leg, assemble it, verify,
+# force-JIT and run it against the same transcript, so all three pipelines
+# print 42. Plan 5.9.16 row p8-section-ctor (M12 asm diagnostic, M20: 42 on
+# every pipeline).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p8.c
+# RUN: %{msil_prog}
+# RUN: %clang_msil %{msil_cflags} -O0 -S %t/p8.c -o %t.asm.O0.il
+# RUN: %ilasm -exe -output=%t.asm.O0.exe %t.asm.O0.il
+# RUN: %msil_verify %t.asm.O0.exe
+# RUN: %if msil-jitall %{ %msil_jitall %t.asm.O0.exe %}
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t.asm.O0.out %t.asm.O0.exe
+# RUN: %if msil-run-netfx %{ %msil_exec --netfx --expect %S/%{s:stem} --out %t.asm.O0.netfx.out %t.asm.O0.exe %}
+# RUN: %clang_msil %{msil_cflags} -O2 -S %t/p8.c -o %t.asm.O2.il
+# RUN: %ilasm -exe -output=%t.asm.O2.exe %t.asm.O2.il
+# RUN: %msil_verify %t.asm.O2.exe
+# RUN: %if msil-jitall %{ %msil_jitall %t.asm.O2.exe %}
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t.asm.O2.out %t.asm.O2.exe
+# RUN: %if msil-run-netfx %{ %msil_exec --netfx --expect %S/%{s:stem} --out %t.asm.O2.netfx.out %t.asm.O2.exe %}
+#--- p8.c
+/* p8.c: a constructor registered through a named section, a common C idiom:
+   ELF '.init_array' and MSVC '.CRT$XCU' (both read by the native startup code). */
+int counter = 1;
+static void init_fn(void) { counter = 40; }
+#if defined(_WIN32)
+#pragma section(".CRT$XCU", read)
+__declspec(allocate(".CRT$XCU")) __attribute__((used)) static void (*p_init)(void) = init_fn;
+#else
+__attribute__((used, section(".init_array"))) static void (*p_init)(void) = init_fn;
+#endif
+int main(void) { return counter + 2; }   /* native: 42 */

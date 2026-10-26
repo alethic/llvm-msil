@@ -70,21 +70,85 @@
 /// streamer that decides the mode); without one (opt) it keeps the
 /// whole-program behaviour.
 ///
+/// MSIL only (plan 5.9.8, M20; a deviation from D30's mechanical copy that
+/// section 12 records): in msil-ld's merged LTO module (the module flag
+/// "msil-lto" is 1) a call of a definition follows cli::classifyCall's
+/// table, so the LTO path decides as msil-ld decides for CIL objects: a call
+/// whose type differs from the definition's, and a call with the
+/// definition's own type where either side has an sret or byval parameter
+/// (5.9.8's rows for these compare only the ABI descriptors). The call's CIL
+/// signature and ABI descriptor (MSIL::getFunctionTypeSignature,
+/// MSIL::getABIDescriptor over the call's own attributes, as the object
+/// writer records a call site) are compared with the definition's:
+/// - an adaptation is a wrapper with the table's actions (extra arguments
+///   dropped, missing ones zero, int32 and native int converted, a result
+///   popped, zero or converted) and a warning;
+/// - a table error is an error, with the trapping '_bitcast_invalid' wrapper
+///   in place so that the module stays well formed;
+/// - a direct match keeps a silent wrapper only where the IR types differ
+///   (i64 and ptr, i8 and i32); a call with the definition's type keeps it.
+/// In both wrappers an i1, i8 or i16 argument or result, an int32 in CIL, is
+/// first widened to i32 as the object path's CIL holds it (section 12): an
+/// argument by the call's 'signext', a result by the definition's, and
+/// otherwise zero extended. Calls of one IR type may differ in these
+/// attributes, so each call is classified: the calls share a wrapper only if
+/// they have the same callee, IR type, ABI descriptor and sign-extended
+/// arguments, and each (callee, IR type, ABI descriptor) is reported once,
+/// whatever the order of the calls. A wrapper has the 'sret' and 'byval'
+/// attributes of its calls, and its call of the definition the definition's,
+/// so that a later run finds them direct.
+/// The wrappers keep the Phase 1 names ('<f>_bitcast'): R5 and C8 forbid
+/// '<msil>' names in objects. The texts are 5.9.8's without the ' in <file>'
+/// parts, since the merged module has no files; msil-ld's LTO diagnostic
+/// handler prints them. Calls of declarations (native imports, or symbols of
+/// other objects in object mode) keep the behaviour above.
+///
+/// msil-ld's LTO applies the table before LTO optimization too (plan 5.9.8,
+/// section 12): MSILFixFunctionBitcastsLTOPass runs this branch at the start
+/// of the LTO post-link pipelines, before "msil-lto" is set (in code
+/// generation), so that InstCombine's transformConstExprCastCall cannot fold
+/// a mismatched call into the definition's type first. Its output is not
+/// known yet, so it adapts only the calls of definitions (an imported
+/// available_externally one of ThinLTO included, which InstCombine folds
+/// too) and does not look through aliases. The code generation run then
+/// finds those calls retargeted, to the adapter or to the trapping wrapper,
+/// and reports nothing twice. A call in an available_externally function (a
+/// function that ThinLTO imported) is a copy of a call that the function's
+/// own module adapts and reports, or msil-ld does: it is adapted silently.
+/// The table sees only the calls that reach msil-ld's LTO still mismatched:
+/// the compile step of -flto keeps its pre-link pipeline, which at -O1 and
+/// above may already have folded a mismatched call inside one TU into the
+/// definition's type, as 'clang -c' does on the object path, where msil-ld
+/// never sees a call inside one object (section 12). A TU compiled at -O0,
+/// a mismatch that cannot be folded and every mismatch across TUs reach it.
+///
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
+#include "MSILAsmPrinter.h"
 #include "MSILTargetMachine.h"
+#include "MSILUtilities.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CLI/CallAdapter.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
+#include <map>
+#include <set>
+#include <string>
+#include <tuple>
+#include <vector>
 using namespace llvm;
 
 #define DEBUG_TYPE "msil-fix-function-bitcasts"
@@ -116,23 +180,35 @@ ModulePass *llvm::createMSILFixFunctionBitcastsLegacyPass() {
   return new MSILFixFunctionBitcastsLegacy();
 }
 
+/// "msil-lto": whether \p Attrs gives a parameter 'sret' or 'byval', the
+/// attributes that make MSIL::getABIDescriptor differ between two calls of
+/// one IR function type.
+static bool hasAggregateABIAttr(const AttributeList &Attrs) {
+  return Attrs.hasAttrSomewhere(Attribute::StructRet) ||
+         Attrs.hasAttrSomewhere(Attribute::ByVal);
+}
+
 // Recursively descend the def-use lists from V to find non-bitcast users of
 // bitcasts of V. In object mode a call through an alias keeps the alias (see
-// the file comment), so aliases are not looked through.
+// the file comment), so aliases are not looked through. With SameTypeToo
+// ("msil-lto", see the file comment) a call with F's own type is found too
+// if it or F has an sret or byval parameter.
 static void findUses(Value *V, Function &F,
                      SmallVectorImpl<std::pair<CallBase *, Function *>> &Uses,
-                     bool ObjectMode) {
+                     bool ObjectMode, bool SameTypeToo) {
   for (User *U : V->users()) {
     if (auto *BC = dyn_cast<BitCastOperator>(U))
-      findUses(BC, F, Uses, ObjectMode);
+      findUses(BC, F, Uses, ObjectMode, SameTypeToo);
     else if (auto *A = dyn_cast<GlobalAlias>(U); A && !ObjectMode)
-      findUses(A, F, Uses, ObjectMode);
+      findUses(A, F, Uses, ObjectMode, SameTypeToo);
     else if (auto *CB = dyn_cast<CallBase>(U)) {
       Value *Callee = CB->getCalledOperand();
       if (Callee != V)
         // Skip calls where the function isn't the callee
         continue;
-      if (CB->getFunctionType() == F.getFunctionType())
+      if (CB->getFunctionType() == F.getFunctionType() &&
+          !(SameTypeToo && (hasAggregateABIAttr(CB->getAttributes()) ||
+                            hasAggregateABIAttr(F.getAttributes()))))
         // Skip uses that are immediately called
         continue;
       Uses.push_back(std::make_pair(CB, &F));
@@ -297,6 +373,328 @@ static Function *createWrapper(Function *F, FunctionType *Ty) {
   return Wrapper;
 }
 
+/// Whether \p M is msil-ld's merged LTO module, on which msil-ld sets the
+/// module flag "msil-lto" (i32 1). A value that is not an integer constant
+/// counts as absent.
+static bool isMSILLTOModule(const Module &M) {
+  const auto *Flag =
+      mdconst::dyn_extract_or_null<ConstantInt>(M.getModuleFlag("msil-lto"));
+  return Flag && !Flag->isZero();
+}
+
+/// "msil-lto": whether the calls of \p F follow cli::classifyCall's table:
+/// those of a definition, which msil-ld would bind by name (plan 5.9.8),
+/// and before LTO optimization (\p PostLinkLTO) those of an imported
+/// available_externally one too (see the file comment).
+static bool usesTable(const Function &F, bool PostLinkLTO) {
+  return PostLinkLTO ? !F.isDeclaration() : !F.isDeclarationForLinker();
+}
+
+/// "msil-lto": the fields of an ABI descriptor (MSIL::getABIDescriptor,
+/// without the token) as an ordered key.
+using ABIKey = std::tuple<uint32_t, uint32_t, uint64_t, uint8_t,
+                          std::vector<std::tuple<uint32_t, uint64_t, uint8_t>>>;
+
+static ABIKey getABIKey(const MSILLink::SignatureInfo &SI) {
+  std::vector<std::tuple<uint32_t, uint64_t, uint8_t>> Byval;
+  for (const MSILLink::ByvalParam &B : SI.Byval)
+    Byval.emplace_back(B.Param, B.Size, B.AlignLog2);
+  return {SI.Flags, SI.FixedParams, SI.SretSize, SI.SretAlignLog2,
+          std::move(Byval)};
+}
+
+/// "msil-lto": what the table's decision for a call of a definition depends
+/// on, and so its report: the definition, the call's IR type (its CIL
+/// signature) and the call's ABI descriptor (plan 5.9.8: msil-ld makes one
+/// adapter per definition, call signature and descriptor).
+using LTOReportKey = std::tuple<Function *, FunctionType *, ABIKey>;
+
+/// "msil-lto": what the table's wrapper for the call depends on besides:
+/// the arguments it sign-extends (getSignExtendedArguments).
+using LTOWrapperKey = std::pair<LTOReportKey, SmallVector<unsigned, 2>>;
+
+/// "msil-lto": \p To with the 'sret' and 'byval' attributes of \p From, and
+/// their 'align' and 'alignstack', in place of its own on each of the first
+/// \p NumParams parameters where either has one of the two (the parameter
+/// attributes that MSIL::getABIDescriptor reads); 'sret' only if
+/// \p AllowSret (the verifier rejects it in a function with a result). The
+/// wrappers get them so that a later run of the table, code generation
+/// after MSILFixFunctionBitcastsLTOPass, finds each call of and in a wrapper
+/// a direct match (see the file comment).
+static AttributeList setAggregateABIAttrs(LLVMContext &C, AttributeList To,
+                                          const AttributeList &From,
+                                          unsigned NumParams, bool AllowSret) {
+  AttributeMask Kinds;
+  Kinds.addAttribute(Attribute::StructRet);
+  Kinds.addAttribute(Attribute::ByVal);
+  Kinds.addAttribute(Attribute::Alignment);
+  Kinds.addAttribute(Attribute::StackAlignment);
+  auto HasAggregate = [](AttributeSet S) {
+    return S.hasAttribute(Attribute::StructRet) ||
+           S.hasAttribute(Attribute::ByVal);
+  };
+  for (unsigned I = 0; I != NumParams; ++I) {
+    AttributeSet FromAttrs = From.getParamAttrs(I);
+    if (!HasAggregate(FromAttrs) && !HasAggregate(To.getParamAttrs(I)))
+      continue;
+    To = To.removeParamAttributes(C, I, Kinds);
+    if (!HasAggregate(FromAttrs))
+      continue;
+    AttrBuilder B(C);
+    for (Attribute::AttrKind K :
+         {Attribute::StructRet, Attribute::ByVal, Attribute::Alignment,
+          Attribute::StackAlignment})
+      if (FromAttrs.hasAttribute(K) && (AllowSret || K != Attribute::StructRet))
+        B.addAttribute(FromAttrs.getAttribute(K));
+    To = To.addParamAttributes(C, I, B);
+  }
+  return To;
+}
+
+/// "msil-lto": gives the calls of \p F in the wrapper \p Wrapper F's 'sret'
+/// and 'byval' attributes (setAggregateABIAttrs), which a call built by
+/// IRBuilder lacks. ISel reads them from F either way.
+static void setCalleeABIAttrs(Function &Wrapper, const Function &F) {
+  for (Instruction &I : instructions(Wrapper))
+    if (auto *Call = dyn_cast<CallInst>(&I);
+        Call && Call->getCalledOperand() == &F)
+      Call->setAttributes(setAggregateABIAttrs(
+          F.getContext(), Call->getAttributes(), F.getAttributes(),
+          F.getFunctionType()->getNumParams(), /*AllowSret=*/true));
+}
+
+/// "msil-lto": the trapping wrapper of type \p Ty that a table error leaves
+/// in place of \p F (createWrapper's '_bitcast_invalid'), so the module
+/// stays well formed after the diagnostic. It has the 'sret' and 'byval'
+/// attributes of the calls it replaces F in, \p CallAttrs (the calls of one
+/// wrapper have one ABI descriptor), so that a later run of the table finds
+/// them direct and reports nothing twice.
+static Function *createTrapWrapper(Function *F, FunctionType *Ty,
+                                   const AttributeList &CallAttrs) {
+  Function *Wrapper =
+      Function::Create(Ty, Function::PrivateLinkage,
+                       F->getName() + "_bitcast_invalid", F->getParent());
+  setWrapperAttributes(Wrapper, F);
+  Wrapper->setAttributes(setAggregateABIAttrs(
+      F->getContext(), Wrapper->getAttributes(), CallAttrs, Ty->getNumParams(),
+      /*AllowSret=*/Ty->getReturnType()->isVoidTy()));
+  IRBuilder<> Builder(BasicBlock::Create(F->getContext(), "body", Wrapper));
+  Builder.CreateUnreachable();
+  return Wrapper;
+}
+
+/// "msil-lto": converts \p V to \p To the way the table's adapter converts
+/// the CIL value: integers and pointers by value (int32 to native int
+/// sign-extends, conv.i; native int to int32 truncates, conv.i4; an i1 is
+/// zero-extended, as ISel widens it), anything else by its bits. An i8 or
+/// i16 is an int32 in CIL, so the wrappers first bring a narrow argument or
+/// result to i32 the way the object path's CIL holds it (widenNarrowArgument,
+/// widenNarrowResult), and the sign extension here is then conv.i on that
+/// int32. Returns null when the types cannot be converted so (aggregates of
+/// other sizes).
+static Value *convertValue(IRBuilder<> &Builder, Value *V, Type *To,
+                           const DataLayout &DL) {
+  Type *From = V->getType();
+  if (From == To)
+    return V;
+  auto IsIntOrPtr = [](Type *T) {
+    return T->isIntegerTy() || T->isPointerTy();
+  };
+  if (IsIntOrPtr(From) && IsIntOrPtr(To)) {
+    Type *IntPtrTy = DL.getIntPtrType(V->getContext());
+    Value *I = From->isPointerTy() ? Builder.CreatePtrToInt(V, IntPtrTy) : V;
+    Type *ToInt = To->isPointerTy() ? IntPtrTy : To;
+    if (I->getType()->isIntegerTy(1))
+      I = Builder.CreateZExtOrTrunc(I, ToInt);
+    else
+      I = Builder.CreateSExtOrTrunc(I, ToInt);
+    return To->isPointerTy() ? Builder.CreateIntToPtr(I, To) : I;
+  }
+  if (CastInst::isBitOrNoopPointerCastable(From, To, DL))
+    return Builder.CreateBitOrPointerCast(V, To);
+  return nullptr;
+}
+
+/// "msil-lto": the result of \p Call, a call of \p F, for conversion to the
+/// wrapper's result type \p To: an i1, i8 or i16 result widened to int32
+/// exactly as F's CIL method returns it (SelectionDAGBuilder::visitRet and
+/// MSILTargetLowering::LowerReturn), sign extended for 'signext' and
+/// otherwise zero extended. Without either attribute ISel any-extends, which
+/// zero-extends constants and narrow loads (ldind.u1, ldind.u2). The table's
+/// int32 conversions (conv.i) then apply to that int32, as the object path's
+/// adapter applies them to the CIL method's result. A result of type \p To,
+/// or of another type, is unchanged.
+static Value *widenNarrowResult(IRBuilder<> &Builder, CallInst *Call,
+                                const Function &F, Type *To) {
+  Type *RetTy = Call->getType();
+  if (RetTy == To || !RetTy->isIntegerTy() || RetTy->getIntegerBitWidth() >= 32)
+    return Call;
+  if (F.hasRetAttribute(Attribute::SExt))
+    return Builder.CreateSExt(Call, Builder.getInt32Ty());
+  return Builder.CreateZExt(Call, Builder.getInt32Ty());
+}
+
+/// "msil-lto": whether the table's wrapper widens an argument of type
+/// \p ArgTy for a parameter of type \p To to int32 (widenNarrowArgument):
+/// an i1, i8 or i16 for a parameter of another type.
+static bool isNarrowArgument(Type *ArgTy, Type *To) {
+  return ArgTy != To && ArgTy->isIntegerTy() &&
+         ArgTy->getIntegerBitWidth() < 32;
+}
+
+/// "msil-lto": whether the table's wrapper widens a narrow argument of type
+/// \p ArgTy, argument \p ArgNo of calls with the attributes \p CallAttrs,
+/// by sign: 'signext' on the call's parameter, never for an i1.
+static bool signExtendsNarrowArgument(Type *ArgTy, unsigned ArgNo,
+                                      const AttributeList &CallAttrs) {
+  return !ArgTy->isIntegerTy(1) &&
+         CallAttrs.hasParamAttr(ArgNo, Attribute::SExt);
+}
+
+/// "msil-lto": the wrapper's argument \p V, argument \p ArgNo of calls with
+/// the attributes \p CallAttrs, for conversion to F's parameter type \p To:
+/// an i1, i8 or i16 argument widened to int32 exactly as the object path's
+/// call site materializes it (plan 5.9.8, section 12), sign extended for
+/// 'signext' on the call's parameter and otherwise zero extended; an i1 is
+/// always zero extended. The table's int32 conversions (conv.i) then apply
+/// to that int32, as the object path's adapter applies them to the call
+/// site's argument; so does a narrower parameter's truncation, as F's CIL
+/// method reads the int32 it is given. An argument of type \p To, or of
+/// another type, is unchanged.
+static Value *widenNarrowArgument(IRBuilder<> &Builder, Value *V,
+                                  unsigned ArgNo, AttributeList CallAttrs,
+                                  Type *To) {
+  Type *ArgTy = V->getType();
+  if (!isNarrowArgument(ArgTy, To))
+    return V;
+  if (signExtendsNarrowArgument(ArgTy, ArgNo, CallAttrs))
+    return Builder.CreateSExt(V, Builder.getInt32Ty());
+  return Builder.CreateZExt(V, Builder.getInt32Ty());
+}
+
+/// "msil-lto": the arguments of calls of \p F with the type \p Ty and the
+/// attributes \p CallAttrs that the table's wrapper sign-extends
+/// (widenNarrowArgument): with 'zeroext' or neither attribute it
+/// zero-extends them alike, so these are all that its body takes from the
+/// call's attributes.
+static SmallVector<unsigned, 2>
+getSignExtendedArguments(const Function &F, const FunctionType *Ty,
+                         const AttributeList &CallAttrs) {
+  SmallVector<unsigned, 2> Args;
+  const FunctionType *FTy = F.getFunctionType();
+  for (unsigned I = 0, E = std::min(Ty->getNumParams(), FTy->getNumParams());
+       I != E; ++I)
+    if (isNarrowArgument(Ty->getParamType(I), FTy->getParamType(I)) &&
+        signExtendsNarrowArgument(Ty->getParamType(I), I, CallAttrs))
+      Args.push_back(I);
+  return Args;
+}
+
+/// "msil-lto": the wrapper of type \p Ty that implements the table's actions
+/// for calls of \p F with the attributes \p CallAttrs (those of every call
+/// that shares it: the wrappers are made per sign-extended argument set,
+/// getSignExtendedArguments): each of F's parameters from the call's
+/// argument (a narrow integer widened to int32 by the call's extension
+/// attribute, widenNarrowArgument, then converted) or zero, extra arguments
+/// dropped, F's result (a narrow integer widened to int32 by F's,
+/// widenNarrowResult) converted, dropped or replaced by zero. This holds for
+/// a direct match too (int32 on both sides, no warning), whose wrapper
+/// exists only because the IR types differ. Returns null if a type pair
+/// cannot be converted (convertValue).
+static Function *createTableWrapper(Function *F, FunctionType *Ty,
+                                    AttributeList CallAttrs) {
+  Module *M = F->getParent();
+  Function *Wrapper = Function::Create(Ty, Function::PrivateLinkage,
+                                       F->getName() + "_bitcast", M);
+  setWrapperAttributes(Wrapper, F);
+  BasicBlock *BB = BasicBlock::Create(M->getContext(), "body", Wrapper);
+  const DataLayout &DL = M->getDataLayout();
+  IRBuilder<> Builder(BB);
+  FunctionType *FTy = F->getFunctionType();
+  SmallVector<Value *, 4> Args;
+  for (unsigned I = 0, E = FTy->getNumParams(); I != E; ++I) {
+    Type *ParamTy = FTy->getParamType(I);
+    if (I >= Ty->getNumParams()) {
+      Args.push_back(Constant::getNullValue(ParamTy));
+      continue;
+    }
+    Value *Arg = convertValue(
+        Builder,
+        widenNarrowArgument(Builder, Wrapper->getArg(I), I, CallAttrs, ParamTy),
+        ParamTy, DL);
+    if (!Arg) {
+      Wrapper->eraseFromParent();
+      return nullptr;
+    }
+    Args.push_back(Arg);
+  }
+  CallInst *Call = Builder.CreateCall(F, Args);
+  Type *RtnType = Ty->getReturnType();
+  if (RtnType->isVoidTy()) {
+    Builder.CreateRetVoid();
+  } else if (FTy->getReturnType()->isVoidTy()) {
+    Builder.CreateRet(Constant::getNullValue(RtnType));
+  } else if (Value *Ret = convertValue(
+                 Builder, widenNarrowResult(Builder, Call, *F, RtnType),
+                 RtnType, DL)) {
+    Builder.CreateRet(Ret);
+  } else {
+    Wrapper->eraseFromParent();
+    return nullptr;
+  }
+  return Wrapper;
+}
+
+/// "msil-lto": the wrapper for the calls of the definition \p F with type
+/// \p Ty and the ABI descriptor \p CallABI, of which \p CB is one, by
+/// cli::classifyCall's table (plan 5.9.8, see the file comment), with the
+/// table's warning or error unless \p Report is false. Null if the call
+/// keeps F: a direct match of F's own type, which differs from F at most in
+/// attributes that the table does not compare.
+static Function *createLTOWrapper(Function *F, FunctionType *Ty,
+                                  const CallBase &CB,
+                                  const MSILLink::SignatureInfo &CallABI,
+                                  const TargetMachine &TM, bool Report) {
+  const Function &Caller = *CB.getFunction();
+  cli::MethodSig CallSig = MSIL::toMethodSig(
+      MSIL::getFunctionTypeSignature(Ty, nullptr, Caller, TM));
+  cli::MethodSig DefSig = MSIL::toMethodSig(
+      MSIL::getFunctionTypeSignature(F->getFunctionType(), F, *F, TM));
+  MSILLink::SignatureInfo DefABI =
+      MSIL::getABIDescriptor(F->getFunctionType(), F->getAttributes(),
+                             /*NoPrototype=*/false, *F, TM);
+  cli::CallShape Call = cli::CallShape::get(CallSig, &CallABI);
+  cli::CallShape Def = cli::CallShape::get(DefSig, &DefABI);
+  cli::CallMatch Match = cli::classifyCall(Call, Def);
+  if (Match.Kind == cli::CallMatchKind::Direct && Ty == F->getFunctionType())
+    return nullptr;
+
+  if (Match.Kind != cli::CallMatchKind::Direct && Report) {
+    std::string Text;
+    raw_string_ostream OS(Text);
+    OS << "function signature mismatch: " << MSIL::getILName(*F, TM)
+       << "\n>>> defined as ";
+    cli::printCallShape(OS, Def);
+    OS << "\n>>> called as ";
+    cli::printCallShape(OS, Call);
+    OS << "\n>>> ";
+    if (Match.Kind == cli::CallMatchKind::Adapter)
+      OS << "adapter: ";
+    OS << Match.Detail;
+    F->getContext().diagnose(DiagnosticInfoGeneric(
+        Text, Match.Kind == cli::CallMatchKind::Error ? DS_Error : DS_Warning));
+  }
+  if (Match.Kind == cli::CallMatchKind::Error)
+    return createTrapWrapper(F, Ty, CB.getAttributes());
+  Function *Wrapper = createTableWrapper(F, Ty, CB.getAttributes());
+  // An aggregate type pair: as without the flag.
+  if (!Wrapper)
+    Wrapper = createWrapper(F, Ty);
+  if (Wrapper)
+    setCalleeABIAttrs(*Wrapper, *F);
+  return Wrapper;
+}
+
 /// Returns the type of a call with the variadic type \p Ty and the arguments
 /// of \p CB as a non-variadic call: \p Ty without the variadic flag, so that
 /// every argument is a fixed parameter (MSILAddMissingPrototypes'
@@ -332,8 +730,15 @@ static void makeKnRCallsNonVariadic(Function &F) {
   }
 }
 
-static bool fixFunctionBitcasts(Module &M, bool ObjectMode) {
+/// \p TM is the target machine of the pass's TargetPassConfig, or null (opt):
+/// "msil-lto"'s table needs it for the CIL signatures. \p PostLinkLTO is the
+/// run before LTO optimization (MSILFixFunctionBitcastsLTOPass, see the file
+/// comment), which applies the table to the calls of definitions only.
+static bool fixFunctionBitcasts(Module &M, bool ObjectMode,
+                                const TargetMachine *TM,
+                                bool PostLinkLTO = false) {
   LLVM_DEBUG(dbgs() << "********** Fix Function Bitcasts **********\n");
+  bool LTO = TM && (PostLinkLTO || isMSILLTOModule(M));
 
   SmallVector<std::pair<CallBase *, Function *>, 0> Uses;
 
@@ -355,15 +760,39 @@ static bool fixFunctionBitcasts(Module &M, bool ObjectMode) {
         makeKnRCallsNonVariadic(F);
       continue;
     }
-    findUses(&F, F, Uses, ObjectMode);
+    findUses(&F, F, Uses, ObjectMode || PostLinkLTO,
+             /*SameTypeToo=*/LTO && usesTable(F, PostLinkLTO));
   }
 
+  // Before LTO optimization the calls in available_externally functions come
+  // last, so that a call of the module's own code decides on the
+  // diagnostic of the wrapper they share (see the file comment).
+  if (PostLinkLTO)
+    std::stable_partition(
+        Uses.begin(), Uses.end(),
+        [](const std::pair<CallBase *, Function *> &U) {
+          return !U.first->getFunction()->hasAvailableExternallyLinkage();
+        });
+
   DenseMap<std::pair<Function *, FunctionType *>, Function *> Wrappers;
+  // "msil-lto": the wrappers by LTOWrapperKey, and the LTOReportKeys
+  // reported (see the file comment).
+  std::map<LTOWrapperKey, Function *> LTOWrappers;
+  std::set<LTOReportKey> LTOReported;
 
   for (auto &UseFunc : Uses) {
     CallBase *CB = UseFunc.first;
     Function *F = UseFunc.second;
     FunctionType *Ty = CB->getFunctionType();
+
+    // Before LTO optimization the calls of declarations are left to code
+    // generation (see the file comment).
+    if (PostLinkLTO && F->isDeclaration())
+      continue;
+
+    // msil-ld's LTO module: the table for the calls of a definition, which
+    // msil-ld would bind by name (plan 5.9.8).
+    bool Table = LTO && usesTable(*F, PostLinkLTO);
 
     // F is not variadic, so a variadic call of F is a K&R call from IR that
     // uses the native x86-64 SysV convention (see the file comment): make it
@@ -371,7 +800,7 @@ static bool fixFunctionBitcasts(Module &M, bool ObjectMode) {
     if (Ty->isVarArg()) {
       Ty = getNonVariadicType(Ty, *CB);
       CB->mutateFunctionType(Ty);
-      if (Ty == F->getFunctionType())
+      if (Ty == F->getFunctionType() && !Table)
         continue;
     }
 
@@ -381,11 +810,31 @@ static bool fixFunctionBitcasts(Module &M, bool ObjectMode) {
     if (ObjectMode && F->isDeclarationForLinker())
       continue;
 
-    auto Pair = Wrappers.try_emplace(std::make_pair(F, Ty));
-    if (Pair.second)
-      Pair.first->second = createWrapper(F, Ty);
+    Function *Wrapper;
+    if (!Table) {
+      auto Pair = Wrappers.try_emplace(std::make_pair(F, Ty));
+      if (Pair.second)
+        Pair.first->second = createWrapper(F, Ty);
+      Wrapper = Pair.first->second;
+    } else {
+      // One wrapper per callee, call type, ABI descriptor and sign-extended
+      // arguments; one report per callee, call type and ABI descriptor.
+      MSILLink::SignatureInfo CallABI =
+          MSIL::getABIDescriptor(Ty, CB->getAttributes(), /*NoPrototype=*/false,
+                                 *CB->getFunction(), *TM);
+      LTOReportKey ReportKey(F, Ty, getABIKey(CallABI));
+      auto Pair = LTOWrappers.try_emplace(LTOWrapperKey(
+          ReportKey, getSignExtendedArguments(*F, Ty, CB->getAttributes())));
+      if (Pair.second) {
+        // A call in an available_externally function is a copy (see the file
+        // comment).
+        bool Report = !CB->getFunction()->hasAvailableExternallyLinkage() &&
+                      LTOReported.insert(ReportKey).second;
+        Pair.first->second = createLTOWrapper(F, Ty, *CB, CallABI, *TM, Report);
+      }
+      Wrapper = Pair.first->second;
+    }
 
-    Function *Wrapper = Pair.first->second;
     if (!Wrapper)
       continue;
 
@@ -399,6 +848,13 @@ bool MSILFixFunctionBitcastsLegacy::runOnModule(Module &M) {
   // Asked here, when the pass runs, not when it is added (see the file
   // comment).
   auto *TPC = getAnalysisIfAvailable<TargetPassConfig>();
-  return fixFunctionBitcasts(
-      M, TPC && TPC->getTM<MSILTargetMachine>().isObjectMode());
+  const MSILTargetMachine *TM =
+      TPC ? &TPC->getTM<MSILTargetMachine>() : nullptr;
+  return fixFunctionBitcasts(M, TM && TM->isObjectMode(), TM);
+}
+
+PreservedAnalyses MSILFixFunctionBitcastsLTOPass::run(Module &M,
+                                                      ModuleAnalysisManager &) {
+  fixFunctionBitcasts(M, /*ObjectMode=*/false, &TM, /*PostLinkLTO=*/true);
+  return PreservedAnalyses::none();
 }

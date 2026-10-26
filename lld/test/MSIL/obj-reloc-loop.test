@@ -1,0 +1,276 @@
+## The relocation loop (ImplementationPlan.md 5.9.10, plan 5.1 as amended,
+## 5.9.9 rule 4; Design.md risk 1): with more than --msil-reloc-loop-threshold
+## (default 32) data relocations, '.cctor' does not store them straight-line
+## but applies the RVA table '<msil>relocs' (type '<msil>relocs_t', explicit
+## layout, pack 1, 16-byte entries {u32 Site; u32 Kind; i64 Value}) in a
+## loop with 'unaligned. 1' stores:
+## - kind 0 stores base + Value (pointer width) and kind 1 the same
+##   truncated to 4 bytes, for targets in the image (Value = the target's
+##   offset plus the addend: 33 pointers into g, and a 4-byte site at the
+##   unaligned offset 345);
+## - kinds 2 and 3 store the pointer read at base + Value, an 8-byte address
+##   slot: relocations without an image target (function pointers) share
+##   one slot per distinct (field, addend), 8-aligned at the end of the image
+##   (352; the image grows from 349 to 360 bytes), which the straight-line
+##   part fills from the '<msil>fn_' field before the loop runs (the ldftn
+##   per function stays, M9).
+## At or below the threshold every relocation is stored straight-line,
+## Phase 1's sequence, as -S writes it (no table, no slot): threshold 36
+## for the 36 relocations here; 0 and 1 on a one-relocation object.
+## Inputs/relocs.py decodes the table and Inputs/cctor.py summarizes
+## '.cctor' (it stops at the loop's first branch).
+## Symbol differences (DIFF, 5.8.8) are not run-time relocations: msil-ld
+## folds them into the image, also across objects (b - a = 300), and one that
+## does not fit its width is
+##   symbol difference '<a>' - '<b>' in <file> does not fit in a <w>-byte value
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj r.ll -o r.o
+# RUN: llc -filetype=obj one.ll -o one.o
+
+## The default threshold: the loop.
+# RUN: msil-ld r.o -o loop.exe 2>&1 | count 0
+# RUN: llvm-cil-dump loop.exe > loop.txt
+# RUN: %python %S/Inputs/relocs.py loop.txt | FileCheck %s --check-prefix=TABLE
+# RUN: %python %S/Inputs/cctor.py loop.txt | FileCheck %s --check-prefix=LOOP
+# RUN: FileCheck %s --check-prefix=LOOP-IL --input-file=loop.txt
+# RUN: msil-ld --msil-reloc-loop-threshold=35 r.o -o loop35.exe 2>&1 | count 0
+# RUN: llvm-cil-dump loop35.exe > loop35.txt
+# RUN: %python %S/Inputs/relocs.py loop35.txt | FileCheck %s --check-prefix=TABLE
+
+# TABLE:      {{^}}64 0 0{{$}}
+# TABLE-NEXT: {{^}}72 0 1{{$}}
+# TABLE-NEXT: {{^}}80 0 2{{$}}
+# TABLE-NEXT: {{^}}88 0 3{{$}}
+# TABLE-NEXT: {{^}}96 0 4{{$}}
+# TABLE-NEXT: {{^}}104 0 5{{$}}
+# TABLE-NEXT: {{^}}112 0 6{{$}}
+# TABLE-NEXT: {{^}}120 0 7{{$}}
+# TABLE-NEXT: {{^}}128 0 8{{$}}
+# TABLE-NEXT: {{^}}136 0 9{{$}}
+# TABLE-NEXT: {{^}}144 0 10{{$}}
+# TABLE-NEXT: {{^}}152 0 11{{$}}
+# TABLE-NEXT: {{^}}160 0 12{{$}}
+# TABLE-NEXT: {{^}}168 0 13{{$}}
+# TABLE-NEXT: {{^}}176 0 14{{$}}
+# TABLE-NEXT: {{^}}184 0 15{{$}}
+# TABLE-NEXT: {{^}}192 0 16{{$}}
+# TABLE-NEXT: {{^}}200 0 17{{$}}
+# TABLE-NEXT: {{^}}208 0 18{{$}}
+# TABLE-NEXT: {{^}}216 0 19{{$}}
+# TABLE-NEXT: {{^}}224 0 20{{$}}
+# TABLE-NEXT: {{^}}232 0 21{{$}}
+# TABLE-NEXT: {{^}}240 0 22{{$}}
+# TABLE-NEXT: {{^}}248 0 23{{$}}
+# TABLE-NEXT: {{^}}256 0 24{{$}}
+# TABLE-NEXT: {{^}}264 0 25{{$}}
+# TABLE-NEXT: {{^}}272 0 26{{$}}
+# TABLE-NEXT: {{^}}280 0 27{{$}}
+# TABLE-NEXT: {{^}}288 0 28{{$}}
+# TABLE-NEXT: {{^}}296 0 29{{$}}
+# TABLE-NEXT: {{^}}304 0 30{{$}}
+# TABLE-NEXT: {{^}}312 0 31{{$}}
+# TABLE-NEXT: {{^}}320 0 32{{$}}
+# TABLE-NEXT: {{^}}328 2 352{{$}}
+# TABLE-NEXT: {{^}}336 2 352{{$}}
+# TABLE-NEXT: {{^}}345 1 0{{$}}
+# TABLE-NOT:  {{.}}
+
+# LOOP:      {{^}}alloc 375{{$}}
+# LOOP-NEXT: {{^}}cpblk data+0 349{{$}}
+# LOOP:      {{^}}field <msil>fn_f1 = &f1{{$}}
+# LOOP-NEXT: {{^}}storei data+352 = <msil>fn_f1{{$}}
+# LOOP-NEXT: {{^}}loop{{$}}
+
+# LOOP-IL:      {{^}}  .field '<msil>relocs' valuetype '<msil>relocs_t' flags=0x0111{{$}}
+# LOOP-IL-NEXT: {{^}}    .data 576 bytes{{$}}
+# LOOP-IL:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# LOOP-IL:      {{^}}    L{{[0-9]+}}: ldsflda valuetype '<msil>relocs_t' '<Module>'::'<msil>relocs'{{$}}
+# LOOP-IL:      {{^}}    L{{[0-9]+}}: unaligned. 1{{$}}
+# LOOP-IL:      {{^}}.class '<msil>relocs_t' flags=0x00000110 extends [mscorlib]System.ValueType{{$}}
+# LOOP-IL-NEXT: {{^}}  .layout pack 1 size 576{{$}}
+
+## At the threshold: straight-line, no table and no slot.
+# RUN: msil-ld --msil-reloc-loop-threshold=36 r.o -o straight.exe 2>&1 | count 0
+# RUN: llvm-cil-dump straight.exe > straight.txt
+# RUN: %python %S/Inputs/cctor.py straight.txt | FileCheck %s --check-prefix=STRAIGHT
+# RUN: FileCheck %s --check-prefix=NO-TABLE --input-file=straight.txt
+# NO-TABLE-NOT: <msil>relocs
+
+# STRAIGHT:      {{^}}alloc 364{{$}}
+# STRAIGHT-NEXT: {{^}}cpblk data+0 349{{$}}
+# STRAIGHT-NEXT: {{^}}field g = data+0{{$}}
+# STRAIGHT-NEXT: {{^}}field tbl = data+64{{$}}
+# STRAIGHT-NEXT: {{^}}field fptrs = data+328{{$}}
+# STRAIGHT-NEXT: {{^}}field pk = data+344{{$}}
+# STRAIGHT-NEXT: {{^}}field <msil>fn_f1 = &f1{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+64 = g{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+72 = g+1{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+80 = g+2{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+88 = g+3{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+96 = g+4{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+104 = g+5{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+112 = g+6{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+120 = g+7{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+128 = g+8{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+136 = g+9{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+144 = g+10{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+152 = g+11{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+160 = g+12{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+168 = g+13{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+176 = g+14{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+184 = g+15{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+192 = g+16{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+200 = g+17{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+208 = g+18{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+216 = g+19{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+224 = g+20{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+232 = g+21{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+240 = g+22{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+248 = g+23{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+256 = g+24{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+264 = g+25{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+272 = g+26{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+280 = g+27{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+288 = g+28{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+296 = g+29{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+304 = g+30{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+312 = g+31{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+320 = g+32{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+328 = <msil>fn_f1{{$}}
+# STRAIGHT-NEXT: {{^}}storei data+336 = <msil>fn_f1{{$}}
+# STRAIGHT-NEXT: {{^}}storei4 data+345 = g{{$}}
+# STRAIGHT-NOT:  {{.}}
+
+## One relocation: the loop at threshold 0, straight-line at 1 (and by
+## default).
+# RUN: msil-ld --msil-reloc-loop-threshold=0 one.o -o one0.exe 2>&1 | count 0
+# RUN: llvm-cil-dump one0.exe > one0.txt
+# RUN: %python %S/Inputs/relocs.py one0.txt | FileCheck %s --check-prefix=ONE-TABLE
+# RUN: %python %S/Inputs/cctor.py one0.txt | FileCheck %s --check-prefix=ONE-LOOP
+# RUN: msil-ld --msil-reloc-loop-threshold=1 one.o -o one1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump one1.exe > one1.txt
+# RUN: %python %S/Inputs/cctor.py one1.txt | FileCheck %s --check-prefix=ONE-STRAIGHT
+# RUN: FileCheck %s --check-prefix=NO-TABLE --input-file=one1.txt
+# ONE-TABLE:          {{^}}8 0 4{{$}}
+# ONE-TABLE-NOT:      {{.}}
+# ONE-LOOP:           {{^}}field q = data+8{{$}}
+# ONE-LOOP-NEXT:      {{^}}loop{{$}}
+# ONE-STRAIGHT:       {{^}}field q = data+8{{$}}
+# ONE-STRAIGHT-NEXT:  {{^}}storei data+8 = v+4{{$}}
+# ONE-STRAIGHT-NOT:   {{.}}
+
+## DIFF folded across objects: d4 (dd.o, offset 0) holds 300 = 0x12C.
+# RUN: llc -filetype=obj dd.ll -o dd.o
+# RUN: llc -filetype=obj ab.ll -o ab.o
+# RUN: llc -filetype=obj do.ll -o do.o
+# RUN: msil-ld dd.o ab.o -o diff.exe 2>&1 | count 0
+# RUN: llvm-cil-dump diff.exe | FileCheck %s --check-prefix=DIFF
+# DIFF:      {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0111{{$}}
+# DIFF-NEXT: {{^}}    .data 305 bytes{{$}}
+# DIFF-NEXT: {{^}}      2C 01 00 00 01 02 03 00 {{.*}}
+# RUN: not msil-ld do.o ab.o -o x.exe 2>&1 | FileCheck %s --check-prefix=OVERFLOW \
+# RUN:   --implicit-check-not="PLEASE submit" --implicit-check-not=error:
+# OVERFLOW: {{^}}msil-ld: error: symbol difference 'b' - 'a' in do.o does not fit in a 1-byte value{{$}}
+
+#--- r.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@g = global [64 x i8] [i8 1, i8 2, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0], align 8
+@tbl = global [33 x ptr] [
+    ptr @g,
+    ptr getelementptr (i8, ptr @g, i64 1),
+    ptr getelementptr (i8, ptr @g, i64 2),
+    ptr getelementptr (i8, ptr @g, i64 3),
+    ptr getelementptr (i8, ptr @g, i64 4),
+    ptr getelementptr (i8, ptr @g, i64 5),
+    ptr getelementptr (i8, ptr @g, i64 6),
+    ptr getelementptr (i8, ptr @g, i64 7),
+    ptr getelementptr (i8, ptr @g, i64 8),
+    ptr getelementptr (i8, ptr @g, i64 9),
+    ptr getelementptr (i8, ptr @g, i64 10),
+    ptr getelementptr (i8, ptr @g, i64 11),
+    ptr getelementptr (i8, ptr @g, i64 12),
+    ptr getelementptr (i8, ptr @g, i64 13),
+    ptr getelementptr (i8, ptr @g, i64 14),
+    ptr getelementptr (i8, ptr @g, i64 15),
+    ptr getelementptr (i8, ptr @g, i64 16),
+    ptr getelementptr (i8, ptr @g, i64 17),
+    ptr getelementptr (i8, ptr @g, i64 18),
+    ptr getelementptr (i8, ptr @g, i64 19),
+    ptr getelementptr (i8, ptr @g, i64 20),
+    ptr getelementptr (i8, ptr @g, i64 21),
+    ptr getelementptr (i8, ptr @g, i64 22),
+    ptr getelementptr (i8, ptr @g, i64 23),
+    ptr getelementptr (i8, ptr @g, i64 24),
+    ptr getelementptr (i8, ptr @g, i64 25),
+    ptr getelementptr (i8, ptr @g, i64 26),
+    ptr getelementptr (i8, ptr @g, i64 27),
+    ptr getelementptr (i8, ptr @g, i64 28),
+    ptr getelementptr (i8, ptr @g, i64 29),
+    ptr getelementptr (i8, ptr @g, i64 30),
+    ptr getelementptr (i8, ptr @g, i64 31),
+    ptr getelementptr (i8, ptr @g, i64 32)], align 8
+@fptrs = global [2 x ptr] [ptr @f1, ptr @f1], align 8
+@pk = global <{ i8, i32 }> <{ i8 7, i32 trunc (i64 ptrtoint (ptr @g to i64) to i32) }>, align 1
+
+define internal i32 @f1() {
+  ret i32 1
+}
+
+define i32 @main() {
+  %a = load ptr, ptr @tbl
+  %b = load ptr, ptr @fptrs
+  %p = getelementptr i8, ptr @pk, i64 1
+  %c = load i32, ptr %p, align 1
+  %x = ptrtoint ptr %a to i32
+  %y = ptrtoint ptr %b to i32
+  %s = add i32 %x, %y
+  %r = add i32 %s, %c
+  ret i32 %r
+}
+
+#--- one.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@v = global [8 x i8] c"abcdefgh", align 8
+@q = global ptr getelementptr (i8, ptr @v, i64 4), align 8
+
+define i32 @main() {
+  %p = load ptr, ptr @q
+  %c = load i8, ptr %p
+  %r = zext i8 %c to i32
+  ret i32 %r
+}
+
+#--- dd.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@a = external global [300 x i8]
+@b = external global i8
+@d4 = global i32 trunc (i64 sub (i64 ptrtoint (ptr @b to i64), i64 ptrtoint (ptr @a to i64)) to i32), align 4
+
+define i32 @main() {
+  %v = load i32, ptr @d4
+  ret i32 %v
+}
+
+#--- do.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@a = external global [300 x i8]
+@b = external global i8
+@d1 = global i8 trunc (i64 sub (i64 ptrtoint (ptr @b to i64), i64 ptrtoint (ptr @a to i64)) to i8), align 1
+
+define i32 @main() {
+  %v = load i8, ptr @d1
+  %r = zext i8 %v to i32
+  ret i32 %r
+}
+
+#--- ab.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@a = global [300 x i8] [i8 1, i8 2, i8 3, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0], align 1
+@b = global i8 9, align 1

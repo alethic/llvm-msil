@@ -12,17 +12,23 @@
 
 #include "SymbolTable.h"
 #include "Config.h"
+#include "InputChunks.h"
 #include "InputFiles.h"
 #include "LTO.h"
 #include "NativeLibraries.h"
+#include "TokenMap.h"
 #include "lld/Common/CommonLinkerContext.h"
+#include "lld/Common/Strings.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/CLI/Signature.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/LTO/LTO.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/StringSaver.h"
 #include <optional>
 
@@ -48,7 +54,21 @@ void SymbolTable::addFile(InputFile *file, StringRef symName) {
     return;
   }
 
-  // The other inputs are LLVM bitcode files (M20 adds CIL objects).
+  // A CIL object (plan 5.9.4). Objects may also be extracted after LTO.
+  if (auto *f = dyn_cast<ObjFile>(file)) {
+    if (f->lazy) {
+      f->parseLazy();
+      return;
+    }
+    if (ctx.arg.trace)
+      message(toString(file));
+    ctx.objectFiles.push_back(f);
+    ctx.loadedFiles.push_back(f);
+    f->parse();
+    return;
+  }
+
+  // The other inputs are LLVM bitcode files.
   auto *f = cast<BitcodeFile>(file);
 
   // Lazy object file
@@ -116,11 +136,25 @@ void SymbolTable::compileBitcodeFiles() {
   for (BitcodeFile *f : ctx.bitcodeFiles)
     lto->add(*f);
 
-  // M14 links only with --lto-emit-asm (the driver reports every other LTO
-  // link), and then compile() writes the output itself. LTO objects are CIL
-  // objects, which M20 parses here.
-  if (!lto->compile().empty())
-    fatal("LTO produced CIL objects, which this msil-ld cannot link (M20)");
+  // Under --lto-emit-asm compile() writes the output itself. Otherwise the
+  // LTO objects are CIL objects, parsed like any object
+  // (lld/wasm/SymbolTable.cpp:112-117); they define the prevailing symbols
+  // that BitcodeCompiler::add() made undefined, and late binding runs over
+  // them (plan 5.9.6, 5.9.13). They are parsed with COMDATs ignored: the
+  // BitcodeFiles claimed every group already and the IR linker kept only the
+  // prevailing copies, so all of their groups are kept.
+  for (InputFile *file : lto->compile()) {
+    auto *obj = dyn_cast<ObjFile>(file);
+    if (!obj) {
+      error(toString(file) + ": LTO wrote no CIL object");
+      continue;
+    }
+    obj->isLTO = true;
+    if (ctx.arg.trace)
+      message(toString(obj));
+    ctx.objectFiles.push_back(obj);
+    obj->parse(/*ignoreComdats=*/true);
+  }
 }
 
 Symbol *SymbolTable::find(StringRef name) {
@@ -190,6 +224,20 @@ static bool checkKind(const Symbol &existing, const Symbol &newSym) {
     return false;
   }
   return true;
+}
+
+// Plan 5.9.5's function-or-data check between the reference \p sym (an
+// undefined symbol, or a lazy symbol that only weak references met) and the
+// linker-defined DATA symbol that the output gives it: __start_<X> and
+// __stop_<X> on non-Windows triples (plan 5.9.9), which the writer defines
+// for CIL objects (SyntheticData) and whole-program code generation under
+// --lto-emit-asm. A function reference is a mismatch, reported as checkKind
+// reports one: the reference first, then the linker-defined data, which has
+// no file ("<internal>"). Returns false after reporting it.
+static bool checkLinkerDefinedKind(const Symbol &sym) {
+  if (!sym.isFunc())
+    return true;
+  return checkKind(sym, SyntheticData(sym.getName(), /*offset=*/0));
 }
 
 Symbol *SymbolTable::addSymbol(const Symbol &newSym) {
@@ -301,11 +349,47 @@ findReferencingDefinitions(BitcodeFile &file, StringRef irName) {
   return ret;
 }
 
+// The methods and segments of the CIL objects whose token sites or
+// relocations name \p sym, as "<file>:(<name>)", in load order: only live
+// ones if \p liveOnly, and LTO objects only if \p includeLTO.
+static SmallVector<std::string, 0>
+getObjectReferences(const Symbol *sym, bool liveOnly, bool includeLTO) {
+  SmallVector<std::string, 0> refs;
+  if (!sym)
+    return refs;
+  for (ObjFile *f : ctx.objectFiles) {
+    if (f->isLTO && !includeLTO)
+      continue;
+    const TokenMap &tokens = f->getTokenMap();
+    for (InputMethod *m : f->methods()) {
+      if (m->discarded || (liveOnly && !m->live))
+        continue;
+      if (any_of(m->sites, [&](const TokenSite &site) {
+            return tokens.lookup(site.token).sym == sym;
+          }))
+        refs.push_back(toString(m));
+    }
+    for (InputSegment *seg : f->segments()) {
+      if (seg->discarded || (liveOnly && !seg->live))
+        continue;
+      if (any_of(seg->relocs, [&](const MSILLink::Reloc &r) {
+            return f->getSymbol(r.Symbol) == sym ||
+                   (r.Type == MSILLink::RelocType::Diff &&
+                    f->getSymbol(r.Symbol2) == sym);
+          }))
+        refs.push_back(toString(seg));
+    }
+  }
+  return refs;
+}
+
 // Reports an unresolved symbol in lld/ELF's form (reportUndefinedSymbol,
 // lld/ELF/Relocations.cpp:550-634): \p msg, then up to three ">>> referenced
-// by" lines and the number of further references.
+// by" lines and the number of further references: the entry point, the
+// bitcode inputs \p refs, then the CIL object locations \p objectRefs.
 void SymbolTable::reportUnresolved(std::string msg, ArrayRef<Reference> refs,
-                                   bool isEntry) {
+                                   bool isEntry,
+                                   ArrayRef<std::string> objectRefs) {
   SmallVector<std::string, 0> locs;
   if (isEntry)
     locs.push_back("the entry point");
@@ -317,6 +401,7 @@ void SymbolTable::reportUnresolved(std::string msg, ArrayRef<Reference> refs,
     for (const std::string &def : defs)
       locs.push_back(toString(ref.file) + ":(" + def + ")");
   }
+  append_range(locs, objectRefs);
 
   const size_t maxUndefReferences = 3;
   for (const std::string &loc : ArrayRef(locs).take_front(maxUndefReferences))
@@ -365,6 +450,18 @@ ArrayRef<SymbolTable::Reference> SymbolTable::getReferences(const Symbol *sym) {
   return it->second;
 }
 
+void SymbolTable::reportUnresolved(std::string msg, const Symbol *sym,
+                                   bool liveOnly) {
+  ArrayRef<Reference> refs = getReferences(sym);
+  reportUnresolved(std::move(msg), refs, /*isEntry=*/false,
+                   getObjectReferences(sym, liveOnly,
+                                       /*includeLTO=*/refs.empty()));
+}
+
+void SymbolTable::reportUndefined(const Symbol *sym, bool liveOnly) {
+  reportUnresolved(getUnresolvedMessage(*sym), sym, liveOnly);
+}
+
 void SymbolTable::reportReference(std::string msg, StringRef name) {
   Symbol *sym = find(name);
   ArrayRef<Reference> refs = sym ? getReferences(sym) : ArrayRef<Reference>();
@@ -404,6 +501,75 @@ static void bindNative(Symbol &sym) {
         .overwrite(sym);
 }
 
+// Step 2 of plan 5.9.6 for the symbols of CIL objects and LTO objects, which
+// carry import attributes: an explicit module binds unchecked (plan 5.10.7);
+// otherwise the native libraries are searched by the import name, else by
+// the symbol name.
+void SymbolTable::bindObjectSymbol(Symbol &sym) {
+  auto it = importInfo.find(&sym);
+  ImportInfo *info = it == importInfo.end() ? nullptr : &it->second;
+  if (info && !info->module.empty()) {
+    auto *e = make<NativeExport>();
+    e->Module = info->module;
+    e->Entry = info->name.empty() ? sym.getName() : info->name;
+    e->Kind = sym.isData() ? NativeKind::Data : NativeKind::Function;
+    e->Why = NotBindable::None;
+    e->Version = "";
+    e->File = const_cast<InputFile *>(info->moduleFile);
+    info->explicitBinding = true;
+    if (sym.isData())
+      NativeData(e->File, sym.getName(), sym.binding, sym.visibility(), e)
+          .overwrite(sym);
+    else
+      NativeFunction(e->File, sym.getName(), sym.binding, sym.visibility(), e)
+          .overwrite(sym);
+    return;
+  }
+
+  StringRef lookupName =
+      info && !info->name.empty() ? info->name : sym.getName();
+  SmallVector<const NativeExport *, 2> rejected;
+  const NativeExport *e = ctx.nativeIndex.lookup(
+      lookupName, rejected, /*isFunctionReference=*/!sym.isData());
+  if (!rejected.empty())
+    append_range(rejectedNative[&sym], rejected);
+  if (!e)
+    return;
+  bool isFunction = e->Kind == NativeKind::Function ||
+                    (e->Kind == NativeKind::NoType && !sym.isData());
+  if (isFunction)
+    NativeFunction(e->File, sym.getName(), sym.binding, sym.visibility(), e)
+        .overwrite(sym);
+  else
+    NativeData(e->File, sym.getName(), sym.binding, sym.visibility(), e)
+        .overwrite(sym);
+}
+
+// True if the type \p t names a type of its module (a TypeRef value), so
+// that equal signatures of two objects may still differ.
+static bool namesType(const cli::TypeSig &t);
+
+static bool signatureNamesType(const cli::MethodSig &sig) {
+  return namesType(sig.Return) ||
+         any_of(sig.Params, [](const cli::TypeSig &p) { return namesType(p); });
+}
+
+static bool namesType(const cli::TypeSig &t) {
+  if (!t.getModifiers().empty())
+    return true;
+  switch (t.getElementType()) {
+  case cli::ELEMENT_TYPE_CLASS:
+  case cli::ELEMENT_TYPE_VALUETYPE:
+  case cli::ELEMENT_TYPE_GENERICINST:
+    return true;
+  case cli::ELEMENT_TYPE_FNPTR:
+    return signatureNamesType(t.getFunctionSig());
+  default:
+    return any_of(t.getOperands(),
+                  [](const cli::TypeSig &op) { return namesType(op); });
+  }
+}
+
 // The sections that definitions of the loaded bitcode files name (their
 // irsymtab section names).
 static DenseSet<StringRef> getDefinedSections() {
@@ -422,6 +588,30 @@ void SymbolTable::bindLateSymbols() {
   // Record the references now: LTO takes the inputs' symbol tables, and the
   // import-annotation pass reports with them after LTO.
   (void)getReferences(nullptr);
+
+  // When LTO writes CIL objects, late binding runs after LTO over the CIL
+  // objects and LTO objects (plan 5.9.6 "When it runs").
+  bool objectMode = !ctx.arg.ltoEmitAsm;
+
+  // The writer defines __start_<X> and __stop_<X> on non-Windows triples
+  // when a CIL object has a segment named <X> (plan 5.9.9), so they do not
+  // bind natively.
+  std::optional<DenseSet<StringRef>> objectSections;
+  auto isObjectSectionBoundary = [&](StringRef name) {
+    if (ctx.arg.target.isOSWindows())
+      return false;
+    if (!name.consume_front("__start_") && !name.consume_front("__stop_"))
+      return false;
+    if (!isValidCIdentifier(name))
+      return false;
+    if (!objectSections) {
+      objectSections.emplace();
+      for (ObjFile *f : ctx.objectFiles)
+        for (InputSegment *seg : f->segments())
+          objectSections->insert(seg->sectionName);
+    }
+    return objectSections->contains(name);
+  };
 
   // On non-Windows triples whole-program code generation defines
   // __start_<X> and __stop_<X> when a definition is in section <X>, so they
@@ -443,12 +633,16 @@ void SymbolTable::bindLateSymbols() {
   Symbol *entrySym = nullptr;
   if (!ctx.arg.entry.empty() && !ctx.arg.shared) {
     entrySym = find(ctx.arg.entry);
-    if (!entrySym)
+    if (!entrySym) {
       reportUnresolved("undefined symbol: " + ctx.arg.entry.str(), {},
                        /*isEntry=*/true);
-    else if (entrySym->isUndefined() || entrySym->isLazy())
-      reportUnresolved(getUnresolvedMessage(*entrySym), getReferences(entrySym),
-                       /*isEntry=*/true);
+    } else if (entrySym->isUndefined() || entrySym->isLazy()) {
+      ArrayRef<Reference> refs = getReferences(entrySym);
+      reportUnresolved(getUnresolvedMessage(*entrySym), refs,
+                       /*isEntry=*/true,
+                       getObjectReferences(entrySym, /*liveOnly=*/false,
+                                           /*includeLTO=*/refs.empty()));
+    }
   }
 
   for (Symbol *sym : symVector) {
@@ -463,14 +657,42 @@ void SymbolTable::bindLateSymbols() {
     auto *u = dyn_cast<Undefined>(sym);
     bool discarded = u && u->discarded;
 
+    // Objects: only what an input still refers to binds (a prevailing
+    // bitcode definition that LTO dropped is an unreferenced undefined
+    // symbol now), and the writer reports the undefined, hidden and
+    // discarded symbols that live code refers to (plan 5.9.6 step 4).
+    if (objectMode) {
+      if (!sym->referenced || discarded)
+        continue;
+      // The writer defines a referenced __start_<X> or __stop_<X> as data,
+      // whatever the reference's visibility: a function reference is a kind
+      // mismatch (plan 5.9.5), reported before the writer runs.
+      if (isObjectSectionBoundary(sym->getName())) {
+        checkLinkerDefinedKind(*sym);
+        continue;
+      }
+      if (sym->visibility() == STV_DEFAULT)
+        bindObjectSymbol(*sym);
+      continue;
+    }
+
     // Step 2: the native libraries, by the symbol name. Whatever stays
     // undefined goes to LTO: a weak symbol keeps M12's lowering (null, and a
     // trap stub for calls), and the import-annotation pass reports any other
-    // that the merged module still refers to (plan 5.9.6, 5.10.13).
-    if (!discarded && sym->visibility() == STV_DEFAULT) {
-      if (!isSectionBoundary(sym->getName()))
+    // that the merged module still refers to (plan 5.9.6, 5.10.13). Code
+    // generation defines __start_<X> and __stop_<X> as data, whatever the
+    // reference's visibility, as the writer does for CIL objects: they are
+    // neither bound nor reported, and a function reference is a kind mismatch
+    // (plan 5.9.5) that is never left to code generation.
+    if (!discarded) {
+      if (isSectionBoundary(sym->getName())) {
+        checkLinkerDefinedKind(*sym);
+        continue;
+      }
+      if (sym->visibility() == STV_DEFAULT) {
         bindNative(*sym);
-      continue;
+        continue;
+      }
     }
 
     // A weak symbol is never reported, as in lld/ELF (maybeReportUndefined).
@@ -483,5 +705,202 @@ void SymbolTable::bindLateSymbols() {
       continue;
     reportUnresolved(getUnresolvedMessage(*sym), symRefs, /*isEntry=*/false);
   }
+
+  if (!objectMode)
+    return;
+
+  // Step 3: the direct calls of each undefined weak function bind to trap
+  // stubs, one per call signature; record the signatures in first-use order.
+  for (ObjFile *f : ctx.objectFiles) {
+    const TokenMap &tokens = f->getTokenMap();
+    for (InputMethod *m : f->methods()) {
+      if (m->discarded)
+        continue;
+      for (const TokenSite &site : m->sites) {
+        TokenTarget t = tokens.lookup(site.token);
+        if (t.kind != TokenTarget::Method || !t.sym || !t.signature ||
+            !t.sym->isUndefWeak())
+          continue;
+        SmallVector<UndefinedCall, 1> &calls = undefinedCalls[t.sym];
+        bool seen = any_of(calls, [&](const UndefinedCall &c) {
+          return *c.signature == *t.signature &&
+                 (c.file == f || !signatureNamesType(*t.signature));
+        });
+        if (!seen)
+          calls.push_back({f, t.signature, t.signatureInfo});
+      }
+    }
+  }
+}
+
+void SymbolTable::resolveAlternateNames() {
+  for (const auto &[from, to] : ctx.appliedAlternateNames) {
+    Symbol *fromSym = find(from);
+    Symbol *toSym = find(to);
+    if (!fromSym || !toSym || fromSym == toSym || !fromSym->isUndefined())
+      continue;
+    // <from>'s references now name <to>'s definition, whatever it is; if
+    // <to> is undefined too, <from> stays undefined.
+    if (auto *d = dyn_cast<Defined>(toSym))
+      d->overwrite(*fromSym);
+    else if (auto *c = dyn_cast<CommonSymbol>(toSym))
+      c->overwrite(*fromSym);
+    else if (auto *n = dyn_cast<NativeSymbol>(toSym))
+      n->overwrite(*fromSym);
+  }
+}
+
+void SymbolTable::finalizeObjectSymbols() {
+  // A definition that lost resolution: its own method or segment is not the
+  // symbol's (plan 5.9.5). COMDAT losers are discarded already.
+  SmallVector<InputChunk *, 0> lost;
+  auto lose = [&](InputChunk *c) {
+    if (!c->discarded) {
+      c->discarded = true;
+      lost.push_back(c);
+    }
+  };
+  for (ObjFile *f : ctx.objectFiles) {
+    for (auto [i, s] : llvm::enumerate(f->getRecord().Symbols)) {
+      uint32_t bind = s.Flags & MSILLink::BindingMask;
+      if ((s.Flags & (MSILLink::Undefined | MSILLink::Alias)) ||
+          bind == MSILLink::BindingLocal || bind == MSILLink::BindingCommon)
+        continue;
+      Symbol *sym = f->getSymbol(i);
+      if (s.Kind == MSILLink::SymbolKind::Function) {
+        InputMethod *own = f->getMethod(s.Token);
+        auto *def = dyn_cast_or_null<DefinedFunction>(sym);
+        if (own && (!def || def->method != own))
+          lose(own);
+        continue;
+      }
+      if (s.Segment >= f->segments().size())
+        continue;
+      InputSegment *own = f->segments()[s.Segment];
+      auto *def = dyn_cast_or_null<DefinedData>(sym);
+      if (!def || def->segment != own)
+        lose(own);
+    }
+  }
+
+  // A losing definition's method or segment stays when a symbol that won
+  // still lies in it: an alias of the losing definition, which keeps its own
+  // binding (lld/ELF never drops the section of an overridden weak
+  // definition). The writer then names it apart from the winner's.
+  if (!lost.empty()) {
+    DenseSet<const InputChunk *> used;
+    for (Symbol *sym : symVector)
+      if (InputChunk *c = getDefiningChunk(sym))
+        used.insert(c);
+    for (ObjFile *f : ctx.objectFiles)
+      for (Symbol *sym : f->getSymbols())
+        if (sym && sym->isLocal())
+          if (InputChunk *c = getDefiningChunk(sym))
+            used.insert(c);
+    for (InputChunk *c : lost)
+      if (used.contains(c))
+        c->discarded = false;
+  }
+
+  // The common symbols that survived, at the SYMTAB position of their first
+  // declaration (plan 5.9.9 rule 3), with the merged size and alignment.
+  for (ObjFile *f : ctx.objectFiles) {
+    for (auto [i, s] : llvm::enumerate(f->getRecord().Symbols)) {
+      if ((s.Flags & MSILLink::BindingMask) != MSILLink::BindingCommon)
+        continue;
+      auto *c = dyn_cast_or_null<CommonSymbol>(f->getSymbol(i));
+      if (!c || c->segment)
+        continue;
+      auto *seg =
+          make<SyntheticSegment>(SyntheticSegment::Common, f, c->getName(),
+                                 Log2_32(c->getAlignment()), c->getSize());
+      seg->symbolIndex = i;
+      seg->sym = c;
+      c->segment = seg;
+      ctx.syntheticSegments.push_back(seg);
+    }
+  }
+}
+
+SyntheticData *SymbolTable::addSyntheticData(StringRef name, uint64_t offset) {
+  Symbol *sym = find(name);
+  if (!sym || !(sym->isUndefined() || (sym->isLazy() && sym->isWeak())))
+    return nullptr;
+  // A function symbol does not become data (plan 5.9.5): bindLateSymbols()
+  // reported a function reference as a kind mismatch, and one that nothing
+  // refers to (a bitcode definition that LTO dropped) stays as it is.
+  if (sym->isFunc())
+    return nullptr;
+  SyntheticData(name, offset).overwrite(*sym);
+  auto *s = cast<SyntheticData>(sym);
+  s->live = true;
+  ctx.sym.startStop.push_back(s);
+  return s;
+}
+
+void SymbolTable::addImportAttributes(Symbol &sym, InputFile &file,
+                                      StringRef module, StringRef name) {
+  if (!sym.isUndefined() && !sym.isLazy())
+    return;
+  // An import name equal to the symbol name, which is what a stub without
+  // `as` has, counts as none (plan 5.9.6 step 2).
+  if (name == sym.getName())
+    name = "";
+  if (module.empty() && name.empty())
+    return;
+  ImportInfo &info = importInfo[&sym];
+  if (!name.empty()) {
+    if (!info.nameFile) {
+      info.name = name;
+      info.nameFile = &file;
+    } else if (info.name != name) {
+      error("import name mismatch for symbol: " + toString(sym) +
+            "\n>>> defined as " + info.name + " in " + toString(info.nameFile) +
+            "\n>>> defined as " + name + " in " + toString(&file));
+    }
+  }
+  if (!module.empty()) {
+    if (!info.moduleFile) {
+      info.module = module;
+      info.moduleFile = &file;
+    } else if (info.module != module) {
+      error("import module mismatch for symbol: " + toString(sym) +
+            "\n>>> defined as " + info.module + " in " +
+            toString(info.moduleFile) + "\n>>> defined as " + module + " in " +
+            toString(&file));
+    }
+  }
+}
+
+StringRef SymbolTable::getImportModule(const Symbol *sym) const {
+  auto it = importInfo.find(sym);
+  return it == importInfo.end() ? StringRef() : it->second.module;
+}
+
+StringRef SymbolTable::getImportName(const Symbol *sym) const {
+  auto it = importInfo.find(sym);
+  return it == importInfo.end() ? StringRef() : it->second.name;
+}
+
+bool SymbolTable::isExplicitImport(const Symbol *sym) const {
+  auto it = importInfo.find(sym);
+  return it != importInfo.end() && it->second.explicitBinding &&
+         sym->isNative();
+}
+
+ArrayRef<const NativeExport *>
+SymbolTable::getRejectedNative(const Symbol *sym) const {
+  auto it = rejectedNative.find(sym);
+  if (it == rejectedNative.end())
+    return {};
+  return it->second;
+}
+
+ArrayRef<SymbolTable::UndefinedCall>
+SymbolTable::getUndefinedCalls(const Symbol *sym) const {
+  auto it = undefinedCalls.find(sym);
+  if (it == undefinedCalls.end())
+    return {};
+  return it->second;
 }
 } // namespace lld::msil

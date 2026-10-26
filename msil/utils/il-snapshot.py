@@ -9,8 +9,8 @@
 """Compile every C and IR input of the MSIL tests and keep IL and diagnostics.
 
     python msil/utils/il-snapshot.py --build DIR --out DIR [--compare DIR]
-        [--normalize forms] [--exclude PATH]... [--jobs N] [--timeout S]
-        PATH...
+        [--normalize forms] [--exclude PATH]... [--llc-arg=ARG]...
+        [--skip-changed] [--jobs N] [--timeout S] PATH...
 
 Plan 5.12.4 (M15; M18 and M20 extend it): the proof that a change leaves the
 text of 'clang -S' and llc byte-identical (5.10.13, D14 frozen). It runs from
@@ -35,6 +35,22 @@ minus every --exclude PATH (a file, or a directory and its subtree), at -O0
 and -O2 for x86_64-pc-windows-msvc-msil and x86_64-unknown-linux-gnu-msil
 and at -O2 for x86_64-w64-windows-gnu-msil and x86_64-unknown-linux-musl-msil.
 The list of inputs comes from HEAD, their contents from the working tree.
+
+--llc-arg=ARG (M20, plan 5.12.4; repeatable) appends ARG to every llc
+command and '-mllvm ARG' to every 'clang -S' command, in the order given:
+M20's gate takes its snapshot with
+--llc-arg=-msil-reloc-loop-threshold=1000000000, which keeps every module's
+'.cctor' on Phase 1's straight-line relocations. Write it with '=' when ARG
+starts with '-'.
+
+--skip-changed (M20) leaves out every input under PATH... that
+'git status --porcelain --untracked-files=all' reports against HEAD
+(modified, added, deleted or renamed, in the index or the working tree;
+both names of a rename), and lists each one as 'il-snapshot: skipped
+(changed against HEAD): <path>'. With --compare the files of those inputs
+are left out of the comparison on both sides (a baseline taken before the
+change still holds them), and the summary counts them; so a gate compares
+exactly the inputs that the milestone did not change.
 
 For each input, triple and level it writes
 
@@ -72,7 +88,8 @@ counts), so no other directory is ever emptied by accident.
 ('missing') or only in --out ('extra') is listed, the first differences are
 shown as unified diffs, and the exit status is 1. The usual use is a
 baseline written with the build of HEAD before a milestone's build, and a
-second snapshot with the new build compared against it.
+second snapshot with the new build compared against it. The files of the
+inputs that --skip-changed left out are not compared.
 
 --normalize forms (M18, plan 5.12.4; only with --compare) compares the .il
 files of both snapshots after the encoding forms that plan Q26 and 5.10.11
@@ -280,6 +297,45 @@ def tracked_inputs(paths, excludes):
     return sorted(found), used
 
 
+def changed_inputs(paths):
+    """The repository paths under paths that 'git status --porcelain -z
+    --untracked-files=all' reports against HEAD (--skip-changed): every entry,
+    with both names of a rename or copy."""
+    out = git(
+        ["status", "--porcelain", "-z", "--untracked-files=all", "--"]
+        + [p or "." for p in paths]
+    )
+    fields = out.decode("utf-8", errors="surrogateescape").split("\0")
+    changed, i = set(), 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        status, path = entry[:2], entry[3:]
+        changed.add(path)
+        if "R" in status or "C" in status:
+            # '-z' prints the original name of a rename as the next field.
+            if i < len(fields) and fields[i]:
+                changed.add(fields[i])
+            i += 1
+    return changed
+
+
+def skipped_files(name, skipped):
+    """Whether the snapshot file name ('<triple>/<level>/<path>.il|.err',
+    or '<triple>/<level>/<file>/<part>.il|.err') belongs to an input of
+    skipped."""
+    parts = name.split("/", 2)
+    if len(parts) < 3:
+        return False
+    rest = parts[2]
+    return any(
+        rest in (inp + ".il", inp + ".err") or rest.startswith(inp + "/")
+        for inp in skipped
+    )
+
+
 def child_env():
     env = dict(os.environ)
     for key in list(env):
@@ -344,8 +400,10 @@ class Snapshot:
         kind, cwd, name, rel_out, triple, level = job
         if kind == "c":
             cmd = [self.clang, "--target=" + triple, *CFLAGS, "-" + level, "-S"]
+            for a in self.args.llc_args:
+                cmd += ["-mllvm", a]
         else:
-            cmd = [self.llc, "-mtriple=" + triple, "-" + level]
+            cmd = [self.llc, "-mtriple=" + triple, "-" + level, *self.args.llc_args]
         cmd += [name, "-o", "-"]
         out, err = self.run(cmd, cwd)
         stem = os.path.join(self.args.out, triple, level, *rel_out.split("/"))
@@ -400,7 +458,8 @@ class Snapshot:
 
 
 def find_inputs(args):
-    """Check the tools and list the inputs, before --out is emptied."""
+    """Check the tools and list the inputs, before --out is emptied. With
+    --skip-changed, the inputs it leaves out are in args.skipped."""
     s = Snapshot(args)
     missing = [p for p in s.tool_paths() if not os.path.isfile(p)]
     if missing:
@@ -412,6 +471,14 @@ def find_inputs(args):
     for e, n in used.items():
         if n == 0:
             say("note: --exclude %s matches no input" % e)
+    args.skipped = []
+    if getattr(args, "skip_changed", False):
+        changed = changed_inputs(args.paths)
+        args.skipped = [i for i in inputs if i in changed]
+        inputs = [i for i in inputs if i not in changed]
+        for i in args.skipped:
+            say("skipped (changed against HEAD): %s" % i)
+        say("--skip-changed: %d inputs left out" % len(args.skipped))
     if not inputs:
         raise UsageError("no .c or .ll input under %s" % " ".join(args.paths))
     return inputs
@@ -502,10 +569,17 @@ def read_stamp(directory):
         return None
 
 
-def compare(new, old, normalize=()):
+def compare(new, old, normalize=(), skipped=()):
     """Compare snapshot new with snapshot old, the .il files after the
-    --normalize kinds in normalize; returns the number of differences."""
+    --normalize kinds in normalize, leaving out the files of the inputs in
+    skipped (--skip-changed); returns the number of differences."""
     fa, fb = tree_files(new), tree_files(old)
+    left_out = 0
+    if skipped:
+        for files in (fa, fb):
+            for name in [n for n in files if skipped_files(n, skipped)]:
+                del files[name]
+                left_out += 1
     differs, missing, extra = [], [], []
     normalized = {}  # name -> (old text, new text) of a normalized .il file
     equal_after = 0  # .il files equal only after normalizing
@@ -550,6 +624,11 @@ def compare(new, old, normalize=()):
         if len(diff) > DIFF_LINES:
             print("... (%d more diff lines)" % (len(diff) - DIFF_LINES))
     total = len(differs) + len(missing) + len(extra)
+    if skipped:
+        say(
+            "--skip-changed: %d files of %d inputs changed against HEAD were "
+            "not compared" % (left_out, len(skipped))
+        )
     if normalize:
         say(
             "--normalize %s: the .il files of both snapshots were compared "
@@ -573,7 +652,7 @@ def compare(new, old, normalize=()):
             % (old.replace("\\", "/"), STAMP)
         )
     elif new_stamp:
-        for key in ("paths", "exclude", "configs", "cflags"):
+        for key in ("paths", "exclude", "configs", "cflags", "llc-args"):
             if old_stamp.get(key) != new_stamp.get(key):
                 say(
                     "note: the snapshots differ in %s: %s here, %s in %s"
@@ -628,6 +707,21 @@ def parse_args(argv):
         default=[],
         metavar="PATH",
         help="leave out this file or directory (repeatable)",
+    )
+    p.add_argument(
+        "--llc-arg",
+        action="append",
+        default=[],
+        dest="llc_args",
+        metavar="ARG",
+        help="append ARG to every llc command and '-mllvm ARG' to every clang "
+        "command (repeatable; write --llc-arg=ARG when ARG starts with '-')",
+    )
+    p.add_argument(
+        "--skip-changed",
+        action="store_true",
+        help="leave out (and list) every input that 'git status' reports "
+        "against HEAD, and its files from --compare",
     )
     p.add_argument(
         "--jobs", type=int, default=os.cpu_count() or 1, help="compiles at once"
@@ -693,11 +787,15 @@ def main(argv=None):
     }
     if args.normalize:
         stamp["normalize"] = args.normalize
+    if args.llc_args:
+        stamp["llc-args"] = args.llc_args
+    if args.skip_changed:
+        stamp["skip-changed"] = args.skipped
     with open(os.path.join(args.out, STAMP), "w", encoding="utf-8", newline="\n") as f:
         json.dump(stamp, f, indent=2, sort_keys=True)
         f.write("\n")
     if args.compare:
-        return 1 if compare(args.out, args.compare, args.normalize) else 0
+        return 1 if compare(args.out, args.compare, args.normalize, args.skipped) else 0
     return 0
 
 

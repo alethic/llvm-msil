@@ -6,13 +6,20 @@
 # msil-ld: the first line of 5.9.14's text, which M15 keeps when msil-ld
 # reports it with '>>> referenced by' lines (plan 5.9.6, 'When it runs'). The
 # Phase-1 wording ('Phase 1 has no linker') never appears, and the link fails
-# with exit status 1. Plan 5.9.16 row undefined (M14 lto, M20 obj).
+# with exit status 1. On the object path msil-ld reports the undefined GLOBAL
+# function itself (plan 5.9.6 step 4) with a '>>> referenced by' line naming
+# main.o and main. Plan 5.9.16 row undefined (M14 lto, M20 obj).
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="Phase 1 has no linker" %}
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="Phase 1 has no linker" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="Phase 1 has no linker" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="Phase 1 has no linker" %}
 # LTO:      {{^}}msil-ld: error: undefined symbol: missing_fn{{$}}
 # LTO:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# OBJ:      {{^}}msil-ld: error: undefined symbol: missing_fn{{$}}
+# OBJ-NEXT: {{^}}>>> referenced by {{.*}}main.o:(main){{$}}
+# OBJ:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
 #--- main.c
 int puts(const char *);
 int missing_fn(int);

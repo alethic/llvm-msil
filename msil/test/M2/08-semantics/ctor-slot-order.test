@@ -1,0 +1,32 @@
+# Matrix case ctor-slot-order: a constructor-table slot and a constructor of equal key in one object.
+# a.c registers slot_fn through a 'used' pointer in '.init_array' (Linux
+# triples) or '.CRT$XCU' (Windows triples, #pragma section and
+# __declspec(allocate) as in recon/p2/judge-c-fidelity-files/probes/p8.c),
+# and defines ctor_fn with __attribute__((constructor)), whose default
+# priority has the same key as the slot (65536, or '.CRT$XCU'); b.c holds
+# only main. Natively, without LTO, ld.lld and lld-link run the slot first,
+# because clang emits llvm.global_ctors after the object's other globals into
+# the same section. msil-ld orders equal keys within one object the same way,
+# its slots in (segment, offset) order before its INIT entries, and applies
+# that rule to LTO objects too, so the object and the LTO pipeline both print
+# the non-LTO native transcript (plan 5.9.9 'Constructor list'). Plan 5.9.16
+# row ctor-slot-order (M20, obj and lto).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+#--- a.c
+#include "msil_test.h"
+static void slot_fn(void) { puts("slot (init_array or .CRT$XCU)"); }
+#if defined(_WIN32)
+#pragma section(".CRT$XCU", read)
+__declspec(allocate(".CRT$XCU")) __attribute__((used)) static void (*p_slot)(void) = slot_fn;
+#else
+__attribute__((used, section(".init_array"))) static void (*p_slot)(void) = slot_fn;
+#endif
+__attribute__((constructor)) static void ctor_fn(void) { puts("constructor"); }
+#--- b.c
+int puts(const char *);
+int main(void) {
+  puts("main");
+  return 0;
+}

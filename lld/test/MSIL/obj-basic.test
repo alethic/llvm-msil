@@ -1,0 +1,265 @@
+## Linking CIL objects into a PE (ImplementationPlan.md M20; 5.9.4, 5.9.7,
+## 5.9.10, 5.9.12; 5.7.10 for the listings). Two objects that llc writes with
+## -filetype=obj (the writer clang -c uses, M19) and an import library link
+## into an EXE with no ilasm:
+## - the image is an IL-only PE32+ EXE for the triple's machine with
+##   '<msil>Main' as its entry point, no COFF symbol table, the Assembly row
+##   named after the stem of -o (version 0.0.0.0, HashAlgId SHA1 0x8004, no
+##   public key) and the Module row named after the output file;
+## - the BCL stand-in (5.9.7): the trailer's members and every msil.bcl
+##   reference become '[mscorlib]' 4.0.0.0 b77a5c561934e089 (D10), and no
+##   placeholder survives: no msil.extern, msil.bcl, msil.link or
+##   msil.unresolved scope, no '<msil>Symbols', '<msil>FnAddr' or
+##   '<msil>LinkInfo' type and no custom attribute (the record's carrier);
+## - token sites name the output entities: a call of another object's
+##   function names its MethodDef, a variable its address field, an address
+##   in data the '<msil>fn_' field (one per method), a native function its
+##   P/Invoke stub ('assembly', preservesig, ImplMap 0x0201, the module of the
+##   import library, 5.10.11);
+## - names and access (5.9.12): functions and address fields keep their
+##   symbol names, GLOBAL definitions are public, LOCAL ones assembly, the
+##   '<msil>fn_' fields stay private without spill classes, and the trailer
+##   ('.cctor', '<msil>Main', '<msil>data', '<msil>image') is private with
+##   Phase 1's flags;
+## - the data image is 5.9.9's layout (a.o's segments, then b.o's, then the
+##   zero part), and with at most 32 relocations '.cctor' is Phase 1's
+##   straight-line sequence (5.9.10), as -S writes it for the same program;
+## - row order follows input order only: the kept methods and address fields
+##   by object in link order and row order, then the P/Invoke stub, then the
+##   trailer's methods; TypeDef '<Module>', then '<msil>image_t'.
+## The listing is the one '-S' plus ilasm gives for the same IR, up to O3's
+## normalizations (5.12.6): msil-ld writes no Param rows and never sets
+## InitLocals, and binds puts from the import library instead of D14's
+## ucrtbase.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj a.ll -o a.o
+# RUN: llc -filetype=obj b.ll -o b.o
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-stdio.def /out:ucrt.lib
+
+# DEFINE: %{none} = --implicit-check-not=msil.extern --implicit-check-not=msil.bcl \
+# DEFINE:   --implicit-check-not=msil.link --implicit-check-not=msil.unresolved \
+# DEFINE:   --implicit-check-not='<msil>Symbols' --implicit-check-not='<msil>FnAddr' \
+# DEFINE:   --implicit-check-not='<msil>LinkInfo' --implicit-check-not=.custom
+
+# RUN: msil-ld a.o b.o ucrt.lib -o prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog.exe > prog.txt
+# RUN: FileCheck %s --check-prefix=CANON %{none} --input-file=prog.txt
+# RUN: llvm-cil-dump --headers prog.exe | FileCheck %s --check-prefix=HEADERS
+# RUN: llvm-cil-dump --tables prog.exe > tables.txt
+# RUN: FileCheck %s --check-prefix=TABLES %{none} --implicit-check-not='Table: CustomAttribute' \
+# RUN:   --implicit-check-not='Table: Param ' --input-file=tables.txt
+
+# CANON:      {{^}}pe PE32+ machine=0x8664 exe subsystem=3{{$}}
+# CANON-NEXT: {{^}}cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319{{$}}
+# CANON-NEXT: {{^}}entrypoint int32(string[]) '<Module>'::'<msil>Main'{{$}}
+# CANON-NEXT: {{^}}assembly 'prog' ver 0.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-{{$}}
+# CANON-NEXT: {{^}}module 'prog.exe'{{$}}
+# CANON-NEXT: {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+# CANON-NEXT: {{^}}moduleref 'api-ms-win-crt-stdio-l1-1-0.dll'{{$}}
+# CANON-EMPTY:
+# CANON-NEXT: {{^}}.class '<Module>' flags=0x00000000{{$}}
+# CANON-NEXT: {{^}}  .field '<msil>data' native int flags=0x0031{{$}}
+# CANON-NEXT: {{^}}  .field '<msil>fn_add3' native int flags=0x0031{{$}}
+# CANON-NEXT: {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0111{{$}}
+# CANON-NEXT: {{^}}    .data 20 bytes{{$}}
+# CANON-NEXT: {{^}}      68 65 6C 6C 6F 00 00 00 00 00 00 00 00 00 00 00 05 00 00 00{{$}}
+# CANON-NEXT: {{^}}  .field 'counter' native int flags=0x0036{{$}}
+# CANON-NEXT: {{^}}  .field 'msg' native int flags=0x0033{{$}}
+# CANON-NEXT: {{^}}  .field 'scratch' native int flags=0x0036{{$}}
+# CANON-NEXT: {{^}}  .field 'table' native int flags=0x0036{{$}}
+# CANON-NEXT: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# CANON-NEXT: {{^}}    .maxstack 3{{$}}
+# CANON-NEXT: {{^}}    L0: ldc.i4.s 47{{$}}
+# CANON-NEXT: {{^}}    L1: conv.i{{$}}
+# CANON-NEXT: {{^}}    L2: call native int(native int) [mscorlib]System.Runtime.InteropServices.Marshal::'AllocHGlobal'{{$}}
+# CANON-NEXT: {{^}}    L3: ldc.i4.s 15{{$}}
+# CANON-NEXT: {{^}}    L4: conv.i{{$}}
+# CANON-NEXT: {{^}}    L5: add{{$}}
+# CANON-NEXT: {{^}}    L6: ldc.i4.s -16{{$}}
+# CANON-NEXT: {{^}}    L7: conv.i{{$}}
+# CANON-NEXT: {{^}}    L8: and{{$}}
+# CANON-NEXT: {{^}}    L9: stsfld native int '<Module>'::'<msil>data'{{$}}
+# CANON-NEXT: {{^}}    L10: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CANON-NEXT: {{^}}    L11: ldsflda valuetype '<msil>image_t' '<Module>'::'<msil>image'{{$}}
+# CANON-NEXT: {{^}}    L12: ldc.i4.s 20{{$}}
+# CANON-NEXT: {{^}}    L13: cpblk{{$}}
+# CANON-NEXT: {{^}}    L14: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CANON-NEXT: {{^}}    L15: ldc.i4.s 20{{$}}
+# CANON-NEXT: {{^}}    L16: add{{$}}
+# CANON-NEXT: {{^}}    L17: ldc.i4.0{{$}}
+# CANON-NEXT: {{^}}    L18: ldc.i4.s 12{{$}}
+# CANON-NEXT: {{^}}    L19: unaligned. 4{{$}}
+# CANON-NEXT: {{^}}    L20: initblk{{$}}
+# CANON-NEXT: {{^}}    L21: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CANON-NEXT: {{^}}    L22: stsfld native int '<Module>'::'msg'{{$}}
+# CANON-NEXT: {{^}}    L23: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CANON-NEXT: {{^}}    L24: ldc.i4.8{{$}}
+# CANON-NEXT: {{^}}    L25: add{{$}}
+# CANON-NEXT: {{^}}    L26: stsfld native int '<Module>'::'table'{{$}}
+# CANON-NEXT: {{^}}    L27: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CANON-NEXT: {{^}}    L28: ldc.i4.s 16{{$}}
+# CANON-NEXT: {{^}}    L29: add{{$}}
+# CANON-NEXT: {{^}}    L30: stsfld native int '<Module>'::'counter'{{$}}
+# CANON-NEXT: {{^}}    L31: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CANON-NEXT: {{^}}    L32: ldc.i4.s 20{{$}}
+# CANON-NEXT: {{^}}    L33: add{{$}}
+# CANON-NEXT: {{^}}    L34: stsfld native int '<Module>'::'scratch'{{$}}
+# CANON-NEXT: {{^}}    L35: ldftn int32(int32) '<Module>'::'add3'{{$}}
+# CANON-NEXT: {{^}}    L36: stsfld native int '<Module>'::'<msil>fn_add3'{{$}}
+# CANON-NEXT: {{^}}    L37: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CANON-NEXT: {{^}}    L38: ldc.i4.8{{$}}
+# CANON-NEXT: {{^}}    L39: add{{$}}
+# CANON-NEXT: {{^}}    L40: ldsfld native int '<Module>'::'<msil>fn_add3'{{$}}
+# CANON-NEXT: {{^}}    L41: stind.i{{$}}
+# CANON-NEXT: {{^}}    L42: ret{{$}}
+# CANON-NEXT: {{^}}  .method '<msil>Main' int32(string[]) flags=0x0091 impl=0x0000{{$}}
+# CANON-NEXT: {{^}}    .maxstack 1{{$}}
+# CANON-NEXT: {{^}}    L0: call int32() '<Module>'::'main'{{$}}
+# CANON-NEXT: {{^}}    L1: ret{{$}}
+# CANON-NEXT: {{^}}  .method 'add3' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# CANON-NEXT: {{^}}    .maxstack 3{{$}}
+# CANON-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'scratch'{{$}}
+# CANON-NEXT: {{^}}    L1: ldarg.0{{$}}
+# CANON-NEXT: {{^}}    L2: call int32(int32) '<Module>'::'helper'{{$}}
+# CANON:      {{^}}  .method 'helper' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# CANON-NEXT: {{^}}    .maxstack 2{{$}}
+# CANON:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# CANON-NEXT: {{^}}    .maxstack 3{{$}}
+# CANON-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'msg'{{$}}
+# CANON-NEXT: {{^}}    L1: call int32(native int) '<Module>'::'puts'{{$}}
+# CANON-NEXT: {{^}}    L2: pop{{$}}
+# CANON-NEXT: {{^}}    L3: ldc.i4.1{{$}}
+# CANON-NEXT: {{^}}    L4: ldsfld native int '<Module>'::'table'{{$}}
+# CANON-NEXT: {{^}}    L5: ldind.i{{$}}
+# CANON-NEXT: {{^}}    L6: calli int32(int32){{$}}
+# CANON-NEXT: {{^}}    L7: ldsfld native int '<Module>'::'counter'{{$}}
+# CANON-NEXT: {{^}}    L8: ldind.i4{{$}}
+# CANON-NEXT: {{^}}    L9: add{{$}}
+# CANON-NEXT: {{^}}    L10: ret{{$}}
+# CANON-NEXT: {{^}}  .method 'puts' int32(native int) flags=0x2093 impl=0x0080{{$}}
+# CANON-NEXT: {{^}}    .pinvokeimpl 'api-ms-win-crt-stdio-l1-1-0.dll' entry 'puts' flags=0x0201{{$}}
+# CANON-EMPTY:
+# CANON-NEXT: {{^}}.class '<msil>image_t' flags=0x00000110 extends [mscorlib]System.ValueType{{$}}
+# CANON-NEXT: {{^}}  .layout pack 1 size 20{{$}}
+# CANON-NOT:  {{.}}
+
+# HEADERS:      {{^}}Format: PE32+ machine=0x8664 exe{{$}}
+# HEADERS-NEXT: {{^}}COFF: sections={{[0-9]+}} timestamp=0x{{[0-9A-F]+}} characteristics=0x{{[0-9A-F]+}} symbols=0{{$}}
+# HEADERS:      {{^}}CLI: flags=0x00000001 entrypoint=0x0600{{[0-9A-F][0-9A-F][0-9A-F][0-9A-F]}} metadata=
+
+# TABLES:      {{^}}Table: Module rows=1 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  Module[1]: Generation=0x0000 Name='prog.exe' Mvid=
+# TABLES:      {{^}}Table: TypeDef rows=2 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  TypeDef[1]: Flags=0x00000000 TypeName='<Module>' TypeNamespace='' Extends=0 FieldList=0x04000001 MethodList=0x06000001{{$}}
+# TABLES-NEXT: {{^}}  TypeDef[2]: Flags=0x00000110 TypeName='<msil>image_t' TypeNamespace=''
+# TABLES:      {{^}}Table: Field rows=7 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  Field[1]: Flags=0x0033 Name='msg' Signature=06 18{{$}}
+# TABLES-NEXT: {{^}}  Field[2]: Flags=0x0036 Name='table' Signature=06 18{{$}}
+# TABLES-NEXT: {{^}}  Field[3]: Flags=0x0036 Name='counter' Signature=06 18{{$}}
+# TABLES-NEXT: {{^}}  Field[4]: Flags=0x0036 Name='scratch' Signature=06 18{{$}}
+# TABLES:      {{^}}Table: MethodDef rows=6 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  MethodDef[1]: RVA=0x{{[0-9A-F]+}} ImplFlags=0x0000 Flags=0x0016 Name='main' Signature=00 00 08 ParamList=
+# TABLES-NEXT: {{^}}  MethodDef[2]: RVA=0x{{[0-9A-F]+}} ImplFlags=0x0000 Flags=0x0013 Name='helper' Signature=00 01 08 08 ParamList=
+# TABLES-NEXT: {{^}}  MethodDef[3]: RVA=0x{{[0-9A-F]+}} ImplFlags=0x0000 Flags=0x0016 Name='add3' Signature=00 01 08 08 ParamList=
+# TABLES-NEXT: {{^}}  MethodDef[4]: RVA=0x00000000 ImplFlags=0x0080 Flags=0x2093 Name='puts' Signature=00 01 08 18 ParamList=
+# TABLES-NEXT: {{^}}  MethodDef[5]: RVA=0x{{[0-9A-F]+}} ImplFlags=0x0000 Flags=0x{{1891|0091}} Name='{{\.cctor|<msil>Main}}'
+# TABLES-NEXT: {{^}}  MethodDef[6]: RVA=0x{{[0-9A-F]+}} ImplFlags=0x0000 Flags=0x{{1891|0091}} Name='{{\.cctor|<msil>Main}}'
+# TABLES:      {{^}}Table: ImplMap rows=1 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  ImplMap[1]: MappingFlags=0x0201 MemberForwarded=0x06000004 ImportName='puts' ImportScope=0x1A000001{{$}}
+# TABLES:      {{^}}Table: Assembly rows=1 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  Assembly[1]: HashAlgId=0x00008004 MajorVersion=0x0000 MinorVersion=0x0000 BuildNumber=0x0000 RevisionNumber=0x0000 Flags=0x00000000 PublicKey=- Name='prog' Culture=''{{$}}
+# TABLES-NEXT: {{^}}Table: AssemblyRef rows=1 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  AssemblyRef[1]: MajorVersion=0x0004 MinorVersion=0x0000 BuildNumber=0x0000 RevisionNumber=0x0000 Flags=0x00000000 PublicKeyOrToken=B7 7A 5C 56 19 34 E0 89 Name='mscorlib' Culture='' HashValue=-{{$}}
+
+## The assembly is named by --assembly-name (both spellings) or -soname, else
+## after the stem of -o (only the last extension goes); the Module row
+## always names the output file.
+# RUN: mkdir out
+# RUN: msil-ld a.o b.o ucrt.lib --assembly-name=Named -o out/n1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump out/n1.exe | FileCheck %s --check-prefix=NAMED -DFILE=n1.exe
+# RUN: msil-ld a.o b.o ucrt.lib --assembly-name Named -o out/n2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump out/n2.exe | FileCheck %s --check-prefix=NAMED -DFILE=n2.exe
+# RUN: msil-ld a.o b.o ucrt.lib -soname Named -o out/n3.exe 2>&1 | count 0
+# RUN: llvm-cil-dump out/n3.exe | FileCheck %s --check-prefix=NAMED -DFILE=n3.exe
+# RUN: msil-ld a.o b.o ucrt.lib -o out/My.App.exe 2>&1 | count 0
+# RUN: llvm-cil-dump out/My.App.exe | FileCheck %s --check-prefix=DOTS
+# NAMED:     {{^}}assembly 'Named' ver 0.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-{{$}}
+# NAMED-NEXT: {{^}}module '[[FILE]]'{{$}}
+# DOTS:      {{^}}assembly 'My.App' ver 0.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-{{$}}
+# DOTS-NEXT: {{^}}module 'My.App.exe'{{$}}
+
+## An output name that ends in neither .exe nor .dll is still an EXE, with a
+## warning (5.10.5).
+# RUN: msil-ld a.o b.o ucrt.lib -o out/prog.bin 2>&1 | FileCheck %s --check-prefix=EXT \
+# RUN:   --implicit-check-not=error: --implicit-check-not="PLEASE submit"
+# RUN: llvm-cil-dump --headers out/prog.bin | FileCheck %s --check-prefix=HEADERS
+# EXT: {{^}}msil-ld: warning: {{.*}}prog.bin
+
+## The machine comes from the triple: aarch64 Linux.
+# RUN: llc -filetype=obj a64.ll -o a64.o
+# RUN: msil-ld a64.o -o a64.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --headers a64.exe | FileCheck %s --check-prefix=A64-HEADERS
+# RUN: llvm-cil-dump a64.exe | FileCheck %s --check-prefix=A64 %{none}
+# A64-HEADERS: {{^}}Format: PE32+ machine=0xAA64 exe{{$}}
+# A64:         {{^}}pe PE32+ machine=0xAA64 exe subsystem=3{{$}}
+# A64-NEXT:    {{^}}cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319{{$}}
+# A64-NEXT:    {{^}}entrypoint int32(string[]) '<Module>'::'<msil>Main'{{$}}
+# A64-NEXT:    {{^}}assembly 'a64' ver 0.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-{{$}}
+# A64-NEXT:    {{^}}module 'a64.exe'{{$}}
+# A64-NEXT:    {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+# A64-EMPTY:
+# A64-NEXT:    {{^}}.class '<Module>' flags=0x00000000{{$}}
+# A64-NEXT:    {{^}}  .method '<msil>Main' int32(string[]) flags=0x0091 impl=0x0000{{$}}
+# A64-NEXT:    {{^}}    .maxstack 1{{$}}
+# A64-NEXT:    {{^}}    L0: call int32() '<Module>'::'main'{{$}}
+# A64-NEXT:    {{^}}    L1: ret{{$}}
+# A64-NEXT:    {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# A64-NEXT:    {{^}}    .maxstack 1{{$}}
+# A64-NEXT:    {{^}}    L0: ldc.i4.s 42{{$}}
+# A64-NEXT:    {{^}}    L1: ret{{$}}
+# A64-NOT:     {{.}}
+
+#--- a.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private unnamed_addr constant [6 x i8] c"hello\00", align 1
+@table = global [1 x ptr] [ptr @add3], align 8
+@counter = external global i32
+
+declare i32 @add3(i32)
+declare i32 @puts(ptr)
+
+define i32 @main() {
+  %p = call i32 @puts(ptr @msg)
+  %f = load ptr, ptr @table
+  %r = call i32 %f(i32 1)
+  %c = load i32, ptr @counter
+  %s = add i32 %r, %c
+  ret i32 %s
+}
+
+#--- b.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = global i32 5, align 4
+@scratch = global [3 x i32] zeroinitializer, align 4
+
+define internal i32 @helper(i32 %x) {
+  %r = add i32 %x, 3
+  ret i32 %r
+}
+
+define i32 @add3(i32 %x) {
+  %h = call i32 @helper(i32 %x)
+  store i32 %h, ptr @scratch
+  ret i32 %h
+}
+
+#--- a64.ll
+target triple = "aarch64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  ret i32 42
+}

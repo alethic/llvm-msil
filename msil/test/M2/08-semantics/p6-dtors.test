@@ -5,14 +5,20 @@
 # no transcript. Global destructors need phase 3 (D26), and under LTO the
 # merged module's llvm.global_dtors is the backend's error, which msil-ld
 # prints, for each destructor; the link fails with exit status 1. A
-# transcript comes with P3-A. Plan 5.9.16 row p6-dtors (M14 lto, M20 obj).
+# transcript comes with P3-A. On the object path llvm.global_dtors stays an
+# error of code generation until P3-A (plan 5.8.10), so 'clang -c' of p6a.c,
+# the first source, already fails with the same text for its destructor, and
+# nothing is linked. Plan 5.9.16 row p6-dtors (M14 lto, M20 obj).
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/p6a.c %t/p6b.c
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld:" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld:" %}
 # LTO-DAG: msil-ld: error: {{.*}}global destructor @d150 is not supported for MSIL yet
 # LTO-DAG: msil-ld: error: {{.*}}global destructor @d120 is not supported for MSIL yet
 # LTO:     clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# OBJ:     {{^}}error: {{.*}}global destructor @d150 is not supported for MSIL yet{{$}}
 #--- p6a.c
 /* p6a.c: constructors and destructors with priorities across objects (representation) */
 int putchar(int);

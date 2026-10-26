@@ -677,7 +677,8 @@ TEST_F(MSILBCLMembers, TableMatchesTheDefFile) {
 
 // M18's list (plan M18.a (6), 5.11.7): System.ValueType, the owner types of
 // Phase 1's five members, and the five members; all Required, static and
-// mscorlib-safe.
+// mscorlib-safe. M18's entries come first, in this order (the order fixes the
+// BCLMemberId values); M20, M21 and M22 append theirs after them.
 TEST_F(MSILBCLMembers, HoldsPhaseOneEntries) {
   using cli::BCLMemberId;
   const struct {
@@ -724,9 +725,78 @@ TEST_F(MSILBCLMembers, HoldsPhaseOneEntries) {
     EXPECT_TRUE(Info.Strength == cli::BCLStrength::Required);
     EXPECT_TRUE(Info.MscorlibSafe);
   }
-  EXPECT_EQ(std::size(Types) + std::size(Methods),
-            cli::getAllBCLMembers().size());
+  // The table begins with M18's ten entries: the types, then the methods.
+  ArrayRef<cli::BCLMemberInfo> All = cli::getAllBCLMembers();
+  ASSERT_LE(std::size(Types) + std::size(Methods), All.size());
+  size_t Index = 0;
+  for (const auto &T : Types) {
+    SCOPED_TRACE(T.Name);
+    EXPECT_EQ(Index, static_cast<size_t>(T.Id));
+    EXPECT_TRUE(All[Index].Id == T.Id);
+    ++Index;
+  }
+  for (const auto &M : Methods) {
+    SCOPED_TRACE(M.Name);
+    EXPECT_EQ(Index, static_cast<size_t>(M.Id));
+    EXPECT_TRUE(All[Index].Id == M.Id);
+    ++Index;
+  }
   EXPECT_EQ("mscorlib", StringRef(cli::MscorlibAssembly));
+}
+
+// M20's entries (plan 5.11.7), appended after M18's: the data-import helper's
+// Marshal::StringToHGlobalUni(string) and EntryPointNotFoundException::.ctor
+// (string) with its type (5.10.12), and System.Object, the base type of the
+// spill classes (5.9.12); the methods Required, all mscorlib-safe.
+TEST_F(MSILBCLMembers, HoldsM20Entries) {
+  using cli::BCLMemberId;
+  const size_t NumM18Entries = 10;
+  const struct {
+    BCLMemberId Id;
+    const char *Namespace;
+    const char *Name;
+  } Types[] = {
+      {BCLMemberId::EntryPointNotFoundException, "System",
+       "EntryPointNotFoundException"},
+      {BCLMemberId::Object, "System", "Object"},
+  };
+  for (const auto &T : Types) {
+    const cli::BCLMemberInfo &Info = cli::getBCLMemberInfo(T.Id);
+    SCOPED_TRACE(T.Name);
+    EXPECT_LE(NumM18Entries, static_cast<size_t>(T.Id));
+    EXPECT_TRUE(Info.isType());
+    EXPECT_EQ(StringRef(T.Namespace), StringRef(Info.Namespace));
+    EXPECT_EQ(StringRef(T.Name), StringRef(Info.Name));
+    EXPECT_TRUE(Info.MscorlibSafe);
+  }
+
+  const struct {
+    BCLMemberId Id;
+    BCLMemberId Owner;
+    const char *Name;
+    bool HasThis;
+    const char *Return;
+    const char *Params;
+  } Methods[] = {
+      {BCLMemberId::Marshal_StringToHGlobalUni, BCLMemberId::Marshal,
+       "StringToHGlobalUni", false, "native int", "string"},
+      {BCLMemberId::EntryPointNotFoundException_ctor,
+       BCLMemberId::EntryPointNotFoundException, ".ctor", true, "void",
+       "string"},
+  };
+  for (const auto &M : Methods) {
+    const cli::BCLMemberInfo &Info = cli::getBCLMemberInfo(M.Id);
+    SCOPED_TRACE(M.Name);
+    EXPECT_LE(NumM18Entries, static_cast<size_t>(M.Id));
+    EXPECT_TRUE(Info.isMethod());
+    EXPECT_EQ(StringRef(M.Name), StringRef(Info.Name));
+    EXPECT_TRUE(M.Owner == Info.Owner);
+    EXPECT_EQ(M.HasThis, bool(Info.HasThis));
+    EXPECT_EQ(StringRef(M.Return), StringRef(Info.Return));
+    EXPECT_EQ(StringRef(M.Params), StringRef(Info.Params));
+    EXPECT_TRUE(Info.Strength == cli::BCLStrength::Required);
+    EXPECT_TRUE(Info.MscorlibSafe);
+  }
 }
 
 // With the scope mscorlib, the exact text Phase 1 printed (decision D10,

@@ -6,11 +6,13 @@ set(LLVM_LINK_COMPONENTS
 
 add_llvm_unittest(CLITests
   BlobTest.cpp
+  CallAdapterTest.cpp
   CLIFormatTest.cpp
   CustomAttributeTest.cpp
   HeapsTest.cpp
   ILBuilderTest.cpp
   ILDecoderTest.cpp
+  ImageLayoutTest.cpp
   LinkInfoTest.cpp
   MetadataBuilderTest.cpp
   MetadataReaderTest.cpp
@@ -23,6 +25,7 @@ add_llvm_unittest(CLITests
   SignatureTest.cpp
   SymbolTableTest.cpp
   TableSchemaTest.cpp
+  TrailerTest.cpp
   )
 
 target_link_libraries(CLITests PRIVATE LLVMTestingSupport)

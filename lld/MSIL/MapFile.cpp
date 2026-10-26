@@ -25,8 +25,26 @@
 //     DefinedFunction Global  libhelp.a(h1.o) helper
 //     NativeFunction  Global  ucrt.lib        puts
 //
-// M20 adds the sections Image:, Methods:, Fields: and Imports:, which show
-// the tokens and offsets of the PE.
+// From M20 the inputs include CIL objects, the symbols the definitions of CIL
+// objects and LTO objects and the linker-defined __start_X/__stop_X, and a
+// map of a PE adds the sections Image:, Methods:, Fields: and Imports:, which
+// show the offsets and tokens that exist only in the PE (writeResult() fills
+// outputMap):
+//
+//   Image: 32 bytes (20 initialized), align 16
+//     Offset     Size Align Section / input / symbol
+//          0        6     1 .rodata
+//          0        6     1   a.o:segment 0
+//          0        6     1     msg
+//   Methods:
+//     Token      Owner      Input          Symbol
+//     0x06000001 <Module>   a.o            main
+//   Fields:
+//     Token      Owner      Offset   Symbol
+//     0x04000001 <Module>        0   msg
+//   Imports:
+//     Token      Module!Entry                              Symbol
+//     0x06000004 api-ms-win-crt-stdio-l1-1-0.dll!puts      puts
 //
 //===----------------------------------------------------------------------===//
 
@@ -40,6 +58,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
@@ -51,19 +70,29 @@ using namespace llvm;
 using namespace lld;
 using namespace lld::msil;
 
+OutputMap lld::msil::outputMap;
+
 // Returns a list of all symbols that we want to print out: the definitions
-// and common symbols that won resolution, by input in load order and, within
-// an input, in the order of its symbol table; then the symbols bound to
-// native libraries, by library in load order and, within a library, in the
-// order of the symbol table.
+// and common symbols that won resolution, by input in load order (CIL objects
+// and bitcode files, then the objects that LTO wrote) and, within an input,
+// in the order of its symbol table; then the symbols bound to native
+// libraries, by library in load order and, within a library, in the order of
+// the symbol table; then __start_X and __stop_X.
 static std::vector<Symbol *> getSymbols() {
   std::vector<Symbol *> v;
   DenseSet<const Symbol *> seen;
-  for (BitcodeFile *file : ctx.bitcodeFiles)
+  auto addFile = [&](InputFile *file) {
     for (Symbol *sym : file->getSymbols())
-      if (sym && (sym->isDefined() || sym->isCommon()) &&
+      if (sym && !sym->isLocal() && (sym->isDefined() || sym->isCommon()) &&
           sym->getFile() == file && seen.insert(sym).second)
         v.push_back(sym);
+  };
+  for (InputFile *file : ctx.loadedFiles)
+    if (isa<BitcodeFile>(file) || isa<ObjFile>(file))
+      addFile(file);
+  for (ObjFile *file : ctx.objectFiles)
+    if (file->isLTO)
+      addFile(file);
 
   DenseMap<const InputFile *, std::vector<Symbol *>> natives;
   for (Symbol *sym : symtab->symbols())
@@ -74,7 +103,76 @@ static std::vector<Symbol *> getSymbols() {
     if (it != natives.end())
       append_range(v, it->second);
   }
+  for (SyntheticData *sym : ctx.sym.startStop)
+    if (seen.insert(sym).second)
+      v.push_back(sym);
   return v;
+}
+
+// Pads \p s on the left to \p width columns.
+static std::string rightJustify(StringRef s, size_t width) {
+  return std::string(width > s.size() ? width - s.size() : 0, ' ') + s.str();
+}
+
+static std::string toHex(uint32_t token) {
+  return "0x" + utohexstr(token, /*LowerCase=*/false, /*Width=*/8);
+}
+
+// The sections of a PE map (plan 5.9.14's example): the columns have the
+// example's minimum widths and grow with their contents.
+static void writePESections(raw_ostream &os) {
+  const OutputMap &map = outputMap;
+  os << "Image: " << map.totalSize << " bytes (" << map.initSize
+     << " initialized), align " << map.align << '\n';
+  os << rightJustify("Offset", 8) << ' ' << rightJustify("Size", 8) << ' '
+     << rightJustify("Align", 5) << " Section / input / symbol\n";
+  for (const OutputMap::ImageRow &row : map.image)
+    os << rightJustify(std::to_string(row.offset), 8) << ' '
+       << rightJustify(std::to_string(row.size), 8) << ' '
+       << rightJustify(std::to_string(row.align), 5) << ' '
+       << std::string(2 * row.depth, ' ') << row.name << '\n';
+
+  size_t ownerWidth = 10, inputWidth = 14;
+  for (const OutputMap::MethodRow &row : map.methods) {
+    ownerWidth = std::max(ownerWidth, row.owner.size());
+    inputWidth = std::max(inputWidth, row.input.size());
+  }
+  os << "Methods:\n";
+  os << "  " << left_justify("Token", 10) << ' '
+     << left_justify("Owner", ownerWidth) << ' '
+     << left_justify("Input", inputWidth) << " Symbol\n";
+  for (const OutputMap::MethodRow &row : map.methods)
+    os << "  " << toHex(row.token) << ' ' << left_justify(row.owner, ownerWidth)
+       << ' ' << left_justify(row.input, inputWidth) << ' ' << row.symbol
+       << '\n';
+
+  size_t fieldOwnerWidth = 10, offsetWidth = 6;
+  for (const OutputMap::FieldRow &row : map.fields) {
+    fieldOwnerWidth = std::max(fieldOwnerWidth, row.owner.size());
+    if (row.offset)
+      offsetWidth = std::max(offsetWidth, std::to_string(*row.offset).size());
+  }
+  os << "Fields:\n";
+  os << "  " << left_justify("Token", 10) << ' '
+     << left_justify("Owner", fieldOwnerWidth) << ' '
+     << rightJustify("Offset", offsetWidth) << "   Symbol\n";
+  for (const OutputMap::FieldRow &row : map.fields)
+    os << "  " << toHex(row.token) << ' '
+       << left_justify(row.owner, fieldOwnerWidth) << ' '
+       << rightJustify(row.offset ? std::to_string(*row.offset) : "-",
+                       offsetWidth)
+       << "   " << row.symbol << '\n';
+
+  size_t entryWidth = 41;
+  for (const OutputMap::ImportRow &row : map.imports)
+    entryWidth = std::max(entryWidth, row.moduleEntry.size());
+  os << "Imports:\n";
+  os << "  " << left_justify("Token", 10) << ' '
+     << left_justify("Module!Entry", entryWidth) << " Symbol\n";
+  for (const OutputMap::ImportRow &row : map.imports)
+    os << "  " << toHex(row.token) << ' '
+       << left_justify(row.moduleEntry, entryWidth) << ' ' << row.symbol
+       << '\n';
 }
 
 namespace {
@@ -119,6 +217,10 @@ static void writeMap(raw_ostream &os) {
     os << "  " << left_justify(row.kind, kindWidth) << ' '
        << left_justify(row.binding, bindingWidth) << ' '
        << left_justify(row.input, inputWidth) << ' ' << row.name << '\n';
+
+  // A PE has the sections of M20; the text of --lto-emit-asm does not.
+  if (!ctx.arg.ltoEmitAsm && outputMap.valid)
+    writePESections(os);
 }
 
 void lld::msil::writeMapFile() {

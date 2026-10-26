@@ -58,6 +58,18 @@ keeps __pycache__ out of the source tree) and checks:
     'note: --exclude <path> matches no input' for exactly the excludes
     that removed nothing (its --build holds empty stand-ins for clang, llc
     and split-file, which are never run).
+  * M20's options (plan 5.12.4). --skip-changed: compare(new, old, (),
+    skipped) on a new tree that lacks the four files of a skipped input and
+    has a changed .err of another one leaves the skipped files out, prints
+    'il-snapshot: --skip-changed: 4 files of 1 inputs changed against HEAD
+    were not compared' and still lists the .err (compare(new, old) lists the
+    skipped input's files as missing); changed_inputs(paths), with git()
+    replaced by a fake, asks 'git status --porcelain -z
+    --untracked-files=all -- <paths>' ('.' for the repository root) once and
+    returns a modified file, an untracked one and both names of a rename.
+    --llc-arg: Snapshot.compile(), with run() replaced so nothing runs,
+    passes each argument to llc after the optimization level and to clang
+    as '-mllvm <argument>' before the input.
 
 It prints 'ok: <case>' on stdout for each case that passes and, for one that
 fails, 'FAIL: <case>: <why>' with the output it saw on stderr. Exit status 0
@@ -747,6 +759,120 @@ def check_note(module, work):
     return errors, output
 
 
+# --------------------------------------------------------- M20 option cases
+
+# --skip-changed: compare(new, old, (), skipped) leaves out every file of a
+# skipped input on both sides (a baseline taken before the change still holds
+# them), counts them, and still lists every other difference;
+# changed_inputs() asks 'git status --porcelain -z --untracked-files=all --
+# <paths>' and takes both names of a rename; --llc-arg: the llc command gets
+# each argument, the clang command '-mllvm <argument>'.
+
+SKIP_LINE_RE = re.compile(
+    r"^il-snapshot: --skip-changed: (\d+) files of (\d+) inputs changed against "
+    r"HEAD were not compared$"
+)
+
+
+def check_skip_changed_compare(module, work, old):
+    # return-0.c is skipped: the new tree lacks its four files and the old
+    # tree's copies stay; dtors.ll is not skipped, and its changed .err is
+    # listed.
+    new = os.path.join(work, "skip-changed")
+    shutil.copytree(BASELINE, new)
+    for name in (WIN_O0_IL, WIN_O0_ERR, WIN_O2_IL, WIN_O2_ERR):
+        remove(new, name)
+    replace_last(new, LNX_ERR, b"@msil_dtor_fn", b"@msil_dtor_fx")
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        result = module.compare(new, old, (), ["msil/test/M1/00-smoke/return-0.c"])
+    output = out.getvalue()
+    errors = verify_compare(result, output, new, old, [LNX_ERR], [], [], [])
+    counts = [m.groups() for m in map(SKIP_LINE_RE.match, output.splitlines()) if m]
+    errors += differ("--skip-changed counts", [("4", "1")], counts)
+    # Without skipped inputs the same trees list return-0.c's files as missing.
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        module.compare(new, old)
+    if "missing: %s" % WIN_O0_IL not in out.getvalue():
+        errors.append("compare(new, old) did not list %s as missing" % WIN_O0_IL)
+    return errors, output
+
+
+class FakeStatus:
+    """git(args) answering 'status --porcelain -z --untracked-files=all --
+    <paths>' with a modification, an untracked file and a rename (whose
+    original name follows as its own NUL-terminated field)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        return (
+            b" M msil/test/M1/00-smoke/return-0.c\0"
+            b"?? msil/test/M1/01-int/new.c\0"
+            b"R  msil/test/M1/01-int/renamed.ll\0msil/test/M1/01-int/mul.ll\0"
+        )
+
+
+def check_skip_changed_git(module):
+    fake, real = FakeStatus(), module.git
+    module.git = fake
+    try:
+        got = module.changed_inputs(["msil/test/M1", ""])
+    finally:
+        module.git = real
+    errors = differ(
+        "changed inputs",
+        sorted(
+            [
+                "msil/test/M1/00-smoke/return-0.c",
+                "msil/test/M1/01-int/new.c",
+                "msil/test/M1/01-int/renamed.ll",
+                "msil/test/M1/01-int/mul.ll",
+            ]
+        ),
+        sorted(got),
+    )
+    status = ["status", "--porcelain", "-z", "--untracked-files=all", "--"]
+    errors += differ("git command", [status + ["msil/test/M1", "."]], fake.calls)
+    return errors, "changed %r\ncalls %r\n" % (sorted(got), fake.calls)
+
+
+def check_llc_arg(module, work):
+    # Snapshot.compile() builds the command; run() is replaced so that
+    # nothing runs.
+    args = types.SimpleNamespace(
+        build=os.path.join(work, "no-build"),
+        out=os.path.join(work, "llc-arg-out"),
+        timeout=1,
+        llc_args=["-msil-reloc-loop-threshold=1000000000", "-x"],
+    )
+    s = module.Snapshot(args)
+    seen = []
+    s.run = lambda cmd, cwd: (seen.append(cmd), (b"", "[exit 0]\n"))[1]
+    s.compile(("ll", work, "a.ll", "a.ll", "x86_64-pc-windows-msvc-msil", "O2"))
+    s.compile(("c", work, "a.c", "a.c", "x86_64-pc-windows-msvc-msil", "O0"))
+    errors = []
+    llc, clang = seen
+    if llc[3:5] != args.llc_args or llc[-3:] != ["a.ll", "-o", "-"]:
+        errors.append("llc command %r" % llc)
+    want = ["-mllvm", args.llc_args[0], "-mllvm", args.llc_args[1]]
+    if clang[-7:-3] != want or clang[-3:] != ["a.c", "-o", "-"] or "-S" not in clang:
+        errors.append("clang command %r" % clang)
+    return errors, "llc %r\nclang %r\n" % (llc, clang)
+
+
+def run_m20_cases(module, work, old, report):
+    errors, output = check_skip_changed_compare(module, work, old)
+    report("compare skip-changed", errors, output)
+    errors, output = check_skip_changed_git(module)
+    report("skip-changed git-status", errors, output)
+    errors, output = check_llc_arg(module, work)
+    report("llc-arg commands", errors, output)
+
+
 # --------------------------------------------------------------------- main
 
 
@@ -817,6 +943,7 @@ def main(argv):
         report(label, errors, output)
     errors, output = check_note(module, work)
     report("exclude note", errors, output)
+    run_m20_cases(module, work, old, report)
     return 1 if failed else 0
 
 

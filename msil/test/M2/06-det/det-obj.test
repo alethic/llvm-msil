@@ -1,0 +1,91 @@
+# Two object builds of one multi-TU program give identical CIL objects and identical PE images.
+# %{msil_det} builds the program twice, in two directories, from relative
+# paths with -fdebug-compilation-dir=., and compares every object and
+# msil-ld's image byte for byte (plan 5.12.4; recon tests-p2 3.7). msil-ld
+# decides only by input order (plan 5.9.12): no hash or pointer order may
+# reach the tokens, the row order, the renamed LOCAL members
+# ('<name><msil><n>'), the adapters ('<msil>adapt_<name>_<n>'), the data
+# image, the '<msil>relocs' table, the constructor list or the MVID and
+# timestamp, which come from the content hash. The program has all of them:
+# static functions and variables of the same name in three objects, weak and
+# strong definitions, common symbols, identical string literals (COMDATs on
+# windows-msvc), constructors of several priorities and a constructor-table
+# slot, more than 32 data relocations with unaligned sites, a named section
+# group, a K&R call that needs an adapter and P/Invokes from two objects.
+# The first RUN line is %{msil_det} (-O2), the second the same at -O0. Under
+# msil_pipeline=lto the same lines compare the bitcode and the LTO image.
+# Plan 5.12.5 (06-det: objects, archives and PE, M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/b.c %t/c.c
+# RUN: %{msil_det}
+# RUN: %msil_prog_build --det --level O0 --workdir %t.det0.d --src %{msil_srcs}
+#--- main.c
+#include "msil_test.h"
+static int state = 1;
+__attribute__((noinline)) static int helper(int x) { return x + state++; }
+__attribute__((weak)) int pick(void) { return 1; }
+int shared __attribute__((common));
+int b_fn(int), c_fn(int), knr();
+extern int (*const table[])(int);
+extern const char *const words[];
+#if defined(_WIN32)
+#define GROUP "detgrp$b"
+#else
+#define GROUP "detgrp"
+#endif
+static const int grouped_main __attribute__((used, section(GROUP))) = 1;
+__attribute__((constructor(150))) static void init_main(void) { shared += 1; }
+int main(void) {
+  int r = helper(1) + b_fn(2) + c_fn(3) + pick() + knr(4);
+  for (int i = 0; i < 4; ++i)
+    r += table[i](i);
+  for (int i = 0; i < 40; ++i)
+    put_str(words[i]);
+  put_str("shared literal");
+  put_i64(r + shared);
+  return r & 0xff;
+}
+#--- b.c
+int puts(const char *);
+static int state = 10;
+__attribute__((noinline)) static int helper(int x) { return x * state++; }
+int pick(void) { return 2; }
+int shared __attribute__((common));
+#if defined(_WIN32)
+#define GROUP "detgrp$a"
+#else
+#define GROUP "detgrp"
+#endif
+static const int grouped_b __attribute__((used, section(GROUP))) = 2;
+__attribute__((constructor(120))) static void init_b(void) { shared += 10; }
+int b_fn(int x) {
+  puts("shared literal");
+  return helper(x);
+}
+int knr(int a, int b) { return a + b; }
+#--- c.c
+int puts(const char *);
+static int state = 100;
+__attribute__((noinline)) static int helper(int x) { return x - state--; }
+int b_fn(int);
+int c_fn(int x) { return helper(x); }
+static int local_add(int x) { return x + 7; }
+int (*const table[])(int) = {b_fn, c_fn, local_add, helper};
+static void slot_fn(void) { puts("slot"); }
+#if defined(_WIN32)
+#pragma section(".CRT$XCU", read)
+__declspec(allocate(".CRT$XCU")) __attribute__((used)) static void (*p_slot)(void) = slot_fn;
+#else
+__attribute__((used, section(".init_array"))) static void (*p_slot)(void) = slot_fn;
+#endif
+struct __attribute__((packed)) wrec {
+  char c;
+  const char *w;
+};
+static struct wrec wrecs[2] = {{'x', "packed one"}, {'y', "packed two"}};
+const char *const words[40] = {
+    "w0",  "w1",  "w2",  "w3",  "w4",  "w5",  "w6",  "w7",  "w8",  "w9",
+    "w10", "w11", "w12", "w13", "w14", "w15", "w16", "w17", "w18", "w19",
+    "w20", "w21", "w22", "w23", "w24", "w25", "w26", "w27", "w28", "w29",
+    "w30", "w31", "w32", "w33", "w34", "w35", "w36", "w37", "w38", "w39"};
+__attribute__((constructor)) static void init_c(void) { puts(wrecs[1].w); }

@@ -1,0 +1,97 @@
+# Oracle O4 on the zoo: canon(msil-ld LTO PE, --no-gc-sections) == canon(ilasm(msil-ld --lto-emit-asm)).
+# The same bitcode, linked twice by msil-ld with the same LTO options: once
+# with object output, which msil-ld parses and writes as the PE (plan
+# 5.9.13, from M20), and once with --lto-emit-asm, whose whole-program text
+# ilasm assembles. Both run the same merged module through code generation,
+# in object mode and in linked-text mode, so the listings must be equal under
+# the four O4 normalizations (assembly-hash ilasm-params ilasm-initlocals
+# snan-quiet; plan 5.12.6): linked text and msil-ld bind the P/Invoke to puts
+# alike (Q13 module strings, assembly access). The program is
+# recon/p2/objfmt-binding-files/zoo/a.c and b.c (the matrix case zoo, plan
+# 5.9.16): a weak definition overridden by b.c's strong one, string literals
+# that windows-msvc emits as COMDATs in both objects, a common symbol in
+# both, constructors of priorities 100 and 200 in different objects,
+# pointers to the other object's functions and data in initialized data,
+# static functions and variables of the same name, and puts from both, with
+# two constructs left out: the weak undefined function maybe and the alias
+# alias_twice, whose whole-program forms are M12's (null with no field, and a
+# forwarding method; plan 5.8.10), which O4 cannot compare and which
+# 08-semantics/zoo.test runs; table[2] points to twice instead, so the
+# result stays 63. The composite runs the program against the native
+# transcript; the RUN lines after it link both sides at -O0 and -O2, compare
+# them and run both images against the same transcript. Plan 5.12.6 (O4,
+# M20).
+# REQUIRES: msil-cil-dump || msil-mdcanon
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+# DEFINE: %{equiv_o4} = %msil_equiv --oracle O4 --test %s --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet
+# RUN: mkdir -p %t/O0/pe %t/O0/il %t/O2/pe %t/O2/il
+# RUN: %clang_msil %{msil_cflags} -O0 -flto -c %t/a.c -o %t/O0/a.o
+# RUN: %clang_msil %{msil_cflags} -O0 -flto -c %t/b.c -o %t/O0/b.o
+# RUN: %clang_msil %{msil_ldflags} -O0 -Wl,--no-gc-sections %t/O0/a.o %t/O0/b.o -o %t/O0/pe/prog.exe
+# RUN: %clang_msil %{msil_ldflags} -O0 -Wl,--lto-emit-asm %t/O0/a.o %t/O0/b.o -o %t/O0/il/prog.il
+# RUN: %ilasm -exe -output=%t/O0/il/prog.exe %t/O0/il/prog.il
+# RUN: %{equiv_o4} %t/O0/pe/prog.exe %t/O0/il/prog.exe
+# RUN: %msil_verify %t/O0/pe/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O0/pe.out %t/O0/pe/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O0/il.out %t/O0/il/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -flto -c %t/a.c -o %t/O2/a.o
+# RUN: %clang_msil %{msil_cflags} -O2 -flto -c %t/b.c -o %t/O2/b.o
+# RUN: %clang_msil %{msil_ldflags} -O2 -Wl,--no-gc-sections %t/O2/a.o %t/O2/b.o -o %t/O2/pe/prog.exe
+# RUN: %clang_msil %{msil_ldflags} -O2 -Wl,--lto-emit-asm %t/O2/a.o %t/O2/b.o -o %t/O2/il/prog.il
+# RUN: %ilasm -exe -output=%t/O2/il/prog.exe %t/O2/il/prog.il
+# RUN: %{equiv_o4} %t/O2/pe/prog.exe %t/O2/il/prog.exe
+# RUN: %msil_verify %t/O2/pe/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O2/pe.out %t/O2/pe/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O2/il.out %t/O2/il/prog.exe
+#--- a.c
+/* a.c: caller side of the binding experiment, without the weak undefined
+   function and the alias */
+int puts(const char *);
+extern int counter;                 /* strong global defined in b.c */
+int add3(int x);                    /* strong function in b.c */
+int twice(int x);
+int b_extra(void);
+int common_c __attribute__((common)); /* tentative definition (common) */
+__attribute__((noinline)) static int helper(int x) { return x + 100; } /* local, same name as b.c's */
+static int local_g = 7;             /* local data, same name as b.c's */
+typedef int (*fn_t)(int);
+fn_t table[3] = { add3, twice, twice };  /* function pointers to another TU in data */
+int *pcounter = &counter;           /* data pointer to another TU's global */
+const char *msg = "hello";          /* string literal (linkonce_odr comdat on msvc) */
+__attribute__((weak)) int weakfn(void) { return 1; }   /* overridden by b.c */
+static volatile int va = 10;
+__attribute__((constructor(200))) static void ctor_a(void) { counter += va; }
+int main(void) {
+  puts("main");                          /* native import from two objects */
+  local_g++;
+  int r = 0;
+  r += table[0](1);                      /* add3(1) = 36 */
+  r += table[1](2);                      /* 4 */
+  r += table[2](3);                      /* 6 */
+  r += *pcounter;                        /* 21 */
+  r += helper(local_g);                  /* 108 */
+  r += weakfn() * 1000;                  /* strong b.c wins: 2000 */
+  common_c += 1; r += common_c;          /* one common_c: 1 */
+  r += (table[1] == table[2]) ? 0 : 7;   /* the same function: 0 */
+  r += msg[0];                           /* 104 */
+  r += b_extra();                        /* 1 * 1000 + 'o' = 1111 */
+  return r & 0xff;                       /* 3391 & 255 = 63 */
+}
+#--- b.c
+/* b.c: callee side of the binding experiment, without the alias */
+int puts(const char *);
+int counter = 5;
+int common_c __attribute__((common)); /* tentative definition again */
+__attribute__((noinline)) static int helper(int x) { return x * 3; }
+static int local_g = 11;
+const char *msg_b = "hello";        /* same literal: one copy on msvc (comdat) */
+int add3(int x) { puts("add3"); counter += 1; local_g++; return helper(x) + counter + local_g; }
+int twice(int x) { return 2 * x; }
+int weakfn(void) { return 2; }      /* strong: wins over a.c's weak */
+static volatile int vb = 2;
+__attribute__((constructor(100))) static void ctor_b(void) { counter *= vb; }
+static volatile int idx = 4;
+/* references, from code, a common symbol and a COMDAT string that a.c's copies win */
+int b_extra(void) { return common_c * 1000 + "hello"[idx]; }

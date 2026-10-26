@@ -223,6 +223,7 @@ TEST(CLIMSILLinkTest, RecordEnums) {
   EXPECT_EQ(val(NoPrototype), 0x1u);
   EXPECT_EQ(val(VarArg), 0x2u);
   EXPECT_EQ(val(Sret), 0x4u);
+  EXPECT_EQ(val(NativeIncompatible), 0x8u);
 
   static_assert(
       std::is_same_v<std::underlying_type_t<LinkerOptionKind>, uint8_t>,

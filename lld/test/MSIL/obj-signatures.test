@@ -1,0 +1,426 @@
+## Call-site signature checks and adapters (ImplementationPlan.md 5.9.8, Q8;
+## texts in wasm-ld's reportFunctionSignatureMismatch shape, 5.9.14). Every
+## site that msil-ld binds by name to a definition is compared with it (IL
+## signature plus SIGNATURES descriptors): a MemberRef on '<msil>Symbols', an
+## import stub resolved to a definition (stubbed, import_name only), and the
+## MethodDef site of a WEAK definition that a GLOBAL one overrides. Each row
+## of 5.9.8's table:
+## - extra trailing arguments: the adapter drops them; missing trailing
+##   arguments: it passes zero; a native int argument for an int32
+##   parameter: conv.i4; an int32 argument for a native int parameter:
+##   conv.i; a call that expects a result of a void function: it returns
+##   zero; a call that discards a result: it pops it; an int32 versus native
+##   int result: conv.i4 / conv.i. Each is a warning
+##     function signature mismatch: <f>
+##     >>> defined as <def shape> in <file>
+##     >>> called as <call shape> in <file>
+##     >>> adapter: <what it does>
+##   and the call names 'assembly static <msil>adapt_<f>_<n>' with the
+##   call's signature (n from 0 per definition in first-use order); sites
+##   with the same definition, call signature and descriptors share one;
+## - integer versus floating point and float32 versus float64, in a
+##   parameter or the result, SRET on one side only and BYVAL of another
+##   size are errors, each with '>>> <why it cannot be adapted>' last, and
+##   VARARG on either side is 'variadic functions are not supported yet';
+## - a WEAK definition overridden by a GLOBAL one with another signature:
+##   'called as' gives the losing copy's signature and object; adapted with
+##   conv.i and conv.i4 (native int on x86_64), or an error for double.
+## The plan fixes the shapes of the first three lines (IL value classes
+## int32, native int, float32, float64, void), not the wording of the last.
+## Calls through function pointers (calli) are not checked.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj def.ll -o def.o
+# RUN: llc -filetype=obj call.ll -o call.o
+# RUN: llc -filetype=obj call3.ll -o call3.o
+# RUN: llc -filetype=obj edef.ll -o edef.o
+# RUN: llc -filetype=obj ecall.ll -o ecall.o
+# RUN: llc -filetype=obj wk.ll -o wk.o
+# RUN: llc -filetype=obj st.ll -o st.o
+# RUN: llc -filetype=obj stf.ll -o stf.o
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## Adapters, one warning per mismatching definition and call signature.
+# RUN: msil-ld def.o call.o -o adapt.exe > adapt.txt 2>&1
+# DEFINE: %{warn} = FileCheck %s --check-prefix=WARN --input-file=adapt.txt -DOBJ=call.o
+# RUN: %{warn} -DNAME=extra "-DDEF=int32(int32)" "-DCALL=int32(int32, int32)"
+# RUN: %{warn} -DNAME=missing "-DDEF=int32(int32, int32)" "-DCALL=int32(int32)"
+# RUN: %{warn} -DNAME=narrow "-DDEF=int32(int32)" "-DCALL=int32(native int)"
+# RUN: %{warn} -DNAME=widen "-DDEF=int32(native int)" "-DCALL=int32(int32)"
+# RUN: %{warn} -DNAME=res_narrow "-DDEF=native int(int32)" "-DCALL=int32(int32)"
+# RUN: %{warn} -DNAME=res_widen "-DDEF=int32(int32)" "-DCALL=native int(int32)"
+# RUN: %{warn} -DNAME=noresult "-DDEF=void(int32)" "-DCALL=int32(int32)"
+# RUN: %{warn} -DNAME=dropresult "-DDEF=int32(int32)" "-DCALL=void(int32)"
+# RUN: %{warn} -DNAME=stubbed "-DDEF=int32(int32)" "-DCALL=int32(int32, int32)"
+# RUN: FileCheck %s --check-prefix=WCOUNT --input-file=adapt.txt
+# RUN: FileCheck %s --check-prefix=NOERR %{crash} --input-file=adapt.txt
+
+# WARN:      {{^}}msil-ld: warning: function signature mismatch: [[NAME]]{{$}}
+# WARN-NEXT: {{^}}>>> defined as [[DEF]] in def.o{{$}}
+# WARN-NEXT: {{^}}>>> called as [[CALL]] in [[OBJ]]{{$}}
+# WARN-NEXT: {{^}}>>> adapter: {{.+}}
+
+# WCOUNT-COUNT-9: {{^}}msil-ld: warning: function signature mismatch:
+# WCOUNT-NOT:     function signature mismatch
+# NOERR-NOT:      error:
+
+# RUN: llvm-cil-dump adapt.exe > adapt-canon.txt
+# RUN: FileCheck %s --check-prefix=ADAPT --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=adapt_extra_1 --input-file=adapt-canon.txt
+
+# ADAPT:      {{^}}  .method '<msil>adapt_dropresult_0' void(int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT-NEXT: {{^}}    .maxstack 1{{$}}
+# ADAPT-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'dropresult'{{$}}
+# ADAPT-NEXT: {{^}}    L2: pop{{$}}
+# ADAPT-NEXT: {{^}}    L3: ret{{$}}
+# ADAPT-NEXT: {{^}}  .method '<msil>adapt_extra_0' int32(int32, int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT-NEXT: {{^}}    .maxstack 1{{$}}
+# ADAPT-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'extra'{{$}}
+# ADAPT-NEXT: {{^}}    L2: ret{{$}}
+# ADAPT-NEXT: {{^}}  .method '<msil>adapt_missing_0' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT-NEXT: {{^}}    .maxstack 2{{$}}
+# ADAPT-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT-NEXT: {{^}}    L1: ldc.i4.0{{$}}
+# ADAPT-NEXT: {{^}}    L2: call int32(int32, int32) '<Module>'::'missing'{{$}}
+# ADAPT-NEXT: {{^}}    L3: ret{{$}}
+# ADAPT-NEXT: {{^}}  .method '<msil>adapt_narrow_0' int32(native int) flags=0x0013 impl=0x0000{{$}}
+# ADAPT-NEXT: {{^}}    .maxstack 1{{$}}
+# ADAPT-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT-NEXT: {{^}}    L1: conv.i4{{$}}
+# ADAPT-NEXT: {{^}}    L2: call int32(int32) '<Module>'::'narrow'{{$}}
+# ADAPT-NEXT: {{^}}    L3: ret{{$}}
+# ADAPT-NEXT: {{^}}  .method '<msil>adapt_noresult_0' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT-NEXT: {{^}}    .maxstack 1{{$}}
+# ADAPT-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT-NEXT: {{^}}    L1: call void(int32) '<Module>'::'noresult'{{$}}
+# ADAPT-NEXT: {{^}}    L2: ldc.i4.0{{$}}
+# ADAPT-NEXT: {{^}}    L3: ret{{$}}
+# ADAPT-NEXT: {{^}}  .method '<msil>adapt_res_narrow_0' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT-NEXT: {{^}}    .maxstack 1{{$}}
+# ADAPT-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT-NEXT: {{^}}    L1: call native int(int32) '<Module>'::'res_narrow'{{$}}
+# ADAPT-NEXT: {{^}}    L2: conv.i4{{$}}
+# ADAPT-NEXT: {{^}}    L3: ret{{$}}
+# ADAPT-NEXT: {{^}}  .method '<msil>adapt_res_widen_0' native int(int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT-NEXT: {{^}}    .maxstack 1{{$}}
+# ADAPT-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'res_widen'{{$}}
+# ADAPT-NEXT: {{^}}    L2: conv.i{{$}}
+# ADAPT-NEXT: {{^}}    L3: ret{{$}}
+# ADAPT-NEXT: {{^}}  .method '<msil>adapt_stubbed_0' int32(int32, int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT-NEXT: {{^}}    .maxstack 1{{$}}
+# ADAPT-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'stubbed'{{$}}
+# ADAPT-NEXT: {{^}}    L2: ret{{$}}
+# ADAPT-NEXT: {{^}}  .method '<msil>adapt_widen_0' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT-NEXT: {{^}}    .maxstack 1{{$}}
+# ADAPT-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT-NEXT: {{^}}    L1: conv.i{{$}}
+# ADAPT-NEXT: {{^}}    L2: call int32(native int) '<Module>'::'widen'{{$}}
+# ADAPT-NEXT: {{^}}    L3: ret{{$}}
+# ADAPT:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# ADAPT:      {{^}}    L2: call int32(int32, int32) '<Module>'::'<msil>adapt_extra_0'{{$}}
+# ADAPT:      {{^}}    L6: call int32(int32, int32) '<Module>'::'<msil>adapt_extra_0'{{$}}
+# ADAPT:      {{^}}    L9: call int32(int32) '<Module>'::'<msil>adapt_missing_0'{{$}}
+# ADAPT:      {{^}}    L13: call int32(native int) '<Module>'::'<msil>adapt_narrow_0'{{$}}
+# ADAPT:      {{^}}    L16: call int32(int32) '<Module>'::'<msil>adapt_widen_0'{{$}}
+# ADAPT:      {{^}}    L19: call int32(int32) '<Module>'::'<msil>adapt_res_narrow_0'{{$}}
+# ADAPT:      {{^}}    L22: call native int(int32) '<Module>'::'<msil>adapt_res_widen_0'{{$}}
+# ADAPT:      {{^}}    L25: call int32(int32) '<Module>'::'<msil>adapt_noresult_0'{{$}}
+# ADAPT:      {{^}}    L28: call void(int32) '<Module>'::'<msil>adapt_dropresult_0'{{$}}
+# ADAPT:      {{^}}    L47: call int32(int32, int32) '<Module>'::'<msil>adapt_stubbed_0'{{$}}
+
+## Another call signature for the same definition gets the next adapter
+## and its own warning (call3.o's site is live with --no-gc-sections).
+# RUN: msil-ld --no-gc-sections def.o call.o call3.o -o adapt3.exe > adapt3.txt 2>&1
+# RUN: FileCheck %s --check-prefix=CALL3 --input-file=adapt3.txt
+# RUN: FileCheck %s --check-prefix=WCOUNT3 --input-file=adapt3.txt
+# RUN: llvm-cil-dump adapt3.exe | FileCheck %s --check-prefix=ADAPT3
+# CALL3:          {{^}}>>> called as int32(int32, int32, int32) in call3.o{{$}}
+# WCOUNT3-COUNT-10: {{^}}msil-ld: warning: function signature mismatch:
+# WCOUNT3-NOT:      function signature mismatch
+# ADAPT3:      {{^}}  .method '<msil>adapt_extra_0' int32(int32, int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT3:      {{^}}  .method '<msil>adapt_extra_1' int32(int32, int32, int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT3-NEXT: {{^}}    .maxstack 1{{$}}
+# ADAPT3-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT3-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'extra'{{$}}
+# ADAPT3-NEXT: {{^}}    L2: ret{{$}}
+# ADAPT3:      {{^}}  .method 'third' int32() flags=0x0016 impl=0x0000{{$}}
+# ADAPT3:      {{^}}    L{{[0-9]+}}: call int32(int32, int32, int32) '<Module>'::'<msil>adapt_extra_1'{{$}}
+
+## Errors: exit status 1, one block per site.
+# RUN: not msil-ld edef.o ecall.o -o x.exe > errors.txt 2>&1
+# DEFINE: %{error} = FileCheck %s --check-prefix=ERROR --input-file=errors.txt
+# RUN: %{error} -DNAME=fi "-DDEF=int32(float32)" "-DCALL=int32(int32)"
+# RUN: %{error} -DNAME=ff "-DDEF=int32(float64)" "-DCALL=int32(float32)"
+# RUN: %{error} -DNAME=rf "-DDEF=float32(int32)" "-DCALL=int32(int32)"
+# RUN: FileCheck %s --check-prefix=ERROR-SR --input-file=errors.txt
+# RUN: FileCheck %s --check-prefix=ERROR-BV --input-file=errors.txt
+# RUN: FileCheck %s --check-prefix=ECOUNT %{crash} --input-file=errors.txt
+
+# ERROR:      {{^}}msil-ld: error: function signature mismatch: [[NAME]]{{$}}
+# ERROR-NEXT: {{^}}>>> defined as [[DEF]] in edef.o{{$}}
+# ERROR-NEXT: {{^}}>>> called as [[CALL]] in ecall.o{{$}}
+# ERROR-NEXT: {{^}}>>> {{.+}}
+# ERROR-SR:      {{^}}msil-ld: error: function signature mismatch: sr{{$}}
+# ERROR-SR-NEXT: {{^}}>>> defined as {{.+}} in edef.o{{$}}
+# ERROR-SR-NEXT: {{^}}>>> called as {{.+}} in ecall.o{{$}}
+# ERROR-SR-NEXT: {{^}}>>> {{.+}}
+# ERROR-BV:      {{^}}msil-ld: error: function signature mismatch: bv{{$}}
+# ERROR-BV-NEXT: {{^}}>>> defined as {{.+}} in edef.o{{$}}
+# ERROR-BV-NEXT: {{^}}>>> called as {{.+}} in ecall.o{{$}}
+# ERROR-BV-NEXT: {{^}}>>> {{.+}}
+# ECOUNT-COUNT-5: {{^}}msil-ld: error: function signature mismatch:
+# ECOUNT-NOT:     {{error:|warning:}}
+
+## VARARG on either side is an error (P3-B). Phase 2 writers never set it,
+## so kr-va.il (also in obj-pinvoke.test) is llc's object-form text of a K&R
+## call 'printf(fmt)' whose SIGNATURES entry was patched by hand from
+## NO_PROTOTYPE to VARARG with one fixed parameter; printf-def.o defines
+## printf.
+# RUN: llc -filetype=obj printf-def.ll -o printf-def.o
+# RUN: %if ilasm %{ %ilasm-verify -output=kr-va.o kr-va.il %}
+# RUN: %if ilasm %{ not msil-ld kr-va.o printf-def.o -o x.exe 2>&1 | FileCheck %s --check-prefix=VARARG %{crash} %}
+# VARARG: {{^}}msil-ld: error: {{.*}}variadic functions are not supported yet
+
+## A WEAK definition overridden by a GLOBAL one with another signature:
+## the losing copy's call in its own object is adapted (conv.i, then
+## conv.i4), or an error for an integer versus floating-point definition.
+# RUN: msil-ld wk.o st.o -o weak.exe > weak.txt 2>&1
+# RUN: FileCheck %s --check-prefix=WEAK-WARN --implicit-check-not=error: %{crash} --input-file=weak.txt
+# RUN: llvm-cil-dump weak.exe | FileCheck %s --check-prefix=WEAK --implicit-check-not=".method 'g'"
+# WEAK-WARN:      {{^}}msil-ld: warning: function signature mismatch: g{{$}}
+# WEAK-WARN-NEXT: {{^}}>>> defined as native int(native int) in st.o{{$}}
+# WEAK-WARN-NEXT: {{^}}>>> called as int32(int32) in wk.o{{$}}
+# WEAK-WARN-NEXT: {{^}}>>> adapter: {{.+}}
+# WEAK:      {{^}}  .method '<msil>adapt_g_0' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# WEAK-NEXT: {{^}}    .maxstack 1{{$}}
+# WEAK-NEXT: {{^}}    L0: ldarg.0{{$}}
+# WEAK-NEXT: {{^}}    L1: conv.i{{$}}
+# WEAK-NEXT: {{^}}    L2: call native int(native int) '<Module>'::'g'{{$}}
+# WEAK-NEXT: {{^}}    L3: conv.i4{{$}}
+# WEAK-NEXT: {{^}}    L4: ret{{$}}
+# WEAK-NEXT: {{^}}  .method 'g' native int(native int) flags=0x0016 impl=0x0000{{$}}
+# WEAK-NEXT: {{^}}    .maxstack 2{{$}}
+# WEAK:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# WEAK-NEXT: {{^}}    .maxstack 1{{$}}
+# WEAK-NEXT: {{^}}    L0: ldc.i4.5{{$}}
+# WEAK-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'<msil>adapt_g_0'{{$}}
+# WEAK-NEXT: {{^}}    L2: ret{{$}}
+
+# RUN: not msil-ld wk.o stf.o -o x.exe 2>&1 | FileCheck %s --check-prefix=WEAK-ERROR %{crash}
+# WEAK-ERROR:      {{^}}msil-ld: error: function signature mismatch: g{{$}}
+# WEAK-ERROR-NEXT: {{^}}>>> defined as float64(float64) in stf.o{{$}}
+# WEAK-ERROR-NEXT: {{^}}>>> called as int32(int32) in wk.o{{$}}
+# WEAK-ERROR-NEXT: {{^}}>>> {{.+}}
+
+#--- def.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @extra(i32 %a) {
+  ret i32 %a
+}
+
+define i32 @missing(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+define i32 @narrow(i32 %a) {
+  ret i32 %a
+}
+
+define i32 @widen(i64 %a) {
+  %r = trunc i64 %a to i32
+  ret i32 %r
+}
+
+define i64 @res_narrow(i32 %a) {
+  %r = sext i32 %a to i64
+  ret i64 %r
+}
+
+define i32 @res_widen(i32 %a) {
+  ret i32 %a
+}
+
+define void @noresult(i32 %a) {
+  ret void
+}
+
+define i32 @dropresult(i32 %a) {
+  ret i32 %a
+}
+
+define i32 @stubbed(i32 %a) {
+  ret i32 %a
+}
+
+#--- call.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @extra(i32, i32)
+declare i32 @missing(i32)
+declare i32 @narrow(i64)
+declare i32 @widen(i32)
+declare i32 @res_narrow(i32)
+declare i64 @res_widen(i32)
+declare i32 @noresult(i32)
+declare void @dropresult(i32)
+declare i32 @stubbed(i32, i32) #0
+
+define i32 @main() {
+  %a = call i32 @extra(i32 1, i32 2)
+  %a2 = call i32 @extra(i32 3, i32 4)
+  %b = call i32 @missing(i32 3)
+  %c = call i32 @narrow(i64 4)
+  %d = call i32 @widen(i32 5)
+  %e = call i32 @res_narrow(i32 6)
+  %f = call i64 @res_widen(i32 7)
+  %f32 = trunc i64 %f to i32
+  %g = call i32 @noresult(i32 8)
+  call void @dropresult(i32 9)
+  %h = call i32 @stubbed(i32 10, i32 11)
+  %s1 = add i32 %a, %a2
+  %s2 = add i32 %s1, %b
+  %s3 = add i32 %s2, %c
+  %s4 = add i32 %s3, %d
+  %s5 = add i32 %s4, %e
+  %s6 = add i32 %s5, %f32
+  %s7 = add i32 %s6, %g
+  %s8 = add i32 %s7, %h
+  ret i32 %s8
+}
+
+attributes #0 = { "msil-import-name"="stubbed" }
+
+#--- call3.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @extra(i32, i32, i32)
+
+define i32 @third() {
+  %r = call i32 @extra(i32 1, i32 2, i32 3)
+  ret i32 %r
+}
+
+#--- edef.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+%big = type { i64, i64, i64 }
+
+define i32 @fi(float %a) {
+  %r = fptosi float %a to i32
+  ret i32 %r
+}
+
+define i32 @ff(double %a) {
+  %r = fptosi double %a to i32
+  ret i32 %r
+}
+
+define float @rf(i32 %a) {
+  %r = sitofp i32 %a to float
+  ret float %r
+}
+
+define void @sr(ptr sret(%big) align 8 %out, i32 %x) {
+  store i64 1, ptr %out
+  ret void
+}
+
+define i32 @bv(ptr byval([16 x i8]) align 8 %p) {
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+
+#--- ecall.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @fi(i32)
+declare i32 @ff(float)
+declare i32 @rf(i32)
+declare void @sr(ptr, i32)
+declare i32 @bv(ptr byval([8 x i8]) align 8)
+
+define i32 @main() {
+  %buf = alloca [24 x i8], align 8
+  %small = alloca [8 x i8], align 8
+  %a = call i32 @fi(i32 1)
+  %b = call i32 @ff(float 2.0)
+  %c = call i32 @rf(i32 3)
+  call void @sr(ptr %buf, i32 4)
+  %d = call i32 @bv(ptr byval([8 x i8]) align 8 %small)
+  %s1 = add i32 %a, %b
+  %s2 = add i32 %s1, %c
+  %s3 = add i32 %s2, %d
+  ret i32 %s3
+}
+
+#--- wk.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define weak i32 @g(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @main() {
+  %r = call i32 @g(i32 5)
+  ret i32 %r
+}
+
+#--- st.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i64 @g(i64 %x) {
+  %r = mul i64 %x, 3
+  ret i64 %r
+}
+
+#--- stf.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define double @g(double %x) {
+  %r = fmul double %x, 3.0
+  ret double %r
+}
+
+#--- printf-def.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @printf(ptr %f) {
+  ret i32 0
+}
+
+#--- kr-va.il
+// MSIL object generated by LLVM (llc -msil-object-form of a K&R call
+// 'printf(fmt)'); the record's SIGNATURES entry for the printf MemberRef was
+// changed by hand from NO_PROTOTYPE (flags 01) to VARARG with FixedParams 1
+// (flags 02, then 01), so the subsection grew from 07 to 08 bytes and the
+// record from 0x6A to 0x6B.
+// source_filename = "kr.ll"
+// target triple   = "x86_64-unknown-linux-gnu-msil"
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+
+.method public static int32 'main'() cil managed
+{
+  .maxstack 2
+  ldsfld native int 'fmt'
+  call int32 [msil.extern]'<msil>Symbols'::'printf'(native int)
+  pop
+  ldc.i4.0
+  ret
+} // end of method 'main'
+
+.field assembly static initonly native int 'fmt'
+
+.module 'kr.ll'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = ( 01 00 6B 00 00 00 4D 53 4C 4B 01 00 00 1D 78 38 36 5F 36 34 2D 75 6E 6B 6E 6F 77 6E 2D 6C 69 6E 75 78 2D 67 6E 75 2D 6D 73 69 6C 01 00 00 08 08 04 08 01 22 03 01 02 03 66 6D 74 01 00 00 04 00 00 03 00 10 06 70 72 69 6E 74 66 00 00 04 6D 61 69 6E 01 00 00 06 02 0F 01 07 2E 72 6F 64 61 74 61 11 00 03 78 0A 00 06 08 01 01 00 00 0A 02 01 00 00 00 )

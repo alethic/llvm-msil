@@ -4,16 +4,23 @@
 # first bytes of the function's code, undefined behaviour with no transcript.
 # msil-ld checks the kind after each insertion (plan 5.9.5, wasm-ld's rule:
 # also for a reference) and stops with 5.9.14's text, the file of the
-# existing symbol first; the link fails with exit status 1.
+# existing symbol first; the link fails with exit status 1. The object link
+# reports the same text for the symbol tables of the two objects.
 # Plan 5.9.16 row type-mismatch (M14 lto, M20 obj).
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/value.c %t/main.c
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
 # LTO:      {{^}}msil-ld: error: symbol type mismatch: value{{$}}
 # LTO-NEXT: {{^}}>>> defined as function in {{.*}}value.o{{$}}
 # LTO-NEXT: {{^}}>>> defined as data in {{.*}}main.o{{$}}
 # LTO:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# OBJ:      {{^}}msil-ld: error: symbol type mismatch: value{{$}}
+# OBJ-NEXT: {{^}}>>> defined as function in {{.*}}value.o{{$}}
+# OBJ-NEXT: {{^}}>>> defined as data in {{.*}}main.o{{$}}
+# OBJ:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
 #--- value.c
 int value(void) { return 7; }
 #--- main.c

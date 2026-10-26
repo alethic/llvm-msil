@@ -3,11 +3,12 @@
 // an ECMA-335 netmodule that carries the link-info record (5.8.2, 5.8.8) and
 // a COFF symbol view (5.8.6). That is one 'cc1 -emit-obj' job through the
 // integrated assembler (the MSIL MC object writer), with no assemble job, no
-// bitcode and no link. MSILToolChain::getLTOMode returns LTOK_None for -c
-// and /c without an explicit -flto, -flto= or -fno-lto, so -fno-lto -c
+// bitcode and no link. Without an explicit -flto or -flto= there is no LTO
+// (M19 made -c and /c write objects; M20 deleted MSILToolChain::getLTOMode,
+// so the toolchain's default, no LTO, applies everywhere), and -fno-lto -c
 // writes an object too, while -flto -c and -emit-llvm -c still write LLVM
-// bitcode. A compile-and-link keeps M14's bitcode default and plans msil-ld
-// until M20, because msil-ld reads CIL objects only from M20 (5.10.5).
+// bitcode. From M20 a compile-and-link compiles CIL objects the same way and
+// msil-ld links them (5.10.5; M14-M19 compiled bitcode for the link).
 // There is no MSIL assembly parser, so ILAsm text cannot be assembled:
 // -save-temps -c, -c -x assembler and clang-cl /FA and /Fa report
 // err_drv_msil_ilasm_input, and with -fno-integrated-as there is no
@@ -104,9 +105,10 @@
 // ILASM: error: assembling ILAsm text is not supported for MSIL target 'x86_64-unknown-linux-gnu-msil'; compile C or LLVM IR sources instead, or use -S to write ILAsm text
 
 // The options that keep the assemble step from being collapsed (clang-cl /FA
-// and /Fa<file>, -via-file-asm) also turn the bitcode default off without
-// -flto, -flto= or -fno-lto (5.10.5's getLTOMode rule, section 12 row of
-// 2026-10-22), so the assemble step stays and reports the same error.
+// and /Fa<file>, -via-file-asm) keep it without -flto or -flto= (5.10.5;
+// there is no LTO default from M20, and M14-M19's getLTOMode returned no LTO
+// for them, section 12 row of 2026-10-22), so the assemble step stays and
+// reports the same error.
 // DEFINE: %{no_bc} = --implicit-check-not="PLEASE submit" --implicit-check-not=-emit-llvm-bc \
 // DEFINE:   --implicit-check-not=-emit-obj
 // RUN: not %clang_cl -### --target=x86_64-pc-windows-msvc-msil /FA /c -- %s 2>&1 \
@@ -132,18 +134,21 @@
 // RUN:   | FileCheck --check-prefix=NO-AS %{no_as} %s
 // NO-AS: error: there is no external assembler that can be used on this platform
 
-// A link without -c still compiles to bitcode and plans msil-ld with LTO
-// until M20 (msil-link.c and msil-lto.c check the link jobs), also with
-// -fno-integrated-as, and never runs 'ld'.
+// A link without -c compiles a CIL object ('cc1 -emit-obj') and plans
+// msil-ld from M20 (msil-link.c and msil-lto.c check the link jobs), never
+// bitcode, LTO or 'ld'. As for -c, -fno-integrated-as has no assembler, and
+// -save-temps keeps the assemble step, which cannot assemble ILAsm text: the
+// errors above, now also for a compile-and-link.
 // RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil %s -o %t.dll 2>&1 \
 // RUN:   | FileCheck --check-prefix=LINK --implicit-check-not=error: --implicit-check-not='"ld"' \
-// RUN:     --implicit-check-not=-emit-obj %s
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as %s -o %t.dll 2>&1 \
-// RUN:   | FileCheck --check-prefix=LINK --implicit-check-not=error: --implicit-check-not='"ld"' \
-// RUN:     --implicit-check-not='"as"' --implicit-check-not=-emit-obj %s
-// LINK: "-cc1" "-triple" "x86_64-unknown-linux-gnu-msil" "-emit-llvm-bc" "-flto=full"
+// RUN:     --implicit-check-not=-emit-llvm-bc --implicit-check-not=-flto= --implicit-check-not=--lto-O %s
+// LINK: "-cc1" "-triple" "x86_64-unknown-linux-gnu-msil" "-emit-obj"
 // LINK: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-gnu-msil"
 // LINK-SAME: "-o" "{{[^"]*}}.dll"
+// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as %s -o %t.dll 2>&1 \
+// RUN:   | FileCheck --check-prefix=NO-AS %{no_as} %s
+// RUN: not %clang -### --target=x86_64-unknown-linux-gnu-msil -save-temps %s -o %t.dll 2>&1 \
+// RUN:   | FileCheck --check-prefix=ILASM %{asm_err} %s
 
 // -S without -mllvm -msil-object-form still writes whole-program ILAsm text.
 // RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -S %s -o %t.il 2>&1 \

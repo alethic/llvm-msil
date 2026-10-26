@@ -47,13 +47,18 @@
 ///   MSIL::getLinkedImport) is null: its calls, invokes and llvm.global_ctors
 ///   entries call an internal trap stub '<msil>undef_<name>', and its other
 ///   uses become null. An extern_weak variable is null in every use and is
-///   erased, unless it is thread-local (an error below).
-/// - A section on a global variable definition (llvm.metadata excepted) is an
-///   error; the variable stays ordinary data.
+///   erased, unless it is thread-local (an error below), or, off Windows, a
+///   __start_<X> or __stop_<X> variable while a global variable definition
+///   is in section <X>: the AsmPrinter defines it at that section's start or
+///   end.
+/// A section on a global variable definition is laid out as a one-object
+/// link lays it out (plan 5.8.10, 5.9.9: MSILDataSegment and the AsmPrinter
+/// group named sections, define __start_/__stop_ symbols and run
+/// constructor-table slots), so it is no longer diagnosed here (M20).
 ///
 /// In object mode (MSILTargetMachine::isObjectMode(): a CIL object or its
 /// object-form text, plan 5.8.10) the module is one object of a link instead,
-/// so none of these three lowerings applies: aliases, extern_weak declarations,
+/// so neither lowering applies: aliases, extern_weak declarations,
 /// external globals and sections stay symbols of the object
 /// (checkObjectSymbols). It reports instead:
 /// - an alias that is not a definition plus a constant offset (a function
@@ -156,6 +161,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Attributes.h"
@@ -1754,6 +1760,9 @@ static void replaceGlobalCtor(Module &M, const Function &F,
 /// which metadata may still name. A variable is null in every use and is
 /// erased, except a thread-local one, which stays: like any other
 /// thread-local variable it is an error (runOnModule) until phase 3 (P3-A).
+/// Off Windows a __start_<X> or __stop_<X> variable stays too while a global
+/// variable definition is in section <X>: the one-object link defines it
+/// (plan 5.9.9; the AsmPrinter checks that <X> names an output section).
 static bool lowerExternWeak(Module &M, const TargetMachine &TM) {
   const Triple &TT = TM.getTargetTriple();
   bool Linked = MSIL::isLinkedModule(M);
@@ -1762,13 +1771,23 @@ static bool lowerExternWeak(Module &M, const TargetMachine &TM) {
     return Linked ? MSIL::getLinkedImport(M, Name, &F).has_value()
                   : MSIL::getPInvokeModule(TT, Name, &F).has_value();
   };
+  StringSet<> Sections;
+  if (!TT.isOSWindows())
+    for (const GlobalVariable &GV : M.globals())
+      if (GV.hasSection() && !GV.isDeclarationForLinker())
+        Sections.insert(GV.getSection());
+  auto IsStartStop = [&](const GlobalVariable &GV) {
+    StringRef Name = MSIL::getILName(GV, TM);
+    return (Name.consume_front("__start_") || Name.consume_front("__stop_")) &&
+           Sections.contains(Name);
+  };
   SmallVector<Function *, 4> Fns;
   for (Function &F : M)
     if (F.hasExternalWeakLinkage() && !F.isIntrinsic() && !HasImport(F))
       Fns.push_back(&F);
   SmallVector<GlobalVariable *, 4> Vars;
   for (GlobalVariable &GV : M.globals())
-    if (GV.hasExternalWeakLinkage() && !GV.isThreadLocal())
+    if (GV.hasExternalWeakLinkage() && !GV.isThreadLocal() && !IsStartStop(GV))
       Vars.push_back(&GV);
   if (Fns.empty() && Vars.empty())
     return false;
@@ -1803,32 +1822,13 @@ static bool lowerExternWeak(Module &M, const TargetMachine &TM) {
   return true;
 }
 
-/// Reports every global variable definition with an explicit section
-/// (judge-c-fidelity F4). A native link gives a section its meaning (the
-/// constructor tables .init_array and .CRT$XCU, a list between __start_ and
-/// __stop_ symbols), but the one data segment of a module has no sections:
-/// the variable would silently lose it, and a constructor registered so would
-/// never run. The variable stays ordinary data, so the output stays well
-/// formed. The special llvm.* globals and the llvm.metadata section hold no
-/// program data, a declaration has no data here, and a section on a function
-/// means nothing to a method.
-static void diagnoseGlobalSections(Module &M) {
-  for (GlobalVariable &GV : M.globals())
-    if (GV.hasSection() && !GV.isDeclarationForLinker() &&
-        !MSIL::isSpecialLLVMGlobal(GV))
-      M.getContext().emitError("global variable " + MSIL::getIRName(GV) +
-                               " in section \"" + GV.getSection() +
-                               "\" is not supported for MSIL yet (phase 2 CIL "
-                               "objects)");
-}
-
 /// The lowerings that hold only when the module is the whole program:
-/// aliases, extern_weak declarations and sections, in that order. Returns
-/// true if the module changed.
+/// aliases and extern_weak declarations, in that order. Named sections are
+/// laid out as a one-object link lays them out (MSILDataSegment, plan
+/// 5.9.9). Returns true if the module changed.
 static bool lowerWholeProgramSymbols(Module &M, const TargetMachine &TM) {
   bool Changed = lowerAliases(M);
   Changed |= lowerExternWeak(M, TM);
-  diagnoseGlobalSections(M);
   return Changed;
 }
 

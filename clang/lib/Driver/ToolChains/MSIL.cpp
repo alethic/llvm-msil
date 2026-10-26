@@ -277,30 +277,6 @@ SanitizerMask MSILToolChain<NativeTC>::getSupportedSanitizers(
          SanitizerKind::Nullability | SanitizerKind::LocalBounds;
 }
 
-template <class NativeTC>
-LTOKind MSILToolChain<NativeTC>::getLTOMode(const ArgList &Args,
-                                            Action::OffloadKind Kind) const {
-  if (Kind != Action::OFK_None ||
-      Args.hasArg(options::OPT_flto_EQ, options::OPT_fno_lto))
-    return NativeTC::getLTOMode(Args, Kind);
-  // -c (clang-cl /c) writes a CIL object: one cc1 -emit-obj job through the
-  // integrated assembler. Only compile-and-link still compiles to bitcode,
-  // because msil-ld reads CIL objects from M20 on, which removes this
-  // override.
-  if (Args.hasArg(options::OPT_c))
-    return LTOK_None;
-  // -S and -emit-llvm keep their Phase 1 cc1 lines.
-  if (Args.hasArg(options::OPT_S, options::OPT_emit_llvm))
-    return LTOK_None;
-  // The options that keep the assemble step (canCollapseAssembleAction) keep
-  // it here too, so that ClangAs rejects the ILAsm text instead of the LTO
-  // compile ignoring them.
-  if (Args.hasArg(options::OPT_via_file_asm, options::OPT__SLASH_FA,
-                  options::OPT__SLASH_Fa))
-    return LTOK_None;
-  return LTOK_Full;
-}
-
 template <class NativeTC> Tool *MSILToolChain<NativeTC>::buildLinker() const {
   return new tools::msil::Linker(*this);
 }

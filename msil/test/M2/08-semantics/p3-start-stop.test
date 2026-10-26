@@ -1,0 +1,33 @@
+# Matrix case p3-start-stop: __start_/__stop_ over one named section from two objects (Linux, native 15).
+# recon/p2/judge-c-fidelity-files/probes/p3a.c and p3b.c: three 'used'
+# static records in the section myreg, one in p3a.c and two in p3b.c, and
+# p3a.c's main sums them from __start_myreg to __stop_myreg. The section name
+# is a C identifier, so on non-Windows triples the link defines both symbols
+# at the start and the end of the output section myreg, which holds the
+# segments of both objects in link order (plan 5.9.9: rule 1 and
+# '__start_<name>/__stop_<name>'); --gc-sections keeps every segment of a
+# section that a referenced __start_/__stop_ names (plan 5.9.11). The LTO
+# link gets the same layout: an LTO object carries the undefined __start_
+# symbols and msil-ld defines them after LTO (plan 5.9.13). Windows triples
+# do not define these symbols, natively or in msil-ld, so the Windows case
+# is p3-start-stop-windows.test (a named link error). Plan 5.9.16 row
+# p3-start-stop (M20).
+# REQUIRES: msil-triple-linux
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p3a.c %t/p3b.c
+# RUN: %{msil_prog}
+#--- p3a.c
+/* p3a.c: section-based registration across objects with __start_/__stop_ (ELF) */
+struct reg { int v; };
+static const struct reg r1 __attribute__((used, section("myreg"))) = { 3 };
+extern const struct reg __start_myreg[], __stop_myreg[];
+int main(void) {
+  int s = 0;
+  for (const struct reg *p = __start_myreg; p < __stop_myreg; ++p) s += p->v;
+  return s;               /* 15 */
+}
+#--- p3b.c
+/* p3b.c */
+struct reg { int v; };
+static const struct reg r2 __attribute__((used, section("myreg"))) = { 5 };
+static const struct reg r3 __attribute__((used, section("myreg"))) = { 7 };

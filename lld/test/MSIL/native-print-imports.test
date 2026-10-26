@@ -68,11 +68,16 @@
 # RUN: count 5 < floor.txt
 # RUN: FileCheck %s --check-prefix=FLOOR --match-full-lines --implicit-check-not=pow \
 # RUN:   --implicit-check-not=GLIBC_2.29 --input-file=floor.txt
+# RUN: FileCheck %s --check-prefix=FLOOR-NONE --input-file=floor.txt
 # FLOOR:      cbrt -> libm.so.6!cbrt [function, GLIBC_2.2.5]
 # FLOOR-NEXT: floor -> libm.so.6!floor [function, GLIBC_2.31]
 # FLOOR-NEXT: puts -> libc.so.6!puts [function, GLIBC_2.2.5]
 # FLOOR-DAG:  libc.so.6: version floor GLIBC_2.2.5
 # FLOOR-DAG:  libm.so.6: version floor GLIBC_2.31
+## The implicit checks guard only the text before the DAG group's first
+## match; FLOOR-NONE covers the whole output (M15 open issue 13).
+# FLOOR-NONE-NOT: pow
+# FLOOR-NONE-NOT: GLIBC_2.29
 # RUN: FileCheck %s --check-prefix=FLOOR-IL --input-file=floor.il
 # FLOOR-IL-DAG: call float64 'floor'(float64)
 # FLOOR-IL-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'floor'(float64) cil managed preservesig {}{{$}}

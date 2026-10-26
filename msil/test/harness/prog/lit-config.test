@@ -2,40 +2,67 @@
 # 5.12.2): lit.cfg.py rejects a value that cannot work instead of quietly
 # running another pipeline, so a nested lit stops with lit's fatal-error
 # status 2 and names the parameter for each of
-# (1) msil_pipeline=obj and (2) msil_link_output=pe, which need CIL objects
-#     and msil-ld's PE writer (M20);
+# (1) msil_link_output=il under asm and under obj, where %{msil_prog} links
+#     CIL objects, whose image msil-ld writes itself (M20; M14's errors for
+#     msil_pipeline=obj and msil_link_output=pe are gone: both work from
+#     M20, as the control shows);
+# (2) msil_equiv=1 under asm, and under lto with msil_link_output=il, where
+#     there is no msil-ld image to compare (M20);
 # (3) an unknown msil_pipeline and (4) an unknown msil_link_output;
 # (5) msil_require_link=1 with msil-ld disabled, and (6) with llvm-ar
 #     disabled (an empty --param is an explicit 'none');
-# (7) msil_pipeline=lto with msil-ld disabled: every %{msil_c} links;
+# (7) msil_pipeline=lto and obj with msil-ld disabled: every %{msil_c} links;
 # (8) an msil_ld that names no program;
 # (9) an explicit msil_glibc_sysroot without usr/include/stdio.h (M15), so
 #     the hosted leg, which names its sysroot, never passes by skipping.
 #     With the header the nested configuration has the feature
 #     msil-glibc-sysroot and %{msil_glibc_sysroot} names the directory (a
 #     nested run of Inputs/nested/features.test echoes both), and an empty
-#     value turns the feature off.
-# The control loads the configuration with msil_require_link=1 and
-# msil_pipeline=lto. --show-tests ends every nested lit after discovery, so
-# no test of Inputs/nested runs, and an empty msil_linux_sysroot keeps the
-# nested configuration from compiling the E7 start.o.
+#     value turns the feature off;
+# (10) msil_equiv=1 with neither llvm-cil-dump nor mdcanon (the listers of
+#     %msil_canon, which O3 and O4 compare; M20).
+# The controls load the configuration with msil_require_link=1 under each
+# pipeline: asm, obj with msil_equiv=1 and msil_scale_tests=1 (Inputs/nested/
+# features.test echoes the features msil-equiv and msil-scale-tests), lto
+# (link output pe) with msil_equiv=1, and lto with link output il.
+# --show-tests ends every nested lit after discovery, so no test of
+# Inputs/nested runs, and an empty msil_linux_sysroot keeps the nested
+# configuration from compiling the E7 start.o.
 # REQUIRES: msil-ld, msil-ar
 
-# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_pipeline=lto %S/Inputs/nested > %t.ok.log 2>&1
-# RUN: %{harness_check} contains %t.ok.log "^\s*MSIL :: harness/prog/Inputs/nested/features\.test$" "note: msil: pipeline lto \(%\{msil_prog\}: lto, link output il\)$"
-# RUN: %{harness_check} lacks %t.ok.log "fatal:"
+# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 %S/Inputs/nested > %t.ok-asm.log 2>&1
+# RUN: %{harness_check} contains %t.ok-asm.log "^\s*MSIL :: harness/prog/Inputs/nested/features\.test$" "note: msil: pipeline asm \(%\{msil_prog\}: obj, link output pe\)$"
+# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_pipeline=obj --param msil_equiv=1 --param msil_scale_tests=1 %S/Inputs/nested > %t.ok-obj.log 2>&1
+# RUN: %{harness_check} contains %t.ok-obj.log "note: msil: pipeline obj \(%\{msil_prog\}: obj, link output pe, equivalence oracles O3, O6\)$"
+# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_pipeline=lto --param msil_equiv=1 %S/Inputs/nested > %t.ok-lto.log 2>&1
+# RUN: %{harness_check} contains %t.ok-lto.log "note: msil: pipeline lto \(%\{msil_prog\}: lto, link output pe, equivalence oracles O4\)$"
+# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_pipeline=lto --param msil_link_output=il %S/Inputs/nested > %t.ok-il.log 2>&1
+# RUN: %{harness_check} contains %t.ok-il.log "note: msil: pipeline lto \(%\{msil_prog\}: lto, link output il\)$"
+# RUN: %{harness_check} lacks %t.ok-asm.log "fatal:"
+# RUN: %{harness_check} lacks %t.ok-obj.log "fatal:"
+# RUN: %{harness_check} lacks %t.ok-lto.log "fatal:"
+# RUN: %{harness_check} lacks %t.ok-il.log "fatal:"
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_equiv=1 --param msil_scale_tests=1 %S/Inputs/nested/features.test > %t.ok-features.log 2>&1
+# RUN: %{harness_check} contains %t.ok-features.log "^PASS: MSIL :: harness/prog/Inputs/nested/features\.test " "^# \| feature msil-equiv$" "^# \| feature msil-scale-tests$" "^# \| feature msil-pipeline=obj$"
+# RUN: %{harness_check} lacks %t.ok-asm.log "feature msil-equiv" "feature msil-scale-tests"
 
-# (1), (2)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj %S/Inputs/nested > %t.1.log 2>&1
-# RUN: %{harness_check} contains %t.1.log "fatal: msil: --param msil_pipeline=obj needs CIL objects and msil-ld's PE writer \(plan M20\); use asm or lto$"
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_link_output=pe %S/Inputs/nested > %t.2.log 2>&1
-# RUN: %{harness_check} contains %t.2.log "fatal: msil: --param msil_link_output=pe needs msil-ld's PE writer \(plan M20\); use il$"
+# (1)
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_link_output=il %S/Inputs/nested > %t.1a.log 2>&1
+# RUN: %{harness_check} contains %t.1a.log "fatal: msil: --param msil_link_output=il: under msil_pipeline=asm %\{msil_prog\} links CIL objects, whose image msil-ld writes itself \(plan 5\.12\.1\); use pe, or msil_pipeline=lto$"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_link_output=il %S/Inputs/nested > %t.1b.log 2>&1
+# RUN: %{harness_check} contains %t.1b.log "fatal: msil: --param msil_link_output=il: under msil_pipeline=obj %\{msil_prog\} links CIL objects"
+
+# (2)
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_equiv=1 %S/Inputs/nested > %t.2a.log 2>&1
+# RUN: %{harness_check} contains %t.2a.log "fatal: msil: --param msil_equiv=1 compares msil-ld's images with ilasm's: it needs msil_pipeline=obj \(O3, O6\) or msil_pipeline=lto with msil_link_output=pe \(O4\), not msil_pipeline=asm with msil_link_output=pe$"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_link_output=il --param msil_equiv=1 %S/Inputs/nested > %t.2b.log 2>&1
+# RUN: %{harness_check} contains %t.2b.log "fatal: msil: --param msil_equiv=1 compares .* not msil_pipeline=lto with msil_link_output=il$"
 
 # (3), (4)
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=bogus %S/Inputs/nested > %t.3.log 2>&1
-# RUN: %{harness_check} contains %t.3.log "fatal: msil: --param msil_pipeline=bogus: use asm or lto$"
+# RUN: %{harness_check} contains %t.3.log "fatal: msil: --param msil_pipeline=bogus: use asm, lto or obj$"
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_link_output=bogus %S/Inputs/nested > %t.4.log 2>&1
-# RUN: %{harness_check} contains %t.4.log "fatal: msil: --param msil_link_output=bogus: use il$"
+# RUN: %{harness_check} contains %t.4.log "fatal: msil: --param msil_link_output=bogus: use pe or il$"
 
 # (5), (6)
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_ld= %S/Inputs/nested > %t.5.log 2>&1
@@ -46,6 +73,8 @@
 # (7)
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_ld= %S/Inputs/nested > %t.7.log 2>&1
 # RUN: %{harness_check} contains %t.7.log "fatal: msil: --param msil_pipeline=lto links every C test through msil-ld, but these are missing: msil-ld \(--param msil_ld=PATH; build the lld target\)$"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_ld= %S/Inputs/nested > %t.7b.log 2>&1
+# RUN: %{harness_check} contains %t.7b.log "fatal: msil: --param msil_pipeline=obj links every C test through msil-ld, but these are missing: msil-ld \(--param msil_ld=PATH; build the lld target\)$"
 
 # (8)
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_ld=%t.no-such-msil-ld %S/Inputs/nested > %t.8.log 2>&1
@@ -61,3 +90,7 @@
 # RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_glibc_sysroot= %S/Inputs/nested/features.test > %t.9off.log 2>&1
 # RUN: %{harness_check} contains %t.9off.log "^PASS: MSIL :: harness/prog/Inputs/nested/features\.test "
 # RUN: %{harness_check} lacks %t.9off.log "feature msil-glibc-sysroot"
+
+# (10)
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_equiv=1 --param msil_cil_dump= --param msil_mdcanon= %S/Inputs/nested > %t.10.log 2>&1
+# RUN: %{harness_check} contains %t.10.log "fatal: msil: --param msil_equiv=1 compares %msil[_]canon listings, but neither llvm-cil-dump \(disabled by an empty --param msil_cil_dump= or [$]MSIL_CIL_DUMP\) nor mdcanon \(disabled by an empty --param msil_mdcanon=\) is available$"

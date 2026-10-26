@@ -1,0 +1,74 @@
+# LTO through msil-ld writes the PE itself: bitcode in, an EXE image out, no ilasm (forced -flto).
+# The sources are compiled with -flto on every pipeline (the REDEFINE of
+# %{msil_cflags}; the native oracle gets the same flag and links with lld's
+# LTO). msil-ld's LTO emits in-memory CIL objects, which it links like any
+# object into the image (plan 5.9.13, from M20), and the clang driver's link
+# job runs msil-ld only. The program crosses the TUs with calls, function
+# pointers, data relocations, a constructor and a K&R call that passes 0 for
+# a pointer parameter, which MSILFixFunctionBitcasts adapts under the module
+# flag msil-lto with a warning (plan 5.9.8; msil-ld prints it without the
+# ' in <file>' parts). After the composite, the RUN lines link the same
+# bitcode through the driver at -O2 on every leg (also msil_link_output=il):
+# the plan of the link names msil-ld and neither --lto-emit-asm nor ilasm,
+# msil-ld warns once for the adapter, the image is a PE32+ EXE with a
+# MethodDef entry point (llvm-cil-dump --headers), and it verifies and runs
+# against the same transcript. Recon tests-p2 3.3, plan 5.12.5 (M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_cflags} = -std=gnu17 -ffreestanding -Werror=return-type -I%msil_inputs -flto
+# REDEFINE: %{msil_srcs} = %t/main.c %t/lib.c
+# RUN: %{msil_prog}
+# RUN: mkdir -p %t/pe
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/main.c -o %t/pe/main.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/lib.c -o %t/pe/lib.o
+# RUN: %clang_msil %{msil_ldflags} -O2 %t/pe/main.o %t/pe/lib.o -o %t/pe/prog.exe -### 2>&1 | FileCheck %s --check-prefix=PLAN --implicit-check-not=lto-emit-asm --implicit-check-not=ilasm
+# RUN: %clang_msil %{msil_ldflags} -O2 %t/pe/main.o %t/pe/lib.o -o %t/pe/prog.exe 2>&1 | FileCheck %s --check-prefix=WARN --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: %if msil-cil-dump %{ %msil_cil_dump --headers %t/pe/prog.exe | FileCheck %s --check-prefix=HDR %}
+# RUN: %msil_verify %t/pe/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/pe/prog.out %t/pe/prog.exe
+# PLAN:      "{{[^"]*}}msil-ld{{(\.exe)?}}"
+# WARN:      {{^}}msil-ld: warning: {{.*}}function signature mismatch: count_or_default{{$}}
+# WARN-NEXT: {{^}}>>> defined as int32(native int){{$}}
+# WARN-NEXT: {{^}}>>> called as int32(int32){{$}}
+# WARN-NEXT: {{^}}>>> adapter: {{.+}}
+# HDR:       {{^}}Format: PE32+ machine=0x8664 exe{{$}}
+# HDR:       {{^}}CLI: flags=0x{{[0-9A-F]+}} entrypoint=0x06{{[0-9A-F]+}} metadata=
+#--- main.c
+#include "msil_test.h"
+int lib_scale(int);
+int lib_calls(void);
+extern int lib_table[4];
+extern int (*const lib_ops[2])(int);
+extern const char *const lib_words[3];
+int count_or_default();
+int main_hits;
+int main_hook(int x) {
+  ++main_hits;
+  return x * 10;
+}
+int main(void) {
+  for (int i = 0; i < 3; ++i)
+    put_str(lib_words[i]);
+  put_kv("lib_scale(4)", lib_scale(4));
+  put_kv("lib_ops[0](5)", lib_ops[0](5));
+  put_kv("lib_ops[1](5)", lib_ops[1](5));
+  put_kv("lib_table[3]", lib_table[3]);
+  put_kv("lib_calls", lib_calls());
+  put_kv("main_hits", main_hits);
+  put_kv("count_or_default(0)", count_or_default(0));
+  return lib_scale(1) + main_hits;
+}
+#--- lib.c
+int main_hook(int);
+static int calls;
+static const char first[] = "lib first";
+const char *const lib_words[3] = {first, "lib second", "lib third"};
+int lib_table[4] = {1, 2, 3, 4};
+static int lib_neg(int x) { return -x; }
+int (*const lib_ops[2])(int) = {main_hook, lib_neg};
+__attribute__((constructor)) static void lib_init(void) { lib_table[3] = 40; }
+int lib_scale(int x) {
+  ++calls;
+  return x * 3 + lib_table[1];
+}
+int lib_calls(void) { return calls; }
+int count_or_default(const int *p) { return p ? *p : 7; }

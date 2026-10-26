@@ -171,44 +171,52 @@
 ## __start_myreg and __stop_myreg with a bitcode definition in section
 ## "myreg" (ss.ll): on linux-gnu, with libss.so (which defines both names) or
 ## without it, msil-ld neither reports them nor binds them, so --trace-symbol
-## shows no shared definition. Until M20 the backend's M12 texts for the
-## section global and the external globals still fail the link. For section
-## "other" (ns.ll) they are native data with libss.so and undefined without
-## it; on windows-msvc they are undefined although ss-win.ll names "myreg".
+## shows no shared definition (5.9.6). From M20 whole-program code
+## generation lays out the section and defines them as address fields at its
+## start and end (5.8.10, 5.9.9), so the link succeeds (M12's section and
+## external-global texts are gone). For section "other" (ns.ll) they are
+## native data with libss.so, which defines no dlopen/dlsym, so 5.10.14's
+## data-import error (M20, 5.10.12), and undefined without it; on
+## windows-msvc they are undefined although ss-win.ll names "myreg".
 # RUN: yaml2obj ss.yaml -o ss-lib.o
 # RUN: ld.lld -shared -soname libss.so.1 ss-lib.o -o libss.so
 # RUN: llvm-as ss.ll -o ss.o
 # RUN: llvm-as ns.ll -o ns.o
 # RUN: llvm-as ss-win.ll -o ss-win.o
 # DEFINE: %{ss} = %{err} --implicit-check-not='undefined symbol' --implicit-check-not='shared definition' \
-# DEFINE:   --implicit-check-not='importing native data'
-# RUN: not msil-ld --lto-emit-asm ss.o libss.so --trace-symbol=__start_myreg --trace-symbol=__stop_myreg \
-# RUN:   -o x.il > ss-lib.txt 2>&1
-# RUN: not msil-ld --lto-emit-asm ss.o -o x.il > ss-nolib.txt 2>&1
-# RUN: %{ss} --check-prefixes=SS-TRACE,SS-M12 --input-file=ss-lib.txt
-# RUN: %{ss} --check-prefix=SS-M12 --input-file=ss-nolib.txt
+# DEFINE:   --implicit-check-not='cannot be imported' --implicit-check-not=error:
+# RUN: msil-ld --lto-emit-asm ss.o libss.so --trace-symbol=__start_myreg --trace-symbol=__stop_myreg \
+# RUN:   -o ss-lib.il > ss-lib.txt 2>&1
+# RUN: msil-ld --lto-emit-asm ss.o -o ss-nolib.il > ss-nolib.txt 2>&1
+# RUN: %{ss} --check-prefixes=SS-TRACE --input-file=ss-lib.txt
+# RUN: count 0 < ss-nolib.txt
 # RUN: FileCheck %s --check-prefix=SS-ABSENT --input-file=ss-lib.txt
-# RUN: FileCheck %s --check-prefix=SS-ABSENT --input-file=ss-nolib.txt
+# RUN: FileCheck %s --check-prefix=SS-IL --input-file=ss-lib.il
+# RUN: FileCheck %s --check-prefix=SS-IL --input-file=ss-nolib.il
+# RUN: FileCheck %s --check-prefix=SS-IL-NONE --input-file=ss-lib.il
 # SS-TRACE-DAG: {{^}}ss.o: reference to __start_myreg{{$}}
 # SS-TRACE-DAG: {{^}}ss.o: reference to __stop_myreg{{$}}
-# SS-M12-DAG:   {{^}}msil-ld: error: global variable @entry in section "myreg" is not supported for MSIL yet (phase 2 CIL objects){{$}}
-# SS-M12-DAG:   {{^}}msil-ld: error: external global variable '__start_myreg' is not supported (phase 2 linker){{$}}
-# SS-M12-DAG:   {{^}}msil-ld: error: external global variable '__stop_myreg' is not supported (phase 2 linker){{$}}
 ## Nowhere in the output (the implicit checks above guard only the text
 ## before the first CHECK-DAG match).
 # SS-ABSENT-NOT: undefined symbol
 # SS-ABSENT-NOT: shared definition
-# SS-ABSENT-NOT: importing native data
+# SS-ABSENT-NOT: cannot be imported
+# SS-ABSENT-NOT: error:
 # SS-ABSENT-NOT: PLEASE submit
 # SS-ABSENT-NOT: Stack dump
 # SS-ABSENT-NOT: LLVM ERROR
-# RUN: not msil-ld --lto-emit-asm ns.o libss.so --trace-symbol=__start_myreg -o x.il 2>&1 \
-# RUN:   | %{err} --check-prefix=NS-LIB --implicit-check-not='undefined symbol'
-# NS-LIB:      {{^}}libss.so: shared definition of __start_myreg{{$}}
-# NS-LIB:      {{^}}msil-ld: error: importing native data symbol '__start_myreg' (libss.so.1) is not supported yet{{$}}
-# NS-LIB-NEXT: {{^}}>>> referenced by ns.o:(main){{$}}
-# NS-LIB:      {{^}}msil-ld: error: importing native data symbol '__stop_myreg' (libss.so.1) is not supported yet{{$}}
-# NS-LIB-NEXT: {{^}}>>> referenced by ns.o:(main){{$}}
+## Address fields, not imports from libss.so.
+# SS-IL-DAG: {{^}}.field {{.*}}static {{(initonly )?}}native int '__start_myreg'
+# SS-IL-DAG: {{^}}.field {{.*}}static {{(initonly )?}}native int '__stop_myreg'
+# SS-IL-NONE-NOT: libss
+# SS-IL-NONE-NOT: pinvokeimpl
+# RUN: not msil-ld --lto-emit-asm ns.o libss.so --trace-symbol=__start_myreg -o x.il > ns-lib.txt 2>&1
+# RUN: %{err} --check-prefix=NS-LIB --implicit-check-not='undefined symbol' --input-file=ns-lib.txt
+# RUN: %{err} --check-prefix=NS-START --input-file=ns-lib.txt
+# RUN: %{err} --check-prefix=NS-STOP --input-file=ns-lib.txt
+# NS-LIB:   {{^}}libss.so: shared definition of __start_myreg{{$}}
+# NS-START: {{^}}msil-ld: error: data symbol '__start_myreg' in libss.so.1 cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym{{$}}
+# NS-STOP:  {{^}}msil-ld: error: data symbol '__stop_myreg' in libss.so.1 cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym{{$}}
 # RUN: not msil-ld --lto-emit-asm ns.o -o x.il 2>&1 | %{err} --check-prefix=SS-UNDEF -DFILE=ns.o
 # RUN: not msil-ld --lto-emit-asm ss-win.o -o x.il 2>&1 | %{err} --check-prefix=SS-UNDEF -DFILE=ss-win.o
 # SS-UNDEF:      {{^}}msil-ld: error: undefined symbol: __start_myreg{{$}}

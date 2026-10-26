@@ -10,8 +10,8 @@
 
     msil-verify.py --ilverify PATH --runtime-dir DIR [--allow FILE]
                    [--peverify PATH] [--ildasm PATH --ilasm PATH]
-                   [--keep-copy DIR] [--timeout S] [--mem-limit-mb N] [-v]
-                   [--dep FILE...]... [--] prog.dll
+                   [--md-baseline FILE] [--keep-copy DIR] [--timeout S]
+                   [--mem-limit-mb N] [-v] [--dep FILE...]... [--] prog.dll
     msil-verify.py --skip [--dep FILE...] [--] prog.dll   (no verifier: a no-op)
     msil-verify.py --roundtrip --output OUT.dll --ildasm PATH --ilasm PATH
                    [--keep-copy DIR] [--timeout S] [--mem-limit-mb N] [-v]
@@ -40,10 +40,13 @@ Pass 1 verifies the assembly itself:
     D12 and D2 always produce, and both need the ildasm listing that pass 2
     makes (plan section 12, 'D21 and M0.b item (7) refined'):
     - 'Cannot modify an imaged based (RVA) static' is accepted only where the
-      listing shows 'ldsflda valuetype '<msil>image_t' '<msil>image'' at the
-      reported offset: the image copy of D12 in <Module>::.cctor
-      ('ldsfld native int '<msil>data'; ldsflda ...; ldc.i4 N; cpblk'). The
-      same message for any other RVA field, or without a listing, fails.
+      listing shows 'ldsflda valuetype '<msil>image_t' '<msil>image'' or
+      'ldsflda valuetype '<msil>relocs_t' '<msil>relocs'' at the reported
+      offset: the image copy of D12 in <Module>::.cctor ('ldsfld native int
+      '<msil>data'; ldsflda ...; ldc.i4 N; cpblk'), and the relocation table
+      that the loop of plan 5.9.10 reads there (above 32 relocations: '-S' at
+      the default threshold and msil-ld's output). The same message for any
+      other RVA field, or without a listing, fails.
     - A function address used as a native int (D2; 'ldftn <method>'):
       PEVerify types it as a method pointer and rejects every such use, with
       a message that depends on the use ('[found <type>::<method>][expected
@@ -59,8 +62,9 @@ Pass 2 verifies a neutralized copy (--ildasm and --ilasm). ILVerify does not
 follow control flow out of a block in which it reported an error, and
 PEVerify stops at the first error of most kinds in a method, so in pass 1 an
 allowed error (the localloc frame of D13, a '.locals' without init, an
-ldind/stind through a native int, cpblk, initblk, calli, the image ldsflda,
-an ldftn) hides the errors behind it, native int/int64 mixing, a bad join and
+ldind/stind through a native int, cpblk, initblk, calli, the image or
+relocation-table ldsflda, an ldftn) hides the errors behind it, native
+int/int64 mixing, a bad join and
 a switch on a native int included (llvm/docs/MSIL/recon/cil-runtime.md 13).
 The copy is the assembly disassembled with ildasm, rewritten so that none of
 these constructs is left, and reassembled with ilasm in a private temporary
@@ -68,13 +72,14 @@ directory:
 
     .locals (...)          .locals init (...)
     localloc               pop; ldc.i4.0; conv.i
-    cpblk                  call void '<msil-verify>cpblk'(native int, native int, int32)
-    initblk                call void '<msil-verify>initblk'(native int, int32, int32)
-    ldind.<t>              call <T> '<msil-verify>ldind.<t>'(native int)
-    stind.<t>              call void '<msil-verify>stind.<t>'(native int, <T>)
-    calli <R>(<P...>)      pop; call <R> '<msil-verify>calli.<k>'(<P...>)
+    cpblk                  call void '<msil-verify>'::'cpblk'(native int, native int, int32)
+    initblk                call void '<msil-verify>'::'initblk'(native int, int32, int32)
+    ldind.<t>              call <T> '<msil-verify>'::'ldind.<t>'(native int)
+    stind.<t>              call void '<msil-verify>'::'stind.<t>'(native int, <T>)
+    calli <R>(<P...>)      pop; call <R> '<msil-verify>'::'calli.<k>'(<P...>)
     ldftn <method>         ldc.i4.0; conv.i
     ldsflda <the image>    ldc.i4.0; conv.i   (only '<msil>image', see above)
+    ldsflda <the relocs>   ldc.i4.0; conv.i   (only '<msil>relocs', see above)
     br.s, brtrue.s, ...    br, brtrue, ... (the rewritten code is longer)
     unaligned., volatile.  nop, before a rewritten instruction
 
@@ -84,14 +89,19 @@ other NaNs come out as bytes, which reassemble) with a float32(0x...) or
 float64(0x...) literal: the same infinity, or the default quiet NaN of the
 same sign. Verification needs only the type, so the payload is not kept.
 
-The '<msil-verify>' stubs are added to the copy ('ldnull; throw'). They take
+The stubs ('ldnull; throw') are added to the copy as static methods of a
+type of their own, the private abstract sealed class '<msil-verify>' (based
+on the listing's System.Object), never to <Module>: msil-ld fills <Module> up
+to the method limit of a type before it spills members (plan 5.9.12), and a
+few more methods would make the copy fail to load. They take
 every address as native int, so ILVerify still rejects an int32, int64 or
 float64 address (it does not convert int32 to native int implicitly), and
 they check the other operands too: a cpblk or initblk size or an initblk
 value that is not int32, and a stored value or calli argument of the wrong
-type. A function address and the image address are native int in the copy,
-as the code uses them, so the value a function relocation of D12 stores with
-stind.i, the image source of cpblk and a calli target pass without an
+type. A function address and the image and relocation-table addresses are
+native int in the copy, as the code uses them, so the value a function
+relocation of D12 stores with stind.i, the image source of cpblk, the
+entries the relocation loop reads and a calli target pass without an
 allowance. Every replacement has the stack effect of the instruction it
 replaces, so .maxstack stays valid. ILVerify and PEVerify then run on the
 copy with no allowance except PEVerify's MemoryCopy message; an ldsflda of
@@ -122,6 +132,20 @@ copies of the dependencies. A native library is only copied. A missing file,
 or two of one name (or one named like the assembly), is a usage error.
 --dep takes every argument up to the next option, so the lit composites pass
 '--dep %{msil_deps} --' before the assembly; an empty list is allowed.
+
+--md-baseline FILE (M20, plan 5.12.4 and 5.12.6: the oracle O6) also runs
+PEVerify '/nologo /md /hresult' on the assembly and on FILE, the image that
+ilasm built from the same program's -S text, and fails unless every
+metadata message of the assembly ('[MD](<hresult>): <text>') is one of
+FILE's. The two writers number their rows differently, so each
+'[token:0x<8>]' in a message is replaced by the row it designates before
+the comparison: '<table> '<name>'' for a row with a name (a Field, MethodDef
+or Param with its owner, '<table> '<owner>'::'<name>''), else
+'<table>[<row>]'; the image's own path becomes '<image>'. msil-ld's output
+is the image that runs (the --gc-sections link), so it may lack members the
+baseline has, never the reverse. Without PEVerify (--peverify empty, every
+host but Windows) O6 is skipped with a note. Pass 1's PEVerify runs with
+'/il' and never prints the metadata messages.
 
 --roundtrip does not verify. It checks that the assembly survives the
 ildasm -> ilasm round trip that Design.md 5.5 asks of the backend's output
@@ -205,12 +229,24 @@ PEVERIFY_ALLOWED = [
 # Pass 2 allows nothing else.
 PEVERIFY_ALLOWED_IN_COPY = [MEMORYCOPY_NATIVE_INT]
 
-# Pass 1 only, and only at the image ldsflda of the listing (D12): PEVerify
-# reports taking the address of an RVA static at the ldsflda, whatever is
-# done with it, and stops checking the method there.
+# Pass 1 only, and only at an ldsflda of the image or of the relocation table
+# in the listing (D12, plan 5.9.10): PEVerify reports taking the address of an
+# RVA static at the ldsflda, whatever is done with it, and stops checking the
+# method there.
 RVA_STATIC = re.compile(r"Cannot modify an imaged based \(RVA\) static")
-# The operand of that ldsflda as ildasm prints it, whitespace folded.
+# The operands of those ldsfldas as ildasm prints them, whitespace folded:
+# the image copy of D12 and the '<msil>relocs' table that the relocation loop
+# of plan 5.9.10 reads (above its threshold of 32 relocations).
 IMAGE_FIELD = "valuetype '<msil>image_t' '<msil>image'"
+RELOCS_FIELD = "valuetype '<msil>relocs_t' '<msil>relocs'"
+RVA_FIELDS = (IMAGE_FIELD, RELOCS_FIELD)
+# The type of the '<msil-verify>' stubs in the neutralized copy: a type of its
+# own, so that a <Module> already near the method limit of a type (msil-ld
+# fills it up to the limit before it spills, plan 5.9.12) stays loadable.
+STUB_TYPE = "'<msil-verify>'"
+# The scope of System.ValueType or System.Object in the listing, for the base
+# type of STUB_TYPE ('[mscorlib]', or a reference pack's facade).
+SYSTEM_SCOPE_RE = re.compile(r"(\[[^\]\s]+\])\s*System\.(?:Object|ValueType)\b")
 
 
 def load_msil_run():
@@ -387,10 +423,9 @@ def run_peverify(args, assembly, allowed_msgs, label, calli_methods=None, listin
         if any(p.fullmatch(msg) for p in allowed_msgs):
             continue
         if listing is not None:
-            if RVA_STATIC.fullmatch(msg) and listing.instruction_at(where, offset) == (
-                "ldsflda",
-                IMAGE_FIELD,
-            ):
+            if RVA_STATIC.fullmatch(msg) and listing.instruction_at(where, offset) in [
+                ("ldsflda", field) for field in RVA_FIELDS
+            ]:
                 continue
             if listing.contains(where, "ldftn"):
                 notes.append(
@@ -576,7 +611,7 @@ def neutralize(text):
 
     def stub(name, ret, params):
         stubs.setdefault(name, (ret, params))
-        return "call %s '<msil-verify>%s'(%s)" % (ret, name, params)
+        return "call %s %s::'%s'(%s)" % (ret, STUB_TYPE, name, params)
 
     def count(what):
         stats[what] = stats.get(what, 0) + 1
@@ -623,9 +658,11 @@ def neutralize(text):
                 depth += paren_depth(lines[i])
                 i += 1
             new = ["ldc.i4.0", "conv.i"]
-        elif op == "ldsflda" and " ".join(rest.split()) == IMAGE_FIELD:
-            # The image copy of D12; any other RVA field stays and fails.
-            new, what = ["ldc.i4.0", "conv.i"], "ldsflda '<msil>image'"
+        elif op == "ldsflda" and " ".join(rest.split()) in RVA_FIELDS:
+            # The image copy of D12 and the relocation table of 5.9.10; any
+            # other RVA field stays and fails.
+            new = ["ldc.i4.0", "conv.i"]
+            what = "ldsflda '%s'" % rest.split("'")[-2]
         elif op.startswith("ldind.") and op[6:] in IND_TYPES:
             new = [stub(op, IND_TYPES[op[6:]], "native int")]
         elif op.startswith("stind.") and op[6:] in IND_TYPES:
@@ -666,20 +703,27 @@ def neutralize(text):
     out.extend(l for _, l in pending_prefixes)
 
     if stubs:
+        scope = SYSTEM_SCOPE_RE.search(text)
         out.append("")
         out.append(
             "// msil-verify.py: stubs that replace the neutralized instructions."
         )
+        out.append(
+            ".class private abstract auto ansi sealed %s extends %sSystem.Object"
+            % (STUB_TYPE, scope.group(1) if scope else "[mscorlib]")
+        )
+        out.append("{")
         for name, (ret, params) in sorted(stubs.items()):
             out.append(
-                ".method assembly static %s '<msil-verify>%s'(%s) cil managed"
+                "  .method assembly static %s '%s'(%s) cil managed"
                 % (ret, name, params)
             )
-            out.append("{")
-            out.append("  .maxstack 1")
-            out.append("  ldnull")
-            out.append("  throw")
-            out.append("}")
+            out.append("  {")
+            out.append("    .maxstack 1")
+            out.append("    ldnull")
+            out.append("    throw")
+            out.append("  }")
+        out.append("}")
     return "\n".join(out) + "\n", stats, calli_methods
 
 
@@ -896,6 +940,312 @@ def roundtrip(args, private):
     return []
 
 
+# ---------------------------------------------------------------- O6
+
+# A PEVerify /md message with /hresult: '[MD](0x8013129D): <text>'; its token,
+# '[token:0x04000001]', is named after the row it designates.
+MD_LINE_RE = re.compile(r"^\[MD\](?:\((?P<hr>0x[0-9A-Fa-f]+)\))?:\s*(?P<msg>.*?)\s*$")
+MD_TOKEN_RE = re.compile(r"\[token:0x(?P<tok>[0-9A-Fa-f]{8})\]")
+
+# ECMA-335 II.22: the tables by number, their columns and coded indexes.
+# Column kinds: 'u16', 'u32', 'str' (#Strings), 'guid', 'blob', ('i', table)
+# and ('c', coded index).
+MD_TABLES = (
+    "Module TypeRef TypeDef FieldPtr Field MethodPtr MethodDef ParamPtr Param "
+    "InterfaceImpl MemberRef Constant CustomAttribute FieldMarshal DeclSecurity "
+    "ClassLayout FieldLayout StandAloneSig EventMap EventPtr Event PropertyMap "
+    "PropertyPtr Property MethodSemantics MethodImpl ModuleRef TypeSpec ImplMap "
+    "FieldRVA EncLog EncMap Assembly AssemblyProcessor AssemblyOS AssemblyRef "
+    "AssemblyRefProcessor AssemblyRefOS File ExportedType ManifestResource "
+    "NestedClass GenericParam MethodSpec GenericParamConstraint"
+).split()
+MD_CODED = {
+    "TypeDefOrRef": (2, (0x02, 0x01, 0x1B)),
+    "HasConstant": (2, (0x04, 0x08, 0x17)),
+    "HasCustomAttribute": (
+        5,
+        (0x06, 0x04, 0x01, 0x02, 0x08, 0x09, 0x0A, 0x00, 0x0E, 0x17, 0x14, 0x11)
+        + (0x1A, 0x1B, 0x20, 0x23, 0x26, 0x27, 0x28, 0x2A, 0x2C, 0x2B),
+    ),
+    "HasFieldMarshal": (1, (0x04, 0x08)),
+    "HasDeclSecurity": (2, (0x02, 0x06, 0x20)),
+    "MemberRefParent": (3, (0x02, 0x01, 0x1A, 0x06, 0x1B)),
+    "HasSemantics": (1, (0x14, 0x17)),
+    "MethodDefOrRef": (1, (0x06, 0x0A)),
+    "MemberForwarded": (1, (0x04, 0x06)),
+    "Implementation": (2, (0x26, 0x23, 0x27)),
+    "CustomAttributeType": (3, (None, None, 0x06, 0x0A, None)),
+    "ResolutionScope": (2, (0x00, 0x1A, 0x23, 0x01)),
+    "TypeOrMethodDef": (1, (0x02, 0x06)),
+}
+MD_SCHEMA = {
+    0x00: ("u16", "str", "guid", "guid", "guid"),
+    0x01: (("c", "ResolutionScope"), "str", "str"),
+    0x02: ("u32", "str", "str", ("c", "TypeDefOrRef"), ("i", 0x04), ("i", 0x06)),
+    0x03: (("i", 0x04),),
+    0x04: ("u16", "str", "blob"),
+    0x05: (("i", 0x06),),
+    0x06: ("u32", "u16", "u16", "str", "blob", ("i", 0x08)),
+    0x07: (("i", 0x08),),
+    0x08: ("u16", "u16", "str"),
+    0x09: (("i", 0x02), ("c", "TypeDefOrRef")),
+    0x0A: (("c", "MemberRefParent"), "str", "blob"),
+    0x0B: ("u16", ("c", "HasConstant"), "blob"),
+    0x0C: (("c", "HasCustomAttribute"), ("c", "CustomAttributeType"), "blob"),
+    0x0D: (("c", "HasFieldMarshal"), "blob"),
+    0x0E: ("u16", ("c", "HasDeclSecurity"), "blob"),
+    0x0F: ("u16", "u32", ("i", 0x02)),
+    0x10: ("u32", ("i", 0x04)),
+    0x11: ("blob",),
+    0x12: (("i", 0x02), ("i", 0x14)),
+    0x13: (("i", 0x14),),
+    0x14: ("u16", "str", ("c", "TypeDefOrRef")),
+    0x15: (("i", 0x02), ("i", 0x17)),
+    0x16: (("i", 0x17),),
+    0x17: ("u16", "str", "blob"),
+    0x18: ("u16", ("i", 0x06), ("c", "HasSemantics")),
+    0x19: (("i", 0x02), ("c", "MethodDefOrRef"), ("c", "MethodDefOrRef")),
+    0x1A: ("str",),
+    0x1B: ("blob",),
+    0x1C: ("u16", ("c", "MemberForwarded"), "str", ("i", 0x1A)),
+    0x1D: ("u32", ("i", 0x04)),
+    0x1E: ("u32", "u32"),
+    0x1F: ("u32",),
+    0x20: ("u32", "u16", "u16", "u16", "u16", "u32", "blob", "str", "str"),
+    0x21: ("u32",),
+    0x22: ("u32", "u32", "u32"),
+    0x23: ("u16", "u16", "u16", "u16", "u32", "blob", "str", "str", "blob"),
+    0x24: ("u32", ("i", 0x23)),
+    0x25: ("u32", "u32", "u32", ("i", 0x23)),
+    0x26: ("u32", "str", "blob"),
+    0x27: ("u32", "u32", "str", "str", ("c", "Implementation")),
+    0x28: ("u32", "u32", "str", ("c", "Implementation")),
+    0x29: (("i", 0x02), ("i", 0x02)),
+    0x2A: ("u16", "u16", ("c", "TypeOrMethodDef"), "str"),
+    0x2B: (("c", "MethodDefOrRef"), "blob"),
+    0x2C: (("i", 0x2A), ("c", "TypeDefOrRef")),
+}
+# The name column (and namespace column) of the tables that have one.
+MD_NAME_COLUMNS = {
+    0x00: (1, None),
+    0x01: (1, 2),
+    0x02: (1, 2),
+    0x04: (1, None),
+    0x06: (3, None),
+    0x08: (2, None),
+    0x0A: (1, None),
+    0x14: (1, None),
+    0x17: (1, None),
+    0x1A: (0, None),
+    0x20: (7, None),
+    0x23: (6, None),
+    0x26: (1, None),
+    0x27: (2, 3),
+    0x28: (2, None),
+    0x2A: (3, None),
+}
+
+
+class MetadataNames:
+    """The rows of an image's metadata tables, enough to name the row that a
+    metadata token designates (O6 compares PEVerify /md messages of two
+    images whose row order differs). Raises ValueError for a file that is
+    not an IL image."""
+
+    def __init__(self, path):
+        with open(path, "rb") as f:
+            self.data = data = f.read()
+        u16 = lambda o: struct.unpack_from("<H", data, o)[0]
+        u32 = lambda o: struct.unpack_from("<I", data, o)[0]
+        if data[:2] != b"MZ":
+            raise ValueError("%s is not a PE file" % path)
+        pe = u32(0x3C)
+        if data[pe : pe + 4] != b"PE\0\0":
+            raise ValueError("%s is not a PE file" % path)
+        nsections, opt_size = u16(pe + 6), u16(pe + 20)
+        opt = pe + 24
+        dirs = opt + {0x10B: 96, 0x20B: 112}.get(u16(opt), 0)
+        if dirs == opt:
+            raise ValueError("%s has an unknown optional header" % path)
+        self.sections = []
+        for i in range(nsections):
+            s = opt + opt_size + 40 * i
+            vsize, va, rawsize, raw = struct.unpack_from("<IIII", data, s + 8)
+            self.sections.append((va, max(vsize, rawsize), raw))
+        cli_rva = u32(dirs + 14 * 8)
+        if not cli_rva:
+            raise ValueError("%s has no CLI header" % path)
+        cli = self.offset(cli_rva)
+        root = self.offset(u32(cli + 8))
+        if u32(root) != 0x424A5342:
+            raise ValueError("%s has no metadata root" % path)
+        vlen = u32(root + 12)
+        at = root + 16 + vlen + 2
+        streams = {}
+        for _ in range(u16(at)):
+            at += 2 if not streams else 0
+            off, size = u32(at), u32(at + 4)
+            end = data.index(b"\0", at + 8)
+            name = data[at + 8 : end].decode("ascii", "replace")
+            streams[name] = (root + off, size)
+            at = at + 8 + ((end - (at + 8)) // 4 + 1) * 4
+        tables = streams.get("#~") or streams.get("#-")
+        self.strings = streams.get("#Strings", (0, 0))[0]
+        if not tables:
+            raise ValueError("%s has no metadata tables" % path)
+        t = tables[0]
+        heaps = data[t + 6]
+        valid = struct.unpack_from("<Q", data, t + 8)[0]
+        self.rows = [0] * len(MD_TABLES)
+        at = t + 24
+        for n in range(64):
+            if valid >> n & 1:
+                if n < len(MD_TABLES):
+                    self.rows[n] = u32(at)
+                at += 4
+        if heaps & 0x40:
+            at += 4
+        sizes = {
+            "u16": 2,
+            "u32": 4,
+            "str": 4 if heaps & 1 else 2,
+            "guid": 4 if heaps & 2 else 2,
+            "blob": 4 if heaps & 4 else 2,
+        }
+
+        def size(kind):
+            if isinstance(kind, str):
+                return sizes[kind]
+            if kind[0] == "i":
+                return 2 if self.rows[kind[1]] < 0x10000 else 4
+            bits, targets = MD_CODED[kind[1]]
+            most = max(self.rows[x] if x is not None else 0 for x in targets)
+            return 2 if most < (1 << (16 - bits)) else 4
+
+        self.table_rows = {}
+        for n in range(len(MD_TABLES)):
+            if not self.rows[n]:
+                continue
+            widths = [size(k) for k in MD_SCHEMA[n]]
+            rowsize = sum(widths)
+            rows = []
+            for r in range(self.rows[n]):
+                cols, o = [], at + r * rowsize
+                for w in widths:
+                    cols.append(u16(o) if w == 2 else u32(o))
+                    o += w
+                rows.append(cols)
+            self.table_rows[n] = rows
+            at += rowsize * self.rows[n]
+
+    def offset(self, rva):
+        for va, size, raw in self.sections:
+            if va <= rva < va + size:
+                return raw + rva - va
+        raise ValueError("RVA 0x%X lies in no section" % rva)
+
+    def string(self, index):
+        start = self.strings + index
+        end = self.data.index(b"\0", start)
+        return self.data[start:end].decode("utf-8", "replace")
+
+    def name(self, table, row):
+        """The (namespace-qualified) name of a row, or None."""
+        rows = self.table_rows.get(table, [])
+        if table not in MD_NAME_COLUMNS or not 1 <= row <= len(rows):
+            return None
+        col, ns = MD_NAME_COLUMNS[table]
+        name = self.string(rows[row - 1][col])
+        if ns is not None:
+            space = self.string(rows[row - 1][ns])
+            if space:
+                name = space + "." + name
+        return name
+
+    def owner(self, table, row):
+        """The TypeDef (for a Field or MethodDef) or MethodDef (for a Param)
+        whose member list holds the row, as (table, row), or None."""
+        parent, column = {0x04: (0x02, 4), 0x06: (0x02, 5), 0x08: (0x06, 5)}[table]
+        found = None
+        for p, cols in enumerate(self.table_rows.get(parent, []), 1):
+            if cols[column] <= row:
+                found = p
+        return (parent, found) if found else None
+
+    def describe(self, token):
+        """A layout-independent text for the row of a metadata token."""
+        table, row = token >> 24, token & 0xFFFFFF
+        label = MD_TABLES[table] if table < len(MD_TABLES) else "table 0x%02X" % table
+        name = self.name(table, row)
+        if name is None:
+            if table < len(MD_TABLES) and not 1 <= row <= self.rows[table]:
+                return "%s[%d] (no such row)" % (label, row)
+            return "%s[%d]" % (label, row)
+        text = "%s '%s'" % (label, name)
+        if table in (0x04, 0x06, 0x08):
+            own = self.owner(table, row)
+            if own:
+                outer = self.name(*own)
+                if table == 0x08:
+                    grand = self.owner(*own)
+                    if grand:
+                        outer = "%s'::'%s" % (self.name(*grand), outer)
+                text = "%s '%s'::'%s'" % (label, outer, name)
+        return text
+
+
+def md_messages(args, image):
+    """The PEVerify /md messages of image, each token named after its row;
+    raises ValueError when PEVerify fails or the image cannot be read."""
+    res, output, limit = run([args.peverify, "/nologo", "/md", "/hresult", image], args)
+    if limit:
+        raise ValueError("peverify /md %s: %s" % (image, limit))
+    names = MetadataNames(image)
+    full = os.path.abspath(image)
+    messages = []
+    for line in output.splitlines():
+        m = MD_LINE_RE.match(line.strip())
+        if not m:
+            continue
+        text = MD_TOKEN_RE.sub(
+            lambda t: "[%s]" % names.describe(int(t.group("tok"), 16)), m.group("msg")
+        )
+        for spelling in {full, full.replace("\\", "/"), image}:
+            text = text.replace(spelling, "<image>")
+        hr = m.group("hr")
+        messages.append("[MD]%s: %s" % ("(0x%s)" % hr[2:].upper() if hr else "", text))
+    # 0: verified (warnings only); 1: errors, which are among the messages.
+    if res.returncode not in (0, 1) or (res.returncode == 1 and not messages):
+        raise ValueError(
+            "peverify /md %s exited with status %s:\n%s"
+            % (image, msil_run.describe_exit(res.returncode), output)
+        )
+    return messages
+
+
+def check_md_baseline(args):
+    """O6 (plan 5.12.6): every PEVerify /md message of the assembly is one of
+    the baseline's. Returns (failures, notes)."""
+    if not args.peverify:
+        return [], ["msil-verify: note: O6 skipped: no PEVerify (--peverify)"]
+    try:
+        mine = md_messages(args, args.assembly)
+        base = set(md_messages(args, args.md_baseline))
+    except (OSError, ValueError, struct.error, IndexError) as e:
+        return ["O6: %s" % e], []
+    extra = sorted(set(m for m in mine if m not in base))
+    if extra:
+        return [
+            "O6: peverify /md: %s (not reported for the baseline %s)"
+            % (m, os.path.basename(args.md_baseline))
+            for m in extra
+        ], []
+    return [], [
+        "msil-verify: O6: the %d PEVerify /md messages of %s are among the %d of %s"
+        % (len(mine), os.path.basename(args.assembly), len(base), args.md_baseline)
+    ]
+
+
 def run_peverify_with_deps(args, listing):
     """Pass 1 of PEVerify: on the assembly itself, or with --dep on a copy in
     a private directory beside copies of the dependencies, where PEVerify
@@ -1006,6 +1356,12 @@ def main():
         "--ilasm", help="ilasm that reassembles the neutralized copy or --roundtrip"
     )
     p.add_argument(
+        "--md-baseline",
+        metavar="FILE",
+        help="O6: every PEVerify /md message of the assembly must be one of "
+        "this image's (the ilasm build of the same program)",
+    )
+    p.add_argument(
         "--keep-copy",
         metavar="DIR",
         help="keep the neutralized copy (.il and the reassembled image), or the "
@@ -1066,6 +1422,8 @@ def main():
     args.managed_deps = [d for d in args.dep if is_managed(d)]
 
     if args.roundtrip:
+        if args.md_baseline:
+            p.error("--md-baseline and --roundtrip exclude each other")
         return main_roundtrip(p, args)
     if args.output:
         p.error("--output needs --roundtrip")
@@ -1079,6 +1437,11 @@ def main():
     if not os.path.isfile(args.assembly):
         sys.stderr.write("msil-verify: error: %s not found\n" % args.assembly)
         return 2
+    if args.md_baseline and not os.path.isfile(args.md_baseline):
+        sys.stderr.write(
+            "msil-verify: error: --md-baseline %s not found\n" % args.md_baseline
+        )
+        return 2
     try:
         allow = load_allow(args.allow)
     except (OSError, re.error) as e:
@@ -1088,6 +1451,10 @@ def main():
     private = tempfile.mkdtemp(prefix="msil-verify-") if args.ildasm else None
     try:
         bad, notes = verify(args, allow, private)
+        if args.md_baseline:
+            mbad, mnotes = check_md_baseline(args)
+            bad += mbad
+            notes += mnotes
     except (OSError, msil_run.ConfigError) as e:
         sys.stderr.write("msil-verify: error: %s\n" % e)
         return 2

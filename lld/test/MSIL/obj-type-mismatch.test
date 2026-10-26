@@ -1,0 +1,207 @@
+## Kind checks and duplicates between CIL objects (ImplementationPlan.md
+## 5.9.5, 5.9.14): a FUNCTION and a DATA symbol of one name, a definition or
+## a reference, are
+##   symbol type mismatch: <s>
+##   >>> defined as function in <file>
+##   >>> defined as data in <file>
+## with the files in the order they were loaded (wasm-ld's rule; reading
+## through such an address has no CIL meaning), also between a CIL object
+## and a bitcode file; a WEAK data definition and a function definition are
+## a mismatch, not a duplicate. Two GLOBAL definitions are
+##   duplicate symbol: <s>
+##   >>> defined in <file>
+##   >>> defined in <file>
+## unless --allow-multiple-definition, which keeps the first.
+## On non-Windows triples msil-ld defines a referenced __start_X/__stop_X as
+## DATA (5.9.9), so a function-typed reference to one (a call of
+## __start_foo, or its address taken as a function) is the same mismatch,
+## with the synthetic definition as '<internal>', on the object link, the
+## LTO PE and --lto-emit-asm alike; a data-typed reference links.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj fn-def.ll -o fn-def.o
+# RUN: llc -filetype=obj data-ref.ll -o data-ref.o
+# RUN: llc -filetype=obj data-def.ll -o data-def.o
+# RUN: llc -filetype=obj fn-ref.ll -o fn-ref.o
+# RUN: llc -filetype=obj weak-data.ll -o weak-data.o
+# RUN: llc -filetype=obj dup.ll -o dup.o
+# RUN: llvm-as data-ref.ll -o data-ref.bc
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=duplicate
+
+## A function definition and a data reference, both orders.
+# RUN: not msil-ld fn-def.o data-ref.o -o x.exe 2>&1 | %{fc} --check-prefix=FD
+# RUN: not msil-ld data-ref.o fn-def.o -o x.exe 2>&1 | %{fc} --check-prefix=DF
+# FD:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# FD-NEXT: {{^}}>>> defined as function in fn-def.o{{$}}
+# FD-NEXT: {{^}}>>> defined as data in data-ref.o{{$}}
+# DF:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# DF-NEXT: {{^}}>>> defined as data in data-ref.o{{$}}
+# DF-NEXT: {{^}}>>> defined as function in fn-def.o{{$}}
+
+## A data definition and a function reference (a call), both orders.
+# RUN: not msil-ld data-def.o fn-ref.o -o x.exe 2>&1 | %{fc} --check-prefix=DF2
+# RUN: not msil-ld fn-ref.o data-def.o -o x.exe 2>&1 | %{fc} --check-prefix=FD2
+# DF2:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# DF2-NEXT: {{^}}>>> defined as data in data-def.o{{$}}
+# DF2-NEXT: {{^}}>>> defined as function in fn-ref.o{{$}}
+# FD2:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# FD2-NEXT: {{^}}>>> defined as function in fn-ref.o{{$}}
+# FD2-NEXT: {{^}}>>> defined as data in data-def.o{{$}}
+
+## A WEAK data definition against a function definition.
+# RUN: not msil-ld fn-def.o weak-data.o -o x.exe 2>&1 | %{fc} --check-prefix=WEAK
+# WEAK:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# WEAK-NEXT: {{^}}>>> defined as function in fn-def.o{{$}}
+# WEAK-NEXT: {{^}}>>> defined as data in weak-data.o{{$}}
+
+## A CIL object against bitcode.
+# RUN: not msil-ld fn-def.o data-ref.bc -o x.exe 2>&1 | %{fc} --check-prefix=MIXED
+# MIXED:      {{^}}msil-ld: error: symbol type mismatch: s{{$}}
+# MIXED-NEXT: {{^}}>>> defined as function in fn-def.o{{$}}
+# MIXED-NEXT: {{^}}>>> defined as data in data-ref.bc{{$}}
+
+## A function-typed __start_foo against msil-ld's DATA definition of it
+## (the output section foo exists), called (ss-call) or only addressed
+## (ss-addr), on every path; ss-data's data-typed references link.
+# RUN: llc -filetype=obj ss-call.ll -o ss-call.o
+# RUN: llc -filetype=obj ss-addr.ll -o ss-addr.o
+# RUN: llc -filetype=obj ss-data.ll -o ss-data.o
+# RUN: llvm-as ss-call.ll -o ss-call.bc
+# RUN: llvm-as ss-addr.ll -o ss-addr.bc
+# RUN: llvm-as ss-data.ll -o ss-data.bc
+# DEFINE: %{ss} = %{fc} --check-prefix=SS --implicit-check-not=error: \
+# DEFINE:   --implicit-check-not="is not linked" --implicit-check-not="runtime helper"
+# RUN: not msil-ld ss-call.o -o x.exe 2>&1 | %{ss}
+# RUN: not msil-ld ss-call.bc -o x.exe 2>&1 | %{ss}
+# RUN: not msil-ld --lto-emit-asm ss-call.bc -o x.il 2>&1 | %{ss}
+# RUN: not msil-ld ss-addr.o -o x.exe 2>&1 | %{ss}
+# RUN: not msil-ld ss-addr.bc -o x.exe 2>&1 | %{ss}
+# RUN: not msil-ld --lto-emit-asm ss-addr.bc -o x.il 2>&1 | %{ss}
+# SS:      {{^}}msil-ld: error: symbol type mismatch: __start_foo{{$}}
+# SS-NEXT: {{^}}>>> defined as function in {{.+}}{{$}}
+# SS-NEXT: {{^}}>>> defined as data in <internal>{{$}}
+# RUN: msil-ld ss-data.o -o ss-data.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ss-data.exe | FileCheck %s --check-prefix=SS-DATA
+# RUN: msil-ld ss-data.bc -o ss-data-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ss-data-lto.exe | FileCheck %s --check-prefix=SS-DATA
+# RUN: msil-ld --lto-emit-asm ss-data.bc -o ss-data.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=SS-DATA-IL --input-file=ss-data.il
+# SS-DATA-DAG:    {{^}}  .field '__start_foo' native int flags=0x{{[0-9A-F]+}}{{$}}
+# SS-DATA-DAG:    {{^}}  .field '__stop_foo' native int flags=0x{{[0-9A-F]+}}{{$}}
+# SS-DATA-IL-DAG: {{^}}.field {{.*}}static {{(initonly )?}}native int '__start_foo'{{$}}
+# SS-DATA-IL-DAG: {{^}}.field {{.*}}static {{(initonly )?}}native int '__stop_foo'{{$}}
+
+## Two GLOBAL definitions of s (functions in fn-def.o and dup.o).
+# RUN: not msil-ld fn-def.o dup.o -o x.exe 2>&1 | FileCheck %s --check-prefix=DUP \
+# RUN:   --implicit-check-not="PLEASE submit" --implicit-check-not=error:
+# DUP:      {{^}}msil-ld: error: duplicate symbol: s{{$}}
+# DUP-NEXT: {{^}}>>> defined in fn-def.o{{$}}
+# DUP-NEXT: {{^}}>>> defined in dup.o{{$}}
+# RUN: msil-ld --allow-multiple-definition fn-def.o dup.o -o first.exe 2>&1 | count 0
+# RUN: llvm-cil-dump first.exe | FileCheck %s --check-prefix=FIRST --implicit-check-not=".method 's'"
+# FIRST:      {{^}}  .method 's' int32() flags=0x0016 impl=0x0000{{$}}
+# FIRST-NEXT: {{^}}    .maxstack 1{{$}}
+# FIRST-NEXT: {{^}}    L0: ldc.i4.1{{$}}
+
+#--- fn-def.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @s() {
+  ret i32 1
+}
+
+define i32 @main() {
+  %r = call i32 @s()
+  ret i32 %r
+}
+
+#--- data-ref.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@s = external global i32
+
+define i32 @read_s() {
+  %v = load i32, ptr @s
+  ret i32 %v
+}
+
+#--- data-def.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@s = global i32 3, align 4
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- fn-ref.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @s()
+
+define i32 @call_s() {
+  %r = call i32 @s()
+  ret i32 %r
+}
+
+#--- weak-data.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@s = weak global i32 4, align 4
+
+#--- dup.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @s() {
+  ret i32 2
+}
+
+#--- ss-call.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@x = global i32 1, section "foo", align 4
+@llvm.used = appending global [1 x ptr] [ptr @x], section "llvm.metadata"
+
+declare i32 @__start_foo()
+
+define i32 @main() {
+  %r = call i32 @__start_foo()
+  ret i32 %r
+}
+
+#--- ss-addr.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@x = global i32 1, section "foo", align 4
+@p = global ptr null, align 8
+@llvm.used = appending global [1 x ptr] [ptr @x], section "llvm.metadata"
+
+declare void @__start_foo()
+
+define i32 @main() {
+  store volatile ptr @__start_foo, ptr @p, align 8
+  ret i32 0
+}
+
+#--- ss-data.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@x = global i32 1, section "foo", align 4
+@llvm.used = appending global [1 x ptr] [ptr @x], section "llvm.metadata"
+@__start_foo = external global [0 x i32]
+@__stop_foo = external global [0 x i32]
+
+define i32 @main() {
+  %a = ptrtoint ptr @__start_foo to i64
+  %b = ptrtoint ptr @__stop_foo to i64
+  %d = sub i64 %b, %a
+  %r = trunc i64 %d to i32
+  ret i32 %r
+}

@@ -1,0 +1,12 @@
+# Run in a nested lit by ../../prog.test under msil_pipeline=asm and under
+# obj with msil_equiv=1: %{msil_prog} of two sources at -O2, built through
+# CIL objects by msil-prog.py with the stand-ins of
+# ../../../prog/Inputs/prog-cc.py (which read the values below).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# RUN: %{msil_prog_O2}
+
+#--- main.c
+// prog-value: 3
+#--- util.c
+// prog-value: 4

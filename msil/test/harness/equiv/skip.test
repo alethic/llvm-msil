@@ -1,0 +1,128 @@
+# The skip lines of the allow-list (plan 5.12.4, 5.12.6; M20): with
+# --test <path>, a 'skip <oracle>[@<triple>][:<level>] <path> <reason>' line
+# whose oracle is the --oracle value (default O3), whose path is the test's,
+# relative to the repository root (an absolute path inside the repository is
+# made relative), or a directory above it (a path ending in '/'), and whose
+# triple and level, where it names them, are --triple's and --level's (plan
+# section 12, 'Plan 5.12.6 amended (skip lines)'), makes msil-equiv.py print
+# '<oracle> skipped: <reason>' and pass (status 0) without reading either
+# image, so the operands here name files that do not exist:
+# (1) an O3 line naming this test, under the default oracle and --oracle O3;
+# (2) an O4 line naming this test, under --oracle O4;
+# (3) an O3 line naming a directory above this test;
+# (4) lines that do not cover the test: an O4 line under O3, an O3 line under
+#     O4, another test's path, a directory that only starts like this one,
+#     and no --test at all; each then goes on to the images and stops at the
+#     missing one (status 2), and says nothing about skipping;
+# (5) the real msil/utils/equiv-allowed.txt skips O4 of
+#     msil/test/M2/00-link/spill-limits.test (spill classes; plan 5.12.6), and
+#     not O3;
+# (6) qualified lines: 'skip O3@x86_64-pc-windows-msvc-msil:O2' covers the
+#     test with that --triple and --level, and not with another triple,
+#     another level, or without --triple and --level; an O4 line with a
+#     triple only covers that triple at every level, and an O4 line with a
+#     level only covers every triple at that level; an unqualified line
+#     covers the test whatever --triple and --level say;
+# (7) a skip line whose triple is not an MSIL triple, whose level is not one
+#     of O0, O1, O2, O3, Os and Oz, or whose oracle is neither O3 nor O4 is
+#     a usage error (status 2);
+# (8) the real file skips O3 of msil/test/M1/11-programs/crc32.c on
+#     x86_64-pc-windows-msvc-msil at -O2 only: not at -O0, and not on
+#     x86_64-unknown-linux-gnu-msil at -O2 (plan 5.9.9 rule 6; the two sides
+#     are equal there).
+
+# RUN: rm -rf %t && split-file %s %t
+
+# (1)
+# RUN: %msil_equiv --allowed %t/o3.txt --test %s %t/none-a %t/none-b > %t/1a.log
+# RUN: %{harness_check} contains %t/1a.log "\AO3 skipped: the reason of the O3 line\n\Z"
+# RUN: %msil_equiv --allowed %t/o3.txt --oracle O3 --test %s %t/none-a %t/none-b > %t/1b.log
+# RUN: %{harness_check} contains %t/1b.log "\AO3 skipped: the reason of the O3 line\n\Z"
+
+# (2)
+# RUN: %msil_equiv --allowed %t/o4.txt --oracle O4 --test %s %t/none-a %t/none-b > %t/2.log
+# RUN: %{harness_check} contains %t/2.log "\AO4 skipped: the reason of the O4 line\n\Z"
+
+# (3)
+# RUN: %msil_equiv --allowed %t/dir.txt --test %s %t/none-a %t/none-b > %t/3.log
+# RUN: %{harness_check} contains %t/3.log "\AO3 skipped: every test of the harness\n\Z"
+
+# (4)
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/o4.txt --test %s %t/none-a %t/none-b > %t/4a.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/o3.txt --oracle O4 --test %s %t/none-a %t/none-b > %t/4b.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/other.txt --test %s %t/none-a %t/none-b > %t/4c.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/o3.txt %t/none-a %t/none-b > %t/4d.log 2>&1
+# RUN: %{harness_check} contains %t/4a.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/4b.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/4c.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/4d.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} lacks %t/4a.log "skipped"
+# RUN: %{harness_check} lacks %t/4b.log "skipped"
+# RUN: %{harness_check} lacks %t/4c.log "skipped"
+# RUN: %{harness_check} lacks %t/4d.log "skipped"
+
+# (5)
+# RUN: %msil_equiv --oracle O4 --test %S/../../M2/00-link/spill-limits.test %t/none-a %t/none-b > %t/5a.log
+# RUN: %{harness_check} contains %t/5a.log "\AO4 skipped: spill classes: --lto-emit-asm text has no per-type limit"
+# RUN: %{harness_check} exits 2 %msil_equiv --oracle O3 --test %S/../../M2/00-link/spill-limits.test %t/none-a %t/none-b > %t/5b.log 2>&1
+# RUN: %{harness_check} lacks %t/5b.log "skipped"
+
+# (6)
+# RUN: %msil_equiv --allowed %t/qual.txt --test %s --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/6a.log
+# RUN: %{harness_check} contains %t/6a.log "\AO3 skipped: Windows at -O2 only\n\Z"
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/qual.txt --test %s --triple x86_64-unknown-linux-gnu-msil --level O2 %t/none-a %t/none-b > %t/6b.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/qual.txt --test %s --triple x86_64-pc-windows-msvc-msil --level O0 %t/none-a %t/none-b > %t/6c.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/qual.txt --test %s %t/none-a %t/none-b > %t/6d.log 2>&1
+# RUN: %{harness_check} contains %t/6b.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/6c.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/6d.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} lacks %t/6b.log "skipped"
+# RUN: %{harness_check} lacks %t/6c.log "skipped"
+# RUN: %{harness_check} lacks %t/6d.log "skipped"
+# RUN: %msil_equiv --allowed %t/qual.txt --oracle O4 --test %s --triple x86_64-unknown-linux-gnu-msil --level Oz %t/none-a %t/none-b > %t/6e.log
+# RUN: %{harness_check} contains %t/6e.log "\AO4 skipped: Linux at every level\n\Z"
+# RUN: %msil_equiv --allowed %t/qual.txt --oracle O4 --test %s --triple x86_64-pc-windows-msvc-msil --level O1 %t/none-a %t/none-b > %t/6f.log
+# RUN: %{harness_check} contains %t/6f.log "\AO4 skipped: every triple at -O1\n\Z"
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/qual.txt --oracle O4 --test %s --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/6g.log 2>&1
+# RUN: %{harness_check} lacks %t/6g.log "skipped"
+# RUN: %msil_equiv --allowed %t/o3.txt --test %s --triple x86_64-unknown-linux-gnu-msil --level Oz %t/none-a %t/none-b > %t/6h.log
+# RUN: %{harness_check} contains %t/6h.log "\AO3 skipped: the reason of the O3 line\n\Z"
+
+# (7)
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-triple.txt --test %s --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/7a.log 2>&1
+# RUN: %{harness_check} contains %t/7a.log "^msil-equiv: error: \S*bad-triple\.txt:1: the triple x86_64-pc-windows-msvc of the skip line is not an MSIL triple \(it does not end in -msil\)$"
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-level.txt --test %s --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/7b.log 2>&1
+# RUN: %{harness_check} contains %t/7b.log "^msil-equiv: error: \S*bad-level\.txt:1: the level O4 of the skip line is not one of O0, O1, O2, O3, Os, Oz$"
+# RUN: %{harness_check} exits 2 %msil_equiv --allowed %t/bad-oracle.txt --test %s --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/7c.log 2>&1
+# RUN: %{harness_check} contains %t/7c.log "^msil-equiv: error: \S*bad-oracle\.txt:1: expected 'skip <oracle>\[@<triple>\]\[:<level>\] <test path> <reason>' with the oracle O3 or O4$"
+
+# (8)
+# RUN: %msil_equiv --oracle O3 --test %S/../../M1/11-programs/crc32.c --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/8a.log
+# RUN: %{harness_check} contains %t/8a.log "\AO3 skipped: unnamed_addr C strings: at -O2 on the Windows triple"
+# RUN: %{harness_check} exits 2 %msil_equiv --oracle O3 --test %S/../../M1/11-programs/crc32.c --triple x86_64-pc-windows-msvc-msil --level O0 %t/none-a %t/none-b > %t/8b.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --oracle O3 --test %S/../../M1/11-programs/crc32.c --triple x86_64-unknown-linux-gnu-msil --level O2 %t/none-a %t/none-b > %t/8c.log 2>&1
+# RUN: %{harness_check} lacks %t/8b.log "skipped"
+# RUN: %{harness_check} lacks %t/8c.log "skipped"
+
+#--- o3.txt
+# This test's O3 comparison is skipped.
+skip O3 msil/test/harness/equiv/skip.test the reason of the O3 line
+#--- o4.txt
+assembly-hash --assembly-hash=ignore # an entry beside the skip line
+skip O4 msil/test/harness/equiv/skip.test the reason of the O4 line
+#--- dir.txt
+skip O3 msil/test/harness/ every test of the harness
+#--- other.txt
+skip O3 msil/test/harness/equiv/other.test another test
+skip O3 msil/test/harness/equi/ a directory that only starts like this one
+skip O3 msil/test/harness/equiv/skip.test.old a longer name
+#--- qual.txt
+skip O3@x86_64-pc-windows-msvc-msil:O2 msil/test/harness/equiv/skip.test Windows at -O2 only
+skip O4@x86_64-unknown-linux-gnu-msil msil/test/harness/equiv/skip.test Linux at every level
+skip O4:O1 msil/test/harness/equiv/skip.test every triple at -O1
+#--- bad-triple.txt
+skip O3@x86_64-pc-windows-msvc:O2 msil/test/harness/equiv/skip.test a native triple
+#--- bad-level.txt
+skip O3@x86_64-pc-windows-msvc-msil:O4 msil/test/harness/equiv/skip.test an oracle where the level goes
+#--- bad-oracle.txt
+skip O5:O2 msil/test/harness/equiv/skip.test no such oracle

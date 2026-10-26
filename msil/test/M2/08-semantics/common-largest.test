@@ -1,0 +1,84 @@
+# Matrix case common-largest: common symbols of different sizes merge to the largest (native).
+# a.c, linked first, has the smaller tentative definition of c (char[4]) and
+# the larger one of d (long long[4], 32 bytes, 8-aligned); b.c has the larger
+# c (char[16]) and the smaller d (char[2]). As ld.lld and lld-link do, the
+# link makes one object of each name with the largest size and alignment of
+# all declarations, placed where its first declaration is (plan 5.9.5, Common
+# against Common: 'alignment = max; size and file from the larger'; plan
+# 5.9.9 rule 3), so b.c's 16 writes to c and a.c's write of d[3] stay inside
+# the objects: the zero-initialized guard arrays of both objects keep their
+# zeros, both objects see the same addresses and contents, and d is 8-aligned.
+# The tentative definitions carry __attribute__((common)) instead of -fcommon
+# (which the native oracle would not get). Plan 5.9.16 row common-largest
+# (M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+#--- a.c
+#include "msil_test.h"
+char c[4] __attribute__((common));
+long long d[4] __attribute__((common));
+static char guard_a[64];
+char *b_c_addr(void);
+char *b_d_addr(void);
+void b_fill(void);
+int b_c_sum(void);
+int b_d_bytes(void);
+int b_guard(void);
+
+int main(void) {
+  int g = 0;
+  b_fill();
+  put_kv("c[0]", c[0]);
+  put_kv("c[3]", c[3]);
+  put_kv("b sees c", b_c_sum());
+  d[3] = 0x0102030405060708LL;
+  put_kv("d[0]", d[0]);
+  put_kv("b sees d", b_d_bytes());
+  put_kv("same c", c == b_c_addr());
+  put_kv("same d", (char *)d == b_d_addr());
+  put_kv("d aligned", ((__UINTPTR_TYPE__)d & 7) == 0);
+  for (int i = 0; i < 64; ++i)
+    g |= guard_a[i];
+  put_kv("guard_a", g);
+  put_kv("guard_b", b_guard());
+  return (c[3] + (int)(d[3] & 0xff) + g) & 0xff;
+}
+#--- b.c
+char c[16] __attribute__((common));
+char d[2] __attribute__((common));
+static char guard_b[64];
+
+char *b_c_addr(void) { return c; }
+char *b_d_addr(void) { return d; }
+
+void b_fill(void) {
+  for (int i = 0; i < 16; ++i)
+    c[i] = (char)(i + 1);
+  d[0] = 5;
+  d[1] = 6;
+}
+
+int b_c_sum(void) {
+  int s = 0;
+  for (int i = 0; i < 16; ++i)
+    s += c[i];
+  return s;
+}
+
+/* The bytes of d as b.c sees them: its own two, then a.c's d[3] behind them
+   (read through a volatile pointer, so the compiler does not reason about
+   b.c's declared size). */
+static const char *volatile d_view;
+int b_d_bytes(void) {
+  d_view = d;
+  const char *p = d_view;
+  return p[0] * 1000 + p[1] * 100 + p[24] * 10 + p[31];
+}
+
+int b_guard(void) {
+  int g = 0;
+  for (int i = 0; i < 64; ++i)
+    g |= guard_b[i];
+  return g;
+}

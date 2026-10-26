@@ -1,0 +1,87 @@
+# CIL objects and MSIL bitcode in one link, positional and in one archive, on every pipeline.
+# msil-ld links bitcode through LTO and parses LTO's output as in-memory CIL
+# objects, which then resolve against the other CIL objects like any object
+# (plan 5.9.13, from M20; Design 5.1: archives may hold both). The RUN lines
+# before the composite build, for the MSIL triple, objpart.c as a CIL object
+# (clang -c) and bcpart.c as bitcode (clang -flto -c), and the archive
+# libmixedpre.a (also named mixedpre.lib) with the CIL object of arobj.c and
+# the bitcode of arbc.c, all with MSIL_PREBUILT defined; %{msil_libs} gives
+# them to the MSIL link only. The composite's own copies of those four
+# sources compile to nothing for the MSIL triple without MSIL_PREBUILT
+# (__MSIL__), so on the object pipeline main.c is a CIL object next to
+# bitcode, and on the LTO pipeline main.c is bitcode next to a CIL object;
+# the native oracle compiles all five sources as usual. References cross
+# every boundary: object to bitcode and back (calls, data pointers in
+# initialized data, a function pointer), the archive's CIL member extracted
+# only by bcpart's bitcode reference and its bitcode member only by the CIL
+# member's reference, and a constructor in the bitcode part. Recon tests-p2
+# 3.3, plan 5.12.5 (mixed bitcode and objects, M20).
+# REQUIRES: msil-ar
+# RUN: rm -rf %t && split-file %s %t
+# RUN: mkdir -p %t/msil
+# RUN: %clang_native --target=%msil_triple %{msil_cflags} -DMSIL_PREBUILT -O2 -c %t/objpart.c -o %t/msil/objpart.o
+# RUN: %clang_native --target=%msil_triple %{msil_cflags} -DMSIL_PREBUILT -O2 -flto -c %t/bcpart.c -o %t/msil/bcpart.o
+# RUN: %clang_native --target=%msil_triple %{msil_cflags} -DMSIL_PREBUILT -O2 -c %t/arobj.c -o %t/msil/arobj.o
+# RUN: %clang_native --target=%msil_triple %{msil_cflags} -DMSIL_PREBUILT -O2 -flto -c %t/arbc.c -o %t/msil/arbc.o
+# RUN: %msil_ar rcs %t/msil/libmixedpre.a %t/msil/arobj.o %t/msil/arbc.o
+# RUN: %msil_ar rcs %t/msil/mixedpre.lib %t/msil/arobj.o %t/msil/arbc.o
+# REDEFINE: %{msil_srcs} = %t/main.c %t/objpart.c %t/bcpart.c %t/arobj.c %t/arbc.c
+# REDEFINE: %{msil_libs} = %t/msil/objpart.o %t/msil/bcpart.o -L%t/msil -lmixedpre
+# RUN: %{msil_prog}
+#--- part.h
+/* The four parts are real C everywhere except in the composite's MSIL
+   build, where they are empty and their prebuilt copies are linked. */
+#if !defined(__MSIL__) || defined(MSIL_PREBUILT)
+#define MSIL_PART 1
+#endif
+#--- main.c
+#include "msil_test.h"
+int obj_fn(int);
+int bc_fn(int);
+extern int obj_data[3];
+extern int *const bc_ptrs[2];
+extern int bc_ctor_ran;
+int main_base = 1000;
+int main(void) {
+  put_kv("obj_fn(1)", obj_fn(1));
+  put_kv("bc_fn(2)", bc_fn(2));
+  put_kv("obj_data[2]", obj_data[2]);
+  put_kv("*bc_ptrs[0]", *bc_ptrs[0]);
+  put_kv("*bc_ptrs[1]", *bc_ptrs[1]);
+  put_kv("bc_ctor_ran", bc_ctor_ran);
+  return (obj_fn(0) + bc_ctor_ran) & 0xff;
+}
+#--- objpart.c
+#include "part.h"
+#ifdef MSIL_PART
+extern int main_base;
+int bc_fn(int);
+int obj_data[3] = {7, 8, 9};
+int (*const obj_to_bc)(int) = bc_fn;
+int obj_fn(int x) { return main_base + obj_to_bc(x) + obj_data[0]; }
+#endif
+#--- bcpart.c
+#include "part.h"
+#ifdef MSIL_PART
+extern int obj_data[3];
+extern int main_base;
+int ar_obj_fn(int);
+int bc_ctor_ran;
+int *const bc_ptrs[2] = {&obj_data[1], &main_base};
+__attribute__((constructor)) static void bc_init(void) {
+  bc_ctor_ran = 1;
+  obj_data[2] += 100;
+}
+int bc_fn(int x) { return x * 10 + ar_obj_fn(x); }
+#endif
+#--- arobj.c
+#include "part.h"
+#ifdef MSIL_PART
+int ar_bc_fn(int);
+int ar_obj_fn(int x) { return ar_bc_fn(x) + 500; }
+#endif
+#--- arbc.c
+#include "part.h"
+#ifdef MSIL_PART
+int ar_bc_fn(int x) { return x + 3; }
+#endif

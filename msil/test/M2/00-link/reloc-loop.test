@@ -1,0 +1,198 @@
+# More than 32 data relocations: <Module>::.cctor applies them in the relocation loop.
+# data.c holds over 40 pointers in initialized data: string literals, data of
+# its own and of main.c and fns.c (with addends), and function pointers to
+# static and external functions, part of them at unaligned offsets in packed
+# records. Above --msil-reloc-loop-threshold (default 32) relocations the
+# trailer writes the '<msil>relocs' table of 16-byte entries and a loop that
+# applies them with 'unaligned. 1' stores: kind 0 for an address into the
+# image, kind 2 for a function pointer, read from an 8-byte address slot that
+# the straight-line part fills from the method's '<msil>fn_' field (plan
+# 5.9.10, 'Relocation loop'; 5.9.9 rule 4).
+# C cannot write a 4-byte data relocation (clang rejects a truncated address
+# in an initializer), so r4.ll supplies them: 4-byte sites, aligned and
+# unaligned, that hold the low 32 bits of an image address (kind 1) and of a
+# function's address (kind 3), which r4_check() compares with the addresses
+# truncated at run time (0 when every site holds its value). The MSIL link
+# takes r4.ll as a CIL object in libr4.a (r4.lib) under %t/msil, found
+# through %{msil_libs}' -L before %{msil_native_libs}' -L; the native oracle,
+# which cannot express such a relocation either, finds r4native.c's
+# equivalent in the same-named archive under %t/native. Every other part of
+# the program is the same C on both sides. Recon tests-p2 3.1, plan 5.12.5
+# (M20).
+# REQUIRES: msil-ar
+# RUN: rm -rf %t && split-file %s %t
+# RUN: mkdir -p %t/msil %t/native
+# RUN: %clang_native --target=%msil_triple -O2 -c %t/r4.ll -o %t/msil/r4.o
+# RUN: %msil_ar rcs %t/msil/libr4.a %t/msil/r4.o
+# RUN: %msil_ar rcs %t/msil/r4.lib %t/msil/r4.o
+# RUN: %clang_native %{msil_cflags} -O2 -c %t/r4native.c -o %t/native/r4.o
+# RUN: %msil_ar rcs %t/native/libr4.a %t/native/r4.o
+# RUN: %msil_ar rcs %t/native/r4.lib %t/native/r4.o
+# REDEFINE: %{msil_srcs} = %t/main.c %t/data.c %t/fns.c
+# REDEFINE: %{msil_libs} = -L%t/msil
+# REDEFINE: %{msil_native_libs} = -L%t/native -lr4
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+struct __attribute__((packed)) urec {
+  char tag;
+  const char *name;
+  int *value;
+  char mid;
+  int (*fn)(int);
+};
+extern const char *const names[12];
+extern int *const ptrs[10];
+extern int (*const fns[8])(int);
+extern struct urec urecs[4];
+extern int *const offs[4];
+extern int r4_target[4];
+int r4_fn(int);
+int r4_check(void);
+int main_vals[6] = {600, 601, 602, 603, 604, 605};
+int main_twice(int x) { return 2 * x; }
+
+int main(void) {
+  long long sum = 0;
+  for (int i = 0; i < 12; ++i)
+    put_str(names[i]);
+  for (int i = 0; i < 10; ++i)
+    sum += *ptrs[i];
+  put_kv("ptrs", sum);
+  for (int i = 0; i < 8; ++i)
+    put_kv("fn", fns[i](i));
+  for (int i = 0; i < 4; ++i) {
+    put_str(urecs[i].name);
+    put_kv("value", *urecs[i].value);
+    put_kv("call", urecs[i].fn(10 + i));
+    sum += urecs[i].tag + urecs[i].mid;
+  }
+  for (int i = 0; i < 4; ++i)
+    put_kv("off", *offs[i]);
+  put_kv("r4_check", r4_check());
+  put_kv("r4_target[2]", r4_target[2]);
+  put_kv("r4_fn(3)", r4_fn(3));
+  return (int)(sum & 0xff);
+}
+#--- data.c
+struct __attribute__((packed)) urec {
+  char tag;
+  const char *name;
+  int *value;
+  char mid;
+  int (*fn)(int);
+};
+extern int main_vals[6];
+int main_twice(int);
+int fns_add(int);
+int fns_sub(int);
+int fns_vals[4] = {40, 41, 42, 43};
+static int local_vals[3] = {70, 71, 72};
+static int local_neg(int x) { return -x; }
+static int local_sq(int x) { return x * x; }
+
+const char *const names[12] = {"n0", "n1", "n2", "n3", "n4",  "n5",
+                               "n6", "n7", "n8", "n9", "n10", "n11"};
+int *const ptrs[10] = {&main_vals[0], &main_vals[1], &main_vals[5],
+                       &fns_vals[0],  &fns_vals[3],  &local_vals[0],
+                       &local_vals[2], &main_vals[2], &fns_vals[1],
+                       &local_vals[1]};
+int (*const fns[8])(int) = {main_twice, fns_add,  fns_sub,  local_neg,
+                            local_sq,   fns_add,  main_twice, local_neg};
+struct urec urecs[4] = {
+    {1, "u0", &main_vals[3], 'a', fns_add},
+    {2, "u1", &fns_vals[2], 'b', local_sq},
+    {3, "u2", &local_vals[1], 'c', main_twice},
+    {4, "u3", &main_vals[4], 'd', fns_sub},
+};
+int *const offs[4] = {&main_vals[1], &fns_vals[3], &local_vals[2],
+                      &main_vals[5]};
+#--- fns.c
+int fns_add(int x) { return x + 1000; }
+int fns_sub(int x) { return x - 1000; }
+#--- r4.ll
+; 4-byte data relocations: the low 32 bits of an address in initialized
+; data, at aligned and unaligned sites, of an image address (with an addend)
+; and of a function. r4_check returns a bitmask of the sites whose value
+; differs from the address truncated at run time.
+@r4_target = global [4 x i32] [i32 11, i32 22, i32 33, i32 44], align 4
+@r4_lo = global [3 x i32] [i32 trunc (i64 ptrtoint (ptr @r4_target to i64) to i32), i32 trunc (i64 ptrtoint (ptr getelementptr (i8, ptr @r4_target, i64 8) to i64) to i32), i32 trunc (i64 ptrtoint (ptr @r4_fn to i64) to i32)], align 4
+@r4_packed = global <{ i8, i32, i8, i32, i16, i32 }> <{ i8 1, i32 trunc (i64 ptrtoint (ptr @r4_target to i64) to i32), i8 2, i32 trunc (i64 ptrtoint (ptr getelementptr (i8, ptr @r4_target, i64 12) to i64) to i32), i16 3, i32 trunc (i64 ptrtoint (ptr @r4_fn to i64) to i32) }>, align 1
+
+define i32 @r4_fn(i32 %v) {
+  %r = mul i32 %v, 5
+  ret i32 %r
+}
+
+define i32 @r4_check() {
+  %t = ptrtoint ptr @r4_target to i64
+  %t32 = trunc i64 %t to i32
+  %t8 = add i32 %t32, 8
+  %t12 = add i32 %t32, 12
+  %f = ptrtoint ptr @r4_fn to i64
+  %f32 = trunc i64 %f to i32
+  %l0 = load i32, ptr @r4_lo, align 4
+  %p1 = getelementptr i8, ptr @r4_lo, i64 4
+  %l1 = load i32, ptr %p1, align 4
+  %p2 = getelementptr i8, ptr @r4_lo, i64 8
+  %l2 = load i32, ptr %p2, align 4
+  %q0 = getelementptr i8, ptr @r4_packed, i64 1
+  %u0 = load i32, ptr %q0, align 1
+  %q1 = getelementptr i8, ptr @r4_packed, i64 6
+  %u1 = load i32, ptr %q1, align 1
+  %q2 = getelementptr i8, ptr @r4_packed, i64 12
+  %u2 = load i32, ptr %q2, align 1
+  %c0 = icmp ne i32 %l0, %t32
+  %c1 = icmp ne i32 %l1, %t8
+  %c2 = icmp ne i32 %l2, %f32
+  %c3 = icmp ne i32 %u0, %t32
+  %c4 = icmp ne i32 %u1, %t12
+  %c5 = icmp ne i32 %u2, %f32
+  %b0 = zext i1 %c0 to i32
+  %z1 = zext i1 %c1 to i32
+  %b1 = shl i32 %z1, 1
+  %z2 = zext i1 %c2 to i32
+  %b2 = shl i32 %z2, 2
+  %z3 = zext i1 %c3 to i32
+  %b3 = shl i32 %z3, 3
+  %z4 = zext i1 %c4 to i32
+  %b4 = shl i32 %z4, 4
+  %z5 = zext i1 %c5 to i32
+  %b5 = shl i32 %z5, 5
+  %m1 = or i32 %b0, %b1
+  %m2 = or i32 %m1, %b2
+  %m3 = or i32 %m2, %b3
+  %m4 = or i32 %m3, %b4
+  %m5 = or i32 %m4, %b5
+  ret i32 %m5
+}
+#--- r4native.c
+/* The native oracle's r4.ll: C has no 4-byte address relocation, so the
+   sites get their values at startup; r4_check is r4.ll's comparison (in
+   unsigned arithmetic, which wraps as the IR's add does). */
+typedef __UINTPTR_TYPE__ uptr;
+int r4_target[4] = {11, 22, 33, 44};
+int r4_fn(int v) { return v * 5; }
+unsigned r4_lo[3];
+struct __attribute__((packed)) {
+  char a;
+  unsigned b;
+  char c;
+  unsigned d;
+  short e;
+  unsigned f;
+} r4_packed = {1, 0, 2, 0, 3, 0};
+__attribute__((constructor)) static void r4_init(void) {
+  r4_lo[0] = (unsigned)(uptr)r4_target;
+  r4_lo[1] = (unsigned)(uptr)&r4_target[2];
+  r4_lo[2] = (unsigned)(uptr)r4_fn;
+  r4_packed.b = (unsigned)(uptr)r4_target;
+  r4_packed.d = (unsigned)(uptr)&r4_target[3];
+  r4_packed.f = (unsigned)(uptr)r4_fn;
+}
+int r4_check(void) {
+  unsigned t = (unsigned)(uptr)r4_target, f = (unsigned)(uptr)r4_fn;
+  return (r4_lo[0] != t) | (r4_lo[1] != t + 8) << 1 | (r4_lo[2] != f) << 2 |
+         (r4_packed.b != t) << 3 | (r4_packed.d != t + 12) << 4 |
+         (r4_packed.f != f) << 5;
+}

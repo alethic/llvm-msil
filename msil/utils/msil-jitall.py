@@ -21,7 +21,11 @@ references, which jitall loads from that directory to JIT the methods that
 use them, and the native libraries the module initializer calls. --dep takes
 one or more files, may be repeated, and takes every argument up to the next
 option, so the lit composites pass '--dep %{msil_deps} --' before prog.dll; a
-missing file, or two of one name, is a configuration error. jitall
+missing file, or two of one name, is a configuration error. On Linux and other
+POSIX hosts, and so in WSL, --dep also puts the private directory first in
+LD_LIBRARY_PATH, as msil-run.py does: the Dlfcn helper of a native data import
+dlopen()s the library's bare name, which glibc never looks for in the
+program's directory (plan 5.10.12 as clarified in section 12). jitall
 JIT-compiles every method that has an IL body and calls none of them. Its
 output is copied to stdout with LF line endings: one 'JIT FAIL <type>::<method>:
 <exception>' line per rejected method, then 'jitall: N ok, M failed'.
@@ -164,6 +168,8 @@ def run_local(args, jitall_dll, runtimeconfig):
         target = os.path.join(private, os.path.basename(args.dll))
         shutil.copyfile(args.dll, target)
         msil_run.copy_deps(args.dep, [], private, [os.path.basename(args.dll)])
+        if args.dep and not IS_WINDOWS:
+            msil_run.prepend_library_path(env, private)
         cmd = [dotnet, "exec", "--runtimeconfig", runtimeconfig, jitall_dll, target]
         if args.filter is not None:
             cmd.append(args.filter)

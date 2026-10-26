@@ -35,6 +35,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBufferRef.h"
 #include <cstdint>
+#include <string>
 
 namespace llvm {
 class Triple;
@@ -128,6 +129,37 @@ private:
 // functions included): native code cannot call a managed function before
 // phase 3's native-callable thunks (plan 5.10.10).
 bool isNativeCallbackFunction(StringRef name);
+
+// The 5.10.14 text for \p e, a native definition of \p name that a P/Invoke
+// cannot bind (e.Why is not NotBindable::None): machine code in an archive,
+// a hidden ELF version, thread-local data, or a GLIBC_PRIVATE symbol.
+std::string getNativeRejectionText(StringRef name, const NativeExport &e);
+
+// The 5.10.12 text for data symbol \p name of native module \p module when
+// the data-import helper has no library loader: no reference defines
+// System.Runtime.InteropServices.NativeLibrary and the native libraries
+// define no dlopen/dlsym. The output writer and the LTO driver share it.
+std::string getDataImportUnavailableText(StringRef name, StringRef module);
+
+// One native function of the data-import helper '<msil>dataimport' (plan
+// 5.10.12): its name (the P/Invoke stub's), module and entry, and the
+// definition that native lookup found (null for kernel32.dll's).
+struct DataImportFunction {
+  StringRef name;
+  StringRef module;
+  StringRef entry;
+  const NativeExport *def;
+};
+
+// The helper's two native functions for the codegen triple \p tt, the
+// library loader first, in \p out: on Windows triples LoadLibraryW and
+// GetProcAddress of kernel32.dll, which every Windows process has; on the
+// other triples dlopen and dlsym, bound from the native libraries like any
+// import (the first bindable function definitions in link order). Returns
+// false, and leaves \p out empty, when the native libraries define no
+// dlopen or no dlsym.
+bool findDataImportFunctions(const llvm::Triple &tt, const NativeIndex &index,
+                             llvm::SmallVectorImpl<DataImportFunction> &out);
 
 // Returns true if \p name is a native function that takes or returns a
 // `long double` (the `l` functions of <math.h> and <complex.h>, nexttoward

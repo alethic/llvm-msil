@@ -33,6 +33,7 @@
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/PassRegistry.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
@@ -212,6 +213,23 @@ MSILTargetMachine::getTargetTransformInfo(const Function &F) const {
 
 TargetPassConfig *MSILTargetMachine::createPassConfig(PassManagerBase &PM) {
   return new MSILPassConfig(*this, PM);
+}
+
+void MSILTargetMachine::registerPassBuilderCallbacks(PassBuilder &PB) {
+  // msil-ld's LTO applies cli::classifyCall's table before optimization as
+  // well as in code generation (plan 5.9.8): otherwise LTO's InstCombine
+  // folds a call whose argument has the size of the parameter into the
+  // definition's type (transformConstExprCastCall), and the table never sees
+  // it. Only the LTO post-link pipelines invoke these extension points, and
+  // only msil-ld links MSIL bitcode, so -S, llc and the pre-link pipelines are
+  // unchanged. So at -O1 and above the compile step of -flto may still fold a
+  // mismatched call inside one TU before msil-ld sees it, as 'clang -c' does
+  // on the object path (section 12); mismatches across TUs reach the table.
+  auto AddCallTable = [this](ModulePassManager &MPM, OptimizationLevel) {
+    MPM.addPass(MSILFixFunctionBitcastsLTOPass(*this));
+  };
+  PB.registerFullLinkTimeOptimizationEarlyEPCallback(AddCallTable);
+  PB.registerThinLinkTimeOptimizationEarlyEPCallback(AddCallTable);
 }
 
 bool MSILTargetMachine::isObjectMode() const {

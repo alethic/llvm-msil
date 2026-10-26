@@ -1,0 +1,38 @@
+# %{msil_c} under msil_pipeline=obj with msil_equiv=1 (plan 5.12.3, 5.12.6;
+# M20): the oracles O3 and O6. For each level (shown for O2, and O0 when
+# msil_opt_levels leaves O2 out):
+# (1) msil-prog.py also gets --equiv-out <t>.<L>.d/equiv/prog.exe
+#     --equiv-skip <msil/utils/equiv-allowed.txt> --test <the test> and links
+#     the same object a second time with -Wl,--no-gc-sections into
+#     equiv/prog.exe, the image that O3 compares (never the one that runs);
+# (2) then the -S reference build of the same source, with the same output
+#     and assembly names: mkdir -p <t>.<L>.d/asm, clang -S with
+#     %{msil_cflags}, the level and -mllvm -msil-assembly-name=prog into
+#     asm/prog.il, and ilasm -exe into asm/prog.exe (module prog.exe, as
+#     msil-ld names the module of prog.exe);
+# (3) msil-verify.py with --md-baseline asm/prog.exe on the image that runs
+#     (O6; with PEVerify it says how many /md messages it compared);
+# (4) after the run, msil-equiv.py --oracle O3 --test <the test> --triple
+#     <the triple> --level <L> (the qualified skip lines of
+#     equiv-allowed.txt match them) with the six entries O3 allows
+#     (assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet,
+#     pinvoke-module, pinvoke-access) on equiv/prog.exe and asm/prog.exe,
+#     which are equal here (the stand-in's msil-ld image and -S text
+#     describe the same program);
+# in this order, and the test passes. %msil_canon is the tree's
+# llvm-cil-dump (msil_equiv=1 needs a lister of %msil_canon).
+# REQUIRES: msil-ld, msil-ar, msil-cil-dump
+
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_equiv=1 %S/Inputs/obj/equiv-c.c > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/equiv-c\.c " "note: msil: pipeline obj \(%\{msil_prog\}: obj, link output pe, equivalence oracles O3, O6\)$"
+
+# (1)
+# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level O2 --workdir '?\S*equiv-c\.c\.tmp\.O2\.d'? --out '?\S*equiv-c\.c\.tmp\.O2\.d/prog\.exe'? --equiv-out '?\S*equiv-c\.c\.tmp\.O2\.d/equiv/prog\.exe'? --equiv-skip '?\S*equiv-allowed\.txt'? --test '?\S*equiv-c\.c'? --src '?\S*equiv-c\.c'?$" "^# \| msil-prog: .* -O2 obj/equiv-c\.o -o prog\.exe\n(# \| .*\n)*# \| msil-prog: .* -O2 obj/equiv-c\.o -Wl,--no-gc-sections -o equiv/prog\.exe$" %}
+# RUN: %if !msil-opt-O2 && msil-opt-O0 %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --level O0 .* --equiv-out '?\S*equiv-c\.c\.tmp\.O0\.d/equiv/prog\.exe'? --equiv-skip '?\S*equiv-allowed\.txt'? --test '?\S*equiv-c\.c'? --src '?\S*equiv-c\.c'?$" "^# \| msil-prog: .* -O0 obj/equiv-c\.o -Wl,--no-gc-sections -o equiv/prog\.exe$" %}
+
+# (2), (3), (4) in order
+# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: mkdir -p '?\S*equiv-c\.c\.tmp\.O2\.d/asm'?$[\s\S]*^# executed command: .*prog-cc\.py'? --as cc --target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \S+ -O2 -S '?\S*equiv-c\.c'? -mllvm -msil-assembly-name=prog -o '?\S*equiv-c\.c\.tmp\.O2\.d/asm/prog\.il'?$[\s\S]*^# executed command: .*msil-run\.py'? --tool .* -nologo -quiet( -pe64 -x64)? -exe '?-output=\S*equiv-c\.c\.tmp\.O2\.d/asm/prog\.exe'? '?\S*equiv-c\.c\.tmp\.O2\.d/asm/prog\.il'?$[\s\S]*^# executed command: .*msil-verify\.py'? .* --md-baseline '?\S*equiv-c\.c\.tmp\.O2\.d/asm/prog\.exe'? '?\S*equiv-c\.c\.tmp\.O2\.d/prog\.exe'?$[\s\S]*^# executed command: .*msil-run\.py'? --expect-os .* --out '?\S*equiv-c\.c\.tmp\.O2\.out'? '?\S*equiv-c\.c\.tmp\.O2\.d/prog\.exe'?$[\s\S]*^# executed command: .*msil-equiv\.py'? --canon .* --allowed '?\S*equiv-allowed\.txt'? --oracle O3 --test '?\S*equiv-c\.c'? --triple \S+-msil --level O2 --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access '?\S*equiv-c\.c\.tmp\.O2\.d/equiv/prog\.exe'? '?\S*equiv-c\.c\.tmp\.O2\.d/asm/prog\.exe'?$" %}
+# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.log "^# \| msil-equiv: O3: \S*equiv-c\.c\.tmp\.O2\.d/equiv/prog\.exe and \S*equiv-c\.c\.tmp\.O2\.d/asm/prog\.exe are equal \(\d+ lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access\)$" %}
+# RUN: %if msil-opt-O2 && msil-peverify %{ %{harness_check} contains %t.log "^# \| msil-verify: O6: the \d+ PEVerify /md messages of prog\.exe are among the \d+ of \S*equiv-c\.c\.tmp\.O2\.d/asm/prog\.exe$" %}
+# RUN: %if !msil-opt-O2 && msil-opt-O0 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? .* --md-baseline '?\S*equiv-c\.c\.tmp\.O0\.d/asm/prog\.exe'? '?\S*equiv-c\.c\.tmp\.O0\.d/prog\.exe'?$" "^# \| msil-equiv: O3: \S*O0\.d/equiv/prog\.exe and \S*O0\.d/asm/prog\.exe are equal " %}
+# RUN: %{harness_check} lacks %t.log " -flto" "--lto-emit-asm" " -dll " "--also-il" "--oracle O4" "skipped" "--dep "

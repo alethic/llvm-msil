@@ -1,0 +1,83 @@
+## Deterministic PE output (ImplementationPlan.md 5.9.4 'msil-ld never reads
+## timestamps, environment variables or hash order', 5.9.12 'MVID and
+## timestamp from the content hash', 5.7.12; O4 of tests-p2): the same
+## inputs and options give the same bytes,
+## - linked twice, and with LLD_IN_TEST=2 (the driver runs twice in one
+##   process, 5.9.1);
+## - from another working directory, with the inputs named by other paths
+##   (no input path reaches the image; the Module row names the output
+##   file);
+## - with b.o as an archive member instead of a positional object (the same
+##   load order, so the same rows; member names appear only in the map and
+##   --why-extract).
+## A different program gets a different MVID.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj a.ll -o a.o
+# RUN: llc -filetype=obj b.ll -o b.o
+# RUN: llc -filetype=obj c.ll -o c.o
+# RUN: llvm-ar rcs libb.a b.o
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-stdio.def /out:ucrt.lib
+# RUN: mkdir d1 d2 d3 d4 d5 d6 d7 sub
+
+# RUN: msil-ld a.o b.o ucrt.lib -o d1/prog.exe 2>&1 | count 0
+# RUN: msil-ld a.o b.o ucrt.lib -o d2/prog.exe 2>&1 | count 0
+# RUN: cmp d1/prog.exe d2/prog.exe
+# RUN: env LLD_IN_TEST=2 msil-ld a.o b.o ucrt.lib -o d3/prog.exe 2>&1 | count 0
+# RUN: cmp d1/prog.exe d3/prog.exe
+# RUN: cd sub && msil-ld ../a.o ../b.o ../ucrt.lib -o ../d4/prog.exe 2>&1 | count 0
+# RUN: cd %t && cmp d1/prog.exe d4/prog.exe
+# RUN: msil-ld %t/a.o %t/b.o %t/ucrt.lib -o %t/d5/prog.exe 2>&1 | count 0
+# RUN: cmp d1/prog.exe d5/prog.exe
+# RUN: msil-ld a.o libb.a ucrt.lib -o d6/prog.exe 2>&1 | count 0
+# RUN: cmp d1/prog.exe d6/prog.exe
+
+## Another program under the same name: another MVID (the content hash).
+# RUN: msil-ld a.o c.o ucrt.lib -o d7/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --headers d1/prog.exe > prog.h
+# RUN: llvm-cil-dump --headers d7/prog.exe > other.h
+# RUN: FileCheck %s --check-prefix=MVID --input-file=prog.h
+# RUN: FileCheck %s --check-prefix=MVID --input-file=other.h
+# RUN: grep Mvid prog.h > prog.mvid
+# RUN: grep Mvid other.h > other.mvid
+# RUN: not diff prog.mvid other.mvid
+# MVID: {{^}}Mvid: {{[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+$}}
+
+#--- a.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private unnamed_addr constant [6 x i8] c"hello\00", align 1
+@table = global [1 x ptr] [ptr @add3], align 8
+
+declare i32 @add3(i32)
+declare i32 @puts(ptr)
+
+define i32 @main() {
+  %p = call i32 @puts(ptr @msg)
+  %f = load ptr, ptr @table
+  %r = call i32 %f(i32 1)
+  ret i32 %r
+}
+
+#--- b.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = global i32 5, align 4
+
+define i32 @add3(i32 %x) {
+  %c = load i32, ptr @counter
+  %r = add i32 %x, %c
+  ret i32 %r
+}
+
+#--- c.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = global i32 6, align 4
+
+define i32 @add3(i32 %x) {
+  %c = load i32, ptr @counter
+  %r = add i32 %x, %c
+  ret i32 %r
+}

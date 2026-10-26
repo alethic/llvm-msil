@@ -1,0 +1,11 @@
+c[0]=1
+c[3]=4
+b sees c=136
+d[0]=1541
+b sees d=5681
+same c=1
+same d=1
+d aligned=1
+guard_a=0
+guard_b=0
+[exit 12]

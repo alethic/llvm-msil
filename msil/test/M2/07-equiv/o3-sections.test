@@ -1,0 +1,95 @@
+# Oracle O3 with named sections, __start_/__stop_ and a constructor-table slot; the -S image runs too.
+# From M20 -S lays out named sections as a one-object link does (plan 5.8.10,
+# D26 as amended): each global's segment carries its section name and
+# cli::layoutImage groups it by the triple's rules, a referenced
+# __start_X/__stop_X on a non-Windows triple is an address field at the
+# start or the end of output section X, and the 8-byte slots of
+# '.init_array' or '.CRT$XCU' run as constructors, sorted with
+# llvm.global_ctors by cli::sortConstructors (plan 5.9.9, 5.9.10). msil-ld
+# does the same for the one object, so the two builds must be equal
+# canonically under the O3 normalizations (plan 5.12.6): the image, the
+# __start_/__stop_ fields, the .cctor's constructor calls in their order.
+# sections.c, on Linux triples: three 'used' records in section o3sec, summed
+# from __start_o3sec to __stop_o3sec, two of them below a record of another
+# section between them in the source; a slot in '.init_array' and a
+# constructor of priority 200, which runs first. On Windows triples, which
+# define no __start_ symbols: the records in 'o3sec$m' between marker arrays
+# in 'o3sec$a' and 'o3sec$z' (COFF grouping, sorted by full name, the markers
+# declared last), the slot in '.CRT$XCU' (#pragma section and
+# __declspec(allocate)) and the same constructor, whose key '.CRT$XCC' sorts
+# first. The composite runs the program against the native transcript; the
+# RUN lines after it build both sides at -O0 and -O2, compare them and run
+# both images (the -S image through ilasm, as the asm pipeline does) against
+# the same transcript. Plan 5.12.6 (O3), 5.9.16 rows p3-start-stop and
+# p8-section-ctor (M20).
+# REQUIRES: msil-cil-dump || msil-mdcanon
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/sections.c
+# RUN: %{msil_prog}
+# DEFINE: %{equiv_o3} = %msil_equiv --oracle O3 --test %s --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access
+# RUN: mkdir -p %t/O0/obj %t/O0/asm %t/O2/obj %t/O2/asm
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/sections.c -o %t/O0/obj/sections.o
+# RUN: %clang_msil %{msil_ldflags} -Wl,--no-gc-sections %t/O0/obj/sections.o -o %t/O0/obj/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O0 -S %t/sections.c -mllvm -msil-assembly-name=prog -o %t/O0/asm/prog.il
+# RUN: %ilasm -exe -output=%t/O0/asm/prog.exe %t/O0/asm/prog.il
+# RUN: %{equiv_o3} %t/O0/obj/prog.exe %t/O0/asm/prog.exe
+# RUN: %msil_verify %t/O0/asm/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O0/obj.out %t/O0/obj/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O0/asm.out %t/O0/asm/prog.exe
+# RUN: %if msil-run-netfx %{ %msil_exec --netfx --expect %S/%{s:stem} --out %t/O0/asm.netfx.out %t/O0/asm/prog.exe %}
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/sections.c -o %t/O2/obj/sections.o
+# RUN: %clang_msil %{msil_ldflags} -Wl,--no-gc-sections %t/O2/obj/sections.o -o %t/O2/obj/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -S %t/sections.c -mllvm -msil-assembly-name=prog -o %t/O2/asm/prog.il
+# RUN: %ilasm -exe -output=%t/O2/asm/prog.exe %t/O2/asm/prog.il
+# RUN: %{equiv_o3} %t/O2/obj/prog.exe %t/O2/asm/prog.exe
+# RUN: %msil_verify %t/O2/asm/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O2/obj.out %t/O2/obj/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O2/asm.out %t/O2/asm/prog.exe
+# RUN: %if msil-run-netfx %{ %msil_exec --netfx --expect %S/%{s:stem} --out %t/O2/asm.netfx.out %t/O2/asm/prog.exe %}
+#--- sections.c
+#include "msil_test.h"
+struct reg {
+  int v;
+};
+static int trace;
+static void slot_fn(void) {
+  trace = trace * 10 + 2;
+  puts("slot");
+}
+__attribute__((constructor(200))) static void ctor_200(void) {
+  trace = trace * 10 + 1;
+  puts("constructor 200");
+}
+#if defined(_WIN32)
+static const struct reg r1 __attribute__((used, section("o3sec$m"))) = {3};
+static const struct reg other __attribute__((used, section("o3other"))) = {100};
+static const struct reg r2 __attribute__((used, section("o3sec$m"))) = {5};
+static const struct reg r3 __attribute__((used, section("o3sec$m"))) = {7};
+const struct reg o3sec_last[1] __attribute__((section("o3sec$z"))) = {{0}};
+const struct reg o3sec_first[1] __attribute__((section("o3sec$a"))) = {{0}};
+#define O3SEC_BEGIN (o3sec_first + 1)
+#define O3SEC_END o3sec_last
+#pragma section(".CRT$XCU", read)
+__declspec(allocate(".CRT$XCU")) __attribute__((used)) static void (*p_slot)(void) = slot_fn;
+#else
+static const struct reg r1 __attribute__((used, section("o3sec"))) = {3};
+static const struct reg other __attribute__((used, section("o3other"))) = {100};
+static const struct reg r2 __attribute__((used, section("o3sec"))) = {5};
+static const struct reg r3 __attribute__((used, section("o3sec"))) = {7};
+extern const struct reg __start_o3sec[], __stop_o3sec[];
+#define O3SEC_BEGIN __start_o3sec
+#define O3SEC_END __stop_o3sec
+__attribute__((used, section(".init_array"))) static void (*p_slot)(void) = slot_fn;
+#endif
+
+int main(void) {
+  int n = 0, s = 0;
+  for (const struct reg *p = O3SEC_BEGIN; p < O3SEC_END; ++p) {
+    ++n;
+    s += p->v;
+  }
+  put_kv("records", n);
+  put_kv("sum", s);
+  put_kv("trace", trace);
+  return (s + trace) & 0xff;
+}

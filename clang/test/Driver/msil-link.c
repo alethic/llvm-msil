@@ -4,11 +4,11 @@
 // its linker with msil-ld: no crt files, no dynamic linker, no PIE, no gold
 // plugin, never ld.lld, lld-link or link.exe; the C library of the triple by
 // default (Design.md 5.2 and 6; 5.10.4); a program is 'a.exe' by default on
-// every MSIL triple, and -o is never given an extension. Until M20 a
-// compile-and-link compiles to bitcode (5.10.5), so every link here is an LTO
-// link through msil-ld; the checked parts of the link lines do not depend on
-// that. The driver never passes
-// --lto-emit-asm and never runs ilasm (5.9.13). msil-ld is matched as
+// every MSIL triple, and -o is never given an extension. From M20 a
+// compile-and-link compiles CIL objects ('cc1 -emit-obj', 5.10.5) and links
+// them through msil-ld (M14-M19 compiled bitcode and linked with LTO); the
+// checked parts of the link lines do not depend on that. The driver never
+// passes --lto-emit-asm and never runs ilasm (5.9.13). msil-ld is matched as
 // '"<dir>msil-ld[.exe]"': no msil-ld binary, SDK or sysroot is needed.
 
 // RUN: rm -rf %t && split-file %s %t
@@ -88,11 +88,13 @@
 // WIN-USER-SAME: "-lvcruntime" "-lucrt" "-lkernel32" "-loldnames" "--ucrtbase-imports" "-o" "a.exe"
 // WIN-USER-NOT: --ucrtbase-imports
 
-// clang-cl: /Fe names the output, inputs compile to bitcode '.obj' files.
+// clang-cl: /Fe names the output, inputs compile to CIL object '.obj' files
+// (M20; M14-M19 wrote bitcode).
 // RUN: %clang_cl -### --target=x86_64-pc-windows-msvc-msil /winsysroot %t /Fe:prog.exe -- %s 2>&1 \
-// RUN:   | FileCheck --check-prefix=CL --implicit-check-not=link.exe --implicit-check-not=error: %s
+// RUN:   | FileCheck --check-prefix=CL --implicit-check-not=link.exe --implicit-check-not=error: \
+// RUN:     --implicit-check-not=-emit-llvm-bc --implicit-check-not=-flto= %s
 // CL: "-cc1" "-triple" "x86_64-pc-windows-msvc{{[0-9.]*}}-msil"
-// CL-SAME: "-emit-llvm-bc"
+// CL-SAME: "-emit-obj"
 // CL: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-pc-windows-msvc-msil"
 // CL-SAME: "{{[^"]*}}.obj"
 // CL-SAME: "-lucrt" "-lkernel32" "-loldnames" "--ucrtbase-imports" "-o" "prog.exe"

@@ -1,7 +1,9 @@
 # %{msil_prog_fail_<L>} (plan 5.12.3) is 'not' plus the build of one level,
 # for named diagnostics: it passes when the build fails, and the output that a
 # test pipes into FileCheck holds the tool's diagnostic and msil-prog.py's
-# summary of the failing step. With the stand-ins of lit.local.cfg:
+# summary of the failing step. With the stand-ins of lit.local.cfg (from M20
+# the build links CIL objects into msil-ld's image prog.exe under the
+# default pipeline asm):
 # (1) a link error ('msil-ld: error: ...') at -O0 and -O2, after the commands
 #     that ran; the link at -O2 is the one that failed;
 # (2) a compile error, which stops the build before the link;
@@ -13,10 +15,10 @@
 # (1)
 # REDEFINE: %{msil_srcs} = %t/main.c %t/undef.c
 # RUN: %{msil_prog_fail_O0} > %t/1.O0.log 2>&1
-# RUN: %{harness_check} contains %t/1.O0.log "^msil-prog: .* -O0 (--sysroot=\S+ )?obj/main\.o obj/undef\.o -Wl,--lto-emit-asm -o prog\.il$" "^msil-ld: error: undefined symbol: nowhere$" "^msil-prog: error: the link failed \(exit status 1\)$"
+# RUN: %{harness_check} contains %t/1.O0.log "^msil-prog: .* -O0 (--sysroot=\S+ )?obj/main\.o obj/undef\.o -o prog\.exe$" "^msil-ld: error: undefined symbol: nowhere$" "^msil-prog: error: the link failed \(exit status 1\)$"
 # RUN: %{msil_prog_fail_O2} > %t/1.O2.log 2>&1
-# RUN: %{harness_check} contains %t/1.O2.log "^msil-prog: .* -O2 (--sysroot=\S+ )?obj/main\.o obj/undef\.o -Wl,--lto-emit-asm -o prog\.il$" "^msil-ld: error: undefined symbol: nowhere$"
-# RUN: %{harness_check} lacks %t/1.O2.log " -exe -output=" "LLVM ERROR" "PLEASE submit"
+# RUN: %{harness_check} contains %t/1.O2.log "^msil-prog: .* -O2 (--sysroot=\S+ )?obj/main\.o obj/undef\.o -o prog\.exe$" "^msil-ld: error: undefined symbol: nowhere$"
+# RUN: %{harness_check} lacks %t/1.O2.log " -exe -output=" "LLVM ERROR" "PLEASE submit" "--equiv-out" "no-gc-sections"
 
 # (2)
 # REDEFINE: %{msil_srcs} = %t/main.c %t/bad.c %t/util.c

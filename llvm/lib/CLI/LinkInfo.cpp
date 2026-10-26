@@ -320,8 +320,12 @@ static_assert(KnownSymbolFlags == 0xFFF,
 static constexpr uint64_t KnownSegmentFlags =
     MSILLink::SegStrings | MSILLink::SegTLS | MSILLink::SegRetain |
     MSILLink::SegZero | MSILLink::SegReadOnly;
-static constexpr uint64_t KnownCallFlags =
-    MSILLink::NoPrototype | MSILLink::VarArg | MSILLink::Sret;
+static constexpr uint64_t KnownCallFlags = MSILLink::NoPrototype |
+                                           MSILLink::VarArg | MSILLink::Sret |
+                                           MSILLink::NativeIncompatible;
+static_assert(KnownCallFlags == 0xF,
+              "v1.0's CallFlags are NO_PROTOTYPE, VARARG, SRET and "
+              "NATIVE_INCOMPATIBLE (5.8.8)");
 /// The largest log2 alignment (5.8.8, SEGMENTS) and the size limit of a
 /// segment.
 static constexpr unsigned MaxAlignLog2 = 30;
@@ -2013,6 +2017,8 @@ void cli::printLinkInfo(const Record &R, const MetadataReader *MD,
       OS << " SRET size=" << S.SretSize << " align=";
       printAlign(OS, S.SretAlignLog2);
     }
+    if (S.Flags & MSILLink::NativeIncompatible)
+      OS << " NATIVE_INCOMPATIBLE";
     if (uint32_t Unknown = S.Flags & ~uint32_t(KnownCallFlags))
       OS << ' ' << hex(Unknown, 0);
     for (const MSILLink::ByvalParam &B : S.Byval) {

@@ -1,0 +1,46 @@
+# Why O3 and O4 compare the equivalence link (plan 5.12.6; M20): -S keeps
+# every external function and global that codegen emitted, while msil-ld's
+# default --gc-sections drops the unreferenced ones from the image that runs.
+# One translation unit with an unreferenced external function (unused_fn)
+# and an unreferenced external global (unused_global) is built through CIL
+# objects by msil-prog.py (the tree's clang and msil-ld) with --equiv-out,
+# and the -S reference the way the composites build it (-mllvm
+# -msil-assembly-name=prog, ilasm -exe into asm/prog.exe):
+# (1) the image that runs lacks the method and the field, and the
+#     --equiv-out image (-Wl,--no-gc-sections) has both;
+# (2) with every entry of the allow-list allowed, msil-equiv.py fails on the
+#     default image (a '+' line of the reference names them), and passes on
+#     the --equiv-out image.
+# It needs M20's msil-ld (the gate's build runs it first, plan 5.6.1 rule 7).
+# REQUIRES: msil-ld, msil-registered-target, msil-cil-dump
+
+# RUN: rm -rf %t %t.d && split-file %s %t
+# RUN: %msil_prog_build --level O2 --workdir %t.d --out %t.d/prog.exe --equiv-out %t.d/equiv/prog.exe --src %t/prog.c --pipeline obj --link-output pe
+# RUN: mkdir -p %t.d/asm
+# RUN: %clang_msil %{msil_cflags} -O2 -S %t/prog.c -mllvm -msil-assembly-name=prog -o %t.d/asm/prog.il
+# RUN: %ilasm -exe -output=%t.d/asm/prog.exe %t.d/asm/prog.il
+
+# (1)
+# RUN: %msil_canon %t.d/prog.exe | FileCheck %s --check-prefix=RUNIMG
+# RUN: %msil_canon %t.d/equiv/prog.exe | FileCheck %s --check-prefix=EQUIVIMG
+# RUNIMG-NOT: unused_
+# RUNIMG:     .method 'main' int32()
+# RUNIMG-NOT: unused_
+# EQUIVIMG-DAG: .field 'unused_global' native int
+# EQUIVIMG-DAG: .method 'unused_fn' int32(int32)
+# EQUIVIMG-DAG: .method 'main' int32()
+
+# (2)
+# RUN: not %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access --allow scopes %t.d/prog.exe %t.d/asm/prog.exe > %t/gc.txt
+# RUN: FileCheck %s --check-prefix=GC --input-file=%t/gc.txt
+# RUN: %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access --allow scopes %t.d/equiv/prog.exe %t.d/asm/prog.exe > %t/equiv.txt
+# RUN: FileCheck %s --check-prefix=EQ --input-file=%t/equiv.txt
+# GC: msil-equiv: O3: {{.*}}prog.exe and {{.*}}asm{{[/\\]}}prog.exe differ
+# GC: {{^}}+{{.*}}unused_
+# EQ: msil-equiv: O3: {{.*}}equiv{{[/\\]}}prog.exe and {{.*}}asm{{[/\\]}}prog.exe are equal
+
+#--- prog.c
+#include "msil_test.h"
+int unused_global = 5;
+int unused_fn(int x) { return x + 1; }
+int main(void) { return 0; }

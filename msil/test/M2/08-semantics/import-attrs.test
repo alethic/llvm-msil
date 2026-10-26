@@ -1,0 +1,73 @@
+# Matrix case import-attrs: the C import attributes bind to a test-built native library (native).
+# native.c is linked into native.dll (with its import library native.lib) on
+# Windows triples or libnative.so on Linux triples, as 03-native/native-lib
+# does, and %{msil_deps} ships it next to the program. main.c reaches it
+# under C names that differ from the library's (plan 5.10.7, Q35):
+# - my_add carries import_name("nat_add") alone: an msil.unresolved stub
+#   whose ImplMap entry is nat_add, bound natively under that name, so the
+#   module is the library's (native.dll from the import library, the
+#   DT_SONAME libnative.so; plan 5.9.6 step 2);
+# - the extern variable my_value carries import_name("nat_value") alone: a
+#   data import (IMPORT with an empty ImportModule) found natively under
+#   nat_value, its address field filled at startup by the data-import helper
+#   (plan 5.10.12);
+# - the extern array my_table carries import_module and import_name: a data
+#   import bound to that module and entry unchecked.
+# The program reads and writes the imported data and calls into the library,
+# which reads the same objects back. The native oracle spells the same
+# bindings with asm labels (__asm__("<entry>")), plus __declspec(dllimport)
+# on Windows triples, where data from a DLL needs it. Plan 5.9.16 row
+# import-attrs (M20, obj and lto).
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %if msil-triple-windows %{ %clang_native -O2 -c %t/native.c -o %t/native.obj && %lld_link -dll -noentry -nodefaultlib %t/native.obj -out:%t/native.dll %} %else %{ %clang_native -O2 -fPIC -c %t/native.c -o %t/native.o && %ld_lld -shared -soname libnative.so %t/native.o -o %t/libnative.so %}
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_native_libs} = -L%t -lnative
+# REDEFINE: %{msil_deps} = %if msil-triple-windows %{%t/native.dll%} %else %{%t/libnative.so%}
+# RUN: %{msil_prog}
+#--- native.c
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT __attribute__((visibility("default")))
+#endif
+
+EXPORT int nat_value = 1234;
+EXPORT int nat_table[4] = {1, 2, 3, 4};
+EXPORT int nat_add(int a, int b) { return a + b; }
+EXPORT int nat_state(void) {
+  return nat_value * 100 + nat_table[0] + nat_table[1] + nat_table[2] +
+         nat_table[3];
+}
+#--- main.c
+#include "msil_test.h"
+#if defined(__MSIL__)
+#if defined(_WIN32)
+#define NATIVE_MODULE "native.dll"
+#else
+#define NATIVE_MODULE "libnative.so"
+#endif
+__attribute__((import_name("nat_add"))) int my_add(int a, int b);
+__attribute__((import_name("nat_value"))) extern int my_value;
+__attribute__((import_module(NATIVE_MODULE), import_name("nat_table")))
+extern int my_table[4];
+#else
+#if defined(_WIN32)
+#define IMPORT __declspec(dllimport)
+#else
+#define IMPORT
+#endif
+IMPORT int my_add(int a, int b) __asm__("nat_add");
+IMPORT extern int my_value __asm__("nat_value");
+IMPORT extern int my_table[4] __asm__("nat_table");
+#endif
+int nat_state(void);
+
+int main(void) {
+  put_kv("my_add(40, 2)", my_add(40, 2));
+  put_kv("my_value", my_value);
+  put_kv("my_table[3]", my_table[3]);
+  my_value = 7;
+  my_table[0] = 10;
+  put_kv("nat_state", nat_state());
+  return my_add(my_value, my_table[0]);
+}

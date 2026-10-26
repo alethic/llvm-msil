@@ -1,0 +1,13 @@
+helper(1)=6
+shared literal
+b_entry(2)=204
+shared literal
+c_entry(3)=-896
+c_ops=2
+c_ops=-2
+shared literal
+c_ops=300
+*b_ptr=78
+b_state=97
+shared literal
+[exit 105]

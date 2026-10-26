@@ -1,0 +1,12 @@
+hello
+o3
+single
+argc=1
+argv[0] set=1
+bump=7
+ops[0]=42
+ops[1] null=1
+*table_end=4
+zeros[63]=0
+is_nan_f(sNaN)=1
+[exit 12]

@@ -1,0 +1,260 @@
+## The entry point of an object link (ImplementationPlan.md 5.9.3 -e/--entry,
+## 5.9.10's '<msil>Main', 5.9.12, D27): from M20 -e/--entry names any
+## function of a D27 shape (M14 accepted only main): '<msil>Main'(string[])
+## is the image's entry point
+## and calls an 'int32()' entry directly, or builds a NULL-terminated argv
+## from Environment.GetCommandLineArgs() for an 'int32(int32, native int)'
+## entry. The entry is a root and extracts the archive member that defines
+## it, like -u. Without a definition the link is 'undefined symbol: <entry>'
+## with '>>> referenced by the entry point'. An entry of another shape, and
+## an entry symbol that names a variable, are 'unsupported signature for
+## <entry>' (5.9.12; the section 12 row 'M20.a (4) and M20.b (6)-(7)
+## clarified'), for main and for any other -e symbol, on the object link and
+## on the LTO link that writes the PE (bitcode with a datalayout); entry.test
+## pins the same text through --lto-emit-asm.
+## The shape is decided on the entry's CIL signature (the section 12 row 'D27
+## clarified (entry shape; M20.a, M20.e)'): an int32 result, not variadic,
+## and no parameters or exactly (int32, native int). So a narrow integer
+## result (IR i16) is 'int32()', and IR (i32, i64) on a 64-bit triple is
+## 'int32(int32, native int)', on the object link, the LTO PE and
+## --lto-emit-asm alike; the shapes that stay errors (a double parameter, an
+## i64 result, an i64 argc) are 'unsupported signature for main' on each.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj start.ll -o start.o
+# RUN: llc -filetype=obj args.ll -o args.o
+# RUN: llc -filetype=obj badmain.ll -o badmain.o
+# RUN: llc -filetype=obj nomain.ll -o nomain.o
+# RUN: llc -filetype=obj badstart.ll -o badstart.o
+# RUN: llc -filetype=obj datastart.ll -o datastart.o
+# RUN: llvm-as badstart.ll -o badstart.bc
+# RUN: llvm-as datastart.ll -o datastart.bc
+# RUN: llvm-ar rcs libstart.a start.o
+# RUN: llc -filetype=obj short-win.ll -o short-win.o
+# RUN: llc -filetype=obj short-lnx.ll -o short-lnx.o
+# RUN: llc -filetype=obj wide.ll -o wide.o
+# RUN: llc -filetype=obj bad-i64.ll -o bad-i64.o
+# RUN: llc -filetype=obj bad-i64-argc.ll -o bad-i64-argc.o
+# RUN: llvm-as short-win.ll -o short-win.bc
+# RUN: llvm-as short-lnx.ll -o short-lnx.bc
+# RUN: llvm-as wide.ll -o wide.bc
+# RUN: llvm-as badmain.ll -o badmain.bc
+# RUN: llvm-as bad-i64.ll -o bad-i64.bc
+# RUN: llvm-as bad-i64-argc.ll -o bad-i64-argc.bc
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## int32 start(void), in each spelling.
+# RUN: msil-ld -e start start.o -o e.exe 2>&1 | count 0
+# RUN: llvm-cil-dump e.exe | FileCheck %s --check-prefix=START
+# RUN: msil-ld --entry=start start.o -o e2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump e2.exe | FileCheck %s --check-prefix=START
+# RUN: msil-ld --entry start start.o -o e3.exe 2>&1 | count 0
+# RUN: llvm-cil-dump e3.exe | FileCheck %s --check-prefix=START
+# START:      {{^}}entrypoint int32(string[]) '<Module>'::'<msil>Main'{{$}}
+# START:      {{^}}  .method '<msil>Main' int32(string[]) flags=0x0091 impl=0x0000{{$}}
+# START-NEXT: {{^}}    .maxstack 1{{$}}
+# START-NEXT: {{^}}    L0: call int32() '<Module>'::'start'{{$}}
+# START-NEXT: {{^}}    L1: ret{{$}}
+# START-NEXT: {{^}}  .method 'start' int32() flags=0x0016 impl=0x0000{{$}}
+
+## The entry extracts its archive member.
+# RUN: msil-ld -e start libstart.a -o lib.exe --why-extract=lib.why 2>&1 | count 0
+# RUN: llvm-cil-dump lib.exe | FileCheck %s --check-prefix=START
+# RUN: FileCheck %s --check-prefix=WHY --input-file=lib.why
+# WHY:      {{^}}reference{{[[:space:]]}}extracted{{[[:space:]]}}symbol{{$}}
+# WHY-NEXT: {{^.+}}{{[[:space:]]}}libstart.a(start.o){{[[:space:]]}}start{{$}}
+
+## int32 run(int32, char **): the argv shape.
+# RUN: msil-ld -e run args.o -o args.exe 2>&1 | count 0
+# RUN: llvm-cil-dump args.exe | FileCheck %s --check-prefix=ARGS
+# ARGS:      {{^}}  .method '<msil>Main' int32(string[]) flags=0x0091 impl=0x0000{{$}}
+# ARGS-NEXT: {{^}}    .maxstack 3{{$}}
+# ARGS-NEXT: {{^}}    .locals (string[], int32, native int, int32){{$}}
+# ARGS-NEXT: {{^}}    L0: call string[]() [mscorlib]System.Environment::'GetCommandLineArgs'{{$}}
+# ARGS:      {{^}}    L12: call native int(native int) [mscorlib]System.Runtime.InteropServices.Marshal::'AllocHGlobal'{{$}}
+# ARGS:      {{^}}    L26: call native int(string) [mscorlib]System.Runtime.InteropServices.Marshal::'StringToHGlobalAnsi'{{$}}
+# ARGS:      {{^}}    L46: call int32(int32, native int) '<Module>'::'run'{{$}}
+# ARGS-NEXT: {{^}}    L47: ret{{$}}
+
+## No definition of the entry, and a main of another shape.
+# RUN: not msil-ld nomain.o -o x.exe 2>&1 | %{err} --check-prefix=NOMAIN \
+# RUN:   --implicit-check-not=error: --implicit-check-not=">>>"
+# NOMAIN:      {{^}}msil-ld: error: undefined symbol: main{{$}}
+# NOMAIN-NEXT: {{^}}>>> referenced by the entry point{{$}}
+# RUN: not msil-ld -e start nomain.o -o x.exe 2>&1 | %{err} --check-prefix=NOSTART \
+# RUN:   --implicit-check-not=error: --implicit-check-not=">>>"
+# NOSTART:      {{^}}msil-ld: error: undefined symbol: start{{$}}
+# NOSTART-NEXT: {{^}}>>> referenced by the entry point{{$}}
+# RUN: not msil-ld badmain.o -o x.exe 2>&1 | %{err} --check-prefix=BADMAIN --implicit-check-not=error:
+# BADMAIN: {{^}}msil-ld: error: unsupported signature for main{{$}}
+
+## A narrow integer main (short main(void)) on both triples: '<msil>Main'
+## calls 'int32() main' directly, on the object link, the LTO PE and
+## --lto-emit-asm.
+# RUN: msil-ld short-win.o -o short-win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump short-win.exe | FileCheck %s --check-prefix=SHORT
+# RUN: msil-ld short-win.bc -o short-win-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump short-win-lto.exe | FileCheck %s --check-prefix=SHORT
+# RUN: msil-ld --lto-emit-asm short-win.bc -o short-win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=SHORT-IL --input-file=short-win.il
+# RUN: msil-ld short-lnx.o -o short-lnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump short-lnx.exe | FileCheck %s --check-prefix=SHORT
+# RUN: msil-ld short-lnx.bc -o short-lnx-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump short-lnx-lto.exe | FileCheck %s --check-prefix=SHORT
+# RUN: msil-ld --lto-emit-asm short-lnx.bc -o short-lnx.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=SHORT-IL --input-file=short-lnx.il
+# SHORT:      {{^}}entrypoint int32(string[]) '<Module>'::'<msil>Main'{{$}}
+# SHORT:      {{^}}  .method '<msil>Main' int32(string[]) flags=0x0091 impl=0x0000{{$}}
+# SHORT-NEXT: {{^}}    .maxstack 1{{$}}
+# SHORT-NEXT: {{^}}    L0: call int32() '<Module>'::'main'{{$}}
+# SHORT-NEXT: {{^}}    L1: ret{{$}}
+# SHORT-NEXT: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# SHORT-IL:      {{^}}.method public static int32 'main'() cil managed{{$}}
+# SHORT-IL:      {{^}}.method private hidebysig static int32 '<msil>Main'(string[] args) cil managed{{$}}
+# SHORT-IL-NEXT: {{^[{]$}}
+# SHORT-IL-NEXT: {{^}}  .entrypoint{{$}}
+# SHORT-IL-NEXT: {{^}}  .maxstack 1{{$}}
+# SHORT-IL-NEXT: {{^}}  call int32 'main'(){{$}}
+# SHORT-IL-NEXT: {{^}}  ret{{$}}
+
+## IR main(i32, i64) on the Linux triple is 'int32(int32, native int)' in
+## CIL (D2): '<msil>Main' builds argv for it on every path.
+# RUN: msil-ld wide.o -o wide.exe 2>&1 | count 0
+# RUN: llvm-cil-dump wide.exe | FileCheck %s --check-prefix=WIDE
+# RUN: msil-ld wide.bc -o wide-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump wide-lto.exe | FileCheck %s --check-prefix=WIDE
+# RUN: msil-ld --lto-emit-asm wide.bc -o wide.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WIDE-IL --input-file=wide.il
+# WIDE:      {{^}}entrypoint int32(string[]) '<Module>'::'<msil>Main'{{$}}
+# WIDE:      {{^}}  .method '<msil>Main' int32(string[]) flags=0x0091 impl=0x0000{{$}}
+# WIDE-NEXT: {{^}}    .maxstack 3{{$}}
+# WIDE-NEXT: {{^}}    .locals (string[], int32, native int, int32){{$}}
+# WIDE-NEXT: {{^}}    L0: call string[]() [mscorlib]System.Environment::'GetCommandLineArgs'{{$}}
+# WIDE:      {{^}}    L{{[0-9]+}}: call native int(string) [mscorlib]System.Runtime.InteropServices.Marshal::'StringToHGlobalAnsi'{{$}}
+# WIDE:      {{^}}    L{{[0-9]+}}: call int32(int32, native int) '<Module>'::'main'{{$}}
+# WIDE-NEXT: {{^}}    L{{[0-9]+}}: ret{{$}}
+# WIDE-NEXT: {{^}}  .method 'main' int32(int32, native int) flags=0x0016 impl=0x0000{{$}}
+# WIDE-IL:      {{^}}.method public static int32 'main'(int32, native int) cil managed{{$}}
+# WIDE-IL:      {{^}}.method private hidebysig static int32 '<msil>Main'(string[] args) cil managed{{$}}
+# WIDE-IL-NEXT: {{^[{]$}}
+# WIDE-IL-NEXT: {{^}}  .entrypoint{{$}}
+# WIDE-IL-NEXT: {{^}}  .maxstack 3{{$}}
+# WIDE-IL-NEXT: {{^}}  .locals (string[], int32, native int, int32){{$}}
+# WIDE-IL-NEXT: {{^}}  call string[] [mscorlib]System.Environment::GetCommandLineArgs(){{$}}
+# WIDE-IL:      {{^}}  call native int [mscorlib]System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string){{$}}
+# WIDE-IL:      {{^}}  call int32 'main'(int32, native int){{$}}
+# WIDE-IL-NEXT: {{^}}  ret{{$}}
+
+## The mains of other shapes stay errors on every path: main(double), an
+## i64 (native int) result, and an i64 argc.
+# DEFINE: %{badmain} = %{err} --check-prefix=BADMAIN --implicit-check-not=error: \
+# DEFINE:   --implicit-check-not="in function"
+# RUN: not msil-ld badmain.bc -o x.exe 2>&1 | %{badmain}
+# RUN: not msil-ld --lto-emit-asm badmain.bc -o x.il 2>&1 | %{badmain}
+# RUN: not msil-ld bad-i64.o -o x.exe 2>&1 | %{badmain}
+# RUN: not msil-ld bad-i64.bc -o x.exe 2>&1 | %{badmain}
+# RUN: not msil-ld --lto-emit-asm bad-i64.bc -o x.il 2>&1 | %{badmain}
+# RUN: not msil-ld bad-i64-argc.o -o x.exe 2>&1 | %{badmain}
+# RUN: not msil-ld bad-i64-argc.bc -o x.exe 2>&1 | %{badmain}
+# RUN: not msil-ld --lto-emit-asm bad-i64-argc.bc -o x.il 2>&1 | %{badmain}
+
+## An -e entry of another shape (int64 start(double)), and -e naming a
+## variable, on the object link and the LTO link.
+# RUN: not msil-ld -e start badstart.o -o x.exe 2>&1 | %{err} --check-prefix=BADSTART --implicit-check-not=error:
+# RUN: not msil-ld -e start badstart.bc -o x.exe 2>&1 | %{err} --check-prefix=BADSTART --implicit-check-not=error:
+# RUN: not msil-ld -e start datastart.o -o x.exe 2>&1 | %{err} --check-prefix=BADSTART --implicit-check-not=error:
+# RUN: not msil-ld -e start datastart.bc -o x.exe 2>&1 | %{err} --check-prefix=BADSTART --implicit-check-not=error:
+# BADSTART: {{^}}msil-ld: error: unsupported signature for start{{$}}
+
+#--- start.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @start() {
+  ret i32 3
+}
+
+#--- args.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @run(i32 %argc, ptr %argv) {
+  ret i32 %argc
+}
+
+#--- badmain.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main(double %x) {
+  %r = fptosi double %x to i32
+  ret i32 %r
+}
+
+#--- badstart.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i64 @start(double %x) {
+  %r = fptosi double %x to i64
+  ret i64 %r
+}
+
+#--- datastart.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@start = global i32 5
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- nomain.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @helper() {
+  ret i32 1
+}
+
+#--- short-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i16 @main() {
+  ret i16 3
+}
+
+#--- short-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i16 @main() {
+  ret i16 3
+}
+
+#--- wide.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main(i32 %argc, i64 %argv) {
+  ret i32 %argc
+}
+
+#--- bad-i64.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i64 @main() {
+  ret i64 3
+}
+
+#--- bad-i64-argc.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main(i64 %argc, ptr %argv) {
+  %r = trunc i64 %argc to i32
+  ret i32 %r
+}

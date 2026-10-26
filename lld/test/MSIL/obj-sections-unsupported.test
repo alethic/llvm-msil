@@ -1,0 +1,211 @@
+## Sections that Phase 2 links refuse by name, never silently
+## (ImplementationPlan.md 5.9.9 'Destructors', rule 7 and the constructor
+## list; 5.9.14; judge-c-fidelity J6), each with exit status 1:
+## - destructor tables (P3-A): '.fini_array*' on non-Windows triples and
+##   '.CRT$XT*' on Windows triples are
+##     global destructors are not supported yet: <s> in <file>
+## - '.ctors*', '.dtors*', '.CRT$XI*', '.CRT$XL*', '.CRT$XP*' and the other
+##   '.CRT$X*' input sections, and under ELF rules '.preinit_array' and
+##   '.preinit_array.*' (the section 12 row 'Plan 5.9.9 and M20.a (1)
+##   amended (`.preinit_array`)': no silent drop, judge-c-fidelity J6), are
+##     section '<name>' in <file> is not supported
+##   On Windows triples '.preinit_array' is plain data: its slot is stored
+##   like any address and never run, with no diagnostic;
+## - TLS segments ('.tdata', '.tbss', or the TLS flag) are
+##     thread-local storage is not supported yet: <s> in <file>
+##   (a variable placed in a section named '.tdata' is one too);
+## - an 8-byte constructor-table slot without an FNADDR64 relocation is
+##     constructor table entry at <section>+<off> in <file> is not a function address
+## Every such segment is kept alive here (llvm.used), so the errors cannot
+## depend on --gc-sections. Without llvm.used, the '.preinit_array' slot is
+## reported too: 5.9.11's table roots keep every segment of an unsupported
+## section (the section 12 row 'Plan 5.9.11 amended (roots; M20.b)').
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj fa.ll -o fa.o
+# RUN: llc -filetype=obj xt.ll -o xt.o
+# RUN: llc -filetype=obj ct.ll -o ct.o
+# RUN: llc -filetype=obj dt.ll -o dt.o
+# RUN: llc -filetype=obj xi.ll -o xi.o
+# RUN: llc -filetype=obj xl.ll -o xl.o
+# RUN: llc -filetype=obj td.ll -o td.o
+# RUN: llc -filetype=obj bad.ll -o bad.o
+# RUN: llc -filetype=obj pa.ll -o pa.o
+# RUN: llc -filetype=obj pa65535.ll -o pa65535.o
+# RUN: llc -filetype=obj pa-nouse.ll -o pa-nouse.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil pa.ll -o wpa.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error:
+
+# RUN: not msil-ld fa.o -o x.exe 2>&1 | %{err} --check-prefix=DTOR -DFILE=fa.o
+# RUN: not msil-ld xt.o -o x.exe 2>&1 | %{err} --check-prefix=DTOR -DFILE=xt.o
+# DTOR: {{^}}msil-ld: error: global destructors are not supported yet: {{.+}} in [[FILE]]{{$}}
+
+# RUN: not msil-ld ct.o -o x.exe 2>&1 | %{err} --check-prefix=SECTION -DNAME=.ctors -DFILE=ct.o
+# RUN: not msil-ld dt.o -o x.exe 2>&1 | %{err} --check-prefix=SECTION -DNAME=.dtors -DFILE=dt.o
+# RUN: not msil-ld xi.o -o x.exe 2>&1 | %{err} --check-prefix=SECTION '-DNAME=.CRT$XIU' -DFILE=xi.o
+# RUN: not msil-ld xl.o -o x.exe 2>&1 | %{err} --check-prefix=SECTION '-DNAME=.CRT$XLB' -DFILE=xl.o
+# RUN: not msil-ld pa.o -o x.exe 2>&1 | %{err} --check-prefix=SECTION -DNAME=.preinit_array -DFILE=pa.o
+# RUN: not msil-ld pa65535.o -o x.exe 2>&1 | %{err} --check-prefix=SECTION -DNAME=.preinit_array.65535 -DFILE=pa65535.o
+# RUN: not msil-ld pa-nouse.o -o x.exe 2>&1 | %{err} --check-prefix=SECTION -DNAME=.preinit_array -DFILE=pa-nouse.o
+# SECTION: {{^}}msil-ld: error: section '[[NAME]]' in [[FILE]] is not supported{{$}}
+
+## '.preinit_array' on Windows: data, the slot holds early's address, and
+## '.cctor' calls nothing.
+# RUN: msil-ld wpa.o -o wpa.exe 2>&1 | count 0
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump wpa.exe > wpa.txt %}
+# RUN: %if llvm-cil-dump %{ %python %S/Inputs/cctor.py wpa.txt | FileCheck %s --check-prefix=WIN-DATA --implicit-check-not=call %}
+# WIN-DATA: {{^}}field pa = data+0{{$}}
+# WIN-DATA: {{^}}storei data+0 = <msil>fn_early{{$}}
+
+# RUN: not msil-ld td.o -o x.exe 2>&1 | %{err} --check-prefix=TLS
+# TLS: {{^}}msil-ld: error: thread-local storage is not supported yet: tv in td.o{{$}}
+
+# RUN: not msil-ld bad.o -o x.exe 2>&1 | %{err} --check-prefix=SLOT
+# SLOT: {{^}}msil-ld: error: constructor table entry at .init_array+0 in bad.o is not a function address{{$}}
+
+#--- fa.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@fa = internal global ptr @fin, section ".fini_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @fa], section "llvm.metadata"
+
+define internal void @fin() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- xt.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@xt = internal global ptr @fin, section ".CRT$XTU", align 8
+@llvm.used = appending global [1 x ptr] [ptr @xt], section "llvm.metadata"
+
+define internal void @fin() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- ct.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@ct = internal global ptr @init, section ".ctors", align 8
+@llvm.used = appending global [1 x ptr] [ptr @ct], section "llvm.metadata"
+
+define internal void @init() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- dt.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@dt = internal global ptr @fin, section ".dtors", align 8
+@llvm.used = appending global [1 x ptr] [ptr @dt], section "llvm.metadata"
+
+define internal void @fin() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- xi.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@xi = internal global ptr @init, section ".CRT$XIU", align 8
+@llvm.used = appending global [1 x ptr] [ptr @xi], section "llvm.metadata"
+
+define internal void @init() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- xl.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@xl = internal global ptr @tlscb, section ".CRT$XLB", align 8
+@llvm.used = appending global [1 x ptr] [ptr @xl], section "llvm.metadata"
+
+define internal void @tlscb() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- td.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@tv = global i32 5, section ".tdata", align 4
+
+define i32 @main() {
+  %v = load i32, ptr @tv
+  ret i32 %v
+}
+
+#--- bad.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@bad = internal global i64 5, section ".init_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @bad], section "llvm.metadata"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- pa.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@pa = internal global ptr @early, section ".preinit_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @pa], section "llvm.metadata"
+
+define internal void @early() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- pa65535.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@pa = internal global ptr @early, section ".preinit_array.65535", align 8
+@llvm.used = appending global [1 x ptr] [ptr @pa], section "llvm.metadata"
+
+define internal void @early() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- pa-nouse.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@pa = internal global ptr @early, section ".preinit_array", align 8
+
+define internal void @early() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}

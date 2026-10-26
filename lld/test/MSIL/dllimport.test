@@ -28,19 +28,30 @@
 # DEFINE:   --implicit-check-not="Stack dump" --implicit-check-not="LLVM ERROR"
 # DEFINE: %{il} = FileCheck %s --check-prefix=IL --implicit-check-not=pinvokeimpl \
 # DEFINE:   --implicit-check-not='is not supported'
+## FileCheck checks --implicit-check-not only before the first match of a
+## CHECK-DAG group, so the IL run leaves the text after its DAG group
+## unchecked; the IL-NONE run, made only of -NOT lines, covers the whole
+## output (M15 open issue 13).
+# DEFINE: %{il_none} = FileCheck %s --check-prefix=IL-NONE
 
 ## Positional definitions, after and before the reference.
 # RUN: msil-ld --lto-emit-asm ref.o gdata.o foo.o -o after.il 2>&1 | %{quiet}
 # RUN: %{il} --input-file=after.il
+# RUN: %{il_none} --input-file=after.il
 # RUN: msil-ld --lto-emit-asm gdata.o foo.o ref.o -o before.il 2>&1 | %{quiet}
 # RUN: %{il} --input-file=before.il
+# RUN: %{il_none} --input-file=before.il
 
 ## Definitions in archive members found by -L/-l: each member is extracted by
 ## its '__imp_' reference.
 # RUN: msil-ld --lto-emit-asm ref.o -L lib -ldef -o archive.il 2>&1 | %{quiet}
 # RUN: %{il} --input-file=archive.il
+# RUN: %{il_none} --input-file=archive.il
 
 # QUIET-NOT: error:
+
+# IL-NONE-NOT: pinvokeimpl
+# IL-NONE-NOT: is not supported
 
 # IL-DAG:  {{^}}.method public static int32 'main'() cil managed{{$}}
 # IL-DAG:  {{^}}.method public static int32 'foo'(int32) cil managed{{$}}

@@ -1,0 +1,47 @@
+# A native data import from the system msvcrt.dll: _iob, through -lmsvcrt and the kernel32 helper (Windows triples).
+# msvcrt.dll exports its stdio array _iob as data. The Windows SDK and the
+# MSVC libraries have no import library that names it (their msvcrt.lib is
+# the UCRT's), so the RUN line before the composite writes one from
+# msvcrt.def with lld-link /lib /def (LIBRARY msvcrt.dll, EXPORTS _iob DATA),
+# and %{msil_native_libs} gives both builds '-L%t -lmsvcrt'. msil-ld binds
+# _iob, a short import of type IMPORT_DATA, as a native data import (plan
+# 5.10.12, from M20): '<msil>dataimport' calls kernel32.dll's LoadLibraryW
+# (with Marshal::StringToHGlobalUni) and GetProcAddress (with
+# StringToHGlobalAnsi), as recon/p2/native-imports-files/data-win.il does on
+# .NET Framework 4.8 and .NET 8, and stores the address in _iob's field
+# before main runs. The program reads the _file member of the three FILE
+# objects of msvcrt's x64 layout (48 bytes each, _file at offset 28), which
+# msvcrt.dll initializes statically to 0, 1 and 2; the native oracle reads
+# them through __declspec(dllimport). Plan 5.10.12, 5.10.15 (M20: msvcrt
+# _iob on Windows).
+# REQUIRES: msil-triple-windows
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %lld_link /lib /machine:x64 /def:%t/msvcrt.def /out:%t/msvcrt.lib
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_native_libs} = -L%t -lmsvcrt
+# RUN: %{msil_prog}
+#--- msvcrt.def
+LIBRARY msvcrt.dll
+EXPORTS
+  _iob DATA
+#--- main.c
+#include "msil_test.h"
+struct msvcrt_file {
+  char *ptr;
+  int cnt;
+  char *base;
+  int flag;
+  int file;
+  int charbuf;
+  int bufsiz;
+  char *tmpfname;
+};
+__declspec(dllimport) extern struct msvcrt_file _iob[];
+
+int main(void) {
+  put_kv("sizeof(FILE)", sizeof(struct msvcrt_file));
+  put_kv("_iob[0]._file", _iob[0].file);
+  put_kv("_iob[1]._file", _iob[1].file);
+  put_kv("_iob[2]._file", _iob[2].file);
+  return _iob[2].file;
+}

@@ -116,8 +116,8 @@
 // 5.10.5): msil-object.c checks the object compile jobs, -fno-lto -c, -flto -c
 // and -emit-llvm -c, the clean errors for assembling ILAsm text (-save-temps
 // -c, -c -x assembler, clang-cl /FA and /Fa, -via-file-asm) and for
-// -fno-integrated-as -c, and the bitcode compile of a link, which plans
-// msil-ld until M20.
+// -fno-integrated-as -c, and the compile of a link, which from M20 writes a
+// CIL object for msil-ld (M14-M19 compiled bitcode for it).
 
 // -S needs no assembler, so -fno-integrated-as -S works.
 // RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -fno-integrated-as -S %s -o %t.il 2>&1 \

@@ -1,0 +1,8 @@
+gcset
+records=3
+sum=15
+gcadj
+records=2
+sum=50
+gcadj markers=1000
+[exit 65]

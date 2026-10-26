@@ -19,6 +19,13 @@
 /// site, 'ldftn', 'calli' and P/Invoke declaration spells a signature the same
 /// way.
 ///
+/// The trailer is a one-object link (Q5, Design.md 4.1): the data image is
+/// laid out by cli::layoutImage (named sections, __start_/__stop_ symbols,
+/// constructor-table slots), and the module initializer, the entry point and
+/// the data-import helpers are built by cli::buildTrailer, msil-ld's trailer
+/// builder (plan 5.9.9, 5.9.10), which this printer feeds and whose methods
+/// it prints through its text sink (MSILTrailerTextSink).
+///
 /// In object mode (MSILTargetMachine::isObjectMode(), plan 5.8) it writes a
 /// CIL object instead, through the same streamer calls (MSILTargetStreamer's
 /// object event order): the object header, the methods, the address fields
@@ -44,6 +51,8 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/BinaryFormat/MSILLink.h"
+#include "llvm/CLI/ImageLayout.h"
+#include "llvm/CLI/Signature.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/Support/Allocator.h"
@@ -56,7 +65,9 @@
 #include <utility>
 
 namespace llvm {
+class AttributeList;
 class Function;
+class FunctionType;
 class GlobalAlias;
 class GlobalIFunc;
 class GlobalValue;
@@ -66,10 +77,42 @@ class MCSymbol;
 class MSILFunctionInfo;
 class MSILSubtarget;
 class MSILTargetStreamer;
+class MSILTrailerTextSink;
 class MachineFunction;
 class MachineInstr;
 class Module;
 class TargetMachine;
+
+namespace MSIL {
+/// The CIL signature of a call (\p TargetFunc null) or of the definition
+/// \p TargetFunc of the IR function type \p FTy in \p Context: the lowering
+/// of MSIL::computeSignatureVTs, mapped through MSIL::toValType, which ISel
+/// applies to formal arguments, returns and call operands.
+Signature getFunctionTypeSignature(const FunctionType *FTy,
+                                   const Function *TargetFunc,
+                                   const Function &Context,
+                                   const TargetMachine &TM);
+
+/// The ABI descriptor (plan 5.8.8, SIGNATURES; its Token is left 0) of a call
+/// or definition of the IR function type \p FTy with the attributes
+/// \p Attrs: NO_PROTOTYPE if \p NoPrototype; SRET with the size and alignment
+/// of the returned aggregate for an sret first parameter (IL parameter 0);
+/// and the IL parameter index, size and alignment of each byval parameter.
+/// The object writer records it, and MSILFixFunctionBitcasts compares it
+/// under "msil-lto" (cli::classifyCall).
+MSILLink::SignatureInfo getABIDescriptor(const FunctionType *FTy,
+                                         const AttributeList &Attrs,
+                                         bool NoPrototype,
+                                         const Function &Context,
+                                         const TargetMachine &TM);
+
+/// The CIL type of a value of type \p T (canonical listing v1's spelling is
+/// ILAsm's for these).
+cli::TypeSig toTypeSig(ValType T);
+
+/// The cli::MethodSig of \p S (a static, default-convention method).
+cli::MethodSig toMethodSig(const Signature &S);
+} // end namespace MSIL
 
 class LLVM_LIBRARY_VISIBILITY MSILAsmPrinter final : public AsmPrinter {
 public:
@@ -126,9 +169,10 @@ private:
   /// Global variable declarations (and available_externally definitions)
   /// that the emitted code or the data segment refers to.
   SmallPtrSet<const GlobalVariable *, 4> UsedExternGlobals;
-  /// UsedExternGlobals in module order, set by emitEndOfAsmFile: errors
-  /// (Phase 1 has no linker), which still get an address field so that the
-  /// output stays well formed.
+  /// UsedExternGlobals in module order, set by emitEndOfAsmFile, each with an
+  /// address field: the __start_/__stop_ symbols of output sections
+  /// (StartStopFields), native data in msil-ld's linked text
+  /// (DataImportVars), and errors, whose fields keep the output well formed.
   SmallVector<const GlobalVariable *, 0> ExternGlobals;
   /// llvm.global_ctors, sorted by priority: the module initializer calls them
   /// after the data segment is in place.
@@ -145,6 +189,19 @@ private:
   /// !msil.imports.used, which doFinalization adds (plan 5.10.13).
   StringSet<> LinkedPInvokeNames;
   SmallVector<StringRef, 0> LinkedPInvokes;
+  /// The referenced external variables __start_<X> and __stop_<X> where <X>
+  /// is an output section of the data image, with their offsets: address
+  /// fields at the section's start and end (plan 5.9.9; not on Windows
+  /// triples, which keep decision D26's error), set by collectExternGlobals.
+  SmallVector<std::pair<const GlobalVariable *, uint64_t>, 2> StartStopFields;
+  /// In msil-ld's linked text, the referenced external variables that native
+  /// data defines, with the module and the entry of each (plan 5.10.12), set
+  /// by collectExternGlobals: '<msil>init_dataimports' sets their fields.
+  struct DataImportVar {
+    const GlobalVariable *GV;
+    std::string Module, Entry;
+  };
+  SmallVector<DataImportVar, 2> DataImportVars;
 
   //===------------------------------------------------------------------===//
   // Object mode (plan 5.8).
@@ -309,8 +366,20 @@ private:
   const DenseMap<const MCSymbol *, const GlobalValue *> &
   getSymToGV(const Module &M);
 
-  /// Reports every global variable that the module refers to but does not
-  /// define, in module order, and lists it in ExternGlobals.
+  /// The section rules of the target triple (plan 5.9.9): COFF for Windows
+  /// triples, ELF for the others.
+  cli::SectionRules getSectionRules() const;
+
+  /// Reports the global variables in named sections that the one-object
+  /// link of whole-program output cannot give their meaning (plan 5.9.9):
+  /// destructor tables, unsupported and thread-local sections, in IR order,
+  /// naming the module's source file.
+  void checkSections(const Module &M);
+
+  /// Lists every global variable that the module refers to but does not
+  /// define, in module order, in ExternGlobals, and reports it unless it is
+  /// a __start_/__stop_ symbol of an output section (StartStopFields) or, in
+  /// msil-ld's linked text, native data (DataImportVars).
   void collectExternGlobals(const Module &M);
 
   /// Lists the functions whose address is used in FuncAddrs, in module order.
@@ -325,10 +394,12 @@ private:
   /// one IL name whose addresses are used.
   void checkAddressFieldNames(const Module &M);
 
-  /// Returns the functions of llvm.global_ctors in the order the module
-  /// initializer calls them, notes the undefined ones for P/Invoke
-  /// declarations and diagnoses the entries it cannot call.
-  SmallVector<const Function *, 8> collectConstructors();
+  /// Returns the constructors in the order the module initializer calls
+  /// them: the functions of llvm.global_ctors and of the 8-byte slots of the
+  /// constructor-table sections (.init_array*, .CRT$XC*), sorted by
+  /// cli::sortConstructors (plan 5.9.9); notes the undefined ones for
+  /// P/Invoke declarations and diagnoses the entries it cannot call.
+  SmallVector<const Function *, 8> collectConstructors(const Module &M);
 
   /// Emits the P/Invoke declarations of the undefined functions and external
   /// symbols that have an import, and diagnoses the rest: in a standalone
@@ -336,26 +407,28 @@ private:
   /// D14, frozen), 'public'; in msil-ld's linked text the natively bound
   /// functions, with msil-ld's module and entry strings, 'assembly' (plan
   /// 5.10.11, 5.10.13), where the native-callee checks name the module (plan
-  /// 5.10.14), and whose names it records in LinkedPInvokes. Those with the
-  /// IL name and signature of a method of the module get none: they bind to
+  /// 5.10.14), and whose names it records in LinkedPInvokes, and the native
+  /// functions of the data-import helper (plan 5.10.12). Those with the IL
+  /// name and signature of a method of the module get none: they bind to
   /// that method, as a native link binds the symbol.
   void emitPInvokeDeclarations(const Module &M);
 
-  /// Emits the data image and the address fields (decision D12).
-  void emitDataSegment();
+  /// Emits the data image, the relocation table that \p Sink recorded (loop
+  /// mode) and the address fields (decision D12).
+  void emitDataSegment(const MSILTrailerTextSink &Sink);
 
   /// Emits the address fields of the functions whose address is used.
   void emitFunctionAddressFields();
 
-  /// Emits <Module>::.cctor, built with cli::ILBuilder: it allocates and fills
-  /// the data segment, sets the address fields of the globals and of the
-  /// functions, applies the relocations and calls \p CtorFns.
-  void emitModuleInitializer(ArrayRef<const Function *> CtorFns);
-
-  /// Emits '<msil>Main'(string[]), the .entrypoint method that calls the C
-  /// function \p Main (decision D27), built with cli::ILBuilder, or diagnoses
-  /// an unsupported signature.
-  void emitEntryPoint(const Function &Main);
+  /// Builds the module trailer with cli::buildTrailer (plan 5.9.10) and
+  /// emits it: the data segment and the address fields, then the
+  /// data-import helpers, <Module>::.cctor (which allocates and fills the
+  /// data segment, sets the address fields of the globals and of the
+  /// functions, initializes the data imports, applies the relocations and
+  /// calls \p CtorFns) and '<msil>Main'(string[]), the .entrypoint method
+  /// that calls main (decision D27), whose unsupported signatures it
+  /// diagnoses.
+  void emitTrailer(Module &M, ArrayRef<const Function *> CtorFns);
 
   /// Object mode: records the ABI descriptors of the IR calls in \p Caller
   /// (CallABIs) and warns about a call that conflicts with an earlier one of

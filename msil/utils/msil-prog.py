@@ -9,8 +9,9 @@
 """Build a multi-translation-unit program for the MSIL execution tests.
 
     msil-prog.py --clang CLANG --triple <triple>-msil --level <L> --workdir DIR
-        [--mode msil|native] [--pipeline lto] [--link-output il]
-        [--ar AR] [--ld MSIL-LD] [--ilasm=CMD] [--out FILE] [--also-il FILE]
+        [--mode msil|native] [--pipeline obj|lto] [--link-output pe|il]
+        [--ar AR] [--ld MSIL-LD] [--llc LLC] [--ilasm=CMD] [--out FILE]
+        [--also-il FILE] [--equiv-out FILE] [--equiv-skip FILE --test PATH]
         [--cflags=FLAGS] [--ldflags=FLAGS] [--native-ldflags=FLAGS]
         [--src FILE...]... [--stock-src FILE...]... [--archives=SPEC]
         [--lib=ARGS]... [--native-lib=ARGS]...
@@ -18,31 +19,61 @@
         [--det] [--timeout S] [--mem-limit-mb N]
 
 This is the build step of the %{msil_prog} composites of msil/test/lit.cfg.py
-(plan 5.12.3, 5.12.4); the composites verify, force-JIT and run what it
-builds. update-expected.py runs its native mode for the .expected files of
+(plan 5.12.3, 5.12.4), and from M20 of %{msil_c} and %{msil_ll} under
+msil_pipeline=obj; the composites verify, force-JIT and run what it builds.
+update-expected.py runs its native mode for the .expected files of
 %{msil_prog} tests. It prints every command it runs ('msil-prog: <command>')
 and passes each tool's output through.
 
 --mode msil (the default) builds the program for the MSIL triple --triple,
-with the pipeline --pipeline lto and the link output --link-output il (plan
-5.12.1; 'obj' and 'pe' are M20's and are usage errors until then):
+with the pipeline --pipeline (plan 5.12.1: 'obj', the default from M20,
+compiles CIL objects with clang -c; 'lto' compiles bitcode with clang -flto
+-c) and the link output --link-output ('pe', the default from M20: msil-ld
+writes the program image; 'il': msil-ld writes --lto-emit-asm text that
+ilasm assembles, lto only):
 
-  1. each --src: CLANG --target=<triple> CFLAGS -<L> -flto -c SRC -o obj/<stem>.o
+  1. each --src: CLANG --target=<triple> CFLAGS -<L> [-flto] -c SRC
+     -o obj/<stem>.o, -flto under lto; under obj a SRC that ends in '.ll' is
+     compiled by --llc when it is given (%{msil_ll} under obj, plan 5.12.1:
+     'llc -filetype=obj' plus the link):
+       LLC -mtriple=<triple> -<L> -filetype=obj SRC -o obj/<stem>.o
+     (llc takes -O0 to -O3 only)
   2. each --stock-src (stock-clang bitcode, plan Q12): the tree's clang for
      the native triple, CLANG --target=<native> CFLAGS -<L> -flto
      [-fno-ms-volatile] -c SRC -o stock/<stem>.o; -fno-ms-volatile on
      windows-msvc only, where clang's default /volatile:ms differs from MSIL's
+     (also under obj: msil-ld links bitcode beside the objects)
   3. each archive NAME of --archives: its members compiled as in 1 (or 2) into
      ar/NAME/<stem>.o, then AR rcs ar/NAME/libNAME.a <members in order>
   4. the link through the clang driver, which runs msil-ld (--ld MSIL-LD
-     becomes --ld-path=MSIL-LD):
+     becomes --ld-path=MSIL-LD); LINK below is
        CLANG --target=<triple> [--ld-path=MSIL-LD] -<L> LDFLAGS obj/... stock/...
-         -Lar/NAME -lNAME ... LIB-ARGS NATIVE-LIB-ARGS -Wl,--lto-emit-asm
-         -o prog.il
-  5. ILASM-CMD -exe -output=<out> <workdir>/prog.il (with --ilasm): the
-     program is always an EXE image, which runs under 'dotnet exec' and on the
-     .NET Framework alike (plan 5.12.1, Q19); --also-il FILE also copies
-     prog.il to FILE.
+         -Lar/NAME -lNAME ... LIB-ARGS NATIVE-LIB-ARGS
+     and the program is always an EXE image, which runs under 'dotnet exec'
+     and on the .NET Framework alike (plan 5.12.1, Q19):
+       pe: LINK -o prog.exe (msil-ld writes the image; copied to --out);
+       il: LINK -Wl,--lto-emit-asm -o prog.il, then
+           ILASM-CMD -exe -output=<out> <workdir>/prog.il (--ilasm), and
+           --also-il FILE copies prog.il to FILE.
+  5. the equivalence outputs (plan 5.12.6), pe only, after the main link:
+       --equiv-out FILE: LINK -Wl,--no-gc-sections -o equiv/prog.exe, copied
+           to FILE: the image that O3 (obj) and O4 (lto) compare, never the
+           one that runs, which keeps msil-ld's default --gc-sections;
+       --also-il FILE (lto): LINK -Wl,--lto-emit-asm -o equiv/prog.il, copied
+           to FILE: the same link's text, the text side of O4.
+     Both keep the names of the main link ('prog' assembly, 'prog.exe'
+     module), which O3's and O4's ilasm builds give theirs too.
+     --equiv-skip FILE --test PATH (both or neither): when FILE
+     (msil/utils/equiv-allowed.txt) has a
+     'skip <oracle>[@<triple>][:<level>] <path> <reason>' line for the
+     oracle the build feeds (O3 under obj, O4 under lto) that covers PATH
+     (lit's %s, made repository-relative as msil-equiv.py makes it) for
+     this build's --triple and --level (a line that names a triple or a
+     level covers only that triple or level, one that names neither covers
+     them all; plan section 12, 'Plan 5.12.6 amended (skip lines)'),
+     neither output is built, and it prints
+     'msil-prog: <oracle> skipped: <reason>'; msil-equiv.py --test with the
+     same --triple and --level then skips the comparison the same way.
 
 --mode native builds the same program for the native triple, the oracle of
 plan 5.12.6 (O1): every --src, --stock-src and archive member is an ordinary
@@ -73,9 +104,10 @@ but it takes NATIVE-LIB-ARGS:
     NATIVE-LDFLAGS is %{msil_native_ldflags}: the compiler-rt builtins of
     msil_native_rtlib for MSVC triples, -lm for Linux triples.
 
-Each mode ignores the options of the other (--ld, --ilasm, --ldflags and --lib
-in native mode; --native-ldflags, --ld-lld, --linux-sysroot and --start in
-MSIL mode), so one command prefix, lit's %msil_prog_build, serves both. An
+Each mode ignores the options of the other (--pipeline, --link-output, --ld,
+--llc, --ilasm, --ldflags and --lib in native mode; --native-ldflags,
+--ld-lld, --linux-sysroot and --start in MSIL mode), so one command prefix,
+lit's %msil_prog_build, serves both. An
 empty --ld-lld=, --linux-sysroot= or --start= cancels an earlier one (the
 last of a repeated option counts), which selects the driver recipe after a
 prefix that names the E7 oracle.
@@ -109,11 +141,19 @@ directory is --workdir, emptied first; --workdir may not contain a source.
 
 --det (MSIL mode; %{msil_det}) builds twice, in <workdir>/a and <workdir>/b,
 with the same relative command lines and -fdebug-compilation-dir=. added to
-every compile, and compares every file of the two build directories byte for
-byte: the objects, the archives and the --lto-emit-asm text, but not ilasm's
-image prog.exe, which ilasm stamps (plan 5.12.4, 3.7 of recon tests-p2). It
-prints each file that differs or exists in one build only. --out and --also-il
-then receive build a's image and text.
+every clang compile, and compares every file of the two build directories
+byte for byte (plan 5.12.4, 3.7 of recon tests-p2): the objects, the
+archives and msil-ld's image prog.exe (pe; from M20) or its --lto-emit-asm
+text (il), but not ilasm's image prog.exe, which ilasm stamps; the
+equivalence outputs of step 5 are built and compared in both builds too. It
+prints each file that differs or exists in one build only. --out, --also-il
+and --equiv-out then receive build a's files.
+
+Usage errors: --pipeline obj with --link-output il (obj writes PE images
+only); --also-il under obj; --equiv-out with --link-output il; --equiv-skip
+without --test (or the reverse) or with a malformed FILE; --llc under lto;
+--llc with a .ll source at -Os or -Oz; --also-il or --equiv-out in native
+mode; il without --ilasm (unless --det).
 
 Exit status: 0 on success; 1 when a step fails (its output is shown) or --det
 finds a difference; 2 on a usage or configuration error.
@@ -135,18 +175,21 @@ E7_DYNAMIC_LINKER = "/lib64/ld-linux-x86-64.so.2"
 NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*$")
 
 
-def load_msil_run():
+def load_script(module_name, file_name):
     # No __pycache__ next to the scripts in the source tree.
     sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location(
-        "msil_run", os.path.join(HERE, "msil-run.py")
+        module_name, os.path.join(HERE, file_name)
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-msil_run = load_msil_run()
+msil_run = load_script("msil_run", "msil-run.py")
+# The allow-list parser and the test-path rule of the equivalence oracles,
+# shared so that --equiv-skip and msil-equiv.py --test skip the same tests.
+msil_equiv = load_script("msil_equiv", "msil-equiv.py")
 
 
 class UsageError(Exception):
@@ -321,9 +364,12 @@ def unique_name(used, directory, stem, ext):
 
 
 def build_msil(b, bdir, det):
-    """Steps 1-5 of MSIL mode in bdir; returns (il path, image path or None)."""
+    """Steps 1-5 of MSIL mode in bdir. Returns {'image': the program image or
+    None (il without --ilasm), 'il': the --lto-emit-asm text or None,
+    'equiv': the --no-gc-sections image or None}."""
     args = b.args
     clang, native = args.clang_cmd, args.native
+    lto = args.pipeline == "lto"
     level = "-" + args.level
     det_flags = ["-fdebug-compilation-dir=."] if det else []
     used = set()
@@ -337,17 +383,17 @@ def build_msil(b, bdir, det):
             cmd = [*clang, "--target=" + native, *args.cflags_words, level, "-flto"]
             if is_msvc(native):
                 cmd.append("-fno-ms-volatile")
+            cmd += det_flags + ["-c"]
             what = "the stock-clang compile of %s" % src
+        elif not lto and args.llc_cmd and src.endswith(".ll"):
+            # %{msil_ll} under obj: llc writes the CIL object (plan 5.12.1).
+            cmd = [*args.llc_cmd, "-mtriple=" + args.triple, level, "-filetype=obj"]
+            what = "the llc compile of %s" % src
         else:
-            cmd = [
-                *clang,
-                "--target=" + args.triple,
-                *args.cflags_words,
-                level,
-                "-flto",
-            ]
+            cmd = [*clang, "--target=" + args.triple, *args.cflags_words, level]
+            cmd += (["-flto"] if lto else []) + det_flags + ["-c"]
             what = "the compile of %s" % src
-        cmd += det_flags + ["-c", rel(src, bdir), "-o", out]
+        cmd += [rel(src, bdir), "-o", out]
         b.run(cmd, bdir, what, out)
         return out
 
@@ -361,22 +407,55 @@ def build_msil(b, bdir, det):
     if args.ld:
         link.append("--ld-path=" + args.ld)
     link += [level, *args.ldflags_words, *objects, *lib_args, *args.lib_words]
-    link += args.native_lib_words + ["-Wl,--lto-emit-asm", "-o", "prog.il"]
-    b.run(link, bdir, "the link", "prog.il")
-    il = os.path.join(bdir, "prog.il")
-    if not args.ilasm_cmd:
-        return il, None
-    image = os.path.join(bdir, "prog.exe") if det or not args.out else args.out
-    image = os.path.abspath(image)
-    if os.path.exists(image):
-        os.remove(image)
-    b.run(
-        [*args.ilasm_cmd, "-exe", "-output=" + image, os.path.abspath(il)],
-        bdir,
-        "ilasm",
-        image,
-    )
-    return il, image
+    link += args.native_lib_words
+    out = {"image": None, "il": None, "equiv": None}
+    if args.link_output == "il":
+        b.run(
+            link + ["-Wl,--lto-emit-asm", "-o", "prog.il"], bdir, "the link", "prog.il"
+        )
+        out["il"] = os.path.join(bdir, "prog.il")
+        if not args.ilasm_cmd:
+            return out
+        image = os.path.join(bdir, "prog.exe") if det or not args.out else args.out
+        image = os.path.abspath(image)
+        if os.path.exists(image):
+            os.remove(image)
+        b.run(
+            [*args.ilasm_cmd, "-exe", "-output=" + image, os.path.abspath(out["il"])],
+            bdir,
+            "ilasm",
+            image,
+        )
+        out["image"] = image
+        return out
+    b.run(link + ["-o", "prog.exe"], bdir, "the link", "prog.exe")
+    out["image"] = os.path.join(bdir, "prog.exe")
+    if args.also_il or args.equiv_out:
+        os.makedirs(os.path.join(bdir, "equiv"))
+    if args.also_il:
+        text = "equiv/prog.il"
+        b.run(link + ["-Wl,--lto-emit-asm", "-o", text], bdir, "the text link", text)
+        out["il"] = os.path.join(bdir, text)
+    if args.equiv_out:
+        image = "equiv/prog.exe"
+        b.run(
+            link + ["-Wl,--no-gc-sections", "-o", image],
+            bdir,
+            "the equivalence link",
+            image,
+        )
+        out["equiv"] = os.path.join(bdir, image)
+    return out
+
+
+def deliver(src, dest):
+    """Copy the built file src to dest unless they are the same file."""
+    if not src or not dest:
+        return
+    if os.path.normcase(os.path.abspath(src)) == os.path.normcase(dest):
+        return
+    os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    shutil.copyfile(src, dest)
 
 
 def build_archives(b, bdir, compile_one, pattern):
@@ -518,13 +597,16 @@ def parse_args(argv):
         description=__doc__,
     )
     p.add_argument("--mode", choices=("msil", "native"), default="msil")
-    p.add_argument("--pipeline", choices=("lto", "obj"), default="lto")
-    p.add_argument("--link-output", choices=("il", "pe"), default="il")
+    p.add_argument("--pipeline", choices=("lto", "obj"), default="obj")
+    p.add_argument("--link-output", choices=("il", "pe"), default="pe")
     p.add_argument("--level", required=True, help="O0, O1, O2, O3, Os or Oz")
     p.add_argument("--triple", required=True, help="the MSIL triple (<native>-msil)")
     p.add_argument("--clang", required=True, help="clang (a program or a command)")
     p.add_argument("--ar", help="llvm-ar (a program or a command)")
     p.add_argument("--ld", help="msil-ld, passed to clang as --ld-path=")
+    p.add_argument(
+        "--llc", help="llc for .ll sources under obj (a program or a command)"
+    )
     p.add_argument("--ilasm", help="the ilasm command (MSIL mode, link output il)")
     p.add_argument("--ld-lld", help="E7: ld.lld (a program or a command)")
     p.add_argument("--linux-sysroot", help="E7: make-linux-sysroot.py's directory")
@@ -550,7 +632,18 @@ def parse_args(argv):
     )
     p.add_argument("--workdir", required=True)
     p.add_argument("--out", help="the program (default <workdir>/prog.exe)")
-    p.add_argument("--also-il", help="also copy the --lto-emit-asm text here")
+    p.add_argument(
+        "--also-il",
+        help="also write the --lto-emit-asm text here (lto; pe: a second link)",
+    )
+    p.add_argument(
+        "--equiv-out", help="also write the -Wl,--no-gc-sections image here (pe)"
+    )
+    p.add_argument(
+        "--equiv-skip",
+        help="equiv-allowed.txt: build no equivalence output for a skipped --test",
+    )
+    p.add_argument("--test", help="the test's path, for --equiv-skip (lit's %%s)")
     p.add_argument("--det", action="store_true", help="build twice and compare")
     p.add_argument(
         "--timeout", type=float, default=600.0, help="seconds per step (600)"
@@ -572,22 +665,45 @@ def parse_args(argv):
 def check_args(args):
     """Everything parse_args cannot check; raises UsageError."""
     args.native = native_of(args.triple)
+    args.skip_reason = None
     if args.mode == "msil":
-        if args.pipeline == "obj":
+        if args.pipeline == "obj" and args.link_output == "il":
             raise UsageError(
-                "--pipeline obj needs CIL objects and msil-ld's PE writer (plan M20); "
-                "use --pipeline lto"
+                "--pipeline obj writes PE images only (plan 5.12.1); use "
+                "--link-output pe"
             )
-        if args.link_output == "pe":
+        if args.pipeline == "obj" and args.also_il:
             raise UsageError(
-                "--link-output pe needs msil-ld's PE writer (plan M20); use "
-                "--link-output il"
+                "--also-il is the --lto-emit-asm text of an LTO link (O4); it needs "
+                "--pipeline lto"
+            )
+        if args.equiv_out and args.link_output == "il":
+            raise UsageError(
+                "--equiv-out is a second msil-ld image; it needs --link-output pe"
+            )
+        if args.llc and args.pipeline == "lto":
+            raise UsageError(
+                "--llc compiles IR sources to CIL objects; it needs --pipeline obj"
+            )
+        if bool(args.equiv_skip) != bool(args.test):
+            raise UsageError("--equiv-skip and --test go together")
+        if args.equiv_skip:
+            try:
+                allowed = msil_equiv.Allowed(args.equiv_skip)
+            except msil_equiv.UsageError as e:
+                raise UsageError("--equiv-skip: %s" % e)
+            # The oracle this build feeds (plan 5.12.6).
+            args.oracle = "O3" if args.pipeline == "obj" else "O4"
+            args.skip_reason = allowed.skip_reason(
+                args.oracle, msil_equiv.test_path(args.test), args.triple, args.level
             )
     else:
         if args.det:
             raise UsageError("--det compares MSIL builds; it has no native mode")
         if args.also_il:
             raise UsageError("--also-il is an MSIL-mode option")
+        if args.equiv_out:
+            raise UsageError("--equiv-out is an MSIL-mode option")
     e7 = [args.ld_lld, args.linux_sysroot, args.start]
     if any(e7) and not all(e7):
         raise UsageError(
@@ -609,6 +725,14 @@ def check_args(args):
     )
     if args.ld:
         args.ld = os.path.abspath(args.ld) if os.path.isfile(args.ld) else args.ld
+    args.llc_cmd = (
+        program(args.llc, "--llc")
+        if args.mode == "msil" and args.pipeline == "obj" and args.llc
+        else None
+    )
+    if args.llc_cmd and args.level in ("Os", "Oz"):
+        if any(s.endswith(".ll") for s in args.srcs):
+            raise UsageError("--llc takes -O0 to -O3, not --level %s" % args.level)
     args.ilasm_cmd = split_words(args.ilasm) if args.ilasm else None
     if args.ilasm is not None and not args.ilasm_cmd:
         raise UsageError("--ilasm is empty")
@@ -620,7 +744,12 @@ def check_args(args):
     args.archive_list = parse_archives(args.archives)
     if args.archive_list and not args.ar_cmd:
         raise UsageError("--archives needs --ar")
-    if args.mode == "msil" and not args.det and not args.ilasm_cmd:
+    if (
+        args.mode == "msil"
+        and args.link_output == "il"
+        and not args.det
+        and not args.ilasm_cmd
+    ):
         raise UsageError("MSIL mode with --link-output il needs --ilasm")
     if args.linux_sysroot:
         libdir = os.path.join(args.linux_sysroot, *E7_LIBDIR)
@@ -654,6 +783,9 @@ def check_args(args):
     ]
     if args.out:
         args.out = os.path.abspath(args.out)
+    for opt in ("also_il", "equiv_out"):
+        if getattr(args, opt):
+            setattr(args, opt, os.path.abspath(getattr(args, opt)))
     args.workdir = os.path.abspath(args.workdir)
     if os.path.dirname(args.workdir) == args.workdir:
         raise UsageError("--workdir %s is a file-system root" % args.workdir)
@@ -671,32 +803,44 @@ def main(argv=None):
     if os.path.exists(args.workdir):
         sys.stderr.write("msil-prog: error: cannot empty --workdir %s\n" % args.workdir)
         return 2
+    if args.skip_reason is not None:
+        # The test's equivalence comparison is skipped (equiv-allowed.txt):
+        # no equivalence link, and in pe mode no --lto-emit-asm text either.
+        b.say("%s skipped: %s" % (args.oracle, args.skip_reason))
+        args.equiv_out = None
+        if args.link_output == "pe":
+            args.also_il = None
     try:
         if args.mode == "native":
             os.makedirs(args.workdir)
             build_native(b, args.workdir)
         elif not args.det:
             os.makedirs(args.workdir)
-            il, _ = build_msil(b, args.workdir, False)
-            if args.also_il:
-                shutil.copyfile(il, args.also_il)
+            built = build_msil(b, args.workdir, False)
+            if args.link_output == "pe":
+                deliver(built["image"], args.out)
+            deliver(built["il"], args.also_il)
+            deliver(built["equiv"], args.equiv_out)
         else:
             dirs = [os.path.join(args.workdir, x) for x in ("a", "b")]
             built = []
             for d in dirs:
                 os.makedirs(d)
                 built.append(build_msil(b, d, True))
-            skip = {"prog.exe"} if built[0][1] else set()
+            # ilasm stamps its image; msil-ld's must be deterministic.
+            skip = (
+                {"prog.exe"}
+                if args.link_output == "il" and built[0]["image"]
+                else set()
+            )
             if compare_builds(b, dirs[0], dirs[1], skip):
                 sys.stderr.write(
                     "msil-prog: error: --det: builds a and b differ (see above)\n"
                 )
                 return 1
-            il, image = built[0]
-            if args.out and image:
-                shutil.copyfile(image, args.out)
-            if args.also_il:
-                shutil.copyfile(il, args.also_il)
+            deliver(built[0]["image"], args.out)
+            deliver(built[0]["il"], args.also_il)
+            deliver(built[0]["equiv"], args.equiv_out)
     except StepFailed as e:
         sys.stderr.write("msil-prog: error: %s\n" % e)
         return 1

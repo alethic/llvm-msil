@@ -1,0 +1,415 @@
+## Symbol resolution of CIL objects (ImplementationPlan.md 5.9.5, the lld/ELF
+## port; 5.9.12 for names):
+## - a GLOBAL definition replaces a WEAK one in either input order, and of
+##   two WEAK definitions the first stays; the losing copy never reaches the
+##   output (no second method, and --gc-sections drops its segment), and the
+##   losing object's own call site names the winner;
+## - an ALIAS resolves like a definition of its kind: a function alias to
+##   the aliasee's method (calls and the '<msil>fn_' field are the target's,
+##   so &alias == &target), a data alias to the aliasee's segment plus its
+##   offset (an address field at base_arr + 8 that another object reads);
+##   a WEAK alias loses to a GLOBAL definition in another object, also for
+##   the calls in the alias's own object (judge-c-fidelity J3: 144, not 114),
+##   and the aliasee it named is then dead;
+## - a losing WEAK definition that a winning GLOBAL alias still lies in keeps
+##   its method or segment (the section 12 row of 2026-10-25 'msil-ld texts
+##   and behaviour that 5.9.3, 5.9.11, 5.9.13 and 5.9.14 do not state'): the
+##   kept method is renamed like a colliding LOCAL member and the alias's
+##   calls name it, and the alias's address field points into the kept
+##   segment, beside the winner's;
+## - LOCAL symbols never enter the symbol table and bind within their
+##   object; a LOCAL member whose name equals a non-LOCAL member's, or an
+##   earlier LOCAL one's in input order, is renamed '<name><msil><n>'
+##   (n = 1, 2, ... per name), never privatescope.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj w1.ll -o w1.o
+# RUN: llc -filetype=obj s2.ll -o s2.o
+# RUN: llc -filetype=obj w3.ll -o w3.o
+
+# DEFINE: %{weak} = FileCheck %s --check-prefix=WEAK --implicit-check-not=".method 'wf'" \
+# DEFINE:   --implicit-check-not=".data "
+
+## GLOBAL over WEAK, both orders: 2 and 20 (0x14).
+# RUN: msil-ld w1.o s2.o -o ws.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ws.exe | %{weak} -DVAL=2 -DBYTE=14
+# RUN: msil-ld s2.o w1.o -o sw.exe 2>&1 | count 0
+# RUN: llvm-cil-dump sw.exe | %{weak} -DVAL=2 -DBYTE=14
+## Two WEAK definitions: the first, 1 and 10 (0x0A), or 3 and 30 (0x1E).
+# RUN: msil-ld w1.o w3.o -o w13.exe 2>&1 | count 0
+# RUN: llvm-cil-dump w13.exe | %{weak} -DVAL=1 -DBYTE=0A
+# RUN: msil-ld w3.o w1.o -o w31.exe 2>&1 | count 0
+# RUN: llvm-cil-dump w31.exe | %{weak} -DVAL=3 -DBYTE=1E
+
+# WEAK:      {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0111{{$}}
+# WEAK-NEXT: {{^}}    .data 4 bytes{{$}}
+# WEAK-NEXT: {{^}}      [[BYTE]] 00 00 00{{$}}
+# WEAK-NEXT: {{^}}  .field 'wd' native int flags=0x0036{{$}}
+# WEAK:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# WEAK-NEXT: {{^}}    .maxstack 3{{$}}
+# WEAK-NEXT: {{^}}    L0: call int32() '<Module>'::'wf'{{$}}
+# WEAK-NEXT: {{^}}    L1: ldsfld native int '<Module>'::'wd'{{$}}
+# WEAK-NEXT: {{^}}    L2: ldind.i4{{$}}
+# WEAK-NEXT: {{^}}    L3: add{{$}}
+# WEAK-NEXT: {{^}}    L4: ret{{$}}
+# WEAK-NEXT: {{^}}  .method 'wf' int32() flags=0x0016 impl=0x0000{{$}}
+# WEAK-NEXT: {{^}}    .maxstack 1{{$}}
+# WEAK-NEXT: {{^}}    L0: ldc.i4.[[VAL]]{{$}}
+# WEAK-NEXT: {{^}}    L1: ret{{$}}
+
+## Aliases (judge-c-fidelity p1a.c and p1b.c as IR, linux-gnu).
+# RUN: llc -filetype=obj p1a.ll -o p1a.o
+# RUN: llc -filetype=obj p1b.ll -o p1b.o
+# RUN: msil-ld p1a.o p1b.o -o alias.exe 2>&1 | count 0
+# RUN: llvm-cil-dump alias.exe > alias.txt
+# RUN: FileCheck %s --check-prefix=ALIAS --implicit-check-not=dummy_hook --implicit-check-not=alias_twice \
+# RUN:   --implicit-check-not=".method 'hook'" --input-file=alias.txt
+
+# ALIAS:      {{^}}  .field '<msil>data' native int flags=0x0031{{$}}
+# ALIAS-NEXT: {{^}}  .field '<msil>fn_twice' native int flags=0x0031{{$}}
+# ALIAS-NEXT: {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0111{{$}}
+# ALIAS-NEXT: {{^}}    .data 32 bytes{{$}}
+# ALIAS-NEXT: {{^}}      01 00 00 00 02 00 00 00 03 00 00 00 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00{{$}}
+# ALIAS-NEXT: {{^}}  .field 'base_arr' native int flags=0x0036{{$}}
+# ALIAS-NEXT: {{^}}  .field 'table' native int flags=0x0036{{$}}
+# ALIAS-NEXT: {{^}}  .field 'third' native int flags=0x0036{{$}}
+# ALIAS-NEXT: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# ALIAS-NEXT: {{^}}    .maxstack 3{{$}}
+# ALIAS-NEXT: {{^}}    L0: ldc.i4.s 47{{$}}
+# ALIAS:      {{^}}    L{{[0-9]+}}: ldc.i4.s 32{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: cpblk{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'base_arr'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.8{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'third'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.s 16{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'table'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldftn int32(int32) '<Module>'::'twice'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'<msil>fn_twice'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.s 16{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>fn_twice'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: stind.i{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.s 24{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>fn_twice'{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: stind.i{{$}}
+# ALIAS-NEXT: {{^}}    L{{[0-9]+}}: ret{{$}}
+# ALIAS:      {{^}}  .method 'hook' int32() flags=0x0016 impl=0x0000{{$}}
+# ALIAS-NEXT: {{^}}    .maxstack 1{{$}}
+# ALIAS-NEXT: {{^}}    L0: ldc.i4.4{{$}}
+# ALIAS-NEXT: {{^}}    L1: ret{{$}}
+# ALIAS-NEXT: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# ALIAS-NEXT: {{^}}    .maxstack 2{{$}}
+# ALIAS-NEXT: {{^}}    L0: call int32() '<Module>'::'hook'{{$}}
+# ALIAS:      {{^}}  .method 'other' int32() flags=0x0016 impl=0x0000{{$}}
+# ALIAS-NEXT: {{^}}    .maxstack 3{{$}}
+# ALIAS-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'third'{{$}}
+# ALIAS-NEXT: {{^}}    L1: ldind.i4{{$}}
+# ALIAS-NEXT: {{^}}    L2: ldsfld native int '<Module>'::'table'{{$}}
+# ALIAS-NEXT: {{^}}    L3: ldind.i{{$}}
+# ALIAS-NEXT: {{^}}    L4: calli int32(int32){{$}}
+# ALIAS-NEXT: {{^}}    L5: call int32(int32) '<Module>'::'twice'{{$}}
+# ALIAS-NEXT: {{^}}    L6: ret{{$}}
+# ALIAS-NEXT: {{^}}  .method 'twice' int32(int32) flags=0x0016 impl=0x0000{{$}}
+
+## The strong hook wins in the other input order too.
+# RUN: msil-ld p1b.o p1a.o -o alias2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump alias2.exe | FileCheck %s --check-prefix=HOOK --implicit-check-not=".method 'hook'"
+# HOOK:      {{^}}  .method 'hook' int32() flags=0x0016 impl=0x0000{{$}}
+# HOOK-NEXT: {{^}}    .maxstack 1{{$}}
+# HOOK-NEXT: {{^}}    L0: ldc.i4.4{{$}}
+
+## Without p1b.o's hook the weak alias stays: main calls dummy_hook, kept
+## as the LOCAL method it is.
+# RUN: llc -filetype=obj p1c.ll -o p1c.o
+# RUN: msil-ld p1a.o p1c.o -o alias3.exe 2>&1 | count 0
+# RUN: llvm-cil-dump alias3.exe | FileCheck %s --check-prefix=WEAK-ALIAS --implicit-check-not=".method 'hook'"
+# WEAK-ALIAS:      {{^}}  .method 'dummy_hook' int32() flags=0x0013 impl=0x0000{{$}}
+# WEAK-ALIAS:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# WEAK-ALIAS-NEXT: {{^}}    .maxstack 2{{$}}
+# WEAK-ALIAS-NEXT: {{^}}    L0: call int32() '<Module>'::'dummy_hook'{{$}}
+
+## LOCAL renaming: l1.o's helper and local_g come first and keep their
+## names; l2.o's become '<name><msil>1'. l1.o's LOCAL twin meets l2.o's
+## GLOBAL twin and is renamed although it comes first.
+# RUN: llc -filetype=obj l1.ll -o l1.o
+# RUN: llc -filetype=obj l2.ll -o l2.o
+# RUN: msil-ld l1.o l2.o -o local.exe 2>&1 | count 0
+# RUN: llvm-cil-dump local.exe | FileCheck %s --check-prefix=LOCAL --implicit-check-not=privatescope
+# LOCAL:      {{^}}  .field 'local_g' native int flags=0x0033{{$}}
+# LOCAL-NEXT: {{^}}  .field 'local_g<msil>1' native int flags=0x0033{{$}}
+# LOCAL:      {{^}}  .method 'helper' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# LOCAL-NEXT: {{^}}    .maxstack 2{{$}}
+# LOCAL-NEXT: {{^}}    L0: ldarg.0{{$}}
+# LOCAL-NEXT: {{^}}    L1: ldc.i4.s 100{{$}}
+# LOCAL-NEXT: {{^}}    L2: add{{$}}
+# LOCAL-NEXT: {{^}}    L3: ret{{$}}
+# LOCAL-NEXT: {{^}}  .method 'helper<msil>1' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# LOCAL-NEXT: {{^}}    .maxstack 2{{$}}
+# LOCAL-NEXT: {{^}}    L0: ldarg.0{{$}}
+# LOCAL-NEXT: {{^}}    L1: ldc.i4.3{{$}}
+# LOCAL-NEXT: {{^}}    L2: mul{{$}}
+# LOCAL-NEXT: {{^}}    L3: ret{{$}}
+# LOCAL-NEXT: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# LOCAL-NEXT: {{^}}    .maxstack 2{{$}}
+# LOCAL-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'local_g'{{$}}
+# LOCAL-NEXT: {{^}}    L1: ldind.i4{{$}}
+# LOCAL-NEXT: {{^}}    L2: call int32(int32) '<Module>'::'helper'{{$}}
+# LOCAL-NEXT: {{^}}    L3: call int32(int32) '<Module>'::'twin<msil>1'{{$}}
+# LOCAL-NEXT: {{^}}    L4: call int32() '<Module>'::'use_l2'{{$}}
+# LOCAL-NEXT: {{^}}    L5: add{{$}}
+# LOCAL-NEXT: {{^}}    L6: ret{{$}}
+# LOCAL-NEXT: {{^}}  .method 'twin' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# LOCAL-NEXT: {{^}}    .maxstack 2{{$}}
+# LOCAL-NEXT: {{^}}    L0: ldarg.0{{$}}
+# LOCAL-NEXT: {{^}}    L1: ldc.i4.m1{{$}}
+# LOCAL-NEXT: {{^}}    L2: add{{$}}
+# LOCAL-NEXT: {{^}}    L3: ret{{$}}
+# LOCAL-NEXT: {{^}}  .method 'twin<msil>1' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# LOCAL-NEXT: {{^}}    .maxstack 2{{$}}
+# LOCAL-NEXT: {{^}}    L0: ldarg.0{{$}}
+# LOCAL-NEXT: {{^}}    L1: ldc.i4.5{{$}}
+# LOCAL-NEXT: {{^}}    L2: xor{{$}}
+# LOCAL-NEXT: {{^}}    L3: ret{{$}}
+# LOCAL-NEXT: {{^}}  .method 'use_l2' int32() flags=0x0016 impl=0x0000{{$}}
+# LOCAL-NEXT: {{^}}    .maxstack 2{{$}}
+# LOCAL-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'local_g<msil>1'{{$}}
+# LOCAL-NEXT: {{^}}    L1: ldind.i4{{$}}
+# LOCAL-NEXT: {{^}}    L2: call int32(int32) '<Module>'::'helper<msil>1'{{$}}
+# LOCAL-NEXT: {{^}}    L3: call int32(int32) '<Module>'::'twin'{{$}}
+# LOCAL-NEXT: {{^}}    L4: ret{{$}}
+
+## In the other order l2.o's LOCAL names come first, and l1.o's are renamed.
+# RUN: msil-ld l2.o l1.o -o local2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump local2.exe | FileCheck %s --check-prefix=LOCAL2
+# LOCAL2:      {{^}}  .method 'helper' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# LOCAL2-NEXT: {{^}}    .maxstack 2{{$}}
+# LOCAL2-NEXT: {{^}}    L0: ldarg.0{{$}}
+# LOCAL2-NEXT: {{^}}    L1: ldc.i4.3{{$}}
+# LOCAL2:      {{^}}  .method 'helper<msil>1' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# LOCAL2-NEXT: {{^}}    .maxstack 2{{$}}
+# LOCAL2-NEXT: {{^}}    L0: ldarg.0{{$}}
+# LOCAL2-NEXT: {{^}}    L1: ldc.i4.s 100{{$}}
+
+## A losing WEAK definition that a winning GLOBAL alias lies in, both orders
+## (default --gc-sections): wa.o's weak f (1) and d (5) lose to sa.o's strong
+## f (2) and d (7), but wa.o's GLOBAL aliases g (of f) and da (of d) have no
+## rival. main's call of f names the winner 'f'; its call of g names the kept
+## losing body 'f<msil>1' (assembly, ldc.i4.1); d and da both exist, da's
+## field points at the kept losing segment (5) and d's at the winner's (7);
+## --print-gc-sections removes nothing. main returns
+## f() + g()*10 + d*100 + da*1000 = 2 + 10 + 700 + 5000 = 5712.
+# RUN: llc -filetype=obj wa.ll -o wa.o
+# RUN: llc -filetype=obj sa.ll -o sa.o
+# DEFINE: %{walias} = FileCheck %s --check-prefix=WALIAS --implicit-check-not=".method 'g'" \
+# DEFINE:   --implicit-check-not="f<msil>2"
+# RUN: msil-ld --print-gc-sections wa.o sa.o -o was.exe 2>&1 | count 0
+# RUN: llvm-cil-dump was.exe > was.txt
+# RUN: %{walias} --input-file=was.txt "-DIMAGE=05 00 00 00 07 00 00 00"
+# RUN: %python %S/Inputs/cctor.py was.txt | FileCheck %s --check-prefix=WALIAS-DATA -DDA=0 -DD=4
+# RUN: msil-ld --print-gc-sections sa.o wa.o -o saw.exe 2>&1 | count 0
+# RUN: llvm-cil-dump saw.exe > saw.txt
+# RUN: %{walias} --input-file=saw.txt "-DIMAGE=07 00 00 00 05 00 00 00"
+# RUN: %python %S/Inputs/cctor.py saw.txt | FileCheck %s --check-prefix=WALIAS-DATA -DDA=4 -DD=0
+
+# WALIAS:      {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0111{{$}}
+# WALIAS-NEXT: {{^}}    .data 8 bytes{{$}}
+# WALIAS-NEXT: {{^}}      [[IMAGE]]{{$}}
+# WALIAS-NEXT: {{^}}  .field 'd' native int flags=0x0036{{$}}
+# WALIAS-NEXT: {{^}}  .field 'da' native int flags=0x0036{{$}}
+# WALIAS:      {{^}}  .method 'f' int32() flags=0x0016 impl=0x0000{{$}}
+# WALIAS-NEXT: {{^}}    .maxstack 1{{$}}
+# WALIAS-NEXT: {{^}}    L0: ldc.i4.2{{$}}
+# WALIAS-NEXT: {{^}}    L1: ret{{$}}
+# WALIAS-NEXT: {{^}}  .method 'f<msil>1' int32() flags=0x0013 impl=0x0000{{$}}
+# WALIAS-NEXT: {{^}}    .maxstack 1{{$}}
+# WALIAS-NEXT: {{^}}    L0: ldc.i4.1{{$}}
+# WALIAS-NEXT: {{^}}    L1: ret{{$}}
+# WALIAS-NEXT: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# WALIAS-NEXT: {{^}}    .maxstack 3{{$}}
+# WALIAS-NEXT: {{^}}    L0: call int32() '<Module>'::'f'{{$}}
+# WALIAS-NEXT: {{^}}    L1: call int32() '<Module>'::'f<msil>1'{{$}}
+# WALIAS:      {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'d'{{$}}
+# WALIAS:      {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'da'{{$}}
+# WALIAS-DATA-DAG: {{^}}field da = data+[[DA]]{{$}}
+# WALIAS-DATA-DAG: {{^}}field d = data+[[D]]{{$}}
+
+#--- w1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@wd = weak global i32 10, align 4
+
+define weak i32 @wf() {
+  ret i32 1
+}
+
+define i32 @main() {
+  %a = call i32 @wf()
+  %b = load i32, ptr @wd
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+#--- s2.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@wd = global i32 20, align 4
+
+define i32 @wf() {
+  ret i32 2
+}
+
+#--- w3.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@wd = weak global i32 30, align 4
+
+define weak i32 @wf() {
+  ret i32 3
+}
+
+#--- p1a.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@base_arr = global [4 x i32] [i32 1, i32 2, i32 3, i32 4], align 4
+@third = alias i32, getelementptr (i8, ptr @base_arr, i64 8)
+@hook = weak alias i32 (), ptr @dummy_hook
+
+declare i32 @other()
+
+define internal i32 @dummy_hook() {
+  ret i32 1
+}
+
+define i32 @main() {
+  %h = call i32 @hook()
+  %t = mul i32 %h, 10
+  %o = call i32 @other()
+  %r = add i32 %t, %o
+  ret i32 %r
+}
+
+#--- p1b.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@third = external global i32
+@table = global [2 x ptr] [ptr @twice, ptr @alias_twice], align 8
+
+@alias_twice = alias i32 (i32), ptr @twice
+
+define i32 @hook() {
+  ret i32 4
+}
+
+define i32 @twice(i32 %x) {
+  %r = shl i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @other() {
+  %v = load i32, ptr @third
+  %f = load ptr, ptr @table
+  %r = call i32 %f(i32 %v)
+  %a = call i32 @alias_twice(i32 %r)
+  ret i32 %a
+}
+
+#--- p1c.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@third = external global i32
+
+define i32 @other() {
+  %v = load i32, ptr @third
+  ret i32 %v
+}
+
+#--- l1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@local_g = internal global i32 7, align 4
+
+declare i32 @use_l2()
+
+define internal i32 @helper(i32 %x) {
+  %r = add i32 %x, 100
+  ret i32 %r
+}
+
+define internal i32 @twin(i32 %x) {
+  %r = xor i32 %x, 5
+  ret i32 %r
+}
+
+define i32 @main() {
+  %g = load i32, ptr @local_g
+  %h = call i32 @helper(i32 %g)
+  %t = call i32 @twin(i32 %h)
+  %u = call i32 @use_l2()
+  %r = add i32 %t, %u
+  ret i32 %r
+}
+
+#--- l2.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@local_g = internal global i32 11, align 4
+
+define internal i32 @helper(i32 %x) {
+  %r = mul i32 %x, 3
+  ret i32 %r
+}
+
+define i32 @twin(i32 %x) {
+  %r = sub i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @use_l2() {
+  %g = load i32, ptr @local_g
+  %h = call i32 @helper(i32 %g)
+  %t = call i32 @twin(i32 %h)
+  ret i32 %t
+}
+
+#--- wa.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@d = weak global i32 5, align 4
+@da = alias i32, ptr @d
+@g = alias i32 (), ptr @f
+
+define weak i32 @f() {
+  ret i32 1
+}
+
+define i32 @main() {
+  %a = call i32 @f()
+  %b = call i32 @g()
+  %c = load i32, ptr @d
+  %e = load i32, ptr @da
+  %b10 = mul i32 %b, 10
+  %c100 = mul i32 %c, 100
+  %e1000 = mul i32 %e, 1000
+  %r1 = add i32 %a, %b10
+  %r2 = add i32 %r1, %c100
+  %r3 = add i32 %r2, %e1000
+  ret i32 %r3
+}
+
+#--- sa.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@d = global i32 7, align 4
+
+define i32 @f() {
+  ret i32 2
+}

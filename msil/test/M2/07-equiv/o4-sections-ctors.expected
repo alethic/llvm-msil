@@ -1,0 +1,9 @@
+b constructor 150
+a slot 250
+a constructor 300
+b slot (default key)
+main
+records=3
+sum=7
+trace=1234
+[exit 217]

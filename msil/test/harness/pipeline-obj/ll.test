@@ -1,0 +1,32 @@
+# %{msil_ll} under msil_pipeline=obj (plan 5.12.1: 'llc -filetype=obj' plus
+# the link; M20), without and with msil_equiv=1, on Inputs/obj/prog-ir.ll at
+# every llc level of msil_opt_levels (features msil-ll-opt-<L> of
+# lit.local.cfg; the checks are shown for O2, and O0 when the levels leave
+# O2 out):
+# (1) msil-prog.py --pipeline obj --link-output pe --llc=<llc> --src <file>
+#     compiles the IR with 'llc -mtriple=<triple> -<L> -filetype=obj' (never
+#     clang, so the IR is not optimized again) and links the object into
+#     msil-ld's image prog.exe, which is verified, force-JITted and run
+#     against prog-ir.expected; the native oracle, where it runs, is Phase
+#     1's (clang for the native triple with -Wno-override-module, no
+#     msil-prog.py), and the .NET Framework run takes the same prog.exe;
+# (2) with msil_equiv=1 the equivalence link (--equiv-out, -Wl,--no-gc-sections)
+#     and the reference build are added, the reference being llc's text with
+#     -msil-assembly-name=prog and ilasm -exe, then --md-baseline (O6) and
+#     msil-equiv.py --oracle O3 with the test's --triple and --level, which
+#     finds the two images equal.
+# REQUIRES: msil-ld, msil-ar
+
+# (1)
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj %S/Inputs/obj/prog-ir.ll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/prog-ir\.ll "
+# RUN: %if msil-ll-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level O2 --workdir '?\S*prog-ir\.ll\.tmp\.O2\.d'? --out '?\S*prog-ir\.ll\.tmp\.O2\.d/prog\.exe'? '?--llc=.*prog-cc\.py.* --as llc'? --src '?\S*prog-ir\.ll'?$" "^# \| msil-prog: .*prog-cc\.py --as llc -mtriple=\S+-msil -O2 -filetype=obj \S*prog-ir\.ll -o obj/prog-ir\.o\n# \| msil-prog: .* -O2 obj/prog-ir\.o -o prog\.exe$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*prog-ir'? --out '?\S*prog-ir\.ll\.tmp\.O2\.out'? '?\S*prog-ir\.ll\.tmp\.O2\.d/prog\.exe'?$" %}
+# RUN: %if !msil-ll-opt-O2 && msil-ll-opt-O0 %{ %{harness_check} contains %t.log "^# \| msil-prog: .*prog-cc\.py --as llc -mtriple=\S+-msil -O0 -filetype=obj \S*prog-ir\.ll -o obj/prog-ir\.o$" %}
+# RUN: %if msil-native-oracle && msil-ll-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*prog-cc\.py'? --as cc .* --target=\S+ -Wno-override-module -O2 '?\S*prog-ir\.ll'?( .+)? -o '?\S*prog-ir\.ll\.tmp\.O2\.native\.exe'?$" "^# executed command: .*msil-run\.py'? .* --native --expect '?\S*prog-ir'? --out '?\S*prog-ir\.ll\.tmp\.O2\.native\.out'? '?\S*prog-ir\.ll\.tmp\.O2\.native\.exe'?$" %}
+# RUN: %if msil-run-netfx && msil-ll-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*msil-run\.py'? .* --netfx --expect '?\S*prog-ir'? --out '?\S*prog-ir\.ll\.tmp\.O2\.netfx\.out'? '?\S*prog-ir\.ll\.tmp\.O2\.d/prog\.exe'?$" %}
+# RUN: %{harness_check} lacks %t.log " -c \S*prog-ir\.ll" "--mode native" " -flto" "--lto-emit-asm" " -dll " "--equiv-out" "msil-equiv\.py" "--md-baseline"
+
+# (2)
+# RUN: %if msil-cil-dump %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_equiv=1 %S/Inputs/obj/prog-ir.ll > %t.equiv.log 2>&1 %}
+# RUN: %if msil-cil-dump %{ %{harness_check} contains %t.equiv.log "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/prog-ir\.ll " %}
+# RUN: %if msil-cil-dump && msil-ll-opt-O2 %{ %{harness_check} contains %t.equiv.log "^# executed command: .*msil-prog\.py'? .* --level O2 .* '?--llc=.*prog-cc\.py.* --as llc'? --equiv-out '?\S*prog-ir\.ll\.tmp\.O2\.d/equiv/prog\.exe'? --equiv-skip '?\S*equiv-allowed\.txt'? --test '?\S*prog-ir\.ll'? --src '?\S*prog-ir\.ll'?$" "^# \| msil-prog: .* -O2 obj/prog-ir\.o -Wl,--no-gc-sections -o equiv/prog\.exe$" "^# executed command: mkdir -p '?\S*prog-ir\.ll\.tmp\.O2\.d/asm'?$[\s\S]*^# executed command: .*prog-cc\.py'? --as llc -mtriple=\S+-msil -O2 '?\S*prog-ir\.ll'? -msil-assembly-name=prog -o '?\S*prog-ir\.ll\.tmp\.O2\.d/asm/prog\.il'?$[\s\S]*^# executed command: .*msil-run\.py'? --tool .* -exe '?-output=\S*prog-ir\.ll\.tmp\.O2\.d/asm/prog\.exe'? '?\S*prog-ir\.ll\.tmp\.O2\.d/asm/prog\.il'?$[\s\S]*--md-baseline '?\S*prog-ir\.ll\.tmp\.O2\.d/asm/prog\.exe'? '?\S*prog-ir\.ll\.tmp\.O2\.d/prog\.exe'?$[\s\S]*^# executed command: .*msil-equiv\.py'? --canon .* --oracle O3 --test '?\S*prog-ir\.ll'? --triple \S+-msil --level O2 --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access '?\S*prog-ir\.ll\.tmp\.O2\.d/equiv/prog\.exe'? '?\S*prog-ir\.ll\.tmp\.O2\.d/asm/prog\.exe'?$" "^# \| msil-equiv: O3: \S*O2\.d/equiv/prog\.exe and \S*O2\.d/asm/prog\.exe are equal " %}

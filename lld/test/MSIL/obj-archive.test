@@ -1,0 +1,167 @@
+## CIL objects in archives (ImplementationPlan.md 5.9.4, 5.9.5 Lazy rows,
+## 5.9.14 for --why-extract and the map's Inputs):
+## - the members of an llvm-ar archive of CIL objects are lazy; the lazy
+##   symbols of a member are its non-LOCAL, non-UNDEFINED symbols, aliases and
+##   WEAK definitions included (d.o's al, e.o's wfn), as lld/ELF takes every
+##   defined global (InputFiles.cpp:2024-2041);
+## - a GLOBAL reference extracts the member, also backwards (the archive
+##   before the object), but a weak undefined reference does not: maybe stays
+##   undefined (address 0, its call a '<msil>undef_maybe' trap stub, 5.9.6
+##   step 3) and c.o is not loaded (judge-c-fidelity F1, lld/ELF
+##   Symbols.cpp:652-680);
+## - --why-extract writes lld's tab-separated lines in extraction order:
+##   member order when the object comes first, the object's symbol order when
+##   the archive comes first; '-u' extracts too and is named '-u <sym>';
+## - --whole-archive loads every member, so c.o's maybe is defined and
+##   called, and u.o is an input (the map lists it; --gc-sections then drops
+##   its unused function).
+## Unextracted members are no inputs.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj main.ll -o main.o
+# RUN: llc -filetype=obj b.ll -o b.o
+# RUN: llc -filetype=obj c.ll -o c.o
+# RUN: llc -filetype=obj d.ll -o d.o
+# RUN: llc -filetype=obj e.ll -o e.o
+# RUN: llc -filetype=obj u.ll -o u.o
+# RUN: llvm-ar rcs lib.a b.o c.o d.o e.o u.o
+
+# DEFINE: %{why} = FileCheck %s --match-full-lines --strict-whitespace
+
+## The object first: member order.
+# RUN: msil-ld main.o lib.a -o lazy.exe --why-extract=lazy.why -Map=lazy.map 2>&1 | count 0
+# RUN: %{why} --check-prefix=WHY --input-file=lazy.why
+# RUN: FileCheck %s --check-prefix=INPUTS --input-file=lazy.map
+# RUN: llvm-cil-dump lazy.exe | FileCheck %s --check-prefix=LAZY --implicit-check-not="'maybe'" \
+# RUN:   --implicit-check-not=unused
+
+#      WHY:reference	extracted	symbol
+# WHY-NEXT:main.o	lib.a(b.o)	b_fn
+# WHY-NEXT:main.o	lib.a(d.o)	al
+# WHY-NEXT:main.o	lib.a(e.o)	wfn
+#  WHY-NOT:{{.}}
+
+## (Whether the archive itself has a line of its own before its members is
+## not fixed.)
+# INPUTS:      {{^}}Inputs:{{$}}
+# INPUTS-NEXT: {{^ *}}main.o{{$}}
+# INPUTS-NOT:  (c.o)
+# INPUTS:      {{^ *}}lib.a(b.o){{$}}
+# INPUTS-NEXT: {{^ *}}lib.a(d.o){{$}}
+# INPUTS-NEXT: {{^ *}}lib.a(e.o){{$}}
+# INPUTS-NEXT: {{^}}Symbols:{{$}}
+
+# LAZY:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# LAZY-NEXT: {{^}}    .maxstack 3{{$}}
+# LAZY-NEXT: {{^}}    .locals (int32){{$}}
+# LAZY-NEXT: {{^}}    L0: call int32() '<Module>'::'b_fn'{{$}}
+# LAZY-NEXT: {{^}}    L1: ldsfld native int '<Module>'::'al'{{$}}
+# LAZY-NEXT: {{^}}    L2: ldind.i4{{$}}
+# LAZY-NEXT: {{^}}    L3: add{{$}}
+# LAZY-NEXT: {{^}}    L4: call int32() '<Module>'::'wfn'{{$}}
+# LAZY-NEXT: {{^}}    L5: add{{$}}
+# LAZY-NEXT: {{^}}    L6: stloc.0{{$}}
+# LAZY-NEXT: {{^}}    L7: ldsfld native int '<Module>'::'<msil>fn_maybe'{{$}}
+# LAZY:      {{^}}    L12: call int32() '<Module>'::'<msil>undef_maybe'{{$}}
+
+## The archive first: the object's symbol order (al is data and comes
+## first in its symbol table, 5.8.8).
+# RUN: msil-ld lib.a main.o -o back.exe --why-extract=back.why 2>&1 | count 0
+# RUN: %{why} --check-prefix=BACK --input-file=back.why
+# RUN: llvm-cil-dump back.exe | FileCheck %s --check-prefix=LAZY --implicit-check-not="'maybe'" \
+# RUN:   --implicit-check-not=unused
+
+#      BACK:reference	extracted	symbol
+# BACK-NEXT:main.o	lib.a(d.o)	al
+# BACK-NEXT:main.o	lib.a(b.o)	b_fn
+# BACK-NEXT:main.o	lib.a(e.o)	wfn
+#  BACK-NOT:{{.}}
+
+## -u extracts the member the weak reference did not.
+# RUN: msil-ld main.o lib.a -u maybe -o u.exe --why-extract=u.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=WHY-U --input-file=u.why
+# RUN: llvm-cil-dump u.exe | FileCheck %s --check-prefix=DEFINED
+# WHY-U: {{^}}-u maybe{{[[:space:]]}}lib.a(c.o){{[[:space:]]}}maybe{{$}}
+
+## --whole-archive loads every member.
+# RUN: msil-ld main.o --whole-archive lib.a --no-whole-archive -o all.exe -Map=all.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=ALL --input-file=all.map
+# RUN: llvm-cil-dump all.exe | FileCheck %s --check-prefix=DEFINED
+# ALL:      {{^}}Inputs:{{$}}
+# ALL-NEXT: {{^ *}}main.o{{$}}
+# ALL:      {{^ *}}lib.a(b.o){{$}}
+# ALL-NEXT: {{^ *}}lib.a(c.o){{$}}
+# ALL-NEXT: {{^ *}}lib.a(d.o){{$}}
+# ALL-NEXT: {{^ *}}lib.a(e.o){{$}}
+# ALL-NEXT: {{^ *}}lib.a(u.o){{$}}
+# ALL-NEXT: {{^}}Symbols:{{$}}
+
+# DEFINED:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# DEFINED:      {{^}}    L7: ldsfld native int '<Module>'::'<msil>fn_maybe'{{$}}
+# DEFINED:      {{^}}    L12: call int32() '<Module>'::'maybe'{{$}}
+# DEFINED:      {{^}}  .method 'maybe' int32() flags=0x0016 impl=0x0000{{$}}
+# DEFINED-NEXT: {{^}}    .maxstack 1{{$}}
+# DEFINED-NEXT: {{^}}    L0: ldc.i4.s 100{{$}}
+
+#--- main.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@al = external global i32
+
+declare i32 @b_fn()
+declare extern_weak i32 @maybe()
+declare i32 @wfn()
+
+define i32 @main() {
+entry:
+  %a = call i32 @b_fn()
+  %v = load i32, ptr @al
+  %w = call i32 @wfn()
+  %s = add i32 %a, %v
+  %t = add i32 %s, %w
+  %p = icmp ne ptr @maybe, null
+  br i1 %p, label %yes, label %no
+yes:
+  %m = call i32 @maybe()
+  %u = add i32 %t, %m
+  ret i32 %u
+no:
+  ret i32 %t
+}
+
+#--- b.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @b_fn() {
+  ret i32 1
+}
+
+#--- c.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @maybe() {
+  ret i32 100
+}
+
+#--- d.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@base = global [2 x i32] [i32 5, i32 6], align 4
+@al = alias i32, getelementptr (i8, ptr @base, i64 4)
+
+#--- e.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define weak i32 @wfn() {
+  ret i32 9
+}
+
+#--- u.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@unused_data = global i32 3, align 4
+
+define i32 @unused_fn() {
+  ret i32 42
+}

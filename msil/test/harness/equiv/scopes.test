@@ -1,0 +1,50 @@
+# The entry scopes of msil/utils/equiv-allowed.txt (plan 5.12.6; M20; the
+# reference legs of M21 allow it): -S and --lto-emit-asm text print
+# [mscorlib], while msil-ld's reference legs bind the BCL to the reference
+# packs (5.11.8). The pair: two ilasm texts of the same program that call
+# System.GC::Collect() in [mscorlib] (A) and in [System.Runtime] (B), both
+# assembled into prog.dll. With every other entry allowed, msil-equiv.py
+# fails (status 1) on exactly the assemblyref header line and the call's
+# scope; with scopes allowed too ('[*]' scopes, no assemblyref lines), the
+# images are equal.
+# REQUIRES: msil-cil-dump
+
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/a %t/b
+# RUN: %ilasm -dll -output=%t/a/prog.dll %t/a.il
+# RUN: %ilasm -dll -output=%t/b/prog.dll %t/b.il
+# RUN: not %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access %t/a/prog.dll %t/b/prog.dll > %t/without.txt
+# RUN: FileCheck %s --check-prefix=WITHOUT --input-file=%t/without.txt
+# RUN: %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access --allow scopes %t/a/prog.dll %t/b/prog.dll > %t/with.txt
+# RUN: FileCheck %s --check-prefix=WITH --input-file=%t/with.txt
+
+# WITHOUT:      msil-equiv: O3: {{.*}}prog.dll and {{.*}}prog.dll differ (4 differing lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access); the first 4:
+# WITHOUT-NEXT: --- {{.*}}a{{[/\\]}}prog.dll
+# WITHOUT-NEXT: +++ {{.*}}b{{[/\\]}}prog.dll
+# WITHOUT-NEXT: @@ {{.*}} @@
+# WITHOUT-NEXT: -assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''
+# WITHOUT-NEXT: +assemblyref 'System.Runtime' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''
+# WITHOUT-NEXT: @@ {{.*}} @@
+# WITHOUT-NEXT: -    L0: call void() [mscorlib]System.GC::'Collect'
+# WITHOUT-NEXT: +    L0: call void() [System.Runtime]System.GC::'Collect'
+# WITHOUT-NOT:  {{.}}
+
+# WITH: msil-equiv: O3: {{.*}}prog.dll and {{.*}}prog.dll are equal ({{[0-9]+}} lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access, scopes)
+
+#--- a.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'prog' { .ver 0:0:0:0 }
+.method public static void 'f'() cil managed
+{
+  .maxstack 1
+  call void [mscorlib]System.GC::Collect()
+  ret
+}
+#--- b.il
+.assembly extern System.Runtime { .publickeytoken = (B0 3F 5F 7F 11 D5 0A 3A ) .ver 8:0:0:0 }
+.assembly 'prog' { .ver 0:0:0:0 }
+.method public static void 'f'() cil managed
+{
+  .maxstack 1
+  call void [System.Runtime]System.GC::Collect()
+  ret
+}

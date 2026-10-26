@@ -498,10 +498,12 @@ Record fullRecord() {
              init(InitKind::Fini, 0, 10), init(InitKind::Init, 101, 17)};
   SignatureInfo VarArgs = sig(memberRef(3), VarArg);
   VarArgs.FixedParams = 2;
-  SignatureInfo SretSig = sig(method(3), Sret, {{1, 8, 3}, {2, 300, 4}});
+  SignatureInfo SretSig =
+      sig(method(3), Sret | NativeIncompatible, {{1, 8, 3}, {2, 300, 4}});
   SretSig.SretSize = 24;
   SretSig.SretAlignLog2 = 3;
-  SignatureInfo All = sig(method(4), NoPrototype | VarArg | Sret);
+  SignatureInfo All =
+      sig(method(4), NoPrototype | VarArg | Sret | NativeIncompatible);
   All.FixedParams = 1;
   All.SretSize = 16;
   All.SretAlignLog2 = 2;
@@ -995,9 +997,9 @@ TEST(CLILinkInfoTest, UnknownFlagsAndEnumValues) {
       {"init kind 2",
        [](Record &R) { R.Inits[0].Kind = static_cast<InitKind>(2); },
        {"init kind 2"}},
-      {"call flag 0x8",
-       [](Record &R) { R.Signatures[0].Flags |= 0x8; },
-       {"call flag", "0x8"}},
+      {"call flag 0x10",
+       [](Record &R) { R.Signatures[0].Flags |= 0x10; },
+       {"call flag", "0x10"}},
       {"linker option kind 2",
        [](Record &R) {
          R.LinkerOptions[0].Kind = static_cast<LinkerOptionKind>(2);
@@ -2561,8 +2563,10 @@ TEST(CLILinkInfoTest, PrintsEveryItem) {
        "Signature 0x06000002 NO_PROTOTYPE",
        "Signature 0x0A000002 NO_PROTOTYPE byval=1:12:4",
        "Signature 0x0A000003 VARARG fixed=2",
-       "Signature 0x06000003 SRET size=24 align=8 byval=1:8:8 byval=2:300:16",
-       "Signature 0x06000004 NO_PROTOTYPE VARARG fixed=1 SRET size=16 align=4",
+       "Signature 0x06000003 SRET size=24 align=8 NATIVE_INCOMPATIBLE "
+       "byval=1:8:8 byval=2:300:16",
+       "Signature 0x06000004 NO_PROTOTYPE VARARG fixed=1 SRET size=16 align=4 "
+       "NATIVE_INCOMPATIBLE",
        "LinkerOption DEPENDENT_LIB 'm'",
        "LinkerOption LINKER_OPTION '/DEFAULTLIB:ws2_32.lib' '-lws2_32'",
        "LinkerOption DEPENDENT_LIB 'ws2_32'",

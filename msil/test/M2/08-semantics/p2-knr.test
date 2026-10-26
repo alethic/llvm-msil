@@ -5,10 +5,31 @@
 # ignores the extra one), and h is a K&R definition with a float parameter
 # that receives the promoted double. Under LTO the merged module calls f with
 # a type that differs from its definition, which MSILFixFunctionBitcasts
-# adapts. Plan 5.9.16 row p2-knr (M14 lto; M20 obj: adapter and warning).
+# adapts. On the object path each call is a MemberRef with the call-site
+# signature (NO_PROTOTYPE), which msil-ld checks against the definition
+# (plan 5.9.8): f's int32(int32, int32) against int32(int32) gets an adapter
+# that drops the extra argument, with a warning naming both objects; g's
+# call matches, and h's call passes the promoted double that h's K&R
+# definition takes, so neither warns. From M20 the LTO path warns for f too,
+# with the same text without the ' in <file>' parts, exactly once at -O0 and
+# -O2: msil-ld's LTO applies the table before LTO optimization too (section
+# 12 row 'Plan 5.9.8 (LTO path) and the D30 row of 2026-10-21 amended').
+# Plan 5.9.16 row p2-knr (M14 lto; M20 obj: adapter and warning).
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/p2a.c %t/p2b.c
 # RUN: %{msil_prog}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# OBJ:      {{^}}msil-ld: warning: function signature mismatch: f{{$}}
+# OBJ-NEXT: {{^}}>>> defined as int32(int32) in {{.*}}p2b.o{{$}}
+# OBJ-NEXT: {{^}}>>> called as int32(int32, int32) in {{.*}}p2a.o{{$}}
+# OBJ-NEXT: {{^}}>>> adapter: {{.+}}
+# LTO:      {{^}}msil-ld: warning: {{.*}}function signature mismatch: f{{$}}
+# LTO-NEXT: {{^}}>>> defined as int32(int32){{$}}
+# LTO-NEXT: {{^}}>>> called as int32(int32, int32){{$}}
+# LTO-NEXT: {{^}}>>> adapter: {{.+}}
 #--- p2a.c
 /* p2a.c: calls through K&R (unprototyped) declarations; definitions in p2b.c (-std=gnu17) */
 int f();                  /* defined as int f(int): one argument too many below */

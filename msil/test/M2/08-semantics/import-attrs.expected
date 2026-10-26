@@ -1,0 +1,5 @@
+my_add(40, 2)=42
+my_value=1234
+my_table[3]=4
+nat_state=719
+[exit 17]

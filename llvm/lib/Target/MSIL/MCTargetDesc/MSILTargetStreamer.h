@@ -60,10 +60,11 @@ struct MSILMethodDecl {
 /// In whole-program mode (-S, llc and msil-ld's --lto-emit-asm text) the
 /// AsmPrinter emits: emitFileHeader, emitAssemblyRefs and emitAssembly; the
 /// methods of the functions; the module trailer (P/Invoke declarations, data
-/// image, address fields, comments, the module initializer and the entry
-/// point). In object mode (MSILTargetMachine::isObjectMode(), plan 5.8) it
-/// emits, in this order (the object event order, plan 5.3 as amended for
-/// M19):
+/// image and relocation table, address fields, comments, and the methods
+/// that cli::buildTrailer makes: the data-import helpers, the module
+/// initializer and the entry point). In object mode
+/// (MSILTargetMachine::isObjectMode(), plan 5.8) it emits, in this order (the
+/// object event order, plan 5.3 as amended for M19):
 /// - emitObjectHeader;
 /// - one method per function definition, in IR order (emitMethodBegin,
 ///   emitMaxStack, emitLocals, the instructions and labels, emitMethodEnd);
@@ -146,6 +147,32 @@ public:
   /// rows (MSILObjectWriter::setLinkInfo).
   virtual void emitLinkInfo(StringRef ModuleName,
                             const MSILLink::Record &R) = 0;
+
+  // The parts of the trailer's synthesized methods (cli::buildTrailer, plan
+  // 5.9.10) that MSIL::Signature and MSILMemberRefExpr cannot spell: the
+  // headers of the data-import helpers, whose signatures take strings, and
+  // their instructions whose token operand is a string literal or such a
+  // helper. Whole-program text only: the defaults are internal errors, which
+  // the object streamer keeps.
+
+  /// The header of a synthesized helper method followed by the line '{':
+  /// '.method <access> [hidebysig] [specialname] [rtspecialname] [static]
+  /// <ret> '<Name>'(<params>) cil managed', from \p Flags and \p Sig (plan
+  /// 5.10.12: '<msil>dataimport', '<msil>init_dataimports').
+  virtual void emitHelperBegin(StringRef Name, cli::MethodAttributes Flags,
+                               const cli::MethodSig &Sig);
+  /// An instruction whose token operand is the string literal \p UTF8:
+  /// '  ldstr "<UTF8>"'.
+  virtual void emitStringInstruction(cli::Opcode Op, StringRef UTF8);
+  /// An instruction whose token operand is the synthesized helper \p Name
+  /// with signature \p Sig: '  call <ret> '<Name>'(<params>)'.
+  virtual void emitHelperInstruction(cli::Opcode Op, StringRef Name,
+                                     const cli::MethodSig &Sig);
+  /// '.field public static native int '<Name>'': the address field of a
+  /// native data import, which '<msil>init_dataimports' stores, so it is not
+  /// 'initonly' (ECMA-335 II.16.1.2: only the type's .cctor may store an
+  /// initonly static field; plan 5.10.12).
+  virtual void emitDataImportField(StringRef Name);
 };
 
 /// The ILAsm text implementation. Every directive is written as whole lines
@@ -179,6 +206,12 @@ public:
   void emitObjectHeader(bool BOM, StringRef SourceFile,
                         StringRef TripleStr) override;
   void emitLinkInfo(StringRef ModuleName, const MSILLink::Record &R) override;
+  void emitHelperBegin(StringRef Name, cli::MethodAttributes Flags,
+                       const cli::MethodSig &Sig) override;
+  void emitStringInstruction(cli::Opcode Op, StringRef UTF8) override;
+  void emitHelperInstruction(cli::Opcode Op, StringRef Name,
+                             const cli::MethodSig &Sig) override;
+  void emitDataImportField(StringRef Name) override;
 };
 
 /// The implementation for -filetype=null: emits nothing.
@@ -202,6 +235,12 @@ public:
   void emitBlankLine() override {}
   void emitObjectHeader(bool, StringRef, StringRef) override {}
   void emitLinkInfo(StringRef, const MSILLink::Record &) override {}
+  void emitHelperBegin(StringRef, cli::MethodAttributes,
+                       const cli::MethodSig &) override {}
+  void emitStringInstruction(cli::Opcode, StringRef) override {}
+  void emitHelperInstruction(cli::Opcode, StringRef,
+                             const cli::MethodSig &) override {}
+  void emitDataImportField(StringRef) override {}
 };
 
 } // end namespace llvm

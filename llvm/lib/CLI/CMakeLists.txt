@@ -1,10 +1,12 @@
 add_llvm_component_library(LLVMCLI
   Blob.cpp
+  CallAdapter.cpp
   CustomAttribute.cpp
   Dump.cpp
   Heaps.cpp
   ILBuilder.cpp
   ILDecoder.cpp
+  ImageLayout.cpp
   LinkInfo.cpp
   MetadataBuilder.cpp
   MetadataReader.cpp
@@ -15,6 +17,7 @@ add_llvm_component_library(LLVMCLI
   Signature.cpp
   SymbolTable.cpp
   TableSchema.cpp
+  Trailer.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/CLI

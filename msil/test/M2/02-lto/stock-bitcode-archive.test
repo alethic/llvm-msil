@@ -5,15 +5,21 @@
 # extracts m_used.c; s_unused.c resolves nothing (its value() duplicates
 # main.c's), so it is not linked and its constructor never prints. The second
 # RUN line pins msil-ld's warning for the stock member, once per link (plan
-# 5.9.13). Recon tests-p2 3.3, plan 5.12.3 (M14 lto).
+# 5.9.13). From M20 %{msil_prog} may compile main.c and m_used.c to CIL
+# objects instead (msil-prog-pipeline=obj): the extracted stock member then
+# goes through LTO next to those objects, with the same warning.
+# Recon tests-p2 3.3, plan 5.12.3 (M14 lto, M20 obj).
 # REQUIRES: msil-ar
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/main.c
 # REDEFINE: %{msil_archives} = mixed=stock:%t/s_used.c,%t/m_used.c,stock:%t/s_unused.c
 # RUN: %{msil_prog}
 # RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.d --src %{msil_srcs} --archives=%{msil_archives} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O0 --workdir %t.warn.d --src %{msil_srcs} --archives=%{msil_archives} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
 # LTO:     msil-ld: warning: {{.*}}s_used.o{{.*}}: linking bitcode for x86_64-{{[^ ]+}} as x86_64-{{[^ ]+}}-msil; stock-clang bitcode is a compatibility path
 # LTO-NOT: stock-clang bitcode is a compatibility path
+# OBJ:     msil-ld: warning: {{.*}}s_used.o{{.*}}: linking bitcode for x86_64-{{[^ ]+}} as x86_64-{{[^ ]+}}-msil; stock-clang bitcode is a compatibility path
+# OBJ-NOT: stock-clang bitcode is a compatibility path
 #--- main.c
 #include "msil_test.h"
 int s_entry(int);

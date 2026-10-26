@@ -1,0 +1,309 @@
+## LINKER_OPTIONS of CIL objects (ImplementationPlan.md 5.8.8, 5.9.4 'Linker
+## options', 5.10.6, 5.9.14; from M20 objects go through M15's code as
+## bitcode does), processed when their object is loaded:
+## - a DEPENDENT_LIB entry 'x' (from !llvm.dependent-libraries) is searched
+##   like -lx; LINKER_OPTION '-l<name>' like -l<name>, '-l:<file>' like
+##   -l:<file>; an object keeps each option as its own string, so a library
+##   name with a space ('-lmy lib') needs no tokenizing (the row of
+##   2026-10-22 for M15.a item 3);
+## - '/DEFAULTLIB:<name>' and '-defaultlib:<name>' get '.lib' when the name
+##   has no extension; an MSVC C runtime request (libcmt.lib) is ignored with
+##   the --verbose note 'ignoring C runtime library request '<name>' from
+##   <file>';
+## - a request found nowhere is 'unable to find library from dependent
+##   library specifier: <name>' with '>>> requested by <file>'; an archive
+##   member's request is made only when the member is extracted, and names
+##   the member;
+## - '/alternatename:a=b' resolves a still undefined a as b;
+##   '/FAILIFMISMATCH:k=v' is lld-link's error when two inputs disagree;
+##   any other option is the warning 'ignoring linker option '<opt>' in
+##   <file>';
+## - --no-dependent-libraries drops every request.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir -p lib wlib
+# RUN: yaml2obj lnxlib.yaml -o lnxlib.o
+# RUN: ld.lld -shared -soname libfoo-dep.so.1 lnxlib.o -o lib/libfoo.so
+# RUN: ld.lld -shared -soname libbar-dep.so.2 lnxlib.o -o lib/libbar.so.2
+# RUN: ld.lld -shared -soname libdep-dep.so.3 lnxlib.o -o lib/libdep.so
+# RUN: ld.lld -shared -soname libmylib.so.1 lnxlib.o -o "lib/libmy lib.so"
+# RUN: llvm-lib /machine:x64 /def:wfoo.def /out:wlib/wfoo.lib
+# RUN: llvm-lib /machine:x64 /def:wbar.def /out:wlib/wbar.lib
+# RUN: llvm-lib /machine:x64 /def:wqux.def /out:wlib/wqux.lib
+# RUN: llc -filetype=obj lnx-foo.ll -o lnx-foo.o
+# RUN: llc -filetype=obj lnx-bar.ll -o lnx-bar.o
+# RUN: llc -filetype=obj lnx-dep.ll -o lnx-dep.o
+# RUN: llc -filetype=obj lnx-space.ll -o lnx-space.o
+# RUN: llc -filetype=obj lnx-missing.ll -o lnx-missing.o
+# RUN: llc -filetype=obj lnx-main.ll -o lnx-main.o
+# RUN: llc -filetype=obj mem.ll -o mem.o
+# RUN: llvm-ar rcs libmem.a mem.o
+# RUN: llc -filetype=obj win.ll -o win.o
+# RUN: llc -filetype=obj win-alt.ll -o win-alt.o
+# RUN: llc -filetype=obj b-def.ll -o b-def.o
+# RUN: llc -filetype=obj fim-a.ll -o fim-a.o
+# RUN: llc -filetype=obj fim-b.ll -o fim-b.o
+# RUN: llc -filetype=obj fim-c.ll -o fim-c.o
+# RUN: llc -filetype=obj other-opt.ll -o other-opt.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{so} = FileCheck %s --check-prefix=SO
+
+## Linux: -l<name>, -l:<file>, a dependent library, a name with a space.
+# RUN: msil-ld lnx-foo.o -L lib -o foo.exe 2>&1 | count 0
+# RUN: llvm-cil-dump foo.exe | %{so} -DMOD=libfoo-dep.so.1
+# RUN: msil-ld lnx-bar.o -L lib -o bar.exe 2>&1 | count 0
+# RUN: llvm-cil-dump bar.exe | %{so} -DMOD=libbar-dep.so.2
+# RUN: msil-ld lnx-dep.o -L lib -o dep.exe 2>&1 | count 0
+# RUN: llvm-cil-dump dep.exe | %{so} -DMOD=libdep-dep.so.3
+# RUN: msil-ld lnx-space.o -L lib -o space.exe 2>&1 | count 0
+# RUN: llvm-cil-dump space.exe | %{so} -DMOD=libmylib.so.1
+# SO:      {{^}}  .method 'lib_fn' int32() flags=0x2093 impl=0x0080{{$}}
+# SO-NEXT: {{^}}    .pinvokeimpl '[[MOD]]' entry 'lib_fn' flags=0x0201{{$}}
+
+## A request found nowhere.
+# RUN: not msil-ld lnx-missing.o -L lib -o x.exe 2>&1 | %{err} --check-prefix=MISSING
+# MISSING:      {{^}}msil-ld: error: unable to find library from dependent library specifier: nosuch{{$}}
+# MISSING-NEXT: {{^}}>>> requested by lnx-missing.o{{$}}
+
+## An archive member's request, only when the member is extracted.
+# RUN: msil-ld lnx-main.o libmem.a -L lib lib/libfoo.so -o mem.exe 2>&1 | count 0
+# RUN: not msil-ld lnx-main.o libmem.a -L lib lib/libfoo.so -u unused_fn -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=MEMBER
+# MEMBER:      {{^}}msil-ld: error: unable to find library from dependent library specifier: nosuchlib{{$}}
+# MEMBER-NEXT: {{^}}>>> requested by libmem.a(mem.o){{$}}
+
+## --no-dependent-libraries: no request, lib_fn stays undefined; and the
+## missing library is not searched for.
+# RUN: not msil-ld --no-dependent-libraries lnx-foo.o -L lib -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=NODEP
+# RUN: msil-ld --no-dependent-libraries lnx-missing.o lib/libfoo.so -o nodep.exe 2>&1 | count 0
+# NODEP: {{^}}msil-ld: error: undefined symbol: lib_fn{{$}}
+
+## windows-msvc: /DEFAULTLIB in its spellings; libcmt.lib is ignored.
+# RUN: msil-ld win.o -L wlib -o win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win.exe | FileCheck %s --check-prefix=WIN
+# WIN:      {{^}}  .method 'wbar_fn' int32() flags=0x2093 impl=0x0080{{$}}
+# WIN-NEXT: {{^}}    .pinvokeimpl 'wbar.dll' entry 'wbar_fn' flags=0x0201{{$}}
+# WIN-NEXT: {{^}}  .method 'wfoo_fn' int32() flags=0x2093 impl=0x0080{{$}}
+# WIN-NEXT: {{^}}    .pinvokeimpl 'wfoo.dll' entry 'wfoo_fn' flags=0x0201{{$}}
+# WIN-NEXT: {{^}}  .method 'wqux_fn' int32() flags=0x2093 impl=0x0080{{$}}
+# WIN-NEXT: {{^}}    .pinvokeimpl 'wqux.dll' entry 'wqux_fn' flags=0x0201{{$}}
+# RUN: msil-ld --verbose win.o -L wlib -o win-verbose.exe 2>&1 | FileCheck %s --check-prefix=LIBCMT
+# LIBCMT: {{^}}msil-ld: ignoring C runtime library request 'libcmt.lib' from win.o{{$}}
+
+## /alternatename: a_fn is undefined after all inputs, so it is b_fn.
+# RUN: msil-ld win-alt.o b-def.o -o alt.exe 2>&1 | count 0
+# RUN: llvm-cil-dump alt.exe | FileCheck %s --check-prefix=ALT --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=undef_ --implicit-check-not="'a_fn'"
+# ALT: {{^}}    L0: call int32() '<Module>'::'b_fn'{{$}}
+
+## /FAILIFMISMATCH, with lld-link's text; an equal value is no error.
+# RUN: not msil-ld fim-a.o fim-b.o -o x.exe 2>&1 | %{err} --check-prefix=FIM
+# RUN: msil-ld fim-a.o fim-c.o -o fim.exe 2>&1 | count 0
+# FIM:      {{^}}msil-ld: error: /failifmismatch: mismatch detected for '_MSC_VER':{{$}}
+# FIM-NEXT: {{^}}>>> fim-a.o has value 1900{{$}}
+# FIM-NEXT: {{^}}>>> fim-b.o has value 1910{{$}}
+
+## Any other option is a warning.
+# RUN: msil-ld other-opt.o -o other.exe 2>&1 | FileCheck %s --check-prefix=OTHER --implicit-check-not=error:
+# OTHER: {{^}}msil-ld: warning: ignoring linker option '/merge:.a=.b' in other-opt.o{{$}}
+
+#--- lnxlib.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: lib_fn, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- wfoo.def
+LIBRARY wfoo.dll
+EXPORTS
+  wfoo_fn
+
+#--- wbar.def
+LIBRARY wbar.dll
+EXPORTS
+  wbar_fn
+
+#--- wqux.def
+LIBRARY wqux.dll
+EXPORTS
+  wqux_fn
+
+#--- lnx-foo.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-lfoo"}
+
+#--- lnx-bar.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-l:libbar.so.2"}
+
+#--- lnx-dep.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+!llvm.dependent-libraries = !{!0}
+!0 = !{!"dep"}
+
+#--- lnx-space.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-lmy lib"}
+
+#--- lnx-missing.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-lnosuch"}
+
+#--- lnx-main.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 @lib_fn()
+  ret i32 %r
+}
+
+declare i32 @lib_fn()
+
+#--- mem.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @unused_fn() {
+  ret i32 1
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-lnosuchlib"}
+
+#--- win.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %a = call i32 @wfoo_fn()
+  %b = call i32 @wbar_fn()
+  %c = call i32 @wqux_fn()
+  %s1 = add i32 %a, %b
+  %s2 = add i32 %s1, %c
+  ret i32 %s2
+}
+
+declare i32 @wfoo_fn()
+declare i32 @wbar_fn()
+declare i32 @wqux_fn()
+
+!llvm.linker.options = !{!0, !1, !2, !3}
+!0 = !{!"/DEFAULTLIB:wfoo.lib"}
+!1 = !{!"/DEFAULTLIB:wbar"}
+!2 = !{!"-defaultlib:wqux.lib"}
+!3 = !{!"/DEFAULTLIB:libcmt.lib"}
+
+#--- win-alt.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @a_fn()
+  ret i32 %r
+}
+
+declare i32 @a_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/alternatename:a_fn=b_fn"}
+
+#--- b-def.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @b_fn() {
+  ret i32 11
+}
+
+#--- fim-a.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/FAILIFMISMATCH:_MSC_VER=1900"}
+
+#--- fim-b.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @other_b() {
+  ret i32 1
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/FAILIFMISMATCH:_MSC_VER=1910"}
+
+#--- fim-c.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @other_c() {
+  ret i32 1
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/FAILIFMISMATCH:_MSC_VER=1900"}
+
+#--- other-opt.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/merge:.a=.b"}

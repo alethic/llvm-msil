@@ -7,9 +7,12 @@
 ## alignment. Unextracted members are no inputs.
 ## M15 adds native libraries: the native libraries read are inputs, and a
 ## symbol that binds natively is a row of kind NativeFunction or NativeData
-## with the library as its input; there is no 'Imports:' section yet (its
-## tokens exist only in M20's PE). M20 adds 'Image:', 'Methods:', 'Fields:'
-## and 'Imports:', so this test does not pin what follows 'Symbols:'.
+## with the library as its input. M20 adds 'Image:', 'Methods:', 'Fields:'
+## and 'Imports:', which show tokens and offsets of the PE (M14's 'no
+## Imports: section' pins are gone): an LTO link that writes the PE has them
+## (below; obj-map.test checks their rows for CIL objects), and for
+## --lto-emit-asm text, which has no PE, this test does not pin what follows
+## 'Symbols:'.
 ## The plan fixes the section names and columns, not the spacing or the
 ## spelling of a binding, so the rows are matched loosely.
 
@@ -70,7 +73,6 @@
 # RUN: msil-ld --lto-emit-asm native.o libfoo.so.1 -o native.il -Map=native.map 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=NATIVE --input-file=native.map
 # RUN: FileCheck %s --check-prefix=NATIVE-ROWS --input-file=native.map
-# RUN: FileCheck %s --check-prefix=NO-IMPORTS --input-file=native.map
 
 # NATIVE:      {{^}}msil-ld map of native.il (x86_64-unknown-linux-gnu-msil){{$}}
 # NATIVE-NEXT: {{^}}Inputs:{{$}}
@@ -81,13 +83,27 @@
 # NATIVE-ROWS:     {{^}}Symbols:{{$}}
 # NATIVE-ROWS-DAG: {{^ *}}NativeFunction{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}libfoo.so.1{{[[:space:]]+}}foo{{$}}
 # NATIVE-ROWS-DAG: {{^ *}}NativeData{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}libfoo.so.1{{[[:space:]]+}}bar{{$}}
-# NO-IMPORTS-NOT:  Imports:
+
+## The same link writing the PE: the map goes on with the PE's sections, in
+## 5.9.14's order, and foo is an import (bar, referenced only from the
+## function LTO deletes, is none).
+# RUN: msil-ld native.o libfoo.so.1 -o native.exe -Map=native-pe.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=PE-MAP --input-file=native-pe.map
+# PE-MAP:      {{^}}msil-ld map of native.exe (x86_64-unknown-linux-gnu-msil){{$}}
+# PE-MAP-NEXT: {{^}}Inputs:{{$}}
+# PE-MAP:      {{^}}Symbols:{{$}}
+# PE-MAP:      {{^}}Image: {{[0-9]+}} bytes ({{[0-9]+}} initialized), align {{[0-9]+}}{{$}}
+# PE-MAP:      {{^}}Methods:{{$}}
+# PE-MAP:      {{^}}Fields:{{$}}
+# PE-MAP:      {{^}}Imports:{{$}}
+# PE-MAP-NEXT: {{^ *Token +Module!Entry +Symbol$}}
+# PE-MAP-NEXT: {{^ +0x06[0-9A-F]+ +libfoo\.so\.1!foo +foo$}}
+# PE-MAP-NOT:  bar
 
 # RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/coff-import.def /out:imp.lib
 # RUN: llvm-as native-win.ll -o native-win.o
 # RUN: msil-ld --lto-emit-asm native-win.o imp.lib -o native-win.il -Map=native-win.map 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=NATIVE-WIN --input-file=native-win.map
-# RUN: FileCheck %s --check-prefix=NO-IMPORTS --input-file=native-win.map
 
 # NATIVE-WIN:      {{^}}Inputs:{{$}}
 # NATIVE-WIN-NEXT: {{^ *}}native-win.o{{$}}

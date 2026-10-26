@@ -17,8 +17,9 @@
 // M14 has the kinds of bitcode linking and M15 the late-bound native kinds
 // (NativeFunction, NativeData; plan 5.9.6 step 2, 5.10). M20 adds the
 // payloads of CIL objects (an InputMethod for a DefinedFunction, an
-// InputSegment and offset for a DefinedData) and SyntheticData, and M22 the
-// managed late-bound kinds.
+// InputSegment, offset and size for a DefinedData, a SyntheticSegment for a
+// common symbol), the local symbols of CIL objects (STB_LOCAL, never in the
+// symbol table) and SyntheticData; M22 adds the managed late-bound kinds.
 //
 //===----------------------------------------------------------------------===//
 
@@ -28,12 +29,17 @@
 #include "lld/Common/LLVM.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <cstdint>
 #include <string>
 
 namespace lld {
 namespace msil {
+class InputChunk;
 class InputFile;
+class InputMethod;
+class InputSegment;
+class SyntheticSegment;
 struct NativeExport;
 class Undefined;
 class CommonSymbol;
@@ -62,6 +68,10 @@ public:
     // which never enter the table through resolution.
     NativeFunctionKind,
     NativeDataKind,
+    // A linker-defined DATA symbol at an offset of the output's data image
+    // (__start_X and __stop_X, plan 5.9.9), which the writer defines through
+    // SymbolTable::addSyntheticData() after the layout.
+    SyntheticDataKind,
   };
 
   Kind kind() const { return static_cast<Kind>(symbolKind); }
@@ -81,9 +91,11 @@ protected:
   StringRef name;
 
 public:
-  // The ELF symbol binding: STB_GLOBAL or STB_WEAK. As in lld/ELF, resolution
-  // also changes it in place: an undefined weak reference does not extract
-  // archive members, so a lazy symbol remembers that it is weak.
+  // The ELF symbol binding: STB_GLOBAL or STB_WEAK for the symbols of the
+  // table, STB_LOCAL for the local symbols of a CIL object, which bind only
+  // within it (plan 5.9.5). As in lld/ELF, resolution also changes it in
+  // place: an undefined weak reference does not extract archive members, so
+  // a lazy symbol remembers that it is weak.
   uint8_t binding;
 
   // The symbol type: STT_FUNC (a function), STT_OBJECT (data) or STT_NOTYPE
@@ -100,10 +112,10 @@ public:
   LLVM_PREFERRED_TYPE(bool)
   uint8_t tls : 1;
 
-  // True if a regular (non-bitcode) input refers to the symbol: the
-  // command line (-u, the entry) in M14, CIL objects from M20. A bitcode
+  // True if a regular (non-bitcode) input refers to the symbol or defines it:
+  // the command line (-u, the entry) and CIL objects (plan 5.9.13). A bitcode
   // reference through a dllimport declaration (__imp_<name>) sets it too, as
-  // in lld/COFF. LTO keeps such symbols visible (plan 5.9.13).
+  // in lld/COFF. LTO keeps such symbols visible.
   LLVM_PREFERRED_TYPE(bool)
   uint8_t isUsedInRegularObj : 1;
 
@@ -112,7 +124,9 @@ public:
   LLVM_PREFERRED_TYPE(bool)
   uint8_t noStrip : 1;
 
-  // Set by --gc-sections (M20) when the symbol's method or segment is kept.
+  // Set by markLive() (plan 5.9.11) when the output keeps the symbol: a live
+  // method or segment refers to it, or it is a root. Without --gc-sections
+  // every symbol of a loaded CIL object is live.
   LLVM_PREFERRED_TYPE(bool)
   uint8_t live : 1;
 
@@ -127,9 +141,16 @@ public:
   uint8_t referenced : 1;
 
   // True if an input refers to the symbol through a dllimport declaration
-  // (__imp_<name> in a bitcode symbol table; from M20, the record's flag).
+  // (__imp_<name> in a bitcode symbol table, or the DLLIMPORT flag of a CIL
+  // object's record).
   LLVM_PREFERRED_TYPE(bool)
   uint8_t dllImport : 1;
+
+  // True for a definition through an alias (the record's ALIAS flag): a
+  // DefinedFunction whose method, or a DefinedData whose segment, belongs to
+  // the aliasee (plan 5.9.5).
+  LLVM_PREFERRED_TYPE(bool)
+  uint8_t isAlias : 1;
 
   StringRef getName() const { return name; }
   void setName(StringRef s) { name = s; }
@@ -138,7 +159,8 @@ public:
 
   bool isPlaceholder() const { return symbolKind == PlaceholderKind; }
   bool isDefined() const {
-    return symbolKind == DefinedFunctionKind || symbolKind == DefinedDataKind;
+    return symbolKind == DefinedFunctionKind || symbolKind == DefinedDataKind ||
+           symbolKind == SyntheticDataKind;
   }
   bool isUndefined() const { return symbolKind == UndefinedKind; }
   bool isCommon() const { return symbolKind == CommonKind; }
@@ -149,6 +171,7 @@ public:
 
   bool isGlobal() const { return binding == llvm::ELF::STB_GLOBAL; }
   bool isWeak() const { return binding == llvm::ELF::STB_WEAK; }
+  bool isLocal() const { return binding == llvm::ELF::STB_LOCAL; }
 
   // True if this is an undefined weak symbol. A weak reference that met a
   // lazy symbol leaves a lazy symbol with a weak binding, so lazy symbols
@@ -186,24 +209,27 @@ protected:
          uint8_t visibility, uint8_t type, bool tls)
       : file(file), name(name), binding(binding), type(type), symbolKind(k),
         vis(visibility), tls(tls), isUsedInRegularObj(false), noStrip(false),
-        live(false), traced(false), referenced(false), dllImport(false) {}
+        live(false), traced(false), referenced(false), dllImport(false),
+        isAlias(false) {}
 
-  // Makes \p sym this symbol: the kind, file, binding, type and TLS bit are
-  // this symbol's, while the name, the merged visibility and the flags stay
-  // \p sym's (lld/ELF's Symbol::overwrite).
+  // Makes \p sym this symbol: the kind, file, binding, type, TLS bit and
+  // alias bit are this symbol's, while the name, the merged visibility and
+  // the other flags stay \p sym's (lld/ELF's Symbol::overwrite).
   void overwrite(Symbol &sym, Kind k) const;
 
 private:
   bool shouldReplace(const Defined &other) const;
 };
 
-// A definition: a function or data. M14 definitions come from bitcode, so
-// they carry no method or segment yet (M20 adds them).
+// A definition: a function or data of a bitcode file or a CIL object, or a
+// linker-defined symbol (SyntheticData).
 class Defined : public Symbol {
 public:
   static bool classof(const Symbol *s) { return s->isDefined(); }
 
-  void overwrite(Symbol &sym) const { Symbol::overwrite(sym, kind()); }
+  // Copies this definition, its payload included, into \p sym (defined
+  // below the subclasses).
+  inline void overwrite(Symbol &sym) const;
 
 protected:
   Defined(Kind k, InputFile *file, StringRef name, uint8_t binding,
@@ -211,27 +237,94 @@ protected:
       : Symbol(k, file, name, binding, visibility, type, tls) {}
 };
 
+// A function definition. The method is null for a definition of a bitcode
+// file (LTO compiles it; the LTO object that defines it again carries the
+// method). For an alias it is the aliasee's method, so that an alias and its
+// aliasee share one method and one '<msil>fn_' field (plan 5.9.5, 5.9.7).
 class DefinedFunction : public Defined {
 public:
   DefinedFunction(InputFile *file, StringRef name, uint8_t binding,
-                  uint8_t visibility)
+                  uint8_t visibility, InputMethod *method = nullptr)
       : Defined(DefinedFunctionKind, file, name, binding, visibility,
-                llvm::ELF::STT_FUNC, /*tls=*/false) {}
+                llvm::ELF::STT_FUNC, /*tls=*/false),
+        method(method) {}
 
   static bool classof(const Symbol *s) {
     return s->kind() == DefinedFunctionKind;
   }
+
+  void overwrite(Symbol &sym) const {
+    Symbol::overwrite(sym, DefinedFunctionKind);
+    static_cast<DefinedFunction &>(sym).method = method;
+  }
+
+  InputMethod *method;
 };
 
+// A data definition. A definition of a CIL object lies at offset in a
+// segment of that object and has the record's size; an alias lies in the
+// aliasee's segment, at the aliasee's offset plus its AliasOffset (plan
+// 5.9.5). The segment is null for a definition of a bitcode file.
 class DefinedData : public Defined {
 public:
   DefinedData(InputFile *file, StringRef name, uint8_t binding,
-              uint8_t visibility, bool tls)
+              uint8_t visibility, bool tls, InputSegment *segment = nullptr,
+              uint64_t offset = 0, uint64_t size = 0)
       : Defined(DefinedDataKind, file, name, binding, visibility,
-                llvm::ELF::STT_OBJECT, tls) {}
+                llvm::ELF::STT_OBJECT, tls),
+        segment(segment), offset(offset), size(size) {}
 
   static bool classof(const Symbol *s) { return s->kind() == DefinedDataKind; }
+
+  void overwrite(Symbol &sym) const {
+    Symbol::overwrite(sym, DefinedDataKind);
+    auto &s = static_cast<DefinedData &>(sym);
+    s.segment = segment;
+    s.offset = offset;
+    s.size = size;
+  }
+
+  InputSegment *segment;
+  uint64_t offset;
+  uint64_t size;
 };
+
+// A linker-defined DATA symbol at \p offset bytes into the output's data
+// image: __start_X and __stop_X on non-Windows triples (plan 5.9.9). It has
+// no file and is never resolved against; SymbolTable::addSyntheticData()
+// creates it after the layout.
+class SyntheticData : public Defined {
+public:
+  SyntheticData(StringRef name, uint64_t offset)
+      : Defined(SyntheticDataKind, /*file=*/nullptr, name,
+                llvm::ELF::STB_GLOBAL, llvm::ELF::STV_DEFAULT,
+                llvm::ELF::STT_OBJECT, /*tls=*/false),
+        offset(offset) {}
+
+  static bool classof(const Symbol *s) {
+    return s->kind() == SyntheticDataKind;
+  }
+
+  void overwrite(Symbol &sym) const {
+    Symbol::overwrite(sym, SyntheticDataKind);
+    static_cast<SyntheticData &>(sym).offset = offset;
+  }
+
+  uint64_t offset;
+};
+
+void Defined::overwrite(Symbol &sym) const {
+  switch (kind()) {
+  case DefinedFunctionKind:
+    return static_cast<const DefinedFunction *>(this)->overwrite(sym);
+  case DefinedDataKind:
+    return static_cast<const DefinedData *>(this)->overwrite(sym);
+  case SyntheticDataKind:
+    return static_cast<const SyntheticData *>(this)->overwrite(sym);
+  default:
+    llvm_unreachable("not a definition");
+  }
+}
 
 // Represents a common symbol.
 //
@@ -243,7 +336,9 @@ public:
 // symbols. If several common symbols of one name meet, the largest size and
 // the largest alignment win. Under LTO the IR linker merges the commons the
 // same way, so a common symbol that survives resolution stays in the merged
-// module.
+// module. A common symbol of CIL objects that survives resolution gets a
+// SyntheticSegment (SymbolTable::finalizeObjectSymbols): its place in the
+// zero part of the output's data image (plan 5.9.9 rule 3).
 class CommonSymbol : public Symbol {
 public:
   CommonSymbol(InputFile *file, StringRef name, uint8_t binding,
@@ -257,6 +352,7 @@ public:
     auto &s = static_cast<CommonSymbol &>(sym);
     s.alignment = alignment;
     s.size = size;
+    s.segment = segment;
   }
 
   static bool classof(const Symbol *s) { return s->isCommon(); }
@@ -266,6 +362,7 @@ public:
 
   uint32_t alignment;
   uint64_t size;
+  SyntheticSegment *segment = nullptr;
 };
 
 class Undefined : public Symbol {
@@ -328,7 +425,11 @@ public:
 // that no input defines (plan 5.9.6 step 2, 5.10.10): the first bindable
 // definition in link order. It keeps the symbol's binding and visibility; its
 // file is the native library. Native definitions bind late, so they never
-// preempt a definition or extract an archive member.
+// preempt a definition or extract an archive member. A symbol with an
+// explicit import module (an EXPLICIT_IMPORT stub, or IMPORT data with a
+// module) binds to a NativeExport that late binding makes from the import
+// attributes, unchecked (plan 5.10.7); its file is the CIL object that gave
+// the module (SymbolTable::isExplicitImport).
 class NativeSymbol : public Symbol {
 public:
   static bool classof(const Symbol *s) { return s->isNative(); }
@@ -364,8 +465,8 @@ public:
 };
 
 // Native data: an ELF object, a COFF data or const import or a DLL's data
-// export. Importing it needs M20's data-import helper (plan 5.10.12); until
-// then the import-annotation pass reports every live reference.
+// export, which the output imports at startup through the data-import helper
+// (plan 5.10.12).
 class NativeData : public NativeSymbol {
 public:
   NativeData(InputFile *file, StringRef name, uint8_t binding,
@@ -387,6 +488,7 @@ union SymbolUnion {
   alignas(LazySymbol) char e[sizeof(LazySymbol)];
   alignas(NativeFunction) char f[sizeof(NativeFunction)];
   alignas(NativeData) char g[sizeof(NativeData)];
+  alignas(SyntheticData) char h[sizeof(SyntheticData)];
 };
 
 // It is important to keep the size of SymbolUnion small for performance and
@@ -394,6 +496,11 @@ union SymbolUnion {
 static_assert(sizeof(SymbolUnion) <= 64, "SymbolUnion too large");
 
 void printTraceSymbol(const Symbol &sym, StringRef name);
+
+// The chunk that defines \p sym: its method, its segment (for an alias, the
+// aliasee's), or a common symbol's synthetic segment. Null for any other
+// symbol, and for a null \p sym.
+InputChunk *getDefiningChunk(const Symbol *sym);
 } // namespace msil
 
 // Returns a symbol name for an error message.

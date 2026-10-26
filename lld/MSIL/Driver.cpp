@@ -10,11 +10,13 @@
 //
 // The msil-ld driver: the "msil" flavor of lld, which links C programs into
 // .NET assemblies (llvm/docs/MSIL/ImplementationPlan.md 5.9). Its inputs are
-// LLVM bitcode files and archives of them, which LTO compiles for the codegen
-// triple, and the native libraries that a native link of the same program
-// reads (plan 5.10): undefined functions bind to them late and become
-// P/Invokes. --lto-emit-asm writes the whole program as ILAsm text, and ilasm
-// turns that into an assembly (msil-ld writes PE files from M20).
+// CIL objects (plan 5.8), LLVM bitcode files, which LTO compiles into CIL
+// objects for the codegen triple, archives of either, and the native
+// libraries that a native link of the same program reads (plan 5.10):
+// undefined symbols bind to them late and become P/Invokes and data imports.
+// The writer links the objects into a PE image (writeResult). Under
+// --lto-emit-asm msil-ld writes the whole program of its bitcode inputs as
+// ILAsm text instead, which ilasm turns into an assembly.
 //
 //===----------------------------------------------------------------------===//
 
@@ -22,8 +24,10 @@
 #include "Config.h"
 #include "InputFiles.h"
 #include "MapFile.h"
+#include "MarkLive.h"
 #include "NativeLibraries.h"
 #include "SymbolTable.h"
+#include "Writer.h"
 #include "lld/Common/Args.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
@@ -34,15 +38,14 @@
 #include "lld/Common/Version.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
-#include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/Archive.h"
-#include "llvm/Object/COFF.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/CommandLine.h"
@@ -72,6 +75,8 @@ void Ctx::reset() {
   new (&arg) Config();
   bitcodeFiles.clear();
   lazyBitcodeFiles.clear();
+  objectFiles.clear();
+  syntheticSegments.clear();
   nativeLibraryFiles.clear();
   loadedFiles.clear();
   nativeIndex.clear();
@@ -114,7 +119,8 @@ private:
   void addLinkerScript(MemoryBufferRef mb, std::optional<sys::fs::UniqueID> id);
   void addInputFile(InputFile *file);
   void addPendingFiles();
-  void addLinkerOptions(BitcodeFile &f);
+  void addLinkerOptions(InputFile &f);
+  void checkInputFile(const InputFile &f);
   void addRequestedLibrary(StringRef name, std::optional<std::string> path,
                            const InputFile &f);
   void applyAlternateNames();
@@ -132,8 +138,20 @@ private:
   // (plan 5.9.4). addPendingFiles() loads them into the symbol table.
   std::vector<InputFile *> files;
   size_t numLoadedFiles = 0;
-  // The bitcode files (ctx.bitcodeFiles) whose linker options are read.
+  // The loaded files (ctx.loadedFiles) whose linker options are read.
   size_t numLinkerOptionFiles = 0;
+
+  // The checks of plan 5.8.9 across the inputs (checkInputFile): the first
+  // input of each kind of value, against which later inputs are compared.
+  // Bitcode inputs give a pointer and long size (from their triple); CIL
+  // objects and LTO objects also give the wchar_t and long double sizes and
+  // the ABI version and flags.
+  const InputFile *modelFile = nullptr;
+  llvm::MSILLink::Header model;
+  const InputFile *objectModelFile = nullptr;
+  llvm::MSILLink::Header objectModel;
+  bool warnedNativeBitcode = false;
+  bool warnedDebugInfo = false;
 
   // The files read, so that a library that several inputs request (clang's
   // /DEFAULTLIB:oldnames.lib in every windows-msvc input) is read once, as
@@ -301,24 +319,8 @@ static bool isBitcode(MemoryBufferRef mb) {
   return identify_magic(mb.getBuffer()) == file_magic::bitcode;
 }
 
-// Returns true if \p mb is a PE image with a CLI header (ECMA-335 II.25.3.3):
-// a CIL object file (M20 links them) or a .NET assembly (M21, M22). Any other
-// PE image is a native DLL.
-static bool hasCLIHeader(MemoryBufferRef mb) {
-  if (identify_magic(mb.getBuffer()) != file_magic::pecoff_executable)
-    return false;
-  Expected<std::unique_ptr<COFFObjectFile>> obj = COFFObjectFile::create(mb);
-  if (!obj) {
-    consumeError(obj.takeError());
-    return false;
-  }
-  const data_directory *dir =
-      (*obj)->getDataDirectory(COFF::CLR_RUNTIME_HEADER);
-  return dir && dir->RelativeVirtualAddress != 0;
-}
-
 static bool isBitcodeOrCILObject(MemoryBufferRef mb) {
-  return isBitcode(mb) || hasCLIHeader(mb);
+  return isBitcode(mb) || isCLIImage(mb);
 }
 
 // lld/ELF/Driver.cpp's isUnderSysroot: true if \p path is inside the
@@ -458,12 +460,15 @@ static bool isSupportedTarget(const Triple &tt) {
 void LinkerDriver::addInputFile(InputFile *file) {
   if (!file)
     return;
-  // Without --target, the first bitcode file names the codegen triple
-  // (plan 5.9.3), as lld/ELF infers its target from the first input file,
-  // archive members included.
-  if (ctx.arg.target.str().empty())
+  // Without --target, the first CIL object or bitcode file names the codegen
+  // triple (plan 5.9.3), as lld/ELF infers its target from the first input
+  // file, archive members included.
+  if (ctx.arg.target.str().empty()) {
     if (auto *f = dyn_cast<BitcodeFile>(file))
       ctx.arg.target = getMSILTriple(f->obj->getTargetTriple());
+    else if (auto *f = dyn_cast<ObjFile>(file))
+      ctx.arg.target = getMSILTriple(f->getRecord().Hdr.Triple);
+  }
   files.push_back(file);
 }
 
@@ -497,19 +502,14 @@ void LinkerDriver::addFile(StringRef path) {
 
     bool hasNativeMembers = false;
     for (const auto &[m, offset] : members) {
-      if (hasCLIHeader(m)) {
-        error(path + "(" + m.getBufferIdentifier() +
-              "): linking CIL object files and .NET assemblies is not "
-              "supported yet");
-        continue;
-      }
       // Import members and native objects are the native index's.
-      if (isNativeArchiveMember(m)) {
+      if (!isCLIImage(m) && isNativeArchiveMember(m)) {
         hasNativeMembers = true;
         continue;
       }
-      // Handle -whole-archive. Any other member is lazy. A member that is not
-      // LLVM bitcode is reported and skipped by createObjectFile().
+      // Handle -whole-archive. Any other member is lazy. A member that is
+      // neither a CIL object nor LLVM bitcode is reported and skipped by
+      // createObjectFile(), and so is a .NET assembly.
       addInputFile(createObjectFile(m, path, offset, !inWholeArchive));
     }
     if (hasNativeMembers)
@@ -520,9 +520,9 @@ void LinkerDriver::addFile(StringRef path) {
     addInputFile(createObjectFile(mbref, "", 0, inLib));
     return;
   case file_magic::pecoff_executable:
-    if (hasCLIHeader(mbref)) {
-      error(path + ": linking CIL object files and .NET assemblies is not "
-                   "supported yet");
+    // A CIL object (or a .NET assembly, which createObjectFile() reports).
+    if (isCLIImage(mbref)) {
+      addInputFile(createObjectFile(mbref, "", 0, inLib));
       return;
     }
     addInputFile(make<NativeLibraryFile>(mbref, NativeLibraryFile::PEDll));
@@ -761,20 +761,35 @@ static bool consumePrefix(StringRef opt, ArrayRef<StringRef> prefixes,
   return false;
 }
 
-// The embedded library requests and linker options of a loaded bitcode file
-// (plan 5.9.4, 5.10.6), unless --no-dependent-libraries: the dependent
-// libraries of stock ELF bitcode (searched as lld/ELF searches them), and the
-// options -l<name>, -l:<file>, /DEFAULTLIB:<name> (.lib appended to a name
-// without an extension, then searched like -l:), /alternatename:<a>=<b> and
-// /failifmismatch:<k>=<v>. Requests naming an MSVC C runtime library are
-// ignored with a --verbose note; any other option is a warning. The
-// libraries are read after the inputs that are already on the list.
-void LinkerDriver::addLinkerOptions(BitcodeFile &f) {
-  if (!ctx.arg.dependentLibraries || !f.obj)
+// The embedded library requests and linker options of a loaded CIL object
+// (its LINKER_OPTIONS) or bitcode file (plan 5.9.4, 5.10.6), unless
+// --no-dependent-libraries: the dependent libraries (DEPENDENT_LIB entries,
+// and those of stock ELF bitcode, searched as lld/ELF searches them), and
+// the options -l<name>, -l:<file>, /DEFAULTLIB:<name> (.lib appended to a
+// name without an extension, then searched like -l:),
+// /alternatename:<a>=<b> and /failifmismatch:<k>=<v>. Requests naming an MSVC
+// C runtime library are ignored with a --verbose note; any other option is a
+// warning. The libraries are read after the inputs that are already on the
+// list.
+void LinkerDriver::addLinkerOptions(InputFile &f) {
+  if (!ctx.arg.dependentLibraries)
     return;
+  SmallVector<StringRef, 0> dependentLibraries;
+  SmallVector<std::string, 0> linkerOptions;
+  if (auto *bc = dyn_cast<BitcodeFile>(&f)) {
+    if (!bc->obj)
+      return;
+    append_range(dependentLibraries, bc->obj->getDependentLibraries());
+    linkerOptions = bc->getLinkerOptions();
+  } else if (auto *obj = dyn_cast<ObjFile>(&f)) {
+    dependentLibraries = obj->getDependentLibraries();
+    linkerOptions = obj->getLinkerOptions();
+  } else {
+    return;
+  }
 
   // lld/ELF/InputFiles.cpp:380-395 (addDependentLibrary).
-  for (StringRef spec : f.obj->getDependentLibraries()) {
+  for (StringRef spec : dependentLibraries) {
     if (isMSVCRuntimeLibrary(spec)) {
       log("ignoring C runtime library request '" + spec + "' from " +
           toString(&f));
@@ -788,7 +803,7 @@ void LinkerDriver::addLinkerOptions(BitcodeFile &f) {
     addRequestedLibrary(spec, std::move(path), f);
   }
 
-  for (const std::string &optString : f.getLinkerOptions()) {
+  for (const std::string &optString : linkerOptions) {
     StringRef opt = saver().save(optString);
     StringRef value;
     if (opt.starts_with("-l") && opt.size() > 2) {
@@ -831,13 +846,13 @@ void LinkerDriver::addLinkerOptions(BitcodeFile &f) {
 }
 
 // Loads the inputs that are not loaded yet into the symbol table, in order,
-// and reads the linker options of every bitcode file as soon as it is loaded,
-// extracted archive members included; the libraries they request go to the
-// end of the list (lld/ELF's order).
+// and reads the linker options of every CIL object and bitcode file as soon
+// as it is loaded, extracted archive members included; the libraries they
+// request go to the end of the list (lld/ELF's order).
 void LinkerDriver::addPendingFiles() {
   while (true) {
-    if (numLinkerOptionFiles < ctx.bitcodeFiles.size()) {
-      addLinkerOptions(*ctx.bitcodeFiles[numLinkerOptionFiles++]);
+    if (numLinkerOptionFiles < ctx.loadedFiles.size()) {
+      addLinkerOptions(*ctx.loadedFiles[numLinkerOptionFiles++]);
       continue;
     }
     if (numLoadedFiles < files.size()) {
@@ -912,13 +927,29 @@ void LinkerDriver::createFiles(opt::InputArgList &args) {
     error("no input files");
 }
 
-// The entry point (plan 5.9.3, D27): main, which the backend calls from the
-// generated '<msil>Main'. Another entry symbol needs CIL objects (M20).
+// The entry point (plan 5.9.3, D27): main by default, any function of a D27
+// shape from M20, which the generated '<msil>Main' calls. The writer checks
+// its shape; under --lto-emit-asm the AsmPrinter does, which learns an entry
+// other than main from the module flag msil-entry (MSILLinkHooksPass).
 static StringRef getEntry(opt::InputArgList &args) {
   auto *arg = args.getLastArg(OPT_entry);
   if (!arg)
     return "main";
   return arg->getValue();
+}
+
+// An unsigned option value (the hidden test options of plan 5.9.3).
+static uint32_t getUnsigned(opt::InputArgList &args, unsigned key,
+                            uint32_t defaultValue) {
+  auto *arg = args.getLastArg(key);
+  if (!arg)
+    return defaultValue;
+  uint32_t v;
+  if (to_integer(arg->getValue(), v, 10))
+    return v;
+  error(StringRef(args.getArgString(arg->getIndex())) +
+        ": number expected, but got '" + arg->getValue() + "'");
+  return defaultValue;
 }
 
 // Initializes Config members by the command line options.
@@ -936,6 +967,7 @@ static void readConfigs(opt::InputArgList &args) {
       args.hasFlag(OPT_dependent_libraries, OPT_no_dependent_libraries, true);
   ctx.arg.disableVerify = args.hasArg(OPT_disable_verify);
   ctx.arg.entry = getEntry(args);
+  ctx.arg.gcSections = args.hasFlag(OPT_gc_sections, OPT_no_gc_sections, true);
   ctx.arg.ltoEmitAsm = args.hasArg(OPT_lto_emit_asm);
   ctx.arg.ltoo = args::getInteger(args, OPT_lto_O, 2);
   if (ctx.arg.ltoo > 3)
@@ -948,7 +980,14 @@ static void readConfigs(opt::InputArgList &args) {
     error("invalid codegen optimization level for LTO: " + Twine(ltoCgo));
   ctx.arg.ltoPartitions = args::getInteger(args, OPT_lto_partitions, 1);
   ctx.arg.mapFile = args.getLastArgValue(OPT_Map);
+  ctx.arg.msilRelocLoopThreshold =
+      getUnsigned(args, OPT_msil_reloc_loop_threshold, 32);
+  ctx.arg.msilRelocLoopThresholdGiven =
+      args.hasArg(OPT_msil_reloc_loop_threshold);
+  ctx.arg.msilTypeMemberLimit =
+      getUnsigned(args, OPT_msil_type_member_limit, UINT32_MAX);
   ctx.arg.outputFile = args.getLastArgValue(OPT_o);
+  ctx.arg.printGcSections = args.hasArg(OPT_print_gc_sections);
   ctx.arg.printImports = args.hasArg(OPT_print_imports);
   ctx.arg.saveTemps = args.hasArg(OPT_save_temps);
   ctx.arg.searchPaths = args::getStrings(args, OPT_library_path);
@@ -975,22 +1014,17 @@ static void readConfigs(opt::InputArgList &args) {
   if (args.hasArg(OPT_print_map))
     ctx.arg.mapFile = "-";
 
-  // A library assembly needs the PE writer and exports (M22); the option is
-  // known because the clang driver passes --shared for -shared (plan 5.9.3).
+  // A library assembly needs exports (M22); the option is known because the
+  // clang driver passes --shared for -shared (plan 5.9.3).
   if (ctx.arg.shared)
     error("-shared is not supported yet");
-  // Before M20 the entry point is main (plan 5.9.3, D27).
-  if (ctx.arg.entry != "main")
-    error("--entry=" + ctx.arg.entry +
-          ": an entry point other than main is not supported yet");
 }
 
-// Before M20 msil-ld cannot link the CIL objects that LTO writes, so every
-// LTO link but a whole-program --lto-emit-asm one is this error (plan 5.9.13).
-static void reportObjectOutput() {
-  error("ThinLTO, --lto-partitions and LTO without --lto-emit-asm need CIL "
-        "object output, which this msil-ld does not have; use --lto-emit-asm "
-        "(clang: -Wl,--lto-emit-asm) to write ILAsm text");
+// ThinLTO and LTO partitions give one module per task, which only CIL
+// objects can link: --lto-emit-asm writes one ILAsm module.
+static void reportSeveralLTOModules() {
+  error("ThinLTO and --lto-partitions cannot write ILAsm text; link without "
+        "--lto-emit-asm");
 }
 
 // Some command line options or some combinations of them are not allowed.
@@ -1002,8 +1036,8 @@ static void checkOptions() {
     error("--thinlto-jobs: invalid job count: " + ctx.arg.thinLTOJobs);
 
   // ThinLTO input is found when the inputs are loaded (linkerMain).
-  if (!ctx.arg.ltoEmitAsm || ctx.arg.ltoPartitions > 1) {
-    reportObjectOutput();
+  if (ctx.arg.ltoEmitAsm && ctx.arg.ltoPartitions > 1) {
+    reportSeveralLTOModules();
     return;
   }
 
@@ -1124,42 +1158,78 @@ static std::string getDataModelString(const MSILLink::Header &h) {
          std::to_string(h.LongDoubleSize);
 }
 
-// Checks every loaded bitcode file in load order (plan 5.8.9, 5.9.13): its
-// triple must have the codegen triple's key; bitcode for the native triple
-// is accepted with one warning per link (Q12); and its data model must be that
-// of the first input with the right key. PointerSize and LongSize are compared,
-// WCharSize from M20 (the IR linker already rejects two different wchar_size
-// flags). Behind equal triple keys the data models of bitcode inputs cannot
-// differ; the check matters once CIL objects carry their own (M20).
-static void checkBitcodeFiles() {
+// Checks one input (plan 5.8.9, 5.9.13), in load order, the objects that LTO
+// writes last: its triple must have the codegen triple's key, and bitcode for
+// the native triple is accepted with one warning per link (Q12). Its data
+// model must be that of the first input: a bitcode input gives PointerSize
+// and LongSize from its triple (the irsymtab has no DataLayout and no
+// wchar_size flag), a CIL object or LTO object its whole header, so WCharSize
+// and LongDoubleSize are compared among objects, the LTO objects of bitcode
+// inputs included (a mismatch names the LTO object). Objects also compare
+// their ABI version and ABI flags. A debug carrier is ignored with one
+// warning per link (plan 5.8.7).
+void LinkerDriver::checkInputFile(const InputFile &f) {
   const Triple &target = ctx.arg.target;
-  bool warnedNative = false;
-  const BitcodeFile *modelFile = nullptr;
-  MSILLink::Header model;
-  for (BitcodeFile *f : ctx.bitcodeFiles) {
-    StringRef triple = f->obj->getTargetTriple();
-    Triple tt(triple);
-    if (!hasTripleKey(tt, target)) {
-      error(toString(f) + ": target triple " + triple +
-            " is incompatible with " + target.str());
-      continue;
-    }
-    if (!tt.isOSBinFormatMSIL() && !warnedNative) {
-      warn(toString(f) + ": linking bitcode for " + triple + " as " +
+  MSILLink::Header h;
+  StringRef triple;
+  const auto *obj = dyn_cast<ObjFile>(&f);
+  if (obj) {
+    h = obj->getRecord().Hdr;
+    triple = h.Triple;
+  } else if (const auto *bc = dyn_cast<BitcodeFile>(&f)) {
+    triple = bc->obj->getTargetTriple();
+  } else {
+    return;
+  }
+  Triple tt(triple);
+  if (!hasTripleKey(tt, target)) {
+    error(toString(&f) + ": target triple " + triple +
+          " is incompatible with " + target.str());
+    return;
+  }
+  if (!obj) {
+    if (!tt.isOSBinFormatMSIL() && !warnedNativeBitcode) {
+      warn(toString(&f) + ": linking bitcode for " + triple + " as " +
            target.str() + "; stock-clang bitcode is a compatibility path");
-      warnedNative = true;
+      warnedNativeBitcode = true;
     }
+    h = getDataModel(tt);
+  }
 
-    MSILLink::Header h = getDataModel(tt);
-    if (!modelFile) {
-      modelFile = f;
-      model = h;
-    } else if (h.PointerSize != model.PointerSize ||
-               h.LongSize != model.LongSize) {
-      error(toString(f) + ": data model " + getDataModelString(h) +
-            " differs from " + getDataModelString(model) + " in " +
-            toString(modelFile));
-    }
+  auto reportModel = [&](const MSILLink::Header &m0, const InputFile &f0) {
+    error(toString(&f) + ": data model " + getDataModelString(h) +
+          " differs from " + getDataModelString(m0) + " in " + toString(&f0));
+  };
+  if (!modelFile) {
+    modelFile = &f;
+    model = h;
+  } else if (h.PointerSize != model.PointerSize ||
+             h.LongSize != model.LongSize) {
+    reportModel(model, *modelFile);
+    return;
+  }
+  if (!obj)
+    return;
+
+  if (!objectModelFile) {
+    objectModelFile = &f;
+    objectModel = h;
+  } else if (h.ABIVersion != objectModel.ABIVersion) {
+    error(toString(&f) + ": toolchain ABI version " + Twine(h.ABIVersion) +
+          " differs from " + Twine(objectModel.ABIVersion) + " in " +
+          toString(objectModelFile));
+  } else if (h.ABIFlags != objectModel.ABIFlags) {
+    error(toString(&f) + ": ABI flags 0x" + utohexstr(h.ABIFlags) +
+          " differ from 0x" + utohexstr(objectModel.ABIFlags) + " in " +
+          toString(objectModelFile));
+  } else if (h.WCharSize != objectModel.WCharSize ||
+             h.LongDoubleSize != objectModel.LongDoubleSize) {
+    reportModel(objectModel, *objectModelFile);
+  }
+
+  if ((h.Flags & MSILLink::HasDebugInfo) && !warnedDebugInfo) {
+    warn("debug information in " + toString(&f) + " is ignored");
+    warnedDebugInfo = true;
   }
 }
 
@@ -1321,27 +1391,80 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (errorCount())
     return;
 
-  // Every input is loaded: check the triples and data models.
-  checkBitcodeFiles();
+  // Every input is loaded: check the triples, data models and ABI versions.
+  for (InputFile *f : ctx.loadedFiles)
+    checkInputFile(*f);
+  size_t numCheckedFiles = ctx.loadedFiles.size();
   if (errorCount())
     return;
 
-  // ThinLTO writes one CIL object per module, which this msil-ld cannot link.
-  if (any_of(ctx.bitcodeFiles, isThinLTO)) {
-    reportObjectOutput();
+  // The bitcode inputs' references, before LTO takes their symbol tables.
+  symtab->recordReferences();
+
+  if (ctx.arg.ltoEmitAsm) {
+    // The whole-program text holds the bitcode inputs only, as one module.
+    if (!ctx.objectFiles.empty()) {
+      error(toString(ctx.objectFiles.front()) +
+            ": --lto-emit-asm cannot link CIL objects; link without "
+            "--lto-emit-asm");
+      return;
+    }
+    if (any_of(ctx.bitcodeFiles, isThinLTO)) {
+      reportSeveralLTOModules();
+      return;
+    }
+
+    // The symbols that are still undefined (plan 5.9.6): the native
+    // libraries bind what they define (step 2); hidden symbols and the entry
+    // point are errors here, and the import-annotation pass reports the rest
+    // after LTO.
+    symtab->bindLateSymbols();
+    if (errorCount())
+      return;
+
+    // Do link-time optimization. This writes the ILAsm text of the whole
+    // program to the output file.
+    symtab->compileBitcodeFiles();
+    if (errorCount())
+      return;
+
+    writeMapFile();
+    writeWhyExtract();
     return;
   }
 
-  // The symbols that are still undefined (plan 5.9.6): the native libraries
-  // bind what they define (step 2); hidden symbols and the entry point are
-  // errors here, and the import-annotation pass reports the rest after LTO.
+  // Do link-time optimization: LTO writes CIL objects (ThinLTO and
+  // partitions included), which are linked like the other objects; check
+  // their headers against the inputs' (plan 5.8.9). Objects that they
+  // extract from archives load now.
+  if (!ctx.bitcodeFiles.empty()) {
+    symtab->compileBitcodeFiles();
+    if (errorCount())
+      return;
+    for (ObjFile *f : ctx.objectFiles)
+      if (f->isLTO)
+        checkInputFile(*f);
+    addPendingFiles();
+    for (InputFile *f : ArrayRef(ctx.loadedFiles).drop_front(numCheckedFiles))
+      checkInputFile(*f);
+    if (errorCount())
+      return;
+  }
+
+  // Late binding over every object (plan 5.9.6), then the losers of
+  // resolution and the common symbols (plan 5.9.5, 5.9.9), then
+  // /alternatename, last.
   symtab->bindLateSymbols();
   if (errorCount())
     return;
+  symtab->finalizeObjectSymbols();
+  symtab->resolveAlternateNames();
 
-  // Do link-time optimization. With --lto-emit-asm this writes the ILAsm
-  // text of the whole program to the output file.
-  symtab->compileBitcodeFiles();
+  // --gc-sections (plan 5.9.11) and the output (plan 5.9.12).
+  markLive();
+  if (errorCount())
+    return;
+  writeResult();
   if (errorCount())
     return;
 

@@ -9,9 +9,9 @@
 ## - a named export binds under its name; whether it is data or code is the
 ##   exporting section's IMAGE_SCN_CNT_CODE, so dataobj in .data is data:
 ##   "'dataobj' in pedll.dll is data, but <file> calls it as a function", and
-##   "importing native data symbol 'dataobj' (pedll.dll) is not supported
-##   yet" when it is used as data (until M20); a call skips the data export
-##   and binds a later library that exports dataobj as code (the section 12
+##   a data import (M20, 5.10.12: kernel32.dll's LoadLibraryW and
+##   GetProcAddress at startup) when it is used as data; a call skips the
+##   data export and binds a later library that exports dataobj as code (the section 12
 ##   row of 2026-10-22 for 5.10.10, 'a COFF import or PE export of the right
 ##   kind'), and the data-call text appears only when none does;
 ## - a forwarder (fwd -> KERNEL32.GetTickCount) binds by its own name, which
@@ -92,11 +92,15 @@
 
 ## Data exports.
 # RUN: not msil-ld --lto-emit-asm call-data.o pedll.dll -o x.il 2>&1 | %{err} --check-prefix=CALL-DATA
-# RUN: not msil-ld --lto-emit-asm use-data.o pedll.dll -o x.il 2>&1 | %{err} --check-prefix=USE-DATA
+# RUN: msil-ld --lto-emit-asm use-data.o pedll.dll -o use-data.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=USE-DATA --input-file=use-data.il
 # CALL-DATA:      {{^}}msil-ld: error: 'dataobj' in pedll.dll is data, but call-data.o calls it as a function{{$}}
 # CALL-DATA-NEXT: {{^}}>>> referenced by call-data.o:(main){{$}}
-# USE-DATA:       {{^}}msil-ld: error: importing native data symbol 'dataobj' (pedll.dll) is not supported yet{{$}}
-# USE-DATA-NEXT:  {{^}}>>> referenced by use-data.o:(main){{$}}
+# USE-DATA-DAG:   {{^}}  ldstr "pedll.dll"{{$}}
+# USE-DATA-DAG:   {{^}}  ldstr "dataobj"{{$}}
+# USE-DATA-DAG:   {{^}}  stsfld native int 'dataobj'{{$}}
+# USE-DATA-DAG:   {{^}}.method {{.*}}pinvokeimpl("kernel32.dll"{{.*}}LoadLibraryW{{.*}}
+# USE-DATA-DAG:   {{^}}.method {{.*}}pinvokeimpl("kernel32.dll"{{.*}}GetProcAddress{{.*}}
 
 ## A call skips pedll.dll's DATA export and binds other.lib's code import.
 # RUN: llvm-lib /machine:x64 /def:other.def /out:other.lib

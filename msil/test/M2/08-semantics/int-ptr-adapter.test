@@ -1,0 +1,43 @@
+# Matrix case int-ptr-adapter: a K&R call passes 0 where the definition takes a pointer (native).
+# a.c calls count_or_default() through a declaration without a prototype,
+# once with the integer constant 0 for b.c's pointer parameter (natively the
+# callee sees a null pointer and takes its default branch) and once with a
+# pointer, which matches the definition and is a direct call. At the first
+# call site an int32 argument meets a native int parameter, which 5.9.8's
+# table adapts: '<msil>adapt_<name>_<n>' converts the argument with conv.i,
+# with a warning (wasm-ld's text shape, plan 5.9.8; the object link names the
+# objects, the LTO link's text leaves out the ' in <file>' parts), and the
+# program prints the native transcript. The object path warns at -O0 and -O2; the LTO path
+# is checked at -O0, where no optimization runs before code generation. Plan
+# 5.9.16 row int-ptr-adapter (M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# OBJ:      {{^}}msil-ld: warning: function signature mismatch: count_or_default{{$}}
+# OBJ-NEXT: {{^}}>>> defined as int32(native int) in {{.*}}b.o{{$}}
+# OBJ-NEXT: {{^}}>>> called as int32(int32) in {{.*}}a.o{{$}}
+# OBJ-NEXT: {{^}}>>> adapter: {{.+}}
+# LTO:      {{^}}msil-ld: warning: {{.*}}function signature mismatch: count_or_default{{$}}
+# LTO-NEXT: {{^}}>>> defined as int32(native int){{$}}
+# LTO-NEXT: {{^}}>>> called as int32(int32){{$}}
+# LTO-NEXT: {{^}}>>> adapter: {{.+}}
+#--- a.c
+#include "msil_test.h"
+int count_or_default();
+int main(void) {
+  int v = 41;
+  int r = count_or_default(0);
+  int s = count_or_default(&v);
+  put_kv("count_or_default(0)", r);
+  put_kv("count_or_default(&v)", s);
+  return r + s;
+}
+#--- b.c
+int count_or_default(const int *p) {
+  if (!p)
+    return 7;
+  return *p + 1;
+}

@@ -1,0 +1,309 @@
+## Native callees of CIL objects (ImplementationPlan.md 5.9.6 step 2, 5.9.7,
+## 5.10.7, 5.10.11, 5.10.13, 5.10.14; M20.c (1) and (3); the section 12 row
+## of 2026-10-25 for NATIVE_INCOMPATIBLE):
+## - an msil.unresolved stub binds natively under its ImplMap import name:
+##   with 'as' (import_name("abs") on my_abs: the stub keeps the C name and
+##   the entry 'abs'), and without 'as' (object-form text, 5.8.4, from llc
+##   -msil-object-form with the 'as' removed by hand: the import name is the
+##   method name); msil-ld writes its P/Invoke stub ('assembly',
+##   preservesig, ImplMap 0x0201, the module verbatim: libc.so.6);
+## - a natively bound qsort, called or only addressed, is 5.10.14's callback
+##   error with '>>> referenced by' lines; an explicit import_module qsort is
+##   exempt (unchecked, 5.10.7) and gets its P/Invoke;
+## - a variadic native callee (VARARG in the record's SIGNATURES; Phase 2
+##   writers never set it, so kr-va.il is llc's object-form text of a K&R
+##   printf call with NO_PROTOTYPE patched by hand to VARARG with one fixed
+##   parameter, the subsection and record lengths grown by one byte) is
+##   5.10.14's variadic error;
+## - a function that takes or returns what a P/Invoke cannot pass (a
+##   two-double aggregate, an i128, a '<2 x float>' vector and a half, which
+##   the writer marks NATIVE_INCOMPATIBLE, a byval aggregate, an sret result)
+##   is 5.10.14's non-passable error with a '>>> referenced by' line, here
+##   from Signatures (native-aggregate.test covers only --lto-emit-asm
+##   text); so is an i128 function used only by address, from initialized
+##   data ('>>> referenced by agg.o:(fp)', the global that holds it);
+##   plain(int32) binds;
+## - a prototype-less function used only by address that binds natively has
+##   no signature to derive (the object carries none for it): Phase 1's error,
+##   moved to msil-ld by M19.b (the module is named in linked text, the row
+##   of 2026-10-22 for MSILAddMissingPrototypes.cpp); with a definition in
+##   another object it links without a P/Invoke.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: yaml2obj agg.yaml -o agg-lib.o
+# RUN: ld.lld -shared -soname libagg.so.1 agg-lib.o -o libagg.so.1
+# RUN: llc -filetype=obj as.ll -o as.o
+# RUN: llc -filetype=obj cb.ll -o cb.o
+# RUN: llc -filetype=obj cba.ll -o cba.o
+# RUN: llc -filetype=obj cbx.ll -o cbx.o
+# RUN: llc -filetype=obj agg.ll -o agg.o
+# RUN: llc -filetype=obj np.ll -o np.o
+# RUN: llc -filetype=obj npdef.ll -o npdef.o
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash}
+
+## import_name: bound under the import name, the C name kept.
+# RUN: msil-ld as.o libc.so.6 -o as.exe 2>&1 | count 0
+# RUN: llvm-cil-dump as.exe | FileCheck %s --check-prefix=AS
+# AS:      {{^}}moduleref 'libc.so.6'{{$}}
+# AS:      {{^}}    L1: call int32(int32) '<Module>'::'my_abs'{{$}}
+# AS:      {{^}}  .method 'my_abs' int32(int32) flags=0x2093 impl=0x0080{{$}}
+# AS-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry 'abs' flags=0x0201{{$}}
+
+## A stub without 'as', from object-form text.
+# RUN: %if ilasm %{ %ilasm-verify -output=noas.o noas.il %}
+# RUN: %if ilasm %{ msil-ld noas.o libc.so.6 -o noas.exe 2>&1 | count 0 %}
+# RUN: %if ilasm %{ llvm-cil-dump noas.exe | FileCheck %s --check-prefix=NOAS %}
+# NOAS:      {{^}}  .method 'abs' int32(int32) flags=0x2093 impl=0x0080{{$}}
+# NOAS-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry 'abs' flags=0x0201{{$}}
+
+## qsort: called, addressed, and imported explicitly.
+# RUN: not msil-ld cb.o libc.so.6 -o x.exe 2>&1 | %{err} --check-prefix=CALLBACK "-DREF=cb.o:(main)" \
+# RUN:   --implicit-check-not=error:
+# RUN: not msil-ld cba.o libc.so.6 -o x.exe 2>&1 | %{err} --check-prefix=CALLBACK "-DREF=cba.o:(getq)" \
+# RUN:   --implicit-check-not=error:
+# CALLBACK:      {{^}}msil-ld: error: native function 'qsort' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# CALLBACK-NEXT: {{^}}>>> referenced by [[REF]]{{$}}
+# RUN: msil-ld cbx.o libc.so.6 -o cbx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump cbx.exe | FileCheck %s --check-prefix=EXPLICIT
+# EXPLICIT:      {{^}}  .method 'qsort' void(native int, native int, native int, native int) flags=0x2093 impl=0x0080{{$}}
+# EXPLICIT-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry 'qsort' flags=0x0201{{$}}
+
+## A variadic native callee (a hand-made VARARG record entry).
+# RUN: %if ilasm %{ %ilasm-verify -output=kr-va.o kr-va.il %}
+# RUN: %if ilasm %{ not msil-ld kr-va.o libc.so.6 -o x.exe 2>&1 | %{err} --check-prefix=VARIADIC --implicit-check-not=error: %}
+# VARIADIC: {{^}}msil-ld: error: native function 'printf' (libc.so.6) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
+
+## Values a P/Invoke cannot pass: seven errors, none for plain.
+# RUN: not msil-ld agg.o libagg.so.1 -o x.exe > agg.txt 2>&1
+# DEFINE: %{agg} = FileCheck %s --check-prefix=AGG --input-file=agg.txt
+# RUN: %{agg} -DNAME=ret_pair -DREF=main
+# RUN: %{agg} -DNAME=take_i128 -DREF=main
+# RUN: %{agg} -DNAME=take_byval -DREF=main
+# RUN: %{agg} -DNAME=make_sret -DREF=main
+# RUN: %{agg} -DNAME=ret_vec -DREF=main
+# RUN: %{agg} -DNAME=ret_half -DREF=main
+# RUN: %{agg} -DNAME=addr_i128 -DREF=fp
+# RUN: FileCheck %s --check-prefix=AGG-NUM %{crash} --input-file=agg.txt
+# AGG:      {{^}}msil-ld: error: native function '[[NAME]]' (libagg.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# AGG-NEXT: {{^}}>>> referenced by agg.o:([[REF]]){{$}}
+# AGG-NUM-COUNT-7: {{^}}msil-ld: error: native function
+# AGG-NUM-NOT:     {{error:|plain}}
+
+## A prototype-less function used only by address.
+# RUN: not msil-ld np.o libfoo.so.1 -o x.exe 2>&1 | %{err} --check-prefix=NOPROTO --implicit-check-not=error:
+# NOPROTO:      {{^}}msil-ld: error: the signature of prototype-less function 'foo'{{( \(libfoo\.so\.1\))?}} cannot be derived: its address is used, but it is never called directly; declare it with a prototype{{$}}
+# NOPROTO-NEXT: {{^}}>>> referenced by np.o:(getfoo){{$}}
+# RUN: msil-ld np.o npdef.o libfoo.so.1 -o npdef.exe 2>&1 | count 0
+# RUN: llvm-cil-dump npdef.exe | FileCheck %s --check-prefix=NOPROTO-DEF --implicit-check-not=pinvokeimpl
+# NOPROTO-DEF: {{^}}  .method 'foo' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# NOPROTO-DEF: {{^}}  .method 'getfoo' native int() flags=0x0016 impl=0x0000{{$}}
+# NOPROTO-DEF: {{^}}    L0: ldsfld native int '<Module>'::'<msil>fn_foo'{{$}}
+
+#--- as.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @my_abs(i32) #0
+
+define i32 @main() {
+  %r = call i32 @my_abs(i32 -4)
+  ret i32 %r
+}
+
+attributes #0 = { "msil-import-name"="abs" }
+
+#--- noas.il
+// MSIL object generated by LLVM (llc -msil-object-form of a declaration
+// 'abs' with import_name("abs")); the stub's 'as "abs"' was removed by hand.
+// source_filename = "ab.ll"
+// target triple   = "x86_64-unknown-linux-gnu-msil"
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+
+.method public static int32 'main'() cil managed
+{
+  .maxstack 1
+  ldc.i4.s -4
+  call int32 'abs'(int32)
+  ret
+} // end of method 'main'
+
+.method public hidebysig static pinvokeimpl("msil.unresolved" nomangle cdecl) int32 'abs'(int32) cil managed preservesig {}
+
+.module 'ab.ll'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = ( 01 00 40 00 00 00 4D 53 4C 4B 01 00 00 1D 78 38 36 5F 36 34 2D 75 6E 6B 6E 6F 77 6E 2D 6C 69 6E 75 78 2D 67 6E 75 2D 6D 73 69 6C 01 00 00 08 08 04 08 01 12 02 00 10 03 61 62 73 00 00 04 6D 61 69 6E 01 00 00 06 00 00 )
+
+#--- cb.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@arr = global [3 x i32] [i32 3, i32 1, i32 2], align 4
+
+declare void @qsort(ptr, i64, i64, ptr)
+
+define internal i32 @cmp(ptr %a, ptr %b) {
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %d = sub i32 %x, %y
+  ret i32 %d
+}
+
+define i32 @main() {
+  call void @qsort(ptr @arr, i64 3, i64 4, ptr @cmp)
+  %v = load i32, ptr @arr
+  ret i32 %v
+}
+
+#--- cba.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare void @qsort(ptr, i64, i64, ptr)
+
+define ptr @getq() {
+  ret ptr @qsort
+}
+
+define i32 @main() {
+  %p = call ptr @getq()
+  %c = icmp eq ptr %p, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+#--- cbx.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@arr = global [3 x i32] [i32 3, i32 1, i32 2], align 4
+
+declare void @qsort(ptr, i64, i64, ptr) #0
+
+define internal i32 @cmp(ptr %a, ptr %b) {
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %d = sub i32 %x, %y
+  ret i32 %d
+}
+
+define i32 @main() {
+  call void @qsort(ptr @arr, i64 3, i64 4, ptr @cmp)
+  %v = load i32, ptr @arr
+  ret i32 %v
+}
+
+attributes #0 = { "msil-import-module"="libc.so.6" }
+
+#--- kr-va.il
+// MSIL object generated by LLVM (llc -msil-object-form of a K&R call
+// 'printf(fmt)'); the record's SIGNATURES entry for the printf MemberRef was
+// changed by hand from NO_PROTOTYPE (flags 01) to VARARG with FixedParams 1
+// (flags 02, then 01), so the subsection grew from 07 to 08 bytes and the
+// record from 0x6A to 0x6B.
+// source_filename = "kr.ll"
+// target triple   = "x86_64-unknown-linux-gnu-msil"
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+
+.method public static int32 'main'() cil managed
+{
+  .maxstack 2
+  ldsfld native int 'fmt'
+  call int32 [msil.extern]'<msil>Symbols'::'printf'(native int)
+  pop
+  ldc.i4.0
+  ret
+} // end of method 'main'
+
+.field assembly static initonly native int 'fmt'
+
+.module 'kr.ll'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = ( 01 00 6B 00 00 00 4D 53 4C 4B 01 00 00 1D 78 38 36 5F 36 34 2D 75 6E 6B 6E 6F 77 6E 2D 6C 69 6E 75 78 2D 67 6E 75 2D 6D 73 69 6C 01 00 00 08 08 04 08 01 22 03 01 02 03 66 6D 74 01 00 00 04 00 00 03 00 10 06 70 72 69 6E 74 66 00 00 04 6D 61 69 6E 01 00 00 06 02 0F 01 07 2E 72 6F 64 61 74 61 11 00 03 78 0A 00 06 08 01 01 00 00 0A 02 01 00 00 00 )
+
+#--- agg.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x40
+Symbols:
+  - { Name: ret_pair,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x00, Size: 8 }
+  - { Name: take_i128,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x08, Size: 8 }
+  - { Name: take_byval, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: make_sret,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+  - { Name: ret_vec,    Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 4 }
+  - { Name: ret_half,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x24, Size: 4 }
+  - { Name: addr_i128,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 8 }
+  - { Name: plain,      Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 8 }
+
+#--- agg.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+%struct.big = type { i64, i64, i64 }
+
+@b = global %struct.big { i64 1, i64 2, i64 3 }
+@fp = global ptr @addr_i128
+
+define i32 @main() {
+  %p1 = call { double, double } @ret_pair()
+  %x = extractvalue { double, double } %p1, 0
+  call void @take_i128(i128 5)
+  call void @take_byval(ptr byval(%struct.big) align 8 @b)
+  %s = alloca %struct.big, align 8
+  call void @make_sret(ptr sret(%struct.big) align 8 %s)
+  %v = call <2 x float> @ret_vec()
+  %h = call half @ret_half()
+  %q = call i32 @plain(i32 1)
+  %f = load ptr, ptr @fp
+  %c = icmp eq ptr %f, null
+  %z = zext i1 %c to i32
+  %i = fptosi double %x to i32
+  %r1 = add i32 %i, %q
+  %r = add i32 %r1, %z
+  ret i32 %r
+}
+
+declare { double, double } @ret_pair()
+declare void @take_i128(i128)
+declare void @take_byval(ptr byval(%struct.big) align 8)
+declare void @make_sret(ptr sret(%struct.big) align 8)
+declare <2 x float> @ret_vec()
+declare half @ret_half()
+declare i32 @plain(i32)
+declare void @addr_i128(i128)
+
+#--- np.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @foo(...) #0
+
+define ptr @getfoo() {
+  ret ptr @foo
+}
+
+define i32 @main() {
+  %p = call ptr @getfoo()
+  %r = icmp eq ptr %p, null
+  %z = zext i1 %r to i32
+  ret i32 %z
+}
+
+attributes #0 = { "no-prototype" }
+
+#--- npdef.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @foo(i32 %x) {
+  ret i32 %x
+}

@@ -2,15 +2,22 @@
 # a.c and b.c both define the function shared, a link error natively. msil-ld
 # reports it as lld/ELF does (plan 5.9.5: both GLOBAL is 'duplicate symbol',
 # 5.9.14's text, the first definition's file first); the link fails with exit
-# status 1. Plan 5.9.16 row duplicate-strong (M14 lto, M20 obj).
+# status 1. The object link reports the same text for the two objects.
+# Plan 5.9.16 row duplicate-strong (M14 lto, M20 obj).
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
 # LTO:      {{^}}msil-ld: error: duplicate symbol: shared{{$}}
 # LTO-NEXT: {{^}}>>> defined in {{.*}}a.o{{$}}
 # LTO-NEXT: {{^}}>>> defined in {{.*}}b.o{{$}}
 # LTO:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# OBJ:      {{^}}msil-ld: error: duplicate symbol: shared{{$}}
+# OBJ-NEXT: {{^}}>>> defined in {{.*}}a.o{{$}}
+# OBJ-NEXT: {{^}}>>> defined in {{.*}}b.o{{$}}
+# OBJ:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
 #--- a.c
 int shared(void) { return 1; }
 int main(void) { return shared(); }

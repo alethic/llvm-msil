@@ -1,11 +1,14 @@
-## msil-ld's command line in M15 (ImplementationPlan.md 5.9.3 and 5.9.14;
+## msil-ld's command line in M20 (ImplementationPlan.md 5.9.3 and 5.9.14;
 ## the still valid cases of M13's stub.test moved here):
 ## - --version prints the lld version and skips input processing, so a
 ##   missing input does not matter; -v without inputs prints it too and exits
 ##   0, and -v with inputs prints it and links;
-## - --help prints the option table, which holds M14's options and none of a
-##   later milestone's (until its milestone such an option is an unknown
-##   argument);
+## - --help prints the option table, which holds the options up to M20's and
+##   none of a later milestone's (until its milestone such an option is an
+##   unknown argument: --reference, --print-bcl-table, --export-class,
+##   --interface-only); M20's hidden test options
+##   --msil-reloc-loop-threshold and --msil-type-member-limit are accepted
+##   but not listed;
 ## - without inputs: 'no input files';
 ## - -r and --relocatable are 'error: -r is not supported', reported while
 ##   the options are read, so -r alone prints only that (the one msil-ld-only
@@ -18,7 +21,21 @@
 ## - M15 adds -Bstatic, -Bdynamic, --ucrtbase-imports, --print-imports and
 ##   --no-dependent-libraries (5.10.9, 5.10.4, 5.10.14, 5.10.6), which M14
 ##   rejected as unknown arguments: they are accepted, and listed by --help;
-##   --ucrtbase-imports is an error for a non-Windows codegen triple.
+##   --ucrtbase-imports is an error for a non-Windows codegen triple;
+## - M20 adds --gc-sections (the default), --no-gc-sections and
+##   --print-gc-sections (5.9.11), listed by --help, and the hidden
+##   --msil-reloc-loop-threshold=<n> and --msil-type-member-limit=<n>
+##   (obj-gc-sections.test, obj-reloc-loop.test and obj-spill.test link
+##   objects with them). main.o's text has no data relocation, no unused
+##   function and few members, so none of them changes it. Under
+##   --lto-emit-asm --msil-reloc-loop-threshold=<n> reaches code generation
+##   as the module flag msil-reloc-loop-threshold, and llc's
+##   -msil-reloc-loop-threshold given through -mllvm takes precedence (the
+##   section 12 row 'M20.a (4) and M20.b (6) clarified (5.9.10, 5.9.13)'):
+##   reloc.o's three data relocations (tab = {&a, &b, &c}) go through the
+##   '<msil>relocs' loop at 0 in the text as in the PE of the same link, and
+##   stay straight-line at the default (32) and under
+##   -mllvm -msil-reloc-loop-threshold=1000.
 ## Every diagnostic starts with 'msil-ld: '. No run may crash.
 ##
 ## LLD_IN_TEST=2 runs the driver twice in one process and fails if the two
@@ -40,10 +57,27 @@
 # VERSION:      {{^}}LLD {{.+}}
 # IL-V:         {{^}}.assembly 'v' { .ver 0:0:0:0 }{{$}}
 
-# RUN: msil-ld --help 2>&1 | %{fc} %{one} --check-prefix=HELP \
-# RUN:   --implicit-check-not=--reference --implicit-check-not=gc-sections \
-# RUN:   --implicit-check-not=--export-class \
-# RUN:   --implicit-check-not=--print-bcl --implicit-check-not=--interface-only
+## FileCheck checks --implicit-check-not only before the first match of a
+## CHECK-DAG group, so the HELP run cannot keep a later option out of the
+## table; HELP-NONE, made only of -NOT lines, checks the whole output
+## (M15 open issue 13).
+# RUN: msil-ld --help > help.txt 2>&1
+# RUN: %{fc} %{one} --check-prefix=HELP --implicit-check-not=--reference \
+# RUN:   --implicit-check-not=--export-class --implicit-check-not=--print-bcl \
+# RUN:   --implicit-check-not=--interface-only --input-file=help.txt
+# RUN: FileCheck %s --check-prefix=HELP-NONE --input-file=help.txt
+
+# HELP-NONE-NOT: PLEASE submit
+# HELP-NONE-NOT: Stack dump
+# HELP-NONE-NOT: LLVM ERROR
+# HELP-NONE-NOT: error:
+# HELP-NONE-NOT: warning:
+# HELP-NONE-NOT: --reference
+# HELP-NONE-NOT: --export-class
+# HELP-NONE-NOT: --print-bcl
+# HELP-NONE-NOT: --interface-only
+# HELP-NONE-NOT: msil-reloc-loop-threshold
+# HELP-NONE-NOT: msil-type-member-limit
 
 # HELP:         OVERVIEW:
 # HELP:         USAGE: {{.*}}msil-ld{{.*}} [options] file...
@@ -62,6 +96,9 @@
 # HELP-DAG:     --no-dependent-libraries
 # HELP-DAG:     --print-imports
 # HELP-DAG:     --ucrtbase-imports
+# HELP-DAG:     --gc-sections
+# HELP-DAG:     --no-gc-sections
+# HELP-DAG:     --print-gc-sections
 
 # RUN: not msil-ld 2>&1 | %{fc} %{one} --check-prefix=NOINPUT
 # RUN: not msil-ld --lto-emit-asm -o x.il 2>&1 | %{fc} %{one} --check-prefix=NOINPUT
@@ -85,14 +122,59 @@
 ## Options of later milestones are unknown arguments (5.9.3).
 # RUN: not msil-ld --no-such-option --lto-emit-asm main.o -o u.il 2>&1 \
 # RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--no-such-option
-# RUN: not msil-ld --gc-sections --lto-emit-asm main.o -o u.il 2>&1 \
-# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--gc-sections
 # RUN: not msil-ld --reference=refs --lto-emit-asm main.o -o u.il 2>&1 \
 # RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--reference=refs
 # RUN: not msil-ld --export-class=Contoso.Native --lto-emit-asm main.o -o u.il 2>&1 \
 # RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--export-class=Contoso.Native
 
 # UNKNOWN:      {{^}}msil-ld: error: unknown argument: [[OPT]]
+
+## M20's options are accepted. main.o's text has no data relocation to loop
+## over, no unused function and few members, so they change nothing in it.
+# RUN: mkdir m20 m20plain
+# RUN: msil-ld --lto-emit-asm main.o -o m20plain/prog.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm --gc-sections --no-gc-sections --print-gc-sections \
+# RUN:   --msil-reloc-loop-threshold=0 --msil-type-member-limit=100 main.o -o m20/prog.il 2>&1 | count 0
+# RUN: cmp m20plain/prog.il m20/prog.il
+
+## --msil-reloc-loop-threshold reaches --lto-emit-asm's code generation:
+## reloc.o's three data relocations use the '<msil>relocs' loop at 0, as the
+## PE of the same link does, and stay straight-line at the default; an llc
+## -msil-reloc-loop-threshold through -mllvm wins over the msil-ld option.
+# RUN: llvm-as reloc.ll -o reloc.o
+# RUN: mkdir rl-def rl-t0 rl-mllvm
+# RUN: msil-ld --lto-emit-asm reloc.o -o rl-def/prog.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=RL-STRAIGHT --implicit-check-not="<msil>relocs" --input-file=rl-def/prog.il
+# RUN: msil-ld --lto-emit-asm --msil-reloc-loop-threshold=0 reloc.o -o rl-t0/prog.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=RL-LOOP --input-file=rl-t0/prog.il
+# RUN: msil-ld --lto-emit-asm -mllvm -msil-reloc-loop-threshold=1000 --msil-reloc-loop-threshold=0 \
+# RUN:   reloc.o -o rl-mllvm/prog.il 2>&1 | count 0
+# RUN: cmp rl-def/prog.il rl-mllvm/prog.il
+# RUN: msil-ld --msil-reloc-loop-threshold=0 reloc.o -o rl-t0.exe 2>&1 | count 0
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump --canonical rl-t0.exe | FileCheck %s --check-prefix=RL-PE-LOOP %}
+# RUN: msil-ld reloc.o -o rl-def.exe 2>&1 | count 0
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump --canonical rl-def.exe \
+# RUN:   | FileCheck %s --check-prefix=RL-PE-STRAIGHT --implicit-check-not="<msil>relocs" %}
+
+# RL-STRAIGHT:      {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+# RL-STRAIGHT:      {{^}}  ldsfld native int 'a'{{$}}
+# RL-STRAIGHT-NEXT: {{^}}  stind.i{{$}}
+# RL-STRAIGHT:      {{^}}  ldsfld native int 'b'{{$}}
+# RL-STRAIGHT-NEXT: {{^}}  stind.i{{$}}
+# RL-STRAIGHT:      {{^}}  ldsfld native int 'c'{{$}}
+# RL-STRAIGHT-NEXT: {{^}}  stind.i{{$}}
+# RL-STRAIGHT-NEXT: {{^}}  ret{{$}}
+# RL-LOOP:          {{^}}.class private explicit ansi sealed '<msil>relocs_t' extends [mscorlib]System.ValueType{{$}}
+# RL-LOOP:          {{^}}.field {{.*}}static valuetype '<msil>relocs_t' '<msil>relocs' at '{{[^']+}}'{{$}}
+# RL-LOOP:          {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+# RL-LOOP:          {{^}}  ldsflda valuetype '<msil>relocs_t' '<msil>relocs'{{$}}
+# RL-LOOP:          {{^[}]}} // end of method '.cctor'{{$}}
+# RL-PE-LOOP:       {{^}}  .field '<msil>relocs' valuetype '<msil>relocs_t' flags=0x0111{{$}}
+# RL-PE-LOOP:       {{^}}    L{{[0-9]+}}: ldsflda valuetype '<msil>relocs_t' '<Module>'::'<msil>relocs'{{$}}
+# RL-PE-STRAIGHT:   {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# RL-PE-STRAIGHT:   {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'c'{{$}}
+# RL-PE-STRAIGHT-NEXT: {{^}}    L{{[0-9]+}}: stind.i{{$}}
+# RL-PE-STRAIGHT-NEXT: {{^}}    L{{[0-9]+}}: ret{{$}}
 
 ## M15's options are accepted. A program without imports prints no import
 ## line, and its text does not change.
@@ -151,6 +233,23 @@ target triple = "x86_64-pc-windows-msvc-msil"
 
 define i32 @main() {
   ret i32 42
+}
+
+#--- reloc.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@a = global i32 1, align 4
+@b = global i32 2, align 4
+@c = global i32 3, align 4
+@tab = global [3 x ptr] [ptr @a, ptr @b, ptr @c], align 8
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %i = sext i32 %argc to i64
+  %p = getelementptr [3 x ptr], ptr @tab, i64 0, i64 %i
+  %q = load ptr, ptr %p, align 8
+  %v = load i32, ptr %q, align 4
+  ret i32 %v
 }
 
 #--- gnu.ll

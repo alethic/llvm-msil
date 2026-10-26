@@ -1,5 +1,6 @@
 # The commands of msil/utils/msil-prog.py (plan 5.12.4), from what it prints
-# when %msil_prog_build runs with the stand-ins of lit.local.cfg:
+# when %msil_prog_build runs with the stand-ins of lit.local.cfg (a later
+# --pipeline or --link-output wins over the one %msil_prog_build passes):
 # (1) MSIL mode (lto, il): each source compiled for the MSIL triple with
 #     %{msil_cflags}, -<L>, -flto and -c from the build directory, under a
 #     path relative to it; a stock source for the native triple with -flto
@@ -27,6 +28,30 @@
 #     A B> followed by the sysroot's libm.so.6, libc.so.6 and libgcc_s.so.1
 #     (-rpath $ORIGIN: a test-built shared library that msil-run.py --dep
 #     copies next to the program is found there; M15).
+# (5) MSIL mode under obj with pe (M20; what %msil_prog_build passes under
+#     msil_pipeline=asm and obj): each source compiled with -c and no -flto,
+#     a stock source still with -flto (bitcode beside the objects), the
+#     archives as in (1), and the link of the same arguments with -o
+#     prog.exe and no -Wl,--lto-emit-asm and no ilasm; --equiv-out (plan
+#     5.12.6) links the same inputs again with -Wl,--no-gc-sections into
+#     equiv/prog.exe and copies it to its file, and both images run;
+# (6) MSIL mode under lto with pe (M20): -flto compiles, the link into
+#     prog.exe, and with --also-il and --equiv-out (O4) a second link with
+#     -Wl,--lto-emit-asm into equiv/prog.il and a third with
+#     -Wl,--no-gc-sections into equiv/prog.exe, each copied to its file;
+# (7) under obj, --llc compiles a .ll source with
+#     'LLC -mtriple=<triple> -<L> -filetype=obj' (the %{msil_ll} of plan
+#     5.12.1) and a C source with clang -c as before;
+# (8) --equiv-skip FILE --test PATH: a 'skip O3' line of FILE that names PATH
+#     (repository-relative, so the absolute path of a test in the
+#     repository matches) or a directory above it, under obj, and a
+#     'skip O4' line under lto, leave out the equivalence link and the text
+#     link and print 'msil-prog: <oracle> skipped: <reason>'; a skip line for
+#     the other oracle, or for another path, does not. A qualified line
+#     'skip O3@<triple>:<level>' (plan section 12, 'Plan 5.12.6 amended
+#     (skip lines)') applies with msil-prog.py's own --triple and --level: it
+#     skips with the triple of %msil_prog_build at -O2, and not at -O1 or
+#     for another triple.
 # The later --triple, --native-ldflags, --ld-lld, --linux-sysroot and
 # --start options win over those of %msil_prog_build, which names the E7
 # oracle under the WSL runner; empty ones cancel them for (2) and (3).
@@ -38,7 +63,7 @@
 # RUN: %{harness_check} write %t/sysroot/usr/lib/x86_64-linux-gnu/libgcc_s.so.1
 
 # (1)
-# RUN: %msil_prog_build --level O1 --workdir %t/m --out %t/m/prog.exe --also-il %t/also.il --src %t/main.c %t/util.c --stock-src %t/stock.c --archives='one=%t/a1.c,stock:%t/a2.c' --lib='-Wl,--stand-in-extra -Wl,--another' --native-lib='-Wl,--stand-in-native' > %t/m.log 2>&1
+# RUN: %msil_prog_build --level O1 --workdir %t/m --out %t/m/prog.exe --also-il %t/also.il --src %t/main.c %t/util.c --stock-src %t/stock.c --archives='one=%t/a1.c,stock:%t/a2.c' --lib='-Wl,--stand-in-extra -Wl,--another' --native-lib='-Wl,--stand-in-native' --pipeline lto --link-output il > %t/m.log 2>&1
 # RUN: %{harness_check} contains %t/m.log "^msil-prog: .*prog-cc\.py\"? --as cc .*--target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \"?-I\S*Inputs\"? -O1 -flto -c \.\./main\.c -o obj/main\.o$" "^msil-prog: .*prog-cc\.py\"? --as cc .*--target=\S+-msil -std=gnu17 \S.* -O1 -flto -c \.\./util\.c -o obj/util\.o$"
 # RUN: %if msil-triple-windows %{ %{harness_check} contains %t/m.log "^msil-prog: .* --as cc .*--target=x86_64-pc-windows-msvc -std=gnu17 \S.* -O1 -flto -fno-ms-volatile -c \.\./stock\.c -o stock/stock\.o$" "^msil-prog: .* --as cc .*--target=x86_64-pc-windows-msvc -std=gnu17 \S.* -O1 -flto -fno-ms-volatile -c \.\./a2\.c -o ar/one/a2\.o$" %}
 # RUN: %if msil-triple-linux %{ %{harness_check} contains %t/m.log "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -std=gnu17 \S.* -O1 -flto -c \.\./stock\.c -o stock/stock\.o$" "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -std=gnu17 \S.* -O1 -flto -c \.\./a2\.c -o ar/one/a2\.o$" %}
@@ -69,6 +94,84 @@
 # RUN: %{harness_check} lacks %t/e.log "fuse-ld" "-flto" "msil-prog: error"
 # RUN: %{harness_check} contains %t/e/prog.elf "\A#!/bin/sh\nexit 11\n\Z"
 
+# (5)
+# RUN: %msil_prog_build --level O2 --workdir %t/o --out %t/o/prog.exe --equiv-out %t/o-equiv.exe --src %t/main.c %t/util.c --stock-src %t/stock.c --archives='one=%t/a1.c,stock:%t/a2.c' --lib='-Wl,--stand-in-extra' --native-lib='-Wl,--stand-in-native' --pipeline obj --link-output pe > %t/o.log 2>&1
+# RUN: %{harness_check} contains %t/o.log "^msil-prog: .*prog-cc\.py\"? --as cc .*--target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \"?-I\S*Inputs\"? -O2 -c \.\./main\.c -o obj/main\.o$" "^msil-prog: .* --as cc .*--target=\S+-msil -std=gnu17 \S.* -O2 -c \.\./a1\.c -o ar/one/a1\.o$" "^msil-prog: .* --as ar rcs ar/one/libone\.a ar/one/a1\.o ar/one/a2\.o$"
+# RUN: %if msil-triple-windows %{ %{harness_check} contains %t/o.log "^msil-prog: .* --as cc .*--target=x86_64-pc-windows-msvc -std=gnu17 \S.* -O2 -flto -fno-ms-volatile -c \.\./stock\.c -o stock/stock\.o$" %}
+# RUN: %if msil-triple-linux %{ %{harness_check} contains %t/o.log "^msil-prog: .* --as cc .*--target=x86_64-unknown-linux-gnu -std=gnu17 \S.* -O2 -flto -c \.\./stock\.c -o stock/stock\.o$" %}
+# RUN: %{harness_check} contains %t/o.log "^msil-prog: .* --as cc .*--target=\S+-msil --ld-path=\S+ -O2 (--sysroot=\S+ )?obj/main\.o obj/util\.o stock/stock\.o -Lar/one -lone -Wl,--stand-in-extra -Wl,--stand-in-native -o prog\.exe$" "^msil-prog: .* --as cc .*--target=\S+-msil --ld-path=\S+ -O2 (--sysroot=\S+ )?obj/main\.o obj/util\.o stock/stock\.o -Lar/one -lone -Wl,--stand-in-extra -Wl,--stand-in-native -Wl,--no-gc-sections -o equiv/prog\.exe$"
+# RUN: %{harness_check} lacks %t/o.log "-flto -c \.\./(main|util|a1)\.c" "lto-emit-asm" " -exe -output=" "msil-prog: error" "skipped"
+# RUN: %{harness_check} contains %t/o/prog.exe.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nobject stock/stock\.o stock\.c 4\nmember ar/one/libone\.a a1\.o 8\nmember ar/one/libone\.a a2\.o 16\narg -Wl,--stand-in-extra\narg -Wl,--stand-in-native\nld-path \S+\n\Z"
+# RUN: %{harness_check} contains %t/o/equiv/prog.exe.inputs "^arg -Wl,--stand-in-native\narg -Wl,--no-gc-sections\nld-path "
+# RUN: %msil_exec --out %t/o.out %t/o/prog.exe
+# RUN: %{harness_check} equals %t/o.out "[exit 31]"
+# RUN: %msil_exec --out %t/o-equiv.out %t/o-equiv.exe
+# RUN: %{harness_check} equals %t/o-equiv.out "[exit 31]"
+
+# (6)
+# RUN: %msil_prog_build --level O3 --workdir %t/l --out %t/l/prog.exe --also-il %t/l-text.il --equiv-out %t/l-equiv.exe --src %t/main.c %t/util.c --pipeline lto --link-output pe > %t/l.log 2>&1
+# RUN: %{harness_check} contains %t/l.log "^msil-prog: .* --as cc .*--target=\S+-msil -std=gnu17 \S.* -O3 -flto -c \.\./main\.c -o obj/main\.o$" "^msil-prog: .* --as cc .*--target=\S+-msil --ld-path=\S+ -O3 (--sysroot=\S+ )?obj/main\.o obj/util\.o -o prog\.exe$" "^msil-prog: .* --as cc .*--target=\S+-msil --ld-path=\S+ -O3 (--sysroot=\S+ )?obj/main\.o obj/util\.o -Wl,--lto-emit-asm -o equiv/prog\.il$" "^msil-prog: .* --as cc .*--target=\S+-msil --ld-path=\S+ -O3 (--sysroot=\S+ )?obj/main\.o obj/util\.o -Wl,--no-gc-sections -o equiv/prog\.exe$"
+# RUN: %{harness_check} lacks %t/l.log " -exe -output=" "msil-prog: error"
+# RUN: %{harness_check} contains %t/l-text.il "^\.assembly 'prog' " "ldc\.i4 3$"
+# RUN: %msil_exec --out %t/l.out %t/l-equiv.exe
+# RUN: %{harness_check} equals %t/l.out "[exit 3]"
+
+# (7)
+# RUN: %msil_prog_build --level O1 --workdir %t/i --out %t/i/prog.exe --llc='%{prog_cc} --as llc' --src %t/main.c %t/ir.ll --pipeline obj --link-output pe > %t/i.log 2>&1
+# RUN: %{harness_check} contains %t/i.log "^msil-prog: .*prog-cc\.py\"? --as cc .*--target=\S+-msil -std=gnu17 \S.* -O1 -c \.\./main\.c -o obj/main\.o$" "^msil-prog: .*prog-cc\.py\"? --as llc -mtriple=\S+-msil -O1 -filetype=obj \.\./ir\.ll -o obj/ir\.o$" "^msil-prog: .* -O1 (--sysroot=\S+ )?obj/main\.o obj/ir\.o -o prog\.exe$"
+# RUN: %msil_exec --out %t/i.out %t/i/prog.exe
+# RUN: %{harness_check} equals %t/i.out "[exit 33]"
+
+# (8)
+# RUN: %msil_prog_build --level O2 --workdir %t/s1 --out %t/s1/prog.exe --equiv-out %t/s1-equiv.exe --equiv-skip %t/allow-o3.txt --test %s --src %t/main.c --pipeline obj > %t/s1.log 2>&1
+# RUN: %{harness_check} contains %t/s1.log "^msil-prog: O3 skipped: the reason of the O3 line$" "-o prog\.exe$"
+# RUN: %{harness_check} lacks %t/s1.log "no-gc-sections"
+# RUN: %{harness_check} missing %t/s1-equiv.exe
+# RUN: %msil_prog_build --level O2 --workdir %t/s2 --out %t/s2/prog.exe --equiv-out %t/s2-equiv.exe --equiv-skip %t/allow-dir.txt --test %s --src %t/main.c --pipeline obj > %t/s2.log 2>&1
+# RUN: %{harness_check} contains %t/s2.log "^msil-prog: O3 skipped: every harness test$"
+# RUN: %{harness_check} missing %t/s2-equiv.exe
+# RUN: %msil_prog_build --level O2 --workdir %t/s3 --out %t/s3/prog.exe --also-il %t/s3.il --equiv-out %t/s3-equiv.exe --equiv-skip %t/allow-o4.txt --test %s --src %t/main.c --pipeline lto --link-output pe > %t/s3.log 2>&1
+# RUN: %{harness_check} contains %t/s3.log "^msil-prog: O4 skipped: the reason of the O4 line$"
+# RUN: %{harness_check} lacks %t/s3.log "no-gc-sections" "lto-emit-asm"
+# RUN: %{harness_check} missing %t/s3-equiv.exe
+# RUN: %{harness_check} missing %t/s3.il
+# RUN: %msil_prog_build --level O2 --workdir %t/s4 --out %t/s4/prog.exe --equiv-out %t/s4-equiv.exe --equiv-skip %t/allow-o4.txt --test %s --src %t/main.c --pipeline obj > %t/s4.log 2>&1
+# RUN: %msil_prog_build --level O2 --workdir %t/s5 --out %t/s5/prog.exe --equiv-out %t/s5-equiv.exe --equiv-skip %t/allow-other.txt --test %s --src %t/main.c --pipeline obj > %t/s5.log 2>&1
+# RUN: %{harness_check} contains %t/s4.log " -Wl,--no-gc-sections -o equiv/prog\.exe$"
+# RUN: %{harness_check} contains %t/s5.log " -Wl,--no-gc-sections -o equiv/prog\.exe$"
+# RUN: %{harness_check} lacks %t/s4.log "skipped"
+# RUN: %{harness_check} lacks %t/s5.log "skipped"
+# RUN: %{harness_check} write %t/allow-qualified.txt "skip O3@%msil_triple:O2 msil/test/harness/prog/commands.test this triple at -O2"
+# RUN: %{harness_check} write %t/allow-qualified-other.txt "skip O3@other-%msil_triple:O2 msil/test/harness/prog/commands.test another triple at -O2"
+# RUN: %msil_prog_build --level O2 --workdir %t/s6 --out %t/s6/prog.exe --equiv-out %t/s6-equiv.exe --equiv-skip %t/allow-qualified.txt --test %s --src %t/main.c --pipeline obj > %t/s6.log 2>&1
+# RUN: %msil_prog_build --level O1 --workdir %t/s7 --out %t/s7/prog.exe --equiv-out %t/s7-equiv.exe --equiv-skip %t/allow-qualified.txt --test %s --src %t/main.c --pipeline obj > %t/s7.log 2>&1
+# RUN: %msil_prog_build --level O2 --workdir %t/s8 --out %t/s8/prog.exe --equiv-out %t/s8-equiv.exe --equiv-skip %t/allow-qualified-other.txt --test %s --src %t/main.c --pipeline obj > %t/s8.log 2>&1
+# RUN: %{harness_check} contains %t/s6.log "^msil-prog: O3 skipped: this triple at -O2$"
+# RUN: %{harness_check} lacks %t/s6.log "no-gc-sections"
+# RUN: %{harness_check} missing %t/s6-equiv.exe
+# RUN: %{harness_check} contains %t/s7.log " -O1 (--sysroot=\S+ )?obj/main\.o -Wl,--no-gc-sections -o equiv/prog\.exe$"
+# RUN: %{harness_check} contains %t/s8.log " -O2 (--sysroot=\S+ )?obj/main\.o -Wl,--no-gc-sections -o equiv/prog\.exe$"
+# RUN: %{harness_check} lacks %t/s7.log "skipped"
+# RUN: %{harness_check} lacks %t/s8.log "skipped"
+# RUN: %msil_exec --out %t/s4.out %t/s4-equiv.exe
+# RUN: %{harness_check} equals %t/s4.out "[exit 1]"
+
+#--- allow-o3.txt
+# A skip line for this test's O3 comparison.
+skip O3 msil/test/harness/prog/commands.test the reason of the O3 line
+#--- allow-dir.txt
+skip O3 msil/test/harness/ every harness test
+#--- allow-o4.txt
+assembly-hash --assembly-hash=ignore # an entry beside the skip line
+skip O4 msil/test/harness/prog/commands.test the reason of the O4 line
+#--- allow-other.txt
+skip O3 msil/test/harness/prog/other.test another test
+skip O3 msil/test/harness/pro/ a directory that only starts like this one
+#--- ir.ll
+; prog-value: 32
+define i32 @f() {
+  ret i32 32
+}
 #--- main.c
 // prog-value: 1
 #--- util.c

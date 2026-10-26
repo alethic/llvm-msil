@@ -4,18 +4,27 @@ add_public_tablegen_target(MSILOptionsTableGen)
 
 add_lld_library(lldMSIL
   Driver.cpp
+  InputChunks.cpp
   InputFiles.cpp
   LTO.cpp
   MapFile.cpp
+  MarkLive.cpp
   NativeLibraries.cpp
+  OutputSegment.cpp
+  Relocations.cpp
+  Signatures.cpp
   SymbolTable.cpp
   Symbols.cpp
+  Synthetic.cpp
+  TokenMap.cpp
+  Writer.cpp
 
   LINK_COMPONENTS
   ${LLVM_TARGETS_TO_BUILD}
   BinaryFormat
   BitWriter
   BitReader
+  CLI
   Core
   LTO
   MC

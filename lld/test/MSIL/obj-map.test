@@ -1,0 +1,127 @@
+## The PE map (ImplementationPlan.md 5.9.14, M20): -Map=<file> (and
+## --print-map or -M on standard output) writes, in this order, the header
+##   msil-ld map of <output> (<codegen triple>)
+## then 'Inputs:' (loaded files in load order, the native library included),
+## 'Symbols:' (Kind Binding Input Symbol), and from M20 the sections that show
+## tokens and offsets that exist only in the PE:
+## - 'Image: <total> bytes (<initialized> initialized), align <n>' and a table
+##   'Offset Size Align Section / input / symbol' with one row per output
+##   section, the input segments under it ('<file>:segment <i>', the index in
+##   the object's SEGMENTS) and their symbols under those;
+## - 'Methods:' (Token Owner Input Symbol), 'Fields:' (Token Owner Offset
+##   Symbol, the offset in the image) and 'Imports:' (Token Module!Entry
+##   Symbol).
+## The program is obj-basic.test's: msg (6 bytes, a.o's segment 0), table
+## (8 bytes at 8, a.o's segment 1), counter (4 bytes at 16, b.o's segment 0),
+## then scratch (12 zero bytes at 20, b.o's segment 1); main, helper, add3,
+## then the P/Invoke stub of puts. The plan fixes the sections, columns and
+## their order, not the spacing, so rows are matched with flexible blanks
+## (the indentation of the section, input and symbol names follows
+## 5.9.14's example).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj a.ll -o a.o
+# RUN: llc -filetype=obj b.ll -o b.o
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-stdio.def /out:ucrt.lib
+
+# RUN: msil-ld a.o b.o ucrt.lib -o prog.exe -Map=prog.map 2>&1 | count 0
+# RUN: FileCheck %s --input-file=prog.map
+# RUN: FileCheck %s --check-prefix=SYMBOLS --input-file=prog.map
+# RUN: FileCheck %s --check-prefix=IMAGE --input-file=prog.map
+# RUN: FileCheck %s --check-prefix=METHODS --input-file=prog.map
+# RUN: FileCheck %s --check-prefix=FIELDS --input-file=prog.map
+# RUN: FileCheck %s --check-prefix=IMPORTS --input-file=prog.map
+
+# CHECK:      {{^}}msil-ld map of prog.exe (x86_64-pc-windows-msvc-msil){{$}}
+# CHECK-NEXT: {{^}}Inputs:{{$}}
+# CHECK-NEXT: {{^ *}}a.o{{$}}
+# CHECK-NEXT: {{^ *}}b.o{{$}}
+# CHECK-NEXT: {{^ *}}ucrt.lib{{.*}}
+# CHECK:      {{^}}Symbols:{{$}}
+# CHECK:      {{^}}Image: 32 bytes (20 initialized), align 16{{$}}
+# CHECK:      {{^}}Methods:{{$}}
+# CHECK:      {{^}}Fields:{{$}}
+# CHECK:      {{^}}Imports:{{$}}
+
+# SYMBOLS:     {{^}}Symbols:{{$}}
+# SYMBOLS-DAG: {{^ *}}DefinedFunction{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}a.o{{[[:space:]]+}}main{{$}}
+# SYMBOLS-DAG: {{^ *}}DefinedFunction{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}b.o{{[[:space:]]+}}add3{{$}}
+# SYMBOLS-DAG: {{^ *}}DefinedData{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}a.o{{[[:space:]]+}}table{{$}}
+# SYMBOLS-DAG: {{^ *}}DefinedData{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}b.o{{[[:space:]]+}}counter{{$}}
+# SYMBOLS-DAG: {{^ *}}NativeFunction{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}ucrt.lib{{.*}}{{[[:space:]]+}}puts{{$}}
+
+# IMAGE:      {{^}}Image: 32 bytes (20 initialized), align 16{{$}}
+# IMAGE-NEXT: {{^ *Offset +Size +Align +Section / input / symbol$}}
+# IMAGE-NEXT: {{^ +0 +6 +1 \.rodata$}}
+# IMAGE-NEXT: {{^ +0 +6 +1   a\.o:segment 0$}}
+# IMAGE-NEXT: {{^ +0 +6 +[0-9]+     msg$}}
+# IMAGE-NEXT: {{^ +8 +8 +8 \.data$}}
+# IMAGE-NEXT: {{^ +8 +8 +8   a\.o:segment 1$}}
+# IMAGE-NEXT: {{^ +8 +8 +[0-9]+     table$}}
+# IMAGE-NEXT: {{^ +16 +4 +4 \.data$}}
+# IMAGE-NEXT: {{^ +16 +4 +4   b\.o:segment 0$}}
+# IMAGE-NEXT: {{^ +16 +4 +[0-9]+     counter$}}
+# IMAGE-NEXT: {{^ +20 +12 +4 \.bss$}}
+# IMAGE-NEXT: {{^ +20 +12 +4   b\.o:segment 1$}}
+# IMAGE-NEXT: {{^ +20 +12 +[0-9]+     scratch$}}
+# IMAGE-NOT:  {{^ +[0-9]}}
+# IMAGE:      {{^}}Methods:{{$}}
+
+# METHODS:      {{^}}Methods:{{$}}
+# METHODS-NEXT: {{^ *Token +Owner +Input +Symbol$}}
+# METHODS-NEXT: {{^ +0x06000001 +<Module> +a\.o +main$}}
+# METHODS-NEXT: {{^ +0x06000002 +<Module> +b\.o +helper$}}
+# METHODS-NEXT: {{^ +0x06000003 +<Module> +b\.o +add3$}}
+
+# FIELDS:      {{^}}Fields:{{$}}
+# FIELDS-NEXT: {{^ *Token +Owner +Offset +Symbol$}}
+# FIELDS-NEXT: {{^ +0x04000001 +<Module> +0 +msg$}}
+# FIELDS-NEXT: {{^ +0x04000002 +<Module> +8 +table$}}
+# FIELDS-NEXT: {{^ +0x04000003 +<Module> +16 +counter$}}
+# FIELDS-NEXT: {{^ +0x04000004 +<Module> +20 +scratch$}}
+
+# IMPORTS:      {{^}}Imports:{{$}}
+# IMPORTS-NEXT: {{^ *Token +Module!Entry +Symbol$}}
+# IMPORTS-NEXT: {{^ +0x06000004 +api-ms-win-crt-stdio-l1-1-0\.dll!puts +puts$}}
+
+## --print-map and -M write the same map to standard output.
+# RUN: msil-ld a.o b.o ucrt.lib -o prog.exe --print-map > print.map 2>&1
+# RUN: diff --strip-trailing-cr prog.map print.map
+# RUN: msil-ld a.o b.o ucrt.lib -o prog.exe -M > m.map 2>&1
+# RUN: diff --strip-trailing-cr prog.map m.map
+
+#--- a.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private unnamed_addr constant [6 x i8] c"hello\00", align 1
+@table = global [1 x ptr] [ptr @add3], align 8
+@counter = external global i32
+
+declare i32 @add3(i32)
+declare i32 @puts(ptr)
+
+define i32 @main() {
+  %p = call i32 @puts(ptr @msg)
+  %f = load ptr, ptr @table
+  %r = call i32 %f(i32 1)
+  %c = load i32, ptr @counter
+  %s = add i32 %r, %c
+  ret i32 %s
+}
+
+#--- b.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = global i32 5, align 4
+@scratch = global [3 x i32] zeroinitializer, align 4
+
+define internal i32 @helper(i32 %x) {
+  %r = add i32 %x, 3
+  ret i32 %r
+}
+
+define i32 @add3(i32 %x) {
+  %h = call i32 @helper(i32 %x)
+  store i32 %h, ptr @scratch
+  ret i32 %h
+}

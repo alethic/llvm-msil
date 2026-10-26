@@ -1,0 +1,40 @@
+# Matrix case missing-arg-adapter: a K&R call passes fewer arguments than the definition takes (native).
+# a.c calls scale() through a declaration without a prototype with one
+# argument; b.c defines scale(int value, int unused), which never reads its
+# second parameter, so natively the missing argument does not matter. The
+# call site's int32(int32) meets int32(int32, int32), which 5.9.8's table
+# adapts: '<msil>adapt_<name>_<n>' passes zero for the missing parameter,
+# with a warning (the object link names the objects, the LTO link's text
+# leaves out the ' in <file>' parts), and the program prints the native
+# transcript. A second call with both arguments matches the definition and
+# is direct. Both paths warn exactly once at -O0 and -O2: msil-ld's LTO
+# applies the table before LTO optimization too, and code generation then
+# finds the call adapted (section 12 row 'Plan 5.9.8 (LTO path) and the D30
+# row of 2026-10-21 amended'). Plan 5.9.16 row missing-arg-adapter (M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# OBJ:      {{^}}msil-ld: warning: function signature mismatch: scale{{$}}
+# OBJ-NEXT: {{^}}>>> defined as int32(int32, int32) in {{.*}}b.o{{$}}
+# OBJ-NEXT: {{^}}>>> called as int32(int32) in {{.*}}a.o{{$}}
+# OBJ-NEXT: {{^}}>>> adapter: {{.+}}
+# LTO:      {{^}}msil-ld: warning: {{.*}}function signature mismatch: scale{{$}}
+# LTO-NEXT: {{^}}>>> defined as int32(int32, int32){{$}}
+# LTO-NEXT: {{^}}>>> called as int32(int32){{$}}
+# LTO-NEXT: {{^}}>>> adapter: {{.+}}
+#--- a.c
+#include "msil_test.h"
+int scale();
+int main(void) {
+  int one = scale(5);
+  int two = scale(6, 99);
+  put_kv("scale(5)", one);
+  put_kv("scale(6, 99)", two);
+  return one + two;
+}
+#--- b.c
+int scale(int value, int unused) { return value * 3 + 1; }

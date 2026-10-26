@@ -1,0 +1,108 @@
+# Matrix case gc-used-retain: --gc-sections keeps used and retain data and __start_ sections (native).
+# msil-ld removes unreferenced methods and segments by default (plan 5.9.11),
+# but its roots include every NO_STRIP symbol (C 'used', and 'retain', which
+# clang puts in llvm.used on MSIL triples) and, on non-Windows triples, every
+# segment of a section that a referenced __start_/__stop_ symbol names
+# (lld/ELF's -z nostart-stop-gc behaviour). Data that only the section layout
+# reaches must survive. Two groups:
+# - gcset: on Linux triples, main.c walks it from __start_gcset to
+#   __stop_gcset; it holds a 'used' static record in b.c, a 'used' and
+#   'retain' static record in c.c, and in e.c an external record that
+#   nothing references and that is e.c's only gcset member. A live segment
+#   in an explicit section keeps live only the segments of the same object,
+#   section name and group (section 12 row 'Plan 5.9.11 amended (roots;
+#   M20.b)', rule (a)), and e.c has no other, so on the object pipeline the
+#   referenced __start_gcset/__stop_gcset root alone keeps e.c's record (an
+#   external record beside b.c's 'used' one would be kept by rule (a) with
+#   no __start_ reference at all); under -flto the bitcode of e.c's record
+#   reaches LTO, and the section that __start_gcset names keeps it there
+#   too, as native LTO keeps it. Windows triples define no __start_ symbols
+#   (plan 5.9.9), so there the group is 'gcset$m' between the marker arrays
+#   of 'gcset$a' (a.c) and 'gcset$z' (d.c), COFF's grouping by the name
+#   before '$', sorted by full name, and e.c's external record is 'used' too.
+# - gcadj (both triples): the marker arrays gcadj_first (a.c) and gcadj_last
+#   (d.c), which main.c references, and between them a 'used' static record
+#   of b.c and an external 'retain' record of c.c that nothing references; on
+#   Linux triples all four are in section gcadj, which nothing names with
+#   __start_, so only NO_STRIP keeps the two in the middle; on Windows
+#   triples the sections are 'gcadj$a', 'gcadj$m' and 'gcadj$z'.
+# Natively the same layout comes from ld.lld (input order within a section)
+# and lld-link ('$' groups); the program prints how many records each walk
+# finds and their sum. Plan 5.9.16 row gc-used-retain (M20).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/a.c %t/b.c %t/c.c %t/d.c %t/e.c
+# RUN: %{msil_prog}
+#--- reg.h
+struct reg {
+  int v;
+};
+#if defined(_WIN32)
+#define GCSET_FIRST "gcset$a"
+#define GCSET "gcset$m"
+#define GCSET_LAST "gcset$z"
+#define GCSET_EXTERNAL_USED __attribute__((used))
+#define GCADJ_FIRST "gcadj$a"
+#define GCADJ "gcadj$m"
+#define GCADJ_LAST "gcadj$z"
+#else
+#define GCSET "gcset"
+#define GCSET_EXTERNAL_USED
+#define GCADJ_FIRST "gcadj"
+#define GCADJ "gcadj"
+#define GCADJ_LAST "gcadj"
+#endif
+#--- main.c
+#include "msil_test.h"
+#include "reg.h"
+#if defined(_WIN32)
+extern const struct reg gcset_first[], gcset_last[];
+#define GCSET_BEGIN (gcset_first + 1)
+#define GCSET_END gcset_last
+#else
+extern const struct reg __start_gcset[], __stop_gcset[];
+#define GCSET_BEGIN __start_gcset
+#define GCSET_END __stop_gcset
+#endif
+extern const struct reg gcadj_first[], gcadj_last[];
+
+static int walk(const char *name, const struct reg *p, const struct reg *end) {
+  int n = 0, s = 0;
+  for (; p < end; ++p) {
+    ++n;
+    s += p->v;
+  }
+  put_str(name);
+  put_kv("records", n);
+  put_kv("sum", s);
+  return s;
+}
+
+int main(void) {
+  int r = walk("gcset", GCSET_BEGIN, GCSET_END);
+  r += walk("gcadj", gcadj_first + 1, gcadj_last);
+  put_kv("gcadj markers", gcadj_first[0].v + gcadj_last[0].v);
+  return r & 0xff;
+}
+#--- a.c
+#include "reg.h"
+#if defined(_WIN32)
+const struct reg gcset_first[1] __attribute__((section(GCSET_FIRST))) = {{0}};
+#endif
+const struct reg gcadj_first[1] __attribute__((section(GCADJ_FIRST))) = {{100}};
+#--- b.c
+#include "reg.h"
+static const struct reg set_b __attribute__((used, section(GCSET))) = {3};
+static const struct reg adj_b __attribute__((used, section(GCADJ))) = {20};
+#--- c.c
+#include "reg.h"
+static const struct reg set_c __attribute__((used, retain, section(GCSET))) = {7};
+const struct reg adj_c __attribute__((retain, section(GCADJ))) = {30};
+#--- d.c
+#include "reg.h"
+#if defined(_WIN32)
+const struct reg gcset_last[1] __attribute__((section(GCSET_LAST))) = {{0}};
+#endif
+const struct reg gcadj_last[1] __attribute__((section(GCADJ_LAST))) = {{900}};
+#--- e.c
+#include "reg.h"
+GCSET_EXTERNAL_USED const struct reg set_e_external __attribute__((section(GCSET))) = {5};

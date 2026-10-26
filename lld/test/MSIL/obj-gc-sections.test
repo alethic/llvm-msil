@@ -1,0 +1,291 @@
+## --gc-sections, the default (ImplementationPlan.md 5.9.11, with the
+## section 12 row 'Plan 5.9.11 amended (roots; M20.b)'): the units are
+## methods, segments and commons. The roots are the entry symbol and
+## '<msil>Main', -u symbols, NO_STRIP symbols (llvm.used), RETAIN segments,
+## every INIT entry, every segment of a section that a referenced
+## '__start_'/'__stop_' names (lld/ELF's -z nostart-stop-gc, so r2 stays
+## although nothing reads it), and the table roots: every segment whose
+## section cli::classifySection puts, under the triple's rules, in the
+## constructor-table, destructor-table or unsupported class, which the
+## writer runs or reports (TLS sections are not table roots). Besides:
+## (a) a live segment in an explicit section (a SEGMENTS name other than
+##     '.rodata', '.data', '.bss', '.tdata' and '.tbss') keeps alive every
+##     segment of its object with the same name and the same COMDAT group,
+##     or none, as lld/ELF keeps a whole input section;
+## (b) on Windows triples every segment in an explicit section that belongs
+##     to no COMDAT group is a root (lld-link /OPT:REF discards only COMDAT
+##     sections).
+## Marking follows token sites of live methods, relocations of live segments
+## and symbols to their definitions. llvm.compiler.used retains nothing
+## (5.8.10). Dead units are dropped, and --print-gc-sections prints
+## 'removing unused section <file>:(<name>)' for each: a method by its
+## function, a segment by its defining global and a common by its symbol
+## (the section 12 row 'msil-ld texts and behaviour that 5.9.3, 5.9.11,
+## 5.9.13 and 5.9.14 do not state'). Explicit --gc-sections is the default;
+## --no-gc-sections keeps every unit. The cases:
+## - g1.o: 5.9.11's roots, and the names of two dead methods and three dead
+##   segments (unused_data, cu_data, and sc, alone in section 'other');
+## - comm.o: an unreferenced common goes, a referenced one stays;
+## - ex1.o and ex2.o, Linux, (a): dead_s shares section 'myset' and its
+##   object with the live live_s and stays; ex2.o's dead_b has the same
+##   section name in another object with no live member there and goes; in
+##   section 'gset', gk_dead stays with the live gk of its COMDAT group,
+##   while nogrp_gset (no group) goes; grp_myset, the member of an
+##   unreferenced group in 'myset', goes with its group although live_s is
+##   live;
+## - w.ll on Windows, (b): the dead non-COMDAT wsec in 'mysec$m' stays; the
+##   dead COMDAT member wc in the same section and the dead default-section
+##   wdef go. On Linux all three go;
+## - tab.o, Linux, the table roots: an unreferenced '.CRT$XCU' segment is
+##   data under ELF rules and goes; an unreferenced '.tdata' segment goes
+##   silently (--no-gc-sections keeps it, and it is 5.9.9's TLS error);
+##   pre.o's '.preinit_array' slot, not in llvm.used, is a table root and
+##   is reported as unsupported (the section 12 row 'Plan 5.9.9 and M20.a
+##   (1) amended (`.preinit_array`)').
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj g1.ll -o g1.o
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: mkdir default print explicit
+# RUN: msil-ld g1.o -o default/gc.exe 2>&1 | count 0
+# RUN: llvm-cil-dump default/gc.exe > gc.txt
+# RUN: FileCheck %s --check-prefix=GC --implicit-check-not=unused_ --implicit-check-not=u_fn \
+# RUN:   --implicit-check-not=cu_data --implicit-check-not="'sc'" --input-file=gc.txt
+# RUN: %python %S/Inputs/cctor.py gc.txt | FileCheck %s --check-prefix=GC-CCTOR
+
+# GC:      {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0111{{$}}
+# GC-NEXT: {{^}}    .data 16 bytes{{$}}
+# GC-NEXT: {{^}}      01 00 00 00 03 00 00 00 05 00 00 00 06 00 00 00{{$}}
+# GC-NEXT: {{^}}  .field '__start_keepme' native int flags=0x{{[0-9A-F]+}}{{$}}
+# GC-NEXT: {{^}}  .field 'live_data' native int flags=0x0036{{$}}
+# GC-NEXT: {{^}}  .field 'r1' native int flags=0x0033{{$}}
+# GC-NEXT: {{^}}  .field 'r2' native int flags=0x0033{{$}}
+# GC-NEXT: {{^}}  .field 'used_data' native int flags=0x0033{{$}}
+# GC-NEXT: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# GC:      {{^}}  .method 'ctor_fn' void() flags=0x0013 impl=0x0000{{$}}
+# GC:      {{^}}  .method 'live_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# GC:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# GC:      {{^}}  .method 'used_fn' void() flags=0x0013 impl=0x0000{{$}}
+
+# GC-CCTOR-DAG: {{^}}field __start_keepme = data+8{{$}}
+# GC-CCTOR-DAG: {{^}}call ctor_fn{{$}}
+
+## --print-gc-sections: the two dead methods and the three dead segments,
+## named after their functions and globals.
+# RUN: msil-ld --print-gc-sections g1.o -o print/gc.exe > print.txt 2>&1
+# RUN: FileCheck %s --check-prefix=PRINT --input-file=print.txt
+# RUN: FileCheck %s --check-prefix=PRINT-NUM --input-file=print.txt
+# RUN: cmp default/gc.exe print/gc.exe
+# PRINT-DAG: {{^}}removing unused section g1.o:(unused_fn){{$}}
+# PRINT-DAG: {{^}}removing unused section g1.o:(u_fn){{$}}
+# PRINT-DAG: {{^}}removing unused section g1.o:(unused_data){{$}}
+# PRINT-DAG: {{^}}removing unused section g1.o:(cu_data){{$}}
+# PRINT-DAG: {{^}}removing unused section g1.o:(sc){{$}}
+# PRINT-NUM-COUNT-5: {{^}}removing unused section g1.o:({{.*}}){{$}}
+# PRINT-NUM-NOT:     {{.}}
+
+## -u keeps u_fn; --gc-sections given explicitly changes nothing.
+# RUN: msil-ld --print-gc-sections -u u_fn g1.o -o u.exe > u.txt 2>&1
+# RUN: FileCheck %s --check-prefix=U-NUM --input-file=u.txt
+# RUN: llvm-cil-dump u.exe | FileCheck %s --check-prefix=U
+# RUN: msil-ld --gc-sections g1.o -o explicit/gc.exe 2>&1 | count 0
+# RUN: cmp default/gc.exe explicit/gc.exe
+# U-NUM-COUNT-4: {{^}}removing unused section g1.o:(
+# U-NUM-NOT:     u_fn
+# U:             {{^}}  .method 'u_fn' int32() flags=0x0016 impl=0x0000{{$}}
+
+## --no-gc-sections keeps every unit, and prints nothing.
+# RUN: msil-ld --no-gc-sections --print-gc-sections g1.o -o all.exe 2>&1 | count 0
+# RUN: llvm-cil-dump all.exe | FileCheck %s --check-prefix=ALL
+# ALL:      {{^}}    .data 28 bytes{{$}}
+# ALL-NEXT: {{^}}      01 00 00 00 02 00 00 00 03 00 00 00 04 00 00 00 05 00 00 00 06 00 00 00 07 00 00 00{{$}}
+# ALL-DAG:  {{^}}  .field 'cu_data' native int flags=0x0033{{$}}
+# ALL-DAG:  {{^}}  .field 'sc' native int flags=0x0033{{$}}
+# ALL-DAG:  {{^}}  .field 'unused_data' native int flags=0x0036{{$}}
+# ALL-DAG:  {{^}}  .method 'u_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# ALL-DAG:  {{^}}  .method 'unused_fn' int32() flags=0x0016 impl=0x0000{{$}}
+
+## An unreferenced common, named after its symbol.
+# RUN: llc -filetype=obj comm.ll -o comm.o
+# RUN: msil-ld --print-gc-sections comm.o -o comm.exe 2>&1 | FileCheck %s --check-prefix=COMM %{crash}
+# RUN: llvm-cil-dump comm.exe | FileCheck %s --check-prefix=COMM-KEPT --implicit-check-not=comm_unused
+# COMM:      {{^}}removing unused section comm.o:(comm_unused){{$}}
+# COMM-NOT:  {{.}}
+# COMM-KEPT: {{^}}  .field 'comm_used' native int flags=0x{{[0-9A-F]+}}{{$}}
+
+## (a): explicit sections are kept per object, name and COMDAT group.
+# RUN: llc -filetype=obj ex1.ll -o ex1.o
+# RUN: llc -filetype=obj ex2.ll -o ex2.o
+# RUN: msil-ld --print-gc-sections ex1.o ex2.o -o ex.exe > ex.txt 2>&1
+# RUN: FileCheck %s --check-prefix=EX-PRINT %{crash} --input-file=ex.txt
+# RUN: FileCheck %s --check-prefix=EX-NUM --input-file=ex.txt
+# RUN: llvm-cil-dump ex.exe | FileCheck %s --check-prefix=EX --implicit-check-not="'nogrp_gset'" \
+# RUN:   --implicit-check-not="'grp_myset'" --implicit-check-not="'dead_b'"
+# EX-PRINT-DAG: {{^}}removing unused section ex1.o:(nogrp_gset){{$}}
+# EX-PRINT-DAG: {{^}}removing unused section ex1.o:(grp_myset){{$}}
+# EX-PRINT-DAG: {{^}}removing unused section ex2.o:(dead_b){{$}}
+# EX-NUM-COUNT-3: {{^}}removing unused section {{.+}}{{$}}
+# EX-NUM-NOT:     {{.}}
+# EX-DAG: {{^}}  .field 'dead_s' native int flags=0x{{[0-9A-F]+}}{{$}}
+# EX-DAG: {{^}}  .field 'gk' native int flags=0x{{[0-9A-F]+}}{{$}}
+# EX-DAG: {{^}}  .field 'gk_dead' native int flags=0x{{[0-9A-F]+}}{{$}}
+# EX-DAG: {{^}}  .field 'live_s' native int flags=0x{{[0-9A-F]+}}{{$}}
+
+## (b): on Windows a dead explicit-section segment outside any COMDAT group
+## is a root; on Linux it is not.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil w.ll -o w.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil w.ll -o wl.o
+# RUN: msil-ld --print-gc-sections w.o -o w.exe > w.txt 2>&1
+# RUN: FileCheck %s --check-prefix=W-PRINT %{crash} --input-file=w.txt
+# RUN: FileCheck %s --check-prefix=W-NUM --input-file=w.txt
+# RUN: llvm-cil-dump w.exe | FileCheck %s --check-prefix=W --implicit-check-not="'wc'" \
+# RUN:   --implicit-check-not="'wdef'"
+# W-PRINT-DAG: {{^}}removing unused section w.o:(wc){{$}}
+# W-PRINT-DAG: {{^}}removing unused section w.o:(wdef){{$}}
+# W-NUM-COUNT-2: {{^}}removing unused section {{.+}}{{$}}
+# W-NUM-NOT:     {{.}}
+# W: {{^}}  .field 'wsec' native int flags=0x{{[0-9A-F]+}}{{$}}
+# RUN: msil-ld --print-gc-sections wl.o -o wl.exe > wl.txt 2>&1
+# RUN: FileCheck %s --check-prefix=WL-PRINT %{crash} --input-file=wl.txt
+# RUN: FileCheck %s --check-prefix=WL-NUM --input-file=wl.txt
+# WL-PRINT-DAG: {{^}}removing unused section wl.o:(wsec){{$}}
+# WL-PRINT-DAG: {{^}}removing unused section wl.o:(wc){{$}}
+# WL-PRINT-DAG: {{^}}removing unused section wl.o:(wdef){{$}}
+# WL-NUM-COUNT-3: {{^}}removing unused section {{.+}}{{$}}
+# WL-NUM-NOT:     {{.}}
+
+## The table roots come from classifySection: '.CRT$XCU' is data on ELF and
+## '.tdata' is no table, so both go silently; '.preinit_array' is
+## unsupported under ELF rules, so its slot stays and is reported.
+# RUN: llc -filetype=obj tab.ll -o tab.o
+# RUN: msil-ld --print-gc-sections tab.o -o tab.exe > tab.txt 2>&1
+# RUN: FileCheck %s --check-prefix=TAB-PRINT %{crash} --input-file=tab.txt
+# RUN: FileCheck %s --check-prefix=TAB-NUM --input-file=tab.txt
+# TAB-PRINT-DAG: {{^}}removing unused section tab.o:(crt){{$}}
+# TAB-PRINT-DAG: {{^}}removing unused section tab.o:(td){{$}}
+# TAB-NUM-COUNT-2: {{^}}removing unused section {{.+}}{{$}}
+# TAB-NUM-NOT:     {{.}}
+# RUN: not msil-ld --no-gc-sections tab.o -o x.exe 2>&1 | FileCheck %s --check-prefix=TAB-TLS %{crash} \
+# RUN:   --implicit-check-not=error:
+# TAB-TLS: {{^}}msil-ld: error: thread-local storage is not supported yet: td in tab.o{{$}}
+# RUN: llc -filetype=obj pre.ll -o pre.o
+# RUN: not msil-ld pre.o -o x.exe 2>&1 | FileCheck %s --check-prefix=PRE %{crash} --implicit-check-not=error:
+# PRE: {{^}}msil-ld: error: section '.preinit_array' in pre.o is not supported{{$}}
+
+#--- g1.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@live_data = global i32 1, align 4
+@unused_data = global i32 2, align 4
+@used_data = internal global i32 3, align 4
+@cu_data = internal global i32 4, align 4
+@r1 = internal constant i32 5, section "keepme", align 4
+@r2 = internal constant i32 6, section "keepme", align 4
+@sc = internal constant i32 7, section "other", align 4
+@__start_keepme = external global i32
+@llvm.used = appending global [2 x ptr] [ptr @used_data, ptr @used_fn], section "llvm.metadata"
+@llvm.compiler.used = appending global [1 x ptr] [ptr @cu_data], section "llvm.metadata"
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @ctor_fn, ptr null }]
+
+define internal void @ctor_fn() {
+  ret void
+}
+
+define internal void @used_fn() {
+  ret void
+}
+
+define i32 @live_fn() {
+  %v = load i32, ptr @live_data
+  ret i32 %v
+}
+
+define i32 @unused_fn() {
+  %v = load i32, ptr @unused_data
+  ret i32 %v
+}
+
+define i32 @u_fn() {
+  ret i32 8
+}
+
+define i32 @main() {
+  %a = call i32 @live_fn()
+  %p = ptrtoint ptr @__start_keepme to i32
+  %r = add i32 %a, %p
+  ret i32 %r
+}
+
+#--- comm.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@comm_unused = common global i32 0, align 4
+@comm_used = common global i32 0, align 4
+
+define i32 @main() {
+  %v = load i32, ptr @comm_used
+  ret i32 %v
+}
+
+#--- ex1.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+$gk = comdat any
+$grp_myset = comdat any
+
+@live_s = internal constant i32 21, section "myset", align 4
+@dead_s = internal constant i32 22, section "myset", align 4
+@grp_myset = linkonce_odr constant i32 23, section "myset", comdat, align 4
+@gk = linkonce_odr constant i32 24, section "gset", comdat, align 4
+@gk_dead = linkonce_odr constant i32 25, section "gset", comdat($gk), align 4
+@nogrp_gset = internal constant i32 26, section "gset", align 4
+
+define i32 @main() {
+  %a = load i32, ptr @live_s
+  %b = load i32, ptr @gk
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+#--- ex2.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@dead_b = internal constant i32 27, section "myset", align 4
+
+#--- w.ll
+$wc = comdat any
+
+@wsec = internal constant i32 31, section "mysec$m", align 4
+@wc = linkonce_odr constant i32 32, section "mysec$m", comdat, align 4
+@wdef = internal constant i32 33, align 4
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- tab.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@crt = internal constant i32 9, section ".CRT$XCU", align 4
+@td = internal constant i32 7, section ".tdata", align 4
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- pre.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@pa = internal global ptr @early, section ".preinit_array", align 8
+
+define internal void @early() {
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}

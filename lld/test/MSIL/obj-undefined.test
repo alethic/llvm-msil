@@ -1,0 +1,105 @@
+## Undefined symbols of CIL objects (ImplementationPlan.md 5.9.6 step 4,
+## 5.9.11, 5.9.14):
+## - a symbol still undefined and GLOBAL after native binding is
+##   'undefined symbol: <s>' with one '>>> referenced by <file>:(<method>)'
+##   line per live method that references it, for functions and for data;
+## - references from dead units are not reported (lld semantics): with the
+##   default --gc-sections dead_fn is dropped and so is its reference to
+##   dead_missing; with --no-gc-sections dead_fn is kept and reported;
+## - an undefined HIDDEN symbol is 'undefined hidden symbol: <s>' and never
+##   binds late, even when a native library defines the name (puts and
+##   ucrt.lib).
+## The diagnostics come in no fixed order, so each is checked on its own,
+## and the total is counted.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj u1.ll -o u1.o
+# RUN: llc -filetype=obj u2.ll -o u2.o
+# RUN: llc -filetype=obj hid.ll -o hid.o
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-stdio.def /out:ucrt.lib
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: not msil-ld u1.o u2.o -o x.exe > live.txt 2>&1
+# RUN: FileCheck %s --check-prefix=FN --input-file=live.txt
+# RUN: FileCheck %s --check-prefix=DATA --input-file=live.txt
+# RUN: FileCheck %s --check-prefix=LIVENUM %{crash} --input-file=live.txt
+# RUN: FileCheck %s --check-prefix=LIVE-NONE --input-file=live.txt
+
+## missing_fn is referenced by main (u1.o) and by helper (u2.o).
+# FN:      {{^}}msil-ld: error: undefined symbol: missing_fn{{$}}
+# FN-NEXT: {{^}}>>> referenced by {{u1.o:\(main\)|u2.o:\(helper\)}}{{$}}
+# FN-NEXT: {{^}}>>> referenced by {{u1.o:\(main\)|u2.o:\(helper\)}}{{$}}
+# DATA:      {{^}}msil-ld: error: undefined symbol: missing_data{{$}}
+# DATA-NEXT: {{^}}>>> referenced by u1.o:(main){{$}}
+# LIVENUM-COUNT-2: {{^}}msil-ld: error:
+# LIVENUM-NOT:     {{error:|warning:}}
+# LIVE-NONE-NOT: dead_missing
+
+## Both references of missing_fn, each once.
+# RUN: FileCheck %s --check-prefix=REF-MAIN --input-file=live.txt
+# RUN: FileCheck %s --check-prefix=REF-HELPER --input-file=live.txt
+# REF-MAIN-COUNT-2: {{^}}>>> referenced by u1.o:(main){{$}}
+# REF-MAIN-NOT:     {{^}}>>> referenced by u1.o:(main){{$}}
+# REF-HELPER-COUNT-1: {{^}}>>> referenced by u2.o:(helper){{$}}
+# REF-HELPER-NOT:     {{^}}>>> referenced by u2.o:(helper){{$}}
+
+## Without --gc-sections the dead function's reference counts.
+# RUN: not msil-ld --no-gc-sections u1.o u2.o -o x.exe > all.txt 2>&1
+# RUN: FileCheck %s --check-prefix=DEAD --input-file=all.txt
+# RUN: FileCheck %s --check-prefix=ALLNUM %{crash} --input-file=all.txt
+# DEAD:      {{^}}msil-ld: error: undefined symbol: dead_missing{{$}}
+# DEAD-NEXT: {{^}}>>> referenced by u2.o:(dead_fn){{$}}
+# ALLNUM-COUNT-3: {{^}}msil-ld: error:
+# ALLNUM-NOT:     {{error:|warning:}}
+
+## An undefined hidden symbol, with and without a library that defines it.
+# RUN: not msil-ld hid.o -o x.exe 2>&1 | FileCheck %s --check-prefix=HIDDEN %{crash} \
+# RUN:   --implicit-check-not=error:
+# RUN: not msil-ld hid.o ucrt.lib -o x.exe 2>&1 | FileCheck %s --check-prefix=HIDDEN %{crash} \
+# RUN:   --implicit-check-not=error:
+# HIDDEN: {{^}}msil-ld: error: undefined hidden symbol: puts{{$}}
+
+#--- u1.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@missing_data = external global i32
+
+declare i32 @missing_fn(i32)
+declare i32 @helper(i32)
+
+define i32 @main() {
+  %v = load i32, ptr @missing_data
+  %a = call i32 @missing_fn(i32 %v)
+  %b = call i32 @helper(i32 %a)
+  ret i32 %b
+}
+
+#--- u2.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @missing_fn(i32)
+declare i32 @dead_missing()
+
+define i32 @helper(i32 %x) {
+  %r = call i32 @missing_fn(i32 %x)
+  ret i32 %r
+}
+
+define i32 @dead_fn() {
+  %r = call i32 @dead_missing()
+  ret i32 %r
+}
+
+#--- hid.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private unnamed_addr constant [3 x i8] c"hi\00", align 1
+
+declare hidden i32 @puts(ptr)
+
+define i32 @main() {
+  %r = call i32 @puts(ptr @msg)
+  ret i32 0
+}

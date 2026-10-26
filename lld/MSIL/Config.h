@@ -23,6 +23,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/LibraryOptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
+#include <cstdint>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -35,7 +36,10 @@ namespace lld::msil {
 class InputFile;
 class BitcodeFile;
 class NativeLibraryFile;
+class ObjFile;
 class Symbol;
+class SyntheticData;
+class SyntheticSegment;
 
 // This struct contains the global configuration for the linker.
 // Most fields are direct mapping from the command line options
@@ -54,9 +58,12 @@ struct Config {
   // --dependent-libraries (default) and --no-dependent-libraries.
   bool dependentLibraries;
   bool disableVerify;
+  // --gc-sections (default) and --no-gc-sections (plan 5.9.11).
+  bool gcSections;
   // -Bstatic: -l accepts static libraries only (plan 5.10.9).
   bool isStatic = false;
   bool ltoEmitAsm;
+  bool printGcSections;
   bool printImports;
   bool saveTemps;
   bool shared;
@@ -68,6 +75,18 @@ struct Config {
   unsigned ltoPartitions;
   unsigned ltoo;
   llvm::CodeGenOptLevel ltoCgo;
+  // --msil-reloc-loop-threshold (hidden, plan 5.9.10): the number of data
+  // relocations above which the trailer applies them through the relocation
+  // loop. Default 32.
+  uint32_t msilRelocLoopThreshold = 32;
+  // True if --msil-reloc-loop-threshold is given: under --lto-emit-asm its
+  // value reaches code generation as the module flag
+  // msil-reloc-loop-threshold (MSILLinkHooksPass, plan 5.9.10, 5.9.13).
+  bool msilRelocLoopThresholdGiven = false;
+  // --msil-type-member-limit (hidden, plan 5.9.12): replaces the per-type
+  // limits of 65,524 methods and 65,534 fields when it is smaller. UINT32_MAX
+  // (the default) keeps the real limits.
+  uint32_t msilTypeMemberLimit = UINT32_MAX;
 
   // --assembly-name and -soname. Empty means the stem of outputFile.
   llvm::StringRef assemblyName;
@@ -95,10 +114,19 @@ struct Ctx {
 
   llvm::SmallVector<BitcodeFile *, 0> bitcodeFiles;
   llvm::SmallVector<BitcodeFile *, 0> lazyBitcodeFiles;
+  // The loaded CIL objects (inputs and extracted archive members) in load
+  // order, then the objects that LTO wrote (ObjFile::isLTO, plan 5.9.13).
+  llvm::SmallVector<ObjFile *, 0> objectFiles;
+  // The synthetic segments of the data image: the common symbols that
+  // survived resolution, in plan 5.9.9 rule 3's order of their first
+  // declarations (SymbolTable::finalizeObjectSymbols), and the writer's
+  // address slots.
+  llvm::SmallVector<SyntheticSegment *, 0> syntheticSegments;
   // The native libraries read, in load order (plan 5.10.10).
   llvm::SmallVector<NativeLibraryFile *, 0> nativeLibraryFiles;
-  // Every loaded file (bitcode files, extracted archive members and native
-  // libraries) in load order: the Inputs: section of the map file.
+  // Every loaded file (CIL objects, bitcode files, extracted archive members
+  // and native libraries; not the objects that LTO wrote) in load order: the
+  // Inputs: section of the map file.
   llvm::SmallVector<InputFile *, 0> loadedFiles;
 
   // The definitions of the native libraries (plan 5.10.8).
@@ -117,8 +145,10 @@ struct Ctx {
 
   // linker-generated symbols
   struct MSILSym {
-    // M20 adds the linker-defined symbols of the data image (__start_X,
-    // __stop_X and the constructor tables, 5.9.9).
+    // The linker-defined symbols of the data image, in the order the writer
+    // defined them through SymbolTable::addSyntheticData(): __start_X and
+    // __stop_X (plan 5.9.9).
+    llvm::SmallVector<SyntheticData *, 0> startStop;
   };
   MSILSym sym;
 

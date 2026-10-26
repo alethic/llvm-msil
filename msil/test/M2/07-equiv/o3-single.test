@@ -1,0 +1,72 @@
+# Oracle O3 on one C file: canon(clang -c + msil-ld --no-gc-sections) == canon(clang -S + ilasm).
+# A one-object link and -S both run the whole-program model that lib/CLI
+# shares (cli::layoutImage, cli::buildTrailer; plan 5.9.9, 5.9.10), so their
+# canonical listings (plan 5.7.10) must be equal under exactly the six O3
+# normalizations of msil/utils/equiv-allowed.txt (plan 5.12.6):
+# assembly-hash (msil-ld writes HashAlgId SHA1, ilasm 0), ilasm-params (ilasm
+# adds Param rows, here for every parameter and main's argv array),
+# ilasm-initlocals (ilasm sets InitLocals on bodies without locals, here
+# no_locals), snan-quiet (ilasm quiets the float32 signaling NaN that main
+# passes to is_nan_f), pinvoke-module (-S binds puts through the standalone
+# D14 table, msil-ld through the native libraries) and pinvoke-access (-S
+# prints the P/Invoke public, msil-ld assembly). Encoding forms, .maxstack,
+# locals, data bytes, the .cctor's stores and every operand compare exactly.
+# The source has an unreferenced external function and variable, which -S
+# keeps and which the equivalence link keeps because it passes
+# -Wl,--no-gc-sections (plan 5.12.6, 'The equivalence link'). Both sides
+# write the module prog.exe and the assembly prog (the -o stem; -S takes it
+# from -msil-assembly-name). The composite runs the program against the
+# native transcript; the RUN lines after it build both sides at -O0 and -O2,
+# compare them with %msil_equiv and run both images. Plan 5.12.6 (O3, M20).
+# REQUIRES: msil-cil-dump || msil-mdcanon
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/one.c
+# RUN: %{msil_prog}
+# DEFINE: %{equiv_o3} = %msil_equiv --oracle O3 --test %s --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access
+# RUN: mkdir -p %t/O0/obj %t/O0/asm %t/O2/obj %t/O2/asm
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/one.c -o %t/O0/obj/one.o
+# RUN: %clang_msil %{msil_ldflags} -Wl,--no-gc-sections %t/O0/obj/one.o -o %t/O0/obj/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O0 -S %t/one.c -mllvm -msil-assembly-name=prog -o %t/O0/asm/prog.il
+# RUN: %ilasm -exe -output=%t/O0/asm/prog.exe %t/O0/asm/prog.il
+# RUN: %{equiv_o3} %t/O0/obj/prog.exe %t/O0/asm/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O0/obj.out %t/O0/obj/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O0/asm.out %t/O0/asm/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/one.c -o %t/O2/obj/one.o
+# RUN: %clang_msil %{msil_ldflags} -Wl,--no-gc-sections %t/O2/obj/one.o -o %t/O2/obj/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -S %t/one.c -mllvm -msil-assembly-name=prog -o %t/O2/asm/prog.il
+# RUN: %ilasm -exe -output=%t/O2/asm/prog.exe %t/O2/asm/prog.il
+# RUN: %{equiv_o3} %t/O2/obj/prog.exe %t/O2/asm/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O2/obj.out %t/O2/obj/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/O2/asm.out %t/O2/asm/prog.exe
+#--- one.c
+#include "msil_test.h"
+/* Nothing references these two; -S keeps them, so the equivalence link must. */
+int unused_global = 17;
+int unused_function(int x) { return x * 3 + unused_global; }
+
+static int counter = 4;
+static int bump(int by) {
+  counter += by;
+  return counter;
+}
+int no_locals(int a, int b) { return a * b; }
+int is_nan_f(float x) { return x != x; }
+const char *const greetings[3] = {"hello", "o3", "single"};
+int table[4] = {1, 2, 3, 4};
+int *const table_end = &table[3];
+int (*const ops[2])(int, int) = {no_locals, 0};
+char zeros[64];
+
+int main(int argc, char **argv) {
+  for (int i = 0; i < 3; ++i)
+    puts(greetings[i]);
+  put_kv("argc", argc);
+  put_kv("argv[0] set", argv[0] != 0);
+  put_kv("bump", bump(3));
+  put_kv("ops[0]", ops[0](6, 7));
+  put_kv("ops[1] null", ops[1] == 0);
+  put_kv("*table_end", *table_end);
+  put_kv("zeros[63]", zeros[63]);
+  put_kv("is_nan_f(sNaN)", is_nan_f(__builtin_nansf("1")));
+  return (bump(1) + *table_end) & 0xff;
+}

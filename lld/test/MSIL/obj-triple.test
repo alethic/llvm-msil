@@ -1,0 +1,109 @@
+## Triples, ABI and data model across CIL objects, bitcode and LTO objects
+## (ImplementationPlan.md 5.8.9, 5.9.13, 5.9.14):
+## - the triple key (architecture, OS, environment without its version,
+##   object format) must be equal across inputs; the vendor is ignored
+##   (x86_64-pc-linux-gnu-msil links with x86_64-unknown-linux-gnu-msil) and
+##   so is the MSVC version (x86_64-pc-windows-msvc19.40.0-msil with
+##   x86_64-pc-windows-msvc-msil); otherwise
+##     <file>: target triple <t> is incompatible with <t0>
+##   also against --target;
+## - the data model (sizeof void*, long, wchar_t, long double) must be
+##   equal: a CIL object's comes from its header when it is loaded (wchar_t
+##   2 against 4: '<file>: data model <m> differs from <m0> in <f0>');
+## - bitcode's wchar_t size is not in its symbol table, so it is checked
+##   through the LTO object, whose header the backend writes from the merged
+##   module: MSIL bitcode with the module flag wchar_size 2 on linux-gnu
+##   plus an object gives the data-model error, naming the LTO object (not
+##   the bitcode file);
+## - stock-clang bitcode for the native triple mixed with an MSIL object
+##   links with Q12's warning only:
+##     <file>: linking bitcode for <native triple> as <msil triple>; stock-clang bitcode is a compatibility path
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj main.ll -o obj.o
+# RUN: llc -filetype=obj fn.ll -o fn.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-linux-gnu-msil fn.ll -o fn-pc.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil main.ll -o win.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc19.40.0-msil fn.ll -o fn-msvc1940.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil fn.ll -o fn-win.o
+# RUN: llc -filetype=obj w2.ll -o w2.o
+# RUN: llvm-as wchar2.ll -o wchar2.bc
+# RUN: llvm-as stock.ll -o stock.bc
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## The vendor and the MSVC version do not matter.
+# RUN: msil-ld obj.o fn-pc.o -o vendor.exe 2>&1 | count 0
+# RUN: msil-ld win.o fn-msvc1940.o -o msvc.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --headers msvc.exe | FileCheck %s --check-prefix=EXE
+# EXE: {{^}}Format: PE32+ machine=0x8664 exe{{$}}
+
+## Different triples: the later file is named.
+# RUN: not msil-ld obj.o fn-win.o -o x.exe 2>&1 | %{err} --check-prefix=TRIPLE
+# TRIPLE: {{^}}msil-ld: error: fn-win.o: target triple x86_64-pc-windows-msvc-msil is incompatible with x86_64-unknown-linux-gnu-msil{{$}}
+# RUN: not msil-ld --target=x86_64-pc-windows-msvc-msil obj.o -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=TARGET
+# TARGET: {{^}}msil-ld: error: obj.o: target triple x86_64-unknown-linux-gnu-msil is incompatible with x86_64-pc-windows-msvc-msil{{$}}
+
+## Different data models between objects (wchar_size 2 on linux-gnu).
+# RUN: not msil-ld obj.o w2.o -o x.exe 2>&1 | %{err} --check-prefix=MODEL --implicit-check-not=error:
+# MODEL: {{^}}msil-ld: error: w2.o: data model {{.+}} differs from {{.+}} in obj.o{{$}}
+
+## MSIL bitcode whose module says wchar_size 2: the LTO object's header.
+# RUN: not msil-ld obj.o wchar2.bc -o x.exe 2>&1 | %{err} --check-prefix=LTO-MODEL \
+# RUN:   --implicit-check-not=error: --implicit-check-not="wchar2.bc: data model"
+# LTO-MODEL: {{^}}msil-ld: error: {{.+}}: data model {{.+}} differs from {{.+}} in obj.o{{$}}
+
+## Stock bitcode for the native triple: the warning, once, and an EXE.
+# RUN: msil-ld obj.o stock.bc -o stock.exe 2>&1 | %{err} --check-prefix=STOCK \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: llvm-cil-dump --headers stock.exe | FileCheck %s --check-prefix=EXE
+# STOCK: {{^}}msil-ld: warning: stock.bc: linking bitcode for x86_64-unknown-linux-gnu as x86_64-unknown-linux-gnu-msil; stock-clang bitcode is a compatibility path{{$}}
+
+#--- main.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @fn()
+
+define i32 @main() {
+  %r = call i32 @fn()
+  ret i32 %r
+}
+
+#--- fn.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @fn() {
+  ret i32 7
+}
+
+#--- w2.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @fn() {
+  ret i32 2
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"wchar_size", i32 2}
+
+#--- wchar2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @fn() {
+  ret i32 2
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"wchar_size", i32 2}
+
+#--- stock.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @fn() {
+  ret i32 3
+}

@@ -1,0 +1,19 @@
+# %{msil_prog} through objects (plan 5.12.1, 5.12.2; M20): with no text
+# linker, %{msil_prog} under the default pipeline asm is obj's, so the same
+# %{msil_prog_O2} of two sources (Inputs/obj/prog-two.test) runs the same
+# msil-prog.py command under asm and under obj with msil_equiv=1:
+# --pipeline obj --link-output pe, compiles with clang -c and the link into
+# msil-ld's image prog.exe. A program of several translation units has no -S
+# text to compare, so msil_equiv=1 adds nothing to %{msil_prog} under obj (no
+# equivalence link, reference build, --md-baseline or msil-equiv.py; O3 is
+# for %{msil_c} and %{msil_ll}, O4 for %{msil_prog} under lto, which
+# ../prog/equiv-lto.test pins).
+# REQUIRES: msil-ld, msil-ar
+
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=asm %S/Inputs/obj/prog-two.test > %t.asm.log 2>&1
+# RUN: %{harness_check} contains %t.asm.log "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/prog-two\.test " "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level O2 --workdir '?\S*prog-two\.test\.tmp\.O2\.d'? --out '?\S*prog-two\.test\.tmp\.O2\.d/prog\.exe'? --src '?\S*main\.c'? '?\S*util\.c'? --stock-src --archives= --lib= --native-lib=$" "^# \| msil-prog: .* -O2 -c \S*main\.c -o obj/main\.o$" "^# \| msil-prog: .* -O2 obj/main\.o obj/util\.o -o prog\.exe$"
+# RUN: %{harness_check} lacks %t.asm.log " -flto" "--lto-emit-asm" "--equiv-out" "msil-equiv\.py"
+
+# RUN: %if msil-cil-dump %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_equiv=1 %S/Inputs/obj/prog-two.test > %t.obj.log 2>&1 %}
+# RUN: %if msil-cil-dump %{ %{harness_check} contains %t.obj.log "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/prog-two\.test " "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level O2 --workdir '?\S*prog-two\.test\.tmp\.O2\.d'? --out '?\S*prog-two\.test\.tmp\.O2\.d/prog\.exe'? --src '?\S*main\.c'? '?\S*util\.c'? --stock-src --archives= --lib= --native-lib=$" "^# \| msil-prog: .* -O2 obj/main\.o obj/util\.o -o prog\.exe$" %}
+# RUN: %if msil-cil-dump %{ %{harness_check} lacks %t.obj.log " -flto" "--equiv-out" "no-gc-sections" " -S " "--md-baseline" "msil-equiv\.py" %}

@@ -11,11 +11,12 @@
 // This file provides a way to combine bitcode files into one .NET assembly
 // by compiling them using LLVM.
 //
-// msil-ld's inputs are LLVM bitcode files (and, from M20, CIL objects), so the
-// linker has to compile bitcode files into CIL. This file provides that
-// functionality. Under --lto-emit-asm, compile() writes the ILAsm text of the
-// whole-program module to -o itself and returns no files; from M20, without
-// --lto-emit-asm, it returns the LTO output as in-memory CIL objects.
+// msil-ld's inputs are CIL objects and LLVM bitcode files, so the linker has
+// to compile bitcode files into CIL. This file provides that functionality.
+// Under --lto-emit-asm, compile() writes the ILAsm text of the whole-program
+// module to -o itself and returns no files; without --lto-emit-asm it returns
+// the LTO output as in-memory CIL objects (one per ThinLTO module or
+// partition, plan 5.9.13).
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,6 +28,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace llvm {
@@ -56,7 +58,29 @@ private:
   SmallVector<std::string, 0> filenames;
   std::unique_ptr<llvm::raw_fd_ostream> indexFile;
   llvm::DenseSet<StringRef> thinIndices;
+  // The sections <X> that a __start_<X> or __stop_<X> symbol names: their
+  // definitions stay visible to regular objects (lld/ELF/LTO.cpp's
+  // usedStartStop).
+  llvm::DenseSet<StringRef> usedStartStop;
 };
+
+// One line of --print-imports (plan 5.10.14).
+struct PrintedImport {
+  std::string symbol;
+  std::string module;
+  std::string entry;
+  bool isData;
+  std::string version;
+  // True for a library read from an ELF shared object (version floor).
+  bool isELF;
+};
+
+// Prints --print-imports (plan 5.10.14): one line per bound symbol, sorted
+// by symbol, "<symbol> -> <module>!<entry> [function|data, <version>|-]",
+// then one line per ELF module, "<module>: version floor <version>|-". The
+// import-annotation pass prints the --lto-emit-asm report; the writer of a
+// PE prints its own with the same function.
+void printImports(std::vector<PrintedImport> &rows);
 } // namespace lld::msil
 
 #endif

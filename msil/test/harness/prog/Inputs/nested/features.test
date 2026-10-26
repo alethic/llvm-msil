@@ -1,12 +1,17 @@
 # Run in a nested lit by ../../pipelines.test and listed by
 # ../../lit-config.test: it prints the pipeline features of the
-# configuration (plan 5.12.2), and the glibc sysroot of the hosted tests
-# (M15).
-# REQUIRES: msil-prog-pipeline=lto, msil-link-output=il
+# configuration (plan 5.12.2; M20: msil-prog-pipeline=obj under asm and obj,
+# lto under lto; msil-link-output=pe by default; msil-equiv and
+# msil-scale-tests), and the glibc sysroot of the hosted tests (M15).
 # RUN: %if msil-pipeline=asm %{ echo feature msil-pipeline=asm %}
 # RUN: %if msil-pipeline=lto %{ echo feature msil-pipeline=lto %}
+# RUN: %if msil-pipeline=obj %{ echo feature msil-pipeline=obj %}
 # RUN: %if msil-prog-pipeline=lto %{ echo feature msil-prog-pipeline=lto %}
+# RUN: %if msil-prog-pipeline=obj %{ echo feature msil-prog-pipeline=obj %}
 # RUN: %if msil-link-output=il %{ echo feature msil-link-output=il %}
+# RUN: %if msil-link-output=pe %{ echo feature msil-link-output=pe %}
+# RUN: %if msil-equiv %{ echo feature msil-equiv %}
+# RUN: %if msil-scale-tests %{ echo feature msil-scale-tests %}
 # RUN: %if msil-ld %{ echo feature msil-ld %}
 # RUN: %if msil-ar %{ echo feature msil-ar %}
 # RUN: %if msil-glibc-sysroot %{ echo feature msil-glibc-sysroot %{msil_glibc_sysroot} %}

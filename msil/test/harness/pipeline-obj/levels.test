@@ -1,0 +1,19 @@
+# The per-level composites under msil_pipeline=obj (plan 5.12.3; M20):
+# %{msil_c_O1} and %{msil_c_Os} of Inputs/obj/level-c.c and %{msil_ll_O3} of
+# Inputs/obj/level-ir.ll run exactly their level whatever msil_opt_levels
+# says (here O2 only): msil-prog.py --level O1, then --level Os, compiling the
+# C source with clang -c at that level, and --level O3 with llc -O3
+# -filetype=obj; with msil_equiv=1 the -S reference of the C source is
+# compiled at -Os too, and the IR reference by llc -O3, and msil-equiv.py
+# gets --level Os and --level O3. Each program runs against its .expected
+# file.
+# REQUIRES: msil-ld, msil-ar
+
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_opt_levels=O2 %S/Inputs/obj/level-c.c %S/Inputs/obj/level-ir.ll > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/level-c\.c " "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/level-ir\.ll "
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level O1 --workdir '?\S*level-c\.c\.tmp\.O1\.d'? --out '?\S*level-c\.c\.tmp\.O1\.d/prog\.exe'? --src '?\S*level-c\.c'?$" "^# \| msil-prog: .* -O1 -c \S*level-c\.c -o obj/level-c\.o$" "^# executed command: .*msil-prog\.py'? .* --level Os --workdir '?\S*level-c\.c\.tmp\.Os\.d'? .* --src '?\S*level-c\.c'?$" "^# \| msil-prog: .* -Os -c \S*level-c\.c -o obj/level-c\.o$"
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --level O3 --workdir '?\S*level-ir\.ll\.tmp\.O3\.d'? .* --src '?\S*level-ir\.ll'?$" "^# \| msil-prog: .*prog-cc\.py --as llc -mtriple=\S+-msil -O3 -filetype=obj \S*level-ir\.ll -o obj/level-ir\.o$"
+# RUN: %{harness_check} lacks %t.log "--level O2" " -O2 -c " "-O2 -filetype=obj"
+
+# RUN: %if msil-cil-dump %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_equiv=1 --param msil_opt_levels=O2 %S/Inputs/obj/level-c.c %S/Inputs/obj/level-ir.ll > %t.equiv.log 2>&1 %}
+# RUN: %if msil-cil-dump %{ %{harness_check} contains %t.equiv.log "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/level-c\.c " "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/level-ir\.ll " "^# executed command: .*prog-cc\.py'? --as cc --target=\S+-msil -std=gnu17 \S.* -Os -S '?\S*level-c\.c'? -mllvm -msil-assembly-name=prog -o '?\S*level-c\.c\.tmp\.Os\.d/asm/prog\.il'?$" "^# executed command: .*prog-cc\.py'? --as llc -mtriple=\S+-msil -O3 '?\S*level-ir\.ll'? -msil-assembly-name=prog -o '?\S*level-ir\.ll\.tmp\.O3\.d/asm/prog\.il'?$" "^# \| msil-equiv: O3: \S*level-c\.c\.tmp\.Os\.d/equiv/prog\.exe and \S*level-c\.c\.tmp\.Os\.d/asm/prog\.exe are equal " "^# \| msil-equiv: O3: \S*level-ir\.ll\.tmp\.O3\.d/equiv/prog\.exe and \S*level-ir\.ll\.tmp\.O3\.d/asm/prog\.exe are equal " "^# executed command: .*msil-equiv\.py'? .* --oracle O3 --test '?\S*level-c\.c'? --triple \S+-msil --level Os .* '?\S*level-c\.c\.tmp\.Os\.d/equiv/prog\.exe'? " "^# executed command: .*msil-equiv\.py'? .* --oracle O3 --test '?\S*level-ir\.ll'? --triple \S+-msil --level O3 .* '?\S*level-ir\.ll\.tmp\.O3\.d/equiv/prog\.exe'? " %}

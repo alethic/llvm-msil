@@ -1,0 +1,158 @@
+## Common symbols in CIL objects (ImplementationPlan.md 5.9.5, the lld/ELF
+## port of Symbols.cpp:541-546 and 607-641; 5.9.9 rule 3 for their place in
+## the image):
+## - two commons merge to the size of the larger and the larger alignment
+##   (the file of the larger one), in either input order; the image's zero
+##   part holds the merged size (char c[4] and char c[16] give 16 bytes);
+## - a common replaces a WEAK definition, and a WEAK definition never
+##   replaces a common (judge-c-fidelity J10: 1, not 51), so the weak value
+##   is not in the image;
+## - a GLOBAL definition replaces a common, and a common never replaces it;
+## - --warn-common notes lld's texts: 'multiple common of <s>' for two
+##   commons, and 'common <s> is overridden' when a definition meets an
+##   existing common or a common meets an existing GLOBAL definition; a
+##   common that replaces an existing WEAK definition is silent, as in
+##   lld/ELF.
+## A common's address field is public, and the trailer stores it from
+## '<msil>data' at its offset in the zero part.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj com4.ll -o com4.o
+# RUN: llc -filetype=obj com16.ll -o com16.o
+# RUN: llc -filetype=obj weakdef.ll -o weakdef.o
+# RUN: llc -filetype=obj usew.ll -o usew.o
+# RUN: llc -filetype=obj def.ll -o def.o
+# RUN: llc -filetype=obj comx.ll -o comx.o
+
+# DEFINE: %{warn} = FileCheck %s --implicit-check-not=warning: --implicit-check-not=error: \
+# DEFINE:   --implicit-check-not="PLEASE submit"
+
+## Two commons: 16 bytes in the zero part, in both orders; the trailer
+## allocates 16 + 15 bytes and clears them.
+# RUN: msil-ld --warn-common com4.o com16.o -o c1.exe 2>&1 | %{warn} --check-prefix=MULTIPLE
+# RUN: llvm-cil-dump c1.exe | FileCheck %s --check-prefix=LARGEST --implicit-check-not="'<msil>image'"
+# RUN: msil-ld --warn-common com16.o com4.o -o c2.exe 2>&1 | %{warn} --check-prefix=MULTIPLE
+# RUN: llvm-cil-dump c2.exe | FileCheck %s --check-prefix=LARGEST --implicit-check-not="'<msil>image'"
+# RUN: msil-ld com4.o com16.o -o c3.exe 2>&1 | count 0
+# RUN: msil-ld com4.o com16.o -o c4.exe -Map=c4.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=MAP --input-file=c4.map
+
+# MULTIPLE: {{^}}msil-ld: warning: multiple common of c{{$}}
+
+# LARGEST:      {{^}}  .field '<msil>data' native int flags=0x0031{{$}}
+# LARGEST-NEXT: {{^}}  .field 'c' native int flags=0x0036{{$}}
+# LARGEST-NEXT: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# LARGEST-NEXT: {{^}}    .maxstack 3{{$}}
+# LARGEST-NEXT: {{^}}    L0: ldc.i4.s 31{{$}}
+# LARGEST:      {{^}}    L9: stsfld native int '<Module>'::'<msil>data'{{$}}
+# LARGEST-NEXT: {{^}}    L10: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# LARGEST-NEXT: {{^}}    L11: ldc.i4.0{{$}}
+# LARGEST-NEXT: {{^}}    L12: ldc.i4.s 16{{$}}
+# LARGEST-NEXT: {{^}}    L13: initblk{{$}}
+# LARGEST-NEXT: {{^}}    L14: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# LARGEST-NEXT: {{^}}    L15: stsfld native int '<Module>'::'c'{{$}}
+# LARGEST-NEXT: {{^}}    L16: ret{{$}}
+
+## The map shows the merged common: the larger one's file, size 16 and
+## alignment 8 (the plan fixes the columns, not their spacing).
+# MAP:      {{^}}Symbols:{{$}}
+# MAP:      {{^ *}}CommonSymbol{{[[:space:]]+}}{{[A-Za-z]+}}{{[[:space:]]+}}com16.o{{[[:space:]]+}}c{{[[:space:]].*(16.*8|8.*16).*$}}
+
+## The common wins over the WEAK definition in both orders: a 4-byte zero
+## part and no initialized image (the weak value 5 is gone); only the
+## common-first order warns.
+# RUN: msil-ld --warn-common weakdef.o usew.o -o wc.exe 2>&1 | count 0
+# RUN: llvm-cil-dump wc.exe | FileCheck %s --check-prefix=COMMON --implicit-check-not="'<msil>image'"
+# RUN: msil-ld --warn-common usew.o weakdef.o -o cw.exe 2>&1 | %{warn} --check-prefix=OVERRIDDEN -DSYM=cw
+# RUN: llvm-cil-dump cw.exe | FileCheck %s --check-prefix=COMMON --implicit-check-not="'<msil>image'"
+
+# COMMON:      {{^}}  .field 'cw' native int flags=0x0036{{$}}
+# COMMON-NEXT: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# COMMON-NEXT: {{^}}    .maxstack 3{{$}}
+# COMMON-NEXT: {{^}}    L0: ldc.i4.s 19{{$}}
+# COMMON:      {{^}}    L10: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# COMMON-NEXT: {{^}}    L11: ldc.i4.0{{$}}
+# COMMON-NEXT: {{^}}    L12: ldc.i4.4{{$}}
+# COMMON-NEXT: {{^}}    L13: initblk{{$}}
+# COMMON:      {{^}}  .method 'get' int32() flags=0x0016 impl=0x0000{{$}}
+# COMMON-NEXT: {{^}}    .maxstack 2{{$}}
+# COMMON-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'cw'{{$}}
+# COMMON-NEXT: {{^}}    L1: ldind.i4{{$}}
+
+## A GLOBAL definition wins over the common in both orders, with the
+## warning in both: 4 initialized bytes holding 5.
+# RUN: msil-ld --warn-common def.o comx.o -o dc.exe 2>&1 | %{warn} --check-prefix=OVERRIDDEN -DSYM=cx
+# RUN: llvm-cil-dump dc.exe | FileCheck %s --check-prefix=DEFINED
+# RUN: msil-ld --warn-common comx.o def.o -o cd.exe 2>&1 | %{warn} --check-prefix=OVERRIDDEN -DSYM=cx
+# RUN: llvm-cil-dump cd.exe | FileCheck %s --check-prefix=DEFINED
+
+# OVERRIDDEN: {{^}}msil-ld: warning: common [[SYM]] is overridden{{$}}
+
+# DEFINED:      {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0111{{$}}
+# DEFINED-NEXT: {{^}}    .data 4 bytes{{$}}
+# DEFINED-NEXT: {{^}}      05 00 00 00{{$}}
+# DEFINED-NEXT: {{^}}  .field 'cx' native int flags=0x0036{{$}}
+
+#--- com4.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@c = common global [4 x i8] zeroinitializer, align 1
+
+define i32 @main() {
+  %p = getelementptr i8, ptr @c, i64 3
+  %v = load i8, ptr %p
+  %r = zext i8 %v to i32
+  ret i32 %r
+}
+
+#--- com16.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@c = common global [16 x i8] zeroinitializer, align 8
+
+define i32 @peek() {
+  %p = getelementptr i8, ptr @c, i64 15
+  %v = load i8, ptr %p
+  %r = zext i8 %v to i32
+  ret i32 %r
+}
+
+#--- weakdef.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@cw = weak global i32 5, align 4
+
+define i32 @get() {
+  %v = load i32, ptr @cw
+  ret i32 %v
+}
+
+#--- usew.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@cw = common global i32 0, align 4
+
+declare i32 @get()
+
+define i32 @main() {
+  %g = call i32 @get()
+  %m = mul i32 %g, 10
+  %r = add i32 %m, 1
+  ret i32 %r
+}
+
+#--- def.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@cx = global i32 5, align 4
+
+#--- comx.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@cx = common global i32 0, align 4
+
+define i32 @main() {
+  %v = load i32, ptr @cx
+  ret i32 %v
+}

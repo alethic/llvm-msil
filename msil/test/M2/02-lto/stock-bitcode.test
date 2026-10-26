@@ -7,14 +7,20 @@
 # value, returns 64-bit values, holds pointers to its own and to main.c's data
 # and runs a constructor. Natively all three are ordinary sources. The second
 # RUN line pins msil-ld's warning: once per link, although two stock inputs
-# are linked (plan 5.9.13). Recon tests-p2 3.3, plan 5.12.3 (M14 lto).
+# are linked (plan 5.9.13). From M20 %{msil_prog} may compile main.c to a CIL
+# object instead (msil-prog-pipeline=obj): the stock bitcode then goes
+# through LTO next to that object, a mixed link, with the same warning.
+# Recon tests-p2 3.3, plan 5.12.3 (M14 lto, M20 obj).
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/main.c
 # REDEFINE: %{msil_stock_srcs} = %t/stock1.c %t/stock2.c
 # RUN: %{msil_prog}
 # RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.d --src %{msil_srcs} --stock-src %{msil_stock_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O0 --workdir %t.warn.d --src %{msil_srcs} --stock-src %{msil_stock_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
 # LTO:     msil-ld: warning: {{.*}}stock1.o: linking bitcode for x86_64-{{[^ ]+}} as x86_64-{{[^ ]+}}-msil; stock-clang bitcode is a compatibility path
 # LTO-NOT: stock-clang bitcode is a compatibility path
+# OBJ:     msil-ld: warning: {{.*}}stock1.o: linking bitcode for x86_64-{{[^ ]+}} as x86_64-{{[^ ]+}}-msil; stock-clang bitcode is a compatibility path
+# OBJ-NOT: stock-clang bitcode is a compatibility path
 #--- shared.h
 struct point { int x, y, z; };
 int msil_side(int v);

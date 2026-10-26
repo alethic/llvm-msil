@@ -4,14 +4,20 @@
 # 12). Both sides are thread-local, so msil-ld's TLS attribute check passes
 # (plan 5.9.5) and the merged module reaches code generation, where a
 # thread-local variable is an error until phase 3 (D26), printed by msil-ld;
-# the link fails with exit status 1. Plan 5.9.16 row p5-tls (M14 lto, M20 obj;
-# 12 from P3-A).
+# the link fails with exit status 1. On the object path a thread-local
+# variable stays an error of code generation until P3-A (plan 5.8.10), so
+# 'clang -c' of p5a.c, the first source, already fails with the same text,
+# and nothing is linked. Plan 5.9.16 row p5-tls (M14 lto, M20 obj; 12 from
+# P3-A).
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/p5a.c %t/p5b.c
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld:" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld:" %}
 # LTO:     msil-ld: error: {{.*}}thread-local variable @tcount is not supported for MSIL yet
 # LTO:     clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# OBJ:     {{^}}error: {{.*}}thread-local variable @tcount is not supported for MSIL yet{{$}}
 #--- p5a.c
 /* p5a.c: thread_local defined in one object, used from another */
 _Thread_local int tcount = 5;

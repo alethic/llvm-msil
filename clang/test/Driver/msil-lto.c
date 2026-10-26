@@ -1,38 +1,51 @@
 // LTO for '<native triple>-msil' targets (ImplementationPlan.md 5.10.3 item 5
-// and 5.10.5; recon p2/driver-toolchain.md 4.8 and 6). Until M20, every
-// compile of a compile-and-link is an LTO compile ('-emit-llvm-bc
-// -flto=full', also without -flto) and every link runs msil-ld, where LTO and
-// the MSIL code generator run. -S and -emit-llvm keep their Phase 1 cc1 lines
-// (no -flto), and from M19 -c without -flto writes a CIL object
-// (msil-object.c). The options that
-// steer code generation reach msil-ld in lld's spellings, never through
-// tools::addLTOOptions: no gold plugin, no -plugin-opt=, and the driver never
-// passes --lto-emit-asm (the harness does, 5.9.13). -O0 is --lto-O0, -O1 and
-// -Og --lto-O1, -O2, -Os and -Oz --lto-O2, -O3 and -Ofast --lto-O3, and
-// without -O msil-ld's default (2) applies; -flto-jobs, -flto-partitions,
-// -save-temps and each -mllvm (the backend runs inside msil-ld, as HIP passes
-// them to its device linker) are forwarded too.
+// and 5.10.5; recon p2/driver-toolchain.md 4.8 and 6). With -flto (full or
+// thin) every compile of a compile-and-link is an LTO compile ('-emit-llvm-bc
+// -flto=...') and the link runs msil-ld, where LTO and the MSIL code
+// generator run. From M20 MSILToolChain::getLTOMode is gone, so without
+// -flto a compile-and-link compiles CIL objects ('cc1 -emit-obj', as -c does
+// from M19, msil-object.c) and msil-ld links them with no LTO options (M14-M19
+// compiled bitcode by default). -S and -emit-llvm keep their Phase 1 cc1
+// lines (no -flto). Under LTO the options that steer code generation reach
+// msil-ld in lld's spellings, never through tools::addLTOOptions: no gold
+// plugin, no -plugin-opt=, and the driver never passes --lto-emit-asm (the
+// harness does, 5.9.13). -O0 is --lto-O0, -O1 and -Og --lto-O1, -O2, -Os and
+// -Oz --lto-O2, -O3 and -Ofast --lto-O3, and without -O msil-ld's default (2)
+// applies; -flto-jobs, -flto-partitions, -save-temps and each -mllvm (the
+// backend runs inside msil-ld, as HIP passes them to its device linker) are
+// forwarded too (5.10.3 step 5: only when LTO is used).
 
 // DEFINE: %{fc} = FileCheck %s --implicit-check-not=-plugin --implicit-check-not=LLVMgold \
 // DEFINE:   --implicit-check-not=--lto-emit-asm --implicit-check-not=error:
 
 // RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -flto -O2 %s -o p.exe 2>&1 \
 // RUN:   | %{fc} --check-prefix=FULL
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -O2 %s -o p.exe 2>&1 \
-// RUN:   | %{fc} --check-prefix=FULL
 // FULL: "-cc1" "-triple" "x86_64-unknown-linux-gnu-msil" "-O2" "-emit-llvm-bc" "-flto=full"
 // FULL: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-gnu-msil"
 // FULL-SAME: "--lto-O2"
 // FULL-SAME: "-o" "p.exe"
 
-// The optimization level, at compile and at link time.
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -O0 %s 2>&1 | %{fc} --check-prefix=O0
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -O1 %s 2>&1 | %{fc} --check-prefix=O1
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -Og %s 2>&1 | %{fc} --check-prefix=O1
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -Os %s 2>&1 | %{fc} --check-prefix=O2
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -Oz %s 2>&1 | %{fc} --check-prefix=O2
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -O3 %s 2>&1 | %{fc} --check-prefix=O3
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -Ofast %s 2>&1 | %{fc} --check-prefix=O3
+// Without -flto: a CIL object and a plain link, no LTO option (M20).
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -O2 %s -o p.exe 2>&1 \
+// RUN:   | %{fc} --check-prefix=OBJ --implicit-check-not=-emit-llvm-bc --implicit-check-not=-flto= \
+// RUN:     --implicit-check-not=--lto-O
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -O2 %s -o p.exe 2>&1 \
+// RUN:   | %{fc} --check-prefix=OBJ-WIN --implicit-check-not=-emit-llvm-bc --implicit-check-not=-flto= \
+// RUN:     --implicit-check-not=--lto-O --implicit-check-not=lld-link
+// OBJ: "-cc1" "-triple" "x86_64-unknown-linux-gnu-msil" "-O2" "-emit-obj"
+// OBJ: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-gnu-msil"
+// OBJ-SAME: "-o" "p.exe"
+// OBJ-WIN: "-cc1" "-triple" "x86_64-pc-windows-msvc{{[0-9.]*}}-msil" "-O2" "-emit-obj"
+// OBJ-WIN: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-pc-windows-msvc-msil"
+
+// The optimization level, at compile and at link time (LTO).
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -flto -O0 %s 2>&1 | %{fc} --check-prefix=O0
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -flto -O1 %s 2>&1 | %{fc} --check-prefix=O1
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -flto -Og %s 2>&1 | %{fc} --check-prefix=O1
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -flto -Os %s 2>&1 | %{fc} --check-prefix=O2
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -flto -Oz %s 2>&1 | %{fc} --check-prefix=O2
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -flto -O3 %s 2>&1 | %{fc} --check-prefix=O3
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -flto -Ofast %s 2>&1 | %{fc} --check-prefix=O3
 // O0: "{{[^"]*}}msil-ld{{(\.exe)?}}"
 // O0-SAME: "--lto-O0"
 // O1: "{{[^"]*}}msil-ld{{(\.exe)?}}"
@@ -41,7 +54,7 @@
 // O2-SAME: "--lto-O2"
 // O3: "{{[^"]*}}msil-ld{{(\.exe)?}}"
 // O3-SAME: "--lto-O3"
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil %s 2>&1 \
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -flto %s 2>&1 \
 // RUN:   | %{fc} --check-prefix=NO-O --implicit-check-not=--lto-O
 // NO-O: "{{[^"]*}}msil-ld{{(\.exe)?}}"
 
@@ -51,9 +64,14 @@
 // THIN: "{{[^"]*}}msil-ld{{(\.exe)?}}"
 // THIN-SAME: "--lto-O3" "--thinlto-jobs=4"
 
-// -mllvm reaches both the compile and the link.
-// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -mllvm -msil-assembly-name=foo %s -o foo.exe 2>&1 \
+// Under LTO -mllvm reaches both the compile and the link; without LTO only
+// the compile, where the code generator runs (5.10.3 step 5).
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -flto -mllvm -msil-assembly-name=foo %s -o foo.exe 2>&1 \
 // RUN:   | %{fc} --check-prefix=MLLVM
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -mllvm -msil-assembly-name=foo %s -o foo.exe 2>&1 \
+// RUN:   | %{fc} --check-prefix=MLLVM-OBJ --implicit-check-not=--mllvm
+// MLLVM-OBJ: "-cc1" {{.*}}"-emit-obj"{{.*}}"-mllvm" "-msil-assembly-name=foo"
+// MLLVM-OBJ: "{{[^"]*}}msil-ld{{(\.exe)?}}"
 // MLLVM: "-cc1" {{.*}}"-mllvm" "-msil-assembly-name=foo"
 // MLLVM: "{{[^"]*}}msil-ld{{(\.exe)?}}"
 // MLLVM-SAME: "--mllvm=-msil-assembly-name=foo"
@@ -94,12 +112,12 @@
 // BC: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-gnu-msil"
 // BC-SAME: "{{[^"]*}}.o"
 
-// A link-only command (object inputs, no compile job): each -mllvm still
-// reaches msil-ld (5.10.3 step 5), and the link job claims it, so there is no
-// 'argument unused during compilation'.
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil %t.o -mllvm -foo=1 2>&1 \
+// A link-only LTO command (object inputs, no compile job, -flto): each -mllvm
+// still reaches msil-ld (5.10.3 step 5), and the link job claims it, so there
+// is no 'argument unused during compilation'.
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -flto %t.o -mllvm -foo=1 2>&1 \
 // RUN:   | %{fc} --check-prefix=MLLVM-LINK --implicit-check-not='argument unused' --implicit-check-not=-cc1
-// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil %t.o -mllvm -foo=1 -mllvm -bar 2>&1 \
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -flto %t.o -mllvm -foo=1 -mllvm -bar 2>&1 \
 // RUN:   | %{fc} --check-prefix=MLLVM-LINK-WIN --implicit-check-not='argument unused' --implicit-check-not=-cc1
 // MLLVM-LINK: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-gnu-msil"
 // MLLVM-LINK-SAME: "--mllvm=-foo=1"

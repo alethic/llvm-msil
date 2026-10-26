@@ -19,6 +19,8 @@
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/BinaryFormat/MSILLink.h"
+#include "llvm/CLI/Trailer.h"
 #include "llvm/CodeGen/AsmPrinter.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DataLayout.h"
@@ -30,11 +32,14 @@
 #include "llvm/MC/MCValue.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
+#include "llvm/Target/TargetLoweringObjectFile.h"
 #include <algorithm>
 #include <cassert>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 using namespace llvm;
 
@@ -114,22 +119,43 @@ void MSILDataSegment::addGlobal(const GlobalVariable &GV, AsmPrinter &AP,
   MaxAlign = std::max(MaxAlign, Alignment);
 
   const Constant *Init = GV.getInitializer();
-  // An object flags a segment ZERO (SHT_NOBITS, plan 5.8.8) by the test that
-  // names it '.bss', which also accepts an aggregate of zeros and undefs; the
-  // whole-program layout keeps its top-level test.
-  if (Init->isNullValue() || isa<UndefValue>(Init) ||
-      (ObjectMode && isNullOrUndef(Init))) {
+  // An object's segment is ZERO (SHT_NOBITS, plan 5.8.8) by the test that
+  // names it '.bss', which also accepts an aggregate of zeros and undefs;
+  // whole-program output keeps Phase 1's top-level test, so its text does
+  // not change.
+  bool IsZero = ObjectMode ? isNullOrUndef(Init)
+                           : Init->isNullValue() || isa<UndefValue>(Init);
+  if (ObjectMode && IsZero) {
     Zero.push_back({&GV, Size, Alignment});
     return;
   }
 
-  // An object's segments are laid out by msil-ld from the alignment in the
-  // record, so their bytes are packed here without padding, which would cost
-  // as much memory as the alignment.
-  if (!ObjectMode)
-    Image.resize(alignTo(Image.size(), Alignment), 0);
+  // The bytes are packed without padding, which would cost as much memory as
+  // the alignment: msil-ld lays an object's segments out from the alignment
+  // in the record, and finalize() a whole-program module's.
   uint64_t Offset = Image.size();
-  Entries.push_back({&GV, Offset, Size});
+  if (ObjectMode) {
+    Entries.push_back({&GV, Offset, Size});
+  } else {
+    // Whole-program mode: one segment per global with object mode's name
+    // and flags (plan 5.8.8, 5.9.9), in addGlobal (IR) order.
+    SectionKind Kind = TargetLoweringObjectFile::getKindForGlobal(&GV, AP.TM);
+    Entry E{&GV, IsZero ? 0 : Offset, Size, IsZero};
+    E.Section = getSegmentName(GV, Kind);
+    if (Kind.isMergeable1ByteCString())
+      E.SegFlags |= MSILLink::SegStrings;
+    if (Kind.isThreadLocal())
+      E.SegFlags |= MSILLink::SegTLS;
+    if (IsZero)
+      E.SegFlags |= MSILLink::SegZero;
+    if (Kind.isReadOnly() || Kind.isReadOnlyWithRel())
+      E.SegFlags |= MSILLink::SegReadOnly;
+    E.AlignLog2 = Log2(Alignment);
+    E.Index = Entries.size();
+    Entries.push_back(std::move(E));
+    if (IsZero)
+      return;
+  }
 
   if (StringRef Why = findUnsupportedConstant(Init); !Why.empty()) {
     reportInitializerError(GV, AP.TM, Why);
@@ -156,31 +182,126 @@ void MSILDataSegment::addGlobal(const GlobalVariable &GV, AsmPrinter &AP,
                              " bytes instead of " + Twine(Size));
 }
 
-void MSILDataSegment::finalize() {
+std::string MSILDataSegment::getSegmentName(const GlobalVariable &GV,
+                                            SectionKind Kind) {
+  if (GV.hasSection())
+    return GV.getSection().str();
+  if (Kind.isThreadBSS())
+    return ".tbss";
+  if (Kind.isThreadData())
+    return ".tdata";
+  if (Kind.isBSS())
+    return ".bss";
+  if (Kind.isReadOnly() || Kind.isReadOnlyWithRel())
+    return ".rodata";
+  return ".data";
+}
+
+void MSILDataSegment::finalize(cli::SectionRules Rules,
+                               unsigned RelocLoopThreshold) {
   assert(!Finalized && "the data segment is finalized once");
   Finalized = true;
 
-  // The zero-initialized globals follow the image, so the image carries no
-  // bytes for them: the module initializer zero-fills [InitSize, TotalSize).
-  InitSize = Image.size();
-  uint64_t End = InitSize;
-  for (const ZeroEntry &Z : Zero) {
-    // Packed in an object, as in addGlobal.
-    if (!ObjectMode)
-      End = alignTo(End, Z.Alignment);
-    Entries.push_back({Z.GV, End, Z.Size, /*IsZero=*/true});
-    End += Z.Size;
+  if (ObjectMode) {
+    // The zero-initialized globals follow the image, packed as in
+    // addGlobal: an object leaves the layout and the symbol differences to
+    // msil-ld (DIFF relocations, plan 5.8.8).
+    InitSize = Image.size();
+    uint64_t End = InitSize;
+    for (const ZeroEntry &Z : Zero) {
+      Entries.push_back({Z.GV, End, Z.Size, /*IsZero=*/true});
+      End += Z.Size;
+    }
+    TotalSize = End;
+    return;
   }
-  TotalSize = End;
 
-  // An object leaves the differences to msil-ld, which lays out the
-  // segments (DIFF relocations, plan 5.8.8).
-  if (Diffs.empty() || ObjectMode)
+  // Whole-program mode: a one-object link (plan 5.9.9). Thread-local
+  // segments (phase 3) stay out of the image, with the relocations and
+  // symbol differences inside them; the AsmPrinter reports them.
+  cli::ImageInput In;
+  In.Rules = Rules;
+  // Phase 1's limit and text are the AsmPrinter's, and Phase 1 shared no
+  // strings.
+  In.AllowOversize = true;
+  In.ShareStrings = false;
+  SmallVector<int32_t, 16> SegOf(Entries.size(), -1);
+  DenseMap<const GlobalValue *, unsigned> EntryOf;
+  for (unsigned I = 0, E = Entries.size(); I != E; ++I) {
+    Entry &En = Entries[I];
+    EntryOf.try_emplace(En.GV, I);
+    if ((En.SegFlags & MSILLink::SegTLS) ||
+        cli::classifySection(En.Section, Rules) == cli::SectionClass::TLS) {
+      En.InImage = false;
+      continue;
+    }
+    SegOf[I] = In.Segments.size();
+    if (En.IsZero)
+      In.ZeroOrder.push_back({false, SegOf[I]});
+    In.Segments.push_back(
+        {En.Section, En.SegFlags, En.AlignLog2, En.Size,
+         En.IsZero ? ArrayRef<uint8_t>()
+                   : ArrayRef<uint8_t>(Image).slice(En.Offset, En.Size)});
+  }
+  auto InImage = [&](const GlobalValue *GV) {
+    auto It = EntryOf.find(GV);
+    return It != EntryOf.end() && Entries[It->second].InImage;
+  };
+  erase_if(Relocs, [&](const MSILReloc &R) { return !InImage(R.Owner); });
+  erase_if(Diffs, [&](const MSILDiff &D) { return !InImage(D.Owner); });
+
+  // The address slots of a relocation loop (plan 5.9.9 rule 4): one per
+  // target outside the image and addend. The AsmPrinter's relocations name
+  // one field per target, so cli::buildTrailer counts the same.
+  std::vector<cli::RuntimeReloc> Slots;
+  DenseMap<const GlobalValue *, cli::EntityRef> TargetIds;
+  for (const MSILReloc &R : Relocs) {
+    cli::EntityRef Id =
+        TargetIds.try_emplace(R.Target, TargetIds.size() + 1).first->second;
+    std::optional<uint64_t> ImageOffset;
+    if (InImage(R.Target))
+      ImageOffset = 0;
+    Slots.push_back({R.Site, R.Size, Id, ImageOffset, R.Addend});
+  }
+  In.NumSlots = cli::countAddressSlots(Slots, RelocLoopThreshold);
+
+  // AllowOversize leaves only the TLS error, and the TLS segments are out.
+  Layout = cantFail(cli::layoutImage(In));
+
+  // Every global, relocation and symbol difference at its final offset.
+  SmallVector<uint64_t, 16> StoreOffset(Entries.size());
+  for (unsigned I = 0, E = Entries.size(); I != E; ++I) {
+    StoreOffset[I] = Entries[I].Offset;
+    if (SegOf[I] >= 0)
+      Entries[I].Offset = Layout.SegmentOffset[SegOf[I]];
+  }
+  auto Move = [&](uint64_t &Site, const GlobalVariable *Owner) {
+    unsigned I = EntryOf.lookup(Owner);
+    Site = Entries[I].Offset + (Site - StoreOffset[I]);
+  };
+  for (MSILReloc &R : Relocs)
+    Move(R.Site, R.Owner);
+  for (MSILDiff &D : Diffs)
+    Move(D.Site, D.Owner);
+  llvm::stable_sort(Relocs, [](const MSILReloc &L, const MSILReloc &R) {
+    return L.Site < R.Site;
+  });
+  llvm::stable_sort(Entries, [](const Entry &L, const Entry &R) {
+    return std::make_pair(!L.InImage, L.Offset) <
+           std::make_pair(!R.InImage, R.Offset);
+  });
+  Image.clear();
+  InitSize = Layout.InitSize;
+  TotalSize = Layout.TotalSize;
+  MaxAlign = Align(uint64_t(1) << Layout.MaxAlignLog2);
+
+  if (Diffs.empty())
     return;
   assert(TM && "symbol differences come from addGlobal, which sets TM");
   DenseMap<const GlobalValue *, uint64_t> Offsets;
   for (const Entry &E : Entries)
-    Offsets.try_emplace(E.GV, E.Offset);
+    if (E.InImage)
+      Offsets.try_emplace(E.GV, E.Offset);
   for (const MSILDiff &D : Diffs) {
     auto A = Offsets.find(D.A);
     auto B = Offsets.find(D.B);
@@ -201,7 +322,7 @@ void MSILDataSegment::finalize() {
                                  Twine(unsigned(D.Size)) + "-byte value");
       continue;
     }
-    storeLE(&Image[D.Site], D.Size, Value);
+    storeLE(&Layout.Image[D.Site], D.Size, Value);
   }
 }
 

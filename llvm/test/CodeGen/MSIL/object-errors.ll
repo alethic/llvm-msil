@@ -72,11 +72,15 @@
 ; which admits no second error or warning.
 ; accepted.ll: what object mode accepts and whole-program mode diagnoses: an
 ; external variable (D26), an undefined function outside the D14 table, a
-; section on a variable (M12's error until M20), a runtime helper
-; (__powidf2 on linux-gnu; windows-msvc imports pow instead) and a library
-; call outside the D14 table (exp10). -filetype=obj writes the object with
-; no message; llc's assembly output and -filetype=null stay whole-program
-; and keep their errors, with the same texts as before this milestone.
+; runtime helper (__powidf2 on linux-gnu; windows-msvc imports pow instead)
+; and a library call outside the D14 table (exp10). It also holds a section
+; on a variable: M12 diagnosed it in whole-program mode, but from M20
+; whole-program mode lays the section out as a one-object link does, so for
+; that construct only the object rows remain (symbol 'in_sec' and segment
+; 'mysec'), and %{clean} on the WP runs keeps the error from coming back.
+; -filetype=obj writes the object with no message; llc's assembly output and
+; -filetype=null stay whole-program and keep their other errors, with the
+; same texts as before this milestone.
 
 ; REQUIRES: llvm-cil-dump
 ; RUN: rm -rf %t && split-file %s %t
@@ -340,7 +344,6 @@
 
 ; WP-DAG: {{^}}error: external global variable 'ext_v' is not supported (phase 2 linker){{$}}
 ; WP-DAG: {{^}}error: undefined function 'ext_f' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
-; WP-DAG: {{^}}error: global variable @in_sec in section "mysec" is not supported for MSIL yet (phase 2 CIL objects){{$}}
 ; WP-DAG: {{^}}error: {{.*}}in function libcall {{.*}}: library call 'exp10' is not a Phase-1 import{{$}}
 ; WP-LNX-DAG: {{^}}error: {{.*}}in function helper {{.*}}: runtime helper '__powidf2' is not available for MSIL yet (phase 3){{$}}
 

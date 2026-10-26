@@ -1,0 +1,167 @@
+## Spill classes (ImplementationPlan.md 5.9.12, 5.9.3's hidden
+## --msil-type-member-limit; metadata-writer 3.6): '<Module>' holds at most
+## 65,524 methods and 65,534 fields, counting linker-made members, and
+## --msil-type-member-limit=<n> lowers both limits for tests. Past the
+## limit, methods and fields move to '<msil>Spill<N>' classes (N from 1;
+## 'private abstract sealed auto ansi', flags 0x180, extending
+## [mscorlib]System.Object through the BCL stand-in):
+## - no class has more members than the limit;
+## - '<Module>' keeps '.cctor', '<msil>Main' and the other private trailer
+##   members ('<msil>data', '<msil>image');
+## - address fields in spill classes are not initonly, because
+##   '<Module>::.cctor' stores them (ECMA's initonly rule): public static
+##   (0x0016), never 0x0036;
+## - '<msil>fn_' fields are 'assembly' once a spill class exists (spilled
+##   code may read them), and 'private' (0x0031) without one, as -S writes
+##   them (O3);
+## - code names the members in their new classes, and the TypeDef rows are
+##   '<Module>', then the spill classes, then '<msil>image_t'.
+## msil/test/M2/00-link/spill-limits.test runs the real limits (M20.g).
+## Inputs/members.py lists the classes and members and checks the limit.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj sp.ll -o sp.o
+
+# RUN: msil-ld --msil-type-member-limit=6 sp.o -o spill.exe 2>&1 | count 0
+# RUN: llvm-cil-dump spill.exe > spill.txt
+# RUN: %python %S/Inputs/members.py --limit 6 spill.txt > members.txt
+# RUN: FileCheck %s --check-prefix=MEMBERS --input-file=members.txt
+# RUN: FileCheck %s --check-prefix=SPILL-NONE --input-file=members.txt
+# RUN: FileCheck %s --check-prefix=FNFIELD --input-file=members.txt
+# RUN: FileCheck %s --check-prefix=CODE --implicit-check-not=privatescope --input-file=spill.txt
+# RUN: FileCheck %s --check-prefix=CALL --input-file=spill.txt
+# RUN: llvm-cil-dump --tables spill.exe | FileCheck %s --check-prefix=TYPES
+
+# MEMBERS:     {{^}}class <Module> flags=0x00000000 extends=-{{$}}
+# MEMBERS-DAG: {{^}}method <Module>::.cctor flags=0x1891{{$}}
+# MEMBERS-DAG: {{^}}method <Module>::<msil>Main flags=0x0091{{$}}
+# MEMBERS-DAG: {{^}}field <Module>::<msil>data flags=0x0031{{$}}
+# MEMBERS-DAG: {{^}}field <Module>::<msil>image flags=0x0111{{$}}
+# MEMBERS:     {{^}}class <msil>Spill1 flags=0x00000180 extends=[mscorlib]System.Object{{$}}
+# MEMBERS:     {{^}}field <msil>Spill{{[0-9]+}}::g{{[0-9]}} flags=0x0016{{$}}
+# MEMBERS:     {{^}}limit 6 ok{{$}}
+
+# FNFIELD: {{^}}field {{<Module>::<msil>fn_f0 flags=0x0033|<msil>Spill[0-9]+::<msil>fn_f0 flags=0x0013}}{{$}}
+
+## No spilled field is initonly, and no fn field is private.
+# SPILL-NONE-NOT: {{^field <msil>Spill[0-9]+::[^ ]+ flags=0x00[2367ABEF]}}
+# SPILL-NONE-NOT: {{<msil>fn_f0 flags=0x0031}}
+
+# CODE:      {{^}}.class '<Module>' flags=0x00000000{{$}}
+# CODE:      {{^}}.class '<msil>Spill1' flags=0x00000180 extends [mscorlib]System.Object{{$}}
+
+## main calls at least one spilled f<N> in its new class. 5.9.12 does not say
+## which methods move, so main itself may lie in any class, and the call is
+## not ordered against the class lines.
+# CALL:      {{^}}    L{{[0-9]+}}: call int32() '<msil>Spill{{[0-9]+}}'::'f{{[0-9]}}'{{$}}
+
+# TYPES:      {{^}}Table: TypeDef rows={{[0-9]+}} rowsize={{[0-9]+}}{{$}}
+# TYPES-NEXT: {{^}}  TypeDef[1]: Flags=0x00000000 TypeName='<Module>' TypeNamespace=''
+# TYPES-NEXT: {{^}}  TypeDef[2]: Flags=0x00000180 TypeName='<msil>Spill1' TypeNamespace=''
+# TYPES:      {{^}}  TypeDef[{{[0-9]+}}]: Flags=0x00000110 TypeName='<msil>image_t' TypeNamespace=''
+# TYPES-NEXT: {{^}}Table: {{(Field|MethodDef)}} rows=
+
+## Without the lowered limit: no spill class, and the fn field is private.
+# RUN: msil-ld sp.o -o plain.exe 2>&1 | count 0
+# RUN: llvm-cil-dump plain.exe > plain.txt
+# RUN: %python %S/Inputs/members.py --limit 65524 plain.txt | FileCheck %s --check-prefix=PLAIN
+# PLAIN-NOT:   Spill
+# PLAIN:       {{^}}field <Module>::<msil>fn_f0 flags=0x0031{{$}}
+# PLAIN-NOT:   Spill
+# PLAIN:       {{^}}count <Module> methods=13 fields=14{{$}}
+# PLAIN-NEXT:  {{^}}count <msil>image_t methods=0 fields=0{{$}}
+# PLAIN-NEXT:  {{^}}limit 65524 ok{{$}}
+
+#--- sp.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@g0 = global i32 1, align 4
+@g1 = global i32 2, align 4
+@g2 = global i32 3, align 4
+@g3 = global i32 4, align 4
+@g4 = global i32 5, align 4
+@g5 = global i32 6, align 4
+@g6 = global i32 7, align 4
+@g7 = global i32 8, align 4
+@g8 = global i32 9, align 4
+@g9 = global i32 10, align 4
+@fp = global ptr @f0, align 8
+
+define i32 @f0() {
+  %v = load i32, ptr @g0
+  ret i32 %v
+}
+
+define i32 @f1() {
+  %v = load i32, ptr @g1
+  ret i32 %v
+}
+
+define i32 @f2() {
+  %v = load i32, ptr @g2
+  ret i32 %v
+}
+
+define i32 @f3() {
+  %v = load i32, ptr @g3
+  ret i32 %v
+}
+
+define i32 @f4() {
+  %v = load i32, ptr @g4
+  ret i32 %v
+}
+
+define i32 @f5() {
+  %v = load i32, ptr @g5
+  ret i32 %v
+}
+
+define i32 @f6() {
+  %v = load i32, ptr @g6
+  ret i32 %v
+}
+
+define i32 @f7() {
+  %v = load i32, ptr @g7
+  ret i32 %v
+}
+
+define i32 @f8() {
+  %v = load i32, ptr @g8
+  ret i32 %v
+}
+
+define i32 @f9() {
+  %v = load i32, ptr @g9
+  ret i32 %v
+}
+
+define i32 @main() {
+  %c0 = call i32 @f0()
+  %c1 = call i32 @f1()
+  %c2 = call i32 @f2()
+  %c3 = call i32 @f3()
+  %c4 = call i32 @f4()
+  %c5 = call i32 @f5()
+  %c6 = call i32 @f6()
+  %c7 = call i32 @f7()
+  %c8 = call i32 @f8()
+  %c9 = call i32 @f9()
+  %s0 = add i32 0, %c0
+  %s1 = add i32 %s0, %c1
+  %s2 = add i32 %s1, %c2
+  %s3 = add i32 %s2, %c3
+  %s4 = add i32 %s3, %c4
+  %s5 = add i32 %s4, %c5
+  %s6 = add i32 %s5, %c6
+  %s7 = add i32 %s6, %c7
+  %s8 = add i32 %s7, %c8
+  %s9 = add i32 %s8, %c9
+  %fpv = load ptr, ptr @fp
+  %fnz = icmp ne ptr %fpv, null
+  %fz = zext i1 %fnz to i32
+  %s10 = add i32 %s9, %fz
+  ret i32 %s10
+}

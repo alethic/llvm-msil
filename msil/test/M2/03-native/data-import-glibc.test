@@ -1,0 +1,38 @@
+# Native data imports from glibc: stderr, environ and optind through dlopen/dlsym (Linux triples).
+# libc.so.6 of the Linux sysroot (%{msil_ldflags}, plan 5.10.4) defines
+# stderr and optind as data (STT_OBJECT) and environ as a weak alias of
+# __environ. Each is a native data import (plan 5.10.12, from M20): its
+# address field is filled at startup by '<msil>dataimport', whose Linux body
+# calls dlopen(<module>, 1) and dlsym, both bound from the link's native
+# libraries like any import (glibc 2.34 and later define them in libc.so.6).
+# The plan marked that path unverified until an M20 test ran it on WSL .NET 8
+# and 10 (plan 5.10.12); this is that test. The program reads optind's
+# initial value, writes it and reads it back, checks that environ holds at
+# least one entry, passes stderr to fileno() and fflush(), and reads environ
+# through an initialized pointer (a data relocation against the import's
+# address field). Natively (the E7 oracle) the same names are copy
+# relocations. Plan 5.10.12, 5.10.15 (M20: glibc stderr/environ/optind under
+# WSL).
+# REQUIRES: msil-triple-linux
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#include "msil_test.h"
+extern char **environ;
+extern int optind;
+extern void *stderr;
+int fileno(void *stream);
+int fflush(void *stream);
+char ***environ_ptr = &environ;
+
+int main(void) {
+  put_kv("optind", optind);
+  optind = 3;
+  put_kv("optind", optind);
+  put_kv("environ set", environ != 0 && environ[0] != 0);
+  put_kv("environ through a pointer", *environ_ptr == environ);
+  put_kv("fileno(stderr)", fileno(stderr));
+  put_kv("fflush(stderr)", fflush(stderr));
+  return optind;
+}

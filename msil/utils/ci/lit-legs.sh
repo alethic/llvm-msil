@@ -18,7 +18,8 @@
 #                llvm-cil-dump and llvm-cil-copy tests, from M18 llvm/test/MC/MSIL and from M19
 #                clang/test/Driver/msil-object.c included), harness, msil/test/M1 and
 #                msil/test/M2 on .NET 8 (tiered), -O0 and -O2, native oracle required
-#                (check-msil's paths)
+#                (check-msil's paths); M2 through CIL objects and msil-ld's image (from M20
+#                %{msil_prog} links objects under the default pipeline asm)
 #   net10        msil/test/M1 on .NET 10
 #   net8-tc0     msil/test/M1 on .NET 8 with DOTNET_TieredCompilation=0 (optimizing JIT)
 #   net10-tc0    msil/test/M1 on .NET 10 with DOTNET_TieredCompilation=0
@@ -26,11 +27,19 @@
 #                tests run at O1 and O3 only); the Windows leg of the same name is M11 gate
 #                step 21, and step 22 runs this triple at these levels under WSL (.NET 10)
 #   lto          msil/test/M1 and msil/test/M2 with msil_pipeline=lto (plan 5.12.11): M1's C
-#                tests as one-source programs through clang -flto -c, msil-ld --lto-emit-asm
-#                and ilasm -exe, and M2, on .NET 8, native oracle required; M1's .ll tests are
-#                filtered out (lto runs them on llc text, as net8 does)
-#   det          msil/test/M2/06-det: objects, archives and --lto-emit-asm text built twice and
-#                compared (%{msil_det})
+#                tests as one-source programs through clang -flto -c and msil-ld (its image
+#                from M20; --lto-emit-asm and ilasm -exe before), and M2, on .NET 8, native
+#                oracle required; M1's .ll tests are filtered out (lto runs them on llc text,
+#                as net8 does)
+#   det          msil/test/M2/06-det: objects, archives and msil-ld's image (M20; M14:
+#                --lto-emit-asm text) built twice and compared (%{msil_det})
+#   obj          msil/test/M1 and msil/test/M2 with msil_pipeline=obj (plan 5.12.11, M20): M1's
+#                C tests as one-source programs through clang -c and msil-ld, its .ll tests
+#                through llc -filetype=obj and msil-ld, and M2, on .NET 8, native oracle
+#                required, with msil_equiv=1 (O3: the --no-gc-sections image against ilasm's
+#                image of the -S text, canonically; O6 needs PEVerify, which Linux lacks, so
+#                msil-verify.py skips it with a note); no msil_scale_tests (lit-legs.ps1's
+#                obj leg alone sets it, plan 5.12.2)
 #   roundtrip    msil/test/M1/11-programs through ildasm -> ilasm, then run (Design.md 5.5)
 #   hosted       optional, runs only when named with --leg hosted (plan Q16, 5.12.11):
 #                msil/test/M2/09-hosted, the hosted compile-only tests, with msil_glibc_sysroot
@@ -106,7 +115,7 @@ tc0=msil_dotnet_env=DOTNET_TieredCompilation=0
 
 # name:kind (kind: lit, expected, utc, upstream; a 'full' suffix marks --full legs, an
 # 'optional' suffix legs that run only when --leg names them)
-legs=(net8:lit net10:lit net8-tc0:lit net10-tc0:lit more-levels:lit lto:lit det:lit roundtrip:lit
+legs=(net8:lit net10:lit net8-tc0:lit net10-tc0:lit more-levels:lit lto:lit det:lit obj:lit roundtrip:lit
   hosted:lit:optional expected:expected utc:utc all-levels:lit:full upstream:upstream:full)
 
 # The tests of the utc leg; lit-legs.ps1 has the same list (keep the two the same).
@@ -118,7 +127,7 @@ leg_paths() {
   case $1 in
     net8) printf '%s\n' "${check_msil[@]}" ;;
     net10 | net8-tc0 | net10-tc0 | more-levels) printf '%s\n' "${m1[@]}" ;;
-    lto) printf '%s\n' "${m1[@]}" "${m2[@]}" ;;
+    lto | obj) printf '%s\n' "${m1[@]}" "${m2[@]}" ;;
     det) echo "$MSIL_REPO/msil/test/M2/06-det" ;;
     roundtrip) printf '%s\n' "${programs[@]}" ;;
     hosted) echo "$MSIL_REPO/msil/test/M2/09-hosted" ;;
@@ -135,6 +144,7 @@ leg_params() {
     more-levels) printf '%s\n' msil_dotnet_runtime=8 msil_opt_levels=O1,O3,Os,Oz ;;
     lto) printf '%s\n' msil_pipeline=lto msil_dotnet_runtime=8 msil_native_oracle=required ;;
     det) echo msil_dotnet_runtime=8 ;;
+    obj) printf '%s\n' msil_pipeline=obj msil_equiv=1 msil_dotnet_runtime=8 msil_native_oracle=required ;;
     roundtrip) echo msil_roundtrip=1 ;;
     hosted) echo "msil_glibc_sysroot=${MSIL_GLIBC_SYSROOT:-/}" ;;
     all-levels) echo msil_opt_levels=O0,O1,O2,O3,Os,Oz ;;

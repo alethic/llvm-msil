@@ -1,0 +1,35 @@
+# The entry snan-quiet of msil/utils/equiv-allowed.txt (plan 5.12.6; M20):
+# both ilasms quiet a float32 signaling-NaN constant, while the MC encoder
+# (CIL objects, msil-ld's image) keeps its bits. The pair comes from the
+# object oracle of plan 5.12.6, which needs no msil-ld: A is llc
+# -filetype=obj's CIL object of a function that returns the float32
+# signaling NaN 0x7F800001 (ldc.r4), B ilasm's object of the same module's
+# object-form text (llc -msil-object-form, ilasm -dll), in which ilasm wrote
+# 0x7FC00001. With every other entry allowed, msil-equiv.py fails (status 1)
+# on exactly the ldc.r4 line; with snan-quiet allowed too (bit 22 set before
+# the comparison), the objects are equal.
+# REQUIRES: msil-registered-target, msil-cil-dump
+
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/a %t/b
+# RUN: %llc_msil -O2 -filetype=obj %t/snan.ll -o %t/a/snan.o
+# RUN: %llc_msil -O2 -msil-object-form %t/snan.ll -o %t/b/snan.il
+# RUN: %ilasm -dll -output=%t/b/snan.o %t/b/snan.il
+# RUN: not %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow pinvoke-module --allow pinvoke-access --allow scopes %t/a/snan.o %t/b/snan.o > %t/without.txt
+# RUN: FileCheck %s --check-prefix=WITHOUT --input-file=%t/without.txt
+# RUN: %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow pinvoke-module --allow pinvoke-access --allow scopes --allow snan-quiet %t/a/snan.o %t/b/snan.o > %t/with.txt
+# RUN: FileCheck %s --check-prefix=WITH --input-file=%t/with.txt
+
+# WITHOUT:      msil-equiv: O3: {{.*}}snan.o and {{.*}}snan.o differ (2 differing lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, pinvoke-module, pinvoke-access, scopes); the first 2:
+# WITHOUT-NEXT: --- {{.*}}a{{[/\\]}}snan.o
+# WITHOUT-NEXT: +++ {{.*}}b{{[/\\]}}snan.o
+# WITHOUT-NEXT: @@ {{.*}} @@
+# WITHOUT-NEXT: -    L0: ldc.r4 float32(0x7F800001)
+# WITHOUT-NEXT: +    L0: ldc.r4 float32(0x7FC00001)
+# WITHOUT-NOT:  {{.}}
+
+# WITH: msil-equiv: O3: {{.*}}snan.o and {{.*}}snan.o are equal ({{[0-9]+}} lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access, scopes)
+
+#--- snan.ll
+define float @snan() {
+  ret float 0x7FF0000020000000
+}

@@ -1,0 +1,57 @@
+# Two builds with archives give identical members, identical archives and identical PE images.
+# %{msil_det} builds the program twice and compares every file of the two
+# build directories byte for byte: the CIL objects, the archives that
+# msil-prog.py writes with the tree's llvm-ar (rcs, deterministic by default)
+# and msil-ld's image (plan 5.12.4; recon tests-p2 3.7). libone.a and
+# libtwo.a both have members named util.o and data.o (each archive is built
+# in its own directory). The link extracts libone.a's util.o and data.o (a
+# member that defines only data) for main.c's references and libtwo.a's
+# util.o, whose references back into libone.a's members are already
+# resolved, and leaves out one/unused.o, two/data.o and two/extra.o, whose
+# constructor therefore never runs; one/util.c shares a string literal with
+# main.c. Extraction depends only on input order, so the two images must be
+# equal. The first RUN line is %{msil_det} (-O2), the second the same at -O0.
+# Plan 5.12.5 (06-det: objects, archives and PE, M20).
+# REQUIRES: msil-ar
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_archives} = one=%t/one/util.c,%t/one/data.c,%t/one/unused.c;two=%t/two/util.c,%t/two/data.c,%t/two/extra.c
+# RUN: %{msil_det}
+# RUN: %msil_prog_build --det --level O0 --workdir %t.det0.d --src %{msil_srcs} --archives='%{msil_archives}'
+#--- main.c
+#include "msil_test.h"
+int one_util(int);
+int two_util(int);
+extern int one_table[3];
+int main(void) {
+  put_str("shared literal");
+  put_i64(one_util(1) + two_util(2) + one_table[2]);
+  return 0;
+}
+#--- one/util.c
+int puts(const char *);
+static int calls;
+int one_util(int x) {
+  ++calls;
+  puts("shared literal");
+  return x + calls;
+}
+#--- one/data.c
+int one_table[3] = {10, 20, 30};
+int one_data_only = 4;
+#--- one/unused.c
+int one_unused(int x) { return x * 99; }
+#--- two/util.c
+int one_util(int);
+extern int one_data_only;
+static int calls;
+int two_util(int x) {
+  ++calls;
+  return one_util(x) + one_data_only + calls;
+}
+#--- two/data.c
+int two_never_referenced = 5;
+#--- two/extra.c
+int puts(const char *);
+int two_extra(void) { return 1; }
+__attribute__((constructor)) static void two_extra_init(void) { puts("never linked"); }

@@ -1,0 +1,261 @@
+## LTO writes CIL objects from M20 (ImplementationPlan.md 5.9.13; M14's
+## 'ThinLTO, --lto-partitions and LTO without --lto-emit-asm need CIL object
+## output' error goes): without --lto-emit-asm, msil-ld parses LTO's output
+## as in-memory CIL objects (lld/wasm/SymbolTable.cpp:112-117) and writes the
+## PE, so these all link with no diagnostic:
+## - bitcode only (full LTO; at -O0 the internalized add3 stays, 'assembly',
+##   and --gc-sections may drop the unreferenced helper; at the default -O2
+##   add3 is inlined into main);
+## - CIL objects and bitcode together: a symbol a CIL object references is
+##   visible to regular objects ('x' in --save-temps' resolutions), so add3
+##   stays public, and the object's call names its method;
+## - --lto-partitions=2 and ThinLTO (module summaries): several LTO objects
+##   in one PE, each contributing live methods. In the partition link,
+##   mainh.bc's main calls add3 and helper, which SplitModule places by the
+##   MD5 of their names (main and add3 in the first partition, helper in the
+##   second), so no partition holds only code that --gc-sections drops; the
+##   map's Symbols: and Methods: sections name '<output>.lto.o' and
+##   '<output>.lto.1.o' (its Inputs: section lists only the bitcode). ThinLTO
+##   writes one object per module;
+## - --save-temps also writes each LTO object, named as lld/wasm names them:
+##   '<output>.lto.o' and '<output>.lto.<n>.o' next to -o for full LTO, and
+##   '<output basename>.lto.<bitcode stem>.o' next to each bitcode input for
+##   ThinLTO (prog.exe.lto.main.thin.o for main.thin.bc); each is a CIL
+##   object with a link-info record for the codegen triple.
+## Under the module flag msil-lto, MSILFixFunctionBitcasts adapts a call
+## whose signature differs from the merged definition with 5.9.8's table and
+## warns, with 5.9.8's text minus the ' in <file>' parts (the merged module
+## has no files), as the object path does (Q8). The table runs before LTO
+## optimization too (the section 12 row 'Plan 5.9.8 (LTO path) and the D30
+## row of 2026-10-21 amended'), so at --lto-O2 and --lto-O3 a float32
+## argument for an int32 parameter is still 5.9.8's error (InstCombine does
+## not fold the call first), and a K&R extra-argument call warns exactly
+## once at -O0 and at -O2 (code generation, which then finds the call
+## adapted, reports nothing again).
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as main.ll -o main.bc
+# RUN: llvm-as add.ll -o add.bc
+# RUN: llc -filetype=obj main.ll -o main.o
+# RUN: opt -module-summary main.ll -o main.thin.bc
+# RUN: opt -module-summary add.ll -o add.thin.bc
+# RUN: llvm-as kr-call.ll -o kr-call.bc
+# RUN: llvm-as kr-def.ll -o kr-def.bc
+# RUN: llvm-as mainh.ll -o mainh.bc
+# RUN: llvm-as fim-call.ll -o fim-call.bc
+# RUN: llvm-as fim-def.ll -o fim-def.bc
+# RUN: mkdir o0 o2 mixed part thin save
+
+# DEFINE: %{exe} = FileCheck %s --check-prefix=EXE
+
+## Bitcode only.
+# RUN: msil-ld --lto-O0 main.bc add.bc -o o0/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --headers o0/prog.exe | %{exe}
+# RUN: llvm-cil-dump o0/prog.exe | FileCheck %s --check-prefix=O0
+# RUN: msil-ld main.bc add.bc -o o2/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump o2/prog.exe | FileCheck %s --check-prefix=O2 --implicit-check-not="'add3'" \
+# RUN:   --implicit-check-not="'helper'"
+# EXE:     {{^}}Format: PE32+ machine=0x8664 exe{{$}}
+# O0:      {{^}}entrypoint int32(string[]) '<Module>'::'<msil>Main'{{$}}
+# O0:      {{^}}  .method 'add3' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# O0:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# O0-NEXT: {{^}}    .maxstack 1{{$}}
+# O0-NEXT: {{^}}    L0: ldc.i4.4{{$}}
+# O0-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'add3'{{$}}
+# O2:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# O2-NEXT: {{^}}    .maxstack 1{{$}}
+# O2-NEXT: {{^}}    L0: ldc.i4.7{{$}}
+# O2-NEXT: {{^}}    L1: ret{{$}}
+
+## A CIL object and bitcode.
+# RUN: msil-ld --save-temps main.o add.bc -o mixed/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --headers mixed/prog.exe | %{exe}
+# RUN: llvm-cil-dump mixed/prog.exe | FileCheck %s --check-prefix=MIXED
+# RUN: FileCheck %s --check-prefix=RES --input-file=mixed/prog.exe.resolution.txt
+# MIXED:      {{^}}  .method 'add3' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# MIXED:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# MIXED-NEXT: {{^}}    .maxstack 1{{$}}
+# MIXED-NEXT: {{^}}    L0: ldc.i4.4{{$}}
+# MIXED-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'add3'{{$}}
+# RES:        {{^}}add.bc{{$}}
+# RES-NEXT:   {{^}}-r=add.bc,add3,p{{l?}}x{{$}}
+
+## Two partitions: methods from both LTO objects.
+# RUN: msil-ld --lto-O0 --lto-partitions=2 --save-temps -Map=part/prog.map mainh.bc add.bc \
+# RUN:   -o part/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --headers part/prog.exe | %{exe}
+# RUN: llvm-cil-dump part/prog.exe | FileCheck %s --check-prefix=PART
+# RUN: ls part | FileCheck %s --check-prefix=PART-TEMPS
+# RUN: FileCheck %s --check-prefix=PART-MAP --input-file=part/prog.map
+# RUN: llvm-cil-dump --link-info part/prog.exe.lto.1.o | FileCheck %s --check-prefix=PART-OBJ
+## (A symbol that crosses LTO objects may be externalized, so add3 and
+## helper are public or assembly.)
+# PART:      {{^}}  .method 'add3' int32(int32) flags=0x001{{[36]}} impl=0x0000{{$}}
+# PART:      {{^}}  .method 'helper' int32(int32) flags=0x001{{[36]}} impl=0x0000{{$}}
+# PART:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# PART:      {{^}}    L{{[0-9]+}}: call int32(int32) '<Module>'::'add3'{{$}}
+# PART-NEXT: {{^}}    L{{[0-9]+}}: call int32(int32) '<Module>'::'helper'{{$}}
+# PART-TEMPS-DAG: {{^}}prog.exe.lto.o{{$}}
+# PART-TEMPS-DAG: {{^}}prog.exe.lto.1.o{{$}}
+# PART-MAP:      {{^}}Inputs:{{$}}
+# PART-MAP-NEXT: {{^}}  mainh.bc{{$}}
+# PART-MAP-NEXT: {{^}}  add.bc{{$}}
+# PART-MAP-NEXT: {{^}}Symbols:{{$}}
+# PART-MAP-DAG:  {{^}}  DefinedFunction {{ *}}Global {{ *}}part{{[/\\]}}prog.exe.lto.o {{ *}}main{{$}}
+# PART-MAP-DAG:  {{^}}  DefinedFunction {{ *}}Global {{ *}}part{{[/\\]}}prog.exe.lto.o {{ *}}add3{{$}}
+# PART-MAP-DAG:  {{^}}  DefinedFunction {{ *}}Global {{ *}}part{{[/\\]}}prog.exe.lto.1.o {{ *}}helper{{$}}
+# PART-MAP:      {{^}}Methods:{{$}}
+# PART-MAP-DAG:  {{^}}  0x06{{[0-9A-F]+}} <Module> {{ *}}part{{[/\\]}}prog.exe.lto.o {{ *}}main{{$}}
+# PART-MAP-DAG:  {{^}}  0x06{{[0-9A-F]+}} <Module> {{ *}}part{{[/\\]}}prog.exe.lto.o {{ *}}add3{{$}}
+# PART-MAP-DAG:  {{^}}  0x06{{[0-9A-F]+}} <Module> {{ *}}part{{[/\\]}}prog.exe.lto.1.o {{ *}}helper{{$}}
+# PART-MAP:      {{^}}Fields:{{$}}
+# PART-OBJ:      {{^}}LinkInfo v1.0 triple=x86_64-pc-windows-msvc-msil {{.*}}{{$}}
+# PART-OBJ:      {{^}}Symbol {{[0-9]+}} FUNCTION GLOBAL {{[A-Z]+}} 'helper' method=0x06{{[0-9A-F]+}}{{$}}
+
+## ThinLTO: one object per module, next to its bitcode, each with methods.
+# RUN: msil-ld --lto-O0 --save-temps -Map=thin/prog.map main.thin.bc add.thin.bc -o thin/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump --headers thin/prog.exe | %{exe}
+# RUN: llvm-cil-dump thin/prog.exe | FileCheck %s --check-prefix=MULTI
+# RUN: ls | FileCheck %s --check-prefix=THIN-OBJS
+# RUN: ls thin | FileCheck %s --check-prefix=THIN-DIR
+# RUN: FileCheck %s --check-prefix=THIN-MAP --input-file=thin/prog.map
+# RUN: llvm-cil-dump --link-info prog.exe.lto.add.thin.o | FileCheck %s --check-prefix=THIN-OBJ
+# MULTI:      {{^}}  .method 'add3' int32(int32) flags=0x001{{[36]}} impl=0x0000{{$}}
+# MULTI:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# MULTI:      {{^}}    L{{[0-9]+}}: call int32(int32) '<Module>'::'add3'{{$}}
+# THIN-OBJS-DAG: {{^}}prog.exe.lto.main.thin.o{{$}}
+# THIN-OBJS-DAG: {{^}}prog.exe.lto.add.thin.o{{$}}
+# THIN-DIR-NOT:  .lto.
+# THIN-MAP:      {{^}}Inputs:{{$}}
+# THIN-MAP-NEXT: {{^}}  main.thin.bc{{$}}
+# THIN-MAP-NEXT: {{^}}  add.thin.bc{{$}}
+# THIN-MAP-NEXT: {{^}}Symbols:{{$}}
+# THIN-MAP:      {{^}}Methods:{{$}}
+# THIN-MAP-DAG:  {{^}}  0x06{{[0-9A-F]+}} <Module> {{ *}}prog.exe.lto.main.thin.o {{ *}}main{{$}}
+# THIN-MAP-DAG:  {{^}}  0x06{{[0-9A-F]+}} <Module> {{ *}}prog.exe.lto.add.thin.o {{ *}}add3{{$}}
+# THIN-MAP:      {{^}}Fields:{{$}}
+# THIN-OBJ:      {{^}}LinkInfo v1.0 triple=x86_64-pc-windows-msvc-msil {{.*}}{{$}}
+# THIN-OBJ:      {{^}}Symbol {{[0-9]+}} FUNCTION GLOBAL {{[A-Z]+}} 'add3' method=0x06{{[0-9A-F]+}}{{$}}
+
+## --save-temps keeps the LTO object, a CIL object.
+# RUN: msil-ld --save-temps main.bc add.bc -o save/prog.exe 2>&1 | count 0
+# RUN: ls save | FileCheck %s --check-prefix=TEMPS
+# RUN: llvm-cil-dump --link-info save/prog.exe.lto.o | FileCheck %s --check-prefix=LTO-OBJ
+# TEMPS-DAG: {{^}}prog.exe{{$}}
+# TEMPS-DAG: {{^}}prog.exe.0.0.preopt.bc{{$}}
+# TEMPS-DAG: {{^}}prog.exe.0.5.precodegen.bc{{$}}
+# TEMPS-DAG: {{^}}prog.exe.lto.o{{$}}
+# TEMPS-DAG: {{^}}prog.exe.resolution.txt{{$}}
+# LTO-OBJ:   {{^}}LinkInfo v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 abiflags=0x0 features=0x0 datamodel=8,4,2,8{{$}}
+# LTO-OBJ:   {{^}}Symbol {{[0-9]+}} FUNCTION GLOBAL DEFAULT 'main' method=0x06{{[0-9A-F]+}}{{$}}
+
+## An adapter in the merged module, with its warning, exactly once at -O0
+## and at -O2.
+# RUN: msil-ld --lto-O0 kr-call.bc kr-def.bc -o kr.exe > kr-O0.txt 2>&1
+# RUN: FileCheck %s --check-prefix=LTO-WARN --implicit-check-not=error: --implicit-check-not="PLEASE submit" \
+# RUN:   --input-file=kr-O0.txt
+# RUN: FileCheck %s --check-prefix=LTO-WCOUNT --input-file=kr-O0.txt
+# RUN: llvm-cil-dump --headers kr.exe | %{exe}
+# RUN: msil-ld --lto-O2 kr-call.bc kr-def.bc -o kr2.exe > kr-O2.txt 2>&1
+# RUN: FileCheck %s --check-prefix=LTO-WARN --implicit-check-not=error: --implicit-check-not="PLEASE submit" \
+# RUN:   --input-file=kr-O2.txt
+# RUN: FileCheck %s --check-prefix=LTO-WCOUNT --input-file=kr-O2.txt
+# RUN: llvm-cil-dump --headers kr2.exe | %{exe}
+# LTO-WARN:      {{^}}msil-ld: warning: function signature mismatch: f{{$}}
+# LTO-WARN-NEXT: {{^}}>>> defined as int32(int32){{$}}
+# LTO-WARN-NEXT: {{^}}>>> called as int32(int32, int32){{$}}
+# LTO-WARN-NEXT: {{^}}>>> adapter: drops 1 extra argument{{$}}
+# LTO-WCOUNT-COUNT-1: {{^}}msil-ld: warning: function signature mismatch: f{{$}}
+# LTO-WCOUNT-NOT:     {{warning:|error:|function signature mismatch}}
+
+## int32 half_of(float) called against int32 half_of(int32): an error at
+## every level, the optimizing ones included.
+# DEFINE: %{fim} = FileCheck %s --check-prefix=FIM --implicit-check-not=error: --implicit-check-not=warning: \
+# DEFINE:   --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" --implicit-check-not="LLVM ERROR"
+# RUN: not msil-ld --lto-O0 fim-call.bc fim-def.bc -o x.exe 2>&1 | %{fim}
+# RUN: not msil-ld --lto-O2 fim-call.bc fim-def.bc -o x.exe 2>&1 | %{fim}
+# RUN: not msil-ld --lto-O3 fim-call.bc fim-def.bc -o x.exe 2>&1 | %{fim}
+# FIM:      {{^}}msil-ld: error: function signature mismatch: half_of{{$}}
+# FIM-NEXT: {{^}}>>> defined as int32(int32){{$}}
+# FIM-NEXT: {{^}}>>> called as int32(float32){{$}}
+# FIM-NEXT: {{^}}>>> {{.+}} (different native register classes){{$}}
+
+#--- main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @add3(i32)
+
+define i32 @main() {
+  %r = call i32 @add3(i32 4)
+  ret i32 %r
+}
+
+#--- add.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @add3(i32 %x) {
+  %r = add i32 %x, 3
+  ret i32 %r
+}
+
+define i32 @helper(i32 %x) {
+  %r = mul i32 %x, 2
+  ret i32 %r
+}
+
+#--- mainh.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @add3(i32)
+declare i32 @helper(i32)
+
+define i32 @main() {
+  %a = call i32 @add3(i32 4)
+  %r = call i32 @helper(i32 %a)
+  ret i32 %r
+}
+
+#--- fim-call.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @half_of(float)
+
+define i32 @main() {
+  %r = call i32 @half_of(float 9.0)
+  %m = and i32 %r, 255
+  ret i32 %m
+}
+
+#--- fim-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @half_of(i32 %x) {
+  %r = sdiv i32 %x, 2
+  ret i32 %r
+}
+
+#--- kr-call.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @f(i32, i32)
+
+define i32 @main() {
+  %r = call i32 @f(i32 1, i32 2)
+  ret i32 %r
+}
+
+#--- kr-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @f(i32 %a) {
+  %r = add i32 %a, 10
+  ret i32 %r
+}

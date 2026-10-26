@@ -1,0 +1,38 @@
+# Matrix case float-int-mismatch: a float prototype against an int definition is a named link error.
+# a.c declares half_of(float) and calls it; b.c defines half_of(int).
+# Natively this links and the callee reads an integer register that the
+# caller never set: undefined behaviour with no transcript. A floating-point
+# argument for an integer parameter lives in another native register class,
+# so 5.9.8's table has no adapter for it: the object link stops with
+# 'function signature mismatch: half_of' and the two shapes (each with its
+# object), then the reason (5.9.8 leaves its wording to msil-ld; it is not an
+# '>>> adapter:' line), and exit status 1. On the LTO path
+# MSILFixFunctionBitcasts applies the same table under the module flag
+# msil-lto and reports the same text without the ' in <file>' parts as an
+# error, never the trapping '_bitcast_invalid' wrapper of M14-M19 and never a
+# JIT-time exception. Both paths are checked at -O0 and -O2: msil-ld's LTO
+# applies the table before LTO optimization too, so the optimizer cannot fold
+# the mismatched call away first (section 12 row 'Plan 5.9.8 (LTO path) and
+# the D30 row of 2026-10-21 amended'). Plan 5.9.16 row float-int-mismatch
+# (M20, obj and lto).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: warning" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: warning" %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: warning" --implicit-check-not="_bitcast_invalid" %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: warning" --implicit-check-not="_bitcast_invalid" %}
+# OBJ:      {{^}}msil-ld: error: function signature mismatch: half_of{{$}}
+# OBJ-NEXT: {{^}}>>> defined as int32(int32) in {{.*}}b.o{{$}}
+# OBJ-NEXT: {{^}}>>> called as int32(float32) in {{.*}}a.o{{$}}
+# OBJ-NEXT: {{^}}>>> {{([^a]|a[^d]).*}}
+# OBJ:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# LTO:      {{^}}msil-ld: error: {{.*}}function signature mismatch: half_of{{$}}
+# LTO-NEXT: {{^}}>>> defined as int32(int32){{$}}
+# LTO-NEXT: {{^}}>>> called as int32(float32){{$}}
+# LTO-NEXT: {{^}}>>> {{([^a]|a[^d]).*}}
+# LTO:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- a.c
+int half_of(float x);
+int main(void) { return half_of(9.0f) & 0xff; }
+#--- b.c
+int half_of(int x) { return x / 2; }

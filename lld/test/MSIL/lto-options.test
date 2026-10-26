@@ -7,18 +7,28 @@
 ##   <output>.resolution.txt, whose flags show which symbols msil-ld keeps
 ##   visible to regular objects ('x'): the entry symbol, -u symbols and
 ##   NO_STRIP symbols (those in llvm.used), while the winning definitions are
-##   prevailing ('p'); symbols referenced by CIL objects (M20) and -shared
-##   exports (M22) join the visible ones later;
+##   prevailing ('p'); symbols referenced by CIL objects (M20, obj-lto.test)
+##   and -shared exports (M22) are visible too;
 ## - -mllvm <opt> and --mllvm=<opt> reach the MSIL code generator that runs
 ##   inside msil-ld;
 ## - --disable-verify, --thinlto-jobs=<n>, --thinlto-cache-dir=<dir> and
-##   --lto-partitions=1 are accepted (ThinLTO and more partitions need CIL
-##   objects, M20; lto-object-output-error.test).
+##   --lto-partitions=1 are accepted (ThinLTO, more partitions and LTO links
+##   that write the PE use CIL object output from M20: obj-lto.test);
+## - --lto-emit-asm writes one ILAsm module, so it refuses what it cannot
+##   write as one (5.9.13; plan 5.6.1 rule 6 for the retired M14 error; the
+##   section 12 row 'msil-ld texts and behaviour that 5.9.3, 5.9.11, 5.9.13
+##   and 5.9.14 do not state' gives the texts): --lto-partitions=2 and a
+##   ThinLTO module (opt -module-summary) are 'ThinLTO and --lto-partitions
+##   cannot write ILAsm text; link without --lto-emit-asm', and a CIL object,
+##   positional or an archive member, is '<file>: --lto-emit-asm cannot link
+##   CIL objects; link without --lto-emit-asm' (the text holds only the
+##   bitcode). Each exits 1 with that one error; --lto-partitions=1 links.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: llvm-as main.ll -o main.o
 # RUN: llvm-as add.ll -o add.o
 # RUN: llvm-as used.ll -o used.o
+# RUN: opt -module-summary add.ll -o add.thin.o
 # RUN: mkdir o0 o1 o2 o3 dflt st stu acc cgo su
 
 # RUN: msil-ld --lto-emit-asm --lto-O0 main.o add.o -o o0/prog.il 2>&1 | count 0
@@ -113,6 +123,25 @@
 # RUN: msil-ld --lto-emit-asm --disable-verify --thinlto-jobs=2 --thinlto-cache-dir=cache \
 # RUN:   --lto-partitions=1 main.o add.o -o acc/prog.il 2>&1 | count 0
 # RUN: cmp dflt/prog.il acc/prog.il
+
+## What --lto-emit-asm cannot write as one module. The CIL object is
+## cil/add.o, an llc object of add.ll; those links run in cil/, so the texts
+## name add.o and libadd.a(add.o).
+# DEFINE: %{rej} = FileCheck %s --implicit-check-not=error: --implicit-check-not="PLEASE submit" \
+# DEFINE:   --implicit-check-not="Stack dump" --implicit-check-not="LLVM ERROR"
+# RUN: not msil-ld --lto-emit-asm --lto-partitions=2 main.o add.o -o x.il 2>&1 | %{rej} --check-prefix=SPLIT
+# RUN: not msil-ld --lto-emit-asm main.o add.thin.o -o x.il 2>&1 | %{rej} --check-prefix=SPLIT
+# SPLIT: {{^}}msil-ld: error: ThinLTO and --lto-partitions cannot write ILAsm text; link without --lto-emit-asm{{$}}
+# RUN: mkdir cil && cd cil
+# RUN: llc -filetype=obj ../add.ll -o add.o
+# RUN: llvm-ar rcs libadd.a add.o
+# RUN: not msil-ld --lto-emit-asm ../main.o add.o -o x.il 2>&1 | %{rej} --check-prefix=CIL -DFILE=add.o
+# RUN: not msil-ld --lto-emit-asm ../main.o libadd.a -o x.il 2>&1 | %{rej} --check-prefix=CIL "-DFILE=libadd.a(add.o)"
+# CIL: {{^}}msil-ld: error: [[FILE]]: --lto-emit-asm cannot link CIL objects; link without --lto-emit-asm{{$}}
+# RUN: cd ..
+## One partition is one module, the same text as without the option.
+# RUN: mkdir p1 && msil-ld --lto-emit-asm --lto-partitions=1 main.o add.o -o p1/prog.il 2>&1 | count 0
+# RUN: cmp dflt/prog.il p1/prog.il
 
 #--- main.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"

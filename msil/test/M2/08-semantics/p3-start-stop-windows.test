@@ -1,0 +1,54 @@
+# Matrix case p3-start-stop on Windows triples: __start_myreg stays undefined, a named link error.
+# The program of p3-start-stop.test (recon/p2/judge-c-fidelity-files/probes/
+# p3a.c and p3b.c). COFF links group sections by the part of the name before
+# '$' and define no __start_/__stop_ symbols: link.exe and lld-link leave the
+# reference undefined, so natively this is a link error with no transcript,
+# and msil-ld does the same on Windows triples (plan 5.9.9,
+# '__start_<name>/__stop_<name>'). Both symbols are reported as 5.9.14's
+# 'undefined symbol: <s>', each with a '>>> referenced by <file>:(<method>)'
+# line naming main, and the link fails with exit status 1. The object link
+# names p3a.o; the LTO link names the object that LTO wrote (late binding runs
+# after LTO from M20, plan 5.9.6), or with --lto-emit-asm the bitcode file, so
+# its line only pins the method. Each output is saved and checked once per
+# symbol, because the order of the two reports is not part of the contract.
+# Plan 5.9.16 row p3-start-stop (M20: Windows 'undefined symbol:
+# __start_myreg').
+# REQUIRES: msil-triple-windows
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/p3a.c %t/p3b.c
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} > %t.obj.O0.txt 2>&1 %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} > %t.obj.O2.txt 2>&1 %}
+# RUN: %if msil-prog-pipeline=obj %{ FileCheck %s --check-prefixes=OBJ-START,TAIL --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --input-file=%t.obj.O0.txt %}
+# RUN: %if msil-prog-pipeline=obj %{ FileCheck %s --check-prefixes=OBJ-STOP,TAIL --input-file=%t.obj.O0.txt %}
+# RUN: %if msil-prog-pipeline=obj %{ FileCheck %s --check-prefixes=OBJ-START,TAIL --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --input-file=%t.obj.O2.txt %}
+# RUN: %if msil-prog-pipeline=obj %{ FileCheck %s --check-prefixes=OBJ-STOP,TAIL --input-file=%t.obj.O2.txt %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} > %t.lto.O0.txt 2>&1 %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} > %t.lto.O2.txt 2>&1 %}
+# RUN: %if msil-prog-pipeline=lto %{ FileCheck %s --check-prefixes=LTO-START,TAIL --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --input-file=%t.lto.O0.txt %}
+# RUN: %if msil-prog-pipeline=lto %{ FileCheck %s --check-prefixes=LTO-STOP,TAIL --input-file=%t.lto.O0.txt %}
+# RUN: %if msil-prog-pipeline=lto %{ FileCheck %s --check-prefixes=LTO-START,TAIL --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --input-file=%t.lto.O2.txt %}
+# RUN: %if msil-prog-pipeline=lto %{ FileCheck %s --check-prefixes=LTO-STOP,TAIL --input-file=%t.lto.O2.txt %}
+# OBJ-START:      {{^}}msil-ld: error: undefined symbol: __start_myreg{{$}}
+# OBJ-START-NEXT: {{^}}>>> referenced by {{.*}}p3a.o:(main){{$}}
+# OBJ-STOP:       {{^}}msil-ld: error: undefined symbol: __stop_myreg{{$}}
+# OBJ-STOP-NEXT:  {{^}}>>> referenced by {{.*}}p3a.o:(main){{$}}
+# LTO-START:      {{^}}msil-ld: error: undefined symbol: __start_myreg{{$}}
+# LTO-START-NEXT: {{^}}>>> referenced by {{.+}}:(main){{$}}
+# LTO-STOP:       {{^}}msil-ld: error: undefined symbol: __stop_myreg{{$}}
+# LTO-STOP-NEXT:  {{^}}>>> referenced by {{.+}}:(main){{$}}
+# TAIL:           clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- p3a.c
+/* p3a.c: section-based registration across objects with __start_/__stop_ (ELF) */
+struct reg { int v; };
+static const struct reg r1 __attribute__((used, section("myreg"))) = { 3 };
+extern const struct reg __start_myreg[], __stop_myreg[];
+int main(void) {
+  int s = 0;
+  for (const struct reg *p = __start_myreg; p < __stop_myreg; ++p) s += p->v;
+  return s;               /* 15 */
+}
+#--- p3b.c
+/* p3b.c */
+struct reg { int v; };
+static const struct reg r2 __attribute__((used, section("myreg"))) = { 5 };
+static const struct reg r3 __attribute__((used, section("myreg"))) = { 7 };

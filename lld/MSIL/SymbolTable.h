@@ -21,9 +21,16 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include <memory>
+#include <string>
 #include <vector>
 
+namespace llvm::cli {
+struct MethodSig;
+} // namespace llvm::cli
+
 namespace lld::msil {
+struct NativeExport;
+
 // SymbolTable is a bucket of all known symbols, including defined,
 // undefined, or lazy symbols (the last one is symbols in archive
 // files whose archive members are not yet loaded).
@@ -37,26 +44,39 @@ namespace lld::msil {
 // plan 5.9.5); addSymbol() applies them and checks that one name is not used
 // for a function and for data, or for TLS and non-TLS data.
 //
-// The driver's order (plan 5.9.6): addFile() for every input, extracted
-// member and native library, addUndefined() for -u and the entry, then
-// bindLateSymbols() and compileBitcodeFiles(). The import-annotation pass
-// (plan 5.10.13) reports unresolved references after LTO through
-// reportReference().
+// The driver's order (plan 5.9.6, M20.b (7)): addFile() for every input,
+// extracted member and native library, addUndefined() for -u and the entry,
+// recordReferences(); then, when LTO writes CIL objects,
+// compileBitcodeFiles() (which parses the LTO objects), bindLateSymbols(),
+// finalizeObjectSymbols() and resolveAlternateNames(), before markLive() and
+// the writer; under --lto-emit-asm, bindLateSymbols() before
+// compileBitcodeFiles(), whose import-annotation pass (plan 5.10.13) reports
+// unresolved references after LTO through reportReference().
 class SymbolTable {
 public:
   // Every symbol in the table, in insertion order.
   ArrayRef<Symbol *> symbols() const { return symVector; }
 
-  // Parses \p file: a lazy file adds lazy symbols, a bitcode file its
-  // symbols, and a native library its definitions to ctx.nativeIndex (they
-  // bind late). \p symName names the symbol whose lazy definition extracted
-  // the file, for diagnostics.
+  // Parses \p file: a lazy file adds lazy symbols, a CIL object or a bitcode
+  // file its symbols, and a native library its definitions to ctx.nativeIndex
+  // (they bind late). \p symName names the symbol whose lazy definition
+  // extracted the file, for diagnostics.
   void addFile(InputFile *file, StringRef symName = {});
 
   // This function is where all the optimizations of link-time
-  // optimization happens. M14's LTO (--lto-emit-asm) writes the ILAsm text of
-  // the whole program to -o and adds no files.
+  // optimization happens. Under --lto-emit-asm it writes the ILAsm text of
+  // the whole program to -o and adds no files; otherwise the in-memory CIL
+  // objects that LTO writes (ThinLTO and --lto-partitions give several) are
+  // parsed like any object, with COMDATs ignored (every group kept), and
+  // appended to ctx.objectFiles (ObjFile::isLTO, plan 5.9.13). The
+  // prevailing bitcode definitions become undefined symbols first, so that
+  // the LTO objects define them again (lld/wasm's undefine).
   void compileBitcodeFiles();
+
+  // Records which bitcode inputs refer to each symbol, for the diagnostics
+  // after LTO, which takes the inputs' symbol tables. The driver calls it
+  // once every input is loaded, before LTO.
+  void recordReferences() { (void)getReferences(nullptr); }
 
   // The plan 5.9.6 rules for the symbols that are still undefined after every
   // input is loaded (M15: bitcode inputs and native libraries; managed
@@ -72,8 +92,13 @@ public:
   // - a definition whose COMDAT copy was discarded and that an input still
   //   refers to is "relocation refers to a symbol in a discarded section";
   // - an undefined hidden (or internal) symbol is "undefined hidden symbol"
-  //   and an undefined protected one "undefined protected symbol"; neither
-  //   binds late;
+  //   and an undefined protected one "undefined protected symbol" (except
+  //   the __start_X and __stop_X below); neither binds late;
+  // - off Windows, an undefined __start_X or __stop_X is neither bound nor
+  //   reported, whatever its visibility, when a bitcode definition is in
+  //   section X: code generation defines it as data (plan 5.9.6, 5.9.9), so
+  //   a function reference of it is plan 5.9.5's "symbol type mismatch"
+  //   against data "in <internal>";
   // - any other undefined symbol, function or data, goes to LTO, whose
   //   import-annotation pass binds or reports what the merged module still
   //   refers to (plan 5.9.6 "When it runs", 5.10.13);
@@ -82,7 +107,107 @@ public:
   //   The driver does not report it again.
   // It also records which inputs refer to each symbol, for reportReference(),
   // because LTO takes the inputs' symbol tables.
+  //
+  // When LTO writes CIL objects (no --lto-emit-asm), it runs after LTO, over
+  // the CIL objects and the LTO objects, which carry import names (plan
+  // 5.9.6 "When it runs"):
+  // - step 2: a referenced undefined symbol of default visibility binds by
+  //   its import name (the ImplMap import name of its msil.unresolved stubs,
+  //   the ImportName of IMPORT data, else the symbol name); a symbol with an
+  //   explicit module (EXPLICIT_IMPORT stubs, IMPORT data with a module)
+  //   binds to that module and entry unchecked (isExplicitImport). The
+  //   definitions the lookup passed over are kept for getRejectedNative();
+  // - an undefined __start_X or __stop_X does not bind natively off Windows
+  //   when a CIL object has a segment named X: the writer defines it as data
+  //   (plan 5.9.9), so a function reference of it, whatever its visibility,
+  //   is plan 5.9.5's "symbol type mismatch" against data "in <internal>";
+  // - step 3: the call signatures of each undefined weak function are
+  //   recorded for its trap stubs (getUndefinedCalls);
+  // - only the entry symbol is reported here: the writer reports the other
+  //   undefined, hidden and discarded symbols that live code refers to (plan
+  //   5.9.6 step 4, 5.9.11; reportUnresolved()).
   void bindLateSymbols();
+
+  // lld-link's /alternatename rule, last (plan 5.9.6), when LTO writes CIL
+  // objects: each <from> of ctx.appliedAlternateNames that late binding left
+  // undefined resolves to <to>'s definition (a copy of <to>'s symbol under
+  // <from>'s name; a method and its '<msil>fn_' field are shared). Under
+  // --lto-emit-asm the import-annotation pass does this on the merged module.
+  void resolveAlternateNames();
+
+  // After resolution and late binding (plan 5.9.5, 5.9.9): marks the method
+  // or segment of every CIL object definition that lost to another input's
+  // definition as discarded (a WEAK copy overridden by a GLOBAL definition or
+  // a common symbol), unless a symbol that won still lies in it (an alias of
+  // the losing definition: the writer then names the method or field apart
+  // from the winner's), and gives every common symbol that survived a
+  // SyntheticSegment at the SYMTAB position of its first declaration, in
+  // ctx.syntheticSegments (objects in load order, SYMTAB order).
+  void finalizeObjectSymbols();
+
+  // Defines the linker-defined DATA symbol \p name at \p offset bytes into
+  // the data image (plan 5.9.9's __start_X and __stop_X) if an input refers
+  // to it and nothing defines it: an undefined or weak lazy entry that is not
+  // a function (bindLateSymbols() reports a function reference, plan 5.9.5)
+  // becomes a SyntheticData, appended to ctx.sym.startStop. Returns null
+  // otherwise.
+  SyntheticData *addSyntheticData(StringRef name, uint64_t offset);
+
+  // The import attributes of the undefined symbol \p sym that \p file gives
+  // (plan 5.10.7, wasm-ld's updateExistingUndefined): an empty module or a
+  // name equal to the symbol name counts as none, and an input that gives
+  // none takes the other's. Two inputs that give different modules or names
+  // are "import module mismatch for symbol: <s>" / "import name mismatch for
+  // symbol: <s>", each with two ">>> defined as <value> in <file>" lines.
+  // Ignored once \p sym is defined.
+  void addImportAttributes(Symbol &sym, InputFile &file, StringRef module,
+                           StringRef name);
+
+  // The import module and import name that CIL objects gave \p sym (empty if
+  // none).
+  StringRef getImportModule(const Symbol *sym) const;
+  StringRef getImportName(const Symbol *sym) const;
+
+  // True if late binding bound \p sym to its explicit import module,
+  // unchecked (plan 5.10.7): the writer exempts such a binding from the
+  // native callback and `long double` checks.
+  bool isExplicitImport(const Symbol *sym) const;
+
+  // The native definitions that late binding's lookup passed over for \p sym
+  // (a P/Invoke cannot bind them, or a function reference skipped COFF
+  // data), in link order: the writer's 5.10.14 texts for a symbol that stays
+  // undefined.
+  ArrayRef<const NativeExport *> getRejectedNative(const Symbol *sym) const;
+
+  // A direct call of an undefined weak function (plan 5.9.6 step 3): the
+  // call-side signature (as the object encodes it) and SIGNATURES entry of
+  // one call site's token, and the object.
+  struct UndefinedCall {
+    ObjFile *file;
+    const llvm::cli::MethodSig *signature;
+    const llvm::MSILLink::SignatureInfo *signatureInfo;
+  };
+  // The calls of the undefined weak function \p sym, in first-use order
+  // (objects in load order, methods in row order, sites in code order), one
+  // per object and signature, and one per signature across objects when the
+  // signature names no type (Phase 2's C signatures): the writer makes one
+  // '<msil>undef_<name>' trap stub per call signature.
+  ArrayRef<UndefinedCall> getUndefinedCalls(const Symbol *sym) const;
+
+  // Reports the error \p msg about \p sym with lld/ELF's ">>> referenced by"
+  // lines (at most three, then ">>> referenced N more times"): the bitcode
+  // inputs that referred to it before LTO, then the methods and segments of
+  // the CIL objects whose token sites or relocations name it, as
+  // "<file>:(<name>)" (only live ones if \p liveOnly; the LTO objects' only
+  // if no bitcode input referred to it).
+  void reportUnresolved(std::string msg, const Symbol *sym, bool liveOnly);
+
+  // reportUnresolved() with plan 5.9.14's first line for the undefined
+  // symbol \p sym: "relocation refers to a symbol in a discarded section:
+  // <s>" with ">>> defined in <file>" for a discarded COMDAT copy, "undefined
+  // hidden symbol: <s>" (hidden or internal), "undefined protected symbol:
+  // <s>", else "undefined symbol: <s>".
+  void reportUndefined(const Symbol *sym, bool liveOnly);
 
   // Reports the error \p msg about the symbol \p name, which LTO's merged
   // module refers to, in lld/ELF's form: up to three ">>> referenced by
@@ -138,8 +263,25 @@ private:
   // The inputs that refer to \p sym, in load order.
   ArrayRef<Reference> getReferences(const Symbol *sym);
 
-  void reportUnresolved(std::string msg, ArrayRef<Reference> refs,
-                        bool isEntry);
+  void reportUnresolved(std::string msg, ArrayRef<Reference> refs, bool isEntry,
+                        ArrayRef<std::string> objectRefs = {});
+
+  // Late binding of one symbol of CIL objects (plan 5.9.6 step 2).
+  void bindObjectSymbol(Symbol &sym);
+
+  // The import attributes per undefined symbol, with the files that gave
+  // them.
+  struct ImportInfo {
+    StringRef module;
+    const InputFile *moduleFile = nullptr;
+    StringRef name;
+    const InputFile *nameFile = nullptr;
+    bool explicitBinding = false;
+  };
+  llvm::DenseMap<const Symbol *, ImportInfo> importInfo;
+  llvm::DenseMap<const Symbol *, SmallVector<const NativeExport *, 1>>
+      rejectedNative;
+  llvm::DenseMap<const Symbol *, SmallVector<UndefinedCall, 1>> undefinedCalls;
 
   // The undefined symbols of the bitcode files' symbol tables, by symbol,
   // collected once every input is loaded.

@@ -1,0 +1,189 @@
+## Named sections in the data image (ImplementationPlan.md 5.9.9 rules 1-2,
+## '__start_'/'__stop_'; 5.8.10's whole-program sections; 5.9.14's map):
+## - '.rodata', '.data' and '.bss' segments are units by themselves; every
+##   other name is a group: all live segments of one output section form one
+##   unit, placed at its first segment's position, in input order inside the
+##   group (judge-c-fidelity p3: r1 of s1.o, then r2 and r3 of s2.o, between
+##   s1.o's before and s2.o's after);
+## - on non-Windows triples a referenced '__start_X'/'__stop_X' of an output
+##   section X with a C-identifier name is defined at its start and end
+##   (lld/ELF Writer.cpp:2289-2301): address fields at data+4 and data+16;
+##   on Windows triples they are not defined, so the reference is
+##   'undefined symbol' (link.exe and lld-link do the same);
+## - COFF grouping on Windows triples: the output section is the part before
+##   the first '$', sorted by full name (stable), so '.grp$a' (w1.o's, then
+##   w2.o's), '.grp$b', '.grp$c' form one unit; on ELF triples '$' is part of
+##   the name and each '.grp$<x>' is a unit of its own;
+## - the same through --lto-emit-asm (5.8.10, 5.9.6): msil-ld neither
+##   reports nor binds '__start_myreg'/'__stop_myreg', whose section a
+##   bitcode definition names, and code generation lays out the section as a
+##   one-object link does, with no section diagnostic (M12's goes in M20).
+## Inputs/cctor.py prints what '.cctor' stores, so ties between fields at
+## one offset (r1 and __start_myreg) do not matter.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj s1.ll -o s1.o
+# RUN: llc -filetype=obj s2.ll -o s2.o
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## Linux: one 'myreg' unit at offset 4, 12 bytes; start and stop defined.
+# RUN: msil-ld s1.o s2.o -o lnx.exe -Map=lnx.map 2>&1 | count 0
+# RUN: llvm-cil-dump lnx.exe > lnx.txt
+# RUN: %python %S/Inputs/cctor.py lnx.txt > lnx-cctor.txt
+# RUN: FileCheck %s --check-prefix=LNX --input-file=lnx-cctor.txt
+# RUN: FileCheck %s --check-prefix=LNX-NUM --input-file=lnx-cctor.txt
+# RUN: FileCheck %s --check-prefix=LNX-IMAGE --input-file=lnx.txt
+# RUN: FileCheck %s --check-prefix=LNX-MAP --input-file=lnx.map
+
+# LNX:      {{^}}alloc 35{{$}}
+# LNX-NEXT: {{^}}cpblk data+0 20{{$}}
+# LNX-DAG:  {{^}}field before = data+0{{$}}
+# LNX-DAG:  {{^}}field r1 = data+4{{$}}
+# LNX-DAG:  {{^}}field __start_myreg = data+4{{$}}
+# LNX-DAG:  {{^}}field r2 = data+8{{$}}
+# LNX-DAG:  {{^}}field r3 = data+12{{$}}
+# LNX-DAG:  {{^}}field __stop_myreg = data+16{{$}}
+# LNX-DAG:  {{^}}field after = data+16{{$}}
+# LNX-NOT:  {{.}}
+## Exactly those seven fields, and no relocation or constructor.
+# LNX-NUM-COUNT-7: {{^}}field {{.*}} = data+
+# LNX-NUM-NOT:     {{^(field|store|call|loop)}}
+
+# LNX-IMAGE:      {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0111{{$}}
+# LNX-IMAGE-NEXT: {{^}}    .data 20 bytes{{$}}
+# LNX-IMAGE-NEXT: {{^}}      64 00 00 00 03 00 00 00 05 00 00 00 07 00 00 00 C8 00 00 00{{$}}
+
+## The map's Image section names the output section with its offset, size
+## and alignment (columns as in 5.9.14's example; spacing not fixed).
+# LNX-MAP:      {{^}}Image: 20 bytes (20 initialized), align 16{{$}}
+# LNX-MAP:      {{^ +4 +12 +4 myreg$}}
+
+## Windows: start and stop stay undefined.
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil s1.ll -o ws1.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil s2.ll -o ws2.o
+# RUN: not msil-ld ws1.o ws2.o -o x.exe > win.txt 2>&1
+# RUN: FileCheck %s --check-prefix=WIN-START --input-file=win.txt
+# RUN: FileCheck %s --check-prefix=WIN-STOP --input-file=win.txt
+# RUN: FileCheck %s --check-prefix=WIN-NUM %{crash} --input-file=win.txt
+# WIN-START:      {{^}}msil-ld: error: undefined symbol: __start_myreg{{$}}
+# WIN-START-NEXT: {{^}}>>> referenced by ws1.o:(main){{$}}
+# WIN-STOP:       {{^}}msil-ld: error: undefined symbol: __stop_myreg{{$}}
+# WIN-STOP-NEXT:  {{^}}>>> referenced by ws1.o:(main){{$}}
+# WIN-NUM-COUNT-2: {{^}}msil-ld: error:
+# WIN-NUM-NOT:     {{error:|warning:}}
+
+## '$' groups: one sorted unit on Windows, separate units on Linux.
+# RUN: llc -filetype=obj w1.ll -o w1.o
+# RUN: llc -filetype=obj w2.ll -o w2.o
+# RUN: msil-ld w1.o w2.o -o grp.exe -Map=grp.map 2>&1 | count 0
+# RUN: llvm-cil-dump grp.exe > grp.txt
+# RUN: FileCheck %s --check-prefix=COFF --input-file=grp.txt
+# RUN: FileCheck %s --check-prefix=COFF-MAP --input-file=grp.map
+# COFF:      {{^}}    .data 20 bytes{{$}}
+# COFF-NEXT: {{^}}      09 00 00 00 01 00 00 00 04 00 00 00 02 00 00 00 03 00 00 00{{$}}
+# COFF-MAP:  {{^ +4 +16 +4 \.grp$}}
+
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil w1.ll -o lw1.o
+# RUN: llc -filetype=obj -mtriple=x86_64-unknown-linux-gnu-msil w2.ll -o lw2.o
+# RUN: msil-ld lw1.o lw2.o -o lgrp.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lgrp.exe | FileCheck %s --check-prefix=ELF-GRP
+# ELF-GRP:      {{^}}    .data 20 bytes{{$}}
+# ELF-GRP-NEXT: {{^}}      09 00 00 00 02 00 00 00 01 00 00 00 04 00 00 00 03 00 00 00{{$}}
+
+## The same program through --lto-emit-asm (at -O0, which keeps the
+## globals in module order): no diagnostic, start and stop are address
+## fields at the section's start and end, as in the object link.
+# RUN: llvm-as s1.ll -o s1.bc
+# RUN: llvm-as s2.ll -o s2.bc
+# RUN: msil-ld --lto-emit-asm --lto-O0 s1.bc s2.bc -o lto.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LTO --input-file=lto.il
+# RUN: %if ilasm %{ %ilasm-verify -output=lto.dll lto.il %}
+# RUN: %if ilasm %{ llvm-cil-dump lto.dll > lto.txt %}
+# RUN: %if ilasm %{ %python %S/Inputs/cctor.py lto.txt | FileCheck %s --check-prefix=LTO-CCTOR %}
+# LTO-DAG: {{^}}.field {{.*}}static {{(initonly )?}}native int '__start_myreg'
+# LTO-DAG: {{^}}.field {{.*}}static {{(initonly )?}}native int '__stop_myreg'
+# LTO-CCTOR-DAG: {{^}}field __start_myreg = data+4{{$}}
+# LTO-CCTOR-DAG: {{^}}field __stop_myreg = data+16{{$}}
+
+#--- s1.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@before = global i32 100, align 4
+@r1 = internal constant i32 3, section "myreg", align 4
+@__start_myreg = external global i32
+@__stop_myreg = external global i32
+@llvm.used = appending global [1 x ptr] [ptr @r1], section "llvm.metadata"
+
+declare i32 @get_after()
+
+define i32 @main() {
+entry:
+  br label %loop
+loop:
+  %p = phi ptr [ @__start_myreg, %entry ], [ %next, %body ]
+  %s = phi i32 [ 0, %entry ], [ %s1, %body ]
+  %done = icmp uge ptr %p, @__stop_myreg
+  br i1 %done, label %exit, label %body
+body:
+  %v = load i32, ptr %p
+  %s1 = add i32 %s, %v
+  %next = getelementptr i32, ptr %p, i64 1
+  br label %loop
+exit:
+  %b = load i32, ptr @before
+  %a = call i32 @get_after()
+  %t = add i32 %s, %b
+  %r = add i32 %t, %a
+  ret i32 %r
+}
+
+#--- s2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@r2 = internal constant i32 5, section "myreg", align 4
+@r3 = internal constant i32 7, section "myreg", align 4
+@after = global i32 200, align 4
+@llvm.used = appending global [2 x ptr] [ptr @r2, ptr @r3], section "llvm.metadata"
+
+define i32 @get_after() {
+  %v = load i32, ptr @after
+  ret i32 %v
+}
+
+#--- w1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@w0 = global i32 9, align 4
+@g_b = global i32 2, section ".grp$b", align 4
+@g_a = global i32 1, section ".grp$a", align 4
+
+declare i32 @sum2()
+
+define i32 @main() {
+  %a = load i32, ptr @w0
+  %b = load i32, ptr @g_b
+  %c = load i32, ptr @g_a
+  %d = call i32 @sum2()
+  %s1 = add i32 %a, %b
+  %s2 = add i32 %s1, %c
+  %s3 = add i32 %s2, %d
+  ret i32 %s3
+}
+
+#--- w2.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@g_c = global i32 3, section ".grp$c", align 4
+@g_a2 = global i32 4, section ".grp$a", align 4
+
+define i32 @sum2() {
+  %a = load i32, ptr @g_c
+  %b = load i32, ptr @g_a2
+  %s = add i32 %a, %b
+  ret i32 %s
+}

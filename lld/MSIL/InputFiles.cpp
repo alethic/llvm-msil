@@ -12,13 +12,21 @@
 
 #include "InputFiles.h"
 #include "Config.h"
+#include "InputChunks.h"
 #include "SymbolTable.h"
+#include "TokenMap.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/Reproduce.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/BinaryFormat/CLI.h"
+#include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/Magic.h"
 #include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/CLI/LinkInfo.h"
+#include "llvm/CLI/MetadataReader.h"
+#include "llvm/CLI/PEImage.h"
+#include "llvm/CLI/Signature.h"
 #include "llvm/IR/Comdat.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/LLVMContext.h"
@@ -26,6 +34,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/StringTableBuilder.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Object/COFF.h"
 #include "llvm/Object/IRSymtab.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/CommandLine.h"
@@ -39,6 +48,8 @@
 using namespace llvm;
 using namespace llvm::ELF;
 using namespace llvm::sys;
+
+namespace MSILLink = llvm::MSILLink;
 
 namespace lld {
 // Returns a string in the format of "foo.o" or "foo.a(bar.o)".
@@ -72,6 +83,29 @@ std::optional<MemoryBufferRef> readFile(StringRef path) {
   return mbref;
 }
 
+bool isCLIImage(MemoryBufferRef mb) {
+  if (identify_magic(mb.getBuffer()) != file_magic::pecoff_executable)
+    return false;
+  Expected<cli::PEImage> image = cli::PEImage::create(
+      ArrayRef(reinterpret_cast<const uint8_t *>(mb.getBufferStart()),
+               mb.getBufferSize()));
+  if (image)
+    return image->hasCLIHeader();
+  consumeError(image.takeError());
+  // A damaged image whose headers llvm::object still reads (its sections run
+  // past the end of the file, say): its CLR directory decides, so that the
+  // CIL object reader reports the damage.
+  Expected<std::unique_ptr<object::COFFObjectFile>> obj =
+      object::COFFObjectFile::create(mb);
+  if (!obj) {
+    consumeError(obj.takeError());
+    return false;
+  }
+  const object::data_directory *dir =
+      (*obj)->getDataDirectory(COFF::CLR_RUNTIME_HEADER);
+  return dir && dir->RelativeVirtualAddress != 0;
+}
+
 InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName,
                             uint64_t offsetInArchive, bool lazy) {
   file_magic magic = identify_magic(mb.getBuffer());
@@ -83,9 +117,16 @@ InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName,
     return f->obj ? f : nullptr;
   }
 
-  // CIL objects are M20's; until then an archive member that is neither
-  // bitcode nor native (the driver gives native members to the native index)
-  // is skipped (plan 5.9.4).
+  // A PE with a CLI header: a CIL object, or a .NET assembly, which the
+  // ObjFile constructor reports (plan 5.9.4).
+  if (isCLIImage(mb)) {
+    auto *f = make<ObjFile>(mb, archiveName, lazy);
+    return f->isValid() ? f : nullptr;
+  }
+
+  // An archive member that is neither bitcode, a CIL object nor native (the
+  // driver gives native members to the native index) is skipped (plan
+  // 5.9.4).
   if (!archiveName.empty()) {
     warn(archiveName + "(" + mb.getBufferIdentifier() +
          "): not LLVM bitcode; ignored");
@@ -93,6 +134,438 @@ InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName,
   }
   error("unknown file type: " + mb.getBufferIdentifier());
   return nullptr;
+}
+
+ObjFile::ObjFile(MemoryBufferRef m, StringRef archiveName, bool lazy)
+    : InputFile(ObjectKind, m) {
+  this->lazy = lazy;
+  this->archiveName = std::string(archiveName);
+
+  // The image and the metadata (plan 5.9.4). Errors are error()s, not lld's
+  // fatal(), so that the printing iteration of LLD_IN_TEST=2 still reports
+  // them (plan 5.9.1).
+  Expected<std::unique_ptr<cli::MetadataReader>> mdOrErr =
+      cli::MetadataReader::create(
+          ArrayRef(reinterpret_cast<const uint8_t *>(mb.getBufferStart()),
+                   mb.getBufferSize()));
+  if (!mdOrErr) {
+    error(toString(this) + ": " + toString(mdOrErr.takeError()));
+    return;
+  }
+  reader = std::move(*mdOrErr);
+
+  // .NET assemblies are reference assemblies (M21) or libraries of this
+  // toolchain (M22).
+  if (reader->isAssembly()) {
+    error(toString(this) + ": .NET assembly inputs are not supported yet");
+    return;
+  }
+
+  // The record (plan 5.8.7): a module without one is no CIL object (a C#
+  // netmodule, Q7).
+  Expected<ArrayRef<uint8_t>> bytesOrErr = cli::findLinkInfo(*reader);
+  if (!bytesOrErr) {
+    std::string msg = toString(bytesOrErr.takeError());
+    if (msg == "no link-info record")
+      error(toString(this) + ": not a CIL object (no link-info record)");
+    else
+      error(toString(this) + ": " + msg);
+    return;
+  }
+  Expected<MSILLink::Record> recordOrErr = cli::decodeLinkInfo(*bytesOrErr);
+  if (!recordOrErr) {
+    error(toString(this) + ": " + toString(recordOrErr.takeError()));
+    return;
+  }
+  record = std::move(*recordOrErr);
+
+  // decodeLinkInfo checked that the names are unique (C8).
+  for (auto [i, sym] : llvm::enumerate(record.Symbols))
+    symbolIndexes[CachedHashStringRef(sym.Name)] = i;
+  valid = true;
+}
+
+ObjFile::~ObjFile() = default;
+
+int32_t ObjFile::findSymbolIndex(StringRef name) const {
+  auto it = symbolIndexes.find(CachedHashStringRef(name));
+  return it == symbolIndexes.end() ? -1 : static_cast<int32_t>(it->second);
+}
+
+InputMethod *ObjFile::getMethod(uint32_t methodDefToken) const {
+  if (cli::getTokenType(methodDefToken) !=
+      static_cast<uint8_t>(cli::TableId::MethodDef))
+    return nullptr;
+  uint32_t row = cli::getTokenRow(methodDefToken);
+  if (row == 0 || row > methodByRow.size())
+    return nullptr;
+  return methodByRow[row - 1];
+}
+
+const MSILLink::SignatureInfo *ObjFile::getSignatureInfo(uint32_t token) const {
+  return sigInfos.lookup(token);
+}
+
+std::optional<ObjFile::ImportAttributes>
+ObjFile::getImport(uint32_t symbolIndex) const {
+  auto it = imports.find(symbolIndex);
+  if (it == imports.end())
+    return std::nullopt;
+  return it->second;
+}
+
+SmallVector<StringRef, 0> ObjFile::getDependentLibraries() const {
+  SmallVector<StringRef, 0> ret;
+  for (const MSILLink::LinkerOption &opt : record.LinkerOptions)
+    if (opt.Kind == MSILLink::LinkerOptionKind::DependentLib &&
+        !opt.Args.empty())
+      ret.push_back(opt.Args.front());
+  return ret;
+}
+
+// One string of a LINKER_OPTION entry is one option, except on Windows
+// triples, where clang quotes a library name with a space
+// (/DEFAULTLIB:"my lib.lib") as lld-link's directive tokenizer expects; the
+// string is tokenized as BitcodeFile::getLinkerOptions() tokenizes the
+// irsymtab's linker options there (section 12 of 2026-10-22).
+SmallVector<std::string, 0> ObjFile::getLinkerOptions() const {
+  SmallVector<std::string, 0> ret;
+  bool windows = Triple(record.Hdr.Triple).isOSWindows();
+  for (const MSILLink::LinkerOption &opt : record.LinkerOptions) {
+    if (opt.Kind != MSILLink::LinkerOptionKind::LinkerOption)
+      continue;
+    for (const std::string &arg : opt.Args) {
+      if (!windows) {
+        ret.push_back(arg);
+        continue;
+      }
+      SmallVector<StringRef, 4> tokens;
+      cl::TokenizeWindowsCommandLineNoCopy(saver().save(arg), saver(), tokens);
+      for (StringRef tok : tokens)
+        ret.push_back(tok.str());
+    }
+  }
+  return ret;
+}
+
+// The methods with a body (decoded by the token walker, plan 5.9.7) and the
+// import attributes of the stubs (body-less MethodDefs with an ImplMap row,
+// C4). Returns false after an error.
+bool ObjFile::readMethods() {
+  // The FUNCTION symbol of each MethodDef with a body (C1, C3).
+  DenseMap<uint32_t, uint32_t> symbolByToken;
+  for (auto [i, sym] : llvm::enumerate(record.Symbols))
+    if (sym.Kind == MSILLink::SymbolKind::Function &&
+        !(sym.Flags & (MSILLink::Undefined | MSILLink::Alias)))
+      symbolByToken[sym.Token] = i;
+
+  uint32_t numRows = reader->getRowCount(cli::TableId::MethodDef);
+  methodByRow.assign(numRows, nullptr);
+  for (uint32_t row = 1; row <= numRows; ++row) {
+    uint32_t token = cli::makeToken(cli::TableId::MethodDef, row);
+    Expected<cli::MethodDefRow> def = reader->getMethodDef(row);
+    if (!def) {
+      error(toString(this) + ": " + toString(def.takeError()));
+      return false;
+    }
+
+    // A stub: the symbol of the method's name takes the stub's module (none
+    // for msil.unresolved) and import name.
+    if (def->RVA == 0) {
+      Expected<std::optional<cli::ImplMapRow>> implMap =
+          reader->findImplMap(token);
+      if (!implMap) {
+        error(toString(this) + ": " + toString(implMap.takeError()));
+        return false;
+      }
+      int32_t index = findSymbolIndex(def->Name);
+      if (!*implMap || index < 0)
+        continue;
+      Expected<cli::ModuleRefRow> moduleRef =
+          reader->getModuleRef(cli::getTokenRow((*implMap)->ImportScope));
+      if (!moduleRef) {
+        error(toString(this) + ": " + toString(moduleRef.takeError()));
+        return false;
+      }
+      StringRef module = moduleRef->Name;
+      if (module == MSILLink::UnresolvedModule)
+        module = "";
+      imports.try_emplace(index,
+                          ImportAttributes{module, (*implMap)->ImportName});
+      continue;
+    }
+
+    auto it = symbolByToken.find(token);
+    if (it == symbolByToken.end())
+      continue; // validateLinkInfo rejects this (C3)
+    auto *m = make<InputMethod>(this, token, def->Name, it->second);
+    m->flags = def->Flags;
+    m->implFlags = def->ImplFlags;
+    m->signatureInfo = getSignatureInfo(token);
+    Expected<ArrayRef<uint8_t>> blob = reader->getBlob(def->Signature);
+    if (!blob) {
+      error(toString(this) + ": " + toString(blob.takeError()));
+      return false;
+    }
+    Expected<cli::MethodSig> sig = cli::decodeMethodSig(*blob);
+    if (!sig) {
+      error(toString(this) + ": '" + def->Name +
+            "': " + toString(sig.takeError()));
+      return false;
+    }
+    m->signature = make<cli::MethodSig>(std::move(*sig));
+    if (!decodeMethod(*this, *m))
+      return false;
+    methodByRow[row - 1] = m;
+    methodList.push_back(m);
+  }
+
+  // IMPORT data: the record carries the attributes (plan 5.8.8).
+  for (auto [i, sym] : llvm::enumerate(record.Symbols))
+    if (sym.Flags & MSILLink::Import)
+      imports.try_emplace(i,
+                          ImportAttributes{sym.ImportModule, sym.ImportName});
+  return true;
+}
+
+// The record's segments, each named after the symbol that defines it, with
+// its slice of DATA_RELOCS (sorted by segment and offset, C8).
+void ObjFile::readSegments() {
+  for (auto [i, seg] : llvm::enumerate(record.Segments))
+    segmentList.push_back(make<InputSegment>(this, i, seg.Name, seg));
+  for (auto [i, sym] : llvm::enumerate(record.Symbols)) {
+    if (sym.Kind != MSILLink::SymbolKind::Data ||
+        (sym.Flags & (MSILLink::Undefined | MSILLink::Alias)) ||
+        (sym.Flags & MSILLink::BindingMask) == MSILLink::BindingCommon ||
+        sym.Segment >= segmentList.size())
+      continue;
+    InputSegment *seg = segmentList[sym.Segment];
+    if (seg->symbolIndex >= 0)
+      continue;
+    seg->symbolIndex = i;
+    seg->name = sym.Name;
+  }
+  ArrayRef<MSILLink::Reloc> relocs = record.Relocs;
+  for (InputSegment *seg : segmentList) {
+    size_t n = 0;
+    while (n < relocs.size() && relocs[n].Segment == seg->index)
+      ++n;
+    seg->relocs = relocs.take_front(n);
+    relocs = relocs.drop_front(n);
+  }
+}
+
+static StringRef getSelectionKindName(MSILLink::ComdatSelection kind) {
+  switch (kind) {
+  case MSILLink::ComdatSelection::Any:
+    return "any";
+  case MSILLink::ComdatSelection::ExactMatch:
+    return "exactmatch";
+  case MSILLink::ComdatSelection::Largest:
+    return "largest";
+  case MSILLink::ComdatSelection::NoDeduplicate:
+    return "nodeduplicate";
+  case MSILLink::ComdatSelection::SameSize:
+    return "samesize";
+  }
+  llvm_unreachable("unknown comdat selection kind");
+}
+
+// COMDAT groups (plan 5.9.5, lld/ELF/InputFiles.cpp:1905-1912): the first
+// object that presents a group keeps it; NoDeduplicate groups are always
+// kept. The methods and segments of a discarded copy are discarded, and the
+// symbols they define (aliases of them included) are marked in
+// \p discardedSymbols: they enter the table as undefined symbols marked
+// "discarded". Under \p ignoreComdats (an LTO object) every group is kept
+// and none is claimed: the object's BitcodeFiles claimed them, and the IR
+// linker kept only the prevailing copies (lld/wasm/InputFiles.cpp,
+// lld/ELF/InputFiles.cpp's ignoreComdats).
+void ObjFile::readComdats(std::vector<bool> &discardedSymbols,
+                          bool ignoreComdats) {
+  auto methodOf = [&](uint32_t index) -> InputMethod * {
+    if (index >= record.Symbols.size())
+      return nullptr;
+    const MSILLink::Symbol &sym = record.Symbols[index];
+    if (sym.Flags & (MSILLink::Undefined | MSILLink::Alias))
+      return nullptr;
+    return getMethod(sym.Token);
+  };
+
+  for (auto [i, group] : llvm::enumerate(record.Comdats)) {
+    if (!ignoreComdats && group.Selection != MSILLink::ComdatSelection::Any &&
+        group.Selection != MSILLink::ComdatSelection::NoDeduplicate)
+      error("comdat '" + group.Name + "' in " + toString(this) +
+            " uses selection kind '" + getSelectionKindName(group.Selection) +
+            "', which msil-ld does not support");
+    bool kept = ignoreComdats ||
+                group.Selection == MSILLink::ComdatSelection::NoDeduplicate ||
+                symtab->addComdat(group.Name);
+    keptComdats.push_back(kept);
+    for (auto [kind, index] : group.Members) {
+      if (kind == MSILLink::ComdatMemberKind::Segment) {
+        if (index >= segmentList.size())
+          continue;
+        segmentList[index]->comdat = i;
+        if (!kept)
+          segmentList[index]->discarded = true;
+        continue;
+      }
+      if (kept || index >= discardedSymbols.size())
+        continue;
+      discardedSymbols[index] = true;
+      if (InputMethod *m = methodOf(index))
+        m->discarded = true;
+    }
+  }
+
+  // The data symbols of discarded segments, then the aliases of discarded
+  // symbols (an aliasee is never an alias, C8).
+  for (auto [i, sym] : llvm::enumerate(record.Symbols)) {
+    if (sym.Kind == MSILLink::SymbolKind::Data &&
+        !(sym.Flags & (MSILLink::Undefined | MSILLink::Alias)) &&
+        (sym.Flags & MSILLink::BindingMask) != MSILLink::BindingCommon &&
+        sym.Segment < segmentList.size() && segmentList[sym.Segment]->discarded)
+      discardedSymbols[i] = true;
+  }
+  for (auto [i, sym] : llvm::enumerate(record.Symbols))
+    if ((sym.Flags & MSILLink::Alias) &&
+        sym.Aliasee < discardedSymbols.size() && discardedSymbols[sym.Aliasee])
+      discardedSymbols[i] = true;
+}
+
+// The symbol of SYMTAB entry \p index (plan 5.9.5): a LOCAL symbol of the
+// object, or the result of resolving the entry against the symbol table.
+Symbol *ObjFile::createSymbol(uint32_t index, bool discarded) {
+  const MSILLink::Symbol &s = record.Symbols[index];
+  uint32_t bind = s.Flags & MSILLink::BindingMask;
+  // The visibility values equal ELF's STV_* (plan 5.8.8).
+  uint8_t visibility =
+      (s.Flags & MSILLink::VisibilityMask) >> MSILLink::VisibilityShift;
+  bool isFunction = s.Kind == MSILLink::SymbolKind::Function;
+  uint8_t type = isFunction ? STT_FUNC : STT_OBJECT;
+  bool tls = s.Flags & MSILLink::ThreadLocal;
+  bool alias = s.Flags & MSILLink::Alias;
+  bool noStrip = s.Flags & MSILLink::NoStrip;
+  uint8_t binding = bind == MSILLink::BindingWeak    ? STB_WEAK
+                    : bind == MSILLink::BindingLocal ? STB_LOCAL
+                                                     : STB_GLOBAL;
+  StringRef name = s.Name;
+
+  // The definition's method, or segment and offset; an alias's is its
+  // aliasee's (plan 5.9.5).
+  const MSILLink::Symbol &def = alias ? record.Symbols[s.Aliasee] : s;
+  InputMethod *method = isFunction ? getMethod(def.Token) : nullptr;
+  InputSegment *segment = nullptr;
+  uint64_t offset = 0;
+  if (!isFunction && bind != MSILLink::BindingCommon &&
+      !(s.Flags & MSILLink::Undefined) && def.Segment < segmentList.size()) {
+    segment = segmentList[def.Segment];
+    offset = def.Offset + (alias ? s.AliasOffset : 0);
+  }
+
+  // LOCAL symbols bind within their object; they never enter the table.
+  if (binding == STB_LOCAL) {
+    Symbol *local;
+    if (discarded)
+      local = make<Undefined>(this, name, STB_LOCAL, visibility, type, tls,
+                              /*discarded=*/true);
+    else if (isFunction)
+      local = make<DefinedFunction>(this, name, STB_LOCAL, visibility, method);
+    else
+      local = make<DefinedData>(this, name, STB_LOCAL, visibility, tls, segment,
+                                offset, s.Size);
+    local->isAlias = alias;
+    local->noStrip = noStrip;
+    return local;
+  }
+
+  Symbol *sym;
+  if (s.Flags & MSILLink::Undefined) {
+    Undefined newSym(this, name, binding, visibility, type, tls);
+    newSym.dllImport = s.Flags & MSILLink::DLLImport;
+    sym = symtab->addSymbol(newSym);
+    sym->referenced = true;
+    // The import attributes of a reference (plan 5.10.7): two inputs that
+    // disagree are an error; one that gives none takes the other's.
+    if (std::optional<ImportAttributes> imp = getImport(index))
+      symtab->addImportAttributes(*sym, *this, imp->module, imp->name);
+  } else if (discarded) {
+    // A definition in a COMDAT group that an earlier input presented enters
+    // as an undefined symbol marked as discarded (plan 5.9.5).
+    sym =
+        symtab->addSymbol(Undefined(this, name, binding, visibility, type, tls,
+                                    /*discarded=*/true));
+  } else if (bind == MSILLink::BindingCommon) {
+    CommonSymbol newSym(this, name, STB_GLOBAL, visibility, tls,
+                        1u << s.CommonAlignLog2, s.CommonSize);
+    newSym.noStrip = noStrip;
+    sym = symtab->addSymbol(newSym);
+  } else if (isFunction) {
+    DefinedFunction newSym(this, name, binding, visibility, method);
+    newSym.isAlias = alias;
+    newSym.noStrip = noStrip;
+    sym = symtab->addSymbol(newSym);
+  } else {
+    DefinedData newSym(this, name, binding, visibility, tls, segment, offset,
+                       s.Size);
+    newSym.isAlias = alias;
+    newSym.noStrip = noStrip;
+    sym = symtab->addSymbol(newSym);
+  }
+  // A CIL object is a regular object: LTO keeps every bitcode definition it
+  // refers to visible (plan 5.9.13).
+  sym->isUsedInRegularObj = true;
+  return sym;
+}
+
+void ObjFile::parse(bool ignoreComdats) {
+  if (parsed)
+    return;
+  parsed = true;
+
+  // C1-C7 between the record and the metadata (plan 5.8.5).
+  if (Error e = cli::validateLinkInfo(record, *reader)) {
+    error(toString(this) + ": malformed CIL object: " + toString(std::move(e)));
+    return;
+  }
+
+  for (const MSILLink::SignatureInfo &info : record.Signatures)
+    sigInfos[info.Token] = &info;
+  if (!readMethods())
+    return;
+  readSegments();
+  std::vector<bool> discardedSymbols(record.Symbols.size());
+  readComdats(discardedSymbols, ignoreComdats);
+
+  // Undefined symbols can trigger recursive extract. Process defined symbols
+  // first so that the relative order between a defined symbol and an
+  // undefined symbol does not change the symbol resolution behavior
+  // (lld/ELF/InputFiles.cpp:1247-1252).
+  symbols.assign(record.Symbols.size(), nullptr);
+  for (auto [i, sym] : llvm::enumerate(record.Symbols))
+    if (!(sym.Flags & MSILLink::Undefined))
+      symbols[i] = createSymbol(i, discardedSymbols[i]);
+  for (auto [i, sym] : llvm::enumerate(record.Symbols))
+    if (sym.Flags & MSILLink::Undefined)
+      symbols[i] = createSymbol(i, /*discarded=*/false);
+
+  tokenMap.build(*this);
+}
+
+// lld/ELF/InputFiles.cpp:2024-2041: every symbol that the object defines
+// (weak and common ones and aliases included) is a lazy symbol.
+void ObjFile::parseLazy() {
+  for (const MSILLink::Symbol &sym : record.Symbols) {
+    if ((sym.Flags & MSILLink::Undefined) ||
+        (sym.Flags & MSILLink::BindingMask) == MSILLink::BindingLocal)
+      continue;
+    symtab->addLazy(sym.Name, this);
+    // addLazy() may trigger this->extract() if an existing symbol is an
+    // undefined symbol. If that happens, this function has served its
+    // purpose, and we can exit from the loop early.
+    if (!lazy)
+      break;
+  }
 }
 
 // The producer string that irsymtab writes into a table and requires of a

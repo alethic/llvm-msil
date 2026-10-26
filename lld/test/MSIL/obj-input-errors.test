@@ -1,0 +1,423 @@
+## Diagnostics for CIL-object inputs, their records and their symbols
+## (ImplementationPlan.md 5.9.14's texts, each pinned in full; 5.8.5, 5.8.7,
+## 5.8.9, 5.9.5, 5.9.6 step 2, 5.9.7, 5.9.9 rule 5, 5.10.7):
+## - the BCL stand-in (5.9.7) rewrites only TypeRefs scoped to msil.bcl. Any
+##   other AssemblyRef scope (here the class of a catch clause) is
+##   '<file>: reference to assembly '<n>' needs --reference, which this
+##   msil-ld does not support yet'. That is the only check that keeps the
+##   stand-in confined to msil.bcl until M21 binds references;
+## - the record (5.8.8, 5.8.9). Another major version is 'invalid link-info
+##   record: version <n> is newer than this toolchain supports (1)'. A newer
+##   minor version links (msil-ld accepts every minor of major 1), but one
+##   that uses a must-understand subsection kind this toolchain does not know
+##   (0x0A, below 0x40) is 'invalid link-info record: v1.<minor> uses
+##   <feature>, which this toolchain does not support'. A SYMTAB subsection
+##   whose payload size runs past the record is the framing error
+##   'invalid link-info record: <field> at offset <n>: <problem>' (C8);
+## - a record that decodes but disagrees with the metadata is
+##   '<file>: malformed CIL object: <rule>: <detail>' (5.8.5): C1, a FUNCTION
+##   symbol whose MethodDef has another name;
+## - an ABIVersion other than the other inputs' is '<file>: toolchain ABI
+##   version <a> differs from <a0> in <f0>' (5.8.9), in both input orders;
+## - HAS_DEBUG_INFO (5.8.7) is the warning 'debug information in <file> is
+##   ignored', once per link however many inputs carry it, and the link
+##   succeeds (exit status 0);
+## - a body msil-ld cannot decode (5.9.7) is '<file>: malformed method body
+##   in '<m>' at IL offset <n>': an unknown opcode (0xA6), a 'call' whose
+##   token names a TypeRef, which its operand kind does not allow, and a body
+##   that ends inside the int32 operand of an 'ldc.i4';
+## - import attributes (5.10.7; 5.9.6 step 2): two objects that give one
+##   symbol different import modules, or different import names, are
+##   wasm-ld's 'import module mismatch for symbol: <s>' / 'import name
+##   mismatch for symbol: <s>' with a '>>> defined as <value> in <file>' line
+##   per object, in input order. An import name equal to the symbol name
+##   (import_name("fn") on fn, what a stub without 'as' has) counts as none
+##   and yields to the other object's 'e2' in either order, with no mismatch,
+##   although e.lib also exports 'fn';
+## - a TLS reference in one object against a plain definition in another is
+##   'TLS attribute mismatch: <s>' with '>>> in <f1>' and '>>> in <f2>'
+##   (5.9.5), in both orders;
+## - two zero-initialized 1.5 GB globals kept by --no-gc-sections are msil-ld's
+##   'the data image of <n> bytes is larger than MSIL supports (2 GiB)'
+##   (5.9.9 rule 5); by default --gc-sections drops the unreferenced one and
+##   the link succeeds.
+## llc never writes the broken records, foreign scopes, debug flags, TLS
+## symbols or bodies above, so those objects are object-form text (5.8.4):
+## mkobj.py writes llc -msil-object-form's text for a one-function module
+## ('strings', MethodDef 0x06000001, as in obj-tokens.test's c.il) and builds
+## its record field by field, changing one field per case; ilasm assembles it
+## under '%if ilasm'. The unchanged text (ok.o) links, so each error comes
+## from the field its case changes. The import, TLS-definition and data-image
+## inputs are llc objects.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj main.ll -o main.o
+# RUN: llc -filetype=obj tlsdef.ll -o tlsdef.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning:
+# DEFINE: %{mk} = %python mkobj.py
+# DEFINE: %{as} = %ilasm-verify
+
+# RUN: %{mk} ok.il
+# RUN: %{mk} foo.il --scope Foo
+# RUN: %{mk} v2.il --major 2
+# RUN: %{mk} minor.il --minor 1
+# RUN: %{mk} feat.il --minor 1 --extra-kind 0x0A
+# RUN: %{mk} frame.il --symtab-size-delta 1
+# RUN: %{mk} c1.il --symbol-name strinGs
+# RUN: %{mk} abi.il --abi 2
+# RUN: %{mk} dbg.il --header-flags 1
+# RUN: %{mk} dbg2.il --header-flags 1 --name strings2
+# RUN: %{mk} badop.il --body badop
+# RUN: %{mk} badtok.il --body badtok
+# RUN: %{mk} trunc.il --body trunc
+# RUN: %{mk} tls.il --body tls
+# RUN: %if ilasm %{ %{as} -output=ok.o ok.il && %{as} -output=foo.o foo.il && %{as} -output=v2.o v2.il %}
+# RUN: %if ilasm %{ %{as} -output=minor.o minor.il && %{as} -output=feat.o feat.il %}
+# RUN: %if ilasm %{ %{as} -output=frame.o frame.il && %{as} -output=c1.o c1.il && %{as} -output=abi.o abi.il %}
+# RUN: %if ilasm %{ %{as} -output=dbg.o dbg.il && %{as} -output=dbg2.o dbg2.il %}
+# RUN: %if ilasm %{ %{as} -output=badop.o badop.il && %{as} -output=badtok.o badtok.il %}
+# RUN: %if ilasm %{ %{as} -output=trunc.o trunc.il && %{as} -output=tls.o tls.il %}
+
+## The unchanged text links, and so does a v1.1 record that uses nothing new.
+# RUN: %if ilasm %{ msil-ld main.o ok.o -o ok.exe 2>&1 | count 0 %}
+# RUN: %if ilasm %{ msil-ld main.o minor.o -o minor.exe 2>&1 | count 0 %}
+
+## An AssemblyRef scope other than msil.bcl.
+# RUN: %if ilasm %{ not msil-ld main.o foo.o -o x.exe 2>&1 | %{err} --check-prefix=FOREIGN %}
+# FOREIGN: {{^}}msil-ld: error: foo.o: reference to assembly 'Foo' needs --reference, which this msil-ld does not support yet{{$}}
+
+## Versions and framing.
+# RUN: %if ilasm %{ not msil-ld main.o v2.o -o x.exe 2>&1 | %{err} --check-prefix=MAJOR %}
+# RUN: %if ilasm %{ not msil-ld main.o feat.o -o x.exe 2>&1 | %{err} --check-prefix=FEATURE %}
+# RUN: %if ilasm %{ not msil-ld main.o frame.o -o x.exe 2>&1 | %{err} --check-prefix=FRAMING %}
+# MAJOR:   {{^}}msil-ld: error: v2.o: invalid link-info record: version 2 is newer than this toolchain supports (1){{$}}
+# FEATURE: {{^}}msil-ld: error: feat.o: invalid link-info record: v1.1 uses subsection kind 0x0A (at offset 59), which this toolchain does not support{{$}}
+# FRAMING: {{^}}msil-ld: error: frame.o: invalid link-info record: subsection payload at offset 44: unexpected end of data (16 bytes needed, 15 left){{$}}
+
+## C1.
+# RUN: %if ilasm %{ not msil-ld main.o c1.o -o x.exe 2>&1 | %{err} --check-prefix=C1 %}
+# C1: {{^}}msil-ld: error: c1.o: malformed CIL object: C1: FUNCTION symbol 0 'strinGs': MethodDef 0x06000001 is named 'strings'{{$}}
+
+## The ABI version, both orders.
+# RUN: %if ilasm %{ not msil-ld main.o abi.o -o x.exe 2>&1 | %{err} --check-prefix=ABI %}
+# RUN: %if ilasm %{ not msil-ld abi.o main.o -o x.exe 2>&1 | %{err} --check-prefix=ABI-REV %}
+# ABI:     {{^}}msil-ld: error: abi.o: toolchain ABI version 2 differs from 1 in main.o{{$}}
+# ABI-REV: {{^}}msil-ld: error: main.o: toolchain ABI version 1 differs from 2 in abi.o{{$}}
+
+## The debug carrier: one warning for two such inputs, and an EXE.
+# RUN: %if ilasm %{ msil-ld main.o dbg.o dbg2.o -o dbg.exe 2>&1 | %{err} --check-prefix=DEBUG %}
+# RUN: %if ilasm && llvm-cil-dump %{ llvm-cil-dump --headers dbg.exe | FileCheck %s --check-prefix=DEBUG-EXE %}
+# DEBUG:     {{^}}msil-ld: warning: debug information in dbg.o is ignored{{$}}
+# DEBUG-EXE: {{^}}Format: PE32+ machine=0x8664 exe{{$}}
+
+## Bodies msil-ld cannot decode.
+# RUN: %if ilasm %{ not msil-ld main.o badop.o -o x.exe 2>&1 | %{err} --check-prefix=BODY -DFILE=badop.o %}
+# RUN: %if ilasm %{ not msil-ld main.o badtok.o -o x.exe 2>&1 | %{err} --check-prefix=BODY -DFILE=badtok.o %}
+# RUN: %if ilasm %{ not msil-ld main.o trunc.o -o x.exe 2>&1 | %{err} --check-prefix=BODY -DFILE=trunc.o %}
+# BODY: {{^}}msil-ld: error: [[FILE]]: malformed method body in 'strings' at IL offset 1{{$}}
+
+## Import attributes.
+# RUN: llc -filetype=obj imp-a.ll -o imp-a.o
+# RUN: llc -filetype=obj imp-b.ll -o imp-b.o
+# RUN: llc -filetype=obj imp-c.ll -o imp-c.o
+# RUN: llc -filetype=obj imp-d.ll -o imp-d.o
+# RUN: llc -filetype=obj imp-same.ll -o imp-same.o
+# RUN: llvm-lib /machine:x64 /def:e.def /out:e.lib
+# RUN: not msil-ld imp-a.o imp-b.o e.lib -o x.exe 2>&1 | %{err} --check-prefix=IMPORT-MODULE
+# RUN: not msil-ld imp-d.o imp-c.o e.lib -o x.exe 2>&1 | %{err} --check-prefix=IMPORT-NAME
+# RUN: not msil-ld imp-c.o imp-d.o e.lib -o x.exe 2>&1 | %{err} --check-prefix=IMPORT-NAME-REV
+# IMPORT-MODULE:        {{^}}msil-ld: error: import module mismatch for symbol: fn{{$}}
+# IMPORT-MODULE-NEXT:   {{^}}>>> defined as a.dll in imp-a.o{{$}}
+# IMPORT-MODULE-NEXT:   {{^}}>>> defined as b.dll in imp-b.o{{$}}
+# IMPORT-NAME:          {{^}}msil-ld: error: import name mismatch for symbol: fn{{$}}
+# IMPORT-NAME-NEXT:     {{^}}>>> defined as e1 in imp-d.o{{$}}
+# IMPORT-NAME-NEXT:     {{^}}>>> defined as e2 in imp-c.o{{$}}
+# IMPORT-NAME-REV:      {{^}}msil-ld: error: import name mismatch for symbol: fn{{$}}
+# IMPORT-NAME-REV-NEXT: {{^}}>>> defined as e2 in imp-c.o{{$}}
+# IMPORT-NAME-REV-NEXT: {{^}}>>> defined as e1 in imp-d.o{{$}}
+
+## An import name equal to the symbol name yields, in either order.
+# RUN: msil-ld imp-same.o imp-c.o e.lib -o same.exe 2>&1 | count 0
+# RUN: msil-ld imp-c.o imp-same.o e.lib -o same-rev.exe 2>&1 | count 0
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump same.exe | FileCheck %s --check-prefix=YIELD %}
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump same-rev.exe | FileCheck %s --check-prefix=YIELD %}
+# YIELD:      {{^}}  .method 'fn' int32() flags=0x2093 impl=0x0080{{$}}
+# YIELD-NEXT: {{^}}    .pinvokeimpl 'e.dll' entry 'e2' flags=0x0201{{$}}
+
+## TLS against non-TLS, both orders.
+# RUN: %if ilasm %{ not msil-ld tlsdef.o tls.o -o x.exe 2>&1 | %{err} --check-prefix=TLS %}
+# RUN: %if ilasm %{ not msil-ld tls.o tlsdef.o -o x.exe 2>&1 | %{err} --check-prefix=TLS-REV %}
+# TLS:          {{^}}msil-ld: error: TLS attribute mismatch: tv{{$}}
+# TLS-NEXT:     {{^}}>>> in tlsdef.o{{$}}
+# TLS-NEXT:     {{^}}>>> in tls.o{{$}}
+# TLS-REV:      {{^}}msil-ld: error: TLS attribute mismatch: tv{{$}}
+# TLS-REV-NEXT: {{^}}>>> in tls.o{{$}}
+# TLS-REV-NEXT: {{^}}>>> in tlsdef.o{{$}}
+
+## The 2 GiB data image: 3,000,000,000 bytes of zero-initialized data.
+# RUN: llc -filetype=obj big-a.ll -o big-a.o
+# RUN: llc -filetype=obj big-b.ll -o big-b.o
+# RUN: not msil-ld --no-gc-sections big-a.o big-b.o -o x.exe 2>&1 | %{err} --check-prefix=BIG
+# RUN: msil-ld big-a.o big-b.o -o big.exe 2>&1 | count 0
+# BIG: {{^}}msil-ld: error: the data image of 3000000000 bytes is larger than MSIL supports (2 GiB){{$}}
+
+#--- main.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @strings()
+
+define i32 @main() {
+  %r = call i32 @strings()
+  ret i32 %r
+}
+
+#--- tlsdef.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@tv = global i32 4, align 4
+
+declare i32 @strings()
+
+define i32 @main() {
+  %r = call i32 @strings()
+  ret i32 %r
+}
+
+#--- imp-a.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @fn() #0
+declare i32 @use_b()
+
+define i32 @main() {
+  %a = call i32 @fn()
+  %b = call i32 @use_b()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+attributes #0 = { "msil-import-module"="a.dll" "msil-import-name"="e1" }
+
+#--- imp-b.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @fn() #0
+
+define i32 @use_b() {
+  %a = call i32 @fn()
+  ret i32 %a
+}
+
+attributes #0 = { "msil-import-module"="b.dll" "msil-import-name"="e1" }
+
+#--- imp-c.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @fn() #0
+
+define i32 @use_b() {
+  %a = call i32 @fn()
+  ret i32 %a
+}
+
+attributes #0 = { "msil-import-name"="e2" }
+
+#--- imp-d.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @fn() #0
+declare i32 @use_b()
+
+define i32 @main() {
+  %a = call i32 @fn()
+  %b = call i32 @use_b()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+attributes #0 = { "msil-import-name"="e1" }
+
+#--- imp-same.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @fn() #0
+declare i32 @use_b()
+
+define i32 @main() {
+  %a = call i32 @fn()
+  %b = call i32 @use_b()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+attributes #0 = { "msil-import-name"="fn" }
+
+#--- e.def
+LIBRARY e.dll
+EXPORTS
+  e1
+  e2
+  fn
+
+#--- big-a.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@h1 = global [1500000000 x i8] zeroinitializer, align 16
+
+define i32 @main() {
+  %v = load i8, ptr @h1
+  %r = zext i8 %v to i32
+  ret i32 %r
+}
+
+#--- big-b.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@h2 = global [1500000000 x i8] zeroinitializer, align 16
+
+define ptr @get2() {
+  ret ptr @h2
+}
+
+#--- mkobj.py
+"""Write the object-form text (ImplementationPlan.md 5.8.4) of a CIL object
+for x86_64-pc-windows-msvc-msil with one defined GLOBAL FUNCTION symbol (the
+method 'strings', MethodDef 0x06000001), whose link-info record (5.8.8) is
+built field by field, so that each case changes one field. It is the text
+llc -msil-object-form writes for such a module (record and metadata agree
+unless an option says otherwise).
+
+Usage: mkobj.py <out.il> [options]
+  --major N, --minor N, --header-flags N, --abi N
+                    the header fields (default 1, 0, 0 and 1)
+  --name S          the method's name and its symbol's (default strings)
+  --symbol-name S   the symbol's name only, for a symbol whose name differs
+                    from its method's
+  --symtab-size-delta N
+                    added to the SYMTAB subsection's payload size (framing)
+  --extra-kind K    append an empty subsection of kind K after SYMTAB
+  --scope S         the assembly that scopes the catch clause's
+                    System.Exception (default msil.bcl, the BCL stand-in's)
+  --body B          ok (a user string and a catch clause; returns 7),
+                    badop (an unknown opcode at IL offset 1), badtok ('call'
+                    with a TypeRef token at IL offset 1), trunc (the body
+                    ends inside the int32 operand of the 'ldc.i4' at IL
+                    offset 1), tls (loads the undefined DATA symbol 'tv',
+                    which the record marks TLS)
+"""
+
+import argparse
+
+p = argparse.ArgumentParser()
+p.add_argument("out")
+p.add_argument("--major", type=int, default=1)
+p.add_argument("--minor", type=int, default=0)
+p.add_argument("--header-flags", type=int, default=0)
+p.add_argument("--abi", type=int, default=1)
+p.add_argument("--name", default="strings")
+p.add_argument("--symbol-name")
+p.add_argument("--symtab-size-delta", type=int, default=0)
+p.add_argument("--extra-kind", type=lambda s: int(s, 0))
+p.add_argument("--scope", default="msil.bcl")
+p.add_argument("--body", default="ok",
+               choices=["ok", "badop", "badtok", "trunc", "tls"])
+a = p.parse_args()
+
+
+def uleb(v):
+    out = bytearray()
+    while True:
+        b = v & 0x7F
+        v >>= 7
+        out.append(b | (0x80 if v else 0))
+        if not v:
+            return bytes(out)
+
+
+def string(s):
+    b = s.encode("utf-8")
+    return uleb(len(b)) + b
+
+
+# SYMTAB entries: Kind (FUNCTION 0, DATA 1), Flags, Name, then the Token of a
+# defined non-alias FUNCTION.
+symbols = []
+if a.body == "tls":
+    symbols.append(bytes([1]) + uleb(0x110) + string("tv"))  # UNDEFINED | TLS
+symbols.append(bytes([0]) + uleb(0) + string(a.symbol_name or a.name) +
+               (0x06000001).to_bytes(4, "little"))
+symtab = uleb(len(symbols)) + b"".join(symbols)
+
+triple = "x86_64-pc-windows-msvc-msil"
+record = b"MSLK" + bytes([a.major, a.minor]) + uleb(a.header_flags)
+record += string(triple) + uleb(a.abi) + uleb(0) + uleb(0)
+record += bytes([8, 4, 2, 8])  # DataModel: void *, long, wchar_t, long double
+record += bytes([0x01]) + uleb(len(symtab) + a.symtab_size_delta) + symtab
+if a.extra_kind is not None:
+    record += bytes([a.extra_kind]) + uleb(0)
+# The carrier's value blob (5.8.7): prolog, int32 length, the record, 00 00.
+blob = b"\x01\x00" + len(record).to_bytes(4, "little") + record + b"\x00\x00"
+
+bodies = {
+    "ok": """  .maxstack 1
+  .try
+  {
+    ldstr "tokens"
+    pop
+    leave.s DONE
+  }
+  catch [%s]System.Exception
+  {
+    pop
+    leave.s DONE
+  }
+DONE:
+  ldc.i4.7
+  ret""" % a.scope,
+    "badop": """  .maxstack 1
+  ldc.i4.7
+  .emitbyte 0xA6
+  ret""",
+    "badtok": """  .maxstack 1
+  ldc.i4.7
+  .emitbyte 0x28
+  .emitbyte 0x01
+  .emitbyte 0x00
+  .emitbyte 0x00
+  .emitbyte 0x01
+  ret""",
+    "trunc": """  .maxstack 1
+  ldc.i4.7
+  .emitbyte 0x20
+  .emitbyte 0x01""",
+    "tls": """  .maxstack 1
+  ldsfld native int [msil.extern]'<msil>Symbols'::'tv'
+  ldind.i4
+  ret""",
+}
+
+lines = [
+    "// MSIL object generated by LLVM (as llc -msil-object-form writes it)",
+    "// target triple   = \"%s\"" % triple,
+    ".assembly extern 'msil.extern' { .ver 0:0:0:0 }",
+    ".assembly extern 'msil.bcl' { .ver 0:0:0:0 }",
+    ".assembly extern 'msil.link' { .ver 0:0:0:0 }",
+]
+if a.scope not in ("msil.bcl", "msil.extern", "msil.link"):
+    lines.append(".assembly extern '%s' { .ver 1:0:0:0 }" % a.scope)
+lines += [
+    "",
+    ".method public static int32 '%s'() cil managed" % a.name,
+    "{",
+    bodies[a.body],
+    "} // end of method '%s'" % a.name,
+    "",
+    ".module 'c.ll'",
+    ".custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = ( %s )"
+    % " ".join("%02X" % b for b in blob),
+    "",
+]
+with open(a.out, "w", newline="\n") as f:
+    f.write("\n".join(lines))

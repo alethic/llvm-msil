@@ -12,6 +12,7 @@
 
 #include "Symbols.h"
 #include "Config.h"
+#include "InputChunks.h"
 #include "InputFiles.h"
 #include "SymbolTable.h"
 #include "lld/Common/ErrorHandler.h"
@@ -45,6 +46,8 @@ std::string toString(msil::Symbol::Kind kind) {
     return "NativeFunction";
   case msil::Symbol::NativeDataKind:
     return "NativeData";
+  case msil::Symbol::SyntheticDataKind:
+    return "SyntheticData";
   }
   llvm_unreachable("invalid symbol kind");
 }
@@ -78,6 +81,16 @@ void printTraceSymbol(const Symbol &sym, StringRef name) {
   message(toString(sym.file) + s + name);
 }
 
+InputChunk *getDefiningChunk(const Symbol *sym) {
+  if (auto *f = dyn_cast_or_null<DefinedFunction>(sym))
+    return f->method;
+  if (auto *d = dyn_cast_or_null<DefinedData>(sym))
+    return d->segment;
+  if (auto *c = dyn_cast_or_null<CommonSymbol>(sym))
+    return c->segment;
+  return nullptr;
+}
+
 // lld/ELF/Symbols.h:251-259. The TLS bit is part of lld/ELF's type (STT_TLS).
 void Symbol::overwrite(Symbol &sym, Kind k) const {
   if (sym.traced)
@@ -85,6 +98,7 @@ void Symbol::overwrite(Symbol &sym, Kind k) const {
   sym.file = file;
   sym.type = type;
   sym.tls = tls;
+  sym.isAlias = isAlias;
   sym.binding = binding;
   sym.symbolKind = k;
 }
@@ -115,10 +129,11 @@ void Symbol::resolve(const Symbol &other) {
   case PlaceholderKind:
   case NativeFunctionKind:
   case NativeDataKind:
+  case SyntheticDataKind:
     break;
   }
-  llvm_unreachable("placeholders and native symbols (which bind late) are "
-                   "never resolved against");
+  llvm_unreachable("placeholders, native symbols (which bind late) and "
+                   "linker-defined symbols are never resolved against");
 }
 
 // Derived from lld/ELF/Symbols.cpp at 64f50ffd4f1c.

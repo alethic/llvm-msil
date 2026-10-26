@@ -147,8 +147,10 @@
 ## libfoo.so.1 like a call of a declaration; without the library it is
 ## msil-ld's own 'undefined symbol' report with '>>> referenced by' lines,
 ## never the backend's 'was not resolved by msil-ld' backstop. An
-## available_externally variable is native data, an error until M20
-## (5.10.12), or undefined without the library.
+## available_externally variable is native data (5.10.12), or undefined
+## without the library: from M20 a data import, which on an ELF triple needs
+## dlopen and dlsym from the link's libraries (libc.so.6), else 5.10.14's
+## 'data symbol ... cannot be imported' error.
 # RUN: llvm-as availext.ll -o availext.o
 # RUN: llvm-as availvar.ll -o availvar.o
 # RUN: msil-ld --lto-emit-asm --lto-O0 availext.o libfoo.so.1 -o availext0.il 2>&1 | count 0
@@ -167,10 +169,14 @@
 # AVAIL-UNDEF-NEXT: {{^}}>>> referenced by availext.o:(main){{$}}
 # RUN: not msil-ld --lto-emit-asm --lto-O0 availvar.o libfoo.so.1 -o x.il 2>&1 \
 # RUN:   | %{err} --check-prefix=AVAIL-DATA --implicit-check-not=error:
+# RUN: msil-ld --lto-emit-asm --lto-O0 availvar.o libfoo.so.1 libc.so.6 -o availvar.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=AVAIL-IMPORT --input-file=availvar.il
+# AVAIL-IMPORT-DAG: {{^}}  ldstr "libfoo.so.1"{{$}}
+# AVAIL-IMPORT-DAG: {{^}}  ldstr "bar"{{$}}
+# AVAIL-IMPORT-DAG: {{^}}  stsfld native int 'bar'{{$}}
 # RUN: not msil-ld --lto-emit-asm --lto-O0 availvar.o -o x.il 2>&1 \
 # RUN:   | %{err} --check-prefix=AVAIL-NODATA --implicit-check-not=error:
-# AVAIL-DATA:        {{^}}msil-ld: error: importing native data symbol 'bar' (libfoo.so.1) is not supported yet{{$}}
-# AVAIL-DATA-NEXT:   {{^}}>>> referenced by availvar.o:(main){{$}}
+# AVAIL-DATA:        {{^}}msil-ld: error: data symbol 'bar' in libfoo.so.1 cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym{{$}}
 # AVAIL-NODATA:      {{^}}msil-ld: error: undefined symbol: bar{{$}}
 # AVAIL-NODATA-NEXT: {{^}}>>> referenced by availvar.o:(main){{$}}
 

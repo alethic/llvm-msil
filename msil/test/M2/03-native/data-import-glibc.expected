@@ -1,0 +1,7 @@
+optind=1
+optind=3
+environ set=1
+environ through a pointer=1
+fileno(stderr)=2
+fflush(stderr)=0
+[exit 3]

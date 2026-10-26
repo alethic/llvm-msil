@@ -95,12 +95,16 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 hello.o ucrt.lib -o d2/hello.il 2>&1 | count 0
 # RUN: cmp d1/hello.il d2/hello.il
 # RUN: FileCheck %s --check-prefix=NATIVE --implicit-check-not='"ucrtbase"' --input-file=d1/hello.il
+# RUN: FileCheck %s --check-prefix=NATIVE-NONE --input-file=d1/hello.il
 # RUN: FileCheck %s --check-prefix=PUBLIC --input-file=d1/hello.il
 
 # NATIVE:      {{^}}.assembly 'hello' { .ver 0:0:0:0 }{{$}}
 # NATIVE-DAG:  {{^}}.method public static int32 'main'() cil managed{{$}}
 # NATIVE-DAG:  call int32 'puts'(native int)
 # NATIVE-DAG:  {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" nomangle cdecl) int32 'puts'(native int) cil managed preservesig {}{{$}}
+## The implicit check above guards only the text before the first match of
+## the DAG group; NATIVE-NONE covers the whole file (M15 open issue 13).
+# NATIVE-NONE-NOT: "ucrtbase"
 # PUBLIC-COUNT-1: {{^}}.method public
 # PUBLIC-NOT:     {{^}}.method public
 

@@ -1,0 +1,117 @@
+# The oracle O6 of plan 5.12.6 (M20): msil-verify.py --md-baseline FILE runs
+# PEVerify /md on the assembly and on FILE, names each token after its row,
+# and fails unless every metadata message of the assembly is one of FILE's.
+# The images, all built by ilasm, use metadata errors that only PEVerify /md
+# reports (ILVerify and PEVerify /il pass), so the status shows what O6 says:
+# - a.il: class C with 'static literal int32 z' and no constant (0x80131B17,
+#   on Field 'C'::'z', token 0x04000001) and the entry point C::main;
+# - b.il: a.il after a class D with an ordinary field v and a second literal
+#   field w without a constant, so b.exe has two messages, on Field 'D'::'w'
+#   (token 0x04000002) and on Field 'C'::'z', whose token is 0x04000003 there:
+#   only the row names make a.exe's message one of b.exe's;
+# - i.il: a.il plus an interface I with an instance field y, which PEVerify
+#   /md reports as 0x8013126B on Field 'I'::'y' and which also fails
+#   PEVerify's /il pass ('Type load failed').
+# PEVerify's message texts depend on the environment (with some PATH values
+# every text is '.NET Framework Internal error: 0x<hresult>', and the
+# metadata warnings are printed too), so the checks match the hresult and the
+# row, and the images have no metadata warning.
+# (1) a.exe against the baseline b.exe: O6 passes (status 0) and says how many
+#     messages it compared;
+# (2) b.exe against the baseline a.exe: O6 fails (status 1) on the message
+#     a.exe lacks, naming the field, and not on the shared one;
+# (3) i.exe against the baseline a.exe: O6 still reports its line when pass 1
+#     fails too;
+# (4) a missing baseline is a usage error (status 2);
+# (5) without PEVerify ('--peverify=', the last value counts) O6 is skipped
+#     with a note and the run passes;
+# (6) without --md-baseline O6 does not run, and b.exe verifies.
+# REQUIRES: msil-ilasm, msil-ilverify, msil-peverify
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %ilasm -exe -output=%t/a.exe %t/a.il
+# RUN: %ilasm -exe -output=%t/b.exe %t/b.il
+# RUN: %ilasm -exe -output=%t/i.exe %t/i.il
+
+# (1)
+# RUN: %msil_verify --md-baseline %t/b.exe %t/a.exe > %t/1.log 2>&1
+# RUN: %{harness_check} contains %t/1.log "^msil-verify: O6: the 1 PEVerify /md messages of a\.exe are among the 2 of \S*b\.exe$"
+# RUN: %{harness_check} lacks %t/1.log "^O6: " "O6 skipped"
+
+# (2)
+# RUN: %{harness_check} exits 1 %msil_verify --md-baseline %t/a.exe %t/b.exe > %t/2.log 2>&1
+# RUN: %{harness_check} contains %t/2.log "^O6: peverify /md: \[MD\]\(0x80131B17\): .* \[Field 'D'::'w'\] \(not reported for the baseline a\.exe\)$" "^msil-verify: 1 disallowed verifier error\(s\) in b\.exe$"
+# RUN: %{harness_check} lacks %t/2.log "'C'::'z'" "\[token" "^msil-verify: O6: the "
+
+# (3)
+# RUN: %{harness_check} exits 1 %msil_verify --md-baseline %t/a.exe %t/i.exe > %t/3.log 2>&1
+# RUN: %{harness_check} contains %t/3.log "^O6: peverify /md: \[MD\]\(0x8013126B\): .* \[Field 'I'::'y'\] \(not reported for the baseline a\.exe\)$"
+# RUN: %{harness_check} lacks %t/3.log "^O6: .*'C'::'z'"
+
+# (4)
+# RUN: %{harness_check} exits 2 %msil_verify --md-baseline %t/none.exe %t/a.exe > %t/4.log 2>&1
+# RUN: %{harness_check} contains %t/4.log "^msil-verify: error: --md-baseline \S*none\.exe not found$"
+
+# (5)
+# RUN: %msil_verify --peverify= --md-baseline %t/a.exe %t/b.exe > %t/5.log 2>&1
+# RUN: %{harness_check} contains %t/5.log "^msil-verify: note: O6 skipped: no PEVerify \(--peverify\)$"
+# RUN: %{harness_check} lacks %t/5.log "^msil-verify: O6: " "^O6: "
+
+# (6)
+# RUN: %msil_verify %t/b.exe > %t/6.log 2>&1
+# RUN: %{harness_check} lacks %t/6.log "O6"
+
+#--- a.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly prog { }
+.module prog.exe
+.class public auto ansi sealed beforefieldinit C extends [mscorlib]System.Object
+{
+  .field public static literal int32 z
+  .method public static int32 main() cil managed
+  {
+    .entrypoint
+    .maxstack 1
+    ldc.i4.0
+    ret
+  }
+}
+#--- b.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly prog { }
+.module prog.exe
+.class public auto ansi sealed beforefieldinit D extends [mscorlib]System.Object
+{
+  .field public static int32 v
+  .field public static literal int32 w
+}
+.class public auto ansi sealed beforefieldinit C extends [mscorlib]System.Object
+{
+  .field public static literal int32 z
+  .method public static int32 main() cil managed
+  {
+    .entrypoint
+    .maxstack 1
+    ldc.i4.0
+    ret
+  }
+}
+#--- i.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly prog { }
+.module prog.exe
+.class public auto ansi sealed beforefieldinit C extends [mscorlib]System.Object
+{
+  .field public static literal int32 z
+  .method public static int32 main() cil managed
+  {
+    .entrypoint
+    .maxstack 1
+    ldc.i4.0
+    ret
+  }
+}
+.class interface public abstract I
+{
+  .field public int32 y
+}

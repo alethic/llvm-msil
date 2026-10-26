@@ -1,0 +1,7 @@
+obj_fn(1)=1521
+bc_fn(2)=525
+obj_data[2]=109
+*bc_ptrs[0]=8
+*bc_ptrs[1]=1000
+bc_ctor_ran=1
+[exit 231]

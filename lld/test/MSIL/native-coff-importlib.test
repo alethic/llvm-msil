@@ -11,8 +11,10 @@
 ## - IMPORT_DATA (a .def DATA export) and IMPORT_CONST (CONSTANT, ucrt's
 ##   _mbcasemap) are data: called as a function they are
 ##   "'<name>' in <module> is data, but <file> calls it as a function", and
-##   referenced as data they are the M15-M19 error "importing native data
-##   symbol '<name>' (<module>) is not supported yet" (5.10.12).
+##   referenced as data they are native data imports from M20 (5.10.12):
+##   '<msil>init_dataimports'() stores the address that kernel32.dll's
+##   LoadLibraryW and GetProcAddress give for the member's DLL and name
+##   (M15-M19 reported them as not supported yet).
 ## A call skips an IMPORT_DATA member and binds a later IMPORT_CODE one, in
 ## either order (the section 12 row of 2026-10-22 for 5.10.10); the reverse
 ## case, a data reference with the code import first, keeps msil-ld's
@@ -65,12 +67,16 @@
 # CALL-DATA:      {{^}}msil-ld: error: 'dataobj' in foo.dll is data, but call-data.o calls it as a function{{$}}
 # CALL-DATA-NEXT: {{^}}>>> referenced by call-data.o:(main){{$}}
 
-# RUN: not msil-ld --lto-emit-asm use-data.o foo.lib -o x.il 2>&1 | %{err} --check-prefix=USE-DATA
-# RUN: not msil-ld --lto-emit-asm use-const.o ucrt.lib -o x.il 2>&1 | %{err} --check-prefix=USE-CONST
-# USE-DATA:       {{^}}msil-ld: error: importing native data symbol 'dataobj' (foo.dll) is not supported yet{{$}}
-# USE-DATA-NEXT:  {{^}}>>> referenced by use-data.o:(main){{$}}
-# USE-CONST:      {{^}}msil-ld: error: importing native data symbol '_mbcasemap' (api-ms-win-crt-multibyte-l1-1-0.dll) is not supported yet{{$}}
-# USE-CONST-NEXT: {{^}}>>> referenced by use-const.o:(main){{$}}
+# RUN: msil-ld --lto-emit-asm use-data.o foo.lib -o use-data.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm use-const.o ucrt.lib -o use-const.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DATA-IMPORT -DMOD=foo.dll -DSYM=dataobj --input-file=use-data.il
+# RUN: FileCheck %s --check-prefix=DATA-IMPORT -DMOD=api-ms-win-crt-multibyte-l1-1-0.dll -DSYM=_mbcasemap \
+# RUN:   --input-file=use-const.il
+# DATA-IMPORT-DAG: {{^}}  ldstr "[[MOD]]"{{$}}
+# DATA-IMPORT-DAG: {{^}}  ldstr "[[SYM]]"{{$}}
+# DATA-IMPORT-DAG: {{^}}  stsfld native int '[[SYM]]'{{$}}
+# DATA-IMPORT-DAG: {{^}}.method {{.*}}pinvokeimpl("kernel32.dll"{{.*}}LoadLibraryW{{.*}}
+# DATA-IMPORT-DAG: {{^}}.method {{.*}}pinvokeimpl("kernel32.dll"{{.*}}GetProcAddress{{.*}}
 
 ## A call never binds an IMPORT_DATA member (the section 12 row of
 ## 2026-10-22 for 5.10.10, 'a COFF import or PE export of the right kind'):
@@ -96,7 +102,7 @@
 
 ## The reverse case: a variable foo against bcode.lib alone and before
 ## adata.lib is msil-ld's symbol type mismatch; adata.lib first is native
-## data (until M20).
+## data, a data import of adata.dll's foo (M20).
 # RUN: llvm-as use-foo.ll -o use-foo.o
 # RUN: not msil-ld --lto-emit-asm --lto-O0 use-foo.o bcode.lib -o x.il 2>&1 \
 # RUN:   | %{err} --check-prefix=REV --implicit-check-not=error:
@@ -105,10 +111,10 @@
 # REV:      {{^}}msil-ld: error: symbol type mismatch: foo{{$}}
 # REV-NEXT: {{^}}>>> defined as function in bcode.lib{{$}}
 # REV-NEXT: {{^}}>>> defined as data in use-foo.o{{$}}
-# RUN: not msil-ld --lto-emit-asm --lto-O0 use-foo.o adata.lib bcode.lib -o x.il 2>&1 \
-# RUN:   | %{err} --check-prefix=REV-DATA --implicit-check-not=error:
-# REV-DATA:      {{^}}msil-ld: error: importing native data symbol 'foo' (adata.dll) is not supported yet{{$}}
-# REV-DATA-NEXT: {{^}}>>> referenced by use-foo.o:(main){{$}}
+# RUN: msil-ld --lto-emit-asm --lto-O0 use-foo.o adata.lib bcode.lib -o rev-data.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DATA-IMPORT -DMOD=adata.dll -DSYM=foo --input-file=rev-data.il
+# RUN: FileCheck %s --check-prefix=NO-BCODE --input-file=rev-data.il
+# NO-BCODE-NOT: bcode.dll
 # KIND-DATA-NEXT: {{^}}>>> referenced by call-foo.o:(main){{$}}
 
 #--- main.ll

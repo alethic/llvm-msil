@@ -4,9 +4,17 @@
 ## - a file that does not exist: lld's 'cannot open <file>: <reason>';
 ## - a file of no known kind (text, ILAsm text, an empty file): 'unknown file
 ##   type: <file>';
-## - a PE with a CLI header (a CIL object or a .NET assembly): '<file>:
-##   linking CIL object files and .NET assemblies is not supported yet' (M20
-##   links CIL objects, M21 and M22 assemblies);
+## - a PE with a CLI header (5.9.4): from M20 a CIL object links (obj-*.test),
+##   a .NET assembly (an Assembly row, here an EXE msil-ld wrote) is
+##   '<file>: .NET assembly inputs are not supported yet' (M21 binds
+##   reference assemblies, M22 links libraries), and a module without the
+##   link-info record (a netmodule ilasm writes from text without
+##   '.assembly') is '<file>: not a CIL object (no link-info record)'; M14's
+##   one error for CIL objects and assemblies is gone. make-pe.py's minimal
+##   CLI image (a metadata root without streams) is no object either: the
+##   metadata reader's error, with 5.7.12's prefix 'invalid CLI metadata: ',
+##   names the file and the missing '#~' stream (obj-input-errors.test
+##   covers the record and object errors);
 ## - a native PE is a native library: M15 reads its export table (this one
 ##   has none, so it binds nothing and changes nothing);
 ## - a native library that does not parse is an error naming the file (a
@@ -36,7 +44,8 @@
 ##   builds an index, or when it picks the COFF format a windows-msvc member
 ##   suggests (an upstream-generic limit of targets without an asm parser
 ##   that M14 leaves alone).
-## The PE inputs are written by Inputs/make-pe.py; nothing here needs ilasm.
+## The native PE inputs are written by Inputs/make-pe.py; only the netmodule
+## needs ilasm.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: llvm-as main.ll -o main.o
@@ -74,7 +83,21 @@
 
 # RUN: not msil-ld --lto-emit-asm main.o cil.dll -o x.il 2>&1 | %{fc} --check-prefix=CLI -DFILE=cil.dll
 # RUN: not msil-ld --lto-emit-asm main.o cilobj.o -o x.il 2>&1 | %{fc} --check-prefix=CLI -DFILE=cilobj.o
-# CLI: {{^}}msil-ld: error: [[FILE]]: linking CIL object files and .NET assemblies is not supported yet{{$}}
+# CLI: {{^}}msil-ld: error: [[FILE]]: invalid CLI metadata: the metadata root has no #~ stream{{$}}
+
+## A .NET assembly that msil-ld itself wrote, and a CIL module without the
+## record.
+# RUN: llc -filetype=obj helper.ll -o helper-cil.o
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil main.ll -o main-cil.o
+# RUN: msil-ld main-cil.o helper-cil.o -o asm.exe 2>&1 | count 0
+# RUN: not msil-ld --lto-emit-asm main.o asm.exe -o x.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=ASSEMBLY --implicit-check-not=error:
+# RUN: not msil-ld main-cil.o helper-cil.o asm.exe -o x.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=ASSEMBLY --implicit-check-not=error:
+# ASSEMBLY: {{^}}msil-ld: error: asm.exe: .NET assembly inputs are not supported yet{{$}}
+# RUN: %if ilasm %{ %ilasm-verify -output=plain.o netmodule.il %}
+# RUN: %if ilasm %{ not msil-ld main-cil.o plain.o -o x.exe 2>&1 | %{fc} --check-prefix=NETMODULE --implicit-check-not=error: %}
+# NETMODULE: {{^}}msil-ld: error: plain.o: not a CIL object (no link-info record){{$}}
 
 # RUN: msil-ld --lto-emit-asm main.o helper.o native.dll -o native.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=NATIVE --implicit-check-not=pinvokeimpl --input-file=native.il
@@ -146,6 +169,18 @@ target triple = "x86_64-pc-windows-msvc-msil"
 
 define i32 @helper() {
   ret i32 1
+}
+
+#--- netmodule.il
+// A module of its own (no '.assembly'): a netmodule without the link-info
+// record of a CIL object.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.module 'plain.o'
+.method public static int32 'helper'() cil managed
+{
+  .maxstack 1
+  ldc.i4.1
+  ret
 }
 
 #--- notes.txt

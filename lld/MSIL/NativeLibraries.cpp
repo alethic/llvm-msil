@@ -134,6 +134,74 @@ bool isNativeCallbackFunction(StringRef name) {
 }
 
 //===----------------------------------------------------------------------===//
+// The texts of rejected definitions and the data-import helper (plan
+// 5.10.12, 5.10.14)
+//===----------------------------------------------------------------------===//
+
+std::string getNativeRejectionText(StringRef name, const NativeExport &e) {
+  switch (e.Why) {
+  case NotBindable::NativeCodeOnly:
+    return ("symbol '" + name + "' is defined only in native object code (" +
+            toString(e.File) + "); MSIL cannot link machine code")
+        .str();
+  case NotBindable::HiddenVersion:
+    return ("symbol '" + name + "' in " + e.Module +
+            " has only the non-default version " + e.Entry + "@" + e.Version +
+            ", which a P/Invoke cannot bind")
+        .str();
+  case NotBindable::ThreadLocal:
+    // Only errno has another spelling, <errno.h>'s macro, that reaches it
+    // without importing the variable.
+    return ("symbol '" + name + "' in " + e.Module +
+            " is thread-local data and cannot be imported" +
+            (name == "errno" ? "; use <errno.h>" : ""))
+        .str();
+  case NotBindable::PrivateVersion:
+    return ("symbol '" + name + "' in " + e.Module + " is " + e.Version +
+            " (GLIBC_PRIVATE) and cannot be bound")
+        .str();
+  case NotBindable::None:
+    break;
+  }
+  llvm_unreachable("a bindable definition is not rejected");
+}
+
+std::string getDataImportUnavailableText(StringRef name, StringRef module) {
+  return ("data symbol '" + name + "' in " + module +
+          " cannot be imported: no reference defines "
+          "System.Runtime.InteropServices.NativeLibrary and the native "
+          "libraries define no dlopen/dlsym")
+      .str();
+}
+
+bool findDataImportFunctions(const Triple &tt, const NativeIndex &index,
+                             SmallVectorImpl<DataImportFunction> &out) {
+  out.clear();
+  // Windows triples: kernel32.dll's loader (verified on .NET Framework 4.8
+  // and .NET 8, native-imports-files/data-win.il). Every Windows process
+  // maps kernel32.dll, so it needs no library on the command line.
+  if (tt.isOSWindows()) {
+    for (StringRef name : {"LoadLibraryW", "GetProcAddress"})
+      out.push_back({name, "kernel32.dll", name, nullptr});
+    return true;
+  }
+  // ELF triples: dlopen and dlsym as the link's native libraries define
+  // them (glibc 2.34 moved them from libdl.so.2 into libc.so.6).
+  for (StringRef name : {"dlopen", "dlsym"}) {
+    SmallVector<const NativeExport *, 2> rejected;
+    const NativeExport *e =
+        index.lookup(name, rejected, /*isFunctionReference=*/true);
+    if (!e ||
+        (e->Kind != NativeKind::Function && e->Kind != NativeKind::NoType)) {
+      out.clear();
+      return false;
+    }
+    out.push_back({name, e->Module, e->Entry, e});
+  }
+  return true;
+}
+
+//===----------------------------------------------------------------------===//
 // Native `long double` functions (plan 5.10.10, 5.10.14)
 //===----------------------------------------------------------------------===//
 

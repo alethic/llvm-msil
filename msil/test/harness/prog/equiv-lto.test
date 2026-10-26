@@ -1,0 +1,32 @@
+# %{msil_prog} under msil_pipeline=lto with msil_link_output=pe and
+# msil_equiv=1: the oracle O4 (plan 5.12.3, 5.12.6; M20). A nested lit with
+# -a runs Inputs/nested/lto-equiv/prog-o4.test (%{msil_prog_O2} of two
+# sources, the stand-ins of lit.local.cfg) and prints every command:
+# (1) msil-prog.py --pipeline lto --link-output pe gets --also-il
+#     <t>.O2.d/equiv/prog.il, --equiv-out <t>.O2.d/equiv/prog.exe,
+#     --equiv-skip <msil/utils/equiv-allowed.txt> and --test <the test>, and
+#     links the bitcode three times: into prog.exe (the image that runs),
+#     with -Wl,--lto-emit-asm into equiv/prog.il (the same link's text) and
+#     with -Wl,--no-gc-sections into equiv/prog.exe;
+# (2) after the run, msil-equiv.py --oracle O4 --test <the test> --triple
+#     <the triple> --level O2 (the qualified skip lines of equiv-allowed.txt
+#     match them) with the four entries O4 allows (assembly-hash,
+#     ilasm-params, ilasm-initlocals, snan-quiet) and --ilasm <%ilasm>
+#     compares equiv/prog.exe with ilasm's image of equiv/prog.il and finds
+#     them equal;
+# (3) O3's and O6's steps do not run (no -S build, no --md-baseline, no
+#     pinvoke entries).
+# REQUIRES: msil-ld, msil-ar, msil-cil-dump
+
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_equiv=1 %S/Inputs/nested/lto-equiv/prog-o4.test > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/prog/Inputs/nested/lto-equiv/prog-o4\.test "
+
+# (1)
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --pipeline lto --link-output pe .* --level O2 --workdir '?\S*prog-o4\.test\.tmp\.O2\.d'? --out '?\S*prog-o4\.test\.tmp\.O2\.d/prog\.exe'? --also-il '?\S*prog-o4\.test\.tmp\.O2\.d/equiv/prog\.il'? --equiv-out '?\S*prog-o4\.test\.tmp\.O2\.d/equiv/prog\.exe'? --equiv-skip '?\S*equiv-allowed\.txt'? --test '?\S*prog-o4\.test'? --src '?\S*main\.c'? '?\S*util\.c'? --stock-src --archives= --lib= --native-lib=$"
+# RUN: %{harness_check} contains %t.log "^# \| msil-prog: .* -O2 -flto -c \S*main\.c -o obj/main\.o$" "^# \| msil-prog: .* -O2 (--sysroot=\S+ )?obj/main\.o obj/util\.o -o prog\.exe\n# \| msil-prog: .* -O2 (--sysroot=\S+ )?obj/main\.o obj/util\.o -Wl,--lto-emit-asm -o equiv/prog\.il\n# \| msil-prog: .* -O2 (--sysroot=\S+ )?obj/main\.o obj/util\.o -Wl,--no-gc-sections -o equiv/prog\.exe$"
+
+# (2)
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-run\.py'? --expect-os .* --out '?\S*prog-o4\.test\.tmp\.O2\.out'? .*prog\.exe'?$[\s\S]*^# executed command: .*msil-equiv\.py'? --canon .* --allowed '?\S*equiv-allowed\.txt'? --oracle O4 --test '?\S*prog-o4\.test'? --triple \S+-msil --level O2 --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --ilasm .*ilasm.* '?\S*prog-o4\.test\.tmp\.O2\.d/equiv/prog\.exe'? '?\S*prog-o4\.test\.tmp\.O2\.d/equiv/prog\.il'?$" "^# \| msil-equiv: O4: \S*O2\.d/equiv/prog\.exe and \S*O2\.d/equiv/prog\.il are equal \(\d+ lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet\)$"
+
+# (3)
+# RUN: %{harness_check} lacks %t.log " -S " "--md-baseline" "--oracle O3" "pinvoke-module" "pinvoke-access" "skipped"

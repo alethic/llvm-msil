@@ -12,6 +12,11 @@
 # expected transcript is calls-arith.expected, which update-expected.py
 # generates for calls-arith.c; calls-arith.c runs the same pipeline without -g
 # at every level of %{msil_c}, and each leg here is one level of it plus -g.
+# The RUN lines are Phase 1's pipeline (clang -S, ilasm -dll), which the lit
+# parameter msil_pipeline does not switch, so the test runs only under the
+# default pipeline asm (plan 5.12.13; the lto and obj legs would repeat it
+# unchanged).
+# REQUIRES: msil-pipeline=asm
 
 # RUN: %clang_msil %{msil_cflags} -O0 -g -S %S/calls-arith.c -o %t.O0.il
 # RUN: %ilasm -dll -output=%t.O0.dll %t.O0.il

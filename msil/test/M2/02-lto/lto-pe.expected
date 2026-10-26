@@ -1,0 +1,11 @@
+lib first
+lib second
+lib third
+lib_scale(4)=14
+lib_ops[0](5)=50
+lib_ops[1](5)=-5
+lib_table[3]=40
+lib_calls=1
+main_hits=1
+count_or_default(0)=7
+[exit 6]

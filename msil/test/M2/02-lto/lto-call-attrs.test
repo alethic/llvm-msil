@@ -1,0 +1,132 @@
+# LTO decides each call by its own attributes: one definition, one IR call type, different signext/zeroext or byval (forced -flto).
+# Plan 5.9.8 decides every call by its own signature and descriptor, with one
+# adapter per (definition, call signature, descriptor), so the object and LTO
+# paths agree. Under -flto MSILFixFunctionBitcasts (module flag msil-lto)
+# builds the wrappers, and two calls of one definition can have the same IR
+# function type but different parameter attributes; each call must get its
+# own decision whatever the link order, never the wrapper or the verdict of
+# the call the pass saw first. Linux triples only: Windows triples put no
+# extension attribute on a char argument, and pass a 32-byte struct by
+# reference, not byval.
+# (a) b.c defines int h(int); a.c calls it through int h(unsigned char) with
+# 200 (zeroext) and c.c through int h(signed char) with -56 (signext). In
+# CIL both calls are int32 against int32, a direct match with no warning,
+# and the narrow argument reaches h as the call's own attribute widens it
+# (section 12 row 'Plan 5.9.8 (LTO path) and 5.9.16 clarified (narrow
+# integers)'): natively h gets 200 and -56 and main exits 3. Before M20's fix
+# the merged module's second call reused the first call's wrapper, so the
+# link order a c b m exited 1 and c a b m exited 2. %{msil_prog} links a c b
+# m (the native transcript at every level of the composite), and the RUN
+# lines after it check that this link prints no diagnostic at -O0 and -O2,
+# then compile the same sources, link them through the driver in the order
+# c a b m at -O0 and -O2 (with no output at all), and verify, force-JIT and
+# run each image against the same transcript.
+# (b) bv_b.c defines long f(long *p, int n); bv_a.c calls it through
+# long f(struct S) with a 32-byte struct passed byval, bv_c.c through
+# long f(long *). Both calls have the IR type i64(ptr) and differ only in
+# byval. 5.9.8's table makes bv_a.c's call an error (BYVAL on one side only)
+# and bv_c.c's an adapter that passes zero for the missing argument, with a
+# warning; in both link orders, at -O0 and -O2, the link stops with both
+# diagnostics (5.9.8's texts without the ' in <file>' parts), each exactly
+# once, where before M20's fix each order printed only the one of its first
+# call. Natively (b) is undefined behaviour, so it has no transcript.
+# REQUIRES: msil-triple-linux
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_cflags} = -std=gnu17 -ffreestanding -Werror=return-type -I%msil_inputs -flto
+# REDEFINE: %{msil_srcs} = %t/a.c %t/c.c %t/b.c %t/m.c
+# RUN: %{msil_prog}
+# RUN: %msil_prog_build --level O0 --workdir %t.acbm.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=ACBM --implicit-check-not="warning:" --implicit-check-not="error:" --implicit-check-not="signature mismatch"
+# RUN: %msil_prog_build --level O2 --workdir %t.acbm.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=ACBM --implicit-check-not="warning:" --implicit-check-not="error:" --implicit-check-not="signature mismatch"
+# ACBM: {{^}}msil-prog: {{.*}} obj/a.o obj/c.o obj/b.o obj/m.o -o prog.exe{{$}}
+# RUN: mkdir -p %t/cabm
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/a.c -o %t/cabm/a.O0.o
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/b.c -o %t/cabm/b.O0.o
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/c.c -o %t/cabm/c.O0.o
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/m.c -o %t/cabm/m.O0.o
+# RUN: %clang_msil %{msil_ldflags} -O0 %t/cabm/c.O0.o %t/cabm/a.O0.o %t/cabm/b.O0.o %t/cabm/m.O0.o -o %t/cabm/O0.exe 2>&1 | count 0
+# RUN: %msil_verify %t/cabm/O0.exe
+# RUN: %if msil-jitall %{ %msil_jitall %t/cabm/O0.exe %}
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/cabm/O0.out %t/cabm/O0.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/a.c -o %t/cabm/a.O2.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/b.c -o %t/cabm/b.O2.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/c.c -o %t/cabm/c.O2.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/m.c -o %t/cabm/m.O2.o
+# RUN: %clang_msil %{msil_ldflags} -O2 %t/cabm/c.O2.o %t/cabm/a.O2.o %t/cabm/b.O2.o %t/cabm/m.O2.o -o %t/cabm/O2.exe 2>&1 | count 0
+# RUN: %msil_verify %t/cabm/O2.exe
+# RUN: %if msil-jitall %{ %msil_jitall %t/cabm/O2.exe %}
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/cabm/O2.out %t/cabm/O2.exe
+# RUN: mkdir -p %t/bv
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/bv_a.c -o %t/bv/a.O0.o
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/bv_b.c -o %t/bv/b.O0.o
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/bv_c.c -o %t/bv/c.O0.o
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/bv_m.c -o %t/bv/m.O0.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/bv_a.c -o %t/bv/a.O2.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/bv_b.c -o %t/bv/b.O2.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/bv_c.c -o %t/bv/c.O2.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/bv_m.c -o %t/bv/m.O2.o
+# RUN: not %clang_msil %{msil_ldflags} -O0 %t/bv/a.O0.o %t/bv/c.O0.o %t/bv/b.O0.o %t/bv/m.O0.o -o %t/bv/acbm.O0.exe > %t/bv/acbm.O0.txt 2>&1
+# RUN: not %clang_msil %{msil_ldflags} -O0 %t/bv/c.O0.o %t/bv/a.O0.o %t/bv/b.O0.o %t/bv/m.O0.o -o %t/bv/cabm.O0.exe > %t/bv/cabm.O0.txt 2>&1
+# RUN: not %clang_msil %{msil_ldflags} -O2 %t/bv/a.O2.o %t/bv/c.O2.o %t/bv/b.O2.o %t/bv/m.O2.o -o %t/bv/acbm.O2.exe > %t/bv/acbm.O2.txt 2>&1
+# RUN: not %clang_msil %{msil_ldflags} -O2 %t/bv/c.O2.o %t/bv/a.O2.o %t/bv/b.O2.o %t/bv/m.O2.o -o %t/bv/cabm.O2.exe > %t/bv/cabm.O2.txt 2>&1
+# DEFINE: %{bv_check} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="_bitcast_invalid"
+# RUN: %{bv_check} --check-prefix=BV-ERR --input-file=%t/bv/acbm.O0.txt
+# RUN: %{bv_check} --check-prefix=BV-WARN --input-file=%t/bv/acbm.O0.txt
+# RUN: %{bv_check} --check-prefix=BV-COUNT --input-file=%t/bv/acbm.O0.txt --implicit-check-not="signature mismatch"
+# RUN: %{bv_check} --check-prefix=BV-ERR --input-file=%t/bv/cabm.O0.txt
+# RUN: %{bv_check} --check-prefix=BV-WARN --input-file=%t/bv/cabm.O0.txt
+# RUN: %{bv_check} --check-prefix=BV-COUNT --input-file=%t/bv/cabm.O0.txt --implicit-check-not="signature mismatch"
+# RUN: %{bv_check} --check-prefix=BV-ERR --input-file=%t/bv/acbm.O2.txt
+# RUN: %{bv_check} --check-prefix=BV-WARN --input-file=%t/bv/acbm.O2.txt
+# RUN: %{bv_check} --check-prefix=BV-COUNT --input-file=%t/bv/acbm.O2.txt --implicit-check-not="signature mismatch"
+# RUN: %{bv_check} --check-prefix=BV-ERR --input-file=%t/bv/cabm.O2.txt
+# RUN: %{bv_check} --check-prefix=BV-WARN --input-file=%t/bv/cabm.O2.txt
+# RUN: %{bv_check} --check-prefix=BV-COUNT --input-file=%t/bv/cabm.O2.txt --implicit-check-not="signature mismatch"
+# BV-ERR:           {{^}}msil-ld: error: {{.*}}function signature mismatch: f{{$}}
+# BV-ERR-NEXT:      {{^}}>>> defined as native int(native int, int32){{$}}
+# BV-ERR-NEXT:      {{^}}>>> called as native int(native int){{$}}
+# BV-ERR-NEXT:      {{^}}>>> {{([^a]|a[^d]).*}}
+# BV-WARN:          {{^}}msil-ld: warning: {{.*}}function signature mismatch: f{{$}}
+# BV-WARN-NEXT:     {{^}}>>> defined as native int(native int, int32){{$}}
+# BV-WARN-NEXT:     {{^}}>>> called as native int(native int){{$}}
+# BV-WARN-NEXT:     {{^}}>>> adapter: {{.+}}
+# BV-COUNT-COUNT-2: {{^}}msil-ld: {{error|warning}}: {{.*}}function signature mismatch: f{{$}}
+# BV-COUNT:         clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- a.c
+int h(unsigned char c); /* b.c defines int h(int c): zeroext 200 */
+int fa(void) { return h(200); }
+#--- c.c
+int h(signed char c);   /* b.c defines int h(int c): signext -56 */
+int fc(void) { return h(-56); }
+#--- b.c
+int h(int c) { return c; }
+#--- m.c
+#include "msil_test.h"
+int fa(void);
+int fc(void);
+int main(void) {
+  int a = fa(), c = fc();
+  put_kv("fa", a);
+  put_kv("fc", c);
+  return (a == 200) | (c == -56) << 1;
+}
+#--- bv_a.c
+struct S {
+  long a, b, c, d;
+};
+long f(struct S s); /* bv_b.c defines long f(long *p, int n): byval only here */
+long fa(void) {
+  struct S s = {1, 2, 3, 4};
+  return f(s);
+}
+#--- bv_c.c
+long f(long *p);    /* bv_b.c defines long f(long *p, int n): one argument short */
+long fc(void) {
+  static long arr[4] = {5, 6, 7, 8};
+  return f(arr);
+}
+#--- bv_b.c
+long f(long *p, int n) { return p[2] + n; }
+#--- bv_m.c
+long fa(void);
+long fc(void);
+int main(void) { return (int)(fa() + fc()) & 0xff; }

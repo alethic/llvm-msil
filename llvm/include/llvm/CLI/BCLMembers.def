@@ -73,5 +73,18 @@ CLI_BCL_METHOD(Buffer_MemoryCopy, Buffer, "MemoryCopy", false, "void",
 CLI_BCL_METHOD(Interlocked_MemoryBarrier, Interlocked, "MemoryBarrier", false,
                "void", "", Required, "", true)
 
+// M20: the data-import helper '<msil>dataimport' (plan 5.10.12) passes the
+// native library's name to LoadLibraryW in UTF-16 ...
+CLI_BCL_METHOD(Marshal_StringToHGlobalUni, Marshal, "StringToHGlobalUni",
+               false, "native int", "string", Required, "", true)
+// ... and '<msil>init_dataimports' throws EntryPointNotFoundException for a
+// missing native library or export.
+CLI_BCL_TYPE(EntryPointNotFoundException, "System",
+             "EntryPointNotFoundException", true)
+CLI_BCL_METHOD(EntryPointNotFoundException_ctor, EntryPointNotFoundException,
+               ".ctor", true, "void", "string", Required, "", true)
+// M20: the base type of msil-ld's '<msil>Spill<N>' classes (plan 5.9.12).
+CLI_BCL_TYPE(Object, "System", "Object", true)
+
 #undef CLI_BCL_TYPE
 #undef CLI_BCL_METHOD

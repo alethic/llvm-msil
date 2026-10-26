@@ -1,0 +1,47 @@
+# The entry assembly-hash of msil/utils/equiv-allowed.txt (plan 5.12.6; M20):
+# msil-ld writes the Assembly row's HashAlgId as SHA1 (0x8004, as Roslyn
+# does), ilasm writes 0 when the text has no '.hash algorithm' directive,
+# which -S and --lto-emit-asm never print. The pair: two ilasm texts of the
+# same program, one with '.hash algorithm 0x00008004' (the msil-ld side, A)
+# and one without (the ilasm side, B), both assembled into prog.dll (so the
+# module names agree). With every other entry allowed, msil-equiv.py fails
+# (status 1) on exactly the assembly line; with assembly-hash allowed too
+# (the listing prints 'hash=*'), the images are equal.
+# REQUIRES: msil-cil-dump
+
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/a %t/b
+# RUN: %ilasm -dll -output=%t/a/prog.dll %t/a.il
+# RUN: %ilasm -dll -output=%t/b/prog.dll %t/b.il
+# RUN: not %msil_equiv --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access --allow scopes %t/a/prog.dll %t/b/prog.dll > %t/without.txt
+# RUN: FileCheck %s --check-prefix=WITHOUT --input-file=%t/without.txt
+# RUN: %msil_equiv --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access --allow scopes --allow assembly-hash %t/a/prog.dll %t/b/prog.dll > %t/with.txt
+# RUN: FileCheck %s --check-prefix=WITH --input-file=%t/with.txt
+
+# WITHOUT:      msil-equiv: O3: {{.*}}prog.dll and {{.*}}prog.dll differ (2 differing lines; allowed: ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access, scopes); the first 2:
+# WITHOUT-NEXT: --- {{.*}}a{{[/\\]}}prog.dll
+# WITHOUT-NEXT: +++ {{.*}}b{{[/\\]}}prog.dll
+# WITHOUT-NEXT: @@ {{.*}} @@
+# WITHOUT-NEXT: -assembly 'prog' ver 0.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-
+# WITHOUT-NEXT: +assembly 'prog' ver 0.0.0.0 flags=0x00000000 hash=0x00000000 culture='' key=-
+# WITHOUT-NOT:  {{.}}
+
+# WITH: msil-equiv: O3: {{.*}}prog.dll and {{.*}}prog.dll are equal ({{[0-9]+}} lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access, scopes)
+
+#--- a.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'prog' { .hash algorithm 0x00008004 .ver 0:0:0:0 }
+.method public static int32 'f'() cil managed
+{
+  .maxstack 1
+  ldc.i4 7
+  ret
+}
+#--- b.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'prog' { .ver 0:0:0:0 }
+.method public static int32 'f'() cil managed
+{
+  .maxstack 1
+  ldc.i4 7
+  ret
+}

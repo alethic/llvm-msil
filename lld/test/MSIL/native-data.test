@@ -1,26 +1,34 @@
-## Native data (ImplementationPlan.md 5.10.12 'M15-M19', 5.10.14 and 5.9.6;
-## M15.a item 5; recon p2 native-imports 5.1). Until M20 writes the
-## data-import helper, a variable that binds to native data is the link
-## error
-##   importing native data symbol '<name>' (<module>) is not supported yet
-## with '>>> referenced by' lines: ELF STT_OBJECT (glibc's stdout, and the
-## WEAK environ), a COFF DATA import member (msvcrt's _iob) and a PE data
-## export (native-pe-dll.test). Calling data is
+## Native data (ImplementationPlan.md 5.10.12, 5.10.14 and 5.9.6; M15.a
+## item 5; recon p2 native-imports 5.1). From M20 a variable that binds to
+## native data is a data import (Q15): it keeps its address field, which
+## '<msil>init_dataimports'() fills at startup through the helper
+## '<msil>dataimport'(module, name), called from '.cctor' (5.10.12); under
+## --lto-emit-asm the linked text has them too (kind-1 '!msil.imports'
+## operands, 5.10.13): ELF STT_OBJECT (glibc's stdout, and the WEAK environ)
+## through dlopen and dlsym bound from libc.so.6, and a COFF DATA import
+## member (msvcrt's _iob) through kernel32.dll's LoadLibraryW and
+## GetProcAddress. M15's error for native data is gone. On an ELF triple
+## whose native libraries define no
+## dlopen/dlsym, native data is 5.10.14's
+##   data symbol '<name>' in <module> cannot be imported: no reference
+##   defines System.Runtime.InteropServices.NativeLibrary and the native
+##   libraries define no dlopen/dlsym
+## Calling data is
 ##   '<name>' in <module> is data, but <file> calls it as a function
 ## (the SIGSEGV of recon 3.2 becomes a link error). An extern variable that
 ## an ELF STT_FUNC defines is msil-ld's 'symbol type mismatch'. Between ELF
 ## libraries the first definition in command-line order wins, whatever its
 ## type, as in ld.so (the section 12 row of 2026-10-22 for 5.10.10): with
 ## libOBJECT.so.1 (foo STT_OBJECT) first a call of foo is the data-call text
-## and a variable foo native data; with libFUNC.so.1 (foo STT_FUNC) first
-## the call binds libFUNC.so.1 and the variable is the type mismatch.
+## and a variable foo native data (here without dlopen/dlsym, so the error
+## above); with libFUNC.so.1 (foo STT_FUNC) first the call binds
+## libFUNC.so.1 and the variable is the type mismatch.
 ## Only live references count: a reference that LTO deletes with its dead
-## function is no error.
+## function is no error and no import.
 ## A function used as data (its address in a table) is no data import: it
 ## gets its P/Invoke and the address field '<msil>fn_<name>' (M9).
-## (5.10.14's 'data symbol ... cannot be imported: no reference defines
-## System.Runtime.InteropServices.NativeLibrary ...' belongs to M20's data
-## imports and cannot occur before them.)
+## The text is assembled under '%if ilasm' and Inputs/dataimports.py prints
+## what the initializer stores.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
@@ -42,15 +50,30 @@
 # DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="undefined symbol"
 
-# RUN: not msil-ld --lto-emit-asm stdout.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=STDOUT
-# RUN: not msil-ld --lto-emit-asm environ.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=ENVIRON
-# RUN: not msil-ld --lto-emit-asm iob.o msvcrt.lib -o x.il 2>&1 | %{err} --check-prefix=IOB
-# STDOUT:       {{^}}msil-ld: error: importing native data symbol 'stdout' (libc.so.6) is not supported yet{{$}}
-# STDOUT-NEXT:  {{^}}>>> referenced by stdout.o:(main){{$}}
-# ENVIRON:      {{^}}msil-ld: error: importing native data symbol 'environ' (libc.so.6) is not supported yet{{$}}
-# ENVIRON-NEXT: {{^}}>>> referenced by environ.o:(main){{$}}
-# IOB:          {{^}}msil-ld: error: importing native data symbol '_iob' (msvcrt.dll) is not supported yet{{$}}
-# IOB-NEXT:     {{^}}>>> referenced by iob.o:(main){{$}}
+# RUN: msil-ld --lto-emit-asm stdout.o libc.so.6 -o stdout.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm environ.o libc.so.6 -o environ.il 2>&1 | count 0
+# RUN: msil-ld --lto-emit-asm iob.o msvcrt.lib -o iob.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefixes=TEXT,DLFCN -DMOD=libc.so.6 -DSYM=stdout --input-file=stdout.il
+# RUN: FileCheck %s --check-prefixes=TEXT,DLFCN -DMOD=libc.so.6 -DSYM=environ --input-file=environ.il
+# RUN: FileCheck %s --check-prefixes=TEXT,KERNEL32 -DMOD=msvcrt.dll -DSYM=_iob --input-file=iob.il
+# TEXT-DAG:     {{^}}.method {{.*}}'<msil>dataimport'(string{{[^,]*}}, string{{[^)]*}}) cil managed
+# TEXT-DAG:     {{^}}.method {{.*}}'<msil>init_dataimports'() cil managed
+# TEXT-DAG:     {{^}}  ldstr "[[MOD]]"{{$}}
+# TEXT-DAG:     {{^}}  ldstr "[[SYM]]"{{$}}
+# TEXT-DAG:     {{^}}  stsfld native int '[[SYM]]'{{$}}
+# TEXT-DAG:     {{^}}  call void '<msil>init_dataimports'(){{$}}
+# DLFCN-DAG:    {{^}}.method {{.*}}pinvokeimpl("libc.so.6"{{.*}}dlopen{{.*}}
+# DLFCN-DAG:    {{^}}.method {{.*}}pinvokeimpl("libc.so.6"{{.*}}dlsym{{.*}}
+# KERNEL32-DAG: {{^}}.method {{.*}}pinvokeimpl("kernel32.dll"{{.*}}LoadLibraryW{{.*}}
+# KERNEL32-DAG: {{^}}.method {{.*}}pinvokeimpl("kernel32.dll"{{.*}}GetProcAddress{{.*}}
+# RUN: %if ilasm %{ %ilasm-verify -output=stdout.dll stdout.il %}
+# RUN: %if ilasm && llvm-cil-dump %{ llvm-cil-dump stdout.dll > stdout.txt %}
+# RUN: %if ilasm && llvm-cil-dump %{ %python %S/Inputs/dataimports.py stdout.txt | FileCheck %s --check-prefix=STDOUT %}
+# RUN: %if ilasm %{ %ilasm-verify -output=iob.dll iob.il %}
+# RUN: %if ilasm && llvm-cil-dump %{ llvm-cil-dump iob.dll > iob.txt %}
+# RUN: %if ilasm && llvm-cil-dump %{ %python %S/Inputs/dataimports.py iob.txt | FileCheck %s --check-prefix=IOB %}
+# STDOUT: {{^}}import stdout = libc.so.6!stdout{{$}}
+# IOB:    {{^}}import _iob = msvcrt.dll!_iob{{$}}
 
 # RUN: not msil-ld --lto-emit-asm call.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=CALL
 # CALL:      {{^}}msil-ld: error: 'stdout' in libc.so.6 is data, but call.o calls it as a function{{$}}
@@ -69,8 +92,7 @@
 ## ELF: the first library wins whatever the type.
 # RUN: not msil-ld --lto-emit-asm var-foo.o libOBJECT.so.1 libFUNC.so.1 -o x.il 2>&1 \
 # RUN:   | %{err} --check-prefix=OBJ-VAR --implicit-check-not=error:
-# OBJ-VAR:      {{^}}msil-ld: error: importing native data symbol 'foo' (libOBJECT.so.1) is not supported yet{{$}}
-# OBJ-VAR-NEXT: {{^}}>>> referenced by var-foo.o:(main){{$}}
+# OBJ-VAR: {{^}}msil-ld: error: data symbol 'foo' in libOBJECT.so.1 cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym{{$}}
 # RUN: not msil-ld --lto-emit-asm call-foo.o libOBJECT.so.1 libFUNC.so.1 -o x.il 2>&1 \
 # RUN:   | %{err} --check-prefix=OBJ-CALL --implicit-check-not=error:
 # OBJ-CALL:      {{^}}msil-ld: error: 'foo' in libOBJECT.so.1 is data, but call-foo.o calls it as a function{{$}}

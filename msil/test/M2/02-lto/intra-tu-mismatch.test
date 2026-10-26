@@ -1,0 +1,58 @@
+# Under LTO a call mismatch inside one TU gets 5.9.8's warning or error once it reaches msil-ld still mismatched (forced -flto).
+# Plan 5.9.8's LTO path applies the table to the merged module, so under LTO
+# a mismatch inside one TU is checked too, where the object path never sees
+# a call inside one object. That holds for the calls that reach msil-ld's
+# LTO still mismatched (section 12 row 'Plan 5.9.8 (LTO path) clarified (a
+# mismatch inside one TU)'): the compile step of -flto keeps its pre-link
+# pipeline, which at -O1 and above may fold a mismatched call whose argument
+# has the size of the parameter, but never an int32 argument for a native
+# int parameter.
+# (1) w.c calls f through the K&R declaration int f() with an int, and
+# defines int f(long long x) later in the same TU (long long is native int
+# on both x86_64 triples). Natively the callee reads the low 32 bits it
+# returns, so main exits 5. Compiled and linked at -O0 and at -O2 through the
+# driver, the link warns exactly once with the table's int32-for-native-int
+# adapter (conv.i), 5.9.8's text without the ' in <file>' parts, and the
+# image verifies and runs against the native transcript, as the composite
+# does at every level.
+# (2) e.c calls the same f with 1.0 (a float64 argument for a native int
+# parameter): compiled and linked at -O0, the link stops with 5.9.8's
+# integer-versus-floating-point error. It is not checked at -O2: the pre-link
+# compile may fold that call before msil-ld sees it, and the program is
+# undefined behaviour, so it has no transcript either.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_cflags} = -std=gnu17 -ffreestanding -Werror=return-type -I%msil_inputs -flto
+# REDEFINE: %{msil_srcs} = %t/w.c
+# RUN: %{msil_prog}
+# RUN: mkdir -p %t/drv
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/w.c -o %t/drv/w.O0.o
+# RUN: %clang_msil %{msil_ldflags} -O0 %t/drv/w.O0.o -o %t/drv/w.O0.exe 2>&1 | FileCheck %s --check-prefix=WARN --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: %msil_verify %t/drv/w.O0.exe
+# RUN: %if msil-jitall %{ %msil_jitall %t/drv/w.O0.exe %}
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/drv/w.O0.out %t/drv/w.O0.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/w.c -o %t/drv/w.O2.o
+# RUN: %clang_msil %{msil_ldflags} -O2 %t/drv/w.O2.o -o %t/drv/w.O2.exe 2>&1 | FileCheck %s --check-prefix=WARN --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: %msil_verify %t/drv/w.O2.exe
+# RUN: %if msil-jitall %{ %msil_jitall %t/drv/w.O2.exe %}
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/drv/w.O2.out %t/drv/w.O2.exe
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/e.c -o %t/drv/e.O0.o
+# RUN: not %clang_msil %{msil_ldflags} -O0 %t/drv/e.O0.o -o %t/drv/e.O0.exe 2>&1 | FileCheck %s --check-prefix=ERR --implicit-check-not="signature mismatch" --implicit-check-not="msil-ld: warning" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="_bitcast_invalid"
+# WARN:      {{^}}msil-ld: warning: {{.*}}function signature mismatch: f{{$}}
+# WARN-NEXT: {{^}}>>> defined as int32(native int){{$}}
+# WARN-NEXT: {{^}}>>> called as int32(int32){{$}}
+# WARN-NEXT: {{^}}>>> adapter: {{.+}}
+# ERR:       {{^}}msil-ld: error: {{.*}}function signature mismatch: f{{$}}
+# ERR-NEXT:  {{^}}>>> defined as int32(native int){{$}}
+# ERR-NEXT:  {{^}}>>> called as int32(float64){{$}}
+# ERR-NEXT:  {{^}}>>> {{([^a]|a[^d]).*}}
+# ERR:       clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- w.c
+int f(); /* defined below as int f(long long x) */
+int g(int a) { return f(a); }
+int f(long long x) { return (int)x; }
+int main(void) { return g(5); }
+#--- e.c
+int f(); /* defined below as int f(long long x) */
+int g(void) { return f(1.0); }
+int f(long long x) { return (int)x; }
+int main(void) { return g(); }

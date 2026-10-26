@@ -13,13 +13,16 @@
 /// \file
 /// This file contains the entry points for global functions defined in the
 /// LLVM MSIL back-end: the factories and PassRegistry initializers of its
-/// passes. The MSIL back-end uses the legacy pass manager only.
+/// passes. The MSIL code generator uses the legacy pass manager only; the one
+/// new-PM pass is the call-site table that MSILTargetMachine adds to msil-ld's
+/// LTO pipelines (MSILFixFunctionBitcastsLTOPass).
 ///
 //===----------------------------------------------------------------------===//
 
 #ifndef LLVM_LIB_TARGET_MSIL_MSIL_H
 #define LLVM_LIB_TARGET_MSIL_MSIL_H
 
+#include "llvm/IR/PassManager.h"
 #include "llvm/Support/CodeGen.h"
 
 namespace llvm {
@@ -33,6 +36,21 @@ class PassRegistry;
 ModulePass *createMSILPrepareIRLegacyPass();
 ModulePass *createMSILAddMissingPrototypesLegacyPass();
 ModulePass *createMSILFixFunctionBitcastsLegacyPass();
+
+/// MSILFixFunctionBitcasts' "msil-lto" branch (cli::classifyCall's table,
+/// plan 5.9.8) before LTO optimization, so that no optimization folds a
+/// mismatched call first. MSILTargetMachine::registerPassBuilderCallbacks
+/// adds it at the post-link early extension points, which only LTO post-link
+/// pipelines (msil-ld's) invoke.
+class MSILFixFunctionBitcastsLTOPass
+    : public RequiredPassInfoMixin<MSILFixFunctionBitcastsLTOPass> {
+  const MSILTargetMachine &TM;
+
+public:
+  explicit MSILFixFunctionBitcastsLTOPass(const MSILTargetMachine &TM)
+      : TM(TM) {}
+  PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
+};
 FunctionPass *createMSILOptimizeReturnedLegacyPass();
 
 // ISel and immediate followup passes.

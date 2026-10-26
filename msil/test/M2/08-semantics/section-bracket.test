@@ -1,0 +1,79 @@
+# Matrix case section-bracket: markers bracket the entries of a named section on the default --gc-sections link.
+# Entries that nothing references and that are neither 'used' nor 'retain'
+# are reached only by pointer arithmetic from a marker that the program does
+# reference, so they must survive the default link (msil-ld's --gc-sections,
+# plan 5.9.11) as they survive native ld.lld --gc-sections and lld-link
+# /opt:ref:
+# - myset (both triples, one TU): a.c defines the const ints start_marker,
+#   e1 = 3, e2 = 5 and end_marker in section "myset", and main walks from
+#   &start_marker + 1 to &end_marker and prints sum * 10 + n: 82 natively.
+#   A live segment in an explicit section keeps live every segment of its
+#   object with the same section name and COMDAT group, as lld/ELF keeps a
+#   whole input section (rule (a) of the section 12 row cited below; on
+#   Windows triples rule (b) roots them anyway).
+# - mysec (Windows triples only, two TUs): the MSVC idiom of '#pragma
+#   section' and __declspec(allocate): a.c defines the marker pair
+#   sec_first in 'mysec$a' and sec_last in 'mysec$z' and sec_e1 = 3 in
+#   'mysec$m', b.c defines sec_e2 = 5 and sec_e3 = 7 in 'mysec$m'. COFF
+#   groups the sections by the name before '$' and sorts them by full name,
+#   so the walk from &sec_first + 1 to &sec_last finds the three entries:
+#   153 natively. On Windows triples every segment in an explicit section
+#   outside a COMDAT group is a root, as lld-link /opt:ref discards only
+#   COMDAT sections (rule (b)); b.c's entries are reached from no symbol at
+#   all. Only Windows triples group sections by '$' (plan 5.9.9), so b.c is
+#   linked only there.
+# The program returns the sum of the walks (82 on Linux triples, 235 on
+# Windows triples), so the Linux transcript is section-bracket.linux.expected.
+# Object pipeline only: under -flto, LTO internalizes the unreferenced
+# entries and GlobalDCE drops them before msil-ld marks anything, as native
+# LTO does (clang-cl -flto with lld-link gives the same transcript), so the
+# test is UNSUPPORTED under msil-prog-pipeline=lto. Section 12 row 'Plan
+# 5.9.11 amended (roots; M20.b)'; plan 5.9.9 (named sections, '$' groups)
+# and 5.9.16.
+# REQUIRES: msil-prog-pipeline=obj
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %if msil-triple-windows %{%t/b.c%}
+# RUN: %{msil_prog}
+#--- a.c
+#include "msil_test.h"
+/* One TU: markers bracket the entries of a named section (no __start_/__stop_). */
+__attribute__((section("myset"))) const int start_marker = 0;
+__attribute__((section("myset"))) const int e1 = 3;
+__attribute__((section("myset"))) const int e2 = 5;
+__attribute__((section("myset"))) const int end_marker = 0;
+#if defined(_WIN32)
+/* Two TUs: an MSVC '$' group; b.c adds two more entries to 'mysec$m'. */
+#pragma section("mysec$a", read)
+#pragma section("mysec$m", read)
+#pragma section("mysec$z", read)
+__declspec(allocate("mysec$a")) const int sec_first = 0;
+__declspec(allocate("mysec$z")) const int sec_last = 0;
+__declspec(allocate("mysec$m")) const int sec_e1 = 3;
+#endif
+int main(void) {
+  const int *p = &start_marker + 1;
+  int sum = 0, n = 0;
+  for (; p < &end_marker; ++p) {
+    sum += *p;
+    ++n;
+  }
+  int r = sum * 10 + n;
+  put_kv("myset", r);
+#if defined(_WIN32)
+  sum = 0;
+  n = 0;
+  for (p = &sec_first + 1; p < &sec_last; ++p) {
+    sum += *p;
+    ++n;
+  }
+  put_kv("mysec", sum * 10 + n);
+  r += sum * 10 + n;
+#endif
+  return r & 0xff;
+}
+#--- b.c
+#if defined(_WIN32)
+#pragma section("mysec$m", read)
+__declspec(allocate("mysec$m")) const int sec_e2 = 5;
+__declspec(allocate("mysec$m")) const int sec_e3 = 7;
+#endif

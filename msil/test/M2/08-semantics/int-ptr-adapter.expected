@@ -1,0 +1,3 @@
+count_or_default(0)=7
+count_or_default(&v)=42
+[exit 49]

@@ -196,8 +196,20 @@ enum class ComdatMemberKind : uint8_t { FunctionSymbol = 0, Segment = 1 };
 /// INIT_FINI, field Kind: an llvm.global_ctors or an llvm.global_dtors entry.
 enum class InitKind : uint8_t { Init = 0, Fini = 1 };
 
-/// SIGNATURES, field CallFlags (C7). Phase 2 writers never set VarArg.
-enum CallFlags : uint32_t { NoPrototype = 0x1, VarArg = 0x2, Sret = 0x4 };
+/// SIGNATURES, field CallFlags (C7): NoPrototype, VarArg, Sret and
+/// NativeIncompatible. Phase 2 writers never set VarArg. NativeIncompatible is
+/// set on the entry of a definition or reference whose IR function type has a
+/// non-void result, or a parameter, that is not a native scalar (an integer of
+/// at most 64 bits, a pointer, float or double): a result returned through a
+/// hidden pointer such as { i64, i64 }, integers wider than 64 bits, vectors,
+/// half, bfloat and aggregates. msil-ld refuses to bind such a symbol to a
+/// native function (P/Invoke) until phase 3.
+enum CallFlags : uint32_t {
+  NoPrototype = 0x1,
+  VarArg = 0x2,
+  Sret = 0x4,
+  NativeIncompatible = 0x8
+};
 
 /// LINKER_OPTIONS, field Kind: an llvm.dependent-libraries entry (one string)
 /// or one llvm.linker.options node (n strings).
@@ -299,8 +311,8 @@ struct ByvalParam {
 
 /// SIGNATURES: the call-site flags of one MethodDef or method MemberRef
 /// (C7). FixedParams is present for VarArg only, SretSize and SretAlignLog2 for
-/// Sret only. A token without an entry is prototyped, not variadic, and has no
-/// sret or byval parameter.
+/// Sret only. A token without an entry is prototyped, not variadic, has no
+/// sret or byval parameter and passes only native scalars.
 struct SignatureInfo {
   uint32_t Token;
   uint32_t Flags = 0;

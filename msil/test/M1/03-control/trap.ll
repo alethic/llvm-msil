@@ -10,6 +10,11 @@
 ; refuses it), so FileCheck reads the transcript of msil-run.py, on .NET 8
 ; (or the runtime of msil_runner) and, with msil_run_netfx, on .NET
 ; Framework 4.8.
+; The RUN lines are Phase 1's pipeline (llc text, ilasm -dll), which the
+; lit parameter msil_pipeline does not switch, so the test runs only under
+; the default pipeline asm (plan 5.12.13; the lto and obj legs would repeat it
+; unchanged).
+; REQUIRES: msil-pipeline=asm
 ; RUN: %llc_msil -O0 %s -o %t.O0.il
 ; RUN: %ilasm -dll -output=%t.O0.dll %t.O0.il
 ; RUN: %msil_verify %t.O0.dll

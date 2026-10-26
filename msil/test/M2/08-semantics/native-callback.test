@@ -12,17 +12,26 @@
 # amended by the section 12 row of 2026-10-22): api-ms-win-crt-utility-l1-1-0.dll
 # through ucrt.lib on windows-msvc (LTO-WIN), libc.so.6 on linux-gnu (LTO-LNX),
 # and the reference is main's. The check runs at -O0 and -O2 on both triples
-# when %{msil_prog} links bitcode; the object link's check comes with M20.
+# when %{msil_prog} links bitcode. On the object path (M20) the same check is
+# msil-ld's own, after native resolution, for every live call or address
+# reference that native lookup binds (plan 5.9.8 'Native callees', 5.10.14):
+# the same text, with a '>>> referenced by' line that names main.o and main.
 # Plan 5.9.16 row native-callback (M15 lto, M20 obj; the transcript from
 # P3-B), 5.10.14.
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/main.c
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefixes=LTO,%if msil-triple-windows %{LTO-WIN%} %else %{LTO-LNX%} --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="undefined symbol" %}
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefixes=LTO,%if msil-triple-windows %{LTO-WIN%} %else %{LTO-LNX%} --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="undefined symbol" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefixes=OBJ,%if msil-triple-windows %{OBJ-WIN%} %else %{OBJ-LNX%} --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="undefined symbol" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefixes=OBJ,%if msil-triple-windows %{OBJ-WIN%} %else %{OBJ-LNX%} --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="undefined symbol" %}
 # LTO-WIN:  {{^}}msil-ld: error: native function 'qsort' (api-ms-win-crt-utility-l1-1-0.dll) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
 # LTO-LNX:  {{^}}msil-ld: error: native function 'qsort' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
 # LTO-NEXT: {{^}}>>> referenced by {{.+}}:(main){{$}}
 # LTO:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# OBJ-WIN:  {{^}}msil-ld: error: native function 'qsort' (api-ms-win-crt-utility-l1-1-0.dll) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# OBJ-LNX:  {{^}}msil-ld: error: native function 'qsort' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# OBJ-NEXT: {{^}}>>> referenced by {{.*}}main.o:(main){{$}}
+# OBJ:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
 #--- main.c
 #include "msil_test.h"
 

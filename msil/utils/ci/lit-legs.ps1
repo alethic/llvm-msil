@@ -12,26 +12,38 @@
 #   pwsh -NoProfile -File msil/utils/ci/lit-legs.ps1 -List
 #
 # Legs, in order. The numbers are the gate steps of plan section 6 that run the same command:
-# 'M19 n' for the M19 gate, 'M18 n' for the M18 gate, 'M14 n' for the M14 gate, 'M12 n' for the
-# M12 gate, plain numbers for the M10 and M11 gates (steps 5-12 the same in both, 20 and 21
-# M11's); lit-legs.sh has the Linux job's legs:
+# 'M20 n' for the M20 gate, 'M19 n' for the M19 gate, 'M18 n' for the M18 gate, 'M14 n' for the
+# M14 gate, 'M12 n' for the M12 gate, plain numbers for the M10 and M11 gates (steps 5-12 the
+# same in both, 20 and 21 M11's); lit-legs.sh has the Linux job's legs:
 #   net8           llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests, from M17
 #                  the llvm-cil-dump and llvm-cil-copy tests, from M18 llvm/test/MC/MSIL and
 #                  from M19 clang/test/Driver/msil-object.c included), harness, msil/test/M1 and
 #                  msil/test/M2 on .NET 8 (tiered) and on the .NET Framework 4.8, -O0 and -O2,
 #                  native oracle required (with the VS clang's compiler-rt builtins, lit's
-#                  msil_native_rtlib=auto)                 (M19 13; M18 15; M14 11; M12 9; step 5)
+#                  msil_native_rtlib=auto); M1 through -S and ilasm, M2 through CIL objects and
+#                  msil-ld's image (from M20 %{msil_prog} links objects under the default
+#                  pipeline asm)                    (M20 17; M19 13; M18 15; M14 11; M12 9; step 5)
 #   net10          msil/test/M1 on .NET 10                                       (M12 10; step 6)
 #   net8-tc0       msil/test/M1 on .NET 8, DOTNET_TieredCompilation=0 (optimizing JIT)  (step 7)
 #   more-levels    msil/test/M1 on .NET 8 at O1,O3,Os,Oz (O0 and O2 run in the other legs; .ll
 #                  tests run at O1 and O3 only, lit.cfg.py)                            (step 21)
 #   lto            msil/test/M1 and msil/test/M2 with msil_pipeline=lto (plan 5.12.11): every
-#                  C test of M1 as a one-source program through clang -flto -c, msil-ld
-#                  --lto-emit-asm and ilasm -exe, and M2, on .NET 8 at -O0 and -O2, native oracle
-#                  required; M1's .ll tests are filtered out (lto runs them on llc text, as
-#                  net8 does)                                                        (M14 12)
-#   det            msil/test/M2/06-det: %{msil_det}, objects, archives and --lto-emit-asm text
-#                  built twice and compared                                          (M14 13)
+#                  C test of M1 as a one-source program through clang -flto -c and msil-ld
+#                  (its image from M20, msil_link_output=pe; --lto-emit-asm and ilasm -exe
+#                  before), and M2, on .NET 8 at -O0 and -O2, native oracle required; M1's .ll
+#                  tests are filtered out (lto runs them on llc text, as net8 does)  (M14 12)
+#   det            msil/test/M2/06-det: %{msil_det}, objects, archives and msil-ld's image (M20;
+#                  M14: --lto-emit-asm text) built twice and compared          (M20 20; M14 13)
+#   obj            msil/test/M1 and msil/test/M2 with msil_pipeline=obj (plan 5.12.11, M20): every
+#                  C test of M1 as a one-source program through clang -c and msil-ld, every .ll
+#                  test through llc -filetype=obj and msil-ld, and M2, on .NET 8 and on the .NET
+#                  Framework 4.8 at -O0 and -O2, native oracle required, with msil_equiv=1 (O3:
+#                  the --no-gc-sections image against ilasm's image of the -S text, canonically,
+#                  and O6: the PEVerify /md messages of the image that runs among those of the
+#                  ilasm image) and msil_scale_tests=1 (msil/test/M2/00-link/spill-limits.test,
+#                  65,600 functions and globals; only this leg sets it, plan 5.12.2); M20's gate
+#                  runs its parameters on M1 alone (step 18), the post-commit run-m1-gate.ps1
+#                  the whole leg                                                     (M20 18)
 #   wsl-net10      -Wsl: msil/test/M1 and msil/test/harness (the WSL runner's own checks),
 #                  x86_64-unknown-linux-gnu-msil, WSL .NET 10, E7 Linux oracle required (M18 16;
 #                  M12 11, and M12 12 checks its response file and log; step 8)
@@ -39,8 +51,12 @@
 #   wsl-ilasm      -Wsl: 11-programs assembled by the Linux ilasm inside WSL           (step 10)
 #   wsl-quick      -Wsl: msil/test/M1/11-programs, msil/test/harness and msil/test/M2 (once it
 #                  exists) on WSL .NET 10, E7 Linux oracle required (plan 5.12.10 G4: the WSL
-#                  step of every Phase 2 gate from M13 on; the M12 gate runs wsl-net10 instead)
-#                                                                                    (M19 14)
+#                  step of every Phase 2 gate from M13 on; the M12 gate runs wsl-net10 instead,
+#                  the M20 gate obj-wsl)                                             (M19 14)
+#   obj-wsl        -Wsl: msil/test/M1/11-programs and msil/test/M2 with msil_pipeline=obj and
+#                  msil_equiv=1 (O3 and O6; PEVerify and ilasm run on the host) on WSL .NET 10,
+#                  E7 Linux oracle required (plan 5.12.11, M20; no .NET Framework run and no
+#                  msil_scale_tests)                                                 (M20 19)
 #   hosted         -Wsl, optional (plan Q16, 5.12.11): msil/test/M2/09-hosted, the hosted
 #                  compile-only tests (glibc headers and libc.so, UCRT headers), with
 #                  msil_glibc_sysroot given: $env:MSIL_GLIBC_SYSROOT, else
@@ -189,6 +205,9 @@ $legs = @(
   @{ Name = 'lto'; Paths = { $m1 + @(Get-M2Paths) }; Lit = @('--filter-out=\.ll$')
      Params = { 'msil_pipeline=lto', 'msil_dotnet_runtime=8', 'msil_native_oracle=required' } }
   @{ Name = 'det'; Paths = { 'msil/test/M2/06-det' }; Params = { 'msil_dotnet_runtime=8' } }
+  @{ Name = 'obj'; Paths = { $m1 + @(Get-M2Paths) }
+     Params = { 'msil_pipeline=obj', 'msil_equiv=1', 'msil_dotnet_runtime=8', 'msil_native_oracle=required',
+                'msil_run_netfx=1', 'msil_scale_tests=1' } }
   @{ Name = 'wsl-net10'; Paths = { 'msil/test/M1', 'msil/test/harness' }; Wsl = $true
      Params = { $wslRuntime + $e7 } }
   @{ Name = 'wsl-net10-tc0'; Paths = { $m1 }; Wsl = $true; Params = { $wslRuntime + $tc0 } }
@@ -198,6 +217,8 @@ $legs = @(
   @{ Name = 'wsl-quick'; Wsl = $true; Params = { $wslRuntime + $e7 }
      Paths = { 'msil/test/M1/11-programs', 'msil/test/harness'
                if (Test-Path -LiteralPath (Join-Path $MsilRepo 'msil/test/M2')) { 'msil/test/M2' } } }
+  @{ Name = 'obj-wsl'; Wsl = $true; Paths = { $programs + @(Get-M2Paths) }
+     Params = { $wslRuntime + $e7 + @('msil_pipeline=obj', 'msil_equiv=1') } }
   @{ Name = 'hosted'; Paths = { 'msil/test/M2/09-hosted' }; Wsl = $true
      Params = { "msil_glibc_sysroot=$($glibcSysroot.Replace('\', '/'))" } }
   @{ Name = 'modern-ilasm'; Paths = { $programs }

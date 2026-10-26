@@ -69,11 +69,16 @@ private directory next to the program, and --dep-dir DIR (repeatable) copies
 everything in DIR there (plan 5.12.4, M15): the managed assemblies and the
 native libraries a program needs at run time, in every mode (.dll, --netfx,
 --native; with --runner wsl into the Linux temporary directory, where the
-copy of this script inside WSL runs the program). A missing FILE or DIR, and
-two files of one name (or one named like the program), are configuration
-errors. --dep takes every argument up to the next option, so the lit
-composites pass '--dep %{msil_deps} --' before the program; an empty list is
-allowed.
+copy of this script inside WSL runs the program). On Linux and other POSIX
+hosts, and so in WSL, a .dll run that is given --dep or --dep-dir also puts
+that directory first in LD_LIBRARY_PATH ('<dir>', or '<dir>:<old value>'): a
+native data import dlopen()s the library's bare name, which glibc never looks
+for in the program's directory (plan 5.10.12 as clarified in section 12; the
+native oracle links with -rpath '$ORIGIN' instead). Windows, --netfx and
+--native runs keep the environment. A missing FILE or DIR, and two files of
+one name (or one named like the program), are configuration errors. --dep
+takes every argument up to the next option, so the lit composites pass
+'--dep %{msil_deps} --' before the program; an empty list is allowed.
 
 With --expect STEM the transcript is compared with STEM.<os>.expected if that
 file exists, else STEM.expected; <os> (windows, linux or darwin) comes from
@@ -511,6 +516,16 @@ def child_env(env_args):
     return env
 
 
+def prepend_library_path(env, directory):
+    """Put directory first in env's LD_LIBRARY_PATH ('<dir>', or '<dir>:<old
+    value>'; an empty old value would add the current directory). A .NET
+    program's native data import dlopen()s the library's bare name, and glibc
+    never looks for one in the program's directory (plan 5.10.12 as clarified
+    in section 12): the analogue of the native oracle's -rpath '$ORIGIN'."""
+    old = env.get("LD_LIBRARY_PATH")
+    env["LD_LIBRARY_PATH"] = directory + ":" + old if old else directory
+
+
 def describe_exit(rc):
     """An exit status as text: decimal, except that Windows NTSTATUS and HRESULT
     style codes (0x80000000..0xEFFFFFFF, for example 0xC0000005 or the CLR's
@@ -688,6 +703,10 @@ def run_local(args):
             shutil.copyfile(args.runtimeconfig, config)
             taken.append(os.path.basename(config))
         copy_deps(args.dep, args.dep_dir, private, taken)
+        if dotnet and not IS_WINDOWS and (args.dep or args.dep_dir):
+            # Also the copy of this script inside WSL under --runner wsl,
+            # which makes private there.
+            prepend_library_path(env, private)
         if dotnet:
             cmd = [dotnet, "exec", "--runtimeconfig", config, copy] + args.args
         else:
@@ -759,7 +778,9 @@ def run_wsl(args):
     )
     if args.stdin:
         cmd += ["--stdin", to_wsl_path(args.stdin)]
-    # The copy inside WSL copies them into its private Linux directory.
+    # The copy inside WSL copies them into its private Linux directory and,
+    # for a .dll, puts that directory first in LD_LIBRARY_PATH (run_local):
+    # the assignments above cannot name it, it does not exist yet.
     check_deps(args.dep, args.dep_dir)
     for dep in args.dep:
         cmd += ["--dep", to_wsl_path(dep)]

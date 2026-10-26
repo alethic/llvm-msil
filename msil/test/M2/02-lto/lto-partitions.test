@@ -1,0 +1,77 @@
+# --lto-partitions=2: LTO code generation in two partitions, linked as two CIL objects (forced -flto).
+# The sources are compiled with -flto on every pipeline (the REDEFINE of
+# %{msil_cflags}; the native oracle gets the same flag) and msil-ld splits
+# the merged module into two partitions (-Wl,--lto-partitions=2 in
+# %{msil_libs}, the MSIL link only). Each partition becomes an in-memory CIL
+# object (plan 5.9.13, from M20), so calls, function pointers, data
+# relocations and constructors cross the partitions as they cross objects:
+# noinline functions in a chain, a table of their addresses, data that points
+# at data and functions defined elsewhere, and constructors of two
+# priorities. Before M20 the option was the error 'ThinLTO, --lto-partitions
+# and LTO without --lto-emit-asm need CIL object output'. After the
+# composite, the RUN lines link the same bitcode with --lto-partitions=2 at
+# -O0 and -O2 through the driver on every leg and run the image against the
+# same transcript. Whole-program text has no partitioned form, so the test
+# does not run with msil_link_output=il. Recon tests-p2 3.3, plan 5.12.5
+# (M20).
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_cflags} = -std=gnu17 -ffreestanding -Werror=return-type -I%msil_inputs -flto
+# REDEFINE: %{msil_srcs} = %t/main.c %t/chain.c %t/data.c
+# REDEFINE: %{msil_libs} = -Wl,--lto-partitions=2
+# RUN: %{msil_prog}
+# RUN: mkdir -p %t/part/O0 %t/part/O2
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/main.c -o %t/part/main.O0.o
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/chain.c -o %t/part/chain.O0.o
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/data.c -o %t/part/data.O0.o
+# RUN: %clang_msil %{msil_ldflags} -O0 -Wl,--lto-partitions=2 %t/part/main.O0.o %t/part/chain.O0.o %t/part/data.O0.o -o %t/part/O0/prog.exe
+# RUN: %msil_verify %t/part/O0/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/part/O0.out %t/part/O0/prog.exe
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/main.c -o %t/part/main.O2.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/chain.c -o %t/part/chain.O2.o
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/data.c -o %t/part/data.O2.o
+# RUN: %clang_msil %{msil_ldflags} -O2 -Wl,--lto-partitions=2 %t/part/main.O2.o %t/part/chain.O2.o %t/part/data.O2.o -o %t/part/O2/prog.exe
+# RUN: %msil_verify %t/part/O2/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t/part/O2.out %t/part/O2/prog.exe
+#--- main.c
+#include "msil_test.h"
+int step0(int);
+extern int (*const steps[6])(int);
+extern int *const data_ptrs[3];
+extern const char *const data_names[2];
+int ctor_trace;
+int main(void) {
+  put_kv("step0(1)", step0(1));
+  for (int i = 0; i < 6; ++i)
+    put_kv("steps", steps[i](i));
+  for (int i = 0; i < 3; ++i)
+    put_kv("data", *data_ptrs[i]);
+  put_str(data_names[0]);
+  put_str(data_names[1]);
+  put_kv("ctor_trace", ctor_trace);
+  return (step0(2) + ctor_trace) & 0xff;
+}
+#--- chain.c
+extern int ctor_trace;
+__attribute__((noinline)) int step5(int x) { return x + 5; }
+__attribute__((noinline)) int step4(int x) { return step5(x) * 2; }
+__attribute__((noinline)) int step3(int x) { return step4(x) - 3; }
+__attribute__((noinline)) int step2(int x) { return step3(x) + 7; }
+__attribute__((noinline)) int step1(int x) { return step2(x) ^ 1; }
+__attribute__((noinline)) int step0(int x) { return step1(x) + 1; }
+__attribute__((constructor(150))) static void chain_init(void) {
+  ctor_trace = ctor_trace * 10 + 2;
+}
+#--- data.c
+int step0(int), step1(int), step2(int), step3(int), step4(int), step5(int);
+extern int ctor_trace;
+static int local_a = 11, local_b = 22;
+int shared_c = 33;
+int (*const steps[6])(int) = {step5, step4, step3, step2, step1, step0};
+int *const data_ptrs[3] = {&local_a, &shared_c, &local_b};
+static const char first[] = "partition data";
+const char *const data_names[2] = {first, "partition literal"};
+__attribute__((constructor(120))) static void data_init(void) {
+  ctor_trace = ctor_trace * 10 + 1;
+  local_b += 1;
+}

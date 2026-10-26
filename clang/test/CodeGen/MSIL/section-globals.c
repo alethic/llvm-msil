@@ -1,42 +1,64 @@
-// An explicit section on a global variable definition is an error in
-// whole-program output (Milestone 12, judge-c-fidelity F4, plan D26 and the
-// section 12 row 'D26 amended (whole-program mode, ...)'). Before M12 the
-// backend ignored the section, so a constructor registered through
-// '.init_array' (ELF) or '.CRT$XCU' (MSVC), which the native startup code
-// runs, silently never ran (judge-c-fidelity probe p8.c: 42 natively, 3 on
-// MSIL). Now MSILPrepareIR reports every global variable definition with a
-// section, in module order and before any function diagnostic, as
-//   global variable @<name> in section "<section>" is not supported for MSIL
-//   yet (phase 2 CIL objects)
-// and leaves the global as ordinary data, so the output stays well formed
-// (plan section 2). Not reported: a function with a section (ignored), and
-// clang's own globals in the "llvm.metadata" section (llvm.used from
-// __attribute__((used))). The frontend emits the sections unchanged, without
-// a diagnostic (IR runs). M20 retires this error, when whole-program output
-// lays out named sections as a one-object link does (plan section 12 row
-// 'D26 amended (Q5; ...)', M20.d updates this test); until then
-// llvm/test/CodeGen/MSIL/section-errors.ll pins the same text for llc.
+// An explicit section on a global variable definition in whole-program output
+// (ImplementationPlan.md 5.8.10 and 5.9.9, M20; D26 as amended by the section
+// 12 rows of 2026-10-21 for M12 and M20; judge-c-fidelity F4). Phase 1
+// ignored the section, so a constructor registered through '.init_array'
+// (ELF) or '.CRT$XCU' (MSVC), which the native startup code runs, silently
+// never ran (judge-c-fidelity probe p8.c: 42 natively, 3 on MSIL); M12 made
+// it the error 'global variable @<name> in section "<section>" is not
+// supported for MSIL yet (phase 2 CIL objects)'. From M20 '-S' output lays
+// named sections out as a one-object link does: p8.c compiles without a
+// diagnostic on both x86_64 MSIL triples, its 8-byte '.init_array' or
+// '.CRT$XCU' slot is a constructor that <Module>::.cctor calls after the
+// relocations (after storing init_fn's address into the slot), and the data
+// in "myreg" is ordinary data in its own section. A function's section is
+// still ignored. The frontend emits the sections unchanged, without a
+// diagnostic (IR runs). Constructs that stay errors are pinned by
+// llvm/test/CodeGen/MSIL/section-errors.ll; layouts, start/stop symbols and
+// constructor order by sections-whole-program.ll.
 //
 // This is p8.c on both x86_64 MSIL triples (-fms-extensions for MSVC's
 // '#pragma section' and '__declspec(allocate)'), plus data in a section named
-// "myreg" and a function in a section of its own.
+// "myreg" and a function in a section of its own. Layout: counter +0,
+// p_init +8, myreg_data +16.
 
 // REQUIRES: msil-registered-target
 
-// RUN: not %clang_cc1 -triple x86_64-unknown-linux-gnu-msil -S -o %t.lnx.il %s 2>&1 \
-// RUN:   | FileCheck %s --check-prefix=LNX --implicit-check-not=error: --implicit-check-not=warning: \
-// RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
-// RUN: not %clang_cc1 -triple x86_64-pc-windows-msvc-msil -fms-extensions -S -o %t.win.il %s 2>&1 \
-// RUN:   | FileCheck %s --check-prefix=WIN --implicit-check-not=error: --implicit-check-not=warning: \
-// RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu-msil -S -o %t.lnx.il %s 2>&1 | count 0
+// RUN: FileCheck %s --check-prefix=IL --implicit-check-not="phase 2 CIL objects" --input-file=%t.lnx.il
+// RUN: %clang_cc1 -triple x86_64-pc-windows-msvc-msil -fms-extensions -S -o %t.win.il %s 2>&1 | count 0
+// RUN: FileCheck %s --check-prefix=IL --implicit-check-not="phase 2 CIL objects" --input-file=%t.win.il
+// RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu-msil -O2 -S -o %t.lnx.o2.il %s 2>&1 | count 0
+// RUN: FileCheck %s --check-prefix=IL --input-file=%t.lnx.o2.il
+// RUN: %if ilasm %{ %ilasm-verify -output=%t.lnx.dll %t.lnx.il %}
+// RUN: %if ilasm %{ %ilasm-verify -output=%t.win.dll %t.win.il %}
 
-// LNX:      {{^}}error: global variable @p_init in section ".init_array" is not supported for MSIL yet (phase 2 CIL objects){{$}}
-// LNX-NEXT: {{^}}error: global variable @myreg_data in section "myreg" is not supported for MSIL yet (phase 2 CIL objects){{$}}
-// LNX-NEXT: {{^}}2 errors generated.{{$}}
-
-// WIN:      {{^}}error: global variable @p_init in section ".CRT$XCU" is not supported for MSIL yet (phase 2 CIL objects){{$}}
-// WIN-NEXT: {{^}}error: global variable @myreg_data in section "myreg" is not supported for MSIL yet (phase 2 CIL objects){{$}}
-// WIN-NEXT: {{^}}2 errors generated.{{$}}
+// IL-DAG:  {{^}}.field public static initonly native int 'counter'{{( |$)}}
+// IL-DAG:  {{^}}.field assembly static initonly native int 'p_init'{{( |$)}}
+// IL-DAG:  {{^}}.field public static initonly native int 'myreg_data'{{( |$)}}
+// IL-DAG:  {{^}}.field private static initonly native int '<msil>fn_init_fn'{{( |$)}}
+// IL:      {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+// IL:      {{^}}  {{ldc\.i4(\.s)? 20( |$)}}
+// IL-NEXT: {{^}}  cpblk{{$}}
+// IL-NEXT: {{^}}  ldsfld native int '<msil>data'{{$}}
+// IL-NEXT: {{^}}  stsfld native int 'counter'{{$}}
+// IL-NEXT: {{^}}  ldsfld native int '<msil>data'{{$}}
+// IL-NEXT: {{^}}  {{ldc\.i4(\.| |\.s )8( |$)}}
+// IL-NEXT: {{^}}  add{{$}}
+// IL-NEXT: {{^}}  stsfld native int 'p_init'{{$}}
+// IL-NEXT: {{^}}  ldsfld native int '<msil>data'{{$}}
+// IL-NEXT: {{^}}  {{ldc\.i4(\.s)? 16( |$)}}
+// IL-NEXT: {{^}}  add{{$}}
+// IL-NEXT: {{^}}  stsfld native int 'myreg_data'{{$}}
+// IL-NEXT: {{^}}  ldftn void 'init_fn'(){{$}}
+// IL-NEXT: {{^}}  stsfld native int '<msil>fn_init_fn'{{$}}
+// IL-NEXT: {{^}}  ldsfld native int '<msil>data'{{$}}
+// IL-NEXT: {{^}}  {{ldc\.i4(\.| |\.s )8( |$)}}
+// IL-NEXT: {{^}}  add{{$}}
+// IL-NEXT: {{^}}  ldsfld native int '<msil>fn_init_fn'{{$}}
+// IL-NEXT: {{^}}  stind.i{{$}}
+// IL-NEXT: {{^}}  call void 'init_fn'(){{$}}
+// IL-NEXT: {{^}}  ret{{$}}
+// IL-NEXT: {{^}}} // end of method '.cctor'{{$}}
 
 // The frontend keeps the sections and diagnoses nothing.
 // RUN: %clang_cc1 -triple x86_64-unknown-linux-gnu-msil -emit-llvm -o - %s -verify=ok \

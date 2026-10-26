@@ -1,0 +1,64 @@
+# Matrix case weak-def-sig-mismatch: a weak definition loses to a strong one with another signature.
+# a.c defines the weak int f(int) and calls it with a small positive
+# argument; b.c defines the strong long long f(long long) (native int on both
+# x86_64 triples), which wins, so natively a.c's call reaches b.c's f, whose
+# argument register holds the zero-extended 3 and whose 64-bit result a.c
+# reads as int: the program prints b.c's result. msil-ld redirects a.c's
+# MethodDef call site of its losing WEAK copy to the winner and checks it as
+# a call site (plan 5.9.8): the call side is the losing copy's int32(int32)
+# with its object, the definition side native int(native int), and 5.9.8's
+# table adapts both directions (conv.i on the argument, conv.i4 on the
+# result) with a warning. On the LTO path the IR linker drops the weak copy
+# and a.c's calls keep its function type against the winner, which
+# MSILFixFunctionBitcasts adapts with the same table and the same text
+# without the ' in <file>' parts. Both paths warn exactly once at -O0 and
+# -O2: msil-ld's LTO applies the table before LTO optimization too (section
+# 12 row 'Plan 5.9.8 (LTO path) and the D30 row of 2026-10-21 amended').
+# The variant (a.c with b_double.c, explicit builds): b_double.c's strong
+# definition is double f(double), natively undefined behaviour with no
+# transcript; an integer argument for a floating-point parameter cannot be
+# adapted, so it is 5.9.8's error on the object and the LTO path at -O0 and
+# -O2, never a JIT-time exception (an argument and a result of different
+# sizes, which the LTO optimizer leaves alone). Plan 5.9.16 row
+# weak-def-sig-mismatch (M20, obj and lto, both variants).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ not %msil_prog_build --level O0 --workdir %t.var.O0.d --src %t/a.c %t/b_double.c 2>&1 | FileCheck %s --check-prefix=OBJ-VAR --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: warning" %}
+# RUN: %if msil-prog-pipeline=obj %{ not %msil_prog_build --level O2 --workdir %t.var.O2.d --src %t/a.c %t/b_double.c 2>&1 | FileCheck %s --check-prefix=OBJ-VAR --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: warning" %}
+# RUN: %if msil-prog-pipeline=lto %{ not %msil_prog_build --level O0 --workdir %t.var.O0.d --src %t/a.c %t/b_double.c 2>&1 | FileCheck %s --check-prefix=LTO-VAR --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: warning" --implicit-check-not="_bitcast_invalid" %}
+# RUN: %if msil-prog-pipeline=lto %{ not %msil_prog_build --level O2 --workdir %t.var.O2.d --src %t/a.c %t/b_double.c 2>&1 | FileCheck %s --check-prefix=LTO-VAR --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="msil-ld: warning" --implicit-check-not="_bitcast_invalid" %}
+# OBJ:          {{^}}msil-ld: warning: function signature mismatch: f{{$}}
+# OBJ-NEXT:     {{^}}>>> defined as native int(native int) in {{.*}}b.o{{$}}
+# OBJ-NEXT:     {{^}}>>> called as int32(int32) in {{.*}}a.o{{$}}
+# OBJ-NEXT:     {{^}}>>> adapter: {{.+}}
+# LTO:          {{^}}msil-ld: warning: {{.*}}function signature mismatch: f{{$}}
+# LTO-NEXT:     {{^}}>>> defined as native int(native int){{$}}
+# LTO-NEXT:     {{^}}>>> called as int32(int32){{$}}
+# LTO-NEXT:     {{^}}>>> adapter: {{.+}}
+# OBJ-VAR:      {{^}}msil-ld: error: function signature mismatch: f{{$}}
+# OBJ-VAR-NEXT: {{^}}>>> defined as float64(float64) in {{.*}}b_double.o{{$}}
+# OBJ-VAR-NEXT: {{^}}>>> called as int32(int32) in {{.*}}a.o{{$}}
+# OBJ-VAR-NEXT: {{^}}>>> {{([^a]|a[^d]).*}}
+# OBJ-VAR:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# LTO-VAR:      {{^}}msil-ld: error: {{.*}}function signature mismatch: f{{$}}
+# LTO-VAR-NEXT: {{^}}>>> defined as float64(float64){{$}}
+# LTO-VAR-NEXT: {{^}}>>> called as int32(int32){{$}}
+# LTO-VAR-NEXT: {{^}}>>> {{([^a]|a[^d]).*}}
+# LTO-VAR:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- a.c
+#include "msil_test.h"
+__attribute__((weak)) int f(int x) { return x - 1000; }
+int main(void) {
+  int r = f(3);
+  put_kv("f(3)", r);
+  return r;
+}
+#--- b.c
+long long f(long long x) { return x * 7 + 1; }
+#--- b_double.c
+double f(double x) { return x * 7.0 + 1.0; }

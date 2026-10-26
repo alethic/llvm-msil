@@ -1,17 +1,25 @@
-## The entry point in M14 (ImplementationPlan.md 5.9.3, D27): -e/--entry
-## default to main, and before M20 main is the only entry point msil-ld
-## accepts; any other symbol is
-##   --entry=<sym>: an entry point other than main is not supported yet
-## whichever spelling named it. main is an LTO root, visible to regular
-## objects, so it survives LTO and the backend's '<msil>Main' calls it with
-## .entrypoint; like -u, the entry extracts the archive member that defines
-## it. A link without a definition of main is an error naming it (5.9.6:
+## The entry point (ImplementationPlan.md 5.9.3, D27): -e/--entry default to
+## main, and from M20 they name any function of a D27 shape (M14-M19 accepted
+## only main, with an error for any other symbol; obj-entry.test covers CIL
+## objects). The entry is an
+## LTO root, visible to regular objects, so it survives LTO (public) and the
+## backend's '<msil>Main' calls it with .entrypoint, whichever spelling named
+## it; like -u, the entry extracts the archive member that defines it. A
+## link without a definition of the entry is an error naming it (5.9.6:
 ## msil-ld reports an undefined entry), in 5.9.14's undefined-symbol form
-## with the entry point as the reference.
+## with the entry point as the reference. '<msil>Main' builds argv for an
+## 'int32(int32, native int)' entry named by -e as for main (D27). An -e
+## entry of another shape, or one that names a variable, is msil-ld's
+## 'unsupported signature for <entry>' (5.9.12), the text of the object and
+## PE links (obj-entry.test), with no '<unknown>:0:0: in function' prefix
+## (the section 12 row 'M20.a (4) and M20.b (6)-(7) clarified').
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: llvm-as main.ll -o main.o
 # RUN: llvm-as start.ll -o start.o
+# RUN: llvm-as args.ll -o args.o
+# RUN: llvm-as badstart.ll -o badstart.o
+# RUN: llvm-as datastart.ll -o datastart.o
 # RUN: llvm-ar rcs libmain.a main.o
 
 # DEFINE: %{il} = FileCheck %s --check-prefix=IL
@@ -38,12 +46,30 @@
 # WHY:      {{^}}reference{{[[:space:]]}}extracted{{[[:space:]]}}symbol{{$}}
 # WHY-NEXT: {{^.+}}{{[[:space:]]}}libmain.a(main.o){{[[:space:]]}}main{{$}}
 
-# RUN: not msil-ld --lto-emit-asm --entry=start main.o start.o -o x.il 2>&1 | FileCheck %s --check-prefix=OTHER --implicit-check-not="PLEASE submit"
-# RUN: not msil-ld --lto-emit-asm --entry start main.o start.o -o x.il 2>&1 | FileCheck %s --check-prefix=OTHER --implicit-check-not="PLEASE submit"
-# RUN: not msil-ld --lto-emit-asm -e start main.o start.o -o x.il 2>&1 | FileCheck %s --check-prefix=OTHER --implicit-check-not="PLEASE submit"
-# RUN: not msil-ld --lto-emit-asm -e start start.o -o x.il 2>&1 | FileCheck %s --check-prefix=OTHER --implicit-check-not="PLEASE submit"
+## Another entry point, in each spelling, with and without a main.
+# DEFINE: %{start} = FileCheck %s --check-prefix=START
+# RUN: msil-ld --lto-emit-asm --entry=start main.o start.o -o s1.il 2>&1 | count 0
+# RUN: %{start} --input-file=s1.il
+# RUN: msil-ld --lto-emit-asm --entry start main.o start.o -o s2.il 2>&1 | count 0
+# RUN: %{start} --input-file=s2.il
+# RUN: msil-ld --lto-emit-asm -e start main.o start.o -o s3.il 2>&1 | count 0
+# RUN: %{start} --input-file=s3.il
+# RUN: msil-ld --lto-emit-asm -e start start.o -o s4.il 2>&1 | count 0
+# RUN: %{start} --input-file=s4.il
 
-# OTHER:    {{^}}msil-ld: error: --entry=start: an entry point other than main is not supported yet{{$}}
+# START:      {{^}}.method public static int32 'start'() cil managed{{$}}
+# START:      {{^}}.method private hidebysig static int32 '<msil>Main'(string[] args) cil managed{{$}}
+# START-NEXT: {{^[{]$}}
+# START-NEXT: {{^}}  .entrypoint{{$}}
+# START-NEXT: {{^}}  .maxstack 1{{$}}
+# START-NEXT: {{^}}  call int32 'start'(){{$}}
+
+## The entry, not main, must be defined.
+# RUN: not msil-ld --lto-emit-asm -e start main.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=NOSTART --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not=error: --implicit-check-not=">>>"
+# NOSTART:      {{^}}msil-ld: error: undefined symbol: start{{$}}
+# NOSTART-NEXT: {{^}}>>> referenced by the entry point{{$}}
 
 # RUN: not msil-ld --lto-emit-asm start.o -o x.il 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=NOMAIN --implicit-check-not="PLEASE submit" \
@@ -51,6 +77,29 @@
 
 # NOMAIN:      {{^}}msil-ld: error: undefined symbol: main{{$}}
 # NOMAIN-NEXT: {{^}}>>> referenced by the entry point{{$}}
+
+## The argv shape through -e.
+# RUN: msil-ld --lto-emit-asm -e run args.o -o args.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=ARGS --input-file=args.il
+# ARGS:      {{^}}.method public static int32 'run'(int32, native int) cil managed{{$}}
+# ARGS:      {{^}}.method private hidebysig static int32 '<msil>Main'(string[] args) cil managed{{$}}
+# ARGS-NEXT: {{^[{]$}}
+# ARGS-NEXT: {{^}}  .entrypoint{{$}}
+# ARGS-NEXT: {{^}}  .maxstack 3{{$}}
+# ARGS-NEXT: {{^}}  .locals (string[], int32, native int, int32){{$}}
+# ARGS-NEXT: {{^}}  call string[] [mscorlib]System.Environment::GetCommandLineArgs(){{$}}
+# ARGS:      {{^}}  call native int [mscorlib]System.Runtime.InteropServices.Marshal::StringToHGlobalAnsi(string){{$}}
+# ARGS:      {{^}}  call int32 'run'(int32, native int){{$}}
+# ARGS-NEXT: {{^}}  ret{{$}}
+
+## An entry of another shape, and an entry that names a variable.
+# RUN: not msil-ld --lto-emit-asm -e start badstart.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=BADSTART --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not="in function"
+# RUN: not msil-ld --lto-emit-asm -e start datastart.o -o x.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=BADSTART --implicit-check-not="PLEASE submit" \
+# RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not="in function"
+# BADSTART: {{^}}msil-ld: error: unsupported signature for start{{$}}
 
 #--- main.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
@@ -65,5 +114,32 @@ target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 target triple = "x86_64-pc-windows-msvc-msil"
 
 define i32 @start() {
+  ret i32 0
+}
+
+#--- args.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @run(i32 %argc, ptr %argv) {
+  ret i32 %argc
+}
+
+#--- badstart.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i64 @start(double %x) {
+  %r = fptosi double %x to i64
+  ret i64 %r
+}
+
+#--- datastart.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@start = global i32 5
+
+define i32 @main() {
   ret i32 0
 }

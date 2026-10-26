@@ -1,0 +1,425 @@
+## Constructors from INIT entries and constructor-table sections
+## (ImplementationPlan.md 5.9.9's constructor list, 5.8.8 INIT_FINI, 5.9.10):
+## '.cctor' calls every constructor directly after the relocations, its
+## result popped, in a stable order by key:
+## - non-Windows triples: an INIT entry's key is its priority (65535 ->
+##   65536); an 8-byte slot of the '.init_array' output section has its input
+##   section's priority ('.init_array.N' -> N, plain '.init_array' -> 65536,
+##   as clang puts the default priority there); every slot carries an
+##   FNADDR64 relocation to the function it runs;
+## - Windows triples: an INIT entry's key is the section name clang's COFF
+##   lowering gives its priority (100 -> '.CRT$XCA00100', 200 -> '.CRT$XCC',
+##   500 -> '.CRT$XCT00500', 65535 -> '.CRT$XCU'); a slot of a '.CRT$XC*'
+##   section has its full section name; keys sort byte-wise;
+## - equal keys follow a native non-LTO link: objects in link order, and
+##   within one object its slots first, then its INIT entries in array
+##   order (c1.o: slot_fn1 before ctor_def; w1.o: slot_u before ctor_def);
+## - an LTO object follows the same rule, so all of its slots of one key run
+##   before all of its INIT entries of that key (c1 and c2 merged: slot_b200
+##   before ctor_a, the other way round from the object link).
+## The slots are also data: the '.init_array' group is laid out by priority
+## on ELF (5.9.9 rule 1) and the '.CRT' group by full name on COFF, and the
+## relocations fill them with the functions' '<msil>fn_' fields.
+## A slot whose target is a function that binds natively (5.9.6 step 2) is a
+## function address too: '.cctor' calls it through its P/Invoke stub, as
+## lld-link calls an imported function at startup, in the same order. Only a
+## slot that holds a data address is an error (obj-sections-unsupported.test).
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj c1.ll -o c1.o
+# RUN: llc -filetype=obj c2.ll -o c2.o
+# RUN: llc -filetype=obj w1.ll -o w1.o
+# RUN: llc -filetype=obj w2.ll -o w2.o
+
+## Linux.
+# RUN: msil-ld c1.o c2.o -o lnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lnx.exe > lnx.txt
+# RUN: %python %S/Inputs/cctor.py lnx.txt > lnx-cctor.txt
+# RUN: FileCheck %s --check-prefix=LNX --input-file=lnx-cctor.txt
+# RUN: FileCheck %s --check-prefix=LNX-CALLS --input-file=lnx-cctor.txt
+# RUN: FileCheck %s --check-prefix=POP --input-file=lnx.txt
+
+# LNX:      {{^}}alloc 43{{$}}
+# LNX-NEXT: {{^}}cpblk data+0 24{{$}}
+# LNX-NEXT: {{^}}initblk data+24 4{{$}}
+# LNX-DAG:  {{^}}field p150 = data+0{{$}}
+# LNX-DAG:  {{^}}field p200 = data+8{{$}}
+# LNX-DAG:  {{^}}field p1 = data+16{{$}}
+# LNX-DAG:  {{^}}field log = data+24{{$}}
+# LNX-DAG:  {{^}}field <msil>fn_slot_fn150 = &slot_fn150{{$}}
+# LNX-DAG:  {{^}}field <msil>fn_slot_fn1 = &slot_fn1{{$}}
+# LNX-DAG:  {{^}}field <msil>fn_slot_b200 = &slot_b200{{$}}
+# LNX:      {{^}}storei data+0 = <msil>fn_slot_fn150{{$}}
+# LNX-NEXT: {{^}}storei data+8 = <msil>fn_slot_b200{{$}}
+# LNX-NEXT: {{^}}storei data+16 = <msil>fn_slot_fn1{{$}}
+
+# LNX-CALLS:      {{^}}call ctor_b{{$}}
+# LNX-CALLS-NEXT: {{^}}call slot_fn150{{$}}
+# LNX-CALLS-NEXT: {{^}}call ctor_a{{$}}
+# LNX-CALLS-NEXT: {{^}}call slot_b200{{$}}
+# LNX-CALLS-NEXT: {{^}}call slot_fn1{{$}}
+# LNX-CALLS-NEXT: {{^}}call ctor_def{{$}}
+# LNX-CALLS-NEXT: {{^}}call ctor_c{{$}}
+# LNX-CALLS-NOT:  {{.}}
+
+## A constructor that returns a value: its result is popped.
+# POP:      {{^}}    L{{[0-9]+}}: call int32() '<Module>'::'ctor_c'{{$}}
+# POP-NEXT: {{^}}    L{{[0-9]+}}: pop{{$}}
+# POP-NEXT: {{^}}    L{{[0-9]+}}: ret{{$}}
+
+## Windows.
+# RUN: msil-ld w1.o w2.o -o win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win.exe > win.txt
+# RUN: %python %S/Inputs/cctor.py win.txt > win-cctor.txt
+# RUN: FileCheck %s --check-prefix=WIN --input-file=win-cctor.txt
+# RUN: FileCheck %s --check-prefix=WIN-CALLS --input-file=win-cctor.txt
+
+# WIN:      {{^}}storei data+0 = <msil>fn_slot_b{{$}}
+# WIN-NEXT: {{^}}storei data+8 = <msil>fn_slot_t{{$}}
+# WIN-NEXT: {{^}}storei data+16 = <msil>fn_slot_u{{$}}
+
+# WIN-CALLS:      {{^}}call ctor_b{{$}}
+# WIN-CALLS-NEXT: {{^}}call slot_b{{$}}
+# WIN-CALLS-NEXT: {{^}}call ctor_a{{$}}
+# WIN-CALLS-NEXT: {{^}}call slot_t{{$}}
+# WIN-CALLS-NEXT: {{^}}call ctor_c{{$}}
+# WIN-CALLS-NEXT: {{^}}call slot_u{{$}}
+# WIN-CALLS-NEXT: {{^}}call ctor_def{{$}}
+# WIN-CALLS-NOT:  {{.}}
+
+## An LTO object (c1 and c2 merged at -O0, which keeps every constructor).
+# RUN: llvm-as c1.ll -o c1.bc
+# RUN: llvm-as c2.ll -o c2.bc
+# RUN: msil-ld --lto-O0 c1.bc c2.bc -o lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lto.exe > lto.txt
+# RUN: %python %S/Inputs/cctor.py lto.txt | FileCheck %s --check-prefix=LTO-CALLS
+# LTO-CALLS:      {{^}}call ctor_b{{$}}
+# LTO-CALLS-NEXT: {{^}}call slot_fn150{{$}}
+# LTO-CALLS-NEXT: {{^}}call slot_b200{{$}}
+# LTO-CALLS-NEXT: {{^}}call ctor_a{{$}}
+# LTO-CALLS-NEXT: {{^}}call slot_fn1{{$}}
+# LTO-CALLS-NEXT: {{^}}call ctor_def{{$}}
+# LTO-CALLS-NEXT: {{^}}call ctor_c{{$}}
+# LTO-CALLS-NOT:  {{.}}
+
+## One TU with a slot and a constructor of equal key, through objects and
+## through LTO: the slot first both times (the native non-LTO order).
+# RUN: llc -filetype=obj one.ll -o one.o
+# RUN: llc -filetype=obj note.ll -o note.o
+# RUN: msil-ld one.o note.o -o one.exe 2>&1 | count 0
+# RUN: llvm-cil-dump one.exe > one.txt
+# RUN: %python %S/Inputs/cctor.py one.txt | FileCheck %s --check-prefix=ONE
+# RUN: llvm-as one.ll -o one.bc
+# RUN: llvm-as note.ll -o note.bc
+# RUN: msil-ld --lto-O0 one.bc note.bc -o one-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump one-lto.exe > one-lto.txt
+# RUN: %python %S/Inputs/cctor.py one-lto.txt | FileCheck %s --check-prefix=ONE
+# ONE:      {{^}}call slot_x{{$}}
+# ONE-NEXT: {{^}}call ctor_x{{$}}
+# ONE-NOT:  {{.}}
+
+## Slots whose target binds natively, with no parameters: libfoo.so.1's foo in
+## '.init_array.200' (Linux: after ctor_a's priority 100, before the default
+## priority's slot_d and ctor_def) and foo.dll's fn1 in '.CRT$XCT' (Windows:
+## after ctor_a's '.CRT$XCA00100', before '.CRT$XCU'), linked from objects,
+## from bitcode into the LTO PE (-O0 keeps every constructor) and with
+## --lto-emit-asm. Every link succeeds; the slot holds the function's
+## '<msil>fn_' field and '.cctor' calls its P/Invoke stub (5.10.11) in 5.9.9's
+## order.
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/coff-import.def /out:foo.lib
+# RUN: llc -filetype=obj nat-lnx.ll -o nat-lnx.o
+# RUN: llc -filetype=obj nat-win.ll -o nat-win.o
+# RUN: llvm-as nat-lnx.ll -o nat-lnx.bc
+# RUN: llvm-as nat-win.ll -o nat-win.bc
+
+# RUN: msil-ld nat-lnx.o libfoo.so.1 -o nat-lnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump nat-lnx.exe > nat-lnx.txt
+# RUN: %python %S/Inputs/cctor.py nat-lnx.txt | FileCheck %s --check-prefix=NAT-LNX
+# RUN: FileCheck %s --check-prefix=PINV-LNX --input-file=nat-lnx.txt
+# RUN: msil-ld --lto-O0 nat-lnx.bc libfoo.so.1 -o nat-lnx-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump nat-lnx-lto.exe > nat-lnx-lto.txt
+# RUN: %python %S/Inputs/cctor.py nat-lnx-lto.txt | FileCheck %s --check-prefix=NAT-LNX
+# RUN: FileCheck %s --check-prefix=PINV-LNX --input-file=nat-lnx-lto.txt
+# RUN: msil-ld --lto-O0 --lto-emit-asm nat-lnx.bc libfoo.so.1 -o nat-lnx.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=ASM-LNX --input-file=nat-lnx.il
+
+# NAT-LNX:      {{^}}field <msil>fn_foo = &foo{{$}}
+# NAT-LNX:      {{^}}storei data+0 = <msil>fn_foo{{$}}
+# NAT-LNX-NEXT: {{^}}storei data+8 = <msil>fn_slot_d{{$}}
+# NAT-LNX-NEXT: {{^}}call ctor_a{{$}}
+# NAT-LNX-NEXT: {{^}}call foo{{$}}
+# NAT-LNX-NEXT: {{^}}call slot_d{{$}}
+# NAT-LNX-NEXT: {{^}}call ctor_def{{$}}
+# NAT-LNX-NOT:  {{.}}
+# PINV-LNX:      {{^}}  .method 'foo' void() flags=0x2093 impl=0x0080{{$}}
+# PINV-LNX-NEXT: {{^}}    .pinvokeimpl 'libfoo.so.1' entry 'foo' flags=0x0201{{$}}
+# ASM-LNX:      {{^}}.method assembly hidebysig static pinvokeimpl("libfoo.so.1" nomangle cdecl) void 'foo'() cil managed preservesig {}{{$}}
+# ASM-LNX:      {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+# ASM-LNX:      {{^}}  call void 'ctor_a'(){{$}}
+# ASM-LNX-NEXT: {{^}}  call void 'foo'(){{$}}
+# ASM-LNX-NEXT: {{^}}  call void 'slot_d'(){{$}}
+# ASM-LNX-NEXT: {{^}}  call void 'ctor_def'(){{$}}
+# ASM-LNX-NEXT: {{^}}  ret{{$}}
+
+# RUN: msil-ld nat-win.o foo.lib -o nat-win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump nat-win.exe > nat-win.txt
+# RUN: %python %S/Inputs/cctor.py nat-win.txt | FileCheck %s --check-prefix=NAT-WIN
+# RUN: FileCheck %s --check-prefix=PINV-WIN --input-file=nat-win.txt
+# RUN: msil-ld --lto-O0 nat-win.bc foo.lib -o nat-win-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump nat-win-lto.exe > nat-win-lto.txt
+# RUN: %python %S/Inputs/cctor.py nat-win-lto.txt | FileCheck %s --check-prefix=NAT-WIN
+# RUN: FileCheck %s --check-prefix=PINV-WIN --input-file=nat-win-lto.txt
+# RUN: msil-ld --lto-O0 --lto-emit-asm nat-win.bc foo.lib -o nat-win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=ASM-WIN --input-file=nat-win.il
+
+# NAT-WIN:      {{^}}field <msil>fn_fn1 = &fn1{{$}}
+# NAT-WIN:      {{^}}storei data+0 = <msil>fn_fn1{{$}}
+# NAT-WIN-NEXT: {{^}}storei data+8 = <msil>fn_slot_u{{$}}
+# NAT-WIN-NEXT: {{^}}call ctor_a{{$}}
+# NAT-WIN-NEXT: {{^}}call fn1{{$}}
+# NAT-WIN-NEXT: {{^}}call slot_u{{$}}
+# NAT-WIN-NEXT: {{^}}call ctor_def{{$}}
+# NAT-WIN-NOT:  {{.}}
+# PINV-WIN:      {{^}}  .method 'fn1' void() flags=0x2093 impl=0x0080{{$}}
+# PINV-WIN-NEXT: {{^}}    .pinvokeimpl 'foo.dll' entry 'fn1' flags=0x0201{{$}}
+# ASM-WIN:      {{^}}.method assembly hidebysig static pinvokeimpl("foo.dll" nomangle cdecl) void 'fn1'() cil managed preservesig {}{{$}}
+# ASM-WIN:      {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+# ASM-WIN:      {{^}}  call void 'ctor_a'(){{$}}
+# ASM-WIN-NEXT: {{^}}  call void 'fn1'(){{$}}
+# ASM-WIN-NEXT: {{^}}  call void 'slot_u'(){{$}}
+# ASM-WIN-NEXT: {{^}}  call void 'ctor_def'(){{$}}
+# ASM-WIN-NEXT: {{^}}  ret{{$}}
+
+#--- c1.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@p150 = internal global ptr @slot_fn150, section ".init_array.150", align 8
+@p1 = internal global ptr @slot_fn1, section ".init_array", align 8
+@llvm.used = appending global [2 x ptr] [ptr @p150, ptr @p1], section "llvm.metadata"
+@llvm.global_ctors = appending global [2 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 200, ptr @ctor_a, ptr null }, { i32, ptr, ptr } { i32 65535, ptr @ctor_def, ptr null }]
+
+declare void @note(i32)
+
+define internal void @slot_fn150() {
+  call void @note(i32 1)
+  ret void
+}
+
+define internal void @slot_fn1() {
+  call void @note(i32 2)
+  ret void
+}
+
+define internal void @ctor_a() {
+  call void @note(i32 3)
+  ret void
+}
+
+define internal void @ctor_def() {
+  call void @note(i32 4)
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- c2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@log = global i32 0, align 4
+@p200 = internal global ptr @slot_b200, section ".init_array.200", align 8
+@llvm.used = appending global [1 x ptr] [ptr @p200], section "llvm.metadata"
+@llvm.global_ctors = appending global [2 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 100, ptr @ctor_b, ptr null }, { i32, ptr, ptr } { i32 65535, ptr @ctor_c, ptr null }]
+
+define void @note(i32 %v) {
+  %o = load i32, ptr @log
+  %m = mul i32 %o, 10
+  %n = add i32 %m, %v
+  store i32 %n, ptr @log
+  ret void
+}
+
+define internal void @slot_b200() {
+  call void @note(i32 5)
+  ret void
+}
+
+define internal void @ctor_b() {
+  call void @note(i32 6)
+  ret void
+}
+
+define internal i32 @ctor_c() {
+  call void @note(i32 7)
+  ret i32 7
+}
+
+#--- w1.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@p_u = internal global ptr @slot_u, section ".CRT$XCU", align 8
+@p_b = internal global ptr @slot_b, section ".CRT$XCB", align 8
+@llvm.used = appending global [2 x ptr] [ptr @p_u, ptr @p_b], section "llvm.metadata"
+@llvm.global_ctors = appending global [2 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 200, ptr @ctor_a, ptr null }, { i32, ptr, ptr } { i32 65535, ptr @ctor_def, ptr null }]
+
+declare void @note(i32)
+
+define internal void @slot_u() {
+  call void @note(i32 1)
+  ret void
+}
+
+define internal void @slot_b() {
+  call void @note(i32 2)
+  ret void
+}
+
+define internal void @ctor_a() {
+  call void @note(i32 3)
+  ret void
+}
+
+define internal void @ctor_def() {
+  call void @note(i32 4)
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- w2.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@log = global i32 0, align 4
+@p_t = internal global ptr @slot_t, section ".CRT$XCT", align 8
+@llvm.used = appending global [1 x ptr] [ptr @p_t], section "llvm.metadata"
+@llvm.global_ctors = appending global [2 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 100, ptr @ctor_b, ptr null }, { i32, ptr, ptr } { i32 500, ptr @ctor_c, ptr null }]
+
+define void @note(i32 %v) {
+  %o = load i32, ptr @log
+  %m = mul i32 %o, 10
+  %n = add i32 %m, %v
+  store i32 %n, ptr @log
+  ret void
+}
+
+define internal void @slot_t() {
+  call void @note(i32 5)
+  ret void
+}
+
+define internal void @ctor_b() {
+  call void @note(i32 6)
+  ret void
+}
+
+define internal void @ctor_c() {
+  call void @note(i32 7)
+  ret void
+}
+
+#--- one.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@px = internal global ptr @slot_x, section ".init_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @px], section "llvm.metadata"
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @ctor_x, ptr null }]
+
+declare void @note(i32)
+
+define internal void @slot_x() {
+  call void @note(i32 1)
+  ret void
+}
+
+define internal void @ctor_x() {
+  call void @note(i32 2)
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- note.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@log = global i32 0, align 4
+
+define void @note(i32 %v) {
+  %o = load i32, ptr @log
+  %m = mul i32 %o, 10
+  %n = add i32 %m, %v
+  store i32 %n, ptr @log
+  ret void
+}
+
+#--- nat-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@pfoo = internal global ptr @foo, section ".init_array.200", align 8
+@pd = internal global ptr @slot_d, section ".init_array", align 8
+@log = internal global i32 0, align 4
+@llvm.used = appending global [2 x ptr] [ptr @pfoo, ptr @pd], section "llvm.metadata"
+@llvm.global_ctors = appending global [2 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 100, ptr @ctor_a, ptr null }, { i32, ptr, ptr } { i32 65535, ptr @ctor_def, ptr null }]
+
+declare void @foo()
+
+define internal void @slot_d() {
+  store volatile i32 1, ptr @log
+  ret void
+}
+
+define internal void @ctor_a() {
+  store volatile i32 2, ptr @log
+  ret void
+}
+
+define internal void @ctor_def() {
+  store volatile i32 3, ptr @log
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- nat-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@pfn1 = internal global ptr @fn1, section ".CRT$XCT", align 8
+@pu = internal global ptr @slot_u, section ".CRT$XCU", align 8
+@log = internal global i32 0, align 4
+@llvm.used = appending global [2 x ptr] [ptr @pfn1, ptr @pu], section "llvm.metadata"
+@llvm.global_ctors = appending global [2 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 100, ptr @ctor_a, ptr null }, { i32, ptr, ptr } { i32 65535, ptr @ctor_def, ptr null }]
+
+declare void @fn1()
+
+define internal void @slot_u() {
+  store volatile i32 1, ptr @log
+  ret void
+}
+
+define internal void @ctor_a() {
+  store volatile i32 2, ptr @log
+  ret void
+}
+
+define internal void @ctor_def() {
+  store volatile i32 3, ptr @log
+  ret void
+}
+
+define i32 @main() {
+  ret i32 0
+}

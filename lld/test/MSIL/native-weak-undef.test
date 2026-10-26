@@ -7,8 +7,10 @@
 ## - a WEAK reference that nothing defines keeps M12's lowering: null, and
 ##   calls go to the trap stub '<msil>undef_<name>' (ldnull; throw), with no
 ##   P/Invoke and no error, also with native libraries on the command line;
-## - WEAK data that a native library defines is native data, an error until
-##   M20 (5.10.12).
+## - WEAK data that a native library defines is native data: from M20 a
+##   data import (5.10.12), which on this ELF triple needs dlopen and dlsym
+##   from the link's libraries (here none, so 5.10.14's 'data symbol ...
+##   cannot be imported' error).
 ## The program is 'if (&maybe) return maybe(); return 0;'.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -43,8 +45,7 @@
 # RUN: not msil-ld --lto-emit-asm weakdata.o libfoo.so.1 -o x.il 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=DATA --implicit-check-not="PLEASE submit" \
 # RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump"
-# DATA:      {{^}}msil-ld: error: importing native data symbol 'bar' (libfoo.so.1) is not supported yet{{$}}
-# DATA-NEXT: {{^}}>>> referenced by weakdata.o:(main){{$}}
+# DATA: {{^}}msil-ld: error: data symbol 'bar' in libfoo.so.1 cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym{{$}}
 
 #--- lib.yaml
 --- !ELF

@@ -13,12 +13,15 @@
 ##   the first declaration's attributes;
 ## - a bitcode definition comes first: a declaration's attributes do not
 ##   make a defined function an import;
-## - an extern variable with the attributes is native data, an error until
-##   M20 (5.10.12), with a module or without one:
-##   importing native data symbol '<name>' (<module>) is not supported yet
-##   with '>>> referenced by' lines, where <name> is the variable's own name
-##   (v_name), never its import name (bar; the section 12 row of 2026-10-22
-##   for 5.10.14).
+## - an extern variable with the attributes is native data, from M20 a data
+##   import (5.10.12): with a module, that module and the entry (the C name
+##   when there is no import_name) unchecked; with import_name alone, the
+##   module that native lookup finds under the entry (bar in libfoo.so.1).
+##   On this ELF triple the helper needs dlopen and dlsym from the link's
+##   libraries (libc.so.6); without them it is 5.10.14's
+##     data symbol '<name>' in <module> cannot be imported: ...
+##   where <name> is the variable's own name (v_name), never its import name
+##   (bar; the section 12 row of 2026-10-22 for 5.10.14).
 ## Linked-text P/Invokes have 'assembly' access (5.10.11).
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -67,12 +70,20 @@
 # DEFINED: {{^}}.method {{.*}}static int32 'imp_or_def'(int32) cil managed
 
 ## Extern variables with import attributes are native data.
-# RUN: not msil-ld --lto-emit-asm var-mod.o -o x.il 2>&1 | %{err} --check-prefix=VAR-MOD
-# RUN: not msil-ld --lto-emit-asm var-name.o libfoo.so.1 -o x.il 2>&1 | %{err} --check-prefix=VAR-NAME
-# VAR-MOD:       {{^}}msil-ld: error: importing native data symbol 'v_mod' (mylib.dll) is not supported yet{{$}}
-# VAR-MOD-NEXT:  {{^}}>>> referenced by var-mod.o:(main){{$}}
-# VAR-NAME:      {{^}}msil-ld: error: importing native data symbol 'v_name' (libfoo.so.1) is not supported yet{{$}}
-# VAR-NAME-NEXT: {{^}}>>> referenced by var-name.o:(main){{$}}
+# RUN: not msil-ld --lto-emit-asm var-mod.o -o x.il 2>&1 | %{err} --check-prefix=VAR-MOD --implicit-check-not=error:
+# RUN: not msil-ld --lto-emit-asm var-name.o libfoo.so.1 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=VAR-NAME --implicit-check-not=error:
+# VAR-MOD:       {{^}}msil-ld: error: data symbol 'v_mod' in mylib.dll cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym{{$}}
+# VAR-NAME:      {{^}}msil-ld: error: data symbol 'v_name' in libfoo.so.1 cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym{{$}}
+# RUN: msil-ld --lto-emit-asm var-mod.o libc.so.6 -o var-mod.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=VAR-IMPORT -DMOD=mylib.dll -DENTRY=v_mod -DSYM=v_mod --input-file=var-mod.il
+# RUN: msil-ld --lto-emit-asm var-name.o libfoo.so.1 libc.so.6 -o var-name.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=VAR-IMPORT -DMOD=libfoo.so.1 -DENTRY=bar -DSYM=v_name --input-file=var-name.il
+# VAR-IMPORT-DAG: {{^}}  ldstr "[[MOD]]"{{$}}
+# VAR-IMPORT-DAG: {{^}}  ldstr "[[ENTRY]]"{{$}}
+# VAR-IMPORT-DAG: {{^}}  stsfld native int '[[SYM]]'{{$}}
+# VAR-IMPORT-DAG: {{^}}.method {{.*}}pinvokeimpl("libc.so.6"{{.*}}dlopen{{.*}}
+# VAR-IMPORT-DAG: {{^}}.method {{.*}}pinvokeimpl("libc.so.6"{{.*}}dlsym{{.*}}
 
 #--- explicit.ll
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"

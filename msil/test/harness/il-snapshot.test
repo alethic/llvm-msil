@@ -35,8 +35,16 @@
 # is listed and diffed between the normalized texts, while another .il that
 # differs only in a form is counted, not listed; the same kinds of change in
 # an .err file are listed (only .il files are normalized); --normalize
-# without --compare exits 2 and creates no --out. M20 extends the script
-# too; its options get cases here.
+# without --compare exits 2 and creates no --out. M20's --skip-changed
+# (5.12.4) is checked on a new copy that lacks the four files of a skipped
+# input and has a changed .err of another: compare() leaves the skipped
+# files out, counts them ('--skip-changed: 4 files of 1 inputs changed
+# against HEAD were not compared') and still lists the .err, and
+# changed_inputs() asks a fake git for 'status --porcelain -z
+# --untracked-files=all -- <paths>' once and takes a modified file, an
+# untracked one and both names of a rename; --llc-arg is checked on the
+# commands Snapshot.compile() builds (nothing runs): llc gets each argument,
+# clang '-mllvm <argument>'.
 
 # RUN: rm -rf %t
 # RUN: %python %S/Inputs/il-snapshot/il-snapshot-selftest.py %S/../../utils/il-snapshot.py %t > %t.log
@@ -44,4 +52,5 @@
 # RUN: %{harness_check} contains %t.log "^ok: usage compare-not-a-directory$" "^ok: usage out-inside-compare$" "^ok: usage out-inside-repository$" "^ok: usage out-holds-repository$" "^ok: usage no-path$" "^ok: usage jobs-zero$"
 # RUN: %{harness_check} contains %t.log "^ok: exclude file$" "^ok: exclude directory$" "^ok: exclude boundary$" "^ok: exclude no-match$" "^ok: exclude non-input$" "^ok: exclude duplicates$" "^ok: exclude sorted$" "^ok: exclude note$"
 # RUN: %{harness_check} contains %t.log "^ok: compare normalize-forms$" "^ok: compare normalize-real-difference$" "^ok: compare normalize-err-exact$" "^ok: usage normalize-without-compare$"
+# RUN: %{harness_check} contains %t.log "^ok: compare skip-changed$" "^ok: skip-changed git-status$" "^ok: llc-arg commands$"
 # RUN: %{harness_check} lacks %t.log "^FAIL"

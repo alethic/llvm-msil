@@ -54,7 +54,10 @@
 ; add and a seq_cst atomic load (__atomic_fetch_add_4, __atomic_load_4), the
 ; f16 helper __truncsfhf2 and putchar (a Phase-1 import in -S) are UNDEFINED
 ; FUNCTION symbols with '<msil>Symbols' calls, no P/Invoke and no
-; diagnostic, while the same module stays D14's error in -S.
+; diagnostic, while the same module stays D14's error in -S. h, whose result
+; is half, has a SIGNATURES entry with NATIVE_INCOMPATIBLE (5.8.8 as the
+; section 12 row of 2026-10-25 amends it); the __truncsfhf2 MemberRef, which
+; code generation adds and no IR call names, has none.
 ; ae.ll: calls through another function type of an available_externally
 ; function and of an extern_weak declaration, both declarations for the
 ; linker (isDeclarationForLinker; 5.8.10: an available_externally function
@@ -71,6 +74,13 @@
 ; exp10 defined) calls the MethodDef '<Module>'::'exp10' (R1), and SYMTAB has
 ; the defined exp10 only, with no UNDEFINED duplicate (C8: names unique
 ; within SYMTAB) and no placeholder MemberRef.
+; ninc.ll: NATIVE_INCOMPATIBLE (5.8.8 as the section 12 row of 2026-10-25
+; amends it) on the definitions and the '<msil>Symbols' MemberRefs whose IR
+; function type has a result or a parameter that is not a native scalar: a
+; { i64, i64 } result (returned through a hidden pointer), an i128 result and
+; an i128 parameter. Their CIL signatures are those of ordinary pointer and
+; int64 calls, so only the flag tells msil-ld that a P/Invoke cannot pass
+; them. The native-scalar definition and call get no entry.
 ; SIGNATURES entries are matched in any order (5.8.8 fixes none) and
 ; counted, and nothing may stand between the symbols and the first entry.
 ;
@@ -433,6 +443,7 @@
 ; ATOM-NEXT:Symbol 7 FUNCTION GLOBAL DEFAULT UNDEFINED '__atomic_load_4'
 ; ATOM-NEXT:Symbol 8 FUNCTION GLOBAL DEFAULT UNDEFINED '__truncsfhf2'
 ; ATOM-NEXT:Segment 0 '.bss' align=4 size=4 flags=ZERO
+; ATOM-NEXT:Signature 0x06000004 'h' NATIVE_INCOMPATIBLE
 ; ATOM-NOT:{{.}}
 ; ATOM-CANON:  .method 'inc' int32() flags=0x0016 impl=0x0000
 ; ATOM-CANON-NOT:  .method
@@ -542,6 +553,49 @@
 ; LIBDEF-CANON-NOT:  .method
 ; LIBDEF-CANON:    L{{[0-9]+}}: call float64(float64) '<Module>'::'exp10'
 ; LIBDEF-CANON-NOT:  .method
+
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/ninc.ll \
+; RUN:   -o %t/ninc.lnx.o 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -filetype=obj -verify-machineinstrs < %t/ninc.ll \
+; RUN:   -o %t/ninc.win.o 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -filetype=obj -O0 -verify-machineinstrs < %t/ninc.ll \
+; RUN:   -o %t/ninc.win.o0.o 2>&1 | count 0
+; RUN: llvm-cil-dump --link-info %t/ninc.lnx.o | FileCheck %s %{full} --check-prefixes=NINC,NINC-LNX
+; RUN: llvm-cil-dump --link-info %t/ninc.win.o | FileCheck %s %{full} --check-prefixes=NINC,NINC-WIN
+; RUN: llvm-cil-dump --link-info %t/ninc.win.o0.o | FileCheck %s %{full} --check-prefixes=NINC,NINC-WIN
+; RUN: llvm-cil-dump --link-info %t/ninc.lnx.o | FileCheck %s %{full} --check-prefix=NINC-SIGS
+; RUN: llvm-cil-dump --link-info %t/ninc.win.o | FileCheck %s %{full} --check-prefix=NINC-SIGS
+; RUN: llvm-cil-dump --link-info %t/ninc.win.o0.o | FileCheck %s %{full} --check-prefix=NINC-SIGS
+; RUN: llvm-cil-dump --tables %t/ninc.lnx.o | FileCheck %s %{full} --check-prefix=NINC-TBL
+; RUN: llvm-cil-dump --tables %t/ninc.win.o0.o | FileCheck %s %{full} --check-prefix=NINC-TBL
+; NINC-LNX:LinkInfo v1.0 triple=x86_64-unknown-linux-gnu-msil abi=1 abiflags=0x0 features=0x0 datamodel=8,8,4,8
+; NINC-WIN:LinkInfo v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 abiflags=0x0 features=0x0 datamodel=8,4,2,8
+; NINC-NEXT:Symbol 0 FUNCTION GLOBAL DEFAULT 'mk_pair' method=0x06000001
+; NINC-NEXT:Symbol 1 FUNCTION GLOBAL DEFAULT 'id128' method=0x06000002
+; NINC-NEXT:Symbol 2 FUNCTION GLOBAL DEFAULT 'lo128' method=0x06000003
+; NINC-NEXT:Symbol 3 FUNCTION GLOBAL DEFAULT UNDEFINED 'ext_pair'
+; NINC-NEXT:Symbol 4 FUNCTION GLOBAL DEFAULT UNDEFINED 'ext_lo'
+; NINC-NEXT:Symbol 5 FUNCTION GLOBAL DEFAULT UNDEFINED 'ext_plain'
+; NINC-NEXT:Symbol 6 FUNCTION GLOBAL DEFAULT 'caller' method=0x06000004
+; NINC-NOT:{{.}}
+; NINC-DAG:Signature 0x06000001 'mk_pair' NATIVE_INCOMPATIBLE
+; NINC-DAG:Signature 0x06000002 'id128' NATIVE_INCOMPATIBLE
+; NINC-DAG:Signature 0x06000003 'lo128' NATIVE_INCOMPATIBLE
+; NINC-DAG:Signature 0x0A000001 'ext_pair' NATIVE_INCOMPATIBLE
+; NINC-DAG:Signature 0x0A000002 'ext_lo' NATIVE_INCOMPATIBLE
+; NINC-NOT:{{.}}
+; NINC-SIGS-COUNT-5:{{^Signature .*}}
+; NINC-SIGS-NOT:{{^Signature }}
+; NINC-TBL:Table: MethodDef rows=4 rowsize={{[0-9]+}}
+; NINC-TBL-NEXT:  MethodDef[1]: RVA=0x{{([0-9A-F]{8})}} ImplFlags=0x0000 Flags=0x0016 Name='mk_pair' Signature=00 03 01 18 18 18 ParamList={{.*}}
+; NINC-TBL-NEXT:  MethodDef[2]: RVA=0x{{([0-9A-F]{8})}} ImplFlags=0x0000 Flags=0x0016 Name='id128' Signature=00 03 01 18 18 18 ParamList={{.*}}
+; NINC-TBL-NEXT:  MethodDef[3]: RVA=0x{{([0-9A-F]{8})}} ImplFlags=0x0000 Flags=0x0016 Name='lo128' Signature=00 02 18 18 18 ParamList={{.*}}
+; NINC-TBL-NEXT:  MethodDef[4]: RVA=0x{{([0-9A-F]{8})}} ImplFlags=0x0000 Flags=0x0016 Name='caller' Signature=00 01 18 18 ParamList={{.*}}
+; NINC-TBL:Table: MemberRef rows=4 rowsize={{[0-9]+}}
+; NINC-TBL-NEXT:  MemberRef[1]: Class=0x01000001 Name='ext_pair' Signature=00 02 01 18 08
+; NINC-TBL-NEXT:  MemberRef[2]: Class=0x01000001 Name='ext_lo' Signature=00 02 18 18 18
+; NINC-TBL-NEXT:  MemberRef[3]: Class=0x01000001 Name='ext_plain' Signature=00 01 18 18
+; NINC-TBL-NEXT:  MemberRef[4]: Class=0x01000002 Name='.ctor' Signature=20 01 01 1D 05
 
 ;--- knr12.ll
 source_filename = "knr-a.c"
@@ -839,3 +893,38 @@ define double @exp10(double %x) {
 }
 
 declare double @llvm.exp10.f64(double)
+
+;--- ninc.ll
+source_filename = "ninc.c"
+
+define { i64, i64 } @mk_pair(i64 %a, i64 %b) {
+  %p0 = insertvalue { i64, i64 } poison, i64 %a, 0
+  %p1 = insertvalue { i64, i64 } %p0, i64 %b, 1
+  ret { i64, i64 } %p1
+}
+
+define i128 @id128(i128 %v) {
+  ret i128 %v
+}
+
+define i64 @lo128(i128 %v) {
+  %t = trunc i128 %v to i64
+  ret i64 %t
+}
+
+declare { i64, i64 } @ext_pair(i32)
+
+declare i64 @ext_lo(i128)
+
+declare i64 @ext_plain(i64)
+
+define i64 @caller(i64 %x) {
+  %p = call { i64, i64 } @ext_pair(i32 1)
+  %a = extractvalue { i64, i64 } %p, 0
+  %w = zext i64 %x to i128
+  %b = call i64 @ext_lo(i128 %w)
+  %c = call i64 @ext_plain(i64 %x)
+  %ab = add i64 %a, %b
+  %r = add i64 %ab, %c
+  ret i64 %r
+}

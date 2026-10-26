@@ -1,0 +1,71 @@
+# The entry pinvoke-access of msil/utils/equiv-allowed.txt (plan 5.12.6;
+# M20): -S prints the D14 P/Invokes public, while msil-ld writes its P/Invoke
+# stubs assembly (5.10.11). The pair: two ilasm texts of the same program
+# whose P/Invoke stub of puts is 'assembly' (A, the msil-ld side) and
+# 'public' (B, the -S side), both assembled into prog.dll. With every other
+# entry allowed, msil-equiv.py fails (status 1) on exactly the method line of
+# the stub (flags 0x2013 against 0x2016); with pinvoke-access allowed too
+# (MemberAccess of PinvokeImpl methods cleared), the images are equal, while
+# the access of a method without PinvokeImpl still compares (control: a
+# third text whose f is assembly instead of public differs on f's line with
+# every entry allowed).
+# REQUIRES: msil-cil-dump
+
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/a %t/b %t/c
+# RUN: %ilasm -dll -output=%t/a/prog.dll %t/a.il
+# RUN: %ilasm -dll -output=%t/b/prog.dll %t/b.il
+# RUN: %ilasm -dll -output=%t/c/prog.dll %t/c.il
+# RUN: not %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow scopes %t/a/prog.dll %t/b/prog.dll > %t/without.txt
+# RUN: FileCheck %s --check-prefix=WITHOUT --input-file=%t/without.txt
+# RUN: %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow scopes --allow pinvoke-access %t/a/prog.dll %t/b/prog.dll > %t/with.txt
+# RUN: FileCheck %s --check-prefix=WITH --input-file=%t/with.txt
+# RUN: not %msil_equiv --allow assembly-hash --allow ilasm-params --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow scopes --allow pinvoke-access %t/a/prog.dll %t/c/prog.dll > %t/control.txt
+# RUN: FileCheck %s --check-prefix=CONTROL --input-file=%t/control.txt
+
+# WITHOUT:      msil-equiv: O3: {{.*}}prog.dll and {{.*}}prog.dll differ (2 differing lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, scopes); the first 2:
+# WITHOUT-NEXT: --- {{.*}}a{{[/\\]}}prog.dll
+# WITHOUT-NEXT: +++ {{.*}}b{{[/\\]}}prog.dll
+# WITHOUT-NEXT: @@ {{.*}} @@
+# WITHOUT-NEXT: -  .method 'puts' int32(native int) flags=0x2013 impl=0x0080
+# WITHOUT-NEXT: +  .method 'puts' int32(native int) flags=0x2016 impl=0x0080
+# WITHOUT-NOT:  {{.}}
+
+# WITH: msil-equiv: O3: {{.*}}prog.dll and {{.*}}prog.dll are equal ({{[0-9]+}} lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access, scopes)
+
+# CONTROL:      msil-equiv: O3: {{.*}} differ (2 differing lines;
+# CONTROL:      -  .method 'f' int32(native int) flags=0x0016 impl=0x0000
+# CONTROL-NEXT: +  .method 'f' int32(native int) flags=0x0013 impl=0x0000
+
+#--- a.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'prog' { .ver 0:0:0:0 }
+.method assembly static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) preservesig {}
+.method public static int32 'f'(native int) cil managed
+{
+  .maxstack 1
+  ldarg.0
+  call int32 'puts'(native int)
+  ret
+}
+#--- b.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'prog' { .ver 0:0:0:0 }
+.method public static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) preservesig {}
+.method public static int32 'f'(native int) cil managed
+{
+  .maxstack 1
+  ldarg.0
+  call int32 'puts'(native int)
+  ret
+}
+#--- c.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'prog' { .ver 0:0:0:0 }
+.method assembly static pinvokeimpl("libc" nomangle cdecl) int32 'puts'(native int) preservesig {}
+.method assembly static int32 'f'(native int) cil managed
+{
+  .maxstack 1
+  ldarg.0
+  call int32 'puts'(native int)
+  ret
+}

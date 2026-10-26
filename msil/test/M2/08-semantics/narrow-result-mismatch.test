@@ -1,0 +1,42 @@
+# Matrix case narrow-result-mismatch: narrow unsigned results called through int prototypes (native 200 and 50000).
+# a.c declares int f(void) and int g(void); b.c defines unsigned char
+# f(void), which returns 200, and unsigned short g(void), which returns
+# 50000. Both sides of each call return int32 in CIL (plan 5.9.8's value
+# classes), so the object link binds a.c's MemberRefs directly and the LTO
+# link's MSILFixFunctionBitcasts finds the same direct match: no warning on
+# either pipeline, at -O0 and -O2 (pinned below). The caller then reads the
+# result as the callee returns it, zero-extended (clang marks the results
+# zeroext on Linux triples; on Windows triples the object path's callee
+# returns the constants zero-extended too), so the object and the LTO path
+# print the same transcript (Q8), never the sign-extended -56 and -15536 that
+# the LTO path printed before M20's fix (M20 review-r1).
+# Natively the callee writes only al or ax: x86-64 code generation leaves
+# the upper bits of eax unspecified on both ABIs, even with zeroext, so a.c
+# reads whatever they held. zero() runs first and clears eax, which makes the
+# native transcript 200 and 50000 at every level on both oracles (without it
+# the Windows oracle read a stale pointer in the upper bits, a different
+# value on every run). Plan 5.9.8 ('so the object and LTO paths agree') and
+# 5.9.16.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
+# RUN: %{msil_prog}
+# RUN: %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LINK --implicit-check-not="warning:" --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LINK --implicit-check-not="warning:" --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# LINK: {{^}}msil-prog: {{.*}} obj/a.o obj/b.o -o prog.exe{{$}}
+#--- a.c
+#include "msil_test.h"
+int zero(void);           /* defined in b.c: clears eax natively */
+int f(void);              /* defined in b.c as unsigned char f(void) */
+int g(void);              /* defined in b.c as unsigned short g(void) */
+int main(void) {
+  int z = zero();
+  int r = f();            /* 200 */
+  int s = g();            /* 50000 */
+  put_kv("f()", r);
+  put_kv("g()", s);
+  return (r + s + z) & 0xff;
+}
+#--- b.c
+int zero(void) { return 0; }
+unsigned char f(void) { return 200; }
+unsigned short g(void) { return 50000; }

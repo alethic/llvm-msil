@@ -1,0 +1,82 @@
+# 65,600 functions and 65,600 globals: the members past the per-type limits move to '<msil>Spill<N>' classes.
+# gen.py writes big.c with 65,600 initialized globals g_<i> and 65,600
+# functions f_<i> that read them, and 82 functions that call 800 of them
+# each, so a link with --gc-sections (the default) keeps every one of them;
+# main.c sums them and takes the address of four of them. That is more than
+# <Module> may hold, 65,524 methods and 65,534 fields with the linker's own
+# members counted, so msil-ld moves the rest into '<msil>Spill1', ... classes
+# (private abstract sealed auto ansi, flags 0x00000180, extending the core
+# library's System.Object, which M20's stand-in binds to [mscorlib]); a spill
+# class's address fields are not initonly, because <Module>::.cctor stores
+# them, and once a spill class exists every '<msil>fn_' field is assembly
+# instead of private (plan 5.9.12). <Module> keeps .cctor and '<msil>Main'.
+# The program verifies, force-JITs and runs at the real limits (msil-ld's
+# --msil-type-member-limit lowers them only in lld/test/MSIL/obj-spill.test),
+# at -O0 only. %msil_canon of the image pins the spill classes. It needs the
+# lit parameter msil_scale_tests=1 (feature msil-scale-tests), which only
+# lit-legs.ps1's obj leg sets (plan 5.12.2). O4 has a skip line for this test
+# in msil/utils/equiv-allowed.txt: --lto-emit-asm text has no per-type limit.
+# Plan 5.12.2 (msil_scale_tests), 5.9.12.
+# REQUIRES: msil-scale-tests
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %python %t/gen.py %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/big.c
+# RUN: %{msil_prog_O0}
+# RUN: %msil_canon %t.O0.d/prog.exe > %t.canon.txt
+# RUN: FileCheck %s --check-prefix=CANON --input-file=%t.canon.txt
+# RUN: FileCheck %s --check-prefix=FNACC --input-file=%t.canon.txt
+# The first spill class, with a public, not initonly, address field and a
+# public method; the classes sort after <Module> ('<msil>S' before
+# '<msil>i...', the image type).
+# CANON:      {{^}}.class '<Module>' flags=0x{{[0-9A-F]+}}{{$}}
+# CANON-NOT:  {{^}}.class
+# CANON:      {{^}}  .method '.cctor' void() flags=0x{{[0-9A-F]+}} impl=0x{{[0-9A-F]+}}{{$}}
+# CANON-NOT:  {{^}}.class
+# CANON:      {{^}}  .method '<msil>Main' {{.+}}{{$}}
+# CANON:      {{^}}.class '<msil>Spill1' flags=0x00000180 extends [mscorlib]System.Object{{$}}
+# CANON-NOT:  {{^}}.class
+# CANON:      {{^}}  .field '{{g_[0-9]+}}' native int flags=0x0016{{$}}
+# CANON-NOT:  {{^}}.class
+# CANON:      {{^}}  .method '{{f_[0-9]+}}' int32() flags=0x0016 impl=0x0000{{$}}
+# With a spill class every '<msil>fn_' field is assembly: 0x0013 in a spill
+# class, 0x0033 (initonly) if it stays in <Module>; none is private (0x0011,
+# 0x0031, Phase 1's access).
+# FNACC-NOT:  {{^}}  .field '<msil>fn_{{[^']*}}' native int flags=0x00{{11|31}}{{$}}
+# FNACC:      {{^}}  .field '<msil>fn_f_{{[0-3]}}' native int flags=0x00{{13|33}}{{$}}
+# FNACC-NOT:  {{^}}  .field '<msil>fn_{{[^']*}}' native int flags=0x00{{11|31}}{{$}}
+#--- gen.py
+# Writes big.c: N initialized globals, N functions that read them, and the
+# chunk functions that call every one of them; big_sum() calls the chunks.
+import os
+import sys
+
+N = 65600
+CHUNK = 800
+with open(os.path.join(sys.argv[1], "big.c"), "w", newline="\n") as f:
+    for i in range(N):
+        f.write("int g_%d = %d;\n" % (i, i % 251 + 1))
+    for i in range(N):
+        f.write("int f_%d(void) { return g_%d; }\n" % (i, i))
+    for c in range(N // CHUNK):
+        f.write("long long chunk_%d(void) {\n  long long s = 0;\n" % c)
+        for i in range(c * CHUNK, (c + 1) * CHUNK):
+            f.write("  s += f_%d();\n" % i)
+        f.write("  return s;\n}\n")
+    f.write("long long big_sum(void) {\n  long long s = 0;\n")
+    for c in range(N // CHUNK):
+        f.write("  s += chunk_%d();\n" % c)
+    f.write("  return s;\n}\n")
+#--- main.c
+#include "msil_test.h"
+long long big_sum(void);
+int f_0(void), f_1(void), f_2(void), f_3(void);
+int (*const some[4])(void) = {f_0, f_1, f_2, f_3};
+int main(void) {
+  long long s = big_sum();
+  int t = 0;
+  for (int i = 0; i < 4; ++i)
+    t += some[i]();
+  put_kv("sum", s);
+  put_kv("first four", t);
+  return (int)((s + t) & 0xff);
+}

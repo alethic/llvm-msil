@@ -1,7 +1,13 @@
 # msil-prog.py's usage and configuration errors: exit status 2 and a message
-# that names the problem, before any command runs (plan 5.12.4; M14):
-# (1) --pipeline obj and (2) --link-output pe need M20's CIL objects and PE
-#     writer;
+# that names the problem, before any command runs (plan 5.12.4; M14, M20):
+# (1) --pipeline obj with --link-output il (obj writes PE images only; M14's
+#     errors for --pipeline obj and --link-output pe are gone: both are the
+#     defaults from M20), and (2) the equivalence options where they cannot
+#     work: --also-il under obj (the text of an LTO link), --equiv-out with
+#     --link-output il, --equiv-skip without --test (and the reverse), a
+#     malformed --equiv-skip file (an oracle that is neither O3 nor O4, a
+#     qualified skip line whose triple is not an MSIL triple), --llc under
+#     lto, --llc with a .ll source at -Os, and --equiv-out in native mode;
 # (3) a source that does not exist;
 # (4) a --workdir that holds a source (the build empties it first);
 # (5) bad --archives specifications: no '=', a bad name, a name given twice,
@@ -10,17 +16,33 @@
 #     (empty ones cancel those of %msil_prog_build under the WSL runner), a
 #     sysroot without the E7 libraries, and the E7 recipe for a triple it
 #     does not build;
-# (7) no --src; (8) a level that does not exist; (9) MSIL mode without
-#     --ilasm; (10) --also-il in native mode.
+# (7) no --src; (8) a level that does not exist; (9) an empty --ilasm (the
+#     il link output needs one); (10) --also-il in native mode.
 
 # RUN: rm -rf %t && split-file %s %t
 # RUN: mkdir -p %t/w
 
 # (1), (2)
-# RUN: %{harness_check} exits 2 %msil_prog_build --pipeline obj --level O2 --workdir %t/w --src %t/main.c > %t/1.log 2>&1
-# RUN: %{harness_check} contains %t/1.log "^msil-prog: error: --pipeline obj needs CIL objects and msil-ld's PE writer \(plan M20\); use --pipeline lto$"
-# RUN: %{harness_check} exits 2 %msil_prog_build --link-output pe --level O2 --workdir %t/w --src %t/main.c > %t/2.log 2>&1
-# RUN: %{harness_check} contains %t/2.log "^msil-prog: error: --link-output pe needs msil-ld's PE writer \(plan M20\); use --link-output il$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --pipeline obj --link-output il --level O2 --workdir %t/w --src %t/main.c > %t/1.log 2>&1
+# RUN: %{harness_check} contains %t/1.log "^msil-prog: error: --pipeline obj writes PE images only \(plan 5\.12\.1\); use --link-output pe$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --pipeline obj --link-output pe --also-il %t/x.il --level O2 --workdir %t/w --src %t/main.c > %t/2a.log 2>&1
+# RUN: %{harness_check} contains %t/2a.log "^msil-prog: error: --also-il is the --lto-emit-asm text of an LTO link \(O4\); it needs --pipeline lto$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --pipeline lto --link-output il --equiv-out %t/x.exe --level O2 --workdir %t/w --src %t/main.c > %t/2b.log 2>&1
+# RUN: %{harness_check} contains %t/2b.log "^msil-prog: error: --equiv-out is a second msil-ld image; it needs --link-output pe$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --equiv-skip %t/allowed.txt --level O2 --workdir %t/w --src %t/main.c > %t/2c.log 2>&1
+# RUN: %{harness_check} contains %t/2c.log "^msil-prog: error: --equiv-skip and --test go together$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --test %s --level O2 --workdir %t/w --src %t/main.c > %t/2d.log 2>&1
+# RUN: %{harness_check} contains %t/2d.log "^msil-prog: error: --equiv-skip and --test go together$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --equiv-skip %t/bad-allowed.txt --test %s --level O2 --workdir %t/w --src %t/main.c > %t/2e.log 2>&1
+# RUN: %{harness_check} contains %t/2e.log "^msil-prog: error: --equiv-skip: \S*bad-allowed\.txt:1: expected 'skip <oracle>\[@<triple>\]\[:<level>\] <test path> <reason>' with the oracle O3 or O4$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --equiv-skip %t/bad-qualified.txt --test %s --level O2 --workdir %t/w --src %t/main.c > %t/2e2.log 2>&1
+# RUN: %{harness_check} contains %t/2e2.log "^msil-prog: error: --equiv-skip: \S*bad-qualified\.txt:1: the triple x86_64-pc-windows-msvc of the skip line is not an MSIL triple \(it does not end in -msil\)$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --pipeline lto --llc=%t/main.c --level O2 --workdir %t/w --src %t/main.c > %t/2f.log 2>&1
+# RUN: %{harness_check} contains %t/2f.log "^msil-prog: error: --llc compiles IR sources to CIL objects; it needs --pipeline obj$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --pipeline obj --llc='%{prog_cc} --as llc' --level Os --workdir %t/w --src %t/ir.ll > %t/2g.log 2>&1
+# RUN: %{harness_check} contains %t/2g.log "^msil-prog: error: --llc takes -O0 to -O3, not --level Os$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --mode native --equiv-out %t/x.exe --level O2 --workdir %t/w --src %t/main.c > %t/2h.log 2>&1
+# RUN: %{harness_check} contains %t/2h.log "^msil-prog: error: --equiv-out is an MSIL-mode option$"
 
 # (3)
 # RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/w --src %t/main.c %t/missing.c > %t/3.log 2>&1
@@ -67,8 +89,17 @@
 
 # No error ran a command.
 # RUN: %{harness_check} lacks %t/1.log "^msil-prog: (?!error: )"
+# RUN: %{harness_check} lacks %t/2e.log "^msil-prog: (?!error: )"
 # RUN: %{harness_check} lacks %t/3.log "^msil-prog: (?!error: )"
 # RUN: %{harness_check} lacks %t/6c.log "^msil-prog: (?!error: )"
 
 #--- main.c
 // prog-value: 1
+#--- ir.ll
+; prog-value: 2
+#--- allowed.txt
+skip O3 msil/test/harness/prog/msil-prog-errors.test never used
+#--- bad-allowed.txt
+skip O5 msil/test/harness/prog/msil-prog-errors.test not an oracle
+#--- bad-qualified.txt
+skip O3@x86_64-pc-windows-msvc:O2 msil/test/harness/prog/msil-prog-errors.test a native triple

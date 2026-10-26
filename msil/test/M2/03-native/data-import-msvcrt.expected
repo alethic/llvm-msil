@@ -1,0 +1,5 @@
+sizeof(FILE)=48
+_iob[0]._file=0
+_iob[1]._file=1
+_iob[2]._file=2
+[exit 2]

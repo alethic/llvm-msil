@@ -1,0 +1,35 @@
+# The entry ilasm-params of msil/utils/equiv-allowed.txt (plan 5.12.6; M20):
+# ilasm adds one Param row per parameter (A_<n> when the parameter has no
+# name), while the MC writer (CIL objects, msil-ld's image) writes none. The
+# pair comes from the object oracle of plan 5.12.6, which needs no msil-ld:
+# A is llc -filetype=obj's CIL object of a function with one unnamed
+# parameter, B ilasm's object of the same module's object-form text
+# (llc -msil-object-form, ilasm -dll; both name the module after the source
+# file). With every other entry allowed, msil-equiv.py fails (status 1) on
+# exactly the '.param 1' line that only B has; with ilasm-params allowed
+# too, the objects are equal.
+# REQUIRES: msil-registered-target, msil-cil-dump
+
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/a %t/b
+# RUN: %llc_msil -O2 -filetype=obj %t/add1.ll -o %t/a/add1.o
+# RUN: %llc_msil -O2 -msil-object-form %t/add1.ll -o %t/b/add1.il
+# RUN: %ilasm -dll -output=%t/b/add1.o %t/b/add1.il
+# RUN: not %msil_equiv --allow assembly-hash --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access --allow scopes %t/a/add1.o %t/b/add1.o > %t/without.txt
+# RUN: FileCheck %s --check-prefix=WITHOUT --input-file=%t/without.txt
+# RUN: %msil_equiv --allow assembly-hash --allow ilasm-initlocals --allow snan-quiet --allow pinvoke-module --allow pinvoke-access --allow scopes --allow ilasm-params %t/a/add1.o %t/b/add1.o > %t/with.txt
+# RUN: FileCheck %s --check-prefix=WITH --input-file=%t/with.txt
+
+# WITHOUT:      msil-equiv: O3: {{.*}}add1.o and {{.*}}add1.o differ (1 differing line; allowed: assembly-hash, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access, scopes); the first 1:
+# WITHOUT-NEXT: --- {{.*}}a{{[/\\]}}add1.o
+# WITHOUT-NEXT: +++ {{.*}}b{{[/\\]}}add1.o
+# WITHOUT-NEXT: @@ {{.*}} @@
+# WITHOUT-NEXT: +    .param 1 'A_0' flags=0x0000
+# WITHOUT-NOT:  {{.}}
+
+# WITH: msil-equiv: O3: {{.*}}add1.o and {{.*}}add1.o are equal ({{[0-9]+}} lines; allowed: assembly-hash, ilasm-params, ilasm-initlocals, snan-quiet, pinvoke-module, pinvoke-access, scopes)
+
+#--- add1.ll
+define i32 @add1(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}

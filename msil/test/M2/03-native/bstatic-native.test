@@ -7,15 +7,20 @@
 # shared object, and reports lld/ELF's 'unable to find library -lnative';
 # -Wl,-Bdynamic restores the default for the driver's default libraries,
 # which follow. This is an msil-ld error before LTO; the check runs where
-# %{msil_prog} links bitcode, as the other link diagnostics of M2 do. Plan
-# 5.10.9 (-Bstatic), 5.10.15, recon tests-p2 3.5, M15.
+# %{msil_prog} links bitcode, as the other link diagnostics of M2 do, and
+# from M20 also where it links CIL objects, with the same text (library
+# lookup does not depend on the kind of the inputs). Plan 5.10.9 (-Bstatic),
+# 5.10.15, recon tests-p2 3.5, M15, M20.
 # RUN: rm -rf %t && split-file %s %t
 # RUN: %if msil-triple-windows %{ %clang_native -O2 -c %t/native.c -o %t/native.obj && %lld_link -dll -noentry -nodefaultlib %t/native.obj -out:%t/native.dll %} %else %{ %clang_native -O2 -fPIC -c %t/native.c -o %t/native.o && %ld_lld -shared -soname libnative.so %t/native.o -o %t/libnative.so %}
 # REDEFINE: %{msil_srcs} = %t/main.c
 # REDEFINE: %{msil_libs} = -L%t -Wl,-Bstatic -lnative -Wl,-Bdynamic
 # RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="unable to find library -l{{[^n]}}" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not="unable to find library -l{{[^n]}}" %}
 # LTO:      {{^}}msil-ld: error: unable to find library -lnative{{$}}
 # LTO:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# OBJ:      {{^}}msil-ld: error: unable to find library -lnative{{$}}
+# OBJ:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
 #--- native.c
 #ifdef _WIN32
 #define EXPORT __declspec(dllexport)

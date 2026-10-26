@@ -1,0 +1,297 @@
+## COMDAT groups in CIL objects (ImplementationPlan.md 5.9.5, as
+## lld/ELF/InputFiles.cpp:1905-1912; 5.9.9 for constructors; 5.9.14):
+## - the first object that presents a group name keeps it; in later objects
+##   the group's members (methods and segments) are discarded, and calls in
+##   the losing object (MethodDef sites of its own discarded copy) name the
+##   kept copy; a discarded copy never reaches the output (c1's shared
+##   returns 1 and c1's sv holds 10; c2's copies return 2 and hold 20);
+## - an INIT entry associated with a discarded group is dropped with it, so
+##   '.cctor' runs init1 and never init2 (5.9.9: 'entries of discarded comdat
+##   groups are dropped');
+## - a reference that resolves to nothing but a discarded copy is
+##   'relocation refers to a symbol in a discarded section: <s>' with
+##   '>>> defined in <file>' (lld/ELF/Relocations.cpp:381-405): c3's group
+##   'g' loses to c5's, and extra, which only c3's copy defines, is needed;
+## - a call site redirected from a discarded copy to the kept one is a call
+##   site for 5.9.8 (5.9.5, R1): its call side is the losing copy's
+##   signature, and 'called as' names the losing object. sa.o's
+##   'int32 shared()' keeps group 'shared'; sb.o's copy 'int32 shared(int32)'
+##   loses, so its call goes through the adapter '<msil>adapt_shared_0',
+##   which drops the extra argument, with the warning; in the other input
+##   order sb.o's copy wins and sa.o's call gets an adapter that passes zero
+##   for the missing argument. sc.o's 'float shared()' against sa.o's int32
+##   result is an error (different native register classes), exit status 1;
+## - a selection kind other than Any and NoDeduplicate is an error even
+##   though the backend never writes one: c4.il is llc -msil-object-form
+##   output whose record was patched by hand from ANY (0) to LARGEST (2)
+##   (the COMDATS byte after the name 'big'), assembled by ilasm.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj c1.ll -o c1.o
+# RUN: llc -filetype=obj c2.ll -o c2.o
+# RUN: llc -filetype=obj c3.ll -o c3.o
+# RUN: llc -filetype=obj c5.ll -o c5.o
+# RUN: llc -filetype=obj sa.ll -o sa.o
+# RUN: llc -filetype=obj sb.ll -o sb.o
+# RUN: llc -filetype=obj sc.ll -o sc.o
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: msil-ld c1.o c2.o -o prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog.exe > prog.txt
+# RUN: FileCheck %s --check-prefix=KEPT --implicit-check-not=".method 'shared'" \
+# RUN:   --implicit-check-not=".data " --implicit-check-not="::'init2'" --input-file=prog.txt
+
+# KEPT:      {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0111{{$}}
+# KEPT-NEXT: {{^}}    .data 4 bytes{{$}}
+# KEPT-NEXT: {{^}}      0A 00 00 00{{$}}
+# KEPT-NEXT: {{^}}  .field 'sv' native int flags=0x0036{{$}}
+# KEPT-NEXT: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# KEPT:      {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'sv'{{$}}
+# KEPT-NEXT: {{^}}    L{{[0-9]+}}: call void() '<Module>'::'init1'{{$}}
+# KEPT-NEXT: {{^}}    L{{[0-9]+}}: ret{{$}}
+# KEPT:      {{^}}  .method 'in_c2' int32() flags=0x0016 impl=0x0000{{$}}
+# KEPT-NEXT: {{^}}    .maxstack 1{{$}}
+# KEPT-NEXT: {{^}}    L0: call int32() '<Module>'::'shared'{{$}}
+# KEPT-NEXT: {{^}}    L1: ret{{$}}
+# KEPT-NEXT: {{^}}  .method 'init1' void() flags=0x0013 impl=0x0000{{$}}
+# KEPT:      {{^}}  .method 'shared' int32() flags=0x0016 impl=0x0000{{$}}
+# KEPT-NEXT: {{^}}    .maxstack 1{{$}}
+# KEPT-NEXT: {{^}}    L0: ldc.i4.1{{$}}
+# KEPT-NEXT: {{^}}    L1: ret{{$}}
+
+## A reference to a symbol that only the discarded copy defines: c5.o keeps
+## group 'g' and its main reaches c3.o's use_extra.
+# RUN: not msil-ld c5.o c3.o -o x.exe 2>&1 | %{err} --check-prefix=DISCARDED --implicit-check-not="undefined symbol"
+# DISCARDED:      {{^}}msil-ld: error: relocation refers to a symbol in a discarded section: extra{{$}}
+# DISCARDED-NEXT: {{^}}>>> defined in c3.o{{$}}
+
+## A discarded copy with another signature: its object's call is checked
+## against the kept copy and adapted, with the warning naming the losing
+## object.
+# RUN: msil-ld sa.o sb.o -o sig.exe 2>&1 | %{err} --check-prefix=SIG-WARN --implicit-check-not=warning: \
+# RUN:   --implicit-check-not=error:
+# RUN: llvm-cil-dump sig.exe | FileCheck %s --check-prefix=SIG --implicit-check-not=adapt_shared_1
+# SIG-WARN:      {{^}}msil-ld: warning: function signature mismatch: shared{{$}}
+# SIG-WARN-NEXT: {{^}}>>> defined as int32() in sa.o{{$}}
+# SIG-WARN-NEXT: {{^}}>>> called as int32(int32) in sb.o{{$}}
+# SIG-WARN-NEXT: {{^}}>>> adapter: drops 1 extra argument{{$}}
+# SIG:      {{^}}  .method '<msil>adapt_shared_0' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# SIG-NEXT: {{^}}    .maxstack 1{{$}}
+# SIG-NEXT: {{^}}    L0: call int32() '<Module>'::'shared'{{$}}
+# SIG-NEXT: {{^}}    L1: ret{{$}}
+# SIG-NEXT: {{^}}  .method 'in_sb' int32() flags=0x0016 impl=0x0000{{$}}
+# SIG-NEXT: {{^}}    .maxstack 1{{$}}
+# SIG-NEXT: {{^}}    L0: ldc.i4.7{{$}}
+# SIG-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'<msil>adapt_shared_0'{{$}}
+# SIG-NEXT: {{^}}    L2: ret{{$}}
+# SIG-NEXT: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# SIG-NEXT: {{^}}    .maxstack 2{{$}}
+# SIG-NEXT: {{^}}    L0: call int32() '<Module>'::'shared'{{$}}
+# SIG:      {{^}}  .method 'shared' int32() flags=0x0016 impl=0x0000{{$}}
+# SIG-NEXT: {{^}}    .maxstack 1{{$}}
+# SIG-NEXT: {{^}}    L0: ldc.i4.1{{$}}
+# SIG-NEXT: {{^}}    L1: ret{{$}}
+
+## The other order: sb.o's copy is kept, and sa.o's call passes zero.
+# RUN: msil-ld sb.o sa.o -o sig-rev.exe 2>&1 | %{err} --check-prefix=SIG-REV-WARN --implicit-check-not=warning: \
+# RUN:   --implicit-check-not=error:
+# RUN: llvm-cil-dump sig-rev.exe | FileCheck %s --check-prefix=SIG-REV --implicit-check-not=adapt_shared_1
+# SIG-REV-WARN:      {{^}}msil-ld: warning: function signature mismatch: shared{{$}}
+# SIG-REV-WARN-NEXT: {{^}}>>> defined as int32(int32) in sb.o{{$}}
+# SIG-REV-WARN-NEXT: {{^}}>>> called as int32() in sa.o{{$}}
+# SIG-REV-WARN-NEXT: {{^}}>>> adapter: passes zero for 1 missing argument{{$}}
+# SIG-REV:      {{^}}  .method '<msil>adapt_shared_0' int32() flags=0x0013 impl=0x0000{{$}}
+# SIG-REV-NEXT: {{^}}    .maxstack 1{{$}}
+# SIG-REV-NEXT: {{^}}    L0: ldc.i4.0{{$}}
+# SIG-REV-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'shared'{{$}}
+# SIG-REV-NEXT: {{^}}    L2: ret{{$}}
+# SIG-REV-NEXT: {{^}}  .method 'in_sb' int32() flags=0x0016 impl=0x0000{{$}}
+# SIG-REV-NEXT: {{^}}    .maxstack 1{{$}}
+# SIG-REV-NEXT: {{^}}    L0: ldc.i4.7{{$}}
+# SIG-REV-NEXT: {{^}}    L1: call int32(int32) '<Module>'::'shared'{{$}}
+# SIG-REV-NEXT: {{^}}    L2: ret{{$}}
+# SIG-REV-NEXT: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# SIG-REV-NEXT: {{^}}    .maxstack 2{{$}}
+# SIG-REV-NEXT: {{^}}    L0: call int32() '<Module>'::'<msil>adapt_shared_0'{{$}}
+# SIG-REV:      {{^}}  .method 'shared' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# SIG-REV-NEXT: {{^}}    .maxstack 1{{$}}
+# SIG-REV-NEXT: {{^}}    L0: ldarg.0{{$}}
+# SIG-REV-NEXT: {{^}}    L1: ret{{$}}
+
+## A float32 result against int32: an error, in both orders.
+# RUN: not msil-ld sa.o sc.o -o x.exe 2>&1 | %{err} --check-prefix=SIG-ERR --implicit-check-not=warning: \
+# RUN:   --implicit-check-not=error:
+# RUN: not msil-ld sc.o sa.o -o x.exe 2>&1 | %{err} --check-prefix=SIG-ERR-REV --implicit-check-not=warning: \
+# RUN:   --implicit-check-not=error:
+# SIG-ERR:          {{^}}msil-ld: error: function signature mismatch: shared{{$}}
+# SIG-ERR-NEXT:     {{^}}>>> defined as int32() in sa.o{{$}}
+# SIG-ERR-NEXT:     {{^}}>>> called as float32() in sc.o{{$}}
+# SIG-ERR-NEXT:     {{^}}>>> {{.+}} (different native register classes){{$}}
+# SIG-ERR-REV:      {{^}}msil-ld: error: function signature mismatch: shared{{$}}
+# SIG-ERR-REV-NEXT: {{^}}>>> defined as float32() in sc.o{{$}}
+# SIG-ERR-REV-NEXT: {{^}}>>> called as int32() in sa.o{{$}}
+# SIG-ERR-REV-NEXT: {{^}}>>> {{.+}} (different native register classes){{$}}
+
+## Selection kind LARGEST.
+# RUN: %if ilasm %{ %ilasm-verify -output=c4.o c4.il %}
+# RUN: %if ilasm %{ not msil-ld c4.o -o x.exe 2>&1 | %{err} --check-prefix=LARGEST %}
+# LARGEST: {{^}}msil-ld: error: comdat 'big' in c4.o uses selection kind 'largest', which msil-ld does not support{{$}}
+
+#--- c1.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+$g = comdat any
+
+@sv = linkonce_odr global i32 10, comdat($g), align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init1, ptr @sv }]
+
+declare i32 @in_c2()
+
+define linkonce_odr i32 @shared() comdat($g) {
+  ret i32 1
+}
+
+define internal void @init1() {
+  store i32 11, ptr @sv
+  ret void
+}
+
+define i32 @main() {
+  %a = call i32 @shared()
+  %b = load i32, ptr @sv
+  %c = call i32 @in_c2()
+  %s = add i32 %a, %b
+  %r = add i32 %s, %c
+  ret i32 %r
+}
+
+#--- c2.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+$g = comdat any
+
+@sv = linkonce_odr global i32 20, comdat($g), align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init2, ptr @sv }]
+
+define linkonce_odr i32 @shared() comdat($g) {
+  ret i32 2
+}
+
+define internal void @init2() {
+  store i32 22, ptr @sv
+  ret void
+}
+
+define i32 @in_c2() {
+  %a = call i32 @shared()
+  ret i32 %a
+}
+
+#--- c3.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+$g = comdat any
+
+define linkonce_odr i32 @extra() comdat($g) {
+  ret i32 4
+}
+
+define i32 @use_extra() {
+  %r = call i32 @extra()
+  ret i32 %r
+}
+
+#--- c5.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+$g = comdat any
+
+declare i32 @use_extra()
+
+define linkonce_odr i32 @shared() comdat($g) {
+  ret i32 5
+}
+
+define i32 @main() {
+  %a = call i32 @shared()
+  %b = call i32 @use_extra()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+#--- sa.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+$shared = comdat any
+
+declare i32 @in_sb()
+
+define linkonce_odr i32 @shared() comdat {
+  ret i32 1
+}
+
+define i32 @main() {
+  %a = call i32 @shared()
+  %b = call i32 @in_sb()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+#--- sb.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+$shared = comdat any
+
+define linkonce_odr i32 @shared(i32 %x) comdat {
+  ret i32 %x
+}
+
+define i32 @in_sb() {
+  %a = call i32 @shared(i32 7)
+  ret i32 %a
+}
+
+#--- sc.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+$shared = comdat any
+
+define linkonce_odr float @shared() comdat {
+  ret float 1.0
+}
+
+define i32 @in_sb() {
+  %a = call float @shared()
+  %b = fptosi float %a to i32
+  ret i32 %b
+}
+
+#--- c4.il
+// MSIL object generated by LLVM (llc -msil-object-form); the record's
+// COMDATS selection byte for group 'big' was changed by hand from 00 (ANY)
+// to 02 (LARGEST).
+// source_filename = "c4.ll"
+// target triple   = "x86_64-unknown-linux-gnu-msil"
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+
+.method public static int32 'pick'() cil managed
+{
+  .maxstack 1
+  ldc.i4.5
+  ret
+} // end of method 'pick'
+
+.method public static int32 'main'() cil managed
+{
+  .maxstack 1
+  call int32 'pick'()
+  ret
+} // end of method 'main'
+
+.module 'c4.ll'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = ( 01 00 50 00 00 00 4D 53 4C 4B 01 00 00 1D 78 38 36 5F 36 34 2D 75 6E 6B 6E 6F 77 6E 2D 6C 69 6E 75 78 2D 67 6E 75 2D 6D 73 69 6C 01 00 00 08 08 04 08 01 17 02 00 01 04 70 69 63 6B 01 00 00 06 00 00 04 6D 61 69 6E 02 00 00 06 04 09 01 03 62 69 67 02 01 00 00 00 00 )

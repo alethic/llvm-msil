@@ -1,0 +1,33 @@
+# %{msil_c} under msil_pipeline=obj without msil_equiv (plan 5.12.1, 5.12.3;
+# M20): for every level of msil_opt_levels (features msil-opt-<L> of
+# lit.local.cfg) the one source of Inputs/obj/prog-c.c is a one-source
+# %{msil_prog}: msil-prog.py --pipeline obj --link-output pe --level <L>
+# --workdir <t>.<L>.d --out <t>.<L>.d/prog.exe --src <file>, which compiles
+# it with clang -c (no -flto) for the MSIL triple with %{msil_cflags} and
+# links the object through the driver into msil-ld's image prog.exe (no
+# --lto-emit-asm, no ilasm); then msil-verify.py, jitall and the run of
+# prog.exe against prog-c.expected; where they run (lit.local.cfg), the
+# native oracle (msil-prog.py --mode native of the same source) and the .NET
+# Framework run of the same prog.exe. No equivalence output, -S build,
+# --md-baseline or msil-equiv.py runs without msil_equiv=1, and none of the
+# placeholders of %{msil_prog} (no --dep). A nested lit with -a prints every
+# command it ran (the local runner, where the stand-ins run on every host);
+# the test passes, so every step found the file the step before wrote.
+# REQUIRES: msil-ld, msil-ar
+
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj %S/Inputs/obj/prog-c.c > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/prog-c\.c " "note: msil: pipeline obj \(%\{msil_prog\}: obj, link output pe\)$"
+# RUN: %if msil-opt-O0 %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level O0 --workdir '?\S*prog-c\.c\.tmp\.O0\.d'? --out '?\S*prog-c\.c\.tmp\.O0\.d/prog\.exe'? --src '?\S*prog-c\.c'?$" %}
+# RUN: %if msil-opt-O1 %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level O1 --workdir '?\S*prog-c\.c\.tmp\.O1\.d'? --out '?\S*prog-c\.c\.tmp\.O1\.d/prog\.exe'? --src '?\S*prog-c\.c'?$" %}
+# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level O2 --workdir '?\S*prog-c\.c\.tmp\.O2\.d'? --out '?\S*prog-c\.c\.tmp\.O2\.d/prog\.exe'? --src '?\S*prog-c\.c'?$" %}
+# RUN: %if msil-opt-O3 %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level O3 --workdir '?\S*prog-c\.c\.tmp\.O3\.d'? --out '?\S*prog-c\.c\.tmp\.O3\.d/prog\.exe'? --src '?\S*prog-c\.c'?$" %}
+# RUN: %if msil-opt-Os %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level Os --workdir '?\S*prog-c\.c\.tmp\.Os\.d'? --out '?\S*prog-c\.c\.tmp\.Os\.d/prog\.exe'? --src '?\S*prog-c\.c'?$" %}
+# RUN: %if msil-opt-Oz %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --pipeline obj --link-output pe .* --level Oz --workdir '?\S*prog-c\.c\.tmp\.Oz\.d'? --out '?\S*prog-c\.c\.tmp\.Oz\.d/prog\.exe'? --src '?\S*prog-c\.c'?$" %}
+
+# The steps of one level (O2 unless msil_opt_levels leaves it out, then O0),
+# in order: the compile and the link, verify, jitall, the run.
+# RUN: %if msil-opt-O2 %{ %{harness_check} contains %t.log "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \S+ -O2 -c \S*prog-c\.c -o obj/prog-c\.o\n# \| msil-prog: .* --target=\S+-msil --ld-path=\S+ -O2 obj/prog-c\.o -o prog\.exe$" "^# executed command: .*msil-verify\.py'? .* '?\S*prog-c\.c\.tmp\.O2\.d/prog\.exe'?$[\s\S]*^# executed command: .*msil-jitall\.py'? .* '?\S*prog-c\.c\.tmp\.O2\.d/prog\.exe'?$[\s\S]*^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*prog-c'? --out '?\S*prog-c\.c\.tmp\.O2\.out'? '?\S*prog-c\.c\.tmp\.O2\.d/prog\.exe'?$" %}
+# RUN: %if !msil-opt-O2 && msil-opt-O0 %{ %{harness_check} contains %t.log "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 \S.* -O0 -c \S*prog-c\.c -o obj/prog-c\.o\n# \| msil-prog: .* --target=\S+-msil --ld-path=\S+ -O0 obj/prog-c\.o -o prog\.exe$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*prog-c'? --out '?\S*prog-c\.c\.tmp\.O0\.out'? '?\S*prog-c\.c\.tmp\.O0\.d/prog\.exe'?$" %}
+# RUN: %if msil-native-oracle && msil-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --mode native --level O2 --workdir '?\S*prog-c\.c\.tmp\.O2\.native\.d'? --out '?\S*prog-c\.c\.tmp\.O2\.native\.d/prog\.exe'? --src '?\S*prog-c\.c'?$" "^# executed command: .*msil-run\.py'? .* --native --expect '?\S*prog-c'? --out '?\S*prog-c\.c\.tmp\.O2\.native\.out'? '?\S*prog-c\.c\.tmp\.O2\.native\.d/prog\.exe'?$" %}
+# RUN: %if msil-run-netfx && msil-opt-O2 %{ %{harness_check} contains %t.log "^# executed command: .*msil-run\.py'? .* --netfx --expect '?\S*prog-c'? --out '?\S*prog-c\.c\.tmp\.O2\.netfx\.out'? '?\S*prog-c\.c\.tmp\.O2\.d/prog\.exe'?$" %}
+# RUN: %{harness_check} lacks %t.log " -flto" "--lto-emit-asm" " -S " " -dll " "-exe -output=" "--equiv-out" "--equiv-skip" "--md-baseline" "msil-equiv\.py" "no-gc-sections" "--dep " "nodefaultlibs"

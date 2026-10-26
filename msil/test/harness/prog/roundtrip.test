@@ -14,10 +14,12 @@
 # level that msil_opt_levels selects (features msil-opt-<L> of
 # lit.local.cfg) the output must show both commands:
 # (1) for Inputs/nested/roundtrip/rt-prog.test, %{msil_prog} of two sources
-#     under the default pipeline (asm), and
+#     under the default pipeline (asm), which from M20 links CIL objects into
+#     msil-ld's own image (the O2 oracle of plan 5.12.6 on msil-ld output),
+#     and
 # (2) for Inputs/nested/roundtrip/rt-c.c, %{msil_c} under
 #     msil_pipeline=lto (which needs msil-ld and llvm-ar configured, as
-#     lit-config.test's (7) shows);
+#     lit-config.test's (7) shows), whose image msil-ld writes too (pe);
 # and the tests must pass. (3) The control: without msil_roundtrip=1 the same
 # %{msil_prog} runs no round trip. The stand-ins of lit.local.cfg build the
 # programs (no clang or msil-ld runs), and the nested runs use the local

@@ -10,9 +10,30 @@
 # ('The prototype passes in object mode') and 5.9.16 row knr-two-arities (M19
 # lto; M20 obj, where f(1) gets the missing-argument adapter and its warning).
 # Both oracles print 3, so there is no .linux.expected.
+# On the object path msil-ld checks both MemberRefs against b.c's
+# int32(int32, int32) (plan 5.9.8): f(1, 2) matches and is direct, and f(1),
+# which never runs, gets the adapter that passes zero for the missing
+# argument, with a warning naming both objects. From M20 the LTO path warns
+# for f(1) too, with the same text without the ' in <file>' parts, exactly
+# once at -O0 and -O2: msil-ld's LTO applies the table before LTO
+# optimization too, so the optimizer cannot remove or complete the call
+# first (section 12 row 'Plan 5.9.8 (LTO path) and the D30 row of 2026-10-21
+# amended').
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/a.c %t/b.c
 # RUN: %{msil_prog}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.warn.O0.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O2 --workdir %t.warn.O2.d --src %{msil_srcs} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="signature mismatch" --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# OBJ:      {{^}}msil-ld: warning: function signature mismatch: f{{$}}
+# OBJ-NEXT: {{^}}>>> defined as int32(int32, int32) in {{.*}}b.o{{$}}
+# OBJ-NEXT: {{^}}>>> called as int32(int32) in {{.*}}a.o{{$}}
+# OBJ-NEXT: {{^}}>>> adapter: {{.+}}
+# LTO:      {{^}}msil-ld: warning: {{.*}}function signature mismatch: f{{$}}
+# LTO-NEXT: {{^}}>>> defined as int32(int32, int32){{$}}
+# LTO-NEXT: {{^}}>>> called as int32(int32){{$}}
+# LTO-NEXT: {{^}}>>> adapter: {{.+}}
 #--- a.c
 #include "msil_test.h"
 int f();                  /* defined in b.c as int f(int, int) */

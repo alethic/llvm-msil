@@ -1,0 +1,170 @@
+## Native data imports (ImplementationPlan.md 5.10.12, 5.9.10, 5.9.6 step 2,
+## 5.10.7, 5.10.14; Q15; M15's error for native data goes in M20): an
+## undefined variable that resolves to native data keeps its
+## address field, and '<Module>::.cctor' calls the private initializer
+## '<msil>init_dataimports'(), before the relocations and constructors, which
+## stores each address from the private helper
+## '<msil>dataimport'(string module, string name) : native int:
+## - module and entry come from native lookup (msvcrt.lib's DATA member
+##   _iob; mydata.lib's bar for v_name, which has import_name("bar") and no
+##   module) or, for IMPORT data with a module, from the attributes,
+##   unchecked (v_mod: mylib.dll!v_entry, which no library defines);
+## - Windows triples: the helper calls Marshal.StringToHGlobalUni and the
+##   P/Invoke kernel32.dll!LoadLibraryW, then Marshal.StringToHGlobalAnsi and
+##   kernel32.dll!GetProcAddress, and returns the result unchecked; the
+##   initializer tests each helper result right after the call (dup;
+##   brtrue.s) and throws EntryPointNotFoundException with the literal
+##   message "data import '<name>' not found in <module>" for a null one,
+##   before the stsfld into the address field (the shape of
+##   native-imports-files/data-win.il's .cctor);
+## - ELF triples: dlopen and dlsym, bound from the link's native libraries
+##   like any import (libc.so.6 here); without them the import is
+##     data symbol '<name>' in <module> cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym
+## - a relocation against an imported variable is applied after the
+##   initializer, from its address field.
+## Inputs/dataimports.py prints what the initializer stores, and
+## Inputs/cctor.py the order of '.cctor'.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/msvcrt.def /out:msvcrt.lib
+# RUN: llvm-lib /machine:x64 /def:mydata.def /out:mydata.lib
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
+# RUN: llc -filetype=obj win.ll -o win.o
+# RUN: llc -filetype=obj lnx.ll -o lnx.o
+# RUN: llc -filetype=obj bar.ll -o bar.o
+
+## Windows: the Kernel32 helper.
+# RUN: msil-ld win.o msvcrt.lib mydata.lib -o win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win.exe > win.txt
+# RUN: %python %S/Inputs/dataimports.py win.txt | FileCheck %s --check-prefix=WIN-IMPORTS
+# RUN: %python %S/Inputs/cctor.py win.txt | FileCheck %s --check-prefix=ORDER
+# RUN: FileCheck %s --check-prefix=WIN-HELPER --input-file=win.txt
+# RUN: FileCheck %s --check-prefix=WIN-PINVOKE --input-file=win.txt
+# RUN: FileCheck %s --check-prefix=WIN-NONE --input-file=win.txt
+
+# WIN-IMPORTS-DAG: {{^}}import _iob = msvcrt.dll!_iob{{$}}
+# WIN-IMPORTS-DAG: {{^}}import v_mod = mylib.dll!v_entry{{$}}
+# WIN-IMPORTS-DAG: {{^}}import v_name = mydata.dll!bar{{$}}
+
+# ORDER:      {{^}}field pio = data+0{{$}}
+# ORDER-NEXT: {{^}}call <msil>init_dataimports{{$}}
+# ORDER-NEXT: {{^}}storei data+0 = _iob{{$}}
+# ORDER-NEXT: {{^}}call ctor{{$}}
+# ORDER-NOT:  {{.}}
+
+## The helper: the Kernel32 body exactly, with no null check of its own.
+# WIN-HELPER:      {{^}}  .method '<msil>dataimport' native int(string, string) flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# WIN-HELPER-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: ldarg.0{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: call native int(string) [mscorlib]System.Runtime.InteropServices.Marshal::'StringToHGlobalUni'{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: call native int(native int) '<Module>'::'LoadLibraryW'{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: ldarg.1{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: call native int(string) [mscorlib]System.Runtime.InteropServices.Marshal::'StringToHGlobalAnsi'{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: call native int(native int, native int) '<Module>'::'GetProcAddress'{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: ret{{$}}
+# WIN-HELPER-NOT:  newobj
+# WIN-HELPER-NOT:  throw
+## The initializer: _iob's helper call, the null test, the throw with the
+## literal message, and the store, all inside '<msil>init_dataimports'.
+# WIN-HELPER:      {{^}}  .method '<msil>init_dataimports' void() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# WIN-HELPER-NOT:  {{^}}  .method
+# WIN-HELPER:      {{^}}    L{{[0-9]+}}: ldstr "msvcrt.dll"{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: ldstr "_iob"{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: call native int(string, string) '<Module>'::'<msil>dataimport'{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: dup{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: brtrue.s L[[IOB_OK:[0-9]+]]{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: ldstr "data import '_iob' not found in msvcrt.dll"{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: newobj instance void(string) [mscorlib]System.EntryPointNotFoundException::'.ctor'{{$}}
+# WIN-HELPER-NEXT: {{^}}    L{{[0-9]+}}: throw{{$}}
+# WIN-HELPER-NEXT: {{^}}    L[[IOB_OK]]: stsfld native int '<Module>'::'_iob'{{$}}
+
+# WIN-PINVOKE-DAG: {{^}}    .pinvokeimpl 'kernel32.dll' entry 'LoadLibraryW' flags=0x0201{{$}}
+# WIN-PINVOKE-DAG: {{^}}    .pinvokeimpl 'kernel32.dll' entry 'GetProcAddress' flags=0x0201{{$}}
+
+## No ELF helper on Windows.
+# WIN-NONE-NOT: dlopen
+# WIN-NONE-NOT: dlsym
+
+## Linux: the Dlfcn helper, from libc.so.6; an IMPORT with a module binds
+## unchecked.
+# RUN: msil-ld lnx.o libc.so.6 -o lnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lnx.exe > lnx.txt
+# RUN: %python %S/Inputs/dataimports.py lnx.txt | FileCheck %s --check-prefix=LNX-IMPORTS
+# RUN: FileCheck %s --check-prefix=LNX-PINVOKE --input-file=lnx.txt
+# RUN: FileCheck %s --check-prefix=LNX-NONE --input-file=lnx.txt
+# LNX-IMPORTS-DAG: {{^}}import stdout = libc.so.6!stdout{{$}}
+# LNX-IMPORTS-DAG: {{^}}import environ = libc.so.6!environ{{$}}
+# LNX-IMPORTS-DAG: {{^}}import v_other = libother.so.2!other_entry{{$}}
+# LNX-PINVOKE-DAG: {{^}}    .pinvokeimpl 'libc.so.6' entry 'dlopen' flags=0x0201{{$}}
+# LNX-PINVOKE-DAG: {{^}}    .pinvokeimpl 'libc.so.6' entry 'dlsym' flags=0x0201{{$}}
+# LNX-NONE-NOT: kernel32
+# LNX-NONE-NOT: LoadLibraryW
+
+## No dlopen/dlsym among the native libraries.
+# RUN: not msil-ld bar.o libfoo.so.1 -o x.exe 2>&1 | FileCheck %s --check-prefix=NODL \
+# RUN:   --implicit-check-not="PLEASE submit" --implicit-check-not=error:
+# NODL: {{^}}msil-ld: error: data symbol 'bar' in libfoo.so.1 cannot be imported: no reference defines System.Runtime.InteropServices.NativeLibrary and the native libraries define no dlopen/dlsym{{$}}
+
+#--- mydata.def
+LIBRARY mydata.dll
+EXPORTS
+  bar DATA
+
+#--- win.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@_iob = external global [3 x [48 x i8]]
+@v_mod = external global i32 #0
+@v_name = external global i32 #1
+@pio = global ptr @_iob, align 8
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @ctor, ptr null }]
+
+define internal void @ctor() {
+  ret void
+}
+
+define i32 @main() {
+  %p = load ptr, ptr @pio
+  %b = load i8, ptr %p
+  %x = zext i8 %b to i32
+  %m = load i32, ptr @v_mod
+  %n = load i32, ptr @v_name
+  %s = add i32 %x, %m
+  %r = add i32 %s, %n
+  ret i32 %r
+}
+
+attributes #0 = { "msil-import-module"="mylib.dll" "msil-import-name"="v_entry" }
+attributes #1 = { "msil-import-name"="bar" }
+
+#--- lnx.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@stdout = external global ptr
+@environ = external global ptr
+@v_other = external global i32 #0
+
+define i32 @main() {
+  %f = load ptr, ptr @stdout
+  %e = load ptr, ptr @environ
+  %o = load i32, ptr @v_other
+  %c = icmp eq ptr %f, %e
+  %z = zext i1 %c to i32
+  %r = add i32 %z, %o
+  ret i32 %r
+}
+
+attributes #0 = { "msil-import-module"="libother.so.2" "msil-import-name"="other_entry" }
+
+#--- bar.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@bar = external global i32
+
+define i32 @main() {
+  %v = load i32, ptr @bar
+  ret i32 %v
+}
