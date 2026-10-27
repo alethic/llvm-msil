@@ -30,7 +30,12 @@
 ## EntryPointNotFoundException::.ctor(string) is the undefined-member error,
 ## listing only EntryPointNotFoundException's own constructor, and nothing is
 ## linked (bcl-members.test checks the same request through
-## --print-bcl-binding).
+## --print-bcl-binding). The same holds with FakeCoreFamCtor, whose
+## EntryPointNotFoundException::.ctor(string) is family: only msil-ld's own
+## System.Attribute::.ctor() request counts a family constructor (section 12
+## row '5.11.4 clarified (msil-ld's own System.Attribute constructor call)'
+## of 2026-10-26; the newobj from <Module> would throw
+## MethodAccessException), so the list marks it ' (not public)'.
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -41,7 +46,7 @@
 # RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
 # RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
 # RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
-# RUN: mkdir nl plain nl-load nl-export nl-sig nl-priv noctor
+# RUN: mkdir nl plain nl-load nl-export nl-sig nl-priv noctor famctor
 # RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o nl/FakeCore.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o nl/FakeInterop.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibrary.yaml -o nl/FakeNativeLibrary.dll
@@ -57,6 +62,8 @@
 # RUN: yaml2obj %S/Inputs/fakepack/FakeNativeLibraryPrivExport.yaml -o nl-priv/FakeNativeLibrary.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeCoreNoCtor.yaml -o noctor/FakeCore.dll
 # RUN: cp plain/FakeInterop.dll noctor
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCoreFamCtor.yaml -o famctor/FakeCore.dll
+# RUN: cp plain/FakeInterop.dll famctor
 
 # DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR"
@@ -106,6 +113,12 @@
 # RUN:   | %{fc} --check-prefix=NO-CTOR --implicit-check-not=error: --implicit-check-not=System.Exception
 # NO-CTOR: {{^}}msil-ld: error: undefined .NET member 'instance void System.EntryPointNotFoundException::.ctor(string)' (requested by {{[^)]+}}); 'System.EntryPointNotFoundException' is defined in FakeCore 8.0.0.0 [b03f5f7f11d50a3a] (noctor/FakeCore.dll) but has no such member; overloads present: instance void .ctor(){{$}}
 # RUN: not ls out/win-noctor.exe
+
+## A family EntryPointNotFoundException::.ctor(string) does not count either.
+# RUN: not msil-ld win.o msvcrt.lib --reference=famctor -o out/win-famctor.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=FAM-CTOR --implicit-check-not=error: --implicit-check-not=System.Exception
+# FAM-CTOR: {{^}}msil-ld: error: undefined .NET member 'instance void System.EntryPointNotFoundException::.ctor(string)' (requested by {{[^)]+}}); 'System.EntryPointNotFoundException' is defined in FakeCore 8.0.0.0 [b03f5f7f11d50a3a] (famctor/FakeCore.dll) but has no such member; overloads present: instance void .ctor(); instance void .ctor(string) (not public){{$}}
+# RUN: not ls out/win-famctor.exe
 
 ## Linux with NativeLibrary: no dlopen needed, and NativeLibrary also wins
 ## over the dlopen/dlsym that libc.so.6 defines.

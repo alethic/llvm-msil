@@ -1,0 +1,158 @@
+# msil-prog.py --shlibs (plan 5.12.3, 5.12.4; M22), from what it prints when
+# %msil_prog_build runs with the stand-ins of lit.local.cfg (prog-cc.py
+# records the inputs of every link in <output>.inputs; a later --shlibs wins
+# over the empty one of %msil_prog_build). The specification is the cyclic
+# pair '?b=b.c;a=a.c,a2.c;b=b.c':
+# (1) MSIL mode (obj): the libraries come first, in the order of the
+#     specification: b's interface (b.c compiled into shlib-iface-obj/b/,
+#     linked with -shared and -Wl,--interface-only into shlib-iface/b.dll),
+#     library a (two sources into shlib-obj/a/, linked against b's
+#     interface), library b (linked against a); each library link is the
+#     program link's prefix (clang, --ld-path=, -<L>, %{msil_ldflags}) with
+#     -shared, never the --lib or --native-lib arguments; then the program's
+#     sources and archive, and its link names shlib/a.dll and shlib/b.dll
+#     after the archive and before the --lib and --native-lib arguments.
+#     The records show the earlier library on each link (b's interface on
+#     a's), and the program runs with the libraries beside it (msil-run.py
+#     --dep-dir; the stand-in program calls each library at run time) and
+#     fails without them;
+# (2) the same under lto: -flto compiles everywhere;
+# (3) native mode, windows-msvc (a Windows host, where the stand-in's
+#     native programs are .NET Framework executables): every compile adds
+#     -fms-runtime-lib=dll (one C runtime), b's interface is the -shared link
+#     with -Wl,/force:unresolved, of which only shlib-iface/b.lib is kept,
+#     the libraries link against the import libraries with
+#     %{msil_native_ldflags} last, and the program links shlib/a.lib and
+#     shlib/b.lib after its archive; it runs with shlib/ beside it;
+# (4) native mode, E7: every compile is -fPIC (start.c keeps E7's flags), no
+#     interface is built, 'ld.lld -shared -Bsymbolic --as-needed -soname
+#     lib<name>.so -rpath $ORIGIN' links each library against the earlier
+#     ones and the sysroot's libraries (each library finds the libraries it
+#     needs next to it), and the program link (-rpath $ORIGIN) names
+#     shlib/liba.so and shlib/libb.so after its archive;
+# (5) native mode, Linux with the driver recipe: -fPIC compiles, no
+#     interface, -shared links with -Wl,-Bsymbolic, -Wl,-soname,lib<name>.so,
+#     -Wl,-rpath,$ORIGIN and %{msil_native_ldflags}, and -Wl,-rpath,$ORIGIN on
+#     the program link too;
+# (6) --det builds the libraries in both builds and compares them, their
+#     objects and the interface too: a library that records the build
+#     directory differs, and only it;
+# (7) without --shlibs every build directory has an empty shlib/, which the
+#     composites pass as --dep-dir, and no library command runs;
+# (8) usage errors (status 2): a malformed specification, a bad name, a
+#     library or an interface named twice, an interface after its library
+#     or without one, an empty source, and --shlibs with --link-output il;
+# (9) --equiv-skip with a 'skip O4' line for the test (plan 5.12.6, M22's
+#     lines for msil/test/M2/04-shared/ and the p2c-* rows) builds neither
+#     the equivalence link nor the --also-il text of a build with --shlibs,
+#     whose link has no --lto-emit-asm text.
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: mkdir -p %t/sysroot/usr/lib/x86_64-linux-gnu
+# RUN: %{harness_check} write %t/sysroot/usr/lib/x86_64-linux-gnu/libm.so.6
+# RUN: %{harness_check} write %t/sysroot/usr/lib/x86_64-linux-gnu/libc.so.6
+# RUN: %{harness_check} write %t/sysroot/usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+
+# (1)
+# RUN: %msil_prog_build --level O1 --workdir %t/m --out %t/m/prog.exe --shlibs='?b=%t/b.c;a=%t/a.c,%t/a2.c;b=%t/b.c' --src %t/main.c --archives='one=%t/c1.c' --lib='-Wl,--stand-in-extra' --native-lib='-Wl,--stand-in-native' --pipeline obj > %t/m.log 2>&1
+# RUN: %{harness_check} contains %t/m.log "^msil-prog: [^\n]* --as cc [^\n]*--target=\S+-msil -std=gnu17 [^\n]* -O1 -c \.\./b\.c -o shlib-iface-obj/b/b\.o\nmsil-prog: [^\n]* --as cc [^\n]*--target=\S+-msil --ld-path=\S+ -O1 (--sysroot=\S+ )?-shared shlib-iface-obj/b/b\.o -Wl,--interface-only -o shlib-iface/b\.dll\nmsil-prog: [^\n]* -O1 -c \.\./a\.c -o shlib-obj/a/a\.o\nmsil-prog: [^\n]* -O1 -c \.\./a2\.c -o shlib-obj/a/a2\.o\nmsil-prog: [^\n]* --ld-path=\S+ -O1 (--sysroot=\S+ )?-shared shlib-obj/a/a\.o shlib-obj/a/a2\.o shlib-iface/b\.dll -o shlib/a\.dll\nmsil-prog: [^\n]* -O1 -c \.\./b\.c -o shlib-obj/b/b\.o\nmsil-prog: [^\n]* --ld-path=\S+ -O1 (--sysroot=\S+ )?-shared shlib-obj/b/b\.o shlib/a\.dll -o shlib/b\.dll\nmsil-prog: [^\n]* -O1 -c \.\./main\.c -o obj/main\.o\nmsil-prog: [^\n]* -O1 -c \.\./c1\.c -o ar/one/c1\.o\nmsil-prog: [^\n]* --as ar rcs ar/one/libone\.a ar/one/c1\.o\nmsil-prog: [^\n]* --ld-path=\S+ -O1 (--sysroot=\S+ )?obj/main\.o -Lar/one -lone shlib/a\.dll shlib/b\.dll -Wl,--stand-in-extra -Wl,--stand-in-native -o prog\.exe$"
+# RUN: %{harness_check} lacks %t/m.log "-shared [^\n]*stand-in" "-fPIC" "-fms-runtime-lib" "msil-prog: error"
+# RUN: %{harness_check} contains %t/m/shlib-iface/b.dll.inputs "\Aobject shlib-iface-obj/b/b\.o b\.c 64\nld-path \S+\n\Z"
+# RUN: %{harness_check} contains %t/m/shlib/a.dll.inputs "\Aobject shlib-obj/a/a\.o a\.c 8\nobject shlib-obj/a/a2\.o a2\.c 16\nlibrary shlib-iface/b\.dll b 64 interface\nld-path \S+\n\Z"
+# RUN: %{harness_check} contains %t/m/shlib/b.dll.inputs "\Aobject shlib-obj/b/b\.o b\.c 64\nlibrary shlib/a\.dll a 24\nld-path \S+\n\Z"
+# RUN: %{harness_check} contains %t/m/prog.exe.inputs "\Aobject obj/main\.o main\.c 1\nmember ar/one/libone\.a c1\.o 2\nlibrary shlib/a\.dll a 24\nlibrary shlib/b\.dll b 64\narg -Wl,--stand-in-extra\narg -Wl,--stand-in-native\nld-path \S+\n\Z"
+# RUN: %msil_exec --out %t/m.out --dep-dir %t/m/shlib %t/m/prog.exe
+# RUN: %{harness_check} equals %t/m.out "[exit 91]"
+# RUN: %msil_exec --out %t/m-alone.out %t/m/prog.exe
+# RUN: %{harness_check} contains %t/m-alone.out "FileNotFoundException"
+
+# (2)
+# RUN: %msil_prog_build --level O2 --workdir %t/l2 --out %t/l2/prog.exe --shlibs='?b=%t/b.c;a=%t/a.c,%t/a2.c;b=%t/b.c' --src %t/main.c --pipeline lto --link-output pe > %t/l2.log 2>&1
+# RUN: %{harness_check} contains %t/l2.log "^msil-prog: [^\n]* -O2 -flto -c \.\./b\.c -o shlib-iface-obj/b/b\.o$" "^msil-prog: [^\n]* -O2 -flto -c \.\./a2\.c -o shlib-obj/a/a2\.o$" "^msil-prog: [^\n]* -O2 (--sysroot=\S+ )?-shared shlib-obj/b/b\.o shlib/a\.dll -o shlib/b\.dll\nmsil-prog: [^\n]* -O2 -flto -c \.\./main\.c -o obj/main\.o\nmsil-prog: [^\n]* -O2 (--sysroot=\S+ )?obj/main\.o shlib/a\.dll shlib/b\.dll -o prog\.exe$"
+# RUN: %msil_exec --out %t/l2.out --dep-dir %t/l2/shlib %t/l2/prog.exe
+# RUN: %{harness_check} equals %t/l2.out "[exit 89]"
+
+# (3)
+# RUN: %if system-windows %{ %msil_prog_build --mode native --triple x86_64-pc-windows-msvc-msil --ld-lld= --linux-sysroot= --start= --native-ldflags=-lD:/rt/clang_rt.builtins-x86_64.lib --level O0 --workdir %t/w --out %t/w/prog.exe --shlibs='?b=%t/b.c;a=%t/a.c,%t/a2.c;b=%t/b.c' --src %t/main.c --archives='one=%t/c1.c' --lib='-Wl,--stand-in-extra' --native-lib='-Wl,--stand-in-native' > %t/w.log 2>&1 %}
+# RUN: %if system-windows %{ %{harness_check} contains %t/w.log "^msil-prog: [^\n]* --as cc [^\n]*--target=x86_64-pc-windows-msvc -fms-runtime-lib=dll -std=gnu17 [^\n]* -O0 -c \.\./b\.c -o shlib-iface-obj/b/b\.o\nmsil-prog: [^\n]* --target=x86_64-pc-windows-msvc -fuse-ld=lld -shared shlib-iface-obj/b/b\.o -lD:/rt/clang_rt\.builtins-x86_64\.lib -Wl,/force:unresolved -o shlib-iface/b\.dll\nmsil-prog: [^\n]* -fms-runtime-lib=dll [^\n]* -O0 -c \.\./a\.c -o shlib-obj/a/a\.o\nmsil-prog: [^\n]* -O0 -c \.\./a2\.c -o shlib-obj/a/a2\.o\nmsil-prog: [^\n]* -fuse-ld=lld -shared shlib-obj/a/a\.o shlib-obj/a/a2\.o shlib-iface/b\.lib -lD:/rt/clang_rt\.builtins-x86_64\.lib -o shlib/a\.dll\nmsil-prog: [^\n]* -O0 -c \.\./b\.c -o shlib-obj/b/b\.o\nmsil-prog: [^\n]* -fuse-ld=lld -shared shlib-obj/b/b\.o shlib/a\.lib -lD:/rt/clang_rt\.builtins-x86_64\.lib -o shlib/b\.dll\nmsil-prog: [^\n]* -fms-runtime-lib=dll [^\n]* -O0 -c \.\./main\.c -o obj/main\.o\nmsil-prog: [^\n]* -fms-runtime-lib=dll [^\n]* -O0 -c \.\./c1\.c -o ar/one/c1\.o\nmsil-prog: [^\n]* --as ar rcs ar/one/one\.lib ar/one/c1\.o\nmsil-prog: [^\n]* --target=x86_64-pc-windows-msvc -fuse-ld=lld obj/main\.o -Lar/one -lone shlib/a\.lib shlib/b\.lib -Wl,--stand-in-native -lD:/rt/clang_rt\.builtins-x86_64\.lib -o \S+prog\.exe$" %}
+# RUN: %if system-windows %{ %{harness_check} lacks %t/w.log "stand-in-extra" "-fPIC" "msil-prog: error" %}
+# RUN: %if system-windows %{ %{harness_check} missing %t/w/shlib-iface/b.dll %}
+# RUN: %if system-windows %{ %{harness_check} contains %t/w/shlib-iface/b.lib "\"interface\": true" %}
+# RUN: %if system-windows %{ %{harness_check} contains %t/w/shlib/a.dll.inputs "\Aobject shlib-obj/a/a\.o a\.c 8\nobject shlib-obj/a/a2\.o a2\.c 16\nlibrary shlib-iface/b\.lib b 64 interface\narg -lD:/rt/clang_rt\.builtins-x86_64\.lib\n\Z" %}
+# RUN: %if system-windows %{ %{harness_check} contains %t/w/prog.exe.inputs "\Aobject obj/main\.o main\.c 1\nmember ar/one/one\.lib c1\.o 2\nlibrary shlib/a\.lib a 24\nlibrary shlib/b\.lib b 64\narg -Wl,--stand-in-native\narg -lD:/rt/clang_rt\.builtins-x86_64\.lib\n\Z" %}
+# RUN: %if system-windows && !msil-wsl %{ %msil_exec --native --out %t/w.out --dep-dir %t/w/shlib %t/w/prog.exe %}
+# RUN: %if system-windows && !msil-wsl %{ %{harness_check} equals %t/w.out "[exit 91]" %}
+
+# (4)
+# RUN: %msil_prog_build --mode native --triple x86_64-unknown-linux-gnu-msil --ld-lld='%{prog_cc} --as ld-lld' --linux-sysroot=%t/sysroot --start=%S/../../../utils/linux-oracle/start.c --level O3 --workdir %t/e --out %t/e/prog.elf --shlibs='?b=%t/b.c;a=%t/a.c,%t/a2.c;b=%t/b.c' --src %t/main.c --archives='one=%t/c1.c' --native-lib='-Wl,--stand-in-native' > %t/e.log 2>&1
+# RUN: %{harness_check} contains %t/e.log "^msil-prog: [^\n]* --as cc [^\n]*--target=x86_64-unknown-linux-gnu -fPIC -std=gnu17 [^\n]* -O3 -c \.\./a\.c -o shlib-obj/a/a\.o\nmsil-prog: [^\n]* -fPIC [^\n]* -O3 -c \.\./a2\.c -o shlib-obj/a/a2\.o\nmsil-prog: [^\n]* --as ld-lld -shared -Bsymbolic --as-needed -soname liba\.so -rpath [$]ORIGIN shlib-obj/a/a\.o shlib-obj/a/a2\.o \S+sysroot.usr.lib.x86_64-linux-gnu.libm\.so\.6 \S+libc\.so\.6 \S+libgcc_s\.so\.1 -o shlib/liba\.so\nmsil-prog: [^\n]* -fPIC [^\n]* -O3 -c \.\./b\.c -o shlib-obj/b/b\.o\nmsil-prog: [^\n]* --as ld-lld -shared -Bsymbolic --as-needed -soname libb\.so -rpath [$]ORIGIN shlib-obj/b/b\.o shlib/liba\.so \S+libm\.so\.6 \S+libc\.so\.6 \S+libgcc_s\.so\.1 -o shlib/libb\.so\nmsil-prog: [^\n]* -fPIC [^\n]* -O3 -c \.\./main\.c -o obj/main\.o$"
+# RUN: %{harness_check} contains %t/e.log "^msil-prog: [^\n]* --as cc [^\n]*--target=x86_64-unknown-linux-gnu -ffreestanding -fno-pic -O2 -c \S+start\.c -o start\.o$" "^msil-prog: [^\n]* --as ld-lld -dynamic-linker /lib64/ld-linux-x86-64\.so\.2 --as-needed -rpath [$]ORIGIN start\.o obj/main\.o -Lar/one -lone shlib/liba\.so shlib/libb\.so --stand-in-native \S+libm\.so\.6 \S+libc\.so\.6 \S+libgcc_s\.so\.1 -o \S+prog\.elf$"
+# RUN: %{harness_check} lacks %t/e.log "shlib-iface" "-fno-pic [^\n]*-std=gnu17" "msil-prog: error"
+# RUN: %{harness_check} contains %t/e/shlib/libb.so.inputs "\Aobject shlib-obj/b/b\.o b\.c 64\nlibrary shlib/liba\.so a 24\n\Z"
+# RUN: %{harness_check} contains %t/e/prog.elf.inputs "\Aobject obj/main\.o main\.c 1\nmember ar/one/libone\.a c1\.o 2\nlibrary shlib/liba\.so a 24\nlibrary shlib/libb\.so b 64\narg --stand-in-native\n\Z"
+# RUN: %{harness_check} contains %t/e/prog.elf "\A#!/bin/sh\nexit 91\n\Z"
+
+# (5)
+# RUN: %msil_prog_build --mode native --triple x86_64-unknown-linux-gnu-msil --ld-lld= --linux-sysroot= --start= --native-ldflags=-lm --level O2 --workdir %t/d5 --out %t/d5/prog.exe --shlibs='?b=%t/b.c;a=%t/a.c,%t/a2.c;b=%t/b.c' --src %t/main.c > %t/d5.log 2>&1
+# RUN: %{harness_check} contains %t/d5.log "^msil-prog: [^\n]* --target=x86_64-unknown-linux-gnu -fPIC -std=gnu17 [^\n]* -O2 -c \.\./a\.c -o shlib-obj/a/a\.o$" "^msil-prog: [^\n]* --target=x86_64-unknown-linux-gnu -fuse-ld=lld -shared shlib-obj/a/a\.o shlib-obj/a/a2\.o -Wl,-Bsymbolic -Wl,-soname,liba\.so -Wl,-rpath,[$]ORIGIN -lm -o shlib/liba\.so$" "^msil-prog: [^\n]* --target=x86_64-unknown-linux-gnu -fuse-ld=lld -shared shlib-obj/b/b\.o shlib/liba\.so -Wl,-Bsymbolic -Wl,-soname,libb\.so -Wl,-rpath,[$]ORIGIN -lm -o shlib/libb\.so$" "^msil-prog: [^\n]* --target=x86_64-unknown-linux-gnu -fuse-ld=lld obj/main\.o shlib/liba\.so shlib/libb\.so -lm -Wl,-rpath,[$]ORIGIN -o \S+prog\.exe$"
+# RUN: %{harness_check} lacks %t/d5.log "shlib-iface" "msil-prog: error"
+# RUN: %{harness_check} contains %t/d5/prog.exe "\A#!/bin/sh\nexit 89\n\Z"
+
+# (6)
+# RUN: %msil_prog_build --det --level O2 --workdir %t/det --out %t/det.exe --shlibs='?b=%t/b.c;a=%t/a.c,%t/a2.c;b=%t/b.c' --src %t/main.c > %t/det.log 2>&1
+# RUN: %{harness_check} contains %t/det.log "^msil-prog: --det: the 16 files of builds a and b are identical$" "^msil-prog: [^\n]* -O2 -fdebug-compilation-dir=\. -c \.\./\.\./b\.c -o shlib-iface-obj/b/b\.o$"
+# RUN: %msil_exec --out %t/det.out --dep-dir %t/det/a/shlib %t/det.exe
+# RUN: %{harness_check} equals %t/det.out "[exit 89]"
+# RUN: %{harness_check} exits 1 %msil_prog_build --det --level O2 --workdir %t/det2 --shlibs='a=%t/a.c,%t/plant-il.c' --src %t/main.c > %t/det2.log 2>&1
+# RUN: %{harness_check} contains %t/det2.log "^msil-prog: --det: shlib/a\.dll differs between a and b " "^msil-prog: error: --det: builds a and b differ"
+# RUN: %{harness_check} lacks %t/det2.log "prog\.exe differs" "\.o differs" "inputs differs" "json differs"
+
+# (7)
+# RUN: %msil_prog_build --level O2 --workdir %t/n --out %t/n/prog.exe --src %t/main.c > %t/n.log 2>&1
+# RUN: %{harness_check} write %t/n/shlib/probe
+# RUN: %{harness_check} lacks %t/n.log "shlib[/-]" "-shared"
+# RUN: %msil_prog_build --mode native --triple x86_64-unknown-linux-gnu-msil --ld-lld= --linux-sysroot= --start= --native-ldflags=-lm --level O2 --workdir %t/nn --out %t/nn/prog.exe --src %t/main.c > %t/nn.log 2>&1
+# RUN: %{harness_check} write %t/nn/shlib/probe
+# RUN: %{harness_check} lacks %t/nn.log "shlib[/-]" "-shared" "-fPIC" "rpath"
+
+# (8)
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/x --shlibs='a' --src %t/main.c > %t/8a.log 2>&1
+# RUN: %{harness_check} contains %t/8a.log "^msil-prog: error: --shlibs: 'a' is not \[\?\]NAME=SRC\[,SRC\.\.\.\]$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/x --shlibs='a/b=%t/a.c' --src %t/main.c > %t/8b.log 2>&1
+# RUN: %{harness_check} contains %t/8b.log "^msil-prog: error: --shlibs: bad library name 'a/b'$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/x --shlibs='a=%t/a.c;a=%t/a2.c' --src %t/main.c > %t/8c.log 2>&1
+# RUN: %{harness_check} contains %t/8c.log "^msil-prog: error: --shlibs: library a is named twice$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/x --shlibs='?b=%t/b.c;?b=%t/b.c;b=%t/b.c' --src %t/main.c > %t/8d.log 2>&1
+# RUN: %{harness_check} contains %t/8d.log "^msil-prog: error: --shlibs: the interface \?b is named twice$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/x --shlibs='b=%t/b.c;?b=%t/b.c' --src %t/main.c > %t/8e.log 2>&1
+# RUN: %{harness_check} contains %t/8e.log "^msil-prog: error: --shlibs: the interface \?b comes after library b; it is for the libraries built before b$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/x --shlibs='?b=%t/b.c;a=%t/a.c' --src %t/main.c > %t/8f.log 2>&1
+# RUN: %{harness_check} contains %t/8f.log "^msil-prog: error: --shlibs: the interface \?b has no library b after it \(the program links the libraries, never an interface\)$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/x --shlibs='a=%t/a.c,' --src %t/main.c > %t/8g.log 2>&1
+# RUN: %{harness_check} contains %t/8g.log "^msil-prog: error: --shlibs: library a has an empty source$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/x --shlibs='a=%t/a.c' --src %t/main.c --pipeline lto --link-output il > %t/8h.log 2>&1
+# RUN: %{harness_check} contains %t/8h.log "^msil-prog: error: --shlibs links the program against \.NET libraries, which --lto-emit-asm cannot import from; use --link-output pe$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --level O2 --workdir %t/x --shlibs='a=%t/none.c' --src %t/main.c > %t/8i.log 2>&1
+# RUN: %{harness_check} contains %t/8i.log "^msil-prog: error: source \S*none\.c: no such file$"
+
+# (9)
+# RUN: %msil_prog_build --level O2 --workdir %t/s9 --out %t/s9/prog.exe --also-il %t/s9.il --equiv-out %t/s9-equiv.exe --equiv-skip %t/allow-o4.txt --test %s --shlibs='a=%t/a.c' --src %t/main.c --pipeline lto --link-output pe > %t/s9.log 2>&1
+# RUN: %{harness_check} contains %t/s9.log "^msil-prog: O4 skipped: -shared libraries and links against them have no --lto-emit-asm text$" " -shared shlib-obj/a/a\.o -o shlib/a\.dll$" " obj/main\.o shlib/a\.dll -o prog\.exe$"
+# RUN: %{harness_check} lacks %t/s9.log "lto-emit-asm -o" "no-gc-sections"
+# RUN: %{harness_check} missing %t/s9.il
+# RUN: %{harness_check} missing %t/s9-equiv.exe
+
+#--- allow-o4.txt
+skip O4 msil/test/harness/prog/shlibs-commands.test -shared libraries and links against them have no --lto-emit-asm text
+#--- main.c
+// prog-value: 1
+#--- a.c
+// prog-value: 8
+#--- a2.c
+// prog-value: 16
+#--- b.c
+// prog-value: 64
+#--- c1.c
+// prog-value: 2
+#--- plant-il.c
+// prog-plant: il

@@ -1,0 +1,10 @@
+pca constructor ran=1
+pcb constructor ran=1
+pca constructor saw pcb_const=22
+pcb constructor saw pca_const=11
+pca_peer == &pcb_const=1
+pcb_peer == &pca_const=1
+*pca_peer + *pcb_peer=33
+pca_calls_pcb(5)=11
+pcb_calls_pca(5)=12
+[exit 0]

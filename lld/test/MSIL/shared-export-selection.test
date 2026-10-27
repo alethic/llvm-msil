@@ -1,0 +1,449 @@
+## Which definitions a library exports (ImplementationPlan.md M22.a item 2,
+## Q22; 5.9.15; M22.b item 2 for aliases; recon p2/exports-multiasm.md
+## 10.1). Candidates are the defined GLOBAL and WEAK symbols with DEFAULT or
+## PROTECTED visibility, COMMON symbols included as data:
+## - hidden definitions stay in <Module> and are not exported;
+## - on Windows triples, when some input defines a dllexport symbol (here in
+##   one object of two), only the dllexport candidates are exported, unless
+##   --export-all-symbols; without any dllexport, every candidate is
+##   (GNU ld's auto-export rule);
+## - --exclude-libs=<list> (lld/ELF's option: archive names separated by ','
+##   or ':') and --exclude-libs=ALL keep the members of those archives out;
+## - commons (one export for two tentative definitions), weak functions and
+##   variables are exported;
+## - a function alias becomes a forwarding method of its own name, whose
+##   accessor returns the aliasee's '<msil>fn_' field (an alias has no field
+##   of its own); a data alias's accessor returns the aliasee's address field
+##   plus its offset;
+## - a thread-local candidate (a variable in '.tdata') is
+##   'thread-local storage is not supported yet: <s> in <file>';
+## - COMDAT copies (section 12 row 'Q22 as implemented (what never exports;
+##   ...)' of 2026-10-26): on Windows triples a candidate that is not
+##   dllexport and belongs to a COMDAT group of its object (a function that
+##   is a member, or a variable whose segment is one) is never exported, by
+##   the automatic rule or by --export-all-symbols: an MSVC string literal
+##   ('??_C@...'), a selectany variable (weak_odr in a comdat) and a
+##   linkonce_odr inline function; they stay private to the library (the
+##   function in <Module>), and the symbol table lists none of them. A weak definition outside a COMDAT group
+##   (w) is still exported, a dllexport COMDAT function exports as before,
+##   and ELF triples export COMDAT members as any definition. A program that
+##   has its own copy of such an inline function links against the library
+##   without a warning (nothing was exported to shadow).
+## listing.py prints the export class's members without bodies, or one
+## method with its body.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj vis.ll -o vis.o
+# RUN: llc -filetype=obj vis2.ll -o vis2.o
+# RUN: llc -filetype=obj win.ll -o win.o
+# RUN: llc -filetype=obj other.ll -o other.o
+# RUN: llc -filetype=obj api.ll -o api.o
+# RUN: llc -filetype=obj xm.ll -o xm.o
+# RUN: llc -filetype=obj ym.ll -o ym.o
+# RUN: llc -filetype=obj tls.ll -o tls.o
+# RUN: llvm-ar rc libx.a xm.o
+# RUN: llvm-ar rc liby.a ym.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+
+## Visibility, commons, weak definitions and aliases (an ELF triple).
+# RUN: msil-ld -shared vis.o vis2.o -o vis.dll 2>&1 | count 0
+# RUN: llvm-cil-dump vis.dll > vis.txt
+# RUN: %{listing} members vis.txt vis | FileCheck %s --check-prefix=VIS
+# VIS:      {{^}}.class 'vis' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# VIS-NEXT: {{^}}  .property 'alias_var' native int() flags=0x0000{{$}}
+# VIS-NEXT: {{^}}    .get native int() 'vis'::'<msil>addr_alias_var'{{$}}
+# VIS-NEXT: {{^}}  .property 'arr' native int() flags=0x0000{{$}}
+# VIS-NEXT: {{^}}    .get native int() 'vis'::'<msil>addr_arr'{{$}}
+# VIS-NEXT: {{^}}  .property 'cm' native int() flags=0x0000{{$}}
+# VIS-NEXT: {{^}}    .get native int() 'vis'::'<msil>addr_cm'{{$}}
+# VIS-NEXT: {{^}}  .property 'def_var' native int() flags=0x0000{{$}}
+# VIS-NEXT: {{^}}    .get native int() 'vis'::'<msil>addr_def_var'{{$}}
+# VIS-NEXT: {{^}}  .property 'prot_var' native int() flags=0x0000{{$}}
+# VIS-NEXT: {{^}}    .get native int() 'vis'::'<msil>addr_prot_var'{{$}}
+# VIS-NEXT: {{^}}  .property 'weak_var' native int() flags=0x0000{{$}}
+# VIS-NEXT: {{^}}    .get native int() 'vis'::'<msil>addr_weak_var'{{$}}
+# VIS-NEXT: {{^}}  .method '<msil>addr_alias_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method '<msil>addr_alias_var' native int() flags=0x0896 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method '<msil>addr_arr' native int() flags=0x0896 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method '<msil>addr_cm' native int() flags=0x0896 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method '<msil>addr_def_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method '<msil>addr_def_var' native int() flags=0x0896 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method '<msil>addr_prot_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method '<msil>addr_prot_var' native int() flags=0x0896 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method '<msil>addr_weak_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method '<msil>addr_weak_var' native int() flags=0x0896 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method 'alias_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method 'def_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method 'prot_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# VIS-NEXT: {{^}}  .method 'weak_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# VIS-NOT:  {{.}}
+
+## The hidden definitions are <Module>'s (def_fn keeps them alive).
+# RUN: %{listing} members vis.txt '<Module>' | FileCheck %s --check-prefix=VIS-MODULE \
+# RUN:   --implicit-check-not=def_fn --implicit-check-not=prot_fn --implicit-check-not=weak_fn
+# VIS-MODULE: {{^}}  .method 'hid_fn' int32() flags=0x00{{13|16}} impl=0x0000{{$}}
+# RUN: %{listing} members vis.txt '<msil>Data' | FileCheck %s --check-prefix=VIS-DATA \
+# RUN:   --implicit-check-not=fn_alias_fn --implicit-check-not=fn_hid_fn
+# VIS-DATA: {{^}}  .field '<msil>fn_def_fn' native int flags=0x0033{{$}}
+# VIS-DATA: {{^}}  .field 'hid_var' native int flags=0x0033{{$}}
+
+## The aliases.
+# RUN: %{listing} method vis.txt vis alias_fn | FileCheck %s --check-prefix=ALIAS-FN
+# ALIAS-FN:      {{^}}  .method 'alias_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# ALIAS-FN-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# ALIAS-FN-NEXT: {{^}}    L0: call int32() 'vis'::'def_fn'{{$}}
+# ALIAS-FN-NEXT: {{^}}    L1: ret{{$}}
+# ALIAS-FN-NOT:  {{.}}
+# RUN: %{listing} method vis.txt vis '<msil>addr_alias_fn' | FileCheck %s --check-prefix=ALIAS-FN-ADDR
+# ALIAS-FN-ADDR:      {{^}}  .method '<msil>addr_alias_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# ALIAS-FN-ADDR-NEXT: {{^}}    .maxstack 1{{$}}
+# ALIAS-FN-ADDR-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'<msil>fn_def_fn'{{$}}
+# ALIAS-FN-ADDR-NEXT: {{^}}    L1: ret{{$}}
+# RUN: %{listing} method vis.txt vis '<msil>addr_alias_var' | FileCheck %s --check-prefix=ALIAS-VAR
+# ALIAS-VAR:      {{^}}  .method '<msil>addr_alias_var' native int() flags=0x0896 impl=0x0000{{$}}
+# ALIAS-VAR-NEXT: {{^}}    .maxstack 2{{$}}
+# ALIAS-VAR-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'arr'{{$}}
+# ALIAS-VAR-NEXT: {{^}}    L1: ldc.i4.4{{$}}
+# ALIAS-VAR-NEXT: {{^}}    L2: add{{$}}
+# ALIAS-VAR-NEXT: {{^}}    L3: ret{{$}}
+
+## The symbol table lists the variables and the weak ones' flags.
+# RUN: llvm-cil-dump --link-info vis.dll | FileCheck %s --check-prefix=VIS-TABLE
+# VIS-TABLE:      {{^}}SymbolTable v1.0 triple=x86_64-unknown-linux-gnu-msil abi=1 runtime='none' datamodel=8,8,4,8{{$}}
+# VIS-TABLE-NEXT: {{^}}ExportClass 'vis'{{$}}
+# VIS-TABLE-DAG:  {{^}}Data 'def_var' size=4 align=4{{$}}
+# VIS-TABLE-DAG:  {{^}}Data 'prot_var' size=4 align=4{{$}}
+# VIS-TABLE-DAG:  {{^}}Data 'cm' size=8 align=8{{$}}
+# VIS-TABLE-DAG:  {{^}}Data WEAK 'weak_var' size=4 align=4{{$}}
+# VIS-TABLE-DAG:  {{^}}Data 'arr' size=16 align=4{{$}}
+# VIS-TABLE-DAG:  {{^}}Data 'alias_var' size=4 align=4{{$}}
+# VIS-TABLE-DAG:  {{^}}Function WEAK 'weak_fn'{{$}}
+
+## Windows: dllexport in one input selects the dllexport definitions of all
+## inputs; --export-all-symbols exports every candidate again.
+# RUN: msil-ld -shared win.o other.o -o win.dll 2>&1 | count 0
+# RUN: llvm-cil-dump win.dll > win.txt
+# RUN: %{listing} members win.txt win | FileCheck %s --check-prefix=DLLEXPORT
+# DLLEXPORT:      {{^}}.class 'win' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# DLLEXPORT-NEXT: {{^}}  .property 'exp_var' native int() flags=0x0000{{$}}
+# DLLEXPORT-NEXT: {{^}}    .get native int() 'win'::'<msil>addr_exp_var'{{$}}
+# DLLEXPORT-NEXT: {{^}}  .method '<msil>addr_exp_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# DLLEXPORT-NEXT: {{^}}  .method '<msil>addr_exp_var' native int() flags=0x0896 impl=0x0000{{$}}
+# DLLEXPORT-NEXT: {{^}}  .method 'exp_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# DLLEXPORT-NOT:  {{.}}
+## The definitions that are not exported stay in <Module> (exp_fn uses
+## them, so --gc-sections keeps them).
+# RUN: %{listing} members win.txt '<Module>' | FileCheck %s --check-prefix=WIN-MODULE
+# WIN-MODULE: {{^}}  .method 'other_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# WIN-MODULE: {{^}}  .method 'plain_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# RUN: mkdir all auto
+# RUN: msil-ld -shared --export-all-symbols win.o other.o -o all/win.dll 2>&1 | count 0
+# RUN: llvm-cil-dump all/win.dll > all.txt
+# RUN: %{listing} members all.txt win | FileCheck %s --check-prefix=ALL
+# ALL:      {{^}}.class 'win' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# ALL-NEXT: {{^}}  .property 'exp_var' native int() flags=0x0000{{$}}
+# ALL-NEXT: {{^}}    .get native int() 'win'::'<msil>addr_exp_var'{{$}}
+# ALL-NEXT: {{^}}  .property 'plain_var' native int() flags=0x0000{{$}}
+# ALL-NEXT: {{^}}    .get native int() 'win'::'<msil>addr_plain_var'{{$}}
+# ALL-NEXT: {{^}}  .method '<msil>addr_exp_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# ALL-NEXT: {{^}}  .method '<msil>addr_exp_var' native int() flags=0x0896 impl=0x0000{{$}}
+# ALL-NEXT: {{^}}  .method '<msil>addr_other_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# ALL-NEXT: {{^}}  .method '<msil>addr_plain_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# ALL-NEXT: {{^}}  .method '<msil>addr_plain_var' native int() flags=0x0896 impl=0x0000{{$}}
+# ALL-NEXT: {{^}}  .method 'exp_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# ALL-NEXT: {{^}}  .method 'other_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# ALL-NEXT: {{^}}  .method 'plain_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# ALL-NOT:  {{.}}
+
+## Windows without dllexport: every candidate (other.o alone).
+# RUN: msil-ld -shared other.o -o auto/other.dll 2>&1 | count 0
+# RUN: llvm-cil-dump auto/other.dll > auto.txt
+# RUN: %{listing} members auto.txt other | FileCheck %s --check-prefix=AUTO
+# AUTO:      {{^}}.class 'other' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# AUTO-NEXT: {{^}}  .method '<msil>addr_other_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# AUTO-NEXT: {{^}}  .method 'other_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# AUTO-NOT:  {{.}}
+
+## --exclude-libs: api.o calls x_fn (libx.a) and y_fn (liby.a).
+# RUN: mkdir ex0 ex1 ex2 ex3 ex4
+# RUN: msil-ld -shared api.o libx.a liby.a -o ex0/ex.dll 2>&1 | count 0
+# RUN: llvm-cil-dump ex0/ex.dll > ex0.txt
+# RUN: %{listing} members ex0.txt ex | FileCheck %s --check-prefixes=EX,EX-X,EX-Y
+# RUN: msil-ld -shared --exclude-libs=libx.a api.o libx.a liby.a -o ex1/ex.dll 2>&1 | count 0
+# RUN: llvm-cil-dump ex1/ex.dll > ex1.txt
+# RUN: %{listing} members ex1.txt ex | FileCheck %s --check-prefixes=EX,EX-Y --implicit-check-not=x_fn
+# RUN: msil-ld -shared --exclude-libs=ALL api.o libx.a liby.a -o ex2/ex.dll 2>&1 | count 0
+# RUN: llvm-cil-dump ex2/ex.dll > ex2.txt
+# RUN: %{listing} members ex2.txt ex | FileCheck %s --check-prefix=EX --implicit-check-not=x_fn \
+# RUN:   --implicit-check-not=y_fn
+# RUN: msil-ld -shared --exclude-libs=libx.a,liby.a api.o libx.a liby.a -o ex3/ex.dll 2>&1 | count 0
+# RUN: llvm-cil-dump ex3/ex.dll > ex3.txt
+# RUN: %{listing} members ex3.txt ex | FileCheck %s --check-prefix=EX --implicit-check-not=x_fn \
+# RUN:   --implicit-check-not=y_fn
+# RUN: msil-ld -shared --exclude-libs=liby.a:libz.a api.o libx.a liby.a -o ex4/ex.dll 2>&1 | count 0
+# RUN: llvm-cil-dump ex4/ex.dll > ex4.txt
+# RUN: %{listing} members ex4.txt ex | FileCheck %s --check-prefixes=EX,EX-X --implicit-check-not=y_fn
+# EX:   {{^}}.class 'ex' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# EX:   {{^}}  .method '<msil>addr_api' native int() flags=0x0096 impl=0x0000{{$}}
+# EX-X: {{^}}  .method '<msil>addr_x_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# EX-Y: {{^}}  .method '<msil>addr_y_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# EX:   {{^}}  .method 'api' int32() flags=0x0016 impl=0x0000{{$}}
+# EX-X: {{^}}  .method 'x_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# EX-Y: {{^}}  .method 'y_fn' int32() flags=0x0016 impl=0x0000{{$}}
+## The excluded member's function is still linked, in <Module>.
+# RUN: %{listing} members ex2.txt '<Module>' | FileCheck %s --check-prefix=EX-MODULE
+# EX-MODULE: {{^}}  .method 'x_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# EX-MODULE: {{^}}  .method 'y_fn' int32() flags=0x0016 impl=0x0000{{$}}
+
+## A thread-local candidate.
+# RUN: not msil-ld -shared tls.o -o x.dll 2>&1 | %{fc} --check-prefix=TLS --implicit-check-not=error:
+# TLS: {{^}}msil-ld: error: thread-local storage is not supported yet: tv in tls.o{{$}}
+
+## COMDAT copies on Windows: only plain and w are exported, with and without
+## --export-all-symbols.
+# RUN: llc -filetype=obj cd.ll -o cd.o
+# RUN: llc -filetype=obj cdx.ll -o cdx.o
+# RUN: llc -filetype=obj cdelf.ll -o cdelf.o
+# RUN: llc -filetype=obj cdprog.ll -o cdprog.o
+# RUN: mkdir cd cdall cdx cdelf
+# RUN: msil-ld -shared cd.o -o cd/cd.dll 2>&1 | count 0
+# RUN: msil-ld -shared --export-all-symbols cd.o -o cdall/cd.dll 2>&1 | count 0
+# RUN: llvm-cil-dump cd/cd.dll > cd.txt
+# RUN: llvm-cil-dump cdall/cd.dll > cdall.txt
+# RUN: %{listing} members cd.txt cd | FileCheck %s --check-prefix=CD --implicit-check-not=sel \
+# RUN:   --implicit-check-not=inl --implicit-check-not="??_C@"
+# RUN: %{listing} members cdall.txt cd | FileCheck %s --check-prefix=CD --implicit-check-not=sel \
+# RUN:   --implicit-check-not=inl --implicit-check-not="??_C@"
+# CD:      {{^}}.class 'cd' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# CD-NEXT: {{^}}  .property 'w' native int() flags=0x0000{{$}}
+# CD-NEXT: {{^}}    .get native int() 'cd'::'<msil>addr_w'{{$}}
+# CD-NEXT: {{^}}  .method '<msil>addr_plain' native int() flags=0x0096 impl=0x0000{{$}}
+# CD-NEXT: {{^}}  .method '<msil>addr_w' native int() flags=0x0896 impl=0x0000{{$}}
+# CD-NEXT: {{^}}  .method 'plain' int32() flags=0x0016 impl=0x0000{{$}}
+# CD-NOT:  {{.}}
+## The inline copy stays in <Module> (plain calls it).
+# RUN: %{listing} members cd.txt '<Module>' | FileCheck %s --check-prefix=CD-MODULE
+# RUN: %{listing} members cdall.txt '<Module>' | FileCheck %s --check-prefix=CD-MODULE
+# CD-MODULE: {{^}}  .method 'inl' int32() flags=0x00{{13|16}} impl=0x0000{{$}}
+## The symbol table: w, and nothing of the COMDAT groups.
+# RUN: llvm-cil-dump --link-info cd/cd.dll | FileCheck %s --check-prefix=CD-TABLE \
+# RUN:   --implicit-check-not=sel --implicit-check-not=inl --implicit-check-not="??_C@"
+# RUN: llvm-cil-dump --link-info cdall/cd.dll | FileCheck %s --check-prefix=CD-TABLE \
+# RUN:   --implicit-check-not=sel --implicit-check-not=inl --implicit-check-not="??_C@"
+# CD-TABLE:      {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8{{$}}
+# CD-TABLE-NEXT: {{^}}ExportClass 'cd'{{$}}
+# CD-TABLE-NEXT: {{^}}Data WEAK 'w' size=4 align=4{{$}}
+# CD-TABLE-NOT:  {{.}}
+
+## A program with its own copy of inl links against the library without a
+## warning, and calls its own copy.
+# RUN: msil-ld cdprog.o cd/cd.dll -o cdprog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump cdprog.exe | FileCheck %s --check-prefix=CD-PROG --implicit-check-not="[cd]cd::'inl'"
+# CD-PROG: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# CD-PROG: {{^}}    L{{[0-9]+}}: call int32() '<Module>'::'inl'{{$}}
+# CD-PROG: {{^}}    L{{[0-9]+}}: call int32() [cd]cd::'plain'{{$}}
+
+## dllexport selects a dllexport COMDAT function (dx, weak_odr as clang
+## writes a __declspec(dllexport) inline function; a linkonce_odr definition
+## that nothing uses is not even in the object), and not the non-dllexport
+## one (inl2).
+# RUN: msil-ld -shared cdx.o -o cdx/cdx.dll 2>&1 | count 0
+# RUN: llvm-cil-dump cdx/cdx.dll > cdx.txt
+# RUN: %{listing} members cdx.txt cdx | FileCheck %s --check-prefix=CDX --implicit-check-not=inl2
+# CDX:      {{^}}.class 'cdx' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# CDX-NEXT: {{^}}  .method '<msil>addr_dx' native int() flags=0x0096 impl=0x0000{{$}}
+# CDX-NEXT: {{^}}  .method 'dx' int32() flags=0x0016 impl=0x0000{{$}}
+# CDX-NOT:  {{.}}
+
+## ELF is unchanged: the COMDAT function is exported.
+# RUN: msil-ld -shared cdelf.o -o cdelf/cdelf.dll 2>&1 | count 0
+# RUN: llvm-cil-dump cdelf/cdelf.dll > cdelf.txt
+# RUN: %{listing} members cdelf.txt cdelf | FileCheck %s --check-prefix=CDELF
+# CDELF:      {{^}}.class 'cdelf' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# CDELF-NEXT: {{^}}  .method '<msil>addr_inl' native int() flags=0x0096 impl=0x0000{{$}}
+# CDELF-NEXT: {{^}}  .method '<msil>addr_plain' native int() flags=0x0096 impl=0x0000{{$}}
+# CDELF-NEXT: {{^}}  .method 'inl' int32() flags=0x0016 impl=0x0000{{$}}
+# CDELF-NEXT: {{^}}  .method 'plain' int32() flags=0x0016 impl=0x0000{{$}}
+# CDELF-NOT:  {{.}}
+
+#--- vis.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@def_var = global i32 1, align 4
+@prot_var = protected global i32 2, align 4
+@hid_var = hidden global i32 3, align 4
+@cm = common global i32 0, align 4
+@weak_var = weak global i32 4, align 4
+@arr = global [4 x i32] [i32 1, i32 2, i32 3, i32 4], align 4
+@alias_var = alias i32, getelementptr (i8, ptr @arr, i64 4)
+
+define hidden i32 @hid_fn() {
+  ret i32 3
+}
+
+define i32 @def_fn() {
+  %h = call i32 @hid_fn()
+  %v = load i32, ptr @hid_var
+  %r = add i32 %h, %v
+  ret i32 %r
+}
+
+define protected i32 @prot_fn() {
+  ret i32 2
+}
+
+define weak i32 @weak_fn() {
+  ret i32 5
+}
+
+@alias_fn = alias i32 (), ptr @def_fn
+
+#--- vis2.ll
+; A second tentative definition of cm, larger: one export of 8 bytes.
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@cm = common global i64 0, align 8
+
+#--- win.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@exp_var = dllexport global i32 1, align 4
+@plain_var = global i32 2, align 4
+
+declare i32 @other_fn()
+
+define dllexport i32 @exp_fn() {
+  %p = call i32 @plain_fn()
+  %o = call i32 @other_fn()
+  %v = load i32, ptr @plain_var
+  %r = add i32 %p, %o
+  %s = add i32 %r, %v
+  ret i32 %s
+}
+
+define i32 @plain_fn() {
+  ret i32 2
+}
+
+#--- other.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @other_fn() {
+  ret i32 3
+}
+
+#--- api.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @x_fn()
+declare i32 @y_fn()
+
+define i32 @api() {
+  %x = call i32 @x_fn()
+  %y = call i32 @y_fn()
+  %r = add i32 %x, %y
+  ret i32 %r
+}
+
+#--- xm.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @x_fn() {
+  ret i32 1
+}
+
+#--- ym.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @y_fn() {
+  ret i32 2
+}
+
+#--- tls.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@tv = global i32 5, section ".tdata", align 4
+
+define i32 @get() {
+  %v = load i32, ptr @tv
+  ret i32 %v
+}
+
+#--- cd.ll
+; What clang -fms-compatibility writes for a string literal, a
+; __declspec(selectany) variable and a header inline function, used by
+; plain; w is weak but in no COMDAT group.
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$"??_C@_05CJBACGMB@hello?$AA@" = comdat any
+$sel = comdat any
+$inl = comdat any
+
+@"??_C@_05CJBACGMB@hello?$AA@" = linkonce_odr dso_local unnamed_addr constant [6 x i8] c"hello\00", comdat, align 1
+@sel = weak_odr dso_local global i32 0, comdat, align 4
+@w = weak global i32 1, align 4
+
+define linkonce_odr dso_local i32 @inl() comdat {
+  ret i32 4
+}
+
+define i32 @plain() {
+  %c = load i8, ptr @"??_C@_05CJBACGMB@hello?$AA@", align 1
+  %ci = zext i8 %c to i32
+  %s = load i32, ptr @sel, align 4
+  %i = call i32 @inl()
+  %a = add i32 %ci, %s
+  %b = add i32 %a, %i
+  ret i32 %b
+}
+
+#--- cdprog.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$inl = comdat any
+
+declare i32 @plain()
+
+define linkonce_odr dso_local i32 @inl() comdat {
+  ret i32 4
+}
+
+define i32 @main() {
+  %i = call i32 @inl()
+  %p = call i32 @plain()
+  %r = add i32 %i, %p
+  ret i32 %r
+}
+
+#--- cdx.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$dx = comdat any
+$inl2 = comdat any
+
+define weak_odr dllexport i32 @dx() comdat {
+  %i = call i32 @inl2()
+  ret i32 %i
+}
+
+define linkonce_odr dso_local i32 @inl2() comdat {
+  ret i32 5
+}
+
+#--- cdelf.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+$inl = comdat any
+
+define linkonce_odr i32 @inl() comdat {
+  ret i32 4
+}
+
+define i32 @plain() {
+  %i = call i32 @inl()
+  ret i32 %i
+}

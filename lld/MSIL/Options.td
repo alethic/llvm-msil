@@ -9,10 +9,7 @@
 // Derived from lld/wasm/Options.td at 64f50ffd4f1c.
 //
 // The options of msil-ld: the rows of llvm/docs/MSIL/ImplementationPlan.md
-// 5.9.3 that M13, M14, M15, M20 and M21 implement, with lld's spellings. Every
-// option of a later milestone is an unknown argument until that milestone
-// adds it, except -shared, which the clang driver already passes and msil-ld
-// rejects.
+// 5.9.3, with lld's spellings.
 //
 //===----------------------------------------------------------------------===//
 
@@ -84,6 +81,8 @@ def entry: S<"entry">, MetaVarName<"<entry>">,
 defm error_limit:
   EEq<"error-limit", "Maximum number of errors to emit before stopping (0 = no limit)">;
 
+defm exclude_libs: Eq<"exclude-libs", "Exclude static libraries from automatic export">;
+
 defm fatal_warnings: B<"fatal-warnings",
     "Treat warnings as errors",
     "Do not treat warnings as errors (default)">;
@@ -118,7 +117,8 @@ def relocatable: F<"relocatable">;
 
 defm reproduce: EEq<"reproduce", "Dump linker invocation and input files for debugging">;
 
-def shared: F<"shared">, HelpText<"Build a library assembly (not supported yet)">;
+def shared: F<"shared">,
+  HelpText<"Build a library assembly (a DLL without an entry point) with exports">;
 
 defm soname: Eq<"soname", "Set the name of the output assembly (same as --assembly-name)">;
 
@@ -155,6 +155,22 @@ def why_extract: JJ<"why-extract=">, HelpText<"Print to a file about why archive
 
 defm assembly_name: EEq<"assembly-name",
   "Name of the output assembly (default: the stem of the output file)">;
+
+defm assembly_version: EEq<"assembly-version",
+  "Version of the output assembly: one to four numbers 0-65535 separated by "
+  "'.' (default: 0.0.0.0)">;
+
+def export_all_symbols: FF<"export-all-symbols">,
+  HelpText<"Export every default-visibility definition of a -shared library, "
+  "also when some input has dllexport definitions (Windows targets)">;
+
+defm export_class: EEq<"export-class",
+  "Namespace-qualified name of the public class that holds a -shared "
+  "library's exports (default: the assembly name)">;
+
+def interface_only: FF<"interface-only">,
+  HelpText<"With -shared: write an interface library, whose methods are "
+  "stubs, without binding undefined symbols">;
 
 def msil_reloc_loop_threshold: JJ<"msil-reloc-loop-threshold=">,
   MetaVarName<"<n>">, Flags<[HelpHidden]>,

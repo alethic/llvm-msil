@@ -1,0 +1,125 @@
+# C library state shared by a library and its program: the heap, a FILE * and errno (recon E5, one C runtime).
+# The library and the program each call the C runtime themselves (msil-ld
+# binds both to the process's C library: the UCRT's DLLs on windows-msvc,
+# libc.so.6 on linux-gnu), and the native C runtime is loaded once per
+# process, so its state is shared as between native shared libraries (recon
+# exports-multiasm 7.1): the program frees a block that the library's malloc
+# returned and the library frees the program's; the program writes into a
+# FILE * that the library opened, the library writes and closes it, and the
+# program reads the file back; errno that the library's strtol set to
+# ERANGE is read by the program right after the call, and errno that the
+# program set is read by the library. errno is read directly after the call
+# that set it: the runtime's own native code may change it in between (any
+# BCL call, recon 7.1's last row, or the first call through an import, which
+# binds it), so main makes the first call of each errno import before the
+# experiment. The native oracle on MSVC triples links the program and the
+# library against the DLL C runtime (msil-prog.py adds -fms-runtime-lib=dll
+# with %{msil_shlibs}), as the MSIL assemblies share ucrtbase. ERANGE is 34
+# with the UCRT and with glibc. Plan M22.f (c-state).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = cstate=%t/cstate.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- api.h
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#define IMPORT __declspec(dllimport)
+#else
+#define API __attribute__((visibility("default")))
+#define IMPORT
+#endif
+typedef __SIZE_TYPE__ size_t;
+void *malloc(size_t n);
+void free(void *p);
+char *strcpy(char *d, const char *s);
+void *fopen(const char *path, const char *mode);
+int fputs(const char *s, void *f);
+char *fgets(char *s, int n, void *f);
+int fclose(void *f);
+long strtol(const char *s, char **end, int base);
+#ifdef _WIN32
+int *_errno(void);
+#define ERRNO (*_errno())
+#else
+int *__errno_location(void);
+#define ERRNO (*__errno_location())
+#endif
+#--- cstate.c
+#include "api.h"
+API char *lib_strdup(const char *s) {
+  char *p = malloc(64);
+  if (p)
+    strcpy(p, s);
+  return p;
+}
+API void lib_free(void *p) { free(p); }
+API void *lib_open(const char *path) { return fopen(path, "w"); }
+API int lib_write(void *f, const char *s) { return fputs(s, f) >= 0; }
+API int lib_close(void *f) { return fclose(f); }
+API void lib_set_erange(void) {
+  ERRNO = 0;
+  strtol("99999999999999999999", 0, 10);
+}
+API int lib_errno(void) { return ERRNO; }
+#--- main.c
+#include "msil_test.h"
+#include "api.h"
+IMPORT char *lib_strdup(const char *s);
+IMPORT void lib_free(void *p);
+IMPORT void *lib_open(const char *path);
+IMPORT int lib_write(void *f, const char *s);
+IMPORT int lib_close(void *f);
+IMPORT void lib_set_erange(void);
+IMPORT int lib_errno(void);
+
+int main(void) {
+  char line[64];
+  /* errno: the first call of each import binds it, before the experiment. */
+  ERRNO = 0;
+  (void)lib_errno();
+  lib_set_erange();
+  int prog_saw = ERRNO;
+  int lib_saw = lib_errno();
+  ERRNO = 7;
+  int lib_saw_7 = lib_errno();
+  put_kv("errno after the library's strtol, read by the program", prog_saw);
+  put_kv("errno read by the library", lib_saw);
+  put_kv("errno 7 set by the program, read by the library", lib_saw_7);
+
+  /* The heap. */
+  char *s = lib_strdup("allocated by the library");
+  if (!s)
+    return 1;
+  puts(s);
+  free(s);
+  char *t = malloc(32);
+  if (!t)
+    return 2;
+  strcpy(t, "allocated by the program");
+  puts(t);
+  lib_free(t);
+  puts("freed across the assemblies");
+
+  /* stdio. */
+  void *f = lib_open("c-state.txt");
+  if (!f)
+    return 3;
+  put_kv("fputs by the program", fputs("written by the program\n", f) >= 0);
+  put_kv("fputs by the library", lib_write(f, "written by the library\n"));
+  put_kv("fclose by the library", lib_close(f));
+  f = fopen("c-state.txt", "r");
+  if (!f)
+    return 4;
+  while (fgets(line, sizeof line, f)) {
+    for (char *p = line; *p; ++p)
+      if (*p == '\n')
+        *p = 0;
+    puts(line);
+  }
+  fclose(f);
+  return 0;
+}

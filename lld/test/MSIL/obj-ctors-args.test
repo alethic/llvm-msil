@@ -1,0 +1,377 @@
+## Constructor arguments on ELF triples (the section 12 rows of 2026-10-26
+## 'M22.b extended (Rust-found defects 2 and 4)' item 4 and 'M22.e extended
+## (Rust-found defects 1-4, tests)'; ImplementationPlan.md 5.8.8 INIT
+## entries, 5.9.9's constructor list, 5.9.10): glibc calls each
+## '.init_array' entry as void (int argc, char **argv, char **envp), and Rust
+## std's ARGV_INIT_ARRAY relies on it.
+## - On linux-gnu MSIL triples a constructor in llvm.global_ctors or in an
+##   '.init_array' slot whose type is void (i32, ptr, ptr), or a prefix of it
+##   ((i32), (i32, ptr)), is called with argc and argv as '<msil>Main' passes
+##   them to main and with the process environment for envp (libc's
+##   environ, a data import from libc.so.6): llc -filetype=obj writes its
+##   INIT entry, and msil-ld's object link, its LTO PE link, --lto-emit-asm
+##   and whole-program text (llc, as clang -S) accept it and call it with as
+##   many arguments as it takes;
+## - any other parameter list stays the error
+##   'global constructor '<c>' takes arguments, which MSIL does not pass',
+##   and so does every constructor that takes arguments on windows-msvc
+##   (MSVC's CRT calls '.CRT$XC*' entries without arguments, here an
+##   llvm.global_ctors entry and a '.CRT$XCU' slot); llc reports it for
+##   llvm.global_ctors in objects, msil-ld for a slot, the LTO code generator
+##   for msil-ld's bitcode links.
+## The environ import of a constructor that takes envp (section 12 row
+## '5.9.10 amended (constructor arguments)' of 2026-10-26; 5.10.12, 5.10.14,
+## 5.9.14): args3.ll never names environ, so the output gets the data-import
+## field '<msil>environ', imported from the first native data definition of
+## environ in link order:
+## - --print-imports prints the same lines as for env.ll, which reads environ
+##   itself (environ as data, and the helper's dlopen and dlsym, from
+##   libc.so.6, and libc.so.6's version floor), in the object link, the LTO
+##   PE link and --lto-emit-asm; -Map lists libc.so.6!environ under Imports:
+##   with the symbol '<msil>environ';
+## - a library of another soname that defines environ (libfoo.so, built from
+##   the same glibc.yaml object) serves the import: the image's P/Invokes and
+##   data import name libfoo.so, and so does the --lto-emit-asm text (its
+##   kind-1 !msil.imports operand), which names no libc.so.6;
+## - with no native definition of environ, an msil-ld link (objects, the LTO
+##   PE link, -shared and --lto-emit-asm) is the error
+##   'global constructor '<c>' takes envp, but no native library of the link
+##   defines 'environ'';
+## - the same holds when llvm.global_ctors names an internal alias of the
+##   constructor (alias.ll: @init_alias -> init3): under --lto-O0, which
+##   keeps the alias, the LTO PE link and --lto-emit-asm agree, both the
+##   error without a definition of environ and both importing environ, dlopen
+##   and dlsym from libfoo.so with it (M22 review r2 finding 5; the error may
+##   name the alias or the aliasee).
+## Every main here takes no arguments, so no output gets the '<msil>argc' and
+## '<msil>argv' trailer fields that obj-ctors-main-args.test covers (section 12
+## row 'M22.b extended (defect 4) clarified').
+## libc.so.6 is the glibc-like stub of Inputs/native/glibc.yaml, which
+## defines environ.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: llc -filetype=obj args3.ll -o args3.o
+# RUN: llc -filetype=obj args1.ll -o args1.o
+# RUN: llc -filetype=obj args2.ll -o args2.o
+# RUN: llc -filetype=obj slot.ll -o slot.o
+# RUN: llvm-as args3.ll -o args3.bc
+# RUN: llvm-as other.ll -o other.bc
+# RUN: llvm-as four.ll -o four.bc
+# RUN: llvm-as win.ll -o win.bc
+# RUN: llc -filetype=obj winslot.ll -o winslot.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+# DEFINE: %{noargv} = FileCheck %s --implicit-check-not="'<msil>argc'" --implicit-check-not="'<msil>argv'"
+
+## The object INIT entries and the calls.
+# RUN: llvm-cil-dump --link-info args3.o | FileCheck %s --check-prefix=INIT -DCTOR=init3
+# RUN: llvm-cil-dump --link-info args1.o | FileCheck %s --check-prefix=INIT -DCTOR=init1
+# RUN: llvm-cil-dump --link-info args2.o | FileCheck %s --check-prefix=INIT -DCTOR=init2
+# INIT: {{^}}Init priority=65535 symbol={{[0-9]+}} '[[CTOR]]'
+# RUN: msil-ld args3.o libc.so.6 -o args3.exe 2>&1 | count 0
+# RUN: llvm-cil-dump args3.exe > args3.txt
+# RUN: %{listing} method args3.txt '<Module>' .cctor | FileCheck %s --check-prefix=CALL3
+# RUN: %{noargv} --check-prefix=NOARGV --input-file=args3.txt
+# CALL3: {{^}}    L{{[0-9]+}}: call void(int32, native int, native int) '<Module>'::'init3'{{$}}
+# RUN: msil-ld args1.o libc.so.6 -o args1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump args1.exe > args1.txt
+# RUN: %{listing} method args1.txt '<Module>' .cctor | FileCheck %s --check-prefix=CALL1
+# RUN: %{noargv} --check-prefix=NOARGV --input-file=args1.txt
+# CALL1: {{^}}    L{{[0-9]+}}: call void(int32) '<Module>'::'init1'{{$}}
+# RUN: msil-ld args2.o libc.so.6 -o args2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump args2.exe > args2.txt
+# RUN: %{listing} method args2.txt '<Module>' .cctor | FileCheck %s --check-prefix=CALL2
+# RUN: %{noargv} --check-prefix=NOARGV --input-file=args2.txt
+# CALL2: {{^}}    L{{[0-9]+}}: call void(int32, native int) '<Module>'::'init2'{{$}}
+# NOARGV: {{^}}.class '<Module>' flags=
+# NOARGV: {{^}}  .method '<msil>Main' int32(string[]) flags={{.*}}
+# NOARGV: {{^}}    L{{[0-9]+}}: call int32() '<Module>'::'main'{{$}}
+
+## An '.init_array' slot.
+# RUN: msil-ld slot.o libc.so.6 -o slot.exe 2>&1 | count 0
+# RUN: llvm-cil-dump slot.exe > slot.txt
+# RUN: %{listing} method slot.txt '<Module>' .cctor | FileCheck %s --check-prefix=SLOT
+# RUN: %{noargv} --check-prefix=NOARGV --input-file=slot.txt
+# SLOT: {{^}}    L{{[0-9]+}}: call void(int32, native int, native int) '<Module>'::'init_slot'{{$}}
+
+## LTO: the PE link and --lto-emit-asm.
+# RUN: msil-ld args3.bc libc.so.6 -o args3-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump args3-lto.exe > args3-lto.txt
+# RUN: %{listing} method args3-lto.txt '<Module>' .cctor | FileCheck %s --check-prefix=CALL3
+# RUN: %{noargv} --check-prefix=NOARGV --input-file=args3-lto.txt
+# RUN: msil-ld --lto-emit-asm args3.bc libc.so.6 -o args3.il 2>&1 | count 0
+# RUN: %{noargv} --check-prefix=TEXT --input-file=args3.il
+# TEXT: {{^}}  call void 'init3'(int32, native int, native int){{$}}
+
+## Whole-program text of the same module (llc, as clang -S writes it).
+# RUN: llc args3.ll -o args3.s 2>&1 | count 0
+# RUN: %{noargv} --check-prefix=TEXT --input-file=args3.s
+
+## The environ import: --print-imports gives env.ll's lines, in each link.
+# RUN: llc -filetype=obj env.ll -o env.o
+# RUN: llvm-as env.ll -o env.bc
+# RUN: msil-ld env.o libc.so.6 --print-imports -o env.exe > env-imports.txt 2>&1
+# RUN: FileCheck %s --check-prefix=IMPORTS --match-full-lines --input-file=env-imports.txt
+# IMPORTS:      dlopen -> libc.so.6!dlopen [function, GLIBC_2.34]
+# IMPORTS-NEXT: dlsym -> libc.so.6!dlsym [function, GLIBC_2.34]
+# IMPORTS-NEXT: environ -> libc.so.6!environ [data, GLIBC_2.2.5]
+# IMPORTS-NEXT: libc.so.6: version floor GLIBC_2.34
+# IMPORTS-NOT:  {{.}}
+# RUN: msil-ld args3.o libc.so.6 --print-imports -o args3-pi.exe > args3-imports.txt 2>&1
+# RUN: diff env-imports.txt args3-imports.txt
+# RUN: msil-ld env.bc libc.so.6 --print-imports -o env-lto.exe > env-lto-imports.txt 2>&1
+# RUN: diff env-imports.txt env-lto-imports.txt
+# RUN: msil-ld args3.bc libc.so.6 --print-imports -o args3-pi-lto.exe > args3-lto-imports.txt 2>&1
+# RUN: diff env-imports.txt args3-lto-imports.txt
+# RUN: msil-ld --lto-emit-asm args3.bc libc.so.6 --print-imports -o args3-pi.il > args3-text-imports.txt 2>&1
+# RUN: diff env-imports.txt args3-text-imports.txt
+
+## -Map: the import under Imports:, with the field's name as the symbol.
+# RUN: msil-ld args3.o libc.so.6 -Map args3.map -o args3-map.exe 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=MAP --input-file=args3.map
+# RUN: msil-ld args3.bc libc.so.6 -Map args3-lto.map -o args3-map-lto.exe 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=MAP --input-file=args3-lto.map
+# MAP:      {{^}}Imports:{{$}}
+# MAP-NEXT: {{^ *Token +Module!Entry +Symbol$}}
+# MAP-DAG:  {{^ +0x04[0-9A-F]+ +libc\.so\.6!environ +<msil>environ$}}
+# MAP-DAG:  {{^ +0x06[0-9A-F]+ +libc\.so\.6!dlopen +dlopen$}}
+# MAP-DAG:  {{^ +0x06[0-9A-F]+ +libc\.so\.6!dlsym +dlsym$}}
+
+## Another soname: libfoo.so defines environ, and nothing names libc.so.6.
+# RUN: ld.lld -shared -soname libfoo.so --version-script %S/Inputs/native/glibc-libc.map libc.o -o libfoo.so
+# RUN: msil-ld args3.o libfoo.so -o foo.exe 2>&1 | count 0
+# RUN: llvm-cil-dump foo.exe | FileCheck %s --check-prefix=FOO --implicit-check-not=libc.so.6
+# FOO:     {{^}}moduleref 'libfoo.so'{{$}}
+# FOO-DAG: {{^}}    L{{[0-9]+}}: ldstr "libfoo.so"{{[[:space:]]+}}L{{[0-9]+}}: ldstr "environ"{{$}}
+# FOO-DAG: {{^}}    .pinvokeimpl 'libfoo.so' entry 'dlopen' flags=0x0201{{$}}
+# FOO-DAG: {{^}}    .pinvokeimpl 'libfoo.so' entry 'dlsym' flags=0x0201{{$}}
+# RUN: msil-ld --lto-emit-asm args3.bc libfoo.so -o foo.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=FOO-TEXT --implicit-check-not=libc.so.6 --input-file=foo.il
+# FOO-TEXT-DAG: {{^}}.method {{.*}}pinvokeimpl("libfoo.so" nomangle cdecl) native int 'dlopen'(native int, int32) {{.*}}
+# FOO-TEXT-DAG: {{^}}.method {{.*}}pinvokeimpl("libfoo.so" nomangle cdecl) native int 'dlsym'(native int, native int) {{.*}}
+# FOO-TEXT-DAG: {{^}}.field public static native int '<msil>environ'{{$}}
+# FOO-TEXT-DAG: {{^}}  ldstr "libfoo.so"{{[[:space:]]+}}ldstr "environ"{{$}}
+
+## An alias constructor under --lto-O0: the PE link and --lto-emit-asm
+## agree, with and without libfoo.so.
+# RUN: llvm-as alias.ll -o alias.bc
+# RUN: not msil-ld --lto-O0 alias.bc -o noenv-alias.exe 2>&1 | %{fc} --check-prefix=NO-ENVIRON-ALIAS
+# RUN: not msil-ld --lto-O0 --lto-emit-asm alias.bc -o noenv-alias.il 2>&1 | %{fc} --check-prefix=NO-ENVIRON-ALIAS
+# NO-ENVIRON-ALIAS: {{^}}msil-ld: error: global constructor '{{init3|init_alias}}' takes envp, but no native library of the link defines 'environ'{{$}}
+# RUN: msil-ld --lto-O0 alias.bc libfoo.so --print-imports -o alias-foo.exe > alias-foo-pe.txt 2>&1
+# RUN: FileCheck %s --check-prefix=FOO-IMPORTS --match-full-lines --input-file=alias-foo-pe.txt
+# FOO-IMPORTS:      dlopen -> libfoo.so!dlopen [function, GLIBC_2.34]
+# FOO-IMPORTS-NEXT: dlsym -> libfoo.so!dlsym [function, GLIBC_2.34]
+# FOO-IMPORTS-NEXT: environ -> libfoo.so!environ [data, GLIBC_2.2.5]
+# FOO-IMPORTS-NEXT: libfoo.so: version floor GLIBC_2.34
+# FOO-IMPORTS-NOT:  {{.}}
+# RUN: llvm-cil-dump alias-foo.exe | FileCheck %s --check-prefix=FOO --implicit-check-not=libc.so.6
+# RUN: msil-ld --lto-O0 --lto-emit-asm alias.bc libfoo.so --print-imports -o alias-foo.il > alias-foo-text.txt 2>&1
+# RUN: diff alias-foo-pe.txt alias-foo-text.txt
+# RUN: FileCheck %s --check-prefix=FOO-TEXT --implicit-check-not=libc.so.6 --input-file=alias-foo.il
+
+## No native definition of environ: the error, in every link.
+# RUN: not msil-ld args3.o -o noenv.exe 2>&1 | %{fc} --check-prefix=NO-ENVIRON -DCTOR=init3
+# RUN: not msil-ld args3.bc -o noenv-lto.exe 2>&1 | %{fc} --check-prefix=NO-ENVIRON -DCTOR=init3
+# RUN: not msil-ld -shared args3.o -o noenv.dll 2>&1 | %{fc} --check-prefix=NO-ENVIRON -DCTOR=init3
+# RUN: not msil-ld -shared args3.bc -o noenv-lto.dll 2>&1 | %{fc} --check-prefix=NO-ENVIRON -DCTOR=init3
+# RUN: not msil-ld --lto-emit-asm args3.bc -o noenv.il 2>&1 | %{fc} --check-prefix=NO-ENVIRON -DCTOR=init3
+# RUN: not msil-ld slot.o -o noenv-slot.exe 2>&1 | %{fc} --check-prefix=NO-ENVIRON -DCTOR=init_slot
+# NO-ENVIRON: {{^}}msil-ld: error: global constructor '[[CTOR]]' takes envp, but no native library of the link defines 'environ'{{$}}
+
+## Other parameter lists, and windows-msvc.
+# RUN: not msil-ld other.bc libc.so.6 -o x.exe 2>&1 | %{fc} --check-prefix=ARGS -DCTOR=init_other
+# RUN: not msil-ld --lto-emit-asm other.bc libc.so.6 -o x.il 2>&1 | %{fc} --check-prefix=ARGS -DCTOR=init_other
+# RUN: not msil-ld four.bc libc.so.6 -o x.exe 2>&1 | %{fc} --check-prefix=ARGS -DCTOR=init4
+# RUN: not msil-ld win.bc -o x.exe 2>&1 | %{fc} --check-prefix=ARGS -DCTOR=init3
+# RUN: not msil-ld --lto-emit-asm win.bc -o x.il 2>&1 | %{fc} --check-prefix=ARGS -DCTOR=init3
+# RUN: not msil-ld winslot.o -o x.exe 2>&1 | %{fc} --check-prefix=ARGS -DCTOR=init_slot
+# ARGS: {{^}}msil-ld: error: {{.*}}global constructor '[[CTOR]]' takes arguments, which MSIL does not pass{{$}}
+# RUN: not llc -filetype=obj other.ll -o x.o 2>&1 | %{fc} --check-prefix=LLC-ARGS -DCTOR=init_other
+# RUN: not llc -filetype=obj win.ll -o x.o 2>&1 | %{fc} --check-prefix=LLC-ARGS -DCTOR=init3
+# LLC-ARGS: {{^}}error: {{.*}}global constructor '[[CTOR]]' takes arguments, which MSIL does not pass{{$}}
+
+#--- args3.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@seen = global i32 0, align 4
+@saved_argv = global ptr null, align 8
+@saved_envp = global ptr null, align 8
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init3, ptr null }]
+
+define internal void @init3(i32 %argc, ptr %argv, ptr %envp) {
+  store i32 %argc, ptr @seen, align 4
+  store ptr %argv, ptr @saved_argv, align 8
+  store ptr %envp, ptr @saved_envp, align 8
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @seen, align 4
+  %a = load ptr, ptr @saved_argv, align 8
+  %e = load ptr, ptr @saved_envp, align 8
+  %ai = ptrtoint ptr %a to i32
+  %ei = ptrtoint ptr %e to i32
+  %s1 = add i32 %v, %ai
+  %s2 = add i32 %s1, %ei
+  ret i32 %s2
+}
+
+#--- env.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@environ = external global ptr
+
+define i32 @main() {
+  %e = load ptr, ptr @environ, align 8
+  %i = ptrtoint ptr %e to i32
+  ret i32 %i
+}
+
+#--- args1.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@seen = global i32 0, align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init1, ptr null }]
+
+define internal void @init1(i32 %argc) {
+  store i32 %argc, ptr @seen, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @seen, align 4
+  ret i32 %v
+}
+
+#--- args2.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@seen = global i32 0, align 4
+@saved_argv = global ptr null, align 8
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init2, ptr null }]
+
+define internal void @init2(i32 %argc, ptr %argv) {
+  store i32 %argc, ptr @seen, align 4
+  store ptr %argv, ptr @saved_argv, align 8
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @seen, align 4
+  ret i32 %v
+}
+
+#--- slot.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@seen = global i32 0, align 4
+@slot = internal global ptr @init_slot, section ".init_array", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @init_slot(i32 %argc, ptr %argv, ptr %envp) {
+  store i32 %argc, ptr @seen, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @seen, align 4
+  ret i32 %v
+}
+
+#--- other.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@saved = global ptr null, align 8
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init_other, ptr null }]
+
+define internal void @init_other(ptr %p) {
+  store ptr %p, ptr @saved, align 8
+  ret void
+}
+
+define i32 @main() {
+  %p = load ptr, ptr @saved, align 8
+  %r = ptrtoint ptr %p to i32
+  ret i32 %r
+}
+
+#--- four.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@seen = global i32 0, align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init4, ptr null }]
+
+define internal void @init4(i32 %argc, ptr %argv, ptr %envp, i32 %extra) {
+  store i32 %extra, ptr @seen, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @seen, align 4
+  ret i32 %v
+}
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@seen = global i32 0, align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init3, ptr null }]
+
+define internal void @init3(i32 %argc, ptr %argv, ptr %envp) {
+  store i32 %argc, ptr @seen, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @seen, align 4
+  ret i32 %v
+}
+
+#--- winslot.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@seen = global i32 0, align 4
+@slot = internal global ptr @init_slot, section ".CRT$XCU", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+
+define internal void @init_slot(i32 %argc, ptr %argv, ptr %envp) {
+  store i32 %argc, ptr @seen, align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @seen, align 4
+  ret i32 %v
+}
+
+#--- alias.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@seen = global i32 0, align 4
+@saved_envp = global ptr null, align 8
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init_alias, ptr null }]
+
+@init_alias = internal alias void (i32, ptr, ptr), ptr @init3
+
+define internal void @init3(i32 %argc, ptr %argv, ptr %envp) {
+  store i32 %argc, ptr @seen, align 4
+  store ptr %envp, ptr @saved_envp, align 8
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @seen, align 4
+  ret i32 %v
+}

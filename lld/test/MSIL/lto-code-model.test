@@ -1,0 +1,93 @@
+## Code models under LTO (the section 12 rows of 2026-10-26 'M22.a extended
+## (Rust-found defect 1)' and 'M22.e extended (Rust-found defects 1-4,
+## tests)'; ImplementationPlan.md 5.9.13): rustc's x86_64-unknown-none
+## bitcode carries the module flag "Code Model" = kernel (2), and msil-ld's
+## LTO stopped with 'LLVM ERROR: Target does not support the kernel
+## CodeModel' and a stack dump, while llc and clang -c accept the module.
+## The MSIL target has no code models, so LTO links such bitcode like any
+## other, in the PE link and under --lto-emit-asm:
+## - on an MSIL triple silently, for the kernel and the large code model;
+## - for stock bitcode of the native triple with the compatibility warning
+##   (5.9.13) and at most a warning about the code model, never an error.
+## The program returns 7 in every link.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as kernel.ll -o kernel.bc
+# RUN: llvm-as large.ll -o large.bc
+# RUN: llvm-as kernel-win.ll -o kernel-win.bc
+# RUN: llvm-as stock.ll -o stock.bc
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error:
+
+# RUN: msil-ld kernel.bc -o kernel.exe 2>&1 | count 0
+# RUN: llvm-cil-dump kernel.exe | FileCheck %s --check-prefix=PE
+# RUN: msil-ld --lto-emit-asm kernel.bc -o kernel.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=IL --input-file=kernel.il
+# RUN: msil-ld large.bc -o large.exe 2>&1 | count 0
+# RUN: llvm-cil-dump large.exe | FileCheck %s --check-prefix=PE
+# RUN: msil-ld --lto-emit-asm large.bc -o large.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=IL --input-file=large.il
+# RUN: msil-ld kernel-win.bc -o kernel-win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump kernel-win.exe | FileCheck %s --check-prefix=PE
+# RUN: msil-ld --lto-emit-asm kernel-win.bc -o kernel-win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=IL --input-file=kernel-win.il
+# PE:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# PE-NEXT: {{^}}    .maxstack 1{{$}}
+# PE-NEXT: {{^}}    L0: ldc.i4.7{{$}}
+# PE-NEXT: {{^}}    L1: ret{{$}}
+# IL:      {{^}}.method public static int32 'main'() cil managed{{$}}
+# IL:      {{^}}  ldc.i4.7{{$}}
+# IL-NEXT: {{^}}  ret{{$}}
+
+## Stock bitcode for the native triple.
+# RUN: msil-ld stock.bc -o stock.exe 2>&1 | %{fc} --check-prefix=STOCK
+# RUN: llvm-cil-dump stock.exe | FileCheck %s --check-prefix=PE
+# RUN: msil-ld --lto-emit-asm stock.bc -o stock.il 2>&1 | %{fc} --check-prefix=STOCK
+# RUN: FileCheck %s --check-prefix=IL --input-file=stock.il
+# STOCK: {{^}}msil-ld: warning: stock.bc: linking bitcode for x86_64-unknown-linux-gnu as x86_64-unknown-linux-gnu-msil; stock-clang bitcode is a compatibility path{{$}}
+
+#--- kernel.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  ret i32 7
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"Code Model", i32 2}
+
+#--- large.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  ret i32 7
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"Code Model", i32 4}
+
+#--- kernel-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 7
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"Code Model", i32 2}
+
+#--- stock.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @main() {
+  ret i32 7
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"Code Model", i32 2}

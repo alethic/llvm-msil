@@ -6,6 +6,7 @@ add_lld_library(lldMSIL
   AssemblyFiles.cpp
   BCLBinder.cpp
   Driver.cpp
+  Exports.cpp
   InputChunks.cpp
   InputFiles.cpp
   LTO.cpp

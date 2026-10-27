@@ -6,13 +6,16 @@
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #
 # ===----------------------------------------------------------------------===#
-"""Helpers of ../roundtrip-snan.test (M21).
+"""Helpers of ../roundtrip-snan.test (M21) and ../roundtrip-moved-class.test
+(M22).
 
     snan-roundtrip.py compare FIRST SECOND
-        compare two ildasm listings line for line as msil-verify.py
-        --roundtrip compares the listing of an image with the listing of its
-        reassembly (compare_listings): print 'equal up to N quieted float32
-        signaling NaN(s)' and exit 0, or print 'differ' and the unified diff
+        compare two ildasm listings as msil-verify.py --roundtrip compares
+        the listing of an image with the listing of its reassembly
+        (compare_listings): print 'equal up to N quieted float32 signaling
+        NaN(s)', followed by ' and the moved class block(s) NAME, ...' when
+        the second listing moves a class block that the .assembly block's
+        .custom names, and exit 0, or print 'differ' and the unified diff
         that --roundtrip would print and exit 1
     snan-roundtrip.py patch FILE FROM TO
         replace the one occurrence of the bytes FROM (hex) in FILE by the
@@ -50,15 +53,22 @@ def compare(first, second):
         a = f.read().splitlines(True)
     with open(second, encoding="utf-8") as f:
         b = f.read().splitlines(True)
-    quieted, differing = load_msil_verify().compare_listings(a, b)
-    if differing is None:
+    quieted, moved, a, b = load_msil_verify().compare_listings(a, b)
+    if a == b:
         print(
-            "equal up to %d quieted float32 signaling NaN%s"
-            % (quieted, "" if quieted == 1 else "s")
+            "equal up to %d quieted float32 signaling NaN%s%s"
+            % (
+                quieted,
+                "" if quieted == 1 else "s",
+                " and the moved class block%s %s"
+                % ("" if len(moved) == 1 else "s", ", ".join(moved))
+                if moved
+                else "",
+            )
         )
         return 0
     print("differ")
-    sys.stdout.writelines(difflib.unified_diff(differing, b, first, second))
+    sys.stdout.writelines(difflib.unified_diff(a, b, first, second))
     return 1
 
 

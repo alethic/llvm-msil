@@ -11,6 +11,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "SymbolTable.h"
+#include "AssemblyFiles.h"
 #include "Config.h"
 #include "InputChunks.h"
 #include "InputFiles.h"
@@ -44,13 +45,52 @@ void SymbolTable::addFile(InputFile *file, StringRef symName) {
   log("Processing: " + toString(file));
 
   // A native library: its definitions bind late, after every input is loaded
-  // (plan 5.9.6 step 2), so it adds nothing to the symbol table.
+  // (plan 5.9.6 step 2), so it adds nothing to the symbol table. A native
+  // object given on the command line adds its definitions as machine code.
   if (auto *f = dyn_cast<NativeLibraryFile>(file)) {
     if (ctx.arg.trace)
       message(toString(file));
     ctx.nativeLibraryFiles.push_back(f);
     ctx.loadedFiles.push_back(f);
     ctx.nativeIndex.addFile(*f, ctx.arg.target);
+    return;
+  }
+
+  // A library built by this toolchain (plan 5.9.15): its exports bind late,
+  // before the native libraries (plan 5.9.6 step 1).
+  if (auto *f = dyn_cast<ManagedLibraryFile>(file)) {
+    if (ctx.arg.ltoEmitAsm) {
+      error(toString(file) + ": --lto-emit-asm cannot import from a .NET "
+                             "library; link without --lto-emit-asm");
+      return;
+    }
+    if (!f->parse())
+      return;
+    // One assembly of a name: the same file again adds nothing.
+    for (ManagedLibraryFile *lib : managedLibraries) {
+      if (!StringRef(lib->getIdentity().Name)
+               .equals_insensitive(f->getIdentity().Name))
+        continue;
+      if (lib->getMemoryBufferRef().getBuffer() !=
+          f->getMemoryBufferRef().getBuffer())
+        error(toString(file) + ": library assembly '" + f->getIdentity().Name +
+              "' is also linked from " + toString(lib) +
+              "; the CLR loads one assembly of a name");
+      return;
+    }
+    // The output is an assembly of that name too: the CLR would resolve the
+    // library's TypeRefs to the output itself (foo.exe linked against
+    // foo.dll, or a library linked against an older build of itself). The
+    // library stays in the list, so that the same file again adds nothing.
+    if (StringRef(f->getIdentity().Name)
+            .equals_insensitive(getOutputAssemblyName()))
+      error(toString(file) + ": library assembly '" + f->getIdentity().Name +
+            "' has the name of the output; the CLR loads one assembly of a "
+            "name");
+    if (ctx.arg.trace)
+      message(toString(file));
+    managedLibraries.push_back(f);
+    ctx.loadedFiles.push_back(f);
     return;
   }
 
@@ -545,6 +585,113 @@ void SymbolTable::bindObjectSymbol(Symbol &sym) {
         .overwrite(sym);
 }
 
+// A definition of the name of \p sym in a native object given on the
+// command line (section 12 of 2026-10-26): a native linker always links such
+// an object, so the reference binds its machine code whatever the libraries
+// define, built by this toolchain (step 1) or native (step 2). It is kept as
+// a definition that late binding passed over, which the writer reports for a
+// live reference (plan 5.10.14's "defined only in native object code"). A
+// symbol with an explicit import module binds to that module unchecked (plan
+// 5.10.7).
+bool SymbolTable::rejectObjectDefinition(Symbol &sym) {
+  if (!getImportModule(&sym).empty())
+    return false;
+  const NativeExport *e = ctx.nativeIndex.findObjectDefinition(sym.getName());
+  if (!e)
+    return false;
+  rejectedNative[&sym].push_back(e);
+  return true;
+}
+
+void SymbolTable::checkManagedLibraries() {
+  if (librariesChecked)
+    return;
+  librariesChecked = true;
+  if (managedLibraries.empty())
+    return;
+  // The model (plan 5.8.9): the first loaded CIL object, else the first
+  // bitcode file.
+  const InputFile *model = nullptr;
+  for (ObjFile *f : ctx.objectFiles)
+    if (!f->isLTO) {
+      model = f;
+      break;
+    }
+  if (!model && !ctx.bitcodeFiles.empty())
+    model = ctx.bitcodeFiles.front();
+  for (ManagedLibraryFile *lib : managedLibraries)
+    lib->check(model, managedLibraries);
+
+  // A bitcode definition that a library also exports stays visible to
+  // regular objects, so that its LTO object keeps it global and late binding
+  // warns about it as about a CIL object's (Q21): LTO would otherwise
+  // internalize it.
+  for (ManagedLibraryFile *lib : managedLibraries)
+    for (const ManagedExport *e : lib->exports())
+      if (Symbol *sym = find(e->Name))
+        if ((sym->isDefined() || sym->isCommon()) &&
+            isa_and_nonnull<BitcodeFile>(sym->getFile()) &&
+            sym->visibility() != STV_HIDDEN &&
+            sym->visibility() != STV_INTERNAL)
+          sym->isUsedInRegularObj = true;
+}
+
+const ManagedExport *SymbolTable::findManagedExport(StringRef name) const {
+  for (ManagedLibraryFile *lib : managedLibraries)
+    if (const ManagedExport *e = lib->findExport(name))
+      return e;
+  return nullptr;
+}
+
+// Step 1 of plan 5.9.6 (plan 5.9.15, exports-multiasm 10.2): the first
+// library in command-line order that exports the symbol's name.
+bool SymbolTable::bindManagedSymbol(Symbol &sym) {
+  if (managedLibraries.empty())
+    return false;
+  // An explicit import module stays native (plan 5.10.7); an import name
+  // applies to step 2 only.
+  if (!getImportModule(&sym).empty())
+    return false;
+  const ManagedExport *e = nullptr;
+  for (ManagedLibraryFile *lib : managedLibraries) {
+    const ManagedExport *other = lib->findExport(sym.getName());
+    if (!other)
+      continue;
+    if (!e) {
+      e = other;
+      continue;
+    }
+    warn("symbol '" + toString(sym) + "' is exported by " + toString(e->File) +
+         " and " + toString(lib) + "; using " + toString(e->File));
+  }
+  if (!e)
+    return false;
+
+  // The kind checks of plan 5.9.5 between the reference and the export. A
+  // lazy symbol carries the kind of the weak reference that met it.
+  bool isData = e->isData();
+  bool isTLS = isData && (e->Flags & cli::LibraryDataSymbol::ThreadLocal);
+  const InputFile *refFile = sym.file;
+  if (auto *lazy = dyn_cast<LazySymbol>(&sym))
+    refFile = lazy->weakRefFile;
+  if (sym.type != STT_NOTYPE && sym.isData() != isData)
+    error("symbol type mismatch: " + toString(sym) + "\n>>> defined as " +
+          (sym.isFunc() ? "function" : "data") + " in " + toString(refFile) +
+          "\n>>> defined as " + (isData ? "data" : "function") + " in " +
+          toString(e->File));
+  else if (sym.type != STT_NOTYPE && sym.isTLS() != isTLS)
+    error("TLS attribute mismatch: " + toString(sym) + "\n>>> in " +
+          toString(refFile) + "\n>>> in " + toString(e->File));
+
+  if (isData)
+    ManagedData(e->File, sym.getName(), sym.binding, sym.visibility(), e)
+        .overwrite(sym);
+  else
+    ManagedFunction(e->File, sym.getName(), sym.binding, sym.visibility(), e)
+        .overwrite(sym);
+  return true;
+}
+
 // True if the type \p t names a type of its module (a TypeRef value), so
 // that equal signatures of two objects may still differ.
 static bool namesType(const cli::TypeSig &t);
@@ -620,6 +767,25 @@ void SymbolTable::bindLateSymbols() {
   // When LTO writes CIL objects, late binding runs after LTO over the CIL
   // objects and LTO objects (plan 5.9.6 "When it runs").
   bool objectMode = !ctx.arg.ltoEmitAsm;
+
+  // The libraries built by this toolchain (plan 5.9.15): checked once
+  // (normally by recordReferences()), then, Q21's -Bsymbolic semantics, an
+  // object definition that a library also exports keeps its own definition,
+  // with a warning: the library keeps its copy too.
+  checkManagedLibraries();
+  if (objectMode && !managedLibraries.empty()) {
+    for (Symbol *sym : symVector) {
+      if ((!sym->isDefined() && !sym->isCommon()) ||
+          !isa_and_nonnull<ObjFile>(sym->getFile()) ||
+          (sym->visibility() != STV_DEFAULT &&
+           sym->visibility() != STV_PROTECTED))
+        continue;
+      if (const ManagedExport *e = findManagedExport(sym->getName()))
+        warn("symbol '" + toString(*sym) + "' is defined in " +
+             toString(sym->getFile()) + " and exported by " +
+             toString(e->File) + "; the output uses its own definition");
+    }
+  }
 
   // The writer defines __start_<X> and __stop_<X> on non-Windows triples
   // when a CIL object has a segment named <X> (plan 5.9.9), so they do not
@@ -699,7 +865,11 @@ void SymbolTable::bindLateSymbols() {
         checkLinkerDefinedKind(*sym);
         continue;
       }
-      if (sym->visibility() == STV_DEFAULT)
+      // A definition in a native object given on the command line, then
+      // step 1, the libraries built by this toolchain, then step 2, the
+      // native libraries.
+      if (sym->visibility() == STV_DEFAULT && !rejectObjectDefinition(*sym) &&
+          !bindManagedSymbol(*sym))
         bindObjectSymbol(*sym);
       continue;
     }
@@ -718,6 +888,19 @@ void SymbolTable::bindLateSymbols() {
         continue;
       }
       if (sym->visibility() == STV_DEFAULT) {
+        // A native object given on the command line defines it: the lookup
+        // refuses its machine code, and the import-annotation pass reports
+        // a reference that the merged module keeps. Code generation would
+        // make a weak one null, so a referenced weak symbol is reported here.
+        if (sym->isWeak())
+          if (const NativeExport *e =
+                  ctx.nativeIndex.findObjectDefinition(sym->getName())) {
+            ArrayRef<Reference> symRefs = getReferences(sym);
+            if (!symRefs.empty())
+              reportUnresolved(getNativeRejectionText(sym->getName(), *e),
+                               symRefs, /*isEntry=*/false);
+            continue;
+          }
         bindNative(*sym);
         continue;
       }

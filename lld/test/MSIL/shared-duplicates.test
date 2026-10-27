@@ -1,0 +1,206 @@
+## Symbols that more than one input provides, with libraries
+## (ImplementationPlan.md M22.c item 3, Q21: CLR semantics, no
+## interposition, warned duplicates; 5.9.6 step 1; recon
+## p2/exports-multiasm.md 10.2):
+## - two libraries that export the same symbol: it binds to the first in
+##   command-line order, with the warning
+##   'symbol '<s>' is exported by <lib1> and <lib2>; using <lib1>';
+## - an object that defines a symbol a library also exports keeps its own
+##   definition (objects come first, and the library keeps its own copy):
+##   'symbol '<s>' is defined in <file> and exported by <lib>; the output
+##   uses its own definition';
+## - a function reference that a library's data export would satisfy is
+##   'symbol type mismatch';
+## - an archive member is an object too (5.9.6: objects and archive members
+##   come first, and a managed definition never blocks archive extraction):
+##   a reference that a library export would satisfy still extracts the
+##   member that defines it, whether the archive comes after or before the
+##   library, with --why-extract's line and the same warning naming
+##   '<archive>(<member>)', and the call goes to the output's own
+##   definition ('<Module>' in an EXE, the export class with -shared);
+## - two different libraries with the same assembly name are
+##   '<lib2>: library assembly '<n>' is also linked from <lib1>; the CLR
+##   loads one assembly of a name', in either order, and nothing is written;
+## - the same library given twice (the same path twice, a path and -l, or a
+##   byte-identical copy in another directory) is one library input: no
+##   diagnostic, one AssemblyRef and one ldtoken (M22 review r2 finding 16);
+## - a library whose assembly name is the output's, compared without regard
+##   to case as the CLR compares assembly names, is
+##   '<lib>: library assembly '<n>' has the name of the output; the CLR loads
+##   one assembly of a name', for a program and for a -shared output, and
+##   nothing is written; the same library linked into another name works
+##   (review r2 finding 2).
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj a.ll -o a.o
+# RUN: llc -filetype=obj b.ll -o b.o
+# RUN: llc -filetype=obj def.ll -o def.o
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: llc -filetype=obj progk.ll -o progk.o
+# RUN: msil-ld -shared a.o -o a.dll 2>&1 | count 0
+# RUN: msil-ld -shared b.o -o b.dll 2>&1 | count 0
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## Two exporters, both orders.
+# RUN: msil-ld prog.o a.dll b.dll -o ab.exe 2>&1 | %{fc} --check-prefix=TWO -DL1=a.dll -DL2=b.dll \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: llvm-cil-dump ab.exe | FileCheck %s --check-prefix=BIND -DLIB=a --implicit-check-not="[b]b::'dup'"
+# RUN: msil-ld prog.o b.dll a.dll -o ba.exe 2>&1 | %{fc} --check-prefix=TWO -DL1=b.dll -DL2=a.dll \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: llvm-cil-dump ba.exe | FileCheck %s --check-prefix=BIND -DLIB=b --implicit-check-not="[a]a::'dup'"
+# TWO:  {{^}}msil-ld: warning: symbol 'dup' is exported by [[L1]] and [[L2]]; using [[L1]]{{$}}
+# BIND: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# BIND: {{^}}    L{{[0-9]+}}: call int32() {{\[}}[[LIB]]{{\]}}[[LIB]]::'dup'{{$}}
+
+## An object and a library.
+# RUN: msil-ld prog.o def.o a.dll -o own.exe 2>&1 | %{fc} --check-prefix=OWN \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# OWN: {{^}}msil-ld: warning: symbol 'dup' is defined in def.o and exported by a.dll; the output uses its own definition{{$}}
+# RUN: llvm-cil-dump own.exe | FileCheck %s --check-prefix=OWN-BIND --implicit-check-not="[a]a::'dup'"
+# OWN-BIND: {{^}}  .method 'dup' int32() flags=0x0016 impl=0x0000{{$}}
+# OWN-BIND: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# OWN-BIND: {{^}}    L{{[0-9]+}}: call int32() '<Module>'::'dup'{{$}}
+
+## A kind mismatch.
+# RUN: not msil-ld progk.o a.dll -o x.exe 2>&1 | %{fc} --check-prefix=KIND --implicit-check-not=warning:
+# KIND: {{^}}msil-ld: error: symbol type mismatch: thing{{$}}
+
+## An archive member against a library: libmem.a(mem.o) defines dup, which
+## a.dll exports too.
+# RUN: llc -filetype=obj mem.ll -o mem.o
+# RUN: llvm-ar rc libmem.a mem.o
+# RUN: msil-ld prog.o a.dll libmem.a --why-extract=arx1.why -o arx1.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=ARX --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: FileCheck %s --check-prefix=WHY --input-file=arx1.why
+# RUN: llvm-cil-dump arx1.exe | FileCheck %s --check-prefix=OWN-BIND --implicit-check-not="[a]a::'dup'"
+# RUN: msil-ld prog.o libmem.a a.dll --why-extract=arx2.why -o arx2.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=ARX --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: FileCheck %s --check-prefix=WHY --input-file=arx2.why
+# RUN: llvm-cil-dump arx2.exe | FileCheck %s --check-prefix=OWN-BIND --implicit-check-not="[a]a::'dup'"
+# RUN: msil-ld -shared prog.o a.dll libmem.a --why-extract=arx3.why -o arxlib.dll 2>&1 \
+# RUN:   | %{fc} --check-prefix=ARX --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: FileCheck %s --check-prefix=WHY --input-file=arx3.why
+# RUN: llvm-cil-dump arxlib.dll | FileCheck %s --check-prefix=ARX-SHARED --implicit-check-not="[a]a::'dup'"
+# ARX: {{^}}msil-ld: warning: symbol 'dup' is defined in libmem.a(mem.o) and exported by a.dll; the output uses its own definition{{$}}
+# WHY:      {{^}}reference{{[[:space:]]}}extracted{{[[:space:]]}}symbol{{$}}
+# WHY-NEXT: {{^}}prog.o{{[[:space:]]}}libmem.a(mem.o){{[[:space:]]}}dup{{$}}
+# WHY-NOT:  {{.}}
+# ARX-SHARED: {{^}}.class 'arxlib' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# ARX-SHARED: {{^}}  .method 'dup' int32() flags=0x0016 impl=0x0000{{$}}
+# ARX-SHARED: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# ARX-SHARED: {{^}}    L{{[0-9]+}}: call int32() 'arxlib'::'dup'{{$}}
+
+## Two libraries named lib: one/lib.dll (from a.o) and two/lib.dll (from b.o).
+# RUN: mkdir one two
+# RUN: msil-ld -shared a.o -o one/lib.dll 2>&1 | count 0
+# RUN: msil-ld -shared b.o -o two/lib.dll 2>&1 | count 0
+# RUN: not msil-ld prog.o one/lib.dll two/lib.dll -o same12.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=SAME -DL1=one -DL2=two --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: not ls same12.exe
+# RUN: not msil-ld prog.o two/lib.dll one/lib.dll -o same21.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=SAME -DL1=two -DL2=one --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: not ls same21.exe
+# RUN: not msil-ld -shared prog.o one/lib.dll two/lib.dll -o same12.dll 2>&1 \
+# RUN:   | %{fc} --check-prefix=SAME -DL1=one -DL2=two --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: not ls same12.dll
+# SAME: {{^}}msil-ld: error: [[L2]]{{[/\\]}}lib.dll: library assembly 'lib' is also linked from [[L1]]{{[/\\]}}lib.dll; the CLR loads one assembly of a name{{$}}
+
+## One library given twice: the same path, a path and -l, and a
+## byte-identical copy (e/lib.dll) are one input.
+# RUN: mkdir d e twice
+# RUN: msil-ld -shared a.o -o d/lib.dll 2>&1 | count 0
+# RUN: cp d/lib.dll e/lib.dll
+# RUN: msil-ld prog.o d/lib.dll d/lib.dll -o twice/p1.exe 2>&1 | count 0
+# RUN: msil-ld prog.o d/lib.dll -Ld -llib -o twice/p2.exe 2>&1 | count 0
+# RUN: msil-ld prog.o d/lib.dll e/lib.dll -o twice/p3.exe 2>&1 | count 0
+# RUN: llvm-cil-dump twice/p1.exe | FileCheck %s --check-prefix=ONCE
+# RUN: llvm-cil-dump twice/p2.exe | FileCheck %s --check-prefix=ONCE
+# RUN: llvm-cil-dump twice/p3.exe | FileCheck %s --check-prefix=ONCE
+# ONCE-COUNT-1: {{^}}assemblyref 'lib' {{.*}}
+# ONCE-NOT:     {{^}}assemblyref 'lib' {{.*}}
+# ONCE-COUNT-1: {{^}}    L{{[0-9]+}}: ldtoken [lib]lib{{$}}
+# ONCE-NOT:     ldtoken
+# ONCE:         {{^}}    L{{[0-9]+}}: call int32() [lib]lib::'dup'{{$}}
+
+## A library named like the output: same/foo.dll against foo.exe, FOO.exe
+## and, with -shared, other/foo.dll. prog.exe links.
+# RUN: mkdir same other
+# RUN: msil-ld -shared a.o -o same/foo.dll 2>&1 | count 0
+# RUN: llc -filetype=obj use.ll -o use.o
+# RUN: not msil-ld prog.o same/foo.dll -o same/foo.exe 2>&1 | %{fc} --check-prefix=OUTNAME \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: not ls same/foo.exe
+# RUN: not msil-ld prog.o same/foo.dll -o FOO.exe 2>&1 | %{fc} --check-prefix=OUTNAME \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: not ls FOO.exe
+# RUN: not msil-ld -shared use.o same/foo.dll -o other/foo.dll 2>&1 | %{fc} --check-prefix=OUTNAME \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: not ls other/foo.dll
+# OUTNAME: {{^}}msil-ld: error: {{.*}}same{{[/\\]}}foo.dll: library assembly 'foo' has the name of the output; the CLR loads one assembly of a name{{$}}
+# RUN: msil-ld prog.o same/foo.dll -o same/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump same/prog.exe | FileCheck %s --check-prefix=FOO-BIND
+# FOO-BIND: {{^}}assemblyref 'foo' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# FOO-BIND: {{^}}    L{{[0-9]+}}: call int32() [foo]foo::'dup'{{$}}
+
+#--- a.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@thing = global i32 5, align 4
+
+define i32 @dup() {
+  ret i32 1
+}
+
+#--- b.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @dup() {
+  ret i32 2
+}
+
+#--- def.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @dup() {
+  ret i32 3
+}
+
+#--- mem.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @dup() {
+  ret i32 4
+}
+
+#--- prog.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @dup()
+
+define i32 @main() {
+  %r = call i32 @dup()
+  ret i32 %r
+}
+
+#--- progk.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @thing()
+
+define i32 @main() {
+  %r = call i32 @thing()
+  ret i32 %r
+}
+
+#--- use.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @dup()
+
+define i32 @use_dup() {
+  %r = call i32 @dup()
+  ret i32 %r
+}

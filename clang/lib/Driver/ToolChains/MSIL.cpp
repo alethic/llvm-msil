@@ -206,7 +206,11 @@ void msil::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (!D.SysRoot.empty())
     CmdArgs.push_back(Args.MakeArgString("--sysroot=" + D.SysRoot));
 
-  if (Args.hasArg(options::OPT_shared))
+  // A library assembly: a DLL image with no entry point. clang-cl's /LD and
+  // /LDd ask for a DLL as -shared does; the output keeps clang-cl's name
+  // (/LD foo.c writes foo.dll).
+  if (Args.hasArg(options::OPT_shared, options::OPT__SLASH_LD,
+                  options::OPT__SLASH_LDd))
     CmdArgs.push_back("--shared");
   // No MSIL triple has a static C library.
   if (const Arg *A = Args.getLastArg(options::OPT_static))

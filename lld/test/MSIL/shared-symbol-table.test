@@ -1,0 +1,146 @@
+## The symbol table of a library (ImplementationPlan.md M22.a item 4, Q25;
+## 5.9.15 and 5.7.9; the section 12 row of 2026-10-23 '5.7.9, 5.8.11 and
+## M17.c item (7) clarified' for printSymbolTable's lines): the Assembly row
+## carries one '<msil>SymbolTable' attribute whose constructor takes
+## uint8[] (signature 20 01 01 1D 05), framed as the custom-attribute value
+## 01 00, the u32 array length, the payload, 00 00. The payload, field by
+## field (Inputs/shared/symtab.py encodes it from the plan, and the golden
+## bytes below are its output):
+## - magic MSYM, version 1.0, flags (0x01 INTERFACE for --interface-only),
+##   the toolchain ABI version 1, the triple without its environment
+##   version, the C runtime identity, the data model 8,4,2,8;
+## - the export class;
+## - the data symbols in input order with size, log2 alignment and flags
+##   (1 const for a READONLY segment, 4 weak; commons are data);
+## - the flagged functions in input order: 2 weak, and 4 ABI followed by the
+##   definition's SIGNATURES descriptor in 5.8.8's encoding (CallFlags, the
+##   SRET size and log2 alignment, the byval count and entries; the tests
+##   read 'descriptor' as the entry without its token). A function whose
+##   flags would be 0 (twice) is not listed.
+## The C runtime identity is the first -l in command-line order named c,
+## msvcrt, ucrt, ucrtbase, crtdll or msvcr*, as given, else 'none' (stub
+## import libraries make the -l options resolve).
+## llvm-cil-dump --link-info prints the table (printSymbolTable): the header
+## line, ExportClass, Data and Function lines. The plan leaves the spelling
+## of INTERFACE and of ABI's descriptor to M22.a; the checks accept
+## ' flags=0x01' or ' flags=INTERFACE' and look for the descriptor in the
+## words of a link-info Signature line (5.8.11: 'SRET size=<n>
+## align=<bytes>', 'byval=<param>:<size>:<align>').
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj lnx.ll -o lnx.o
+# RUN: mkdir stubs lnxstubs iface crt1 crt2 crt3 crt4 crt5 crt6
+# RUN: llvm-lib /machine:x64 /def:stub.def /out:stubs/ucrt.lib
+# RUN: llvm-lib /machine:x64 /def:stub.def /out:stubs/msvcrt.lib
+# RUN: llvm-lib /machine:x64 /def:stub.def /out:stubs/ucrtbase.lib
+# RUN: llvm-lib /machine:x64 /def:stub.def /out:stubs/msvcr120.lib
+# RUN: llvm-lib /machine:x64 /def:stub.def /out:stubs/kernel32.lib
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o lnxstubs/libc.so
+# RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o lnxstubs/libm.so
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: msil-ld -shared lib.o -o lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info lib.dll | FileCheck %s --check-prefix=TABLE
+# TABLE:      {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8{{$}}
+# TABLE-NEXT: {{^}}ExportClass 'lib'{{$}}
+# TABLE-NEXT: {{^}}Data 'counter' size=4 align=4{{$}}
+# TABLE-NEXT: {{^}}Data CONST 'table' size=6 align=2{{$}}
+# TABLE-NEXT: {{^}}Data WEAK 'wv' size=8 align=8{{$}}
+# TABLE-NEXT: {{^}}Data 'cm' size=4 align=4{{$}}
+# TABLE-NEXT: {{^}}Function WEAK 'wfn'{{$}}
+# TABLE-NEXT: {{^}}Function{{( [A-Z]+)*}} 'mk' {{(.* )?}}SRET size=12 align=4{{( .*)?$}}
+# TABLE-NEXT: {{^}}Function{{( [A-Z]+)*}} 'take' {{(.* )?}}byval=0:12:4{{( .*)?$}}
+# TABLE-NEXT: {{^}}Function WEAK{{( [A-Z]+)*}} 'wmk' {{(.* )?}}SRET size=12 align=4{{( .*)?$}}
+# TABLE-NOT:  {{.}}
+
+## The golden bytes: the table above, as the attribute value of the
+## Assembly row (the last line of the canonical listing).
+# RUN: llvm-cil-dump lib.dll | FileCheck %s --check-prefix=BLOB
+# BLOB:     {{^}}assembly .custom instance void(uint8[]) '<msil>SymbolTable'::'.ctor' = 01 00 75 00 00 00 4D 53 59 4D 01 00 00 01 1B 78 38 36 5F 36 34 2D 70 63 2D 77 69 6E 64 6F 77 73 2D 6D 73 76 63 2D 6D 73 69 6C 04 6E 6F 6E 65 08 04 02 08 01 03 6C 69 62 04 07 63 6F 75 6E 74 65 72 04 02 00 05 74 61 62 6C 65 06 01 01 02 77 76 08 03 04 02 63 6D 04 02 00 04 03 77 66 6E 02 02 6D 6B 04 04 0C 02 00 04 74 61 6B 65 04 00 01 00 0C 02 03 77 6D 6B 06 04 0C 02 00 00 00{{$}}
+# BLOB-NOT: {{.}}
+
+## The carrier: one attribute on the Assembly row, whose constructor is the
+## private class's '.ctor(uint8[])'.
+# RUN: llvm-cil-dump --tables lib.dll | FileCheck %s --check-prefix=CARRIER
+# CARRIER:     {{^}}  MethodDef[{{[0-9]+}}]: RVA=0x{{[0-9A-F]+}} ImplFlags=0x0000 Flags=0x{{[0-9A-F]+}} Name='.ctor' Signature=20 01 01 1D 05 ParamList=
+# CARRIER:     {{^}}Table: CustomAttribute rows=2 rowsize={{[0-9]+}}{{$}}
+# CARRIER-NEXT: {{^}}  CustomAttribute[1]: Parent=0x20000001 Type=0x06{{[0-9A-F]+}} Value=01 00 75 00 00 00 4D 53 59 4D {{.+}} 00 00{{$}}
+# CARRIER-NEXT: {{^}}  CustomAttribute[2]: Parent=0x020000{{[0-9A-F]+}} Type=0x0A{{[0-9A-F]+}} Value=01 00 01 00 00 00 01 00 54 02 0D 41 6C 6C 6F 77 4D 75 6C 74 69 70 6C 65 01{{$}}
+
+## --interface-only: the same table with INTERFACE (flags 0x01).
+# RUN: msil-ld -shared --interface-only lib.o -o iface/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info iface/lib.dll | FileCheck %s --check-prefix=IFACE
+# IFACE:      {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8 flags={{0x01|INTERFACE}}{{$}}
+# IFACE-NEXT: {{^}}ExportClass 'lib'{{$}}
+# IFACE-NEXT: {{^}}Data 'counter' size=4 align=4{{$}}
+# RUN: llvm-cil-dump iface/lib.dll | FileCheck %s --check-prefix=IFACE-BLOB
+# IFACE-BLOB: {{^}}assembly .custom instance void(uint8[]) '<msil>SymbolTable'::'.ctor' = 01 00 75 00 00 00 4D 53 59 4D 01 00 01 01 1B 78 38 36 5F 36 34 2D 70 63 2D 77 69 6E 64 6F 77 73 2D 6D 73 76 63 2D 6D 73 69 6C 04 6E 6F 6E 65 08 04 02 08 01 03 6C 69 62 04 07 63 6F 75 6E 74 65 72 04 02 00 05 74 61 62 6C 65 06 01 01 02 77 76 08 03 04 02 63 6D 04 02 00 04 03 77 66 6E 02 02 6D 6B 04 04 0C 02 00 04 74 61 6B 65 04 00 01 00 0C 02 03 77 6D 6B 06 04 0C 02 00 00 00{{$}}
+
+## The C runtime identity: the first -l of the list, as given; libraries
+## with other names do not count; none without one.
+# RUN: msil-ld -shared lib.o -L stubs -lucrt -o crt1/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info crt1/lib.dll | FileCheck %s --check-prefix=RUNTIME -DCRT=ucrt
+# RUN: msil-ld -shared lib.o -L stubs -lkernel32 -lucrtbase -lmsvcrt -o crt2/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info crt2/lib.dll | FileCheck %s --check-prefix=RUNTIME -DCRT=ucrtbase
+# RUN: msil-ld -shared lib.o -L stubs -lmsvcr120 -lucrt -o crt3/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info crt3/lib.dll | FileCheck %s --check-prefix=RUNTIME -DCRT=msvcr120
+# RUN: msil-ld -shared lib.o -L stubs -lkernel32 -o crt4/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info crt4/lib.dll | FileCheck %s --check-prefix=RUNTIME -DCRT=none
+# RUN: msil-ld -shared lib.o -L stubs -lmsvcrt -o crt5/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info crt5/lib.dll | FileCheck %s --check-prefix=RUNTIME -DCRT=msvcrt
+# RUNTIME: {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='[[CRT]]' datamodel=8,4,2,8{{$}}
+
+## Linux: -lc, the ELF data model, the triple without a version.
+# RUN: msil-ld -shared lnx.o -L lnxstubs -lm -lc -o crt6/lnx.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info crt6/lnx.dll | FileCheck %s --check-prefix=LNX
+# LNX:      {{^}}SymbolTable v1.0 triple=x86_64-unknown-linux-gnu-msil abi=1 runtime='c' datamodel=8,8,4,8{{$}}
+# LNX-NEXT: {{^}}ExportClass 'lnx'{{$}}
+# LNX-NEXT: {{^}}Data 'lv' size=8 align=8{{$}}
+# LNX-NOT:  {{.}}
+
+#--- stub.def
+EXPORTS
+  stub_fn
+
+#--- lib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+%struct.S = type { i32, i32, i32 }
+
+@counter = global i32 5, align 4
+@table = constant [3 x i16] [i16 1, i16 2, i16 3], align 2
+@wv = weak global i64 7, align 8
+@cm = common global i32 0, align 4
+
+define i32 @twice(i32 %x) {
+  %r = shl i32 %x, 1
+  ret i32 %r
+}
+
+define weak i32 @wfn() {
+  ret i32 1
+}
+
+define void @mk(ptr sret(%struct.S) align 4 %out, i32 %x) {
+  store i32 %x, ptr %out, align 4
+  ret void
+}
+
+define i32 @take(ptr byval(%struct.S) align 4 %s) {
+  %v = load i32, ptr %s, align 4
+  ret i32 %v
+}
+
+define weak void @wmk(ptr sret(%struct.S) align 4 %out) {
+  store i32 0, ptr %out, align 4
+  ret void
+}
+
+#--- lnx.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@lv = global i64 1, align 8

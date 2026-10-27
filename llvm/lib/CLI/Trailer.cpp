@@ -34,6 +34,11 @@ using namespace llvm::cli;
 
 TrailerSink::~TrailerSink() = default;
 
+EntityRef TrailerSink::addTrailerField(StringRef Name) {
+  reportFatalInternalError("MSIL trailer: this sink cannot make the field '" +
+                           Name + "'");
+}
+
 /// The width of a pointer (decision D6: Phase 2's triples are 64-bit), the
 /// natural alignment of stind.i and of the zero part's initblk, as Phase 1
 /// wrote them.
@@ -82,12 +87,26 @@ static void emitOffset(ILBuilder &B, int64_t Offset) {
   B.emit(Opcode::Add);
 }
 
-/// A method of the trailer: \p Name with \p Flags and \p Sig.
+/// 'unaligned. N' before an access to Base + \p Offset that may be less
+/// aligned than the instruction assumes (\p Natural), with N the largest of
+/// 1, 2 and 4 that the address guarantees, as MSILSetMemFlags decides it for
+/// code (decision D24, ECMA-335 III.2.5). Base is aligned to \p MaxAlign.
+static void emitUnaligned(ILBuilder &B, Align MaxAlign, uint64_t Offset,
+                          uint64_t Natural) {
+  uint64_t A = commonAlignment(MaxAlign, Offset).value();
+  if (A < Natural)
+    B.emitImm(Opcode::Unaligned, std::min<uint64_t>(A, 4));
+}
+
+/// A method of the trailer: \p Name with \p Flags and \p Sig, held by
+/// \p Owner.
 static TrailerMethod makeMethod(StringRef Name, MethodAttributes Flags,
-                                MethodSig Sig) {
+                                MethodSig Sig,
+                                TrailerOwner Owner = TrailerOwner::Module) {
   bool ReturnsValue = Sig.Return.getElementType() != ELEMENT_TYPE_VOID;
   TrailerMethod M{
       Name.str(), Flags, std::move(Sig), {}, ILBuilder(ReturnsValue), {}};
+  M.Owner = Owner;
   return M;
 }
 
@@ -115,12 +134,13 @@ static MethodSig getVoidSig() { return MethodSig(); }
 /// then the export's address (0 when either is missing, except that
 /// NativeLibrary's members throw instead).
 static void buildDataImportHelper(const DataImportHelper &H,
-                                  const MethodSig &Sig, TrailerSink &Sink) {
+                                  const MethodSig &Sig, TrailerOwner Owner,
+                                  TrailerSink &Sink) {
   TrailerMethod M =
       makeMethod(DataImportHelperName,
                  MethodAttributes::Private | MethodAttributes::HideBySig |
                      MethodAttributes::Static,
-                 Sig);
+                 Sig, Owner);
   ILBuilder &B = M.Body;
   B.emitLdarg(0);
   switch (H.K) {
@@ -165,12 +185,12 @@ static void buildDataImportHelper(const DataImportHelper &H,
 /// not found in <module>") for a missing one (5.10.12). A separate method,
 /// never inlined into .cctor (FeatureIdeas 7).
 static void buildInitDataImports(ArrayRef<DataImport> Imports, EntityRef Helper,
-                                 TrailerSink &Sink) {
+                                 TrailerOwner Owner, TrailerSink &Sink) {
   TrailerMethod M =
       makeMethod(InitDataImportsName,
                  MethodAttributes::Private | MethodAttributes::HideBySig |
                      MethodAttributes::Static,
-                 getVoidSig());
+                 getVoidSig(), Owner);
   ILBuilder &B = M.Body;
   EntityRef Ctor =
       Sink.getBCLMember(BCLMemberId::EntryPointNotFoundException_ctor);
@@ -211,15 +231,103 @@ collectSlots(ArrayRef<RuntimeReloc> Relocs, SlotMap &Slots) {
   return Order;
 }
 
-/// <Module>::.cctor (5.9.10).
-static void buildModuleInitializer(const TrailerInput &In,
-                                   EntityRef InitImports, TrailerSink &Sink) {
-  TrailerMethod M =
-      makeMethod(ModuleInitializerName,
-                 MethodAttributes::Private | MethodAttributes::HideBySig |
-                     MethodAttributes::SpecialName |
-                     MethodAttributes::RTSpecialName | MethodAttributes::Static,
-                 getVoidSig());
+/// A type initializer, <Module>::.cctor or '<msil>Data'::.cctor (5.9.10).
+static TrailerMethod makeTypeInitializer(TrailerOwner Owner) {
+  return makeMethod(ModuleInitializerName,
+                    MethodAttributes::Private | MethodAttributes::HideBySig |
+                        MethodAttributes::SpecialName |
+                        MethodAttributes::RTSpecialName |
+                        MethodAttributes::Static,
+                    getVoidSig(), Owner);
+}
+
+/// Appends argc and a NULL-terminated argv, as a native main gets them, to
+/// \p M, in four new locals from \p FirstLocal on: the string[] of
+/// Environment.GetCommandLineArgs(), argc, argv (\p PointerBytes-byte
+/// pointers) and a counter. The arguments start with the program (the .dll),
+/// and Marshal.StringToHGlobalAnsi converts them to the native narrow
+/// encoding (UTF-8 on Unix, the ANSI code page on Windows). The strings and
+/// the array are never freed: they live as long as the program. Its labels
+/// are '<LabelPrefix>_loop' and '<LabelPrefix>_cond'.
+static void emitArgv(TrailerMethod &M, unsigned FirstLocal,
+                     unsigned PointerBytes, StringRef LabelPrefix,
+                     TrailerSink &Sink) {
+  ILBuilder &B = M.Body;
+  // A pointer is a native int on 64-bit triples (decision D2).
+  TypeSig PointerType =
+      TypeSig::get(PointerBytes == 8 ? ELEMENT_TYPE_I : ELEMENT_TYPE_I4);
+  assert(M.Locals.size() == FirstLocal && "the locals are appended");
+  M.Locals.push_back(TypeSig::getSZArray(TypeSig::get(ELEMENT_TYPE_STRING)));
+  M.Locals.push_back(TypeSig::get(ELEMENT_TYPE_I4));
+  M.Locals.push_back(PointerType);
+  M.Locals.push_back(TypeSig::get(ELEMENT_TYPE_I4));
+  unsigned Args = FirstLocal, Argc = FirstLocal + 1, Argv = FirstLocal + 2,
+           I = FirstLocal + 3;
+  ILLabel Loop = createLabel(M, (LabelPrefix + "_loop").str());
+  ILLabel Cond = createLabel(M, (LabelPrefix + "_cond").str());
+  // Pushes the address of argv[<IndexLocal>].
+  auto AddArgvSlotAddress = [&](unsigned IndexLocal) {
+    B.emitLdloc(Argv);
+    B.emitLdloc(IndexLocal);
+    B.emit(Opcode::Conv_i);
+    B.emitLdcI4(PointerBytes);
+    B.emit(Opcode::Mul);
+    B.emit(Opcode::Add);
+  };
+
+  B.emitCall(
+      Opcode::Call,
+      tok(Sink.getBCLMember(BCLMemberId::Environment_GetCommandLineArgs)), 0,
+      1);
+  B.emitStloc(Args);
+  // argc = args.Length
+  B.emitLdloc(Args);
+  B.emit(Opcode::Ldlen);
+  B.emit(Opcode::Conv_i4);
+  B.emitStloc(Argc);
+  // argv = AllocHGlobal((argc + 1) * sizeof(char *))
+  B.emitLdloc(Argc);
+  B.emitLdcI4(1);
+  B.emit(Opcode::Add);
+  B.emit(Opcode::Conv_i);
+  B.emitLdcI4(PointerBytes);
+  B.emit(Opcode::Mul);
+  B.emitCall(Opcode::Call,
+             tok(Sink.getBCLMember(BCLMemberId::Marshal_AllocHGlobal)), 1, 1);
+  B.emitStloc(Argv);
+  // for (i = 0; i < argc; ++i) argv[i] = StringToHGlobalAnsi(args[i])
+  B.emitLdcI4(0);
+  B.emitStloc(I);
+  B.emitBranch(Opcode::Br, Cond);
+  B.placeLabel(Loop);
+  AddArgvSlotAddress(I);
+  B.emitLdloc(Args);
+  B.emitLdloc(I);
+  B.emit(Opcode::Ldelem_ref);
+  B.emitCall(Opcode::Call,
+             tok(Sink.getBCLMember(BCLMemberId::Marshal_StringToHGlobalAnsi)),
+             1, 1);
+  B.emit(Opcode::Stind_i);
+  B.emitLdloc(I);
+  B.emitLdcI4(1);
+  B.emit(Opcode::Add);
+  B.emitStloc(I);
+  B.placeLabel(Cond);
+  B.emitLdloc(I);
+  B.emitLdloc(Argc);
+  B.emitBranch(Opcode::Blt, Loop);
+  // argv[argc] = NULL
+  AddArgvSlotAddress(Argc);
+  B.emitLdcI4(0);
+  B.emit(Opcode::Conv_i);
+  B.emit(Opcode::Stind_i);
+}
+
+/// Phase 1 of the initialization (5.9.10), appended to \p M: the image, the
+/// address fields, the function addresses, the data imports and the
+/// relocations within the assembly.
+static void emitPhase1(const TrailerInput &In, EntityRef InitImports,
+                       TrailerMethod &M, TrailerSink &Sink) {
   ILBuilder &B = M.Body;
 
   // The address field of every function whose address is used, which code
@@ -244,14 +352,8 @@ static void buildModuleInitializer(const TrailerInput &In,
     uint64_t ZeroSize = L->TotalSize - InitSize;
     Align MaxAlign(uint64_t(1) << L->MaxAlignLog2);
     int64_t Alignment = MaxAlign.value();
-    // 'unaligned. N' before an access to Base + Offset that may be less
-    // aligned than the instruction assumes (Natural), with N the largest of
-    // 1, 2 and 4 that the address guarantees, as MSILSetMemFlags decides it
-    // for code (decision D24, ECMA-335 III.2.5). Base is aligned to MaxAlign.
     auto AddUnaligned = [&](uint64_t Offset, uint64_t Natural) {
-      uint64_t A = commonAlignment(MaxAlign, Offset).value();
-      if (A < Natural)
-        B.emitImm(Opcode::Unaligned, std::min<uint64_t>(A, 4));
+      emitUnaligned(B, MaxAlign, Offset, Natural);
     };
 
     // Base = (AllocHGlobal(TotalSize + MaxAlign - 1) + MaxAlign - 1) &
@@ -440,16 +542,98 @@ static void buildModuleInitializer(const TrailerInput &In,
     // Without a data segment, the function addresses come first.
     AddFunctionAddresses();
   }
+}
+
+namespace {
+/// The fields '<msil>argc' and '<msil>argv' through which <Module>::.cctor
+/// hands '<msil>Main' the argc and argv that it built for the constructors
+/// (TrailerInput::CtorArgs); 0 when '<msil>Main' builds its own.
+struct SharedArgs {
+  EntityRef Argc = 0, Argv = 0;
+};
+} // end anonymous namespace
+
+/// Phase 2 of the initialization (5.9.10, 5.9.15), appended to \p M: the
+/// libraries, the relocations against their exports and the constructors.
+/// With \p Shared, argc and argv are stored in its fields once they are
+/// built.
+static void emitPhase2(const TrailerInput &In, TrailerMethod &M,
+                       TrailerSink &Sink, SharedArgs *Shared) {
+  ILBuilder &B = M.Body;
+
+  // Every linked library initializes before this assembly's constructors
+  // and main: the JIT runs a library's module initializer when it resolves
+  // a token of the library (exports-multiasm 6.1, 6.3).
+  for (EntityRef Type : In.LibraryTypes) {
+    B.emitToken(Opcode::Ldtoken, tok(Type));
+    B.emit(Opcode::Pop);
+  }
+
+  // The relocations against library exports, straight-line: the accessor's
+  // value plus the addend, at '<msil>data' plus the site.
+  if (!In.CrossRelocs.empty()) {
+    const ImageLayout *L = In.Image;
+    assert(L && "relocations need an image");
+    EntityRef Base = Sink.getDataField();
+    Align MaxAlign(uint64_t(1) << L->MaxAlignLog2);
+    for (const CrossReloc &R : In.CrossRelocs) {
+      assert(R.Site < L->InitSize && "relocation sites lie in the image");
+      B.emitToken(Opcode::Ldsfld, tok(Base));
+      emitOffset(B, R.Site);
+      B.emitCall(Opcode::Call, tok(R.Accessor), 0, 1);
+      emitOffset(B, R.Addend);
+      if (R.Width == 4) {
+        B.emit(Opcode::Conv_i4);
+        emitUnaligned(B, MaxAlign, R.Site, 4);
+        B.emit(Opcode::Stind_i4);
+      } else {
+        assert(R.Width == 8 && "relocations hold 4 or 8 bytes");
+        emitUnaligned(B, MaxAlign, R.Site, PointerSize);
+        B.emit(Opcode::Stind_i);
+      }
+    }
+  }
 
   // The constructors last, in run order: the data they may touch is in
-  // place. Each is called directly; a result is popped.
-  for (const auto &[Method, ReturnsValue] : In.Ctors) {
-    B.emitCall(Opcode::Call, tok(Method), 0, ReturnsValue ? 1 : 0);
+  // place. Each is called directly, with argc, argv and envp as far as it
+  // takes them (CtorArgs); a result is popped.
+  assert((In.CtorArgs.empty() || In.CtorArgs.size() == In.Ctors.size()) &&
+         "one argument count per constructor");
+  std::optional<unsigned> ArgvLocals;
+  for (auto [Index, Ctor] : enumerate(In.Ctors)) {
+    auto [Method, ReturnsValue] = Ctor;
+    unsigned NumArgs = In.CtorArgs.empty() ? 0 : In.CtorArgs[Index];
+    assert(NumArgs <= 3 && "constructors take argc, argv and envp at most");
+    if (NumArgs != 0 && !ArgvLocals) {
+      ArgvLocals = M.Locals.size();
+      emitArgv(M, *ArgvLocals, PointerSize, "ctor_argv", Sink);
+      if (Shared) {
+        // For '<msil>Main', so that main gets this argv, as glibc passes
+        // one argv to the constructors and main. A native int field holds
+        // argc.
+        Shared->Argc = Sink.addTrailerField(ArgcFieldName);
+        Shared->Argv = Sink.addTrailerField(ArgvFieldName);
+        B.emitLdloc(*ArgvLocals + 1);
+        B.emit(Opcode::Conv_i);
+        B.emitToken(Opcode::Stsfld, tok(Shared->Argc));
+        B.emitLdloc(*ArgvLocals + 2);
+        B.emitToken(Opcode::Stsfld, tok(Shared->Argv));
+      }
+    }
+    if (NumArgs >= 1)
+      B.emitLdloc(*ArgvLocals + 1);
+    if (NumArgs >= 2)
+      B.emitLdloc(*ArgvLocals + 2);
+    if (NumArgs >= 3) {
+      // envp is the C library's environ: the pointer at its address.
+      assert(In.EnvironField && "envp needs the address of environ");
+      B.emitToken(Opcode::Ldsfld, tok(In.EnvironField));
+      B.emit(Opcode::Ldind_i);
+    }
+    B.emitCall(Opcode::Call, tok(Method), NumArgs, ReturnsValue ? 1 : 0);
     if (ReturnsValue)
       B.emit(Opcode::Pop);
   }
-  B.emitRet();
-  finish(M, Sink);
 }
 
 std::optional<bool> cli::getEntryPointHasArgs(const MethodSig &Sig,
@@ -471,8 +655,10 @@ std::optional<bool> cli::getEntryPointHasArgs(const MethodSig &Sig,
 }
 
 /// '<msil>Main'(string[] args), the .entrypoint method that calls the C
-/// function main (decision D27).
-static void buildEntryPoint(const EntryPoint &E, TrailerSink &Sink) {
+/// function main (decision D27), with the argc and argv of \p Shared when
+/// <Module>::.cctor stored them there.
+static void buildEntryPoint(const EntryPoint &E, const SharedArgs &Shared,
+                            TrailerSink &Sink) {
   MethodSig Sig;
   Sig.Return = TypeSig::get(ELEMENT_TYPE_I4);
   Sig.Params = {TypeSig::getSZArray(TypeSig::get(ELEMENT_TYPE_STRING))};
@@ -482,77 +668,16 @@ static void buildEntryPoint(const EntryPoint &E, TrailerSink &Sink) {
                      MethodAttributes::Static,
                  std::move(Sig));
   ILBuilder &B = M.Body;
-  // A pointer is a native int on 64-bit triples (decision D2).
-  TypeSig PointerType =
-      TypeSig::get(E.PointerSize == 8 ? ELEMENT_TYPE_I : ELEMENT_TYPE_I4);
-  if (E.HasArgs) {
-    // argc and a NULL-terminated argv as a native main gets them:
-    // Environment.GetCommandLineArgs() starts with the program (the .dll),
-    // and Marshal.StringToHGlobalAnsi converts to the native narrow encoding
-    // (UTF-8 on Unix, the ANSI code page on Windows). The strings and the
-    // array are never freed: they live as long as the program.
-    // Locals: 0 = the string[], 1 = argc, 2 = argv, 3 = i.
-    M.Locals = {TypeSig::getSZArray(TypeSig::get(ELEMENT_TYPE_STRING)),
-                TypeSig::get(ELEMENT_TYPE_I4), PointerType,
-                TypeSig::get(ELEMENT_TYPE_I4)};
-    ILLabel Loop = createLabel(M, "argv_loop");
-    ILLabel Cond = createLabel(M, "argv_cond");
-    // Pushes the address of argv[<IndexLocal>].
-    auto AddArgvSlotAddress = [&](unsigned IndexLocal) {
-      B.emitLdloc(2);
-      B.emitLdloc(IndexLocal);
-      B.emit(Opcode::Conv_i);
-      B.emitLdcI4(E.PointerSize);
-      B.emit(Opcode::Mul);
-      B.emit(Opcode::Add);
-    };
-
-    B.emitCall(
-        Opcode::Call,
-        tok(Sink.getBCLMember(BCLMemberId::Environment_GetCommandLineArgs)), 0,
-        1);
-    B.emitStloc(0);
-    // argc = args.Length
-    B.emitLdloc(0);
-    B.emit(Opcode::Ldlen);
+  if (E.HasArgs && Shared.Argv) {
+    // return main(argc, argv), as the constructors got them: the type
+    // initializer of <Module> runs before a static field of <Module> is
+    // first read (ECMA-335 II.10.5.3.1).
+    B.emitToken(Opcode::Ldsfld, tok(Shared.Argc));
     B.emit(Opcode::Conv_i4);
-    B.emitStloc(1);
-    // argv = AllocHGlobal((argc + 1) * sizeof(char *))
-    B.emitLdloc(1);
-    B.emitLdcI4(1);
-    B.emit(Opcode::Add);
-    B.emit(Opcode::Conv_i);
-    B.emitLdcI4(E.PointerSize);
-    B.emit(Opcode::Mul);
-    B.emitCall(Opcode::Call,
-               tok(Sink.getBCLMember(BCLMemberId::Marshal_AllocHGlobal)), 1, 1);
-    B.emitStloc(2);
-    // for (i = 0; i < argc; ++i) argv[i] = StringToHGlobalAnsi(args[i])
-    B.emitLdcI4(0);
-    B.emitStloc(3);
-    B.emitBranch(Opcode::Br, Cond);
-    B.placeLabel(Loop);
-    AddArgvSlotAddress(3);
-    B.emitLdloc(0);
-    B.emitLdloc(3);
-    B.emit(Opcode::Ldelem_ref);
-    B.emitCall(Opcode::Call,
-               tok(Sink.getBCLMember(BCLMemberId::Marshal_StringToHGlobalAnsi)),
-               1, 1);
-    B.emit(Opcode::Stind_i);
-    B.emitLdloc(3);
-    B.emitLdcI4(1);
-    B.emit(Opcode::Add);
-    B.emitStloc(3);
-    B.placeLabel(Cond);
-    B.emitLdloc(3);
-    B.emitLdloc(1);
-    B.emitBranch(Opcode::Blt, Loop);
-    // argv[argc] = NULL
-    AddArgvSlotAddress(1);
-    B.emitLdcI4(0);
-    B.emit(Opcode::Conv_i);
-    B.emit(Opcode::Stind_i);
+    B.emitToken(Opcode::Ldsfld, tok(Shared.Argv));
+  } else if (E.HasArgs) {
+    // Locals: 0 = the string[], 1 = argc, 2 = argv, 3 = i.
+    emitArgv(M, 0, E.PointerSize, "argv", Sink);
     // return main(argc, argv)
     B.emitLdloc(1);
     B.emitLdloc(2);
@@ -575,6 +700,9 @@ unsigned cli::countAddressSlots(ArrayRef<RuntimeReloc> Relocs,
 }
 
 void cli::buildTrailer(const TrailerInput &In, TrailerSink &Sink) {
+  // Phase 1 and its helpers belong to '<msil>Data' in a two-phase output.
+  TrailerOwner Phase1Owner =
+      In.TwoPhase ? TrailerOwner::Data : TrailerOwner::Module;
   EntityRef InitImports = 0;
   if (!In.DataImports.empty()) {
     assert(In.ImportHelper && "data imports need a helper");
@@ -584,11 +712,37 @@ void cli::buildTrailer(const TrailerInput &In, TrailerSink &Sink) {
                         TypeSig::get(ELEMENT_TYPE_STRING)};
     EntityRef Helper = Sink.declareHelper(DataImportHelperName, HelperSig);
     InitImports = Sink.declareHelper(InitDataImportsName, getVoidSig());
-    buildDataImportHelper(*In.ImportHelper, HelperSig, Sink);
-    buildInitDataImports(In.DataImports, Helper, Sink);
+    buildDataImportHelper(*In.ImportHelper, HelperSig, Phase1Owner, Sink);
+    buildInitDataImports(In.DataImports, Helper, Phase1Owner, Sink);
   }
-  if (In.Image || !In.FnAddrFields.empty() || InitImports || !In.Ctors.empty())
-    buildModuleInitializer(In, InitImports, Sink);
+  bool HasPhase1 = In.Image || !In.FnAddrFields.empty() || InitImports;
+  bool HasPhase2 =
+      !In.LibraryTypes.empty() || !In.CrossRelocs.empty() || !In.Ctors.empty();
+  SharedArgs Shared;
+  if (In.TwoPhase) {
+    if (HasPhase1) {
+      TrailerMethod M = makeTypeInitializer(TrailerOwner::Data);
+      emitPhase1(In, InitImports, M, Sink);
+      M.Body.emitRet();
+      finish(M, Sink);
+    }
+    if (HasPhase2) {
+      TrailerMethod M = makeTypeInitializer(TrailerOwner::Module);
+      emitPhase2(In, M, Sink, /*Shared=*/nullptr);
+      M.Body.emitRet();
+      finish(M, Sink);
+    }
+  } else if (HasPhase1 || HasPhase2) {
+    // A main that takes argc and argv gets those of the constructors that
+    // take them, if any do (CtorArgs).
+    bool MainTakesArgs =
+        In.Entry && In.Entry->HasArgs && In.Entry->PointerSize == PointerSize;
+    TrailerMethod M = makeTypeInitializer(TrailerOwner::Module);
+    emitPhase1(In, InitImports, M, Sink);
+    emitPhase2(In, M, Sink, MainTakesArgs ? &Shared : nullptr);
+    M.Body.emitRet();
+    finish(M, Sink);
+  }
   if (In.Entry)
-    buildEntryPoint(*In.Entry, Sink);
+    buildEntryPoint(*In.Entry, Shared, Sink);
 }

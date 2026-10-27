@@ -17,6 +17,14 @@
 // MSILTargetStreamer), so -S output and a one-object link share one
 // implementation (Q5).
 //
+// Outputs that link libraries built by this toolchain (5.9.15, M22) also
+// touch each library's export class with 'ldtoken' and apply the data
+// relocations against the libraries' exports, after the relocations within
+// the assembly and before the constructors. A library itself initializes in
+// two phases: '<msil>Data'::.cctor allocates and fills the image and applies
+// the relocations within the assembly, naming no other assembly of this
+// toolchain, and <Module>::.cctor runs the rest (exports-multiasm 6.4).
+//
 // The builder is pure computation: it asks its sink for the entities it
 // names (fields, BCL members, helpers, strings, RVA data) and hands it each
 // method with its body laid out (cli::ILBuilder, token operands
@@ -63,6 +71,12 @@ inline constexpr StringLiteral RelocsTypeName = "<msil>relocs_t";
 inline constexpr StringLiteral RelocsFieldName = "<msil>relocs";
 inline constexpr StringLiteral DataImportHelperName = "<msil>dataimport";
 inline constexpr StringLiteral InitDataImportsName = "<msil>init_dataimports";
+/// The fields in which <Module>::.cctor leaves argc and argv for
+/// '<msil>Main' when a constructor takes them (TrailerInput::CtorArgs).
+inline constexpr StringLiteral ArgcFieldName = "<msil>argc";
+inline constexpr StringLiteral ArgvFieldName = "<msil>argv";
+/// The class whose .cctor runs phase 1 of a two-phase output (M22).
+inline constexpr StringLiteral DataClassName = "<msil>Data";
 
 /// A data relocation applied at startup: the image slot at Site receives the
 /// address of a global plus Addend (Width 8, stind.i) or its low 32 bits
@@ -110,6 +124,23 @@ struct EntryPoint {
   unsigned PointerSize = 8;
 };
 
+/// A data relocation against an export of a library built by this toolchain
+/// (M22; plan 5.9.15): the image slot at Site receives the value that the
+/// export's '<msil>addr_<name>' accessor Accessor returns (the MemberRef of
+/// a function's or a variable's accessor) plus Addend, all of it (Width 8,
+/// stind.i) or its low 32 bits (Width 4, conv.i4 + stind.i4).
+struct CrossReloc {
+  uint64_t Site = 0;
+  uint8_t Width = 0;
+  EntityRef Accessor = 0;
+  int64_t Addend = 0;
+};
+
+/// The class that holds a trailer method (M22): <Module>, or the class
+/// '<msil>Data' (DataClassName), whose .cctor runs phase 1 of a two-phase
+/// output, and which then also holds the data-import helpers.
+enum class TrailerOwner : uint8_t { Module, Data };
+
 /// Whether an entry function with the IL signature \p Sig (variadic if
 /// \p IsVarArg or if Sig has a SENTINEL) has one of the shapes that
 /// '<msil>Main' calls (decision D27, decided on the IL signature): a default
@@ -132,6 +163,9 @@ struct TrailerMethod {
   /// The name of each label of Body, by ILLabel::Id, for a text sink (the
   /// MSIL target prints them as temporary symbols, '@argv_loop').
   std::vector<std::string> LabelNames;
+  /// The class that holds the method (M22): always <Module> unless
+  /// TrailerInput::TwoPhase.
+  TrailerOwner Owner = TrailerOwner::Module;
 };
 
 /// What the trailer is built from. The canonical orders (5.9.10): address
@@ -153,11 +187,45 @@ struct TrailerInput {
   std::vector<RuntimeReloc> Relocs;
   /// (method, returns a value), in run order.
   std::vector<std::pair<EntityRef, bool>> Ctors;
+  /// The number of arguments that each constructor of Ctors takes, by
+  /// position; empty when none takes any (plan section 12, 'M22.b extended',
+  /// defect 4). Off Windows a constructor may take 1-3: argc, argv and envp,
+  /// as glibc calls an .init_array entry. argc and argv are built once, from
+  /// Environment.GetCommandLineArgs(), before the first such constructor,
+  /// and when '<msil>Main' passes main argc and argv it passes the same ones,
+  /// as glibc does: <Module>::.cctor, which runs before '<msil>Main', leaves
+  /// them in '<msil>argc' and '<msil>argv' (ArgcFieldName, ArgvFieldName,
+  /// private static initonly native int fields of <Module> that
+  /// TrailerSink::addTrailerField makes), and '<msil>Main' reads them
+  /// instead of building its own (a TwoPhase output has no '<msil>Main').
+  /// envp is the value of the C library's environ, read through
+  /// EnvironField.
+  std::vector<uint8_t> CtorArgs;
+  /// The address field of the C library's environ, one of DataImports;
+  /// needed when a constructor takes envp (CtorArgs).
+  EntityRef EnvironField = 0;
   std::optional<EntryPoint> Entry;
   /// Above this many relocations the module initializer applies them through
   /// the '<msil>relocs' table and a loop (llc -msil-reloc-loop-threshold,
   /// msil-ld --msil-reloc-loop-threshold).
   unsigned RelocLoopThreshold = 32;
+  /// M22: two-phase initialization, set for -shared outputs (plan 5.9.10,
+  /// 5.9.15). Phase 1, from the allocation through the relocations within
+  /// the assembly (the loop included), and the data-import helpers belong to
+  /// '<msil>Data' (TrailerOwner::Data), whose .cctor never names another
+  /// assembly of this toolchain; phase 2, the LibraryTypes, the CrossRelocs
+  /// and the constructors, is <Module>::.cctor, which is omitted when it is
+  /// empty. Without it one <Module>::.cctor runs both, phase 2 after the
+  /// relocations.
+  bool TwoPhase = false;
+  /// M22: the first export class of every library that the output links
+  /// directly, in command-line order, used or not; each is touched with
+  /// 'ldtoken' and 'pop', so that the CLR initializes every linked library
+  /// before this output's constructors and main (exports-multiasm 6.3).
+  std::vector<EntityRef> LibraryTypes;
+  /// M22: the relocations against the exports of libraries, in site order;
+  /// only with an image.
+  std::vector<CrossReloc> CrossRelocs;
 };
 
 /// The entities the trailer names, and the methods it makes: the MSIL
@@ -182,6 +250,13 @@ public:
   virtual EntityRef declareHelper(StringRef Name, const MethodSig &Sig) = 0;
   /// The user string UTF8 ('ldstr', the operands of the data imports).
   virtual EntityRef addUserString(StringRef UTF8) = 0;
+  /// A new private static initonly native int field Name of <Module>, which
+  /// <Module>::.cctor stores and '<msil>Main' reads: '<msil>argc' and
+  /// '<msil>argv', only for an output whose constructors take argc or argv
+  /// and whose main takes them too (TrailerInput::CtorArgs). The default
+  /// implementation, for sinks that never see such an output, is a fatal
+  /// error.
+  virtual EntityRef addTrailerField(StringRef Name);
   /// Defines a method: name, flags, signature, locals, maxstack and the
   /// instruction list of M.Body.
   virtual void emitMethod(const TrailerMethod &M) = 0;
@@ -208,15 +283,24 @@ LLVM_ABI unsigned countAddressSlots(ArrayRef<RuntimeReloc> Relocs,
 /// - '<msil>dataimport' and '<msil>init_dataimports' when there are data
 ///   imports;
 /// - <Module>::.cctor when there is an image, a function address, a data
-///   import or a constructor: allocate (AllocHGlobal(TotalSize + MaxAlign -
-///   1)), align, store '<msil>data', cpblk the image, initblk the zero part,
-///   store the address fields, ldftn and store the '<msil>fn_' fields, call
-///   '<msil>init_dataimports', fill the address slots and run the loop (loop
-///   mode only), apply the relocations, call the constructors (a result is
+///   import, a library type or a constructor: allocate
+///   (AllocHGlobal(TotalSize + MaxAlign - 1)), align, store '<msil>data',
+///   cpblk the image, initblk the zero part, store the address fields, ldftn
+///   and store the '<msil>fn_' fields, call '<msil>init_dataimports', fill
+///   the address slots and run the loop (loop mode only), apply the
+///   relocations, 'ldtoken' and 'pop' each library type, apply the
+///   relocations against library exports (straight-line: '<msil>data' plus
+///   Site, the accessor's value plus Addend), call the constructors (each
+///   with its arguments, after argc and argv are built and, for a main that
+///   takes them, stored in '<msil>argc' and '<msil>argv'; a result is
 ///   popped), ret. With at most RelocLoopThreshold relocations each is
-///   stored straight-line, and the method is Phase 1's, instruction for
-///   instruction;
-/// - '<msil>Main' when In.Entry is set (decision D27).
+///   stored straight-line, and without libraries and constructor arguments
+///   the method is Phase 1's, instruction for instruction;
+/// - with TwoPhase, '<msil>Data'::.cctor instead runs everything up to the
+///   relocations, and <Module>::.cctor, when it is not empty, the rest;
+/// - '<msil>Main' when In.Entry is set (decision D27), which passes main
+///   the argc and argv of '<msil>argc' and '<msil>argv' when <Module>::.cctor
+///   stored them, else builds them itself.
 /// The image's sizes must satisfy 5.9.9 rule 5 except where the caller has
 /// already reported them (ImageInput::AllowOversize), and its slots
 /// (ImageLayout::SlotsOffset) must hold countAddressSlots(In.Relocs, ...).

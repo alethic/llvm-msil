@@ -1,0 +1,108 @@
+## Undefined symbols in a library (ImplementationPlan.md M22.c item 3, Q21's
+## -z defs; 5.9.6 steps 3-4, 5.9.14, 5.9.15; recon p2/exports-multiasm.md
+## 10.2: an assembly has no global symbol scope, so a library cannot leave a
+## symbol for its eventual program):
+## - like a program, a -shared output reports every undefined GLOBAL symbol
+##   left after late binding, functions and data alike:
+##   'undefined symbol: <s>' with '>>> referenced by <file>:(<method>)';
+##   an undefined hidden symbol is 'undefined hidden symbol: <s>';
+## - a weak undefined symbol is allowed: its address is 0 and a direct call
+##   binds to the trap stub '<msil>undef_<name>';
+## - a library that another library input defines links (ext.dll);
+## - --interface-only (with -shared) skips late binding and reports
+##   nothing: an interface library may leave symbols undefined
+##   (shared-interface.test); without -shared it is an error.
+## The errors come in no fixed order, so each is checked on its own and the
+## total is counted.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj weak.ll -o weak.o
+# RUN: llc -filetype=obj hid.ll -o hid.o
+# RUN: llc -filetype=obj ext.ll -o ext.o
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+# RUN: not msil-ld -shared lib.o -o x.dll > undef.txt 2>&1
+# RUN: FileCheck %s --check-prefix=FN --input-file=undef.txt
+# RUN: FileCheck %s --check-prefix=DATA --input-file=undef.txt
+# RUN: FileCheck %s --check-prefix=NUM %{crash} --input-file=undef.txt
+# FN:      {{^}}msil-ld: error: undefined symbol: ext_fn{{$}}
+# FN-NEXT: {{^}}>>> referenced by lib.o:(api){{$}}
+# DATA:      {{^}}msil-ld: error: undefined symbol: ext_var{{$}}
+# DATA-NEXT: {{^}}>>> referenced by lib.o:(api){{$}}
+# NUM-COUNT-2: {{^}}msil-ld: error:
+# NUM-NOT:     {{error:|warning:}}
+
+## Weak undefined symbols: no error; the call goes to the trap stub.
+# RUN: msil-ld -shared weak.o -o weak.dll 2>&1 | count 0
+# RUN: llvm-cil-dump weak.dll | FileCheck %s --check-prefix=WEAK
+# WEAK: {{^}}  .method '<msil>undef_opt_fn' int32() flags=0x0013 impl=0x0000{{$}}
+# WEAK: {{^}}  .method 'api_weak' int32() flags=0x0016 impl=0x0000{{$}}
+# WEAK: {{^}}    L{{[0-9]+}}: call int32() '<Module>'::'<msil>undef_opt_fn'{{$}}
+
+## An undefined hidden symbol.
+# RUN: not msil-ld -shared hid.o -o x.dll 2>&1 | FileCheck %s --check-prefix=HIDDEN %{crash} \
+# RUN:   --implicit-check-not=error:
+# HIDDEN: {{^}}msil-ld: error: undefined hidden symbol: hs{{$}}
+
+## Another library defines them.
+# RUN: msil-ld -shared ext.o -o ext.dll 2>&1 | count 0
+# RUN: msil-ld -shared lib.o ext.dll -o lib.dll 2>&1 | count 0
+
+## --interface-only: nothing is reported; without -shared it is an error.
+# RUN: mkdir iface
+# RUN: msil-ld -shared --interface-only lib.o -o iface/lib.dll 2>&1 | count 0
+# RUN: not msil-ld --interface-only ext.o -o x.exe 2>&1 | FileCheck %s --check-prefix=NOSHARED %{crash}
+# NOSHARED: {{^}}msil-ld: error: {{.*}}--interface-only
+
+#--- lib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@ext_var = external global i32
+declare i32 @ext_fn(i32)
+
+define i32 @api(i32 %x) {
+  %a = call i32 @ext_fn(i32 %x)
+  %b = load i32, ptr @ext_var, align 4
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+#--- weak.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare extern_weak i32 @opt_fn()
+@opt_var = extern_weak global i32
+
+define i32 @api_weak() {
+  %r = call i32 @opt_fn()
+  %p = ptrtoint ptr @opt_var to i32
+  %s = add i32 %r, %p
+  ret i32 %s
+}
+
+#--- hid.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare hidden i32 @hs()
+
+define i32 @api_hid() {
+  %r = call i32 @hs()
+  ret i32 %r
+}
+
+#--- ext.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@ext_var = global i32 3, align 4
+
+define i32 @ext_fn(i32 %x) {
+  ret i32 %x
+}
+
+define i32 @main() {
+  ret i32 0
+}

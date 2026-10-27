@@ -42,7 +42,14 @@
 # against reference assemblies (%{msil_ref_flags} in %{msil_ldflags}; the
 # legs refs-net48, refs-net8 and refs-net10 of msil/utils/ci), and
 # %msil_check_mscorlib_safe proves msil-ld's built-in [mscorlib] table on
-# the runtimes (see "reference assemblies" below).
+# the runtimes (see "reference assemblies" below). From M22, a %{msil_prog}
+# test builds shared libraries before its program with %{msil_shlibs}
+# (msil-prog.py --shlibs: library assemblies through clang -shared, and the
+# native oracle's DLLs or ELF shared objects), every run gets the build's
+# shlib/ directory beside the program (--dep-dir; msil-verify.py also
+# verifies the libraries), and %msil_csc compiles a C# program with the
+# newest .NET SDK's csc (feature msil-csc, parameter msil_require_csc; see
+# "C# compiler" below).
 #
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
@@ -66,9 +73,10 @@
 # --param msil_require_exec=1 (the gate legs of msil/utils/ci pass it) does
 # the same for msil-exec, which M1/ needs (clang with the MSIL target, ilasm
 # and a .NET runtime; see M1/lit.local.cfg); --param msil_require_link=1 (and
-# msil_pipeline=lto or obj) does the same for msil-ld and llvm-ar; and an
-# explicitly requested runner, runtime, leg or tool that cannot be used is
-# one too.
+# msil_pipeline=lto or obj) does the same for msil-ld and llvm-ar;
+# --param msil_require_csc=1 does it for the SDK's csc of %msil_csc (M22);
+# and an explicitly requested runner, runtime, leg or tool that cannot be
+# used is one too.
 
 import glob
 import importlib.util
@@ -1830,6 +1838,50 @@ if ref_dir:
         )
     )
 
+# ---------------------------------------------------------------- C# compiler
+# %msil_csc (plan 5.12.3, M22) is msil/utils/jitall/build-jitall.py
+# --csharp: it compiles one C# file offline with the Roslyn csc of the newest
+# installed .NET SDK, for net8 (against the newest Microsoft.NETCore.App.Ref
+# 8.x pack) or net48 (against the .NET Framework 4.8 reference assemblies
+# and their Facades); the C# consumer of msil/test/M2/04-shared and
+# harness/csc.test use it. Feature msil-csc when that csc is found ('dotnet
+# --list-sdks', as build-jitall.py looks for it); --param msil_require_csc=1
+# makes a missing one a configuration error. The script finds the packs as
+# this file does (see "reference assemblies"): $MSIL_REF_NET8 and
+# $MSIL_REF_NET48 when they are set (lit passes them on), else the newest
+# 8.x pack of the SDK's dotnet root and the .NET Framework 4.8 reference
+# directory (on Linux the NuGet package that msil-tools.proj pins).
+require_csc = bool_param("msil_require_csc")
+build_jitall_py = os.path.join(utils_dir, "jitall", "build-jitall.py")
+csc_why = None
+if not dotnet:
+    csc_why = "no dotnet host found"
+else:
+    saved = sys.dont_write_bytecode  # no __pycache__ in msil/utils
+    sys.dont_write_bytecode = True
+    try:
+        spec = importlib.util.spec_from_file_location("build_jitall", build_jitall_py)
+        build_jitall_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(build_jitall_mod)
+        csc_sdk, _, csc_dll = build_jitall_mod.find_csc(dotnet)
+    except (OSError, ImportError) as e:
+        csc_why = "cannot load %s: %s" % (slashes(build_jitall_py), e)
+    except Exception as e:  # build-jitall.py's BuildError
+        csc_why = str(e)
+    finally:
+        sys.dont_write_bytecode = saved
+if csc_why is None:
+    features.add("msil-csc")
+    note("csc: %s (SDK %s)" % (slashes(csc_dll), csc_sdk))
+elif require_csc:
+    fatal(
+        "msil_require_csc=1, but the .NET SDK's csc is missing: %s; install a .NET "
+        "SDK (it ships Roslyn/bincore/csc.dll) or pass --param msil_dotnet=PATH"
+        % csc_why
+    )
+else:
+    note("csc is not available (%%msil_csc): %s" % csc_why)
+
 # Everything needed to compile and run C programs.
 if {"clang", "msil-registered-target", "msil-ilasm", "msil-dotnet"} <= features:
     features.add("msil-exec")
@@ -1854,6 +1906,9 @@ for var in (
     "MSIL_BUILD_DIR",
     "MSIL_LINUX_SYSROOT",
     "MSIL_GLIBC_SYSROOT",
+    # The reference packs of %msil_csc (build-jitall.py --csharp, M22).
+    "MSIL_REF_NET8",
+    "MSIL_REF_NET48",
 ):
     if var in os.environ:
         config.environment[var] = os.environ[var]
@@ -2174,6 +2229,14 @@ ll_levels = [o for o in opt_levels if o in ("O0", "O1", "O2", "O3")] or ["O2"]
 #                       the value may use lit's %if (native.dll on Windows
 #                       triples, libnative.so on Linux ones) and wildcards,
 #                       which the internal shell expands
+#   %{msil_shlibs}      [?]NAME=SRC[,SRC...][;...]: shared libraries that
+#                       msil-prog.py --shlibs builds before the program, each
+#                       linked against those before it, for the MSIL build
+#                       (clang -shared into <workdir>/shlib/NAME.dll; ?NAME
+#                       an interface, -Wl,--interface-only) and the native
+#                       oracle (DLLs, or the E7 recipe's ELF shared objects);
+#                       a cycle is ?b=b.c;a=a.c;b=b.c (M22). It is part of
+#                       %msil_prog_build, so every build of the test gets it
 # and a directory may redefine %{msil_cflags} and %{msil_ldflags}, the MSIL
 # link's flags (from M15 empty on Windows triples and
 # --sysroot=<msil_linux_sysroot> on Linux triples, so the link reads the
@@ -2184,6 +2247,11 @@ ll_levels = [o for o in opt_levels if o in ("O0", "O1", "O2", "O3")] or ["O2"]
 # %S/%{s:stem}, and the %if legs: the round trip of the image, the native
 # oracle (msil-prog.py --mode native, the same sources and archives built
 # for the native triple; E7 with msil_runner=wsl) and the .NET Framework run.
+# Every one of them gets the build's shlib/ directory, which msil-prog.py
+# always makes (empty without %{msil_shlibs}), as '--dep-dir
+# %t.<L>.d/shlib' (the native runs '%t.<L>.native.d/shlib'), so each run
+# finds the libraries beside the program; %msil_verify also gets
+# --also-verify-deps, which verifies each library too (M22).
 # %{msil_prog_fail_<L>} is 'not' plus the build at one level, for named
 # diagnostics: pipe it with 2>&1 into FileCheck, with
 # --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit", under
@@ -2202,7 +2270,8 @@ ll_levels = [o for o in opt_levels if o in ("O0", "O1", "O2", "O3")] or ["O2"]
 prog_template = (
     "%s --triple %s --pipeline %s --link-output %s @TOOLS@"
     " --cflags='%%{msil_cflags}' --ldflags='%%{msil_ldflags}'"
-    " --native-ldflags='%%{msil_native_ldflags}' --timeout %g --mem-limit-mb %d"
+    " --native-ldflags='%%{msil_native_ldflags}' --shlibs='%%{msil_shlibs}'"
+    " --timeout %g --mem-limit-mb %d"
     % (
         script("msil-prog.py"),
         msil_triple,
@@ -2258,12 +2327,19 @@ PROG_PLACEHOLDERS = (
 )
 
 
-def dep_args(deps):
+def dep_args(deps, workdir=None, verify=False):
     """The dependency options of a run, placed right before the program:
-    every file of deps after one --dep (msil-run.py, msil-verify.py and
-    msil-jitall.py take one or more files after it), then '--', which ends
-    the list (an empty list is allowed). Empty when deps is None."""
-    return "" if deps is None else f" --dep {deps} --"
+    '--dep-dir <workdir>/shlib' (the libraries of %{msil_shlibs}; with
+    verify also --also-verify-deps, which verifies them), then every file of
+    deps after one --dep (msil-run.py, msil-verify.py and msil-jitall.py take
+    one or more files after it), then '--', which ends the list (an empty
+    list is allowed). Empty when deps is None."""
+    if deps is None:
+        return ""
+    text = ""
+    if workdir:
+        text = f" --dep-dir {workdir}/shlib" + (" --also-verify-deps" if verify else "")
+    return text + f" --dep {deps} --"
 
 
 # The equivalence oracles (plan 5.12.6; msil_equiv=1): the entries of
@@ -2343,7 +2419,10 @@ def prog_pipeline(level, inputs=PROG_PLACEHOLDERS, deps="%{msil_deps}", single=N
     (see prog_build)."""
     t = "%t." + level
     build, exe = prog_build(level, inputs, single=single)
-    dep = dep_args(deps)
+    # Every run of the program gets the build's shlib/ (M22).
+    dep = dep_args(deps, f"{t}.d")
+    verify_dep = dep_args(deps, f"{t}.d", verify=True)
+    native_dep = dep_args(deps, f"{t}.native.d")
     o3 = equiv and prog_pipeline_name == "obj" and single
     o4 = equiv and prog_pipeline_name == "lto"
     # The test's triple and level select the qualified skip lines of
@@ -2360,7 +2439,7 @@ def prog_pipeline(level, inputs=PROG_PLACEHOLDERS, deps="%{msil_deps}", single=N
             f" --md-baseline {t}.d/asm/prog.exe"
         )
     cmd = (
-        f"{build} && %msil_verify{md}{dep} {exe}"
+        f"{build} && %msil_verify{md}{verify_dep} {exe}"
         f" %if msil-jitall %{{ && %msil_jitall{dep} {exe} %}}"
         f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out{dep} {exe}"
     )
@@ -2385,7 +2464,7 @@ def prog_pipeline(level, inputs=PROG_PLACEHOLDERS, deps="%{msil_deps}", single=N
             f" --level {level} --workdir {t}.native.d --out {native}"
             + prog_inputs(*inputs, native=True)
             + f" && %msil_exec --native --expect %S/%{{s:stem}}"
-            f" --out {t}.native.out{dep} {native} %}}"
+            f" --out {t}.native.out{native_dep} {native} %}}"
         )
     cmd += (
         f" %if msil-run-netfx %{{ && %msil_exec --netfx --expect %S/%{{s:stem}}"
@@ -2453,6 +2532,9 @@ substitutions = [
     ("%{msil_libs}", ""),
     ("%{msil_native_libs}", ""),
     ("%{msil_deps}", ""),
+    # The shared libraries of a %{msil_prog} test (M22; msil-prog.py
+    # --shlibs, which %msil_prog_build passes).
+    ("%{msil_shlibs}", ""),
     # The MSIL link's harness flags (plan 5.12.3, M15; see msil_ldflags):
     # --sysroot=<msil_linux_sysroot> on Linux triples, so the link reads the
     # default libraries of plan 5.10.4, and from M21 %{msil_ref_flags}, the
@@ -2496,6 +2578,17 @@ substitutions = [
     # this configuration's ilasm assembles and that runs on the runtimes of
     # this run (see mscorlib_safe_cmd); callers add --out and options.
     ("%msil_check_mscorlib_safe", mscorlib_safe_cmd),
+    # build-jitall.py --csharp SRC --out EXE [--reference DLL]...
+    # [--refs net8|net48] [--unsafe] with this configuration's dotnet (plan
+    # 5.12.3, M22; feature msil-csc, see "C# compiler").
+    (
+        "%msil_csc",
+        "%s%s --csharp"
+        % (
+            script("jitall/build-jitall.py"),
+            " --dotnet " + quote(dotnet) if dotnet else "",
+        ),
+    ),
     # -std=gnu17 pins the C dialect against a change of clang's default
     # (C23 rejects the K&R definitions of 11-programs/kr-legacy.c; backlog
     # 3.4). -ffreestanding turns off main's implicit 'return 0'

@@ -1,0 +1,8 @@
+a_peer == &b_var=1
+b_peer == &a_var=1
+a_peer_value()=8192
+b_peer_value()=4096
+a_calls_b()=8193
+b_calls_a()=4098
+b_var after *a_peer += 5=8197
+[exit 0]

@@ -11,7 +11,8 @@
     msil-jitall.py [--jitall DIR] [--dotnet PATH] [--runtimeconfig FILE]
                    [--runner {local,wsl}] [--wsl-distro D]
                    [--timeout S] [--mem-limit-mb N] [--env VAR=VALUE]...
-                   [--filter TEXT] [--dep FILE...]... [--] prog.dll
+                   [--filter TEXT] [--dep-dir DIR]... [--dep FILE...]...
+                   [--] prog.dll
 
 Runs 'dotnet exec --runtimeconfig <cfg> <DIR>/jitall.dll prog.dll' from a
 private temporary directory that holds a copy of prog.dll, so that assemblies
@@ -21,14 +22,18 @@ references, which jitall loads from that directory to JIT the methods that
 use them, and the native libraries the module initializer calls. --dep takes
 one or more files, may be repeated, and takes every argument up to the next
 option, so the lit composites pass '--dep %{msil_deps} --' before prog.dll; a
-missing file, or two of one name, is a configuration error. On Linux and other
-POSIX hosts, and so in WSL, --dep also puts the private directory first in
-LD_LIBRARY_PATH, as msil-run.py does: the Dlfcn helper of a native data import
-dlopen()s the library's bare name, which glibc never looks for in the
-program's directory (plan 5.10.12 as clarified in section 12). jitall
-JIT-compiles every method that has an IL body and calls none of them. Its
-output is copied to stdout with LF line endings: one 'JIT FAIL <type>::<method>:
-<exception>' line per rejected method, then 'jitall: N ok, M failed'.
+missing file, or two of one name, is a configuration error. --dep-dir DIR
+(repeatable; plan 5.12.4, M22) copies everything in DIR there too, as
+msil-run.py --dep-dir does: the composites pass the build's shlib/, the
+library assemblies of %{msil_shlibs}; a DIR that does not exist adds nothing.
+On Linux and other POSIX hosts, and so in WSL, --dep or --dep-dir also puts
+the private directory first in LD_LIBRARY_PATH, as msil-run.py does: the
+Dlfcn helper of a native data import dlopen()s the library's bare name, which
+glibc never looks for in the program's directory (plan 5.10.12 as clarified
+in section 12). jitall JIT-compiles every method that has an IL body and
+calls none of them. Its output is copied to stdout with LF line endings: one
+'JIT FAIL <type>::<method>: <exception>' line per rejected method, then
+'jitall: N ok, M failed'.
 
 Compiling a method of <Module> makes the runtime run <Module>::.cctor, the
 module initializer (data segment and C constructors), first, so that code does
@@ -134,6 +139,11 @@ def find_dotnet(explicit):
     return None
 
 
+def existing_dirs(dirs):
+    """The --dep-dir directories that exist (a missing one adds nothing)."""
+    return [d for d in dirs if os.path.isdir(d)]
+
+
 def describe_status(rc):
     if rc < 0:
         return "was killed by signal %d" % -rc
@@ -162,13 +172,14 @@ def run_local(args, jitall_dll, runtimeconfig):
             else "no dotnet host found (pass --dotnet or set DOTNET_ROOT)"
         )
     env = msil_run.child_env(args.env)
-    msil_run.check_deps(args.dep, [])
+    dep_dirs = existing_dirs(args.dep_dir)
+    msil_run.check_deps(args.dep, dep_dirs)
     private = tempfile.mkdtemp(prefix="msil-jitall-")
     try:
         target = os.path.join(private, os.path.basename(args.dll))
         shutil.copyfile(args.dll, target)
-        msil_run.copy_deps(args.dep, [], private, [os.path.basename(args.dll)])
-        if args.dep and not IS_WINDOWS:
+        msil_run.copy_deps(args.dep, dep_dirs, private, [os.path.basename(args.dll)])
+        if (args.dep or args.dep_dir) and not IS_WINDOWS:
             msil_run.prepend_library_path(env, private)
         cmd = [dotnet, "exec", "--runtimeconfig", runtimeconfig, jitall_dll, target]
         if args.filter is not None:
@@ -250,9 +261,12 @@ def run_wsl(args, jitall_dir, runtimeconfig):
     if args.filter is not None:
         cmd.append("--filter=" + args.filter)
     # The copy inside WSL copies them next to its private copy of the dll.
-    msil_run.check_deps(args.dep, [])
+    dep_dirs = existing_dirs(args.dep_dir)
+    msil_run.check_deps(args.dep, dep_dirs)
     for dep in args.dep:
         cmd += ["--dep", msil_run.to_wsl_path(dep)]
+    for d in dep_dirs:
+        cmd += ["--dep-dir", msil_run.to_wsl_path(d)]
     cmd += ["--", msil_run.to_wsl_path(args.dll)]
     env = dict(os.environ)
     msil_run.set_env_var(env, "WSL_UTF8", "1")  # wsl.exe's own messages, not UTF-16
@@ -339,6 +353,14 @@ def main():
         metavar="FILE",
         help="copy these files next to the assembly (repeatable; takes every "
         "argument up to the next option, so end with '--' before the assembly)",
+    )
+    p.add_argument(
+        "--dep-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="copy everything in DIR next to the assembly (repeatable; a "
+        "missing DIR adds nothing)",
     )
     p.add_argument("dll", help="assembly to check")
     args = p.parse_args()

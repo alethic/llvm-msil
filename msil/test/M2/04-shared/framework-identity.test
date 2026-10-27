@@ -1,0 +1,61 @@
+# One address per library function on the .NET Framework too (recon E2 prog2c): &f taken late, after f first ran through calli.
+# On .NET Framework 4.8 an ldftn that is JIT-compiled after its target first
+# ran through calli yields a different address than an earlier ldftn of the
+# same method, in the library and in an importer alike (recon
+# exports-multiasm 4.2, M9's Framework finding; recon/p2/exports-multiasm-
+# files/e2/prog2c.il). C needs one address per function in every assembly,
+# so an importer never takes a library function's address with its own
+# ldftn: &twice is the library's '<msil>addr_twice' accessor, which returns
+# the address the library took once in its phase 1 (plan 5.9.15). The
+# program takes &twice, calls twice 200,000 times through that pointer (its
+# first execution is a calli), then compares the pointer with &twice taken
+# in a function that runs only afterwards, with the library's get_twice()
+# and with the library's own late &twice. Every comparison is equal
+# natively and on every runtime; the netfx leg runs the Framework case. The
+# program's declarations are dllimport on Windows triples, so the native
+# oracle's &twice is the function, not the program's import thunk. Plan
+# M22.f (framework-identity).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = ident=%t/ident.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- api.h
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#define IMPORT __declspec(dllimport)
+#else
+#define API __attribute__((visibility("default")))
+#define IMPORT
+#endif
+#--- ident.c
+#include "api.h"
+API int twice(int x) { return 2 * x; }
+API int (*get_twice(void))(int) { return twice; }
+/* Takes the address in a function that first runs after the loop. */
+__attribute__((noinline)) API int (*late_twice(void))(int) { return twice; }
+#--- main.c
+#include "msil_test.h"
+#include "api.h"
+IMPORT int twice(int);
+IMPORT int (*get_twice(void))(int);
+IMPORT int (*late_twice(void))(int);
+static int (*volatile fp)(int);
+__attribute__((noinline)) static int (*prog_late(void))(int) { return twice; }
+
+int main(void) {
+  unsigned sum = 0;
+  fp = twice;
+  for (int i = 0; i < 200000; ++i)
+    sum += (unsigned)fp(i & 7);
+  put_kv("sum of twice(i & 7)", sum);
+  put_kv("program: late &twice == fp", prog_late() == fp);
+  put_kv("library: get_twice() == fp", get_twice() == fp);
+  put_kv("library: late &twice == fp", late_twice() == fp);
+  put_kv("program: &twice == library late &twice", &twice == late_twice());
+  put_kv("fp(21)", fp(21));
+  return 0;
+}

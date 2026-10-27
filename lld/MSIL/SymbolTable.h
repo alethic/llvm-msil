@@ -29,6 +29,8 @@ struct MethodSig;
 } // namespace llvm::cli
 
 namespace lld::msil {
+class ManagedLibraryFile;
+struct ManagedExport;
 struct NativeExport;
 
 // SymbolTable is a bucket of all known symbols, including defined,
@@ -59,9 +61,41 @@ public:
 
   // Parses \p file: a lazy file adds lazy symbols, a CIL object or a bitcode
   // file its symbols, and a native library its definitions to ctx.nativeIndex
-  // (they bind late). \p symName names the symbol whose lazy definition
-  // extracted the file, for diagnostics.
+  // (they bind late), a native object given on the command line its
+  // definitions as machine code (NativeIndex::addFile). A library built by
+  // this toolchain (ManagedLibraryFile, plan 5.9.15) joins
+  // getManagedLibraries() in command-line order and is parsed; its exports
+  // bind late (plan 5.9.6 step 1). Under --lto-emit-asm it is the error
+  // "<file>: --lto-emit-asm cannot import from a .NET library; link without
+  // --lto-emit-asm" (M22.c item 8). A library whose assembly name (compared
+  // ignoring case) is the name of an earlier one is skipped when it has the
+  // same bytes, and is otherwise the error "<file>: library assembly '<name>'
+  // is also linked from <file>; the CLR loads one assembly of a name"; one
+  // whose assembly name is the output's (getOutputAssemblyName, compared
+  // ignoring case) is the error "<file>: library assembly '<name>' has the
+  // name of the output; the CLR loads one assembly of a name". \p symName
+  // names the symbol whose lazy definition extracted the file, for
+  // diagnostics.
   void addFile(InputFile *file, StringRef symName = {});
+
+  // The libraries built by this toolchain, in command-line order (plan
+  // 5.9.6 step 1): late binding searches them in this order, and the writer
+  // gives each its AssemblyRef and phase 2's 'ldtoken' of its first export
+  // class, used or not (M22.b).
+  ArrayRef<ManagedLibraryFile *> getManagedLibraries() const {
+    return managedLibraries;
+  }
+
+  // Plan 5.9.15's checks of every library against the link
+  // (ManagedLibraryFile::check: ABI version, triple key, data model, C
+  // runtime, the symbol map, the library's own AssemblyRefs), with the first
+  // loaded CIL object, else the first bitcode file, as the model. A bitcode
+  // definition (default or protected visibility) that a library exports
+  // becomes isUsedInRegularObj, so that LTO keeps it global and late binding
+  // warns about it under LTO as through objects. Runs once:
+  // recordReferences() calls it, once every input is loaded and before LTO,
+  // and bindLateSymbols() calls it if it has not run.
+  void checkManagedLibraries();
 
   // This function is where all the optimizations of link-time
   // optimization happens. Under --lto-emit-asm it writes the ILAsm text of
@@ -74,19 +108,30 @@ public:
   void compileBitcodeFiles();
 
   // Records which bitcode inputs refer to each symbol, for the diagnostics
-  // after LTO, which takes the inputs' symbol tables. The driver calls it
-  // once every input is loaded, before LTO.
-  void recordReferences() { (void)getReferences(nullptr); }
+  // after LTO, which takes the inputs' symbol tables, and checks the
+  // libraries built by this toolchain against the link
+  // (checkManagedLibraries). The driver calls it once every input is loaded,
+  // before LTO, in every mode (--interface-only and --lto-emit-asm
+  // included).
+  void recordReferences() {
+    (void)getReferences(nullptr);
+    checkManagedLibraries();
+  }
 
   // The plan 5.9.6 rules for the symbols that are still undefined after every
-  // input is loaded (M15: bitcode inputs and native libraries; managed
-  // libraries are M22's step 1):
+  // input is loaded (M15: bitcode inputs and native libraries; M22: the
+  // libraries built by this toolchain, step 1, when LTO writes CIL objects):
   // - step 2: an undefined symbol of default visibility, weak or global (a
   //   lazy symbol that only weak references met included), binds to the first
   //   bindable definition of its name in the native libraries, in link order
   //   (NativeFunction or NativeData); --trace-symbol prints "<file>: shared
   //   definition of <sym>". Bitcode symbol tables carry no import names, so
-  //   the symbol name is looked up;
+  //   the symbol name is looked up. A name that a native object given on the
+  //   command line defines binds nothing (NativeIndex::lookup): the
+  //   import-annotation pass reports a reference that the merged module
+  //   keeps, and a referenced weak symbol is reported here, with plan
+  //   5.10.14's "symbol '<s>' is defined only in native object code
+  //   (<file>); MSIL cannot link machine code";
   // - an undefined weak symbol that nothing binds stays undefined, for the
   //   backend (null, and a trap stub for calls; step 3);
   // - a definition whose COMDAT copy was discarded and that an input still
@@ -111,6 +156,27 @@ public:
   // When LTO writes CIL objects (no --lto-emit-asm), it runs after LTO, over
   // the CIL objects and the LTO objects, which carry import names (plan
   // 5.9.6 "When it runs"):
+  // - first, a definition of a CIL object or LTO object (default or
+  //   protected visibility) that a library also exports keeps its own
+  //   definition, with the warning "symbol '<s>' is defined in <file> and
+  //   exported by <lib>; the output uses its own definition" (Q21, the first
+  //   library that exports it);
+  // - step 1 (plan 5.9.15): a referenced undefined symbol of default
+  //   visibility, weak or global, without an explicit import module (an
+  //   EXPLICIT_IMPORT stub, IMPORT data with a module) binds by its symbol
+  //   name to the first library in command-line order that exports it
+  //   (ManagedFunction or ManagedData), unless a native object given on the
+  //   command line defines that name (NativeIndex::findObjectDefinition):
+  //   that machine code comes before every library, built by this toolchain
+  //   or native, so the symbol binds nothing and the definition is kept for
+  //   getRejectedNative(), which the writer reports for a live reference,
+  //   weak or not; --trace-symbol prints "<lib>: managed
+  //   definition of <s>". Each later exporter is the warning "symbol '<s>' is
+  //   exported by <lib1> and <lib2>; using <lib1>". A function reference of a
+  //   data export, or the reverse, is plan 5.9.14's "symbol type mismatch:
+  //   <s>" (">>> defined as function in <file>", ">>> defined as data in
+  //   <lib>"), and a thread-local reference "TLS attribute mismatch"; the
+  //   symbol binds to the export all the same, so nothing reports it again;
   // - step 2: a referenced undefined symbol of default visibility binds by
   //   its import name (the ImplMap import name of its msil.unresolved stubs,
   //   the ImportName of IMPORT data, else the symbol name); a symbol with an
@@ -268,6 +334,20 @@ private:
 
   // Late binding of one symbol of CIL objects (plan 5.9.6 step 2).
   void bindObjectSymbol(Symbol &sym);
+  // Late binding of one symbol to a library export (plan 5.9.6 step 1).
+  // Returns true if a library exports it.
+  bool bindManagedSymbol(Symbol &sym);
+  // Before step 1: returns true, and keeps the definition for
+  // getRejectedNative(), if a native object given on the command line
+  // defines the name of \p sym, which has no explicit import module.
+  bool rejectObjectDefinition(Symbol &sym);
+  // The first library that exports \p name, or null.
+  const ManagedExport *findManagedExport(StringRef name) const;
+
+  // The libraries built by this toolchain, in command-line order, and
+  // whether checkManagedLibraries() has run.
+  SmallVector<ManagedLibraryFile *, 0> managedLibraries;
+  bool librariesChecked = false;
 
   // The import attributes per undefined symbol, with the files that gave
   // them.

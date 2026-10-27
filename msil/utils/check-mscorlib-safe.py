@@ -222,6 +222,17 @@ def il_string(text):
     return '"%s"' % text.replace("\\", "\\\\").replace('"', '\\"')
 
 
+# A class or value type that a member's signature names without a resolution
+# scope ('valuetype System.AttributeTargets', as BCLMembers.def spells its
+# parameter types) is an mscorlib type too: without the scope ilasm would look
+# for it in the probe itself.
+UNSCOPED_TYPE_RE = re.compile(r"\b(class|valuetype) (?!\[)")
+
+
+def scoped(ref):
+    return UNSCOPED_TYPE_RE.sub(r"\1 [mscorlib]", ref)
+
+
 def probe_text(numbered):
     """The ILAsm probe for numbered = [(index, (kind, reference))]."""
     out = [
@@ -234,7 +245,8 @@ def probe_text(numbered):
         "",
     ]
     for index, (kind, ref) in numbered:
-        operand = ref if kind == "type" else "%s %s" % (kind, ref)
+        target = scoped(ref)
+        operand = target if kind == "type" else "%s %s" % (kind, target)
         out += [
             "// entry %d: %s %s" % (index, kind, ref),
             ".method public static void 'entry%d'() cil managed noinlining" % index,

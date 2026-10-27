@@ -38,6 +38,13 @@
 ##   FakeThreading);
 ## - a non-public member never binds and is listed with ' (not public)'
 ##   (FakeThreadingNonPublic: only an 'assembly' void MemoryBarrier());
+##   the one exception is msil-ld's own request for
+##   System.Attribute::.ctor(), which also counts a family constructor
+##   (section 12 row '5.11.4 clarified (msil-ld's own System.Attribute
+##   constructor call)' of 2026-10-26): FakeCoreFamCtor's family
+##   EntryPointNotFoundException::.ctor(string) does not bind msil-ld's own
+##   request for it (the overload list marks it ' (not public)'), while the
+##   same pack's family System.Attribute::.ctor() binds;
 ## - the base-type search (section 12 row 2026-10-26, '5.11.4 amended (the
 ##   base-type member search)'):
 ##   - item (2): the MemberRef's parent stays the requested type and the
@@ -82,7 +89,7 @@
 # RUN: llc -filetype=obj fence.ll -o fence.o
 # RUN: llc -filetype=obj main-named.ll -o main-named.o
 # RUN: yaml2obj %S/Inputs/fakepack/named-obj-vararg.yaml -o named-vararg.o
-# RUN: mkdir ret ovl inst base obs prev gen va np hid hidmod xb xbonly copy noctor plain
+# RUN: mkdir ret ovl inst base obs prev gen va np hid hidmod xb xbonly copy noctor famctor plain
 # RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o FakeCore.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingRet.yaml -o ret/FakeThreading.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingOverloads.yaml -o ovl/FakeThreading.dll
@@ -100,6 +107,7 @@
 # RUN: yaml2obj %S/Inputs/fakepack/FakeThreadingXBase.yaml -o xbonly/FakeThreading.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeBarrierBaseCopy.yaml -o copy/FakeBarrierBaseCopy.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeCoreNoCtor.yaml -o noctor/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCoreFamCtor.yaml -o famctor/FakeCore.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o plain/FakeThreading.dll
 
 # DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
@@ -219,6 +227,14 @@
 # RUN: msil-ld --reference=noctor --print-bcl-binding=member:EntryPointNotFoundException_ctor 2>&1 \
 # RUN:   | %{fc} --check-prefix=NO-CTOR --implicit-check-not=System.Exception
 # NO-CTOR: {{^}}member:EntryPointNotFoundException_ctor -> undefined .NET member 'instance void System.EntryPointNotFoundException::.ctor(string)' (requested by {{[^)]+}}); 'System.EntryPointNotFoundException' is defined in FakeCore 8.0.0.0 [b03f5f7f11d50a3a] (noctor/FakeCore.dll) but has no such member; overloads present: instance void .ctor(){{$}}
+
+## A family constructor counts only for msil-ld's own System.Attribute
+## request: FakeCoreFamCtor's family EntryPointNotFoundException::.ctor(string)
+## is listed, not bound; its family System.Attribute::.ctor() binds.
+# RUN: msil-ld --reference=famctor --print-bcl-binding=member:EntryPointNotFoundException_ctor \
+# RUN:   --print-bcl-binding=member:Attribute_ctor 2>&1 | %{fc} --check-prefix=FAM-CTOR
+# FAM-CTOR:      {{^}}member:EntryPointNotFoundException_ctor -> undefined .NET member 'instance void System.EntryPointNotFoundException::.ctor(string)' (requested by {{[^)]+}}); 'System.EntryPointNotFoundException' is defined in FakeCore 8.0.0.0 [b03f5f7f11d50a3a] (famctor/FakeCore.dll) but has no such member; overloads present: instance void .ctor(); instance void .ctor(string) (not public){{$}}
+# FAM-CTOR-NEXT: {{^}}member:Attribute_ctor -> instance void [FakeCore]System.Attribute::.ctor(){{$}}
 
 #--- fence.ll
 target triple = "x86_64-pc-windows-msvc-msil"

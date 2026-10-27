@@ -1,0 +1,31 @@
+## The metadata size of a library with many exports (ImplementationPlan.md
+## M22.e's shared-size case; recon p2/exports-multiasm.md 5.1: ilasm stores
+## '<msil>addr_f', '<msil>fn_f' and f as three strings, and past 64 KB of
+## '#Strings' every string index grows to 4 bytes; msil-ld's writer shares
+## string suffixes as Roslyn does, so f costs nothing next to
+## '<msil>addr_f'). 1,000 exported functions with 12-18-byte names
+## (Inputs/shared/size.py): every one has its method, its accessor and its
+## '<msil>fn_' field, and '#Strings' (llvm-cil-dump --stats-only, 5.7.10)
+## stays within the sum over f of len('<msil>addr_' + f) + 1 +
+## len('<msil>fn_' + f) + 1, plus 4,096 bytes.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && mkdir %t && cd %t
+# RUN: %python %S/Inputs/shared/size.py gen 1000 big.ll names.txt
+# RUN: llc -filetype=obj big.ll -o big.o
+# RUN: msil-ld -shared big.o -o big.dll 2>&1 | count 0
+# RUN: llvm-cil-dump big.dll > big.txt
+# RUN: %python %S/Inputs/shared/listing.py members big.txt big > members.txt
+# RUN: FileCheck %s --check-prefix=ACCESSORS --input-file=members.txt
+# RUN: FileCheck %s --check-prefix=FUNCTIONS --input-file=members.txt
+# RUN: %python %S/Inputs/shared/listing.py members big.txt '<msil>Data' > data.txt
+# RUN: FileCheck %s --check-prefix=FIELDS --input-file=data.txt
+# ACCESSORS-COUNT-1000: {{^}}  .method '<msil>addr_exp{{[0-9]+}}_{{[a-z]+}}' native int() flags=0x0096 impl=0x0000{{$}}
+# ACCESSORS-NOT:        <msil>addr_
+# FUNCTIONS:            {{^}}  .method 'exp0_abcdefg' int32() flags=0x0016 impl=0x0000{{$}}
+# FUNCTIONS-COUNT-999:  {{^}}  .method 'exp{{[0-9]+}}_{{[a-z]+}}' int32() flags=0x0016 impl=0x0000{{$}}
+# FUNCTIONS-NOT:        .method
+# FIELDS-COUNT-1000:    {{^}}  .field '<msil>fn_exp{{[0-9]+}}_{{[a-z]+}}' native int flags=0x0033{{$}}
+# RUN: llvm-cil-dump --stats-only big.dll > stats.txt
+# RUN: %python %S/Inputs/shared/size.py check names.txt stats.txt | FileCheck %s --check-prefix=SIZE
+# SIZE: {{^}}strings {{[0-9]+}} within 56090{{$}}

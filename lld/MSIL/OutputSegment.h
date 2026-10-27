@@ -46,6 +46,17 @@ class SymbolBinder;
 class SyntheticSegment;
 struct OutputMap;
 
+// A constructor of the output (plan 5.9.9): the method that the module
+// initializer calls, whether it returns a value (popped), and how many of
+// argc, argv and envp it takes (plan section 12, 'M22.b extended', defect
+// 4: off Windows a constructor may take them, as glibc calls an .init_array
+// entry).
+struct OutputConstructor {
+  uint32_t method;
+  bool returnsValue;
+  uint8_t numArgs;
+};
+
 class OutputImage {
 public:
   explicit OutputImage(OutputModule &out) : out(out) {}
@@ -68,13 +79,16 @@ public:
   void addRelocations(SymbolBinder &symbols, unsigned threshold,
                       std::vector<llvm::cli::RuntimeReloc> &relocs);
 
-  // The constructor list of 5.9.9 in run order: (method, returns a value).
-  // A natively bound function is called through its canonical P/Invoke stub
-  // (\p symbols). A NULL slot is skipped on Windows triples, as the MSVC
-  // CRT's _initterm skips it (cli::skipsNullConstructorSlots). Reports the
-  // other slots that hold no function address and the constructors that
-  // take arguments.
-  std::vector<std::pair<uint32_t, bool>> getConstructors(SymbolBinder &symbols);
+  // The constructor list of 5.9.9 in run order. A natively bound function is
+  // called through its canonical P/Invoke stub (\p symbols). A NULL slot is
+  // skipped on Windows triples, as the MSVC CRT's _initterm skips it
+  // (cli::skipsNullConstructorSlots). Off Windows a constructor may take
+  // (int32 argc, native int argv, native int envp) or a prefix of it, as
+  // glibc passes them; a constructor that takes other arguments, or any on
+  // a Windows triple, is "global constructor '<s>' takes arguments, which
+  // MSIL does not pass". Reports that and the other slots that hold no
+  // function address.
+  std::vector<OutputConstructor> getConstructors(SymbolBinder &symbols);
 
   // True if the output has no data image (no segment or common symbol is
   // laid out).

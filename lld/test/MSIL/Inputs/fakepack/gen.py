@@ -16,8 +16,10 @@ source (ilasm's preprocessor builds the variants of FakeCore.il,
 FakeInterop.il, FakeThreading.il, FakeBarrierBase.il, FakeTypesB.il,
 FakeNativeLibrary.il, MiniCore.il, named-obj.il and field-obj.il), and
 whether it is a library ('-dll', PE32 AnyCPU like the assemblies of the .NET
-reference packs) or a CIL object ('-dll -pe64 -x64', the envelope of
-%ilasm-verify and of llc -filetype=obj).
+reference packs), a CIL object ('-dll -pe64 -x64', the envelope of
+%ilasm-verify and of llc -filetype=obj) or a library built by this toolchain
+('-dll -pe64 -x64' as well: msil-ld -shared writes a PE32+ image for the
+triple's machine, M22).
 
 PATCHES lists the outputs whose assembled image is changed before the
 conversion, for metadata that ilasm cannot write: BaseCore's System.Object
@@ -62,6 +64,7 @@ TARGETS = [
     ("FakeCore", "FakeCore.il", [], "dll"),
     ("FakeCoreNoCtor", "FakeCore.il", ["NOCTOR"], "dll"),
     ("FakeCoreNoInAttr", "FakeCore.il", ["NOINATTR"], "dll"),
+    ("FakeCoreFamCtor", "FakeCore.il", ["FAMCTOR"], "dll"),
     ("FakeInterop", "FakeInterop.il", [], "dll"),
     ("FakeInteropMods", "FakeInterop.il", ["MODS"], "dll"),
     ("FakeInteropV9", "FakeInterop.il", ["V9"], "dll"),
@@ -103,7 +106,7 @@ TARGETS = [
     ("FakeTypesA", "FakeTypesA.il", [], "dll"),
     ("FakeTypesB", "FakeTypesB.il", [], "dll"),
     ("FakeTypesC", "FakeTypesB.il", ["TYPES_C"], "dll"),
-    ("ToolLib", "ToolLib.il", [], "dll"),
+    ("ToolLib", "ToolLib.il", [], "toollib"),
     ("named-obj", "named-obj.il", [], "obj"),
     ("named-obj-vararg", "named-obj.il", ["VARARG"], "obj"),
     ("FakeFields", "FakeFields.il", [], "dll"),
@@ -335,7 +338,7 @@ def main():
         with open(il, "w", encoding="utf-8", newline="\n") as f:
             f.write("".join("#define %s\n" % d for d in defines) + text)
         image = os.path.join(work, name + (".o" if kind == "obj" else ".dll"))
-        flags = ["-nologo", "-quiet", "-dll"] + (["-pe64", "-x64"] if kind == "obj" else [])
+        flags = ["-nologo", "-quiet", "-dll"] + (["-pe64", "-x64"] if kind in ("obj", "toollib") else [])
         run([a.ilasm] + flags + [il, "-output=" + image])
         with open(image, "rb") as f:
             data = bytearray(f.read())

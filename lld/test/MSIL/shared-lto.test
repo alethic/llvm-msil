@@ -1,0 +1,262 @@
+## Libraries and LTO (ImplementationPlan.md M22.a items 1 and 3, M22.c item
+## 8; 5.9.3, 5.9.13, 5.9.15):
+## - irsymtab has no dllexport bit, so -shared makes every bitcode
+##   definition that may be exported (GLOBAL or WEAK, DEFAULT or PROTECTED)
+##   visible to regular objects: LTO keeps it, also when nothing calls it,
+##   and export selection then reads the LTO objects' flags; a hidden
+##   definition is not exported;
+## - on windows-msvc-msil only the dllexport definitions are exported when
+##   one exists (plain stays in <Module>: its volatile store keeps exp's
+##   call to it through LTO, which would otherwise fold the call to its
+##   constant result and leave plain to --gc-sections);
+## - on windows-msvc-msil without dllexport, the COMDAT copies of the LTO
+##   objects are never exported, by automatic export or by
+##   --export-all-symbols (section 12 row 'Q22 as implemented' of
+##   2026-10-26; M22 review r2 finding 14): a linkonce_odr inline function
+##   (inl), a selectany variable (sel) and an MSVC string literal ('??_C@')
+##   stay out of the export class and the symbol table, while the plain
+##   definition and a weak definition outside a COMDAT group (w) are
+##   exported; --lto-O0 keeps all of them, so inl stays in <Module> and sel
+##   and the literal in '<msil>Data';
+## - --exclude-libs applies to bitcode archive members: with libx.a(xm.bc)
+##   and liby.a(ym.bc), --exclude-libs=ALL exports only api, the definition
+##   outside the archives, and --exclude-libs=libx.a exports liby.a's y_fn
+##   as well (LTO inlines what is not exported into api); in a mixed link,
+##   where a CIL object calls them, the excluded members stay in <Module>;
+## - a program linked through LTO binds to a library like one made of CIL
+##   objects (late binding runs over the LTO objects);
+## - --lto-emit-asm cannot write a library ('--lto-emit-asm cannot write a
+##   -shared library; link without --lto-emit-asm') nor a program that
+##   imports from one ('<file>: --lto-emit-asm cannot import from a .NET
+##   library; link without --lto-emit-asm').
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as lib.ll -o lib.bc
+# RUN: llvm-as win.ll -o win.bc
+# RUN: llvm-as prog.ll -o prog.bc
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+
+## Default-visibility bitcode definitions are exported, unused ones too.
+# RUN: msil-ld -shared lib.bc -o lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump lib.dll > lib.txt
+# RUN: %{listing} members lib.txt lib | FileCheck %s --check-prefix=LIB
+# LIB:      {{^}}.class 'lib' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# LIB-NEXT: {{^}}  .property 'gv' native int() flags=0x0000{{$}}
+# LIB-NEXT: {{^}}    .get native int() 'lib'::'<msil>addr_gv'{{$}}
+# LIB-NEXT: {{^}}  .method '<msil>addr_api' native int() flags=0x0096 impl=0x0000{{$}}
+# LIB-NEXT: {{^}}  .method '<msil>addr_gv' native int() flags=0x0896 impl=0x0000{{$}}
+# LIB-NEXT: {{^}}  .method '<msil>addr_unused_api' native int() flags=0x0096 impl=0x0000{{$}}
+# LIB-NEXT: {{^}}  .method 'api' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# LIB-NEXT: {{^}}    .param 1 'A_0' flags=0x0000{{$}}
+# LIB-NEXT: {{^}}  .method 'unused_api' int32() flags=0x0016 impl=0x0000{{$}}
+# LIB-NOT:  {{.}}
+# RUN: llvm-cil-dump --link-info lib.dll | FileCheck %s --check-prefix=LIB-TABLE
+# LIB-TABLE:      {{^}}SymbolTable v1.0 triple=x86_64-unknown-linux-gnu-msil abi=1 runtime='none' datamodel=8,8,4,8{{$}}
+# LIB-TABLE-NEXT: {{^}}ExportClass 'lib'{{$}}
+# LIB-TABLE-NEXT: {{^}}Data 'gv' size=4 align=4{{$}}
+# LIB-TABLE-NOT:  {{.}}
+
+## windows-msvc-msil: only the dllexport definition.
+# RUN: msil-ld -shared win.bc -o win.dll 2>&1 | count 0
+# RUN: llvm-cil-dump win.dll > win.txt
+# RUN: %{listing} members win.txt win | FileCheck %s --check-prefix=WIN
+# WIN:      {{^}}.class 'win' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# WIN-NEXT: {{^}}  .method '<msil>addr_exp' native int() flags=0x0096 impl=0x0000{{$}}
+# WIN-NEXT: {{^}}  .method 'exp' int32() flags=0x0016 impl=0x0000{{$}}
+# WIN-NOT:  {{.}}
+# RUN: %{listing} members win.txt '<Module>' | FileCheck %s --check-prefix=WIN-MODULE
+# WIN-MODULE: {{^}}  .method 'plain' int32() flags=0x0016 impl=0x0000{{$}}
+
+## windows-msvc-msil without dllexport: no COMDAT copy is exported.
+# RUN: llvm-as comdat.ll -o comdat.bc
+# RUN: mkdir cd cdall
+# RUN: msil-ld -shared --lto-O0 comdat.bc -o cd/comdat.dll 2>&1 | count 0
+# RUN: msil-ld -shared --lto-O0 --export-all-symbols comdat.bc -o cdall/comdat.dll 2>&1 | count 0
+# RUN: llvm-cil-dump cd/comdat.dll > cd.txt
+# RUN: llvm-cil-dump cdall/comdat.dll > cdall.txt
+# RUN: %{listing} members cd.txt comdat | FileCheck %s --check-prefix=CD
+# RUN: %{listing} members cdall.txt comdat | FileCheck %s --check-prefix=CD
+# CD:      {{^}}.class 'comdat' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# CD-NEXT: {{^}}  .property 'w' native int() flags=0x0000{{$}}
+# CD-NEXT: {{^}}    .get native int() 'comdat'::'<msil>addr_w'{{$}}
+# CD-NEXT: {{^}}  .method '<msil>addr_plain' native int() flags=0x0096 impl=0x0000{{$}}
+# CD-NEXT: {{^}}  .method '<msil>addr_w' native int() flags=0x0896 impl=0x0000{{$}}
+# CD-NEXT: {{^}}  .method 'plain' int32() flags=0x0016 impl=0x0000{{$}}
+# CD-NOT:  {{.}}
+# RUN: %{listing} members cd.txt '<Module>' | FileCheck %s --check-prefix=CD-MODULE
+# CD-MODULE: {{^}}  .method 'inl' int32() flags=0x0016 impl=0x0000{{$}}
+# RUN: %{listing} members cd.txt '<msil>Data' | FileCheck %s --check-prefix=CD-DATA
+# CD-DATA-DAG: {{^}}  .field '??_C@_05CJBACGMB@hello?$AA@' native int flags=0x0033{{$}}
+# CD-DATA-DAG: {{^}}  .field 'sel' native int flags=0x0033{{$}}
+# RUN: llvm-cil-dump --link-info cd/comdat.dll | FileCheck %s --check-prefix=CD-TABLE
+# RUN: llvm-cil-dump --link-info cdall/comdat.dll | FileCheck %s --check-prefix=CD-TABLE
+# CD-TABLE:      {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8{{$}}
+# CD-TABLE-NEXT: {{^}}ExportClass 'comdat'{{$}}
+# CD-TABLE-NEXT: {{^}}Data WEAK 'w' size=4 align=4{{$}}
+# CD-TABLE-NOT:  {{.}}
+
+## --exclude-libs with bitcode archive members.
+# RUN: llvm-as xm.ll -o xm.bc
+# RUN: llvm-as ym.ll -o ym.bc
+# RUN: llvm-as api.ll -o api.bc
+# RUN: llc -filetype=obj api.ll -o api.o
+# RUN: llvm-ar rc libx.a xm.bc
+# RUN: llvm-ar rc liby.a ym.bc
+# RUN: mkdir exall exx exm
+# RUN: msil-ld -shared api.bc libx.a liby.a --exclude-libs=ALL -o exall/ex.dll 2>&1 | count 0
+# RUN: llvm-cil-dump exall/ex.dll > exall.txt
+# RUN: %{listing} members exall.txt ex | FileCheck %s --check-prefix=EX-ALL
+# RUN: llvm-cil-dump --link-info exall/ex.dll | FileCheck %s --check-prefix=EX-TABLE
+# EX-ALL:      {{^}}.class 'ex' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# EX-ALL-NEXT: {{^}}  .method '<msil>addr_api' native int() flags=0x0096 impl=0x0000{{$}}
+# EX-ALL-NEXT: {{^}}  .method 'api' int32() flags=0x0016 impl=0x0000{{$}}
+# EX-ALL-NOT:  {{.}}
+# EX-TABLE:      {{^}}SymbolTable v1.0 triple=x86_64-unknown-linux-gnu-msil abi=1 runtime='none' datamodel=8,8,4,8{{$}}
+# EX-TABLE-NEXT: {{^}}ExportClass 'ex'{{$}}
+# EX-TABLE-NOT:  {{.}}
+# RUN: msil-ld -shared api.bc libx.a liby.a --exclude-libs=libx.a -o exx/ex.dll 2>&1 | count 0
+# RUN: llvm-cil-dump exx/ex.dll > exx.txt
+# RUN: %{listing} members exx.txt ex | FileCheck %s --check-prefix=EX-X
+# EX-X:      {{^}}.class 'ex' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# EX-X-NEXT: {{^}}  .method '<msil>addr_api' native int() flags=0x0096 impl=0x0000{{$}}
+# EX-X-NEXT: {{^}}  .method '<msil>addr_y_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# EX-X-NEXT: {{^}}  .method 'api' int32() flags=0x0016 impl=0x0000{{$}}
+# EX-X-NEXT: {{^}}  .method 'y_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# EX-X-NOT:  {{.}}
+
+## A CIL object against the bitcode archives: x_fn and y_fn stay in
+## <Module>, and only api is exported.
+# RUN: msil-ld -shared api.o libx.a liby.a --exclude-libs=ALL -o exm/ex.dll 2>&1 | count 0
+# RUN: llvm-cil-dump exm/ex.dll > exm.txt
+# RUN: %{listing} members exm.txt ex | FileCheck %s --check-prefix=EX-ALL
+# RUN: %{listing} members exm.txt '<Module>' | FileCheck %s --check-prefix=EXM-MODULE
+# EXM-MODULE:      {{^}}.class '<Module>' flags=0x00000000{{$}}
+# EXM-MODULE-NEXT: {{^}}  .method 'x_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# EXM-MODULE-NEXT: {{^}}  .method 'y_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# EXM-MODULE-NOT:  {{.}}
+
+## A bitcode program against the library.
+# RUN: msil-ld prog.bc lib.dll -o prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog.exe | FileCheck %s --check-prefix=PROG
+# PROG: {{^}}assemblyref 'lib' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# PROG: {{^}}    L{{[0-9]+}}: call int32(int32) [lib]lib::'api'{{$}}
+
+## --lto-emit-asm.
+# RUN: not msil-ld -shared --lto-emit-asm lib.bc -o x.il 2>&1 | %{fc} --check-prefix=EMIT-SHARED \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# EMIT-SHARED: {{^}}msil-ld: error: --lto-emit-asm cannot write a -shared library; link without --lto-emit-asm{{$}}
+# RUN: not msil-ld --lto-emit-asm prog.bc lib.dll -o x.il 2>&1 | %{fc} --check-prefix=EMIT-IMPORT \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# EMIT-IMPORT: {{^}}msil-ld: error: lib.dll: --lto-emit-asm cannot import from a .NET library; link without --lto-emit-asm{{$}}
+
+#--- lib.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@gv = global i32 3, align 4
+
+define hidden i32 @hid(i32 %x) noinline {
+  %r = mul i32 %x, 3
+  ret i32 %r
+}
+
+define i32 @api(i32 %x) {
+  %h = call i32 @hid(i32 %x)
+  %v = load i32, ptr @gv, align 4
+  %r = add i32 %h, %v
+  ret i32 %r
+}
+
+define i32 @unused_api() {
+  ret i32 11
+}
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@sink = internal global i32 0
+
+define i32 @plain() noinline {
+  store volatile i32 1, ptr @sink
+  ret i32 2
+}
+
+define dllexport i32 @exp() {
+  %p = call i32 @plain()
+  ret i32 %p
+}
+
+#--- prog.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @api(i32)
+
+define i32 @main() {
+  %r = call i32 @api(i32 4)
+  ret i32 %r
+}
+
+#--- comdat.ll
+; What clang -fms-compatibility writes for a string literal, a
+; __declspec(selectany) variable and a header inline function, all used by
+; plain; w is weak but in no COMDAT group.
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$"??_C@_05CJBACGMB@hello?$AA@" = comdat any
+$sel = comdat any
+$inl = comdat any
+
+@"??_C@_05CJBACGMB@hello?$AA@" = linkonce_odr dso_local unnamed_addr constant [6 x i8] c"hello\00", comdat, align 1
+@sel = weak_odr dso_local global i32 0, comdat, align 4
+@w = weak global i32 1, align 4
+
+define linkonce_odr dso_local i32 @inl() comdat {
+  ret i32 4
+}
+
+define i32 @plain() {
+  %c = load i8, ptr @"??_C@_05CJBACGMB@hello?$AA@", align 1
+  %ci = zext i8 %c to i32
+  %s = load i32, ptr @sel, align 4
+  %i = call i32 @inl()
+  %a = add i32 %ci, %s
+  %b = add i32 %a, %i
+  ret i32 %b
+}
+
+#--- xm.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @x_fn() {
+  ret i32 1
+}
+
+#--- ym.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @y_fn() {
+  ret i32 2
+}
+
+#--- api.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @x_fn()
+declare i32 @y_fn()
+
+define i32 @api() {
+  %x = call i32 @x_fn()
+  %y = call i32 @y_fn()
+  %r = add i32 %x, %y
+  ret i32 %r
+}

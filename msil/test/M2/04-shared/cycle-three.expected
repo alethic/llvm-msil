@@ -1,0 +1,8 @@
+a_peer == &c_var=1
+c_peer == &b_var=1
+b_peer == &a_var=1
+*a_peer + *b_peer + *c_peer=6
+a_ring(5)=231231
+b_ring(4)=12312
+c_ring(3)=3123
+[exit 0]

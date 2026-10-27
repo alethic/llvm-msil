@@ -106,6 +106,65 @@ bool isCLIImage(MemoryBufferRef mb) {
   return dir && dir->RelativeVirtualAddress != 0;
 }
 
+// The name of a file format that identify_magic recognizes and msil-ld does
+// not link, for "unknown file type: <file> (<format>)"; empty for a file
+// that it does not recognize either.
+static StringRef getFormatName(file_magic magic) {
+  switch (magic) {
+  case file_magic::clang_ast:
+    return "Clang AST file";
+  case file_magic::elf:
+  case file_magic::elf_executable:
+  case file_magic::elf_core:
+    return "ELF file that is no relocatable object or shared library";
+  case file_magic::goff_object:
+    return "GOFF object";
+  case file_magic::macho_object:
+  case file_magic::macho_executable:
+  case file_magic::macho_fixed_virtual_memory_shared_lib:
+  case file_magic::macho_core:
+  case file_magic::macho_preload_executable:
+  case file_magic::macho_dynamically_linked_shared_lib:
+  case file_magic::macho_dynamic_linker:
+  case file_magic::macho_bundle:
+  case file_magic::macho_dynamically_linked_shared_lib_stub:
+  case file_magic::macho_dsym_companion:
+  case file_magic::macho_kext_bundle:
+  case file_magic::macho_universal_binary:
+  case file_magic::macho_file_set:
+    return "Mach-O file";
+  case file_magic::minidump:
+    return "Windows minidump";
+  case file_magic::coff_cl_gl_object:
+    return "cl.exe /GL intermediate object";
+  case file_magic::coff_import_library:
+    return "COFF import member outside an import library";
+  case file_magic::windows_resource:
+    return "Windows resource file";
+  case file_magic::xcoff_object_32:
+  case file_magic::xcoff_object_64:
+    return "XCOFF object";
+  case file_magic::wasm_object:
+    return "WebAssembly object";
+  case file_magic::pdb:
+    return "PDB file";
+  case file_magic::tapi_file:
+    return "TAPI file";
+  case file_magic::cuda_fatbinary:
+    return "CUDA fat binary";
+  case file_magic::offload_binary:
+  case file_magic::offload_bundle:
+  case file_magic::offload_bundle_compressed:
+    return "offload binary";
+  case file_magic::dxcontainer_object:
+    return "DirectX container";
+  case file_magic::spirv_object:
+    return "SPIR-V binary";
+  default:
+    return "";
+  }
+}
+
 InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName,
                             uint64_t offsetInArchive, bool lazy) {
   file_magic magic = identify_magic(mb.getBuffer());
@@ -133,7 +192,26 @@ InputFile *createObjectFile(MemoryBufferRef mb, StringRef archiveName,
          "): not LLVM bitcode; ignored");
     return nullptr;
   }
-  error("unknown file type: " + mb.getBufferIdentifier());
+
+  // A native object on the command line, such as the symbols.o that rustc
+  // passes under -Clinker-plugin-lto (section 12 of 2026-10-26): machine
+  // code, skipped as an unreferenced native archive member is, unless an
+  // input refers to one of its definitions. The native index reads it as an
+  // archive member (NativeIndex::addFile).
+  if (magic == file_magic::coff_object ||
+      magic == file_magic::elf_relocatable) {
+    log("native object " + mb.getBufferIdentifier() +
+        ": its definitions are machine code, which MSIL cannot link; a "
+        "reference to one of them is an error");
+    return make<NativeLibraryFile>(mb, NativeLibraryFile::NativeObject);
+  }
+
+  StringRef format = getFormatName(magic);
+  if (!format.empty())
+    error("unknown file type: " + mb.getBufferIdentifier() + " (" + format +
+          ")");
+  else
+    error("unknown file type: " + mb.getBufferIdentifier());
   return nullptr;
 }
 

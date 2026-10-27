@@ -1,0 +1,193 @@
+## Call-site signature checks against a library (ImplementationPlan.md M22.c
+## item 4, Q8; 5.9.8's table and texts; M22.a item 4 for the ABI
+## descriptor): a call that binds to a library export is compared with the
+## export's MethodDef signature and, from the symbol table, its SIGNATURES
+## descriptor (flag ABI):
+## - an extra trailing argument is adapted: the warning
+##     function signature mismatch: f
+##     >>> defined as int32(int32) in lib.dll
+##     >>> called as int32(int32, int32) in prog.o
+##     >>> adapter: <what it does>
+##   and the call names '<msil>adapt_f_0' (assembly static, the call's
+##   signature), which calls the library's MemberRef;
+## - float32 against int32 is an error; so are an SRET mismatch (mk returns
+##   its struct through a hidden pointer, the call passes a plain pointer:
+##   both MethodDef signatures are void(native int), only the descriptor
+##   differs) and a byval parameter of another size (take), each with
+##   '>>> <why it cannot be adapted>' last;
+## - calls that match the descriptor link silently and call the library's
+##   MemberRef directly, with no adapter (M22 review r2 finding 15): mk
+##   declared and called with the same sret, take with the same byval
+##   (windows-msvc), a byval parameter on linux-gnu (takel), and a call
+##   through an unprototyped (K&R, "no-prototype") declaration whose
+##   arguments match the definition (knr).
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: llc -filetype=obj perr.ll -o perr.o
+# RUN: msil-ld -shared lib.o -o lib.dll 2>&1 | count 0
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## The adapter.
+# RUN: msil-ld prog.o lib.dll -o prog.exe > warn.txt 2>&1
+# RUN: FileCheck %s --check-prefix=WARN %{crash} --implicit-check-not=error: --input-file=warn.txt
+# WARN:      {{^}}msil-ld: warning: function signature mismatch: f{{$}}
+# WARN-NEXT: {{^}}>>> defined as int32(int32) in lib.dll{{$}}
+# WARN-NEXT: {{^}}>>> called as int32(int32, int32) in prog.o{{$}}
+# WARN-NEXT: {{^}}>>> adapter: {{.+}}
+# WARN-NOT:  warning:
+# RUN: llvm-cil-dump prog.exe | FileCheck %s --check-prefix=ADAPT --implicit-check-not=adapt_f_1
+# ADAPT:      {{^}}  .method '<msil>adapt_f_0' int32(int32, int32) flags=0x0013 impl=0x0000{{$}}
+# ADAPT-NEXT: {{^}}    .maxstack 1{{$}}
+# ADAPT-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ADAPT-NEXT: {{^}}    L1: call int32(int32) [lib]lib::'f'{{$}}
+# ADAPT-NEXT: {{^}}    L2: ret{{$}}
+# ADAPT:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# ADAPT:      {{^}}    L{{[0-9]+}}: call int32(int32, int32) '<Module>'::'<msil>adapt_f_0'{{$}}
+
+## The errors: exit status 1, one block per mismatching function.
+# RUN: not msil-ld perr.o lib.dll -o x.exe > errors.txt 2>&1
+# RUN: FileCheck %s --check-prefix=FLOAT --input-file=errors.txt
+# RUN: FileCheck %s --check-prefix=SRET --input-file=errors.txt
+# RUN: FileCheck %s --check-prefix=BYVAL --input-file=errors.txt
+# RUN: FileCheck %s --check-prefix=ECOUNT %{crash} --input-file=errors.txt
+# FLOAT:      {{^}}msil-ld: error: function signature mismatch: g{{$}}
+# FLOAT-NEXT: {{^}}>>> defined as float32(int32) in lib.dll{{$}}
+# FLOAT-NEXT: {{^}}>>> called as int32(int32) in perr.o{{$}}
+# FLOAT-NEXT: {{^}}>>> {{.+}}
+# SRET:      {{^}}msil-ld: error: function signature mismatch: mk{{$}}
+# SRET-NEXT: {{^}}>>> defined as {{.+}} in lib.dll{{$}}
+# SRET-NEXT: {{^}}>>> called as {{.+}} in perr.o{{$}}
+# SRET-NEXT: {{^}}>>> {{.+}}
+# BYVAL:      {{^}}msil-ld: error: function signature mismatch: take{{$}}
+# BYVAL-NEXT: {{^}}>>> defined as {{.+}} in lib.dll{{$}}
+# BYVAL-NEXT: {{^}}>>> called as {{.+}} in perr.o{{$}}
+# BYVAL-NEXT: {{^}}>>> {{.+}}
+# ECOUNT-COUNT-3: {{^}}msil-ld: error: function signature mismatch:
+# ECOUNT-NOT:     {{error:|warning:}}
+
+## Matching sret and byval calls: no diagnostic, direct calls.
+# RUN: llc -filetype=obj pok.ll -o pok.o
+# RUN: msil-ld pok.o lib.dll -o pok.exe 2>&1 | count 0
+# RUN: llvm-cil-dump pok.exe | FileCheck %s --check-prefix=OK --implicit-check-not=adapt_
+# OK: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# OK: {{^}}    L{{[0-9]+}}: call void(native int) [lib]lib::'mk'{{$}}
+# OK: {{^}}    L{{[0-9]+}}: call int32(native int) [lib]lib::'take'{{$}}
+
+## linux-gnu: a matching byval call and a K&R call bind directly.
+# RUN: llc -filetype=obj liblnx.ll -o liblnx.o
+# RUN: llc -filetype=obj poklnx.ll -o poklnx.o
+# RUN: mkdir lnx
+# RUN: msil-ld -shared liblnx.o -o lnx/liblnx.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --link-info lnx/liblnx.dll | FileCheck %s --check-prefix=LNX-TABLE
+# LNX-TABLE: {{^}}Function ABI 'takel' byval=0:24:8{{$}}
+# RUN: msil-ld poklnx.o lnx/liblnx.dll -o lnx/poklnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lnx/poklnx.exe | FileCheck %s --check-prefix=LNX-OK --implicit-check-not=adapt_
+# LNX-OK: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# LNX-OK: {{^}}    L{{[0-9]+}}: call int32(native int) [liblnx]liblnx::'takel'{{$}}
+# LNX-OK: {{^}}    L{{[0-9]+}}: call int32(int32, int32) [liblnx]liblnx::'knr'{{$}}
+
+#--- lib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+%struct.S = type { i32, i32, i32 }
+
+define i32 @f(i32 %x) {
+  ret i32 %x
+}
+
+define float @g(i32 %x) {
+  %r = sitofp i32 %x to float
+  ret float %r
+}
+
+define void @mk(ptr sret(%struct.S) align 4 %out) {
+  store i32 1, ptr %out, align 4
+  ret void
+}
+
+define i32 @take(ptr byval(%struct.S) align 4 %s) {
+  %v = load i32, ptr %s, align 4
+  ret i32 %v
+}
+
+#--- prog.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @f(i32, i32)
+
+define i32 @main() {
+  %r = call i32 @f(i32 1, i32 2)
+  ret i32 %r
+}
+
+#--- perr.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+%struct.T = type { i64, i64 }
+
+declare i32 @g(i32)
+declare void @mk(ptr)
+declare i32 @take(ptr byval(%struct.T) align 8)
+
+define i32 @main() {
+  %buf = alloca [3 x i32], align 4
+  %t = alloca %struct.T, align 8
+  %a = call i32 @g(i32 1)
+  call void @mk(ptr %buf)
+  %b = call i32 @take(ptr byval(%struct.T) align 8 %t)
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+#--- pok.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+%struct.S = type { i32, i32, i32 }
+
+declare void @mk(ptr sret(%struct.S) align 4)
+declare i32 @take(ptr byval(%struct.S) align 4)
+
+define i32 @main() {
+  %s = alloca %struct.S, align 4
+  call void @mk(ptr sret(%struct.S) align 4 %s)
+  %b = call i32 @take(ptr byval(%struct.S) align 4 %s)
+  ret i32 %b
+}
+
+#--- liblnx.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+%struct.L = type { i64, i64, i64 }
+
+define i32 @takel(ptr byval(%struct.L) align 8 %s) {
+  %v = load i64, ptr %s, align 8
+  %r = trunc i64 %v to i32
+  ret i32 %r
+}
+
+define i32 @knr(i32 %a, i32 %b) {
+  %r = sub i32 %a, %b
+  ret i32 %r
+}
+
+#--- poklnx.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+%struct.L = type { i64, i64, i64 }
+
+declare i32 @takel(ptr byval(%struct.L) align 8)
+declare i32 @knr(...) "no-prototype"
+
+define i32 @main() {
+  %s = alloca %struct.L, align 8
+  store i64 7, ptr %s, align 8
+  %a = call i32 @takel(ptr byval(%struct.L) align 8 %s)
+  %b = call i32 @knr(i32 10, i32 3)
+  %r = add i32 %a, %b
+  ret i32 %r
+}

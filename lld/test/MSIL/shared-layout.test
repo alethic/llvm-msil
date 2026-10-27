@@ -1,0 +1,348 @@
+## The layout of a library that msil-ld -shared writes (ImplementationPlan.md
+## M22.a items 1 and 2, M22.b item 2; 5.9.3, 5.9.12, 5.9.15; D27 as amended
+## for M22; recon p2/exports-multiasm.md 10.1; 5.7.10 for the listings):
+## - a DLL image (COFF characteristics 0x2022: DLL, executable, large
+##   address aware) with entry-point token 0 and no '<msil>Main', also when
+##   the inputs define main, which is exported like any function; the
+##   Assembly row is named after the stem of -o (or --assembly-name,
+##   -soname), version 0.0.0.0 unless --assembly-version (one to four
+##   uint16 parts, also for EXEs), no public key;
+## - the export class (Q23 as implemented): the assembly name parsed like an
+##   --export-class value, whose last '.' separates the namespace ('lib' is
+##   a class without namespace, 'My.Lib' is Lib in My), or --export-class;
+##   'public abstract sealed auto ansi' (0x181), extending System.Object;
+## - it owns the exported functions, whose Param rows are named A_<i>
+##   (Flags 0), then the accessors: per function
+##   'public hidebysig static native int <msil>addr_f()' (0x0096) returning
+##   '<msil>Data'::'<msil>fn_f', per variable
+##   'public hidebysig specialname static native int <msil>addr_x()'
+##   (0x0896) returning its address field, with property x (signature
+##   08 00 18) and a Getter MethodSemantics row (0x0002);
+## - '<msil>Data' ('private abstract sealed auto ansi beforefieldinit',
+##   0x00100180) holds '<msil>data', every address field and one
+##   '<msil>fn_' field per exported function, all 'assembly initonly'
+##   (0x0033); its '.cctor' is phase 1 (shared-two-phase.test). '<msil>image'
+##   stays in <Module>, with 'assembly' access (0x0113);
+## - '<msil>SymbolTable' ('private auto ansi sealed beforefieldinit',
+##   0x00100100) extends System.Attribute, has '.ctor(uint8[] A_0)' calling
+##   System.Attribute::.ctor() and the attribute
+##   AttributeUsage(AttributeTargets.Assembly) { AllowMultiple = true } with
+##   the blob 01 00 01 00 00 00 01 00 54 02 0D 41 6C 6C 6F 77 4D 75 6C 74 69
+##   70 6C 65 01; the Assembly row carries the table (shared-symbol-table);
+## - <Module> keeps the hidden and the local functions and phase 2 (here
+##   the constructor);
+## - TypeDef rows after M20's (<Module>, '<msil>image_t'): the export class,
+##   '<msil>Data', '<msil>SymbolTable';
+## - warnings: '--entry is ignored with -shared',
+##   'assembly name '<n>' differs from the output file name '<f>'; the CLR
+##   loads a library only as <n>.dll', and, for an output name such as
+##   lib.bin, '<f>: the output name ends in neither .exe nor .dll; msil-ld
+##   writes a DLL image', whose headers are a DLL's (M22 review r2 finding
+##   16);
+## - errors: 'invalid --assembly-version value '<v>'' for more than four
+##   parts, a part above 65,535 or a part that is not a number;
+##   'invalid --export-class value '<v>'' for an empty name, a '/' or more
+##   than 1,023 bytes, and for a reserved name (section 12 row 'M22.a item
+##   (1) and 5.9.3 clarified (reserved export-class names)' of 2026-10-26: a
+##   namespace or name that starts with '<msil>', or the value '<Module>',
+##   which could repeat a TypeDef that msil-ld makes), from --export-class or
+##   from the assembly name alike (no output is written; 'Ns.<Module>' is
+##   fine); and
+##   'export class '<c>' would hold <n> methods; the CLR allows 65,524'
+##   when the class holds more than 65,524 methods or the hidden
+##   --msil-type-member-limit (here 3 functions and 5 accessors, 8 methods).
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj main.ll -o main.o
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+
+# RUN: msil-ld -shared lib.o -o lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --headers lib.dll | FileCheck %s --check-prefix=HEADERS
+# HEADERS:      {{^}}Format: PE32+ machine=0x8664 dll{{$}}
+# HEADERS-NEXT: {{^}}COFF: sections={{[0-9]+}} timestamp=0x{{[0-9A-F]+}} characteristics=0x2022 symbols=0{{$}}
+# HEADERS:      {{^}}CLI: flags=0x00000001 entrypoint=0x00000000 metadata=
+
+# RUN: llvm-cil-dump lib.dll > lib.txt
+# RUN: FileCheck %s --check-prefix=CANON --implicit-check-not=entrypoint --implicit-check-not="'<msil>Main'" \
+# RUN:   --implicit-check-not=msil.extern --implicit-check-not=msil.bcl --implicit-check-not=msil.link \
+# RUN:   --input-file=lib.txt
+# CANON:      {{^}}pe PE32+ machine=0x8664 dll subsystem=3{{$}}
+# CANON-NEXT: {{^}}cor flags=0x00000001 runtime=2.5 metadata-version=v4.0.30319{{$}}
+# CANON-NEXT: {{^}}assembly 'lib' ver 0.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-{{$}}
+# CANON-NEXT: {{^}}module 'lib.dll'{{$}}
+# CANON-NEXT: {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+# CANON-EMPTY:
+# CANON-NEXT: {{^}}.class '<Module>' flags=0x00000000{{$}}
+# CANON:      {{^}}.class '<msil>Data' flags=0x00100180 extends [mscorlib]System.Object{{$}}
+# CANON:      {{^}}.class '<msil>SymbolTable' flags=0x00100100 extends [mscorlib]System.Attribute{{$}}
+# CANON:      {{^}}.class '<msil>image_t' flags=0x00000110 extends [mscorlib]System.ValueType{{$}}
+# CANON-NEXT: {{^}}  .layout pack 1 size 12{{$}}
+# CANON:      {{^}}.class 'lib' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# CANON:      {{^}}assembly .custom instance void(uint8[]) '<msil>SymbolTable'::'.ctor' = 01 00 {{.+}} 00 00{{$}}
+# CANON-NOT:  {{.}}
+
+## <Module>: the image in 'assembly' access, phase 2 (the constructor), the
+## hidden and the local functions; nothing exported.
+# RUN: %{listing} class lib.txt '<Module>' | FileCheck %s --check-prefix=MODULE \
+# RUN:   --implicit-check-not="'twice'" --implicit-check-not="'add'" --implicit-check-not="'main'" \
+# RUN:   --implicit-check-not="<msil>addr_" --implicit-check-not="<msil>fn_" --implicit-check-not=".field 'counter'"
+# MODULE:      {{^}}.class '<Module>' flags=0x00000000{{$}}
+# MODULE-NEXT: {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0113{{$}}
+# MODULE-NEXT: {{^}}    .data 12 bytes{{$}}
+# MODULE-NEXT: {{^}}      05 00 00 00 01 00 00 00 02 00 00 00{{$}}
+# MODULE-NEXT: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# MODULE-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# MODULE-NEXT: {{^}}    L0: call void() '<Module>'::'init'{{$}}
+# MODULE-NEXT: {{^}}    L1: ret{{$}}
+# MODULE-NEXT: {{^}}  .method 'helper' int32(int32) flags=0x00{{13|16}} impl=0x0000{{$}}
+# MODULE:      {{^}}  .method 'init' void() flags=0x0013 impl=0x0000{{$}}
+# MODULE:      {{^}}  .method 'local_fn' int32(int32) flags=0x0013 impl=0x0000{{$}}
+
+## '<msil>Data': '<msil>data', the address fields and one '<msil>fn_' field
+## per exported function, then phase 1's '.cctor'.
+# RUN: %{listing} members lib.txt '<msil>Data' | FileCheck %s --check-prefix=DATA
+# DATA:      {{^}}.class '<msil>Data' flags=0x00100180 extends [mscorlib]System.Object{{$}}
+# DATA-NEXT: {{^}}  .field '<msil>data' native int flags=0x0033{{$}}
+# DATA-NEXT: {{^}}  .field '<msil>fn_add' native int flags=0x0033{{$}}
+# DATA-NEXT: {{^}}  .field '<msil>fn_main' native int flags=0x0033{{$}}
+# DATA-NEXT: {{^}}  .field '<msil>fn_twice' native int flags=0x0033{{$}}
+# DATA-NEXT: {{^}}  .field 'calls' native int flags=0x0033{{$}}
+# DATA-NEXT: {{^}}  .field 'counter' native int flags=0x0033{{$}}
+# DATA-NEXT: {{^}}  .field 'table' native int flags=0x0033{{$}}
+# DATA-NEXT: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# DATA-NOT:  {{.}}
+
+## The attribute class.
+# RUN: %{listing} class lib.txt '<msil>SymbolTable' | FileCheck %s --check-prefix=ATTR
+# ATTR:      {{^}}.class '<msil>SymbolTable' flags=0x00100100 extends [mscorlib]System.Attribute{{$}}
+# ATTR-NEXT: {{^}}  .custom instance void(valuetype [mscorlib]System.AttributeTargets) [mscorlib]System.AttributeUsageAttribute::'.ctor' = 01 00 01 00 00 00 01 00 54 02 0D 41 6C 6C 6F 77 4D 75 6C 74 69 70 6C 65 01{{$}}
+# ATTR-NEXT: {{^}}  .method '.ctor' instance void(uint8[]) flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# ATTR-NEXT: {{^}}    .param 1 'A_0' flags=0x0000{{$}}
+# ATTR-NEXT: {{^}}    .maxstack 1{{$}}
+# ATTR-NEXT: {{^}}    L0: ldarg.0{{$}}
+# ATTR-NEXT: {{^}}    L1: call instance void() [mscorlib]System.Attribute::'.ctor'{{$}}
+# ATTR-NEXT: {{^}}    L2: ret{{$}}
+# ATTR-NOT:  {{.}}
+
+## The export class: properties, accessors (bodies included), functions and
+## their Param rows; main is exported like any function.
+# RUN: %{listing} class lib.txt lib | FileCheck %s --check-prefix=CLASS
+# CLASS:      {{^}}.class 'lib' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# CLASS-NEXT: {{^}}  .property 'counter' native int() flags=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .get native int() 'lib'::'<msil>addr_counter'{{$}}
+# CLASS-NEXT: {{^}}  .property 'table' native int() flags=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .get native int() 'lib'::'<msil>addr_table'{{$}}
+# CLASS-NEXT: {{^}}  .method '<msil>addr_add' native int() flags=0x0096 impl=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .maxstack 1{{$}}
+# CLASS-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'<msil>fn_add'{{$}}
+# CLASS-NEXT: {{^}}    L1: ret{{$}}
+# CLASS-NEXT: {{^}}  .method '<msil>addr_counter' native int() flags=0x0896 impl=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .maxstack 1{{$}}
+# CLASS-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'counter'{{$}}
+# CLASS-NEXT: {{^}}    L1: ret{{$}}
+# CLASS-NEXT: {{^}}  .method '<msil>addr_main' native int() flags=0x0096 impl=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .maxstack 1{{$}}
+# CLASS-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'<msil>fn_main'{{$}}
+# CLASS-NEXT: {{^}}    L1: ret{{$}}
+# CLASS-NEXT: {{^}}  .method '<msil>addr_table' native int() flags=0x0896 impl=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .maxstack 1{{$}}
+# CLASS-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'table'{{$}}
+# CLASS-NEXT: {{^}}    L1: ret{{$}}
+# CLASS-NEXT: {{^}}  .method '<msil>addr_twice' native int() flags=0x0096 impl=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .maxstack 1{{$}}
+# CLASS-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'<msil>fn_twice'{{$}}
+# CLASS-NEXT: {{^}}    L1: ret{{$}}
+# CLASS-NEXT: {{^}}  .method 'add' int32(int32, int32) flags=0x0016 impl=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .param 1 'A_0' flags=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .param 2 'A_1' flags=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .maxstack 2{{$}}
+# CLASS-NEXT: {{^}}    L0: ldarg.0{{$}}
+# CLASS-NEXT: {{^}}    L1: ldarg.1{{$}}
+# CLASS-NEXT: {{^}}    L2: add{{$}}
+# CLASS-NEXT: {{^}}    L3: ret{{$}}
+# CLASS-NEXT: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# CLASS:      {{^}}  .method 'twice' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# CLASS-NEXT: {{^}}    .param 1 'A_0' flags=0x0000{{$}}
+# CLASS:      {{^}}    L{{[0-9]+}}: call int32(int32) '<Module>'::'local_fn'{{$}}
+
+## Rows: the TypeDefs after M20's, the properties in plan order, Getter
+## semantics, the two attributes (sorted by their HasCustomAttribute parent:
+## Assembly row 1 is 0x2E, TypeDef row 5 is 0xA3), the Assembly row.
+# RUN: llvm-cil-dump --tables lib.dll | FileCheck %s --check-prefix=TABLES
+# TABLES:      {{^}}Table: TypeDef rows=5 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  TypeDef[1]: Flags=0x00000000 TypeName='<Module>' TypeNamespace='' Extends=0 {{.*$}}
+# TABLES-NEXT: {{^}}  TypeDef[2]: Flags=0x00000110 TypeName='<msil>image_t' TypeNamespace='' {{.*$}}
+# TABLES-NEXT: {{^}}  TypeDef[3]: Flags=0x00000181 TypeName='lib' TypeNamespace='' Extends=0x01{{[0-9A-F]+}} {{.*$}}
+# TABLES-NEXT: {{^}}  TypeDef[4]: Flags=0x00100180 TypeName='<msil>Data' TypeNamespace='' Extends=0x01{{[0-9A-F]+}} {{.*$}}
+# TABLES-NEXT: {{^}}  TypeDef[5]: Flags=0x00100100 TypeName='<msil>SymbolTable' TypeNamespace='' Extends=0x01{{[0-9A-F]+}} {{.*$}}
+# TABLES:      {{^}}Table: CustomAttribute rows=2 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  CustomAttribute[1]: Parent=0x20000001 Type=0x06{{[0-9A-F]+}} Value=01 00 {{.+$}}
+# TABLES-NEXT: {{^}}  CustomAttribute[2]: Parent=0x02000005 Type=0x0A{{[0-9A-F]+}} Value=01 00 01 00 00 00 01 00 54 02 0D 41 6C 6C 6F 77 4D 75 6C 74 69 70 6C 65 01{{$}}
+# TABLES:      {{^}}Table: PropertyMap rows=1 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  PropertyMap[1]: Parent=0x02000003 PropertyList=0x17000001{{$}}
+# TABLES-NEXT: {{^}}Table: Property rows=2 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  Property[1]: Flags=0x0000 Name='counter' Type=08 00 18{{$}}
+# TABLES-NEXT: {{^}}  Property[2]: Flags=0x0000 Name='table' Type=08 00 18{{$}}
+# TABLES-NEXT: {{^}}Table: MethodSemantics rows=2 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  MethodSemantics[1]: Semantics=0x0002 Method=0x06{{[0-9A-F]+}} Association=0x17000001{{$}}
+# TABLES-NEXT: {{^}}  MethodSemantics[2]: Semantics=0x0002 Method=0x06{{[0-9A-F]+}} Association=0x17000002{{$}}
+# TABLES:      {{^}}Table: Assembly rows=1 rowsize={{[0-9]+}}{{$}}
+# TABLES-NEXT: {{^}}  Assembly[1]: HashAlgId=0x00008004 MajorVersion=0x0000 MinorVersion=0x0000 BuildNumber=0x0000 RevisionNumber=0x0000 Flags=0x00000000 PublicKey=- Name='lib' Culture=''{{$}}
+
+## The export class from a dotted assembly name, from --export-class, and
+## from a dot-free --export-class value.
+# RUN: mkdir dotted ns plain
+# RUN: msil-ld -shared lib.o -o dotted/My.Lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --tables dotted/My.Lib.dll | FileCheck %s --check-prefix=TYPE -DNS=My -DNAME=Lib
+# RUN: llvm-cil-dump dotted/My.Lib.dll | FileCheck %s --check-prefix=FULL -DFULL=My.Lib
+# RUN: msil-ld -shared lib.o --export-class=Contoso.Zl.Native -o ns/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --tables ns/lib.dll | FileCheck %s --check-prefix=TYPE -DNS=Contoso.Zl -DNAME=Native
+# RUN: llvm-cil-dump ns/lib.dll | FileCheck %s --check-prefix=FULL -DFULL=Contoso.Zl.Native
+# RUN: msil-ld -shared lib.o --export-class=Native -o plain/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --tables plain/lib.dll | FileCheck %s --check-prefix=TYPE -DNS= -DNAME=Native
+# RUN: llvm-cil-dump plain/lib.dll | FileCheck %s --check-prefix=FULL -DFULL=Native
+# TYPE: {{^}}  TypeDef[3]: Flags=0x00000181 TypeName='[[NAME]]' TypeNamespace='[[NS]]' Extends=
+# FULL: {{^}}.class '[[FULL]]' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# FULL-NEXT: {{^}}  .property 'counter' native int() flags=0x0000{{$}}
+# FULL-NEXT: {{^}}    .get native int() '[[FULL]]'::'<msil>addr_counter'{{$}}
+
+## --assembly-version: one to four parts, for libraries and EXEs alike.
+# RUN: mkdir v4 v1 v2 exe
+# RUN: msil-ld -shared lib.o --assembly-version=1.2.3.4 -o v4/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump v4/lib.dll | FileCheck %s --check-prefix=VERSION -DNAME=lib -DVER=1.2.3.4
+# RUN: msil-ld -shared lib.o --assembly-version=7 -o v1/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump v1/lib.dll | FileCheck %s --check-prefix=VERSION -DNAME=lib -DVER=7.0.0.0
+# RUN: msil-ld -shared lib.o --assembly-version=65535.0.2 -o v2/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump v2/lib.dll | FileCheck %s --check-prefix=VERSION -DNAME=lib -DVER=65535.0.2.0
+# RUN: msil-ld main.o --assembly-version=2.0.0.1 -o exe/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump exe/prog.exe | FileCheck %s --check-prefix=VERSION -DNAME=prog -DVER=2.0.0.1
+# VERSION: {{^}}assembly '[[NAME]]' ver [[VER]] flags=0x00000000 hash=0x00008004 culture='' key=-{{$}}
+# RUN: not msil-ld -shared lib.o --assembly-version=1.2.3.4.5 -o x.dll 2>&1 | %{fc} --check-prefix=BADVER -DV=1.2.3.4.5
+# RUN: not msil-ld -shared lib.o --assembly-version=65536 -o x.dll 2>&1 | %{fc} --check-prefix=BADVER -DV=65536
+# RUN: not msil-ld -shared lib.o --assembly-version=1.x -o x.dll 2>&1 | %{fc} --check-prefix=BADVER -DV=1.x
+# BADVER: {{^}}msil-ld: error: invalid --assembly-version value '[[V]]'{{$}}
+
+## The assembly name and the file name differ: a warning, and the class is
+## named after the assembly.
+# RUN: mkdir name soname
+# RUN: msil-ld -shared lib.o --assembly-name=Other -o name/lib.dll 2>&1 \
+# RUN:   | %{fc} --check-prefix=NAME --implicit-check-not=error:
+# RUN: msil-ld -shared lib.o -soname Other -o soname/lib.dll 2>&1 \
+# RUN:   | %{fc} --check-prefix=NAME --implicit-check-not=error:
+# NAME: {{^}}msil-ld: warning: assembly name 'Other' differs from the output file name '{{.*}}lib.dll'; the CLR loads a library only as Other.dll{{$}}
+# RUN: llvm-cil-dump name/lib.dll | FileCheck %s --check-prefix=OTHER
+# OTHER: {{^}}assembly 'Other' ver 0.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-{{$}}
+# OTHER: {{^}}.class 'Other' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+
+## -e with -shared: a warning, still no entry point.
+# RUN: mkdir entry
+# RUN: msil-ld -shared -e main lib.o -o entry/lib.dll 2>&1 | %{fc} --check-prefix=ENTRY --implicit-check-not=error:
+# RUN: msil-ld -shared --entry=twice lib.o -o entry/lib2.dll 2>&1 | %{fc} --check-prefix=ENTRY --implicit-check-not=error:
+# ENTRY: {{^}}msil-ld: warning: --entry is ignored with -shared{{$}}
+# RUN: llvm-cil-dump --headers entry/lib.dll | FileCheck %s --check-prefix=HEADERS
+
+## An output name with neither .exe nor .dll: a warning, and a DLL image.
+# RUN: mkdir bin
+# RUN: msil-ld -shared lib.o -o bin/lib.bin 2>&1 | %{fc} --check-prefix=BIN \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# BIN: {{^}}msil-ld: warning: {{.*}}lib.bin: the output name ends in neither .exe nor .dll; msil-ld writes a DLL image{{$}}
+# RUN: llvm-cil-dump --headers bin/lib.bin | FileCheck %s --check-prefix=HEADERS
+
+## Invalid --export-class values: an empty name (also after the namespace),
+## a '/', more than 1,023 bytes; 1,023 bytes are fine.
+# RUN: not msil-ld -shared lib.o --export-class= -o x.dll 2>&1 | %{fc} --check-prefix=BADCLASS -DV=
+# RUN: not msil-ld -shared lib.o --export-class=Contoso. -o x.dll 2>&1 | %{fc} --check-prefix=BADCLASS -DV=Contoso.
+# RUN: not msil-ld -shared lib.o --export-class=Outer/Inner -o x.dll 2>&1 | %{fc} --check-prefix=BADCLASS -DV=Outer/Inner
+# BADCLASS: {{^}}msil-ld: error: invalid --export-class value '[[V]]'{{$}}
+# RUN: %python long.py 1024 > long1024.rsp
+# RUN: not msil-ld -shared lib.o @long1024.rsp -o x.dll 2>&1 | %{fc} --check-prefix=LONG
+# LONG: {{^}}msil-ld: error: invalid --export-class value 'Ns.{{A+}}'{{$}}
+# RUN: %python long.py 1023 > long1023.rsp
+# RUN: mkdir long
+# RUN: msil-ld -shared lib.o @long1023.rsp -o long/lib.dll 2>&1 | count 0
+
+## Reserved names, from --export-class and from the assembly name (quoted:
+## lit's shell would read '<' and '>' as redirections); nothing is written.
+# RUN: mkdir rsv
+# RUN: not msil-ld -shared lib.o "--export-class=<msil>Data" -o rsv/x.dll 2>&1 \
+# RUN:   | %{fc} --check-prefix=BADCLASS "-DV=<msil>Data"
+# RUN: not msil-ld -shared lib.o "--export-class=<Module>" -o rsv/x.dll 2>&1 \
+# RUN:   | %{fc} --check-prefix=BADCLASS "-DV=<Module>"
+# RUN: not msil-ld -shared lib.o "--export-class=Ns.<msil>X" -o rsv/x.dll 2>&1 \
+# RUN:   | %{fc} --check-prefix=BADCLASS "-DV=Ns.<msil>X"
+# RUN: not msil-ld -shared lib.o "--export-class=<msil>Ns.X" -o rsv/x.dll 2>&1 \
+# RUN:   | %{fc} --check-prefix=BADCLASS "-DV=<msil>Ns.X"
+# RUN: not msil-ld -shared lib.o -soname "<msil>Data" -o rsv/x.dll 2>&1 \
+# RUN:   | %{fc} --check-prefix=BADCLASS "-DV=<msil>Data"
+# RUN: not ls rsv/x.dll
+# RUN: mkdir nsmodule
+# RUN: msil-ld -shared lib.o "--export-class=Ns.<Module>" -o nsmodule/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --tables nsmodule/lib.dll | FileCheck %s --check-prefix=TYPE -DNS=Ns "-DNAME=<Module>"
+
+## The export-class limit: 8 methods against --msil-type-member-limit=7
+## (the other classes hold at most 7 members); 8 links. The failing link
+## writes x.dll, so its export class is 'x'.
+# RUN: not msil-ld -shared lib.o --msil-type-member-limit=7 -o x.dll 2>&1 | %{fc} --check-prefix=LIMIT
+# LIMIT: {{^}}msil-ld: error: export class 'x' would hold 8 methods; the CLR allows 65,524{{$}}
+# RUN: mkdir limit
+# RUN: msil-ld -shared lib.o --msil-type-member-limit=8 -o limit/lib.dll 2>&1 | count 0
+
+#--- long.py
+# An --export-class value of <n> bytes: 'Ns.' and n - 3 letters A.
+import sys
+n = int(sys.argv[1])
+print("--export-class=Ns." + "A" * (n - 3))
+
+#--- lib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = global i32 5, align 4
+@table = constant [2 x i32] [i32 1, i32 2], align 4
+@calls = internal global i32 0, align 4
+
+define hidden i32 @helper(i32 %x) {
+  %r = mul i32 %x, 10
+  ret i32 %r
+}
+
+define internal i32 @local_fn(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @twice(i32 %x) {
+  %c = load i32, ptr @calls
+  %c1 = add i32 %c, 1
+  store i32 %c1, ptr @calls
+  %h = call i32 @helper(i32 %x)
+  %l = call i32 @local_fn(i32 %h)
+  ret i32 %l
+}
+
+define i32 @add(i32 %a, i32 %b) {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+define i32 @main() {
+  ret i32 0
+}
+
+define internal void @init() {
+  store i32 100, ptr @counter
+  ret void
+}
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init, ptr null }]
+
+#--- main.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}

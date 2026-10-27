@@ -1,0 +1,258 @@
+## Native object files on the command line (the section 12 rows of
+## 2026-10-26 'M22.c extended (Rust-found defect 3)' and 'M22.e extended
+## (Rust-found defects 1-4, tests)'; ImplementationPlan.md 5.9.4, 5.10.8):
+## rustc passes an empty native object (symbols.o) under
+## -Clinker-plugin-lto, and msil-ld stopped with 'unknown file type'.
+## - A native ELF or COFF object, in the object format of the triple's OS,
+##   that defines no symbol, or only symbols nothing references, is skipped
+##   (at most a note, as for unreferenced native archive members): no error
+##   or warning, and the output is the one without it, for CIL objects and
+##   for bitcode (LTO);
+## - a referenced definition in native object code stays the error
+##   'symbol '<s>' is defined only in native object code (<file>); MSIL
+##   cannot link machine code', also when a native library or a .NET library
+##   msil-ld wrote defines the same symbol, before or after the object (M22
+##   review r2 finding 1): an import library (nat.lib) and a -shared library
+##   (m/natlib.dll) on the Windows triple, a shared object (libnat.so) on
+##   linux-gnu; --trace-symbol shows no library definition, so nothing binds
+##   the symbol elsewhere;
+## - an oldnames-style alias object on the command line (strdup.obj, weak
+##   external strdup -> _strdup with IMAGE_WEAK_EXTERN_SEARCH_ALIAS) binds
+##   through its alias as the same object does inside oldnames.lib
+##   (native-coff-alias.test): strdup is the P/Invoke
+##   pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup") (review r2
+##   finding 6);
+## - a file of a format msil-ld does not link names the format it found (a
+##   WebAssembly object).
+## coff-code.yaml (Inputs/native) defines fn1, fn2 and dataobj (-D FN1=
+## renames fn1).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj main-lnx.ll -o main-lnx.o
+# RUN: llc -filetype=obj use-lnx.ll -o use-lnx.o
+# RUN: llc -filetype=obj main-win.ll -o main-win.o
+# RUN: llc -filetype=obj use-win.ll -o use-win.o
+# RUN: llvm-as main-lnx.ll -o main-lnx.bc
+# RUN: yaml2obj empty-elf.yaml -o empty-elf.o
+# RUN: yaml2obj unused-elf.yaml -o unused-elf.o
+# RUN: yaml2obj -D NAME=nat_fn unused-elf.yaml -o nat-elf.o
+# RUN: yaml2obj empty-coff.yaml -o empty-coff.obj
+# RUN: yaml2obj %S/Inputs/native/coff-code.yaml -o unused-coff.obj
+# RUN: yaml2obj -D FN1=nat_fn %S/Inputs/native/coff-code.yaml -o nat-coff.obj
+# RUN: yaml2obj wasm.yaml -o wasm.o
+# RUN: mkdir plain e u lplain le wplain we wu m lib
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{quiet} = %{fc} --allow-empty --check-prefix=NONE
+# NONE-NOT: {{error|warning}}:
+
+## ELF objects on a Linux triple: skipped.
+# RUN: msil-ld main-lnx.o -o plain/prog.exe 2>&1 | count 0
+# RUN: msil-ld main-lnx.o empty-elf.o -o e/prog.exe 2>&1 | %{quiet}
+# RUN: cmp plain/prog.exe e/prog.exe
+# RUN: msil-ld main-lnx.o unused-elf.o -o u/prog.exe 2>&1 | %{quiet}
+# RUN: cmp plain/prog.exe u/prog.exe
+
+## The same with bitcode.
+# RUN: msil-ld main-lnx.bc -o lplain/prog.exe 2>&1 | count 0
+# RUN: msil-ld main-lnx.bc empty-elf.o -o le/prog.exe 2>&1 | %{quiet}
+# RUN: cmp lplain/prog.exe le/prog.exe
+
+## A referenced native definition.
+# RUN: not msil-ld use-lnx.o nat-elf.o -o x.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE=nat-elf.o \
+# RUN:   --implicit-check-not=error:
+# NATIVE: {{^}}msil-ld: error: symbol 'nat_fn' is defined only in native object code ([[FILE]]); MSIL cannot link machine code{{$}}
+
+## COFF objects on a Windows triple.
+# RUN: msil-ld main-win.o -o wplain/prog.exe 2>&1 | count 0
+# RUN: msil-ld main-win.o empty-coff.obj -o we/prog.exe 2>&1 | %{quiet}
+# RUN: cmp wplain/prog.exe we/prog.exe
+# RUN: msil-ld main-win.o unused-coff.obj -o wu/prog.exe 2>&1 | %{quiet}
+# RUN: cmp wplain/prog.exe wu/prog.exe
+# RUN: not msil-ld use-win.o nat-coff.obj -o x.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE=nat-coff.obj \
+# RUN:   --implicit-check-not=error:
+
+## The referenced native definition against a library that defines the same
+## symbol, in both orders: the object's definition is the error, never the
+## library's binding ('<lib>: shared definition of nat_fn' or
+## '<lib>: managed definition of nat_fn' under --trace-symbol).
+# RUN: llvm-lib /machine:x64 /def:nat.def /out:nat.lib
+# RUN: ld.lld -shared -soname libnat.so nat-elf.o -o libnat.so
+# RUN: llc -filetype=obj natlib.ll -o natlib.o
+# RUN: msil-ld -shared natlib.o -o m/natlib.dll 2>&1 | count 0
+# RUN: llvm-as use-lnx.ll -o use-lnx.bc
+# RUN: llvm-as use-win.ll -o use-win.bc
+# DEFINE: %{nobind} = %{fc} --check-prefix=NATIVE --implicit-check-not=error: \
+# DEFINE:   --implicit-check-not="shared definition" --implicit-check-not="managed definition"
+
+## Windows: an import library.
+# RUN: not msil-ld use-win.o nat-coff.obj nat.lib --trace-symbol=nat_fn -o x.exe 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-coff.obj
+# RUN: not msil-ld use-win.o nat.lib nat-coff.obj --trace-symbol=nat_fn -o x.exe 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-coff.obj
+# RUN: not msil-ld use-win.bc nat-coff.obj nat.lib --trace-symbol=nat_fn -o x.exe 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-coff.obj
+
+## Windows: a .NET library that exports nat_fn.
+# RUN: not msil-ld use-win.o nat-coff.obj m/natlib.dll --trace-symbol=nat_fn -o x.exe 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-coff.obj
+# RUN: not msil-ld use-win.o m/natlib.dll nat-coff.obj --trace-symbol=nat_fn -o x.exe 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-coff.obj
+# RUN: not msil-ld use-win.bc nat-coff.obj m/natlib.dll --trace-symbol=nat_fn -o x.exe 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-coff.obj
+
+## linux-gnu: a shared object, with CIL objects, bitcode and --lto-emit-asm.
+# RUN: not msil-ld use-lnx.o nat-elf.o libnat.so --trace-symbol=nat_fn -o x.exe 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-elf.o
+# RUN: not msil-ld use-lnx.o libnat.so nat-elf.o --trace-symbol=nat_fn -o x.exe 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-elf.o
+# RUN: not msil-ld use-lnx.bc nat-elf.o libnat.so --trace-symbol=nat_fn -o x.exe 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-elf.o
+# RUN: not msil-ld use-lnx.bc libnat.so nat-elf.o --trace-symbol=nat_fn -o x.exe 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-elf.o
+# RUN: not msil-ld --lto-emit-asm use-lnx.bc nat-elf.o libnat.so --trace-symbol=nat_fn -o x.il 2>&1 \
+# RUN:   | %{nobind} -DFILE=nat-elf.o
+
+## An oldnames-style alias object on the command line binds through its
+## alias, in bitcode (--lto-emit-asm) and CIL object links. The text has no
+## method '_strdup' ('--implicit-check-not' covers only the text before the
+## first match of a -DAG-only prefix, so ALIAS-NONE checks the whole file).
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-string.def /out:lib/ucrt.lib
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/oldnames.yaml -o strdup.obj
+# RUN: llvm-as strdup-main.ll -o strdup-main.bc
+# RUN: llc -filetype=obj strdup-main.ll -o strdup-main.o
+# RUN: msil-ld --lto-emit-asm --lto-O0 strdup-main.bc strdup.obj lib/ucrt.lib -o strdup.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=ALIAS --input-file=strdup.il
+# RUN: FileCheck %s --check-prefix=ALIAS-NONE --input-file=strdup.il
+# ALIAS-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" as "_strdup" nomangle cdecl) native int 'strdup'(native int) cil managed preservesig {}{{$}}
+# ALIAS-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("api-ms-win-crt-string-l1-1-0.dll" nomangle cdecl) native int 'strlen'(native int) cil managed preservesig {}{{$}}
+# ALIAS-DAG: call native int 'strdup'(native int)
+# ALIAS-NONE-NOT: '_strdup'
+# RUN: msil-ld strdup-main.o strdup.obj lib/ucrt.lib --print-imports -o strdup.exe > strdup-imports.txt 2>&1
+# RUN: FileCheck %s --check-prefix=ALIAS-OBJ --match-full-lines --input-file=strdup-imports.txt
+# ALIAS-OBJ:      strdup -> api-ms-win-crt-string-l1-1-0.dll!_strdup [function, -]
+# ALIAS-OBJ-NEXT: strlen -> api-ms-win-crt-string-l1-1-0.dll!strlen [function, -]
+# ALIAS-OBJ-NOT:  {{.}}
+
+## A WebAssembly object: the error names the format.
+# RUN: not msil-ld main-lnx.o wasm.o -o x.exe 2>&1 | %{fc} --check-prefix=WASM --implicit-check-not=error:
+# WASM: {{^}}msil-ld: error: {{.*}}wasm.o{{.*([Ww]asm|WebAssembly).*$}}
+
+#--- main-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- use-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @nat_fn()
+
+define i32 @main() {
+  %r = call i32 @nat_fn()
+  ret i32 %r
+}
+
+#--- main-win.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 0
+}
+
+#--- use-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @nat_fn()
+
+define i32 @main() {
+  %r = call i32 @nat_fn()
+  ret i32 %r
+}
+
+#--- natlib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @nat_fn() {
+  ret i32 7
+}
+
+#--- strdup-main.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %p = call ptr @strdup(ptr @msg)
+  %n = call i64 @strlen(ptr %p)
+  %r = trunc i64 %n to i32
+  ret i32 %r
+}
+
+declare ptr @strdup(ptr)
+declare i64 @strlen(ptr)
+
+#--- nat.def
+LIBRARY nat.dll
+EXPORTS
+  nat_fn
+
+#--- empty-elf.yaml
+## An x86_64 ELF object with an empty .text and no symbol (rustc's
+## symbols.o).
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+
+#--- unused-elf.yaml
+## An x86_64 ELF object that defines one function in machine code.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: '[[NAME=unused_nat]]', Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+
+#--- empty-coff.yaml
+## An AMD64 COFF object with one 'ret' in .text and no symbol.
+--- !COFF
+header:
+  Machine:         IMAGE_FILE_MACHINE_AMD64
+  Characteristics: [  ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    Alignment:       16
+    SectionData:     C3
+symbols:         []
+
+#--- wasm.yaml
+## A WebAssembly object (a 'linking' section).
+--- !WASM
+FileHeader:
+  Version: 0x00000001
+Sections:
+  - Type:    CUSTOM
+    Name:    linking
+    Version: 2

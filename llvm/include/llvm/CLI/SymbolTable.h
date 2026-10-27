@@ -16,15 +16,19 @@
 //
 // The payload (section 5.9.15 of llvm/docs/MSIL/ImplementationPlan.md) is
 // written with the link-info record's primitives (cli::RecordWriter): the
-// magic "MSYM", u8 major 1, u8 minor 0, u8 flags, uleb toolchain ABI version,
-// str triple, str C runtime identity, 4 x u8 data model, then a uleb count and
-// the export classes (str), the data symbols (str name, uleb size, u8 log2
-// alignment, u8 flags) and the flagged functions (str name, u8 flags).
+// magic "MSYM", u8 major 1, u8 minor 0, u8 flags (INTERFACE 0x01), uleb
+// toolchain ABI version, str triple, str C runtime identity, 4 x u8 data
+// model, then a uleb count and the export classes (str), the data symbols
+// (str name, uleb size, u8 log2 alignment, u8 flags) and the flagged
+// functions (str name, u8 flags; with ABI 0x04 followed by the definition's
+// SIGNATURES descriptor in the link-info record's encoding, plan 5.8.8: uleb
+// CallFlags, uleb FixedParams for VARARG, uleb SretSize and u8 SretAlignLog2
+// for SRET, then a uleb byval count and per byval parameter uleb Param, uleb
+// Size and u8 AlignLog2; there is no Token, because the function is named).
 //
-// M22 adds the header flag INTERFACE (0x01) and the function flag ABI (0x04)
-// with its signature descriptor, and its commit freezes the format; until
-// then the decoder refuses both as unknown flags. Errors on input have the
-// prefix "invalid symbol table: ".
+// M22 added INTERFACE and ABI, and its commit froze the format: a later
+// change needs a section 12 row of the plan. Errors on input have the prefix
+// "invalid symbol table: ".
 //
 //===----------------------------------------------------------------------===//
 
@@ -71,21 +75,31 @@ struct LibraryDataSymbol {
 };
 
 /// One exported function whose flags are not 0 (every other exported
-/// function is a plain one): its name and flags.
+/// function is a plain one): its name and flags. With ABI, Signature is the
+/// definition's SIGNATURES descriptor (plan 5.8.8): its Flags (CallFlags),
+/// FixedParams (VARARG only), SretSize and SretAlignLog2 (SRET only) and
+/// Byval; its Token is not part of the payload (0 after decoding). Without
+/// ABI, Signature is not written and stays empty after decoding.
 struct LibraryFunctionFlags {
-  enum : uint8_t { Variadic = 0x1, Weak = 0x2, KnownFlags = 0x3 };
+  enum : uint8_t { Variadic = 0x1, Weak = 0x2, ABI = 0x4, KnownFlags = 0x7 };
   std::string Name;
   uint8_t Flags = 0;
+  MSILLink::SignatureInfo Signature{};
 };
 
-/// The symbol table of a library (5.9.15). Triple is the library's triple
-/// without its environment version; CRuntime is the C runtime identity (the
-/// first -l among c, msvcrt, ucrt, ucrtbase, crtdll and msvcr*, else "none");
-/// PointerSize..LongDoubleSize are the data model of 5.8.9. ExportClasses are
-/// full type names ("NS.Name" or "Name").
+/// The header flags of a symbol table (5.9.15): INTERFACE marks an
+/// interface library (msil-ld --interface-only), whose methods are stubs.
+struct LibraryTableFlags {
+  enum : uint8_t { Interface = 0x01, KnownFlags = 0x01 };
+};
+
+/// The symbol table of a library (5.9.15). Flags are LibraryTableFlags.
+/// Triple is the library's triple without its environment version; CRuntime
+/// is the C runtime identity (the first -l among c, msvcrt, ucrt, ucrtbase,
+/// crtdll and msvcr*, else "none"); PointerSize..LongDoubleSize are the data
+/// model of 5.8.9. ExportClasses are full type names ("NS.Name" or "Name").
 struct LibrarySymbolTable {
-  /// No header flag is defined before M22.
-  enum : uint8_t { KnownFlags = 0x0 };
+  enum : uint8_t { KnownFlags = LibraryTableFlags::KnownFlags };
   uint8_t Major = SymbolTableMajorVersion, Minor = SymbolTableMinorVersion;
   uint8_t Flags = 0;
   uint32_t ABIVersion = MSILLink::ToolchainABIVersion;
@@ -104,19 +118,24 @@ LLVM_ABI void encodeSymbolTable(const LibrarySymbolTable &T,
                                 SmallVectorImpl<uint8_t> &Out);
 
 /// Decodes a payload. It refuses a bad magic, another major version (any
-/// minor version is read), unknown header, data-symbol and function flags,
-/// strings that are not UTF-8 or hold a NUL byte, an ABI version above
+/// minor version is read), unknown header, data-symbol, function and call
+/// flags, strings that are not UTF-8 or hold a NUL byte, an ABI version above
 /// 2^32 - 1, an alignment above 2^30, truncation and trailing bytes.
 LLVM_ABI Expected<LibrarySymbolTable>
 decodeSymbolTable(ArrayRef<uint8_t> Bytes);
 
 /// Prints \p T in llvm-cil-dump --link-info's format, one line per item:
 ///   SymbolTable v1.<minor> triple=<t> abi=<n> runtime='<c>'
-///     datamodel=<p>,<l>,<w>,<d>[ flags=0x<2X>]         (one line)
+///     datamodel=<p>,<l>,<w>,<d>[ flags=<f>]             (one line)
 ///   ExportClass '<name>'
 ///   Data[ CONST][ TLS][ WEAK] '<name>' size=<n> align=<bytes>
-///   Function[ VARARG][ WEAK] '<name>'
-/// Names are quoted as in the canonical listing.
+///   Function[ VARARG][ WEAK][ ABI] '<name>'[ NO_PROTOTYPE][ VARARG
+///     fixed=<n>][ SRET size=<n> align=<bytes>][ NATIVE_INCOMPATIBLE]
+///     [ byval=<param>:<size>:<align>]...                 (one line)
+/// <f> names the set header flags joined by '|' (INTERFACE), an unknown rest
+/// as 0x<2X>. The items after a Function's name are its ABI descriptor's, as
+/// printLinkInfo prints a Signature line. Names are quoted as in the
+/// canonical listing.
 LLVM_ABI void printSymbolTable(const LibrarySymbolTable &T, raw_ostream &OS);
 
 } // namespace cli

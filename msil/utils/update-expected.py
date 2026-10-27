@@ -85,9 +85,14 @@ else on PATH); on a Windows host --os linux uses the E7 recipe. %{msil_libs}
 belongs to the MSIL link only and is not read. %{msil_native_libs} goes to
 both builds, so the native build gets it (msil-prog.py --native-lib; plan
 M15), and the files of %{msil_deps} are copied next to the native program
-when it runs (msil-run.py --dep), as the native-oracle leg does; a
-REDEFINE: value may use lit's %if and %else (decided as below), and a
-wildcard in %{msil_deps} is expanded, as lit's shell expands it. RUN:
+when it runs (msil-run.py --dep), as the native-oracle leg does.
+%{msil_shlibs} (M22) builds the test's shared libraries natively before the
+program (msil-prog.py --shlibs: DLLs and import libraries on Windows, the E7
+recipe's ELF shared objects with --os linux), and the native program runs
+with the build's shlib/ directory beside it (msil-run.py --dep-dir), as the
+native-oracle leg of %{msil_prog} runs it. A REDEFINE: value may use lit's
+%if and %else (decided as below), and a wildcard in %{msil_deps} is
+expanded, as lit's shell expands it. RUN:
 commands before the test's first composite, other than 'rm -rf %t &&
 split-file %s %t', prepare its inputs (a test-built native library, plan
 5.12.5): they run first, in lit's internal shell (llvm/utils/lit), with %if
@@ -557,6 +562,7 @@ class Oracle:
             stock = msil_prog.split_words(value("%{msil_stock_srcs}", "", True))
             deps = msil_prog.split_words(value("%{msil_deps}", "", True))
             archives = value("%{msil_archives}", "", False)
+            shlibs = value("%{msil_shlibs}", "", False)
             native_libs = value("%{msil_native_libs}", "", True)
         except (msil_prog.UsageError, ValueError) as e:
             log.err("update-expected: %s: %s\n" % (src, e))
@@ -585,6 +591,7 @@ class Oracle:
         cmd += ["--workdir", os.path.join(work, "prog"), "--out", exe]
         cmd += ["--src", *srcs, "--stock-src", *stock]
         cmd.append("--archives=" + archives)
+        cmd.append("--shlibs=" + shlibs)
         cmd.append("--native-lib=" + native_libs)
         try:
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -600,9 +607,12 @@ class Oracle:
                 "status %s)\n" % res.returncode
             )
             return None, None
-        # %{msil_deps}: copied next to the native program, as the composite's
-        # native-oracle leg does (msil-run.py --dep).
-        return exe, self.run_mode() + (["--dep", *deps] if deps else [])
+        # %{msil_deps} and the libraries of %{msil_shlibs} (shlib/, which
+        # msil-prog.py always makes): copied next to the native program, as
+        # the composite's native-oracle leg does (msil-run.py --dep and
+        # --dep-dir).
+        run = self.run_mode() + ["--dep-dir", os.path.join(work, "prog", "shlib")]
+        return exe, run + (["--dep", *deps] if deps else [])
 
     def decide_if(self, text):
         """text with lit's %if/%else decided by the features the oracle knows

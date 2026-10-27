@@ -1,0 +1,8 @@
+program: hook()=2
+library: lib_hook()=1
+program: wvalue=20
+library: lib_wvalue()=10
+two copies of wvalue=1
+plain(1) from the library=101
+library: lib_wvalue() after the program's store=10
+[exit 0]

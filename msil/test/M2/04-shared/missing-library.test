@@ -1,0 +1,54 @@
+# A program whose library is not deployed stops before main with the CLR's FileNotFoundException naming the library.
+# The program links zmiss.dll and runs against its native transcript first.
+# Then the same build runs with zmiss.dll deleted from the directory that
+# msil-run.py copies next to the program: the program's <Module>::.cctor
+# names the library in its first ldtoken (plan 5.9.15: every linked library
+# initializes before main), so resolving that token fails while the
+# initializer is JIT-compiled and the program never reaches main (recon
+# exports-multiasm 3 and 6.1). The run therefore no longer matches the
+# expected transcript (not), prints no line of main, and stops with an
+# unhandled exception; the CLR may wrap the FileNotFoundException in a
+# TypeInitializationException for '<Module>', so the transcript's status
+# line accepts both and the program's stderr, which msil-run.py prints after
+# the difference, must name the missing assembly. The same on .NET Framework
+# under msil-run-netfx. Plan M22.f (missing-library); recon exports-multiasm
+# 10.5 (a missing library fails at run time, not at link time).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = zmiss=%t/zmiss.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+# RUN: %msil_prog_build --level O2 --workdir %t.gone.d --out %t.gone.d/prog.exe --src %t/main.c
+# RUN: rm %t.gone.d/shlib/zmiss.dll
+# RUN: not %msil_exec --expect %S/%{s:stem} --out %t.gone.out --dep-dir %t.gone.d/shlib -- %t.gone.d/prog.exe > %t.gone.err 2>&1
+# RUN: FileCheck %s --check-prefix=TRANSCRIPT --input-file=%t.gone.out
+# RUN: FileCheck %s --check-prefix=STDERR --input-file=%t.gone.err
+# RUN: %if msil-run-netfx %{ not %msil_exec --netfx --expect %S/%{s:stem} --out %t.gone.netfx.out --dep-dir %t.gone.d/shlib -- %t.gone.d/prog.exe > %t.gone.netfx.err 2>&1 %}
+# RUN: %if msil-run-netfx %{ FileCheck %s --check-prefix=TRANSCRIPT --input-file=%t.gone.netfx.out %}
+# RUN: %if msil-run-netfx %{ FileCheck %s --check-prefix=STDERR --input-file=%t.gone.netfx.err %}
+# TRANSCRIPT-NOT: main entered
+# TRANSCRIPT:     {{^}}[unhandled exception: System.{{IO.FileNotFoundException|TypeInitializationException}}]{{$}}
+# TRANSCRIPT-NOT: {{.}}
+# STDERR:         System.IO.FileNotFoundException: Could not load file or assembly 'zmiss,
+#--- zmiss.c
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+API int zmiss_value(void) { return 42; }
+#--- main.c
+#include "msil_test.h"
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+int zmiss_value(void);
+
+int main(void) {
+  puts("main entered");
+  put_kv("zmiss_value()", zmiss_value());
+  return 0;
+}

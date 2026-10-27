@@ -1,0 +1,62 @@
+# A library survives ildasm and ilasm with its symbol-table attribute, and a program links against the round-tripped copy and runs.
+# The composite builds rtlib.dll and its program and runs them (its
+# msil-roundtrip leg also round-trips the program). Then the library of the
+# -O2 build goes through msil-verify.py --roundtrip (Design.md 5.5: the .NET
+# ildasm, ilasm, and ildasm again, listings equal): the private
+# '<msil>SymbolTable' class and the attribute on the Assembly row are plain
+# metadata, so ilasm writes them back, and llvm-cil-dump --link-info decodes
+# the same symbol table from both copies (the dumps are compared from each
+# file's own directory, so they name the same file). A program linked
+# against the round-tripped library (msil-prog.py --lib, no --shlibs) is
+# verified with it and prints the expected transcript with the round-tripped
+# library beside it. Plan M22.f (roundtrip-library), recon exports-multiasm
+# 11 item 3 (ildasm/ilasm round trip keeps the attribute).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# REQUIRES: msil-roundtrip, msil-cil-dump
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = rtlib=%t/rtlib.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+# RUN: %msil_prog_build --level O2 --workdir %t.lib.d --out %t.lib.d/prog.exe --src %t/main.c
+# RUN: mkdir -p %t.rt
+# RUN: %msil_roundtrip --output=%t.rt/rtlib.dll %t.lib.d/shlib/rtlib.dll
+# RUN: cd %t.lib.d/shlib && %msil_cil_dump --link-info rtlib.dll > %t.orig.txt
+# RUN: cd %t.rt && %msil_cil_dump --link-info rtlib.dll > %t.rt.txt
+# RUN: diff %t.orig.txt %t.rt.txt
+# RUN: FileCheck %s --check-prefix=TABLE --input-file=%t.rt.txt
+# RUN: %msil_prog_build --shlibs= --lib='%t.rt/rtlib.dll' --level O2 --workdir %t.relink.d --out %t.relink.d/prog.exe --src %t/main.c
+# RUN: %msil_verify --dep-dir %t.rt --also-verify-deps -- %t.relink.d/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t.relink.out --dep-dir %t.rt -- %t.relink.d/prog.exe
+# RUN: %if msil-run-netfx %{ %msil_exec --netfx --expect %S/%{s:stem} --out %t.relink.netfx.out --dep-dir %t.rt -- %t.relink.d/prog.exe %}
+# TABLE:     {{^}}SymbolTable v1.0 triple={{.*}} runtime='{{.*}}' datamodel={{.*}}
+# TABLE:     {{^}}ExportClass 'rtlib'{{$}}
+# TABLE:     {{^}}Data{{.*}} 'rt_value' size=4 align=4{{$}}
+#--- rtlib.c
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+API int rt_value = 41;
+API int rt_bump(void) { return ++rt_value; }
+API int rt_add(int a, int b) { return a + b; }
+#--- main.c
+#include "msil_test.h"
+#ifdef _WIN32
+#define IMPORT __declspec(dllimport)
+#else
+#define IMPORT
+#endif
+IMPORT extern int rt_value;
+IMPORT int rt_bump(void);
+IMPORT int rt_add(int, int);
+
+int main(void) {
+  put_kv("rt_value", rt_value);
+  put_kv("rt_bump()", rt_bump());
+  put_kv("rt_add(40, 2)", rt_add(40, 2));
+  return 0;
+}

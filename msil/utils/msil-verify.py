@@ -13,8 +13,10 @@
                    [--ildasm PATH --ilasm PATH]
                    [--md-baseline FILE [--equiv-skip FILE --test PATH
                    [--triple T] [--level L]]] [--keep-copy DIR] [--timeout S]
-                   [--mem-limit-mb N] [-v] [--dep FILE...]... [--] prog.dll
-    msil-verify.py --skip [--dep FILE...] [--] prog.dll   (no verifier: a no-op)
+                   [--mem-limit-mb N] [-v] [--dep-dir DIR]... [--also-verify-deps]
+                   [--dep FILE...]... [--] prog.dll
+    msil-verify.py --skip [--dep-dir DIR]... [--also-verify-deps] [--dep FILE...]
+                   [--] prog.dll                         (no verifier: a no-op)
     msil-verify.py --roundtrip --output OUT.dll --ildasm PATH --ilasm PATH
                    [--keep-copy DIR] [--timeout S] [--mem-limit-mb N] [-v]
                    prog.dll              (the ildasm -> ilasm round trip)
@@ -47,8 +49,12 @@ Pass 1 verifies the assembly itself:
       offset: the image copy of D12 in <Module>::.cctor ('ldsfld native int
       '<msil>data'; ldsflda ...; ldc.i4 N; cpblk'), and the relocation table
       that the loop of plan 5.9.10 reads there (above 32 relocations: '-S' at
-      the default threshold and msil-ld's output). The same message for any
-      other RVA field, or without a listing, fails.
+      the default threshold and msil-ld's output). A -shared library copies
+      the image in '<msil>Data'::.cctor, its first initialization phase
+      (plan 5.9.15, M22; the fields stay in <Module>), and the same check
+      accepts the message there, at the same ldsfldas (plan section 12, the
+      M22 row 'D21 refined'). The same message for any other RVA field, or
+      without a listing, fails.
     - A function address used as a native int (D2; 'ldftn <method>'):
       PEVerify types it as a method pointer and rejects every such use, with
       a message that depends on the use ('[found <type>::<method>][expected
@@ -80,7 +86,9 @@ directory:
     stind.<t>              call void '<msil-verify>'::'stind.<t>'(native int, <T>)
     calli <R>(<P...>)      pop; call <R> '<msil-verify>'::'calli.<k>'(<P...>)
     ldftn <method>         ldc.i4.0; conv.i
-    ldsflda <the image>    ldc.i4.0; conv.i   (only '<msil>image', see above)
+    ldsflda <the image>    ldc.i4.0; conv.i   (only '<msil>image', see above;
+                                               in any method, '<msil>Data'::
+                                               .cctor included)
     ldsflda <the relocs>   ldc.i4.0; conv.i   (only '<msil>relocs', see above)
     br.s, brtrue.s, ...    br, brtrue, ... (the rewritten code is longer)
     unaligned., volatile.  nop, before a rewritten instruction
@@ -134,6 +142,18 @@ copies of the dependencies. A native library is only copied. A missing file,
 or two of one name (or one named like the assembly), is a usage error.
 --dep takes every argument up to the next option, so the lit composites pass
 '--dep %{msil_deps} --' before the assembly; an empty list is allowed.
+
+--dep-dir DIR (repeatable; plan 5.12.4, M22) adds every file directly in DIR
+as if each were given with --dep: the managed ones are ILVerify references
+in both passes and every one is copied next to the assembly for PEVerify.
+The lit composites pass '--dep-dir <build directory>/shlib', the library
+assemblies of %{msil_shlibs}; a DIR that does not exist, or is empty, adds
+nothing. --also-verify-deps then verifies each managed file of the --dep-dir
+directories too, after the assembly, with the same options (both passes,
+the allowances above), the other files of those directories and the --dep
+files as its dependencies, and the messages of each prefixed with its file
+name; O6 (--md-baseline) concerns the assembly only. A line
+'msil-verify: also verified <files>' names them.
 
 --md-baseline FILE (M20, plan 5.12.4 and 5.12.6: the oracle O6) also runs
 PEVerify '/nologo /md /hresult' on the assembly and on FILE, the image that
@@ -196,15 +216,33 @@ the 'snan-quiet' entry, and section 12, 'M21.c extended'); ildasm prints such
 an operand as its bytes, '(01 00 80 7F)' coming back as '(01 00 C0 7F)', or
 as 'float32(0x7F800001)'. A float64 operand, a quiet NaN that changes, a
 payload that changes otherwise and every other line still fail; -v counts the
-quieted constants. The only edit
-to the listing is that an image layout directive whose value ildasm did not
-format ('.imagebase 0x%016I64x' from the Linux ildasm 10.0.12) is dropped,
-because ilasm rejects it; ilasm then uses its default, which is what the
-backend's output gets too. The lit leg runs --output afterwards and compares
-its transcript as usual. Use the .NET (NuGet) ildasm and ilasm: the .NET
-Framework ildasm prints infinite ldc.r4/ldc.r8 operands as 'inf', which
-neither the .NET Framework ilasm nor the .NET ilasm 10.0.12 reads back
-(llvm/docs/MSIL/recon/cil-runtime.md 15).
+quieted constants.
+
+One more difference is accepted, for library outputs: a top-level '.class'
+block whose class a '.custom' inside the listing's '.assembly' block names
+may stand at another position in the second listing (plan 5.12.6 O2 and
+section 12, '5.12.6 O2 clarified (library outputs)'). In practice it is the
+'<msil>SymbolTable' attribute class of every -shared output: ilasm defines a
+TypeDef at its first reference, and the '.assembly' block precedes every
+class, so the class comes back as the first one of the module. The block,
+from its '.class' line to its '} // end of class' line and the blank line
+that ildasm prints after it, is compared at its position in the second
+listing, so its own lines and every other line (the '.assembly' block's
+included) must still be equal, and the other acceptances apply to it and
+around it as before. Any other moved class, a changed or missing block and a
+block that no '.custom' of the '.assembly' block names still fail, so an EXE,
+whose '.assembly' block names none of its classes, round-trips strictly; -v
+names the moved classes, and a failing diff shows the first listing with
+the accepted move applied.
+
+The only edit to the listing is that an image layout directive whose value
+ildasm did not format ('.imagebase 0x%016I64x' from the Linux ildasm
+10.0.12) is dropped, because ilasm rejects it; ilasm then uses its default,
+which is what the backend's output gets too. The lit leg runs --output
+afterwards and compares its transcript as usual. Use the .NET (NuGet) ildasm
+and ilasm: the .NET Framework ildasm prints infinite ldc.r4/ldc.r8 operands
+as 'inf', which neither the .NET Framework ilasm nor the .NET ilasm 10.0.12
+reads back (llvm/docs/MSIL/recon/cil-runtime.md 15).
 
 Exit status: 0 if clean, 1 on a disallowed error (with --roundtrip: on a tool
 failure or a listing difference), 2 on a usage error.
@@ -955,14 +993,144 @@ def snan_quieted(first, second):
     return is_float32_snan(a[2]) and b[2] == a[2] | FLOAT32_QUIET
 
 
+# The '.assembly NAME' line of an ildasm listing (not '.assembly extern'),
+# which opens the block of the Assembly row's attributes; the block ends at
+# the next line that starts with '}'.
+ASSEMBLY_BLOCK_RE = re.compile(r"^\.assembly\s+(?!extern\b)\S")
+# A '.custom' line in that block and the class that its constructor belongs
+# to, as ildasm prints it: ".custom instance void '<msil>SymbolTable'::.ctor(
+# uint8[]) = ( 01 00 ...". A class of another assembly ('[mscorlib]System.
+# ...') has no block in the listing.
+ASSEMBLY_CUSTOM_RE = re.compile(
+    r"^\s+\.custom\s+(?:instance\s+)?void\s+(?P<cls>[^\[\s].*?)::\.ctor\("
+)
+# The first and last lines of a top-level class block (nested classes and
+# members are indented): '.class private auto ansi ... NAME' and
+# '} // end of class NAME'.
+CLASS_BLOCK_START_RE = re.compile(r"^\.class\s")
+CLASS_BLOCK_END_RE = re.compile(r"^\} // end of class (?P<cls>.+?)\s*$")
+
+
+def assembly_attribute_classes(listing):
+    """The class names that the '.custom' lines inside the '.assembly' block
+    of listing (a list of lines) name."""
+    names, inside = set(), False
+    for line in listing:
+        text = line.rstrip("\r\n")
+        if not inside:
+            inside = bool(ASSEMBLY_BLOCK_RE.match(text))
+        elif text.startswith("}"):
+            break
+        else:
+            m = ASSEMBLY_CUSTOM_RE.match(text)
+            if m:
+                names.add(m.group("cls"))
+    return names
+
+
+def class_blocks(listing, names):
+    """[(name, start, end)] of the top-level class blocks of listing whose
+    class is one of names, in listing order: from the '.class' line to the
+    '} // end of class' line and the blank line that ildasm prints after it
+    (end exclusive)."""
+    blocks, start = [], None
+    for i, line in enumerate(listing):
+        text = line.rstrip("\r\n")
+        if CLASS_BLOCK_START_RE.match(text):
+            start = i
+            continue
+        m = CLASS_BLOCK_END_RE.match(text) if start is not None else None
+        if not m:
+            continue
+        if m.group("cls") in names:
+            end = i + 1
+            if end < len(listing) and not listing[end].strip():
+                end += 1
+            blocks.append((m.group("cls"), start, end))
+        start = None
+    return blocks
+
+
+def move_attribute_classes(first, second):
+    """The difference --roundtrip accepts for library outputs: ilasm defines
+    a TypeDef at its first reference, so a class that a '.custom' of the
+    '.assembly' block names (the '<msil>SymbolTable' attribute class of a
+    -shared output) comes back first. Returns (first with the top-level
+    blocks of those classes moved to their positions in second, the names
+    of the blocks that moved, in the order of second). The k-th block of a
+    class goes where the k-th block of that class stands in second; nothing
+    moves unless both listings have the same blocks of those classes. The
+    blocks' lines are moved as they are, so a changed block, a moved block
+    of another class and every other difference remain for the comparison."""
+    names = assembly_attribute_classes(first)
+    if not names:
+        return first, []
+    a, b = class_blocks(first, names), class_blocks(second, names)
+    if not a or sorted(n for n, _, _ in a) != sorted(n for n, _, _ in b):
+        return first, []
+
+    def split(listing, blocks):
+        """(the lines outside blocks, the index in them of each block)."""
+        rest, at, pos = [], [], 0
+        for _, start, end in blocks:
+            rest.extend(listing[pos:start])
+            at.append(len(rest))
+            pos = end
+        rest.extend(listing[pos:])
+        return rest, at
+
+    rest, at_a = split(first, a)
+    _, at_b = split(second, b)
+    # The blocks of the first listing per class, with their (index, rank).
+    pending = {}
+    for rank, ((name, start, end), at) in enumerate(zip(a, at_a)):
+        pending.setdefault(name, []).append((first[start:end], (at, rank)))
+    moved_first, pos, moved = [], 0, []
+    for rank, ((name, _, _), at) in enumerate(zip(b, at_b)):
+        lines, where = pending[name].pop(0)
+        if where != (at, rank) and name not in moved:
+            moved.append(name)
+        moved_first.extend(rest[pos:at])
+        moved_first.extend(lines)
+        pos = max(pos, at)
+    moved_first.extend(rest[pos:])
+    return moved_first, moved
+
+
+def moved_classes(moved):
+    """'class block NAME' or 'class blocks NAME, NAME' of the names that
+    move_attribute_classes returned."""
+    return "class block%s %s" % ("" if len(moved) == 1 else "s", ", ".join(moved))
+
+
+def renumber_data_labels(listing):
+    """listing (a list of lines) with its RVA data labels I_<RVA> renumbered
+    I_0, I_1, ... in the order of their first appearance (DATA_LABEL_RE)."""
+    labels = {}
+
+    def renumber(m):
+        return m.group(1) + labels.setdefault(m.group(2), "I_%d" % len(labels))
+
+    return [DATA_LABEL_RE.sub(renumber, line) for line in listing]
+
+
 def compare_listings(first, second):
-    """Compare two comparable ildasm listings (lists of lines) for
-    --roundtrip. Returns (count of float32 signaling NaN constants that the
-    second listing has quieted, the lines of the first listing with those
-    quieted lines taken from the second, or None when the listings are
-    equal up to that quieting). Only a line-for-line quieting counts."""
+    """Compare two ildasm listings (lists of lines without the build-specific
+    ones, BUILD_SPECIFIC_RE) for --roundtrip. Returns (quieted, moved, a, b):
+    the count of float32 signaling NaN constants that the second listing has
+    quieted, the names of the class blocks that it has moved
+    (move_attribute_classes), and the two listings as compared, their data
+    labels renumbered, a being the first listing with those accepted
+    differences applied (the blocks at their positions in the second, the
+    quieted lines taken from the second). The listings are equal up to the
+    accepted differences when a == b, and a unified diff of a and b names
+    only the real differences. Only a line-for-line quieting counts. The
+    blocks move before the labels are renumbered, so a label inside a moved
+    block gets its number in the order of the second listing in both."""
+    first, moved = move_attribute_classes(first, second)
+    first, second = renumber_data_labels(first), renumber_data_labels(second)
     if len(first) != len(second):
-        return 0, first
+        return 0, moved, first, second
     quieted, merged = 0, []
     for a, b in zip(first, second):
         if a != b and snan_quieted(a, b):
@@ -970,7 +1138,7 @@ def compare_listings(first, second):
             merged.append(b)
         else:
             merged.append(a)
-    return quieted, (None if merged == second else merged)
+    return quieted, moved, merged, second
 
 
 def roundtrip(args, private):
@@ -1020,36 +1188,54 @@ def roundtrip(args, private):
         return [failure]
 
     def comparable(listing):
-        labels = {}
+        return [l for l in listing.splitlines(True) if not BUILD_SPECIFIC_RE.match(l)]
 
-        def renumber(m):
-            label = labels.setdefault(m.group(2), "I_%d" % len(labels))
-            return m.group(1) + label
-
-        return [
-            DATA_LABEL_RE.sub(renumber, l)
-            for l in listing.splitlines(True)
-            if not BUILD_SPECIFIC_RE.match(l)
-        ]
-
-    a, b = comparable(first), comparable(second)
-    quieted, differing = compare_listings(a, b)
-    if differing is not None:
-        # The diff shows the first listing with the accepted quieting
+    quieted, moved, a, b = compare_listings(comparable(first), comparable(second))
+    if a != b:
+        # The diff shows the first listing with the accepted differences
         # already applied, so it names only the real differences.
         diff = "".join(
             difflib.unified_diff(
-                differing,
+                a,
                 b,
                 "ildasm %s" % os.path.basename(args.assembly),
                 "ildasm %s" % os.path.basename(output),
             )
         )
+        one = len(moved) == 1
+        note = (
+            "(in the diff, the first listing's %s %s at %s position in the "
+            "second: a move that --roundtrip accepts)\n"
+            % (
+                moved_classes(moved),
+                "stands" if one else "stand",
+                "its" if one else "their",
+            )
+            if moved
+            else ""
+        )
         return [
-            "%s: the disassembly of the reassembled %s differs from that of %s:\n%s"
-            % (label, os.path.basename(output), os.path.basename(args.assembly), diff)
+            "%s: the disassembly of the reassembled %s differs from that of %s:\n%s%s"
+            % (
+                label,
+                os.path.basename(output),
+                os.path.basename(args.assembly),
+                note,
+                diff,
+            )
         ]
     if args.verbose:
+        accepted = []
+        if quieted:
+            accepted.append(
+                "%d float32 signaling NaN constant%s that ilasm quieted"
+                % (quieted, "" if quieted == 1 else "s")
+            )
+        if moved:
+            accepted.append(
+                "the position of the %s, which the .assembly block's .custom "
+                "names and ilasm moved" % moved_classes(moved)
+            )
         print(
             "msil-verify: %s: %s -> %s, %d listing lines identical%s"
             % (
@@ -1057,10 +1243,7 @@ def roundtrip(args, private):
                 args.assembly,
                 args.output,
                 len(a),
-                " up to %d float32 signaling NaN constant%s that ilasm quieted"
-                % (quieted, "" if quieted == 1 else "s")
-                if quieted
-                else "",
+                " up to " + " and ".join(accepted) if accepted else "",
             )
         )
     return []
@@ -1450,6 +1633,38 @@ def verify(args, allow, private):
     return bad + cbad, notes
 
 
+def verify_deps(args, allow):
+    """--also-verify-deps: verify each managed file of the --dep-dir
+    directories as the assembly is verified (both passes), with the other
+    files of those directories and the --dep files as its dependencies.
+    Returns (failures, notes), each prefixed with the file's name."""
+    bad, notes, done = [], [], []
+    for lib in args.dir_deps:
+        if not is_managed(lib):
+            continue
+        name = os.path.basename(lib)
+        sub = argparse.Namespace(**vars(args))
+        sub.assembly = lib
+        sub.dep = args.file_deps + [d for d in args.dir_deps if d != lib]
+        sub.managed_deps = [d for d in sub.dep if is_managed(d)]
+        sub.md_baseline = None
+        if args.keep_copy:
+            sub.keep_copy = os.path.join(args.keep_copy, name)
+        private = tempfile.mkdtemp(prefix="msil-verify-") if args.ildasm else None
+        try:
+            lbad, lnotes = verify(sub, allow, private)
+        finally:
+            if private:
+                keep_copy(sub, private)
+                msil_run.remove_tree(private)
+        bad += ["%s: %s" % (name, b) for b in lbad]
+        notes += ["%s: %s" % (name, n) for n in lnotes]
+        done.append(name)
+    if done:
+        notes.append("msil-verify: also verified %s" % ", ".join(done))
+    return bad, notes
+
+
 def keep_copy(args, private):
     if args.keep_copy:
         os.makedirs(args.keep_copy, exist_ok=True)
@@ -1576,12 +1791,35 @@ def main():
         "references, all are copied next to it for PEVerify (repeatable; takes "
         "every argument up to the next option, so end with '--')",
     )
+    p.add_argument(
+        "--dep-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="every file in DIR as a --dep (repeatable; a missing or empty "
+        "DIR adds nothing)",
+    )
+    p.add_argument(
+        "--also-verify-deps",
+        action="store_true",
+        help="also verify each managed file of the --dep-dir directories",
+    )
     p.add_argument("assembly")
     args = p.parse_args()
     try:
         msil_run.check_deps(args.dep, [])
     except msil_run.ConfigError as e:
         p.error(str(e))
+    # --dep-dir: the files directly in each directory join the --dep files.
+    args.dir_deps = [
+        os.path.join(d, name)
+        for d in args.dep_dir
+        if os.path.isdir(d)
+        for name in sorted(os.listdir(d))
+        if os.path.isfile(os.path.join(d, name))
+    ]
+    args.file_deps = list(args.dep)
+    args.dep = args.file_deps + args.dir_deps
     names = {}
     for f in args.dep + [args.assembly]:
         key = os.path.normcase(os.path.basename(f))
@@ -1602,6 +1840,8 @@ def main():
     if args.roundtrip:
         if args.md_baseline:
             p.error("--md-baseline and --roundtrip exclude each other")
+        if args.also_verify_deps:
+            p.error("--also-verify-deps and --roundtrip exclude each other")
         if args.skip_peverify is not None:
             p.error("--skip-peverify and --roundtrip exclude each other")
         return main_roundtrip(p, args)
@@ -1658,6 +1898,10 @@ def main():
             mbad, mnotes = check_md_baseline(args)
             bad += mbad
             notes += mnotes
+        if args.also_verify_deps:
+            dbad, dnotes = verify_deps(args, allow)
+            bad += dbad
+            notes += dnotes
     except (OSError, msil_run.ConfigError) as e:
         sys.stderr.write("msil-verify: error: %s\n" % e)
         return 2

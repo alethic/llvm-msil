@@ -113,6 +113,8 @@ if(TARGET clang AND LLVM_EXTERNAL_CLANG_SOURCE_DIR)
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-header-search.c
     # clang -c writes CIL objects (M19).
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-object.c
+    # -shared, clang-cl /LD and /LDd link library assemblies (M22).
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-shared.c
     )
 endif()
 # msil-ld's tests (M13, M14): the lld flavor msil.

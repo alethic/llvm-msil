@@ -20,7 +20,10 @@
 ## - e-straddle.ll: a packed table whose relocation for init sits at +4 and
 ##   straddles both slots, so neither is NULL (errors at +0 and +8);
 ## - f-diff.ll: the first slot holds the difference g2 - g1 - 8 (error at
-##   +0), the second a real constructor.
+##   +0), the second a real constructor;
+## - g-diff.ll: the difference alone, with no real constructor (the section
+##   12 row 'M22.e extended (M21 follow-up, null constructor slots)'):
+##   the error at +0.
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -32,6 +35,8 @@
 # RUN: llvm-as lnx.ll -o lnx.bc
 # RUN: llvm-as e-straddle.ll -o e-straddle.bc
 # RUN: llvm-as f-diff.ll -o f-diff.bc
+# RUN: llc -filetype=obj g-diff.ll -o g-diff.o
+# RUN: llvm-as g-diff.ll -o g-diff.bc
 
 # DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error:
@@ -66,6 +71,9 @@
 # RUN: not msil-ld f-diff.o -o x.exe 2>&1 | %{fc} --check-prefix=COFF -DFILE=f-diff.o
 # RUN: not msil-ld f-diff.bc -o f-diff-lto.exe 2>&1 | %{fc} --check-prefix=COFF -DFILE=f-diff-lto.exe.lto.o
 # RUN: not msil-ld --lto-emit-asm f-diff.bc -o x.il 2>&1 | %{fc} --check-prefix=COFF -DFILE=ld-temp.o
+# RUN: not msil-ld g-diff.o -o x.exe 2>&1 | %{fc} --check-prefix=COFF -DFILE=g-diff.o
+# RUN: not msil-ld g-diff.bc -o g-diff-lto.exe 2>&1 | %{fc} --check-prefix=COFF -DFILE=g-diff-lto.exe.lto.o
+# RUN: not msil-ld --lto-emit-asm g-diff.bc -o x.il 2>&1 | %{fc} --check-prefix=COFF -DFILE=ld-temp.o
 # COFF:          {{^}}msil-ld: error: constructor table entry at .CRT$XCU+0 in [[FILE]] is not a function address{{$}}
 # STRADDLE-NEXT: {{^}}msil-ld: error: constructor table entry at .CRT$XCU+8 in [[FILE]] is not a function address{{$}}
 
@@ -144,4 +152,17 @@ define internal void @init() {
 define i32 @main() {
   %v = load i32, ptr @log
   ret i32 %v
+}
+
+#--- g-diff.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@g1 = internal global i64 5, align 8
+@g2 = internal global i64 6, align 8
+@df = internal global i64 add (i64 sub (i64 ptrtoint (ptr @g2 to i64), i64 ptrtoint (ptr @g1 to i64)), i64 -8), section ".CRT$XCU", align 8
+@llvm.used = appending global [3 x ptr] [ptr @df, ptr @g1, ptr @g2], section "llvm.metadata"
+
+define i32 @main() {
+  ret i32 0
 }

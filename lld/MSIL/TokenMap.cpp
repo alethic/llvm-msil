@@ -36,6 +36,30 @@ bool TokenTarget::isRedirected() const {
   return !def || def->method != method;
 }
 
+bool TokenTarget::isManaged() const {
+  return (kind == Method || kind == Field || kind == FnAddr) && sym &&
+         sym->isManaged();
+}
+
+uint32_t lld::msil::getInstructionOffset(const TokenSite &site) {
+  return site.offset - getOpcodeSize(site.op);
+}
+
+void lld::msil::rewriteManagedAddressSites(const ObjFile &file,
+                                           const InputMethod &m,
+                                           MutableArrayRef<uint8_t> code) {
+  const TokenMap &tokens = file.getTokenMap();
+  for (const TokenSite &site : m.sites) {
+    if (site.op != Opcode::Ldsfld ||
+        !tokens.lookup(site.token).isManagedAddress())
+      continue;
+    // ldsfld and call are one-byte opcodes followed by the token.
+    uint32_t at = getInstructionOffset(site);
+    assert(at < code.size() && code[at] == 0x7E && "not an ldsfld");
+    code[at] = 0x28;
+  }
+}
+
 // The tables whose tokens an operand of kind \p kind may name (III.1.2).
 static bool isAllowedTable(OperandKind kind, uint8_t type) {
   auto is = [&](TableId t) { return type == static_cast<uint8_t>(t); };

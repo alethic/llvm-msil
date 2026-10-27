@@ -38,6 +38,7 @@ namespace lld::msil {
 class InputMethod;
 class ObjFile;
 class Symbol;
+struct TokenSite;
 
 // What a token of a CIL object names (plan 5.9.7's table).
 struct TokenTarget {
@@ -118,6 +119,20 @@ struct TokenTarget {
   // to the object's own method: a call site that the writer checks against
   // the winning definition (plan 5.9.8). Valid after resolution.
   bool isRedirected() const;
+
+  // True for a Method, Field or FnAddr token whose symbol late binding bound
+  // to an export of a library built by this toolchain (ManagedFunction,
+  // ManagedData; plan 5.9.6 step 1). The output token is a MemberRef on the
+  // library's export class (CallBinder::bindManaged): the exported method or
+  // an adapter that calls it for a Method token, the '<msil>addr_<name>'
+  // accessor for a Field or FnAddr token, whose ldsfld becomes a call
+  // (rewriteManagedAddressSites). Valid after late binding.
+  bool isManaged() const;
+  // True for a Field or FnAddr token that isManaged(): an address that the
+  // output takes by calling the export's accessor.
+  bool isManagedAddress() const {
+    return (kind == Field || kind == FnAddr) && isManaged();
+  }
 };
 
 // The token map of one CIL object.
@@ -146,6 +161,22 @@ private:
 // bad local signature or catch class token are reported as "<file>:
 // malformed method body in '<m>' at IL offset <n>"; returns false then.
 bool decodeMethod(ObjFile &file, InputMethod &m);
+
+// The IL offset of the instruction of token site \p site (its token
+// operand follows the opcode).
+uint32_t getInstructionOffset(const TokenSite &site);
+
+// Plan 5.9.7's one body edit besides token patching (M22): in \p code, a copy
+// of the code of \p m, the method of \p file, replaces the ldsfld (0x7E) of
+// every token site whose target isManagedAddress() with call (0x28). The
+// writer patches the token operand to the accessor's MemberRef
+// (CallBinder::bindManaged), before or after this call. Both forms are 5
+// bytes with stack effect 0 to 1, so code size, branch offsets and .maxstack
+// stay. SymbolBinder::collectReferences() reports a site with another opcode
+// ("<file>: unsupported use of imported symbol '<s>' in '<m>' at IL offset
+// <n>"); such a site is left as it is.
+void rewriteManagedAddressSites(const ObjFile &file, const InputMethod &m,
+                                MutableArrayRef<uint8_t> code);
 } // namespace lld::msil
 
 #endif

@@ -1,0 +1,89 @@
+# A program whose library lost a function stops with the CLR's MissingMethodException in the method that calls it.
+# The program links zmem.dll, which exports zmem_value and zmem_extra, and
+# runs against its native transcript first. Then zmem.dll is replaced by a
+# build of the same library without zmem_extra (same assembly name and
+# version, linked with an unrelated program that does not need it): the
+# program still starts, because only the method that calls zmem_extra
+# refers to the missing member, and that method fails when the CLR
+# JIT-compiles it, before its first statement (recon exports-multiasm 3:
+# 'Method not found', the whole calling method fails). So main prints its
+# first lines (flushed with fflush, because an unhandled exception ends the
+# process without flushing C stdio), then the call fails with an unhandled
+# MissingMethodException that names the member; the run no longer matches
+# the expected transcript (not). The same on .NET Framework under
+# msil-run-netfx. Plan M22.f (missing-member); recon exports-multiasm 10.5
+# (a library whose member disappears fails at the caller's JIT time, not at
+# link time).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = zmem=%t/zmem.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+# RUN: %msil_prog_build --level O2 --workdir %t.v1.d --out %t.v1.d/prog.exe --src %t/main.c
+# RUN: %msil_prog_build --shlibs='zmem=%t/zmem-v2.c' --level O2 --workdir %t.v2.d --out %t.v2.d/other.exe --src %t/other.c
+# RUN: cp %t.v2.d/shlib/zmem.dll %t.v1.d/shlib/zmem.dll
+# RUN: not %msil_exec --expect %S/%{s:stem} --out %t.v1.out --dep-dir %t.v1.d/shlib -- %t.v1.d/prog.exe > %t.v1.err 2>&1
+# RUN: FileCheck %s --check-prefix=TRANSCRIPT --input-file=%t.v1.out
+# RUN: FileCheck %s --check-prefix=STDERR --input-file=%t.v1.err
+# RUN: %if msil-run-netfx %{ not %msil_exec --netfx --expect %S/%{s:stem} --out %t.v1.netfx.out --dep-dir %t.v1.d/shlib -- %t.v1.d/prog.exe > %t.v1.netfx.err 2>&1 %}
+# RUN: %if msil-run-netfx %{ FileCheck %s --check-prefix=TRANSCRIPT --input-file=%t.v1.netfx.out %}
+# RUN: %if msil-run-netfx %{ FileCheck %s --check-prefix=STDERR --input-file=%t.v1.netfx.err %}
+# TRANSCRIPT:      {{^}}main entered{{$}}
+# TRANSCRIPT-NEXT: {{^}}zmem_value()=7{{$}}
+# TRANSCRIPT-NEXT: {{^}}[unhandled exception: System.MissingMethodException]{{$}}
+# TRANSCRIPT-NOT:  {{.}}
+# STDERR:          System.MissingMethodException: Method not found: {{.*}}zmem_extra
+#--- zmem.c
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+API int zmem_value(void) { return 7; }
+API int zmem_extra(int x) { return x * 3; }
+#--- zmem-v2.c
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+API int zmem_value(void) { return 7; }
+#--- other.c
+#ifdef _WIN32
+__declspec(dllimport)
+#endif
+int zmem_value(void);
+int main(void) { return zmem_value() == 7 ? 0 : 1; }
+#--- main.c
+#include "msil_test.h"
+#ifdef _WIN32
+#define IMPORT __declspec(dllimport)
+#else
+#define IMPORT
+#endif
+IMPORT int zmem_value(void);
+IMPORT int zmem_extra(int);
+int fflush(void *stream);
+
+/* The only method that refers to zmem_extra; big enough, with its loop, that
+   no JIT inlines it into main. */
+__attribute__((noinline)) static int use_extra(int n) {
+  int sum = 0;
+  for (int i = 0; i < n; ++i) {
+    sum += zmem_extra(i);
+    put_kv("partial sum", sum);
+  }
+  return sum;
+}
+
+int main(void) {
+  puts("main entered");
+  put_kv("zmem_value()", zmem_value());
+  /* An unhandled exception ends the process without flushing C stdio. */
+  fflush(0);
+  put_kv("use_extra(4)", use_extra(4));
+  return 0;
+}

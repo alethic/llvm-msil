@@ -1,0 +1,14 @@
+# A %{msil_prog} test with a cyclic pair of shared libraries (M22) for
+# ../../update-expected.test: the stand-in's native program adds the values
+# of both libraries (73 = 1 + 8 + 64), on Windows by calling them at run
+# time, so they must be beside it.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_shlibs} = ?b=%t/b.c;a=%t/a.c;b=%t/b.c
+# RUN: %{msil_prog}
+#--- main.c
+// prog-value: 1
+#--- a.c
+// prog-value: 8
+#--- b.c
+// prog-value: 64

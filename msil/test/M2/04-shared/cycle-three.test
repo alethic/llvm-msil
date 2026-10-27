@@ -1,0 +1,93 @@
+# Three libraries in a ring of data relocations and calls, linked through one interface: complete data in all three.
+# cyc3a refers to cyc3c, cyc3c to cyc3b and cyc3b to cyc3a: each defines a
+# variable, a pointer to the next library's variable and a function that
+# calls the next library's, around the ring. The spec builds the interface
+# of cyc3c first (-Wl,--interface-only, plan 5.9.15), then cyc3a against it,
+# cyc3b against cyc3a and the real cyc3c against cyc3b, each library linked
+# against the latest build of every name before it (msil-prog.py
+# --shlibs). Whichever library the program enters first, the other two
+# reach it through '<msil>addr_' accessors whose '<msil>Data' class is
+# complete before any cross-assembly store (plan 5.9.10, recon
+# exports-multiasm 6.2 and 6.4). The native MSVC model cannot hold the
+# address of another DLL's data in a static initializer, so only the native
+# Windows oracle sets the pointers in constructors (STATIC_XRELOCS=0).
+# Plan M22.f (cycle-three).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = ?cyc3c=%t/c.c;cyc3a=%t/a.c;cyc3b=%t/b.c;cyc3c=%t/c.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- api.h
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#define IMPORT __declspec(dllimport)
+#else
+#define API __attribute__((visibility("default")))
+#define IMPORT
+#endif
+#if defined(_WIN32) && !defined(__MSIL__)
+#define STATIC_XRELOCS 0
+#else
+#define STATIC_XRELOCS 1
+#endif
+#--- a.c
+#include "api.h"
+API int a_var = 1;
+#if STATIC_XRELOCS
+extern int c_var;
+API int *a_peer = &c_var;
+#else
+IMPORT extern int c_var;
+API int *a_peer;
+__attribute__((constructor)) static void set_peer(void) { a_peer = &c_var; }
+#endif
+IMPORT int c_ring(int);
+API int a_ring(int n) { return n ? a_var + 10 * c_ring(n - 1) : a_var; }
+#--- b.c
+#include "api.h"
+API int b_var = 2;
+#if STATIC_XRELOCS
+extern int a_var;
+API int *b_peer = &a_var;
+#else
+IMPORT extern int a_var;
+API int *b_peer;
+__attribute__((constructor)) static void set_peer(void) { b_peer = &a_var; }
+#endif
+IMPORT int a_ring(int);
+API int b_ring(int n) { return n ? b_var + 10 * a_ring(n - 1) : b_var; }
+#--- c.c
+#include "api.h"
+API int c_var = 3;
+#if STATIC_XRELOCS
+extern int b_var;
+API int *c_peer = &b_var;
+#else
+IMPORT extern int b_var;
+API int *c_peer;
+__attribute__((constructor)) static void set_peer(void) { c_peer = &b_var; }
+#endif
+IMPORT int b_ring(int);
+API int c_ring(int n) { return n ? c_var + 10 * b_ring(n - 1) : c_var; }
+#--- main.c
+#include "msil_test.h"
+#include "api.h"
+IMPORT extern int a_var, b_var, c_var;
+IMPORT extern int *a_peer, *b_peer, *c_peer;
+IMPORT int a_ring(int);
+IMPORT int b_ring(int);
+IMPORT int c_ring(int);
+
+int main(void) {
+  put_kv("a_peer == &c_var", a_peer == &c_var);
+  put_kv("c_peer == &b_var", c_peer == &b_var);
+  put_kv("b_peer == &a_var", b_peer == &a_var);
+  put_kv("*a_peer + *b_peer + *c_peer", *a_peer + *b_peer + *c_peer);
+  put_kv("a_ring(5)", a_ring(5));
+  put_kv("b_ring(4)", b_ring(4));
+  put_kv("c_ring(3)", c_ring(3));
+  return 0;
+}

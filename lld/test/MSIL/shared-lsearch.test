@@ -1,0 +1,130 @@
+## -l finds libraries built by this toolchain (ImplementationPlan.md M22.a
+## item 1; 5.10.9 with M22's managed kind; the section 12 row of 2026-10-23
+## for 5.10.8-5.10.14):
+## - a candidate that is a .NET assembly with the toolchain's symbol table is
+##   *managed*: inside one -L directory it ranks after a static library and
+##   before an import library or a native shared one; the driver hands it to
+##   the same code as a positional library, so '-L mng -lfoo' and
+##   'mng/foo.dll' give the same output;
+## - -Bstatic skips managed candidates (and import libraries): only static
+##   ones count;
+## - a .NET assembly without the table is still skipped with M15's warning
+##   '<path>: skipping the .NET assembly that -l<name> found; use
+##   --reference for .NET reference assemblies', and does not hide a later
+##   directory;
+## - on ELF triples <n>.dll and lib<n>.dll are candidates as managed
+##   libraries.
+## foo_fn is 7 in the library, 1 in the static archive's CIL object, and an
+## import from foo.dll (a native DLL) in the import library.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: mkdir mng all mi imp ref pos l lnx st1 st2
+# RUN: llc -filetype=obj foo.ll -o foo.o
+# RUN: llc -filetype=obj foo-st.ll -o foo-st.o
+# RUN: llc -filetype=obj main.ll -o main.o
+# RUN: llc -filetype=obj bar.ll -o bar.o
+# RUN: llc -filetype=obj main-lnx.ll -o main-lnx.o
+# RUN: msil-ld -shared foo.o -o mng/foo.dll 2>&1 | count 0
+# RUN: cp mng/foo.dll all/foo.dll
+# RUN: cp mng/foo.dll mi/foo.dll
+# RUN: llvm-ar rc all/libfoo.a foo-st.o
+# RUN: llvm-lib /machine:x64 /def:foo.def /out:all/foo.lib
+# RUN: llvm-lib /machine:x64 /def:foo.def /out:mi/foo.lib
+# RUN: llvm-lib /machine:x64 /def:foo.def /out:imp/foo.lib
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o ref/foo.dll
+# RUN: msil-ld -shared bar.o -o lnx/libbar.dll 2>&1 | count 0
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{why} = FileCheck %s --match-full-lines --strict-whitespace
+
+## A managed candidate alone, and the same library given positionally.
+# RUN: msil-ld main.o -L mng -lfoo -o l/prog.exe 2>&1 | count 0
+# RUN: msil-ld main.o mng/foo.dll -o pos/prog.exe 2>&1 | count 0
+# RUN: cmp l/prog.exe pos/prog.exe
+# RUN: llvm-cil-dump l/prog.exe | FileCheck %s --check-prefix=MANAGED --implicit-check-not=pinvokeimpl
+# MANAGED: {{^}}assemblyref 'foo' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# MANAGED: {{^}}    L{{[0-9]+}}: call int32() [foo]foo::'foo_fn'{{$}}
+
+## Ranking: static beats managed beats import.
+# RUN: msil-ld main.o -L all -lfoo -o st1/prog.exe --why-extract=all.why 2>&1 | count 0
+# RUN: %{why} --check-prefix=WHY --input-file=all.why
+#      WHY:reference	extracted	symbol
+# WHY-NEXT:main.o	all{{[/\\]}}libfoo.a(foo-st.o)	foo_fn
+# RUN: llvm-cil-dump st1/prog.exe | FileCheck %s --check-prefix=STATIC --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not="assemblyref 'foo'"
+# STATIC: {{^}}  .method 'foo_fn' int32() flags=0x0016 impl=0x0000{{$}}
+# STATIC: {{^}}    L{{[0-9]+}}: call int32() '<Module>'::'foo_fn'{{$}}
+# RUN: msil-ld main.o -L mi -lfoo -o mi.exe 2>&1 | count 0
+# RUN: llvm-cil-dump mi.exe | FileCheck %s --check-prefix=MANAGED --implicit-check-not=pinvokeimpl
+# RUN: msil-ld main.o -L imp -lfoo -o imp.exe 2>&1 | count 0
+# RUN: llvm-cil-dump imp.exe | FileCheck %s --check-prefix=IMPORT --implicit-check-not="assemblyref 'foo'"
+# IMPORT: {{^}}    .pinvokeimpl 'foo.dll' entry 'foo_fn' flags=0x{{[0-9A-F]+}}{{$}}
+
+## -Bstatic: a managed or import candidate is no candidate.
+# RUN: not msil-ld main.o -L mng -Bstatic -lfoo -o x.exe 2>&1 | %{fc} --check-prefix=NOLIB
+# RUN: not msil-ld main.o -L mi -Bstatic -lfoo -o x.exe 2>&1 | %{fc} --check-prefix=NOLIB
+# NOLIB: {{^}}msil-ld: error: unable to find library -lfoo{{$}}
+# RUN: msil-ld main.o -L all -Bstatic -lfoo -o st2/prog.exe 2>&1 | count 0
+# RUN: cmp st1/prog.exe st2/prog.exe
+# RUN: msil-ld main.o -L mng -Bstatic -Bdynamic -lfoo -o bdynamic.exe 2>&1 | count 0
+# RUN: llvm-cil-dump bdynamic.exe | FileCheck %s --check-prefix=MANAGED --implicit-check-not=pinvokeimpl
+
+## A .NET assembly without the table: M15's warning, then the next
+## directory.
+# RUN: msil-ld main.o -L ref -L mng -lfoo -o skip.exe 2>&1 | %{fc} --check-prefix=SKIP --implicit-check-not=error:
+# SKIP: {{^}}msil-ld: warning: ref{{[/\\]}}foo.dll: skipping the .NET assembly that -lfoo found; use --reference for .NET reference assemblies{{$}}
+# RUN: llvm-cil-dump skip.exe | FileCheck %s --check-prefix=MANAGED --implicit-check-not=pinvokeimpl
+
+## An ELF triple: lib<n>.dll.
+# RUN: msil-ld main-lnx.o -L lnx -lbar -o lnx/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lnx/prog.exe | FileCheck %s --check-prefix=LNX
+# LNX: {{^}}assemblyref 'libbar' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# LNX: {{^}}    L{{[0-9]+}}: call int32() [libbar]libbar::'bar_fn'{{$}}
+
+#--- foo.def
+LIBRARY foo.dll
+EXPORTS
+  foo_fn
+
+#--- foo.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @foo_fn() {
+  ret i32 7
+}
+
+#--- foo-st.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @foo_fn() {
+  ret i32 1
+}
+
+#--- main.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @foo_fn()
+
+define i32 @main() {
+  %r = call i32 @foo_fn()
+  ret i32 %r
+}
+
+#--- bar.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @bar_fn() {
+  ret i32 5
+}
+
+#--- main-lnx.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @bar_fn()
+
+define i32 @main() {
+  %r = call i32 @bar_fn()
+  ret i32 %r
+}

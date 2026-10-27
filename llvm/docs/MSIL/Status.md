@@ -1,6 +1,6 @@
 # MSIL backend: status of Phase 1
 
-State after milestone M21 (2026-10-26, branch `msil`, with upstream llvm-project main at
+State after milestone M22 (2026-10-26, branch `msil`, with upstream llvm-project main at
 `64f50ffd4f1c` merged). Phase 1 (milestones M0-M10) is the "first milestone" of
 [Design.md](Design.md) section 12: one C file compiled with `clang -S` to ILAsm text,
 assembled with `ilasm`, run on .NET. M11 followed up the first upstream merge. M12, the first
@@ -54,7 +54,15 @@ before; given the .NET 8 or .NET 10 reference pack, it references `System.Runtim
 `System.Runtime.InteropServices` and `System.Threading` of that version and runs on that .NET
 and later, but not on the .NET Framework. A link without references binds through a built-in
 `[mscorlib]` table and writes exactly the image M20 wrote (section 2, "Reference assemblies and
-the base class library"). Libraries (M22) and the Phase 2 exit (M23) follow (plan section 6).
+the base class library"). M22 made `msil-ld -shared` (clang `-shared`, clang-cl `/LD` and
+`/LDd`) link library assemblies: DLL images without an entry point whose exported functions
+are public static methods of an export class, with an address accessor per export and a
+property per variable, a symbol table in a custom attribute, and data initialized in two
+phases, so libraries whose data point into each other, in a cycle too, see complete data.
+Programs and other libraries link against them with the CLR's semantics (no interposition,
+every symbol resolved, duplicates warned), and C# programs call them (section 2, "Libraries
+and assembly-to-assembly linking"). M22 also fixed four defects that an experiment with Rust
+bitcode found (section 2, "Rust bitcode"). The Phase 2 exit (M23) follows (plan section 6).
 How to build and use it is in
 [GettingStarted.md](GettingStarted.md); the decisions referred to as D1-D38 are in section 3 of
 [ImplementationPlan.md](ImplementationPlan.md), and its section 12 records every later
@@ -64,8 +72,8 @@ amendment.
 
 | Criterion | How Phase 1 meets it |
 |---|---|
-| About 25 small C programs compile at `-O0` and `-O2`, run, and match native clang's output, as a lit suite in CI | `msil/test/M1/11-programs/` has 20 programs (fib, sieve, quicksort over a global array, mergesort, n-queens, hanoi, matrix multiplication, crc32, a string table with relocations, a bytecode VM dispatching through a function-pointer table, fnv1a, string functions, bignum addition, life, fixed-point mandelbrot, collatz, a struct-heavy simulation, linked lists and binary trees in static pools, K&R code). With the struct and function-pointer programs of `08-fnptr/`, `09-structs/` and `10-calls/` and the other execution tests in `msil/test/M1/` (143 in all: 99 C programs, 43 IR files and one test that compiles a C program with `-g`), each test runs at `-O0` and `-O2` and its transcript (stdout and exit status) must equal the one a native clang build produces (on Windows linked with the compiler-rt builtins of the Visual Studio LLVM, for the `__int128` helpers a native build calls; for the Linux triple in WSL, a native Linux build linked on Windows and run in WSL, the E7 oracle of GettingStarted.md section 7); the gate also runs every C program of `msil/test/M1` at `-O1`, `-O3`, `-Os` and `-Oz` and every IR test that uses `%{msil_ll}` (40 of the 43) at `-O1` and `-O3` (the `more-levels` leg, on .NET 8); the three trap tests `01-int/trap-call-before-div.ll`, `01-int/trap-call-before-rem.ll` and `03-control/trap.ll`, like the `-g` test, have explicit RUN lines that pin `-O0` and `-O2` in every leg. The gate runs the suite on .NET 8 (tiered and with `DOTNET_TieredCompilation=0`), .NET 10, .NET Framework 4.8, and in WSL on a private .NET 10 for `x86_64-unknown-linux-gnu-msil` (tiered and optimizing JIT), assembles the programs with the Framework ilasm, the modern Windows ilasm and the Linux ilasm, and round-trips them through the modern ildasm and ilasm (Design.md 5.5). It also runs the upstream regression tests of the 55 upstream files the fork changes (327 lit tests, all of `TargetParserTests` and `MCTests`, and `LLDAsLibAllTests`; the upstream-hooks check of GettingStarted.md section 7). Since M18 it also requires that the backend's binary encoding of every method of the C programs of `msil/test/M1`, at `-O0` and `-O2`, equal what ilasm assembles from the same text (the `encoder-parity` leg; section 2, "Binary CIL"). Since M19 it also requires that the CIL object `clang -c` writes of each C program of `msil/test/M1` at `-O0` and `-O2`, and of each program of `11-programs` for the Linux triple, list exactly like ilasm's object of its object-form text, link-info record included, come out the same from two directories, open in `mdcanon` and both ildasms, agree with its record, and give `llvm-nm`, `llvm-ar` and, in WSL, GNU `nm` and `ar` the symbols of plan 5.8.6 (the `obj-text` and `obj-text-wsl` legs; section 2, "CIL objects"). Since M20 the `obj` leg runs every test of `msil/test/M1` again as a program that `msil-ld` links from CIL objects (`clang -c`, or `llc -filetype=obj` for the IR tests) into an image of its own, at `-O0` and `-O2`, on .NET 8 and .NET Framework 4.8 against the native oracle, with the equivalence oracles O3 (the image of the one-object link lists exactly like ilasm's image of the same file's `-S` text, up to the normalizations of section 2) and O6 (it gets no PEVerify metadata message that ilasm's image does not get), and the `obj-wsl` leg runs the programs of `11-programs` and `msil/test/M2` that way in WSL on .NET 10 (section 2, "CIL object links and the image"). Since M21 the legs `refs-net48`, `refs-net8` and `refs-net10` run `11-programs`, `msil/test/M2/00-link` and `msil/test/M2/05-refs` through CIL objects linked against a reference pack: the .NET Framework 4.8 reference assemblies on .NET 8 and .NET Framework 4.8 (with O3 up to the assembly scopes, and O6), the .NET 8 pack on .NET 8 and the .NET 10 pack on .NET 10 (ILVerify against the pack, PEVerify skipped), and `check-mscorlib-safe.py` runs every entry of `msil-ld`'s built-in `[mscorlib]` table on .NET Framework 4.8, .NET 8, .NET 10 and WSL .NET 10 (section 2, "Reference assemblies and the base class library"). CI (`.github/workflows/msil-ci.yml`) runs the same scripts as the local gate; it has a manual trigger only until the repository owner enables more |
-| FileCheck tests on the emitted `.il` | 136 llc and MIR tests in `llvm/test/CodeGen/MSIL` (129 `.ll`, among them `lto-module-flags.ll` for the module flags of `msil-ld`, `imports-linked.ll` for the linked import mode of M15, the 12 `object-*.ll` tests of M19, which write CIL objects with `llc -filetype=obj`, read them back with `llvm-cil-dump`, `llvm-nm` and `llvm-ar` and compare them with ilasm's objects of their object-form text, and M20's `sections-whole-program.ll`, `reloc-loop-threshold.ll`, `function-bitcasts-lto.ll` and `imports-linked-data.ll` for the named sections, the relocation loop, the call adapters of LTO and the data imports of linked text, and 7 `.mir`; both x86_64 triples, the aarch64 triples where the ABI differs, ilasm round trip where a module is complete; since M18 they pin the shortest forms and `nomangle`) and one test there of the bitcode symbol table (`irsymtab-linker-options.ll`), the 9 MC tests of `llvm/test/MC/MSIL` (M18: `llc -show-mc-encoding` for every operand kind, branches at the short-form boundaries, `switch` entries and the synthesized `.cctor` and `'<msil>Main'`, the shortest forms, the BCL members, every operand class in both spellings of `-M object-form`, `nomangle` on four triples with its ImplMap flags 0x0201 read back from ilasm's image, and the clean error of `llvm-mc -filetype=obj`), 22 clang tests in `clang/test/CodeGen/MSIL` (including `design-milestone1.c`, Design.md 12's literal command on fib, and, since M19, `emit-obj.c`, whose `cc1 -emit-obj` writes CIL objects and which reads the headers and record of the objects of `-c` and clang-cl `/c`, and `section-globals.c`, whose constructor registered in `.init_array` or `.CRT$XCU` compiles since M20 and runs from `.cctor`), the driver tests in `clang/test/Driver/msil-toolchain.c` and, for the MSIL toolchain of M14, `msil-link.c` (with M15's `--ucrtbase-imports` on windows-msvc), `msil-lto.c` and `msil-header-search.c`, and, for M19, `msil-object.c` (`-c` and clang-cl `/c` write CIL objects: their cc1 jobs and errors, and the bytes from two directories, `llvm-nm` letters and object-form text of what they write), the 90 `msil-ld` tests in `lld/test/MSIL` (`dispatch.test` of M13, 24 of the 25 of M14, ten of which M15 updated to its rules, the 21 `native-*.test` of M15, whose ELF shared objects, import libraries and DLLs `yaml2obj`, `llvm-mc`, `ld.lld`, `lld-link` and `llvm-lib` make, the 25 `obj-*.test` of M20, which link CIL objects of `llc -filetype=obj` and read the image with `llvm-cil-dump`, and M21's 17 `bcl-*.test`, which bind against the synthetic reference assemblies of `Inputs/fakepack/` (ilasm sources, their `yaml2obj` images and the generator `gen.py`), with `obj-ctors-null.test` and `start-stop-hidden.test` for two follow-ups of M20; `dispatch.test` and `dispatch-coff.test` check which program names reach `msil-ld` and that the other lld flavors, COFF's included, dispatch as before; all but `dispatch-coff.test` also run with `LLD_IN_TEST=2`), the 14 tests of the ECMA-335 tools `llvm-cil-dump` and `llvm-cil-copy` in `llvm/test/tools` (M17; their inputs are `yaml2obj` copies of ilasm images), and unit tests in `llvm/unittests/Target/MSIL` (`MSILImportsTest` pins the standalone import table and the linked import mode; M18's suites `MSILCILRecords`, `MSILBCLMembers`, `MSILBranchForms`, `MSILMCCodeEmitter` and `MSILAsmBackend`, 42 tests, pin the 219 CIL records against `CILOpcodes.def`, the BCL list, the choice of branch forms, the bytes and fixups of every record and the asm backend, and `MSILTargetStreamerTest` the streamer and both spellings of every operand class) and, for the ECMA-335 library (its headers and the link-info record of M13, its writer half of M16, its reader, PE writer, codecs and dumper of M17, and the link model of M20), `llvm/unittests/CLI` (`CLITests`, 21 suites; 419 tests, at least 210 by the floor of the gates from M20) |
+| About 25 small C programs compile at `-O0` and `-O2`, run, and match native clang's output, as a lit suite in CI | `msil/test/M1/11-programs/` has 20 programs (fib, sieve, quicksort over a global array, mergesort, n-queens, hanoi, matrix multiplication, crc32, a string table with relocations, a bytecode VM dispatching through a function-pointer table, fnv1a, string functions, bignum addition, life, fixed-point mandelbrot, collatz, a struct-heavy simulation, linked lists and binary trees in static pools, K&R code). With the struct and function-pointer programs of `08-fnptr/`, `09-structs/` and `10-calls/` and the other execution tests in `msil/test/M1/` (143 in all: 99 C programs, 43 IR files and one test that compiles a C program with `-g`), each test runs at `-O0` and `-O2` and its transcript (stdout and exit status) must equal the one a native clang build produces (on Windows linked with the compiler-rt builtins of the Visual Studio LLVM, for the `__int128` helpers a native build calls; for the Linux triple in WSL, a native Linux build linked on Windows and run in WSL, the E7 oracle of GettingStarted.md section 7); the gate also runs every C program of `msil/test/M1` at `-O1`, `-O3`, `-Os` and `-Oz` and every IR test that uses `%{msil_ll}` (40 of the 43) at `-O1` and `-O3` (the `more-levels` leg, on .NET 8); the three trap tests `01-int/trap-call-before-div.ll`, `01-int/trap-call-before-rem.ll` and `03-control/trap.ll`, like the `-g` test, have explicit RUN lines that pin `-O0` and `-O2` in every leg. The gate runs the suite on .NET 8 (tiered and with `DOTNET_TieredCompilation=0`), .NET 10, .NET Framework 4.8, and in WSL on a private .NET 10 for `x86_64-unknown-linux-gnu-msil` (tiered and optimizing JIT), assembles the programs with the Framework ilasm, the modern Windows ilasm and the Linux ilasm, and round-trips them through the modern ildasm and ilasm (Design.md 5.5). It also runs the upstream regression tests of the 55 upstream files the fork changes (327 lit tests, all of `TargetParserTests` and `MCTests`, and `LLDAsLibAllTests`; the upstream-hooks check of GettingStarted.md section 7). Since M18 it also requires that the backend's binary encoding of every method of the C programs of `msil/test/M1`, at `-O0` and `-O2`, equal what ilasm assembles from the same text (the `encoder-parity` leg; section 2, "Binary CIL"). Since M19 it also requires that the CIL object `clang -c` writes of each C program of `msil/test/M1` at `-O0` and `-O2`, and of each program of `11-programs` for the Linux triple, list exactly like ilasm's object of its object-form text, link-info record included, come out the same from two directories, open in `mdcanon` and both ildasms, agree with its record, and give `llvm-nm`, `llvm-ar` and, in WSL, GNU `nm` and `ar` the symbols of plan 5.8.6 (the `obj-text` and `obj-text-wsl` legs; section 2, "CIL objects"). Since M20 the `obj` leg runs every test of `msil/test/M1` again as a program that `msil-ld` links from CIL objects (`clang -c`, or `llc -filetype=obj` for the IR tests) into an image of its own, at `-O0` and `-O2`, on .NET 8 and .NET Framework 4.8 against the native oracle, with the equivalence oracles O3 (the image of the one-object link lists exactly like ilasm's image of the same file's `-S` text, up to the normalizations of section 2) and O6 (it gets no PEVerify metadata message that ilasm's image does not get), and the `obj-wsl` leg runs the programs of `11-programs` and `msil/test/M2` that way in WSL on .NET 10 (section 2, "CIL object links and the image"). Since M21 the legs `refs-net48`, `refs-net8` and `refs-net10` run `11-programs`, `msil/test/M2/00-link` and `msil/test/M2/05-refs` through CIL objects linked against a reference pack: the .NET Framework 4.8 reference assemblies on .NET 8 and .NET Framework 4.8 (with O3 up to the assembly scopes, and O6), the .NET 8 pack on .NET 8 and the .NET 10 pack on .NET 10 (ILVerify against the pack, PEVerify skipped), and `check-mscorlib-safe.py` runs every entry of `msil-ld`'s built-in `[mscorlib]` table on .NET Framework 4.8, .NET 8, .NET 10 and WSL .NET 10 (section 2, "Reference assemblies and the base class library"). Since M22 the legs that run `msil/test/M2` also run its `04-shared` directory and the library rows of the link-semantics matrix: programs linked against libraries that the test builds with `msil-ld -shared` (a library and its program, two- and three-library cycles, initialization order, shared C library state, a missing library and a missing member, and a C# program compiled by csc against a library), against native oracles built from the same sources as DLLs on Windows and as `-Bsymbolic` ELF shared objects in WSL, also with `DOTNET_TieredCompilation=0` and bound to the .NET 8 pack on .NET 10 (section 2, "Libraries and assembly-to-assembly linking"). CI (`.github/workflows/msil-ci.yml`) runs the same scripts as the local gate; it has a manual trigger only until the repository owner enables more |
+| FileCheck tests on the emitted `.il` | 137 llc and MIR tests in `llvm/test/CodeGen/MSIL` (130 `.ll`, among them M22's `asm-comment-barrier.ll` for inline asm whose template holds only comments, `lto-module-flags.ll` for the module flags of `msil-ld`, `imports-linked.ll` for the linked import mode of M15, the 12 `object-*.ll` tests of M19, which write CIL objects with `llc -filetype=obj`, read them back with `llvm-cil-dump`, `llvm-nm` and `llvm-ar` and compare them with ilasm's objects of their object-form text, and M20's `sections-whole-program.ll`, `reloc-loop-threshold.ll`, `function-bitcasts-lto.ll` and `imports-linked-data.ll` for the named sections, the relocation loop, the call adapters of LTO and the data imports of linked text, and 7 `.mir`; both x86_64 triples, the aarch64 triples where the ABI differs, ilasm round trip where a module is complete; since M18 they pin the shortest forms and `nomangle`) and one test there of the bitcode symbol table (`irsymtab-linker-options.ll`), the 9 MC tests of `llvm/test/MC/MSIL` (M18: `llc -show-mc-encoding` for every operand kind, branches at the short-form boundaries, `switch` entries and the synthesized `.cctor` and `'<msil>Main'`, the shortest forms, the BCL members, every operand class in both spellings of `-M object-form`, `nomangle` on four triples with its ImplMap flags 0x0201 read back from ilasm's image, and the clean error of `llvm-mc -filetype=obj`), 22 clang tests in `clang/test/CodeGen/MSIL` (including `design-milestone1.c`, Design.md 12's literal command on fib, and, since M19, `emit-obj.c`, whose `cc1 -emit-obj` writes CIL objects and which reads the headers and record of the objects of `-c` and clang-cl `/c`, and `section-globals.c`, whose constructor registered in `.init_array` or `.CRT$XCU` compiles since M20 and runs from `.cctor`), the driver tests in `clang/test/Driver/msil-toolchain.c` and, for the MSIL toolchain of M14, `msil-link.c` (with M15's `--ucrtbase-imports` on windows-msvc), `msil-lto.c` and `msil-header-search.c`, and, for M19, `msil-object.c` (`-c` and clang-cl `/c` write CIL objects: their cc1 jobs and errors, and the bytes from two directories, `llvm-nm` letters and object-form text of what they write), and, for M22, `msil-shared.c` (`-shared` on the four x86_64 MSIL triples and clang-cl `/LD` and `/LDd` give `msil-ld` `--shared`), the 109 `msil-ld` tests in `lld/test/MSIL` (by prefix 28 `obj-`, 22 `native-`, 17 `bcl-`, 15 `shared-` and 27 others: `dispatch.test` of M13, 24 of the 25 of M14, ten of which M15 updated to its rules, the 21 `native-*.test` of M15, whose ELF shared objects, import libraries and DLLs `yaml2obj`, `llvm-mc`, `ld.lld`, `lld-link` and `llvm-lib` make, the 25 `obj-*.test` of M20, which link CIL objects of `llc -filetype=obj` and read the image with `llvm-cil-dump`, and M21's 17 `bcl-*.test`, which bind against the synthetic reference assemblies of `Inputs/fakepack/` (ilasm sources, their `yaml2obj` images and the generator `gen.py`), with `obj-ctors-null.test` and `start-stop-hidden.test` for two follow-ups of M20, and M22's 15 `shared-*.test`, which build libraries with `msil-ld -shared` and link programs and libraries against them, and `lto-code-model.test`, `native-object-inputs.test`, `obj-ctors-args.test` and `obj-ctors-main-args.test` for three of the four defects of the Rust experiment; `dispatch.test` and `dispatch-coff.test` check which program names reach `msil-ld` and that the other lld flavors, COFF's included, dispatch as before; all but `dispatch-coff.test` also run with `LLD_IN_TEST=2`), the 14 tests of the ECMA-335 tools `llvm-cil-dump` and `llvm-cil-copy` in `llvm/test/tools` (M17; their inputs are `yaml2obj` copies of ilasm images), and unit tests in `llvm/unittests/Target/MSIL` (`MSILImportsTest` pins the standalone import table and the linked import mode; M18's suites `MSILCILRecords`, `MSILBCLMembers`, `MSILBranchForms`, `MSILMCCodeEmitter` and `MSILAsmBackend`, 42 tests, pin the 219 CIL records against `CILOpcodes.def`, the BCL list, the choice of branch forms, the bytes and fixups of every record and the asm backend, and `MSILTargetStreamerTest` the streamer and both spellings of every operand class) and, for the ECMA-335 library (its headers and the link-info record of M13, its writer half of M16, its reader, PE writer, codecs and dumper of M17, and the link model of M20), `llvm/unittests/CLI` (`CLITests`, 21 suites; 425 tests, at least 210 by the floor of the gates from M20; since M22 `CLISymbolTableTest` has 18, at least 9 by a second floor, for the symbol table's INTERFACE flag and ABI descriptors) |
 | `ilverify` reports no stack-shape errors | replaced by the verification policy of section 4 (decision D21, approved by the user 2026-10-12), enforced in every gate |
 
 ## 2. What works
@@ -87,7 +95,9 @@ amendment.
   when the link has no reference assemblies; with them (M21) it binds the base class library to
   the assemblies given ("Reference assemblies and the base class library" below).
 - C functions become static methods of `<Module>`: `public` for external linkage, `assembly`
-  otherwise. A generated `'<msil>Main'(string[])` is the entry point. It calls `main(void)`, or
+  otherwise. A generated `'<msil>Main'(string[])` is the entry point (a library that `msil-ld
+  -shared` links has none, M22: "Libraries and assembly-to-assembly linking" below). It calls
+  `main(void)`, or
   `main(int, char **)` with a NULL-terminated `argv` built from
   `Environment.GetCommandLineArgs()` (`argv[0]` is the `.dll` path under `dotnet x.dll`). Since
   M20 a narrow integer result (`short`, `char` or `_Bool main`) counts as `int` on every output,
@@ -208,15 +218,15 @@ GettingStarted.md section 3 ("Programs of several files").
   - Call native variadic functions, native functions with aggregate parameters or results, and
     native functions that take C function pointers (Phase 3): "Native libraries and P/Invokes"
     below.
-  - Link .NET libraries that this toolchain built (M22): such an input is `<path>: linking .NET
-    libraries built by this toolchain is not supported yet`. Since M21 every other .NET assembly
-    is a reference assembly ("Reference assemblies and the base class library" below); in M20 a
-    .NET assembly was `<file>: .NET assembly inputs are not supported yet`, and in M14-M19
-    `<file>: linking CIL object files and .NET assemblies is not supported yet`, as was a CIL
-    object.
-  - `-shared` (`-shared is not supported yet`; libraries are M22's); `-r` is never supported.
-    Native data, entry points other than `main` and `--gc-sections` came with M20, reference
-    assemblies (`--reference`) with M21.
+  - `-r`, which is never supported. Native data, entry points other than `main` and
+    `--gc-sections` came with M20, reference assemblies (`--reference`) with M21, and `-shared`
+    and the .NET libraries that this toolchain builds with M22 ("Libraries and
+    assembly-to-assembly linking" below): in M14-M21 `-shared` was `-shared is not supported
+    yet`, and in M21 such a library given as an input was `<path>: linking .NET libraries built
+    by this toolchain is not supported yet` (every other .NET assembly is a reference assembly
+    since M21; in M20 a .NET assembly was `<file>: .NET assembly inputs are not supported yet`,
+    and in M14-M19 `<file>: linking CIL object files and .NET assemblies is not supported yet`,
+    as was a CIL object).
   - Leave out an archive member that nothing references when it defines a runtime library-call
     name of the target (`fmod`, `floor`, `memcpy`, ...). As lld does, `msil-ld` extracts every
     such bitcode member, so its constructors run and its other definitions and references join
@@ -243,8 +253,9 @@ How to link against native libraries, with examples, is in GettingStarted.md sec
   absolute path under `--sysroot` when the script lies inside the sysroot, as glibc's `libc.so`
   needs). On the Windows triples: COFF import libraries (short import members with lld-link's
   name types, and MinGW's long-format members), the weak-alias objects of `oldnames.lib` and
-  the export tables of native DLLs. Also archives of native objects, whose definitions are only
-  named in an error. A library of the other format, given on the command line, by `-l:<file>`
+  the export tables of native DLLs. Also archives of native objects and, since M22, native
+  object files given on the command line, whose definitions are only named in an error ("Rust
+  bitcode" below). A library of the other format, given on the command line, by `-l:<file>`
   or by a script, is an error, `<path>: ELF file cannot be imported for target <triple>` on a
   Windows triple (lld-link rejects an ELF input) and `<path>: PE/COFF file cannot be imported
   for target <triple>` on a Linux one (ld.lld rejects a DLL and ignores COFF import members);
@@ -361,13 +372,14 @@ How to link against native libraries, with examples, is in GettingStarted.md sec
 - **`-l` search (5.10.9).** The `-L` directories in order; the first that holds an acceptable
   candidate (`lib<n>.a`, `<n>.lib` and `<n>.dll` on windows-msvc; the MinGW names
   `lib<n>.dll.a` and `<n>.dll.a` too on windows-gnu; `lib<n>.a` and `lib<n>.so` on Linux, where
-  `<n>.dll` and `lib<n>.dll` count only as M22's .NET libraries, so `-lfoo` in a directory
-  holding `foo.dll`, `foo.lib` and `libfoo.so` takes `libfoo.so`, as ld.lld does) wins, and
-  inside it a static library (with bitcode members) wins over an import library or a shared
-  one: Design.md 5.2's static-first rule, the opposite of GNU ld's. An archive of machine code
+  `<n>.dll` and `lib<n>.dll` count only as .NET libraries of this toolchain, so `-lfoo` in a
+  directory holding a native `foo.dll`, `foo.lib` and `libfoo.so` takes `libfoo.so`, as ld.lld
+  does) wins, and inside it a static library (with bitcode members) wins, then (since M22) a
+  library assembly that this toolchain built, then an import library or a shared one:
+  Design.md 5.2's static-first rule, the opposite of GNU ld's. An archive of machine code
   only is skipped (`--verbose`: `skipping native static archive <path> (no CIL or bitcode
-  members)`), and so is a .NET assembly, with a warning that names `--reference` (managed
-  libraries are M22's). `-Bstatic` accepts only static libraries until `-Bdynamic`, `-l:<file>`
+  members)`), and so is a .NET assembly without this toolchain's symbol table, with a warning
+  that names `--reference`. `-Bstatic` accepts only static libraries until `-Bdynamic`, `-l:<file>`
   takes that file whatever its kind (one of the other object format is the error above), and
   an empty archive (glibc's `libpthread.a` and `libdl.a` since 2.34) is a static library that
   defines nothing, so the `-lpthread` of `-pthread` links against such a glibc.
@@ -453,7 +465,7 @@ How to link against native libraries, with examples, is in GettingStarted.md sec
     `EnumWindows`, `SetConsoleCtrlHandler`), is not diagnosed: the program links, and fails at
     run time when native code calls the function.
 
-### The link-semantics matrix (M14, M15 and M20)
+### The link-semantics matrix (M14, M15, M20 and M22)
 
 `msil/test/M2/08-semantics/` holds the rows of plan 5.9.16, built from the recon's probe
 programs. Each case either prints the transcript of the same program built natively (by clang
@@ -466,8 +478,13 @@ through bitcode, and `obj`) and in WSL on .NET 10 for the Linux triple (`obj-wsl
 `wsl-quick`); the native transcripts are the same on both operating systems except in two cases
 whose program differs by triple, each with a `.linux.expected` file of its own: `section-bracket`
 (only the Windows program also walks an MSVC `$` group) and `narrow-arg-mismatch` (only the
-Linux program makes the `signed char` calls). M14 wrote 20 of the 38 tests, M15
-`pragma-comment-lib` and `native-callback`, M19 `knr-two-arities` and M20 the other fifteen.
+Linux program makes the `signed char` calls). `initarray-args` runs its program on the Linux
+triples only, against `initarray-args.linux.expected`; its `.expected` file is the native
+Windows build with both constructors compiled out, which no MSIL leg compares against. M14 wrote
+20 of the 42 tests, M15 `pragma-comment-lib` and `native-callback`, M19 `knr-two-arities`, M20
+fifteen and M22 the three library rows `p2c-*` (the libraries are built by `%{msil_shlibs}`,
+natively as DLLs on Windows and as `-Bsymbolic` shared objects for the E7 oracle) and
+`initarray-args`.
 
 | Case | What it links | Native | MSIL |
 |---|---|---|---|
@@ -502,6 +519,10 @@ Linux program makes the `signed char` calls). M14 wrote 20 of the 38 tests, M15
 | `pragma-comment-lib` (M15) | `#pragma comment(lib, "native")` in one of two files names a native library that the test builds (`native.dll` with its import library, or `libnative.so`); the link gets only its directory | a string from the library's data, 42, 20; exit status 12 | the same |
 | `import-attrs` (M20) | against a test-built native library: `import_name` alone on a function whose C name differs from its entry and on a variable, and `import_module` with `import_name` on a variable | 17 | the same |
 | `native-callback` (M15) | the C library's `qsort` with a comparator of the program | the sorted array | `native function 'qsort' (<module>) takes a C function pointer; passing functions to native code needs phase 3 thunks` (until P3-B), with the module `qsort` binds to: `api-ms-win-crt-utility-l1-1-0.dll` or `libc.so.6` |
+| `p2c-bsymbolic` (M22) | a function `which` that both the program and its library define (Q21) | each calls its own (2 and 1), and the two addresses differ (Windows DLLs and the `-Bsymbolic` Linux library alike) | the same, with the warning `symbol 'which' is defined in <file> and exported by bsym.dll; the output uses its own definition` (`<file>` is the program's object under `obj`, `prog.exe.lto.o` under `lto`) |
+| `p2c-cycle` (M22) | two libraries that call each other, point into each other's data and have a constructor each, linked through an interface library | both constructors ran before `main` and found the other library's static data complete (22 and 11); pointers and calls across the cycle work | the same |
+| `p2c-weak-def` (M22) | a library's weak function and weak variable, both also defined strongly by the program, and a weak function that only the library defines | the program uses its definitions (2, 20), the library its weak ones (1, 10), and `plain(1)` binds to the library's (101) | the same, with the warning above for `hook` and `wvalue`; the symbol table flags the library's weak definitions |
+| `initarray-args` (M22) | a function that takes `(int argc, char **argv, char **envp)` in an `.init_array.00099` slot, as Rust std's `ARGV_INIT_ARRAY` is, and a constructor that takes `argc` | on Linux both get argc 1, the slot's function `main`'s `argv` with a null `argv[argc]` and an `envp` that holds the run's `DOTNET_NOLOGO=1` | the same on the Linux triples, through objects and LTO; on the Windows triples, whose C runtime calls constructors without arguments, `global constructor 'count_args' takes arguments, which MSIL does not pass` |
 
 On the object path the diagnostics are `msil-ld`'s, whose `>>> referenced by
 <file>:(<function>)` and `>>> defined in <file>` lines name the objects; the adapter warnings
@@ -524,8 +545,10 @@ The plain multi-file cases of plan 5.9.16 are tests of `msil/test/M2/00-link/`
 `data-only-tu`, with `two-tu`, `weak-strong`, `common`, `ctor-priority` and, since M20,
 `reloc-loop` and `spill-limits`), and they print the native transcript, as do the archive tests
 of `01-archive/`, the LTO tests of `02-lto/` and the native-library programs of `03-native/`.
-The rows that remain are those of libraries (M22) and of phase 3 (thread-local data,
-destructors, `atexit`, a variadic definition called from another object). Of `p7-flags`, M19
+The rows that remain are those of phase 3 (thread-local data, destructors, `atexit`, a
+variadic definition called from another object); the library rows came with M22, and the
+programs of `04-shared/` cover libraries further ("Libraries and assembly-to-assembly linking"
+below). Of `p7-flags`, M19
 pins what the objects say (`llvm/test/CodeGen/MSIL/object-p7-flags.ll`: the call flags of
 declarations without a prototype, with `sret` and with `byval` parameters, `dllimport`,
 undefined data and the linker options), which `msil-ld` reads since M20.
@@ -534,8 +557,8 @@ undefined data and the linker options), which `msil-ld` reads since M20.
 
 | Triple | clang | llc | Executed by the gate |
 |---|---|---|---|
-| `x86_64-pc-windows-msvc-msil` | yes | yes | Windows: .NET 8 (tiered and optimizing JIT), .NET 10, .NET Framework 4.8; programs that `msil-ld` links (M14) on .NET 8 and Framework 4.8, with their P/Invokes bound from the Windows SDK's and Visual C++'s import libraries (M15), and since M20 through CIL objects and `msil-ld`'s own image (the zoo also on .NET 10) |
-| `x86_64-unknown-linux-gnu-msil` | yes | yes | WSL Ubuntu: a private .NET 10 (tiered and optimizing JIT) against a native Linux build (the E7 oracle), also assembled by the Linux ilasm; programs that `msil-ld` links (M14), linked on Windows with the E7 sysroot's `libc.so.6` and `libm.so.6` as `--sysroot` (M15), and since M20 through CIL objects and `msil-ld`'s own image (`obj-wsl`; the zoo also on the private .NET 8) |
+| `x86_64-pc-windows-msvc-msil` | yes | yes | Windows: .NET 8 (tiered and optimizing JIT), .NET 10, .NET Framework 4.8; programs that `msil-ld` links (M14) on .NET 8 and Framework 4.8, with their P/Invokes bound from the Windows SDK's and Visual C++'s import libraries (M15), and since M20 through CIL objects and `msil-ld`'s own image (the zoo also on .NET 10); since M22 library assemblies with the programs and libraries that link them, also on .NET 10 bound to the .NET 8 pack, against native DLLs |
+| `x86_64-unknown-linux-gnu-msil` | yes | yes | WSL Ubuntu: a private .NET 10 (tiered and optimizing JIT) against a native Linux build (the E7 oracle), also assembled by the Linux ilasm; programs that `msil-ld` links (M14), linked on Windows with the E7 sysroot's `libc.so.6` and `libm.so.6` as `--sysroot` (M15), and since M20 through CIL objects and `msil-ld`'s own image (`obj-wsl`; the zoo also on the private .NET 8); since M22 library assemblies against native `-Bsymbolic` shared objects, and constructors that take glibc's `argc`, `argv` and `envp` |
 | `aarch64-*-msil` CIL objects and images | `-c` writes them (M19) | `-filetype=obj` | FileCheck only: `msil-ld` writes an image with the triple's machine (0xAA64; `lld/test/MSIL/obj-basic.test`), which the gate does not run |
 | `x86_64-unknown-linux-musl-msil`, `x86_64-w64-windows-gnu-msil` | yes | yes | FileCheck and ilasm only |
 | `aarch64-unknown-linux-gnu-msil`, `aarch64-unknown-linux-musl-msil`, `aarch64-pc-windows-msvc-msil`, `aarch64-w64-windows-gnu-msil` | yes (native AArch64 DataLayout and ABI) | yes | FileCheck and ilasm (`-pe64 -arm64`) only |
@@ -657,7 +680,14 @@ assemble them with `ilasm -arm64`; execution stays x86_64-only (D6).
   `"+@ccz"` and tied ones too, because native code sets it from the flags after the statement),
   an output in memory tied to an input of another floating-point type (`"=rm"` on a `float`
   with a `double` `"0"`, which native x86 cannot compile either), `asm goto` and Microsoft
-  `__asm` stay errors (section 3). Each accepted output holds what native x86 code leaves in it:
+  `__asm` stay errors (section 3). Since M22 the backend also counts as empty a template that
+  holds nothing but whitespace and complete `/* ... */` comments, operand references inside
+  them included: Rust's optimization barriers write `asm!("/*{0}*/", inout(reg) x)`, IR
+  `asm sideeffect "/*${0:k}*/", "=&r,0,..."` (serde_json's float formatter), which llc and
+  `msil-ld`'s LTO now compile to the same IL as an empty template (the value passes through);
+  any other text, an unterminated comment or an untied output keeps the error. clang's own
+  check of C `asm` statements is unchanged: in C source only an empty template is accepted.
+  Each accepted output holds what native x86 code leaves in it:
   - A register output tied to an input is that input: zero-extended for a `_Bool` `"+r"`, and
     converted between pointer and integer for a pointer tied to an integer of its width, as the
     native register holds it. A tie written with alternatives (`"=r,r"` with `"0,0"`) is read
@@ -1113,9 +1143,11 @@ section 3 ("Programs of several files"); plan 5.9 is the contract.
   native code, characteristics 0x0022, a 4 MB stack reserve), whose entry point is
   `'<msil>Main'`. It is an EXE image whatever `-o` says (a name that ends in neither `.exe` nor
   `.dll` gets the warning `<path>: the output name ends in neither .exe nor .dll; msil-ld writes
-  an EXE image`), so the one file runs under `dotnet exec` and directly on .NET Framework 4.8.
+  an EXE image`), so the one file runs under `dotnet exec` and directly on .NET Framework 4.8;
+  since M22 `-shared` writes a DLL image instead (below).
   The Assembly row is named after the output's stem (or `--assembly-name`, `-soname`), with
-  version 0.0.0.0, the hash algorithm SHA1 (0x8004) and no public key, and the Module row after
+  version 0.0.0.0 (since M22 `--assembly-version`), the hash algorithm SHA1 (0x8004) and no
+  public key, and the Module row after
   the output file's name; the MVID and the time stamp are a hash of the image, so the same
   inputs give the same bytes (the `det` leg compares the objects, archives and images of two
   builds). clang's compile-and-link command compiles each source with `cc1 -emit-obj` and links
@@ -1131,9 +1163,10 @@ section 3 ("Programs of several files"); plan 5.9 is the contract.
   link's triple, toolchain ABI version and data model (`<file>: data model 8,8,2,8 differs from
   8,8,4,8 in <f0>`), the objects that LTO writes included, which is how a bitcode file compiled
   with another `wchar_t` size is found. Archive members are lazy, as for bitcode. A .NET
-  assembly is, since M21, a reference assembly, or a library of this toolchain, M22's ("Reference
-  assemblies and the base class library" below); in M20 it was `<file>: .NET assembly inputs
-  are not supported yet`.
+  assembly is, since M21, a reference assembly ("Reference assemblies and the base class
+  library" below) and, since M22, a library input when this toolchain built it ("Libraries and
+  assembly-to-assembly linking" below); in M20 it was `<file>: .NET assembly inputs are not
+  supported yet`.
 - **Symbols and tokens (plan 5.9.5, 5.9.7).** Object symbols resolve by M14's port of lld/ELF's
   rules: strong, weak and common definitions (common symbols of one name become the largest,
   with the largest alignment), aliases (of a function, or of a variable plus an offset), weak
@@ -1203,7 +1236,11 @@ section 3 ("Programs of several files"); plan 5.9 is the contract.
   lowering gives it), then in link order, and within one object its table entries before its
   constructors of equal key, which is what ld.lld and lld-link give a `clang -c` object. An
   entry that is not a function address is `constructor table entry at <section>+<off> in
-  <file> is not a function address`. Since M21 a null entry (zero bytes, no relocation) of a
+  <file> is not a function address`. Since M22 a constructor on the Linux triples may take
+  glibc's `(int argc, char **argv, char **envp)` or a prefix of it, and gets them ("Rust
+  bitcode" below); any other constructor that takes arguments is `global constructor '<c>'
+  takes arguments, which MSIL does not pass`. Since M21 a null entry (zero bytes, no
+  relocation) of a
   `.CRT$XC*` table on the Windows triples is skipped, as the MSVC CRT's `_initterm` skips it,
   in `msil-ld`'s image and in whole-program text alike (`cli::skipsNullConstructorSlots`); on
   the Linux triples a null `.init_array` entry stays that error, because glibc calls every
@@ -1246,7 +1283,10 @@ section 3 ("Programs of several files"); plan 5.9 is the contract.
   and one loop over it (unaligned stores, 4-byte sites, function addresses through 8-byte
   slots of the image), so a large initialized table costs a fixed amount of IL instead of
   several instructions per pointer. Native data imports run first, then the relocations, then the
-  constructors.
+  constructors. Since M22 a link with library inputs runs an `ldtoken` per library and the
+  cross-assembly relocations between the relocations and the constructors, and a `-shared`
+  library splits the steps over two initializers ("Libraries and assembly-to-assembly linking"
+  below).
 - **Calls of native functions (plan 5.10.11, 5.10.13, 5.10.14).** A function that binds to a
   native library becomes a P/Invoke stub, one per symbol and IL signature, `assembly static
   pinvokeimpl("<module>" as "<entry>" nomangle cdecl) ... preservesig` with the module string
@@ -1328,10 +1368,15 @@ section 3 ("Programs of several files"); plan 5.9 is the contract.
   `<Module>` field (`0x8013129D`) those fields' messages have no counterpart in the baseline
   (M20's post-commit `obj` leg failed both at `-O0`). Each line covers its own oracle only,
   and O6 runs unchanged for every other test. The ildasm and ilasm round trip of `msil-ld`'s
-  images (O2, `msil_pipeline=obj msil_roundtrip=1`) accepts, since M21, exactly one
-  difference, line for line: a float32 signaling NaN `ldc.r4` operand that ilasm quieted
-  (`(01 00 80 7F)` back as `(01 00 C0 7F)`, `07-equiv/o3-single.test`), which the image keeps
-  exact.
+  images (O2, `msil_pipeline=obj msil_roundtrip=1`) accepts, since M21, one difference, line
+  for line: a float32 signaling NaN `ldc.r4` operand that ilasm quieted (`(01 00 80 7F)` back
+  as `(01 00 C0 7F)`, `07-equiv/o3-single.test`), which the image keeps exact. Since M22 it
+  also accepts, for a library, the top-level class block that a `.custom` of the `.assembly`
+  block names (the `'<msil>SymbolTable'` attribute class of every `-shared` output) at another
+  position: ilasm defines a TypeDef at its first reference, and the `.assembly` block precedes
+  every class, so the class comes back first. The block's own lines and every other line must
+  still be equal, and an EXE, whose `.assembly` block names no class, round-trips strictly
+  (plan 5.12.6; `prog/roundtrip-moved-class.test` of the harness).
 - **Tests.** The 25 `obj-*.test` of M20 in `lld/test/MSIL` link CIL objects from `llc
   -filetype=obj` and read the image with `llvm-cil-dump`: rows, entry points and names, every
   token class, resolution in both orders, common symbols, COMDAT groups, archives, every
@@ -1370,8 +1415,9 @@ How to link against reference assemblies, with examples, is in GettingStarted.md
   .NET assembly`. A positional .NET assembly input (a PE image with CLI metadata and an
   Assembly row, such as a `.dll` of a pack) is a reference assembly too, in command-line
   order, unless it carries this toolchain's symbol-table attribute: then it is
-  a library, which the driver hands to M22's code and which in M21 is `<path>: linking .NET
-  libraries built by this toolchain is not supported yet`; such a library given with
+  a library input, which the driver hands to `createManagedLibraryFile` ("Libraries and
+  assembly-to-assembly linking" below; in M21 it was `<path>: linking .NET libraries built by
+  this toolchain is not supported yet`); such a library given with
   `--reference` is skipped with the warning `<path> is a library built by this toolchain; pass
   it as a link input instead`. A .NET assembly inside an archive (a reference assembly or a
   toolchain library) is neither a link input nor a reference: it gives the warning
@@ -1503,13 +1549,18 @@ How to link against reference assemblies, with examples, is in GettingStarted.md
   the mscorlib-safe entries of `llvm/include/llvm/CLI/BCLMembers.def`, bound to `mscorlib`
   4.0.0.0 `b77a5c561934e089` with flags 0, and its rows are exactly those M20 wrote, so every
   link without references gives M20's image byte for byte and O3 keeps holding. `msil-ld
-  --print-bcl-table` prints its 14 entries in `.def` order (`type [mscorlib]System.ValueType`,
+  --print-bcl-table` prints its 20 entries in `.def` order (M21's 14:
+  `type [mscorlib]System.ValueType`,
   the owner types `Marshal`, `Environment`, `Buffer` and `Interlocked`, Phase 1's five members
   `Marshal::AllocHGlobal(native int)`, `Marshal::StringToHGlobalAnsi(string)`,
   `Environment::GetCommandLineArgs()`, `Buffer::MemoryCopy(void*, void*, int64, int64)` and
   `Interlocked::MemoryBarrier()`, then M20's `Marshal::StringToHGlobalUni(string)`, the type
   `System.EntryPointNotFoundException` and its constructor `(string)`, and the type
-  `System.Object`) and exits. Anything else is `.NET member '<signature>' is not in msil-ld's
+  `System.Object`; then M22's six for the symbol-table attribute of libraries: the types
+  `System.Attribute`, `System.AttributeUsageAttribute` and the value type
+  `System.AttributeTargets`, `Attribute::.ctor()`, `AttributeUsageAttribute::.ctor(valuetype
+  System.AttributeTargets)` and `AttributeUsageAttribute::set_AllowMultiple(bool)`) and exits.
+  Anything else is `.NET member '<signature>' is not in msil-ld's
   built-in mscorlib table; pass --reference=<reference assemblies>`.
   `msil/utils/check-mscorlib-safe.py` proves every entry by running code: an ILAsm probe that
   takes the token of each entry through `[mscorlib]` must exit 42 on .NET Framework 4.8,
@@ -1587,6 +1638,276 @@ How to link against reference assemblies, with examples, is in GettingStarted.md
   `lto-text-mscorlib`. The legs `refs-net48`, `refs-net8` and `refs-net10` run
   `11-programs`, `00-link` and `05-refs` bound to each pack (GettingStarted.md section 7).
 
+### Libraries and assembly-to-assembly linking (M22)
+
+How to build a library, link programs and other libraries against it, deploy them and call one
+from C#, with examples, is in GettingStarted.md section 3 ("Libraries"); plan 5.9.15 is the
+contract and recon `p2/exports-multiasm.md` section 10 the design.
+
+- **What `-shared` writes.** `msil-ld -shared` (clang's `-shared` and clang-cl's `/LD` and
+  `/LDd` pass `--shared`) writes a *library assembly*: an IL-only PE32+ DLL image
+  (characteristics 0x2022) with entry-point token 0 and no `'<msil>Main'`, also when an input
+  defines `main`, which is exported like any function (D27 as amended for M22; `-e` with
+  `-shared` warns `--entry is ignored with -shared`). Output names stay the driver's: `/LD
+  foo.c` writes `foo.dll`, `-o` is used as given, and `-shared` without `-o` writes `a.exe`, a
+  DLL image whatever its name (a name that ends in neither `.exe` nor `.dll` warns `<path>: the
+  output name ends in neither .exe nor .dll; msil-ld writes a DLL image`). The Assembly row is
+  named after the stem of `-o` (or `--assembly-name`, `-soname`; a name that differs from the
+  stem warns `assembly name '<n>' differs from the output file name '<f>'; the CLR loads a
+  library only as <n>.dll`), with no public key and the version of
+  `--assembly-version=<a>[.<b>[.<c>[.<d>]]]` (parts 0-65535, default 0.0.0.0; it sets an
+  EXE's version too; anything else is `invalid --assembly-version value '<v>'`).
+- **Exports (plan Q22).** On the Linux triples every defined GLOBAL or WEAK function and
+  variable of default or protected visibility, common symbols included, as `ld.lld -shared`
+  exports them, so `-fvisibility=hidden` and `__attribute__((visibility("default")))` work as
+  natively. On the Windows triples the `__declspec(dllexport)` definitions when any input has
+  one, as link.exe does (`--export-all-symbols` exports every default-visibility definition
+  anyway), and otherwise every default-visibility definition, as GNU ld's automatic export
+  does. Never exported: names that start with `<msil>`, `.ctor` and `.cctor`, and the
+  definitions of the members of the archives that `--exclude-libs=<archive>[,<archive>...]`
+  names by file name (`libutil.a`; `ALL`: every archive), as in lld/ELF. A thread-local export is `thread-local storage is not
+  supported yet: <s> in <file>` (phase 3). Exports are `--gc-sections` roots, and under LTO
+  every bitcode definition that may be exported stays visible (irsymtab has no `dllexport`
+  bit, so on the Windows triples the selection reads the flags of the objects that LTO writes).
+- **The export class (Q23, Q24).** The exported functions are public static methods, with
+  Param rows `A_<i>`, of one class, `public abstract sealed` (0x181) and extending
+  `System.Object`, named by `--export-class=<Ns.Name>`, else by the assembly name parsed the
+  same way: the last `.` separates the namespace (`zl` is a class without namespace,
+  `Contoso.Zlib` the class `Zlib` in `Contoso`). An empty name, a `/`, more than 1,023 bytes,
+  a namespace or name that starts with `<msil>` (D11's prefix for the toolchain's own names)
+  and the value `<Module>` are `invalid --export-class value '<v>'`, for the default from the
+  assembly name too, because such a class could repeat a TypeDef that `msil-ld` writes
+  (`<Module>`, `'<msil>Data'`, `'<msil>SymbolTable'`, the spill classes), which ECMA-335
+  forbids (`Ns.<Module>` is allowed), and a class of more than 65,524 methods is `export
+  class '<c>' would hold <n> methods; the CLR allows 65,524`. After the functions come the
+  accessors: per function `public static native int '<msil>addr_<f>'()`, which returns the
+  function's one address (its `'<msil>fn_<f>'` field), and per variable `'<msil>addr_<x>'()`,
+  which returns the variable's address, with a property `<x>` whose getter it is. A function
+  alias is a forwarding method of its own name, and a data alias's accessor returns the
+  aliasee's address plus the alias's offset. Hidden and `static` functions stay in `<Module>`,
+  which no other assembly can name. C# therefore sees a static class with the C functions
+  (pointers as `nint`) and an address property per variable.
+- **Two-phase initialization (plan 5.9.10).** A library initializes in two module
+  initializers. Phase 1 is the `.cctor` of the private `beforefieldinit` class `'<msil>Data'`,
+  which holds `'<msil>data'`, the address fields, the `'<msil>fn_'` fields and the data-import
+  fields: it imports native variables, allocates and fills the data image, sets the address
+  fields and applies the library's own relocations, and names no other assembly. Phase 2 is
+  `<Module>::.cctor`, left out when empty: an `ldtoken` and `pop` of each linked library's
+  export class, in command-line order, used or not, so that every linked library initializes
+  before the code that links it; the cross-assembly relocations, straight-line stores of
+  accessor results; then the constructors. Phase-1 state is reached only through
+  `'<msil>Data'` fields, so a library whose data point into another library's, in a cycle too,
+  finds that data complete. An EXE with library inputs keeps one `<Module>::.cctor`, which runs
+  the `ldtoken`s and the cross-assembly relocations after its own relocations and before its
+  constructors (plan section 12, 2026-10-21; section 10 item 10 asks the user whether such EXEs
+  should have two phases too). An EXE without library inputs, and every `-S` text, is byte for
+  byte what M21 wrote.
+- **The symbol table (Q25).** A private attribute class `'<msil>SymbolTable'` (extending
+  `System.Attribute`, AllowMultiple, constructor `(uint8[])`) carries the table on the Assembly
+  row: format 1.0 (magic `MSYM`), flags (0x01 INTERFACE), the toolchain ABI version, the triple
+  without its environment version, the C runtime identity, the data model of the inputs (the
+  sizes of `void *`, `long`, `wchar_t` and `long double`), the export class, the data symbols
+  with size, alignment and flags (const, weak), and the functions that carry flags (weak, and
+  ABI followed by the definition's call descriptor: no prototype, the `sret` size and
+  alignment, the `byval` parameters), which the signature checks of importers need. The codec
+  in `llvm/lib/CLI` refuses another major version, unknown flags and trailing bytes, and M22's
+  commit freezes the format. The C runtime identity is the first `-l` of the link, the driver's
+  default libraries included, named `c`, `msvcrt`, `ucrt`, `ucrtbase`, `crtdll` or `msvcr*`,
+  written as given, else `none` (as with `-nostdlib`), which matches any; a windows-msvc
+  library that clang links gets `ucrt`, a Linux one `c`. `llvm-cil-dump --link-info lib.dll`
+  prints the table: `SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='ucrt'
+  datamodel=8,4,2,8`, then lines such as `ExportClass 'lib'`, `Data 'counter' size=4 align=4`
+  and `Function ABI 'mk' SRET size=12 align=4` (a function that returns a struct
+  through `sret`).
+- **Linking against a library.** A library is a link input, positional (`zl.dll`) or found by
+  `-l` as the managed kind of plan 5.10.9 ("Native libraries and P/Invokes" above); a .NET
+  assembly without the symbol table stays a reference assembly (M21). Libraries are read in
+  command-line order, the same file twice counts once, and two files of one assembly name are
+  `<file>: library assembly '<n>' is also linked from <file>; the CLR loads one assembly of a
+  name`. A library with the output's assembly name, compared without case (`foo.exe` linked
+  against `foo.dll`, or a library linked against an older build of itself), is `<lib>: library
+  assembly '<n>' has the name of the output; the CLR loads one assembly of a name`, because
+  the CLR would resolve the library's references to the output. The link's triple comes from
+  `--target` or the first CIL object or bitcode file, so a link of libraries alone without
+  `--target` (clang always passes one) is `no target triple: pass --target or a CIL object or
+  bitcode file`, with `--interface-only` too. A symbol table that does not decode, or has another format version, is an error when
+  the library is read; once every input is loaded, each library is checked against the link,
+  and its first failure is the error: the toolchain ABI version, the triple (`<file>: target triple <t> is incompatible with <t0>`; the
+  vendor does not count), the data model, the C runtime (`<file>: C runtime '<c>' differs from
+  '<c0>' of this link`; `none` matches anything, since windows-gnu may mix msvcrt and ucrt),
+  the export table (`<file>: malformed export table: <what>`: no export class, a missing class,
+  accessor or property, a symbol exported twice, no table), then the library's own AssemblyRefs against
+  the link's references, or against `mscorlib` 4.0.0.0 without references (a newer version is
+  an error, an absent name a warning). Undefined symbols bind late, as native ones do, but
+  before them: to the first library in command-line order that exports the name, weak
+  undefined references included (`--trace-symbol` prints `<lib>: managed definition of
+  <s>`). A later exporter warns `symbol '<s>' is exported by <lib1> and <lib2>; using <lib1>`;
+  a definition of the program that a library also exports wins for the program, with the
+  warning `symbol '<s>' is defined in <file> and exported by <lib>; the output uses its own
+  definition`, while the library keeps calling its own (no interposition, Q21); a function
+  bound to data or the reverse is `symbol type mismatch: <s>`.
+- **Calls, addresses and data.** A call of a library function is a `call` of the MemberRef
+  `[lib]Ns.Class::f` with the library's signature, after the check of plan Q8 against the
+  export's signature and call descriptor: a difference that an adapter can bridge gets an
+  adapter `'<msil>adapt_<f>_<n>'` and the warning `function signature mismatch: <f>`, whose
+  `>>> defined as` line ends in `in <lib>`, and the others are that error. The address of a
+  library function or variable is a call of its accessor: the object's 5-byte `ldsfld` of an
+  address field becomes a 5-byte `call` of `'<msil>addr_<s>'()`, so sizes, branches and
+  `.maxstack` stay, and any other use is `<file>: unsupported use of imported symbol '<s>' in
+  '<m>' at IL offset <n>`. Importers never take a library function's address with `ldftn`, so
+  `&f` is the same in every assembly, on the .NET Framework too (`framework-identity`). A data
+  relocation against a library symbol (`int *pc = &counter;`) is a cross-assembly relocation
+  that phase 2 (an EXE's one initializer) applies, 8- and 4-byte sites, aligned or not; a
+  difference of two addresses of which one is in a library is `symbol difference '<a>' -
+  '<b>' in <file> refers to a symbol of <lib>`. Each library gets one AssemblyRef: its name, version and culture,
+  flags 0, no key or token (a token makes the .NET Framework refuse such a library). `-Map`
+  lists the libraries under `Inputs:`, and under `Symbols:` the symbols bound to their exports
+  as `ManagedFunction` and `ManagedData` rows with the library as the input, after the
+  natively bound symbols and before `__start_`/`__stop_`, by library in link order (plan
+  5.9.14).
+- **Every symbol resolved (Q21's `-z defs`).** An assembly has no global symbol scope, so a
+  library, like a program, must resolve every symbol: `undefined symbol: <name>` stops a
+  `-shared` link too, and a weak undefined symbol stays null. A cyclic pair therefore links
+  through an *interface library*: `-shared --interface-only` writes the export class,
+  accessors, properties, signatures, identity and symbol table of the real link of the same
+  inputs, the table flagged INTERFACE, with stub bodies (`ldnull`, `throw`) and no data image,
+  `'<msil>Data'` or initializer, and allows undefined symbols. Linking against an interface
+  binds as against the real library (`--verbose`: `<file> is an interface library; deploy the
+  library built from the same objects`); the real library is what gets deployed.
+  `--interface-only` without `-shared` is `--interface-only requires -shared`.
+- **No text.** `--lto-emit-asm` with `-shared` is `--lto-emit-asm cannot write a -shared
+  library; link without --lto-emit-asm`, and with a library input `<file>: --lto-emit-asm
+  cannot import from a .NET library; link without --lto-emit-asm`, so oracle O4 skips the tests
+  that build or link libraries (the `skip O4` lines of msil/test/README.md).
+- **Running.** The libraries go next to the program: `dotnet` and the .NET Framework load them
+  from the application directory, and a library needs no runtimeconfig of its own. Every
+  linked library initializes before `main`, dependencies first: the CLR runs a library's
+  module initializer when a method that refers to the library is JIT-compiled, and the
+  program's `ldtoken`s refer to each linked library before its constructors run (recon
+  exports-multiasm 6.1; `init-order`). The C library state is shared, because every assembly
+  calls the same native C runtime: `malloc` and `free`, a `FILE *` and `errno`, read right after
+  the call that set it, work across assemblies (`c-state`; CoreCLR's own code may clobber a
+  thread's `errno` later, a phase 3 item). C# programs call a library through its export class
+  (`csharp-consumer`, compiled by csc for .NET 8 and the .NET Framework 4.8). A missing library
+  stops the program before `main` with a `System.TypeInitializationException` around the
+  `System.IO.FileNotFoundException` that names it, and a library that lost a function stops the
+  method that calls it, when it is JIT-compiled, with `System.MissingMethodException`
+  (`missing-library`, `missing-member`).
+- **Known limits** (recon exports-multiasm 10.5 and 13; plan 5.9.15):
+  - No symbol interposition across assemblies: a symbol that two assemblies define has one
+    copy in each (warned), as with `-Bsymbolic`.
+  - In a cycle, phase 1 of every library is complete before any constructor runs, but phase 2
+    (the cross-assembly relocations and the constructors) of the library that was entered
+    first may not have run when the other library's constructors call into it, and which
+    constructor of a cycle runs first is unspecified, as natively. Two threads that enter a
+    cycle from both ends rely on the CLR's deadlock breaking in type initialization (not
+    tested).
+  - The address of a *native* function differs between assemblies: each has its own P/Invoke
+    stub.
+  - A library whose member disappears fails at the caller's JIT time, not when the program is
+    linked again; .NET 8 and later also refuse a library older than the version the program
+    was linked against (`System.IO.FileNotFoundException`), which the .NET Framework accepts
+    (section 5).
+  - A library's assembly name must equal its file stem, and an application holds one assembly
+    of a name: a managed `z.dll` cannot sit next to a native `z.dll`.
+  - An imported variable whose declared type is larger than the exported size gets no warning,
+    as ELF linkers give: link-info record v1 gives undefined data symbols no size (plan
+    5.9.15).
+  - Only `-shared` outputs are libraries: an EXE is never a library input, and only `-shared`
+    outputs initialize in two phases.
+  - That the CLR initializes a library before its first use at JIT time is observed
+    behaviour: CoreCLR, the .NET Framework and crossgen2 (ReadyToRun) agree, and ECMA-335
+    promises module initializers only "at, or sometime before, first access". Mono, NativeAOT
+    and the interpreter were not tested.
+- **Tests.** The 15 `shared-*.test` of `lld/test/MSIL` build libraries from objects of `llc
+  -filetype=obj` and read them with `llvm-cil-dump`: the layout (`shared-layout`), export
+  selection (`shared-export-selection`), the symbol table's golden bytes and printed lines
+  (`shared-symbol-table`), both initializers and an EXE's one (`shared-two-phase`), a library's `'<msil>Data'` class
+  with spill classes and a native data import (`shared-data-class`), MemberRefs,
+  the accessor rewrite and cross-assembly relocations (`shared-import`), the identity checks
+  on images that `Inputs/shared/gen.py` patches, a table without an export class among them
+  (`shared-checks`), `-z defs` (`shared-zdefs`),
+  signatures (`shared-signature`), duplicates and a library named like the output
+  (`shared-duplicates`), interface libraries and a
+  cyclic pair (`shared-interface`), `-l` (`shared-lsearch`), LTO (`shared-lto`), a library's
+  AssemblyRefs against M21's fake pack (`shared-assemblyref`) and 1,000 exports
+  (`shared-size`), each also with `LLD_IN_TEST=2`; `options.test` and
+  `bcl-reference-option.test` pin the new options and built-in entries where M14's and M21's
+  retired errors were (`options.test` also a link of libraries alone without `--target`). `clang/test/Driver/msil-shared.c` pins the driver and
+  `CLISymbolTableTest` (18 tests) the INTERFACE flag and the ABI descriptors. The 13 tests of
+  `msil/test/M2/04-shared/` (`lib-and-prog`, recon E7: calls, data, both relocation kinds,
+  identity both ways, the library's constructor before `main` and a program function called by
+  the library; `framework-identity`; `cycle-pair` and `cycle-three`, through interfaces;
+  `init-order`, recon E4c, an unused library's initializer included; `c-state`;
+  `archive-in-two-libs`, a copy of the same code in each library; `missing-library` and
+  `missing-member`; `csharp-consumer`; `lib-det`, two builds byte for byte, libraries
+  included; `roundtrip-library`, ildasm and ilasm keep the attribute and a program links
+  against the copy, in the `roundtrip` leg and M22's gate (`msil_roundtrip=1`); `lsearch-managed`) and the library rows of the matrix above run at `-O0`
+  and `-O2` on .NET 8 (tiered and optimizing JIT), the .NET Framework 4.8 and WSL .NET 10, and
+  bound to the .NET 8 pack on .NET 10, against native builds of the same sources: DLLs with
+  import libraries on Windows, ELF shared objects linked with `-Bsymbolic` and found through
+  `-rpath $ORIGIN` for the E7 oracle. The harness builds the libraries from `%{msil_shlibs}`
+  and verifies them with the program (msil/test/README.md); the tests that set it are
+  UNSUPPORTED under `msil_pipeline=lto` with `msil_link_output=il`, because a library has no
+  `--lto-emit-asm` text.
+
+### Rust bitcode (M22)
+
+An experiment of 2026-10-26 retargeted the bitcode of rustc 1.99 to the MSIL triples: `core`,
+`alloc` and 13 crates.io crates, and `std` with stand-ins, ran on the .NET Framework 4.8, .NET 8
+and WSL. It found four defects, which M22 fixed:
+
+- **Code models under LTO.** rustc's bitcode for `x86_64-unknown-none` carries the module flag
+  `"Code Model"` = kernel, which stopped `msil-ld`'s LTO with `LLVM ERROR: Target does not
+  support the kernel CodeModel` and a stack dump, while llc and `clang -c` compiled the same
+  module. The MSIL target has no code models (D8), so LTO now always configures the small one
+  and links such bitcode (kernel or large code model) without a diagnostic, on the MSIL
+  triples and as stock bitcode (`lto-code-model.test`).
+- **Comment-only `asm` barriers** in LLVM IR count as empty ("C and LLVM IR" above;
+  `asm-comment-barrier.ll`).
+- **Native object files.** `msil-ld` stopped with `unknown file type: <path>` on a native
+  object file on the command line, such as the empty `symbols.o` that rustc passes under
+  `-Clinker-plugin-lto`. A COFF (Windows triples) or ELF (Linux triples) object is now read
+  like a member of a native archive: a definition that nothing references is skipped
+  (`--verbose`: `native object <file>: its definitions are machine code, which MSIL cannot
+  link; a reference to one of them is an error`), a referenced one stays `symbol '<s>' is
+  defined only in native object code (<file>); MSIL cannot link machine code`, also when a
+  native library or a library assembly defines the same name, before or after the object (a
+  native linker always links an object that the command line names, so no library binds the
+  name instead), an oldnames-style alias object (`strdup` as a weak alias of `_strdup`) binds
+  through its alias as it does inside `oldnames.lib`, and a file of a format that `msil-ld`
+  recognizes but cannot link names it (`unknown file type: <file> (WebAssembly object)`)
+  (`native-object-inputs.test`).
+- **Constructor arguments.** glibc calls every `.init_array` entry as `void (int argc, char
+  **argv, char **envp)`, and Rust std's `ARGV_INIT_ARRAY` reads its arguments that way. On the
+  Linux triples a constructor (`__attribute__((constructor))`, `llvm.global_ctors` or an
+  `.init_array` slot) whose parameters are those or a prefix of them gets the `argc` and `argv`
+  that `'<msil>Main'` passes to `main` (built once, before the first such constructor) and, for
+  `envp`, the process environment: the program's own import of libc's `environ`, else a data
+  import of `environ` that `msil-ld` adds from the first native library that defines it
+  (`global constructor '<c>' takes envp, but no native library of the link defines 'environ'`
+  when none does). `clang -S`, llc and `--lto-emit-asm` text agree; they import `environ` from
+  the C library (`libc.so.6`, on musl `libc.so`) through `dlopen` and `dlsym`. Link-info record
+  v1 is unchanged: the number of arguments comes from the method's signature. Destructors and
+  the Windows triples' `.CRT$XC*` entries take no arguments, and any other parameter list
+  stays `global constructor '<c>' takes arguments, which MSIL does not pass`
+  (`obj-ctors-args.test`, `obj-ctors-main-args.test`, `08-semantics/initarray-args`).
+
+What runs (the recipe is in GettingStarted.md section 3, "Rust bitcode"): with `-C lto=fat`
+rustc writes the bitcode of the whole crate graph, `core` and `alloc` included, which links like stock-clang
+bitcode for the native triple. `core`, `alloc` and `no_std` crates such as serde_json,
+hashbrown, miniz_oxide, sha2, crc32fast and libm ran, verified, with the native build's output,
+through objects and through LTO, on both x86_64 triples. What needs phase 3: atomics (`Arc`,
+hashbrown's default hasher), thread-local storage, calls of native variadic functions (`open64`,
+`fcntl` and `syscall` in `std` on Linux), functions passed to native code (signal handlers), and
+MSVC's `__fastfail` asm; architecture intrinsics (x86 SIMD paths, the `pause` of
+`core::hint::spin_loop`) are errors until phase 4. `std` ran only with IR rewrites standing in
+for the phase 3 items (single-threaded thread-locals, fixed-arity imports of the variadic
+functions, and the like): printing, `Vec`, `HashMap`, the program's arguments and file reads
+worked, threads did not. Phase 3 is what lets `std`, `Arc` and threads run without stand-ins.
+With `-Clinker-plugin-lto` and no rustc LTO, the prebuilt `core` and `alloc` of the toolchain
+are native code, which `msil-ld` reports as machine code.
+
 ## 3. What Phase 1 does not do
 
 | Feature | Phase 1 | Planned |
@@ -1602,12 +1923,12 @@ How to link against reference assemblies, with examples, is in GettingStarted.md
 | `long double` | is `double` (8 bytes, 53-bit mantissa) on every MSIL triple, not an error. Differs from native on x86_64 Linux (glibc and musl) and x86_64 MinGW (`x86_64-w64-windows-gnu`), where it is the 80-bit x87 format in 16 bytes, and on aarch64 Linux, where it is IEEE binary128 in 16 bytes; matches native on windows-msvc (x86_64 and aarch64) and `aarch64-w64-windows-gnu`. So where it differs, a native `long double` function (`sqrtl`, `expl`, `powl`, `strtold`, `nexttoward`, ...) that `msil-ld` binds is the link error `native function '<name>' (<module>) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)` (section 2, "Native libraries and P/Invokes"); windows-msvc and `aarch64-w64-windows-gnu` bind them | permanent (Design.md 3; section 6, item 14); calls of native `long double` functions: phase 3 |
 | Conversions between floating point and `__int128` under strict floating point (constrained intrinsics: `-ffp-model=strict`, `#pragma STDC FENV_ACCESS ON`), conversions between `_Float16` and `__int128` and from `__int128` to `__bf16` (helpers `__extendhfsf2`, `__truncsfhf2`, `__extendbfsf2`, `__truncsfbf2`), `_Float16`/`__bf16` arithmetic, `__bf16` parameters, call arguments and return values even without arithmetic (`__truncsfbf2`, `__extendbfsf2`; `_Float16` ones compile), C `_Complex` multiplication and division | error naming the runtime helper (`__fixdfti`, `__floattidf`, `__extendhfsf2`, `__muldc3`, ...). `__int128` division, the plain conversions and those from `__bf16` to `__int128` are inline since M12 (section 2). Under `msil-ld`'s LTO, argument promotion never turns a pointer into a `_Float16` or `__bf16` parameter (section 2, "LTO and argument promotion") | phase 3: BCL types where available, helpers in the output assembly otherwise |
 | `__float128`, `x86_fp80`, rounding-mode changes, floating-point environment access | error (CIL rounds to nearest and has no FP exceptions) | |
-| Inline and module-level assembly, other than empty `asm` statements with or without operands (section 2): instructions, outputs not tied to an input, condition-flag outputs (`"=@cc<cond>"`, `"+@cc<cond>"`, tied or not), an output in memory tied to an input of another floating-point type, `asm goto`, Microsoft `__asm`, file-scope `asm` | error: clang's `inline assembly is not supported for the MSIL target '...'` (`Microsoft-style inline assembly ...`, `file-scope assembly ...`), llc's `inline assembly is not supported for MSIL` | never (Design.md 3) |
+| Inline and module-level assembly, other than empty `asm` statements with or without operands (section 2; in LLVM IR since M22 also templates of nothing but `/* */` comments): instructions, outputs not tied to an input, condition-flag outputs (`"=@cc<cond>"`, `"+@cc<cond>"`, tied or not), an output in memory tied to an input of another floating-point type, `asm goto`, Microsoft `__asm`, file-scope `asm` | error: clang's `inline assembly is not supported for the MSIL target '...'` (`Microsoft-style inline assembly ...`, `file-scope assembly ...`), llc's `inline assembly is not supported for MSIL` | never (Design.md 3) |
 | A section that MSIL cannot lay out: a destructor table (`.fini_array*`, `.CRT$XT*`), `.ctors`/`.dtors`, `.preinit_array*` (Linux triples), another `.CRT$X*` section (`.CRT$XI*`, `.CRT$XL*`, `.CRT$XP*`, ...), thread-local data (`.tdata`, `.tbss`); a constructor-table entry that is not a function address; `__start_`/`__stop_` on the Windows triples | error: `global destructors are not supported yet: <s> in <file>`, `section '<name>' in <file> is not supported` (`.preinit_array` too, which ld.so runs before every `.init_array` entry; `--gc-sections` keeps such segments for the report), `thread-local storage is not supported yet: <s> in <file>`, `constructor table entry at <section>+<off> in <file> is not a function address` (in `-S` and llc text `<file>` is the source file; since M21 a null entry of a `.CRT$XC*` table on the Windows triples is skipped instead, as the MSVC CRT's `_initterm` skips it, while a null `.init_array` entry stays the error). Every other section on a variable (`__attribute__((section(...)))`, `__declspec(allocate(...))`) is laid out since M20, in `-S` and llc text as in `msil-ld`'s image, and constructors registered in `.init_array` or `.CRT$XC*` run (section 2). On the Windows triples `__start_X` stays undefined, as with link.exe and lld-link, and in `-S` text it is D26's external-variable error. In M12-M19 `-S` and llc rejected every section on a variable, `global variable @<name> in section "<section>" is not supported for MSIL yet (phase 2 CIL objects)`, and before M12 they dropped it silently, so such a constructor never ran. A section on a function is ignored, and clang's own sectioned globals (`llvm.metadata`) are not affected | destructor tables: phase 3 (Design.md 4.1); `.preinit_array` (its entries run before every `.init_array` entry): a later milestone; `__start_`/`__stop_` on Windows: never (native COFF links do not define them) |
 | Aliases other than those of section 2 (an offset into a function, a function-typed alias of a variable, an alias of an ifunc, a `thread_local` alias of a variable that is not thread-local) and ifuncs (from LLVM IR only: clang ignores `__attribute__((ifunc(...)))` on the MSIL triples with an `unknown attribute` warning) | error: `alias @<name> is not supported for MSIL`, `ifunc @<name> is not supported for MSIL`. A CIL object (M19) keeps every alias of a definition plus a constant offset (offset 0 for a function) as an alias symbol for `msil-ld`; any other alias there is `alias '<name>' must point to a definition plus a constant offset for MSIL` | ifuncs stay errors |
 | Function pointers passed to native code (callbacks) | function pointer values are managed; no Phase-1 import takes a callback. In a program that `msil-ld` links, a native function of plan 5.10.14's callback list (`qsort`, `bsearch`, `signal`, `pthread_create`, `CreateThread`, ...; section 2) is a link error, `native function '<name>' (<module>) takes a C function pointer; passing functions to native code needs phase 3 thunks`. **Known gap:** a function address passed to any other native function (a native library's own callback API, a Win32 callback) is not diagnosed and fails at run time | phase 3 thunks (P3-B; Design.md 4.5) |
 | Structs by value, `__int128`, vectors and `_Float16` in P/Invoke signatures | none of the standalone imports takes one; a natively bound function that does is `native function '<name>' (<module>) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)` | phase 3 |
-| Exports (`-shared`), assembly-to-assembly linking | no; `msil-ld` reports `-shared is not supported yet`, and since M21 a .NET library that this toolchain built, given as an input, `<path>: linking .NET libraries built by this toolchain is not supported yet` (every other .NET assembly is a reference assembly, section 2) | phase 2 (P2-C, M22), Design.md 2.3 |
+| Exports (`-shared`), assembly-to-assembly linking | done in M22 (section 2, "Libraries and assembly-to-assembly linking"), with the known limits listed there; in M14-M21 `msil-ld` reported `-shared is not supported yet`, and in M21 a .NET library that this toolchain built, given as an input, `<path>: linking .NET libraries built by this toolchain is not supported yet` | done (P2-C, M22), Design.md 2.3 |
 | BCL intrinsics (`BitOperations`, `Math`, `MathF`, `Vector128`, ...) | none: bit operations, `fabs` and `copysign` use inline expansions, math calls are P/Invokes (D16) | phase 3 codegen switches |
 | The codegen switches for newer .NET APIs of Design.md 7.1 (`DisableRuntimeMarshalling`, `Math.FusedMultiplyAdd`, `UnmanagedCallersOnly` thunks, ...) | none exist; Phase-1 output already is what their defaults will give: code that runs on .NET Framework 4.8 and modern .NET alike. Since M21 `msil-ld`'s binder has the optional request strengths they will use (an attribute dropped, or a call substituted by a helper, when the references lack the member; section 2), with no producer yet | phase 3 (P3-A) |
 | Architecture-specific intrinsics (`llvm.x86.*`, `llvm.aarch64.*` from `immintrin.h`, `arm_neon.h`) | error naming the intrinsic: `intrinsic '<name>' is not supported for MSIL` (`llvm.x86.sse42.crc32.32.32` from `_mm_crc32_u32`, `llvm.x86.rdtsc` from `__rdtsc`, ...). Intrinsics that clang lowers to generic IR (`_mm_add_ps`, `_mm_popcnt_u32`, ...) still compile | phase 4 SIMD (Design.md 3.2) |
@@ -1691,6 +2012,12 @@ How to link against reference assemblies, with examples, is in GettingStarted.md
   `msil-ld` reports a native binding of it (M20, plan 5.10.13): `the signature of
   prototype-less function '<f>' cannot be derived: its address is used, but it is never called
   directly; declare it with a prototype`.
+- Libraries (M22) have the known limits listed in section 2, "Libraries and
+  assembly-to-assembly linking": no interposition across assemblies, the order of phase 2 in a
+  cycle, one P/Invoke stub (and so one native function address) per assembly, failures of a
+  changed library at JIT time, one assembly per name and the name equal to the file stem, and
+  no warning for an imported variable whose declared type is larger than its export, because
+  link-info record v1 gives undefined data symbols no size.
 - On Linux, as for native programs, only the low 8 bits of the exit status survive.
 
 ## 4. Verification policy
@@ -1718,7 +2045,8 @@ of these are clean:
    addresses passed to `System.Buffer::MemoryCopy`, D15). Two shapes that D12 and D2 always
    produce are notes only when the second pass runs: the RVA image copy in `<Module>::.cctor`
    and, since M20, the read of the relocation table `'<msil>relocs'` there (`Cannot modify an
-   imaged based (RVA) static`, at exactly those `ldsflda`s), and a function address used as a
+   imaged based (RVA) static`, at exactly those `ldsflda`s; since M22 also in
+   `'<msil>Data'::.cctor`, phase 1 of a library), and a function address used as a
    `native int` (`ldftn`).
 5. **A neutralized second pass** (`msil-verify.py`): an allowed construct hides the errors
    behind it, so the assembly is disassembled with ildasm, every allowed construct is replaced
@@ -1746,7 +2074,9 @@ against that pack with PEVerify left out, because PEVerify cannot load such an i
 <reason>`, and O6 is skipped with it); this happens only in the `refs-net8` and `refs-net10`
 legs (and in a lit run whose `msil_references` path names such a pack, which lit treats as
 that pack), and in the `05-refs` tests that bind to those packs, and the same programs pass
-PEVerify in every other leg.
+PEVerify in every other leg. Since M22 a program that links libraries is verified with them
+(`msil-verify.py --dep-dir <dir>`: ILVerify references and copies next to the program for
+PEVerify), and each library is verified too, with both passes (`--also-verify-deps`).
 
 ## 5. Runtime differences
 
@@ -1764,8 +2094,11 @@ What differs between the runtimes Phase 1 targets, and how the backend deals wit
 | Inconsistent stack depth at a join | accepted | the JIT hung and grew past 40 GB | not measured | MSILStackCheck rejects such code at compile time |
 | `Math.Min(-0.0, +0.0)` | -0.0 | -0.0 | +0.0 | `Math.Min`/`Max` are not used; min/max are compares and selects (D16) |
 | Main-thread stack on Windows | 1.5 MB (the reserve of `dotnet.exe`) | same | 4 MB (the default of ilasm's 64-bit `.exe`, `ilasm -stack=` sets another, and of `msil-ld`'s images) | see below |
+| `errno` read after the runtime's own native code ran (a `Console.WriteLine`, say) | 0 | 0 | the value the program set | read `errno` right after the call that set it; across assemblies it is shared like every other C library state (M22) |
 | An image that references `System.Runtime` and its siblings at 8.0.0.0 (`msil-ld` with the .NET 8 pack, M21) | runs | runs | `System.IO.FileNotFoundException` for `System.Runtime` 8.0.0.0 at start-up | without references, or with the .NET Framework 4.8 reference assemblies, the image references only `mscorlib` 4.0.0.0, which all three load (the runtimes' `mscorlib` facades forward each Phase 1 type in one hop) |
 | The same at 10.0.0.0 (the .NET 10 pack) | `System.MissingMethodException` (`Entry point not found in assembly`) at start-up: CoreCLR loads only the requested version or a newer one | runs | `System.IO.FileNotFoundException` | as above |
+| A program run with an older build of a library than the one it was linked against (a lower `--assembly-version`; M22) | `System.IO.FileNotFoundException` | same | runs (no strong name, so the version is not checked) | the AssemblyRef carries the library's exact version and no public key token (a token would make the .NET Framework refuse the unsigned library; recon exports-multiasm 3), so a newer build of the library serves an older program everywhere |
+| When a library's module initializers run (M22) | when the first method that refers to the library is JIT-compiled | same | same (also ReadyToRun) | the program's own `<Module>::.cctor` names every linked library with `ldtoken`, so all of them initialize before `main` |
 
 - **Deep recursion.** `dotnet x.dll` on Windows runs `main` on the host's main thread, whose
   stack is 1.5 MB, while native Linux programs get 8 MB by default (`ulimit -s`, which the Linux

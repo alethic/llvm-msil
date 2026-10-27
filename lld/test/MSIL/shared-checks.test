@@ -1,0 +1,182 @@
+## What msil-ld checks when it reads a library (ImplementationPlan.md M22.c
+## items 1 and 2; 5.9.4, 5.9.14, 5.9.15; recon p2/exports-multiasm.md 5.4
+## and 7.2): decodeSymbolTable, then, each error naming both files,
+## - the table version: another major is refused, another minor is read;
+## - the toolchain ABI version, the triple key (arch, OS, environment
+##   without its version, object format; the vendor is ignored) and the
+##   data model, with 5.9.14's texts;
+## - the C runtime against this link's identity (the first -l named c,
+##   msvcrt, ucrt, ucrtbase, crtdll or msvcr*, else none):
+##   '<file>: C runtime '<c>' differs from '<c0>' of this link', where none
+##   on either side matches anything;
+## - the export table against the metadata: each class a public TypeDef,
+##   each function with '<msil>addr_<name>', each data symbol with a
+##   property whose getter is '<msil>addr_<name>'; a violation is
+##   '<file>: malformed export table: <what>', and a table that lists no
+##   export class (zl-nocls, M22 review r2 finding 3) is
+##   '<file>: malformed export table: no export class';
+## - a table that does not decode (another magic, a trailing byte, an
+##   unknown header flag) is an error naming the file.
+## A .NET assembly without the symbol table is a reference assembly
+## (FakeCore), and a native DLL stays a native library: neither is a library
+## input.
+## The broken libraries are Inputs/shared/zl-*.yaml (gen.py: zl.il assembled
+## by ilasm with the table symtab.py encodes, or with a part of the export
+## class left out); every one is named zl.dll in its own directory. The
+## windows-gnu libraries for the C runtime are built here, with stub import
+## libraries behind -lucrt and -lmsvcrt.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: llc -filetype=obj ret.ll -o ret.o
+# RUN: llc -filetype=obj libg.ll -o libg.o
+# RUN: llc -filetype=obj progg.ll -o progg.o
+# RUN: %python %S/Inputs/make-pe.py --dll native.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o FakeCore.dll
+# RUN: mkdir out nat stubs gu gn ok vendor envver minor gnu arm linux abi model
+# RUN: mkdir major ucrt magic trailing flags noclass private noaddr noprop nocls
+# RUN: yaml2obj %S/Inputs/shared/zl-ok.yaml -o ok/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-vendor.yaml -o vendor/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-envver.yaml -o envver/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-minor.yaml -o minor/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-gnu.yaml -o gnu/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-arm.yaml -o arm/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-linux.yaml -o linux/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-abi.yaml -o abi/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-model.yaml -o model/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-major.yaml -o major/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-ucrt.yaml -o ucrt/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-magic.yaml -o magic/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-trailing.yaml -o trailing/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-flags.yaml -o flags/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-noclass.yaml -o noclass/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-private.yaml -o private/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-noaddr.yaml -o noaddr/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-noprop.yaml -o noprop/zl.dll
+# RUN: yaml2obj %S/Inputs/shared/zl-nocls.yaml -o nocls/zl.dll
+# RUN: llvm-lib /machine:x64 /def:stub.def /out:stubs/ucrt.lib
+# RUN: llvm-lib /machine:x64 /def:stub.def /out:stubs/msvcrt.lib
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = %{fc} --implicit-check-not=error: --implicit-check-not=warning:
+
+## A valid library: it binds.
+# RUN: msil-ld prog.o ok/zl.dll -o out/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump out/prog.exe | FileCheck %s --check-prefix=OK
+# OK:     {{^}}assemblyref 'zl' ver 1.2.3.4 flags=0x00000000 key=- culture=''{{$}}
+# OK:     {{^}}    L{{[0-9]+}}: ldtoken [zl]Contoso.Zl.Native{{$}}
+# OK:     {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# OK-NEXT: {{^}}    .maxstack 2{{$}}
+# OK-NEXT: {{^}}    L0: call native int() [zl]Contoso.Zl.Native::'<msil>addr_counter'{{$}}
+# OK-NEXT: {{^}}    L1: ldind.i4{{$}}
+# OK-NEXT: {{^}}    L2: call int32(int32) [zl]Contoso.Zl.Native::'twice'{{$}}
+# OK-NEXT: {{^}}    L3: ret{{$}}
+
+## The vendor and an environment version do not count; a newer minor
+## version of the table is read.
+# RUN: msil-ld prog.o vendor/zl.dll -o vendor/prog.exe 2>&1 | count 0
+# RUN: msil-ld prog.o envver/zl.dll -o envver/prog.exe 2>&1 | count 0
+# RUN: msil-ld prog.o minor/zl.dll -o minor/prog.exe 2>&1 | count 0
+
+## The triple: environment, architecture, OS.
+# RUN: not msil-ld prog.o gnu/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=TRIPLE -DTRIPLE=x86_64-w64-windows-gnu-msil
+# RUN: not msil-ld prog.o arm/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=TRIPLE -DTRIPLE=aarch64-pc-windows-msvc-msil
+# RUN: not msil-ld prog.o linux/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=TRIPLE -DTRIPLE=x86_64-unknown-linux-gnu-msil
+# TRIPLE: {{^}}msil-ld: error: {{[a-z]+[/\\]}}zl.dll: target triple [[TRIPLE]] is incompatible with x86_64-pc-windows-msvc-msil{{$}}
+
+## The ABI version and the data model.
+# RUN: not msil-ld prog.o abi/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=ABI
+# ABI: {{^}}msil-ld: error: abi{{[/\\]}}zl.dll: toolchain ABI version 2 differs from 1 in prog.o{{$}}
+# RUN: not msil-ld prog.o model/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=MODEL
+# MODEL: {{^}}msil-ld: error: model{{[/\\]}}zl.dll: data model {{.+}} differs from {{.+}} in prog.o{{$}}
+
+## The table version.
+# RUN: not msil-ld prog.o major/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=MAJOR
+# MAJOR: {{^}}msil-ld: error: major{{[/\\]}}zl.dll: {{.*}}version 2{{.*$}}
+
+## The C runtime (ucrt in the table): -lmsvcrt is the error; -lucrt and no
+## C runtime library at all link.
+# RUN: not msil-ld prog.o ucrt/zl.dll -L stubs -lmsvcrt -o x.exe 2>&1 | %{err} --check-prefix=CRT
+# RUN: msil-ld prog.o ucrt/zl.dll -L stubs -lucrt -o ucrt/prog.exe 2>&1 | count 0
+# RUN: msil-ld prog.o ucrt/zl.dll -o ucrt/prog2.exe 2>&1 | count 0
+# CRT: {{^}}msil-ld: error: ucrt{{[/\\]}}zl.dll: C runtime 'ucrt' differs from 'msvcrt' of this link{{$}}
+
+## The same on windows-gnu, between two libraries msil-ld wrote: libg.dll
+## built with -lucrt against a program with -lmsvcrt; none matches either.
+# RUN: msil-ld -shared libg.o -L stubs -lucrt -o gu/libg.dll 2>&1 | count 0
+# RUN: msil-ld -shared libg.o -o gn/libg.dll 2>&1 | count 0
+# RUN: not msil-ld progg.o gu/libg.dll -L stubs -lmsvcrt -o x.exe 2>&1 | %{err} --check-prefix=CRT-GNU
+# CRT-GNU: {{^}}msil-ld: error: gu{{[/\\]}}libg.dll: C runtime 'ucrt' differs from 'msvcrt' of this link{{$}}
+# RUN: msil-ld progg.o gu/libg.dll -L stubs -lucrt -o gu/prog.exe 2>&1 | count 0
+# RUN: msil-ld progg.o gu/libg.dll -o gu/prog2.exe 2>&1 | count 0
+# RUN: msil-ld progg.o gn/libg.dll -L stubs -lmsvcrt -o gn/prog.exe 2>&1 | count 0
+
+## Tables that do not decode.
+# RUN: not msil-ld prog.o magic/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=DECODE -DDIR=magic
+# RUN: not msil-ld prog.o trailing/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=DECODE -DDIR=trailing
+# RUN: not msil-ld prog.o flags/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=DECODE -DDIR=flags
+# DECODE: {{^}}msil-ld: error: [[DIR]]{{[/\\]}}zl.dll: {{.*(invalid symbol table|malformed export table)}}
+
+## Export tables that do not match the metadata.
+# RUN: not msil-ld prog.o noclass/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=MALFORMED -DDIR=noclass
+# RUN: not msil-ld prog.o private/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=MALFORMED -DDIR=private
+# RUN: not msil-ld prog.o noaddr/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=MALFORMED -DDIR=noaddr
+# RUN: not msil-ld prog.o noprop/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=MALFORMED -DDIR=noprop
+# MALFORMED: {{^}}msil-ld: error: [[DIR]]{{[/\\]}}zl.dll: malformed export table: {{.+}}
+## No export class: the error, and no output (msil-ld had written a
+## program whose 'ldtoken [zl]' names no type).
+# RUN: not msil-ld ret.o nocls/zl.dll -o nocls/prog.exe 2>&1 | %{err} --check-prefix=NOCLS --implicit-check-not=ldtoken
+# RUN: not ls nocls/prog.exe
+# NOCLS: {{^}}msil-ld: error: {{.*}}zl.dll: malformed export table: no export class{{$}}
+
+## A .NET assembly without the table is a reference, not a library input:
+## no AssemblyRef, no ldtoken. A native DLL binds nothing and changes
+## nothing.
+# RUN: msil-ld ret.o FakeCore.dll -o ref.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ref.exe | FileCheck %s --check-prefix=REF --implicit-check-not=ldtoken \
+# RUN:   --implicit-check-not="assemblyref 'FakeCore'"
+# REF: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# RUN: msil-ld prog.o ok/zl.dll native.dll -o nat/prog.exe 2>&1 | count 0
+# RUN: cmp out/prog.exe nat/prog.exe
+
+#--- stub.def
+EXPORTS
+  stub_fn
+
+#--- prog.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = external global i32
+declare i32 @twice(i32)
+
+define i32 @main() {
+  %c = load i32, ptr @counter, align 4
+  %r = call i32 @twice(i32 %c)
+  ret i32 %r
+}
+
+#--- ret.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 42
+}
+
+#--- libg.ll
+target triple = "x86_64-w64-windows-gnu-msil"
+
+define i32 @g_fn() {
+  ret i32 7
+}
+
+#--- progg.ll
+target triple = "x86_64-w64-windows-gnu-msil"
+
+declare i32 @g_fn()
+
+define i32 @main() {
+  %r = call i32 @g_fn()
+  ret i32 %r
+}

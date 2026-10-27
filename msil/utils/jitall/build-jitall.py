@@ -10,6 +10,8 @@
 
     python build-jitall.py [--out DIR] [--build-dir DIR] [--dotnet PATH]
                            [--ref-major N] [--force]
+    python build-jitall.py --csharp SRC --out EXE [--reference DLL]...
+                           [--refs net8|net48] [--unsafe] [--dotnet PATH]
 
 The newest installed .NET SDK's Roslyn compiler (<sdk>/Roslyn/bincore/csc.dll)
 compiles jitall.cs against every reference assembly of the newest installed
@@ -26,7 +28,28 @@ last build, so lit can call this script on every configuration. A build is
 compiled into a temporary sibling directory that is renamed into place, so a
 concurrent run never sees a half-written jitall.dll.
 
-Exit status: 0 when jitall.dll is built or up to date, 1 on any error.
+--csharp SRC (plan 5.12.4, M22; lit's %msil_csc) compiles one other C#
+file, a program, with the same csc into --out EXE (-target:exe
+-langversion:latest -deterministic+, -unsafe+ with --unsafe, a -r: per
+--reference DLL, such as a library assembly built by this toolchain):
+  net8   (the default) against every reference assembly of the newest
+         Microsoft.NETCore.App.Ref 8.x pack ($MSIL_REF_NET8, the pack's
+         ref/net8.0 directory, names another), and writes
+         <stem>.runtimeconfig.json (tfm net8.0, Microsoft.NETCore.App 8.0.0,
+         rollForward Major) next to EXE, so 'dotnet exec EXE' runs it;
+  net48  against the .NET Framework 4.8 reference assemblies and their
+         Facades: $MSIL_REF_NET48, else the Windows reference directory
+         (%ProgramFiles(x86)%/Reference Assemblies/Microsoft/Framework/
+         .NETFramework/v4.8), else build/.NETFramework/v4.8 of the NuGet
+         package microsoft.netframework.referenceassemblies.net48 at the
+         version msil/utils/tools/msil-tools.proj pins
+         (MsilNet48RefAssembliesVersion) in a NuGet global-packages folder;
+         the EXE runs on the .NET Framework.
+It is compiled every time (no up-to-date check) and the jitall build is not
+touched. Nothing is downloaded either way.
+
+Exit status: 0 when jitall.dll is built or up to date (with --csharp: when
+EXE is compiled), 1 on any error, 2 on a usage error.
 """
 
 import argparse
@@ -36,6 +59,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -232,6 +256,208 @@ def compile_into(tmp, dotnet, csc, refdir, major):
         f.write(stamp_text(major))
 
 
+def is_assembly(path):
+    """Whether path is an assembly: a PE file with a CLI header whose
+    metadata has an Assembly row (the .NET Framework's v4.8 directory also
+    holds native DLLs and a module, System.EnterpriseServices.Thunk.dll and
+    .Wrapper.dll, which csc refuses as references)."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+        u16 = lambda o: struct.unpack_from("<H", data, o)[0]
+        u32 = lambda o: struct.unpack_from("<I", data, o)[0]
+        if data[:2] != b"MZ":
+            return False
+        pe = u32(0x3C)
+        if data[pe : pe + 4] != b"PE" + bytes(2):
+            return False
+        nsections, opt_size, opt = u16(pe + 6), u16(pe + 20), pe + 24
+        count_at, dirs_at = {0x10B: (92, 96), 0x20B: (108, 112)}.get(
+            u16(opt), (None, None)
+        )
+        if count_at is None or u32(opt + count_at) <= 14:
+            return False
+        sections = []
+        for i in range(nsections):
+            at = opt + opt_size + 40 * i
+            vsize, va, rawsize, raw = struct.unpack_from("<IIII", data, at + 8)
+            sections.append((va, max(vsize, rawsize), raw))
+
+        def offset(rva):
+            for va, size, raw in sections:
+                if va <= rva < va + size:
+                    return raw + rva - va
+            raise ValueError("RVA 0x%X lies in no section" % rva)
+
+        cli_rva = u32(opt + dirs_at + 14 * 8)
+        if not cli_rva:
+            return False
+        root = offset(u32(offset(cli_rva) + 8))
+        if u32(root) != 0x424A5342:
+            return False
+        at = root + 16 + u32(root + 12) + 2
+        count = u16(at)
+        at += 2
+        for _ in range(count):
+            off, end = u32(at), data.index(b"\0", at + 8)
+            if data[at + 8 : end] in (b"#~", b"#-"):
+                valid = struct.unpack_from("<Q", data, root + off + 8)[0]
+                return bool(valid >> 0x20 & 1)
+            at = at + 8 + ((end - (at + 8)) // 4 + 1) * 4
+        return False
+    except (OSError, ValueError, struct.error):
+        return False
+
+
+def net48_ref_dir(dotnet):
+    """The .NET Framework 4.8 reference directory for --csharp --refs net48."""
+    explicit = os.environ.get("MSIL_REF_NET48")
+    if explicit:
+        if not os.path.isfile(os.path.join(explicit, "mscorlib.dll")):
+            raise BuildError("$MSIL_REF_NET48=%s has no mscorlib.dll" % explicit)
+        return explicit
+    candidates = []
+    if IS_WINDOWS:
+        candidates.append(
+            os.path.join(
+                os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+                "Reference Assemblies",
+                "Microsoft",
+                "Framework",
+                ".NETFramework",
+                "v4.8",
+            )
+        )
+    proj = os.path.join(REPO, "msil", "utils", "tools", "msil-tools.proj")
+    try:
+        with open(proj, encoding="utf-8") as f:
+            m = re.search(
+                r"<MsilNet48RefAssembliesVersion[^>]*>\s*([0-9.]+)\s*<", f.read()
+            )
+    except OSError:
+        m = None
+    if m:
+        roots = [
+            os.environ.get("NUGET_PACKAGES"),
+            os.path.join(os.path.expanduser("~"), ".nuget", "packages"),
+        ]
+        try:
+            listing = subprocess.run(
+                [dotnet, "nuget", "locals", "global-packages", "--list"],
+                capture_output=True,
+                text=True,
+                env=child_env(),
+                timeout=120,
+            ).stdout
+            found = re.search(r"^global-packages:\s*(.+?)\s*$", listing, re.M)
+            if found:
+                roots.append(found.group(1))
+        except (OSError, subprocess.SubprocessError):
+            pass
+        candidates += [
+            os.path.join(
+                r,
+                "microsoft.netframework.referenceassemblies.net48",
+                m.group(1),
+                "build",
+                ".NETFramework",
+                "v4.8",
+            )
+            for r in roots
+            if r
+        ]
+    for c in candidates:
+        if os.path.isfile(os.path.join(c, "mscorlib.dll")):
+            return c
+    raise BuildError(
+        "no .NET Framework 4.8 reference assemblies (searched %s; set "
+        "$MSIL_REF_NET48)" % (", ".join(candidates) or "nothing")
+    )
+
+
+def compile_csharp(args, dotnet, sdk_ver, sdk_base, csc):
+    """--csharp: compile args.csharp into args.out."""
+    src, out = os.path.abspath(args.csharp), os.path.abspath(args.out)
+    if not os.path.isfile(src):
+        raise BuildError("--csharp %s: no such file" % args.csharp)
+    for r in args.reference:
+        if not os.path.isfile(r):
+            raise BuildError("--reference %s: no such file" % r)
+    if args.refs == "net8":
+        explicit = os.environ.get("MSIL_REF_NET8")
+        if explicit:
+            if not os.path.isfile(os.path.join(explicit, "System.Runtime.dll")):
+                raise BuildError(
+                    "$MSIL_REF_NET8=%s has no System.Runtime.dll" % explicit
+                )
+            pack_ver, refdirs = "from $MSIL_REF_NET8", [explicit]
+        else:
+            roots = []
+            for r in (
+                os.path.dirname(os.path.abspath(sdk_base)),
+                os.path.dirname(os.path.realpath(dotnet)),
+            ):
+                if r not in roots:
+                    roots.append(r)
+            pack_ver, refdir = find_ref_pack(roots, 8)
+            refdirs = [refdir]
+    else:
+        refdir = net48_ref_dir(dotnet)
+        pack_ver, refdirs = "v4.8", [refdir, os.path.join(refdir, "Facades")]
+    refs = []
+    for d in refdirs:
+        # v4.8 also holds native DLLs (System.EnterpriseServices.Thunk.dll).
+        refs += [
+            r for r in sorted(glob.glob(os.path.join(d, "*.dll"))) if is_assembly(r)
+        ]
+    if not refs:
+        raise BuildError("no reference assemblies in %s" % refdirs[0])
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = tempfile.mkdtemp(prefix="build-jitall-csharp-")
+    try:
+        rsp = os.path.join(tmp, "csc.rsp")
+        with open(rsp, "w", encoding="utf-8", newline="\n") as f:
+            for r in refs + [os.path.abspath(x) for x in args.reference]:
+                f.write('-r:"%s"\n' % r)
+        cmd = [dotnet, csc, "-nologo", "-noconfig", "-nostdlib+", "-target:exe"]
+        cmd += ["-langversion:latest", "-deterministic+"]
+        if args.unsafe:
+            cmd.append("-unsafe+")
+        cmd += ["-out:" + out, "@" + rsp, src]
+        try:
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=child_env(),
+                timeout=600,
+            )
+        except (OSError, subprocess.SubprocessError) as e:
+            raise BuildError("running csc failed: %s" % e)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    text = proc.stdout.decode("utf-8", errors="replace")
+    if proc.returncode != 0 or not os.path.isfile(out):
+        raise BuildError("csc failed (exit %d):\n%s" % (proc.returncode, text))
+    if text.strip():
+        sys.stdout.write(text)
+    if args.refs == "net8":
+        config = {
+            "runtimeOptions": {
+                "tfm": "net8.0",
+                "rollForward": "Major",
+                "framework": {"name": "Microsoft.NETCore.App", "version": "8.0.0"},
+            }
+        }
+        stem = os.path.splitext(out)[0]
+        with open(
+            stem + ".runtimeconfig.json", "w", encoding="utf-8", newline="\n"
+        ) as f:
+            json.dump(config, f, indent=2)
+            f.write("\n")
+    log("compiled %s (SDK %s, %s references %s)" % (out, sdk_ver, args.refs, pack_ver))
+
+
 def install(tmp, out, major):
     """Rename the finished build directory 'tmp' to 'out'.
 
@@ -283,7 +509,42 @@ def main():
         help="major version of the targeting pack and runtimeconfig (default 8)",
     )
     p.add_argument("--force", action="store_true", help="rebuild even if up to date")
+    p.add_argument(
+        "--csharp",
+        metavar="SRC",
+        help="compile this C# program into --out EXE instead of building jitall",
+    )
+    p.add_argument(
+        "--reference",
+        action="append",
+        default=[],
+        metavar="DLL",
+        help="with --csharp: an assembly the program references (repeatable)",
+    )
+    p.add_argument(
+        "--refs",
+        choices=("net8", "net48"),
+        help="with --csharp: the reference assemblies (default net8)",
+    )
+    p.add_argument("--unsafe", action="store_true", help="with --csharp: -unsafe+")
     args = p.parse_args()
+    if args.csharp is None:
+        if args.reference or args.refs or args.unsafe:
+            p.error("--reference, --refs and --unsafe go with --csharp")
+    else:
+        if not args.out:
+            p.error("--csharp needs --out EXE")
+        if args.force or args.build_dir:
+            p.error("--force and --build-dir build jitall, not a --csharp program")
+        args.refs = args.refs or "net8"
+        try:
+            dotnet = find_dotnet(args.dotnet)
+            sdk_ver, sdk_base, csc = find_csc(dotnet)
+            compile_csharp(args, dotnet, sdk_ver, sdk_base, csc)
+        except BuildError as e:
+            sys.stderr.write("build-jitall: error: %s\n" % e)
+            return 1
+        return 0
 
     out = os.path.abspath(
         args.out or default_out_dir(args.build_dir or default_build_dir())

@@ -19,7 +19,8 @@
 // payloads of CIL objects (an InputMethod for a DefinedFunction, an
 // InputSegment, offset and size for a DefinedData, a SyntheticSegment for a
 // common symbol), the local symbols of CIL objects (STB_LOCAL, never in the
-// symbol table) and SyntheticData; M22 adds the managed late-bound kinds.
+// symbol table) and SyntheticData; M22 adds the managed late-bound kinds
+// (ManagedFunction, ManagedData; plan 5.9.6 step 1, 5.9.15).
 //
 //===----------------------------------------------------------------------===//
 
@@ -40,6 +41,7 @@ class InputFile;
 class InputMethod;
 class InputSegment;
 class SyntheticSegment;
+struct ManagedExport;
 struct NativeExport;
 class Undefined;
 class CommonSymbol;
@@ -72,6 +74,12 @@ public:
     // (__start_X and __stop_X, plan 5.9.9), which the writer defines through
     // SymbolTable::addSyntheticData() after the layout.
     SyntheticDataKind,
+    // Late-bound exports of libraries built by this toolchain (plan 5.9.6
+    // step 1, 5.9.15), which SymbolTable::bindLateSymbols() creates before
+    // it looks at the native libraries, and which never enter the table
+    // through resolution either.
+    ManagedFunctionKind,
+    ManagedDataKind,
   };
 
   Kind kind() const { return static_cast<Kind>(symbolKind); }
@@ -167,6 +175,9 @@ public:
   bool isLazy() const { return symbolKind == LazyKind; }
   bool isNative() const {
     return symbolKind == NativeFunctionKind || symbolKind == NativeDataKind;
+  }
+  bool isManaged() const {
+    return symbolKind == ManagedFunctionKind || symbolKind == ManagedDataKind;
   }
 
   bool isGlobal() const { return binding == llvm::ELF::STB_GLOBAL; }
@@ -477,6 +488,60 @@ public:
   static bool classof(const Symbol *s) { return s->kind() == NativeDataKind; }
 };
 
+// An export of a library built by this toolchain (a ManagedLibraryFile, plan
+// 5.9.15) that late binding chose for a symbol that no input defines (plan
+// 5.9.6 step 1): the first library in command-line order that exports the
+// name. It keeps the symbol's binding and visibility; its file is the
+// library. Like a native definition it never preempts a definition or
+// extracts an archive member. The output reaches it through MemberRefs on
+// the library's export class: a call names the exported method, and an
+// address calls its '<msil>addr_<name>' accessor (plan 5.9.7).
+class ManagedSymbol : public Symbol {
+public:
+  static bool classof(const Symbol *s) { return s->isManaged(); }
+
+  void overwrite(Symbol &sym) const {
+    Symbol::overwrite(sym, kind());
+    static_cast<ManagedSymbol &>(sym).managedExport = managedExport;
+  }
+
+  // The export: its library, class, kind, methods, signature and flags.
+  const ManagedExport *managedExport;
+
+protected:
+  ManagedSymbol(Kind k, InputFile *file, StringRef name, uint8_t binding,
+                uint8_t visibility, uint8_t type,
+                const ManagedExport *managedExport)
+      : Symbol(k, file, name, binding, visibility, type, /*tls=*/false),
+        managedExport(managedExport) {}
+};
+
+// An exported function: a public static method of the library's export
+// class.
+class ManagedFunction : public ManagedSymbol {
+public:
+  ManagedFunction(InputFile *file, StringRef name, uint8_t binding,
+                  uint8_t visibility, const ManagedExport *managedExport)
+      : ManagedSymbol(ManagedFunctionKind, file, name, binding, visibility,
+                      llvm::ELF::STT_FUNC, managedExport) {}
+
+  static bool classof(const Symbol *s) {
+    return s->kind() == ManagedFunctionKind;
+  }
+};
+
+// An exported variable: a property of the library's export class whose
+// getter '<msil>addr_<name>' returns its address.
+class ManagedData : public ManagedSymbol {
+public:
+  ManagedData(InputFile *file, StringRef name, uint8_t binding,
+              uint8_t visibility, const ManagedExport *managedExport)
+      : ManagedSymbol(ManagedDataKind, file, name, binding, visibility,
+                      llvm::ELF::STT_OBJECT, managedExport) {}
+
+  static bool classof(const Symbol *s) { return s->kind() == ManagedDataKind; }
+};
+
 // A buffer class that is large enough to hold any Symbol-derived
 // object. SymbolTable::insert() allocates every table entry as one, so that
 // overwrite() can turn the entry into a symbol of any kind.
@@ -489,6 +554,8 @@ union SymbolUnion {
   alignas(NativeFunction) char f[sizeof(NativeFunction)];
   alignas(NativeData) char g[sizeof(NativeData)];
   alignas(SyntheticData) char h[sizeof(SyntheticData)];
+  alignas(ManagedFunction) char i[sizeof(ManagedFunction)];
+  alignas(ManagedData) char j[sizeof(ManagedData)];
 };
 
 // It is important to keep the size of SymbolUnion small for performance and

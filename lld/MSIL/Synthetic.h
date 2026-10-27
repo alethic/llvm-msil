@@ -19,9 +19,11 @@
 // The writer collects every method and field first, in row order (5.9.12:
 // the kept methods by object in link order and row order, then the
 // linker-made members in first-use order, then the trailer's), names them,
-// distributes them over '<Module>' and the spill classes, and only then adds
-// the rows: a cli::MetadataBuilder groups member rows by owner, and every
-// body that names a member is encoded after MetadataBuilder::finalize().
+// distributes them over '<Module>', the spill classes and, in a -shared
+// output, the classes of plan 5.9.15 (the export class, '<msil>Data' and
+// '<msil>SymbolTable'), and only then adds the rows: a cli::MetadataBuilder
+// groups member rows by owner, and every body that names a member is encoded
+// after MetadataBuilder::finalize().
 //
 //===----------------------------------------------------------------------===//
 
@@ -56,13 +58,29 @@ class InputMethod;
 class ObjFile;
 class Symbol;
 
+// The class that a member of the output belongs to before the writer
+// distributes the members (plan 5.9.12, 5.9.15).
+enum class OutputClass : uint8_t {
+  // '<Module>', or past its per-type limits a '<msil>Spill<N>' class.
+  Module,
+  // '<msil>Data' of a -shared output: the trailer's phase 1 and the fields
+  // that it stores; past the field limit, fields go to the spill classes.
+  Data,
+  // The export class of a -shared output: the exported functions, the alias
+  // forwarders and the '<msil>addr_' accessors (never spilled).
+  Export,
+  // '<msil>SymbolTable', the attribute class of a -shared output.
+  SymbolTable,
+};
+
 // A method of the output assembly.
 struct OutputMethod {
   enum Kind : uint8_t {
     // A kept method of a CIL object or an LTO object: its body is copied
     // with the token operands renumbered (plan 5.9.7).
     Object,
-    // '<msil>adapt_<name>_<n>' (plan 5.9.8).
+    // '<msil>adapt_<name>_<n>' (plan 5.9.8): a local adapter calls a method
+    // of the output, a library adapter a library's MemberRef (see target).
     Adapter,
     // '<msil>undef_<name>', the call of an undefined weak function (plan
     // 5.9.6 step 3).
@@ -72,13 +90,19 @@ struct OutputMethod {
     // A method of the trailer: '<msil>dataimport', '<msil>init_dataimports',
     // '.cctor', '<msil>Main' (plan 5.9.10).
     Trailer,
+    // A method that a -shared output adds (plan 5.9.15): the forwarding
+    // method of an exported function alias, an '<msil>addr_' accessor, the
+    // constructor of '<msil>SymbolTable', and under --interface-only the
+    // stub of an exported function.
+    Export,
   };
 
   explicit OutputMethod(Kind k) : kind(k) {}
 
   Kind kind;
   // The name; Writer.cpp renames the renamable ones that collide (plan
-  // 5.9.12) and names the adapters.
+  // 5.9.12) and names the local adapters. A library adapter arrives named
+  // from CallBinder::bindManaged.
   std::string name;
   // True for a LOCAL method, and for the method of a definition that lost
   // resolution but stays because a winning alias lies in it.
@@ -89,18 +113,30 @@ struct OutputMethod {
   llvm::cli::MethodSig sig;
   // Object: the input method.
   InputMethod *input = nullptr;
-  // Adapter: the method it calls and its number (n from 0 per definition).
+  // Adapter. A local adapter (CallBinder::bindCall): the method of the output
+  // that it calls and its number (n from 0 per definition), from which
+  // Writer.cpp names it. A library adapter (CallBinder::bindManaged) calls a
+  // library's MemberRef: target is OutputField::NoMethod, which alone tells
+  // the two kinds apart, adapterNumber is unused, and its name
+  // '<msil>adapt_<export>_<n>' (n from 0 per export) is final when made.
   uint32_t target = 0;
   uint32_t adapterNumber = 0;
   // PInvoke: the module (the ModuleRef, verbatim) and the entry (the
   // ImplMap import name).
   std::string module, entry;
-  // Adapter, TrapStub and Trailer: the body, laid out, whose token operands
-  // are TokenRef::getExternal(<entity>).
+  // Adapter, TrapStub, Trailer and Export: the body, laid out, whose token
+  // operands are TokenRef::getExternal(<entity>).
   std::unique_ptr<llvm::cli::ILBuilder> body;
   // The StandAloneSig token of the body's locals, or 0.
   uint32_t localSigToken = 0;
-  // 0 for '<Module>', n for '<msil>Spill<n>'.
+  // The class of the method before distribution.
+  OutputClass cls = OutputClass::Module;
+  // True if the method gets a Param row named 'A_<i>' (Flags 0) for each
+  // parameter i from 0 (plan 5.9.15: the methods of the export class and
+  // the constructor of '<msil>SymbolTable').
+  bool namedParams = false;
+  // The writer's index of the class that holds the method: 0 for
+  // '<Module>', n for '<msil>Spill<n>', then the classes of plan 5.9.15.
   uint32_t owner = 0;
   llvm::cli::EntityHandle handle;
 };
@@ -117,7 +153,8 @@ struct OutputField {
     // The address field of a native data import (plan 5.10.12), stored by
     // '<msil>init_dataimports'.
     DataImport,
-    // '<msil>data', '<msil>image', '<msil>relocs' (plan 5.9.10).
+    // '<msil>data', '<msil>image', '<msil>relocs' (plan 5.9.10), and
+    // '<msil>argc' and '<msil>argv' (cli::TrailerInput::CtorArgs).
     Trailer,
   };
 
@@ -146,6 +183,9 @@ struct OutputField {
   // field, or -1.
   llvm::cli::FieldAttributes flags{};
   int32_t rva = -1;
+  // The class of the field before distribution, and the writer's index of
+  // the class that holds it (OutputMethod::owner).
+  OutputClass cls = OutputClass::Module;
   uint32_t owner = 0;
   llvm::cli::EntityHandle handle;
 };
@@ -305,10 +345,16 @@ getBCLMemberRequest(llvm::cli::BCLMemberId id,
 
 // The trailer sink of msil-ld (plan 5.9.10): the trailer's methods, fields,
 // RVA data, BCL members and strings become entries of an OutputModule; the
-// writer adds their rows with the others.
+// writer adds their rows with the others. Each method goes to the class of
+// its cli::TrailerMethod::Owner. For a two-phase output (\p twoPhase, a
+// -shared library, plan 5.9.15) '<msil>data' belongs to '<msil>Data', and
+// it and the RVA fields '<msil>image' and '<msil>relocs', which stay in
+// '<Module>', are 'assembly', because '<msil>Data'::.cctor and
+// '<Module>'::.cctor both use them.
 class RowTrailerSink : public llvm::cli::TrailerSink {
 public:
-  explicit RowTrailerSink(OutputModule &out) : out(out) {}
+  explicit RowTrailerSink(OutputModule &out, bool twoPhase = false)
+      : out(out), twoPhase(twoPhase) {}
 
   llvm::cli::EntityRef getDataField() override;
   llvm::cli::EntityRef addRVAData(StringRef typeName, StringRef fieldName,
@@ -317,12 +363,16 @@ public:
   llvm::cli::EntityRef declareHelper(StringRef name,
                                      const llvm::cli::MethodSig &sig) override;
   llvm::cli::EntityRef addUserString(StringRef utf8) override;
+  llvm::cli::EntityRef addTrailerField(StringRef name) override;
   void emitMethod(const llvm::cli::TrailerMethod &m) override;
 
 private:
   OutputModule &out;
+  bool twoPhase;
   std::optional<uint32_t> dataField;
-  llvm::StringMap<uint32_t> helpers;
+  // The helpers that declareHelper() made and emitMethod() has not defined
+  // yet, by name.
+  llvm::StringMap<uint32_t> declared;
 };
 } // namespace lld::msil
 

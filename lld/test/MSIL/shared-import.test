@@ -1,0 +1,378 @@
+## A program linked against libraries (ImplementationPlan.md M22.c items 1,
+## 3, 5, 6 and 7, M22.b items 1 and 3; 5.9.6 step 1, 5.9.7, 5.9.10, 5.9.15;
+## recon p2/exports-multiasm.md 10.2):
+## - a positional library built by msil-ld -shared is a library input; its
+##   exports bind late, by symbol name, to undefined symbols (weak ones too),
+##   and --trace-symbol prints '<lib>: managed definition of <s>';
+## - a call becomes a MemberRef on the library's export class
+##   ([lib]lib::twice) with the library's signature;
+## - where the object reads a '<msil>Symbols' field or a '<msil>FnAddr'
+##   placeholder with ldsfld, the output calls [lib]lib::'<msil>addr_<s>'()
+##   (signature 00 00 18) instead: the opcode becomes call, both forms are 5
+##   bytes with stack effect 0 to 1, so the instruction count and .maxstack
+##   stay; never an ldftn of a library method;
+## - every data relocation whose target is a library export becomes a
+##   cross-assembly relocation, stored in '.cctor' after the ldtokens, in
+##   site order: ldsfld '<msil>data', ldc.i4 site, add, call the accessor,
+##   the addend (ldc.i4, add), conv.i4 for 4 bytes, unaligned. 1 when the
+##   site is misaligned, stind.i or stind.i4 (ADDR64 with and without an
+##   addend, FNADDR64, ADDR32, FNADDR32, a misaligned ADDR64);
+## - one AssemblyRef per library: its name and version, Flags 0, no key or
+##   token, its culture; an unused library gets its AssemblyRef and its
+##   'ldtoken [unused]unused' too;
+## - any other opcode on such a token is
+##   '<file>: unsupported use of imported symbol '<s>' in '<m>' at IL offset <n>'
+##   (bad-use.il is llc's object-form text of bad.ll, -msil-object-form,
+##   with the ldsfld at IL offset 3 changed to ldsflda by hand; the record
+##   does not change);
+## - a symbol difference (a DIFF relocation, either operand) against a
+##   symbol that a library exports is
+##   'symbol difference '<a>' - '<b>' in <file> refers to a symbol of <lib>'
+##   (M22.c item 6), for an EXE and for a -shared output, and no output is
+##   written: two assemblies' data have no fixed distance;
+## - declarations with import attributes (5.9.6 step 1, M22.c item 5): a
+##   function or variable with only msil-import-name (C's import_name; an
+##   msil.unresolved stub) binds late by its symbol name, never by its import
+##   name (named binds to the library's named, not other_name; v_name to
+##   '<msil>addr_v_name', not bar), while an EXPLICIT_IMPORT function
+##   (msil-import-module and msil-import-name) and IMPORT data with a module
+##   skip step 1 and stay native although the library exports their names
+##   (expl stays a P/Invoke of native.dll, v_mod a data import of
+##   mylib.dll!v_entry read through its '<Module>' field).
+## The image of prog.o: pre (0), pc (8), ft (16), pa (24), n4 (32), f4
+## (36), pk (40, 9 bytes, its pointer at 41), then the zero part, fp (56).
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj unused.ll -o unused.o
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: msil-ld -shared lib.o --assembly-version=1.2.3.4 -o lib.dll 2>&1 | count 0
+# RUN: msil-ld -shared unused.o -o unused.dll 2>&1 | count 0
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+
+# RUN: msil-ld prog.o lib.dll unused.dll -o prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog.exe > prog.txt
+# RUN: FileCheck %s --check-prefix=HEAD --input-file=prog.txt --implicit-check-not=ldftn \
+# RUN:   --implicit-check-not=msil.extern --implicit-check-not='<msil>Symbols' --implicit-check-not='<msil>FnAddr'
+# HEAD:      {{^}}entrypoint int32(string[]) '<Module>'::'<msil>Main'{{$}}
+# HEAD-NEXT: {{^}}assembly 'prog' ver 0.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-{{$}}
+# HEAD-NEXT: {{^}}module 'prog.exe'{{$}}
+# HEAD-NEXT: {{^}}assemblyref 'lib' ver 1.2.3.4 flags=0x00000000 key=- culture=''{{$}}
+# HEAD-NEXT: {{^}}assemblyref 'mscorlib' ver 4.0.0.0 flags=0x00000000 key=B7 7A 5C 56 19 34 E0 89 culture=''{{$}}
+# HEAD-NEXT: {{^}}assemblyref 'unused' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# HEAD-EMPTY:
+
+## main: the same instructions, with calls of the accessors and the
+## library's function.
+# RUN: %{listing} method prog.txt '<Module>' main | FileCheck %s --check-prefix=MAIN
+# MAIN:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# MAIN-NEXT: {{^}}    .maxstack 3{{$}}
+# MAIN-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'fp'{{$}}
+# MAIN-NEXT: {{^}}    L1: call native int() [lib]lib::'<msil>addr_twice'{{$}}
+# MAIN-NEXT: {{^}}    L2: stind.i{{$}}
+# MAIN-NEXT: {{^}}    L3: call native int() [lib]lib::'<msil>addr_counter'{{$}}
+# MAIN-NEXT: {{^}}    L4: ldind.i4{{$}}
+# MAIN-NEXT: {{^}}    L5: call int32(int32) [lib]lib::'twice'{{$}}
+# MAIN-NEXT: {{^}}    L6: call native int() [lib]lib::'<msil>addr_arr'{{$}}
+# MAIN-NEXT: {{^}}    L7: ldc.i4.4{{$}}
+# MAIN-NEXT: {{^}}    L8: add{{$}}
+# MAIN-NEXT: {{^}}    L9: ldind.i4{{$}}
+# MAIN-NEXT: {{^}}    L10: add{{$}}
+# MAIN:      {{^}}    L32: call int32() [lib]lib::'wkfn'{{$}}
+# MAIN:      {{^}}    L{{[0-9]+}}: ret{{$}}
+
+## '.cctor': the M20 part, the ldtokens in command-line order, the
+## cross-assembly relocations in site order.
+# RUN: %{listing} method prog.txt '<Module>' .cctor | FileCheck %s --check-prefix=CCTOR
+# CCTOR:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# CCTOR-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# CCTOR-NEXT: {{^}}    L0: ldc.i4.s 79{{$}}
+# CCTOR:      {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'fp'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldtoken [lib]lib{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: pop{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldtoken [unused]unused{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: pop{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.8{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: call native int() [lib]lib::'<msil>addr_counter'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: stind.i{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.s 16{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: call native int() [lib]lib::'<msil>addr_twice'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: stind.i{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.s 24{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: call native int() [lib]lib::'<msil>addr_arr'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.8{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: stind.i{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.s 32{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: call native int() [lib]lib::'<msil>addr_counter'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: conv.i4{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: stind.i4{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.s 36{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: call native int() [lib]lib::'<msil>addr_twice'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: conv.i4{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: stind.i4{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.s 41{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: call native int() [lib]lib::'<msil>addr_counter'{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: unaligned. 1{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: stind.i{{$}}
+# CCTOR-NEXT: {{^}}    L{{[0-9]+}}: ret{{$}}
+# CCTOR-NOT:  {{.}}
+
+## The rows: the accessors' MemberRefs (00 00 18), the function's with the
+## library's signature, the export classes' TypeRefs, the AssemblyRefs.
+# RUN: llvm-cil-dump --tables prog.exe | FileCheck %s --check-prefix=TABLES
+# TABLES-DAG: {{^}}  TypeRef[{{[0-9]+}}]: ResolutionScope=0x23{{[0-9A-F]+}} TypeName='lib' TypeNamespace=''{{$}}
+# TABLES-DAG: {{^}}  TypeRef[{{[0-9]+}}]: ResolutionScope=0x23{{[0-9A-F]+}} TypeName='unused' TypeNamespace=''{{$}}
+# TABLES-DAG: {{^}}  MemberRef[{{[0-9]+}}]: Class=0x01{{[0-9A-F]+}} Name='twice' Signature=00 01 08 08{{$}}
+# TABLES-DAG: {{^}}  MemberRef[{{[0-9]+}}]: Class=0x01{{[0-9A-F]+}} Name='<msil>addr_counter' Signature=00 00 18{{$}}
+# TABLES-DAG: {{^}}  MemberRef[{{[0-9]+}}]: Class=0x01{{[0-9A-F]+}} Name='<msil>addr_twice' Signature=00 00 18{{$}}
+# TABLES-DAG: {{^}}  MemberRef[{{[0-9]+}}]: Class=0x01{{[0-9A-F]+}} Name='<msil>addr_arr' Signature=00 00 18{{$}}
+# TABLES-DAG: {{^}}  AssemblyRef[{{[0-9]+}}]: MajorVersion=0x0001 MinorVersion=0x0002 BuildNumber=0x0003 RevisionNumber=0x0004 Flags=0x00000000 PublicKeyOrToken=- Name='lib' Culture='' HashValue=-{{$}}
+# TABLES-DAG: {{^}}  AssemblyRef[{{[0-9]+}}]: MajorVersion=0x0000 MinorVersion=0x0000 BuildNumber=0x0000 RevisionNumber=0x0000 Flags=0x00000000 PublicKeyOrToken=- Name='unused' Culture='' HashValue=-{{$}}
+
+## --trace-symbol: the library binds counter late.
+# RUN: msil-ld prog.o lib.dll unused.dll -o trace.exe --trace-symbol=counter 2>&1 \
+# RUN:   | %{fc} --check-prefix=TRACE --implicit-check-not=error: --implicit-check-not=warning:
+# TRACE: {{^}}prog.o: reference to counter{{$}}
+# TRACE: {{^}}lib.dll: managed definition of counter{{$}}
+
+## Any other use of an imported symbol than ldsfld (in a library that links
+## against lib.dll).
+# RUN: %if ilasm %{ %ilasm-verify -output=bad-use.o bad-use.il %}
+# RUN: %if ilasm %{ not msil-ld -shared bad-use.o lib.dll -o x.dll 2>&1 | %{fc} --check-prefix=BAD-USE --implicit-check-not=error: %}
+# BAD-USE: {{^}}msil-ld: error: bad-use.o: unsupported use of imported symbol 'counter' in 'f' at IL offset 3{{$}}
+
+## A symbol difference against a library export: counter - own (8 bytes)
+## and own - counter (4 bytes), each reported.
+# RUN: llc -filetype=obj diff.ll -o diff.o
+# RUN: mkdir diff
+# RUN: not msil-ld diff.o lib.dll -o diff/prog.exe 2>&1 \
+# RUN:   | %{fc} --check-prefix=DIFF --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: not ls diff/prog.exe
+# RUN: not msil-ld -shared diff.o lib.dll -o diff/prog.dll 2>&1 \
+# RUN:   | %{fc} --check-prefix=DIFF --implicit-check-not=error: --implicit-check-not=warning:
+# RUN: not ls diff/prog.dll
+# DIFF-DAG: {{^}}msil-ld: error: symbol difference 'counter' - 'own' in diff.o refers to a symbol of lib.dll{{$}}
+# DIFF-DAG: {{^}}msil-ld: error: symbol difference 'own' - 'counter' in diff.o refers to a symbol of lib.dll{{$}}
+
+## Import attributes against attrlib.dll, which exports every name involved:
+## twice, named, other_name, expl, v_mod, v_name and bar.
+# RUN: llc -filetype=obj attrlib.ll -o attrlib.o
+# RUN: llc -filetype=obj attr.ll -o attr.o
+# RUN: msil-ld -shared attrlib.o -o attrlib.dll 2>&1 | count 0
+# RUN: msil-ld attr.o attrlib.dll -o attr.exe 2>&1 | count 0
+# RUN: llvm-cil-dump attr.exe > attr.txt
+# RUN: FileCheck %s --check-prefix=ATTR --input-file=attr.txt --implicit-check-not=other_name \
+# RUN:   --implicit-check-not="'bar'" --implicit-check-not=addr_bar --implicit-check-not=addr_v_mod \
+# RUN:   --implicit-check-not=addr_expl --implicit-check-not="[attrlib]attrlib::'expl'" \
+# RUN:   --implicit-check-not="[attrlib]attrlib::'v_mod'"
+# ATTR:      {{^}}assemblyref 'attrlib' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# ATTR:      {{^}}moduleref 'native.dll'{{$}}
+# ATTR:      {{^}}.class '<Module>' flags=0x00000000{{$}}
+# ATTR-NEXT: {{^}}  .field 'v_mod' native int flags=0x0016{{$}}
+# ATTR:      {{^}}  .method '<msil>init_dataimports' void() flags=0x0091 impl=0x0000{{$}}
+# ATTR-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# ATTR-NEXT: {{^}}    L0: ldstr "mylib.dll"{{$}}
+# ATTR-NEXT: {{^}}    L1: ldstr "v_entry"{{$}}
+# ATTR-NEXT: {{^}}    L2: call native int(string, string) '<Module>'::'<msil>dataimport'{{$}}
+# ATTR:      {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'v_mod'{{$}}
+# ATTR:      {{^}}  .method 'expl' int32(int32) flags=0x2093 impl=0x0080{{$}}
+# ATTR-NEXT: {{^}}    .pinvokeimpl 'native.dll' entry 'expl' flags=0x0201{{$}}
+# ATTR-NEXT: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# ATTR:      {{^}}    L{{[0-9]+}}: call int32(int32) [attrlib]attrlib::'twice'{{$}}
+# ATTR:      {{^}}    L{{[0-9]+}}: call int32(int32) [attrlib]attrlib::'named'{{$}}
+# ATTR:      {{^}}    L{{[0-9]+}}: call int32(int32) '<Module>'::'expl'{{$}}
+# ATTR:      {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'v_mod'{{$}}
+# ATTR:      {{^}}    L{{[0-9]+}}: call native int() [attrlib]attrlib::'<msil>addr_v_name'{{$}}
+
+#--- lib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = global i32 5, align 4
+@arr = global [4 x i32] [i32 1, i32 2, i32 3, i32 4], align 4
+
+define i32 @twice(i32 %x) {
+  %r = shl i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @wkfn() {
+  ret i32 9
+}
+
+#--- unused.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @nothing() {
+  ret i32 0
+}
+
+#--- prog.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = external global i32
+@arr = external global [4 x i32]
+declare i32 @twice(i32)
+declare extern_weak i32 @wkfn()
+
+@pre = global i64 1, align 8
+@pc = global ptr @counter, align 8
+@ft = global ptr @twice, align 8
+@pa = global ptr getelementptr (i8, ptr @arr, i64 8), align 8
+@n4 = global i32 ptrtoint (ptr @counter to i32), align 4
+@f4 = global i32 ptrtoint (ptr @twice to i32), align 4
+@pk = global <{ i8, ptr }> <{ i8 1, ptr @counter }>, align 1
+@fp = global ptr null, align 8
+
+define i32 @main() {
+  store ptr @twice, ptr @fp, align 8
+  %c = load i32, ptr @counter, align 4
+  %r = call i32 @twice(i32 %c)
+  %q = getelementptr i8, ptr @arr, i64 4
+  %d = load i32, ptr %q, align 4
+  %s = add i32 %r, %d
+  %v1 = load i64, ptr @pre, align 8
+  %v2 = load ptr, ptr @pc, align 8
+  %v3 = load ptr, ptr @ft, align 8
+  %v4 = load ptr, ptr @pa, align 8
+  %v5 = load i32, ptr @n4, align 4
+  %v6 = load i32, ptr @f4, align 4
+  %v7 = load i8, ptr @pk, align 1
+  %t1 = trunc i64 %v1 to i32
+  %t2 = ptrtoint ptr %v2 to i32
+  %t3 = ptrtoint ptr %v3 to i32
+  %t4 = ptrtoint ptr %v4 to i32
+  %t7 = zext i8 %v7 to i32
+  %a1 = add i32 %s, %t1
+  %a2 = add i32 %a1, %t2
+  %a3 = add i32 %a2, %t3
+  %a4 = add i32 %a3, %t4
+  %a5 = add i32 %a4, %v5
+  %a6 = add i32 %a5, %v6
+  %a7 = add i32 %a6, %t7
+  %w = call i32 @wkfn()
+  %a8 = add i32 %a7, %w
+  ret i32 %a8
+}
+
+#--- bad.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = external global i32
+
+define i32 @f(i32 %x) {
+  %y = mul i32 %x, 3
+  %c = load i32, ptr @counter, align 4
+  %d = add i32 %y, %c
+  ret i32 %d
+}
+
+#--- diff.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = external global i32
+@own = global i32 1, align 4
+@d = global i64 sub (i64 ptrtoint (ptr @counter to i64), i64 ptrtoint (ptr @own to i64)), align 8
+@r = global i32 trunc (i64 sub (i64 ptrtoint (ptr @own to i64), i64 ptrtoint (ptr @counter to i64)) to i32), align 4
+
+define i32 @main() {
+  %v = load i64, ptr @d, align 8
+  %t = trunc i64 %v to i32
+  %w = load i32, ptr @r, align 4
+  %s = add i32 %t, %w
+  ret i32 %s
+}
+
+#--- attrlib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@v_mod = global i32 11, align 4
+@v_name = global i32 22, align 4
+@bar = global i32 33, align 4
+
+define i32 @twice(i32 %x) {
+  %r = shl i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @named(i32 %x) {
+  ret i32 %x
+}
+
+define i32 @other_name(i32 %x) {
+  %r = add i32 %x, 100
+  ret i32 %r
+}
+
+define i32 @expl(i32 %x) {
+  %r = add i32 %x, 200
+  ret i32 %r
+}
+
+#--- attr.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@v_mod = external global i32 #2
+@v_name = external global i32 #3
+
+declare i32 @twice(i32)
+declare i32 @named(i32) #0
+declare i32 @expl(i32) #1
+
+define i32 @main() {
+  %a = call i32 @twice(i32 1)
+  %b = call i32 @named(i32 2)
+  %c = call i32 @expl(i32 3)
+  %m = load i32, ptr @v_mod, align 4
+  %n = load i32, ptr @v_name, align 4
+  %s = add i32 %a, %b
+  %t = add i32 %s, %c
+  %u = add i32 %t, %m
+  %v = add i32 %u, %n
+  ret i32 %v
+}
+
+attributes #0 = { "msil-import-name"="other_name" }
+attributes #1 = { "msil-import-module"="native.dll" "msil-import-name"="expl" }
+attributes #2 = { "msil-import-module"="mylib.dll" "msil-import-name"="v_entry" }
+attributes #3 = { "msil-import-name"="bar" }
+
+#--- bad-use.il
+// MSIL object generated by LLVM (llc -msil-object-form bad.ll), with the
+// ldsfld of counter changed to ldsflda by hand.
+// source_filename = "bad.ll"
+// target triple   = "x86_64-pc-windows-msvc-msil"
+.assembly extern 'msil.extern' { .ver 0:0:0:0 }
+.assembly extern 'msil.bcl' { .ver 0:0:0:0 }
+.assembly extern 'msil.link' { .ver 0:0:0:0 }
+
+.method public static int32 'f'(int32) cil managed
+{
+  .maxstack 3
+  ldarg.0
+  ldc.i4.3
+  mul
+  ldsflda native int [msil.extern]'<msil>Symbols'::'counter'
+  ldind.i4
+  add
+  ret
+} // end of method 'f'
+
+.module 'bad.ll'
+.custom instance void [msil.link]'<msil>LinkInfo'::.ctor(uint8[]) = ( 01 00 3F 00 00 00 4D 53 4C 4B 01 00 00 1B 78 38 36 5F 36 34 2D 70 63 2D 77 69 6E 64 6F 77 73 2D 6D 73 76 63 2D 6D 73 69 6C 01 00 00 08 04 02 08 01 13 02 01 10 07 63 6F 75 6E 74 65 72 00 00 01 66 01 00 00 06 00 00 )

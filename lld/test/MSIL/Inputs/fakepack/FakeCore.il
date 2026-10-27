@@ -7,12 +7,14 @@
 //
 // Like System.Runtime in the .NET 8 pack it holds the core half of
 // BCLMembers.def (System.ValueType, Environment, Buffer, Object and
-// EntryPointNotFoundException), System.Exception for exception clauses, and
-// the attribute and modifier types the rest of the pack uses. Its key is the
+// EntryPointNotFoundException), System.Exception for exception clauses,
+// System.Attribute, System.AttributeUsageAttribute and System.AttributeTargets
+// for the symbol-table attribute class of M22's libraries, and the attribute
+// and modifier types the rest of the pack uses. Its key is the
 // one of the .NET packs (token b03f5f7f11d50a3a). Bodies throw, as in a
 // reference assembly.
 //
-// gen.py builds two variants with '#define', both named FakeCore:
+// gen.py builds three variants with '#define', all named FakeCore:
 //   FakeCoreNoCtor    NOCTOR    EntryPointNotFoundException has .ctor() only,
 //                               while its base System.Exception keeps
 //                               .ctor(string): constructors are not inherited
@@ -20,6 +22,12 @@
 //                               amended (the base-type member search)')
 //   FakeCoreNoInAttr  NOINATTR  no System.Runtime.InteropServices.InAttribute,
 //                               the modreq type of FakeInteropMods
+//   FakeCoreFamCtor   FAMCTOR   EntryPointNotFoundException::.ctor(string) is
+//                               family (protected): only msil-ld's own
+//                               System.Attribute::.ctor() request counts a
+//                               family constructor (section 12, '5.11.4
+//                               clarified (msil-ld's own System.Attribute
+//                               constructor call)')
 .mscorlib
 .assembly FakeCore
 {
@@ -66,6 +74,27 @@
 {
   .method family hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
 }
+// M22: the attribute class '<msil>SymbolTable' of a library that msil-ld
+// -shared writes extends System.Attribute and carries
+// AttributeUsage(AttributeTargets.Assembly) { AllowMultiple = true }
+// (ImplementationPlan.md 5.9.15, M22.a item 6), as in the .NET 8 pack.
+.class public auto ansi sealed beforefieldinit System.AttributeUsageAttribute extends System.Attribute
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor(valuetype System.AttributeTargets validOn)
+          cil managed { ldnull throw }
+  .method public hidebysig specialname instance bool get_AllowMultiple() cil managed { ldnull throw }
+  .method public hidebysig specialname instance void set_AllowMultiple(bool 'value') cil managed { ldnull throw }
+  .property instance bool AllowMultiple()
+  {
+    .get instance bool System.AttributeUsageAttribute::get_AllowMultiple()
+    .set instance void System.AttributeUsageAttribute::set_AllowMultiple(bool)
+  }
+}
+.class public auto ansi sealed System.AttributeTargets extends System.Enum
+{
+  .field public specialname rtspecialname int32 value__
+  .field public static literal valuetype System.AttributeTargets Assembly = int32(1)
+}
 
 .class public auto ansi beforefieldinit System.Exception extends System.Object
 {
@@ -75,7 +104,11 @@
 {
   .method public hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
 #ifndef NOCTOR
+#ifdef FAMCTOR
+  .method family hidebysig specialname rtspecialname instance void .ctor(string message) cil managed { ldnull throw }
+#else
   .method public hidebysig specialname rtspecialname instance void .ctor(string message) cil managed { ldnull throw }
+#endif
 #endif
 }
 .class public abstract auto ansi sealed beforefieldinit System.Environment extends System.Object

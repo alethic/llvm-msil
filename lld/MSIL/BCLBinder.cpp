@@ -818,7 +818,9 @@ bool BCLBinder::Impl::requiresPreview(const ReferenceAssemblyFile &file,
 // whatever its accessibility, checking access afterwards: so a non-public
 // method of exactly the match's signature in \p parent or a type between it
 // and the match hides the match, and the request is undefined. The hiding
-// rule concerns methods only.
+// rule concerns methods only. One exception to 'only public members count',
+// section 12's '5.11.4 clarified (msil-ld's own System.Attribute
+// constructor call)': see familyCtorCounts below.
 Expected<MemberDefinition>
 BCLBinder::Impl::resolveMember(const BCLRequest &r,
                                const TypeDefinition &parent) {
@@ -836,6 +838,20 @@ BCLBinder::Impl::resolveMember(const BCLRequest &r,
                        (!isField && (member == ".ctor" || member == ".cctor"));
   // Constructors and fields are searched in \p parent only.
   bool searchesOwnTypeOnly = isConstructor || isField;
+  // msil-ld's own 'call instance void System.Attribute::.ctor()' in the
+  // constructor of the '<msil>SymbolTable' attribute class (plan 5.9.15;
+  // M22.b item (2)), which extends System.Attribute: the reference packs
+  // declare that constructor protected (family), and the CLR lets a derived
+  // type call a family or family-or-assembly constructor of its base type on
+  // its own instance. That request alone counts such a constructor. Every
+  // other request counts public members only: msil-ld's newobj of
+  // EntryPointNotFoundException::.ctor(string) from '<Module>', which
+  // derives from no exception type, would throw MethodAccessException on a
+  // protected one, and the objects' requests (RequestedBy set) and field
+  // requests keep 5.11.4's rule.
+  bool familyCtorCounts = !r.RequestedBy && r.K == BCLRequest::Method &&
+                          member == ".ctor" && r.Namespace == "System" &&
+                          r.Name == "Attribute";
 
   // The members of the name that the search saw, for the error.
   std::vector<std::string> present;
@@ -876,8 +892,8 @@ BCLBinder::Impl::resolveMember(const BCLRequest &r,
     };
 
     SmallVector<uint32_t, 2> matches;
-    // The signature of the last public method match, and the non-public
-    // methods.
+    // The signature of the last method match that counts (public, or
+    // admitted by familyCtorCounts), and the methods that do not count.
     cli::MethodSig matchMethod;
     SmallVector<NonPublicMethod, 2> nonPublic;
     uint32_t begin = isField ? row->FieldBegin : row->MethodBegin;
@@ -885,7 +901,9 @@ BCLBinder::Impl::resolveMember(const BCLRequest &r,
     for (uint32_t index = begin; index < end; ++index) {
       std::string text;
       raw_string_ostream os(text);
-      bool isPublic, match;
+      // counts: the member may bind (public, or admitted by
+      // familyCtorCounts); the others are listed as '(not public)'.
+      bool counts, match;
       if (isField) {
         Expected<cli::FieldRow> f = rd.getField(index);
         if (!f)
@@ -898,15 +916,15 @@ BCLBinder::Impl::resolveMember(const BCLRequest &r,
         Expected<cli::TypeSig> t = cli::decodeFieldSig(*blob);
         if (!t)
           return fileError(file, t.takeError());
-        isPublic = (f->Flags & cli::FieldAttributes::FieldAccessMask) ==
-                   cli::FieldAttributes::Public;
+        counts = (f->Flags & cli::FieldAttributes::FieldAccessMask) ==
+                 cli::FieldAttributes::Public;
         match = typesMatch(*reqType, *t, file, 0);
         if ((f->Flags & cli::FieldAttributes::Static) ==
             cli::FieldAttributes::Static)
           os << "static ";
         cli::printTypeSig(os, *t, defRef);
         os << ' ' << owner << f->Name;
-        if (match && isPublic)
+        if (match && counts)
           matches.push_back(cli::makeToken(cli::TableId::Field, index));
       } else {
         Expected<cli::MethodDefRow> m = rd.getMethodDef(index);
@@ -920,8 +938,12 @@ BCLBinder::Impl::resolveMember(const BCLRequest &r,
         Expected<cli::MethodSig> sig = cli::decodeMethodSig(*blob);
         if (!sig)
           return fileError(file, sig.takeError());
-        isPublic = (m->Flags & cli::MethodAttributes::MemberAccessMask) ==
-                   cli::MethodAttributes::Public;
+        cli::MethodAttributes access =
+            m->Flags & cli::MethodAttributes::MemberAccessMask;
+        counts =
+            access == cli::MethodAttributes::Public ||
+            (familyCtorCounts && (access == cli::MethodAttributes::Family ||
+                                  access == cli::MethodAttributes::FamORAssem));
         match = methodSigsMatch(*reqSig, *sig, file, 0);
         printCallingConvention(os, sig->Header);
         cli::printTypeSig(os, sig->Return, defRef);
@@ -935,14 +957,14 @@ BCLBinder::Impl::resolveMember(const BCLRequest &r,
           cli::printTypeSig(os, p, defRef);
         }
         os << ')';
-        if (match && isPublic) {
+        if (match && counts) {
           matches.push_back(cli::makeToken(cli::TableId::MethodDef, index));
           matchMethod = *sig;
-        } else if (!isPublic) {
+        } else if (!counts) {
           nonPublic.push_back({&file, *sig});
         }
       }
-      if (!isPublic)
+      if (!counts)
         text += " (not public)";
       present.push_back(std::move(text));
     }

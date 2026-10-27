@@ -12,6 +12,9 @@ ilasm, which the `obj` pipeline also does for every one-file test of `M1/`.
 Since M21 `msil-ld` binds the .NET base class library against reference
 assemblies, which `--param msil_references` gives every MSIL link (the
 reference legs) and the tests of `M2/05-refs/` give their own links.
+Since M22 tests also build library assemblies with `msil-ld -shared`
+(`%{msil_shlibs}`) and link programs, other libraries and C# programs
+(`%msil_csc`) against them (`M2/04-shared/`).
 It is an LLVM external
 project (`-DLLVM_EXTERNAL_PROJECTS=msil -DLLVM_EXTERNAL_MSIL_SOURCE_DIR=<repo>/msil`,
 set by `msil/utils/build/msil-configure.ps1` and `msil/cmake/caches/MSIL.cmake`),
@@ -97,25 +100,32 @@ objects (`clang -c`, the pipeline `obj`) under `msil_pipeline=asm` and `obj`,
 and bitcode (`clang -flto -c`, the pipeline `lto`) under `msil_pipeline=lto`:
 
 ```text
+%{msil_shlibs}      first (M22), in order: clang -shared, each against the
+                      libraries built before it-->            shlib/<NAME>.dll
+                      (?NAME: -Wl,--interface-only-->          shlib-iface/<NAME>.dll)
 %{msil_srcs}        --clang -c (obj) / -flto -c (lto)-->       obj/<stem>.o
 %{msil_stock_srcs}  --clang --target=<native> -flto -c-->      stock/<stem>.o
 %{msil_archives}    --compiled as %{msil_srcs}, then
                       llvm-ar rcs-->                           ar/<NAME>/lib<NAME>.a
   --clang -<L> %{msil_ldflags} <objects> -Lar/<NAME> -l<NAME> %{msil_libs}
-     %{msil_native_libs} -o prog.exe (clang runs msil-ld, which also reads
-     the driver's default libraries and writes the image)-->  prog.exe
+     %{msil_native_libs} shlib/<NAME>.dll... -o prog.exe (clang runs msil-ld,
+     which also reads the driver's default libraries and writes the
+     image)-->                                                 prog.exe
      (msil_link_output=il, lto only: -Wl,--lto-emit-asm -o prog.il, then
      ilasm -exe, as every link did in M14-M19)
   --> msil-verify.py, msil-jitall.py, msil-run.py   as for %{msil_c}, each
-                        with --dep %{msil_deps} -- before the program
+                        with --dep-dir <workdir>/shlib (msil-verify.py also
+                        --also-verify-deps) --dep %{msil_deps} -- before the
+                        program
   [--> round trip]      of prog.exe (msil_roundtrip=1)
   [--> equivalence]     lto with msil_equiv=1: O4 (below) on equiv/prog.exe,
                         a -Wl,--no-gc-sections link, against ilasm of
                         equiv/prog.il, the same link's --lto-emit-asm text
-  [--> native oracle]   msil-prog.py --mode native: the same sources, archives
-                        and %{msil_native_libs} built for the native triple
-                        (clang -fuse-ld=lld; the E7 recipe in WSL, with
-                        -rpath $ORIGIN), run with the same --dep files
+  [--> native oracle]   msil-prog.py --mode native: the same sources, archives,
+                        %{msil_native_libs} and %{msil_shlibs} built for the
+                        native triple (clang -fuse-ld=lld; the E7 recipe in
+                        WSL, with -rpath $ORIGIN), run with the same --dep
+                        files and its own shlib/ directory
   [--> .NET Framework]  the same prog.exe, run by the Framework
 ```
 
@@ -136,6 +146,40 @@ locally and in WSL, `msil-run.py` also puts that directory first in
 `LD_LIBRARY_PATH`, because a native data import (M20) loads its library with
 `dlopen` of the bare name, which never searches the program's directory
 (Status.md section 3, "Limits"; natively the E7 recipe's `-rpath $ORIGIN`).
+
+`%{msil_shlibs}` (M22; default empty) names the shared libraries of a test,
+`[?]NAME=SRC[,SRC...][;...]`, which `msil-prog.py --shlibs` builds before
+anything else, in that order, each linked against the latest build of every
+other name, with the program's `--cflags` and `--ldflags` (`%{msil_ref_flags}`
+included; no `%{msil_libs}` or `%{msil_native_libs}`); a `SRC` written
+`stock:SRC` is a stock source. `?NAME` builds only the interface of `NAME`
+(`-Wl,--interface-only`, into `shlib-iface/`), for a cycle: `?b=b.c;a=a.c;b=b.c`
+links `b`'s interface, then `a` against it, then the real `b` against `a`. The
+program links every real library after its archives. Natively the same
+specification gives, on Windows, `-shared -fuse-ld=lld` DLLs with their import
+libraries (an interface is the same link with `-Wl,/force:unresolved`, of
+which only the import library is kept), every compile with
+`-fms-runtime-lib=dll`, so that all DLLs share one C runtime as MSIL
+assemblies do; and, for the E7 oracle and the Linux driver, `-fPIC` objects
+linked `-shared -Bsymbolic` into `shlib/lib<NAME>.so` (`-soname lib<NAME>.so`;
+no interfaces: the dynamic loader resolves cycles), with `-rpath $ORIGIN` on
+the program; `-Bsymbolic` gives the CLR's semantics, in which a library's own
+references never bind to the program. The build directory always has a
+`shlib/` directory, empty without libraries, which every run, jitall and
+verification of the composite gets as `--dep-dir`; `msil-verify.py` verifies
+each library in it too (`--also-verify-deps`). `%{msil_det}` compares the
+libraries as well. `%{msil_shlibs}` with `msil_link_output=il` is a usage
+error of `msil-prog.py`, because a library has no `--lto-emit-asm` text, so
+the tests that set it (`04-shared/` but `csharp-consumer`, and the three
+`08-semantics/p2c-*` rows) say `UNSUPPORTED: msil-link-output=il` and are
+UNSUPPORTED under `msil_pipeline=lto` with `msil_link_output=il`.
+`%msil_csc SRC --out EXE [--reference DLL]... [--refs net8|net48]
+[--unsafe]` (feature `msil-csc`) compiles a C# program with the newest .NET
+SDK's csc (`msil/utils/jitall/build-jitall.py --csharp`): `net8` (the default)
+against the newest 8.x reference pack, writing `<stem>.runtimeconfig.json`,
+`net48` against the .NET Framework 4.8 reference assemblies and their
+`Facades`; `$MSIL_REF_NET8` and `$MSIL_REF_NET48` name other packs, and lit
+passes both variables to tests when they are set.
 
 `--param msil_pipeline` (feature `msil-pipeline=<p>`) picks how `%{msil_c}`
 and `%{msil_ll}` build: `asm` (the default) is the Phase 1 flow above; `obj`
@@ -291,7 +335,9 @@ against (`msil-refpack=net48`, `net8` or `net10`) and `msil-cil-dump`;
 `msil-ld` or `llvm-ar` a configuration error, and so do `msil_pipeline=lto` and
 `obj`. `msil_equiv=1` needs `llvm-cil-dump` or `mdcanon` for `%msil_canon` (a
 configuration error otherwise), and the tests of `M2/07-equiv/` require the
-feature `msil-cil-dump` or `msil-mdcanon`.
+feature `msil-cil-dump` or `msil-mdcanon`. `M2/04-shared/csharp-consumer.test`
+needs the feature `msil-csc` (the newest .NET SDK's csc), and
+`--param msil_require_csc=1` makes a missing csc a configuration error.
 The compile-only tests of `M2/09-hosted/` need only clang with the MSIL
 target, and the feature `msil-glibc-sysroot` (glibc) or `msil-ucrt-headers`
 (UCRT) of their C library; the `hosted` leg names the glibc sysroot, so there
@@ -323,8 +369,7 @@ failing directory names the earliest broken capability:
 compiles a C program with `-g`.
 
 `M2/` (Phase 2, from M14) holds programs of several files that `msil-ld`
-links (`%{msil_prog}`), in the tiers of plan 5.12.5; the number that is
-missing belongs to a later milestone (`04-shared/`, M22):
+links (`%{msil_prog}`), in the tiers of plan 5.12.5:
 
 | Directory | Since | Covers |
 |---|---|---|
@@ -332,35 +377,52 @@ missing belongs to a later milestone (`04-shared/`, M22):
 | `01-archive/` | M14 | archives: lazy members, members with data only, members of one name in two archives, two archives that need each other (no group needed, as in lld), members that define `puts` and `fdim` and win over the C library |
 | `02-lto/` | M14 | stock-clang bitcode for the native triple, also inside an archive, and `msil-ld`'s once-per-link warning about it; since M20, with `-flto` forced, LTO images (`lto-pe`, which also checks that the link runs `msil-ld` alone and writes a PE32+ EXE), ThinLTO (`thinlto`), `--lto-partitions=2` (`lto-partitions`), CIL objects mixed with MSIL bitcode, positional and in one archive (`mixed-objects-bitcode`), signature mismatches inside one file (`intra-tu-mismatch`: a warning exactly once at `-O0` and `-O2` for an `int` argument of a `long long` parameter, which the compile step cannot fold, and the integer-versus-floating-point error of a file compiled at `-O0`; plan 5.9.8 as clarified for M20), calls of one definition with one IR call type, each decided by its own `signext`, `zeroext` or `byval` attribute in both link orders at `-O0` and `-O2` (`lto-call-attrs`, Linux triples: `unsigned char` 200 and `signed char` -56 reach an `int` parameter widened as natively, with no diagnostic, and a `byval` struct call and a call one argument short stop the link with the error and the adapter warning, each exactly once), and `sret` and `byval` mismatches whose IR call type equals the definition's, which stop the link with plan 5.9.8's errors, each exactly once, at `-O0` and `-O2`, as the object path does (`lto-same-type-mismatch`, the `byval` case on Linux triples only) |
 | `03-native/` | M15 | native libraries: C library functions outside the standalone table (`strlen`, `strcmp`, `atoi`, `malloc`, ...) and a program without output, glibc's versioned libm functions and its IFUNCs (Linux triple), `kernel32.lib`, `htons` imported by ordinal, `strdup` through an oldnames alias and the functions of `--ucrtbase-imports` (Windows triple), a `native.dll` or `libnative.so` that the test builds and ships (`%{msil_native_libs}`, `%{msil_deps}`), `-Wl,--print-imports` and the linked text's P/Invokes, and the named errors for an undefined function and for `-Bstatic` (with `OBJ` lines for the object path since M20); since M20 native variables: those of a test-built library, read and written (`data-import-testlib`), glibc's `stderr`, `environ` and `optind` (`data-import-glibc`, Linux) and `msvcrt.dll`'s `_iob` (`data-import-msvcrt`, Windows) |
+| `04-shared/` | M22 | library assemblies (`%{msil_shlibs}`) and what links against them: a library and its program, recon E7 (`lib-and-prog`: calls, exported and `extern` data, both kinds of cross-assembly relocation, pointer identity both ways, the library's constructor before `main`, a program function that the library calls), one address per library function on the .NET Framework too (`framework-identity`, recon E2), cycles of two and three libraries through interface libraries, with complete data in each (`cycle-pair`, recon E4b, and `cycle-three`), initialization before the program, dependencies first, an otherwise unused library included (`init-order`, recon E4c), the heap, a `FILE *` and `errno` shared by a library and its program (`c-state`), two libraries built from the same code keeping a copy each (`archive-in-two-libs`), a library missing at run time and one that lost a function, which stop with `System.IO.FileNotFoundException` before `main` and with `System.MissingMethodException` in the calling method (`missing-library`, `missing-member`: a transcript, then `not %msil_exec --expect` on the broken deployment), a C# program compiled by `%msil_csc` for .NET 8 and the .NET Framework 4.8 against a library with `--export-class=Contoso.Lib.Native` (`csharp-consumer`, FileCheck), `%{msil_det}` with libraries and an interface (`lib-det`), the ildasm and ilasm round trip of a library, after which a program links against the copy (`roundtrip-library`), and a library found by `-L` and `-l`, and the static archive that `-l` prefers (`lsearch-managed`). Sources use an `API` macro (`__declspec(dllexport)` on Windows, default visibility elsewhere) and import data with `__declspec(dllimport)` on Windows, as the native oracle needs |
 | `05-refs/` | M21 | reference binding with the real reference packs: `mscorlib-safe` (`%msil_check_mscorlib_safe` on every runtime of the leg: the 14 entries of `msil-ld --print-bcl-table`, and a probe that `NativeLibrary::Load` through `[mscorlib]` fails), `p1prog` (the recon's program, which uses every BCL member of Phase 1, in every leg, with the AssemblyRef rows that leg must give), `rows-none`, `rows-net8` and `rows-net10` (the rows without references and with each .NET pack, in first-use order, checked by `Inputs/refrows.py`; with the scopes stripped the listings equal the link's without references; the runs on the pack's .NET, with ILVerify against the pack and PEVerify skipped, and the negative runs: `System.IO.FileNotFoundException` on the .NET Framework and, for the .NET 10 binding, `System.MissingMethodException` on .NET 8 (the .NET 8 host cannot load `<Module>`'s .NET 10 references and reports the entry point missing; the .NET 10 run of the same image is the positive control); a run on a given .NET goes through `Inputs/net<N>.runtimeconfig.json`), `net48-equals-none` (equal canonical listings), `positional-pack` (positional `.dll` references give images byte-identical to every `--reference` form), `facade-only` and `two-corlibs` (the core-library errors, through `%{msil_prog_fail_O2}`), `dataimport-nativelibrary` (`03-native/`'s data import through `NativeLibrary` with the .NET 8 pack, on .NET 8 and in WSL on .NET 10, and M20's helper with the .NET Framework's) and `lto-text-mscorlib` (`-S` and `--lto-emit-asm` text keep `[mscorlib]`, an LTO image binds to the pack, and `--lto-emit-asm` still rejects a set without a core library) |
 | `06-det/` | M14 | determinism: `%{msil_det}` builds a program twice and compares every object, archive and output: `det-lto` (bitcode with `-flto` forced, also with `--lto-partitions=4`), and since M20 `det-obj` and `det-archive` (CIL objects, archives and `msil-ld`'s image) |
 | `07-equiv/` | M20 | explicit equivalence checks with their own RUN lines (feature `msil-cil-dump` or `msil-mdcanon`): O3 on one C file (`o3-single`), above the relocation-loop threshold from C and from IR (`o3-reloc-loop`) and with named sections, `__start_`/`__stop_` and a constructor-table entry (`o3-sections`, whose `-S` image also runs), and O4 on the zoo (`o4-zoo`, without its weak undefined function and its alias, whose whole-program forms O4 cannot compare) and with sections and constructors (`o4-sections-ctors`); each also has a composite against its native transcript |
-| `08-semantics/` | M14 | the link-semantics matrix of plan 5.9.16 (`llvm/docs/MSIL/Status.md` section 2), through LTO and, since M20, through CIL objects: native transcripts, or named diagnostics for duplicate, undefined and mismatched symbols, thread-local variables and destructors; since M15 a library named by `#pragma comment(lib)` (`pragma-comment-lib`) and `qsort` with a C comparator, a named error until phase 3 (`native-callback`); since M19 a declaration without a prototype called with two argument lists (`knr-two-arities`); since M20 `__start_`/`__stop_` (`p3-start-stop` on Linux, `p3-start-stop-windows` as the named error), a constructor in `.init_array` or `.CRT$XCU` (`p8-section-ctor`, also through `clang -S` and ilasm) and its order against a constructor of equal key (`ctor-slot-order`), common symbols of different sizes (`common-largest`), unaligned pointers in data (`unaligned-reloc`), the call adapters and their warnings (`int-ptr-adapter`, `missing-arg-adapter`, `weak-def-sig-mismatch`), the signature error (`float-int-mismatch`), `--gc-sections` against `used` and `retain` data (`gc-used-retain`), entries of a named section between two markers that only pointer arithmetic reaches, which the default `--gc-sections` link keeps as a native link does (`section-bracket`; `obj` pipeline only, because under `-flto` LTO drops them first, as native LTO does), narrow unsigned results called through `int` prototypes, with no warning (`narrow-result-mismatch`), narrow arguments passed to wider parameters, with the adapter warning for the `long long` ones (`narrow-arg-mismatch`; since M21 it builds the program through objects and through LTO in every leg, on the leg's triple at `-O0` and `-O2`, checks each pipeline's warnings and requires the two transcripts to be equal), the import attributes against a test-built library (`import-attrs`), and `OBJ` checks of the object path on the existing diagnostic and adapter rows |
+| `08-semantics/` | M14 | the link-semantics matrix of plan 5.9.16 (`llvm/docs/MSIL/Status.md` section 2), through LTO and, since M20, through CIL objects: native transcripts, or named diagnostics for duplicate, undefined and mismatched symbols, thread-local variables and destructors; since M15 a library named by `#pragma comment(lib)` (`pragma-comment-lib`) and `qsort` with a C comparator, a named error until phase 3 (`native-callback`); since M19 a declaration without a prototype called with two argument lists (`knr-two-arities`); since M20 `__start_`/`__stop_` (`p3-start-stop` on Linux, `p3-start-stop-windows` as the named error), a constructor in `.init_array` or `.CRT$XCU` (`p8-section-ctor`, also through `clang -S` and ilasm) and its order against a constructor of equal key (`ctor-slot-order`), common symbols of different sizes (`common-largest`), unaligned pointers in data (`unaligned-reloc`), the call adapters and their warnings (`int-ptr-adapter`, `missing-arg-adapter`, `weak-def-sig-mismatch`), the signature error (`float-int-mismatch`), `--gc-sections` against `used` and `retain` data (`gc-used-retain`), entries of a named section between two markers that only pointer arithmetic reaches, which the default `--gc-sections` link keeps as a native link does (`section-bracket`; `obj` pipeline only, because under `-flto` LTO drops them first, as native LTO does), narrow unsigned results called through `int` prototypes, with no warning (`narrow-result-mismatch`), narrow arguments passed to wider parameters, with the adapter warning for the `long long` ones (`narrow-arg-mismatch`; since M21 it builds the program through objects and through LTO in every leg, on the leg's triple at `-O0` and `-O2`, checks each pipeline's warnings and requires the two transcripts to be equal), the import attributes against a test-built library (`import-attrs`), and `OBJ` checks of the object path on the existing diagnostic and adapter rows; since M22 the library rows (`%{msil_shlibs}`): a function that the program and its library both define, each calling its own, with `msil-ld`'s warning (`p2c-bsymbolic`), a cyclic pair with constructors (`p2c-cycle`) and weak library definitions against the program's strong ones (`p2c-weak-def`), and constructors that take glibc's `argc`, `argv` and `envp` (`initarray-args`: the program on Linux triples, the named error on Windows triples) |
 | `09-hosted/` | M15 | the optional hosted leg (plan Q16), compile-only: glibc's 38 C and POSIX headers and the UCRT's headers with `-fsyntax-only`, a hosted glibc program linked to text against glibc's real `libc.so` and `libm.so` scripts, `atexit`, which glibc defines only in `libc_nonshared.a`, as a named error, and the spellings that glibc's headers give functions of the callback list (`__sysv_signal`, `ftw64`, `nftw64`, `scandir64`) as named errors too. Its `lit.local.cfg` needs only clang with the MSIL target |
 
-`M2/` has 103 tests (12, 5, 9, 15, 11, 3, 5, 38 and 5); 79 compare a
-transcript, 13 pin a named diagnostic, the three of `06-det/` check
-determinism, `03-native/print-imports.test` checks `msil-ld`'s
+`M2/` has 120 tests (12, 5, 9, 15, 13, 11, 3, 5, 42 and 5); 94 compare a
+transcript (`08-semantics/initarray-args` only on Linux triples, where
+Windows triples pin its named error), 13 pin a named diagnostic, the three of
+`06-det/` and `04-shared/lib-det` check determinism,
+`04-shared/csharp-consumer` FileChecks a C# program's output,
+`03-native/print-imports.test` checks `msil-ld`'s
 `--print-imports` and linked text, `05-refs/mscorlib-safe.test` runs the
 probe of `check-mscorlib-safe.py`, `05-refs/lto-text-mscorlib.test` checks
 text, rows and a diagnostic, and the five of `09-hosted/` only compile and
-link (two of them to a named link error). The tests of `05-refs/` other than
+link (two of them to a named link error). In `04-shared/`,
+`csharp-consumer` requires `msil-csc` (its .NET Framework half also
+`msil-netfx` and a Windows triple), `roundtrip-library` `msil-roundtrip`
+(so it runs with `msil_roundtrip=1`: in the `roundtrip` leg and M22's
+gate) and `msil-cil-dump`, and `lsearch-managed` `msil-ar`. The tests of `05-refs/` other than
 `p1prog` and `mscorlib-safe` require the packs they bind to
 (`msil-refpack=<name>`), and `rows-none` the leg without references
-(`msil-ref=none`). Every transcript but two is the same on
+(`msil-ref=none`). Every transcript but three is the same on
 Windows and on the E7 Linux oracle; the exceptions are
 `08-semantics/section-bracket.linux.expected` (without the `mysec` line,
-exit status 82: only the Windows program also walks an MSVC `$` group) and
+exit status 82: only the Windows program also walks an MSVC `$` group),
 `08-semantics/narrow-arg-mismatch.linux.expected` (with the `si(-56)` and
 `sl(-56)` lines, exit status 32: only the Linux program makes the
-`signed char` calls).
+`signed char` calls) and `08-semantics/initarray-args.linux.expected` (the
+constructors got `argc`, `argv` and `envp`; its `.expected` file is the
+native Windows build with both constructors compiled out, which no MSIL leg
+compares against). The library tests whose data hold another assembly's
+addresses keep one transcript for both oracles, although native MSVC code
+cannot hold another DLL's address in a static initializer: their sources set
+those pointers in a constructor only for the native Windows build
+(`STATIC_XRELOCS=0`), and every MSIL build and the Linux oracle use the static
+initializers, which `msil-ld` turns into cross-assembly relocations.
 `08-semantics/p4-selectany` (`__declspec`) and `p3-start-stop-windows`,
 and `03-native/kernel32`, `ordinal-import`, `oldnames-alias`,
 `ucrtbase-imports` and `data-import-msvcrt` require a Windows triple;
 `02-lto/lto-call-attrs` (Windows triples put no extension attribute on a
 `char` argument and pass a 32-byte struct by reference, not `byval`),
 `03-native/ifunc` and `data-import-glibc` and `08-semantics/p3-start-stop`
-a Linux one. Three tests have a part for one triple only:
+a Linux one, and `08-semantics/initarray-args` runs its program on Linux
+triples only. Three tests have a part for one triple only:
 `02-lto/lto-same-type-mismatch` defines and checks its `byval` case only
 for a Linux triple, because Windows triples pass both structs by
 reference, `08-semantics/section-bracket` links its `$` group (`b.c`) only
@@ -370,8 +432,24 @@ one, because Win64 leaves the upper bits of a `char` argument undefined.
 
 `harness/` holds the self-tests of the runner, the verifier, jitall,
 `update-expected.py`, `il-snapshot.py`, `%msil_canon`, the equivalence
-oracles and lit's configuration: 97 tests, 13 of them in `prog/`, 11 in
+oracles and lit's configuration: 102 tests, 15 of them in `prog/`, 11 in
 `legs/`, 3 in `pipeline/`, 5 in `pipeline-obj/` and 11 in `equiv/`.
+M22 added `shlibs.test` (a nested lit run of `prog/Inputs/nested/shlibs.test`
+with stand-in tools that record the build order, the interfaces, the
+libraries each link gets, `--dep-dir` on every run, jitall and verification,
+and the native commands per OS), `prog/shlibs-commands.test` (every
+`--shlibs` recipe of `msil-prog.py`, MSIL and native, `--det`, the usage
+errors and `--equiv-skip` with libraries; `prog/deps.test` and
+`prog/update-expected.test` cover `--dep-dir` and the native library builds of
+`update-expected.py`), `csc.test` (`%msil_csc` compiles a two-line C# program
+against an ilasm library for net8 and, under `msil-netfx`, net48, and both
+run, while a C# error fails with csc's message) and `verify-data-cctor.test`
+(pass 1 of `msil-verify.py` accepts the RVA image copy in a library's
+`'<msil>Data'::.cctor` under the same listing check as in `<Module>::.cctor`,
+and pass 2 neutralizes it, for the library alone and as a program's
+`--dep-dir` with `--also-verify-deps`; a copy from another RVA field still
+fails, naming the library, and a type error right after the copy fails in the
+neutralized pass).
 M21 added `ref-flags.test` (nested lit runs of the suite
 `prog/Inputs/nested/refs/` with a stand-in clang and `msil-ld` that records
 each link: `msil_references` reaches the MSIL link of `%{msil_prog}` and
@@ -386,7 +464,11 @@ printed, and an empty reason or `--roundtrip` with it is a usage error),
 lines for another oracle, test, triple or level leave it failing) and
 `prog/roundtrip-snan.test` (`--roundtrip` accepts a quieted float32
 signaling NaN `ldc.r4`, as bytes or as `float32(0x...)`, and rejects any
-other change of the operand).
+other change of the operand) and, since M22, `prog/roundtrip-moved-class.test`
+(`--roundtrip` accepts a top-level class block that a `.custom` of the
+`.assembly` block names, in practice a library's `'<msil>SymbolTable'`
+class, at another position in the second listing, and rejects any other
+moved class, a changed or missing block and a moved class of an EXE).
 `canon-listing.test` (M16; from M17 it pins `llvm-cil-dump`, so it also needs
 `msil-cil-dump`) assembles `Inputs/canon-listing.il` (an assembly
 with a hash algorithm, a field with RVA data, a P/Invoke, methods with and
@@ -486,8 +568,9 @@ python build/bin/llvm-lit.py -sv --param msil_pipeline=obj --param msil_equiv=1 
 `llvm/test/CodeGen/MSIL` (with the CIL object tests `object-*.ll` of M19),
 `clang/test/CodeGen/MSIL`, `clang/test/Preprocessor/init-msil.c`, the driver
 tests `clang/test/Driver/msil-toolchain.c`, `msil-link.c`, `msil-lto.c`,
-`msil-header-search.c` and `msil-object.c` (M19: `clang -c` writes CIL
-objects), when lld is built `lld/test/MSIL` (the `msil-ld`
+`msil-header-search.c`, `msil-object.c` (M19: `clang -c` writes CIL
+objects) and `msil-shared.c` (M22: `-shared`, `/LD` and `/LDd` link
+libraries), when lld is built `lld/test/MSIL` (the `msil-ld`
 tests), `llvm/test/MC/MSIL` (M18: the encodings, fixups and operand
 spellings of `llc -show-mc-encoding` and `-M object-form`), and
 `llvm/test/tools/llvm-cil-dump` and `llvm/test/tools/llvm-cil-copy` (M17),
@@ -542,7 +625,8 @@ Framework 4.8, native oracle required), the reference legs of M21
 `M2/00-link` and `M2/05-refs` under `msil_pipeline=obj` with
 `msil_references=<pack>`, `refs-net48` with `msil_equiv=1` on .NET 8 and the
 Framework, `refs-net8` on .NET 8 and `refs-net10` on .NET 10, both with
-PEVerify skipped), WSL with the linux triple on the
+PEVerify skipped; the legs that run `M2/` run `M2/04-shared/` too, and the
+`net8` leg also `clang/test/Driver/msil-shared.c`), WSL with the linux triple on the
 private runtime (`msil_wsl_dotnet=private`) and, in `wsl-net10`,
 `wsl-quick` and `obj-wsl` (M20: `M1/11-programs` and `M2/` through CIL
 objects with `msil_equiv=1`), the E7 oracle required, the Linux and the modern Windows ilasm,
@@ -695,6 +779,30 @@ int helper(void) { return 100; }
   with `%{msil_native_libs}` and, for the run, the `%{msil_deps}` files next
   to the program. Tests whose only composites are `%{msil_prog_fail_<L>}` or
   `%{msil_det}` have no transcript and are skipped.
+- A test of libraries (M22) goes in `M2/04-shared/` (a row of the matrix in
+  `M2/08-semantics/`) and names them in `%{msil_shlibs}` ("What runs"):
+
+  ```text
+  # RUN: rm -rf %t && split-file %s %t
+  # REDEFINE: %{msil_shlibs} = zl=%t/zl.c
+  # REDEFINE: %{msil_srcs} = %t/main.c
+  # RUN: %{msil_prog}
+  ```
+
+  Export with an `API` macro (`__declspec(dllexport)` on Windows,
+  `__attribute__((visibility("default")))` elsewhere) and declare imported
+  variables `__declspec(dllimport)` on Windows, as the native oracle needs
+  (MSIL ignores it). Native MSVC code cannot put another DLL's address in a
+  static initializer, so a test whose data hold such addresses sets them in a
+  constructor for the native Windows build only (`#if defined(_WIN32) &&
+  !defined(__MSIL__)`). A cycle names an interface first
+  (`?b=b.c;a=a.c;b=b.c`). The order in which unrelated native libraries
+  initialize differs between Windows and glibc, so a test of initialization
+  order chains its libraries, and a constructor of a cycle records what it
+  saw rather than printing it. `update-expected.py` builds the libraries
+  natively too, and a test outside `04-shared/` that builds or links a
+  library needs a `skip O4` line in `msil/utils/equiv-allowed.txt` (below),
+  because a library has no `--lto-emit-asm` text.
 
 ## Parameters and features
 
@@ -727,6 +835,7 @@ int helper(void) { return 100; }
 | `msil_ld`, `msil_ar`, `msil_nm` | `<build>/bin/msil-ld`, `llvm-ar`, `llvm-nm` | the tree's linker, archiver and symbol lister (also `$MSIL_LD`, `$MSIL_AR`, `$MSIL_NM`), never ones from `PATH`: the Visual Studio `llvm-ar` cannot index this LLVM's bitcode. A named path that does not exist is a configuration error; empty disables the tool |
 | `msil_cil_dump` | `<build>/bin/llvm-cil-dump` | the tree's ECMA-335 dumper (M17, plan 5.12.2; also `$MSIL_CIL_DUMP`), never one from `PATH`: feature `msil-cil-dump`, `%msil_cil_dump`, and `%msil_canon` is `llvm-cil-dump --canonical` when it is found (else the `mdcanon` command). A named path that does not exist is a configuration error; empty disables it. Under `msil_require_verify=1` a missing `llvm-cil-dump` (the tree's never built, or a named path that does not exist) and a disabled one (`--param msil_cil_dump=` or an empty `$MSIL_CIL_DUMP`) are configuration errors that name `llvm-cil-dump` and `msil_require_verify=1`; without it `%msil_canon` falls back to `mdcanon` |
 | `msil_require_link` | `0` | `1` (every gate leg): a missing `msil-ld` or `llvm-ar` is a configuration error, and so is an `M2/` that cannot run; `msil_pipeline=lto` requires both as well |
+| `msil_require_csc` | `0` | `1` (M22): a missing csc of the newest .NET SDK (`%msil_csc`, feature `msil-csc`) is a configuration error instead of an UNSUPPORTED `csharp-consumer` |
 | `msil_glibc_sysroot` | `$MSIL_GLIBC_SYSROOT`, else `C:\llvm-msil-scratch\glibc-sysroot` on Windows when it holds `usr/include/stdio.h`; empty disables it | a glibc sysroot with headers, as `msil/utils/make-glibc-sysroot.sh` makes it, for the hosted tests of `M2/09-hosted/` (feature `msil-glibc-sysroot`, substitution `%{msil_glibc_sysroot}`; M15). A value given explicitly, as the `hosted` leg gives it, without `usr/include/stdio.h` is a configuration error |
 
 Tool search order: `--param msil_<tool>=PATH`, `$MSIL_<TOOL>`, the value CMake
@@ -743,7 +852,8 @@ pipeline `%{msil_prog}` uses: `obj` under `asm` and `obj` since M20, `lto`
 under `lto`; see "What runs"), `msil-link-output=<pe|il>`, `msil-equiv` and
 `msil-scale-tests` (M20), `msil-ref=<none|net48|net8|net10|path>` (the
 value of `msil_references`) and `msil-refpack=<net48|net8|net10>` (that
-reference pack was found; M21), `msil-ilverify`, `msil-peverify`, `msil-ildasm`
+reference pack was found; M21), `msil-csc` (the newest .NET SDK's csc was
+found, for `%msil_csc`; M22), `msil-ilverify`, `msil-peverify`, `msil-ildasm`
 (msil-verify.py runs its neutralized pass), `msil-jitall` (jitall.dll is
 built and the runner has a runtime), `msil-mdcanon` (mdcanon.dll is built and
 the host's dotnet has a runtime for it; M16), `msil-cil-dump` (the tree's
@@ -834,6 +944,11 @@ where installed, and always the leg's own runtime `net<N>`
 where `msil-exec` holds (a host with only .NET 9 runs the probe on
 `net9`), and with the WSL runner `wsl-net<major>` of the programs' runtime;
 callers add `--out DIR` and optionally `--table FILE`).
+Since M22: the placeholder `%{msil_shlibs}` (default empty; "What runs"),
+which `%msil_prog_build` passes as `--shlibs='%{msil_shlibs}'` (an explicit
+`--shlibs=` later on a command line overrides it), and `%msil_csc`
+(`msil/utils/jitall/build-jitall.py --dotnet <dotnet> --csharp`; add `SRC
+--out EXE`, `--reference DLL`, `--refs net8|net48` and `--unsafe`).
 Everything works in lit's internal shell.
 
 ## Transcripts
@@ -891,8 +1006,9 @@ CoreCLR exits with 137 there. An out-of-memory start-up failure is
    `Cannot modify an imaged based (RVA) static` passes only where the listing
    shows `ldsflda valuetype '<msil>image_t' '<msil>image'` or, since M20,
    `ldsflda valuetype '<msil>relocs_t' '<msil>relocs'` at the reported offset
-   (the image copy and the relocation table of the loop in `<Module>::.cctor`;
-   any other RVA field fails), and every PEVerify error in a method that
+   (the image copy and the relocation table of the loop in `<Module>::.cctor`,
+   and since M22 the image copy in `'<msil>Data'::.cctor`, the first phase of a
+   library; any other RVA field fails), and every PEVerify error in a method that
    contains `ldftn` (a function address used as a native int, which PEVerify
    types as a method pointer) is a note, because pass 2 verifies that method
    again. Without ildasm both fail.
@@ -917,6 +1033,16 @@ silently (plan section 9); only the verifiers check those, and native
 int/int64 mixing only PEVerify, so that check exists on Windows only.
 `--param msil_require_verify=1` (every gate) turns a missing ILVerify, ildasm
 or (Windows) PEVerify into a configuration error.
+
+Libraries (M22): `--dep-dir DIR` (repeatable) treats every file directly in
+DIR as a `--dep` file, ILVerify references and copies next to the assembly
+for PEVerify; a missing or empty directory adds nothing. `--also-verify-deps`
+runs both passes on each managed file of those directories too, with the
+other files and the `--dep` files as its dependencies, prefixes its messages
+with the file name and prints `msil-verify: also verified <files>`; it is a
+usage error with `--roundtrip`. The composites pass both with the build's
+`shlib/` directory, so every library of `%{msil_shlibs}` is verified with its
+program.
 
 ## The equivalence allow-list (`msil/utils/equiv-allowed.txt`)
 
@@ -976,8 +1102,12 @@ Every line of the file:
 | `skip O4 msil/test/M2/00-link/reloc-loop.test` | | | prebuilt CIL objects: the composite links the CIL object `r4.o` in `libr4.a`, so its `--also-il` link stops with `'--lto-emit-asm cannot link CIL objects'` and there is no text to compare (plan 5.9.13) |
 | `skip O4 msil/test/M2/02-lto/mixed-objects-bitcode.test` | | | prebuilt CIL objects: the composite links CIL objects (`objpart.o`, and `arobj.o` in `libmixedpre.a`) beside bitcode, so its `--also-il` link stops with `'--lto-emit-asm cannot link CIL objects'` and there is no text to compare (plan 5.9.13) |
 | `skip O4 msil/test/M2/02-lto/lto-partitions.test` | | | `--lto-partitions=2`: the composite's link writes two partitions, so its `--also-il` link stops with `'ThinLTO and --lto-partitions cannot write ILAsm text'` and there is no text to compare (plan 5.9.13) |
+| `skip O4 msil/test/M2/04-shared/` | | | library links (M22): `-shared libraries and links against them have no --lto-emit-asm text`; `msil-ld` stops with `--lto-emit-asm cannot write a -shared library` and, for a link with a library input, `--lto-emit-asm cannot import from a .NET library`, so `msil-prog.py --equiv-skip` builds neither the equivalence link nor the `--also-il` text |
+| `skip O4 msil/test/M2/08-semantics/p2c-bsymbolic.test` | | | library links (M22), with the same reason |
+| `skip O4 msil/test/M2/08-semantics/p2c-cycle.test` | | | library links (M22), with the same reason |
+| `skip O4 msil/test/M2/08-semantics/p2c-weak-def.test` | | | library links (M22), with the same reason |
 
-The `skip` lines are of three kinds (plan 5.12.6): 5.8.10's whole-program
+The `skip` lines are of four kinds (plan 5.12.6): 5.8.10's whole-program
 differences (under O6 too, since M21, for the two tests whose image has
 fields that the `-S` build lacks), where `-S`, llc and `--lto-emit-asm` text keep M12's alias
 forwarding methods and data aliases replaced by their aliasees, fold
@@ -987,7 +1117,12 @@ UNDEFINED WEAK symbols and `msil-ld` shares live STRINGS segments with equal
 bytes inside one object too, by plan 5.9.9 rule 6 (O3 against `-S` or llc
 text, O4 against `--lto-emit-asm` text); spill classes under O4; and O4 for
 links that `--lto-emit-asm` cannot write as one text module (prebuilt CIL
-objects or archives of them, ThinLTO and `--lto-partitions`). Only crc32.c's
+objects or archives of them, ThinLTO and `--lto-partitions`); and, since M22,
+O4 for the tests that build `-shared` libraries or link against them, which
+have no `--lto-emit-asm` text at all (`04-shared/` as a directory, and the
+three library rows of the matrix). Under `lto` with `msil_equiv=1` these
+tests print `O4 skipped: <reason>` and run every other check (M22's gate
+shows it on `04-shared/lib-and-prog` and `08-semantics/p2c-cycle`). Only crc32.c's
 line names a triple and a level, because its difference exists only in the
 Windows triple's `-O2` build; every other line covers every triple and level.
 
@@ -1015,7 +1150,10 @@ see the neutralized copy that pass 2 of msil-verify.py verified.
 A `%{msil_prog}` test builds each level in its own directory,
 `build/tools/msil/test/M2/<dir>/Output/<name>.test.tmp.<L>.d/`: `obj/` holds
 the CIL objects (bitcode under `lto`) and `stock/` the stock-clang bitcode,
-`ar/<NAME>/` each archive and its members, and `prog.exe` is `msil-ld`'s image
+`ar/<NAME>/` each archive and its members, `shlib/` the libraries of
+`%{msil_shlibs}` (`shlib/<NAME>.dll`; their objects in `shlib-obj/<NAME>/`,
+interfaces in `shlib-iface/` and `shlib-iface-obj/<NAME>/`; natively DLLs and
+import libraries, or `lib<NAME>.so`), and `prog.exe` is `msil-ld`'s image
 (with `msil_link_output=il`, `prog.il` is its text and `prog.exe` ilasm's
 image); with `msil_equiv=1`, `equiv/` holds the `--no-gc-sections` image (and
 under `lto` its text), and a one-file test under `obj` (in
@@ -1032,4 +1170,7 @@ linked and why; `-Wl,--print-imports` shows which native library each P/Invoke
 binds to (M15). A run that needs `%{msil_deps}` copies them into the private
 directory of that run, so re-run it with the same `--dep FILE... --` options
 before the program (`msil-run.py --dep-dir DIR` copies every file of a
-directory). `python msil/utils/msil-prog.py --help` describes every option.
+directory, as the composites do with `shlib/`). `llvm-cil-dump --link-info
+shlib/<NAME>.dll` prints a library's symbol table, and `-Wl,--trace-symbol=<s>`
+on the program's link shows which library binds `<s>`. `python
+msil/utils/msil-prog.py --help` describes every option.

@@ -1,0 +1,4 @@
+rt_value=41
+rt_bump()=42
+rt_add(40, 2)=42
+[exit 0]

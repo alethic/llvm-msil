@@ -1,0 +1,141 @@
+## Interface libraries and a cyclic pair (ImplementationPlan.md M22.a items
+## 1 and 5, M22.b item 2, M22.c item 3; 5.9.3, 5.9.15; recon
+## p2/exports-multiasm.md 6.2 and 10.2):
+## - under Q21's -z defs a cyclic pair cannot be linked directly: a.o needs
+##   b_fn, b.o needs a_fn;
+## - -shared --interface-only writes the same export plan, identity and
+##   symbol table as the real link of the same inputs, flagged INTERFACE:
+##   the same export class with the same members (names, signatures, flags,
+##   Param rows, properties and Getter rows), each body 'ldnull; throw', and
+##   no image, no '<msil>Data', no trailer ('.cctor') and no other member;
+##   undefined symbols are allowed and late binding is skipped;
+## - linking against an interface binds as against the real library (the
+##   output is byte-identical), with the --verbose note
+##   '<file> is an interface library; deploy the library built from the
+##   same objects'.
+## So: iface/b.dll from b.o, a.dll against it, b.dll against a.dll, and
+## a.dll again against the real b.dll.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj a.ll -o a.o
+# RUN: llc -filetype=obj b.ll -o b.o
+# RUN: mkdir iface final
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+
+## Without an interface, the cycle is unlinkable.
+# RUN: not msil-ld -shared a.o -o x.dll 2>&1 | %{fc} --check-prefix=CYCLE --implicit-check-not=warning:
+# CYCLE:      {{^}}msil-ld: error: undefined symbol: b_fn{{$}}
+# CYCLE-NEXT: {{^}}>>> referenced by a.o:(a_fn){{$}}
+
+## The interface of b.o: undefined a_fn is allowed.
+# RUN: msil-ld -shared --interface-only b.o -o iface/b.dll 2>&1 | count 0
+# RUN: llvm-cil-dump iface/b.dll > iface.txt
+# RUN: FileCheck %s --check-prefix=IFACE --input-file=iface.txt --implicit-check-not='<msil>Data' \
+# RUN:   --implicit-check-not='<msil>image' --implicit-check-not='<msil>fn_' --implicit-check-not="'.cctor'" \
+# RUN:   --implicit-check-not=entrypoint --implicit-check-not="'a_fn'"
+# IFACE:      {{^}}pe PE32+ machine=0x8664 dll subsystem=3{{$}}
+# IFACE:      {{^}}assembly 'b' ver 0.0.0.0 flags=0x00000000 hash=0x00008004 culture='' key=-{{$}}
+# IFACE:      {{^}}.class '<Module>' flags=0x00000000{{$}}
+# IFACE-EMPTY:
+# IFACE-NEXT: {{^}}.class '<msil>SymbolTable' flags=0x00100100 extends [mscorlib]System.Attribute{{$}}
+# IFACE:      {{^}}.class 'b' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# IFACE-NEXT: {{^}}  .property 'b_var' native int() flags=0x0000{{$}}
+# IFACE-NEXT: {{^}}    .get native int() 'b'::'<msil>addr_b_var'{{$}}
+# IFACE-NEXT: {{^}}  .method '<msil>addr_b_calls_a' native int() flags=0x0096 impl=0x0000{{$}}
+# IFACE-NEXT: {{^}}    .maxstack 1{{$}}
+# IFACE-NEXT: {{^}}    L0: ldnull{{$}}
+# IFACE-NEXT: {{^}}    L1: throw{{$}}
+# IFACE-NEXT: {{^}}  .method '<msil>addr_b_fn' native int() flags=0x0096 impl=0x0000{{$}}
+# IFACE-NEXT: {{^}}    .maxstack 1{{$}}
+# IFACE-NEXT: {{^}}    L0: ldnull{{$}}
+# IFACE-NEXT: {{^}}    L1: throw{{$}}
+# IFACE-NEXT: {{^}}  .method '<msil>addr_b_var' native int() flags=0x0896 impl=0x0000{{$}}
+# IFACE-NEXT: {{^}}    .maxstack 1{{$}}
+# IFACE-NEXT: {{^}}    L0: ldnull{{$}}
+# IFACE-NEXT: {{^}}    L1: throw{{$}}
+# IFACE-NEXT: {{^}}  .method 'b_calls_a' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# IFACE-NEXT: {{^}}    .param 1 'A_0' flags=0x0000{{$}}
+# IFACE-NEXT: {{^}}    .maxstack 1{{$}}
+# IFACE-NEXT: {{^}}    L0: ldnull{{$}}
+# IFACE-NEXT: {{^}}    L1: throw{{$}}
+# IFACE-NEXT: {{^}}  .method 'b_fn' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# IFACE-NEXT: {{^}}    .param 1 'A_0' flags=0x0000{{$}}
+# IFACE-NEXT: {{^}}    .maxstack 1{{$}}
+# IFACE-NEXT: {{^}}    L0: ldnull{{$}}
+# IFACE-NEXT: {{^}}    L1: throw{{$}}
+# IFACE-NEXT: {{^}}assembly .custom instance void(uint8[]) '<msil>SymbolTable'::'.ctor' = 01 00 {{.+}}
+# IFACE-NOT:  {{.}}
+# RUN: llvm-cil-dump --link-info iface/b.dll | FileCheck %s --check-prefixes=TABLE,TABLE-IFACE
+# TABLE-IFACE: {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8 flags={{0x01|INTERFACE}}{{$}}
+# TABLE-REAL:  {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8{{$}}
+# TABLE-NEXT:  {{^}}ExportClass 'b'{{$}}
+# TABLE-NEXT:  {{^}}Data 'b_var' size=4 align=4{{$}}
+# TABLE-NOT:   {{.}}
+
+## a.dll against the interface: the note, and the import of b_fn.
+# RUN: msil-ld -shared --verbose a.o iface/b.dll -o a.dll > a-verbose.txt 2>&1
+# RUN: FileCheck %s --check-prefix=NOTE --input-file=a-verbose.txt --implicit-check-not=error: \
+# RUN:   --implicit-check-not=warning:
+# NOTE: {{^}}{{(msil-ld: )?}}iface{{[/\\]}}b.dll is an interface library; deploy the library built from the same objects{{$}}
+# RUN: llvm-cil-dump a.dll > a.txt
+# RUN: FileCheck %s --check-prefix=A --input-file=a.txt
+# A:      {{^}}assemblyref 'b' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# A:      {{^}}    L0: ldtoken [b]b{{$}}
+# A:      {{^}}.class 'a' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# A:      {{^}}  .method 'a_fn' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# A:      {{^}}    L{{[0-9]+}}: call int32(int32) [b]b::'b_fn'{{$}}
+
+## The real b.dll against a.dll: the same members as the interface, the
+## same table without INTERFACE.
+# RUN: msil-ld -shared b.o a.dll -o b.dll 2>&1 | count 0
+# RUN: llvm-cil-dump b.dll > b.txt
+# RUN: %{listing} members b.txt b > b-members.txt
+# RUN: %{listing} members iface.txt b > iface-members.txt
+# RUN: diff b-members.txt iface-members.txt
+# RUN: FileCheck %s --check-prefix=B --input-file=b.txt
+# B: {{^}}assemblyref 'a' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# B: {{^}}  .method 'b_calls_a' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# B: {{^}}    L{{[0-9]+}}: call int32(int32) [a]a::'a_fn'{{$}}
+# RUN: llvm-cil-dump --link-info b.dll | FileCheck %s --check-prefixes=TABLE,TABLE-REAL
+
+## a.dll linked against the real b.dll is the same file, without the note.
+# RUN: msil-ld -shared --verbose a.o b.dll -o final/a.dll > final-verbose.txt 2>&1
+# RUN: FileCheck %s --check-prefix=NO-NOTE --input-file=final-verbose.txt
+# NO-NOTE-NOT: interface library
+# RUN: cmp a.dll final/a.dll
+
+#--- a.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @b_fn(i32)
+
+@a_var = global i32 10, align 4
+
+define i32 @a_fn(i32 %x) {
+  %r = call i32 @b_fn(i32 %x)
+  %v = load i32, ptr @a_var, align 4
+  %s = add i32 %r, %v
+  ret i32 %s
+}
+
+#--- b.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @a_fn(i32)
+
+@b_var = global i32 4, align 4
+
+define i32 @b_fn(i32 %x) {
+  %v = load i32, ptr @b_var, align 4
+  %r = mul i32 %x, %v
+  ret i32 %r
+}
+
+define i32 @b_calls_a(i32 %x) {
+  %r = call i32 @a_fn(i32 %x)
+  ret i32 %r
+}

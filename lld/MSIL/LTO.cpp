@@ -21,12 +21,14 @@
 // data-import helper (plan 5.10.12), and the backend prints P/Invokes from
 // the annotations alone; an entry point other than main reaches the backend
 // as the module flag msil-entry (plan 5.9.3), and --msil-reloc-loop-threshold
-// as the module flag msil-reloc-loop-threshold (plan 5.9.10).
+// as the module flag msil-reloc-loop-threshold (plan 5.9.10). Under -shared
+// the definitions a library may export stay visible (plan 5.9.13).
 //
 //===----------------------------------------------------------------------===//
 
 #include "LTO.h"
 #include "Config.h"
+#include "Exports.h"
 #include "InputFiles.h"
 #include "NativeLibraries.h"
 #include "ReferenceSet.h"
@@ -42,7 +44,9 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/CLI/ImageLayout.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Mangler.h"
@@ -419,6 +423,152 @@ static bool isUnboundWeak(const GlobalValue &gv, StringRef name) {
   return gv.hasExternalWeakLinkage();
 }
 
+// Whether \p f takes argc, argv and envp as glibc passes them to an
+// .init_array entry: three parameters whose CIL types are int32, native int
+// and native int (int, char ** and char **), the shape for which
+// whole-program code generation passes envp (MSILAsmPrinter's
+// getConstructorArgs; section 12 row 'M22.b extended (Rust-found defects 2
+// and 4)', item (4)).
+static bool takesEnvp(const Function &f) {
+  FunctionType *type = f.getFunctionType();
+  if (type->isVarArg() || type->getNumParams() != 3)
+    return false;
+  auto isNativeInt = [](const Type *t) {
+    return t->isPointerTy() ||
+           (t->isIntegerTy() && t->getIntegerBitWidth() > 32 &&
+            t->getIntegerBitWidth() <= 64);
+  };
+  const Type *argc = type->getParamType(0);
+  return argc->isIntegerTy() && argc->getIntegerBitWidth() <= 32 &&
+         isNativeInt(type->getParamType(1)) &&
+         isNativeInt(type->getParamType(2));
+}
+
+// The function whose address the constructor \p c is (the function of an
+// llvm.global_ctors entry, or the value of a constructor-table slot), or
+// null: through pointer casts, zero-index GEPs, ptrtoint and inttoptr, and
+// through the aliases that MSILPrepareIR's lowerAliases replaces by their
+// aliasees before whole-program code generation sees the constructors
+// (MSILAsmPrinter::collectConstructors), as the object writer's INIT entries
+// resolve an alias to its aliased function too: a chain of aliases whose
+// value types are function types, ending at a function at offset 0 (the IR
+// verifier makes it a definition). MSILPrepareIR reports every other alias.
+static const Function *getConstructorFunction(const Constant *c) {
+  SmallPtrSet<const GlobalAlias *, 4> visited;
+  while (true) {
+    c = c->stripPointerCasts();
+    if (const auto *ce = dyn_cast<ConstantExpr>(c);
+        ce && (ce->getOpcode() == Instruction::PtrToInt ||
+               ce->getOpcode() == Instruction::IntToPtr)) {
+      c = ce->getOperand(0);
+      continue;
+    }
+    const auto *ga = dyn_cast<GlobalAlias>(c);
+    if (!ga)
+      break;
+    if (!ga->getValueType()->isFunctionTy() || !visited.insert(ga).second)
+      return nullptr;
+    c = ga->getAliasee();
+  }
+  const auto *f = dyn_cast<Function>(c);
+  return f && !f->isIntrinsic() ? f : nullptr;
+}
+
+// The first constructor of \p m in run order (plan 5.9.9) that takes envp,
+// or null: among the functions that llvm.global_ctors names and the function
+// addresses in the 8-byte slots of the constructor-table sections
+// (.init_array and .init_array.<N>), as whole-program code generation finds
+// the constructors (MSILAsmPrinter::collectConstructors) and msil-ld orders
+// those of the object that the LTO PE link writes
+// (OutputImage::getConstructors): every constructor goes through
+// getConstructorFunction, and cli::sortConstructors orders the entries by
+// key (cli::getConstructorKey: an INIT entry's priority, clamped to 65535
+// as AsmPrinter::preprocessXXStructorList and the object writer's INIT
+// entries clamp it, or the priority of a slot's section), then the slots in
+// (segment, offset) order (segments in IR order, as the data segment's
+// entries and an object's SEGMENTS are), then the INIT entries in array
+// order. Two differences remain. A slot's offset here counts the leaves of
+// its initializer, not its bytes; in a table that code generation accepts
+// every leaf is one 8-byte function address, so both order the slots alike
+// (any other table is the link's error, and no output is written). An entry
+// after a null function in llvm.global_ctors counts, as in the object
+// writer's INIT entries, although preprocessXXStructorList drops the rest of
+// the array for the -S text, whose environ import is then unused. Only
+// non-Windows triples pass constructors arguments.
+static const Function *findEnvpConstructor(const Module &m) {
+  if (ctx.arg.target.isOSWindows())
+    return nullptr;
+  constexpr cli::SectionRules rules = cli::SectionRules::ELF;
+  SmallVector<cli::ConstructorEntry, 4> entries;
+  SmallVector<const Function *, 4> functions;
+  auto add = [&](const Constant *c, cli::ConstructorEntry entry) {
+    const Function *f = getConstructorFunction(c);
+    if (!f || !takesEnvp(*f))
+      return;
+    entry.Id = functions.size();
+    functions.push_back(f);
+    entries.push_back(std::move(entry));
+  };
+
+  // The INIT entries, in array order.
+  if (const GlobalVariable *ctors = m.getNamedGlobal("llvm.global_ctors");
+      ctors && ctors->hasInitializer()) {
+    if (const auto *list = dyn_cast<ConstantArray>(ctors->getInitializer())) {
+      for (auto [i, op] : enumerate(list->operands())) {
+        const auto *cs = dyn_cast<ConstantStruct>(op.get());
+        const auto *priority = cs && cs->getNumOperands() >= 2
+                                   ? dyn_cast<ConstantInt>(cs->getOperand(0))
+                                   : nullptr;
+        if (!priority)
+          continue;
+        cli::ConstructorEntry entry;
+        entry.Key = cli::getConstructorKey(
+            static_cast<uint32_t>(priority->getLimitedValue(65535)), rules);
+        entry.Offset = i;
+        add(cs->getOperand(1), std::move(entry));
+      }
+    }
+  }
+
+  // The slots, in IR order of their variables and then in initializer order.
+  for (auto [i, gv] : enumerate(m.globals())) {
+    if (!gv.hasInitializer() || gv.isDeclarationForLinker() ||
+        cli::classifySection(gv.getSection(), rules) !=
+            cli::SectionClass::ConstructorTable)
+      continue;
+    uint64_t slot = 0;
+    SmallVector<const Constant *, 8> worklist = {gv.getInitializer()};
+    while (!worklist.empty()) {
+      const Constant *c = worklist.pop_back_val();
+      if (isa<ConstantAggregate>(c)) {
+        for (const Use &op : reverse(c->operands()))
+          worklist.push_back(cast<Constant>(op.get()));
+        continue;
+      }
+      cli::ConstructorEntry entry;
+      entry.Key = cli::getConstructorKey(gv.getSection(), rules);
+      entry.IsSlot = true;
+      entry.Segment = i;
+      entry.Offset = slot++;
+      add(c, std::move(entry));
+    }
+  }
+
+  if (entries.empty())
+    return nullptr;
+  cli::sortConstructors(entries);
+  return functions[entries.front().Id];
+}
+
+// True if \p m refers to a declaration of the C library's environ, which the
+// import analysis binds natively or reports.
+static bool refersToEnviron(const Module &m) {
+  return any_of(m.globals(), [](const GlobalVariable &gv) {
+    return gv.isDeclarationForLinker() && getSymbolName(gv) == "environ" &&
+           hasLiveUses(gv);
+  });
+}
+
 // The import annotation of plan 5.10.13 and the post-LTO report of plan
 // 5.9.6, on the merged module \p m: every declaration that the module still
 // refers to is bound or reported, and the library functions that the code
@@ -672,6 +822,33 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
       reportUnbound(name, rejected);
   }
 
+  // envp of the constructors that take it (section 12 rows 'M22.b extended
+  // (Rust-found defects 2 and 4)' item (4) and '5.9.10 amended (constructor
+  // arguments)' of 2026-10-26): the value of the C library's environ. When
+  // the module does not refer to environ itself, the text imports it as the
+  // PE link of the same inputs does, from the first native data definition
+  // in link order: a kind-1 operand of !msil.imports, which the AsmPrinter
+  // reads, with the data-import helper below. Without such a definition the
+  // link is the PE link's error, and no output is written.
+  if (const Function *ctor = findEnvpConstructor(m);
+      ctor && !refersToEnviron(m)) {
+    SmallVector<const NativeExport *, 2> rejected;
+    const NativeExport *e = ctx.nativeIndex.lookup(
+        "environ", rejected, /*isFunctionReference=*/false);
+    if (e && e->Kind != NativeKind::Function) {
+      out.dataImports.push_back({"environ", e->Module.str(), e->Entry.str()});
+      record("environ", e->Module, e->Entry, /*isData=*/true, e);
+    } else {
+      std::string ctorName =
+          ctor->hasName()
+              ? GlobalValue::dropLLVMManglingEscape(ctor->getName()).str()
+              : getSymbolName(*ctor);
+      error("global constructor '" + ctorName +
+            "' takes envp, but no native library of the link defines "
+            "'environ'");
+    }
+  }
+
   // The data-import helper (plan 5.10.12): on Windows triples LoadLibraryW
   // and GetProcAddress from kernel32.dll, elsewhere dlopen and dlsym as the
   // native libraries define them (findDataImportFunctions, which the output
@@ -748,6 +925,13 @@ static lto::Config createConfig() {
     c.RelocModel = *relocModel;
   else
     c.RelocModel = Reloc::Static;
+
+  // The MSIL target has no code models (decision D8: Small). Without a
+  // configured one, LTO would take the "Code Model" module flag, which rustc
+  // sets to kernel for x86_64-unknown-none, and creating the target machine
+  // would stop with "Target does not support the kernel CodeModel", while
+  // llc and clang -c compile the same module.
+  c.CodeModel = CodeModel::Small;
 
   // --lto-emit-asm writes the ILAsm text of the whole program, with the
   // comments that llc and clang -S print (lld/ELF/LTO.cpp:169-172).
@@ -870,13 +1054,17 @@ void BitcodeCompiler::add(BitcodeFile &f) {
                    (sym->isDefined() || sym->isCommon()) &&
                    sym->getFile() == &f;
     // Only the symbols that CIL objects refer to or define, the entry
-    // symbol, -u symbols, NO_STRIP symbols and the definitions in a section
-    // that __start_ or __stop_ names stay visible: every other definition is
-    // internal to the merged module. There is no --wrap (LinkerRedefined) in
-    // msil-ld.
-    r.VisibleToRegularObj = sym->isUsedInRegularObj || sym->isNoStrip() ||
-                            (!objSym.getSectionName().empty() &&
-                             usedStartStop.contains(objSym.getSectionName()));
+    // symbol, -u symbols, NO_STRIP symbols, the definitions in a section
+    // that __start_ or __stop_ names and, under -shared, the definitions that
+    // the library may export stay visible: every other definition is internal
+    // to the merged module. irsymtab has no dllexport bit, so on Windows
+    // triples the export selection applies to the LTO objects' DLLEXPORT
+    // flags (plan 5.9.13). There is no --wrap (LinkerRedefined) in msil-ld.
+    r.VisibleToRegularObj =
+        sym->isUsedInRegularObj || sym->isNoStrip() ||
+        (!objSym.getSectionName().empty() &&
+         usedStartStop.contains(objSym.getSectionName())) ||
+        (ctx.arg.shared && r.Prevailing && mayBeExported(*sym));
     // lld/wasm undefines the prevailing symbol here, so that the LTO object
     // defines it. Under --lto-emit-asm there is no LTO object, and the map
     // file shows the bitcode definitions.

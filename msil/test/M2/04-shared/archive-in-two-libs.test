@@ -1,0 +1,66 @@
+# Two libraries built from the same object code each keep their own copy of its functions and data.
+# counter.c (a counter with its state, the code a static archive gives every
+# library that links it) is linked into dup1 and into dup2. Each library
+# calls its own copy, so each copy counts on its own, and the state lives
+# twice, at two addresses, in the libraries' separate data segments. dup2 is
+# linked against dup1 (msil-prog.py links each library against the ones
+# built before it) and defines counter.c's symbols itself, so its own
+# definitions win (CLR semantics, plan Q21: an object definition that a
+# library also exports is used by the output; on Linux triples dup1 exports
+# them and msil-ld warns, on Windows triples only the dllexport functions
+# are exported); natively the Linux library is linked -Bsymbolic, and a DLL
+# calls its own code anyway.
+# msil-prog.py builds a library from sources only, so counter.c is a source
+# of both libraries rather than a member of an archive they both link.
+# Plan M22.f (archive-in-two-libs), recon tests-p2 3.4.
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = dup1=%t/dup1.c,%t/counter.c;dup2=%t/dup2.c,%t/counter.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- api.h
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#define IMPORT __declspec(dllimport)
+#else
+#define API __attribute__((visibility("default")))
+#define IMPORT
+#endif
+#--- counter.c
+int counter_state[2];
+int counter_next(void) { return ++counter_state[0]; }
+int *counter_address(void) { return counter_state; }
+#--- dup1.c
+#include "api.h"
+int counter_next(void);
+int *counter_address(void);
+API int dup1_next(void) { return counter_next(); }
+API int *dup1_state(void) { return counter_address(); }
+#--- dup2.c
+#include "api.h"
+int counter_next(void);
+int *counter_address(void);
+API int dup2_next(void) { return 100 + counter_next(); }
+API int *dup2_state(void) { return counter_address(); }
+#--- main.c
+#include "msil_test.h"
+#include "api.h"
+IMPORT int dup1_next(void);
+IMPORT int *dup1_state(void);
+IMPORT int dup2_next(void);
+IMPORT int *dup2_state(void);
+
+int main(void) {
+  put_kv("dup1_next()", dup1_next());
+  put_kv("dup1_next()", dup1_next());
+  put_kv("dup2_next()", dup2_next());
+  put_kv("dup1_next()", dup1_next());
+  put_kv("dup2_next()", dup2_next());
+  put_kv("separate states", dup1_state() != dup2_state());
+  put_kv("dup1 state", dup1_state()[0]);
+  put_kv("dup2 state", dup2_state()[0]);
+  return 0;
+}

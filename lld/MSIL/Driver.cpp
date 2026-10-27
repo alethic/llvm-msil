@@ -17,9 +17,13 @@
 // .NET reference assemblies (--reference and positional assemblies, plan
 // 5.11) form the reference set against which the writer binds the BCL types
 // and members of the output; without references it binds them to msil-ld's
-// built-in [mscorlib] table. The writer links the objects into a PE image
-// (writeResult). Under --lto-emit-asm msil-ld writes the whole program of its
-// bitcode inputs as ILAsm text instead, which ilasm turns into an assembly.
+// built-in [mscorlib] table. Libraries built by this toolchain (-shared
+// outputs, which carry its symbol table; plan 5.9.15) are linked as managed
+// libraries, positional or found by -l. The writer links the objects into a
+// PE image (writeResult): a program, or with -shared a library assembly with
+// exports (Exports.h). Under --lto-emit-asm msil-ld writes the whole program
+// of its bitcode inputs as ILAsm text instead, which ilasm turns into an
+// assembly.
 //
 //===----------------------------------------------------------------------===//
 
@@ -27,6 +31,7 @@
 #include "AssemblyFiles.h"
 #include "BCLBinder.h"
 #include "Config.h"
+#include "Exports.h"
 #include "InputFiles.h"
 #include "MapFile.h"
 #include "MarkLive.h"
@@ -91,6 +96,7 @@ void Ctx::reset() {
   alternateNames.clear();
   appliedAlternateNames.clear();
   mustMatch.clear();
+  excludedSymbols.clear();
   whyExtractRecords.clear();
   sym = MSILSym{};
 }
@@ -560,7 +566,10 @@ void LinkerDriver::addFile(StringRef path) {
     }
     [[fallthrough]];
   default:
-    error("unknown file type: " + mbref.getBufferIdentifier());
+    // Native COFF and ELF objects, and files that no linker here reads, go to
+    // createObjectFile(), which skips or indexes the former and reports the
+    // latter (section 12 of 2026-10-26, Rust-found defect 3).
+    addInputFile(createObjectFile(mbref, "", 0, inLib));
   }
 }
 
@@ -661,18 +670,34 @@ static SmallVector<std::string, 0> getLibraryCandidates(StringRef name) {
           ("lib" + name + ".dll").str(), ("lib" + name + ".so").str()};
 }
 
+// True if the .NET assembly at \p path, a library candidate, is a library
+// built by this toolchain: it carries the toolchain's symbol table (plan
+// 5.10.9's managed kind).
+static bool isToolchainLibraryFile(StringRef path) {
+  ErrorOr<std::unique_ptr<MemoryBuffer>> mbOrErr =
+      MemoryBuffer::getFile(path, /*IsText=*/false,
+                            /*RequiresNullTerminator=*/false);
+  if (!mbOrErr)
+    return false;
+  return classifyCLIImage((*mbOrErr)->getMemBufferRef()) ==
+         CLIImageKind::ToolchainLibrary;
+}
+
 // This is for -l<basename> (plan 5.10.9). The -L directories are searched in
 // order, and the first one that holds an acceptable candidate wins. Inside it
 // a static library wins (Design.md 5.2's static-first rule, the opposite of
-// GNU ld's), then the first import library or native shared library in list
-// order, of the object format that the codegen triple reads (plan 5.10.8).
-// Archives of machine code and native libraries of the other format are
-// skipped (noted under --verbose), and so are .NET assemblies until msil-ld
-// links managed libraries (M22). -Bstatic accepts static libraries only.
+// GNU ld's), then a library built by this toolchain (managed), then the first
+// import library or native shared library in list order, of the object
+// format that the codegen triple reads (plan 5.10.8). Archives of machine
+// code and native libraries of the other format are skipped (noted under
+// --verbose), and so are .NET assemblies without the toolchain's symbol table
+// (with a warning: they are references). -Bstatic accepts static libraries
+// only. The driver reads the library found like a positional input, so a
+// managed library reaches createManagedLibraryFile().
 static std::optional<std::string> searchLibraryBaseName(StringRef name) {
   SmallVector<std::string, 0> candidates = getLibraryCandidates(name);
   for (StringRef dir : ctx.arg.searchPaths) {
-    std::optional<std::string> native;
+    std::optional<std::string> managed, native;
     for (const std::string &candidate : candidates) {
       std::optional<std::string> s = findFile(dir, candidate);
       if (!s)
@@ -681,8 +706,13 @@ static std::optional<std::string> searchLibraryBaseName(StringRef name) {
       case LibraryKind::Static:
         return s;
       case LibraryKind::Managed:
-        warn(*s + ": skipping the .NET assembly that -l" + name +
-             " found; use --reference for .NET reference assemblies");
+        if (!isToolchainLibraryFile(*s)) {
+          warn(*s + ": skipping the .NET assembly that -l" + name +
+               " found; use --reference for .NET reference assemblies");
+          break;
+        }
+        if (!ctx.arg.isStatic && !managed)
+          managed = std::move(s);
         break;
       case LibraryKind::NativeOnly:
         log("skipping native static archive " + *s +
@@ -698,6 +728,8 @@ static std::optional<std::string> searchLibraryBaseName(StringRef name) {
         break;
       }
     }
+    if (managed)
+      return managed;
     if (native)
       return native;
   }
@@ -908,6 +940,11 @@ void LinkerDriver::addPendingFiles() {
 // undefined after every input is loaded, and no native library defines it
 // (an import of the right kind is a definition for lld-link), its references
 // resolve to <to>.
+// A native object given on the command line always defines <from> for
+// lld-link, which links every such object, so <from> is never redirected
+// then, also when it reaches that definition through a chain of weak
+// aliases: <from> stays undefined, and late binding reports the definition
+// in native object code (section 12 of 2026-10-26).
 // <to> becomes a reference of the command line, so that an archive member
 // that defines it is extracted and LTO keeps the definition; the
 // import-annotation pass resolves <from> after LTO.
@@ -919,6 +956,10 @@ void LinkerDriver::applyAlternateNames() {
     SmallVector<const NativeExport *, 2> rejected;
     if (ctx.nativeIndex.lookup(from, rejected,
                                /*isFunctionReference=*/!sym->isData()))
+      continue;
+    // lookup returns null for a command-line object's definition, and puts
+    // it first in `rejected`, which starts empty.
+    if (!rejected.empty() && isNativeObjectDefinition(*rejected.front()))
       continue;
     ctx.appliedAlternateNames.insert({from, to});
     symtab->addUndefined(to, saver().save("/alternatename:" + from + "=" + to));
@@ -997,6 +1038,43 @@ static uint32_t getUnsigned(opt::InputArgList &args, unsigned key,
   return defaultValue;
 }
 
+// --assembly-version=<a[.b[.c[.d]]]> (plan 5.9.15): one to four decimal
+// numbers 0-65535; the missing parts are 0.
+static void parseAssemblyVersion(StringRef value) {
+  SmallVector<StringRef, 4> parts;
+  value.split(parts, '.');
+  cli::AssemblyVersion version;
+  uint16_t *fields[] = {&version.Major, &version.Minor, &version.Build,
+                        &version.Revision};
+  bool valid = parts.size() <= std::size(fields);
+  for (size_t i = 0; valid && i != parts.size(); ++i) {
+    unsigned n = 0;
+    valid = !parts[i].getAsInteger(10, n) && n <= UINT16_MAX;
+    *fields[i] = n;
+  }
+  if (!valid) {
+    error("invalid --assembly-version value '" + value + "'");
+    return;
+  }
+  ctx.arg.assemblyVersion = version;
+}
+
+// --exclude-libs=<lib,lib,...> (lld/ELF's getExcludeLibs): the library names
+// may be delimited by commas or colons.
+static void readExcludeLibs(opt::InputArgList &args) {
+  for (auto *arg : args.filtered(OPT_exclude_libs)) {
+    StringRef s = arg->getValue();
+    for (;;) {
+      size_t pos = s.find_first_of(",:");
+      if (pos == StringRef::npos)
+        break;
+      ctx.arg.excludeLibs.insert(s.substr(0, pos));
+      s = s.substr(pos + 1);
+    }
+    ctx.arg.excludeLibs.insert(s);
+  }
+}
+
 // Initializes Config members by the command line options.
 static void readConfigs(opt::InputArgList &args) {
   // msil-ld writes no relocatable output. Reported while the options are
@@ -1008,11 +1086,26 @@ static void readConfigs(opt::InputArgList &args) {
       OPT_allow_multiple_definition, OPT_no_allow_multiple_definition, false);
   if (auto *arg = args.getLastArg(OPT_assembly_name, OPT_soname))
     ctx.arg.assemblyName = arg->getValue();
+  if (auto *arg = args.getLastArg(OPT_assembly_version))
+    parseAssemblyVersion(arg->getValue());
   ctx.arg.dependentLibraries =
       args.hasFlag(OPT_dependent_libraries, OPT_no_dependent_libraries, true);
   ctx.arg.disableVerify = args.hasArg(OPT_disable_verify);
   ctx.arg.entry = getEntry(args);
+  readExcludeLibs(args);
+  ctx.arg.exportAllSymbols = args.hasArg(OPT_export_all_symbols);
+  // The export class is checked here; the default, the assembly name, when
+  // the writer computes the export plan.
+  if (auto *arg = args.getLastArg(OPT_export_class)) {
+    ctx.arg.exportClass = arg->getValue();
+    if (Expected<std::pair<StringRef, StringRef>> name =
+            parseClassName(ctx.arg.exportClass);
+        !name)
+      error(toString(name.takeError()));
+  }
   ctx.arg.gcSections = args.hasFlag(OPT_gc_sections, OPT_no_gc_sections, true);
+  ctx.arg.interfaceOnly = args.hasArg(OPT_interface_only);
+  ctx.arg.libraries = args::getStrings(args, OPT_library);
   ctx.arg.ltoEmitAsm = args.hasArg(OPT_lto_emit_asm);
   ctx.arg.ltoo = args::getInteger(args, OPT_lto_O, 2);
   if (ctx.arg.ltoo > 3)
@@ -1062,10 +1155,12 @@ static void readConfigs(opt::InputArgList &args) {
   if (args.hasArg(OPT_print_map))
     ctx.arg.mapFile = "-";
 
-  // A library assembly needs exports (M22); the option is known because the
-  // clang driver passes --shared for -shared (plan 5.9.3).
-  if (ctx.arg.shared)
-    error("-shared is not supported yet");
+  // A library assembly has no entry point (D27, plan 5.9.3): main is
+  // exported like any function.
+  if (ctx.arg.shared && args.hasArg(OPT_entry))
+    warn("--entry is ignored with -shared");
+  if (ctx.arg.interfaceOnly && !ctx.arg.shared)
+    error("--interface-only requires -shared");
 }
 
 // ThinLTO and LTO partitions give one module per task, which only CIL
@@ -1083,14 +1178,34 @@ static void checkOptions() {
   if (!get_threadpool_strategy(ctx.arg.thinLTOJobs))
     error("--thinlto-jobs: invalid job count: " + ctx.arg.thinLTOJobs);
 
+  // The whole-program text is one module of a program: a library's export
+  // class, accessors and symbol table exist only in msil-ld's own output
+  // (plan 5.9.3).
+  if (ctx.arg.ltoEmitAsm && ctx.arg.shared) {
+    error("--lto-emit-asm cannot write a -shared library; link without "
+          "--lto-emit-asm");
+    return;
+  }
+
   // ThinLTO input is found when the inputs are loaded (linkerMain).
   if (ctx.arg.ltoEmitAsm && ctx.arg.ltoPartitions > 1) {
     reportSeveralLTOModules();
     return;
   }
 
-  if (ctx.arg.outputFile.empty())
+  if (ctx.arg.outputFile.empty()) {
     error("no output file specified");
+    return;
+  }
+
+  // The CLR finds a library only as <assembly name>.dll (exports-multiasm
+  // 3), so a library named apart from its file cannot be loaded.
+  if (ctx.arg.shared && !ctx.arg.assemblyName.empty() &&
+      ctx.arg.assemblyName != path::stem(ctx.arg.outputFile))
+    warn("assembly name '" + ctx.arg.assemblyName +
+         "' differs from the output file name '" +
+         path::filename(ctx.arg.outputFile) +
+         "'; the CLR loads a library only as " + ctx.arg.assemblyName + ".dll");
 }
 
 static void handleLibcall(StringRef name) {
@@ -1388,8 +1503,9 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
     return;
   }
 
-  // The codegen triple is fixed now, by --target or by the first bitcode
-  // input. An unsupported one stops the link before the per-file triple and
+  // The codegen triple is fixed now, by --target or by the first CIL object
+  // or bitcode input; a link without one is reported once every input is
+  // loaded. An unsupported one stops the link before the per-file triple and
   // data-model checks and before LTO, which would compile for it.
   if (!ctx.arg.target.str().empty() && !isSupportedTarget(ctx.arg.target)) {
     error("unsupported target triple '" + ctx.arg.target.str() + "' for MSIL");
@@ -1437,8 +1553,8 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
 
   // The entry point is visible to regular objects, so LTO keeps it, and it
   // extracts the archive member that defines it. bindLateSymbols() reports it
-  // if nothing defines it.
-  if (!ctx.arg.entry.empty())
+  // if nothing defines it. A -shared library has none.
+  if (!ctx.arg.entry.empty() && !ctx.arg.shared)
     symtab->addUndefined(ctx.arg.entry, "--entry");
   addPendingFiles();
   if (errorCount())
@@ -1464,12 +1580,27 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (errorCount())
     return;
 
-  // Every input is loaded: check the triples, data models and ABI versions.
+  // Every input is loaded, so the codegen triple is --target or the triple of
+  // the first CIL object or bitcode file (plan 5.9.3). A link of libraries
+  // alone has none, and its output would need one. The diagnostics of the
+  // options and of loading the libraries come first.
+  if (ctx.arg.target.str().empty()) {
+    error("no target triple: pass --target or a CIL object or bitcode file");
+    return;
+  }
+
+  // Check the triples, data models and ABI versions.
   for (InputFile *f : ctx.loadedFiles)
     checkInputFile(*f);
   size_t numCheckedFiles = ctx.loadedFiles.size();
   if (errorCount())
     return;
+
+  // A -shared library exports no definition of an --exclude-libs archive's
+  // members; they are known before LTO, which may then internalize them (as
+  // lld/ELF handles --exclude-libs).
+  if (ctx.arg.shared)
+    excludeLibs();
 
   // The bitcode inputs' references, before LTO takes their symbol tables.
   symtab->recordReferences();
@@ -1535,18 +1666,26 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
       checkInputFile(*f);
     if (errorCount())
       return;
+    // The archive members that the LTO objects extracted.
+    if (ctx.arg.shared)
+      excludeLibs();
   }
 
   // Late binding over every object (plan 5.9.6), then the losers of
   // resolution and the common symbols (plan 5.9.5, 5.9.9), then
-  // /alternatename, last.
-  symtab->bindLateSymbols();
+  // /alternatename, last. An interface library binds nothing late: its
+  // undefined symbols stay unresolved (plan 5.9.15).
+  if (!ctx.arg.interfaceOnly)
+    symtab->bindLateSymbols();
   if (errorCount())
     return;
   symtab->finalizeObjectSymbols();
   symtab->resolveAlternateNames();
 
-  // --gc-sections (plan 5.9.11) and the output (plan 5.9.12).
+  // --gc-sections (plan 5.9.11), whose roots include a library's exports, and
+  // the output (plan 5.9.12).
+  if (ctx.arg.shared)
+    markExportsLive();
   markLive();
   if (errorCount())
     return;

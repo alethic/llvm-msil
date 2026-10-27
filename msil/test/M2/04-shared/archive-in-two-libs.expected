@@ -1,0 +1,9 @@
+dup1_next()=1
+dup1_next()=2
+dup2_next()=101
+dup1_next()=3
+dup2_next()=102
+separate states=1
+dup1 state=3
+dup2 state=2
+[exit 0]

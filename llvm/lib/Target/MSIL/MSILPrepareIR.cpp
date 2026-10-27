@@ -98,7 +98,9 @@
 /// variables and the local functions that no linkonce function reaches stay.
 /// A definition from a header that the program does not use is not compiled,
 /// and therefore not diagnosed. Then, in each function definition, an empty
-/// inline asm statement with operands becomes a compiler fence, a fake use of
+/// inline asm statement with operands (a template of nothing but whitespace
+/// and /* */ comments, as Rust's optimization barriers write it, is empty)
+/// becomes a compiler fence, a fake use of
 /// each input and llvm.sideeffect; an indirect output tied to a by-value
 /// input gets the input stored through its pointer (truncated when it is a
 /// wider integer), and each direct output becomes its tied input, converted
@@ -815,15 +817,32 @@ struct TiedStore {
 };
 } // end anonymous namespace
 
+/// Returns true if the inline asm template \p Asm holds no instruction:
+/// nothing but whitespace and /* */ comments, whose text (operand references
+/// such as the `/*{0}*/` of Rust's zmij, `/*${0:k}*/` in IR, included)
+/// native code never assembles. An unterminated comment is not blank.
+static bool isBlankAsmString(StringRef Asm) {
+  for (Asm = Asm.ltrim(); !Asm.empty(); Asm = Asm.ltrim()) {
+    if (!Asm.consume_front("/*"))
+      return false;
+    size_t End = Asm.find("*/");
+    if (End == StringRef::npos)
+      return false;
+    Asm = Asm.drop_front(End + 2);
+  }
+  return true;
+}
+
 /// Returns true if \p CI calls an empty inline asm statement that
 /// lowerEmptyInlineAsm lowers, and appends to \p Results the input tied to
 /// each of its direct outputs, in order, and to \p Stores each indirect
-/// output that is to hold its input: an asm string that is empty after
-/// trimming, inputs of any kind, outputs that are not condition flags
-/// (isFlagOutput), indirect ('=*m') or direct and tied to an input whose type
-/// isConvertibleTie accepts, any clobbers and no label. A direct output is
-/// tied to the input of its matching constraint (getTiedInput) or, for a
-/// local register variable, to the input in its own register
+/// output that is to hold its input: an asm string that is blank
+/// (isBlankAsmString: empty after trimming, or only comments; plan section
+/// 12, 'M22.b extended', defect 2), inputs of any kind, outputs that are not
+/// condition flags (isFlagOutput), indirect ('=*m') or direct and tied to an
+/// input whose type isConvertibleTie accepts, any clobbers and no label. A
+/// direct output is tied to the input of its matching constraint (getTiedInput)
+/// or, for a local register variable, to the input in its own register
 /// (findRegisterTie); each input is tied to one output at most. Such an asm
 /// reads its inputs and writes nothing but its outputs, which hold after it
 /// what native x86 code leaves in them: a direct output the value of its
@@ -842,7 +861,7 @@ static bool isEmptyAsmWithOperands(const CallInst &CI,
                                    SmallVectorImpl<Value *> &Results,
                                    SmallVectorImpl<TiedStore> &Stores) {
   const auto *IA = dyn_cast<InlineAsm>(CI.getCalledOperand());
-  if (!IA || !IA->getAsmString().trim().empty())
+  if (!IA || !isBlankAsmString(IA->getAsmString()))
     return false;
   InlineAsm::ConstraintInfoVector Constraints = IA->ParseConstraints();
   if (Constraints.empty() && !IA->getConstraintString().empty())

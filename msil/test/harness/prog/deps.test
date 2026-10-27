@@ -2,15 +2,21 @@
 # M15). A nested lit with -a prints every command it ran for
 # Inputs/nested/deps.test (%{msil_prog_O2}, with the stand-ins of
 # lit.local.cfg, on the local runner):
-# (1) the MSIL build gets the native library arguments as --native-lib;
+# (1) the MSIL build gets the native library arguments as --native-lib, and
+#     the empty --shlibs of %msil_prog_build (M22: a test without
+#     %{msil_shlibs});
 # (2) msil-verify.py, msil-jitall.py and the run of the program get the
-#     files of %{msil_deps} after one --dep, ended by '--' before the
-#     program (a value may choose files with lit's %if and name them with a
-#     wildcard: -a prints the pattern, and lit's shell expands it, so the
-#     nested test passes only because the file it names exists);
+#     build's shlib/ directory as --dep-dir (M22; msil-verify.py also
+#     --also-verify-deps), then the files of %{msil_deps} after one --dep,
+#     ended by '--' before the program (a value may choose files with lit's
+#     %if and name them with a wildcard: -a prints the pattern, and lit's
+#     shell expands it, so the nested test passes only because the file it
+#     names exists); shlib/ is empty here, and a run with an empty one
+#     passes;
 # (3) where the native-oracle and .NET Framework legs run (a Windows triple
 #     with the .NET Framework; Inputs/nested/lit.local.cfg), the native build
-#     gets the same --native-lib and both runs the same --dep list;
+#     gets the same --native-lib and both runs the same --dep list, after
+#     --dep-dir with the native build's shlib/ and the MSIL build's;
 # and the test passes, so every step found its files. A run with a missing
 # --dep file is a configuration error (../dep-local.test).
 
@@ -18,11 +24,11 @@
 # RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/prog/Inputs/nested/deps\.test "
 
 # (1)
-# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --level O2 --workdir '?\S*deps\.test\.tmp\.O2\.d'? --out '?\S*deps\.test\.tmp\.O2\.d/prog\.exe'? --src '?\S*main\.c'? --stock-src --archives= --lib= --native-lib=-Wl,--stand-in-native$"
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --level O2 --workdir '?\S*deps\.test\.tmp\.O2\.d'? --out '?\S*deps\.test\.tmp\.O2\.d/prog\.exe'? --src '?\S*main\.c'? --stock-src --archives= --lib= --native-lib=-Wl,--stand-in-native$" "^# executed command: .*msil-prog\.py'? .* --shlibs= .* --level O2 --workdir '?\S*deps\.test\.tmp\.O2\.d'? "
 
 # (2)
-# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? .* --dep '?\S*dep-a\.txt'? '?\S*more/\*'? -- '?\S*deps\.test\.tmp\.O2\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*deps'? --out '?\S*deps\.test\.tmp\.O2\.out'? --dep '?\S*dep-a\.txt'? '?\S*more/\*'? -- '?\S*deps\.test\.tmp\.O2\.d/prog\.exe'?$"
-# RUN: %if msil-jitall %{ %{harness_check} contains %t.log "^# executed command: .*msil-jitall\.py'? .* --dep '?\S*dep-a\.txt'? '?\S*more/\*'? -- '?\S*deps\.test\.tmp\.O2\.d/prog\.exe'?$" %}
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? .* --dep-dir '?\S*deps\.test\.tmp\.O2\.d/shlib'? --also-verify-deps --dep '?\S*dep-a\.txt'? '?\S*more/\*'? -- '?\S*deps\.test\.tmp\.O2\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*deps'? --out '?\S*deps\.test\.tmp\.O2\.out'? --dep-dir '?\S*deps\.test\.tmp\.O2\.d/shlib'? --dep '?\S*dep-a\.txt'? '?\S*more/\*'? -- '?\S*deps\.test\.tmp\.O2\.d/prog\.exe'?$"
+# RUN: %if msil-jitall %{ %{harness_check} contains %t.log "^# executed command: .*msil-jitall\.py'? .* --dep-dir '?\S*deps\.test\.tmp\.O2\.d/shlib'? --dep '?\S*dep-a\.txt'? '?\S*more/\*'? -- '?\S*deps\.test\.tmp\.O2\.d/prog\.exe'?$" %}
 
 # (3)
-# RUN: %if msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --mode native --level O2 .* --native-lib=-Wl,--stand-in-native$" "^# executed command: .*msil-run\.py'? .* --native --expect '?\S*deps'? --out '?\S*deps\.test\.tmp\.O2\.native\.out'? --dep '?\S*dep-a\.txt'? '?\S*more/\*'? -- '?\S*deps\.test\.tmp\.O2\.native\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? .* --netfx --expect '?\S*deps'? --out '?\S*deps\.test\.tmp\.O2\.netfx\.out'? --dep '?\S*dep-a\.txt'? '?\S*more/\*'? -- '?\S*deps\.test\.tmp\.O2\.d/prog\.exe'?$" %}
+# RUN: %if msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --mode native --level O2 .* --native-lib=-Wl,--stand-in-native$" "^# executed command: .*msil-run\.py'? .* --native --expect '?\S*deps'? --out '?\S*deps\.test\.tmp\.O2\.native\.out'? --dep-dir '?\S*deps\.test\.tmp\.O2\.native\.d/shlib'? --dep '?\S*dep-a\.txt'? '?\S*more/\*'? -- '?\S*deps\.test\.tmp\.O2\.native\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? .* --netfx --expect '?\S*deps'? --out '?\S*deps\.test\.tmp\.O2\.netfx\.out'? --dep-dir '?\S*deps\.test\.tmp\.O2\.d/shlib'? --dep '?\S*dep-a\.txt'? '?\S*more/\*'? -- '?\S*deps\.test\.tmp\.O2\.d/prog\.exe'?$" %}

@@ -1,0 +1,104 @@
+# A C# program compiled by csc calls a C library built by this toolchain (recon E6), on .NET 8 and on .NET Framework 4.8.
+# zlibc.c is linked with clang -shared -Wl,--export-class=Contoso.Lib.Native
+# at -O0 and at -O2 and verified; use.cs (recon/p2/exports-multiasm-files/
+# e6/use.cs, adapted) is compiled with the SDK's csc against each build
+# (%msil_csc, plan 5.12.3) and run with the library beside it. C# sees the
+# export class as the static class Contoso.Lib.Native (Q23): exported
+# functions as public static methods with their C signatures (native int for
+# pointers), the exported variable counter as a property whose getter
+# '<msil>addr_counter' returns its address, a function pointer from
+# get_twice() equal to what the '<msil>addr_twice' accessor returns, and no
+# member for the hidden helper (plan 5.9.15). The library's constructor
+# (counter = 100) runs before Main's first statement, because the CLR runs
+# the library's initializers when Main is JIT-compiled (recon
+# exports-multiasm 6.1). net8: compiled against the newest .NET 8 reference
+# pack and run on the configured .NET runtime, whenever the library is bound
+# to mscorlib or to the .NET 8 pack (msil_references none, net48 or net8).
+# net48: compiled against the .NET Framework 4.8 reference assemblies and
+# run on the Framework, when it is installed and the library is bound to
+# mscorlib (msil_references none or net48) for a Windows triple. Plan M22.f
+# (csharp-consumer).
+# REQUIRES: msil-csc
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/O0 %t/O2
+# RUN: %clang_msil %{msil_cflags} -O0 -c %t/zlibc.c -o %t/O0/zlibc.o
+# RUN: %clang_msil -O0 %{msil_ldflags} -shared -Wl,--export-class=Contoso.Lib.Native %t/O0/zlibc.o -o %t/O0/zlibc.dll
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/zlibc.c -o %t/O2/zlibc.o
+# RUN: %clang_msil -O2 %{msil_ldflags} -shared -Wl,--export-class=Contoso.Lib.Native %t/O2/zlibc.o -o %t/O2/zlibc.dll
+# RUN: %msil_verify %t/O0/zlibc.dll
+# RUN: %msil_verify %t/O2/zlibc.dll
+# RUN: %if msil-jitall %{ %msil_jitall %t/O0/zlibc.dll %}
+# RUN: %if msil-jitall %{ %msil_jitall %t/O2/zlibc.dll %}
+
+# RUN: %if msil-ref=none || msil-ref=net48 || msil-ref=net8 %{ %msil_csc %t/use.cs --out %t/O0/use8.exe --reference %t/O0/zlibc.dll --refs net8 --unsafe %}
+# RUN: %if msil-ref=none || msil-ref=net48 || msil-ref=net8 %{ %msil_exec --out %t/O0/use8.out --dep %t/O0/zlibc.dll -- %t/O0/use8.exe %}
+# RUN: %if msil-ref=none || msil-ref=net48 || msil-ref=net8 %{ FileCheck %s --input-file=%t/O0/use8.out %}
+# RUN: %if msil-ref=none || msil-ref=net48 || msil-ref=net8 %{ %msil_csc %t/use.cs --out %t/O2/use8.exe --reference %t/O2/zlibc.dll --refs net8 --unsafe %}
+# RUN: %if msil-ref=none || msil-ref=net48 || msil-ref=net8 %{ %msil_exec --out %t/O2/use8.out --dep %t/O2/zlibc.dll -- %t/O2/use8.exe %}
+# RUN: %if msil-ref=none || msil-ref=net48 || msil-ref=net8 %{ FileCheck %s --input-file=%t/O2/use8.out %}
+
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ %msil_csc %t/use.cs --out %t/O0/use48.exe --reference %t/O0/zlibc.dll --refs net48 --unsafe %}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ %msil_exec --netfx --out %t/O0/use48.out --dep %t/O0/zlibc.dll -- %t/O0/use48.exe %}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ FileCheck %s --input-file=%t/O0/use48.out %}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ %msil_csc %t/use.cs --out %t/O2/use48.exe --reference %t/O2/zlibc.dll --refs net48 --unsafe %}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ %msil_exec --netfx --out %t/O2/use48.out --dep %t/O2/zlibc.dll -- %t/O2/use48.exe %}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ FileCheck %s --input-file=%t/O2/use48.out %}
+
+# CHECK:      {{^}}C#: *counter = 100{{$}}
+# CHECK-NEXT: {{^}}C#: add(2, 3) = 5{{$}}
+# CHECK-NEXT: {{^}}C#: bump() after *counter = 40 -> 41{{$}}
+# CHECK-NEXT: {{^}}C#: get_twice()(21) = 42{{$}}
+# CHECK-NEXT: {{^}}C#: get_twice() == <msil>addr_twice(): True{{$}}
+# CHECK-NEXT: {{^}}C#: length("hello, world") = 12{{$}}
+# CHECK-NEXT: {{^}}C#: Contoso.Lib.Native is a static class: True{{$}}
+# CHECK-NEXT: {{^}}C#: helper visible: False{{$}}
+# CHECK-NEXT: {{^}}[exit 0]{{$}}
+#--- zlibc.c
+/* recon E6's library (e6/zlibc.il), in C. */
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+API int counter = 5;
+__attribute__((visibility("hidden"))) int helper(int x) { return x + 1; }
+API int add(int a, int b) { return a + b; }
+API int bump(void) { return helper(counter++); }
+API int twice(int x) { return 2 * x; }
+API int (*get_twice(void))(int) { return twice; }
+API int length(const char *s) {
+  int n = 0;
+  while (s[n])
+    ++n;
+  return n;
+}
+__attribute__((constructor)) static void init(void) { counter = 100; }
+#--- use.cs
+// recon E6's use.cs: a C# program calling a library built by this toolchain
+// through its export class.
+using System;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using Contoso.Lib;
+
+unsafe static class Program
+{
+    static int Main()
+    {
+        int* counter = (int*)Native.counter;          // exported data: property -> address
+        Console.WriteLine("C#: *counter = " + *counter);
+        Console.WriteLine("C#: add(2, 3) = " + Native.add(2, 3));
+        *counter = 40;
+        Console.WriteLine("C#: bump() after *counter = 40 -> " + Native.bump());
+        delegate*<int, int> f = (delegate*<int, int>)Native.get_twice();   // a C function pointer
+        Console.WriteLine("C#: get_twice()(21) = " + f(21));
+        IntPtr viaAccessor = (IntPtr)typeof(Native).GetMethod("<msil>addr_twice").Invoke(null, null);
+        Console.WriteLine("C#: get_twice() == <msil>addr_twice(): " + ((IntPtr)Native.get_twice() == viaAccessor));
+        IntPtr s = Marshal.StringToHGlobalAnsi("hello, world");
+        Console.WriteLine("C#: length(\"hello, world\") = " + Native.length(s));
+        Marshal.FreeHGlobal(s);
+        Console.WriteLine("C#: Contoso.Lib.Native is a static class: " + (typeof(Native).IsAbstract && typeof(Native).IsSealed));
+        const BindingFlags any = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+        Console.WriteLine("C#: helper visible: " + (typeof(Native).GetMethod("helper", any) != null));
+        return 0;
+    }
+}

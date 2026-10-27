@@ -123,13 +123,15 @@ min-pass 306
 fork-only .github/workflows/msil-ci.yml
 fork-only clang/lib/Basic/Targets/MSIL.h
 # The clang MSIL toolchain (plan 5.10.1, M14) and its driver tests (5.6.4); msil-object.c
-# (M19) pins that -c writes CIL objects.
+# (M19) pins that -c writes CIL objects, msil-shared.c (M22) that -shared, clang-cl /LD and
+# /LDd link library assemblies.
 fork-only clang/lib/Driver/ToolChains/MSIL.cpp
 fork-only clang/lib/Driver/ToolChains/MSIL.h
 fork-only clang/test/Driver/msil-header-search.c
 fork-only clang/test/Driver/msil-link.c
 fork-only clang/test/Driver/msil-lto.c
 fork-only clang/test/Driver/msil-object.c
+fork-only clang/test/Driver/msil-shared.c
 fork-only clang/test/Driver/msil-toolchain.c
 fork-only clang/test/Preprocessor/init-msil.c
 # The ECMA-335 format headers (plan 5.7.2) and the link-info record v1 (5.8.11), header-only.

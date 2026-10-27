@@ -1,0 +1,7 @@
+argc in main=1
+argc in the slot constructor=1
+argc in the attribute constructor=1
+the slot constructor got main's argv=1
+argv[argc] is null=1
+envp holds DOTNET_NOLOGO=1=1
+[exit 0]

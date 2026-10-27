@@ -15,7 +15,11 @@
 #     composite, which build a native library with %clang_native and
 #     %msil_ar (lit's %if/%else decided by the oracle's triple), links it
 #     through %{msil_native_libs} and copies %{msil_deps} next to the native
-#     program, so its transcript holds the library's value;
+#     program, so its transcript holds the library's value; for
+#     shlib-pair.test (M22) it builds the shared libraries of
+#     %{msil_shlibs} natively before the program (msil-prog.py --shlibs) and
+#     runs the program with them beside it (msil-run.py --dep-dir), so its
+#     transcript holds both libraries' values;
 # (2) --check passes against what it wrote;
 # (3) --check of a wrong two.expected fails with status 1 and the diff.
 # The stand-in's native program is a .NET Framework executable for a Windows
@@ -33,6 +37,7 @@
 # RUN: cat %S/Inputs/ue/unknown-features.test > %t.d/unknown-features.test
 # RUN: cat %S/Inputs/ue/no-composite.test > %t.d/no-composite.test
 # RUN: cat %S/Inputs/ue/native-lib.test > %t.d/native-lib.test
+# RUN: cat %S/Inputs/ue/shlib-pair.test > %t.d/shlib-pair.test
 
 # (1)
 # RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none %t.d > %t.1.log 2>&1
@@ -41,6 +46,8 @@
 # RUN: %{harness_check} equals %t.d/unknown-features.expected "[exit 23]"
 # RUN: %{harness_check} contains %t.1.log "^wrote \S+native-lib\.expected$" "^update-expected: prepare: .*prog-cc\.py\"? --as cc .*--target=x86_64-\S+ -std=gnu17 -ffreestanding -Werror=return-type -I\"\S+Inputs\" -O2 -c \S+/t/lib\.c -o \S+/t/lib\.o$" "^update-expected: prepare: .*prog-cc\.py\"? --as ar rcs \S+/t/(native\.lib|libnative\.a) \S+/t/lib\.o$"
 # RUN: %{harness_check} equals %t.d/native-lib.expected "[exit 65]"
+# RUN: %{harness_check} contains %t.1.log "^wrote \S+shlib-pair\.expected$"
+# RUN: %{harness_check} equals %t.d/shlib-pair.expected "[exit 73]"
 # RUN: %{harness_check} missing %t.d/fail-only.expected
 # RUN: %{harness_check} missing %t.d/det-only.expected
 # RUN: %{harness_check} missing %t.d/no-composite.expected
@@ -54,7 +61,7 @@
 
 # (2)
 # RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none --check %t.d > %t.2.log 2>&1
-# RUN: %{harness_check} contains %t.2.log "^ok: \S+two\.test$" "^ok: \S+unknown-features\.test$" "^ok: \S+native-lib\.test$"
+# RUN: %{harness_check} contains %t.2.log "^ok: \S+two\.test$" "^ok: \S+unknown-features\.test$" "^ok: \S+native-lib\.test$" "^ok: \S+shlib-pair\.test$"
 
 # (3)
 # RUN: %{harness_check} write %t.d/two.expected "[exit 99]"

@@ -17,10 +17,12 @@
 #define LLD_MSIL_CONFIG_H
 
 #include "NativeLibraries.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/BinaryFormat/CLI.h"
 #include "llvm/Support/LibraryOptionsContext.h"
 #include "llvm/TargetParser/Triple.h"
 #include <cstdint>
@@ -48,22 +50,29 @@ class SyntheticSegment;
 // and such fields have the same name as the corresponding options.
 // Most fields are initialized by the driver.
 //
-// Options without a member act while the driver reads them: -l, -l:,
-// --whole-archive, --no-whole-archive, --start-lib and --end-lib (input
-// order), --trace-symbol and -y (SymbolTable::trace), --reproduce (tar),
-// --fatal-warnings, --error-limit, --verbose and --color-diagnostics
-// (lld's ErrorHandler), and the rejected -r. -Bstatic and -Bdynamic set
-// isStatic while the driver reads the inputs (lld/ELF's member),
-// --ucrtbase-imports adds its built-in library where it appears, and
-// --reference adds its file or directory to ctx.references where it appears
-// (references keeps the values too).
+// Options without a member act while the driver reads them: -l and -l: (the
+// libraries member keeps their values), --whole-archive, --no-whole-archive,
+// --start-lib and --end-lib (input order), --trace-symbol and -y
+// (SymbolTable::trace), --reproduce (tar), --fatal-warnings, --error-limit,
+// --verbose and --color-diagnostics (lld's ErrorHandler), and the rejected
+// -r. -Bstatic and -Bdynamic set isStatic while the driver reads the inputs
+// (lld/ELF's member), --ucrtbase-imports adds its built-in library where it
+// appears, and --reference adds its file or directory to ctx.references where
+// it appears (references keeps the values too).
 struct Config {
   bool allowMultipleDefinition;
   // --dependent-libraries (default) and --no-dependent-libraries.
   bool dependentLibraries;
   bool disableVerify;
+  // --export-all-symbols (plan 5.9.15): on Windows triples, a -shared
+  // library exports every candidate even when some input has dllexport
+  // definitions.
+  bool exportAllSymbols;
   // --gc-sections (default) and --no-gc-sections (plan 5.9.11).
   bool gcSections;
+  // --interface-only (plan 5.9.15; only with -shared): an interface library
+  // with stub bodies, linked without late binding.
+  bool interfaceOnly;
   // -Bstatic: -l accepts static libraries only (plan 5.10.9).
   bool isStatic = false;
   bool ltoEmitAsm;
@@ -73,6 +82,8 @@ struct Config {
   bool printGcSections;
   bool printImports;
   bool saveTemps;
+  // -shared and --shared (plan 5.9.15): a library assembly (a DLL image
+  // without an entry point) with exports.
   bool shared;
   bool stripAll;
   bool trace;
@@ -97,7 +108,13 @@ struct Config {
 
   // --assembly-name and -soname. Empty means the stem of outputFile.
   llvm::StringRef assemblyName;
+  // --assembly-version (plan 5.9.15): the version of the Assembly row of
+  // every output; missing parts are 0 (default 0.0.0.0).
+  llvm::cli::AssemblyVersion assemblyVersion;
   llvm::StringRef entry;
+  // --export-class=<Ns.Name> (plan 5.9.15) as given, which the driver has
+  // checked with parseClassName(). Empty means the assembly name.
+  llvm::StringRef exportClass;
   llvm::StringRef mapFile;
   llvm::StringRef outputFile;
   llvm::StringRef sysroot;
@@ -108,9 +125,18 @@ struct Config {
   // --target: the codegen triple, an MSIL triple.
   llvm::Triple target;
 
+  // --exclude-libs=<list> (lld/ELF's): the archive file names, split at ','
+  // and ':', whose members' definitions a -shared library does not export;
+  // "ALL" names every archive.
+  llvm::DenseSet<llvm::StringRef> excludeLibs;
+
   // --print-bcl-binding=<request> (hidden, plan 5.11.5), in command-line
   // order: print how the references bind each request and exit.
   llvm::SmallVector<llvm::StringRef, 0> printBclBinding;
+  // The values of -l (the -l:<file> ones with their ':'), in command-line
+  // order: getCRuntimeIdentity() (plan 5.9.15) reads them. The driver
+  // searches each where it appears.
+  llvm::SmallVector<llvm::StringRef, 0> libraries;
   // --reference=<file|dir> (plan 5.11.1), in command-line order.
   llvm::SmallVector<llvm::StringRef, 0> references;
   llvm::SmallVector<llvm::StringRef, 0> searchPaths;
@@ -163,6 +189,13 @@ struct Ctx {
   // The /failifmismatch:<key>=<value> linker options: the value of each key
   // and the last input that gave it (lld-link's mustMatch).
   llvm::StringMap<std::pair<llvm::StringRef, const InputFile *>> mustMatch;
+
+  // The definitions of the members of the --exclude-libs archives (CIL
+  // objects and bitcode files), which a -shared library never exports (plan
+  // 5.9.15): excludeLibs() records them before LTO, as lld/ELF does, so that
+  // LTO may internalize them and the LTO objects that define them again stay
+  // excluded.
+  llvm::DenseSet<const Symbol *> excludedSymbols;
 
   // linker-generated symbols
   struct MSILSym {

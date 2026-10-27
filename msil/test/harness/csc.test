@@ -1,0 +1,70 @@
+# %msil_csc (plan 5.12.3, 5.12.4; M22) is msil/utils/jitall/build-jitall.py
+# --csharp: it compiles one C# file offline with the newest .NET SDK's
+# Roslyn csc, as the C# consumer of msil/test/M2/04-shared does. stub.il is
+# a library like the ones msil-ld writes for -shared (Design.md 5.4): a
+# public abstract sealed export class with a public static method:
+# (1) net8 (the default): against the newest Microsoft.NETCore.App.Ref 8.x
+#     pack, with --reference to the library; it writes the program and
+#     <stem>.runtimeconfig.json (net8.0) beside it, and the program runs on
+#     .NET with the library beside it (msil-run.py --dep), printing what the
+#     library returns; --unsafe allows pointers (-unsafe+), which csc refuses
+#     without it;
+# (2) under msil-netfx, net48: against the .NET Framework 4.8 reference
+#     assemblies and their Facades, and the program runs on the .NET
+#     Framework with the library beside it;
+# (3) a C# error fails with status 1 and csc's message, and --reference
+#     without --csharp is a usage error (status 2).
+# REQUIRES: msil-csc
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: %ilasm -dll -output=%t/stub.dll %t/stub.il
+
+# (1)
+# RUN: %msil_csc %t/use.cs --out %t/net8/use.exe --reference %t/stub.dll > %t/8.log 2>&1
+# RUN: %{harness_check} contains %t/8.log "^build-jitall: compiled \S+use\.exe \(SDK \S+, net8 references \S+\)$"
+# RUN: %{harness_check} contains %t/net8/use.runtimeconfig.json "\"tfm\": \"net8\.0\"" "\"name\": \"Microsoft\.NETCore\.App\""
+# RUN: %msil_exec --out %t/8.out --dep %t/stub.dll -- %t/net8/use.exe
+# RUN: %{harness_check} equals %t/8.out "add(2, 3) = 5" "[exit 0]"
+# RUN: %msil_csc %t/ptr.cs --out %t/net8/ptr.exe --reference %t/stub.dll --refs net8 --unsafe
+# RUN: %msil_exec --out %t/ptr.out --dep %t/stub.dll -- %t/net8/ptr.exe
+# RUN: %{harness_check} equals %t/ptr.out "[exit 5]"
+# RUN: %{harness_check} exits 1 %msil_csc %t/ptr.cs --out %t/net8/ptr-safe.exe --reference %t/stub.dll > %t/safe.log 2>&1
+# RUN: %{harness_check} contains %t/safe.log "error CS0227"
+
+# (2)
+# RUN: %if msil-netfx %{ %msil_csc %t/use.cs --out %t/net48/use.exe --reference %t/stub.dll --refs net48 > %t/48.log 2>&1 %}
+# RUN: %if msil-netfx %{ %{harness_check} contains %t/48.log "^build-jitall: compiled \S+use\.exe \(SDK \S+, net48 references v4\.8\)$" %}
+# RUN: %if msil-netfx %{ %{harness_check} missing %t/net48/use.runtimeconfig.json %}
+# RUN: %if msil-netfx && !msil-wsl %{ %msil_exec --netfx --out %t/48.out --dep %t/stub.dll -- %t/net48/use.exe %}
+# RUN: %if msil-netfx && !msil-wsl %{ %{harness_check} equals %t/48.out "add(2, 3) = 5" "[exit 0]" %}
+
+# (3)
+# RUN: %{harness_check} exits 1 %msil_csc %t/bad.cs --out %t/net8/bad.exe > %t/bad.log 2>&1
+# RUN: %{harness_check} contains %t/bad.log "^build-jitall: error: csc failed \(exit 1\):$" "error CS0103"
+# RUN: %{harness_check} exits 2 %python %S/../../utils/jitall/build-jitall.py --reference %t/stub.dll > %t/usage.log 2>&1
+# RUN: %{harness_check} contains %t/usage.log "error: --reference, --refs and --unsafe go with --csharp$"
+
+#--- stub.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'stub' { .ver 0:0:0:0 }
+.class public abstract auto ansi sealed Contoso.Stub.Native extends [mscorlib]System.Object
+{
+  .method public hidebysig static int32 'add'(int32 A_0, int32 A_1) cil managed
+  {
+    .maxstack 2
+    ldarg.0
+    ldarg.1
+    add
+    ret
+  }
+}
+#--- use.cs
+static class Program {
+  static int Main() { System.Console.WriteLine("add(2, 3) = " + Contoso.Stub.Native.add(2, 3)); return 0; }
+}
+#--- ptr.cs
+unsafe static class Program {
+  static int Main() { int v = Contoso.Stub.Native.add(2, 3); int* p = &v; return *p; }
+}
+#--- bad.cs
+static class Program { static int Main() { return undefined_name; } }

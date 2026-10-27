@@ -1,0 +1,291 @@
+## Two-phase initialization (ImplementationPlan.md 5.9.10 and 5.9.15, M22.b
+## item 1; the section 12 row of 2026-10-21 for the two-phase scope; recon
+## p2/exports-multiasm.md 6.2-6.4):
+## - a -shared output runs phase 1 in '<msil>Data'::.cctor: the allocation,
+##   the image copy (from '<Module>'::'<msil>image'), the address fields,
+##   the '<msil>fn_' fields and the in-assembly relocations; it never names
+##   another toolchain assembly (no [base] or [other] token);
+## - phase 2 is <Module>::.cctor: first one 'ldtoken <export class>' and
+##   'pop' per directly linked library in command-line order, used or not
+##   (other.dll exports nothing lib.o uses), then the cross-assembly
+##   relocations in site order (the accessor's result stored straight-line:
+##   ldsfld '<msil>data', ldc.i4 site, add, call
+##   [lib]Class::'<msil>addr_<name>'(), stind.i), then the constructors;
+## - a library without library inputs and constructors has no
+##   <Module>::.cctor;
+## - an EXE keeps its one <Module>::.cctor and no '<msil>Data' class: after
+##   its in-assembly relocations come the ldtokens, then the cross-assembly
+##   relocations, then the constructors;
+## - phase 1 of a -shared output also holds the relocation loop
+##   (--msil-reloc-loop-threshold=0, M20's '<msil>relocs' loop): the table
+##   '<msil>relocs' is a field of <Module> in 'assembly' access (0x0113),
+##   the loop reads it in '<msil>Data'::.cctor with no foreign token, and
+##   <Module>::.cctor (phase 2) is the same as without the loop (M22 review
+##   r2 finding 11);
+## - -Map lists the symbols bound to a library's exports as rows of kind
+##   ManagedFunction and ManagedData with the library as input, after the
+##   program's own definitions and the natively bound symbols, in
+##   symbol-table order (section 12 row '5.9.14 clarified (managed binding)'
+##   of 2026-10-26; review r2 finding 4).
+## listing.py prints one method of one class of the canonical listing.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj base.ll -o base.o
+# RUN: llc -filetype=obj other.ll -o other.o
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: msil-ld -shared base.o -o base.dll 2>&1 | count 0
+# RUN: msil-ld -shared other.o -o other.dll 2>&1 | count 0
+
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+
+## No library input and no constructor: no <Module>::.cctor.
+# RUN: llvm-cil-dump base.dll > base.txt
+# RUN: %{listing} method base.txt '<Module>' .cctor | FileCheck %s --check-prefix=NO-PHASE2
+# NO-PHASE2: {{^}}no method <Module>::.cctor{{$}}
+# RUN: %{listing} method base.txt '<msil>Data' .cctor | FileCheck %s --check-prefix=BASE-PHASE1
+# BASE-PHASE1: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+
+## lib.dll: phase 1 holds everything of its own and no foreign token.
+# RUN: mkdir ab ba
+# RUN: msil-ld -shared lib.o base.dll other.dll -o ab/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump ab/lib.dll > ab.txt
+# RUN: %{listing} method ab.txt '<msil>Data' .cctor > ab-phase1.txt
+# RUN: FileCheck %s --check-prefix=PHASE1 --implicit-check-not='[base]' --implicit-check-not='[other]' \
+# RUN:   --implicit-check-not=ldtoken --implicit-check-not="'init'" --input-file=ab-phase1.txt
+# PHASE1:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# PHASE1-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# PHASE1-NEXT: {{^}}    L0: ldc.i4.s 51{{$}}
+# PHASE1-NEXT: {{^}}    L1: conv.i{{$}}
+# PHASE1-NEXT: {{^}}    L2: call native int(native int) [mscorlib]System.Runtime.InteropServices.Marshal::'AllocHGlobal'{{$}}
+# PHASE1-NEXT: {{^}}    L3: ldc.i4.s 15{{$}}
+# PHASE1-NEXT: {{^}}    L4: conv.i{{$}}
+# PHASE1-NEXT: {{^}}    L5: add{{$}}
+# PHASE1-NEXT: {{^}}    L6: ldc.i4.s -16{{$}}
+# PHASE1-NEXT: {{^}}    L7: conv.i{{$}}
+# PHASE1-NEXT: {{^}}    L8: and{{$}}
+# PHASE1-NEXT: {{^}}    L9: stsfld native int '<msil>Data'::'<msil>data'{{$}}
+# PHASE1-NEXT: {{^}}    L10: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# PHASE1-NEXT: {{^}}    L11: ldsflda valuetype '<msil>image_t' '<Module>'::'<msil>image'{{$}}
+# PHASE1-NEXT: {{^}}    L12: ldc.i4.s 32{{$}}
+# PHASE1-NEXT: {{^}}    L13: cpblk{{$}}
+# PHASE1:      {{^}}    L{{[0-9]+}}: initblk{{$}}
+# PHASE1-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# PHASE1-NEXT: {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Data'::'own'{{$}}
+# PHASE1:      {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Data'::'pown'{{$}}
+# PHASE1:      {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Data'::'pbase'{{$}}
+# PHASE1:      {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Data'::'fbase'{{$}}
+# PHASE1:      {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Data'::'log'{{$}}
+# PHASE1-NEXT: {{^}}    L{{[0-9]+}}: ldftn int32() 'lib'::'get'{{$}}
+# PHASE1-NEXT: {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Data'::'<msil>fn_get'{{$}}
+# PHASE1-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# PHASE1-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.8{{$}}
+# PHASE1-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# PHASE1-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<msil>Data'::'own'{{$}}
+# PHASE1-NEXT: {{^}}    L{{[0-9]+}}: stind.i{{$}}
+# PHASE1-NEXT: {{^}}    L{{[0-9]+}}: ret{{$}}
+# PHASE1-NOT:  {{.}}
+
+## Phase 2: the ldtokens in command-line order, the two cross-assembly
+## relocations (pbase at 16, fbase at 24), the constructor. The image is
+## own (0), pown (8, relocated in phase 1), pbase (16), fbase (24), then
+## the zero part, log (32): 36 bytes, so phase 1 allocates 36 + 15.
+# RUN: %{listing} method ab.txt '<Module>' .cctor | FileCheck %s --check-prefixes=PHASE2,AB
+# RUN: msil-ld -shared lib.o other.dll base.dll -o ba/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump ba/lib.dll > ba.txt
+# RUN: %{listing} method ba.txt '<Module>' .cctor | FileCheck %s --check-prefixes=PHASE2,BA
+# PHASE2:    {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# PHASE2-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# AB-NEXT:   {{^}}    L0: ldtoken [base]base{{$}}
+# AB-NEXT:   {{^}}    L1: pop{{$}}
+# AB-NEXT:   {{^}}    L2: ldtoken [other]other{{$}}
+# AB-NEXT:   {{^}}    L3: pop{{$}}
+# BA-NEXT:   {{^}}    L0: ldtoken [other]other{{$}}
+# BA-NEXT:   {{^}}    L1: pop{{$}}
+# BA-NEXT:   {{^}}    L2: ldtoken [base]base{{$}}
+# BA-NEXT:   {{^}}    L3: pop{{$}}
+# PHASE2-NEXT: {{^}}    L4: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# PHASE2-NEXT: {{^}}    L5: ldc.i4.s 16{{$}}
+# PHASE2-NEXT: {{^}}    L6: add{{$}}
+# PHASE2-NEXT: {{^}}    L7: call native int() [base]base::'<msil>addr_base_var'{{$}}
+# PHASE2-NEXT: {{^}}    L8: stind.i{{$}}
+# PHASE2-NEXT: {{^}}    L9: ldsfld native int '<msil>Data'::'<msil>data'{{$}}
+# PHASE2-NEXT: {{^}}    L10: ldc.i4.s 24{{$}}
+# PHASE2-NEXT: {{^}}    L11: add{{$}}
+# PHASE2-NEXT: {{^}}    L12: call native int() [base]base::'<msil>addr_base_fn'{{$}}
+# PHASE2-NEXT: {{^}}    L13: stind.i{{$}}
+# PHASE2-NEXT: {{^}}    L14: call void() '<Module>'::'init'{{$}}
+# PHASE2-NEXT: {{^}}    L15: ret{{$}}
+# PHASE2-NOT:  {{.}}
+
+## A library whose only phase-2 work is an unused library's ldtoken.
+# RUN: mkdir tok
+# RUN: msil-ld -shared base.o other.dll -o tok/base.dll 2>&1 | count 0
+# RUN: llvm-cil-dump tok/base.dll > tok.txt
+# RUN: %{listing} method tok.txt '<Module>' .cctor | FileCheck %s --check-prefix=TOK
+# TOK:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# TOK-NEXT: {{^}}    .maxstack 1{{$}}
+# TOK-NEXT: {{^}}    L0: ldtoken [other]other{{$}}
+# TOK-NEXT: {{^}}    L1: pop{{$}}
+# TOK-NEXT: {{^}}    L2: ret{{$}}
+
+## An EXE with a library input: one '.cctor'; in-assembly relocations, the
+## ldtoken, the cross-assembly relocation, the constructor.
+# RUN: msil-ld prog.o base.dll -o prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog.exe > prog.txt
+# RUN: %{listing} class prog.txt '<msil>Data' | FileCheck %s --check-prefix=EXE-NODATA
+# EXE-NODATA: {{^}}no class <msil>Data{{$}}
+# RUN: %{listing} method prog.txt '<Module>' .cctor | FileCheck %s --check-prefix=EXE
+# EXE:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# EXE:      {{^}}    L{{[0-9]+}}: call native int(native int) [mscorlib]System.Runtime.InteropServices.Marshal::'AllocHGlobal'{{$}}
+# EXE:      {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'pbase'{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.s 24{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'log'{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.8{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'own'{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: stind.i{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: ldtoken [base]base{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: pop{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'<msil>data'{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: ldc.i4.s 16{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: add{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: call native int() [base]base::'<msil>addr_base_var'{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: stind.i{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: call void() '<Module>'::'pinit'{{$}}
+# EXE-NEXT: {{^}}    L{{[0-9]+}}: ret{{$}}
+# EXE-NOT:  {{.}}
+
+## The relocation loop in phase 1: lib.o's one in-assembly relocation (pown)
+## goes through '<msil>relocs'; phase 2 is ab/lib.dll's.
+# RUN: mkdir loop
+# RUN: msil-ld -shared lib.o base.dll other.dll --msil-reloc-loop-threshold=0 -o loop/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump loop/lib.dll > loop.txt
+# RUN: %{listing} class loop.txt '<Module>' | FileCheck %s --check-prefix=LOOP-FIELD
+# LOOP-FIELD:      {{^}}.class '<Module>' flags=0x00000000{{$}}
+# LOOP-FIELD-NEXT: {{^}}  .field '<msil>image' valuetype '<msil>image_t' flags=0x0113{{$}}
+# LOOP-FIELD:      {{^}}  .field '<msil>relocs' valuetype '<msil>relocs_t' flags=0x0113{{$}}
+# RUN: %{listing} method loop.txt '<msil>Data' .cctor > loop-phase1.txt
+# RUN: FileCheck %s --check-prefix=LOOP --implicit-check-not='[base]' --implicit-check-not='[other]' \
+# RUN:   --implicit-check-not=ldtoken --implicit-check-not="'init'" --input-file=loop-phase1.txt
+# LOOP:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# LOOP:      {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Data'::'<msil>fn_get'{{$}}
+# LOOP:      {{^}}    L{{[0-9]+}}: ldsflda valuetype '<msil>relocs_t' '<Module>'::'<msil>relocs'{{$}}
+# LOOP:      {{^}}    L{{[0-9]+}}: ret{{$}}
+# LOOP-NOT:  {{.}}
+# RUN: %{listing} method loop.txt '<Module>' .cctor | FileCheck %s --check-prefixes=PHASE2,AB
+
+## -Map of a program that calls base_fn, reads base_var and calls puts from
+## an import library.
+# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/ucrt-stdio.def /out:stdio.lib
+# RUN: llc -filetype=obj progm.ll -o progm.o
+# RUN: msil-ld progm.o base.dll stdio.lib -Map=progm.map -o progm.exe 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=MAP --input-file=progm.map
+# MAP:      {{^}}Symbols:{{$}}
+# MAP-NEXT: {{^  Kind +Binding +Input +Symbol$}}
+# MAP-NEXT: {{^  DefinedData +Global +progm\.o +own$}}
+# MAP-NEXT: {{^  DefinedFunction +Global +progm\.o +main$}}
+# MAP-NEXT: {{^  NativeFunction +Global +stdio\.lib.* +puts$}}
+# MAP-NEXT: {{^  ManagedData +Global +base\.dll +base_var$}}
+# MAP-NEXT: {{^  ManagedFunction +Global +base\.dll +base_fn$}}
+# MAP-NEXT: {{^}}Image: {{.*}}
+
+#--- base.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@base_var = global i32 7, align 4
+
+define i32 @base_fn() {
+  ret i32 3
+}
+
+#--- other.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@other_var = global i32 9, align 4
+
+#--- lib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@base_var = external global i32
+declare i32 @base_fn()
+
+@own = global i32 1, align 4
+@pown = global ptr @own, align 8
+@pbase = global ptr @base_var, align 8
+@fbase = global ptr @base_fn, align 8
+@log = internal global i32 0, align 4
+
+define i32 @get() {
+  %a = load ptr, ptr @pown
+  %b = load ptr, ptr @pbase
+  %f = load ptr, ptr @fbase
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %z = call i32 %f()
+  %l = load i32, ptr @log
+  %s1 = add i32 %x, %y
+  %s2 = add i32 %s1, %z
+  %s3 = add i32 %s2, %l
+  ret i32 %s3
+}
+
+define internal void @init() {
+  store i32 1, ptr @log
+  ret void
+}
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init, ptr null }]
+
+#--- prog.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@base_var = external global i32
+
+@own = global i32 1, align 4
+@pown = global ptr @own, align 8
+@pbase = global ptr @base_var, align 8
+@log = internal global i32 0, align 4
+
+define internal void @pinit() {
+  store i32 1, ptr @log
+  ret void
+}
+
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @pinit, ptr null }]
+
+define i32 @main() {
+  %a = load ptr, ptr @pown
+  %b = load ptr, ptr @pbase
+  %x = load i32, ptr %a
+  %y = load i32, ptr %b
+  %l = load i32, ptr @log
+  %s1 = add i32 %x, %y
+  %s2 = add i32 %s1, %l
+  ret i32 %s2
+}
+
+#--- progm.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@base_var = external global i32
+declare i32 @base_fn()
+declare i32 @puts(ptr)
+
+@own = global i32 1, align 4
+@msg = private constant [3 x i8] c"hi\00"
+
+define i32 @main() {
+  %v = load i32, ptr @base_var, align 4
+  %f = call i32 @base_fn()
+  %p = call i32 @puts(ptr @msg)
+  %o = load i32, ptr @own, align 4
+  %s1 = add i32 %v, %f
+  %s2 = add i32 %s1, %p
+  %s3 = add i32 %s2, %o
+  ret i32 %s3
+}

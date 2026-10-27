@@ -1,0 +1,157 @@
+## Two variants of a library's '<msil>Data' class (ImplementationPlan.md
+## M22.b items 1 and 2; 5.9.15, 5.9.10, 5.9.12, 5.10.12):
+## - spill classes: '<msil>Data' holds '<msil>data', the address fields and
+##   the '<msil>fn_' fields up to the --msil-type-member-limit, and the rest
+##   go to M20's '<msil>Spill<N>' classes ('private abstract sealed auto
+##   ansi', 0x180, extending System.Object), whose fields are 'assembly' and
+##   not initonly (0x0013), because '<msil>Data'::.cctor (phase 1) stores
+##   them; every spill class has a '.cctor' that reads a static field of
+##   '<msil>Data' and pops it, so that phase 1 has run before code reads a
+##   spilled field (a spill class is not beforefieldinit-triggered by
+##   '<msil>Data'); the export class's methods and accessors read the
+##   fields in their spill classes, and no class exceeds the limit;
+## - native data imports: '<msil>Data' owns the data-import field (here
+##   environ, 'assembly static' and not initonly, 0x0013) with the helpers
+##   '<msil>dataimport' and '<msil>init_dataimports', and its '.cctor' calls
+##   '<msil>init_dataimports'; <Module> holds none of them (it keeps the
+##   helper's dlopen and dlsym P/Invokes).
+## libc.so.6 is the glibc-like stub of Inputs/native/glibc.yaml, which
+## defines environ. listing.py prints one part of llvm-cil-dump's canonical
+## listing; members.py lists the classes and checks the limit.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj spill.ll -o spill.o
+
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+
+## Spill classes: 8 globals and 2 exported functions against a limit of 4.
+# RUN: msil-ld -shared --msil-type-member-limit=4 spill.o -o spill.dll 2>&1 | count 0
+# RUN: llvm-cil-dump spill.dll > spill.txt
+# RUN: %python %S/Inputs/members.py --limit 4 --spill-base '[mscorlib]System.Object' spill.txt \
+# RUN:   | FileCheck %s --check-prefix=MEMBERS
+# MEMBERS:     {{^}}class <msil>Data flags=0x00100180 extends=[mscorlib]System.Object{{$}}
+# MEMBERS:     {{^}}class <msil>Spill1 flags=0x00000180 extends=[mscorlib]System.Object{{$}}
+# MEMBERS:     {{^}}class <msil>Spill2 flags=0x00000180 extends=[mscorlib]System.Object{{$}}
+# MEMBERS:     {{^}}limit 4 ok{{$}}
+# MEMBERS-NEXT: {{^}}spill base [mscorlib]System.Object ok (2 classes){{$}}
+
+## Every spilled field is 'assembly static', never initonly.
+# RUN: FileCheck %s --check-prefix=SPILL-FIELDS --input-file=spill.txt
+# SPILL-FIELDS:     {{^}}.class '<msil>Spill1' flags=0x00000180 extends [mscorlib]System.Object{{$}}
+# SPILL-FIELDS-NOT: {{^}}.class
+# SPILL-FIELDS:     {{^}}  .field '{{[^']+}}' native int flags=0x0013{{$}}
+# SPILL-FIELDS-NOT: {{^}}  .field '{{[^']+}}' native int flags=0x00{{[2367ABEF]}}
+# SPILL-FIELDS:     {{^}}.class '<msil>Spill2' flags=0x00000180 extends [mscorlib]System.Object{{$}}
+# SPILL-FIELDS-NOT: {{^}}.class
+# SPILL-FIELDS:     {{^}}  .field '{{[^']+}}' native int flags=0x0013{{$}}
+# SPILL-FIELDS-NOT: {{^}}  .field '{{[^']+}}' native int flags=0x00{{[2367ABEF]}}
+# SPILL-FIELDS:     {{^}}.class
+
+## Each spill class's '.cctor': read a field of '<msil>Data', pop, return.
+# RUN: %{listing} method spill.txt '<msil>Spill1' .cctor | FileCheck %s --check-prefix=TRIGGER
+# RUN: %{listing} method spill.txt '<msil>Spill2' .cctor | FileCheck %s --check-prefix=TRIGGER
+# TRIGGER:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# TRIGGER-NEXT: {{^}}    .maxstack 1{{$}}
+# TRIGGER-NEXT: {{^}}    L0: ldsfld native int '<msil>Data'::'{{[^']+}}'{{$}}
+# TRIGGER-NEXT: {{^}}    L1: pop{{$}}
+# TRIGGER-NEXT: {{^}}    L2: ret{{$}}
+# TRIGGER-NOT:  {{.}}
+
+## Phase 1 ('<msil>Data'::.cctor) stores the spilled fields, g7 and the
+## '<msil>fn_' fields included.
+# RUN: %{listing} method spill.txt '<msil>Data' .cctor | FileCheck %s --check-prefix=PHASE1
+# PHASE1:     {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# PHASE1-DAG: {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Spill{{[12]}}'::'g7'{{$}}
+# PHASE1-DAG: {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Spill{{[12]}}'::'<msil>fn_last'{{$}}
+# PHASE1-DAG: {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Spill{{[12]}}'::'<msil>fn_sum'{{$}}
+
+## last() and the accessors read the spilled fields.
+# RUN: %{listing} method spill.txt spill last | FileCheck %s --check-prefix=LAST
+# LAST:      {{^}}  .method 'last' int32() flags=0x0016 impl=0x0000{{$}}
+# LAST-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# LAST-NEXT: {{^}}    L0: ldsfld native int '<msil>Spill{{[12]}}'::'g7'{{$}}
+# RUN: %{listing} method spill.txt spill '<msil>addr_last' | FileCheck %s --check-prefix=ADDR -DF=last
+# RUN: %{listing} method spill.txt spill '<msil>addr_sum' | FileCheck %s --check-prefix=ADDR -DF=sum
+# ADDR:      {{^}}  .method '<msil>addr_[[F]]' native int() flags=0x0096 impl=0x0000{{$}}
+# ADDR-NEXT: {{^}}    .maxstack 1{{$}}
+# ADDR-NEXT: {{^}}    L0: ldsfld native int '<msil>Spill{{[12]}}'::'<msil>fn_[[F]]'{{$}}
+# ADDR-NEXT: {{^}}    L1: ret{{$}}
+
+## Data imports: environ on linux-gnu, against the libc.so.6 stub.
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+# RUN: llc -filetype=obj envlib.ll -o envlib.o
+# RUN: msil-ld -shared envlib.o libc.so.6 -o envlib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump envlib.dll > envlib.txt
+# RUN: %{listing} members envlib.txt '<msil>Data' | FileCheck %s --check-prefix=IMPORT-DATA
+# IMPORT-DATA:     {{^}}.class '<msil>Data' flags=0x00100180 extends [mscorlib]System.Object{{$}}
+# IMPORT-DATA-DAG: {{^}}  .field 'environ' native int flags=0x0013{{$}}
+# IMPORT-DATA-DAG: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# IMPORT-DATA-DAG: {{^}}  .method '<msil>dataimport' native int(string, string) flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# IMPORT-DATA-DAG: {{^}}  .method '<msil>init_dataimports' void() flags=0x{{[0-9A-F]+}} impl=0x0000{{$}}
+# RUN: %{listing} method envlib.txt '<msil>Data' .cctor | FileCheck %s --check-prefix=IMPORT-CCTOR
+# IMPORT-CCTOR: {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# IMPORT-CCTOR: {{^}}    L{{[0-9]+}}: call void() '<msil>Data'::'<msil>init_dataimports'{{$}}
+# RUN: %{listing} method envlib.txt '<msil>Data' '<msil>init_dataimports' \
+# RUN:   | FileCheck %s --check-prefix=IMPORT-INIT
+# IMPORT-INIT: {{^}}    L{{[0-9]+}}: ldstr "libc.so.6"{{$}}
+# IMPORT-INIT: {{^}}    L{{[0-9]+}}: ldstr "environ"{{$}}
+# IMPORT-INIT: {{^}}    L{{[0-9]+}}: call native int(string, string) '<msil>Data'::'<msil>dataimport'{{$}}
+# IMPORT-INIT: {{^}}    L{{[0-9]+}}: stsfld native int '<msil>Data'::'environ'{{$}}
+# RUN: %{listing} method envlib.txt envlib get_env | FileCheck %s --check-prefix=IMPORT-USE
+# IMPORT-USE: {{^}}    L0: ldsfld native int '<msil>Data'::'environ'{{$}}
+# RUN: %{listing} class envlib.txt '<Module>' | FileCheck %s --check-prefix=IMPORT-MODULE \
+# RUN:   --implicit-check-not=environ --implicit-check-not=dataimport
+# IMPORT-MODULE:      {{^}}.class '<Module>' flags=0x00000000{{$}}
+# IMPORT-MODULE-NEXT: {{^}}  .method 'dlopen' native int(native int, int32) flags=0x{{[0-9A-F]+}} impl=0x0080{{$}}
+# IMPORT-MODULE-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry 'dlopen' flags=0x0201{{$}}
+# IMPORT-MODULE-NEXT: {{^}}  .method 'dlsym' native int(native int, native int) flags=0x{{[0-9A-F]+}} impl=0x0080{{$}}
+# IMPORT-MODULE-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry 'dlsym' flags=0x0201{{$}}
+# IMPORT-MODULE-NOT:  {{.}}
+
+#--- spill.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@g0 = internal global i32 10, align 4
+@g1 = internal global i32 11, align 4
+@g2 = internal global i32 12, align 4
+@g3 = internal global i32 13, align 4
+@g4 = internal global i32 14, align 4
+@g5 = internal global i32 15, align 4
+@g6 = internal global i32 16, align 4
+@g7 = internal global i32 17, align 4
+
+define i32 @sum() {
+  %a0 = load volatile i32, ptr @g0
+  %a1 = load volatile i32, ptr @g1
+  %a2 = load volatile i32, ptr @g2
+  %a3 = load volatile i32, ptr @g3
+  %a4 = load volatile i32, ptr @g4
+  %a5 = load volatile i32, ptr @g5
+  %a6 = load volatile i32, ptr @g6
+  %a7 = load volatile i32, ptr @g7
+  %s1 = add i32 %a0, %a1
+  %s2 = add i32 %s1, %a2
+  %s3 = add i32 %s2, %a3
+  %s4 = add i32 %s3, %a4
+  %s5 = add i32 %s4, %a5
+  %s6 = add i32 %s5, %a6
+  %s7 = add i32 %s6, %a7
+  ret i32 %s7
+}
+
+define i32 @last() {
+  %a7 = load volatile i32, ptr @g7
+  ret i32 %a7
+}
+
+#--- envlib.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@environ = external global ptr
+
+define ptr @get_env() {
+  %e = load ptr, ptr @environ, align 8
+  ret ptr %e
+}

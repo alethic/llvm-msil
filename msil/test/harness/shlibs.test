@@ -1,0 +1,46 @@
+# %{msil_shlibs} in the %{msil_prog} composites (plan 5.12.2-5.12.4; M22).
+# A nested lit with -a runs prog/Inputs/nested/shlibs.test
+# (%{msil_prog_O2} of a program with the cyclic pair '?b=b.c;a=a.c;b=b.c'
+# and one %{msil_deps} file) with the stand-ins of prog/lit.local.cfg on the
+# local runner, and prints every command it ran. The stand-in program calls
+# each library when it runs, so the test passes only if every run found the
+# libraries beside the program:
+# (1) the MSIL build is msil-prog.py with --shlibs, and it builds b's
+#     interface (-shared -Wl,--interface-only into shlib-iface/b.dll), then
+#     library a against that interface, then library b against a, before the
+#     program, whose link names shlib/a.dll and shlib/b.dll (the earlier
+#     libraries on each link);
+# (2) msil-verify.py gets '--dep-dir <workdir>/shlib --also-verify-deps'
+#     before the --dep list, and also verifies both libraries (with
+#     ILVerify);
+# (3) msil-jitall.py and the run of the program get --dep-dir with the
+#     same directory before the --dep list;
+# (4) where the native-oracle and .NET Framework legs run (a Windows triple
+#     with the .NET Framework; prog/Inputs/nested/lit.local.cfg), the native
+#     build gets the same --shlibs and builds DLLs with one C runtime
+#     (-fms-runtime-lib=dll), b's interface through -Wl,/force:unresolved and
+#     the program against the import libraries, its run gets the native
+#     build's shlib/ (--dep-dir <workdir>.native.d/shlib), and the .NET
+#     Framework run gets the MSIL build's.
+# msil-prog.py's commands for every recipe (E7, Linux and the usage errors
+# included) are pinned by prog/shlibs-commands.test, update-expected.py's
+# native build of a %{msil_shlibs} test by prog/update-expected.test.
+
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= %S/prog/Inputs/nested/shlibs.test > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/prog/Inputs/nested/shlibs\.test "
+
+# (1)
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* '?--shlibs=\?b=\S*/b\.c;a=\S*/a\.c;b=\S*/b\.c'? .* --level O2 --workdir '?\S*shlibs\.test\.tmp\.O2\.d'? --out '?\S*shlibs\.test\.tmp\.O2\.d/prog\.exe'? --src '?\S*main\.c'? --stock-src --archives= --lib= --native-lib=$"
+# RUN: %{harness_check} contains %t.log "^# \| msil-prog: [^\n]* -O2 -c \S*/b\.c -o shlib-iface-obj/b/b\.o\n# \| msil-prog: [^\n]* -O2 (--sysroot=\S+ )?-shared shlib-iface-obj/b/b\.o -Wl,--interface-only -o shlib-iface/b\.dll\n# \| msil-prog: [^\n]* -O2 -c \S*/a\.c -o shlib-obj/a/a\.o\n# \| msil-prog: [^\n]* -O2 (--sysroot=\S+ )?-shared shlib-obj/a/a\.o shlib-iface/b\.dll -o shlib/a\.dll\n# \| msil-prog: [^\n]* -O2 -c \S*/b\.c -o shlib-obj/b/b\.o\n# \| msil-prog: [^\n]* -O2 (--sysroot=\S+ )?-shared shlib-obj/b/b\.o shlib/a\.dll -o shlib/b\.dll\n# \| msil-prog: [^\n]* -O2 -c \S*/main\.c -o obj/main\.o\n# \| msil-prog: [^\n]* -O2 (--sysroot=\S+ )?obj/main\.o shlib/a\.dll shlib/b\.dll -o prog\.exe$"
+
+# (2)
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py'? .* --dep-dir '?\S*shlibs\.test\.tmp\.O2\.d/shlib'? --also-verify-deps --dep '?\S*dep\.txt'? -- '?\S*shlibs\.test\.tmp\.O2\.d/prog\.exe'?$"
+# RUN: %if msil-ilverify %{ %{harness_check} contains %t.log "^# \| msil-verify: also verified a\.dll, b\.dll$" %}
+
+# (3)
+# RUN: %if msil-jitall %{ %{harness_check} contains %t.log "^# executed command: .*msil-jitall\.py'? .* --dep-dir '?\S*shlibs\.test\.tmp\.O2\.d/shlib'? --dep '?\S*dep\.txt'? -- '?\S*shlibs\.test\.tmp\.O2\.d/prog\.exe'?$" %}
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*shlibs'? --out '?\S*shlibs\.test\.tmp\.O2\.out'? --dep-dir '?\S*shlibs\.test\.tmp\.O2\.d/shlib'? --dep '?\S*dep\.txt'? -- '?\S*shlibs\.test\.tmp\.O2\.d/prog\.exe'?$"
+
+# (4)
+# RUN: %if msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* '?--shlibs=\?b=\S*/b\.c;a=\S*/a\.c;b=\S*/b\.c'? .* --mode native --level O2 --workdir '?\S*shlibs\.test\.tmp\.O2\.native\.d'? " "^# \| msil-prog: [^\n]* --target=x86_64-pc-windows-msvc -fms-runtime-lib=dll [^\n]* -O2 -c \S*/b\.c -o shlib-iface-obj/b/b\.o\n# \| msil-prog: [^\n]* -fuse-ld=lld -shared shlib-iface-obj/b/b\.o [^\n]*-Wl,/force:unresolved -o shlib-iface/b\.dll$" "^# \| msil-prog: [^\n]* -fuse-ld=lld obj/main\.o shlib/a\.lib shlib/b\.lib [^\n]*-o \S*prog\.exe$" %}
+# RUN: %if msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.log "^# executed command: .*msil-run\.py'? .* --native --expect '?\S*shlibs'? --out '?\S*shlibs\.test\.tmp\.O2\.native\.out'? --dep-dir '?\S*shlibs\.test\.tmp\.O2\.native\.d/shlib'? --dep '?\S*dep\.txt'? -- '?\S*shlibs\.test\.tmp\.O2\.native\.d/prog\.exe'?$" "^# executed command: .*msil-run\.py'? .* --netfx --expect '?\S*shlibs'? --out '?\S*shlibs\.test\.tmp\.O2\.netfx\.out'? --dep-dir '?\S*shlibs\.test\.tmp\.O2\.d/shlib'? --dep '?\S*dep\.txt'? -- '?\S*shlibs\.test\.tmp\.O2\.d/prog\.exe'?$" %}

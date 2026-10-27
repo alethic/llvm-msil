@@ -1,0 +1,5 @@
+program: which()=2
+library: lib_which()=1
+library: lib_which_addr()()=1
+two addresses=1
+[exit 0]

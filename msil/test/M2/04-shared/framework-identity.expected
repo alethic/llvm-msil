@@ -1,0 +1,7 @@
+sum of twice(i & 7)=1400000
+program: late &twice == fp=1
+library: get_twice() == fp=1
+library: late &twice == fp=1
+program: &twice == library late &twice=1
+fp(21)=42
+[exit 0]

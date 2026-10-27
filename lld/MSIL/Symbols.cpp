@@ -48,6 +48,10 @@ std::string toString(msil::Symbol::Kind kind) {
     return "NativeData";
   case msil::Symbol::SyntheticDataKind:
     return "SyntheticData";
+  case msil::Symbol::ManagedFunctionKind:
+    return "ManagedFunction";
+  case msil::Symbol::ManagedDataKind:
+    return "ManagedData";
   }
   llvm_unreachable("invalid symbol kind");
 }
@@ -64,7 +68,8 @@ void Symbol::extract() const {
 }
 
 // Print out a log message for --trace-symbol (lld/ELF/Symbols.cpp:297-311).
-// A native definition is lld/ELF's shared definition.
+// A native definition is lld/ELF's shared definition; a library export is a
+// managed definition (plan 5.9.15).
 void printTraceSymbol(const Symbol &sym, StringRef name) {
   std::string s;
   if (sym.isUndefined())
@@ -75,6 +80,8 @@ void printTraceSymbol(const Symbol &sym, StringRef name) {
     s = ": common definition of ";
   else if (sym.isNative())
     s = ": shared definition of ";
+  else if (sym.isManaged())
+    s = ": managed definition of ";
   else
     s = ": definition of ";
 
@@ -130,10 +137,13 @@ void Symbol::resolve(const Symbol &other) {
   case NativeFunctionKind:
   case NativeDataKind:
   case SyntheticDataKind:
+  case ManagedFunctionKind:
+  case ManagedDataKind:
     break;
   }
-  llvm_unreachable("placeholders, native symbols (which bind late) and "
-                   "linker-defined symbols are never resolved against");
+  llvm_unreachable("placeholders, native and managed symbols (which bind "
+                   "late) and linker-defined symbols are never resolved "
+                   "against");
 }
 
 // Derived from lld/ELF/Symbols.cpp at 64f50ffd4f1c.

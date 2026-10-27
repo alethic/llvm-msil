@@ -14,7 +14,7 @@
         [--also-il FILE] [--equiv-out FILE] [--equiv-skip FILE --test PATH]
         [--cflags=FLAGS] [--ldflags=FLAGS] [--native-ldflags=FLAGS]
         [--src FILE...]... [--stock-src FILE...]... [--archives=SPEC]
-        [--lib=ARGS]... [--native-lib=ARGS]...
+        [--shlibs=SPEC] [--lib=ARGS]... [--native-lib=ARGS]...
         [--ld-lld LD.LLD --linux-sysroot DIR --start START]
         [--det] [--timeout S] [--mem-limit-mb N]
 
@@ -121,6 +121,61 @@ one archive per NAME, linked in the order of SPEC after the objects; a SRC
 written stock:SRC is compiled as a --stock-src (in MSIL mode). NAME is
 letters, digits and '_', '.', '+', '-'; sources may not contain ',' or ';'.
 
+--shlibs SPEC is [?]NAME=SRC[,SRC...][;[?]NAME=SRC[,SRC...]]...
+(%{msil_shlibs}, plan 5.12.3, 5.12.4, M22): shared libraries, built in the
+order of SPEC before anything else (the program's sources, stock sources and
+archives come after them), each linked against the libraries built before it
+(the latest build of every other NAME) with the program's --cflags and
+--ldflags (in MSIL mode %{msil_ldflags}, with %{msil_ref_flags}; no --lib or
+--native-lib arguments). The program links every library (not the
+interfaces) after its archives, in the order of SPEC. ?NAME builds only the
+interface of NAME, for a cycle, which is written ?b=b.c;a=a.c;b=b.c: an
+interface needs the library of its NAME later in SPEC, and each NAME has at
+most one library and one interface. The names follow --archives' rule, a SRC
+written stock:SRC is a stock source (MSIL mode), and each library's objects
+go into shlib-obj/NAME/ (an interface's into shlib-iface-obj/NAME/):
+  MSIL mode:   LINK-PREFIX -shared <objects> <earlier libraries> -o
+               shlib/NAME.dll, where LINK-PREFIX is the program link's
+               CLANG --target=<triple> [--ld-path=MSIL-LD] -<L> LDFLAGS; an
+               interface adds -Wl,--interface-only and writes
+               shlib-iface/NAME.dll; the program link gets shlib/NAME.dll
+               after its archives;
+  native, Windows (the driver recipe): CLANG --target=<native> -fuse-ld=lld
+               -shared <objects> <earlier import libraries> NATIVE-LDFLAGS
+               -o shlib/NAME.dll, which also writes shlib/NAME.lib; an
+               interface is the same link with -Wl,/force:unresolved into
+               shlib-iface/NAME.dll, of which only shlib-iface/NAME.lib is
+               kept (MinGW: -Wl,--out-implib=<dir>/libNAME.dll.a, and for an
+               interface -Wl,-Xlink=-force:unresolved, unverified); on MSVC
+               triples every native compile of the build adds
+               -fms-runtime-lib=dll, so the program and its libraries share
+               one C runtime (heap, streams, errno) as MSIL assemblies share
+               the process's ucrtbase (recon exports-multiasm 7.1), where
+               the default static CRT gives each DLL its own; the program
+               link gets shlib/NAME.lib (MinGW shlib/libNAME.dll.a);
+  native, E7:  LD.LLD -shared -Bsymbolic --as-needed -soname libNAME.so
+               -rpath $ORIGIN <objects> <earlier libraries> <the sysroot's
+               libm.so.6, libc.so.6 and libgcc_s.so.1> -o shlib/libNAME.so,
+               and the program link gets shlib/libNAME.so after its archives;
+               each -rpath $ORIGIN finds that module's libraries next to it
+               (ld.lld writes DT_RUNPATH, which covers only the DT_NEEDED of
+               its own module, and the --as-needed program link leaves out a
+               library that only another library needs); there are no
+               interfaces (ld.lld -shared leaves undefined symbols to the
+               dynamic loader), so ?NAME builds nothing; every compile of
+               the build is -fPIC instead of -fno-pic, because a -fno-pic
+               program would get copy relocations and canonical PLT entries
+               that a -Bsymbolic library never sees (a second copy of
+               exported data, two addresses for a function);
+  native, Linux with the driver recipe: CLANG --target=<native>
+               -fuse-ld=lld -shared <objects> <earlier libraries>
+               -Wl,-Bsymbolic -Wl,-soname,libNAME.so -Wl,-rpath,$ORIGIN
+               NATIVE-LDFLAGS -o shlib/libNAME.so, -fPIC compiles, no
+               interfaces, and -Wl,-rpath,$ORIGIN on the program link too.
+Without --shlibs every command is unchanged. The build directory always has
+a shlib/ directory (empty without libraries), which the composites give
+msil-verify.py, msil-jitall.py and msil-run.py as --dep-dir.
+
 --src and --stock-src take one or more files each and may be repeated; files
 keep their order, and the stock objects follow the --src objects on the link
 line. --lib ARGS (repeatable; %{msil_libs}) are further link arguments of the
@@ -147,9 +202,10 @@ directory is --workdir, emptied first; --workdir may not contain a source.
 with the same relative command lines and -fdebug-compilation-dir=. added to
 every clang compile, and compares every file of the two build directories
 byte for byte (plan 5.12.4, 3.7 of recon tests-p2): the objects, the
-archives and msil-ld's image prog.exe (pe; from M20) or its --lto-emit-asm
-text (il), but not ilasm's image prog.exe, which ilasm stamps; the
-equivalence outputs of step 5 are built and compared in both builds too. It
+archives, the libraries and interfaces of --shlibs and their objects, and
+msil-ld's image prog.exe (pe; from M20) or its --lto-emit-asm text (il), but
+not ilasm's image prog.exe, which ilasm stamps; the equivalence outputs of
+step 5 are built and compared in both builds too. It
 prints each file that differs or exists in one build only. --out, --also-il
 and --equiv-out then receive build a's files.
 
@@ -157,7 +213,10 @@ Usage errors: --pipeline obj with --link-output il (obj writes PE images
 only); --also-il under obj; --equiv-out with --link-output il; --equiv-skip
 without --test (or the reverse) or with a malformed FILE; --llc under lto;
 --llc with a .ll source at -Os or -Oz; --also-il or --equiv-out in native
-mode; il without --ilasm (unless --det).
+mode; il without --ilasm (unless --det); --shlibs with --link-output il (a
+link against a .NET library has no --lto-emit-asm text) or with a malformed
+SPEC (a bad name, a library or an interface named twice, an interface after
+its library or without one).
 
 Exit status: 0 on success; 1 when a step fails (its output is shown) or --det
 finds a difference; 2 on a usage or configuration error.
@@ -301,6 +360,51 @@ def parse_archives(spec):
     return archives
 
 
+def parse_shlibs(spec):
+    """[?]NAME=SRC[,SRC...][;...] -> [(NAME, interface, [(SRC, stock)])],
+    checked: each NAME has at most one library and one interface, and an
+    interface comes before its library."""
+    shlibs, real, iface = [], set(), set()
+    for part in spec.split(";"):
+        if not part.strip():
+            continue
+        name, sep, srcs = part.partition("=")
+        name = name.strip()
+        interface = name.startswith("?")
+        if interface:
+            name = name[1:]
+        if not sep:
+            raise UsageError("--shlibs: %r is not [?]NAME=SRC[,SRC...]" % part.strip())
+        if not NAME_RE.match(name):
+            raise UsageError("--shlibs: bad library name %r" % name)
+        what = "the interface ?%s" % name if interface else "library %s" % name
+        if name in (iface if interface else real):
+            raise UsageError("--shlibs: %s is named twice" % what)
+        if interface and name in real:
+            raise UsageError(
+                "--shlibs: the interface ?%s comes after library %s; it is for "
+                "the libraries built before %s" % (name, name, name)
+            )
+        (iface if interface else real).add(name)
+        members = []
+        for src in srcs.split(","):
+            src = src.strip()
+            stock = src.startswith("stock:")
+            if stock:
+                src = src[len("stock:") :]
+            if not src:
+                raise UsageError("--shlibs: %s has an empty source" % what)
+            members.append((src, stock))
+        shlibs.append((name, interface, members))
+    lacking = sorted(iface - real)
+    if lacking:
+        raise UsageError(
+            "--shlibs: the interface ?%s has no library %s after it (the program "
+            "links the libraries, never an interface)" % (lacking[0], lacking[0])
+        )
+    return shlibs
+
+
 def rel(path, base):
     """path relative to base with '/', or absolute when that is impossible
     (another drive on Windows)."""
@@ -378,11 +482,13 @@ def build_msil(b, bdir, det):
     det_flags = ["-fdebug-compilation-dir=."] if det else []
     used = set()
     os.makedirs(os.path.join(bdir, "obj"))
+    os.makedirs(os.path.join(bdir, "shlib"))
 
     def compile_one(src, stock, outdir):
         out = unique_name(
             used, outdir, os.path.splitext(os.path.basename(src))[0], ".o"
         )
+        os.makedirs(os.path.join(bdir, outdir), exist_ok=True)
         if stock:
             cmd = [*clang, "--target=" + native, *args.cflags_words, level, "-flto"]
             if is_msvc(native):
@@ -401,16 +507,19 @@ def build_msil(b, bdir, det):
         b.run(cmd, bdir, what, out)
         return out
 
+    prefix = [*clang, "--target=" + args.triple]
+    if args.ld:
+        prefix.append("--ld-path=" + args.ld)
+    prefix += [level, *args.ldflags_words]
+    shlibs = build_shlibs_msil(b, bdir, compile_one, prefix)
+
     objects = [compile_one(s, False, "obj") for s in args.srcs]
     if args.stock_srcs:
         os.makedirs(os.path.join(bdir, "stock"))
     objects += [compile_one(s, True, "stock") for s in args.stock_srcs]
     lib_args = build_archives(b, bdir, compile_one, "lib%s.a")
 
-    link = [*clang, "--target=" + args.triple]
-    if args.ld:
-        link.append("--ld-path=" + args.ld)
-    link += [level, *args.ldflags_words, *objects, *lib_args, *args.lib_words]
+    link = prefix + [*objects, *lib_args, *shlibs, *args.lib_words]
     link += args.native_lib_words
     out = {"image": None, "il": None, "equiv": None}
     if args.link_output == "il":
@@ -481,6 +590,105 @@ def build_archives(b, bdir, compile_one, pattern):
     return lib_args
 
 
+def build_shlibs(b, link_one):
+    """Build every --shlibs entry in order: link_one(name, interface,
+    objdir, members, earlier) compiles the entry's members into objdir
+    (shlib-obj/NAME, an interface's shlib-iface-obj/NAME), links it, and
+    returns the file that later links name through (None: the recipe has no
+    use for that interface, and nothing was built). earlier is the latest
+    build of every other name, in the order of the builds. Returns what the
+    program links: the libraries, in the order of the specification."""
+    built, real = {}, []
+    for name, interface, members in b.args.shlib_list:
+        objdir = ("shlib-iface-obj/" if interface else "shlib-obj/") + name
+        earlier = [path for n, path in built.items() if n != name]
+        result = link_one(name, interface, objdir, members, earlier)
+        if result is None:
+            continue
+        built.pop(name, None)
+        built[name] = result
+        if not interface:
+            real.append(result)
+    return real
+
+
+def build_shlibs_msil(b, bdir, compile_one, prefix):
+    """--shlibs in MSIL mode: 'LINK-PREFIX -shared' into shlib/NAME.dll, an
+    interface with -Wl,--interface-only into shlib-iface/NAME.dll."""
+
+    def link_one(name, interface, objdir, members, earlier):
+        objs = [compile_one(src, stock, objdir) for src, stock in members]
+        outdir = "shlib-iface" if interface else "shlib"
+        os.makedirs(os.path.join(bdir, outdir), exist_ok=True)
+        out = "%s/%s.dll" % (outdir, name)
+        cmd = prefix + ["-shared", *objs, *earlier]
+        if interface:
+            cmd.append("-Wl,--interface-only")
+        what = "the interface link of ?%s" if interface else "the link of library %s"
+        b.run(cmd + ["-o", out], bdir, what % name, out)
+        return out
+
+    return build_shlibs(b, link_one)
+
+
+def build_shlibs_native(b, bdir, compile_one, flavor, libdir):
+    """--shlibs in native mode (flavor 'e7', 'msvc', 'mingw' or 'linux'; see
+    the module documentation); libdir: the sysroot's library directory of
+    the E7 recipe."""
+    args = b.args
+
+    def link_one(name, interface, objdir, members, earlier):
+        if interface and flavor in ("e7", "linux"):
+            # ld.lld -shared leaves undefined symbols to the dynamic loader.
+            return None
+        objs = [compile_one(src, stock, objdir) for src, stock in members]
+        outdir = "shlib-iface" if interface else "shlib"
+        os.makedirs(os.path.join(bdir, outdir), exist_ok=True)
+        what = "the interface link of ?%s" if interface else "the link of library %s"
+        what %= name
+        if flavor == "e7":
+            out = "shlib/lib%s.so" % name
+            # -rpath $ORIGIN: the library finds its own libraries next to
+            # it (the program's DT_RUNPATH does not apply to them).
+            cmd = [*args.ld_lld_cmd, "-shared", "-Bsymbolic", "--as-needed"]
+            cmd += ["-soname", "lib%s.so" % name, "-rpath", "$ORIGIN"]
+            cmd += [*objs, *earlier]
+            cmd += [os.path.join(libdir, n) for n in E7_LIBS] + ["-o", out]
+            b.run(cmd, bdir, what, out)
+            return out
+        cmd = [*args.clang_cmd, "--target=" + args.native, "-fuse-ld=lld", "-shared"]
+        cmd += [*objs, *earlier]
+        if flavor == "linux":
+            out = "shlib/lib%s.so" % name
+            cmd += ["-Wl,-Bsymbolic", "-Wl,-soname,lib%s.so" % name]
+            cmd += ["-Wl,-rpath,$ORIGIN"]
+            cmd += args.native_ldflags_words + ["-o", out]
+            b.run(cmd, bdir, what, out)
+            return out
+        dll = "%s/%s.dll" % (outdir, name)
+        if flavor == "msvc":
+            # The MSVC driver writes the import library next to the DLL.
+            implib = "%s/%s.lib" % (outdir, name)
+        else:
+            implib = "%s/lib%s.dll.a" % (outdir, name)
+            cmd.append("-Wl,--out-implib=" + implib)
+        cmd += args.native_ldflags_words
+        if interface:
+            # Unresolved symbols are left to the library built later.
+            cmd.append(
+                "-Wl,/force:unresolved"
+                if flavor == "msvc"
+                else "-Wl,-Xlink=-force:unresolved"
+            )
+        b.run(cmd + ["-o", dll], bdir, what, implib)
+        if interface:
+            # Only the import library of an interface is used.
+            os.remove(os.path.join(bdir, dll))
+        return implib
+
+    return build_shlibs(b, link_one)
+
+
 def build_native(b, bdir):
     """Native mode in bdir; returns the program's path."""
     args = b.args
@@ -488,19 +696,34 @@ def build_native(b, bdir):
     level = "-" + args.level
     used = set()
     os.makedirs(os.path.join(bdir, "obj"))
+    os.makedirs(os.path.join(bdir, "shlib"))
     e7 = bool(args.ld_lld_cmd)
-    target = ["--target=" + (E7_TARGET if e7 else native)] + (
-        ["-fno-pic"] if e7 else []
-    )
+    windows = "windows" in native.split("-")
+    if e7:
+        flavor = "e7"
+    elif windows:
+        flavor = "msvc" if is_msvc(native) else "mingw"
+    else:
+        flavor = "linux"
+    target = ["--target=" + (E7_TARGET if e7 else native)]
+    if args.shlib_list:
+        # One C runtime for the program and its libraries (MSVC), and code
+        # that reaches another module's symbols through the GOT (ELF).
+        target += {"msvc": ["-fms-runtime-lib=dll"], "mingw": []}.get(flavor, ["-fPIC"])
+    elif e7:
+        target.append("-fno-pic")
+    libdir = os.path.join(args.linux_sysroot, *E7_LIBDIR) if e7 else None
 
     def compile_one(src, stock, outdir):
         out = unique_name(
             used, outdir, os.path.splitext(os.path.basename(src))[0], ".o"
         )
+        os.makedirs(os.path.join(bdir, outdir), exist_ok=True)
         cmd = [*clang, *target, *args.cflags_words, level, "-c", rel(src, bdir)]
         b.run(cmd + ["-o", out], bdir, "the native compile of %s" % src, out)
         return out
 
+    shlibs = build_shlibs_native(b, bdir, compile_one, flavor, libdir)
     objects = [compile_one(s, False, "obj") for s in args.srcs]
     if args.stock_srcs:
         os.makedirs(os.path.join(bdir, "stock"))
@@ -523,16 +746,18 @@ def build_native(b, bdir):
             cmd += ["-O2", "-c", start, "-o", start_o]
             b.run(cmd, bdir, "the compile of %s" % start, start_o)
             start = start_o
-        libdir = os.path.join(args.linux_sysroot, *E7_LIBDIR)
         cmd = [*args.ld_lld_cmd, "-dynamic-linker", E7_DYNAMIC_LINKER, "--as-needed"]
-        cmd += ["-rpath", "$ORIGIN", start, *objects, *lib_args]
+        cmd += ["-rpath", "$ORIGIN", start, *objects, *lib_args, *shlibs]
         cmd += linker_words(args.native_lib_words)
         cmd += [os.path.join(libdir, n) for n in E7_LIBS] + ["-o", out]
         b.run(cmd, bdir, "the E7 link", out)
     else:
         cmd = [*clang, "--target=" + native, "-fuse-ld=lld", *objects, *lib_args]
-        cmd += args.native_lib_words + args.native_ldflags_words + ["-o", out]
-        b.run(cmd, bdir, "the native link", out)
+        cmd += shlibs + args.native_lib_words + args.native_ldflags_words
+        if shlibs and flavor == "linux":
+            # The dynamic loader finds the libraries next to the program.
+            cmd.append("-Wl,-rpath,$ORIGIN")
+        b.run(cmd + ["-o", out], bdir, "the native link", out)
     return out
 
 
@@ -627,6 +852,11 @@ def parse_args(argv):
         "--stock-src", nargs="*", action="extend", default=[], dest="stock_srcs"
     )
     p.add_argument("--archives", default="", help="NAME=SRC[,SRC...][;...]")
+    p.add_argument(
+        "--shlibs",
+        default="",
+        help="[?]NAME=SRC[,SRC...][;...]: shared libraries (%%{msil_shlibs})",
+    )
     p.add_argument("--lib", action="append", default=[], help="MSIL link arguments")
     p.add_argument(
         "--native-lib",
@@ -748,6 +978,12 @@ def check_args(args):
     args.archive_list = parse_archives(args.archives)
     if args.archive_list and not args.ar_cmd:
         raise UsageError("--archives needs --ar")
+    args.shlib_list = parse_shlibs(args.shlibs)
+    if args.shlib_list and args.mode == "msil" and args.link_output == "il":
+        raise UsageError(
+            "--shlibs links the program against .NET libraries, which "
+            "--lto-emit-asm cannot import from; use --link-output pe"
+        )
     if (
         args.mode == "msil"
         and args.link_output == "il"
@@ -771,6 +1007,7 @@ def check_args(args):
         args.start = os.path.abspath(args.start)
     sources = list(args.srcs) + list(args.stock_srcs)
     sources += [s for _, members in args.archive_list for s, _ in members]
+    sources += [s for _, _, members in args.shlib_list for s, _ in members]
     for src in sources:
         if not os.path.isfile(src):
             raise UsageError("source %s: no such file" % src)
@@ -784,6 +1021,10 @@ def check_args(args):
     args.archive_list = [
         (name, [(os.path.abspath(s), stock) for s, stock in members])
         for name, members in args.archive_list
+    ]
+    args.shlib_list = [
+        (name, interface, [(os.path.abspath(s), stock) for s, stock in members])
+        for name, interface, members in args.shlib_list
     ]
     if args.out:
         args.out = os.path.abspath(args.out)

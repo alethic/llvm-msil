@@ -1,0 +1,456 @@
+# The ildasm -> ilasm round trip of library outputs (msil-verify.py
+# --roundtrip; Design.md 5.5, oracle O2 of plan 5.12.6; section 12, '5.12.6
+# O2 clarified (library outputs)'): ilasm defines a TypeDef at its first
+# reference, and the .assembly block, whose .custom names the
+# '<msil>SymbolTable' attribute class of every -shared output, precedes every
+# class of the listing, so the reassembly has that class first while msil-ld
+# writes it after the export class and '<msil>Data' (M22 review-r2 finding
+# 10: roundtrip-library failed at its round trip). --roundtrip accepts a
+# top-level class block that a .custom of the .assembly block names at
+# another position in the second listing, and nothing else: the block's own
+# lines and every other line must still be equal. Inputs/snan-roundtrip.py
+# compare runs msil-verify.py's listing comparison on hand-written listings:
+# (1) accepted: '<msil>SymbolTable' moved to the front of the classes, with
+#     another RVA for the data label; a moved block together with a quieted
+#     float32 signaling NaN, where a data label inside the moved block and
+#     one in another class keep their numbers only because the block moves
+#     back before the labels are renumbered;
+# (2) rejected, each with the unified diff --roundtrip prints: another class
+#     moved besides '<msil>SymbolTable', the moved block changed (the diff
+#     names only the changed line), the block missing, the .assembly block's
+#     .custom changed, a class that only a .custom of the module names, and
+#     an EXE whose .assembly block names no class (its round trip stays
+#     strict);
+# (3) end to end, with the .NET ildasm and ilasm that msil-tools.proj pins
+#     (feature msil-roundtrip-tools, %{prog_roundtrip}): a library whose
+#     .assembly directive comes after its classes, so ilasm writes the
+#     attribute class Marker last, as msil-ld writes '<msil>SymbolTable',
+#     round-trips with Marker moved to the front, and msil-verify.py -v names
+#     the moved block.
+
+# RUN: rm -rf %t && split-file %s %t
+# DEFINE: %{compare} = %python %S/Inputs/snan-roundtrip.py compare
+
+# (1)
+# RUN: %{compare} %t/lib.a %t/lib.b > %t/1a.log
+# RUN: %{harness_check} contains %t/1a.log "\Aequal up to 0 quieted float32 signaling NaNs and the moved class block '<msil>SymbolTable'\n\Z"
+# RUN: %{compare} %t/mix.a %t/mix.b > %t/1b.log
+# RUN: %{harness_check} contains %t/1b.log "\Aequal up to 1 quieted float32 signaling NaN and the moved class block Marker\n\Z"
+# RUN: %{compare} %t/lib.a %t/lib.a > %t/1c.log
+# RUN: %{harness_check} contains %t/1c.log "\Aequal up to 0 quieted float32 signaling NaNs\n\Z"
+
+# (2)
+# RUN: %{harness_check} exits 1 %{compare} %t/lib.a %t/both.b > %t/2a.log
+# RUN: %{harness_check} contains %t/2a.log "\Adiffer\n" "^[-+]\.class public abstract auto ansi sealed rtlib$"
+# RUN: %{harness_check} lacks %t/2a.log "^[-+].*SymbolTable"
+# RUN: %{harness_check} exits 1 %{compare} %t/lib.a %t/changed.b > %t/2b.log
+# RUN: %{harness_check} contains %t/2b.log "^-    \.maxstack  1$" "^\+    \.maxstack  2$"
+# RUN: %{harness_check} lacks %t/2b.log "^[-+]\.class" "^[-+]\} // end of class"
+# RUN: %{harness_check} exits 1 %{compare} %t/lib.a %t/missing.b > %t/2c.log
+# RUN: %{harness_check} contains %t/2c.log "^-\.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'$"
+# RUN: %{harness_check} exits 1 %{compare} %t/lib.a %t/asm.b > %t/2d.log
+# RUN: %{harness_check} contains %t/2d.log "^-  \.custom instance void '<msil>SymbolTable'::\.ctor\(uint8\[\]\) = \( 01 00 04 00 00 00 4D 53 59 4D 00 00 \)$" "^\+  \.custom instance void '<msil>SymbolTable'::\.ctor\(uint8\[\]\) = \( 01 00 04 00 00 00 4D 53 59 4D 00 01 \)$"
+# RUN: %{harness_check} exits 1 %{compare} %t/module.a %t/module.b > %t/2e.log
+# RUN: %{harness_check} contains %t/2e.log "^[-+]\.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'$"
+# RUN: %{harness_check} exits 1 %{compare} %t/exe.a %t/exe.b > %t/2f.log
+# RUN: %{harness_check} contains %t/2f.log "^[-+]\.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'$"
+
+# (3)
+# RUN: %if msil-ilasm && msil-roundtrip-tools %{ %ilasm -dll -output=%t/marker.dll %t/marker.il %}
+# RUN: %if msil-ilasm && msil-roundtrip-tools %{ %{prog_roundtrip} -v --keep-copy %t/keep --output=%t/rt/marker.dll %t/marker.dll > %t/3.log 2>&1 %}
+# RUN: %if msil-ilasm && msil-roundtrip-tools %{ %{harness_check} contains %t/3.log "^msil-verify: round trip: \S*marker\.dll -> \S*marker\.dll, \d+ listing lines identical up to the position of the class block Marker, which the \.assembly block's \.custom names and ilasm moved$" %}
+# The reassembly's listing (--keep-copy keeps the last one) has Marker first.
+# RUN: %if msil-ilasm && msil-roundtrip-tools %{ %{harness_check} contains %t/keep/marker.ildasm.il "^\.class private auto ansi sealed beforefieldinit Marker\n(?:.*\n)*\.class public abstract auto ansi sealed marker$" %}
+
+#--- lib.a
+.assembly extern mscorlib
+{
+  .ver 4:0:0:0
+}
+.assembly rtlib
+{
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = ( 01 00 04 00 00 00 4D 53 59 4D 00 00 )
+  .ver 0:0:0:0
+}
+.module rtlib.dll
+.field static assembly valuetype '<msil>image_t' '<msil>image' at I_00002060
+
+// =============== CLASS MEMBERS DECLARATION ===================
+
+.class private explicit ansi sealed '<msil>image_t'
+       extends [mscorlib]System.ValueType
+{
+  .size 4
+} // end of class '<msil>image_t'
+
+.class public abstract auto ansi sealed rtlib
+       extends [mscorlib]System.Object
+{
+} // end of class rtlib
+
+.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'
+       extends [mscorlib]System.Attribute
+{
+  .method public hidebysig specialname rtspecialname
+          instance void  .ctor(uint8[] A_0) cil managed
+  {
+    .maxstack  1
+    IL_0000:  ret
+  } // end of method '<msil>SymbolTable'::.ctor
+
+} // end of class '<msil>SymbolTable'
+
+
+// =============================================================
+
+.data cil I_00002060 = bytearray (29 00 00 00)
+#--- lib.b
+.assembly extern mscorlib
+{
+  .ver 4:0:0:0
+}
+.assembly rtlib
+{
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = ( 01 00 04 00 00 00 4D 53 59 4D 00 00 )
+  .ver 0:0:0:0
+}
+.module rtlib.dll
+.field static assembly valuetype '<msil>image_t' '<msil>image' at I_00002050
+
+// =============== CLASS MEMBERS DECLARATION ===================
+
+.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'
+       extends [mscorlib]System.Attribute
+{
+  .method public hidebysig specialname rtspecialname
+          instance void  .ctor(uint8[] A_0) cil managed
+  {
+    .maxstack  1
+    IL_0000:  ret
+  } // end of method '<msil>SymbolTable'::.ctor
+
+} // end of class '<msil>SymbolTable'
+
+.class private explicit ansi sealed '<msil>image_t'
+       extends [mscorlib]System.ValueType
+{
+  .size 4
+} // end of class '<msil>image_t'
+
+.class public abstract auto ansi sealed rtlib
+       extends [mscorlib]System.Object
+{
+} // end of class rtlib
+
+
+// =============================================================
+
+.data cil I_00002050 = bytearray (29 00 00 00)
+#--- both.b
+.assembly extern mscorlib
+{
+  .ver 4:0:0:0
+}
+.assembly rtlib
+{
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = ( 01 00 04 00 00 00 4D 53 59 4D 00 00 )
+  .ver 0:0:0:0
+}
+.module rtlib.dll
+.field static assembly valuetype '<msil>image_t' '<msil>image' at I_00002050
+
+// =============== CLASS MEMBERS DECLARATION ===================
+
+.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'
+       extends [mscorlib]System.Attribute
+{
+  .method public hidebysig specialname rtspecialname
+          instance void  .ctor(uint8[] A_0) cil managed
+  {
+    .maxstack  1
+    IL_0000:  ret
+  } // end of method '<msil>SymbolTable'::.ctor
+
+} // end of class '<msil>SymbolTable'
+
+.class public abstract auto ansi sealed rtlib
+       extends [mscorlib]System.Object
+{
+} // end of class rtlib
+
+.class private explicit ansi sealed '<msil>image_t'
+       extends [mscorlib]System.ValueType
+{
+  .size 4
+} // end of class '<msil>image_t'
+
+
+// =============================================================
+
+.data cil I_00002050 = bytearray (29 00 00 00)
+#--- changed.b
+.assembly extern mscorlib
+{
+  .ver 4:0:0:0
+}
+.assembly rtlib
+{
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = ( 01 00 04 00 00 00 4D 53 59 4D 00 00 )
+  .ver 0:0:0:0
+}
+.module rtlib.dll
+.field static assembly valuetype '<msil>image_t' '<msil>image' at I_00002050
+
+// =============== CLASS MEMBERS DECLARATION ===================
+
+.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'
+       extends [mscorlib]System.Attribute
+{
+  .method public hidebysig specialname rtspecialname
+          instance void  .ctor(uint8[] A_0) cil managed
+  {
+    .maxstack  2
+    IL_0000:  ret
+  } // end of method '<msil>SymbolTable'::.ctor
+
+} // end of class '<msil>SymbolTable'
+
+.class private explicit ansi sealed '<msil>image_t'
+       extends [mscorlib]System.ValueType
+{
+  .size 4
+} // end of class '<msil>image_t'
+
+.class public abstract auto ansi sealed rtlib
+       extends [mscorlib]System.Object
+{
+} // end of class rtlib
+
+
+// =============================================================
+
+.data cil I_00002050 = bytearray (29 00 00 00)
+#--- missing.b
+.assembly extern mscorlib
+{
+  .ver 4:0:0:0
+}
+.assembly rtlib
+{
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = ( 01 00 04 00 00 00 4D 53 59 4D 00 00 )
+  .ver 0:0:0:0
+}
+.module rtlib.dll
+.field static assembly valuetype '<msil>image_t' '<msil>image' at I_00002050
+
+// =============== CLASS MEMBERS DECLARATION ===================
+
+.class private explicit ansi sealed '<msil>image_t'
+       extends [mscorlib]System.ValueType
+{
+  .size 4
+} // end of class '<msil>image_t'
+
+.class public abstract auto ansi sealed rtlib
+       extends [mscorlib]System.Object
+{
+} // end of class rtlib
+
+
+// =============================================================
+
+.data cil I_00002050 = bytearray (29 00 00 00)
+#--- asm.b
+.assembly extern mscorlib
+{
+  .ver 4:0:0:0
+}
+.assembly rtlib
+{
+  .custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = ( 01 00 04 00 00 00 4D 53 59 4D 00 01 )
+  .ver 0:0:0:0
+}
+.module rtlib.dll
+.field static assembly valuetype '<msil>image_t' '<msil>image' at I_00002050
+
+// =============== CLASS MEMBERS DECLARATION ===================
+
+.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'
+       extends [mscorlib]System.Attribute
+{
+  .method public hidebysig specialname rtspecialname
+          instance void  .ctor(uint8[] A_0) cil managed
+  {
+    .maxstack  1
+    IL_0000:  ret
+  } // end of method '<msil>SymbolTable'::.ctor
+
+} // end of class '<msil>SymbolTable'
+
+.class private explicit ansi sealed '<msil>image_t'
+       extends [mscorlib]System.ValueType
+{
+  .size 4
+} // end of class '<msil>image_t'
+
+.class public abstract auto ansi sealed rtlib
+       extends [mscorlib]System.Object
+{
+} // end of class rtlib
+
+
+// =============================================================
+
+.data cil I_00002050 = bytearray (29 00 00 00)
+#--- mix.a
+.assembly mix
+{
+  .custom instance void Marker::.ctor() = ( 01 00 00 00 )
+  .ver 0:0:0:0
+}
+.module mix.dll
+.class public auto ansi sealed Tables
+       extends [mscorlib]System.Object
+{
+  .field public static int32 t1 at I_00002070
+  .method public static float32  f() cil managed
+  {
+    .maxstack  1
+    IL_0000:  ldc.r4     (01 00 80 7F)
+    IL_0005:  ret
+  } // end of method Tables::f
+
+} // end of class Tables
+
+.class private auto ansi sealed Marker
+       extends [mscorlib]System.Attribute
+{
+  .field public static int32 m1 at I_00002080
+} // end of class Marker
+
+.data cil I_00002070 = bytearray (01 02 03 04)
+.data cil I_00002080 = bytearray (05 06 07 08)
+#--- mix.b
+.assembly mix
+{
+  .custom instance void Marker::.ctor() = ( 01 00 00 00 )
+  .ver 0:0:0:0
+}
+.module mix.dll
+.class private auto ansi sealed Marker
+       extends [mscorlib]System.Attribute
+{
+  .field public static int32 m1 at I_00002054
+} // end of class Marker
+
+.class public auto ansi sealed Tables
+       extends [mscorlib]System.Object
+{
+  .field public static int32 t1 at I_00002050
+  .method public static float32  f() cil managed
+  {
+    .maxstack  1
+    IL_0000:  ldc.r4     (01 00 C0 7F)
+    IL_0005:  ret
+  } // end of method Tables::f
+
+} // end of class Tables
+
+.data cil I_00002050 = bytearray (01 02 03 04)
+.data cil I_00002054 = bytearray (05 06 07 08)
+#--- module.a
+.assembly rtlib
+{
+  .ver 0:0:0:0
+}
+.module rtlib.dll
+.custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = ( 01 00 00 00 00 00 )
+.class public abstract auto ansi sealed rtlib
+       extends [mscorlib]System.Object
+{
+} // end of class rtlib
+
+.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'
+       extends [mscorlib]System.Attribute
+{
+} // end of class '<msil>SymbolTable'
+
+#--- module.b
+.assembly rtlib
+{
+  .ver 0:0:0:0
+}
+.module rtlib.dll
+.custom instance void '<msil>SymbolTable'::.ctor(uint8[]) = ( 01 00 00 00 00 00 )
+.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'
+       extends [mscorlib]System.Attribute
+{
+} // end of class '<msil>SymbolTable'
+
+.class public abstract auto ansi sealed rtlib
+       extends [mscorlib]System.Object
+{
+} // end of class rtlib
+
+#--- exe.a
+.assembly prog
+{
+  .ver 0:0:0:0
+}
+.module prog.exe
+.class private abstract auto ansi sealed beforefieldinit '<msil>Main'
+       extends [mscorlib]System.Object
+{
+} // end of class '<msil>Main'
+
+.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'
+       extends [mscorlib]System.Attribute
+{
+} // end of class '<msil>SymbolTable'
+
+#--- exe.b
+.assembly prog
+{
+  .ver 0:0:0:0
+}
+.module prog.exe
+.class private auto ansi sealed beforefieldinit '<msil>SymbolTable'
+       extends [mscorlib]System.Attribute
+{
+} // end of class '<msil>SymbolTable'
+
+.class private abstract auto ansi sealed beforefieldinit '<msil>Main'
+       extends [mscorlib]System.Object
+{
+} // end of class '<msil>Main'
+
+#--- marker.il
+// The .assembly directive after the classes: ilasm writes the TypeDefs in
+// source order (marker, then Marker), and the reassembly of ildasm's listing,
+// whose .assembly block comes first, defines Marker at the .custom.
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.module marker.dll
+.class public abstract auto ansi sealed marker extends [mscorlib]System.Object
+{
+  .method public static int32 answer() cil managed
+  {
+    .maxstack 1
+    ldc.i4.s 42
+    ret
+  }
+}
+.class private auto ansi sealed beforefieldinit Marker extends [mscorlib]System.Attribute
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor(uint8[] A_0) cil managed
+  {
+    .maxstack 1
+    ldarg.0
+    call instance void [mscorlib]System.Attribute::.ctor()
+    ret
+  }
+}
+.assembly marker
+{
+  .custom instance void Marker::.ctor(uint8[]) = ( 01 00 02 00 00 00 41 42 00 00 )
+  .ver 0:0:0:0
+}

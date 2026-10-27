@@ -193,6 +193,11 @@ void OutputImage::addRelocations(SymbolBinder &symbols, unsigned threshold,
       switch (r.Type) {
       case MSILLink::RelocType::Addr64:
       case MSILLink::RelocType::Addr32: {
+        // A library export's address is a cross relocation
+        // (SymbolBinder::getCrossRelocations), which the trailer stores
+        // (plan 5.9.10, 5.9.15).
+        if (sym->isManaged())
+          break;
         uint8_t width = r.Type == MSILLink::RelocType::Addr64 ? 8 : 4;
         // An undefined weak symbol is address 0 (plan 5.9.6 step 3): the
         // site holds the addend, and nothing runs at startup.
@@ -244,6 +249,9 @@ void OutputImage::addRelocations(SymbolBinder &symbols, unsigned threshold,
       }
       case MSILLink::RelocType::FnAddr64:
       case MSILLink::RelocType::FnAddr32: {
+        // A library export's address: a cross relocation, as above.
+        if (sym->isManaged())
+          break;
         // An undefined weak function's address is 0.
         if (isUndefWeak)
           break;
@@ -263,6 +271,10 @@ void OutputImage::addRelocations(SymbolBinder &symbols, unsigned threshold,
         // A symbol difference is a link-time constant (plan 5.8.8): both
         // symbols lie in this image.
         Symbol *sym2 = f->getSymbol(r.Symbol2);
+        // A library export lies in another assembly's image:
+        // SymbolBinder::reportUnresolved reported the difference.
+        if (sym2 && (sym->isManaged() || sym2->isManaged()))
+          break;
         std::optional<uint64_t> a = getSymbolOffset(sym);
         std::optional<uint64_t> b = sym2 ? getSymbolOffset(sym2) : std::nullopt;
         std::string what = "symbol difference '" + toString(*sym) + "' - '" +
@@ -337,7 +349,25 @@ static bool isNullSlot(const InputSegment &seg, uint64_t off) {
   return all_of(seg.bytes.slice(off, 8), [](uint8_t b) { return b == 0; });
 }
 
-std::vector<std::pair<uint32_t, bool>>
+// The number of glibc's .init_array arguments (int argc, char **argv, char
+// **envp) that a constructor with the IL signature \p sig takes, or
+// std::nullopt if it takes other arguments: off Windows, its parameters are
+// a prefix of (int32, native int, native int) (pointers are native ints,
+// decision D2); on Windows triples it takes none.
+static std::optional<uint8_t> getConstructorArgs(const MethodSig &sig,
+                                                 SectionRules rules) {
+  if (sig.Params.empty())
+    return 0;
+  if (rules == SectionRules::COFF || sig.Header != SIG_DEFAULT ||
+      sig.Params.size() > 3 || sig.RequiredParamCount < sig.Params.size())
+    return std::nullopt;
+  for (auto [i, param] : llvm::enumerate(sig.Params))
+    if (param != TypeSig::get(i == 0 ? ELEMENT_TYPE_I4 : ELEMENT_TYPE_I))
+      return std::nullopt;
+  return static_cast<uint8_t>(sig.Params.size());
+}
+
+std::vector<OutputConstructor>
 OutputImage::getConstructors(SymbolBinder &symbols) {
   SmallVector<ConstructorEntry, 0> entries;
   // The method that a constructor calls: a definition's, or the canonical
@@ -356,8 +386,9 @@ OutputImage::getConstructors(SymbolBinder &symbols) {
     }
     if (!method)
       return false;
-    // A constructor is called with no argument; a result is popped.
-    if (!out.methods[*method].sig.Params.empty()) {
+    // A constructor is called with no argument, or off Windows with argc,
+    // argv and envp as far as it takes them; a result is popped.
+    if (!getConstructorArgs(out.methods[*method].sig, out.rules)) {
       error("global constructor '" + toString(*sym) +
             "' takes arguments, which MSIL does not pass");
       return true;
@@ -412,10 +443,12 @@ OutputImage::getConstructors(SymbolBinder &symbols) {
   }
 
   sortConstructors(entries);
-  std::vector<std::pair<uint32_t, bool>> ctors;
-  for (const ConstructorEntry &e : entries)
-    ctors.push_back({e.Id, out.methods[e.Id].sig.Return.getElementType() !=
-                               ELEMENT_TYPE_VOID});
+  std::vector<OutputConstructor> ctors;
+  for (const ConstructorEntry &e : entries) {
+    const MethodSig &sig = out.methods[e.Id].sig;
+    ctors.push_back({e.Id, sig.Return.getElementType() != ELEMENT_TYPE_VOID,
+                     *getConstructorArgs(sig, out.rules)});
+  }
   return ctors;
 }
 

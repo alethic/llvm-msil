@@ -1,0 +1,79 @@
+# Libraries initialize before the program, dependencies first, a library the program never calls included (recon E4c).
+# initc, inita and initb each have a constructor that prints; inita calls
+# initc and initb calls inita. The program links the three in that order
+# (msil-prog.py links the libraries of %{msil_shlibs} in spec order, and
+# links each library against the ones built before it: inita against initc,
+# initb against initc and inita). main calls only inita; initb and initc are
+# referenced on a branch that never runs. Every library is a direct
+# reference of the program, because Windows loads only the DLLs whose
+# symbols a program imports and the E7 oracle links the program with
+# --as-needed. The transcript shows:
+# - every directly linked library initializes before the program's
+#   constructors and main, dependencies first (initc, inita, initb). In MSIL
+#   the program's single <Module>::.cctor runs one ldtoken per linked
+#   library before its own constructors (plan 5.9.10, 5.9.15; an EXE keeps
+#   one initializer, section 12, 2026-10-21), and each ldtoken runs that
+#   library's initializers after those of the libraries it links (recon
+#   exports-multiasm 6.3), so the transcript does not show the order of the
+#   program's ldtokens (lld/test/MSIL/shared-two-phase checks that ldtokens
+#   follow the link order);
+# - initb, which the program never calls, still initializes. No other
+#   library links initb, so in MSIL it is the program's ldtoken of initb
+#   that runs its constructor before the program's: without it the CLR
+#   initializes initb only when it compiles main (which names b_unused),
+#   after the program's constructors.
+# The order is the dependency order of the chain initc <- inita <- initb,
+# which every loader keeps; natively the order of libraries that do not
+# depend on each other differs between the OSes (glibc runs a sibling
+# before the libraries the program links earlier, Windows does not).
+# E4c's library that the program never references cannot be tested against
+# the native oracle (Windows does not load it, and --as-needed drops it);
+# the ldtoken checks of lld/test/MSIL (shared-two-phase, shared-import)
+# cover it. Plan M22.f (init-order).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = initc=%t/c.c;inita=%t/a.c;initb=%t/b.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- api.h
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#define IMPORT __declspec(dllimport)
+#else
+#define API __attribute__((visibility("default")))
+#define IMPORT
+#endif
+int puts(const char *);
+#--- c.c
+#include "api.h"
+__attribute__((constructor)) static void c_init(void) { puts("initc: constructor"); }
+API int c_f(int x) { return x + 1; }
+#--- a.c
+#include "api.h"
+IMPORT int c_f(int);
+__attribute__((constructor)) static void a_init(void) { puts("inita: constructor"); }
+API int a_f(int x) { return c_f(x) * 2; }
+#--- b.c
+#include "api.h"
+IMPORT int a_f(int);
+__attribute__((constructor)) static void b_init(void) { puts("initb: constructor"); }
+API int b_unused(void) { return a_f(1); }
+#--- main.c
+#include "msil_test.h"
+#include "api.h"
+IMPORT int a_f(int);
+IMPORT int b_unused(void);
+IMPORT int c_f(int);
+static volatile int never;
+__attribute__((constructor)) static void prog_init(void) { puts("program: constructor"); }
+
+int main(void) {
+  puts("main");
+  if (never)
+    return b_unused() + c_f(0);
+  put_kv("a_f(20)", a_f(20));
+  return 0;
+}

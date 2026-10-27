@@ -677,7 +677,7 @@ source_filename = "ctor-args.c"
 
 @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @ia, ptr null }]
 
-define void @ia(i32 %x) {
+define void @ia(i64 %x) {
   ret void
 }
 

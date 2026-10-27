@@ -304,6 +304,22 @@ static bool isCOFFData(const NativeExport &e) {
          f->format == NativeLibraryFile::PEDll;
 }
 
+bool isNativeObjectDefinition(const NativeExport &e) {
+  return e.Why == NotBindable::NativeCodeOnly &&
+         cast<NativeLibraryFile>(e.File)->format ==
+             NativeLibraryFile::NativeObject;
+}
+
+const NativeExport *NativeIndex::findObjectDefinition(StringRef name) const {
+  auto it = defs.find(CachedHashStringRef(name));
+  if (it == defs.end())
+    return nullptr;
+  for (const NativeExport *e : it->second)
+    if (isNativeObjectDefinition(*e))
+      return e;
+  return nullptr;
+}
+
 const NativeExport *
 NativeIndex::lookup(StringRef name,
                     SmallVectorImpl<const NativeExport *> &rejected,
@@ -311,7 +327,17 @@ NativeIndex::lookup(StringRef name,
   // An alias applies only when its name has no bindable definition of its
   // own (a weak external), and the target resolves like any symbol. Chains of
   // aliases are followed a few steps, so that a cycle cannot hang the link.
+  size_t first = rejected.size();
   for (unsigned depth = 0; depth != 8; ++depth) {
+    // A native linker always links a native object given on the command
+    // line, so its definition wins whatever the order of the inputs; it is
+    // machine code, which nothing binds. An archive is searched only while a
+    // name is undefined, so its native members keep their place in link
+    // order.
+    if (const NativeExport *e = findObjectDefinition(name)) {
+      rejected.insert(rejected.begin() + first, e);
+      return nullptr;
+    }
     auto it = defs.find(CachedHashStringRef(name));
     if (it != defs.end()) {
       for (const NativeExport *e : it->second) {
@@ -763,14 +789,21 @@ static void readPEDll(NativeIndex &index, NativeLibraryFile &f,
 namespace {
 // The reader of one archive: its COFF short import members, its MinGW
 // long-format import objects, its weak-alias objects and its native objects.
+// It also reads a native object given on the command line, as one member.
 class ArchiveReader {
 public:
   ArchiveReader(NativeIndex &index, NativeLibraryFile &f, const Triple &tt)
       : index(index), file(f), tt(tt) {}
+  // Reads the archive \p f.
   void read();
+  // Reads the native object \p f (NativeLibraryFile::NativeObject) as a
+  // member of an archive is read, with the same checks; the object itself is
+  // the file of its machine code.
+  void readObject();
 
 private:
   void readMember(MemoryBufferRef mb);
+  void readLongImports();
   void readCOFFShortImport(MemoryBufferRef mb);
   void readCOFFObject(MemoryBufferRef mb);
   void readELFRelocatable(MemoryBufferRef mb);
@@ -779,7 +812,12 @@ private:
   bool checkFormat();
   bool checkMachine(uint16_t machine, MemoryBufferRef mb);
   void addNativeCode(StringRef sym, MemoryBufferRef mb);
+  bool isObject() const {
+    return file.format == NativeLibraryFile::NativeObject;
+  }
   std::string memberName(MemoryBufferRef mb) const {
+    if (isObject())
+      return toString(&file);
     return (toString(&file) + "(" + mb.getBufferIdentifier() + ")").str();
   }
 
@@ -803,7 +841,8 @@ private:
   DenseMap<CachedHashStringRef, StringRef> headToName;
   DenseMap<CachedHashStringRef, StringRef> nameToDll;
 
-  // The file of the machine code of the current member, created on demand.
+  // The file of the machine code of the current member, created on demand
+  // (the native object itself for readObject()).
   NativeLibraryFile *memberFile = nullptr;
 };
 } // namespace
@@ -890,7 +929,9 @@ void ArchiveReader::readCOFFShortImport(MemoryBufferRef mb) {
 }
 
 void ArchiveReader::addNativeCode(StringRef sym, MemoryBufferRef mb) {
-  if (!memberFile) {
+  if (isObject()) {
+    memberFile = &file;
+  } else if (!memberFile) {
     memberFile = make<NativeLibraryFile>(mb, NativeLibraryFile::ArchiveMember);
     memberFile->archiveName = std::string(file.getName());
   }
@@ -1201,11 +1242,20 @@ void ArchiveReader::read() {
   for (std::unique_ptr<MemoryBuffer> &thin : archive.takeThinBuffers())
     make<std::unique_ptr<MemoryBuffer>>(std::move(thin));
 
-  // The heads and tails of long-format import libraries come anywhere in the
-  // archive, so the functions' members are read last.
+  readLongImports();
+}
+
+// The heads and tails of long-format import libraries come anywhere in the
+// archive, so the functions' members are read last.
+void ArchiveReader::readLongImports() {
   for (LongImport &imp : longImports)
     readGNULongImport(*imp.obj, imp.mb, imp.head);
   longImports.clear();
+}
+
+void ArchiveReader::readObject() {
+  readMember(file.getMemoryBufferRef());
+  readLongImports();
 }
 
 //===----------------------------------------------------------------------===//
@@ -1241,7 +1291,12 @@ void NativeIndex::addFile(NativeLibraryFile &f, const Triple &tt) {
   case NativeLibraryFile::Builtin:
     readUCRTBaseImports(*this, f);
     return;
+  case NativeLibraryFile::NativeObject:
+    ArchiveReader(*this, f, tt).readObject();
+    return;
   case NativeLibraryFile::ArchiveMember:
+    // The file of a member's machine code, which the archive's reader makes;
+    // never added on its own.
     return;
   }
   llvm_unreachable("unknown native library format");

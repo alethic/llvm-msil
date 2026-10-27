@@ -1,0 +1,124 @@
+# A library and its program (recon E7): calls, data, extern data, both relocation kinds, identity both ways, constructors.
+# zl.c is recon/p2/exports-multiasm-files/e7/zl.c, linked with -shared into
+# zl.dll (%{msil_shlibs}; natively zl.dll with zl.lib on Windows, libzl.so on
+# Linux); main.c and reloc.c are E7's main.c, linked against it. Checked:
+# - calls into the library through MemberRefs with the library's signatures;
+# - exported data read and written from the program (extern int counter,
+#   extern int *pcounter), dllimport on Windows triples as the native
+#   oracle needs, and the library's intra-assembly relocation pcounter;
+# - both kinds of cross-assembly relocation in the program's data, pc =
+#   &counter (ADDR) and ft = twice (FNADDR): phase-2 stores through the
+#   library's '<msil>addr_' accessors (plan 5.9.15, M22.c item 6);
+# - pointer identity both ways: the program's &counter, &twice, pc and ft
+#   equal the library's own addresses, and the library finds the program's
+#   pointers equal to its own (an importer never uses its own ldftn, recon
+#   exports-multiasm 4.2);
+# - the library's constructor runs before main, after the library's static
+#   data is complete (it sees counter == 5 and sets 100);
+# - a static function of the program called by the library through a
+#   pointer (apply(add1, 41)), and the hidden helper staying in the library.
+# The native MSVC model cannot write a static initializer that holds the
+# address of another DLL's symbol (dllimport data is no constant expression
+# in C; a dllimport function's address in data is the import thunk), so
+# only the native Windows oracle sets pc and ft in a constructor
+# (STATIC_XRELOCS=0); every MSIL build and the Linux oracle (-fPIC, the
+# library linked -Bsymbolic) use the static initializers. Plan M22.f.
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = zl=%t/zl.c
+# REDEFINE: %{msil_srcs} = %t/main.c %t/reloc.c
+# RUN: %{msil_prog}
+#--- api.h
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#define IMPORT __declspec(dllimport)
+#else
+#define API __attribute__((visibility("default")))
+#define IMPORT
+#endif
+#if defined(_WIN32) && !defined(__MSIL__)
+#define STATIC_XRELOCS 0
+#else
+#define STATIC_XRELOCS 1
+#endif
+#--- zl.c
+/* E7 library: what 'clang -shared -o zl.dll' builds. */
+#include "api.h"
+API int counter = 5;                  /* exported data */
+static int calls;                     /* internal data */
+API int *pcounter = &counter;         /* intra-assembly data relocation */
+API int ctor_saw;                     /* what the constructor found in counter */
+__attribute__((visibility("hidden"))) int helper(int x) { return x * 10; }
+API int twice(int x) {
+  calls++;
+  return 2 * x;
+}
+API int bump(void) { return ++counter; }
+API int (*get_twice(void))(int) { return twice; }
+API int apply(int (*f)(int), int x) { return f(x) + helper(0); }
+API int get_calls(void) { return calls; }
+API int is_twice(int (*f)(int)) { return f == twice; }
+API int is_counter(const int *p) { return p == &counter; }
+__attribute__((constructor)) static void init(void) {
+  ctor_saw = counter;
+  counter = 100;
+}
+#--- reloc.c
+/* The program's data that holds addresses of the library's symbols. */
+#include "api.h"
+#if STATIC_XRELOCS
+extern int counter;
+int twice(int);
+int *pc = &counter;                   /* cross-assembly data relocation */
+int (*ft)(int) = twice;               /* cross-assembly function relocation */
+#else
+IMPORT extern int counter;
+IMPORT int twice(int);
+int *pc;
+int (*ft)(int);
+__attribute__((constructor)) static void set_pointers(void) {
+  pc = &counter;
+  ft = twice;
+}
+#endif
+#--- main.c
+/* E7 program: what 'clang main.c reloc.c zl.dll -o main.exe' builds. */
+#include "msil_test.h"
+#include "api.h"
+IMPORT extern int counter;
+IMPORT extern int *pcounter;
+IMPORT extern int ctor_saw;
+IMPORT int twice(int);
+IMPORT int bump(void);
+IMPORT int (*get_twice(void))(int);
+IMPORT int apply(int (*)(int), int);
+IMPORT int get_calls(void);
+IMPORT int is_twice(int (*)(int));
+IMPORT int is_counter(const int *);
+extern int *pc;
+extern int (*ft)(int);
+static int add1(int x) { return x + 1; }
+
+int main(void) {
+  put_kv("constructor saw counter", ctor_saw);
+  put_kv("counter in main", counter);
+  put_kv("pc == &counter", pc == &counter);
+  put_kv("pcounter == &counter", pcounter == &counter);
+  put_kv("library: pc is &counter", is_counter(pc));
+  put_kv("ft == &twice", ft == &twice);
+  put_kv("ft == get_twice()", ft == get_twice());
+  put_kv("library: ft is twice", is_twice(ft));
+  put_kv("library: &twice is twice", is_twice(&twice));
+  put_kv("ft(21)", ft(21));
+  put_kv("apply(add1, 41)", apply(add1, 41));
+  *pc = 7;
+  put_kv("bump() after *pc = 7", bump());
+  counter += 10;
+  put_kv("*pcounter after counter += 10", *pcounter);
+  put_kv("twice(4) through get_twice()", get_twice()(4));
+  put_kv("calls of twice", get_calls());
+  return counter & 0xff;
+}

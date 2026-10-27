@@ -1,0 +1,16 @@
+constructor saw counter=5
+counter in main=100
+pc == &counter=1
+pcounter == &counter=1
+library: pc is &counter=1
+ft == &twice=1
+ft == get_twice()=1
+library: ft is twice=1
+library: &twice is twice=1
+ft(21)=42
+apply(add1, 41)=42
+bump() after *pc = 7=8
+*pcounter after counter += 10=18
+twice(4) through get_twice()=8
+calls of twice=2
+[exit 18]

@@ -89,3 +89,12 @@ skip O4 msil/test/M2/00-link/spill-limits.test spill classes: --lto-emit-asm tex
 skip O4 msil/test/M2/00-link/reloc-loop.test prebuilt CIL objects: the composite links the CIL object r4.o in libr4.a, so its --also-il link stops with '--lto-emit-asm cannot link CIL objects' and there is no text to compare (plan 5.9.13)
 skip O4 msil/test/M2/02-lto/mixed-objects-bitcode.test prebuilt CIL objects: the composite links CIL objects (objpart.o, and arobj.o in libmixedpre.a) beside bitcode, so its --also-il link stops with '--lto-emit-asm cannot link CIL objects' and there is no text to compare (plan 5.9.13)
 skip O4 msil/test/M2/02-lto/lto-partitions.test --lto-partitions=2: the composite's link writes two partitions, so its --also-il link stops with 'ThinLTO and --lto-partitions cannot write ILAsm text' and there is no text to compare (plan 5.9.13)
+#
+# Library links (plan 5.12.6, M22): msil-ld cannot write a -shared library as
+# --lto-emit-asm text, nor a link that imports from a .NET library built by
+# this toolchain, so the tests that build or link against one have no text to
+# compare.
+skip O4 msil/test/M2/04-shared/ -shared libraries and links against them have no --lto-emit-asm text
+skip O4 msil/test/M2/08-semantics/p2c-bsymbolic.test -shared libraries and links against them have no --lto-emit-asm text
+skip O4 msil/test/M2/08-semantics/p2c-cycle.test -shared libraries and links against them have no --lto-emit-asm text
+skip O4 msil/test/M2/08-semantics/p2c-weak-def.test -shared libraries and links against them have no --lto-emit-asm text

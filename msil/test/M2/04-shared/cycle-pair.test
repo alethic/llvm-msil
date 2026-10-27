@@ -1,0 +1,88 @@
+# Two libraries whose data point into each other (recon E4b), linked through an interface: complete data in both.
+# cyca.c and cycb.c each define a variable and a pointer to the other's
+# (cyca's a_peer = &b_var, cycb's b_peer = &a_var) and call each other. The
+# pair is cyclic, so under msil-ld's -z defs one side links against an
+# interface: '?cycb=...' first builds cycb.dll with -Wl,--interface-only
+# (plan 5.9.15; natively an import library through /force:unresolved on
+# Windows, nothing on Linux, where ld.lld -shared leaves the symbols to the
+# dynamic loader), then cyca links against that interface and the real cycb
+# against cyca. The program reads both pointers and calls across the cycle.
+# With Phase 1's single initializer the library entered second read the
+# other's address field before it was set (E4b v1: a stale null address);
+# with two phases each address comes from the other's '<msil>Data' class,
+# which is complete before any cross-assembly store (E4b v2, plan 5.9.10).
+# The native MSVC model cannot hold the address of another DLL's data in a
+# static initializer, so only the native Windows oracle sets the pointers in
+# a constructor (STATIC_XRELOCS=0). Plan M22.f (cycle-pair).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = ?cycb=%t/cycb.c;cyca=%t/cyca.c;cycb=%t/cycb.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- api.h
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#define IMPORT __declspec(dllimport)
+#else
+#define API __attribute__((visibility("default")))
+#define IMPORT
+#endif
+#if defined(_WIN32) && !defined(__MSIL__)
+#define STATIC_XRELOCS 0
+#else
+#define STATIC_XRELOCS 1
+#endif
+#--- cyca.c
+#include "api.h"
+API int a_var = 0x1000;
+#if STATIC_XRELOCS
+extern int b_var;
+API int *a_peer = &b_var;
+#else
+IMPORT extern int b_var;
+API int *a_peer;
+__attribute__((constructor)) static void set_peer(void) { a_peer = &b_var; }
+#endif
+IMPORT int b_get(void);
+API int a_get(void) { return a_var; }
+API int a_peer_value(void) { return *a_peer; }
+API int a_calls_b(void) { return b_get() + 1; }
+#--- cycb.c
+#include "api.h"
+API int b_var = 0x2000;
+#if STATIC_XRELOCS
+extern int a_var;
+API int *b_peer = &a_var;
+#else
+IMPORT extern int a_var;
+API int *b_peer;
+__attribute__((constructor)) static void set_peer(void) { b_peer = &a_var; }
+#endif
+IMPORT int a_get(void);
+API int b_get(void) { return b_var; }
+API int b_peer_value(void) { return *b_peer; }
+API int b_calls_a(void) { return a_get() + 2; }
+#--- main.c
+#include "msil_test.h"
+#include "api.h"
+IMPORT extern int a_var, b_var;
+IMPORT extern int *a_peer, *b_peer;
+IMPORT int a_peer_value(void);
+IMPORT int b_peer_value(void);
+IMPORT int a_calls_b(void);
+IMPORT int b_calls_a(void);
+
+int main(void) {
+  put_kv("a_peer == &b_var", a_peer == &b_var);
+  put_kv("b_peer == &a_var", b_peer == &a_var);
+  put_kv("a_peer_value()", a_peer_value());
+  put_kv("b_peer_value()", b_peer_value());
+  put_kv("a_calls_b()", a_calls_b());
+  put_kv("b_calls_a()", b_calls_a());
+  *a_peer += 5;
+  put_kv("b_var after *a_peer += 5", b_var);
+  return 0;
+}

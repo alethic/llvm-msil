@@ -1,0 +1,7 @@
+initc: constructor
+inita: constructor
+initb: constructor
+program: constructor
+main
+a_f(20)=42
+[exit 0]

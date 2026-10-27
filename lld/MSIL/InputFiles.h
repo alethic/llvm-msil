@@ -10,11 +10,12 @@
 //
 // The input files of msil-ld (plan 5.9.4): CIL objects (ObjFile, plan 5.8)
 // and LLVM bitcode, as files, as archive members and between --start-lib and
-// --end-lib, the in-memory CIL objects that LTO writes, and native libraries
-// (NativeLibraryFile, plan 5.10.8). The driver classifies .NET assemblies
-// (AssemblyFiles.h): reference assemblies join the reference set (plan
-// 5.11), and libraries built by this toolchain go to
-// createManagedLibraryFile().
+// --end-lib, the in-memory CIL objects that LTO writes, native libraries
+// (NativeLibraryFile, plan 5.10.8) and native objects given on the command
+// line. The driver classifies .NET assemblies (AssemblyFiles.h): reference
+// assemblies join the reference set (plan 5.11), and libraries built by this
+// toolchain go to createManagedLibraryFile(), which makes a
+// ManagedLibraryFile (plan 5.9.15).
 //
 //===----------------------------------------------------------------------===//
 
@@ -56,6 +57,8 @@ public:
     ObjectKind,
     BitcodeKind,
     NativeLibraryKind,
+    // A library built by this toolchain (AssemblyFiles.h, plan 5.9.15).
+    ManagedLibraryKind,
   };
 
   virtual ~InputFile() {}
@@ -240,11 +243,23 @@ public:
 // a native DLL, or the built-in library of --ucrtbase-imports. The driver
 // creates one per library it reads, in command-line order, and the symbol
 // table adds it to ctx.nativeIndex when it loads it. The native index
-// creates one per archive member that defines machine code, as the file of
-// its NativeCodeOnly definitions.
+// creates one per archive member that defines machine code (ArchiveMember),
+// as the file of its NativeCodeOnly definitions. createObjectFile() makes one
+// of format NativeObject for a native COFF or ELF object given on the command
+// line (section 12 of 2026-10-26, Rust-found defect 3), which the native
+// index reads as an archive member: its global definitions are machine code,
+// which a reference cannot bind and which comes before every library's
+// definition, and an object that nothing refers to is skipped.
 class NativeLibraryFile : public InputFile {
 public:
-  enum Format : uint8_t { ELFShared, Archive, PEDll, Builtin, ArchiveMember };
+  enum Format : uint8_t {
+    ELFShared,
+    Archive,
+    PEDll,
+    Builtin,
+    ArchiveMember,
+    NativeObject
+  };
 
   NativeLibraryFile(MemoryBufferRef m, Format format)
       : InputFile(NativeLibraryKind, m), format(format) {}
@@ -257,11 +272,17 @@ public:
 
 // Creates the input file for a CIL object or bitcode file, an archive member
 // or a file between --start-lib and --end-lib, or one of LTO's in-memory
-// objects. Anything else is not linkable by this msil-ld: an archive member
-// that is none of these nor a native member (an import member or a native
-// object, which the driver gives to the native index) is skipped with the
-// warning "<archive>(<member>): not LLVM bitcode; ignored", and any other
-// file is the error "unknown file type: <file>". Both return null, as do a
+// objects. A native COFF or ELF object given on the command line (not an
+// archive member, which the driver gives to the native index) becomes a
+// NativeLibraryFile of format NativeObject, noted under --verbose: its
+// definitions are machine code that only a reference makes an error
+// (NativeIndex::addFile). Anything else is not linkable by this
+// msil-ld: an archive member that is none of these nor a native member (an
+// import member or a native object) is skipped with the warning
+// "<archive>(<member>): not LLVM bitcode; ignored", a file of a format that
+// llvm::identify_magic recognizes is the error "unknown file type: <file>
+// (<format>)" (a WebAssembly object, a Mach-O file, ...), and any other file
+// is the error "unknown file type: <file>". These return null, as do a
 // bitcode file with module-level inline assembly, after D26's error (plan
 // 5.9.14), and a PE with a CLI header that is no valid CIL object, after
 // ObjFile's error or, for a .NET assembly in an archive, its warning.

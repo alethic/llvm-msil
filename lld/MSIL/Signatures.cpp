@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Signatures.h"
+#include "AssemblyFiles.h"
 #include "Config.h"
 #include "InputChunks.h"
 #include "InputFiles.h"
@@ -143,6 +144,30 @@ void CallBinder::checkNativeReferences() {
   }
 }
 
+// Plan 5.9.8's diagnostic for the call \p call of \p sym in \p f against
+// the definition \p def in \p defFile: a warning for an adapter, else an
+// error.
+static void reportMismatch(const Symbol &sym, const CallShape &call,
+                           const CallShape &def, const CallMatch &match,
+                           StringRef defFile, const ObjFile &f) {
+  bool isAdapter = match.Kind == CallMatchKind::Adapter;
+  std::string where =
+      ("\n>>> defined as " + printShape(def) + " in " + defFile +
+       "\n>>> called as " + printShape(call) + " in " + toString(&f))
+          .str();
+  // A variadic side is 5.9.14's Phase 3 text (P3-B), the others wasm-ld's
+  // reportFunctionSignatureMismatch shape.
+  std::string msg =
+      call.isVarArg() || def.isVarArg()
+          ? "variadic functions are not supported yet: " + toString(sym) + where
+          : "function signature mismatch: " + toString(sym) + where + "\n>>> " +
+                (isAdapter ? "adapter: " : "") + match.Detail;
+  if (isAdapter)
+    warn(msg);
+  else
+    error(msg);
+}
+
 std::optional<uint32_t> CallBinder::bindCall(ObjFile &f, const TokenTarget &t) {
   Symbol *sym = t.sym;
   if (!sym)
@@ -176,24 +201,8 @@ std::optional<uint32_t> CallBinder::bindCall(ObjFile &f, const TokenTarget &t) {
     key.push_back('\0');
     key += getDescriptorKey(t.signatureInfo);
     bool isAdapter = match.Kind == CallMatchKind::Adapter;
-    std::string diagKey = key + '\0' + toString(&f);
-    if (reported.insert(diagKey).second) {
-      std::string where = "\n>>> defined as " + printShape(defShape) + " in " +
-                          toString(d->method->file) + "\n>>> called as " +
-                          printShape(call) + " in " + toString(&f);
-      // A variadic side is 5.9.14's Phase 3 text (P3-B), the others
-      // wasm-ld's reportFunctionSignatureMismatch shape.
-      std::string msg =
-          call.isVarArg() || defShape.isVarArg()
-              ? "variadic functions are not supported yet: " + toString(*sym) +
-                    where
-              : "function signature mismatch: " + toString(*sym) + where +
-                    "\n>>> " + (isAdapter ? "adapter: " : "") + match.Detail;
-      if (isAdapter)
-        warn(msg);
-      else
-        error(msg);
-    }
+    if (reported.insert(key + '\0' + toString(&f)).second)
+      reportMismatch(*sym, call, defShape, match, toString(d->method->file), f);
     if (!isAdapter)
       return std::nullopt;
 
@@ -261,4 +270,87 @@ std::optional<uint32_t> CallBinder::bindCall(ObjFile &f, const TokenTarget &t) {
   // Undefined, discarded, data called as a function and kind mismatches are
   // reported elsewhere.
   return std::nullopt;
+}
+
+OutRef CallBinder::bindManaged(ObjFile &f, const TokenTarget &t) {
+  auto *managed = dyn_cast_or_null<ManagedSymbol>(t.sym);
+  if (!managed)
+    return OutRef();
+  const ManagedExport &e = *managed->managedExport;
+  ManagedLibraryFile &lib = *e.File;
+  auto fail = [&](Error err) {
+    error(toString(&f) + ": " + toString(std::move(err)));
+    return OutRef();
+  };
+
+  // An address: the export's accessor, which the site's ldsfld now calls
+  // (plan 5.9.7). A function and a variable each have one.
+  if (t.kind == TokenTarget::Field || t.kind == TokenTarget::FnAddr) {
+    Expected<uint32_t> ref =
+        lib.getMemberRef(e, /*accessor=*/true, out.mb, out.binder);
+    if (!ref)
+      return fail(ref.takeError());
+    return OutRef::token(*ref);
+  }
+
+  // A call of a variable is late binding's kind mismatch.
+  if (t.kind != TokenTarget::Method || e.isData())
+    return OutRef();
+  Expected<uint32_t> ref =
+      lib.getMemberRef(e, /*accessor=*/false, out.mb, out.binder);
+  if (!ref)
+    return fail(ref.takeError());
+  if (!t.signature)
+    return OutRef::token(*ref);
+
+  // Q8's check against the export's MethodDef signature and SIGNATURES
+  // descriptor (plan 5.9.8).
+  Expected<MethodSig> defSig = lib.getOutputSignature(e, out.mb, out.binder);
+  if (!defSig)
+    return fail(defSig.takeError());
+  MethodSig callSig = out.mapSig(f, *t.signature);
+  CallShape call = CallShape::get(callSig, t.signatureInfo);
+  CallShape defShape = CallShape::get(*defSig, e.getSignatureInfo());
+  CallMatch match = classifyCall(call, defShape);
+  if (match.Kind == CallMatchKind::Direct)
+    return OutRef::token(*ref);
+
+  // One adapter per (export, call signature, descriptor); one diagnostic
+  // per adapter and calling object.
+  std::string key = "<managed>";
+  key += toString(&lib);
+  key.push_back('\0');
+  key += e.Name;
+  key.push_back('\0');
+  key += OutputModule::getSignatureKey(callSig);
+  key.push_back('\0');
+  key += getDescriptorKey(t.signatureInfo);
+  bool isAdapter = match.Kind == CallMatchKind::Adapter;
+  if (reported.insert(key + '\0' + toString(&f)).second)
+    reportMismatch(*managed, call, defShape, match, toString(&lib), f);
+  if (!isAdapter)
+    return OutRef();
+
+  auto [it, inserted] = adapters.try_emplace(key, 0);
+  if (inserted) {
+    // 'assembly static '<msil>adapt_<name>_<n>'' with the call's signature
+    // (plan 5.9.8), calling the library's MemberRef. It has no target method
+    // in the output, so its name is final here.
+    OutputMethod a(OutputMethod::Adapter);
+    a.name = ("<msil>adapt_" + e.Name + "_" + Twine(managedAdapterCounts[&e]++))
+                 .str();
+    a.flags = MethodAttributes::Assembly | MethodAttributes::Static;
+    a.implFlags = MethodImplAttributes::IL | MethodImplAttributes::Managed;
+    a.sig = callSig;
+    a.target = OutputField::NoMethod;
+    a.body = std::make_unique<ILBuilder>(callSig.Return.getElementType() !=
+                                         ELEMENT_TYPE_VOID);
+    buildAdapter(match, callSig, TokenRef::getToken(*ref), *a.body);
+    if (Error err = a.body->layout())
+      reportFatalInternalError(Twine("msil-ld: adapter of '") +
+                               toString(*managed) +
+                               "': " + toString(std::move(err)));
+    it->second = out.addMethod(std::move(a));
+  }
+  return OutRef::method(it->second);
 }

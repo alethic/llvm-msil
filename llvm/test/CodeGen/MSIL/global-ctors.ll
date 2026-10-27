@@ -275,7 +275,9 @@ define internal void @c3() {
 }
 
 ;--- ctor-args.ll
-; __attribute__((constructor)) static void init(int argc, char **argv)
+; __attribute__((constructor)) static void init(char **argv, int argc): a
+; parameter list that glibc does not pass (off Windows a prefix of (int
+; argc, char **argv, char **envp) is passed, obj-ctors-args.test)
 source_filename = "ctor-args.c"
 
 ; ARGS: {{^}}error: {{.*}}global constructor 'init' takes arguments, which MSIL does not pass{{$}}
@@ -283,7 +285,7 @@ source_filename = "ctor-args.c"
 @seen = global i32 0, align 4
 @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init, ptr null }]
 
-define internal void @init(i32 %argc, ptr %argv) {
+define internal void @init(ptr %argv, i32 %argc) {
   store i32 %argc, ptr @seen, align 4
   ret void
 }

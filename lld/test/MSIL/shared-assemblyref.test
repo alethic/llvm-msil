@@ -1,0 +1,126 @@
+## A library's own AssemblyRefs against the program's references
+## (ImplementationPlan.md M22.c item 7; 5.11.9's M22 texts; recon
+## p2/bcl-binding.md 5.9 and p2/exports-multiasm.md 5.4 step 5): each
+## AssemblyRef of a linked library that names no library of this link is
+## compared with the references, or without references with the built-in
+## table's mscorlib 4.0.0.0:
+## - a newer version than the reference's is the error
+##   '<library> references <name> <version>, newer than the reference <version>';
+##   an older or equal one is fine;
+## - a name the references do not have is the warning
+##   '<library> references <name>, which is not among the references';
+## - an AssemblyRef that names another library of the link is not checked.
+## The references are Inputs/fakepack's (M21): pack holds FakeCore 8.0.0.0,
+## FakeInterop 8.0.0.0 and FakeThreading 8.1.2.3, pack9 the same with
+## FakeInterop 9.0.0.0, packnt pack without FakeThreading, mscorlib the
+## one-file mscorlib 4.0.0.0. lib.o binds Marshal (FakeInterop) for its data
+## and Interlocked (FakeThreading) for a fence; libb.o calls lib's bump.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj libb.ll -o libb.o
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: llc -filetype=obj progb.ll -o progb.o
+# RUN: mkdir pack pack9 packnt mscorlib v8 v9 none b out
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o pack/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o pack9/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInteropV9.yaml -o pack9/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeThreading.yaml -o pack9/FakeThreading.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o packnt/FakeCore.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeInterop.yaml -o packnt/FakeInterop.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeMscorlib.yaml -o mscorlib/mscorlib.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+
+## The libraries: against pack9, pack, and no references.
+# RUN: msil-ld -shared lib.o --reference=pack9 -o v9/lib.dll 2>&1 | count 0
+# RUN: msil-ld -shared lib.o --reference=pack -o v8/lib.dll 2>&1 | count 0
+# RUN: msil-ld -shared lib.o -o none/lib.dll 2>&1 | count 0
+# RUN: llvm-cil-dump v9/lib.dll | FileCheck %s --check-prefix=V9-REFS
+# V9-REFS:      {{^}}assemblyref 'FakeCore' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# V9-REFS-NEXT: {{^}}assemblyref 'FakeInterop' ver 9.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# V9-REFS-NEXT: {{^}}assemblyref 'FakeThreading' ver 8.1.2.3 flags=0x00000000 key=31 BF 38 56 AD 36 4E 35 culture=''{{$}}
+
+## A newer version is the error; an older or equal one is fine.
+# RUN: not msil-ld prog.o v9/lib.dll --reference=pack -o x.exe 2>&1 | %{fc} --check-prefix=NEWER \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# NEWER: {{^}}msil-ld: error: v9{{[/\\]}}lib.dll references FakeInterop 9.0.0.0, newer than the reference 8.0.0.0{{$}}
+# RUN: msil-ld prog.o v8/lib.dll --reference=pack -o out/p8.exe 2>&1 | count 0
+# RUN: msil-ld prog.o v8/lib.dll --reference=pack9 -o out/p9.exe 2>&1 | count 0
+# RUN: msil-ld prog.o v9/lib.dll --reference=pack9 -o out/p99.exe 2>&1 | count 0
+
+## A name the references do not have is a warning, and the link goes on.
+# RUN: msil-ld prog.o v8/lib.dll --reference=packnt -o out/nt.exe 2>&1 | %{fc} --check-prefix=ABSENT \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# ABSENT: {{^}}msil-ld: warning: v8{{[/\\]}}lib.dll references FakeThreading, which is not among the references{{$}}
+
+## Without references: the built-in table has mscorlib 4.0.0.0 only.
+# RUN: msil-ld prog.o v8/lib.dll -o out/builtin.exe > builtin.txt 2>&1
+# RUN: %{fc} --check-prefix=BUILTIN --implicit-check-not=error: --input-file=builtin.txt
+# BUILTIN-DAG: {{^}}msil-ld: warning: v8{{[/\\]}}lib.dll references FakeCore, which is not among the references{{$}}
+# BUILTIN-DAG: {{^}}msil-ld: warning: v8{{[/\\]}}lib.dll references FakeInterop, which is not among the references{{$}}
+# BUILTIN-DAG: {{^}}msil-ld: warning: v8{{[/\\]}}lib.dll references FakeThreading, which is not among the references{{$}}
+# RUN: msil-ld prog.o none/lib.dll -o out/none.exe 2>&1 | count 0
+# RUN: msil-ld prog.o none/lib.dll --reference=mscorlib -o out/mscorlib.exe 2>&1 | count 0
+# RUN: msil-ld prog.o none/lib.dll --reference=pack -o out/none-pack.exe 2>&1 | %{fc} --check-prefix=NO-MSCORLIB \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# NO-MSCORLIB: {{^}}msil-ld: warning: none{{[/\\]}}lib.dll references mscorlib, which is not among the references{{$}}
+
+## libb.dll references lib: silent when lib.dll is a library of the link,
+## else lib is just a name the references do not have.
+# RUN: msil-ld -shared libb.o v8/lib.dll --reference=pack -o b/libb.dll 2>&1 | count 0
+# RUN: llvm-cil-dump b/libb.dll | FileCheck %s --check-prefix=B-REFS
+# B-REFS: {{^}}assemblyref 'lib' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# RUN: msil-ld progb.o b/libb.dll v8/lib.dll --reference=pack -o out/pb.exe 2>&1 | count 0
+# RUN: msil-ld progb.o b/libb.dll --reference=pack -o out/pb2.exe 2>&1 | %{fc} --check-prefix=B-ABSENT \
+# RUN:   --implicit-check-not=error: --implicit-check-not=warning:
+# B-ABSENT: {{^}}msil-ld: warning: b{{[/\\]}}libb.dll references lib, which is not among the references{{$}}
+
+#--- lib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@counter = global i32 5, align 4
+
+define i32 @bump() {
+  %c = load i32, ptr @counter, align 4
+  %c1 = add i32 %c, 1
+  store i32 %c1, ptr @counter, align 4
+  fence seq_cst
+  ret i32 %c1
+}
+
+#--- libb.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @bump()
+
+define i32 @bump2() {
+  %a = call i32 @bump()
+  %b = call i32 @bump()
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+#--- prog.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @bump()
+
+define i32 @main() {
+  %r = call i32 @bump()
+  ret i32 %r
+}
+
+#--- progb.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @bump2()
+
+define i32 @main() {
+  %r = call i32 @bump2()
+  ret i32 %r
+}

@@ -80,8 +80,9 @@
 #                  sysroot made through the WSL distribution); the CI never runs it   (M15 20)
 #   modern-ilasm   11-programs assembled by the .NET ilasm (win-x64), not Framework's
 #                                                                         (M18 17; step 11)
-#   roundtrip      11-programs through ildasm -> ilasm, then run (Design.md 5.5)
-#                                                                         (M18 17; M12 13)
+#   roundtrip      11-programs and msil/test/M2/04-shared/roundtrip-library.test (a -shared
+#                  library and a program relinked against its reassembly; plan 5.12.6 O2, M22)
+#                  through ildasm -> ilasm, then run (Design.md 5.5)      (M18 17; M12 13)
 #   expected       update-expected.py --check msil/test/M1 msil/test/M2: .expected vs the Windows
 #                  native oracle, with the compiler-rt builtins (M2's %{msil_prog} tests built by
 #                  msil-prog.py --mode native)                              (M14 15; step 12)
@@ -185,14 +186,18 @@ $BuildDir = [System.IO.Path]::GetFullPath($BuildDir)
 $checkMsil = @('llvm/test/CodeGen/MSIL', 'clang/test/CodeGen/MSIL', 'clang/test/Preprocessor/init-msil.c',
                'clang/test/Driver/msil-toolchain.c', 'clang/test/Driver/msil-link.c',
                'clang/test/Driver/msil-lto.c', 'clang/test/Driver/msil-header-search.c',
-               'clang/test/Driver/msil-object.c', 'lld/test/MSIL', 'llvm/test/tools/llvm-cil-dump',
-               'llvm/test/tools/llvm-cil-copy', 'llvm/test/MC/MSIL', 'msil/test')
+               'clang/test/Driver/msil-object.c', 'clang/test/Driver/msil-shared.c', 'lld/test/MSIL',
+               'llvm/test/tools/llvm-cil-dump', 'llvm/test/tools/llvm-cil-copy', 'llvm/test/MC/MSIL',
+               'msil/test')
 $m1 = @('msil/test/M1')
 # msil/test/M2 (plan 5.12.5, from M14) where it exists.
 function Get-M2Paths {
   if (Test-Path -LiteralPath (Join-Path $MsilRepo 'msil/test/M2')) { 'msil/test/M2' }
 }
 $programs = @('msil/test/M1/11-programs')
+# The paths of the roundtrip leg: 11-programs and M2's library round trip (plan 5.12.6 O2, M22);
+# lit-legs.sh's roundtrip is the same list.
+$roundtrip = @('msil/test/M1/11-programs', 'msil/test/M2/04-shared/roundtrip-library.test')
 # The paths of the reference legs (plan 5.12.11, M21); lit-legs.sh's refs is the same list.
 $refs = @('msil/test/M1/11-programs', 'msil/test/M2/00-link', 'msil/test/M2/05-refs')
 $linux = 'msil_triple=x86_64-unknown-linux-gnu-msil'
@@ -244,7 +249,7 @@ $legs = @(
      Params = { "msil_glibc_sysroot=$($glibcSysroot.Replace('\', '/'))" } }
   @{ Name = 'modern-ilasm'; Paths = { $programs }
      Params = { "msil_ilasm=$(Get-MsilNuGetTool -Repo $MsilRepo -Rid win-x64 -Tool ilasm)" } }
-  @{ Name = 'roundtrip'; Paths = { $programs }; Params = { 'msil_roundtrip=1' } }
+  @{ Name = 'roundtrip'; Paths = { $roundtrip }; Params = { 'msil_roundtrip=1' } }
   @{ Name = 'expected'; Expected = 'windows' }
   @{ Name = 'expected-linux'; Expected = 'linux'; Wsl = $true }
   @{ Name = 'utc'; Utc = $true }

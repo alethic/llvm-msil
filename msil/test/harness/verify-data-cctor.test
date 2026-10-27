@@ -1,0 +1,214 @@
+# A -shared library copies its data image in '<msil>Data'::.cctor, its
+# first initialization phase (plan 5.9.10, 5.9.15; M22), while the RVA field
+# '<msil>image' stays in <Module> with assembly access. PEVerify reports the
+# copy's 'ldsflda valuetype '<msil>image_t' '<msil>image'' ('Cannot modify
+# an imaged based (RVA) static') there as it does in <Module>::.cctor, and
+# msil-verify.py accepts it in pass 1 under the same ildasm-listing check and
+# neutralizes the copy in pass 2 (plan section 12, M22 row 'D21 refined';
+# verify-d12-image.test has the <Module>::.cctor case). datalib.il is such a
+# library: the beforefieldinit class '<msil>Data' with '<msil>data' and two
+# address fields, the export class Contoso.DataLib with 'get' (42 + 7 from
+# the copied image), the accessor '<msil>addr_counter' and its property.
+# (1) The library verifies, and a program that calls Contoso.DataLib::get
+#     verifies with the library as a dependency (--dep-dir with
+#     --also-verify-deps, which verifies the library too), force-JITs and
+#     runs with it beside it, exiting with 49, so the copy ran.
+# (2) The allowance is exact: the same copy from another RVA field
+#     (datalib-rva.il) fails in '<msil>Data'::.cctor, also when the library
+#     is only a dependency of the program (the failure names the library),
+#     and native int + int64 right after the copy (datalib-mix.il), which
+#     PEVerify's pass 1 never reaches, fails in the neutralized copy.
+# REQUIRES: msil-ilverify, msil-peverify, msil-ildasm
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: mkdir -p %t/good %t/rva %t/mix
+
+# (1)
+# RUN: %ilasm -dll -output=%t/good/datalib.dll %t/datalib.il
+# RUN: %msil_verify %t/good/datalib.dll
+# RUN: %ilasm -exe -output=%t/prog.exe %t/prog.il
+# RUN: %msil_verify --dep-dir %t/good --also-verify-deps %t/prog.exe > %t/prog-verify.log 2>&1
+# RUN: %{harness_check} contains %t/prog-verify.log "^msil-verify: also verified datalib\.dll$"
+# RUN: %if msil-jitall %{ %msil_jitall --dep-dir %t/good %t/prog.exe > %t/jitall.log 2>&1 %}
+# RUN: %if msil-jitall %{ %{harness_check} contains %t/jitall.log "^jitall: 1 ok, 0 failed$" %}
+# RUN: %msil_exec --out %t/prog.out --dep-dir %t/good %t/prog.exe
+# RUN: %{harness_check} equals %t/prog.out "[exit 49]"
+
+# (2)
+# RUN: %ilasm -dll -output=%t/rva/datalib.dll %t/datalib-rva.il
+# RUN: not %msil_verify %t/rva/datalib.dll > %t/rva.log 2>&1
+# RUN: %{harness_check} contains %t/rva.log "^peverify: <msil>Data::\.cctor\[offset 0x[0-9A-Fa-f]+\] Cannot modify an imaged based \(RVA\) static"
+# RUN: not %msil_verify --dep-dir %t/rva --also-verify-deps %t/prog.exe > %t/rva-dep.log 2>&1
+# RUN: %{harness_check} contains %t/rva-dep.log "^datalib\.dll: peverify: <msil>Data::\.cctor\[offset 0x[0-9A-Fa-f]+\] Cannot modify an imaged based \(RVA\) static"
+# RUN: %ilasm -dll -output=%t/mix/datalib.dll %t/datalib-mix.il
+# RUN: not %msil_verify %t/mix/datalib.dll > %t/mix.log 2>&1
+# RUN: %{harness_check} contains %t/mix.log "^peverify \(neutralized copy\): <msil>Data::\.cctor\[offset 0x[0-9A-Fa-f]+\] ?\[found Native Int\]\[expected Long\] Unexpected type on the stack"
+# RUN: %{harness_check} lacks %t/mix.log "^peverify: "
+
+#--- datalib.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'datalib' { .ver 0:0:0:0 }
+
+// The data segment: 8 bytes, {42, 7}.
+.class private explicit ansi sealed '<msil>image_t' extends [mscorlib]System.ValueType
+{
+  .pack 1
+  .size 8
+}
+.data cil '<msil>image_d' = bytearray (2A 00 00 00 07 00 00 00)
+.field assembly static valuetype '<msil>image_t' '<msil>image' at '<msil>image_d'
+
+// Phase 1: allocate, copy the image, set the address fields.
+.class private abstract auto ansi sealed beforefieldinit '<msil>Data' extends [mscorlib]System.Object
+{
+  .field assembly static initonly native int '<msil>data'
+  .field assembly static initonly native int 'counter'
+  .field assembly static initonly native int 'seven'
+  .method private hidebysig specialname rtspecialname static void .cctor() cil managed
+  {
+    .maxstack 3
+    ldc.i4.s 15
+    conv.i
+    call native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+    ldc.i4.7
+    conv.i
+    add
+    ldc.i4.s -8
+    conv.i
+    and
+    stsfld native int '<msil>Data'::'<msil>data'
+    ldsfld native int '<msil>Data'::'<msil>data'
+    ldsflda valuetype '<msil>image_t' '<msil>image'
+    ldc.i4.8
+    cpblk
+    ldsfld native int '<msil>Data'::'<msil>data'
+    stsfld native int '<msil>Data'::'counter'
+    ldsfld native int '<msil>Data'::'<msil>data'
+    ldc.i4.4
+    add
+    stsfld native int '<msil>Data'::'seven'
+    ret
+  }
+}
+
+.class public abstract auto ansi sealed Contoso.DataLib extends [mscorlib]System.Object
+{
+  .method public hidebysig static int32 'get'() cil managed
+  {
+    .maxstack 2
+    ldsfld native int '<msil>Data'::'counter'
+    ldind.i4
+    ldsfld native int '<msil>Data'::'seven'
+    ldind.i4
+    add
+    ret
+  }
+  .method public hidebysig specialname static native int '<msil>addr_counter'() cil managed
+  {
+    .maxstack 1
+    ldsfld native int '<msil>Data'::'counter'
+    ret
+  }
+  .property native int counter()
+  {
+    .get native int Contoso.DataLib::'<msil>addr_counter'()
+  }
+}
+#--- datalib-rva.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'datalib' { .ver 0:0:0:0 }
+
+.class private explicit ansi sealed '<msil>image_t' extends [mscorlib]System.ValueType
+{
+  .pack 1
+  .size 8
+}
+.data cil '<msil>image_d' = bytearray (2A 00 00 00 07 00 00 00)
+.field assembly static valuetype '<msil>image_t' '<msil>image' at '<msil>image_d'
+.data cil '<msil>image2_d' = bytearray (2A 00 00 00 07 00 00 00)
+.field assembly static valuetype '<msil>image_t' '<msil>image2' at '<msil>image2_d'
+
+.class private abstract auto ansi sealed beforefieldinit '<msil>Data' extends [mscorlib]System.Object
+{
+  .field assembly static initonly native int '<msil>data'
+  .method private hidebysig specialname rtspecialname static void .cctor() cil managed
+  {
+    .maxstack 3
+    ldc.i4.8
+    conv.i
+    call native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+    stsfld native int '<msil>Data'::'<msil>data'
+    ldsfld native int '<msil>Data'::'<msil>data'
+    ldsflda valuetype '<msil>image_t' '<msil>image2'
+    ldc.i4.8
+    cpblk
+    ret
+  }
+}
+
+.class public abstract auto ansi sealed Contoso.DataLib extends [mscorlib]System.Object
+{
+  .method public hidebysig static int32 'get'() cil managed
+  {
+    .maxstack 1
+    ldsfld native int '<msil>Data'::'<msil>data'
+    ldind.i4
+    ret
+  }
+}
+#--- datalib-mix.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly 'datalib' { .ver 0:0:0:0 }
+
+.class private explicit ansi sealed '<msil>image_t' extends [mscorlib]System.ValueType
+{
+  .pack 1
+  .size 8
+}
+.data cil '<msil>image_d' = bytearray (2A 00 00 00 07 00 00 00)
+.field assembly static valuetype '<msil>image_t' '<msil>image' at '<msil>image_d'
+
+.class private abstract auto ansi sealed beforefieldinit '<msil>Data' extends [mscorlib]System.Object
+{
+  .field assembly static initonly native int '<msil>data'
+  .method private hidebysig specialname rtspecialname static void .cctor() cil managed
+  {
+    .maxstack 3
+    ldc.i4.8
+    conv.i
+    call native int [mscorlib]System.Runtime.InteropServices.Marshal::AllocHGlobal(native int)
+    stsfld native int '<msil>Data'::'<msil>data'
+    ldsfld native int '<msil>Data'::'<msil>data'
+    ldsflda valuetype '<msil>image_t' '<msil>image'
+    ldc.i4.8
+    cpblk
+    ldsfld native int '<msil>Data'::'<msil>data'  // the error: native int + int64
+    ldc.i8 1
+    add
+    pop
+    ret
+  }
+}
+
+.class public abstract auto ansi sealed Contoso.DataLib extends [mscorlib]System.Object
+{
+  .method public hidebysig static int32 'get'() cil managed
+  {
+    .maxstack 1
+    ldsfld native int '<msil>Data'::'<msil>data'
+    ldind.i4
+    ret
+  }
+}
+#--- prog.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly extern datalib { .ver 0:0:0:0 }
+.assembly 'dataprog' { .ver 0:0:0:0 }
+
+.method private hidebysig static int32 '<msil>Main'(string[] args) cil managed
+{
+  .entrypoint
+  .maxstack 1
+  call int32 [datalib]Contoso.DataLib::'get'()
+  ret
+} // end of method '<msil>Main'

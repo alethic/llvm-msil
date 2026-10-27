@@ -235,7 +235,9 @@ static constexpr size_t MaxArgsOrLocals = 0xFFFF;
 /// cli::buildTrailer's (llvm/CLI/Trailer.h): no generated name can be a C
 /// function's or variable's, because none takes a string[] and only
 /// cli::DataFieldName can collide with the address field of a global variable
-/// (checkAddressFieldNames); the RVA fields have types of their own.
+/// (checkAddressFieldNames), and cli::ArgcFieldName and cli::ArgvFieldName
+/// where the trailer makes them (emitTrailer); the RVA fields have types of
+/// their own.
 static constexpr StringRef ImageLabel = "<msil>image_d";
 static constexpr StringRef RelocsLabel = "<msil>relocs_d";
 
@@ -311,6 +313,65 @@ getDataImportFunctions(const Triple &TT) {
   return {{{"dlopen", Load}, {"dlsym", GetSymbol}}};
 }
 
+/// The number of glibc's .init_array arguments (int argc, char **argv, char
+/// **envp) that a constructor with the IL signature \p S takes, or
+/// std::nullopt if it takes other arguments: off Windows its parameters may
+/// be a prefix of (int32, native int, native int), on Windows triples there
+/// are none (plan section 12, 'M22.b extended', defect 4), as msil-ld decides
+/// it (lld/MSIL OutputSegment.cpp). The module initializer builds argc and
+/// argv once, and '<msil>Main' passes main the same ones; envp is the C
+/// library's environ (cli::TrailerInput::CtorArgs).
+static std::optional<unsigned> getConstructorArgs(const MSIL::Signature &S,
+                                                  const Triple &TT) {
+  if (S.Params.empty())
+    return 0;
+  if (TT.isOSWindows() || S.Params.size() > 3)
+    return std::nullopt;
+  for (auto [I, T] : enumerate(S.Params))
+    if (T != (I == 0 ? MSIL::ValType::I32 : MSIL::ValType::NativeInt))
+      return std::nullopt;
+  return S.Params.size();
+}
+
+/// The native data import of the symbol \p Name that msil-ld's linked text
+/// \p M lists in !msil.imports (plan 5.10.12, 5.10.13): the module and the
+/// entry of the first kind-1 operand !{!"<symbol>", !"<module>", !"<entry>",
+/// i32 1} for \p Name with a module (the entry defaults to the name). It
+/// serves an external variable without import attributes
+/// (getLinkedDataImport) and the C library's environ, which a module whose
+/// constructors take envp needs.
+static std::optional<std::pair<std::string, std::string>>
+getListedDataImport(const Module &M, StringRef Name) {
+  const NamedMDNode *Imports = M.getNamedMetadata("msil.imports");
+  if (!Imports)
+    return std::nullopt;
+  for (const MDNode *Op : Imports->operands()) {
+    if (Op->getNumOperands() != 4)
+      continue;
+    const auto *Symbol = dyn_cast_or_null<MDString>(Op->getOperand(0));
+    const auto *Module = dyn_cast_or_null<MDString>(Op->getOperand(1));
+    const auto *Entry = dyn_cast_or_null<MDString>(Op->getOperand(2));
+    const auto *Kind =
+        mdconst::dyn_extract_or_null<ConstantInt>(Op->getOperand(3));
+    if (!Symbol || Symbol->getString() != Name || !Module ||
+        Module->getString().empty() || !Entry || !Kind || !Kind->isOne())
+      continue;
+    return std::make_pair(
+        Module->getString().str(),
+        (Entry->getString().empty() ? Name : Entry->getString()).str());
+  }
+  return std::nullopt;
+}
+
+/// The C library of the ELF triple \p TT by its DT_SONAME, which defines
+/// environ, dlopen and dlsym: glibc's libc.so.6 (dlopen and dlsym moved into
+/// it in glibc 2.34) or musl's libc.so. Whole-program output imports envp's
+/// environ from it when a constructor takes envp and the module imports no
+/// environ itself (plan section 12, 'M22.b extended', defect 4).
+static StringRef getCLibrarySoname(const Triple &TT) {
+  return TT.isMusl() ? "libc.so" : "libc.so.6";
+}
+
 namespace llvm {
 /// The text sink of cli::buildTrailer (plan 5.9.10). The trailer's entities
 /// are the MSILMemberRefExprs that code uses, so its instructions are CIL_
@@ -343,6 +404,8 @@ class MSILTrailerTextSink final : public cli::TrailerSink {
     std::vector<uint8_t> Bytes;
   };
   std::vector<RVAData> RVA;
+  /// The names of the fields that addTrailerField made, in order.
+  std::vector<StringRef> TrailerFields;
   std::vector<cli::TrailerMethod> Methods;
 
   cli::EntityRef addEntity(Entity E) {
@@ -390,9 +453,17 @@ public:
     E.Name = UTF8.str();
     return addEntity(std::move(E));
   }
+  cli::EntityRef addTrailerField(StringRef Name) override {
+    StringRef Saved = Saver.save(Name);
+    TrailerFields.push_back(Saved);
+    return add(MSILMemberRefExpr::createField(Saved, AP.OutContext));
+  }
   void emitMethod(const cli::TrailerMethod &M) override {
     Methods.push_back(M);
   }
+
+  /// The fields that addTrailerField made ('<msil>argc' and '<msil>argv').
+  ArrayRef<StringRef> getTrailerFields() const { return TrailerFields; }
 
   /// The bytes of the RVA field \p FieldName; empty if there is none.
   ArrayRef<uint8_t> getRVAData(StringRef FieldName) const {
@@ -412,6 +483,9 @@ public:
 } // end namespace llvm
 
 void MSILTrailerTextSink::printMethod(const cli::TrailerMethod &M) {
+  // Only msil-ld's -shared outputs initialize in two phases (plan 5.9.10).
+  assert(M.Owner == cli::TrailerOwner::Module &&
+         "whole-program output has one module initializer");
   MSILTargetStreamer &TS = AP.getTargetStreamer();
   MSILMethodDecl Decl;
   Decl.Name = M.Name;
@@ -906,8 +980,8 @@ MSILAsmPrinter::getSymToGV(const Module &M) {
 /// The native data import of the external variable \p GV, named \p Name, in
 /// msil-ld's linked text (plan 5.10.12, 5.10.13): the module and the entry
 /// of its import attributes ("msil-import-module", "msil-import-name"; the
-/// entry defaults to the name), else of a kind-1 operand of !msil.imports,
-/// !{!"<symbol>", !"<module>", !"<entry>", i32 1}.
+/// entry defaults to the name), else of a kind-1 operand of !msil.imports
+/// (getListedDataImport).
 static std::optional<std::pair<std::string, std::string>>
 getLinkedDataImport(const Module &M, const GlobalVariable &GV, StringRef Name) {
   if (StringRef Module =
@@ -916,25 +990,7 @@ getLinkedDataImport(const Module &M, const GlobalVariable &GV, StringRef Name) {
     StringRef Entry = GV.getAttribute("msil-import-name").getValueAsString();
     return std::make_pair(Module.str(), (Entry.empty() ? Name : Entry).str());
   }
-  const NamedMDNode *Imports = M.getNamedMetadata("msil.imports");
-  if (!Imports)
-    return std::nullopt;
-  for (const MDNode *Op : Imports->operands()) {
-    if (Op->getNumOperands() != 4)
-      continue;
-    const auto *Symbol = dyn_cast_or_null<MDString>(Op->getOperand(0));
-    const auto *Module = dyn_cast_or_null<MDString>(Op->getOperand(1));
-    const auto *Entry = dyn_cast_or_null<MDString>(Op->getOperand(2));
-    const auto *Kind =
-        mdconst::dyn_extract_or_null<ConstantInt>(Op->getOperand(3));
-    if (!Symbol || Symbol->getString() != Name || !Module ||
-        Module->getString().empty() || !Entry || !Kind || !Kind->isOne())
-      continue;
-    return std::make_pair(
-        Module->getString().str(),
-        (Entry->getString().empty() ? Name : Entry->getString()).str());
-  }
-  return std::nullopt;
+  return getListedDataImport(M, Name);
 }
 
 void MSILAsmPrinter::collectExternGlobals(const Module &M) {
@@ -1085,9 +1141,12 @@ MSILAsmPrinter::collectConstructors(const Module &M) {
   SmallVector<cli::ConstructorEntry, 8> Entries;
   SmallVector<const Function *, 8> Fns;
   // The module initializer calls each constructor without arguments (C's
-  // __attribute__((constructor)) functions take none) and drops a result.
+  // __attribute__((constructor)) functions take none), or off Windows with
+  // argc, argv and envp as glibc calls an .init_array entry
+  // (getConstructorArgs), and drops a result.
+  const Triple &TT = TM.getTargetTriple();
   auto Add = [&](const Function &F, cli::ConstructorEntry E) {
-    if (!getSignature(F).Params.empty()) {
+    if (!getConstructorArgs(getSignature(F), TT)) {
       F.getContext().emitError("global constructor '" + MSIL::getILName(F, TM) +
                                "' takes arguments, which MSIL does not pass");
       return;
@@ -1605,9 +1664,87 @@ void MSILAsmPrinter::emitTrailer(Module &M,
   }
 
   // The constructors last, in run order: the data they may touch is in
-  // place.
-  for (const Function *F : CtorFns)
-    In.Ctors.push_back({MethodRef(*F), !getSignature(*F).Results.empty()});
+  // place. Off Windows a constructor may take argc, argv and envp
+  // (collectConstructors checked the shapes); envp is the value of the C
+  // library's environ, a data import: the module's own import of it, else
+  // one that this module adds (plan section 12, 'M22.b extended', defect 4).
+  bool TakesEnvp = false;
+  for (const Function *F : CtorFns) {
+    const MSIL::Signature &Sig = getSignature(*F);
+    In.Ctors.push_back({MethodRef(*F), !Sig.Results.empty()});
+    TakesEnvp |= Sig.Params.size() == 3;
+  }
+  if (any_of(CtorFns, [&](const Function *F) {
+        return !getSignature(*F).Params.empty();
+      }))
+    for (const Function *F : CtorFns)
+      In.CtorArgs.push_back(getSignature(*F).Params.size());
+  // The field of a data import of environ that the module does not make.
+  std::optional<std::string> EnvironImportField;
+  if (TakesEnvp) {
+    for (const DataImportVar &V : DataImportVars)
+      if (MSIL::getILName(*V.GV, TM) == "environ")
+        In.EnvironField = GlobalField(*V.GV);
+  }
+  if (TakesEnvp && !In.EnvironField) {
+    // The module's own import of environ: as msil-ld's linked text lists it,
+    // else from the C library, as a native link binds it
+    // (getCLibrarySoname). Its helper's native functions likewise, when no
+    // other data import declared them (plan 5.10.12).
+    const Triple &TT = TM.getTargetTriple();
+    bool Linked = MSIL::isLinkedModule(M);
+    StringRef CLib = getCLibrarySoname(TT);
+    std::pair<std::string, std::string> Import = {CLib.str(), "environ"};
+    if (std::optional<std::pair<std::string, std::string>> Listed =
+            Linked ? getListedDataImport(M, "environ") : std::nullopt)
+      Import = std::move(*Listed);
+    if (!In.ImportHelper) {
+      auto Functions = getDataImportFunctions(TT);
+      cli::DataImportHelper H;
+      H.K = cli::DataImportHelper::Kind::Dlfcn;
+      MSILTargetStreamer &TS = getTargetStreamer();
+      // A method of the same name and signature that the module defines or
+      // that emitPInvokeDeclarations declared already.
+      auto IsDeclared = [&](StringRef Name, const MSIL::Signature &S) {
+        return Methods.count({Name, S}) ||
+               any_of(ExternFuncs,
+                      [&](const auto &P) {
+                        return *P.second == S &&
+                               MSIL::getILName(*P.first, TM) == Name;
+                      }) ||
+               any_of(ExtSymOrder, [&](const auto &P) {
+                 return P.first == Name && *P.second == S;
+               });
+      };
+      for (unsigned I = 0; I != 2; ++I) {
+        StringRef Name = Functions[I].first;
+        const MSIL::Signature &S = internSignature(Functions[I].second);
+        std::optional<MSIL::NativeImport> Helper =
+            Linked ? MSIL::getLinkedImport(M, Name, nullptr) : std::nullopt;
+        if (!IsDeclared(Name, S)) {
+          // Recorded for !msil.imports.used, as emitPInvokeDeclarations
+          // records the P/Invokes that msil-ld bound.
+          if (Helper) {
+            auto [It, New] = LinkedPInvokeNames.insert(Name);
+            if (New)
+              LinkedPInvokes.push_back(It->getKey());
+          }
+          TS.emitPInvoke({Name, &S, /*Public=*/!Linked},
+                         Helper ? Helper->Module : CLib,
+                         Helper ? Helper->Entry : Name);
+        }
+        cli::EntityRef Ref =
+            Sink.add(MSILMemberRefExpr::createMethod(Name, &S, OutContext));
+        (I == 0 ? H.Load : H.GetSymbol) = Ref;
+      }
+      In.ImportHelper = H;
+    }
+    EnvironImportField = "<msil>environ";
+    In.EnvironField = Sink.add(
+        MSILMemberRefExpr::createField(*EnvironImportField, OutContext));
+    In.DataImports.push_back(
+        {In.EnvironField, std::move(Import.first), std::move(Import.second)});
+  }
 
   // The entry function is main, or under msil-ld --lto-emit-asm --entry=<sym>
   // the function that the module flag msil-entry names (plan 5.9.3, section
@@ -1656,6 +1793,30 @@ void MSILAsmPrinter::emitTrailer(Module &M,
 
   cli::buildTrailer(In, Sink);
   emitDataSegment(Sink);
+  if (EnvironImportField) {
+    getTargetStreamer().emitDataImportField(*EnvironImportField);
+    getTargetStreamer().emitBlankLine();
+  }
+  // '<msil>argc' and '<msil>argv', in which the module initializer leaves
+  // the argc and argv of the constructors for '<msil>Main'. Their names are
+  // reserved when they exist, like cli::DataFieldName
+  // (checkAddressFieldNames): an asm label can give a global variable one.
+  if (ArrayRef<StringRef> Fields = Sink.getTrailerFields(); !Fields.empty()) {
+    for (StringRef Name : Fields) {
+      auto CheckName = [&](const GlobalVariable &GV) {
+        if (MSIL::getILName(GV, TM) == Name)
+          Ctx.emitError("global variable " + MSIL::getIRName(GV) +
+                        " has the reserved IL name '" + Name + "'");
+      };
+      for (const MSILDataSegment::Entry &E : Data->Entries)
+        CheckName(*E.GV);
+      for (const GlobalVariable *GV : ExternGlobals)
+        CheckName(*GV);
+      getTargetStreamer().emitAddressField(Name, /*Public=*/false,
+                                           /*Generated=*/true);
+    }
+    getTargetStreamer().emitBlankLine();
+  }
   emitFunctionAddressFields();
   Sink.emitMethods();
 }
@@ -2503,7 +2664,9 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
 
   // INIT_FINI (plan 5.8.8): llvm.global_ctors in array order, each with the
   // comdat of its associated global. Each constructor is a function that the
-  // object defines, called without arguments; a result is popped.
+  // object defines, called without arguments, or off Windows with argc, argv
+  // and envp as far as its signature takes them (getConstructorArgs); a
+  // result is popped.
   if (const GlobalVariable *Ctors = M.getNamedGlobal("llvm.global_ctors");
       Ctors && Ctors->hasInitializer()) {
     if (const auto *List = dyn_cast<ConstantArray>(Ctors->getInitializer())) {
@@ -2538,7 +2701,7 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
         const auto *F = dyn_cast<Function>(FnGV);
         if (const auto *GA = dyn_cast<GlobalAlias>(FnGV))
           F = dyn_cast_or_null<Function>(getAliasedObject(*GA, Offset));
-        if (F && !getSignature(*F).Params.empty()) {
+        if (F && !getConstructorArgs(getSignature(*F), TM.getTargetTriple())) {
           Ctx.emitError("global constructor '" + MSIL::getILName(*FnGV, TM) +
                         "' takes arguments, which MSIL does not pass");
           continue;

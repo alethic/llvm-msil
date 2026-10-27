@@ -1,20 +1,22 @@
-## msil-ld's command line in M21 (ImplementationPlan.md 5.9.3 and 5.9.14;
+## msil-ld's command line in M22 (ImplementationPlan.md 5.9.3 and 5.9.14;
 ## the still valid cases of M13's stub.test moved here):
 ## - --version prints the lld version and skips input processing, so a
 ##   missing input does not matter; -v without inputs prints it too and exits
 ##   0, and -v with inputs prints it and links;
-## - --help prints the option table, which holds the options up to M21's and
-##   none of a later milestone's (until its milestone such an option is an
-##   unknown argument: --export-class, --interface-only); M20's hidden test
-##   options --msil-reloc-loop-threshold and --msil-type-member-limit and
-##   M21's hidden --print-bcl-binding are accepted but not listed;
+## - --help prints the option table, which holds the options up to M22's;
+##   M20's hidden test options --msil-reloc-loop-threshold and
+##   --msil-type-member-limit and M21's hidden --print-bcl-binding are
+##   accepted but not listed; an option no milestone defines is an unknown
+##   argument;
 ## - without inputs: 'no input files';
 ## - -r and --relocatable are 'error: -r is not supported', reported while
 ##   the options are read, so -r alone prints only that (the one msil-ld-only
 ##   error Phase 2 never retires; dispatch.test identifies msil-ld by it);
-## - -shared and --shared are recognized and rejected, 'error: -shared is not
-##   supported yet' (M14-M21), because the clang driver already passes
-##   --shared for -shared;
+## - -shared and --shared link a library (M22; M14-M21 rejected them): with
+##   --lto-emit-asm they are the error '--lto-emit-asm cannot write a
+##   -shared library; link without --lto-emit-asm', and -e with -shared is
+##   the warning '--entry is ignored with -shared' (shared-*.test have the
+##   rest);
 ## - -s and --strip-all are accepted and ignored (the driver passes them), and
 ##   the other M14 options are accepted;
 ## - M15 adds -Bstatic, -Bdynamic, --ucrtbase-imports, --print-imports and
@@ -39,7 +41,12 @@
 ##   hidden --print-bcl-binding=<request> (5.11.1, 5.11.5; their behaviour is
 ##   in bcl-*.test): --reference and --print-bcl-table are listed by --help,
 ##   and a --reference naming a path that does not exist is an error, no
-##   longer an unknown argument.
+##   longer an unknown argument;
+## - M22 adds -shared, --export-class=<Ns.Name>, --assembly-version=<a.b.c.d>,
+##   --exclude-libs=<list>|ALL, --export-all-symbols and --interface-only
+##   (5.9.3), listed by --help, and --interface-only without -shared is an
+##   error; a -shared link of libraries alone without --target has no triple
+##   and is an error that says so.
 ## Every diagnostic starts with 'msil-ld: '. No run may crash.
 ##
 ## LLD_IN_TEST=2 runs the driver twice in one process and fails if the two
@@ -66,9 +73,7 @@
 ## table; HELP-NONE, made only of -NOT lines, checks the whole output
 ## (M15 open issue 13).
 # RUN: msil-ld --help > help.txt 2>&1
-# RUN: %{fc} %{one} --check-prefix=HELP \
-# RUN:   --implicit-check-not=--export-class --implicit-check-not=--print-bcl-binding \
-# RUN:   --implicit-check-not=--interface-only --input-file=help.txt
+# RUN: %{fc} %{one} --check-prefix=HELP --implicit-check-not=--print-bcl-binding --input-file=help.txt
 # RUN: FileCheck %s --check-prefix=HELP-NONE --input-file=help.txt
 
 # HELP-NONE-NOT: PLEASE submit
@@ -76,9 +81,7 @@
 # HELP-NONE-NOT: LLVM ERROR
 # HELP-NONE-NOT: error:
 # HELP-NONE-NOT: warning:
-# HELP-NONE-NOT: --export-class
 # HELP-NONE-NOT: --print-bcl-binding
-# HELP-NONE-NOT: --interface-only
 # HELP-NONE-NOT: msil-reloc-loop-threshold
 # HELP-NONE-NOT: msil-type-member-limit
 
@@ -104,6 +107,11 @@
 # HELP-DAG:     --print-gc-sections
 # HELP-DAG:     --reference
 # HELP-DAG:     --print-bcl-table
+# HELP-DAG:     --export-class
+# HELP-DAG:     --assembly-version
+# HELP-DAG:     --exclude-libs
+# HELP-DAG:     --export-all-symbols
+# HELP-DAG:     --interface-only
 
 # RUN: not msil-ld 2>&1 | %{fc} %{one} --check-prefix=NOINPUT
 # RUN: not msil-ld --lto-emit-asm -o x.il 2>&1 | %{fc} %{one} --check-prefix=NOINPUT
@@ -122,9 +130,40 @@
 # RUN: not msil-ld -shared --lto-emit-asm main.o -o s.il 2>&1 | %{fc} %{one} --check-prefix=SHARED
 # RUN: not msil-ld --shared --lto-emit-asm main.o -o s.il 2>&1 | %{fc} %{one} --check-prefix=SHARED
 
-# SHARED:       {{^}}msil-ld: error: -shared is not supported yet{{$}}
+# SHARED:       {{^}}msil-ld: error: --lto-emit-asm cannot write a -shared library; link without --lto-emit-asm{{$}}
 
-## Options of later milestones are unknown arguments (5.9.3); M21's are not.
+# RUN: mkdir shared
+# RUN: llc -filetype=obj -mtriple=x86_64-pc-windows-msvc-msil main.ll -o main-cil.o
+# RUN: msil-ld -shared main-cil.o -o shared/main.dll 2>&1 | count 0
+# RUN: msil-ld --shared main.o -o shared/main2.dll 2>&1 | %{fc} --allow-empty --check-prefix=SHARED-BC \
+# RUN:   --implicit-check-not=error:
+# SHARED-BC-NOT: error:
+# RUN: msil-ld -shared -e main main-cil.o -o shared/main3.dll 2>&1 | %{fc} --check-prefix=ENTRY \
+# RUN:   --implicit-check-not=error:
+# ENTRY:        {{^}}msil-ld: warning: --entry is ignored with -shared{{$}}
+# RUN: msil-ld -shared --export-class=Contoso.Native --assembly-version=1.2 --exclude-libs=ALL \
+# RUN:   --export-all-symbols main-cil.o -o shared/main4.dll 2>&1 | %{fc} --allow-empty \
+# RUN:   --check-prefix=SHARED-BC --implicit-check-not=error:
+# RUN: msil-ld -shared --interface-only main-cil.o -o shared/main5.dll 2>&1 | %{fc} --allow-empty \
+# RUN:   --check-prefix=SHARED-BC --implicit-check-not=error:
+# RUN: not msil-ld --interface-only main-cil.o -o x.exe 2>&1 | %{fc} --check-prefix=IFACE-EXE
+# IFACE-EXE:    {{^}}msil-ld: error: {{.*}}--interface-only
+
+## A link whose only inputs are libraries has no input to take the triple
+## from (M22 review r2 finding 8): 'no target triple: pass --target or a CIL
+## object or bitcode file', also under --interface-only, instead of the PE
+## writer's "architecture ''"; with --target the same links work.
+# RUN: not msil-ld -shared shared/main.dll -o shared/re.dll 2>&1 | %{fc} %{one} --check-prefix=NOTARGET \
+# RUN:   --implicit-check-not="architecture ''"
+# RUN: not msil-ld -shared --interface-only shared/main.dll -o shared/re2.dll 2>&1 \
+# RUN:   | %{fc} %{one} --check-prefix=NOTARGET --implicit-check-not="architecture ''"
+# NOTARGET:     {{^}}msil-ld: error: no target triple: pass --target or a CIL object or bitcode file{{$}}
+# RUN: msil-ld -shared --target=x86_64-pc-windows-msvc-msil shared/main.dll -o shared/re3.dll 2>&1 | count 0
+# RUN: msil-ld -shared --interface-only --target=x86_64-pc-windows-msvc-msil shared/main.dll -o shared/re4.dll 2>&1 \
+# RUN:   | count 0
+
+## An option no milestone defines is an unknown argument (5.9.3); M21's
+## options are known.
 # RUN: not msil-ld --no-such-option --lto-emit-asm main.o -o u.il 2>&1 \
 # RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--no-such-option
 # RUN: not msil-ld --reference=refs --lto-emit-asm main.o -o u.il 2>&1 \
@@ -134,8 +173,8 @@
 # REFERENCE:    {{^}}msil-ld: error: {{.*}}refs
 # RUN: msil-ld --print-bcl-table 2>&1 | %{fc} %{one} --check-prefix=TABLE
 # TABLE:        {{^}}type [mscorlib]System.ValueType{{$}}
-# RUN: not msil-ld --export-class=Contoso.Native --lto-emit-asm main.o -o u.il 2>&1 \
-# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--export-class=Contoso.Native
+# RUN: not msil-ld --export-symbols-from=lib.a --lto-emit-asm main.o -o u.il 2>&1 \
+# RUN:   | %{fc} --check-prefix=UNKNOWN -DOPT=--export-symbols-from=lib.a
 
 # UNKNOWN:      {{^}}msil-ld: error: unknown argument: [[OPT]]
 

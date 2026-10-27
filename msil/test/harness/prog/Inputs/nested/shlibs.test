@@ -1,0 +1,18 @@
+# Run in a nested lit by ../../../shlibs.test (M22): %{msil_prog_O2} of a
+# program with a cyclic pair of shared libraries (%{msil_shlibs}: b's
+# interface, then a, then b) and a file that every run gets (%{msil_deps}).
+# The stand-in program calls both libraries when it runs (73 = 1 + 8 + 64),
+# so every run needs the build's shlib/ directory beside it.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_shlibs} = ?b=%t/b.c;a=%t/a.c;b=%t/b.c
+# REDEFINE: %{msil_deps} = %t/dep.txt
+# RUN: %{msil_prog_O2}
+#--- main.c
+// prog-value: 1
+#--- a.c
+// prog-value: 8
+#--- b.c
+// prog-value: 64
+#--- dep.txt
+A file every run gets beside the program.

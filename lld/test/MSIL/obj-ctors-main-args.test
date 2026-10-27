@@ -1,0 +1,344 @@
+## Constructors that take arguments share main's argc and argv (the section 12
+## rows of 2026-10-26 'M22.b extended (defect 4) clarified' and 'M22.b
+## extended (Rust-found defects 2 and 4)' item 4; ImplementationPlan.md 5.9.10):
+## glibc passes the '.init_array' entries the argv that main gets, so when a
+## linux-gnu constructor takes argc or argv and the output has a '<msil>Main'
+## whose main takes (int, char **):
+## (a) <Module> has two trailer fields, '.field private static initonly
+##     native int' '<msil>argc' and '<msil>argv'; text output declares them
+##     after '<msil>environ' (when it exists) and before the '<msil>fn_'
+##     fields;
+## (b) <Module>::.cctor builds argv once and, before the first constructor
+##     that takes arguments, stores argc (widened with conv.i) and argv in
+##     them;
+## (c) '<msil>Main' is ldsfld '<msil>argc', conv.i4, ldsfld '<msil>argv', the
+##     call of main and ret, with no locals and no argv of its own.
+## (d) Nothing changes when no constructor takes arguments, when main takes
+##     none (obj-ctors-args.test's links) and in -shared outputs, which keep
+##     building argv in <Module>::.cctor.
+## (e) In text output (llc as clang -S writes it, and msil-ld --lto-emit-asm)
+##     a global variable whose IL name is '<msil>argc' or '<msil>argv' is an
+##     error in a module that makes the fields, and stays an ordinary global
+##     where main takes no arguments.
+## Each case runs through both real trailer sinks: msil-ld's rows (the object
+## link and the LTO PE link) and the MSIL text sink (llc and --lto-emit-asm).
+## libc.so.6 is the glibc-like stub of Inputs/native/glibc.yaml, which
+## defines environ.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{noargv} = FileCheck %s --implicit-check-not="'<msil>argc'" --implicit-check-not="'<msil>argv'"
+# DEFINE: %{listing} = %python %S/Inputs/shared/listing.py
+
+## both.ll: an '.init_array.00099' slot whose constructor takes (argc, argv,
+## envp), an llvm.global_ctors constructor that takes (argc, argv), a function
+## address (a '<msil>fn_' field) and main(argc, argv).
+# RUN: llc -filetype=obj both.ll -o both.o
+# RUN: llvm-as both.ll -o both.bc
+# RUN: msil-ld both.o libc.so.6 -o both.exe 2>&1 | count 0
+# RUN: llvm-cil-dump both.exe > both.txt
+# RUN: msil-ld both.bc libc.so.6 -o both-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump both-lto.exe > both-lto.txt
+# RUN: %{listing} members both.txt '<Module>' | FileCheck %s --check-prefix=FIELD
+# RUN: %{listing} members both-lto.txt '<Module>' | FileCheck %s --check-prefix=FIELD
+# RUN: %{listing} method both.txt '<Module>' .cctor \
+# RUN:   | FileCheck %s --check-prefix=CCTOR --implicit-check-not=GetCommandLineArgs
+# RUN: %{listing} method both-lto.txt '<Module>' .cctor \
+# RUN:   | FileCheck %s --check-prefix=CCTOR --implicit-check-not=GetCommandLineArgs
+# RUN: %{listing} method both.txt '<Module>' '<msil>Main' \
+# RUN:   | FileCheck %s --check-prefix=MAIN --implicit-check-not=GetCommandLineArgs --implicit-check-not=L5:
+# RUN: %{listing} method both-lto.txt '<Module>' '<msil>Main' \
+# RUN:   | FileCheck %s --check-prefix=MAIN --implicit-check-not=GetCommandLineArgs --implicit-check-not=L5:
+# RUN: msil-ld --lto-emit-asm both.bc libc.so.6 -o both.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefixes=TEXT,TMAIN --implicit-check-not=GetCommandLineArgs --input-file=both.il
+# RUN: llc both.ll -o both.s 2>&1 | count 0
+# RUN: FileCheck %s --check-prefixes=TEXT,TMAIN --implicit-check-not=GetCommandLineArgs --input-file=both.s
+
+## (a) In the rows: private (0x0001) static (0x0010) initonly (0x0020).
+# FIELD: {{^}}  .field '<msil>argc' native int flags=0x0031{{$}}
+# FIELD: {{^}}  .field '<msil>argv' native int flags=0x0031{{$}}
+
+## (b) One argv, built before the constructors and stored before the first one
+## that takes arguments (the priority-99 slot runs first).
+# CCTOR:      {{^}}  .method '.cctor' void() flags={{.*}}
+# CCTOR:      {{^}}    L{{[0-9]+}}: call string[]() [mscorlib]System.Environment::'GetCommandLineArgs'{{$}}
+# CCTOR-NOT:  call void(int32
+# CCTOR-DAG:  {{^}}    L{{[0-9]+}}: conv.i{{[[:space:]]+}}L{{[0-9]+}}: stsfld native int '<Module>'::'<msil>argc'{{$}}
+# CCTOR-DAG:  {{^}}    L{{[0-9]+}}: stsfld native int '<Module>'::'<msil>argv'{{$}}
+# CCTOR-NOT:  call void(int32
+# CCTOR:      {{^}}    L{{[0-9]+}}: call void(int32, native int, native int) '<Module>'::'init_slot'{{$}}
+# CCTOR:      {{^}}    L{{[0-9]+}}: call void(int32, native int) '<Module>'::'init2'{{$}}
+
+## (c) '<msil>Main' has no locals and exactly these five instructions.
+# MAIN:      {{^}}  .method '<msil>Main' int32(string[]) flags={{.*}}
+# MAIN-NEXT: {{^}}    .maxstack {{[0-9]+}}{{$}}
+# MAIN-NEXT: {{^}}    L0: ldsfld native int '<Module>'::'<msil>argc'{{$}}
+# MAIN-NEXT: {{^}}    L1: conv.i4{{$}}
+# MAIN-NEXT: {{^}}    L2: ldsfld native int '<Module>'::'<msil>argv'{{$}}
+# MAIN-NEXT: {{^}}    L3: call int32(int32, native int) '<Module>'::'main'{{$}}
+# MAIN-NEXT: {{^}}    L4: ret{{$}}
+
+## The same in text: (a) the field order, (b) the .cctor, (c) '<msil>Main'.
+# TEXT-NOT:  {{^}}.field {{.*}}'<msil>fn_
+# TEXT:      {{^}}.field public static native int '<msil>environ'{{$}}
+# TEXT-NOT:  {{^}}.field {{.*}}'<msil>fn_
+# TEXT:      {{^}}.field private static initonly native int '<msil>argc'{{$}}
+# TEXT-NOT:  {{^}}.field {{.*}}'<msil>fn_
+# TEXT:      {{^}}.field private static initonly native int '<msil>argv'{{$}}
+# TEXT:      {{^}}.field private static initonly native int '<msil>fn_
+# TEXT:      {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+# TEXT:      {{^}}  call string[] [mscorlib]System.Environment::GetCommandLineArgs(){{$}}
+# TEXT-NOT:  {{^}}  call void '{{.*}}'(int32
+# TEXT-DAG:  {{^}}  conv.i{{[[:space:]]+}}stsfld native int '<msil>argc'{{$}}
+# TEXT-DAG:  {{^}}  stsfld native int '<msil>argv'{{$}}
+# TEXT-NOT:  {{^}}  call void '{{.*}}'(int32
+# TEXT:      {{^}}  call void 'init_slot'(int32, native int, native int){{$}}
+# TEXT:      {{^}}  call void 'init2'(int32, native int){{$}}
+# TEXT:      {{^}}} // end of method '.cctor'{{$}}
+
+## noenv.ll: only a constructor that takes (argc), so no '<msil>environ';
+## the fields still come before the '<msil>fn_' fields.
+# RUN: llc noenv.ll -o noenv.s 2>&1 | count 0
+# RUN: FileCheck %s --check-prefixes=NOENV,TMAIN --implicit-check-not=GetCommandLineArgs \
+# RUN:   --implicit-check-not="'<msil>environ'" --input-file=noenv.s
+# RUN: llc -filetype=obj noenv.ll -o noenv.o
+# RUN: msil-ld noenv.o -o noenv.exe 2>&1 | count 0
+# RUN: llvm-cil-dump noenv.exe > noenv.txt
+# RUN: %{listing} members noenv.txt '<Module>' | FileCheck %s --check-prefix=FIELD
+# RUN: %{listing} method noenv.txt '<Module>' '<msil>Main' \
+# RUN:   | FileCheck %s --check-prefix=MAIN --implicit-check-not=GetCommandLineArgs --implicit-check-not=L5:
+# NOENV-NOT: {{^}}.field {{.*}}'<msil>fn_
+# NOENV:     {{^}}.field private static initonly native int '<msil>argc'{{$}}
+# NOENV-NOT: {{^}}.field {{.*}}'<msil>fn_
+# NOENV:     {{^}}.field private static initonly native int '<msil>argv'{{$}}
+# NOENV:     {{^}}.field private static initonly native int '<msil>fn_helper'{{$}}
+# NOENV:     {{^}}  call string[] [mscorlib]System.Environment::GetCommandLineArgs(){{$}}
+# NOENV-NOT: {{^}}  call void 'init1'(int32)
+# NOENV:     {{^}}  stsfld native int '<msil>argc'{{$}}
+# NOENV:     {{^}}  call void 'init1'(int32){{$}}
+# NOENV:     {{^}}} // end of method '.cctor'{{$}}
+
+# TMAIN:      {{^}}.method private hidebysig static int32 '<msil>Main'(string[] args) cil managed{{$}}
+# TMAIN-NEXT: {{^[{]$}}
+# TMAIN-NEXT: {{^}}  .entrypoint{{$}}
+# TMAIN-NEXT: {{^}}  .maxstack {{[0-9]+}}{{$}}
+# TMAIN-NEXT: {{^}}  ldsfld native int '<msil>argc'{{$}}
+# TMAIN-NEXT: {{^}}  conv.i4{{$}}
+# TMAIN-NEXT: {{^}}  ldsfld native int '<msil>argv'{{$}}
+# TMAIN-NEXT: {{^}}  call int32 'main'(int32, native int){{$}}
+# TMAIN-NEXT: {{^}}  ret{{$}}
+# TMAIN-NEXT: {{^}}} // end of method '<msil>Main'{{$}}
+
+## (d) A constructor without arguments and main(argc, argv): no field, and
+## '<msil>Main' builds argv as before.
+# RUN: llc -filetype=obj plain.ll -o plain.o
+# RUN: llvm-as plain.ll -o plain.bc
+# RUN: msil-ld plain.o -o plain.exe 2>&1 | count 0
+# RUN: llvm-cil-dump plain.exe > plain.txt
+# RUN: %{noargv} --check-prefix=PLAIN --input-file=plain.txt
+# RUN: msil-ld plain.bc -o plain-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump plain-lto.exe > plain-lto.txt
+# RUN: %{noargv} --check-prefix=PLAIN --input-file=plain-lto.txt
+# RUN: msil-ld --lto-emit-asm plain.bc -o plain.il 2>&1 | count 0
+# RUN: %{noargv} --check-prefix=TPLAIN --input-file=plain.il
+# RUN: llc plain.ll -o plain.s 2>&1 | count 0
+# RUN: %{noargv} --check-prefix=TPLAIN --input-file=plain.s
+# PLAIN:      {{^}}.class '<Module>' flags=
+# PLAIN:      {{^}}  .method '.cctor' void() flags={{.*}}
+# PLAIN-NOT:  GetCommandLineArgs
+# PLAIN:      {{^}}    L{{[0-9]+}}: call void() '<Module>'::'init0'{{$}}
+# PLAIN:      {{^}}  .method '<msil>Main' int32(string[]) flags={{.*}}
+# PLAIN:      {{^}}    L{{[0-9]+}}: call string[]() [mscorlib]System.Environment::'GetCommandLineArgs'{{$}}
+# PLAIN:      {{^}}    L{{[0-9]+}}: call int32(int32, native int) '<Module>'::'main'{{$}}
+# TPLAIN:      {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+# TPLAIN-NOT:  GetCommandLineArgs
+# TPLAIN:      {{^}}  call void 'init0'(){{$}}
+# TPLAIN:      {{^}}.method private hidebysig static int32 '<msil>Main'(string[] args) cil managed{{$}}
+# TPLAIN:      {{^}}  call string[] [mscorlib]System.Environment::GetCommandLineArgs(){{$}}
+# TPLAIN:      {{^}}  call int32 'main'(int32, native int){{$}}
+
+## (d) -shared: no '<msil>Main', so no field; <Module>::.cctor builds argv for
+## the constructors as before.
+# RUN: msil-ld -shared both.o libc.so.6 -o both.dll 2>&1 | count 0
+# RUN: llvm-cil-dump both.dll > both-dll.txt
+# RUN: %{noargv} --check-prefix=SHARED --input-file=both-dll.txt
+# RUN: msil-ld -shared both.bc libc.so.6 -o both-lto.dll 2>&1 | count 0
+# RUN: llvm-cil-dump both-lto.dll > both-lto-dll.txt
+# RUN: %{noargv} --check-prefix=SHARED --input-file=both-lto-dll.txt
+# SHARED:      {{^}}.class '<Module>' flags=
+# SHARED:      {{^}}  .method '.cctor' void() flags={{.*}}
+# SHARED:      {{^}}    L{{[0-9]+}}: call string[]() [mscorlib]System.Environment::'GetCommandLineArgs'{{$}}
+# SHARED:      {{^}}    L{{[0-9]+}}: call void(int32, native int, native int) '<Module>'::'init_slot'{{$}}
+# SHARED:      {{^}}    L{{[0-9]+}}: call void(int32, native int) '<Module>'::'init2'{{$}}
+
+## (e) A global named '<msil>argc' or '<msil>argv' in text output: an error
+## where the fields exist, an ordinary global where main takes no arguments.
+# RUN: not llc reserved-argc.ll -o x.s 2>&1 | %{fc} --check-prefix=RESERVED -DNAME=argc
+# RUN: llvm-as reserved-argc.ll -o reserved-argc.bc
+# RUN: not msil-ld --lto-emit-asm reserved-argc.bc -o x.il 2>&1 | %{fc} --check-prefix=RESERVED -DNAME=argc
+# RUN: not llc reserved-argv.ll -o x.s 2>&1 | %{fc} --check-prefix=RESERVED -DNAME=argv
+# RUN: llvm-as reserved-argv.ll -o reserved-argv.bc
+# RUN: not msil-ld --lto-emit-asm reserved-argv.bc -o x.il 2>&1 | %{fc} --check-prefix=RESERVED -DNAME=argv
+# RESERVED: {{^(msil-ld: )?}}error: {{.*}}global variable @"<msil>[[NAME]]" has the reserved IL name '<msil>[[NAME]]'{{$}}
+# RUN: llc noargs.ll -o noargs.s 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=NOARGS --implicit-check-not="'<msil>argv'" --input-file=noargs.s
+# RUN: llvm-as noargs.ll -o noargs.bc
+# RUN: msil-ld --lto-emit-asm noargs.bc -o noargs.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=NOARGS --implicit-check-not="'<msil>argv'" --input-file=noargs.il
+# NOARGS-NOT: {{^}}.field {{.*}}'<msil>argc'{{$}}
+# NOARGS:     {{^}}.field {{public|assembly}} static initonly native int '<msil>argc' // +0{{$}}
+# NOARGS-NOT: {{^}}.field {{.*}}'<msil>argc'{{$}}
+# NOARGS:     {{^}}  call void 'init2'(int32, native int){{$}}
+# NOARGS:     {{^}}.method private hidebysig static int32 '<msil>Main'(string[] args) cil managed{{$}}
+# NOARGS:     {{^}}  call int32 'main'(){{$}}
+
+#--- both.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@seen = global i32 0, align 4
+@saved_argv = global ptr null, align 8
+@saved_envp = global ptr null, align 8
+@fp = global ptr @helper, align 8
+@slot = internal global ptr @init_slot, section ".init_array.00099", align 8
+@llvm.used = appending global [1 x ptr] [ptr @slot], section "llvm.metadata"
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init2, ptr null }]
+
+define internal void @helper() {
+  ret void
+}
+
+define internal void @init_slot(i32 %argc, ptr %argv, ptr %envp) {
+  store ptr %envp, ptr @saved_envp, align 8
+  ret void
+}
+
+define internal void @init2(i32 %argc, ptr %argv) {
+  store i32 %argc, ptr @seen, align 4
+  store ptr %argv, ptr @saved_argv, align 8
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %v = load i32, ptr @seen, align 4
+  %a = load ptr, ptr @saved_argv, align 8
+  %e = load ptr, ptr @saved_envp, align 8
+  %f = load ptr, ptr @fp, align 8
+  %ai = ptrtoint ptr %a to i32
+  %ei = ptrtoint ptr %e to i32
+  %fi = ptrtoint ptr %f to i32
+  %bi = ptrtoint ptr %argv to i32
+  %s1 = add i32 %v, %ai
+  %s2 = add i32 %s1, %ei
+  %s3 = add i32 %s2, %fi
+  %s4 = add i32 %s3, %bi
+  %s5 = add i32 %s4, %argc
+  ret i32 %s5
+}
+
+#--- noenv.ll
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@seen = global i32 0, align 4
+@fp = global ptr @helper, align 8
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init1, ptr null }]
+
+define internal void @helper() {
+  ret void
+}
+
+define internal void @init1(i32 %argc) {
+  store i32 %argc, ptr @seen, align 4
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %v = load i32, ptr @seen, align 4
+  %f = load ptr, ptr @fp, align 8
+  %fi = ptrtoint ptr %f to i32
+  %s1 = add i32 %v, %fi
+  %s2 = add i32 %s1, %argc
+  ret i32 %s2
+}
+
+#--- plain.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@seen = global i32 0, align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init0, ptr null }]
+
+; The volatile store keeps LTO's GlobalOpt from evaluating the constructor.
+define internal void @init0() {
+  store volatile i32 1, ptr @seen, align 4
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %v = load i32, ptr @seen, align 4
+  %bi = ptrtoint ptr %argv to i32
+  %s1 = add i32 %v, %bi
+  %s2 = add i32 %s1, %argc
+  ret i32 %s2
+}
+
+#--- reserved-argc.ll
+; int msil_argc __asm__("<msil>argc");
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@"<msil>argc" = global i32 0, align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init2, ptr null }]
+
+define internal void @init2(i32 %argc, ptr %argv) {
+  store i32 %argc, ptr @"<msil>argc", align 4
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %v = load i32, ptr @"<msil>argc", align 4
+  ret i32 %v
+}
+
+#--- reserved-argv.ll
+; char **msil_argv __asm__("<msil>argv");
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@"<msil>argv" = global ptr null, align 8
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init2, ptr null }]
+
+define internal void @init2(i32 %argc, ptr %argv) {
+  store ptr %argv, ptr @"<msil>argv", align 8
+  ret void
+}
+
+define i32 @main(i32 %argc, ptr %argv) {
+  %v = load ptr, ptr @"<msil>argv", align 8
+  %r = ptrtoint ptr %v to i32
+  ret i32 %r
+}
+
+#--- noargs.ll
+; reserved-argc.ll with int main(void): no trailer fields, so '<msil>argc' is
+; an ordinary global.
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@"<msil>argc" = global i32 0, align 4
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @init2, ptr null }]
+
+define internal void @init2(i32 %argc, ptr %argv) {
+  store i32 %argc, ptr @"<msil>argc", align 4
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @"<msil>argc", align 4
+  ret i32 %v
+}

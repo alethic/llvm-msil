@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "Relocations.h"
+#include "AssemblyFiles.h"
 #include "BCLBinder.h"
 #include "Config.h"
 #include "InputChunks.h"
@@ -24,11 +25,13 @@
 #include "Synthetic.h"
 #include "TokenMap.h"
 #include "lld/Common/ErrorHandler.h"
+#include "lld/Common/Memory.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/BinaryFormat/CLI.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/CLI/MetadataReader.h"
+#include "llvm/CLI/Opcodes.h"
 
 #define DEBUG_TYPE "lld"
 
@@ -96,6 +99,16 @@ void SymbolBinder::collectReferences() {
       if (!m->live || m->discarded)
         continue;
       for (const TokenSite &site : m->sites) {
+        // A library export (plan 5.9.7): calls are calls of its method, and
+        // addresses ldsfld sites that become calls of its accessor.
+        if (TokenTarget t = tokens.lookup(site.token); t.isManaged()) {
+          Opcode expected =
+              t.kind == TokenTarget::Method ? Opcode::Call : Opcode::Ldsfld;
+          if (site.op != expected)
+            error(toString(f) + ": unsupported use of imported symbol '" +
+                  toString(*t.sym) + "' in '" + m->name + "' at IL offset " +
+                  Twine(getInstructionOffset(site)));
+        }
         if (!seenTokens.insert(site.token).second)
           continue;
         TokenTarget t = tokens.lookup(site.token);
@@ -152,14 +165,40 @@ void SymbolBinder::collectReferences() {
 }
 
 void SymbolBinder::reportUnresolved() {
+  assert(!ctx.arg.interfaceOnly &&
+         "an --interface-only link writes its stubs before references exist");
+
   // bindLateSymbols() reported an undefined entry point.
   Symbol *entry = nullptr;
   if (!ctx.arg.entry.empty() && !ctx.arg.shared)
     entry = symtab->find(ctx.arg.entry);
 
+  // A symbol difference is a constant of this image (plan 5.8.8): a library
+  // export lies in another assembly's image.
+  for (ObjFile *f : ctx.objectFiles) {
+    for (InputSegment *seg : f->segments()) {
+      if (!image.contains(seg))
+        continue;
+      for (const MSILLink::Reloc &r : seg->relocs) {
+        if (r.Type != MSILLink::RelocType::Diff)
+          continue;
+        Symbol *a = f->getSymbol(r.Symbol), *b = f->getSymbol(r.Symbol2);
+        Symbol *managed = a && a->isManaged() ? a : b;
+        if (!a || !b || !managed->isManaged())
+          continue;
+        error("symbol difference '" + toString(*a) + "' - '" + toString(*b) +
+              "' in " + toString(f) + " refers to a symbol of " +
+              toString(managed->getFile()));
+      }
+    }
+  }
+
   DenseSet<const Symbol *> done;
   for (const SymbolReference &r : references) {
     Symbol *sym = r.sym;
+    // A library export (plan 5.9.15): late binding checked the kinds.
+    if (sym->isManaged())
+      continue;
     // Native data is imported and native functions are called: a function
     // reference of data and a data reference of a function have no CIL
     // meaning (plan 5.10.10, 5.9.5).
@@ -185,11 +224,15 @@ void SymbolBinder::reportUnresolved() {
       continue;
 
     // Plan 5.9.6 step 3: an undefined weak symbol is null, and its calls
-    // trap.
+    // trap; but a native linker binds a weak reference to the machine code
+    // of a native object given on the command line, which MSIL cannot link.
     auto *u = dyn_cast<Undefined>(sym);
     bool discarded = u && u->discarded;
-    if (!discarded && sym->isUndefWeak())
-      continue;
+    if (!discarded && sym->isUndefWeak()) {
+      ArrayRef<const NativeExport *> rejected = symtab->getRejectedNative(sym);
+      if (rejected.empty() || !isNativeObjectDefinition(*rejected.front()))
+        continue;
+    }
 
     // A definition that native lookup passed over (plan 5.10.10, 5.10.14):
     // one a P/Invoke cannot bind, or data of a COFF import library or DLL
@@ -386,34 +429,83 @@ bool SymbolBinder::addDataImports(TrailerInput &in) {
   }
   if (imports.empty())
     return true;
-  auto addImports = [&] {
-    for (const auto &[sym, index] : imports) {
-      const NativeExport &e = *cast<NativeData>(sym)->nativeExport;
-      in.DataImports.push_back(
-          {out.getFieldEntity(index), e.Module.str(), e.Entry.str()});
-    }
-  };
 
-  // The helper's first choice (plan 5.10.12, M21):
-  // System.Runtime.InteropServices.NativeLibrary when the references define
-  // both members; never in a link without references, whose built-in table
-  // has no NativeLibrary entry.
-  if (std::optional<DataImportHelper> helper = getNativeLibraryHelper()) {
-    in.ImportHelper = *helper;
-    addImports();
-    return true;
-  }
-  if (errorCount())
-    return false;
-
-  SmallVector<DataImportFunction, 2> functions;
-  if (!findDataImportFunctions(ctx.arg.target, ctx.nativeIndex, functions)) {
+  std::optional<DataImportHelper> helper = getDataImportHelper([&] {
     for (const auto &[sym, index] : imports)
       symtab->reportUnresolved(
           getDataImportUnavailableText(
               sym->getName(), cast<NativeData>(sym)->nativeExport->Module),
           sym, /*liveOnly=*/true);
+  });
+  if (!helper)
     return false;
+  in.ImportHelper = *helper;
+  for (const auto &[sym, index] : imports) {
+    const NativeExport &e = *cast<NativeData>(sym)->nativeExport;
+    in.DataImports.push_back(
+        {out.getFieldEntity(index), e.Module.str(), e.Entry.str()});
+  }
+  return true;
+}
+
+bool SymbolBinder::addEnvironImport(TrailerInput &in, StringRef ctorName) {
+  // The program's own import of environ (plan 5.10.12), which
+  // addDataImports() imported.
+  if (auto *sym = dyn_cast_or_null<NativeData>(symtab->find("environ"))) {
+    if (std::optional<uint32_t> field = findDataField(sym)) {
+      in.EnvironField = out.getFieldEntity(*field);
+      environImport = sym;
+      return true;
+    }
+  }
+
+  // Else the first native data definition of environ in link order.
+  SmallVector<const NativeExport *, 2> rejected;
+  const NativeExport *e = ctx.nativeIndex.lookup("environ", rejected,
+                                                 /*isFunctionReference=*/false);
+  if (!e || e->Kind == NativeKind::Function) {
+    error("global constructor '" + ctorName +
+          "' takes envp, but no native library of the link defines 'environ'");
+    return false;
+  }
+  if (!in.ImportHelper) {
+    std::optional<DataImportHelper> helper = getDataImportHelper(
+        [&] { error(getDataImportUnavailableText("environ", e->Module)); });
+    if (!helper)
+      return false;
+    in.ImportHelper = *helper;
+  }
+  // The field's symbol, outside the symbol table, binds it to the
+  // definition as a program's own import is bound, so that the map lists
+  // it among the imports.
+  auto *sym = make<NativeData>(e->File, "environ", ELF::STB_GLOBAL,
+                               ELF::STV_DEFAULT, e);
+  OutputField f(OutputField::DataImport);
+  f.name = "<msil>environ";
+  f.sym = sym;
+  uint32_t index = out.addField(std::move(f));
+  in.DataImports.push_back(
+      {out.getFieldEntity(index), e->Module.str(), e->Entry.str()});
+  in.EnvironField = out.getFieldEntity(index);
+  environImport = sym;
+  return true;
+}
+
+std::optional<DataImportHelper>
+SymbolBinder::getDataImportHelper(function_ref<void()> reportUnavailable) {
+  // The first choice (plan 5.10.12, M21):
+  // System.Runtime.InteropServices.NativeLibrary when the references define
+  // both members; never in a link without references, whose built-in table
+  // has no NativeLibrary entry.
+  if (std::optional<DataImportHelper> helper = getNativeLibraryHelper())
+    return helper;
+  if (errorCount())
+    return std::nullopt;
+
+  SmallVector<DataImportFunction, 2> functions;
+  if (!findDataImportFunctions(ctx.arg.target, ctx.nativeIndex, functions)) {
+    reportUnavailable();
+    return std::nullopt;
   }
 
   // The helper's P/Invokes, bound like any import (plan 5.10.12): Windows
@@ -436,12 +528,10 @@ bool SymbolBinder::addDataImports(TrailerInput &in) {
       out.getMethodEntity(getPInvokeStub(l.name, l.module, l.entry, load));
   helper.GetSymbol =
       out.getMethodEntity(getPInvokeStub(g.name, g.module, g.entry, getSymbol));
-  in.ImportHelper = helper;
   for (const DataImportFunction &fn : functions)
     helperFunctions.push_back(
         {fn.name.str(), fn.module.str(), fn.entry.str(), fn.def});
-  addImports();
-  return true;
+  return helper;
 }
 
 std::optional<DataImportHelper> SymbolBinder::getNativeLibraryHelper() {
@@ -490,7 +580,50 @@ void SymbolBinder::printImports() const {
     if (auto *n = dyn_cast<NativeSymbol>(r.sym))
       add(r.sym->getName(), n->nativeExport->Module, n->nativeExport->Entry,
           isa<NativeData>(r.sym), n->nativeExport);
+  // The constructors' environ (addEnvironImport()), listed as a program's
+  // own import of environ, whose version counts for the floor.
+  if (environImport)
+    add(environImport->getName(), environImport->nativeExport->Module,
+        environImport->nativeExport->Entry, /*isData=*/true,
+        environImport->nativeExport);
   for (const HelperFunction &h : helperFunctions)
     add(h.name, h.module, h.entry, /*isData=*/false, h.def);
   lld::msil::printImports(rows);
+}
+
+std::vector<CrossRelocation> SymbolBinder::getCrossRelocations() const {
+  std::vector<CrossRelocation> relocs;
+  for (ObjFile *f : ctx.objectFiles) {
+    for (InputSegment *seg : f->segments()) {
+      std::optional<uint64_t> base =
+          image.contains(seg) ? image.getSegmentOffset(seg) : std::nullopt;
+      if (!base)
+        continue;
+      for (const MSILLink::Reloc &r : seg->relocs) {
+        uint8_t width;
+        switch (r.Type) {
+        case MSILLink::RelocType::Addr64:
+        case MSILLink::RelocType::FnAddr64:
+          width = 8;
+          break;
+        case MSILLink::RelocType::Addr32:
+        case MSILLink::RelocType::FnAddr32:
+          width = 4;
+          break;
+        default:
+          continue;
+        }
+        // The accessor gives a function's address as well as a variable's.
+        auto *m = dyn_cast_or_null<ManagedSymbol>(f->getSymbol(r.Symbol));
+        if (!m)
+          continue;
+        relocs.push_back({*base + r.Offset, width, m->managedExport, r.Addend});
+      }
+    }
+  }
+  llvm::stable_sort(relocs,
+                    [](const CrossRelocation &a, const CrossRelocation &b) {
+                      return a.OutputSite < b.OutputSite;
+                    });
+  return relocs;
 }

@@ -1,0 +1,8 @@
+main entered
+zmem_value()=7
+partial sum=0
+partial sum=3
+partial sum=9
+partial sum=18
+use_extra(4)=18
+[exit 0]

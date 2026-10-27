@@ -1,0 +1,59 @@
+# A library assembly found by -L and -l (the managed kind of plan 5.10.9), and the static archive that -l prefers.
+# The composite links lsm.dll positionally (%{msil_shlibs}) and runs the
+# program against its native transcript. Then the program is linked again
+# without a positional library, with -L<dir> -llsm (%{msil_libs}, msil-prog.py
+# --lib): msil-ld classifies lsm.dll, a PE with an Assembly row and the
+# toolchain's symbol-table attribute, as a managed library ('<n>.dll' is a
+# candidate name on every triple) and links it as if it were positional
+# (plan 5.10.9, M22.a item 1), so the relinked program prints the same
+# transcript. Finally a directory holding both lsm.dll and a static archive
+# liblsm.a of CIL objects that defines the same functions: within one
+# directory a static candidate ranks before a managed one (Design.md 5.2's
+# static-first rule, plan 5.10.9), so the program links the archive's
+# definitions and prints its values, with no library at run time.
+# Plan M22.f (lsearch-managed).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# REQUIRES: msil-ar
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = lsm=%t/lsm.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+# RUN: %msil_prog_build --level O2 --workdir %t.lib.d --out %t.lib.d/prog.exe --src %t/main.c
+# RUN: %msil_prog_build --shlibs= --lib='-L%t.lib.d/shlib -llsm' --level O2 --workdir %t.l.d --out %t.l.d/prog.exe --src %t/main.c
+# RUN: %msil_verify --dep-dir %t.lib.d/shlib -- %t.l.d/prog.exe
+# RUN: %msil_exec --expect %S/%{s:stem} --out %t.l.out --dep-dir %t.lib.d/shlib -- %t.l.d/prog.exe
+# RUN: %if msil-run-netfx %{ %msil_exec --netfx --expect %S/%{s:stem} --out %t.l.netfx.out --dep-dir %t.lib.d/shlib -- %t.l.d/prog.exe %}
+# RUN: mkdir -p %t.both
+# RUN: cp %t.lib.d/shlib/lsm.dll %t.both/lsm.dll
+# RUN: %clang_msil %{msil_cflags} -O2 -c %t/static.c -o %t/static.o
+# RUN: %msil_ar rcs %t.both/liblsm.a %t/static.o
+# RUN: %msil_prog_build --shlibs= --lib='-L%t.both -llsm' --level O2 --workdir %t.s.d --out %t.s.d/prog.exe --src %t/main.c
+# RUN: %msil_exec --out %t.s.out %t.s.d/prog.exe
+# RUN: FileCheck %s --check-prefix=STATIC --input-file=%t.s.out
+# STATIC:      {{^}}lsm_value()=2000{{$}}
+# STATIC-NEXT: {{^}}lsm_twice(21)=-42{{$}}
+# STATIC-NEXT: {{^}}[exit 0]{{$}}
+#--- lsm.c
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+API int lsm_value(void) { return 1000; }
+API int lsm_twice(int x) { return 2 * x; }
+#--- static.c
+int lsm_value(void) { return 2000; }
+int lsm_twice(int x) { return -2 * x; }
+#--- main.c
+#include "msil_test.h"
+int lsm_value(void);
+int lsm_twice(int);
+
+int main(void) {
+  put_kv("lsm_value()", lsm_value());
+  put_kv("lsm_twice(21)", lsm_twice(21));
+  return 0;
+}

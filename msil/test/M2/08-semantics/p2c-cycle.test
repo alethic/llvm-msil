@@ -1,0 +1,99 @@
+# Matrix case p2c-cycle: a cyclic pair of libraries with constructors; both initialize before main and see complete data.
+# pca and pcb call each other, point into each other's data and each have a
+# constructor. Under msil-ld's -z defs the cycle links through an interface
+# ('?pcb=...', -Wl,--interface-only, plan 5.9.15). Each constructor records
+# that it ran and reads the other library's statically initialized data,
+# which the other library's phase 1 has complete before any constructor of
+# the cycle runs ('<msil>Data'::.cctor, plan 5.9.10; native loaders apply
+# every relocation before the first constructor). Which constructor of the
+# cycle runs first is unspecified natively and in MSIL (recon
+# exports-multiasm 10.5), so nothing prints in a constructor: main prints
+# what they recorded, the pointers into the other library and calls across
+# the cycle. A constructor never reads the other library's pointers, which
+# that library's phase 2 sets (they may still be unset when the library of
+# the cycle that was entered first runs its constructors). The native MSVC
+# model cannot hold the address of another DLL's data in a static
+# initializer, so only the native Windows oracle sets the pointers in
+# constructors (STATIC_XRELOCS=0). Plan 5.9.16 row 'P2-C rows' (M22).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = ?pcb=%t/pcb.c;pca=%t/pca.c;pcb=%t/pcb.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- api.h
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#define IMPORT __declspec(dllimport)
+#else
+#define API __attribute__((visibility("default")))
+#define IMPORT
+#endif
+#if defined(_WIN32) && !defined(__MSIL__)
+#define STATIC_XRELOCS 0
+#else
+#define STATIC_XRELOCS 1
+#endif
+#--- pca.c
+#include "api.h"
+IMPORT int pcb_twice(int);
+API const int pca_const = 11;
+API int pca_ctor_ran;
+API int pca_ctor_saw;
+#if STATIC_XRELOCS
+extern const int pcb_const;
+API const int *pca_peer = &pcb_const;
+#else
+IMPORT extern const int pcb_const;
+API const int *pca_peer;
+__attribute__((constructor)) static void set_peer(void) { pca_peer = &pcb_const; }
+#endif
+API int pca_twice(int x) { return 2 * x; }
+API int pca_calls_pcb(int x) { return pcb_twice(x) + 1; }
+__attribute__((constructor)) static void pca_init(void) {
+  pca_ctor_ran = 1;
+  pca_ctor_saw = pcb_const;
+}
+#--- pcb.c
+#include "api.h"
+IMPORT int pca_twice(int);
+API const int pcb_const = 22;
+API int pcb_ctor_ran;
+API int pcb_ctor_saw;
+#if STATIC_XRELOCS
+extern const int pca_const;
+API const int *pcb_peer = &pca_const;
+#else
+IMPORT extern const int pca_const;
+API const int *pcb_peer;
+__attribute__((constructor)) static void set_peer(void) { pcb_peer = &pca_const; }
+#endif
+API int pcb_twice(int x) { return 2 * x; }
+API int pcb_calls_pca(int x) { return pca_twice(x) + 2; }
+__attribute__((constructor)) static void pcb_init(void) {
+  pcb_ctor_ran = 1;
+  pcb_ctor_saw = pca_const;
+}
+#--- main.c
+#include "msil_test.h"
+#include "api.h"
+IMPORT extern const int pca_const, pcb_const;
+IMPORT extern int pca_ctor_ran, pca_ctor_saw, pcb_ctor_ran, pcb_ctor_saw;
+IMPORT extern const int *pca_peer, *pcb_peer;
+IMPORT int pca_calls_pcb(int);
+IMPORT int pcb_calls_pca(int);
+
+int main(void) {
+  put_kv("pca constructor ran", pca_ctor_ran);
+  put_kv("pcb constructor ran", pcb_ctor_ran);
+  put_kv("pca constructor saw pcb_const", pca_ctor_saw);
+  put_kv("pcb constructor saw pca_const", pcb_ctor_saw);
+  put_kv("pca_peer == &pcb_const", pca_peer == &pcb_const);
+  put_kv("pcb_peer == &pca_const", pcb_peer == &pca_const);
+  put_kv("*pca_peer + *pcb_peer", *pca_peer + *pcb_peer);
+  put_kv("pca_calls_pcb(5)", pca_calls_pcb(5));
+  put_kv("pcb_calls_pca(5)", pcb_calls_pca(5));
+  return 0;
+}

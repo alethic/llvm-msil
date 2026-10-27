@@ -19,8 +19,10 @@
 ##   class '<msil>SymbolTable', Inputs/fakepack/ToolLib.il) is skipped under
 ##   --reference with the warning
 ##   '<path> is a library built by this toolchain; pass it as a link input instead'
-##   and given positionally is the error
-##   '<path>: linking .NET libraries built by this toolchain is not supported yet';
+##   and given positionally is, from M22, a library input (5.9.15): the
+##   program gets its AssemblyRef (version 0.0.0.0, no key) and the
+##   'ldtoken [ToolLib]ToolLib' that initializes it, though it uses nothing
+##   of it (shared-*.test have the rest);
 ## - a .NET assembly inside an archive, a reference or a toolchain library,
 ##   is not a link input and never a reference (section 12 row 2026-10-26,
 ##   '5.9.4 and 5.9.14 amended (.NET assemblies in archives ...)'): each such
@@ -37,7 +39,11 @@
 ##   mscorlib. Those are M18's entries (System.ValueType, the four owner
 ##   types, the five Phase 1 methods), then M20's (StringToHGlobalUni,
 ##   EntryPointNotFoundException and its constructor, System.Object); M21's
-##   NativeLibrary entries are not mscorlib-safe and are not listed.
+##   NativeLibrary entries are not mscorlib-safe and are not listed; then
+##   M22's six attribute entries (M22.a item 6: System.Attribute, its
+##   constructor, System.AttributeUsageAttribute, System.AttributeTargets,
+##   AttributeUsageAttribute's constructor and set_AllowMultiple), whose
+##   parameter lists print as BCLMembers.def writes them.
 ## The pack is Inputs/fakepack (gen.py): FakeCore (the core library),
 ## FakeInterop (Marshal) and FakeThreading (Interlocked). p1.o requests every
 ## Phase 1 member (data with a relocation, a variable-length memmove, a fence
@@ -125,15 +131,17 @@
 # RUN:   | %{fc} --check-prefix=MISSING
 # MISSING: {{^}}msil-ld: error: {{.*}}missing.dll
 
-## A toolchain library: skipped with a warning under --reference, an error
-## as a link input.
+## A toolchain library: skipped with a warning under --reference, a library
+## input given positionally.
 # RUN: msil-ld p1.o --reference=toollib.dll --reference=pack -o tool/prog.exe 2>&1 \
 # RUN:   | %{fc} --implicit-check-not=error: --check-prefix=TOOL-REF
 # TOOL-REF: {{^}}msil-ld: warning: toollib.dll is a library built by this toolchain; pass it as a link input instead{{$}}
 # RUN: cmp dir/prog.exe tool/prog.exe
-# RUN: not msil-ld p1.o toollib.dll --reference=pack -o x.exe 2>&1 \
-# RUN:   | %{fc} %{one} --check-prefix=TOOL-INPUT
-# TOOL-INPUT: {{^}}msil-ld: error: toollib.dll: linking .NET libraries built by this toolchain is not supported yet{{$}}
+# RUN: mkdir tool-input
+# RUN: msil-ld p1.o toollib.dll --reference=pack -o tool-input/prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump tool-input/prog.exe | FileCheck %s --check-prefix=TOOL-INPUT
+# TOOL-INPUT: {{^}}assemblyref 'ToolLib' ver 0.0.0.0 flags=0x00000000 key=- culture=''{{$}}
+# TOOL-INPUT: {{^}}    L{{[0-9]+}}: ldtoken [ToolLib]ToolLib{{$}}
 
 ## .NET assemblies in archives: a warning per member, the built-in table,
 ## and the same PE as without the archive (none/prog.exe for p1.o; for mix.a
@@ -189,6 +197,12 @@
 # TABLE-NEXT: {{^}}type [mscorlib]System.EntryPointNotFoundException{{$}}
 # TABLE-NEXT: {{^}}method instance void [mscorlib]System.EntryPointNotFoundException::.ctor(string){{$}}
 # TABLE-NEXT: {{^}}type [mscorlib]System.Object{{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.Attribute{{$}}
+# TABLE-NEXT: {{^}}method instance void [mscorlib]System.Attribute::.ctor(){{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.AttributeUsageAttribute{{$}}
+# TABLE-NEXT: {{^}}type [mscorlib]System.AttributeTargets{{$}}
+# TABLE-NEXT: {{^}}method instance void [mscorlib]System.AttributeUsageAttribute::.ctor(valuetype System.AttributeTargets){{$}}
+# TABLE-NEXT: {{^}}method instance void [mscorlib]System.AttributeUsageAttribute::set_AllowMultiple(bool){{$}}
 # TABLE-NOT:  {{.}}
 
 #--- notes.txt

@@ -1,0 +1,12 @@
+errno after the library's strtol, read by the program=34
+errno read by the library=34
+errno 7 set by the program, read by the library=7
+allocated by the library
+allocated by the program
+freed across the assemblies
+fputs by the program=1
+fputs by the library=1
+fclose by the library=0
+written by the program
+written by the library
+[exit 0]

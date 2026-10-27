@@ -30,22 +30,28 @@ A switch set, for example clang `-mmsil-*` or `-fmsil-*` options carried as modu
 - Decide the flag surface and the defaults.
 - Keep the raw model as the always-available fallback.
 
-## 3. Typed pointers in signatures instead of `native int`
+## 3. Typed and delegate-accepting secondary signatures for exports
 
-**Today:** every pointer is `native int`. Design.md says pointers are plain `native int`, and LLVM IR pointers are opaque, so the backend only ever sees `ptr`. Signatures and decompiled code are hard to read.
+**Scheduled (user, 2026-10-26):** with the managed-calls goal (C calling .NET methods), after Phase 3, not at the end of the project; both need clang to carry C prototypes to the backend.
 
-**Wanted:** an option to choose a better pointer type: `void*`, `uint8*`, or the pointee type written in the C prototype (`int32*`, `char*`, struct pointers).
+**Today:** every pointer in a signature is `native int`; C# sees `nint` for data pointers and function pointers alike, so nothing stops a wrong argument and call sites need casts.
+
+**Wanted (refined by the user):** keep the raw signatures, which stay the ABI that C uses, and add secondary overloads on a library's export class (M22) for C# callers:
+- **typed pointers:** `T*` for data pointers and `delegate* unmanaged[Cdecl]<...>` for function pointers;
+- **delegate-accepting overloads:** a parameter of a generated, named delegate type (one per function-pointer shape, marked cdecl; `Marshal.GetFunctionPointerForDelegate` refuses generic delegates such as `Func<int, int>`), converted to a native pointer and forwarded to the raw method; works on .NET Framework 4.8 too;
+- later, with struct types: `ref`/`in` parameters and value types for C structs (explicit layout), possibly `Span<T>` overloads.
 
 **Notes:**
-- It should not change performance: unmanaged pointers and `native int` are the same to the JIT. The gains are readability, decompiler output and nicer C# call sites.
-- Because IR pointers are opaque, the C types have to come from clang. The options are debug-info types (DISubprogram with `-g`) or a signature annotation that clang emits for each function (metadata or an attribute).
-- Struct pointee types need one CIL value type per C struct (explicit layout).
-- Check the verification allow-lists (ILVerify and PEVerify already treat unmanaged pointers as unverifiable).
+- No run-time cost: `native int`, unmanaged pointers and function pointers are the same value to the JIT; the gains are C# call sites, compile-time checking and decompiler output.
+- **Pointee types must come from clang**, because IR pointers are opaque (`ptr`): a per-function C prototype annotation (metadata or an attribute) or debug-info types (`DISubprogram` with `-g`). The managed-calls goal needs the same plumbing in the other direction.
+- **Lifetime and validity facts are already in the IR** and need no clang change: `captures(none)` (formerly `nocapture`; inferred by LLVM's function-attribute pass at -O1 and above, or declared in C with `__attribute__((noescape))`), `nonnull`, `dereferenceable(N)`, `align`, `readonly`/`writeonly`, `noalias` (`restrict`). Mapping: `captures(none)` + `nonnull` + `dereferenceable(sizeof T)` gives `ref T` (`in T` if `readonly`), since a C# ref is exactly a non-null, dereferenceable pointer that cannot escape the call; `captures(none)` on a function pointer gives a delegate overload that keeps the delegate alive only for the call. Without that evidence only the typed-pointer overload is generated: a callback that C retains (registered handlers, `atexit`, `signal`) needs explicit lifetime handling, for example a returned handle that the caller must keep, so no convenient overload can crash later.
+- Rust compiled with this toolchain benefits automatically: rustc emits `noalias`, `readonly`, `nonnull`, `noundef`, `align` and `dereferenceable` for references (its lifetimes are erased before LLVM; capture is left to LLVM's inference). Recognizing a Rust slice `(ptr, len)` as one `ReadOnlySpan<T>` would need rustc's type information (debug info or rustdoc JSON).
+- Struct pointee types need one CIL value type per C struct. Check the verification allow-lists (unmanaged pointers are already unverifiable).
 
 **Questions:**
-- Exported signatures only, or internal ones too?
-- Locals and fields too?
-- Is the default `void*` or `uint8*`?
+- Exports only (the default), or also internal signatures, locals and fields for readability?
+- The handle API for retained callbacks: a returned `IDisposable`, a `GCHandle`-based registration, or a C-side annotation that names the owner?
+- Naming of the generated delegate types and of overloads that would collide.
 
 ## 4. Managed memory and refs instead of unmanaged memory
 

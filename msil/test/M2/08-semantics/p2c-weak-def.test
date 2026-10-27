@@ -1,0 +1,57 @@
+# Matrix case p2c-weak-def: weak definitions in a library, one function and one variable replaced by strong ones in the program.
+# wdef.c defines and exports the weak function hook() and the weak variable
+# wvalue, and the weak function plain() that nothing else defines; main.c
+# defines a strong hook() and wvalue of its own and calls the library.
+# Assemblies have no global symbol scope, so the program uses its own hook
+# and wvalue (msil-ld warns as for any object definition that a library
+# also exports, plan Q21, M22.c item 3) while the library keeps using its
+# weak definitions; plain() binds to the library's weak definition, which
+# the symbol table flags weak (plan 5.9.15: function flag 2, data flag 4).
+# The native oracles agree: the Linux library is linked -Bsymbolic, so its
+# references to its own weak definitions bind locally, and a Windows DLL
+# uses its own definitions. Plan 5.9.16 row 'P2-C rows' (M22).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = wdef=%t/wdef.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- wdef.c
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+__attribute__((weak)) API int hook(void) { return 1; }
+__attribute__((weak)) API int wvalue = 10;
+__attribute__((weak)) API int plain(int x) { return x + 100; }
+API int lib_hook(void) { return hook(); }
+API int lib_wvalue(void) { return wvalue; }
+API int *lib_wvalue_addr(void) { return &wvalue; }
+#--- main.c
+#include "msil_test.h"
+#ifdef _WIN32
+#define IMPORT __declspec(dllimport)
+#else
+#define IMPORT
+#endif
+IMPORT int plain(int);
+IMPORT int lib_hook(void);
+IMPORT int lib_wvalue(void);
+IMPORT int *lib_wvalue_addr(void);
+int hook(void) { return 2; }
+int wvalue = 20;
+
+int main(void) {
+  put_kv("program: hook()", hook());
+  put_kv("library: lib_hook()", lib_hook());
+  put_kv("program: wvalue", wvalue);
+  put_kv("library: lib_wvalue()", lib_wvalue());
+  put_kv("two copies of wvalue", lib_wvalue_addr() != &wvalue);
+  put_kv("plain(1) from the library", plain(1));
+  wvalue = 21;
+  put_kv("library: lib_wvalue() after the program's store", lib_wvalue());
+  return 0;
+}

@@ -52,7 +52,9 @@
 #                8.x pack) on .NET 8; msil-verify.py runs ILVerify against the pack (PEVerify,
 #                which cannot load such an image, does not exist here anyway)
 #   refs-net10   the same with msil_references=net10 (the newest 10.x pack) on .NET 10
-#   roundtrip    msil/test/M1/11-programs through ildasm -> ilasm, then run (Design.md 5.5)
+#   roundtrip    msil/test/M1/11-programs and msil/test/M2/04-shared/roundtrip-library.test (a
+#                -shared library and a program relinked against its reassembly; plan 5.12.6
+#                O2, M22) through ildasm -> ilasm, then run (Design.md 5.5)
 #   hosted       optional, runs only when named with --leg hosted (plan Q16, 5.12.11):
 #                msil/test/M2/09-hosted, the hosted compile-only tests, with msil_glibc_sysroot
 #                given ($MSIL_GLIBC_SYSROOT, else /, the runner's own glibc headers and
@@ -116,13 +118,17 @@ check_msil=("$MSIL_REPO/llvm/test/CodeGen/MSIL" "$MSIL_REPO/clang/test/CodeGen/M
   "$MSIL_REPO/clang/test/Preprocessor/init-msil.c" "$MSIL_REPO/clang/test/Driver/msil-toolchain.c"
   "$MSIL_REPO/clang/test/Driver/msil-link.c" "$MSIL_REPO/clang/test/Driver/msil-lto.c"
   "$MSIL_REPO/clang/test/Driver/msil-header-search.c" "$MSIL_REPO/clang/test/Driver/msil-object.c"
-  "$MSIL_REPO/lld/test/MSIL" "$MSIL_REPO/llvm/test/tools/llvm-cil-dump"
+  "$MSIL_REPO/clang/test/Driver/msil-shared.c" "$MSIL_REPO/lld/test/MSIL" "$MSIL_REPO/llvm/test/tools/llvm-cil-dump"
   "$MSIL_REPO/llvm/test/tools/llvm-cil-copy" "$MSIL_REPO/llvm/test/MC/MSIL" "$MSIL_REPO/msil/test")
 m1=("$MSIL_REPO/msil/test/M1")
 # msil/test/M2 (plan 5.12.5, from M14) where it exists.
 m2=()
 [[ ! -d $MSIL_REPO/msil/test/M2 ]] || m2=("$MSIL_REPO/msil/test/M2")
 programs=("$MSIL_REPO/msil/test/M1/11-programs")
+# The paths of the roundtrip leg: 11-programs and M2's library round trip (plan 5.12.6 O2, M22);
+# lit-legs.ps1's $roundtrip is the same list.
+roundtrip=("$MSIL_REPO/msil/test/M1/11-programs"
+  "$MSIL_REPO/msil/test/M2/04-shared/roundtrip-library.test")
 # The paths of the reference legs (plan 5.12.11, M21); lit-legs.ps1's $refs is the same list.
 refs=("$MSIL_REPO/msil/test/M1/11-programs" "$MSIL_REPO/msil/test/M2/00-link"
   "$MSIL_REPO/msil/test/M2/05-refs")
@@ -146,7 +152,7 @@ leg_paths() {
     lto | obj) printf '%s\n' "${m1[@]}" "${m2[@]}" ;;
     det) echo "$MSIL_REPO/msil/test/M2/06-det" ;;
     refs-net48 | refs-net8 | refs-net10) printf '%s\n' "${refs[@]}" ;;
-    roundtrip) printf '%s\n' "${programs[@]}" ;;
+    roundtrip) printf '%s\n' "${roundtrip[@]}" ;;
     hosted) echo "$MSIL_REPO/msil/test/M2/09-hosted" ;;
     all-levels) echo "$MSIL_REPO/msil/test" ;;
   esac

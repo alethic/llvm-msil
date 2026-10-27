@@ -98,5 +98,22 @@ CLI_BCL_METHOD(NativeLibrary_Load, NativeLibrary, "Load", false, "native int",
 CLI_BCL_METHOD(NativeLibrary_GetExport, NativeLibrary, "GetExport", false,
                "native int", "native int, string", Required, "", false)
 
+// M22: the private attribute class '<msil>SymbolTable' of a -shared library
+// (plan 5.9.15, Q25) extends System.Attribute and calls its constructor ...
+CLI_BCL_TYPE(Attribute, "System", "Attribute", true)
+CLI_BCL_METHOD(Attribute_ctor, Attribute, ".ctor", true, "void", "", Required,
+               "", true)
+// ... and carries [AttributeUsage(AttributeTargets.Assembly,
+// AllowMultiple = true)]; AttributeTargets is a value type (an enum).
+CLI_BCL_TYPE(AttributeUsageAttribute, "System", "AttributeUsageAttribute",
+             true)
+CLI_BCL_TYPE(AttributeTargets, "System", "AttributeTargets", true)
+CLI_BCL_METHOD(AttributeUsageAttribute_ctor, AttributeUsageAttribute, ".ctor",
+               true, "void", "valuetype System.AttributeTargets", Required, "",
+               true)
+CLI_BCL_METHOD(AttributeUsageAttribute_set_AllowMultiple,
+               AttributeUsageAttribute, "set_AllowMultiple", true, "void",
+               "bool", Required, "", true)
+
 #undef CLI_BCL_TYPE
 #undef CLI_BCL_METHOD

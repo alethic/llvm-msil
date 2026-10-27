@@ -1,0 +1,58 @@
+# Matrix case p2c-bsymbolic: a function defined by both a program and its library; each assembly calls its own (warning).
+# bsym.c defines and exports which() and calls it from lib_which() and
+# lib_which_addr(); main.c defines its own which() and links against
+# bsym.dll. Assemblies have no global symbol scope, so nothing interposes:
+# the program uses its own definition and msil-ld warns (plan Q21, 5.9.15;
+# M22.c item 3: 'symbol '<s>' is defined in <file> and exported by <lib>;
+# the output uses its own definition'), while the library keeps calling its
+# own copy, and the two addresses differ. That is native -Bsymbolic
+# behaviour: the E7 Linux oracle links libbsym.so with -Bsymbolic, without
+# which the library's call would bind to the program's which(), and a
+# Windows DLL calls its own code anyway, so both oracles print the same
+# transcript. The warning names the file that defines the program's
+# which(): under msil-prog-pipeline=obj the CIL object main.o, under lto the
+# object that LTO wrote (prog.exe.lto.o), so its checks are OBJ and LTO
+# blocks (plan 5.12.1, 5.12.7). The builds that check it are separate from
+# the composite, whose output nothing reads. Plan 5.9.16 row 'P2-C rows'
+# (M22).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = bsym=%t/bsym.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O0 --workdir %t.w0.d --out %t.w0.d/prog.exe --src %t/main.c 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=obj %{ %msil_prog_build --level O2 --workdir %t.w2.d --out %t.w2.d/prog.exe --src %t/main.c 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O0 --workdir %t.w0.d --out %t.w0.d/prog.exe --src %t/main.c 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %msil_prog_build --level O2 --workdir %t.w2.d --out %t.w2.d/prog.exe --src %t/main.c 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# OBJ: {{^}}msil-ld: warning: symbol 'which' is defined in {{(.*[/\\])?}}main.o and exported by {{(.*[/\\])?}}bsym.dll; the output uses its own definition{{$}}
+# LTO: {{^}}msil-ld: warning: symbol 'which' is defined in {{(.*[/\\])?}}prog.exe.lto.o and exported by {{(.*[/\\])?}}bsym.dll; the output uses its own definition{{$}}
+#--- bsym.c
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+API int which(void) { return 1; }
+API int lib_which(void) { return which(); }
+API int (*lib_which_addr(void))(void) { return which; }
+#--- main.c
+#include "msil_test.h"
+#ifdef _WIN32
+#define IMPORT __declspec(dllimport)
+#else
+#define IMPORT
+#endif
+IMPORT int lib_which(void);
+IMPORT int (*lib_which_addr(void))(void);
+int which(void) { return 2; }
+
+int main(void) {
+  put_kv("program: which()", which());
+  put_kv("library: lib_which()", lib_which());
+  put_kv("library: lib_which_addr()()", lib_which_addr()());
+  put_kv("two addresses", lib_which_addr() != which);
+  return 0;
+}

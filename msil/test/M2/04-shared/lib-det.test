@@ -1,0 +1,75 @@
+# Two builds of a program and its libraries, a cyclic pair through an interface included, are identical byte for byte.
+# %{msil_det} builds everything twice, in two directories, from relative
+# paths with -fdebug-compilation-dir=., and compares every file: the
+# objects, the interface of detb, the libraries deta and detb and the
+# program (msil-prog.py --det with --shlibs, plan 5.12.4). msil-ld decides
+# by input order only (plan 5.9.12), so the export class and its accessors
+# and properties, the symbol-table attribute, the '<msil>Data' class, the
+# two-phase initializers, the AssemblyRefs and MemberRefs of the libraries
+# each output links, the content-hash MVID and the timestamp must all be
+# reproducible. The first RUN line is %{msil_det} (-O2), the second the same
+# at -O0; under msil_pipeline=lto the same lines compare the bitcode and the
+# LTO images. Plan M22.f (lib-det), plan 5.12.4 (--det compares the
+# libraries too).
+# The program links against .NET libraries, which --lto-emit-asm cannot
+# import from (plan 5.12.1, M22.c item 8), so the test does not run with
+# msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = ?detb=%t/detb.c;deta=%t/deta.c;detb=%t/detb.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_det}
+# RUN: %msil_prog_build --det --level O0 --workdir %t.det0.d --src %{msil_srcs}
+#--- api.h
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#define IMPORT __declspec(dllimport)
+#else
+#define API __attribute__((visibility("default")))
+#define IMPORT
+#endif
+#--- deta.c
+#include "api.h"
+extern int b_table[3];
+IMPORT int b_sum(void);
+int puts(const char *);
+API int a_count = 3;
+API int *a_ref = &b_table[1];
+API const char *const a_words[] = {"one", "two", "three"};
+static int a_hidden(int x) { return x * 7; }
+API int a_call(int x) { return a_hidden(x) + b_sum(); }
+API int (*a_fn(void))(int) { return a_call; }
+__attribute__((constructor)) static void a_init(void) { puts("deta: constructor"); }
+#--- detb.c
+#include "api.h"
+IMPORT extern int a_count;
+IMPORT int a_call(int);
+API int b_table[3] = {10, 20, 30};
+API int b_sum(void) { return b_table[0] + b_table[1] + b_table[2] + a_count; }
+API int b_call(int x) { return a_call(x) - 1; }
+__attribute__((weak)) API int b_weak(void) { return 5; }
+#--- main.c
+#include "msil_test.h"
+#ifdef _WIN32
+#define IMPORT __declspec(dllimport)
+#else
+#define IMPORT
+#endif
+IMPORT extern int a_count;
+IMPORT extern const char *const a_words[];
+IMPORT int a_call(int);
+int b_call(int);
+IMPORT int b_weak(void);
+extern int b_table[3];
+int *table_ref = &b_table[2];
+int (*call_ref)(int) = b_call;
+__attribute__((constructor)) static void main_init(void) { puts("program: constructor"); }
+
+int main(void) {
+  for (int i = 0; i < a_count; ++i)
+    puts(a_words[i]);
+  put_kv("a_call(2)", a_call(2));
+  put_kv("call_ref(2)", call_ref(2));
+  put_kv("*table_ref", *table_ref);
+  return b_weak();
+}

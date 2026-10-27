@@ -1,0 +1,77 @@
+# Constructors that take glibc's (argc, argv, envp) get them on linux-gnu; on windows-msvc they are the documented error.
+# glibc calls every '.init_array' entry as void (int argc, char **argv,
+# char **envp), and Rust std's ARGV_INIT_ARRAY (std::sys::args::unix, a
+# function in an '.init_array.00099' slot) relies on it. On ELF MSIL triples
+# msil-ld calls a constructor whose type is void (i32, ptr, ptr), or a
+# prefix of it, with the argc and argv that '<msil>Main' passes to main and
+# with the process environment (libc's environ) for envp (section 12,
+# 2026-10-26, 'M22.b extended (Rust-found defects 2 and 4)' item 4). main.c
+# has such a function in an '.init_array.00099' slot, as Rust writes it, and
+# an __attribute__((constructor)) function (llvm.global_ctors, '.init_array'
+# natively) that takes only argc. Each records what it was given, and main,
+# which takes argc and argv itself, prints it: argc, whether argv is main's
+# argv and argv[argc] (here argv[1], the program runs without arguments) is
+# null, and whether envp holds DOTNET_NOLOGO=1, which msil-run.py sets for
+# every run it starts, native or managed. The native oracle is glibc's own
+# behaviour (E7). The objects (obj) and the LTO link (lto) must agree.
+# windows-msvc: MSVC's CRT calls '.CRT$XC*' entries without arguments, so on
+# Windows triples the same source (with the slot in '.CRT$XCU') is the
+# error 'global constructor '<c>' takes arguments, which MSIL does not pass':
+# clang -c reports it for the llvm.global_ctors entry of a CIL object, the
+# LTO code generator inside msil-ld for bitcode (5.9.13), each at -O0 and
+# -O2; no MSIL build for Windows has a transcript. update-expected.py still
+# builds the test with the native Windows oracle, which compiles both
+# constructors out (MSVC's CRT would call them without arguments), so
+# initarray-args.expected records that neither ran; the Linux transcript,
+# the one the composite compares, is initarray-args.linux.expected.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %if msil-triple-linux %{ %{msil_prog} %}
+# RUN: %if msil-triple-windows && msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-triple-windows && msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-triple-windows && msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-triple-windows && msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# OBJ: {{^}}error: global constructor 'count_args' takes arguments, which MSIL does not pass{{$}}
+# LTO: {{^}}msil-ld: error: {{.*}}global constructor '{{count_args|save_args}}' takes arguments, which MSIL does not pass{{$}}
+#--- main.c
+#include "msil_test.h"
+
+static int seen_argc3 = -1, seen_argc1 = -1;
+static char **seen_argv;
+static char **seen_envp;
+
+#if !defined(_WIN32) || defined(__MSIL__)
+static void save_args(int argc, char **argv, char **envp) {
+  seen_argc3 = argc;
+  seen_argv = argv;
+  seen_envp = envp;
+}
+#ifdef _WIN32
+#pragma section(".CRT$XCU", read)
+__declspec(allocate(".CRT$XCU")) __attribute__((used)) static void (*const p_save_args)(int, char **, char **) = save_args;
+#else
+__attribute__((used, section(".init_array.00099"))) static void (*const p_save_args)(int, char **, char **) = save_args;
+#endif
+
+__attribute__((constructor)) static void count_args(int argc) { seen_argc1 = argc; }
+#endif
+
+static int same(const char *a, const char *b) {
+  while (*a && *a == *b)
+    ++a, ++b;
+  return *a == *b;
+}
+
+int main(int argc, char **argv) {
+  int has_var = 0;
+  if (seen_envp)
+    for (char **e = seen_envp; *e; ++e)
+      has_var |= same(*e, "DOTNET_NOLOGO=1");
+  put_kv("argc in main", argc);
+  put_kv("argc in the slot constructor", seen_argc3);
+  put_kv("argc in the attribute constructor", seen_argc1);
+  put_kv("the slot constructor got main's argv", seen_argv == argv);
+  put_kv("argv[argc] is null", seen_argv && !seen_argv[argc]);
+  put_kv("envp holds DOTNET_NOLOGO=1", has_var);
+  return 0;
+}

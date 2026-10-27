@@ -539,13 +539,22 @@ uint32_t OutputModule::mapUserString(ObjFile &f, uint32_t token) {
 // The trailer sink (plan 5.9.10)
 //===----------------------------------------------------------------------===//
 
+// The access of the trailer's fields: Phase 1's 'private', and 'assembly' in
+// a two-phase output, whose two type initializers use them (plan 5.9.12).
+static FieldAttributes getTrailerFieldAccess(bool twoPhase) {
+  return twoPhase ? FieldAttributes::Assembly : FieldAttributes::Private;
+}
+
 EntityRef RowTrailerSink::getDataField() {
   if (!dataField) {
-    // Phase 1's '.field private static initonly native int '<msil>data''.
+    // Phase 1's '.field private static initonly native int '<msil>data'',
+    // in '<msil>Data' of a two-phase output, whose .cctor stores it.
     OutputField f(OutputField::Trailer);
     f.name = DataFieldName.str();
-    f.flags = FieldAttributes::Private | FieldAttributes::Static |
+    f.flags = getTrailerFieldAccess(twoPhase) | FieldAttributes::Static |
               FieldAttributes::InitOnly;
+    if (twoPhase)
+      f.cls = OutputClass::Data;
     dataField = out.addField(std::move(f));
   }
   return out.getFieldEntity(*dataField);
@@ -554,10 +563,11 @@ EntityRef RowTrailerSink::getDataField() {
 EntityRef RowTrailerSink::addRVAData(StringRef typeName, StringRef fieldName,
                                      ArrayRef<uint8_t> bytes) {
   // Phase 1's '.field private static valuetype '<type>' '<field>' at ...',
-  // whose type is an explicit-layout value type of the data's size.
+  // whose type is an explicit-layout value type of the data's size. It stays
+  // in '<Module>' of a two-phase output too, as 'assembly' (plan 5.9.12).
   OutputField f(OutputField::Trailer);
   f.name = fieldName.str();
-  f.flags = FieldAttributes::Private | FieldAttributes::Static |
+  f.flags = getTrailerFieldAccess(twoPhase) | FieldAttributes::Static |
             FieldAttributes::HasFieldRVA;
   f.rva = out.rvaData.size();
   uint32_t index = out.addField(std::move(f));
@@ -572,7 +582,7 @@ EntityRef RowTrailerSink::getBCLMember(BCLMemberId id) {
 }
 
 EntityRef RowTrailerSink::declareHelper(StringRef name, const MethodSig &sig) {
-  auto [it, inserted] = helpers.try_emplace(name, 0);
+  auto [it, inserted] = declared.try_emplace(name, 0);
   if (inserted) {
     OutputMethod m(OutputMethod::Trailer);
     m.name = name.str();
@@ -586,17 +596,32 @@ EntityRef RowTrailerSink::addUserString(StringRef utf8) {
   return out.getTokenEntity(out.mb.addUserString(utf8));
 }
 
+EntityRef RowTrailerSink::addTrailerField(StringRef name) {
+  // '.field private static initonly native int '<name>'' of '<Module>',
+  // which '<Module>'::.cctor stores and '<msil>Main' reads ('<msil>argc' and
+  // '<msil>argv').
+  OutputField f(OutputField::Trailer);
+  f.name = name.str();
+  f.flags = getTrailerFieldAccess(twoPhase) | FieldAttributes::Static |
+            FieldAttributes::InitOnly;
+  return out.getFieldEntity(out.addField(std::move(f)));
+}
+
 void RowTrailerSink::emitMethod(const TrailerMethod &tm) {
+  // A helper that declareHelper() made, else a new method (a two-phase
+  // output has two '.cctor's).
   uint32_t index;
-  if (auto it = helpers.find(tm.Name); it != helpers.end()) {
+  if (auto it = declared.find(tm.Name); it != declared.end()) {
     index = it->second;
+    declared.erase(it);
   } else {
     OutputMethod m(OutputMethod::Trailer);
     m.name = tm.Name;
     index = out.addMethod(std::move(m));
-    helpers[tm.Name] = index;
   }
   OutputMethod &m = out.methods[index];
+  m.cls =
+      tm.Owner == TrailerOwner::Data ? OutputClass::Data : OutputClass::Module;
   m.flags = tm.Flags;
   m.implFlags = MethodImplAttributes::IL | MethodImplAttributes::Managed;
   m.sig = tm.Sig;

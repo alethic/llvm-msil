@@ -46,9 +46,14 @@
 //     Token      Module!Entry                              Symbol
 //     0x06000004 api-ms-win-crt-stdio-l1-1-0.dll!puts      puts
 //
+// From M22 Symbols: also lists the symbols that late binding bound to the
+// exports of .NET libraries built by this toolchain (ManagedFunction,
+// ManagedData, the library as input), after the natively bound ones.
+//
 //===----------------------------------------------------------------------===//
 
 #include "MapFile.h"
+#include "AssemblyFiles.h"
 #include "Config.h"
 #include "InputFiles.h"
 #include "SymbolTable.h"
@@ -77,6 +82,9 @@ OutputMap lld::msil::outputMap;
 // and bitcode files, then the objects that LTO wrote) and, within an input,
 // in the order of its symbol table; then the symbols bound to native
 // libraries, by library in load order and, within a library, in the order of
+// the symbol table; then the symbols bound to the exports of .NET libraries
+// (late binding step 1, plan 5.9.6), by library in link order
+// (SymbolTable::getManagedLibraries()) and, within a library, in the order of
 // the symbol table; then __start_X and __stop_X.
 static std::vector<Symbol *> getSymbols() {
   std::vector<Symbol *> v;
@@ -94,13 +102,21 @@ static std::vector<Symbol *> getSymbols() {
     if (file->isLTO)
       addFile(file);
 
-  DenseMap<const InputFile *, std::vector<Symbol *>> natives;
-  for (Symbol *sym : symtab->symbols())
+  DenseMap<const InputFile *, std::vector<Symbol *>> natives, managed;
+  for (Symbol *sym : symtab->symbols()) {
     if (sym->isNative())
       natives[sym->getFile()].push_back(sym);
+    else if (sym->isManaged())
+      managed[sym->getFile()].push_back(sym);
+  }
   for (NativeLibraryFile *file : ctx.nativeLibraryFiles) {
     auto it = natives.find(file);
     if (it != natives.end())
+      append_range(v, it->second);
+  }
+  for (ManagedLibraryFile *file : symtab->getManagedLibraries()) {
+    auto it = managed.find(file);
+    if (it != managed.end())
       append_range(v, it->second);
   }
   for (SyntheticData *sym : ctx.sym.startStop)

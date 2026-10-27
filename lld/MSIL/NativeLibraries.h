@@ -54,8 +54,9 @@ enum class NativeKind : uint8_t { Function, Data, TLS, NoType };
 
 // Why a P/Invoke cannot bind a native definition (plan 5.10.10): None for a
 // bindable one; an ELF definition with only a non-default (hidden) version,
-// thread-local data, a GLIBC_PRIVATE symbol, or a symbol that only a native
-// object of an archive defines (machine code).
+// thread-local data, a GLIBC_PRIVATE symbol, or a symbol of native object code
+// (machine code: a native object of an archive, or one given on the command
+// line).
 enum class NotBindable : uint8_t {
   None,
   HiddenVersion,
@@ -76,8 +77,8 @@ struct NativeExport {
   // The ELF version (the default one of a bindable definition, the hidden one
   // of a HiddenVersion definition), for --print-imports and diagnostics.
   StringRef Version;
-  // The library (for NativeCodeOnly, the archive member), for ">>> defined
-  // in" lines and the map file.
+  // The library (for NativeCodeOnly, the archive member or the native object
+  // given on the command line), for ">>> defined in" lines and the map file.
   InputFile *File;
 };
 
@@ -92,7 +93,12 @@ public:
   // Reports a malformed file, a file of the object format that \p tt does
   // not read (getOtherFormatMessage) and a file for another machine (plan
   // 5.10.14), and adds nothing from it. An empty \p tt (no --target and no
-  // bitcode input) skips the format and machine checks.
+  // bitcode input) skips the format and machine checks. A native object given
+  // on the command line (NativeLibraryFile::NativeObject) is read as an
+  // archive member is, with the same checks: its global definitions are
+  // machine code (NotBindable::NativeCodeOnly, with the object as their
+  // file), and its COFF weak externals with IMAGE_WEAK_EXTERN_SEARCH_ALIAS
+  // are aliases (addAlias), as those of oldnames.lib.
   void addFile(NativeLibraryFile &f, const llvm::Triple &tt);
 
   // Returns the first bindable definition of \p name in link order, following
@@ -105,10 +111,20 @@ public:
   // (plan 5.10.10). Definitions that were passed over, because a P/Invoke
   // cannot bind them or because they are such data, are appended to
   // \p rejected in link order, for the diagnostics. Returns null if nothing
-  // binds.
+  // binds. A definition in a native object given on the command line
+  // (findObjectDefinition) comes before every library's, whatever the order
+  // of the inputs, because a native linker always links such an object: the
+  // lookup returns null, with that definition first among those it appends
+  // to \p rejected (section 12 of 2026-10-26).
   const NativeExport *
   lookup(StringRef name, llvm::SmallVectorImpl<const NativeExport *> &rejected,
          bool isFunctionReference) const;
+
+  // Returns the first definition of \p name in a native object given on the
+  // command line (isNativeObjectDefinition), or null. Late binding asks this
+  // before it consults the libraries built by this toolchain (plan 5.9.6
+  // step 1): such a definition is machine code that wins over every library.
+  const NativeExport *findObjectDefinition(StringRef name) const;
 
   // Forgets every definition (Ctx::reset(), so that LLD_IN_TEST=2 passes).
   void clear();
@@ -123,6 +139,11 @@ private:
   llvm::DenseMap<llvm::CachedHashStringRef, StringRef> aliases;
   llvm::SpecificBumpPtrAllocator<NativeExport> alloc;
 };
+
+// Returns true if \p e is a definition in a native object given on the
+// command line (NotBindable::NativeCodeOnly, its file of format
+// NativeLibraryFile::NativeObject), not in a member of an archive.
+bool isNativeObjectDefinition(const NativeExport &e);
 
 // Returns true if \p name is a native function that takes a C function
 // pointer (plan 5.10.14's callback list, glibc's __REDIRECT targets of its
