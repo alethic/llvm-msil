@@ -1,0 +1,38 @@
+# Matrix P3 row .fini_array (Linux): a destructor in a '.fini_array' slot is a named link error until phase 3.
+# main.c puts the address of at_fini in a 'used' slot of section
+# '.fini_array', as code that registers a destructor without
+# __attribute__((destructor)) does (and as clang lowers llvm.global_dtors for
+# ELF). Natively glibc runs it at exit, after main: the transcript is 'main'
+# then 'fini_array entry'; the E7 Linux oracle's _start runs no
+# '.fini_array' (plan 5.9.16, row p6-dtors), so no .expected file records
+# it. Destructors are P3-A: plan 5.9.9 classifies '.fini_array*' as a
+# destructor table, and in Phase 2 every entry of one is msil-ld's 'global
+# destructors are not supported yet: <s> in <file>' (5.9.14's Phase 3
+# features), never a silent drop (judge-c-fidelity J6) and never a crash at
+# exit: on the object path naming the slot and main.o, on the LTO path the
+# LTO object; exit status 1 at -O0 and -O2. A transcript comes with P3-A,
+# which runs the destructors at exit in the native order (and needs an
+# oracle _start that runs '.fini_array'). Only ELF triples have
+# '.fini_array'; the Windows twin is crt-xt.test. Plan 5.9.9, 5.9.16 (P3
+# rows), M23.c.
+# REQUIRES: msil-triple-linux
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# OBJ: {{^}}msil-ld: error: global destructors are not supported yet: p_fini in {{.*}}main.o{{$}}
+# OBJ: clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# LTO: {{^}}msil-ld: error: global destructors are not supported yet: p_fini in {{.*}}.lto.o{{$}}
+# LTO: clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- main.c
+#include "msil_test.h"
+
+static void at_fini(void) { put_str("fini_array entry"); }
+__attribute__((used, section(".fini_array"))) static void (*const p_fini)(void) = at_fini;
+
+int main(void) {
+  put_str("main");
+  return 0;
+}

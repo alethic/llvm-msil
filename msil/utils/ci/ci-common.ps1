@@ -4,8 +4,11 @@
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #
-# Result rows. Every step or leg of a CI script ends in one row (step, name, PASS/FAIL, seconds,
-# detail). The script prints its rows as a table at the end; the rows are also appended
+# Result rows. Every step or leg of a CI script ends in one row (step, name, PASS/FAIL/SKIP,
+# seconds, detail). SKIP marks a leg left out on purpose (lit-legs.ps1's ctest leg while
+# $env:MSIL_CORPUS_SKIP names c-testsuite): it is no pass, but no failure either, so
+# Test-MsilCiFailed counts only FAIL rows. The script prints its rows as a table at the end; the
+# rows are also appended
 #   - to $env:MSIL_CI_RESULTS (tab-separated; run-m1-gate.ps1 sets it and prints all rows), and
 #   - to $env:GITHUB_STEP_SUMMARY as a Markdown table (GitHub Actions).
 # ci-common.sh writes the same format.
@@ -22,7 +25,7 @@ function Add-MsilCiResult {
   param(
     [Parameter(Mandatory)][string]$Step,
     [Parameter(Mandatory)][string]$Name,
-    [Parameter(Mandatory)][ValidateSet('PASS', 'FAIL')][string]$Status,
+    [Parameter(Mandatory)][ValidateSet('PASS', 'FAIL', 'SKIP')][string]$Status,
     [double]$Seconds = 0,
     [string]$Detail = ''
   )
@@ -37,7 +40,7 @@ function Add-MsilCiResult {
     $line = "$Step`t$Name`t$Status`t$([int][math]::Floor($Seconds))`t$detailText"
     Add-Content -LiteralPath $env:MSIL_CI_RESULTS -Value $line -Encoding utf8
   }
-  $color = if ($Status -eq 'PASS') { 'Green' } else { 'Red' }
+  $color = switch ($Status) { 'PASS' { 'Green' } 'SKIP' { 'Yellow' } default { 'Red' } }
   Write-Host "[msil-ci] $Status $Step/$Name ($($row.Time)) $detailText" -ForegroundColor $color
 }
 
@@ -56,8 +59,9 @@ function Write-MsilCiSummary {
   }
 }
 
+# True if a row failed: a SKIP row is no failure.
 function Test-MsilCiFailed {
-  return [bool]($script:MsilCiRows | Where-Object { $_.Result -ne 'PASS' })
+  return [bool]($script:MsilCiRows | Where-Object { $_.Result -notin @('PASS', 'SKIP') })
 }
 
 # Lit's summary lines ('  Passed     : 236 (98.33%)') as a hashtable label -> count.

@@ -1,0 +1,32 @@
+# tinf with zlib (Z_SOLO): two static libraries whose members share names.
+# tinf_main.c compresses with zlib and decompresses the raw and the
+# zlib-wrapped stream with tinf; both libraries' Adler-32 and CRC-32 must agree.
+# libz.a and libtinf.a both have members adler32.o and crc32.o (each archive is
+# built in its own directory); the link extracts tinf's members for tinf's
+# names and zlib's for zlib's, and leaves out zlib's inflate.o, infback.o,
+# inffast.o and inftrees.o and tinf's tinfgzip.o.
+# Built as a multi-TU program with static archives (%{msil_archives}: one per
+# library plus libsup.a, the support library of ../support) from the corpus
+# cache (%{msil_corpus}, filled by msil/utils/corpus/fetch.py), with the shim
+# headers of ../shim in both builds (%{msil_copts}), at every level of the leg,
+# and compared with the native build of the same sources; the error count is
+# the exit status, so the transcript ends [exit 0]. Plan 5.12.9 (M23).
+# ../det/tinf.test repeats these REDEFINE lines for %{msil_det}.
+# REQUIRES: msil-corpus-tinf, msil-corpus-zlib
+# REDEFINE: %{msil_srcs} = %S/../tinf/tinf_main.c
+# REDEFINE: %{msil_archives} = z=%{msil_corpus}/zlib-1.3.2/adler32.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/crc32.c,%{msil_corpus}/zlib-1.3.2/deflate.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/infback.c,%{msil_corpus}/zlib-1.3.2/inffast.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/inflate.c,%{msil_corpus}/zlib-1.3.2/inftrees.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/trees.c,%{msil_corpus}/zlib-1.3.2/zutil.c; \
+# REDEFINE:   tinf=%{msil_corpus}/tinf-57ffa1f1d5e3/src/tinflate.c, \
+# REDEFINE:   %{msil_corpus}/tinf-57ffa1f1d5e3/src/tinfzlib.c, \
+# REDEFINE:   %{msil_corpus}/tinf-57ffa1f1d5e3/src/tinfgzip.c, \
+# REDEFINE:   %{msil_corpus}/tinf-57ffa1f1d5e3/src/adler32.c, \
+# REDEFINE:   %{msil_corpus}/tinf-57ffa1f1d5e3/src/crc32.c;sup=%S/../support/sup_arena.c, \
+# REDEFINE:   %S/../support/sup_malloc.c,%S/../support/sup_memcmp.c,%S/../support/sup_memset.c, \
+# REDEFINE:   %S/../support/sup_memcpy.c,%S/../support/sup_strlen.c,%S/../support/sup_out.c
+# REDEFINE: %{msil_copts} = -isystem %S/../shim -I%S/../support -I%{msil_corpus}/zlib-1.3.2 \
+# REDEFINE:   -I%{msil_corpus}/tinf-57ffa1f1d5e3/src -DZ_SOLO -DNDEBUG \
+# REDEFINE:   -Werror=implicit-function-declaration -w
+# RUN: %{msil_prog}

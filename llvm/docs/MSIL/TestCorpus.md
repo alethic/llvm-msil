@@ -13,6 +13,68 @@ Researched 2026-10-15. The user asked for tiny, medium and large C programs to t
 
 Some research agents compiled candidates through this backend while M9 was in progress. The JSON `blockers` and `evidence` fields say which candidates only compiled and which also ran.
 
+The next section, "Phase 2 exit corpus", records what Phase 2 adopted from this research (M23, 2026-10-27); the sections after it are the research of 2026-10-15 as it was, with the backend issues it surfaced marked where a later milestone resolved them.
+
+## Phase 2 exit corpus
+
+Nine of the picks below and c-testsuite became the exit corpus of Phase 2 (plan Q29 and Q30,
+milestone M23). They are never copied into the repository: `msil/utils/corpus/manifest.json`
+pins them, `python msil/utils/corpus/fetch.py` downloads them into a cache outside the
+repository and verifies every hash (GettingStarted.md section 7, "The exit corpus"), and
+`msil/test/Programs/` builds them from that cache. The table is the manifest:
+
+| Entry | Version | Pinned by | Licence (`license_file`) | Tree in the cache |
+|---|---|---|---|---|
+| zlib | 1.3.2 (tag `v1.3.2`) | commit `da607da739fa6047df13e66a2af6b8bec7c2a498`, GitHub archive | Zlib (`LICENSE`) | `zlib-1.3.2` |
+| tinf | `57ffa1f1d5e3` | commit `57ffa1f1d5e3dde19011b2127bd26d01689b694b` | Zlib (`LICENSE`) | `tinf-57ffa1f1d5e3` |
+| Monocypher | 4.0.2 | release tarball, SHA-256 `38d07179738c0c90677dba3ceb7a7b8496bcfea758ba1a53e803fed30ae0879c` | BSD-2-Clause OR CC0-1.0 (`LICENCE.md`) | `monocypher-4.0.2` |
+| CoreMark | `1f483d5b8316` | commit `1f483d5b8316753a742cbf5590caf5bd0a4e4777` | CoreMark Acceptable Use Agreement (EEMBC) and Apache-2.0 (`LICENSE.md`) | `coremark-1f483d5b8316` |
+| LZ4 | 1.10.0 (tag `v1.10.0`) | commit `ebb370ca83af193212df4dcbadcc5d87bc0de2f0` | BSD-2-Clause for `lib/` (`lib/LICENSE`) | `lz4-1.10.0` |
+| BLAKE2 | `ed1974ea8343` | commit `ed1974ea83433eba7b2d95c5dcd9ac33cb847913` | CC0-1.0 OR OpenSSL OR Apache-2.0 (`COPYING`) | `blake2-ed1974ea8343` |
+| TweetNaCl | 20140427 | the two files `tweetnacl.c` and `tweetnacl.h` of `tweetnacl.cr.yp.to/20140427/` | public domain (no file) | `tweetnacl-20140427` |
+| KISS FFT | `2a1f1337160e` | commit `2a1f1337160e6e8dbc6182202d0bd7f624002197` | BSD-3-Clause (`COPYING`) | `kissfft-2a1f1337160e` |
+| jsmn | `25647e692c79` | commit `25647e692c7906b96ffd2b05ca54c097948e879c` | MIT (`LICENSE`) | `jsmn-25647e692c79` |
+| c-testsuite | `5c7275656d75` | commit `5c7275656d751de0e68b2d340a95b5681858ed07` | MIT for the runners and scripts; each test carries the licence of its scc or tinycc original (`LICENSE`, `tests/LICENSE`, `tests/single-exec/*.c.otags`) | `c-testsuite-5c7275656d75` |
+
+Every entry is also pinned by `tree_sha256`, the SHA-256 of its extracted tree's sorted
+`<sha256> <path>` lines, because GitHub archives are not byte-stable; the six abbreviated hashes
+of the recon (tests-p2 5.1) match the full commits, and the zlib and LZ4 archives at the tag
+commits give the same trees as the release tarballs the recon used. The ten trees take about 19
+MB in the cache, of which 4.4 MB are downloaded.
+
+**How each program is built and what it checks** (Status.md section 1 has the details): each
+links its library as a static archive with a small support archive (an arena allocator,
+`memcmp`, `memset`, `memcpy`, `strlen` and output through `puts`) and compiles against shim
+headers instead of a C library's, with the same flags natively and for MSIL. zlib runs 12
+deflate/inflate round trips; tinf decompresses zlib's streams (two archives with members of the
+same names); Monocypher self-checks every primitive family; CoreMark validates the CRCs of its
+performance run; LZ4 round-trips block and HC compression; BLAKE2 checks 4 x 256 keyed
+known-answer tests; TweetNaCl boxes, signs, hashes and multiplies scalars with a
+`randombytes` from another object; KISS FFT runs complex and real FFTs with C math calls; jsmn
+parses five documents with the parser in another object. Every transcript ends `[exit 0]`.
+
+**Results at the Phase 2 exit** (M23, measured while it was built): all nine programs match
+their native builds at `-O0` and `-O2`, through CIL objects and through LTO, on
+`x86_64-pc-windows-msvc-msil` (.NET 8, .NET 10, .NET Framework 4.8) and
+`x86_64-unknown-linux-gnu-msil` (WSL .NET 10 and .NET 8), with one expected transcript per
+program for both triples (TweetNaCl included), and each builds byte for byte the same from two
+directories. Of c-testsuite's 220 tests, the 150 whose source calls no C library function (the
+recon's rule; 68 need `printf` and 2 other C library functions) are listed in
+`msil/test/Programs/c-testsuite/libc-free.txt`; 149 exit 0 through objects at `-O0` and `-O2`
+on `x86_64-pc-windows-msvc-msil` and .NET 8 (the `ctest` leg; no leg runs them for the Linux
+triple), as natively, and one is a `diag` entry:
+
+| Test | Phase 2 | Phase 3 item |
+|---|---|---|
+| `00140` | `variadic function definitions are not supported for MSIL yet` (LTO deletes the unused variadic function at `-O2`; objects keep it) | P3-B, variadic definitions |
+
+**CI.** Whether GitHub's runners may download and run CoreMark (EEMBC's licence agreement) and
+c-testsuite (per-test licences) is still unverified (plan section 10 item 11). Until the user
+decides, `.github/workflows/msil-ci.yml` sets `MSIL_CORPUS_SKIP: coremark,c-testsuite`, which
+reaches `fetch.py --skip` and lit's `msil_corpus_skip`: CI fetches and runs the other eight
+entries, CoreMark's tests are UNSUPPORTED and the `ctest` leg is skipped. The phase gate on the
+development host (`run-m1-gate.ps1`) runs all ten.
+
 ## C
 
 ### Tiny (under about 3k lines)
@@ -112,11 +174,11 @@ Some research agents compiled candidates through this backend while M9 was in pr
 | Roc | Unknown, worth re-checking. | Check whether the roc CLI can emit or keep the .bc. | Unknown (Phase 1 in principle) | - |
 | Vala | Poor fit. | Not recommended. | Phase 3 | - |
 
-## Backend issues the research surfaced (for M10 / phase planning, not yet triaged)
+## Backend issues the research surfaced (2026-10-15; how each was resolved)
 
-- **Aliases:** rustc merges identical functions into IR aliases, and MSIL rejects every GlobalAlias. The workaround is `-C llvm-args=-mergefunc-use-aliases=false`; lowering aliases would fix it properly.
-- **i128 division:** u128/i128 division by a non-power-of-two, and float-to-i128 conversions, become `__udivti3`/`__fixunsdfti`, which we report as Phase-3 helpers. NVPTX and AMDGPU set `setMaxDivRemBitWidthSupported(64)` and `setMaxLargeFPConvertBitWidthSupported(64)` so that LLVM expands these inline (ExpandIRInsts). It could be done the same way here.
-- **`black_box`:** Rust's `black_box` becomes an empty `asm sideeffect` with inputs and a memory clobber, which MSILPrepareIR rejects. It could be accepted as a compiler barrier.
-- **Swift:** Embedded Swift uses the swiftcc calling convention, which `callingConvSupported` rejects.
-- **Rust slice and str compares:** these need `memcmp`, which is not a Phase-1 import. Define it in the program, or import it explicitly.
+- **Aliases:** rustc merges identical functions into IR aliases, and MSIL rejects every GlobalAlias. The workaround is `-C llvm-args=-mergefunc-use-aliases=false`; lowering aliases would fix it properly. *Resolved in M12:* whole-program output lowers aliases of defined functions and variables, and CIL objects keep them as alias symbols for `msil-ld` (M19).
+- **i128 division:** u128/i128 division by a non-power-of-two, and float-to-i128 conversions, become `__udivti3`/`__fixunsdfti`, which we report as Phase-3 helpers. NVPTX and AMDGPU set `setMaxDivRemBitWidthSupported(64)` and `setMaxLargeFPConvertBitWidthSupported(64)` so that LLVM expands these inline (ExpandIRInsts). It could be done the same way here. *Resolved in M12:* expanded inline exactly that way (plan Q36).
+- **`black_box`:** Rust's `black_box` becomes an empty `asm sideeffect` with inputs and a memory clobber, which MSILPrepareIR rejects. It could be accepted as a compiler barrier. *Resolved in M12:* empty `asm` statements with operands are accepted (and since M22 templates of nothing but `/* */` comments in IR).
+- **Swift:** Embedded Swift uses the swiftcc calling convention, which `callingConvSupported` rejects. *Moved to phase 4 or dropped* (plan Q34).
+- **Rust slice and str compares:** these need `memcmp`, which is not a Phase-1 import. Define it in the program, or import it explicitly. *Since M15* a program that `msil-ld` links binds `memcmp` to the C library like any other native function; only `clang -S` keeps the Phase-1 import table.
 - **Never planned, and the cause of most "poor fit" verdicts:** exception unwinding (C++ exceptions, Rust panic=unwind) and GCs that scan the machine stack.

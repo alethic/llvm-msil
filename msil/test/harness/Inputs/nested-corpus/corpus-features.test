@@ -1,0 +1,7 @@
+# Run in a nested lit by ../../corpus-param.test: it prints the corpus
+# features of the configuration (plan 5.12.2; M23) and %{msil_corpus}.
+# RUN: %if msil-corpus %{ echo feature msil-corpus %}
+# RUN: %if msil-corpus-zlib %{ echo feature msil-corpus-zlib %}
+# RUN: %if msil-corpus-coremark %{ echo feature msil-corpus-coremark %}
+# RUN: %if msil-corpus-c-testsuite %{ echo feature msil-corpus-c-testsuite %}
+# RUN: echo corpus %{msil_corpus}

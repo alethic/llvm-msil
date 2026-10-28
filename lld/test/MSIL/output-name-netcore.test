@@ -1,0 +1,461 @@
+## Executables bound to .NET and their names (section 12 rows of 2026-10-26
+## 'M23.d extended (executable naming, msil-ld)' and 'M23.c extended
+## (executable naming, tests)', corrected for netstandard by the row of
+## 2026-10-27 'M23.d extended (executable naming, netstandard 2.1)';
+## ImplementationPlan.md 5.10.5, 5.9.12, 5.11.3).
+## msil-ld always writes an EXE image for a program, whatever its name, and
+## the default name stays a.exe; but a program whose bound core library
+## (M21's ReferenceSet::coreLibrary()) is .NET Core's, System.Runtime (a
+## .NET reference pack) or System.Private.CoreLib (a runtime directory), or
+## netstandard 2.1 or later, runs only on .NET, through 'dotnet', and cannot
+## start on .NET Framework (which ships netstandard 2.0.0.0 and nothing
+## later), where <name>.exe would be expected to run. So a non -shared link
+## whose output name ends in .exe, in any case, warns
+##   '<path>: this executable is bound to <core library> <version>, so it
+##   runs only on .NET through 'dotnet' and cannot start on .NET Framework;
+##   .NET executables are named .dll (for example -o <stem>.dll)'
+## and still writes the EXE image (llvm-cil-dump --headers). There is no
+## warning for the same link named .dll, for a link without references (the
+## built-in [mscorlib] table), for the .NET Framework reference assemblies
+## (mscorlib) or netstandard 2.0 (both run on .NET Framework), or for
+## -shared.
+## The references are small assemblies in the style of M21's fake pack
+## (Inputs/fakepack): rt/System.Runtime.dll is FakeCore.il renamed
+## System.Runtime (version 8.0.0.0, the .NET packs' key), whose attribute
+## types a -shared link needs; spc/System.Private.CoreLib.dll (10.0.0.0),
+## ns/netstandard.dll (2.0.0.0) and ns21/netstandard.dll (2.1.0.0) are
+## minimal core libraries (System.Object and System.ValueType, as
+## Inputs/fakepack/MiniCore.il); fw/mscorlib.dll is the pack's FakeMscorlib.
+## The IL source of each image is the split-file part <name>.il, and the
+## part <name>.yaml after it is 'ilasm -dll <name>.il' (the .NET Framework's
+## ilasm, gen.py's default) converted by Inputs/fakepack/gen.py's pe_to_yaml,
+## with the two comment lines it starts with as the header; no gen.py
+## target builds these images, and regenerating changes only their MVIDs.
+## The links run in the test's directory, so <path> is the -o value and
+## <stem> its name without .exe.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj ret.ll -o ret.o
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: mkdir rt spc ns ns21 fw
+# RUN: yaml2obj System.Runtime.yaml -o rt/System.Runtime.dll
+# RUN: yaml2obj System.Private.CoreLib.yaml -o spc/System.Private.CoreLib.dll
+# RUN: yaml2obj netstandard-2.0.yaml -o ns/netstandard.dll
+# RUN: yaml2obj netstandard-2.1.yaml -o ns21/netstandard.dll
+# RUN: yaml2obj %S/Inputs/fakepack/FakeMscorlib.yaml -o fw/mscorlib.dll
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning:
+
+## Bound to System.Runtime and named .exe: the warning, and an EXE image.
+# RUN: msil-ld ret.o --reference=rt -o x.exe 2>&1 | %{fc} --check-prefix=WARN-RT
+# WARN-RT: {{^}}msil-ld: warning: x.exe: this executable is bound to System.Runtime 8.0.0.0, so it runs only on .NET through 'dotnet' and cannot start on .NET Framework; .NET executables are named .dll (for example -o x.dll){{$}}
+# RUN: llvm-cil-dump --headers x.exe | FileCheck %s --check-prefix=EXE-IMAGE
+# EXE-IMAGE: {{^}}Format: PE32+ machine=0x8664 exe{{$}}
+
+## Bound to System.Private.CoreLib, an upper-case extension: the same.
+# RUN: msil-ld ret.o --reference=spc -o Prog.EXE 2>&1 | %{fc} --check-prefix=WARN-SPC
+# WARN-SPC: {{^}}msil-ld: warning: Prog.EXE: this executable is bound to System.Private.CoreLib 10.0.0.0, so it runs only on .NET through 'dotnet' and cannot start on .NET Framework; .NET executables are named .dll (for example -o Prog.dll){{$}}
+# RUN: llvm-cil-dump --headers Prog.EXE | FileCheck %s --check-prefix=EXE-IMAGE
+
+## The same link named .dll: no warning, the same EXE image.
+# RUN: msil-ld ret.o --reference=rt -o x.dll 2>&1 | count 0
+# RUN: llvm-cil-dump --headers x.dll | FileCheck %s --check-prefix=EXE-IMAGE
+
+## No references, the Framework's mscorlib, netstandard 2.0: no warning.
+# RUN: msil-ld ret.o -o none.exe 2>&1 | count 0
+# RUN: msil-ld ret.o --reference=fw -o framework.exe 2>&1 | count 0
+# RUN: msil-ld ret.o --reference=ns -o standard.exe 2>&1 | count 0
+
+## Bound to netstandard 2.1, which the .NET Framework does not ship: the
+## warning named .exe, with the EXE image; nothing named .dll.
+# RUN: msil-ld ret.o --reference=ns21 -o x.exe 2>&1 | %{fc} --check-prefix=WARN-NS21
+# WARN-NS21: {{^}}msil-ld: warning: x.exe: this executable is bound to netstandard 2.1.0.0, so it runs only on .NET through 'dotnet' and cannot start on .NET Framework; .NET executables are named .dll (for example -o x.dll){{$}}
+# RUN: llvm-cil-dump --headers x.exe | FileCheck %s --check-prefix=EXE-IMAGE
+# RUN: msil-ld ret.o --reference=ns21 -o x.dll 2>&1 | count 0
+
+## -shared: no warning, whatever the name.
+# RUN: msil-ld -shared lib.o --reference=rt -o lib.dll 2>&1 | count 0
+# RUN: msil-ld -shared lib.o --reference=rt -o shlib.exe 2>&1 | count 0
+
+#--- ret.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  ret i32 42
+}
+
+#--- lib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @lib_fn(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+#--- System.Runtime.il
+// System.Runtime 8.0.0.0: Inputs/fakepack/FakeCore.il as gen.py's FakeCore
+// target assembles it (no '#define'), without its comments, with the
+// assembly and the module renamed System.Runtime: the same types and the
+// .NET packs' public key.
+.mscorlib
+.assembly System.Runtime
+{
+  .custom instance void System.Runtime.CompilerServices.ReferenceAssemblyAttribute::.ctor() = ( 01 00 00 00 )
+  .publickey = ( 00 24 00 00 04 80 00 00 94 00 00 00 06 02 00 00
+                 00 24 00 00 52 53 41 31 00 04 00 00 01 00 01 00
+                 07 D1 FA 57 C4 AE D9 F0 A3 2E 84 AA 0F AE FD 0D
+                 E9 E8 FD 6A EC 8F 87 FB 03 76 6C 83 4C 99 92 1E
+                 B2 3B E7 9A D9 D5 DC C1 DD 9A D2 36 13 21 02 90
+                 0B 72 3C F9 80 95 7F C4 E1 77 10 8F C6 07 77 4F
+                 29 E8 32 0E 92 EA 05 EC E4 E8 21 C0 A5 EF E8 F1
+                 64 5C 4C 0C 93 C1 AB 99 28 5D 62 2C AA 65 2C 1D
+                 FA D6 3D 74 5D 6F 2D E5 F1 7E 5E AF 0F C4 96 3D
+                 26 1C 8A 12 43 65 18 20 6D C0 93 34 4D 5A D2 93 )
+  .ver 8:0:0:0
+}
+.module System.Runtime.dll
+
+.class public auto ansi beforefieldinit System.Object
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
+}
+.class public abstract auto ansi beforefieldinit System.ValueType extends System.Object { }
+.class public abstract auto ansi beforefieldinit System.Enum extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.Void extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.Boolean extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.Char extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.SByte extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.Byte extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.Int16 extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.UInt16 extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.Int32 extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.UInt32 extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.Int64 extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.UInt64 extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.Single extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.Double extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.IntPtr extends System.ValueType { }
+.class public sequential ansi sealed beforefieldinit System.UIntPtr extends System.ValueType { }
+.class public auto ansi sealed beforefieldinit System.String extends System.Object { }
+.class public abstract auto ansi beforefieldinit System.Array extends System.Object { }
+.class public abstract auto ansi beforefieldinit System.Type extends System.Object { }
+.class public abstract auto ansi beforefieldinit System.Attribute extends System.Object
+{
+  .method family hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
+}
+.class public auto ansi sealed beforefieldinit System.AttributeUsageAttribute extends System.Attribute
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor(valuetype System.AttributeTargets validOn)
+          cil managed { ldnull throw }
+  .method public hidebysig specialname instance bool get_AllowMultiple() cil managed { ldnull throw }
+  .method public hidebysig specialname instance void set_AllowMultiple(bool 'value') cil managed { ldnull throw }
+  .property instance bool AllowMultiple()
+  {
+    .get instance bool System.AttributeUsageAttribute::get_AllowMultiple()
+    .set instance void System.AttributeUsageAttribute::set_AllowMultiple(bool)
+  }
+}
+.class public auto ansi sealed System.AttributeTargets extends System.Enum
+{
+  .field public specialname rtspecialname int32 value__
+  .field public static literal valuetype System.AttributeTargets Assembly = int32(1)
+}
+
+.class public auto ansi beforefieldinit System.Exception extends System.Object
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor(string message) cil managed { ldnull throw }
+}
+.class public auto ansi beforefieldinit System.EntryPointNotFoundException extends System.Exception
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
+  .method public hidebysig specialname rtspecialname instance void .ctor(string message) cil managed { ldnull throw }
+}
+.class public abstract auto ansi sealed beforefieldinit System.Environment extends System.Object
+{
+  .method public hidebysig static string[] GetCommandLineArgs() cil managed { ldnull throw }
+}
+.class public abstract auto ansi sealed beforefieldinit System.Buffer extends System.Object
+{
+  .method public hidebysig static void MemoryCopy(void* source, void* destination, uint64 destinationSizeInBytes,
+                                                  uint64 sourceBytesToCopy) cil managed { ldnull throw }
+  .method public hidebysig static void MemoryCopy(void* source, void* destination, int64 destinationSizeInBytes,
+                                                  int64 sourceBytesToCopy) cil managed { ldnull throw }
+}
+
+.class public auto ansi sealed beforefieldinit System.ObsoleteAttribute extends System.Attribute
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor(string message) cil managed { ldnull throw }
+}
+.class public auto ansi sealed beforefieldinit System.Runtime.Versioning.RequiresPreviewFeaturesAttribute
+       extends System.Attribute
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
+}
+.class public auto ansi sealed beforefieldinit System.Runtime.CompilerServices.ReferenceAssemblyAttribute
+       extends System.Attribute
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
+}
+.class public auto ansi sealed beforefieldinit System.Runtime.InteropServices.InAttribute extends System.Attribute
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
+}
+.class public abstract auto ansi sealed beforefieldinit System.Runtime.CompilerServices.IsVolatile
+       extends System.Object { }
+.class public auto ansi beforefieldinit System.Runtime.CompilerServices.CallConvCdecl extends System.Object
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
+}
+
+#--- System.Runtime.yaml
+# Generated by Inputs/fakepack/gen.py's pe_to_yaml from 'ilasm -dll System.Runtime.il',
+# the part above. Do not edit: change that part and convert it again.
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 10526
+  ImageBase:       4194304
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 1048576
+  SizeOfStackCommit: 4096
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 4096
+  ImportTable:
+    RelativeVirtualAddress: 10436
+    Size:            87
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            8
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8200
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_I386
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_32BIT_MACHINE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     2340
+    SectionData:     0029000000000000480000000200050000210000C4070000010000000000000000000000000000005020000080000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000A147A0A147A0A147A0A147A0A147A0A147A0A147A0A147A0A147A0A147A0A147A0A147A0A147A0A147A0A147A0A147A42534A4201000100000000000C00000076342E302E33303331390000000005006C000000AC030000237E000018040000B002000023537472696E677300000000C80600000800000023555300D0060000100000002347554944000000E0060000E400000023426C6F6200000000000000020000015519A0010100000000FA253300160000010000002300000002000000100000000D00000001000000010000000100000001000000020000000100000000000A000100000000000000000001000000000001000100010110001D0038006000010001000100100058005F000000010002008100100066005F000C00010003008100100070005F001000010003000901100075005F00100001000300090110007A005F001000010003000901100082005F001000010003000901100087005F00100001000300090110008D005F001000010003000901100092005F001000010003000901100098005F00100001000300090110009F005F0010000100030009011000A5005F0010000100030009011000AC005F0010000100030009011000B2005F0010000100030009011000B9005F0010000100030009011000C0005F0010000100030009011000C7005F0010000100030009011000CE005F0010000100030001011000D6005F000C000100030081001000DD005F000C000100030081001000E3005F000C000100030081001000E8005F000C000100030001011000F2005F00600001000400010100000A015F00140001000700010010001B015F000C00030007000100100025015F006C00030008008101100041015F000C0003000A00810110004D015F000C0003000B000101100054015F00600003000D000101100066018701600003000E0001011000A101AD01600003000F0081011000CC0138000C000300100001001000D70138000C000300100006061D021400568025021700D020000000008618E50101000100D320000000008618E50101000100D620000000008418E50101000100D920000000008618E50105000100DC20000000008608F3010B000200DF2000000000860805020F000200E220000000008618E50120000300E520000000008618E50101000400E820000000008618E50120000400EB20000000009600360225000500EE2000000000960049022A000500F120000000009600490234000900F420000000008618E50120000D00F720000000008618E50101000E00FA20000000008618E50101000E00FD20000000008618E50101000E0000000100EB01000001001702000001002E02000001002E02000001005402000002005B02000003006702000004007E02000001005402000002005B02000003006702000004007E02000001002E02080008001B002E000A001B0019000100000090023E000200050003000100060003000000000008000000000000000100000042009E0200000000003C4D6F64756C653E0053797374656D2E52756E74696D652E646C6C005265666572656E6365417373656D626C794174747269627574650053797374656D2E52756E74696D652E436F6D70696C65725365727669636573004F626A6563740053797374656D0056616C75655479706500456E756D00566F696400426F6F6C65616E0043686172005342797465004279746500496E7431360055496E74313600496E7433320055496E74333200496E7436340055496E7436340053696E676C6500446F75626C6500496E745074720055496E7450747200537472696E67004172726179005479706500417474726962757465004174747269627574655573616765417474726962757465004174747269627574655461726765747300457863657074696F6E00456E747279506F696E744E6F74466F756E64457863657074696F6E00456E7669726F6E6D656E7400427566666572004F62736F6C6574654174747269627574650052657175697265735072657669657746656174757265734174747269627574650053797374656D2E52756E74696D652E56657273696F6E696E6700496E4174747269627574650053797374656D2E52756E74696D652E496E7465726F705365727669636573004973566F6C6174696C650043616C6C436F6E76436465636C002E63746F720076616C69644F6E006765745F416C6C6F774D756C7469706C65007365745F416C6C6F774D756C7469706C650076616C75650076616C75655F5F00417373656D626C79006D65737361676500476574436F6D6D616E644C696E6541726773004D656D6F7279436F707900736F757263650064657374696E6174696F6E0064657374696E6174696F6E53697A65496E427974657300736F757263654279746573546F436F707900416C6C6F774D756C7469706C650053797374656D2E52756E74696D65000000000003200000000000823E75218897874CB6BF561CE83136D20003200001052001011168032000020420010102020608030611680401000000042001010E0400001D0E090004010F010F010B0B090004010F010F010A0A0328000280A0002400000480000094000000060200000024000052534131000400000100010007D1FA57C4AED9F0A32E84AA0FAEFD0DE9E8FD6AEC8F87FB03766C834C99921EB23BE79AD9D5DCC1DD9AD236132102900B723CF980957FC4E177108FC607774F29E8320E92EA05ECE4E821C0A5EFE8F1645C4C0C93C1AB99285D622CAA652C1DFAD63D745D6F2DE5F17E5EAF0FC4963D261C8A12436518206DC093344D5AD293EC28000000000000000000000E290000002000000000000000000000000000000000000000000000002900000000000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C0000000000FF2500204000
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000020390000
+symbols:         []
+...
+
+#--- System.Private.CoreLib.il
+// A minimal core library named System.Private.CoreLib 10.0.0.0, as
+// Inputs/fakepack/MiniCore.il: '.mscorlib', no AssemblyRef and no public
+// key, top-level System.Object and System.ValueType only.
+.mscorlib
+.assembly System.Private.CoreLib
+{
+  .ver 10:0:0:0
+}
+.module System.Private.CoreLib.dll
+
+.class public auto ansi beforefieldinit System.Object
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
+}
+.class public abstract auto ansi beforefieldinit System.ValueType extends System.Object { }
+
+#--- System.Private.CoreLib.yaml
+# Generated by Inputs/fakepack/gen.py's pe_to_yaml from 'ilasm -dll System.Private.CoreLib.il',
+# the part above. Do not edit: change that part and convert it again.
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8718
+  ImageBase:       4194304
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 1048576
+  SizeOfStackCommit: 4096
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 4096
+  ImportTable:
+    RelativeVirtualAddress: 8640
+    Size:            75
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            8
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8200
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_I386
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_32BIT_MACHINE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     532
+    SectionData:     F0210000000000004800000002000500542000006C01000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000A147A0042534A4201000100000000000C00000076342E302E33303331390000000005006C00000084000000237E0000F00000005C00000023537472696E6773000000004C010000080000002355530054010000100000002347554944000000640100000800000023426C6F620000000000000002000001450000000100000000FA2533001600000100000003000000010000000100000000000A0001000000000000000000010000000000010001000100100025002C000000010001008100100033002C0008000100020050200000000086183D0001000100000000000A000000000000000000000000004300000000000000003C4D6F64756C653E0053797374656D2E507269766174652E436F72654C69622E646C6C004F626A6563740053797374656D0056616C756554797065002E63746F720053797374656D2E507269766174652E436F72654C69620000000003200000000000F7F34BE477AD264AB4D0B5386E0BA1940003200001000000E82100000000000000000000FE210000002000000000000000000000000000000000000000000000F02100000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C0000000000FF2500204000
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000010320000
+symbols:         []
+...
+
+#--- netstandard-2.0.il
+// A minimal core library named netstandard 2.0.0.0, as
+// Inputs/fakepack/MiniCore.il: '.mscorlib', no AssemblyRef and no public
+// key, top-level System.Object and System.ValueType only.
+.mscorlib
+.assembly netstandard
+{
+  .ver 2:0:0:0
+}
+.module netstandard.dll
+
+.class public auto ansi beforefieldinit System.Object
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
+}
+.class public abstract auto ansi beforefieldinit System.ValueType extends System.Object { }
+
+#--- netstandard-2.0.yaml
+# Generated by Inputs/fakepack/gen.py's pe_to_yaml from 'ilasm -dll netstandard-2.0.il',
+# the part above. Do not edit: change that part and convert it again.
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8702
+  ImageBase:       4194304
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 1048576
+  SizeOfStackCommit: 4096
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 4096
+  ImportTable:
+    RelativeVirtualAddress: 8616
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            8
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8200
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_I386
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_32BIT_MACHINE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     516
+    SectionData:     E0210000000000004800000002000500542000005401000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000A147A0042534A4201000100000000000C00000076342E302E33303331390000000005006C00000084000000237E0000F00000004400000023537472696E6773000000003401000008000000235553003C0100001000000023475549440000004C0100000800000023426C6F620000000000000002000001450000000100000000FA2533001600000100000003000000010000000100000000000A000100000000000000000001000000000001000100010010001A002100000001000100810010002800210008000100020050200000000086183200010001000000000002000000000000000000000000003800000000000000003C4D6F64756C653E006E65747374616E646172642E646C6C004F626A6563740053797374656D0056616C756554797065002E63746F72006E65747374616E646172640000032000000000007D09BA232ED0694285179D134AE050A00003200001000000D02100000000000000000000EE210000002000000000000000000000000000000000000000000000E021000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C0000000000FF2500204000
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000000320000
+symbols:         []
+...
+
+#--- netstandard-2.1.il
+// A minimal core library named netstandard 2.1.0.0, as
+// Inputs/fakepack/MiniCore.il: '.mscorlib', no AssemblyRef and no public
+// key, top-level System.Object and System.ValueType only.
+.mscorlib
+.assembly netstandard
+{
+  .ver 2:1:0:0
+}
+.module netstandard.dll
+
+.class public auto ansi beforefieldinit System.Object
+{
+  .method public hidebysig specialname rtspecialname instance void .ctor() cil managed { ldnull throw }
+}
+.class public abstract auto ansi beforefieldinit System.ValueType extends System.Object { }
+
+#--- netstandard-2.1.yaml
+# Generated by Inputs/fakepack/gen.py's pe_to_yaml from 'ilasm -dll netstandard-2.1.il',
+# the part above. Do not edit: change that part and convert it again.
+--- !COFF
+OptionalHeader:
+  AddressOfEntryPoint: 8702
+  ImageBase:       4194304
+  SectionAlignment: 8192
+  FileAlignment:   512
+  MajorOperatingSystemVersion: 4
+  MinorOperatingSystemVersion: 0
+  MajorImageVersion: 0
+  MinorImageVersion: 0
+  MajorSubsystemVersion: 4
+  MinorSubsystemVersion: 0
+  Subsystem:       IMAGE_SUBSYSTEM_WINDOWS_CUI
+  DLLCharacteristics: [ IMAGE_DLL_CHARACTERISTICS_DYNAMIC_BASE, IMAGE_DLL_CHARACTERISTICS_NX_COMPAT, IMAGE_DLL_CHARACTERISTICS_NO_SEH, IMAGE_DLL_CHARACTERISTICS_TERMINAL_SERVER_AWARE ]
+  SizeOfStackReserve: 1048576
+  SizeOfStackCommit: 4096
+  SizeOfHeapReserve: 1048576
+  SizeOfHeapCommit: 4096
+  ImportTable:
+    RelativeVirtualAddress: 8616
+    Size:            83
+  BaseRelocationTable:
+    RelativeVirtualAddress: 16384
+    Size:            12
+  IAT:
+    RelativeVirtualAddress: 8192
+    Size:            8
+  ClrRuntimeHeader:
+    RelativeVirtualAddress: 8200
+    Size:            72
+header:
+  Machine:         IMAGE_FILE_MACHINE_I386
+  Characteristics: [ IMAGE_FILE_EXECUTABLE_IMAGE, IMAGE_FILE_32BIT_MACHINE, IMAGE_FILE_DLL ]
+sections:
+  - Name:            .text
+    Characteristics: [ IMAGE_SCN_CNT_CODE, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  8192
+    VirtualSize:     516
+    SectionData:     E0210000000000004800000002000500542000005401000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000A147A0042534A4201000100000000000C00000076342E302E33303331390000000005006C00000084000000237E0000F00000004400000023537472696E6773000000003401000008000000235553003C0100001000000023475549440000004C0100000800000023426C6F620000000000000002000001450000000100000000FA2533001600000100000003000000010000000100000000000A000100000000000000000001000000000001000100010010001A002100000001000100810010002800210008000100020050200000000086183200010001000000000002000100000000000000000000003800000000000000003C4D6F64756C653E006E65747374616E646172642E646C6C004F626A6563740053797374656D0056616C756554797065002E63746F72006E65747374616E64617264000003200000000000A8F6897ED849AC4FB9D876D4F8A9D7440003200001000000D02100000000000000000000EE210000002000000000000000000000000000000000000000000000E021000000000000000000000000000000005F436F72446C6C4D61696E006D73636F7265652E646C6C0000000000FF2500204000
+  - Name:            .reloc
+    Characteristics: [ IMAGE_SCN_CNT_INITIALIZED_DATA, IMAGE_SCN_MEM_DISCARDABLE, IMAGE_SCN_MEM_READ ]
+    VirtualAddress:  16384
+    VirtualSize:     12
+    SectionData:     002000000C00000000320000
+symbols:         []
+...

@@ -1,0 +1,90 @@
+# An executable bound to the .NET 8 reference pack, linked as prog.dll, runs as 'dotnet prog.dll' with its prog.runtimeconfig.json.
+# The naming convention of section 12's rows of 2026-10-26 ('M23.d extended
+# (executable naming, msil-ld)', 'M23.c extended (executable naming,
+# tests)' and 'M23.e extended (executable naming, docs)'): a program bound
+# to a .NET reference pack runs only on .NET, so it is named <name>.dll and
+# runs as 'dotnet <name>.dll', with the <name>.runtimeconfig.json that the
+# build system writes (msil-ld writes no runtimeconfig.json and no apphost,
+# decisions of 2026-10-14); msil-ld still writes an EXE image, and a .dll
+# name gets no warning (lld/test/MSIL/output-name-netcore.test has the
+# warning for a .exe name).
+# prog.c uses the data image, argv and the C library, so the link binds
+# System.Runtime and System.Runtime.InteropServices 8.0.0.0 of the pack. The
+# composite runs it with the leg's references against its native
+# transcript. The RUN lines after it compile it with 'clang -c' and link it
+# through the clang driver with -Wl,--reference=%{msil_ref_dir_net8} as
+# prog.dll at -O0 and -O2: the link prints nothing; the image is an EXE
+# image whose module is prog.dll, bound to the pack; it verifies with
+# ILVerify (PEVerify cannot load an image bound to .NET 8 references,
+# bcl-binding 3.5) and force-JITs; the test writes prog.runtimeconfig.json
+# (what the .NET SDK writes for net8.0: Microsoft.NETCore.App 8.0.0 with the
+# default roll-forward) next to it; and the program prints its native
+# transcript when the leg's runner (Windows .NET or WSL) starts it with that
+# file, and, on Windows, when 'dotnet prog.dll' itself starts it from its
+# directory, the way a user runs it (the dotnet host finds the
+# runtimeconfig.json next to the DLL; the transcript is the program's
+# stdout followed by '[exit 0]', compared ignoring the CRs before each LF).
+# REQUIRES: msil-refpack=net8, dotnet-runtime-8, msil-cil-dump
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/prog.c
+# RUN: %{msil_prog}
+# DEFINE: %{dll_level} = O0
+# DEFINE: %{dll_check} = \
+# DEFINE:   rm -rf %t.dll.%{dll_level}.d && mkdir -p %t.dll.%{dll_level}.d \
+# DEFINE:   && %clang_msil %{msil_cflags} -%{dll_level} -c %t/prog.c -o %t.dll.%{dll_level}.d/prog.o \
+# DEFINE:   && %clang_msil -%{dll_level} %{msil_ldflags} %t.dll.%{dll_level}.d/prog.o \
+# DEFINE:      -o %t.dll.%{dll_level}.d/prog.dll > %t.dll.%{dll_level}.d/link.txt 2>&1 \
+# DEFINE:   && count 0 < %t.dll.%{dll_level}.d/link.txt \
+# DEFINE:   && %msil_cil_dump --headers %t.dll.%{dll_level}.d/prog.dll > %t.dll.%{dll_level}.d/headers.txt \
+# DEFINE:   && FileCheck %s --check-prefix=HEADERS --input-file=%t.dll.%{dll_level}.d/headers.txt \
+# DEFINE:   && %msil_cil_dump %t.dll.%{dll_level}.d/prog.dll > %t.dll.%{dll_level}.d/listing.txt \
+# DEFINE:   && FileCheck %s --check-prefix=LISTING --input-file=%t.dll.%{dll_level}.d/listing.txt \
+# DEFINE:      --implicit-check-not="assemblyref 'mscorlib'" \
+# DEFINE:   && cp %t/prog.runtimeconfig.json %t.dll.%{dll_level}.d/prog.runtimeconfig.json \
+# DEFINE:   && %msil_verify --skip-peverify "bound to .NET 8 references" %t.dll.%{dll_level}.d/prog.dll \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %t.dll.%{dll_level}.d/prog.dll %} \
+# DEFINE:   && %msil_exec --runtimeconfig %t.dll.%{dll_level}.d/prog.runtimeconfig.json --expect %S/%{s:stem} \
+# DEFINE:      --out %t.dll.%{dll_level}.out %t.dll.%{dll_level}.d/prog.dll \
+# DEFINE:   %if msil-triple-windows && !msil-wsl %{ && %dotnet %t.dll.%{dll_level}.d/prog.dll \
+# DEFINE:      > %t.dll.%{dll_level}.direct.txt \
+# DEFINE:      && echo "[exit 0]" >> %t.dll.%{dll_level}.direct.txt \
+# DEFINE:      && diff --strip-trailing-cr %S/%{s:stem}.expected %t.dll.%{dll_level}.direct.txt %}
+# REDEFINE: %{msil_ref_flags} = -Wl,--reference=%{msil_ref_dir_net8}
+# RUN: %{dll_check}
+# REDEFINE: %{dll_level} = O2
+# RUN: %{dll_check}
+# HEADERS: {{^}}Format: PE32+ machine={{0x8664|0xAA64}} exe{{$}}
+# LISTING:      {{^}}entrypoint int32(string[]) '<Module>'::'<msil>Main'{{$}}
+# LISTING-NEXT: {{^}}assembly 'prog' ver 0.0.0.0 {{.+}}
+# LISTING-NEXT: {{^}}module 'prog.dll'{{$}}
+# LISTING-DAG:  {{^}}assemblyref 'System.Runtime' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+# LISTING-DAG:  {{^}}assemblyref 'System.Runtime.InteropServices' ver 8.0.0.0 flags=0x00000000 key=B0 3F 5F 7F 11 D5 0A 3A culture=''{{$}}
+#--- prog.c
+#include "msil_test.h"
+
+static int squares[8];
+static const char *const names[] = {"zero", "one", "two", "three"};
+
+int main(int argc, char **argv) {
+  int sum = 0;
+  for (int i = 0; i < 8; ++i)
+    squares[i] = i * i;
+  for (int i = 0; i < 8; ++i)
+    sum += squares[i];
+  put_kv("argc", argc);
+  put_kv("argv[0] is a non-empty string", argv[0] && argv[0][0]);
+  put_kv("argv[argc] is null", !argv[argc]);
+  put_kv("sum of squares", sum);
+  put_str(names[sum % 4]);
+  return 0;
+}
+#--- prog.runtimeconfig.json
+{
+  "runtimeOptions": {
+    "tfm": "net8.0",
+    "framework": {
+      "name": "Microsoft.NETCore.App",
+      "version": "8.0.0"
+    }
+  }
+}

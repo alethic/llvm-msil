@@ -1,31 +1,43 @@
 # calls-arith.c compiled with -g gives the same transcript as without -g, at
 # -O0 and at -O2 (Milestone 4, review-r2 findings 1 and 3; Milestone 7,
-# review-r1 finding 3). The -O2 leg covers the two Milestone-4 failures, which
-# need -O1 or above: with -g at -O1 and above clang turns on call-site info
-# (EmitCallSiteInfo), which the MSIL call lowering must keep in step when it
-# splits and recombines a call ('Call site info was not updated!'), and every
-# x86_64 triple defaults to instruction-referencing variable locations, whose
-# LiveDebugValues assumes the allocated physical registers that MSIL never has
-# (main's named integer locals, such as one, seven and big, carry #dbg_value
-# records). The -O0 leg is the mode in which every parameter and local is a
-# #dbg_declare of a frame slot, which static frames (M7) make reachable. The
-# expected transcript is calls-arith.expected, which update-expected.py
-# generates for calls-arith.c; calls-arith.c runs the same pipeline without -g
-# at every level of %{msil_c}, and each leg here is one level of it plus -g.
-# The RUN lines are Phase 1's pipeline (clang -S, ilasm -dll), which the lit
-# parameter msil_pipeline does not switch, so the test runs only under the
-# default pipeline asm (plan 5.12.13; the lto and obj legs would repeat it
-# unchanged).
-# REQUIRES: msil-pipeline=asm
+# review-r1 finding 3). The -O2 build covers the two Milestone-4 failures,
+# which need -O1 or above: with -g at -O1 and above clang turns on call-site
+# info (EmitCallSiteInfo), which the MSIL call lowering must keep in step when
+# it splits and recombines a call ('Call site info was not updated!'), and
+# every x86_64 triple defaults to instruction-referencing variable locations,
+# whose LiveDebugValues assumes the allocated physical registers that MSIL
+# never has (main's named integer locals, such as one, seven and big, carry
+# #dbg_value records). The -O0 build is the mode in which every parameter and
+# local is a #dbg_declare of a frame slot, which static frames (M7) make
+# reachable. The expected transcript is calls-arith.expected, which
+# update-expected.py generates for calls-arith.c; calls-arith.c runs the same
+# composite without -g.
+# The test is a %{msil_prog} composite of calls-arith.c with %{msil_copts}
+# -g and %{msil_expect} calls-arith (plan 5.12.3, 5.12.13 'obj variants'), so
+# it builds as the leg's pipeline builds a program (clang -c -g and msil-ld
+# under obj, the default, and asm; clang -flto -c -g and the LTO link under
+# lto) at the leg's levels (msil_opt_levels: -O0 and -O2 by default) and
+# gets every leg of a composite: verification, jitall, the run against
+# calls-arith.expected, msil_also_run's runtimes (.NET 10 and .NET 8 with
+# DOTNET_TieredCompilation=0 in net8; WSL .NET 8 and .NET 10 with
+# TieredCompilation=0 on the Linux triple in wsl-net10), the native oracle
+# (calls-arith.c built natively with -g), the round trip and the .NET
+# Framework run. Under asm (the asm-oracle leg) Phase 1's route runs too:
+# clang -S -g and ilasm -dll at -O0 and -O2, so the text AsmPrinter meets the
+# same debug records.
+# REDEFINE: %{msil_srcs} = %S/calls-arith.c
+# REDEFINE: %{msil_copts} = -g
+# REDEFINE: %{msil_expect} = %S/calls-arith
+# RUN: %{msil_prog}
 
-# RUN: %clang_msil %{msil_cflags} -O0 -g -S %S/calls-arith.c -o %t.O0.il
-# RUN: %ilasm -dll -output=%t.O0.dll %t.O0.il
-# RUN: %msil_verify %t.O0.dll
-# RUN: %if msil-jitall %{ %msil_jitall %t.O0.dll %}
-# RUN: %msil_exec --expect %S/calls-arith --out %t.O0.out %t.O0.dll
+# RUN: %if msil-pipeline=asm %{ %clang_msil %{msil_cflags} -O0 -g -S %S/calls-arith.c -o %t.S.O0.il %}
+# RUN: %if msil-pipeline=asm %{ %ilasm -dll -output=%t.S.O0.dll %t.S.O0.il %}
+# RUN: %if msil-pipeline=asm %{ %msil_verify %t.S.O0.dll %}
+# RUN: %if msil-pipeline=asm && msil-jitall %{ %msil_jitall %t.S.O0.dll %}
+# RUN: %if msil-pipeline=asm %{ %msil_exec --expect %S/calls-arith --out %t.S.O0.out %t.S.O0.dll %}
 
-# RUN: %clang_msil %{msil_cflags} -O2 -g -S %S/calls-arith.c -o %t.O2.il
-# RUN: %ilasm -dll -output=%t.O2.dll %t.O2.il
-# RUN: %msil_verify %t.O2.dll
-# RUN: %if msil-jitall %{ %msil_jitall %t.O2.dll %}
-# RUN: %msil_exec --expect %S/calls-arith --out %t.O2.out %t.O2.dll
+# RUN: %if msil-pipeline=asm %{ %clang_msil %{msil_cflags} -O2 -g -S %S/calls-arith.c -o %t.S.O2.il %}
+# RUN: %if msil-pipeline=asm %{ %ilasm -dll -output=%t.S.O2.dll %t.S.O2.il %}
+# RUN: %if msil-pipeline=asm %{ %msil_verify %t.S.O2.dll %}
+# RUN: %if msil-pipeline=asm && msil-jitall %{ %msil_jitall %t.S.O2.dll %}
+# RUN: %if msil-pipeline=asm %{ %msil_exec --expect %S/calls-arith --out %t.S.O2.out %t.S.O2.dll %}

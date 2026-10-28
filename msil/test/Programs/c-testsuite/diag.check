@@ -1,0 +1,3 @@
+; The diagnostic of a 'diag' entry of libc-free.txt, given as -DDIAG=<text>
+; (msil_ctest_format.py), checked as a literal string.
+CHECK: [[DIAG]]

@@ -1,0 +1,5 @@
+# A %{msil_prog} test for ../../update-expected-m23.test (M23): no split-file
+# parts and no split-file command; its sources are files next to it (%S), as
+# the programs of msil/test/Programs name their drivers.
+# REDEFINE: %{msil_srcs} = %S/no-parts-main.c %S/no-parts-util.c
+# RUN: %{msil_prog}

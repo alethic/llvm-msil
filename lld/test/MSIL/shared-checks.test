@@ -4,7 +4,15 @@
 ## - the table version: another major is refused, another minor is read;
 ## - the toolchain ABI version, the triple key (arch, OS, environment
 ##   without its version, object format; the vendor is ignored) and the
-##   data model, with 5.9.14's texts;
+##   data model, with 5.9.14's texts; a program in bitcode is checked
+##   through the header of the first LTO object, once LTO has written it
+##   (5.9.13; section 12 rows of 2026-10-27 'M23.d extended (library data
+##   model under LTO, msil-ld)' and 'M23.c extended (library data model
+##   under LTO, test)'): a linux-gnu library built from IR with wchar_size 2
+##   (data model 8,8,2,8) against a bitcode program with the target's data
+##   layout and wchar_size 4 (8,8,4,8) is the data-model error naming the
+##   LTO object, as the same program as a CIL object is (naming the
+##   object), while a bitcode program with wchar_size 2 links;
 ## - the C runtime against this link's identity (the first -l named c,
 ##   msvcrt, ucrt, ucrtbase, crtdll or msvcr*, else none):
 ##   '<file>: C runtime '<c>' differs from '<c0>' of this link', where none
@@ -32,10 +40,15 @@
 # RUN: llc -filetype=obj ret.ll -o ret.o
 # RUN: llc -filetype=obj libg.ll -o libg.o
 # RUN: llc -filetype=obj progg.ll -o progg.o
+# RUN: llc -filetype=obj wlib.ll -o wlib.o
+# RUN: llc -filetype=obj wprog4.ll -o wprog4.o
+# RUN: llvm-as wprog4.ll -o wprog4.bc
+# RUN: llvm-as wprog2.ll -o wprog2.bc
 # RUN: %python %S/Inputs/make-pe.py --dll native.dll
 # RUN: yaml2obj %S/Inputs/fakepack/FakeCore.yaml -o FakeCore.dll
 # RUN: mkdir out nat stubs gu gn ok vendor envver minor gnu arm linux abi model
 # RUN: mkdir major ucrt magic trailing flags noclass private noaddr noprop nocls
+# RUN: mkdir wl
 # RUN: yaml2obj %S/Inputs/shared/zl-ok.yaml -o ok/zl.dll
 # RUN: yaml2obj %S/Inputs/shared/zl-vendor.yaml -o vendor/zl.dll
 # RUN: yaml2obj %S/Inputs/shared/zl-envver.yaml -o envver/zl.dll
@@ -91,6 +104,19 @@
 # ABI: {{^}}msil-ld: error: abi{{[/\\]}}zl.dll: toolchain ABI version 2 differs from 1 in prog.o{{$}}
 # RUN: not msil-ld prog.o model/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=MODEL
 # MODEL: {{^}}msil-ld: error: model{{[/\\]}}zl.dll: data model {{.+}} differs from {{.+}} in prog.o{{$}}
+
+## The data model of a library against a program in bitcode: the first LTO
+## object's header is the model once LTO has run (wlto.exe.lto.o, named
+## after the output), so wchar_t's 4 bytes differ from the library's 2 as
+## they do for the program as a CIL object; the link writes nothing. With
+## wchar_size 2 the bitcode program links.
+# RUN: msil-ld -shared wlib.o -o wl/wlib.dll 2>&1 | count 0
+# RUN: not msil-ld wprog4.bc wl/wlib.dll -o wlto.exe 2>&1 | %{err} --check-prefix=MODEL-LTO
+# RUN: not ls wlto.exe
+# MODEL-LTO: {{^}}msil-ld: error: wl{{[/\\]}}wlib.dll: data model 8,8,2,8 differs from 8,8,4,8 in wlto.exe.lto.o{{$}}
+# RUN: not msil-ld wprog4.o wl/wlib.dll -o wobj.exe 2>&1 | %{err} --check-prefix=MODEL-OBJ
+# MODEL-OBJ: {{^}}msil-ld: error: wl{{[/\\]}}wlib.dll: data model 8,8,2,8 differs from 8,8,4,8 in wprog4.o{{$}}
+# RUN: msil-ld wprog2.bc wl/wlib.dll -o wl/wprog2.exe 2>&1 | count 0
 
 ## The table version.
 # RUN: not msil-ld prog.o major/zl.dll -o x.exe 2>&1 | %{err} --check-prefix=MAJOR
@@ -180,3 +206,43 @@ define i32 @main() {
   %r = call i32 @g_fn()
   ret i32 %r
 }
+
+#--- wlib.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @w_fn(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"wchar_size", i32 2}
+
+#--- wprog4.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @w_fn(i32)
+
+define i32 @main() {
+  %r = call i32 @w_fn(i32 41)
+  ret i32 %r
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"wchar_size", i32 4}
+
+#--- wprog2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @w_fn(i32)
+
+define i32 @main() {
+  %r = call i32 @w_fn(i32 41)
+  ret i32 %r
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"wchar_size", i32 2}

@@ -1,0 +1,43 @@
+# Matrix P3 row variadic definition across objects: a variadic function defined in one object and called from another is a named diagnostic until phase 3.
+# sum.c defines int sum(int n, ...) with <stdarg.h>; main.c calls it
+# through its prototype (judge-c-fidelity 6.5: a call to a variadic
+# definition; natively 42). Variadic definitions and calls are P3-B (D19,
+# Design.md 4.7): on the object path 'clang -c' of sum.c, the first source,
+# already stops with the variadic-definition diagnostic of code generation,
+# and nothing is linked; main.c alone stops with the variadic-call
+# diagnostic (clang -c, checked at -O2). On the LTO path both TUs compile to
+# bitcode, and code generation inside msil-ld reports the definition, which
+# msil-ld prints; exit status 1 at -O0 and -O2, never a JIT-time exception.
+# A transcript comes with P3-B. Plan 5.9.16 (P3 rows), M23.c.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/sum.c %t/main.c
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat --implicit-check-not="msil-ld:" %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat --implicit-check-not="msil-ld:" %}
+# RUN: %if msil-prog-pipeline=obj %{ not %clang_msil %{msil_cflags} -O2 -c %t/main.c -o %t.main.o 2>&1 | FileCheck %s --check-prefix=OBJ-CALL --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# OBJ:      {{^}}{{.*}}sum.c:3:5: error: variadic function definitions are not supported for MSIL yet{{$}}
+# OBJ-CALL: {{^}}{{.*}}main.c:5:5: error: calls to variadic functions are not supported for MSIL yet{{$}}
+# LTO:      {{^}}msil-ld: error: {{.*}}in function sum {{.*}}: variadic function definitions are not supported for MSIL yet{{$}}
+# LTO:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- sum.c
+#include <stdarg.h>
+
+int sum(int n, ...) {
+  va_list ap;
+  int s = 0;
+  va_start(ap, n);
+  for (int i = 0; i < n; ++i)
+    s += va_arg(ap, int);
+  va_end(ap);
+  return s;
+}
+#--- main.c
+#include "msil_test.h"
+
+int sum(int n, ...);
+
+int main(void) {
+  put_kv("sum(3, 10, 20, 12)", sum(3, 10, 20, 12));
+  return 0;
+}

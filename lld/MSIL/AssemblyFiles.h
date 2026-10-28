@@ -221,6 +221,17 @@ public:
   // references". Returns false after an error.
   bool check(const InputFile *model, ArrayRef<ManagedLibraryFile *> libraries);
 
+  // The rest of the data model once LTO has written its objects (plan 5.8.9,
+  // 5.9.13: a bitcode input's data model is checked through the LTO
+  // objects' headers): when check() passed with a bitcode file as the model,
+  // which gave only the pointer and long sizes, compares the table's wchar_t
+  // and long double sizes with the header of \p lto, the first LTO object,
+  // and reports "<file>: data model <m> differs from <m0> in <lto>" (5.9.14).
+  // Does nothing when check() had a CIL object as the model, had none, or
+  // failed. SymbolTable::compileBitcodeFiles() calls it, before late binding.
+  // Returns false after an error.
+  bool checkLTODataModel(const ObjFile &lto);
+
   // The identity of the Assembly row (no key: a toolchain library has none).
   const AssemblyIdentity &getIdentity() const { return identity; }
   const llvm::cli::LibrarySymbolTable &getTable() const { return table; }
@@ -284,6 +295,9 @@ private:
   SmallVector<ManagedExport *, 0> exportList;
   llvm::StringMap<ManagedExport *> exportMap;
   bool parsed = false;
+  // Set by check() when it passed against a bitcode model, whose wchar_t and
+  // long double sizes checkLTODataModel() compares after LTO.
+  bool needsLTODataModel = false;
 };
 
 // The driver's one path for a library built by this toolchain (plan 5.9.2,

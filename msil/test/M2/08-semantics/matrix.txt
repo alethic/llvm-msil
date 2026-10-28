@@ -1,0 +1,98 @@
+# The link-semantics matrix (ImplementationPlan.md 5.9.16 and 5.12.7,
+# condition 5): one line per row of 5.9.16 and per variant of a row, and
+# the other tests of this directory. Inputs/check-matrix.py (run by
+# matrix-coverage.test) checks each line against its tests; its docstring
+# has the rules.
+#
+# Columns, separated by '|':
+#   case        the 5.9.16 row, or <row>/<variant>
+#   tests       relative to msil/test/M2, or to the repository (llvm/...)
+#   native      transcript | link error | UB | n/a, then ': <what>'
+#   pipelines   asm, obj, lto (obj and lto: %{msil_prog} in the legs whose
+#               msil-prog-pipeline is obj or lto)
+#   triples     linux-gnu (x86_64-unknown-linux-gnu-msil, WSL .NET 10 and the
+#               private .NET 8), windows-msvc (x86_64-pc-windows-msvc-msil,
+#               .NET 8, .NET 10 and Framework 4.8)
+#   Phase 2     transcript (the native one, at -O0 and -O2 and every level of
+#               the leg) | diag:<text> (a named diagnostic, exit status 1, at
+#               -O0 and -O2; '<...>' is a part the test matches as a
+#               pattern) | untested: <reason> | object: <what>
+#   milestones  5.9.16's 'From' column; 'P3...' marks a P3 row, whose
+#               transcript comes in phase 3 and whose test pins the Phase 2
+#               diagnostic
+#
+# case | tests | native | pipelines | triples | Phase 2 | milestones
+
+# The zoo (objfmt-binding-files/zoo).
+zoo | 08-semantics/zoo.test | transcript: 63 | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+zoo-archive | 08-semantics/zoo-archive.test | transcript: 63 | obj,lto | linux-gnu,windows-msvc | transcript: the weak undefined maybe does not extract c.o | M14 lto, M20 obj
+zoo-defined | 08-semantics/zoo-defined.test | transcript: 223 | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+
+# judge-c-fidelity's probes p1-p9.
+p1-weak-alias | 08-semantics/p1-weak-alias.test | transcript: 144 | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+p1-weak-alias/reversed | 08-semantics/p1-weak-alias-reversed.test | transcript: 144 | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+p1-weak-alias/kept | 08-semantics/p1-weak-alias-kept.test | transcript: 114 | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+p1-weak-alias/main | 08-semantics/p1-weak-alias-main.test | transcript: 144 | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+p1-weak-alias/main-kept | 08-semantics/p1-weak-alias-main-kept.test | transcript: 114 | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+p2-knr | 08-semantics/p2-knr.test | transcript: 23 | obj,lto | linux-gnu,windows-msvc | transcript: the obj link adapts with a warning | M14 lto, M20 obj
+p3-start-stop/linux | 08-semantics/p3-start-stop.test | transcript: 15 | obj,lto | linux-gnu | transcript | M20
+p3-start-stop/windows | 08-semantics/p3-start-stop-windows.test | link error: COFF linkers define no __start_/__stop_ | obj,lto | windows-msvc | diag:undefined symbol: __start_myreg | M20
+p4-selectany | 08-semantics/p4-selectany.test | transcript: 15 | obj,lto | windows-msvc | transcript | M14 lto, M20 obj
+p5-tls | 08-semantics/p5-tls.test | transcript: 12 | obj,lto | linux-gnu,windows-msvc | diag:thread-local variable @tcount is not supported for MSIL yet | M14 lto, M20 obj; the transcript from P3-A
+p6-ctors | 08-semantics/p6-ctors.test | transcript: BCDM | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+p6-dtors | 08-semantics/p6-dtors.test | transcript: BCDM, then the destructors at exit (the E7 oracle runs no .fini_array; Windows faults at exit, J9) | obj,lto | linux-gnu,windows-msvc | diag:global destructor @d150 is not supported for MSIL yet | M14 lto, M20 obj; the transcript from P3-A
+p7-flags | llvm/test/CodeGen/MSIL/object-p7-flags.ll | n/a: object content | obj | linux-gnu,windows-msvc | object: SIGNATURES, DLLIMPORT (windows-msvc), LINKER_OPTIONS (5.8.8) | M19
+p8-section-ctor | 08-semantics/p8-section-ctor.test | transcript: 42 | asm,obj,lto | linux-gnu,windows-msvc | transcript | M12 asm (diagnostic), M20 every pipeline
+p9-weak-common | 08-semantics/p9-weak-common.test | transcript: 1 | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+p9-weak-common/reversed | 08-semantics/p9-weak-common-reversed.test | transcript: 1 | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+
+# Signature checks and adapters (judge-c-fidelity 6.5, plan 5.9.8).
+knr-two-arities | 08-semantics/knr-two-arities.test | transcript: 3 | obj,lto | linux-gnu,windows-msvc | transcript: obj has two MemberRefs with NO_PROTOTYPE and the missing-argument adapter with its warning | M19 lto, M20 obj; M23 every pipeline, triple and runtime
+sig-mismatch | 08-semantics/sig-mismatch.test | transcript: 41 | obj,lto | linux-gnu,windows-msvc | transcript: adapter and warning | M14 lto, M20 obj
+weak-def-sig-mismatch | 08-semantics/weak-def-sig-mismatch.test | transcript: the strong definition's result | obj,lto | linux-gnu,windows-msvc | transcript: adapter and warning | M20 (obj, lto)
+weak-def-sig-mismatch/double | 08-semantics/weak-def-sig-mismatch.test | UB: an integer argument read as a double | obj,lto | linux-gnu,windows-msvc | diag:function signature mismatch: f | M20 (obj, lto)
+int-ptr-adapter | 08-semantics/int-ptr-adapter.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript: adapter and warning | M20
+missing-arg-adapter | 08-semantics/missing-arg-adapter.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript: adapter and warning | M20
+float-int-mismatch | 08-semantics/float-int-mismatch.test | UB: the callee reads a register the caller never set | obj,lto | linux-gnu,windows-msvc | diag:function signature mismatch: half_of | M20 (obj, lto)
+narrow-arg-mismatch | 08-semantics/narrow-arg-mismatch.test | transcript: 200 and -56 | obj,lto | linux-gnu,windows-msvc | transcript: both pipelines in every leg, with their warnings | M20 (5.9.8: the object and LTO paths agree)
+narrow-result-mismatch | 08-semantics/narrow-result-mismatch.test | transcript: 200 and 50000 | obj,lto | linux-gnu,windows-msvc | transcript | M20 (5.9.8: the object and LTO paths agree)
+
+# Constructors, sections and the image (plan 5.9.9, 5.9.11).
+ctor-slot-order | 08-semantics/ctor-slot-order.test | transcript: the slot's letter, then the constructor's (non-LTO native) | obj,lto | linux-gnu,windows-msvc | transcript | M20 (obj, lto)
+common-largest | 08-semantics/common-largest.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript: the largest common wins | M20
+unaligned-reloc | 08-semantics/unaligned-reloc.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M20
+gc-used-retain | 08-semantics/gc-used-retain.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M20
+section-bracket | 08-semantics/section-bracket.test | transcript: 82 (Linux), 235 (Windows) | obj | linux-gnu,windows-msvc | transcript | M20 (obj only: under -flto LTO drops the unreferenced entries, as native LTO does)
+initarray-args/linux | 08-semantics/initarray-args.test | transcript: glibc passes argc, argv and envp | obj,lto | linux-gnu | transcript | M22 (row 'M22.f extended (Rust-found defect 4, execution)')
+initarray-args/windows | 08-semantics/initarray-args.test | UB: MSVC's CRT calls '.CRT$XC*' entries without arguments | obj,lto | windows-msvc | diag:global constructor '<c>' takes arguments, which MSIL does not pass | M22 (row 'M22.f extended (Rust-found defect 4, execution)')
+
+# Resolution (plan 5.9.5, 5.9.6, 5.10.10).
+type-mismatch | 08-semantics/type-mismatch.test | UB: a function used as data | obj,lto | linux-gnu,windows-msvc | diag:symbol type mismatch: value | M14 lto, M20 obj
+duplicate-strong | 08-semantics/duplicate-strong.test | link error: duplicate symbol | obj,lto | linux-gnu,windows-msvc | diag:duplicate symbol: shared | M14 lto, M20 obj
+undefined | 08-semantics/undefined.test | link error: undefined symbol | obj,lto | linux-gnu,windows-msvc | diag:undefined symbol: missing_fn | M14 lto, M20 obj
+weak-undef-guarded | 08-semantics/weak-undef-guarded.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+
+# Native libraries and the C import attributes (plan 5.10).
+import-attrs | 08-semantics/import-attrs.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M20 (obj, lto)
+pragma-comment-lib | 08-semantics/pragma-comment-lib.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M15 lto, M20 obj
+native-callback | 08-semantics/native-callback.test | transcript: the sorted array | obj,lto | linux-gnu,windows-msvc | diag:native function 'qsort' (<module>) takes a C function pointer; passing functions to native code needs phase 3 thunks | M15 lto, M20 obj; the transcript from P3-B
+
+# tests-p2 3.1's plain multi-TU cases, in 00-link.
+static-same-name | 00-link/static-same-name.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+inline-comdat | 00-link/inline-comdat.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+byval-sret-xtu | 00-link/byval-sret-xtu.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+knr-def-xtu | 00-link/knr-def-xtu.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+main-not-first | 00-link/main-not-first.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+data-only-tu | 00-link/data-only-tu.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
+
+# P2-C rows (M22): assemblies have no global symbol scope.
+p2c-bsymbolic | 08-semantics/p2c-bsymbolic.test | transcript: -Bsymbolic native libraries | obj,lto | linux-gnu,windows-msvc | transcript: each assembly calls its own definition, with msil-ld's warning | M22
+p2c-cycle | 08-semantics/p2c-cycle.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M22
+p2c-weak-def | 08-semantics/p2c-weak-def.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M22
+
+# P3 rows: transcripts in phase 3; until then each test pins the Phase 2
+# diagnostic (p5-tls, p6-dtors and native-callback above are P3 rows too).
+fini-array | 08-semantics/fini-array.test | transcript: main, then the .fini_array entry at exit (glibc) | obj,lto | linux-gnu | diag:global destructors are not supported yet: p_fini in <file> | P3-A
+crt-xt | 08-semantics/crt-xt.test | transcript: main, then the .CRT$XT entry at exit (MSVC CRT) | obj,lto | windows-msvc | diag:global destructors are not supported yet: p_term in <file> | P3-A
+atexit-order | 08-semantics/atexit-order.test | transcript: the handlers in the reverse order of registration | obj,lto | linux-gnu,windows-msvc | diag:undefined symbol: atexit | P3 (5.10.10: atexit binds nowhere in Phase 2)
+variadic-def-xtu | 08-semantics/variadic-def-xtu.test | transcript: 42 | obj,lto | linux-gnu,windows-msvc | diag:variadic function definitions are not supported for MSIL yet | P3-B (D19)

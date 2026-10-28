@@ -1,0 +1,18 @@
+# Two builds of the monocypher program give identical objects, archives and image.
+# %{msil_det} builds the program of ../monocypher/monocypher.test twice at -O2, in two
+# directories from relative paths, and compares every CIL object (bitcode under
+# lto), the archives that llvm-ar writes and msil-ld's image byte for byte
+# (plan 5.12.4, 5.12.9; M23). check-recipe.py fails when the REDEFINE lines
+# here differ from that test's, so both build the same program.
+# REQUIRES: msil-corpus-monocypher
+# REDEFINE: %{msil_srcs} = %S/../monocypher/monocypher_main.c
+# REDEFINE: %{msil_archives} = monocypher=%{msil_corpus}/monocypher-4.0.2/src/monocypher.c, \
+# REDEFINE:   %{msil_corpus}/monocypher-4.0.2/src/optional/monocypher-ed25519.c; \
+# REDEFINE:   sup=%S/../support/sup_arena.c,%S/../support/sup_malloc.c,%S/../support/sup_memcmp.c, \
+# REDEFINE:   %S/../support/sup_memset.c,%S/../support/sup_memcpy.c,%S/../support/sup_strlen.c, \
+# REDEFINE:   %S/../support/sup_out.c
+# REDEFINE: %{msil_copts} = -isystem %S/../shim -I%S/../support \
+# REDEFINE:   -I%{msil_corpus}/monocypher-4.0.2/src -I%{msil_corpus}/monocypher-4.0.2/src/optional \
+# REDEFINE:   -Werror=implicit-function-declaration -w
+# RUN: %python %S/check-recipe.py %s %S/../monocypher/monocypher.test
+# RUN: %{msil_det}

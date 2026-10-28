@@ -8,10 +8,11 @@
 # 'jitall: N ok, 0 failed'. Without the %msil_jitall step of c_pipeline or
 # ll_pipeline in lit.cfg.py the summaries are missing (and without the
 # %msil_verify step the verify commands; verify-runs.test shows that a
-# rejected module fails the run).
+# rejected module fails the run). The nested lit selects the asm pipeline,
+# which these checks describe (the default is obj from M23).
 # REQUIRES: msil-jitall
 
-# RUN: %{harness_lit} -a %S/Inputs/jitall-levels.c %S/Inputs/jitall-levels-ir.ll > %t.log 2>&1
+# RUN: %{harness_lit} -a --param msil_pipeline=asm %S/Inputs/jitall-levels.c %S/Inputs/jitall-levels-ir.ll > %t.log 2>&1
 # RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/pipeline/Inputs/jitall-levels\.c " "^PASS: MSIL :: harness/pipeline/Inputs/jitall-levels-ir\.ll "
 # RUN: %if msil-opt-O0 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels\.c\.tmp\.O0\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels\.c\.tmp\.O0\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}
 # RUN: %if msil-opt-O1 %{ %{harness_check} contains %t.log "^# executed command: .*msil-verify\.py .*jitall-levels\.c\.tmp\.O1\.dll'?$" "^# executed command: .*msil-jitall\.py .*jitall-levels\.c\.tmp\.O1\.dll'?\n# \.-+command stdout-+\n# \| jitall: \d+ ok, 0 failed$" %}

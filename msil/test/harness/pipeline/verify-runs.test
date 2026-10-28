@@ -7,10 +7,11 @@
 # own failure report, and without the %msil_verify step of c_pipeline or
 # ll_pipeline in lit.cfg.py they would pass. lit.cfg.py keeps Inputs/ out of
 # discovery, so a nested lit runs them. jitall-runs.test shows the jitall
-# step.
+# step. The nested lit selects the asm pipeline (the default is obj from
+# M23).
 # REQUIRES: msil-ilverify
 
-# RUN: not %{harness_lit} %S/Inputs/bad-switch.c %S/Inputs/bad-switch-ir.ll > %t.log 2>&1
+# RUN: not %{harness_lit} --param msil_pipeline=asm %S/Inputs/bad-switch.c %S/Inputs/bad-switch-ir.ll > %t.log 2>&1
 # RUN: %{harness_check} contains %t.log "^FAIL: MSIL :: harness/pipeline/Inputs/bad-switch\.c " "^FAIL: MSIL :: harness/pipeline/Inputs/bad-switch-ir\.ll "
 # RUN: %{harness_check} contains %t.log "TEST 'MSIL :: harness/pipeline/Inputs/bad-switch\.c' FAILED \*+\n(?:(?!\*{20}$).*\n)*?.*StackUnexpected.*::main\(\).*\[found Native Int\]\[expected Int32\]"
 # RUN: %{harness_check} contains %t.log "TEST 'MSIL :: harness/pipeline/Inputs/bad-switch-ir\.ll' FAILED \*+\n(?:(?!\*{20}$).*\n)*?.*StackUnexpected.*::main\(\).*\[found Native Int\]\[expected Int32\]"

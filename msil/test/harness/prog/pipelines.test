@@ -1,5 +1,6 @@
 # --param msil_pipeline and msil_link_output (plan 5.12.1, 5.12.2; M14, M20):
-# (1) under asm (the default) %{msil_c} keeps Phase 1's expansion (clang -S,
+# (1) under asm (the asm oracle; obj is the default from M23, which
+#     ../default-pipeline.test pins) %{msil_c} keeps Phase 1's expansion (clang -S,
 #     ilasm -dll; ../pipeline pins it in detail) and never runs msil-prog.py,
 #     while %{msil_prog} is obj's from M20 (no text linker): the features are
 #     msil-pipeline=asm, msil-prog-pipeline=obj and msil-link-output=pe;
@@ -22,7 +23,9 @@
 # throughout. A nested lit with -a prints every command it ran; it runs
 # Inputs/nested/one-source.c (%{msil_c_O2}) and Inputs/nested/features.test
 # (it echoes the features) on the local runner, where the stand-ins of
-# lit.local.cfg run on every host.
+# lit.local.cfg run on every host. one-source.c and one-ir.ll are this
+# test's own (Inputs/nested/lit.local.cfg): its nested runs of each, which
+# share one %t work directory, run one after another.
 # (5) %{msil_ll} stays on llc text under asm and lto: a nested lit of its own
 #     per pipeline, at -O2 only, runs Inputs/nested/one-ir.ll (%{msil_ll});
 #     its commands are llc for the MSIL triple (the stand-in

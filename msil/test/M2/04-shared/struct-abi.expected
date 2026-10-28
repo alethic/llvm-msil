@@ -1,0 +1,23 @@
+make_big(3)
+  a=3000000021
+  b=-3
+  c * 4=6
+  d[i]=300
+  d[i]=301
+  d[i]=302
+  d[i]=303
+  d[i]=304
+sum_big(make_big(7))=3565
+sum_big(mine)=1533
+mine after sum_big
+  a=3000000021
+  b=-3
+  c * 4=6
+  d[i]=300
+  d[i]=301
+  d[i]=302
+  d[i]=303
+  d[i]=304
+knr_scale(1.25f, 4) * 100=500
+knr_scale(-2.5f, 3) * 100=-750
+[exit 0]

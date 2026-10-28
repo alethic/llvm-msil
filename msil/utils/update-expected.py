@@ -74,9 +74,11 @@ composites are %{msil_prog_fail_<L>} (a named diagnostic, no transcript) or
 are always processed as %{msil_c} or %{msil_ll} tests.
 
 A %{msil_prog} test (a .test file in the format of plan 5.12.5) is built the
-way the native-oracle leg of %{msil_prog} builds it: its split-file parts are
-written into a temporary directory (split-file, default next to --clang, else
-on PATH; or --split-file), its REDEFINE: lines give %{msil_srcs} (default:
+way the native-oracle leg of %{msil_prog} builds it: its split-file parts, if
+it has any (a part separator line, or 'rm -rf %t && split-file %s %t' before
+its composite), are written into a temporary directory (split-file, default
+next to --clang, else on PATH; or --split-file, needed only by such a test),
+its REDEFINE: lines give %{msil_srcs} (default:
 the test file), %{msil_stock_srcs} and %{msil_archives} with %s, %S, %p, %t
 and %{s:stem} replaced (%t is that directory), and 'msil-prog.py --mode
 native' builds them at --opt with --cflags, the --target triple's
@@ -106,6 +108,25 @@ when the features the oracle knows decide it whatever the other features are:
 msil-triple-windows, msil-triple-linux and msil-triple=<target>-msil follow
 --target, system-<host os> the host and msil-wsl the E7 oracle.
 
+M23 (plan 5.12.3, 5.12.4): REDEFINE: values may use %{msil_corpus}, the
+exit corpus' cache (--corpus-dir: default $MSIL_CORPUS_CACHE, else
+C:\\llvm-msil-scratch\\corpus-cache on Windows and ~/.cache/msil-corpus
+elsewhere, as lit's msil_corpus_dir and msil/utils/corpus/fetch.py default
+it), so the programs of msil/test/Programs build natively from the sources
+that fetch.py verified; %{msil_copts} adds compile flags to the native build
+(after the C flags, as msil-prog.py's --cflags gets them from lit); and
+%{msil_expect} names the expected file's stem (default the test's own, as
+lit's %S/%{s:stem}), so <stem>[.<os>].expected is written or checked there.
+A directory whose lit.local.cfg, or that of a directory above it up to
+msil/test (lit inherits it), sets config.suffixes to the one suffix ".test"
+(in any quoting: [".test"], ['.test'], (".test",), ...) contributes only its
+.test files (msil/test/Programs: the drivers, support files and shims are no
+tests, also when only msil/test/Programs/support is named), the %{msil_det}
+tests of msil/test/Programs/det are skipped as every determinism test is,
+and a directory with a libc-free.txt (c-testsuite's lit test format, one
+test per listed name against one shared exit0.expected; the name is the one
+msil/test/Programs/c-testsuite/lit.local.cfg opens) is skipped as a whole.
+
 --clang may also be a command line (a stand-in compiler of the harness
 self-tests, written as msil-prog.py's --clang takes it).
 
@@ -115,6 +136,7 @@ matched, 1 otherwise.
 """
 
 import argparse
+import ast
 import concurrent.futures
 import difflib
 import glob
@@ -142,9 +164,12 @@ RUN_RE = re.compile(r"(?<![\w-])RUN:(.*)$")
 # Any composite of msil/test/lit.cfg.py: the RUN: commands before the first
 # one prepare the test's inputs (see Oracle.prepare).
 COMPOSITE_RE = re.compile(r"%\{msil_(?:prog|det|c|ll)(?:_\w+)?\}")
-# The preparation every %{msil_prog} test starts with, which build_prog does
-# itself.
+# The preparation every %{msil_prog} test with split-file parts starts with,
+# which build_prog does itself.
 SPLIT_ONLY_RE = re.compile(r"^rm\s+-rf\s+%t\s+&&\s+split-file\s+%s\s+%t$")
+# A split-file part separator, as split-file itself accepts it:
+# '^(.|//)--- <part>' ('#--- ', '//--- ', ';--- ', ...).
+SPLIT_PART_RE = re.compile(r"^(?://|.)--- ")
 # A substitution of lit.cfg.py that the preparation does not know.
 UNKNOWN_SUBST_RE = re.compile(r"%(?:\{[^}]*\}|[A-Za-z_][\w]*)")
 REDEFINE_RE = re.compile(r"^\s*(%\{[_a-zA-Z][-_:0-9a-zA-Z]*\})\s*=(.*)$")
@@ -156,6 +181,21 @@ DEFAULT_CFLAGS = "-std=gnu17 -ffreestanding -Werror=return-type"
 E7_TARGET = "x86_64-unknown-linux-gnu"
 E7_LIBS = ("libm.so.6", "libc.so.6", "libgcc_s.so.1")
 DEFAULT_LINUX_SYSROOT = r"C:\llvm-msil-scratch\linux-sysroot"
+# The exit corpus' cache (plan 5.12.9), as fetch.py and lit default it.
+DEFAULT_CORPUS_CACHE = (
+    r"C:\llvm-msil-scratch\corpus-cache"
+    if os.name == "nt"
+    else os.path.join(os.path.expanduser("~"), ".cache", "msil-corpus")
+)
+# A lit.local.cfg that makes its directory a suite of .test files only: the
+# fallback of test_only_dir for a file that does not parse as Python.
+TEST_ONLY_SUFFIXES_RE = re.compile(
+    r"^\s*config\.suffixes\s*=\s*[\[(]\s*[rRuU]?[\"']\.test[\"']\s*,?\s*[\])]", re.M
+)
+# The file c-testsuite's lit test format reads its test names from
+# (msil/test/Programs/c-testsuite/lit.local.cfg opens the same name); a
+# directory that holds it is skipped as a whole.
+CTEST_LIST = "libc-free.txt"
 # lit's internal shell runs one preparation at a time (Oracle.prepare).
 PREPARE_LOCK = threading.Lock()
 
@@ -278,6 +318,11 @@ class TestInfo:
         # The RUN: commands before the first composite (continuation lines
         # joined as lit joins them): what a test runs to prepare its inputs.
         self.prep = []
+        # Whether the test has split-file parts (a part separator line, or
+        # the usual 'rm -rf %t && split-file %s %t' before its composite):
+        # build_prog splits only such a test (M23: the programs of
+        # msil/test/Programs have none; their sources are files in %S).
+        self.split_parts = False
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
                 lines = f.read().splitlines()
@@ -287,6 +332,7 @@ class TestInfo:
         pending = None  # a REDEFINE: body continued with a trailing '\'
         runs, composite_seen = [], False
         for line in lines:
+            self.split_parts = self.split_parts or bool(SPLIT_PART_RE.match(line))
             single = single or bool(ORACLE_RUN_RE.search(line))
             prog = prog or bool(PROG_RUN_RE.search(line))
             fail = fail or bool(FAIL_RUN_RE.search(line))
@@ -323,6 +369,9 @@ class TestInfo:
             composite_seen = composite_seen or bool(COMPOSITE_RE.search(cmd))
             if not composite_seen:
                 self.prep.append(cmd.strip())
+        self.split_parts = self.split_parts or any(
+            SPLIT_ONLY_RE.match(c) for c in self.prep
+        )
         if prog:
             self.kind = "prog"
         elif single and path.endswith((".c", ".ll")):
@@ -392,17 +441,85 @@ def evaluate(expr, features, unknown):
     return results.pop() if len(results) == 1 else unknown
 
 
+def suffixes_test_only(text):
+    """True if the lit.local.cfg text sets config.suffixes to the one suffix
+    ".test", in any quoting ([".test"], ['.test'], (".test",), ...); the last
+    such assignment at the top level decides, as lit runs the file."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return bool(TEST_ONLY_SUFFIXES_RE.search(text))
+    found = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Attribute)
+                and target.attr == "suffixes"
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "config"
+            ):
+                try:
+                    value = ast.literal_eval(node.value)
+                except (ValueError, TypeError, SyntaxError):
+                    found = False
+                    continue
+                found = isinstance(value, (list, tuple, set)) and list(value) == [".test"]
+    return bool(found)
+
+
+def test_only_dir(path):
+    """True if the lit.local.cfg of the directory path makes it a suite of
+    .test files only (config.suffixes = [".test"])."""
+    try:
+        with open(os.path.join(path, "lit.local.cfg"), encoding="utf-8") as f:
+            return suffixes_test_only(f.read())
+    except OSError:
+        return False
+
+
+def test_only_above(path):
+    """True if a directory above path, up to msil/test, is a .test-only
+    suite: lit's configuration is inherited, so a walk that starts below
+    msil/test/Programs (msil/test/Programs/support) is one too."""
+    root = os.path.normcase(os.path.abspath(TEST_ROOT))
+    d = os.path.abspath(path)
+    while os.path.normcase(d) != root:
+        parent = os.path.dirname(d)
+        if parent == d or not os.path.normcase(parent).startswith(root):
+            return False
+        d = parent
+        if test_only_dir(d):
+            return True
+    return False
+
+
 def collect(paths):
-    """(path, explicit) for every test source to process."""
+    """(path, explicit) for every test source to process, and (directory,
+    None) for a directory of c-testsuite's format, which is skipped."""
     for p in paths:
-        if os.path.isdir(p):
-            for root, dirs, files in os.walk(p):
-                dirs[:] = sorted(d for d in dirs if d not in ("Inputs", "Output"))
-                for f in sorted(files):
-                    if f.endswith((".c", ".ll", ".test")):
-                        yield os.path.join(root, f), False
-        else:
+        if not os.path.isdir(p):
             yield p, True
+            continue
+        # The .test-only directories (their lit.local.cfg); lit's
+        # configuration is inherited, so their subdirectories are too, and so
+        # is p when a directory above it is one.
+        tests_only = {p} if test_only_above(p) else set()
+        for root, dirs, files in os.walk(p):
+            if CTEST_LIST in files:
+                dirs[:] = []
+                yield root, None
+                continue
+            dirs[:] = sorted(d for d in dirs if d not in ("Inputs", "Output"))
+            if root in tests_only or test_only_dir(root):
+                tests_only.update(os.path.join(root, d) for d in dirs)
+                suffixes = (".test",)
+            else:
+                suffixes = (".c", ".ll", ".test")
+            for f in sorted(files):
+                if f.endswith(suffixes):
+                    yield os.path.join(root, f), False
 
 
 def read_expected(path):
@@ -488,6 +605,12 @@ class Oracle:
             lang = ["-Wno-override-module"]
         else:
             lang = args.cflags.split() + ["-I", os.path.join(TEST_ROOT, "Inputs")]
+            try:
+                lang += self.copts(TestInfo(src), src)
+            except (msil_prog.UsageError, ValueError) as e:
+                # As build_prog reports it: no native build without the flags.
+                log.err("update-expected: %s: %%{msil_copts}: %s\n" % (src, e))
+                return None, None
         if not self.e7:
             exe = os.path.join(work, name + ".exe")
             cmd = [*args.clang_cmd, "--target=" + args.target, args.opt] + lang
@@ -528,10 +651,15 @@ class Oracle:
         it, or (None, None)."""
         args, src = self.args, info.path
         t = os.path.join(work, "t")
-        if not args.split_file_cmd:
+        if not info.split_parts:
+            # No parts to write (M23: msil/test/Programs names its sources
+            # in %S and %{msil_corpus}), so no split-file is needed; %t is
+            # an empty directory for the preparation commands.
+            os.makedirs(t, exist_ok=True)
+        elif not args.split_file_cmd:
             log.err("update-expected: no split-file found; pass --split-file PATH\n")
             return None, None
-        if not self.step([*args.split_file_cmd, src, t], "split-file", log):
+        elif not self.step([*args.split_file_cmd, src, t], "split-file", log):
             return None, None
         test_dir = os.path.dirname(os.path.abspath(src))
         stem = os.path.splitext(os.path.basename(src))[0]
@@ -545,6 +673,7 @@ class Oracle:
             if "%if " in text:
                 text = self.decide_if(text)
             for key, sub in (
+                ("%{msil_corpus}", args.corpus_dir.replace("\\", "/")),
                 ("%{s:stem}", stem),
                 ("%s", os.path.abspath(src)),
                 ("%S", test_dir),
@@ -564,6 +693,7 @@ class Oracle:
             archives = value("%{msil_archives}", "", False)
             shlibs = value("%{msil_shlibs}", "", False)
             native_libs = value("%{msil_native_libs}", "", True)
+            copts = msil_prog.split_words(value("%{msil_copts}", "", True))
         except (msil_prog.UsageError, ValueError) as e:
             log.err("update-expected: %s: %s\n" % (src, e))
             return None, None
@@ -574,8 +704,10 @@ class Oracle:
             for m in (sorted(glob.glob(d)) if glob.has_magic(d) else [d]) or [d]
         ]
         exe = os.path.join(work, "prog." + ("elf" if self.e7 else "exe"))
-        # -I<dir> as one word, as %{msil_cflags} writes it.
+        # -I<dir> as one word, as %{msil_cflags} writes it, then the test's
+        # %{msil_copts}, as lit's '%{msil_cflags} %{msil_copts}' gives them.
         cflags = args.cflags.split() + ["-I" + os.path.join(TEST_ROOT, "Inputs")]
+        cflags += copts
         cmd = [sys.executable, os.path.join(HERE, "msil-prog.py"), "--mode", "native"]
         cmd += ["--triple", args.target + "-msil", "--level", args.opt[1:]]
         cmd += ["--clang=" + args.clang, "--cflags=" + msil_prog.join_words(cflags)]
@@ -613,6 +745,45 @@ class Oracle:
         # --dep-dir).
         run = self.run_mode() + ["--dep-dir", os.path.join(work, "prog", "shlib")]
         return exe, run + (["--dep", *deps] if deps else [])
+
+    def placeholder(self, info, src, name, default):
+        """The REDEFINE: value of the placeholder name of the test src (info
+        is its TestInfo), with %if decided and %{msil_corpus}, %{s:stem},
+        %s, %S and %p replaced (M23), or default."""
+        text = info.redefines.get(name)
+        if text is None:
+            return default
+        if "%if " in text:
+            text = self.decide_if(text)
+        test_dir = os.path.dirname(os.path.abspath(src))
+        for key, sub in (
+            ("%{msil_corpus}", self.args.corpus_dir.replace("\\", "/")),
+            ("%{s:stem}", os.path.splitext(os.path.basename(src))[0]),
+            ("%s", os.path.abspath(src)),
+            ("%S", test_dir),
+            ("%p", test_dir),
+        ):
+            text = text.replace(key, sub)
+        return text
+
+    def copts(self, info, src):
+        """The words of the %{msil_copts} REDEFINE: of a single-source test;
+        raises msil_prog.UsageError for a value that does not split into
+        words (an unterminated quote) and ValueError for an %if that lit
+        cannot decide."""
+        text = self.placeholder(info, src, "%{msil_copts}", "")
+        return msil_prog.split_words(text)
+
+    def expect_stem(self, info, src):
+        """The stem of the expected file: the %{msil_expect} REDEFINE: value
+        (M23), else the test's own path without its suffix."""
+        try:
+            text = self.placeholder(info, src, "%{msil_expect}", None)
+        except ValueError:
+            text = None
+        if not text or not text.strip():
+            return os.path.splitext(src)[0]
+        return os.path.normpath(text.strip())
 
     def decide_if(self, text):
         """text with lit's %if/%else decided by the features the oracle knows
@@ -747,6 +918,12 @@ class Oracle:
         write its expected file: (its Log, 1 if it failed else 0)."""
         args, osname = self.args, self.osname
         log = Log()
+        if explicit is None:
+            log.out(
+                "skip (c-testsuite format: one test per name of libc-free.txt): "
+                "%s\n" % src
+            )
+            return log, 0
         info = TestInfo(src)
         kind = info.kind
         if explicit and src.endswith((".c", ".ll")) and kind != "prog":
@@ -766,7 +943,7 @@ class Oracle:
         if why:
             log.out("skip (%s, for %s): %s\n" % (why, args.target, src))
             return log, 0
-        stem = os.path.splitext(src)[0]
+        stem = self.expect_stem(info, src)
         base = stem + ".expected"
         override = stem + "." + osname + ".expected"
         if not args.check and osname == "windows" and os.path.exists(override):
@@ -905,6 +1082,12 @@ def main():
         help="%%{msil_prog} tests: split-file (default: next to --clang, else on "
         "PATH)",
     )
+    ap.add_argument(
+        "--corpus-dir",
+        default=os.environ.get("MSIL_CORPUS_CACHE") or DEFAULT_CORPUS_CACHE,
+        help="the exit corpus' cache, %%%%{msil_corpus} (default: "
+        "$MSIL_CORPUS_CACHE, else %s)" % DEFAULT_CORPUS_CACHE.replace("%", "%%"),
+    )
     ap.add_argument("--check", action="store_true", help="compare, do not write")
     ap.add_argument(
         "-j",
@@ -942,6 +1125,7 @@ def main():
         ap.error("no clang found; build clang or pass --clang PATH")
     if args.jobs < 1:
         ap.error("--jobs must be at least 1")
+    args.corpus_dir = os.path.abspath(args.corpus_dir)
     if not args.opt.startswith("-"):
         args.opt = "-" + args.opt
     if args.opt[1:] not in msil_prog.LEVELS:

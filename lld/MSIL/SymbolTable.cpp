@@ -183,6 +183,7 @@ void SymbolTable::compileBitcodeFiles() {
   // them (plan 5.9.6, 5.9.13). They are parsed with COMDATs ignored: the
   // BitcodeFiles claimed every group already and the IR linker kept only the
   // prevailing copies, so all of their groups are kept.
+  ObjFile *firstLTO = nullptr;
   for (InputFile *file : lto->compile()) {
     auto *obj = dyn_cast<ObjFile>(file);
     if (!obj) {
@@ -194,7 +195,17 @@ void SymbolTable::compileBitcodeFiles() {
       message(toString(obj));
     ctx.objectFiles.push_back(obj);
     obj->parse(/*ignoreComdats=*/true);
+    if (!firstLTO)
+      firstLTO = obj;
   }
+
+  // The libraries that checkManagedLibraries() compared with a bitcode model
+  // before LTO, which gave only the pointer and long sizes: the first LTO
+  // object's header gives their wchar_t and long double sizes, before late
+  // binding (plan 5.9.13).
+  if (firstLTO)
+    for (ManagedLibraryFile *lib : managedLibraries)
+      lib->checkLTODataModel(*firstLTO);
 }
 
 Symbol *SymbolTable::find(StringRef name) {

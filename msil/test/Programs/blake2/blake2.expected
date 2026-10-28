@@ -1,0 +1,6 @@
+blake2b(255) 142709d62e28fcccd0af97fad0f8465b971e82201dc51070faa0372aa43e92484be1c1e73ba10906d5d1853db6a4106e0a7bf9800d373d6dee2d46d62ef2a461
+bad blake2b 0
+bad blake2s 0
+bad blake2bp 0
+bad blake2sp 0
+[exit 0]

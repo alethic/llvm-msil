@@ -8,6 +8,12 @@
 # test runs and no M1 Output directory is touched (the outer run owns them).
 # The control, where msil-exec is available: the same discovery with every
 # tool present loads M1's configuration and lists its tests.
+# Under the default obj pipeline msil-exec also stands for msil-ld and
+# llvm-ar (lit.cfg.py), so a missing one is named by itself, never as 'the
+# execution harness': in M1 (--param msil_ld= names only msil-ld,
+# --param msil_ar= only llvm-ar), in msil/test/M2 and in msil/test/Programs
+# (--param msil_ar= names llvm-ar), each through msil_require_exec=1 without
+# msil_require_link=1, the manual path where lit.cfg.py itself names nothing.
 
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_require_exec=1 --param msil_ilasm= %S/../../M1 > %t.ilasm.log 2>&1
 # RUN: %{harness_check} contains %t.ilasm.log "fatal: msil: msil_require_exec=1, but the execution tests cannot run; missing: .*\bilasm\b"
@@ -15,3 +21,21 @@
 # RUN: %if msil-exec %{ %{harness_lit} --show-tests --param msil_require_exec=1 %S/../../M1 > %t.ok.log 2>&1 %}
 # RUN: %if msil-exec %{ %{harness_check} contains %t.ok.log "^\s*MSIL :: M1/" %}
 # RUN: %if msil-exec %{ %{harness_check} lacks %t.ok.log "fatal:" %}
+
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_require_exec=1 --param msil_ld= %S/../../M1 > %t.m1-ld.log 2>&1
+# RUN: %{harness_check} contains %t.m1-ld.log "fatal: msil: msil_require_exec=1, but the execution tests cannot run; missing: .*\bmsil-ld \("
+# RUN: %{harness_check} lacks %t.m1-ld.log "the execution harness"
+# RUN: %if msil-exec %{ %{harness_check} contains %t.m1-ld.log "; missing: msil-ld \(the obj and lto pipelines link through it; build the lld target or pass --param msil_ld=PATH\)$" %}
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_require_exec=1 --param msil_ar= %S/../../M1 > %t.m1-ar.log 2>&1
+# RUN: %{harness_check} contains %t.m1-ar.log "fatal: msil: msil_require_exec=1, but the execution tests cannot run; missing: .*\bllvm-ar \("
+# RUN: %{harness_check} lacks %t.m1-ar.log "the execution harness"
+# RUN: %if msil-exec %{ %{harness_check} contains %t.m1-ar.log "; missing: llvm-ar \(build the llvm-ar target or pass --param msil_ar=PATH\)$" %}
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_require_exec=1 --param msil_ar= %S/../../M2 > %t.m2-ar.log 2>&1
+# RUN: %{harness_check} contains %t.m2-ar.log "fatal: msil: msil/test/M2 cannot run, but the leg requires it \(msil_require_link=1 or msil_require_exec=1\); missing: .*\bllvm-ar \("
+# RUN: %{harness_check} lacks %t.m2-ar.log "the execution harness"
+# RUN: %if msil-exec %{ %{harness_check} contains %t.m2-ar.log "; missing: llvm-ar \(build the llvm-ar target or pass --param msil_ar=PATH\)$" %}
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_require_exec=1 --param msil_ar= %S/../../Programs > %t.prog-ar.log 2>&1
+# RUN: %{harness_check} contains %t.prog-ar.log "fatal: msil: msil/test/Programs cannot run, but the leg requires it .*; missing: .*\bllvm-ar\b"
+# RUN: %{harness_check} lacks %t.prog-ar.log "the execution harness"
+# RUN: %if msil-exec %{ %{harness_check} contains %t.prog-ar.log "; missing: .*\bllvm-ar\b.*--param msil_ar=PATH" %}
+# RUN: %if msil-exec %{ %{harness_check} lacks %t.prog-ar.log "missing: .*(\bclang \(|the MSIL target|\bilasm \(|a \.NET runtime|msil-ld \()" %}

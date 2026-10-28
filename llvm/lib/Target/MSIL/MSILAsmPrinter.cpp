@@ -1845,14 +1845,45 @@ void MSILAsmPrinter::emitJumpTableInfo() {
   emitMethodEnd();
 }
 
+/// The llvm.global_ctors list \p List as AsmPrinter::preprocessXXStructorList
+/// reads it, which casts every element to ConstantStruct: the elements before
+/// the first one that is null as a whole (zeroinitializer, whose null
+/// function ends the list, as it ends the object writer's INIT entries),
+/// without the elements that are undef or poison as a whole (skipped, as the
+/// INIT entries skip them). \p List itself when it has neither.
+static const Constant *getStructorList(const Constant *List) {
+  const auto *Array = dyn_cast<ConstantArray>(List);
+  if (!Array)
+    return List;
+  SmallVector<Constant *, 8> Elements;
+  bool Changed = false;
+  for (const Use &Op : Array->operands()) {
+    auto *C = cast<Constant>(Op.get());
+    if (C->isNullValue()) {
+      Changed = true;
+      break;
+    }
+    if (!isa<ConstantStruct>(C)) {
+      Changed = true;
+      continue;
+    }
+    Elements.push_back(C);
+  }
+  if (!Changed)
+    return List;
+  return ConstantArray::get(
+      ArrayType::get(Array->getType()->getElementType(), Elements.size()),
+      Elements);
+}
+
 void MSILAsmPrinter::emitGlobalVariable(const GlobalVariable *GV) {
   StringRef Name = GV->getName();
   // The module initializer calls the constructors (decision D12); an object
   // lists them in the record, in array order (emitObjectEnd).
   if (Name == "llvm.global_ctors") {
     if (GV->hasInitializer() && !ObjectMode)
-      preprocessXXStructorList(GV->getDataLayout(), GV->getInitializer(),
-                               Ctors);
+      preprocessXXStructorList(GV->getDataLayout(),
+                               getStructorList(GV->getInitializer()), Ctors);
     return;
   }
   // MSILPrepareIR reports and erases a non-empty llvm.global_dtors; this is
@@ -2671,12 +2702,20 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
       Ctors && Ctors->hasInitializer()) {
     if (const auto *List = dyn_cast<ConstantArray>(Ctors->getInitializer())) {
       for (const Use &Op : List->operands()) {
+        // A null function ends the list, as in whole-program code generation
+        // (AsmPrinter::preprocessXXStructorList after getStructorList), so
+        // that both call the same constructors; an element that is null as a
+        // whole (zeroinitializer) has one too. Both skip an element that is
+        // undef or poison as a whole.
+        if (cast<Constant>(Op.get())->isNullValue())
+          break;
         const auto *CS = dyn_cast<ConstantStruct>(Op.get());
         if (!CS || CS->getNumOperands() < 2)
           continue;
+        if (CS->getOperand(1)->isNullValue())
+          break;
         const Constant *Fn = CS->getOperand(1)->stripPointerCasts();
-        // A null terminator, or the poison of a definition that MSILPrepareIR
-        // diagnosed.
+        // The poison of a definition that MSILPrepareIR diagnosed.
         if (isa<ConstantPointerNull, UndefValue>(Fn))
           continue;
         const auto *FnGV = dyn_cast<GlobalValue>(Fn);

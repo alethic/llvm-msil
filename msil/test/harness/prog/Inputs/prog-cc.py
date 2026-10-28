@@ -88,7 +88,10 @@ libraries must be -fPIC.
 
 Every invocation checks the arguments that msil-prog.py and the composites
 must pass (plan 5.12.4) and fails with 'prog-cc: error: <why>' (exit status
-1) when one is wrong.
+1) when one is wrong. A compile must have %{msil_cflags} (-std=gnu17,
+-ffreestanding, -Werror=return-type and an -I directory with msil_test.h);
+with $PROG_CC_CTEST set (harness/prog/Inputs/nested-ctest), c-testsuite's
+-std=gnu17 -w instead, and none of those other flags.
 """
 
 import hashlib
@@ -176,6 +179,16 @@ def markers(src):
 
 
 def check_cflags(flags, what):
+    if os.environ.get("PROG_CC_CTEST"):
+        # c-testsuite's flags (msil/test/Programs/c-testsuite redefines
+        # %{msil_cflags} to -std=gnu17 -w), for the executing nested run of
+        # harness/ctest-lists.test: none of the harness's own flags.
+        if "-std=gnu17" not in flags or "-w" not in flags:
+            raise Fail("%s without c-testsuite's -std=gnu17 -w" % what)
+        for f in flags:
+            if f in ("-ffreestanding", "-Werror=return-type") or f.startswith("-I"):
+                raise Fail("%s with %s, which c-testsuite's flags lack" % (what, f))
+        return
     for need in ("-std=gnu17", "-ffreestanding", "-Werror=return-type"):
         if need not in flags:
             raise Fail("%s without %s (%%{msil_cflags})" % (what, need))

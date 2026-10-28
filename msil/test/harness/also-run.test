@@ -1,0 +1,76 @@
+# --param msil_also_run (plan 5.12.2, 5.12.3, 5.12.10; M23): after the main
+# run, every composite repeats jitall and the run of the same verified image
+# once per entry, with that runtime's runtimeconfig.json and, for
+# <major>+tc0, DOTNET_TieredCompilation=0, against the same expected file:
+# (1) under asm (the stand-in compiler of harness/pipeline, which turns
+#     pipeline/Inputs/also-run/runtime-major.c into a program that exits 1 on
+#     .NET 10 or newer and 0 on .NET 8 and the .NET Framework), the entry
+#     8+tc0 adds msil-jitall.py and msil-run.py of <t>.O2.dll with
+#     msil-net8.runtimeconfig.json and --env DOTNET_TieredCompilation=0, after
+#     the main run, writing <t>.O2.also-net8-tc0.out; the test passes;
+# (2) the entry 10 runs the same image on .NET 10, whose transcript differs
+#     from the one expected file, so the test fails with the diff, while the
+#     main run on .NET 8 passed;
+# (3) under the default obj pipeline (prog/Inputs/nested/m23/also-run-obj.c,
+#     a C test that only this test runs, as prog/Inputs/nested/lit.local.cfg
+#     requires; %{msil_c_O2} through msil-prog.py and the stand-ins of
+#     harness/prog) the two entries of 10,8+tc0 give two more jitall runs and
+#     two more runs of <t>.O2.d/prog.exe, in that order, after the main run,
+#     each with its runtimeconfig.json and environment and its own
+#     transcript, and the note names both runtimes;
+# (4) the configuration errors: an entry that is not <major> or
+#     <major>+tc0, an entry named twice, and a runtime the runner lacks under
+#     msil_require_exec=1; without msil_require_exec=1 such an entry is left
+#     out with a note;
+# (5) a test with explicit RUN lines (Inputs/also-run-check, plan 5.12.3):
+#     explicit.test REDEFINEs %{msil_also_run_image} to a placeholder of its
+#     own that names its image and appends %{msil_also_run_check} after its
+#     main run's FileCheck. With msil_also_run=10,8+tc0 that adds, after the
+#     main run and FileCheck, one group per entry in the parameter's order:
+#     msil-jitall.py and msil-run.py of the image with the entry's
+#     runtimeconfig.json (and, for 8+tc0, --env DOTNET_TieredCompilation=0),
+#     the run writing <image>.also-net10.out or <image>.also-net8-tc0.out,
+#     and FileCheck --match-full-lines of that transcript with the test's
+#     check lines; the test passes. explicit-net10.test, whose check line
+#     holds on .NET 8 only, fails with msil_also_run=10 at the FileCheck of
+#     the .NET 10 run. Without msil_also_run the substitution expands to
+#     nothing: explicit.test runs only its own commands.
+# The nested lits run on the local runner, with an empty msil_linux_sysroot
+# (no E7 start.o), at the levels the tests name.
+# REQUIRES: dotnet-runtime-8, dotnet-runtime-10, msil-jitall
+
+# (1)
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=asm --param msil_dotnet_runtime=8 --param msil_also_run=8+tc0 %S/pipeline/Inputs/also-run/runtime-major.c > %t.tc0.log 2>&1
+# RUN: %{harness_check} contains %t.tc0.log "^PASS: MSIL :: harness/pipeline/Inputs/also-run/runtime-major\.c " "note: msil: also run on Microsoft\.NETCore\.App 8\.\S+ with DOTNET_TieredCompilation=0$"
+# RUN: %{harness_check} contains %t.tc0.log "^# executed command: .*msil-run\.py'? --expect-os \S+ .*msil-net8\.runtimeconfig\.json'? --expect '?\S*runtime-major'? --out '?\S*runtime-major\.c\.tmp\.O2\.out'? '?\S*runtime-major\.c\.tmp\.O2\.dll'?$[\s\S]*^# executed command: .*msil-jitall\.py'? .*msil-net8\.runtimeconfig\.json'? --env '?DOTNET_TieredCompilation=0'? '?\S*runtime-major\.c\.tmp\.O2\.dll'?$[\s\S]*^# executed command: .*msil-run\.py'? --expect-os \S+ .*msil-net8\.runtimeconfig\.json'? --env '?DOTNET_TieredCompilation=0'? --expect '?\S*runtime-major'? --out '?\S*runtime-major\.c\.tmp\.O2\.also-net8-tc0\.out'? '?\S*runtime-major\.c\.tmp\.O2\.dll'?$"
+
+# (2)
+# RUN: not %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=asm --param msil_dotnet_runtime=8 --param msil_also_run=10 %S/pipeline/Inputs/also-run/runtime-major.c > %t.net10.log 2>&1
+# RUN: %{harness_check} contains %t.net10.log "^FAIL: MSIL :: harness/pipeline/Inputs/also-run/runtime-major\.c " "^# executed command: .*msil-run\.py'? .*msil-net10\.runtimeconfig\.json'? --expect '?\S*runtime-major'? --out '?\S*runtime-major\.c\.tmp\.O2\.also-net10\.out'? '?\S*runtime-major\.c\.tmp\.O2\.dll'?$" "-\s?\[exit 0\]" "\+\s?\[exit 1\]"
+
+# (3)
+# RUN: %if msil-ld && msil-ar %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_dotnet_runtime=8 --param msil_also_run=10,8+tc0 %S/prog/Inputs/nested/m23/also-run-obj.c > %t.obj.log 2>&1 %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.obj.log "^PASS: MSIL :: harness/prog/Inputs/nested/m23/also-run-obj\.c " "note: msil: also run on Microsoft\.NETCore\.App 10\.\S+, Microsoft\.NETCore\.App 8\.\S+ with DOTNET_TieredCompilation=0$" %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.obj.log "^# executed command: .*msil-run\.py'? .*msil-net8\.runtimeconfig\.json'? --expect '?\S*m23/also-run-obj'? --out '?\S*also-run-obj\.c\.tmp\.O2\.out'? '?\S*also-run-obj\.c\.tmp\.O2\.d/prog\.exe'?$[\s\S]*^# executed command: .*msil-jitall\.py'? .*msil-net10\.runtimeconfig\.json'? '?\S*also-run-obj\.c\.tmp\.O2\.d/prog\.exe'?$[\s\S]*^# executed command: .*msil-run\.py'? .*msil-net10\.runtimeconfig\.json'? --expect '?\S*m23/also-run-obj'? --out '?\S*also-run-obj\.c\.tmp\.O2\.also-net10\.out'? '?\S*also-run-obj\.c\.tmp\.O2\.d/prog\.exe'?$[\s\S]*^# executed command: .*msil-jitall\.py'? .*msil-net8\.runtimeconfig\.json'? --env '?DOTNET_TieredCompilation=0'? '?\S*also-run-obj\.c\.tmp\.O2\.d/prog\.exe'?$[\s\S]*^# executed command: .*msil-run\.py'? .*msil-net8\.runtimeconfig\.json'? --env '?DOTNET_TieredCompilation=0'? --expect '?\S*m23/also-run-obj'? --out '?\S*also-run-obj\.c\.tmp\.O2\.also-net8-tc0\.out'? '?\S*also-run-obj\.c\.tmp\.O2\.d/prog\.exe'?$" %}
+
+# (4)
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_also_run=10+tc1 %S/Inputs/nested-ok > %t.bad.log 2>&1
+# RUN: %{harness_check} contains %t.bad.log "fatal: msil: --param msil_also_run: '10\+tc1' is not <major> or <major>\+tc0 \(for example msil_also_run=10,8\+tc0\)$"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_also_run=10,10 %S/Inputs/nested-ok > %t.twice.log 2>&1
+# RUN: %{harness_check} contains %t.twice.log "fatal: msil: --param msil_also_run names 10 twice$"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_exec=1 --param msil_also_run=99 %S/Inputs/nested-ok > %t.missing.log 2>&1
+# RUN: %{harness_check} contains %t.missing.log "fatal: msil: --param msil_also_run=99: no Microsoft\.NETCore\.App 99\.x for the \S+ runner \(installed: [0-9, ]+\); msil_require_exec=1 makes it a configuration error$"
+# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_also_run=99 %S/Inputs/nested-ok > %t.noted.log 2>&1
+# RUN: %{harness_check} contains %t.noted.log "note: msil: --param msil_also_run=99: no Microsoft\.NETCore\.App 99\.x for the \S+ runner \(installed: [0-9, ]+\); the entry is left out$"
+# RUN: %{harness_check} lacks %t.noted.log "note: msil: also run on"
+
+# (5)
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_dotnet_runtime=8 --param msil_also_run=10,8+tc0 %S/Inputs/also-run-check/explicit.test > %t.explicit.log 2>&1
+# RUN: %{harness_check} contains %t.explicit.log "^PASS: MSIL :: harness/Inputs/also-run-check/explicit\.test "
+# RUN: %{harness_check} contains %t.explicit.log "^# executed command: .*msil-run\.py'? --expect-os \S+ .*msil-net8\.runtimeconfig\.json'? --out '?\S*explicit\.test\.tmp\.dll\.out'? '?\S*explicit\.test\.tmp\.dll'?$[\s\S]*^# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?--input-file=\S*explicit\.test\.tmp\.dll\.out'? --match-full-lines '?\S*explicit\.test'?$[\s\S]*^# executed command: .*msil-jitall\.py'? .*msil-net10\.runtimeconfig\.json'? '?\S*explicit\.test\.tmp\.dll'?$[\s\S]*^# executed command: .*msil-run\.py'? --expect-os \S+ .*msil-net10\.runtimeconfig\.json'? --out '?\S*explicit\.test\.tmp\.dll\.also-net10\.out'? '?\S*explicit\.test\.tmp\.dll'?$[\s\S]*^# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?--input-file=\S*explicit\.test\.tmp\.dll\.also-net10\.out'? --match-full-lines '?\S*explicit\.test'?$[\s\S]*^# executed command: .*msil-jitall\.py'? .*msil-net8\.runtimeconfig\.json'? --env '?DOTNET_TieredCompilation=0'? '?\S*explicit\.test\.tmp\.dll'?$[\s\S]*^# executed command: .*msil-run\.py'? --expect-os \S+ .*msil-net8\.runtimeconfig\.json'? --env '?DOTNET_TieredCompilation=0'? --out '?\S*explicit\.test\.tmp\.dll\.also-net8-tc0\.out'? '?\S*explicit\.test\.tmp\.dll'?$[\s\S]*^# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?--input-file=\S*explicit\.test\.tmp\.dll\.also-net8-tc0\.out'? --match-full-lines '?\S*explicit\.test'?$"
+# RUN: %{harness_check} lacks %t.explicit.log "msil-also-run-image-not-set"
+# RUN: not %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_dotnet_runtime=8 --param msil_also_run=10 %S/Inputs/also-run-check/explicit-net10.test > %t.explicit-net10.log 2>&1
+# RUN: %{harness_check} contains %t.explicit-net10.log "^FAIL: MSIL :: harness/Inputs/also-run-check/explicit-net10\.test " "^# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?--input-file=\S*explicit-net10\.test\.tmp\.dll\.out'? --match-full-lines '?\S*explicit-net10\.test'?$[\s\S]*^# executed command: .*msil-run\.py'? .*msil-net10\.runtimeconfig\.json'? --out '?\S*explicit-net10\.test\.tmp\.dll\.also-net10\.out'? '?\S*explicit-net10\.test\.tmp\.dll'?$[\s\S]*^# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?--input-file=\S*explicit-net10\.test\.tmp\.dll\.also-net10\.out'? --match-full-lines '?\S*explicit-net10\.test'?$" "explicit-net10\.test:\d+:\d+: error: CHECK: expected string not found in input$"
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_dotnet_runtime=8 %S/Inputs/also-run-check/explicit.test > %t.explicit-none.log 2>&1
+# RUN: %{harness_check} contains %t.explicit-none.log "^PASS: MSIL :: harness/Inputs/also-run-check/explicit\.test " "^# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?--input-file=\S*explicit\.test\.tmp\.dll\.out'? --match-full-lines '?\S*explicit\.test'?$"
+# RUN: %{harness_check} lacks %t.explicit-none.log "also-net" "msil-also-run-image" "msil-jitall\.py"

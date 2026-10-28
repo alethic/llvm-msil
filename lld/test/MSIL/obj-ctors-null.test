@@ -24,6 +24,26 @@
 ## - g-diff.ll: the difference alone, with no real constructor (the section
 ##   12 row 'M22.e extended (M21 follow-up, null constructor slots)'):
 ##   the error at +0.
+## A null entry of llvm.global_ctors (not a slot) ends the list, on every
+## triple: AsmPrinter::preprocessXXStructorList, behind every whole-program
+## text, stops at the first null function, as every LLVM target does, and
+## the object writer's INIT walk and msil-ld's LTO path stop there too
+## (section 12 rows of 2026-10-27 'M23.d extended (a null entry in
+## llvm.global_ctors)' and 'M23.c extended (a null entry in
+## llvm.global_ctors, lld tests)'). ctn-lnx.ll and ctn-win.ll have
+## llvm.global_ctors = [a, null, b], where a stores 3 and b stores 5 into the
+## global that main returns: the object link, the LTO PE link (--lto-O0,
+## so that no optimization evaluates the constructors) and --lto-emit-asm
+## all make '<Module>::.cctor' call a and never b, silently.
+## ctz-lnx.ll and ctz-win.ll are the same modules with the null entry written
+## '{ i32, ptr, ptr } zeroinitializer' (a ConstantAggregateZero element, not
+## a ConstantStruct, which the verifier accepts; the section 12 row of
+## 2026-10-27 'Rows ... clarified (an entry written zeroinitializer)'): it
+## has a null function and ends the list too, in the object writer's INIT
+## walk, in LTO.cpp's findEnvpConstructor and in the whole-program text,
+## where preprocessXXStructorList stops at it instead of asserting in
+## cast<ConstantStruct>. The same three links call a and never b, with no
+## output at all (%{ctz_quiet}: no crash, no diagnostic).
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -37,6 +57,14 @@
 # RUN: llvm-as f-diff.ll -o f-diff.bc
 # RUN: llc -filetype=obj g-diff.ll -o g-diff.o
 # RUN: llvm-as g-diff.ll -o g-diff.bc
+# RUN: llc -filetype=obj ctn-lnx.ll -o ctn-lnx.o
+# RUN: llc -filetype=obj ctn-win.ll -o ctn-win.o
+# RUN: llvm-as ctn-lnx.ll -o ctn-lnx.bc
+# RUN: llvm-as ctn-win.ll -o ctn-win.bc
+# RUN: llc -filetype=obj ctz-lnx.ll -o ctz-lnx.o
+# RUN: llc -filetype=obj ctz-win.ll -o ctz-win.o
+# RUN: llvm-as ctz-lnx.ll -o ctz-lnx.bc
+# RUN: llvm-as ctz-win.ll -o ctz-win.bc
 
 # DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error:
@@ -76,6 +104,58 @@
 # RUN: not msil-ld --lto-emit-asm g-diff.bc -o x.il 2>&1 | %{fc} --check-prefix=COFF -DFILE=ld-temp.o
 # COFF:          {{^}}msil-ld: error: constructor table entry at .CRT$XCU+0 in [[FILE]] is not a function address{{$}}
 # STRADDLE-NEXT: {{^}}msil-ld: error: constructor table entry at .CRT$XCU+8 in [[FILE]] is not a function address{{$}}
+
+## A null llvm.global_ctors entry ends the list: a runs, b never does, in
+## the object link, the LTO PE link and the --lto-emit-asm text, on both
+## triples. %{ctn_calls} and %{ctn_text} reject a call to b anywhere in the
+## summary or the text, before a as well as after it.
+# DEFINE: %{ctn_calls} = FileCheck %s --check-prefix=CTN-CALLS --implicit-check-not="{{^}}call b{{$}}"
+# DEFINE: %{ctn_text} = FileCheck %s --check-prefix=CTN-TEXT --implicit-check-not="{{^ *call .*'b'[(]}}"
+# RUN: msil-ld ctn-lnx.o -o ctn-lnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ctn-lnx.exe > ctn-lnx.txt
+# RUN: %python %S/Inputs/cctor.py ctn-lnx.txt | %{ctn_calls}
+# RUN: msil-ld --lto-O0 ctn-lnx.bc -o ctn-lnx-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ctn-lnx-lto.exe > ctn-lnx-lto.txt
+# RUN: %python %S/Inputs/cctor.py ctn-lnx-lto.txt | %{ctn_calls}
+# RUN: msil-ld --lto-O0 --lto-emit-asm ctn-lnx.bc -o ctn-lnx.il 2>&1 | count 0
+# RUN: %{ctn_text} --input-file=ctn-lnx.il
+# RUN: msil-ld ctn-win.o -o ctn-win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ctn-win.exe > ctn-win.txt
+# RUN: %python %S/Inputs/cctor.py ctn-win.txt | %{ctn_calls}
+# RUN: msil-ld --lto-O0 ctn-win.bc -o ctn-win-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ctn-win-lto.exe > ctn-win-lto.txt
+# RUN: %python %S/Inputs/cctor.py ctn-win-lto.txt | %{ctn_calls}
+# RUN: msil-ld --lto-O0 --lto-emit-asm ctn-win.bc -o ctn-win.il 2>&1 | count 0
+# RUN: %{ctn_text} --input-file=ctn-win.il
+# CTN-CALLS:     {{^}}call a{{$}}
+# CTN-CALLS-NOT: {{^}}call
+# CTN-TEXT:      {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+# CTN-TEXT:      {{^}}  call void 'a'(){{$}}
+# CTN-TEXT-NOT:  {{^}}  call{{ }}
+# CTN-TEXT:      {{^[}]}} // end of method '.cctor'{{$}}
+
+## The null entry written zeroinitializer ends the list the same way: a
+## runs, b never does, in the same three links on both triples, and msil-ld
+## prints nothing: %{ctz_quiet} rejects any output line, with %{fc}'s
+## implicit checks naming a crash or a diagnostic.
+# DEFINE: %{ctz_quiet} = %{fc} --check-prefix=CTZ-QUIET --allow-empty
+# RUN: msil-ld ctz-lnx.o -o ctz-lnx.exe 2>&1 | %{ctz_quiet}
+# RUN: llvm-cil-dump ctz-lnx.exe > ctz-lnx.txt
+# RUN: %python %S/Inputs/cctor.py ctz-lnx.txt | %{ctn_calls}
+# RUN: msil-ld --lto-O0 ctz-lnx.bc -o ctz-lnx-lto.exe 2>&1 | %{ctz_quiet}
+# RUN: llvm-cil-dump ctz-lnx-lto.exe > ctz-lnx-lto.txt
+# RUN: %python %S/Inputs/cctor.py ctz-lnx-lto.txt | %{ctn_calls}
+# RUN: msil-ld --lto-O0 --lto-emit-asm ctz-lnx.bc -o ctz-lnx.il 2>&1 | %{ctz_quiet}
+# RUN: %{ctn_text} --input-file=ctz-lnx.il
+# RUN: msil-ld ctz-win.o -o ctz-win.exe 2>&1 | %{ctz_quiet}
+# RUN: llvm-cil-dump ctz-win.exe > ctz-win.txt
+# RUN: %python %S/Inputs/cctor.py ctz-win.txt | %{ctn_calls}
+# RUN: msil-ld --lto-O0 ctz-win.bc -o ctz-win-lto.exe 2>&1 | %{ctz_quiet}
+# RUN: llvm-cil-dump ctz-win-lto.exe > ctz-win-lto.txt
+# RUN: %python %S/Inputs/cctor.py ctz-win-lto.txt | %{ctn_calls}
+# RUN: msil-ld --lto-O0 --lto-emit-asm ctz-win.bc -o ctz-win.il 2>&1 | %{ctz_quiet}
+# RUN: %{ctn_text} --input-file=ctz-win.il
+# CTZ-QUIET-NOT: {{.}}
 
 #--- win.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
@@ -165,4 +245,92 @@ target triple = "x86_64-pc-windows-msvc-msil"
 
 define i32 @main() {
   ret i32 0
+}
+
+#--- ctn-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@val = global i32 0, align 4
+@llvm.global_ctors = appending global [3 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @a, ptr null }, { i32, ptr, ptr } { i32 65535, ptr null, ptr null }, { i32, ptr, ptr } { i32 65535, ptr @b, ptr null }]
+
+define internal void @a() {
+  store i32 3, ptr @val
+  ret void
+}
+
+define internal void @b() {
+  store i32 5, ptr @val
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @val
+  ret i32 %v
+}
+
+#--- ctn-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@val = global i32 0, align 4
+@llvm.global_ctors = appending global [3 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @a, ptr null }, { i32, ptr, ptr } { i32 65535, ptr null, ptr null }, { i32, ptr, ptr } { i32 65535, ptr @b, ptr null }]
+
+define internal void @a() {
+  store i32 3, ptr @val
+  ret void
+}
+
+define internal void @b() {
+  store i32 5, ptr @val
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @val
+  ret i32 %v
+}
+
+#--- ctz-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@val = global i32 0, align 4
+@llvm.global_ctors = appending global [3 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @a, ptr null }, { i32, ptr, ptr } zeroinitializer, { i32, ptr, ptr } { i32 65535, ptr @b, ptr null }]
+
+define internal void @a() {
+  store i32 3, ptr @val
+  ret void
+}
+
+define internal void @b() {
+  store i32 5, ptr @val
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @val
+  ret i32 %v
+}
+
+#--- ctz-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@val = global i32 0, align 4
+@llvm.global_ctors = appending global [3 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @a, ptr null }, { i32, ptr, ptr } zeroinitializer, { i32, ptr, ptr } { i32 65535, ptr @b, ptr null }]
+
+define internal void @a() {
+  store i32 3, ptr @val
+  ret void
+}
+
+define internal void @b() {
+  store i32 5, ptr @val
+  ret void
+}
+
+define i32 @main() {
+  %v = load i32, ptr @val
+  ret i32 %v
 }

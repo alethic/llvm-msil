@@ -613,8 +613,9 @@ TEST(CLISymbolTableTest, InterfacePrint) {
   const std::string Head =
       "SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil "
       "abi=1 runtime='ucrtbase' datamodel=8,4,2,8";
-  EXPECT_THAT(Lines[0], testing::AnyOf(testing::Eq(Head + " flags=0x01"),
-                                       testing::Eq(Head + " flags=INTERFACE")));
+  // The header flags print by name (section 12, 2026-10-27, '5.9.15 and
+  // 5.8.11 clarified'), never as a number.
+  EXPECT_EQ(Lines[0], Head + " flags=INTERFACE");
   // The rest is printed as without the flag.
   std::vector<std::string> Plain = printLines(P.B);
   ASSERT_EQ(Plain.size(), 8u);
@@ -643,45 +644,26 @@ TEST(CLISymbolTableTest, ABIDescriptorRoundTrip) {
 }
 
 // One Function line per flagged function, in payload order, naming the
-// function and spelling its descriptor as a link-info Signature line does.
+// function and spelling its descriptor as a link-info Signature line does:
+// `Function[ VARARG][ WEAK][ ABI] '<n>'`, then after ABI the descriptor's
+// items in the order `[ NO_PROTOTYPE][ VARARG fixed=<n>][ SRET size=<n>
+// align=<bytes>][ NATIVE_INCOMPATIBLE][ byval=<param>:<size>:<align>]...`
+// (section 12, 2026-10-27, '5.9.15 and 5.8.11 clarified'). Each line is
+// compared whole.
 TEST(CLISymbolTableTest, ABIDescriptorPrint) {
-  std::vector<std::string> Lines = printLines(abiPayload().B);
-  ASSERT_EQ(Lines.size(), 11u);
-  EXPECT_EQ(Lines[0], "SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil "
-                      "abi=1 runtime='ucrt' datamodel=8,4,2,8");
-  EXPECT_EQ(Lines[1], "ExportClass 'Contoso.Lib'");
-  EXPECT_EQ(Lines[2], "Data 'counter' size=4 align=4");
-  struct {
-    const char *Name;
-    bool Weak;
-    std::vector<const char *> Words;
-  } Want[] = {
-      {"mk", false, {"SRET size=12 align=4"}},
-      {"take", false, {"byval=0:12:4"}},
-      {"knr", false, {"NO_PROTOTYPE"}},
-      {"both", false, {"SRET size=24 align=8", "byval=1:16:8"}},
-      {"knr_sret", false, {"NO_PROTOTYPE", "SRET size=12 align=4"}},
-      {"weak_mk", true, {"SRET size=8 align=8"}},
-      {"wide",
-       false,
-       {"byval=0:300:16", "byval=2:8589934592:1", "byval=200:1:1"}},
-  };
-  for (size_t I = 0; I < std::size(Want); ++I) {
-    const std::string &Line = Lines[3 + I];
-    SCOPED_TRACE(Line);
-    EXPECT_THAT(Line, StartsWith("Function"));
-    EXPECT_THAT(Line,
-                testing::HasSubstr(std::string(" '") + Want[I].Name + "'"));
-    for (const char *W : Want[I].Words)
-      EXPECT_THAT(Line, testing::HasSubstr(W));
-    if (Want[I].Weak)
-      EXPECT_THAT(Line, testing::HasSubstr(" WEAK"));
-    else
-      EXPECT_THAT(Line, testing::Not(testing::HasSubstr("WEAK")));
-    EXPECT_THAT(Line, testing::Not(testing::HasSubstr("VARARG")));
-  }
-  // A function without ABI keeps M17's line.
-  EXPECT_EQ(Lines[10], "Function WEAK 'weak_only'");
+  std::vector<std::string> Want = {
+      "SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 "
+      "runtime='ucrt' datamodel=8,4,2,8",
+      "ExportClass 'Contoso.Lib'", "Data 'counter' size=4 align=4",
+      "Function ABI 'mk' SRET size=12 align=4",
+      "Function ABI 'take' byval=0:12:4", "Function ABI 'knr' NO_PROTOTYPE",
+      "Function ABI 'both' SRET size=24 align=8 byval=1:16:8",
+      "Function ABI 'knr_sret' NO_PROTOTYPE SRET size=12 align=4",
+      "Function WEAK ABI 'weak_mk' SRET size=8 align=8",
+      "Function ABI 'wide' byval=0:300:16 byval=2:8589934592:1 byval=200:1:1",
+      // A function without ABI keeps M17's line.
+      "Function WEAK 'weak_only'"};
+  EXPECT_EQ(printLines(abiPayload().B), Want);
 }
 
 // The descriptor is part of the payload: cut anywhere it is truncation, an
@@ -749,33 +731,15 @@ TEST(CLISymbolTableTest, ABIDescriptorNativeIncompatible) {
   ASSERT_THAT_EXPECTED(decodeSymbolTable(P.B), Succeeded());
   EXPECT_EQ(reencode(P.B), P.B);
 
-  std::vector<std::string> Lines = printLines(P.B);
-  ASSERT_EQ(Lines.size(), 4u);
-  EXPECT_EQ(Lines[1], "ExportClass 'lib'");
-  {
-    const std::string &Line = Lines[2];
-    SCOPED_TRACE(Line);
-    EXPECT_THAT(Line, StartsWith("Function"));
-    EXPECT_THAT(Line, testing::HasSubstr(" 'add128'"));
-    EXPECT_THAT(Line, testing::HasSubstr(" NATIVE_INCOMPATIBLE"));
-    EXPECT_THAT(Line, testing::Not(testing::HasSubstr("SRET")));
-    EXPECT_THAT(Line, testing::Not(testing::HasSubstr("byval=")));
-    EXPECT_THAT(Line, testing::Not(testing::HasSubstr("WEAK")));
-    // Not an unknown bit, which the printer spells in hex.
-    EXPECT_THAT(Line, testing::Not(testing::HasSubstr(" 0x")));
-  }
-  {
-    const std::string &Line = Lines[3];
-    SCOPED_TRACE(Line);
-    EXPECT_THAT(Line, StartsWith("Function"));
-    EXPECT_THAT(Line, testing::HasSubstr(" 'mk_pair'"));
-    EXPECT_THAT(Line, testing::HasSubstr(" WEAK"));
-    EXPECT_THAT(Line, testing::HasSubstr(" SRET size=16 align=8"));
-    EXPECT_THAT(Line, testing::HasSubstr(" NATIVE_INCOMPATIBLE"));
-    EXPECT_THAT(Line, testing::HasSubstr(" byval=1:16:8"));
-    EXPECT_THAT(Line, testing::Not(testing::HasSubstr("NO_PROTOTYPE")));
-    EXPECT_THAT(Line, testing::Not(testing::HasSubstr(" 0x")));
-  }
+  // Whole lines, as ABIDescriptorPrint: NATIVE_INCOMPATIBLE after SRET and
+  // before the byval items, never an unknown bit in hex.
+  std::vector<std::string> Want = {
+      "SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 "
+      "runtime='none' datamodel=8,4,2,8",
+      "ExportClass 'lib'", "Function ABI 'add128' NATIVE_INCOMPATIBLE",
+      "Function WEAK ABI 'mk_pair' SRET size=16 align=8 NATIVE_INCOMPATIBLE "
+      "byval=1:16:8"};
+  EXPECT_EQ(printLines(P.B), Want);
 }
 
 } // namespace

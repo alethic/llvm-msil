@@ -1,0 +1,11 @@
+coremark crclist e714
+coremark crcmatrix 1fd7
+coremark crcstate 8e3a
+coremark crcfinal 382f
+coremark errors 0
+collision crclist e240
+collision crcmatrix 6983
+collision crcstate 3fcb
+collision crcfinal e240
+collision errors 3
+[exit 0]

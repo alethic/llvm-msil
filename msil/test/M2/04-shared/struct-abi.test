@@ -1,0 +1,99 @@
+# Structs across an assembly boundary: a library function returning a 40-byte struct (sret), one taking it by value, and one called through a K&R declaration.
+# sabi.c, linked with -shared into sabi.dll (%{msil_shlibs}), exports:
+# - make_big(seed), which returns struct big (40 bytes, more than 16, so
+#   through a hidden result pointer on both x86_64 ABIs: SRET in the
+#   library's symbol table, 5.8.8);
+# - sum_big(struct big v), which takes it by value (on linux-gnu a copy in
+#   memory, byval; on windows-msvc a pointer to a copy the caller makes),
+#   changes its copy and returns a checksum of it;
+# - knr_scale(double x, int n), which main.c calls through the unprototyped
+#   declaration 'double knr_scale();', so the float argument is promoted to
+#   double at the call (the call site's NO_PROTOTYPE, 5.8.8) and matches the
+#   definition.
+# main.c passes make_big's result straight to sum_big, keeps a struct of
+# its own across a call that changes the callee's copy (C passes the value,
+# so the caller's struct is unchanged), and prints every field. The program
+# links against the library's MemberRefs with the SRET and byval
+# descriptors the symbol table carries (M22.a item 4; msil-ld's call-site
+# checks, 5.9.8, see direct matches), and the composite compares it with the
+# native build on both x86_64 triples at the leg's levels (section 12 row of
+# 2026-10-27 'M23.c extended (structs across assemblies, execution)'; M22
+# review r2 finding 15: no 04-shared or p2c source passed or returned a
+# struct across an assembly boundary). The program links against .NET
+# libraries, which --lto-emit-asm cannot import from (plan 5.12.1, M22.c
+# item 8), so the test does not run with msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = sabi=%t/sabi.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- api.h
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#define IMPORT __declspec(dllimport)
+#else
+#define API __attribute__((visibility("default")))
+#define IMPORT
+#endif
+#--- big.h
+/* 40 bytes on both x86_64 ABIs: 8 + 4 (+4) + 8 + 10 (+6). */
+struct big {
+  long long a;
+  int b;
+  double c;
+  short d[5];
+};
+#--- sabi.c
+#include "api.h"
+#include "big.h"
+
+API struct big make_big(int seed) {
+  struct big r;
+  r.a = seed * 1000000007LL;
+  r.b = -seed;
+  r.c = seed * 0.5;
+  for (int i = 0; i < 5; ++i)
+    r.d[i] = (short)(seed * 100 + i);
+  return r;
+}
+
+API long long sum_big(struct big v) {
+  long long s = v.a % 1000 + v.b + (long long)(v.c * 4);
+  for (int i = 0; i < 5; ++i)
+    s += v.d[i];
+  v.a = 0;
+  v.b = 0;
+  v.d[0] = -1;
+  return s + v.d[0];
+}
+
+API double knr_scale(double x, int n) { return x * n; }
+#--- main.c
+#include "msil_test.h"
+#include "api.h"
+#include "big.h"
+
+IMPORT struct big make_big(int seed);
+IMPORT long long sum_big(struct big v);
+IMPORT double knr_scale();
+
+static void put_big(const char *name, const struct big *v) {
+  put_str(name);
+  put_kv("  a", v->a);
+  put_kv("  b", v->b);
+  put_kv("  c * 4", (long long)(v->c * 4));
+  for (int i = 0; i < 5; ++i)
+    put_kv("  d[i]", v->d[i]);
+}
+
+int main(void) {
+  struct big mine = make_big(3);
+  put_big("make_big(3)", &mine);
+  put_kv("sum_big(make_big(7))", sum_big(make_big(7)));
+  put_kv("sum_big(mine)", sum_big(mine));
+  put_big("mine after sum_big", &mine);
+  float f = 1.25f;
+  put_kv("knr_scale(1.25f, 4) * 100", (long long)(knr_scale(f, 4) * 100));
+  put_kv("knr_scale(-2.5f, 3) * 100", (long long)(knr_scale(-2.5f, 3) * 100));
+  return 0;
+}

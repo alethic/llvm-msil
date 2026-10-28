@@ -1,0 +1,23 @@
+# Monocypher 4.0.2 with its optional Ed25519 as a static library: self-checks and digests of every primitive family.
+# monocypher_main.c hashes, MACs, encrypts and decrypts, agrees on X25519 keys
+# and signs and checks with EdDSA and Ed25519 on fixed inputs; crypto_argon2
+# takes its configuration and inputs as structs by value across translation
+# units. libmonocypher.a holds monocypher.c and monocypher-ed25519.c.
+# Built as a multi-TU program with static archives (%{msil_archives}: one per
+# library plus libsup.a, the support library of ../support) from the corpus
+# cache (%{msil_corpus}, filled by msil/utils/corpus/fetch.py), with the shim
+# headers of ../shim in both builds (%{msil_copts}), at every level of the leg,
+# and compared with the native build of the same sources; the error count is
+# the exit status, so the transcript ends [exit 0]. Plan 5.12.9 (M23).
+# ../det/monocypher.test repeats these REDEFINE lines for %{msil_det}.
+# REQUIRES: msil-corpus-monocypher
+# REDEFINE: %{msil_srcs} = %S/../monocypher/monocypher_main.c
+# REDEFINE: %{msil_archives} = monocypher=%{msil_corpus}/monocypher-4.0.2/src/monocypher.c, \
+# REDEFINE:   %{msil_corpus}/monocypher-4.0.2/src/optional/monocypher-ed25519.c; \
+# REDEFINE:   sup=%S/../support/sup_arena.c,%S/../support/sup_malloc.c,%S/../support/sup_memcmp.c, \
+# REDEFINE:   %S/../support/sup_memset.c,%S/../support/sup_memcpy.c,%S/../support/sup_strlen.c, \
+# REDEFINE:   %S/../support/sup_out.c
+# REDEFINE: %{msil_copts} = -isystem %S/../shim -I%S/../support \
+# REDEFINE:   -I%{msil_corpus}/monocypher-4.0.2/src -I%{msil_corpus}/monocypher-4.0.2/src/optional \
+# REDEFINE:   -Werror=implicit-function-declaration -w
+# RUN: %{msil_prog}

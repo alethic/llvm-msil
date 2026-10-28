@@ -92,7 +92,7 @@
 # RUN: %if dotnet-runtime-9 %{ %{harness_check} contains %t/5.log "^PASS: MSIL :: harness/prog/Inputs/nested/refs/refs-features\.test " "^# \| mscorlib-safe .* --runtimes (netfx,)?(net8,)?net9(,net10)? --timeout " %}
 
 # (6)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_references=%t/pack %S/prog/Inputs/nested/refs > %t/6a.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=asm --param msil_references=%t/pack %S/prog/Inputs/nested/refs > %t/6a.log 2>&1
 # RUN: %{harness_check} contains %t/6a.log "fatal: msil: --param msil_references=\S*pack needs a link, which msil_pipeline=asm does not have \(plan 5\.12\.2\); use msil_pipeline=obj or lto$"
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_references=%t/no-such-pack %S/prog/Inputs/nested/refs > %t/6b.log 2>&1
 # RUN: %{harness_check} contains %t/6b.log "fatal: msil: --param msil_references=\S*no-such-pack: use none, net48, net8, net10 or the path of a reference assembly or of a directory of them$"

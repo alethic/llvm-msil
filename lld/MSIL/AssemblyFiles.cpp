@@ -383,7 +383,28 @@ bool ManagedLibraryFile::check(const InputFile *model,
   if (!readExports())
     return false;
   checkAssemblyRefs(libraries);
+  // A bitcode model gave the pointer and long sizes only: the LTO objects'
+  // headers give the rest (checkLTODataModel).
+  needsLTODataModel = model && !isa<ObjFile>(model);
   return true;
+}
+
+bool ManagedLibraryFile::checkLTODataModel(const ObjFile &lto) {
+  if (!needsLTODataModel)
+    return true;
+  needsLTODataModel = false;
+  const MSILLink::Header &h0 = lto.getRecord().Hdr;
+  if (table.WCharSize == h0.WCharSize &&
+      table.LongDoubleSize == h0.LongDoubleSize)
+    return true;
+  error(toString(this) + ": data model " +
+        getDataModelString(table.PointerSize, table.LongSize, table.WCharSize,
+                           table.LongDoubleSize) +
+        " differs from " +
+        getDataModelString(h0.PointerSize, h0.LongSize, h0.WCharSize,
+                           h0.LongDoubleSize) +
+        " in " + toString(&lto));
+  return false;
 }
 
 // The symbol map (exports-multiasm 5.4 step 4). The first violation is the

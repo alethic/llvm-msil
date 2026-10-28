@@ -1,0 +1,51 @@
+# The placeholders %{msil_copts} and %{msil_expect} (plan 5.12.3; M23): a
+# nested lit runs prog/Inputs/nested/m23 with the stand-ins of harness/prog
+# under the default obj pipeline:
+# (1) copts.test REDEFINEs %{msil_copts} = -DMSIL_COPTS_CHECK=1 -I<its
+#     directory>: msil-prog.py's --cflags is '%{msil_cflags} %{msil_copts}',
+#     so every compile of the MSIL build (clang -c for the MSIL triple) and,
+#     where the native oracle runs (lit.local.cfg), of the native build has
+#     the flags after %{msil_cflags}; it REDEFINEs %{msil_expect} =
+#     <its directory>/shared, so the run (and the native and .NET Framework
+#     runs) compare with shared.expected, and the test passes although there
+#     is no copts.expected;
+# (2) det-copts.test: %{msil_det} builds both of its builds with the flags of
+#     its %{msil_copts};
+# (3) with neither placeholder redefined (no-redefine.c, a C test that only
+#     this test runs, as prog/Inputs/nested/lit.local.cfg requires) the
+#     compile line has nothing after %{msil_cflags} but the level, and the
+#     run's --expect is the test's own stem;
+# (4) every build of a %{msil_c} test gets its %{msil_copts} after
+#     %{msil_cflags} on every pipeline (plan section 12, '5.12.3 clarified
+#     (`%{msil_copts}` in `%{msil_c}`)'): pipeline-obj/Inputs/obj/copts-c.c
+#     REDEFINEs it to -DMSIL_COPTS_CHECK=4 and runs %{msil_c_O2} with the
+#     stand-ins of pipeline-obj (whose -S text and msil-ld image describe
+#     the same program); under obj with msil_equiv=1 the compile of the
+#     one-source program and the -S compile of O3's and O6's asm reference
+#     (asm/prog.il) have the flags, and under msil_pipeline=asm the -S
+#     compile and, where the native oracle runs, the native leg's compile.
+# prog/update-expected-m23.test checks update-expected.py's side.
+# REQUIRES: msil-ld, msil-ar, msil-cil-dump
+
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= %S/prog/Inputs/nested/m23/copts.test %S/prog/Inputs/nested/m23/det-copts.test %S/prog/Inputs/nested/m23/no-redefine.c > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/prog/Inputs/nested/m23/copts\.test " "^PASS: MSIL :: harness/prog/Inputs/nested/m23/det-copts\.test " "^PASS: MSIL :: harness/prog/Inputs/nested/m23/no-redefine\.c "
+
+# (1)
+# RUN: %{harness_check} contains %t.log "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \S+ -DMSIL_COPTS_CHECK=1 -I\S+m23 -O2 -c \S*main\.c -o obj/main\.o$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \S+ -DMSIL_COPTS_CHECK=1 -I\S+m23 -O2 -c \S*util\.c -o obj/util\.o$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*m23/shared'? --out '?\S*copts\.test\.tmp\.O2\.out'? .*prog\.exe'?$"
+# RUN: %if msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.log "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=x86_64-pc-windows-msvc -std=gnu17 -ffreestanding -Werror=return-type \S+ -DMSIL_COPTS_CHECK=1 -I\S+m23 -O2 -c \S*main\.c -o obj/main\.o$" "^# executed command: .*msil-run\.py'? .* --native --expect '?\S*m23/shared'? --out '?\S*copts\.test\.tmp\.O2\.native\.out'? " "^# executed command: .*msil-run\.py'? .* --netfx --expect '?\S*m23/shared'? --out '?\S*copts\.test\.tmp\.O2\.netfx\.out'? " %}
+# RUN: %{harness_check} lacks %t.log "--expect '?\S*m23/copts'? "
+
+# (2)
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? .* --det --level O2 --workdir '?\S*det-copts\.test\.tmp\.det\.d'? .*$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \S+ -DMSIL_COPTS_CHECK=2 -O2 -fdebug-compilation-dir=\. -c \S*main\.c -o obj/main\.o$"
+
+# (3)
+# RUN: %{harness_check} contains %t.log "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type -I\S+Inputs -O2 -c \S*no-redefine\.c -o obj/no-redefine\.o$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*m23/no-redefine'? --out '?\S*no-redefine\.c\.tmp\.O2\.out'? "
+
+# (4) under obj with msil_equiv=1 (which needs the lister of %msil_canon,
+# llvm-cil-dump), then under asm
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_equiv=1 %S/pipeline-obj/Inputs/obj/copts-c.c > %t.equiv.log 2>&1
+# RUN: %{harness_check} contains %t.equiv.log "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/copts-c\.c " "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \S+ -DMSIL_COPTS_CHECK=4 -O2 -c \S*copts-c\.c -o obj/copts-c\.o$" "^# executed command: .*prog-cc\.py'? --as cc --target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \S+ -DMSIL_COPTS_CHECK=4 -O2 -S '?\S*copts-c\.c'? -mllvm -msil-assembly-name=prog -o '?\S*copts-c\.c\.tmp\.O2\.d/asm/prog\.il'?$" "^# \| msil-equiv: O3: \S*copts-c\.c\.tmp\.O2\.d/equiv/prog\.exe and \S*copts-c\.c\.tmp\.O2\.d/asm/prog\.exe are equal "
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=asm %S/pipeline-obj/Inputs/obj/copts-c.c > %t.asm.log 2>&1
+# RUN: %{harness_check} contains %t.asm.log "^PASS: MSIL :: harness/pipeline-obj/Inputs/obj/copts-c\.c " "^# executed command: .*prog-cc\.py'? --as cc --target=\S+-msil -std=gnu17 -ffreestanding -Werror=return-type \S+ -DMSIL_COPTS_CHECK=4 -O2 -S '?\S*copts-c\.c'? -o '?\S*copts-c\.c\.tmp\.O2\.il'?$"
+# RUN: %if msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.asm.log "^# executed command: .*prog-cc\.py'? --as cc .*--target=x86_64-pc-windows-msvc -std=gnu17 -ffreestanding -Werror=return-type \S+ -DMSIL_COPTS_CHECK=4 -O2 '?\S*copts-c\.c'?( .*)? -o '?\S*copts-c\.c\.tmp\.O2\.native\.exe'?$" "^# executed command: .*msil-run\.py'? .* --native --expect '?\S*obj/copts-c'? --out '?\S*copts-c\.c\.tmp\.O2\.native\.out'? " %}
+# RUN: %{harness_check} lacks %t.asm.log "msil-prog\.py"

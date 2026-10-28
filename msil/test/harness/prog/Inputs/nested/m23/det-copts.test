@@ -1,0 +1,8 @@
+# Run in a nested lit by ../../../../copts-expect.test: %{msil_det} builds
+# with the test's %{msil_copts} too (M23).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_copts} = -DMSIL_COPTS_CHECK=2
+# RUN: %{msil_det}
+#--- main.c
+// prog-value: 5

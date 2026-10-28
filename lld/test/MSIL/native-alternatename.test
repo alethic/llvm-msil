@@ -1,0 +1,134 @@
+## /alternatename over a definition in native machine code
+## (ImplementationPlan.md 5.9.4: '/alternatename:a=b' resolves a as b only
+## when a is still undefined after all inputs, lld-link's rule; section 12
+## rows of 2026-10-27 'M22.c native objects on the command line as
+## implemented', 'M23.d extended (/alternatename over native machine code in
+## an archive)' and 'M23.c extended (/alternatename over native machine
+## code, tests)').
+## alt.ll (x86_64-pc-windows-msvc-msil) defines b_fn, calls a_fn and carries
+## '/alternatename:a_fn=b_fn' in !llvm.linker.options. nat.obj is a COFF
+## object whose .text defines a_fn (coff-code.yaml with -D FN1=a_fn).
+## lld-link links such an object (or extracts the archive member for the
+## undefined a_fn) before it applies /alternatename, so a_fn is defined and
+## never redirected; msil-ld must not redirect it either, and MSIL cannot
+## link machine code, so every link is the error
+## 'symbol 'a_fn' is defined only in native object code (<file>); MSIL
+## cannot link machine code', with the reference that needs it, and writes
+## no output:
+## 1. nat.obj on the command line, before and after the module, through the
+##    object link (alt.o), the LTO PE link (alt.bc) and --lto-emit-asm;
+## 2. nat.obj as the member of a static archive, an llvm-lib one (and, for
+##    the object link, an llvm-ar one), before and after the module, through
+##    the same three links: the error names '<archive>(<member>)', as it
+##    does for the same link without the directive (noalt.o).
+## 3. The control: a native object that does not define a_fn (fn1, fn2 and
+##    dataobj) leaves a_fn undefined after all inputs, so the redirect
+##    applies: the links print nothing and main calls b_fn (the LTO links at
+##    --lto-O0, which keeps the call).
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj alt.ll -o alt.o
+# RUN: llc -filetype=obj noalt.ll -o noalt.o
+# RUN: llvm-as alt.ll -o alt.bc
+# RUN: yaml2obj -D FN1=a_fn %S/Inputs/native/coff-code.yaml -o nat.obj
+# RUN: yaml2obj %S/Inputs/native/coff-code.yaml -o other.obj
+# RUN: llvm-lib /machine:x64 /out:natlib.lib nat.obj
+# RUN: llvm-ar rcs natar.a nat.obj
+# RUN: mkdir out
+
+# DEFINE: %{fc} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=error: --implicit-check-not=warning:
+
+## 1. The object on the command line.
+# RUN: not msil-ld alt.o nat.obj -o out/o1.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE=nat.obj -DREF=alt.o
+# RUN: not msil-ld nat.obj alt.o -o out/o2.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE=nat.obj -DREF=alt.o
+# RUN: not msil-ld alt.bc nat.obj -o out/o3.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE=nat.obj -DREF=alt.bc
+# RUN: not msil-ld nat.obj alt.bc -o out/o4.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE=nat.obj -DREF=alt.bc
+# RUN: not msil-ld --lto-emit-asm alt.bc nat.obj -o out/o5.il 2>&1 | %{fc} --check-prefix=NATIVE -DFILE=nat.obj -DREF=alt.bc
+# RUN: not msil-ld --lto-emit-asm nat.obj alt.bc -o out/o6.il 2>&1 | %{fc} --check-prefix=NATIVE -DFILE=nat.obj -DREF=alt.bc
+
+## 2. The object as an archive member; the same link without the directive
+## gives the same error.
+# RUN: not msil-ld noalt.o natlib.lib -o out/a0.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE="natlib.lib(nat.obj)" -DREF=noalt.o
+# RUN: not msil-ld alt.o natlib.lib -o out/a1.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE="natlib.lib(nat.obj)" -DREF=alt.o
+# RUN: not msil-ld natlib.lib alt.o -o out/a2.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE="natlib.lib(nat.obj)" -DREF=alt.o
+# RUN: not msil-ld alt.o natar.a -o out/a3.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE="natar.a(nat.obj)" -DREF=alt.o
+# RUN: not msil-ld natar.a alt.o -o out/a4.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE="natar.a(nat.obj)" -DREF=alt.o
+# RUN: not msil-ld alt.bc natlib.lib -o out/a5.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE="natlib.lib(nat.obj)" -DREF=alt.bc
+# RUN: not msil-ld natlib.lib alt.bc -o out/a6.exe 2>&1 | %{fc} --check-prefix=NATIVE -DFILE="natlib.lib(nat.obj)" -DREF=alt.bc
+# RUN: not msil-ld --lto-emit-asm alt.bc natlib.lib -o out/a7.il 2>&1 | %{fc} --check-prefix=NATIVE -DFILE="natlib.lib(nat.obj)" -DREF=alt.bc
+# RUN: not msil-ld --lto-emit-asm natlib.lib alt.bc -o out/a8.il 2>&1 | %{fc} --check-prefix=NATIVE -DFILE="natlib.lib(nat.obj)" -DREF=alt.bc
+# NATIVE:      {{^}}msil-ld: error: symbol 'a_fn' is defined only in native object code ([[FILE]]); MSIL cannot link machine code{{$}}
+# NATIVE-NEXT: {{^}}>>> referenced by [[REF]]:(main){{$}}
+
+## No failed link wrote its output.
+# RUN: not ls out/o1.exe
+# RUN: not ls out/o2.exe
+# RUN: not ls out/o3.exe
+# RUN: not ls out/o4.exe
+# RUN: not ls out/o5.il
+# RUN: not ls out/o6.il
+# RUN: not ls out/a0.exe
+# RUN: not ls out/a1.exe
+# RUN: not ls out/a2.exe
+# RUN: not ls out/a3.exe
+# RUN: not ls out/a4.exe
+# RUN: not ls out/a5.exe
+# RUN: not ls out/a6.exe
+# RUN: not ls out/a7.il
+# RUN: not ls out/a8.il
+
+## 3. The control: a_fn stays undefined, so it is b_fn. The other input
+## order gives the same bytes; it links to the same file name in another
+## directory, because the output name sets the assembly and module names and
+## so the content-hash TimeDateStamp.
+# RUN: msil-ld alt.o other.obj -o ctl.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ctl.exe | FileCheck %s --check-prefix=CTL --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=undef_ --implicit-check-not="'a_fn'"
+# RUN: rm -rf o2 && mkdir o2
+# RUN: msil-ld other.obj alt.o -o o2/ctl.exe 2>&1 | count 0
+# RUN: cmp ctl.exe o2/ctl.exe
+# RUN: msil-ld --lto-O0 alt.bc other.obj -o ctl-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ctl-lto.exe | FileCheck %s --check-prefix=CTL --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=undef_ --implicit-check-not="'a_fn'"
+# RUN: msil-ld --lto-O0 --lto-emit-asm alt.bc other.obj -o ctl.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=CTL-TEXT --input-file=ctl.il --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not="'a_fn'"
+# CTL:      {{^}}  .method 'main' int32() flags={{.*}}
+# CTL:      {{^}}    L0: call int32() '<Module>'::'b_fn'{{$}}
+# CTL-TEXT: {{^}}.method public static int32 'main'() cil managed{{$}}
+# CTL-TEXT: {{^}}  call int32 'b_fn'(){{$}}
+
+#--- alt.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @b_fn() {
+  ret i32 11
+}
+
+define i32 @main() {
+  %r = call i32 @a_fn()
+  ret i32 %r
+}
+
+declare i32 @a_fn()
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/alternatename:a_fn=b_fn"}
+
+#--- noalt.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @b_fn() {
+  ret i32 11
+}
+
+define i32 @main() {
+  %r = call i32 @a_fn()
+  ret i32 %r
+}
+
+declare i32 @a_fn()

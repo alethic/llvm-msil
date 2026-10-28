@@ -1,0 +1,11 @@
+# msil/utils/corpus/fetch.py --self-test (plan 5.12.9; M23), so every leg
+# that runs msil/test/harness re-checks the exit corpus' fetch step, not only
+# the gate step that runs the self-test directly: https URLs only,
+# every archive's hash checked before it is extracted, safe extraction (no
+# member outside the tree, no absolute path, no link that leaves it), the
+# tree hash, the stamp and the refusal of a cache inside the repository. The
+# self-test is offline (file: URLs into its own temporary directory, which
+# it removes), downloads nothing and writes nothing into the repository or
+# the build tree.
+# RUN: %python %S/../../utils/corpus/fetch.py --self-test > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^fetch.py self-test: PASS"

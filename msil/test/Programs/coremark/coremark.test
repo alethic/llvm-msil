@@ -1,0 +1,33 @@
+# CoreMark as a static library with its own port: CoreMark validates its CRCs, and a negative check.
+# coremark_driver.c calls core_main.c's main, renamed coremark_main by
+# -Dmain=coremark_main (the driver undefines the macro), twice. coremark.h
+# makes main return 0 whatever CoreMark finds, so CoreMark's result reaches
+# the driver through the port: core_portme.h turns main's last call,
+# portable_fini, into a call that also passes main's results and
+# total_errors. The performance run (seeds 0, 0, 0x66, 200 iterations)
+# prints the list, matrix, state and final CRCs and CoreMark's error count,
+# the number of those CRCs that differ from CoreMark's known values; the
+# collision run (seeds with the same seed CRC, one iteration) must count
+# mismatches, or the driver exits 255. ee_printf is compiled out
+# (core_portme.h). libcoremark.a holds CoreMark's five sources.
+# Built as a multi-TU program with static archives (%{msil_archives}: one per
+# library plus libsup.a, the support library of ../support) from the corpus
+# cache (%{msil_corpus}, filled by msil/utils/corpus/fetch.py), with the shim
+# headers of ../shim in both builds (%{msil_copts}), at every level of the leg,
+# and compared with the native build of the same sources; the performance
+# run's error count is the exit status, so the transcript ends [exit 0].
+# Plan 5.12.9 (M23).
+# ../det/coremark.test repeats these REDEFINE lines for %{msil_det}.
+# REQUIRES: msil-corpus-coremark
+# REDEFINE: %{msil_srcs} = %S/../coremark/coremark_driver.c %S/../coremark/core_portme.c
+# REDEFINE: %{msil_archives} = coremark=%{msil_corpus}/coremark-1f483d5b8316/core_list_join.c, \
+# REDEFINE:   %{msil_corpus}/coremark-1f483d5b8316/core_main.c, \
+# REDEFINE:   %{msil_corpus}/coremark-1f483d5b8316/core_matrix.c, \
+# REDEFINE:   %{msil_corpus}/coremark-1f483d5b8316/core_state.c, \
+# REDEFINE:   %{msil_corpus}/coremark-1f483d5b8316/core_util.c;sup=%S/../support/sup_arena.c, \
+# REDEFINE:   %S/../support/sup_malloc.c,%S/../support/sup_memcmp.c,%S/../support/sup_memset.c, \
+# REDEFINE:   %S/../support/sup_memcpy.c,%S/../support/sup_strlen.c,%S/../support/sup_out.c
+# REDEFINE: %{msil_copts} = -isystem %S/../shim -I%S/../support -I%S/../coremark \
+# REDEFINE:   -I%{msil_corpus}/coremark-1f483d5b8316 -DITERATIONS=200 -Dmain=coremark_main \
+# REDEFINE:   -Werror=implicit-function-declaration -w
+# RUN: %{msil_prog}

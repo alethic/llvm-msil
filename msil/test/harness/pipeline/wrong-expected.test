@@ -2,7 +2,8 @@
 # runs %{msil_c} against an expected file that says '[exit 8]' while its
 # program exits with 7; lit.cfg.py keeps Inputs/ out of discovery, so a
 # nested lit runs it (the composite expands to several commands, which 'not'
-# cannot wrap). It must fail, and its output must show the transcript diff.
+# cannot wrap). It must fail, and its output must show the transcript diff. The
+# nested lit selects the asm pipeline (the default is obj from M23).
 
-# RUN: not %{harness_lit} %S/Inputs/wrong-expected.c > %t.log 2>&1
+# RUN: not %{harness_lit} --param msil_pipeline=asm %S/Inputs/wrong-expected.c > %t.log 2>&1
 # RUN: %{harness_check} contains %t.log "^FAIL: MSIL :: harness/pipeline/Inputs/wrong-expected\.c" "-\s?\[exit 8\]" "\+\s?\[exit 7\]"

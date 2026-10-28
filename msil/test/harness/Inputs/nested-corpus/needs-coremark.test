@@ -1,0 +1,5 @@
+# Run in a nested lit by ../../corpus-param.test: a test of one corpus entry
+# (as msil/test/Programs/coremark requires it), UNSUPPORTED when the stamp
+# leaves the entry out.
+# REQUIRES: msil-corpus, msil-corpus-coremark
+# RUN: echo coremark is in the stamp

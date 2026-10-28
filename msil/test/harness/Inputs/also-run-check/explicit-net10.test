@@ -1,0 +1,8 @@
+# Run in a nested lit by ../../also-run.test only, for its case (5): as
+# explicit.test, but the check line holds only on .NET 8, so with
+# msil_also_run=10 the main run on .NET 8 passes and the FileCheck of the
+# .NET 10 run fails the test.
+# REDEFINE: %{msil_also_run_image} = %t.dll
+# RUN: %ilasm -dll -output=%t.dll %S/../../pipeline/Inputs/also-run/runtime-major.il.in
+# RUN: %msil_exec --out %t.dll.out %t.dll && FileCheck --input-file=%t.dll.out --match-full-lines %s %{msil_also_run_check}
+# CHECK: [exit 0]

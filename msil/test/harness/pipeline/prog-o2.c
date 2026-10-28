@@ -1,5 +1,7 @@
 // The per-level form %{msil_c_O2} (plan 5.5, D32): -O2 only, whatever
 // msil_opt_levels says, with the same legs as %{msil_c}.
+// The asm expansion, the asm oracle from M23 (harness/pipeline-obj pins obj).
+// REQUIRES: msil-pipeline=asm
 // RUN: rm -f %t.*.out
 // RUN: %{msil_c_O2}
 // RUN: %{harness_check} equals %t.O2.out "[exit 11]"

@@ -30,7 +30,7 @@
 # configuration from compiling the E7 start.o.
 # REQUIRES: msil-ld, msil-ar
 
-# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 %S/Inputs/nested > %t.ok-asm.log 2>&1
+# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_pipeline=asm %S/Inputs/nested > %t.ok-asm.log 2>&1
 # RUN: %{harness_check} contains %t.ok-asm.log "^\s*MSIL :: harness/prog/Inputs/nested/features\.test$" "note: msil: pipeline asm \(%\{msil_prog\}: obj, link output pe\)$"
 # RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_pipeline=obj --param msil_equiv=1 --param msil_scale_tests=1 %S/Inputs/nested > %t.ok-obj.log 2>&1
 # RUN: %{harness_check} contains %t.ok-obj.log "note: msil: pipeline obj \(%\{msil_prog\}: obj, link output pe, equivalence oracles O3, O6\)$"
@@ -47,13 +47,13 @@
 # RUN: %{harness_check} lacks %t.ok-asm.log "feature msil-equiv" "feature msil-scale-tests"
 
 # (1)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_link_output=il %S/Inputs/nested > %t.1a.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=asm --param msil_link_output=il %S/Inputs/nested > %t.1a.log 2>&1
 # RUN: %{harness_check} contains %t.1a.log "fatal: msil: --param msil_link_output=il: under msil_pipeline=asm %\{msil_prog\} links CIL objects, whose image msil-ld writes itself \(plan 5\.12\.1\); use pe, or msil_pipeline=lto$"
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_link_output=il %S/Inputs/nested > %t.1b.log 2>&1
 # RUN: %{harness_check} contains %t.1b.log "fatal: msil: --param msil_link_output=il: under msil_pipeline=obj %\{msil_prog\} links CIL objects"
 
 # (2)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_equiv=1 %S/Inputs/nested > %t.2a.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=asm --param msil_equiv=1 %S/Inputs/nested > %t.2a.log 2>&1
 # RUN: %{harness_check} contains %t.2a.log "fatal: msil: --param msil_equiv=1 compares msil-ld's images with ilasm's: it needs msil_pipeline=obj \(O3, O6\) or msil_pipeline=lto with msil_link_output=pe \(O4\), not msil_pipeline=asm with msil_link_output=pe$"
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_link_output=il --param msil_equiv=1 %S/Inputs/nested > %t.2b.log 2>&1
 # RUN: %{harness_check} contains %t.2b.log "fatal: msil: --param msil_equiv=1 compares .* not msil_pipeline=lto with msil_link_output=il$"

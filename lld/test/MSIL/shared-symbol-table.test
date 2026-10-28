@@ -21,11 +21,15 @@
 ## msvcrt, ucrt, ucrtbase, crtdll or msvcr*, as given, else 'none' (stub
 ## import libraries make the -l options resolve).
 ## llvm-cil-dump --link-info prints the table (printSymbolTable): the header
-## line, ExportClass, Data and Function lines. The plan leaves the spelling
-## of INTERFACE and of ABI's descriptor to M22.a; the checks accept
-## ' flags=0x01' or ' flags=INTERFACE' and look for the descriptor in the
-## words of a link-info Signature line (5.8.11: 'SRET size=<n>
-## align=<bytes>', 'byval=<param>:<size>:<align>').
+## line, ExportClass, Data and Function lines. The spellings are the ones
+## M22's commit froze (section 12 row of 2026-10-27 '5.9.15 and 5.8.11
+## clarified (the symbol table's INTERFACE and ABI, as M22.a built them)'):
+## the header line ends ' flags=INTERFACE' for --interface-only, and a
+## function prints as 'Function[ VARARG][ WEAK][ ABI] '<name>'', with ABI
+## followed by the descriptor's items as a link-info Signature line prints
+## them ('SRET size=<n> align=<bytes>', 'byval=<param>:<size>:<align>').
+## The checks match each line whole (M23.c, row 'M23.c extended (exact
+## symbol-table and option texts in M22's tests)').
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -52,9 +56,9 @@
 # TABLE-NEXT: {{^}}Data WEAK 'wv' size=8 align=8{{$}}
 # TABLE-NEXT: {{^}}Data 'cm' size=4 align=4{{$}}
 # TABLE-NEXT: {{^}}Function WEAK 'wfn'{{$}}
-# TABLE-NEXT: {{^}}Function{{( [A-Z]+)*}} 'mk' {{(.* )?}}SRET size=12 align=4{{( .*)?$}}
-# TABLE-NEXT: {{^}}Function{{( [A-Z]+)*}} 'take' {{(.* )?}}byval=0:12:4{{( .*)?$}}
-# TABLE-NEXT: {{^}}Function WEAK{{( [A-Z]+)*}} 'wmk' {{(.* )?}}SRET size=12 align=4{{( .*)?$}}
+# TABLE-NEXT: {{^}}Function ABI 'mk' SRET size=12 align=4{{$}}
+# TABLE-NEXT: {{^}}Function ABI 'take' byval=0:12:4{{$}}
+# TABLE-NEXT: {{^}}Function WEAK ABI 'wmk' SRET size=12 align=4{{$}}
 # TABLE-NOT:  {{.}}
 
 ## The golden bytes: the table above, as the attribute value of the
@@ -74,7 +78,7 @@
 ## --interface-only: the same table with INTERFACE (flags 0x01).
 # RUN: msil-ld -shared --interface-only lib.o -o iface/lib.dll 2>&1 | count 0
 # RUN: llvm-cil-dump --link-info iface/lib.dll | FileCheck %s --check-prefix=IFACE
-# IFACE:      {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8 flags={{0x01|INTERFACE}}{{$}}
+# IFACE:      {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8 flags=INTERFACE{{$}}
 # IFACE-NEXT: {{^}}ExportClass 'lib'{{$}}
 # IFACE-NEXT: {{^}}Data 'counter' size=4 align=4{{$}}
 # RUN: llvm-cil-dump iface/lib.dll | FileCheck %s --check-prefix=IFACE-BLOB

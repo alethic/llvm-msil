@@ -51,6 +51,23 @@
 # newest .NET SDK's csc (feature msil-csc, parameter msil_require_csc; see
 # "C# compiler" below).
 #
+# From M23 (plan 5.12.1, Q31) objects are the default pipeline: with no
+# parameter, msil_pipeline=obj and msil_link_output=pe, so %{msil_c},
+# %{msil_ll} and %{msil_prog} compile CIL objects and run msil-ld's image;
+# msil_pipeline=asm (-S plus ilasm) stays selectable as the asm oracle. The
+# exit corpus (plan 5.12.9) is read from a cache that
+# msil/utils/corpus/fetch.py fills outside the repository (msil_corpus_dir,
+# features msil-corpus and msil-corpus-<name>, %{msil_corpus}; see "exit
+# corpus" below); msil_also_run repeats jitall and the run of every
+# composite on further .NET runtimes against the same expected file, and
+# those of an explicit-RUN test with %{msil_also_run_check} and
+# %{msil_also_run_image} (see "more runtimes" below); a test adds compile
+# flags with %{msil_copts} to both builds of %{msil_prog} and %{msil_det}
+# and to every build of %{msil_c} on every pipeline, O3's and O6's asm
+# reference included (%{msil_ll} takes none, because llc has no C flags),
+# and names another expected file with %{msil_expect} (default
+# %S/%{s:stem}).
+#
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
 # compiler-rt builtins for the i128 helpers (msil_native_rtlib); on Linux by
@@ -75,10 +92,12 @@
 # and a .NET runtime; see M1/lit.local.cfg); --param msil_require_link=1 (and
 # msil_pipeline=lto or obj) does the same for msil-ld and llvm-ar;
 # --param msil_require_csc=1 does it for the SDK's csc of %msil_csc (M22);
-# and an explicitly requested runner, runtime, leg or tool that cannot be
-# used is one too.
+# --param msil_require_corpus=1 (the corpus legs) does it for the exit
+# corpus; and an explicitly requested runner, runtime, leg or tool that
+# cannot be used is one too.
 
 import glob
+import hashlib
 import importlib.util
 import json
 import os
@@ -310,17 +329,18 @@ wsl_ilasm_param = params.get("msil_wsl_ilasm")  # see "Linux ilasm in WSL"
 
 # --param msil_pipeline=asm|lto|obj (plan 5.12.1, 5.12.2; feature
 # msil-pipeline=<p>) decides how %{msil_c}, %{msil_ll} and their per-level
-# forms build a test: asm (the default until M23) as in Phase 1, clang -S (or
-# llc) and ilasm -dll; obj (M20) as %{msil_prog} of the one source, clang -c
-# and the link through msil-ld, with %{msil_ll} compiled by
-# 'llc -filetype=obj'; lto as %{msil_prog} of the one C source through
-# clang -flto -c, while %{msil_ll} stays on llc text. %{msil_prog}
-# (multi-TU programs, see "linker" below) has no text linker from M20: it is
-# obj's under asm and obj and lto's under lto, which the feature
-# msil-prog-pipeline=<p> names; a check that depends on how %{msil_prog}
-# builds is guarded by msil-prog-pipeline=<p>, never by msil-pipeline=<p>,
-# which decides only %{msil_c} and %{msil_ll}.
-pipeline = params.get("msil_pipeline", "asm")
+# forms build a test: obj (M20; the default from M23, Q31) as %{msil_prog}
+# of the one source, clang -c and the link through msil-ld, with %{msil_ll}
+# compiled by 'llc -filetype=obj'; asm (the default until M23, now the asm
+# oracle) as in Phase 1, clang -S (or llc) and ilasm -dll; lto as
+# %{msil_prog} of the one C source through clang -flto -c, while %{msil_ll}
+# stays on llc text. %{msil_prog} (multi-TU programs, see "linker" below)
+# has no text linker from M20: it is obj's under asm and obj and lto's under
+# lto, which the feature msil-prog-pipeline=<p> names; a check that depends
+# on how %{msil_prog} builds is guarded by msil-prog-pipeline=<p>, never by
+# msil-pipeline=<p>, which decides only %{msil_c} and %{msil_ll}.
+pipeline_param = params.get("msil_pipeline")
+pipeline = pipeline_param or "obj"
 if pipeline not in ("asm", "lto", "obj"):
     fatal("--param msil_pipeline=%s: use asm, lto or obj" % pipeline)
 features.add("msil-pipeline=" + pipeline)
@@ -706,6 +726,71 @@ if exec_major is not None and (runner == "wsl" or dotnet):
     note("programs run on Microsoft.NETCore.App %s" % exec_runtimes[exec_major][0])
 else:
     note("no usable .NET runtime; execution tests are UNSUPPORTED")
+
+# ---------------------------------------------------------------- more runtimes
+# --param msil_also_run=<entry>[,<entry>...] (plan 5.12.2, 5.12.10; M23):
+# each entry is <major> or <major>+tc0. After the main run, every composite
+# repeats jitall and the run of the same verified image once per entry, on
+# Microsoft.NETCore.App <major>.x of the runner (its own runtimeconfig.json)
+# and, for +tc0, with DOTNET_TieredCompilation=0 (the optimizing JIT, plan
+# D38), against the same expected file, each into <t>.<L>.also-net<major>
+# [-tc0].out. So one verified build serves several runtimes (the .NET 10 and
+# TieredCompilation=0 runs of the net8 and wsl-net10 legs, plan 5.12.11).
+# The leg's msil_dotnet_env applies to these runs too. Feature
+# msil-also-run. An entry that is not <major> or <major>+tc0, or that comes
+# twice, is a configuration error; so is a runtime that the runner lacks
+# under msil_require_exec=1 (without it, a note, and the entry is left out).
+# The .NET Framework run stays msil_run_netfx.
+# A test with explicit RUN lines follows msil_also_run with two names
+# (plan 5.12.3): it REDEFINEs the placeholder %{msil_also_run_image} (default
+# msil-also-run-image-not-set, so a test that leaves it fails) to its image,
+# a path or a placeholder of its own, and appends %{msil_also_run_check}
+# after its main run's FileCheck. Per entry, in the parameter's order, that
+# expands to jitall (under %if msil-jitall) and the run of the image with
+# the entry's runtimeconfig.json and environment, as above, into
+# <image>.also-net<major>[-tc0].out, then FileCheck --match-full-lines of
+# that transcript with the test's own check lines; without msil_also_run it
+# expands to nothing.
+also_run = []  # [(major, tc0)]
+for entry in params.get("msil_also_run", "").split(","):
+    entry = entry.strip()
+    if not entry:
+        continue
+    m = re.match(r"^(\d+)(\+tc0)?$", entry)
+    if not m:
+        fatal(
+            "--param msil_also_run: %r is not <major> or <major>+tc0 (for example "
+            "msil_also_run=10,8+tc0)" % entry
+        )
+    item = (int(m.group(1)), bool(m.group(2)))
+    if item in also_run:
+        fatal("--param msil_also_run names %s twice" % entry)
+    if item[0] not in exec_runtimes:
+        msg = (
+            "--param msil_also_run=%s: no Microsoft.NETCore.App %d.x for the %s "
+            "runner (installed: %s)"
+            % (
+                entry,
+                item[0],
+                runner,
+                ", ".join(str(x) for x in sorted(exec_runtimes)) or "none",
+            )
+        )
+        if config.msil_require_exec:
+            fatal(msg + "; msil_require_exec=1 makes it a configuration error")
+        note(msg + "; the entry is left out")
+        continue
+    also_run.append(item)
+if also_run:
+    features.add("msil-also-run")
+    note(
+        "also run on %s"
+        % ", ".join(
+            "Microsoft.NETCore.App %s%s"
+            % (exec_runtimes[major][0], " with DOTNET_TieredCompilation=0" if tc0 else "")
+            for major, tc0 in also_run
+        )
+    )
 
 # ---------------------------------------------------------------- Linux ilasm in WSL
 # --param msil_wsl_ilasm=PATH (with msil_runner=wsl; the Linux assembler leg
@@ -1501,9 +1586,11 @@ if oracle_required or bool_param("msil_native_oracle"):
 # the tools; by default they are the tree's <build>/bin/msil-ld (lld's msil
 # flavor), llvm-ar and llvm-nm, never ones from PATH: the Visual Studio
 # llvm-ar cannot index the tree's bitcode. An empty value disables a tool.
-# Features msil-ld and msil-ar. msil_pipeline=lto and obj, whose %{msil_c}
-# links through them, and msil_require_link=1 make a missing one a
-# configuration error.
+# Features msil-ld and msil-ar. An explicit msil_pipeline=lto or obj, whose
+# %{msil_c} links through them, and msil_require_link=1 make a missing one a
+# configuration error; under the default obj pipeline (no msil_pipeline) a
+# missing one only takes away msil-exec, so the execution tests are
+# UNSUPPORTED and a tree without lld still runs the rest.
 def find_tree_tool(name, exe):
     override = params.get("msil_" + name)
     if override is None:
@@ -1542,13 +1629,19 @@ link_missing = [
     )
     if not path
 ]
-if link_missing and pipeline in ("lto", "obj"):
+if link_missing and pipeline_param in ("lto", "obj"):
     fatal(
         "--param msil_pipeline=%s links every C test through msil-ld, but "
         "these are missing: %s" % (pipeline, "; ".join(link_missing))
     )
 if link_missing and config.msil_require_link:
     fatal("msil_require_link=1, but these are missing: " + "; ".join(link_missing))
+if link_missing and pipeline in ("lto", "obj"):
+    note(
+        "the default pipeline %s links every C test through msil-ld, but these "
+        "are missing: %s; execution tests are UNSUPPORTED (pass --param "
+        "msil_pipeline=asm for -S and ilasm)" % (pipeline, "; ".join(link_missing))
+    )
 note(
     "pipeline %s (%%{msil_prog}: %s, link output %s%s)"
     % (
@@ -1560,6 +1653,137 @@ note(
         else "",
     )
 )
+
+# ---------------------------------------------------------------- exit corpus
+# The exit corpus (plan 5.12.9, M23): msil/utils/corpus/fetch.py downloads
+# the pinned sources of msil/utils/corpus/manifest.json into a cache outside
+# the repository, as <cache>/<name>-<ref>/, and after verifying the entries
+# it selected writes <cache>/msil-corpus.stamp, JSON {"manifest_sha256":
+# <sha256 of manifest.json's bytes>, "trees": {<name>: <tree_sha256>}}.
+# --param msil_corpus_dir=DIR (plan 5.12.2) names the cache: default
+# $MSIL_CORPUS_CACHE, else fetch.py's default cache
+# (C:\llvm-msil-scratch\corpus-cache on Windows, ~/.cache/msil-corpus
+# elsewhere); an empty value disables the corpus. Feature msil-corpus only
+# when the stamp matches the checked-in manifest (its sha256), and
+# msil-corpus-<name> only for each tree the stamp lists with the manifest's
+# tree_sha256 whose directory exists; %{msil_corpus} is the cache directory
+# ('/' separators, unquoted, so that a test may write it inside
+# %{msil_archives} and %{msil_srcs}; a cache path with a blank is not used).
+# A missing or stale stamp is a note, and msil/test/Programs is UNSUPPORTED.
+# --param msil_require_corpus=1 (the corpus legs) makes it a configuration
+# error that names 'fetch.py --cache <dir>', and so is an entry that the
+# stamp lacks, unless --param msil_corpus_skip=<name>[,<name>...] names it:
+# entries left out on purpose (lit-legs passes $MSIL_CORPUS_SKIP; the CI
+# leaves CoreMark and c-testsuite out, plan 5.12.12), whose tests are then
+# UNSUPPORTED with a note. A name in msil_corpus_skip that the manifest does
+# not have is a configuration error.
+require_corpus = bool_param("msil_require_corpus")
+corpus_manifest = os.path.join(utils_dir, "corpus", "manifest.json")
+corpus_skip = []
+for _name in params.get("msil_corpus_skip", "").split(","):
+    if _name.strip() and _name.strip() not in corpus_skip:
+        corpus_skip.append(_name.strip())
+corpus_dir_param = params.get("msil_corpus_dir")
+if corpus_dir_param is None:
+    corpus_dir_param = os.environ.get("MSIL_CORPUS_CACHE") or (
+        r"C:\llvm-msil-scratch\corpus-cache"
+        if is_windows
+        else os.path.join(home, ".cache", "msil-corpus")
+    )
+corpus_dir = os.path.abspath(corpus_dir_param) if corpus_dir_param else None
+corpus_why = None  # why the feature msil-corpus is missing
+corpus_entries = {}  # name -> (ref, tree_sha256) of the manifest
+try:
+    with open(corpus_manifest, "rb") as f:
+        _manifest_bytes = f.read()
+    for _entry in json.loads(_manifest_bytes.decode("utf-8"))["programs"]:
+        corpus_entries[_entry["name"]] = (_entry["ref"], _entry["tree_sha256"])
+except (OSError, ValueError, KeyError, TypeError) as e:
+    _manifest_bytes = None
+    corpus_why = "cannot read %s: %s" % (slashes(corpus_manifest), e)
+_unknown_skip = [n for n in corpus_skip if corpus_entries and n not in corpus_entries]
+if _unknown_skip:
+    fatal(
+        "--param msil_corpus_skip: %s %s not in %s (entries: %s)"
+        % (
+            ", ".join(_unknown_skip),
+            "is" if len(_unknown_skip) == 1 else "are",
+            slashes(corpus_manifest),
+            ", ".join(corpus_entries),
+        )
+    )
+corpus_trees = []  # the names whose msil-corpus-<name> holds
+fetch_hint = "python msil/utils/corpus/fetch.py --cache %s" % slashes(
+    corpus_dir or "<dir>"
+)
+if corpus_why is None and not corpus_dir:
+    corpus_why = "disabled by an empty --param msil_corpus_dir="
+elif corpus_why is None and re.search(r"\s", corpus_dir):
+    corpus_why = "the cache %s contains a blank, which the tests cannot quote" % (
+        slashes(corpus_dir)
+    )
+elif corpus_why is None:
+    stamp_path = os.path.join(corpus_dir, "msil-corpus.stamp")
+    try:
+        with open(stamp_path, encoding="utf-8") as f:
+            stamp = json.load(f)
+        stamp_sha = stamp["manifest_sha256"]
+        stamp_trees = dict(stamp["trees"])
+    except FileNotFoundError:
+        corpus_why = "%s has no msil-corpus.stamp" % slashes(corpus_dir)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        corpus_why = "cannot read %s: %s" % (slashes(stamp_path), e)
+    else:
+        if stamp_sha != hashlib.sha256(_manifest_bytes).hexdigest():
+            corpus_why = (
+                "%s is stale: it was written for another msil/utils/corpus/"
+                "manifest.json" % slashes(stamp_path)
+            )
+        else:
+            for _name, (_ref, _tree) in corpus_entries.items():
+                if stamp_trees.get(_name) == _tree and os.path.isdir(
+                    os.path.join(corpus_dir, "%s-%s" % (_name, _ref))
+                ):
+                    corpus_trees.append(_name)
+if corpus_why is None:
+    features.add("msil-corpus")
+    for _name in corpus_trees:
+        features.add("msil-corpus-" + _name)
+    note(
+        "exit corpus: %s (%s)"
+        % (slashes(corpus_dir), ", ".join(corpus_trees) or "no tree")
+    )
+    lacking = [n for n in corpus_entries if n not in corpus_trees]
+    lacking_unskipped = [n for n in lacking if n not in corpus_skip]
+    if lacking_unskipped and require_corpus:
+        fatal(
+            "msil_require_corpus=1, but the stamp of %s lacks %s; run '%s' "
+            "(or name the entries in --param msil_corpus_skip)"
+            % (slashes(corpus_dir), ", ".join(lacking_unskipped), fetch_hint)
+        )
+    for _name in lacking:
+        note(
+            "exit corpus entry %s %s; its tests are UNSUPPORTED"
+            % (
+                _name,
+                "is left out on purpose (msil_corpus_skip)"
+                if _name in corpus_skip
+                else "is not in the stamp (run '%s')" % fetch_hint,
+            )
+        )
+elif require_corpus:
+    fatal(
+        "msil_require_corpus=1, but the exit corpus is not usable: %s; run '%s'"
+        % (corpus_why, fetch_hint)
+    )
+else:
+    note(
+        "exit corpus not available (msil/test/Programs is UNSUPPORTED): %s%s"
+        % (
+            corpus_why,
+            "; run '%s'" % fetch_hint if corpus_dir and _manifest_bytes else "",
+        )
+    )
 
 # ---------------------------------------------------------------- reference assemblies
 # From M21 msil-ld binds every BCL type and member of its output against
@@ -1882,8 +2106,11 @@ elif require_csc:
 else:
     note("csc is not available (%%msil_csc): %s" % csc_why)
 
-# Everything needed to compile and run C programs.
-if {"clang", "msil-registered-target", "msil-ilasm", "msil-dotnet"} <= features:
+# Everything needed to compile and run C programs: under obj and lto also
+# msil-ld and llvm-ar, through which %{msil_c} links.
+if {"clang", "msil-registered-target", "msil-ilasm", "msil-dotnet"} <= features and (
+    pipeline == "asm" or not link_missing
+):
     features.add("msil-exec")
 
 # ---------------------------------------------------------------- environment
@@ -1944,17 +2171,23 @@ if wsl_ilasm:
         ilasm_flags,
     )
 
-exec_cmd = "%s --expect-os %s%s" % (script("msil-run.py"), triple_os, limits)
-if runner == "wsl":
-    exec_cmd += " --runner wsl --wsl-distro %s --dotnet %s" % (
-        wsl_distro,
-        quote(wsl_dotnet),
-    )
-elif dotnet:
-    exec_cmd += " --dotnet " + quote(dotnet)
-if exec_runtimeconfig:
-    exec_cmd += " --runtimeconfig " + quote(exec_runtimeconfig)
-exec_cmd += env_args
+def make_exec_cmd(runtimeconfig, env):
+    """%msil_exec with the runtimeconfig.json <runtimeconfig> and the
+    --env arguments <env> (text)."""
+    cmd = "%s --expect-os %s%s" % (script("msil-run.py"), triple_os, limits)
+    if runner == "wsl":
+        cmd += " --runner wsl --wsl-distro %s --dotnet %s" % (
+            wsl_distro,
+            quote(wsl_dotnet),
+        )
+    elif dotnet:
+        cmd += " --dotnet " + quote(dotnet)
+    if runtimeconfig:
+        cmd += " --runtimeconfig " + quote(runtimeconfig)
+    return cmd + env
+
+
+exec_cmd = make_exec_cmd(exec_runtimeconfig, env_args)
 
 if "msil-ilverify" in features:
     # An image bound to .NET <N> references (msil_references=net8, net10 or
@@ -1978,25 +2211,56 @@ if "msil-ilverify" in features:
 else:
     verify_cmd = script("msil-verify.py") + " --skip"
 
-jitall_cmd = "%s --jitall %s%s" % (
-    script("msil-jitall.py"),
-    quote(jitall_dir or "jitall-disabled"),
-    limits,
-)
-if runner == "wsl":
-    # In WSL on the runtime of the programs: the module initializer runs.
-    jitall_cmd += " --runner wsl --wsl-distro %s --dotnet %s" % (
-        wsl_distro,
-        quote(wsl_dotnet),
+def make_jitall_cmd(runtimeconfig, env):
+    """%msil_jitall with the runtimeconfig.json <runtimeconfig> and the --env
+    arguments <env> (text)."""
+    cmd = "%s --jitall %s%s" % (
+        script("msil-jitall.py"),
+        quote(jitall_dir or "jitall-disabled"),
+        limits,
     )
-    if exec_runtimeconfig:
-        jitall_cmd += " --runtimeconfig " + quote(exec_runtimeconfig)
-else:
-    if dotnet:
-        jitall_cmd += " --dotnet " + quote(dotnet)
-    if local_runtimeconfig:
-        jitall_cmd += " --runtimeconfig " + quote(local_runtimeconfig)
-jitall_cmd += env_args
+    if runner == "wsl":
+        # In WSL on the runtime of the programs: the module initializer runs.
+        cmd += " --runner wsl --wsl-distro %s --dotnet %s" % (
+            wsl_distro,
+            quote(wsl_dotnet),
+        )
+    elif dotnet:
+        cmd += " --dotnet " + quote(dotnet)
+    if runtimeconfig:
+        cmd += " --runtimeconfig " + quote(runtimeconfig)
+    return cmd + env
+
+
+jitall_cmd = make_jitall_cmd(
+    exec_runtimeconfig if runner == "wsl" else local_runtimeconfig, env_args
+)
+
+# msil_also_run (see "more runtimes"): per entry, the tag of its transcript
+# and the jitall and run commands with that runtime's runtimeconfig.json
+# (jitall runs where the programs run, so both take the runner's runtime)
+# and, for +tc0, DOTNET_TieredCompilation=0 after the leg's msil_dotnet_env.
+also_run_cmds = []
+for _major, _tc0 in also_run:
+    _rc = write_runtimeconfig(_major)
+    _env = env_args + (' --env "DOTNET_TieredCompilation=0"' if _tc0 else "")
+    also_run_cmds.append(
+        (
+            "also-net%d%s" % (_major, "-tc0" if _tc0 else ""),
+            make_jitall_cmd(_rc, _env),
+            make_exec_cmd(_rc, _env),
+        )
+    )
+
+# %{msil_also_run_check} (see "more runtimes"; plan 5.12.3): the runs of
+# msil_also_run for a test with explicit RUN lines.
+also_run_check = "".join(
+    f" %if msil-jitall %{{ && {jit} %{{msil_also_run_image}} %}}"
+    f" && {run} --out %{{msil_also_run_image}}.{tag}.out %{{msil_also_run_image}}"
+    f" && FileCheck --input-file=%{{msil_also_run_image}}.{tag}.out"
+    " --match-full-lines %s"
+    for tag, jit, run in also_run_cmds
+)
 
 # %msil_mdcanon (plan 5.12.3): mdcanon on the host's dotnet, under the limits
 # of every other tool; callers add the options and files. %msil_cil_dump
@@ -2138,7 +2402,7 @@ def native_leg(t, level, compile_flags):
         exe = f"{t}.native.exe"
     return (
         f" %if msil-native-oracle %{{ && {build}"
-        f" && %msil_exec --native --expect %S/%{{s:stem}}"
+        f" && %msil_exec --native --expect %{{msil_expect}}"
         f" --out {t}.native.out {exe} %}}"
     )
 
@@ -2152,25 +2416,40 @@ def roundtrip_leg(t, image=None, dep=""):
     image = image or f"{t}.dll"
     return (
         f" %if msil-roundtrip %{{ && %msil_roundtrip --output={rt} {image}"
-        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.rt.out{dep} {rt} %}}"
+        f" && %msil_exec --expect %{{msil_expect}} --out {t}.rt.out{dep} {rt} %}}"
     )
+
+
+def also_run_legs(t, image, dep=""):
+    """msil_also_run: after the main run, jitall and the run of <image> once
+    per entry (see "more runtimes"), against the same expected file, into
+    <t>.also-net<major>[-tc0].out. dep: the dependency options of the run
+    (dep_args)."""
+    text = ""
+    for tag, jit, run in also_run_cmds:
+        text += (
+            f" %if msil-jitall %{{ && {jit}{dep} {image} %}}"
+            f" && {run} --expect %{{msil_expect}} --out {t}.{tag}.out{dep} {image}"
+        )
+    return text
 
 
 def c_pipeline(level):
     """compile -> assemble -> verify -> force-JIT -> run and compare, at -<level>."""
     t = "%t." + level
     cmd = (
-        f"%clang_msil %{{msil_cflags}} -{level} -S %s -o {t}.il"
+        f"%clang_msil %{{msil_cflags}} %{{msil_copts}} -{level} -S %s -o {t}.il"
         f" && %ilasm -dll -output={t}.dll {t}.il"
         f" && %msil_verify {t}.dll"
         f" %if msil-jitall %{{ && %msil_jitall {t}.dll %}}"
-        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {t}.dll"
+        f" && %msil_exec --expect %{{msil_expect}} --out {t}.out {t}.dll"
     )
+    cmd += also_run_legs(t, f"{t}.dll")
     cmd += roundtrip_leg(t)
-    cmd += native_leg(t, level, "%{msil_cflags}")
+    cmd += native_leg(t, level, "%{msil_cflags} %{msil_copts}")
     cmd += (
         f" %if msil-run-netfx %{{ && %ilasm -exe -output={t}.exe {t}.il"
-        f" && %msil_exec --netfx --expect %S/%{{s:stem}} --out {t}.netfx.out {t}.exe %}}"
+        f" && %msil_exec --netfx --expect %{{msil_expect}} --out {t}.netfx.out {t}.exe %}}"
     )
     return cmd
 
@@ -2185,13 +2464,14 @@ def ll_pipeline(level):
         f" && %ilasm -dll -output={t}.dll {t}.il"
         f" && %msil_verify {t}.dll"
         f" %if msil-jitall %{{ && %msil_jitall {t}.dll %}}"
-        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out {t}.dll"
+        f" && %msil_exec --expect %{{msil_expect}} --out {t}.out {t}.dll"
     )
+    cmd += also_run_legs(t, f"{t}.dll")
     cmd += roundtrip_leg(t)
     cmd += native_leg(t, level, "-Wno-override-module")
     cmd += (
         f" %if msil-run-netfx %{{ && %ilasm -exe -output={t}.exe {t}.il"
-        f" && %msil_exec --netfx --expect %S/%{{s:stem}} --out {t}.netfx.out {t}.exe %}}"
+        f" && %msil_exec --netfx --expect %{{msil_expect}} --out {t}.netfx.out {t}.exe %}}"
     )
     return cmd
 
@@ -2237,6 +2517,10 @@ ll_levels = [o for o in opt_levels if o in ("O0", "O1", "O2", "O3")] or ["O2"]
 #                       oracle (DLLs, or the E7 recipe's ELF shared objects);
 #                       a cycle is ?b=b.c;a=a.c;b=b.c (M22). It is part of
 #                       %msil_prog_build, so every build of the test gets it
+#   %{msil_copts}       extra compile flags of both builds, after
+#                       %{msil_cflags} (M23; part of %msil_prog_build too)
+#   %{msil_expect}      the --expect stem of every run (M23; default
+#                       %S/%{s:stem})
 # and a directory may redefine %{msil_cflags} and %{msil_ldflags}, the MSIL
 # link's flags (from M15 empty on Windows triples and
 # --sysroot=<msil_linux_sysroot> on Linux triples, so the link reads the
@@ -2244,7 +2528,9 @@ ll_levels = [o for o in opt_levels if o in ("O0", "O1", "O2", "O3")] or ["O2"]
 # level builds in a fresh %t.<L>.d into %t.<L>.d/prog.exe (an EXE,
 # so the same image runs under 'dotnet exec' and on the .NET Framework, plan
 # 5.12.1), then %msil_verify, %msil_jitall and %msil_exec --expect
-# %S/%{s:stem}, and the %if legs: the round trip of the image, the native
+# %{msil_expect} (default %S/%{s:stem}, M23), under msil_also_run jitall and
+# the run once more per entry (M23), and the %if legs: the round trip of the
+# image, the native
 # oracle (msil-prog.py --mode native, the same sources and archives built
 # for the native triple; E7 with msil_runner=wsl) and the .NET Framework run.
 # Every one of them gets the build's shlib/ directory, which msil-prog.py
@@ -2269,7 +2555,7 @@ ll_levels = [o for o in opt_levels if o in ("O0", "O1", "O2", "O3")] or ["O2"]
 # pickles the configuration for its worker processes).
 prog_template = (
     "%s --triple %s --pipeline %s --link-output %s @TOOLS@"
-    " --cflags='%%{msil_cflags}' --ldflags='%%{msil_ldflags}'"
+    " --cflags='%%{msil_cflags} %%{msil_copts}' --ldflags='%%{msil_ldflags}'"
     " --native-ldflags='%%{msil_native_ldflags}' --shlibs='%%{msil_shlibs}'"
     " --timeout %g --mem-limit-mb %d"
     % (
@@ -2401,7 +2687,7 @@ def asm_reference(level, single):
     ref = f"{t}.d/asm"
     if single == "c":
         text = (
-            f"%clang_msil %{{msil_cflags}} -{level} -S %s"
+            f"%clang_msil %{{msil_cflags}} %{{msil_copts}} -{level} -S %s"
             f" -mllvm -msil-assembly-name=prog -o {ref}/prog.il"
         )
     else:
@@ -2441,8 +2727,9 @@ def prog_pipeline(level, inputs=PROG_PLACEHOLDERS, deps="%{msil_deps}", single=N
     cmd = (
         f"{build} && %msil_verify{md}{verify_dep} {exe}"
         f" %if msil-jitall %{{ && %msil_jitall{dep} {exe} %}}"
-        f" && %msil_exec --expect %S/%{{s:stem}} --out {t}.out{dep} {exe}"
+        f" && %msil_exec --expect %{{msil_expect}} --out {t}.out{dep} {exe}"
     )
+    cmd += also_run_legs(t, exe, dep)
     cmd += roundtrip_leg(t, exe, dep)
     if o3:
         cmd += (
@@ -2463,11 +2750,11 @@ def prog_pipeline(level, inputs=PROG_PLACEHOLDERS, deps="%{msil_deps}", single=N
             f" %if msil-native-oracle %{{ && %msil_prog_build --mode native"
             f" --level {level} --workdir {t}.native.d --out {native}"
             + prog_inputs(*inputs, native=True)
-            + f" && %msil_exec --native --expect %S/%{{s:stem}}"
+            + f" && %msil_exec --native --expect %{{msil_expect}}"
             f" --out {t}.native.out{native_dep} {native} %}}"
         )
     cmd += (
-        f" %if msil-run-netfx %{{ && %msil_exec --netfx --expect %S/%{{s:stem}}"
+        f" %if msil-run-netfx %{{ && %msil_exec --netfx --expect %{{msil_expect}}"
         f" --out {t}.netfx.out{dep} {exe} %}}"
     )
     return cmd
@@ -2535,6 +2822,28 @@ substitutions = [
     # The shared libraries of a %{msil_prog} test (M22; msil-prog.py
     # --shlibs, which %msil_prog_build passes).
     ("%{msil_shlibs}", ""),
+    # Extra compile flags, after %{msil_cflags} (plan 5.12.3, M23): for both
+    # builds (the MSIL build and the native oracle's) of %{msil_prog} and
+    # %{msil_det}, and for every build of %{msil_c} on every pipeline: the
+    # one-source program under obj and lto, the -S compile and the native
+    # leg under asm, and O3's and O6's asm reference (msil_equiv=1).
+    # %{msil_ll} takes none, because llc has no C flags (its native leg
+    # compiles IR). msil-prog.py's --cflags is '%{msil_cflags}
+    # %{msil_copts}', so a value may not contain a single quote.
+    ("%{msil_copts}", ""),
+    # The --expect stem of every run of every composite (plan 5.12.3, M23):
+    # <stem>[.<os>].expected; a directory or test that shares one expected
+    # file REDEFINEs it (c-testsuite's %S/exit0).
+    ("%{msil_expect}", "%S/%{s:stem}"),
+    # msil_also_run for explicit RUN lines (see "more runtimes"; plan 5.12.3,
+    # M23): the check comes first, so the image placeholder in its expansion
+    # takes the test's REDEFINE value in the same pass; a value that is a
+    # placeholder of the test's own expands on a later pass
+    # (recursiveExpansionLimit).
+    ("%{msil_also_run_check}", also_run_check),
+    ("%{msil_also_run_image}", "msil-also-run-image-not-set"),
+    # The exit corpus' cache (see "exit corpus"; plan 5.12.3, M23).
+    ("%{msil_corpus}", slashes(corpus_dir) if corpus_dir else "msil-corpus-not-found"),
     # The MSIL link's harness flags (plan 5.12.3, M15; see msil_ldflags):
     # --sysroot=<msil_linux_sysroot> on Linux triples, so the link reads the
     # default libraries of plan 5.10.4, and from M21 %{msil_ref_flags}, the

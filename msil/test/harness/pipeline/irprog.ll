@@ -3,6 +3,8 @@
 ; %{msil_c} (prog.c), and the native-oracle leg builds the IR without
 ; %{msil_cflags}. The checks after the composite show that every leg of every
 ; level ran.
+; The asm expansion, the asm oracle from M23 (harness/pipeline-obj pins obj).
+; REQUIRES: msil-pipeline=asm
 ; RUN: rm -f %t.*.out
 ; RUN: %{msil_ll}
 ; RUN: %if msil-ll-opt-O0 %{ %{harness_check} equals %t.O0.out "[exit 13]" %}

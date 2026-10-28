@@ -6,6 +6,9 @@
 // compare with the same file. The checks after the composite show that every
 // leg of every level ran; the transcripts of an earlier run are removed
 // first.
+// The asm expansion (-S plus ilasm), the asm oracle from M23: under the
+// default obj pipeline harness/pipeline-obj pins %{msil_c}.
+// REQUIRES: msil-pipeline=asm
 // RUN: rm -f %t.*.out
 // RUN: %{msil_c}
 // RUN: %if msil-opt-O0 %{ %{harness_check} equals %t.O0.out "[exit 7]" %}

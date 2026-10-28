@@ -1,0 +1,12 @@
+# Run in a nested lit by ../../../../copts-expect.test: a %{msil_prog} test
+# that adds compile flags with %{msil_copts} and names a shared expected file
+# with %{msil_expect} (M23); there is no copts.expected, only shared.expected.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/util.c
+# REDEFINE: %{msil_copts} = -DMSIL_COPTS_CHECK=1 -I%S
+# REDEFINE: %{msil_expect} = %S/shared
+# RUN: %{msil_prog_O2}
+#--- main.c
+// prog-value: 3
+#--- util.c
+// prog-value: 4

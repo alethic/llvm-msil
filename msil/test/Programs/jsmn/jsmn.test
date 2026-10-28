@@ -1,0 +1,21 @@
+# jsmn split over two translation units that must agree on its configuration macros.
+# jsmn_main.c includes jsmn.h with JSMN_HEADER and jsmn_impl.c without it, so
+# the parser's functions come from the other object; JSMN_PARENT_LINKS and
+# JSMN_STRICT, which change jsmntok_t's layout, are passed to every compile.
+# It parses five documents (one unterminated) and prints the token counts and
+# a hash of the tokens. The only archive is the support library.
+# Built as a multi-TU program with static archives (%{msil_archives}: one per
+# library plus libsup.a, the support library of ../support) from the corpus
+# cache (%{msil_corpus}, filled by msil/utils/corpus/fetch.py), with the shim
+# headers of ../shim in both builds (%{msil_copts}), at every level of the leg,
+# and compared with the native build of the same sources; jsmn_main.c has no
+# error count and returns 0, so the transcript ends [exit 0]. Plan 5.12.9 (M23).
+# ../det/jsmn.test repeats these REDEFINE lines for %{msil_det}.
+# REQUIRES: msil-corpus-jsmn
+# REDEFINE: %{msil_srcs} = %S/../jsmn/jsmn_main.c %S/../jsmn/jsmn_impl.c
+# REDEFINE: %{msil_archives} = sup=%S/../support/sup_arena.c,%S/../support/sup_malloc.c, \
+# REDEFINE:   %S/../support/sup_memcmp.c,%S/../support/sup_memset.c,%S/../support/sup_memcpy.c, \
+# REDEFINE:   %S/../support/sup_strlen.c,%S/../support/sup_out.c
+# REDEFINE: %{msil_copts} = -isystem %S/../shim -I%S/../support -I%{msil_corpus}/jsmn-25647e692c79 \
+# REDEFINE:   -DJSMN_PARENT_LINKS -DJSMN_STRICT -Werror=implicit-function-declaration -w
+# RUN: %{msil_prog}

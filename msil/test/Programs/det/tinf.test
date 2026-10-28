@@ -1,0 +1,25 @@
+# Two builds of the tinf program give identical objects, archives and image.
+# %{msil_det} builds the program of ../tinf/tinf.test twice at -O2, in two
+# directories from relative paths, and compares every CIL object (bitcode under
+# lto), the archives that llvm-ar writes and msil-ld's image byte for byte
+# (plan 5.12.4, 5.12.9; M23). check-recipe.py fails when the REDEFINE lines
+# here differ from that test's, so both build the same program.
+# REQUIRES: msil-corpus-tinf, msil-corpus-zlib
+# REDEFINE: %{msil_srcs} = %S/../tinf/tinf_main.c
+# REDEFINE: %{msil_archives} = z=%{msil_corpus}/zlib-1.3.2/adler32.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/crc32.c,%{msil_corpus}/zlib-1.3.2/deflate.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/infback.c,%{msil_corpus}/zlib-1.3.2/inffast.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/inflate.c,%{msil_corpus}/zlib-1.3.2/inftrees.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/trees.c,%{msil_corpus}/zlib-1.3.2/zutil.c; \
+# REDEFINE:   tinf=%{msil_corpus}/tinf-57ffa1f1d5e3/src/tinflate.c, \
+# REDEFINE:   %{msil_corpus}/tinf-57ffa1f1d5e3/src/tinfzlib.c, \
+# REDEFINE:   %{msil_corpus}/tinf-57ffa1f1d5e3/src/tinfgzip.c, \
+# REDEFINE:   %{msil_corpus}/tinf-57ffa1f1d5e3/src/adler32.c, \
+# REDEFINE:   %{msil_corpus}/tinf-57ffa1f1d5e3/src/crc32.c;sup=%S/../support/sup_arena.c, \
+# REDEFINE:   %S/../support/sup_malloc.c,%S/../support/sup_memcmp.c,%S/../support/sup_memset.c, \
+# REDEFINE:   %S/../support/sup_memcpy.c,%S/../support/sup_strlen.c,%S/../support/sup_out.c
+# REDEFINE: %{msil_copts} = -isystem %S/../shim -I%S/../support -I%{msil_corpus}/zlib-1.3.2 \
+# REDEFINE:   -I%{msil_corpus}/tinf-57ffa1f1d5e3/src -DZ_SOLO -DNDEBUG \
+# REDEFINE:   -Werror=implicit-function-declaration -w
+# RUN: %python %S/check-recipe.py %s %S/../tinf/tinf.test
+# RUN: %{msil_det}

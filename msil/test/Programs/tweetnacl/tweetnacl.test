@@ -1,0 +1,22 @@
+# TweetNaCl 20140427 as a static library with randombytes in another object: the same transcript on both triples.
+# tweetnacl_main.c boxes and opens, signs and checks (and rejects a forged
+# message), hashes, authenticates and multiplies scalars with keys from
+# tweetnacl_rand.c's deterministic randombytes, which libnacl.a's tweetnacl.c
+# calls back. tweetnacl.c's u32 is 'unsigned long', 32 bits on windows-msvc and
+# 64 bits on linux-gnu, so the test has no .linux.expected override.
+# Built as a multi-TU program with static archives (%{msil_archives}: one per
+# library plus libsup.a, the support library of ../support) from the corpus
+# cache (%{msil_corpus}, filled by msil/utils/corpus/fetch.py), with the shim
+# headers of ../shim in both builds (%{msil_copts}), at every level of the leg,
+# and compared with the native build of the same sources; the error count is
+# the exit status, so the transcript ends [exit 0]. Plan 5.12.9 (M23).
+# ../det/tweetnacl.test repeats these REDEFINE lines for %{msil_det}.
+# REQUIRES: msil-corpus-tweetnacl
+# REDEFINE: %{msil_srcs} = %S/../tweetnacl/tweetnacl_main.c %S/../tweetnacl/tweetnacl_rand.c
+# REDEFINE: %{msil_archives} = nacl=%{msil_corpus}/tweetnacl-20140427/tweetnacl.c; \
+# REDEFINE:   sup=%S/../support/sup_arena.c,%S/../support/sup_malloc.c,%S/../support/sup_memcmp.c, \
+# REDEFINE:   %S/../support/sup_memset.c,%S/../support/sup_memcpy.c,%S/../support/sup_strlen.c, \
+# REDEFINE:   %S/../support/sup_out.c
+# REDEFINE: %{msil_copts} = -isystem %S/../shim -I%S/../support -I%{msil_corpus}/tweetnacl-20140427 \
+# REDEFINE:   -Werror=implicit-function-declaration -w
+# RUN: %{msil_prog}

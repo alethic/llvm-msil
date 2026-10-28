@@ -1,0 +1,11 @@
+# A %{msil_prog} test for ../../update-expected-m23.test (M23): a source
+# from the exit corpus' cache (%{msil_corpus}, update-expected.py's
+# --corpus-dir), compile flags in %{msil_copts} and a shared expected file
+# named by %{msil_expect}.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %{msil_corpus}/src/lib.c
+# REDEFINE: %{msil_copts} = -DMSIL_COPTS_CHECK=1
+# REDEFINE: %{msil_expect} = %S/corpus-shared
+# RUN: %{msil_prog}
+#--- main.c
+// prog-value: 2

@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "programs": [
+    {
+      "name": "zlib",
+      "license": "Zlib",
+      "license_file": "LICENSE",
+      "url": "https://github.com/madler/zlib/archive/da607da739fa6047df13e66a2af6b8bec7c2a498.tar.gz",
+      "ref": "1.3.2",
+      "commit": "da607da739fa6047df13e66a2af6b8bec7c2a498",
+      "tree_sha256": "adf943637db9bd636adc13f302b957a0dbc898dcb80a195f8b73328bdfc5bd28",
+      "strip": 1
+    },
+    {
+      "name": "tinf",
+      "license": "Zlib",
+      "license_file": "LICENSE",
+      "url": "https://github.com/jibsen/tinf/archive/57ffa1f1d5e3dde19011b2127bd26d01689b694b.tar.gz",
+      "ref": "57ffa1f1d5e3",
+      "commit": "57ffa1f1d5e3dde19011b2127bd26d01689b694b",
+      "tree_sha256": "600d84f31b60e0f27dde377e4361d6d769e611b1f616516cb7fdc6b6c4fadbf0",
+      "strip": 1
+    },
+    {
+      "name": "monocypher",
+      "license": "BSD-2-Clause OR CC0-1.0",
+      "license_file": "LICENCE.md",
+      "url": "https://github.com/LoupVaillant/Monocypher/releases/download/4.0.2/monocypher-4.0.2.tar.gz",
+      "ref": "4.0.2",
+      "archive_sha256": "38d07179738c0c90677dba3ceb7a7b8496bcfea758ba1a53e803fed30ae0879c",
+      "tree_sha256": "a2069cb999afa52469bc6f28c95fade6baaf5d4f99609dcc1d59cb7ac443c66f",
+      "strip": 1
+    },
+    {
+      "name": "coremark",
+      "license": "CoreMark Acceptable Use Agreement (EEMBC) and Apache-2.0",
+      "license_file": "LICENSE.md",
+      "url": "https://github.com/eembc/coremark/archive/1f483d5b8316753a742cbf5590caf5bd0a4e4777.tar.gz",
+      "ref": "1f483d5b8316",
+      "commit": "1f483d5b8316753a742cbf5590caf5bd0a4e4777",
+      "tree_sha256": "1bffe9969e09de858527427faa751b53a38e9b1d6560149c6c768bad6dd7c83c",
+      "strip": 1
+    },
+    {
+      "name": "lz4",
+      "license": "BSD-2-Clause (lib/)",
+      "license_file": "lib/LICENSE",
+      "url": "https://github.com/lz4/lz4/archive/ebb370ca83af193212df4dcbadcc5d87bc0de2f0.tar.gz",
+      "ref": "1.10.0",
+      "commit": "ebb370ca83af193212df4dcbadcc5d87bc0de2f0",
+      "tree_sha256": "471bbfd50aaaa16150a4274663c77297e07c775c67a3e8743c1d9e3f71541770",
+      "strip": 1
+    },
+    {
+      "name": "blake2",
+      "license": "CC0-1.0 OR OpenSSL OR Apache-2.0",
+      "license_file": "COPYING",
+      "url": "https://github.com/BLAKE2/BLAKE2/archive/ed1974ea83433eba7b2d95c5dcd9ac33cb847913.tar.gz",
+      "ref": "ed1974ea8343",
+      "commit": "ed1974ea83433eba7b2d95c5dcd9ac33cb847913",
+      "tree_sha256": "c879cc3a931f5bfcde48016e58001f2af6a37eb1d75072d146e6dd832a5dabcf",
+      "strip": 1
+    },
+    {
+      "name": "tweetnacl",
+      "license": "public domain",
+      "license_file": null,
+      "url": [
+        "https://tweetnacl.cr.yp.to/20140427/tweetnacl.c",
+        "https://tweetnacl.cr.yp.to/20140427/tweetnacl.h"
+      ],
+      "ref": "20140427",
+      "archive_sha256": "ed65179d6c29e61a2636dc17e616cdbfc723bf77fb8103690bf771875d501630",
+      "tree_sha256": "ed65179d6c29e61a2636dc17e616cdbfc723bf77fb8103690bf771875d501630",
+      "strip": 0
+    },
+    {
+      "name": "kissfft",
+      "license": "BSD-3-Clause",
+      "license_file": "COPYING",
+      "url": "https://github.com/mborgerding/kissfft/archive/2a1f1337160e6e8dbc6182202d0bd7f624002197.tar.gz",
+      "ref": "2a1f1337160e",
+      "commit": "2a1f1337160e6e8dbc6182202d0bd7f624002197",
+      "tree_sha256": "3ba94e069d1fe8bb376d81d77a4fa5c9f095fc4c913cf889b0fe6dad44401301",
+      "strip": 1
+    },
+    {
+      "name": "jsmn",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "url": "https://github.com/zserge/jsmn/archive/25647e692c7906b96ffd2b05ca54c097948e879c.tar.gz",
+      "ref": "25647e692c79",
+      "commit": "25647e692c7906b96ffd2b05ca54c097948e879c",
+      "tree_sha256": "e206be5e42026b0a373331482634a50e98a4519d2d4501978a3b7404dcbcdae0",
+      "strip": 1
+    },
+    {
+      "name": "c-testsuite",
+      "license": "MIT (runners and scripts); each test carries the licence of its scc or tinycc original (tests/LICENSE, tests/single-exec/*.c.otags)",
+      "license_file": "LICENSE",
+      "url": "https://github.com/c-testsuite/c-testsuite/archive/5c7275656d751de0e68b2d340a95b5681858ed07.tar.gz",
+      "ref": "5c7275656d75",
+      "commit": "5c7275656d751de0e68b2d340a95b5681858ed07",
+      "tree_sha256": "8354673e3a237a0b3c90b6f7e922b9fb146044be9dd1ec5735a0dec89218cd95",
+      "strip": 1
+    }
+  ]
+}

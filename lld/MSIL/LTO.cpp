@@ -487,13 +487,15 @@ static const Function *getConstructorFunction(const Constant *c) {
 // entries clamp it, or the priority of a slot's section), then the slots in
 // (segment, offset) order (segments in IR order, as the data segment's
 // entries and an object's SEGMENTS are), then the INIT entries in array
-// order. Two differences remain. A slot's offset here counts the leaves of
-// its initializer, not its bytes; in a table that code generation accepts
-// every leaf is one 8-byte function address, so both order the slots alike
-// (any other table is the link's error, and no output is written). An entry
-// after a null function in llvm.global_ctors counts, as in the object
-// writer's INIT entries, although preprocessXXStructorList drops the rest of
-// the array for the -S text, whose environ import is then unused. Only
+// order. In llvm.global_ctors, an element with a null function, or one that
+// is null as a whole (zeroinitializer), ends the INIT entries, and one that
+// is undef or poison as a whole is skipped, as whole-program code generation
+// (preprocessXXStructorList after MSILAsmPrinter's getStructorList) and the
+// object writer's INIT entries treat them.
+// One difference remains: a slot's offset here counts the leaves of its
+// initializer, not its bytes; in a table that code generation accepts every
+// leaf is one 8-byte function address, so both order the slots alike (any
+// other table is the link's error, and no output is written). Only
 // non-Windows triples pass constructors arguments.
 static const Function *findEnvpConstructor(const Module &m) {
   if (ctx.arg.target.isOSWindows())
@@ -515,7 +517,11 @@ static const Function *findEnvpConstructor(const Module &m) {
       ctors && ctors->hasInitializer()) {
     if (const auto *list = dyn_cast<ConstantArray>(ctors->getInitializer())) {
       for (auto [i, op] : enumerate(list->operands())) {
+        if (cast<Constant>(op.get())->isNullValue())
+          break;
         const auto *cs = dyn_cast<ConstantStruct>(op.get());
+        if (cs && cs->getNumOperands() >= 2 && cs->getOperand(1)->isNullValue())
+          break;
         const auto *priority = cs && cs->getNumOperands() >= 2
                                    ? dyn_cast<ConstantInt>(cs->getOperand(0))
                                    : nullptr;

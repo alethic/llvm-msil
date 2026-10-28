@@ -1,0 +1,58 @@
+# The exit-corpus parameters of lit.cfg.py (plan 5.12.2, 5.12.3, 5.12.9;
+# M23): msil_corpus_dir names the cache that msil/utils/corpus/fetch.py
+# fills, msil_require_corpus=1 makes an unusable cache a configuration error
+# that names 'fetch.py --cache <dir>', and msil_corpus_skip names the
+# entries left out on purpose. Inputs/make-fake-corpus.py writes caches that
+# look verified to lit (the directories <name>-<ref> and msil-corpus.stamp
+# for the checked-in manifest, without sources), and nested lits run
+# Inputs/nested-corpus, whose corpus-features.test echoes the corpus features
+# and %{msil_corpus}, and whose needs-coremark.test requires
+# msil-corpus-coremark:
+# (1) no cache (no stamp): a note, no feature msil-corpus, needs-coremark
+#     UNSUPPORTED; under msil_require_corpus=1 a configuration error;
+# (2) a stale stamp (written for another manifest): the same;
+# (3) a valid fake stamp: msil-corpus and msil-corpus-<name> for every entry
+#     (zlib, coremark and c-testsuite shown), %{msil_corpus} is the cache with
+#     '/' separators, needs-coremark passes, and msil_require_corpus=1 loads;
+# (4) a fake stamp without coremark (as 'fetch.py --skip coremark' writes
+#     it): under msil_require_corpus=1 a configuration error naming
+#     coremark, unless msil_corpus_skip=coremark names it, which gives a note
+#     and makes needs-coremark UNSUPPORTED while zlib stays;
+# (5) a name in msil_corpus_skip that the manifest does not have is a
+#     configuration error, and an empty msil_corpus_dir disables the corpus.
+
+# RUN: rm -rf %t.none %t.stale %t.ok %t.nocm
+
+# (1)
+# RUN: %{harness_lit} -a --param msil_linux_sysroot= --param msil_corpus_dir=%t.none %S/Inputs/nested-corpus > %t.1.log 2>&1
+# RUN: %{harness_check} contains %t.1.log "note: msil: exit corpus not available \(msil/test/Programs is UNSUPPORTED\): \S*none has no msil-corpus\.stamp; run 'python msil/utils/corpus/fetch\.py --cache \S*none'$" "^UNSUPPORTED: MSIL :: harness/Inputs/nested-corpus/needs-coremark\.test " "^PASS: MSIL :: harness/Inputs/nested-corpus/corpus-features\.test "
+# RUN: %{harness_check} lacks %t.1.log "^# \| feature msil-corpus"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.none --param msil_require_corpus=1 %S/Inputs/nested-corpus > %t.1r.log 2>&1
+# RUN: %{harness_check} contains %t.1r.log "fatal: msil: msil_require_corpus=1, but the exit corpus is not usable: \S*none has no msil-corpus\.stamp; run 'python msil/utils/corpus/fetch\.py --cache \S*none'$"
+
+# (2)
+# RUN: %python %S/Inputs/make-fake-corpus.py %S/../../utils/corpus/manifest.json %t.stale --stale
+# RUN: %{harness_lit} -a --param msil_linux_sysroot= --param msil_corpus_dir=%t.stale %S/Inputs/nested-corpus > %t.2.log 2>&1
+# RUN: %{harness_check} contains %t.2.log "note: msil: exit corpus not available \(msil/test/Programs is UNSUPPORTED\): \S*stale/msil-corpus\.stamp is stale: it was written for another msil/utils/corpus/manifest\.json; run 'python msil/utils/corpus/fetch\.py --cache \S*stale'$" "^UNSUPPORTED: MSIL :: harness/Inputs/nested-corpus/needs-coremark\.test "
+# RUN: %{harness_check} lacks %t.2.log "^# \| feature msil-corpus"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.stale --param msil_require_corpus=1 %S/Inputs/nested-corpus > %t.2r.log 2>&1
+# RUN: %{harness_check} contains %t.2r.log "fatal: msil: msil_require_corpus=1, but the exit corpus is not usable: \S*stale/msil-corpus\.stamp is stale"
+
+# (3)
+# RUN: %python %S/Inputs/make-fake-corpus.py %S/../../utils/corpus/manifest.json %t.ok
+# RUN: %{harness_lit} -a --param msil_linux_sysroot= --param msil_corpus_dir=%t.ok --param msil_require_corpus=1 %S/Inputs/nested-corpus > %t.3.log 2>&1
+# RUN: %{harness_check} contains %t.3.log "note: msil: exit corpus: \S*ok \(zlib, tinf, monocypher, coremark, lz4, blake2, tweetnacl, kissfft, jsmn, c-testsuite\)$" "^PASS: MSIL :: harness/Inputs/nested-corpus/needs-coremark\.test " "^# \| feature msil-corpus$" "^# \| feature msil-corpus-zlib$" "^# \| feature msil-corpus-coremark$" "^# \| feature msil-corpus-c-testsuite$" "^# \| corpus \S*ok$"
+
+# (4)
+# RUN: %python %S/Inputs/make-fake-corpus.py %S/../../utils/corpus/manifest.json %t.nocm --omit coremark
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.nocm --param msil_require_corpus=1 %S/Inputs/nested-corpus > %t.4r.log 2>&1
+# RUN: %{harness_check} contains %t.4r.log "fatal: msil: msil_require_corpus=1, but the stamp of \S*nocm lacks coremark; run 'python msil/utils/corpus/fetch\.py --cache \S*nocm' \(or name the entries in --param msil_corpus_skip\)$"
+# RUN: %{harness_lit} -a --param msil_linux_sysroot= --param msil_corpus_dir=%t.nocm --param msil_require_corpus=1 --param msil_corpus_skip=coremark %S/Inputs/nested-corpus > %t.4.log 2>&1
+# RUN: %{harness_check} contains %t.4.log "note: msil: exit corpus entry coremark is left out on purpose \(msil_corpus_skip\); its tests are UNSUPPORTED$" "^UNSUPPORTED: MSIL :: harness/Inputs/nested-corpus/needs-coremark\.test " "^# \| feature msil-corpus$" "^# \| feature msil-corpus-zlib$"
+# RUN: %{harness_check} lacks %t.4.log "^# \| feature msil-corpus-coremark$"
+
+# (5)
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.ok --param msil_corpus_skip=coremark,nosuch %S/Inputs/nested-corpus > %t.5.log 2>&1
+# RUN: %{harness_check} contains %t.5.log "fatal: msil: --param msil_corpus_skip: nosuch is not in \S+manifest\.json \(entries: zlib, tinf, monocypher, coremark, lz4, blake2, tweetnacl, kissfft, jsmn, c-testsuite\)$"
+# RUN: %{harness_lit} -a --param msil_linux_sysroot= --param msil_corpus_dir= %S/Inputs/nested-corpus > %t.5e.log 2>&1
+# RUN: %{harness_check} contains %t.5e.log "note: msil: exit corpus not available \(msil/test/Programs is UNSUPPORTED\): disabled by an empty --param msil_corpus_dir=$" "^UNSUPPORTED: MSIL :: harness/Inputs/nested-corpus/needs-coremark\.test "

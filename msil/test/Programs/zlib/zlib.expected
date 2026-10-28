@@ -1,0 +1,29 @@
+input 100000
+adler32 1962396220
+crc32 570108568
+deflate 28409
+  fnv 3457963913
+deflate 28409
+  fnv 3457963913
+deflate 60742
+  fnv 2692691968
+deflate 60741
+  fnv 3415253177
+deflate 21712
+  fnv 1014808541
+deflate 21832
+  fnv 2196637983
+deflate 60742
+  fnv 2692691968
+deflate 60741
+  fnv 3415253177
+deflate 20954
+  fnv 1586195155
+deflate 21044
+  fnv 1108447119
+deflate 60742
+  fnv 2692691968
+deflate 60741
+  fnv 3415253177
+errors 0
+[exit 0]

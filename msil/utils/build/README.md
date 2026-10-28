@@ -92,6 +92,18 @@ the first time). Without `-Standard` the script builds exactly the targets it is
 needs at least one, as before: after a change in `lld/MSIL` or in clang's MSIL toolchain, `lld
 clang` relinks `msil-ld` and clang.
 
+**The phase gate's build.** The Phase 2 exit (M23) builds exactly this list: its Build targets
+line names the 29 targets of `build-targets.txt` in the file's order (`llc`, `opt`, `clang`,
+`FileCheck`, `not`, `count`, `split-file`, `llvm-config`, `llvm-profdata`, `TargetParserTests`,
+`MCTests`, `MSILTests`, `lld`, `llvm-ar`, `llvm-ranlib`, `llvm-lib`, `llvm-dlltool`, `llvm-nm`,
+`llvm-objdump`, `llvm-readobj`, `llvm-as`, `llvm-bcanalyzer`, `llvm-lto2`, `CLITests`,
+`LLDAsLibAllTests`, `yaml2obj`, `llvm-mc`, `llvm-cil-dump`, `llvm-cil-copy`), M17's list, to which
+M18-M23 added nothing. So gate step G1 (`msil-build.ps1 -Standard`) and the build step of
+`msil/utils/run-m1-gate.ps1` (`msil/utils/ci/build.ps1`, which also builds jitall) are the same
+build; on a tree that is current it only confirms that. The exit corpus needs no target of its
+own: `msil/utils/corpus/fetch.py` is Python, and `msil/utils/ci/det-manifest.py`, the
+determinism row, uses `clang` and `llvm-ar` from the list.
+
 ```powershell
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard llvm-dwarfdump
@@ -111,7 +123,19 @@ pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv -
 The gates run `lld/test/MSIL` a second time with `-LitArgs "-sv --param
 RUN_LLD_MAIN_TWICE=1"`, which makes every link run twice in one process (`LLD_IN_TEST=2`), so
 global state of `msil-ld` that is not reset between links (M15's native index, say) fails a
-test. The hosted tests (M15) run with `msil-lit.ps1 -LitArgs:"-sv --param
+test; the phase gate of M23 does it together with `clang/test/Driver/msil-shared.c` (only
+`dispatch-coff.test`, `UNSUPPORTED: main-run-twice`, may be unsupported there). No leg of
+`msil/utils/ci/lit-legs.ps1` and no row of `run-m1-gate.ps1` runs this, so run it after any
+change to `lld/MSIL`:
+
+```powershell
+pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 -LitArgs "-sv --param RUN_LLD_MAIN_TWICE=1 --param msil_require_verify=1" lld/test/MSIL clang/test/Driver/msil-shared.c
+```
+
+The execution tests read the exit corpus from a cache outside the repository; fetch it once
+(`python msil/utils/corpus/fetch.py`, into `C:\llvm-msil-scratch\corpus-cache` unless
+`MSIL_CORPUS_CACHE` names another) before running `msil/test/Programs` with `msil-lit.ps1`
+(GettingStarted.md section 7, "The exit corpus"). The hosted tests (M15) run with `msil-lit.ps1 -LitArgs:"-sv --param
 msil_glibc_sysroot=C:/llvm-msil-scratch/glibc-sysroot" msil/test/M2/09-hosted` (the colon after
 `-LitArgs`, because the value holds a drive path; see `msil/test/README.md`), or as the `hosted`
 leg of `msil/utils/ci/lit-legs.ps1`.

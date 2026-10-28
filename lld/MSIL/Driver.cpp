@@ -941,10 +941,14 @@ void LinkerDriver::addPendingFiles() {
 // (an import of the right kind is a definition for lld-link), its references
 // resolve to <to>.
 // A native object given on the command line always defines <from> for
-// lld-link, which links every such object, so <from> is never redirected
-// then, also when it reaches that definition through a chain of weak
-// aliases: <from> stays undefined, and late binding reports the definition
-// in native object code (section 12 of 2026-10-26).
+// lld-link, which links every such object, and so does a member of a native
+// static archive that defines <from> in machine code, which lld-link
+// extracts for the undefined reference before it applies /alternatename; so
+// <from> is never redirected then, also when it reaches that definition
+// through a chain of weak aliases: <from> stays undefined, and late binding
+// reports the definition in native object code (section 12 of 2026-10-26
+// and 2026-10-27). Definitions in import libraries, shared libraries and
+// DLLs keep the rules of plan 5.10.10.
 // <to> becomes a reference of the command line, so that an archive member
 // that defines it is extracted and LTO keeps the definition; the
 // import-annotation pass resolves <from> after LTO.
@@ -958,8 +962,11 @@ void LinkerDriver::applyAlternateNames() {
                                /*isFunctionReference=*/!sym->isData()))
       continue;
     // lookup returns null for a command-line object's definition, and puts
-    // it first in `rejected`, which starts empty.
-    if (!rejected.empty() && isNativeObjectDefinition(*rejected.front()))
+    // it first in `rejected`, which starts empty; an archive member's machine
+    // code is among the definitions it passed over.
+    if (any_of(rejected, [](const NativeExport *e) {
+          return e->Why == NotBindable::NativeCodeOnly;
+        }))
       continue;
     ctx.appliedAlternateNames.insert({from, to});
     symtab->addUndefined(to, saver().save("/alternatename:" + from + "=" + to));

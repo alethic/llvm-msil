@@ -1,0 +1,6 @@
+argc=1
+argv[0] is a non-empty string=1
+argv[argc] is null=1
+sum of squares=140
+zero
+[exit 0]

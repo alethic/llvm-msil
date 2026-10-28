@@ -1,0 +1,26 @@
+# LZ4 1.10.0 (lz4.c and lz4hc.c) as a freestanding static library: block and HC round trips.
+# lz4_main.c compresses one input with lz4.c at four accelerations and with
+# lz4hc.c at four levels, using caller-provided state, decompresses each stream
+# and compares. LZ4_FREESTANDING keeps the library off the heap and off the C
+# library: LZ4_memcpy, LZ4_memset and LZ4_memmove are the compiler's builtins
+# (in the MSIL build cpblk, initblk or Buffer.MemoryCopy, never C library
+# calls, plan D15). The driver also defines the LZ4_USER_MEMORY_FUNCTIONS
+# callbacks, which the freestanding build never calls.
+# Built as a multi-TU program with static archives (%{msil_archives}: one per
+# library plus libsup.a, the support library of ../support) from the corpus
+# cache (%{msil_corpus}, filled by msil/utils/corpus/fetch.py), with the shim
+# headers of ../shim in both builds (%{msil_copts}), at every level of the leg,
+# and compared with the native build of the same sources; the error count is
+# the exit status, so the transcript ends [exit 0]. Plan 5.12.9 (M23).
+# ../det/lz4.test repeats these REDEFINE lines for %{msil_det}.
+# REQUIRES: msil-corpus-lz4
+# REDEFINE: %{msil_srcs} = %S/../lz4/lz4_main.c
+# REDEFINE: %{msil_archives} = lz4=%{msil_corpus}/lz4-1.10.0/lib/lz4.c, \
+# REDEFINE:   %{msil_corpus}/lz4-1.10.0/lib/lz4hc.c;sup=%S/../support/sup_arena.c, \
+# REDEFINE:   %S/../support/sup_malloc.c,%S/../support/sup_memcmp.c,%S/../support/sup_memset.c, \
+# REDEFINE:   %S/../support/sup_memcpy.c,%S/../support/sup_strlen.c,%S/../support/sup_out.c
+# REDEFINE: %{msil_copts} = -isystem %S/../shim -I%S/../support -I%{msil_corpus}/lz4-1.10.0/lib \
+# REDEFINE:   -DLZ4_FREESTANDING=1 -DLZ4_memcpy=__builtin_memcpy -DLZ4_memset=__builtin_memset \
+# REDEFINE:   -DLZ4_memmove=__builtin_memmove -DLZ4_FORCE_SW_BITCOUNT -DLZ4_USER_MEMORY_FUNCTIONS \
+# REDEFINE:   -Werror=implicit-function-declaration -w
+# RUN: %{msil_prog}

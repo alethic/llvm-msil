@@ -1,0 +1,74 @@
+# update-expected.py's M23 additions (plan 5.12.4): with the stand-in
+# compiler of lit.local.cfg,
+# (1) Inputs/ue/corpus-copts.test takes a source from %{msil_corpus}, which
+#     is --corpus-dir (a fake cache with src/lib.c), adds its %{msil_copts}
+#     to the native build and writes the transcript to the file its
+#     %{msil_expect} names (corpus-shared.expected; no
+#     corpus-copts.expected); --check then matches it;
+# (2) a directory with libc-free.txt (c-testsuite's lit test format) is
+#     skipped as a whole, and a directory whose lit.local.cfg sets
+#     config.suffixes = [".test"] (msil/test/Programs) contributes no .c
+#     file, in its subdirectories neither, so its drivers are not reported;
+# (3) Inputs/ue/no-parts.test has no split-file parts and names its sources
+#     in its own directory (%S), as msil/test/Programs does: it is built
+#     natively without split-file, so its .expected is written and checked
+#     also when --split-file is a stand-in that fails (an unknown mode of
+#     the stand-in), which a test with parts (corpus-copts.test) does run;
+# (4) a single-source test whose %{msil_copts} has an unterminated quote
+#     (Inputs/ue/bad-copts.c) is an error that names the test and the quote,
+#     with no native build, no .expected and exit status 1, as for a
+#     %{msil_prog} test;
+# (5) a directory below a .test-only one contributes no .c file also when
+#     the walk starts there (msil/test/Programs/support, whose
+#     lit.local.cfg is msil/test/Programs'), and a tuple (".test",) makes a
+#     directory .test-only as the list does.
+# RUN: rm -rf %t.d %t.corpus %t.walk && mkdir -p %t.d %t.corpus/src %t.walk/ctest %t.walk/progs/sub %t.walk/progs2
+# RUN: cat %S/Inputs/ue/corpus-copts.test > %t.d/corpus-copts.test
+# RUN: %{harness_check} write %t.corpus/src/lib.c "// prog-value: 9"
+
+# (1)
+# RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none --corpus-dir %t.corpus %t.d > %t.1.log 2>&1
+# RUN: %{harness_check} contains %t.1.log "^wrote \S+corpus-shared\.expected$"
+# RUN: %{harness_check} equals %t.d/corpus-shared.expected "[exit 11]"
+# RUN: %{harness_check} missing %t.d/corpus-copts.expected
+# RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none --corpus-dir %t.corpus --check %t.d > %t.2.log 2>&1
+# RUN: %{harness_check} contains %t.2.log "^ok: \S+corpus-copts\.test$"
+# RUN: not %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none --corpus-dir %t.walk --check %t.d > %t.3.log 2>&1
+# RUN: %{harness_check} contains %t.3.log "^FAIL \(native compile\): \S+corpus-copts\.test$"
+
+# (2)
+# RUN: %{harness_check} write %t.walk/ctest/libc-free.txt "00001"
+# RUN: %{harness_check} write %t.walk/progs/lit.local.cfg "config.suffixes = ['.test']"
+# RUN: %{harness_check} write %t.walk/progs/driver.c "int main(void) { return 0; }"
+# RUN: %{harness_check} write %t.walk/progs/sub/other.c "int main(void) { return 0; }"
+# RUN: %{harness_check} write %t.walk/progs2/lit.local.cfg "config.suffixes = ('.test',)"
+# RUN: %{harness_check} write %t.walk/progs2/driver2.c "int main(void) { return 0; }"
+# RUN: %{harness_update_expected} --clang '%{prog_clang}' --rtlib none --check %t.walk > %t.4.log 2>&1
+# RUN: %{harness_check} contains %t.4.log "^skip \(c-testsuite format: one test per name of libc-free\.txt\): \S+ctest$"
+# RUN: %{harness_check} lacks %t.4.log "driver\.c" "other\.c" "driver2\.c"
+
+# (3)
+# RUN: rm -rf %t.np && mkdir -p %t.np
+# RUN: cat %S/Inputs/ue/no-parts.test > %t.np/no-parts.test
+# RUN: cat %S/Inputs/ue/no-parts-main.c > %t.np/no-parts-main.c
+# RUN: cat %S/Inputs/ue/no-parts-util.c > %t.np/no-parts-util.c
+# RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file '%{prog_cc} --as split-file' --rtlib none %t.np/no-parts.test > %t.5.log 2>&1
+# RUN: %{harness_check} contains %t.5.log "^wrote \S+no-parts\.expected$"
+# RUN: %{harness_check} lacks %t.5.log "split-file"
+# RUN: %{harness_check} equals %t.np/no-parts.expected "[exit 12]"
+# RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file '%{prog_cc} --as split-file' --rtlib none --check %t.np/no-parts.test > %t.6.log 2>&1
+# RUN: %{harness_check} contains %t.6.log "^ok: \S+no-parts\.test$"
+# RUN: not %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file '%{prog_cc} --as split-file' --rtlib none --corpus-dir %t.corpus --check %t.d/corpus-copts.test > %t.7.log 2>&1
+# RUN: %{harness_check} contains %t.7.log "^FAIL \(native compile\): \S+corpus-copts\.test$" "^update-expected: split-file failed"
+
+# (4)
+# RUN: rm -rf %t.bc && mkdir -p %t.bc
+# RUN: cat %S/Inputs/ue/bad-copts.c > %t.bc/bad-copts.c
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang '%{prog_clang}' --rtlib none %t.bc/bad-copts.c > %t.8.log 2>&1
+# RUN: %{harness_check} contains %t.8.log "^update-expected: \S+bad-copts\.c: %\{msil_copts\}: unterminated \" quote in '-DVAL=\"7'$" "^FAIL \(native compile\): \S+bad-copts\.c$"
+# RUN: %{harness_check} lacks %t.8.log "^wrote "
+# RUN: %{harness_check} missing %t.bc/bad-copts.expected
+
+# (5)
+# RUN: %{harness_update_expected} --clang '%{prog_clang}' --rtlib none --check %S/../../Programs/support > %t.9.log 2>&1
+# RUN: %{harness_check} lacks %t.9.log "\.c$" "^skip"

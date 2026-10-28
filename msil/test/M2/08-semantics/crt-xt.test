@@ -1,0 +1,36 @@
+# Matrix P3 row .CRT$XT (Windows): a terminator in a '.CRT$XTU' slot is a named link error until phase 3.
+# main.c puts the address of at_term in a '.CRT$XTU' slot with '#pragma
+# section' and __declspec(allocate), the MSVC idiom of p8.c
+# (judge-c-fidelity probes) for a terminator. Natively the MSVC CRT calls
+# the '.CRT$XT*' entries at exit, after main: the transcript is 'main' then
+# 'CRT$XT entry'. Destructors are P3-A: plan 5.9.9 classifies '.CRT$XT*' as
+# a destructor table on Windows triples, and in Phase 2 every entry of one
+# is msil-ld's 'global destructors are not supported yet: <s> in <file>'
+# (5.9.14's Phase 3 features), never a silent drop (judge-c-fidelity J6):
+# on the object path naming the slot and main.o, on the LTO path the LTO
+# object; exit status 1 at -O0 and -O2. A transcript comes with P3-A, which
+# runs '.CRT$XT*' ascending at exit. Only Windows triples group '$'
+# sections; the ELF twin is fini-array.test. Plan 5.9.9, 5.9.16 (P3 rows),
+# M23.c.
+# REQUIRES: msil-triple-windows
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# OBJ: {{^}}msil-ld: error: global destructors are not supported yet: p_term in {{.*}}main.o{{$}}
+# OBJ: clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# LTO: {{^}}msil-ld: error: global destructors are not supported yet: p_term in {{.*}}.lto.o{{$}}
+# LTO: clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- main.c
+#include "msil_test.h"
+
+static void at_term(void) { put_str("CRT$XT entry"); }
+#pragma section(".CRT$XTU", read)
+__declspec(allocate(".CRT$XTU")) __attribute__((used)) static void (*const p_term)(void) = at_term;
+
+int main(void) {
+  put_str("main");
+  return 0;
+}

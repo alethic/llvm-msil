@@ -1,0 +1,35 @@
+# Matrix P3 row atexit order: atexit binds nowhere in Phase 2, so registering exit handlers is a named link error.
+# main.c registers first() and then second() with atexit and returns from
+# main; natively the C library runs them in the reverse order of
+# registration at exit: 'main returns', 'second registered, runs first',
+# 'first registered, runs last'. In Phase 2 atexit binds nowhere (plan
+# 5.10.10: glibc keeps it in libc_nonshared.a, the UCRT does not export it;
+# it stays an error until phase 3 intercepts it, backlog 5), so on both
+# triples, on the object and the LTO path, at -O0 and -O2, the link stops
+# with msil-ld's 'undefined symbol: atexit' and the reference of main
+# (5.9.14), exit status 1, never a crash or a silent drop of the handlers. A
+# transcript comes from P3. Plan 5.9.16 (P3 rows), 5.10.10, M23.c.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefixes=LINK,OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefixes=LINK,OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefixes=LINK,LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefixes=LINK,LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
+# LINK:     {{^}}msil-ld: error: undefined symbol: atexit{{$}}
+# OBJ-NEXT: {{^}}>>> referenced by {{.*}}main.o:(main){{$}}
+# LTO-NEXT: {{^}}>>> referenced by {{.+}}:(main){{$}}
+# LINK:     clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+#--- main.c
+#include "msil_test.h"
+
+int atexit(void (*fn)(void));
+
+static void first(void) { put_str("first registered, runs last"); }
+static void second(void) { put_str("second registered, runs first"); }
+
+int main(void) {
+  atexit(first);
+  atexit(second);
+  put_str("main returns");
+  return 0;
+}

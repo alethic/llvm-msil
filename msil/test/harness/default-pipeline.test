@@ -1,0 +1,29 @@
+# The default pipeline from M23 (plan 5.12.1, Q31; section 12, 'Phase 1
+# decisions at the Phase 2 exit'): with no msil_pipeline and no
+# msil_link_output, the features are msil-pipeline=obj,
+# msil-prog-pipeline=obj and msil-link-output=pe, and %{msil_c} is the object
+# route: msil-prog.py --pipeline obj --link-output pe compiles the one source
+# with clang -c (no -flto, no -S) and links it through the driver into
+# msil-ld's image prog.exe, which runs; no ilasm builds the program. The
+# nested lits run the suite of prog/Inputs/nested (the stand-ins of
+# harness/prog) without --param msil_pipeline: %{harness_lit} passes on
+# neither msil_pipeline nor msil_link_output, so whatever leg runs this test
+# (asm-oracle included), the nested configuration has the default. The C
+# test is m23/default-obj.c, which only this test runs, as
+# prog/Inputs/nested/lit.local.cfg requires; features.test, which other
+# tests run too, only echoes.
+# Without msil-ld (an empty --param msil_ld=) the default pipeline is no
+# configuration error: the configuration loads with a note, and msil-exec,
+# which every execution directory requires, is gone, so
+# msil/test/M1/00-smoke/return-42.c is UNSUPPORTED (an explicit
+# msil_pipeline=obj stays an error, prog/lit-config.test).
+# REQUIRES: msil-ld, msil-ar
+
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= %S/prog/Inputs/nested/m23/default-obj.c %S/prog/Inputs/nested/features.test > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/prog/Inputs/nested/m23/default-obj\.c " "^PASS: MSIL :: harness/prog/Inputs/nested/features\.test " "note: msil: pipeline obj \(%\{msil_prog\}: obj, link output pe\)$"
+# RUN: %{harness_check} contains %t.log "^# \| feature msil-pipeline=obj$" "^# \| feature msil-prog-pipeline=obj$" "^# \| feature msil-link-output=pe$"
+# RUN: %{harness_check} contains %t.log "^# executed command: .*msil-prog\.py'? --triple \S+-msil --pipeline obj --link-output pe .* --level O2 --workdir '?\S*default-obj\.c\.tmp\.O2\.d'? --out '?\S*default-obj\.c\.tmp\.O2\.d/prog\.exe'? --src '?\S*default-obj\.c'?$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 .* -O2 -c \S*default-obj\.c -o obj/default-obj\.o$" "^# \| msil-prog: .* -O2 obj/default-obj\.o -o prog\.exe$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*m23/default-obj'? --out '?\S*default-obj\.c\.tmp\.O2\.out'? '?\S*default-obj\.c\.tmp\.O2\.d/prog\.exe'?$"
+# RUN: %{harness_check} lacks %t.log "--as clang-msil" " -S " " -flto" "--lto-emit-asm" " -dll " "^# \| feature msil-pipeline=(asm|lto)$" "^# \| feature msil-link-output=il$"
+
+# RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_ld= %S/../M1/00-smoke/return-42.c > %t.nold.log 2>&1
+# RUN: %{harness_check} contains %t.nold.log "note: msil: the default pipeline obj links every C test through msil-ld, but these are missing: msil-ld \(--param msil_ld=PATH; build the lld target\); execution tests are UNSUPPORTED \(pass --param msil_pipeline=asm for -S and ilasm\)$" "^UNSUPPORTED: MSIL :: M1/00-smoke/return-42\.c "

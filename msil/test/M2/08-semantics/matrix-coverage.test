@@ -1,0 +1,23 @@
+# The link-semantics matrix is complete: matrix.txt lists every row of plan 5.9.16 and every test of this directory, and each test does what its line says.
+# matrix.txt has one line per row of plan 5.9.16 and per variant (rows that
+# live elsewhere included: tests-p2 3.1's cases in 00-link, M19's p7 object
+# test, M22's P2-C rows) and for the other tests of this directory, with
+# the native result, the pipelines, the triples, the Phase 2 result and the
+# milestones. Inputs/check-matrix.py, run with the repository root, checks
+# M23.c's rules (its docstring has them): every listed file exists and every
+# .test here is listed; a 'UB' or 'link error' native result has a named
+# diagnostic; a transcript line runs %{msil_prog} at the leg's levels on both
+# x86_64 triples (or REQUIRES, or guards with '%if msil-triple-<os>', the one
+# triple it names) under exactly its pipelines, against a generated
+# .expected file; a diagnostic line fails to build at -O0 and -O2 under each
+# of its pipelines and FileChecks the text with --implicit-check-not for
+# 'LLVM ERROR' and 'PLEASE submit'; every M20 row lists obj and lto; a P3 row
+# pins its Phase 2 diagnostic or is 'untested' with a reason, and no other
+# row is untested; pipeline-specific checks use msil-prog-pipeline, never
+# msil-pipeline; no XFAIL line. The self-test runs the checker on trees it
+# builds, one good and one per rule broken. Plan 5.9.16, 5.12.7, M23.c.
+# RUN: %python %S/Inputs/check-matrix.py --self-test | FileCheck %s --check-prefix=SELF
+# RUN: %python %S/Inputs/check-matrix.py %S/../../../.. | FileCheck %s
+# SELF:  {{^}}self-test: the good tree: OK{{$}}
+# SELF:  {{^}}self-test: [[N:[0-9]+]] of [[N]] checks passed{{$}}
+# CHECK: {{^}}check-matrix: {{[0-9]+}} lines, {{[0-9]+}} tests: OK{{$}}

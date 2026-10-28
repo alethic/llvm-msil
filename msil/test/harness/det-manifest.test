@@ -1,0 +1,22 @@
+# msil/utils/ci/det-manifest.py (plan 5.12.12, section 12 'Cross-host
+# determinism'; M23), the manifest of CIL objects and archives that the CI's
+# determinism job compares across hosts and run-m1-gate.ps1's determinism row
+# within the development host: its offline self-test (stand-ins for clang
+# and llvm-ar in a temporary directory outside the repository) builds a
+# small tree twice from different work directories and compares, checks the
+# command lines (relative sources, -fdebug-compilation-dir=., both x86_64
+# MSIL triples at each level, -fms-compatibility-version=19.33 on the
+# windows-msvc compiles only, so that the triple an object records does not
+# depend on the host's MSVC), an edited source, compare's one-sided,
+# disjoint and malformed manifests, a work directory inside the repository
+# and a failed compile; relative, '/'-separated tool paths run from the root
+# (msil-ci.yml's form before M23's fix loop: the stand-ins refuse a relative
+# path, and the archiver runs from the work directory); a work directory
+# holding a foreign file (refused, the file kept) or only <triple>/
+# directories (emptied); a tool that does not start, refused before anything
+# is deleted.
+# RUN: %python %S/../../utils/ci/det-manifest.py --self-test > %t.log 2>&1
+# RUN: %{harness_check} contains %t.log "^det-manifest: self-test passed \(0 failure\(s\)\)$" "^ok: two work directories give equal manifests$" "^ok: compare fails on a differing entry$" "^ok: a work directory inside the repository is refused$"
+# RUN: %{harness_check} contains %t.log "^ok: relative '/'-separated tool paths, run from the root, pass the archive step$" "^ok: a work directory holding a foreign file is refused, and the file survives$" "^ok: a work directory holding only <triple>/ directories is emptied and marked$" "^ok: a missing --clang is a usage error before anything is deleted$" "^ok: a missing --ar is a usage error before anything is deleted$"
+# RUN: %{harness_check} contains %t.log "^ok: relative sources and -I, .*, -fms-compatibility-version=19\.33 on every windows-msvc compile and on no linux-gnu one$"
+# RUN: %{harness_check} lacks %t.log "^FAIL: "

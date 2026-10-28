@@ -20,8 +20,13 @@
 ; errors.ll: every other inline asm keeps 'inline assembly is not supported
 ; for MSIL', naming its function, whose body is deleted: an untied output
 ; (with no input, or with an untied input) and any text besides the
-; comments, before them, after them or between two. Nothing crashes, and the
-; IL, which keeps the function after them, assembles.
+; comments, before them, after them or between two; and, with a tied output
+; ('=r,0'), a line comment ('// ${0:k}' or '# ${0:k}') and an unterminated
+; block comment ('/* ${0:k}'), which only block comments count as (section
+; 12 row of 2026-10-27 'Inline asm acceptance as built': MSILPrepareIR's
+; isBlankAsmString accepts whitespace and complete '/* ... */' comments
+; only). Nothing crashes, and the IL, which keeps the function after them,
+; assembles.
 
 ; RUN: split-file %s %t
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/comment.ll \
@@ -135,6 +140,9 @@
 ; ERR: {{^}}error: {{.*}}in function asm_comment_then_text {{.*}}: inline assembly is not supported for MSIL{{$}}
 ; ERR: {{^}}error: {{.*}}in function asm_text_then_comment {{.*}}: inline assembly is not supported for MSIL{{$}}
 ; ERR: {{^}}error: {{.*}}in function asm_text_between {{.*}}: inline assembly is not supported for MSIL{{$}}
+; ERR: {{^}}error: {{.*}}in function asm_line_comment {{.*}}: inline assembly is not supported for MSIL{{$}}
+; ERR: {{^}}error: {{.*}}in function asm_hash_comment {{.*}}: inline assembly is not supported for MSIL{{$}}
+; ERR: {{^}}error: {{.*}}in function asm_unterminated_comment {{.*}}: inline assembly is not supported for MSIL{{$}}
 
 ; The diagnosed functions are gone; the function after them stays.
 ; ERR-IL:      {{^}}.method public static int32 'after_asm'(int32, int32) cil managed{{$}}
@@ -247,6 +255,21 @@ define i32 @asm_text_then_comment(i32 %x) {
 define void @asm_text_between() {
   call void asm sideeffect "/* a */ pause /* b */", "~{memory}"()
   ret void
+}
+
+define i32 @asm_line_comment(i32 %x) {
+  %r = call i32 asm sideeffect "// ${0:k}", "=r,0"(i32 %x)
+  ret i32 %r
+}
+
+define i32 @asm_hash_comment(i32 %x) {
+  %r = call i32 asm sideeffect "# ${0:k}", "=r,0"(i32 %x)
+  ret i32 %r
+}
+
+define i32 @asm_unterminated_comment(i32 %x) {
+  %r = call i32 asm sideeffect "/* ${0:k}", "=r,0"(i32 %x)
+  ret i32 %r
 }
 
 define i32 @after_asm(i32 %a, i32 %b) {

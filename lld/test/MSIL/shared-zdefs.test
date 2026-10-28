@@ -11,7 +11,9 @@
 ## - a library that another library input defines links (ext.dll);
 ## - --interface-only (with -shared) skips late binding and reports
 ##   nothing: an interface library may leave symbols undefined
-##   (shared-interface.test); without -shared it is an error.
+##   (shared-interface.test); without -shared it is the error
+##   '--interface-only requires -shared' (section 12 row of 2026-10-27
+##   'M22.a interfaces as built', item (2)).
 ## The errors come in no fixed order, so each is checked on its own and the
 ## total is counted.
 
@@ -56,7 +58,7 @@
 # RUN: mkdir iface
 # RUN: msil-ld -shared --interface-only lib.o -o iface/lib.dll 2>&1 | count 0
 # RUN: not msil-ld --interface-only ext.o -o x.exe 2>&1 | FileCheck %s --check-prefix=NOSHARED %{crash}
-# NOSHARED: {{^}}msil-ld: error: {{.*}}--interface-only
+# NOSHARED: {{^}}msil-ld: error: --interface-only requires -shared{{$}}
 
 #--- lib.ll
 target triple = "x86_64-pc-windows-msvc-msil"

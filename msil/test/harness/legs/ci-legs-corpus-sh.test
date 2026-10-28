@@ -1,0 +1,43 @@
+# The CI-only corpus paths of msil/utils/ci/lit-legs.sh (plan 5.12.11 and
+# 5.12.12, section 12 row 'M23 CI corpus'), which only the Linux CI job takes,
+# run against a stand-in build directory whose llvm-lit records its arguments
+# (Inputs/ci-legs.py): inside WSL from Windows (the WSL legs), natively on
+# Linux. (a) --leg ctest with MSIL_CORPUS_SKIP=coremark,c-testsuite prints its
+# skip line, writes a SKIP row through ci-common.sh's ci_result (console,
+# table, MSIL_CI_RESULTS and GITHUB_STEP_SUMMARY), runs no lit and exits 0
+# (ci_summary counts only FAIL rows), while with c-testsuite left in the
+# variable the leg runs lit; (b) the corpus leg programs passes
+# msil_require_corpus=1, msil_corpus_skip from MSIL_CORPUS_SKIP and
+# msil_corpus_dir from MSIL_CORPUS_CACHE; (c) --leg net10, a leg M23 removed,
+# exits 2 naming net8 and runs no lit. ci-legs-corpus.test checks
+# lit-legs.ps1 the same way.
+# REQUIRES: msil-ci-bash
+
+# RUN: rm -rf %t.build %t.rows-a %t.rows-a2 %t.rows-b %t.rows-c %t.summary
+# RUN: %python %S/Inputs/ci-legs.py setup %t.build
+
+# (a) The skip line and the SKIP row; no lit run, exit 0.
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t.build MSIL_CORPUS_SKIP=coremark,c-testsuite MSIL_CI_RESULTS=%t.rows-a GITHUB_STEP_SUMMARY=%t.summary -- --leg ctest > %t.a.log
+# RUN: %{harness_check} contains %t.a.log "^ctest: skipped \(c-testsuite is in MSIL_CORPUS_SKIP\)$" "^\[msil-ci\] SKIP lit-legs/ctest \(0:00\) c-testsuite is in MSIL_CORPUS_SKIP \(plan section 10 item 11\); no lit run$" "^lit-legs +ctest +SKIP +0:00 +c-testsuite is in MSIL_CORPUS_SKIP"
+# RUN: %{harness_check} contains %t.rows-a "^lit-legs\tctest\tSKIP\t0\tc-testsuite is in MSIL_CORPUS_SKIP \(plan section 10 item 11\); no lit run$"
+# RUN: %{harness_check} lacks %t.rows-a "\t(PASS|FAIL)\t"
+# RUN: %{harness_check} contains %t.summary "^\| lit-legs \| ctest \| SKIP \| 0:00 \| c-testsuite is in MSIL_CORPUS_SKIP \(plan section 10 item 11\); no lit run \|$"
+# RUN: %{harness_check} missing %t.build/lit-calls.log
+
+# (a) With c-testsuite not in MSIL_CORPUS_SKIP, ctest runs lit.
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t.build MSIL_CORPUS_SKIP=coremark MSIL_CI_RESULTS=%t.rows-a2 -- --leg ctest > %t.a2.log
+# RUN: %{harness_check} contains %t.build/lit-calls.log "^arg: msil_corpus_skip=coremark$" "^arg: \S*/Programs/c-testsuite$"
+# RUN: %{harness_check} contains %t.rows-a2 "^lit-legs\tctest\tPASS\t"
+# RUN: %{harness_check} lacks %t.a2.log "skipped \(c-testsuite"
+
+# (b) A corpus leg's corpus parameters.
+# RUN: rm -f %t.build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t.build MSIL_CORPUS_SKIP=coremark,c-testsuite MSIL_CORPUS_CACHE=%t.cache MSIL_CI_RESULTS=%t.rows-b -- --leg programs > %t.b.log
+# RUN: %{harness_check} contains %t.build/lit-calls.log "^arg: msil_require_corpus=1$" "^arg: msil_corpus_skip=coremark,c-testsuite$" "^arg: msil_corpus_dir=.+\.tmp\.cache$" "^arg: \S*/Programs/coremark$" "^arg: \S*/Programs/jsmn$"
+# RUN: %{harness_check} contains %t.rows-b "^lit-legs\tprograms\tPASS\t"
+
+# (c) A removed leg fails naming the leg that covers it, before any lit run.
+# RUN: rm -f %t.build/lit-calls.log
+# RUN: %{harness_check} exits 2 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t.build MSIL_CI_RESULTS=%t.rows-c -- --leg net10 > %t.c.log
+# RUN: %{harness_check} contains %t.c.log "^lit-legs\.sh: leg 'net10' was removed in M23 \(plan 5\.12\.11\): net8 \(msil_also_run=10\)"
+# RUN: %{harness_check} missing %t.build/lit-calls.log

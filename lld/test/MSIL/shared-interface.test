@@ -4,7 +4,9 @@
 ## - under Q21's -z defs a cyclic pair cannot be linked directly: a.o needs
 ##   b_fn, b.o needs a_fn;
 ## - -shared --interface-only writes the same export plan, identity and
-##   symbol table as the real link of the same inputs, flagged INTERFACE:
+##   symbol table as the real link of the same inputs, flagged INTERFACE
+##   (llvm-cil-dump --link-info ends the header line ' flags=INTERFACE',
+##   section 12 row of 2026-10-27 '5.9.15 and 5.8.11 clarified'):
 ##   the same export class with the same members (names, signatures, flags,
 ##   Param rows, properties and Getter rows), each body 'ldnull; throw', and
 ##   no image, no '<msil>Data', no trailer ('.cctor') and no other member;
@@ -70,7 +72,7 @@
 # IFACE-NEXT: {{^}}assembly .custom instance void(uint8[]) '<msil>SymbolTable'::'.ctor' = 01 00 {{.+}}
 # IFACE-NOT:  {{.}}
 # RUN: llvm-cil-dump --link-info iface/b.dll | FileCheck %s --check-prefixes=TABLE,TABLE-IFACE
-# TABLE-IFACE: {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8 flags={{0x01|INTERFACE}}{{$}}
+# TABLE-IFACE: {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8 flags=INTERFACE{{$}}
 # TABLE-REAL:  {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8{{$}}
 # TABLE-NEXT:  {{^}}ExportClass 'b'{{$}}
 # TABLE-NEXT:  {{^}}Data 'b_var' size=4 align=4{{$}}

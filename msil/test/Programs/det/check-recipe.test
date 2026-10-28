@@ -1,0 +1,12 @@
+# check-recipe.py, which keeps each det test on its program test's recipe.
+# Equal directives pass (zlib.test against ../zlib/zlib.test); a det test
+# against another program's test fails and names both files; a file without
+# a redefinition (this one) fails. Plan 5.12.9 (M23).
+# RUN: %python %S/check-recipe.py %S/zlib.test %S/../zlib/zlib.test | FileCheck --check-prefix=SAME %s
+# SAME: check-recipe.py: 4 directives agree
+# RUN: not %python %S/check-recipe.py %S/zlib.test %S/../tinf/tinf.test | FileCheck --check-prefix=DIFF %s
+# DIFF: check-recipe.py: the directives of {{.*}}zlib.test differ from {{.*}}tinf.test's:
+# DIFF: -DZ_SOLO -Werror=implicit-function-declaration -w
+# DIFF: -DZ_SOLO -DNDEBUG -Werror=implicit-function-declaration -w
+# RUN: not %python %S/check-recipe.py %s %S/../zlib/zlib.test | FileCheck --check-prefix=NONE %s
+# NONE: check-recipe.py: {{.*}}check-recipe.test has no {{REDEFINE}}: line

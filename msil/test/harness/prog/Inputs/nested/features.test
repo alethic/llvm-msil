@@ -1,5 +1,6 @@
-# Run in a nested lit by ../../pipelines.test and listed by
-# ../../lit-config.test: it prints the pipeline features of the
+# Run in a nested lit by ../../pipelines.test, ../../lit-config.test and
+# ../../../default-pipeline.test (it writes nothing, so they may share it;
+# lit.local.cfg): it prints the pipeline features of the
 # configuration (plan 5.12.2; M20: msil-prog-pipeline=obj under asm and obj,
 # lto under lto; msil-link-output=pe by default; msil-equiv and
 # msil-scale-tests), and the glibc sysroot of the hosted tests (M15).

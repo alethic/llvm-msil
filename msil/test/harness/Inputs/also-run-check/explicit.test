@@ -1,0 +1,13 @@
+# Run in a nested lit by ../../also-run.test only, for its case (5): a test
+# with explicit RUN lines that follows msil_also_run (plan 5.12.3). ilasm
+# assembles ../../pipeline/Inputs/also-run/runtime-major.il.in (exit 1 on
+# .NET 10 or newer, else 0) into the image that the placeholder %{arc_image}
+# names, the main run is FileChecked, and %{msil_also_run_check} repeats
+# jitall, the run and FileCheck on every runtime of msil_also_run. The image
+# reaches it through a REDEFINE of %{msil_also_run_image} to %{arc_image}, a
+# placeholder of this test, as the M1 tests use theirs.
+# DEFINE: %{arc_image} = %t.dll
+# REDEFINE: %{msil_also_run_image} = %{arc_image}
+# RUN: %ilasm -dll -output=%{arc_image} %S/../../pipeline/Inputs/also-run/runtime-major.il.in
+# RUN: %msil_exec --out %{arc_image}.out %{arc_image} && FileCheck --input-file=%{arc_image}.out --match-full-lines %s %{msil_also_run_check}
+# CHECK: [exit {{[01]}}]

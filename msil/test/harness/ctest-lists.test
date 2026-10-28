@@ -1,0 +1,70 @@
+# The configuration errors of msil/test/Programs/c-testsuite (plan 5.12.9;
+# M23): a malformed or stale libc-free.txt must stop lit, never turn into
+# fewer tests. (1) Inputs/ctest-lists.py unit calls msil_ctest_format's
+# TestList and libc_free directly (python -B: no __pycache__ in the source
+# tree): a diag entry whose item is not P3-A or P3-B, a diag entry without
+# '# <item>', a header count that differs from the entries, a name listed
+# twice and a list without '# rule:' are errors, and libc_free picks the .c
+# files that the rule matches nowhere. (2) The checks of c-testsuite's
+# lit.local.cfg, in nested lits over a copy of the directory
+# (Inputs/nested-ctest runs the copy's lit.local.cfg) with a fake cache
+# (Inputs/make-fake-corpus.py, then Inputs/ctest-lists.py setup writes the
+# tree free1.c, free2.c and calls.c and a matching list): the consistent
+# list loads and yields one test per name; a listed test whose .c.expected
+# is not empty, a listed name that the tree lacks, a libc-free test of the
+# tree that the list lacks, and a name listed twice are each a configuration
+# error (lit's exit status 2) that names it. (3) The format's tests executed
+# (prog/Inputs/nested-ctest runs the copy's lit.local.cfg below
+# prog/lit.local.cfg, so %{msil_prog} and %{msil_prog_fail_<L>} build with
+# the stand-ins of prog/Inputs/prog-cc.py, whose compiler accepts only
+# c-testsuite's flags there): Inputs/ctest-lists.py setup ... exec lists
+# free1, a program that exits 0, and the diag entries diag1, whose compile
+# fails with the listed text, and diag2, which builds. At -O0 and -O2,
+# free1's MSIL build (and, where the native oracle runs, its native build)
+# gets --cflags='-std=gnu17 -w', each compile has those flags, and the runs
+# compare with the copy's exit0.expected; diag1 runs 'not' + the build piped
+# into FileCheck of the copy's diag.check with "-DDIAG=<text>" and both
+# --implicit-check-not texts (LLVM ERROR, PLEASE submit) at each level and
+# passes; diag2, whose build succeeds, fails. Under msil_pipeline=lto free1
+# passes and both diag entries are UNSUPPORTED (they require
+# msil-prog-pipeline=obj).
+
+# (1)
+# RUN: %python -B %S/Inputs/ctest-lists.py unit > %t.unit.log 2>&1
+# RUN: %{harness_check} contains %t.unit.log "^ctest-lists: 7 checks, 0 failed$" "^ok: a diag entry whose item is not P3-A or P3-B: " "^ok: a diag entry without '# <item>': " "^ok: a header count that differs from the entries: " "^ok: a name listed twice: " "^ok: no '# rule:' line: " "^ok: libc_free: "
+# RUN: %{harness_check} lacks %t.unit.log "^FAIL: "
+
+# (2)
+# RUN: rm -rf %t.copy %t.corpus
+# RUN: %python %S/Inputs/make-fake-corpus.py %S/../../utils/corpus/manifest.json %t.corpus
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus
+# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.ok.log 2>&1
+# RUN: %{harness_check} contains %t.ok.log "MSIL :: harness/Inputs/nested-ctest/free1$" "MSIL :: harness/Inputs/nested-ctest/free2$"
+# RUN: %{harness_check} lacks %t.ok.log "fatal:" "nested-ctest/calls$"
+
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus expected
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.expected.log 2>&1
+# RUN: %{harness_check} contains %t.expected.log "fatal: msil: c-testsuite test free2 is listed in libc-free\.txt, but .+free2\.c\.expected is missing or not empty"
+
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus absent
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.absent.log 2>&1
+# RUN: %{harness_check} contains %t.absent.log "fatal: msil: libc-free\.txt does not match .+ by its rule: listed but not libc-free or not in the tree: ghost; libc-free but not listed: none$"
+
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus unlisted
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.unlisted.log 2>&1
+# RUN: %{harness_check} contains %t.unlisted.log "fatal: msil: libc-free\.txt does not match .+ by its rule: listed but not libc-free or not in the tree: none; libc-free but not listed: free3$"
+
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus twice
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.twice.log 2>&1
+# RUN: %{harness_check} contains %t.twice.log "fatal: msil: .+libc-free\.txt:\d+: free1 is listed twice$"
+
+# (3)
+# RUN: rm -rf %t.exec
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.exec %t.corpus exec
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} exits 1 %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O0,O2 --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.exec %S/prog/Inputs/nested-ctest > %t.exec.log 2>&1 %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.exec.log "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/free1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/diag1 " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/diag2 " %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.exec.log "^# executed command: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O0 --workdir '?\S*free1\.tmp\.O0\.d'? .*$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -w -O0 -c \S*free1\.c -o obj/free1\.o$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*exit0'? --out '?\S*free1\.tmp\.O0\.out'? " "^# executed command: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O2 --workdir '?\S*free1\.tmp\.O2\.d'? .*$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*exit0'? --out '?\S*free1\.tmp\.O2\.out'? " %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.exec.log "^# executed command: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --mode native --level O0 .*$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=x86_64-pc-windows-msvc -std=gnu17 -w -O0 -c \S*free1\.c -o obj/free1\.o$" "^# executed command: .*msil-run\.py'? .* --native --expect '?\S*exit0'? --out '?\S*free1\.tmp\.O0\.native\.out'? " %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.exec.log "^# executed command: not .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O0 --workdir '?\S*diag1\.tmp\.O0\.d'? .*\n# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?\S*diag\.check'? '?-DDIAG=error: variadic function definitions are not supported for MSIL yet'? '?--implicit-check-not=LLVM ERROR'? '?--implicit-check-not=PLEASE submit'?$" "^# executed command: not .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O2 --workdir '?\S*diag1\.tmp\.O2\.d'? .*\n# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?\S*diag\.check'? '?-DDIAG=error: variadic function definitions are not supported for MSIL yet'? '?--implicit-check-not=LLVM ERROR'? '?--implicit-check-not=PLEASE submit'?$" "^# executed command: not .*msil-prog\.py'? .* --level O0 --workdir '?\S*diag2\.tmp\.O0\.d'? .*$" %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O0,O2 --param msil_pipeline=lto --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.exec %S/prog/Inputs/nested-ctest > %t.exec-lto.log 2>&1 %}
+# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.exec-lto.log "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/free1 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/diag1 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/diag2 " %}
