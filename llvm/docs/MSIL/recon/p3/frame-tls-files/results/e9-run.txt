@@ -1,0 +1,35 @@
+--- net48
+runtime 4.0.30319.42000
+1. VLA loop: 1,000,000 iterations, sizes 1..4096: chunk allocations 1, chunks live after 1 (the bottom chunk is kept), Sp back to empty: True (156 ms)
+2. recursion 8,000 x 1 KiB (8 MiB): chunk allocations 6, live after 1, Sp empty True; again: +1 allocations (16 ms)
+3. longjmp through 50 VLA frames: with the catch-path restore -> 7; without -> -1 (-1: Sp left below the setjmp point)
+4. per call: localloc(64) 22.58 ns, shadow save+alloca+restore 148.81 ns (3 header lookups), 62.87 ns (1 lookup)
+exit=0
+--- net8
+runtime 8.0.33
+1. VLA loop: 1,000,000 iterations, sizes 1..4096: chunk allocations 1, chunks live after 1 (the bottom chunk is kept), Sp back to empty: True (672 ms)
+2. recursion 8,000 x 1 KiB (8 MiB): chunk allocations 6, live after 1, Sp empty True; again: +1 allocations (15 ms)
+3. longjmp through 50 VLA frames: with the catch-path restore -> 7; without -> -1 (-1: Sp left below the setjmp point)
+4. per call: localloc(64) 11.33 ns, shadow save+alloca+restore 286.81 ns (3 header lookups), 94.67 ns (1 lookup)
+exit=0
+--- net10
+runtime 10.0.14
+1. VLA loop: 1,000,000 iterations, sizes 1..4096: chunk allocations 1, chunks live after 1 (the bottom chunk is kept), Sp back to empty: True (93 ms)
+2. recursion 8,000 x 1 KiB (8 MiB): chunk allocations 6, live after 1, Sp empty True; again: +1 allocations (16 ms)
+3. longjmp through 50 VLA frames: with the catch-path restore -> 7; without -> -1 (-1: Sp left below the setjmp point)
+4. per call: localloc(64) 12.21 ns, shadow save+alloca+restore 68.57 ns (3 header lookups), 40.81 ns (1 lookup)
+exit=0
+--- wsl net8
+runtime 8.0.31
+1. VLA loop: 1,000,000 iterations, sizes 1..4096: chunk allocations 1, chunks live after 1 (the bottom chunk is kept), Sp back to empty: True (780 ms)
+2. recursion 8,000 x 1 KiB (8 MiB): chunk allocations 6, live after 1, Sp empty True; again: +1 allocations (48 ms)
+3. longjmp through 50 VLA frames: with the catch-path restore -> 7; without -> -1 (-1: Sp left below the setjmp point)
+4. per call: localloc(64) 12.44 ns, shadow save+alloca+restore 481.90 ns (3 header lookups), 174.28 ns (1 lookup)
+exit=0
+--- wsl net10
+runtime 10.0.13
+1. VLA loop: 1,000,000 iterations, sizes 1..4096: chunk allocations 1, chunks live after 1 (the bottom chunk is kept), Sp back to empty: True (104 ms)
+2. recursion 8,000 x 1 KiB (8 MiB): chunk allocations 6, live after 1, Sp empty True; again: +1 allocations (16 ms)
+3. longjmp through 50 VLA frames: with the catch-path restore -> 7; without -> -1 (-1: Sp left below the setjmp point)
+4. per call: localloc(64) 12.77 ns, shadow save+alloca+restore 88.98 ns (3 header lookups), 44.89 ns (1 lookup)
+exit=0

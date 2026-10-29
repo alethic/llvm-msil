@@ -1,0 +1,21 @@
+_execl                       -                            process.h
+_execle                      -                            process.h
+_execlp                      -                            process.h
+_execlpe                     -                            process.h
+_open                        -                            corecrt_io.h
+_sopen                       -                            corecrt_io.h
+_spawnl                      -                            process.h
+_spawnle                     -                            process.h
+_spawnlp                     -                            process.h
+_spawnlpe                    -                            process.h
+_wexecl                      -                            corecrt_wprocess.h
+_wexecle                     -                            corecrt_wprocess.h
+_wexeclp                     -                            corecrt_wprocess.h
+_wexeclpe                    -                            corecrt_wprocess.h
+_wopen                       -                            corecrt_wio.h
+_wsopen                      -                            corecrt_wio.h
+_wspawnl                     -                            corecrt_wprocess.h
+_wspawnle                    -                            corecrt_wprocess.h
+_wspawnlp                    -                            corecrt_wprocess.h
+_wspawnlpe                   -                            corecrt_wprocess.h
+# 20 exported variadic functions, 0 with a v-variant

@@ -1,0 +1,4 @@
+runtime 4.0.30319.42000
+finalizer(finished thread) HasShutdownStarted=True
+finalizer(main thread) HasShutdownStarted=True
+finalizer(background thread, still running) HasShutdownStarted=True

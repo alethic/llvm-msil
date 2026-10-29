@@ -1,0 +1,16 @@
+### build/sqlite-default/lin-O2-sim
+      1 msil-ld: error: undefined symbol: __atomic_store_8
+      1 msil-ld: error: undefined symbol: __atomic_store_4
+      1 msil-ld: error: undefined symbol: __atomic_store_2
+      1 msil-ld: error: undefined symbol: __atomic_store_1
+      1 msil-ld: error: undefined symbol: __atomic_load_4
+      1 msil-ld: error: undefined symbol: __atomic_load_2
+      1 msil-ld: error: undefined symbol: __atomic_load_1
+      1 msil-ld: error: the signature of prototype-less function 'mremap' cannot be derived: its address is used, but it is never called directly; declare it with a prototype
+      1 msil-ld: error: the signature of prototype-less function 'fcntl64' cannot be derived: its address is used, but it is never called directly; declare it with a prototype
+      1 msil-ld: error: native function 'pthread_create' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks
+      1 clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+      1 $ D:/llvm-msil/build/bin/clang.exe --target=x86_64-unknown-linux-gnu-msil -O2 -fno-color-diagnostics -fno-caret-diagnostics -ferror-limit=0 --sysroot=C:/llvm-msil-scratch/glibc-sysroot <S>/build/sqlite-default/lin-O2-sim/sqlite3.o <S>/build/sqlite-default/lin-O2-sim/shell.o <S>/build/sqlite-default/lin-O2-sim/sim.o -lm -lpthread -ldl -Wl,--error-limit=0 -Wl,--print-imports -o <S>/build/sqlite-default/lin-O2-sim/shell.exe
+      1 $ D:/llvm-msil/build/bin/clang.exe --target=x86_64-unknown-linux-gnu-msil -O2 -fno-color-diagnostics -fno-caret-diagnostics -ferror-limit=0 --sysroot=C:/llvm-msil-scratch/glibc-sysroot -S -emit-llvm -Wno-deprecated-declarations <S>/sim/sim.c -o <S>/build/sqlite-default/lin-O2-sim/sim.ll
+      1 $ D:/llvm-msil/build/bin/clang.exe --target=x86_64-unknown-linux-gnu-msil -O2 -fno-color-diagnostics -fno-caret-diagnostics -ferror-limit=0 --sysroot=C:/llvm-msil-scratch/glibc-sysroot -I<S>/src/sqlite-amalgamation-3540100 -include <S>/sim/sim.h -S -emit-llvm -Wno-deprecated-declarations <S>/src/sqlite-amalgamation-3540100/sqlite3.c -o <S>/build/sqlite-default/lin-O2-sim/sqlite3.ll
+      1 $ D:/llvm-msil/build/bin/clang.exe --target=x86_64-unknown-linux-gnu-msil -O2 -fno-color-diagnostics -fno-caret-diagnostics -ferror-limit=0 --sysroot=C:/llvm-msil-scratch/glibc-sysroot -I<S>/src/sqlite-amalgamation-3540100 -include <S>/sim/sim.h -S -emit-llvm -Wno-deprecated-declarations <S>/src/sqlite-amalgamation-3540100/shell.c -o <S>/build/sqlite-default/lin-O2-sim/shell.ll

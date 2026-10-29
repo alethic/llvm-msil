@@ -1,0 +1,300 @@
+=== net48 ret
+[    5 ms main] Main: mode=ret runtime=.NET Framework 4.8.9363.0
+[    6 ms main] Main returns 7
+[   14 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[   14 ms thread 2 bg] ProcessExit handler A end
+[   15 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=3584 ms
+=== net48 ret300
+[    4 ms main] Main: mode=ret300 runtime=.NET Framework 4.8.9363.0
+[    5 ms main] Main returns 300
+[   12 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=300)
+[   12 ms thread 2 bg] ProcessExit handler A end
+[   13 ms thread 2 bg] ProcessExit handler B (ExitCode=300)
+status=300 (0x0000012C) wall=3246 ms
+=== net48 envexit
+[   43 ms main] Main: mode=envexit runtime=.NET Framework 4.8.9363.0
+[  101 ms main] Environment.Exit(7)
+[  114 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  114 ms thread 2 bg] ProcessExit handler A end
+[  114 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=1626 ms
+=== net48 envexit300
+[   45 ms main] Main: mode=envexit300 runtime=.NET Framework 4.8.9363.0
+[  283 ms main] Environment.Exit(300)
+[  298 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=300)
+[  306 ms thread 2 bg] ProcessExit handler A end
+[  307 ms thread 2 bg] ProcessExit handler B (ExitCode=300)
+status=300 (0x0000012C) wall=6658 ms
+=== net48 envexit-thread
+[   95 ms main] Main: mode=envexit-thread runtime=.NET Framework 4.8.9363.0
+[  274 ms thread 3 fg] Environment.Exit(7) from a second thread
+[  276 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  276 ms thread 2 bg] ProcessExit handler A end
+[  276 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=1874 ms
+=== net48 exitcode
+[    5 ms main] Main: mode=exitcode runtime=.NET Framework 4.8.9363.0
+[    6 ms main] Environment.ExitCode = 5, Main returns 7
+[  188 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  188 ms thread 2 bg] ProcessExit handler A end
+[  188 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=3540 ms
+=== net48 unhandled
+[    6 ms main] Main: mode=unhandled runtime=.NET Framework 4.8.9363.0
+[    7 ms main] throwing
+[    8 ms main] UnhandledException ran (IsTerminating=True)
+
+Unhandled Exception: System.InvalidOperationException: boom
+   at P.Main(String[] args) in C:\llvm-msil-scratch\p3\lifecycle\dotnet\Program.cs:line 57
+status=-532462766 (0xE0434352) wall=2620 ms
+=== net48 nativeexit
+[   11 ms main] Main: mode=nativeexit runtime=.NET Framework 4.8.9363.0
+[   12 ms main] _crt_atexit returned 0
+[   12 ms main] native exit(7)
+[  258 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  259 ms thread 2 bg] ProcessExit handler A end
+[  259 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=2900 ms
+=== net48 native_exit
+[   45 ms main] Main: mode=native_exit runtime=.NET Framework 4.8.9363.0
+[   75 ms main] _crt_atexit returned 0
+[   76 ms main] native _exit(7)
+[   92 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[   92 ms thread 2 bg] ProcessExit handler A end
+[   93 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1394 ms
+=== net48 quick
+[    5 ms main] Main: mode=quick runtime=.NET Framework 4.8.9363.0
+[    6 ms main] native quick_exit(7)
+[    8 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    8 ms thread 2 bg] ProcessExit handler A end
+[    9 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1193 ms
+=== net48 exitprocess
+[   65 ms main] Main: mode=exitprocess runtime=.NET Framework 4.8.9363.0
+[  118 ms main] _crt_atexit returned 0
+[  118 ms main] kernel32 ExitProcess(7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1501 ms
+=== net48 terminate
+[    4 ms main] Main: mode=terminate runtime=.NET Framework 4.8.9363.0
+[    6 ms main] kernel32 TerminateProcess(7)
+status=7 (0x00000007) wall=1684 ms
+=== net48 native-ret
+[    4 ms main] Main: mode=native-ret runtime=.NET Framework 4.8.9363.0
+[    6 ms main] _crt_atexit returned 0
+[    6 ms main] Main returns 7 after registering a native atexit callback
+[  114 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  114 ms thread 2 bg] ProcessExit handler A end
+[  114 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1027 ms
+=== net48 native-envexit
+[    5 ms main] Main: mode=native-envexit runtime=.NET Framework 4.8.9363.0
+[    6 ms main] _crt_atexit returned 0
+[    7 ms main] Environment.Exit(7) after registering a native atexit callback
+[    9 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    9 ms thread 2 bg] ProcessExit handler A end
+[    9 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=713 ms
+=== net8.0 ret
+[    2 ms main] Main: mode=ret runtime=.NET 8.0.33
+[    4 ms main] Main returns 7
+[    5 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    5 ms thread 2 bg] ProcessExit handler A end
+[    5 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=4881 ms
+=== net8.0 ret300
+[    1 ms main] Main: mode=ret300 runtime=.NET 8.0.33
+[    2 ms main] Main returns 300
+[    3 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=300)
+[    3 ms thread 2 bg] ProcessExit handler A end
+[    3 ms thread 2 bg] ProcessExit handler B (ExitCode=300)
+status=300 (0x0000012C) wall=1176 ms
+=== net8.0 envexit
+[    1 ms main] Main: mode=envexit runtime=.NET 8.0.33
+[    4 ms main] Environment.Exit(7)
+[    5 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    5 ms thread 2 bg] ProcessExit handler A end
+[    5 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=1476 ms
+=== net8.0 envexit300
+[    1 ms main] Main: mode=envexit300 runtime=.NET 8.0.33
+[    2 ms main] Environment.Exit(300)
+[    3 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=300)
+[    3 ms thread 2 bg] ProcessExit handler A end
+[    3 ms thread 2 bg] ProcessExit handler B (ExitCode=300)
+status=300 (0x0000012C) wall=1726 ms
+=== net8.0 envexit-thread
+[    1 ms main] Main: mode=envexit-thread runtime=.NET 8.0.33
+[   95 ms thread 4 fg] Environment.Exit(7) from a second thread
+[   96 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[   96 ms thread 2 bg] ProcessExit handler A end
+[   96 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=1256 ms
+=== net8.0 exitcode
+[    2 ms main] Main: mode=exitcode runtime=.NET 8.0.33
+[    3 ms main] Environment.ExitCode = 5, Main returns 7
+[    4 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    4 ms thread 2 bg] ProcessExit handler A end
+[    5 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=739 ms
+=== net8.0 unhandled
+[    6 ms main] Main: mode=unhandled runtime=.NET 8.0.33
+[    8 ms main] throwing
+[   74 ms main] UnhandledException ran (IsTerminating=True)
+Unhandled exception. System.InvalidOperationException: boom
+   at P.Main(String[] args) in C:\llvm-msil-scratch\p3\lifecycle\dotnet\Program.cs:line 74
+status=-532462766 (0xE0434352) wall=1779 ms
+=== net8.0 nativeexit
+[    2 ms main] Main: mode=nativeexit runtime=.NET 8.0.33
+[    5 ms main] _crt_atexit returned 0
+[    5 ms main] native exit(7)
+[    6 ms main] native atexit callback (registered with the host C library) ran
+stdout(native puts): buffered line from Main
+stdout(native puts): from native atexit callback
+status=7 (0x00000007) wall=2054 ms
+=== net8.0 native_exit
+[    1 ms main] Main: mode=native_exit runtime=.NET 8.0.33
+[    3 ms main] _crt_atexit returned 0
+[    4 ms main] native _exit(7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=910 ms
+=== net8.0 quick
+[    1 ms main] Main: mode=quick runtime=.NET 8.0.33
+[    3 ms main] native quick_exit(7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1394 ms
+=== net8.0 exitprocess
+[    3 ms main] Main: mode=exitprocess runtime=.NET 8.0.33
+[   14 ms main] _crt_atexit returned 0
+[   14 ms main] kernel32 ExitProcess(7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1295 ms
+=== net8.0 terminate
+[    6 ms main] Main: mode=terminate runtime=.NET 8.0.33
+[    8 ms main] kernel32 TerminateProcess(7)
+status=7 (0x00000007) wall=748 ms
+=== net8.0 native-ret
+[    1 ms main] Main: mode=native-ret runtime=.NET 8.0.33
+[    4 ms main] _crt_atexit returned 0
+[    4 ms main] Main returns 7 after registering a native atexit callback
+stdout(native puts): buffered line from Main
+[    5 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    5 ms thread 2 bg] ProcessExit handler A end
+[    5 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+[    6 ms main] native atexit callback (registered with the host C library) ran
+stdout(native puts): from native atexit callback
+status=7 (0x00000007) wall=1145 ms
+=== net8.0 native-envexit
+[    1 ms main] Main: mode=native-envexit runtime=.NET 8.0.33
+[    4 ms main] _crt_atexit returned 0
+[    4 ms main] Environment.Exit(7) after registering a native atexit callback
+[    5 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    5 ms thread 2 bg] ProcessExit handler A end
+[    5 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1564 ms
+=== net10.0 ret
+[    0 ms main] Main: mode=ret runtime=.NET 10.0.14
+[    2 ms main] Main returns 7
+[    3 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    3 ms thread 1 bg] ProcessExit handler A end
+[    3 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=3907 ms
+=== net10.0 ret300
+[    0 ms main] Main: mode=ret300 runtime=.NET 10.0.14
+[    2 ms main] Main returns 300
+[    2 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=300)
+[    2 ms thread 1 bg] ProcessExit handler A end
+[    3 ms thread 1 bg] ProcessExit handler B (ExitCode=300)
+status=300 (0x0000012C) wall=2077 ms
+=== net10.0 envexit
+[    0 ms main] Main: mode=envexit runtime=.NET 10.0.14
+[    1 ms main] Environment.Exit(7)
+[    3 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    3 ms thread 1 bg] ProcessExit handler A end
+[    3 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=990 ms
+=== net10.0 envexit300
+[    0 ms main] Main: mode=envexit300 runtime=.NET 10.0.14
+[    2 ms main] Environment.Exit(300)
+[    3 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=300)
+[    3 ms thread 1 bg] ProcessExit handler A end
+[    3 ms thread 1 bg] ProcessExit handler B (ExitCode=300)
+status=300 (0x0000012C) wall=1964 ms
+=== net10.0 envexit-thread
+[    0 ms main] Main: mode=envexit-thread runtime=.NET 10.0.14
+[  175 ms thread 4 fg] Environment.Exit(7) from a second thread
+[  176 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  176 ms thread 1 bg] ProcessExit handler A end
+[  176 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=2562 ms
+=== net10.0 exitcode
+[    0 ms main] Main: mode=exitcode runtime=.NET 10.0.14
+[    1 ms main] Environment.ExitCode = 5, Main returns 7
+[    2 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    2 ms thread 1 bg] ProcessExit handler A end
+[    2 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=2645 ms
+=== net10.0 unhandled
+[    0 ms main] Main: mode=unhandled runtime=.NET 10.0.14
+[    2 ms main] throwing
+[    4 ms main] UnhandledException ran (IsTerminating=True)
+Unhandled exception. System.InvalidOperationException: boom
+   at P.Main(String[] args) in C:\llvm-msil-scratch\p3\lifecycle\dotnet\Program.cs:line 74
+status=-532462766 (0xE0434352) wall=2361 ms
+=== net10.0 nativeexit
+[    3 ms main] Main: mode=nativeexit runtime=.NET 10.0.14
+[    6 ms main] _crt_atexit returned 0
+[    7 ms main] native exit(7)
+[    7 ms main] native atexit callback (registered with the host C library) ran
+stdout(native puts): buffered line from Main
+stdout(native puts): from native atexit callback
+status=7 (0x00000007) wall=1477 ms
+=== net10.0 native_exit
+[    0 ms main] Main: mode=native_exit runtime=.NET 10.0.14
+[   21 ms main] _crt_atexit returned 0
+[   22 ms main] native _exit(7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1384 ms
+=== net10.0 quick
+[    0 ms main] Main: mode=quick runtime=.NET 10.0.14
+[    1 ms main] native quick_exit(7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1357 ms
+=== net10.0 exitprocess
+[    0 ms main] Main: mode=exitprocess runtime=.NET 10.0.14
+[    5 ms main] _crt_atexit returned 0
+[    5 ms main] kernel32 ExitProcess(7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1273 ms
+=== net10.0 terminate
+[    0 ms main] Main: mode=terminate runtime=.NET 10.0.14
+[    1 ms main] kernel32 TerminateProcess(7)
+status=7 (0x00000007) wall=1029 ms
+=== net10.0 native-ret
+[    0 ms main] Main: mode=native-ret runtime=.NET 10.0.14
+[    3 ms main] _crt_atexit returned 0
+[    3 ms main] Main returns 7 after registering a native atexit callback
+stdout(native puts): buffered line from Main
+[    4 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    4 ms thread 1 bg] ProcessExit handler A end
+[    4 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+[  148 ms main] native atexit callback (registered with the host C library) ran
+stdout(native puts): from native atexit callback
+status=7 (0x00000007) wall=1765 ms
+=== net10.0 native-envexit
+[    0 ms main] Main: mode=native-envexit runtime=.NET 10.0.14
+[    8 ms main] _crt_atexit returned 0
+[    8 ms main] Environment.Exit(7) after registering a native atexit callback
+[    9 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    9 ms thread 1 bg] ProcessExit handler A end
+[    9 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+stdout(native puts): buffered line from Main
+status=7 (0x00000007) wall=1037 ms

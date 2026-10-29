@@ -1,0 +1,138 @@
+# probe outputs (hosted-libc recon), 2026-10-28T23:58Z
+## crtw (UCRT startup state): native lld-link
+printf-options 0x24 scanf-options 0x2
+%.0f(0.5)=0 %.0f(2.5)=2 %.2f(1.005)=1.00 %.1f(0.25)=0.2
+__argc=1 __argv=set
+_environ=set getenv(PATH)=set
+_pgmptr=set
+fmode=16384
+setlocale=C
+fopen=0000000000000000 errno=2 No such file or directory
+isatty(0)=1 fileno(stdout)=1
+RAND_MAX=32767 rand=61
+timezone-available=1
+sscanf=2
+wide|wid2|narrow
+[exit 0]
+## crtw: MSIL net8
+printf-options 0x0 scanf-options 0x0
+%.0f(0.5)=1 %.0f(2.5)=3 %.2f(1.005)=1.00 %.1f(0.25)=0.3
+__argc=5 __argv=NULL
+_environ=set getenv(PATH)=set
+fmode=16384
+setlocale=C
+fopen=0000000000000000 errno=2 No such file or directory
+isatty(0)=1 fileno(stdout)=1
+RAND_MAX=32767 rand=61
+timezone-available=1
+sscanf=2
+wide|wid2|narrow
+[exit 0]
+## crtw: MSIL net10
+printf-options 0x0 scanf-options 0x0
+%.0f(0.5)=1 %.0f(2.5)=3 %.2f(1.005)=1.00 %.1f(0.25)=0.3
+__argc=5 __argv=NULL
+_environ=set getenv(PATH)=set
+fmode=16384
+setlocale=C
+fopen=0000000000000000 errno=2 No such file or directory
+isatty(0)=1 fileno(stdout)=1
+RAND_MAX=32767 rand=61
+timezone-available=1
+sscanf=2
+wide|wid2|narrow
+[exit 0]
+## crtw: MSIL fx
+printf-options 0x0 scanf-options 0x0
+%.0f(0.5)=1 %.0f(2.5)=3 %.2f(1.005)=1.00 %.1f(0.25)=0.3
+__argc=0 __argv=NULL
+_environ=set getenv(PATH)=set
+fmode=16384
+setlocale=C
+fopen=0000000000000000 errno=2 No such file or directory
+isatty(0)=1 fileno(stdout)=1
+RAND_MAX=32767 rand=61
+timezone-available=1
+sscanf=2
+wide|wid2|narrow
+[exit 0]
+## crtw2 (+ constructor setting printf options 0x24, scanf 0x2): MSIL net8
+printf-options 0x24 scanf-options 0x2
+%.0f(0.5)=0 %.0f(2.5)=2 %.2f(1.005)=1.00 %.1f(0.25)=0.2
+## crtw2 (+ constructor setting printf options 0x24, scanf 0x2): MSIL fx
+printf-options 0x24 scanf-options 0x2
+%.0f(0.5)=0 %.0f(2.5)=2 %.2f(1.005)=1.00 %.1f(0.25)=0.2
+## crtl (glibc startup state): native
+argc=1 argv0-basename=crtl.elf
+program_invocation_short_name=crtl.elf
+environ=set getenv(PATH)=set
+setlocale=C
+fopen=(nil) errno=2 No such file or directory
+isatty(0)=0 fileno(stdout)=1
+RAND_MAX=2147483647 rand=1045618677
+timezone=21600 daylight=1 tzname0=CST
+getopt a=1 o=val optind=4
+%.0f(0.5)=0 %.0f(2.5)=2 %.2f(1.005)=1.00
+pagesize=4096 pid>0=1
+[exit 0]
+## crtl: MSIL wsl8
+argc=1 argv0-basename=crtl-msil.exe
+program_invocation_short_name=dotnet
+environ=set getenv(PATH)=set
+setlocale=C
+fopen=(nil) errno=2 No such file or directory
+isatty(0)=0 fileno(stdout)=1
+RAND_MAX=2147483647 rand=1045618677
+timezone=21600 daylight=1 tzname0=CST
+getopt a=1 o=val optind=4
+%.0f(0.5)=0 %.0f(2.5)=2 %.2f(1.005)=1.00
+pagesize=4096 pid>0=1
+[exit 0]
+## crtl: MSIL wsl10
+argc=1 argv0-basename=crtl-msil.exe
+program_invocation_short_name=dotnet
+environ=set getenv(PATH)=set
+setlocale=C
+fopen=(nil) errno=2 No such file or directory
+isatty(0)=0 fileno(stdout)=1
+RAND_MAX=2147483647 rand=1045618677
+timezone=21600 daylight=1 tzname0=CST
+getopt a=1 o=val optind=4
+%.0f(0.5)=0 %.0f(2.5)=2 %.2f(1.005)=1.00
+pagesize=4096 pid>0=1
+[exit 0]
+## lasterr2: native
+first: GetLastError=3 (want 3) SetLastError(4242)->4242 errno=2 (want 2) fd=-1
+mismatches of 300000: GetLastError 0 SetLastError/GetLastError 0 errno 0
+[exit 0]
+## lasterr2: MSIL net8
+first: GetLastError=3 (want 3) SetLastError(4242)->4242 errno=2 (want 2) fd=-1
+mismatches of 300000: GetLastError 0 SetLastError/GetLastError 0 errno 0
+[exit 0]
+## lasterr2: MSIL net10
+first: GetLastError=3 (want 3) SetLastError(4242)->4242 errno=2 (want 2) fd=-1
+mismatches of 300000: GetLastError 0 SetLastError/GetLastError 0 errno 0
+[exit 0]
+## lasterr2: MSIL fx
+first: GetLastError=3 (want 3) SetLastError(4242)->4242 errno=2 (want 2) fd=-1
+mismatches of 300000: GetLastError 0 SetLastError/GetLastError 0 errno 0
+[exit 0]
+## errno2: native
+first: open=-1 errno=2 (want 2) No such file or directory
+mismatches of 300000: open/ENOENT 0 close/EBADF 0
+[exit 0]
+## errno2: MSIL wsl8
+first: open=-1 errno=2 (want 2) No such file or directory
+mismatches of 300000: open/ENOENT 0 close/EBADF 0
+[exit 0]
+## errno2: MSIL wsl10
+first: open=-1 errno=2 (want 2) No such file or directory
+mismatches of 300000: open/ENOENT 0 close/EBADF 0
+[exit 0]
+## mul128: native / wsl8 / net8(windows triple)
+h=9a50741cea254c6b acc=47aa0db77d102330 accl=92571a69
+[exit 0]
+h=9a50741cea254c6b acc=47aa0db77d102330 accl=92571a69
+[exit 0]
+h=9a50741cea254c6b acc=47aa0db77d102330 accl=92571a69
+[exit 0]

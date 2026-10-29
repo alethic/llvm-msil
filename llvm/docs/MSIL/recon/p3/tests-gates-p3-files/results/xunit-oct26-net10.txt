@@ -1,0 +1,40 @@
+testsuites time (wall): 141.44
+sum of test seconds: 1091 (18.2 min); tests 143
+      154 s  14.2%  n=  20  avg=   7.7  MSIL:M1/11-programs
+      142 s  13.1%  n=  17  avg=   8.4  MSIL:M1/07-globals
+      126 s  11.5%  n=  18  avg=   7.0  MSIL:M1/01-int
+      112 s  10.3%  n=  14  avg=   8.0  MSIL:M1/02-fp
+      107 s   9.8%  n=  15  avg=   7.2  MSIL:M1/03-control
+      101 s   9.2%  n=  13  avg=   7.7  MSIL:M1/05-memory
+       78 s   7.2%  n=  10  avg=   7.8  MSIL:M1/10-calls
+       63 s   5.7%  n=   8  avg=   7.8  MSIL:M1/08-fnptr
+       62 s   5.7%  n=   8  avg=   7.8  MSIL:M1/04-frames
+       54 s   4.9%  n=   7  avg=   7.7  MSIL:M1/09-structs
+       51 s   4.6%  n=   7  avg=   7.2  MSIL:M1/06-output
+       41 s   3.8%  n=   6  avg=   6.8  MSIL:M1/00-smoke
+top 25 tests:
+    15.9  MSIL.M1/11-programs/kr-legacy.c
+    15.6  MSIL.M1/02-fp/fp-compare-nan.ll
+    15.0  MSIL.M1/07-globals/weak-undefined.c
+    14.7  MSIL.M1/10-calls/black-box.c
+    12.9  MSIL.M1/05-memory/argv.c
+    12.5  MSIL.M1/07-globals/reloc-global-ptrs.c
+    12.2  MSIL.M1/08-fnptr/dispatch-table.c
+    11.3  MSIL.M1/04-frames/frame-align.c
+    10.5  MSIL.M1/07-globals/local-aggregate-init.c
+     9.7  MSIL.M1/01-int/bit-ops.ll
+     8.9  MSIL.M1/02-fp/fp-to-int-sat.ll
+     8.7  MSIL.M1/03-control/loops.c
+     8.7  MSIL.M1/11-programs/crc32.c
+     8.7  MSIL.M1/01-int/div-rem.ll
+     8.6  MSIL.M1/10-calls/void-calls.c
+     8.6  MSIL.M1/07-globals/ctor-results.c
+     8.5  MSIL.M1/06-output/puts-hello.c
+     8.4  MSIL.M1/09-structs/struct-byval.c
+     8.3  MSIL.M1/11-programs/fnv1a.c
+     8.3  MSIL.M1/05-memory/pointer-arith.c
+     8.3  MSIL.M1/04-frames/frame-align16.c
+     8.2  MSIL.M1/07-globals/global-array-sum.c
+     8.2  MSIL.M1/04-frames/many-locals.c
+     8.1  MSIL.M1/09-structs/struct-heavy.c
+     8.1  MSIL.M1/05-memory/bitcast-fp.c

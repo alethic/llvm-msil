@@ -1,0 +1,30 @@
+--- net48
+runtime 4.0.30319.42000 (UCRT _errno)
+1. open -> -1, first errno read -> 2 (expected 2) ok
+2. 100000 iterations, 251690 gen0 GCs meanwhile, mismatches 0
+3. per-thread errno: thread A (ENOENT) mismatches 0, thread B (ERANGE from strtol) mismatches 0
+exit=0
+--- net8
+runtime 8.0.33 (UCRT _errno)
+1. open -> -1, first errno read -> 2 (expected 2) ok
+2. 100000 iterations, 8389 gen0 GCs meanwhile, mismatches 0
+3. per-thread errno: thread A (ENOENT) mismatches 0, thread B (ERANGE from strtol) mismatches 0
+exit=0
+--- net10
+runtime 10.0.14 (UCRT _errno)
+1. open -> -1, first errno read -> 2 (expected 2) ok
+2. 100000 iterations, 11775 gen0 GCs meanwhile, mismatches 0
+3. per-thread errno: thread A (ENOENT) mismatches 0, thread B (ERANGE from strtol) mismatches 0
+exit=0
+--- wsl net8
+runtime 8.0.31 (glibc __errno_location)
+1. open -> -1, first errno read -> 2 (expected 2) ok
+2. 2000000 iterations, 6021 gen0 GCs meanwhile, mismatches 0
+3. per-thread errno: thread A (ENOENT) mismatches 0, thread B (ERANGE from strtol) mismatches 0
+exit=0
+--- wsl net10
+runtime 10.0.13 (glibc __errno_location)
+1. open -> -1, first errno read -> 2 (expected 2) ok
+2. 2000000 iterations, 3972 gen0 GCs meanwhile, mismatches 0
+3. per-thread errno: thread A (ENOENT) mismatches 0, thread B (ERANGE from strtol) mismatches 0
+exit=0

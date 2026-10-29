@@ -1,0 +1,6 @@
+== .NET 8: dotnet out/cs.dll one "two words"
+Environment.CommandLine: C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cs\out\cs.dll one "two words"
+GetCommandLineArgs: C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cs\out\cs.dll | one | two words
+== .NET 8: dotnet exec --runtimeconfig out/cs.runtimeconfig.json out/cs.dll one "two words"
+Environment.CommandLine: C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cs\out\cs.dll one "two words"
+GetCommandLineArgs: C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cs\out\cs.dll | one | two words

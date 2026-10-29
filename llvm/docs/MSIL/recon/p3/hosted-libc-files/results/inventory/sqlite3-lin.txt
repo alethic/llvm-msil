@@ -1,0 +1,29 @@
+definitions: 1602; external functions: 60; external globals: 0
+variadic definitions (20): checkAppendMsg, errorMPrintf, execSqlF, getDigits, jsonPrintf, sqlite3ErrorMsg, sqlite3ErrorWithMsg, sqlite3MPrintf, sqlite3NestedParse, sqlite3VdbeError, sqlite3VdbeExplain, sqlite3VdbeMultiLoad, sqlite3_config, sqlite3_db_config, sqlite3_log, sqlite3_mprintf, sqlite3_snprintf, sqlite3_str_appendf, sqlite3_test_control, sqlite3_vtab_config
+variadic call sites to external (native) functions (1): open64 1
+variadic call sites to own definitions (978): sqlite3ErrorMsg 341, sqlite3_log 261, sqlite3MPrintf 71, sqlite3_str_appendf 69, sqlite3NestedParse 39, sqlite3_mprintf 33, checkAppendMsg 32, sqlite3VdbeExplain 31, sqlite3_snprintf 21, sqlite3VdbeError 21, sqlite3ErrorWithMsg 20, sqlite3VdbeMultiLoad 13, getDigits 9, execSqlF 5, jsonPrintf 5, sqlite3_config 4, errorMPrintf 2, sqlite3_vtab_config 1
+indirect variadic calls: 24; va_start: 20; va_copy: 0
+setjmp/longjmp calls: {}; returns_twice decls: []
+own functions passed to external functions (callbacks) (3): pthread_create(vdbeIncrPopulateThread) 1, pthread_create(vdbePmaReaderBgIncrInit) 1, pthread_create(vdbeSorterFlushThread) 1
+external function addresses passed as arguments:
+external (native) function addresses in data initializers (22): access, close, fchmod, fchown, fcntl64, fstat64, ftruncate64, getcwd, geteuid, lstat64, mkdir, mmap64, mremap, munmap, pread64, pwrite64, read, readlink, rmdir, stat64, unlink, write
+own function addresses in data initializers: 504 functions
+external globals (data imports):
+thread_local globals: []
+atomics: {'fence system': 80, 'store atomic': 69, 'load atomic': 29}
+dynamic allocas: 0; stacksave: 0; inline asm: 0; i128 lines: 18
+global_dtors: 0; atexit calls: 0
+byval args to external functions: {}
+sret calls to external functions: {}
+long double library functions: []
+intrinsics (excluding lifetime/mem*/va_*): llvm.abs.i32 4, llvm.abs.i64 1, llvm.bswap.i32 8, llvm.bswap.i64 1, llvm.ctlz.i64 3, llvm.ctpop.i32 1, llvm.ctpop.i64 2, llvm.fabs.f64 23, llvm.fmuladd.f64 10, llvm.fshl.i32 32, llvm.sadd.sat.i16 1, llvm.smax.i16 6, llvm.smax.i32 53, llvm.smax.i64 13, llvm.smax.i8 3, llvm.smin.i16 9, llvm.smin.i32 33, llvm.smin.i64 23, llvm.ssub.sat.i32 4, llvm.umax.i16 1, llvm.umax.i32 17, llvm.umax.i64 3, llvm.umax.i8 3, llvm.umin.i16 8, llvm.umin.i32 17, llvm.umin.i64 7, llvm.umin.i8 1, llvm.umulh.i64 2
+external functions by category:
+  alloc (3): free malloc realloc
+  ctype/locale (1): __errno_location
+  dl (4): dlclose dlerror dlopen dlsym
+  other (1): bcmp
+  posix-io (25): access close fchmod fchown fcntl64 fstat64 fsync ftruncate64 getcwd geteuid lstat64 mkdir mmap64 mremap munmap open64 pread64 pwrite64 read readlink rmdir stat64 unlink utimes write
+  process/env (3): getenv getpid sysconf
+  string/mem (9): memchr memcmp strchr strcmp strcspn strlen strncmp strrchr strspn
+  threads (10): pthread_create pthread_join pthread_mutex_destroy pthread_mutex_init pthread_mutex_lock pthread_mutex_trylock pthread_mutex_unlock pthread_mutexattr_destroy pthread_mutexattr_init pthread_mutexattr_settype
+  time (4): gettimeofday localtime nanosleep time

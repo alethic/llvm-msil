@@ -1,0 +1,7 @@
+lua-ldo.ll                   luaD_rawrunprotected               setjmp sites 1, calls after setjmp   1 (indirect 1, willreturn 0), calls in function   1
+puff.ll                      puff                               setjmp sites 1, calls after setjmp  17 (indirect 0, willreturn 0), calls in function  17
+blast.ll                     blast                              setjmp sites 1, calls after setjmp  21 (indirect 9, willreturn 0), calls in function  21
+png-png.ll                   png_create_png_struct              setjmp sites 1, calls after setjmp   2 (indirect 0, willreturn 0), calls in function   4
+png-pngerror.ll              png_free_jmpbuf                    setjmp sites 1, calls after setjmp   1 (indirect 0, willreturn 0), calls in function   1
+png-pngerror.ll              png_safe_execute                   setjmp sites 1, calls after setjmp   2 (indirect 1, willreturn 0), calls in function   2
+png-pngtest.ll               test_one_file                      setjmp sites 2, calls after setjmp 140 (indirect 0, willreturn 1), calls in function 155

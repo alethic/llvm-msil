@@ -1,0 +1,71 @@
+== rust-exp std v6_thread (thread::spawn) lin/v6_thread.ll: 294 atomic operations
+     48  load ptr monotonic
+     45  rmw sub i64 release
+     43  fence acquire
+     30  store ptr monotonic
+     15  load i64 monotonic
+     13  load i32 monotonic
+      9  rmw add i64 monotonic
+      9  cmpxchg i64 acquire/monotonic
+      8  call llvm.x86.sse2.pause
+      7  store i64 monotonic
+      7  load i8 monotonic
+      6  rmw xchg i32 release
+      6  store i8 monotonic
+      5  load i32 acquire
+      4  cmpxchg weak i64 monotonic/monotonic
+      4  store i64 release
+      4  load i32 inbounds
+      4  cmpxchg i32 monotonic/monotonic
+      4  cmpxchg i32 acquire/monotonic
+      3  load i64 acquire
+      3  cmpxchg weak i32 acquire/monotonic
+      2  store i8 release
+      2  rmw xchg i8 monotonic
+      2  rmw sub i32 release
+      2  rmw add i32 release
+      1  load ptr acquire
+      1  store ptr release
+      1  cmpxchg ptr acquire/monotonic
+      1  cmpxchg i8 monotonic/monotonic
+      1  rmw xchg i32 acquire
+      1  cmpxchg i64 release/acquire
+      1  cmpxchg weak i32 acquire/acquire
+      1  cmpxchg weak i32 monotonic/acquire
+      1  load i8 acquire
+== rust-exp std v6_thread (thread::spawn) win/v6_thread.ll: 174 atomic operations
+     23  rmw sub i64 release
+     23  load ptr monotonic
+     22  fence acquire
+     15  load i64 monotonic
+     15  store ptr monotonic
+      7  cmpxchg weak i64 monotonic/monotonic
+      6  store i64 monotonic
+      6  load i32 acquire
+      6  load i32 monotonic
+      6  load i8 monotonic
+      5  rmw add i64 monotonic
+      4  load i32 inbounds
+      4  call llvm.x86.sse2.pause
+      4  cmpxchg i32 monotonic/monotonic
+      3  rmw xchg i8 release
+      3  rmw xchg i8 monotonic
+      2  cmpxchg weak i32 acquire/monotonic
+      2  cmpxchg i8 acquire/monotonic
+      2  fence seq_cst
+      1  cmpxchg i64 acquire/monotonic
+      1  load i64 acquire
+      1  store i64 release
+      1  store i8 monotonic
+      1  rmw sub i32 release
+      1  cmpxchg i8 monotonic/monotonic
+      1  rmw xchg i8 acquire
+      1  load ptr seq_cst
+      1  cmpxchg ptr seq_cst/seq_cst
+      1  rmw add i32 monotonic
+      1  cmpxchg i32 release/acquire
+      1  rmw sub i32 monotonic
+      1  rmw xchg i32 acq_rel
+      1  cmpxchg weak i32 acquire/acquire
+      1  rmw xchg i32 release
+      1  cmpxchg weak i32 monotonic/acquire

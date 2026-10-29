@@ -1,0 +1,284 @@
+--- ExpandVariadics.orig.cpp	2026-10-28 15:20:54.717341000 -0500
++++ msil-expand-variadics.cpp	2026-10-28 15:30:31.102547800 -0500
+@@ -51,7 +51,7 @@
+ //
+ //===----------------------------------------------------------------------===//
+
+-#include "llvm/Transforms/IPO/ExpandVariadics.h"
++enum class ExpandVariadicsMode { Unspecified, Disable, Optimize, Lowering };
+ #include "llvm/ADT/Sequence.h"
+ #include "llvm/ADT/SmallVector.h"
+ #include "llvm/Demangle/Demangle.h"
+@@ -59,12 +59,10 @@
+ #include "llvm/IR/IntrinsicInst.h"
+ #include "llvm/IR/Module.h"
+ #include "llvm/IR/PassManager.h"
+-#include "llvm/InitializePasses.h"
+ #include "llvm/Pass.h"
+ #include "llvm/Support/CommandLine.h"
+ #include "llvm/Support/NVPTXAddrSpace.h"
+ #include "llvm/TargetParser/Triple.h"
+-#include "llvm/Transforms/Utils/ModuleUtils.h"
+
+ #define DEBUG_TYPE "expand-variadics"
+
+@@ -1123,7 +1121,123 @@
+   }
+ };
+
++
++//===----------------------------------------------------------------------===//
++// MSIL prototype (recon P3 variadics): the native va_list of each MSIL triple,
++// built over the caller's argument buffer.
++//===----------------------------------------------------------------------===//
++
++// Variadic declarations that MSIL leaves alone: prototype-less declarations
++// (whose calls MSILFixFunctionBitcasts makes non-variadic) and the
++// fixed-arity natives.
++static bool msilIgnore(const Function *F) {
++  return F && (F->hasFnAttribute("no-prototype") ||
++               F->hasFnAttribute("msil-fixed-arity"));
++}
++
++// x86-64 SysV: va_list is [1 x {i32 gp_offset, i32 fp_offset, ptr
++// overflow_arg_area, ptr reg_save_area}], passed as a pointer. The buffer is
++// the overflow area: 8-byte slots, by value, 16-byte aligned for types aligned
++// above 8; gp_offset=48 and fp_offset=176 say "registers exhausted".
++struct MSILSysV final : public VariadicABIInfo {
++  bool enableForTarget() override { return true; }
++  bool vaListPassedInSSARegister() override { return false; }
++  Type *vaListType(LLVMContext &Ctx) override {
++    Type *I32 = Type::getInt32Ty(Ctx);
++    Type *P = PointerType::getUnqual(Ctx);
++    return ArrayType::get(StructType::get(Ctx, {I32, I32, P, P}), 1);
++  }
++  Type *vaListParameterType(Module &M) override {
++    return PointerType::getUnqual(M.getContext());
++  }
++  Value *initializeVaList(Module &M, LLVMContext &Ctx, IRBuilder<> &B,
++                          AllocaInst *VaList, Value *Buffer) override {
++    B.CreateStore(B.getInt32(48), VaList);
++    B.CreateStore(B.getInt32(176), B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), VaList, 4));
++    B.CreateStore(Buffer, B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), VaList, 8));
++    B.CreateStore(ConstantPointerNull::get(PointerType::getUnqual(Ctx)),
++                  B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), VaList, 16));
++    return VaList;
++  }
++  VAArgSlotInfo slotInfo(const DataLayout &DL, Type *T) override {
++    Align A = DL.getABITypeAlign(T);
++    return {A > Align(8) ? Align(16) : Align(8), false};
++  }
++  bool ignoreFunction(const Function *F) override { return msilIgnore(F); }
++};
++
++// AAPCS64 (Linux): va_list is {ptr __stack, ptr __gr_top, ptr __vr_top, i32
++// __gr_offs, i32 __vr_offs}; offsets 0 say "registers exhausted". Stack slots
++// are 8 bytes (16-byte aligned for 16-byte aligned types); clang passes
++// composites above 16 bytes by reference already.
++struct MSILAAPCS64 final : public VariadicABIInfo {
++  bool enableForTarget() override { return true; }
++  bool vaListPassedInSSARegister() override { return false; }
++  Type *vaListType(LLVMContext &Ctx) override {
++    Type *I32 = Type::getInt32Ty(Ctx);
++    Type *P = PointerType::getUnqual(Ctx);
++    return StructType::get(Ctx, {P, P, P, I32, I32});
++  }
++  Type *vaListParameterType(Module &M) override {
++    return PointerType::getUnqual(M.getContext());
++  }
++  Value *initializeVaList(Module &M, LLVMContext &Ctx, IRBuilder<> &B,
++                          AllocaInst *VaList, Value *Buffer) override {
++    Value *Null = ConstantPointerNull::get(PointerType::getUnqual(Ctx));
++    B.CreateStore(Buffer, VaList);
++    B.CreateStore(Null, B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), VaList, 8));
++    B.CreateStore(Null, B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), VaList, 16));
++    B.CreateStore(B.getInt32(0), B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), VaList, 24));
++    B.CreateStore(B.getInt32(0), B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), VaList, 28));
++    return VaList;
++  }
++  VAArgSlotInfo slotInfo(const DataLayout &DL, Type *T) override {
++    Align A = DL.getABITypeAlign(T);
++    return {A > Align(8) ? Align(16) : Align(8), false};
++  }
++  bool ignoreFunction(const Function *F) override { return msilIgnore(F); }
++};
++
++// Win64 (x64 and ARM64 Windows, and Apple ARM64 later): va_list is a char*
++// into 8-byte slots. x64: a value that is not 1, 2, 4 or 8 bytes goes by
++// pointer to a caller copy; ARM64 Windows: one above 16 bytes.
++struct MSILCharPtr final : public VariadicABIInfo {
++  uint64_t MaxDirect;
++  bool PowerOf2Only;
++  MSILCharPtr(uint64_t MaxDirect, bool PowerOf2Only)
++      : MaxDirect(MaxDirect), PowerOf2Only(PowerOf2Only) {}
++  bool enableForTarget() override { return true; }
++  bool vaListPassedInSSARegister() override { return true; }
++  Type *vaListType(LLVMContext &Ctx) override { return PointerType::getUnqual(Ctx); }
++  Type *vaListParameterType(Module &M) override {
++    return PointerType::getUnqual(M.getContext());
++  }
++  Value *initializeVaList(Module &M, LLVMContext &Ctx, IRBuilder<> &B,
++                          AllocaInst *, Value *Buffer) override {
++    return Buffer;
++  }
++  VAArgSlotInfo slotInfo(const DataLayout &DL, Type *T) override {
++    uint64_t Size = DL.getTypeAllocSize(T).getFixedValue();
++    bool Indirect = Size > MaxDirect || (PowerOf2Only && !isPowerOf2_64(Size));
++    return {Align(8), Indirect};
++  }
++  bool ignoreFunction(const Function *F) override { return msilIgnore(F); }
++};
++
+ std::unique_ptr<VariadicABIInfo> VariadicABIInfo::create(const Triple &T) {
++  if (T.isOSBinFormatMSIL()) {
++    if (T.isOSWindows())
++      return std::make_unique<MSILCharPtr>(T.isAArch64() ? 16 : 8,
++                                           !T.isAArch64());
++    if (T.isOSDarwin())
++      return std::make_unique<MSILCharPtr>(16, false); // phase 4, unverified
++    if (T.getArch() == Triple::x86_64)
++      return std::make_unique<MSILSysV>();
++    if (T.isAArch64())
++      return std::make_unique<MSILAAPCS64>();
++    return {};
++  }
++
+   switch (T.getArch()) {
+   case Triple::amdgpu:
+   case Triple::r600: {
+@@ -1154,16 +1268,127 @@
+
+ char ExpandVariadics::ID = 0;
+
+-INITIALIZE_PASS(ExpandVariadics, DEBUG_TYPE, "Expand variadic functions", false,
+-                false)
++//===----------------------------------------------------------------------===//
++// Prototype driver: msil-expand-variadics <in.ll> <out.ll>
++//  1. Fixed-arity natives (a per-triple name list, or the IR attribute
++//     "msil-fixed-arity" that __attribute__((msil_fixed_arity)) would set):
++//     each direct call becomes the non-variadic call of all of its arguments
++//     (Win64: double variadic arguments passed as their i64 bits, which the
++//     callee reads from the integer register's home slot). The declaration
++//     is replaced by one of the call's type.
++//  2. ExpandVariadics in Lowering mode with the MSIL ABIs above.
++//  3. Stand-in for msil-ld's link-time v-variant binding: an expanded
++//     declaration in the v-variant table is renamed to its v-variant.
++//===----------------------------------------------------------------------===//
+
+-ModulePass *llvm::createExpandVariadicsPass(ExpandVariadicsMode M) {
+-  return new ExpandVariadics(M);
++#include "llvm/IR/Verifier.h"
++#include "llvm/IRReader/IRReader.h"
++#include "llvm/Support/SourceMgr.h"
++#include "llvm/Support/raw_ostream.h"
++#include "llvm/Support/InitLLVM.h"
++#include <map>
++#include <set>
++
++static const char *const FixedAritySysV[] = {"open", "open64", "openat", "openat64", "fcntl",
++                                             "fcntl64", "ioctl", "prctl", "syscall", "execl",
++                                             "execlp", "execle", "ulimit", "sem_open",
++                                             "mq_open", "ptrace", "semctl", "mremap"};
++static const char *const FixedArityUCRT[] = {"msvcrt_sprintf", "_open", "_sopen", "_wopen", "_wsopen", "_execl",
++                                             "_execle", "_execlp", "_execlpe", "_spawnl",
++                                             "_spawnle", "_spawnlp", "_spawnlpe"};
++
++static void makeFixedArity(Module &M, const Triple &T) {
++  std::set<std::string> Names;
++  if (T.isOSWindows())
++    for (const char *N : FixedArityUCRT) Names.insert(N);
++  else
++    for (const char *N : FixedAritySysV) Names.insert(N);
++  for (Function &F : make_early_inc_range(M)) {
++    if (!F.isDeclaration() || !F.isVarArg() || F.isIntrinsic())
++      continue;
++    if (!Names.count(F.getName().str()) && !F.hasFnAttribute("msil-fixed-arity"))
++      continue;
++    // Each call keeps its own signature: the mechanism Phase 2 uses for the
++    // calls of a prototype-less declaration (a per-call-site MemberRef,
++    // NO_PROTOTYPE in the record, one P/Invoke per IL signature in msil-ld).
++    F.addFnAttr("msil-fixed-arity");
++    F.addFnAttr("no-prototype");
++    for (User *U : make_early_inc_range(F.users())) {
++      auto *CB = dyn_cast<CallBase>(U);
++      if (!CB || CB->getCalledOperand() != &F)
++        continue;
++      IRBuilder<> B(CB);
++      SmallVector<Value *, 8> Args(CB->args());
++      for (unsigned I = F.getFunctionType()->getNumParams(); I < Args.size(); ++I)
++        if (T.isOSWindows() && Args[I]->getType()->isDoubleTy())
++          Args[I] = B.CreateBitCast(Args[I], B.getInt64Ty());
++        else if (!T.isOSWindows() && Args[I]->getType()->isFloatingPointTy())
++          report_fatal_error(Twine("floating-point argument to native variadic function '") +
++                             F.getName() + "' without a v-variant: MSIL cannot set AL");
++      SmallVector<Type *, 8> Tys;
++      for (Value *A : Args) Tys.push_back(A->getType());
++      FunctionType *FTy = FunctionType::get(CB->getType(), Tys, false);
++      CallInst *NC = B.CreateCall(FTy, &F, Args);
++      NC->setCallingConv(CB->getCallingConv());
++      CB->replaceAllUsesWith(NC);
++      NC->takeName(CB);
++      CB->eraseFromParent();
++    }
++  }
+ }
+
+-PreservedAnalyses ExpandVariadicsPass::run(Module &M, ModuleAnalysisManager &) {
+-  return ExpandVariadics(Mode).runOnModule(M) ? PreservedAnalyses::none()
+-                                              : PreservedAnalyses::all();
++static const std::map<std::string, std::string> &vVariants(const Triple &T) {
++  static const std::map<std::string, std::string> Glibc = {
++      {"printf", "vprintf"},   {"fprintf", "vfprintf"},   {"sprintf", "vsprintf"},
++      {"snprintf", "vsnprintf"}, {"dprintf", "vdprintf"}, {"asprintf", "vasprintf"},
++      {"scanf", "vscanf"},     {"fscanf", "vfscanf"},     {"sscanf", "vsscanf"},
++      {"__isoc99_scanf", "__isoc99_vscanf"}, {"__isoc99_fscanf", "__isoc99_vfscanf"},
++      {"__isoc99_sscanf", "__isoc99_vsscanf"}, {"__isoc23_scanf", "__isoc23_vscanf"},
++      {"__isoc23_fscanf", "__isoc23_vfscanf"}, {"__isoc23_sscanf", "__isoc23_vsscanf"},
++      {"syslog", "vsyslog"},   {"err", "verr"},           {"errx", "verrx"},
++      {"warn", "vwarn"},       {"warnx", "vwarnx"},       {"wprintf", "vwprintf"},
++      {"fwprintf", "vfwprintf"}, {"swprintf", "vswprintf"}};
++  static const std::map<std::string, std::string> None;
++  return T.isOSWindows() ? None : Glibc;
+ }
+
+-ExpandVariadicsPass::ExpandVariadicsPass(ExpandVariadicsMode M) : Mode(M) {}
++int main(int argc, char **argv) {
++  InitLLVM X(argc, argv);
++  if (argc != 3) {
++    errs() << "usage: msil-expand-variadics <in.ll> <out.ll>\n";
++    return 2;
++  }
++  LLVMContext Ctx;
++  SMDiagnostic Err;
++  std::unique_ptr<Module> M = parseIRFile(argv[1], Err, Ctx);
++  if (!M) {
++    Err.print(argv[0], errs());
++    return 1;
++  }
++  Triple T(M->getTargetTriple());
++  makeFixedArity(*M, T);
++  std::set<std::string> VariadicDecls;
++  for (Function &F : *M)
++    if (F.isDeclaration() && F.isVarArg() && !F.isIntrinsic() && !msilIgnore(&F))
++      VariadicDecls.insert(F.getName().str());
++  ExpandVariadics Pass(ExpandVariadicsMode::Lowering);
++  Pass.runOnModule(*M);
++  for (const std::string &N : VariadicDecls)
++    if (Function *F = M->getFunction(N)) {
++      auto It = vVariants(T).find(N);
++      if (It != vVariants(T).end() && F->isDeclaration()) {
++        if (Function *E = M->getFunction(It->second)) {
++          F->replaceAllUsesWith(E);
++          F->eraseFromParent();
++        } else {
++          F->setName(It->second);
++        }
++      }
++    }
++  if (verifyModule(*M, &errs()))
++    return 1;
++  std::error_code EC;
++  raw_fd_ostream OS(argv[2], EC);
++  M->print(OS, nullptr);
++  return 0;
++}

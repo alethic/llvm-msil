@@ -1,0 +1,60 @@
+--- net48
+runtime 4.0.30319.42000
+  baseline (delegate + empty call)    6.03 ns
+  [ThreadStatic] IntPtr + check      37.74 ns
+  [ThreadStatic] object + check      31.95 ns
+  ThreadLocal<IntPtr>.Value          27.29 ns
+  Thread.CurrentThread               10.69 ns
+  CurrentThread.ManagedThreadId tbl  35.31 ns
+exit=0
+--- net8
+runtime 8.0.33
+  baseline (delegate + empty call)    5.00 ns
+  [ThreadStatic] IntPtr + check      84.56 ns
+  [ThreadStatic] object + check      76.32 ns
+  ThreadLocal<IntPtr>.Value          25.19 ns
+  Thread.CurrentThread               12.47 ns
+  CurrentThread.ManagedThreadId tbl  21.37 ns
+exit=0
+--- net10
+runtime 10.0.14
+  baseline (delegate + empty call)    4.90 ns
+  [ThreadStatic] IntPtr + check      14.72 ns
+  [ThreadStatic] object + check      19.94 ns
+  ThreadLocal<IntPtr>.Value          22.58 ns
+  Thread.CurrentThread               12.26 ns
+  CurrentThread.ManagedThreadId tbl  23.52 ns
+exit=0
+--- wsl net8
+runtime 8.0.31
+  baseline (delegate + empty call)    8.52 ns
+  [ThreadStatic] IntPtr + check     261.92 ns
+  [ThreadStatic] object + check     271.95 ns
+  ThreadLocal<IntPtr>.Value          79.38 ns
+  Thread.CurrentThread               36.54 ns
+  CurrentThread.ManagedThreadId tbl  73.58 ns
+exit=0
+--- wsl net10
+runtime 10.0.13
+  baseline (delegate + empty call)    6.22 ns
+  [ThreadStatic] IntPtr + check      24.83 ns
+  [ThreadStatic] object + check      34.54 ns
+  ThreadLocal<IntPtr>.Value          44.52 ns
+  Thread.CurrentThread               28.97 ns
+  CurrentThread.ManagedThreadId tbl  54.14 ns
+exit=0
+--- net48
+runtime 4.0.30319.42000
+main thread: no-cctor class 35.95 ns, class with cctor 39.93 ns, IntPtr check 39.02 ns, baseline delegate+call 6.00 ns
+new thread: no-cctor class 40.67 ns, class with cctor 37.43 ns, IntPtr check 38.73 ns, baseline delegate+call 5.52 ns
+exit=0
+--- net8
+runtime 8.0.33
+main thread: no-cctor class 153.43 ns, class with cctor 122.72 ns, IntPtr check 68.37 ns, baseline delegate+call 5.23 ns
+new thread: no-cctor class 126.01 ns, class with cctor 129.51 ns, IntPtr check 79.25 ns, baseline delegate+call 5.17 ns
+exit=0
+--- net10
+runtime 10.0.14
+main thread: no-cctor class 9.62 ns, class with cctor 11.65 ns, IntPtr check 12.20 ns, baseline delegate+call 6.45 ns
+new thread: no-cctor class 10.08 ns, class with cctor 11.23 ns, IntPtr check 14.16 ns, baseline delegate+call 6.19 ns
+exit=0

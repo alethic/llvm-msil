@@ -1,0 +1,12 @@
+=== volsum.il, linux-arm64 crossgen2 10.0.13 --instruction-set:armv8-a (memory instructions only)
+  V:vsum: ldar w1, [x19]
+  V:dekker: stlr w0, [x19] | dmb ish | ldar w0, [x20]
+  V:bload: ldarb w0, [x19]
+  V:bstore: stlrb w20, [x19]
+  V:load64: ldar x0, [x19]
+=== volsum.il, linux-arm64 crossgen2 10.0.13 --instruction-set:armv8.3-a (memory instructions only)
+  V:vsum: ldapr w1, [x19]
+  V:dekker: stlr w0, [x19] | dmb ish | ldapr w0, [x20]
+  V:bload: ldaprb w0, [x19]
+  V:bstore: stlrb w20, [x19]
+  V:load64: ldapr x0, [x19]

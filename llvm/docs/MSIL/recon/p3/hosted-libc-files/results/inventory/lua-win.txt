@@ -1,0 +1,31 @@
+definitions: 663; external functions: 97; external globals: 3
+variadic definitions (8): fprintf, luaG_runerror, luaL_error, luaO_pushfstring, lua_gc, lua_pushfstring, printf, sprintf
+variadic call sites to external (native) functions (0):
+variadic call sites to own definitions (408): printf 161, luaL_error 103, lua_pushfstring 36, luaG_runerror 36, luaO_pushfstring 30, sprintf 16, fprintf 13, lua_gc 13
+indirect variadic calls: 0; va_start: 14; va_copy: 0
+setjmp/longjmp calls: {'longjmp': 1, '_setjmp': 1}; returns_twice decls: []
+own functions passed to external functions (callbacks) (4): signal(laction) 4
+external function addresses passed as arguments: lua_pushstring(exit) 1
+external (native) function addresses in data initializers (0):
+own function addresses in data initializers: 150 functions
+external globals (data imports):
+thread_local globals: []
+atomics: {}
+dynamic allocas: 0; stacksave: 0; inline asm: 0; i128 lines: 0
+global_dtors: 0; atexit calls: 0
+byval args to external functions: {}
+sret calls to external functions: {}
+long double library functions: []
+intrinsics (excluding lifetime/mem*/va_*): llvm.abs.i32 1, llvm.abs.i64 1, llvm.ceil.f64 2, llvm.ctpop.i32 9, llvm.fabs.f64 2, llvm.floor.f64 37, llvm.fmuladd.f64 3, llvm.frameaddress.p0 1, llvm.fshl.i64 5, llvm.smax.i32 31, llvm.smax.i64 1, llvm.smin.i32 15, llvm.smin.i64 5, llvm.umax.i32 1, llvm.umax.i64 1, llvm.umin.i32 3, llvm.umin.i64 2
+external functions by category:
+  alloc (2): free realloc
+  ctype/locale (15): _errno isalnum isalpha iscntrl isgraph islower isprint ispunct isspace isupper isxdigit localeconv setlocale tolower toupper
+  dl (3): FreeLibrary GetProcAddress LoadLibraryExA
+  jmp (2): _setjmp longjmp
+  math (17): acos asin atan2 cos cosh exp fmod frexp ldexp log log10 pow sin sinh sqrt tan tanh
+  posix-io (1): _isatty
+  process/env (5): abort exit getenv signal system
+  stdio (29): __acrt_iob_func __stdio_common_vfprintf __stdio_common_vsprintf _fileno _fseeki64 _ftelli64 _pclose _popen clearerr fclose feof ferror fflush fgets fopen fputc fputs fread freopen fwrite getc putchar puts remove rename setvbuf tmpfile tmpnam ungetc
+  string/mem (14): memchr memcmp strchr strcmp strcoll strcpy strerror strftime strlen strpbrk strrchr strspn strstr strtod
+  time (6): _difftime64 _gmtime64 _localtime64 _mktime64 _time64 clock
+  win32 (3): FormatMessageA GetLastError GetModuleFileNameA

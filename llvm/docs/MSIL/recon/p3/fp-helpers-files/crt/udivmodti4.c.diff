@@ -1,0 +1,11 @@
+--- udivmodti4.c	2026-10-12 10:31:12.312856400 -0500
++++ udivmodti4.c	2026-10-28 16:32:22.007274000 -0500
+@@ -83,7 +83,7 @@
+
+ static inline du_int udiv128by64to64(du_int u1, du_int u0, du_int v,
+                                      du_int *r) {
+-#if defined(__x86_64__) && !defined(__arm64ec__)
++#if defined(__x86_64__) && !defined(__arm64ec__) && !defined(__MSIL__)
+   du_int result;
+   __asm__("divq %[v]"
+           : "=a"(result), "=d"(*r)

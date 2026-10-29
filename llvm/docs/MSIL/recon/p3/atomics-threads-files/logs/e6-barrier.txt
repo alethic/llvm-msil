@@ -1,0 +1,62 @@
+# E6c barrier-spin.c through the prototype: WHICH 0 = plain int + asm volatile("":::"memory") (D36 MEMBARRIER), 1 = volatile int, 2 = relaxed atomic; bs0fix = MEMBARRIER replaced by a call of a private noinlining empty method
+## WHICH=0
+[net48] plain + asm memory barrier: GAVE UP (load hoisted)
+
+[net8] plain + asm memory barrier: exited
+
+[net10] plain + asm memory barrier: GAVE UP (load hoisted)
+
+[net8 TC=0] plain + asm memory barrier: GAVE UP (load hoisted)
+
+## WHICH=1
+[net48] volatile: exited
+
+[net8] volatile: exited
+
+[net10] volatile: exited
+
+[net8 TC=0] volatile: exited
+
+## WHICH=2
+[net48] relaxed atomic: exited
+
+[net8] relaxed atomic: exited
+
+[net10] relaxed atomic: exited
+
+[net8 TC=0] relaxed atomic: exited
+
+## bs0fix
+[net48] plain + asm memory barrier: exited
+
+[net8] plain + asm memory barrier: exited
+
+[net10] plain + asm memory barrier: exited
+
+[net8 TC=0] plain + asm memory barrier: exited
+
+## WSL
+native: plain + asm memory barrier: exited
+net8: plain + asm memory barrier: exited
+net10: plain + asm memory barrier: GAVE UP (load hoisted)
+native: volatile: exited
+net8: volatile: exited
+net10: volatile: exited
+native: relaxed atomic: exited
+net8: relaxed atomic: exited
+net10: relaxed atomic: exited
+wsl net8: plain + asm memory barrier: exited
+wsl net10: plain + asm memory barrier: exited
+## cost of a barrier in a loop of plain increments (cb.exe, ns per iteration)
+[net48]
+none 1.144185
+noinl_call 2.275054
+membarrier 6.377678
+[net8 TC=0]
+none 1.349305
+noinl_call 1.821012
+membarrier 5.941703
+[net10 TC=0]
+none 1.383423
+noinl_call 1.742548
+membarrier 5.926432

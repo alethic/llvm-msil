@@ -1,0 +1,20 @@
+--- net48
+runtime 4.0.30319.42000
+threads reached exit call: 3, holders finalized: 3
+exit=0
+--- net8
+runtime 8.0.33
+threads reached exit call: 3, holders finalized: 3
+exit=0
+--- net10
+runtime 10.0.14
+threads reached exit call: 3, holders finalized: 3
+exit=0
+--- wsl net8
+runtime 8.0.31
+threads reached exit call: 3, holders finalized: 3
+exit=0
+--- wsl net10
+runtime 10.0.13
+threads reached exit call: 3, holders finalized: 3
+exit=0

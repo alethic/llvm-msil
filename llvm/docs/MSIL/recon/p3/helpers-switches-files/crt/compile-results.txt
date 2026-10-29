@@ -1,0 +1,63 @@
+# compile of compiler-rt builtins sources, -O2 -ffreestanding -fno-builtin -fvisibility=hidden -DCOMPILER_RT_HAS_FLOAT16
+## x86_64-unknown-linux-gnu-msil, without -D__ELF__
+x86_64-unknown-linux-gnu-msil: 5 ok, 171 failed of 176
+(every failure: int_lib.h:70 '#error Unsupported target', because __ELF__ is not predefined on Linux MSIL triples)
+## x86_64-unknown-linux-gnu-msil, -D__ELF__=1
+x86_64-unknown-linux-gnu-msil: 142 ok, 34 failed of 176
+FAIL G udivmodti4.c: udivmodti4.c:88:3: error: inline assembly is not supported for the MSIL target 'x86_64-unknown-linux-gnu-msil'
+FAIL B trunctfbf2.c: trunctfbf2.c:16:23: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T addtf3.c: addtf3.c:19:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T comparetf2.c: comparetf2.c:45:28: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T divtc3.c: divtc3.c:20:26: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T divtf3.c: divtf3.c:24:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T extenddftf2.c: extenddftf2.c:17:23: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T extendhftf2.c: extendhftf2.c:18:23: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T extendsftf2.c: extendsftf2.c:17:23: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T fixtfdi.c: fixtfdi.c:17:24: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T fixtfsi.c: fixtfsi.c:17:24: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T fixtfti.c: fixtfti.c:17:24: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T fixunstfdi.c: fixunstfdi.c:16:24: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T fixunstfsi.c: fixunstfsi.c:16:24: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T fixunstfti.c: fixunstfti.c:16:24: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T floatditf.c: floatditf.c:19:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T floatsitf.c: floatsitf.c:19:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T floattitf.c: floattitf.c:33:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T floatunditf.c: floatunditf.c:19:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T floatunsitf.c: floatunsitf.c:19:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T floatuntitf.c: floatuntitf.c:33:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T multc3.c: multc3.c:22:26: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T multf3.c: multf3.c:20:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T powitf2.c: powitf2.c:20:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T subtf3.c: subtf3.c:20:22: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T trunctfdf2.c: trunctfdf2.c:17:23: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T trunctfhf2.c: trunctfhf2.c:18:23: error: floating-point type 'fp128' is not supported for MSIL
+FAIL T trunctfsf2.c: trunctfsf2.c:17:23: error: floating-point type 'fp128' is not supported for MSIL
+FAIL E emutls.c: emutls.c:10:10: fatal error: 'stdlib.h' file not found
+FAIL E enable_execute_stack.c: enable_execute_stack.c:12:10: fatal error: 'sys/mman.h' file not found
+FAIL E eprintf.c: eprintf.c:10:10: fatal error: 'stdio.h' file not found
+FAIL E clear_cache.c: clear_cache.c:11:10: fatal error: 'assert.h' file not found
+FAIL E cpu_model/x86.c: D:\llvm-msil\build\lib\clang\24\include\cpuid.h:370:5: error: inline assembly is not supported for the MSIL target 'x86_64-unknown-linux-gnu-msil'
+FAIL E i386/fp_mode.c: i386/fp_mode.c:20:3: error: inline assembly is not supported for the MSIL target 'x86_64-unknown-linux-gnu-msil'
+## x86_64-pc-windows-msvc-msil
+x86_64-pc-windows-msvc-msil: 155 ok, 21 failed of 176
+FAIL G int_util.c: int_util.c:45:10: fatal error: 'stdlib.h' file not found
+FAIL G udivmodti4.c: udivmodti4.c:88:3: error: inline assembly is not supported for the MSIL target 'x86_64-pc-windows-msvc19.33.0-msil'
+FAIL X divxc3.c: divxc3.c:20:35: error: unknown type name 'xf_float'
+FAIL X extendhfxf2.c: extendhfxf2.c:14:17: error: unknown type name 'xf_float'
+FAIL X fixxfdi.c: fixxfdi.c:34:34: error: unknown type name 'xf_float'
+FAIL X fixxfti.c: fixxfti.c:27:34: error: unknown type name 'xf_float'
+FAIL X fixunsxfdi.c: fixunsxfdi.c:35:37: error: unknown type name 'xf_float'
+FAIL X fixunsxfsi.c: fixunsxfsi.c:35:37: error: unknown type name 'xf_float'
+FAIL X fixunsxfti.c: fixunsxfti.c:28:37: error: unknown type name 'xf_float'
+FAIL X floatdixf.c: floatdixf.c:26:17: error: unknown type name 'xf_float'
+FAIL X floattixf.c: floattixf.c:26:17: error: unknown type name 'xf_float'
+FAIL X floatundixf.c: floatundixf.c:25:17: error: unknown type name 'xf_float'
+FAIL X floatuntixf.c: floatuntixf.c:26:17: error: unknown type name 'xf_float'
+FAIL X mulxc3.c: mulxc3.c:20:35: error: unknown type name 'xf_float'
+FAIL X powixf2.c: powixf2.c:19:17: error: unknown type name 'xf_float'
+FAIL X truncxfhf2.c: truncxfhf2.c:13:36: error: unknown type name 'xf_float'
+FAIL E emutls.c: emutls.c:10:10: fatal error: 'stdlib.h' file not found
+FAIL E enable_execute_stack.c: enable_execute_stack.c:22:10: fatal error: 'windows.h' file not found
+FAIL E eprintf.c: eprintf.c:10:10: fatal error: 'stdio.h' file not found
+FAIL E cpu_model/x86.c: cpu_model/x86.c:274:3: error: builtin is not supported on this target
+FAIL E i386/fp_mode.c: i386/fp_mode.c:20:3: error: inline assembly is not supported for the MSIL target 'x86_64-pc-windows-msvc19.33.0-msil'

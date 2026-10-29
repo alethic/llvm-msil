@@ -1,0 +1,14 @@
+--- fp_trunc.h	2026-10-12 10:31:12.290223700 -0500
++++ fp_trunc.h	2026-10-28 16:32:22.417977900 -0500
+@@ -107,7 +107,11 @@
+ static const int dstExpBits = 5;
+
+ #elif defined DST_BFLOAT
++#if defined(__MSIL__)
++typedef uint16_t dst_t; /* MSIL: bf16 crosses calls as its bits (H4) */
++#else
+ typedef __bf16 dst_t;
++#endif
+ typedef uint16_t dst_rep_t;
+ #define DST_REP_C UINT16_C
+ static const int dstBits = sizeof(dst_t) * CHAR_BIT;

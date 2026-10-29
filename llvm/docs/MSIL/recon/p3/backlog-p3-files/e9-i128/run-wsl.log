@@ -1,0 +1,16 @@
+== WSL .NET 8
+mul3p1 1 split5 1 stk7s(struct) 1 stk7(i128,pack8) 0 stk7(i128,pack16) 0
+exit=0
+Int128 mul3p1 Unhandled exception. System.Runtime.InteropServices.MarshalDirectiveException: Cannot marshal 'parameter #1': System.Int128 and System.UInt128 cannot be passed by value to unmanaged.
+   at mul3p1(Int128 A_0)
+   at main()
+exit=134
+== WSL .NET 10
+/mnt/c/llvm-msil-scratch/p3/backlog-p3/e9-i128/run-wsl.sh: line 3:   485 Aborted                    LD_LIBRARY_PATH=. "$D" exec --runtimeconfig rc$v.json i128n.dll
+mul3p1 1 split5 1 stk7s(struct) 1 stk7(i128,pack8) 0 stk7(i128,pack16) 0
+exit=0
+Int128 mul3p1 Unhandled exception. System.Runtime.InteropServices.MarshalDirectiveException: Cannot marshal 'parameter #1': System.Int128 and System.UInt128 cannot be passed by value to unmanaged.
+   at mul3p1(Int128 A_0)
+   at main()
+/mnt/c/llvm-msil-scratch/p3/backlog-p3/e9-i128/run-wsl.sh: line 3:   501 Aborted                    LD_LIBRARY_PATH=. "$D" exec --runtimeconfig rc$v.json i128n.dll
+exit=134

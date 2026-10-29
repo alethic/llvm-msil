@@ -1,0 +1,19 @@
+# E8: VS 18 (VS 2026, vswhere installationVersion 18.10) detection by the shared build's clang, outside the dev shell (INCLUDE/LIB/LIBPATH unset)
+## clang --target=x86_64-pc-windows-msvc-msil hello.c -o hello.exe -###  (include and library paths)
+"-internal-isystem" "D:\\llvm-msil\\build\\lib\\clang\\24\\include"
+"-internal-isystem" "C:/Program Files/Microsoft Visual Studio 10.0/VC/include"
+"-internal-isystem" "C:/Program Files/Microsoft Visual Studio 9.0/VC/include"
+"-internal-isystem" "C:/Program Files/Microsoft Visual Studio 9.0/VC/PlatformSDK/Include"
+"-internal-isystem" "C:/Program Files/Microsoft Visual Studio 8/VC/include"
+"-internal-isystem" "C:/Program Files/Microsoft Visual Studio 8/VC/PlatformSDK/Include"
+"-LC:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\ucrt\\x64"
+"-LC:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64"
+## the same native (x86_64-pc-windows-msvc -c)
+hello.c:1:10: fatal error: 'stdio.h' file not found
+    1 | #include <stdio.h>
+      |          ^~~~~~~~~
+## MSIL compile+link
+hello.c:1:10: fatal error: 'stdio.h' file not found
+    1 | #include <stdio.h>
+      |          ^~~~~~~~~
+## inside msil-env.ps1 (dev shell): see the harness; every gate runs there

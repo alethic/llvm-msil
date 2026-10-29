@@ -1,0 +1,12 @@
+# E7 GitHub state of the fork (read-only gh queries, 2026-10-28)
+== gh repo view --json defaultBranchRef,visibility
+{"defaultBranchRef":{"name":"msil"},"visibility":"PUBLIC"}
+
+== gh workflow list --all | grep MSIL
+MSIL CI	active	391960041
+== gh run list --workflow <MSIL CI id> --limit 5 (empty = never run)
+[end of list]
+== gh run list --limit 3 (upstream scheduled workflows on msil: skipped)
+completed	skipped	[libc++] Request historical benchmark data	[libc++] Request historical benchmark data	msil	schedule	40751084753	2s	2026-10-28T19:05:11Z
+completed	skipped	Release Asset Audit	Release Asset Audit	msil	schedule	40748106184	2s	2026-10-28T18:45:38Z
+completed	skipped	Comment on an issue	Comment on an issue	msil	workflow_run	40745421898	7s	2026-10-28T18:28:19Z

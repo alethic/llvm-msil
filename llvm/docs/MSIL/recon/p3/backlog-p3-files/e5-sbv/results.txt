@@ -1,0 +1,15 @@
+# E5 struct-by-value native calls at HEAD
+== windows-msvc-msil
+msil-ld: error: native function 'lldiv' (api-ms-win-crt-utility-l1-1-0.dll) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)
+>>> referenced by <tmp>\lldiv-33f75a.o:(main)
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+link exit=1
+== linux-gnu-msil
+msil-ld: error: native function 'lldiv' (libc.so.6) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)
+>>> referenced by <tmp>\lldiv-e3c884.o:(main)
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+link exit=1
+Framework exit=92 (expect 92)
+linux link exit=0
+(invalid: wsl.exe expanded $? before bash ran; see the next line)
+WSL .NET 8 divl exit=92 (expect 92)

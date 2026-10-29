@@ -1,0 +1,104 @@
+== Windows native (clang --target=x86_64-pc-windows-msvc -O0) tls_threads
+slot 0: tcount=5 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 1: tcount=1005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 2: tcount=2005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 3: tcount=3005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 4: tcount=4005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+distinct addresses: 1; main thread after the workers: tcount=5 tzero[0]=0
+== Windows native -O0 vla_cases (-Wl,/STACK:4194304)
+vla_loop 128493856
+alloca_loop 780
+vla_align 1
+vla_rec 1000
+== Windows native (clang --target=x86_64-pc-windows-msvc -O2) tls_threads
+slot 0: tcount=5 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 1: tcount=1005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 2: tcount=2005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 3: tcount=3005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 4: tcount=4005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+distinct addresses: 1; main thread after the workers: tcount=5 tzero[0]=0
+== Windows native -O2 vla_cases (-Wl,/STACK:4194304)
+vla_loop 128493856
+alloca_loop 780
+vla_align 1
+vla_rec 1000
+== clang IR, tls_threads.c, x86_64-unknown-linux-gnu-msil -O2 (thread_local globals and llvm.threadlocal.address)
+@tcount = thread_local global i32 5, align 4
+@tptr = thread_local local_unnamed_addr global ptr @g, align 8
+@tfn = thread_local local_unnamed_addr global ptr @twice, align 8
+@tzero = thread_local local_unnamed_addr global [100 x i8] zeroinitializer, align 16
+@taligned = thread_local local_unnamed_addr global [8 x i8] zeroinitializer, align 64
+  %0 = tail call align 16 ptr @llvm.threadlocal.address.p0(ptr align 16 @tzero)
+  %.pre.i = tail call align 4 ptr @llvm.threadlocal.address.p0(ptr align 4 @tcount)
+  %4 = tail call align 8 ptr @llvm.threadlocal.address.p0(ptr align 8 @tptr)
+  %7 = tail call align 8 ptr @llvm.threadlocal.address.p0(ptr align 8 @tfn)
+  %0 = tail call align 16 ptr @llvm.threadlocal.address.p0(ptr align 16 @tzero)
+  %.pre.i = tail call align 4 ptr @llvm.threadlocal.address.p0(ptr align 4 @tcount)
+  %2 = tail call align 4 ptr @llvm.threadlocal.address.p0(ptr align 4 @tcount)
+  %8 = tail call align 8 ptr @llvm.threadlocal.address.p0(ptr align 8 @tptr)
+  %11 = tail call align 8 ptr @llvm.threadlocal.address.p0(ptr align 8 @tfn)
+declare nonnull ptr @llvm.threadlocal.address.p0(ptr nonnull) #6
+== clang IR, tlsmodel.c, x86_64-unknown-linux-gnu-msil -O2
+@x = external thread_local local_unnamed_addr global i32, align 4
+@z = thread_local(localexec) local_unnamed_addr global i32 0, align 4
+  %0 = tail call align 4 ptr @llvm.threadlocal.address.p0(ptr align 4 @x)
+  %2 = tail call align 4 ptr @llvm.threadlocal.address.p0(ptr align 4 @z)
+declare nonnull ptr @llvm.threadlocal.address.p0(ptr nonnull) #1
+== clang IR, tlsmodel.c, x86_64-pc-windows-msvc-msil -O2
+@x = external thread_local local_unnamed_addr global i32, align 4
+@z = thread_local(localexec) local_unnamed_addr global i32 0, align 4
+  %0 = tail call align 4 ptr @llvm.threadlocal.address.p0(ptr align 4 @x)
+  %2 = tail call align 4 ptr @llvm.threadlocal.address.p0(ptr align 4 @z)
+declare nonnull ptr @llvm.threadlocal.address.p0(ptr nonnull) #1
+== clang -O2 -S -emit-llvm vla_loop.c (x86_64-pc-windows-msvc): VLA scopes
+  %1 = tail call ptr @llvm.stacksave.p0()
+  %vla.peel = alloca i8, i64 %0, align 1
+  call void @llvm.stackrestore.p0(ptr %1)
+  %2 = tail call ptr @llvm.stacksave.p0()
+  %vla = alloca i8, i64 %0, align 1
+  call void @llvm.stackrestore.p0(ptr %2)
+declare ptr @llvm.stacksave.p0() #2
+declare void @llvm.stackrestore.p0(ptr) #2
+== MSIL today: clang --target=x86_64-unknown-linux-gnu-msil -O2 -c tls_threads.c
+error: thread-local variable @tcount is not supported for MSIL yet
+error: thread-local variable @tptr is not supported for MSIL yet
+error: thread-local variable @tfn is not supported for MSIL yet
+error: thread-local variable @tzero is not supported for MSIL yet
+error: thread-local variable @taligned is not supported for MSIL yet
+tls_threads.c:46:5: error: calls to variadic functions are not supported for MSIL yet
+   46 | int main(void) {
+      |     ^
+tls_threads.c:46:5: error: calls to variadic functions are not supported for MSIL yet
+tls_threads.c:46:5: error: calls to variadic functions are not supported for MSIL yet
+tls_threads.c:46:5: error: calls to variadic functions are not supported for MSIL yet
+tls_threads.c:46:5: error: calls to variadic functions are not supported for MSIL yet
+tls_threads.c:46:5: error: calls to variadic functions are not supported for MSIL yet
+11 errors generated.
+== tls_threads_lin-O0
+slot 0: tcount=5 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 1: tcount=1005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 2: tcount=2005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 3: tcount=3005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 4: tcount=4005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+distinct addresses: 1; main thread after the workers: tcount=5 tzero[0]=0
+exit=0
+== tls_threads_lin-O2
+slot 0: tcount=5 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 1: tcount=1005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 2: tcount=2005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 3: tcount=3005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+slot 4: tcount=4005 *tptr+tfn(1)=44 sum(tzero)=0 taligned%64=0
+distinct addresses: 1; main thread after the workers: tcount=5 tzero[0]=0
+exit=0
+== vla_cases_lin-O0
+vla_loop 128493856
+alloca_loop 780
+vla_align 1
+vla_rec 1000
+exit=0
+== vla_cases_lin-O2
+vla_loop 128493856
+alloca_loop 780
+vla_align 1
+vla_rec 1000
+exit=0

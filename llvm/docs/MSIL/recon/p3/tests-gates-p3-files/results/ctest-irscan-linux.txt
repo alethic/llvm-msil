@@ -1,0 +1,8 @@
+# c-testsuite-5c7275656d75 tests/single-exec, clang -S -emit-llvm --target=x86_64-unknown-linux-gnu-msil
+# --sysroot=<glibc sysroot> -std=gnu17 -w at -O0 and -O2: Phase 3 constructs found in the IR
+# (the i128 pattern matched the datalayout string of every module and is ignored)
+counts: {'vararg-call': 69, 'vararg-def': 2, 'va_start': 1, 'dyn-alloca': 1, 'stacksave': 1}
+00140 {'vararg-def': ['O0', 'O2'], 'vararg-call': ['O0']}
+00204 {'va_start': ['O0', 'O2'], 'vararg-def': ['O0', 'O2'], 'vararg-call': ['O0', 'O2']}
+00207 {'dyn-alloca': ['O0'], 'stacksave': ['O0'], 'vararg-call': ['O0', 'O2']}
+tests with only native variadic calls (printf family): 66

@@ -1,0 +1,18 @@
+### build/sqlite-default/win-O2-sim
+      1 error: <unknown>:0:0: in function sqlite3WalUndo i32 (ptr, ptr, ptr): frame escape ('llvm.localescape') is not supported for MSIL
+      1 error: <unknown>:0:0: in function sqlite3WalSavepointUndo i32 (ptr, ptr): frame escape ('llvm.localescape') is not supported for MSIL
+      1 error: <unknown>:0:0: in function sqlite3WalFrames i32 (ptr, i32, ptr, i32, i32, i32): frame escape ('llvm.localescape') is not supported for MSIL
+      1 error: <unknown>:0:0: in function sqlite3WalFindFrame i32 (ptr, i32, ptr): frame escape ('llvm.localescape') is not supported for MSIL
+      1 error: <unknown>:0:0: in function sqlite3WalCheckpoint i32 (ptr, ptr, i32, ptr, ptr, i32, i32, ptr, ptr, ptr): frame escape ('llvm.localescape') is not supported for MSIL
+      1 error: <unknown>:0:0: in function sqlite3WalBeginWriteTransaction i32 (ptr): frame escape ('llvm.localescape') is not supported for MSIL
+      1 error: <unknown>:0:0: in function sqlite3WalBeginReadTransaction i32 (ptr, ptr): frame escape ('llvm.localescape') is not supported for MSIL
+      1 error: <unknown>:0:0: in function ?filt$0@0@sqlite3WalUndo@@ i32 (ptr, ptr): frame escape ('llvm.eh.recoverfp') is not supported for MSIL
+      1 error: <unknown>:0:0: in function ?filt$0@0@sqlite3WalSavepointUndo@@ i32 (ptr, ptr): frame escape ('llvm.eh.recoverfp') is not supported for MSIL
+      1 error: <unknown>:0:0: in function ?filt$0@0@sqlite3WalFrames@@ i32 (ptr, ptr): frame escape ('llvm.eh.recoverfp') is not supported for MSIL
+      1 error: <unknown>:0:0: in function ?filt$0@0@sqlite3WalFindFrame@@ i32 (ptr, ptr): frame escape ('llvm.eh.recoverfp') is not supported for MSIL
+      1 error: <unknown>:0:0: in function ?filt$0@0@sqlite3WalCheckpoint@@ i32 (ptr, ptr): frame escape ('llvm.eh.recoverfp') is not supported for MSIL
+      1 error: <unknown>:0:0: in function ?filt$0@0@sqlite3WalBeginWriteTransaction@@ i32 (ptr, ptr): frame escape ('llvm.eh.recoverfp') is not supported for MSIL
+      1 error: <unknown>:0:0: in function ?filt$0@0@sqlite3WalBeginReadTransaction@@ i32 (ptr, ptr): frame escape ('llvm.eh.recoverfp') is not supported for MSIL
+      1 $ D:/llvm-msil/build/bin/clang.exe --target=x86_64-pc-windows-msvc-msil -O2 -fno-color-diagnostics -fno-caret-diagnostics -ferror-limit=0 -S -emit-llvm -Wno-deprecated-declarations <S>/sim/sim.c -o <S>/build/sqlite-default/win-O2-sim/sim.ll
+      1 $ D:/llvm-msil/build/bin/clang.exe --target=x86_64-pc-windows-msvc-msil -O2 -fno-color-diagnostics -fno-caret-diagnostics -ferror-limit=0 -I<S>/src/sqlite-amalgamation-3540100 -include <S>/sim/sim.h -S -emit-llvm -Wno-deprecated-declarations <S>/src/sqlite-amalgamation-3540100/sqlite3.c -o <S>/build/sqlite-default/win-O2-sim/sqlite3.ll
+      1 $ D:/llvm-msil/build/bin/clang.exe --target=x86_64-pc-windows-msvc-msil -O2 -fno-color-diagnostics -fno-caret-diagnostics -ferror-limit=0 -I<S>/src/sqlite-amalgamation-3540100 -include <S>/sim/sim.h -S -emit-llvm -Wno-deprecated-declarations <S>/src/sqlite-amalgamation-3540100/shell.c -o <S>/build/sqlite-default/win-O2-sim/shell.ll

@@ -1,0 +1,9 @@
+== .NET Framework 4.8 (net48 build, started directly)
+Environment.CommandLine: C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cs\multi\bin\Release\net48\cs.exe one "two words"
+GetCommandLineArgs: C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cs\multi\bin\Release\net48\cs.exe | one | two words
+== .NET 10 (apphost)
+Environment.CommandLine: C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cs\multi\bin\Release\net10.0\cs.dll one "two words"
+GetCommandLineArgs: C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cs\multi\bin\Release\net10.0\cs.dll | one | two words
+== .NET 10 (dotnet exec)
+Environment.CommandLine: C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cs\multi\bin\Release\net10.0\cs.dll one "two words"
+GetCommandLineArgs: C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cs\multi\bin\Release\net10.0\cs.dll | one | two words

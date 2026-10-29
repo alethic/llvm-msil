@@ -1,0 +1,54 @@
+Prototype results (msil-expand-variadics between clang -S -emit-llvm and the shared
+llc -filetype=obj; msil-ld links through the shared clang driver). SAME = stdout equal
+to the native build's (clang for x86_64-pc-windows-msvc; E7 oracle for Linux).
+
+Windows (Framework 4.8 = fx, .NET 8.0.33, .NET 10.0.14):
+  va.win-O0.exe      fx SAME  net8 SAME  net10 SAME
+  va.win-O2.exe      fx SAME  net8 SAME  net10 SAME
+  xtu.win-O0.exe     fx SAME  net8 SAME  net10 SAME
+  xtu.win-O2.exe     fx SAME  net8 SAME  net10 SAME
+  t00140.win-O0.exe  fx SAME  net8 SAME  net10 SAME   (exit 0)
+  t00140.win-O2.exe  fx SAME  net8 SAME  net10 SAME   (exit 0)
+  natives.win-O0.exe fx SAME  net8 SAME  net10 SAME
+  natives.win-O2.exe fx SAME  net8 SAME  net10 SAME
+  winfp-O0.exe / winfp-O2.exe: fx, net8, net10 all print
+      2.500000|-1.250000|7|0.125000|10000000000.000000   (= native)
+  shared: vlib.dll + prog.exe (-O2): fx and net8 print the xtu transcript
+
+WSL (.NET 8.0.31, .NET 10.0.13, each also with DOTNET_TieredCompilation=0):
+  va, xtu, t00140, natives, regs at -O0 and -O2: SAME in all 8 configurations each
+  shared: vlib.dll + prog.exe (-O2) on .NET 8: the xtu transcript, exit 0
+
+Native reference transcripts:
+  va (Windows)
+    f1 3 3
+    sum 0 42 55
+    avg 2.5000 5.5500
+    mixed 8824955344737324474
+    forward 10 twice 18018 by_pointer 1234 restart 311
+    rec 63 none 9 vp 4
+    my_printf -17 str 3.142 Q 8589934592 4000000000
+    my_snprintf [-002.500|42   |   ab|beef]
+    snprintf [0.5 1.5 2.5 3.5 4.5 5.5 6.5 7.5 8.5 9.5]
+    via pointer 7 0.250000
+    fprintf done 1
+  va (Linux): the same except "mixed -5288231203357274694" (unsigned long is 64 bits)
+  xtu: sum(3, 10, 20, 12) = 42 / dsum = 108.75 / fp = 42
+  natives (Linux): open ok / fcntl F_GETFL & O_ACCMODE = 1 / fcntl F_DUPFD >= 10: 1 /
+    ioctl FIONREAD on a file: r=0 / syslog ok;  (Windows): open ok
+  regs: regs 123456789 / native 123456789
+
+Benchmark (bench.c, -O2, single runs on a loaded host):
+  native win: variadic sum x20M 167 ms, fixed sum 77 ms, snprintf x1M 745 ms
+  MSIL fx:    192 ms, 12 ms, 505 ms
+  MSIL net8:  261 ms, 33 ms, 798 ms
+  MSIL net10: 147 ms, 12 ms, 601 ms
+  native lnx: 372 ms, 96 ms, 1578 ms
+  MSIL net8 (WSL):  633 ms, 64 ms, 1576 ms
+  MSIL net10 (WSL): 621 ms, 66 ms, 1544 ms
+  (The MSIL "fixed sum" was inlined by the JIT: C's noinline does not reach IL.)
+
+Hand-written emulation (emu.c, no prototype tool; today's toolchain):
+  Windows: emu.win-O0/-O2 (objects) and emu.win-O2.lto: fx, net8, net10, net8 TC=0 SAME;
+           emu.win-O0.lto: link fails (Phase 2 gap: UCRT's inline sprintf at -O0 under LTO)
+  WSL: emu.lnx-O0/-O2 objects and LTO: net8, net8 TC=0, net10, net10 TC=0 SAME

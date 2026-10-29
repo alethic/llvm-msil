@@ -1,0 +1,85 @@
+=== order.dll.exe ret, ORDER_EXIT_IN_CTOR=1
+ctor 101
+ctor default
+  ctor default calls exit(13)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+status=13 (0x0000000D)
+=== order.static.exe ret, ORDER_EXIT_IN_CTOR=1
+ctor 101
+ctor default
+  ctor default calls exit(13)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+.CRT$XPU slot
+status=-1073741819 (0xC0000005)
+=== multi/dll/main.exe ret (libpb.dll, libpc.dll)
+libB: ctor
+libC: ctor
+prog: ctor
+prog: main
+libB: b_reg registers its handler
+libC: c_reg registers its handler
+prog: atexit h2 (registered after c_reg)
+prog: atexit h1 (registered before b_reg)
+libC: atexit handler (registered by c_reg)
+libC: atexit handler (registered in libC ctor)
+libB: atexit handler (registered by b_reg)
+libB: atexit handler (registered in libB ctor)
+status=0 (0x00000000)
+=== multi/dll/main.exe exit (libpb.dll, libpc.dll)
+libB: ctor
+libC: ctor
+prog: ctor
+prog: main
+libB: b_reg registers its handler
+libC: c_reg registers its handler
+prog: atexit h2 (registered after c_reg)
+prog: atexit h1 (registered before b_reg)
+libC: atexit handler (registered by c_reg)
+libC: atexit handler (registered in libC ctor)
+libB: atexit handler (registered by b_reg)
+libB: atexit handler (registered in libB ctor)
+status=3 (0x00000003)
+=== multi/static/main.exe ret (libpb.dll, libpc.dll)
+libB: ctor
+libC: ctor
+prog: ctor
+prog: main
+libB: b_reg registers its handler
+libC: c_reg registers its handler
+prog: atexit h2 (registered after c_reg)
+prog: atexit h1 (registered before b_reg)
+status=-1073741819 (0xC0000005)
+=== multi/static/main.exe exit (libpb.dll, libpc.dll)
+libB: ctor
+libC: ctor
+prog: ctor
+prog: main
+libB: b_reg registers its handler
+libC: c_reg registers its handler
+prog: atexit h2 (registered after c_reg)
+prog: atexit h1 (registered before b_reg)
+status=-1073741819 (0xC0000005)
+=== matrix/crt-xt.dll.exe
+main
+status=0 (0x00000000)
+=== matrix/crt-xt.static.exe
+main
+status=-1073741819 (0xC0000005)
+=== matrix/p6-dtors.dll.exe
+BCDM
+status=0 (0x00000000)
+=== matrix/p6-dtors.static.exe
+BCDM
+status=-1073741819 (0xC0000005)
+=== matrix/atexit-order.dll.exe
+main returns
+second registered, runs first
+first registered, runs last
+status=0 (0x00000000)
+=== matrix/atexit-order.static.exe
+main returns
+second registered, runs first
+first registered, runs last
+status=0 (0x00000000)

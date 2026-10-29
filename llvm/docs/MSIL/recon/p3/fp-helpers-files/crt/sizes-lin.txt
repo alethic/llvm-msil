@@ -1,0 +1,31 @@
+__clzti2            91          int32(native int, native int)
+__divdc3          1658 localloc void(native int, float64, float64, float64, float64)
+__divmodti4        152 localloc void(native int, native int, native int, native int, native  __udivmodti4
+__divsc3          1524 localloc void(native int, float32, float32, float32, float32)
+__divti3            97 localloc void(native int, native int, native int, native int, native  __udivmodti4
+__extendbfsf2       64 localloc float32(int32)
+__extendhfdf2      146 localloc float64(int32)
+__extendhfsf2      136 localloc float32(int32)
+__fixdfti          248 localloc void(native int, float64)
+__fixsfti          224 localloc void(native int, float32)
+__fixunsdfti       116 localloc void(native int, float64)
+__fixunssfti       113 localloc void(native int, float32)
+__floattidf        257 localloc float64(native int, native int)                              __clzti2
+__floattisf        225 localloc float32(native int, native int)                              __clzti2
+__floatuntidf      224 localloc float64(native int, native int)                              __clzti2
+__floatuntisf      192 localloc float32(native int, native int)                              __clzti2
+__modti3           103 localloc void(native int, native int, native int, native int, native  __udivmodti4
+__muldc3           682 localloc void(native int, float64, float64, float64, float64)
+__muloti4         1116          void(native int, native int, native int, native int, native
+__mulsc3           642 localloc void(native int, float32, float32, float32, float32)
+__multi3            70          void(native int, native int, native int, native int, native
+__powidf2           50          float64(float64, int32)
+__powisf2           50          float32(float32, int32)
+__truncdfbf2       218 localloc int32(float64)
+__truncdfhf2       217 localloc int32(float64)
+__truncsfbf2       176 localloc int32(float32)
+__truncsfhf2       185 localloc int32(float32)
+__udivmodti4       804          void(native int, native int, native int, native int, native
+__udivti3           36 localloc void(native int, native int, native int, native int, native  __udivmodti4
+__umodti3           44 localloc void(native int, native int, native int, native int, native  __udivmodti4
+total IL instructions 9860

@@ -1,0 +1,75 @@
+--- net48
+runtime 4.0.30319.42000 (.NET Framework 4.8.9363.0)
+alloca: static 64-byte localloc        23.79 ns/call
+alloca: localloc(n) n=64               29.37 ns/call
+alloca: shadow SP [ThreadStatic] x2    69.99 ns/call
+alloca: shadow SP in TLS block         56.96 ns/call
+tls: plain global (address field)      18.45 ns/call
+tls: A [ThreadStatic] int field        28.41 ns/call
+tls: B block, inline check             56.46 ns/call
+tls: B block, helper call              56.34 ns/call
+tls: B block, class with .cctor        48.84 ns/call
+tls: C ThreadLocal<IntPtr>             54.77 ns/call
+tls: B 4 vars, one base                63.73 ns/call
+tls: B 4 vars, base per access        136.95 ns/call
+exit=0
+--- net8
+runtime 8.0.33 (.NET 8.0.33)
+alloca: static 64-byte localloc        11.20 ns/call
+alloca: localloc(n) n=64               13.25 ns/call
+alloca: shadow SP [ThreadStatic] x2   373.46 ns/call
+alloca: shadow SP in TLS block        103.07 ns/call
+tls: plain global (address field)       7.06 ns/call
+tls: A [ThreadStatic] int field       152.17 ns/call
+tls: B block, inline check            105.17 ns/call
+tls: B block, helper call              80.13 ns/call
+tls: B block, class with .cctor        96.16 ns/call
+tls: C ThreadLocal<IntPtr>             28.26 ns/call
+tls: B 4 vars, one base                99.45 ns/call
+tls: B 4 vars, base per access        376.84 ns/call
+exit=0
+--- net10
+runtime 10.0.14 (.NET 10.0.14)
+alloca: static 64-byte localloc        19.77 ns/call
+alloca: localloc(n) n=64               21.02 ns/call
+alloca: shadow SP [ThreadStatic] x2    22.10 ns/call
+alloca: shadow SP in TLS block         27.02 ns/call
+tls: plain global (address field)       8.33 ns/call
+tls: A [ThreadStatic] int field         8.93 ns/call
+tls: B block, inline check             21.82 ns/call
+tls: B block, helper call              20.00 ns/call
+tls: B block, class with .cctor        15.65 ns/call
+tls: C ThreadLocal<IntPtr>             16.38 ns/call
+tls: B 4 vars, one base                36.74 ns/call
+tls: B 4 vars, base per access         59.10 ns/call
+exit=0
+--- wsl net8
+runtime 8.0.31 (.NET 8.0.31)
+alloca: static 64-byte localloc        19.24 ns/call
+alloca: localloc(n) n=64               21.96 ns/call
+alloca: shadow SP [ThreadStatic] x2   709.60 ns/call
+alloca: shadow SP in TLS block        206.37 ns/call
+tls: plain global (address field)      14.00 ns/call
+tls: A [ThreadStatic] int field       329.51 ns/call
+tls: B block, inline check            192.32 ns/call
+tls: B block, helper call             198.15 ns/call
+tls: B block, class with .cctor       171.54 ns/call
+tls: C ThreadLocal<IntPtr>             33.22 ns/call
+tls: B 4 vars, one base               221.08 ns/call
+tls: B 4 vars, base per access        802.96 ns/call
+exit=0
+--- wsl net10
+runtime 10.0.13 (.NET 10.0.13)
+alloca: static 64-byte localloc        15.65 ns/call
+alloca: localloc(n) n=64               13.59 ns/call
+alloca: shadow SP [ThreadStatic] x2    42.71 ns/call
+alloca: shadow SP in TLS block         40.39 ns/call
+tls: plain global (address field)      11.36 ns/call
+tls: A [ThreadStatic] int field        18.12 ns/call
+tls: B block, inline check             32.84 ns/call
+tls: B block, helper call              27.25 ns/call
+tls: B block, class with .cctor        31.66 ns/call
+tls: C ThreadLocal<IntPtr>             25.25 ns/call
+tls: B 4 vars, one base                44.43 ns/call
+tls: B 4 vars, base per access         93.44 ns/call
+exit=0

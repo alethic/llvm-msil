@@ -1,0 +1,44 @@
+
+optimized code: Framework default, CoreCLR DOTNET_TieredCompilation=0
+
+| case (ns per call) | fx | n8 | n10 | w8 | w10 |
+|---|---|---|---|---|---|
+| direct call | 0.5 (0.6) | 1.3 (1.4) | 1.6 (1.6) | 2.8 (4.2) | 1.8 (1.9) |
+| managed calli (today: ldftn value) | 3.8 (4.8) | 2.9 (3.1) | 2.8 (3.4) | 4.6 (5.2) | 3.1 (3.1) |
+| calli unmanaged -> delegate thunk (A1 default) | 29.4 (37.1) | 25.3 (28.2) | 16.6 (16.7) | 29.6 (35.6) | 27.1 (28.3) |
+| calli unmanaged -> native function | 3.6 (4.5) | 3.3 (3.9) | 3.2 (3.6) | 4.1 (4.2) | 4.0 (4.5) |
+| A2 lookup helper hit (delegate value) + managed calli | 8.1 (8.2) | 5.5 (5.7) | 5.0 (5.4) | 5.9 (6.8) | 7.6 (7.7) |
+| A2 lookup helper miss (native value) + calli unmanaged | 7.5 (7.9) | 6.6 (8.5) | 6.8 (7.0) | 11.4 (11.5) | 8.2 (10.2) |
+| A2 inline first probe hit (delegate value) + managed calli | 3.9 (4.0) | 6.0 (10.2) | 4.9 (5.2) | 5.1 (8.6) | 6.5 (7.5) |
+| A2 inline first probe miss (native value) + calli unmanaged | 9.0 (9.4) | 7.5 (7.7) | 8.3 (21.0) | 10.2 (17.7) | 11.2 (11.8) |
+| A2 per-site cache hit + managed calli | 3.3 (3.3) | 4.9 (4.9) | 3.6 (3.8) | 5.0 (6.5) | 4.9 (7.7) |
+| native loop -> native function | 1.6 (1.8) | 1.6 (1.8) | 1.8 (1.9) | 1.7 (2.0) | 2.1 (4.0) |
+| native loop -> delegate thunk | 26.5 (31.7) | 22.9 (25.0) | 16.6 (21.2) | 24.7 (26.4) | 21.8 (26.8) |
+| native loop -> ldftn value (unsafe, for scale) | 2.8 (3.0) | 4.1 (4.2) | 2.7 (4.7) | 2.8 (2.9) | 3.1 (4.8) |
+| qsort native comparator (per sort of n/20 ints, ns per element) | 174.2 (190.2) | 180.5 (181.2) | 157.4 (208.9) | 231.4 (239.7) | 252.2 (288.8) |
+| qsort delegate-thunk comparator (per sort of n/20 ints, ns per element) | 792.7 (838.7) | 698.2 (743.5) | 516.6 (704.8) | 734.8 (960.3) | 571.9 (628.0) |
+| calli unmanaged -> UCO thunk (A1 switch) | - | 8.9 (10.7) | 9.9 (10.2) | 16.2 (17.1) | 30.8 (32.6) |
+| native loop -> UCO thunk | - | 8.5 (9.3) | 6.6 (7.0) | 11.5 (12.9) | 23.6 (25.9) |
+| qsort UCO comparator (per sort of n/20 ints, ns per element) | - | 413.2 (525.0) | 368.0 (397.4) | 509.6 (542.4) | 769.5 (783.8) |
+
+default tiering (CoreCLR)
+
+| case (ns per call) | n8 | n10 | w8 | w10 |
+|---|---|---|---|---|
+| direct call | 1.6 (4.4) | 1.4 (1.8) | 3.3 (3.7) | 3.8 (3.9) |
+| managed calli (today: ldftn value) | 2.8 (2.9) | 3.2 (3.5) | 6.4 (6.5) | 5.7 (5.8) |
+| calli unmanaged -> delegate thunk (A1 default) | 37.2 (42.3) | 16.9 (18.3) | 49.2 (74.7) | 46.7 (47.8) |
+| calli unmanaged -> native function | 11.9 (13.2) | 3.1 (3.9) | 22.8 (31.1) | 10.3 (10.4) |
+| A2 lookup helper hit (delegate value) + managed calli | 5.4 (6.6) | 6.3 (11.2) | 8.4 (15.7) | 12.9 (15.3) |
+| A2 lookup helper miss (native value) + calli unmanaged | 15.6 (16.0) | 9.5 (10.1) | 26.9 (51.5) | 18.2 (18.5) |
+| A2 inline first probe hit (delegate value) + managed calli | 4.3 (4.4) | 4.8 (5.7) | 5.1 (5.8) | 8.8 (9.4) |
+| A2 inline first probe miss (native value) + calli unmanaged | 18.6 (25.6) | 8.8 (12.7) | 31.5 (31.7) | 10.8 (15.3) |
+| A2 per-site cache hit + managed calli | 4.0 (5.8) | 3.5 (3.7) | 4.0 (5.4) | 4.2 (4.8) |
+| native loop -> native function | 1.9 (2.0) | 2.0 (2.2) | 1.9 (3.2) | 2.1 (3.0) |
+| native loop -> delegate thunk | 20.8 (21.7) | 19.9 (21.2) | 30.7 (34.0) | 23.6 (23.9) |
+| native loop -> ldftn value (unsafe, for scale) | 3.4 (3.8) | 4.3 (5.6) | 2.9 (5.5) | 2.8 (3.7) |
+| qsort native comparator (per sort of n/20 ints, ns per element) | 227.7 (260.2) | 192.8 (212.5) | 272.2 (414.0) | 264.0 (269.5) |
+| qsort delegate-thunk comparator (per sort of n/20 ints, ns per element) | 729.9 (815.6) | 687.6 (736.4) | 858.2 (1047.4) | 704.3 (789.4) |
+| calli unmanaged -> UCO thunk (A1 switch) | 20.8 (21.1) | 8.3 (8.5) | 40.0 (49.2) | 15.3 (15.4) |
+| native loop -> UCO thunk | 7.3 (7.6) | 11.7 (14.6) | 13.3 (14.1) | 15.2 (22.0) |
+| qsort UCO comparator (per sort of n/20 ints, ns per element) | 395.7 (472.3) | 429.4 (545.9) | 434.8 (551.1) | 412.0 (423.4) |

@@ -1,0 +1,15 @@
+c01 basic: r=7 count=2
+c02 longjmp(b, 0) returns 1
+c03 locals: r=5 unmodified=42 vol=2 arg=14
+c04 longjmp past an inner setjmp frame: r=9
+c05 recursion, longjmp from level 5 to level 2: 2042
+c06 re-entered setjmp 5 times: sum=10 i=5
+c07 longjmp to a memcpy'd jmp_buf: r=3
+c08 two setjmp sites in one function: log=23
+c09 longjmp through a function pointer: r=11
+c10 longjmp out of an indirect call: r=13
+c11 setjmp as a switch condition: path=123
+c12 Lua-style chained handlers: inner=2 outer=5 errorJmp=null
+c13 1000 round trips from varying depth: total=3000
+c14 sigsetjmp/siglongjmp and _setjmp/_longjmp: 4 6 8
+sizeof(jmp_buf)=256 depth_hit=0

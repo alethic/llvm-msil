@@ -1,0 +1,139 @@
+fp-helpers recon: measured results (HEAD cc4c79787d6a, 2026-10-28). Scratch: C:\llvm-msil-scratch\p3\fp-helpers.
+Runtimes: .NET 8.0.33, 10.0.14, Framework 4.8 (Windows 11); WSL Ubuntu .NET 8.0.31, 10.0.13. Host loaded by other
+projects: times are whole-process wall seconds, best of 3 unless noted.
+
+F1  inventory: scripts/inv_cases.py (107 cases), inv_run.py, inv_table.py -> inv/table.md.
+    428 runs (107 cases x {win,lin} x {-O0,-O2}); each: frontend IR calls, -S (IL count/diag), -c (llvm-nm -u), native -c.
+
+F2  Win64 i128 libcall ABI (i128/strict_i128.c: #pragma STDC FENV_ACCESS ON, (double)__int128, (float)unsigned __int128)
+    archive helper signatures (llvm-cil-dump):
+      win: __floattidf float64(native int)            __udivti3 void(native int, native int, native int)
+      lin: __floattidf float64(native int, native int) __udivti3 void(native int, native int, native int, native int, native int)
+    call site (legalizer libcall): float64(native int, native int) on both triples
+    msil-ld (win): warning: function signature mismatch: __floattidf
+      >>> defined as float64(native int) in .../clang_rt.builtins.lib(floattidf.c.o)
+      >>> called as float64(native int, native int) in si-win.exe.strict_i128.c.o
+      >>> adapter: drops 1 extra argument          (same for __floatuntisf)
+    run win .NET 8:  Unhandled exception System.NullReferenceException at __floattidf(IntPtr)
+                     at <msil>adapt___floattidf_0(IntPtr, IntPtr) at cvt(IntPtr) ... exit 3221225477 (0xC0000005)
+    run win netfx:   System.NullReferenceException at __floattidf(IntPtr) at main(), exit 0xC0000005
+    run lin WSL 8/10: 4630000000000000 / 000000007f800000, exit 0   (= native Windows and native Linux)
+
+F3  compiler-rt subset (scripts/crt_build.py; 30 sources: extendhfsf2 extendhfdf2 truncsfhf2 truncdfhf2 extendbfsf2
+    truncsfbf2* truncdfbf2* mulsc3 muldc3 divsc3 divdc3 powisf2 powidf2 udivmodti4* udivti3 umodti3 divti3 modti3
+    divmodti4 floattidf floattisf floatuntidf floatuntisf fixdfti fixsfti fixunsdfti fixunssfti muloti4 multi3 clzti2;
+    * = patched copy, crt/*.diff; flags -O2 -fno-builtin -std=c11 -fvisibility=hidden -ffreestanding
+    -DCOMPILER_RT_HAS_FLOAT16, lin also -D__ELF__=1)
+    archives: win 76,790 bytes, lin 76,278 bytes; 30/30 objects compile for both triples and natively.
+    IL instructions per helper (win / lin), L = uses localloc (24 of 30, all for bitcasts):
+      __extendhfsf2 136/136 L   __extendhfdf2 146/146 L   __truncsfhf2 185/185 L   __truncdfhf2 217/217 L
+      __extendbfsf2 66/64 L     __truncsfbf2 176/176 L    __truncdfbf2 217/218 L
+      __mulsc3 668/642 L        __muldc3 686/682 L        __divsc3 1538/1524 L     __divdc3 1669/1658 L
+      __powisf2 50/50           __powidf2 50/50
+      __udivmodti4 822/804      __udivti3 86/36 L         __umodti3 94/44 L        __divti3 147/97 L
+      __modti3 153/103 L        __divmodti4 206/152 L     __multi3 84/70           __muloti4 1134/1116
+      __floattidf 295/257 L     __floattisf 263/225 L     __floatuntidf 262/224 L  __floatuntisf 230/192 L
+      __fixdfti 248/248 L       __fixsfti 224/224 L       __fixunsdfti 116/116 L   __fixunssfti 113/113 L
+      __clzti2 100/91           total 10,381 / 9,860
+    JIT code (WSL .NET 10, TC=0): __extendhfsf2 230 bytes (IL 197), __truncsfhf2 370 (IL 328), __truncdfhf2 453 (IL 395),
+      __truncsfbf2 332 (IL 303), __truncdfbf2 441 (IL 395).
+
+F4  exhaustive f16/bf16 (f16/f16conv.c; f16/matrix.md has the per-variant table)
+    reference (native Windows, VS compiler-rt):
+      A h->f32 3db7a122e9f79cb7 (65,536)      A h->f64 5d18c4d2fa1b9bc5 (65,536)
+      B f32->h nonNaN 8878cb5d64537be7 (4,278,190,082)   B f32->h NaN b93571acc4784534 (16,777,214)
+      C f64->h bounds b8e0f2adcc2cc9e3 (317,440)  C f64->h dbl-round c807d8058fc3eed2 (63,488)  C random 1c0b3b33cb4cdca8 (16,777,216)
+      D bf16->f32 580f3ec0d9becab4 (65,536)  D f32->bf16 nonNaN ba45373e41c40727  D f32->bf16 NaN fba81c992ffc4751  D f64->bf16 70c28264f3828e3b (12,582,912)
+    identical in every line: native Windows tree compiler-rt; native Linux tree compiler-rt; MSIL compiler-rt helpers on
+      .NET 8, .NET 10, Framework 4.8 (win triple), WSL .NET 8, .NET 10 (lin triple).
+    native Linux libgcc_s: differs in A h->f32 (sNaN quieted), D f32->bf16 NaN (sNaN quieted); equal in B, C, other D.
+    System.Half (helpers patched, .NET 8, .NET 10, WSL .NET 10): differs only in A h->f32 (sNaN quieted); equal in B, C, D.
+    native Windows with -mf16c (F16C instructions): A h->f32 d7f8ac501aca7a66 (= libgcc = System.Half: sNaN quieted).
+    named: half 7c01->f32: crt 7f802000, libgcc/Half 7fc02000; 7d00: 7fa00000 vs 7fe00000; fc01: ff802000 vs ffc02000;
+           f32 7fa00000->bf16: crt 7fa0, libgcc 7fe0; f32 7fa00000->half: 7f00 everywhere.
+    part times (s, one run): native win VS B 45.9 D 49.6; native lin libgcc B 593.7 D 155.1; native lin crt B 72.5 D 62.6;
+      MSIL crt .NET 8 B 53.0 D 85.7; .NET 10 B 60.4 D 67.4; netfx B 78.1 D 48.8; WSL 8 B 75.2 D 94.0; WSL 10 B 79.7 D 78.2;
+      MSIL Half .NET 8 B 40.5 D 54.2; .NET 10 B 47.1 D 45.4; WSL 10 B 76.1 D 93.4.
+
+F5  System.Half
+    ref packs 6.0.36 .. 10.0.14: BitConverter.HalfToInt16Bits/Int16BitsToHalf present in all; UInt128 absent in 6.0,
+      present 7.0+; BFloat16 absent in all. Framework 4.8: patched program -> FileNotFoundException System.Runtime 8.0.0.0.
+    C# halfcheck (all 65,536 halves): "half->float differs from compiler-rt on 1022 of 65536 inputs; sNaN inputs 1022;
+      differing non-sNaN 0" on 8.0.33 and 10.0.14.
+    C# loop 2^30 float->Half: 8,477 ms (.NET 8), 4,959 ms (.NET 10).
+    JIT: patched wrappers are inlined into their callers (absent from DOTNET_JitDisasmSummary).
+    speed of f16/f16bench.c: see timing.txt.
+
+F6  complex (cx/cx.c, cx/complex-probe-Program.cs; matrix = 14^4 operand combinations per operation)
+    hashes (dmul ddiv fmul fdiv): compiler-rt (VS, tree, native Linux tree crt, MSIL on .NET 8/10/netfx/WSL 8/10):
+      107c8b9436f0a493 4806565b30c2a3a0 f6247375efeb0e89 4dd2c19558974ae0
+    native Linux libgcc: 107c8b9436f0a493 b6ebc940dd1cc9c9 f6247375efeb0e89 05bf092e24f3de22
+    MSIL .NET 8 full matrix (153,664 lines) byte-identical to native compiler-rt.
+    differing cases out of 38,416:
+      compiler-rt vs libgcc: dmul 0, ddiv 5,907 (3,653 within 2 ulps), fmul 0, fdiv 139
+      compiler-rt vs .NET 8/10 Complex: dmul 3,896 (1,432 C inf+inf i vs NaN+NaN i; 1,232 C NaN+inf i vs NaN; 1,232 C inf+NaN i vs NaN)
+                                         ddiv 7,343 (968 C 0+0i vs NaN+NaN i; 952 C inf+inf i vs NaN; 3,340 finite values; ...)
+      compiler-rt vs .NET Framework Complex: dmul 3,896, ddiv 8,877 (1,534 NaN sign/payload only)
+      .NET 8 vs .NET Framework Complex: dmul 0, ddiv 1,708 (all NaN sign/payload)
+    named cases: cx/named-compare.md.
+
+F7  complex speed (cx/cxbench.c, cx/complex-bench-Program.cs): see timing.txt.
+
+F8  i128 workload (i128/nt128.c, -O2, lin triple unless noted; all variants print hash 76bb6cb7ad653295 = native)
+    i128 div/rem in -O2 IR: 26 (11 urem var, 8 udiv var, 2 sdiv var, 5 udiv 10); all in main.
+    IL bytes (ildasm Code size) / IL instructions (llvm-cil-dump) / JIT code bytes (WSL .NET 10, TC=0):
+      inline (M12):          main 27,355 / 17,087 / 42,059
+      compiler-rt helpers:   main 8,562 / 5,330 / 11,948; __udivmodti4 1,220 / 804 / 1,562; __umodti3 58 / 44 / 103;
+                             __udivti3 47 / 36 / 85; __divti3 126 / 97 / 213
+      outlined linkonce_odr: main 8,562 / 5,330 / 11,948; __msil_udiv128 914 / 626 / 1,206;
+                             __msil_urem128 1,005 / 697 / 1,321; __msil_sdiv128 1,105 / 697 / 1,348
+      Int128 bodies:         __udivti3 57 IL / 31 bytes JIT; __umodti3 57 / 135; __divti3 57 / 31;
+                             UInt128.DivideSlow 762 IL / 1,196 bytes (CoreLib)
+      inline -O0:            46,140 IL bytes in 27 methods, 22,448 instructions
+    exe sizes: inline 29,184; helper 12,288; Int128 13,312; inline -O0 53,248 bytes.
+    win triple outlined (nt128-outl-win) runs on .NET 8 and Framework 4.8 with the native hash.
+    compiler-rt algorithm as ABI-neutral IR (nt-irhelp-win): udivmodti4.c (patched), udivti3.c, umodti3.c, divti3.c,
+      modti3.c compiled with clang --target=x86_64-unknown-linux-gnu-msil -D__ELF__=1 -O2 -S -emit-llvm (IR keeps
+      i128 parameters), target datalayout/triple replaced by the windows-msvc-msil ones, compiled with -c and linked
+      with nt128-helper-win.ll (i128_to_calls.py on the windows IR): correct on .NET 8 and Framework 4.8, no Win64 issue.
+    speed: see timing.txt.
+
+F9  MinOpts (i128/many20.c, many36.c: 10+10 / 18+18 u128 div+rem by variables in one function)
+    many20 inline: IL 20,226, FullOpts, code 35,118 (.NET 10) / 35,084 (.NET 8)
+    many36 inline: IL 36,470, "Tier-0 switched MinOpts", code 104,840 (.NET 10) / 105,108 (.NET 8)
+    many36 outlined: f IL 2,122 FullOpts code 3,359; __msil_udiv128 914/1,206; __msil_urem128 1,005/1,321
+    speed: see timing.txt.
+
+F10 Int128 helper: scripts/patch_il.py recipe int128 (System.Int128/UInt128 .ctor(uint64, uint64), op_Division,
+    op_Modulus, op_RightShift, op_Explicit -> uint64).
+
+F11 constant divisor: i128/div10.c div10_dag 103 IL instructions vs x/10 473 (ExpandIRInsts, -O2 lin);
+    div10_dag == x/10 on 4,000,000 values (native check). Native x86_64 x/10: 42 lines of assembly, no call.
+    -mllvm -expand-div-rem-bits=128 on u128/10: "error: runtime helper '__udivti3' is not available for MSIL yet (phase 3)"
+    (ReplaceNodeResults reports before the type legalizer's constant expansion).
+
+F12 long double (ld/ma.c; clang -dM -E)
+    alignof(max_align_t), sizeof(max_align_t), alignof(long double), sizeof(struct{char; long double}):
+      x86_64-unknown-linux-gnu-msil 8 16 8 16 | x86_64-unknown-linux-gnu 16 32 16 32
+      x86_64-w64-windows-gnu-msil   8 16 8 16 | x86_64-w64-windows-gnu   16 32 16 32
+      x86_64-pc-windows-msvc-msil   8  8 8 16
+      aarch64-unknown-linux-gnu-msil 8 16 8 16 | aarch64-unknown-linux-gnu 16 32 16 32
+    predefines: all MSIL: __LDBL_MANT_DIG__ 53, __SIZEOF_LONG_DOUBLE__ 8; native x86_64 linux: 64, 16.
+      __SIZEOF_FLOAT128__ 16 and __FLOAT128__ on x86_64-unknown-linux-gnu-msil and x86_64-w64-windows-gnu-msil
+      (not on x86_64-pc-windows-msvc-msil, aarch64-unknown-linux-gnu-msil).
+
+F13 long double consequences
+    ld/ldl.c (glibc sysroot headers, lin triple): IR declares double @sqrtl(double), double @expl(double),
+      double @strtold(ptr, ptr); msil-ld: "native function 'sqrtl' (libm.so.6) takes or returns a value that a
+      P/Invoke cannot pass natively yet (phase 3)", same for expl (libm.so.6), strtold (libc.so.6).
+    ld/ldwrap.c in libldwrap.a linked with ldl.o: links; WSL .NET 10 prints 4038514d6df535d1 / 8 / 0x35 (53);
+      native Linux prints 4038514d6df535d1 / 0x10 / 0x40.
+    ld/ldn2.c native Linux (glibc 2.43): "%Lf given a double (the MSIL argument): nan",
+      "%Lf given a long double: 48.635176", "%Lf given a double again: 48.635176" (expected 97.270352).
+    cx/complex-libm.c: cabs binds (lin: double(double, double); win: double(native int)); cexp:
+      "native function 'cexp' (libm.so.6) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)"
+      and the same with api-ms-win-crt-math-l1-1-0.dll.
+
+F14 HasFloat128 off: glibc sysroot <math.h> parsed with --target=x86_64-pc-windows-msvc-msil -D__linux__:
+      bits/floatn.h:83:52: error: unsupported machine mode '__TC__'
+    `_Float128 q;` (global, no arithmetic) compiles on x86_64-unknown-linux-gnu-msil.

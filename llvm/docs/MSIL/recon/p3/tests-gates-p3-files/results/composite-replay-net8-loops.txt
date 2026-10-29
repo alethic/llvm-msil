@@ -1,0 +1,34 @@
+# Replay of msil/test/M1/03-control/loops.c with the net8 leg parameters, one command at a time,
+# each in its own job object (wall under a host at 100% CPU; cpu = user+kernel of the whole process
+# tree; procs includes the replay bash and its conhost, i.e. 2 more than lit itself starts).
+level step wall_s cpu_s procs
+O0 build(+equiv_link) 2.19 0.56 8
+O0 mkdir 0.52 0.08 3
+O0 clang_-S_(asm_ref) 0.54 0.11 3
+O0 ilasm(asm_ref) 4.61 0.34 4
+O0 verify 14.24 1.11 11
+O0 jitall 1.82 0.45 4
+O0 run_net8 3.69 0.44 4
+O0 jitall_net10 2.97 0.38 4
+O0 run_net10 1.71 0.38 4
+O0 jitall_net8+tc0 1.4 0.31 4
+O0 run_net8+tc0 1.6 0.41 4
+O0 equiv_O3_(msil-equiv.py;_llvm-cil-dump_x2) 13.8 0.83 7
+O0 native-build 6.33 0.5 6
+O0 native-run 3.53 0.3 4
+O0 netfx-run 2.56 0.42 4
+O2 build(+equiv_link) 1.72 0.58 8
+O2 mkdir 1.01 0.03 3
+O2 clang_-S_(asm_ref) 0.75 0.22 3
+O2 ilasm(asm_ref) 3.67 0.39 4
+O2 verify 11.23 0.97 11
+O2 jitall 1.94 0.36 4
+O2 run_net8 1.6 0.36 4
+O2 jitall_net10 2.37 0.38 4
+O2 run_net10 1.69 0.3 4
+O2 jitall_net8+tc0 1.41 0.39 4
+O2 run_net8+tc0 0.95 0.38 4
+O2 equiv_O3_(msil-equiv.py;_llvm-cil-dump_x2) 4.56 0.58 7
+O2 native-build 2.7 0.56 6
+O2 native-run 2.85 0.25 4
+O2 netfx-run 1.37 0.27 4

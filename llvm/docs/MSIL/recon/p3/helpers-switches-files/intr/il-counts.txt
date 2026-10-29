@@ -1,0 +1,36 @@
+# IL instructions per function of intr.c (without roundeven_ and lround_, which -S rejects: 'library call roundeven is not a Phase-1 import', 'undefined function lround ...'), clang -O2 -ffreestanding -S, identical on both x86_64 MSIL triples; then the calls and localloc in the body
+popc32         30
+popc64         36
+clz32          61
+clz64          73
+ctz32          37
+ctz64          44
+bswap32        20
+bswap64        50
+rotl32         13
+rotl64         13
+rotl32c         8
+fshl32         15
+fmin_           4 call float64 'fmin'(float64, float64)
+fmax_           4 call float64 'fmax'(float64, float64)
+fminimum_      25
+fminf_          4 call float32 'fminf'(float32, float32)
+round_          3 call float64 'round'(float64)
+trunc_          3 call float64 'trunc'(float64)
+floor_          3 call float64 'floor'(float64)
+rint_           3 call float64 'rint'(float64)
+nearbyint_      3 call float64 'nearbyint'(float64)
+copysign_      43 localloc
+copysignf_     41 localloc
+fabs_          22 localloc
+fma_            5 call float64 'fma'(float64, float64, float64)
+sqrt_           3 call float64 'sqrt'(float64)
+d2u            15 localloc
+u2d            15 localloc
+f2u            15 localloc
+u2f            15 localloc
+isnan_          6
+isinf_         21 localloc
+signbit_       18 localloc
+parity32       32
+bitrev32       56

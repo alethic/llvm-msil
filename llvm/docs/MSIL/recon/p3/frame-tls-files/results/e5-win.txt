@@ -1,0 +1,48 @@
+--- net48
+runtime 4.0.30319.42000 (.NET Framework 4.8.9363.0) threads=2000 kind=managed mode=none block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 0
+memory (private bytes): +68.4 KiB/thread after the threads, +68.3 KiB/thread after GC+finalizers (total 133.4 MiB)
+--- net8
+runtime 8.0.33 (.NET 8.0.33) threads=2000 kind=managed mode=none block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 0
+memory (private bytes): +67.6 KiB/thread after the threads, +67.1 KiB/thread after GC+finalizers (total 131.1 MiB)
+--- net10
+runtime 10.0.14 (.NET 10.0.14) threads=2000 kind=managed mode=none block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 0
+memory (private bytes): +66.8 KiB/thread after the threads, +66.4 KiB/thread after GC+finalizers (total 129.7 MiB)
+--- net48
+runtime 4.0.30319.42000 (.NET Framework 4.8.9363.0) threads=2000 kind=managed mode=holder block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 2000
+memory (private bytes): +5.0 KiB/thread after the threads, +2.6 KiB/thread after GC+finalizers (total 5.1 MiB)
+--- net8
+runtime 8.0.33 (.NET 8.0.33) threads=2000 kind=managed mode=holder block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 2000
+memory (private bytes): +19.3 KiB/thread after the threads, +1.7 KiB/thread after GC+finalizers (total 3.4 MiB)
+--- net10
+runtime 10.0.14 (.NET 10.0.14) threads=2000 kind=managed mode=holder block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 2000
+memory (private bytes): +18.2 KiB/thread after the threads, +0.9 KiB/thread after GC+finalizers (total 1.7 MiB)
+--- net48
+runtime 4.0.30319.42000 (.NET Framework 4.8.9363.0) threads=2000 kind=native mode=none block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 0
+memory (private bytes): +68.1 KiB/thread after the threads, +68.1 KiB/thread after GC+finalizers (total 132.9 MiB)
+--- net8
+runtime 8.0.33 (.NET 8.0.33) threads=2000 kind=native mode=none block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 0
+memory (private bytes): +66.9 KiB/thread after the threads, +66.4 KiB/thread after GC+finalizers (total 129.8 MiB)
+--- net10
+runtime 10.0.14 (.NET 10.0.14) threads=2000 kind=native mode=none block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 0
+memory (private bytes): +66.6 KiB/thread after the threads, +66.1 KiB/thread after GC+finalizers (total 129.2 MiB)
+--- net48
+runtime 4.0.30319.42000 (.NET Framework 4.8.9363.0) threads=2000 kind=native mode=holder block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 2000
+memory (private bytes): +18.2 KiB/thread after the threads, +1.7 KiB/thread after GC+finalizers (total 3.3 MiB)
+--- net8
+runtime 8.0.33 (.NET 8.0.33) threads=2000 kind=native mode=holder block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 2000
+memory (private bytes): +17.0 KiB/thread after the threads, +2.0 KiB/thread after GC+finalizers (total 3.8 MiB)
+--- net10
+runtime 10.0.14 (.NET 10.0.14) threads=2000 kind=native mode=holder block=64 KiB
+allocated 2000, distinct per-thread values 2000, freed by finalizers 2000
+memory (private bytes): +16.9 KiB/thread after the threads, +2.3 KiB/thread after GC+finalizers (total 4.5 MiB)

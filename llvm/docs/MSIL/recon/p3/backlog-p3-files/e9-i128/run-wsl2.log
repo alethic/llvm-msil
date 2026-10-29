@@ -1,0 +1,6 @@
+== WSL .NET 8
+stk7(i128,pad) lo=12 hi=1
+exit=42 (expect 42)
+== WSL .NET 10
+stk7(i128,pad) lo=12 hi=1
+exit=42 (expect 42)

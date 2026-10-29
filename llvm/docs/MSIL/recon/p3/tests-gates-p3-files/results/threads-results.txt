@@ -1,0 +1,33 @@
+# threads.c (native) and Threads.cs (CLR) results, 2026-10-28, host at ~100% CPU from other work.
+# Windows native: build/bin/clang --target=x86_64-pc-windows-msvc -fuse-ld=lld (-O0 and -O2).
+# Linux native: E7 link (start.c, ld.lld, the E7 sysroot's libc.so.6), run in WSL Ubuntu.
+# CLR: Threads.exe built once by the .NET Framework csc (/unsafe /platform:x64), run directly
+# (Framework 4.8) and through 'dotnet exec --runtimeconfig' on .NET 8.0.33 / 10.0.14 (Windows) and
+# the private WSL runtimes 8.0.31 / 10.0.13.
+
+## atomicity: 4 threads x 1,000,000 increments of one cell
+native win -O0/-O2 atomic      4000000 (expected 4000000), exit 0
+native linux -O0/-O2 atomic    4000000 (expected 4000000), exit 0
+CLR Interlocked net48/8/10     4000000 (expected 4000000), exit 0 (Windows 678/692/1049 ms; WSL net8/10 70/53 ms)
+native win plain (-O2, 20 runs)   lost 15,767 .. 2,403,986 of 4,000,000 in every run
+native win plain (2 thr x 10,000) lost >0 in 15 of 20 runs (0 .. 5,461)
+native linux plain -O0/-O2        lost 2,009,912 / 2,031,714
+CLR plain (Volatile.Read/Write, not atomic) net48 742,875; net8 1,907,947; net10 1,781,544 (Windows);
+                                  WSL net8 692,155; net10 2,386,827 lost
+
+## TLS: N threads bump a _Thread_local / [ThreadStatic] counter; main checks each thread's result,
+## that the addresses are distinct and that main's own copy is unchanged
+native win/linux, with a barrier (all threads alive when addresses are compared):
+                                  0 of 20 (win -O0, -O2, 4x1e6 and 8x1e5) and 0 of 20 (linux) failed
+native win, without the barrier:  first run at -O0 (4x1e6) failed 'addresses distinct 0';
+                                  then 1 of 20 (-O2, 4x1e6) and 0 of 20 (-O0) failed: the runtime reuses
+                                  an exited thread's TLS block, so the check is flaky without a barrier
+CLR [ThreadStatic] net48/8/10 and WSL net8/10: 4 threads, 0 wrong, main's value unchanged
+
+## ping-pong: two threads pass a token through a seq_cst atomic 1,000,000 times
+native win/linux -O0/-O2: 1000000 rounds, token 0, exit 0
+
+## hosted Linux oracle 'E7h' (glibc sysroot's crt1.o, crti.o, crtn.o and -lc = libc.so.6 +
+## libc_nonshared.a, -nostartfiles -nodefaultlibs, ld.lld), atexit.c:
+main returns 42 / second registered, runs first / first registered, runs last / destructor, exit 0
+(the E7 start.c cannot link atexit: libc.so.6 does not export it; it runs no .fini_array)

@@ -1,0 +1,2 @@
+WSL .NET 8 pinv16 exit=42 (expect 42)
+WSL .NET 10 pinv16 exit=42 (expect 42)

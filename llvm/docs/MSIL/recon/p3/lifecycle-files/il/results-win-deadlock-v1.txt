@@ -1,0 +1,276 @@
+=== net48 ret
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] main returns 300
+[tid 1] exit called
+[tid 1] atexit h2 (registered 2nd)
+[tid 1] atexit h1 (registered 1st)
+[tid 1] program destructor
+[tid 1] plib: plib atexit handler
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler: exit already started, nothing to do
+status=300
+=== net48 exit3
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] exit called
+[tid 1] atexit h2 (registered 2nd)
+[tid 1] atexit h1 (registered 1st)
+[tid 1] program destructor
+[tid 1] plib: plib atexit handler
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler: exit already started, nothing to do
+status=3
+=== net48 libexit
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] plib: exit called
+[tid 1] plib: plib atexit handler
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler -> fini
+[tid 2] atexit h2 (registered 2nd)
+[tid 2] atexit h1 (registered 1st)
+[tid 2] program destructor
+status=5
+=== net48 nested
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] main returns 300
+[tid 1] exit called
+[tid 1] atexit h2 (registered 2nd)
+[tid 1] h2 registers h_late
+[tid 1] atexit h_late (registered during exit)
+[tid 1] atexit h1 (registered 1st)
+[tid 1] program destructor
+[tid 1] plib: plib atexit handler
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler: exit already started, nothing to do
+status=300
+=== net48 exitinhandler
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] main returns 300
+[tid 1] exit called
+[tid 1] atexit h2 (registered 2nd)
+[tid 1] h2 calls exit(9)
+[tid 1] exit called
+[tid 1] atexit h1 (registered 1st)
+[tid 1] program destructor
+[tid 1] plib: plib atexit handler
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler: exit already started, nothing to do
+status=9
+=== net48 thread
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] main starts a thread that calls exit(4), then sleeps 5 s
+[tid 3] exit called
+[tid 3] atexit h2 (registered 2nd)
+[tid 3] atexit h1 (registered 1st)
+[tid 3] program destructor
+[tid 3] plib: plib atexit handler
+[tid 3] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler: exit already started, nothing to do
+status=4
+=== net8.0 ret
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] main returns 300
+[tid 1] exit called
+[tid 1] atexit h2 (registered 2nd)
+[tid 1] atexit h1 (registered 1st)
+[tid 1] program destructor
+[tid 1] plib: plib atexit handler
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler: exit already started, nothing to do
+status=300
+=== net8.0 exit3
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] exit called
+[tid 1] atexit h2 (registered 2nd)
+[tid 1] atexit h1 (registered 1st)
+[tid 1] program destructor
+[tid 1] plib: plib atexit handler
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler: exit already started, nothing to do
+status=3
+=== net8.0 libexit
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] plib: exit called
+[tid 1] plib: plib atexit handler
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler -> fini
+[tid 2] atexit h2 (registered 2nd)
+[tid 2] atexit h1 (registered 1st)
+[tid 2] program destructor
+status=5
+=== net8.0 nested
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] main returns 300
+[tid 1] exit called
+[tid 1] atexit h2 (registered 2nd)
+[tid 1] h2 registers h_late
+[tid 1] atexit h_late (registered during exit)
+[tid 1] atexit h1 (registered 1st)
+[tid 1] program destructor
+[tid 1] plib: plib atexit handler
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler: exit already started, nothing to do
+status=300
+=== net8.0 exitinhandler
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] main returns 300
+[tid 1] exit called
+[tid 1] atexit h2 (registered 2nd)
+[tid 1] h2 calls exit(9)
+[tid 1] exit called
+[tid 1] atexit h1 (registered 1st)
+[tid 1] program destructor
+[tid 1] plib: plib atexit handler
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler: exit already started, nothing to do
+status=9
+=== net8.0 thread
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] main
+[tid 1] plib: plib: lib_register calls atexit(lib_h)
+[tid 1] main starts a thread that calls exit(4), then sleeps 5 s
+[tid 4] exit called
+[tid 4] atexit h2 (registered 2nd)
+[tid 4] atexit h1 (registered 1st)
+[tid 4] program destructor
+[tid 4] plib: plib atexit handler
+[tid 4] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+[tid 2] ProcessExit handler: exit already started, nothing to do
+status=4
+=== net10.0 ret
+[tid 2] plib: plib constructor
+[tid 2] program constructor
+[tid 2] main
+[tid 2] plib: plib: lib_register calls atexit(lib_h)
+[tid 2] main returns 300
+[tid 2] exit called
+[tid 2] atexit h2 (registered 2nd)
+[tid 2] atexit h1 (registered 1st)
+[tid 2] program destructor
+[tid 2] plib: plib atexit handler
+[tid 2] plib: plib destructor
+[tid 1] plib: ProcessExit handler: exit already started, nothing to do
+[tid 1] ProcessExit handler: exit already started, nothing to do
+status=300
+=== net10.0 exit3
+[tid 2] plib: plib constructor
+[tid 2] program constructor
+[tid 2] main
+[tid 2] plib: plib: lib_register calls atexit(lib_h)
+[tid 2] exit called
+[tid 2] atexit h2 (registered 2nd)
+[tid 2] atexit h1 (registered 1st)
+[tid 2] program destructor
+[tid 2] plib: plib atexit handler
+[tid 2] plib: plib destructor
+[tid 1] plib: ProcessExit handler: exit already started, nothing to do
+[tid 1] ProcessExit handler: exit already started, nothing to do
+status=3
+=== net10.0 libexit
+[tid 2] plib: plib constructor
+[tid 2] program constructor
+[tid 2] main
+[tid 2] plib: plib: lib_register calls atexit(lib_h)
+[tid 2] plib: exit called
+[tid 2] plib: plib atexit handler
+[tid 2] plib: plib destructor
+[tid 1] plib: ProcessExit handler: exit already started, nothing to do
+[tid 1] ProcessExit handler -> fini
+[tid 1] atexit h2 (registered 2nd)
+[tid 1] atexit h1 (registered 1st)
+[tid 1] program destructor
+status=5
+=== net10.0 nested
+[tid 2] plib: plib constructor
+[tid 2] program constructor
+[tid 2] main
+[tid 2] plib: plib: lib_register calls atexit(lib_h)
+[tid 2] main returns 300
+[tid 2] exit called
+[tid 2] atexit h2 (registered 2nd)
+[tid 2] h2 registers h_late
+[tid 2] atexit h_late (registered during exit)
+[tid 2] atexit h1 (registered 1st)
+[tid 2] program destructor
+[tid 2] plib: plib atexit handler
+[tid 2] plib: plib destructor
+[tid 1] plib: ProcessExit handler: exit already started, nothing to do
+[tid 1] ProcessExit handler: exit already started, nothing to do
+status=300
+=== net10.0 exitinhandler
+[tid 2] plib: plib constructor
+[tid 2] program constructor
+[tid 2] main
+[tid 2] plib: plib: lib_register calls atexit(lib_h)
+[tid 2] main returns 300
+[tid 2] exit called
+[tid 2] atexit h2 (registered 2nd)
+[tid 2] h2 calls exit(9)
+[tid 2] exit called
+[tid 2] atexit h1 (registered 1st)
+[tid 2] program destructor
+[tid 2] plib: plib atexit handler
+[tid 2] plib: plib destructor
+[tid 1] plib: ProcessExit handler: exit already started, nothing to do
+[tid 1] ProcessExit handler: exit already started, nothing to do
+status=9
+=== net10.0 thread
+[tid 2] plib: plib constructor
+[tid 2] program constructor
+[tid 2] main
+[tid 2] plib: plib: lib_register calls atexit(lib_h)
+[tid 2] main starts a thread that calls exit(4), then sleeps 5 s
+[tid 4] exit called
+[tid 4] atexit h2 (registered 2nd)
+[tid 4] atexit h1 (registered 1st)
+[tid 4] program destructor
+[tid 4] plib: plib atexit handler
+[tid 4] plib: plib destructor
+[tid 1] plib: ProcessExit handler: exit already started, nothing to do
+[tid 1] ProcessExit handler: exit already started, nothing to do
+status=4

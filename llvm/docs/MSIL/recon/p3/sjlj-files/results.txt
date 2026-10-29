@@ -1,0 +1,115 @@
+sjlj recon (P3-B setjmp/longjmp): measured results, 2026-10-28, HEAD cc4c79787d6a, shared build D:\llvm-msil\build.
+Host: Windows 11, 4 cores / 8 threads, shared and under load (CPU LoadPercentage 100 during the timings):
+treat the absolute numbers as +-30 %, the ratios as meaningful. Scratch: C:\llvm-msil-scratch\p3\sjlj.
+Runtimes: .NET Framework 4.8.9363.0 (CLR 4.0.30319.42000); Windows .NET 8.0.33, .NET 10.0.14;
+WSL Ubuntu 26.04.1 private .NET 8.0.31, .NET 10.0.13 (msil-wsl-dotnet.sh). 'dotnet exec --runtimeconfig'
+with scripts/runtimeconfig.net8.json / .net10.json.
+
+== 1. Today (today/*.c) ==================================================================
+x86_64-unknown-linux-gnu-msil (--sysroot glibc-sysroot):
+  setjmp(b)            -> call i32 @_setjmp(ptr)        (glibc's setjmp macro)          returns_twice nounwind
+  sigsetjmp(b, 1)      -> call i32 @__sigsetjmp(ptr, i32 1)
+  longjmp/_longjmp/siglongjmp -> @longjmp/@_longjmp/@siglongjmp(ptr, i32)          noreturn nounwind
+  -D_FORTIFY_SOURCE=2: every longjmp flavour -> @__longjmp_chk(ptr, i32)
+  clang -S sj1.c: "undefined function '_setjmp' ... is not a Phase-1 import" (and 'longjmp'), plus the printf
+                  variadic error
+  clang -c sj3.c: NO diagnostic; llvm-nm: U __sigsetjmp, U _setjmp, U siglongjmp
+  clang sj4.c -o sj4.linux.exe (msil-ld): links; P/Invokes '_setjmp' and 'longjmp' from libc.so.6;
+                  WSL .NET 8: prints "ok", exit 0  (native longjmp across managed frames, works by accident)
+  bench.c (global jmp_buf) and bench2.c (local jmp_buf, localloc frame), today's native binding, WSL:
+                  .NET 8  : 30M round trips 4.05 s - 1.21 s (n=0)  = ~95 ns per round trip, "ok"
+                  .NET 10 : 30M round trips 2.94 s - 1.67 s (n=0)  = ~43 ns per round trip, "ok"
+                  bench2 1M: "ok" on .NET 8 and .NET 10
+x86_64-pc-windows-msvc-msil:
+  setjmp(b)            -> %0 = call ptr @llvm.frameaddress.p0(i32 0); call i32 @_setjmp(ptr @b, ptr %0)
+  clang -c / -S        : "error: llvm.frameaddress is not supported for MSIL yet (phase 3 shadow stack)"
+  bench3.c (asm labels force _setjmp(buf, 0)/longjmp): msil-ld "undefined symbol: _setjmp", "undefined
+                  symbol: longjmp" (vcruntime is not a default library; --ucrtbase-imports lacks them)
+aarch64-pc-windows-msvc-msil:
+  setjmp(b)            -> %0 = call ptr @llvm.sponentry.p0(); call i32 @_setjmpex(ptr @b, ptr %0)
+__builtin_setjmp/__builtin_longjmp (sj2.c), Linux triple -c:
+  error: llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 setjmp/longjmp)
+  error: llvm.stacksave is not supported for MSIL yet (phase 3 shadow stack)
+  error: llvm.frameaddress is not supported for MSIL yet (phase 3 shadow stack)
+  error: llvm.eh.sjlj.longjmp is not supported for MSIL yet (phase 3 setjmp/longjmp)
+sizeof/alignof(jmp_buf) (size.c):
+  x86_64-pc-windows-msvc(-msil) 256 / 16     aarch64-pc-windows-msvc-msil 192 / 8
+  x86_64-unknown-linux-gnu(-msil) 200 / 8    (sigjmp_buf 200)
+
+== 2. CLR semantics (il/sem.il + il/thrower.il + il/Mid.cs), identical on all five runtimes ==
+test 1: IL frame, throw two frames deeper (assembly 'thrower' throws a boxed IntPtr, assembly 'sem' filters)
+  IL filter matched the boxed IntPtr
+  a (set to 22 in the try) = 22              <- IL local written in the try survives into handler and after
+  flt (local written by the filter) = 1      <- a filter may write locals of its frame
+  *st (frame memory written by the filter) = 85   <- and localloc memory of its frame
+  caught = 1
+test 2: a C# frame in between (filter declining, finally)
+  C# filter sees System.Runtime.CompilerServices.RuntimeWrappedException
+  IL filter matched the boxed IntPtr         <- pass 1: C# filter, then ours
+  C# finally ran                             <- pass 2
+test 3: a C# catch(Exception) + throw; in between
+  C# catch(Exception) got System.Runtime.CompilerServices.RuntimeWrappedException; rethrow
+  IL filter matched the boxed IntPtr         <- 'throw;' rethrows the original (unwrapped) object
+tests 5-6: non-matching exceptions pass
+  LjSub <- type the outer catch got; the inner filter declined
+  outer (st1) caught its longjmp; inner (st2) declined
+unhandled boxed IntPtr: "Unhandled exception. System.Runtime.CompilerServices.RuntimeWrappedException: An
+  object that does not derive from System.Exception has been wrapped in a RuntimeWrappedException."
+  exit 0xE0434352 (Framework, .NET 8, .NET 10 Windows), SIGABRT 134 (WSL .NET 8)
+localloc inside .try (il2, not copied): works on Framework, .NET 8, .NET 10 ("localloc inside .try: 42")
+
+== 3. Exception object cost (sem.exe perf N): ns per throw+filter+catch round trip, depth = frames
+      between the wrapper and the throw ======================================================
+                              Framework   .NET 8 W   .NET 10 W   .NET 8 L    .NET 10 L
+boxed IntPtr          d1        32214      25412       7473       71967       16261   (rerun L8: 68188)
+Exception subclass    d1        25964      23670       6938       39207       14303   (rerun L8: 46447)
+ExternalException(hr) d1        24205      21922       6378       39676       15426   (rerun L8: 42523)
+AOORE(ActualValue)    d1        23809      21398       7929       43753       15901   (rerun L8: 44635)
+cached subclass obj   d1        24167      20141       6436       65479       15102   (rerun L8: 43365)
+boxed IntPtr          d10       54710      57838      15525      112965       26080
+Exception subclass    d10       44589      44931      14213       64996       27572
+ExternalException(hr) d10       44214      47878      12920       78539       29729
+cached subclass obj   d10       47424      49586      14924       78295       29565
+
+== 4. End-to-end prototype (proto/proto.c = bench.c in the post-pass shape, compiled by the real
+      backend with -O2 -S, wrapper and throw stub patched by patch-proto.py, ilasm 4.8) =========
+correctness: "ok" for n=8 and n=1M on Framework, .NET 8/10 Windows (x86_64-pc-windows-msvc-msil IL)
+             and .NET 8/10 WSL (x86_64-unknown-linux-gnu-msil IL); call-variant and inline-filter variant
+1M round trips, wall time minus the n=0 run:
+  native clang -O2 + UCRT longjmp (x64, RtlUnwind-based)   2.45 s - 0.52 s  = ~1.9-2.7 us / round trip
+                                                            (10M: 27.19 s)
+  native clang -O2 + glibc (WSL)                           100M: 6.96 s - 0.49 s = ~65 ns / round trip
+                                                            (10M: 1.42 s)
+  E1 prototype, .NET Framework 4.8                         28.07 s - 0.75 s = ~27 us
+  E1 prototype, .NET 8 Windows                             26.54 s - 0.30 s = ~26 us
+  E1 prototype, .NET 10 Windows                             7.35 s - 0.77 s = ~6.6 us
+  E1 prototype, .NET 8 WSL                                 44.71 s - 0.44 s = ~44 us
+  E1 prototype, .NET 10 WSL                                 8.65 s - 0.17 s = ~8.5 us
+Normal-path cost of a wrapped call (proto/proto2.c, 1e9 calls of a 2-argument function, two runs):
+  Framework  direct 6.97 / 3.14 s   wrapped 11.22 / 11.85 s   -> ~5-8 ns per wrapped call
+  .NET 8     direct 6.59 / 6.32 s   wrapped  8.72 /  9.94 s   -> ~2-3.5 ns
+  .NET 10    direct 5.20 / 4.90 s   wrapped  6.97 /  5.94 s   -> ~1-2 ns
+ILVerify 8.0 on the prototype: the wrapper with .try/filter verifies except StackByRef on 'ldind.i4' of the
+  native int status pointer (allowed code, D21); no new error codes.
+
+== 5. Exceptions through native frames (qsort/Program.cs: comparator throws on its 5th call) ========
+                                   Framework  .NET 8 W   .NET 10 W   .NET 8 L    .NET 10 L
+native qsort, delegate thunk        caught     caught     caught      abort 134   abort 134
+native qsort, UnmanagedCallersOnly  n/a        caught     caught      abort 134   abort 134
+calli unmanaged -> delegate thunk   caught     caught     caught      abort 134   caught
+calli unmanaged -> UCO thunk        n/a        caught     caught      abort 134   caught
+("caught": the C# filter below qsort ran, the second sort and GC.Collect succeeded; "abort 134":
+ "Unhandled exception. LjEx: longjmp" then SIGABRT, although a matching handler exists)
+
+== 6. Programs (scan/sjscan.py over clang -O2 -S -emit-llvm, x86_64-unknown-linux-gnu-msil) ==========
+see scan/results.txt. Lua 5.4.7 (-DLUA_USE_LINUX: _setjmp/_longjmp): 1 setjmp function, 1 indirect call.
+libpng 1.6.44: png_set_longjmp_fn(png_ptr, longjmp, 200) takes longjmp's ADDRESS (png_jmpbuf macro);
+  pngtest test_one_file: 2 setjmp sites, 140 calls after setjmp, 81 distinct direct callees.
+libjpeg-turbo 3.0.4: setjmp( in turbojpeg.c 17, turbojpeg-mp.c 6, example.c 5, cjpeg.c 2, jcstest.c 2.
+SQLite 3.47.0 amalgamation: no setjmp/longjmp. c-testsuite (879 files in the cache): none.
+zlib 1.3.2 contrib: puff.c (1 site, 17 calls after), blast.c (1 site, 21 calls, 9 indirect),
+  minizip zip.c, examples/gzlog.c. tinf test/greatest.h: only with -DGREATEST_USE_LONGJMP=1.
+
+== 7. Semantics suite, native (tests/sjlj-semantics.c) ==============================================
+Linux clang -O0 and -O2 + glibc: identical output (sjlj-semantics.linux.expected).
+Windows clang -O0 and -O2 + UCRT: identical; differs from Linux only in sizeof(jmp_buf) (256 vs 200).

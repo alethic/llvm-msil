@@ -1,0 +1,55 @@
+# E1 retarget artifacts at HEAD cc4c79787d6a (build/bin clang and llc); stderr, -O2 -ffreestanding -c
+== clang --target=x86_64-pc-windows-msvc-msil -O2 -ffreestanding -c pause.c
+pause.c:2:5: error: intrinsic 'llvm.x86.sse2.pause' is not supported for MSIL
+pause.c:3:5: error: intrinsic 'llvm.x86.sse2.pause' is not supported for MSIL
+2 errors generated.
+[exit 1]
+== clang --target=x86_64-pc-windows-msvc-msil -O2 -ffreestanding -c fastfail.c
+fastfail.c:2:19: error: builtin is not supported on this target
+1 error generated.
+[exit 1]
+== clang --target=x86_64-pc-windows-msvc-msil -O2 -ffreestanding -c rustff.c
+rustff.c:3:24: error: inline assembly is not supported for the MSIL target 'x86_64-pc-windows-msvc19.33.0-msil'
+1 error generated.
+[exit 1]
+== clang --target=x86_64-pc-windows-msvc-msil -O2 -ffreestanding -c dispatch.c
+dispatch.c:4:10: error: intrinsic 'llvm.x86.sse42.crc32.32.32' is not supported for MSIL
+1 error generated.
+[exit 1]
+== clang --target=x86_64-pc-windows-msvc-msil -O2 -ffreestanding -c cpu.c
+[exit 0]
+== clang --target=x86_64-unknown-linux-gnu-msil -O2 -ffreestanding -c pause.c
+pause.c:2:5: error: intrinsic 'llvm.x86.sse2.pause' is not supported for MSIL
+pause.c:3:5: error: intrinsic 'llvm.x86.sse2.pause' is not supported for MSIL
+2 errors generated.
+[exit 1]
+== clang --target=x86_64-unknown-linux-gnu-msil -O2 -ffreestanding -c fastfail.c
+D:\llvm-msil\build\lib\clang\24\include\intrin.h:12:15: fatal error: 'intrin.h' file not found
+1 error generated.
+[exit 1]
+== clang --target=x86_64-unknown-linux-gnu-msil -O2 -ffreestanding -c rustff.c
+rustff.c:3:24: error: inline assembly is not supported for the MSIL target 'x86_64-unknown-linux-gnu-msil'
+1 error generated.
+[exit 1]
+== clang --target=x86_64-unknown-linux-gnu-msil -O2 -ffreestanding -c dispatch.c
+dispatch.c:4:10: error: intrinsic 'llvm.x86.sse42.crc32.32.32' is not supported for MSIL
+1 error generated.
+[exit 1]
+== clang --target=x86_64-unknown-linux-gnu-msil -O2 -ffreestanding -c cpu.c
+[exit 0]
+== llvm-nm cpu.x86_64-pc-windows-msvc-msil.o
+         U __cpu_model
+180002000 T has_avx2
+180002000 T main
+== msil-ld --target=x86_64-pc-windows-msvc-msil cpu.o
+msil-ld: error: undefined symbol: __cpu_model
+>>> referenced by cpu.x86_64-pc-windows-msvc-msil.o:(main)
+[exit 1]
+== llc -mtriple=x86_64-pc-windows-msvc-msil rust-artifacts.ll
+error: <unknown>:0:0: in function spin_hint void (): intrinsic 'llvm.x86.sse2.pause' is not supported for MSIL
+error: <unknown>:0:0: in function fastfail void (i32): inline assembly is not supported for MSIL
+[exit 1]
+== llc -mtriple=x86_64-unknown-linux-gnu-msil rust-artifacts.ll
+error: <unknown>:0:0: in function spin_hint void (): intrinsic 'llvm.x86.sse2.pause' is not supported for MSIL
+error: <unknown>:0:0: in function fastfail void (i32): inline assembly is not supported for MSIL
+[exit 1]

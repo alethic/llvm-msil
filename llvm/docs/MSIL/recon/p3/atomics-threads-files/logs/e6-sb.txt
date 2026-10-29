@@ -1,0 +1,34 @@
+# E6a store buffering, 2,000,000 rounds: count of r0 == r1 == 0
+## sc (win)
+[net48] r0 == r1 == 0 seen:
+ 0
+
+[net8] r0 == r1 == 0 seen:
+ 0
+
+[net10] r0 == r1 == 0 seen:
+ 0
+
+[net8 TC=0] r0 == r1 == 0 seen:
+ 0
+
+## relacq (win)
+[net48] r0 == r1 == 0 seen:
+ 23801
+
+[net8] r0 == r1 == 0 seen:
+ 6463
+
+[net10] r0 == r1 == 0 seen:
+ 36985
+
+[net8 TC=0] r0 == r1 == 0 seen:
+ 32708
+
+## WSL and native Linux
+wsl net8 sc: 0
+wsl net10 sc: 0
+native linux sc: 0
+wsl net8 relacq: 80852
+wsl net10 relacq: 46300
+native linux relacq: 105177

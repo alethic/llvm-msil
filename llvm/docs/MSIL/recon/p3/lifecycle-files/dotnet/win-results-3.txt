@@ -1,0 +1,41 @@
+=== net48 tick
+[   69 ms main] Main: mode=tick runtime=.NET Framework 4.8.9363.0
+[  169 ms main] Main returns 7
+[  185 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  484 ms thread 2 bg] A tick 1
+[  788 ms thread 2 bg] A tick 2
+[ 1103 ms thread 2 bg] A tick 3
+[ 1385 ms thread 2 bg] A tick 4
+[ 1699 ms thread 2 bg] A tick 5
+[ 1970 ms thread 2 bg] A tick 6
+[ 2243 ms thread 2 bg] A tick 7
+[ 2526 ms thread 2 bg] A tick 8
+status=7 (0x00000007) wall=6010 ms
+=== net48 tick-envexit
+[   38 ms main] Main: mode=tick-envexit runtime=.NET Framework 4.8.9363.0
+[  220 ms main] Environment.Exit(7)
+[  234 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  609 ms thread 2 bg] A tick 1
+[  906 ms thread 2 bg] A tick 2
+[ 1284 ms thread 2 bg] A tick 3
+[ 1587 ms thread 2 bg] A tick 4
+[ 1882 ms thread 2 bg] A tick 5
+[ 2174 ms thread 2 bg] A tick 6
+[ 2453 ms thread 2 bg] A tick 7
+[ 2716 ms thread 2 bg] A tick 8
+status=7 (0x00000007) wall=4398 ms
+=== net48 tick2
+[   21 ms main] Main: mode=tick2 runtime=.NET Framework 4.8.9363.0
+[   53 ms main] Main returns 7
+[   87 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  387 ms thread 2 bg] A tick 1
+[  652 ms thread 2 bg] A tick 2
+[  932 ms thread 2 bg] A tick 3
+[ 1236 ms thread 2 bg] A tick 4
+[ 1549 ms thread 2 bg] A tick 5
+[ 1846 ms thread 2 bg] A tick 6
+[ 1846 ms thread 2 bg] ProcessExit handler A end
+[ 1847 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+[ 2127 ms thread 2 bg] B tick 1
+[ 2408 ms thread 2 bg] B tick 2
+status=7 (0x00000007) wall=3252 ms

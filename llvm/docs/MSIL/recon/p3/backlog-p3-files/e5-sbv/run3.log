@@ -1,0 +1,6 @@
+link exit=0
+Framework 4.8 exit=42 (expect 42)
+.NET 8 Windows exit=42 (expect 42)
+linux link exit=0
+WSL .NET 8 exit=1 (expect 42)
+WSL .NET 8 sret24 exit=42 (expect 42)

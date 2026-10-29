@@ -1,0 +1,32 @@
+=== wsl net8.0 exit-in-callback
+[   11 ms main] Main: mode=exit-in-callback runtime=.NET 8.0.31
+[   47 ms main] calling native qsort
+[   47 ms main] qsort comparator (reverse P/Invoke) calls Environment.Exit(6)
+[   49 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=6)
+[   49 ms thread 2 bg] ProcessExit handler A end
+[   50 ms thread 2 bg] ProcessExit handler B (ExitCode=6)
+status=6 wall=2267 ms
+=== wsl net8.0 exit-on-native-thread
+[    3 ms main] Main: mode=exit-on-native-thread runtime=.NET 8.0.31
+[   24 ms main] main sleeps 10 s
+[   25 ms thread 4 bg] native thread (reverse P/Invoke) calls Environment.Exit(8)
+[   29 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=8)
+[   29 ms thread 2 bg] ProcessExit handler A end
+[   29 ms thread 2 bg] ProcessExit handler B (ExitCode=8)
+status=8 wall=1246 ms
+=== wsl net10.0 exit-in-callback
+[    0 ms main] Main: mode=exit-in-callback runtime=.NET 10.0.13
+[   59 ms main] calling native qsort
+[   60 ms main] qsort comparator (reverse P/Invoke) calls Environment.Exit(6)
+[   62 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=6)
+[   62 ms thread 2 bg] ProcessExit handler A end
+[   62 ms thread 2 bg] ProcessExit handler B (ExitCode=6)
+status=6 wall=1614 ms
+=== wsl net10.0 exit-on-native-thread
+[    0 ms main] Main: mode=exit-on-native-thread runtime=.NET 10.0.13
+[   60 ms main] main sleeps 10 s
+[   61 ms thread 4 bg] native thread (reverse P/Invoke) calls Environment.Exit(8)
+[   63 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=8)
+[   63 ms thread 2 bg] ProcessExit handler A end
+[   63 ms thread 2 bg] ProcessExit handler B (ExitCode=8)
+status=8 wall=2995 ms

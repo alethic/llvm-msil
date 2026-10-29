@@ -1,0 +1,16 @@
+### zlib win -O2: clang -c (objects)
+failing (4): example gzlib gzwrite minigzip
+    4  stdio.h: error: variadic function definitions are not supported for MSIL yet   [example,gzlib,minigzip]
+    2  gzlib.c: error: calls to variadic functions are not supported for MSIL yet   [gzlib]
+    1  example.c: error: calls to variadic functions are not supported for MSIL yet   [example]
+    1  gzwrite.c: error: variadic function definitions are not supported for MSIL yet   [gzwrite]
+### msil-ld LTO link (-flto bitcode)
+failing (2): example minigzip
+    2  msil-ld: error: <unknown>: in function fprintf i32 (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [example,minigzip]
+    2  msil-ld: error: <unknown>: in function gz_open ptr (ptr, i32, ptr): calls to variadic functions are not supported for MSIL yet   [minigzip]
+    2  msil-ld: error: <unknown>: in function snprintf i32 (ptr, i64, ptr, ...): variadic function definitions are not supported for MSIL yet   [example,minigzip]
+    1  msil-ld: error: <unknown>: in function gzopen ptr (ptr, ptr): calls to variadic functions are not supported for MSIL yet   [example]
+    1  msil-ld: error: <unknown>: in function gzprintf i32 (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [example]
+    1  msil-ld: error: <unknown>: in function printf i32 (ptr, ...): variadic function definitions are not supported for MSIL yet   [example]
+### msil-ld --lto-emit-asm --error-limit=0
+failing (0):

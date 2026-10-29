@@ -1,0 +1,12 @@
+mode=throw first=1 .NET Framework 4.8.9363.0: caught=5 nre=0 handlerCalls=5 lastCode=0xE0434352  [net48 exit=0]
+mode=throw first=0 .NET Framework 4.8.9363.0: caught=5 nre=0 handlerCalls=5 lastCode=0xE0434352  [net48 exit=0]
+mode=nre first=1 .NET Framework 4.8.9363.0: caught=0 nre=1 handlerCalls=2 lastCode=0xC0000005  [net48 exit=0]
+mode=nre first=0 .NET Framework 4.8.9363.0: caught=0 nre=1 handlerCalls=1 lastCode=0xC0000005  [net48 exit=0]
+mode=throw first=1 .NET 8.0.33: caught=5 nre=0 handlerCalls=5 lastCode=0xE0434352  [net8.0 exit=0]
+mode=throw first=0 .NET 8.0.33: caught=5 nre=0 handlerCalls=5 lastCode=0xE0434352  [net8.0 exit=0]
+Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.  [net8.0 exit=0]
+Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.    at P.Main(System.String[])  [net8.0 exit=0]
+mode=throw first=1 .NET 10.0.14: caught=5 nre=0 handlerCalls=0 lastCode=0x00000000  [net10.0 exit=0]
+mode=throw first=0 .NET 10.0.14: caught=5 nre=0 handlerCalls=0 lastCode=0x00000000  [net10.0 exit=0]
+Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.  [net10.0 exit=0]
+mode=nre first=0 .NET 10.0.14: caught=0 nre=1 handlerCalls=0 lastCode=0x00000000  [net10.0 exit=0]

@@ -1,0 +1,111 @@
+# E1 IR atomics per function, MSIL triples (identical IR natively except ms-volatile on windows-msvc)
+f_load_seq: load atomic i32 seq_cst a4
+f_load_acq: load atomic i32 acquire a4
+f_load_rlx: load atomic i32 monotonic a4
+f_store_seq: store atomic i32 seq_cst a4
+f_store_rel: store atomic i32 release a4
+f_store_rlx: store atomic i32 monotonic a4
+f_xchg: atomicrmw xchg i32 seq_cst a4
+f_add: atomicrmw add i32 seq_cst a4
+f_sub: atomicrmw sub i32 seq_cst a4
+f_and: atomicrmw and i32 seq_cst a4
+f_or: atomicrmw or i32 seq_cst a4
+f_xor: atomicrmw xor i32 seq_cst a4
+f_max: atomicrmw max i32 seq_cst a4
+f_umin: atomicrmw umin i32 seq_cst a4
+f_nand: atomicrmw nand i32 seq_cst a4
+f_addpost: atomicrmw add i32 seq_cst a4
+f_cas: cmpxchg i32 seq_cst/seq_cst a4
+f_casw: cmpxchg weak i32 acq_rel/acquire a4
+f_c_add: atomicrmw add i8 seq_cst a1
+f_c_cas: cmpxchg i8 seq_cst/seq_cst a1
+f_s_or:
+    [x86_64-pc-windows-msvc-msil] atomicrmw or i16 seq_cst a4
+    [x86_64-unknown-linux-gnu-msil] atomicrmw or i16 seq_cst a2
+    [aarch64-unknown-linux-gnu-msil] atomicrmw or i16 seq_cst a2
+f_s_xchg:
+    [x86_64-pc-windows-msvc-msil] atomicrmw xchg i16 seq_cst a4
+    [x86_64-unknown-linux-gnu-msil] atomicrmw xchg i16 seq_cst a2
+    [aarch64-unknown-linux-gnu-msil] atomicrmw xchg i16 seq_cst a2
+f_ll_add: atomicrmw add i64 seq_cst a8
+f_ll_load: load atomic i64 seq_cst a8
+f_p_xchg: atomicrmw xchg ptr seq_cst a8
+f_f_add: atomicrmw fadd float seq_cst a4
+f_d_load: load atomic double seq_cst a8
+f_d_fadd: atomicrmw fadd double seq_cst a8
+f_s3_load: load atomic i32 seq_cst a4
+f_s16_load: load atomic i128 seq_cst a16
+f_s16_store: store atomic i128 seq_cst a16
+f_s24_load: call __atomic_load
+f_i128_add: atomicrmw add i128 seq_cst a16
+f_i128_cas: cmpxchg i128 seq_cst/seq_cst a16
+f_flag_tas: atomicrmw xchg i8 seq_cst a1
+f_flag_clear:
+    [x86_64-pc-windows-msvc-msil] store atomic i8 seq_cst a1
+    [x86_64-unknown-linux-gnu-msil] store atomic i8 seq_cst a1
+    [aarch64-unknown-linux-gnu-msil] store atomic i8 seq_cst a4
+f_fence_seq: fence seq_cst
+f_fence_acq: fence acquire
+f_sigfence: fence syncscope("singlethread") seq_cst
+f_sync_add: atomicrmw add i32 seq_cst a4
+f_sync_addf: atomicrmw add i32 seq_cst a4
+f_sync_vcas: cmpxchg i32 seq_cst/seq_cst a4
+f_sync_bcas: cmpxchg i32 seq_cst/seq_cst a4
+f_sync_tas: atomicrmw xchg i32 seq_cst a4
+f_sync_rel: store atomic i32 release a4
+f_sync_sync: fence seq_cst
+f_sync_nand: atomicrmw nand i32 seq_cst a4
+f_vol_load: load volatile i32,
+f_vol_store: store volatile i32
+f_lockfree_i: ret const true
+f_lockfree_16:
+    [x86_64-pc-windows-msvc-msil] call __atomic_is_lock_free
+    [x86_64-unknown-linux-gnu-msil] call __atomic_is_lock_free
+    [aarch64-unknown-linux-gnu-msil] ret const true
+f_lockfree_128:
+    [x86_64-pc-windows-msvc-msil] call __atomic_is_lock_free
+    [x86_64-unknown-linux-gnu-msil] call __atomic_is_lock_free
+    [aarch64-unknown-linux-gnu-msil] ret const true
+f_lockfree_24: call __atomic_is_lock_free
+f_lockfree_rt: call __atomic_is_lock_free
+f_always16:
+    [x86_64-pc-windows-msvc-msil] ret const 0
+    [x86_64-unknown-linux-gnu-msil] ret const 0
+    [aarch64-unknown-linux-gnu-msil] ret const 1
+f_always8: ret const 1
+f_macros: ret const 222
+f_c11_add: atomicrmw add i32 monotonic a4
+
+# MSIL vs native windows-msvc (only differences)
+f_vol_load:
+    [x86_64-pc-windows-msvc-msil] load volatile i32,
+    [x86_64-pc-windows-msvc] load atomic volatile i32 acquire a4
+f_vol_store:
+    [x86_64-pc-windows-msvc-msil] store volatile i32
+    [x86_64-pc-windows-msvc] store atomic volatile i32 release a4
+
+# MSVC intrinsics (msvc.c): msil / native / msil -fms-volatile
+f_inc: atomicrmw add i32 seq_cst a4
+f_cas: cmpxchg i32 seq_cst/seq_cst a4
+f_add64: atomicrmw add i64 seq_cst a8
+f_xchg8: atomicrmw xchg i8 seq_cst a1
+f_or16: atomicrmw or i16 seq_cst a2
+f_cas128: cmpxchg i128 seq_cst/seq_cst a16
+f_rwb: fence syncscope("singlethread") seq_cst
+f_fsf: fence seq_cst
+f_mfence: -
+f_pause: -
+f_xchgp: atomicrmw xchg i64 seq_cst a8
+f_bts:
+    [msvc.x86_64-pc-windows-msvc-msil] atomicrmw or i8 seq_cst a1
+    [msvc.x86_64-pc-windows-msvc] -
+    [msvc.msvol] atomicrmw or i8 seq_cst a1
+f_vload:
+    [msvc.x86_64-pc-windows-msvc-msil] load volatile i32,
+    [msvc.x86_64-pc-windows-msvc] load atomic volatile i32 acquire a4
+    [msvc.msvol] load atomic volatile i32 acquire a4
+
+# clang -c undefined symbols (x86_64-pc-windows-msvc-msil)
+__atomic_compare_exchange_1 __atomic_compare_exchange_16 __atomic_compare_exchange_4 __atomic_compare_exchange_8 __atomic_exchange_1 __atomic_exchange_2 __atomic_exchange_4 __atomic_exchange_8 __atomic_fetch_add_1 __atomic_fetch_add_16 __atomic_fetch_add_4 __atomic_fetch_add_8 __atomic_fetch_and_4 __atomic_fetch_nand_4 __atomic_fetch_or_2 __atomic_fetch_or_4 __atomic_fetch_sub_4 __atomic_fetch_xor_4 __atomic_is_lock_free __atomic_load __atomic_load_16 __atomic_load_4 __atomic_load_8 __atomic_store_1 __atomic_store_16 __atomic_store_4
+# clang -c undefined symbols (aarch64-unknown-linux-gnu-msil)
+__atomic_compare_exchange_1 __atomic_compare_exchange_16 __atomic_compare_exchange_4 __atomic_compare_exchange_8 __atomic_exchange_1 __atomic_exchange_2 __atomic_exchange_4 __atomic_exchange_8 __atomic_fetch_add_1 __atomic_fetch_add_16 __atomic_fetch_add_4 __atomic_fetch_add_8 __atomic_fetch_and_4 __atomic_fetch_nand_4 __atomic_fetch_or_2 __atomic_fetch_or_4 __atomic_fetch_sub_4 __atomic_fetch_xor_4 __atomic_is_lock_free __atomic_load __atomic_load_16 __atomic_load_4 __atomic_load_8 __atomic_store_1 __atomic_store_16 __atomic_store_4

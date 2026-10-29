@@ -1,0 +1,25 @@
+--- net48
+runtime 4.0.30319.42000 (.NET Framework 4.8.9363.0) server GC=False
+main thread: int=stable long=stable IntPtr=stable Big(256)=MOVED(20/20, 0x3695ba8->0x366b5e8) static Big=MOVED(20/20, 0x2a32c40->0x2a32800)
+new thread: int=stable long=stable IntPtr=stable Big(256)=MOVED(20/20, 0x4fc42b8->0x366be38) static Big=stable
+exit=0
+--- net8
+runtime 8.0.33 (.NET 8.0.33) server GC=False
+main thread: int=stable long=stable IntPtr=stable Big(256)=MOVED(20/20, 0x2d6ad71b438->0x2d6ad479ed0) static Big=stable
+new thread: int=stable long=stable IntPtr=stable Big(256)=MOVED(20/20, 0x2d6af0630e8->0x2d6aa8a3b98) static Big=stable
+exit=0
+--- net10
+runtime 10.0.14 (.NET 10.0.14) server GC=False
+main thread: int=MOVED(20/20, 0x1eb55afe150->0x1eb55878bc8) long=MOVED(20/20, 0x1eb55afe140->0x1eb55878bb8) IntPtr=MOVED(20/20, 0x1eb55afe148->0x1eb55878bc0) Big(256)=MOVED(20/20, 0x1eb55afe188->0x1eb55878c00) static Big=stable
+new thread: int=MOVED(20/20, 0x1eb56a60588->0x1eb52e9e838) long=MOVED(20/20, 0x1eb56a60578->0x1eb52e9e828) IntPtr=MOVED(20/20, 0x1eb56a60580->0x1eb52e9e830) Big(256)=MOVED(20/20, 0x1eb56a605d8->0x1eb52e9e870) static Big=stable
+exit=0
+--- wsl net8
+runtime 8.0.31 (.NET 8.0.31) server GC=False
+main thread: int=stable long=stable IntPtr=stable Big(256)=MOVED(20/20, 0x725d7926fd00->0x725d790469d0) static Big=stable
+new thread: int=stable long=stable IntPtr=stable Big(256)=MOVED(20/20, 0x725d7ac63168->0x725d7646f9c8) static Big=stable
+exit=0
+--- wsl net10
+runtime 10.0.13 (.NET 10.0.13) server GC=False
+main thread: int=MOVED(20/20, 0x7bf471269dc8->0x7bf471042ab0) long=MOVED(20/20, 0x7bf471269db8->0x7bf471042aa0) IntPtr=MOVED(20/20, 0x7bf471269dc0->0x7bf471042aa8) Big(256)=MOVED(20/20, 0x7bf471269e00->0x7bf471042ae8) static Big=stable
+new thread: int=MOVED(20/20, 0x7bf473260580->0x7bf46e66a280) long=MOVED(20/20, 0x7bf473260570->0x7bf46e66a270) IntPtr=MOVED(20/20, 0x7bf473260578->0x7bf46e66a278) Big(256)=MOVED(20/20, 0x7bf4732605d0->0x7bf46e66a2b8) static Big=stable
+exit=0

@@ -1,0 +1,29 @@
+# E12-E14 (resumed run, 2026-10-28 evening): scripts/batch4.sh; lit -j1 -a inside one Windows job object
+# (scripts/jobrun.py). The job counts Windows processes and their CPU only; the Linux side of every
+# wsl.exe launch runs in the WSL VM and is not in these numbers. Host load 76-100% (other projects).
+
+## E12: one WSL composite, msil/test/M1/03-control/loops.c, two levels (-O0, -O2)
+# wsl-full: today's wsl-net10 parameters: obj, runner wsl, linux-gnu triple, private WSL .NET 10,
+#           native oracle required (E7), msil_equiv=1, msil_also_run=8,10+tc0, the three msil_require_*
+# wsl-lean: obj, runner wsl, linux-gnu, private WSL .NET 10, the three msil_require_* (no oracle,
+#           no equivalence, no msil_also_run)
+JOBRUN {"label": "wsl-full-loops", "rc": 0, "wall_s": 53.67, "cpu_s": 17.28, "user_s": 8.94, "kernel_s": 8.34, "processes": 138}
+JOBRUN {"label": "wsl-lean-loops", "rc": 0, "wall_s": 17.31, "cpu_s": 8.33, "user_s": 5.11, "kernel_s": 3.22, "processes": 58}
+# lit 'Testing Time' (the test alone, back to back): wsl-full 37.41 s, wsl-lean 13.55 s (ratio 2.76)
+# executed commands (lit -a), per level:
+#   wsl-full: 14 commands; 7 run inside WSL (wsl.exe): msil-jitall + msil-run for .NET 10, for .NET 8 and
+#             for .NET 10 TC=0 (msil_also_run), and the native E7 run; 7 on Windows: msil-prog.py build,
+#             mkdir + clang -S + ilasm (O3 reference), msil-verify.py, msil-equiv.py, msil-prog.py --mode native
+#   wsl-lean: 4 commands; 2 inside WSL (msil-jitall, msil-run); msil-prog.py build, msil-verify.py
+# per test after subtracting the configuration (E14): wsl-full 123 processes, 13.2 CPU-s;
+#                                                     wsl-lean 43 processes, 4.3 CPU-s (33% of full)
+
+## E13: asm pipeline on .NET 10 (the 2026-10-26 quiet 'net10' leg's composite shape), two tests
+JOBRUN {"label": "asm-net10-2", "rc": 0, "wall_s": 34.97, "cpu_s": 12.62, "user_s": 6.75, "kernel_s": 5.88, "processes": 68}
+# Testing Time 26.63 s for loops.c + many-args.ll at -j1: 13.3 s per composite; per test after the
+# configuration (11 processes, 4.2 CPU-s): 28 processes, 4.2 CPU-s.
+# (the first attempt of this run, 17:50, ended in 'a worker process crashed' when the session was stopped)
+
+## E14: the WSL configuration alone (wsl-full parameters, --filter=NOMATCHXYZ, config evaluated, 25 notes)
+JOBRUN {"label": "wsl-config-only", "rc": 2, "wall_s": 18.16, "cpu_s": 4.05, "user_s": 2.39, "kernel_s": 1.66, "processes": 15}
+# Windows-triple configuration for comparison (Z-net8-nomatch): 11 processes, 4.16 CPU-s, 13.3 s.

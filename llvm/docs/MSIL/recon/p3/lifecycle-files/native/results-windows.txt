@@ -1,0 +1,304 @@
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe ret
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+.CRT$XPU slot
+stdout: buffered line from main
+stdout: from h1
+status=-1073741819 (0xC0000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe ret300
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+.CRT$XPU slot
+stdout: buffered line from main
+stdout: from h1
+status=-1073741819 (0xC0000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe exit
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+.CRT$XPU slot
+stdout: buffered line from main
+stdout: from h1
+status=-1073741819 (0xC0000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe exit300
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+.CRT$XPU slot
+stdout: buffered line from main
+stdout: from h1
+status=-1073741819 (0xC0000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe exitneg
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+.CRT$XPU slot
+stdout: buffered line from main
+stdout: from h1
+status=-1073741819 (0xC0000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe _Exit
+ctor 101
+ctor default
+main start
+main end
+dtor 101
+dtor 200
+dtor 300
+.CRT$XTU slot
+dtor default
+status=5 (0x00000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe _exit
+ctor 101
+ctor default
+main start
+main end
+dtor 101
+dtor 200
+dtor 300
+.CRT$XTU slot
+dtor default
+status=5 (0x00000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe quick
+ctor 101
+ctor default
+main start
+main end
+at_quick_exit q2
+at_quick_exit q1
+dtor 101
+dtor 200
+dtor 300
+.CRT$XTU slot
+dtor default
+status=6 (0x00000006)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe abort
+ctor 101
+ctor default
+main start
+main end
+status=-1073740791 (0xC0000409)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe nested
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+  h2: atexit(h_late) during exit returned 0
+atexit h_late (registered by h2 during exit)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+.CRT$XPU slot
+stdout: buffered line from main
+stdout: from h1
+status=-1073741819 (0xC0000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe exitinhandler
+ctor 101
+ctor default
+main start
+main end
+atexit h_last (registered after exit-calling h3)
+atexit h3 calls exit(9)
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+.CRT$XPU slot
+stdout: buffered line from main
+stdout: from h1
+status=-1073741819 (0xC0000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe exitindtor
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+.CRT$XPU slot
+stdout: buffered line from main
+stdout: from h1
+status=-1073741819 (0xC0000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.static.exe atexitindtor
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+.CRT$XPU slot
+stdout: buffered line from main
+stdout: from h1
+status=-1 (0xFFFFFFFF)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe ret
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+stdout: buffered line from main
+stdout: from h1
+status=0 (0x00000000)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe ret300
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+stdout: buffered line from main
+stdout: from h1
+status=300 (0x0000012C)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe exit
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+stdout: buffered line from main
+stdout: from h1
+status=3 (0x00000003)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe exit300
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+stdout: buffered line from main
+stdout: from h1
+status=300 (0x0000012C)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe exitneg
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+stdout: buffered line from main
+stdout: from h1
+status=-1 (0xFFFFFFFF)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe _Exit
+ctor 101
+ctor default
+main start
+main end
+stdout: buffered line from main
+status=5 (0x00000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe _exit
+ctor 101
+ctor default
+main start
+main end
+stdout: buffered line from main
+status=5 (0x00000005)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe quick
+ctor 101
+ctor default
+main start
+main end
+at_quick_exit q2
+at_quick_exit q1
+stdout: buffered line from main
+stdout: from q2
+status=6 (0x00000006)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe abort
+ctor 101
+ctor default
+main start
+main end
+status=-1073740791 (0xC0000409)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe nested
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+  h2: atexit(h_late) during exit returned 0
+atexit h_late (registered by h2 during exit)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+stdout: buffered line from main
+stdout: from h1
+status=0 (0x00000000)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe exitinhandler
+ctor 101
+ctor default
+main start
+main end
+atexit h_last (registered after exit-calling h3)
+atexit h3 calls exit(9)
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+stdout: buffered line from main
+stdout: from h1
+status=9 (0x00000009)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe exitindtor
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+stdout: buffered line from main
+stdout: from h1
+status=0 (0x00000000)
+=== C:\llvm-msil-scratch\p3\lifecycle\native\order.dll.exe atexitindtor
+ctor 101
+ctor default
+main start
+main end
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+stdout: buffered line from main
+stdout: from h1
+status=0 (0x00000000)

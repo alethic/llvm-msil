@@ -1,0 +1,86 @@
+## today: qsort/fp/thread programs compiled by the MSIL toolchain (Phase 2 shape)
+qs-win.exe  | fx | -7|-7|0|3|19|42|256|1000|
+fp-win.exe  | fx | -17510|21|1|5|exit=0|
+thr-win.exe  | fx | ./run.sh: line 6: 439600 Segmentation fault         timeout 300 ./$exe "$@"|exit=139|
+qs-win.exe  | n8 | -7|-7|0|3|19|42|256|1000|
+fp-win.exe  | n8 | -17510|21|1|5|exit=0|
+thr-win.exe  | n8 | 42|43|1|exit=0|
+qs-win.exe  | n10 | -7|-7|0|3|19|42|256|1000|
+fp-win.exe  | n10 | -17510|21|1|5|exit=0|
+thr-win.exe  | n10 | 42|43|1|exit=0|
+qs-lnx.exe  | w8 | -7|-7|0|3|19|42|256|1000|
+fp-lnx.exe  | w8 | -17510|21|1|5|exit=0|
+thr-lnx.exe  | w8 | 42|43|1|exit=0|
+qs-lnx.exe  | w10 | -7|-7|0|3|19|42|256|1000|
+fp-lnx.exe  | w10 | -17510|21|1|5|exit=0|
+thr-lnx.exe  | w10 | 42|43|1|exit=0|
+## proposed shape: the same -S output rewritten by patch_fp.py
+fp-win-delegate.exe  | fx | indirect calls: 1 through the table, 1 native|-17510|21|1|5|exit=0|
+thr-win-delegate.exe  | fx | indirect calls: 0 through the table, 0 native|42|43|1|exit=0|
+fp-win-delegate.exe  | n8 | indirect calls: 1 through the table, 1 native|-17510|21|1|5|exit=0|
+thr-win-delegate.exe  | n8 | indirect calls: 0 through the table, 0 native|42|43|1|exit=0|
+fp-win-delegate.exe  | n10 | indirect calls: 1 through the table, 1 native|-17510|21|1|5|exit=0|
+thr-win-delegate.exe  | n10 | indirect calls: 0 through the table, 0 native|42|43|1|exit=0|
+fp-win-uco.exe  | n8 | indirect calls: 1 through the table, 1 native|-17510|21|1|5|exit=0|
+thr-win-uco.exe  | n8 | indirect calls: 0 through the table, 0 native|42|43|1|exit=0|
+fp-win-uco.exe  | n10 | indirect calls: 1 through the table, 1 native|-17510|21|1|5|exit=0|
+thr-win-uco.exe  | n10 | indirect calls: 0 through the table, 0 native|42|43|1|exit=0|
+fp-lnx-delegate.exe  | w8 | indirect calls: 1 through the table, 1 native|-17510|21|1|5|exit=0|
+thr-lnx-delegate.exe  | w8 | 42|43|1|indirect calls: 0 through the table, 0 native|exit=0|
+fp-lnx-uco.exe  | w8 | indirect calls: 1 through the table, 1 native|-17510|21|1|5|exit=0|
+thr-lnx-uco.exe  | w8 | indirect calls: 0 through the table, 0 native|42|43|1|exit=0|
+fp-lnx-delegate.exe  | w10 | -17510|21|1|5|indirect calls: 1 through the table, 1 native|exit=0|
+thr-lnx-delegate.exe  | w10 | indirect calls: 0 through the table, 0 native|42|43|1|exit=0|
+fp-lnx-uco.exe  | w10 | -17510|21|1|5|indirect calls: 1 through the table, 1 native|exit=0|
+thr-lnx-uco.exe  | w10 | indirect calls: 0 through the table, 0 native|42|43|1|exit=0|
+## UnmanagedCallersOnly bound by name: private attribute class (uconame) and [mscorlib] TypeRef (ucomscorlib)
+uconame.exe uco-direct | fx | direct managed call of UCO thunk: 42|exit=0|
+uconame.exe uco-direct | n8 | Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=6|
+uconame.exe uco-direct | n10 | Fatal error.|Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=6|
+uconame.exe uco-direct | w8 | Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=0|bash: line 1:   434 Aborted                    timeout 300 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json uconame.exe uco-direct|
+uconame.exe uco-direct | w10 | Fatal error.|Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=0|bash: line 1:   522 Aborted                    timeout 300 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc10.json uconame.exe uco-direct|
+ucomscorlib.exe uco-direct | fx | direct managed call of UCO thunk: 42|exit=0|
+ucomscorlib.exe uco-direct | n8 | Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=6|
+ucomscorlib.exe uco-direct | n10 | Fatal error.|Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=6|
+ucomscorlib.exe uco-direct | w8 | Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=0|bash: line 1:   474 Aborted                    timeout 300 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json ucomscorlib.exe uco-direct|
+ucomscorlib.exe uco-direct | w10 | Fatal error.|Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=0|bash: line 1:   508 Aborted                    timeout 300 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc10.json ucomscorlib.exe uco-direct|
+## struct-by-value parameters and results through thunks
+sbv.exe del | fx | s16 param (expect 105): 105|s24 param (expect 1605): 1605|s16 result (expect 5006): 5006|s24 result (expect 5006007): 5006007|exit=0|
+sbv.exe del | n8 | s16 param (expect 105): 105|s24 param (expect 1605): 1605|s16 result (expect 5006): 5006|s24 result (expect 5006007): 5006007|exit=0|
+sbv.exe uco | n8 | s16 param (expect 105): 105|s24 param (expect 1605): 1605|s16 result (expect 5006): 5006|s24 result (expect 5006007): 5006007|exit=0|
+sbv.exe del | n10 | s16 param (expect 105): 105|s24 param (expect 1605): 1605|s16 result (expect 5006): 5006|s24 result (expect 5006007): 5006007|exit=0|
+sbv.exe uco | n10 | s16 param (expect 105): 105|s24 param (expect 1605): 1605|s16 result (expect 5006): 5006|s24 result (expect 5006007): 5006007|exit=0|
+sbv.exe del | w8 | s16 param (expect 105): 105|s24 param (expect 1605): 1605|s16 result (expect 5006): 5006|s24 result (expect 5006007): 5006007|exit=0|
+sbv.exe uco | w8 | s16 param (expect 105): 105|s24 param (expect 1605): 1605|s16 result (expect 5006): 5006|s24 result (expect 5006007): 5006007|exit=0|
+sbv.exe del | w10 | s16 param (expect 105): 105|s24 param (expect 1605): 1605|s16 result (expect 5006): 5006|s24 result (expect 5006007): 5006007|exit=0|
+sbv.exe uco | w10 | s16 param (expect 105): 105|s24 param (expect 1605): 1605|s16 result (expect 5006): 5006|s24 result (expect 5006007): 5006007|exit=0|
+## signal handlers (Linux)
+sigt.exe sync del | w8 | sync: handler ran 1 time(s)|exit=0|
+sigt.exe sync uco | w8 | sync: handler ran 1 time(s)|exit=0|
+sigt.exe async del | w8 | Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|bash: line 1:   550 Aborted                    timeout 300 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json sigt.exe async del|exit=0|
+sigt.exe async uco | w8 | Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|bash: line 1:   572 Aborted                    timeout 300 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json sigt.exe async uco|exit=0|
+sigt.exe sync del | w10 | sync: handler ran 1 time(s)|exit=0|
+sigt.exe sync uco | w10 | sync: handler ran 1 time(s)|exit=0|
+sigt.exe async del | w10 | Fatal error.|Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|bash: line 1:   610 Aborted                    timeout 300 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc10.json sigt.exe async del|exit=0|
+sigt.exe async uco | w10 | Fatal error.|Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|bash: line 1:   622 Aborted                    timeout 300 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc10.json sigt.exe async uco|exit=0|
+## pthread key destructors (Linux)
+keyt.exe del | w8 | native thread that never ran managed code:|  destructor(42) on managed thread 4|native thread whose start routine is managed:|  destructor(43) on managed thread 6|done|exit=0|
+keyt.exe uco | w8 | native thread that never ran managed code:|  destructor(42) on managed thread 4|native thread whose start routine is managed:|  destructor(43) on managed thread 6|done|exit=0|
+keyt.exe del | w10 | native thread that never ran managed code:|  destructor(42) on managed thread 4|native thread whose start routine is managed:|  destructor(43) on managed thread 6|done|exit=0|
+keyt.exe uco | w10 | native thread that never ran managed code:|  destructor(42) on managed thread 4|native thread whose start routine is managed:|  destructor(43) on managed thread 6|done|exit=0|
+## process-wide registry slot
+regt.exe  | fx | registry slot: 12725664|exit=0|
+regt.exe  | n8 | registry slot: 1544045099328|exit=0|
+regt.exe  | n10 | registry slot: 2952544615264|exit=0|
+regt.exe  | w8 | registry slot: 108400732537584|exit=0|
+regt.exe  | w10 | registry slot: 109309544983888|exit=0|
+## thunk and ldftn addresses
+addrfx.exe  | fx | delegate thunk f0: 15608CC|delegate thunk f1: 156091C|delegate thunk f2: 156096C|delegate thunk f3: 15609BC|delegate thunk f4: 1560A0C|delegate thunk f5: 1560A5C|ldftn f0: 7FF8A8000488|ldftn f1: 7FF8A8000490|
+addrfx.exe  | n8 | delegate thunk f0: 7FF7F84C3024|delegate thunk f1: 7FF7F84C3064|delegate thunk f2: 7FF7F84C30A4|delegate thunk f3: 7FF7F84C30E4|delegate thunk f4: 7FF7F84C3124|delegate thunk f5: 7FF7F84C3164|ldftn f0: 7FF7F86C2BC8|ldftn f1: 7FF7F86C2BE0|
+addrfx.exe  | n10 | delegate thunk f0: 7FF8D1AB3618|delegate thunk f1: 7FF8D1AB39C0|delegate thunk f2: 7FF8D1AB39D8|delegate thunk f3: 7FF8D1AB39F0|delegate thunk f4: 7FF8D1AB3A08|delegate thunk f5: 7FF8D1AB3A20|ldftn f0: 7FF8D1CE0CF0|ldftn f1: 7FF8D1CE0D08|
+addrfx.exe  | w8 | delegate thunk f0: 7E53DF453024|delegate thunk f1: 7E53DF453064|delegate thunk f2: 7E53DF4530A4|delegate thunk f3: 7E53DF4530E4|delegate thunk f4: 7E53DF453124|delegate thunk f5: 7E53DF453164|ldftn f0: 7E53E02B3138|ldftn f1: 7E53E02B3150|
+addrfx.exe  | w10 | delegate thunk f0: 72F361A10E70|delegate thunk f1: 72F361A12430|delegate thunk f2: 72F361A12448|delegate thunk f3: 72F361A12460|delegate thunk f4: 72F361A12478|delegate thunk f5: 72F361A12490|ldftn f0: 72F361A234E0|ldftn f1: 72F361A234F8|
+addruco.exe  | n8 | delegate thunk f0: 7FF7F84A3024|delegate thunk f1: 7FF7F84A3064|delegate thunk f2: 7FF7F84A30A4|delegate thunk f3: 7FF7F84A30E4|delegate thunk f4: 7FF7F84A3124|delegate thunk f5: 7FF7F84A3164|ldftn f0: 7FF7F86A2BC8|ldftn UCO u0: 7FF7F86A2BE0|
+addruco.exe  | n10 | delegate thunk f0: 7FF8D1AD3618|delegate thunk f1: 7FF8D1AD39C0|delegate thunk f2: 7FF8D1AD39D8|delegate thunk f3: 7FF8D1AD39F0|delegate thunk f4: 7FF8D1AD3A08|delegate thunk f5: 7FF8D1AD3A20|ldftn f0: 7FF8D1D00CF0|ldftn UCO u0: 7FF8D1D00D80|
+addruco.exe  | w8 | delegate thunk f0: 716B22063024|delegate thunk f1: 716B22063064|delegate thunk f2: 716B220630A4|delegate thunk f3: 716B220630E4|delegate thunk f4: 716B22063124|delegate thunk f5: 716B22063164|ldftn f0: 716B22EC3138|ldftn UCO u0: 716B22EC3150|
+addruco.exe  | w10 | delegate thunk f0: 719806810E70|delegate thunk f1: 719806812430|delegate thunk f2: 719806812448|delegate thunk f3: 719806812460|delegate thunk f4: 719806812478|delegate thunk f5: 719806812490|ldftn f0: 7198068234E0|ldftn UCO u0: 719806823570|

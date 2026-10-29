@@ -1,0 +1,26 @@
+definitions: 139; external functions: 29; external globals: 6
+variadic definitions (1): gzprintf
+variadic call sites to external (native) functions (60): fprintf 45, printf 7, fcntl 4, snprintf 3, open 1
+variadic call sites to own definitions (1): gzprintf 1
+indirect variadic calls: 0; va_start: 1; va_copy: 0
+setjmp/longjmp calls: {}; returns_twice decls: []
+own functions passed to external functions (callbacks) (0):
+external function addresses passed as arguments:
+external (native) function addresses in data initializers (0):
+own function addresses in data initializers: 3 functions
+external globals (data imports): stderr, stdin, stdout
+thread_local globals: []
+atomics: {}
+dynamic allocas: 0; stacksave: 0; inline asm: 0; i128 lines: 0
+global_dtors: 0; atexit calls: 0
+byval args to external functions: {}
+sret calls to external functions: {}
+long double library functions: []
+intrinsics (excluding lifetime/mem*/va_*): llvm.abs.i32 1, llvm.bswap.i32 2, llvm.smin.i32 1, llvm.smin.i64 6, llvm.uadd.sat.i64 2, llvm.umax.i32 2, llvm.umax.i64 1, llvm.umax.i8 1, llvm.umin.i32 31, llvm.umin.i64 33, llvm.umul.with.overflow.i64 2, llvm.usub.sat.i32 5
+external functions by category:
+  alloc (3): calloc free malloc
+  ctype/locale (1): __errno_location
+  posix-io (7): close fcntl lseek64 open read unlink write
+  process/env (1): exit
+  stdio (12): fclose ferror fileno fopen fprintf fread fwrite perror printf puts snprintf vsnprintf
+  string/mem (5): memchr strcmp strerror strlen strrchr

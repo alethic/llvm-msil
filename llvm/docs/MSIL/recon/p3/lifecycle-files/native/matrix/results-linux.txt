@@ -1,0 +1,14 @@
+=== fini-array (glibc crt1, real _start)
+main
+fini_array entry
+
+status=0
+=== p6-dtors (glibc crt1, real _start)
+BCDMcb
+status=0
+=== atexit-order (glibc crt1, real _start)
+main returns
+second registered, runs first
+first registered, runs last
+
+status=0

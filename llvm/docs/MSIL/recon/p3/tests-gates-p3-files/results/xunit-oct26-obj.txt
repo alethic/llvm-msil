@@ -1,0 +1,49 @@
+testsuites time (wall): 1999.71
+sum of test seconds: 14089 (234.8 min); tests 246
+     1630 s  11.6%  n=  38  avg=  42.9  MSIL:M2/08-semantics
+     1249 s   8.9%  n=  20  avg=  62.4  MSIL:M1/11-programs
+     1143 s   8.1%  n=  17  avg=  67.2  MSIL:M1/07-globals
+      976 s   6.9%  n=  18  avg=  54.2  MSIL:M1/01-int
+      933 s   6.6%  n=  14  avg=  66.7  MSIL:M1/02-fp
+      905 s   6.4%  n=  15  avg=  60.3  MSIL:M1/03-control
+      888 s   6.3%  n=  13  avg=  68.3  MSIL:M1/05-memory
+      779 s   5.5%  n=  12  avg=  64.9  MSIL:M2/00-link
+      696 s   4.9%  n=  10  avg=  69.6  MSIL:M1/10-calls
+      666 s   4.7%  n=  11  avg=  60.6  MSIL:M2/05-refs
+      555 s   3.9%  n=   8  avg=  69.4  MSIL:M1/04-frames
+      552 s   3.9%  n=   8  avg=  69.0  MSIL:M1/08-fnptr
+      513 s   3.6%  n=   7  avg=  73.3  MSIL:M1/09-structs
+      490 s   3.5%  n=   9  avg=  54.4  MSIL:M2/02-lto
+      484 s   3.4%  n=   5  avg=  96.7  MSIL:M2/07-equiv
+      472 s   3.3%  n=   7  avg=  67.4  MSIL:M1/06-output
+      407 s   2.9%  n=  15  avg=  27.1  MSIL:M2/03-native
+      376 s   2.7%  n=   6  avg=  62.7  MSIL:M1/00-smoke
+      272 s   1.9%  n=   5  avg=  54.5  MSIL:M2/01-archive
+       69 s   0.5%  n=   3  avg=  22.9  MSIL:M2/06-det
+       35 s   0.2%  n=   5  avg=   6.9  MSIL:M2/09-hosted
+top 25 tests:
+   268.2  MSIL.M2/00-link/spill-limits.test
+   120.0  MSIL.M2/07-equiv/o3-reloc-loop.test
+   113.6  MSIL.M2/05-refs/rows-net8.test
+   113.3  MSIL.M2/08-semantics/narrow-arg-mismatch.test
+   108.5  MSIL.M2/05-refs/rows-net10.test
+    98.8  MSIL.M2/07-equiv/o4-sections-ctors.test
+    95.3  MSIL.M2/07-equiv/o3-sections.test
+    91.5  MSIL.M2/07-equiv/o4-zoo.test
+    87.2  MSIL.M1/05-memory/memmove-helper.c
+    86.2  MSIL.M1/09-structs/struct-byval.c
+    83.9  MSIL.M2/05-refs/dataimport-nativelibrary.test
+    83.5  MSIL.M2/02-lto/thinlto.test
+    83.3  MSIL.M2/02-lto/intra-tu-mismatch.test
+    82.7  MSIL.M2/02-lto/lto-partitions.test
+    82.1  MSIL.M2/05-refs/net48-equals-none.test
+    81.4  MSIL.M1/10-calls/mutual-recursion.c
+    80.3  MSIL.M1/06-output/libm-calls.c
+    80.2  MSIL.M2/08-semantics/p8-section-ctor.test
+    80.0  MSIL.M1/07-globals/ctors.c
+    79.5  MSIL.M1/07-globals/bss-zero.c
+    78.8  MSIL.M1/08-fnptr/qsort-callback.c
+    78.7  MSIL.M1/09-structs/struct-return.c
+    78.1  MSIL.M1/07-globals/global-array-sum.c
+    78.0  MSIL.M2/07-equiv/o3-single.test
+    77.9  MSIL.M1/05-memory/packed-unaligned.c

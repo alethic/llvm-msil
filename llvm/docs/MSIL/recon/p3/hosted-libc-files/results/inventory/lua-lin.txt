@@ -1,0 +1,31 @@
+definitions: 662; external functions: 91; external globals: 6
+variadic definitions (5): luaG_runerror, luaL_error, luaO_pushfstring, lua_gc, lua_pushfstring
+variadic call sites to external (native) functions (190): printf 161, snprintf 15, fprintf 13, sprintf 1
+variadic call sites to own definitions (203): luaL_error 98, lua_pushfstring 34, luaO_pushfstring 30, luaG_runerror 28, lua_gc 13
+indirect variadic calls: 0; va_start: 5; va_copy: 0
+setjmp/longjmp calls: {'_longjmp': 1, '_setjmp': 1}; returns_twice decls: []
+own functions passed to external functions (callbacks) (0):
+external function addresses passed as arguments:
+external (native) function addresses in data initializers (0):
+own function addresses in data initializers: 151 functions
+external globals (data imports): stderr, stdin, stdout
+thread_local globals: []
+atomics: {}
+dynamic allocas: 0; stacksave: 0; inline asm: 0; i128 lines: 0
+global_dtors: 0; atexit calls: 0
+byval args to external functions: {}
+sret calls to external functions: {}
+long double library functions: []
+intrinsics (excluding lifetime/mem*/va_*): llvm.abs.i64 1, llvm.ceil.f64 2, llvm.ctpop.i32 9, llvm.fabs.f64 1, llvm.floor.f64 35, llvm.fmuladd.f64 2, llvm.fshl.i64 5, llvm.smax.i32 17, llvm.smax.i64 1, llvm.smin.i32 8, llvm.smin.i64 5, llvm.umax.i32 1, llvm.umax.i64 1, llvm.umin.i32 1, llvm.umin.i64 2
+external functions by category:
+  alloc (2): free realloc
+  ctype/locale (7): __ctype_b_loc __ctype_tolower_loc __ctype_toupper_loc __errno_location isatty localeconv setlocale
+  dl (4): dlclose dlerror dlopen dlsym
+  jmp (2): _longjmp _setjmp
+  math (18): acos asin atan2 cos cosh exp fmod frexp ldexp log log10 log2 pow sin sinh sqrt tan tanh
+  other (2): __uflow bcmp
+  posix-io (2): close mkstemp64
+  process/env (6): abort exit getenv sigaction sigemptyset system
+  stdio (30): clearerr fclose feof ferror fflush fgets flockfile fopen64 fprintf fputc fputs fread freopen64 fseeko64 ftello64 funlockfile fwrite getc pclose popen printf putchar puts remove rename setvbuf snprintf sprintf tmpfile64 ungetc
+  string/mem (12): memchr strchr strcmp strcoll strcpy strerror strftime strlen strpbrk strspn strstr strtod
+  time (6): clock difftime gmtime_r localtime_r mktime time

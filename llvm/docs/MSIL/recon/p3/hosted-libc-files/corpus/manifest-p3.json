@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "programs": [
+    {
+      "name": "lua",
+      "license": "MIT",
+      "license_file": "src/lua.h",
+      "url": "https://www.lua.org/ftp/lua-5.4.9.tar.gz",
+      "ref": "5.4.9",
+      "archive_sha256": "2335b6c582a52654f94612bf10d2f4672805d05329aa6568b1d8cd9e5c6fb8e6",
+      "tree_sha256": "5ae2103cee75f96abee333a09a559db72c44f8e8d5d626020a27904857689d60",
+      "strip": 1
+    },
+    {
+      "name": "lua-tests",
+      "license": "MIT",
+      "license_file": "all.lua",
+      "url": "https://www.lua.org/tests/lua-5.4.9-tests.tar.gz",
+      "ref": "5.4.9",
+      "archive_sha256": "7d971845f545ffc09fbb3128a86b2c6524161c70d0fdf0154a16e8c00c343fca",
+      "tree_sha256": "3bf782c4ae25eeab5e4e739720b685b23ae62f14f0b4a635999858f4fba765e0",
+      "strip": 1
+    },
+    {
+      "name": "sqlite",
+      "license": "public domain",
+      "license_file": null,
+      "url": "https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip",
+      "ref": "3.54.1",
+      "archive_sha256": "0a9c8e34352dad46006aa82836d5383bff9dc6bc9ce5a60553c05aa30e6ad1f9",
+      "tree_sha256": "4c2d538f44a67d2a8befa009f9e6bbd93e2d2d9c1becc6b97fd9594bef502470",
+      "strip": 1
+    }
+  ]
+}

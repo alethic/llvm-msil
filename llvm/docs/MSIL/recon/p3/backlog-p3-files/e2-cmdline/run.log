@@ -1,0 +1,33 @@
+== .NET Framework 4.8, direct
+-- main argv:
+C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cmdline.exe
+one
+two words
+-- GetCommandLineW:
+"C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cmdline.exe" one "two words"
+-- GetCommandLineA:
+"C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cmdline.exe" one "two words"
+-- ucrt __argc/__argv:
+(null)
+== dotnet cmdline.exe (runtimeconfig next to it)
+-- main argv:
+C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cmdline.exe
+one
+two words
+-- GetCommandLineW:
+"C:\Program Files\dotnet\dotnet.exe" .\cmdline.exe one "two words"
+-- GetCommandLineA:
+"C:\Program Files\dotnet\dotnet.exe" .\cmdline.exe one "two words"
+-- ucrt __argc/__argv:
+(null)
+== dotnet exec --runtimeconfig
+-- main argv:
+C:\llvm-msil-scratch\p3\backlog-p3\e2-cmdline\cmdline.exe
+one
+two words
+-- GetCommandLineW:
+"C:\Program Files\dotnet\dotnet.exe" exec --runtimeconfig .\cmdline.runtimeconfig.json .\cmdline.exe one "two words"
+-- GetCommandLineA:
+"C:\Program Files\dotnet\dotnet.exe" exec --runtimeconfig .\cmdline.runtimeconfig.json .\cmdline.exe one "two words"
+-- ucrt __argc/__argv:
+(null)

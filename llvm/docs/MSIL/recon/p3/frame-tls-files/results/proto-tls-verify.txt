@@ -1,0 +1,37 @@
+## PEVerify /il (NETFX 4.8 tools), offsets stripped, counted
+      3
+      1 6 Error(s) Verifying bin/proto_tls.exe(14 Warnings)
+      1 Copyright (c) Microsoft Corporation.  All rights reserved.
+      1 Microsoft (R) .NET Framework PE Verifier.  Version  4.0.30319.0
+      1 [IL]: Error: [proto_tls.exe : <Module>::.cctor][found Native Int] Expected ByRef on the stack.
+      1 [IL]: Error: [proto_tls.exe : <Module>::Main] initlocals must be set for verifiable methods with one or more local variables.
+      1 [IL]: Error: [proto_tls.exe : <Module>::bump] initlocals must be set for verifiable methods with one or more local variables.
+      1 [IL]: Error: [proto_tls.exe : <Module>::record] initlocals must be set for verifiable methods with one or more local variables.
+      1 [IL]: Error: [proto_tls.exe : <Module>::worker] initlocals must be set for verifiable methods with one or more local variables.
+      1 [IL]: Error: [proto_tls.exe : <msil>Thread::Init] initlocals must be set for verifiable methods with one or more local variables.
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x04000001]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x04000002]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x04000003]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x04000004]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x04000005]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x04000006]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x04000007]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x04000008]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x06000001]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x06000002]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x06000003]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x06000004]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x06000005]
+      1 [MD]: .NET Framework Internal error: 0x8013129d [token:0x06000006]
+
+## ILVerify (dotnet-ilverify 10.0.12) against mscorlib 4.0, offsets stripped, counted
+      1 21 Error(s) Verifying proto_tls.exe
+      5 [IL]: Error [InitLocals]: [proto_tls.exe : <Module>::Main()] initlocals must be set for verifiable methods with one or more local variables.
+      1 [IL]: Error [InitLocals]: [proto_tls.exe : <Module>::bump()] initlocals must be set for verifiable methods with one or more local variables.
+      2 [IL]: Error [InitLocals]: [proto_tls.exe : <Module>::record(int32)] initlocals must be set for verifiable methods with one or more local variables.
+      1 [IL]: Error [InitLocals]: [proto_tls.exe : <Module>::worker()] initlocals must be set for verifiable methods with one or more local variables.
+      6 [IL]: Error [InitLocals]: [proto_tls.exe : <msil>Thread::Init()] initlocals must be set for verifiable methods with one or more local variables.
+      1 [IL]: Error [StackByRef]: [proto_tls.exe : <Module>::.cctor()][found Native Int] Expected ByRef on the stack.
+      1 [IL]: Error [StackByRef]: [proto_tls.exe : <Module>::bump()][found Native Int] Expected ByRef on the stack.
+      1 [IL]: Error [StackByRef]: [proto_tls.exe : <Module>::record(int32)][found Native Int] Expected ByRef on the stack.
+      3 [IL]: Error [Unverifiable]: [proto_tls.exe : <msil>Thread::Init()] Instruction cannot be verified.

@@ -1,0 +1,32 @@
+--- wsl net8
+runtime 8.0.31 (.NET 8.0.31) threads=1000 kind=managed mode=none block=64 KiB
+allocated 1000, distinct per-thread values 1000, freed by finalizers 0
+memory (RSS): +78.5 KiB/thread after the threads, +76.0 KiB/thread after GC+finalizers (total 74.3 MiB)
+--- wsl net10
+runtime 10.0.13 (.NET 10.0.13) threads=1000 kind=managed mode=none block=64 KiB
+allocated 1000, distinct per-thread values 1000, freed by finalizers 0
+memory (RSS): +77.7 KiB/thread after the threads, +77.5 KiB/thread after GC+finalizers (total 75.6 MiB)
+--- wsl net8
+runtime 8.0.31 (.NET 8.0.31) threads=1000 kind=managed mode=holder block=64 KiB
+allocated 1000, distinct per-thread values 1000, freed by finalizers 1000
+memory (RSS): +43.5 KiB/thread after the threads, +43.5 KiB/thread after GC+finalizers (total 42.4 MiB)
+--- wsl net10
+runtime 10.0.13 (.NET 10.0.13) threads=1000 kind=managed mode=holder block=64 KiB
+allocated 1000, distinct per-thread values 1000, freed by finalizers 1000
+memory (RSS): +52.3 KiB/thread after the threads, +43.3 KiB/thread after GC+finalizers (total 42.3 MiB)
+--- wsl net8
+runtime 8.0.31 (.NET 8.0.31) threads=1000 kind=native mode=none block=64 KiB
+allocated 1000, distinct per-thread values 1000, freed by finalizers 0
+memory (RSS): +74.4 KiB/thread after the threads, +74.1 KiB/thread after GC+finalizers (total 72.4 MiB)
+--- wsl net10
+runtime 10.0.13 (.NET 10.0.13) threads=1000 kind=native mode=none block=64 KiB
+allocated 1000, distinct per-thread values 1000, freed by finalizers 0
+memory (RSS): +74.4 KiB/thread after the threads, +74.3 KiB/thread after GC+finalizers (total 72.6 MiB)
+--- wsl net8
+runtime 8.0.31 (.NET 8.0.31) threads=1000 kind=native mode=holder block=64 KiB
+allocated 1000, distinct per-thread values 1000, freed by finalizers 1000
+memory (RSS): +39.9 KiB/thread after the threads, +39.8 KiB/thread after GC+finalizers (total 38.9 MiB)
+--- wsl net10
+runtime 10.0.13 (.NET 10.0.13) threads=1000 kind=native mode=holder block=64 KiB
+allocated 1000, distinct per-thread values 1000, freed by finalizers 1000
+memory (RSS): +39.8 KiB/thread after the threads, +39.7 KiB/thread after GC+finalizers (total 38.8 MiB)

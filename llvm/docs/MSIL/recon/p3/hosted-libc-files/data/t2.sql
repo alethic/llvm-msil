@@ -1,0 +1,7 @@
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS k(x INTEGER PRIMARY KEY, y TEXT);
+WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 20000) INSERT INTO k(y) SELECT hex(randomblob(16)) FROM n;
+SELECT count(*), count(DISTINCT length(y)) FROM k;
+PRAGMA wal_checkpoint(TRUNCATE);
+VACUUM;
+PRAGMA integrity_check;

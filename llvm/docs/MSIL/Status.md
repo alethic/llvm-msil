@@ -2540,48 +2540,22 @@ name and never `libc` (Design.md 5.3). Where each item went, for the references 
 | 9 | 2.3 |
 | 12 | 5.5 |
 
-### Proposed Design.md updates (Phase 2 as built)
+### Phase 2 as-built items (15-23)
 
-Design.md is the user's, and no work package edits it (plan section 2). These are the places
-where Phase 2 as built differs from its text or adds to it, with proposed wording, numbered after
-the Phase 1 items above. Item 15 is already applied.
+Items 15-22 were proposed here where Phase 2 as built differed from Design.md. Item 15
+(two-phase initialization) was applied on 2026-10-27. Items 16-22 and a new item 23 (the
+data-import helper of `msil-ld`) were applied to [Design.md](Design.md) on 2026-10-28, with the
+user's approval, together with the Phase 3 plan and the Phase 3 decisions (recon
+`p3/decision-brief.md`); items 16, 19 and 21 were amended as recon `p3/backlog-p3.md` section 3
+says. Where each item went:
 
-15. **Two-phase initialization (4.1, 5.4).** Applied on 2026-10-27, when plan section 10 item 10
-    was resolved with its proposed wording: libraries (`-shared` outputs) initialize in two
-    phases, and a program runs the same steps, in the same order, in its one module initializer,
-    which is what M22 built.
-16. **Section 11, Phase 2 row.** Add after the table, as section 12 has for Phase 1: "*As built
-    (Phase 2, 2026-10-27).* Phase 2 delivered every outcome of its row (Status.md section 1):
-    `clang -c` writes CIL objects with link-info record v1, frozen since M20; `msil-ld` writes
-    the PE, binds native libraries, reference assemblies and library assemblies; objects are the
-    default route and `-S` plus ilasm a test oracle. Nine programs of several files and the link-semantics
-    matrix match their native builds through objects and LTO on .NET 8, .NET 10, .NET Framework
-    4.8 and WSL, and c-testsuite's 150 libc-free tests through objects on .NET 8. What Phase 2 reports as an error
-    instead of running is Phase 3's: thread-local data, destructors and `atexit`, variadic
-    definitions and calls, function pointers passed to native code, setjmp/longjmp, atomics and
-    the compiler-rt helpers."
-17. **5.1, bitcode objects.** "Until CIL objects exist, `clang -c` writes bitcode." is history
-    since M19: replace it by "`-flto -c` (or `-emit-llvm -c`) writes bitcode; `clang -c` writes a
-    CIL object."
-18. **5.1, shape.** Add: "An object has no spill classes, so one translation unit holds at most
-    the runtimes' per-type member counts (65,524 methods and 65,534 fields in `<Module>`);
-    `msil-ld`'s outputs spill past them into private classes." (spilling in objects is a phase 4
-    item; Status.md section 3, "Limits").
-19. **5.2, step 1.** "including the toolchain's static C helper archive" does not exist in Phase 2:
-    add "(from phase 3)", as plan section 7 (P2-B) says.
-20. **4.1, constructors.** Add: "On Linux triples a constructor may take glibc's `(int argc, char
-    **argv, char **envp)` or a prefix of it, and gets `main`'s `argc` and `argv` and the
-    process environment; on Windows triples, whose C runtime passes nothing, a constructor that
-    takes arguments is an error. A null function in `llvm.global_ctors` ends the list, as on
-    every LLVM target."
-21. **Section 8, output names.** After "The default output name is `a.exe` on every MSIL triple
-    ...", add: "An executable that can run on .NET Framework (linked without references or
-    against the Framework's reference assemblies) is named `<name>.exe` and runs directly or
-    through `dotnet`; one bound to a .NET reference pack runs only on .NET and is named
-    `<name>.dll`, run as `dotnet <name>.dll` with the runtimeconfig.json that the build system
-    writes. `msil-ld` warns when such an executable, or one bound to `netstandard` 2.1 or later,
-    is named `.exe`, and writes no apphost."
-22. **5.4, a known limit.** Add: "In a library whose `'<msil>Data'` fields spill into further
-    classes, two threads that first use the library at the same time may let one of them read a
-    spilled field before the first phase stored it; phase 3's threads fix it by running the first
-    phase inside the module initializer of such a library."
+| Items | Design.md |
+|---|---|
+| 15 | 4.1, 5.4 |
+| 16 | the "As built (Phase 2)" note after the section 11 table |
+| 17, 18 | 5.1 |
+| 19 | 5.2, step 1 |
+| 20 | 4.1 |
+| 21 | section 8 |
+| 22 | 5.4 |
+| 23 | 5.2, step 2.3, and the 7.1 table |

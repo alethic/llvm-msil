@@ -1,0 +1,1 @@
+public static class M { static int Main() { System.IntPtr a = La.Table(), b = Lb.Table(); System.Console.WriteLine("table shared across assemblies: " + (a == b) + " (" + System.Environment.Version + ")"); return a == b ? 0 : 1; } }

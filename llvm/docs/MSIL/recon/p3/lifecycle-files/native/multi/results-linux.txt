@@ -1,0 +1,34 @@
+=== main.linux ret
+libC: ctor
+libB: ctor
+prog: ctor
+prog: main
+libB: b_reg registers its handler
+libC: c_reg registers its handler
+prog: atexit h2 (registered after c_reg)
+libC: atexit handler (registered by c_reg)
+libB: atexit handler (registered by b_reg)
+prog: atexit h1 (registered before b_reg)
+prog: dtor
+libB: dtor
+libC: dtor
+libB: atexit handler (registered in libB ctor)
+libC: atexit handler (registered in libC ctor)
+status=0
+=== main.linux exit
+libC: ctor
+libB: ctor
+prog: ctor
+prog: main
+libB: b_reg registers its handler
+libC: c_reg registers its handler
+prog: atexit h2 (registered after c_reg)
+libC: atexit handler (registered by c_reg)
+libB: atexit handler (registered by b_reg)
+prog: atexit h1 (registered before b_reg)
+prog: dtor
+libB: dtor
+libC: dtor
+libB: atexit handler (registered in libB ctor)
+libC: atexit handler (registered in libC ctor)
+status=3

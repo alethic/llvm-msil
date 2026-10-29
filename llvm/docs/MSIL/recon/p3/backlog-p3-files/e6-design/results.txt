@@ -1,0 +1,5 @@
+# E6 what clang -c writes (first 4 bytes) at HEAD
+-c                M Z 220 \0
+-flto -c          B C 300 336
+-emit-llvm -c     B C 300 336
+-flto=thin -c     B C 300 336

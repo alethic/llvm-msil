@@ -1,0 +1,43 @@
+# E6b hoisting (hoist.il, hoist2.il): spin on a native-int address, flag set by another managed thread after 300 ms, join waits 3 s
+## hoist.exe
+[net48]
+plain: HUNG (load hoisted)
+plain+counter: HUNG (load hoisted)
+volatile: exited
+[net8 TieredCompilation=1]
+plain: exited
+plain+counter: exited
+volatile: exited
+[net8 TieredCompilation=0]
+plain: HUNG (load hoisted)
+plain+counter: HUNG (load hoisted)
+volatile: exited
+[net10 TieredCompilation=1]
+plain: HUNG (load hoisted)
+plain+counter: HUNG (load hoisted)
+volatile: exited
+[net10 TieredCompilation=0]
+plain: HUNG (load hoisted)
+plain+counter: HUNG (load hoisted)
+volatile: exited
+## hoist2.exe
+[net48]
+noinline call in loop: exited
+volatile ldsfld+pop in loop: HUNG (load hoisted)
+volatile ldsfld (used) in loop: exited
+[net8 TieredCompilation=1]
+noinline call in loop: exited
+volatile ldsfld+pop in loop: exited
+volatile ldsfld (used) in loop: exited
+[net8 TieredCompilation=0]
+noinline call in loop: exited
+volatile ldsfld+pop in loop: HUNG (load hoisted)
+volatile ldsfld (used) in loop: exited
+[net10 TieredCompilation=1]
+noinline call in loop: exited
+volatile ldsfld+pop in loop: HUNG (load hoisted)
+volatile ldsfld (used) in loop: exited
+[net10 TieredCompilation=0]
+noinline call in loop: exited
+volatile ldsfld+pop in loop: HUNG (load hoisted)
+volatile ldsfld (used) in loop: exited

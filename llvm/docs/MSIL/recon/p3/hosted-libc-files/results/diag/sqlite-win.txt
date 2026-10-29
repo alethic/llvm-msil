@@ -1,0 +1,17 @@
+### sqlite win -O2: clang -c (objects)
+failing (2): shell sqlite3
+  370  shell.c: error: calls to variadic functions are not supported for MSIL yet   [shell]
+   24  shell.c: error: variadic function definitions are not supported for MSIL yet   [shell]
+   20  sqlite3.c: error: variadic function definitions are not supported for MSIL yet   [sqlite3]
+    7  error: frame escape ('llvm.eh.recoverfp') is not supported for MSIL   [sqlite3]
+    7  sqlite3.c: error: frame escape ('llvm.localescape') is not supported for MSIL   [sqlite3]
+    4  stdio.h: error: variadic function definitions are not supported for MSIL yet   [shell]
+### msil-ld LTO link (-flto bitcode)
+failing (1): shell
+    1  msil-ld: error: <unknown>: in function fprintf i32 (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function printf i32 (ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function snprintf i32 (ptr, i64, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sscanf i32 (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+### msil-ld --lto-emit-asm --error-limit=0
+failing (1): shell
+    1  msil-ld: error: undefined symbol: main   [shell]

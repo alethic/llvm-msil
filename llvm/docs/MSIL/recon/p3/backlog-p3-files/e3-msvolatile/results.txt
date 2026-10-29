@@ -1,0 +1,29 @@
+# E3 stock-clang bitcode with /volatile:ms at HEAD cc4c79787d6a
+== clang --target=x86_64-pc-windows-msvc -O2 -flto -c vol.c (stock-clang path, -fms-volatile is the x86 windows-msvc default)
+[exit 0]
+== msil-ld --target=x86_64-pc-windows-msvc-msil vol.native.bc
+msil-ld: warning: vol.native.bc: linking bitcode for x86_64-pc-windows-msvc19.33.0 as x86_64-pc-windows-msvc-msil; stock-clang bitcode is a compatibility path
+msil-ld: error: undefined symbol: __atomic_store_4
+>>> referenced by vol.exe.lto.o:(main)
+
+msil-ld: error: undefined symbol: __atomic_store_8
+>>> referenced by vol.exe.lto.o:(main)
+
+msil-ld: error: undefined symbol: __atomic_load_4
+>>> referenced by vol.exe.lto.o:(main)
+[exit 1]
+== clang --target=x86_64-pc-windows-msvc-msil -O2 -fms-volatile -c vol.c; llvm-nm
+         U __atomic_load_4
+         U __atomic_store_4
+         U __atomic_store_8
+180004000 B big
+180004000 B flag
+180002000 T main
+180002000 T poll
+180002000 T set
+== clang --target=x86_64-pc-windows-msvc-msil -O2 -c vol.c (MSIL default: no -fms-volatile, M1.c); llvm-nm
+180004000 B big
+180004000 B flag
+180002000 T main
+180002000 T poll
+180002000 T set

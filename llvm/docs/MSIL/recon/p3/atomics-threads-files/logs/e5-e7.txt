@@ -1,0 +1,77 @@
+# E7 lock-free answers and predefines
+## x86_64-pc-windows-msvc-msil
+#define __CLANG_ATOMIC_LLONG_LOCK_FREE 2
+#define __CLANG_ATOMIC_POINTER_LOCK_FREE 2
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_1 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8 1
+## x86_64-unknown-linux-gnu-msil
+#define __CLANG_ATOMIC_LLONG_LOCK_FREE 2
+#define __CLANG_ATOMIC_POINTER_LOCK_FREE 2
+#define __GCC_ATOMIC_LLONG_LOCK_FREE 2
+#define __GCC_ATOMIC_POINTER_LOCK_FREE 2
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_1 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8 1
+## aarch64-unknown-linux-gnu-msil
+#define __CLANG_ATOMIC_LLONG_LOCK_FREE 2
+#define __CLANG_ATOMIC_POINTER_LOCK_FREE 2
+#define __GCC_ATOMIC_LLONG_LOCK_FREE 2
+#define __GCC_ATOMIC_POINTER_LOCK_FREE 2
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_1 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8 1
+## aarch64-pc-windows-msvc-msil
+#define __CLANG_ATOMIC_LLONG_LOCK_FREE 2
+#define __CLANG_ATOMIC_POINTER_LOCK_FREE 2
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_1 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4 1
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8 1
+## x86_64-unknown-linux-gnu-msil -mcx16
+#define __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16 1
+__atomic_always_lock_free(16,0) x86_64-unknown-linux-gnu-msil -mcx16:   ret i32 1
+__atomic_always_lock_free(16,0) x86_64-unknown-linux-gnu-msil -march=x86-64-v2:   ret i32 1
+__atomic_always_lock_free(16,0) x86_64-unknown-linux-gnu-msil :   ret i32 0
+
+# E5 compiler-rt atomic.c for MSIL triples (-O2 -ffreestanding -fno-builtin -fvisibility=hidden, -D__ELF__=1 on Linux): atomic ops in selected functions
+## x86_64-pc-windows-msvc-msil
+  __atomic_load_16: cmpxchg weak ptr %add.ptr.i, i64; store atomic i64
+  __atomic_fetch_add_16: cmpxchg weak ptr %add.ptr.i, i64; store atomic i64
+  __atomic_load_8: load atomic i64
+  __atomic_load: call void @llvm; cmpxchg weak ptr %add.ptr.i, i64; load atomic i16; load atomic i32; load atomic i64; load atomic i8; store atomic i64
+## x86_64-unknown-linux-gnu-msil
+  __atomic_load_16: cmpxchg weak ptr %add.ptr.i, i64; store atomic i64
+  __atomic_fetch_add_16: cmpxchg weak ptr %add.ptr.i, i64; store atomic i64
+  __atomic_load_8: load atomic i64
+  __atomic_load: call void @llvm; cmpxchg weak ptr %add.ptr.i, i64; load atomic i16; load atomic i32; load atomic i64; load atomic i8; store atomic i64
+## aarch64-unknown-linux-gnu-msil
+  __atomic_load_16: load atomic i128
+  __atomic_fetch_add_16: atomicrmw add ptr %ptr, i128
+  __atomic_load_8: load atomic i64
+  __atomic_load: call void @llvm; cmpxchg weak ptr %add.ptr.i, i64; load atomic i128; load atomic i16; load atomic i32; load atomic i64; load atomic i8; store atomic i64
+
+# E5 native oracle for i128.c (16- and 24-byte atomics)
+## x86_64-pc-windows-msvc + lld-link: undefined __atomic_load_16 (default), __atomic_store/__atomic_load/__atomic_is_lock_free (-mcx16)
+## x86_64-unknown-linux-gnu (E7-style link) without libatomic: undefined __atomic_fetch_add_16, __atomic_compare_exchange_16, __atomic_store, __atomic_load, __atomic_load_16, __atomic_is_lock_free
+## with WSL's libatomic.so.1: 1 3 lf16=0 lf24=0 always16=0 [native rc=0]
+
+# E5 process-wide lock table (appdom/liba.il, libb.il, main.cs)
+table shared across assemblies: True (4.0.30319.42000)
+table shared across assemblies: True (8.0.33)
+table shared across assemblies: True (10.0.14)
+# E5 interned-string lock objects and lock costs (cs/main.cs)
+interned lock objects shared across assemblies: True (4.0.30319.42000)
+ns/op: Monitor on interned string 23.4, spinlock CAS+release 8.5, Interlocked.Increment 5.1
+ns/op: Monitor on interned string 21.3, spinlock CAS+release 11.5, Interlocked.Increment 6.7
+interned lock objects shared across assemblies: True (8.0.33)
+ns/op: Monitor on interned string 22.4, spinlock CAS+release 9.8, Interlocked.Increment 5.1
+ns/op: Monitor on interned string 20.8, spinlock CAS+release 10.6, Interlocked.Increment 5.5
+interned lock objects shared across assemblies: True (10.0.14)
+ns/op: Monitor on interned string 20.7, spinlock CAS+release 7.1, Interlocked.Increment 5.1
+ns/op: Monitor on interned string 20.1, spinlock CAS+release 6.5, Interlocked.Increment 4.8

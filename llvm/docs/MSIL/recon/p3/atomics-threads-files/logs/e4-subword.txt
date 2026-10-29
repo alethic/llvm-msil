@@ -1,0 +1,45 @@
+# E4 subword CAS-loop test (sw), and the broken variant (swb: plain word store, negative control)
+[net48] subword: all updates kept
+
+[net8] subword: all updates kept
+
+[net10] subword: all updates kept
+
+[net8 TC=0] subword: all updates kept
+
+[wsl net8 rc=0] subword: all updates kept [wsl net10 rc=0] subword: all updates kept
+[net48] subword: all updates kept
+
+[net8] subword: all updates kept
+
+[net10] subword: all updates kept
+
+[net8 TC=0] subword: all updates kept
+
+[wsl net8 rc=0] subword: all updates kept [wsl net10 rc=0] subword: all updates kept
+[net48] subword: all updates kept
+
+[net8] subword: all updates kept
+
+[net10] subword: all updates kept
+
+[net8 TC=0] subword: all updates kept
+
+[wsl net8 rc=0] subword: all updates kept [wsl net10 rc=0] subword: all updates kept
+## negative control
+[net48] plain store overwritten during the run
+ FAIL
+
+[net8] lost byte update
+ lost plain store (final)
+ lost halfword update
+ plain store overwritten during the run
+ FAIL
+
+[net10] lost byte update
+ lost plain store (final)
+ plain store overwritten during the run
+ FAIL
+
+[net8 TC=0] plain store overwritten during the run
+ FAIL

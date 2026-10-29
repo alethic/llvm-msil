@@ -1,0 +1,906 @@
+=== bench fx default
+runtime 4.0.30319.42000
+--- round
+direct call                                                        0.61 ns
+managed calli (today: ldftn value)                                 3.79 ns
+calli unmanaged -> delegate thunk (A1 default)                    37.06 ns
+calli unmanaged -> native function                                 3.57 ns
+A2 lookup helper hit (delegate value) + managed calli              8.68 ns
+A2 lookup helper miss (native value) + calli unmanaged             9.97 ns
+A2 inline first probe hit (delegate value) + managed calli         3.85 ns
+A2 inline first probe miss (native value) + calli unmanaged        9.01 ns
+A2 per-site cache hit + managed calli                              3.27 ns
+native loop -> native function                                     1.81 ns
+native loop -> delegate thunk                                     31.73 ns
+native loop -> ldftn value (unsafe, for scale)                     2.77 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   190.25 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   792.67 ns
+--- round
+direct call                                                        0.54 ns
+managed calli (today: ldftn value)                                 4.85 ns
+calli unmanaged -> delegate thunk (A1 default)                    53.62 ns
+calli unmanaged -> native function                                 5.69 ns
+A2 lookup helper hit (delegate value) + managed calli              8.25 ns
+A2 lookup helper miss (native value) + calli unmanaged             7.51 ns
+A2 inline first probe hit (delegate value) + managed calli         4.22 ns
+A2 inline first probe miss (native value) + calli unmanaged        9.36 ns
+A2 per-site cache hit + managed calli                              3.33 ns
+native loop -> native function                                     1.61 ns
+native loop -> delegate thunk                                     26.53 ns
+native loop -> ldftn value (unsafe, for scale)                     6.71 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   174.23 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   838.73 ns
+--- round
+direct call                                                        4.32 ns
+managed calli (today: ldftn value)                                 7.30 ns
+calli unmanaged -> delegate thunk (A1 default)                    29.45 ns
+calli unmanaged -> native function                                 4.55 ns
+A2 lookup helper hit (delegate value) + managed calli              8.12 ns
+A2 lookup helper miss (native value) + calli unmanaged             7.90 ns
+A2 inline first probe hit (delegate value) + managed calli         4.05 ns
+A2 inline first probe miss (native value) + calli unmanaged        9.50 ns
+A2 per-site cache hit + managed calli                              3.26 ns
+native loop -> native function                                     2.36 ns
+native loop -> delegate thunk                                     55.70 ns
+native loop -> ldftn value (unsafe, for scale)                     2.98 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   258.79 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   841.94 ns
+7200000360000000
+exit=0
+=== bench n8 default
+runtime 8.0.33
+--- round
+direct call                                                        4.38 ns
+managed calli (today: ldftn value)                                 3.36 ns
+calli unmanaged -> delegate thunk (A1 default)                    43.28 ns
+calli unmanaged -> native function                                11.91 ns
+A2 lookup helper hit (delegate value) + managed calli              9.64 ns
+A2 lookup helper miss (native value) + calli unmanaged            15.58 ns
+A2 inline first probe hit (delegate value) + managed calli         4.29 ns
+A2 inline first probe miss (native value) + calli unmanaged       27.37 ns
+A2 per-site cache hit + managed calli                             12.30 ns
+native loop -> native function                                     1.86 ns
+native loop -> delegate thunk                                     20.75 ns
+native loop -> ldftn value (unsafe, for scale)                     3.78 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   227.72 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   729.88 ns
+--- round
+direct call                                                        5.46 ns
+managed calli (today: ldftn value)                                 2.81 ns
+calli unmanaged -> delegate thunk (A1 default)                    37.16 ns
+calli unmanaged -> native function                                29.57 ns
+A2 lookup helper hit (delegate value) + managed calli              6.56 ns
+A2 lookup helper miss (native value) + calli unmanaged            15.96 ns
+A2 inline first probe hit (delegate value) + managed calli         4.40 ns
+A2 inline first probe miss (native value) + calli unmanaged       18.62 ns
+A2 per-site cache hit + managed calli                              3.99 ns
+native loop -> native function                                     2.00 ns
+native loop -> delegate thunk                                     33.17 ns
+native loop -> ldftn value (unsafe, for scale)                     5.65 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   260.23 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   815.60 ns
+--- round
+direct call                                                        1.64 ns
+managed calli (today: ldftn value)                                 2.91 ns
+calli unmanaged -> delegate thunk (A1 default)                    42.31 ns
+calli unmanaged -> native function                                13.24 ns
+A2 lookup helper hit (delegate value) + managed calli              5.40 ns
+A2 lookup helper miss (native value) + calli unmanaged            24.16 ns
+A2 inline first probe hit (delegate value) + managed calli         5.76 ns
+A2 inline first probe miss (native value) + calli unmanaged       25.65 ns
+A2 per-site cache hit + managed calli                              5.78 ns
+native loop -> native function                                     3.03 ns
+native loop -> delegate thunk                                     21.72 ns
+native loop -> ldftn value (unsafe, for scale)                     3.39 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   270.13 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1044.48 ns
+7200000360000000
+exit=0
+=== bench n10 default
+runtime 10.0.14
+--- round
+direct call                                                        2.09 ns
+managed calli (today: ldftn value)                                 3.52 ns
+calli unmanaged -> delegate thunk (A1 default)                    16.87 ns
+calli unmanaged -> native function                                 4.21 ns
+A2 lookup helper hit (delegate value) + managed calli             11.25 ns
+A2 lookup helper miss (native value) + calli unmanaged             9.46 ns
+A2 inline first probe hit (delegate value) + managed calli         4.84 ns
+A2 inline first probe miss (native value) + calli unmanaged       12.72 ns
+A2 per-site cache hit + managed calli                              3.66 ns
+native loop -> native function                                     2.60 ns
+native loop -> delegate thunk                                     21.65 ns
+native loop -> ldftn value (unsafe, for scale)                     5.58 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   245.60 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   752.20 ns
+--- round
+direct call                                                        1.36 ns
+managed calli (today: ldftn value)                                 3.25 ns
+calli unmanaged -> delegate thunk (A1 default)                    21.97 ns
+calli unmanaged -> native function                                 3.06 ns
+A2 lookup helper hit (delegate value) + managed calli              6.30 ns
+A2 lookup helper miss (native value) + calli unmanaged            10.78 ns
+A2 inline first probe hit (delegate value) + managed calli         5.81 ns
+A2 inline first probe miss (native value) + calli unmanaged       12.82 ns
+A2 per-site cache hit + managed calli                              7.21 ns
+native loop -> native function                                     2.25 ns
+native loop -> delegate thunk                                     19.91 ns
+native loop -> ldftn value (unsafe, for scale)                     4.27 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   212.51 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   736.38 ns
+--- round
+direct call                                                        1.75 ns
+managed calli (today: ldftn value)                                 4.02 ns
+calli unmanaged -> delegate thunk (A1 default)                    18.27 ns
+calli unmanaged -> native function                                 3.85 ns
+A2 lookup helper hit (delegate value) + managed calli             12.64 ns
+A2 lookup helper miss (native value) + calli unmanaged            10.06 ns
+A2 inline first probe hit (delegate value) + managed calli         5.65 ns
+A2 inline first probe miss (native value) + calli unmanaged        8.83 ns
+A2 per-site cache hit + managed calli                              3.48 ns
+native loop -> native function                                     2.00 ns
+native loop -> delegate thunk                                     21.25 ns
+native loop -> ldftn value (unsafe, for scale)                     6.37 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   192.83 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   687.63 ns
+7200000360000000
+exit=0
+=== bench w8 default
+runtime 8.0.31
+--- round
+direct call                                                        4.57 ns
+managed calli (today: ldftn value)                                 6.90 ns
+calli unmanaged -> delegate thunk (A1 default)                    49.16 ns
+calli unmanaged -> native function                                31.14 ns
+A2 lookup helper hit (delegate value) + managed calli             20.57 ns
+A2 lookup helper miss (native value) + calli unmanaged            51.54 ns
+A2 inline first probe hit (delegate value) + managed calli         5.14 ns
+A2 inline first probe miss (native value) + calli unmanaged       31.69 ns
+A2 per-site cache hit + managed calli                              5.43 ns
+native loop -> native function                                     3.19 ns
+native loop -> delegate thunk                                     45.45 ns
+native loop -> ldftn value (unsafe, for scale)                     5.52 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   428.22 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1271.43 ns
+--- round
+direct call                                                        3.31 ns
+managed calli (today: ldftn value)                                 6.52 ns
+calli unmanaged -> delegate thunk (A1 default)                    87.95 ns
+calli unmanaged -> native function                                38.57 ns
+A2 lookup helper hit (delegate value) + managed calli             15.69 ns
+A2 lookup helper miss (native value) + calli unmanaged            54.52 ns
+A2 inline first probe hit (delegate value) + managed calli        10.21 ns
+A2 inline first probe miss (native value) + calli unmanaged       52.19 ns
+A2 per-site cache hit + managed calli                              6.44 ns
+native loop -> native function                                     4.66 ns
+native loop -> delegate thunk                                     34.04 ns
+native loop -> ldftn value (unsafe, for scale)                     2.89 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   272.22 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   858.19 ns
+--- round
+direct call                                                        3.68 ns
+managed calli (today: ldftn value)                                 6.44 ns
+calli unmanaged -> delegate thunk (A1 default)                    74.67 ns
+calli unmanaged -> native function                                22.83 ns
+A2 lookup helper hit (delegate value) + managed calli              8.38 ns
+A2 lookup helper miss (native value) + calli unmanaged            26.89 ns
+A2 inline first probe hit (delegate value) + managed calli         5.85 ns
+A2 inline first probe miss (native value) + calli unmanaged       31.50 ns
+A2 per-site cache hit + managed calli                              4.05 ns
+native loop -> native function                                     1.85 ns
+native loop -> delegate thunk                                     30.67 ns
+native loop -> ldftn value (unsafe, for scale)                     5.60 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   414.02 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1047.42 ns
+7200000360000000
+exit=0
+=== bench w10 default
+runtime 10.0.13
+--- round
+direct call                                                        3.75 ns
+managed calli (today: ldftn value)                                 7.24 ns
+calli unmanaged -> delegate thunk (A1 default)                    47.82 ns
+calli unmanaged -> native function                                11.82 ns
+A2 lookup helper hit (delegate value) + managed calli             17.47 ns
+A2 lookup helper miss (native value) + calli unmanaged            19.29 ns
+A2 inline first probe hit (delegate value) + managed calli         9.45 ns
+A2 inline first probe miss (native value) + calli unmanaged       10.81 ns
+A2 per-site cache hit + managed calli                              4.23 ns
+native loop -> native function                                     2.06 ns
+native loop -> delegate thunk                                     23.85 ns
+native loop -> ldftn value (unsafe, for scale)                     3.72 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   263.99 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   789.37 ns
+--- round
+direct call                                                        3.85 ns
+managed calli (today: ldftn value)                                 5.67 ns
+calli unmanaged -> delegate thunk (A1 default)                    49.23 ns
+calli unmanaged -> native function                                10.42 ns
+A2 lookup helper hit (delegate value) + managed calli             15.26 ns
+A2 lookup helper miss (native value) + calli unmanaged            18.48 ns
+A2 inline first probe hit (delegate value) + managed calli         8.83 ns
+A2 inline first probe miss (native value) + calli unmanaged       15.32 ns
+A2 per-site cache hit + managed calli                              4.80 ns
+native loop -> native function                                     2.99 ns
+native loop -> delegate thunk                                     23.63 ns
+native loop -> ldftn value (unsafe, for scale)                     5.55 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   410.03 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1109.72 ns
+--- round
+direct call                                                        3.92 ns
+managed calli (today: ldftn value)                                 5.82 ns
+calli unmanaged -> delegate thunk (A1 default)                    46.74 ns
+calli unmanaged -> native function                                10.30 ns
+A2 lookup helper hit (delegate value) + managed calli             12.92 ns
+A2 lookup helper miss (native value) + calli unmanaged            18.20 ns
+A2 inline first probe hit (delegate value) + managed calli         9.56 ns
+A2 inline first probe miss (native value) + calli unmanaged       17.47 ns
+A2 per-site cache hit + managed calli                              8.68 ns
+native loop -> native function                                     4.77 ns
+native loop -> delegate thunk                                     31.09 ns
+native loop -> ldftn value (unsafe, for scale)                     2.81 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   269.53 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   704.28 ns
+7200000360000000
+exit=0
+=== bench n8 TC=0
+runtime 8.0.33
+--- round
+direct call                                                        2.10 ns
+managed calli (today: ldftn value)                                 4.10 ns
+calli unmanaged -> delegate thunk (A1 default)                    25.30 ns
+calli unmanaged -> native function                                 3.94 ns
+A2 lookup helper hit (delegate value) + managed calli              6.27 ns
+A2 lookup helper miss (native value) + calli unmanaged             6.63 ns
+A2 inline first probe hit (delegate value) + managed calli         6.00 ns
+A2 inline first probe miss (native value) + calli unmanaged        9.64 ns
+A2 per-site cache hit + managed calli                              5.58 ns
+native loop -> native function                                     1.81 ns
+native loop -> delegate thunk                                     32.39 ns
+native loop -> ldftn value (unsafe, for scale)                     4.29 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   181.45 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   743.54 ns
+--- round
+direct call                                                        1.45 ns
+managed calli (today: ldftn value)                                 2.94 ns
+calli unmanaged -> delegate thunk (A1 default)                    28.17 ns
+calli unmanaged -> native function                                 3.34 ns
+A2 lookup helper hit (delegate value) + managed calli              5.55 ns
+A2 lookup helper miss (native value) + calli unmanaged             8.47 ns
+A2 inline first probe hit (delegate value) + managed calli        10.23 ns
+A2 inline first probe miss (native value) + calli unmanaged        7.73 ns
+A2 per-site cache hit + managed calli                              4.91 ns
+native loop -> native function                                     1.85 ns
+native loop -> delegate thunk                                     22.91 ns
+native loop -> ldftn value (unsafe, for scale)                     4.19 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   181.15 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   903.26 ns
+--- round
+direct call                                                        1.26 ns
+managed calli (today: ldftn value)                                 3.11 ns
+calli unmanaged -> delegate thunk (A1 default)                    30.47 ns
+calli unmanaged -> native function                                18.72 ns
+A2 lookup helper hit (delegate value) + managed calli              5.69 ns
+A2 lookup helper miss (native value) + calli unmanaged            11.89 ns
+A2 inline first probe hit (delegate value) + managed calli        13.89 ns
+A2 inline first probe miss (native value) + calli unmanaged        7.51 ns
+A2 per-site cache hit + managed calli                              4.88 ns
+native loop -> native function                                     1.63 ns
+native loop -> delegate thunk                                     24.98 ns
+native loop -> ldftn value (unsafe, for scale)                     4.08 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   180.47 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   698.17 ns
+7200000360000000
+exit=0
+=== benchuco n8 default
+runtime 8.0.33
+--- round
+direct call                                                        2.74 ns
+managed calli (today: ldftn value)                                 6.45 ns
+calli unmanaged -> delegate thunk (A1 default)                    37.79 ns
+calli unmanaged -> UCO thunk (A1 switch)                          26.38 ns
+calli unmanaged -> native function                                15.73 ns
+A2 lookup helper hit (delegate value) + managed calli             10.11 ns
+A2 lookup helper miss (native value) + calli unmanaged            18.92 ns
+A2 inline first probe hit (delegate value) + managed calli         6.30 ns
+A2 inline first probe miss (native value) + calli unmanaged       18.70 ns
+A2 per-site cache hit + managed calli                              4.17 ns
+native loop -> native function                                     1.79 ns
+native loop -> delegate thunk                                     28.94 ns
+native loop -> ldftn value (unsafe, for scale)                     3.52 ns
+native loop -> UCO thunk                                           7.56 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   194.03 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   825.88 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     499.54 ns
+--- round
+direct call                                                        1.64 ns
+managed calli (today: ldftn value)                                 2.91 ns
+calli unmanaged -> delegate thunk (A1 default)                    36.46 ns
+calli unmanaged -> UCO thunk (A1 switch)                          20.81 ns
+calli unmanaged -> native function                                14.77 ns
+A2 lookup helper hit (delegate value) + managed calli              5.65 ns
+A2 lookup helper miss (native value) + calli unmanaged            16.61 ns
+A2 inline first probe hit (delegate value) + managed calli         5.77 ns
+A2 inline first probe miss (native value) + calli unmanaged       16.67 ns
+A2 per-site cache hit + managed calli                              3.89 ns
+native loop -> native function                                     1.69 ns
+native loop -> delegate thunk                                     17.49 ns
+native loop -> ldftn value (unsafe, for scale)                     2.64 ns
+native loop -> UCO thunk                                           7.31 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   185.56 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   852.16 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     472.30 ns
+--- round
+direct call                                                        3.89 ns
+managed calli (today: ldftn value)                                 4.22 ns
+calli unmanaged -> delegate thunk (A1 default)                    32.10 ns
+calli unmanaged -> UCO thunk (A1 switch)                          21.13 ns
+calli unmanaged -> native function                                14.64 ns
+A2 lookup helper hit (delegate value) + managed calli             14.23 ns
+A2 lookup helper miss (native value) + calli unmanaged            25.54 ns
+A2 inline first probe hit (delegate value) + managed calli         5.87 ns
+A2 inline first probe miss (native value) + calli unmanaged       17.70 ns
+A2 per-site cache hit + managed calli                              3.63 ns
+native loop -> native function                                     2.43 ns
+native loop -> delegate thunk                                     23.98 ns
+native loop -> ldftn value (unsafe, for scale)                     3.67 ns
+native loop -> UCO thunk                                          14.18 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   188.67 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   766.45 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     395.66 ns
+8400000420000000
+exit=0
+=== benchuco n8 TC=0
+runtime 8.0.33
+--- round
+direct call                                                        1.71 ns
+managed calli (today: ldftn value)                                 6.02 ns
+calli unmanaged -> delegate thunk (A1 default)                    22.53 ns
+calli unmanaged -> UCO thunk (A1 switch)                           8.88 ns
+calli unmanaged -> native function                                 3.67 ns
+A2 lookup helper hit (delegate value) + managed calli             10.08 ns
+A2 lookup helper miss (native value) + calli unmanaged             6.41 ns
+A2 inline first probe hit (delegate value) + managed calli         5.96 ns
+A2 inline first probe miss (native value) + calli unmanaged        8.44 ns
+A2 per-site cache hit + managed calli                              3.69 ns
+native loop -> native function                                     1.69 ns
+native loop -> delegate thunk                                     29.72 ns
+native loop -> ldftn value (unsafe, for scale)                     5.38 ns
+native loop -> UCO thunk                                          11.43 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   184.13 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   826.57 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     413.17 ns
+--- round
+direct call                                                        1.12 ns
+managed calli (today: ldftn value)                                 3.07 ns
+calli unmanaged -> delegate thunk (A1 default)                    21.84 ns
+calli unmanaged -> UCO thunk (A1 switch)                          10.73 ns
+calli unmanaged -> native function                                 6.20 ns
+A2 lookup helper hit (delegate value) + managed calli             22.18 ns
+A2 lookup helper miss (native value) + calli unmanaged             6.58 ns
+A2 inline first probe hit (delegate value) + managed calli         5.25 ns
+A2 inline first probe miss (native value) + calli unmanaged       10.04 ns
+A2 per-site cache hit + managed calli                              4.53 ns
+native loop -> native function                                     2.08 ns
+native loop -> delegate thunk                                     25.01 ns
+native loop -> ldftn value (unsafe, for scale)                     8.20 ns
+native loop -> UCO thunk                                           9.35 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   271.03 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   925.23 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     525.04 ns
+--- round
+direct call                                                        2.34 ns
+managed calli (today: ldftn value)                                 4.31 ns
+calli unmanaged -> delegate thunk (A1 default)                    46.95 ns
+calli unmanaged -> UCO thunk (A1 switch)                          13.01 ns
+calli unmanaged -> native function                                 4.09 ns
+A2 lookup helper hit (delegate value) + managed calli              7.09 ns
+A2 lookup helper miss (native value) + calli unmanaged             6.97 ns
+A2 inline first probe hit (delegate value) + managed calli         5.41 ns
+A2 inline first probe miss (native value) + calli unmanaged        8.63 ns
+A2 per-site cache hit + managed calli                              4.15 ns
+native loop -> native function                                     1.63 ns
+native loop -> delegate thunk                                     23.56 ns
+native loop -> ldftn value (unsafe, for scale)                     4.54 ns
+native loop -> UCO thunk                                           8.52 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   184.87 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   861.39 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     587.99 ns
+8400000420000000
+exit=0
+=== bench n10 TC=0
+runtime 10.0.14
+--- round
+direct call                                                        1.72 ns
+managed calli (today: ldftn value)                                 3.42 ns
+calli unmanaged -> delegate thunk (A1 default)                    16.67 ns
+calli unmanaged -> native function                                 3.64 ns
+A2 lookup helper hit (delegate value) + managed calli              5.00 ns
+A2 lookup helper miss (native value) + calli unmanaged             6.83 ns
+A2 inline first probe hit (delegate value) + managed calli         5.18 ns
+A2 inline first probe miss (native value) + calli unmanaged        8.26 ns
+A2 per-site cache hit + managed calli                              3.63 ns
+native loop -> native function                                     2.58 ns
+native loop -> delegate thunk                                     21.21 ns
+native loop -> ldftn value (unsafe, for scale)                     2.66 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   157.37 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   516.59 ns
+--- round
+direct call                                                        1.55 ns
+managed calli (today: ldftn value)                                 2.82 ns
+calli unmanaged -> delegate thunk (A1 default)                    19.12 ns
+calli unmanaged -> native function                                 3.19 ns
+A2 lookup helper hit (delegate value) + managed calli              5.42 ns
+A2 lookup helper miss (native value) + calli unmanaged            11.92 ns
+A2 inline first probe hit (delegate value) + managed calli        13.03 ns
+A2 inline first probe miss (native value) + calli unmanaged       20.99 ns
+A2 per-site cache hit + managed calli                              3.79 ns
+native loop -> native function                                     1.77 ns
+native loop -> delegate thunk                                     34.46 ns
+native loop -> ldftn value (unsafe, for scale)                     4.65 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   208.86 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   704.83 ns
+--- round
+direct call                                                        1.63 ns
+managed calli (today: ldftn value)                                 3.63 ns
+calli unmanaged -> delegate thunk (A1 default)                    16.65 ns
+calli unmanaged -> native function                                 4.15 ns
+A2 lookup helper hit (delegate value) + managed calli              5.73 ns
+A2 lookup helper miss (native value) + calli unmanaged             6.95 ns
+A2 inline first probe hit (delegate value) + managed calli         4.90 ns
+A2 inline first probe miss (native value) + calli unmanaged       28.91 ns
+A2 per-site cache hit + managed calli                              4.21 ns
+native loop -> native function                                     1.85 ns
+native loop -> delegate thunk                                     16.64 ns
+native loop -> ldftn value (unsafe, for scale)                     7.04 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   222.41 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1414.03 ns
+7200000360000000
+exit=0
+=== benchuco n10 default
+runtime 10.0.14
+--- round
+direct call                                                        2.94 ns
+managed calli (today: ldftn value)                                 8.76 ns
+calli unmanaged -> delegate thunk (A1 default)                    36.91 ns
+calli unmanaged -> UCO thunk (A1 switch)                           8.86 ns
+calli unmanaged -> native function                                 3.45 ns
+A2 lookup helper hit (delegate value) + managed calli              8.34 ns
+A2 lookup helper miss (native value) + calli unmanaged             9.08 ns
+A2 inline first probe hit (delegate value) + managed calli         5.14 ns
+A2 inline first probe miss (native value) + calli unmanaged       12.07 ns
+A2 per-site cache hit + managed calli                              3.39 ns
+native loop -> native function                                     2.08 ns
+native loop -> delegate thunk                                     16.39 ns
+native loop -> ldftn value (unsafe, for scale)                     3.60 ns
+native loop -> UCO thunk                                          18.44 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   205.31 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   671.20 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     545.87 ns
+--- round
+direct call                                                        1.66 ns
+managed calli (today: ldftn value)                                 2.75 ns
+calli unmanaged -> delegate thunk (A1 default)                    16.33 ns
+calli unmanaged -> UCO thunk (A1 switch)                           8.32 ns
+calli unmanaged -> native function                                 3.45 ns
+A2 lookup helper hit (delegate value) + managed calli              8.69 ns
+A2 lookup helper miss (native value) + calli unmanaged             7.81 ns
+A2 inline first probe hit (delegate value) + managed calli         4.59 ns
+A2 inline first probe miss (native value) + calli unmanaged       23.67 ns
+A2 per-site cache hit + managed calli                              7.69 ns
+native loop -> native function                                     2.10 ns
+native loop -> delegate thunk                                     18.14 ns
+native loop -> ldftn value (unsafe, for scale)                     4.16 ns
+native loop -> UCO thunk                                          14.64 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   317.11 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   660.05 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)    1111.44 ns
+--- round
+direct call                                                        6.76 ns
+managed calli (today: ldftn value)                                11.99 ns
+calli unmanaged -> delegate thunk (A1 default)                    18.84 ns
+calli unmanaged -> UCO thunk (A1 switch)                           8.47 ns
+calli unmanaged -> native function                                 3.37 ns
+A2 lookup helper hit (delegate value) + managed calli              6.59 ns
+A2 lookup helper miss (native value) + calli unmanaged             7.49 ns
+A2 inline first probe hit (delegate value) + managed calli         4.79 ns
+A2 inline first probe miss (native value) + calli unmanaged        7.78 ns
+A2 per-site cache hit + managed calli                              2.60 ns
+native loop -> native function                                     1.64 ns
+native loop -> delegate thunk                                     20.09 ns
+native loop -> ldftn value (unsafe, for scale)                     5.16 ns
+native loop -> UCO thunk                                          11.74 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   200.58 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   665.79 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     429.42 ns
+8400000420000000
+exit=0
+=== benchuco n10 TC=0
+runtime 10.0.14
+--- round
+direct call                                                        2.32 ns
+managed calli (today: ldftn value)                                 5.04 ns
+calli unmanaged -> delegate thunk (A1 default)                    16.79 ns
+calli unmanaged -> UCO thunk (A1 switch)                          11.89 ns
+calli unmanaged -> native function                                 4.49 ns
+A2 lookup helper hit (delegate value) + managed calli              7.03 ns
+A2 lookup helper miss (native value) + calli unmanaged             8.80 ns
+A2 inline first probe hit (delegate value) + managed calli        10.15 ns
+A2 inline first probe miss (native value) + calli unmanaged       14.03 ns
+A2 per-site cache hit + managed calli                              5.18 ns
+native loop -> native function                                     2.00 ns
+native loop -> delegate thunk                                     15.28 ns
+native loop -> ldftn value (unsafe, for scale)                     2.78 ns
+native loop -> UCO thunk                                           6.61 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   181.78 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   504.95 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     397.43 ns
+--- round
+direct call                                                        2.65 ns
+managed calli (today: ldftn value)                                 9.39 ns
+calli unmanaged -> delegate thunk (A1 default)                    15.94 ns
+calli unmanaged -> UCO thunk (A1 switch)                           9.89 ns
+calli unmanaged -> native function                                 6.34 ns
+A2 lookup helper hit (delegate value) + managed calli             15.10 ns
+A2 lookup helper miss (native value) + calli unmanaged             7.12 ns
+A2 inline first probe hit (delegate value) + managed calli         5.65 ns
+A2 inline first probe miss (native value) + calli unmanaged       10.91 ns
+A2 per-site cache hit + managed calli                              4.73 ns
+native loop -> native function                                     2.01 ns
+native loop -> delegate thunk                                     19.09 ns
+native loop -> ldftn value (unsafe, for scale)                     2.77 ns
+native loop -> UCO thunk                                           7.52 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   180.95 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   554.77 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     436.01 ns
+--- round
+direct call                                                        1.61 ns
+managed calli (today: ldftn value)                                 3.48 ns
+calli unmanaged -> delegate thunk (A1 default)                    14.37 ns
+calli unmanaged -> UCO thunk (A1 switch)                          10.23 ns
+calli unmanaged -> native function                                 3.19 ns
+A2 lookup helper hit (delegate value) + managed calli              7.66 ns
+A2 lookup helper miss (native value) + calli unmanaged             6.36 ns
+A2 inline first probe hit (delegate value) + managed calli         4.51 ns
+A2 inline first probe miss (native value) + calli unmanaged        7.47 ns
+A2 per-site cache hit + managed calli                              6.15 ns
+native loop -> native function                                     2.41 ns
+native loop -> delegate thunk                                     12.29 ns
+native loop -> ldftn value (unsafe, for scale)                     2.45 ns
+native loop -> UCO thunk                                           7.03 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   168.13 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   531.54 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     367.96 ns
+8400000420000000
+exit=0
+=== bench w8 TC=0
+runtime 8.0.31
+--- round
+direct call                                                        4.34 ns
+managed calli (today: ldftn value)                                 6.59 ns
+calli unmanaged -> delegate thunk (A1 default)                    49.54 ns
+calli unmanaged -> native function                                 5.24 ns
+A2 lookup helper hit (delegate value) + managed calli              6.78 ns
+A2 lookup helper miss (native value) + calli unmanaged            11.42 ns
+A2 inline first probe hit (delegate value) + managed calli         5.12 ns
+A2 inline first probe miss (native value) + calli unmanaged       10.17 ns
+A2 per-site cache hit + managed calli                              7.30 ns
+native loop -> native function                                     1.74 ns
+native loop -> delegate thunk                                     30.04 ns
+native loop -> ldftn value (unsafe, for scale)                     6.43 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   397.49 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1053.32 ns
+--- round
+direct call                                                        4.15 ns
+managed calli (today: ldftn value)                                 4.64 ns
+calli unmanaged -> delegate thunk (A1 default)                    29.60 ns
+calli unmanaged -> native function                                 4.06 ns
+A2 lookup helper hit (delegate value) + managed calli              5.93 ns
+A2 lookup helper miss (native value) + calli unmanaged            15.33 ns
+A2 inline first probe hit (delegate value) + managed calli        13.00 ns
+A2 inline first probe miss (native value) + calli unmanaged       18.97 ns
+A2 per-site cache hit + managed calli                              6.48 ns
+native loop -> native function                                     2.00 ns
+native loop -> delegate thunk                                     24.69 ns
+native loop -> ldftn value (unsafe, for scale)                     2.84 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   239.66 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   734.76 ns
+--- round
+direct call                                                        2.76 ns
+managed calli (today: ldftn value)                                 5.18 ns
+calli unmanaged -> delegate thunk (A1 default)                    35.57 ns
+calli unmanaged -> native function                                 4.15 ns
+A2 lookup helper hit (delegate value) + managed calli             10.89 ns
+A2 lookup helper miss (native value) + calli unmanaged            11.54 ns
+A2 inline first probe hit (delegate value) + managed calli         8.62 ns
+A2 inline first probe miss (native value) + calli unmanaged       17.68 ns
+A2 per-site cache hit + managed calli                              5.00 ns
+native loop -> native function                                     2.04 ns
+native loop -> delegate thunk                                     26.38 ns
+native loop -> ldftn value (unsafe, for scale)                     2.90 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   231.41 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   960.32 ns
+7200000360000000
+exit=0
+=== benchuco w8 default
+runtime 8.0.31
+--- round
+direct call                                                        4.43 ns
+managed calli (today: ldftn value)                                 6.45 ns
+calli unmanaged -> delegate thunk (A1 default)                    44.88 ns
+calli unmanaged -> UCO thunk (A1 switch)                          49.25 ns
+calli unmanaged -> native function                                30.16 ns
+A2 lookup helper hit (delegate value) + managed calli             13.98 ns
+A2 lookup helper miss (native value) + calli unmanaged            33.52 ns
+A2 inline first probe hit (delegate value) + managed calli         6.65 ns
+A2 inline first probe miss (native value) + calli unmanaged       37.35 ns
+A2 per-site cache hit + managed calli                              4.68 ns
+native loop -> native function                                     2.11 ns
+native loop -> delegate thunk                                     27.63 ns
+native loop -> ldftn value (unsafe, for scale)                     5.14 ns
+native loop -> UCO thunk                                          14.10 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   250.82 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   722.18 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     847.02 ns
+--- round
+direct call                                                        3.33 ns
+managed calli (today: ldftn value)                                 5.57 ns
+calli unmanaged -> delegate thunk (A1 default)                    80.05 ns
+calli unmanaged -> UCO thunk (A1 switch)                          65.58 ns
+calli unmanaged -> native function                                24.23 ns
+A2 lookup helper hit (delegate value) + managed calli              9.35 ns
+A2 lookup helper miss (native value) + calli unmanaged            27.62 ns
+A2 inline first probe hit (delegate value) + managed calli         6.91 ns
+A2 inline first probe miss (native value) + calli unmanaged       39.05 ns
+A2 per-site cache hit + managed calli                              5.55 ns
+native loop -> native function                                     3.85 ns
+native loop -> delegate thunk                                     31.08 ns
+native loop -> ldftn value (unsafe, for scale)                     2.20 ns
+native loop -> UCO thunk                                          13.30 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   250.94 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   920.91 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     551.14 ns
+--- round
+direct call                                                        2.81 ns
+managed calli (today: ldftn value)                                 3.74 ns
+calli unmanaged -> delegate thunk (A1 default)                    39.62 ns
+calli unmanaged -> UCO thunk (A1 switch)                          39.95 ns
+calli unmanaged -> native function                                27.73 ns
+A2 lookup helper hit (delegate value) + managed calli              9.64 ns
+A2 lookup helper miss (native value) + calli unmanaged            35.65 ns
+A2 inline first probe hit (delegate value) + managed calli        11.16 ns
+A2 inline first probe miss (native value) + calli unmanaged       53.26 ns
+A2 per-site cache hit + managed calli                              7.20 ns
+native loop -> native function                                     4.06 ns
+native loop -> delegate thunk                                     39.09 ns
+native loop -> ldftn value (unsafe, for scale)                     5.49 ns
+native loop -> UCO thunk                                          22.38 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   445.76 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1004.46 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     434.82 ns
+8400000420000000
+exit=0
+=== benchuco w8 TC=0
+runtime 8.0.31
+--- round
+direct call                                                        2.52 ns
+managed calli (today: ldftn value)                                 8.66 ns
+calli unmanaged -> delegate thunk (A1 default)                    54.20 ns
+calli unmanaged -> UCO thunk (A1 switch)                          34.08 ns
+calli unmanaged -> native function                                10.27 ns
+A2 lookup helper hit (delegate value) + managed calli             17.45 ns
+A2 lookup helper miss (native value) + calli unmanaged            20.63 ns
+A2 inline first probe hit (delegate value) + managed calli        12.00 ns
+A2 inline first probe miss (native value) + calli unmanaged       21.32 ns
+A2 per-site cache hit + managed calli                              7.94 ns
+native loop -> native function                                     4.11 ns
+native loop -> delegate thunk                                     43.91 ns
+native loop -> ldftn value (unsafe, for scale)                     5.57 ns
+native loop -> UCO thunk                                          17.39 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   236.09 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   769.19 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     509.58 ns
+--- round
+direct call                                                        1.90 ns
+managed calli (today: ldftn value)                                 4.68 ns
+calli unmanaged -> delegate thunk (A1 default)                    37.41 ns
+calli unmanaged -> UCO thunk (A1 switch)                          16.18 ns
+calli unmanaged -> native function                                 7.88 ns
+A2 lookup helper hit (delegate value) + managed calli              8.84 ns
+A2 lookup helper miss (native value) + calli unmanaged            14.26 ns
+A2 inline first probe hit (delegate value) + managed calli         7.00 ns
+A2 inline first probe miss (native value) + calli unmanaged       10.09 ns
+A2 per-site cache hit + managed calli                              4.16 ns
+native loop -> native function                                     2.04 ns
+native loop -> delegate thunk                                     22.18 ns
+native loop -> ldftn value (unsafe, for scale)                     2.80 ns
+native loop -> UCO thunk                                          12.90 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   302.92 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   676.11 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     542.36 ns
+--- round
+direct call                                                        1.26 ns
+managed calli (today: ldftn value)                                 4.54 ns
+calli unmanaged -> delegate thunk (A1 default)                    29.37 ns
+calli unmanaged -> UCO thunk (A1 switch)                          17.12 ns
+calli unmanaged -> native function                                 5.62 ns
+A2 lookup helper hit (delegate value) + managed calli              8.08 ns
+A2 lookup helper miss (native value) + calli unmanaged            17.21 ns
+A2 inline first probe hit (delegate value) + managed calli         8.43 ns
+A2 inline first probe miss (native value) + calli unmanaged       12.24 ns
+A2 per-site cache hit + managed calli                              5.23 ns
+native loop -> native function                                     2.00 ns
+native loop -> delegate thunk                                     22.74 ns
+native loop -> ldftn value (unsafe, for scale)                     2.74 ns
+native loop -> UCO thunk                                          11.52 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   217.53 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   545.60 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     564.01 ns
+8400000420000000
+exit=0
+=== bench w10 TC=0
+runtime 10.0.13
+--- round
+direct call                                                        2.36 ns
+managed calli (today: ldftn value)                                 3.13 ns
+calli unmanaged -> delegate thunk (A1 default)                    28.26 ns
+calli unmanaged -> native function                                 3.96 ns
+A2 lookup helper hit (delegate value) + managed calli              7.74 ns
+A2 lookup helper miss (native value) + calli unmanaged            12.47 ns
+A2 inline first probe hit (delegate value) + managed calli         6.55 ns
+A2 inline first probe miss (native value) + calli unmanaged       13.98 ns
+A2 per-site cache hit + managed calli                             10.70 ns
+native loop -> native function                                     4.87 ns
+native loop -> delegate thunk                                     21.82 ns
+native loop -> ldftn value (unsafe, for scale)                     3.11 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   252.21 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   571.86 ns
+--- round
+direct call                                                        1.93 ns
+managed calli (today: ldftn value)                                 4.37 ns
+calli unmanaged -> delegate thunk (A1 default)                    27.15 ns
+calli unmanaged -> native function                                 4.51 ns
+A2 lookup helper hit (delegate value) + managed calli              7.63 ns
+A2 lookup helper miss (native value) + calli unmanaged             8.20 ns
+A2 inline first probe hit (delegate value) + managed calli         7.45 ns
+A2 inline first probe miss (native value) + calli unmanaged       11.80 ns
+A2 per-site cache hit + managed calli                              4.86 ns
+native loop -> native function                                     2.09 ns
+native loop -> delegate thunk                                     26.80 ns
+native loop -> ldftn value (unsafe, for scale)                     5.56 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   288.75 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   722.14 ns
+--- round
+direct call                                                        1.80 ns
+managed calli (today: ldftn value)                                 3.08 ns
+calli unmanaged -> delegate thunk (A1 default)                    41.02 ns
+calli unmanaged -> native function                                 8.76 ns
+A2 lookup helper hit (delegate value) + managed calli             12.53 ns
+A2 lookup helper miss (native value) + calli unmanaged            10.25 ns
+A2 inline first probe hit (delegate value) + managed calli         8.10 ns
+A2 inline first probe miss (native value) + calli unmanaged       11.21 ns
+A2 per-site cache hit + managed calli                              7.66 ns
+native loop -> native function                                     3.96 ns
+native loop -> delegate thunk                                     45.86 ns
+native loop -> ldftn value (unsafe, for scale)                     4.85 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   343.77 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   628.03 ns
+7200000360000000
+exit=0
+=== benchuco w10 default
+runtime 10.0.13
+--- round
+direct call                                                        3.50 ns
+managed calli (today: ldftn value)                                 3.84 ns
+calli unmanaged -> delegate thunk (A1 default)                    25.89 ns
+calli unmanaged -> UCO thunk (A1 switch)                          15.35 ns
+calli unmanaged -> native function                                 4.42 ns
+A2 lookup helper hit (delegate value) + managed calli             10.79 ns
+A2 lookup helper miss (native value) + calli unmanaged             8.85 ns
+A2 inline first probe hit (delegate value) + managed calli         4.29 ns
+A2 inline first probe miss (native value) + calli unmanaged        9.91 ns
+A2 per-site cache hit + managed calli                              3.62 ns
+native loop -> native function                                     1.96 ns
+native loop -> delegate thunk                                     22.38 ns
+native loop -> ldftn value (unsafe, for scale)                     2.86 ns
+native loop -> UCO thunk                                          15.22 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   275.35 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   577.43 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     423.39 ns
+--- round
+direct call                                                        2.82 ns
+managed calli (today: ldftn value)                                 3.29 ns
+calli unmanaged -> delegate thunk (A1 default)                    25.69 ns
+calli unmanaged -> UCO thunk (A1 switch)                          15.43 ns
+calli unmanaged -> native function                                 5.59 ns
+A2 lookup helper hit (delegate value) + managed calli              7.70 ns
+A2 lookup helper miss (native value) + calli unmanaged            12.89 ns
+A2 inline first probe hit (delegate value) + managed calli         8.22 ns
+A2 inline first probe miss (native value) + calli unmanaged       14.79 ns
+A2 per-site cache hit + managed calli                              5.99 ns
+native loop -> native function                                     2.89 ns
+native loop -> delegate thunk                                     30.45 ns
+native loop -> ldftn value (unsafe, for scale)                     3.94 ns
+native loop -> UCO thunk                                          21.99 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   372.72 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)   707.58 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     412.00 ns
+--- round
+direct call                                                        2.07 ns
+managed calli (today: ldftn value)                                 3.85 ns
+calli unmanaged -> delegate thunk (A1 default)                    38.74 ns
+calli unmanaged -> UCO thunk (A1 switch)                          30.77 ns
+calli unmanaged -> native function                                 9.79 ns
+A2 lookup helper hit (delegate value) + managed calli             17.94 ns
+A2 lookup helper miss (native value) + calli unmanaged            18.31 ns
+A2 inline first probe hit (delegate value) + managed calli         8.84 ns
+A2 inline first probe miss (native value) + calli unmanaged       18.51 ns
+A2 per-site cache hit + managed calli                              7.21 ns
+native loop -> native function                                     4.52 ns
+native loop -> delegate thunk                                     33.45 ns
+native loop -> ldftn value (unsafe, for scale)                     6.28 ns
+native loop -> UCO thunk                                          26.30 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   432.82 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1044.82 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     540.78 ns
+8400000420000000
+exit=0
+=== benchuco w10 TC=0
+runtime 10.0.13
+--- round
+direct call                                                        2.69 ns
+managed calli (today: ldftn value)                                 6.44 ns
+calli unmanaged -> delegate thunk (A1 default)                    47.31 ns
+calli unmanaged -> UCO thunk (A1 switch)                          30.84 ns
+calli unmanaged -> native function                                 9.67 ns
+A2 lookup helper hit (delegate value) + managed calli             19.96 ns
+A2 lookup helper miss (native value) + calli unmanaged            17.12 ns
+A2 inline first probe hit (delegate value) + managed calli         5.81 ns
+A2 inline first probe miss (native value) + calli unmanaged       13.34 ns
+A2 per-site cache hit + managed calli                              5.95 ns
+native loop -> native function                                     2.12 ns
+native loop -> delegate thunk                                     24.05 ns
+native loop -> ldftn value (unsafe, for scale)                     3.17 ns
+native loop -> UCO thunk                                          23.62 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   430.95 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1199.17 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     822.22 ns
+--- round
+direct call                                                        3.88 ns
+managed calli (today: ldftn value)                                 6.49 ns
+calli unmanaged -> delegate thunk (A1 default)                    50.73 ns
+calli unmanaged -> UCO thunk (A1 switch)                          32.88 ns
+calli unmanaged -> native function                                11.01 ns
+A2 lookup helper hit (delegate value) + managed calli             16.26 ns
+A2 lookup helper miss (native value) + calli unmanaged            17.51 ns
+A2 inline first probe hit (delegate value) + managed calli         9.47 ns
+A2 inline first probe miss (native value) + calli unmanaged       22.70 ns
+A2 per-site cache hit + managed calli                             12.09 ns
+native loop -> native function                                     3.95 ns
+native loop -> delegate thunk                                     43.80 ns
+native loop -> ldftn value (unsafe, for scale)                     5.08 ns
+native loop -> UCO thunk                                          26.79 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   398.20 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1044.57 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     769.50 ns
+--- round
+direct call                                                        3.19 ns
+managed calli (today: ldftn value)                                 5.70 ns
+calli unmanaged -> delegate thunk (A1 default)                    56.88 ns
+calli unmanaged -> UCO thunk (A1 switch)                          32.63 ns
+calli unmanaged -> native function                                10.99 ns
+A2 lookup helper hit (delegate value) + managed calli             19.18 ns
+A2 lookup helper miss (native value) + calli unmanaged            16.90 ns
+A2 inline first probe hit (delegate value) + managed calli         9.98 ns
+A2 inline first probe miss (native value) + calli unmanaged       20.43 ns
+A2 per-site cache hit + managed calli                             11.96 ns
+native loop -> native function                                     3.97 ns
+native loop -> delegate thunk                                     41.15 ns
+native loop -> ldftn value (unsafe, for scale)                     5.60 ns
+native loop -> UCO thunk                                          25.90 ns
+qsort native comparator (per sort of n/20 ints, ns per element)   403.44 ns
+qsort delegate-thunk comparator (per sort of n/20 ints, ns per element)  1052.83 ns
+qsort UCO comparator (per sort of n/20 ints, ns per element)     783.83 ns
+8400000420000000
+exit=0
+ALLDONE

@@ -1,0 +1,86 @@
+# output comparison (m2/, tools/measure.sh), MSIL vs the native build of the same sources
+## zlib-example
+  fx      md5 f8defc9cb9c9  bytes 260  exit [exit 0]
+  natlin  md5 195d5823918e  bytes 252  exit [exit 0]
+  natwin  md5 f8defc9cb9c9  bytes 260  exit [exit 0]
+  net10   md5 f8defc9cb9c9  bytes 260  exit [exit 0]
+  net8    md5 f8defc9cb9c9  bytes 260  exit [exit 0]
+  wsl10   md5 195d5823918e  bytes 252  exit [exit 0]
+  wsl8    md5 195d5823918e  bytes 252  exit [exit 0]
+## zlib-mgz-c
+  fx      md5 fad254798e51  bytes 523689  exit [exit 0]
+  natlin  md5 33a91bee59a0  bytes 523689  exit [exit 0]
+  natwin  md5 fad254798e51  bytes 523689  exit [exit 0]
+  net10   md5 fad254798e51  bytes 523689  exit [exit 0]
+  net8    md5 fad254798e51  bytes 523689  exit [exit 0]
+  wsl10   md5 33a91bee59a0  bytes 523689  exit [exit 0]
+  wsl8    md5 33a91bee59a0  bytes 523689  exit [exit 0]
+## zlib-mgz-d
+  fx      md5 c3131b44797b  bytes 2000000  exit [exit 0]
+  natlin  md5 c3131b44797b  bytes 2000000  exit [exit 0]
+  natwin  md5 c3131b44797b  bytes 2000000  exit [exit 0]
+  net10   md5 c3131b44797b  bytes 2000000  exit [exit 0]
+  net8    md5 c3131b44797b  bytes 2000000  exit [exit 0]
+  wsl10   md5 c3131b44797b  bytes 2000000  exit [exit 0]
+  wsl8    md5 c3131b44797b  bytes 2000000  exit [exit 0]
+## lua-prog1
+  fx      md5 f6190d8ecfc8  bytes 1303  exit [exit 0]
+  natlin  md5 bdf068cb8b78  bytes 1276  exit [exit 0]
+  natwin  md5 42f220086ac1  bytes 1303  exit [exit 0]
+  net10   md5 f6190d8ecfc8  bytes 1303  exit [exit 0]
+  net8    md5 f6190d8ecfc8  bytes 1303  exit [exit 0]
+  wsl10   md5 bdf068cb8b78  bytes 1276  exit [exit 0]
+  wsl8    md5 bdf068cb8b78  bytes 1276  exit [exit 0]
+## lua-prog2
+  natlin  md5 4e46b631df83  bytes 307  exit [exit 0]
+  wsl10   md5 4e46b631df83  bytes 307  exit [exit 0]
+  wsl8    md5 4e46b631df83  bytes 307  exit [exit 0]
+## sql1
+  fx      md5 e03d2fc3a139  bytes 1317  exit [exit 0]
+  natlin  md5 b60e31f82393  bytes 1293  exit [exit 0]
+  natwin  md5 b60e31f82393  bytes 1293  exit [exit 0]
+  net10   md5 e03d2fc3a139  bytes 1317  exit [exit 0]
+  net8    md5 e03d2fc3a139  bytes 1317  exit [exit 0]
+  wsl10   md5 b60e31f82393  bytes 1293  exit [exit 0]
+  wsl8    md5 b60e31f82393  bytes 1293  exit [exit 0]
+## sql2
+  fx      md5 8d3a75bc03b3  bytes 25  exit [exit 0]
+  natlin  md5 37a863dc00cd  bytes 21  exit [exit 0]
+  natwin  md5 37a863dc00cd  bytes 21  exit [exit 0]
+  net10   md5 8d3a75bc03b3  bytes 25  exit [exit 0]
+  net8    md5 8d3a75bc03b3  bytes 25  exit [exit 0]
+  wsl10   md5 37a863dc00cd  bytes 21  exit [exit 0]
+  wsl8    md5 37a863dc00cd  bytes 21  exit [exit 0]
+## sql3
+  fx      md5 ac63b6e015e2  bytes 172  exit [exit 0]
+  natlin  md5 5a59f2cc1ca3  bytes 170  exit [exit 0]
+  natwin  md5 5a59f2cc1ca3  bytes 170  exit [exit 0]
+  net10   md5 ac63b6e015e2  bytes 172  exit [exit 0]
+  net8    md5 ac63b6e015e2  bytes 172  exit [exit 0]
+  wsl10   md5 5a59f2cc1ca3  bytes 170  exit [exit 0]
+  wsl8    md5 5a59f2cc1ca3  bytes 170  exit [exit 0]
+## Windows MSIL vs native, CR removed (SQLite: the -Dmain=main stand-in skips wmain's _setmode(_O_BINARY))
+  sql1 net8 == natwin
+  sql1 net10 == natwin
+  sql1 fx == natwin
+  sql2 net8 == natwin
+  sql2 net10 == natwin
+  sql2 fx == natwin
+  sql3 net8 == natwin
+  sql3 net10 == natwin
+  sql3 fx == natwin
+## lua-prog1: natwin vs net8 (the only difference on every Windows runtime: UCRT legacy rounding, section 5.3)
+7c7
+< 1.23457e+08|123456789.125|0x1.d6f34548p+26|1.234568e+08|123456789.12|123456789.125
+---
+> 1.23457e+08|123456789.125|0x1.d6f34548p+26|1.234568e+08|123456789.13|123456789.125
+## lua-prog1 natlin vs wsl8/wsl10
+  wsl8 == natlin
+  wsl10 == natlin
+## Lua 5.4.9 test suite (all.lua, _U=true): last lines
+  natlin: total time: 3.03s (wall time: 8s) 1 final OK
+  wsl8: total time: 4.14s (wall time: 18s) 1 final OK
+  wsl10: total time: 4.70s (wall time: 13s) 1 final OK
+## Lua 5.5.1 test suite
+  natlin: total time: 4.03s (wall time: 9s) 1 final OK
+  wsl8: total time: 4.70s (wall time: 6s) 1 final OK

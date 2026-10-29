@@ -1,0 +1,80 @@
+total 220 libc-free 150 listed 150
+rule/list mismatch: []
+excluded: 70 calls among excluded: {'strlen': 2, 'calloc': 1, 'printf': 68, 'memcmp': 1, 'strcat': 1, 'strcmp': 1, 'strcpy': 2, 'strncmp': 1, 'strncpy': 1, 'fprintf': 1, 'sprintf': 1, 'fopen': 1, 'va_start': 1}
+excluded with empty .expected: ['00025', '00040', '00208', '00218']
+excluded calling only printf: 62
+
+name | calls | expected lines | phase-3 constructs (heuristic)
+00025 | strlen | 0 |
+00040 | calloc | 0 |
+00056 | printf | 3 |
+00125 | printf | 1 |
+00131 | printf | 5 |
+00132 | printf | 15 |
+00154 | printf | 6 |
+00156 | printf | 10 |
+00157 | printf | 10 |
+00158 | printf | 8 |
+00159 | printf | 4 |
+00160 | printf | 11 |
+00161 | printf | 11 |
+00163 | printf | 8 |
+00164 | printf | 15 |
+00165 | printf | 2 |
+00166 | printf | 4 |
+00167 | printf | 2 |
+00168 | printf | 10 |
+00169 | printf | 18 |
+00170 | printf | 4 |
+00171 | printf | 3 |
+00172 | printf | 6 |
+00173 | printf | 7 |
+00174 | printf | 16 |  float
+00175 | printf | 12 |  float
+00176 | printf | 2 | VLA?
+00177 | printf | 8 |
+00178 | printf | 4 |  float
+00179 | memcmp,printf,strcat,strcmp,strcpy,strlen,strncmp,strncpy | 19 |
+00180 | printf,strcpy | 1 |
+00181 | printf | 71 | VLA?
+00182 | fprintf,printf | 4 |
+00183 | printf | 10 |
+00184 | printf | 2 |
+00185 | printf | 20 |
+00186 | printf,sprintf | 20 |
+00187 | fopen,printf | 27 |
+00188 | printf | 6 |
+00189 | printf | 2 |
+00190 | printf | 1 |
+00191 | printf | 1 |
+00192 | printf | 10 |
+00193 | printf | 4 |
+00194 | printf | 1 |
+00195 | printf | 1 |  float
+00196 | printf | 20 |
+00197 | printf | 8 |
+00198 | printf | 9 |
+00199 | printf | 8 |
+00200 | printf | 1 |
+00201 | printf | 1 |
+00202 | printf | 2 |
+00203 | printf | 1 |
+00204 | printf,va_start | 174 | variadic-def,va_*,long double float
+00205 | printf | 72 |
+00206 | printf | 5 |
+00207 | printf | 6 | VLA?
+00208 | printf | 0 |
+00210 | printf | 2 | variadic-decl-call
+00211 | printf | 1 | variadic-decl-call
+00212 | printf | 1 |
+00213 | printf | 23 | variadic-decl-call
+00214 | printf | 2 | variadic-decl-call
+00215 | printf | 14 | variadic-decl-call
+00216 | printf | 43 |
+00217 | printf | 1 | variadic-decl-call
+00218 | printf | 0 | variadic-decl-call
+00219 | printf | 14 |
+00220 | printf | 1 |
+
+libc-free tests with phase-3 constructs (heuristic):
+  00140 ['variadic-def'] (diag)

@@ -1,0 +1,334 @@
+## init (initfx/inituco)
+=== initfx fx
+runtime 4.0.30319.42000
+A: ldftn + store of 1000 functions (Phase 2 shape)                           11.3 us total
+B1: 1000 delegates (newobj) of one signature                                 68.3 us total
+B2: 1000 GetFunctionPointerForDelegate of one signature                     771.6 us total
+B3: first native call through each of the 1000 delegate thunks            23531.1 us total
+B4: second native call through each of the 1000 delegate thunks             480.5 us total
+C: 1000 delegates + GetFunctionPointerForDelegate (another set, warm)      1005.1 us total
+D1: 50 delegates + GetFunctionPointerForDelegate, 50 distinct signatures    25567.5 us total
+D2: first call (calli unmanaged) through each of the 50 signatures' thunks      806.2 us total
+exit=0
+=== initfx n8
+runtime 8.0.33
+A: ldftn + store of 1000 functions (Phase 2 shape)                           28.1 us total
+B1: 1000 delegates (newobj) of one signature                                135.2 us total
+B2: 1000 GetFunctionPointerForDelegate of one signature                    1287.6 us total
+B3: first native call through each of the 1000 delegate thunks            35657.7 us total
+B4: second native call through each of the 1000 delegate thunks             154.9 us total
+C: 1000 delegates + GetFunctionPointerForDelegate (another set, warm)      1356.7 us total
+D1: 50 delegates + GetFunctionPointerForDelegate, 50 distinct signatures      101.7 us total
+D2: first call (calli unmanaged) through each of the 50 signatures' thunks    19873.0 us total
+exit=0
+=== initfx n10
+runtime 10.0.14
+A: ldftn + store of 1000 functions (Phase 2 shape)                           34.4 us total
+B1: 1000 delegates (newobj) of one signature                                163.6 us total
+B2: 1000 GetFunctionPointerForDelegate of one signature                    1111.3 us total
+B3: first native call through each of the 1000 delegate thunks            69539.7 us total
+B4: second native call through each of the 1000 delegate thunks             332.2 us total
+C: 1000 delegates + GetFunctionPointerForDelegate (another set, warm)       949.3 us total
+D1: 50 delegates + GetFunctionPointerForDelegate, 50 distinct signatures       82.9 us total
+D2: first call (calli unmanaged) through each of the 50 signatures' thunks    36474.5 us total
+exit=0
+=== initfx w8
+runtime 8.0.31
+A: ldftn + store of 1000 functions (Phase 2 shape)                            9.9 us total
+B1: 1000 delegates (newobj) of one signature                                165.1 us total
+B2: 1000 GetFunctionPointerForDelegate of one signature                    1498.2 us total
+B3: first native call through each of the 1000 delegate thunks            88786.0 us total
+B4: second native call through each of the 1000 delegate thunks              96.2 us total
+C: 1000 delegates + GetFunctionPointerForDelegate (another set, warm)     11416.0 us total
+D1: 50 delegates + GetFunctionPointerForDelegate, 50 distinct signatures      131.7 us total
+D2: first call (calli unmanaged) through each of the 50 signatures' thunks    19740.6 us total
+exit=0
+=== initfx w10
+runtime 10.0.13
+A: ldftn + store of 1000 functions (Phase 2 shape)                           10.4 us total
+B1: 1000 delegates (newobj) of one signature                                154.3 us total
+B2: 1000 GetFunctionPointerForDelegate of one signature                     990.9 us total
+B3: first native call through each of the 1000 delegate thunks           102970.9 us total
+B4: second native call through each of the 1000 delegate thunks              96.8 us total
+C: 1000 delegates + GetFunctionPointerForDelegate (another set, warm)      4863.5 us total
+D1: 50 delegates + GetFunctionPointerForDelegate, 50 distinct signatures       75.4 us total
+D2: first call (calli unmanaged) through each of the 50 signatures' thunks    26444.0 us total
+exit=0
+=== inituco n8
+runtime 8.0.33
+A: ldftn + store of 1000 functions (Phase 2 shape)                           28.0 us total
+B1: 1000 delegates (newobj) of one signature                                203.6 us total
+B2: 1000 GetFunctionPointerForDelegate of one signature                    1634.4 us total
+B3: first native call through each of the 1000 delegate thunks            34924.3 us total
+B4: second native call through each of the 1000 delegate thunks             159.8 us total
+C: 1000 delegates + GetFunctionPointerForDelegate (another set, warm)      1553.7 us total
+D1: 50 delegates + GetFunctionPointerForDelegate, 50 distinct signatures      181.0 us total
+D2: first call (calli unmanaged) through each of the 50 signatures' thunks    17756.4 us total
+E1: ldftn + store of 1000 UCO methods                                        82.4 us total
+E2: first native call through each of the 1000 UCO pointers              111475.8 us total
+E3: second native call through each of the 1000 UCO pointers                128.1 us total
+exit=0
+=== inituco n10
+runtime 10.0.14
+A: ldftn + store of 1000 functions (Phase 2 shape)                           30.6 us total
+B1: 1000 delegates (newobj) of one signature                                113.5 us total
+B2: 1000 GetFunctionPointerForDelegate of one signature                     743.3 us total
+B3: first native call through each of the 1000 delegate thunks            49610.6 us total
+B4: second native call through each of the 1000 delegate thunks             172.8 us total
+C: 1000 delegates + GetFunctionPointerForDelegate (another set, warm)      1020.6 us total
+D1: 50 delegates + GetFunctionPointerForDelegate, 50 distinct signatures       86.4 us total
+D2: first call (calli unmanaged) through each of the 50 signatures' thunks    16814.0 us total
+E1: ldftn + store of 1000 UCO methods                                        32.0 us total
+E2: first native call through each of the 1000 UCO pointers              129168.4 us total
+E3: second native call through each of the 1000 UCO pointers                175.7 us total
+exit=0
+=== inituco w8
+runtime 8.0.31
+A: ldftn + store of 1000 functions (Phase 2 shape)                           11.3 us total
+B1: 1000 delegates (newobj) of one signature                                190.2 us total
+B2: 1000 GetFunctionPointerForDelegate of one signature                    1626.6 us total
+B3: first native call through each of the 1000 delegate thunks           184535.6 us total
+B4: second native call through each of the 1000 delegate thunks             122.2 us total
+C: 1000 delegates + GetFunctionPointerForDelegate (another set, warm)      2023.1 us total
+D1: 50 delegates + GetFunctionPointerForDelegate, 50 distinct signatures      194.9 us total
+D2: first call (calli unmanaged) through each of the 50 signatures' thunks    42380.0 us total
+E1: ldftn + store of 1000 UCO methods                                        10.8 us total
+E2: first native call through each of the 1000 UCO pointers              146203.0 us total
+E3: second native call through each of the 1000 UCO pointers                 77.2 us total
+exit=0
+=== inituco w10
+runtime 10.0.13
+A: ldftn + store of 1000 functions (Phase 2 shape)                           11.0 us total
+B1: 1000 delegates (newobj) of one signature                                133.0 us total
+B2: 1000 GetFunctionPointerForDelegate of one signature                     788.8 us total
+B3: first native call through each of the 1000 delegate thunks           294321.1 us total
+B4: second native call through each of the 1000 delegate thunks             102.8 us total
+C: 1000 delegates + GetFunctionPointerForDelegate (another set, warm)       848.9 us total
+D1: 50 delegates + GetFunctionPointerForDelegate, 50 distinct signatures       77.2 us total
+D2: first call (calli unmanaged) through each of the 50 signatures' thunks    18963.8 us total
+E1: ldftn + store of 1000 UCO methods                                         9.4 us total
+E2: first native call through each of the 1000 UCO pointers              187021.2 us total
+E3: second native call through each of the 1000 UCO pointers                 66.8 us total
+exit=0
+
+## module initializer, first run
+=== cctorfx fx
+runtime 4.0.30319.42000
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     5099.7 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    97586.7 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    43574.2 us
+exit=0
+=== cctorfx fx
+runtime 4.0.30319.42000
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     6169.8 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   107479.6 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    61431.4 us
+exit=0
+=== cctorfx n8
+runtime 8.0.33
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     7833.9 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    38790.9 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     7713.1 us
+exit=0
+=== cctorfx n8
+runtime 8.0.33
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     3713.3 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    39320.5 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     9436.9 us
+exit=0
+=== cctorfx n10
+runtime 10.0.14
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     2867.1 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    45808.7 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     9710.2 us
+exit=0
+=== cctorfx n10
+runtime 10.0.14
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     2798.7 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    43337.7 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     8468.5 us
+exit=0
+=== cctorfx w8
+runtime 8.0.31
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    28012.4 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   101690.9 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    18068.7 us
+exit=0
+=== cctorfx w8
+runtime 8.0.31
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    14042.1 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   100746.0 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    17933.7 us
+exit=0
+=== cctorfx w10
+runtime 10.0.13
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    16463.5 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    93089.4 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    29808.4 us
+exit=0
+=== cctorfx w10
+runtime 10.0.13
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     9484.6 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    50442.5 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     9220.5 us
+exit=0
+=== cctoruco n8
+runtime 8.0.33
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    13968.2 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    46326.5 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     7266.2 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function     1795.7 us
+exit=0
+=== cctoruco n8
+runtime 8.0.33
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     3757.0 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    63550.5 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    26262.3 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function     5652.8 us
+exit=0
+=== cctoruco n10
+runtime 10.0.14
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     2967.3 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   109651.3 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    21427.4 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function     4910.5 us
+exit=0
+=== cctoruco n10
+runtime 10.0.14
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     3001.0 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    64344.7 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     7947.9 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function     2462.7 us
+exit=0
+=== cctoruco w8
+runtime 8.0.31
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     9895.6 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   110729.5 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    32630.9 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function     2276.6 us
+exit=0
+=== cctoruco w8
+runtime 8.0.31
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    15501.4 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    72470.0 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    17099.3 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function     3485.9 us
+exit=0
+=== cctoruco w10
+runtime 10.0.13
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    13625.9 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   125359.7 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    29223.4 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function     2583.7 us
+exit=0
+=== cctoruco w10
+runtime 10.0.13
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     9927.9 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    84456.3 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    16642.2 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function     2535.5 us
+exit=0
+
+## module initializer, second run (adds initE)
+=== cctorfx fx
+runtime 4.0.30319.42000
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    14533.1 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   225926.0 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    88690.8 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50   116858.5 us
+exit=0
+=== cctorfx fx
+runtime 4.0.30319.42000
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     5386.9 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   150252.4 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    48267.8 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50   159906.3 us
+exit=0
+=== cctorfx n8
+runtime 8.0.33
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     4277.9 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    60735.7 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     8706.3 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    44882.8 us
+exit=0
+=== cctorfx n8
+runtime 8.0.33
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     2740.6 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   163225.5 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    14324.5 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    29998.2 us
+exit=0
+=== cctorfx n10
+runtime 10.0.14
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     5493.1 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   165068.6 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    10428.0 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50   174515.9 us
+exit=0
+=== cctorfx n10
+runtime 10.0.14
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)     2974.8 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    78057.4 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    38103.8 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    94133.8 us
+exit=0
+=== cctorfx w8
+runtime 8.0.31
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    45340.1 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    80702.4 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     9234.9 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    34451.4 us
+exit=0
+=== cctorfx w8
+runtime 8.0.31
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    16927.4 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   113982.8 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    28888.6 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    54099.7 us
+exit=0
+=== cctorfx w10
+runtime 10.0.13
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    15465.9 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    92626.9 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    18037.6 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    60303.1 us
+exit=0
+=== cctorfx w10
+runtime 10.0.13
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)   136228.1 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   221871.1 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    17162.6 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    66526.4 us
+exit=0
+=== cctoruco n8
+runtime 8.0.33
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    42463.1 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    53104.9 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     9134.2 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    41146.9 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function     3058.7 us
+exit=0
+=== cctoruco n10
+runtime 10.0.14
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    10735.0 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    59634.9 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop     7425.5 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    32597.0 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function     3619.4 us
+exit=0
+=== cctoruco w8
+runtime 8.0.31
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    13501.2 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function    99871.6 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    27763.9 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    66325.7 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function    11542.6 us
+exit=0
+=== cctoruco w10
+runtime 10.0.13
+initA (first call, JIT included): 1000 x ldftn + stsfld per function (Phase 2 fn_ shape)    32074.3 us
+initB (first call, JIT included): 1000 x straight-line delegate + GFPFD per function   119013.7 us
+initC (first call, JIT included): 1000 x ldftn table + one delegate loop    18068.0 us
+initE (first call, JIT included): 1000 x straight-line delegate + GFPFD, 20 methods of 50    79930.8 us
+initU (first call, JIT included): 1000 x ldftn of UCO thunk + stsfld per function    12302.5 us
+exit=0

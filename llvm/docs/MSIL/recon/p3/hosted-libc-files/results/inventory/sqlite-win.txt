@@ -1,0 +1,31 @@
+definitions: 2063; external functions: 151; external globals: 0
+variadic definitions (48): checkAppendMsg, cli_printf, ctxErrorMsg, db_int, diskusedError, diskusedLine, diskusedPrepare, diskusedSql, diskusedSqlInt, diskusedTitle, dotCmdError, errorMPrintf, execSqlF, failIfSafeMode, fprintf, fsdirSetErrmsg, getDigits, hash_step_vformat, idxAppendText, idxPrintfPrepareStmt, intckMprintf, intckPrepareFmt, jsonPrintf, pickStr, printf, qrfError, sha3_step_vformat, shellPreparePrintf, snprintf, sqlite3ErrorMsg, sqlite3ErrorWithMsg, sqlite3MPrintf, sqlite3NestedParse, sqlite3VdbeError, sqlite3VdbeExplain, sqlite3VdbeMultiLoad, sqlite3_config, sqlite3_db_config, sqlite3_expert_config, sqlite3_fprintf, sqlite3_log, sqlite3_mprintf, sqlite3_snprintf, sqlite3_str_appendf, sqlite3_test_control, sqlite3_vtab_config, sscanf, vfstrace_printf
+variadic call sites to external (native) functions (7): llvm.localescape 7
+variadic call sites to own definitions (2099): cli_printf 342, sqlite3ErrorMsg 342, sqlite3_log 265, sqlite3_str_appendf 172, sqlite3_mprintf 171, sqlite3_snprintf 95, sqlite3MPrintf 71, dotCmdError 69, vfstrace_printf 66, sqlite3NestedParse 39, qrfError 38, diskusedLine 37, checkAppendMsg 32, sqlite3VdbeExplain 31, sqlite3_test_control 29, sqlite3_db_config 24, sqlite3_config 22, idxAppendText 22, sqlite3VdbeError 21, fprintf 20, sqlite3ErrorWithMsg 20, failIfSafeMode 19, intckMprintf 18, pickStr 14, sqlite3VdbeMultiLoad 13, diskusedError 11, diskusedSqlInt 11, sqlite3_fprintf 9, getDigits 9, idxPrintfPrepareStmt 7, diskusedPrepare 6, intckPrepareFmt 5, diskusedTitle 5, fsdirSetErrmsg 5, db_int 5, execSqlF 5, jsonPrintf 5, sscanf 4, sqlite3_vtab_config 4, sha3_step_vformat 3, hash_step_vformat 3, ctxErrorMsg 2, diskusedSql 2, errorMPrintf 2, snprintf 1, shellPreparePrintf 1, sqlite3_expert_config 1, printf 1
+indirect variadic calls: 0; va_start: 50; va_copy: 0
+setjmp/longjmp calls: {}; returns_twice decls: []
+own functions passed to external functions (callbacks) (5): SetConsoleCtrlHandler(ConsoleCtrlHandler) 1, _beginthreadex(sqlite3ThreadProc) 3, atexit(abnormalExit) 1
+external function addresses passed as arguments:
+external (native) function addresses in data initializers (47): AreFileApisANSI, CloseHandle, CreateFileMappingW, CreateFileW, DeleteFileW, FlushFileBuffers, FlushViewOfFile, FormatMessageW, FreeLibrary, GetCurrentProcessId, GetDriveTypeW, GetFileAttributesExW, GetFileAttributesW, GetFileSizeEx, GetFullPathNameW, GetLastError, GetProcAddress, GetProcessHeap, GetSystemInfo, GetSystemTimeAsFileTime, GetTempPathW, GetTickCount64, HeapAlloc, HeapCompact, HeapCreate, HeapDestroy, HeapFree, HeapReAlloc, HeapSize, HeapValidate, LoadLibraryW, LocalFree, LockFileEx, MapViewOfFile, MultiByteToWideChar, OutputDebugStringA, QueryPerformanceCounter, ReadFile, SetEndOfFile, SetFilePointerEx, Sleep, UnlockFileEx, UnmapViewOfFile, WaitForSingleObject, WaitForSingleObjectEx, WideCharToMultiByte, WriteFile
+own function addresses in data initializers: 598 functions
+external globals (data imports):
+thread_local globals: []
+atomics: {'fence singlethread': 82, 'store atomic': 70, 'load atomic': 29, 'cmpxchg': 2}
+dynamic allocas: 0; stacksave: 0; inline asm: 0; i128 lines: 18
+global_dtors: 0; atexit calls: 1
+byval args to external functions: {}
+sret calls to external functions: {}
+long double library functions: []
+intrinsics (excluding lifetime/mem*/va_*): llvm.abs.i32 6, llvm.abs.i64 1, llvm.bswap.i16 31, llvm.bswap.i32 182, llvm.bswap.i64 14, llvm.ceil.f64 2, llvm.ctlz.i64 3, llvm.ctpop.i32 3, llvm.ctpop.i64 3, llvm.eh.exceptioncode 7, llvm.eh.recoverfp 7, llvm.fabs.f64 24, llvm.floor.f64 1, llvm.fmuladd.f64 10, llvm.fshl.i32 259, llvm.fshl.i64 116, llvm.localescape 7, llvm.localrecover 7, llvm.sadd.sat.i16 1, llvm.scmp.i32.i32 1, llvm.smax.i16 6, llvm.smax.i32 65, llvm.smax.i64 20, llvm.smax.i8 3, llvm.smin.i16 9, llvm.smin.i32 50, llvm.smin.i64 26, llvm.ssub.sat.i32 4, llvm.trunc.f64 1, llvm.umax.i16 1, llvm.umax.i32 20, llvm.umax.i64 5, llvm.umax.i8 3, llvm.umin.i16 8, llvm.umin.i32 20, llvm.umin.i64 32, llvm.umin.i8 1, llvm.umulh.i64 2, llvm.usub.sat.i64 1
+external functions by category:
+  alloc (5): _msize calloc free malloc realloc
+  conv (2): atof atoi
+  ctype/locale (5): _errno isalnum isalpha isprint isspace
+  dl (4): FreeLibrary GetProcAddress LoadLibraryA LoadLibraryW
+  other (12): __C_specific_handler _beginthreadex _endthreadex _putenv _wassert _wchmod _wfindfirst64i32 _wfindnext64i32 _wmkdir _wpopen fgetws fputws
+  posix-io (11): _access _findclose _fstat64 _isatty _setmode _stat64 _unlink _waccess _wfullpath _wstat64i32 _wunlink
+  process/env (4): atexit exit getenv system
+  stdio (20): __acrt_iob_func __stdio_common_vfprintf __stdio_common_vsprintf __stdio_common_vsscanf _fileno _pclose _wfopen fclose fflush fgetc fgets fputc fputs fread fseek ftell fwrite puts rewind setvbuf
+  string/mem (15): _strdup memchr memcmp strchr strcmp strcspn strftime strlen strncmp strrchr strspn strstr strtod strtol strtoll
+  time (3): _localtime64 _localtime64_s _time64
+  win32 (70): AcquireSRWLockExclusive AreFileApisANSI CloseHandle CreateFileMappingW CreateFileW DebugBreak DeleteCriticalSection DeleteFileW EnterCriticalSection FindClose FindFirstFileW FlushFileBuffers FlushViewOfFile FormatMessageW GetConsoleMode GetConsoleScreenBufferInfo GetCurrentProcess GetCurrentProcessId GetCurrentThreadId GetDriveTypeW GetFileAttributesExW GetFileAttributesW GetFileSizeEx GetFullPathNameW GetLastError GetOverlappedResult GetProcessHeap GetStdHandle GetSystemInfo GetSystemTime GetSystemTimeAsFileTime GetSystemTimePreciseAsFileTime GetTempPathW GetTickCount64 HeapAlloc HeapCompact HeapCreate HeapDestroy HeapFree HeapReAlloc HeapSize HeapValidate InitializeCriticalSection InitializeSRWLock LeaveCriticalSection LocalFree LockFileEx MapViewOfFile MultiByteToWideChar OutputDebugStringA QueryPerformanceCounter RaiseException ReadFile ReleaseSRWLockExclusive SetConsoleCtrlHandler SetConsoleMode SetCurrentDirectoryW SetEndOfFile SetFilePointerEx SetFileTime Sleep SystemTimeToFileTime TryAcquireSRWLockExclusive TryEnterCriticalSection UnlockFileEx UnmapViewOfFile WaitForSingleObject WaitForSingleObjectEx WideCharToMultiByte WriteFile

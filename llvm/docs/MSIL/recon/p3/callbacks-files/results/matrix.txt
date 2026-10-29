@@ -1,0 +1,186 @@
+# Matrix logs: one line per (test, runtime): fx = .NET Framework 4.8, n8/n10 = .NET 8.0.33/10.0.14 (Windows), w8/w10 = .NET 8.0.31/10.0.13 (WSL Ubuntu).
+
+## logs-ldftn.txt
+ldftn | fx | native call of ldftn value: 42|exit=0|
+ldftn | n8 | native call of ldftn value: 42|exit=0|
+ldftn | n10 | native call of ldftn value: 42|exit=0|
+ldftn | w8 | native call of ldftn value: 42|exit=0|
+ldftn | w10 | native call of ldftn value: 42|exit=0|
+ldftn-cold | fx | native call of cold ldftn value: 42|exit=0|
+ldftn-cold | n8 | native call of cold ldftn value: 42|exit=0|
+ldftn-cold | n10 | native call of cold ldftn value: 42|exit=0|
+ldftn-cold | w8 | native call of cold ldftn value: 42|exit=0|
+ldftn-cold | w10 | native call of cold ldftn value: 42|exit=0|
+ldftn-loop | fx | native loop over ldftn value: 500000500000|exit=0|
+ldftn-loop | n8 | native loop over ldftn value: 500000500000|exit=0|
+ldftn-loop | n10 | native loop over ldftn value: 500000500000|exit=0|
+ldftn-loop | w8 | native loop over ldftn value: 500000500000|exit=0|
+ldftn-loop | w10 | native loop over ldftn value: 500000500000|exit=0|
+ldftn-gc | fx | native call of allocating/collecting ldftn value x200: 42|exit=0|
+ldftn-gc | n8 | native call of allocating/collecting ldftn value x200: 42|exit=0|
+ldftn-gc | n10 | native call of allocating/collecting ldftn value x200: 42|exit=0|
+ldftn-gc | w8 | native call of allocating/collecting ldftn value x200: 42|exit=0|
+ldftn-gc | w10 | native call of allocating/collecting ldftn value x200: 42|exit=0|
+ldftn-thread | fx | ./run.sh: line 6: 429536 Segmentation fault         timeout 120 ./$exe "$@"|exit=139|
+ldftn-thread | n8 | Unhandled exception. System.FormatException: Index (zero based) must be greater than or equal to zero and less than the size of the argument list.|exit=127|
+ldftn-thread | n10 | Process terminated.|UnhandledException|exit=35|
+ldftn-thread | w8 | Unhandled exception. System.FormatException: Index (zero based) must be greater than or equal to zero and less than the size of the argument list.|bash: line 1:   682 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json cb.exe ldftn-thread 1000000|exit=0|
+ldftn-thread | w10 | Process terminated.|UnhandledException|bash: line 1:   700 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc10.json cb.exe ldftn-thread 1000000|exit=0|
+
+## logs-ldftn-thread.txt
+ldftn-thread | fx | ./run.sh: line 6: 429933 Segmentation fault         timeout 120 ./$exe "$@"|exit=139|
+ldftn-thread | n8 |   in thread: tsv before=0 managedId=4 isBackground=True|native thread on ldftn start routine returned: 42|exit=0|
+ldftn-thread | n10 |   in thread: tsv before=0 managedId=4 isBackground=True|native thread on ldftn start routine returned: 42|exit=0|
+ldftn-thread | w8 |   in thread: tsv before=0 managedId=4 isBackground=True|native thread on ldftn start routine returned: 42|exit=0|
+ldftn-thread | w10 |   in thread: tsv before=0 managedId=4 isBackground=True|native thread on ldftn start routine returned: 42|exit=0|
+
+## logs-gcstress.txt
+ldftn-gcstress | fx | ./run.sh: line 6: 429702 Segmentation fault         timeout 120 ./$exe "$@"|exit=139|
+ldftn-gcstress | n8 | Unhandled exception. Fatal error. Internal CLR error. (0x80131506)|./run.sh: line 7: 429713 Segmentation fault         timeout 120 dotnet exec --runtimeconfig $S/rc8.json $exe "$@"|exit=139|
+ldftn-gcstress | n10 | CORRUPTION: boxed value changed|loop with allocating callback under concurrent GC (expect n(n+1)/2): 44999140416|gen0 collections: 262|exit=0|
+ldftn-gcstress | w8 | bash: line 1:   484 Segmentation fault         timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json cb.exe ldftn-gcstress 300000|exit=0|
+ldftn-gcstress | w10 | loop with allocating callback under concurrent GC (expect n(n+1)/2): 45000150000|gen0 collections: 294|exit=0|
+del-gcstress | fx | loop with allocating callback under concurrent GC (expect n(n+1)/2): 45000150000|gen0 collections: 1212|exit=0|
+del-gcstress | n8 | loop with allocating callback under concurrent GC (expect n(n+1)/2): 45000150000|gen0 collections: 398|exit=0|
+del-gcstress | n10 | loop with allocating callback under concurrent GC (expect n(n+1)/2): 45000150000|gen0 collections: 396|exit=0|
+del-gcstress | w8 | loop with allocating callback under concurrent GC (expect n(n+1)/2): 45000150000|gen0 collections: 416|exit=0|
+del-gcstress | w10 | loop with allocating callback under concurrent GC (expect n(n+1)/2): 45000150000|gen0 collections: 486|exit=0|
+ldftn-thread | fx | ./run.sh: line 6: 429918 Segmentation fault         timeout 120 ./$exe "$@"|exit=139|
+ldftn-thread | n8 |   in thread: tsv before=0 managedId=4 isBackground=True|native thread on ldftn start routine returned: 42|exit=0|
+ldftn-thread | n10 |   in thread: tsv before=0 managedId=4 isBackground=True|native thread on ldftn start routine returned: 42|exit=0|
+ldftn-thread | w8 |   in thread: tsv before=0 managedId=4 isBackground=True|native thread on ldftn start routine returned: 42|exit=0|
+ldftn-thread | w10 |   in thread: tsv before=0 managedId=4 isBackground=True|native thread on ldftn start routine returned: 42|exit=0|
+del-gcstress | w10 | loop with allocating callback under concurrent GC (expect n(n+1)/2): 45000150000|gen0 collections: 327|exit=0|
+
+## logs-coop.txt
+calli-managed-native-gc | fx | native call ms: 1849|gen0 collections during the native call: 98|allocations by the other thread during the native call: 4657315|exit=0|
+calli-managed-native-gc | n8 | native call ms: 1765|gen0 collections during the native call: 1|allocations by the other thread during the native call: 24550|exit=0|
+calli-managed-native-gc | n10 | native call ms: 1984|gen0 collections during the native call: 1|allocations by the other thread during the native call: 61076|exit=0|
+calli-managed-native-gc | w8 | native call ms: 2370|gen0 collections during the native call: 2|allocations by the other thread during the native call: 63040|exit=0|
+calli-managed-native-gc | w10 | native call ms: 2866|gen0 collections during the native call: 1|allocations by the other thread during the native call: 55620|exit=0|
+calli-unmanaged-native-gc | fx | native call ms: 2046|gen0 collections during the native call: 2304|allocations by the other thread during the native call: 109469642|exit=0|
+calli-unmanaged-native-gc | n8 | native call ms: 2895|gen0 collections during the native call: 2644|allocations by the other thread during the native call: 125648403|exit=0|
+calli-unmanaged-native-gc | n10 | native call ms: 2505|gen0 collections during the native call: 2163|allocations by the other thread during the native call: 102799421|exit=0|
+calli-unmanaged-native-gc | w8 | native call ms: 2429|gen0 collections during the native call: 755|allocations by the other thread during the native call: 35874599|exit=0|
+calli-unmanaged-native-gc | w10 | native call ms: 4239|gen0 collections during the native call: 779|allocations by the other thread during the native call: 37026609|exit=0|
+
+## logs-del.txt
+del-noattr | fx | native call of delegate thunk without UnmanagedFunctionPointer: 42|exit=0|
+del-noattr | n8 | native call of delegate thunk without UnmanagedFunctionPointer: 42|exit=0|
+del-noattr | n10 | native call of delegate thunk without UnmanagedFunctionPointer: 42|exit=0|
+del-noattr | w8 | native call of delegate thunk without UnmanagedFunctionPointer: 42|exit=0|
+del-noattr | w10 | native call of delegate thunk without UnmanagedFunctionPointer: 42|exit=0|
+del-gc | fx | native call of allocating/collecting delegate thunk x200: 42|exit=0|
+del-gc | n8 | native call of allocating/collecting delegate thunk x200: 42|exit=0|
+del-gc | n10 | native call of allocating/collecting delegate thunk x200: 42|exit=0|
+del-gc | w8 | native call of allocating/collecting delegate thunk x200: 42|exit=0|
+del-gc | w10 | native call of allocating/collecting delegate thunk x200: 42|exit=0|
+del-collected | fx | |Unhandled Exception: System.NullReferenceException: Object reference not set to an instance of an object.|./run.sh: line 6: 430557 Segmentation fault         timeout 120 ./$exe "$@"|exit=139|
+del-collected | n8 | native call of collected delegate's thunk: 42|exit=0|
+del-collected | n10 | native call of collected delegate's thunk: 42|exit=0|
+del-collected | w8 | native call of collected delegate's thunk: 42|exit=0|
+del-collected | w10 | native call of collected delegate's thunk: 42|exit=0|
+del-identity | fx | same delegate, two GetFunctionPointerForDelegate equal: 1|two delegates of one method equal: 0|thunk equals ldftn: 0|exit=0|
+del-identity | n8 | same delegate, two GetFunctionPointerForDelegate equal: 1|two delegates of one method equal: 0|thunk equals ldftn: 0|exit=0|
+del-identity | n10 | same delegate, two GetFunctionPointerForDelegate equal: 1|two delegates of one method equal: 0|thunk equals ldftn: 0|exit=0|
+del-identity | w8 | same delegate, two GetFunctionPointerForDelegate equal: 1|two delegates of one method equal: 0|thunk equals ldftn: 0|exit=0|
+del-identity | w10 | same delegate, two GetFunctionPointerForDelegate equal: 1|two delegates of one method equal: 0|thunk equals ldftn: 0|exit=0|
+del-thread | fx | main native thread id: 23948|  in thread: tsv before=0 managedId=3 isBackground=True|run_thread status: 0|native thread on delegate start routine returned: 42|main thread tsv after: 5|  in thread: tsv before=0 managedId=4 isBackground=True|
+del-thread | n8 | main native thread id: 40732|  in thread: tsv before=0 managedId=4 isBackground=True|run_thread status: 0|native thread on delegate start routine returned: 42|main thread tsv after: 5|  in thread: tsv before=0 managedId=5 isBackground=True|
+del-thread | n10 | main native thread id: 21380|  in thread: tsv before=0 managedId=4 isBackground=True|run_thread status: 0|native thread on delegate start routine returned: 42|main thread tsv after: 5|  in thread: tsv before=0 managedId=5 isBackground=True|
+del-thread | w8 | main native thread id: 134947835988928|  in thread: tsv before=0 managedId=4 isBackground=True|run_thread status: 0|native thread on delegate start routine returned: 42|main thread tsv after: 5|  in thread: tsv before=0 managedId=5 isBackground=True|
+del-thread | w10 | main native thread id: 138857298406336|  in thread: tsv before=0 managedId=4 isBackground=True|run_thread status: 0|native thread on delegate start routine returned: 42|main thread tsv after: 5|  in thread: tsv before=0 managedId=5 isBackground=True|
+del-thread-throw | fx | |Unhandled Exception: System.InvalidOperationException: thrown on native thread|exit=127|
+del-thread-throw | n8 | Unhandled exception. System.InvalidOperationException: thrown on native thread|exit=127|
+del-thread-throw | n10 | Unhandled exception. System.InvalidOperationException: thrown on native thread|exit=127|
+del-thread-throw | w8 | Unhandled exception. System.InvalidOperationException: thrown on native thread|bash: line 1:   453 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json cb.exe del-thread-throw 1000000|exit=0|
+del-thread-throw | w10 | Unhandled exception. System.InvalidOperationException: thrown on native thread|bash: line 1:   524 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc10.json cb.exe del-thread-throw 1000000|exit=0|
+del-throw | fx | thrown in callbackcaught across native frames: |callback still usable after: 5|exit=0|
+del-throw | n8 | thrown in callbackcaught across native frames: |callback still usable after: 5|exit=0|
+del-throw | n10 | thrown in callbackcaught across native frames: |callback still usable after: 5|exit=0|
+del-throw | w8 | Unhandled exception. System.InvalidOperationException: thrown in callback|bash: line 1:   454 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json cb.exe del-throw 1000000|exit=0|
+del-throw | w10 | Unhandled exception. System.InvalidOperationException: thrown in callback|bash: line 1:   533 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc10.json cb.exe del-throw 1000000|exit=0|
+del-ops | fx | native call through struct field: 1042|exit=0|
+del-ops | n8 | native call through struct field: 1042|exit=0|
+del-ops | n10 | native call through struct field: 1042|exit=0|
+del-ops | w8 | native call through struct field: 1042|exit=0|
+del-ops | w10 | native call through struct field: 1042|exit=0|
+del-qsort | fx | qsort result digits (expect 12345678910 folded): 1234567900|exit=0|
+del-qsort | n8 | qsort result digits (expect 12345678910 folded): 1234567900|exit=0|
+del-qsort | n10 | qsort result digits (expect 12345678910 folded): 1234567900|exit=0|
+del-qsort | w8 | qsort result digits (expect 12345678910 folded): 1234567900|exit=0|
+del-qsort | w10 | qsort result digits (expect 12345678910 folded): 1234567900|exit=0|
+calli-native | fx | calli unmanaged cdecl of native pointer: 42|exit=0|
+calli-native | n8 | calli unmanaged cdecl of native pointer: 42|exit=0|
+calli-native | n10 | calli unmanaged cdecl of native pointer: 42|exit=0|
+calli-native | w8 | calli unmanaged cdecl of native pointer: 42|exit=0|
+calli-native | w10 | calli unmanaged cdecl of native pointer: 42|exit=0|
+calli-del | fx | calli unmanaged cdecl of delegate thunk: 42|exit=0|
+calli-del | n8 | calli unmanaged cdecl of delegate thunk: 42|exit=0|
+calli-del | n10 | calli unmanaged cdecl of delegate thunk: 42|exit=0|
+calli-del | w8 | calli unmanaged cdecl of delegate thunk: 42|exit=0|
+calli-del | w10 | calli unmanaged cdecl of delegate thunk: 42|exit=0|
+calli-unmanaged-on-ldftn | fx | calli unmanaged cdecl of ldftn value: 42|exit=0|
+calli-unmanaged-on-ldftn | n8 | calli unmanaged cdecl of ldftn value: 42|exit=0|
+calli-unmanaged-on-ldftn | n10 | calli unmanaged cdecl of ldftn value: 42|exit=0|
+calli-unmanaged-on-ldftn | w8 | calli unmanaged cdecl of ldftn value: 42|exit=0|
+calli-unmanaged-on-ldftn | w10 | calli unmanaged cdecl of ldftn value: 42|exit=0|
+calli-managed-on-native | fx | managed calli of native pointer: 42|exit=0|
+calli-managed-on-native | n8 | managed calli of native pointer: 42|exit=0|
+calli-managed-on-native | n10 | managed calli of native pointer: 42|exit=0|
+calli-managed-on-native | w8 | managed calli of native pointer: 42|exit=0|
+calli-managed-on-native | w10 | managed calli of native pointer: 42|exit=0|
+
+## logs-uco.txt
+uco | n8 | native call of UCO thunk: 42|native loop over UCO thunk: 500000500000|exit=0|
+uco | n10 | native call of UCO thunk: 42|native loop over UCO thunk: 500000500000|exit=0|
+uco | w8 | native call of UCO thunk: 42|native loop over UCO thunk: 500000500000|exit=0|
+uco | w10 | native call of UCO thunk: 42|native loop over UCO thunk: 500000500000|exit=0|
+uco-cdecl | n8 | native call of UCO thunk with CallConvs=Cdecl: 42|exit=0|
+uco-cdecl | n10 | native call of UCO thunk with CallConvs=Cdecl: 42|exit=0|
+uco-cdecl | w8 | native call of UCO thunk with CallConvs=Cdecl: 42|exit=0|
+uco-cdecl | w10 | native call of UCO thunk with CallConvs=Cdecl: 42|exit=0|
+uco-cold | n8 | native call of never-run UCO thunk: 42|exit=0|
+uco-cold | n10 | native call of never-run UCO thunk: 42|exit=0|
+uco-cold | w8 | native call of never-run UCO thunk: 42|exit=0|
+uco-cold | w10 | native call of never-run UCO thunk: 42|exit=0|
+uco-identity | n8 | ldftn of UCO thunk before and after 2n native calls and a sleep equal: 1|UCO thunk equals ldftn of the C function: 0|exit=0|
+uco-identity | n10 | ldftn of UCO thunk before and after 2n native calls and a sleep equal: 1|UCO thunk equals ldftn of the C function: 0|exit=0|
+uco-identity | w8 | ldftn of UCO thunk before and after 2n native calls and a sleep equal: 1|UCO thunk equals ldftn of the C function: 0|exit=0|
+uco-identity | w10 | ldftn of UCO thunk before and after 2n native calls and a sleep equal: 1|UCO thunk equals ldftn of the C function: 0|exit=0|
+uco-direct | n8 | Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=6|
+uco-direct | n10 | Fatal error.|Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=6|
+uco-direct | w8 | Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|bash: line 1:  1193 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json uco.exe uco-direct 1000000|exit=0|
+uco-direct | w10 | Fatal error.|Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|bash: line 1:  1205 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc10.json uco.exe uco-direct 1000000|exit=0|
+uco-managed-calli | n8 | Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=6|
+uco-managed-calli | n10 | Fatal error.|Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|exit=6|
+uco-managed-calli | w8 | Fatal error. Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|bash: line 1:  1225 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json uco.exe uco-managed-calli 1000000|exit=0|
+uco-managed-calli | w10 | Fatal error.|Invalid Program: attempted to call a UnmanagedCallersOnly method from managed code.|bash: line 1:  1240 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc10.json uco.exe uco-managed-calli 1000000|exit=0|
+uco-calli | n8 | calli unmanaged cdecl of UCO pointer: 42|exit=0|
+uco-calli | n10 | calli unmanaged cdecl of UCO pointer: 42|exit=0|
+uco-calli | w8 | calli unmanaged cdecl of UCO pointer: 42|exit=0|
+uco-calli | w10 | calli unmanaged cdecl of UCO pointer: 42|exit=0|
+uco-thread | n8 |   in thread: tsv before=0 managedId=4 isBackground=True|run_thread status: 0|native thread on UCO start routine returned: 42|  in thread: tsv before=0 managedId=5 isBackground=True|second native thread returned: 51|main thread tsv after: 5|
+uco-thread | n10 |   in thread: tsv before=0 managedId=4 isBackground=True|run_thread status: 0|native thread on UCO start routine returned: 42|  in thread: tsv before=0 managedId=5 isBackground=True|second native thread returned: 51|main thread tsv after: 5|
+uco-thread | w8 |   in thread: tsv before=0 managedId=4 isBackground=True|run_thread status: 0|native thread on UCO start routine returned: 42|  in thread: tsv before=0 managedId=5 isBackground=True|second native thread returned: 51|main thread tsv after: 5|
+uco-thread | w10 |   in thread: tsv before=0 managedId=4 isBackground=True|run_thread status: 0|native thread on UCO start routine returned: 42|  in thread: tsv before=0 managedId=5 isBackground=True|second native thread returned: 51|main thread tsv after: 5|
+uco-throw | n8 | thrown in callbackcaught across native frames: |exit=0|
+uco-throw | n10 | thrown in callbackcaught across native frames: |exit=0|
+uco-throw | w8 | Unhandled exception. System.InvalidOperationException: thrown in callback|bash: line 1:  1306 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc8.json uco.exe uco-throw 1000000|exit=0|
+uco-throw | w10 | Unhandled exception. System.InvalidOperationException: thrown in callback|bash: line 1:  1318 Aborted                    timeout 120 $HOME/.dotnet-msil/dotnet exec --runtimeconfig /mnt/c/llvm-msil-scratch/p3/callbacks/rc10.json uco.exe uco-throw 1000000|exit=0|
+uco-qsort | n8 | qsort result digits: 1234567900|exit=0|
+uco-qsort | n10 | qsort result digits: 1234567900|exit=0|
+uco-qsort | w8 | qsort result digits: 1234567900|exit=0|
+uco-qsort | w10 | qsort result digits: 1234567900|exit=0|
+
+## logs-uconame.txt
+uconame.exe | fx | runtime4.0.30319.42000|native call of UCO thunk: 42|native loop over UCO thunk: 500500|exit=0|
+uconame.exe | n8 | runtime8.0.33|native call of UCO thunk: 42|native loop over UCO thunk: 500500|exit=0|
+uconame.exe | n10 | runtime10.0.14|native call of UCO thunk: 42|native loop over UCO thunk: 500500|exit=0|
+uconame.exe | w8 | runtime8.0.31|native call of UCO thunk: 42|native loop over UCO thunk: 500500|exit=0|
+uconame.exe | w10 | runtime10.0.13|native call of UCO thunk: 42|native loop over UCO thunk: 500500|exit=0|
+ucomscorlib.exe | fx | runtime4.0.30319.42000|native call of UCO thunk: 42|native loop over UCO thunk: 500500|exit=0|
+ucomscorlib.exe | n8 | runtime8.0.33|native call of UCO thunk: 42|native loop over UCO thunk: 500500|exit=0|
+ucomscorlib.exe | n10 | runtime10.0.14|native call of UCO thunk: 42|native loop over UCO thunk: 500500|exit=0|
+ucomscorlib.exe | w8 | runtime8.0.31|native call of UCO thunk: 42|native loop over UCO thunk: 500500|exit=0|
+ucomscorlib.exe | w10 | runtime10.0.13|native call of UCO thunk: 42|native loop over UCO thunk: 500500|exit=0|

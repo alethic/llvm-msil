@@ -1,0 +1,141 @@
+=== lnx call_printf -O0 clang -c
+call_printf.c:2:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== lnx call_printf -O2 clang -c
+call_printf.c:2:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== lnx call_printf -O2 LTO
+msil-ld: error: <unknown>:0:0: in function main i32 (): calls to variadic functions are not supported for MSIL yet
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+exit 1
+=== lnx call_snprintf -O0 clang -c
+call_snprintf.c:2:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== lnx call_snprintf -O2 clang -c
+call_snprintf.c:2:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== lnx call_snprintf -O2 LTO
+msil-ld: error: <unknown>:0:0: in function main i32 (): calls to variadic functions are not supported for MSIL yet
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+exit 1
+=== lnx call_open -O0 clang -c
+call_open.c:10:5: error: calls to variadic functions are not supported for MSIL yet
+call_open.c:10:5: error: calls to variadic functions are not supported for MSIL yet
+call_open.c:10:5: error: calls to variadic functions are not supported for MSIL yet
+call_open.c:10:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== lnx call_open -O2 clang -c
+call_open.c:10:5: error: calls to variadic functions are not supported for MSIL yet
+call_open.c:10:5: error: calls to variadic functions are not supported for MSIL yet
+call_open.c:10:5: error: calls to variadic functions are not supported for MSIL yet
+call_open.c:10:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== lnx call_open -O2 LTO
+msil-ld: error: <unknown>:0:0: in function main i32 (): calls to variadic functions are not supported for MSIL yet
+msil-ld: error: <unknown>:0:0: in function main i32 (): calls to variadic functions are not supported for MSIL yet
+msil-ld: error: <unknown>:0:0: in function main i32 (): calls to variadic functions are not supported for MSIL yet
+msil-ld: error: <unknown>:0:0: in function main i32 (): calls to variadic functions are not supported for MSIL yet
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+exit 1
+=== lnx def_same -O0 clang -c
+def_same.c:2:5: error: variadic function definitions are not supported for MSIL yet
+exit 1
+=== lnx def_same -O2 clang -c
+def_same.c:2:5: error: variadic function definitions are not supported for MSIL yet
+exit 1
+=== lnx def_same -O2 LTO
+msil-ld: error: <unknown>:0:0: in function sum i32 (i32, ...): variadic function definitions are not supported for MSIL yet
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+exit 1
+=== lnx valist_fn -O0 clang -c
+exit 0
+=== lnx valist_fn -O0 link
+exit 0
+=== lnx valist_fn -O2 clang -c
+exit 0
+=== lnx valist_fn -O2 link
+exit 0
+=== lnx valist_fn -O2 LTO
+exit 0
+=== lnx fnptr -O0 clang -c
+fnptr.c:3:5: error: calls to variadic functions are not supported for MSIL yet
+error: undefined variadic function 'printf' is not supported for MSIL yet (phase 3)
+exit 1
+=== lnx fnptr -O2 clang -c
+fnptr.c:3:5: error: calls to variadic functions are not supported for MSIL yet
+error: undefined variadic function 'printf' is not supported for MSIL yet (phase 3)
+exit 1
+=== lnx fnptr -O2 LTO
+msil-ld: error: <unknown>:0:0: in function main i32 (): calls to variadic functions are not supported for MSIL yet
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+exit 1
+=== lnx xtu obj
+def_xtu_a.c:2:5: error: variadic function definitions are not supported for MSIL yet
+def_xtu_b.c:2:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== win call_printf -O0 clang -c
+<ucrt>\stdio.h:950:37: error: variadic function definitions are not supported for MSIL yet
+exit 1
+=== win call_printf -O2 clang -c
+<ucrt>\stdio.h:950:37: error: variadic function definitions are not supported for MSIL yet
+exit 1
+=== win call_printf -O2 LTO
+msil-ld: error: <unknown>:0:0: in function printf i32 (ptr, ...): variadic function definitions are not supported for MSIL yet
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+exit 1
+=== win call_snprintf -O0 clang -c
+<ucrt>\stdio.h:1919:37: error: variadic function definitions are not supported for MSIL yet
+exit 1
+=== win call_snprintf -O2 clang -c
+<ucrt>\stdio.h:1919:37: error: variadic function definitions are not supported for MSIL yet
+exit 1
+=== win call_snprintf -O2 LTO
+msil-ld: error: <unknown>:0:0: in function snprintf i32 (ptr, i64, ptr, ...): variadic function definitions are not supported for MSIL yet
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+exit 1
+=== win call_open -O0 clang -c
+call_open.c:10:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== win call_open -O2 clang -c
+call_open.c:10:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== win call_open -O2 LTO
+msil-ld: error: <unknown>:0:0: in function main i32 (): calls to variadic functions are not supported for MSIL yet
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+exit 1
+=== win def_same -O0 clang -c
+def_same.c:2:5: error: variadic function definitions are not supported for MSIL yet
+exit 1
+=== win def_same -O2 clang -c
+def_same.c:2:5: error: variadic function definitions are not supported for MSIL yet
+exit 1
+=== win def_same -O2 LTO
+msil-ld: error: <unknown>:0:0: in function sum i32 (i32, ...): variadic function definitions are not supported for MSIL yet
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+exit 1
+=== win valist_fn -O0 clang -c
+exit 0
+=== win valist_fn -O0 link
+exit 0
+=== win valist_fn -O2 clang -c
+exit 0
+=== win valist_fn -O2 link
+exit 0
+=== win valist_fn -O2 LTO
+exit 0
+=== win fnptr -O0 clang -c
+<ucrt>\stdio.h:950:37: error: variadic function definitions are not supported for MSIL yet
+fnptr.c:3:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== win fnptr -O2 clang -c
+<ucrt>\stdio.h:950:37: error: variadic function definitions are not supported for MSIL yet
+fnptr.c:3:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1
+=== win fnptr -O2 LTO
+msil-ld: error: <unknown>:0:0: in function printf i32 (ptr, ...): variadic function definitions are not supported for MSIL yet
+clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+exit 1
+=== win xtu obj
+def_xtu_a.c:2:5: error: variadic function definitions are not supported for MSIL yet
+def_xtu_b.c:2:5: error: calls to variadic functions are not supported for MSIL yet
+exit 1

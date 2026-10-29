@@ -1,0 +1,12 @@
+7:mul3p1:                                 # @mul3p1
+24:split5:                                 # @split5
+46:	addq	16(%rsp), %rax
+47:	adcq	24(%rsp), %rsi
+61:stk7:                                   # @stk7
+64:	movq	8(%rsp), %rax
+67:	addq	24(%rsp), %rax
+68:	adcq	32(%rsp), %rdx
+77:stk7s:                                  # @stk7s
+80:	movq	16(%rsp), %rax
+81:	movq	24(%rsp), %rdx
+82:	addq	8(%rsp), %rax

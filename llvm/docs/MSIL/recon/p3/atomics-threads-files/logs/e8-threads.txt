@@ -1,0 +1,123 @@
+# E8 counter.c (4 threads x 2,000,000 atomic_fetch_add + a racy plain counter), prototype build
+[net48] ns per increment (4 threads, wall / total increments, x1000)
+ 15189
+ counter
+ 8000000
+ plain counter lost updates (race seen, as expected)
+
+[net8] ns per increment (4 threads, wall / total increments, x1000)
+ 12486
+ counter
+ 8000000
+ plain counter lost updates (race seen, as expected)
+
+[net10] ns per increment (4 threads, wall / total increments, x1000)
+ 12029
+ counter
+ 8000000
+ plain counter lost updates (race seen, as expected)
+
+[net8 TC=0] ns per increment (4 threads, wall / total increments, x1000)
+ 11747
+ counter
+ 8000000
+ plain counter lost updates (race seen, as expected)
+
+[wsl net8 rc=0] ns per increment (4 threads, wall / total increments, x1000)
+13769
+counter
+8000000
+plain counter lost updates (race seen, as expected)
+[wsl net10 rc=0] ns per increment (4 threads, wall / total increments, x1000)
+14487
+counter
+8000000
+plain counter lost updates (race seen, as expected)
+# texit.c (thread ends with ExitThread / pthread_exit)
+[net48] return: exit code
+ 7
+ ExitThread: exit code
+ 42
+ main done
+
+[net8] return: exit code
+ 7
+ ExitThread: exit code
+ 42
+ main done
+
+[net10] return: exit code
+ 7
+ ExitThread: exit code
+ 42
+ main done
+
+[net8 TC=0] return: exit code
+ 7
+ ExitThread: exit code
+ 42
+ main done
+
+[wsl net8 rc=2] return: value
+7
+pthread_exit: value
+42
+main done
+[wsl net10 rc=2] return: value
+7
+pthread_exit: value
+42
+main done
+# c11thr.c (thrd_create, mtx_*, call_once)
+[native win] mutex: counter exact
+ call_once: ran once
+ thrd_join: results ok
+
+[net48] mutex: counter exact
+ call_once: ran once
+ thrd_join: results ok
+
+[net8] mutex: counter exact
+ call_once: ran once
+ thrd_join: results ok
+
+[net10] mutex: counter exact
+ call_once: ran once
+ thrd_join: results ok
+
+[net8 TC=0] mutex: counter exact
+ call_once: ran once
+ thrd_join: results ok
+
+[wsl net8 rc=0] mutex: counter exact
+call_once: ran once
+thrd_join: results ok
+[wsl net10 rc=0] mutex: counter exact
+call_once: ran once
+thrd_join: results ok
+# exit while a created thread spins (texitrun)
+[native win] main returns while a thread spins
+rc=3
+[net48] main returns while a thread spins
+
+[net8] main returns while a thread spins
+
+[net10] main returns while a thread spins
+
+[net8 TC=0] main returns while a thread spins
+
+native: 204 us
+net8: 412 us
+net10: 316 us
+native: 172 us
+net8: 342 us
+net10: 248 us
+native: 190 us
+net8: 386 us
+net10: 284 us
+main returns while a thread spins
+exit-while-running native: rc=3 131 ms
+main returns while a thread spins
+exit-while-running net8: rc=3 811 ms
+main returns while a thread spins
+exit-while-running net10: rc=3 735 ms

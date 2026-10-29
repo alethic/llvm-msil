@@ -1,0 +1,26 @@
+definitions: 1631; external functions: 76; external globals: 0
+variadic definitions (20): checkAppendMsg, errorMPrintf, execSqlF, getDigits, jsonPrintf, sqlite3ErrorMsg, sqlite3ErrorWithMsg, sqlite3MPrintf, sqlite3NestedParse, sqlite3VdbeError, sqlite3VdbeExplain, sqlite3VdbeMultiLoad, sqlite3_config, sqlite3_db_config, sqlite3_log, sqlite3_mprintf, sqlite3_snprintf, sqlite3_str_appendf, sqlite3_test_control, sqlite3_vtab_config
+variadic call sites to external (native) functions (7): llvm.localescape 7
+variadic call sites to own definitions (988): sqlite3ErrorMsg 342, sqlite3_log 265, sqlite3MPrintf 71, sqlite3_str_appendf 69, sqlite3NestedParse 39, sqlite3_mprintf 35, checkAppendMsg 32, sqlite3VdbeExplain 31, sqlite3_snprintf 24, sqlite3VdbeError 21, sqlite3ErrorWithMsg 20, sqlite3VdbeMultiLoad 13, getDigits 9, execSqlF 5, jsonPrintf 5, sqlite3_config 4, errorMPrintf 2, sqlite3_vtab_config 1
+indirect variadic calls: 0; va_start: 20; va_copy: 0
+setjmp/longjmp calls: {}; returns_twice decls: []
+own functions passed to external functions (callbacks) (3): _beginthreadex(sqlite3ThreadProc) 3
+external function addresses passed as arguments:
+external (native) function addresses in data initializers (47): AreFileApisANSI, CloseHandle, CreateFileMappingW, CreateFileW, DeleteFileW, FlushFileBuffers, FlushViewOfFile, FormatMessageW, FreeLibrary, GetCurrentProcessId, GetDriveTypeW, GetFileAttributesExW, GetFileAttributesW, GetFileSizeEx, GetFullPathNameW, GetLastError, GetProcAddress, GetProcessHeap, GetSystemInfo, GetSystemTimeAsFileTime, GetTempPathW, GetTickCount64, HeapAlloc, HeapCompact, HeapCreate, HeapDestroy, HeapFree, HeapReAlloc, HeapSize, HeapValidate, LoadLibraryW, LocalFree, LockFileEx, MapViewOfFile, MultiByteToWideChar, OutputDebugStringA, QueryPerformanceCounter, ReadFile, SetEndOfFile, SetFilePointerEx, Sleep, UnlockFileEx, UnmapViewOfFile, WaitForSingleObject, WaitForSingleObjectEx, WideCharToMultiByte, WriteFile
+own function addresses in data initializers: 493 functions
+external globals (data imports):
+thread_local globals: []
+atomics: {'fence singlethread': 82, 'store atomic': 70, 'load atomic': 29, 'cmpxchg': 2}
+dynamic allocas: 0; stacksave: 0; inline asm: 0; i128 lines: 18
+global_dtors: 0; atexit calls: 0
+byval args to external functions: {}
+sret calls to external functions: {}
+long double library functions: []
+intrinsics (excluding lifetime/mem*/va_*): llvm.abs.i32 4, llvm.abs.i64 1, llvm.bswap.i16 31, llvm.bswap.i32 166, llvm.bswap.i64 13, llvm.ctlz.i64 3, llvm.ctpop.i32 1, llvm.ctpop.i64 2, llvm.eh.exceptioncode 7, llvm.eh.recoverfp 7, llvm.fabs.f64 23, llvm.fmuladd.f64 10, llvm.fshl.i32 32, llvm.localescape 7, llvm.localrecover 7, llvm.sadd.sat.i16 1, llvm.smax.i16 6, llvm.smax.i32 47, llvm.smax.i64 13, llvm.smax.i8 3, llvm.smin.i16 9, llvm.smin.i32 37, llvm.smin.i64 22, llvm.ssub.sat.i32 4, llvm.umax.i16 1, llvm.umax.i32 18, llvm.umax.i64 3, llvm.umax.i8 3, llvm.umin.i16 8, llvm.umin.i32 18, llvm.umin.i64 7, llvm.umin.i8 1, llvm.umulh.i64 2
+external functions by category:
+  alloc (4): _msize free malloc realloc
+  dl (3): FreeLibrary GetProcAddress LoadLibraryW
+  other (3): __C_specific_handler _beginthreadex _endthreadex
+  string/mem (9): memchr memcmp strchr strcmp strcspn strlen strncmp strrchr strspn
+  time (1): _localtime64_s
+  win32 (56): AcquireSRWLockExclusive AreFileApisANSI CloseHandle CreateFileMappingW CreateFileW DeleteCriticalSection DeleteFileW EnterCriticalSection FlushFileBuffers FlushViewOfFile FormatMessageW GetCurrentProcessId GetCurrentThreadId GetDriveTypeW GetFileAttributesExW GetFileAttributesW GetFileSizeEx GetFullPathNameW GetLastError GetOverlappedResult GetProcessHeap GetSystemInfo GetSystemTimeAsFileTime GetTempPathW GetTickCount64 HeapAlloc HeapCompact HeapCreate HeapDestroy HeapFree HeapReAlloc HeapSize HeapValidate InitializeCriticalSection InitializeSRWLock LeaveCriticalSection LocalFree LockFileEx MapViewOfFile MultiByteToWideChar OutputDebugStringA QueryPerformanceCounter RaiseException ReadFile ReleaseSRWLockExclusive SetEndOfFile SetFilePointerEx Sleep TryAcquireSRWLockExclusive TryEnterCriticalSection UnlockFileEx UnmapViewOfFile WaitForSingleObject WaitForSingleObjectEx WideCharToMultiByte WriteFile

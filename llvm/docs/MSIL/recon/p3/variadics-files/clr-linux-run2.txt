@@ -1,0 +1,72 @@
+### .NET 8 Linux
+runtime: 8.0.31 unix 64-bit
+expect1: 42|2.500000|hello|-1.250000
+expect2: 2.500000|-1.250000|7|0.125000
+A1 vararg  i,d,p,d: EXCEPTION System.InvalidProgramException: Vararg calling convention not supported.
+A2 vararg  d,d,i,d: EXCEPTION System.InvalidProgramException: Vararg calling convention not supported.
+B1 fixed   i,d,p,d: 42|2.500000|hello|-1.250000
+B2 fixed   d,d,i,d: 2.500000|-1.250000|7|0.125000
+B4 fixed d,d,i,d x2000: wrong 0 (last: 2.500000|-1.250000|7|0.125000)
+B5 fixed d x2000: wrong 0 (last: 2.500000)
+C1 AL: 0x08x4 0x30x1196
+C3 AL at al_probe_z (address low byte 0x00): 0x00x1 0x30x1199
+C4 first variadic double read like gcc (AL test), x1200: entry at ...00: wrong 1; entry at ...40: wrong 0
+C2 AL per signature (after warm-up): d=0x08 i=0x08 ddd=0x08 pd=0x08
+D1 vsprintf over buffer i,d,p,d: 42|2.500000|hello|-1.250000
+D2 vsprintf over buffer, 18 args: 42|2.500000|hello|-1.250000|1099511627776|1|2|3|4|1.000000|2.000000|3.000000|4.000000|5.000000|6.000000|7.000000|8.000000|9.000000
+D3 vsprintf over a register save area + overflow: 1|2|3|4|0.500000|1.500000|2.500000|9|3.500000|hello
+exit 0
+### .NET 8 Linux TC=0
+runtime: 8.0.31 unix 64-bit
+expect1: 42|2.500000|hello|-1.250000
+expect2: 2.500000|-1.250000|7|0.125000
+A1 vararg  i,d,p,d: EXCEPTION System.InvalidProgramException: Vararg calling convention not supported.
+A2 vararg  d,d,i,d: EXCEPTION System.InvalidProgramException: Vararg calling convention not supported.
+B1 fixed   i,d,p,d: 42|2.500000|hello|-1.250000
+B2 fixed   d,d,i,d: 2.500000|-1.250000|7|0.125000
+B4 fixed d,d,i,d x2000: wrong 8 (last: 2.500000|-1.250000|7|0.125000)
+B5 fixed d x2000: wrong 0 (last: 2.500000)
+C1 AL: 0x08x4 0x48x1196
+C3 AL at al_probe_z (address low byte 0x00): 0x00x1 0x48x1199
+C4 first variadic double read like gcc (AL test), x1200: entry at ...00: wrong 1; entry at ...40: wrong 0
+C2 AL per signature (after warm-up): d=0x08 i=0x08 ddd=0x08 pd=0x08
+D1 vsprintf over buffer i,d,p,d: 42|2.500000|hello|-1.250000
+D2 vsprintf over buffer, 18 args: 42|2.500000|hello|-1.250000|1099511627776|1|2|3|4|1.000000|2.000000|3.000000|4.000000|5.000000|6.000000|7.000000|8.000000|9.000000
+D3 vsprintf over a register save area + overflow: 1|2|3|4|0.500000|1.500000|2.500000|9|3.500000|hello
+exit 0
+### .NET 10 Linux
+runtime: 10.0.13 unix 64-bit
+expect1: 42|2.500000|hello|-1.250000
+expect2: 2.500000|-1.250000|7|0.125000
+A1 vararg  i,d,p,d: EXCEPTION System.InvalidProgramException: Vararg calling convention not supported.
+A2 vararg  d,d,i,d: EXCEPTION System.InvalidProgramException: Vararg calling convention not supported.
+B1 fixed   i,d,p,d: 42|2.500000|hello|-1.250000
+B2 fixed   d,d,i,d: 2.500000|-1.250000|7|0.125000
+B4 fixed d,d,i,d x2000: wrong 0 (last: 2.500000|-1.250000|7|0.125000)
+B5 fixed d x2000: wrong 0 (last: 2.500000)
+C1 AL: 0x40x1200
+C3 AL at al_probe_z (address low byte 0x00): 0x40x1200
+C4 first variadic double read like gcc (AL test), x1200: entry at ...00: wrong 0; entry at ...40: wrong 0
+C2 AL per signature (after warm-up): d=0x08 i=0x08 ddd=0x08 pd=0x08
+D1 vsprintf over buffer i,d,p,d: 42|2.500000|hello|-1.250000
+D2 vsprintf over buffer, 18 args: 42|2.500000|hello|-1.250000|1099511627776|1|2|3|4|1.000000|2.000000|3.000000|4.000000|5.000000|6.000000|7.000000|8.000000|9.000000
+D3 vsprintf over a register save area + overflow: 1|2|3|4|0.500000|1.500000|2.500000|9|3.500000|hello
+exit 0
+### .NET 10 Linux TC=0
+runtime: 10.0.13 unix 64-bit
+expect1: 42|2.500000|hello|-1.250000
+expect2: 2.500000|-1.250000|7|0.125000
+A1 vararg  i,d,p,d: EXCEPTION System.InvalidProgramException: Vararg calling convention not supported.
+A2 vararg  d,d,i,d: EXCEPTION System.InvalidProgramException: Vararg calling convention not supported.
+B1 fixed   i,d,p,d: 42|2.500000|hello|-1.250000
+B2 fixed   d,d,i,d: 2.500000|-1.250000|7|0.125000
+B4 fixed d,d,i,d x2000: wrong 8 (last: 2.500000|-1.250000|7|0.125000)
+B5 fixed d x2000: wrong 0 (last: 2.500000)
+C1 AL: 0xa0x1200
+C3 AL at al_probe_z (address low byte 0x00): 0x98x1200
+C4 first variadic double read like gcc (AL test), x1200: entry at ...00: wrong 0; entry at ...40: wrong 0
+C2 AL per signature (after warm-up): d=0x08 i=0x08 ddd=0x08 pd=0x08
+D1 vsprintf over buffer i,d,p,d: 42|2.500000|hello|-1.250000
+D2 vsprintf over buffer, 18 args: 42|2.500000|hello|-1.250000|1099511627776|1|2|3|4|1.000000|2.000000|3.000000|4.000000|5.000000|6.000000|7.000000|8.000000|9.000000
+D3 vsprintf over a register save area + overflow: 1|2|3|4|0.500000|1.500000|2.500000|9|3.500000|hello
+exit 0

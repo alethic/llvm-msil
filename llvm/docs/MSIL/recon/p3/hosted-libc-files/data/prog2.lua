@@ -1,0 +1,12 @@
+-- hosted-libc recon: errors (pcall/error, longjmp) and coroutines (yield, longjmp).
+print(pcall(error, "boom"))
+print(pcall(function() local x = nil; return x.y end))
+print(select("#", pcall(error)))
+print(xpcall(function() error({code = 7}) end, function(e) return e.code end))
+local co = coroutine.wrap(function(a) local b = coroutine.yield(a + 1); return b * 2 end)
+print(co(1), co(10))
+local gen = coroutine.wrap(function() for i = 1, 3 do coroutine.yield(i) end end)
+print(gen(), gen(), gen())
+print(pcall(string.rep, "x", -1), pcall(string.format, "%d", 1.5))
+local ok, err = pcall(function() return 1 + {} end); print(ok, err)
+print(string.format("%s", pcall(load, "x = ")), load("return 1 +"))

@@ -1,0 +1,29 @@
+testsuites time (wall): 630.55
+sum of test seconds: 4897 (81.6 min); tests 150
+     4897 s 100.0%  n= 150  avg=  32.6  MSIL:Programs/c-testsuite
+top 25 tests:
+    66.0  MSIL.Programs/c-testsuite/00016
+    62.7  MSIL.Programs/c-testsuite/00017
+    58.5  MSIL.Programs/c-testsuite/00060
+    57.8  MSIL.Programs/c-testsuite/00008
+    55.0  MSIL.Programs/c-testsuite/00109
+    54.3  MSIL.Programs/c-testsuite/00022
+    54.2  MSIL.Programs/c-testsuite/00010
+    52.6  MSIL.Programs/c-testsuite/00153
+    51.8  MSIL.Programs/c-testsuite/00036
+    51.3  MSIL.Programs/c-testsuite/00046
+    50.7  MSIL.Programs/c-testsuite/00052
+    50.3  MSIL.Programs/c-testsuite/00127
+    49.8  MSIL.Programs/c-testsuite/00048
+    49.6  MSIL.Programs/c-testsuite/00059
+    49.3  MSIL.Programs/c-testsuite/00014
+    49.1  MSIL.Programs/c-testsuite/00141
+    49.0  MSIL.Programs/c-testsuite/00083
+    48.5  MSIL.Programs/c-testsuite/00069
+    48.5  MSIL.Programs/c-testsuite/00012
+    48.4  MSIL.Programs/c-testsuite/00134
+    48.1  MSIL.Programs/c-testsuite/00113
+    47.3  MSIL.Programs/c-testsuite/00108
+    47.1  MSIL.Programs/c-testsuite/00019
+    47.0  MSIL.Programs/c-testsuite/00057
+    46.7  MSIL.Programs/c-testsuite/00042

@@ -1,0 +1,30 @@
+definitions: 2015; external functions: 110; external globals: 3
+variadic definitions (43): checkAppendMsg, cli_printf, ctxErrorMsg, db_int, diskusedError, diskusedLine, diskusedPrepare, diskusedSql, diskusedSqlInt, diskusedTitle, dotCmdError, errorMPrintf, execSqlF, failIfSafeMode, fsdirSetErrmsg, getDigits, hash_step_vformat, idxAppendText, idxPrintfPrepareStmt, intckMprintf, intckPrepareFmt, jsonPrintf, pickStr, qrfError, sha3_step_vformat, shellPreparePrintf, sqlite3ErrorMsg, sqlite3ErrorWithMsg, sqlite3MPrintf, sqlite3NestedParse, sqlite3VdbeError, sqlite3VdbeExplain, sqlite3VdbeMultiLoad, sqlite3_config, sqlite3_db_config, sqlite3_expert_config, sqlite3_log, sqlite3_mprintf, sqlite3_snprintf, sqlite3_str_appendf, sqlite3_test_control, sqlite3_vtab_config, vfstrace_printf
+variadic call sites to external (native) functions (38): fprintf 25, ioctl 6, __isoc99_sscanf 4, snprintf 1, printf 1, open64 1
+variadic call sites to own definitions (2067): cli_printf 344, sqlite3ErrorMsg 341, sqlite3_log 261, sqlite3_mprintf 176, sqlite3_str_appendf 173, sqlite3_snprintf 92, sqlite3MPrintf 71, dotCmdError 68, vfstrace_printf 66, sqlite3NestedParse 39, qrfError 38, diskusedLine 37, checkAppendMsg 32, sqlite3VdbeExplain 31, sqlite3_test_control 29, sqlite3_config 25, sqlite3_db_config 24, idxAppendText 22, sqlite3VdbeError 21, sqlite3ErrorWithMsg 20, failIfSafeMode 19, intckMprintf 18, pickStr 14, sqlite3VdbeMultiLoad 13, diskusedError 11, diskusedSqlInt 11, getDigits 9, idxPrintfPrepareStmt 7, diskusedPrepare 6, intckPrepareFmt 5, diskusedTitle 5, fsdirSetErrmsg 5, db_int 5, execSqlF 5, jsonPrintf 5, sqlite3_vtab_config 4, sha3_step_vformat 3, hash_step_vformat 3, ctxErrorMsg 3, diskusedSql 2, errorMPrintf 2, shellPreparePrintf 1, sqlite3_expert_config 1
+indirect variadic calls: 24; va_start: 44; va_copy: 0
+setjmp/longjmp calls: {}; returns_twice decls: []
+own functions passed to external functions (callbacks) (7): atexit(abnormalExit) 1, pthread_create(vdbeIncrPopulateThread) 1, pthread_create(vdbePmaReaderBgIncrInit) 1, pthread_create(vdbeSorterFlushThread) 1, signal(interrupt_handler) 1, signal(sigterm_handler) 2
+external function addresses passed as arguments:
+external (native) function addresses in data initializers (22): access, close, fchmod, fchown, fcntl64, fstat64, ftruncate64, getcwd, geteuid, lstat64, mkdir, mmap64, mremap, munmap, pread64, pwrite64, read, readlink, rmdir, stat64, unlink, write
+own function addresses in data initializers: 609 functions
+external globals (data imports): stderr, stdin, stdout
+thread_local globals: []
+atomics: {'fence system': 80, 'store atomic': 69, 'load atomic': 29}
+dynamic allocas: 0; stacksave: 0; inline asm: 0; i128 lines: 18
+global_dtors: 0; atexit calls: 1
+byval args to external functions: {}
+sret calls to external functions: {}
+long double library functions: []
+intrinsics (excluding lifetime/mem*/va_*): llvm.abs.i32 6, llvm.abs.i64 1, llvm.bswap.i32 24, llvm.bswap.i64 2, llvm.ceil.f64 2, llvm.ctlz.i64 3, llvm.ctpop.i32 3, llvm.ctpop.i64 3, llvm.fabs.f64 24, llvm.floor.f64 1, llvm.fmuladd.f64 12, llvm.fshl.i32 259, llvm.fshl.i64 116, llvm.sadd.sat.i16 1, llvm.scmp.i32.i32 1, llvm.smax.i16 6, llvm.smax.i32 67, llvm.smax.i64 22, llvm.smax.i8 3, llvm.smin.i16 9, llvm.smin.i32 44, llvm.smin.i64 28, llvm.ssub.sat.i32 4, llvm.trunc.f64 1, llvm.umax.i16 1, llvm.umax.i32 19, llvm.umax.i64 6, llvm.umax.i8 3, llvm.umin.i16 8, llvm.umin.i32 19, llvm.umin.i64 29, llvm.umin.i8 1, llvm.umulh.i64 2, llvm.usub.sat.i64 1
+external functions by category:
+  alloc (4): calloc free malloc realloc
+  ctype/locale (3): __ctype_b_loc __errno_location isatty
+  dl (4): dlclose dlerror dlopen dlsym
+  other (9): __assert_fail __isoc99_sscanf bcmp gethostname getpwuid getrusage setenv symlink unsetenv
+  posix-io (33): access chdir chmod close closedir fchmod fchown fcntl64 fstat64 fsync ftruncate64 getcwd geteuid getuid ioctl lstat64 mkdir mmap64 mremap munmap open64 opendir pread64 pwrite64 read readdir64 readlink realpath rmdir stat64 unlink utimes write
+  process/env (8): atexit exit getenv getpid raise signal sysconf system
+  stdio (20): fclose fflush fgetc fgets fopen64 fprintf fputc fputs fread fseek ftell fwrite pclose popen printf puts rewind setvbuf snprintf vfprintf
+  string/mem (15): memchr memcmp strchr strcmp strcspn strdup strftime strlen strncmp strrchr strspn strstr strtod strtol strtoll
+  threads (10): pthread_create pthread_join pthread_mutex_destroy pthread_mutex_init pthread_mutex_lock pthread_mutex_trylock pthread_mutex_unlock pthread_mutexattr_destroy pthread_mutexattr_init pthread_mutexattr_settype
+  time (4): gettimeofday localtime nanosleep time

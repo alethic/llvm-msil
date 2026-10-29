@@ -1,0 +1,32 @@
+testsuites time (wall): 617.94
+sum of test seconds: 4678 (78.0 min); tests 88
+     2207 s  47.2%  n=  47  avg=  47.0  MSIL:M2/08-semantics
+     1221 s  26.1%  n=  20  avg=  61.1  MSIL:M1/11-programs
+      629 s  13.4%  n=  12  avg=  52.4  MSIL:M2/00-link
+      621 s  13.3%  n=   9  avg=  69.0  MSIL:M2/02-lto
+top 25 tests:
+   123.6  MSIL.M2/08-semantics/narrow-arg-mismatch.test
+   117.7  MSIL.M2/08-semantics/p8-section-ctor.test
+    93.7  MSIL.M2/02-lto/lto-call-attrs.test
+    89.5  MSIL.M2/08-semantics/p2c-cycle.test
+    85.7  MSIL.M2/02-lto/intra-tu-mismatch.test
+    85.1  MSIL.M2/02-lto/lto-partitions.test
+    81.9  MSIL.M2/02-lto/thinlto.test
+    77.8  MSIL.M2/08-semantics/p2c-bsymbolic.test
+    72.3  MSIL.M2/02-lto/stock-bitcode.test
+    71.4  MSIL.M2/02-lto/lto-pe.test
+    71.1  MSIL.M2/08-semantics/int-ptr-adapter.test
+    70.7  MSIL.M2/08-semantics/missing-arg-adapter.test
+    70.6  MSIL.M2/08-semantics/p9-weak-common.test
+    69.9  MSIL.M1/11-programs/collatz.c
+    69.5  MSIL.M2/08-semantics/zoo-defined.test
+    68.3  MSIL.M1/11-programs/bigint-add.c
+    67.5  MSIL.M2/08-semantics/unaligned-reloc.test
+    67.3  MSIL.M1/11-programs/mandelbrot-fixed.c
+    66.6  MSIL.M2/02-lto/stock-bitcode-archive.test
+    65.8  MSIL.M1/11-programs/fnv1a.c
+    65.7  MSIL.M2/08-semantics/p3-start-stop.test
+    65.7  MSIL.M2/00-link/static-same-name.test
+    65.4  MSIL.M1/11-programs/mergesort.c
+    65.2  MSIL.M2/08-semantics/weak-def-sig-mismatch.test
+    65.2  MSIL.M2/00-link/main-not-first.test

@@ -1,0 +1,98 @@
+### e3.exe: runs
+net48: e3 bad=0
+ rc=0
+net8: e3 bad=0
+ rc=0
+net10: e3 bad=0
+ rc=0
+### ILVerify 10.0.12 (e3.exe)
+[IL]: Error [StackUnexpected]: [e3.exe : E3::add_nint(native int, int32)][offset 0x00000002][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::cas_nint(native int, int32, int32)][offset 0x00000003][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::vread_nint(native int)][offset 0x00000001][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::vwrite_nint(native int, int32)][offset 0x00000002][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::cas64_nint(native int, native int, native int)][offset 0x00000003][found Native Int][expected address of IntPtr] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::add64_conv(native int, native int)][offset 0x00000003][found Native Int][expected address of Int64] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::add64_mixed(native int, native int)][offset 0x00000002][found Native Int][expected Long] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::add64_mixed(native int, native int)][offset 0x00000002][found Native Int][expected address of Int64] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::add64_mixed(native int, native int)][offset 0x00000007][found Long][expected Native Int] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::vread64_nint(native int)][offset 0x00000001][found Native Int][expected address of IntPtr] Unexpected type on the stack.
+[IL]: Error [UnmanagedPointer]: [e3.exe : E3::add_ptr(int32*, int32)][offset 0x00000000] Unmanaged pointers are not a verifiable type.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::add_ptr(int32*, int32)][offset 0x00000002][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3.exe : E3::add_byref_local(native int, int32)][offset 0x00000001][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error [StackByRef]: [e3.exe : E3::vol_ldind(native int)][offset 0x00000003][found Native Int] Expected ByRef on the stack.
+[IL]: Error [StackByRef]: [e3.exe : E3::vol_stind(native int, int32)][offset 0x00000004][found Native Int] Expected ByRef on the stack.
+[IL]: Error [StackByRef]: [e3.exe : E3::Main()][offset 0x0000000E][found Native Int] Expected ByRef on the stack.
+16 Error(s) Verifying e3.exe
+### PEVerify 4.8 /il (e3.exe)
+
+Microsoft (R) .NET Framework PE Verifier.  Version  4.0.30319.0
+Copyright (c) Microsoft Corporation.  All rights reserved.
+
+[IL]: Error: [e3.exe : E3::add_nint][offset 0x00000002][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::cas_nint][offset 0x00000003][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::vread_nint][offset 0x00000001][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::vwrite_nint][offset 0x00000002][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::cas64_nint][offset 0x00000003][found Native Int][expected address of Native Int] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::add64_conv][offset 0x00000003][found Native Int][expected address of Long] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::add64_mixed][offset 0x00000002][found Native Int][expected address of Long] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::add64_mixed][offset 0x00000002][found Native Int][expected Long] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::add64_mixed][offset 0x00000007][found Long][expected Native Int] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::vread64_nint][offset 0x00000001][found Native Int][expected address of Native Int] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::add_ptr][offset 0x00000000] Unmanaged pointers are not a verifiable type.
+[IL]: Error: [e3.exe : E3::add_byref_local][offset 0x00000001][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error: [e3.exe : E3::vol_ldind][offset 0x00000003][found Native Int] Expected ByRef on the stack.
+[IL]: Error: [e3.exe : E3::vol_stind][offset 0x00000004][found Native Int] Expected ByRef on the stack.
+[IL]: Error: [e3.exe : E3::Main][offset 0x0000000E][found Native Int] Expected ByRef on the stack.
+15 Error(s) Verifying e3.exe
+### e3b.exe: runs
+net48: 11
+ rc=11
+net8: 11
+ rc=11
+net10: 11
+ rc=11
+### ILVerify 10.0.12 (e3b.exe)
+[IL]: Error [UnmanagedPointer]: [e3b.exe : E3b::asref_i4(void*)][offset 0x00000000] Unmanaged pointers are not a verifiable type.
+[IL]: Error [StackUnexpected]: [e3b.exe : E3b::asref_i4(void*)][offset 0x00000001][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error [ReturnPtrToStack]: [e3b.exe : E3b::asref_i4(void*)][offset 0x00000001] Return type is ByRef, TypedReference, ArgHandle, or ArgIterator.
+[IL]: Error [UnmanagedPointer]: [e3b.exe : E3b::asref_i(void*)][offset 0x00000000] Unmanaged pointers are not a verifiable type.
+[IL]: Error [StackUnexpected]: [e3b.exe : E3b::asref_i(void*)][offset 0x00000001][found Native Int][expected address of IntPtr] Unexpected type on the stack.
+[IL]: Error [ReturnPtrToStack]: [e3b.exe : E3b::asref_i(void*)][offset 0x00000001] Return type is ByRef, TypedReference, ArgHandle, or ArgIterator.
+[IL]: Error [StackUnexpected]: [e3b.exe : E3b::atomic_add_4(native int, int32)][offset 0x00000002][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error [StackUnexpected]: [e3b.exe : E3b::add_v3_bad(native int, int64)][offset 0x00000007][found Long][expected Int32] Unexpected type on the stack.
+[IL]: Error [StackByRef]: [e3b.exe : E3b::Main()][offset 0x0000000E][found Native Int] Expected ByRef on the stack.
+9 Error(s) Verifying e3b.exe
+### PEVerify 4.8 /il (e3b.exe)
+
+Microsoft (R) .NET Framework PE Verifier.  Version  4.0.30319.0
+Copyright (c) Microsoft Corporation.  All rights reserved.
+
+[IL]: Error: [e3b.exe : E3b::asref_i4][offset 0x00000000] Unmanaged pointers are not a verifiable type.
+[IL]: Error: [e3b.exe : E3b::asref_i][offset 0x00000000] Unmanaged pointers are not a verifiable type.
+[IL]: Error: [e3b.exe : E3b::add_v3][offset 0x00000001][found Native Int][expected unmanaged pointer] Unexpected type on the stack.
+[IL]: Error: [e3b.exe : E3b::cas64_v3][offset 0x00000001][found Native Int][expected unmanaged pointer] Unexpected type on the stack.
+[IL]: Error: [e3b.exe : E3b::atomic_add_4][offset 0x00000002][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error: [e3b.exe : E3b::add_v3_bad][offset 0x00000001][found Native Int][expected unmanaged pointer] Unexpected type on the stack.
+[IL]: Error: [e3b.exe : E3b::add_v3_bad][offset 0x00000007][found Long][expected Int32] Unexpected type on the stack.
+[IL]: Error: [e3b.exe : E3b::Main][offset 0x0000000E][found Native Int] Expected ByRef on the stack.
+8 Error(s) Verifying e3b.exe
+### e3c.exe: runs
+net48:  rc=5
+net8:  rc=5
+net10:  rc=5
+### ILVerify 10.0.12 (e3c.exe)
+[IL]: Error [StackUnexpected]: [e3c.exe : E3c::asref_i4(native int)][offset 0x00000001][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error [ReturnPtrToStack]: [e3c.exe : E3c::asref_i4(native int)][offset 0x00000001] Return type is ByRef, TypedReference, ArgHandle, or ArgIterator.
+[IL]: Error [StackUnexpected]: [e3c.exe : E3c::add_v3n_bad(native int, int64)][offset 0x00000007][found Long][expected Int32] Unexpected type on the stack.
+3 Error(s) Verifying e3c.exe
+### PEVerify 4.8 /il (e3c.exe)
+
+Microsoft (R) .NET Framework PE Verifier.  Version  4.0.30319.0
+Copyright (c) Microsoft Corporation.  All rights reserved.
+
+[IL]: Error: [e3c.exe : E3c::asref_i4][offset 0x00000001][found Native Int][expected address of Int32] Unexpected type on the stack.
+[IL]: Error: [e3c.exe : E3c::asref_i4][offset 0x00000001] Return type is ByRef, TypedReference, ArgHandle, or ArgIterator.
+[IL]: Error: [e3c.exe : E3c::add_v3n_bad][offset 0x00000007][found Long][expected Int32] Unexpected type on the stack.
+3 Error(s) Verifying e3c.exe
+### msil-verify.py (today's D21 policy) on e3.exe: exit status
+status 1

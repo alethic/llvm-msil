@@ -1,0 +1,30 @@
+=== wsl net8.0 ret PPROG_EXIT_IN_CTOR
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] program constructor calls exit(13)
+[tid 1] exit called
+[tid 1] program destructor
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+status=13
+=== wsl net10.0 ret PPROG_EXIT_IN_CTOR
+[tid 1] plib: plib constructor
+[tid 1] program constructor
+[tid 1] program constructor calls exit(13)
+[tid 1] exit called
+[tid 1] program destructor
+[tid 1] plib: plib destructor
+[tid 2] plib: ProcessExit handler: exit already started, nothing to do
+status=13
+=== wsl net8.0 ret PLIB_EXIT_IN_CTOR
+[tid 1] plib: plib constructor
+[tid 1] plib: plib constructor calls exit(14)
+[tid 1] plib: exit called
+[tid 1] plib: plib destructor
+status=14
+=== wsl net10.0 ret PLIB_EXIT_IN_CTOR
+[tid 1] plib: plib constructor
+[tid 1] plib: plib constructor calls exit(14)
+[tid 1] plib: exit called
+[tid 1] plib: plib destructor
+status=14

@@ -1,0 +1,222 @@
+=== order.linux ret
+ctor 101
+ctor default
+main start
+main end
+__cxa_atexit handler (arg ok)
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+dtor default
+.fini_array slot (plain)
+dtor 300
+dtor 200
+.fini_array.150 slot
+dtor 101
+stdout: buffered line from main
+stdout: from h1
+stdout: from dtor default
+status=0
+=== order.linux ret300
+ctor 101
+ctor default
+main start
+main end
+__cxa_atexit handler (arg ok)
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+dtor default
+.fini_array slot (plain)
+dtor 300
+dtor 200
+.fini_array.150 slot
+dtor 101
+stdout: buffered line from main
+stdout: from h1
+stdout: from dtor default
+status=44
+=== order.linux exit
+ctor 101
+ctor default
+main start
+main end
+__cxa_atexit handler (arg ok)
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+dtor default
+.fini_array slot (plain)
+dtor 300
+dtor 200
+.fini_array.150 slot
+dtor 101
+stdout: buffered line from main
+stdout: from h1
+stdout: from dtor default
+status=3
+=== order.linux exit300
+ctor 101
+ctor default
+main start
+main end
+__cxa_atexit handler (arg ok)
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+dtor default
+.fini_array slot (plain)
+dtor 300
+dtor 200
+.fini_array.150 slot
+dtor 101
+stdout: buffered line from main
+stdout: from h1
+stdout: from dtor default
+status=44
+=== order.linux exitneg
+ctor 101
+ctor default
+main start
+main end
+__cxa_atexit handler (arg ok)
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+dtor default
+.fini_array slot (plain)
+dtor 300
+dtor 200
+.fini_array.150 slot
+dtor 101
+stdout: buffered line from main
+stdout: from h1
+stdout: from dtor default
+status=255
+=== order.linux _Exit
+ctor 101
+ctor default
+main start
+main end
+status=5
+=== order.linux _exit
+ctor 101
+ctor default
+main start
+main end
+status=5
+=== order.linux quick
+ctor 101
+ctor default
+main start
+main end
+at_quick_exit q2
+at_quick_exit q1
+status=6
+=== order.linux abort
+ctor 101
+ctor default
+main start
+main end
+status=134
+=== order.linux nested
+ctor 101
+ctor default
+main start
+main end
+__cxa_atexit handler (arg ok)
+atexit h2 (registered 2nd in main)
+  h2: atexit(h_late) during exit returned 0
+atexit h_late (registered by h2 during exit)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+dtor default
+.fini_array slot (plain)
+dtor 300
+dtor 200
+.fini_array.150 slot
+dtor 101
+stdout: buffered line from main
+stdout: from h1
+stdout: from dtor default
+status=0
+=== order.linux exitinhandler
+ctor 101
+ctor default
+main start
+main end
+atexit h_last (registered after exit-calling h3)
+atexit h3 calls exit(9)
+__cxa_atexit handler (arg ok)
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+dtor default
+.fini_array slot (plain)
+dtor 300
+dtor 200
+.fini_array.150 slot
+dtor 101
+stdout: buffered line from main
+stdout: from h1
+stdout: from dtor default
+status=9
+=== order.linux exitindtor
+ctor 101
+ctor default
+main start
+main end
+__cxa_atexit handler (arg ok)
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+dtor default
+  dtor default calls exit(11)
+stdout: buffered line from main
+stdout: from h1
+stdout: from dtor default
+status=11
+=== order.linux atexitindtor
+ctor 101
+ctor default
+main start
+main end
+__cxa_atexit handler (arg ok)
+atexit h2 (registered 2nd in main)
+atexit h1 (registered 1st in main)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+dtor default
+.fini_array slot (plain)
+dtor 300
+  dtor 300: atexit(d_late) returned 0
+dtor 200
+.fini_array.150 slot
+dtor 101
+atexit d_late (registered by a destructor)
+stdout: buffered line from main
+stdout: from h1
+stdout: from dtor default
+status=0
+=== order.linux (glibc crt1) ret, ORDER_EXIT_IN_CTOR=1
+ctor 101
+ctor default
+  ctor default calls exit(13)
+atexit h_ctor (registered in default ctor)
+atexit h_ctor101 (registered in ctor 101)
+dtor default
+.fini_array slot (plain)
+dtor 300
+dtor 200
+.fini_array.150 slot
+dtor 101
+stdout: from dtor default
+status=13

@@ -1,0 +1,232 @@
+=== net48 slow
+[   30 ms main] Main: mode=slow runtime=.NET Framework 4.8.9363.0
+[  139 ms main] Main returns 7
+[  152 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  152 ms thread 2 bg] A sleeps 4000 ms
+status=7 (0x00000007) wall=4287 ms
+=== net48 envexit-in-pe
+[   46 ms main] Main: mode=envexit-in-pe runtime=.NET Framework 4.8.9363.0
+[  128 ms main] Main returns 7
+[  148 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  148 ms thread 2 bg] A calls Environment.Exit(9)
+status=9 (0x00000009) wall=3733 ms
+=== net48 nativeexit-in-pe
+[   44 ms main] Main: mode=nativeexit-in-pe runtime=.NET Framework 4.8.9363.0
+[  131 ms main] Main returns 7
+[  137 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  137 ms thread 2 bg] A calls native exit(9)
+status=9 (0x00000009) wall=1906 ms
+=== net48 late-subscribe
+[   30 ms main] Main: mode=late-subscribe runtime=.NET Framework 4.8.9363.0
+[   31 ms main] Main returns 7
+[   32 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[   32 ms thread 2 bg] A subscribed C
+[   32 ms thread 2 bg] ProcessExit handler A end
+[   33 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=1300 ms
+=== net48 pe-exitcode
+[    5 ms main] Main: mode=pe-exitcode runtime=.NET Framework 4.8.9363.0
+[    6 ms main] Main returns 7
+[   10 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[   10 ms thread 2 bg] A set Environment.ExitCode = 9
+[   10 ms thread 2 bg] ProcessExit handler A end
+[   10 ms thread 2 bg] ProcessExit handler B (ExitCode=9)
+status=9 (0x00000009) wall=617 ms
+=== net48 stdio-pe
+[    5 ms main] Main: mode=stdio-pe runtime=.NET Framework 4.8.9363.0
+[    6 ms main] Main returns 7
+[    7 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    8 ms thread 2 bg] ProcessExit handler A end
+[    8 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+stdout(native puts): from ProcessExit handler A
+status=7 (0x00000007) wall=1483 ms
+=== net48 bg-thread-in-pe
+[   46 ms main] Main: mode=bg-thread-in-pe runtime=.NET Framework 4.8.9363.0
+[  189 ms main] Main returns 7
+[  205 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  251 ms thread 3 fg] thread started by A runs
+[  770 ms thread 3 fg] thread started by A done
+[  847 ms thread 2 bg] A joined its thread
+[  847 ms thread 2 bg] ProcessExit handler A end
+[  847 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=2306 ms
+=== net48 finalizer
+[   36 ms main] Main: mode=finalizer runtime=.NET Framework 4.8.9363.0
+[  164 ms main] Main returns 7
+[  177 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  178 ms thread 2 bg] ProcessExit handler A end
+[  178 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+[  178 ms thread 2 bg] finalizer ran: unreachable
+[  178 ms thread 2 bg] finalizer ran: reachable from a static
+status=7 (0x00000007) wall=1251 ms
+=== net48 fg-thread
+[    4 ms main] Main: mode=fg-thread runtime=.NET Framework 4.8.9363.0
+[   33 ms main] Main returns 7 while a foreground thread sleeps 3 s
+[ 3045 ms thread 3 fg] foreground thread done
+[ 3050 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[ 3050 ms thread 2 bg] ProcessExit handler A end
+[ 3050 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=3579 ms
+=== net48 fg-thread-envexit
+[    5 ms main] Main: mode=fg-thread-envexit runtime=.NET Framework 4.8.9363.0
+[   44 ms main] Environment.Exit(7) while a foreground thread sleeps 3 s
+[  163 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  163 ms thread 2 bg] ProcessExit handler A end
+[  163 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=637 ms
+=== net8.0 slow
+[    1 ms main] Main: mode=slow runtime=.NET 8.0.33
+[    3 ms main] Main returns 7
+[    4 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    4 ms thread 2 bg] A sleeps 4000 ms
+[ 4015 ms thread 2 bg] A woke up
+[ 4015 ms thread 2 bg] ProcessExit handler A end
+[ 4015 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=5689 ms
+=== net8.0 envexit-in-pe
+TIMEOUT (killed after 60 s)
+[    1 ms main] Main: mode=envexit-in-pe runtime=.NET 8.0.33
+[    2 ms main] Main returns 7
+[    3 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    4 ms thread 2 bg] A calls Environment.Exit(9)
+status=-1 (0xFFFFFFFF) wall=60254 ms
+=== net8.0 nativeexit-in-pe
+[    2 ms main] Main: mode=nativeexit-in-pe runtime=.NET 8.0.33
+[    3 ms main] Main returns 7
+[    4 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    4 ms thread 2 bg] A calls native exit(9)
+status=9 (0x00000009) wall=314 ms
+=== net8.0 late-subscribe
+[    2 ms main] Main: mode=late-subscribe runtime=.NET 8.0.33
+[    5 ms main] Main returns 7
+[    7 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    7 ms thread 2 bg] A subscribed C
+[    7 ms thread 2 bg] ProcessExit handler A end
+[    7 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=271 ms
+=== net8.0 pe-exitcode
+[    1 ms main] Main: mode=pe-exitcode runtime=.NET 8.0.33
+[    3 ms main] Main returns 7
+[    4 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    4 ms thread 2 bg] A set Environment.ExitCode = 9
+[    4 ms thread 2 bg] ProcessExit handler A end
+[    4 ms thread 2 bg] ProcessExit handler B (ExitCode=9)
+status=9 (0x00000009) wall=373 ms
+=== net8.0 stdio-pe
+[    1 ms main] Main: mode=stdio-pe runtime=.NET 8.0.33
+[    3 ms main] Main returns 7
+[    4 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    4 ms thread 2 bg] ProcessExit handler A end
+[    4 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+stdout(native puts): from ProcessExit handler A
+status=7 (0x00000007) wall=361 ms
+=== net8.0 bg-thread-in-pe
+[    1 ms main] Main: mode=bg-thread-in-pe runtime=.NET 8.0.33
+[    2 ms main] Main returns 7
+[    3 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[   33 ms thread 4 fg] thread started by A runs
+[  546 ms thread 4 fg] thread started by A done
+[  546 ms thread 2 bg] A joined its thread
+[  546 ms thread 2 bg] ProcessExit handler A end
+[  546 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=951 ms
+=== net8.0 finalizer
+[    1 ms main] Main: mode=finalizer runtime=.NET 8.0.33
+[    2 ms main] Main returns 7
+[    3 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    3 ms thread 2 bg] ProcessExit handler A end
+[    3 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=319 ms
+=== net8.0 fg-thread
+[    2 ms main] Main: mode=fg-thread runtime=.NET 8.0.33
+[    6 ms main] Main returns 7 while a foreground thread sleeps 3 s
+[ 3021 ms thread 4 fg] foreground thread done
+[ 3022 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[ 3022 ms thread 2 bg] ProcessExit handler A end
+[ 3022 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=3478 ms
+=== net8.0 fg-thread-envexit
+[    3 ms main] Main: mode=fg-thread-envexit runtime=.NET 8.0.33
+[   29 ms main] Environment.Exit(7) while a foreground thread sleeps 3 s
+[   30 ms thread 2 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[   30 ms thread 2 bg] ProcessExit handler A end
+[   30 ms thread 2 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=400 ms
+=== net10.0 slow
+[    0 ms main] Main: mode=slow runtime=.NET 10.0.14
+[    2 ms main] Main returns 7
+[    3 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    3 ms thread 1 bg] A sleeps 4000 ms
+[ 4017 ms thread 1 bg] A woke up
+[ 4017 ms thread 1 bg] ProcessExit handler A end
+[ 4017 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=4686 ms
+=== net10.0 envexit-in-pe
+TIMEOUT (killed after 60 s)
+[    0 ms main] Main: mode=envexit-in-pe runtime=.NET 10.0.14
+[   58 ms main] Main returns 7
+[   59 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[   59 ms thread 1 bg] A calls Environment.Exit(9)
+status=-1 (0xFFFFFFFF) wall=60339 ms
+=== net10.0 nativeexit-in-pe
+[    0 ms main] Main: mode=nativeexit-in-pe runtime=.NET 10.0.14
+[    2 ms main] Main returns 7
+[    3 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    3 ms thread 1 bg] A calls native exit(9)
+status=9 (0x00000009) wall=1535 ms
+=== net10.0 late-subscribe
+[    0 ms main] Main: mode=late-subscribe runtime=.NET 10.0.14
+[    1 ms main] Main returns 7
+[    2 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    2 ms thread 1 bg] A subscribed C
+[    2 ms thread 1 bg] ProcessExit handler A end
+[    3 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=1442 ms
+=== net10.0 pe-exitcode
+[    0 ms main] Main: mode=pe-exitcode runtime=.NET 10.0.14
+[    4 ms main] Main returns 7
+[    5 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    5 ms thread 1 bg] A set Environment.ExitCode = 9
+[    5 ms thread 1 bg] ProcessExit handler A end
+[    5 ms thread 1 bg] ProcessExit handler B (ExitCode=9)
+status=9 (0x00000009) wall=1161 ms
+=== net10.0 stdio-pe
+[    0 ms main] Main: mode=stdio-pe runtime=.NET 10.0.14
+[    3 ms main] Main returns 7
+[    4 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    5 ms thread 1 bg] ProcessExit handler A end
+[    5 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+stdout(native puts): from ProcessExit handler A
+status=7 (0x00000007) wall=684 ms
+=== net10.0 bg-thread-in-pe
+[   48 ms main] Main: mode=bg-thread-in-pe runtime=.NET 10.0.14
+[  128 ms main] Main returns 7
+[  129 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[  373 ms thread 4 fg] thread started by A runs
+[  920 ms thread 4 fg] thread started by A done
+[  921 ms thread 1 bg] A joined its thread
+[  921 ms thread 1 bg] ProcessExit handler A end
+[  921 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=2348 ms
+=== net10.0 finalizer
+[    0 ms main] Main: mode=finalizer runtime=.NET 10.0.14
+[    2 ms main] Main returns 7
+[    3 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[    3 ms thread 1 bg] ProcessExit handler A end
+[    3 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=5301 ms
+=== net10.0 fg-thread
+[    0 ms main] Main: mode=fg-thread runtime=.NET 10.0.14
+[  148 ms main] Main returns 7 while a foreground thread sleeps 3 s
+[ 3214 ms thread 4 fg] foreground thread done
+[ 3215 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[ 3215 ms thread 1 bg] ProcessExit handler A end
+[ 3215 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=5675 ms
+=== net10.0 fg-thread-envexit
+[    0 ms main] Main: mode=fg-thread-envexit runtime=.NET 10.0.14
+[   70 ms main] Environment.Exit(7) while a foreground thread sleeps 3 s
+[   71 ms thread 1 bg] ProcessExit handler A start (sender=AppDomain, ExitCode=7)
+[   71 ms thread 1 bg] ProcessExit handler A end
+[   71 ms thread 1 bg] ProcessExit handler B (ExitCode=7)
+status=7 (0x00000007) wall=2218 ms

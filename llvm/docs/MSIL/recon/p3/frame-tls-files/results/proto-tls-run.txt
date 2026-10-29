@@ -1,0 +1,40 @@
+--- net48
+thread slot 0: &tcount=0x15acce0 tcount=6 *tptr=42 sum(tzero)=0
+thread slot 1: &tcount=0x15acb60 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 2: &tcount=0x15ac360 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 3: &tcount=0x15ac760 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 4: &tcount=0x15ac2e0 tcount=1005 *tptr=42 sum(tzero)=0
+blocks freed by finalizers: 4 (main thread's block still live: tcount=7)
+exit=0
+--- net8
+thread slot 0: &tcount=0x1a4b84af0b0 tcount=6 *tptr=42 sum(tzero)=0
+thread slot 1: &tcount=0x1a4b84ae5b0 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 2: &tcount=0x1a4b84af030 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 3: &tcount=0x1a4b84ae630 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 4: &tcount=0x1a4b84aeab0 tcount=1005 *tptr=42 sum(tzero)=0
+blocks freed by finalizers: 4 (main thread's block still live: tcount=7)
+exit=0
+--- net10
+thread slot 0: &tcount=0x1bb3d8eae00 tcount=6 *tptr=42 sum(tzero)=0
+thread slot 1: &tcount=0x1bb3d8ea400 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 2: &tcount=0x1bb3d8eb200 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 3: &tcount=0x1bb3d8eaa80 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 4: &tcount=0x1bb3d8e9f00 tcount=1005 *tptr=42 sum(tzero)=0
+blocks freed by finalizers: 4 (main thread's block still live: tcount=7)
+exit=0
+--- wsl net8
+thread slot 0: &tcount=0x61a9ae656f20 tcount=6 *tptr=42 sum(tzero)=0
+thread slot 1: &tcount=0x718320001390 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 2: &tcount=0x718324000fa0 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 3: &tcount=0x718318000fa0 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 4: &tcount=0x7183200012e0 tcount=1005 *tptr=42 sum(tzero)=0
+blocks freed by finalizers: 4 (main thread's block still live: tcount=7)
+exit=0
+--- wsl net10
+thread slot 0: &tcount=0x5f187b69e130 tcount=6 *tptr=42 sum(tzero)=0
+thread slot 1: &tcount=0x7c91b4001f00 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 2: &tcount=0x7c91b80010b0 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 3: &tcount=0x7c91b4003270 tcount=1005 *tptr=42 sum(tzero)=0
+thread slot 4: &tcount=0x7c91b8001340 tcount=1005 *tptr=42 sum(tzero)=0
+blocks freed by finalizers: 4 (main thread's block still live: tcount=7)
+exit=0

@@ -1,0 +1,37 @@
+testsuites time (wall): 182.76
+sum of test seconds: 1433 (23.9 min); tests 112
+      414 s  28.9%  n=  38  avg=  10.9  MSIL:M2/08-semantics
+      383 s  26.7%  n=  20  avg=  19.2  MSIL:M1/11-programs
+      159 s  11.1%  n=   9  avg=  17.7  MSIL:M2/02-lto
+      147 s  10.3%  n=  12  avg=  12.3  MSIL:M2/00-link
+      136 s   9.5%  n=   5  avg=  27.2  MSIL:M2/07-equiv
+       91 s   6.3%  n=  15  avg=   6.1  MSIL:M2/03-native
+       79 s   5.5%  n=   5  avg=  15.8  MSIL:M2/01-archive
+       12 s   0.8%  n=   3  avg=   3.9  MSIL:M2/06-det
+       12 s   0.8%  n=   5  avg=   2.4  MSIL:M2/09-hosted
+top 25 tests:
+    32.5  MSIL.M2/07-equiv/o3-reloc-loop.test
+    32.0  MSIL.M2/07-equiv/o4-zoo.test
+    30.8  MSIL.M2/02-lto/thinlto.test
+    27.1  MSIL.M1/11-programs/struct-sim.c
+    25.8  MSIL.M2/07-equiv/o3-sections.test
+    25.1  MSIL.M2/02-lto/lto-call-attrs.test
+    24.6  MSIL.M2/07-equiv/o4-sections-ctors.test
+    23.6  MSIL.M2/01-archive/data-only-member.test
+    23.1  MSIL.M2/08-semantics/p8-section-ctor.test
+    21.3  MSIL.M2/02-lto/intra-tu-mismatch.test
+    21.3  MSIL.M1/11-programs/crc32.c
+    21.1  MSIL.M2/07-equiv/o3-single.test
+    20.9  MSIL.M1/11-programs/matrix-mult.c
+    20.5  MSIL.M2/02-lto/lto-partitions.test
+    20.4  MSIL.M1/11-programs/fib.c
+    19.7  MSIL.M1/11-programs/strings.c
+    19.7  MSIL.M1/11-programs/fnv1a.c
+    18.8  MSIL.M1/11-programs/kr-legacy.c
+    18.7  MSIL.M1/11-programs/linked-list-pool.c
+    18.7  MSIL.M1/11-programs/bigint-add.c
+    18.6  MSIL.M1/11-programs/string-table.c
+    18.6  MSIL.M1/11-programs/mergesort.c
+    18.4  MSIL.M1/11-programs/binary-trees-pool.c
+    18.3  MSIL.M1/11-programs/nqueens.c
+    18.1  MSIL.M1/11-programs/life.c

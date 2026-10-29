@@ -1,0 +1,165 @@
+# x64 hot loops, .NET 8.0.33 JIT (DOTNET_TieredCompilation=0), bench.exe
+B:b_direct_add
+   G_M000_IG05: lock | inc dword ptr [rsi] | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05
+   G_M000_IG04: test ebx, ebx | jle SHORT G_M000_IG06 | align [2 bytes for IG05] || G_M000_IG05: lock | inc dword ptr [rsi] | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05 || G_M000_IG06: lea rcx, [rsp+0x28] | mov rax, 0x7FF9CC983480 || G_M000_IG07: call rax | cmp dword ptr [(reloc 0x7ff8d13a917c)], 0 | jne SHORT G_M000_IG11 || G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04
+   G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04 || G_M000_IG11: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG08
+B:b_asref_add
+   G_M000_IG05: lock | inc dword ptr [rsi] | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05
+   G_M000_IG04: test ebx, ebx | jle SHORT G_M000_IG06 | align [2 bytes for IG05] || G_M000_IG05: lock | inc dword ptr [rsi] | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05 || G_M000_IG06: lea rcx, [rsp+0x28] | mov rax, 0x7FF9CC983480 || G_M000_IG07: call rax | cmp dword ptr [(reloc 0x7ff8d13a917c)], 0 | jne SHORT G_M000_IG11 || G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04
+   G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04 || G_M000_IG11: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG08
+B:b_ophelper_add
+   G_M000_IG05: lock | inc dword ptr [rsi] | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05
+   G_M000_IG04: test ebx, ebx | jle SHORT G_M000_IG06 | align [2 bytes for IG05] || G_M000_IG05: lock | inc dword ptr [rsi] | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05 || G_M000_IG06: lea rcx, [rsp+0x28] | mov rax, 0x7FF9CC983480 || G_M000_IG07: call rax | cmp dword ptr [(reloc 0x7ff8d13a917c)], 0 | jne SHORT G_M000_IG11 || G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04
+   G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04 || G_M000_IG11: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG08
+B:b_vol_read
+   G_M000_IG05: cmp dword ptr [rsi], esi | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05
+   G_M000_IG04: test ebx, ebx | jle SHORT G_M000_IG06 | align [2 bytes for IG05] || G_M000_IG05: cmp dword ptr [rsi], esi | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05 || G_M000_IG06: lea rcx, [rsp+0x28] | mov rax, 0x7FF9CC983480 || G_M000_IG07: call rax | cmp dword ptr [(reloc 0x7ff8d13a917c)], 0 | jne SHORT G_M000_IG11 || G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04
+   G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04 || G_M000_IG11: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG08
+B:b_Vread
+   G_M000_IG05: cmp dword ptr [rsi], esi | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05
+   G_M000_IG04: test ebx, ebx | jle SHORT G_M000_IG06 | align [2 bytes for IG05] || G_M000_IG05: cmp dword ptr [rsi], esi | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05 || G_M000_IG06: lea rcx, [rsp+0x28] | mov rax, 0x7FF9CC983480 || G_M000_IG07: call rax | cmp dword ptr [(reloc 0x7ff8d13a917c)], 0 | jne SHORT G_M000_IG11 || G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04
+   G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04 || G_M000_IG11: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG08
+B:b_xchg_store
+   G_M000_IG05: mov ecx, ebp | xchg dword ptr [rsi], ecx | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05
+   G_M000_IG04: test ebx, ebx | jle SHORT G_M000_IG06 | align [2 bytes for IG05] || G_M000_IG05: mov ecx, ebp | xchg dword ptr [rsi], ecx | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05 || G_M000_IG06: lea rcx, [rsp+0x28] | mov rax, 0x7FF9CC983480 || G_M000_IG07: call rax | cmp dword ptr [(reloc 0x7ff8d13a917c)], 0 | jne SHORT G_M000_IG11 || G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04
+   G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04 || G_M000_IG11: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG08
+B:b_write_fence
+   G_M000_IG05: mov dword ptr [rsi], ebp | lock | or dword ptr [rsp], 0 | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05
+   G_M000_IG04: test ebx, ebx | jle SHORT G_M000_IG06 | align [2 bytes for IG05] || G_M000_IG05: mov dword ptr [rsi], ebp | lock | or dword ptr [rsp], 0 | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05 || G_M000_IG06: lea rcx, [rsp+0x28] | mov rax, 0x7FF9CC983480 || G_M000_IG07: call rax | cmp dword ptr [(reloc 0x7ff8d13a917c)], 0 | jne SHORT G_M000_IG11 || G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04
+   G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04 || G_M000_IG11: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG08
+B:b_add64
+   G_M000_IG05: lock | inc qword ptr [rsi] | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05
+   G_M000_IG04: test ebx, ebx | jle SHORT G_M000_IG06 | align [2 bytes for IG05] || G_M000_IG05: lock | inc qword ptr [rsi] | inc ebp | cmp ebp, ebx | jl SHORT G_M000_IG05 || G_M000_IG06: lea rcx, [rsp+0x28] | mov rax, 0x7FF9CC983480 || G_M000_IG07: call rax | cmp dword ptr [(reloc 0x7ff8d13a917c)], 0 | jne SHORT G_M000_IG11 || G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04
+   G_M000_IG08: mov rax, qword ptr [rsp+0x28] | sub rax, rdi || G_M000_IG09: add rsp, 56 | pop rbx | pop rbp | pop rsi | pop rdi | ret || G_M000_IG10: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG04 || G_M000_IG11: call CORINFO_HELP_POLL_GC | jmp SHORT G_M000_IG08
+
+# linux-arm64 hot loops, crossgen2 (arm64-armv8-a; files arm64-*.txt are .NET 10.0.13 crossgen2, arm64-net8 is 8.0.32)
+B:b_plain_add
+   G_M000_IG03: ldr w11, [x19] | add w11, w11, #1 | str w11, [x19] | sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_direct_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_asref_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_ophelper_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_noinl_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_cas_add
+   G_M000_IG04: sxtw w11, w1 | add w1, w11, #1 | mov w0, w11 | casal w0, w1, [x19] | sxtw w1, w0 | cmp w1, w11 | bne G_M000_IG04
+   G_M000_IG03: ldar w11, [x19] | add w0, w11, #1 | mov w1, w11 | casal w1, w0, [x19] | cmp w1, w11 | beq G_M000_IG05 || G_M000_IG04: sxtw w11, w1 | add w1, w11, #1 | mov w0, w11 | casal w0, w1, [x19] | sxtw w1, w0 | cmp w1, w11 | bne G_M000_IG04 || G_M000_IG05: sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_byte_cas_add
+   G_M000_IG05: sxtw w4, w6 || G_M000_IG06: lsr w5, w4, w2 | add w5, w5, #1 | uxtb w5, w5 | lsl w5, w5, w2 | and w6, w3, w4 | orr w5, w5, w6 | mov w6, w4 | casal w6, w5, [x1] | cmp w6, w4 | bne G_M000_IG05
+   G_M000_IG04: mov x1, x11 | sxtw w2, w0 | mov w3, #255 | lsl w3, w3, w2 | ldar w4, [x1] | mvn w3, w3 | b G_M000_IG06 || G_M000_IG05: sxtw w4, w6 || G_M000_IG06: lsr w5, w4, w2 | add w5, w5, #1 | uxtb w5, w5 | lsl w5, w5, w2 | and w6, w3, w4 | orr w5, w5, w6 | mov w6, w4 | casal w6, w5, [x1] | cmp w6, w4 | bne G_M000_IG05 || G_M000_IG07: sub w19, w19, #1 | cbnz w19, G_M000_IG04
+B:b_vol_read
+   G_M000_IG03: ldr wzr, [x19] | sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_Vread
+   G_M000_IG03: ldr wzr, [x19] | sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_vol_write
+   G_M000_IG03: stlr w11, [x20] | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_xchg_store
+   G_M000_IG03: swpal w11, w0, [x20] | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_write_fence
+   G_M000_IG03: stlr w11, [x20] | dmb ish | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_add64
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov x1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_pinvoke_add
+   G_M000_IG04: mov x0, x19 | str x0, [fp, #0x18] | mov x11, x22 | str x11, [fp, #0x10] | mov w1, #1 | str w1, [fp, #0x24] | mov w2, #5 | str w2, [fp, #0x20] | add x0, fp, #40 | adrp x3, [HIGH RELOC #0x420150] | add x3, x3, [LOW RELOC #0x420150] | ldr x3, [x3] || G_M000_IG05: blr x3 | adrp x0, [HIGH RELOC #0x420158] | add x0, x0, [LOW RELOC #0x420158] | ldr x0, [x0] | ldr x3, [x0] | ldp x11, x0, [fp, #0x10] | ldp w2, w1, [fp, #0x20] || G_M000_IG06: blr x3 | add x0, fp, #40 | adrp x1, [HIGH RELOC #0x420160] | add x1, x1, [LOW RELOC #0x420160] | ldr x1, [x1] | blr x1 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+
+# linux-arm64 hot loops, crossgen2 (arm64-armv8.1-a; files arm64-*.txt are .NET 10.0.13 crossgen2, arm64-net8 is 8.0.32)
+B:b_plain_add
+   G_M000_IG03: ldr w11, [x19] | add w11, w11, #1 | str w11, [x19] | sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_direct_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_asref_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_ophelper_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_noinl_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_cas_add
+   G_M000_IG04: sxtw w11, w1 | add w1, w11, #1 | mov w0, w11 | casal w0, w1, [x19] | sxtw w1, w0 | cmp w1, w11 | bne G_M000_IG04
+   G_M000_IG03: ldar w11, [x19] | add w0, w11, #1 | mov w1, w11 | casal w1, w0, [x19] | cmp w1, w11 | beq G_M000_IG05 || G_M000_IG04: sxtw w11, w1 | add w1, w11, #1 | mov w0, w11 | casal w0, w1, [x19] | sxtw w1, w0 | cmp w1, w11 | bne G_M000_IG04 || G_M000_IG05: sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_byte_cas_add
+   G_M000_IG05: sxtw w4, w6 || G_M000_IG06: lsr w5, w4, w2 | add w5, w5, #1 | uxtb w5, w5 | lsl w5, w5, w2 | and w6, w3, w4 | orr w5, w5, w6 | mov w6, w4 | casal w6, w5, [x1] | cmp w6, w4 | bne G_M000_IG05
+   G_M000_IG04: mov x1, x11 | sxtw w2, w0 | mov w3, #255 | lsl w3, w3, w2 | ldar w4, [x1] | mvn w3, w3 | b G_M000_IG06 || G_M000_IG05: sxtw w4, w6 || G_M000_IG06: lsr w5, w4, w2 | add w5, w5, #1 | uxtb w5, w5 | lsl w5, w5, w2 | and w6, w3, w4 | orr w5, w5, w6 | mov w6, w4 | casal w6, w5, [x1] | cmp w6, w4 | bne G_M000_IG05 || G_M000_IG07: sub w19, w19, #1 | cbnz w19, G_M000_IG04
+B:b_vol_read
+   G_M000_IG03: ldr wzr, [x19] | sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_Vread
+   G_M000_IG03: ldr wzr, [x19] | sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_vol_write
+   G_M000_IG03: stlr w11, [x20] | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_xchg_store
+   G_M000_IG03: swpal w11, w0, [x20] | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_write_fence
+   G_M000_IG03: stlr w11, [x20] | dmb ish | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_add64
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov x1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_pinvoke_add
+   G_M000_IG04: mov x0, x19 | str x0, [fp, #0x18] | mov x11, x22 | str x11, [fp, #0x10] | mov w1, #1 | str w1, [fp, #0x24] | mov w2, #5 | str w2, [fp, #0x20] | add x0, fp, #40 | adrp x3, [HIGH RELOC #0x420150] | add x3, x3, [LOW RELOC #0x420150] | ldr x3, [x3] || G_M000_IG05: blr x3 | adrp x0, [HIGH RELOC #0x420158] | add x0, x0, [LOW RELOC #0x420158] | ldr x0, [x0] | ldr x3, [x0] | ldp x11, x0, [fp, #0x10] | ldp w2, w1, [fp, #0x20] || G_M000_IG06: blr x3 | add x0, fp, #40 | adrp x1, [HIGH RELOC #0x420160] | add x1, x1, [LOW RELOC #0x420160] | ldr x1, [x1] | blr x1 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+
+# linux-arm64 hot loops, crossgen2 (arm64-armv8.4-a; files arm64-*.txt are .NET 10.0.13 crossgen2, arm64-net8 is 8.0.32)
+B:b_plain_add
+   G_M000_IG03: ldr w11, [x19] | add w11, w11, #1 | str w11, [x19] | sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_direct_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_asref_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_ophelper_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_noinl_add
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov w1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_cas_add
+   G_M000_IG04: sxtw w11, w1 | add w1, w11, #1 | mov w0, w11 | casal w0, w1, [x19] | sxtw w1, w0 | cmp w1, w11 | bne G_M000_IG04
+   G_M000_IG03: ldapr w11, [x19] | add w0, w11, #1 | mov w1, w11 | casal w1, w0, [x19] | cmp w1, w11 | beq G_M000_IG05 || G_M000_IG04: sxtw w11, w1 | add w1, w11, #1 | mov w0, w11 | casal w0, w1, [x19] | sxtw w1, w0 | cmp w1, w11 | bne G_M000_IG04 || G_M000_IG05: sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_byte_cas_add
+   G_M000_IG05: sxtw w4, w6 || G_M000_IG06: lsr w5, w4, w2 | add w5, w5, #1 | uxtb w5, w5 | lsl w5, w5, w2 | and w6, w3, w4 | orr w5, w5, w6 | mov w6, w4 | casal w6, w5, [x1] | cmp w6, w4 | bne G_M000_IG05
+   G_M000_IG04: mov x1, x11 | sxtw w2, w0 | mov w3, #255 | lsl w3, w3, w2 | ldapr w4, [x1] | mvn w3, w3 | b G_M000_IG06 || G_M000_IG05: sxtw w4, w6 || G_M000_IG06: lsr w5, w4, w2 | add w5, w5, #1 | uxtb w5, w5 | lsl w5, w5, w2 | and w6, w3, w4 | orr w5, w5, w6 | mov w6, w4 | casal w6, w5, [x1] | cmp w6, w4 | bne G_M000_IG05 || G_M000_IG07: sub w19, w19, #1 | cbnz w19, G_M000_IG04
+B:b_vol_read
+   G_M000_IG03: ldr wzr, [x19] | sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_Vread
+   G_M000_IG03: ldr wzr, [x19] | sub w20, w20, #1 | cbnz w20, G_M000_IG03
+B:b_vol_write
+   G_M000_IG03: stlr w11, [x20] | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_xchg_store
+   G_M000_IG03: swpal w11, w0, [x20] | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_write_fence
+   G_M000_IG03: stlr w11, [x20] | dmb ish | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_add64
+   G_M000_IG04: mov x0, x19 | mov x11, x22 | mov x1, #1 | ldr xip0, [x11] | blr xip0 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+B:b_pinvoke_add
+   G_M000_IG04: mov x0, x19 | str x0, [fp, #0x18] | mov x11, x22 | str x11, [fp, #0x10] | mov w1, #1 | str w1, [fp, #0x24] | mov w2, #5 | str w2, [fp, #0x20] | add x0, fp, #40 | adrp x3, [HIGH RELOC #0x420150] | add x3, x3, [LOW RELOC #0x420150] | ldr x3, [x3] || G_M000_IG05: blr x3 | adrp x0, [HIGH RELOC #0x420158] | add x0, x0, [LOW RELOC #0x420158] | ldr x0, [x0] | ldr x3, [x0] | ldp x11, x0, [fp, #0x10] | ldp w2, w1, [fp, #0x20] || G_M000_IG06: blr x3 | add x0, fp, #40 | adrp x1, [HIGH RELOC #0x420160] | add x1, x1, [LOW RELOC #0x420160] | ldr x1, [x1] | blr x1 | sub w20, w20, #1 | cbnz w20, G_M000_IG04
+
+# linux-arm64 hot loops, crossgen2 (arm64-net8; files arm64-*.txt are .NET 10.0.13 crossgen2, arm64-net8 is 8.0.32)
+B:b_plain_add
+   G_M000_IG03: ldr w0, [x19] | add w0, w0, #1 | str w0, [x19] | add w11, w11, #1 | cmp w11, w20 | blt G_M000_IG03
+B:b_direct_add
+   G_M000_IG03: mov x0, x20 | mov x11, x23 | mov w1, #1 | ldr x2, [x11] | blr x2 | add w22, w22, #1 | cmp w22, w19 | blt G_M000_IG03
+B:b_asref_add
+   G_M000_IG03: mov x0, x20 | mov x11, x23 | mov w1, #1 | ldr x2, [x11] | blr x2 | add w22, w22, #1 | cmp w22, w19 | blt G_M000_IG03
+B:b_ophelper_add
+   G_M000_IG03: mov x0, x20 | mov x11, x23 | mov w1, #1 | ldr x2, [x11] | blr x2 | add w22, w22, #1 | cmp w22, w19 | blt G_M000_IG03
+B:b_noinl_add
+   G_M000_IG03: mov x0, x20 | mov x11, x23 | mov w1, #1 | ldr x2, [x11] | blr x2 | add w22, w22, #1 | cmp w22, w19 | blt G_M000_IG03
+B:b_cas_add
+   G_M000_IG04: add w1, w0, #1 | mov w2, w0 | casal w2, w1, [x19] | cmp w2, w0 | beq G_M000_IG06 || G_M000_IG05: sxtw w0, w2 | b G_M000_IG04
+   G_M000_IG03: ldapr w0, [x19] || G_M000_IG04: add w1, w0, #1 | mov w2, w0 | casal w2, w1, [x19] | cmp w2, w0 | beq G_M000_IG06 || G_M000_IG05: sxtw w0, w2 | b G_M000_IG04 || G_M000_IG06: add w11, w11, #1 | cmp w11, w20 | blt G_M000_IG03
+B:b_byte_cas_add
+   G_M000_IG04: lsr w6, w5, w3 | add w6, w6, #1 | uxtb w6, w6 | lsl w6, w6, w3 | and w7, w4, w5 | orr w6, w6, w7 | mov w7, w5 | casal w7, w6, [x2] | cmp w7, w5 | beq G_M000_IG06 || G_M000_IG05: sxtw w5, w7 | b G_M000_IG04
+   G_M000_IG03: mov x2, x0 | sxtw w3, w1 | mov w4, #255 | lsl w4, w4, w3 | ldapr w5, [x2] | mvn w4, w4 || G_M000_IG04: lsr w6, w5, w3 | add w6, w6, #1 | uxtb w6, w6 | lsl w6, w6, w3 | and w7, w4, w5 | orr w6, w6, w7 | mov w7, w5 | casal w7, w6, [x2] | cmp w7, w5 | beq G_M000_IG06 || G_M000_IG05: sxtw w5, w7 | b G_M000_IG04 || G_M000_IG06: add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_vol_read
+   G_M000_IG03: ldr wzr, [x20] | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_Vread
+   G_M000_IG03: ldr wzr, [x20] | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_vol_write
+   G_M000_IG03: stlr w11, [x20] | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_xchg_store
+   G_M000_IG03: swpal w11, w0, [x20] | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_write_fence
+   G_M000_IG03: stlr w11, [x20] | dmb ish | add w11, w11, #1 | cmp w11, w19 | blt G_M000_IG03
+B:b_add64
+   G_M000_IG03: mov x0, x20 | mov x11, x23 | mov x1, #1 | ldr x2, [x11] | blr x2 | add w22, w22, #1 | cmp w22, w19 | blt G_M000_IG03
+B:b_pinvoke_add
+   G_M000_IG03: mov x0, x20 | str x0, [fp, #0x70] // | mov x11, x23 | str x11, [fp, #0x68] // | mov w1, #1 | str w1, [fp, #0x7C] // | mov w2, #5 | str w2, [fp, #0x78] // | add x0, fp, #16 // | adrp x3, [HIGH RELOC #0x420148] | add x3, x3, [LOW RELOC #0x420148] | ldr x3, [x3] || G_M000_IG04: blr x3 | adrp x0, [HIGH RELOC #0x420150] | add x0, x0, [LOW RELOC #0x420150] | ldr x0, [x0] | ldr x3, [x0] | ldp x11, x0, [fp, #0x68] // , | ldp w2, w1, [fp, #0x78] // || G_M000_IG05: blr x3 | add x0, fp, #16 // | adrp x1, [HIGH RELOC #0x420158] | add x1, x1, [LOW RELOC #0x420158] | ldr x1, [x1] | blr x1 | add w22, w22, #1 | cmp w22, w19 | blt G_M000_IG03
+
+# fadd.il x64 (.NET 8 and 10 JIT)
+ mov eax, edx| lock | xadd dword ptr [rcx], eax| add eax, edx| sub eax, edx| ret | mov rax, rdx| lock | xadd qword ptr [rcx], rax| add rax, rdx| sub rax, rdx| ret | mov eax, edx| lock | cmpxchg dword ptr [rcx], r8d| sete al| movzx rax, al| ret |
+ mov eax, edx| lock | xadd dword ptr [rcx], eax| add eax, edx| sub eax, edx| ret | mov rax, rdx| lock | xadd qword ptr [rcx], rax| add rax, rdx| sub rax, rdx| ret | mov eax, edx| lock | cmpxchg dword ptr [rcx], r8d| sete al| movzx rax, al| ret |

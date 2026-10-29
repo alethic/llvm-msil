@@ -1,0 +1,46 @@
+# E1b: link today, x86_64-unknown-linux-gnu-msil, object path, glibc sysroot, no libatomic
+  msil-ld: error: undefined symbol: __atomic_fetch_add_4
+  >>> referenced by main1.lnx.o:(main)
+
+  msil-ld: error: undefined symbol: __atomic_fetch_add_8
+  >>> referenced by main1.lnx.o:(main)
+
+  msil-ld: error: undefined symbol: __atomic_compare_exchange_4
+  >>> referenced by main1.lnx.o:(main)
+
+  msil-ld: error: undefined symbol: __atomic_load_4
+  >>> referenced by main1.lnx.o:(main)
+
+  msil-ld: error: undefined symbol: __atomic_load_8
+  >>> referenced by main1.lnx.o:(main)
+  clang: error: msil-ld command failed with exit code 1 (use -v to see invocation)
+# with -L<dir holding WSL's libatomic.so.1> -l:libatomic.so.1 -Wl,--print-imports (object path)
+  __atomic_compare_exchange_4 -> libatomic.so.1!__atomic_compare_exchange_4 [function, LIBATOMIC_1.0]
+  __atomic_fetch_add_4 -> libatomic.so.1!__atomic_fetch_add_4 [function, LIBATOMIC_1.0]
+  __atomic_fetch_add_8 -> libatomic.so.1!__atomic_fetch_add_8 [function, LIBATOMIC_1.0]
+  __atomic_load_4 -> libatomic.so.1!__atomic_load_4 [function, LIBATOMIC_1.0]
+  __atomic_load_8 -> libatomic.so.1!__atomic_load_8 [function, LIBATOMIC_1.0]
+  puts -> libc.so.6!puts [function, GLIBC_2.2.5]
+  libatomic.so.1: version floor LIBATOMIC_1.0
+  libc.so.6: version floor GLIBC_2.2.5
+# the same through -flto
+  __atomic_compare_exchange_4 -> libatomic.so.1!__atomic_compare_exchange_4 [function, LIBATOMIC_1.0]
+  __atomic_fetch_add_4 -> libatomic.so.1!__atomic_fetch_add_4 [function, LIBATOMIC_1.0]
+  __atomic_fetch_add_8 -> libatomic.so.1!__atomic_fetch_add_8 [function, LIBATOMIC_1.0]
+  __atomic_load_4 -> libatomic.so.1!__atomic_load_4 [function, LIBATOMIC_1.0]
+  __atomic_load_8 -> libatomic.so.1!__atomic_load_8 [function, LIBATOMIC_1.0]
+  puts -> libc.so.6!puts [function, GLIBC_2.2.5]
+  libatomic.so.1: version floor LIBATOMIC_1.0
+  libc.so.6: version floor GLIBC_2.2.5
+# runs (WSL, private runtimes)
+  obj: [wsl net8 rc=9] ok
+  obj: [wsl net10 rc=9] ok
+  lto: [wsl net8 rc=9] ok
+  lto: [wsl net10 rc=9] ok
+# -S, x86_64-pc-windows-msvc-msil
+  error: undefined function '__atomic_fetch_add_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker
+  error: undefined function '__atomic_fetch_add_8' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker
+  error: undefined function '__atomic_compare_exchange_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker
+  error: undefined function '__atomic_load_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker
+  error: undefined function '__atomic_load_8' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker
+  5 errors generated.

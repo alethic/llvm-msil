@@ -1,0 +1,19 @@
+# JOBRUN lines of the sample-set profiles (4 tests: M1/03-control/loops.c, M1/01-int/many-args.ll,
+# M2/00-link/two-tu.test, M2/08-semantics/zoo.test; lit -j1 inside one job object; host at ~100% CPU from other work)
+JOBRUN {"label": "full", "rc": 0, "wall_s": 460.7, "cpu_s": 47.28, "user_s": 26.72, "kernel_s": 20.56, "processes": 319}
+JOBRUN {"label": "lean-alsorun", "rc": 0, "wall_s": 400.6, "cpu_s": 34.94, "user_s": 20.08, "kernel_s": 14.86, "processes": 220}
+JOBRUN {"label": "lean-equiv", "rc": 0, "wall_s": 182.15, "cpu_s": 30.0, "user_s": 16.91, "kernel_s": 13.09, "processes": 204}
+JOBRUN {"label": "lean-oracle", "rc": 0, "wall_s": 321.93, "cpu_s": 32.33, "user_s": 18.33, "kernel_s": 14.0, "processes": 207}
+JOBRUN {"label": "lean", "rc": 0, "wall_s": 194.46, "cpu_s": 25.91, "user_s": 15.58, "kernel_s": 10.33, "processes": 156}
+JOBRUN {"label": "minimal", "rc": 0, "wall_s": 193.23, "cpu_s": 23.19, "user_s": 13.66, "kernel_s": 9.53, "processes": 140}
+JOBRUN {"label": "Z-net8-nomatch", "rc": 2, "wall_s": 13.34, "cpu_s": 4.16, "user_s": 2.86, "kernel_s": 1.3, "processes": 11}
+JOBRUN {"label": "A2-net8-loops", "rc": 0, "wall_s": 132.52, "cpu_s": 18.0, "user_s": 10.8, "kernel_s": 7.2, "processes": 99}
+JOBRUN {"label": "B-quick-loops", "rc": 0, "wall_s": 52.37, "cpu_s": 9.89, "user_s": 6.17, "kernel_s": 3.72, "processes": 44}
+
+# E11: FileCheck directories, lit -j1 --max-tests=20 inside one job object (net8's parameters; loaded host).
+# lit's default --order=smart runs the previously slowest tests first, so these are the 20 slowest tests of
+# each directory (their recorded times in build/test/.lit_test_times.txt and
+# build/tools/lld/test/.lit_test_times.txt sum to 370.8 s and 648.1 s): an upper bound per file.
+JOBRUN {"label": "fc-codegen-20", "rc": 0, "wall_s": 379.67, "cpu_s": 102.45, "user_s": 44.16, "kernel_s": 58.3, "processes": 2360}
+JOBRUN {"label": "fc-lld-20", "rc": 0, "wall_s": 651.03, "cpu_s": 102.02, "user_s": 29.67, "kernel_s": 72.34, "processes": 1783}
+# whole directories by recorded time: llvm/test/CodeGen/MSIL 141 tests 682.8 s; lld/test/MSIL 113 tests 1,061.9 s

@@ -1,0 +1,14 @@
+# earlier bench.exe runs during the investigation (.NET Framework 4.8, three runs, ns/op)
+plain_add      1.276438 1.599298 1.826676
+direct_add     8.021612 6.29087 5.791904
+asref_add      9.256476 7.934224 11.198968
+ophelper_add   6.09056 6.071592 5.818472
+noinl_add      8.882624 8.579282 8.32916
+cas_add        11.491618 12.387444 10.73005
+byte_cas_add   13.2422 13.187704 11.981988
+vol_read       0.957882 1.059896 0.873264
+Vread          2.00625 3.517152 2.20247
+vol_write      0.529188 0.625246 0.559306
+xchg_store     8.157468 11.023122 12.080712
+write_fence    7.533764 7.750664 13.930742
+add64          7.73863 7.895258 7.072434

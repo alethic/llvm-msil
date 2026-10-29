@@ -1,0 +1,96 @@
+## E1: localloc per iteration (n=64, 1,000,000 iterations); 'iter' lines thinned to the last ones before the overflow
+--- net48
+n=64 iters=1000000 64-bit=True runtime=4.0.30319.42000
+iter        1: growth         64 bytes (64.0 per iteration)
+iter        2: growth        128 bytes (64.0 per iteration)
+iter        4: growth        256 bytes (64.0 per iteration)
+  ...
+iter     2048: growth     131072 bytes (64.0 per iteration)
+iter     4096: growth     262144 bytes (64.0 per iteration)
+iter     8192: growth     524288 bytes (64.0 per iteration)
+
+Process is terminated due to StackOverflowException.
+exit=127
+--- net8
+n=64 iters=1000000 64-bit=True runtime=8.0.33
+iter        1: growth         64 bytes (64.0 per iteration)
+iter        2: growth        128 bytes (64.0 per iteration)
+iter        4: growth        256 bytes (64.0 per iteration)
+  ...
+iter    21504: growth    1376256 bytes (64.0 per iteration)
+iter    22528: growth    1441792 bytes (64.0 per iteration)
+iter    23552: growth    1507328 bytes (64.0 per iteration)
+Stack overflow.
+exit=127
+--- net10
+n=64 iters=1000000 64-bit=True runtime=10.0.14
+iter        1: growth         64 bytes (64.0 per iteration)
+iter        2: growth        128 bytes (64.0 per iteration)
+iter        4: growth        256 bytes (64.0 per iteration)
+  ...
+iter    21504: growth    1376256 bytes (64.0 per iteration)
+iter    22528: growth    1441792 bytes (64.0 per iteration)
+iter    23552: growth    1507328 bytes (64.0 per iteration)
+Stack overflow.
+exit=127
+Stack overflow.
+/mnt/c/llvm-msil-scratch/p3/frame-tls/wslrun-inner.sh: line 4:   550 Aborted                    $D exec --runtimeconfig $H/rc$v.json $H/bin/$n.exe "$@"
+Stack overflow.
+/mnt/c/llvm-msil-scratch/p3/frame-tls/wslrun-inner.sh: line 4:   559 Aborted                    $D exec --runtimeconfig $H/rc$v.json $H/bin/$n.exe "$@"
+iteration)
+iter      128: growth       8192 bytes (64.0 per iteration)
+iter      256: growth      16384 bytes (64.0 per iteration)
+iter      512: growth      32768 bytes (64.0 per iteration)
+  ...
+iter   128000: growth    8192000 bytes (64.0 per iteration)
+iter   129024: growth    8257536 bytes (64.0 per iteration)
+iter   130048: growth    8323072 bytes (64.0 per iteration)
+exit=134
+--- wsl net10
+n=64 iters=1000000 64-bit=True runtime=10.0.13
+iter        1: growth         64 bytes (64.0 per iteration)
+iter        2: growth        128 bytes (64.0 per iteration)
+iter        4: growth        256 bytes (64.0 per iteration)
+  ...
+iter   128000: growth    8192000 bytes (64.0 per iteration)
+iter   129024: growth    8257536 bytes (64.0 per iteration)
+iter   130048: growth    8323072 bytes (64.0 per iteration)
+exit=134
+
+## growth per localloc for other sizes (64 iterations)
+n=1
+--- net48
+iter       64: growth       1009 bytes (15.8 per iteration)
+--- net8
+iter       64: growth       1009 bytes (15.8 per iteration)
+--- net10
+iter       64: growth       1009 bytes (15.8 per iteration)
+n=24
+--- net48
+iter       64: growth       2040 bytes (31.9 per iteration)
+--- net8
+iter       64: growth       2040 bytes (31.9 per iteration)
+--- net10
+iter       64: growth       2040 bytes (31.9 per iteration)
+n=100
+--- net48
+iter       64: growth       7156 bytes (111.8 per iteration)
+--- net8
+iter       64: growth       7156 bytes (111.8 per iteration)
+--- net10
+iter       64: growth       7156 bytes (111.8 per iteration)
+n=4096
+--- net48
+iter       64: growth     262144 bytes (4096.0 per iteration)
+--- net8
+iter       64: growth     262144 bytes (4096.0 per iteration)
+--- net10
+iter       64: growth     262144 bytes (4096.0 per iteration)
+
+## Notes
+- Git bash prints exit=127 for the crashed Windows processes; PowerShell's $LASTEXITCODE was -1073741571 (0xC00000FD,
+  STATUS_STACK_OVERFLOW) for both net48 and net8 (checked separately).
+- WSL: stdout and stderr interleave above; the last report of each run was 'iter 130048: growth 8323072 bytes', then
+  'Stack overflow.' and SIGABRT (exit=134), on both .NET 8.0.31 and .NET 10.0.13.
+- Native clang, vla_loop.c (c/): -O0 'sum=254991808 same_address=1'; -O2 'sum=254991808 same_address=0' (the first
+  iteration is peeled: two stacksave/stackrestore pairs in the IR), both complete 1,000,000 iterations.

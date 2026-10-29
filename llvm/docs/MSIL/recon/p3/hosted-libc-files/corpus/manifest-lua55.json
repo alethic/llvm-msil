@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "programs": [
+    {"name": "lua", "license": "MIT", "license_file": "src/lua.h", "url": "https://www.lua.org/ftp/lua-5.5.1.tar.gz", "ref": "5.5.1",
+     "archive_sha256": "1c4b4068d67061f2a2231ad2b5422e77acea1487ea9890f6320af614f4373dce", "tree_sha256": "0000000000000000000000000000000000000000000000000000000000000000", "strip": 1},
+    {"name": "lua-tests", "license": "MIT", "license_file": "all.lua", "url": "https://www.lua.org/tests/lua-5.5.1-tests.tar.gz", "ref": "5.5.1",
+     "archive_sha256": "da07b543872dc0bb2ff12aabd0c248578d78df3eb6b67efdc537a46d455c7f31", "tree_sha256": "0000000000000000000000000000000000000000000000000000000000000000", "strip": 1}
+  ]
+}

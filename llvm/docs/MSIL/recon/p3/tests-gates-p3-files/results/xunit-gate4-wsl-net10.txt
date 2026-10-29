@@ -1,0 +1,56 @@
+testsuites time (wall): 6540.60
+sum of test seconds: 51712 (861.9 min); tests 385
+     5768 s  11.2%  n=  47  avg= 122.7  MSIL:M2/08-semantics
+     4502 s   8.7%  n=  20  avg= 225.1  MSIL:M1/11-programs
+     3661 s   7.1%  n=  17  avg= 215.3  MSIL:M1/07-globals
+     3340 s   6.5%  n=  64  avg=  52.2  MSIL:harness
+     3016 s   5.8%  n=  14  avg= 215.4  MSIL:M2/04-shared
+     2849 s   5.5%  n=  14  avg= 203.5  MSIL:M1/02-fp
+     2767 s   5.4%  n=  15  avg= 184.5  MSIL:M1/03-control
+     2686 s   5.2%  n=  13  avg= 206.6  MSIL:M1/05-memory
+     2491 s   4.8%  n=  18  avg= 138.4  MSIL:M1/01-int
+     2304 s   4.5%  n=  10  avg= 230.4  MSIL:M1/10-calls
+     2026 s   3.9%  n=  12  avg= 168.8  MSIL:M2/05-refs
+     1953 s   3.8%  n=  16  avg= 122.1  MSIL:harness/prog
+     1918 s   3.7%  n=  12  avg= 159.8  MSIL:M2/00-link
+     1656 s   3.2%  n=   8  avg= 207.0  MSIL:M1/04-frames
+     1644 s   3.2%  n=   7  avg= 234.8  MSIL:M1/09-structs
+     1558 s   3.0%  n=   7  avg= 222.6  MSIL:M1/06-output
+     1454 s   2.8%  n=   8  avg= 181.8  MSIL:M1/08-fnptr
+     1146 s   2.2%  n=   6  avg= 191.0  MSIL:M1/00-smoke
+     1014 s   2.0%  n=  15  avg=  67.6  MSIL:M2/03-native
+      928 s   1.8%  n=   9  avg= 103.1  MSIL:M2/02-lto
+      747 s   1.4%  n=  13  avg=  57.5  MSIL:harness/legs
+      565 s   1.1%  n=  11  avg=  51.4  MSIL:harness/equiv
+      539 s   1.0%  n=   5  avg= 107.7  MSIL:harness/pipeline-obj
+      454 s   0.9%  n=   5  avg=  90.7  MSIL:M2/07-equiv
+      388 s   0.8%  n=   5  avg=  77.6  MSIL:M2/01-archive
+      192 s   0.4%  n=   6  avg=  32.1  MSIL:harness/pipeline
+      105 s   0.2%  n=   3  avg=  35.1  MSIL:M2/06-det
+       41 s   0.1%  n=   5  avg=   8.3  MSIL:M2/09-hosted
+top 25 tests:
+   424.2  MSIL.M2/04-shared/struct-abi.test
+   413.6  MSIL.M2/04-shared/archive-in-two-libs.test
+   389.3  MSIL.M2/05-refs/netcore-dll-name.test
+   381.6  MSIL.M2/03-native/native-lib.test
+   375.9  MSIL.M1/09-structs/struct-return.c
+   373.2  MSIL.M1/03-control/collatz.c
+   372.8  MSIL.M1/09-structs/struct-basic.c
+   358.7  MSIL.M1/11-programs/hanoi.c
+   357.1  MSIL.M1/11-programs/kr-legacy.c
+   339.7  MSIL.M2/08-semantics/zoo-defined.test
+   333.1  MSIL.M1/07-globals/bss-only.c
+   330.6  MSIL.M2/05-refs/dataimport-nativelibrary.test
+   327.3  MSIL.M1/00-smoke/return-42.c
+   317.4  MSIL.M2/08-semantics/knr-two-arities.test
+   308.2  MSIL.M1/11-programs/strings.c
+   305.2  MSIL.M1/10-calls/kr-call.c
+   302.1  MSIL.M1/02-fp/u64-to-fp-rounding.ll
+   298.6  MSIL.M2/08-semantics/p2-knr.test
+   297.4  MSIL.M1/10-calls/mutual-recursion.c
+   296.2  MSIL.M1/10-calls/kr-import.c
+   290.9  MSIL.M2/04-shared/lsearch-managed.test
+   286.9  MSIL.M1/02-fp/i128-fp-conv.c
+   284.9  MSIL.M1/00-smoke/return-argc.c
+   283.2  MSIL.M2/05-refs/positional-pack.test
+   281.7  MSIL.M1/10-calls/void-calls.c

@@ -1,0 +1,19 @@
+-- main argv[0]:
+/mnt/c/llvm-msil-scratch/p3/backlog-p3/e2-cmdline/linux/progname.exe
+-- .init_array ctor argv[0]:
+/mnt/c/llvm-msil-scratch/p3/backlog-p3/e2-cmdline/linux/progname.exe
+-- program_invocation_name / short:
+$HOME/.dotnet-msil/dotnet
+dotnet
+-- /proc/self/cmdline:
+$HOME/.dotnet-msil/dotnet progname.exe one two
+== exec
+-- main argv[0]:
+/mnt/c/llvm-msil-scratch/p3/backlog-p3/e2-cmdline/linux/progname.exe
+-- .init_array ctor argv[0]:
+/mnt/c/llvm-msil-scratch/p3/backlog-p3/e2-cmdline/linux/progname.exe
+-- program_invocation_name / short:
+$HOME/.dotnet-msil/dotnet
+dotnet
+-- /proc/self/cmdline:
+$HOME/.dotnet-msil/dotnet exec --runtimeconfig progname.runtimeconfig.json progname.exe one two

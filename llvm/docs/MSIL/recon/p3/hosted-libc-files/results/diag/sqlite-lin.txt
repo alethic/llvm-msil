@@ -1,0 +1,36 @@
+### sqlite lin -O2: clang -c (objects)
+failing (2): shell sqlite3
+  417  shell.c: error: calls to variadic functions are not supported for MSIL yet   [shell]
+   25  sqlite3.c: error: calls to variadic functions are not supported for MSIL yet   [sqlite3]
+   23  shell.c: error: variadic function definitions are not supported for MSIL yet   [shell]
+   20  sqlite3.c: error: variadic function definitions are not supported for MSIL yet   [sqlite3]
+    1  error: undefined variadic function 'fcntl64' is not supported for MSIL yet (phase 3)   [sqlite3]
+    1  error: undefined variadic function 'mremap' is not supported for MSIL yet (phase 3)   [sqlite3]
+### msil-ld LTO link (-flto bitcode)
+failing (1): shell
+    1  msil-ld: error: <unknown>: in function checkAppendMsg void (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function errorMPrintf void (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function execSqlF i32 (ptr, ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function getDigits i32 (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function jsonPrintf void (i32, ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3ErrorMsg void (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3ErrorWithMsg void (ptr, i32, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3MPrintf ptr (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3NestedParse void (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3VdbeError void (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3VdbeExplain void (ptr, i8, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3VdbeMultiLoad void (ptr, i32, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3_config i32 (i32, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3_db_config i32 (ptr, i32, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3_log void (i32, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3_mprintf ptr (ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3_snprintf ptr (i32, ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3_str_appendf void (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3_test_control i32 (i32, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: <unknown>: in function sqlite3_vtab_config i32 (ptr, i32, ...): variadic function definitions are not supported for MSIL yet   [shell]
+    1  msil-ld: error: too many errors emitted, stopping now (use --error-limit=0 to see all errors)   [shell]
+### msil-ld --lto-emit-asm --error-limit=0
+failing (1): shell
+    1  msil-ld: error: native function 'pthread_create' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks   [shell]
+    1  msil-ld: error: native function 'signal' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks   [shell]
+    1  msil-ld: error: symbol 'atexit' is defined only in native object code (<path> MSIL cannot link machine code   [shell]

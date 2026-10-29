@@ -1,0 +1,18 @@
+# E4 who reads __ELF__ (Linux MSIL triples leave it undefined, plan section 10 item 9)
+== glibc 2.43 sysroot headers (C:/llvm-msil-scratch/glibc-sysroot/usr/include): files mentioning __ELF__
+0
+== compiler-rt/lib/builtins/*.h
+compiler-rt/lib/builtins/int_lib.h:51:#if defined(__ELF__) || defined(__MINGW32__) || defined(__wasm__) ||           \
+compiler-rt/lib/builtins/assembly.h:39:#elif defined(__ELF__)
+compiler-rt/lib/builtins/assembly.h:58:#else // !__APPLE__ && !__ELF__
+compiler-rt/lib/builtins/assembly.h:74:#if defined(__aarch64__) && defined(__ELF__) &&                                \
+compiler-rt/lib/builtins/assembly.h:352:#ifdef __ELF__
+== llvm-libc (libc/)
+libc/include/llvm-libc-macros/time-macros.h:8:#elif defined(__ELF__)
+libc/src/stdlib/abort_utils.h:18:#elif defined(__ELF__)
+libc/src/__support/OSUtil/io.h:31:#elif defined(__ELF__)
+== Lua 5.4.9 (hosted-libc recon's download)
+324:    defined(__ELF__)		/* { */
+== predefines: clang -dM -E on each Linux triple
+x86_64-unknown-linux-gnu         1
+x86_64-unknown-linux-gnu-msil    0

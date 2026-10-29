@@ -1,0 +1,41 @@
+testsuites time (wall): 932.06
+sum of test seconds: 6669 (111.2 min); tests 149
+     1028 s  15.4%  n=  18  avg=  57.1  MSIL:M1/01-int
+      790 s  11.8%  n=  20  avg=  39.5  MSIL:M1/11-programs
+      783 s  11.7%  n=  15  avg=  52.2  MSIL:M1/03-control
+      683 s  10.2%  n=  17  avg=  40.2  MSIL:M1/07-globals
+      656 s   9.8%  n=  14  avg=  46.8  MSIL:M1/02-fp
+      540 s   8.1%  n=  13  avg=  41.6  MSIL:M1/05-memory
+      379 s   5.7%  n=  10  avg=  37.9  MSIL:M1/10-calls
+      356 s   5.3%  n=   6  avg=  59.3  MSIL:harness/pipeline
+      326 s   4.9%  n=   8  avg=  40.8  MSIL:M1/08-fnptr
+      310 s   4.7%  n=   6  avg=  51.7  MSIL:M1/00-smoke
+      294 s   4.4%  n=   8  avg=  36.7  MSIL:M1/04-frames
+      270 s   4.1%  n=   7  avg=  38.6  MSIL:M1/09-structs
+      254 s   3.8%  n=   7  avg=  36.2  MSIL:M1/06-output
+top 25 tests:
+   123.5  MSIL.harness/pipeline/irprog.ll
+    98.6  MSIL.M1/03-control/switch-i64.ll
+    98.4  MSIL.M1/01-int/many-args.ll
+    82.3  MSIL.M1/02-fp/fp-ops.ll
+    78.0  MSIL.M1/01-int/i128-ops.ll
+    77.3  MSIL.M1/00-smoke/ret-argc.ll
+    75.8  MSIL.M1/05-memory/memory-ops.ll
+    75.2  MSIL.harness/pipeline/jitall-runs.test
+    74.9  MSIL.M1/01-int/compare-sext.ll
+    70.3  MSIL.M1/02-fp/i64-to-f32-known-sign.ll
+    68.4  MSIL.M1/03-control/fp-branches-nan.ll
+    68.3  MSIL.M1/01-int/narrow-ints.ll
+    68.2  MSIL.M1/01-int/div-rem.ll
+    67.1  MSIL.M1/01-int/calls-arith-debug-info.test
+    66.8  MSIL.M1/07-globals/data-diff.ll
+    63.7  MSIL.M1/01-int/bit-ops.ll
+    63.0  MSIL.M1/01-int/int64-ops.ll
+    62.5  MSIL.M1/03-control/loop-shapes.ll
+    61.9  MSIL.M1/03-control/nested-loops.ll
+    61.8  MSIL.M1/02-fp/fp-minmax.ll
+    60.4  MSIL.M1/03-control/indirectbr.ll
+    60.1  MSIL.M1/11-programs/fib.c
+    60.0  MSIL.M1/07-globals/ctor-results.c
+    57.7  MSIL.M1/02-fp/fp-calls.ll
+    57.6  MSIL.M1/00-smoke/ret-const.ll

@@ -1,0 +1,40 @@
+testsuites time (wall): 140.67
+sum of test seconds: 1092 (18.2 min); tests 143
+      149 s  13.7%  n=  20  avg=   7.5  MSIL:M1/11-programs
+      130 s  11.9%  n=  18  avg=   7.2  MSIL:M1/01-int
+      127 s  11.6%  n=  17  avg=   7.5  MSIL:M1/07-globals
+      114 s  10.4%  n=  15  avg=   7.6  MSIL:M1/03-control
+      101 s   9.3%  n=  14  avg=   7.2  MSIL:M1/02-fp
+       94 s   8.6%  n=  13  avg=   7.2  MSIL:M1/05-memory
+       81 s   7.4%  n=  10  avg=   8.1  MSIL:M1/10-calls
+       70 s   6.4%  n=   8  avg=   8.8  MSIL:M1/08-fnptr
+       70 s   6.4%  n=   7  avg=  10.0  MSIL:M1/09-structs
+       58 s   5.3%  n=   8  avg=   7.2  MSIL:M1/04-frames
+       50 s   4.6%  n=   7  avg=   7.2  MSIL:M1/06-output
+       47 s   4.3%  n=   6  avg=   7.9  MSIL:M1/00-smoke
+top 25 tests:
+    22.2  MSIL.M1/09-structs/unions.c
+    15.7  MSIL.M1/10-calls/rust-shaped.ll
+    15.0  MSIL.M1/08-fnptr/fnptr-to-import.c
+    14.3  MSIL.M1/03-control/switch.c
+    14.2  MSIL.M1/00-smoke/return-0.c
+    11.9  MSIL.M1/07-globals/local-aggregate-init.c
+    10.8  MSIL.M1/03-control/fp-branches-nan.ll
+    10.6  MSIL.M1/08-fnptr/dispatch-table.c
+     9.4  MSIL.M1/01-int/compare-sext.ll
+     8.7  MSIL.M1/04-frames/many-locals.c
+     8.7  MSIL.M1/01-int/div-rem.ll
+     8.6  MSIL.M1/09-structs/struct-return.c
+     8.5  MSIL.M1/09-structs/struct-byval.c
+     8.3  MSIL.M1/10-calls/void-calls.c
+     8.2  MSIL.M1/10-calls/kr-call.c
+     8.2  MSIL.M1/09-structs/nested-aggregates.c
+     8.2  MSIL.M1/05-memory/pointer-arith.c
+     8.2  MSIL.M1/02-fp/i128-fp-conv.c
+     8.1  MSIL.M1/06-output/libm-calls.c
+     8.0  MSIL.M1/11-programs/dispatch-vm.c
+     8.0  MSIL.M1/01-int/bit-ops.ll
+     7.9  MSIL.M1/08-fnptr/fnptr-struct-args.c
+     7.9  MSIL.M1/11-programs/linked-list-pool.c
+     7.8  MSIL.M1/10-calls/byval-slots.c
+     7.8  MSIL.M1/09-structs/struct-heavy.c

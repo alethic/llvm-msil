@@ -1,0 +1,75 @@
+testsuites time (wall): 2628.51
+sum of test seconds: 16749 (279.2 min); tests 856
+     1717 s  10.3%  n=  64  avg=  26.8  MSIL:harness
+     1383 s   8.3%  n=  47  avg=  29.4  MSIL:M2/08-semantics
+     1068 s   6.4%  n=  12  avg=  89.0  MSIL:M2/00-link
+      980 s   5.9%  n=  16  avg=  61.3  MSIL:harness/prog
+      955 s   5.7%  n=  17  avg=  56.2  MSIL:M1/07-globals
+      910 s   5.4%  n=  20  avg=  45.5  MSIL:M1/11-programs
+      786 s   4.7%  n=  18  avg=  43.7  MSIL:M1/01-int
+      736 s   4.4%  n=  14  avg=  52.6  MSIL:M1/02-fp
+      698 s   4.2%  n=  13  avg=  53.7  MSIL:M1/05-memory
+      658 s   3.9%  n=  15  avg=  43.9  MSIL:M1/03-control
+      647 s   3.9%  n= 111  avg=   5.8  lld:MSIL
+      604 s   3.6%  n=  14  avg=  43.1  MSIL:M2/04-shared
+      568 s   3.4%  n= 139  avg=   4.1  LLVM:CodeGen/MSIL
+      526 s   3.1%  n=  10  avg=  52.6  MSIL:M1/10-calls
+      480 s   2.9%  n=  12  avg=  40.0  MSIL:M2/05-refs
+      403 s   2.4%  n=   8  avg=  50.4  MSIL:M1/08-fnptr
+      388 s   2.3%  n=   8  avg=  48.5  MSIL:M1/04-frames
+      372 s   2.2%  n=  15  avg=  24.8  MSIL:M2/03-native
+      359 s   2.1%  n=   7  avg=  51.3  MSIL:M1/09-structs
+      341 s   2.0%  n=   7  avg=  48.7  MSIL:M1/06-output
+      329 s   2.0%  n=   5  avg=  65.9  MSIL:harness/pipeline-obj
+      301 s   1.8%  n=   5  avg=  60.1  MSIL:M2/07-equiv
+      297 s   1.8%  n=   9  avg=  33.0  MSIL:M2/02-lto
+      266 s   1.6%  n=   5  avg=  53.2  MSIL:M2/01-archive
+      252 s   1.5%  n=   6  avg=  41.9  MSIL:M1/00-smoke
+      213 s   1.3%  n=  13  avg=  16.4  MSIL:harness/legs
+      157 s   0.9%  n=  11  avg=  14.2  MSIL:harness/equiv
+      101 s   0.6%  n=   6  avg=  16.8  MSIL:harness/pipeline
+       73 s   0.4%  n=  22  avg=   3.3  Clang:CodeGen/MSIL
+       60 s   0.4%  n=   6  avg=  10.1  Clang:Driver
+       34 s   0.2%  n=   5  avg=   6.9  MSIL:M2/09-hosted
+       32 s   0.2%  n=   3  avg=  10.8  MSIL:M2/06-det
+       20 s   0.1%  n=   8  avg=   2.4  LLVM:tools/llvm-cil-dump
+       19 s   0.1%  n=   6  avg=   3.2  LLVM:tools/llvm-cil-copy
+       10 s   0.1%  n=   9  avg=   1.1  LLVM:MC/MSIL
+        5 s   0.0%  n=   1  avg=   4.9  Clang:Preprocessor
+        0 s   0.0%  n=   1  avg=   0.0  MSIL:Programs/blake2
+        0 s   0.0%  n= 150  avg=   0.0  MSIL:Programs/c-testsuite
+        0 s   0.0%  n=   1  avg=   0.0  MSIL:Programs/coremark
+        0 s   0.0%  n=  10  avg=   0.0  MSIL:Programs/det
+        0 s   0.0%  n=   1  avg=   0.0  MSIL:Programs/jsmn
+        0 s   0.0%  n=   1  avg=   0.0  MSIL:Programs/kissfft
+        0 s   0.0%  n=   1  avg=   0.0  MSIL:Programs/lz4
+        0 s   0.0%  n=   1  avg=   0.0  MSIL:Programs/monocypher
+        0 s   0.0%  n=   1  avg=   0.0  MSIL:Programs/tinf
+        0 s   0.0%  n=   1  avg=   0.0  MSIL:Programs/tweetnacl
+        0 s   0.0%  n=   1  avg=   0.0  MSIL:Programs/zlib
+top 25 tests:
+   637.0  MSIL.M2/00-link/spill-limits.test
+   199.7  MSIL.harness/ref-flags.test
+   132.0  MSIL.harness/prog/pipelines.test
+   113.5  MSIL.harness/prog/roundtrip.test
+   112.2  MSIL.harness/also-run.test
+   108.3  MSIL.harness/prog/o6-skip.test
+   102.1  MSIL.harness/ctest-lists.test
+    98.5  MSIL.harness/pipeline-obj/levels.test
+    98.5  MSIL.harness/prog/lit-config.test
+    95.8  MSIL.harness/prog/shlibs-commands.test
+    89.8  MSIL.M1/02-fp/i128-fp-conv.c
+    88.0  MSIL.M1/08-fnptr/fnptr-in-struct.c
+    87.6  MSIL.M1/07-globals/const-tables.c
+    86.7  MSIL.M1/05-memory/ext-load-trunc-store.c
+    86.3  MSIL.M2/08-semantics/p2c-cycle.test
+    84.3  MSIL.M1/05-memory/packed-unaligned.c
+    84.1  MSIL.harness/gtest.test
+    82.8  MSIL.M2/08-semantics/p2c-bsymbolic.test
+    81.4  MSIL.M1/09-structs/nested-aggregates.c
+    81.1  MSIL.M1/06-output/libm-libcalls.c
+    81.1  MSIL.M1/01-int/narrow-ints.ll
+    81.0  MSIL.M1/02-fp/u64-to-fp-rounding.ll
+    80.6  MSIL.harness/legs/roundtrip-composites.test
+    80.5  MSIL.harness/pipeline-obj/ll.test
+    79.4  MSIL.M1/07-globals/volatile-inputs.c
