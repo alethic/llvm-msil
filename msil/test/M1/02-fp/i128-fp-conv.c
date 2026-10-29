@@ -21,9 +21,10 @@
 // ExpandIRInsts also expands __bf16 to __int128 and to unsigned __int128
 // inline, on the value's 16-bit pattern (the section 12 row of 2026-10-21 that
 // corrects 'D14/D33 note and P3-B text'), where the native build calls
-// __fixsfti and __fixunssfti. A __bf16 parameter would need the
-// __truncsfbf2 helper on MSIL, so b2i and b2u take a pointer, and main fills
-// each __bf16 from its bit pattern (4 hex digits) with __builtin_memcpy.
+// __fixsfti and __fixunssfti. A __bf16 parameter needed the __truncsfbf2
+// helper on MSIL until the upstream merge at 1838cefa99c0 (upstream
+// 5110131a330f), so b2i and b2u take a pointer, and main fills each __bf16
+// from its bit pattern (4 hex digits) with __builtin_memcpy.
 // Their inputs: exact values, fractions, both zeros, powers of two up to
 // 2^127, the largest finite __bf16 values below 2^127 and below 2^128, and
 // -2^127, each in range.

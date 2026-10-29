@@ -7,19 +7,35 @@
 //===----------------------------------------------------------------------===//
 //
 // The code generation options the MSIL TargetMachine forces whatever the
-// driver passes (ImplementationPlan.md decision D8, M2.a item (2)): no
-// exception model (clang's MinGW toolchain passes -exception-model=seh even
-// for C, which BackendUtil turns into WinEH), Reloc::Static, CodeModel::Small
-// by default, no address-significance table, TrapUnreachable on and
-// NoTrapAfterNoreturn off. The options are given the opposite values here, so
-// a TargetMachine that keeps the incoming options fails these tests.
+// driver passes (ImplementationPlan.md decision D8, M2.a item (2)):
+// Reloc::Static, CodeModel::Small by default, no address-significance table,
+// TrapUnreachable on and NoTrapAfterNoreturn off. The options are given the
+// opposite values here, so a TargetMachine that keeps the incoming options
+// fails these tests.
+//
+// There is no exception model either. Codegen reads it from
+// Module::getExceptionModel(): the "exception-model" module flag, else the
+// triple's default, which is None for every MSIL triple. The TargetMachine
+// supports no model, so TargetPassConfig adds no EH preparation pass, and code
+// generation resets an incoming flag to "none": IR built for a native triple
+// keeps its flag, and llc turns -exception-model into one (clang's MinGW
+// toolchain passes -exception-model=seh even for C, but clang emits no flag
+// for an MSIL triple).
 //
 //===----------------------------------------------------------------------===//
 
-#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/ADT/SmallString.h"
+#include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
+#include "llvm/AsmParser/Parser.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/Module.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/CodeGen.h"
+#include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Triple.h"
@@ -42,11 +58,19 @@ const char *const MSILTriples[] = {
     "x86_64-pc-windows-msvc-msil",
 };
 
+// Every exception model a target can support. None is supported trivially
+// (supportsExceptionModel asserts on it), and Default is not a model.
+const ExceptionHandling NativeExceptionModels[] = {
+    ExceptionHandling::DwarfCFI, ExceptionHandling::SjLj,
+    ExceptionHandling::ARM,      ExceptionHandling::WinEH,
+    ExceptionHandling::Wasm,     ExceptionHandling::Emscripten,
+    ExceptionHandling::AIX,      ExceptionHandling::ZOS,
+};
+
 // What a native x86_64 MinGW compile hands the TargetMachine: every option
-// that decision D8 overrides has the other value.
+// that the MSIL TargetMachine overrides has the other value.
 TargetOptions nativeMinGWOptions() {
   TargetOptions Options;
-  Options.ExceptionModel = ExceptionHandling::WinEH;
   Options.EmitAddrsig = true;
   Options.TrapUnreachable = false;
   Options.NoTrapAfterNoreturn = true;
@@ -66,6 +90,7 @@ protected:
     LLVMInitializeMSILTargetInfo();
     LLVMInitializeMSILTargetMC();
     LLVMInitializeMSILTarget();
+    LLVMInitializeMSILAsmPrinter();
   }
 
   static std::unique_ptr<TargetMachine>
@@ -89,11 +114,6 @@ TEST_F(MSILTargetMachineTest, MSILOverridesNativeCodeGenOptions) {
     std::unique_ptr<TargetMachine> TM =
         createTM(TripleStr, nativeMinGWOptions(), Reloc::PIC_);
     ASSERT_TRUE(TM);
-    EXPECT_EQ(ExceptionHandling::None, TM->Options.ExceptionModel)
-        << ehName(TM->Options.ExceptionModel);
-    EXPECT_EQ(ExceptionHandling::None,
-              TM->getMCAsmInfo().getExceptionHandlingType())
-        << ehName(TM->getMCAsmInfo().getExceptionHandlingType());
     EXPECT_EQ(Reloc::Static, TM->getRelocationModel());
     EXPECT_FALSE(TM->Options.EmitAddrsig);
     EXPECT_TRUE(TM->Options.TrapUnreachable);
@@ -101,30 +121,63 @@ TEST_F(MSILTargetMachineTest, MSILOverridesNativeCodeGenOptions) {
   }
 }
 
-TEST_F(MSILTargetMachineTest, MSILExceptionModelIsNoneForEveryIncomingModel) {
-  const ExceptionHandling Models[] = {
-      ExceptionHandling::Default,  ExceptionHandling::None,
-      ExceptionHandling::DwarfCFI, ExceptionHandling::SjLj,
-      ExceptionHandling::ARM,      ExceptionHandling::WinEH,
-      ExceptionHandling::Wasm,     ExceptionHandling::Emscripten,
-      ExceptionHandling::AIX,      ExceptionHandling::ZOS,
-  };
+TEST_F(MSILTargetMachineTest, MSILSupportsNoExceptionModel) {
   for (const char *TripleStr : MSILTriples) {
-    for (ExceptionHandling Model : Models) {
-      SCOPED_TRACE(std::string(TripleStr) + ", incoming exception model " +
-                   ehName(Model));
-      TargetOptions Options = nativeMinGWOptions();
-      Options.ExceptionModel = Model;
+    SCOPED_TRACE(TripleStr);
+    // A module without an "exception-model" flag gets the triple's default.
+    ExceptionHandling TripleDefault =
+        Triple(TripleStr).getDefaultExceptionHandling();
+    EXPECT_EQ(ExceptionHandling::None, TripleDefault) << ehName(TripleDefault);
+    // So no EH preparation pass is added for any model.
+    std::unique_ptr<TargetMachine> TM =
+        createTM(TripleStr, nativeMinGWOptions(), std::nullopt);
+    ASSERT_TRUE(TM);
+    for (ExceptionHandling Model : NativeExceptionModels)
+      EXPECT_FALSE(TM->supportsExceptionModel(Model)) << ehName(Model);
+  }
+}
+
+TEST_F(MSILTargetMachineTest, MSILCodeGenResetsExceptionModelFlag) {
+  // The flag values that Module::getExceptionModel() parses, other than
+  // "none". The base AsmPrinter would print .cfi directives around the
+  // definition, which may unwind, for "dwarf", and would use the ARM target
+  // streamer for "arm".
+  const char *const Flags[] = {"dwarf", "sjlj", "arm",
+                               "wineh", "wasm", "emscripten"};
+  const char *const Body = "define i32 @may_unwind(i32 %x) {\n"
+                           "  %r = add i32 %x, 1\n"
+                           "  ret i32 %r\n"
+                           "}\n"
+                           "!llvm.module.flags = !{!0}\n";
+  for (const char *TripleStr : MSILTriples) {
+    for (const char *Flag : Flags) {
+      SCOPED_TRACE(std::string(TripleStr) + ", \"exception-model\" = \"" +
+                   Flag + "\"");
       std::unique_ptr<TargetMachine> TM =
-          createTM(TripleStr, Options, std::nullopt);
+          createTM(TripleStr, TargetOptions(), std::nullopt);
       ASSERT_TRUE(TM);
-      EXPECT_EQ(ExceptionHandling::None, TM->Options.ExceptionModel)
-          << ehName(TM->Options.ExceptionModel);
-      // The MCAsmInfo is set up from the options after the override, so no
-      // exception tables or unwind directives can be requested from it.
-      EXPECT_EQ(ExceptionHandling::None,
-                TM->getMCAsmInfo().getExceptionHandlingType())
-          << ehName(TM->getMCAsmInfo().getExceptionHandlingType());
+      std::string Source =
+          (Twine("target triple = \"") + TripleStr + "\"\n" + Body +
+           "!0 = !{i32 1, !\"exception-model\", !\"" + Flag + "\"}\n")
+              .str();
+      LLVMContext Ctx;
+      SMDiagnostic Err;
+      std::unique_ptr<Module> M = parseAssemblyString(Source, Err, Ctx);
+      ASSERT_TRUE(M) << Err.getMessage().str();
+      M->setDataLayout(TM->createDataLayout());
+
+      SmallString<1024> Text;
+      raw_svector_ostream OS(Text);
+      legacy::PassManager PM;
+      ASSERT_FALSE(TM->addPassesToEmitFile(PM, OS, nullptr,
+                                           CodeGenFileType::AssemblyFile));
+      PM.run(*M);
+
+      EXPECT_EQ(ExceptionHandling::None, M->getExceptionModel())
+          << ehName(M->getExceptionModel());
+      EXPECT_NE(StringRef::npos, Text.str().find("'may_unwind'"))
+          << std::string(Text);
+      EXPECT_EQ(StringRef::npos, Text.str().find(".cfi")) << std::string(Text);
     }
   }
 }

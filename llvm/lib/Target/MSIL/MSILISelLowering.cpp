@@ -402,8 +402,8 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // ones included) and bf16 -> i128 (expanded on the value's 16-bit pattern)
   // call no __divti3, __fixdfti, ... helper, which would be an error until
   // phase 3 (decision D14). Still named: f16 -> i128 (__extendhfsf2),
-  // i128 -> f16 (__truncsfhf2), i128 -> bf16 (__extendbfsf2 and
-  // __truncsfbf2) and the constrained conversions (the i128 helpers).
+  // i128 -> f16 (__truncsfhf2), i128 -> bf16 (__extendbfsf2) and the
+  // constrained conversions (the i128 helpers).
   setMaxDivRemBitWidthSupported(64);
   setMaxLargeFPConvertBitWidthSupported(64);
 }

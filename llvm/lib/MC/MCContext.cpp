@@ -165,7 +165,7 @@ void MCContext::reset() {
 
   CVContext.reset();
 
-  MCSubtargetAllocator.DestroyAll();
+  SubtargetCopies.clear();
   InlineAsmUsedLabelNames.clear();
   Symbols.clear();
   Allocator.Reset();
@@ -973,7 +973,7 @@ MCSectionMSIL *MCContext::getMSILSection(StringRef Section, SectionKind K) {
 }
 
 MCSubtargetInfo &MCContext::getSubtargetCopy(const MCSubtargetInfo &STI) {
-  return *new (MCSubtargetAllocator.Allocate()) MCSubtargetInfo(STI);
+  return *SubtargetCopies.emplace_back(STI.clone());
 }
 
 void MCContext::addDebugPrefixMapEntry(const std::string &From,

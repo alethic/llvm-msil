@@ -154,7 +154,7 @@ createTargetCodeGenInfo(CodeGenModule &CGM) {
     AArch64ABIKind Kind = AArch64ABIKind::AAPCS;
     if (Target.getABI() == "darwinpcs")
       Kind = AArch64ABIKind::DarwinPCS;
-    else if (Triple.isOSWindows())
+    else if (Triple.isOSWindowsOrUEFI())
       return createWindowsAArch64TargetCodeGenInfo(CGM, AArch64ABIKind::Win64);
     else if (Target.getABI() == "aapcs-soft")
       Kind = AArch64ABIKind::AAPCSSoft;
@@ -338,6 +338,8 @@ createTargetCodeGenInfo(CodeGenModule &CGM) {
     return createLoongArchTargetCodeGenInfo(
         CGM, Target.getPointerWidth(LangAS::Default), ABIFRLen);
   }
+  case llvm::Triple::xtensa:
+    return createXtensaTargetCodeGenInfo(CGM);
   }
 }
 
@@ -1542,10 +1544,11 @@ void CodeGenModule::Release() {
   // that the flag's absence unambiguously means unspecified regardless of the
   // target default. In the absence of a custom module flag merging behavior, an
   // explicit non-default model could silently merge with a defaulted module.
-  // MSIL emits no flag: the MSIL TargetMachine forces the exception model to
-  // None, and that override reaches only consumers that read TargetOptions,
-  // not those that read Module::getExceptionModel(). The driver still passes
-  // the native -exception-model so that predefines such as __SEH__ match.
+  // MSIL emits no flag: MSIL has no exception model, and every codegen
+  // consumer reads Module::getExceptionModel(), which for an MSIL triple
+  // without the flag falls back to the triple's default, None. The driver
+  // still passes the native -exception-model so that predefines such as
+  // __SEH__ match.
   llvm::ExceptionHandling ExceptionModel =
       CodeGenOptions::toExceptionHandling(CodeGenOpts.getExceptionHandling());
   if (ExceptionModel != llvm::ExceptionHandling::Default &&
@@ -4727,6 +4730,12 @@ bool CodeGenModule::MustBeEmitted(const ValueDecl *Global) {
 }
 
 bool CodeGenModule::MayBeEmittedEagerly(const ValueDecl *Global) {
+  // In an OpenMP compilation Sema may defer a function's diagnostics to the end
+  // of the TU (see Sema::emitDeferredDiags). Emitting it before then would let
+  // code with pending errors reach CodeGen.
+  if (LangOpts.OpenMP && !LangOpts.OpenMPSimd && isa<FunctionDecl>(Global))
+    return false;
+
   // In OpenMP 5.0 variables and function may be marked as
   // device_type(host/nohost) and we should not emit them eagerly unless we sure
   // that they must be emitted on the host/device. To be sure we need to have

@@ -56,8 +56,11 @@ MSILMCAsmInfo::MSILMCAsmInfo(const Triple &TT, const MCTargetOptions &Options)
   WeakDirective = "\t// .weak\t";
 
   // No DWARF or CodeView (Portable PDB is a later phase) and no unwinding.
+  // The exception model comes from the module, not from here:
+  // Module::getExceptionModel() falls back to
+  // Triple::getDefaultExceptionHandling(), which is None for the MSIL object
+  // format.
   SupportsDebugInformation = false;
-  ExceptionsType = ExceptionHandling::None;
 
   // ILAsm text only: ilasm assembles it, there is no object writer.
   UseIntegratedAssembler = false;

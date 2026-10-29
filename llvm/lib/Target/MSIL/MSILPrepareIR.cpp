@@ -108,10 +108,12 @@
 /// (lowerEmptyInlineAsm), before its checks. The checks and what follows
 /// them:
 /// - A function definition that is variadic, calls other inline assembly, has
-///   a va_arg instruction of a struct or array type, calls a target
-///   intrinsic (llvm.x86.*, llvm.aarch64.*, ...), accesses a named
-///   register, reads the thread pointer (llvm.thread.pointer), records a
-///   stack map (stackmap, patchpoint, statepoint), has deoptimization state
+///   a va_arg instruction of a struct or array type (which the IR verifier
+///   rejects since upstream 74a120bff99f, so only IR that skipped
+///   verification has one), calls a target intrinsic (llvm.x86.*,
+///   llvm.aarch64.*, ...), accesses a named register, reads the thread
+///   pointer (llvm.thread.pointer), records a stack map (stackmap,
+///   patchpoint, statepoint), has deoptimization state
 ///   ("deopt" operand bundles), makes a preallocated call
 ///   (llvm.call.preallocated.*, "preallocated" operand bundles), uses
 ///   the frame escape intrinsics (llvm.localescape, llvm.localrecover,
@@ -145,8 +147,9 @@
 ///   an error; its uses become poison and it is erased.
 /// - A thread-local variable is an error; it becomes an ordinary global.
 /// - A non-empty llvm.global_dtors is an error, and it is erased.
-/// - An "exception-model" module flag is reset to "none", the model the
-///   MSILTargetMachine always uses.
+/// - An "exception-model" module flag is reset to "none": MSIL has no
+///   exception model (decision D8). MSILAsmPrinter has already reset it when
+///   this pass runs in the full pipeline (MSIL::resetExceptionModel).
 ///
 /// Module-level inline assembly is diagnosed by MSILAsmPrinter: the legacy
 /// pass manager initializes the AsmPrinter before any pass runs. It
@@ -379,28 +382,6 @@ static bool isSupportedTarget(const TargetMachine &TM) {
   return TT.isOSBinFormatMSIL() &&
          (TT.getArch() == Triple::x86_64 || TT.getArch() == Triple::aarch64) &&
          TM.getPointerSizeInBits(0) == 64;
-}
-
-/// Resets an "exception-model" module flag to "none". The MSILTargetMachine
-/// always uses ExceptionHandling::None, but the codegen code that calls
-/// Module::getExceptionModel() reads the flag before the TargetOptions, and
-/// IR built for a native triple (MinGW: "wineh") keeps its flag when it is
-/// compiled for an MSIL triple.
-static bool resetExceptionModel(Module &M) {
-  SmallVector<Module::ModuleFlagEntry, 8> Flags;
-  M.getModuleFlagsMetadata(Flags);
-  StringRef None = getExceptionModelName(ExceptionHandling::None);
-  for (const Module::ModuleFlagEntry &Flag : Flags) {
-    if (Flag.Key->getString() != "exception-model")
-      continue;
-    if (auto *Model = dyn_cast_or_null<MDString>(Flag.Val);
-        Model && Model->getString() == None)
-      return false;
-    M.setModuleFlag(Flag.Behavior, "exception-model",
-                    MDString::get(M.getContext(), None));
-    return true;
-  }
-  return false;
 }
 
 /// Removes the stack protector and SafeStack attributes of \p F with a
@@ -1253,10 +1234,13 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
     } else if (auto *VA = dyn_cast<VAArgInst>(&I);
                VA &&
                (VA->getType()->isStructTy() || VA->getType()->isArrayTy())) {
-      // SelectionDAGBuilder::visitVAArg asks for the value type of a struct
-      // or array and crashes ('Unknown type!'), for native targets too. A
-      // scalar or vector va_arg reaches instruction selection, which reports
-      // it with the same text (decision D19; variadics are phase 3).
+      // The IR verifier rejects a va_arg of an aggregate type since upstream
+      // 74a120bff99f, so this branch only sees IR that skipped verification
+      // (llc -disable-verify). SelectionDAGBuilder::visitVAArg asks for the
+      // value type of a struct or array and crashes ('Unknown type!'), for
+      // native targets too. A scalar or vector va_arg reaches instruction
+      // selection, which reports it with the same text (decision D19;
+      // variadics are phase 3).
       Ctx.diagnose(
           DiagnosticInfoUnsupported(F, VAArgUnsupported, I.getDebugLoc()));
       HasError = true;
@@ -2191,7 +2175,7 @@ bool MSILPrepareIRLegacy::runOnModule(Module &M) {
     return true;
   }
 
-  bool Changed = resetExceptionModel(M);
+  bool Changed = MSIL::resetExceptionModel(M);
   Changed |= disableMetadataSections(M, TM);
 
   // Whole-program mode (-S, llc and msil-ld's --lto-emit-asm text) lowers

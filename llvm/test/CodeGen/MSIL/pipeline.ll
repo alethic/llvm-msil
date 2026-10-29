@@ -15,9 +15,11 @@
 ;   runs again between the generic IR passes (CodeGenPrepare at -O2) and
 ;   AtomicExpand (addISelPrepare), where TargetPassConfig used to add them a
 ;   second time, and no DWARF, SjLj or Windows EH preparation pass is
-;   added, even when -exception-model asks for one: the MinGW run passes the
-;   model that clang's MinGW toolchain sets for x86_64 (-exception-model=seh,
-;   which is WinEH), even for C;
+;   added: TargetPassConfig adds one for each model that the TargetMachine
+;   supports, and the MSIL TargetMachine supports none. The MinGW run passes
+;   the model that clang's MinGW toolchain sets for x86_64
+;   (-exception-model=seh, which is WinEH), even for C: llc turns it into an
+;   "exception-model" module flag, which adds no pass either;
 ; - instruction selection: ISel, then ArgumentMove, SetMemFlags and
 ;   CleanCodeAfterTrap;
 ; - no register allocator, no virtual register rewriter, and none of the

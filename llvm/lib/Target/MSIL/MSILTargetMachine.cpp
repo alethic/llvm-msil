@@ -29,11 +29,11 @@
 #include "llvm/CodeGen/Passes.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/Function.h"
-#include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCStreamer.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/PassRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
@@ -78,6 +78,15 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMSILTarget() {
 // MSIL Lowering public interface.
 //===----------------------------------------------------------------------===//
 
+/// The exception models that a TargetMachine can support: all but None and
+/// Default. MSIL supports none of them (decision D8).
+static constexpr ExceptionHandling NativeExceptionModels[] = {
+    ExceptionHandling::DwarfCFI, ExceptionHandling::SjLj,
+    ExceptionHandling::ARM,      ExceptionHandling::WinEH,
+    ExceptionHandling::Wasm,     ExceptionHandling::Emscripten,
+    ExceptionHandling::AIX,      ExceptionHandling::ZOS,
+};
+
 static Reloc::Model getEffectiveRelocModel(std::optional<Reloc::Model>) {
   // Always static, whatever the driver asks for (clang passes PIC on Linux).
   // CIL has no load-time relocations: global addresses are computed at run
@@ -113,16 +122,21 @@ MSILTargetMachine::MSILTargetMachine(const Target &T, const Triple &TT,
   this->Options.EmitAddrsig = false;
 
   // C has no unwinding in Phase 1, and CIL exceptions are not native unwind
-  // tables. Every incoming model becomes None, before initAsmInfo() copies it
-  // into the MCAsmInfo: clang's MinGW toolchain passes -exception-model=seh
-  // even for C, and that would otherwise turn into WinEH.
-  this->Options.ExceptionModel = ExceptionHandling::None;
+  // tables (decision D8): no exception model is supported, so
+  // TargetPassConfig adds none of the EH preparation passes. The defaults
+  // that TargetMachine derives from the triple say the same for the MSIL
+  // object format; this does not depend on them. The model that codegen uses
+  // comes from Module::getExceptionModel(): clang emits no "exception-model"
+  // flag for an MSIL triple, so the MSIL triple's default, None, applies, and
+  // MSILAsmPrinter and MSILPrepareIR reset an incoming flag to "none".
+  for (ExceptionHandling Model : NativeExceptionModels)
+    setSupportsExceptionModel(Model, false);
 
-  // CIL methods have no sections. Basic block sections are dropped silently,
-  // like the exception model (there is no LLVMContext to warn through), and
-  // here rather than in MSILPrepareIR: TargetPassConfig::addMachinePasses
-  // reads the option when it builds the pipeline, and a profile file adds
-  // passes that assert the List type.
+  // CIL methods have no sections. Basic block sections are dropped silently
+  // (there is no LLVMContext to warn through), and here rather than in
+  // MSILPrepareIR: TargetPassConfig::addMachinePasses reads the option when
+  // it builds the pipeline, and a profile file adds passes that assert the
+  // List type.
   this->Options.BBSections = BasicBlockSection::None;
 
   initAsmInfo();
@@ -304,8 +318,10 @@ void MSILPassConfig::addPassesToHandleExceptions() {
   // TargetPassConfig::addIRPasses adds.
   // TargetPassConfig would add LowerInvoke and UnreachableBlockElim a second
   // time, after CodeGenPrepare.
-  assert(TM->getMCAsmInfo().getExceptionHandlingType() ==
-             ExceptionHandling::None &&
+  assert(none_of(NativeExceptionModels,
+                 [this](ExceptionHandling Model) {
+                   return TM->supportsExceptionModel(Model);
+                 }) &&
          "MSIL has no exception model (decision D8)");
 }
 

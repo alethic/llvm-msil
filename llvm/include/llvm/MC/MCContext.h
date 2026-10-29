@@ -325,7 +325,9 @@ private:
   StringMap<MCSectionMSIL *> MSILUniquingMap;
   StringMap<bool> RelSecNames;
 
-  SpecificBumpPtrAllocator<MCSubtargetInfo> MCSubtargetAllocator;
+  /// Copies of MCSubtargetInfo created by getSubtargetCopy(). These must live
+  /// as long as the context since fragments reference them.
+  SmallVector<std::unique_ptr<MCSubtargetInfo>, 0> SubtargetCopies;
 
   /// Do automatic reset in destructor
   bool AutoReset;

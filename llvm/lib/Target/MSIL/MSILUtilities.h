@@ -65,6 +65,19 @@ StringRef getILName(const GlobalValue &GV, const TargetMachine &TM);
 /// function named \p Name, else the one named "\1" + \p Name, else null.
 const Function *getFunctionByILName(const Module &M, StringRef Name);
 
+/// Resets the "exception-model" module flag of \p M to "none", keeping its
+/// merge behavior, and returns true if the module changed. MSIL has no
+/// exception model (decision D8), but Module::getExceptionModel(), which every
+/// codegen consumer reads, returns the flag's model when there is one: IR built
+/// for a native triple keeps its flag ("wineh" for MinGW), and llc turns
+/// -exception-model into the flag. Without the flag it falls back to the MSIL
+/// triple's default, None. MSILAsmPrinter::doInitialization calls this before
+/// the base AsmPrinter picks its exception handler from the model (the legacy
+/// pass manager initializes the AsmPrinter before any IR pass runs), and
+/// MSILPrepareIR calls it too, for the pipelines without an AsmPrinter
+/// (-stop-after), whose IR and machine passes read the model as well.
+bool resetExceptionModel(Module &M);
+
 /// Test whether MI is a child of some other node in an expression tree.
 bool isChild(const MachineInstr &MI, const MSILFunctionInfo &MFI);
 

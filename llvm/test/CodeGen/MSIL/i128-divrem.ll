@@ -22,11 +22,16 @@
 ; __fixdfti, __fixunssfti, __floattidf and __floatuntisf; the half
 ; conversions name the float32 <-> half helpers that the expansion goes
 ; through (__extendhfsf2, __truncsfhf2); and sitofp and uitofp from i128 to
-; bfloat name both __extendbfsf2 and __truncsfbf2 (the section 12 row 'Row
-; 'D14/D33 note and P3-B text' (2026-10-21) and M12.b (1) corrected'). Each
-; is Phase 1's 'runtime helper '<name>' is not available for MSIL yet (phase
-; 3)', once per helper and function, with no call built and no crash; the IL
-; on stdout assembles.
+; bfloat name __extendbfsf2 (the section 12 row 'Row 'D14/D33 note and P3-B
+; text' (2026-10-21) and M12.b (1) corrected'). They also named __truncsfbf2
+; until the upstream merge at 1838cefa99c0: since upstream 5110131a330f the
+; exact f32 -> bf16 step (an FP_ROUND marked exact, which turns the result's
+; float32 copy back into bfloat) is a bitcast plus the high 16 bits, so only
+; __extendbfsf2 is named (the expansion's rounding fptrunc feeds only the
+; diagnosed __extendbfsf2 conversion and is dropped with it). Each is Phase
+; 1's 'runtime helper '<name>' is not available for MSIL yet (phase 3)', once
+; per helper and function, with no call built and no crash; the IL on stdout
+; assembles.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not="{{^ +call}}" \
 ; DEFINE:   --implicit-check-not=__divti3 --implicit-check-not=__udivti3 --implicit-check-not=__modti3 \
@@ -203,9 +208,7 @@ source_filename = "i128-helpers.c"
 ; HELPER: {{^}}error: {{.*}}in function sitofp_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
 ; HELPER: {{^}}error: {{.*}}in function uitofp_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
 ; HELPER: {{^}}error: {{.*}}in function sitofp_bf16 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function sitofp_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
 ; HELPER: {{^}}error: {{.*}}in function uitofp_bf16 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function uitofp_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
 
 ; HELPER-IL-LABEL: {{^}}.method public static void 'fptosi_f64_strict'(native int, float64) cil managed{{$}}
 ; HELPER-IL-LABEL: {{^}}.method public static void 'fptoui_f32_strict'(native int, float32) cil managed{{$}}

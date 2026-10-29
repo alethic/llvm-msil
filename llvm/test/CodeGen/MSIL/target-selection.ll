@@ -110,8 +110,8 @@
 ; An "exception-model" module flag that the input already carries (IR built
 ; for the native MinGW triple says "wineh") is reset to "none" by
 ; MSILPrepareIR, so that every codegen consumer of Module::getExceptionModel()
-; sees no exception model, as the TargetMachine does (decision D8, amendment
-; log 2026-10-12 for M2.a item (5)).
+; sees no exception model, and the TargetMachine supports none (decision D8,
+; amendment log 2026-10-12 for M2.a item (5)).
 ; RUN: llc -mtriple=x86_64-w64-windows-gnu-msil -stop-after=msil-prepare-ir \
 ; RUN:   -verify-machineinstrs < %t/wineh.ll -o - | FileCheck %s --check-prefix=EHFLAG
 ; RUN: llc -mtriple=aarch64-pc-windows-msvc-msil -stop-after=msil-prepare-ir \
@@ -123,6 +123,40 @@
 ; RUN: llc -mtriple=x86_64-w64-windows-gnu-msil -verify-machineinstrs < %t/wineh.ll \
 ; RUN:   | FileCheck %s --check-prefix=WINEH
 ; WINEH: .assembly 'ehflag' { .ver 0:0:0:0 }
+
+; The base AsmPrinter picks its exception handler from
+; Module::getExceptionModel() when it is initialized, and the legacy pass
+; manager does that before MSILPrepareIR runs, so MSILAsmPrinter resets the
+; flag first. Neither an "exception-model" flag in the IR ("dwarf", "sjlj",
+; "arm") nor llc's -exception-model, which llc turns into that flag, gives a
+; definition that may unwind .cfi directives ("dwarf" would ask for an
+; .eh_frame entry), ARM EHABI directives ("arm" would use the ARM target
+; streamer) or a section switch.
+; DEFINE: %{ehcheck} = FileCheck %s --check-prefix=EHMODEL \
+; DEFINE:   --implicit-check-not=.cfi --implicit-check-not=eh_frame \
+; DEFINE:   --implicit-check-not=.fnstart --implicit-check-not=.fnend \
+; DEFINE:   --implicit-check-not=.section --implicit-check-not=.text
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/ehdwarf.ll | %{ehcheck}
+; RUN: llc -mtriple=x86_64-w64-windows-gnu-msil -verify-machineinstrs < %t/ehdwarf.ll | %{ehcheck}
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/ehsjlj.ll | %{ehcheck}
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -verify-machineinstrs < %t/eharm.ll | %{ehcheck}
+; RUN: llc -mtriple=x86_64-w64-windows-gnu-msil -exception-model=dwarf -verify-machineinstrs \
+; RUN:   < %t/ehmodel.ll | %{ehcheck}
+; RUN: llc -mtriple=x86_64-w64-windows-gnu-msil -exception-model=sjlj -verify-machineinstrs \
+; RUN:   < %t/ehmodel.ll | %{ehcheck}
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -exception-model=dwarf -verify-machineinstrs \
+; RUN:   < %t/ehmodel.ll | %{ehcheck}
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -exception-model=sjlj -verify-machineinstrs \
+; RUN:   < %t/ehmodel.ll | %{ehcheck}
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -exception-model=arm -verify-machineinstrs \
+; RUN:   < %t/ehmodel.ll | %{ehcheck}
+; EHMODEL: .assembly 'ehmodel' { .ver 0:0:0:0 }
+; EHMODEL: .method public static int32 'may_unwind'(int32) cil managed
+; EHMODEL: } // end of method 'may_unwind'
+; RUN: %if ilasm %{ llc -mtriple=x86_64-w64-windows-gnu-msil < %t/ehdwarf.ll -o %t/ehdwarf.il \
+; RUN:   && %ilasm-verify -output=%t/ehdwarf.dll %t/ehdwarf.il %}
+; RUN: %if ilasm %{ llc -mtriple=x86_64-unknown-linux-gnu-msil -exception-model=dwarf < %t/ehmodel.ll \
+; RUN:   -o %t/ehmodel.il && %ilasm-verify -output=%t/ehmodel.dll %t/ehmodel.il %}
 
 ;--- attrs.ll
 ; Declarations with the attributes clang emits for x86_64 and aarch64.
@@ -155,3 +189,46 @@ declare void @external_fn()
 
 !llvm.module.flags = !{!0}
 !0 = !{i32 1, !"exception-model", !"wineh"}
+
+;--- ehmodel.ll
+; A definition without nounwind, so a DWARF model would give it an unwind
+; table entry.
+source_filename = "ehmodel.c"
+
+define i32 @may_unwind(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+;--- ehdwarf.ll
+source_filename = "ehmodel.c"
+
+define i32 @may_unwind(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"exception-model", !"dwarf"}
+
+;--- ehsjlj.ll
+source_filename = "ehmodel.c"
+
+define i32 @may_unwind(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"exception-model", !"sjlj"}
+
+;--- eharm.ll
+source_filename = "ehmodel.c"
+
+define i32 @may_unwind(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"exception-model", !"arm"}

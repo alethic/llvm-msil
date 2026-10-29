@@ -20,6 +20,7 @@
 #include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "MSILMachineFunctionInfo.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -32,6 +33,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSymbol.h"
+#include "llvm/Support/CodeGen.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
@@ -69,6 +71,23 @@ const Function *MSIL::getFunctionByILName(const Module &M, StringRef Name) {
     return F;
   // getILName drops the '\1' escape, so "\1Name" has the IL name Name too.
   return M.getFunction((Twine("\1") + Name).str());
+}
+
+bool MSIL::resetExceptionModel(Module &M) {
+  SmallVector<Module::ModuleFlagEntry, 8> Flags;
+  M.getModuleFlagsMetadata(Flags);
+  StringRef None = getExceptionModelName(ExceptionHandling::None);
+  for (const Module::ModuleFlagEntry &Flag : Flags) {
+    if (Flag.Key->getString() != "exception-model")
+      continue;
+    if (auto *Model = dyn_cast_or_null<MDString>(Flag.Val);
+        Model && Model->getString() == None)
+      return false;
+    M.setModuleFlag(Flag.Behavior, "exception-model",
+                    MDString::get(M.getContext(), None));
+    return true;
+  }
+  return false;
 }
 
 /// Test whether MI is a child of some other node in an expression tree.

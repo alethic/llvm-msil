@@ -762,6 +762,14 @@ bool MSILAsmPrinter::doInitialization(Module &M) {
                     static_cast<uint32_t>(ControlFlowGuardMode::Disabled));
     Changed = true;
   }
+
+  // The base class records Module::getExceptionModel() and picks its
+  // exception handler from it: a DwarfCFIException for an "exception-model"
+  // flag of "dwarf" (it prints .cfi directives around every method that may
+  // unwind) or "sjlj", an ARMException for "arm" (it needs the ARM target
+  // streamer). MSIL has no exception model (decision D8), and MSILPrepareIR
+  // resets the flag too late here as well: reset it silently.
+  Changed |= MSIL::resetExceptionModel(M);
   return AsmPrinter::doInitialization(M) || Changed;
 }
 
