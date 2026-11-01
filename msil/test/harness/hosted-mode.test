@@ -1,0 +1,84 @@
+# Hosted mode (plan 5.17.3, M24). A directory whose lit.local.cfg calls
+# config.msil_enable_hosted(config) is hosted: %{msil_cflags} becomes
+# '-std=gnu17 -Werror=return-type -I<msil/test/Inputs> %{msil_hosted_cflags}'
+# without -ffreestanding, %{msil_oracle_flags} becomes --hosted, and its
+# tests are UNSUPPORTED without the feature msil-hosted (the triple's C
+# headers), which --param msil_require_hosted=1 (every lit leg passes it,
+# 5.17.6) turns into lit's fatal configuration error. %{msil_hosted_cflags}
+# is --sysroot=<msil_glibc_sysroot> for a Linux triple and empty for a
+# Windows triple. A nested lit with -a runs the suite Inputs/nested-hosted,
+# whose hosted/ directory has the marker and whose plain/ directory has
+# none; each flags.test echoes those substitutions and the features
+# msil-hosted and msil-linux-hosted-oracle with its directory's name in
+# front, so the checks below tell the two directories apart.
+#
+# The feature msil-hosted is pinned by the inputs, not by the host: for the
+# Windows triple a directory named by INCLUDE must hold corecrt.h (the nested
+# lit gets INCLUDE=%t.inc, which holds an empty corecrt.h, or INCLUDE=%t.noinc,
+# which does not); for a Linux triple msil_glibc_sysroot must hold
+# usr/include/stdio.h (%t.glibc, which also holds the five files of the
+# hosted Linux oracle E7h, so it gives msil-linux-hosted-oracle as well), and
+# an empty msil_glibc_sysroot gives no sysroot, so no msil-hosted, and the
+# hosted cflags then name the sysroot glibc-sysroot-not-found, so that a
+# hosted compile can never fall back to the host's headers. A missing hosted
+# oracle matters only under msil_native_oracle=required with the WSL runner
+# (the Linux triple's oracle runs inside WSL): %t.headers holds the headers
+# but none of E7h's files, so the hosted directory is UNSUPPORTED there, and
+# fatal under msil_require_hosted=1. In every case the plain directory is
+# unaffected: it keeps -ffreestanding, an empty %{msil_oracle_flags}, and
+# passes. Each failure path is pinned: the UNSUPPORTED result with its note,
+# and the fatal error with lit's status 2.
+# REQUIRES: system-windows
+
+# RUN: rm -rf %t.inc %t.noinc %t.glibc %t.headers
+# RUN: mkdir -p %t.inc %t.noinc %t.glibc/usr/include %t.glibc/usr/lib/x86_64-linux-gnu %t.headers/usr/include
+# RUN: %{harness_check} write %t.inc/corecrt.h
+# RUN: %{harness_check} write %t.glibc/usr/include/stdio.h
+# RUN: %{harness_check} write %t.headers/usr/include/stdio.h
+# RUN: %{harness_check} write %t.glibc/usr/lib/x86_64-linux-gnu/crt1.o
+# RUN: %{harness_check} write %t.glibc/usr/lib/x86_64-linux-gnu/crti.o
+# RUN: %{harness_check} write %t.glibc/usr/lib/x86_64-linux-gnu/crtn.o
+# RUN: %{harness_check} write %t.glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a
+# RUN: %{harness_check} write %t.glibc/usr/lib/x86_64-linux-gnu/libc.so
+
+# (1) Windows triple with the UCRT headers: hosted flags in hosted/ only.
+# RUN: env INCLUDE=%t.inc %{harness_lit} -a --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local %S/Inputs/nested-hosted > %t.1.log 2>&1
+# RUN: %{harness_check} contains %t.1.log "^PASS: MSIL :: harness/Inputs/nested-hosted/hosted/flags\.test " "^PASS: MSIL :: harness/Inputs/nested-hosted/plain/flags\.test "
+# RUN: %{harness_check} contains %t.1.log "^# \| hosted dir cflags: \[-std=gnu17 -Werror=return-type -I\S*\Wmsil\Wtest\WInputs ?\]$" "^# \| hosted dir oracle flags: \[--hosted\]$" "^# \| hosted dir hosted cflags: \[\]$" "^# \| hosted dir feature msil-hosted$"
+# RUN: %{harness_check} contains %t.1.log "^# \| plain dir cflags: \[-std=gnu17 -ffreestanding -Werror=return-type -I\S*\Wmsil\Wtest\WInputs\]$" "^# \| plain dir oracle flags: \[\]$" "^# \| plain dir hosted cflags: \[\]$"
+# RUN: %{harness_check} lacks %t.1.log "^# \| hosted dir cflags: .*-ffreestanding" "^UNSUPPORTED: " "fatal: "
+
+# (2) Windows triple without them: hosted/ is UNSUPPORTED, plain/ passes.
+# RUN: env INCLUDE=%t.noinc %{harness_lit} -a --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local %S/Inputs/nested-hosted > %t.2.log 2>&1
+# RUN: %{harness_check} contains %t.2.log "note: msil: harness/Inputs/nested-hosted/hosted: hosted tests are UNSUPPORTED: the Windows triple's C headers are missing: no directory of INCLUDE holds corecrt\.h " "^UNSUPPORTED: MSIL :: harness/Inputs/nested-hosted/hosted/flags\.test " "^PASS: MSIL :: harness/Inputs/nested-hosted/plain/flags\.test " "^# \| plain dir oracle flags: \[\]$"
+# RUN: %{harness_check} lacks %t.2.log "hosted dir" "feature msil-hosted"
+
+# (3) The same under msil_require_hosted=1: lit's fatal error.
+# RUN: env INCLUDE=%t.noinc %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= -a --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local --param msil_require_hosted=1 %S/Inputs/nested-hosted > %t.3.log 2>&1
+# RUN: %{harness_check} contains %t.3.log "fatal: msil: harness/Inputs/nested-hosted/hosted is a hosted directory \(plan 5\.17\.3\), but the Windows triple's C headers are missing: no directory of INCLUDE holds corecrt\.h .*; msil_require_hosted=1 makes that a configuration error$"
+# RUN: %{harness_check} lacks %t.3.log "^(PASS|UNSUPPORTED|FAIL): "
+# RUN: env INCLUDE=%t.inc %{harness_lit} --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local --param msil_require_hosted=1 %S/Inputs/nested-hosted > %t.3ok.log 2>&1
+# RUN: %{harness_check} contains %t.3ok.log "^PASS: MSIL :: harness/Inputs/nested-hosted/hosted/flags\.test "
+
+# (4) Linux triple with a glibc sysroot: --sysroot=<sysroot> in the hosted
+# cflags of both directories, and in %{msil_cflags} of hosted/ only.
+# RUN: %{harness_lit} -a --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_runner=local --param msil_linux_sysroot= --param msil_glibc_sysroot=%t.glibc %S/Inputs/nested-hosted > %t.4.log 2>&1
+# RUN: %{harness_check} contains %t.4.log "^PASS: MSIL :: harness/Inputs/nested-hosted/hosted/flags\.test " "^PASS: MSIL :: harness/Inputs/nested-hosted/plain/flags\.test "
+# RUN: %{harness_check} contains %t.4.log "^# \| hosted dir cflags: \[-std=gnu17 -Werror=return-type -I\S*\Wmsil\Wtest\WInputs --sysroot=\S*hosted-mode\.test\.tmp\.glibc\]$" "^# \| hosted dir oracle flags: \[--hosted\]$" "^# \| hosted dir hosted cflags: \[--sysroot=\S*hosted-mode\.test\.tmp\.glibc\]$" "^# \| hosted dir feature msil-hosted$" "^# \| hosted dir feature msil-linux-hosted-oracle$"
+# RUN: %{harness_check} contains %t.4.log "^# \| plain dir cflags: \[-std=gnu17 -ffreestanding -Werror=return-type -I\S*\Wmsil\Wtest\WInputs\]$" "^# \| plain dir oracle flags: \[\]$" "^# \| plain dir hosted cflags: \[--sysroot=\S*hosted-mode\.test\.tmp\.glibc\]$"
+
+# (5) Linux triple without one: hosted/ is UNSUPPORTED; (6) fatal under
+# msil_require_hosted=1.
+# RUN: %{harness_lit} -a --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_runner=local --param msil_linux_sysroot= --param msil_glibc_sysroot= %S/Inputs/nested-hosted > %t.5.log 2>&1
+# RUN: %{harness_check} contains %t.5.log "note: msil: harness/Inputs/nested-hosted/hosted: hosted tests are UNSUPPORTED: the Linux triple's C headers are missing: no msil_glibc_sysroot with usr/include/stdio\.h " "^UNSUPPORTED: MSIL :: harness/Inputs/nested-hosted/hosted/flags\.test " "^PASS: MSIL :: harness/Inputs/nested-hosted/plain/flags\.test " "^# \| plain dir hosted cflags: \[--sysroot=glibc-sysroot-not-found\]$"
+# RUN: %{harness_check} lacks %t.5.log "hosted dir" "feature msil-hosted"
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= -a --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_runner=local --param msil_linux_sysroot= --param msil_glibc_sysroot= --param msil_require_hosted=1 %S/Inputs/nested-hosted > %t.6.log 2>&1
+# RUN: %{harness_check} contains %t.6.log "fatal: msil: harness/Inputs/nested-hosted/hosted is a hosted directory \(plan 5\.17\.3\), but the Linux triple's C headers are missing: no msil_glibc_sysroot with usr/include/stdio\.h .*; msil_require_hosted=1 makes that a configuration error$"
+# RUN: %{harness_check} lacks %t.6.log "^(PASS|UNSUPPORTED|FAIL): "
+
+# (7) WSL runner, native oracle required, headers without E7h's files:
+# hosted/ is UNSUPPORTED, and fatal under msil_require_hosted=1.
+# RUN: %if msil-linux-oracle %{ %{harness_lit} -a --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_runner=wsl --param msil_native_oracle=required --param msil_glibc_sysroot=%t.headers %S/Inputs/nested-hosted > %t.7.log 2>&1 %}
+# RUN: %if msil-linux-oracle %{ %{harness_check} contains %t.7.log "note: msil: harness/Inputs/nested-hosted/hosted: hosted tests are UNSUPPORTED: the hosted Linux oracle E7h needs crt1\.o, crti\.o, crtn\.o, libc_nonshared\.a, libc\.so in \S*hosted-mode\.test\.tmp\.headers/usr/lib/x86_64-linux-gnu \(msil_native_oracle=required\)$" "^UNSUPPORTED: MSIL :: harness/Inputs/nested-hosted/hosted/flags\.test " "^PASS: MSIL :: harness/Inputs/nested-hosted/plain/flags\.test " %}
+# RUN: %if msil-linux-oracle %{ %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= -a --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_runner=wsl --param msil_native_oracle=required --param msil_glibc_sysroot=%t.headers --param msil_require_hosted=1 %S/Inputs/nested-hosted > %t.8.log 2>&1 %}
+# RUN: %if msil-linux-oracle %{ %{harness_check} contains %t.8.log "fatal: msil: harness/Inputs/nested-hosted/hosted is a hosted directory \(plan 5\.17\.3\), but the hosted Linux oracle E7h needs crt1\.o, crti\.o, crtn\.o, libc_nonshared\.a, libc\.so in \S*hosted-mode\.test\.tmp\.headers/usr/lib/x86_64-linux-gnu \(msil_native_oracle=required\); msil_require_hosted=1 makes that a configuration error$" %}

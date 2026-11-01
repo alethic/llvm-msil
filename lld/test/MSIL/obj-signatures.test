@@ -27,7 +27,11 @@
 ##   conv.i and conv.i4 (native int on x86_64), or an error for double.
 ## The plan fixes the shapes of the first three lines (IL value classes
 ## int32, native int, float32, float64, void), not the wording of the last.
-## Calls through function pointers (calli) are not checked.
+## Calls through function pointers (calli) are not checked. The names here
+## are ordinary: a compiler runtime helper, an atomic library name, a
+## toolchain name (5.14.2's N1-N3) or a trailer definition is never adapted
+## but N-1's error, '(a toolchain or compiler runtime helper)' (M24;
+## helper-mismatch.test).
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t

@@ -1,0 +1,54 @@
+# Hosted fputs, fputc and putc to stdout and stderr through the real <stdio.h>.
+# stdout and stderr are the C library's own streams: glibc's data imports
+# 'stdout' and 'stderr' (plan 5.10.12) on Linux triples, the UCRT header's
+# calls of __acrt_iob_func(1) and (2) on Windows triples. The program writes
+# to stdout with fputs (a line in two pieces), fputc and putc (a line of
+# single characters), puts (the put_kv lines) and an empty fputs, so the
+# transcript holds what the four functions leave in one stream, in order, as
+# the native oracle's does; it prints each result (fputs: nonnegative, as
+# glibc returns a count and the UCRT 0; fputc and putc: the character
+# written), fflush(stdout), fflush(stderr) and ferror(stdout). It also
+# writes two lines to stderr with fputs and fputc, which the transcript does
+# not hold: the program is built once more at -O0 and at -O2 (whatever
+# levels the leg's composite builds) and run with msil-run.py --stderr-out,
+# and FileCheck reads exactly those two lines from what it wrote to stderr
+# (ERR). Plan 5.17.13 (M24, M3/10-hosted).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+# RUN: rm -rf %t.err.O0.d %t.err.O2.d
+# RUN: %msil_prog_build --level O0 --workdir %t.err.O0.d --out %t.err.O0.d/prog.exe --src %{msil_srcs}
+# RUN: %msil_exec --stderr-out %t.err.O0.txt --out %t.err.O0.out %t.err.O0.d/prog.exe
+# RUN: FileCheck %s --check-prefix=ERR --match-full-lines --input-file=%t.err.O0.txt
+# RUN: %msil_prog_build --level O2 --workdir %t.err.O2.d --out %t.err.O2.d/prog.exe --src %{msil_srcs}
+# RUN: %msil_exec --stderr-out %t.err.O2.txt --out %t.err.O2.out %t.err.O2.d/prog.exe
+# RUN: FileCheck %s --check-prefix=ERR --match-full-lines --input-file=%t.err.O2.txt
+# ERR:      stderr: the first line
+# ERR-NEXT: ! the second line
+# ERR-NOT:  {{.}}
+#--- main.c
+#include <stdio.h>
+
+#include "msil_test.h"
+
+int main(void) {
+  int r1 = fputs("fputs, ", stdout);
+  int r2 = fputs("in two pieces\n", stdout);
+  int c1 = fputc('x', stdout);
+  int c2 = putc('y', stdout);
+  int c3 = fputc('\n', stdout);
+  put_kv("fputs results are nonnegative", r1 >= 0 && r2 >= 0);
+  put_kv("fputc('x')", c1);
+  put_kv("putc('y')", c2);
+  put_kv("fputc of a newline", c3);
+  int e1 = fputs("stderr: the first line\n", stderr);
+  int e2 = fputc('!', stderr);
+  int e3 = fputs(" the second line\n", stderr);
+  put_kv("fputs to stderr is nonnegative", e1 >= 0 && e3 >= 0);
+  put_kv("fputc('!', stderr)", e2);
+  put_kv("fputs of an empty string is nonnegative", fputs("", stdout) >= 0);
+  put_kv("fflush(stdout)", fflush(stdout));
+  put_kv("fflush(stderr)", fflush(stderr));
+  put_kv("ferror(stdout)", ferror(stdout));
+  return 0;
+}

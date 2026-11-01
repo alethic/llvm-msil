@@ -1,0 +1,130 @@
+# The automated retry after a tool timeout in lit-legs.sh (plan 5.17.9, M24),
+# checked as timeout-retry.test checks lit-legs.ps1's: after a lit run of a
+# leg fails, the script runs 'lit-retry.py select' on the run's xunit file;
+# when every failed test is timeout-only (a timeout marker after the last
+# '# executed command:' line of its failure) and at most three are, each of
+# them runs again, alone, with exactly the run's parameters and paths, -j1 and
+# --filter=^<escaped name>$, into <build>/lit-results/<leg>-retry-<stem>.log
+# and .xml, but only after a lit run that exited 1 (failed tests only) after
+# running every test. The row passes with a detail that starts 'retried after
+# timeout: <names> (<logs>)' when every re-run passes; it fails when a re-run
+# fails, when more than three tests timed out, when a failure is not
+# timeout-only, when lit reported an error or when lit did not run every test
+# (and then nothing runs again). The stand-in llvm-lit of Inputs/ci-legs.py
+# plays a scenario, inside WSL from Windows (the WSL legs) and natively on
+# Linux. With --leg more-levels (msil/test/M1):
+# (a) one timeout-only failure that passes when it runs again: PASS with the
+# retry detail; the re-run passes the first run's parameters and path (the
+# same lit arguments, matched by backreference) after -j1, its own xunit file
+# and the filter; its log and xunit file exist.
+# (b) the re-run times out again: FAIL, naming the re-run's log and status.
+# (c) four timeout-only failures: FAIL with '4 tests timed out; re-run the leg
+# on a quieter host', no re-run, and (b)'s retry files are gone. (d) a
+# failure that is not timeout-only: FAIL, no re-run. (e) one of two re-runs
+# fails: FAIL, with both re-runs named. (f) no xunit file: FAIL, no re-run.
+# (g) three timeouts that pass again: PASS (three is the limit). (h) a timeout
+# with a failure of another kind: FAIL, no re-run. (i) lit exits 2 after an
+# error in tests (a test whose outcome is 'crash': lit's 'a worker process
+# crashed' error, and the tests it did not run skipped in the xunit file) with
+# one timeout-only failure: FAIL with 'lit reported an error, so no retry', no
+# re-run and no retry file; the same xunit file with lit exit 1 (that test
+# only skipped, as after --max-failures, which stops lit without an error)
+# fails with 'lit did not run 2 test(s), so no retry', again without a re-run
+# or a retry file; a lit error without a failed test still ends 'the xunit
+# file lists no failed test, so no retry'. (j) With --leg net8, whose
+# --filter-out excludes Programs/, an excluded and an unsupported test (each a
+# <skipped> element with another message than 'Skipped') do not stop the
+# retry: PASS as in (a).
+# REQUIRES: msil-ci-bash
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %python %S/Inputs/ci-legs.py setup %t/build
+
+# (a)
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=timeout,pass' 'MSIL :: M1/b.c=pass'
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-a -- --leg more-levels > %t/a.log
+# RUN: %{harness_check} contains %t/rows-a "^lit-legs\tmore-levels\tPASS\t\d+\tretried after timeout: MSIL :: M1/a\.c \(\S+/lit-results/more-levels-retry-MSIL_M1_a\.c\.log\); passed 1, failed 1; lit exit 1$"
+# RUN: %{harness_check} contains %t/build/lit-calls.log '\Aarg: -sv\narg: --xunit-xml-output=\S+/lit-results/more-levels\.xml\n((?:arg: --param\narg: \S+\n)+)arg: (\S+/msil/test/M1)\narg: -sv\narg: -j1\narg: --xunit-xml-output=\S+/lit-results/more-levels-retry-MSIL_M1_a\.c\.xml\narg: --filter=\^MSIL :: M1/a\\\.c\$\n\1arg: \2\n\Z'
+# RUN: %{harness_check} contains %t/build/lit-calls.log "^arg: msil_require_hosted=1$" "^arg: msil_glibc_sysroot=/$"
+# RUN: %{harness_check} contains %t/build/lit-results/more-levels-retry-MSIL_M1_a.c.log "^PASS: MSIL :: M1/a\.c \(1 of 1\)$"
+# RUN: %{harness_check} contains %t/build/lit-results/more-levels-retry-MSIL_M1_a.c.xml "<testcase classname=\"MSIL\.M1\" name=\"a\.c\" time=\"[0-9.]+\"/>"
+# RUN: %{harness_check} contains %t/a.log "re-run after timeout of MSIL :: M1/a\.c: "
+
+# (b)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=timeout,timeout' 'MSIL :: M1/b.c=pass'
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-b -- --leg more-levels > %t/b.log
+# RUN: %{harness_check} contains %t/rows-b "^lit-legs\tmore-levels\tFAIL\t\d+\tpassed 1, failed 1; lit exit 1; re-run after timeout failed: MSIL :: M1/a\.c \(\S+/lit-results/more-levels-retry-MSIL_M1_a\.c\.log; lit exit 1\)$"
+# RUN: %{harness_check} contains %t/build/lit-results/more-levels-retry-MSIL_M1_a.c.log "^FAIL: MSIL :: M1/a\.c \(1 of 1\)$"
+
+# (c)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=timeout,pass' 'MSIL :: M1/b.c=timeout,pass' 'MSIL :: M1/c.c=timeout,pass' 'MSIL :: M1/d.c=timeout,pass'
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-c -- --leg more-levels > %t/c.log
+# RUN: %{harness_check} contains %t/rows-c "^lit-legs\tmore-levels\tFAIL\t\d+\tfailed 4; lit exit 1; 4 tests timed out; re-run the leg on a quieter host$"
+# RUN: %{harness_check} lacks %t/build/lit-calls.log "^arg: -j1$" "--filter="
+# RUN: %{harness_check} missing %t/build/lit-results/more-levels-retry-MSIL_M1_a.c.log
+
+# (d)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=other,pass' 'MSIL :: M1/b.c=pass'
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-d -- --leg more-levels > %t/d.log
+# RUN: %{harness_check} contains %t/rows-d "^lit-legs\tmore-levels\tFAIL\t\d+\tpassed 1, failed 1; lit exit 1; 1 failed test\(s\) not timeout-only, so nothing was re-run$"
+# RUN: %{harness_check} lacks %t/build/lit-calls.log "^arg: -j1$" "--filter="
+
+# (e)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=timeout,pass' 'MSIL :: M1/b.c=timeout,timeout'
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-e -- --leg more-levels > %t/e.log
+# RUN: %{harness_check} contains %t/rows-e "^lit-legs\tmore-levels\tFAIL\t\d+\tfailed 2; lit exit 1; re-run after timeout failed: MSIL :: M1/b\.c \(\S+/more-levels-retry-MSIL_M1_b\.c\.log; lit exit 1\); re-run after timeout passed: MSIL :: M1/a\.c \(\S+/more-levels-retry-MSIL_M1_a\.c\.log\)$"
+
+# (f)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build --no-xunit 'MSIL :: M1/a.c=timeout,pass'
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-f -- --leg more-levels > %t/f.log
+# RUN: %{harness_check} contains %t/rows-f "^lit-legs\tmore-levels\tFAIL\t\d+\tfailed 1; lit exit 1; no xunit file, so no retry$"
+# RUN: %{harness_check} lacks %t/build/lit-calls.log "^arg: -j1$"
+
+# (g)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=timeout,pass' 'MSIL :: M1/b.c=timeout,pass' 'MSIL :: M1/c.c=timeout,pass'
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-g -- --leg more-levels > %t/g.log
+# RUN: %{harness_check} contains %t/rows-g "^lit-legs\tmore-levels\tPASS\t\d+\tretried after timeout: MSIL :: M1/a\.c, MSIL :: M1/b\.c, MSIL :: M1/c\.c \(\S+/more-levels-retry-MSIL_M1_a\.c\.log, \S+/more-levels-retry-MSIL_M1_b\.c\.log, \S+/more-levels-retry-MSIL_M1_c\.c\.log\); failed 3; lit exit 1$"
+
+# (h)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=timeout,pass' 'MSIL :: M1/b.c=other,pass'
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-h -- --leg more-levels > %t/h.log
+# RUN: %{harness_check} contains %t/rows-h "^lit-legs\tmore-levels\tFAIL\t\d+\tfailed 2; lit exit 1; 1 failed test\(s\) not timeout-only, so nothing was re-run$"
+# RUN: %{harness_check} lacks %t/build/lit-calls.log "^arg: -j1$"
+
+# (i)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=timeout,pass' 'MSIL :: M1/b.c=pass' 'MSIL :: M1/c.c=crash' 'MSIL :: M1/d.c=skip'
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-i -- --leg more-levels > %t/i.log
+# RUN: %{harness_check} contains %t/rows-i "^lit-legs\tmore-levels\tFAIL\t\d+\tskipped 2, passed 1, failed 1; lit exit 2; lit reported an error, so no retry$"
+# RUN: %{harness_check} contains %t/build/lit-results/more-levels.log "^llvm-lit: .+main\.py:283: error: a worker process crashed: A process in the process pool was terminated abruptly while the future was running or pending\.$" "^1 error\(s\) in tests$"
+# RUN: %{harness_check} contains %t/build/lit-results/more-levels.xml "<testcase classname=\"MSIL\.M1\" name=\"c\.c\" time=\"[0-9.]+\">\n  <skipped message=\"Skipped\"/>\n</testcase>" "<testcase classname=\"MSIL\.M1\" name=\"d\.c\" time=\"[0-9.]+\">\n  <skipped message=\"Skipped\"/>\n</testcase>"
+# RUN: %{harness_check} lacks %t/build/lit-calls.log "^arg: -j1$" "--filter="
+# RUN: %{harness_check} missing %t/build/lit-results/more-levels-retry-MSIL_M1_a.c.log
+# RUN: %{harness_check} missing %t/build/lit-results/more-levels-retry-MSIL_M1_a.c.xml
+# RUN: cat %t/build/lit-results/more-levels.xml > %t/i-crash.xml
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=timeout,pass' 'MSIL :: M1/b.c=pass' 'MSIL :: M1/c.c=skip' 'MSIL :: M1/d.c=skip'
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-i1 -- --leg more-levels > %t/i1.log
+# RUN: diff %t/i-crash.xml %t/build/lit-results/more-levels.xml
+# RUN: %{harness_check} contains %t/rows-i1 "^lit-legs\tmore-levels\tFAIL\t\d+\tskipped 2, passed 1, failed 1; lit exit 1; lit did not run 2 test\(s\), so no retry$"
+# RUN: %{harness_check} lacks %t/build/lit-calls.log "^arg: -j1$" "--filter="
+# RUN: %{harness_check} missing %t/build/lit-results/more-levels-retry-MSIL_M1_a.c.log
+# RUN: %{harness_check} missing %t/build/lit-results/more-levels-retry-MSIL_M1_a.c.xml
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=pass' 'MSIL :: M1/b.c=crash'
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-i2 -- --leg more-levels > %t/i2.log
+# RUN: %{harness_check} contains %t/rows-i2 "^lit-legs\tmore-levels\tFAIL\t\d+\tskipped 1, passed 1; lit exit 2; the xunit file lists no failed test, so no retry$"
+
+# (j)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/a.c=timeout,pass' 'MSIL :: M1/u.c=unsupported' 'MSIL :: Programs/x.test=pass'
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-j -- --leg net8 > %t/j.log
+# RUN: %{harness_check} contains %t/build/lit-results/net8.xml "<testcase classname=\"MSIL\.M1\" name=\"u\.c\" time=\"[0-9.]+\">\n  <skipped message=\"Unsupported configuration\"/>\n</testcase>" "<testcase classname=\"MSIL\.Programs\" name=\"x\.test\" time=\"[0-9.]+\">\n  <skipped message=\"Test not selected \(--filter, --max-tests\)\"/>\n</testcase>"
+# RUN: %{harness_check} contains %t/rows-j "^lit-legs\tnet8\tPASS\t\d+\tretried after timeout: MSIL :: M1/a\.c \(\S+/lit-results/net8-retry-MSIL_M1_a\.c\.log\); excluded 1, unsupported 1, failed 1; lit exit 1$"
+# RUN: %{harness_check} contains %t/build/lit-results/net8-retry-MSIL_M1_a.c.log "^PASS: MSIL :: M1/a\.c \(1 of 1\)$"

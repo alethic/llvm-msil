@@ -30,8 +30,9 @@ concurrent run never sees a half-written jitall.dll.
 
 --csharp SRC (plan 5.12.4, M22; lit's %msil_csc) compiles one other C#
 file, a program, with the same csc into --out EXE (-target:exe
--langversion:latest -deterministic+, -unsafe+ with --unsafe, a -r: per
---reference DLL, such as a library assembly built by this toolchain):
+-langversion:latest -deterministic+ -optimize+ (M24: optimized, like the
+jitall build), -unsafe+ with --unsafe, a -r: per --reference DLL, such as a
+library assembly built by this toolchain):
   net8   (the default) against every reference assembly of the newest
          Microsoft.NETCore.App.Ref 8.x pack ($MSIL_REF_NET8, the pack's
          ref/net8.0 directory, names another), and writes
@@ -420,7 +421,7 @@ def compile_csharp(args, dotnet, sdk_ver, sdk_base, csc):
             for r in refs + [os.path.abspath(x) for x in args.reference]:
                 f.write('-r:"%s"\n' % r)
         cmd = [dotnet, csc, "-nologo", "-noconfig", "-nostdlib+", "-target:exe"]
-        cmd += ["-langversion:latest", "-deterministic+"]
+        cmd += ["-langversion:latest", "-deterministic+", "-optimize+"]
         if args.unsafe:
             cmd.append("-unsafe+")
         cmd += ["-out:" + out, "@" + rsp, src]

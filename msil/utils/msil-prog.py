@@ -16,7 +16,8 @@
         [--src FILE...]... [--stock-src FILE...]... [--archives=SPEC]
         [--shlibs=SPEC] [--lib=ARGS]... [--native-lib=ARGS]...
         [--ld-lld LD.LLD --linux-sysroot DIR --start START]
-        [--det] [--timeout S] [--mem-limit-mb N]
+        [--hosted] [--glibc-sysroot DIR] [--expected-rule=RULE]
+        [--det] [--timeout S] [--timeout-factor F] [--mem-limit-mb N]
 
 This is the build step of the %{msil_prog} composites of msil/test/lit.cfg.py
 (plan 5.12.3, 5.12.4), and from M20 of %{msil_c} and %{msil_ll} under
@@ -108,13 +109,64 @@ but it takes NATIVE-LIB-ARGS:
     NATIVE-LDFLAGS is %{msil_native_ldflags}: the compiler-rt builtins of
     msil_native_rtlib for MSVC triples, -lm for Linux triples.
 
+--hosted (plan 5.17.3, M24; %{msil_oracle_flags} of a hosted test) selects
+the hosted native oracle, for programs that use the C library's headers and
+its exit path (atexit, .fini_array, the order of both):
+
+  - with the E7 options: E7h instead of E7, for x86_64-unknown-linux-gnu
+    built on Windows and run under WSL. The glibc sysroot <G> of
+    --glibc-sysroot (msil/utils/make-glibc-sysroot.sh; its
+    usr/lib/x86_64-linux-gnu must hold crt1.o, crti.o, crtn.o,
+    libc_nonshared.a and the libc.so script) takes the place of E7's
+    sysroot and start.c (--linux-sysroot and --start are not used), and the
+    clang driver with lld links glibc's own start files, without crtbegin
+    or libgcc: CLANG --target=x86_64-unknown-linux-gnu --sysroot=<G> CFLAGS
+    -<L> -c (the driver's default PIE code), archives libNAME.a, and
+      CLANG --target=x86_64-unknown-linux-gnu --sysroot=<G> -fuse-ld=lld
+        -nostartfiles -nodefaultlibs <G>/usr/lib/x86_64-linux-gnu/crt1.o
+        <G>/usr/lib/x86_64-linux-gnu/crti.o obj/... stock/... -Lar/NAME
+        -lNAME ... NATIVE-LIB-ARGS -lm -lc
+        <G>/usr/lib/x86_64-linux-gnu/crtn.o -Wl,-rpath,$ORIGIN -o <out>
+    The program is a PIE, the driver's default, as recon tests-gates-p3's
+    E10 linked it (glibc's crt1.o has only GOT-relative relocations); -lc
+    is the sysroot's libc.so script (libc.so.6, libc_nonshared.a, which
+    holds atexit and at_quick_exit, and ld-linux-x86-64.so.2), lld defines
+    the __dso_handle that libc_nonshared.a's atexit uses and crtbegin.o
+    would define, and glibc's exit runs the atexit handlers before
+    .fini_array. NATIVE-LDFLAGS are not used (-lm is in the recipe), and
+    -rpath $ORIGIN serves test-built libraries as in E7;
+  - for an MSVC triple: the DLL C runtime (/MD: vcruntime140.dll and the
+    ucrtbase.dll that MSIL output binds) instead of clang's default static
+    one, whose exit path differs (recon lifecycle 2.2-2.3). Every native
+    compile adds -fms-runtime-lib=dll, whose /DEFAULTLIB:msvcrt.lib
+    directive lld-link reads with the inputs, before the driver's
+    -defaultlib:libcmt (lld/COFF/Driver.cpp processes command-line
+    /defaultlib libraries in a later loop), so mainCRTStartup and the rest
+    of the start-up code come from msvcrt.lib and libcmt.lib stays unused;
+    the link is the driver recipe's, with NATIVE-LDFLAGS;
+  - otherwise the driver recipe unchanged: for a Linux triple without the
+    E7 options that is the host's own link on a Linux host (the CI job),
+    which runs glibc's start files and exit path already; MinGW keeps its
+    C runtime.
+
 Each mode ignores the options of the other (--pipeline, --link-output, --ld,
 --llc, --ilasm, --ldflags and --lib in native mode; --native-ldflags,
---ld-lld, --linux-sysroot and --start in MSIL mode), so one command prefix,
-lit's %msil_prog_build, serves both. An
-empty --ld-lld=, --linux-sysroot= or --start= cancels an earlier one (the
-last of a repeated option counts), which selects the driver recipe after a
-prefix that names the E7 oracle.
+--ld-lld, --linux-sysroot, --start, --hosted and --glibc-sysroot in MSIL
+mode), so one command prefix, lit's %msil_prog_build, serves both. An
+empty --ld-lld=, --linux-sysroot=, --start= or --glibc-sysroot= cancels an
+earlier one (the last of a repeated option counts), which selects the
+driver recipe after a prefix that names the E7 oracle.
+
+--expected-rule RULE (plan 5.17.4, M24; %{msil_expected_rule}) is empty (no
+rule, the default) or '<os>[,<os>]: <reason>', where each <os> is windows or
+linux and the reason holds no single quote: the test's expected file for
+each OS it names is written by hand. In native mode, when RULE names the OS
+of --triple (the oracle's), nothing is built: msil-prog.py prints
+'msil-prog: native oracle skipped (hand-written expected file): <reason>'
+and exits with status 0, after its usage checks and without touching
+--workdir; the composite's native run (msil-run.py --native
+--expected-rule) skips the same way, and every MSIL run still compares with
+the file. MSIL mode checks RULE and ignores it.
 
 --archives SPEC is NAME=SRC[,SRC...][;NAME=SRC[,SRC...]]... (%{msil_archives}):
 one archive per NAME, linked in the order of SPEC after the objects; a SRC
@@ -148,11 +200,12 @@ go into shlib-obj/NAME/ (an interface's into shlib-iface-obj/NAME/):
                kept (MinGW: -Wl,--out-implib=<dir>/libNAME.dll.a, and for an
                interface -Wl,-Xlink=-force:unresolved, unverified); on MSVC
                triples every native compile of the build adds
-               -fms-runtime-lib=dll, so the program and its libraries share
-               one C runtime (heap, streams, errno) as MSIL assemblies share
-               the process's ucrtbase (recon exports-multiasm 7.1), where
-               the default static CRT gives each DLL its own; the program
-               link gets shlib/NAME.lib (MinGW shlib/libNAME.dll.a);
+               -fms-runtime-lib=dll (as --hosted does), so the program and
+               its libraries share one C runtime (heap, streams, errno) as
+               MSIL assemblies share the process's ucrtbase (recon
+               exports-multiasm 7.1), where the default static CRT gives
+               each DLL its own; the program link gets shlib/NAME.lib
+               (MinGW shlib/libNAME.dll.a);
   native, E7:  LD.LLD -shared -Bsymbolic --as-needed -soname libNAME.so
                -rpath $ORIGIN <objects> <earlier libraries> <the sysroot's
                libm.so.6, libc.so.6 and libgcc_s.so.1> -o shlib/libNAME.so,
@@ -167,6 +220,15 @@ go into shlib-obj/NAME/ (an interface's into shlib-iface-obj/NAME/):
                program would get copy relocations and canonical PLT entries
                that a -Bsymbolic library never sees (a second copy of
                exported data, two addresses for a function);
+  native, E7h (--hosted with the E7 options): CLANG
+               --target=x86_64-unknown-linux-gnu --sysroot=<G> -fuse-ld=lld
+               -shared -nostartfiles -nodefaultlibs
+               <G>/usr/lib/x86_64-linux-gnu/crti.o <objects> <earlier
+               libraries> -lm -lc <G>/usr/lib/x86_64-linux-gnu/crtn.o
+               -Wl,-Bsymbolic -Wl,-soname,libNAME.so -Wl,-rpath,$ORIGIN -o
+               shlib/libNAME.so (glibc's shared-object start files, without
+               crtbeginS.o), and the program link gets shlib/libNAME.so after
+               its archives; no interfaces, and -fPIC compiles, as in E7;
   native, Linux with the driver recipe: CLANG --target=<native>
                -fuse-ld=lld -shared <objects> <earlier libraries>
                -Wl,-Bsymbolic -Wl,-soname,libNAME.so -Wl,-rpath,$ORIGIN
@@ -193,10 +255,15 @@ write them as --cflags=VALUE (VALUE may start with '-'). --clang, --ar and
 self-tests pass stand-ins written in Python).
 
 Every command runs in the build directory, with the sources as paths relative
-to it where possible, under --timeout seconds (default 600) and a memory cap of
---mem-limit-mb MiB (default 4096) each (msil-run.py's limits). The build
-directory is --workdir, emptied first; --workdir may not contain a source.
---out is the program (default <workdir>/prog.exe; prog.elf for the E7 oracle).
+to it where possible, under --timeout seconds times --timeout-factor
+(default 600 and 1) and a memory cap of --mem-limit-mb MiB (default 4096)
+each (msil-run.py's limits). lit's %msil_prog_build passes %{msil_limits}
+--timeout-factor 10 (plan 5.17.2, 5.17.9): the test's limits, of which every
+build step gets ten times the run's timeout; a step that runs out of time
+fails with '<step> failed (timeout after <T> s)', T being that product. The
+build directory is --workdir, emptied first; --workdir may not contain a
+source. --out is the program (default <workdir>/prog.exe; prog.elf for the
+E7 and E7h oracles).
 
 --det (MSIL mode; %{msil_det}) builds twice, in <workdir>/a and <workdir>/b,
 with the same relative command lines and -fdebug-compilation-dir=. added to
@@ -216,10 +283,17 @@ without --test (or the reverse) or with a malformed FILE; --llc under lto;
 mode; il without --ilasm (unless --det); --shlibs with --link-output il (a
 link against a .NET library has no --lto-emit-asm text) or with a malformed
 SPEC (a bad name, a library or an interface named twice, an interface after
-its library or without one).
+its library or without one); in native mode --hosted with the E7 options but
+without --glibc-sysroot, or with one that lacks a file of E7h; a malformed
+--expected-rule (in either mode); a --timeout-factor that is not positive.
 
-Exit status: 0 on success; 1 when a step fails (its output is shown) or --det
-finds a difference; 2 on a usage or configuration error.
+Exit status: 0 on success (and for a native build that --expected-rule
+skips); 1 when a step fails (its output is shown) or --det finds a
+difference; 2 on a usage or configuration error. As a module, main(argv)
+runs it with the argument list argv and returns that status instead of
+exiting, also for argparse's own errors (msil-steps.py runs the native
+oracle's build in its own process, plan 5.17.5 and 5.17.10;
+update-expected.py shares parse_expected_rule).
 """
 
 import argparse
@@ -235,7 +309,13 @@ E7_TARGET = "x86_64-unknown-linux-gnu"
 E7_LIBDIR = ("usr", "lib", "x86_64-linux-gnu")
 E7_LIBS = ("libm.so.6", "libc.so.6", "libgcc_s.so.1")
 E7_DYNAMIC_LINKER = "/lib64/ld-linux-x86-64.so.2"
+# E7h (plan 5.17.3): the files of the glibc sysroot's usr/lib/x86_64-linux-gnu
+# that it links, as lit's feature msil-linux-hosted-oracle checks them.
+E7H_FILES = ("crt1.o", "crti.o", "crtn.o", "libc_nonshared.a", "libc.so")
 NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.+-]*$")
+# %{msil_expected_rule} (plan 5.17.4): the operating systems a rule may name.
+RULE_OSES = ("windows", "linux")
+RULE_SKIP = "native oracle skipped (hand-written expected file): %s"
 
 
 def load_script(module_name, file_name):
@@ -330,6 +410,48 @@ def is_msvc(native):
     missing)."""
     parts = native.split("-")
     return "windows" in parts and (len(parts) < 4 or parts[3].startswith("msvc"))
+
+
+def triple_os(triple):
+    """The operating system of a triple as an expected-file rule names it:
+    'windows', 'linux', or None for any other."""
+    parts = triple.split("-")
+    if "windows" in parts:
+        return "windows"
+    if "linux" in parts:
+        return "linux"
+    return None
+
+
+def parse_expected_rule(value):
+    """%{msil_expected_rule} (plan 5.17.4): None for an empty or blank value,
+    else (the set of operating systems it names, the reason) for
+    '<os>[,<os>]: <reason>'; raises UsageError for anything else.
+    update-expected.py reads the REDEFINE: value with this function too."""
+    text = value.strip()
+    if not text:
+        return None
+    names, sep, reason = text.partition(":")
+    if not sep:
+        raise UsageError("%r is not '<os>[,<os>]: <reason>'" % text)
+    oses = [n.strip() for n in names.split(",")]
+    for name in oses:
+        if name not in RULE_OSES:
+            raise UsageError(
+                "%r names %r, which is not an operating system of a rule "
+                "(windows or linux)" % (text, name)
+            )
+    if len(set(oses)) != len(oses):
+        raise UsageError("%r names an operating system twice" % text)
+    reason = reason.strip()
+    if not reason:
+        raise UsageError("%r gives no reason" % text)
+    if "'" in reason:
+        raise UsageError(
+            "the reason of %r holds a single quote (lit quotes the rule with "
+            "single quotes)" % text
+        )
+    return frozenset(oses), reason
 
 
 def parse_archives(spec):
@@ -440,14 +562,16 @@ class Builder:
         args = self.args
         try:
             res = msil_run.run_limited(
-                cmd, cwd, self.env, args.timeout, args.mem_limit_mb
+                cmd, cwd, self.env, args.step_timeout, args.mem_limit_mb
             )
         except OSError as e:
             raise StepFailed("%s: cannot run %s: %s" % (what, cmd[0], e))
         msil_run.emit(sys.stdout, res.stdout)
         msil_run.emit(sys.stderr, res.stderr)
         if res.timed_out:
-            raise StepFailed("%s failed (timeout after %g s)" % (what, args.timeout))
+            raise StepFailed(
+                "%s failed (timeout after %g s)" % (what, args.step_timeout)
+            )
         if res.memory_limit:
             raise StepFailed(
                 "%s failed (memory limit of %d MiB)" % (what, args.mem_limit_mb)
@@ -631,14 +755,25 @@ def build_shlibs_msil(b, bdir, compile_one, prefix):
     return build_shlibs(b, link_one)
 
 
+def e7h_driver(args):
+    """The start of every E7h link: the clang driver for the E7 target with
+    the glibc sysroot and lld (plan 5.17.3)."""
+    return [
+        *args.clang_cmd,
+        "--target=" + E7_TARGET,
+        "--sysroot=" + args.glibc_sysroot,
+        "-fuse-ld=lld",
+    ]
+
+
 def build_shlibs_native(b, bdir, compile_one, flavor, libdir):
-    """--shlibs in native mode (flavor 'e7', 'msvc', 'mingw' or 'linux'; see
-    the module documentation); libdir: the sysroot's library directory of
-    the E7 recipe."""
+    """--shlibs in native mode (flavor 'e7', 'e7h', 'msvc', 'mingw' or
+    'linux'; see the module documentation); libdir: the sysroot's library
+    directory of the E7 recipe, or the glibc sysroot's of E7h."""
     args = b.args
 
     def link_one(name, interface, objdir, members, earlier):
-        if interface and flavor in ("e7", "linux"):
+        if interface and flavor in ("e7", "e7h", "linux"):
             # ld.lld -shared leaves undefined symbols to the dynamic loader.
             return None
         objs = [compile_one(src, stock, objdir) for src, stock in members]
@@ -646,6 +781,16 @@ def build_shlibs_native(b, bdir, compile_one, flavor, libdir):
         os.makedirs(os.path.join(bdir, outdir), exist_ok=True)
         what = "the interface link of ?%s" if interface else "the link of library %s"
         what %= name
+        if flavor == "e7h":
+            out = "shlib/lib%s.so" % name
+            # glibc's shared-object start files, without crtbeginS.o (lld
+            # defines __dso_handle); -rpath $ORIGIN as in E7.
+            cmd = e7h_driver(args) + ["-shared", "-nostartfiles", "-nodefaultlibs"]
+            cmd += [os.path.join(libdir, "crti.o"), *objs, *earlier, "-lm", "-lc"]
+            cmd += [os.path.join(libdir, "crtn.o"), "-Wl,-Bsymbolic"]
+            cmd += ["-Wl,-soname,lib%s.so" % name, "-Wl,-rpath,$ORIGIN", "-o", out]
+            b.run(cmd, bdir, what, out)
+            return out
         if flavor == "e7":
             out = "shlib/lib%s.so" % name
             # -rpath $ORIGIN: the library finds its own libraries next to
@@ -697,22 +842,35 @@ def build_native(b, bdir):
     used = set()
     os.makedirs(os.path.join(bdir, "obj"))
     os.makedirs(os.path.join(bdir, "shlib"))
-    e7 = bool(args.ld_lld_cmd)
     windows = "windows" in native.split("-")
-    if e7:
+    if args.e7h:
+        flavor = "e7h"
+    elif args.ld_lld_cmd:
         flavor = "e7"
     elif windows:
         flavor = "msvc" if is_msvc(native) else "mingw"
     else:
         flavor = "linux"
-    target = ["--target=" + (E7_TARGET if e7 else native)]
-    if args.shlib_list:
-        # One C runtime for the program and its libraries (MSVC), and code
-        # that reaches another module's symbols through the GOT (ELF).
-        target += {"msvc": ["-fms-runtime-lib=dll"], "mingw": []}.get(flavor, ["-fPIC"])
-    elif e7:
+    # The Linux oracles that build on Windows and run under WSL.
+    elf = flavor in ("e7", "e7h")
+    target = ["--target=" + (E7_TARGET if elf else native)]
+    if flavor == "e7h":
+        target.append("--sysroot=" + args.glibc_sysroot)
+    if flavor == "msvc" and (args.shlib_list or args.hosted):
+        # The DLL C runtime: one for the program and its libraries, and the
+        # exit path of the ucrtbase.dll that MSIL output binds (--hosted).
+        target.append("-fms-runtime-lib=dll")
+    elif args.shlib_list and flavor != "mingw":
+        # Code that reaches another module's symbols through the GOT (ELF).
+        target.append("-fPIC")
+    elif flavor == "e7":
         target.append("-fno-pic")
-    libdir = os.path.join(args.linux_sysroot, *E7_LIBDIR) if e7 else None
+    if flavor == "e7h":
+        libdir = os.path.join(args.glibc_sysroot, *E7_LIBDIR)
+    elif flavor == "e7":
+        libdir = os.path.join(args.linux_sysroot, *E7_LIBDIR)
+    else:
+        libdir = None
 
     def compile_one(src, stock, outdir):
         out = unique_name(
@@ -728,17 +886,25 @@ def build_native(b, bdir):
     if args.stock_srcs:
         os.makedirs(os.path.join(bdir, "stock"))
     objects += [compile_one(s, False, "stock") for s in args.stock_srcs]
-    if e7:
+    if elf:
         pattern = "lib%s.a"
     else:
         pattern = "%s.lib" if is_msvc(native) else "lib%s.a"
     lib_args = build_archives(b, bdir, compile_one, pattern)
     out = os.path.abspath(
-        args.out or os.path.join(bdir, "prog.elf" if e7 else "prog.exe")
+        args.out or os.path.join(bdir, "prog.elf" if elf else "prog.exe")
     )
     if os.path.exists(out):
         os.remove(out)
-    if e7:
+    if flavor == "e7h":
+        # glibc's start files and exit path (plan 5.17.3): no crtbegin.o and
+        # no libgcc; -lc is the sysroot's libc.so script.
+        cmd = e7h_driver(args) + ["-nostartfiles", "-nodefaultlibs"]
+        cmd += [os.path.join(libdir, n) for n in ("crt1.o", "crti.o")]
+        cmd += [*objects, *lib_args, *shlibs, *args.native_lib_words, "-lm", "-lc"]
+        cmd += [os.path.join(libdir, "crtn.o"), "-Wl,-rpath,$ORIGIN", "-o", out]
+        b.run(cmd, bdir, "the E7h link", out)
+    elif flavor == "e7":
         start = args.start
         if start.endswith(".c"):
             start_o = "start.o"
@@ -840,6 +1006,19 @@ def parse_args(argv):
     p.add_argument("--ld-lld", help="E7: ld.lld (a program or a command)")
     p.add_argument("--linux-sysroot", help="E7: make-linux-sysroot.py's directory")
     p.add_argument("--start", help="E7: msil/utils/linux-oracle/start.c or its object")
+    p.add_argument(
+        "--hosted",
+        action="store_true",
+        help="the hosted native oracle (%%{msil_oracle_flags}): E7h with the E7 "
+        "options, the DLL C runtime for MSVC triples",
+    )
+    p.add_argument("--glibc-sysroot", help="E7h: make-glibc-sysroot.sh's directory")
+    p.add_argument(
+        "--expected-rule",
+        default="",
+        help="'<os>[,<os>]: <reason>' (%%{msil_expected_rule}): no native build "
+        "for those operating systems",
+    )
     p.add_argument("--cflags", default="", help="compile flags (%%{msil_cflags})")
     p.add_argument("--ldflags", default="", help="MSIL link flags (%%{msil_ldflags})")
     p.add_argument(
@@ -883,6 +1062,12 @@ def parse_args(argv):
         "--timeout", type=float, default=600.0, help="seconds per step (600)"
     )
     p.add_argument(
+        "--timeout-factor",
+        type=float,
+        default=1.0,
+        help="each step gets --timeout times this (1; %%msil_prog_build: 10)",
+    )
+    p.add_argument(
         "--mem-limit-mb",
         type=int,
         default=msil_run.DEFAULT_MEM_LIMIT_MB,
@@ -893,6 +1078,8 @@ def parse_args(argv):
         p.error("--level %s: use one of %s" % (args.level, ", ".join(LEVELS)))
     if args.timeout <= 0 or args.mem_limit_mb <= 0:
         p.error("--timeout and --mem-limit-mb must be positive")
+    if not args.timeout_factor > 0:
+        p.error("--timeout-factor must be positive")
     return p, args
 
 
@@ -900,6 +1087,11 @@ def check_args(args):
     """Everything parse_args cannot check; raises UsageError."""
     args.native = native_of(args.triple)
     args.skip_reason = None
+    try:
+        args.rule = parse_expected_rule(args.expected_rule)
+    except UsageError as e:
+        raise UsageError("--expected-rule: %s" % e)
+    args.step_timeout = args.timeout * args.timeout_factor
     if args.mode == "msil":
         if args.pipeline == "obj" and args.link_output == "il":
             raise UsageError(
@@ -947,6 +1139,23 @@ def check_args(args):
         raise UsageError(
             "the E7 Linux oracle builds %s only, not %s" % (E7_TARGET, args.native)
         )
+    # E7h (plan 5.17.3): --hosted with the E7 options, in native mode.
+    args.e7h = args.mode == "native" and args.hosted and all(e7)
+    if args.e7h:
+        if not args.glibc_sysroot:
+            raise UsageError(
+                "the hosted Linux oracle (E7h: --hosted with the E7 options) "
+                "needs --glibc-sysroot"
+            )
+        libdir = os.path.join(args.glibc_sysroot, *E7_LIBDIR)
+        lacking = [n for n in E7H_FILES if not os.path.isfile(os.path.join(libdir, n))]
+        if lacking:
+            raise UsageError(
+                "--glibc-sysroot %s has no %s in usr/lib/x86_64-linux-gnu (run "
+                "msil/utils/make-glibc-sysroot.sh)"
+                % (args.glibc_sysroot, ", ".join(lacking))
+            )
+        args.glibc_sysroot = os.path.abspath(args.glibc_sysroot)
     if not args.srcs:
         raise UsageError("no --src")
     args.clang_cmd = program(args.clang, "--clang")
@@ -1037,13 +1246,25 @@ def check_args(args):
 
 
 def main(argv=None):
-    p, args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        p, args = parse_args(sys.argv[1:] if argv is None else argv)
+    except SystemExit as e:
+        # argparse's usage errors (2) and --help (0), as a status.
+        return e.code if isinstance(e.code, int) else (0 if e.code is None else 2)
     try:
         check_args(args)
     except UsageError as e:
         sys.stderr.write("msil-prog: error: %s\n" % e)
         return 2
     b = Builder(args)
+    if (
+        args.mode == "native"
+        and args.rule is not None
+        and triple_os(args.native) in args.rule[0]
+    ):
+        # A hand-written expected file for this OS (plan 5.17.4): no oracle.
+        b.say(RULE_SKIP % args.rule[1])
+        return 0
     msil_run.remove_tree(args.workdir)
     if os.path.exists(args.workdir):
         sys.stderr.write("msil-prog: error: cannot empty --workdir %s\n" % args.workdir)

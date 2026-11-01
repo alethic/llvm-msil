@@ -21,6 +21,7 @@ add_lld_library(lldMSIL
   Symbols.cpp
   Synthetic.cpp
   TokenMap.cpp
+  TrailerDefFile.cpp
   Writer.cpp
 
   LINK_COMPONENTS

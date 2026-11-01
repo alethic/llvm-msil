@@ -25,7 +25,7 @@ Scope: C (via clang) to fully managed, IL-only .NET assemblies. Flat exported C 
 **Non-goals (for now)**
 
 - A managed object model, GC references in C code, or C++/CLI-style mixed assemblies. Two narrower features are later goals (user, 2026-10-22), after phase 3 at the earliest: C source calling managed (.NET) methods directly, and inline IL.
-- C++ beyond whatever already works as plain C with mangled names. Mangled names are legal CIL identifiers, so it costs nothing to leave the door open.
+- C++ beyond whatever already works as plain C with mangled names. Mangled names are legal CIL identifiers, so it costs nothing to leave the door open. C++ support aimed at building Qt (QtCore first) is a later goal (user, 2026-10-31), after phase 3 at the earliest.
 - Being callable *from native C* (exporting symbols from the assembly to native callers). Callbacks into managed code via function pointers handed to native code are in scope; that is a different thing (see 4.5).
 - Verifiable/safe IL. The output is unverifiable, full-trust IL, the same as `/clr:pure` or `unsafe` C#.
 

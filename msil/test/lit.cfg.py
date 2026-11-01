@@ -68,6 +68,20 @@
 # and names another expected file with %{msil_expect} (default
 # %S/%{s:stem}).
 #
+# From M24 (plan 5.17.2-5.17.5, 5.17.10): every tool command takes its
+# limits from the placeholder %{msil_limits}, which a test of a large program
+# REDEFINEs; a directory whose lit.local.cfg calls
+# config.msil_enable_hosted(config) is hosted (C headers, the hosted native
+# oracle; see "hosted mode" below); %{msil_expected_rule} marks hand-written
+# expected files, %{msil_netfx_skip} skips the .NET Framework run, and
+# %{msil_prog_loud_<L>} checks a loud failure's message; each level of a
+# composite is its build followed by msil/utils/msil-steps.py, which runs
+# the remaining steps in one Python process (and their WSL runs in one
+# wsl.exe), with lit's output_limit raised so that every step's command line
+# and output stay in lit's log; the probes that start a process keep their
+# results in a cache (msil_probe_cache, see "probe cache"); and the local
+# runner runs the programs on .NET 10 by default.
+#
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
 # compiler-rt builtins for the i128 helpers (msil_native_rtlib); on Linux by
@@ -107,6 +121,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 import lit.formats
 import lit.util
@@ -124,6 +139,20 @@ config.test_exec_root = os.path.join(config.msil_obj_root, "test")
 config.recursiveExpansionLimit = 10
 
 params = lit_config.params
+# lit shows at most output_limit bytes (a parameter, 10240 unless the run
+# gives it) of each command's stdout and of its stderr. A composite level is
+# one %msil_steps command whose stdout carries the command line and the
+# output of every step (about 10 KiB with the calibration parameters before
+# any failure output), where each step used to be a command of its own with
+# 10 KiB of each stream. So unless the run gives output_limit, this lit
+# invocation shows 24 x 10 KiB of each stream, 10 KiB for each step of a
+# level of up to 24 steps (the longest levels have about 18), which keeps
+# every step's command line and output in lit's log (plan 5.17.10). lit
+# reads the value when it formats a result, in worker processes that receive
+# lit_config after the configurations ran, so it holds for every test suite
+# of the invocation.
+STEPS_OUTPUT_LIMIT = 24 * 10240
+params.setdefault("output_limit", str(STEPS_OUTPUT_LIMIT))
 features = config.available_features
 utils_dir = os.path.join(config.msil_src_root, "utils")
 inputs_dir = os.path.join(config.test_source_root, "Inputs")
@@ -279,6 +308,259 @@ def write_runtimeconfig(major):
     return path
 
 
+_scripts = {}
+
+
+def load_script(path):
+    """The Python script path as a module, loaded once and without a
+    __pycache__ next to it (msil/utils stays clean); raises OSError,
+    ImportError or SyntaxError when it cannot be loaded."""
+    if path not in _scripts:
+        saved = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            spec = importlib.util.spec_from_file_location(
+                "msil_lit_" + re.sub(r"\W", "_", os.path.basename(path)), path
+            )
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = saved
+        _scripts[path] = module
+    return _scripts[path]
+
+
+# build-jitall.py's and build-mdtools.py's default --ref-major, which lit
+# leaves as it is.
+TOOLS_REF_MAJOR = 8
+
+
+def tools_up_to_date(build_script, out_dir):
+    """Whether build_script (build-jitall.py or build-mdtools.py) finds the
+    tools in out_dir up to date: the script's own up_to_date() as a function
+    of the imported script, so no process starts when there is nothing to
+    build (plan 5.17.10). False when it cannot tell; the script then runs."""
+    try:
+        module = load_script(build_script)
+        return bool(module.up_to_date(os.path.abspath(out_dir), TOOLS_REF_MAJOR))
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------- probe cache
+# --param msil_probe_cache=FILE (plan 5.17.10; default
+# <build>/tools/msil/test/probe-cache.json, empty disables it): the probes
+# of this file that start a process keep their results in FILE, so a lit run
+# whose tools did not change starts none of them: clang
+# -print-file-name=include (lit's use_clang), 'dotnet --list-runtimes',
+# 'dotnet nuget locals global-packages --list', 'dotnet --list-sdks' (the
+# csc of %msil_csc), 'ilverify --version', the WSL dotnet probe, the
+# msil_wsl_ilasm probe and the compile of the E7 oracle's start.o. FILE is
+# {"version": 1, "key": {"lit_cfg_sha256": <SHA-256 of this file>},
+# "probes": {<probe>: {"key": {...}, "value": ...}}}: each probe's key holds
+# the absolute path, size and mtime of every file it depends on (the tool,
+# and the directories that change when a runtime or SDK is installed), the
+# parameters that select what it probes and the environment variables it
+# reads. A probe runs again when its key differs, when this file changed or
+# when FILE cannot be read, and FILE is then rewritten atomically (a
+# temporary file and a rename). Only a result that lets the run go on is
+# kept, so a probe that failed runs again next time. The up-to-date checks
+# of build-jitall.py and build-mdtools.py run as functions of the imported
+# scripts (a process only when a build is due), and the file lookups
+# (PEVerify, ildasm, the host ilasm, the sysroots and their features) start
+# no process, so they are made every time. The WSL dotnet probe cannot see
+# into WSL by itself: its key holds the WSL dotnet host and its runtime
+# directory as \\wsl.localhost (or \\wsl$) shows them, and it is not cached
+# without that view. lit prints 'note: probe cache: hit' when every probe
+# came from FILE, else 'note: probe cache: miss (<reason>)'.
+with open(__file__, "rb") as _f:
+    LIT_CFG_SHA256 = hashlib.sha256(_f.read()).hexdigest()
+
+
+def file_stamp(path):
+    """[absolute path, size, mtime in ns] of a file or directory (size and
+    mtime None when it is missing)."""
+    if not path:
+        return [None, None, None]
+    full = os.path.abspath(path)
+    try:
+        st = os.stat(full)
+    except OSError:
+        return [slashes(full), None, None]
+    return [slashes(full), st.st_size, st.st_mtime_ns]
+
+
+def _retry_sharing(action):
+    """action(), retried for a moment while another lit run holds the file
+    (a Windows sharing violation)."""
+    for attempt in range(10):
+        try:
+            return action()
+        except PermissionError:
+            if attempt == 9:
+                raise
+            time.sleep(0.05)
+
+
+def _key_change(old, new):
+    """What differs between two probe keys, for the miss note."""
+    for part in ("params", "env", "tools"):
+        o = (old or {}).get(part) or {}
+        n = (new or {}).get(part) or {}
+        for k in sorted(set(o) | set(n)):
+            if o.get(k) != n.get(k):
+                return "%s changed" % k
+    return "its key changed"
+
+
+class ProbeCache:
+    def __init__(self, path):
+        self.path = path
+        self.old = {}  # the probes of FILE
+        self.new = {}  # the probes this run used or made
+        self.dirty = False
+        self.reason = None  # the first reason for a miss
+        if not path:
+            self.reason = "disabled by an empty msil_probe_cache"
+            return
+
+        def read():
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+
+        try:
+            data = _retry_sharing(read)
+        except FileNotFoundError:
+            self.reason = "no cache file yet"
+            return
+        except (OSError, ValueError) as e:
+            self.reason = "cannot read %s: %s" % (slashes(path), e)
+            return
+        if not (
+            isinstance(data, dict)
+            and data.get("version") == 1
+            and isinstance(data.get("key"), dict)
+            and isinstance(data.get("probes"), dict)
+        ):
+            self.reason = "%s is not a probe cache of version 1" % slashes(path)
+            return
+        if data["key"].get("lit_cfg_sha256") != LIT_CFG_SHA256:
+            self.reason = "lit.cfg.py changed"
+            return
+        self.old = data["probes"]
+
+    def miss(self, reason):
+        if self.reason is None:
+            self.reason = reason
+
+    def peek(self, name):
+        """The value kept for the probe name, unchecked, or None: for a probe
+        whose key depends on its own answer (the WSL dotnet probe)."""
+        entry = self.old.get(name) if self.path else None
+        return entry.get("value") if isinstance(entry, dict) else None
+
+    def get(self, name, key, check=None):
+        """The cached value of the probe name when its key is key and
+        check(value), if given, holds; else None (the caller probes)."""
+        if not self.path:
+            return None
+        entry = self.old.get(name)
+        if not isinstance(entry, dict) or "value" not in entry:
+            self.miss("%s: not cached" % name)
+            return None
+        if entry.get("key") != key:
+            self.miss("%s: %s" % (name, _key_change(entry.get("key"), key)))
+            return None
+        if check is not None and not check(entry["value"]):
+            self.miss("%s: its result is out of date" % name)
+            return None
+        self.new[name] = entry
+        return entry["value"]
+
+    def put(self, name, key, value):
+        if self.path:
+            self.new[name] = {"key": key, "value": value}
+            self.dirty = True
+
+    def finish(self):
+        """Print the note and rewrite FILE when a probe ran."""
+        if self.reason is None and not self.dirty:
+            lit_config.note("probe cache: hit")
+            return
+        lit_config.note("probe cache: miss (%s)" % (self.reason or "a probe ran"))
+        if not self.path or not self.dirty:
+            return
+
+        def alive(entry):
+            # The probes of tools that are gone (a finished test's
+            # stand-ins) are dropped.
+            tools = ((entry.get("key") or {}).get("tools") or {}).values()
+            return all(
+                not (isinstance(s, list) and s and s[0])
+                or s[0].startswith("//")
+                or os.path.exists(s[0])
+                for s in tools
+            )
+
+        probes = {n: e for n, e in self.old.items() if isinstance(e, dict) and alive(e)}
+        probes.update(self.new)
+        data = {
+            "version": 1,
+            "key": {"lit_cfg_sha256": LIT_CFG_SHA256},
+            "probes": probes,
+        }
+        tmp = "%s.%d.tmp" % (self.path, os.getpid())
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+            with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(data, f, indent=1, sort_keys=True)
+                f.write("\n")
+            _retry_sharing(lambda: os.replace(tmp, self.path))
+        except OSError:
+            pass  # another lit run holds it; the next run writes it
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
+
+probe_cache_param = params.get("msil_probe_cache")
+probe_cache = ProbeCache(
+    os.path.join(config.test_exec_root, "probe-cache.json")
+    if probe_cache_param is None
+    else os.path.abspath(probe_cache_param)
+    if probe_cache_param
+    else ""
+)
+
+
+def dotnet_key(host, *dirs):
+    """The probe key of a dotnet host: the host and the directories (relative
+    to its installation) whose entries change when a runtime or SDK is added
+    or removed."""
+    base = os.path.dirname(os.path.realpath(host))
+    tools = {"dotnet": file_stamp(host)}
+    for d in dirs:
+        tools[d] = file_stamp(os.path.join(base, *d.split("/")))
+    return {"tools": tools}
+
+
+def cached_run(name, key, cmd, timeout, check=None):
+    """run_quietly(cmd, timeout) through the probe cache: the output of an
+    earlier run while its key is key. Only a run that exits with status 0
+    (and whose output passes check, if given) is kept; check also decides
+    whether a kept output still holds."""
+    out = probe_cache.get(name, key, check)
+    if out is not None:
+        return 0, out
+    rc, out = run_quietly(cmd, timeout)
+    if rc == 0 and (check is None or check(out)):
+        probe_cache.put(name, key, out)
+    return rc, out
+
+
 # ---------------------------------------------------------------- LLVM tools
 # M0 builds no LLVM tool, so FileCheck may be missing; the internal shell has
 # its own 'not'.
@@ -288,7 +570,26 @@ else:
     config.substitutions.append(("%python", '"%s"' % sys.executable))
     llvm_config.add_err_msg_substitutions()
     note("FileCheck is not built; FileCheck, count and not are not substituted")
-llvm_config.use_clang(required=False)  # %clang; feature 'clang'
+# use_clang() runs 'clang -print-file-name=include'; its answer comes from the
+# probe cache while clang is unchanged.
+_include_dir_probe = llvm_config.get_clang_builtin_include_dir
+
+
+def _cached_include_dir(clang):
+    name = "clang -print-file-name=include " + slashes(os.path.abspath(clang))
+    key = {"tools": {"clang": file_stamp(clang)}}
+    value = probe_cache.get(name, key)
+    if value is None:
+        value = _include_dir_probe(clang)
+        probe_cache.put(name, key, value)
+    return value
+
+
+llvm_config.get_clang_builtin_include_dir = _cached_include_dir
+try:
+    llvm_config.use_clang(required=False)  # %clang; feature 'clang'
+finally:
+    del llvm_config.get_clang_builtin_include_dir
 
 # ---------------------------------------------------------------- parameters
 require_verify = bool_param("msil_require_verify")
@@ -383,7 +684,7 @@ if equiv:
     features.add("msil-equiv")
 # --param msil_scale_tests=1 (plan 5.12.2; feature msil-scale-tests): the
 # tests at the real CLR limits (msil/test/M2/00-link/spill-limits.test),
-# which only lit-legs.ps1's obj leg runs.
+# which lit-legs.ps1's net8 and scale legs run (plan 5.12.2, 5.17.6).
 if bool_param("msil_scale_tests"):
     features.add("msil-scale-tests")
 # msil_require_link=1 (every gate leg passes it): a missing msil-ld or llvm-ar
@@ -455,7 +756,15 @@ dotnet = find_tool(
 )
 local_runtimes = {}
 if dotnet:
-    rc, listing = run_quietly([dotnet, "--list-runtimes"], 120)
+    rc, listing = cached_run(
+        "dotnet --list-runtimes " + slashes(os.path.abspath(dotnet)),
+        dotnet_key(dotnet, "shared/Microsoft.NETCore.App"),
+        [dotnet, "--list-runtimes"],
+        120,
+        check=lambda text: all(
+            os.path.isdir(d) for _, d in list_runtimes(text).values()
+        ),
+    )
     local_runtimes = list_runtimes(listing) if rc == 0 else {}
     note(
         "dotnet: %s (Microsoft.NETCore.App %s)"
@@ -495,16 +804,26 @@ def nuget_roots():
         if dotnet:
             # dotnet itself resolves the configured folder (D:/packages/NuGet
             # on the development host); this config never reads NuGet.Config.
-            rc, out = run_quietly(
-                [dotnet, "nuget", "locals", "global-packages", "--list"], 120
+            # The probe cache keeps the answer while the host, $NUGET_PACKAGES
+            # and the folder itself stay.
+            def folder(text):
+                m = re.search(r"^global-packages:\s*(.+?)\s*$", text or "", re.M)
+                return m.group(1) if m else None
+
+            rc, out = cached_run(
+                "dotnet nuget locals global-packages "
+                + slashes(os.path.abspath(dotnet)),
+                {
+                    "env": {"NUGET_PACKAGES": os.environ.get("NUGET_PACKAGES")},
+                    "tools": {"dotnet": file_stamp(dotnet)},
+                },
+                [dotnet, "nuget", "locals", "global-packages", "--list"],
+                120,
+                check=lambda text: bool(folder(text)) and os.path.isdir(folder(text)),
             )
-            m = (
-                re.search(r"^global-packages:\s*(.+?)\s*$", out or "", re.M)
-                if rc == 0
-                else None
-            )
+            m = folder(out) if rc == 0 else None
             if m:
-                _nuget_roots.insert(1, m.group(1))
+                _nuget_roots.insert(1, m)
     unique = {}
     for r in filter(None, _nuget_roots):
         unique.setdefault(os.path.normcase(os.path.normpath(r)), r)
@@ -630,27 +949,92 @@ if runner == "wsl":
         "esac; "
         'echo "dotnet: $d"; echo "kind: $k"; "$d" --list-runtimes'
     )
-    try:
-        res = subprocess.run(
-            [
-                wsl,
-                "-d",
-                wsl_distro,
-                "--exec",
-                "sh",
-                "-c",
-                probe,
-                "sh",
-                wsl_dotnet_param or "auto",
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=300,
+
+    def wsl_unc(path):
+        """The Windows path of the WSL file path as \\wsl.localhost (else
+        \\wsl$) shows it, or None when neither shows it."""
+        for root in ("\\\\wsl.localhost\\", "\\\\wsl$\\"):
+            unc = root + wsl_distro + path.replace("/", "\\")
+            try:
+                os.stat(unc)
+                return unc
+            except OSError:
+                pass
+        return None
+
+    def wsl_probe_key(text):
+        """(probe-cache key, None) of the probe's answer text, or (None, why
+        it is not cached): a private or explicit host, with the host and the
+        runtime directories it listed as \\wsl.localhost shows them; the
+        distribution's own dotnet from PATH is probed every time."""
+        m = re.search(r"^dotnet: (/\S+)$", text or "", re.M)
+        kind = re.search(r"^kind: (\w+)$", text or "", re.M)
+        dirs = sorted(
+            set(
+                re.findall(
+                    r"^Microsoft\.NETCore\.App \S+ \[(/.+)\]\s*$", text or "", re.M
+                )
+            )
         )
-        rc, out, err = res.returncode, decode(res.stdout), decode(res.stderr)
-    except (OSError, subprocess.SubprocessError) as e:
-        rc, out, err = None, "", str(e)
+        if not m or not kind:
+            return None, "not cached"
+        if kind.group(1) == "path":
+            return None, "the distribution's dotnet from PATH is not cached"
+        if not dirs:
+            return None, "no runtime is listed"
+        tools = {}
+        for label, path in [("dotnet", m.group(1))] + [
+            ("runtimes " + d, d) for d in dirs
+        ]:
+            unc = wsl_unc(path)
+            if unc is None:
+                return None, "\\\\wsl.localhost does not show %s" % path
+            tools[label] = file_stamp(unc)
+        return {
+            "params": {
+                "msil_wsl_distro": wsl_distro,
+                "msil_wsl_dotnet": wsl_dotnet_param or "auto",
+            },
+            "tools": tools,
+        }, None
+
+    wsl_probe_name = "WSL dotnet %s %s" % (wsl_distro, wsl_dotnet_param or "auto")
+    out = None
+    if probe_cache.path:
+        kept = probe_cache.peek(wsl_probe_name)
+        key, why = wsl_probe_key(kept) if kept is not None else (None, None)
+        if why:
+            probe_cache.miss("%s: %s" % (wsl_probe_name, why))
+        else:
+            out = probe_cache.get(wsl_probe_name, key)
+    if out is not None:
+        rc, err = 0, ""
+    else:
+        try:
+            res = subprocess.run(
+                [
+                    wsl,
+                    "-d",
+                    wsl_distro,
+                    "--exec",
+                    "sh",
+                    "-c",
+                    probe,
+                    "sh",
+                    wsl_dotnet_param or "auto",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=300,
+            )
+            rc, out, err = res.returncode, decode(res.stdout), decode(res.stderr)
+        except (OSError, subprocess.SubprocessError) as e:
+            rc, out, err = None, "", str(e)
+        if rc == 0 and probe_cache.path:
+            key, why = wsl_probe_key(out)
+            if key is not None:
+                probe_cache.put(wsl_probe_name, key, out)
     if rc == 4:
         fatal(
             "--param msil_wsl_dotnet=private, but the private .NET runtime is not "
@@ -696,7 +1080,9 @@ if runner == "wsl":
     default_major = 10  # WSL runs .NET 10 (plan D22)
 else:
     exec_runtimes = local_runtimes
-    default_major = 8  # .NET 8 by default (plan D22)
+    # .NET 10, the primary modern runtime from M24 (plan 5.17.1, R20; .NET 8
+    # until M23, plan D22).
+    default_major = 10
 for major in exec_runtimes:
     features.add("dotnet-runtime-%d" % major)
 
@@ -821,47 +1207,66 @@ if wsl_ilasm_param:
         wsl_ilasm = os.path.abspath(wsl_ilasm_param)
     if not os.path.isfile(wsl_ilasm):
         fatal("--param msil_wsl_ilasm=%s: no such file" % wsl_ilasm_param)
+
     # Fail here, not in every test, when it cannot assemble inside WSL (a
-    # missing libstdc++, say).
-    os.makedirs(config.test_exec_root, exist_ok=True)
-    probe_dir = tempfile.mkdtemp(prefix="msil-wsl-ilasm-", dir=config.test_exec_root)
-    try:
-        probe_il = os.path.join(probe_dir, "probe.il")
-        probe_dll = os.path.join(probe_dir, "probe.dll")
-        with open(probe_il, "w", encoding="utf-8", newline="\n") as f:
-            f.write(".assembly extern mscorlib {}\n.assembly probe {}\n")
-        rc, out = run_quietly(
-            [
-                config.python_executable,
-                os.path.join(utils_dir, "msil-run.py"),
-                "--tool",
-                "--runner",
-                "wsl",
-                "--wsl-distro",
-                wsl_distro,
-                "--timeout",
-                "%g" % timeout,
-                "--mem-limit-mb",
-                str(mem_limit_mb),
-                "--",
-                wsl_ilasm,
-                "-nologo",
-                "-quiet",
-                "-dll",
-                *ilasm_flags.split(),
-                "-output=" + probe_dll,
-                probe_il,
-            ],
-            timeout + 300,
+    # missing libstdc++, say). The probe cache keeps a success while the
+    # ilasm, its flags and msil-run.py are unchanged.
+    def probe_wsl_ilasm():
+        """(assembled, status, output) of assembling a tiny module inside WSL
+        with the Linux ilasm."""
+        os.makedirs(config.test_exec_root, exist_ok=True)
+        probe_dir = tempfile.mkdtemp(
+            prefix="msil-wsl-ilasm-", dir=config.test_exec_root
         )
-        assembled = rc == 0 and os.path.isfile(probe_dll)
-    finally:
-        shutil.rmtree(probe_dir, ignore_errors=True)
-    if not assembled:
-        fatal(
-            "--param msil_wsl_ilasm=%s cannot assemble inside WSL %s (status %s):\n%s"
-            % (wsl_ilasm_param, wsl_distro, rc, out)
-        )
+        try:
+            probe_il = os.path.join(probe_dir, "probe.il")
+            probe_dll = os.path.join(probe_dir, "probe.dll")
+            with open(probe_il, "w", encoding="utf-8", newline="\n") as f:
+                f.write(".assembly extern mscorlib {}\n.assembly probe {}\n")
+            rc, out = run_quietly(
+                [
+                    config.python_executable,
+                    os.path.join(utils_dir, "msil-run.py"),
+                    "--tool",
+                    "--runner",
+                    "wsl",
+                    "--wsl-distro",
+                    wsl_distro,
+                    "--timeout",
+                    "%g" % timeout,
+                    "--mem-limit-mb",
+                    str(mem_limit_mb),
+                    "--",
+                    wsl_ilasm,
+                    "-nologo",
+                    "-quiet",
+                    "-dll",
+                    *ilasm_flags.split(),
+                    "-output=" + probe_dll,
+                    probe_il,
+                ],
+                timeout + 300,
+            )
+            return rc == 0 and os.path.isfile(probe_dll), rc, out
+        finally:
+            shutil.rmtree(probe_dir, ignore_errors=True)
+
+    wsl_ilasm_probe = "WSL ilasm %s %s" % (wsl_distro, slashes(wsl_ilasm))
+    wsl_ilasm_key = {
+        "params": {"msil_wsl_distro": wsl_distro, "ilasm flags": ilasm_flags.strip()},
+        "tools": {
+            "ilasm": file_stamp(wsl_ilasm),
+            "msil-run.py": file_stamp(os.path.join(utils_dir, "msil-run.py")),
+        },
+    }
+    if probe_cache.get(wsl_ilasm_probe, wsl_ilasm_key) is None:
+        assembled, rc, out = probe_wsl_ilasm()
+        if not assembled:
+            fatal(
+                "--param msil_wsl_ilasm=%s cannot assemble inside WSL %s (status %s):\n%s"
+                % (wsl_ilasm_param, wsl_distro, rc, out)
+            )
+        probe_cache.put(wsl_ilasm_probe, wsl_ilasm_key, True)
     features.add("msil-wsl-ilasm")
     note("ilasm inside WSL %s: %s" % (wsl_distro, wsl_ilasm))
 
@@ -887,8 +1292,18 @@ ilverify = find_tool(
     "ilverify", fallback=[os.path.join(home, ".dotnet", "tools", "ilverify" + exe_ext)]
 )
 if ilverify:
-    # dotnet-ilverify 10.x is itself a net10.0 app; make sure it starts.
-    rc, out = run_quietly([ilverify, "--version"], 120)
+    # dotnet-ilverify 10.x is itself a net10.0 app; make sure it starts (the
+    # probe cache keeps a start while it and the host's runtimes stay).
+    ilverify_key = (
+        dotnet_key(dotnet, "shared/Microsoft.NETCore.App") if dotnet else {"tools": {}}
+    )
+    ilverify_key["tools"]["ilverify"] = file_stamp(ilverify)
+    rc, out = cached_run(
+        "ilverify --version " + slashes(ilverify),
+        ilverify_key,
+        [ilverify, "--version"],
+        120,
+    )
     if rc != 0:
         note(
             "ilverify at %s does not run (%s); ILVerify disabled"
@@ -1012,15 +1427,23 @@ if jitall_param != "":
     )
     build_jitall = os.path.join(utils_dir, "jitall", "build-jitall.py")
     if dotnet and os.path.isfile(build_jitall):
-        rc, out = run_quietly(
-            [sys.executable, build_jitall, "--out", jitall_dir, "--dotnet", dotnet], 600
-        )
-        if rc == 0:
-            note(out.strip().replace("\n", "; "))
-        else:
-            lit_config.warning(
-                "msil: %s failed (status %s):\n%s" % (build_jitall, rc, out)
+        if tools_up_to_date(build_jitall, jitall_dir):
+            # The script's own line for an up-to-date jitall.
+            note(
+                "build-jitall: %s is up to date"
+                % os.path.join(os.path.abspath(jitall_dir), "jitall.dll")
             )
+        else:
+            rc, out = run_quietly(
+                [sys.executable, build_jitall, "--out", jitall_dir, "--dotnet", dotnet],
+                600,
+            )
+            if rc == 0:
+                note(out.strip().replace("\n", "; "))
+            else:
+                lit_config.warning(
+                    "msil: %s failed (status %s):\n%s" % (build_jitall, rc, out)
+                )
     jitall_runtime = (
         exec_runtimeconfig if runner == "wsl" else (dotnet and local_runtimeconfig)
     )
@@ -1060,6 +1483,9 @@ else:
         mdcanon_why = "no dotnet host to build and run it"
     elif not os.path.isfile(build_mdtools):
         mdcanon_why = "%s is missing" % slashes(build_mdtools)
+    elif tools_up_to_date(build_mdtools, mdcanon_dir):
+        # The script's own line for up-to-date tools.
+        note("build-mdtools: %s is up to date" % os.path.abspath(mdcanon_dir))
     else:
         rc, out = run_quietly(
             [sys.executable, build_mdtools, "--out", mdcanon_dir, "--dotnet", dotnet],
@@ -1247,7 +1673,7 @@ if require_verify:
             )
         else:
             missing.append(
-                ".NET runtime%s: %s; install .NET 8, or pass --param "
+                ".NET runtime%s: %s; install .NET 10, or pass --param "
                 "msil_dotnet=PATH (or set $MSIL_DOTNET)"
                 % (
                     why("dotnet"),
@@ -1464,6 +1890,42 @@ if any(
     features.add("msil-ucrt-headers")
     note("UCRT headers found through INCLUDE")
 
+# Hosted mode (plan 5.17.2, 5.17.3; M24). Feature msil-hosted: the C headers
+# of the triple exist (Linux triples: msil_glibc_sysroot holds
+# usr/include/stdio.h; Windows triples: msil-ucrt-headers). Feature
+# msil-linux-hosted-oracle: the glibc sysroot also holds the start files and
+# libraries that E7h, the hosted Linux oracle (msil-prog.py --mode native
+# --hosted), links, and ld.lld is found. --param msil_require_hosted=1
+# (every lit leg passes it, plan 5.17.6) makes a hosted directory without
+# them a configuration error instead of UNSUPPORTED (see
+# config.msil_enable_hosted below). %{msil_hosted_cflags} is
+# --sysroot=<msil_glibc_sysroot> for Linux triples and empty otherwise; it
+# changes compiles only (the MSIL link keeps %{msil_ldflags}).
+E7H_FILES = ("crt1.o", "crti.o", "crtn.o", "libc_nonshared.a", "libc.so")
+require_hosted = bool_param("msil_require_hosted")
+config.msil_require_hosted = require_hosted
+if triple_os == "linux" and glibc_sysroot:
+    features.add("msil-hosted")
+elif triple_os == "windows" and "msil-ucrt-headers" in features:
+    features.add("msil-hosted")
+e7h_lacking = (
+    [
+        n
+        for n in E7H_FILES
+        if not os.path.isfile(os.path.join(glibc_sysroot, *LINUX_LIBDIR, n))
+    ]
+    if glibc_sysroot
+    else list(E7H_FILES)
+)
+if glibc_sysroot and ld_lld and not e7h_lacking:
+    features.add("msil-linux-hosted-oracle")
+if triple_os == "linux":
+    hosted_cflags = "--sysroot=" + (
+        quote(glibc_sysroot) if glibc_sysroot else "glibc-sysroot-not-found"
+    )
+else:
+    hosted_cflags = ""
+
 e7_why = None
 e7_start = None
 if not linux_libdir:
@@ -1480,32 +1942,35 @@ elif "X86" not in config.targets_to_build:
     e7_why = "the X86 target is not built"
 else:
     # start.o, once per lit run. Another lit run may be linking with the
-    # current copy: replace it only when the new one differs.
+    # current copy: replace it only when the new one differs. The probe cache
+    # keeps the compile while clang, start.c and start.o itself are unchanged.
     start_dir = os.path.join(config.test_exec_root, "linux-oracle")
     os.makedirs(start_dir, exist_ok=True)
     e7_start = os.path.join(start_dir, "start.o")
-    tmp = "%s.%d.tmp" % (e7_start, os.getpid())
-    rc, out = run_quietly(
-        [
-            clang_path,
-            "--target=x86_64-unknown-linux-gnu",
-            "-ffreestanding",
-            "-fno-pic",
-            "-O2",
-            "-c",
-            os.path.join(utils_dir, "linux-oracle", "start.c"),
-            "-o",
-            tmp,
-        ],
-        300,
-    )
-    if rc != 0 or not os.path.isfile(tmp):
-        e7_why = "cannot compile msil/utils/linux-oracle/start.c (status %s): %s" % (
-            rc,
-            out.strip(),
+    start_c = os.path.join(utils_dir, "linux-oracle", "start.c")
+
+    def compile_start():
+        """Compile start.c into e7_start; None, or why it failed."""
+        tmp = "%s.%d.tmp" % (e7_start, os.getpid())
+        rc, out = run_quietly(
+            [
+                clang_path,
+                "--target=x86_64-unknown-linux-gnu",
+                "-ffreestanding",
+                "-fno-pic",
+                "-O2",
+                "-c",
+                start_c,
+                "-o",
+                tmp,
+            ],
+            300,
         )
-        e7_start = None
-    else:
+        if rc != 0 or not os.path.isfile(tmp):
+            return "cannot compile msil/utils/linux-oracle/start.c (status %s): %s" % (
+                rc,
+                out.strip(),
+            )
         try:
             with open(tmp, "rb") as f:
                 new = f.read()
@@ -1517,11 +1982,27 @@ else:
             if not same:
                 os.replace(tmp, e7_start)
         except OSError as e:
-            e7_why = "cannot write %s: %s" % (e7_start, e)
-            e7_start = None
+            return "cannot write %s: %s" % (e7_start, e)
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)
+        return None
+
+    start_probe = "start.o " + slashes(e7_start)
+    start_key = {
+        "tools": {"clang": file_stamp(clang_path), "start.c": file_stamp(start_c)}
+    }
+    if (
+        probe_cache.get(
+            start_probe, start_key, check=lambda value: value == file_stamp(e7_start)
+        )
+        is None
+    ):
+        e7_why = compile_start()
+        if e7_why:
+            e7_start = None
+        else:
+            probe_cache.put(start_probe, start_key, file_stamp(e7_start))
 if e7_start:
     features.add("msil-linux-oracle")
     note(
@@ -1578,6 +2059,112 @@ if oracle_required or bool_param("msil_native_oracle"):
             note("native oracle: %s with %s" % (native_triple, slashes(native_rtlib)))
         else:
             note("native oracle: " + native_triple)
+
+# ---------------------------------------------------------------- hosted mode
+# config.msil_enable_hosted(config) (plan 5.17.3): the lit.local.cfg of a
+# hosted directory calls it with its own configuration; that exact line is
+# also the marker that update-expected.py reads to decide hosted mode per
+# test; gate-select.py does not read it, but counts every lit.local.cfg
+# under msil/test, the marker's file, as a harness file, so a changed
+# marker selects the harness leg (plan 5.17.5). On the directory's
+# configuration it (1) makes the tests UNSUPPORTED without the feature
+# msil-hosted, and on a Linux triple whose native oracle is E7 without
+# msil-linux-hosted-oracle under msil_native_oracle=required (each a
+# configuration error under msil_require_hosted=1; under a native oracle that
+# is not required the directory only loses the native oracle, with a note);
+# (2) sets %{msil_cflags} to '-std=gnu17 -Werror=return-type -I<Inputs>
+# %{msil_hosted_cflags}', without -ffreestanding (msil_test.h stays
+# usable); (3) sets %{msil_oracle_flags} to --hosted, which selects the
+# hosted native oracle of msil-prog.py. A configuration that is UNSUPPORTED
+# already (no execution harness) gets only the substitutions. lit copies the
+# configuration for every directory and pickles it for its workers, which
+# never call it: the object stays itself when copied and pickles as a plain
+# string.
+FREESTANDING_CFLAGS = "-std=gnu17 -ffreestanding -Werror=return-type -I" + quote(
+    inputs_dir
+)
+HOSTED_CFLAGS = "-std=gnu17 -Werror=return-type -I%s %%{msil_hosted_cflags}" % quote(
+    inputs_dir
+)
+
+
+def hosted_headers_why():
+    """Why the feature msil-hosted is missing."""
+    if triple_os == "linux":
+        return (
+            "the Linux triple's C headers are missing: no msil_glibc_sysroot with "
+            "usr/include/stdio.h (make one with 'bash msil/utils/make-glibc-sysroot.sh "
+            "<dir>' inside WSL and pass --param msil_glibc_sysroot=<dir>, plan 5.12.8)"
+        )
+    if triple_os == "windows":
+        return (
+            "the Windows triple's C headers are missing: no directory of INCLUDE holds "
+            "corecrt.h (run lit from a VS x64 developer prompt)"
+        )
+    return (
+        "hosted mode knows the C headers of Linux and Windows triples only, not %s"
+        % (msil_triple)
+    )
+
+
+class EnableHosted:
+    def __call__(self, cfg):
+        caller = os.path.dirname(os.path.abspath(sys._getframe(1).f_code.co_filename))
+        try:
+            where = slashes(os.path.relpath(caller, config.test_source_root))
+        except ValueError:  # another drive
+            where = slashes(caller)
+        values = {"%{msil_cflags}": HOSTED_CFLAGS, "%{msil_oracle_flags}": "--hosted"}
+        subs = [(k, values.get(k, v)) for k, v in cfg.substitutions]
+        names = {k for k, _ in subs}
+        subs += [(k, v) for k, v in values.items() if k not in names]
+        cfg.substitutions = subs
+        if cfg.unsupported:
+            return
+        problem = None
+        if "msil-hosted" not in cfg.available_features:
+            problem = hosted_headers_why()
+        elif (
+            triple_os == "linux"
+            and e7_oracle
+            and "msil-native-oracle" in cfg.available_features
+            and "msil-linux-hosted-oracle" not in cfg.available_features
+        ):
+            why = (
+                "the hosted Linux oracle E7h needs %s in %s"
+                % (
+                    ", ".join(e7h_lacking),
+                    slashes(os.path.join(glibc_sysroot, *LINUX_LIBDIR)),
+                )
+                if e7h_lacking
+                else "the hosted Linux oracle E7h needs ld.lld"
+            )
+            if not oracle_required:
+                cfg.available_features.discard("msil-native-oracle")
+                note("%s: no native oracle in this hosted directory: %s" % (where, why))
+                return
+            problem = why + " (msil_native_oracle=required)"
+        if problem is None:
+            return
+        if require_hosted:
+            fatal(
+                "%s is a hosted directory (plan 5.17.3), but %s; msil_require_hosted=1 "
+                "makes that a configuration error" % (where, problem)
+            )
+        note("%s: hosted tests are UNSUPPORTED: %s" % (where, problem))
+        cfg.unsupported = True
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __reduce__(self):
+        return (str, ("config.msil_enable_hosted",))
+
+
+config.msil_enable_hosted = EnableHosted()
 
 
 # ---------------------------------------------------------------- linker
@@ -1673,10 +2260,10 @@ note(
 # --param msil_require_corpus=1 (the corpus legs) makes it a configuration
 # error that names 'fetch.py --cache <dir>', and so is an entry that the
 # stamp lacks, unless --param msil_corpus_skip=<name>[,<name>...] names it:
-# entries left out on purpose (lit-legs passes $MSIL_CORPUS_SKIP; the CI
-# leaves CoreMark and c-testsuite out, plan 5.12.12), whose tests are then
-# UNSUPPORTED with a note. A name in msil_corpus_skip that the manifest does
-# not have is a configuration error.
+# entries left out on purpose (lit-legs passes $MSIL_CORPUS_SKIP, a local
+# opt-out; msil-ci.yml's list is empty since M24, R23, plan 5.17.17),
+# whose tests are then UNSUPPORTED with a note. A name in msil_corpus_skip
+# that the manifest does not have is a configuration error.
 require_corpus = bool_param("msil_require_corpus")
 corpus_manifest = os.path.join(utils_dir, "corpus", "manifest.json")
 corpus_skip = []
@@ -2081,19 +2668,30 @@ csc_why = None
 if not dotnet:
     csc_why = "no dotnet host found"
 else:
-    saved = sys.dont_write_bytecode  # no __pycache__ in msil/utils
-    sys.dont_write_bytecode = True
-    try:
-        spec = importlib.util.spec_from_file_location("build_jitall", build_jitall_py)
-        build_jitall_mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(build_jitall_mod)
-        csc_sdk, _, csc_dll = build_jitall_mod.find_csc(dotnet)
-    except (OSError, ImportError) as e:
-        csc_why = "cannot load %s: %s" % (slashes(build_jitall_py), e)
-    except Exception as e:  # build-jitall.py's BuildError
-        csc_why = str(e)
-    finally:
-        sys.dont_write_bytecode = saved
+    # The probe cache keeps the answer while the host and its SDK directory
+    # are unchanged and the csc it named exists.
+    csc_probe = "dotnet --list-sdks " + slashes(os.path.abspath(dotnet))
+    csc_key = dotnet_key(dotnet, "sdk")
+    csc_kept = probe_cache.get(
+        csc_probe,
+        csc_key,
+        check=lambda value: isinstance(value, list)
+        and len(value) == 2
+        and os.path.isfile(value[1]),
+    )
+    if csc_kept is not None:
+        csc_sdk, csc_dll = csc_kept
+    else:
+        try:
+            build_jitall_mod = load_script(build_jitall_py)
+        except (OSError, ImportError, SyntaxError) as e:
+            csc_why = "cannot load %s: %s" % (slashes(build_jitall_py), e)
+        else:
+            try:
+                csc_sdk, _, csc_dll = build_jitall_mod.find_csc(dotnet)
+                probe_cache.put(csc_probe, csc_key, [csc_sdk, csc_dll])
+            except Exception as e:  # build-jitall.py's BuildError
+                csc_why = str(e)
 if csc_why is None:
     features.add("msil-csc")
     note("csc: %s (SDK %s)" % (slashes(csc_dll), csc_sdk))
@@ -2105,6 +2703,9 @@ elif require_csc:
     )
 else:
     note("csc is not available (%%msil_csc): %s" % csc_why)
+
+# Every probe that starts a process has run (or come from the cache).
+probe_cache.finish()
 
 # Everything needed to compile and run C programs: under obj and lto also
 # msil-ld and llvm-ar, through which %{msil_c} links.
@@ -2145,7 +2746,17 @@ config.environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1"
 
 # ---------------------------------------------------------------- substitutions
 python = quote(config.python_executable)
-limits = " --timeout %g --mem-limit-mb %d" % (timeout, mem_limit_mb)
+# %{msil_limits} (plan 5.17.2, 5.17.9; M24): the timeout and memory cap of the
+# tool commands, '--timeout <msil_timeout> --mem-limit-mb <msil_mem_limit_mb>'.
+# It stays a placeholder inside every command that takes the limits
+# (msil-run.py, so %ilasm, %msil_exec, %msil_ld, %msil_mdcanon and
+# %msil_cil_dump; msil-verify.py, so %msil_verify and %msil_roundtrip;
+# %msil_jitall, %msil_steps, %msil_check_mscorlib_safe, and %msil_prog_build
+# as '%{msil_limits} --timeout-factor 10', which keeps the build steps'
+# ten-fold timeout), so a test of a large program REDEFINEs it for all of
+# them at once.
+limits_value = "--timeout %g --mem-limit-mb %d" % (timeout, mem_limit_mb)
+limits = " %{msil_limits}"
 env_args = "".join(' --env "%s"' % kv for kv in dotnet_env)
 
 
@@ -2385,73 +2996,152 @@ e7_args = "--clang %s --linux-sysroot %s --wsl-distro %s --ld-lld %s" % (
 )
 
 
-def native_leg(t, level, compile_flags):
-    """The native-oracle leg of a composite: <compile_flags> are the C or IR
-    flags before -<level>."""
+# The composites (plan 5.12.3, 5.17.10; M24): each level is its build, then
+# %msil_steps with the level's remaining steps, which msil/utils/msil-steps.py
+# runs in one Python process (the imported tools; with msil_runner=wsl the
+# WSL runs that follow each other in one wsl.exe), printing 'msil-steps:
+# <step>: <command line>' before each step and stopping at the first that
+# fails, with that step's exit status and output. A step's command line is
+# the expansion of the atom (%msil_verify, %msil_exec, ...) that an explicit
+# RUN line runs. The host's steps (assembly, verification, the round trip,
+# the native build) come first, so that a level's jitall and runs (main,
+# msil_also_run entries, round trip, native oracle) follow each other; the
+# equivalence oracles and the .NET Framework run come last. The native runs
+# and msil-prog.py's native builds take --expected-rule
+# '%{msil_expected_rule}' (plan 5.17.4), and every .NET Framework run
+# %{msil_netfx_skip}; the native build of a Phase 1 composite (native_steps:
+# %{msil_c} under msil_pipeline=asm, and every %{msil_ll} test) takes
+# neither the rule nor %{msil_oracle_flags}, so under a rule that names the
+# oracle's OS it still builds and only its run is skipped.
+
+
+def step(name, command):
+    """The step <name> of %msil_steps, which runs <command>."""
+    return f" --step={name} {command}"
+
+
+def when(feature, text):
+    """<text> under lit's %if <feature>."""
+    return f" %if {feature} %{{{text} %}}"
+
+
+def native_run_step(t, exe, dep=""):
+    """The native oracle's run of <exe> against the expected file. dep: the
+    dependency options of the run (dep_args)."""
+    return when(
+        "msil-native-oracle",
+        step(
+            "native-run",
+            "%msil_exec --native --expected-rule '%{msil_expected_rule}'"
+            f" --expect %{{msil_expect}} --out {t}.native.out{dep} {exe}",
+        ),
+    )
+
+
+def native_steps(t, level, compile_flags):
+    """The native-oracle steps of a Phase 1 composite (clang for the native
+    triple, or the E7 Linux oracle): (the build, the run). compile_flags: the
+    C or IR flags before -<level>."""
     if e7_oracle:
-        build = (
-            f"%{{msil_linux_cc}} {compile_flags} -{level} -c %s -o {t}.native.o"
-            f" && %{{msil_linux_ld}} {t}.native.o %{{msil_linux_libs}}"
-            f" -o {t}.native.elf"
+        build = step(
+            "native-compile",
+            f"%{{msil_linux_cc}} {compile_flags} -{level} -c %s -o {t}.native.o",
+        ) + step(
+            "native-link",
+            f"%{{msil_linux_ld}} {t}.native.o %{{msil_linux_libs}} -o {t}.native.elf",
         )
         exe = f"{t}.native.elf"
     else:
-        build = (
-            f"%clang_native {compile_flags} -{level} %s{native_link} -o {t}.native.exe"
+        build = step(
+            "native-build",
+            f"%clang_native {compile_flags} -{level} %s{native_link} -o {t}.native.exe",
         )
         exe = f"{t}.native.exe"
-    return (
-        f" %if msil-native-oracle %{{ && {build}"
-        f" && %msil_exec --native --expect %{{msil_expect}}"
-        f" --out {t}.native.out {exe} %}}"
-    )
+    return when("msil-native-oracle", build), native_run_step(t, exe)
 
 
-def roundtrip_leg(t, image=None, dep=""):
-    """msil_roundtrip: the ildasm -> ilasm round trip of <t>.dll (or of the
-    program image of %{msil_prog}, written back as <t>.rt.exe), then a run of
-    the reassembled image against the same .expected file. dep: the
-    dependency options of the run (dep_args)."""
+def roundtrip_steps(t, image=None, dep=""):
+    """msil_roundtrip: (the ildasm -> ilasm round trip of <t>.dll, or of the
+    program image of %{msil_prog} written back as <t>.rt.exe; the run of the
+    reassembled image against the same expected file). dep: the dependency
+    options of the run (dep_args)."""
     rt = f"{t}.rt.exe" if image else f"{t}.rt.dll"
     image = image or f"{t}.dll"
     return (
-        f" %if msil-roundtrip %{{ && %msil_roundtrip --output={rt} {image}"
-        f" && %msil_exec --expect %{{msil_expect}} --out {t}.rt.out{dep} {rt} %}}"
+        when(
+            "msil-roundtrip",
+            step("roundtrip", f"%msil_roundtrip --output={rt} {image}"),
+        ),
+        when(
+            "msil-roundtrip",
+            step(
+                "roundtrip-run",
+                f"%msil_exec --expect %{{msil_expect}} --out {t}.rt.out{dep} {rt}",
+            ),
+        ),
     )
 
 
-def also_run_legs(t, image, dep=""):
-    """msil_also_run: after the main run, jitall and the run of <image> once
-    per entry (see "more runtimes"), against the same expected file, into
-    <t>.also-net<major>[-tc0].out. dep: the dependency options of the run
-    (dep_args)."""
-    text = ""
+def run_steps(t, image, dep=""):
+    """jitall and the main run of <image> against the expected file, into
+    <t>.out, then per msil_also_run entry (see "more runtimes") jitall and the
+    run once more, into <t>.also-net<major>[-tc0].out. dep: the dependency
+    options of the runs (dep_args)."""
+    text = when("msil-jitall", step("jitall", f"%msil_jitall{dep} {image}"))
+    text += step(
+        "run", f"%msil_exec --expect %{{msil_expect}} --out {t}.out{dep} {image}"
+    )
     for tag, jit, run in also_run_cmds:
-        text += (
-            f" %if msil-jitall %{{ && {jit}{dep} {image} %}}"
-            f" && {run} --expect %{{msil_expect}} --out {t}.{tag}.out{dep} {image}"
+        text += when("msil-jitall", step(f"{tag}-jitall", f"{jit}{dep} {image}"))
+        text += step(
+            f"{tag}-run",
+            f"{run} --expect %{{msil_expect}} --out {t}.{tag}.out{dep} {image}",
         )
     return text
+
+
+def netfx_run_step(t, image, dep=""):
+    """The .NET Framework run of <image>, which %{msil_netfx_skip} may skip.
+    dep: the dependency options of the run (dep_args)."""
+    return step(
+        "netfx-run",
+        "%msil_exec --netfx %{msil_netfx_skip} --expect %{msil_expect}"
+        f" --out {t}.netfx.out{dep} {image}",
+    )
+
+
+def asm_pipeline(level, build, native_flags):
+    """Phase 1's composite at -<level> after <build>, which writes <t>.il:
+    assemble -> verify -> force-JIT -> run and compare, and the legs.
+    native_flags: the native oracle's C or IR flags before -<level>."""
+    t = "%t." + level
+    roundtrip, roundtrip_run = roundtrip_steps(t)
+    native_build, native_run = native_steps(t, level, native_flags)
+    return (
+        f"{build} && %msil_steps"
+        + step("assemble", f"%ilasm -dll -output={t}.dll {t}.il")
+        + step("verify", f"%msil_verify {t}.dll")
+        + roundtrip
+        + native_build
+        + run_steps(t, f"{t}.dll")
+        + roundtrip_run
+        + native_run
+        + when(
+            "msil-run-netfx",
+            step("netfx-assemble", f"%ilasm -exe -output={t}.exe {t}.il")
+            + netfx_run_step(t, f"{t}.exe"),
+        )
+    )
 
 
 def c_pipeline(level):
     """compile -> assemble -> verify -> force-JIT -> run and compare, at -<level>."""
     t = "%t." + level
-    cmd = (
-        f"%clang_msil %{{msil_cflags}} %{{msil_copts}} -{level} -S %s -o {t}.il"
-        f" && %ilasm -dll -output={t}.dll {t}.il"
-        f" && %msil_verify {t}.dll"
-        f" %if msil-jitall %{{ && %msil_jitall {t}.dll %}}"
-        f" && %msil_exec --expect %{{msil_expect}} --out {t}.out {t}.dll"
+    return asm_pipeline(
+        level,
+        f"%clang_msil %{{msil_cflags}} %{{msil_copts}} -{level} -S %s -o {t}.il",
+        "%{msil_cflags} %{msil_copts}",
     )
-    cmd += also_run_legs(t, f"{t}.dll")
-    cmd += roundtrip_leg(t)
-    cmd += native_leg(t, level, "%{msil_cflags} %{msil_copts}")
-    cmd += (
-        f" %if msil-run-netfx %{{ && %ilasm -exe -output={t}.exe {t}.il"
-        f" && %msil_exec --netfx --expect %{{msil_expect}} --out {t}.netfx.out {t}.exe %}}"
-    )
-    return cmd
 
 
 def ll_pipeline(level):
@@ -2459,21 +3149,9 @@ def ll_pipeline(level):
     datalayout in the file). llc does no IPO, so values passed to noinline
     functions stay opaque even at -O2."""
     t = "%t." + level
-    cmd = (
-        f"%llc_msil -{level} %s -o {t}.il"
-        f" && %ilasm -dll -output={t}.dll {t}.il"
-        f" && %msil_verify {t}.dll"
-        f" %if msil-jitall %{{ && %msil_jitall {t}.dll %}}"
-        f" && %msil_exec --expect %{{msil_expect}} --out {t}.out {t}.dll"
+    return asm_pipeline(
+        level, f"%llc_msil -{level} %s -o {t}.il", "-Wno-override-module"
     )
-    cmd += also_run_legs(t, f"{t}.dll")
-    cmd += roundtrip_leg(t)
-    cmd += native_leg(t, level, "-Wno-override-module")
-    cmd += (
-        f" %if msil-run-netfx %{{ && %ilasm -exe -output={t}.exe {t}.il"
-        f" && %msil_exec --netfx --expect %{{msil_expect}} --out {t}.netfx.out {t}.exe %}}"
-    )
-    return cmd
 
 
 # llc takes -O0..-O3 only; -Os/-Oz levels are skipped for IR tests.
@@ -2557,14 +3235,12 @@ prog_template = (
     "%s --triple %s --pipeline %s --link-output %s @TOOLS@"
     " --cflags='%%{msil_cflags} %%{msil_copts}' --ldflags='%%{msil_ldflags}'"
     " --native-ldflags='%%{msil_native_ldflags}' --shlibs='%%{msil_shlibs}'"
-    " --timeout %g --mem-limit-mb %d"
+    " %%{msil_limits} --timeout-factor 10"
     % (
         script("msil-prog.py"),
         msil_triple,
         prog_pipeline_name,
         link_output,
-        timeout * 10,
-        mem_limit_mb,
     )
 )
 
@@ -2582,10 +3258,14 @@ prog_tool_args = {
     "ld": "--ld=" + quote(msil_ld or "msil-ld-not-found"),
 }
 if e7_oracle:
-    # msil-prog.py's native mode builds the E7 Linux oracle (plan 5.12.8).
+    # msil-prog.py's native mode builds the E7 Linux oracle (plan 5.12.8),
+    # and with --hosted (%{msil_oracle_flags} of a hosted test) E7h from the
+    # glibc sysroot (plan 5.17.3).
     prog_tool_args["ld-lld"] = "--ld-lld=" + quote(ld_lld)
     prog_tool_args["linux-sysroot"] = "--linux-sysroot=" + quote(linux_sysroot)
     prog_tool_args["start"] = "--start=" + quote(e7_start)
+    if glibc_sysroot:
+        prog_tool_args["glibc-sysroot"] = "--glibc-sysroot=" + quote(glibc_sysroot)
 config.msil_prog_tool_args = prog_tool_args
 config.msil_prog_template = prog_template
 
@@ -2656,16 +3336,18 @@ def allow_args(names):
     return "".join(" --allow " + n for n in names)
 
 
-def prog_build(level, inputs, fail=False, single=None):
+def prog_build(level, inputs, fail=False, single=None, equiv_outputs=True):
     """The MSIL build of %{msil_prog} at -<level>: (command, program).
     single: 'c' or 'll' for the one-source program of %{msil_c} or
-    %{msil_ll}, None for %{msil_prog}."""
+    %{msil_ll}, None for %{msil_prog}. equiv_outputs: under msil_equiv=1 the
+    build also writes the outputs of the equivalence oracles (not for the
+    loud composite, which runs none)."""
     t = "%t." + level
     exe = f"{t}.d/prog.exe"
     cmd = f"%msil_prog_build --level {level} --workdir {t}.d --out {exe}"
     if single == "ll":
         cmd += " --llc=%{msil_llc}"
-    if equiv and not fail:
+    if equiv and not fail and equiv_outputs:
         # The equivalence outputs (msil-prog.py step 5): under obj the
         # --no-gc-sections image of a one-source program (O3), under lto
         # (with pe) that image and the link's --lto-emit-asm text (O4).
@@ -2681,8 +3363,9 @@ def prog_build(level, inputs, fail=False, single=None):
 def asm_reference(level, single):
     """O3's and O6's reference (msil_equiv=1 under obj): the one source
     compiled the Phase 1 way, -S (or llc text) with the assembly name of
-    msil-ld's image, and ilasm's EXE image <t>.d/asm/prog.exe, whose module
-    name prog.exe is the msil-ld image's too."""
+    msil-ld's image, as part of the build, and the step that assembles it
+    with ilasm into the EXE image <t>.d/asm/prog.exe, whose module name
+    prog.exe is the msil-ld image's too: (build text, step)."""
     t = "%t." + level
     ref = f"{t}.d/asm"
     if single == "c":
@@ -2693,8 +3376,8 @@ def asm_reference(level, single):
     else:
         text = f"%llc_msil -{level} %s -msil-assembly-name=prog -o {ref}/prog.il"
     return (
-        f" && mkdir -p {ref} && {text}"
-        f" && %ilasm -exe -output={ref}/prog.exe {ref}/prog.il"
+        f" && mkdir -p {ref} && {text}",
+        step("asm-ref", f"%ilasm -exe -output={ref}/prog.exe {ref}/prog.il"),
     )
 
 
@@ -2716,48 +3399,99 @@ def prog_pipeline(level, inputs=PROG_PLACEHOLDERS, deps="%{msil_deps}", single=N
     # --equiv-skip (plan section 12, 'Plan 5.12.6 amended (skip lines)').
     skip_key = f"--test %s --triple {msil_triple} --level {level}"
     md = ""
+    steps = ""
     if o3:
-        build += asm_reference(level, single)
+        ref_build, ref_step = asm_reference(level, single)
+        build += ref_build
+        steps += ref_step
         # O6, unless a 'skip O6' line of equiv-allowed.txt names the test
         # (plan section 12, 'M21.c extended').
         md = (
             f" --equiv-skip {quote(equiv_allowed)} {skip_key}"
             f" --md-baseline {t}.d/asm/prog.exe"
         )
-    cmd = (
-        f"{build} && %msil_verify{md}{verify_dep} {exe}"
-        f" %if msil-jitall %{{ && %msil_jitall{dep} {exe} %}}"
-        f" && %msil_exec --expect %{{msil_expect}} --out {t}.out{dep} {exe}"
-    )
-    cmd += also_run_legs(t, exe, dep)
-    cmd += roundtrip_leg(t, exe, dep)
-    if o3:
-        cmd += (
-            f" && %msil_equiv --oracle O3 {skip_key}{allow_args(O3_ALLOWED)}"
-            f" {t}.d/equiv/prog.exe {t}.d/asm/prog.exe"
-        )
-    if o4:
-        cmd += (
-            f" && %msil_equiv --oracle O4 {skip_key}{allow_args(O4_ALLOWED)}"
-            f" --ilasm '%ilasm' {t}.d/equiv/prog.exe {t}.d/equiv/prog.il"
-        )
+    steps += step("verify", f"%msil_verify{md}{verify_dep} {exe}")
+    roundtrip, roundtrip_run = roundtrip_steps(t, exe, dep)
     if single == "ll":
         # The native oracle of an IR test is Phase 1's (no msil-prog.py).
-        cmd += native_leg(t, level, "-Wno-override-module")
+        native_build, native_run = native_steps(t, level, "-Wno-override-module")
     else:
         native = f"{t}.native.d/prog.{'elf' if e7_oracle else 'exe'}"
-        cmd += (
-            f" %if msil-native-oracle %{{ && %msil_prog_build --mode native"
-            f" --level {level} --workdir {t}.native.d --out {native}"
-            + prog_inputs(*inputs, native=True)
-            + f" && %msil_exec --native --expect %{{msil_expect}}"
-            f" --out {t}.native.out{native_dep} {native} %}}"
+        native_build = when(
+            "msil-native-oracle",
+            step(
+                "native-build",
+                "%msil_prog_build --mode native %{msil_oracle_flags}"
+                " --expected-rule '%{msil_expected_rule}'"
+                f" --level {level} --workdir {t}.native.d --out {native}"
+                + prog_inputs(*inputs, native=True),
+            ),
         )
-    cmd += (
-        f" %if msil-run-netfx %{{ && %msil_exec --netfx --expect %{{msil_expect}}"
-        f" --out {t}.netfx.out{dep} {exe} %}}"
+        native_run = native_run_step(t, native, native_dep)
+    steps += (
+        roundtrip + native_build + run_steps(t, exe, dep) + roundtrip_run + native_run
     )
-    return cmd
+    if o3:
+        steps += step(
+            "O3",
+            f"%msil_equiv --oracle O3 {skip_key}{allow_args(O3_ALLOWED)}"
+            f" {t}.d/equiv/prog.exe {t}.d/asm/prog.exe",
+        )
+    if o4:
+        steps += step(
+            "O4",
+            f"%msil_equiv --oracle O4 {skip_key}{allow_args(O4_ALLOWED)}"
+            f" --ilasm '%ilasm' {t}.d/equiv/prog.exe {t}.d/equiv/prog.il",
+        )
+    steps += when("msil-run-netfx", netfx_run_step(t, exe, dep))
+    return f"{build} && %msil_steps{steps}"
+
+
+def loud_pipeline(level):
+    """%{msil_prog_loud_<level>} (plan 5.17.4): the test of a loud failure,
+    which throws or fails fast at run time. The build of %{msil_prog} (no
+    equivalence outputs), %msil_verify and %msil_jitall, then each run of the
+    leg (main, every msil_also_run entry, the .NET Framework run) with
+    msil-run.py --stderr-out <file> against %{msil_expect} (hand-written
+    under %{msil_expected_rule}), each followed by 'FileCheck %s
+    --check-prefix=LOUD --input-file <file>' on the program's stderr; no
+    native oracle and no O3, O4 or O6. A Framework run that
+    %{msil_netfx_skip} skips takes its check with it (msil-steps.py)."""
+    t = "%t." + level
+    build, exe = prog_build(level, PROG_PLACEHOLDERS, equiv_outputs=False)
+    dep = dep_args("%{msil_deps}", f"{t}.d")
+    verify_dep = dep_args("%{msil_deps}", f"{t}.d", verify=True)
+
+    def check(name, err):
+        return step(name, f"FileCheck %s --check-prefix=LOUD --input-file {err}")
+
+    steps = step("verify", f"%msil_verify{verify_dep} {exe}")
+    steps += when("msil-jitall", step("jitall", f"%msil_jitall{dep} {exe}"))
+    steps += step(
+        "run",
+        f"%msil_exec --stderr-out {t}.err --expect %{{msil_expect}}"
+        f" --out {t}.out{dep} {exe}",
+    )
+    steps += check("run-check", f"{t}.err")
+    for tag, jit, run in also_run_cmds:
+        steps += when("msil-jitall", step(f"{tag}-jitall", f"{jit}{dep} {exe}"))
+        steps += step(
+            f"{tag}-run",
+            f"{run} --stderr-out {t}.{tag}.err --expect %{{msil_expect}}"
+            f" --out {t}.{tag}.out{dep} {exe}",
+        )
+        steps += check(f"{tag}-check", f"{t}.{tag}.err")
+    steps += when(
+        "msil-run-netfx",
+        step(
+            "netfx-run",
+            "%msil_exec --netfx %{msil_netfx_skip}"
+            f" --stderr-out {t}.netfx.err --expect %{{msil_expect}}"
+            f" --out {t}.netfx.out{dep} {exe}",
+        )
+        + check("netfx-check", f"{t}.netfx.err"),
+    )
+    return f"{build} && %msil_steps{steps}"
 
 
 ONE_SOURCE = ("%s", None, None, None, None)
@@ -2794,6 +3528,8 @@ substitutions = [
         ("%%{msil_prog_fail_%s}" % o, prog_build(o, PROG_PLACEHOLDERS, fail=True)[0])
         for o in ALL_LEVELS
     ],
+    # The loud-failure composite (plan 5.17.4, M24; see loud_pipeline).
+    *[("%%{msil_prog_loud_%s}" % o, loud_pipeline(o)) for o in ALL_LEVELS],
     (
         "%{msil_det}",
         "%msil_prog_build --det --level O2 --workdir %t.det.d"
@@ -2833,7 +3569,7 @@ substitutions = [
     ("%{msil_copts}", ""),
     # The --expect stem of every run of every composite (plan 5.12.3, M23):
     # <stem>[.<os>].expected; a directory or test that shares one expected
-    # file REDEFINEs it (c-testsuite's %S/exit0).
+    # file or keeps it outside %S REDEFINEs it (c-testsuite's %t/<name>).
     ("%{msil_expect}", "%S/%{s:stem}"),
     # msil_also_run for explicit RUN lines (see "more runtimes"; plan 5.12.3,
     # M23): the check comes first, so the image placeholder in its expansion
@@ -2904,12 +3640,21 @@ substitutions = [
     # (FunctionDecl::isMain in clang/lib/AST/Decl.cpp), so falling off main
     # must be an error; MSVCRT triples keep the implicit return
     # (isMSVCRTEntryPoint), natively and for MSIL alike. Directories may
-    # replace this (hosted C in phase 3). update-expected.py uses the same
-    # flags.
-    (
-        "%{msil_cflags}",
-        "-std=gnu17 -ffreestanding -Werror=return-type -I" + quote(inputs_dir),
-    ),
+    # replace this; a hosted directory's config.msil_enable_hosted does (see
+    # "hosted mode"). update-expected.py uses the same flags.
+    ("%{msil_cflags}", FREESTANDING_CFLAGS),
+    # The C headers of the triple for hosted compiles (plan 5.17.2; see
+    # "hosted mode"): --sysroot=<msil_glibc_sysroot> for Linux triples,
+    # empty otherwise.
+    ("%{msil_hosted_cflags}", hosted_cflags),
+    # The placeholders of plan 5.17.2 (M24), which a test REDEFINEs: the
+    # native oracle's options (--hosted for the hosted oracle; a hosted
+    # directory sets it), the hand-written expected files' rule
+    # '<os>[,<os>]: <reason>' of every native-oracle command (plan 5.17.4),
+    # and the .NET Framework run's --skip-netfx '<reason>'.
+    ("%{msil_oracle_flags}", ""),
+    ("%{msil_expected_rule}", ""),
+    ("%{msil_netfx_skip}", ""),
     # -lm for non-Windows native triples, the compiler-rt builtins for MSVC
     # triples, else empty (see native_ldflags).
     ("%{msil_native_ldflags}", native_ldflags),
@@ -2943,6 +3688,11 @@ substitutions = [
     ("%msil_cil_dump", cil_dump_cmd),
     ("%msil_canon", canon_cmd),
     ("%msil_inputs", slashes(inputs_dir)),
+    # msil-steps.py (plan 5.17.10, M24): the steps of one composite level in
+    # one Python process; every --step=NAME is followed by its command line.
+    ("%msil_steps", script("msil-steps.py") + limits),
+    # Last, after every command that holds it (see limits above).
+    ("%{msil_limits}", limits_value),
 ]
 # lit treats each name as a regular expression; none of these names contains a
 # regex metacharacter that matters or is a prefix of another one, so a

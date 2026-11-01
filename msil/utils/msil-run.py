@@ -16,6 +16,7 @@
     msil-run.py [OPTIONS] --native --runner wsl [--] prog.elf  (E7 Linux oracle)
     msil-run.py --tool [--timeout S] [--mem-limit-mb N] -- TOOL [ARGS...]
     msil-run.py --tool --runner wsl [--wsl-distro D] [LIMITS] -- TOOL [ARGS...]
+    msil-run.py --runner wsl --steps FILE      (several steps in one wsl.exe)
 
 The transcript is the program's stdout, followed by one status line, with
 every run of CRs before an LF (the regular expression \\r+\\n) replaced by a
@@ -29,6 +30,7 @@ status lines are:
     [exit N]                      exit status N, 0 <= N <= 255
     [exit N: outside 0..255]      any other exit status; never matches (D37)
     [unhandled exception: T]      the CLR reported an unhandled exception T
+    [failfast]                    the program called Environment.FailFast
     [signal N]                    killed by signal N (POSIX)
     [timeout]                     still running after --timeout seconds
     [memory limit]                hit the --mem-limit-mb memory cap
@@ -38,6 +40,18 @@ newline. Linux keeps only the low 8 bits of an exit status, so a status above
 255 that Windows reports in full is never accepted (plan D37). N is decimal
 (signed on Windows), except for Windows exception and HRESULT codes
 (0x80000000..0xEFFFFFFF, for example 0xC0000005), which are hexadecimal.
+
+'[failfast]' (plan 5.17.4; the trap thunks of loud failures) is the status
+of a managed program ('dotnet exec' or --netfx) that ended in
+Environment.FailFast, which the runtimes report differently (measured
+2026-10-29 with FailFast(string) and FailFast(string, Exception)): on Windows
+the .NET Framework 4.8, .NET 8 and .NET 10 exit with 0x80131623
+(COR_E_FAILFAST; '[exit 0x80131623: outside 0..255]' without the mapping),
+and on Linux .NET 8 and 10 print 'Process terminated.' on stderr and abort
+(SIGABRT; '[signal 6]' without it). So the status is '[failfast]' for exit
+status 0x80131623 on Windows, and for signal 6 after a stderr line that
+starts with 'Process terminated.' on POSIX (also inside WSL). A --native
+program is never mapped: its abort() stays '[signal 6]'.
 
 The program runs from a fresh private directory that holds only a copy of it
 (and of its runtimeconfig.json and --dep files): two assemblies with the same name in one
@@ -85,7 +99,45 @@ file exists, else STEM.expected; <os> (windows, linux or darwin) comes from
 --expect-os, which lit sets from the target triple (default: linux with
 --runner wsl, else the host's). A mismatch prints a unified diff and exits 1.
 --out FILE also writes the transcript to FILE. Without --expect the
-transcript goes to stdout.
+transcript goes to stdout. --stderr-out FILE (plan 5.17.4) writes the
+program's stderr, under the transcript newline rule, to FILE whenever the
+program ran (with --runner wsl: what the run inside WSL wrote to stderr), for
+the FileCheck of a loud failure's message; a run that fails before the
+program starts or is skipped leaves no FILE (an old one is removed).
+
+--skip-netfx REASON (with --netfx; plan 5.17.4, lit's %{msil_netfx_skip})
+runs nothing: after the usage checks it prints 'msil-run: netfx run
+skipped: REASON' on stdout and exits with status 0 (a program that needs
+what the .NET Framework lacks, such as the attribute of --uco-thunks).
+
+--expected-rule RULE (with --native; plan 5.17.4, %{msil_expected_rule}) is
+empty (no rule, as when it is left out) or '<os>[,<os>]: <reason>', where
+each <os> is windows or linux and the reason holds no single quote, the
+grammar of msil-prog.py --expected-rule. When RULE names the OS of
+--expect-os, the test's expected file for that OS is written by hand and the
+native oracle is not run: after the usage checks msil-run.py prints
+'msil-run: native oracle skipped (hand-written expected file): <reason>' on
+stdout and exits with status 0 (msil-prog.py --mode native skipped the build
+the same way). A malformed RULE is a usage error.
+
+--runner wsl --steps FILE (plan 5.17.10; msil-steps.py) runs the steps that
+FILE lists, msil-run.py and msil-jitall.py runs with --runner wsl, in order
+and through one wsl.exe for each run of consecutive steps of one
+distribution, instead of one wsl.exe per step: FILE is JSON, {"version": 1,
+"steps": [{"name": N, "script": "msil-run.py" or "msil-jitall.py", "argv":
+[ARG...], "display": TEXT}, ...]}, where argv is the step's own command line
+after the script and display (optional) a line printed before the step's
+output. Each step's command line inside WSL is the one its own wsl.exe would
+run; a copy of this script inside WSL (the internal --steps-inside) runs
+them one by one, each under the wall-clock limit its own wsl.exe would have
+had (its --timeout plus the WSL start-up grace), and stops after the first
+one that cannot pass. Back on Windows every step is judged and reported in
+order exactly as its own run would be, with the same messages, and the
+first failing step ends the list with its exit status. A step that needs no
+WSL (a skip of --skip-netfx or --expected-rule, a step without --runner wsl)
+or that fails before it would start wsl.exe (a usage or configuration
+error) runs by itself in its turn. --steps takes no other option; its exit
+status is that of the first failing step, else 0.
 
 --tool runs any other program (ilasm, a verifier, a compiler) under the same
 timeout and memory cap, from the current directory, passing its output and
@@ -112,14 +164,20 @@ with 137 there. host_startup_failure() recognizes the messages (msil-jitall.py
 uses it too). An out-of-memory start-up failure (HRESULT 0x8007000E or
 0x80070008) is the memory cap at work and gives '[memory limit]'.
 
-Exit status: 0 on success; 1 on a mismatch or when the program's exit status
-is outside 0..255 (the transcript is still written); 2 on a usage or
-configuration error. With --tool, the tool's own status (1 when it hit the
-timeout or the memory cap, 2 when it could not be started).
+Exit status: 0 on success (and for a skipped run); 1 on a mismatch or when
+the program's exit status is outside 0..255 (the transcript is still
+written); 2 on a usage or configuration error. With --tool, the tool's own
+status (1 when it hit the timeout or the memory cap, 2 when it could not be
+started). main(argv) returns the status, for a usage error too, so
+msil-steps.py runs this script as a function.
 """
 
 import argparse
+import base64
+import contextlib
 import difflib
+import importlib.util
+import json
 import os
 import re
 import shutil
@@ -159,13 +217,30 @@ HOST_STARTUP_RE = re.compile(
 )
 STATUS_RE = re.compile(
     r"^\[(?:exit -?\w+(?:: outside 0\.\.255)?|unhandled exception: .*|signal \d+"
-    r"|timeout|memory limit)\]$"
+    r"|timeout|memory limit|failfast)\]$"
 )
 OUTSIDE_RE = re.compile(r"^\[exit (-?\w+): outside 0\.\.255\]$")
 NEWLINE_RE = re.compile(r"\r+\n")
+# Environment.FailFast (see '[failfast]' above): Windows runtimes exit with
+# COR_E_FAILFAST; CoreCLR on Linux prints 'Process terminated.' and aborts.
+COR_E_FAILFAST = 0x80131623
+SIGABRT = 6
+FAILFAST_RE = re.compile(r"^Process terminated\.", re.M)
+# --expected-rule (plan 5.17.4): the operating systems a rule may name.
+RULE_OSES = ("windows", "linux")
+NETFX_SKIP = "netfx run skipped: %s"
+RULE_SKIP = "native oracle skipped (hand-written expected file): %s"
+# --steps: the version of FILE and of the internal file of --steps-inside,
+# and the prefix of the result lines that the copy inside WSL prints.
+STEPS_VERSION = 1
+STEP_RESULT = "MSIL-STEP "
 
 
 class ConfigError(Exception):
+    pass
+
+
+class UsageError(Exception):
     pass
 
 
@@ -176,6 +251,8 @@ class LimitedResult:
         self.stderr = stderr
         self.timed_out = timed_out
         self.memory_limit = memory_limit
+        # --steps: why the shared wsl.exe could not run at all, else None.
+        self.error = None
 
 
 def host_startup_failure(stderr_text):
@@ -537,7 +614,17 @@ def describe_exit(rc):
     return "%d" % rc
 
 
-def status_line(res, stderr_text):
+def is_failfast(rc, stderr_text):
+    """Whether a managed program's exit status rc (and its stderr) is the end
+    of Environment.FailFast on this OS (see '[failfast]' above)."""
+    if IS_WINDOWS:
+        return rc == COR_E_FAILFAST
+    return rc == -SIGABRT and bool(FAILFAST_RE.search(stderr_text))
+
+
+def status_line(res, stderr_text, managed=False):
+    """The status line of a run; managed: a 'dotnet exec' or --netfx run,
+    whose Environment.FailFast is '[failfast]'."""
     if res.timed_out:
         return "[timeout]"
     if res.memory_limit:
@@ -546,6 +633,8 @@ def status_line(res, stderr_text):
     if m:
         return "[unhandled exception: %s]" % m.group(1)
     rc = res.returncode
+    if managed and is_failfast(rc, stderr_text):
+        return "[failfast]"
     if rc < 0:  # POSIX: killed by a signal
         return "[signal %d]" % -rc
     if rc <= 255:
@@ -732,12 +821,15 @@ def run_local(args):
                 "the dotnet host could not start %s (exit status %s): %s\n%s"
                 % (name, describe_exit(res.returncode), failure, stderr_text)
             )
-    return make_transcript(res.stdout, status_line(res, stderr_text)), stderr_text
+    managed = bool(dotnet) or args.netfx
+    status = status_line(res, stderr_text, managed)
+    return make_transcript(res.stdout, status), stderr_text
 
 
-def run_wsl(args):
-    """Run 'dotnet exec' (or, with --native, a Linux executable) in WSL
-    through a copy of this script running there."""
+def wsl_inner_command(args):
+    """The command line that run_wsl() has wsl.exe run inside WSL (after
+    'wsl.exe -d <distro> --exec'), once the files are checked; raises
+    ConfigError. msil-run.py --steps runs the same command."""
     if not IS_WINDOWS:
         raise ConfigError("--runner wsl needs a Windows host")
     if not args.native and (
@@ -750,7 +842,6 @@ def run_wsl(args):
     if not os.path.isfile(args.program):
         raise ConfigError("%s not found" % args.program)
     check_stdin(args)
-    wsl = wsl_exe()
     assignments = ["%s=%s" % kv for kv in DOTNET_DEFAULTS]
     assignments += ["%s=%s" % kv for kv in parse_env_args(args.env)]
     if args.native:
@@ -763,7 +854,7 @@ def run_wsl(args):
             to_wsl_path(args.runtimeconfig),
         ]
     cmd = (
-        [wsl, "-d", args.wsl_distro, "--exec", "env"]
+        ["env"]
         + assignments
         + [
             "python3",
@@ -787,12 +878,34 @@ def run_wsl(args):
     for d in args.dep_dir:
         cmd += ["--dep-dir", to_wsl_path(d)]
     cmd += ["--", to_wsl_path(args.program)] + args.args
+    return cmd
+
+
+def wsl_env():
     env = dict(os.environ)
     set_env_var(env, "WSL_UTF8", "1")  # wsl.exe's own messages, not UTF-16
+    return env
+
+
+def run_wsl(args):
+    """Run 'dotnet exec' (or, with --native, a Linux executable) in WSL
+    through a copy of this script running there."""
+    inner = wsl_inner_command(args)
+    wsl = wsl_exe()
+    cmd = [wsl, "-d", args.wsl_distro, "--exec"] + inner
     try:
-        res = run_limited(cmd, None, env, args.timeout + WSL_GRACE, args.mem_limit_mb)
+        res = run_limited(
+            cmd, None, wsl_env(), args.timeout + WSL_GRACE, args.mem_limit_mb
+        )
     except OSError as e:
         raise ConfigError("cannot run %s: %s" % (wsl, e))
+    return wsl_result(args, res)
+
+
+def wsl_result(args, res):
+    """(transcript, stderr text) of the wsl.exe run of wsl_inner_command(args)
+    whose result is res; raises ConfigError when the copy inside WSL did not
+    get as far as a transcript."""
     stderr_text = text_of(res.stderr)
     if res.timed_out:
         return make_transcript(b"", "[timeout]"), stderr_text + (
@@ -900,8 +1013,81 @@ def run_tool_wsl(args):
     return pass_through(res, args.program, args.timeout + WSL_GRACE, args.mem_limit_mb)
 
 
-def parse_args(argv):
-    p = argparse.ArgumentParser(
+def parse_expected_rule(value):
+    """--expected-rule (plan 5.17.4; msil-prog.py's grammar and messages): None
+    for an empty or blank value, else (the set of operating systems it names,
+    the reason) for '<os>[,<os>]: <reason>'; raises ValueError otherwise."""
+    text = value.strip()
+    if not text:
+        return None
+    names, sep, reason = text.partition(":")
+    if not sep:
+        raise ValueError("%r is not '<os>[,<os>]: <reason>'" % text)
+    oses = [n.strip() for n in names.split(",")]
+    for name in oses:
+        if name not in RULE_OSES:
+            raise ValueError(
+                "%r names %r, which is not an operating system of a rule "
+                "(windows or linux)" % (text, name)
+            )
+    if len(set(oses)) != len(oses):
+        raise ValueError("%r names an operating system twice" % text)
+    reason = reason.strip()
+    if not reason:
+        raise ValueError("%r gives no reason" % text)
+    if "'" in reason:
+        raise ValueError(
+            "the reason of %r holds a single quote (lit quotes the rule with "
+            "single quotes)" % text
+        )
+    return frozenset(oses), reason
+
+
+class _QuietParser(argparse.ArgumentParser):
+    """A parser that raises UsageError instead of printing: --steps parses
+    every step before its turn, and a step with a usage error then runs by
+    itself in its turn, where main() prints the message."""
+
+    def error(self, message):
+        raise UsageError(message)
+
+    def exit(self, status=0, message=None):
+        raise UsageError(message or "exit status %d" % status)
+
+    def print_help(self, file=None):
+        raise UsageError("help")
+
+
+# The options --steps refuses (dest, default): each step has its own.
+_STEP_REFUSED = (
+    ("native", False),
+    ("netfx", False),
+    ("tool", False),
+    ("wsl_distro", "Ubuntu"),
+    ("dotnet", None),
+    ("runtimeconfig", None),
+    ("env", []),
+    ("stdin", None),
+    ("dep", []),
+    ("dep_dir", []),
+    ("timeout", DEFAULT_TIMEOUT),
+    ("mem_limit_mb", DEFAULT_MEM_LIMIT_MB),
+    ("out", None),
+    ("expect", None),
+    ("expect_os", None),
+    ("show_stderr", False),
+    ("stage", False),
+    ("stderr_out", None),
+    ("skip_netfx", None),
+    ("expected_rule", None),
+)
+
+
+def parse_args(argv, quiet=False):
+    """The options of argv; quiet: raise UsageError instead of printing a
+    usage error and exiting."""
+    parser = _QuietParser if quiet else argparse.ArgumentParser
+    p = parser(
         description=__doc__.splitlines()[0],
         usage="%(prog)s [options] [--] program [args...]",
     )
@@ -985,6 +1171,30 @@ def parse_args(argv):
         "temporary directory (a precaution for a DrvFs mount with 'metadata' "
         "and a restrictive fmask, which makes the original non-executable)",
     )
+    p.add_argument(
+        "--stderr-out",
+        metavar="FILE",
+        help="also write the program's stderr to FILE",
+    )
+    p.add_argument(
+        "--skip-netfx",
+        metavar="REASON",
+        help="with --netfx: run nothing, print 'netfx run skipped: REASON' and "
+        "exit with status 0",
+    )
+    p.add_argument(
+        "--expected-rule",
+        metavar="RULE",
+        help="with --native: '<os>[,<os>]: <reason>' (or empty); when it names "
+        "--expect-os, skip the run (a hand-written expected file)",
+    )
+    p.add_argument(
+        "--steps",
+        metavar="FILE",
+        help="with --runner wsl: run the msil-run.py and msil-jitall.py steps "
+        "of FILE through one wsl.exe",
+    )
+    p.add_argument("--steps-inside", metavar="FILE", help=argparse.SUPPRESS)
     # Everything after the first '--' (or from the first positional on) is the
     # program and its arguments, even if it looks like an option.
     if "--" in argv:
@@ -995,6 +1205,19 @@ def parse_args(argv):
         p.add_argument("command", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
         args = p.parse_args(argv)
         rest = args.command
+    args.rule = None
+    if args.steps is not None or args.steps_inside is not None:
+        refused = [d for d, default in _STEP_REFUSED if getattr(args, d) != default]
+        if (
+            rest
+            or refused
+            or (args.steps is not None) == (args.steps_inside is not None)
+        ):
+            p.error("--steps FILE takes no program and no option but --runner wsl")
+        if args.steps is not None and args.runner != "wsl":
+            p.error("--steps needs --runner wsl")
+        args.program, args.args = None, []
+        return args
     if not rest:
         if args.dep:
             p.error(
@@ -1015,11 +1238,81 @@ def parse_args(argv):
         args.expect_os = "linux" if args.runner == "wsl" else host_os()
     if args.netfx and not IS_WINDOWS:
         p.error("--netfx is only available on Windows")
+    if args.stderr_out is not None and args.tool:
+        p.error("--stderr-out writes a program's stderr, not a --tool's")
+    if args.skip_netfx is not None:
+        if not args.netfx:
+            p.error("--skip-netfx needs --netfx")
+        if not args.skip_netfx.strip():
+            p.error("--skip-netfx needs a reason")
+    if args.expected_rule is not None:
+        if not args.native:
+            p.error("--expected-rule needs --native")
+        try:
+            args.rule = parse_expected_rule(args.expected_rule)
+        except ValueError as e:
+            p.error("--expected-rule: %s" % e)
     return args
 
 
+def exit_status(e):
+    """The status of argparse's SystemExit (2 for a usage error, 0 for --help)."""
+    return e.code if isinstance(e.code, int) else (0 if e.code is None else 2)
+
+
+def skip_message(args):
+    """The line of a skipped run (--skip-netfx, or an --expected-rule that
+    names --expect-os), without the 'msil-run: ' prefix, or None."""
+    if args.program is None:
+        return None
+    if args.skip_netfx is not None:
+        return NETFX_SKIP % args.skip_netfx
+    if args.rule is not None and args.expect_os in args.rule[0]:
+        return RULE_SKIP % args.rule[1]
+    return None
+
+
+def planned_skip(argv):
+    """For msil-steps.py: (the skip line, the --stderr-out FILE or None) when
+    the msil-run.py command line argv is a skipped run, else None."""
+    try:
+        args = parse_args(list(argv), quiet=True)
+    except UsageError:
+        return None
+    message = skip_message(args)
+    return (message, args.stderr_out) if message is not None else None
+
+
+def remove_stale(*paths):
+    """Remove the output files of an earlier run (best effort)."""
+    for path in paths:
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 def main(argv=None):
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        args = parse_args(sys.argv[1:] if argv is None else list(argv))
+    except SystemExit as e:
+        return exit_status(e)
+    if args.steps_inside is not None:
+        return run_steps_inside(args.steps_inside)
+    if args.steps is not None:
+        try:
+            steps = read_steps(args.steps)
+        except ConfigError as e:
+            sys.stderr.write("msil-run: error: %s\n" % e)
+            return 2
+        return run_steps(steps)[0]
+    skip = skip_message(args)
+    if skip is not None:
+        remove_stale(args.out, args.stderr_out)
+        emit(sys.stdout, "msil-run: %s\n" % skip)
+        return 0
+    remove_stale(args.stderr_out)
     try:
         if args.tool:
             return run_tool(args)
@@ -1030,9 +1323,17 @@ def main(argv=None):
     except ConfigError as e:
         sys.stderr.write("msil-run: error: %s\n" % e)
         return 2
+    return finish(args, out, stderr_text)
 
+
+def finish(args, out, stderr_text):
+    """Report a run that produced the transcript out and the stderr text
+    stderr_text (main() after the run); return the exit status."""
     if args.show_stderr and stderr_text:
         emit(sys.stderr, stderr_text)
+    if args.stderr_out:
+        with open(args.stderr_out, "w", encoding="utf-8", newline="\n") as f:
+            f.write(stderr_text)
     if args.out:
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
             f.write(out)
@@ -1074,6 +1375,354 @@ def main(argv=None):
     if stderr_text and not args.show_stderr:
         sys.stderr.write("---- program stderr ----\n" + stderr_text)
     return 1
+
+
+# ---------------------------------------------------------------- --steps
+# msil-run.py --runner wsl --steps FILE (plan 5.17.10; see the docstring).
+# Each script that may be a step (this one and msil-jitall.py) provides
+# batch_prepare(argv), which parses and checks the step without printing
+# anything and returns a Prepared step for a run that goes into the shared
+# wsl.exe (None: the step runs by itself in its turn, through main(argv)),
+# and batch_report(prepared, result), which judges and reports the step from
+# the result of its command inside WSL exactly as its own wsl.exe run would
+# have been, and returns the exit status.
+STEP_SCRIPTS = ("msil-run.py", "msil-jitall.py")
+
+
+class Prepared:
+    """A step of --steps that runs inside a shared wsl.exe: the command after
+    'wsl.exe -d <distro> --exec', its wall-clock limit inside WSL, its memory
+    cap, and when the copy inside WSL must stop after it: always (stop), or
+    unless its stdout is the transcript expect (or None)."""
+
+    def __init__(
+        self, args, distro, argv, limit, mem_limit_mb, expect=None, stop=False
+    ):
+        self.args = args
+        self.distro = distro
+        self.argv = argv
+        self.limit = limit
+        self.mem_limit_mb = mem_limit_mb
+        self.expect = expect
+        self.stop = stop
+
+    def inner_spec(self):
+        return {
+            "argv": self.argv,
+            "limit": self.limit,
+            "expect": self.expect,
+            "stop": self.stop,
+        }
+
+
+def batch_prepare(argv):
+    """--steps: the Prepared step of the msil-run.py command line argv when it
+    runs a program in WSL, else None; prints nothing."""
+    try:
+        args = parse_args(list(argv), quiet=True)
+    except UsageError:
+        return None
+    if (
+        args.program is None
+        or args.tool
+        or args.runner != "wsl"
+        or skip_message(args) is not None
+    ):
+        return None
+    try:
+        inner = wsl_inner_command(args)
+    except ConfigError:
+        return None
+    expect, stop = None, False
+    if args.expect:
+        exp_path = expected_file(args.expect, args.expect_os)
+        if exp_path is None:
+            stop = True  # it fails: 'no expected file'
+        else:
+            try:
+                with open(exp_path, "r", encoding="utf-8", newline="") as f:
+                    expect = fold_newlines(f.read())
+            except (OSError, ValueError):
+                return None
+    return Prepared(
+        args,
+        args.wsl_distro,
+        inner,
+        args.timeout + WSL_GRACE,
+        args.mem_limit_mb,
+        expect,
+        stop,
+    )
+
+
+def batch_report(prepared, res):
+    """--steps: report the step prepared, whose command ran inside a shared
+    wsl.exe with the result res, as main() reports its own run; return the
+    exit status."""
+    args = prepared.args
+    remove_stale(args.stderr_out)
+    try:
+        if res.error:
+            raise ConfigError(res.error)
+        out, stderr_text = wsl_result(args, res)
+    except ConfigError as e:
+        sys.stderr.write("msil-run: error: %s\n" % e)
+        return 2
+    return finish(args, out, stderr_text)
+
+
+def read_steps(path):
+    """The steps of --steps FILE (see the docstring); raises ConfigError."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            spec = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigError("cannot read --steps %s: %s" % (path, e))
+    steps = spec.get("steps") if isinstance(spec, dict) else None
+    if (
+        not isinstance(spec, dict)
+        or spec.get("version") != STEPS_VERSION
+        or not isinstance(steps, list)
+    ):
+        raise ConfigError(
+            "--steps %s is not a steps file of version %d" % (path, STEPS_VERSION)
+        )
+    for n, step in enumerate(steps, 1):
+        if not (
+            isinstance(step, dict)
+            and step.get("script") in STEP_SCRIPTS
+            and isinstance(step.get("argv"), list)
+            and all(isinstance(a, str) for a in step["argv"])
+            and isinstance(step.get("display", ""), str)
+        ):
+            raise ConfigError(
+                '--steps %s: step %d is not {"script": "msil-run.py" or '
+                '"msil-jitall.py", "argv": [ARG...]}' % (path, n)
+            )
+    return steps
+
+
+class _ThisScript:
+    """This module as a step script (msil-steps.py loads it under another
+    name, so sys.modules cannot name it)."""
+
+    def __init__(self):
+        self.__file__ = os.path.abspath(__file__)
+        self.main = main
+        self.batch_prepare = batch_prepare
+        self.batch_report = batch_report
+
+
+_step_scripts = {}
+
+
+def load_step_script(script):
+    """The module of a step script of --steps: this one, or msil-jitall.py
+    (loaded once; it loads its own copy of this file)."""
+    if script not in _step_scripts:
+        if script == "msil-run.py":
+            _step_scripts[script] = _ThisScript()
+        else:
+            saved = sys.dont_write_bytecode  # no __pycache__ in msil/utils
+            sys.dont_write_bytecode = True
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    "msil_steps_" + script.replace("-", "_").replace(".", "_"),
+                    os.path.join(os.path.dirname(os.path.abspath(__file__)), script),
+                )
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+            finally:
+                sys.dont_write_bytecode = saved
+            _step_scripts[script] = module
+    return _step_scripts[script]
+
+
+@contextlib.contextmanager
+def as_script(path):
+    """Run a script's main() in this process under its own name (argparse
+    takes the program name of its messages from sys.argv[0])."""
+    saved = sys.argv
+    sys.argv = [path] + list(saved[1:])
+    try:
+        yield
+    finally:
+        sys.argv = saved
+
+
+def call_main(module, argv):
+    """module.main(argv) under the script's own name; its exit status."""
+    with as_script(module.__file__):
+        try:
+            status = module.main(list(argv))
+        except SystemExit as e:
+            status = exit_status(e)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    return 0 if status is None else status
+
+
+def run_group(prepared):
+    """Run the commands of the Prepared steps prepared (one distribution)
+    inside one wsl.exe; return one LimitedResult per step."""
+    tmp = tempfile.mkdtemp(prefix="msil-run-steps-")
+    wsl = wsl_exe()
+    limit = sum(p.limit for p in prepared) + WSL_GRACE
+    try:
+        inner = os.path.join(tmp, "steps.json")
+        with open(inner, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(
+                {"version": STEPS_VERSION, "steps": [p.inner_spec() for p in prepared]},
+                f,
+            )
+        cmd = [
+            wsl,
+            "-d",
+            prepared[0].distro,
+            "--exec",
+            "python3",
+            to_wsl_path(os.path.abspath(__file__)),
+            "--steps-inside",
+            to_wsl_path(inner),
+        ]
+        res = run_limited(
+            cmd, None, wsl_env(), limit, max(p.mem_limit_mb for p in prepared)
+        )
+    except (OSError, ConfigError) as e:
+        failed = LimitedResult(None, b"", b"", False, False)
+        failed.error = "cannot run %s: %s" % (wsl, e)
+        return [failed] * len(prepared)
+    finally:
+        remove_tree(tmp)
+    records, other = {}, []
+    for line in res.stdout.split(b"\n"):
+        text = line.rstrip(b"\r").decode("utf-8", "replace")
+        if text.startswith(STEP_RESULT):
+            try:
+                rec = json.loads(text[len(STEP_RESULT) :])
+                records[rec["step"]] = LimitedResult(
+                    rec["rc"],
+                    base64.b64decode(rec["stdout"]),
+                    base64.b64decode(rec["stderr"]),
+                    bool(rec["timed_out"]),
+                    False,
+                )
+                continue
+            except (ValueError, KeyError, TypeError):
+                pass
+        other.append(line)
+    rest = b"\n".join(other).strip(b"\r\n")
+    results = []
+    for k in range(len(prepared)):
+        if k in records:
+            results.append(records[k])
+        elif res.timed_out:
+            # wsl.exe itself ran out of time; the step's own limit is the
+            # one it reports.
+            results.append(LimitedResult(None, b"", b"", True, False))
+        else:
+            # The copy inside WSL never got to this step (it failed itself,
+            # or wsl.exe did): as from a wsl.exe of the step's own.
+            results.append(LimitedResult(res.returncode, rest, b"", False, False))
+    # wsl.exe's own messages (and those of the copy inside WSL) go with the
+    # first step without a result of its own, else with the first step.
+    missing = [k for k in range(len(prepared)) if k not in records]
+    target = results[missing[0] if missing else 0]
+    target.stderr = res.stderr + target.stderr
+    return results
+
+
+def run_steps(steps, header=None, load=None):
+    """Run the steps of --steps (dicts with 'script' and 'argv', optionally
+    'name' and 'display') in order; return (the exit status of the first
+    failing step, else 0; its index, else None). header(i) prints the header
+    of step i before its output (default: its 'display' line, if any);
+    load(script) returns a step script's module (default: load_step_script)."""
+    load = load or load_step_script
+    modules = [load(s["script"]) for s in steps]
+    prepared = [m.batch_prepare(list(s["argv"])) for m, s in zip(modules, steps)]
+    results = {}
+    for i, step in enumerate(steps):
+        if prepared[i] is not None and i not in results:
+            # The run of consecutive inner steps of one distribution from here.
+            j = i
+            while (
+                j < len(steps)
+                and prepared[j] is not None
+                and prepared[j].distro == prepared[i].distro
+            ):
+                j += 1
+            for k, res in zip(range(i, j), run_group(prepared[i:j])):
+                results[k] = res
+        if header is not None:
+            header(i)
+        elif step.get("display"):
+            emit(sys.stdout, step["display"] + "\n")
+        if prepared[i] is None:
+            status = call_main(modules[i], step["argv"])
+        else:
+            with as_script(modules[i].__file__):
+                status = modules[i].batch_report(prepared[i], results[i])
+            sys.stdout.flush()
+            sys.stderr.flush()
+        if status != 0:
+            return status, i
+    return 0, None
+
+
+def run_steps_inside(path):
+    """--steps-inside FILE (inside WSL, for --steps): run each command of
+    FILE in order under its wall-clock limit, print one result line per
+    command, and stop after the first one that cannot pass (a status other
+    than 0, a timeout, the step's stop flag, or stdout other than the
+    expected transcript)."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            steps = json.load(f)["steps"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        sys.stderr.write("msil-run: error: cannot read %s: %s\n" % (path, e))
+        return 2
+    for i, step in enumerate(steps):
+        timed_out = False
+        try:
+            proc = subprocess.Popen(
+                step["argv"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=not IS_WINDOWS,
+            )
+        except OSError as e:
+            rc, out = 1, b""
+            err = ("msil-run: cannot run %s: %s\n" % (step["argv"][0], e)).encode()
+        else:
+            try:
+                out, err = proc.communicate(timeout=step["limit"])
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                if IS_WINDOWS:
+                    proc.kill()
+                else:
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                out, err = proc.communicate()
+            rc = proc.returncode
+        record = {
+            "step": i,
+            "rc": rc,
+            "timed_out": timed_out,
+            "stdout": base64.b64encode(out).decode("ascii"),
+            "stderr": base64.b64encode(err).decode("ascii"),
+        }
+        sys.stdout.write(STEP_RESULT + json.dumps(record) + "\n")
+        sys.stdout.flush()
+        if timed_out or rc != 0 or step.get("stop"):
+            break
+        if step.get("expect") is not None and text_of(out) != step["expect"]:
+            break
+    return 0
 
 
 if __name__ == "__main__":

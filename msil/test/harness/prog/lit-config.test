@@ -65,24 +65,27 @@
 # RUN: %{harness_check} contains %t.4.log "fatal: msil: --param msil_link_output=bogus: use pe or il$"
 
 # (5), (6)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_ld= %S/Inputs/nested > %t.5.log 2>&1
+# Each nested run below whose probe fails (a missing or broken tool) passes
+# --param msil_probe_cache= (empty), so it neither reads the parent's probe
+# cache nor replaces it with its own probes (plan 5.17.10; probe-cache.test).
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_ld= %S/Inputs/nested > %t.5.log 2>&1
 # RUN: %{harness_check} contains %t.5.log "fatal: msil: msil_require_link=1, but these are missing: msil-ld \(--param msil_ld=PATH; build the lld target\)$"
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_ar= %S/Inputs/nested > %t.6.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_linux_sysroot= --param msil_require_link=1 --param msil_ar= %S/Inputs/nested > %t.6.log 2>&1
 # RUN: %{harness_check} contains %t.6.log "fatal: msil: msil_require_link=1, but these are missing: llvm-ar \(--param msil_ar=PATH; build the llvm-ar target\)$"
 
 # (7)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_ld= %S/Inputs/nested > %t.7.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_linux_sysroot= --param msil_pipeline=lto --param msil_ld= %S/Inputs/nested > %t.7.log 2>&1
 # RUN: %{harness_check} contains %t.7.log "fatal: msil: --param msil_pipeline=lto links every C test through msil-ld, but these are missing: msil-ld \(--param msil_ld=PATH; build the lld target\)$"
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_ld= %S/Inputs/nested > %t.7b.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_ld= %S/Inputs/nested > %t.7b.log 2>&1
 # RUN: %{harness_check} contains %t.7b.log "fatal: msil: --param msil_pipeline=obj links every C test through msil-ld, but these are missing: msil-ld \(--param msil_ld=PATH; build the lld target\)$"
 
 # (8)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_ld=%t.no-such-msil-ld %S/Inputs/nested > %t.8.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_linux_sysroot= --param msil_ld=%t.no-such-msil-ld %S/Inputs/nested > %t.8.log 2>&1
 # RUN: %{harness_check} contains %t.8.log "fatal: msil: msil_ld=\S*no-such-msil-ld: no such program$"
 
 # (9)
 # RUN: rm -rf %t.glibc && mkdir -p %t.glibc/usr/include
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_glibc_sysroot=%t.glibc %S/Inputs/nested > %t.9.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_linux_sysroot= --param msil_glibc_sysroot=%t.glibc %S/Inputs/nested > %t.9.log 2>&1
 # RUN: %{harness_check} contains %t.9.log "fatal: msil: msil_glibc_sysroot=\S*glibc has no usr/include/stdio\.h; make it with 'bash msil/utils/make-glibc-sysroot\.sh <dir>' inside WSL \(plan 5\.12\.8\)$"
 # RUN: %{harness_check} write %t.glibc/usr/include/stdio.h
 # RUN: %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_glibc_sysroot=%t.glibc %S/Inputs/nested/features.test > %t.9ok.log 2>&1
@@ -92,5 +95,5 @@
 # RUN: %{harness_check} lacks %t.9off.log "feature msil-glibc-sysroot"
 
 # (10)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_equiv=1 --param msil_cil_dump= --param msil_mdcanon= %S/Inputs/nested > %t.10.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_equiv=1 --param msil_cil_dump= --param msil_mdcanon= %S/Inputs/nested > %t.10.log 2>&1
 # RUN: %{harness_check} contains %t.10.log "fatal: msil: --param msil_equiv=1 compares %msil[_]canon listings, but neither llvm-cil-dump \(disabled by an empty --param msil_cil_dump= or [$]MSIL_CIL_DUMP\) nor mdcanon \(disabled by an empty --param msil_mdcanon=\) is available$"

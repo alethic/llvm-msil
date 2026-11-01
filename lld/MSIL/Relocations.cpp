@@ -24,6 +24,7 @@
 #include "Symbols.h"
 #include "Synthetic.h"
 #include "TokenMap.h"
+#include "TrailerDefFile.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
 #include "llvm/ADT/DenseSet.h"
@@ -314,7 +315,18 @@ std::optional<uint32_t> SymbolBinder::getDataField(Symbol *sym) {
   return index;
 }
 
+std::optional<uint32_t>
+SymbolBinder::getTrailerMethod(const Symbol *sym) const {
+  auto it = trailerMethods.find(sym);
+  if (it == trailerMethods.end())
+    return std::nullopt;
+  return it->second;
+}
+
 const void *SymbolBinder::getFnAddrKey(const Symbol *sym) const {
+  // A trailer definition's row, which all of its names share.
+  if (trailerMethods.count(sym))
+    return getTrailerDefinition(sym);
   if (auto *d = dyn_cast<DefinedFunction>(sym))
     return d->method;
   if (isa<NativeFunction>(sym))
@@ -336,7 +348,9 @@ std::optional<uint32_t> SymbolBinder::getFnAddrField(Symbol *sym) {
 
   OutputField of(OutputField::FnAddr);
   of.sym = sym;
-  if (auto *d = dyn_cast<DefinedFunction>(sym)) {
+  if (std::optional<uint32_t> method = getTrailerMethod(sym)) {
+    of.fnMethod = *method;
+  } else if (auto *d = dyn_cast<DefinedFunction>(sym)) {
     std::optional<uint32_t> method = out.getMethodOf(d->method);
     if (!method)
       return std::nullopt;

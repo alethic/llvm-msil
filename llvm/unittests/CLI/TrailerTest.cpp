@@ -25,7 +25,13 @@
 //   dlopen(path, 1) and dlsym (Dlfcn), called from '<msil>init_dataimports'
 //   before the relocations, never from .cctor itself, and
 //   EntryPointNotFoundException("data import '<name>' not found in <module>")
-//   for a missing symbol.
+//   for a missing symbol;
+// - trailer definitions (5.14.4, 5.14.11, M24): a TrailerInput::Defs request
+//   is emitted by its row's emitter after every other method and changes
+//   nothing else, in every shape above and in a two-phase library; a
+//   TrailerInput with only Defs emits only the definitions; and
+//   TrailerMethod::ImplFlags defaults to 0 (IL, managed), the value of every
+//   method that the builder emitted before M24 (S2).
 // A small CIL interpreter runs the recorded methods on a simulated heap: it
 // checks every store against the alignment it is allowed to assume (the
 // natural one, or that of an 'unaligned.' prefix), that the data block is
@@ -52,6 +58,7 @@
 #include "llvm/CLI/ImageLayout.h"
 #include "llvm/CLI/Opcodes.h"
 #include "llvm/CLI/Signature.h"
+#include "llvm/CLI/TrailerDefs.h"
 #include "llvm/Support/MathExtras.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -124,6 +131,8 @@ public:
   struct Method {
     std::string Name;
     MethodAttributes Flags = MethodAttributes::PrivateScope;
+    MethodImplAttributes ImplFlags = MethodImplAttributes::IL;
+    TrailerOwner Owner = TrailerOwner::Module;
     MethodSig Sig;
     std::vector<TypeSig> Locals;
     unsigned MaxStack = 0;
@@ -177,6 +186,8 @@ public:
     Method R;
     R.Name = std::string(M.Name);
     R.Flags = M.Flags;
+    R.ImplFlags = M.ImplFlags;
+    R.Owner = M.Owner;
     R.Sig = M.Sig;
     R.Locals.assign(M.Locals.begin(), M.Locals.end());
     R.MaxStack = M.Body.getMaxStack();
@@ -2172,6 +2183,258 @@ TEST(CLITrailerTest, DataImportsInLoopMode) {
     runAndCheckData(P, VM, {{P.Iob, Iob}, {P.Fmode, Fmode}, {P.GData, GData}});
     EXPECT_EQ(P.AtCtor, (std::vector<uint64_t>{Iob + 48, GData}));
   }
+}
+
+//===----------------------------------------------------------------------===//
+// Trailer definitions (5.14.4, M24)
+//===----------------------------------------------------------------------===//
+
+// Declares '__msil_compiler_barrier' through the sink before the trailer is
+// built, as the AsmPrinter's fillTrailerDefs and msil-ld's writer do
+// (5.14.11: a request's Method is what declareHelper returned for the row's
+// name), and requests its definition when Request is set.
+EntityRef declareBarrier(Program &P, bool Request) {
+  const TrailerDefInfo *Info = findTrailerDef("__msil_compiler_barrier");
+  if (!Info) {
+    ADD_FAILURE() << "no trailer definition '__msil_compiler_barrier'";
+    return 0;
+  }
+  EntityRef Ref =
+      P.Sink.declareHelper(Info->Name, getTrailerDefSignature(*Info));
+  if (Request) {
+    TrailerDefRequest R{};
+    R.Id = Info->Id;
+    R.Method = Ref;
+    P.In.Defs.push_back(R);
+  }
+  return Ref;
+}
+
+// '.method assembly static void '__msil_compiler_barrier'() cil managed
+// noinlining' in <Module> with the body 'ret' (5.14.4 T2, T4; D36).
+void checkBarrier(const RecordingSink &S, const RecordingSink::Method &M) {
+  EXPECT_EQ(M.Name, "__msil_compiler_barrier");
+  EXPECT_EQ(M.Flags, MethodAttributes::Assembly | MethodAttributes::Static);
+  EXPECT_EQ(M.ImplFlags, MethodImplAttributes::NoInlining);
+  EXPECT_EQ(M.Owner, TrailerOwner::Module);
+  EXPECT_TRUE(isVoid(M.Sig.Return));
+  EXPECT_TRUE(M.Sig.Params.empty());
+  EXPECT_TRUE(M.Sig == MethodSig());
+  EXPECT_TRUE(M.Locals.empty());
+  EXPECT_EQ(S.render(M), (Lines{"ret"}));
+  EXPECT_EQ(M.CodeSize, 1u);
+  EXPECT_EQ(M.MaxStack, 0u);
+  Interp VM(S);
+  Interp::Outcome O = VM.run(M, {});
+  EXPECT_EQ(VM.Failure, "");
+  EXPECT_FALSE(O.Threw);
+  EXPECT_FALSE(O.Ret.has_value());
+}
+
+// The entities, that is the sink calls that create them in call order, of two
+// builds are the same.
+void expectSameEntities(const RecordingSink &A, const RecordingSink &B) {
+  ASSERT_EQ(A.Entities.size(), B.Entities.size());
+  for (size_t K = 0; K != A.Entities.size(); ++K) {
+    const RecordingSink::Entity &X = A.Entities[K], &Y = B.Entities[K];
+    SCOPED_TRACE("entity " + std::to_string(K + 1) + " '" + X.Name + "'");
+    EXPECT_EQ(X.K, Y.K);
+    EXPECT_EQ(X.Name, Y.Name);
+    EXPECT_EQ(X.TypeName, Y.TypeName);
+    EXPECT_EQ(X.Bytes, Y.Bytes);
+    EXPECT_EQ(X.Bcl, Y.Bcl);
+    EXPECT_TRUE(X.Sig == Y.Sig);
+  }
+}
+
+// Two recorded methods are the same, instruction for instruction.
+void expectSameMethod(const RecordingSink &SA, const RecordingSink::Method &A,
+                      const RecordingSink &SB, const RecordingSink::Method &B) {
+  SCOPED_TRACE("method '" + A.Name + "'");
+  EXPECT_EQ(A.Name, B.Name);
+  EXPECT_EQ(A.Flags, B.Flags);
+  EXPECT_EQ(A.ImplFlags, B.ImplFlags);
+  EXPECT_EQ(A.Owner, B.Owner);
+  EXPECT_TRUE(A.Sig == B.Sig);
+  EXPECT_EQ(A.Locals, B.Locals);
+  EXPECT_EQ(A.MaxStack, B.MaxStack);
+  EXPECT_EQ(A.CodeSize, B.CodeSize);
+  EXPECT_EQ(SA.render(A), SB.render(B));
+  ASSERT_EQ(A.Code.size(), B.Code.size());
+  for (size_t K = 0; K != A.Code.size(); ++K) {
+    const RecordingSink::Instr &X = A.Code[K], &Y = B.Code[K];
+    EXPECT_TRUE(X.Op == Y.Op && X.Offset == Y.Offset && X.Imm == Y.Imm &&
+                X.FPBits == Y.FPBits && X.Token == Y.Token &&
+                X.Target == Y.Target && X.SwitchTargets == Y.SwitchTargets)
+        << "instruction " << K;
+  }
+}
+
+// Builds a program twice, each time with the barrier declared through the
+// sink, and requests the definition in the second build only: the request
+// adds the definition after every other method and changes no other method
+// and no other sink call (5.14.4 S2; M24.b).
+template <typename ProgramT>
+void expectDefinitionComesLast(StringRef What,
+                               function_ref<void(ProgramT &)> Make) {
+  SCOPED_TRACE(What);
+  ProgramT Without, With;
+  Make(Without);
+  Make(With);
+  declareBarrier(Without, /*Request=*/false);
+  declareBarrier(With, /*Request=*/true);
+  Without.build();
+  With.build();
+  const std::vector<RecordingSink::Method> &A = Without.Sink.Methods;
+  const std::vector<RecordingSink::Method> &B = With.Sink.Methods;
+  ASSERT_FALSE(A.empty());
+  ASSERT_EQ(B.size(), A.size() + 1) << "one request, one more method";
+  for (size_t K = 0; K != A.size(); ++K)
+    expectSameMethod(Without.Sink, A[K], With.Sink, B[K]);
+  checkBarrier(With.Sink, B.back());
+  expectSameEntities(Without.Sink, With.Sink);
+}
+
+TEST(CLITrailerTest, ImplFlagsDefaultToZero) {
+  // A TrailerMethod written with the members that the builder set before
+  // M24, as Trailer.cpp writes its methods: IL, managed (5.14.4 T4).
+  const MethodAttributes Static = MethodAttributes::Static;
+  TrailerMethod M{"m", Static, MethodSig(), {}, ILBuilder(false), {}};
+  EXPECT_EQ(unsigned(M.ImplFlags), 0u);
+  EXPECT_EQ(M.ImplFlags,
+            MethodImplAttributes::IL | MethodImplAttributes::Managed);
+  EXPECT_EQ(M.Owner, TrailerOwner::Module);
+  EXPECT_TRUE(TrailerInput().Defs.empty());
+
+  // Every method that the builder writes without a request keeps it, so the
+  // sinks, which write ImplFlags, write the text and rows of M23 (S2).
+  auto Check = [](const RecordingSink &S) {
+    EXPECT_FALSE(S.Methods.empty());
+    for (const RecordingSink::Method &R : S.Methods)
+      EXPECT_EQ(unsigned(R.ImplFlags), 0u) << R.Name;
+  };
+  {
+    Program P;
+    makeModuleInitializer(P);
+    P.build();
+    Check(P.Sink);
+  }
+  {
+    Program P;
+    makeGlobalRelocs(P, /*NumSlots=*/2);
+    P.In.RelocLoopThreshold = 1;
+    P.build();
+    Check(P.Sink);
+  }
+  for (DataImportHelper::Kind K :
+       {DataImportHelper::Kind::Kernel32, DataImportHelper::Kind::Dlfcn}) {
+    ImportProgram P;
+    P.make(K);
+    P.build();
+    Check(P.Sink);
+  }
+}
+
+TEST(CLITrailerTest, DefinitionFollowsTheGoldens) {
+  // module-initializer.ll's trailer with a constructor and a request: the
+  // '.cctor' and '<msil>Main' of HEAD's llc, then the definition.
+  Program P;
+  makeModuleInitializer(P);
+  EntityRef Ctor = P.Sink.method("ctor", sig(TypeSig(), {}));
+  P.In.Ctors = {{Ctor, false}};
+  declareBarrier(P, /*Request=*/true);
+  P.build();
+  EXPECT_EQ(P.Sink.methodNames(),
+            (std::vector<std::string>{".cctor", "<msil>Main",
+                                      "__msil_compiler_barrier"}));
+  Lines Cctor = lines(ModuleInitializerCctor);
+  Cctor.insert(Cctor.end() - 1, "call ctor");
+  EXPECT_EQ(P.Sink.render(".cctor"), Cctor);
+  EXPECT_EQ(P.Sink.render("<msil>Main"), lines(MainWithArgs));
+  const RecordingSink::Method *B = P.Sink.findMethod("__msil_compiler_barrier");
+  ASSERT_NE(B, nullptr);
+  checkBarrier(P.Sink, *B);
+  Interp VM(P.Sink);
+  runAndCheckData(P, VM);
+}
+
+TEST(CLITrailerTest, DefinitionComesAfterEveryOtherMethod) {
+  expectDefinitionComesLast<Program>(
+      "module initializer and constructor", [](Program &P) {
+        makeModuleInitializer(P);
+        P.In.Ctors = {{P.Sink.method("ctor", sig(TypeSig(), {})), false}};
+      });
+  expectDefinitionComesLast<Program>("relocation loop", [](Program &P) {
+    makeGlobalRelocs(P, /*NumSlots=*/2);
+    P.In.RelocLoopThreshold = 1;
+  });
+  expectDefinitionComesLast<Program>("unaligned, loop mode", [](Program &P) {
+    makeUnaligned(P, /*NumSlots=*/1);
+    P.In.RelocLoopThreshold = 0;
+  });
+  expectDefinitionComesLast<Program>("entry point only", [](Program &P) {
+    P.In.Entry = entry(P.Sink.method("main", sig(tI4(), {})), false);
+  });
+  expectDefinitionComesLast<Program>("constructors only", [](Program &P) {
+    P.In.Ctors = {{P.Sink.method("c1", sig(tI4(), {})), true},
+                  {P.Sink.method("c2", sig(TypeSig(), {})), false}};
+  });
+  expectDefinitionComesLast<ImportProgram>(
+      "data imports (Kernel32)",
+      [](ImportProgram &P) { P.make(DataImportHelper::Kind::Kernel32); });
+  expectDefinitionComesLast<ImportProgram>(
+      "data imports (dlfcn) in loop mode", [](ImportProgram &P) {
+        P.make(DataImportHelper::Kind::Dlfcn, /*NumSlots=*/2,
+               /*Threshold=*/0);
+      });
+  // A -shared output (M22): '<msil>Data'::.cctor, <Module>::.cctor with the
+  // library type, the cross-assembly relocation and the constructor, then
+  // the definition, which a library defines too (scope Any).
+  auto MakeLibrary = [](Program &P) {
+    makeModuleInitializer(P);
+    P.In.Entry.reset();
+    P.In.TwoPhase = true;
+    P.In.LibraryTypes = {P.Sink.field("lib.Exports")};
+    CrossReloc X{};
+    X.Site = 16; // table[4], in the image
+    X.Width = 4;
+    X.Accessor = P.Sink.method("lib_data", sig(tNI(), {}));
+    X.Addend = 8;
+    P.In.CrossRelocs = {X};
+    P.In.Ctors = {{P.Sink.method("ctor", sig(TypeSig(), {})), false}};
+  };
+  expectDefinitionComesLast<Program>("two-phase library", MakeLibrary);
+  // That shape is two-phase: phase 1 is a method of '<msil>Data', while the
+  // definition stays a method of <Module> (5.14.4 T4).
+  Program P;
+  MakeLibrary(P);
+  declareBarrier(P, /*Request=*/true);
+  P.build();
+  EXPECT_TRUE(any_of(P.Sink.Methods, [](const RecordingSink::Method &M) {
+    return M.Owner == TrailerOwner::Data;
+  }));
+  ASSERT_FALSE(P.Sink.Methods.empty());
+  EXPECT_EQ(P.Sink.Methods.back().Name, "__msil_compiler_barrier");
+  EXPECT_EQ(P.Sink.Methods.back().Owner, TrailerOwner::Module);
+}
+
+TEST(CLITrailerTest, OnlyDefinitionsEmitOnlyThem) {
+  Program P;
+  EntityRef Ref = declareBarrier(P, /*Request=*/true);
+  P.build();
+  EXPECT_EQ(P.Sink.methodNames(),
+            (std::vector<std::string>{"__msil_compiler_barrier"}));
+  // The builder asked the sink for nothing else: no data field, image, BCL
+  // member, helper or user string; the one entity is the test's declaration.
+  ASSERT_EQ(P.Sink.Entities.size(), 1u);
+  EXPECT_EQ(P.Sink.Entities[0].K, Kind::Helper);
+  ASSERT_EQ(P.Sink.Methods.size(), 1u);
+  const RecordingSink::Method &M = P.Sink.Methods[0];
+  checkBarrier(P.Sink, M);
+  // The definition is the declared method: the same name and signature,
+  // which the sinks pair by name (5.9.10, as for '<msil>dataimport').
+  EXPECT_EQ(M.Name, P.Sink.get(Ref).Name);
+  EXPECT_TRUE(M.Sig == P.Sink.get(Ref).Sig);
 }
 
 } // namespace

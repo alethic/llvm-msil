@@ -25,6 +25,7 @@ add_llvm_unittest(CLITests
   SignatureTest.cpp
   SymbolTableTest.cpp
   TableSchemaTest.cpp
+  TrailerDefsTest.cpp
   TrailerTest.cpp
   )
 

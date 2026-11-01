@@ -18,6 +18,7 @@ add_llvm_component_library(LLVMCLI
   SymbolTable.cpp
   TableSchema.cpp
   Trailer.cpp
+  TrailerDefs.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/CLI

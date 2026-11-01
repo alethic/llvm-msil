@@ -1,0 +1,181 @@
+## -O0 LTO links compile no unused copy of a header's inline function
+## (ImplementationPlan.md decision D26 as Phase 2 amends it: whole-program
+## output drops the unreferenced discardable functions; the section 12 row of
+## 2026-10-30 'M24.c extended (fix loop)'). The UCRT's <stdio.h> defines
+## inline functions in every module that includes it, and clang -O0 emits
+## them as linkonce_odr definitions in COMDATs, the variadic sprintf and
+## _snprintf among them. LTO keeps the prevailing copies of the C library
+## functions that code generation may call (lto::InputFile::Symbol::isLibcall:
+## sprintf and vsprintf) as weak_odr definitions and makes the others
+## internal, each staying in its COMDAT. With a module summary, which clang
+## -flto writes, LTO's liveness analysis first removes the copies that
+## neither the program nor those library functions use (_snprintf and
+## _vsnprintf here); the -O0 pipeline deletes nothing. A program that calls
+## none of them compiles none of them: no
+##   variadic function definitions are not supported for MSIL yet
+## error for sprintf or _snprintf, no method and no P/Invoke. Before the fix
+## a -O0 LTO link of a windows-msvc program that includes <stdio.h> failed
+## with that error for sprintf (msil/test/M3/10-hosted on the Windows lto
+## legs). An unreferenced function that is not such a copy stays at -O0
+## (lto-options.test, whole-archive.test).
+## - prog.ll: those definitions as clang -flto emits them for
+##   x86_64-pc-windows-msvc-msil at -O0 (stdio.ll, reduced to sprintf,
+##   vsprintf, _snprintf and _vsnprintf with the helpers they call:
+##   _vsprintf_l, _vsnprintf_l and __local_stdio_printf_options; _vsnprintf_l
+##   calls the UCRT's __stdio_common_vsprintf, which an import library
+##   stand-in exports) and a main that calls none of them. prog.bc has a full
+##   LTO summary as clang -flto writes it (opt -module-summary of a module
+##   with the module flag ThinLTO = 0); nosum.bc has none (llvm-as), so LTO
+##   hands every copy to code generation. --lto-O0 links each without a
+##   diagnostic, to an image and to --lto-emit-asm text, and no output has a
+##   method of any of them or an import of __stdio_common_vsprintf.
+## - calls.ll: the same module with a main that calls sprintf. sprintf is
+##   compiled and keeps decision D19's error, which is the only one: the
+##   copies that main does not use are still dropped. M26 implements variadic
+##   definitions (plan 5.15.2) and changes this check.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: cat stdio.ll main.ll > prog.ll
+# RUN: cat stdio.ll calls.ll > calls-prog.ll
+# RUN: opt -module-summary prog.ll -o prog.bc
+# RUN: llvm-as prog.ll -o nosum.bc
+# RUN: opt -module-summary calls-prog.ll -o calls.bc
+# RUN: llvm-as calls-prog.ll -o calls-nosum.bc
+# RUN: llvm-lib /machine:x64 /def:ucrt.def /out:ucrt.lib
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{gone} = FileCheck %s --implicit-check-not=sprintf --implicit-check-not=snprintf \
+# DEFINE:   "--implicit-check-not='__local_stdio_printf_options'"
+# DEFINE: %{called} = FileCheck %s --check-prefix=CALLED %{crash} --implicit-check-not=error: \
+# DEFINE:   --implicit-check-not=warning:
+
+## A main that calls none of them: no diagnostic (a failing link shows its
+## errors here), and only main's method.
+# RUN: msil-ld --lto-O0 prog.bc ucrt.lib -o prog.exe 2>&1 | FileCheck %s --check-prefix=QUIET --allow-empty
+# RUN: msil-ld --lto-O0 nosum.bc ucrt.lib -o nosum.exe 2>&1 | FileCheck %s --check-prefix=QUIET --allow-empty
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump prog.exe | %{gone} --check-prefix=IMAGE %}
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump nosum.exe | %{gone} --check-prefix=IMAGE %}
+# IMAGE: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# RUN: msil-ld --lto-O0 --lto-emit-asm prog.bc ucrt.lib -o prog.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=QUIET --allow-empty
+# RUN: msil-ld --lto-O0 --lto-emit-asm nosum.bc ucrt.lib -o nosum.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=QUIET --allow-empty
+# RUN: %{gone} --check-prefix=TEXT --implicit-check-not=pinvokeimpl --input-file=prog.il
+# RUN: %{gone} --check-prefix=TEXT --implicit-check-not=pinvokeimpl --input-file=nosum.il
+# TEXT: {{^}}.method public static int32 'main'() cil managed{{$}}
+# QUIET-NOT: {{.}}
+
+## A main that calls sprintf: sprintf's error, and no other.
+# RUN: not msil-ld --lto-O0 calls.bc ucrt.lib -o x.exe 2>&1 | %{called}
+# RUN: not msil-ld --lto-O0 calls-nosum.bc ucrt.lib -o x.exe 2>&1 | %{called}
+# RUN: not msil-ld --lto-O0 --lto-emit-asm calls.bc ucrt.lib -o x.il 2>&1 | %{called}
+# RUN: not msil-ld --lto-O0 --lto-emit-asm calls-nosum.bc ucrt.lib -o x.il 2>&1 | %{called}
+# CALLED: {{^}}msil-ld: error: {{.*}}in function sprintf i32 (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet{{$}}
+
+#--- stdio.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; <stdio.h>'s inline functions as clang -O0 emits them for windows-msvc:
+;; linkonce_odr, each in its COMDAT. sprintf and _snprintf are variadic.
+$sprintf = comdat any
+$vsprintf = comdat any
+$_snprintf = comdat any
+$_vsnprintf = comdat any
+$_vsprintf_l = comdat any
+$_vsnprintf_l = comdat any
+$__local_stdio_printf_options = comdat any
+
+@__local_stdio_printf_options._OptionsStorage = internal global i64 0, align 8
+
+define linkonce_odr i32 @sprintf(ptr noundef %_Buffer, ptr noundef %_Format, ...) #0 comdat {
+entry:
+  %_ArgList = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %_ArgList)
+  %0 = load ptr, ptr %_ArgList, align 8
+  %call = call i32 @_vsprintf_l(ptr noundef %_Buffer, ptr noundef %_Format, ptr noundef null, ptr noundef %0)
+  call void @llvm.va_end.p0(ptr %_ArgList)
+  ret i32 %call
+}
+
+define linkonce_odr i32 @vsprintf(ptr noundef %_Buffer, ptr noundef %_Format, ptr noundef %_ArgList) #0 comdat {
+entry:
+  %call = call i32 @_vsnprintf_l(ptr noundef %_Buffer, i64 noundef -1, ptr noundef %_Format, ptr noundef null, ptr noundef %_ArgList)
+  ret i32 %call
+}
+
+define linkonce_odr i32 @_snprintf(ptr noundef %_Buffer, i64 noundef %_BufferCount, ptr noundef %_Format, ...) #0 comdat {
+entry:
+  %_ArgList = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %_ArgList)
+  %0 = load ptr, ptr %_ArgList, align 8
+  %call = call i32 @_vsnprintf(ptr noundef %_Buffer, i64 noundef %_BufferCount, ptr noundef %_Format, ptr noundef %0)
+  call void @llvm.va_end.p0(ptr %_ArgList)
+  ret i32 %call
+}
+
+define linkonce_odr i32 @_vsnprintf(ptr noundef %_Buffer, i64 noundef %_BufferCount, ptr noundef %_Format, ptr noundef %_ArgList) #0 comdat {
+entry:
+  %call = call i32 @_vsnprintf_l(ptr noundef %_Buffer, i64 noundef %_BufferCount, ptr noundef %_Format, ptr noundef null, ptr noundef %_ArgList)
+  ret i32 %call
+}
+
+define linkonce_odr i32 @_vsprintf_l(ptr noundef %_Buffer, ptr noundef %_Format, ptr noundef %_Locale, ptr noundef %_ArgList) #0 comdat {
+entry:
+  %call = call i32 @_vsnprintf_l(ptr noundef %_Buffer, i64 noundef -1, ptr noundef %_Format, ptr noundef %_Locale, ptr noundef %_ArgList)
+  ret i32 %call
+}
+
+define linkonce_odr i32 @_vsnprintf_l(ptr noundef %_Buffer, i64 noundef %_BufferCount, ptr noundef %_Format, ptr noundef %_Locale, ptr noundef %_ArgList) #0 comdat {
+entry:
+  %call = call ptr @__local_stdio_printf_options()
+  %0 = load i64, ptr %call, align 8
+  %or = or i64 %0, 1
+  %call1 = call i32 @__stdio_common_vsprintf(i64 noundef %or, ptr noundef %_Buffer, i64 noundef %_BufferCount, ptr noundef %_Format, ptr noundef %_Locale, ptr noundef %_ArgList)
+  %cmp = icmp slt i32 %call1, 0
+  %cond = select i1 %cmp, i32 -1, i32 %call1
+  ret i32 %cond
+}
+
+define linkonce_odr ptr @__local_stdio_printf_options() #0 comdat {
+entry:
+  ret ptr @__local_stdio_printf_options._OptionsStorage
+}
+
+declare i32 @__stdio_common_vsprintf(i64 noundef, ptr noundef, i64 noundef, ptr noundef, ptr noundef, ptr noundef)
+
+declare void @llvm.va_start.p0(ptr)
+
+declare void @llvm.va_end.p0(ptr)
+
+attributes #0 = { noinline nounwind optnone }
+
+;; clang -flto's module flag: a summary, if written, is a full LTO one.
+!llvm.module.flags = !{!0}
+!0 = !{i32 1, !"ThinLTO", i32 0}
+
+#--- main.ll
+
+;; int main(void) { return 0; }
+define i32 @main() #0 {
+entry:
+  ret i32 0
+}
+
+#--- calls.ll
+
+;; int main(void) { char buf[16]; return sprintf(buf, "%d", 7); }
+@fmt = private unnamed_addr constant [3 x i8] c"%d\00", align 1
+
+define i32 @main() #0 {
+entry:
+  %buf = alloca [16 x i8], align 1
+  %call = call i32 (ptr, ptr, ...) @sprintf(ptr noundef %buf, ptr noundef @fmt, i32 noundef 7)
+  ret i32 %call
+}
+
+#--- ucrt.def
+LIBRARY api-ms-win-crt-stdio-l1-1-0.dll
+EXPORTS
+  __stdio_common_vsprintf

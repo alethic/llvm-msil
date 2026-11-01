@@ -21,6 +21,14 @@
 ;   no helper: ExpandIRInsts expands them inline (i128-divrem.ll), so
 ;   helpers.ll's div128 and sitofp128, which named __divti3 and __floattidf
 ;   until then, compile with no error and no call, and neither name appears.
+;   Since M24 the constrained (strictfp) conversions between i128 and float32
+;   or float64 do the same (sitofp128_strict, fptosi128_strict): slot P0
+;   makes them plain before ExpandIRInsts runs (strict-i128.ll), so
+;   __floattidf and __fixdfti are not named either. Also since M24 a bfloat
+;   is an int32 holding its 16-bit pattern and its extension to float32 is
+;   inline (bf16_to_f32, which named __extendbfsf2 until then; fp-helpers F2
+;   (a)), while the rounding conversion from float32 is still the runtime
+;   helper __truncsfbf2, an error (f32_to_bf16).
 ; - Any other library function is an error: "library call '<name>' is not a
 ;   Phase-1 import" (lround, exp10). On x86_64-w64-windows-gnu-msil the import
 ;   set is msvcrt.dll's (D14 as amended in plan section 12, 'Windows import
@@ -78,7 +86,8 @@
 ; DEFINE:   --implicit-check-not=error: --implicit-check-not=warning:
 ; DEFINE: %{il} = FileCheck %s --check-prefix=HELPER-IL --implicit-check-not=__divti3 \
 ; DEFINE:   --implicit-check-not=__floattidf --implicit-check-not=lround --implicit-check-not=exp10 \
-; DEFINE:   --implicit-check-not=pinvokeimpl
+; DEFINE:   --implicit-check-not=pinvokeimpl --implicit-check-not=__fixdfti \
+; DEFINE:   --implicit-check-not=__extendbfsf2 --implicit-check-not=__truncsfbf2
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/helpers.ll -o /dev/null 2>&1 \
 ; RUN:   | %{diag} --check-prefix=HELPER
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/helpers.ll -o /dev/null 2>&1 \
@@ -268,6 +277,7 @@ source_filename = "libcall-helpers.c"
 
 ; HELPER: {{^}}error: {{.*}}in function lround64 {{.*}}: library call 'lround' is not a Phase-1 import{{$}}
 ; HELPER: {{^}}error: {{.*}}in function exp10_f64 {{.*}}: library call 'exp10' is not a Phase-1 import{{$}}
+; HELPER: {{^}}error: {{.*}}in function f32_to_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
 
 ; HELPER-IL-LABEL: .method {{.*}}'div128'(
 ; HELPER-IL-NOT:   {{^}}  call
@@ -275,12 +285,28 @@ source_filename = "libcall-helpers.c"
 ; HELPER-IL-LABEL: .method {{.*}}'sitofp128'(
 ; HELPER-IL-NOT:   {{^}}  call
 ; HELPER-IL:       {{^}}} // end of method 'sitofp128'{{$}}
+; HELPER-IL-LABEL: .method public static float64 'sitofp128_strict'(native int, native int) cil managed{{$}}
+; HELPER-IL-NOT:   {{^}}  call
+; HELPER-IL:       {{^}}} // end of method 'sitofp128_strict'{{$}}
+; HELPER-IL-LABEL: .method public static native int 'fptosi128_strict'(float64) cil managed{{$}}
+; HELPER-IL-NOT:   {{^}}  call
+; HELPER-IL:       {{^}}} // end of method 'fptosi128_strict'{{$}}
 ; HELPER-IL-LABEL: .method {{.*}}'lround64'(
 ; HELPER-IL-NOT:   {{^}}  call
 ; HELPER-IL:       {{^}}} // end of method 'lround64'{{$}}
 ; HELPER-IL-LABEL: .method {{.*}}'exp10_f64'(
 ; HELPER-IL-NOT:   {{^}}  call
 ; HELPER-IL:       {{^}}} // end of method 'exp10_f64'{{$}}
+; HELPER-IL-LABEL: .method public static float32 'bf16_to_f32'(int32) cil managed{{$}}
+; HELPER-IL-NOT:   {{^}}  call
+; HELPER-IL:       {{^}}  ldarg.0{{$}}
+; HELPER-IL-NEXT:  {{^}}  ldc.i4.s 16{{$}}
+; HELPER-IL-NEXT:  {{^}}  shl{{$}}
+; HELPER-IL-NOT:   {{^}}  call
+; HELPER-IL:       {{^}}} // end of method 'bf16_to_f32'{{$}}
+; HELPER-IL-LABEL: .method public static int32 'f32_to_bf16'(float32) cil managed{{$}}
+; HELPER-IL-NOT:   {{^}}  call
+; HELPER-IL:       {{^}}} // end of method 'f32_to_bf16'{{$}}
 ; HELPER-IL-LABEL: .method {{.*}}'after_helpers'(
 ; HELPER-IL-NEXT:  {{^\{$}}
 ; HELPER-IL-NEXT:  {{^}}  .maxstack 2{{$}}
@@ -301,6 +327,17 @@ define double @sitofp128(i128 %x) {
   ret double %r
 }
 
+define double @sitofp128_strict(i128 %x) strictfp {
+  %r = call double @llvm.experimental.constrained.sitofp.f64.i128(i128 %x, metadata !"round.tonearest", metadata !"fpexcept.strict") strictfp
+  ret double %r
+}
+
+define i64 @fptosi128_strict(double %x) strictfp {
+  %r = call i128 @llvm.experimental.constrained.fptosi.i128.f64(double %x, metadata !"fpexcept.strict") strictfp
+  %t = trunc i128 %r to i64
+  ret i64 %t
+}
+
 define i64 @lround64(double %x) {
   %r = call i64 @llvm.lround.i64.f64(double %x)
   ret i64 %r
@@ -311,6 +348,16 @@ define double @exp10_f64(double %x) {
   ret double %r
 }
 
+define float @bf16_to_f32(bfloat %x) {
+  %r = fpext bfloat %x to float
+  ret float %r
+}
+
+define bfloat @f32_to_bf16(float %x) {
+  %r = fptrunc float %x to bfloat
+  ret bfloat %r
+}
+
 define i32 @after_helpers(i32 %a, i32 %b) {
   %r = mul i32 %a, %b
   ret i32 %r
@@ -318,6 +365,8 @@ define i32 @after_helpers(i32 %a, i32 %b) {
 
 declare i64 @llvm.lround.i64.f64(double)
 declare double @llvm.exp10.f64(double)
+declare double @llvm.experimental.constrained.sitofp.f64.i128(i128, metadata, metadata)
+declare i128 @llvm.experimental.constrained.fptosi.i128.f64(double, metadata)
 
 ;--- powi.ll
 ; __builtin_powi: __powidf2 (compiler-rt) where the C runtime has it, pow of

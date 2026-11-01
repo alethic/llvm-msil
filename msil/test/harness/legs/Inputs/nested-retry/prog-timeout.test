@@ -1,0 +1,2 @@
+# Fails at its last command with msil-prog.py's step timeout: timeout-only.
+# RUN: %python -c "import sys; print('msil-prog: native-link failed (timeout after 600 s)'); sys.exit(1)"

@@ -1,0 +1,168 @@
+# D36's compiler barrier at run time: a C spin loop on a plain int ends when another thread sets it, on every runtime.
+# spin.c is a -shared library (export class Barrier.Native) whose spin()
+# reads a plain 'static int flag' in a loop with an empty asm memory clobber,
+# '__asm__ volatile("" ::: "memory")', and whose spin_signal_fence() does the
+# same with __atomic_signal_fence(__ATOMIC_SEQ_CST); set_flag() and
+# clear_flag() write the flag. A plain int with a compiler barrier is the
+# classic pre-C11 idiom (barrier(), cpu_relax()), a data race in C11 terms,
+# kept on purpose: clang and GCC give the memory clobber the meaning "reload
+# memory", and LLVM keeps the load in the loop. Each loop gives up after
+# SPINS iterations and returns 3, and returns 1 when it sees the flag.
+# Recon atomics-threads 5.4 found that the CLR hoists the plain load out of
+# such a loop when the barrier is only the comment of Phase 1's MEMBARRIER:
+# the loop then exhausts SPINS on Framework 4.8, .NET 8 with
+# TieredCompilation=0, .NET 10 and WSL .NET 10, and ends only where Tier-0
+# code runs. D36 as amended in M24 makes each barrier a call of
+# __msil_compiler_barrier, an empty noinlining method (msil-ld's '<trailer>'
+# input defines it in this object link), which the JIT cannot see through,
+# so the load stays in the loop and both spins return 1 about 300 ms after
+# they start. With the tools before M24 both return 3, at -O0 and at -O2, on
+# .NET 10 tiered and with TieredCompilation=0 (after 2.5 to 7 s per loop),
+# so the test fails without the barrier call.
+# No C function reaches native code before M28, so the threads are C#'s:
+# host.cs, compiled by csc (%msil_csc), clears the flag, starts a thread
+# that sleeps 300 ms and calls set_flag, calls spin on the main thread,
+# joins the thread and prints the result, then does the same for
+# spin_signal_fence; only the main thread prints (plan 5.17.13's thread
+# rules). It exits with 0 when both returned 1, else 3.
+# The library is built at -O0 and -O2 (-flto under the lto pipeline, where
+# the whole-program module defines the barrier instead), verified and, with
+# jitall, force-JITted; the host runs on the configured runtime and then, by
+# %{msil_also_run_check} (plan 5.12.3), once per entry of the leg's
+# msil_also_run, force-JITted, on that entry's runtime (.NET 10 with
+# TieredCompilation=0 in p3-full); on Windows triples a net48 build of the
+# host runs on .NET Framework 4.8 as well, when the library is bound to
+# mscorlib (msil_references none or net48). %{msil_also_run_check} runs the
+# image alone (no --dep), so the host carries the library inside itself:
+# embed.py writes the library's bytes into host.cs as base64, and the host
+# loads them with Assembly.Load(byte[]) and binds the exports through
+# reflection, with no reference to the library at compile time (M27's
+# %{msil_run_opts}, which every run takes, could pass the library as a
+# --dep instead). Gate steps 20 and 21 of M24 run the test again on .NET 8
+# with TieredCompilation=0 on both OSes (msil_dotnet_env). The barrier's IL
+# is pinned by llvm/test/CodeGen/MSIL/fence.ll. Plan 5.17.13 (M24,
+# M3/08-atomics), atomics-threads 5.4.
+# REQUIRES: msil-csc
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/O0 %t/O2
+# DEFINE: %{bs_level} = O0
+# REDEFINE: %{msil_also_run_image} = %t/%{bs_level}/host.exe
+# DEFINE: %{bs_library} = \
+# DEFINE:   %clang_msil %{msil_cflags} -%{bs_level} %if msil-prog-pipeline=lto %{ -flto %} -c %t/spin.c -o %t/%{bs_level}/spin.o \
+# DEFINE:   && %clang_msil -%{bs_level} %{msil_ldflags} -shared -Wl,--export-class=Barrier.Native %t/%{bs_level}/spin.o -o %t/%{bs_level}/spin.dll \
+# DEFINE:   && %msil_verify %t/%{bs_level}/spin.dll \
+# DEFINE:   %if msil-jitall %{ && %msil_jitall %t/%{bs_level}/spin.dll %} \
+# DEFINE:   && %python %t/embed.py %t/%{bs_level}/spin.dll %t/host.cs %t/%{bs_level}/host.cs
+# DEFINE: %{bs_host} = \
+# DEFINE:   %msil_csc %t/%{bs_level}/host.cs --out %t/%{bs_level}/host.exe --refs net8 \
+# DEFINE:   && %msil_exec --out %t/%{bs_level}/host.out %t/%{bs_level}/host.exe \
+# DEFINE:   && FileCheck --input-file=%t/%{bs_level}/host.out --match-full-lines %s \
+# DEFINE:   %{msil_also_run_check}
+# DEFINE: %{bs_netfx} = \
+# DEFINE:   %msil_csc %t/%{bs_level}/host.cs --out %t/%{bs_level}/host48.exe --refs net48 \
+# DEFINE:   && %msil_exec --netfx --out %t/%{bs_level}/host48.out %t/%{bs_level}/host48.exe \
+# DEFINE:   && FileCheck --input-file=%t/%{bs_level}/host48.out --match-full-lines %s
+# RUN: %{bs_library}
+# RUN: %if msil-ref=none || msil-ref=net48 || msil-ref=net8 %{ %{bs_host} %}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ %{bs_netfx} %}
+# REDEFINE: %{bs_level} = O2
+# RUN: %{bs_library}
+# RUN: %if msil-ref=none || msil-ref=net48 || msil-ref=net8 %{ %{bs_host} %}
+# RUN: %if msil-netfx && msil-triple-windows && (msil-ref=none || msil-ref=net48) %{ %{bs_netfx} %}
+# Every run's transcript: both spins saw the flag.
+# CHECK:      spin() = 1
+# CHECK-NEXT: spin_signal_fence() = 1
+# CHECK-NEXT: [exit 0]
+#--- spin.c
+/* The library: two spin loops on a plain int, each bounded by SPINS. */
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+
+/* A loop whose load was hoisted gives up after 2.5 to 7 s (measured on
+   .NET 10 with the tools before M24), far below msil-run.py's limit. */
+#define SPINS 4000000000LL
+
+static int flag;
+
+API void set_flag(void) { flag = 1; }
+API void clear_flag(void) { flag = 0; }
+
+API int spin(void) {
+  for (long long i = 0; i < SPINS; ++i) {
+    if (flag)
+      return 1;
+    __asm__ volatile("" ::: "memory");
+  }
+  return 3;
+}
+
+API int spin_signal_fence(void) {
+  for (long long i = 0; i < SPINS; ++i) {
+    if (flag)
+      return 1;
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+  }
+  return 3;
+}
+#--- embed.py
+"""Writes the C# host's source with the library inside it.
+
+python embed.py LIBRARY SOURCE OUTPUT replaces the one @LIBRARY_BASE64@ of
+SOURCE with LIBRARY's bytes in base64 and writes the result to OUTPUT.
+"""
+import base64
+import sys
+
+library, source, output = sys.argv[1:]
+with open(library, "rb") as f:
+    data = base64.b64encode(f.read()).decode("ascii")
+with open(source, encoding="utf-8") as f:
+    text = f.read()
+marker = "@LIBRARY_BASE64@"
+if text.count(marker) != 1:
+    sys.exit("embed.py: %s must hold %s exactly once" % (source, marker))
+with open(output, "w", encoding="utf-8") as f:
+    f.write(text.replace(marker, data))
+#--- host.cs
+// The C# host: runs each spin loop of the library while a second thread
+// sets the flag after 300 ms. The library comes from embed.py's base64.
+using System;
+using System.Reflection;
+using System.Threading;
+
+static class Program
+{
+    const string Library = "@LIBRARY_BASE64@";
+
+    static Action setFlag, clearFlag;
+
+    static T Export<T>(Type native, string name) where T : class
+    {
+        MethodInfo method = native.GetMethod(name, BindingFlags.Public | BindingFlags.Static);
+        return (T)(object)Delegate.CreateDelegate(typeof(T), method);
+    }
+
+    static int Run(string name, Func<int> loop)
+    {
+        clearFlag();
+        Thread setter = new Thread(() => { Thread.Sleep(300); setFlag(); });
+        setter.Start();
+        int result = loop();
+        setter.Join();
+        Console.WriteLine(name + " = " + result);
+        return result;
+    }
+
+    static int Main()
+    {
+        Assembly library = Assembly.Load(Convert.FromBase64String(Library));
+        Type native = library.GetType("Barrier.Native", true);
+        setFlag = Export<Action>(native, "set_flag");
+        clearFlag = Export<Action>(native, "clear_flag");
+        int a = Run("spin()", Export<Func<int>>(native, "spin"));
+        int b = Run("spin_signal_fence()", Export<Func<int>>(native, "spin_signal_fence"));
+        return a == 1 && b == 1 ? 0 : 3;
+    }
+}

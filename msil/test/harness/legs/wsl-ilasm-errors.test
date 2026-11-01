@@ -8,7 +8,10 @@
 # wsl-ilasm-local-runner.test covers the local runner.
 # REQUIRES: msil-wsl
 
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_wsl_ilasm=%t.no-such-ilasm %S/../Inputs/nested-ok > %t.missing.log 2>&1
+# Each nested run below whose probe fails (a missing or broken tool) passes
+# --param msil_probe_cache= (empty), so it neither reads the parent's probe
+# cache nor replaces it with its own probes (plan 5.17.10; probe-cache.test).
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_wsl_ilasm=%t.no-such-ilasm %S/../Inputs/nested-ok > %t.missing.log 2>&1
 # RUN: %{harness_check} contains %t.missing.log "fatal: msil: --param msil_wsl_ilasm=\S*no-such-ilasm: no such file"
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_wsl_ilasm=%S/Inputs/roundtrip-ldc.il %S/../Inputs/nested-ok > %t.bad.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_wsl_ilasm=%S/Inputs/roundtrip-ldc.il %S/../Inputs/nested-ok > %t.bad.log 2>&1
 # RUN: %{harness_check} contains %t.bad.log "fatal: msil: --param msil_wsl_ilasm=\S*roundtrip-ldc\.il cannot assemble inside WSL"

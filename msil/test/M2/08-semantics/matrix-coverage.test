@@ -4,18 +4,25 @@
 # test, M22's P2-C rows) and for the other tests of this directory, with
 # the native result, the pipelines, the triples, the Phase 2 result and the
 # milestones. Inputs/check-matrix.py, run with the repository root, checks
-# M23.c's rules (its docstring has them): every listed file exists and every
-# .test here is listed; a 'UB' or 'link error' native result has a named
-# diagnostic; a transcript line runs %{msil_prog} at the leg's levels on both
-# x86_64 triples (or REQUIRES, or guards with '%if msil-triple-<os>', the one
-# triple it names) under exactly its pipelines, against a generated
-# .expected file; a diagnostic line fails to build at -O0 and -O2 under each
-# of its pipelines and FileChecks the text with --implicit-check-not for
-# 'LLVM ERROR' and 'PLEASE submit'; every M20 row lists obj and lto; a P3 row
-# pins its Phase 2 diagnostic or is 'untested' with a reason, and no other
-# row is untested; pipeline-specific checks use msil-prog-pipeline, never
-# msil-pipeline; no XFAIL line. The self-test runs the checker on trees it
-# builds, one good and one per rule broken. Plan 5.9.16, 5.12.7, M23.c.
+# the rules of M23.c and 5.17.12 (its docstring has them): every listed file
+# exists and every .test here is listed; every '#! rows:' row has a line and
+# every '#! obj-lto:' row lists obj and lto; every '#! p3-tests:' path is a
+# test under msil/test that no line names; a 'UB' or 'link error' native
+# result has a named diagnostic; a transcript line runs %{msil_prog} at the
+# leg's levels on both x86_64 triples (or REQUIRES, or guards with
+# '%if msil-triple-<os>', the one triple it names) under exactly its
+# pipelines, against a generated .expected file, or a hand-written one on
+# the triple of a '; rule <triple>:' clause (%{msil_expected_rule}); a
+# diagnostic line fails to build at -O0 and at -O2 under each of its
+# pipelines and FileChecks each level's output for the text with
+# --implicit-check-not for 'LLVM ERROR' and 'PLEASE submit'; a P3 row (P3,
+# P3-A, P3-B) pins its Phase 2 diagnostic or is 'untested' with a reason, no
+# other row is untested, and no line names both a P3 label and a milestone
+# from M24 to M35; pipeline-specific checks use msil-prog-pipeline, never
+# msil-pipeline; no XFAIL line. The legs and gate rules need the legs
+# (--legs, from lit-legs.ps1 -Describe), which the phase gates pass and this
+# test does not. The self-test runs the checker on trees it builds, one good
+# and one per rule broken. Plan 5.9.16, 5.12.7, 5.17.12, M23.c.
 # RUN: %python %S/Inputs/check-matrix.py --self-test | FileCheck %s --check-prefix=SELF
 # RUN: %python %S/Inputs/check-matrix.py %S/../../../.. | FileCheck %s
 # SELF:  {{^}}self-test: the good tree: OK{{$}}

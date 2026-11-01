@@ -1,0 +1,40 @@
+# The standard streams through the real <stdio.h>: stdin, stdout and stderr as glibc's data imports and as the UCRT's __acrt_iob_func calls.
+# On Linux triples glibc's <stdio.h> declares 'extern FILE *stdin', stdout
+# and stderr, data symbols of libc.so.6 that each become a native data
+# import (plan 5.10.12: an address field that '<msil>dataimport' fills at
+# startup through dlopen and dlsym); on Windows triples the UCRT's defines
+# them as calls of __acrt_iob_func(0), (1) and (2). The program reads each
+# one, passes it to fileno (the POSIX name: on Windows triples oldnames.lib's
+# alias of _fileno, with the UCRT's deprecation warning turned off by
+# _CRT_NONSTDC_NO_WARNINGS), compares them, reads the empty stdin that every
+# run gets (msil-run.py's default) with getchar, which glibc's header turns
+# into getc(stdin) when it optimizes, and with fgetc, checks feof, ferror and
+# clearerr on it, writes through a copy of stdout and flushes every stream
+# with fflush(NULL). Plan 5.17.13 (M24, M3/10-hosted).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#define _CRT_NONSTDC_NO_WARNINGS
+#include <stdio.h>
+
+#include "msil_test.h"
+
+int main(void) {
+  FILE *in = stdin, *out = stdout, *err = stderr;
+  put_kv("fileno(stdin)", fileno(in));
+  put_kv("fileno(stdout)", fileno(out));
+  put_kv("fileno(stderr)", fileno(err));
+  put_kv("the three streams differ", in != out && out != err && in != err);
+  put_kv("stdout read again is the same stream", stdout == out);
+  put_kv("getchar() on the empty stdin is EOF", getchar() == EOF);
+  put_kv("feof(stdin)", feof(stdin) != 0);
+  put_kv("ferror(stdin)", ferror(stdin) != 0);
+  clearerr(stdin);
+  put_kv("feof(stdin) after clearerr", feof(stdin) != 0);
+  put_kv("fgetc(stdin) is EOF again", fgetc(stdin) == EOF);
+  put_kv("feof(stdin) again", feof(stdin) != 0);
+  put_kv("fputs through the copy of stdout", fputs("written through a copy of stdout\n", out) >= 0);
+  put_kv("fflush(NULL)", fflush(NULL));
+  return 0;
+}

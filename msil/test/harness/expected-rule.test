@@ -1,0 +1,164 @@
+# Hand-written expected files (plan 5.17.4, M24). A test that sets
+# REDEFINE: %{msil_expected_rule} = <os>[,<os>]: <reason> has a hand-written
+# expected file for each named OS; the native-oracle commands of every
+# composite (msil-prog.py --mode native and the native run) take
+# --expected-rule '%{msil_expected_rule}', and when the rule names the
+# oracle's OS each prints 'native oracle skipped (hand-written expected
+# file): <reason>' and exits 0, while every MSIL run still compares with the
+# file; update-expected.py neither builds nor writes for a named OS and logs
+# 'rule: <file> (<reason>)', or 'MISSING: ...' when the file does not exist.
+#
+# (1) msil-run.py --native --expected-rule, on a stand-in native program
+# (Inputs/fake-native-44.il, a .NET Framework executable that exits with 44
+# when it gets no arguments): the oracle's OS is --expect-os (%msil_exec
+# passes windows); a rule that names it, alone or with the other OS, skips
+# the run and its comparison (a wrong expected file passes, nothing is
+# written to --out); a rule for the other OS and the empty rule compare as
+# before; a malformed rule is a usage error (status 2) that names what is
+# wrong, and so is --expected-rule without --native.
+# (2) msil-prog.py --mode native --expected-rule: a rule for the triple's OS
+# prints the skip line and leaves --workdir untouched; the skip comes only
+# after the usage checks; a malformed rule is a usage error; a rule for the
+# other OS builds as before (with the real clang where the native oracle is
+# available); --mode msil ignores the rule.
+# (3) The composite, in a nested lit with -a of prog/Inputs/nested-rule
+# (msil-prog.py with the stand-ins of prog/Inputs/prog-cc.py, whose native
+# program exits with one more than the MSIL program: prog-native): rule.c
+# passes only through its rule, and both native steps print the skip line;
+# norule.c, the same test without the rule, fails at its native run;
+# rule-msil-wrong.c fails at its MSIL run although its rule names both OSes;
+# rule-other.c, whose rule names only linux, fails at its native run.
+# (4) update-expected.py on copies of rule.c and rule-other.c: 'rule:' with
+# --check and without (the hand-written file stays as it is), 'MISSING:'
+# without the file (status 1, nothing written), and for rule-other.c the
+# native build and comparison as for any test (the stand-in compiler of (1)
+# copies itself, so the native transcript is [exit 44]: MISMATCH). Writing
+# never replaces rule-other.expected, the hand-written Linux file (there is
+# no rule-other.linux.expected): it writes rule-other.windows.expected
+# instead ('wrote <file> (rule-other.expected is the hand-written linux
+# expected file)'), which --check then reads; norule.c, which has no rule,
+# gets its norule.expected replaced. A malformed rule (rule-bad.c), and a
+# %{msil_oracle_flags} value with a word other than --hosted, the only one
+# the oracle knows (flags-bad.c), fail the test before anything is built:
+# the reason on stderr, then 'FAIL (test file): <test>' (status 1, nothing
+# written); flags.c, which differs from flags-bad.c only by that word, gets
+# its rule's line (both rules name windows, so neither test is built).
+# Windows only: the stand-in native programs are .NET Framework executables,
+# which %msil_exec runs locally only under the Windows triple (the WSL legs,
+# whose %msil_exec passes --runner wsl --expect-os linux, leave this test out).
+# REQUIRES: system-windows, msil-triple-windows, msil-netfx
+
+# RUN: rm -rf %t.d %t.wd %t.wd2 %t.wd3 %t.ue
+# RUN: mkdir -p %t.d %t.ue
+# RUN: %ilasm -exe -output=%t.d/native44.exe %S/Inputs/fake-native-44.il %S/Inputs/fake-native-cc.il
+# RUN: %{harness_check} write %t.d/wrong.expected "[exit 43]"
+# RUN: %{harness_check} write %t.d/right.expected "[exit 44]"
+
+# (1)
+# RUN: %msil_exec --native --expected-rule 'windows: the reason, with: a colon' --expect %t.d/wrong --out %t.d/skip.out %t.d/native44.exe > %t.1a.log
+# RUN: %{harness_check} equals %t.1a.log "msil-run: native oracle skipped (hand-written expected file): the reason, with: a colon"
+# RUN: %{harness_check} missing %t.d/skip.out
+# RUN: %msil_exec --native --expected-rule 'linux,windows: both' --expect %t.d/wrong %t.d/native44.exe > %t.1b.log
+# RUN: %{harness_check} equals %t.1b.log "msil-run: native oracle skipped (hand-written expected file): both"
+# RUN: %msil_exec --expect-os linux --native --expected-rule 'linux: the Linux oracle' --expect %t.d/wrong %t.d/native44.exe > %t.1c.log
+# RUN: %{harness_check} equals %t.1c.log "msil-run: native oracle skipped (hand-written expected file): the Linux oracle"
+# RUN: not %msil_exec --native --expected-rule 'linux: the other OS' --expect %t.d/wrong --out %t.d/other.out %t.d/native44.exe > %t.1d.log 2>&1
+# RUN: %{harness_check} contains %t.1d.log "does not match \S*wrong\.expected"
+# RUN: %{harness_check} lacks %t.1d.log "skipped"
+# RUN: %{harness_check} equals %t.d/other.out "[exit 44]"
+# RUN: %msil_exec --native --expected-rule 'linux: the other OS' --expect %t.d/right %t.d/native44.exe
+# RUN: not %msil_exec --native --expected-rule '' --expect %t.d/wrong %t.d/native44.exe > %t.1e.log 2>&1
+# RUN: %{harness_check} contains %t.1e.log "does not match \S*wrong\.expected"
+# RUN: %{harness_check} exits 2 %msil_exec --native --expected-rule 'macos: x' --expect %t.d/right %t.d/native44.exe > %t.1f.log 2>&1
+# RUN: %{harness_check} contains %t.1f.log "error: --expected-rule: 'macos: x' names 'macos', which is not an operating system of a rule \(windows or linux\)$"
+# RUN: %{harness_check} exits 2 %msil_exec --native --expected-rule 'windows' --expect %t.d/right %t.d/native44.exe > %t.1g.log 2>&1
+# RUN: %{harness_check} contains %t.1g.log "error: --expected-rule: 'windows' is not '<os>\[,<os>\]: <reason>'$"
+# RUN: %{harness_check} exits 2 %msil_exec --native --expected-rule "windows: it's" --expect %t.d/right %t.d/native44.exe > %t.1h.log 2>&1
+# RUN: %{harness_check} contains %t.1h.log "error: --expected-rule: the reason of \"windows: it's\" holds a single quote \(lit quotes the rule with single quotes\)$"
+# RUN: %{harness_check} exits 2 %msil_exec --native --expected-rule 'windows: ' --expect %t.d/right %t.d/native44.exe > %t.1i.log 2>&1
+# RUN: %{harness_check} contains %t.1i.log "error: --expected-rule: 'windows:' gives no reason$"
+# RUN: %{harness_check} exits 2 %msil_exec --native --expected-rule 'windows,windows: twice' --expect %t.d/right %t.d/native44.exe > %t.1j.log 2>&1
+# RUN: %{harness_check} contains %t.1j.log "error: --expected-rule: 'windows,windows: twice' names an operating system twice$"
+# RUN: %{harness_check} exits 2 %msil_exec --expected-rule 'windows: managed' --expect %t.d/right %t.d/native44.exe > %t.1k.log 2>&1
+# RUN: %{harness_check} contains %t.1k.log "error: --expected-rule needs --native$"
+# RUN: %{harness_check} lacks %t.1f.log "skipped"
+# RUN: %{harness_check} lacks %t.1k.log "skipped"
+
+# (2)
+# RUN: %msil_prog_build --mode native --expected-rule 'windows: the reason of (2)' --level O0 --workdir %t.wd --out %t.wd/prog.exe --src %S/Inputs/rule-prog.c > %t.2a.log
+# RUN: %{harness_check} equals %t.2a.log "msil-prog: native oracle skipped (hand-written expected file): the reason of (2)"
+# RUN: %{harness_check} missing %t.wd
+# RUN: %{harness_check} exits 2 %msil_prog_build --mode native --expected-rule 'windows: the reason of (2)' --level O0 --src %S/Inputs/rule-prog.c > %t.2b.log 2>&1
+# RUN: %{harness_check} contains %t.2b.log "error: the following arguments are required: --workdir"
+# RUN: %{harness_check} lacks %t.2b.log "skipped"
+# RUN: %{harness_check} exits 2 %msil_prog_build --mode native --expected-rule 'bad' --level O0 --workdir %t.wd --out %t.wd/prog.exe --src %S/Inputs/rule-prog.c > %t.2c.log 2>&1
+# RUN: %{harness_check} contains %t.2c.log "^msil-prog: error: --expected-rule: 'bad' is not '<os>\[,<os>\]: <reason>'$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --mode native --expected-rule "windows: it's" --level O0 --workdir %t.wd --out %t.wd/prog.exe --src %S/Inputs/rule-prog.c > %t.2d.log 2>&1
+# RUN: %{harness_check} contains %t.2d.log "^msil-prog: error: --expected-rule: the reason of \"windows: it's\" holds a single quote "
+# RUN: %{harness_check} missing %t.wd
+# RUN: %if msil-native-oracle %{ %msil_prog_build --mode native --expected-rule 'linux: the other OS' --level O0 --workdir %t.wd2 --out %t.wd2/prog.exe --src %S/Inputs/rule-prog.c > %t.2e.log %}
+# RUN: %if msil-native-oracle %{ %{harness_check} contains %t.2e.log "^msil-prog: \S*clang\S* --target=x86_64-pc-windows-msvc .*-O0 -c \S*rule-prog\.c -o obj/rule-prog\.o$" %}
+# RUN: %if msil-native-oracle %{ %{harness_check} lacks %t.2e.log "skipped" %}
+# RUN: %if msil-native-oracle %{ %msil_exec --native --out %t.2e.out %t.wd2/prog.exe %}
+# RUN: %if msil-native-oracle %{ %{harness_check} equals %t.2e.out "[exit 9]" %}
+# RUN: %if msil-ld && msil-ar && msil-registered-target %{ %msil_prog_build --mode msil --expected-rule 'windows: ignored' --level O0 --workdir %t.wd3 --out %t.wd3/prog.exe --src %S/Inputs/rule-prog.c > %t.2f.log %}
+# RUN: %if msil-ld && msil-ar && msil-registered-target %{ %{harness_check} lacks %t.2f.log "skipped" %}
+# RUN: %if msil-ld && msil-ar && msil-registered-target %{ %msil_exec --out %t.2f.out %t.wd3/prog.exe %}
+# RUN: %if msil-ld && msil-ar && msil-registered-target %{ %{harness_check} equals %t.2f.out "[exit 9]" %}
+
+# (3)
+# RUN: not %{harness_lit} -a --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local --param msil_native_oracle=required --param msil_run_netfx=1 %S/prog/Inputs/nested-rule > %t.3.log 2>&1
+# RUN: %{harness_check} contains %t.3.log "^PASS: MSIL :: harness/prog/Inputs/nested-rule/rule\.c " "^FAIL: MSIL :: harness/prog/Inputs/nested-rule/norule\.c " "^FAIL: MSIL :: harness/prog/Inputs/nested-rule/rule-msil-wrong\.c " "^FAIL: MSIL :: harness/prog/Inputs/nested-rule/rule-other\.c "
+# RUN: %{harness_check} contains %t.3.log "^# \| msil-steps: native-build: .*msil-prog\.py'? .* --mode native --expected-rule 'windows,linux: the reason of rule\.c, with: a colon' --level O0 " "^# \| msil-prog: native oracle skipped \(hand-written expected file\): the reason of rule\.c, with: a colon$"
+# RUN: %{harness_check} contains %t.3.log "^# \| msil-steps: native-run: .*msil-run\.py'? .* --native --expected-rule 'windows,linux: the reason of rule\.c, with: a colon' --expect \S*nested-rule\Wrule'? " "^# \| msil-run: native oracle skipped \(hand-written expected file\): the reason of rule\.c, with: a colon$"
+# RUN: %{harness_check} contains %t.3.log "^# \| msil-steps: run: .*msil-run\.py'? .* --expect \S*nested-rule\Wrule'? .*rule\.c\.tmp\.O0\.d\Wprog\.exe'?$" "^# \| msil-steps: netfx-run: .*msil-run\.py'? .*--netfx .*--expect \S*nested-rule\Wrule'? .*rule\.c\.tmp\.O0\.d\Wprog\.exe'?$"
+# RUN: %{harness_check} contains %t.3.log "^# \| msil-steps: native-build: .*msil-prog\.py'? .* --mode native --expected-rule '' --level O0 --workdir \S*norule\.c\.tmp" "^# \| msil-run: output of \S*norule\.c\.tmp\.O0\.native\.d\Wprog\.exe does not match \S*nested-rule\Wnorule\.expected\n(?:# \| .*\n)*?# \| -\[exit 21\]\n# \| \+\[exit 22\]\n# \| msil-steps: native-run failed \(exit status 1\)$"
+# RUN: %{harness_check} contains %t.3.log "^# \| msil-prog: native oracle skipped \(hand-written expected file\): the reason of rule-msil-wrong\.c$" "^# \| msil-run: output of \S*rule-msil-wrong\.c\.tmp\.O0\.d\Wprog\.exe does not match \S*nested-rule\Wrule-msil-wrong\.expected\n(?:# \| .*\n)*?# \| -\[exit 30\]\n# \| \+\[exit 31\]\n# \| msil-steps: run failed \(exit status 1\)$"
+# RUN: %{harness_check} contains %t.3.log "^# \| msil-steps: native-build: .*msil-prog\.py'? .* --mode native --expected-rule 'linux: the reason of rule-other\.c' --level O0 " "^# \| msil-run: output of \S*rule-other\.c\.tmp\.O0\.native\.d\Wprog\.exe does not match \S*nested-rule\Wrule-other\.expected\n(?:# \| .*\n)*?# \| -\[exit 41\]\n# \| \+\[exit 42\]\n# \| msil-steps: native-run failed \(exit status 1\)$"
+# RUN: %{harness_check} lacks %t.3.log "skipped \(hand-written expected file\): the reason of rule-other\.c" "native oracle skipped \(hand-written expected file\): $"
+
+# (4)
+# RUN: cat %S/prog/Inputs/nested-rule/rule.c > %t.ue/rule.c
+# RUN: cat %S/prog/Inputs/nested-rule/rule.expected > %t.ue/rule.expected
+# RUN: cat %S/prog/Inputs/nested-rule/rule-other.c > %t.ue/rule-other.c
+# RUN: cat %S/prog/Inputs/nested-rule/rule-other.expected > %t.ue/rule-other.expected
+# RUN: %{harness_update_expected} --clang %t.d/native44.exe --rtlib none --check %t.ue/rule.c > %t.4a.log 2>&1
+# RUN: %{harness_check} contains %t.4a.log "^rule: \S*rule\.expected \(the reason of rule\.c, with: a colon\)$"
+# RUN: %{harness_update_expected} --clang %t.d/native44.exe --rtlib none %t.ue/rule.c > %t.4b.log 2>&1
+# RUN: %{harness_check} contains %t.4b.log "^rule: \S*rule\.expected \(the reason of rule\.c, with: a colon\)$"
+# RUN: %{harness_check} lacks %t.4b.log "^wrote "
+# RUN: %{harness_check} equals %t.ue/rule.expected "[exit 9]"
+# RUN: rm %t.ue/rule.expected
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang %t.d/native44.exe --rtlib none --check %t.ue/rule.c > %t.4c.log 2>&1
+# RUN: %{harness_check} contains %t.4c.log "^MISSING: \S*rule\.expected \(hand-written under %\{msil_expected_rule\}: the reason of rule\.c, with: a colon\)$"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang %t.d/native44.exe --rtlib none %t.ue/rule.c > %t.4d.log 2>&1
+# RUN: %{harness_check} contains %t.4d.log "^MISSING: \S*rule\.expected "
+# RUN: %{harness_check} missing %t.ue/rule.expected
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang %t.d/native44.exe --rtlib none --check %t.ue/rule-other.c > %t.4e.log 2>&1
+# RUN: %{harness_check} contains %t.4e.log "^MISMATCH: \S*rule-other\.c$" "^-\[exit 41\]$" "^\+\[exit 44\]$"
+# RUN: %{harness_check} lacks %t.4e.log "^rule: "
+# RUN: %{harness_update_expected} --clang %t.d/native44.exe --rtlib none %t.ue/rule-other.c > %t.4f.log 2>&1
+# RUN: %{harness_check} contains %t.4f.log "^wrote \S*rule-other\.windows\.expected \(rule-other\.expected is the hand-written linux expected file\)$"
+# RUN: %{harness_check} equals %t.ue/rule-other.expected "[exit 41]"
+# RUN: %{harness_check} equals %t.ue/rule-other.windows.expected "[exit 44]"
+# RUN: %{harness_update_expected} --clang %t.d/native44.exe --rtlib none --check %t.ue/rule-other.c > %t.4g.log 2>&1
+# RUN: %{harness_check} contains %t.4g.log "^ok: \S*rule-other\.c$"
+# RUN: cat %S/prog/Inputs/nested-rule/norule.c > %t.ue/norule.c
+# RUN: cat %S/prog/Inputs/nested-rule/norule.expected > %t.ue/norule.expected
+# RUN: %{harness_update_expected} --clang %t.d/native44.exe --rtlib none %t.ue/norule.c > %t.4h.log 2>&1
+# RUN: %{harness_check} contains %t.4h.log "^wrote \S*norule\.expected$"
+# RUN: %{harness_check} equals %t.ue/norule.expected "[exit 44]"
+# RUN: %{harness_check} missing %t.ue/norule.windows.expected
+# RUN: %{harness_check} write %t.ue/rule-bad.c "// REDEFINE: %%{msil_expected_rule} = windows" "// RUN: %%{msil_c_O0}" "int main(void) { return 9; }"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang %t.d/native44.exe --rtlib none %t.ue/rule-bad.c > %t.4i.log 2>&1
+# RUN: %{harness_check} contains %t.4i.log "^update-expected: \S*rule-bad\.c: %\{msil_expected_rule\}: 'windows' is not '<os>\[,<os>\]: <reason>'$" "^FAIL \(test file\): \S*rule-bad\.c$"
+# RUN: %{harness_check} missing %t.ue/rule-bad.expected
+# RUN: %{harness_check} write %t.ue/flags-bad.c "// REDEFINE: %%{msil_oracle_flags} = --hosted --bogus" "// REDEFINE: %%{msil_expected_rule} = windows: the reason of the flags tests" "// RUN: %%{msil_c_O0}" "int main(void) { return 9; }"
+# RUN: %{harness_check} write %t.ue/flags.c "// REDEFINE: %%{msil_oracle_flags} = --hosted" "// REDEFINE: %%{msil_expected_rule} = windows: the reason of the flags tests" "// RUN: %%{msil_c_O0}" "int main(void) { return 9; }"
+# RUN: %{harness_check} write %t.ue/flags-bad.expected "[exit 9]"
+# RUN: %{harness_check} write %t.ue/flags.expected "[exit 9]"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang %t.d/native44.exe --rtlib none %t.ue/flags-bad.c > %t.4j.log 2>&1
+# RUN: %{harness_check} contains %t.4j.log "^update-expected: \S*flags-bad\.c: %\{msil_oracle_flags\}: '--bogus': the oracle knows only --hosted$" "^FAIL \(test file\): \S*flags-bad\.c$"
+# RUN: %{harness_check} lacks %t.4j.log "^rule: "
+# RUN: %{harness_update_expected} --clang %t.d/native44.exe --rtlib none %t.ue/flags.c > %t.4k.log 2>&1
+# RUN: %{harness_check} contains %t.4k.log "^rule: \S*flags\.expected \(the reason of the flags tests\)$"

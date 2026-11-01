@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "test": "msil/test/M1/03-control/loops.c",
+  "params": [
+    "msil_pipeline=obj",
+    "msil_dotnet_runtime=8",
+    "msil_native_oracle=required",
+    "msil_run_netfx=1",
+    "msil_equiv=1",
+    "msil_also_run=10,8+tc0",
+    "msil_require_verify=1",
+    "msil_require_exec=1",
+    "msil_require_link=1"
+  ],
+  "quiet_seconds": 11.73,
+  "test_cpu_seconds": 5.74,
+  "source": "M24's harness-cost WP, 2026-10-30, on a Windows 11 x64 host shared with other work. Each figure is the median of three lit -j1 invocations of the test through private lit roots, each inside a Windows job object; test CPU is lit's CPU minus that of a configuration-only invocation with the same parameters. Before the first edit, the M23 harness (38e70b08832e): test CPU 14.77 s (17.08 - 2.31, host about 59% loaded), -j1 wall 28.47 s, xunit 24.17 s. Finished, interleaved run by run with the M23 harness on the same host and build: M23 harness test CPU 9.54 s (10.98 - 1.44; 97 processes), wall 15.28 s, xunit 13.21 s; M24 harness test CPU 5.74 s (6.33 - 0.59; 66 processes, probe cache hit), wall 9.69 s, xunit 8.70 s. quiet_seconds = 19.5 x 5.74 / 9.54 from the interleaved pair, which shared the host's load; test_cpu_seconds = 5.74."
+}

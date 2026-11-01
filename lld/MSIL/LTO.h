@@ -40,6 +40,7 @@ class LTO;
 namespace lld::msil {
 class BitcodeFile;
 class InputFile;
+struct DiscardableCopies;
 
 class BitcodeCompiler {
 public:
@@ -62,7 +63,15 @@ private:
   // definitions stay visible to regular objects (lld/ELF/LTO.cpp's
   // usedStartStop).
   llvm::DenseSet<StringRef> usedStartStop;
+  // What add() records for the code generator's hooks (LTO.cpp): the
+  // prevailing definitions that no regular object needs.
+  std::shared_ptr<DiscardableCopies> discardable;
 };
+
+// Returns true if \p f has a ThinLTO module, by lto::LTO::addModule's rule (a
+// module with a summary that is not a regular LTO module). The lto::InputFile
+// itself knows only after it is added to LTO.
+bool isThinLTO(const BitcodeFile *f);
 
 // One line of --print-imports (plan 5.10.14).
 struct PrintedImport {

@@ -42,11 +42,26 @@ class MSILFunctionInfo;
 class TargetMachine;
 class Triple;
 
+namespace cli {
+struct TrailerDefInfo;
+} // end namespace cli
+
 namespace MSIL {
+
+struct Signature;
 
 /// The longest identifier that both Phase-1 ilasms accept, in UTF-8 bytes
 /// (D11).
 inline constexpr size_t MaxILNameBytes = 1023;
+
+/// The widest integer, in bits, that instruction selection converts to and
+/// from floating point (MSILTargetLowering's
+/// setMaxLargeFPConvertBitWidthSupported): ExpandIRInsts expands the
+/// conversions of wider integers inline. It is also the bound of
+/// relaxStrictInt128Conversions (MSILPreExpand.h), which makes the constrained
+/// conversions of wider integers plain, so that ExpandIRInsts expands them
+/// too.
+inline constexpr unsigned MaxSelectedFPConvertBits = 64;
 
 /// The IR spelling of GV ("@name", "@0", "@\"\01x\"") for diagnostics.
 std::string getIRName(const GlobalValue &GV);
@@ -164,6 +179,24 @@ struct NativeImport {
 /// as \p F's attributes and \p M's metadata, or as \p Name.
 std::optional<NativeImport> getLinkedImport(const Module &M, StringRef Name,
                                             const Function *F);
+
+/// The row of llvm/CLI/TrailerDefs.def that whole-program text (-S, llc,
+/// msil-ld --lto-emit-asm) defines for a reference to \p Name in \p M (plan
+/// 5.14.4 T6): the row named \p Name, when \p M defines no function of that
+/// IL name (a module that defines one calls its own) and the row's scope
+/// holds for \p M's triple and kind of output. Text of -S and llc is an
+/// executable when \p M defines main or wmain; msil-ld's linked text
+/// (isLinkedModule) always is, because msil-ld never writes it for a -shared
+/// link, so it offers what msil-ld's '<trailer>' input offers. Null
+/// otherwise. Object mode asks no such question: there the name is an
+/// undefined symbol, which msil-ld's '<trailer>' defines (T1).
+const cli::TrailerDefInfo *getOfferedTrailerDef(const Module &M,
+                                                StringRef Name);
+
+/// Whether \p S, the CIL signature of a call or of a declaration, is the
+/// signature of the trailer definition \p D (cli::getTrailerDefSignature).
+bool matchesTrailerDefSignature(const cli::TrailerDefInfo &D,
+                                const Signature &S);
 
 } // end namespace MSIL
 

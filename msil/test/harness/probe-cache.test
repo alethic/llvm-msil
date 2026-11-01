@@ -1,0 +1,86 @@
+# The probe cache of lit.cfg.py (plan 5.17.10, M24): lit.cfg.py writes its
+# probe results to --param msil_probe_cache (default
+# <build>/tools/msil/test/probe-cache.json; empty disables it) as
+# {"version": 1, "key": {"lit_cfg_sha256": ...}, "probes": {NAME: {"key":
+# ..., "value": ...}}}, where each probe's key holds what it depends on (the
+# probed tools' paths, sizes and mtimes, ...) and the file's key the SHA-256 of
+# lit.cfg.py (M24.i's hand-over). Any difference, or an unreadable file, means
+# a re-probe and a rewrite, and lit prints 'note: probe cache: hit' or 'note:
+# probe cache: miss (<reason>)'. Each nested lit below loads the
+# configuration with --show-tests on Inputs/nested-ok and its own cache file,
+# so it runs nothing and never touches the outer run's cache; the
+# Inputs/probe-cache-edit.py script checks the file's shape and makes one
+# change to it at a time. The checks:
+# (1) the first load misses (no file yet) and writes the cache; the second
+# hits. (2) A poisoned value under an untouched key is a hit, and the
+# configuration reports it (the .NET SDK version 10.0.999 of its csc note),
+# so the cache really is read; the cache stays as it is. (3) A changed probe
+# key is a miss that names the probe and the tool, the configuration reports
+# the real SDK again, and the rewritten file hits. (4) A missing probe, (5) a
+# changed SHA-256 of lit.cfg.py, (6) another version and (7) a file that is
+# not JSON each miss with their reason. (8) An empty msil_probe_cache disables
+# the cache, says so, and writes no file. (9) A cache in a directory that
+# does not exist yet is written there, and nothing else is left beside it.
+# REQUIRES: msil-dotnet, msil-csc
+
+# RUN: rm -rf %t && mkdir -p %t
+
+# (1)
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache=%t/cache.json %S/Inputs/nested-ok > %t/1.log 2>&1
+# RUN: %{harness_check} contains %t/1.log "note: probe cache: miss \(no cache file yet\)$"
+# RUN: %python %S/Inputs/probe-cache-edit.py check %t/cache.json
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache=%t/cache.json %S/Inputs/nested-ok > %t/1b.log 2>&1
+# RUN: %{harness_check} contains %t/1b.log "note: probe cache: hit$" "note: msil: csc: .* \(SDK (?!10\.0\.999\))\S+\)$"
+# RUN: %{harness_check} lacks %t/1b.log "probe cache: miss"
+
+# (2)
+# RUN: %python %S/Inputs/probe-cache-edit.py poison %t/cache.json
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache=%t/cache.json %S/Inputs/nested-ok > %t/2.log 2>&1
+# RUN: %{harness_check} contains %t/2.log "note: probe cache: hit$" "note: msil: csc: .* \(SDK 10\.0\.999\)$"
+
+# (3)
+# RUN: %python %S/Inputs/probe-cache-edit.py probekey %t/cache.json
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache=%t/cache.json %S/Inputs/nested-ok > %t/3.log 2>&1
+# RUN: %{harness_check} contains %t/3.log "note: probe cache: miss \(dotnet --list-sdks \S.*: dotnet changed\)$" "note: msil: csc: .* \(SDK (?!10\.0\.999\))\S+\)$"
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache=%t/cache.json %S/Inputs/nested-ok > %t/3b.log 2>&1
+# RUN: %{harness_check} contains %t/3b.log "note: probe cache: hit$" "note: msil: csc: .* \(SDK (?!10\.0\.999\))\S+\)$"
+# RUN: %python %S/Inputs/probe-cache-edit.py check %t/cache.json
+
+# (4)
+# RUN: %python %S/Inputs/probe-cache-edit.py dropprobe %t/cache.json
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache=%t/cache.json %S/Inputs/nested-ok > %t/4.log 2>&1
+# RUN: %{harness_check} contains %t/4.log "note: probe cache: miss \(dotnet --list-sdks \S.*: not cached\)$"
+
+# (5)
+# RUN: %python %S/Inputs/probe-cache-edit.py sha %t/cache.json
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache=%t/cache.json %S/Inputs/nested-ok > %t/5.log 2>&1
+# RUN: %{harness_check} contains %t/5.log "note: probe cache: miss \(lit\.cfg\.py changed\)$"
+
+# (6)
+# RUN: %python %S/Inputs/probe-cache-edit.py version %t/cache.json
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache=%t/cache.json %S/Inputs/nested-ok > %t/6.log 2>&1
+# RUN: %{harness_check} contains %t/6.log "note: probe cache: miss \(\S*cache\.json is not a probe cache of version 1\)$"
+
+# (7)
+# RUN: %python %S/Inputs/probe-cache-edit.py garbage %t/cache.json
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache=%t/cache.json %S/Inputs/nested-ok > %t/7.log 2>&1
+# RUN: %{harness_check} contains %t/7.log "note: probe cache: miss \(cannot read \S*cache\.json: .+\)$"
+# RUN: %python %S/Inputs/probe-cache-edit.py check %t/cache.json
+
+# (8)
+# RUN: rm -f %t/cache.json
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache= %S/Inputs/nested-ok > %t/8.log 2>&1
+# RUN: %{harness_check} contains %t/8.log "note: probe cache: miss \(disabled by an empty msil_probe_cache\)$"
+# RUN: %{harness_check} missing %t/cache.json
+
+# (9)
+# RUN: %{harness_lit} --show-tests --param msil_probe_cache=%t/sub/deeper/cache.json %S/Inputs/nested-ok > %t/9.log 2>&1
+# RUN: %{harness_check} contains %t/9.log "note: probe cache: miss \(no cache file yet\)$"
+# RUN: %python %S/Inputs/probe-cache-edit.py check %t/sub/deeper/cache.json
+# RUN: %python %S/Inputs/probe-cache-edit.py listdir %t/sub/deeper > %t/9.ls
+# RUN: %{harness_check} equals %t/9.ls "cache.json"
+
+# The script's own failure path: a file that is not a probe cache.
+# RUN: %{harness_check} write %t/not-a-cache.json "{\"version\": 1}"
+# RUN: not %python %S/Inputs/probe-cache-edit.py check %t/not-a-cache.json 2> %t/check.log
+# RUN: %{harness_check} contains %t/check.log "^probe-cache-edit: \S*not-a-cache\.json: the top level is not \{version, key, probes\}$"

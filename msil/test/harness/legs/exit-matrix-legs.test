@@ -1,0 +1,39 @@
+# run-m1-gate.ps1 -Exit's row matrix-legs (plan 5.17.11 and 5.17.12 item 1,
+# M24): 'lit-legs.ps1 -Describe' writes <build>/lit-results/legs.json, and
+# 'check-matrix.py --legs' on that file must pass with the gate rule applied.
+# run-m1-gate.ps1 itself would configure, build and run every leg, so
+# Inputs/exit-matrix-legs.ps1 loads Invoke-MatrixLegsStep, the functions it
+# calls and Get-ExpectedLegs from the script's syntax tree and runs them alone,
+# each case with its own build directory, against the real lit-legs.ps1 and
+# against stand-ins of it. It checks:
+# (1) with the real lit-legs.ps1, PASS: the row holds check-matrix's two
+# summary lines and names the legs file, which holds -Describe's JSON.
+# (2) The failure paths, each a FAIL row: -Describe exits 3 (the row names the
+# status and the first three of its four stderr lines, and the legs file of
+# an earlier run is gone); a planted legs fault, -Describe's JSON without the
+# legs that the legs rule counts (check-matrix's problem count and its first
+# three problems, the legs rule's); a planted gate fault, the Quick legs
+# without 10+tc0 (the gate rule's problems); and a JSON that names
+# lit-legs.sh, which passes the legs rule while the gate rule does not apply.
+# (3) Get-ExpectedLegs' -Exit filter, against a stand-in -List with a leg of
+# every tag: -Exit adds the Exit legs, -NoWsl leaves out the Wsl legs and the
+# Exit legs named *-wsl, and the Quick and Full legs are never expected.
+# REQUIRES: msil-ci-pwsh
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %{legs_pwsh} %S/Inputs/exit-matrix-legs.ps1 -Work %t -Python %python > %t/driver.log 2>&1
+
+# (1)
+# RUN: %{harness_check} contains %t/pass/rows.tsv "\Amatrix-legs\t-\tPASS\t\d+\tlegs: \d+ lit runs of \d+ legs in 1 files; the gate rule applied; \d+ lines, \d+ tests: OK \(.*pass.build.lit-results.legs\.json\)\n\Z"
+# RUN: %{harness_check} contains %t/pass/build/lit-results/legs.json '"version": 1,' '"script": "lit-legs\.ps1",' '"name": "p3-full",'
+# RUN: %{harness_check} missing %t/pass/build/lit-results/legs.stderr.txt
+
+# (2)
+# RUN: %{harness_check} contains %t/describe-fails/rows.tsv "\Amatrix-legs\t-\tFAIL\t\d+\tlit-legs\.ps1 -Describe exited 3: lit-legs\.ps1: planted failure 1 lit-legs\.ps1: planted failure 2 lit-legs\.ps1: planted failure 3\n\Z"
+# RUN: %{harness_check} missing %t/describe-fails/build/lit-results/legs.json
+# RUN: %{harness_check} contains %t/drop-legs/rows.tsv "\Amatrix-legs\t-\tFAIL\t\d+\t\d+ problems(; [^;\t]+: no phase-gate leg runs \S+ under (asm|obj|lto) for (linux-gnu|windows-msvc)){3}; check-matrix\.py exited 1 \(.*drop-legs.build.lit-results.legs\.json\)\n\Z"
+# RUN: %{harness_check} contains %t/no-also-run/rows.tsv "\Amatrix-legs\t-\tFAIL\t\d+\t\d+ problems(; [^;\t]+: no gate leg runs \S+ with 10\+tc0 for (linux-gnu|windows-msvc)){1,3}; check-matrix\.py exited 1 \(.*no-also-run.build.lit-results.legs\.json\)\n\Z"
+# RUN: %{harness_check} contains %t/sh-script/rows.tsv "\Amatrix-legs\t-\tFAIL\t\d+\tthe gate rule did not apply; check-matrix\.py exited 0 \(.*sh-script.build.lit-results.legs\.json\)\n\Z"
+
+# (3)
+# RUN: %{harness_check} equals %t/expected/legs.txt "no switch: net8, wsl-net10" "-Exit: net8, wsl-net10, ctest-lto, gc-churn-wsl" "-Exit -NoWsl: net8, ctest-lto"

@@ -7,6 +7,11 @@
 ; of i128 by a variable, the eight plain conversions between float32 or
 ; float64 and signed or unsigned i128, and llvm.fptosi.sat.i128.f64 into
 ; inline IR (600-1,050 IL instructions each; NVPTX and AMDGPU do the same).
+; Since M24 the constrained (strictfp) forms of those conversions expand
+; too: MSIL::relaxStrictInt128Conversions (slot P0, plan 5.13.6) replaces
+; each by the plain instruction before ExpandIRInsts runs, since CIL has one
+; rounding mode and no floating-point exceptions (the '*_strict' functions;
+; strict-i128.ll checks that each body equals its plain twin's).
 ; No compiler-rt helper is asked for: no __divti3, __udivti3, __modti3,
 ; __umodti3, __fixsfti, __fixdfti, __fixunssfti, __fixunsdfti, __floattisf,
 ; __floattidf, __floatuntisf or __floatuntidf, no call at all, and none of
@@ -18,20 +23,20 @@
 ;
 ; helpers.ll (a split part): the expansion covers the plain conversions from
 ; and to float32 and float64, and from bfloat (fp-expand.ll's i128.ll). The
-; constrained (strictfp) conversions are not expanded and still name
-; __fixdfti, __fixunssfti, __floattidf and __floatuntisf; the half
-; conversions name the float32 <-> half helpers that the expansion goes
-; through (__extendhfsf2, __truncsfhf2); and sitofp and uitofp from i128 to
-; bfloat name __extendbfsf2 (the section 12 row 'Row 'D14/D33 note and P3-B
-; text' (2026-10-21) and M12.b (1) corrected'). They also named __truncsfbf2
-; until the upstream merge at 1838cefa99c0: since upstream 5110131a330f the
-; exact f32 -> bf16 step (an FP_ROUND marked exact, which turns the result's
-; float32 copy back into bfloat) is a bitcast plus the high 16 bits, so only
-; __extendbfsf2 is named (the expansion's rounding fptrunc feeds only the
-; diagnosed __extendbfsf2 conversion and is dropped with it). Each is Phase
-; 1's 'runtime helper '<name>' is not available for MSIL yet (phase 3)', once
-; per helper and function, with no call built and no crash; the IL on stdout
-; assembles.
+; half conversions name the float32 <-> half helpers that the expansion goes
+; through (__extendhfsf2, __truncsfhf2), and sitofp and uitofp from i128 to
+; bfloat name __truncsfbf2, the expansion's rounding f32 -> bf16 step (the
+; section 12 row 'Row 'D14/D33 note and P3-B text' (2026-10-21) and M12.b
+; (1) corrected'). From the upstream merge at 1838cefa99c0 until M24 they
+; named __extendbfsf2 instead, because the rounding fptrunc fed only the
+; diagnosed bf16 -> f32 conversion and was dropped with it; since M24 that
+; extension is inline (fp-helpers F2 (a)), so __extendbfsf2 is never named
+; and the rounding step is the call that is diagnosed. The exact f32 -> bf16
+; step (an FP_ROUND marked exact, which turns the result's float32 copy back
+; into bfloat) is a bitcast plus the high 16 bits since upstream
+; 5110131a330f. Each is Phase 1's 'runtime helper '<name>' is not available
+; for MSIL yet (phase 3)', once per helper and function, with no call built
+; and no crash; the IL on stdout assembles.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not="{{^ +call}}" \
 ; DEFINE:   --implicit-check-not=__divti3 --implicit-check-not=__udivti3 --implicit-check-not=__modti3 \
@@ -180,54 +185,16 @@ define i128 @fptosi_sat_f64_i128(double %x) {
   ret i128 %r
 }
 
-; CHECK-LABEL: {{^}}.method public static int32 'after_i128'(int32, int32) cil managed{{$}}
-; CHECK-NEXT:  {{^\{$}}
-; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
-; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
-; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
-; CHECK-NEXT:  {{^}}  sub{{$}}
-; CHECK-NEXT:  {{^}}  ret{{$}}
-; CHECK-NEXT:  {{^}}} // end of method 'after_i128'{{$}}
-; CHECK-NOT:   {{^}}.method
-define i32 @after_i128(i32 %a, i32 %b) {
-  %r = sub i32 %a, %b
-  ret i32 %r
-}
-
-declare i128 @llvm.fptosi.sat.i128.f64(double)
-
-;--- helpers.ll
-source_filename = "i128-helpers.c"
-
-; HELPER: {{^}}error: {{.*}}in function fptosi_f64_strict {{.*}}: runtime helper '__fixdfti' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function fptoui_f32_strict {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function sitofp_f64_strict {{.*}}: runtime helper '__floattidf' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function uitofp_f32_strict {{.*}}: runtime helper '__floatuntisf' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function fptosi_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function fptoui_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function sitofp_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function uitofp_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function sitofp_bf16 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function uitofp_bf16 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3){{$}}
-
-; HELPER-IL-LABEL: {{^}}.method public static void 'fptosi_f64_strict'(native int, float64) cil managed{{$}}
-; HELPER-IL-LABEL: {{^}}.method public static void 'fptoui_f32_strict'(native int, float32) cil managed{{$}}
-; HELPER-IL-LABEL: {{^}}.method public static float64 'sitofp_f64_strict'(native int, native int) cil managed{{$}}
-; HELPER-IL-LABEL: {{^}}.method public static float32 'uitofp_f32_strict'(native int, native int) cil managed{{$}}
-; HELPER-IL-LABEL: {{^}}.method public static void 'fptosi_f16'(native int, int32) cil managed{{$}}
-; HELPER-IL-LABEL: {{^}}.method public static void 'fptoui_f16'(native int, int32) cil managed{{$}}
-; HELPER-IL-LABEL: {{^}}.method public static int32 'sitofp_f16'(native int, native int) cil managed{{$}}
-; HELPER-IL-LABEL: {{^}}.method public static int32 'uitofp_f16'(native int, native int) cil managed{{$}}
-; HELPER-IL-LABEL: {{^}}.method public static int32 'sitofp_bf16'(native int, native int) cil managed{{$}}
-; HELPER-IL-LABEL: {{^}}.method public static int32 'uitofp_bf16'(native int, native int) cil managed{{$}}
-; HELPER-IL-LABEL: {{^}}.method public static int32 'after_helpers'(int32, int32) cil managed{{$}}
-; HELPER-IL-NEXT:  {{^\{$}}
-; HELPER-IL-NEXT:  {{^}}  .maxstack 2{{$}}
-; HELPER-IL-NEXT:  {{^}}  ldarg.0{{$}}
-; HELPER-IL-NEXT:  {{^}}  ldarg.1{{$}}
-; HELPER-IL-NEXT:  {{^}}  add{{$}}
-; HELPER-IL-NEXT:  {{^}}  ret{{$}}
-
+; The constrained conversions (M24): the plain expansions, with no helper,
+; no call and no report.
+; CHECK-LABEL: {{^}}.method public static void 'fptosi_f64_strict'(native int, float64) cil managed{{$}}
+; CHECK:       {{^}}} // end of method 'fptosi_f64_strict'{{$}}
+; CHECK-LABEL: {{^}}.method public static void 'fptoui_f32_strict'(native int, float32) cil managed{{$}}
+; CHECK:       {{^}}} // end of method 'fptoui_f32_strict'{{$}}
+; CHECK-LABEL: {{^}}.method public static float64 'sitofp_f64_strict'(native int, native int) cil managed{{$}}
+; CHECK:       {{^}}} // end of method 'sitofp_f64_strict'{{$}}
+; CHECK-LABEL: {{^}}.method public static float32 'uitofp_f32_strict'(native int, native int) cil managed{{$}}
+; CHECK:       {{^}}} // end of method 'uitofp_f32_strict'{{$}}
 define i128 @fptosi_f64_strict(double %x) strictfp {
   %r = call i128 @llvm.experimental.constrained.fptosi.i128.f64(double %x, metadata !"fpexcept.strict") strictfp
   ret i128 %r
@@ -247,6 +214,50 @@ define float @uitofp_f32_strict(i128 %x) strictfp {
   %r = call float @llvm.experimental.constrained.uitofp.f32.i128(i128 %x, metadata !"round.tonearest", metadata !"fpexcept.strict") strictfp
   ret float %r
 }
+
+; CHECK-LABEL: {{^}}.method public static int32 'after_i128'(int32, int32) cil managed{{$}}
+; CHECK-NEXT:  {{^\{$}}
+; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
+; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
+; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
+; CHECK-NEXT:  {{^}}  sub{{$}}
+; CHECK-NEXT:  {{^}}  ret{{$}}
+; CHECK-NEXT:  {{^}}} // end of method 'after_i128'{{$}}
+; CHECK-NOT:   {{^}}.method
+define i32 @after_i128(i32 %a, i32 %b) {
+  %r = sub i32 %a, %b
+  ret i32 %r
+}
+
+declare i128 @llvm.fptosi.sat.i128.f64(double)
+declare i128 @llvm.experimental.constrained.fptosi.i128.f64(double, metadata)
+declare i128 @llvm.experimental.constrained.fptoui.i128.f32(float, metadata)
+declare double @llvm.experimental.constrained.sitofp.f64.i128(i128, metadata, metadata)
+declare float @llvm.experimental.constrained.uitofp.f32.i128(i128, metadata, metadata)
+
+;--- helpers.ll
+source_filename = "i128-helpers.c"
+
+; HELPER: {{^}}error: {{.*}}in function fptosi_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
+; HELPER: {{^}}error: {{.*}}in function fptoui_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
+; HELPER: {{^}}error: {{.*}}in function sitofp_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
+; HELPER: {{^}}error: {{.*}}in function uitofp_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
+; HELPER: {{^}}error: {{.*}}in function sitofp_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
+; HELPER: {{^}}error: {{.*}}in function uitofp_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
+
+; HELPER-IL-LABEL: {{^}}.method public static void 'fptosi_f16'(native int, int32) cil managed{{$}}
+; HELPER-IL-LABEL: {{^}}.method public static void 'fptoui_f16'(native int, int32) cil managed{{$}}
+; HELPER-IL-LABEL: {{^}}.method public static int32 'sitofp_f16'(native int, native int) cil managed{{$}}
+; HELPER-IL-LABEL: {{^}}.method public static int32 'uitofp_f16'(native int, native int) cil managed{{$}}
+; HELPER-IL-LABEL: {{^}}.method public static int32 'sitofp_bf16'(native int, native int) cil managed{{$}}
+; HELPER-IL-LABEL: {{^}}.method public static int32 'uitofp_bf16'(native int, native int) cil managed{{$}}
+; HELPER-IL-LABEL: {{^}}.method public static int32 'after_helpers'(int32, int32) cil managed{{$}}
+; HELPER-IL-NEXT:  {{^\{$}}
+; HELPER-IL-NEXT:  {{^}}  .maxstack 2{{$}}
+; HELPER-IL-NEXT:  {{^}}  ldarg.0{{$}}
+; HELPER-IL-NEXT:  {{^}}  ldarg.1{{$}}
+; HELPER-IL-NEXT:  {{^}}  add{{$}}
+; HELPER-IL-NEXT:  {{^}}  ret{{$}}
 
 ; half starts and ends as its i16 bits (fp-expand.ll's bf16.ll).
 define i128 @fptosi_f16(i16 %bits) {
@@ -274,7 +285,8 @@ define i16 @uitofp_f16(i128 %x) {
 }
 
 ; bfloat ends as its i16 bits too; fptosi and fptoui from bfloat expand
-; inline (fp-expand.ll's i128.ll), these two do not.
+; inline (fp-expand.ll's i128.ll), these two name the expansion's rounding
+; step __truncsfbf2.
 define i16 @sitofp_bf16(i128 %x) {
   %r = sitofp i128 %x to bfloat
   %b = bitcast bfloat %r to i16
@@ -291,8 +303,3 @@ define i32 @after_helpers(i32 %a, i32 %b) {
   %r = add i32 %a, %b
   ret i32 %r
 }
-
-declare i128 @llvm.experimental.constrained.fptosi.i128.f64(double, metadata)
-declare i128 @llvm.experimental.constrained.fptoui.i128.f32(float, metadata)
-declare double @llvm.experimental.constrained.sitofp.f64.i128(i128, metadata, metadata)
-declare float @llvm.experimental.constrained.uitofp.f32.i128(i128, metadata, metadata)

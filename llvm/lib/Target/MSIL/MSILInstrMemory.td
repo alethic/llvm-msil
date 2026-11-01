@@ -169,12 +169,10 @@ defm MEMMOVE : I<(outs), (ins I64:$src, I64:$dst, I64:$len),
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0 in
 defm MEMORY_BARRIER : I<(outs), (ins), [], "call", 0x28>;
 
-// atomic_fence (ordering, scope). A single-thread fence (scope 0, clang's
+// atomic_fence (ordering, scope): every fence that gets here calls
+// Interlocked::MemoryBarrier. A single-thread fence (scope 0, clang's
 // translation of 'asm volatile("" ::: "memory")' and of
-// __atomic_signal_fence) only orders code generation: the generic MEMBARRIER
-// pseudo has side effects and no memory operands, so MSILRegStackify never
-// moves a load or store across it, and AsmPrinter prints it as a comment
-// (AArch64 precedent). Every other fence calls Interlocked::MemoryBarrier.
-let AddedComplexity = 15 in
-def : Pat<(atomic_fence (timm), 0), (MEMBARRIER)>;
+// __atomic_signal_fence) never does: MSILTargetLowering::LowerATOMIC_FENCE
+// makes it a call of __msil_compiler_barrier, which the JIT does not move
+// memory accesses across either (decision D36 as amended).
 def : Pat<(atomic_fence (timm), (timm)), (MEMORY_BARRIER)>;

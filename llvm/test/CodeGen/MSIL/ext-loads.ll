@@ -14,12 +14,15 @@
 ; half and bfloat (half-ext.ll): extending loads from f16 and bf16 to f32 and
 ; f64 are Expand (M7.b), so a loaded half or bfloat that is extended is the
 ; 16-bit integer load (load-store.ll copies them with ldind.u2) followed by the
-; generic conversion, which is a compiler-rt call: __extendhfsf2 for half,
-; __extendbfsf2 for bfloat, also on the way to double. A library call whose
-; name starts with '__' is an error until phase 3 (decision D14), so each
-; function gets exactly that one diagnostic, never a 'Cannot select' of an
-; unselectable extending load or a crash; llc exits with 1 and the IL on stdout
-; still assembles.
+; generic conversion. For half that is the compiler-rt call __extendhfsf2,
+; also on the way to double; a library call whose name starts with '__' is an
+; error until phase 3 (decision D14), so each half function gets exactly that
+; one diagnostic, never a 'Cannot select' of an unselectable extending load or
+; a crash. For bfloat the conversion is inline since M24 (fp-helpers F2 (a)):
+; the loaded bits are shifted left by 16, stored to the frame slot as an int32
+; and read back as a float32 (BF-IL), then conv.r8 for double, so the bfloat
+; functions report nothing and call nothing (until M24 they named
+; __extendbfsf2). llc exits with 1 and the IL on stdout still assembles.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=conv.i8 \
 ; DEFINE:   --implicit-check-not=conv.u8 --implicit-check-not=ldind.i8 --implicit-check-not=ldind.u4 \
@@ -49,7 +52,10 @@
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/half-ext.ll -o /dev/null \
 ; RUN:   2>&1 | %{diag}
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/half-ext.ll > %t.half.il
+; RUN: FileCheck %s --check-prefix=BF-IL --input-file=%t.half.il --implicit-check-not="{{^ +call}}"
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t.half.dll %t.half.il %}
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/half-ext.ll > %t.half.o0.il
+; RUN: FileCheck %s --check-prefix=BF-IL --input-file=%t.half.o0.il --implicit-check-not="{{^ +call}}"
 
 ;--- loads.ll
 source_filename = "ext-loads.c"
@@ -260,6 +266,38 @@ define double @fpext_f32_to_f64(ptr %p) {
   ret double %e
 }
 
+; ---- half and bfloat results: the 16-bit pattern in an int32 ----
+
+; A half or bfloat result is its 16-bit pattern in an int32 (bfloat since
+; M24, fp-helpers F2 (a); until then a loaded bfloat result was a float32 and
+; needed __extendbfsf2), so returning a loaded one is the zero-extending
+; 16-bit load alone.
+; CHECK-LABEL: .method {{.*}}'load_half_ret'(
+; CHECK-SAME:  native int) cil managed{{$}}
+; CHECK-NEXT:  {{^\{$}}
+; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
+; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
+; CHECK-NEXT:  {{^}}  ldind.u2{{$}}
+; CHECK-NEXT:  {{^}}  ret{{$}}
+; CHECK-NEXT:  {{^}}} // end of method 'load_half_ret'{{$}}
+define half @load_half_ret(ptr %p) {
+  %v = load half, ptr %p
+  ret half %v
+}
+
+; CHECK-LABEL: .method {{.*}}'load_bfloat_ret'(
+; CHECK-SAME:  native int) cil managed{{$}}
+; CHECK-NEXT:  {{^\{$}}
+; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
+; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
+; CHECK-NEXT:  {{^}}  ldind.u2{{$}}
+; CHECK-NEXT:  {{^}}  ret{{$}}
+; CHECK-NEXT:  {{^}}} // end of method 'load_bfloat_ret'{{$}}
+define bfloat @load_bfloat_ret(ptr %p) {
+  %v = load bfloat, ptr %p
+  ret bfloat %v
+}
+
 !0 = !{i8 0, i8 2}
 !1 = !{}
 
@@ -280,14 +318,31 @@ define double @fpext_half_to_f64(ptr %p) {
   ret double %e
 }
 
-; ERR: error: {{.*}}in function fpext_bfloat_to_f32 float (ptr): runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3){{$}}
+; BF-IL-LABEL: {{^}}.method public static float32 'fpext_bfloat_to_f32'(native int) cil managed{{$}}
+; BF-IL:       {{^}}  ldarg.0{{$}}
+; BF-IL-NEXT:  {{^}}  ldind.u2{{$}}
+; BF-IL-NEXT:  {{^}}  ldc.i4.s 16{{$}}
+; BF-IL-NEXT:  {{^}}  shl{{$}}
+; BF-IL:       {{^}}  stind.i4{{$}}
+; BF-IL:       {{^}}  ldind.r4{{$}}
+; BF-IL-NEXT:  {{^}}  ret{{$}}
+; BF-IL-NEXT:  {{^}}} // end of method 'fpext_bfloat_to_f32'{{$}}
 define float @fpext_bfloat_to_f32(ptr %p) {
   %v = load bfloat, ptr %p
   %e = fpext bfloat %v to float
   ret float %e
 }
 
-; ERR: error: {{.*}}in function fpext_bfloat_to_f64 double (ptr): runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3){{$}}
+; BF-IL-LABEL: {{^}}.method public static float64 'fpext_bfloat_to_f64'(native int) cil managed{{$}}
+; BF-IL:       {{^}}  ldarg.0{{$}}
+; BF-IL-NEXT:  {{^}}  ldind.u2{{$}}
+; BF-IL-NEXT:  {{^}}  ldc.i4.s 16{{$}}
+; BF-IL-NEXT:  {{^}}  shl{{$}}
+; BF-IL:       {{^}}  stind.i4{{$}}
+; BF-IL:       {{^}}  ldind.r4{{$}}
+; BF-IL-NEXT:  {{^}}  conv.r8{{$}}
+; BF-IL-NEXT:  {{^}}  ret{{$}}
+; BF-IL-NEXT:  {{^}}} // end of method 'fpext_bfloat_to_f64'{{$}}
 define double @fpext_bfloat_to_f64(ptr %p) {
   %v = load bfloat, ptr %p
   %e = fpext bfloat %v to double

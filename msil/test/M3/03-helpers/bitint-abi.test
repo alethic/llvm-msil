@@ -1,0 +1,272 @@
+# _BitInt(N) results and arguments across translation units for N = 7, 17, 33, 65 and 127, against the native oracle.
+# Upstream merge U2 (plan section 12, row 'Narrow results after upstream
+# merge U2') brought three x86-64 ABI changes that the Linux MSIL triples
+# follow, as clang's ABI code is shared: 05c3ff5c8c06 marks no result
+# zeroext or signext (_BitInt(7) and (17) here; bool alone stays
+# zeroext), 016eb68c7d20 no longer extends a _BitInt result to 64 bits
+# (_BitInt(33) returns as i33, not i64), and 9f0c2f993640 no longer returns
+# _BitInt(65) to (128) as {i64, i64} (they return as i65 and i127, which the
+# MSIL target returns through a hidden pointer). So the upper bits of every
+# _BitInt result are unspecified on both triples and the caller narrows it;
+# arguments keep their rules (Linux triples: zeroext or signext up to 32
+# bits, one i64 for (33), two for (65) and (127); Windows triples: no
+# extension up to 64 bits, a pointer to a copy above, and a result above 64
+# bits through sret). IR checks pin those signatures for both triples
+# (LINUX, WIN). The program then makes every rule matter: callee.c's
+# noinline functions return values whose register holds more than N bits
+# (a truncation of a wider argument, an unsigned sum that wraps, an
+# implementation-defined conversion to a signed _BitInt, which clang wraps
+# modulo 2^N), and widen their arguments; main.c truncates wide values from
+# volatile inputs before passing them, passes results straight on as
+# arguments, and widens each result it gets, printing 64-bit halves in hex
+# (the 65- and 127-bit values as hi:lo) and signed values in decimal. A
+# result or argument whose upper bits leak shows as a different value than
+# the native oracle's, at -O0 and -O2 and under the obj and lto pipelines
+# (noinline keeps the calls). No operation needs a compiler-rt helper
+# (additions, subtractions, conversions and shifts by 64 only). The test
+# lives in 03-helpers, the directory of the i128 tests, which M25 extends.
+# Plan 5.17.13, section 12 (M24.h extended, merge review U2).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/callee.c
+# RUN: %{msil_prog}
+# RUN: %clang --target=x86_64-unknown-linux-gnu-msil -std=gnu17 -O0 -S -emit-llvm %t/callee.c -o - | FileCheck %s --check-prefix=LINUX
+# RUN: %clang --target=x86_64-pc-windows-msvc-msil -std=gnu17 -O0 -S -emit-llvm %t/callee.c -o - | FileCheck %s --check-prefix=WIN
+# Linux triples: results narrow and unextended, arguments as above.
+# LINUX: {{^}}define {{(noundef )?}}i7 @u7_from(i64 noundef %x)
+# LINUX: {{^}}define {{(noundef )?}}i7 @s7_from(i64 noundef %x)
+# LINUX: {{^}}define {{(noundef )?}}i7 @u7_add(i7 noundef zeroext %a, i7 noundef zeroext %b)
+# LINUX: {{^}}define {{(noundef )?}}i7 @s7_sub(i7 noundef signext %a, i7 noundef signext %b)
+# LINUX: {{^}}define {{(noundef )?}}i17 @u17_from(i64 noundef %x)
+# LINUX: {{^}}define {{(noundef )?}}i33 @u33_from(i64 noundef %x)
+# LINUX: {{^}}define {{(noundef )?}}i33 @u33_add(i64 noundef %a.coerce, i64 noundef %b.coerce)
+# LINUX: {{^}}define {{(noundef )?}}i65 @u65_from(i64 noundef %hi, i64 noundef %lo)
+# LINUX: {{^}}define {{(noundef )?}}i65 @u65_add(i64 noundef %a.coerce0, i64 noundef %a.coerce1, i64 noundef %b.coerce0, i64 noundef %b.coerce1)
+# LINUX: {{^}}define {{(noundef )?}}i127 @u127_from(i64 noundef %hi, i64 noundef %lo)
+# LINUX: {{^}}define {{(noundef )?}}i127 @s127_sub(i64 noundef %a.coerce0, i64 noundef %a.coerce1, i64 noundef %b.coerce0, i64 noundef %b.coerce1)
+# LINUX: {{^}}define {{(noundef )?}}zeroext i1 @is_odd(
+# Windows triples: no extension up to 64 bits, memory above.
+# WIN: {{^}}define {{(noundef )?}}i7 @u7_from(i64 noundef %x)
+# WIN: {{^}}define {{(noundef )?}}i7 @u7_add(i7 noundef %a, i7 noundef %b)
+# WIN: {{^}}define {{(noundef )?}}i7 @s7_sub(i7 noundef %a, i7 noundef %b)
+# WIN: {{^}}define {{(noundef )?}}i33 @u33_add(i33 noundef %a, i33 noundef %b)
+# WIN: {{^}}define void @u65_from(ptr {{.*}}sret(i128) {{.*}}, i64 noundef %hi, i64 noundef %lo)
+# WIN: {{^}}define void @u65_add(ptr {{.*}}sret(i128) {{.*}}, ptr {{.*}}, ptr {{.*}})
+# WIN: {{^}}define void @s127_sub(ptr {{.*}}sret(i128) {{.*}}, ptr {{.*}}, ptr {{.*}})
+# WIN: {{^}}define {{(noundef )?}}zeroext i1 @is_odd(
+#--- bitint.h
+#define NOINLINE __attribute__((noinline))
+
+/* The 128-bit value hi:lo. */
+#define WIDE(hi, lo) (((unsigned _BitInt(128))(hi) << 64) | (lo))
+
+/* _BitInt(N) for N up to 64: a truncation of an argument as the result,
+   an unsigned sum that wraps, a signed difference, and the argument widened
+   to 64 bits. */
+#define SMALL_FUNCTIONS(N)                                                     \
+  unsigned _BitInt(N) u##N##_from(unsigned long long x);                       \
+  _BitInt(N) s##N##_from(long long x);                                         \
+  unsigned _BitInt(N) u##N##_add(unsigned _BitInt(N) a, unsigned _BitInt(N) b); \
+  _BitInt(N) s##N##_sub(_BitInt(N) a, _BitInt(N) b);                           \
+  unsigned long long u##N##_widen(unsigned _BitInt(N) a);                      \
+  long long s##N##_widen(_BitInt(N) a);
+
+/* _BitInt(N) above 64 bits: the same, with hi:lo halves, and the argument
+   widened to 128 bits and stored as out[0] = lo, out[1] = hi. */
+#define BIG_FUNCTIONS(N)                                                       \
+  unsigned _BitInt(N) u##N##_from(unsigned long long hi, unsigned long long lo); \
+  _BitInt(N) s##N##_from(unsigned long long hi, unsigned long long lo);        \
+  unsigned _BitInt(N) u##N##_add(unsigned _BitInt(N) a, unsigned _BitInt(N) b); \
+  _BitInt(N) s##N##_sub(_BitInt(N) a, _BitInt(N) b);                           \
+  void u##N##_split(unsigned _BitInt(N) a, unsigned long long out[2]);         \
+  void s##N##_split(_BitInt(N) a, unsigned long long out[2]);
+
+SMALL_FUNCTIONS(7)
+SMALL_FUNCTIONS(17)
+SMALL_FUNCTIONS(33)
+BIG_FUNCTIONS(65)
+BIG_FUNCTIONS(127)
+
+/* A bool result, which stays zero-extended on both triples. */
+_Bool is_odd(unsigned _BitInt(17) a);
+#--- callee.c
+#include "bitint.h"
+
+#define SMALL_DEFINITIONS(N)                                                   \
+  NOINLINE unsigned _BitInt(N) u##N##_from(unsigned long long x) {             \
+    return (unsigned _BitInt(N))x;                                             \
+  }                                                                            \
+  NOINLINE _BitInt(N) s##N##_from(long long x) { return (_BitInt(N))x; }       \
+  NOINLINE unsigned _BitInt(N) u##N##_add(unsigned _BitInt(N) a,               \
+                                          unsigned _BitInt(N) b) {             \
+    return a + b;                                                              \
+  }                                                                            \
+  NOINLINE _BitInt(N) s##N##_sub(_BitInt(N) a, _BitInt(N) b) { return a - b; } \
+  NOINLINE unsigned long long u##N##_widen(unsigned _BitInt(N) a) {            \
+    return a;                                                                  \
+  }                                                                            \
+  NOINLINE long long s##N##_widen(_BitInt(N) a) { return a; }
+
+#define BIG_DEFINITIONS(N)                                                     \
+  NOINLINE unsigned _BitInt(N) u##N##_from(unsigned long long hi,              \
+                                           unsigned long long lo) {            \
+    return (unsigned _BitInt(N))WIDE(hi, lo);                                  \
+  }                                                                            \
+  NOINLINE _BitInt(N) s##N##_from(unsigned long long hi,                       \
+                                  unsigned long long lo) {                     \
+    return (_BitInt(N))WIDE(hi, lo);                                           \
+  }                                                                            \
+  NOINLINE unsigned _BitInt(N) u##N##_add(unsigned _BitInt(N) a,               \
+                                          unsigned _BitInt(N) b) {             \
+    return a + b;                                                              \
+  }                                                                            \
+  NOINLINE _BitInt(N) s##N##_sub(_BitInt(N) a, _BitInt(N) b) { return a - b; } \
+  NOINLINE void u##N##_split(unsigned _BitInt(N) a, unsigned long long out[2]) { \
+    unsigned _BitInt(128) w = a;                                               \
+    out[0] = (unsigned long long)w;                                            \
+    out[1] = (unsigned long long)(w >> 64);                                    \
+  }                                                                            \
+  NOINLINE void s##N##_split(_BitInt(N) a, unsigned long long out[2]) {        \
+    unsigned _BitInt(128) w = (unsigned _BitInt(128))(_BitInt(128))a;          \
+    out[0] = (unsigned long long)w;                                            \
+    out[1] = (unsigned long long)(w >> 64);                                    \
+  }
+
+SMALL_DEFINITIONS(7)
+SMALL_DEFINITIONS(17)
+SMALL_DEFINITIONS(33)
+BIG_DEFINITIONS(65)
+BIG_DEFINITIONS(127)
+
+NOINLINE _Bool is_odd(unsigned _BitInt(17) a) { return a & 1; }
+#--- main.c
+#include "bitint.h"
+#include "msil_test.h"
+
+/* The inputs, read through volatile so that nothing is folded; each has
+   bits above every N below 64. */
+static volatile unsigned long long in_lo = 0x0123456789abcdefull;
+static volatile unsigned long long in_hi = 0xfedcba9876543210ull;
+static volatile unsigned long long in_sign = 0x4000000000000001ull;
+static volatile unsigned long long all_ones = ~0ull;
+static volatile long long in_pos = 100;
+static volatile long long in_neg = -100;
+static volatile long long in_mixed = -0x0123456789abcdefll;
+
+/* Appends "0x<hex digits>" at buf + n and returns the new length. */
+static int append_hex(char *buf, int n, unsigned long long v) {
+  static const char digits[] = "0123456789abcdef";
+  char tmp[16];
+  int k = 0;
+  do {
+    tmp[k++] = digits[v & 15];
+    v >>= 4;
+  } while (v);
+  buf[n++] = '0';
+  buf[n++] = 'x';
+  while (k)
+    buf[n++] = tmp[--k];
+  return n;
+}
+
+static int append_name(char *buf, const char *name) {
+  int n = 0;
+  while (*name && n < 80)
+    buf[n++] = *name++;
+  buf[n++] = '=';
+  return n;
+}
+
+/* "name=0x<v>" on one line. */
+static void put_x(const char *name, unsigned long long v) {
+  char buf[128];
+  int n = append_hex(buf, append_name(buf, name), v);
+  buf[n] = 0;
+  puts(buf);
+}
+
+/* "name=0x<hi>:0x<lo>" on one line, for a value of more than 64 bits. */
+static void put_x2(const char *name, unsigned long long hi,
+                   unsigned long long lo) {
+  char buf[128];
+  int n = append_hex(buf, append_name(buf, name), hi);
+  buf[n++] = ':';
+  n = append_hex(buf, n, lo);
+  buf[n] = 0;
+  puts(buf);
+}
+
+#define CHECK_SMALL(N)                                                         \
+  do {                                                                         \
+    put_str("_BitInt(" #N ")");                                                \
+    unsigned _BitInt(N) a = u##N##_from(in_lo);                                \
+    unsigned _BitInt(N) b = u##N##_from(in_hi);                                \
+    unsigned _BitInt(N) m = u##N##_from(all_ones);                             \
+    put_x("u_from(lo)", a);                                                    \
+    put_x("u_from(hi)", b);                                                    \
+    put_x("u_from(~0)", m);                                                    \
+    put_x("u_add(max, 2)", u##N##_add(m, 2));                                  \
+    put_x("u_add(u_from(lo), u_from(hi))", u##N##_add(a, b));                  \
+    put_x("u_widen(u_add(max, max))", u##N##_widen(u##N##_add(m, m)));         \
+    put_x("u_widen(lo truncated by the caller)",                               \
+          u##N##_widen((unsigned _BitInt(N))in_lo));                           \
+    put_x("u_widen(hi truncated by the caller)",                               \
+          u##N##_widen((unsigned _BitInt(N))in_hi));                           \
+    _BitInt(N) p = s##N##_from(in_pos);                                        \
+    _BitInt(N) q = s##N##_from(in_neg);                                        \
+    put_kv("s_from(100)", p);                                                  \
+    put_kv("s_from(-100)", q);                                                 \
+    put_kv("s_from(mixed)", s##N##_from(in_mixed));                            \
+    put_kv("s_sub(s_from(100), s_from(-100))", s##N##_sub(p, q));              \
+    put_kv("s_widen(s_from(-100))", s##N##_widen(q));                          \
+    put_kv("s_widen(mixed truncated by the caller)",                           \
+           s##N##_widen((_BitInt(N))in_mixed));                                \
+    put_kv("s_widen(sign truncated by the caller)",                            \
+           s##N##_widen((_BitInt(N))(long long)in_sign));                      \
+  } while (0)
+
+#define CHECK_BIG(N)                                                           \
+  do {                                                                         \
+    unsigned long long w[2];                                                   \
+    put_str("_BitInt(" #N ")");                                                \
+    unsigned _BitInt(N) a = u##N##_from(in_hi, in_lo);                         \
+    unsigned _BitInt(N) m = u##N##_from(all_ones, all_ones);                   \
+    unsigned _BitInt(N) r = u##N##_add(m, 2);                                  \
+    put_x2("u_from(hi, lo)", (unsigned long long)(a >> 64),                    \
+           (unsigned long long)a);                                             \
+    put_x2("u_from(~0, ~0)", (unsigned long long)(m >> 64),                    \
+           (unsigned long long)m);                                             \
+    put_x2("u_add(max, 2)", (unsigned long long)(r >> 64),                     \
+           (unsigned long long)r);                                             \
+    r = u##N##_add(a, a);                                                      \
+    put_x2("u_add(a, a)", (unsigned long long)(r >> 64),                       \
+           (unsigned long long)r);                                             \
+    u##N##_split(u##N##_add(m, m), w);                                         \
+    put_x2("u_split(u_add(max, max))", w[1], w[0]);                            \
+    u##N##_split((unsigned _BitInt(N))WIDE(in_hi, in_lo), w);                  \
+    put_x2("u_split(hi:lo truncated by the caller)", w[1], w[0]);              \
+    _BitInt(N) p = s##N##_from(0, (unsigned long long)in_pos);                 \
+    _BitInt(N) q = s##N##_from(all_ones, (unsigned long long)in_neg);          \
+    s##N##_split(p, w);                                                        \
+    put_x2("s_split(s_from(0, 100))", w[1], w[0]);                             \
+    s##N##_split(q, w);                                                        \
+    put_x2("s_split(s_from(~0, -100))", w[1], w[0]);                           \
+    s##N##_split(s##N##_sub(p, q), w);                                         \
+    put_x2("s_split(s_sub(100, -100))", w[1], w[0]);                           \
+    s##N##_split(s##N##_sub(q, p), w);                                         \
+    put_x2("s_split(s_sub(-100, 100))", w[1], w[0]);                           \
+    s##N##_split(s##N##_from(in_sign, in_lo), w);                              \
+    put_x2("s_split(s_from(sign, lo))", w[1], w[0]);                           \
+    s##N##_split((_BitInt(N))WIDE(in_sign, in_lo), w);                         \
+    put_x2("s_split(sign:lo truncated by the caller)", w[1], w[0]);            \
+  } while (0)
+
+int main(void) {
+  CHECK_SMALL(7);
+  CHECK_SMALL(17);
+  CHECK_SMALL(33);
+  CHECK_BIG(65);
+  CHECK_BIG(127);
+  put_kv("is_odd(u17_from(lo))", is_odd(u17_from(in_lo)));
+  put_kv("is_odd(u17_from(hi))", is_odd(u17_from(in_hi)));
+  return 0;
+}

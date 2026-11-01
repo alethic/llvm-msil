@@ -1,0 +1,59 @@
+# Environment.FailFast under msil-run.py (plan 5.17.4, M24): a loud failure
+# that fails fast (trap thunks, the Linux thunk filter of R8) ends with a
+# status that differs by runtime, as M24's harness WP measured it: Framework
+# 4.8, .NET 8 and .NET 10 on Windows exit with 0x80131623 (the Framework
+# prints nothing on stderr), and WSL .NET 8 and .NET 10 end with signal 6
+# after 'Process terminated.' on stderr. msil-run.py maps each of them to the
+# one status line [failfast] for managed runs; a --native run keeps its raw
+# status. Inputs/failfast.il calls Environment.FailFast with the toolchain's
+# message, assembled as a DLL (.NET, with a runtimeconfig of this test's own
+# for .NET 8 and for .NET 10) and as an EXE (--netfx and --native).
+# Each managed run's transcript is exactly [failfast], and on .NET its
+# --stderr-out file holds the toolchain's message; an expected file of
+# [failfast] passes on .NET and on the Framework, and one with another status
+# fails. The EXE run natively is the raw 0x80131623, outside 0..255, which
+# msil-run.py never passes (plan D37). Inside WSL (a nested lit of
+# Inputs/nested-failfast with the WSL runner, where the E7 oracle shows that
+# WSL runs here) both runtimes give [failfast], and a native program that
+# ends with SIGABRT keeps its [signal 6]. The outer lit must run the Windows
+# triple, where %msil_exec runs locally (the WSL runner has no --netfx run);
+# the WSL side is the nested run's.
+# REQUIRES: system-windows, msil-triple-windows, msil-netfx, dotnet-runtime-8, dotnet-runtime-10
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %ilasm -dll -output=%t/failfast.dll %S/Inputs/failfast.il
+# RUN: %ilasm -exe -output=%t/failfast.exe %S/Inputs/failfast.il
+# RUN: %{harness_check} write %t/net8.runtimeconfig.json '{"runtimeOptions": {"tfm": "net8.0", "rollForward": "LatestPatch", "framework": {"name": "Microsoft.NETCore.App", "version": "8.0.0"}}}'
+# RUN: %{harness_check} write %t/net10.runtimeconfig.json '{"runtimeOptions": {"tfm": "net10.0", "rollForward": "LatestPatch", "framework": {"name": "Microsoft.NETCore.App", "version": "10.0.0"}}}'
+
+# .NET 8, .NET 10 and the Framework on Windows.
+# RUN: %msil_exec --runtimeconfig %t/net8.runtimeconfig.json --stderr-out %t/net8.err --out %t/net8.out %t/failfast.dll
+# RUN: %{harness_check} equals %t/net8.out "[failfast]"
+# RUN: %{harness_check} contains %t/net8.err "msil: trap: the construct needs M99 \(loud-failfast\)$"
+# RUN: %msil_exec --runtimeconfig %t/net10.runtimeconfig.json --stderr-out %t/net10.err --out %t/net10.out %t/failfast.dll
+# RUN: %{harness_check} equals %t/net10.out "[failfast]"
+# RUN: %{harness_check} contains %t/net10.err "^msil: trap: the construct needs M99 \(loud-failfast\)$"
+# RUN: %msil_exec --netfx --stderr-out %t/netfx.err --out %t/netfx.out %t/failfast.exe
+# RUN: %{harness_check} equals %t/netfx.out "[failfast]"
+# RUN: %{harness_check} equals %t/netfx.err
+
+# The comparison: [failfast] passes, another status fails.
+# RUN: %{harness_check} write %t/failfast.expected "[failfast]"
+# RUN: %{harness_check} write %t/exit7.expected "[exit 7]"
+# RUN: %msil_exec --expect %t/failfast %t/failfast.dll
+# RUN: %msil_exec --netfx --expect %t/failfast %t/failfast.exe
+# RUN: not %msil_exec --expect %t/exit7 %t/failfast.dll > %t/exit7.log 2>&1
+# RUN: %{harness_check} contains %t/exit7.log "does not match \S*exit7\.expected" "^\+\[failfast\]$"
+# RUN: not %msil_exec --netfx --expect %t/exit7 %t/failfast.exe > %t/exit7-netfx.log 2>&1
+# RUN: %{harness_check} contains %t/exit7-netfx.log "does not match \S*exit7\.expected" "^\+\[failfast\]$"
+
+# The native run keeps the raw status.
+# RUN: not %msil_exec --native --out %t/native.out %t/failfast.exe > %t/native.log 2>&1
+# RUN: %{harness_check} equals %t/native.out "[exit 0x80131623: outside 0..255]"
+# RUN: %{harness_check} contains %t/native.log "failfast\.exe exited with status 0x80131623, outside 0\.\.255; Linux would truncate it, so it never passes \(plan D37\)$"
+# RUN: %{harness_check} lacks %t/native.log "failfast\]"
+
+# WSL .NET 8 and .NET 10, and a native SIGABRT.
+# RUN: %if msil-linux-oracle %{ %{harness_lit} -a --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_runner=wsl %S/Inputs/nested-failfast > %t.wsl.log 2>&1 %}
+# RUN: %if msil-linux-oracle %{ %{harness_check} contains %t.wsl.log "^PASS: MSIL :: harness/Inputs/nested-failfast/failfast\.test " "^# executed command: .*msil-run\.py'? .*--runner wsl .*--runtimeconfig \S*net8\.runtimeconfig\.json'? --stderr-out " "^# executed command: .*msil-run\.py'? .*--runner wsl .*--runtimeconfig \S*net10\.runtimeconfig\.json'? --stderr-out " "^# executed command: .*msil-run\.py'? .*--runner wsl .*--native --stderr-out \S*abort\.err'? " %}
+# RUN: %if msil-linux-oracle %{ %{harness_check} contains %t.wsl.log "^# executed command: cat \S*net8\.out'? \S*net10\.out'? \S*abort\.out'?\n# \.-+command stdout-+\n# \| \[failfast\]\n# \| \[failfast\]\n# \| \[signal 6\]$" %}

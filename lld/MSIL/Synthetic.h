@@ -246,6 +246,10 @@ public:
   llvm::cli::EntityRef getMethodEntity(uint32_t index);
   llvm::cli::EntityRef getFieldEntity(uint32_t index);
   llvm::cli::EntityRef getTokenEntity(uint32_t token);
+  // The index in methods of the method entity \p ref (one that
+  // RowTrailerSink::declareHelper returned); std::nullopt for another
+  // entity.
+  std::optional<uint32_t> getEntityMethod(llvm::cli::EntityRef ref) const;
   // The token of an entity or of a token operand; after the rows are added
   // and the metadata is finalized.
   llvm::Expected<uint32_t> resolveEntity(llvm::cli::EntityRef ref) const;

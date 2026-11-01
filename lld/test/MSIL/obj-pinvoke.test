@@ -8,8 +8,9 @@
 ##   method name); msil-ld writes its P/Invoke stub ('assembly',
 ##   preservesig, ImplMap 0x0201, the module verbatim: libc.so.6);
 ## - a natively bound qsort, called or only addressed, is 5.10.14's callback
-##   error with '>>> referenced by' lines; an explicit import_module qsort is
-##   exempt (unchecked, 5.10.7) and gets its P/Invoke;
+##   error, in 5.15.11's text from M24, with '>>> referenced by' lines; an
+##   explicit import_module qsort is exempt (unchecked, 5.10.7) and gets its
+##   P/Invoke;
 ## - a variadic native callee (VARARG in the record's SIGNATURES; Phase 2
 ##   writers never set it, so kr-va.il is llc's object-form text of a K&R
 ##   printf call with NO_PROTOTYPE patched by hand to VARARG with one fixed
@@ -68,7 +69,7 @@
 # RUN:   --implicit-check-not=error:
 # RUN: not msil-ld cba.o libc.so.6 -o x.exe 2>&1 | %{err} --check-prefix=CALLBACK "-DREF=cba.o:(getq)" \
 # RUN:   --implicit-check-not=error:
-# CALLBACK:      {{^}}msil-ld: error: native function 'qsort' (libc.so.6) takes a C function pointer; passing functions to native code needs phase 3 thunks{{$}}
+# CALLBACK:      {{^}}msil-ld: error: native function 'qsort' (libc.so.6) takes a C function pointer; passing C functions to native code is not supported for MSIL yet{{$}}
 # CALLBACK-NEXT: {{^}}>>> referenced by [[REF]]{{$}}
 # RUN: msil-ld cbx.o libc.so.6 -o cbx.exe 2>&1 | count 0
 # RUN: llvm-cil-dump cbx.exe | FileCheck %s --check-prefix=EXPLICIT

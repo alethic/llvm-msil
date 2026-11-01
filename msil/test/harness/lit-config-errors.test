@@ -27,21 +27,24 @@
 # RUN: %{harness_check} lacks %t.ok.log "fatal:"
 
 # (1)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=local --param msil_wsl_dotnet=private %S/Inputs/nested-ok > %t.1.log 2>&1
+# Each nested run below whose probe fails (a missing or broken tool) passes
+# --param msil_probe_cache= (empty), so it neither reads the parent's probe
+# cache nor replaces it with its own probes (plan 5.17.10; probe-cache.test).
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_runner=local --param msil_wsl_dotnet=private %S/Inputs/nested-ok > %t.1.log 2>&1
 # RUN: %{harness_check} contains %t.1.log "fatal: msil: --param msil_wsl_dotnet needs --param msil_runner=wsl$"
 
 # (2)
-# RUN: %if system-windows %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_runner=wsl --param msil_wsl_dotnet=relative/path %S/Inputs/nested-ok > %t.2.log 2>&1 %}
+# RUN: %if system-windows %{ %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_runner=wsl --param msil_wsl_dotnet=relative/path %S/Inputs/nested-ok > %t.2.log 2>&1 %}
 # RUN: %if system-windows %{ %{harness_check} contains %t.2.log "fatal: msil: --param msil_wsl_dotnet=relative/path: use private or an absolute path inside WSL$" %}
 
 # (3)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_native_rtlib=%t.d/no-such.lib %S/Inputs/nested-ok > %t.3.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_native_rtlib=%t.d/no-such.lib %S/Inputs/nested-ok > %t.3.log 2>&1
 # RUN: %{harness_check} contains %t.3.log "fatal: msil: --param msil_native_rtlib=\S*no-such\.lib: no such file$"
 
 # (4)
-# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot=%t.d/empty-sysroot %S/Inputs/nested-ok > %t.4.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_linux_sysroot=%t.d/empty-sysroot %S/Inputs/nested-ok > %t.4.log 2>&1
 # RUN: %{harness_check} contains %t.4.log "fatal: msil: msil_linux_sysroot=\S*empty-sysroot has no libc\.so\.6 or libm\.so\.6 in usr/lib/x86_64-linux-gnu"
 
 # (5)
-# RUN: %if system-windows %{ %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local --param msil_native_oracle=required --param msil_native_rtlib=none --param msil_linux_sysroot= %S/Inputs/nested-ok > %t.5.log 2>&1 %}
+# RUN: %if system-windows %{ %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --show-tests --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local --param msil_native_oracle=required --param msil_native_rtlib=none --param msil_linux_sysroot= %S/Inputs/nested-ok > %t.5.log 2>&1 %}
 # RUN: %if system-windows %{ %{harness_check} contains %t.5.log "fatal: msil: native oracle unavailable: .*\bthe Windows native oracle needs compiler-rt: disabled by --param msil_native_rtlib=none" %}

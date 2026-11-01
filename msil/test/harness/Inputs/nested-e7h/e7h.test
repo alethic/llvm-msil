@@ -1,0 +1,22 @@
+# Run only in a nested lit by ../../linux-hosted-oracle.test (Linux triple,
+# WSL runner, msil_native_oracle=required): builds order.c with the hosted
+# Linux oracle E7h (%msil_prog_build --mode native %{msil_oracle_flags}, which
+# is --hosted here), runs it under WSL as a composite's native leg runs it,
+# and prints the ELF header, the needed libraries and the transcript for the
+# outer test. The transcript must be glibc's order (order.expected), and a
+# transcript in another order (order-wrong.expected: the .fini_array entry
+# before the handlers) must fail the comparison. msil-prog.py's errors: E7h
+# without a glibc sysroot (an empty --glibc-sysroot= cancels the one that
+# %msil_prog_build passes), and a sysroot without E7h's files.
+# RUN: rm -rf %t.d %t.nosys.d %t.empty.d %t.empty
+# RUN: %msil_prog_build --mode native %{msil_oracle_flags} --level O2 --workdir %t.d --out %t.d/prog.elf --src %S/order.c
+# RUN: %msil_exec --native --expect %S/order --out %t.out %t.d/prog.elf
+# RUN: cat %t.out
+# RUN: not %msil_exec --native --expect %S/order-wrong --out %t.wrong.out %t.d/prog.elf 2> %t.wrong.log
+# RUN: %{harness_check} contains %t.wrong.log "does not match \S*order-wrong\.expected"
+# RUN: llvm-readobj --file-headers --needed-libs %t.d/prog.elf
+# RUN: not %msil_prog_build --mode native %{msil_oracle_flags} --glibc-sysroot= --level O2 --workdir %t.nosys.d --out %t.nosys.d/prog.elf --src %S/order.c > %t.nosys.log 2>&1
+# RUN: %{harness_check} contains %t.nosys.log "^msil-prog: error: the hosted Linux oracle \(E7h: --hosted with the E7 options\) needs --glibc-sysroot$"
+# RUN: mkdir -p %t.empty/usr/include %t.empty/usr/lib/x86_64-linux-gnu
+# RUN: not %msil_prog_build --mode native %{msil_oracle_flags} --glibc-sysroot=%t.empty --level O2 --workdir %t.empty.d --out %t.empty.d/prog.elf --src %S/order.c > %t.empty.log 2>&1
+# RUN: %{harness_check} contains %t.empty.log "^msil-prog: error: --glibc-sysroot \S*e7h\.test\.tmp\.empty has no .*\bcrt1\.o\b.* in usr/lib/x86_64-linux-gnu \(run msil/utils/make-glibc-sysroot\.sh\)$"

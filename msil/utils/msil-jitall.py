@@ -70,6 +70,12 @@ memory cap, a crash of jitall or a missing summary line), 2 on a usage or
 configuration error (including a dotnet host that cannot start jitall at all,
 recognized by msil-run.py's host_startup_failure(); an out-of-memory start-up
 failure is the memory cap).
+
+msil-steps.py imports this script (plan 5.17.10): main(argv) returns the exit
+status, for a usage error too, and batch_prepare() and batch_report() let
+msil-run.py --runner wsl --steps run a --runner wsl jitall inside a wsl.exe
+that it shares with the level's other WSL steps, with the same command
+inside WSL and the same messages.
 """
 
 import argparse
@@ -230,18 +236,17 @@ def run_local(args, jitall_dll, runtimeconfig):
     return Outcome(out, err, 1 if reason else 0, reason)
 
 
-def run_wsl(args, jitall_dir, runtimeconfig):
-    """Run this script in WSL, so that jitall, the module initializer and the
-    limits all run inside Linux."""
+def wsl_inner_command(args, jitall_dir, runtimeconfig):
+    """The command line that run_wsl() has wsl.exe run inside WSL (after
+    'wsl.exe -d <distro> --exec'): this script there, so that jitall, the
+    module initializer and the limits all run inside Linux. Raises
+    ConfigError. msil-run.py --steps runs the same command."""
     if not IS_WINDOWS:
         raise ConfigError("--runner wsl needs a Windows host")
-    wsl = shutil.which("wsl.exe") or os.path.join(
-        os.environ.get("SystemRoot", r"C:\Windows"), "System32", "wsl.exe"
-    )
     assignments = ["%s=%s" % kv for kv in msil_run.DOTNET_DEFAULTS]
     assignments += ["%s=%s" % kv for kv in msil_run.parse_env_args(args.env)]
     cmd = (
-        [wsl, "-d", args.wsl_distro, "--exec", "env"]
+        ["env"]
         + assignments
         + [
             "python3",
@@ -268,14 +273,28 @@ def run_wsl(args, jitall_dir, runtimeconfig):
     for d in dep_dirs:
         cmd += ["--dep-dir", msil_run.to_wsl_path(d)]
     cmd += ["--", msil_run.to_wsl_path(args.dll)]
-    env = dict(os.environ)
-    msil_run.set_env_var(env, "WSL_UTF8", "1")  # wsl.exe's own messages, not UTF-16
+    return cmd
+
+
+def run_wsl(args, jitall_dir, runtimeconfig):
+    """Run this script in WSL, so that jitall, the module initializer and the
+    limits all run inside Linux."""
+    inner = wsl_inner_command(args, jitall_dir, runtimeconfig)
+    wsl = msil_run.wsl_exe()
+    cmd = [wsl, "-d", args.wsl_distro, "--exec"] + inner
     limit = args.timeout + msil_run.WSL_GRACE
     try:
-        res = msil_run.run_limited(cmd, None, env, limit, args.mem_limit_mb)
+        res = msil_run.run_limited(
+            cmd, None, msil_run.wsl_env(), limit, args.mem_limit_mb
+        )
     except OSError as e:
         raise ConfigError("cannot run %s: %s" % (wsl, e))
+    return wsl_outcome(res, limit)
 
+
+def wsl_outcome(res, limit):
+    """The Outcome of the wsl.exe run (wall-clock limit limit) of
+    wsl_inner_command() whose result is res."""
     out, err = msil_run.text_of(res.stdout), msil_run.text_of(res.stderr)
     if out and not out.endswith("\n"):
         out += "\n"
@@ -294,8 +313,11 @@ def run_wsl(args, jitall_dir, runtimeconfig):
     )
 
 
-def main():
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def parse_args(argv, quiet=False):
+    """The options of argv; quiet: raise msil-run.py's UsageError instead of
+    printing a usage error and exiting."""
+    parser = msil_run._QuietParser if quiet else argparse.ArgumentParser
+    p = parser(description=__doc__.splitlines()[0])
     p.add_argument(
         "--jitall",
         metavar="DIR",
@@ -363,10 +385,14 @@ def main():
         "missing DIR adds nothing)",
     )
     p.add_argument("dll", help="assembly to check")
-    args = p.parse_args()
+    args = p.parse_args(argv)
     if args.timeout <= 0 or args.mem_limit_mb <= 0:
         p.error("--timeout and --mem-limit-mb must be positive")
+    return args
 
+
+def tool_paths(args):
+    """(jitall directory, jitall.dll, runtimeconfig.json) of args."""
     jitall_dir = args.jitall or os.path.join(
         os.environ.get("MSIL_BUILD_DIR") or os.path.join(REPO, "build"),
         "tools",
@@ -377,27 +403,27 @@ def main():
     runtimeconfig = os.path.abspath(
         args.runtimeconfig or os.path.join(jitall_dir, "jitall.runtimeconfig.json")
     )
-    try:
-        if not os.path.isfile(jitall_dll):
-            raise ConfigError(
-                "%s not found; build it with 'python %s'"
-                % (
-                    jitall_dll,
-                    os.path.join(REPO, "msil", "utils", "jitall", "build-jitall.py"),
-                )
-            )
-        if not os.path.isfile(runtimeconfig):
-            raise ConfigError("%s not found" % runtimeconfig)
-        if not os.path.isfile(args.dll):
-            raise ConfigError("%s not found" % args.dll)
-        if args.runner == "wsl":
-            res = run_wsl(args, os.path.dirname(jitall_dll), runtimeconfig)
-        else:
-            res = run_local(args, jitall_dll, runtimeconfig)
-    except ConfigError as e:
-        sys.stderr.write("msil-jitall: error: %s\n" % e)
-        return 2
+    return jitall_dir, jitall_dll, runtimeconfig
 
+
+def check_files(jitall_dll, runtimeconfig, dll):
+    """The configuration errors of missing files, before any run."""
+    if not os.path.isfile(jitall_dll):
+        raise ConfigError(
+            "%s not found; build it with 'python %s'"
+            % (
+                jitall_dll,
+                os.path.join(REPO, "msil", "utils", "jitall", "build-jitall.py"),
+            )
+        )
+    if not os.path.isfile(runtimeconfig):
+        raise ConfigError("%s not found" % runtimeconfig)
+    if not os.path.isfile(dll):
+        raise ConfigError("%s not found" % dll)
+
+
+def report(args, res):
+    """Print the Outcome res of a run as main() does; return its status."""
     msil_run.emit(sys.stdout, res.out)
     if res.err:
         msil_run.emit(sys.stderr, res.err if res.err.endswith("\n") else res.err + "\n")
@@ -406,6 +432,60 @@ def main():
     elif res.reason:
         sys.stderr.write("msil-jitall: %s: jitall %s\n" % (args.dll, res.reason))
     return res.status
+
+
+def main(argv=None):
+    try:
+        args = parse_args(sys.argv[1:] if argv is None else list(argv))
+    except SystemExit as e:
+        # argparse's usage errors (2) and --help (0), as a status.
+        return e.code if isinstance(e.code, int) else (0 if e.code is None else 2)
+    jitall_dir, jitall_dll, runtimeconfig = tool_paths(args)
+    try:
+        check_files(jitall_dll, runtimeconfig, args.dll)
+        if args.runner == "wsl":
+            res = run_wsl(args, os.path.dirname(jitall_dll), runtimeconfig)
+        else:
+            res = run_local(args, jitall_dll, runtimeconfig)
+    except ConfigError as e:
+        sys.stderr.write("msil-jitall: error: %s\n" % e)
+        return 2
+    return report(args, res)
+
+
+def batch_prepare(argv):
+    """msil-run.py --steps: the Prepared step of the msil-jitall.py command
+    line argv when it runs jitall in WSL, else None (the step then runs by
+    itself in its turn); prints nothing."""
+    try:
+        args = parse_args(list(argv), quiet=True)
+    except msil_run.UsageError:
+        return None
+    if args.runner != "wsl":
+        return None
+    jitall_dir, jitall_dll, runtimeconfig = tool_paths(args)
+    try:
+        check_files(jitall_dll, runtimeconfig, args.dll)
+        inner = wsl_inner_command(args, os.path.dirname(jitall_dll), runtimeconfig)
+    except ConfigError:
+        return None
+    return msil_run.Prepared(
+        args,
+        args.wsl_distro,
+        inner,
+        args.timeout + msil_run.WSL_GRACE,
+        args.mem_limit_mb,
+    )
+
+
+def batch_report(prepared, res):
+    """msil-run.py --steps: report the step prepared, whose command ran inside
+    a shared wsl.exe with the result res, as main() reports its own run;
+    return the exit status."""
+    if res.error:
+        sys.stderr.write("msil-jitall: error: %s\n" % res.error)
+        return 2
+    return report(prepared.args, wsl_outcome(res, prepared.limit))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,213 @@
+## Signature mismatches of helper names (ImplementationPlan.md 5.14.2 N-1,
+## 5.14.4 T7; the section 12 row of 2026-10-28 'Plan 5.9.8 amended (helper
+## signatures)'; M24.d (2); fp-helpers 5.4 and I2). A call-site signature
+## that differs from the definition of a compiler runtime helper (N1), an
+## atomic library name (N2), a toolchain name (N3) or a trailer definition is
+## an error, never 5.9.8's adapter and warning, because such a mismatch is
+## always a toolchain bug:
+##   function signature mismatch: <name> (a toolchain or compiler runtime helper)
+##   >>> defined as <IL signature> in <file>
+##   >>> called as <IL signature> in <file>
+## with no '>>> adapter:' line, no warning and no image.
+## - fp-helpers F2: compiler-rt's Win64 __floattidf takes the __int128 by
+##   pointer, float64(native int), while the legalizer's call for a
+##   constrained conversion passed the two halves, float64(native int,
+##   native int) (__floatuntisf likewise, with float32); 5.9.8's adapter
+##   linked that and the program died in the helper. The definition is a
+##   member of a clang_rt.builtins stand-in archive or an object, the call
+##   in an object or in an LTO object ('called as ... in <output>.lto.o').
+## - N2 (__atomic_load_4 called without its memory order) and N3
+##   (__msil_foo called with a native int) against an object and an archive
+##   member: one error each.
+## - The trailer definition __msil_compiler_barrier called as int32(int32):
+##   '>>> defined as void() in <trailer>', from an object and from an LTO
+##   object (msil-ld's call-site check). In whole-program text
+##   (--lto-emit-asm) msil-ld checks no call site, and the backend rejects
+##   the call with its existing text, as llc does (trailer-defs.ll in
+##   llvm/test/CodeGen/MSIL; the section 12 row of 2026-10-30 'Plan 5.14.4
+##   T7 reads with M24.c (3)'):
+##     library call '__msil_compiler_barrier' does not match the type of the
+##     function of that name in this module
+##   the only error: no N-1 lines, no warning, no adapter and no text.
+## - An ordinary name keeps 5.9.8: a warning, a '>>> adapter:' line and the
+##   adapter '<msil>adapt_plain_0' in the image.
+## helper-mismatch-lto.test covers a helper that a bitcode input defines.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj fp-def.ll -o fp-def.o
+# RUN: llvm-ar rcs clang_rt.builtins.lib fp-def.o
+# RUN: llc -filetype=obj fp-call.ll -o fp-call.o
+# RUN: llvm-as fp-call.ll -o fp-call.bc
+# RUN: llc -filetype=obj lib-def.ll -o lib-def.o
+# RUN: llvm-ar rcs libshim.a lib-def.o
+# RUN: llc -filetype=obj lib-call.ll -o lib-call.o
+# RUN: llc -filetype=obj barrier-call.ll -o barrier-call.o
+# RUN: llvm-as barrier-call.ll -o barrier-call.bc
+# RUN: llc -filetype=obj plain-def.ll -o plain-def.o
+# RUN: llc -filetype=obj plain-call.ll -o plain-call.o
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=warning: --implicit-check-not=adapt \
+# DEFINE:   --implicit-check-not=error: --implicit-check-not=">>>"
+
+## fp-helpers F2: the archive member, the object, and a call from LTO. Each
+## negative link here leaves no output ('not ls').
+# RUN: rm -f x.exe
+# RUN: not msil-ld fp-call.o clang_rt.builtins.lib -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=FP "-DDEF=clang_rt.builtins.lib(fp-def.o)" -DCALL=fp-call.o
+# RUN: not ls x.exe
+# RUN: rm -f x.exe
+# RUN: not msil-ld fp-call.o fp-def.o -o x.exe 2>&1 | %{err} --check-prefix=FP -DDEF=fp-def.o -DCALL=fp-call.o
+# RUN: not ls x.exe
+# RUN: rm -f fp-lto.exe
+# RUN: not msil-ld fp-call.bc clang_rt.builtins.lib -o fp-lto.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=FP "-DDEF=clang_rt.builtins.lib(fp-def.o)" -DCALL=fp-lto.exe.lto.o
+# RUN: not ls fp-lto.exe
+# FP:       {{^}}msil-ld: error: function signature mismatch: __floattidf (a toolchain or compiler runtime helper){{$}}
+# FP-NEXT:  {{^}}>>> defined as float64(native int) in [[DEF]]{{$}}
+# FP-NEXT:  {{^}}>>> called as float64(native int, native int) in [[CALL]]{{$}}
+# FP-EMPTY:
+# FP-NEXT:  {{^}}msil-ld: error: function signature mismatch: __floatuntisf (a toolchain or compiler runtime helper){{$}}
+# FP-NEXT:  {{^}}>>> defined as float32(native int) in [[DEF]]{{$}}
+# FP-NEXT:  {{^}}>>> called as float32(native int, native int) in [[CALL]]{{$}}
+
+## N2 and N3 against an object and an archive member.
+# RUN: rm -f x.exe
+# RUN: not msil-ld lib-call.o lib-def.o -o x.exe 2>&1 | %{err} --check-prefix=LIB -DDEF=lib-def.o
+# RUN: not ls x.exe
+# RUN: rm -f x.exe
+# RUN: not msil-ld lib-call.o libshim.a -o x.exe 2>&1 | %{err} --check-prefix=LIB "-DDEF=libshim.a(lib-def.o)"
+# RUN: not ls x.exe
+# LIB:       {{^}}msil-ld: error: function signature mismatch: __atomic_load_4 (a toolchain or compiler runtime helper){{$}}
+# LIB-NEXT:  {{^}}>>> defined as int32(native int, int32) in [[DEF]]{{$}}
+# LIB-NEXT:  {{^}}>>> called as int32(native int) in lib-call.o{{$}}
+# LIB-EMPTY:
+# LIB-NEXT:  {{^}}msil-ld: error: function signature mismatch: __msil_foo (a toolchain or compiler runtime helper){{$}}
+# LIB-NEXT:  {{^}}>>> defined as int32(int32) in [[DEF]]{{$}}
+# LIB-NEXT:  {{^}}>>> called as int32(native int) in lib-call.o{{$}}
+
+## The trailer definition, from an object and from an LTO object.
+# RUN: rm -f x.exe
+# RUN: not msil-ld barrier-call.o -o x.exe 2>&1 | %{err} --check-prefix=BARRIER -DCALL=barrier-call.o
+# RUN: not ls x.exe
+# RUN: rm -f barrier-lto.exe
+# RUN: not msil-ld barrier-call.bc -o barrier-lto.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=BARRIER -DCALL=barrier-lto.exe.lto.o
+# RUN: not ls barrier-lto.exe
+# BARRIER:      {{^}}msil-ld: error: function signature mismatch: __msil_compiler_barrier (a toolchain or compiler runtime helper){{$}}
+# BARRIER-NEXT: {{^}}>>> defined as void() in <trailer>{{$}}
+# BARRIER-NEXT: {{^}}>>> called as int32(int32) in [[CALL]]{{$}}
+
+## Whole-program text: the backend's error, the only one, and no text.
+# RUN: rm -f x.il
+# RUN: not msil-ld --lto-emit-asm barrier-call.bc -o x.il 2>&1 | %{err} --check-prefix=BARRIER-TEXT
+# RUN: not ls x.il
+# BARRIER-TEXT: {{^}}msil-ld: error: {{.*}}in function main i32 (): library call '__msil_compiler_barrier' does not match the type of the function of that name in this module{{$}}
+
+## An ordinary name: 5.9.8's warning and adapter.
+# RUN: msil-ld plain-call.o plain-def.o -o plain.exe > plain.txt 2>&1
+# RUN: FileCheck %s --check-prefix=PLAIN %{crash} --implicit-check-not=error: --input-file=plain.txt
+# PLAIN:      {{^}}msil-ld: warning: function signature mismatch: plain{{$}}
+# PLAIN-NEXT: {{^}}>>> defined as int32(int32) in plain-def.o{{$}}
+# PLAIN-NEXT: {{^}}>>> called as int32(int32, int32) in plain-call.o{{$}}
+# PLAIN-NEXT: {{^}}>>> adapter: {{.+}}
+# RUN: llvm-cil-dump plain.exe | FileCheck %s --check-prefix=PLAIN-IL
+# PLAIN-IL: {{^}}  .method '<msil>adapt_plain_0' int32(int32, int32) flags=0x0013 impl=0x0000{{$}}
+# PLAIN-IL: {{^}}    L{{[0-9]+}}: call int32(int32, int32) '<Module>'::'<msil>adapt_plain_0'{{$}}
+
+#--- fp-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; compiler-rt's helpers as clang compiles them for Win64: the __int128
+;; argument by pointer.
+define double @__floattidf(ptr %a) {
+  %lo = load i64, ptr %a, align 8
+  %r = sitofp i64 %lo to double
+  ret double %r
+}
+
+define float @__floatuntisf(ptr %a) {
+  %lo = load i64, ptr %a, align 8
+  %r = uitofp i64 %lo to float
+  ret float %r
+}
+
+#--- fp-call.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; The legalizer's SysV-style calls: the two halves as two arguments.
+declare double @__floattidf(i64, i64)
+declare float @__floatuntisf(i64, i64)
+
+define i32 @main() {
+  %d = call double @__floattidf(i64 42, i64 0)
+  %f = call float @__floatuntisf(i64 7, i64 0)
+  %e = fpext float %f to double
+  %s = fadd double %d, %e
+  %i = fptosi double %s to i32
+  ret i32 %i
+}
+
+#--- lib-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @__atomic_load_4(ptr %p, i32 %order) {
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+
+define i32 @__msil_foo(i32 %x) {
+  ret i32 %x
+}
+
+#--- lib-call.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; The memory order argument is missing; __msil_foo gets a native int.
+@v = global i32 7
+
+declare i32 @__atomic_load_4(ptr)
+declare i32 @__msil_foo(i64)
+
+define i32 @main() {
+  %a = call i32 @__atomic_load_4(ptr @v)
+  %w = sext i32 %a to i64
+  %b = call i32 @__msil_foo(i64 %w)
+  ret i32 %b
+}
+
+#--- barrier-call.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @__msil_compiler_barrier(i32)
+
+define i32 @main() {
+  %r = call i32 @__msil_compiler_barrier(i32 1)
+  ret i32 %r
+}
+
+#--- plain-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @plain(i32 %a) {
+  ret i32 %a
+}
+
+#--- plain-call.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @plain(i32, i32)
+
+define i32 @main() {
+  %r = call i32 @plain(i32 1, i32 2)
+  ret i32 %r
+}

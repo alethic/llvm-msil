@@ -1,0 +1,74 @@
+# Deterministic <time.h> through the real headers: gmtime and strftime of fixed times, time(NULL) and difftime.
+# gmtime, time and difftime are functions of glibc's libc.so.6 on Linux
+# triples, and static inline functions of the UCRT's <time.h> over its
+# 64-bit _gmtime64, _time64 and _difftime64 on Windows triples, so the
+# program compiles the header's own bodies; strftime is a function of
+# both. time_t is 64 bits on both, so the fixed times include 2^31 - 1,
+# 2^31 and 2100-01-01, past the 32-bit limit of 2038. For each time the
+# program prints the broken-down fields (tm_year, tm_mon, tm_mday, tm_hour,
+# tm_min, tm_sec, tm_wday, tm_yday, tm_isdst) and two strftime strings with
+# numeric conversions only (%Y-%m-%d %H:%M:%S; %j %w %y %%), which the C
+# locale formats the same in both libraries, with strftime's length.
+# time(NULL) is checked only for being positive and later than 2020-01-01,
+# time(&t) for storing what it returns, and difftime by its integral value.
+# _CRT_SECURE_NO_WARNINGS turns off the UCRT's deprecation warning for
+# gmtime. Plan 5.17.13 (M24, M3/10-hosted).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#define _CRT_SECURE_NO_WARNINGS
+#include <time.h>
+
+#include "msil_test.h"
+
+static void show(long long when) {
+  time_t t = (time_t)when;
+  char buf[64];
+  put_kv("time", when);
+  struct tm *tm = gmtime(&t);
+  if (!tm) {
+    put_str("gmtime returned NULL");
+    return;
+  }
+  put_kv("tm_year", tm->tm_year);
+  put_kv("tm_mon", tm->tm_mon);
+  put_kv("tm_mday", tm->tm_mday);
+  put_kv("tm_hour", tm->tm_hour);
+  put_kv("tm_min", tm->tm_min);
+  put_kv("tm_sec", tm->tm_sec);
+  put_kv("tm_wday", tm->tm_wday);
+  put_kv("tm_yday", tm->tm_yday);
+  put_kv("tm_isdst", tm->tm_isdst);
+  size_t n = strftime(buf, sizeof buf, "%Y-%m-%d %H:%M:%S", tm);
+  put_kv("strftime length", (long long)n);
+  put_str(buf);
+  n = strftime(buf, sizeof buf, "%j %w %y %%", tm);
+  put_kv("strftime length", (long long)n);
+  put_str(buf);
+}
+
+int main(void) {
+  static const long long fixed[] = {
+      0,           /* 1970-01-01 00:00:00, a Thursday */
+      86399,       /* the last second of that day */
+      951782400,   /* 2000-02-29, a leap day */
+      1234567890,  /* 2009-02-13 23:31:30 */
+      2147483647,  /* 2038-01-19 03:14:07, 2^31 - 1 */
+      2147483648,  /* 2^31 */
+      4102444800,  /* 2100-01-01, not a leap year */
+  };
+  for (unsigned i = 0; i < sizeof fixed / sizeof fixed[0]; i++)
+    show(fixed[i]);
+
+  time_t now = time(NULL);
+  put_kv("time(NULL) > 0", now > 0);
+  put_kv("time(NULL) is after 2020-01-01", now > (time_t)1577836800);
+  time_t stored = 0;
+  time_t returned = time(&stored);
+  put_kv("time(&t) stores what it returns", returned == stored);
+  put_kv("difftime(1234567890, 0)",
+         (long long)difftime((time_t)1234567890, (time_t)0));
+  put_kv("difftime(0, 86399)", (long long)difftime((time_t)0, (time_t)86399));
+  return 0;
+}

@@ -53,7 +53,7 @@
 # EL:         maxStack: 1{{$}}
 # EL:         body:
 # EL:         [[D:%[0-9]+]]:i64 = CONST_I64 1,
-# EL-NEXT:    DROP_I64 killed [[D]],
+# EL-NEXT:    DROP_I64 [[D]],
 # EL-NEXT:    %0:i32 = CONST_I32 42,
 # EL-NEXT:    RETURN %0,
 # EL-NOT:     LOCAL_

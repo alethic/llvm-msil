@@ -15,7 +15,8 @@
 // line. The driver classifies .NET assemblies (AssemblyFiles.h): reference
 // assemblies join the reference set (plan 5.11), and libraries built by this
 // toolchain go to createManagedLibraryFile(), which makes a
-// ManagedLibraryFile (plan 5.9.15).
+// ManagedLibraryFile (plan 5.9.15). The trailer definitions are the
+// synthetic lazy input '<trailer>' (TrailerDefFile.h, plan 5.14.4 T5).
 //
 //===----------------------------------------------------------------------===//
 
@@ -59,6 +60,9 @@ public:
     NativeLibraryKind,
     // A library built by this toolchain (AssemblyFiles.h, plan 5.9.15).
     ManagedLibraryKind,
+    // The trailer definitions, '<trailer>' (TrailerDefFile.h, plan 5.14.4
+    // T5).
+    TrailerDefKind,
   };
 
   virtual ~InputFile() {}

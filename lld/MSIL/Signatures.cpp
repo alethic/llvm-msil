@@ -120,12 +120,12 @@ void CallBinder::checkNativeReferences() {
     std::string prefix =
         ("native function '" + name + "' (" + e.Module + ") ").str();
     std::string msg;
-    // Native code cannot call a managed function before phase 3's thunks
-    // (plan 5.10.10): the functions of the callback list are errors, whether
-    // or not the call passes a function.
+    // Native code cannot call a managed function yet (plan 5.10.10,
+    // 5.15.11): the functions of the callback list are errors, whether or not
+    // the call passes a function.
     if (!isExplicit && isListed(isNativeCallbackFunction))
-      msg = prefix + "takes a C function pointer; passing functions to "
-                     "native code needs phase 3 thunks";
+      msg = prefix + "takes a C function pointer; " +
+            "passing C functions to native code is not supported for MSIL yet";
     else if (variadic)
       msg = prefix + "is variadic; calls of native variadic functions are not "
                      "supported for MSIL yet (phase 3)";
@@ -168,10 +168,44 @@ static void reportMismatch(const Symbol &sym, const CallShape &call,
     error(msg);
 }
 
+// Plan 5.14.2 N-1's error for the call \p call of the helper \p sym in \p f
+// against the definition \p def in \p defFile: never an adapter or a warning.
+// The helpers are the names of isHelperName (N1-N3) and the trailer
+// definitions (5.14.4 T7).
+static void reportHelperMismatch(const Symbol &sym, const CallShape &call,
+                                 const CallShape &def, StringRef defFile,
+                                 const ObjFile &f) {
+  error("function signature mismatch: " + toString(sym) +
+        " (a toolchain or compiler runtime helper)\n>>> defined as " +
+        printShape(def) + " in " + defFile + "\n>>> called as " +
+        printShape(call) + " in " + toString(&f));
+}
+
 std::optional<uint32_t> CallBinder::bindCall(ObjFile &f, const TokenTarget &t) {
   Symbol *sym = t.sym;
   if (!sym)
     return std::nullopt;
+
+  // A trailer definition (plan 5.14.4 T5): the method that the writer
+  // declared with the registry's signature. Any difference is N-1's error
+  // (plan 5.14.2, 5.14.4 T7).
+  if (std::optional<uint32_t> def = symbols.getTrailerMethod(sym)) {
+    if (!t.signature)
+      return def;
+    MethodSig callSig = out.mapSig(f, *t.signature);
+    CallShape call = CallShape::get(callSig, t.signatureInfo);
+    CallShape defShape = CallShape::get(out.methods[*def].sig, nullptr);
+    if (classifyCall(call, defShape).Kind == CallMatchKind::Direct)
+      return def;
+    std::string key = std::to_string(*def);
+    key.push_back('\0');
+    key += OutputModule::getSignatureKey(callSig);
+    key.push_back('\0');
+    key += getDescriptorKey(t.signatureInfo);
+    if (reported.insert(key + '\0' + toString(&f)).second)
+      reportHelperMismatch(*sym, call, defShape, toString(sym->getFile()), f);
+    return std::nullopt;
+  }
 
   // A definition of an object or an LTO object.
   if (auto *d = dyn_cast<DefinedFunction>(sym)) {
@@ -200,6 +234,13 @@ std::optional<uint32_t> CallBinder::bindCall(ObjFile &f, const TokenTarget &t) {
     key += OutputModule::getSignatureKey(callSig);
     key.push_back('\0');
     key += getDescriptorKey(t.signatureInfo);
+    // A helper's call is never adapted (plan 5.14.2 N-1).
+    if (isHelperName(sym->getName(), ctx)) {
+      if (reported.insert(key + '\0' + toString(&f)).second)
+        reportHelperMismatch(*sym, call, defShape, toString(d->method->file),
+                             f);
+      return std::nullopt;
+    }
     bool isAdapter = match.Kind == CallMatchKind::Adapter;
     if (reported.insert(key + '\0' + toString(&f)).second)
       reportMismatch(*sym, call, defShape, match, toString(d->method->file), f);
@@ -325,6 +366,12 @@ OutRef CallBinder::bindManaged(ObjFile &f, const TokenTarget &t) {
   key += OutputModule::getSignatureKey(callSig);
   key.push_back('\0');
   key += getDescriptorKey(t.signatureInfo);
+  // A helper's call is never adapted (plan 5.14.2 N-1).
+  if (isHelperName(managed->getName(), ctx)) {
+    if (reported.insert(key + '\0' + toString(&f)).second)
+      reportHelperMismatch(*managed, call, defShape, toString(&lib), f);
+    return OutRef();
+  }
   bool isAdapter = match.Kind == CallMatchKind::Adapter;
   if (reported.insert(key + '\0' + toString(&f)).second)
     reportMismatch(*managed, call, defShape, match, toString(&lib), f);

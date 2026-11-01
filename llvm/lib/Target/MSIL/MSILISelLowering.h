@@ -63,6 +63,20 @@ public:
   bool isProfitableToCombineMinNumMaxNum(EVT VT) const override {
     return false;
   }
+  /// Passes bf16 as f16, its 16-bit pattern in an int32, and a vector of bf16
+  /// as the vector of f16 of the same length, one such int32 per element
+  /// (TargetLoweringBase gives bf16 the register type of f32). Every other
+  /// type as the base class.
+  MVT getRegisterTypeForCallingConv(LLVMContext &Context, CallingConv::ID CC,
+                                    EVT VT) const override;
+  unsigned getNumRegistersForCallingConv(LLVMContext &Context,
+                                         CallingConv::ID CC,
+                                         EVT VT) const override;
+  unsigned getVectorTypeBreakdownForCallingConv(LLVMContext &Context,
+                                                CallingConv::ID CC, EVT VT,
+                                                EVT &IntermediateVT,
+                                                unsigned &NumIntermediates,
+                                                MVT &RegisterVT) const override;
 
   // Lowering hooks.
   SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const override;
@@ -148,9 +162,13 @@ private:
   /// Splits FSINCOS into FSIN and FCOS: sincos is not a Phase-1 import
   /// (decision D14), and sin and cos are.
   SDValue LowerFSINCOS(SDValue Op, SelectionDAG &DAG) const;
-  /// Converts between bf16 and f32/f64 through the compiler-rt helpers, as f16
-  /// does, instead of the generic expansions' bitcasts through memory.
+  /// Converts f32 and f64 to bf16 through the compiler-rt helpers
+  /// (__truncsfbf2, __truncdfbf2), as f16 does.
   SDValue LowerBF16Conversion(SDValue Op, SelectionDAG &DAG) const;
+  /// Lowers a single-thread fence to a call of __msil_compiler_barrier
+  /// (decision D36 as amended); returns any other fence unchanged, for the
+  /// MEMORY_BARRIER pattern.
+  SDValue LowerATOMIC_FENCE(SDValue Op, SelectionDAG &DAG) const;
   /// Reports \p What, the diagnostic text for an operation that Phase 1 does
   /// not support, and returns well-formed dummy results (zero for an integer
   /// value, the input chain for a chain), so that compilation continues.

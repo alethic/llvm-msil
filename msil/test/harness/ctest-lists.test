@@ -1,70 +1,169 @@
-# The configuration errors of msil/test/Programs/c-testsuite (plan 5.12.9;
-# M23): a malformed or stale libc-free.txt must stop lit, never turn into
-# fewer tests. (1) Inputs/ctest-lists.py unit calls msil_ctest_format's
-# TestList and libc_free directly (python -B: no __pycache__ in the source
-# tree): a diag entry whose item is not P3-A or P3-B, a diag entry without
-# '# <item>', a header count that differs from the entries, a name listed
-# twice and a list without '# rule:' are errors, and libc_free picks the .c
-# files that the rule matches nowhere. (2) The checks of c-testsuite's
-# lit.local.cfg, in nested lits over a copy of the directory
-# (Inputs/nested-ctest runs the copy's lit.local.cfg) with a fake cache
-# (Inputs/make-fake-corpus.py, then Inputs/ctest-lists.py setup writes the
-# tree free1.c, free2.c and calls.c and a matching list): the consistent
-# list loads and yields one test per name; a listed test whose .c.expected
-# is not empty, a listed name that the tree lacks, a libc-free test of the
-# tree that the list lacks, and a name listed twice are each a configuration
-# error (lit's exit status 2) that names it. (3) The format's tests executed
-# (prog/Inputs/nested-ctest runs the copy's lit.local.cfg below
-# prog/lit.local.cfg, so %{msil_prog} and %{msil_prog_fail_<L>} build with
-# the stand-ins of prog/Inputs/prog-cc.py, whose compiler accepts only
-# c-testsuite's flags there): Inputs/ctest-lists.py setup ... exec lists
-# free1, a program that exits 0, and the diag entries diag1, whose compile
-# fails with the listed text, and diag2, which builds. At -O0 and -O2,
-# free1's MSIL build (and, where the native oracle runs, its native build)
-# gets --cflags='-std=gnu17 -w', each compile has those flags, and the runs
-# compare with the copy's exit0.expected; diag1 runs 'not' + the build piped
-# into FileCheck of the copy's diag.check with "-DDIAG=<text>" and both
-# --implicit-check-not texts (LLVM ERROR, PLEASE submit) at each level and
-# passes; diag2, whose build succeeds, fails. Under msil_pipeline=lto free1
-# passes and both diag entries are UNSUPPORTED (they require
-# msil-prog-pipeline=obj).
+# The lists of msil/test/Programs/c-testsuite and their format (plan 5.12.9,
+# 5.17.14; M23, M24): a malformed or stale list must stop lit, never turn
+# into fewer tests, and every entry kind must build its test as specified.
+# (1) Inputs/ctest-lists.py unit calls msil_ctest_format directly (python
+#     -B: no __pycache__ in the source tree): a list with every entry kind
+#     ('<name>', '<name> native <triple>  # <reason>', '<name> diag
+#     [<triple>] <text>  # M<n> ...', '<name> exclude <triple>
+#     long-double|not-portable  # <text>') parses into Entry tuples; each
+#     ListError message, with its '<path>:<line>: ' (the grammar, a bad
+#     name, a triple that is not linux-gnu or windows-msvc, a diag text with
+#     " \ % $ or `, a diag comment that names no milestone, an exclude word
+#     outside the vocabulary, a native or exclude entry without a comment, a
+#     name listed twice, and the header lines); split_tree and libc_free on
+#     a small tree; expected_text (msil-run.py's transcript rule plus
+#     '[exit 0]'); and mode_of of every entry kind on both triples.
+# (2) The checks of c-testsuite's lit.local.cfg, in nested lits over a copy
+#     of the directory (Inputs/nested-ctest runs the copy's lit.local.cfg)
+#     with a fake cache (Inputs/make-fake-corpus.py, then
+#     Inputs/ctest-lists.py setup writes the tree free1.c, free2.c and
+#     calls.c, libc-free.txt and libc.txt): the consistent lists load and
+#     yield one test per name, libc.txt's as libc/<name>; without libc.txt
+#     (optional until M26) only libc-free.txt's tests; a listed test without
+#     its .c.expected (either list), a name the tree lacks or a test the
+#     rule puts into a list that lacks it (either list), a libc.txt name the
+#     rule does not match, a libc.txt rule that differs from libc-free.txt's,
+#     a name listed twice and a ListError are each a configuration error
+#     (lit's exit status 2) that names it. A libc.txt also needs hosted mode
+#     and %{msil_hosted_cflags} (Inputs/nested-ctest's msil_ctest_drop takes
+#     them away, as a lit.cfg.py without M24's hosted mode would lack them),
+#     while a tree without libc.txt loads without them. A 'native <triple>'
+#     entry needs the native oracle: the setup case 'native' adds natwin
+#     (native windows-msvc) and natlin (native linux-gnu) to libc-free.txt,
+#     and a nested run (-a) of the one for the configured triple alone
+#     (--filter) reports it UNSUPPORTED for the missing feature
+#     msil-native-oracle and builds nothing (Inputs/nested-ctest never has
+#     the feature: %{harness_lit} does not pass msil_native_oracle on).
+# (3) The format's tests executed (prog/Inputs/nested-ctest runs the copy's
+#     lit.local.cfg below prog/lit.local.cfg, so %{msil_prog} and
+#     %{msil_prog_fail_<L>} build with the stand-ins of
+#     prog/Inputs/prog-cc.py, whose compiler accepts only c-testsuite's
+#     flags there, and whose prog-stdout markers make the program print the
+#     .c.expected text) at -O0 and -O2 on windows-msvc:
+#     - plain entries: the MSIL build (and the native build of the native
+#       oracle) gets --cflags='-std=gnu17 -w', each compile has those flags,
+#       and the MSIL and native runs compare with %t/<name>.expected, which
+#       the format wrote from <name>.c.expected (free1: a line; nonl: no
+#       final newline, so the file has msil-run.py's '[no newline at end of
+#       output]' line; crlf: CRLF folded to LF) and '[exit 0]'; out1, whose
+#       program prints nothing, fails with the diff of its text;
+#     - nat1 (native windows-msvc): before %{msil_prog}, msil-prog.py
+#       --mode native at the first level into %t.expected.d and msil-run.py
+#       --native --out %t/nat1.expected write the native transcript, which
+#       the test then matches although nat1.c.expected holds another text;
+#       nat2 (native linux-gnu) is a plain test here and fails on that text;
+#     - diag1 (diag, no triple) runs 'not' + the build piped into FileCheck
+#       of the copy's diag.check with -DDIAG=<text> and both
+#       --implicit-check-not texts at each level and passes; diag2, whose
+#       build succeeds, fails; diag3 (diag linux-gnu) is a plain test here;
+#     - exc1 (exclude windows-msvc not-portable) is UNSUPPORTED with
+#       'excluded on windows-msvc: not-portable (<text>)'; exc2 (exclude
+#       linux-gnu) is a plain test here;
+#     - libc.txt's lib1 is 'libc/lib1', compiled with -std=gnu17 -w and
+#       %{msil_hosted_cflags} (empty for windows-msvc), with the hosted
+#       native oracle (msil-prog.py --mode native --hosted, which compiles
+#       with -fms-runtime-lib=dll); lib2 (native windows-msvc) writes its
+#       expected file through --mode native --hosted.
+#     Under msil_pipeline=lto the plain entries pass and the diag entries
+#     are UNSUPPORTED (they require msil-prog-pipeline=obj).
 
 # (1)
 # RUN: %python -B %S/Inputs/ctest-lists.py unit > %t.unit.log 2>&1
-# RUN: %{harness_check} contains %t.unit.log "^ctest-lists: 7 checks, 0 failed$" "^ok: a diag entry whose item is not P3-A or P3-B: " "^ok: a diag entry without '# <item>': " "^ok: a header count that differs from the entries: " "^ok: a name listed twice: " "^ok: no '# rule:' line: " "^ok: libc_free: "
+# RUN: %{harness_check} contains %t.unit.log "^ctest-lists: 38 checks, 0 failed$" "^ok: a list with every entry kind: " "^ok: the grammar \('00001 native'\): " "^ok: a bad test name \('a/b'\): " "^ok: a diag entry's triple that is not one of the lists: " "^ok: a diag text with a character that lit or the checker would change \('error: 100%'\): " "^ok: a diag entry that names no milestone \('  # P3-B variadic'\): " "^ok: an exclude word outside the vocabulary: " "^ok: a native entry without a comment \('00002 native windows-msvc'\): " "^ok: a exclude entry without a comment " "^ok: a name listed twice: " "^ok: split_tree: " "^ok: expected_text\(b'x'\): " "^ok: mode_of with msil-triple-windows: " "^ok: mode_of with msil-triple-linux: "
 # RUN: %{harness_check} lacks %t.unit.log "^FAIL: "
 
 # (2)
-# RUN: rm -rf %t.copy %t.corpus
+# RUN: rm -rf %t %t.copy %t.corpus
+# RUN: mkdir -p %t
 # RUN: %python %S/Inputs/make-fake-corpus.py %S/../../utils/corpus/manifest.json %t.corpus
 # RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus
 # RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.ok.log 2>&1
-# RUN: %{harness_check} contains %t.ok.log "MSIL :: harness/Inputs/nested-ctest/free1$" "MSIL :: harness/Inputs/nested-ctest/free2$"
-# RUN: %{harness_check} lacks %t.ok.log "fatal:" "nested-ctest/calls$"
+# RUN: %{harness_check} contains %t.ok.log "MSIL :: harness/Inputs/nested-ctest/free1$" "MSIL :: harness/Inputs/nested-ctest/free2$" "MSIL :: harness/Inputs/nested-ctest/libc/calls$"
+# RUN: %{harness_check} lacks %t.ok.log "fatal:" "nested-ctest/calls$" "nested-ctest/libc/free"
+
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_ctest_drop=hosted --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.nohosted.log 2>&1
+# RUN: %{harness_check} contains %t.nohosted.log "fatal: msil: c-testsuite's libc\.txt needs hosted mode \(config\.msil_enable_hosted, plan 5\.17\.3\), which lit\.cfg\.py does not define$"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_ctest_drop=subst --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.nosubst.log 2>&1
+# RUN: %{harness_check} contains %t.nosubst.log "fatal: msil: c-testsuite's libc\.txt needs the substitutions %\{msil_hosted_cflags\}, which lit\.cfg\.py does not define$"
+
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus nolibc
+# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.nolibc.log 2>&1
+# RUN: %{harness_check} contains %t.nolibc.log "MSIL :: harness/Inputs/nested-ctest/free1$" "MSIL :: harness/Inputs/nested-ctest/free2$"
+# RUN: %{harness_check} lacks %t.nolibc.log "fatal:" "nested-ctest/calls$" "nested-ctest/libc/"
+# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_ctest_drop=hosted --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.nolibc-nohosted.log 2>&1
+# RUN: %{harness_check} contains %t.nolibc-nohosted.log "MSIL :: harness/Inputs/nested-ctest/free1$"
+# RUN: %{harness_check} lacks %t.nolibc-nohosted.log "fatal:"
 
 # RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus expected
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.expected.log 2>&1
-# RUN: %{harness_check} contains %t.expected.log "fatal: msil: c-testsuite test free2 is listed in libc-free\.txt, but .+free2\.c\.expected is missing or not empty"
+# RUN: %{harness_check} contains %t.expected.log "fatal: msil: c-testsuite test free2 is listed, but \S+free2\.c\.expected does not exist \(the format writes the test's expected file from it\)$"
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus libc-expected
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.libc-expected.log 2>&1
+# RUN: %{harness_check} contains %t.libc-expected.log "fatal: msil: c-testsuite test calls is listed, but \S+calls\.c\.expected does not exist \(the format writes the test's expected file from it\)$"
 
 # RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus absent
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.absent.log 2>&1
 # RUN: %{harness_check} contains %t.absent.log "fatal: msil: libc-free\.txt does not match .+ by its rule: listed but not libc-free or not in the tree: ghost; libc-free but not listed: none$"
-
 # RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus unlisted
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.unlisted.log 2>&1
 # RUN: %{harness_check} contains %t.unlisted.log "fatal: msil: libc-free\.txt does not match .+ by its rule: listed but not libc-free or not in the tree: none; libc-free but not listed: free3$"
 
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus libc-absent
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.libc-absent.log 2>&1
+# RUN: %{harness_check} contains %t.libc-absent.log "fatal: msil: libc\.txt does not match .+ by its rule: listed but not matched by the rule or not in the tree: ghost2; matched by the rule but not listed: none$"
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus libc-unlisted
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.libc-unlisted.log 2>&1
+# RUN: %{harness_check} contains %t.libc-unlisted.log "fatal: msil: libc\.txt does not match .+ by its rule: listed but not matched by the rule or not in the tree: none; matched by the rule but not listed: calls2$"
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus libc-free
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.libc-free.log 2>&1
+# RUN: %{harness_check} contains %t.libc-free.log "fatal: msil: libc\.txt does not match .+ by its rule: listed but not matched by the rule or not in the tree: free1; matched by the rule but not listed: none$"
+
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus rule
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.rule.log 2>&1
+# RUN: %{harness_check} contains %t.rule.log "fatal: msil: \S+libc\.txt: the '# rule:' line differs from libc-free\.txt's \(both lists split the tree by one rule\)$"
+
 # RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus twice
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.twice.log 2>&1
-# RUN: %{harness_check} contains %t.twice.log "fatal: msil: .+libc-free\.txt:\d+: free1 is listed twice$"
+# RUN: %{harness_check} contains %t.twice.log "fatal: msil: \S+libc-free\.txt:6: free1 is listed twice$"
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus grammar
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.grammar.log 2>&1
+# RUN: %{harness_check} contains %t.grammar.log "fatal: msil: \S+libc\.txt:4: the exclude entry of calls names 'other'; the word is one of long-double, not-portable$"
+
+# RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus native
+# RUN: %if msil-triple-windows %{ %{harness_lit} -a --filter=nested-ctest/natwin --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.native.log 2>&1 %}
+# RUN: %if msil-triple-windows %{ %{harness_check} contains %t.native.log "^UNSUPPORTED: MSIL :: harness/Inputs/nested-ctest/natwin \(1 of 1\)\nTest requires the following unavailable features: msil-native-oracle$" %}
+# RUN: %if msil-triple-linux %{ %{harness_lit} -a --filter=nested-ctest/natlin --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.native.log 2>&1 %}
+# RUN: %if msil-triple-linux %{ %{harness_check} contains %t.native.log "^UNSUPPORTED: MSIL :: harness/Inputs/nested-ctest/natlin \(1 of 1\)\nTest requires the following unavailable features: msil-native-oracle$" %}
 
 # (3)
 # RUN: rm -rf %t.exec
 # RUN: %python -B %S/Inputs/ctest-lists.py setup %t.exec %t.corpus exec
-# RUN: %if msil-ld && msil-ar %{ %{harness_check} exits 1 %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O0,O2 --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.exec %S/prog/Inputs/nested-ctest > %t.exec.log 2>&1 %}
-# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.exec.log "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/free1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/diag1 " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/diag2 " %}
-# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.exec.log "^# executed command: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O0 --workdir '?\S*free1\.tmp\.O0\.d'? .*$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -w -O0 -c \S*free1\.c -o obj/free1\.o$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*exit0'? --out '?\S*free1\.tmp\.O0\.out'? " "^# executed command: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O2 --workdir '?\S*free1\.tmp\.O2\.d'? .*$" "^# executed command: .*msil-run\.py'? --expect-os .* --expect '?\S*exit0'? --out '?\S*free1\.tmp\.O2\.out'? " %}
-# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.exec.log "^# executed command: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --mode native --level O0 .*$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=x86_64-pc-windows-msvc -std=gnu17 -w -O0 -c \S*free1\.c -o obj/free1\.o$" "^# executed command: .*msil-run\.py'? .* --native --expect '?\S*exit0'? --out '?\S*free1\.tmp\.O0\.native\.out'? " %}
-# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.exec.log "^# executed command: not .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O0 --workdir '?\S*diag1\.tmp\.O0\.d'? .*\n# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?\S*diag\.check'? '?-DDIAG=error: variadic function definitions are not supported for MSIL yet'? '?--implicit-check-not=LLVM ERROR'? '?--implicit-check-not=PLEASE submit'?$" "^# executed command: not .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O2 --workdir '?\S*diag1\.tmp\.O2\.d'? .*\n# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?\S*diag\.check'? '?-DDIAG=error: variadic function definitions are not supported for MSIL yet'? '?--implicit-check-not=LLVM ERROR'? '?--implicit-check-not=PLEASE submit'?$" "^# executed command: not .*msil-prog\.py'? .* --level O0 --workdir '?\S*diag2\.tmp\.O0\.d'? .*$" %}
-# RUN: %if msil-ld && msil-ar %{ %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O0,O2 --param msil_pipeline=lto --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.exec %S/prog/Inputs/nested-ctest > %t.exec-lto.log 2>&1 %}
-# RUN: %if msil-ld && msil-ar %{ %{harness_check} contains %t.exec-lto.log "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/free1 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/diag1 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/diag2 " %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} exits 1 %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O0,O2 --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.exec %S/prog/Inputs/nested-ctest > %t.exec.log 2>&1 %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/free1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/nonl " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/crlf " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/out1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/nat1 " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/nat2 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/diag1 " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/diag2 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/diag3 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/exc1 \(\d+ of 13\)\nexcluded on windows-msvc: not-portable \(bit-field layout\)$" "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/exc2 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/libc/lib1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/libc/lib2 " "^Total Discovered Tests: 13$" %}
+
+# plain entries
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^# executed command: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O0 --workdir '?\S*free1\.tmp\.O0\.d'? .*$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -w -O0 -c \S*free1\.c -o obj/free1\.o$" "^# \| msil-steps: run: .*msil-run\.py'? --expect-os .* --expect '?\S*free1\.tmp/free1'? --out '?\S*free1\.tmp\.O0\.out'? " "^# executed command: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O2 --workdir '?\S*free1\.tmp\.O2\.d'? .*$" "^# \| msil-steps: run: .*msil-run\.py'? --expect-os .* --expect '?\S*free1\.tmp/free1'? --out '?\S*free1\.tmp\.O2\.out'? " %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^# \| msil-steps: native-build: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --mode native --expected-rule '' --level O0 --workdir '?\S*free1\.tmp\.O0\.native\.d'? " "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=x86_64-pc-windows-msvc -std=gnu17 -w -O0 -c \S*free1\.c -o obj/free1\.o$" "^# \| msil-steps: native-run: .*msil-run\.py'? .* --native --expected-rule '' --expect '?\S*free1\.tmp/free1'? --out '?\S*free1\.tmp\.O0\.native\.out'? " %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} equals %t/../../prog/Inputs/nested-ctest/Output/free1.tmp/free1.expected "free1 ok" "[exit 0]" %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} equals %t/../../prog/Inputs/nested-ctest/Output/nonl.tmp/nonl.expected "tail" "[no newline at end of output]" "[exit 0]" %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} equals %t/../../prog/Inputs/nested-ctest/Output/crlf.tmp/crlf.expected "crlf ok" "[exit 0]" %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^# \| --- \S*out1\.tmp/out1\.expected\n# \| \+\+\+ actual\n# \| @@ -1,2 \+1 @@\n# \| -out1 differs\n# \|  \[exit 0\]$" %}
+
+# native entries
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^# executed command: .*msil-prog\.py'? .* --mode native --level O0 --workdir '?\S*nat1\.tmp\.expected\.d'? --out '?\S*nat1\.tmp\.expected\.d/prog\.exe'? --src \S*nat1\.c --stock-src --archives= --native-lib=$\n(# .*\n)*# executed command: .*msil-run\.py'? .* --native --out '?\S*nat1\.tmp/nat1\.expected'? '?\S*nat1\.tmp\.expected\.d/prog\.exe'?$\n(# .*\n)*# executed command: .*msil-prog\.py'? .* --level O0 --workdir '?\S*nat1\.tmp\.O0\.d'? " "^# \| msil-steps: run: .*msil-run\.py'? --expect-os .* --expect '?\S*nat1\.tmp/nat1'? --out '?\S*nat1\.tmp\.O2\.out'? " %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} equals %t/../../prog/Inputs/nested-ctest/Output/nat1.tmp/nat1.expected "[exit 0]" %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^# \| -LP64 only\n# \|  \[exit 0\]$" %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} lacks %t.exec.log "nat2\.tmp\.expected\.d" "--out '?\S*nat2\.tmp/nat2\.expected" %}
+
+# diag entries
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^# executed command: not .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O0 --workdir '?\S*diag1\.tmp\.O0\.d'? .*\n# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?\S*diag\.check'? '?-DDIAG=error: variadic function definitions need M26'? '?--implicit-check-not=LLVM ERROR'? '?--implicit-check-not=PLEASE submit'?$" "^# executed command: not .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O2 --workdir '?\S*diag1\.tmp\.O2\.d'? .*\n# executed command: .*[Ff]ile[Cc]heck(\.exe)?'? '?\S*diag\.check'? '?-DDIAG=error: variadic function definitions need M26'? '?--implicit-check-not=LLVM ERROR'? '?--implicit-check-not=PLEASE submit'?$" "^# executed command: not .*msil-prog\.py'? .* --level O0 --workdir '?\S*diag2\.tmp\.O0\.d'? .*$" "^# \| msil-steps: run: .*msil-run\.py'? --expect-os .* --expect '?\S*diag3\.tmp/diag3'? " %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} lacks %t.exec.log "not .*msil-prog\.py'? .* --workdir '?\S*diag3\.tmp" "exc1\.tmp" %}
+
+# libc.txt entries
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -w -O0 -c \S*lib1\.c -o obj/lib1\.o$" "^# \| msil-steps: native-build: .*msil-prog\.py'? .* --mode native --hosted --expected-rule '' --level O0 --workdir '?\S*lib1\.tmp\.O0\.native\.d'? " "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=x86_64-pc-windows-msvc -fms-runtime-lib=dll -std=gnu17 -w -O0 -c \S*lib1\.c -o obj/lib1\.o$" "^# \| msil-steps: run: .*msil-run\.py'? --expect-os .* --expect '?\S*libc\WOutput\Wlib1\.tmp/lib1'? --out '?\S*lib1\.tmp\.O2\.out'? " "^# executed command: .*msil-prog\.py'? .* --mode native --hosted --level O0 --workdir '?\S*lib2\.tmp\.expected\.d'? " %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} equals %t/../../prog/Inputs/nested-ctest/libc/Output/lib1.tmp/lib1.expected "lib1 ok" "[exit 0]" %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} equals %t/../../prog/Inputs/nested-ctest/libc/Output/lib2.tmp/lib2.expected "[exit 0]" %}
+
+# lto
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} exits 1 %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O0,O2 --param msil_pipeline=lto --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.exec %S/prog/Inputs/nested-ctest > %t.exec-lto.log 2>&1 %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec-lto.log "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/free1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/nat1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/libc/lib1 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/diag1 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/diag2 " "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -w -O2 -flto -c \S*free1\.c -o obj/free1\.o$" %}

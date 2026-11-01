@@ -1,0 +1,104 @@
+# FILE * I/O through the real <stdio.h> in the private run directory: write, read back, seek, rename and remove.
+# Every run of a program (the MSIL runs and the native oracle) starts in a
+# private directory of its own (msil-run.py), so the relative file names
+# below cannot collide. The program writes a file in binary mode ("wb": no
+# newline translation on Windows, so the byte counts are the same) with
+# fputs, fwrite of eight bytes that include 0, 0x80 and 0xff, and fputc,
+# checks ftell (a 'long', 32 bits on Windows triples and 64 bits on Linux
+# triples, so the import's signature differs by triple) and fclose, reads it
+# back ("rb") with fgets, fgetc and ungetc, fseek to the end and back, fread
+# and memcmp, sees feof at the end, renames it, opens the new name, and
+# removes it: then remove and fopen of the name fail with ENOENT. errno is
+# copied right after the call that sets it (msil/test/M3/10-hosted/errno.test
+# says why). _CRT_SECURE_NO_WARNINGS turns off the UCRT's deprecation
+# warning for fopen. Plan 5.17.13 (M24, M3/10-hosted).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#define _CRT_SECURE_NO_WARNINGS
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "msil_test.h"
+
+#define FIRST "m3-file-io.tmp"
+#define SECOND "m3-file-io-renamed.tmp"
+
+static const unsigned char bytes[8] = {0, 1, 2, 0x7f, 0x80, 0xfe, 0xff, '\n'};
+
+/* Prints a line read by fgets without its newline. */
+static void put_line(const char *what, char *line) {
+  line[strcspn(line, "\n")] = 0;
+  put_str(what);
+  put_str(line);
+}
+
+int main(void) {
+  errno = 0;
+  FILE *f = fopen(FIRST, "wb");
+  put_kv("fopen(wb)", f != NULL);
+  if (!f)
+    return 1;
+  put_kv("fputs", fputs("the first line\n", f) >= 0);
+  put_kv("fputs", fputs("the second line\n", f) >= 0);
+  put_kv("fwrite", (long long)fwrite(bytes, 1, sizeof bytes, f));
+  put_kv("fputc", fputc('Z', f));
+  put_kv("ftell after writing", (long long)ftell(f));
+  put_kv("fclose", fclose(f));
+
+  f = fopen(FIRST, "rb");
+  put_kv("fopen(rb)", f != NULL);
+  if (!f)
+    return 2;
+  char line[64];
+  put_kv("fgets", fgets(line, sizeof line, f) == line);
+  put_line("the line read:", line);
+  put_kv("ftell after one line", (long long)ftell(f));
+  put_kv("fseek to the end", fseek(f, 0, SEEK_END));
+  put_kv("ftell at the end", (long long)ftell(f));
+  rewind(f);
+  put_kv("fgetc after rewind", fgetc(f));
+  put_kv("ungetc", ungetc('T', f));
+  put_kv("fgetc after ungetc", fgetc(f));
+  put_kv("fseek to the second line", fseek(f, 15, SEEK_SET));
+  put_kv("fgets", fgets(line, sizeof line, f) == line);
+  put_line("the line read:", line);
+  unsigned char got[8];
+  memset(got, 0xaa, sizeof got);
+  put_kv("fread", (long long)fread(got, 1, sizeof got, f));
+  put_kv("the bytes read back are the bytes written",
+         memcmp(got, bytes, sizeof got) == 0);
+  put_kv("fgetc of the last byte", fgetc(f));
+  put_kv("fgetc at the end is EOF", fgetc(f) == EOF);
+  put_kv("feof", feof(f) != 0);
+  put_kv("fclose", fclose(f));
+
+  put_kv("rename", rename(FIRST, SECOND));
+  errno = 0;
+  f = fopen(FIRST, "rb");
+  int e = errno;
+  put_kv("fopen of the old name fails", f == NULL);
+  put_kv("with ENOENT", e == ENOENT);
+  f = fopen(SECOND, "rb");
+  put_kv("fopen of the new name", f != NULL);
+  if (!f)
+    return 3;
+  put_kv("fgets", fgets(line, sizeof line, f) == line);
+  put_line("the line read:", line);
+  put_kv("fclose", fclose(f));
+
+  put_kv("remove", remove(SECOND));
+  errno = 0;
+  int r = remove(SECOND);
+  e = errno;
+  put_kv("remove again fails", r != 0);
+  put_kv("with ENOENT", e == ENOENT);
+  errno = 0;
+  f = fopen(SECOND, "rb");
+  e = errno;
+  put_kv("fopen after remove fails", f == NULL);
+  put_kv("with ENOENT", e == ENOENT);
+  return f != NULL;
+}

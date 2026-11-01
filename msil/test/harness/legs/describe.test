@@ -1,0 +1,85 @@
+# lit-legs.ps1 -Describe (plan 5.17.6, M24) prints every leg as JSON
+# ({"version": 1, "script": "lit-legs.ps1", "legs": [...]}) and runs
+# nothing; -Leg <name> -Run <k>[,<k>...] runs only the listed runs of a leg.
+# Against a stand-in build whose llvm-lit records its arguments and response
+# file (Inputs/ci-legs.py), Inputs/legs-check.py checks:
+# (1) the output is JSON alone, no lit ran, and every leg and run has 5.17.6's
+# shape: the derived fields (pipeline, prog_pipeline, triple, runner,
+# also_run) and msil_require_verify, _exec, _link and _hosted=1 on every lit
+# run; the M24 rows: net-core (with $checkMsil, no native oracle, no
+# msil_also_run), p3-full, harness, wsl-p3 (two runs), scale, ctest-wsl, and
+# the changed wsl-net10, lto, lto-wsl, expected, expected-linux and ctest.
+# $p3Tests is what 'check-matrix.py --p3-tests' prints (M24.o's
+# strict-i128.c): p3-full and wsl-p3's run 1 carry every one of those paths,
+# and the --filter-out of net-core and of wsl-p3's run 2 ($p3Out) matches
+# exactly those tests' full lit names, metacharacters escaped. (2) What
+# -Describe shows is what the runs pass: -Leg net-core, p3-full and wsl-p3
+# pass exactly the paths, params and lit arguments of their runs, and
+# -Run 2 runs wsl-p3's second run alone, in a row named 'wsl-p3 (run 2)'.
+# (3) -Leg wsl-p3 -Run 3, -Run without exactly one -Leg, and -Run 0 are usage
+# errors that run nothing. (4) The corpus parameters print as the environment
+# resolves them, and the NuGet tools as @nuget:<rid>/<tool>. (5) The failure
+# path of Inputs/legs-check.py: each planted fault (a $p3Tests path missing
+# from wsl-p3's run 1, wsl-p3's run 2 without $p3Out, a lit run without
+# msil_require_hosted=1, an lto run whose prog_pipeline is obj) is reported.
+# describe-sh.test checks lit-legs.sh --describe.
+# REQUIRES: msil-ci-pwsh
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %python %S/Inputs/ci-legs.py setup %t/build
+
+# (1)
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build -- -Describe > %t/describe.json
+# RUN: %{harness_check} missing %t/build/lit-calls.log
+# RUN: %python %S/Inputs/legs-check.py describe ps1 %t/describe.json > %t/1.log
+# RUN: %{harness_check} contains %t/1.log "^legs-check: lit-legs\.ps1: \d+ legs, \d+ lit runs: OK$" "^legs-check: [$]p3Tests: msil/test/M1/02-fp/strict-i128\.c( |$)"
+
+# (2)
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-2a -- -Leg net-core > %t/2a.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json net-core %t/build/lit-calls.log > %t/2a-calls.log
+# RUN: %{harness_check} contains %t/2a-calls.log "^legs-check: net-core: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-2b -- -Leg p3-full > %t/2b.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json p3-full %t/build/lit-calls.log > %t/2b-calls.log
+# RUN: %{harness_check} contains %t/2b-calls.log "^legs-check: p3-full: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-2c -- -Leg wsl-p3 > %t/2c.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json wsl-p3 %t/build/lit-calls.log > %t/2c-calls.log
+# RUN: %{harness_check} contains %t/2c-calls.log "^legs-check: wsl-p3: 2 lit invocations pass the paths, params and lit arguments of runs 1,2$"
+# RUN: %{harness_check} contains %t/rows-2c "^lit-legs\twsl-p3\tPASS\t\d+\trun 1: passed 1; lit exit 0; run 2: passed 1; lit exit 0$"
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-2d -- -Leg wsl-p3 -Run 2 > %t/2d.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json wsl-p3 %t/build/lit-calls.log --run 2 > %t/2d-calls.log
+# RUN: %{harness_check} contains %t/2d-calls.log "^legs-check: wsl-p3: 1 lit invocations pass the paths, params and lit arguments of runs 2$"
+# RUN: %{harness_check} contains %t/rows-2d "^lit-legs\twsl-p3 \(run 2\)\tPASS\t"
+# RUN: %{harness_check} lacks %t/rows-2d "\trun 1: "
+
+# (3)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %{harness_check} exits 2 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-3 -- -Leg wsl-p3 -Run 3 > %t/3a.log
+# RUN: %{harness_check} contains %t/3a.log "^lit-legs\.ps1: usage error: -Run 3: leg 'wsl-p3' has 2 lit run\(s\), numbered 1 to 2$"
+# RUN: %{harness_check} exits 2 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-3 -- -Run 1 > %t/3b.log
+# RUN: %{harness_check} contains %t/3b.log "^lit-legs\.ps1: usage error: -Run needs exactly one -Leg \(got none\)$"
+# RUN: %{harness_check} exits 2 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-3 -- -Leg wsl-p3,harness -Run 1 > %t/3c.log
+# RUN: %{harness_check} contains %t/3c.log "^lit-legs\.ps1: usage error: -Run needs exactly one -Leg \(got wsl-p3, harness\)$"
+# RUN: %{harness_check} exits 2 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-3 -- -Leg harness -Run 0 > %t/3d.log
+# RUN: %{harness_check} contains %t/3d.log "^lit-legs\.ps1: usage error: -Run 0: leg 'harness' has 1 lit run\(s\), numbered 1 to 1$"
+# RUN: %{harness_check} missing %t/build/lit-calls.log
+# RUN: %{harness_check} missing %t/rows-3
+
+# (4)
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CORPUS_SKIP=coremark MSIL_CORPUS_CACHE=%t/cache -- -Describe > %t/describe-corpus.json
+# RUN: %python %S/Inputs/legs-check.py describe ps1 %t/describe-corpus.json
+# RUN: %{harness_check} contains %t/describe-corpus.json '"msil_corpus_skip": "coremark"' '"msil_corpus_dir": "[^"]*describe\.test\.tmp[^"]*cache"' '"msil_ilasm": "@nuget:win-x64/ilasm"' '"msil_wsl_ilasm": "@nuget:linux-x64/ilasm"'
+# RUN: %{harness_check} lacks %t/describe.json '"msil_corpus_skip"' '"msil_corpus_dir"'
+# RUN: %{harness_check} missing %t/build/lit-calls.log
+
+# (5)
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant drop-p3-path > %t/5a.log
+# RUN: %{harness_check} contains %t/5a.log "^legs-check: error: wsl-p3 run 1: paths \['msil/test/M3'\], lit \[\]; not msil/test/M3 and [$]p3Tests "
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant keep-p3 > %t/5b.log
+# RUN: %{harness_check} contains %t/5b.log "^legs-check: error: wsl-p3 run 2: lit \[\], not one --filter-out \([$]p3Out\)$"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant no-hosted > %t/5c.log
+# RUN: %{harness_check} contains %t/5c.log "^legs-check: error: harness run 1: params lack msil_require_hosted=1$"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant wrong-prog-pipeline > %t/5d.log
+# RUN: %{harness_check} contains %t/5d.log "^legs-check: error: lto run 1: prog_pipeline 'obj', not 'lto'$"

@@ -1,0 +1,63 @@
+//===- TrailerDefs.def - Functions the MSIL trailer defines -----*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// The trailer definitions (ImplementationPlan.md 5.14.4): C-named functions
+// whose IL the trailer builder writes (cli::buildTrailer) in an output that
+// references the name and defines it nowhere else. Compiled code calls them
+// as ordinary undefined functions; llvm/CLI/TrailerDefs.h declares the
+// registry. One X-macro:
+//
+//   CLI_TRAILER_DEF(Id, Name, Return, Params, Scope, Emitter)
+//
+//   Id       the cli::TrailerDefId enumerator;
+//   Name     the C symbol name, which is also the method's name: a toolchain
+//            name __msil_<name> (plan 5.14.2 N3), or a standard C name that
+//            the trailer overrides only in its Scope (5.14.2 N5); never a
+//            compiler runtime helper's name (5.14.2 N1), exit, _exit, _Exit,
+//            quick_exit or abort (plan 5.14.4 T3);
+//   Return, Params
+//            the IL signature as canonical listing v1 text (plan 5.7.10), as
+//            in BCLMembers.def: the return type, and the parameter types
+//            joined by ", " ("" for none); the method is static and has the
+//            default calling convention (cli::getTrailerDefSignature);
+//   Scope    a cli::TrailerDefScope enumerator: the outputs in which the
+//            trailer defines the name;
+//   Emitter  the function that writes the method,
+//            void Emitter(cli::TrailerDefContext &), which TrailerDefs.h
+//            declares and the feature's file in llvm/lib/CLI defines.
+//
+// The macro is expanded only when it is defined; the file #undef's it at the
+// end. TrailerDefs.h expands the rows into cli::TrailerDefId and the
+// emitters' declarations, and llvm/lib/CLI into the registry and
+// buildTrailer's dispatch, so a new row needs no other shared file.
+//
+// Rows are appended at the end of the file, never inserted, reordered,
+// renamed or deleted: the order fixes the TrailerDefId values. A row that
+// turns out unused stays, with a comment '// unused since M<n>'. Each
+// milestone's rows form one block headed '// M<n>: <purpose> (plan 5.<x>)',
+// written by the milestone's owner of this file. A column of an existing row
+// never changes: a committed definition's name, signature and meaning are
+// frozen, and a changed one is a new row with a new name (plan 5.13.7 B1-B3,
+// 5.14.4 T10).
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef CLI_TRAILER_DEF
+#define CLI_TRAILER_DEF(Id, Name, Return, Params, Scope, Emitter)
+#endif
+
+// M24: the compiler barrier (plan 5.14.4)
+// .method assembly static void '__msil_compiler_barrier'() cil managed
+// noinlining, whose body is 'ret'. Every single-thread fence,
+// atomic_signal_fence and empty asm barrier calls it (decision D36): the JIT
+// does not inline the call, so it reloads memory after it, as the barrier
+// means.
+CLI_TRAILER_DEF(CompilerBarrier, "__msil_compiler_barrier", "void", "", Any,
+                emitCompilerBarrier)
+
+#undef CLI_TRAILER_DEF

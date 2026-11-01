@@ -19,10 +19,12 @@
 // 4. the references of the live units: the unresolved ones are reported
 //    (5.9.6 steps 3-4), and so are the native callees that a P/Invoke cannot
 //    call (5.10.14);
-// 5. every token of every kept body is bound (5.9.7): a definition, an
-//    adapter or a trap stub (5.9.8), a P/Invoke stub (5.10.11), an address
-//    or '<msil>fn_' field, a library export's method or accessor (5.9.15),
-//    or what the BCL binder binds (5.11: against the references, or the
+// 5. the methods of the trailer definitions that the live code uses
+//    (5.14.4), declared first, then every token of every kept body is bound
+//    (5.9.7): a definition, a trailer definition's method, an adapter or a
+//    trap stub (5.9.8), a P/Invoke stub (5.10.11), an address or
+//    '<msil>fn_' field, a library export's method or accessor (5.9.15), or
+//    what the BCL binder binds (5.11: against the references, or the
 //    built-in [mscorlib] table without them); with -shared, the members of
 //    the export class follow;
 // 6. the data relocations, the constructor list, the entry point, the
@@ -57,6 +59,7 @@
 #include "Symbols.h"
 #include "Synthetic.h"
 #include "TokenMap.h"
+#include "TrailerDefFile.h"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -72,6 +75,7 @@
 #include "llvm/CLI/PEWriter.h"
 #include "llvm/CLI/SymbolTable.h"
 #include "llvm/CLI/Trailer.h"
+#include "llvm/CLI/TrailerDefs.h"
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/Path.h"
 #include <algorithm>
@@ -107,6 +111,7 @@ public:
 
 private:
   void addObjectMethods();
+  std::vector<TrailerDefRequest> declareTrailerDefs(RowTrailerSink &sink);
   void bindTokens();
   OutRef bindToken(ObjFile &f, uint32_t token, const TokenTarget &t);
   std::optional<EntryPoint> getEntryPoint();
@@ -140,6 +145,9 @@ private:
   EntityHandle object;
   // The FieldRVA data, at the offsets given to addFieldRVA.
   std::vector<uint8_t> mappedData;
+  // The methods of the trailer definitions (declareTrailerDefs), which the
+  // map file names '<trailer>'.
+  DenseSet<uint32_t> trailerDefMethods;
 
   // -shared (plan 5.9.15): the export plan, the methods of the exported
   // functions (their own definitions, not aliases), the exported variables'
@@ -208,6 +216,37 @@ void Writer::addObjectMethods() {
       out.setMethodOf(m, out.addMethod(std::move(om)));
     }
   }
+}
+
+// The trailer definitions that the live methods and the image's segments
+// use (plan 5.14.4 T5: the definitions of '<trailer>' that they refer to,
+// also through /alternatename), in TrailerDefs.def's row order: each one's
+// method, declared before the tokens bind (RowTrailerSink::declareHelper
+// with the registry's signature), so that the calls of the names and the
+// '<msil>fn_' field of their address name it, and cli::buildTrailer emits
+// it from TrailerInput::Defs. A link that uses none declares nothing, and
+// its output is M23's (5.14.5 S2).
+std::vector<TrailerDefRequest>
+Writer::declareTrailerDefs(RowTrailerSink &sink) {
+  DenseMap<const TrailerDefInfo *, SmallVector<const Symbol *, 1>> used;
+  for (const SymbolReference &r : symbols.getReferences())
+    if (const TrailerDefInfo *info = getTrailerDefinition(r.sym))
+      used[info].push_back(r.sym);
+  std::vector<TrailerDefRequest> defs;
+  for (const TrailerDefInfo &info : getTrailerDefs()) {
+    auto it = used.find(&info);
+    if (it == used.end())
+      continue;
+    EntityRef method =
+        sink.declareHelper(info.Name, getTrailerDefSignature(info));
+    std::optional<uint32_t> index = out.getEntityMethod(method);
+    assert(index && "declareHelper returns a method");
+    for (const Symbol *sym : it->second)
+      symbols.setTrailerMethod(sym, *index);
+    trailerDefMethods.insert(*index);
+    defs.push_back({info.Id, method});
+  }
+  return defs;
 }
 
 OutRef Writer::bindToken(ObjFile &f, uint32_t token, const TokenTarget &t) {
@@ -1111,7 +1150,7 @@ void Writer::writeImage(const MethodBodyStream &bodies) {
 void Writer::fillMap() {
   OutputMap &map = outputMap;
   image.fillMap(map);
-  for (const OutputMethod &m : out.methods) {
+  for (auto [index, m] : llvm::enumerate(out.methods)) {
     uint32_t token = out.mb.getToken(m.handle);
     if (m.kind == OutputMethod::PInvoke) {
       map.imports.push_back({token, m.module + "!" + m.entry, m.name});
@@ -1120,6 +1159,8 @@ void Writer::fillMap() {
     std::string input = m.kind == OutputMethod::Object
                             ? toString(m.input->file)
                             : std::string("<internal>");
+    if (trailerDefMethods.contains(static_cast<uint32_t>(index)))
+      input = "<trailer>";
     map.methods.push_back({token, ownerNames[m.owner], input, m.name});
   }
   for (const OutputField &f : out.fields) {
@@ -1208,7 +1249,10 @@ void Writer::run() {
   symbols.reportUnresolved();
   calls.checkNativeReferences();
 
-  // 5: the tokens, then a library's export class.
+  // 5: the trailer definitions' methods, the tokens, then a library's export
+  // class.
+  RowTrailerSink sink(out, /*twoPhase=*/ctx.arg.shared);
+  std::vector<TrailerDefRequest> trailerDefs = declareTrailerDefs(sink);
   bindTokens();
   if (ctx.arg.shared) {
     addExportMembers();
@@ -1240,11 +1284,11 @@ void Writer::run() {
   addConstructors(ctors, in);
   in.Entry = entry;
   addLibraryImports(in);
+  in.Defs = std::move(trailerDefs);
   if (errorCount())
     return;
   if (ctx.arg.printImports)
     symbols.printImports();
-  RowTrailerSink sink(out, in.TwoPhase);
   buildTrailer(in, sink);
   // A BCL member that the trailer needs may have failed to bind.
   if (errorCount())

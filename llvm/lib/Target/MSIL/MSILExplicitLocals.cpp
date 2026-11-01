@@ -353,11 +353,8 @@ static bool explicitLocals(MachineFunction &MF) {
           auto InsertPt = std::next(MI.getIterator());
           if (UseEmpty[OldReg.virtRegIndex()]) {
             unsigned Opc = getDropOpcode(RC);
-            MachineInstr *Drop =
-                BuildMI(MBB, InsertPt, MI.getDebugLoc(), TII->get(Opc))
-                    .addReg(NewReg);
-            // After the drop instruction, this reg operand will not be used
-            Drop->getOperand(0).setIsKill();
+            BuildMI(MBB, InsertPt, MI.getDebugLoc(), TII->get(Opc))
+                .addReg(NewReg);
             if (MFI.isFrameBaseVirtual() && OldReg == MFI.getFrameBaseVreg())
               MFI.clearFrameBaseVreg();
           } else {

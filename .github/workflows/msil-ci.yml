@@ -8,34 +8,39 @@
 # Each job sets up its tools; then makes the exit corpus' cache directory
 # outside the checkout, restores the cache (actions/cache) and fetches and
 # verifies the corpus with msil/utils/corpus/fetch.py (each fetch.py run with
-# --skip of MSIL_CORPUS_SKIP); then runs the scripts in msil/utils/ci in this
-# order: configure, build, unit-tests and lit-legs; then det-manifest.py build
-# and the upload of its manifest; and in the Windows job upstream-hooks. The
-# determinism job, which needs both jobs, runs det-manifest.py compare on the
-# two manifests. The local phase gate (msil/utils/run-m1-gate.ps1, plan M10,
-# M11 and M23) runs the Windows job's scripts in the same order on the
-# development host, so the gate executes the CI commands. It differs in
-# host-setup, which only the development host needs, and in the corpus and
-# determinism rows, which the CI runs as its own steps and job: the gate never
-# skips a corpus entry (fetch.py --check of all ten; MSIL_CORPUS_SKIP is
-# removed from the legs' environment), and it runs det-manifest.py build twice
-# on the one host before compare. configure differs too (CI uses
-# msil/cmake/caches/MSIL.cmake, the host msil/utils/build/msil-configure.ps1),
-# and the gate also runs the upstream-hooks legs that CI skips. The Linux
-# job's scripts need a Linux build tree, so the gate only smoke-checks them
-# inside WSL (its ci-sh row: bash -n, the leg list of lit-legs.sh, and their
-# failure exit status against an empty build directory). The scripts build
-# the targets of msil/utils/ci/build-targets.txt, the one build-target list
-# of the gates and both jobs (clang, llc, lld with msil-ld, llvm-ar and its
-# copies, the binary tools and the unit tests; projects clang and lld, the
-# X86 and experimental MSIL targets), run the MSIL unit tests (CLITests among
-# them) and then the test legs of the Phase 2 exit (plan 5.12.11, M23): the
-# llc/clang FileCheck tests and the execution tests in msil/test, compiled to
-# CIL objects and linked by msil-ld (the default pipeline from M23), verified
-# (ILVerify, jitall, and PEVerify on Windows), run on .NET and compared with
-# checked-in transcripts and a native build (the native oracle); -S plus
-# ilasm stays as the asm oracle. One verified build serves several runtimes
-# (msil_also_run).
+# --skip of MSIL_CORPUS_SKIP, empty since M24); then runs the scripts in
+# msil/utils/ci in this order: configure, build, unit-tests and lit-legs; then
+# det-manifest.py build and the upload of its manifest; and in the Windows job
+# upstream-hooks. The determinism job, which needs both jobs, runs
+# det-manifest.py compare on the two manifests. The local phase gate
+# (msil/utils/run-m1-gate.ps1, plan M10, M11, M23 and M24) runs the Windows
+# job's scripts in the same order on the development host, so the gate
+# executes the CI commands. It differs in host-setup, which only the
+# development host needs, in the corpus and determinism rows, which the CI
+# runs as its own steps and job, and in -Exit's matrix-legs row (plan
+# 5.17.11): the gate never skips a corpus entry (fetch.py --check of every
+# entry; MSIL_CORPUS_SKIP is removed from the legs' environment), and it runs
+# det-manifest.py build twice on the one host before compare. configure
+# differs too (CI uses msil/cmake/caches/MSIL.cmake, the host
+# msil/utils/build/msil-configure.ps1), and the gate also runs the
+# upstream-hooks legs that CI skips. The Linux job's scripts need a Linux
+# build tree, so the gate only smoke-checks them inside WSL (its ci-sh row:
+# bash -n, the leg list of lit-legs.sh, and their failure exit status against
+# an empty build directory). The scripts build the targets of
+# msil/utils/ci/build-targets.txt, the one build-target list of the gates and
+# both jobs (clang, llc, lld with msil-ld, llvm-ar and its copies, the binary
+# tools and the unit tests; projects clang and lld, the X86 and experimental
+# MSIL targets), run the MSIL unit tests (CLITests among them) and then the
+# default test legs of the Phase 2 exit (plan 5.12.11, M23) with Phase 3's
+# changes (plan 5.17.6 and 5.17.17, M24): the llc/clang FileCheck tests and
+# the execution tests in msil/test, compiled to CIL objects and linked by
+# msil-ld (the default pipeline from M23), verified (ILVerify, jitall, and
+# PEVerify on Windows), run on .NET and compared with checked-in transcripts
+# and a native build (the native oracle); -S plus ilasm stays as the asm
+# oracle. One verified build serves several runtimes (msil_also_run). From
+# M24 msil/test/M3 runs inside net8 and lto, its hosted tests against the
+# host C library: on Linux natively (msil_glibc_sysroot=/, the host's link as
+# the hosted oracle), on Windows the UCRT with the DLL-CRT oracle.
 #   linux:   x86_64-unknown-linux-gnu-msil; net8 (.NET 8, and .NET 10, .NET 8
 #            and .NET 10 with DOTNET_TieredCompilation=0 through
 #            msil_also_run), more-levels (O1, O3, Os, Oz), asm-oracle (NuGet
@@ -44,36 +49,45 @@
 #            Framework 4.8 reference assemblies of the NuGet package that
 #            msil-tools.proj pins, exported as MSIL_REF_NET48, and against
 #            the .NET 8 and 10 targeting packs), roundtrip (O2 on msil-ld's
-#            outputs), the exit corpus (programs, programs-lto, ctest),
-#            .expected files vs native, the update_llc_test_checks tests (utc)
+#            outputs), the exit corpus (programs, programs-lto, and ctest on
+#            .NET 10 and 8), .expected files vs native at -O0 and -O2
+#            (msil/test/M1, M2 and M3), the update_llc_test_checks tests (utc)
 #   windows: x86_64-pc-windows-msvc-msil; net8 (.NET 8 and .NET Framework 4.8,
 #            .NET 10 and .NET 8 with DOTNET_TieredCompilation=0 through
 #            msil_also_run, the equivalence oracles O3 and O6), more-levels,
 #            asm-oracle (Framework ilasm, ildasm and PEVerify), modern-ilasm,
 #            roundtrip, expected, utc, obj-text, lto, det, the reference legs,
-#            the exit corpus (programs, programs-lto, ctest); then the
-#            upstream hook tests (msil/utils/ci/upstream-hooks.ps1 -NoCompile
-#            -NoManifest: action pins, the upstream lit tests of the upstream
-#            files the fork changes, full TargetParserTests and MCTests)
+#            the exit corpus (programs, programs-lto, and ctest on .NET 10 and
+#            8 and the .NET Framework 4.8); then the upstream hook tests
+#            (msil/utils/ci/upstream-hooks.ps1 -NoCompile -NoManifest: action
+#            pins, the upstream lit tests of the upstream files the fork
+#            changes, full TargetParserTests and MCTests)
 # The exit corpus (plan 5.12.9) is never part of the repository: each job
 # caches it outside the checkout (actions/cache, keyed on
-# msil/utils/corpus/manifest.json) and fills and verifies the cache with
-# msil/utils/corpus/fetch.py, leaving out the entries of MSIL_CORPUS_SKIP
-# below (CoreMark and c-testsuite, whose CI licences are unverified), whose
-# tests are UNSUPPORTED and whose ctest leg is a SKIP row; the phase gate on
-# the development host (run-m1-gate.ps1) runs all ten. After the legs each job
-# writes a manifest of the CIL objects and archives it builds from
-# msil/test/M1 (msil/utils/ci/det-manifest.py, both x86_64 MSIL triples, -O0
-# and -O2), and the determinism job compares the two (plan 5.12.12): no PE is
-# compared across hosts, the det legs check PE determinism within each host.
-# The legs that need WSL (the Linux triple and the Linux ilasm run from
-# Windows) run only on the development host (lit-legs.ps1 -Wsl). Nightly and
-# manual 'full' runs add every optimization level, and on Linux check-llvm and
-# check-clang. Every lit leg passes msil_require_verify=1 (plan decision D38),
-# msil_require_exec=1 and msil_require_link=1, and the corpus legs also
-# msil_require_corpus=1, so a missing verifier, jitall, compiler, runtime,
-# msil-ld or llvm-ar, or a corpus cache that fetch.py did not verify, fails
-# the job instead of silently skipping a step.
+# msil/utils/corpus/manifest.json and a hash of MSIL_CORPUS_SKIP) and fills
+# and verifies the cache with msil/utils/corpus/fetch.py. MSIL_CORPUS_SKIP
+# below is empty since M24 (R23), so both jobs fetch and run every entry,
+# CoreMark and c-testsuite included; an entry it names is left out, its tests
+# are UNSUPPORTED and, for c-testsuite, the ctest leg is a SKIP row (a local
+# opt-out). After the legs each job writes a manifest of the CIL objects and
+# archives it builds from msil/test/M1 (msil/utils/ci/det-manifest.py, both
+# x86_64 MSIL triples, -O0 and -O2), and the determinism job compares the two
+# (plan 5.12.12): no PE is compared across hosts, the det legs check PE
+# determinism within each host. The legs that need WSL (the Linux triple and
+# the Linux ilasm run from Windows) run only on the development host
+# (lit-legs.ps1 -Wsl), and so do the milestone gates' Quick legs (net-core,
+# p3-full, harness, wsl-p3, scale) and the Exit legs (plan 5.17.6: the
+# post-commit run and the phase-exit gate; never in CI, plan 5.17.17).
+# Nightly and manual 'full' runs add every optimization level, and on Linux
+# check-llvm and check-clang. Every lit leg passes msil_require_verify=1
+# (plan decision D38), msil_require_exec=1, msil_require_link=1 and, from
+# M24, msil_require_hosted=1, and the corpus legs also msil_require_corpus=1,
+# so a missing verifier, jitall, compiler, runtime, msil-ld, llvm-ar, hosted
+# header set or hosted oracle, or a corpus cache that fetch.py did not
+# verify, fails the job instead of silently skipping a step. A lit run that
+# fails only by tool timeouts re-runs those tests once each, alone (at most
+# three; plan 5.17.9), and its row says so ('retried after timeout: ...');
+# lit's own retries are never used.
 name: MSIL CI
 
 permissions:
@@ -117,14 +131,19 @@ env:
   # from it. (The gtest filter of the unit tests lives in
   # msil/utils/ci/unit-tests.{sh,ps1}.)
   MSIL_TOOLS_PROJ: msil/utils/tools/msil-tools.proj
-  # The exit-corpus entries that CI neither downloads nor runs (plan 5.12.12,
-  # section 12 row 'M23 CI corpus'): the CI licences of CoreMark (EEMBC licence
-  # agreement) and c-testsuite (per-test licences from scc and tinycc) are
-  # unverified until the user answers plan section 10 item 11 ('CI licences of
-  # the exit corpus'). fetch.py gets it as --skip, lit-legs as
-  # msil_corpus_skip; if the user allows CI to fetch them, a section 12 row
-  # empties it.
-  MSIL_CORPUS_SKIP: coremark,c-testsuite
+  # The exit-corpus entries that CI neither downloads nor runs (plan 5.12.12):
+  # none since M24. R23 (plan 5.17.17, the user's decision of 2026-10-28)
+  # answers plan section 10 item 11 ('CI licences of the exit corpus'):
+  # allowed, so both jobs fetch every entry and run CoreMark and c-testsuite.
+  # The skip mechanism stays for local opt-outs: fetch.py gets the list as
+  # --skip, lit-legs as msil_corpus_skip, and while it names c-testsuite the
+  # ctest leg is a SKIP row (msil/test/harness/legs/ci-legs-corpus.test and
+  # ci-legs-corpus-sh.test pin it). The corpus cache key takes a hash of the
+  # list (MSIL_SKIPLIST_SHA256, set with MSIL_CORPUS_CACHE), never the list:
+  # actions/cache rejects a key with a comma (the first dispatch, 2026-10-29,
+  # failed at the cache step of both jobs with 'Key Validation Error:
+  # ...-coremark,c-testsuite cannot contain commas').
+  MSIL_CORPUS_SKIP: ''
 
 jobs:
   linux:
@@ -221,13 +240,18 @@ jobs:
           echo "MSIL_REF_NET48=$net48" >> "$GITHUB_ENV"
 
       - name: Exit-corpus cache directory (outside the checkout)
-        run: echo "MSIL_CORPUS_CACHE=$RUNNER_TEMP/msil-corpus" >> "$GITHUB_ENV"
+        run: |
+          echo "MSIL_CORPUS_CACHE=$RUNNER_TEMP/msil-corpus" >> "$GITHUB_ENV"
+          # The cache key's part for MSIL_CORPUS_SKIP: the first 16 hex digits
+          # of the SHA-256 of its value (actions/cache rejects commas in a key;
+          # see env above). The Windows job computes the same digits.
+          echo "MSIL_SKIPLIST_SHA256=$(printf '%s' "$MSIL_CORPUS_SKIP" | sha256sum | cut -c1-16)" >> "$GITHUB_ENV"
 
       - name: Cache the exit corpus
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA upstream pins for actions/cache/restore and actions/cache/save)
         with:
           path: ${{ env.MSIL_CORPUS_CACHE }}
-          key: msil-corpus-${{ runner.os }}-${{ hashFiles('msil/utils/corpus/manifest.json') }}-${{ env.MSIL_CORPUS_SKIP }}
+          key: msil-corpus-${{ runner.os }}-${{ hashFiles('msil/utils/corpus/manifest.json') }}-${{ env.MSIL_SKIPLIST_SHA256 }}
 
       - name: Fetch and verify the exit corpus (msil/utils/corpus/fetch.py)
         run: |
@@ -342,13 +366,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "dotnet restore $env:MSIL_TOOLS_PROJ failed ($LASTEXITCODE)" }
 
       - name: Exit-corpus cache directory (outside the checkout)
-        run: '"MSIL_CORPUS_CACHE=$env:RUNNER_TEMP\msil-corpus" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
+        run: |
+          "MSIL_CORPUS_CACHE=$env:RUNNER_TEMP\msil-corpus" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          # As in the Linux job: the first 16 hex digits of the SHA-256 of
+          # MSIL_CORPUS_SKIP's UTF-8 bytes, for the cache key.
+          $bytes = [System.Text.Encoding]::UTF8.GetBytes("$env:MSIL_CORPUS_SKIP")
+          $hash = [System.Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant().Substring(0, 16)
+          "MSIL_SKIPLIST_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Cache the exit corpus
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 (the SHA upstream pins for actions/cache/restore and actions/cache/save)
         with:
           path: ${{ env.MSIL_CORPUS_CACHE }}
-          key: msil-corpus-${{ runner.os }}-${{ hashFiles('msil/utils/corpus/manifest.json') }}-${{ env.MSIL_CORPUS_SKIP }}
+          key: msil-corpus-${{ runner.os }}-${{ hashFiles('msil/utils/corpus/manifest.json') }}-${{ env.MSIL_SKIPLIST_SHA256 }}
 
       - name: Fetch and verify the exit corpus (msil/utils/corpus/fetch.py)
         run: |

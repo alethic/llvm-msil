@@ -49,6 +49,7 @@
 #include "MSILMachineFunctionInfo.h"
 #include "MSILSubtarget.h"
 #include "MSILTargetMachine.h"
+#include "MSILTrailerTextSink.h"
 #include "MSILUtilities.h"
 #include "TargetInfo/MSILTargetInfo.h"
 #include "llvm/ADT/STLExtras.h"
@@ -66,6 +67,7 @@
 #include "llvm/CLI/Opcodes.h"
 #include "llvm/CLI/Signature.h"
 #include "llvm/CLI/Trailer.h"
+#include "llvm/CLI/TrailerDefs.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -110,7 +112,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/Path.h"
-#include "llvm/Support/StringSaver.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
 #include "llvm/Target/TargetMachine.h"
@@ -370,222 +371,6 @@ getListedDataImport(const Module &M, StringRef Name) {
 /// environ itself (plan section 12, 'M22.b extended', defect 4).
 static StringRef getCLibrarySoname(const Triple &TT) {
   return TT.isMusl() ? "libc.so" : "libc.so.6";
-}
-
-namespace llvm {
-/// The text sink of cli::buildTrailer (plan 5.9.10). The trailer's entities
-/// are the MSILMemberRefExprs that code uses, so its instructions are CIL_
-/// MCInsts like those of a compiled function (MSILInstPrinter prints them,
-/// and plan 5.1's text keeps one owner); the data-import helpers and their
-/// string literals, which no MSILMemberRefExpr can spell (their signatures
-/// take strings), go through MSILTargetStreamer's helper calls instead. The
-/// sink records the RVA data and the methods, and the AsmPrinter emits them
-/// at their places in the trailer (emitDataSegment, emitMethods).
-class MSILTrailerTextSink final : public cli::TrailerSink {
-  MSILAsmPrinter &AP;
-  BumpPtrAllocator Alloc;
-  /// Owns the names that MSILMemberRefExprs refer to.
-  StringSaver Saver{Alloc};
-
-  struct Entity {
-    enum Kind : uint8_t { Member, Helper, String };
-    Kind K = Member;
-    /// Member: the operand of the instructions that name it.
-    const MSILMemberRefExpr *Ref = nullptr;
-    /// Helper: its name and signature; String: the literal.
-    std::string Name;
-    cli::MethodSig Sig;
-  };
-  /// EntityRef I is Entities[I - 1].
-  std::vector<Entity> Entities;
-  cli::EntityRef DataField = 0;
-  struct RVAData {
-    std::string FieldName;
-    std::vector<uint8_t> Bytes;
-  };
-  std::vector<RVAData> RVA;
-  /// The names of the fields that addTrailerField made, in order.
-  std::vector<StringRef> TrailerFields;
-  std::vector<cli::TrailerMethod> Methods;
-
-  cli::EntityRef addEntity(Entity E) {
-    Entities.push_back(std::move(E));
-    return Entities.size();
-  }
-  void printMethod(const cli::TrailerMethod &M);
-
-public:
-  explicit MSILTrailerTextSink(MSILAsmPrinter &AP) : AP(AP) {}
-
-  /// A member that MCInsts name.
-  cli::EntityRef add(const MSILMemberRefExpr *Ref) {
-    Entity E;
-    E.Ref = Ref;
-    return addEntity(std::move(E));
-  }
-
-  cli::EntityRef getDataField() override {
-    if (!DataField)
-      DataField = add(
-          MSILMemberRefExpr::createField(cli::DataFieldName, AP.OutContext));
-    return DataField;
-  }
-  cli::EntityRef addRVAData(StringRef TypeName, StringRef FieldName,
-                            ArrayRef<uint8_t> Bytes) override {
-    RVA.push_back({FieldName.str(), Bytes.vec()});
-    return add(MSILMemberRefExpr::createValueTypeField(
-        Saver.save(FieldName), Saver.save(TypeName), AP.OutContext));
-  }
-  cli::EntityRef getBCLMember(cli::BCLMemberId Id) override {
-    return add(MSILMemberRefExpr::createBCL(Id, AP.OutContext));
-  }
-  cli::EntityRef declareHelper(StringRef Name,
-                               const cli::MethodSig &Sig) override {
-    Entity E;
-    E.K = Entity::Helper;
-    E.Name = Name.str();
-    E.Sig = Sig;
-    return addEntity(std::move(E));
-  }
-  cli::EntityRef addUserString(StringRef UTF8) override {
-    Entity E;
-    E.K = Entity::String;
-    E.Name = UTF8.str();
-    return addEntity(std::move(E));
-  }
-  cli::EntityRef addTrailerField(StringRef Name) override {
-    StringRef Saved = Saver.save(Name);
-    TrailerFields.push_back(Saved);
-    return add(MSILMemberRefExpr::createField(Saved, AP.OutContext));
-  }
-  void emitMethod(const cli::TrailerMethod &M) override {
-    Methods.push_back(M);
-  }
-
-  /// The fields that addTrailerField made ('<msil>argc' and '<msil>argv').
-  ArrayRef<StringRef> getTrailerFields() const { return TrailerFields; }
-
-  /// The bytes of the RVA field \p FieldName; empty if there is none.
-  ArrayRef<uint8_t> getRVAData(StringRef FieldName) const {
-    for (const RVAData &D : RVA)
-      if (D.FieldName == FieldName)
-        return D.Bytes;
-    return {};
-  }
-
-  /// Emits the methods in the order cli::buildTrailer made them: the
-  /// data-import helpers, <Module>::.cctor and '<msil>Main'.
-  void emitMethods() {
-    for (const cli::TrailerMethod &M : Methods)
-      printMethod(M);
-  }
-};
-} // end namespace llvm
-
-void MSILTrailerTextSink::printMethod(const cli::TrailerMethod &M) {
-  // Only msil-ld's -shared outputs initialize in two phases (plan 5.9.10).
-  assert(M.Owner == cli::TrailerOwner::Module &&
-         "whole-program output has one module initializer");
-  MSILTargetStreamer &TS = AP.getTargetStreamer();
-  MSILMethodDecl Decl;
-  Decl.Name = M.Name;
-  Decl.Public = false;
-  if (M.Name == cli::ModuleInitializerName) {
-    Decl.Kind = MSILMethodKind::ModuleInitializer;
-    TS.emitMethodBegin(Decl);
-  } else if (M.Name == cli::EntryPointName) {
-    Decl.Kind = MSILMethodKind::EntryPoint;
-    TS.emitMethodBegin(Decl);
-    TS.emitEntryPoint();
-  } else {
-    TS.emitHelperBegin(M.Name, M.Flags, M.Sig);
-  }
-  const cli::ILBuilder &B = M.Body;
-  TS.emitMaxStack(B.getMaxStack());
-  // Never 'init' (decision D13): every local is written before it is read.
-  TS.emitLocals(M.Locals);
-
-  // Method-local labels, temporary symbols like the block labels: never the
-  // symbol of a C function or variable of the same IL name. Text names them
-  // '@<name>' (MCAsmInfo's InternalSymbolPrefix), e.g. '@argv_loop'.
-  MCContext &Ctx = AP.OutContext;
-  SmallVector<MCSymbol *, 4> LabelSyms;
-  SmallVector<std::pair<uint32_t, unsigned>, 4> LabelOffsets;
-  for (unsigned Id = 0, E = M.LabelNames.size(); Id != E; ++Id) {
-    LabelSyms.push_back(
-        Ctx.createTempSymbol(M.LabelNames[Id], /*AlwaysAddSuffix=*/false));
-    LabelOffsets.push_back({B.getLabelOffset(cli::ILLabel{Id}), Id});
-  }
-  auto Label = [&](cli::ILLabel L) {
-    assert(L.isValid() && L.Id < LabelSyms.size() && "unnamed label");
-    return MCOperand::createExpr(MCSymbolRefExpr::create(LabelSyms[L.Id], Ctx));
-  };
-  // The labels in offset order, each emitted before the instruction at its
-  // offset (or after the last one).
-  llvm::sort(LabelOffsets);
-  auto *NextLabel = LabelOffsets.begin();
-  auto EmitLabelsUpTo = [&](uint32_t Offset) {
-    for (; NextLabel != LabelOffsets.end() && NextLabel->first <= Offset;
-         ++NextLabel)
-      AP.OutStreamer->emitLabel(LabelSyms[NextLabel->second]);
-  };
-
-  for (const cli::ILInstr &I : B.instructions()) {
-    EmitLabelsUpTo(I.Offset);
-    MCInst Inst;
-    Inst.setOpcode(MSIL::getMCOpcodeForCIL(I.Op));
-    switch (cli::getOpcodeInfo(I.Op).Operand) {
-    case cli::OperandKind::InlineNone:
-      break;
-    case cli::OperandKind::ShortInlineVar:
-    case cli::OperandKind::InlineVar:
-    case cli::OperandKind::ShortInlineI:
-    case cli::OperandKind::InlineI:
-    case cli::OperandKind::InlineI8:
-      Inst.addOperand(MCOperand::createImm(I.Imm));
-      break;
-    case cli::OperandKind::ShortInlineR:
-      Inst.addOperand(MCOperand::createSFPImm(static_cast<uint32_t>(I.FPBits)));
-      break;
-    case cli::OperandKind::InlineR:
-      Inst.addOperand(MCOperand::createDFPImm(I.FPBits));
-      break;
-    case cli::OperandKind::ShortInlineBrTarget:
-    case cli::OperandKind::InlineBrTarget:
-      Inst.addOperand(Label(I.Target));
-      break;
-    case cli::OperandKind::InlineMethod:
-    case cli::OperandKind::InlineField:
-    case cli::OperandKind::InlineType:
-    case cli::OperandKind::InlineTok:
-    case cli::OperandKind::InlineSig:
-    case cli::OperandKind::InlineString: {
-      assert(I.Token.getKind() == cli::TokenRef::Kind::External &&
-             I.Token.getValue() != 0 && I.Token.getValue() <= Entities.size() &&
-             "unknown entity");
-      const Entity &E = Entities[I.Token.getValue() - 1];
-      if (E.K == Entity::String) {
-        TS.emitStringInstruction(I.Op, E.Name);
-        continue;
-      }
-      if (E.K == Entity::Helper) {
-        TS.emitHelperInstruction(I.Op, E.Name, E.Sig);
-        continue;
-      }
-      Inst.addOperand(MCOperand::createExpr(E.Ref));
-      break;
-    }
-    case cli::OperandKind::InlineSwitch:
-      for (cli::ILLabel L : B.getSwitchTargets(I))
-        Inst.addOperand(Label(L));
-      break;
-    }
-    // The module trailer has no MachineFunction: the TargetMachine's
-    // subtarget (MSIL has one processor and no features, decision D7).
-    AP.OutStreamer->emitInstruction(Inst, AP.TM.getMCSubtargetInfo());
-  }
-  EmitLabelsUpTo(B.getCodeSize());
-  TS.emitMethodEnd(M.Name);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1358,6 +1143,22 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     // already reach that method, and a P/Invoke would duplicate it.
     if (Methods.count({Name, *Sig}))
       continue;
+    // The module trailer defines a trailer definition (fillTrailerDefs). A
+    // declaration of another type is the only function of that name in the
+    // module, so the text names both signatures, as msil-ld's '>>> defined
+    // as' lines print them.
+    if (const cli::TrailerDefInfo *D = MSIL::getOfferedTrailerDef(M, Name)) {
+      if (!MSIL::matchesTrailerDefSignature(*D, *Sig)) {
+        std::string Declared, Defined;
+        raw_string_ostream DeclaredOS(Declared), DefinedOS(Defined);
+        cli::printMethodSig(DeclaredOS, MSIL::toMethodSig(*Sig), nullptr);
+        cli::printMethodSig(DefinedOS, cli::getTrailerDefSignature(*D),
+                            nullptr);
+        Ctx.emitError("function '" + Name + "' is declared as " + Declared +
+                      " but the toolchain defines it as " + Defined);
+      }
+      continue;
+    }
     if (Linked) {
       // msil-ld reports an unresolved symbol first; this is a backstop. A
       // native callee is checked after native resolution, so the texts name
@@ -1424,6 +1225,9 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     // A library call of a method that this module defines (by IL name and
     // signature) calls that method, as a native link would resolve it.
     if (Methods.count({Name, *Sig}))
+      continue;
+    if (const cli::TrailerDefInfo *D = MSIL::getOfferedTrailerDef(M, Name);
+        D && MSIL::matchesTrailerDefSignature(*D, *Sig))
       continue;
     // A function of the same IL name takes part only if its method has this
     // signature, as in LowerCall (matchesSignature): a declaration supplies
@@ -1799,6 +1603,7 @@ void MSILAsmPrinter::emitTrailer(Module &M,
     }
   }
 
+  fillTrailerDefs(M, Sink, In);
   cli::buildTrailer(In, Sink);
   emitDataSegment(Sink);
   if (EnvironImportField) {

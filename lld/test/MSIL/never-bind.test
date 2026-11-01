@@ -1,0 +1,934 @@
+## Names that never bind to a native library (ImplementationPlan.md 5.14.2
+## N1-N4 and N-2, M24.d (1); helpers-switches 2.5). msil-ld resolves an
+## undefined symbol from objects, archive members, the '<trailer>' input and
+## native libraries, in that order, and skips every native library for these
+## names, whichever one on the command line exports them:
+## - N1, the '__' names of lto::LTO::getRuntimeLibcallSymbols for the codegen
+##   triple (compiler-rt's builtins): __extendhfsf2, which the legalizer
+##   calls for an fpext of half, is never taken from a libgcc_s.so.1
+##   stand-in (or a DLL on windows-msvc). Its undefined-symbol report gains,
+##   after the first line and before the '>>> referenced by' lines,
+##     >>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins
+##   An archive member that defines it wins over the native library in either
+##   order (helpers-switches E4); a weak reference stays unbound (the trap
+##   stub '<msil>undef_<name>', no P/Invoke). The C library's own entry
+##   points that the set also lists (isCLibraryName) are not N1 and still
+##   bind natively, with no line: on linux-gnu __memcpy_chk, __memmove_chk
+##   and __memset_chk (which glibc's _FORTIFY_SOURCE wrappers call) and
+##   __stack_chk_fail to libc.so.6, the stack protector's guard
+##   __stack_chk_guard as a data import (through libc.so.6's dlopen and
+##   dlsym), and libm's __<function>_finite entry points (matched by their
+##   suffix; here __exp_finite and __powf_finite) to libm.so.6; on
+##   windows-msvc the C runtime's __chkstk, __security_check_cookie and the
+##   data __security_cookie (to a VCRUNTIME140.dll import library).
+## - N2, '__atomic_*' (libatomic's interface): on Linux triples it binds to a
+##   libatomic.so.1 stand-in, as a native build links it (user decisions
+##   R4/R5 (5), N-3), and without one the report gains
+##     >>> an atomic operation: link with -latomic, as a native build does
+##   On Windows triples it never binds natively (here to a libatomic-1.dll
+##   import library):
+##     >>> an atomic operation (libatomic's interface)
+##   The objects call __atomic_load_4 directly, so M30's inline atomics leave
+##   this test alone.
+## - N3, '__msil_*' (cli::isToolchainName): never from a native library (an
+##   ELF shared object, a DLL import library) or from another assembly (a
+##   toolchain library that msil-ld -shared built and that exports it):
+##     >>> a toolchain helper: link the toolchain's helper archive clang_rt.builtins; if it is linked, the object needs a newer toolchain
+##   An archive member supplies it.
+## - N4, the setjmp family: not a report but an error per referencing file
+##   and name,
+##     <file>: '<name>' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler
+##   whether or not a native library exports the name. The objects call all
+##   ten: _setjmp, setjmp, __sigsetjmp, sigsetjmp, longjmp, _longjmp,
+##   siglongjmp and __longjmp_chk on Linux, and _setjmpex, _setjmp, _setjmp3
+##   and longjmp on windows-msvc. An object definition resolves them. From
+##   M27 the backend lowers every such call, so only older objects meet this
+##   error.
+## - Import names: the native libraries are searched by a symbol's import
+##   name (msil-import-name, C's import_name) when it has one, so the guards
+##   also test that name. Ordinary symbols imported as __extendhfsf2 (N1),
+##   _setjmp (N4) and __msil_foo (N3) never bind to the libraries that export
+##   those names. 5.14.2 gives import names no text, so each stays today's
+##   'undefined symbol: <symbol>', keyed on the symbol name, without a class
+##   line or N4's error, and a weak reference keeps its trap stub. Objects
+##   and LTO images are checked through their objects' import attributes,
+##   --lto-emit-asm text through the merged module's (the import annotation).
+## Through CIL objects (llc -filetype=obj), LTO with an image (the reference
+## that code generation creates after LTO names '<output>.lto.o') and
+## --lto-emit-asm. In whole-program text the fpext of half stays the
+## backend's helper error, D14's text, which M25 rewords.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: yaml2obj libgcc.yaml -o libgcc.o
+# RUN: ld.lld -shared -soname libgcc_s.so.1 libgcc.o -o libgcc_s.so.1
+# RUN: yaml2obj libc.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 libc.o -o libc.so.6
+# RUN: yaml2obj libm.yaml -o libm.o
+# RUN: ld.lld -shared -soname libm.so.6 libm.o -o libm.so.6
+# RUN: yaml2obj atomic.yaml -o atomic.o
+# RUN: ld.lld -shared -soname libatomic.so.1 atomic.o -o libatomic.so.1
+# RUN: llvm-lib /machine:x64 /def:helpers.def /out:helpers.lib
+# RUN: llvm-lib /machine:x64 /def:atomic.def /out:atomic.lib
+# RUN: llvm-lib /machine:x64 /def:vcruntime.def /out:vcruntime.lib
+# RUN: llc -filetype=obj half.ll -o half.o
+# RUN: llc -filetype=obj ref2.ll -o ref2.o
+# RUN: llc -filetype=obj ext.ll -o ext.o
+# RUN: llvm-ar rcs libhelp.a ext.o
+# RUN: llc -filetype=obj weak.ll -o weak.o
+# RUN: llc -filetype=obj chk.ll -o chk.o
+# RUN: llc -filetype=obj clib.ll -o clib.o
+# RUN: llc -filetype=obj crt-win.ll -o crt-win.o
+# RUN: llc -filetype=obj atom.ll -o atom.o
+# RUN: llc -filetype=obj atom-win.ll -o atom-win.o
+# RUN: llc -filetype=obj help-win.ll -o help-win.o
+# RUN: llc -filetype=obj foo.ll -o foo.o
+# RUN: llc -filetype=obj tl.ll -o tl.o
+# RUN: llvm-ar rcs libtl.a tl.o
+# RUN: llc -filetype=obj use.ll -o use.o
+# RUN: llc -filetype=obj sj.ll -o sj.o
+# RUN: llc -filetype=obj sj2.ll -o sj2.o
+# RUN: llc -filetype=obj sjdef.ll -o sjdef.o
+# RUN: llc -filetype=obj sj-win.ll -o sj-win.o
+# RUN: llc -filetype=obj imp.ll -o imp.o
+# RUN: llc -filetype=obj impweak.ll -o impweak.o
+# RUN: llvm-as half.ll -o half.bc
+# RUN: llvm-as direct.ll -o direct.bc
+# RUN: llvm-as weak.ll -o weak.bc
+# RUN: llvm-as chk.ll -o chk.bc
+# RUN: llvm-as clib.ll -o clib.bc
+# RUN: llvm-as crt-win.ll -o crt-win.bc
+# RUN: llvm-as atom.ll -o atom.bc
+# RUN: llvm-as atom-win.ll -o atom-win.bc
+# RUN: llvm-as foo.ll -o foo.bc
+# RUN: llvm-as sj.ll -o sj.bc
+# RUN: llvm-as imp.ll -o imp.bc
+# RUN: llvm-as impweak.ll -o impweak.bc
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning: \
+# DEFINE:   --implicit-check-not=">>>"
+
+## The N1 name __extendhfsf2 stays undefined although libgcc_s.so.1 exports
+## it; the report is the same without the library.
+# RUN: not msil-ld half.o libgcc_s.so.1 -o x.exe 2>&1 | %{err} --check-prefix=N1 -DREF=half.o
+# RUN: not msil-ld half.o -o x.exe 2>&1 | %{err} --check-prefix=N1 -DREF=half.o
+# N1:      {{^}}msil-ld: error: undefined symbol: __extendhfsf2{{$}}
+# N1-NEXT: {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# N1-NEXT: {{^}}>>> referenced by [[REF]]:(main){{$}}
+
+## Two referencing files: the line once, then a '>>> referenced by' line for
+## each (--no-gc-sections keeps ref2.o's function).
+# RUN: not msil-ld --no-gc-sections half.o ref2.o libgcc_s.so.1 -o x.exe 2>&1 | %{err} --check-prefix=N1-TWO
+# N1-TWO:      {{^}}msil-ld: error: undefined symbol: __extendhfsf2{{$}}
+# N1-TWO-NEXT: {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# N1-TWO-NEXT: {{^}}>>> referenced by half.o:(main){{$}}
+# N1-TWO-NEXT: {{^}}>>> referenced by ref2.o:(ext2){{$}}
+
+## LTO: a direct call is a bitcode reference; the legalizer's call exists
+## only after LTO, in the LTO object.
+# RUN: not msil-ld direct.bc libgcc_s.so.1 -o x.exe 2>&1 | %{err} --check-prefix=N1 -DREF=direct.bc
+# RUN: not msil-ld --lto-emit-asm direct.bc libgcc_s.so.1 -o x.il 2>&1 | %{err} --check-prefix=N1 -DREF=direct.bc
+# RUN: not msil-ld half.bc libgcc_s.so.1 -o half-lto.exe 2>&1 | %{err} --check-prefix=N1 -DREF=half-lto.exe.lto.o
+# RUN: not msil-ld --lto-emit-asm half.bc libgcc_s.so.1 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=N1-TEXT --implicit-check-not=pinvokeimpl --implicit-check-not=libgcc_s
+# N1-TEXT: {{^}}msil-ld: error: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
+
+## An archive member wins over the native library in either order.
+# RUN: msil-ld half.o libhelp.a libgcc_s.so.1 -o ar1.exe 2>&1 | count 0
+# RUN: msil-ld half.o libgcc_s.so.1 libhelp.a -o ar2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ar1.exe | FileCheck %s --check-prefix=ARCHIVE --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=moduleref
+# RUN: llvm-cil-dump ar2.exe | FileCheck %s --check-prefix=ARCHIVE --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=moduleref
+# ARCHIVE: {{^}}  .method '__extendhfsf2' float32(int32) flags=0x0016 impl=0x0000{{$}}
+# ARCHIVE: {{^}}    L{{[0-9]+}}: call float32(int32) '<Module>'::'__extendhfsf2'{{$}}
+
+## A weak reference is not bound natively either: the trap stub.
+# RUN: msil-ld weak.o libgcc_s.so.1 -o weak.exe 2>&1 | count 0
+# RUN: llvm-cil-dump weak.exe | FileCheck %s --check-prefix=WEAK --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=moduleref
+# RUN: msil-ld weak.bc libgcc_s.so.1 -o weak-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump weak-lto.exe | FileCheck %s --check-prefix=WEAK --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=moduleref
+# WEAK:      {{^}}  .method '<msil>undef___extendhfsf2' float32(int32) flags=0x0013 impl=0x0000{{$}}
+# WEAK:      {{^}}    L{{[0-9]+}}: throw{{$}}
+# WEAK:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# WEAK:      {{^}}    L{{[0-9]+}}: call float32(int32) '<Module>'::'<msil>undef___extendhfsf2'{{$}}
+
+## The C library's checked entry points bind natively: objects, LTO with an
+## image and --lto-emit-asm (non-constant sizes, so nothing folds them into
+## memcpy, memmove or memset).
+# RUN: msil-ld chk.o libc.so.6 -o chk.exe 2>&1 | count 0
+# RUN: llvm-cil-dump chk.exe | FileCheck %s --check-prefix=CHK
+# RUN: msil-ld chk.bc libc.so.6 -o chk-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump chk-lto.exe | FileCheck %s --check-prefix=CHK
+# CHK:      {{^}}moduleref 'libc.so.6'{{$}}
+# CHK:      {{^}}  .method '__memcpy_chk' native int(native int, native int, native int, native int) flags=0x2093 impl=0x0080{{$}}
+# CHK-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry '__memcpy_chk' flags=0x0201{{$}}
+# CHK-NEXT: {{^}}  .method '__memmove_chk' native int(native int, native int, native int, native int) flags=0x2093 impl=0x0080{{$}}
+# CHK-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry '__memmove_chk' flags=0x0201{{$}}
+# CHK-NEXT: {{^}}  .method '__memset_chk' native int(native int, int32, native int, native int) flags=0x2093 impl=0x0080{{$}}
+# CHK-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry '__memset_chk' flags=0x0201{{$}}
+# CHK-NEXT: {{^}}  .method '__stack_chk_fail' void() flags=0x2093 impl=0x0080{{$}}
+# CHK-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry '__stack_chk_fail' flags=0x0201{{$}}
+# RUN: msil-ld --lto-emit-asm chk.bc libc.so.6 -o chk.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=CHK-TEXT --input-file=chk.il
+# CHK-TEXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int '__memcpy_chk'(native int, native int, native int, native int) cil managed preservesig {}{{$}}
+# CHK-TEXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int '__memmove_chk'(native int, native int, native int, native int) cil managed preservesig {}{{$}}
+# CHK-TEXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int '__memset_chk'(native int, int32, native int, native int) cil managed preservesig {}{{$}}
+# CHK-TEXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) void '__stack_chk_fail'() cil managed preservesig {}{{$}}
+
+## The C library's other names in the set bind natively too, with no N1
+## line (the links print nothing): on linux-gnu the guard __stack_chk_guard
+## is a data import that '<msil>init_dataimports' fills through libc.so.6's
+## dlopen and dlsym, and libm's _finite entry points are P/Invokes; objects,
+## LTO with an image and --lto-emit-asm.
+# RUN: msil-ld clib.o libc.so.6 libm.so.6 -o clib.exe 2>&1 | count 0
+# RUN: llvm-cil-dump clib.exe > clib.txt
+# RUN: FileCheck %s --check-prefix=CLIB --input-file=clib.txt
+# RUN: %python %S/Inputs/dataimports.py clib.txt | FileCheck %s --check-prefix=CLIB-DATA
+# RUN: msil-ld clib.bc libc.so.6 libm.so.6 -o clib-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump clib-lto.exe > clib-lto.txt
+# RUN: FileCheck %s --check-prefix=CLIB --input-file=clib-lto.txt
+# RUN: %python %S/Inputs/dataimports.py clib-lto.txt | FileCheck %s --check-prefix=CLIB-DATA
+# CLIB:      {{^}}  .method '__exp_finite' float64(float64) flags=0x2093 impl=0x0080{{$}}
+# CLIB-NEXT: {{^}}    .pinvokeimpl 'libm.so.6' entry '__exp_finite' flags=0x0201{{$}}
+# CLIB-NEXT: {{^}}  .method '__powf_finite' float32(float32, float32) flags=0x2093 impl=0x0080{{$}}
+# CLIB-NEXT: {{^}}    .pinvokeimpl 'libm.so.6' entry '__powf_finite' flags=0x0201{{$}}
+# CLIB-NEXT: {{^}}  .method 'dlopen' native int(native int, int32) flags=0x2093 impl=0x0080{{$}}
+# CLIB-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry 'dlopen' flags=0x0201{{$}}
+# CLIB-NEXT: {{^}}  .method 'dlsym' native int(native int, native int) flags=0x2093 impl=0x0080{{$}}
+# CLIB-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry 'dlsym' flags=0x0201{{$}}
+# CLIB-DATA:     {{^}}import __stack_chk_guard = libc.so.6!__stack_chk_guard{{$}}
+# CLIB-DATA-NOT: {{.}}
+# RUN: msil-ld --lto-emit-asm clib.bc libc.so.6 libm.so.6 -o clib.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=CLIB-TEXT --input-file=clib.il
+# CLIB-TEXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 '__exp_finite'(float64) cil managed preservesig {}{{$}}
+# CLIB-TEXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float32 '__powf_finite'(float32, float32) cil managed preservesig {}{{$}}
+# CLIB-TEXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int 'dlopen'(native int, int32) cil managed preservesig {}{{$}}
+# CLIB-TEXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) native int 'dlsym'(native int, native int) cil managed preservesig {}{{$}}
+# CLIB-TEXT-DAG: {{^}}.field public static native int '__stack_chk_guard'{{$}}
+# CLIB-TEXT-DAG: {{^}}  ldstr "libc.so.6"{{$}}
+# CLIB-TEXT-DAG: {{^}}  ldstr "__stack_chk_guard"{{$}}
+# CLIB-TEXT-DAG: {{^}}  stsfld native int '__stack_chk_guard'{{$}}
+
+## On windows-msvc the C runtime's __chkstk and __security_check_cookie are
+## P/Invokes into the VCRUNTIME140.dll stand-in and its __security_cookie a
+## data import (through kernel32.dll's LoadLibraryW and GetProcAddress);
+## objects, LTO with an image and --lto-emit-asm.
+# RUN: msil-ld crt-win.o vcruntime.lib -o crt-win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump crt-win.exe > crt-win.txt
+# RUN: FileCheck %s --check-prefix=CRT --input-file=crt-win.txt
+# RUN: %python %S/Inputs/dataimports.py crt-win.txt | FileCheck %s --check-prefix=CRT-DATA
+# RUN: msil-ld crt-win.bc vcruntime.lib -o crt-win-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump crt-win-lto.exe > crt-win-lto.txt
+# RUN: FileCheck %s --check-prefix=CRT --input-file=crt-win-lto.txt
+# RUN: %python %S/Inputs/dataimports.py crt-win-lto.txt | FileCheck %s --check-prefix=CRT-DATA
+# CRT:      {{^}}  .method '__chkstk' void() flags=0x2093 impl=0x0080{{$}}
+# CRT-NEXT: {{^}}    .pinvokeimpl 'VCRUNTIME140.dll' entry '__chkstk' flags=0x0201{{$}}
+# CRT-NEXT: {{^}}  .method '__security_check_cookie' void(native int) flags=0x2093 impl=0x0080{{$}}
+# CRT-NEXT: {{^}}    .pinvokeimpl 'VCRUNTIME140.dll' entry '__security_check_cookie' flags=0x0201{{$}}
+# CRT-DATA:     {{^}}import __security_cookie = VCRUNTIME140.dll!__security_cookie{{$}}
+# CRT-DATA-NOT: {{.}}
+# RUN: msil-ld --lto-emit-asm crt-win.bc vcruntime.lib -o crt-win.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=CRT-TEXT --input-file=crt-win.il
+# CRT-TEXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("VCRUNTIME140.dll" nomangle cdecl) void '__chkstk'() cil managed preservesig {}{{$}}
+# CRT-TEXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("VCRUNTIME140.dll" nomangle cdecl) void '__security_check_cookie'(native int) cil managed preservesig {}{{$}}
+# CRT-TEXT-DAG: {{^}}.field public static native int '__security_cookie'{{$}}
+# CRT-TEXT-DAG: {{^}}  ldstr "VCRUNTIME140.dll"{{$}}
+# CRT-TEXT-DAG: {{^}}  ldstr "__security_cookie"{{$}}
+# CRT-TEXT-DAG: {{^}}  stsfld native int '__security_cookie'{{$}}
+
+## Windows: the N1 and N3 names from a DLL's import library stay undefined,
+## each with its line.
+# RUN: not msil-ld help-win.o helpers.lib -o x.exe 2>&1 | %{err} --check-prefix=WIN-HELP
+# WIN-HELP:      {{^}}msil-ld: error: undefined symbol: __extendhfsf2{{$}}
+# WIN-HELP-NEXT: {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# WIN-HELP-NEXT: {{^}}>>> referenced by help-win.o:(main){{$}}
+# WIN-HELP:      {{^}}msil-ld: error: undefined symbol: __msil_foo{{$}}
+# WIN-HELP-NEXT: {{^}}>>> a toolchain helper: link the toolchain's helper archive clang_rt.builtins; if it is linked, the object needs a newer toolchain{{$}}
+# WIN-HELP-NEXT: {{^}}>>> referenced by help-win.o:(main){{$}}
+
+## N2 on Linux: libatomic.so.1 binds __atomic_load_4 (objects, LTO with an
+## image, --lto-emit-asm); without it, N2's Linux line.
+# RUN: msil-ld atom.o libatomic.so.1 -o atom.exe 2>&1 | count 0
+# RUN: llvm-cil-dump atom.exe | FileCheck %s --check-prefix=ATOMIC
+# RUN: msil-ld atom.bc libatomic.so.1 -o atom-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump atom-lto.exe | FileCheck %s --check-prefix=ATOMIC
+# ATOMIC:      {{^}}moduleref 'libatomic.so.1'{{$}}
+# ATOMIC:      {{^}}  .method '__atomic_load_4' int32(native int, int32) flags=0x2093 impl=0x0080{{$}}
+# ATOMIC-NEXT: {{^}}    .pinvokeimpl 'libatomic.so.1' entry '__atomic_load_4' flags=0x0201{{$}}
+# ATOMIC:      {{^}}    L{{[0-9]+}}: call int32(native int, int32) '<Module>'::'__atomic_load_4'{{$}}
+# RUN: msil-ld --lto-emit-asm atom.bc libatomic.so.1 -o atom.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=ATOMIC-TEXT --input-file=atom.il
+# ATOMIC-TEXT: {{^}}.method assembly hidebysig static pinvokeimpl("libatomic.so.1" nomangle cdecl) int32 '__atomic_load_4'(native int, int32) cil managed preservesig {}{{$}}
+# RUN: not msil-ld atom.o -o x.exe 2>&1 | %{err} --check-prefix=N2-LINUX -DREF=atom.o
+# RUN: not msil-ld atom.bc -o x.exe 2>&1 | %{err} --check-prefix=N2-LINUX -DREF=atom.bc
+# RUN: not msil-ld --lto-emit-asm atom.bc -o x.il 2>&1 | %{err} --check-prefix=N2-LINUX -DREF=atom.bc
+# N2-LINUX:      {{^}}msil-ld: error: undefined symbol: __atomic_load_4{{$}}
+# N2-LINUX-NEXT: {{^}}>>> an atomic operation: link with -latomic, as a native build does{{$}}
+# N2-LINUX-NEXT: {{^}}>>> referenced by [[REF]]:(main){{$}}
+
+## N2 on Windows: never from a DLL; objects, LTO with an image and
+## --lto-emit-asm.
+# RUN: not msil-ld atom-win.o atomic.lib -o x.exe 2>&1 | %{err} --check-prefix=N2-WIN -DREF=atom-win.o
+# RUN: not msil-ld atom-win.o -o x.exe 2>&1 | %{err} --check-prefix=N2-WIN -DREF=atom-win.o
+# RUN: not msil-ld atom-win.bc atomic.lib -o x.exe 2>&1 | %{err} --check-prefix=N2-WIN -DREF=atom-win.bc
+# RUN: not msil-ld --lto-emit-asm atom-win.bc atomic.lib -o x.il 2>&1 | %{err} --check-prefix=N2-WIN -DREF=atom-win.bc
+# N2-WIN:      {{^}}msil-ld: error: undefined symbol: __atomic_load_4{{$}}
+# N2-WIN-NEXT: {{^}}>>> an atomic operation (libatomic's interface){{$}}
+# N2-WIN-NEXT: {{^}}>>> referenced by [[REF]]:(main){{$}}
+
+## The N3 name __msil_foo is never taken from libc.so.6, which exports it,
+## and the report is the same without it; objects, LTO with an image and
+## --lto-emit-asm.
+# RUN: not msil-ld foo.o libc.so.6 -o x.exe 2>&1 | %{err} --check-prefix=N3 -DREF=foo.o
+# RUN: not msil-ld foo.o -o x.exe 2>&1 | %{err} --check-prefix=N3 -DREF=foo.o
+# RUN: not msil-ld foo.bc libc.so.6 -o x.exe 2>&1 | %{err} --check-prefix=N3 -DREF=foo.bc
+# RUN: not msil-ld --lto-emit-asm foo.bc libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=N3 -DREF=foo.bc
+# N3:      {{^}}msil-ld: error: undefined symbol: __msil_foo{{$}}
+# N3-NEXT: {{^}}>>> a toolchain helper: link the toolchain's helper archive clang_rt.builtins; if it is linked, the object needs a newer toolchain{{$}}
+# N3-NEXT: {{^}}>>> referenced by [[REF]]:(main){{$}}
+
+## N3 and another assembly: tl.dll (msil-ld -shared) exports __msil_foo and
+## other_fn. other_fn binds to it, __msil_foo does not; an archive with the
+## same object supplies both.
+# RUN: msil-ld -shared tl.o -o tl.dll 2>&1 | count 0
+# RUN: llvm-cil-dump tl.dll > tl.txt
+# RUN: %python %S/Inputs/shared/listing.py members tl.txt tl | FileCheck %s --check-prefix=TL-EXPORTS
+# TL-EXPORTS:      {{^}}.class 'tl' flags=
+# TL-EXPORTS:      {{^}}  .method '__msil_foo' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# TL-EXPORTS:      {{^}}  .method 'other_fn' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# RUN: not msil-ld use.o tl.dll -o x.exe 2>&1 | %{err} --check-prefix=N3 -DREF=use.o --implicit-check-not=other_fn
+# RUN: msil-ld use.o libtl.a -o use.exe 2>&1 | count 0
+# RUN: llvm-cil-dump use.exe | FileCheck %s --check-prefix=TL-ARCHIVE "--implicit-check-not=assemblyref 'tl'" \
+# RUN:   --implicit-check-not=pinvokeimpl
+# TL-ARCHIVE: {{^}}  .method '__msil_foo' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# TL-ARCHIVE: {{^}}    L{{[0-9]+}}: call int32(int32) '<Module>'::'__msil_foo'{{$}}
+
+## N4 on Linux: one error per file and name, with or without a libc.so.6
+## that exports the family; no 'undefined symbol' report, no P/Invoke.
+## --no-gc-sections keeps sj2.o's reference, which main does not reach.
+# RUN: not msil-ld --no-gc-sections sj.o sj2.o libc.so.6 -o x.exe > sj.txt 2>&1
+# RUN: not msil-ld --no-gc-sections sj.o sj2.o -o x.exe > sj-nolib.txt 2>&1
+# RUN: FileCheck %s --check-prefixes=N4,N4-SJ2 -DFILE=sj.o --input-file=sj.txt
+# RUN: FileCheck %s --check-prefixes=N4,N4-SJ2 -DFILE=sj.o --input-file=sj-nolib.txt
+# RUN: FileCheck %s --check-prefix=N4-NUM9 --input-file=sj.txt
+# RUN: FileCheck %s --check-prefix=N4-NUM9 --input-file=sj-nolib.txt
+# RUN: FileCheck %s --check-prefix=N4-NONE --input-file=sj.txt
+# RUN: FileCheck %s --check-prefix=N4-NONE --input-file=sj-nolib.txt
+# N4-DAG:    {{^}}msil-ld: error: [[FILE]]: '_setjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-DAG:    {{^}}msil-ld: error: [[FILE]]: 'setjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-DAG:    {{^}}msil-ld: error: [[FILE]]: '__sigsetjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-DAG:    {{^}}msil-ld: error: [[FILE]]: 'sigsetjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-DAG:    {{^}}msil-ld: error: [[FILE]]: 'longjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-DAG:    {{^}}msil-ld: error: [[FILE]]: '_longjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-DAG:    {{^}}msil-ld: error: [[FILE]]: 'siglongjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-DAG:    {{^}}msil-ld: error: [[FILE]]: '__longjmp_chk' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-SJ2-DAG: {{^}}msil-ld: error: sj2.o: 'longjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-NUM9-COUNT-9: {{^}}msil-ld: error: {{.+}}
+# N4-NUM9-NOT:     {{.}}
+## The implicit patterns of a -DAG-only prefix check only the text before its
+## first match, so the absent texts have a prefix of their own.
+# N4-NONE-NOT: undefined symbol
+# N4-NONE-NOT: warning:
+# N4-NONE-NOT: pinvokeimpl
+# N4-NONE-NOT: PLEASE submit
+# N4-NONE-NOT: Stack dump
+# N4-NONE-NOT: LLVM ERROR
+
+## N4 through LTO: the bitcode file is named, with an image and in
+## --lto-emit-asm.
+# RUN: not msil-ld sj.bc libc.so.6 -o x.exe > sj-lto.txt 2>&1
+# RUN: not msil-ld --lto-emit-asm sj.bc libc.so.6 -o x.il > sj-text.txt 2>&1
+# RUN: FileCheck %s --check-prefix=N4 -DFILE=sj.bc --input-file=sj-lto.txt
+# RUN: FileCheck %s --check-prefix=N4 -DFILE=sj.bc --input-file=sj-text.txt
+# RUN: FileCheck %s --check-prefix=N4-NUM8 --input-file=sj-lto.txt
+# RUN: FileCheck %s --check-prefix=N4-NUM8 --input-file=sj-text.txt
+# RUN: FileCheck %s --check-prefix=N4-NONE --input-file=sj-lto.txt
+# RUN: FileCheck %s --check-prefix=N4-NONE --input-file=sj-text.txt
+# N4-NUM8-COUNT-8: {{^}}msil-ld: error: {{.+}}
+# N4-NUM8-NOT:     {{.}}
+
+## An object definition resolves the family; libc.so.6 binds nothing.
+# RUN: msil-ld --no-gc-sections sj.o sj2.o sjdef.o libc.so.6 -o sjdef.exe 2>&1 | count 0
+# RUN: llvm-cil-dump sjdef.exe | FileCheck %s --check-prefix=SJDEF --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=moduleref
+# SJDEF: {{^}}  .method '__longjmp_chk' void(native int, int32) flags=0x0016 impl=0x0000{{$}}
+# SJDEF: {{^}}  .method '__sigsetjmp' int32(native int, int32) flags=0x0016 impl=0x0000{{$}}
+# SJDEF: {{^}}  .method '_longjmp' void(native int, int32) flags=0x0016 impl=0x0000{{$}}
+# SJDEF: {{^}}  .method '_setjmp' int32(native int) flags=0x0016 impl=0x0000{{$}}
+# SJDEF: {{^}}  .method 'longjmp' void(native int, int32) flags=0x0016 impl=0x0000{{$}}
+# SJDEF: {{^}}  .method 'setjmp' int32(native int) flags=0x0016 impl=0x0000{{$}}
+# SJDEF: {{^}}  .method 'siglongjmp' void(native int, int32) flags=0x0016 impl=0x0000{{$}}
+# SJDEF: {{^}}  .method 'sigsetjmp' int32(native int, int32) flags=0x0016 impl=0x0000{{$}}
+
+## N4 on windows-msvc: _setjmpex, _setjmp, _setjmp3 and longjmp, with or
+## without a VCRUNTIME140.dll import library that exports them.
+# RUN: not msil-ld sj-win.o vcruntime.lib -o x.exe > sj-win.txt 2>&1
+# RUN: not msil-ld sj-win.o -o x.exe > sj-win-nolib.txt 2>&1
+# RUN: FileCheck %s --check-prefix=N4-WIN --input-file=sj-win.txt
+# RUN: FileCheck %s --check-prefix=N4-WIN --input-file=sj-win-nolib.txt
+# RUN: FileCheck %s --check-prefix=N4-NUM4 --input-file=sj-win.txt
+# RUN: FileCheck %s --check-prefix=N4-NUM4 --input-file=sj-win-nolib.txt
+# RUN: FileCheck %s --check-prefix=N4-NONE --input-file=sj-win.txt
+# RUN: FileCheck %s --check-prefix=N4-NONE --input-file=sj-win-nolib.txt
+# N4-WIN-DAG: {{^}}msil-ld: error: sj-win.o: '_setjmpex' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-WIN-DAG: {{^}}msil-ld: error: sj-win.o: '_setjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-WIN-DAG: {{^}}msil-ld: error: sj-win.o: '_setjmp3' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-WIN-DAG: {{^}}msil-ld: error: sj-win.o: 'longjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler{{$}}
+# N4-NUM4-COUNT-4: {{^}}msil-ld: error: {{.+}}
+# N4-NUM4-NOT:     {{.}}
+
+## Import names: my_ext, my_setjmp and my_foo, imported as __extendhfsf2,
+## _setjmp and __msil_foo, bind to neither libgcc_s.so.1 nor libc.so.6, which
+## export those names: each is an undefined symbol under its own name, and
+## no image or text is written; objects, LTO with an image and
+## --lto-emit-asm.
+# RUN: not msil-ld imp.o libc.so.6 libgcc_s.so.1 -o imp.exe 2>&1 | %{err} --check-prefix=IMPORT -DREF=imp.o
+# RUN: not ls imp.exe
+# RUN: not msil-ld imp.bc libc.so.6 libgcc_s.so.1 -o imp-lto.exe 2>&1 | %{err} --check-prefix=IMPORT -DREF=imp.bc
+# RUN: not ls imp-lto.exe
+# RUN: not msil-ld --lto-emit-asm imp.bc libc.so.6 libgcc_s.so.1 -o imp.il 2>&1 \
+# RUN:   | %{err} --check-prefix=IMPORT -DREF=imp.bc
+# RUN: not ls imp.il
+# IMPORT:      {{^}}msil-ld: error: undefined symbol: my_ext{{$}}
+# IMPORT-NEXT: {{^}}>>> referenced by [[REF]]:(main){{$}}
+# IMPORT-EMPTY:
+# IMPORT-NEXT: {{^}}msil-ld: error: undefined symbol: my_setjmp{{$}}
+# IMPORT-NEXT: {{^}}>>> referenced by [[REF]]:(main){{$}}
+# IMPORT-EMPTY:
+# IMPORT-NEXT: {{^}}msil-ld: error: undefined symbol: my_foo{{$}}
+# IMPORT-NEXT: {{^}}>>> referenced by [[REF]]:(main){{$}}
+
+## Weak references to the same imports keep their trap stubs: no P/Invoke,
+## no ImplMap or ModuleRef row (llvm-cil-dump's .pinvokeimpl and moduleref
+## lines).
+# RUN: msil-ld impweak.o libc.so.6 libgcc_s.so.1 -o impweak.exe 2>&1 | count 0
+# RUN: llvm-cil-dump impweak.exe | FileCheck %s --check-prefix=IMPORT-STUB --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=moduleref
+# RUN: msil-ld impweak.bc libc.so.6 libgcc_s.so.1 -o impweak-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump impweak-lto.exe | FileCheck %s --check-prefix=IMPORT-STUB --implicit-check-not=pinvokeimpl \
+# RUN:   --implicit-check-not=moduleref
+# IMPORT-STUB: {{^}}  .method '<msil>undef_my_ext' float32(int32) flags=0x0013 impl=0x0000{{$}}
+# IMPORT-STUB: {{^}}  .method '<msil>undef_my_foo' int32(int32) flags=0x0013 impl=0x0000{{$}}
+# IMPORT-STUB: {{^}}  .method '<msil>undef_my_setjmp' int32(native int) flags=0x0013 impl=0x0000{{$}}
+# IMPORT-STUB: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# IMPORT-STUB: {{^}}    L{{[0-9]+}}: call float32(int32) '<Module>'::'<msil>undef_my_ext'{{$}}
+# IMPORT-STUB: {{^}}    L{{[0-9]+}}: call int32(native int) '<Module>'::'<msil>undef_my_setjmp'{{$}}
+# IMPORT-STUB: {{^}}    L{{[0-9]+}}: call int32(int32) '<Module>'::'<msil>undef_my_foo'{{$}}
+# RUN: msil-ld --lto-emit-asm impweak.bc libc.so.6 libgcc_s.so.1 -o impweak.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=IMPORT-STUB-TEXT --implicit-check-not=pinvokeimpl --input-file=impweak.il
+# IMPORT-STUB-TEXT: {{^}}  call float32 '<msil>undef_my_ext'(int32){{$}}
+# IMPORT-STUB-TEXT: {{^}}  call int32 '<msil>undef_my_setjmp'(native int){{$}}
+# IMPORT-STUB-TEXT: {{^}}  call int32 '<msil>undef_my_foo'(int32){{$}}
+# IMPORT-STUB-TEXT: {{^}}.method assembly static float32 '<msil>undef_my_ext'(int32) cil managed{{$}}
+# IMPORT-STUB-TEXT: {{^}}.method assembly static int32 '<msil>undef_my_setjmp'(native int) cil managed{{$}}
+# IMPORT-STUB-TEXT: {{^}}.method assembly static int32 '<msil>undef_my_foo'(int32) cil managed{{$}}
+
+#--- libgcc.yaml
+## A libgcc_s.so.1 stand-in that exports compiler-rt names.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x18
+Symbols:
+  - { Name: __extendhfsf2, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: __truncsfhf2,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x8, Size: 8 }
+  - { Name: __floattidf,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+
+#--- libc.yaml
+## A libc.so.6 stand-in: the checked entry points and the stack protector's
+## guard (data), dlopen and dlsym (for the guard's data import), every Linux
+## name of the setjmp family and an '__msil_' name.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x80
+  - Name:  .data
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_WRITE ]
+    Size:  0x8
+Symbols:
+  - { Name: puts,              Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: dlopen,            Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x8, Size: 8 }
+  - { Name: dlsym,             Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: __memcpy_chk,      Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+  - { Name: __memmove_chk,     Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 8 }
+  - { Name: __memset_chk,      Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 8 }
+  - { Name: __stack_chk_fail,  Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 8 }
+  - { Name: __stack_chk_guard, Type: STT_OBJECT, Section: .data, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: _setjmp,           Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x38, Size: 8 }
+  - { Name: setjmp,            Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x40, Size: 8 }
+  - { Name: __sigsetjmp,       Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x48, Size: 8 }
+  - { Name: sigsetjmp,         Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x50, Size: 8 }
+  - { Name: longjmp,           Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x58, Size: 8 }
+  - { Name: _longjmp,          Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x60, Size: 8 }
+  - { Name: siglongjmp,        Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x68, Size: 8 }
+  - { Name: __longjmp_chk,     Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x70, Size: 8 }
+  - { Name: __msil_foo,        Type: STT_FUNC,   Section: .text, Binding: STB_GLOBAL, Value: 0x78, Size: 8 }
+
+#--- libm.yaml
+## A libm.so.6 stand-in: two of glibc's _finite entry points.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: __exp_finite,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: __powf_finite, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x8, Size: 8 }
+
+#--- atomic.yaml
+## A libatomic.so.1 stand-in.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: __atomic_load_4,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: __atomic_store_4, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x8, Size: 8 }
+
+#--- helpers.def
+LIBRARY helpers.dll
+EXPORTS
+  __extendhfsf2
+  __msil_foo
+
+#--- atomic.def
+LIBRARY libatomic-1.dll
+EXPORTS
+  __atomic_load_4
+  __atomic_store_4
+
+#--- vcruntime.def
+LIBRARY VCRUNTIME140.dll
+EXPORTS
+  _setjmp
+  _setjmp3
+  _setjmpex
+  longjmp
+  __chkstk
+  __security_check_cookie
+  __security_cookie DATA
+
+#--- half.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; The legalizer calls __extendhfsf2 for the fpext.
+@g = global half 0xH3E00
+
+define i32 @main() {
+  %h = load volatile half, ptr @g
+  %f = fpext half %h to float
+  %i = fptosi float %f to i32
+  ret i32 %i
+}
+
+#--- direct.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare float @__extendhfsf2(i32)
+
+define i32 @main() {
+  %f = call float @__extendhfsf2(i32 15872)
+  %i = fptosi float %f to i32
+  ret i32 %i
+}
+
+#--- ref2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare float @__extendhfsf2(i32)
+
+define float @ext2(i32 %h) {
+  %f = call float @__extendhfsf2(i32 %h)
+  ret float %f
+}
+
+#--- ext.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; A stand-in for the helper archive's member.
+define float @__extendhfsf2(i32 %h) {
+  %f = sitofp i32 %h to float
+  ret float %f
+}
+
+#--- weak.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare extern_weak float @__extendhfsf2(i32)
+
+define i32 @main() {
+  %c = icmp eq ptr @__extendhfsf2, null
+  br i1 %c, label %none, label %call
+call:
+  %f = call float @__extendhfsf2(i32 15872)
+  %i = fptosi float %f to i32
+  ret i32 %i
+none:
+  ret i32 0
+}
+
+#--- chk.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@dst = global [16 x i8] zeroinitializer
+@src = global [16 x i8] zeroinitializer
+@n = global i64 4
+@os = global i64 16
+
+declare ptr @__memcpy_chk(ptr, ptr, i64, i64)
+declare ptr @__memmove_chk(ptr, ptr, i64, i64)
+declare ptr @__memset_chk(ptr, i32, i64, i64)
+declare void @__stack_chk_fail()
+
+define i32 @main() {
+  %n = load volatile i64, ptr @n
+  %os = load volatile i64, ptr @os
+  %a = call ptr @__memcpy_chk(ptr @dst, ptr @src, i64 %n, i64 %os)
+  %b = call ptr @__memmove_chk(ptr %a, ptr @src, i64 %n, i64 %os)
+  %c = call ptr @__memset_chk(ptr %b, i32 0, i64 %n, i64 %os)
+  %z = icmp eq ptr %c, null
+  br i1 %z, label %fail, label %ok
+fail:
+  call void @__stack_chk_fail()
+  unreachable
+ok:
+  ret i32 0
+}
+
+#--- clib.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; The stack protector's guard and two of libm's _finite entry points; the
+;; arguments are volatile loads, so nothing folds the calls.
+@__stack_chk_guard = external global i64
+@d = global double 1.0
+@f = global float 2.0
+
+declare double @__exp_finite(double)
+declare float @__powf_finite(float, float)
+
+define i32 @main() {
+  %g = load volatile i64, ptr @__stack_chk_guard
+  %x = load volatile double, ptr @d
+  %e = call double @__exp_finite(double %x)
+  %y = load volatile float, ptr @f
+  %p = call float @__powf_finite(float %y, float %y)
+  %pe = fpext float %p to double
+  %s = fadd double %e, %pe
+  %i = fptosi double %s to i64
+  %r = add i64 %i, %g
+  %t = trunc i64 %r to i32
+  ret i32 %t
+}
+
+#--- crt-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; The MSVC C runtime's stack probe and security cookie.
+@__security_cookie = external global i64
+
+declare void @__chkstk()
+declare void @__security_check_cookie(i64)
+
+define i32 @main() {
+  call void @__chkstk()
+  %c = load volatile i64, ptr @__security_cookie
+  call void @__security_check_cookie(i64 %c)
+  %t = trunc i64 %c to i32
+  ret i32 %t
+}
+
+#--- atom.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@v = global i32 7
+
+declare i32 @__atomic_load_4(ptr, i32)
+
+define i32 @main() {
+  %r = call i32 @__atomic_load_4(ptr @v, i32 5)
+  ret i32 %r
+}
+
+#--- atom-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@v = global i32 7
+
+declare i32 @__atomic_load_4(ptr, i32)
+
+define i32 @main() {
+  %r = call i32 @__atomic_load_4(ptr @v, i32 5)
+  ret i32 %r
+}
+
+#--- help-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare float @__extendhfsf2(i32)
+declare i32 @__msil_foo(i32)
+
+define i32 @main() {
+  %f = call float @__extendhfsf2(i32 15872)
+  %i = fptosi float %f to i32
+  %r = call i32 @__msil_foo(i32 %i)
+  ret i32 %r
+}
+
+#--- foo.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @__msil_foo(i32)
+
+define i32 @main() {
+  %r = call i32 @__msil_foo(i32 1)
+  ret i32 %r
+}
+
+#--- tl.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @__msil_foo(i32 %x) {
+  %r = add i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @other_fn(i32 %x) {
+  %r = add i32 %x, 2
+  ret i32 %r
+}
+
+#--- use.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare i32 @__msil_foo(i32)
+declare i32 @other_fn(i32)
+
+define i32 @main() {
+  %a = call i32 @other_fn(i32 1)
+  %r = call i32 @__msil_foo(i32 %a)
+  ret i32 %r
+}
+
+#--- sj.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; Every Linux name of the family. glibc's headers spell setjmp as _setjmp
+;; and sigsetjmp as __sigsetjmp, and longjmp, _longjmp and siglongjmp under
+;; _FORTIFY_SOURCE as __longjmp_chk; musl's spell each name as itself. Every
+;; call is live.
+@buf = global [200 x i8] zeroinitializer
+
+declare i32 @_setjmp(ptr) returns_twice
+declare i32 @setjmp(ptr) returns_twice
+declare i32 @__sigsetjmp(ptr, i32) returns_twice
+declare i32 @sigsetjmp(ptr, i32) returns_twice
+declare void @longjmp(ptr, i32) noreturn
+declare void @_longjmp(ptr, i32) noreturn
+declare void @siglongjmp(ptr, i32) noreturn
+declare void @__longjmp_chk(ptr, i32) noreturn
+
+define i32 @main() {
+  %a = call i32 @_setjmp(ptr @buf)
+  %b = call i32 @setjmp(ptr @buf)
+  %c = call i32 @__sigsetjmp(ptr @buf, i32 0)
+  %d = call i32 @sigsetjmp(ptr @buf, i32 1)
+  %ab = add i32 %a, %b
+  %cd = add i32 %c, %d
+  %s = add i32 %ab, %cd
+  switch i32 %s, label %done [
+    i32 0, label %jump
+    i32 1, label %jump2
+    i32 2, label %jumpsig
+    i32 3, label %jumpchk
+  ]
+jump:
+  call void @longjmp(ptr @buf, i32 1)
+  unreachable
+jump2:
+  call void @_longjmp(ptr @buf, i32 2)
+  unreachable
+jumpsig:
+  call void @siglongjmp(ptr @buf, i32 3)
+  unreachable
+jumpchk:
+  call void @__longjmp_chk(ptr @buf, i32 4)
+  unreachable
+done:
+  ret i32 0
+}
+
+#--- sj2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; A second file that references longjmp: an error of its own.
+@buf2 = global [200 x i8] zeroinitializer
+
+declare void @longjmp(ptr, i32) noreturn
+
+define void @leave() {
+  call void @longjmp(ptr @buf2, i32 3)
+  unreachable
+}
+
+#--- sjdef.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; Object definitions of sj.ll's eight names.
+define i32 @_setjmp(ptr %b) {
+  ret i32 1
+}
+
+define i32 @setjmp(ptr %b) {
+  ret i32 1
+}
+
+define i32 @__sigsetjmp(ptr %b, i32 %m) {
+  ret i32 1
+}
+
+define i32 @sigsetjmp(ptr %b, i32 %m) {
+  ret i32 1
+}
+
+define void @longjmp(ptr %b, i32 %v) {
+  ret void
+}
+
+define void @_longjmp(ptr %b, i32 %v) {
+  ret void
+}
+
+define void @siglongjmp(ptr %b, i32 %v) {
+  ret void
+}
+
+define void @__longjmp_chk(ptr %b, i32 %v) {
+  ret void
+}
+
+#--- sj-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; The UCRT's setjmp is _setjmpex (or _setjmp) with a frame argument; the
+;; 32-bit x86 CRT's, _setjmp3, takes the count of the arguments that follow
+;; (here none).
+@buf = global [256 x i8] zeroinitializer
+
+declare i32 @_setjmpex(ptr, ptr) returns_twice
+declare i32 @_setjmp(ptr, ptr) returns_twice
+declare i32 @_setjmp3(ptr, i32) returns_twice
+declare void @longjmp(ptr, i32) noreturn
+
+define i32 @main() {
+  %a = call i32 @_setjmpex(ptr @buf, ptr null)
+  %b = call i32 @_setjmp(ptr @buf, ptr null)
+  %e = call i32 @_setjmp3(ptr @buf, i32 0)
+  %ab = add i32 %a, %b
+  %s = add i32 %ab, %e
+  %c = icmp eq i32 %s, 0
+  br i1 %c, label %jump, label %done
+jump:
+  call void @longjmp(ptr @buf, i32 1)
+  unreachable
+done:
+  ret i32 0
+}
+
+#--- imp.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; Ordinary symbols whose import names are an N1, an N4 and an N3 name, as C's
+;; __attribute__((import_name("..."))) gives them; libgcc_s.so.1 exports
+;; __extendhfsf2 and libc.so.6 exports _setjmp and __msil_foo.
+@buf = global [200 x i8] zeroinitializer
+
+declare float @my_ext(i32) "msil-import-name"="__extendhfsf2"
+declare i32 @my_setjmp(ptr) returns_twice "msil-import-name"="_setjmp"
+declare i32 @my_foo(i32) "msil-import-name"="__msil_foo"
+
+define i32 @main() {
+  %f = call float @my_ext(i32 15872)
+  %i = fptosi float %f to i32
+  %s = call i32 @my_setjmp(ptr @buf)
+  %r = call i32 @my_foo(i32 %i)
+  %t = add i32 %r, %s
+  ret i32 %t
+}
+
+#--- impweak.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; imp.ll's references, weak.
+@buf = global [200 x i8] zeroinitializer
+
+declare extern_weak float @my_ext(i32) "msil-import-name"="__extendhfsf2"
+declare extern_weak i32 @my_setjmp(ptr) returns_twice "msil-import-name"="_setjmp"
+declare extern_weak i32 @my_foo(i32) "msil-import-name"="__msil_foo"
+
+define i32 @main() {
+  %c = icmp eq ptr @my_ext, null
+  br i1 %c, label %none, label %call
+call:
+  %f = call float @my_ext(i32 15872)
+  %i = fptosi float %f to i32
+  %s = call i32 @my_setjmp(ptr @buf)
+  %r = call i32 @my_foo(i32 %i)
+  %t = add i32 %r, %s
+  ret i32 %t
+none:
+  ret i32 0
+}

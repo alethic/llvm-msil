@@ -1,0 +1,118 @@
+# msil-steps.py (plan 5.17.10 item 2, M24): a composite level is '<build> &&
+# %msil_steps --step=NAME CMD... --step=NAME CMD...', and msil-steps.py runs
+# its steps in one Python process: msil-run.py, msil-jitall.py,
+# msil-verify.py, msil-prog.py and msil-equiv.py as functions of the imported
+# scripts, everything else (FileCheck, ilasm behind msil-run.py --tool's
+# child, a compiler) as child processes. Before each step it prints
+# 'msil-steps: NAME: <equivalent command line>', and none of this may change
+# a check: the header is the step's command line, and that line run by itself
+# prints the same output and exits with the same status, failure messages
+# included, byte for byte. The first failing step ends the level with
+# 'msil-steps: NAME failed (exit status N)' on stderr and status N.
+# Inputs/steps-replay.py runs a msil-steps.py command, then each header's
+# command line as a process of its own, and compares the two (the words of
+# each header, each step's stdout, the whole stderr, the exit status, and that
+# nothing runs after a failing step).
+# (1) A level whose steps all pass: an ilasm step, verify, jitall, the main
+# run, a .NET 8 run, a run that throws, a run that ends with [timeout], the
+# native oracle's build and run, O3 (msil-equiv.py), the Framework run and a
+# FileCheck check. (2) Levels that fail, each at its first step, so that the
+# step after it never runs: a verifier error, a JIT failure, a transcript
+# that differs, msil-run.py's and msil-prog.py's usage errors (argparse's
+# text under the script's own name), O3 on two different images, a failed
+# FileCheck check, an ilasm error and a native transcript that differs.
+# (3) A skipped Framework run passes, and the check of its --stderr-out file
+# is skipped. (4) A child step that outlives ten times --timeout fails with
+# 'msil-steps: <program> did not finish within <T> s' and status 1, and the
+# level stops there. (5) msil-steps.py's usage errors exit 2. (6) In a nested
+# lit of Inputs/nested-steps-wsl with the WSL runner, the WSL steps that
+# msil-steps.py runs through one wsl.exe replay the same way. (7) The
+# failure path of Inputs/steps-replay.py: with Inputs/fake-steps.py, a
+# msil-steps.py stand-in, every planted fault is reported.
+# REQUIRES: msil-triple-windows, msil-ilverify, msil-jitall, msil-netfx, msil-native-oracle, msil-cil-dump, dotnet-runtime-8
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %ilasm -dll -output=%t/puts.dll %S/Inputs/puts-windows.il
+# RUN: %ilasm -exe -output=%t/puts.exe %S/Inputs/puts-windows.il
+# RUN: %ilasm -exe -output=%t/exit42.exe %S/Inputs/exit-42.il
+# RUN: %ilasm -dll -output=%t/throw.dll %S/Inputs/throw-null.il
+# RUN: %ilasm -dll -output=%t/bad.dll %S/Inputs/bad-stack-join.il
+# RUN: %ilasm -dll -output=%t/falloff.dll %S/Inputs/jitall-falloff.il
+# RUN: %ilasm -dll -output=%t/spin.dll %S/Inputs/spin.il
+# RUN: %{harness_check} write %t/nine.expected "[exit 9]"
+# RUN: %{harness_check} write %t/wrong.expected "hello" "[exit 7]"
+# RUN: %{harness_check} write %t/check.txt "hello from puts"
+# RUN: %{harness_check} write %t/broken.il "this is not IL"
+# RUN: %{harness_check} write %t/net8.runtimeconfig.json '{"runtimeOptions": {"tfm": "net8.0", "rollForward": "LatestPatch", "framework": {"name": "Microsoft.NETCore.App", "version": "8.0.0"}}}'
+
+# (1)
+# RUN: %python %S/Inputs/steps-replay.py -- %msil_steps --step=assemble %ilasm -dll -output=%t/again.dll %S/Inputs/exit-42.il --step=verify %msil_verify %t/puts.dll --step=jitall %msil_jitall %t/puts.dll --step=run %msil_exec --expect %S/Inputs/puts-windows --out %t/run.out %t/puts.dll --step=also-net8-run %msil_exec --runtimeconfig %t/net8.runtimeconfig.json --expect %S/Inputs/puts-windows %t/puts.dll --step=throw-run %msil_exec --expect %S/Inputs/throw-null %t/throw.dll --step=spin-run %msil_exec --timeout 3 --expect %S/Inputs/spin %t/spin.dll --step=native-build %msil_prog_build --mode native --level O0 --workdir %t/native.d --out %t/native.d/prog.exe --src %S/Inputs/rule-prog.c --step=native-run %msil_exec --native --expect %t/nine %t/native.d/prog.exe --step=O3 %msil_equiv %t/puts.exe %t/puts.exe --step=netfx-run %msil_exec --netfx --expect %S/Inputs/puts-windows %t/puts.exe --step=run-check FileCheck %s --check-prefix=STEPS-CHECK --input-file %t/check.txt > %t/1.log
+# RUN: %{harness_check} contains %t/1.log "^steps-replay: assemble: same output and exit status 0$" "^steps-replay: verify: same output and exit status 0$" "^steps-replay: jitall: same output and exit status 0$" "^steps-replay: run: same output and exit status 0$" "^steps-replay: also-net8-run: same output and exit status 0$" "^steps-replay: throw-run: same output and exit status 0$" "^steps-replay: spin-run: same output and exit status 0$" "^steps-replay: native-build: same output and exit status 0$" "^steps-replay: native-run: same output and exit status 0$" "^steps-replay: O3: same output and exit status 0$" "^steps-replay: netfx-run: same output and exit status 0$" "^steps-replay: run-check: same output and exit status 0$" "^steps-replay: msil-steps\.py ran 12 of 12 steps, exit status 0$"
+# RUN: %{harness_check} contains %t/1.log "^msil-steps: assemble: \S*python\S* \S*msil-run\.py'? --tool .*exit-42\.il'?$" "^msil-steps: verify: \S*python\S* \S*msil-verify\.py'? " "^msil-steps: jitall: \S*python\S* \S*msil-jitall\.py'? " "^msil-steps: native-build: \S*python\S* \S*msil-prog\.py'? .* --mode native " "^msil-steps: O3: \S*python\S* \S*msil-equiv\.py'? " "^msil-steps: run-check: \S*[Ff]ile[Cc]heck\S* "
+# RUN: %{harness_check} equals %t/run.out "hello from puts" "second line" "[exit 7]"
+# STEPS-CHECK: hello from puts
+
+# (2)
+# RUN: %python %S/Inputs/steps-replay.py --status 1 -- %msil_steps --step=verify %msil_verify %t/bad.dll --step=never %msil_exec --expect %S/Inputs/puts-windows %t/puts.dll > %t/2a.log
+# RUN: %{harness_check} contains %t/2a.log "^steps-replay: verify: same output and exit status 1$" "^steps-replay: msil-steps\.py ran 1 of 2 steps, exit status 1$" "PathStackDepth" "^msil-steps: verify failed \(exit status 1\)$"
+# RUN: %python %S/Inputs/steps-replay.py --status 1 -- %msil_steps --step=jitall %msil_jitall %t/falloff.dll --step=never %msil_exec --expect %S/Inputs/puts-windows %t/puts.dll > %t/2b.log
+# RUN: %{harness_check} contains %t/2b.log "^steps-replay: jitall: same output and exit status 1$" "^steps-replay: msil-steps\.py ran 1 of 2 steps, exit status 1$" "JIT FAIL .*::no_ret" "^msil-steps: jitall failed \(exit status 1\)$"
+# RUN: %python %S/Inputs/steps-replay.py --status 1 -- %msil_steps --step=run %msil_exec --expect %t/wrong %t/puts.dll --step=never %msil_exec --expect %S/Inputs/puts-windows %t/puts.dll > %t/2c.log
+# RUN: %{harness_check} contains %t/2c.log "^steps-replay: run: same output and exit status 1$" "^steps-replay: msil-steps\.py ran 1 of 2 steps, exit status 1$" "^msil-run: output of \S*puts\.dll does not match \S*wrong\.expected$" "^\+hello from puts$" "^msil-steps: run failed \(exit status 1\)$"
+# RUN: %python %S/Inputs/steps-replay.py --status 2 -- %msil_steps --step=run %msil_exec --bogus %t/puts.dll --step=never %msil_exec --expect %S/Inputs/puts-windows %t/puts.dll > %t/2d.log
+# RUN: %{harness_check} contains %t/2d.log "^steps-replay: run: same output and exit status 2$" "^steps-replay: msil-steps\.py ran 1 of 2 steps, exit status 2$" "^usage: msil-run\.py " "^msil-run\.py: error: unrecognized arguments: --bogus$" "^msil-steps: run failed \(exit status 2\)$"
+# RUN: %python %S/Inputs/steps-replay.py --status 2 -- %msil_steps --step=native-build %msil_prog_build --mode native --level O0 --src %S/Inputs/rule-prog.c --step=never %msil_exec --expect %S/Inputs/puts-windows %t/puts.dll > %t/2e.log
+# RUN: %{harness_check} contains %t/2e.log "^steps-replay: native-build: same output and exit status 2$" "^steps-replay: msil-steps\.py ran 1 of 2 steps, exit status 2$" "^usage: msil-prog\.py " "^msil-prog\.py: error: the following arguments are required: --workdir$" "^msil-steps: native-build failed \(exit status 2\)$"
+# RUN: %python %S/Inputs/steps-replay.py --status 1 -- %msil_steps --step=O3 %msil_equiv %t/puts.exe %t/exit42.exe --step=never %msil_exec --expect %S/Inputs/puts-windows %t/puts.dll > %t/2f.log
+# RUN: %{harness_check} contains %t/2f.log "^steps-replay: O3: same output and exit status 1$" "^steps-replay: msil-steps\.py ran 1 of 2 steps, exit status 1$" "^msil-steps: O3 failed \(exit status 1\)$"
+# RUN: %python %S/Inputs/steps-replay.py --status 1 -- %msil_steps --step=run-check FileCheck %s --check-prefix=STEPS-NONE --input-file %t/check.txt --step=never %msil_exec --expect %S/Inputs/puts-windows %t/puts.dll > %t/2g.log
+# RUN: %{harness_check} contains %t/2g.log "^steps-replay: run-check: same output and exit status 1$" "^steps-replay: msil-steps\.py ran 1 of 2 steps, exit status 1$" "error: STEPS-NONE: expected string not found in input$" "^msil-steps: run-check failed \(exit status 1\)$"
+# STEPS-NONE: a line that check.txt does not hold
+# RUN: %python %S/Inputs/steps-replay.py --status 1 -- %msil_steps --step=assemble %ilasm -dll -output=%t/broken.dll %t/broken.il --step=never %msil_exec --expect %S/Inputs/puts-windows %t/puts.dll > %t/2h.log
+# RUN: %{harness_check} contains %t/2h.log "^steps-replay: assemble: same output and exit status 1$" "^steps-replay: msil-steps\.py ran 1 of 2 steps, exit status 1$" "^msil-steps: assemble failed \(exit status 1\)$"
+# RUN: %python %S/Inputs/steps-replay.py --status 1 -- %msil_steps --step=native-run %msil_exec --native --expect %t/wrong %t/native.d/prog.exe --step=never %msil_exec --expect %S/Inputs/puts-windows %t/puts.dll > %t/2i.log
+# RUN: %{harness_check} contains %t/2i.log "^steps-replay: native-run: same output and exit status 1$" "^steps-replay: msil-steps\.py ran 1 of 2 steps, exit status 1$" "^\+\[exit 9\]$" "^msil-steps: native-run failed \(exit status 1\)$"
+# RUN: cat %t/2a.log %t/2b.log %t/2c.log %t/2d.log %t/2e.log %t/2f.log %t/2g.log %t/2h.log %t/2i.log > %t/2.log
+# RUN: %{harness_check} lacks %t/2.log "^msil-steps: never:" "^steps-replay: error:"
+
+# (3)
+# RUN: %python %S/Inputs/steps-replay.py -- %msil_steps --step=netfx-run %msil_exec --netfx --skip-netfx 'a reason of this test' --stderr-out %t/netfx.err --expect %S/Inputs/puts-windows %t/puts.exe --step=netfx-check FileCheck %s --check-prefix=STEPS-CHECK --input-file %t/netfx.err > %t/3.log
+# RUN: %{harness_check} contains %t/3.log "^steps-replay: netfx-run: same output and exit status 0$" "^steps-replay: netfx-check: skipped$" "^steps-replay: msil-steps\.py ran 2 of 2 steps, exit status 0$" "^msil-run: netfx run skipped: a reason of this test$" "^msil-steps: netfx-check: skipped: \S*netfx\.err is the --stderr-out of the skipped step netfx-run$"
+
+# (4)
+# RUN: %{harness_check} exits 1 %msil_steps --timeout 1 --step=sleepy %python -c "import time; time.sleep(60)" --step=never %python -c "print('never')" > %t/4.out 2> %t/4.err
+# RUN: %{harness_check} contains %t/4.out "^msil-steps: sleepy: \S*python\S* -c 'import time; time\.sleep\(60\)'$"
+# RUN: %{harness_check} contains %t/4.err "^msil-steps: .*python.* did not finish within 10 s$" "^msil-steps: sleepy failed \(exit status 1\)$"
+# RUN: %{harness_check} lacks %t/4.out "never"
+
+# (5)
+# RUN: %{harness_check} exits 2 %msil_steps > %t/5a.log 2>&1
+# RUN: %{harness_check} contains %t/5a.log "^msil-steps: error: no steps \(each step starts with --step=NAME\)$"
+# RUN: %{harness_check} exits 2 %msil_steps --step=a %python -c "print(1)" --step=b > %t/5b.log 2>&1
+# RUN: %{harness_check} contains %t/5b.log "^msil-steps: error: step b has no command$"
+# RUN: %{harness_check} exits 2 %msil_steps %python --step=a %python -c "print(1)" > %t/5c.log 2>&1
+# RUN: %{harness_check} contains %t/5c.log "^msil-steps: error: unknown option \S*python\S* \(each step starts with --step=NAME\)$"
+# RUN: %{harness_check} exits 2 %msil_steps --step= %python -c "print(1)" > %t/5d.log 2>&1
+# RUN: %{harness_check} contains %t/5d.log "^msil-steps: error: --step= needs a name$"
+# RUN: %{harness_check} exits 2 %msil_steps --timeout abc --step=a %python -c "print(1)" > %t/5e.log 2>&1
+# RUN: %{harness_check} contains %t/5e.log "^msil-steps: error: --timeout abc: give a positive number$"
+# RUN: cat %t/5a.log %t/5b.log %t/5c.log %t/5d.log %t/5e.log > %t/5.log
+# RUN: %{harness_check} lacks %t/5.log "^msil-steps: a:" "^1$"
+
+# (6)
+# RUN: %if msil-linux-oracle %{ %{harness_lit} -a --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_runner=wsl --param msil_native_oracle=required %S/Inputs/nested-steps-wsl > %t/6.log 2>&1 %}
+# RUN: %if msil-linux-oracle %{ %{harness_check} contains %t/6.log "^PASS: MSIL :: harness/Inputs/nested-steps-wsl/steps\.test " "^# \| steps-replay: native-run: same output and exit status 0$" "^# \| steps-replay: msil-steps\.py ran 5 of 5 steps, exit status 0$" "^# \| steps-replay: msil-steps\.py ran 2 of 3 steps, exit status 1$" %}
+
+# (7)
+# RUN: %python %S/Inputs/steps-replay.py --status 3 -- %python %S/Inputs/fake-steps.py ok --step=a %python -c "print('a')" --step=b %python -c "import sys; print('b'); sys.stderr.write('b-err\n'); sys.exit(3)" --step=c %python -c "print('c')" > %t/7ok.log
+# RUN: %{harness_check} contains %t/7ok.log "^steps-replay: a: same output and exit status 0$" "^steps-replay: b: same output and exit status 3$" "^steps-replay: msil-steps\.py ran 2 of 3 steps, exit status 3$"
+# RUN: not %python %S/Inputs/steps-replay.py --status 3 -- %python %S/Inputs/fake-steps.py extra-out --step=a %python -c "print('a')" --step=b %python -c "import sys; print('b'); sys.stderr.write('b-err\n'); sys.exit(3)" --step=c %python -c "print('c')" > %t/7a.log
+# RUN: %{harness_check} contains %t/7a.log "^steps-replay: error: step a: stdout differs from the replay's:$"
+# RUN: not %python %S/Inputs/steps-replay.py --status 3 -- %python %S/Inputs/fake-steps.py other-words --step=a %python -c "print('a')" --step=b %python -c "import sys; print('b'); sys.stderr.write('b-err\n'); sys.exit(3)" --step=c %python -c "print('c')" > %t/7b.log
+# RUN: %{harness_check} contains %t/7b.log "^steps-replay: error: step a: the header's words are not the step's words:$" "^    \| --fake$"
+# RUN: not %python %S/Inputs/steps-replay.py --status 3 -- %python %S/Inputs/fake-steps.py lost-err --step=a %python -c "print('a')" --step=b %python -c "import sys; print('b'); sys.stderr.write('b-err\n'); sys.exit(3)" --step=c %python -c "print('c')" > %t/7c.log
+# RUN: %{harness_check} contains %t/7c.log "^steps-replay: error: stderr differs from the replays' stderr:$"
+# RUN: not %python %S/Inputs/steps-replay.py --status 3 -- %python %S/Inputs/fake-steps.py no-stop --step=a %python -c "print('a')" --step=b %python -c "import sys; print('b'); sys.stderr.write('b-err\n'); sys.exit(3)" --step=c %python -c "print('c')" > %t/7d.log
+# RUN: %{harness_check} contains %t/7d.log "^steps-replay: error: step c ran after step b failed$" "^steps-replay: error: steps ran after the failing step b$"
+# RUN: not %python %S/Inputs/steps-replay.py --status 3 -- %python %S/Inputs/fake-steps.py wrong-status --step=a %python -c "print('a')" --step=b %python -c "import sys; print('b'); sys.stderr.write('b-err\n'); sys.exit(3)" --step=c %python -c "print('c')" > %t/7e.log
+# RUN: %{harness_check} contains %t/7e.log "^steps-replay: error: msil-steps\.py exited with 0, the steps say 3$" "^steps-replay: error: msil-steps\.py exited with 0, not --status 3$"

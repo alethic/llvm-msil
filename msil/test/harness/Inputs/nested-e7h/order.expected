@@ -1,0 +1,6 @@
+thread ran
+main returns
+atexit handler 2
+atexit handler 1
+fini_array entry
+[exit 3]

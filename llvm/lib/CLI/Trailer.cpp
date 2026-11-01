@@ -10,7 +10,9 @@
 // (ImplementationPlan.md 5.9.10, see llvm/CLI/Trailer.h). Below the
 // relocation-loop threshold the module initializer and the entry point are
 // the methods that the MSIL AsmPrinter wrote in Phase 1, instruction for
-// instruction (with M18's shortest forms), so -S text does not change.
+// instruction (with M18's shortest forms), so -S text does not change. The
+// trailer definitions that the output uses come last, from their rows'
+// emitters (5.14.4, TrailerDefs.cpp).
 //
 //===----------------------------------------------------------------------===//
 
@@ -687,6 +689,25 @@ static void buildEntryPoint(const EntryPoint &E, const SharedArgs &Shared,
   finish(M, Sink);
 }
 
+/// Each trailer definition of In.Defs, in Id order, written by its row's
+/// emitter (TrailerDefs.def, plan 5.14.4 T8) for the method that the sink
+/// declared for it.
+static void emitTrailerDefs(const TrailerInput &In, TrailerSink &Sink) {
+  ArrayRef<TrailerDefInfo> Rows = getTrailerDefs();
+  for (auto [Index, R] : enumerate(In.Defs)) {
+    assert((Index == 0 || In.Defs[Index - 1].Id < R.Id) &&
+           "each trailer definition is requested once, in Id order");
+    TrailerDefContext Ctx{In, Sink, Rows[static_cast<size_t>(R.Id)], R.Method};
+    switch (R.Id) {
+#define CLI_TRAILER_DEF(Id, Name, Return, Params, Scope, Emitter)              \
+  case TrailerDefId::Id:                                                       \
+    Emitter(Ctx);                                                              \
+    break;
+#include "llvm/CLI/TrailerDefs.def"
+    }
+  }
+}
+
 bool cli::skipsNullConstructorSlots(SectionRules Rules) {
   return Rules == SectionRules::COFF;
 }
@@ -745,4 +766,5 @@ void cli::buildTrailer(const TrailerInput &In, TrailerSink &Sink) {
   }
   if (In.Entry)
     buildEntryPoint(*In.Entry, Shared, Sink);
+  emitTrailerDefs(In, Sink);
 }

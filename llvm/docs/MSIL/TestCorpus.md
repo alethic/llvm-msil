@@ -69,11 +69,14 @@ triple), as natively, and one is a `diag` entry:
 | `00140` | `variadic function definitions are not supported for MSIL yet` (LTO deletes the unused variadic function at `-O2`; objects keep it) | P3-B, variadic definitions |
 
 **CI.** Whether GitHub's runners may download and run CoreMark (EEMBC's licence agreement) and
-c-testsuite (per-test licences) is still unverified (plan section 10 item 11). Until the user
-decides, `.github/workflows/msil-ci.yml` sets `MSIL_CORPUS_SKIP: coremark,c-testsuite`, which
-reaches `fetch.py --skip` and lit's `msil_corpus_skip`: CI fetches and runs the other eight
-entries, CoreMark's tests are UNSUPPORTED and the `ctest` leg is skipped. The phase gate on the
-development host (`run-m1-gate.ps1`) runs all ten.
+c-testsuite (per-test licences) was plan section 10 item 11, which the user answered with R23
+(2026-10-28): allowed. Since M24 (plan 5.17.17) `.github/workflows/msil-ci.yml` sets
+`MSIL_CORPUS_SKIP: ''`, so CI fetches and runs all ten entries. The variable stays for local
+opt-outs: an entry it names is left out (`fetch.py --skip`, lit's `msil_corpus_skip`) and its
+tests are UNSUPPORTED, and while it names `c-testsuite` the `ctest` and `ctest-wsl` legs are
+skipped (GettingStarted.md section 7, "The exit corpus"). CI's corpus cache key takes a hash of
+the skip list, never the list itself (`actions/cache` rejects a key with a comma). The phase
+gate on the development host (`run-m1-gate.ps1`) clears the variable and runs all ten.
 
 ## C
 

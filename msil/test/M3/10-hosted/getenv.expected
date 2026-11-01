@@ -1,0 +1,13 @@
+PATH is inherited and not empty=1
+unset at the start=0
+set=1
+found after set=1
+a hosted value
+length=14
+set again=1
+found after set again=1
+another value
+length=13
+unset=1
+found after unset=0
+[exit 0]

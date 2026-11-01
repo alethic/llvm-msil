@@ -1,0 +1,13 @@
+fputs, in two pieces
+xy
+fputs results are nonnegative=1
+fputc('x')=120
+putc('y')=121
+fputc of a newline=10
+fputs to stderr is nonnegative=1
+fputc('!', stderr)=33
+fputs of an empty string is nonnegative=1
+fflush(stdout)=0
+fflush(stderr)=0
+ferror(stdout)=0
+[exit 0]

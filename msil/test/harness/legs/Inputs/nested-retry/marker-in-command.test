@@ -1,0 +1,3 @@
+# The last command's own command line holds a timeout marker, but nothing
+# after its '# executed command:' line does: not timeout-only.
+# RUN: %python -c "import sys; sys.exit(1)" "did not finish within 60 s"

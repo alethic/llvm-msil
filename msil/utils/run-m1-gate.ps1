@@ -1,18 +1,23 @@
 # run-m1-gate.ps1 - run every leg of the phase gate (the milestone-1 gate of plan M10, extended in
-# M11 and, as the Phase 2 exit gate, in M23) on the development host, through the scripts that
-# the CI workflow runs, in the CI order, and print one row per step or leg.
+# M11, as the Phase 2 exit gate in M23 and, with -Exit, as Phase 3's post-commit run and exit gate
+# in M24) on the development host, through the scripts that the CI workflow runs, in the CI order,
+# and print one row per step or leg.
 #
 # Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
 # SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #
-#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1                  # everything
+#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1                  # everything but the Exit legs
 #   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -CorpusCache C:/llvm-msil-scratch/corpus-cache
 #   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Leg roundtrip
+#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -SkipConfigure -SkipBuild -Exit -CorpusCache C:/llvm-msil-scratch/corpus-cache
+#                                                     # Phase 3's post-commit run (plan 5.17.11)
+#   pwsh -NoProfile -File msil/utils/run-m1-gate.ps1 -CorpusCache C:/llvm-msil-scratch/corpus-cache -Exit
+#                                                     # the Phase 3 exit gate's run (M35)
 #
 # Steps (the Windows job of .github/workflows/msil-ci.yml runs the same scripts in the same order,
-# except host-setup, which only the development host needs, and the corpus and determinism rows,
-# which the CI runs as its own steps and job):
+# except host-setup, which only the development host needs, the corpus and determinism rows,
+# which the CI runs as its own steps and job, and matrix-legs, which only -Exit runs):
 #   1. msil/utils/ci/configure.ps1   msil-configure.ps1 -Experimental MSIL (the only step that
 #                                    differs from CI, which configures with -C MSIL.cmake)
 #   2. msil/utils/ci/build.ps1       msil-build.ps1 -Standard: the targets of
@@ -25,76 +30,103 @@
 #        linux-sysroot (msil/utils/make-linux-sysroot.py copies the E7 Linux oracle's
 #        libraries out of WSL into $env:MSIL_LINUX_SYSROOT, else
 #        C:\llvm-msil-scratch\linux-sysroot) and glibc-sysroot (M15:
-#        msil/utils/make-glibc-sysroot.sh inside WSL builds the hosted leg's glibc sysroot into
-#        $env:MSIL_GLIBC_SYSROOT, else C:\llvm-msil-scratch\glibc-sysroot; it downloads only
-#        missing packages). Seconds once done; no root, no system setting.
+#        msil/utils/make-glibc-sysroot.sh inside WSL builds the glibc sysroot of the hosted leg
+#        and of hosted mode's E7h oracle into $env:MSIL_GLIBC_SYSROOT, else
+#        C:\llvm-msil-scratch\glibc-sysroot; it downloads only missing packages). Seconds once
+#        done; no root, no system setting.
 #   5. corpus (M23, plan 5.12.9; a phase-exit row): python msil/utils/corpus/fetch.py --cache
-#        <-CorpusCache> --check (offline, all ten entries of msil/utils/corpus/manifest.json,
-#        never --skip; it writes the stamp that lit's corpus legs read), row corpus/check; with
+#        <-CorpusCache> --check (offline, every entry of msil/utils/corpus/manifest.json, never
+#        --skip; it writes the stamp that lit's corpus legs read), row corpus/check; with
 #        -FetchCorpus first fetch.py --cache <-CorpusCache> (the download the user approved on
-#        2026-10-21: only entries the cache lacks, about 7 MB, every hash verified), row
-#        corpus/fetch. -CorpusCache defaults to $env:MSIL_CORPUS_CACHE, else
-#        C:\llvm-msil-scratch\corpus-cache, and is exported to the legs as MSIL_CORPUS_CACHE;
-#        MSIL_CORPUS_SKIP is removed from the legs' environment, so the phase gate runs all ten
-#        entries (the CI leaves CoreMark and c-testsuite out, plan section 10 item 11). A failed
-#        corpus row does not stop the legs (the corpus legs then fail with lit's configuration
-#        error).                                                                  (~2 s)
-#   6. msil/utils/ci/lit-legs.ps1 -Wsl: every leg of 'lit-legs.ps1 -List' except the -Quick and
-#        -Full ones (-Full adds those; -NoWsl leaves out the -Wsl ones): net8 (all MSIL lit
-#        tests under obj on .NET 8, .NET Framework 4.8 and the native oracle, msil_equiv=1 with
-#        the equivalence link, msil_also_run=10,8+tc0, msil_scale_tests=1, msil_require_csc=1),
-#        more-levels, asm-oracle, modern-ilasm, roundtrip, expected, utc, obj-text, lto, det,
-#        refs-net48, refs-net8, refs-net10, programs and programs-lto (the exit corpus through
-#        objects and LTO), ctest (c-testsuite), wsl-net10, wsl-ilasm, expected-linux,
-#        obj-text-wsl, lto-wsl, programs-wsl, programs-lto-wsl, det-wsl and hosted (see
-#        lit-legs.ps1's header, which gives each leg's minutes). M23's two phase-gate runs
-#        (2026-10-27, on a host shared with other work) took 144 and 217 min of Windows legs
-#        (net8 60 and 87, asm-oracle 19 and 22.5, lto 11 and 22.5, ctest 9 and 18, more-levels
-#        15.5) and 79 and 117 min of WSL legs (wsl-net10 56 and 103), against plan M23's
-#        estimate of 53 and 22; lto-wsl's msil/test/M2/00-link (about +2-3 min) and
-#        programs-lto-wsl's msil_equiv=1 (about +1-3) came after them.
+#        2026-10-21: only entries the cache lacks, every hash verified), row corpus/fetch.
+#        -CorpusCache defaults to $env:MSIL_CORPUS_CACHE, else C:\llvm-msil-scratch\corpus-cache,
+#        and is exported to the legs as MSIL_CORPUS_CACHE; MSIL_CORPUS_SKIP is removed from the
+#        legs' environment, so the phase gate runs every entry and a local opt-out never reaches
+#        it (since M24 the CI runs every entry too: R23, plan 5.17.17, empties msil-ci.yml's
+#        MSIL_CORPUS_SKIP). A failed corpus row does not stop the legs (the corpus legs then fail
+#        with lit's configuration error).                                         (~2 s)
+#   6. msil/utils/ci/lit-legs.ps1 -Wsl: every leg of 'lit-legs.ps1 -List' except the -Quick, -Full
+#        and -Exit ones (-Full and -Exit add those; -NoWsl leaves out the -Wsl ones and the -Exit
+#        legs whose name ends in '-wsl'): net8 (all MSIL lit tests under obj on .NET 8, .NET
+#        Framework 4.8 and the native oracle, msil_equiv=1 with the equivalence link,
+#        msil_also_run=10,8+tc0, msil_scale_tests=1, msil_require_csc=1), more-levels, asm-oracle,
+#        modern-ilasm, roundtrip, expected, utc, obj-text, lto, det, refs-net48, refs-net8,
+#        refs-net10, programs and programs-lto (the exit corpus through objects and LTO), ctest
+#        (c-testsuite), wsl-net10, wsl-ilasm, expected-linux, obj-text-wsl, lto-wsl, programs-wsl,
+#        programs-lto-wsl, ctest-wsl (M24), det-wsl and hosted (see lit-legs.ps1's header, which
+#        gives each leg's minutes). Since M24 msil/test/M3 runs inside net8, wsl-net10, lto and
+#        lto-wsl, and every lit leg passes msil_require_hosted=1 (plan 5.17.6). -Exit (M24, plan
+#        5.17.11) adds the Exit legs: none in M24; plan 5.17.6 gives the later ones (ctest-lto,
+#        gc-churn, gc-churn-wsl, stress, stress-wsl). The milestone gates' -Quick legs (net-core,
+#        p3-full, harness, wsl-p3, scale; plan 5.17.7) run only when -Leg names them. A lit run
+#        that failed only by tool timeouts re-runs those tests once each (the retry of plan
+#        5.17.9, in lit-legs.ps1; see the summary below). M23's two phase-gate runs (2026-10-27,
+#        on a host shared with other work) took 144 and 217 min of Windows legs (net8 60 and 87,
+#        asm-oracle 19 and 22.5, lto 11 and 22.5, ctest 9 and 18, more-levels 15.5) and 79 and
+#        117 min of WSL legs (wsl-net10 56 and 103), against plan M23's estimate of 53 and 22;
+#        lto-wsl's msil/test/M2/00-link (about +2-3 min) and programs-lto-wsl's msil_equiv=1
+#        (about +1-3) came after them, and M24's msil/test/M3, ctest-wsl and the wider lto-wsl
+#        after those.
 #   7. determinism (M23, plan 5.7.12 and section 12 'Cross-host determinism'; a phase-exit row):
 #        msil/utils/ci/det-manifest.py build twice, from the work directories
 #        C:\llvm-msil-scratch\gates\det\a and ...\b, of every C file of msil/test/M1 with
 #        clang -c for both x86_64 MSIL triples at -O0 and -O2 and an llvm-ar archive per triple
 #        and level, then det-manifest.py compare (the CI's determinism job compares the two CI
 #        hosts' manifests instead; 1 and 0.5 min in M23's gate runs).                  (~1 min)
-#   8. msil/utils/ci/upstream-hooks.ps1 (M11; not with -SkipUpstreamHooks)        (~4 min)
+#   8. matrix-legs (-Exit only; M24, plan 5.17.11 and 5.17.12 item 1): 'lit-legs.ps1 -Describe'
+#        writes <build>/lit-results/legs.json, then
+#        msil/test/M2/08-semantics/Inputs/check-matrix.py --legs <that file> <repo> checks that a
+#        default, -Wsl or Exit leg runs every line of matrix.txt on its pipelines and triples and,
+#        by the gate rule, that a -Quick leg (p3-full, wsl-p3's first run) runs every Phase 3
+#        matrix test and every '#! p3-tests:' path with 10+tc0, the native oracle required and,
+#        for windows-msvc, msil_run_netfx=1. Row matrix-legs/-: check-matrix's two summary lines,
+#        or its problem count and first problems. It needs no build, so it also runs after a
+#        failed configure or build.                                                 (~10 s)
+#   9. msil/utils/ci/upstream-hooks.ps1 (M11; not with -SkipUpstreamHooks)        (~4 min)
 #        manifest (msil/utils/upstream-hooks.txt lists every upstream file the fork changes, and
 #        every object-format switch has an MSIL case), pins (action pins as upstream's), lit
 #        (the upstream lit tests of the hooked files), gtest (all of TargetParserTests and
 #        MCTests), compile (ARMAsmParser.cpp and lldb's GDBRemoteCommunicationClient.cpp in the
 #        private hooks build tree on C:). CI runs it with -NoCompile -NoManifest -MinPass 250.
-#   9. ci-sh (not with -NoWsl)       a smoke check of the Linux job's scripts inside WSL: bash -n
+#  10. ci-sh (not with -NoWsl)       a smoke check of the Linux job's scripts inside WSL: bash -n
 #                                    on every msil/utils/ci/*.sh, 'lit-legs.sh --list' must print
-#                                    the legs its header documents, and lit-legs.sh and
-#                                    unit-tests.sh must fail (exit non-zero, FAIL rows) against an
-#                                    empty build directory. The Linux job's configure, build,
-#                                    unit-test and lit steps themselves are not run here (they
-#                                    need a Linux build tree); only the CI runs them.
-# A failed configure or build stops steps 3 to 8 (nothing in them could pass); ci-sh needs no
-# build and still runs. A failed host-setup or corpus row does not stop the legs: the legs that
-# need what it makes then fail with a configuration error that names it. The unit tests and every
-# leg run even after a failure. The summary table has one row per step or leg; the exit status is
-# 0 only if every row is PASS (a SKIP row, which lit-legs.ps1 writes for a leg that
+#                                    the legs its header documents ('--full:' and '--exit:'
+#                                    descriptions tag a leg), and lit-legs.sh and unit-tests.sh
+#                                    must fail (exit non-zero, FAIL rows) against an empty build
+#                                    directory. The Linux job's configure, build, unit-test and
+#                                    lit steps themselves are not run here (they need a Linux
+#                                    build tree); only the CI runs them.
+# A failed configure or build stops steps 3 to 7 and 9 (nothing in them could pass); matrix-legs
+# and ci-sh need no build and still run. A failed host-setup or corpus row does not stop the legs:
+# the legs that need what it makes then fail with a configuration error that names it. The unit
+# tests and every leg run even after a failure. The summary table has one row per step or leg; the
+# exit status is 0 only if every row is PASS (a SKIP row, which lit-legs.ps1 writes for a leg that
 # MSIL_CORPUS_SKIP leaves out, is not, and cannot occur here: the variable is cleared). A child
 # script that ends with a non-zero exit status without a FAIL row (an exception before its first
 # leg, for example an unknown or removed -Leg, or a killed process) gets a FAIL row, and so does
 # every expected leg without a row of its own (the legs of 'lit-legs.ps1 -List' that -NoWsl,
-# -Full and -Leg select; -Quick legs only when -Leg names them), so a run that died part-way
-# never passes. The corpus and determinism rows run with -Leg too.
+# -Full, -Exit and -Leg select; -Quick legs only when -Leg names them), so a run that died
+# part-way never passes. The corpus and determinism rows run with -Leg too, and so does
+# matrix-legs with -Exit. After the table and its summary line ('==== phase gate: <n> row(s), <k>
+# not PASS, <min> min ====', which plan 5.17.11 puts into the next commit body), the rows whose
+# detail tells of the timeout retry (plan 5.17.9: 'retried after timeout: <names> (<logs>)', '<n>
+# tests timed out; re-run the leg on a quieter host', 're-run after timeout failed: ...' or
+# 're-run after timeout passed: ...') are listed again, each with its whole detail, under
+# '==== timeout retry: <n> row(s), <k> passed after the re-run ====', or the line
+# '==== timeout retry: none ====' when no row tells of it.
 #
 # Build agent or gate agent only: steps 1 and 2 take the exclusive build-dir lock (cmake, ninja).
 # The whole run took 228, 339, 184 and 275 minutes on this host in M23's four gate rounds (gate
 # step 16: 129-217 of Windows legs, 50-138 of WSL legs, about 5 for the other steps), more than
 # section 10's Q32 budget of 70-90 minutes, which the user accepted (plan section 12, row 'Q32
-# amended'), so start it with run_in_background and wait for it (a background job dies with the
-# agent's turn).
+# amended'; plan 5.17.11 estimates 3-6 hours for Phase 3's post-commit run), so start it with
+# run_in_background and wait for it (a background job dies with the agent's turn).
 # -SkipConfigure/-SkipBuild reuse the current build; -Leg runs only the named lit legs (see
-# lit-legs.ps1 -List); -SkipUpstreamHooks leaves out step 8; -NoWsl leaves out host-setup, the
-# -Wsl legs and ci-sh. The upstream-hooks step always runs all of its legs, and the gate checks
-# that each of them (manifest, pins, lit, gtest, compile) has a row. The format and scope checks
-# of the gate (plan M23 gate steps 19 and 20) are not legs and are not run here.
+# lit-legs.ps1 -List); -Exit adds the Exit legs and matrix-legs; -SkipUpstreamHooks leaves out
+# step 9; -NoWsl leaves out host-setup, the -Wsl legs, the -Exit legs named '*-wsl' and ci-sh. The
+# upstream-hooks step always runs all of its legs, and the gate checks that each of them
+# (manifest, pins, lit, gtest, compile) has a row. The format and scope checks of the gate (plan
+# M23 gate steps 19 and 20) are not legs and are not run here.
 [CmdletBinding()]
 param(
   [switch]$SkipConfigure,
@@ -103,6 +135,7 @@ param(
   [switch]$SkipUpstreamHooks,
   [switch]$NoWsl,
   [switch]$Full,
+  [switch]$Exit,                  # the Exit legs and the matrix-legs row (plan 5.17.11)
   [string[]]$Leg = @(),
   [string]$BuildDir = '',         # default: $env:MSIL_BUILD_DIR, else <repo>\build
   [string]$CorpusCache = '',      # default: $env:MSIL_CORPUS_CACHE, else C:\llvm-msil-scratch\corpus-cache
@@ -123,7 +156,8 @@ $linuxSysroot = if ($env:MSIL_LINUX_SYSROOT) { $env:MSIL_LINUX_SYSROOT } else { 
 $glibcSysroot = if ($env:MSIL_GLIBC_SYSROOT) { $env:MSIL_GLIBC_SYSROOT } else { 'C:\llvm-msil-scratch\glibc-sysroot' }
 
 # The exit corpus' cache (plan 5.12.9): the legs read it through MSIL_CORPUS_CACHE, and the phase
-# gate runs all ten entries, so MSIL_CORPUS_SKIP (the CI's licence default) is cleared.
+# gate runs every entry, so MSIL_CORPUS_SKIP (a local opt-out; the CI's value is empty since M24,
+# R23) is cleared.
 if (-not $CorpusCache) {
   $CorpusCache = if ($env:MSIL_CORPUS_CACHE) { $env:MSIL_CORPUS_CACHE } else { 'C:\llvm-msil-scratch\corpus-cache' }
 }
@@ -197,8 +231,9 @@ function Test-ChildRows([string]$Step, [string]$Script, [int]$ExitCode, [string[
 }
 
 # The legs that lit-legs.ps1 runs with the arguments the gate passes: the -Leg names, else the
-# legs of 'lit-legs.ps1 -List' without the -Wsl tag under -NoWsl, without -Full unless -Full, and
-# never the -Quick ones. $null if the list cannot be read.
+# legs of 'lit-legs.ps1 -List' without the -Wsl tag under -NoWsl, without -Full unless -Full,
+# without -Exit unless -Exit (and, like lit-legs.ps1, without the -Exit legs named '*-wsl' under
+# -NoWsl), and never the -Quick ones. $null if the list cannot be read.
 function Get-ExpectedLegs {
   $env:MSIL_CI_RESULTS = ''         # -List records no row; make sure of it
   try {
@@ -220,6 +255,7 @@ function Get-ExpectedLegs {
               else {
                 @($all | Where-Object {
                     -not (($_.Tag -eq '-Wsl' -and $NoWsl) -or ($_.Tag -eq '-Full' -and -not $Full) -or
+                          ($_.Tag -eq '-Exit' -and (-not $Exit -or ($NoWsl -and $_.Name -like '*-wsl'))) -or
                           $_.Tag -eq '-Quick')
                   } | ForEach-Object { $_.Name })
               }
@@ -342,7 +378,55 @@ function Invoke-DeterminismStep {
     "$detail (det-manifest.py exited $($codes -join ', ')); $detRoot" $sw.Elapsed.TotalSeconds
 }
 
-# Step 9: the Linux job's scripts inside WSL (see the header). Returns the failures.
+# Step 8 (-Exit): check-matrix.py --legs on the output of 'lit-legs.ps1 -Describe' (see the
+# header), row matrix-legs/-.
+function Invoke-MatrixLegsStep {
+  Write-Host ''
+  Write-Host "==== $(Get-Date -Format s) matrix-legs: check-matrix.py --legs on lit-legs.ps1 -Describe ===="
+  $sw = [Diagnostics.Stopwatch]::StartNew()
+  $results = Join-Path $BuildDir 'lit-results'
+  $legsFile = Join-Path $results 'legs.json'
+  $errFile = Join-Path $results 'legs.stderr.txt'
+  New-Item -ItemType Directory -Force -Path $results | Out-Null
+  Remove-Item -LiteralPath $legsFile, $errFile -ErrorAction SilentlyContinue
+  # -Describe prints only the JSON on stdout and records no row; make sure of the latter.
+  $env:MSIL_CI_RESULTS = ''
+  try {
+    $json = @(& pwsh -NoProfile -File (Join-Path $ci 'lit-legs.ps1') -BuildDir $BuildDir -Describe 2> $errFile)
+    $rc = $LASTEXITCODE
+  } finally { $env:MSIL_CI_RESULTS = $resultsFile }
+  $err = @(Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue | Where-Object { "$_".Trim() })
+  Remove-Item -LiteralPath $errFile -ErrorAction SilentlyContinue
+  if ($rc -ne 0 -or $json.Count -eq 0) {
+    $why = if ($err.Count -gt 0) { ": $(($err | Select-Object -First 3) -join ' ')" } else { '' }
+    Add-GateRow 'matrix-legs' '-' 'FAIL' "lit-legs.ps1 -Describe exited $rc$why" $sw.Elapsed.TotalSeconds
+    return
+  }
+  [System.IO.File]::WriteAllLines($legsFile, [string[]]@($json | ForEach-Object { "$_" }),
+                                  [System.Text.UTF8Encoding]::new($false))
+  $checker = Join-Path $MsilRepo 'msil/test/M2/08-semantics/Inputs/check-matrix.py'
+  $res = Invoke-SetupCommand $MsilPython @($checker, '--legs', $legsFile, $MsilRepo)
+  $legsLine = @($res.Lines | Where-Object { $_ -match '^check-matrix: legs: ' } | Select-Object -Last 1)
+  $okLine = @($res.Lines | Where-Object { $_ -match '^check-matrix: \d+ lines, \d+ tests: OK$' } | Select-Object -Last 1)
+  $gate = $legsLine.Count -gt 0 -and $legsLine[0] -match '; the gate rule applied$'
+  if ($res.Rc -eq 0 -and $okLine.Count -gt 0 -and $gate) {
+    $detail = "$($legsLine[0] -replace '^check-matrix: ', ''); $($okLine[0] -replace '^check-matrix: ', '') ($legsFile)"
+    Add-GateRow 'matrix-legs' '-' 'PASS' $detail $sw.Elapsed.TotalSeconds
+    return
+  }
+  $count = @($res.Lines | Where-Object { $_ -match '^check-matrix: \d+ problems?$' } | Select-Object -Last 1)
+  $first = @($res.Lines | Where-Object { $_ -match '^check-matrix: error: ' } | Select-Object -First 3 |
+             ForEach-Object { $_ -replace '^check-matrix: error: ', '' })
+  $parts = @()
+  if ($count.Count -gt 0) { $parts += $count[0] -replace '^check-matrix: ', '' }
+  if ($first.Count -gt 0) { $parts += $first }
+  if ($res.Rc -eq 0 -and -not $gate) { $parts += 'the gate rule did not apply' }
+  if ($parts.Count -eq 0) { $parts += 'no summary' }
+  Add-GateRow 'matrix-legs' '-' 'FAIL' "$($parts -join '; '); check-matrix.py exited $($res.Rc) ($legsFile)" `
+    $sw.Elapsed.TotalSeconds
+}
+
+# Step 10: the Linux job's scripts inside WSL (see the header). Returns the failures.
 function Invoke-CiShSmoke {
   $problems = [System.Collections.Generic.List[string]]::new()
   $wsl = Get-Command wsl.exe -CommandType Application -ErrorAction SilentlyContinue |
@@ -360,7 +444,8 @@ function Invoke-CiShSmoke {
     if ($LASTEXITCODE -ne 0) { $problems.Add("bash -n $($s.Name) exited $LASTEXITCODE") }
   }
 
-  # (b) 'lit-legs.sh --list' prints the legs of its header, in order, '--full:' legs tagged.
+  # (b) 'lit-legs.sh --list' prints the legs of its header, in order, '--full:' and '--exit:' legs
+  # tagged.
   $header = @()
   $inLegs = $false
   foreach ($l in Get-Content -LiteralPath (Join-Path $ci 'lit-legs.sh')) {
@@ -369,7 +454,9 @@ function Invoke-CiShSmoke {
     # first other line after a leg.
     $m = [regex]::Match($l, '^#   ([A-Za-z0-9][A-Za-z0-9-]*)\s{2,}(\S.*)$')
     if ($m.Success) {
-      $tag = if ($m.Groups[2].Value -like '--full:*') { ' (--full)' } else { '' }
+      $tag = if ($m.Groups[2].Value -like '--full:*') { ' (--full)' }
+             elseif ($m.Groups[2].Value -like '--exit:*') { ' (--exit)' }
+             else { '' }
       $header += $m.Groups[1].Value + $tag
     } elseif ($header.Count -gt 0 -and $l -notmatch '^#\s{4,}\S') { break }
   }
@@ -430,6 +517,7 @@ if (-not $stop) {
   $legArgs = @()
   if (-not $NoWsl) { $legArgs += '-Wsl' }
   if ($Full) { $legArgs += '-Full' }
+  if ($Exit) { $legArgs += '-Exit' }
   if ($Leg.Count -gt 0) { $legArgs += @('-Leg', ($Leg -join ',')) }
   $rc = Invoke-CiScript 'lit-legs.ps1' $legArgs
   $legs = Get-ExpectedLegs
@@ -440,10 +528,14 @@ if (-not $stop) {
     Test-ChildRows 'lit-legs' 'lit-legs.ps1' $rc $legs.Expected $legs.Known
   }
   try { Invoke-DeterminismStep } catch { Add-GateRow 'determinism' '-' 'FAIL' "$_" }
-  if (-not $SkipUpstreamHooks) {
-    $rc = Invoke-CiScript 'upstream-hooks.ps1' @()
-    Test-ChildRows 'upstream-hooks' 'upstream-hooks.ps1' $rc @('manifest', 'pins', 'lit', 'gtest', 'compile')
-  }
+}
+# Step 8 needs no build: it runs after a failed configure or build too.
+if ($Exit) {
+  try { Invoke-MatrixLegsStep } catch { Add-GateRow 'matrix-legs' '-' 'FAIL' "$_" }
+}
+if (-not $stop -and -not $SkipUpstreamHooks) {
+  $rc = Invoke-CiScript 'upstream-hooks.ps1' @()
+  Test-ChildRows 'upstream-hooks' 'upstream-hooks.ps1' $rc @('manifest', 'pins', 'lit', 'gtest', 'compile')
 }
 if (-not $NoWsl) {
   Write-Host ''
@@ -463,5 +555,17 @@ $elapsed = (Get-Date) - $started
 Write-Host ''
 Write-Host "==== phase gate: $($rows.Count) row(s), $($failed.Count) not PASS, $([int]$elapsed.TotalMinutes) min ===="
 $rows | Format-Table -AutoSize -Wrap Step, Leg, Result, Time, Detail | Out-String -Width 220 | Write-Host
+# The timeout retry of the lit legs (plan 5.17.9; see the header): every row whose detail tells of
+# it, again, with its whole detail (the names, the re-run logs and the lit exit statuses).
+$retryPattern = 'retried after timeout: |\d+ tests timed out; re-run the leg on a quieter host|' +
+                're-run after timeout (failed|passed): '
+$retried = @($rows | Where-Object { $_.Detail -match $retryPattern })
+if ($retried.Count -eq 0) {
+  Write-Host '==== timeout retry: none ===='
+} else {
+  $passedRetry = @($retried | Where-Object { $_.Result -eq 'PASS' })
+  Write-Host "==== timeout retry: $($retried.Count) row(s), $($passedRetry.Count) passed after the re-run ===="
+  foreach ($r in $retried) { Write-Host "$($r.Step)/$($r.Leg) $($r.Result): $($r.Detail)" }
+}
 if ($rows.Count -eq 0) { Write-Host 'run-m1-gate: nothing ran'; exit 1 }
 exit $(if ($failed.Count -eq 0) { 0 } else { 1 })

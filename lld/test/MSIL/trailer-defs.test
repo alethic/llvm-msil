@@ -1,0 +1,292 @@
+## Trailer definitions in msil-ld (ImplementationPlan.md 5.14.4 T1 and
+## T4-T6, 5.14.2's resolution order; M24.d (4) and (5); D36 as amended by
+## decision brief 3.2). msil-ld adds one lazy synthetic input, '<trailer>',
+## after the command-line inputs. It is searched like an archive, after every
+## real archive and before native libraries, also for the references that
+## code generation creates after LTO (helpers-switches E5), and it offers a
+## name only when its scope holds for the output. M24's one definition, the
+## scope Any row of TrailerDefs.def, is
+##   assembly static void '__msil_compiler_barrier'() cil managed noinlining { ret }
+## a MethodDef of '<Module>' with flags 0x0013 (assembly static), ImplFlags
+## 0x0008 (NoInlining), '.maxstack 0' and a body of 'ret'. Every single-thread
+## fence and every empty asm barrier compiles to a call of it as of an
+## undefined function (a MemberRef on '<msil>Symbols' in the object).
+## - A fence object binds both calls of main to that method: two fences on
+##   windows-msvc; an empty asm statement with a memory clobber and a signal
+##   fence on x86_64 Linux.
+## - An object definition and an archive member win over '<trailer>', the
+##   member also when a native library comes first on the command line; a
+##   native export of the name loses to it (an import library and an ELF
+##   shared object; N3 names never bind natively).
+## - The map file names '<trailer>' as an input, as the symbol's input and as
+##   the method's input; --trace-symbol and --why-extract name it as the
+##   definition.
+## - -shared defines it in '<Module>' and does not export it: the export
+##   class lists only the library's own function, and a program linked
+##   against the library has its own copy.
+## - LTO with an image resolves the references that code generation creates
+##   after LTO; --lto-emit-asm text defines the method (T6) and calls it.
+## - A link without a barrier has no such method and no '<trailer>' input.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj fence.ll -o fence.o
+# RUN: llc -filetype=obj asm.ll -o asm.o
+# RUN: llc -filetype=obj def.ll -o def.o
+# RUN: llvm-ar rcs libdef.a def.o
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: llc -filetype=obj plain.ll -o plain.o
+# RUN: llvm-as lto.ll -o lto.bc
+# RUN: llvm-as plain.ll -o plain.bc
+# RUN: llvm-lib /machine:x64 /def:native.def /out:native.lib
+# RUN: yaml2obj native.yaml -o native.o
+# RUN: ld.lld -shared -soname libnative.so.1 native.o -o libnative.so.1
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{barrier} = FileCheck %s --check-prefix=BARRIER "--implicit-check-not=.method '__msil_compiler_barrier'" \
+# DEFINE:   "--implicit-check-not=<msil>Symbols" --implicit-check-not=pinvokeimpl --implicit-check-not=moduleref
+
+## The barrier method and main's two calls of it; one method, no MemberRef
+## left, no P/Invoke.
+# BARRIER:      {{^}}.class '<Module>' flags=0x00000000{{$}}
+# BARRIER:      {{^}}  .method '__msil_compiler_barrier' void() flags=0x0013 impl=0x0008{{$}}
+# BARRIER-NEXT: {{^}}    .maxstack 0{{$}}
+# BARRIER-NEXT: {{^}}    L0: ret{{$}}
+# BARRIER-NEXT: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# BARRIER:      {{^}}    L0: call void() '<Module>'::'__msil_compiler_barrier'{{$}}
+# BARRIER:      {{^}}    L{{[0-9]+}}: call void() '<Module>'::'__msil_compiler_barrier'{{$}}
+
+## windows-msvc: fences, with the map file, --trace-symbol and --why-extract.
+# RUN: msil-ld fence.o -o fence.exe -Map=fence.map --trace-symbol=__msil_compiler_barrier \
+# RUN:   --why-extract=fence.why > fence.txt 2>&1
+# RUN: llvm-cil-dump fence.exe | %{barrier}
+# RUN: FileCheck %s --check-prefix=TRACE %{crash} --implicit-check-not=warning: --implicit-check-not=error: \
+# RUN:   --input-file=fence.txt
+# TRACE:      {{^}}fence.o: reference to __msil_compiler_barrier{{$}}
+# TRACE-NEXT: {{^}}<trailer>: definition of __msil_compiler_barrier{{$}}
+# TRACE-NOT:  {{.}}
+# RUN: FileCheck %s --check-prefix=WHY --match-full-lines --strict-whitespace --input-file=fence.why
+#      WHY:reference	extracted	symbol
+# WHY-NEXT:fence.o	<trailer>	__msil_compiler_barrier
+#  WHY-NOT:{{.}}
+# RUN: FileCheck %s --check-prefixes=MAP,MAP-TRAILER -DOUT=fence.exe -DOBJ=fence.o \
+# RUN:   -DTRIPLE=x86_64-pc-windows-msvc-msil --input-file=fence.map
+# MAP:              {{^}}msil-ld map of [[OUT]] ([[TRIPLE]]){{$}}
+# MAP-NEXT:         {{^}}Inputs:{{$}}
+# MAP-NEXT:         {{^}}  [[OBJ]]{{$}}
+# MAP-NEXT:         {{^}}  <trailer>{{$}}
+# MAP-NEXT:         {{^}}Symbols:{{$}}
+# MAP-TRAILER:      {{^}}  DefinedFunction {{[A-Za-z]+}} <trailer> __msil_compiler_barrier{{$}}
+# MAP-TRAILER:      {{^}}Methods:{{$}}
+# MAP-TRAILER:      {{^}}  0x{{[0-9A-F]+}} <Module> <trailer> __msil_compiler_barrier{{$}}
+# MAP-TRAILER:      {{^}}Imports:{{$}}
+# MAP-TRAILER-NEXT: {{^}}  Token Module!Entry Symbol{{$}}
+# MAP-TRAILER-NOT:  {{.}}
+
+## x86_64 Linux: an empty asm barrier and a signal fence.
+# RUN: msil-ld asm.o -o asm.exe -Map=asm.map 2>&1 | count 0
+# RUN: llvm-cil-dump asm.exe | %{barrier}
+# RUN: FileCheck %s --check-prefixes=MAP,MAP-TRAILER -DOUT=asm.exe -DOBJ=asm.o \
+# RUN:   -DTRIPLE=x86_64-unknown-linux-gnu-msil --input-file=asm.map
+
+## An object definition wins; so does an archive member, whatever the order
+## of the archive and a native library that exports the name.
+# RUN: msil-ld fence.o def.o -o od.exe -Map=od.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEFINED -DIN=def.o --implicit-check-not="<trailer>" --input-file=od.map
+# RUN: llvm-cil-dump od.exe | FileCheck %s --check-prefix=DEFINED-IL \
+# RUN:   "--implicit-check-not=.method '__msil_compiler_barrier'"
+# RUN: msil-ld fence.o libdef.a -o ad.exe -Map=ad.map --why-extract=ad.why 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEFINED "-DIN=libdef.a(def.o)" --implicit-check-not="<trailer>" --input-file=ad.map
+# RUN: llvm-cil-dump ad.exe | FileCheck %s --check-prefix=DEFINED-IL \
+# RUN:   "--implicit-check-not=.method '__msil_compiler_barrier'"
+# RUN: FileCheck %s --check-prefix=WHY-ARCHIVE --match-full-lines --strict-whitespace --input-file=ad.why
+# RUN: msil-ld fence.o native.lib libdef.a -o ad2.exe -Map=ad2.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEFINED "-DIN=libdef.a(def.o)" --implicit-check-not="<trailer>" \
+# RUN:   --implicit-check-not=native.dll --input-file=ad2.map
+# DEFINED:         {{^}}  DefinedFunction {{[A-Za-z]+}} [[IN]] __msil_compiler_barrier{{$}}
+# DEFINED:         {{^}}  0x{{[0-9A-F]+}} <Module> [[IN]] __msil_compiler_barrier{{$}}
+# DEFINED-IL:      {{^}}  .method '__msil_compiler_barrier' void() flags=0x0016 impl=0x0000{{$}}
+# DEFINED-IL:      {{^}}    L{{[0-9]+}}: ldsfld native int '<Module>'::'count'{{$}}
+# DEFINED-IL:      {{^}}    L0: call void() '<Module>'::'__msil_compiler_barrier'{{$}}
+#      WHY-ARCHIVE:reference	extracted	symbol
+# WHY-ARCHIVE-NEXT:fence.o	libdef.a(def.o)	__msil_compiler_barrier
+#  WHY-ARCHIVE-NOT:{{.}}
+
+## A native export loses to '<trailer>': an import library on windows-msvc,
+## an ELF shared object on x86_64 Linux.
+# RUN: msil-ld fence.o native.lib -o nat.exe -Map=nat.map 2>&1 | count 0
+# RUN: llvm-cil-dump nat.exe | %{barrier}
+# RUN: FileCheck %s --check-prefix=MAP-TRAILER --input-file=nat.map
+# RUN: msil-ld asm.o libnative.so.1 -o nat2.exe -Map=nat2.map 2>&1 | count 0
+# RUN: llvm-cil-dump nat2.exe | %{barrier}
+# RUN: FileCheck %s --check-prefix=MAP-TRAILER --input-file=nat2.map
+
+## -shared: the definition is in '<Module>', the export class has only spin,
+## and a program linked against the library defines its own copy.
+# RUN: msil-ld -shared lib.o -o bl.dll -Map=bl.map 2>&1 | count 0
+# RUN: llvm-cil-dump bl.dll > bl.txt
+# RUN: %python %S/Inputs/shared/listing.py members bl.txt bl \
+# RUN:   | FileCheck %s --check-prefix=SHARED-EXPORTS --implicit-check-not=__msil_compiler_barrier
+# SHARED-EXPORTS: {{^}}.class 'bl' flags=
+# SHARED-EXPORTS: {{^}}  .method 'spin' int32() flags=0x0016 impl=0x0000{{$}}
+# RUN: %python %S/Inputs/shared/listing.py members bl.txt '<Module>' | FileCheck %s --check-prefix=SHARED-MODULE
+# SHARED-MODULE:      {{^}}.class '<Module>' flags=0x00000000{{$}}
+# SHARED-MODULE-NEXT: {{^}}  .method '__msil_compiler_barrier' void() flags=0x0013 impl=0x0008{{$}}
+# SHARED-MODULE-NOT:  {{.}}
+# RUN: %python %S/Inputs/shared/listing.py method bl.txt bl spin | FileCheck %s --check-prefix=SHARED-CALL
+# SHARED-CALL: {{^}}    L0: call void() '<Module>'::'__msil_compiler_barrier'{{$}}
+# RUN: FileCheck %s --check-prefix=MAP-TRAILER --input-file=bl.map
+# RUN: msil-ld prog.o bl.dll -o prog.exe -Map=prog.map 2>&1 | count 0
+# RUN: llvm-cil-dump prog.exe | FileCheck %s --check-prefix=PROG \
+# RUN:   "--implicit-check-not=.method '__msil_compiler_barrier'" "--implicit-check-not=[bl]bl::'__msil_compiler_barrier'"
+# PROG:      {{^}}assemblyref 'bl' ver
+# PROG:      {{^}}  .method '__msil_compiler_barrier' void() flags=0x0013 impl=0x0008{{$}}
+# PROG:      {{^}}    L0: call void() '<Module>'::'__msil_compiler_barrier'{{$}}
+# PROG-NEXT: {{^}}    L1: call int32() [bl]bl::'spin'{{$}}
+# RUN: FileCheck %s --check-prefix=MAP-TRAILER --input-file=prog.map
+
+## LTO with an image: code generation creates the references after LTO.
+# RUN: msil-ld lto.bc -o lto.exe -Map=lto.map 2>&1 | count 0
+# RUN: llvm-cil-dump lto.exe | %{barrier}
+# RUN: FileCheck %s --check-prefixes=MAP,MAP-TRAILER -DOUT=lto.exe -DOBJ=lto.bc \
+# RUN:   -DTRIPLE=x86_64-pc-windows-msvc-msil --input-file=lto.map
+# RUN: FileCheck %s --check-prefix=LTO-MAIN --input-file=lto.map
+# LTO-MAIN: {{^}}  0x{{[0-9A-F]+}} <Module> lto.exe.lto.o main{{$}}
+
+## --lto-emit-asm: the text defines the method and calls it.
+# RUN: msil-ld --lto-emit-asm lto.bc -o lto.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=TEXT --implicit-check-not=pinvokeimpl \
+# RUN:   "--implicit-check-not=.method assembly static void '__msil_compiler_barrier'" --input-file=lto.il
+# TEXT:      {{^}}  call void '__msil_compiler_barrier'(){{$}}
+# TEXT:      {{^}}  call void '__msil_compiler_barrier'(){{$}}
+# TEXT:      {{^}}.method assembly static void '__msil_compiler_barrier'() cil managed noinlining{{$}}
+# TEXT-NEXT: {{^}}{{[{]}}{{$}}
+# TEXT-NEXT: {{^}}  .maxstack 0{{$}}
+# TEXT-NEXT: {{^}}  ret{{$}}
+# TEXT-NEXT: {{^}}} // end of method '__msil_compiler_barrier'{{$}}
+
+## No barrier, no method and no '<trailer>' input.
+# RUN: msil-ld plain.o -o plain.exe -Map=plain.map 2>&1 | count 0
+# RUN: llvm-cil-dump plain.exe | FileCheck %s --check-prefix=PLAIN --implicit-check-not=__msil_compiler_barrier
+# PLAIN: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# RUN: FileCheck %s --check-prefix=PLAIN-MAP --implicit-check-not="<trailer>" \
+# RUN:   --implicit-check-not=__msil_compiler_barrier --input-file=plain.map
+# PLAIN-MAP:      {{^}}Inputs:{{$}}
+# PLAIN-MAP-NEXT: {{^}}  plain.o{{$}}
+# PLAIN-MAP-NEXT: {{^}}Symbols:{{$}}
+# RUN: msil-ld --lto-emit-asm plain.bc -o plain.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=PLAIN-TEXT --implicit-check-not=__msil_compiler_barrier --input-file=plain.il
+# PLAIN-TEXT: {{^}}.method public static int32 'main'() cil managed{{$}}
+
+#--- fence.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@flag = global i32 0
+
+define i32 @main() {
+  fence syncscope("singlethread") seq_cst
+  %v = load i32, ptr @flag
+  fence syncscope("singlethread") acquire
+  ret i32 %v
+}
+
+#--- asm.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; __asm__ volatile("" ::: "memory") and atomic_signal_fence(memory_order_acquire).
+@flag = global i32 0
+
+define i32 @main() {
+  call void asm sideeffect "", "~{memory}"()
+  %v = load i32, ptr @flag
+  fence syncscope("singlethread") acquire
+  ret i32 %v
+}
+
+#--- def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; A C definition of the name, which wins over the trailer's.
+@count = global i32 0
+
+define void @__msil_compiler_barrier() {
+  %c = load i32, ptr @count
+  %n = add i32 %c, 1
+  store i32 %n, ptr @count
+  ret void
+}
+
+#--- lib.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@flag = global i32 0
+
+define i32 @spin() {
+  fence syncscope("singlethread") seq_cst
+  %v = load i32, ptr @flag
+  ret i32 %v
+}
+
+#--- prog.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @spin()
+
+define i32 @main() {
+  fence syncscope("singlethread") seq_cst
+  %v = call i32 @spin()
+  ret i32 %v
+}
+
+#--- lto.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@flag = global i32 0
+
+define i32 @main() {
+  fence syncscope("singlethread") seq_cst
+  %v = load volatile i32, ptr @flag
+  fence syncscope("singlethread") release
+  ret i32 %v
+}
+
+#--- plain.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@flag = global i32 0
+
+define i32 @main() {
+  %v = load volatile i32, ptr @flag
+  ret i32 %v
+}
+
+#--- native.def
+LIBRARY native.dll
+EXPORTS
+  __msil_compiler_barrier
+  puts
+
+#--- native.yaml
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: __msil_compiler_barrier, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x0, Size: 8 }
+  - { Name: puts,                    Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x8, Size: 8 }

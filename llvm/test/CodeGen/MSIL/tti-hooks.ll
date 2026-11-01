@@ -20,12 +20,15 @@
 ;   and it is reached through TTI getGEPCost at -O2, LoopStrengthReduce and
 ;   CodeGenPrepare, which therefore sinks no address computation into the
 ;   blocks that use them;
-; - areTypesABICompatible rejects half and bfloat, and the vectors, arrays and
-;   structs that contain them: ArgumentPromotion keeps the pointer parameter
-;   of an internal function that only loads such a value through it, because
-;   a half or bfloat passed by value needs a compiler-rt helper until phase 3
-;   (D14), and LTO internalizes functions that take one by pointer (b2i and
-;   b2u of msil/test/M1/02-fp/i128-fp-conv.c).
+; - areTypesABICompatible accepts half and bfloat, and the aggregates that
+;   contain them, since M24 (backlog T25): a half or bfloat passed by value
+;   is its 16-bit pattern in an int32 and needs no compiler-rt helper (D14 as
+;   M24 amends it), so ArgumentPromotion turns the pointer parameter of an
+;   internal function that only loads such a value through it into the
+;   value, as it does for an i32 and as the native x86 backend does (b2i and
+;   b2u of msil/test/M1/02-fp/i128-fp-conv.c, which LTO internalizes). Until
+;   M24 it rejected them, because a bfloat passed by value needed
+;   __extendbfsf2, and the pointer stayed.
 ; The vectorizer and unroller checks need the forcing options: at plain -O2,
 ; BasicTTIImpl enables partial and runtime unrolling only for a scheduling
 ; model with a loop buffer, which MSIL lacks, and its default 32-bit vector
@@ -133,24 +136,27 @@
 ; CGP:       else:
 ; CGP-NEXT:    %w = load i32, ptr %q
 
-; ArgumentPromotion. The internal functions that load only a bfloat, a half or
-; a struct holding an array of bfloat through their pointer parameter keep the
-; pointer; the one that loads an i32 gets the i32, which shows that the pass
-; ran.
+; ArgumentPromotion. Since M24 the internal functions that load only a
+; bfloat, a half or a struct holding an array of bfloat through their pointer
+; parameter get that value, loaded in the caller, exactly as the one that
+; loads an i32 gets the i32 (the X86-AP run below).
 ; RUN: opt -mtriple=x86_64-pc-windows-msvc-msil -passes=argpromotion -S < %s 2>%t.apwin.err \
 ; RUN:   | FileCheck %s --check-prefix=AP
 ; RUN: count 0 < %t.apwin.err
 ; RUN: opt -mtriple=x86_64-unknown-linux-gnu-msil -passes=argpromotion -S < %s 2>%t.ap.err \
 ; RUN:   | FileCheck %s --check-prefix=AP
 ; RUN: count 0 < %t.ap.err
-; AP-LABEL: define internal i32 @msil_ap_bf16(ptr %p)
-; AP-LABEL: define internal i32 @msil_ap_half(ptr %p)
-; AP-LABEL: define internal i32 @msil_ap_agg(ptr %p)
+; AP-LABEL: define internal i32 @msil_ap_bf16(bfloat %p.0.val)
+; AP-LABEL: define internal i32 @msil_ap_half(half %p.0.val)
+; AP-LABEL: define internal i32 @msil_ap_agg({ i32, [2 x bfloat] } %p.0.val)
 ; AP-LABEL: define internal i32 @msil_ap_i32(i32 %p.0.val)
 ; AP-LABEL: define i32 @msil_ap_caller(
-; AP:         %rb = call i32 @msil_ap_bf16(ptr %b)
-; AP-NEXT:    %rh = call i32 @msil_ap_half(ptr %h)
-; AP-NEXT:    %ra = call i32 @msil_ap_agg(ptr %a)
+; AP:         %b.val = load bfloat, ptr %b, align 2
+; AP-NEXT:    %rb = call i32 @msil_ap_bf16(bfloat %b.val)
+; AP-NEXT:    %h.val = load half, ptr %h, align 2
+; AP-NEXT:    %rh = call i32 @msil_ap_half(half %h.val)
+; AP-NEXT:    %a.val = load { i32, [2 x bfloat] }, ptr %a, align 4
+; AP-NEXT:    %ra = call i32 @msil_ap_agg({ i32, [2 x bfloat] } %a.val)
 ; AP-NEXT:    %i.val = load i32, ptr %i, align 4
 ; AP-NEXT:    %ri = call i32 @msil_ap_i32(i32 %i.val)
 
@@ -226,7 +232,7 @@
 ; X86-LAA:           Run-time memory checks:
 ; X86-LAA-NEXT:      Check 0:
 ; It passes half and bfloat by value, so ArgumentPromotion promotes every
-; pointer parameter.
+; pointer parameter, as it does for MSIL since M24.
 ; RUN: %if x86-registered-target %{ opt -mtriple=x86_64-unknown-linux-gnu -passes=argpromotion -S < %s \
 ; RUN:   | FileCheck %s --check-prefix=X86-AP %}
 ; X86-AP-LABEL: define internal i32 @msil_ap_bf16(bfloat %p.0.val)

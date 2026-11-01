@@ -19,7 +19,11 @@
 ; and a library call whose name starts with '__' is an error until phase 3
 ; (decision D14), so each function gets exactly that one diagnostic, never a
 ; 'Cannot select' of an unselectable truncating store or a crash; llc exits
-; with 1 and the IL on stdout still assembles.
+; with 1 and the IL on stdout still assembles. A half or bfloat parameter, by
+; contrast, is already its 16-bit pattern in an int32 (bfloat since M24,
+; fp-helpers F2 (a); until then a bfloat parameter was a float32, which was
+; stored through a frame slot), so storing one is the int32's truncating
+; store, stind.i2, with no conversion (stores.ll).
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=conv.i8 \
 ; DEFINE:   --implicit-check-not=conv.u8 --implicit-check-not=stind.i8 --implicit-check-not=localloc
@@ -227,6 +231,36 @@ define void @trunc_i128_to_i64(ptr %p, i128 %v) {
 define void @trunc_i128_to_i32(ptr %p, i128 %v) {
   %t = trunc i128 %v to i32
   store i32 %t, ptr %p
+  ret void
+}
+
+; ---- half and bfloat parameters: the int32's low 16 bits ----
+
+; CHECK-LABEL: .method {{.*}}'store_half_arg'(
+; CHECK-SAME:  native int, int32) cil managed{{$}}
+; CHECK-NEXT:  {{^\{$}}
+; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
+; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
+; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
+; CHECK-NEXT:  {{^}}  stind.i2{{$}}
+; CHECK-NEXT:  {{^}}  ret{{$}}
+; CHECK-NEXT:  {{^}}} // end of method 'store_half_arg'{{$}}
+define void @store_half_arg(ptr %p, half %v) {
+  store half %v, ptr %p
+  ret void
+}
+
+; CHECK-LABEL: .method {{.*}}'store_bfloat_arg'(
+; CHECK-SAME:  native int, int32) cil managed{{$}}
+; CHECK-NEXT:  {{^\{$}}
+; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
+; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
+; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
+; CHECK-NEXT:  {{^}}  stind.i2{{$}}
+; CHECK-NEXT:  {{^}}  ret{{$}}
+; CHECK-NEXT:  {{^}}} // end of method 'store_bfloat_arg'{{$}}
+define void @store_bfloat_arg(ptr %p, bfloat %v) {
+  store bfloat %v, ptr %p
   ret void
 }
 

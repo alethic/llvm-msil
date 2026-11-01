@@ -1,0 +1,59 @@
+# calibrate.py --label start|end (plan 5.17.8, M24) runs the calibration
+# composite of calibration.json (msil/test/M1/03-control/loops.c with M23.d's
+# parameters, fixed for all of Phase 3) through msil-lit.ps1 -LitArgs "-sv -j1
+# @<rsp>" in a job object, reads the test's time from lit's xunit file and
+# writes <build>/lit-results/calibration-<label>.json (or --out FILE, creating
+# its missing parents) with seconds, quiet_seconds, factor = seconds /
+# quiet_seconds, the measured test_cpu_seconds and load_percent. It prints
+# 'calibration <label>: <s> s against <q> s quiet, factor <f>', warns when the
+# measured CPU differs from test_cpu_seconds by more than 30%, and exits 1
+# when the test does not pass. Against the stand-in build of
+# Inputs/ci-legs.py, whose lit plays a scenario:
+# (1) With msil/utils/ci/calibration.json and loops.c passing in 1.5 s: the
+# measured run passes exactly calibration.json's nine parameters
+# (msil_pipeline=obj msil_dotnet_runtime=8 msil_native_oracle=required
+# msil_run_netfx=1 msil_equiv=1 msil_also_run=10,8+tc0 and the three
+# msil_require_* of 5.12.11) and its xunit file, on loops.c alone; --out
+# under two missing directories gets the result.
+# (2) With a calibration file (--calibration) of quiet_seconds 2.0 and
+# test_cpu_seconds 50, and loops.c passing in 2.5 s and then in 3.5 s:
+# --label start writes factor 1.25 and --label end, into the default file,
+# factor 1.75; both warn about the CPU, since the stand-in's test takes none;
+# --combine of the two files prints 1.50.
+# (3) The failure path: loops.c failing, or missing from the run, exits 1 and
+# writes no file. calibrate.test checks --self-test and --combine.
+# REQUIRES: msil-ci-pwsh
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %python %S/Inputs/ci-legs.py setup %t/build
+
+# (1)
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/03-control/loops.c=pass@1.5'
+# RUN: %python %S/../../../utils/ci/calibrate.py --label start --build %t/build --out %t/out/a/b/start.json > %t/1.log 2>&1
+# RUN: %{harness_check} contains %t/1.log "^calibration start: 1\.5 s against [0-9.]+ s quiet, factor [0-9.]+$"
+# RUN: %{harness_check} contains %t/out/a/b/start.json '"label": "start"' '"test": "msil/test/M1/03-control/loops\.c"' '"seconds": 1\.5,' '"quiet_seconds": [0-9.]+,' '"factor": [0-9.]+,' '"test_cpu_seconds": -?[0-9.]+,' '"load_percent": '
+# RUN: %{harness_check} contains %t/build/lit-calls.log '^arg: -sv\narg: -j1\narg: @\S+/lit-results/calibration-start\.params\.rsp\n(rsp: --param=\S+\n){9}rsp: --xunit-xml-output=\S+/lit-results/calibration-start\.xml\narg: \S+[/\\]M1[/\\]03-control[/\\]loops\.c$'
+# RUN: %{harness_check} contains %t/build/lit-results/calibration-start.params.rsp "^--param=msil_pipeline=obj$" "^--param=msil_dotnet_runtime=8$" "^--param=msil_native_oracle=required$" "^--param=msil_run_netfx=1$" "^--param=msil_equiv=1$" "^--param=msil_also_run=10,8\+tc0$" "^--param=msil_require_verify=1$" "^--param=msil_require_exec=1$" "^--param=msil_require_link=1$"
+# RUN: %{harness_check} missing %t/build/lit-results/calibration-start.json
+
+# (2)
+# RUN: %{harness_check} write %t/calibration.json '{"version": 1, "test": "msil/test/M1/03-control/loops.c", "params": ["msil_pipeline=obj", "msil_dotnet_runtime=8", "msil_native_oracle=required", "msil_run_netfx=1", "msil_equiv=1", "msil_also_run=10,8+tc0", "msil_require_verify=1", "msil_require_exec=1", "msil_require_link=1"], "quiet_seconds": 2.0, "test_cpu_seconds": 50.0, "source": "calibrate-label.test"}'
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/03-control/loops.c=pass@2.5,pass@3.5'
+# RUN: %python %S/../../../utils/ci/calibrate.py --label start --build %t/build --calibration %t/calibration.json --out %t/start.json > %t/2a.log 2>&1
+# RUN: %{harness_check} contains %t/2a.log "^calibration start: 2\.5 s against 2\.0 s quiet, factor 1\.25$" "^calibrate\.py: warning: the measured test CPU, "
+# RUN: %{harness_check} contains %t/start.json '"seconds": 2\.5,' '"quiet_seconds": 2\.0,' '"factor": 1\.25,'
+# RUN: %python %S/../../../utils/ci/calibrate.py --label end --build %t/build --calibration %t/calibration.json > %t/2b.log 2>&1
+# RUN: %{harness_check} contains %t/2b.log "^calibration end: 3\.5 s against 2\.0 s quiet, factor 1\.75$" "^calibrate\.py: warning: the measured test CPU, "
+# RUN: %{harness_check} contains %t/build/lit-results/calibration-end.json '"label": "end"' '"seconds": 3\.5,' '"factor": 1\.75,'
+# RUN: %python %S/../../../utils/ci/calibrate.py --combine %t/start.json %t/build/lit-results/calibration-end.json > %t/2c.log
+# RUN: %{harness_check} contains %t/2c.log "\Agate load factor 1\.50\n\Z"
+
+# (3)
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/03-control/loops.c=other'
+# RUN: %{harness_check} exits 1 %python %S/../../../utils/ci/calibrate.py --label end --build %t/build --calibration %t/calibration.json --out %t/fail.json > %t/3a.log 2>&1
+# RUN: %{harness_check} contains %t/3a.log "^calibrate\.py: the calibration test did not pass: .*loops\.c"
+# RUN: %{harness_check} missing %t/fail.json
+# RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M1/03-control/other.c=pass'
+# RUN: %{harness_check} exits 1 %python %S/../../../utils/ci/calibrate.py --label end --build %t/build --calibration %t/calibration.json --out %t/fail.json > %t/3b.log 2>&1
+# RUN: %{harness_check} contains %t/3b.log "^calibrate\.py: the calibration test did not pass: .*loops\.c"
+# RUN: %{harness_check} missing %t/fail.json

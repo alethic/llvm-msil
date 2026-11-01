@@ -1,0 +1,15 @@
+fileno(stdin)=0
+fileno(stdout)=1
+fileno(stderr)=2
+the three streams differ=1
+stdout read again is the same stream=1
+getchar() on the empty stdin is EOF=1
+feof(stdin)=1
+ferror(stdin)=0
+feof(stdin) after clearerr=0
+fgetc(stdin) is EOF again=1
+feof(stdin) again=1
+written through a copy of stdout
+fputs through the copy of stdout=1
+fflush(NULL)=0
+[exit 0]

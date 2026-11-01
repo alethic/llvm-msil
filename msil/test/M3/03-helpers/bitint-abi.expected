@@ -1,0 +1,77 @@
+_BitInt(7)
+u_from(lo)=0x6f
+u_from(hi)=0x10
+u_from(~0)=0x7f
+u_add(max, 2)=0x1
+u_add(u_from(lo), u_from(hi))=0x7f
+u_widen(u_add(max, max))=0x7e
+u_widen(lo truncated by the caller)=0x6f
+u_widen(hi truncated by the caller)=0x10
+s_from(100)=-28
+s_from(-100)=28
+s_from(mixed)=17
+s_sub(s_from(100), s_from(-100))=-56
+s_widen(s_from(-100))=28
+s_widen(mixed truncated by the caller)=17
+s_widen(sign truncated by the caller)=1
+_BitInt(17)
+u_from(lo)=0x1cdef
+u_from(hi)=0x3210
+u_from(~0)=0x1ffff
+u_add(max, 2)=0x1
+u_add(u_from(lo), u_from(hi))=0x1ffff
+u_widen(u_add(max, max))=0x1fffe
+u_widen(lo truncated by the caller)=0x1cdef
+u_widen(hi truncated by the caller)=0x3210
+s_from(100)=100
+s_from(-100)=-100
+s_from(mixed)=12817
+s_sub(s_from(100), s_from(-100))=200
+s_widen(s_from(-100))=-100
+s_widen(mixed truncated by the caller)=12817
+s_widen(sign truncated by the caller)=1
+_BitInt(33)
+u_from(lo)=0x189abcdef
+u_from(hi)=0x76543210
+u_from(~0)=0x1ffffffff
+u_add(max, 2)=0x1
+u_add(u_from(lo), u_from(hi))=0x1ffffffff
+u_widen(u_add(max, max))=0x1fffffffe
+u_widen(lo truncated by the caller)=0x189abcdef
+u_widen(hi truncated by the caller)=0x76543210
+s_from(100)=100
+s_from(-100)=-100
+s_from(mixed)=1985229329
+s_sub(s_from(100), s_from(-100))=200
+s_widen(s_from(-100))=-100
+s_widen(mixed truncated by the caller)=1985229329
+s_widen(sign truncated by the caller)=1
+_BitInt(65)
+u_from(hi, lo)=0x0:0x123456789abcdef
+u_from(~0, ~0)=0x1:0xffffffffffffffff
+u_add(max, 2)=0x0:0x1
+u_add(a, a)=0x0:0x2468acf13579bde
+u_split(u_add(max, max))=0x1:0xfffffffffffffffe
+u_split(hi:lo truncated by the caller)=0x0:0x123456789abcdef
+s_split(s_from(0, 100))=0x0:0x64
+s_split(s_from(~0, -100))=0xffffffffffffffff:0xffffffffffffff9c
+s_split(s_sub(100, -100))=0x0:0xc8
+s_split(s_sub(-100, 100))=0xffffffffffffffff:0xffffffffffffff38
+s_split(s_from(sign, lo))=0xffffffffffffffff:0x123456789abcdef
+s_split(sign:lo truncated by the caller)=0xffffffffffffffff:0x123456789abcdef
+_BitInt(127)
+u_from(hi, lo)=0x7edcba9876543210:0x123456789abcdef
+u_from(~0, ~0)=0x7fffffffffffffff:0xffffffffffffffff
+u_add(max, 2)=0x0:0x1
+u_add(a, a)=0x7db97530eca86420:0x2468acf13579bde
+u_split(u_add(max, max))=0x7fffffffffffffff:0xfffffffffffffffe
+u_split(hi:lo truncated by the caller)=0x7edcba9876543210:0x123456789abcdef
+s_split(s_from(0, 100))=0x0:0x64
+s_split(s_from(~0, -100))=0xffffffffffffffff:0xffffffffffffff9c
+s_split(s_sub(100, -100))=0x0:0xc8
+s_split(s_sub(-100, 100))=0xffffffffffffffff:0xffffffffffffff38
+s_split(s_from(sign, lo))=0xc000000000000001:0x123456789abcdef
+s_split(sign:lo truncated by the caller)=0xc000000000000001:0x123456789abcdef
+is_odd(u17_from(lo))=1
+is_odd(u17_from(hi))=0
+[exit 0]

@@ -41,7 +41,8 @@ MSILTargetStreamer::~MSILTargetStreamer() = default;
 }
 
 void MSILTargetStreamer::emitHelperBegin(StringRef, cli::MethodAttributes,
-                                         const cli::MethodSig &) {
+                                         const cli::MethodSig &,
+                                         cli::MethodImplAttributes) {
   reportTrailerOnly("a synthesized helper method");
 }
 
@@ -325,9 +326,9 @@ void MSILTargetAsmStreamer::emitObjectHeader(bool BOM, StringRef SourceFile,
   emitLine("");
 }
 
-void MSILTargetAsmStreamer::emitHelperBegin(StringRef Name,
-                                            cli::MethodAttributes Flags,
-                                            const cli::MethodSig &Sig) {
+void MSILTargetAsmStreamer::emitHelperBegin(
+    StringRef Name, cli::MethodAttributes Flags, const cli::MethodSig &Sig,
+    cli::MethodImplAttributes ImplFlags) {
   using cli::MethodAttributes;
   auto Has = [Flags](MethodAttributes A) {
     return (Flags & A) != MethodAttributes::PrivateScope;
@@ -359,8 +360,15 @@ void MSILTargetAsmStreamer::emitHelperBegin(StringRef Name,
     OS << " static";
   OS << ' ';
   printSynthesizedMethod(OS, Name, Sig);
+  OS << " cil managed";
+  // The implementation flags of the trailer definitions (plan 5.14.4 T4).
+  if (ImplFlags == cli::MethodImplAttributes::NoInlining)
+    OS << " noinlining";
+  else if (ImplFlags != cli::MethodImplAttributes{})
+    reportFatalInternalError("MSIL: a synthesized method's implementation "
+                             "flags are not IL managed or noinlining");
   // As in emitMethodBegin: both lines in one raw text.
-  OS << " cil managed\n{";
+  OS << "\n{";
   emitLine(OS.str());
 }
 

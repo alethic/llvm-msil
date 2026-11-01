@@ -154,10 +154,20 @@ public:
   std::optional<uint32_t> findDataField(const Symbol *sym) const;
   // The '<msil>fn_' field of the method that the FUNCTION symbol \p sym
   // resolves to (one per method: an alias shares its target's; a native
-  // function's names its canonical P/Invoke stub; an undefined weak
-  // function's is never stored), made on first use. std::nullopt for a
-  // library export, whose address its accessor gives.
+  // function's names its canonical P/Invoke stub; a trailer definition's
+  // names its method; an undefined weak function's is never stored), made
+  // on first use. std::nullopt for a library export, whose address its
+  // accessor gives.
   std::optional<uint32_t> getFnAddrField(Symbol *sym);
+
+  // The method of the output that the writer declared for the trailer
+  // definition \p sym (plan 5.14.4 T5: a definition of '<trailer>', whose
+  // DefinedFunction has no method, or a name that /alternatename resolved to
+  // one), before the calls and addresses bind.
+  void setTrailerMethod(const Symbol *sym, uint32_t method) {
+    trailerMethods[sym] = method;
+  }
+  std::optional<uint32_t> getTrailerMethod(const Symbol *sym) const;
   // The P/Invoke stub of \p name with output signature \p sig (plan
   // 5.10.11), made on first use.
   uint32_t getPInvokeStub(StringRef name, StringRef module, StringRef entry,
@@ -194,7 +204,9 @@ public:
   void printImports() const;
 
 private:
-  // The key of a '<msil>fn_' field: the definition's method, or the symbol.
+  // The key of a '<msil>fn_' field: the definition's method, a trailer
+  // definition's row (getTrailerDefinition), or the symbol (a native
+  // function, an undefined weak function).
   const void *getFnAddrKey(const Symbol *sym) const;
   // The data-import helper (plan 5.10.12): getNativeLibraryHelper(), else
   // the kernel32 or dlopen/dlsym P/Invokes of findDataImportFunctions(),
@@ -214,6 +226,7 @@ private:
   llvm::DenseMap<const Symbol *, NativeSignature> stubSignatures;
   llvm::DenseMap<const Symbol *, uint32_t> dataFields;
   llvm::DenseMap<const void *, uint32_t> fnAddrFields;
+  llvm::DenseMap<const Symbol *, uint32_t> trailerMethods;
   llvm::StringMap<uint32_t> pinvokeStubs;
   // The functions of the data-import helper, for --print-imports.
   struct HelperFunction {

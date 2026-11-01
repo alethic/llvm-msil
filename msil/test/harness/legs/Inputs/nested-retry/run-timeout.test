@@ -1,0 +1,3 @@
+# Fails at its last command with msil-run.py's timeout message: timeout-only.
+# RUN: echo "a command that passes"
+# RUN: %python -c "import sys; sys.stderr.write('msil-run: dotnet did not finish within 60 s\n'); sys.exit(1)"

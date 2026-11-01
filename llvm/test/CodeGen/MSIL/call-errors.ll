@@ -26,9 +26,10 @@
 ;   ("unknown intrinsic '<name>' is not supported for MSIL") and an
 ;   ExternalSymbol callee that is a runtime helper, whose name starts with
 ;   '__' ("runtime helper '<name>' is not available for MSIL yet (phase 3)",
-;   D14 and M8.a; fp-expand.ll has the half and bfloat conversions and
-;   i128-divrem.ll the constrained i128 conversions that still ask for one;
-;   libcall-policy.ll has the library calls that are imports).
+;   D14 and M8.a; fp-expand.ll has the half and bfloat conversions that
+;   still ask for one; since M24 the constrained i128 conversions ask for
+;   none, i128-divrem.ll and strict-i128.ll; libcall-policy.ll has the
+;   library calls that are imports).
 ; - Since M12 (Q36; section 12, 'D14/D33 note and P3-B text'), i128 division
 ;   and remainder by a variable or by any constant, and the plain conversions
 ;   between i128 and float32 or float64, ask for no runtime helper at all:
@@ -38,6 +39,16 @@
 ;   pinned their __divti3, __udivti3, __modti3, __umodti3, __floattidf and
 ;   __floatuntisf errors until M12, now compile with no diagnostic and no call
 ;   (i128-divrem.ll has all of them).
+; - Since M24 (M24.c (7); fp-helpers 5.4), a library call with an i128
+;   argument on x86_64-pc-windows-msvc-msil and x86_64-w64-windows-gnu-msil
+;   passes that argument as compiler-rt's Win64 helpers take it, as X86's
+;   LowerWin64_i128OP family does: by the address of a 16-byte, 16-aligned
+;   temporary of the static frame that holds it, so __floattidf is called as
+;   'float64(native int)'; the other triples keep the two halves. No IR
+;   reaches such a call by default since M12, so the W64I128 part asks for
+;   LIBCALLFP's library calls with -expand-fp-convert-bits=128 and checks
+;   object-form text and objects, where a '__' helper is a symbol; in
+;   whole-program text the calls stay D14's runtime-helper errors.
 ; - A rejected call whose result needs more than one value (i128,
 ;   { i64, i64 }) is demoted to a frame slot around LowerCall (frames exist
 ;   since M7) and reported once. Since M9, MSILFixFunctionBitcasts erases
@@ -79,6 +90,13 @@
 ;   pass, is reported once at the end of the module with M8.c's "imported
 ;   function '<name>' has a parameter or result that a P/Invoke cannot pass
 ;   natively (...)" and gets no P/Invoke declaration.
+; - A half or bfloat parameter or result of an import (HALFIMP): since M24 a
+;   bfloat is an int32 that holds its 16-bit pattern, as a half is (D14 as
+;   M24 amends it, fp-helpers F2 (a)), so the call is built with int32
+;   operands and result, and each import is reported once at the end of the
+;   module with that same M8.c text, which M24 leaves as it is (it names half
+;   only, and the bfloat imports get the same text; pinvoke-errors.ll SIG has
+;   such declarations), and gets no P/Invoke declaration.
 ;
 ; Later owners (section 12): M8.d updated the EXTERN, AVAIL, EXTMULTI, LIBCALL,
 ; LIBCALLFP and DIAGCALLEE parts for the M8 texts; M9.c retired the M4 parts
@@ -87,7 +105,8 @@
 ; mismatch check as a backstop with struct-typed mismatches (STRUCTMM) and
 ; added the byval call of an import (BYVALIMP); M12.c made LIBCALL and
 ; LIBCALLFP error-free (inline i128 division and conversions) and lowered the
-; aliases of ALIAS.
+; aliases of ALIAS; M24.f added the calls of half and bfloat imports
+; (HALFIMP) and the library calls with an i128 argument (W64I128).
 
 ; DEFINE: %{diag} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
 ; DEFINE:   --implicit-check-not=error: --implicit-check-not=warning:
@@ -149,6 +168,52 @@
 ; RUN:   -o %t/libcall-fp.lnx.o0.il 2>&1 | count 0
 ; RUN: FileCheck %s --check-prefix=LIBCALLFP-IL --input-file=%t/libcall-fp.lnx.o0.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/libcall-fp.dll %t/libcall-fp.win.il %}
+
+; The same conversions as library calls (-expand-fp-convert-bits=128): the
+; i128 argument by the address of a 16-aligned frame temporary on the x86-64
+; Windows triples, as two halves on the others. Object-form text on four
+; triples at -O2 and -O0, and objects; whole-program text rejects the '__'
+; helpers (D14), builds no call and still assembles.
+; DEFINE: %{i128of} = llc -expand-fp-convert-bits=128 -msil-object-form -asm-verbose=false -verify-machineinstrs
+; DEFINE: %{i128obj} = llc -expand-fp-convert-bits=128 -filetype=obj -verify-machineinstrs
+; RUN: %{i128of} -mtriple=x86_64-pc-windows-msvc-msil < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.win.il 2>&1 \
+; RUN:   | count 0
+; RUN: FileCheck %s --check-prefixes=W64I128,W64I128-O2 --input-file=%t/libcall-fp-w64.win.il
+; RUN: %{i128of} -mtriple=x86_64-pc-windows-msvc-msil -O0 < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.win.o0.il 2>&1 \
+; RUN:   | count 0
+; RUN: FileCheck %s --check-prefixes=W64I128,W64I128-O0 --input-file=%t/libcall-fp-w64.win.o0.il
+; RUN: %{i128of} -mtriple=x86_64-w64-windows-gnu-msil < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.mingw.il 2>&1 \
+; RUN:   | count 0
+; RUN: FileCheck %s --check-prefixes=W64I128,W64I128-O2 --input-file=%t/libcall-fp-w64.mingw.il
+; RUN: %{i128of} -mtriple=x86_64-w64-windows-gnu-msil -O0 < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.mingw.o0.il 2>&1 \
+; RUN:   | count 0
+; RUN: FileCheck %s --check-prefixes=W64I128,W64I128-O0 --input-file=%t/libcall-fp-w64.mingw.o0.il
+; RUN: %{i128of} -mtriple=x86_64-unknown-linux-gnu-msil < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.lnx.il 2>&1 \
+; RUN:   | count 0
+; RUN: FileCheck %s --check-prefix=I128HALVES --input-file=%t/libcall-fp-w64.lnx.il
+; RUN: %{i128of} -mtriple=x86_64-unknown-linux-gnu-msil -O0 < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.lnx.o0.il 2>&1 \
+; RUN:   | count 0
+; RUN: FileCheck %s --check-prefix=I128HALVES --input-file=%t/libcall-fp-w64.lnx.o0.il
+; RUN: %{i128of} -mtriple=aarch64-pc-windows-msvc-msil < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.a64w.il 2>&1 \
+; RUN:   | count 0
+; RUN: FileCheck %s --check-prefix=I128HALVES --input-file=%t/libcall-fp-w64.a64w.il
+; RUN: %{i128of} -mtriple=aarch64-pc-windows-msvc-msil -O0 < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.a64w.o0.il 2>&1 \
+; RUN:   | count 0
+; RUN: FileCheck %s --check-prefix=I128HALVES --input-file=%t/libcall-fp-w64.a64w.o0.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/libcall-fp-w64.win.dll %t/libcall-fp-w64.win.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/libcall-fp-w64.lnx.dll %t/libcall-fp-w64.lnx.il %}
+; RUN: %{i128obj} -mtriple=x86_64-pc-windows-msvc-msil < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.win.o 2>&1 | count 0
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --tables %t/libcall-fp-w64.win.o | FileCheck %s --check-prefix=W64I128-OBJ %}
+; RUN: %{i128obj} -mtriple=x86_64-unknown-linux-gnu-msil < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.lnx.o 2>&1 | count 0
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --tables %t/libcall-fp-w64.lnx.o \
+; RUN:   | FileCheck %s --check-prefix=I128HALVES-OBJ %}
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -expand-fp-convert-bits=128 -verify-machineinstrs \
+; RUN:   < %t/libcall-fp-w64.ll -o /dev/null 2>&1 | %{diag} --check-prefix=W64I128-ERR
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -expand-fp-convert-bits=128 -asm-verbose=false \
+; RUN:   -verify-machineinstrs < %t/libcall-fp-w64.ll > %t/libcall-fp-w64.win.wp.il 2> %t/libcall-fp-w64.win.wp.err
+; RUN: %{diag} --check-prefix=W64I128-ERR --input-file=%t/libcall-fp-w64.win.wp.err
+; RUN: FileCheck %s --check-prefix=W64I128-WP --input-file=%t/libcall-fp-w64.win.wp.il
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/libcall-fp-w64.wp.dll %t/libcall-fp-w64.win.wp.il %}
 
 ; Call-site types that differ from the callee's in a struct type, which
 ; MSILFixFunctionBitcasts does not wrap (one of them with a two-value result).
@@ -345,6 +410,25 @@
 ; RUN:   > %t/byval-import.win.il
 ; RUN: FileCheck %s --check-prefix=BYVALIMP-IL --implicit-check-not=pinvokeimpl --input-file=%t/byval-import.win.il
 
+; Half and bfloat parameters and results of imported declarations (the calls
+; are built, and the imports get no P/Invoke, so the IL does not assemble).
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/half-import.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=HALFIMP
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/half-import.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=HALFIMP
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/half-import.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=HALFIMP
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/half-import.ll -o /dev/null 2>&1 \
+; RUN:   | %{diag} --check-prefix=HALFIMP
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/half-import.ll \
+; RUN:   > %t/half-import.lnx.il
+; RUN: FileCheck %s --check-prefix=HALFIMP-IL --implicit-check-not=pinvokeimpl --implicit-check-not=__extendbfsf2 \
+; RUN:   --implicit-check-not=__truncsfbf2 --input-file=%t/half-import.lnx.il
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/half-import.ll \
+; RUN:   > %t/half-import.win.il
+; RUN: FileCheck %s --check-prefix=HALFIMP-IL --implicit-check-not=pinvokeimpl --implicit-check-not=__extendbfsf2 \
+; RUN:   --implicit-check-not=__truncsfbf2 --input-file=%t/half-import.win.il
+
 ;--- variadic.ll
 ; A variadic callee, called with and without variadic arguments, then a
 ; function that compiles normally.
@@ -537,6 +621,138 @@ define float @uitofp128(i128 %x) {
 define i64 @after_libcall_fp(i64 %a, i64 %b) {
   %r = add i64 %a, %b
   ret i64 %r
+}
+
+;--- libcall-fp-w64.ll
+; libcall-fp.ll's conversions under -expand-fp-convert-bits=128, which keeps
+; ExpandIRInsts from expanding them: the legalizer calls __floattidf and
+; __floatuntisf with the i128 argument (M24.c (7); fp-helpers 5.4).
+; - x86_64-pc-windows-msvc-msil and x86_64-w64-windows-gnu-msil (W64I128):
+;   LowerCall passes the argument as compiler-rt's Win64 helpers take it, as
+;   X86's LowerWin64_i128OP family does. The static frame holds a 16-byte,
+;   16-aligned temporary: the frame's localloc of 24 bytes (16, plus the 8
+;   that decision D13 adds for an alignment of 16) is aligned up to 16, the
+;   high half (ldarg.1) is stored at +8 ('or' of 8 into the aligned pointer)
+;   and the low half (ldarg.0) at +0, and the call passes the temporary's
+;   address: float64(native int) and float32(native int). At -O2 the aligned
+;   pointer stays in local 0 (dup, stloc.0), at -O0 it has a local of its own
+;   (W64I128-O2, W64I128-O0).
+; - x86_64-unknown-linux-gnu-msil and aarch64-pc-windows-msvc-msil
+;   (I128HALVES): the two halves, (native int, native int), and no frame.
+;   AArch64 Windows passes __int128 in a register pair, and X86's family
+;   exists only for x86-64.
+; - The objects of x86_64-pc-windows-msvc-msil and
+;   x86_64-unknown-linux-gnu-msil (W64I128-OBJ, I128HALVES-OBJ): each helper
+;   is one MemberRef on '<msil>Symbols' with the call's signature, 00 01 0D 18
+;   (float64(native int)) and 00 01 0C 18 (float32(native int)), or
+;   00 02 0D 18 18 and 00 02 0C 18 18.
+; - Whole-program text of x86_64-pc-windows-msvc-msil (W64I128-ERR,
+;   W64I128-WP): each call is D14's runtime-helper error, reported once, no
+;   call is built, and the IL assembles.
+; An i128 result cannot be reached this way: fptosi to i128 and, with
+; -expand-div-rem-bits=128, sdiv i128 are reported by ReplaceNodeResults
+; ('__fixdfti' and '__divti3' with the runtime-helper text) before any call
+; is built, so no function here returns an i128.
+
+; W64I128-LABEL:   {{^}}.method public static float64 'sitofp128'(native int, native int) cil managed{{$}}
+; W64I128:         {{^}}  ldc.i4.s 24{{$}}
+; W64I128-NEXT:    {{^}}  localloc{{$}}
+; W64I128-NEXT:    {{^}}  stloc.0{{$}}
+; W64I128-NEXT:    {{^}}  ldloc.0{{$}}
+; W64I128-NEXT:    {{^}}  ldc.i4.s 15{{$}}
+; W64I128-NEXT:    {{^}}  conv.i{{$}}
+; W64I128-NEXT:    {{^}}  add{{$}}
+; W64I128-NEXT:    {{^}}  ldc.i4.s -16{{$}}
+; W64I128-NEXT:    {{^}}  conv.i{{$}}
+; W64I128-NEXT:    {{^}}  and{{$}}
+; W64I128-O2-NEXT: {{^}}  dup{{$}}
+; W64I128-O2-NEXT: {{^}}  stloc.[[T:[0-9]+]]{{$}}
+; W64I128-O0-NEXT: {{^}}  stloc.[[T:[0-9]+]]{{$}}
+; W64I128-O0-NEXT: {{^}}  ldloc.[[T]]{{$}}
+; W64I128-NEXT:    {{^}}  ldc.i4.8{{$}}
+; W64I128-NEXT:    {{^}}  conv.i{{$}}
+; W64I128-NEXT:    {{^}}  or{{$}}
+; W64I128-NEXT:    {{^}}  ldarg.1{{$}}
+; W64I128-NEXT:    {{^}}  stind.i{{$}}
+; W64I128-NEXT:    {{^}}  ldloc.[[T]]{{$}}
+; W64I128-NEXT:    {{^}}  ldarg.0{{$}}
+; W64I128-NEXT:    {{^}}  stind.i{{$}}
+; W64I128-NEXT:    {{^}}  ldloc.[[T]]{{$}}
+; W64I128-NEXT:    {{^}}  call float64 [msil.extern]'<msil>Symbols'::'__floattidf'(native int){{$}}
+; W64I128-NEXT:    {{^}}  ret{{$}}
+; W64I128-NEXT:    {{^}}} // end of method 'sitofp128'{{$}}
+; W64I128-LABEL:   {{^}}.method public static float32 'uitofp128'(native int, native int) cil managed{{$}}
+; W64I128:         {{^}}  ldc.i4.s 24{{$}}
+; W64I128-NEXT:    {{^}}  localloc{{$}}
+; W64I128-NEXT:    {{^}}  stloc.0{{$}}
+; W64I128-NEXT:    {{^}}  ldloc.0{{$}}
+; W64I128-NEXT:    {{^}}  ldc.i4.s 15{{$}}
+; W64I128-NEXT:    {{^}}  conv.i{{$}}
+; W64I128-NEXT:    {{^}}  add{{$}}
+; W64I128-NEXT:    {{^}}  ldc.i4.s -16{{$}}
+; W64I128-NEXT:    {{^}}  conv.i{{$}}
+; W64I128-NEXT:    {{^}}  and{{$}}
+; W64I128-O2-NEXT: {{^}}  dup{{$}}
+; W64I128-O2-NEXT: {{^}}  stloc.[[T:[0-9]+]]{{$}}
+; W64I128-O0-NEXT: {{^}}  stloc.[[T:[0-9]+]]{{$}}
+; W64I128-O0-NEXT: {{^}}  ldloc.[[T]]{{$}}
+; W64I128-NEXT:    {{^}}  ldc.i4.8{{$}}
+; W64I128-NEXT:    {{^}}  conv.i{{$}}
+; W64I128-NEXT:    {{^}}  or{{$}}
+; W64I128-NEXT:    {{^}}  ldarg.1{{$}}
+; W64I128-NEXT:    {{^}}  stind.i{{$}}
+; W64I128-NEXT:    {{^}}  ldloc.[[T]]{{$}}
+; W64I128-NEXT:    {{^}}  ldarg.0{{$}}
+; W64I128-NEXT:    {{^}}  stind.i{{$}}
+; W64I128-NEXT:    {{^}}  ldloc.[[T]]{{$}}
+; W64I128-NEXT:    {{^}}  call float32 [msil.extern]'<msil>Symbols'::'__floatuntisf'(native int){{$}}
+; W64I128-NEXT:    {{^}}  ret{{$}}
+; W64I128-NEXT:    {{^}}} // end of method 'uitofp128'{{$}}
+
+; I128HALVES-LABEL: {{^}}.method public static float64 'sitofp128'(native int, native int) cil managed{{$}}
+; I128HALVES-NEXT:  {{^\{$}}
+; I128HALVES-NEXT:  {{^}}  .maxstack 2{{$}}
+; I128HALVES-NEXT:  {{^}}  ldarg.0{{$}}
+; I128HALVES-NEXT:  {{^}}  ldarg.1{{$}}
+; I128HALVES-NEXT:  {{^}}  call float64 [msil.extern]'<msil>Symbols'::'__floattidf'(native int, native int){{$}}
+; I128HALVES-NEXT:  {{^}}  ret{{$}}
+; I128HALVES-NEXT:  {{^}}} // end of method 'sitofp128'{{$}}
+; I128HALVES-LABEL: {{^}}.method public static float32 'uitofp128'(native int, native int) cil managed{{$}}
+; I128HALVES-NEXT:  {{^\{$}}
+; I128HALVES-NEXT:  {{^}}  .maxstack 2{{$}}
+; I128HALVES-NEXT:  {{^}}  ldarg.0{{$}}
+; I128HALVES-NEXT:  {{^}}  ldarg.1{{$}}
+; I128HALVES-NEXT:  {{^}}  call float32 [msil.extern]'<msil>Symbols'::'__floatuntisf'(native int, native int){{$}}
+; I128HALVES-NEXT:  {{^}}  ret{{$}}
+; I128HALVES-NEXT:  {{^}}} // end of method 'uitofp128'{{$}}
+
+; W64I128-OBJ:         {{^}}Table: MemberRef rows=3 rowsize={{[0-9]+}}{{$}}
+; W64I128-OBJ-NEXT:    {{^}}  MemberRef[1]: Class=0x01000001 Name='__floattidf' Signature=00 01 0D 18{{$}}
+; W64I128-OBJ-NEXT:    {{^}}  MemberRef[2]: Class=0x01000001 Name='__floatuntisf' Signature=00 01 0C 18{{$}}
+; I128HALVES-OBJ:      {{^}}Table: MemberRef rows=3 rowsize={{[0-9]+}}{{$}}
+; I128HALVES-OBJ-NEXT: {{^}}  MemberRef[1]: Class=0x01000001 Name='__floattidf' Signature=00 02 0D 18 18{{$}}
+; I128HALVES-OBJ-NEXT: {{^}}  MemberRef[2]: Class=0x01000001 Name='__floatuntisf' Signature=00 02 0C 18 18{{$}}
+
+; W64I128-ERR: {{^}}error: {{.*}}in function sitofp128 {{.*}}: runtime helper '__floattidf' is not available for MSIL yet (phase 3){{$}}
+; W64I128-ERR: {{^}}error: {{.*}}in function uitofp128 {{.*}}: runtime helper '__floatuntisf' is not available for MSIL yet (phase 3){{$}}
+
+; W64I128-WP-LABEL: .method {{.*}}'sitofp128'(
+; W64I128-WP-NOT:   {{^}}  call
+; W64I128-WP:       {{^}}} // end of method 'sitofp128'{{$}}
+; W64I128-WP-LABEL: .method {{.*}}'uitofp128'(
+; W64I128-WP-NOT:   {{^}}  call
+; W64I128-WP:       {{^}}} // end of method 'uitofp128'{{$}}
+; W64I128-WP-NOT:   __float
+source_filename = "libcall-fp-w64.c"
+
+define double @sitofp128(i128 %x) {
+  %r = sitofp i128 %x to double
+  ret double %r
+}
+
+define float @uitofp128(i128 %x) {
+  %r = uitofp i128 %x to float
+  ret float %r
 }
 
 ;--- struct-mismatch.ll
@@ -1073,4 +1289,38 @@ declare i64 @ext(ptr byval(%S) align 8) "msil-import-module"="mylib"
 define i64 @caller(ptr %p) {
   %r = call i64 @ext(ptr byval(%S) align 8 %p)
   ret i64 %r
+}
+
+;--- half-import.ll
+; Calls of imports (D14: msil-import-module) that take a half, take a bfloat
+; and return a bfloat. Each half or bfloat is an int32 holding its 16-bit
+; pattern (bfloat since M24), so the calls pass and return int32 with no
+; conversion and no runtime helper; a P/Invoke cannot pass either type
+; natively, so each import is reported once at the end of the module, in
+; declaration order, with M8.c's text unchanged, and gets no P/Invoke.
+; HALFIMP:      {{^}}error: imported function 'takes_half' has a parameter or result that a P/Invoke cannot pass natively (aggregates, vectors, 128-bit integers and half are not supported for MSIL yet){{$}}
+; HALFIMP-NEXT: {{^}}error: imported function 'takes_bf16' has a parameter or result that a P/Invoke cannot pass natively (aggregates, vectors, 128-bit integers and half are not supported for MSIL yet){{$}}
+; HALFIMP-NEXT: {{^}}error: imported function 'ret_bf16' has a parameter or result that a P/Invoke cannot pass natively (aggregates, vectors, 128-bit integers and half are not supported for MSIL yet){{$}}
+
+; HALFIMP-IL-LABEL: .method {{.*}}'caller'(
+; HALFIMP-IL-SAME:  int32, int32) cil managed{{$}}
+; HALFIMP-IL:       {{^}}  call int32 'takes_half'(int32){{$}}
+; HALFIMP-IL:       {{^}}  call int32 'takes_bf16'(int32){{$}}
+; HALFIMP-IL:       {{^}}  call int32 'ret_bf16'(int32){{$}}
+; HALFIMP-IL:       {{^}}  ret{{$}}
+; HALFIMP-IL-NEXT:  {{^}}} // end of method 'caller'{{$}}
+source_filename = "half-import.c"
+
+declare i32 @takes_half(half) "msil-import-module"="mylib"
+declare i32 @takes_bf16(bfloat) "msil-import-module"="mylib"
+declare bfloat @ret_bf16(i32) "msil-import-module"="mylib"
+
+define i32 @caller(half %h, bfloat %b) {
+  %a = call i32 @takes_half(half %h)
+  %c = call i32 @takes_bf16(bfloat %b)
+  %s = add i32 %a, %c
+  %r = call bfloat @ret_bf16(i32 %s)
+  %i = bitcast bfloat %r to i16
+  %z = zext i16 %i to i32
+  ret i32 %z
 }

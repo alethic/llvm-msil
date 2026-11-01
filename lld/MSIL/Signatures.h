@@ -16,6 +16,15 @@
 //   MethodDef of a losing WEAK or discarded COMDAT copy) is compared with the
 //   definition by cli::classifyCall, and calls the definition directly, an
 //   adapter '<msil>adapt_<name>_<n>' (with a warning) or reports an error;
+//   a call of a helper (plan 5.14.2 N-1: a compiler-runtime, atomic library
+//   or toolchain name, N1-N3) that differs from its definition is the error
+//   "function signature mismatch: <name> (a toolchain or compiler runtime
+//   helper)" with the ">>> defined as" and ">>> called as" lines, never an
+//   adapter;
+// - a call of a trailer definition (plan 5.14.4) calls the method that the
+//   writer declared for it (SymbolBinder::getTrailerMethod), checked against
+//   the registry's signature as a helper's call is ("defined as <sig> in
+//   <trailer>");
 // - so is a call that binds to an export of a library built by this
 //   toolchain (plan 5.9.15), against the export's MethodDef signature and
 //   SIGNATURES descriptor: it calls the library's MemberRef, or an adapter
@@ -63,9 +72,10 @@ public:
   void checkNativeReferences();
 
   // The output method that the Method token \p t of \p f calls: the
-  // definition, an adapter, a trap stub or a P/Invoke stub. std::nullopt
-  // after an error (reported here or by SymbolBinder::reportUnresolved),
-  // and for a token that TokenTarget::isManaged() (bindManaged() binds it).
+  // definition, a trailer definition's method, an adapter, a trap stub or a
+  // P/Invoke stub. std::nullopt after an error (reported here or by
+  // SymbolBinder::reportUnresolved), and for a token that
+  // TokenTarget::isManaged() (bindManaged() binds it).
   std::optional<uint32_t> bindCall(ObjFile &f, const TokenTarget &t);
 
   // The output of the token \p t of \p f whose target
@@ -77,7 +87,8 @@ public:
   //   MemberRef [lib]Ns.Class::<name> (an OutRef::token) for a direct call,
   //   or an adapter (an OutRef::method) with 5.9.8's warning, whose body
   //   calls that MemberRef; a mismatch that cannot be adapted is 5.9.8's
-  //   error. The texts name the library: ">>> defined as <sig> in <lib>".
+  //   error, and any mismatch of a helper's call N-1's (plan 5.14.2). The
+  //   texts name the library: ">>> defined as <sig> in <lib>".
   //   The adapter is an OutputMethod::Adapter whose target is
   //   OutputField::NoMethod and whose name is final:
   //   '<msil>adapt_<name>_<n>', n from 0 per export in first-use order (the

@@ -25,6 +25,10 @@
 // the relocations within the assembly, naming no other assembly of this
 // toolchain, and <Module>::.cctor runs the rest (exports-multiasm 6.4).
 //
+// After its other methods the trailer writes the trailer definitions that the
+// output uses (5.14.4, llvm/CLI/TrailerDefs.h), such as
+// __msil_compiler_barrier.
+//
 // The builder is pure computation: it asks its sink for the entities it
 // names (fields, BCL members, helpers, strings, RVA data) and hands it each
 // method with its body laid out (cli::ILBuilder, token operands
@@ -41,6 +45,7 @@
 #include "llvm/CLI/BCLMembers.h"
 #include "llvm/CLI/ILBuilder.h"
 #include "llvm/CLI/Signature.h"
+#include "llvm/CLI/TrailerDefs.h"
 #include "llvm/Support/Compiler.h"
 #include <cstdint>
 #include <optional>
@@ -53,9 +58,6 @@ namespace cli {
 
 struct ImageLayout;
 enum class SectionRules : uint8_t;
-
-/// A handle that the sink defines and later prints or encodes; 0 is none.
-using EntityRef = uint32_t;
 
 /// The names of the synthesized members (plan 5.1, 5.9.10, 5.9.12, 5.10.12):
 /// the module initializer, the entry point, the field that holds the image
@@ -166,6 +168,18 @@ struct TrailerMethod {
   /// The class that holds the method (M22): always <Module> unless
   /// TrailerInput::TwoPhase.
   TrailerOwner Owner = TrailerOwner::Module;
+  /// The implementation flags (M24, 5.14.4 T4), which both sinks write: IL |
+  /// Managed (0) unless a trailer definition sets others (NoInlining).
+  MethodImplAttributes ImplFlags = {};
+};
+
+/// A trailer definition that the output uses (M24, 5.14.4): the row Id of
+/// TrailerDefs.def, and Method, the entity that the sink's declareHelper
+/// returned for the row's name and getTrailerDefSignature before
+/// buildTrailer, which the calls of the name refer to.
+struct TrailerDefRequest {
+  TrailerDefId Id{};
+  EntityRef Method = 0;
 };
 
 /// What the trailer is built from. The canonical orders (5.9.10): address
@@ -226,6 +240,9 @@ struct TrailerInput {
   /// M22: the relocations against the exports of libraries, in site order;
   /// only with an image.
   std::vector<CrossReloc> CrossRelocs;
+  /// M24: the trailer definitions that the output uses, in Id order (5.14.4).
+  /// Without them the trailer is M23's, byte for byte.
+  std::vector<TrailerDefRequest> Defs;
 };
 
 /// The entities the trailer names, and the methods it makes: the MSIL
@@ -246,7 +263,8 @@ public:
   /// A member of llvm/CLI/BCLMembers.def (plan 5.11).
   virtual EntityRef getBCLMember(BCLMemberId Id) = 0;
   /// The method Name with signature Sig that a later emitMethod defines
-  /// ('<msil>dataimport', '<msil>init_dataimports').
+  /// ('<msil>dataimport', '<msil>init_dataimports', and each trailer
+  /// definition of TrailerInput::Defs, declared before buildTrailer).
   virtual EntityRef declareHelper(StringRef Name, const MethodSig &Sig) = 0;
   /// The user string UTF8 ('ldstr', the operands of the data imports).
   virtual EntityRef addUserString(StringRef UTF8) = 0;
@@ -257,8 +275,8 @@ public:
   /// implementation, for sinks that never see such an output, is a fatal
   /// error.
   virtual EntityRef addTrailerField(StringRef Name);
-  /// Defines a method: name, flags, signature, locals, maxstack and the
-  /// instruction list of M.Body.
+  /// Defines a method: name, flags, implementation flags, signature, locals,
+  /// maxstack and the instruction list of M.Body.
   virtual void emitMethod(const TrailerMethod &M) = 0;
 };
 
@@ -300,7 +318,9 @@ LLVM_ABI unsigned countAddressSlots(ArrayRef<RuntimeReloc> Relocs,
 ///   relocations, and <Module>::.cctor, when it is not empty, the rest;
 /// - '<msil>Main' when In.Entry is set (decision D27), which passes main
 ///   the argc and argv of '<msil>argc' and '<msil>argv' when <Module>::.cctor
-///   stored them, else builds them itself.
+///   stored them, else builds them itself;
+/// - then, in Id order, each trailer definition of In.Defs, written by its
+///   row's emitter (TrailerDefs.def) with the request's Method.
 /// The image's sizes must satisfy 5.9.9 rule 5 except where the caller has
 /// already reported them (ImageInput::AllowOversize), and its slots
 /// (ImageLayout::SlotsOffset) must hold countAddressSlots(In.Relocs, ...).

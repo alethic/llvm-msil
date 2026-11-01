@@ -18,7 +18,10 @@
 #     sysroot without the E7 libraries, and the E7 recipe for a triple it
 #     does not build;
 # (7) no --src; (8) a level that does not exist; (9) an empty --ilasm (the
-#     il link output needs one); (10) --also-il in native mode.
+#     il link output needs one); (10) --also-il in native mode;
+# (11) a --timeout-factor that is not positive (M24, plan 5.17.5): zero, a
+#      negative factor and nan, each after the '--timeout-factor 10' of
+#      %msil_prog_build (the last one counts), as argparse's usage error.
 
 # RUN: rm -rf %t && split-file %s %t
 # RUN: mkdir -p %t/w
@@ -88,11 +91,20 @@
 # RUN: %{harness_check} exits 2 %msil_prog_build --mode native --also-il %t/x.il --level O2 --workdir %t/w --src %t/main.c > %t/10.log 2>&1
 # RUN: %{harness_check} contains %t/10.log "^msil-prog: error: --also-il is an MSIL-mode option$"
 
+# (11)
+# RUN: %{harness_check} exits 2 %msil_prog_build --timeout-factor 0 --level O2 --workdir %t/w --src %t/main.c > %t/11a.log 2>&1
+# RUN: %{harness_check} contains %t/11a.log "^msil-prog\.py: error: --timeout-factor must be positive$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --timeout-factor=-1 --level O2 --workdir %t/w --src %t/main.c > %t/11b.log 2>&1
+# RUN: %{harness_check} contains %t/11b.log "^msil-prog\.py: error: --timeout-factor must be positive$"
+# RUN: %{harness_check} exits 2 %msil_prog_build --timeout-factor nan --level O2 --workdir %t/w --src %t/main.c > %t/11c.log 2>&1
+# RUN: %{harness_check} contains %t/11c.log "^msil-prog\.py: error: --timeout-factor must be positive$"
+
 # No error ran a command.
 # RUN: %{harness_check} lacks %t/1.log "^msil-prog: (?!error: )"
 # RUN: %{harness_check} lacks %t/2e.log "^msil-prog: (?!error: )"
 # RUN: %{harness_check} lacks %t/3.log "^msil-prog: (?!error: )"
 # RUN: %{harness_check} lacks %t/6c.log "^msil-prog: (?!error: )"
+# RUN: %{harness_check} lacks %t/11a.log "^msil-prog: "
 
 #--- main.c
 // prog-value: 1

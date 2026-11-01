@@ -32,6 +32,10 @@
 /// - A function definition with a garbage collection strategy is an error;
 ///   its body and its strategy are deleted before any pass runs
 ///   (doInitialization).
+/// - A constrained conversion between floating point and an integer wider
+///   than 64 bits becomes the plain instruction before any pass runs
+///   (doInitialization, MSIL::relaxStrictInt128Conversions), so that
+///   ExpandIRInsts expands it inline as it expands the plain conversions.
 ///
 /// Then, before any function is checked, the module is lowered as the whole
 /// program, which it is in -S output, in llc's and in msil-ld's
@@ -89,13 +93,17 @@
 /// Then the discardable function definitions that the program cannot reach
 /// lose their bodies, decided by reachability as GlobalDCE does
 /// (dropUnreferencedDiscardableFunctions): the candidates are the linkonce
-/// and linkonce_odr definitions and the internal and private definitions
-/// their bodies refer to, directly or through other candidates; a candidate
-/// is live when something other than a candidate's body uses it (a function
-/// that is not a candidate, a global initializer, llvm.used,
-/// llvm.global_ctors, any other global) or a live candidate's body refers to
-/// it, and every other candidate is dropped, dead cycles included. Global
-/// variables and the local functions that no linkonce function reaches stay.
+/// and linkonce_odr definitions, in msil-ld's merged LTO module (the module
+/// flag "msil-lto") also the internal and private definitions in a comdat
+/// (the prevailing linkonce_odr copies that LTO internalized), and the
+/// internal and private definitions their bodies refer to, directly or
+/// through other candidates; a candidate is live when something other than a
+/// candidate's body uses it (a function that is not a candidate, a global
+/// initializer, llvm.used, llvm.global_ctors, any other global) or a live
+/// candidate's body refers to it, and every other candidate is dropped, dead
+/// cycles included. Global variables, weak_odr and external definitions and
+/// the other local functions stay (a function that LTO internalized, which
+/// has no comdat, included).
 /// A definition from a header that the program does not use is not compiled,
 /// and therefore not diagnosed. Then, in each function definition, an empty
 /// inline asm statement with operands (a template of nothing but whitespace
@@ -159,6 +167,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MSIL.h"
+#include "MSILPreExpand.h"
 #include "MSILTargetMachine.h"
 #include "MSILUtilities.h"
 #include "llvm/ADT/APInt.h"
@@ -2072,33 +2081,54 @@ static void collectReferencedFunctions(Function &F,
   }
 }
 
+/// Whether \p M is msil-ld's merged LTO module, on which msil-ld sets the
+/// module flag "msil-lto" (i32 1). A value that is not an integer constant
+/// counts as absent.
+static bool isMSILLTOModule(const Module &M) {
+  const auto *Flag =
+      mdconst::dyn_extract_or_null<ConstantInt>(M.getModuleFlag("msil-lto"));
+  return Flag && !Flag->isZero();
+}
+
 /// Deletes the body of every discardable function definition that the
 /// program cannot reach, deciding by reachability as GlobalDCE does
 /// (driver-toolchain 5.4). The candidates are every linkonce and linkonce_odr
-/// function definition and every internal or private definition that the
-/// body of a candidate refers to, directly or through other candidates
-/// (collectReferencedFunctions). A candidate is live when something other
-/// than the body of a candidate uses it (isUsedOutside: a function that is
-/// not a candidate, a global variable initializer, llvm.used,
-/// llvm.compiler.used, llvm.global_ctors, any other global value), and when
-/// the body of a live candidate refers to it; every other candidate loses
-/// its body. So a dead cycle (two linkonce_odr functions that call each
-/// other, a linkonce_odr function that calls a cycle of internal functions)
-/// is dropped. Every module may drop such a definition (another module that
-/// uses it has its own copy, or the definition was local), and headers
-/// define many: the UCRT stdio.h of a -O0 compile defines the variadic
-/// sprintf and its helpers in every module, and a definition that is not
-/// compiled is not diagnosed. As for a diagnosed definition, the function
-/// stays as a declaration without a comdat. Global variables are never
-/// dropped, and a local function that no linkonce function reaches (one
-/// that nothing used from the start, a cycle of local functions) is not a
-/// candidate and stays, as before. Returns true if a body was deleted.
+/// function definition, in msil-ld's merged LTO module (isMSILLTOModule)
+/// every internal or private definition in a comdat as well, and every
+/// internal or private definition that the body of a candidate refers to,
+/// directly or through other candidates (collectReferencedFunctions). A
+/// candidate is live when something other than the body of a candidate uses
+/// it (isUsedOutside: a function that is not a candidate, a global variable
+/// initializer, llvm.used, llvm.compiler.used, llvm.global_ctors, any other
+/// global value), and when the body of a live candidate refers to it; every
+/// other candidate loses its body. So a dead cycle (two linkonce_odr
+/// functions that call each other, a linkonce_odr function that calls a
+/// cycle of internal functions) is dropped. Every module may drop such a
+/// definition (another module that uses it has its own copy, or the
+/// definition was local), and headers define many: the UCRT stdio.h of a -O0
+/// compile defines the variadic sprintf and its helpers in every module, and
+/// a definition that is not compiled is not diagnosed. LTO internalizes the
+/// prevailing linkonce_odr copies that no regular object needs, each staying
+/// in its comdat, and its -O0 pipeline has no GlobalDCE (a module without a
+/// summary has no index-based dead stripping either), so in the merged module
+/// such a copy is a local definition in a comdat. As for a diagnosed
+/// definition, the function stays as a declaration without a comdat. Global
+/// variables are never dropped, nor are weak_odr definitions (a regular
+/// object may use one, which only msil-ld knows; LTO keeps the prevailing
+/// copy of a library function such as sprintf weak_odr), and a local
+/// function that is not a candidate (one without a comdat that nothing used
+/// from the start, as an unreferenced function that LTO internalized is at
+/// -O0, a cycle of such functions) stays, as before. Returns true if a body
+/// was deleted.
 static bool dropUnreferencedDiscardableFunctions(Module &M) {
-  // The candidates, the linkonce definitions first.
+  // The candidates, the linkonce definitions and, in msil-ld's merged LTO
+  // module, the local definitions in a comdat first.
+  bool LTO = isMSILLTOModule(M);
   SmallPtrSet<const Function *, 16> Candidates;
   SmallVector<Function *, 16> Order;
   for (Function &F : M)
-    if (!F.isDeclaration() && F.hasLinkOnceLinkage()) {
+    if (!F.isDeclaration() && (F.hasLinkOnceLinkage() ||
+                               (LTO && F.hasLocalLinkage() && F.hasComdat()))) {
       Candidates.insert(&F);
       Order.push_back(&F);
     }
@@ -2153,10 +2183,14 @@ static bool dropUnreferencedDiscardableFunctions(Module &M) {
 // pass manager initializes every pass before it runs any. It initializes them
 // in pipeline order, so this module pass is initialized before the function
 // pass manager that holds GC lowering and the AsmPrinter.
+// ExpandIRInsts runs before this pass too (TargetPassConfig::addISelPasses
+// adds it before addIRPasses), so the IR that it must expand is rewritten
+// here as well (plan 5.13.6 P0), in every mode.
 bool MSILPrepareIRLegacy::doInitialization(Module &M) {
   DeletedBodies.clear();
   bool Changed = stripPseudoProbes(M);
   Changed |= diagnoseGCStrategies(M, DeletedBodies);
+  Changed |= MSIL::relaxStrictInt128Conversions(M);
   return Changed;
 }
 

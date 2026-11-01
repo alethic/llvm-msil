@@ -183,6 +183,10 @@ public:
   //   explicit module (EXPLICIT_IMPORT stubs, IMPORT data with a module)
   //   binds to that module and entry unchecked (isExplicitImport). The
   //   definitions the lookup passed over are kept for getRejectedNative();
+  // - in either mode, a name that no native library may define (plan 5.14.2,
+  //   mayBindNatively: N1, N3 and N4, and N2 on Windows triples) is not
+  //   looked up natively, and no library built by this toolchain supplies a
+  //   toolchain name (N3): such a symbol stays undefined;
   // - an undefined __start_X or __stop_X does not bind natively off Windows
   //   when a CIL object has a segment named X: the writer defines it as data
   //   (plan 5.9.9), so a function reference of it, whatever its visibility,
@@ -272,8 +276,21 @@ public:
   // symbol \p sym: "relocation refers to a symbol in a discarded section:
   // <s>" with ">>> defined in <file>" for a discarded COMDAT copy, "undefined
   // hidden symbol: <s>" (hidden or internal), "undefined protected symbol:
-  // <s>", else "undefined symbol: <s>".
+  // <s>", else "undefined symbol: <s>"; the undefined forms add plan
+  // 5.14.2's line for a name of classes N1-N3 (getNameClassLine). A
+  // setjmp-family name that is not a discarded copy is
+  // reportSetjmpFamily()'s error instead.
   void reportUndefined(const Symbol *sym, bool liveOnly);
+
+  // Plan 5.14.2's N4 error for the setjmp-family name \p name, which no
+  // object or archive member defines: "<file>: '<name>' cannot be bound to a
+  // native library: setjmp and longjmp are lowered by the compiler"
+  // (getSetjmpFamilyText) once for each input that refers to it, in load
+  // order: the bitcode inputs that referred to it before LTO, then the CIL
+  // objects whose methods or segments name it (only live ones if
+  // \p liveOnly; the LTO objects only if no bitcode input referred to it),
+  // or ld-temp.o for a name that only LTO's merged module refers to.
+  void reportSetjmpFamily(StringRef name, bool liveOnly);
 
   // Reports the error \p msg about the symbol \p name, which LTO's merged
   // module refers to, in lld/ELF's form: up to three ">>> referenced by

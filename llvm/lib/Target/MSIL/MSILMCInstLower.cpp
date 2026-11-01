@@ -306,9 +306,10 @@ MCOperand MSILMCInstLower::lowerCallee(const MachineInstr &MI,
   }
   case MachineOperand::MO_ExternalSymbol: {
     // A library call. Its name is a Phase-1 import or diagnosed by LowerCall
-    // (decision D14). It has no IR function type, so the call itself spells
-    // the signature of the P/Invoke declaration that the module trailer
-    // emits for the symbol.
+    // (decision D14), or a trailer definition (plan 5.14.4 T6). It has no IR
+    // function type, so the call itself spells the signature of the P/Invoke
+    // declaration that the module trailer emits for the symbol, or of the
+    // method that it defines for a trailer definition.
     StringRef Name = MO.getSymbolName();
     if (MO.getOffset() != 0)
       reportFatalInternalError("MSIL: reference to external symbol '" + Name +

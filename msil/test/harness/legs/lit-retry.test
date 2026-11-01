@@ -1,0 +1,61 @@
+# lit-retry.py (plan 5.17.9, M24): 'select <xunit> [--max N]' prints the full
+# names of the timeout-only failed tests of a lit run, one per line. A failed
+# test is timeout-only when the part of its xunit failure text after the last
+# '# executed command:' line (the command at which lit's internal shell
+# stopped) holds a timeout marker. It exits 0 when every failed test is
+# timeout-only and at most N (default 3) are, 3 when more are, 4 when a
+# failure is not timeout-only, and 2 on a usage error or a file it cannot
+# read. timeout-retry.test checks how lit-legs.ps1 uses it.
+# (1) --self-test passes every case.
+# (2) On the xunit files of nested lit runs of Inputs/nested-retry, whose
+# tests fail at their last command with each kind of marker (msil-run.py's and
+# msil-verify.py's 'did not finish within <T> s', the transcript status line
+# [timeout], msil-prog.py's '(timeout after <T> s)'), fail without one, with
+# one only in an earlier command's output, or with one only on the last
+# command's own line, and pass with one: (a) every test: exit 4, naming
+# exactly the three failures that are not timeout-only; (b) --filter=timeout
+# (lit lists the others as skipped): exit 3 with the default --max, exit 0
+# with --max 4, printing the four names; (c) one timeout and the passing test:
+# exit 0, that one name; (d) the passing test alone: exit 0, no name.
+# (3) A missing file, a file that is not XML and usage errors exit 2.
+
+# RUN: rm -rf %t && mkdir -p %t
+
+# (1)
+# RUN: %python %S/../../../utils/ci/lit-retry.py --self-test > %t/1.log
+# RUN: %{harness_check} contains %t/1.log "\Alit-retry: self-test: (\d+) of \1 cases passed\n\Z"
+
+# (2a)
+# RUN: not %{harness_lit} --xunit-xml-output=%t/all.xml %S/Inputs/nested-retry > %t/2a-lit.log 2>&1
+# RUN: %{harness_check} contains %t/2a-lit.log "^  Passed: 1 \(12\.50%\)$" "^  Failed: 7 \(87\.50%\)$"
+# RUN: %{harness_check} exits 4 %python %S/../../../utils/ci/lit-retry.py select %t/all.xml > %t/2a.out 2> %t/2a.err
+# RUN: %{harness_check} contains %t/2a.err "^lit-retry: 3 failed test\(s\) not timeout-only, so nothing is re-run: MSIL :: harness/legs/Inputs/nested-retry/earlier\.test, MSIL :: harness/legs/Inputs/nested-retry/marker-in-command\.test, MSIL :: harness/legs/Inputs/nested-retry/other\.test$"
+
+# (2b)
+# RUN: not %{harness_lit} --xunit-xml-output=%t/timeouts.xml --filter=timeout %S/Inputs/nested-retry > %t/2b-lit.log 2>&1
+# RUN: %{harness_check} contains %t/timeouts.xml "<skipped message="
+# RUN: %{harness_check} exits 3 %python %S/../../../utils/ci/lit-retry.py select %t/timeouts.xml > %t/2b.out 2> %t/2b.err
+# RUN: %{harness_check} contains %t/2b.err "^lit-retry: 4 tests timed out, more than --max 3$"
+# RUN: %python %S/../../../utils/ci/lit-retry.py select %t/timeouts.xml --max 4 > %t/2b4.out
+# RUN: %{harness_check} contains %t/2b4.out "\AMSIL :: harness/legs/Inputs/nested-retry/prog-timeout\.test\nMSIL :: harness/legs/Inputs/nested-retry/run-timeout\.test\nMSIL :: harness/legs/Inputs/nested-retry/transcript-timeout\.test\nMSIL :: harness/legs/Inputs/nested-retry/verify-timeout\.test\n\Z"
+
+# (2c)
+# RUN: not %{harness_lit} --xunit-xml-output=%t/one.xml "--filter=run-timeout|pass" %S/Inputs/nested-retry > %t/2c-lit.log 2>&1
+# RUN: %python %S/../../../utils/ci/lit-retry.py select %t/one.xml > %t/2c.out
+# RUN: %{harness_check} contains %t/2c.out "\AMSIL :: harness/legs/Inputs/nested-retry/run-timeout\.test\n\Z"
+
+# (2d)
+# RUN: %{harness_lit} --xunit-xml-output=%t/pass.xml --filter=pass %S/Inputs/nested-retry > %t/2d-lit.log 2>&1
+# RUN: %python %S/../../../utils/ci/lit-retry.py select %t/pass.xml > %t/2d.out
+# RUN: %{harness_check} equals %t/2d.out
+
+# (3)
+# RUN: %{harness_check} exits 2 %python %S/../../../utils/ci/lit-retry.py select %t/no-such.xml > %t/3a.log 2>&1
+# RUN: %{harness_check} contains %t/3a.log "^lit-retry: \S*no-such\.xml: no such file$"
+# RUN: %{harness_check} write %t/not-xml.xml "PASS: MSIL :: M1/a.c (1 of 1)"
+# RUN: %{harness_check} exits 2 %python %S/../../../utils/ci/lit-retry.py select %t/not-xml.xml > %t/3b.log 2>&1
+# RUN: %{harness_check} contains %t/3b.log "^lit-retry: cannot read \S*not-xml\.xml: "
+# RUN: %{harness_check} exits 2 %python %S/../../../utils/ci/lit-retry.py > %t/3c.log 2>&1
+# RUN: %{harness_check} contains %t/3c.log "^lit-retry: missing command 'select' \(or --self-test\)$"
+# RUN: %{harness_check} exits 2 %python %S/../../../utils/ci/lit-retry.py select %t/all.xml --max x > %t/3d.log 2>&1
+# RUN: %{harness_check} contains %t/3d.log "^lit-retry: argument --max: not a number: 'x'$"

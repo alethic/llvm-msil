@@ -47,6 +47,17 @@
 /// policy: a library call, a compiler-rt helper included, is a direct call
 /// of the symbol, which msil-ld resolves.
 ///
+/// A trailer definition (llvm/CLI/TrailerDefs.def, plan 5.14.4), such as the
+/// __msil_compiler_barrier of a single-thread fence, is the exception in
+/// whole-program text: a library call of it, or a call of a declaration of
+/// it, calls the method that the module trailer defines
+/// (MSILAsmPrinter::fillTrailerDefs), before the import policy applies. In
+/// object mode it is an undefined symbol like any other, which msil-ld's
+/// '<trailer>' defines.
+///
+/// On x86-64 Windows a library call passes each i128 argument by pointer to a
+/// temporary, as compiler-rt's helpers take it there (passInt128ByPointer).
+///
 /// In object mode a direct call of a function that this object does not
 /// define (Function::isDeclarationForLinker: a declaration, extern_weak or
 /// available_externally) uses the call site's signature, which may differ
@@ -58,6 +69,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "MCTargetDesc/MSILMCTargetDesc.h"
+#include "MCTargetDesc/MSILMCTypeUtilities.h"
 #include "MSILISelLowering.h"
 #include "MSILMachineFunctionInfo.h"
 #include "MSILSelectionDAGInfo.h"
@@ -111,6 +123,70 @@ static bool matchesSignature(const Function &F,
          equal(Results, map_range(CLI.Ins, [](const ISD::InputArg &In) {
                  return In.VT;
                }));
+}
+
+/// Returns the CIL signature of a call with the lowered arguments and results
+/// of \p CLI, as MSILMCInstLower spells it for the call instruction.
+static MSIL::Signature
+getCallSignature(const TargetLowering::CallLoweringInfo &CLI) {
+  unsigned PointerSize = CLI.DAG.getDataLayout().getPointerSizeInBits();
+  MSIL::Signature S;
+  for (const ISD::OutputArg &Out : CLI.Outs)
+    S.Params.push_back(MSIL::toValType(Out.VT, PointerSize));
+  for (const ISD::InputArg &In : CLI.Ins)
+    S.Results.push_back(MSIL::toValType(In.VT, PointerSize));
+  return S;
+}
+
+/// On x86-64 Windows, compiler-rt's i128 functions take each i128 argument by
+/// pointer, as clang's Win64 ABI passes __int128, and X86 passes the
+/// legalizer's i128 library calls so (X86TargetLowering::LowerWin64_i128OP
+/// and its two siblings). Stores each i128 argument of the library call
+/// \p CLI (two i64 parts, the low one first) into a 16-byte, 16-aligned
+/// temporary of the static frame (decision D13) and passes the temporary's
+/// address instead, so that the call spells the signature of the compiled
+/// helper ('float64(native int)' for __floattidf). An i128 result needs
+/// nothing here: CanLowerReturn demotes it to a hidden first pointer
+/// parameter, as the helper's '<2 x i64>' result is demoted.
+static void passInt128ByPointer(TargetLowering::CallLoweringInfo &CLI) {
+  if (none_of(CLI.Outs,
+              [](const ISD::OutputArg &Out) { return Out.ArgVT == MVT::i128; }))
+    return;
+  SelectionDAG &DAG = CLI.DAG;
+  MachineFunction &MF = DAG.getMachineFunction();
+  const SDLoc &DL = CLI.DL;
+  MVT PtrVT = DAG.getTargetLoweringInfo().getPointerTy(DAG.getDataLayout());
+  decltype(CLI.Outs) Outs;
+  decltype(CLI.OutVals) OutVals;
+  SmallVector<SDValue, 4> Stores;
+  for (unsigned I = 0, E = CLI.Outs.size(); I != E;) {
+    const ISD::OutputArg &Out = CLI.Outs[I];
+    if (Out.ArgVT != MVT::i128) {
+      Outs.push_back(Out);
+      OutVals.push_back(CLI.OutVals[I++]);
+      continue;
+    }
+    SDValue Slot = DAG.CreateStackTemporary(TypeSize::getFixed(16), Align(16));
+    int FI = cast<FrameIndexSDNode>(Slot)->getIndex();
+    unsigned ArgIndex = Out.OrigArgIndex;
+    for (; I != E && CLI.Outs[I].OrigArgIndex == ArgIndex; ++I) {
+      unsigned Offset = CLI.Outs[I].PartOffset;
+      Stores.push_back(DAG.getStore(
+          CLI.Chain, DL, CLI.OutVals[I],
+          DAG.getObjectPtrOffset(DL, Slot, TypeSize::getFixed(Offset)),
+          MachinePointerInfo::getFixedStack(MF, FI, Offset),
+          commonAlignment(Align(16), Offset)));
+    }
+    ISD::ArgFlagsTy Flags;
+    Flags.setPointer();
+    Outs.push_back(ISD::OutputArg(Flags, PtrVT, PtrVT,
+                                  PointerType::getUnqual(*DAG.getContext()),
+                                  ArgIndex, /*PartOffset=*/0));
+    OutVals.push_back(Slot);
+  }
+  CLI.Chain = DAG.getNode(ISD::TokenFactor, DL, MVT::Other, Stores);
+  CLI.Outs = std::move(Outs);
+  CLI.OutVals = std::move(OutVals);
 }
 
 // Test whether the given calling convention is supported. Every call is a
@@ -244,6 +320,10 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
                     "' does not match the type of the function of that name "
                     "in this module");
     };
+    // Before any signature is compared: the Win64 convention of the helpers.
+    const Triple &TT = DAG.getTarget().getTargetTriple();
+    if (TT.getArch() == Triple::x86_64 && TT.isOSWindows())
+      passInt128ByPointer(CLI);
     // Methods are named by their IL name, so a function @"\01sqrt" is the
     // one a call to 'sqrt' binds to.
     const Function *Named = MSIL::getFunctionByILName(M, Name);
@@ -271,6 +351,15 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
       if (!matchesSignature(*Named, CLI))
         return Mismatch();
       F = Named;
+    } else if (const cli::TrailerDefInfo *Def =
+                   MSIL::getOfferedTrailerDef(M, Name)) {
+      // A trailer definition (plan 5.14.4 T6), such as the compiler barrier
+      // of a single-thread fence: whole-program text defines its method
+      // (MSILAsmPrinter::fillTrailerDefs), with the registry's signature,
+      // before the import policy below applies.
+      if (!MSIL::matchesTrailerDefSignature(*Def, getCallSignature(CLI)))
+        return Mismatch();
+      LibCallee = ES->getSymbol();
     } else if (MSIL::isLinkedModule(M)) {
       // msil-ld's linked text: the module and entry come from the
       // declaration's "msil-import-*" attributes, else from !msil.imports
@@ -300,7 +389,6 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
       // library, or a declaration with "msil-import-module". The compiler-rt
       // helpers (__divti3, __mulsc3, __extendhfsf2, __atomic_*, ...) wait for
       // the phase-3 runtime library.
-      const Triple &TT = DAG.getTarget().getTargetTriple();
       if (!MSIL::getPInvokeModule(TT, Name, Named)) {
         if (Name.starts_with("__"))
           return Reject(Twine("runtime helper '") + Name +
@@ -379,6 +467,18 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     // too). The call stays what the IR says: an indirect call, with the call
     // site's signature, through the function's address.
     F = nullptr;
+  }
+
+  // A declaration that names a trailer definition: in whole-program text its
+  // calls call the method that the module trailer defines, as the library
+  // calls above do, with the registry's signature (plan 5.14.4 T6).
+  if (F && !ObjectMode && F->isDeclarationForLinker()) {
+    StringRef Name = MSIL::getILName(*F, DAG.getTarget());
+    if (const cli::TrailerDefInfo *Def = MSIL::getOfferedTrailerDef(M, Name);
+        Def && !MSIL::matchesTrailerDefSignature(*Def, getCallSignature(CLI)))
+      return Reject(Twine("library call '") + Name +
+                    "' does not match the type of the function of that name "
+                    "in this module");
   }
 
   // A narrow (i1, i8, i16) result is returned as an int32, and the zeroext

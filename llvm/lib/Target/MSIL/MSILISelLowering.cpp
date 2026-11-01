@@ -22,6 +22,7 @@
 #include "MSILSubtarget.h"
 #include "MSILUtilities.h"
 #include "llvm/ADT/FloatingPointMode.h"
+#include "llvm/CLI/TrailerDefs.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineInstrBuilder.h"
@@ -138,12 +139,16 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
     setOperationAction({ISD::FABS, ISD::FCOPYSIGN}, T, Expand);
     // f16 and bf16 are not legal types: their values are held as integers,
     // and arithmetic converts them to and from f32. Those conversions are the
-    // compiler-rt helpers (__extendhfsf2, __truncsfhf2, __truncdfhf2 and the
-    // bf16 ones), which LowerCall diagnoses: '__' helpers are errors until
-    // phase 3 (decision D14). LowerBF16Conversion calls the bf16 helpers
-    // instead of the generic expansions' bitcasts through memory.
+    // compiler-rt helpers (__extendhfsf2, __truncsfhf2, __truncdfhf2,
+    // __truncsfbf2 and __truncdfbf2), which LowerCall diagnoses: '__' helpers
+    // are errors until phase 3 (decision D14). bf16 -> f32 is exact, and its
+    // generic expansion is inline: the 16 bits shifted left by 16, bit cast to
+    // f32 (through a stack slot, decision D16), extended for an f64 result.
+    // The generic expansion of f32 -> bf16 truncates instead of rounding, so
+    // LowerBF16Conversion calls the helpers.
     setOperationAction({ISD::FP16_TO_FP, ISD::FP_TO_FP16}, T, Expand);
-    setOperationAction({ISD::BF16_TO_FP, ISD::FP_TO_BF16}, T, Custom);
+    setOperationAction(ISD::BF16_TO_FP, T, Expand);
+    setOperationAction(ISD::FP_TO_BF16, T, Custom);
   }
   // There is no reinterpreting opcode: a bitcast between an integer and a
   // floating-point value goes through a stack slot (decision D16).
@@ -162,13 +167,14 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // is keyed on the operand type too: int64 -> f64 and int32 sources stay a
   // single conv.r8 or conv.r4.
   setOperationAction(ISD::SINT_TO_FP, MVT::i64, Custom);
-  // FP -> i128: ExpandIRInsts expands the plain conversions before
-  // instruction selection (setMaxLargeFPConvertBitWidthSupported below), so
-  // only the constrained ones get here. They would call __fixsfti,
-  // __fixdfti, __fixunssfti or __fixunsdfti, whose two-value result
-  // CanLowerReturn demotes to a stack slot even after LowerCall's diagnostic;
-  // ReplaceNodeResults reports the libcall instead, as it does for i128
-  // division.
+  // FP -> i128: ExpandIRInsts expands these conversions before instruction
+  // selection (setMaxLargeFPConvertBitWidthSupported below), the constrained
+  // ones too once MSILPrepareIR has made them plain
+  // (MSIL::relaxStrictInt128Conversions), so none should get here. One that
+  // did would call __fixsfti, __fixdfti, __fixunssfti or __fixunsdfti, whose
+  // two-value result CanLowerReturn demotes to a stack slot even after
+  // LowerCall's diagnostic; ReplaceNodeResults reports the libcall instead,
+  // as it does for i128 division.
   setOperationAction({ISD::FP_TO_SINT, ISD::FP_TO_UINT, ISD::STRICT_FP_TO_SINT,
                       ISD::STRICT_FP_TO_UINT},
                      MVT::i128, Custom);
@@ -209,11 +215,14 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
                       ISD::STRICT_BF16_TO_FP, ISD::STRICT_FP_TO_BF16},
                      {MVT::f32, MVT::f64}, Custom);
   setOperationAction(ISD::STRICT_BF16_TO_FP, MVT::i16, Custom);
-  // A strictfp function receives a bfloat argument as a STRICT_FP_ROUND of
-  // its float32, which DAGCombiner does not fold into an extension of it:
-  // once the rounding has become plain, LowerFP_EXTEND (keyed on the f16 or
-  // bf16 operand) and LowerStrictFP fold the extensions, so that they compile
-  // as without strictfp.
+  // Calls pass a bf16 value as its bits (getRegisterTypeForCallingConv), but
+  // a bf16 value that another block computed arrives in a float32 virtual
+  // register (TargetLoweringBase's register type of bf16), and a strictfp
+  // function receives it as a STRICT_FP_ROUND of that float32, which
+  // DAGCombiner does not fold into an extension of it: once the rounding has
+  // become plain, LowerFP_EXTEND (keyed on the f16 or bf16 operand) and
+  // LowerStrictFP fold the extensions, so that they compile as without
+  // strictfp.
   setOperationAction(ISD::FP_EXTEND, {MVT::f16, MVT::bf16}, Custom);
   // llvm.set.rounding cannot change the rounding mode: LowerSET_ROUNDING
   // diagnoses it. llvm.get.rounding expands to the constant 1 (to nearest).
@@ -394,18 +403,22 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // No atomics yet: AtomicExpand turns every atomic operation into a call of
   // an __atomic_* function, which is not a Phase-1 import (decision D14).
   setMaxAtomicSizeInBitsSupported(0);
+  // A single-thread fence calls __msil_compiler_barrier (LowerATOMIC_FENCE);
+  // every other fence selects MEMORY_BARRIER (decision D36 as amended).
+  setOperationAction(ISD::ATOMIC_FENCE, MVT::Other, Custom);
 
   // Integer division and remainder wider than 64 bits, and the conversions
   // between such integers and floating point, are expanded inline by
   // ExpandIRInsts before instruction selection (NVPTX and AMDGPU do the same),
-  // so i128 division, the plain f32 and f64 <-> i128 conversions (saturating
-  // ones included) and bf16 -> i128 (expanded on the value's 16-bit pattern)
-  // call no __divti3, __fixdfti, ... helper, which would be an error until
-  // phase 3 (decision D14). Still named: f16 -> i128 (__extendhfsf2),
-  // i128 -> f16 (__truncsfhf2), i128 -> bf16 (__extendbfsf2) and the
-  // constrained conversions (the i128 helpers).
+  // so i128 division, the f32 and f64 <-> i128 conversions (saturating ones
+  // included, and constrained ones after MSIL::relaxStrictInt128Conversions)
+  // and bf16 -> i128 (expanded on the value's 16-bit pattern) call no
+  // __divti3, __fixdfti, ... helper, which would be an error until phase 3
+  // (decision D14). Still named, by the f32 step of their expansions:
+  // f16 -> i128 (__extendhfsf2), i128 -> f16 (__truncsfhf2) and
+  // i128 -> bf16 (__truncsfbf2).
   setMaxDivRemBitWidthSupported(64);
-  setMaxLargeFPConvertBitWidthSupported(64);
+  setMaxLargeFPConvertBitWidthSupported(MSIL::MaxSelectedFPConvertBits);
 }
 
 //===----------------------------------------------------------------------===//
@@ -416,6 +429,48 @@ MVT MSILTargetLowering::getScalarShiftAmountTy(const DataLayout & /*DL*/,
                                                EVT /*VT*/) const {
   // CIL shifts take an int32 amount, whatever the width of the value.
   return MVT::i32;
+}
+
+/// The type that a call passes for a value of type \p VT: \p VT with f16 in
+/// place of bf16, as a scalar or as the element type of a vector. A bf16
+/// value crosses a call as f16 does, as its 16-bit pattern in an int32, in
+/// every signature, and a vector of bf16 as the vector of f16 of the same
+/// length does, one such int32 per element: compiler-rt's bf16 helpers return
+/// their result so, and the IL signature of a function with a __bf16
+/// parameter or result is the one that its callers' calls spell
+/// (MSIL::computeLegalValueVTs asks the hooks below too). TargetLoweringBase
+/// gives bf16 the register type f32, which would pass the elements of a
+/// vector as float32 values and need __truncsfbf2 for a <1 x bfloat>. All
+/// three hooks map the type, because SelectionDAGBuilder checks the parts of
+/// a vector that getVectorTypeBreakdownForCallingConv describes against the
+/// other two. Calling conventions are all lowered alike
+/// (callingConvSupported).
+static EVT getCallingConvVT(LLVMContext &Context, EVT VT) {
+  return VT.getScalarType() == MVT::bf16
+             ? VT.changeElementType(Context, MVT::f16)
+             : VT;
+}
+
+MVT MSILTargetLowering::getRegisterTypeForCallingConv(LLVMContext &Context,
+                                                      CallingConv::ID CC,
+                                                      EVT VT) const {
+  return TargetLowering::getRegisterTypeForCallingConv(
+      Context, CC, getCallingConvVT(Context, VT));
+}
+
+unsigned MSILTargetLowering::getNumRegistersForCallingConv(LLVMContext &Context,
+                                                           CallingConv::ID CC,
+                                                           EVT VT) const {
+  return TargetLowering::getNumRegistersForCallingConv(
+      Context, CC, getCallingConvVT(Context, VT));
+}
+
+unsigned MSILTargetLowering::getVectorTypeBreakdownForCallingConv(
+    LLVMContext &Context, CallingConv::ID CC, EVT VT, EVT &IntermediateVT,
+    unsigned &NumIntermediates, MVT &RegisterVT) const {
+  return TargetLowering::getVectorTypeBreakdownForCallingConv(
+      Context, CC, getCallingConvVT(Context, VT), IntermediateVT,
+      NumIntermediates, RegisterVT);
 }
 
 EVT MSILTargetLowering::getSetCCResultType(const DataLayout & /*DL*/,
@@ -697,9 +752,10 @@ SDValue MSILTargetLowering::LowerOperation(SDValue Op,
     return LowerFPTRUNC_ROUND(Op, DAG);
   case ISD::FSINCOS:
     return LowerFSINCOS(Op, DAG);
-  case ISD::BF16_TO_FP:
   case ISD::FP_TO_BF16:
     return LowerBF16Conversion(Op, DAG);
+  case ISD::ATOMIC_FENCE:
+    return LowerATOMIC_FENCE(Op, DAG);
   default:
     reportFatalInternalError(Twine("MSIL: unexpected operation in "
                                    "LowerOperation: ") +
@@ -1065,12 +1121,14 @@ SDValue MSILTargetLowering::LowerStrictFP(SDValue Op, SelectionDAG &DAG) const {
 SDValue MSILTargetLowering::LowerFP_EXTEND(SDValue Op,
                                            SelectionDAG &DAG) const {
   // The extension of an f16 or bf16 value, before the type legalizer
-  // soft-promotes it. A bfloat argument or call result arrives as a float32
-  // and is an exact FP_ROUND of it, which DAGCombiner folds into a plain
-  // fp_extend; in a strictfp function it is a STRICT_FP_ROUND, which becomes
-  // plain (ReplaceNodeResults) only after DAGCombiner ran. Fold it here, as
-  // LowerStrictFP does for STRICT_FP_EXTEND, so that the extension compiles
-  // as in a function without strictfp. Anything else is soft-promoted.
+  // soft-promotes it. A bf16 value that another block computed arrives in a
+  // float32 virtual register (TargetLoweringBase's register type of bf16;
+  // calls pass bf16 as its bits instead) and is an exact FP_ROUND of it,
+  // which DAGCombiner folds into a plain fp_extend; in a strictfp function it
+  // is a STRICT_FP_ROUND, which becomes plain (ReplaceNodeResults) only after
+  // DAGCombiner ran. Fold it here, as LowerStrictFP does for
+  // STRICT_FP_EXTEND, so that the extension compiles as in a function without
+  // strictfp. Anything else is soft-promoted.
   return foldExtendOfExactRound(Op.getOperand(0), Op.getValueType(), SDLoc(Op),
                                 DAG);
 }
@@ -1175,33 +1233,53 @@ SDValue MSILTargetLowering::LowerFSINCOS(SDValue Op, SelectionDAG &DAG) const {
 
 SDValue MSILTargetLowering::LowerBF16Conversion(SDValue Op,
                                                 SelectionDAG &DAG) const {
-  // bf16 values are held as integers. The generic expansions of these
-  // conversions shift the bits and BITCAST them to or from f32 through a
-  // stack slot; like the f16 conversions, call the compiler-rt helper
-  // (__extendbfsf2, __truncsfbf2, __truncdfbf2) instead, which LowerCall
-  // diagnoses.
+  // bf16 values are held as integers. The generic expansion of FP_TO_BF16
+  // drops the low 16 bits of the f32 value (after rounding an f64 to f32
+  // first) instead of rounding once to nearest; like the f16 conversions,
+  // call the compiler-rt helper (__truncsfbf2, __truncdfbf2) instead, which
+  // LowerCall diagnoses.
+  assert(Op.getOpcode() == ISD::FP_TO_BF16 && "BF16_TO_FP is expanded");
   SDLoc DL(Op);
   SDValue Src = Op.getOperand(0);
   EVT VT = Op.getValueType();
-  bool IsExtend = Op.getOpcode() == ISD::BF16_TO_FP;
-  RTLIB::Libcall LC = IsExtend
-                          ? RTLIB::FPEXT_BF16_F32
-                          : RTLIB::getFPROUND(Src.getValueType(), MVT::bf16);
-  // A wider result is the exact extension of the f32 one.
-  EVT CallVT = IsExtend ? EVT(MVT::f32) : VT;
-  SDValue Result;
-  if (LC != RTLIB::UNKNOWN_LIBCALL &&
-      getLibcallImpl(LC) != RTLIB::Unsupported) {
-    Result = makeLibCall(DAG, LC, CallVT, Src, MakeLibCallOptions(), DL).first;
-  } else {
-    DAG.getContext()->diagnose(DiagnosticInfoUnsupported(
-        DAG.getMachineFunction().getFunction(),
-        "bf16 conversions are not supported for MSIL", DL.getDebugLoc()));
-    Result = DAG.getUNDEF(CallVT);
-  }
-  if (CallVT != VT)
-    Result = DAG.getNode(ISD::FP_EXTEND, DL, VT, Result);
-  return Result;
+  RTLIB::Libcall LC = RTLIB::getFPROUND(Src.getValueType(), MVT::bf16);
+  if (LC != RTLIB::UNKNOWN_LIBCALL && getLibcallImpl(LC) != RTLIB::Unsupported)
+    return makeLibCall(DAG, LC, VT, Src, MakeLibCallOptions(), DL).first;
+  DAG.getContext()->diagnose(DiagnosticInfoUnsupported(
+      DAG.getMachineFunction().getFunction(),
+      "bf16 conversions are not supported for MSIL", DL.getDebugLoc()));
+  return DAG.getUNDEF(VT);
+}
+
+SDValue MSILTargetLowering::LowerATOMIC_FENCE(SDValue Op,
+                                              SelectionDAG &DAG) const {
+  // ATOMIC_FENCE (chain, ordering, scope). Every fence that is not
+  // single-threaded is a full memory barrier: the MEMORY_BARRIER pattern
+  // selects it (Interlocked::MemoryBarrier).
+  if (Op.getConstantOperandVal(2) != SyncScope::SingleThread)
+    return Op;
+  // A single-thread fence (clang's translation of 'asm volatile("" :::
+  // "memory")' and of __atomic_signal_fence, and the fences of MSILPrepareIR's
+  // lowerEmptyInlineAsm) orders only the compiler's own code motion, but the
+  // JIT compiles the method again and would move memory accesses across a
+  // fence that leaves nothing in the IL (it hoists a plain load out of a spin
+  // loop). It calls __msil_compiler_barrier instead, the trailer definition
+  // (llvm/CLI/TrailerDefs.def) 'void()' that is a 'noinlining' method whose
+  // body is 'ret': no JIT moves a memory access across a call that it does
+  // not inline. The call is a library call on the fence's chain; LowerCall
+  // binds it to the method that whole-program text defines, or in object
+  // mode to the undefined symbol that msil-ld's trailer defines.
+  const cli::TrailerDefInfo &Barrier =
+      cli::getTrailerDefs()[static_cast<unsigned>(
+          cli::TrailerDefId::CompilerBarrier)];
+  TargetLowering::CallLoweringInfo CLI(DAG);
+  CLI.setDebugLoc(SDLoc(Op))
+      .setChain(Op.getOperand(0))
+      .setLibCallee(CallingConv::C, Type::getVoidTy(*DAG.getContext()),
+                    DAG.getExternalSymbol(Barrier.Name.data(),
+                                          getPointerTy(DAG.getDataLayout())),
+                    ArgListTy());
+  return LowerCallTo(CLI).second;
 }
 
 /// Returns well-formed dummy results for \p Op, an operation that is not

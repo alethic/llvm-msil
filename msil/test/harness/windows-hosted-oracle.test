@@ -1,0 +1,37 @@
+# The hosted Windows oracle (plan 5.17.3, M24): for a Windows triple,
+# msil-prog.py --mode native --hosted links the DLL C runtime, because MSIL
+# output binds ucrtbase.dll and the static CRT's exit differs. Every native
+# compile takes -fms-runtime-lib=dll (the spelling M24.j verified), and the
+# link is the driver's lld link of the objects with msil_native_rtlib
+# (%msil_prog_build's --native-ldflags); lld-link reads the objects'
+# /DEFAULTLIB:msvcrt.lib, so the program imports VCRUNTIME140.dll and the
+# api-ms-win-crt-*-l1-1-0.dll forwarders of the UCRT besides KERNEL32.dll.
+# Inputs/hosted-exit-windows.c registers an atexit handler and writes through
+# stdio, and must run with its transcript (the handler after main returns,
+# then the status). The control, which pins the failure path: the same build
+# without --hosted (the static CRT) has no -fms-runtime-lib=dll on its
+# compile and imports neither VCRUNTIME140.dll nor any api-ms-win-crt DLL,
+# so the import checks below fail on a link that is not the DLL CRT's; and a
+# transcript in another order fails the comparison. The program includes the
+# UCRT headers (msil-hosted: INCLUDE holds corecrt.h).
+# REQUIRES: system-windows, msil-triple-windows, msil-hosted, msil-native-oracle
+
+# RUN: rm -rf %t.d %t.static.d
+# RUN: %msil_prog_build --mode native --hosted --level O2 --workdir %t.d --out %t.d/prog.exe --src %S/Inputs/hosted-exit-windows.c > %t.build.log 2>&1
+# RUN: %{harness_check} contains %t.build.log "^msil-prog: \S*clang\S* --target=x86_64-pc-windows-msvc -fms-runtime-lib=dll -std=gnu17 .* -O2 -c \S*hosted-exit-windows\.c -o obj/hosted-exit-windows\.o$" "^msil-prog: \S*clang\S* --target=x86_64-pc-windows-msvc -fuse-ld=lld obj/hosted-exit-windows\.o \S?-l\S.* -o \S*windows-hosted-oracle\.test\.tmp\.d\Wprog\.exe$"
+# RUN: %msil_exec --native --expect %S/Inputs/hosted-exit-windows --out %t.out %t.d/prog.exe
+# RUN: %{harness_check} equals %t.out "main returns" "atexit handler" "[exit 7]"
+# RUN: %{harness_check} write %t.wrong.expected "atexit handler" "main returns" "[exit 7]"
+# RUN: not %msil_exec --native --expect %t.wrong --out %t.wrong.out %t.d/prog.exe 2> %t.wrong.log
+# RUN: %{harness_check} contains %t.wrong.log "does not match \S*wrong\.expected"
+# RUN: llvm-readobj --coff-imports %t.d/prog.exe > %t.imports
+# RUN: %{harness_check} contains %t.imports "^  Name: VCRUNTIME140\.dll$" "^  Name: api-ms-win-crt-heap-l1-1-0\.dll$" "^  Name: api-ms-win-crt-locale-l1-1-0\.dll$" "^  Name: api-ms-win-crt-math-l1-1-0\.dll$" "^  Name: api-ms-win-crt-runtime-l1-1-0\.dll$" "^  Name: api-ms-win-crt-stdio-l1-1-0\.dll$" "^  Name: KERNEL32\.dll$"
+
+# The static CRT without --hosted.
+# RUN: %msil_prog_build --mode native --level O2 --workdir %t.static.d --out %t.static.d/prog.exe --src %S/Inputs/hosted-exit-windows.c > %t.static.log 2>&1
+# RUN: %{harness_check} contains %t.static.log "^msil-prog: \S*clang\S* --target=x86_64-pc-windows-msvc -std=gnu17 .* -O2 -c \S*hosted-exit-windows\.c -o obj/hosted-exit-windows\.o$"
+# RUN: %{harness_check} lacks %t.static.log "-fms-runtime-lib"
+# RUN: %msil_exec --native --expect %S/Inputs/hosted-exit-windows --out %t.static.out %t.static.d/prog.exe
+# RUN: llvm-readobj --coff-imports %t.static.d/prog.exe > %t.static.imports
+# RUN: %{harness_check} contains %t.static.imports "^  Name: KERNEL32\.dll$"
+# RUN: %{harness_check} lacks %t.static.imports "VCRUNTIME140" "api-ms-win-crt-"

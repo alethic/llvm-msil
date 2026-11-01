@@ -76,9 +76,13 @@ void llvm::MSIL::computeLegalValueVTs(const MSILTargetLowering &TLI,
   SmallVector<EVT, 4> VTs;
   ComputeValueVTs(TLI, DL, Ty, VTs);
 
+  // The calling-convention register types, which SelectionDAG's call, formal
+  // argument and return lowering use (bf16 differs from getRegisterType);
+  // MSIL lowers every supported convention alike.
   for (EVT VT : VTs) {
-    unsigned NumRegs = TLI.getNumRegisters(Ctx, VT);
-    MVT RegisterVT = TLI.getRegisterType(Ctx, VT);
+    unsigned NumRegs =
+        TLI.getNumRegistersForCallingConv(Ctx, CallingConv::C, VT);
+    MVT RegisterVT = TLI.getRegisterTypeForCallingConv(Ctx, CallingConv::C, VT);
     for (unsigned I = 0; I != NumRegs; ++I)
       ValueVTs.push_back(RegisterVT);
   }

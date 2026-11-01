@@ -1,0 +1,17 @@
+errno after errno = 0=0
+strtoll overflow is LLONG_MAX=1
+strtoll overflow sets ERANGE=1
+strtoll underflow is LLONG_MIN=1
+strtoll underflow sets ERANGE=1
+strtoll("12345xyz")=12345
+characters parsed=5
+a partial parse leaves errno 0=0
+strtoull overflow is ULLONG_MAX=1
+strtoull overflow sets ERANGE=1
+fopen of a missing file is NULL=1
+fopen of a missing file sets ENOENT=1
+remove of a missing file fails=1
+remove of a missing file sets ENOENT=1
+errno = EINVAL reads back=1
+&errno is the same for two reads=1
+[exit 0]

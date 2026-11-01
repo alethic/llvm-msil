@@ -33,11 +33,13 @@
 #include "Config.h"
 #include "Exports.h"
 #include "InputFiles.h"
+#include "LTO.h"
 #include "MapFile.h"
 #include "MarkLive.h"
 #include "NativeLibraries.h"
 #include "ReferenceSet.h"
 #include "SymbolTable.h"
+#include "TrailerDefFile.h"
 #include "Writer.h"
 #include "lld/Common/Args.h"
 #include "lld/Common/CommonLinkerContext.h"
@@ -54,7 +56,6 @@
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/BinaryFormat/Magic.h"
-#include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CLI/MetadataBuilder.h"
 #include "llvm/LTO/LTO.h"
 #include "llvm/Object/Archive.h"
@@ -92,6 +93,7 @@ void Ctx::reset() {
   nativeLibraryFiles.clear();
   loadedFiles.clear();
   nativeIndex.clear();
+  compilerRuntimeNames.clear();
   references = std::make_unique<ReferenceSet>();
   alternateNames.clear();
   appliedAlternateNames.clear();
@@ -957,8 +959,11 @@ void LinkerDriver::applyAlternateNames() {
     Symbol *sym = symtab->find(from);
     if (!sym || !sym->isUndefined())
       continue;
+    // A name that no native library may define (plan 5.14.2,
+    // mayBindNatively) has no native definition, so it is redirected.
     SmallVector<const NativeExport *, 2> rejected;
-    if (ctx.nativeIndex.lookup(from, rejected,
+    if (mayBindNatively(from, ctx) &&
+        ctx.nativeIndex.lookup(from, rejected,
                                /*isFunctionReference=*/!sym->isData()))
       continue;
     // lookup returns null for a command-line object's definition, and puts
@@ -1409,28 +1414,6 @@ void LinkerDriver::checkInputFile(const InputFile &f) {
   }
 }
 
-// Returns true if \p f has a ThinLTO module, by lto::LTO::addModule's rule (a
-// module with a summary that is not a regular LTO module). The lto::InputFile
-// itself knows only after it is added to LTO.
-static bool isThinLTO(const BitcodeFile *f) {
-  Expected<std::vector<BitcodeModule>> modsOrErr =
-      getBitcodeModuleList(f->obj->getFileBuffer());
-  if (!modsOrErr) {
-    consumeError(modsOrErr.takeError());
-    return false;
-  }
-  for (BitcodeModule &bm : *modsOrErr) {
-    Expected<BitcodeLTOInfo> info = bm.getLTOInfo();
-    if (!info) {
-      consumeError(info.takeError());
-      continue;
-    }
-    if (info->IsThinLTO)
-      return true;
-  }
-  return false;
-}
-
 LinkerDriver::LinkerDriver(Ctx &ctx) : ctx(ctx) {}
 
 void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
@@ -1532,6 +1515,13 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   if (errorCount())
     return;
 
+  // The compiler-runtime names of the codegen triple (plan 5.14.2 N1), once
+  // per link, for every check of a name's class (isCompilerRuntimeName). A
+  // link without a triple yet has none: it stops before anything binds.
+  if (!ctx.arg.target.str().empty())
+    ctx.compilerRuntimeNames = getCompilerRuntimeNames(
+        lto::LTO::getRuntimeLibcallSymbols(ctx.arg.target));
+
   // Fail early if the output file or map file is not writable. If a user has a
   // long link, e.g. due to a large LTO link, they do not wish to run it and
   // find that it failed because there was a mistake in their command-line.
@@ -1579,6 +1569,15 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
   addPendingFiles();
   if (errorCount())
     return;
+
+  // The trailer definitions (plan 5.14.4 T5): one lazy input after the
+  // inputs of the command line and the libraries that they request, so that
+  // it is searched after every real archive and before the native libraries,
+  // which bind late. Its lazy symbols stay for the references that
+  // /alternatename and the LTO objects make later. A link without a codegen
+  // triple stops below.
+  if (!ctx.arg.target.str().empty())
+    symtab->addFile(make<TrailerDefFile>());
 
   // Every input is loaded: /alternatename applies to the names that are
   // still undefined, and may extract the members that define the targets.

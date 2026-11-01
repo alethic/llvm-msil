@@ -149,18 +149,24 @@ public:
                             const MSILLink::Record &R) = 0;
 
   // The parts of the trailer's synthesized methods (cli::buildTrailer, plan
-  // 5.9.10) that MSIL::Signature and MSILMemberRefExpr cannot spell: the
-  // headers of the data-import helpers, whose signatures take strings, and
-  // their instructions whose token operand is a string literal or such a
-  // helper. Whole-program text only: the defaults are internal errors, which
-  // the object streamer keeps.
+  // 5.9.10) that MSIL::Signature, MSILMethodDecl and MSILMemberRefExpr cannot
+  // spell: the headers of the helper methods (the data-import helpers, whose
+  // signatures take strings, and the trailer definitions, which have
+  // implementation flags), and the data-import helpers' instructions whose
+  // token operand is a string literal or such a helper. Whole-program text
+  // only: the defaults are internal errors, which the object streamer keeps.
 
   /// The header of a synthesized helper method followed by the line '{':
   /// '.method <access> [hidebysig] [specialname] [rtspecialname] [static]
-  /// <ret> '<Name>'(<params>) cil managed', from \p Flags and \p Sig (plan
-  /// 5.10.12: '<msil>dataimport', '<msil>init_dataimports').
+  /// <ret> '<Name>'(<params>) cil managed [noinlining]', from \p Flags, \p Sig
+  /// and \p ImplFlags (plan 5.10.12: '<msil>dataimport',
+  /// '<msil>init_dataimports'; plan 5.14.4 T4: the trailer definitions, such
+  /// as '__msil_compiler_barrier'). Of the implementation flags only
+  /// NoInlining ('noinlining') prints; any other nonzero \p ImplFlags is an
+  /// internal error.
   virtual void emitHelperBegin(StringRef Name, cli::MethodAttributes Flags,
-                               const cli::MethodSig &Sig);
+                               const cli::MethodSig &Sig,
+                               cli::MethodImplAttributes ImplFlags);
   /// An instruction whose token operand is the string literal \p UTF8:
   /// '  ldstr "<UTF8>"'.
   virtual void emitStringInstruction(cli::Opcode Op, StringRef UTF8);
@@ -207,7 +213,8 @@ public:
                         StringRef TripleStr) override;
   void emitLinkInfo(StringRef ModuleName, const MSILLink::Record &R) override;
   void emitHelperBegin(StringRef Name, cli::MethodAttributes Flags,
-                       const cli::MethodSig &Sig) override;
+                       const cli::MethodSig &Sig,
+                       cli::MethodImplAttributes ImplFlags) override;
   void emitStringInstruction(cli::Opcode Op, StringRef UTF8) override;
   void emitHelperInstruction(cli::Opcode Op, StringRef Name,
                              const cli::MethodSig &Sig) override;
@@ -235,8 +242,8 @@ public:
   void emitBlankLine() override {}
   void emitObjectHeader(bool, StringRef, StringRef) override {}
   void emitLinkInfo(StringRef, const MSILLink::Record &) override {}
-  void emitHelperBegin(StringRef, cli::MethodAttributes,
-                       const cli::MethodSig &) override {}
+  void emitHelperBegin(StringRef, cli::MethodAttributes, const cli::MethodSig &,
+                       cli::MethodImplAttributes) override {}
   void emitStringInstruction(cli::Opcode, StringRef) override {}
   void emitHelperInstruction(cli::Opcode, StringRef,
                              const cli::MethodSig &) override {}

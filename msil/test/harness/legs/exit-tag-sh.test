@@ -1,0 +1,47 @@
+# The leg tag Exit in lit-legs.sh (plan 5.17.6, M24): --exit adds the legs
+# tagged Exit to the default set (the untagged legs), as --full adds the Full
+# legs; the Quick leg (hosted) runs only when --leg names it. --list marks a
+# tagged leg with its switch ('name (--full)', 'name (--exit)'); the Quick leg
+# has no switch and none. No leg is tagged Exit at M24, so the checks read the
+# legs from --describe each time and hold for every leg a later milestone
+# tags. Against the stand-in build of Inputs/ci-legs.py, whose lit passes,
+# inside WSL from Windows (the WSL legs) and natively on Linux,
+# Inputs/legs-check.py checks:
+# (1) --list and --describe name the same legs in the same order, each listed
+# with the switch of its tag.
+# (2) The rows (MSIL_CI_RESULTS) of a run with no switch and of one with
+# --exit are exactly the legs of that set, in --describe's order. The stand-in
+# cannot pass the non-lit legs (expected, utc), so both runs exit 1.
+# (3) The failure path: net8 planted as Exit in the JSON fails the --list
+# check and the run without --exit; hosted planted as Exit fails the --exit
+# run, which lacks it.
+# exit-tag.test checks lit-legs.ps1 -Exit.
+# REQUIRES: msil-ci-bash
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %python %S/Inputs/ci-legs.py setup %t/build
+
+# (1)
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build -- --list > %t/list.txt
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build -- --describe > %t/describe.json
+# RUN: %python %S/Inputs/legs-check.py tags sh %t/list.txt %t/describe.json > %t/1.log
+# RUN: %{harness_check} contains %t/1.log "^legs-check: \d+ legs, the list's tags are the JSON's \(.*untagged \d+\); Exit legs: \S.*$"
+# RUN: %{harness_check} contains %t/list.txt "^hosted$"
+# RUN: %{harness_check} missing %t/build/lit-calls.log
+
+# (2)
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-default -- > %t/default.log
+# RUN: %python %S/Inputs/legs-check.py rows sh %t/describe.json %t/rows-default > %t/2-default.log
+# RUN: %{harness_check} contains %t/2-default.log "^legs-check: \d+ rows, the legs of the default set; Exit legs among them: none$"
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-exit -- --exit > %t/exit.log
+# RUN: %python %S/Inputs/legs-check.py rows sh %t/describe.json %t/rows-exit --exit > %t/2-exit.log
+# RUN: %{harness_check} contains %t/2-exit.log "^legs-check: \d+ rows, the legs of exit; Exit legs among them: \S.*$"
+# RUN: %{harness_check} lacks %t/rows-exit "^lit-legs\thosted\t"
+
+# (3)
+# RUN: not %python %S/Inputs/legs-check.py tags sh %t/list.txt %t/describe.json --plant net8=Exit > %t/3a.log
+# RUN: %{harness_check} contains %t/3a.log "^legs-check: error: leg net8: listed with 'no switch', its tag 'Exit'$"
+# RUN: not %python %S/Inputs/legs-check.py rows sh %t/describe.json %t/rows-default --plant net8=Exit > %t/3b.log
+# RUN: %{harness_check} contains %t/3b.log "^legs-check: error: the run's legs \[[^]]*'net8'[^]]*\], not \[(?![^]]*'net8')[^]]*\]$"
+# RUN: not %python %S/Inputs/legs-check.py rows sh %t/describe.json %t/rows-exit --exit --plant hosted=Exit > %t/3c.log
+# RUN: %{harness_check} contains %t/3c.log "^legs-check: error: the run's legs \[(?![^]]*'hosted')[^]]*\], not \[[^]]*'hosted'[^]]*\]$"

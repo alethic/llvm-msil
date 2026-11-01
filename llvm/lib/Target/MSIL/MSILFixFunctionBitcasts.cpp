@@ -99,9 +99,12 @@
 /// so that a later run finds them direct.
 /// The wrappers keep the Phase 1 names ('<f>_bitcast'): R5 and C8 forbid
 /// '<msil>' names in objects. The texts are 5.9.8's without the ' in <file>'
-/// parts, since the merged module has no files; msil-ld's LTO diagnostic
-/// handler prints them. Calls of declarations (native imports, or symbols of
-/// other objects in object mode) keep the behaviour above.
+/// parts, since the merged module has no files, reported as the typed
+/// diagnostic cli::DiagnosticInfoCallMismatch: msil-ld's LTO diagnostic
+/// handler reads its fields and turns the mismatch of a helper's call into
+/// plan 5.14.2 N-1's error, and prints the others as they are. Calls of
+/// declarations (native imports, or symbols of other objects in object mode)
+/// keep the behaviour above.
 ///
 /// msil-ld's LTO applies the table before LTO optimization too (plan 5.9.8,
 /// section 12): MSILFixFunctionBitcastsLTOPass runs this branch at the start
@@ -131,10 +134,10 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CLI/CallAdapter.h"
+#include "llvm/CLI/CallMismatchDiagnostic.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Constants.h"
-#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
@@ -523,7 +526,12 @@ static Value *convertValue(IRBuilder<> &Builder, Value *V, Type *To,
 /// zero-extends constants and narrow loads (ldind.u1, ldind.u2). The table's
 /// int32 conversions (conv.i) then apply to that int32, as the object path's
 /// adapter applies them to the CIL method's result. A result of type \p To,
-/// or of another type, is unchanged.
+/// or of another type, is unchanged. Clang marks no char, short or _BitInt
+/// result 'signext' or 'zeroext' on any MSIL triple (a bool result stays
+/// 'zeroext'): since upstream 05c3ff5c8c06 the Linux triples, like the
+/// Windows ones, leave the bits above such a result unspecified, so the
+/// sign-extending branch is reached only from hand-written IR (plan section
+/// 12, 'Narrow results after upstream merge U2').
 static Value *widenNarrowResult(IRBuilder<> &Builder, CallInst *Call,
                                 const Function &F, Type *To) {
   Type *RetTy = Call->getType();
@@ -670,19 +678,12 @@ static Function *createLTOWrapper(Function *F, FunctionType *Ty,
     return nullptr;
 
   if (Match.Kind != cli::CallMatchKind::Direct && Report) {
-    std::string Text;
-    raw_string_ostream OS(Text);
-    OS << "function signature mismatch: " << MSIL::getILName(*F, TM)
-       << "\n>>> defined as ";
-    cli::printCallShape(OS, Def);
-    OS << "\n>>> called as ";
-    cli::printCallShape(OS, Call);
-    OS << "\n>>> ";
-    if (Match.Kind == cli::CallMatchKind::Adapter)
-      OS << "adapter: ";
-    OS << Match.Detail;
-    F->getContext().diagnose(DiagnosticInfoGeneric(
-        Text, Match.Kind == cli::CallMatchKind::Error ? DS_Error : DS_Warning));
+    std::string Defined, Called;
+    raw_string_ostream DefinedOS(Defined), CalledOS(Called);
+    cli::printCallShape(DefinedOS, Def);
+    cli::printCallShape(CalledOS, Call);
+    F->getContext().diagnose(cli::DiagnosticInfoCallMismatch(
+        MSIL::getILName(*F, TM), Match.Kind, Defined, Called, Match.Detail));
   }
   if (Match.Kind == cli::CallMatchKind::Error)
     return createTrapWrapper(F, Ty, CB.getAttributes());

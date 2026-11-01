@@ -12,9 +12,12 @@
 
 # RUN: %{harness_lit} --param msil_require_verify=1 %S/Inputs/nested-ok > %t.ok.log 2>&1
 # RUN: %{harness_check} contains %t.ok.log "^PASS: MSIL :: harness/Inputs/nested-ok/exit-42\.test"
-# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_require_verify=1 --param msil_ilverify= %S/Inputs/nested-ok > %t.ilverify.log 2>&1
+# Each nested run below whose probe fails (a missing or broken tool) passes
+# --param msil_probe_cache= (empty), so it neither reads the parent's probe
+# cache nor replaces it with its own probes (plan 5.17.10; probe-cache.test).
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --param msil_require_verify=1 --param msil_ilverify= %S/Inputs/nested-ok > %t.ilverify.log 2>&1
 # RUN: %{harness_check} contains %t.ilverify.log "fatal: .*msil_require_verify=1" "ILVerify"
-# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_require_verify=1 --param msil_mdcanon= %S/Inputs/nested-ok > %t.mdcanon.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --param msil_require_verify=1 --param msil_mdcanon= %S/Inputs/nested-ok > %t.mdcanon.log 2>&1
 # RUN: %{harness_check} contains %t.mdcanon.log "fatal: .*msil_require_verify=1" "mdcanon"
-# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_require_verify=1 --param msil_cil_dump= %S/Inputs/nested-ok > %t.cildump.log 2>&1
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --param msil_require_verify=1 --param msil_cil_dump= %S/Inputs/nested-ok > %t.cildump.log 2>&1
 # RUN: %{harness_check} contains %t.cildump.log "fatal: .*msil_require_verify=1" "llvm-cil-dump"

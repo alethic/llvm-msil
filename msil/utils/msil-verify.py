@@ -245,7 +245,9 @@ as 'inf', which neither the .NET Framework ilasm nor the .NET ilasm 10.0.12
 reads back (llvm/docs/MSIL/recon/cil-runtime.md 15).
 
 Exit status: 0 if clean, 1 on a disallowed error (with --roundtrip: on a tool
-failure or a listing difference), 2 on a usage error.
+failure or a listing difference), 2 on a usage error. msil-steps.py imports
+this script (plan 5.17.10): main(argv) returns the exit status, for a usage
+error too, with the same messages as the command.
 """
 
 import argparse
@@ -1694,7 +1696,16 @@ def main_roundtrip(p, args):
     return 1 if bad else 0
 
 
-def main():
+def main(argv=None):
+    """The exit status of msil-verify.py with the arguments argv (default
+    sys.argv[1:]); argparse's usage errors (2) and --help (0) included."""
+    try:
+        return _main(sys.argv[1:] if argv is None else list(argv))
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else (0 if e.code is None else 2)
+
+
+def _main(argv):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument(
         "--ilverify", help="ILVerify executable (dotnet tool dotnet-ilverify)"
@@ -1805,7 +1816,7 @@ def main():
         help="also verify each managed file of the --dep-dir directories",
     )
     p.add_argument("assembly")
-    args = p.parse_args()
+    args = p.parse_args(argv)
     try:
         msil_run.check_deps(args.dep, [])
     except msil_run.ConfigError as e:

@@ -1,0 +1,83 @@
+# %{msil_limits} (plan 5.17.2, 5.17.9; M24): the tool limits are one
+# placeholder, '--timeout <msil_timeout> --mem-limit-mb <msil_mem_limit_mb>',
+# that a test of a large program redefines for all of its commands. Every
+# msil-run.py, msil-verify.py, msil-jitall.py and msil-steps.py command, the
+# ilasm command, %msil_ld, %msil_mdcanon and %msil_cil_dump take it, and
+# %msil_prog_build takes '%{msil_limits} --timeout-factor 10' (the build
+# steps keep their ten-fold timeout); update-expected.py honours the
+# redefinition for its native build and run.
+# (1) Before the REDEFINE line below, these substitutions carry the
+# configuration's limits, which are msil_timeout's default of 60 seconds
+# when no leg sets the limits (feature msil-default-limits, ./lit.local.cfg);
+# after it, every one carries the new values and none carries any other
+# --timeout or --mem-limit-mb.
+# (2) The redefined timeout governs a run: Inputs/spin.il, which does not
+# finish, is '[timeout]' after the three seconds of the second REDEFINE,
+# well within the bound that the configuration's timeout would exceed.
+# (3) A composite of a test that redefines the limits, in a nested lit with
+# -a of prog/Inputs/nested-limits (msil-prog.py with the stand-ins of
+# prog/Inputs/prog-cc.py): its build takes the new limits with
+# --timeout-factor 10, msil-steps.py and every step after the build take
+# them as they are, and the native oracle's build again with the factor.
+# (4) update-expected.py on copies of a test with the stand-in compiler of
+# Inputs/fake-native-sleep.il, whose native program sleeps for four seconds:
+# under a redefined timeout of one second ('--timeout 1' or '--timeout=1')
+# the native run does not finish and the test is REFUSED, while the same test
+# without the redefinition gets its expected file; a redefinition that is
+# not '--timeout S' or '--mem-limit-mb N', or whose value is not a number, is
+# a test file error.
+# REQUIRES: system-windows, msil-netfx, msil-ld, msil-mdcanon, msil-cil-dump
+
+# (1)
+# RUN: echo "exec: %msil_exec" > %t.before
+# RUN: echo "ilasm: %ilasm" >> %t.before
+# RUN: echo "prog: %msil_prog_build" >> %t.before
+# RUN: %{harness_check} contains %t.before "^exec: \S*python\S* \S*msil-run\.py --expect-os \S+ --timeout \d+ --mem-limit-mb \d+ " "^ilasm: \S*python\S* \S*msil-run\.py --tool --timeout \d+ --mem-limit-mb \d+ -- " "^prog: .* --timeout \d+ --mem-limit-mb \d+ --timeout-factor 10$"
+# RUN: %if msil-default-limits %{ %{harness_check} contains %t.before "^exec: \S*python\S* \S*msil-run\.py --expect-os \S+ --timeout 60 " %}
+# REDEFINE: %{msil_limits} = --timeout 7 --mem-limit-mb 777
+# RUN: echo "exec: %msil_exec" > %t.after
+# RUN: echo "verify: %msil_verify" >> %t.after
+# RUN: echo "jitall: %msil_jitall" >> %t.after
+# RUN: echo "steps: %msil_steps" >> %t.after
+# RUN: echo "ilasm: %ilasm" >> %t.after
+# RUN: echo "ld: %msil_ld" >> %t.after
+# RUN: echo "mdcanon: %msil_mdcanon" >> %t.after
+# RUN: echo "cildump: %msil_cil_dump" >> %t.after
+# RUN: echo "prog: %msil_prog_build" >> %t.after
+# RUN: %{harness_check} contains %t.after "^exec: \S*python\S* \S*msil-run\.py --expect-os \S+ --timeout 7 --mem-limit-mb 777 " "^verify: \S*python\S* \S*msil-verify\.py .*--timeout 7 --mem-limit-mb 777( |$)" "^jitall: \S*python\S* \S*msil-jitall\.py .*--timeout 7 --mem-limit-mb 777( |$)" "^steps: \S*python\S* \S*msil-steps\.py --timeout 7 --mem-limit-mb 777$"
+# RUN: %{harness_check} contains %t.after "^ilasm: \S*python\S* \S*msil-run\.py --tool --timeout 7 --mem-limit-mb 777 -- \S*ilasm" "^ld: \S*python\S* \S*msil-run\.py --tool --timeout 7 --mem-limit-mb 777 -- \S*msil-ld" "^mdcanon: \S*python\S* \S*msil-run\.py --tool --timeout 7 --mem-limit-mb 777 -- .*mdcanon" "^cildump: \S*python\S* \S*msil-run\.py --tool --timeout 7 --mem-limit-mb 777 -- \S*llvm-cil-dump"
+# RUN: %{harness_check} contains %t.after "^prog: \S*python\S* \S*msil-prog\.py .*--ilasm=\S*python\S* \S*msil-run\.py --tool --timeout 7 --mem-limit-mb 777 -- .* --timeout 7 --mem-limit-mb 777 --timeout-factor 10$"
+# RUN: %{harness_check} lacks %t.after "--timeout (?!7\b)\d" "--mem-limit-mb (?!777\b)\d"
+
+# (2)
+# REDEFINE: %{msil_limits} = --timeout 3 --mem-limit-mb 777
+# RUN: %ilasm -dll -output=%t.spin.dll %S/Inputs/spin.il
+# RUN: %{harness_check} within 40 %msil_exec --expect %S/Inputs/spin --out %t.spin.out %t.spin.dll
+# RUN: %{harness_check} equals %t.spin.out "[timeout]"
+
+# (3)
+# RUN: %{harness_lit} -a --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local --param msil_native_oracle=required --param msil_run_netfx=1 %S/prog/Inputs/nested-limits > %t.3.log 2>&1
+# RUN: %{harness_check} contains %t.3.log "^PASS: MSIL :: harness/prog/Inputs/nested-limits/limits\.c " "^# executed command: \S*python\S* \S*msil-prog\.py .* --timeout 37 --mem-limit-mb 3777 --timeout-factor 10 --level O0 " "^# executed command: \S*python\S* \S*msil-steps\.py --timeout 37 --mem-limit-mb 3777 --step=verify "
+# RUN: %{harness_check} contains %t.3.log "^# \| msil-steps: verify: .*msil-verify\.py'? .*--timeout 37 --mem-limit-mb 3777 " "^# \| msil-steps: native-build: .*msil-prog\.py'? .*--timeout 37 --mem-limit-mb 3777 --timeout-factor 10 --mode native " "^# \| msil-steps: jitall: .*msil-jitall\.py'? .*--timeout 37 --mem-limit-mb 3777 " "^# \| msil-steps: run: .*msil-run\.py'? --expect-os \S+ --timeout 37 --mem-limit-mb 3777 " "^# \| msil-steps: native-run: .*msil-run\.py'? --expect-os \S+ --timeout 37 --mem-limit-mb 3777 .*--native " "^# \| msil-steps: netfx-run: .*msil-run\.py'? --expect-os \S+ --timeout 37 --mem-limit-mb 3777 .*--netfx "
+# RUN: %{harness_check} lacks %t.3.log "^# (executed command|\| msil-steps).*--timeout (?!37\b)\d" "^# (executed command|\| msil-steps).*--mem-limit-mb (?!3777\b)\d"
+
+# (4)
+# RUN: rm -rf %t.ue && mkdir -p %t.ue
+# RUN: %ilasm -exe -output=%t.ue/sleep.exe %S/Inputs/fake-native-sleep.il %S/Inputs/fake-native-cc.il
+# RUN: %{harness_check} write %t.ue/t1.c "// REDEFINE: %%{msil_limits} = --timeout 1 --mem-limit-mb 777" "// RUN: %%{msil_c_O0}" "int main(void) { return 44; }"
+# RUN: %{harness_check} write %t.ue/t2.c "// RUN: %%{msil_c_O0}" "int main(void) { return 44; }"
+# RUN: %{harness_check} write %t.ue/t3.c "// REDEFINE: %%{msil_limits} = --timeout=1 --mem-limit-mb 777" "// RUN: %%{msil_c_O0}" "int main(void) { return 44; }"
+# RUN: %{harness_check} write %t.ue/t4.c "// REDEFINE: %%{msil_limits} = --timeout abc" "// RUN: %%{msil_c_O0}" "int main(void) { return 44; }"
+# RUN: %{harness_check} write %t.ue/t5.c "// REDEFINE: %%{msil_limits} = --bogus 3" "// RUN: %%{msil_c_O0}" "int main(void) { return 44; }"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang %t.ue/sleep.exe --rtlib none %t.ue/t1.c > %t.4a.log 2>&1
+# RUN: %{harness_check} contains %t.4a.log "^REFUSED: \S*t1\.c: the native run ended with \[timeout\]: a native run that does not exit normally is no oracle$"
+# RUN: %{harness_check} missing %t.ue/t1.expected
+# RUN: %{harness_update_expected} --clang %t.ue/sleep.exe --rtlib none %t.ue/t2.c > %t.4b.log 2>&1
+# RUN: %{harness_check} contains %t.4b.log "^wrote \S*t2\.expected$"
+# RUN: %{harness_check} equals %t.ue/t2.expected "[exit 44]"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang %t.ue/sleep.exe --rtlib none %t.ue/t3.c > %t.4c.log 2>&1
+# RUN: %{harness_check} contains %t.4c.log "^REFUSED: \S*t3\.c: the native run ended with \[timeout\]"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang %t.ue/sleep.exe --rtlib none %t.ue/t4.c > %t.4d.log 2>&1
+# RUN: %{harness_check} contains %t.4d.log "^update-expected: \S*t4\.c: %\{msil_limits\}: --timeout 'abc' is not a number$" "^FAIL \(test file\): \S*t4\.c$"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang %t.ue/sleep.exe --rtlib none %t.ue/t5.c > %t.4e.log 2>&1
+# RUN: %{harness_check} contains %t.4e.log "^update-expected: \S*t5\.c: %\{msil_limits\}: '--bogus' is not --timeout S or --mem-limit-mb N$" "^FAIL \(test file\): \S*t5\.c$"

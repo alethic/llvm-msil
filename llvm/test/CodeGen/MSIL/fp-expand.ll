@@ -43,15 +43,17 @@
 ;   call, so a bfloat operand is no error either; a half operand is widened
 ;   by the compiler-rt call __extendhfsf2, which LowerCall reports with the
 ;   runtime helper text (I128). (i128 to half and to bfloat still name their
-;   helpers: i128-divrem.ll's helpers part.) The constrained conversions are
-;   not expanded: they are still the compiler-rt calls __fixsfti, __fixdfti,
-;   __fixunssfti and __fixunsdfti, whose two-value results would be demoted
-;   to a stack slot, so ReplaceNodeResults reports them with the runtime
-;   helper text and returns UNDEF (row 'M5.a extended'); from half and bfloat
-;   they name the float32 functions __fixsfti and __fixunssfti, which the
-;   legalizer calls after it extends the operand to float32; never '?' and
-;   never __fixhfti (row "Row 'M5.a extended' (floating point to i128)
-;   amended") (I128S).
+;   helpers: i128-divrem.ll's helpers part.) Since M24 the constrained
+;   (strictfp) conversions to i128 expand exactly as the plain ones: before
+;   ExpandIRInsts runs, MSIL::relaxStrictInt128Conversions (slot P0, plan
+;   5.13.6) replaces each by the plain instruction, since CIL has one rounding
+;   mode and no floating-point exceptions. So from float32, float64 and
+;   bfloat nothing is reported and nothing is called, and from half the error
+;   names __extendhfsf2, as the plain conversion's does; the compiler-rt
+;   calls __fixsfti, __fixdfti, __fixunssfti and __fixunsdfti, which
+;   ReplaceNodeResults reported until then (row 'M5.a extended'), are never
+;   named, and neither is '?' or __fixhfti (I128S; strict-i128.ll checks that
+;   each body equals its plain twin's).
 ; - CIL rounds only to nearest (row 'M5.a extended (constrained floating
 ;   point and rounding mode)'): llvm.set.rounding, and llvm.fptrunc.round with
 ;   any other mode than round.tonearest, report "changing the floating-point
@@ -62,19 +64,24 @@
 ;   round.tonearest legalizes like the plain fptrunc: one conv.r4 per element
 ;   of a float32 vector, and one diagnosed __truncsfhf2 or __truncsfbf2 per
 ;   half or bfloat element.
-; - bfloat values are promoted to float32 like half, and the conversions are
-;   the compiler-rt calls __extendbfsf2, __truncsfbf2 and __truncdfbf2 that
-;   LowerBF16Conversion builds instead of the generic integer expansions
-;   through a stack slot; LowerCall diagnoses them (same row). A truncation
+; - bfloat values are promoted to float32 like half. Since M24 (fp-helpers
+;   F2 (a)) a bfloat parameter or result is its 16-bit pattern in an int32,
+;   as a half is (bf16-signatures.ll), the extensions to float32 and float64
+;   are inline (the pattern shifted left by 16 and reinterpreted as a
+;   float32, then conv.r8 for float64), and only the truncations from float32
+;   and float64 are the compiler-rt calls __truncsfbf2 and __truncdfbf2, which
+;   LowerCall diagnoses (same row); __extendbfsf2 is never named. A truncation
 ;   only stays alive when its result is used, here through 'bitcast bfloat to
-;   i16'; an extension of a bfloat argument is a no-op (the argument is
-;   already a float32), so the extensions start from 'bitcast i16 to bfloat'.
+;   i16', and the values start from 'bitcast i16 to bfloat' as for half.
 ; - Constrained operations (strictfp) on half and bfloat end exactly as their
 ;   plain forms do (row 'M5.a extended (constrained operations on half and
-;   bfloat)'): fpext, fptrunc, fadd, fcmp, fcmps, sitofp and fptosi report the
-;   compiler-rt conversion of the plain form, never 'LLVM ERROR' (the type
-;   legalizer has no soft promotion for them, and STRICT_FP16_TO_FP and the
-;   other strict conversions it builds have no instruction).
+;   bfloat)'): on half, fpext, fptrunc, fadd, fcmp, fcmps, sitofp and fptosi
+;   report the compiler-rt conversion of the plain form; on bfloat, whose
+;   extension is inline since M24, fpext, fcmp, fcmps and fptosi compile with
+;   no call and no report, and fptrunc, fadd and sitofp report __truncsfbf2
+;   or __truncdfbf2; never 'LLVM ERROR' (the type legalizer has no soft
+;   promotion for them, and STRICT_FP16_TO_FP and the other strict
+;   conversions it builds have no instruction).
 ; - fp128, x86_fp80 and ppc_fp128 have no CIL type (their operations become
 ;   compiler-rt calls with results in memory, and their values are passed in
 ;   memory), and llvm.get.fpenv, llvm.set.fpenv, llvm.get.fpmode and
@@ -92,9 +99,10 @@
 ; the runtime helper is printed, and the IL on stdout still assembles. Where
 ; one function has exactly one library call or one unsupported type, every
 ; error line is accounted for (no other error or warning, in this order); for
-; f16 and bfloat (plain and constrained) each function needs at least one
-; error naming one of its runtime helpers, since how many of the calls are
-; diagnosed depends on the legalizer.
+; f16 and bfloat (plain and constrained) each function that converts through
+; a helper needs at least one error naming one of its runtime helpers, since
+; how many of the calls are diagnosed depends on the legalizer, and the
+; bfloat functions that only extend have no error at all.
 ; Every part runs on both triples at -O2 and at least once at -O0. fabs,
 ; copysign and the bitcasts between integers and floating point go through
 ; memory and are tested in M7.c (plan 5.5).
@@ -191,7 +199,8 @@
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/multi.win.dll %t/multi.win.il %}
 
 ; Floating point to i128: plain (only half is an error since M12),
-; constrained (unchanged) and saturating (no error since M12).
+; constrained (the same as plain since M24) and saturating (no error since
+; M12).
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/i128.ll -o /dev/null 2>&1 \
 ; RUN:   | %{diag} --check-prefix=I128
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/i128.ll -o /dev/null 2>&1 \
@@ -249,54 +258,61 @@
 ; RUN: FileCheck %s --check-prefixes=ROUND-IL,ROUND-IL-O0 --implicit-check-not=call --input-file=%t/rounding.win.o0.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/rounding.dll %t/rounding.lnx.il %}
 
-; bfloat.
+; bfloat. The extensions report nothing (a second negative check over the
+; whole file, as %{nameban} does). Their frame slot is allocated with
+; localloc, which contains the letters 'call', so the BF16-IL and STRICT16-IL
+; runs ban an instruction line that starts with call.
+; DEFINE: %{bf16ok} = --implicit-check-not="{{function bf16_ext_f(32|64) }}" --implicit-check-not=__extendbfsf2
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/bf16.ll -o /dev/null \
 ; RUN:   2> %t/names.err
 ; RUN: %{names} --check-prefix=BF16
-; RUN: %{nameban}
+; RUN: %{nameban} %{bf16ok}
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/bf16.ll -o /dev/null \
 ; RUN:   2> %t/names.err
 ; RUN: %{names} --check-prefix=BF16
-; RUN: %{nameban}
+; RUN: %{nameban} %{bf16ok}
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/bf16.ll -o /dev/null \
 ; RUN:   2> %t/names.err
 ; RUN: %{names} --check-prefix=BF16
-; RUN: %{nameban}
+; RUN: %{nameban} %{bf16ok}
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/bf16.ll -o /dev/null \
 ; RUN:   2> %t/names.err
 ; RUN: %{names} --check-prefix=BF16
-; RUN: %{nameban}
+; RUN: %{nameban} %{bf16ok}
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/bf16.ll \
 ; RUN:   > %t/bf16.lnx.il
-; RUN: FileCheck %s --check-prefix=BF16-IL --implicit-check-not=call --input-file=%t/bf16.lnx.il
+; RUN: FileCheck %s --check-prefix=BF16-IL --implicit-check-not="{{^ +call}}" --input-file=%t/bf16.lnx.il
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/bf16.ll \
 ; RUN:   > %t/bf16.win.il
-; RUN: FileCheck %s --check-prefix=BF16-IL --implicit-check-not=call --input-file=%t/bf16.win.il
+; RUN: FileCheck %s --check-prefix=BF16-IL --implicit-check-not="{{^ +call}}" --input-file=%t/bf16.win.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/bf16.dll %t/bf16.win.il %}
 
-; Constrained operations on half and bfloat.
+; Constrained operations on half and bfloat. The bfloat functions that only
+; extend report nothing.
+; DEFINE: %{strict16ok} = --implicit-check-not=__extendbfsf2 \
+; DEFINE:   --implicit-check-not="{{function strict_(fpext_bf16_f32|fpext_bf16_f64|fcmp_bf16|fcmps_bf16|fptosi_bf16_i32) }}"
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/strict16.ll -o /dev/null \
 ; RUN:   2> %t/names.err
 ; RUN: %{names} --check-prefix=STRICT16
-; RUN: %{nameban}
+; RUN: %{nameban} %{strict16ok}
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/strict16.ll -o /dev/null \
 ; RUN:   2> %t/names.err
 ; RUN: %{names} --check-prefix=STRICT16
-; RUN: %{nameban}
+; RUN: %{nameban} %{strict16ok}
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -verify-machineinstrs < %t/strict16.ll -o /dev/null \
 ; RUN:   2> %t/names.err
 ; RUN: %{names} --check-prefix=STRICT16
-; RUN: %{nameban}
+; RUN: %{nameban} %{strict16ok}
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/strict16.ll -o /dev/null \
 ; RUN:   2> %t/names.err
 ; RUN: %{names} --check-prefix=STRICT16
-; RUN: %{nameban}
+; RUN: %{nameban} %{strict16ok}
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/strict16.ll \
 ; RUN:   > %t/strict16.lnx.il
-; RUN: FileCheck %s --check-prefix=STRICT16-IL --implicit-check-not=call --input-file=%t/strict16.lnx.il
+; RUN: FileCheck %s --check-prefix=STRICT16-IL --implicit-check-not="{{^ +call}}" --input-file=%t/strict16.lnx.il
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/strict16.ll \
 ; RUN:   > %t/strict16.win.il
-; RUN: FileCheck %s --check-prefix=STRICT16-IL --implicit-check-not=call --input-file=%t/strict16.win.il
+; RUN: FileCheck %s --check-prefix=STRICT16-IL --implicit-check-not="{{^ +call}}" --input-file=%t/strict16.win.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/strict16.dll %t/strict16.lnx.il %}
 
 ; fp128, x86_fp80, ppc_fp128 and the floating-point environment.
@@ -1357,52 +1373,39 @@ define i64 @after_i128(i32 %a) {
 
 
 ;--- i128-strict.ll
-; The constrained (strictfp) conversions to i128: the same errors.
+; The constrained (strictfp) conversions to i128 since M24: the plain
+; conversions' errors (half only), and the plain expansions elsewhere.
 source_filename = "fp-expand-i128-strict.c"
 
-; I128S:    error: {{.*}}in function fptosi_f32_i128_strict {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
-; I128S:    error: {{.*}}in function fptosi_f64_i128_strict {{.*}}: runtime helper '__fixdfti' is not available for MSIL yet (phase 3)
-; I128S:    error: {{.*}}in function fptoui_f32_i128_strict {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
-; I128S:    error: {{.*}}in function fptoui_f64_i128_strict {{.*}}: runtime helper '__fixunsdfti' is not available for MSIL yet (phase 3)
-; I128S:    error: {{.*}}in function fptosi_f16_i128_strict {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
-; I128S:    error: {{.*}}in function fptoui_f16_i128_strict {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
-; I128S:    error: {{.*}}in function fptosi_bf16_i128_strict {{.*}}: runtime helper '__fixsfti' is not available for MSIL yet (phase 3)
-; I128S:    error: {{.*}}in function fptoui_bf16_i128_strict {{.*}}: runtime helper '__fixunssfti' is not available for MSIL yet (phase 3)
+; I128S:    error: {{.*}}in function fptosi_f16_i128_strict {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+; I128S:    error: {{.*}}in function fptoui_f16_i128_strict {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
 
 ; I128S-IL-LABEL: .method {{.*}}'use128'(
 ; I128S-IL-SAME:  native int, native int) cil managed{{$}}
 ; I128S-IL-LABEL: .method {{.*}}'fptosi_f32_i128_strict'(
 ; I128S-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128S-IL:       {{^}}  ret{{$}}
-; I128S-IL-NEXT:  {{^}}} // end of method 'fptosi_f32_i128_strict'{{$}}
+; I128S-IL:       {{^}}} // end of method 'fptosi_f32_i128_strict'{{$}}
 ; I128S-IL-LABEL: .method {{.*}}'fptosi_f64_i128_strict'(
 ; I128S-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128S-IL:       {{^}}  ret{{$}}
-; I128S-IL-NEXT:  {{^}}} // end of method 'fptosi_f64_i128_strict'{{$}}
+; I128S-IL:       {{^}}} // end of method 'fptosi_f64_i128_strict'{{$}}
 ; I128S-IL-LABEL: .method {{.*}}'fptoui_f32_i128_strict'(
 ; I128S-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128S-IL:       {{^}}  ret{{$}}
-; I128S-IL-NEXT:  {{^}}} // end of method 'fptoui_f32_i128_strict'{{$}}
+; I128S-IL:       {{^}}} // end of method 'fptoui_f32_i128_strict'{{$}}
 ; I128S-IL-LABEL: .method {{.*}}'fptoui_f64_i128_strict'(
 ; I128S-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128S-IL:       {{^}}  ret{{$}}
-; I128S-IL-NEXT:  {{^}}} // end of method 'fptoui_f64_i128_strict'{{$}}
+; I128S-IL:       {{^}}} // end of method 'fptoui_f64_i128_strict'{{$}}
 ; I128S-IL-LABEL: .method {{.*}}'fptosi_f16_i128_strict'(
 ; I128S-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128S-IL:       {{^}}  ret{{$}}
-; I128S-IL-NEXT:  {{^}}} // end of method 'fptosi_f16_i128_strict'{{$}}
+; I128S-IL:       {{^}}} // end of method 'fptosi_f16_i128_strict'{{$}}
 ; I128S-IL-LABEL: .method {{.*}}'fptoui_f16_i128_strict'(
 ; I128S-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128S-IL:       {{^}}  ret{{$}}
-; I128S-IL-NEXT:  {{^}}} // end of method 'fptoui_f16_i128_strict'{{$}}
+; I128S-IL:       {{^}}} // end of method 'fptoui_f16_i128_strict'{{$}}
 ; I128S-IL-LABEL: .method {{.*}}'fptosi_bf16_i128_strict'(
 ; I128S-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128S-IL:       {{^}}  ret{{$}}
-; I128S-IL-NEXT:  {{^}}} // end of method 'fptosi_bf16_i128_strict'{{$}}
+; I128S-IL:       {{^}}} // end of method 'fptosi_bf16_i128_strict'{{$}}
 ; I128S-IL-LABEL: .method {{.*}}'fptoui_bf16_i128_strict'(
 ; I128S-IL:       {{^}}  call void 'use128'(native int, native int){{$}}
-; I128S-IL:       {{^}}  ret{{$}}
-; I128S-IL-NEXT:  {{^}}} // end of method 'fptoui_bf16_i128_strict'{{$}}
+; I128S-IL:       {{^}}} // end of method 'fptoui_bf16_i128_strict'{{$}}
 ; I128S-IL-LABEL: .method {{.*}}'after_i128_strict'(
 ; I128S-IL-NEXT:  {{^\{$}}
 ; I128S-IL-NEXT:  {{^}}  .maxstack 1{{$}}
@@ -1685,21 +1688,38 @@ declare <2 x half> @llvm.fptrunc.round.v2f16.v2f32(<2 x float>, metadata)
 declare i32 @llvm.get.rounding()
 
 ;--- bf16.ll
-; bfloat: every conversion between bfloat and float32 or float64 is a
-; compiler-rt call. As for half, a conversion whose only user is a diagnosed
-; call may be dropped without a diagnostic of its own, so the fadd (two
-; extensions and a truncation) is matched by a pattern.
+; bfloat: since M24 an extension to float32 or float64 is inline (the int32
+; that holds the pattern shifted left by 16, stored and read back as a
+; float32 through the frame slot, then conv.r8 for float64), and a
+; truncation from float32 or float64 is the compiler-rt call __truncsfbf2 or
+; __truncdfbf2. The fadd (two inline extensions and a truncation) names
+; __truncsfbf2.
 source_filename = "fp-expand-bf16.c"
 
-; BF16-DAG: error: {{.*}}in function bf16_ext_f32 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
-; BF16-DAG: error: {{.*}}in function bf16_ext_f64 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
 ; BF16-DAG: error: {{.*}}in function bf16_trunc_f32 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
 ; BF16-DAG: error: {{.*}}in function bf16_trunc_f64 {{.*}}: runtime helper '__truncdfbf2' is not available for MSIL yet (phase 3)
-; BF16-DAG: error: {{.*}}in function bf16_add {{.*}}: runtime helper '{{__extendbfsf2|__truncsfbf2}}' is not available for MSIL yet (phase 3)
+; BF16-DAG: error: {{.*}}in function bf16_add {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
 ; BF16-NOT: error: {{.*}}in function after_bf16
 ; BF16-NOT: LLVM ERROR
 ; BF16-NOT: PLEASE submit
 
+; BF16-IL-LABEL: .method public static float32 'bf16_ext_f32'(int32) cil managed{{$}}
+; BF16-IL:       {{^}}  ldarg.0{{$}}
+; BF16-IL-NEXT:  {{^}}  ldc.i4.s 16{{$}}
+; BF16-IL-NEXT:  {{^}}  shl{{$}}
+; BF16-IL-NEXT:  {{^}}  stind.i4{{$}}
+; BF16-IL:       {{^}}  ldind.r4{{$}}
+; BF16-IL-NEXT:  {{^}}  ret{{$}}
+; BF16-IL-NEXT:  {{^}}} // end of method 'bf16_ext_f32'{{$}}
+; BF16-IL-LABEL: .method public static float64 'bf16_ext_f64'(int32) cil managed{{$}}
+; BF16-IL:       {{^}}  ldarg.0{{$}}
+; BF16-IL-NEXT:  {{^}}  ldc.i4.s 16{{$}}
+; BF16-IL-NEXT:  {{^}}  shl{{$}}
+; BF16-IL-NEXT:  {{^}}  stind.i4{{$}}
+; BF16-IL:       {{^}}  ldind.r4{{$}}
+; BF16-IL-NEXT:  {{^}}  conv.r8{{$}}
+; BF16-IL-NEXT:  {{^}}  ret{{$}}
+; BF16-IL-NEXT:  {{^}}} // end of method 'bf16_ext_f64'{{$}}
 ; BF16-IL-LABEL: .method {{.*}}'after_bf16'(
 ; BF16-IL-NEXT:  {{^\{$}}
 ; BF16-IL-NEXT:  {{^}}  .maxstack 2{{$}}
@@ -1750,34 +1770,70 @@ define float @after_bf16(float %a, float %b) {
 ; Constrained operations on half and bfloat in strictfp functions end as their
 ; plain forms do, with the compiler-rt conversion of that form and never
 ; 'LLVM ERROR'. As in bf16.ll the values start from and end in their i16
-; bits: an extension of a bfloat argument is a no-op, and a truncation only
-; stays alive when its result is used. The conversions whose only user is a
-; diagnosed call may be dropped (see f16.ll), so the fadd is matched by a
-; pattern; every other function has one possible library call.
+; bits, and a truncation only stays alive when its result is used. The
+; conversions whose only user is a diagnosed call may be dropped (see
+; f16.ll), so the half fadd is matched by a pattern; every other function has
+; one possible library call. Since M24 the bfloat extensions are inline: the
+; constrained fpext, fcmp, fcmps and fptosi of bfloat report nothing and call
+; nothing, and the bfloat fadd names __truncsfbf2.
 source_filename = "fp-expand-strict16.c"
 
 ; STRICT16-DAG: error: {{.*}}in function strict_fpext_f16_f32 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_fpext_f16_f64 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fpext_bf16_f32 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fpext_bf16_f64 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f32_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f64_f16 {{.*}}: runtime helper '__truncdfhf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f32_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f64_bf16 {{.*}}: runtime helper '__truncdfbf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_fadd_f16 {{.*}}: runtime helper '{{__extendhfsf2|__truncsfhf2}}' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fadd_bf16 {{.*}}: runtime helper '{{__extendbfsf2|__truncsfbf2}}' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fadd_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_fcmp_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_fcmps_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fcmp_bf16 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fcmps_bf16 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_sitofp_i32_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_sitofp_i32_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
 ; STRICT16-DAG: error: {{.*}}in function strict_fptosi_f16_i32 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fptosi_bf16_i32 {{.*}}: runtime helper '__extendbfsf2' is not available for MSIL yet (phase 3)
 ; STRICT16-NOT: error: {{.*}}in function after_strict16
 ; STRICT16-NOT: LLVM ERROR
 ; STRICT16-NOT: PLEASE submit
 
+; STRICT16-IL-LABEL: .method public static float32 'strict_fpext_bf16_f32'(int32) cil managed{{$}}
+; STRICT16-IL:       {{^}}  ldarg.0{{$}}
+; STRICT16-IL-NEXT:  {{^}}  ldc.i4.s 16{{$}}
+; STRICT16-IL-NEXT:  {{^}}  shl{{$}}
+; STRICT16-IL-NEXT:  {{^}}  stind.i4{{$}}
+; STRICT16-IL:       {{^}}  ldind.r4{{$}}
+; STRICT16-IL-NEXT:  {{^}}  ret{{$}}
+; STRICT16-IL-NEXT:  {{^}}} // end of method 'strict_fpext_bf16_f32'{{$}}
+; STRICT16-IL-LABEL: .method public static float64 'strict_fpext_bf16_f64'(int32) cil managed{{$}}
+; STRICT16-IL:       {{^}}  ldarg.0{{$}}
+; STRICT16-IL-NEXT:  {{^}}  ldc.i4.s 16{{$}}
+; STRICT16-IL-NEXT:  {{^}}  shl{{$}}
+; STRICT16-IL-NEXT:  {{^}}  stind.i4{{$}}
+; STRICT16-IL:       {{^}}  ldind.r4{{$}}
+; STRICT16-IL-NEXT:  {{^}}  conv.r8{{$}}
+; STRICT16-IL-NEXT:  {{^}}  ret{{$}}
+; STRICT16-IL-NEXT:  {{^}}} // end of method 'strict_fpext_bf16_f64'{{$}}
+; Each operand of the comparisons is extended inline, then compared as
+; float32.
+; STRICT16-IL-LABEL:   .method public static int32 'strict_fcmp_bf16'(int32, int32) cil managed{{$}}
+; STRICT16-IL-COUNT-2: {{^}}  shl{{$}}
+; STRICT16-IL:         {{^}}  ldind.r4{{$}}
+; STRICT16-IL:         {{^}}  ldind.r4{{$}}
+; STRICT16-IL-NEXT:    {{^}}  clt{{$}}
+; STRICT16-IL-NEXT:    {{^}}  ret{{$}}
+; STRICT16-IL-NEXT:    {{^}}} // end of method 'strict_fcmp_bf16'{{$}}
+; STRICT16-IL-LABEL:   .method public static int32 'strict_fcmps_bf16'(int32, int32) cil managed{{$}}
+; STRICT16-IL-COUNT-2: {{^}}  shl{{$}}
+; STRICT16-IL:         {{^}}  ldind.r4{{$}}
+; STRICT16-IL:         {{^}}  ldind.r4{{$}}
+; STRICT16-IL-NEXT:    {{^}}  clt{{$}}
+; STRICT16-IL-NEXT:    {{^}}  ret{{$}}
+; STRICT16-IL-NEXT:    {{^}}} // end of method 'strict_fcmps_bf16'{{$}}
+; STRICT16-IL-LABEL: .method public static int32 'strict_fptosi_bf16_i32'(int32) cil managed{{$}}
+; STRICT16-IL:       {{^}}  shl{{$}}
+; STRICT16-IL:       {{^}}  ldind.r4{{$}}
+; STRICT16-IL-NEXT:  {{^}}  conv.i4{{$}}
+; STRICT16-IL-NEXT:  {{^}}  ret{{$}}
+; STRICT16-IL-NEXT:  {{^}}} // end of method 'strict_fptosi_bf16_i32'{{$}}
 ; STRICT16-IL-LABEL: .method {{.*}}'after_strict16'(
 ; STRICT16-IL-NEXT:  {{^\{$}}
 ; STRICT16-IL-NEXT:  {{^}}  .maxstack 2{{$}}

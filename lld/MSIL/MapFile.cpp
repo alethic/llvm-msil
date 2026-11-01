@@ -50,6 +50,19 @@
 // exports of .NET libraries built by this toolchain (ManagedFunction,
 // ManagedData, the library as input), after the natively bound ones.
 //
+// From M24 the trailer definitions that a link extracted (plan 5.14.4 T5)
+// have the input '<trailer>', which Inputs: lists where the first one was
+// extracted, and so does the Methods: row of each one that the output
+// defines:
+//
+//   Inputs:
+//     main.o
+//     <trailer>
+//   Symbols:
+//     DefinedFunction Global  <trailer>       __msil_compiler_barrier
+//   Methods:
+//     0x06000002 <Module>   <trailer>      __msil_compiler_barrier
+//
 //===----------------------------------------------------------------------===//
 
 #include "MapFile.h"
@@ -58,6 +71,7 @@
 #include "InputFiles.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
+#include "TrailerDefFile.h"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -78,9 +92,9 @@ using namespace lld::msil;
 OutputMap lld::msil::outputMap;
 
 // Returns a list of all symbols that we want to print out: the definitions
-// and common symbols that won resolution, by input in load order (CIL objects
-// and bitcode files, then the objects that LTO wrote) and, within an input,
-// in the order of its symbol table; then the symbols bound to native
+// and common symbols that won resolution, by input in load order (CIL objects,
+// bitcode files and '<trailer>', then the objects that LTO wrote) and, within
+// an input, in the order of its symbol table; then the symbols bound to native
 // libraries, by library in load order and, within a library, in the order of
 // the symbol table; then the symbols bound to the exports of .NET libraries
 // (late binding step 1, plan 5.9.6), by library in link order
@@ -96,7 +110,8 @@ static std::vector<Symbol *> getSymbols() {
         v.push_back(sym);
   };
   for (InputFile *file : ctx.loadedFiles)
-    if (isa<BitcodeFile>(file) || isa<ObjFile>(file))
+    if (isa<BitcodeFile>(file) || isa<ObjFile>(file) ||
+        isa<TrailerDefFile>(file))
       addFile(file);
   for (ObjFile *file : ctx.objectFiles)
     if (file->isLTO)

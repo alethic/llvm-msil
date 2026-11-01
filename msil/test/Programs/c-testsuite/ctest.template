@@ -1,19 +1,24 @@
 # The script of every c-testsuite test (msil_ctest_format.py yields one lit
-# test per name of libc-free.txt, 'MSIL :: Programs/c-testsuite/<name>', and
-# lit runs this file as if it were the test's own). The format gives the
+# test per entry of libc-free.txt and libc.txt, 'MSIL ::
+# Programs/c-testsuite/<name>' and 'MSIL :: Programs/c-testsuite/libc/<name>',
+# and lit runs this file as if it were the test's own). The format gives the
 # test four substitutions: %{msil_ctest_name} (the name), %{msil_ctest_tree}
 # (the cached tree, c-testsuite-<ref>), %{msil_ctest_cflags} (the recon's
 # flags, -std=gnu17 -w: no -ffreestanding, because several tests rely on
-# main's implicit 'return 0') and %{msil_ctest_run}: %{msil_prog}, which
-# builds the test through the leg's pipeline at each of its levels and runs
-# it against exit0.expected (as the native oracle build), or for a
-# '<name> diag <text>' entry one %{msil_prog_fail_<L>} per level, piped into
-# FileCheck of the text (diag.check). The placeholders are redefined here,
-# not given as substitutions of the format, which lit would apply before
-# lit.cfg.py's definitions (its %{msil_srcs} would then win inside
-# %{msil_prog}). Plan 5.12.9 (M23). This file is not a test itself.
+# main's implicit 'return 0'; for libc.txt followed by %{msil_hosted_cflags})
+# and %{msil_ctest_run}: %{msil_prog}, which builds the test through the
+# leg's pipeline at each of its levels and runs it against
+# %t/<name>.expected (as the native oracle build), the file the format
+# writes from <name>.c.expected and '[exit 0]'; for a 'native <triple>'
+# entry on that triple the native oracle's run that writes the file first,
+# then %{msil_prog}; for a 'diag' entry one %{msil_prog_fail_<L>} per level,
+# piped into FileCheck of the text (diag.check). The placeholders are
+# redefined here, not given as substitutions of the format, which lit would
+# apply before lit.cfg.py's definitions (its %{msil_srcs} would then win
+# inside %{msil_prog}). Plan 5.12.9, 5.17.14. This file is not a test
+# itself.
 # REQUIRES: msil-corpus-c-testsuite
 # REDEFINE: %{msil_srcs} = %{msil_corpus}/%{msil_ctest_tree}/tests/single-exec/%{msil_ctest_name}.c
 # REDEFINE: %{msil_cflags} = %{msil_ctest_cflags}
-# REDEFINE: %{msil_expect} = %S/exit0
+# REDEFINE: %{msil_expect} = %t/%{msil_ctest_name}
 # RUN: %{msil_ctest_run}

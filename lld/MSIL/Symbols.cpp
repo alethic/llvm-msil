@@ -211,6 +211,14 @@ void Symbol::resolve(const Undefined &other) {
   }
 }
 
+// A definition that the lazy input '<trailer>' gave (plan 5.14.4 T5). It is
+// searched after every archive, so a definition of an object or an archive
+// member that is loaded later replaces it, without a duplicate.
+static bool isTrailerDefinition(const Symbol &sym) {
+  return sym.isDefined() && sym.file &&
+         sym.file->kind() == InputFile::TrailerDefKind;
+}
+
 // lld/ELF/Symbols.cpp:541-557: compare two symbols. Return true if the new
 // symbol should win.
 bool Symbol::shouldReplace(const Defined &other) const {
@@ -223,6 +231,9 @@ bool Symbol::shouldReplace(const Defined &other) const {
   // :547-548: a definition replaces an undefined or lazy symbol.
   if (!isDefined())
     return true;
+  // An input's definition replaces a trailer definition.
+  if (LLVM_UNLIKELY(isTrailerDefinition(*this)))
+    return true;
 
   // :550-556: incoming STB_GLOBAL overrides STB_WEAK; otherwise the first
   // definition stays.
@@ -233,6 +244,8 @@ bool Symbol::shouldReplace(const Defined &other) const {
 // non-weak definitions are a duplicate.
 void Symbol::checkDuplicate(const Defined &other) const {
   if (isWeak() || other.isWeak())
+    return;
+  if (isTrailerDefinition(*this) || isTrailerDefinition(other))
     return;
   if (ctx.arg.allowMultipleDefinition)
     return;

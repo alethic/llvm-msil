@@ -1,18 +1,24 @@
 // Compiler barriers and fences from C (Milestone 7, D36): stores and loads
 // separated by asm volatile("" ::: "memory") and the other empty asm forms
-// (clang emits a singlethread fence for each, which selects the comment-only
-// MEMBARRIER) and by __atomic_signal_fence / __c11_atomic_signal_fence (also
-// singlethread), and by __atomic_thread_fence with seq_cst, acq_rel, acquire
-// and release, __c11_atomic_thread_fence and __sync_synchronize (system
-// fences: a call of System.Threading.Interlocked::MemoryBarrier()); a relaxed
-// fence emits nothing. Covered: values stored before a barrier are seen
-// after it, stores after it overwrite them, barriers in loops, in branches
-// and at the start and end of blocks, and helpers whose whole body is one
-// barrier or fence (a method that is only the MEMBARRIER comment and ret, or
-// only the call and ret). Values are derived from argc (1 when run without
-// arguments) and pass through noinline helpers, so clang cannot fold them at
-// -O2. MSIL_EXPECT returns 1 + (line % 255) at the first failed check;
-// [exit 0] means every check passed.
+// (clang emits a singlethread fence for each, which becomes a call of
+// __msil_compiler_barrier, an empty noinlining method that the JIT cannot
+// see through, so it keeps memory accesses on their side of the call; D36 as
+// amended in M24, defined in the module by llc and lto and by msil-ld's
+// <trailer> input in an object link) and by __atomic_signal_fence /
+// __c11_atomic_signal_fence (also singlethread, the same call), and by
+// __atomic_thread_fence with seq_cst, acq_rel, acquire and release,
+// __c11_atomic_thread_fence and __sync_synchronize (system fences: a call of
+// System.Threading.Interlocked::MemoryBarrier()); a relaxed fence emits
+// nothing. Covered: values stored before a barrier are seen after it, stores
+// after it overwrite them, barriers in loops, in branches and at the start
+// and end of blocks, and helpers whose whole body is one barrier or fence (a
+// method that is only the call of __msil_compiler_barrier and ret, or only
+// the call of MemoryBarrier and ret). That the JIT reloads memory after the
+// barrier is msil/test/M3/08-atomics/barrier-spin.test's subject. Values are
+// derived from argc (1 when run without arguments) and pass through noinline
+// helpers, so clang cannot fold them at -O2. MSIL_EXPECT returns
+// 1 + (line % 255) at the first failed check; [exit 0] means every check
+// passed.
 // RUN: %{msil_c}
 #include "msil_test.h"
 

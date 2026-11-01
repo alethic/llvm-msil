@@ -22,7 +22,12 @@
 // the annotations alone; an entry point other than main reaches the backend
 // as the module flag msil-entry (plan 5.9.3), and --msil-reloc-loop-threshold
 // as the module flag msil-reloc-loop-threshold (plan 5.9.10). Under -shared
-// the definitions a library may export stay visible (plan 5.9.13).
+// the definitions a library may export stay visible (plan 5.9.13). LTO's
+// diagnostic handler makes a signature mismatch of a helper's call inside
+// LTO plan 5.14.2 N-1's error, as the objects' call-site check does. The
+// prevailing linkonce_odr copies that LTO keeps external although no regular
+// object needs them are linkonce_odr again before code generation, which
+// drops the unused ones (decision D26).
 //
 //===----------------------------------------------------------------------===//
 
@@ -34,6 +39,7 @@
 #include "ReferenceSet.h"
 #include "SymbolTable.h"
 #include "Symbols.h"
+#include "TrailerDefFile.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Strings.h"
@@ -44,8 +50,11 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Bitcode/BitcodeReader.h"
+#include "llvm/CLI/CallMismatchDiagnostic.h"
 #include "llvm/CLI/ImageLayout.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -123,6 +132,18 @@ void lld::msil::printImports(std::vector<PrintedImport> &rows) {
     message(module + ": version floor " + (floor.empty() ? "-" : floor));
 }
 
+namespace lld::msil {
+/// What BitcodeCompiler::add records for one link, which
+/// MSILLinkHooksPass::restoreDiscardableCopies reads: the IR names of the
+/// prevailing bitcode definitions that no regular object needs
+/// (lto::SymbolResolution::VisibleToRegularObj is false), and whether a
+/// bitcode input has a ThinLTO module.
+struct DiscardableCopies {
+  StringSet<> irNames;
+  bool anyThinLTOModule = false;
+};
+} // namespace lld::msil
+
 namespace {
 /// What the import annotation decided for the merged module (plan 5.10.13).
 /// The analysis runs in lto::Config::PreCodeGenModuleHook, which reports the
@@ -179,17 +200,21 @@ struct ImportAnnotation {
 /// --msil-reloc-loop-threshold=<n> is the module flag
 /// "msil-reloc-loop-threshold" (i32 <n>, Override), so that the text applies
 /// its data relocations as the PE of the same link does (plan 5.9.10). After
-/// code generation it prints --print-imports.
+/// code generation it prints --print-imports. Before it sets the flags, it
+/// makes the prevailing linkonce_odr copies that LTO keeps external although
+/// no regular object needs them linkonce_odr again (restoreDiscardableCopies),
+/// so that the backend drops the unused ones (decision D26).
 class MSILLinkHooksPass final : public ModulePass {
 public:
   static char ID;
 
   MSILLinkHooksPass(std::string assemblyName, std::string entry,
                     std::optional<uint32_t> relocLoopThreshold,
-                    std::shared_ptr<const ImportAnnotation> imports)
+                    std::shared_ptr<const ImportAnnotation> imports,
+                    std::shared_ptr<const DiscardableCopies> discardable)
       : ModulePass(ID), assemblyName(std::move(assemblyName)),
         entry(std::move(entry)), relocLoopThreshold(relocLoopThreshold),
-        imports(std::move(imports)) {}
+        imports(std::move(imports)), discardable(std::move(discardable)) {}
 
   StringRef getPassName() const override { return "msil-ld link hooks"; }
 
@@ -202,6 +227,7 @@ public:
   // first.
   bool doInitialization(Module &m) override {
     LLVMContext &context = m.getContext();
+    restoreDiscardableCopies(m);
     if (!assemblyName.empty())
       m.setModuleFlag(Module::Override, "msil-assembly-name",
                       MDString::get(context, assemblyName));
@@ -257,6 +283,31 @@ public:
   }
 
 private:
+  // A prevailing weak_odr definition (a linkonce_odr copy, which LTO made
+  // weak_odr) that no regular object needs (BitcodeCompiler::add) and that
+  // LTO still keeps external, as its libcall rule does
+  // (lto::InputFile::Symbol::isLibcall: the C library functions of
+  // TargetLibraryInfo, such as the UCRT's inline sprintf, and the code
+  // generator's library calls), is linkonce_odr again, so that the backend
+  // drops it when the merged module does not use it (decision D26), as it
+  // drops the copies in a 'clang -c' object. The names that the code
+  // generator may call (RuntimeLibcalls) keep their definitions, and so does
+  // every link that gives LTO more than one module (a ThinLTO module,
+  // --lto-partitions), where another module may call the copy.
+  void restoreDiscardableCopies(Module &m) {
+    if (!discardable || discardable->anyThinLTOModule ||
+        ctx.arg.ltoPartitions != 1)
+      return;
+    StringSet<> codegenNames;
+    for (const char *name : lto::LTO::getRuntimeLibcallSymbols(ctx.arg.target))
+      codegenNames.insert(name);
+    for (Function &f : m.functions())
+      if (!f.isDeclaration() && f.hasWeakODRLinkage() &&
+          discardable->irNames.contains(f.getName()) &&
+          !codegenNames.contains(f.getName()))
+        f.setLinkage(GlobalValue::LinkOnceODRLinkage);
+  }
+
   void annotate(Module &m) {
     LLVMContext &context = m.getContext();
     m.setModuleFlag(Module::Override, "msil-linked", 1);
@@ -327,6 +378,7 @@ private:
   /// given.
   std::optional<uint32_t> relocLoopThreshold;
   std::shared_ptr<const ImportAnnotation> imports;
+  std::shared_ptr<const DiscardableCopies> discardable;
 };
 } // namespace
 
@@ -610,10 +662,14 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
   };
 
   // Looks up \p lookupName in the native libraries, or reuses late binding's
-  // result for the symbol \p name (step 2 looked the symbol name up).
+  // result for the symbol \p name (step 2 looked the symbol name up). A name
+  // that no native library may define (plan 5.14.2, mayBindNatively) binds
+  // nothing, so it is reported.
   auto lookup = [&](StringRef name, StringRef lookupName,
                     SmallVectorImpl<const NativeExport *> &rejected,
                     bool isFunctionReference) -> const NativeExport * {
+    if (!mayBindNatively(name, ctx) || !mayBindNatively(lookupName, ctx))
+      return nullptr;
     if (lookupName == name)
       if (auto *sym = dyn_cast_or_null<NativeSymbol>(symtab->find(name)))
         return sym->nativeExport;
@@ -621,13 +677,19 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
   };
 
   // Reports the reference \p name that no native library binds: undefined,
+  // with plan 5.14.2's line for a name of classes N1-N3 (getNameClassLine),
+  // a setjmp-family name (N4) as an error of each input that refers to it,
   // or the first definition that the lookup passed over: one that a P/Invoke
   // cannot bind, or data of a COFF import library or DLL, which a function
   // reference skips (plan 5.10.10).
   auto reportUnbound = [&](StringRef name,
                            ArrayRef<const NativeExport *> rejected) {
-    if (rejected.empty())
-      symtab->reportReference(("undefined symbol: " + name).str(), name);
+    if (rejected.empty() && isSetjmpFamilyName(name))
+      symtab->reportSetjmpFamily(name, /*liveOnly=*/false);
+    else if (rejected.empty())
+      symtab->reportReference(
+          ("undefined symbol: " + name + getNameClassLine(name, ctx)).str(),
+          name);
     else if (rejected[0]->Why == NotBindable::None)
       symtab->reportReference((Twine("'") + name + "' in " +
                                rejected[0]->Module + " is data, but " +
@@ -664,6 +726,10 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
       continue;
     std::string name = getSymbolName(f);
     if (isSectionBoundary(m, name))
+      continue;
+    // A trailer definition that the output is offered: the AsmPrinter
+    // defines it in the module (plan 5.14.4 T6).
+    if (findOfferedTrailerDef(name))
       continue;
     bool isUsed = hasLiveUses(f);
 
@@ -736,14 +802,14 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
           name);
       continue;
     }
-    // Native code cannot call a managed function before phase 3's thunks
-    // (plan 5.10.10): the functions of the callback list are errors, whether
-    // or not the call passes a function.
+    // Native code cannot call a managed function yet (plan 5.10.10,
+    // 5.15.11): the functions of the callback list are errors, whether or not
+    // the call passes a function.
     if (isListed(isNativeCallbackFunction)) {
       symtab->reportReference(
           (Twine("native function '") + name + "' (" + e->Module +
-           ") takes a C function pointer; passing functions to native code "
-           "needs phase 3 thunks")
+           ") takes a C function pointer; " +
+           "passing C functions to native code is not supported for MSIL yet")
               .str(),
           name);
       continue;
@@ -882,16 +948,17 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
   }
 
   // The library functions that the code generator may call (plan 5.10.13):
-  // each name of RuntimeLibcalls without a '__' prefix (those are phase 3's
-  // helpers) that the module neither defines nor declares and that a native
-  // library binds as a function, unless a P/Invoke cannot pass its
-  // `long double`.
+  // each name of RuntimeLibcalls without a '__' prefix (those are the
+  // compiler-runtime and atomic names of plan 5.14.2, and the C library's
+  // few) that the module neither defines nor declares, that may bind
+  // natively (mayBindNatively) and that a native library binds as a
+  // function, unless a P/Invoke cannot pass its `long double`.
   StringSet<> seen;
   for (const char *libcall :
        lto::LTO::getRuntimeLibcallSymbols(ctx.arg.target)) {
     StringRef name(libcall);
-    if (name.starts_with("__") || m.getNamedValue(name) ||
-        !seen.insert(name).second)
+    if (name.starts_with("__") || !mayBindNatively(name, ctx) ||
+        m.getNamedValue(name) || !seen.insert(name).second)
       continue;
     SmallVector<const NativeExport *, 2> rejected;
     const NativeExport *e =
@@ -905,7 +972,35 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
   }
 }
 
-static lto::Config createConfig() {
+// msil-ld's LTO diagnostic handler: lld's (lld::diagnosticHandler), except
+// that plan 5.9.8's signature mismatch of a helper's call inside LTO is plan
+// 5.14.2 N-1's error, never 5.9.8's adapter and warning. On 5.9.8's LTO path,
+// MSILFixFunctionBitcasts compares each call of a definition in an LTO module
+// with it by cli::classifyCall and reports a difference as
+// cli::DiagnosticInfoCallMismatch: a warning for an adapter, an error for a
+// call that cannot be adapted, printed as 5.9.8's text minus its ' in <file>'
+// parts. Only msil-ld knows the name classes (the N1 set is the codegen
+// triple's, plan 5.14.2 N-2), so for a helper (isHelperName) msil-ld builds
+// N-1's text from the diagnostic's name and printed shapes, as CallBinder
+// does for the objects' calls: the first line names a helper, and the
+// adapter's or the error's reason line goes. The text is an error, so the
+// link stops before the backend's adapter reaches an output. Every other
+// diagnostic, an ordinary name's mismatch included, is lld's. ThinLTO's
+// backends call it from their threads.
+static void handleLTODiagnostic(const DiagnosticInfo &di) {
+  if (const auto *m = dyn_cast<cli::DiagnosticInfoCallMismatch>(&di)) {
+    if (isHelperName(m->getName(), ctx)) {
+      error("function signature mismatch: " + m->getName() +
+            " (a toolchain or compiler runtime helper)\n>>> defined as " +
+            m->getDefined() + "\n>>> called as " + m->getCalled());
+      return;
+    }
+  }
+  diagnosticHandler(di);
+}
+
+static lto::Config
+createConfig(std::shared_ptr<const DiscardableCopies> discardable) {
   lto::Config c;
   c.LibraryOptions = &ctx.arg.libraryOptions;
   c.PTO = PipelineTuningOptions(c.LibraryOptions);
@@ -916,7 +1011,7 @@ static lto::Config createConfig() {
   c.Options.DataSections = true;
 
   c.DisableVerify = ctx.arg.disableVerify;
-  c.DiagHandler = diagnosticHandler;
+  c.DiagHandler = handleLTODiagnostic;
   c.OptLevel = ctx.arg.ltoo;
   c.CPU = getCPUStr();
   c.MAttrs = getMAttrs();
@@ -985,9 +1080,12 @@ static lto::Config createConfig() {
   std::optional<uint32_t> relocLoopThreshold;
   if (ctx.arg.ltoEmitAsm && ctx.arg.msilRelocLoopThresholdGiven)
     relocLoopThreshold = ctx.arg.msilRelocLoopThreshold;
+  // The copies that the pass may make discardable again are BitcodeCompiler's
+  // record of the link, complete once every bitcode input is added.
   c.PreCodeGenPassesHook = [name = getAssemblyName(), entry, relocLoopThreshold,
-                            imports](legacy::PassManager &pm) {
-    pm.add(new MSILLinkHooksPass(name, entry, relocLoopThreshold, imports));
+                            imports, discardable](legacy::PassManager &pm) {
+    pm.add(new MSILLinkHooksPass(name, entry, relocLoopThreshold, imports,
+                                 discardable));
   };
 
   if (ctx.arg.saveTemps)
@@ -1009,14 +1107,34 @@ static void undefine(Symbol *sym) {
 }
 
 namespace lld::msil {
-BitcodeCompiler::BitcodeCompiler() {
+bool isThinLTO(const BitcodeFile *f) {
+  Expected<std::vector<BitcodeModule>> modsOrErr =
+      getBitcodeModuleList(f->obj->getFileBuffer());
+  if (!modsOrErr) {
+    consumeError(modsOrErr.takeError());
+    return false;
+  }
+  for (BitcodeModule &bm : *modsOrErr) {
+    Expected<BitcodeLTOInfo> info = bm.getLTOInfo();
+    if (!info) {
+      consumeError(info.takeError());
+      continue;
+    }
+    if (info->IsThinLTO)
+      return true;
+  }
+  return false;
+}
+
+BitcodeCompiler::BitcodeCompiler()
+    : discardable(std::make_shared<DiscardableCopies>()) {
   // Initialize ltoObj. ThinLTO input and LTO partitions give one CIL object
   // per module; under --lto-emit-asm the driver rejects them before LTO runs.
   auto onIndexWrite = [&](StringRef s) { thinIndices.erase(s); };
   lto::ThinBackend backend = lto::createInProcessThinBackend(
       llvm::heavyweight_hardware_concurrency(ctx.arg.thinLTOJobs),
       onIndexWrite);
-  ltoObj = std::make_unique<lto::LTO>(createConfig(), backend,
+  ltoObj = std::make_unique<lto::LTO>(createConfig(discardable), backend,
                                       ctx.arg.ltoPartitions);
 
   // The sections that __start_<X> and __stop_<X> name (lld/ELF/LTO.cpp's
@@ -1071,12 +1189,20 @@ void BitcodeCompiler::add(BitcodeFile &f) {
         (!objSym.getSectionName().empty() &&
          usedStartStop.contains(objSym.getSectionName())) ||
         (ctx.arg.shared && r.Prevailing && mayBeExported(*sym));
+    // The prevailing definitions that no regular object needs: the copies
+    // among them that LTO keeps external may become discardable again
+    // (MSILLinkHooksPass::restoreDiscardableCopies).
+    if (r.Prevailing && !r.VisibleToRegularObj && !objSym.getIRName().empty())
+      discardable->irNames.insert(objSym.getIRName());
     // lld/wasm undefines the prevailing symbol here, so that the LTO object
     // defines it. Under --lto-emit-asm there is no LTO object, and the map
     // file shows the bitcode definitions.
     if (r.Prevailing && !ctx.arg.ltoEmitAsm)
       undefine(sym);
   }
+  // A ThinLTO module may call the merged module's copies.
+  if (!discardable->anyThinLTOModule && isThinLTO(&f))
+    discardable->anyThinLTOModule = true;
   checkError(ltoObj->add(std::move(f.obj), resols));
 }
 

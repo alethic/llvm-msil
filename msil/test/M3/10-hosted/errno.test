@@ -1,0 +1,81 @@
+# errno through the real <errno.h>: the C library's thread-local errno, set by strtoll, strtoull, fopen and remove and by the program.
+# errno is '(*__errno_location())' in glibc's header and '(*_errno())' in
+# the UCRT's, so every read and write of it is a native call (both bind
+# natively, M15) and a load or store through the pointer it returns. Each
+# value is copied right after the call that sets it, before any other native
+# call, and the program writes errno once before the first measured call, so
+# neither another call nor the first call's binding of __errno_location or
+# _errno comes between a call and its errno (a precaution: a variant that
+# reads errno for the first time right after a strtoll overflow saw ERANGE
+# too, on both triples).
+# Checked: errno = 0 and errno = EINVAL read back; strtoll overflow and
+# underflow (LLONG_MAX and LLONG_MIN with ERANGE), a partial parse with
+# its end pointer and errno untouched; strtoull overflow (ULLONG_MAX with
+# ERANGE); fopen and remove of a missing file in the private run directory
+# (NULL and -1, ENOENT); and the address of errno, the same for two reads.
+# Values are compared with the header's constants (ERANGE, ENOENT and
+# EINVAL), so the transcript is the same for both C libraries. Plan
+# 5.17.13 (M24, M3/10-hosted).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#define _CRT_SECURE_NO_WARNINGS
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include "msil_test.h"
+
+int main(void) {
+  errno = 0;
+  int e = errno;
+  put_kv("errno after errno = 0", e);
+
+  long long v = strtoll("99999999999999999999", NULL, 10);
+  e = errno;
+  put_kv("strtoll overflow is LLONG_MAX", v == LLONG_MAX);
+  put_kv("strtoll overflow sets ERANGE", e == ERANGE);
+
+  errno = 0;
+  v = strtoll("-99999999999999999999", NULL, 10);
+  e = errno;
+  put_kv("strtoll underflow is LLONG_MIN", v == LLONG_MIN);
+  put_kv("strtoll underflow sets ERANGE", e == ERANGE);
+
+  static const char partial[] = "12345xyz";
+  char *end = NULL;
+  errno = 0;
+  v = strtoll(partial, &end, 10);
+  e = errno;
+  put_kv("strtoll(\"12345xyz\")", v);
+  put_kv("characters parsed", end - partial);
+  put_kv("a partial parse leaves errno 0", e);
+
+  errno = 0;
+  unsigned long long u = strtoull("18446744073709551616", NULL, 10);
+  e = errno;
+  put_kv("strtoull overflow is ULLONG_MAX", u == ULLONG_MAX);
+  put_kv("strtoull overflow sets ERANGE", e == ERANGE);
+
+  errno = 0;
+  FILE *f = fopen("m3-errno-missing.txt", "rb");
+  e = errno;
+  put_kv("fopen of a missing file is NULL", f == NULL);
+  put_kv("fopen of a missing file sets ENOENT", e == ENOENT);
+
+  errno = 0;
+  int r = remove("m3-errno-missing.txt");
+  e = errno;
+  put_kv("remove of a missing file fails", r != 0);
+  put_kv("remove of a missing file sets ENOENT", e == ENOENT);
+
+  errno = EINVAL;
+  e = errno;
+  put_kv("errno = EINVAL reads back", e == EINVAL);
+  int *p1 = &errno;
+  int *p2 = &errno;
+  put_kv("&errno is the same for two reads", p1 == p2);
+  return f != NULL;
+}

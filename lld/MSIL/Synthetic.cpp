@@ -74,6 +74,13 @@ EntityRef OutputModule::getTokenEntity(uint32_t token) {
   return ref;
 }
 
+std::optional<uint32_t> OutputModule::getEntityMethod(EntityRef ref) const {
+  if (ref == 0 || ref > entities.size() ||
+      entities[ref - 1].kind != Entity::Method)
+    return std::nullopt;
+  return entities[ref - 1].value;
+}
+
 Expected<uint32_t> OutputModule::resolveEntity(EntityRef ref) const {
   if (ref == 0 || ref > entities.size())
     return createStringError(inconvertibleErrorCode(),
@@ -623,7 +630,9 @@ void RowTrailerSink::emitMethod(const TrailerMethod &tm) {
   m.cls =
       tm.Owner == TrailerOwner::Data ? OutputClass::Data : OutputClass::Module;
   m.flags = tm.Flags;
-  m.implFlags = MethodImplAttributes::IL | MethodImplAttributes::Managed;
+  // IL | Managed (0) unless a trailer definition sets others (plan 5.14.4
+  // T4: NoInlining).
+  m.implFlags = tm.ImplFlags;
   m.sig = tm.Sig;
   m.body = std::make_unique<ILBuilder>(tm.Body);
   m.localSigToken = out.addLocalSig(tm.Locals);

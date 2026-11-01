@@ -5,17 +5,24 @@
 ; (not an invoke or a callbr) when its inputs are of any kind (register,
 ; memory, indirect memory, alternatives, immediates, 'g'), its outputs are
 ; indirect ('=*m') or direct and tied to an input, with any clobbers and no
-; labels, sideeffect or not. It becomes the D36 compiler fence (the
-; MEMBARRIER pseudo, printed as a tab and '//MEMBARRIER', fence.ll), one
+; labels, sideeffect or not. It becomes the D36 compiler fence (since M24
+; "call void '__msil_compiler_barrier'()", the call of the trailer definition
+; that whole-program text defines once, after every other method, as
+; '.method assembly static void '__msil_compiler_barrier'() cil managed
+; noinlining' with the body 'ret'; plan 5.14.4 T2 and T6, fence.ll), one
 ; llvm.fake.use of every input that is not a constant and is an integer of at
 ; most 64 bits, a pointer, a float or a double, and llvm.sideeffect (which
 ; emits nothing); a tied output becomes its input (two of them an aggregate
-; built from the inputs). So no call is printed, the input's computation is
-; kept (stored to a local or popped) before the barrier, and loads and stores
-; do not move across it: a store before the barrier and one after it are both
-; kept, and memory is read again after it. An immediate, an i128 and a vector
-; input get no fake use and are accepted. llc reports nothing at -O0 and -O2
-; on both triples, and the output assembles.
+; built from the inputs). So no other call is printed, the input's
+; computation is kept (stored to a local or popped) before the barrier, and
+; loads and stores do not move across it: a store before the barrier and one
+; after it are both kept, and memory is read again after it. An immediate, an
+; i128 and a vector input get no fake use and are accepted. llc reports
+; nothing at -O0 and -O2 on both x86_64 triples and on
+; aarch64-unknown-linux-gnu-msil (the IL is the same on the three), and the
+; output assembles. In a CIL object each barrier is a call of a MemberRef on
+; [msil.extern]'<msil>Symbols' and the barrier is an UNDEFINED FUNCTION
+; symbol with no definition (5.14.4 T1).
 ;
 ; Tied outputs follow the section 12 row 'D36 row of 2026-10-21 (...)
 ; clarified' (2026-10-21): clang's acceptance rule is the only one, and
@@ -68,7 +75,8 @@
 ; condition-flag output ('={@ccz},0', clang's "+@ccz" and "=@ccz" with "0":
 ; native code sets it from the flags after the statement; that row's part
 ; (3)) and an indirect float output tied to a double input ('=*rm,0'; part
-; (1)). Nothing crashes, and the IL on stdout assembles.
+; (1)). Nothing crashes, and the IL on stdout assembles; it defines no
+; barrier, since no function left in it calls one.
 ;
 ; aarch64-q.ll (a split part): AArch64's 'Q' (memory addressed by one base
 ; register) is a memory alternative, like x86's 'm'. clang emits '=*r|Q,0|0'
@@ -85,7 +93,8 @@
 ; function, on both x86_64 triples at -O0 and -O2.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not="{{^ +call}}" \
-; DEFINE:   --implicit-check-not=localloc --implicit-check-not=MEMBARRIER
+; DEFINE:   --implicit-check-not=localloc --implicit-check-not=MEMBARRIER \
+; DEFINE:   --implicit-check-not="'__msil_compiler_barrier'() cil"
 ; RUN: split-file %s %t
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/main.ll \
 ; RUN:   -o %t/main.lnx.o2.il 2>&1 | count 0
@@ -99,10 +108,30 @@
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/main.ll \
 ; RUN:   -o %t/main.win.o0.il 2>&1 | count 0
 ; RUN: %{check} --check-prefixes=CHECK,O0 --input-file=%t/main.win.o0.il
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/main.ll \
+; RUN:   -o %t/main.a64.o2.il 2>&1 | count 0
+; RUN: %{check} --check-prefixes=CHECK,O2 --input-file=%t/main.a64.o2.il
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/main.ll \
+; RUN:   -o %t/main.a64.o0.il 2>&1 | count 0
+; RUN: %{check} --check-prefixes=CHECK,O0 --input-file=%t/main.a64.o0.il
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/main.ll -o %t/main.prep.ll
 ; RUN: FileCheck %s --check-prefix=IR --input-file=%t/main.prep.ll --implicit-check-not=" asm "
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/main.lnx.o2.dll %t/main.lnx.o2.il %}
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/main.win.o0.dll %t/main.win.o0.il %}
+
+; The CIL objects of main.ll.
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/main.ll \
+; RUN:   -o %t/main.lnx.o2.o 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -filetype=obj -verify-machineinstrs < %t/main.ll \
+; RUN:   -o %t/main.win.o0.o 2>&1 | count 0
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/main.ll \
+; RUN:   -o %t/main.a64.o2.o 2>&1 | count 0
+; DEFINE: %{obj} = FileCheck %s --implicit-check-not=__msil_compiler_barrier
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/main.lnx.o2.o | %{obj} --check-prefix=OBJ %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/main.win.o0.o | %{obj} --check-prefix=OBJ %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/main.a64.o2.o | %{obj} --check-prefix=OBJ %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --canonical %t/main.lnx.o2.o | %{obj} --check-prefix=OBJC %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --canonical %t/main.win.o0.o | %{obj} --check-prefix=OBJC %}
 
 ; DEFINE: %{diag} = FileCheck %s --check-prefix=ERR --implicit-check-not="LLVM ERROR" \
 ; DEFINE:   --implicit-check-not="PLEASE submit" --implicit-check-not=error: --implicit-check-not=warning:
@@ -114,12 +143,13 @@
 ; RUN:   | %{diag}
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/errors.ll \
 ; RUN:   > %t/errors.lnx.il
-; RUN: FileCheck %s --check-prefix=ERR-IL --input-file=%t/errors.lnx.il --implicit-check-not=".method "
+; RUN: FileCheck %s --check-prefix=ERR-IL --input-file=%t/errors.lnx.il --implicit-check-not=".method " \
+; RUN:   --implicit-check-not=__msil_compiler_barrier
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/errors.dll %t/errors.lnx.il %}
 
 ; DEFINE: %{a64} = FileCheck %s --check-prefix=A64 --implicit-check-not=int64 \
 ; DEFINE:   --implicit-check-not="{{^ +call}}" --implicit-check-not=localloc --implicit-check-not=MEMBARRIER \
-; DEFINE:   --implicit-check-not=ldarg.1
+; DEFINE:   --implicit-check-not=ldarg.1 --implicit-check-not="'__msil_compiler_barrier'() cil"
 ; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/aarch64-q.ll \
 ; RUN:   -o %t/a64.lnx.o2.il 2>&1 | count 0
 ; RUN: %{a64} --input-file=%t/a64.lnx.o2.il
@@ -138,6 +168,9 @@
 ; RUN:   --implicit-check-not="store i32 %y"
 ; RUN: %if ilasm %{ %ilasm-verify -arm64 -output=%t/a64.lnx.o2.dll %t/a64.lnx.o2.il %}
 ; RUN: %if ilasm %{ %ilasm-verify -arm64 -output=%t/a64.win.o0.dll %t/a64.win.o0.il %}
+; RUN: llc -mtriple=aarch64-pc-windows-msvc-msil -O0 -filetype=obj -verify-machineinstrs < %t/aarch64-q.ll \
+; RUN:   -o %t/a64.win.o0.o 2>&1 | count 0
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/a64.win.o0.o | %{obj} --check-prefix=A64-OBJ %}
 
 ; DEFINE: %{x86q} = FileCheck %s --check-prefix=X86Q --implicit-check-not="LLVM ERROR" \
 ; DEFINE:   --implicit-check-not="PLEASE submit" --implicit-check-not=error: --implicit-check-not=warning:
@@ -168,7 +201,7 @@ source_filename = "asm-operands.c"
 ; CHECK-NEXT:  {{^}}  mul{{$}}
 ; O2-NEXT:     {{^}}  starg.s 0{{$}}
 ; O0-NEXT:     {{^}}  pop{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'keep_r'{{$}}
@@ -185,7 +218,7 @@ define i32 @keep_r(i32 %x) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.2{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
@@ -202,7 +235,7 @@ define void @keep_ptr_memory(ptr %p) {
 ; CHECK-LABEL: {{^}}.method public static int32 'keep_mem'(native int) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i4{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -220,7 +253,7 @@ define i32 @keep_mem(ptr %p) {
 ; CHECK-LABEL: {{^}}.method public static void 'keep_rm'(native int) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define void @keep_rm(i64 %x) {
   call void asm sideeffect "", "r|m,~{memory},~{dirflag},~{fpsr},~{flags}"(i64 %x)
@@ -230,7 +263,7 @@ define void @keep_rm(i64 %x) {
 ; CHECK-LABEL: {{^}}.method public static void 'keep_imm'() cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define void @keep_imm() {
   call void asm sideeffect "", "i"(i32 42)
@@ -240,7 +273,7 @@ define void @keep_imm() {
 ; CHECK-LABEL: {{^}}.method public static void 'keep_g'(int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define void @keep_g(i32 %x) {
   call void asm sideeffect "", "g"(i32 %x)
@@ -263,7 +296,7 @@ define void @keep_g(i32 %x) {
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:     {{^}}  starg.s 0{{$}}
 ; O0-NEXT:     {{^}}  stloc.0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
 ; O0-NEXT:     {{^}}  ldloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.3{{$}}
@@ -280,7 +313,7 @@ define i32 @tied(i32 %x) {
 ; CHECK-LABEL: {{^}}.method public static int32 'tied_ret'(int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'tied_ret'{{$}}
@@ -294,7 +327,7 @@ define i32 @tied_ret(i32 %x) {
 ; CHECK-LABEL: {{^}}.method public static native int 'tied_two'(int32, native int) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
@@ -328,7 +361,7 @@ define i64 @tied_two(i32 %a, i64 %b) {
 ; CHECK-NEXT:  {{^}}  clt{{$}}
 ; O2-NEXT:     {{^}}  starg.s 0{{$}}
 ; O0-NEXT:     {{^}}  stloc.0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
 ; O0-NEXT:     {{^}}  ldloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -359,7 +392,7 @@ define i32 @tied_bool(i32 %x) {
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:     {{^}}  starg.s 0{{$}}
 ; O0-NEXT:     {{^}}  stloc.0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
 ; O0-NEXT:     {{^}}  ldloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -390,7 +423,7 @@ define ptr @tied_inttoptr(i64 %n) {
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:     {{^}}  starg.s 0{{$}}
 ; O0-NEXT:     {{^}}  stloc.0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
 ; O0-NEXT:     {{^}}  ldloc.0{{$}}
@@ -421,7 +454,7 @@ define void @tied_ptrtoint(ptr %p, ptr %out) {
 ; CHECK-NEXT:  {{^}}  mul{{$}}
 ; O2-NEXT:     {{^}}  starg.s 0{{$}}
 ; O0-NEXT:     {{^}}  stloc.0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
 ; O0-NEXT:     {{^}}  ldloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -440,7 +473,7 @@ define i32 @tied_regvar(i32 %y) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i4{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -451,8 +484,8 @@ define i32 @out_mem(ptr %p) {
   ret i32 %v
 }
 
-; Without 'sideeffect' the asm is lowered the same way: fence.ll's
-; MEMBARRIER line, the input's computation kept, no call.
+; Without 'sideeffect' the asm is lowered the same way: fence.ll's barrier
+; call, the input's computation kept, no other call.
 ; CHECK-LABEL: {{^}}.method public static int32 'non_sideeffect'(int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
@@ -461,7 +494,7 @@ define i32 @out_mem(ptr %p) {
 ; CHECK-NEXT:  {{^}}  mul{{$}}
 ; O2-NEXT:     {{^}}  starg.s 0{{$}}
 ; O0-NEXT:     {{^}}  pop{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define i32 @non_sideeffect(i32 %x) {
@@ -480,7 +513,7 @@ define i32 @non_sideeffect(i32 %x) {
 ; CHECK-LABEL: {{^}}.method public static void 'keep_fp'(float64, float32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define void @keep_fp(double %d, float %f) {
   call void asm sideeffect "", "x,x"(double %d, float %f)
@@ -494,7 +527,7 @@ define void @keep_fp(double %d, float %f) {
 ; CHECK-LABEL: {{^}}.method public static void 'keep_wide'(native int, native int, int32, int32, int32, int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 define void @keep_wide(i128 %v, <4 x i32> %w) {
   call void asm sideeffect "", "r,x"(i128 %v, <4 x i32> %w)
@@ -516,7 +549,7 @@ define void @keep_wide(i128 %v, <4 x i32> %w) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^  (unaligned\. [124][[:space:]]+)?stind\.i4$}}
@@ -545,7 +578,7 @@ define i32 @tied_out_rm(ptr %x, i32 %y) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^  (unaligned\. [124][[:space:]]+)?stind\.i4$}}
@@ -575,7 +608,7 @@ define i32 @tied_out_g(ptr %x, i32 %y) {
 ; CHECK-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^  (unaligned\. [124][[:space:]]+)?stind\.i$}}
@@ -605,7 +638,7 @@ define i64 @tied_out_rm_i64(ptr %x, i64 %y) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i1{{$}}
@@ -635,7 +668,7 @@ define i32 @tied_out_rm_char(ptr %x, i32 %y) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i4{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -659,7 +692,7 @@ define i32 @tied_out_alt_mem(ptr %x, i32 %y) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i4{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -683,7 +716,7 @@ define i32 @tied_out_rw_alt_mem(ptr %x, i32 %y) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldind.i4{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
@@ -702,7 +735,7 @@ define i32 @tied_out_mem_mem(ptr %x, ptr %y) {
 ; CHECK-LABEL: {{^}}.method public static int32 'tied_alt'(int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'tied_alt'{{$}}
@@ -718,7 +751,7 @@ define i32 @tied_alt(i32 %y) {
 ; CHECK-LABEL: {{^}}.method public static int32 'tied_alt_r0'(int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'tied_alt_r0'{{$}}
@@ -735,7 +768,7 @@ define i32 @tied_alt_r0(i32 %y) {
 ; CHECK-LABEL: {{^}}.method public static int32 'tied_alt_second'(int32, int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'tied_alt_second'{{$}}
@@ -756,8 +789,8 @@ define i32 @tied_alt_second(i32 %a, i32 %b) {
 ; CHECK-LABEL: {{^}}.method public static int32 'tied_chain'(int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'tied_chain'{{$}}
@@ -778,8 +811,8 @@ define i32 @tied_chain(i32 %x) {
 ; CHECK-LABEL: {{^}}.method public static native int 'tied_roundtrip'(native int) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'tied_roundtrip'{{$}}
@@ -801,7 +834,7 @@ define ptr @tied_roundtrip(ptr %p) {
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.2{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
@@ -813,6 +846,22 @@ define void @no_operands(ptr %p, ptr %q) {
   store i32 2, ptr %q, align 4
   ret void
 }
+
+; The barrier's one definition ends the module.
+; CHECK-LABEL: {{^}}.method assembly static void '__msil_compiler_barrier'() cil managed noinlining{{$}}
+; CHECK-NEXT:  {{^\{$}}
+; CHECK-NEXT:  {{^}}  .maxstack 0{{$}}
+; CHECK-NEXT:  {{^}}  ret{{$}}
+; CHECK-NEXT:  {{^}}} // end of method '__msil_compiler_barrier'{{$}}
+; CHECK-NOT:   {{.}}
+
+; The object: the barrier is the last symbol, UNDEFINED, and 32 calls of one
+; '<msil>Symbols' MemberRef stand where the text calls the method.
+; OBJ:          {{^}}Symbol 29 FUNCTION GLOBAL DEFAULT 'no_operands' method=0x0600001E{{$}}
+; OBJ-NEXT:     {{^}}Symbol 30 FUNCTION GLOBAL DEFAULT UNDEFINED '__msil_compiler_barrier'{{$}}
+; OBJ-NEXT:     {{^}}Signature 0x06000011 'keep_wide' NATIVE_INCOMPATIBLE{{$}}
+; OBJ-NOT:      {{.}}
+; OBJC-COUNT-32: {{^}}    L{{[0-9]+}}: call void() [msil.extern]<msil>Symbols::'__msil_compiler_barrier'{{$}}
 
 ;--- errors.ll
 source_filename = "asm-errors.c"
@@ -927,7 +976,7 @@ source_filename = "asm-aarch64-q.c"
 ; A64-NEXT:  {{^}}  ldarg.0{{$}}
 ; A64-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; A64-NEXT:  {{^}}  stind.i4{{$}}
-; A64-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; A64-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; A64-NEXT:  {{^}}  ldarg.0{{$}}
 ; A64-NEXT:  {{^}}  ldind.i4{{$}}
 ; A64-NEXT:  {{^}}  ret{{$}}
@@ -951,7 +1000,7 @@ define i32 @q_alt_mem(ptr %x, i32 %y) {
 ; A64-NEXT:  {{^}}  ldarg.0{{$}}
 ; A64-NEXT:  {{^}}  ldc.i4.5{{$}}
 ; A64-NEXT:  {{^}}  stind.i4{{$}}
-; A64-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; A64-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; A64-NEXT:  {{^}}  ldarg.0{{$}}
 ; A64-NEXT:  {{^}}  ldind.i4{{$}}
 ; A64-NEXT:  {{^}}  ret{{$}}
@@ -962,3 +1011,16 @@ define i32 @q_first_alt_mem(ptr %x, i32 %y) {
   %v = load i32, ptr %x, align 4
   ret i32 %v
 }
+
+; A64-LABEL: {{^}}.method assembly static void '__msil_compiler_barrier'() cil managed noinlining{{$}}
+; A64-NEXT:  {{^\{$}}
+; A64-NEXT:  {{^}}  .maxstack 0{{$}}
+; A64-NEXT:  {{^}}  ret{{$}}
+; A64-NEXT:  {{^}}} // end of method '__msil_compiler_barrier'{{$}}
+; A64-NOT:   {{.}}
+
+; A64-OBJ:      {{^}}LinkInfo v1.0 triple=aarch64-pc-windows-msvc-msil {{.*}}
+; A64-OBJ-NEXT: {{^}}Symbol 0 FUNCTION GLOBAL DEFAULT 'q_alt_mem' method=0x06000001{{$}}
+; A64-OBJ-NEXT: {{^}}Symbol 1 FUNCTION GLOBAL DEFAULT 'q_first_alt_mem' method=0x06000002{{$}}
+; A64-OBJ-NEXT: {{^}}Symbol 2 FUNCTION GLOBAL DEFAULT UNDEFINED '__msil_compiler_barrier'{{$}}
+; A64-OBJ-NOT:  {{.}}

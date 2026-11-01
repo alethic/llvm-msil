@@ -1,0 +1,66 @@
+# lit-legs.sh --describe (plan 5.17.6, M24) prints every leg as JSON
+# ({"version": 1, "script": "lit-legs.sh", "legs": [...]}) and runs nothing.
+# Against a stand-in build whose llvm-lit records its arguments
+# (Inputs/ci-legs.py), inside WSL from Windows (the WSL legs) and natively on
+# Linux, Inputs/legs-check.py checks:
+# (1) the output is JSON alone, no lit ran, and every leg and run has 5.17.6's
+# shape: the derived fields (pipeline, prog_pipeline, triple, runner,
+# also_run) and msil_require_verify, _exec, _link and _hosted=1 on every lit
+# run; lit-legs.sh has none of lit-legs.ps1's Quick or WSL legs (its Quick leg
+# hosted runs only when --leg names it), sets msil_glibc_sysroot on every lit
+# run, runs msil/test/M3 in lto and .NET 10 with msil_also_run=8 in ctest.
+# (2) What --describe shows is what the runs pass: --leg net8, lto, ctest and
+# hosted pass exactly the paths, params and lit arguments of their runs.
+# (3) The corpus parameters print as the environment resolves them.
+# (4) The failure path of Inputs/legs-check.py: each planted fault (net8
+# without msil_require_hosted=1 or without msil_glibc_sysroot, an lto run
+# whose prog_pipeline is obj, a leg named ctest-wsl) is reported.
+# describe.test checks lit-legs.ps1 -Describe.
+# REQUIRES: msil-ci-bash
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %python %S/Inputs/ci-legs.py setup %t/build
+
+# (1)
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build -- --describe > %t/describe.json
+# RUN: %{harness_check} missing %t/build/lit-calls.log
+# RUN: %python %S/Inputs/legs-check.py describe sh %t/describe.json > %t/1.log
+# RUN: %{harness_check} contains %t/1.log "\Alegs-check: lit-legs\.sh: \d+ legs, \d+ lit runs: OK\n\Z"
+
+# (2)
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-2 -- --leg net8 > %t/2a.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json net8 %t/build/lit-calls.log > %t/2a-calls.log
+# RUN: %{harness_check} contains %t/2a-calls.log "^legs-check: net8: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-2 -- --leg lto > %t/2b.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json lto %t/build/lit-calls.log > %t/2b-calls.log
+# RUN: %{harness_check} contains %t/2b-calls.log "^legs-check: lto: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-2 -- --leg ctest > %t/2c.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json ctest %t/build/lit-calls.log > %t/2c-calls.log
+# RUN: %{harness_check} contains %t/2c-calls.log "^legs-check: ctest: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-2 -- --leg hosted > %t/2d.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json hosted %t/build/lit-calls.log > %t/2d-calls.log
+# RUN: %{harness_check} contains %t/2d-calls.log "^legs-check: hosted: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: %{harness_check} contains %t/rows-2 "\Alit-legs\tnet8\tPASS\t.*\nlit-legs\tlto\tPASS\t.*\nlit-legs\tctest\tPASS\t.*\nlit-legs\thosted\tPASS\t.*\n\Z"
+# RUN: not %python %S/Inputs/legs-check.py calls %t/describe.json net8 %t/build/lit-calls.log > %t/2e.log
+# RUN: %{harness_check} contains %t/2e.log "^legs-check: error: net8 run 1: passes paths \['msil/test/M2/09-hosted'\], the JSON says \["
+
+# (3)
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CORPUS_SKIP=coremark MSIL_CORPUS_CACHE=%t/cache -- --describe > %t/describe-corpus.json
+# RUN: %python %S/Inputs/legs-check.py describe sh %t/describe-corpus.json
+# RUN: %{harness_check} contains %t/describe-corpus.json '"msil_corpus_skip": "coremark"' '"msil_corpus_dir": "[^"]*describe-sh\.test\.tmp[^"]*cache"'
+# RUN: %{harness_check} lacks %t/describe.json '"msil_corpus_skip"' '"msil_corpus_dir"'
+# RUN: %{harness_check} missing %t/build/lit-calls.log
+
+# (4)
+# RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant no-hosted > %t/4a.log
+# RUN: %{harness_check} contains %t/4a.log "^legs-check: error: net8 run 1: params lack msil_require_hosted=1$"
+# RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant no-glibc > %t/4b.log
+# RUN: %{harness_check} contains %t/4b.log "^legs-check: error: net8 run 1: no msil_glibc_sysroot$"
+# RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant wrong-prog-pipeline > %t/4c.log
+# RUN: %{harness_check} contains %t/4c.log "^legs-check: error: lto run 1: prog_pipeline 'obj', not 'lto'$"
+# RUN: not %python %S/Inputs/legs-check.py describe sh %t/describe.json --plant wsl-leg > %t/4d.log
+# RUN: %{harness_check} contains %t/4d.log "^legs-check: error: lit-legs\.sh has the Quick or WSL leg ctest-wsl$"

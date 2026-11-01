@@ -30,10 +30,10 @@
 # 60-s limit per child process, so %msil_verify gets --timeout 1200 here
 # (about 6 minutes in all on this host). %msil_canon of the image pins the
 # spill classes. It needs the lit parameter msil_scale_tests=1 (feature
-# msil-scale-tests), which only lit-legs.ps1's obj leg sets (plan 5.12.2).
-# msil/utils/equiv-allowed.txt keeps its 'skip O4' line for this test
-# (--lto-emit-asm text has no per-type limit), which only a composite would
-# use. Plan 5.12.2 (msil_scale_tests), 5.9.12.
+# msil-scale-tests), which lit-legs.ps1's net8 and scale legs set (plan
+# 5.12.2, 5.17.6). msil/utils/equiv-allowed.txt keeps its 'skip O4' line for
+# this test (--lto-emit-asm text has no per-type limit), which only a
+# composite would use. Plan 5.12.2 (msil_scale_tests), 5.9.12.
 # REQUIRES: msil-scale-tests
 # RUN: rm -rf %t %t.O0.d %t.O0.native.d && split-file %s %t
 # RUN: %python %t/gen.py %t

@@ -1,0 +1,73 @@
+# update-expected.py's directory walk (plan 5.17.5, whose update-expected.py
+# entry the section 12 row of 2026-10-30 extends): G7 runs update-expected.py
+# --check --levels O0,O2 on the directories that 'gate-select.py
+# expected-dirs' prints, msil/test/harness and its subdirectories among them
+# when harness self-tests change.
+# (a) Nothing at or below msil/test/harness of this source tree is built or
+#     checked: the self-tests there are built with stand-in tools
+#     (prog/composite.test links with -Wl,--stand-in-native), so they have no
+#     native oracle. Nested and repeated harness directories (%S, %S/prog and
+#     %S/legs/.., which is %S) give one line, 'skip (harness self-test:
+#     stand-in tools): <%S>', also with the inner directory first, and the
+#     skip counts as a match (exit status 0). The compiler is
+#     Inputs/levels-cc.py without an --at, which fails whenever it runs
+#     ('levels-cc: error: no --at for -O0'), so a skip that stops working
+#     fails the test at once and never writes an expected file into the
+#     source tree. Each run's stdout is its log; its stderr, where
+#     update-expected.py also warns when LIB is not set, goes to a file that
+#     must not hold the stand-in's error.
+# (b) A file named below that directory (prog/composite.test) gets the same
+#     line, also when writing, and nothing is written: composite.expected is
+#     unchanged and no per-OS expected file appears beside it.
+# (c) The self-tests' copies are processed: they lie below the build tree's
+#     .../msil/test/harness/Output/, so the skip compares source-tree paths,
+#     not the name 'harness'. Each test is processed once however the
+#     arguments nest. Of '%t.w/sub %t.w %t.w/sub/prog.c', the walk of %t.w
+#     covers %t.w/sub, and prog.c is processed as a named file (it has no RUN
+#     line, so a walk would skip it) where it is named, after top.c; a
+#     --check run that names prog.c first reports its changed expected file
+#     first and once (one MISMATCH), then top.c. A directory below another
+#     argument's Inputs/, which that argument's walk does not enter, is
+#     processed on its own. The compiler and program stand-in is the .NET
+#     Framework executable of update-expected-native-ldflags.test
+#     (Inputs/fake-native-44.il with fake-native-cc.il; the program exits
+#     with 44), so (c) runs where that test runs: system-windows with
+#     msil-triple-windows and msil-netfx.
+
+# DEFINE: %{walk_failing_cc} = %python %S/Inputs/levels-cc.py
+
+# (a)
+# RUN: %{harness_update_expected} --clang '%{walk_failing_cc}' --rtlib none --check --levels O0,O2 %S %S/prog %S/legs/.. > %t.a1.log 2> %t.a1.err
+# RUN: %{harness_check} contains %t.a1.log '\Askip \(harness self-test: stand-in tools\): .+[/\\]msil[/\\]test[/\\]harness\n\Z'
+# RUN: %{harness_check} lacks %t.a1.err "levels-cc: error"
+# RUN: %{harness_update_expected} --clang '%{walk_failing_cc}' --rtlib none --check --levels O0,O2 %S/prog %S > %t.a2.log 2> %t.a2.err
+# RUN: %{harness_check} contains %t.a2.log '\Askip \(harness self-test: stand-in tools\): .+[/\\]msil[/\\]test[/\\]harness\n\Z'
+# RUN: %{harness_check} lacks %t.a2.err "levels-cc: error"
+
+# (b)
+# RUN: cat %S/prog/composite.expected > %t.b.before
+# RUN: %{harness_update_expected} --clang '%{walk_failing_cc}' --rtlib none %S/prog/composite.test > %t.b.log 2> %t.b.err
+# RUN: %{harness_check} contains %t.b.log '\Askip \(harness self-test: stand-in tools\): .+[/\\]msil[/\\]test[/\\]harness[/\\]prog[/\\]composite\.test\n\Z'
+# RUN: %{harness_check} lacks %t.b.err "levels-cc: error"
+# RUN: diff %t.b.before %S/prog/composite.expected
+# RUN: %{harness_check} missing %S/prog/composite.windows.expected
+# RUN: %{harness_check} missing %S/prog/composite.linux.expected
+
+# (c)
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ rm -rf %t.d %t.w %t.k && mkdir -p %t.d %t.w/sub %t.k/Inputs/kept %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %ilasm -exe -output=%t.d/fake-native-44.exe %S/Inputs/fake-native-44.il %S/Inputs/fake-native-cc.il %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ cat %S/Inputs/exit-range-prog.c > %t.w/top.c %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_check} write %t.w/sub/prog.c "// No lit RUN line, so only naming it makes this file a test." "int main(void) { return 0; }" %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_update_expected} --clang %t.d/fake-native-44.exe --rtlib none %t.w/sub %t.w %t.w/sub/prog.c > %t.c1.log %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.c1.log '\Awrote .+[/\\]top\.expected\nwrote .+[/\\]sub[/\\]prog\.expected\n\Z' %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_check} equals %t.w/top.expected "[exit 44]" %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_check} equals %t.w/sub/prog.expected "[exit 44]" %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_check} write %t.w/sub/prog.expected "[exit 45]" %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_check} exits 1 %{harness_update_expected} --clang %t.d/fake-native-44.exe --rtlib none --check %t.w/sub/prog.c %t.w/sub %t.w > %t.c2.log %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.c2.log '\AMISMATCH: .+[/\\]sub[/\\]prog\.c\n(?:[-+@].*\n)+ok: .+[/\\]top\.c\n\Z' "^-\[exit 45\]$" "^\+\[exit 44\]$" %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ cat %S/Inputs/exit-range-prog.c > %t.k/a.c %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ cat %S/Inputs/exit-range-prog.c > %t.k/Inputs/kept/b.c %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_update_expected} --clang %t.d/fake-native-44.exe --rtlib none %t.k %t.k/Inputs/kept > %t.c3.log %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_check} contains %t.c3.log '\Awrote .+[/\\]a\.expected\nwrote .+[/\\]Inputs[/\\]kept[/\\]b\.expected\n\Z' %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_check} equals %t.k/a.expected "[exit 44]" %}
+# RUN: %if system-windows && msil-triple-windows && msil-netfx %{ %{harness_check} equals %t.k/Inputs/kept/b.expected "[exit 44]" %}

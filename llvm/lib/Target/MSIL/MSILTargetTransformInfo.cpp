@@ -43,24 +43,13 @@ void MSILTTIImpl::getUnrollingPreferences(
   UP.Runtime = false;
 }
 
-/// Returns true if \p Ty is half or bfloat, or a vector, array or struct that
-/// contains one.
-static bool containsHalfOrBFloat(Type *Ty) {
-  if (auto *AT = dyn_cast<ArrayType>(Ty))
-    return containsHalfOrBFloat(AT->getElementType());
-  if (auto *STy = dyn_cast<StructType>(Ty))
-    return any_of(STy->elements(), containsHalfOrBFloat);
-  return Ty->getScalarType()->is16bitFPTy();
-}
-
 bool MSILTTIImpl::areTypesABICompatible(const Function *Caller,
                                         const Function *Callee,
                                         ArrayRef<Type *> Types) const {
-  // Half and bfloat values passed by value need compiler-rt helpers until
-  // phase 3 (D14). ArgumentPromotion would create such parameters from the
-  // pointer parameters of functions that LTO internalized.
-  if (any_of(Types, containsHalfOrBFloat))
-    return false;
+  // Every type, half and bfloat included: both pass as their 16-bit pattern
+  // in an int32 (MSILTargetLowering::getRegisterTypeForCallingConv), so a
+  // parameter that ArgumentPromotion makes from a pointer parameter costs no
+  // conversion helper at the call.
   return BaseT::areTypesABICompatible(Caller, Callee, Types);
 }
 

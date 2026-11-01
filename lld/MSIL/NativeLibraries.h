@@ -29,6 +29,7 @@
 #include "lld/Common/LLVM.h"
 #include "llvm/ADT/CachedHashString.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Allocator.h"
@@ -44,6 +45,7 @@ class Triple;
 namespace lld::msil {
 class InputFile;
 class NativeLibraryFile;
+struct Ctx;
 
 // What a native definition is: an ELF STT_FUNC or STT_GNU_IFUNC symbol, a
 // COFF IMPORT_CODE member or an export in a code section is a Function;
@@ -147,9 +149,81 @@ bool isNativeObjectDefinition(const NativeExport &e);
 
 // Returns true if \p name is a native function that takes a C function
 // pointer (plan 5.10.14's callback list, glibc's __REDIRECT targets of its
-// functions included): native code cannot call a managed function before
-// phase 3's native-callable thunks (plan 5.10.10).
+// functions included, and the exit and thread-exit registrations of plan
+// 5.15.11): passing C functions to native code is not supported for MSIL yet
+// (plan 5.10.10).
 bool isNativeCallbackFunction(StringRef name);
+
+// The name classes of plan 5.14.2, which decide where a name may be resolved
+// from. Later milestones call these predicates, never a copy of them. N3,
+// the toolchain names ("__msil_*"), is llvm::cli::isToolchainName
+// (llvm/CLI/TrailerDefs.h); N5 needs no predicate.
+
+// N1, a compiler-runtime name: a name that starts with "__" in the
+// RuntimeLibcalls set of the codegen triple, other than N2's names and the C
+// library's own entry points that the set also lists (__memcpy_chk,
+// __stack_chk_fail, ...; NativeLibraries.cpp lists them), which keep binding
+// natively. The driver computes the set once per link
+// (getCompilerRuntimeNames, ctx.compilerRuntimeNames). Objects and archive
+// members (the helper archive clang_rt.builtins) define these names; native
+// libraries never do.
+bool isCompilerRuntimeName(StringRef name, const Ctx &ctx);
+
+// N2, an atomic library name: "__atomic_*", libatomic's interface (its sized
+// and generic entry points). On Linux triples the native libraries may
+// define them (libatomic.so.1 through -latomic, as a native build links it);
+// on Windows triples only objects and archive members do.
+bool isAtomicLibraryName(StringRef name);
+
+// N4, the setjmp family: exactly _setjmp, setjmp, __sigsetjmp, sigsetjmp,
+// _setjmpex, _setjmp3, longjmp, _longjmp, siglongjmp and __longjmp_chk,
+// which the compiler lowers. A reference that no object or archive member
+// defines is getSetjmpFamilyText's error.
+bool isSetjmpFamilyName(StringRef name);
+
+// Returns false if no native library may define \p name (plan 5.14.2 N-2):
+// an N1, N3 or N4 name, and on Windows triples an N2 name. Every path that
+// binds a name natively asks it before it consults the native index: late
+// binding (SymbolTable::bindLateSymbols: CIL objects, LTO objects, and the
+// bitcode inputs under --lto-emit-asm), LTO's import annotation
+// (!msil.imports: the references of the merged module, the quiet binding of
+// unused declarations and the library calls of code generation) and
+// /alternatename. Such a name stays undefined, and its report carries
+// getNameClassLine's line (an N4 name: getSetjmpFamilyText).
+bool mayBindNatively(StringRef name, const Ctx &ctx);
+
+// Returns true if the calls of \p name must match its definition exactly
+// (plan 5.14.2 N-1): an N1, N2 or N3 name. A call-site signature that differs
+// from such a definition is never adapted: it is the error "function
+// signature mismatch: <name> (a toolchain or compiler runtime helper)" with
+// the ">>> defined as" and ">>> called as" lines, for the calls that the
+// objects make (CallBinder) and for those inside the LTO modules (LTO's
+// diagnostic handler) alike.
+bool isHelperName(StringRef name, const Ctx &ctx);
+
+// The N1 names of \p runtimeLibcalls, the RuntimeLibcalls set of the codegen
+// triple (lto::LTO::getRuntimeLibcallSymbols): its "__" names, other than
+// N2's and the C library's. The driver keeps the result in
+// ctx.compilerRuntimeNames.
+llvm::DenseSet<StringRef>
+getCompilerRuntimeNames(ArrayRef<const char *> runtimeLibcalls);
+
+// The line of plan 5.14.2 that the report of the undefined symbol \p name
+// adds after its first line, before the ">>> referenced by" lines, with its
+// leading newline: for an N1 name "\n>>> a compiler runtime helper: link the
+// toolchain's helper archive clang_rt.builtins", for an N2 name "\n>>> an
+// atomic operation: link with -latomic, as a native build does" (Linux) or
+// "\n>>> an atomic operation (libatomic's interface)" (Windows), and for an
+// N3 name "\n>>> a toolchain helper: link the toolchain's helper archive
+// clang_rt.builtins; if it is linked, the object needs a newer toolchain".
+// Empty for any other name.
+std::string getNameClassLine(StringRef name, const Ctx &ctx);
+
+// N4's error for \p file, an input that refers to the setjmp-family name
+// \p name, which no object or archive member defines: "<file>: '<name>'
+// cannot be bound to a native library: setjmp and longjmp are lowered by the
+// compiler".
+std::string getSetjmpFamilyText(StringRef name, StringRef file);
 
 // The 5.10.14 text for \p e, a native definition of \p name that a P/Invoke
 // cannot bind (e.Why is not NotBindable::None): machine code in an archive,

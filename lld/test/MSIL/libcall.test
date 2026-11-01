@@ -24,8 +24,10 @@
 ## (msil-ld lists it in !msil.imports): 'assembly' access and the library's
 ## module (5.10.11). Without one it is the backend's 'library call '<name>'
 ## was not resolved by msil-ld', never D14's public P/Invoke of "ucrtbase" or
-## "libm.so.6". A compiler-rt helper ('__' name, __powidf2 for llvm.powi on
-## Linux) keeps its phase 3 error even when a native library defines it.
+## "libm.so.6". A compiler-rt helper (a '__' name of the RuntimeLibcalls set,
+## 5.14.2's class N1: __powidf2 for llvm.powi on Linux) never binds to a
+## native library, M24's guard (never-bind.test), so it keeps the backend's
+## helper error even when a native library defines it.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: llvm-as main.ll -o main.o
@@ -83,7 +85,8 @@
 
 ## Linked library calls: pow binds through the native library that defines
 ## it, on both triples, and is the backend's error without one; __powidf2
-## stays a phase 3 helper on Linux although libhelper.so defines it.
+## stays the backend's helper error on Linux although libhelper.so defines
+## it (no P/Invoke).
 # RUN: cd %t/linked
 # RUN: llvm-as pow-win.ll -o pow-win.o
 # RUN: llvm-as pow-lnx.ll -o pow-lnx.o

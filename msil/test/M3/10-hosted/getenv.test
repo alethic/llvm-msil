@@ -1,0 +1,61 @@
+# The environment through the real <stdlib.h>: getenv of an inherited variable, of an unset one, and of one the program sets, changes and removes.
+# getenv returns a pointer into the C library's environment, which the
+# program reads as a C string (puts, strlen). The program sets a variable
+# with setenv on Linux triples (POSIX; glibc's <stdlib.h> declares it under
+# -std=gnu17) and with _putenv_s on Windows triples (the UCRT has no
+# setenv), changes it, and removes it with unsetenv or with _putenv_s and an
+# empty value; each route updates the environment that the same C library's
+# getenv reads. PATH is inherited from the process that started the program
+# (msil-run.py passes its environment on, to the native oracle as well;
+# getenv's name lookup is case-insensitive in the UCRT, which finds Path).
+# _CRT_SECURE_NO_WARNINGS turns off the UCRT's deprecation warning for
+# getenv. Plan 5.17.13 (M24, M3/10-hosted).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#define _CRT_SECURE_NO_WARNINGS
+#include <stdlib.h>
+#include <string.h>
+
+#include "msil_test.h"
+
+#define NAME "MSIL_M3_GETENV_TEST"
+
+static int set_var(const char *value) {
+#ifdef _WIN32
+  return _putenv_s(NAME, value);
+#else
+  return setenv(NAME, value, 1);
+#endif
+}
+
+static int unset_var(void) {
+#ifdef _WIN32
+  return _putenv_s(NAME, "");
+#else
+  return unsetenv(NAME);
+#endif
+}
+
+static void show(const char *what) {
+  const char *v = getenv(NAME);
+  put_kv(what, v != NULL);
+  if (v) {
+    puts(v);
+    put_kv("length", (long long)strlen(v));
+  }
+}
+
+int main(void) {
+  const char *path = getenv("PATH");
+  put_kv("PATH is inherited and not empty", path != NULL && path[0] != 0);
+  show("unset at the start");
+  put_kv("set", set_var("a hosted value") == 0);
+  show("found after set");
+  put_kv("set again", set_var("another value") == 0);
+  show("found after set again");
+  put_kv("unset", unset_var() == 0);
+  show("found after unset");
+  return 0;
+}

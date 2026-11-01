@@ -1,0 +1,24 @@
+# Run only in a nested lit by ../../steps-equivalence.test, with the WSL
+# runner: msil-steps.py runs consecutive WSL steps (msil-jitall.py and
+# msil-run.py with --runner wsl, the managed runs and the E7 native run)
+# through one wsl.exe (msil-run.py --steps, plan 5.17.10 item 3), and
+# ../steps-replay.py replays each of their headers as a command of its own,
+# which must print the same output and exit with the same status. The first
+# level passes: the native oracle's build (msil-prog.py, on the host), the
+# force-JIT, the .NET run, a .NET 8 run with a runtimeconfig of this test's
+# own, and the native run of the E7 program; the second fails at its run,
+# whose transcript differs from the expected file, so the step after it never
+# runs.
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %ilasm -dll -output=%t/puts.dll %S/../puts-wsl.il
+# RUN: %{harness_check} write %t/nine.expected "[exit 9]"
+# RUN: %{harness_check} write %t/wrong.expected "hello" "[exit 7]"
+# RUN: %{harness_check} write %t/net8.runtimeconfig.json '{"runtimeOptions": {"tfm": "net8.0", "rollForward": "LatestPatch", "framework": {"name": "Microsoft.NETCore.App", "version": "8.0.0"}}}'
+# RUN: %python %S/../steps-replay.py -- %msil_steps --step=native-build %msil_prog_build --mode native --level O0 --workdir %t/native.d --out %t/native.d/prog.elf --src %S/../rule-prog.c --step=jitall %msil_jitall %t/puts.dll --step=run %msil_exec --expect %S/../puts-wsl --out %t/run.out %t/puts.dll --step=also-net8-run %msil_exec --runtimeconfig %t/net8.runtimeconfig.json --expect %S/../puts-wsl %t/puts.dll --step=native-run %msil_exec --native --expect %t/nine --out %t/native.out %t/native.d/prog.elf > %t/pass.log
+# RUN: %{harness_check} contains %t/pass.log "^steps-replay: native-build: same output and exit status 0$" "^steps-replay: jitall: same output and exit status 0$" "^steps-replay: run: same output and exit status 0$" "^steps-replay: also-net8-run: same output and exit status 0$" "^steps-replay: native-run: same output and exit status 0$" "^steps-replay: msil-steps\.py ran 5 of 5 steps, exit status 0$"
+# RUN: %{harness_check} contains %t/pass.log "^msil-steps: run: \S*python\S* \S*msil-run\.py'? .*--runner wsl " "^msil-steps: native-run: \S*python\S* \S*msil-run\.py'? .*--runner wsl .*--native "
+# RUN: %{harness_check} equals %t/native.out "[exit 9]"
+# RUN: %python %S/../steps-replay.py --status 1 -- %msil_steps --step=jitall %msil_jitall %t/puts.dll --step=run %msil_exec --expect %t/wrong %t/puts.dll --step=never %msil_exec --expect %S/../puts-wsl %t/puts.dll > %t/fail.log
+# RUN: %{harness_check} contains %t/fail.log "^steps-replay: jitall: same output and exit status 0$" "^steps-replay: run: same output and exit status 1$" "^steps-replay: msil-steps\.py ran 2 of 3 steps, exit status 1$" "^msil-run: output of \S*puts\.dll does not match \S*wrong\.expected$" "^msil-steps: run failed \(exit status 1\)$"
+# RUN: %{harness_check} lacks %t/fail.log "^msil-steps: never:"
+# RUN: cat %t/pass.log %t/fail.log

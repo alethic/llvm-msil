@@ -1,0 +1,46 @@
+# %{msil_netfx_skip} and msil-run.py --skip-netfx (plan 5.17.2, 5.17.5;
+# M24). The placeholder is empty by default and sits in the .NET Framework
+# run of every composite; a test of a construct that the Framework lacks
+# (the attribute of --uco-thunks) sets REDEFINE: %{msil_netfx_skip} =
+# --skip-netfx '<reason>', and msil-run.py --netfx --skip-netfx REASON then
+# prints 'msil-run: netfx run skipped: REASON' and exits 0 without running.
+# (1) msil-run.py itself, on Inputs/exit-42.il assembled as an EXE: the skip
+# passes even with a wrong expected file and writes nothing to --out; the
+# same run without the skip runs and compares; --skip-netfx without --netfx,
+# or with an empty reason, is a usage error (status 2).
+# (2) The composite, in a nested lit with -a of prog/Inputs/nested-netfx
+# (msil-prog.py with the stand-ins of prog/Inputs/prog-cc.py, whose MSIL
+# program exits with one more on the .NET Framework: prog-netfx): skip.c
+# passes only through its skip, and its Framework step carries the reason and
+# prints the skip line; noskip.c, the same test without the skip, fails at
+# its Framework run; skip-main-wrong.c fails at its main run, which the skip
+# does not cover. Only under the Windows triple, where %msil_exec runs
+# locally: the WSL runner has no --netfx run.
+# REQUIRES: system-windows, msil-triple-windows, msil-netfx
+
+# RUN: rm -rf %t.d && mkdir -p %t.d
+# RUN: %ilasm -exe -output=%t.d/exit-42.exe %S/Inputs/exit-42.il
+# RUN: %{harness_check} write %t.d/wrong.expected "[exit 41]"
+
+# (1)
+# RUN: %msil_exec --netfx --skip-netfx 'the attribute that the Framework lacks' --expect %t.d/wrong --out %t.d/skip.out %t.d/exit-42.exe > %t.1a.log
+# RUN: %{harness_check} equals %t.1a.log "msil-run: netfx run skipped: the attribute that the Framework lacks"
+# RUN: %{harness_check} missing %t.d/skip.out
+# RUN: not %msil_exec --netfx --expect %t.d/wrong --out %t.d/run.out %t.d/exit-42.exe > %t.1b.log 2>&1
+# RUN: %{harness_check} contains %t.1b.log "does not match \S*wrong\.expected"
+# RUN: %{harness_check} equals %t.d/run.out "[exit 42]"
+# RUN: %msil_exec --netfx --expect %S/Inputs/exit-42 %t.d/exit-42.exe
+# RUN: %{harness_check} exits 2 %msil_exec --skip-netfx 'a reason' --expect %S/Inputs/exit-42 %t.d/exit-42.exe > %t.1c.log 2>&1
+# RUN: %{harness_check} contains %t.1c.log "error: --skip-netfx needs --netfx$"
+# RUN: %{harness_check} exits 2 %msil_exec --netfx --skip-netfx '' --expect %S/Inputs/exit-42 %t.d/exit-42.exe > %t.1d.log 2>&1
+# RUN: %{harness_check} contains %t.1d.log "error: --skip-netfx needs a reason$"
+# RUN: %{harness_check} lacks %t.1c.log "skipped"
+# RUN: %{harness_check} lacks %t.1d.log "skipped"
+
+# (2)
+# RUN: not %{harness_lit} -a --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local --param msil_native_oracle=required --param msil_run_netfx=1 %S/prog/Inputs/nested-netfx > %t.2.log 2>&1
+# RUN: %{harness_check} contains %t.2.log "^PASS: MSIL :: harness/prog/Inputs/nested-netfx/skip\.c " "^FAIL: MSIL :: harness/prog/Inputs/nested-netfx/noskip\.c " "^FAIL: MSIL :: harness/prog/Inputs/nested-netfx/skip-main-wrong\.c "
+# RUN: %{harness_check} contains %t.2.log "^# \| msil-steps: netfx-run: .*msil-run\.py'? .*--netfx --skip-netfx 'the attribute that the Framework lacks' --expect \S*nested-netfx\Wskip'? .*skip\.c\.tmp\.O0\.d\Wprog\.exe'?$" "^# \| msil-run: netfx run skipped: the attribute that the Framework lacks$"
+# RUN: %{harness_check} contains %t.2.log "^# \| msil-steps: netfx-run: .*msil-run\.py'? .*--netfx --expect \S*nested-netfx\Wnoskip'? " "^# \| msil-run: output of \S*noskip\.c\.tmp\.O0\.d\Wprog\.exe does not match \S*nested-netfx\Wnoskip\.expected\n(?:# \| .*\n)*?# \| -\[exit 15\]\n# \| \+\[exit 16\]\n# \| msil-steps: netfx-run failed \(exit status 1\)$"
+# RUN: %{harness_check} contains %t.2.log "^# \| msil-run: output of \S*skip-main-wrong\.c\.tmp\.O0\.d\Wprog\.exe does not match \S*nested-netfx\Wskip-main-wrong\.expected\n(?:# \| .*\n)*?# \| -\[exit 24\]\n# \| \+\[exit 25\]\n# \| msil-steps: run failed \(exit status 1\)$"
+# RUN: %{harness_check} lacks %t.2.log "msil-steps: netfx-run: .*--netfx --skip-netfx .*noskip"

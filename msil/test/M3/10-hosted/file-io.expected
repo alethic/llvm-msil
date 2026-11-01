@@ -1,0 +1,41 @@
+fopen(wb)=1
+fputs=1
+fputs=1
+fwrite=8
+fputc=90
+ftell after writing=40
+fclose=0
+fopen(rb)=1
+fgets=1
+the line read:
+the first line
+ftell after one line=15
+fseek to the end=0
+ftell at the end=40
+fgetc after rewind=116
+ungetc=84
+fgetc after ungetc=84
+fseek to the second line=0
+fgets=1
+the line read:
+the second line
+fread=8
+the bytes read back are the bytes written=1
+fgetc of the last byte=90
+fgetc at the end is EOF=1
+feof=1
+fclose=0
+rename=0
+fopen of the old name fails=1
+with ENOENT=1
+fopen of the new name=1
+fgets=1
+the line read:
+the first line
+fclose=0
+remove=0
+remove again fails=1
+with ENOENT=1
+fopen after remove fails=1
+with ENOENT=1
+[exit 0]

@@ -32,6 +32,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "NativeLibraries.h"
+#include "Config.h"
 #include "InputFiles.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
@@ -43,6 +44,7 @@
 #include "llvm/BinaryFormat/COFF.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/BinaryFormat/Magic.h"
+#include "llvm/CLI/TrailerDefs.h"
 #include "llvm/Object/Archive.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Object/ELF.h"
@@ -69,60 +71,73 @@ namespace lld::msil {
 
 // Native functions that take a C function pointer. Native code that calls a
 // '<msil>fn_' address enters managed code without a reverse-P/Invoke
-// transition, so calling them needs phase 3's native-callable thunks (plan
-// 5.10.10). The table also holds glibc's other spellings of them, which its
-// headers select through an asm label (__REDIRECT), so that standard C code
-// references them instead of the listed name: __sysv_signal for signal
-// without __USE_MISC, and ftw64, nftw64, scandir64 and scandirat64 for
-// _FILE_OFFSET_BITS=64; and glibc's other exported functions that take a
-// signal handler or a callback in the same way (bsd_signal, scandirat, sigset,
-// ssignal, sysv_signal). Sorted in byte order, for binary search.
-static const char *const nativeCallbackFunctions[] = {"CreateThread",
-                                                      "__sysv_signal",
-                                                      "_beginthread",
-                                                      "_beginthreadex",
-                                                      "_lfind",
-                                                      "_lfind_s",
-                                                      "_lsearch",
-                                                      "_lsearch_s",
-                                                      "_onexit",
-                                                      "at_quick_exit",
-                                                      "atexit",
-                                                      "bsd_signal",
-                                                      "bsearch",
-                                                      "bsearch_s",
-                                                      "call_once",
-                                                      "ftw",
-                                                      "ftw64",
-                                                      "lfind",
-                                                      "lsearch",
-                                                      "nftw",
-                                                      "nftw64",
-                                                      "on_exit",
-                                                      "pthread_atfork",
-                                                      "pthread_create",
-                                                      "pthread_key_create",
-                                                      "pthread_once",
-                                                      "qsort",
-                                                      "qsort_r",
-                                                      "qsort_s",
-                                                      "scandir",
-                                                      "scandir64",
-                                                      "scandirat",
-                                                      "scandirat64",
-                                                      "sigaction",
-                                                      "signal",
-                                                      "sigset",
-                                                      "ssignal",
-                                                      "sysv_signal",
-                                                      "tdelete",
-                                                      "tdestroy",
-                                                      "tfind",
-                                                      "thrd_create",
-                                                      "tsearch",
-                                                      "tss_create",
-                                                      "twalk",
-                                                      "twalk_r"};
+// transition, so passing C functions to native code is not supported for
+// MSIL yet (plan 5.10.10, 5.15.11). The table also holds glibc's other
+// spellings of them, which its headers select through an asm label
+// (__REDIRECT), so that standard C code references them instead of the
+// listed name: __sysv_signal for signal without __USE_MISC, and ftw64,
+// nftw64, scandir64 and scandirat64 for _FILE_OFFSET_BITS=64; glibc's other
+// exported functions that take a signal handler or a callback in the same
+// way (bsd_signal, scandirat, sigset, ssignal, sysv_signal); and the exit and
+// thread-exit registrations that the C and C++ runtimes call
+// (__cxa_at_quick_exit, __cxa_atexit, __cxa_thread_atexit_impl,
+// _crt_at_quick_exit, _crt_atexit, _register_onexit_function) and FlsAlloc,
+// whose callback runs when a fiber or thread ends (plan 5.15.11). Sorted in
+// byte order, for binary search.
+static const char *const nativeCallbackFunctions[] = {
+    "CreateThread",
+    "FlsAlloc",
+    "__cxa_at_quick_exit",
+    "__cxa_atexit",
+    "__cxa_thread_atexit_impl",
+    "__sysv_signal",
+    "_beginthread",
+    "_beginthreadex",
+    "_crt_at_quick_exit",
+    "_crt_atexit",
+    "_lfind",
+    "_lfind_s",
+    "_lsearch",
+    "_lsearch_s",
+    "_onexit",
+    "_register_onexit_function",
+    "at_quick_exit",
+    "atexit",
+    "bsd_signal",
+    "bsearch",
+    "bsearch_s",
+    "call_once",
+    "ftw",
+    "ftw64",
+    "lfind",
+    "lsearch",
+    "nftw",
+    "nftw64",
+    "on_exit",
+    "pthread_atfork",
+    "pthread_create",
+    "pthread_key_create",
+    "pthread_once",
+    "qsort",
+    "qsort_r",
+    "qsort_s",
+    "scandir",
+    "scandir64",
+    "scandirat",
+    "scandirat64",
+    "sigaction",
+    "signal",
+    "sigset",
+    "ssignal",
+    "sysv_signal",
+    "tdelete",
+    "tdestroy",
+    "tfind",
+    "thrd_create",
+    "tsearch",
+    "tss_create",
+    "twalk",
+    "twalk_r"};
 
 bool isNativeCallbackFunction(StringRef name) {
   auto less = [](StringRef a, StringRef b) { return a < b; };
@@ -131,6 +146,137 @@ bool isNativeCallbackFunction(StringRef name) {
          "the callback list must be sorted");
   return std::binary_search(std::begin(nativeCallbackFunctions),
                             std::end(nativeCallbackFunctions), name, less);
+}
+
+//===----------------------------------------------------------------------===//
+// The name classes (plan 5.14.2)
+//===----------------------------------------------------------------------===//
+
+// The C library's own entry points among the "__" names of the
+// RuntimeLibcalls sets, which are not compiler-runtime names (N1) and keep
+// binding natively: of the names of the sets of the x86_64 MSIL triples, the
+// ones that compiler-rt's builtins do not define and the C library does.
+// glibc's _FORTIFY_SOURCE wrappers call the _chk functions, and stack
+// protection the __stack_chk names.
+// - The C library: __memcpy_chk, __memmove_chk and __memset_chk (every
+//   x86_64 set), __stack_chk_fail and __stack_chk_guard (linux-gnu,
+//   linux-musl, windows-gnu).
+// - glibc's libm: the __<function>_finite entry points (isCLibraryName
+//   matches the suffix), 19 in the x86_64 sets: __exp_finite, __expf_finite,
+//   __exp2_finite, __exp2f_finite, __log_finite, __logf_finite,
+//   __log2_finite, __log2f_finite, __log10_finite, __log10f_finite,
+//   __pow_finite and __powf_finite (every set), and __expf128_finite,
+//   __exp2f128_finite, __exp10f128_finite, __logf128_finite,
+//   __log2f128_finite, __log10f128_finite and __powf128_finite (linux-gnu,
+//   windows-gnu).
+// - The MSVC C runtime: __chkstk, __security_check_cookie and
+//   __security_cookie (windows-msvc).
+// The other names of those sets that compiler-rt's builtins do not define
+// stay N1, so that no native library supplies them: the helpers that only
+// libgcc has (__ashlhi3, __ashlsi3, __ashrhi3, __ashrsi3, __lshrhi3,
+// __lshrsi3, __divhi3, __divqi3, __modhi3, __modqi3, __mulhi3, __mulqi3,
+// __mulsi3, __negsi2, __udivhi3, __udivqi3, __umodhi3, __umodqi3; the half
+// conversions __fixhfsi, __fixhfdi, __fixhfti, __fixunshfsi, __fixunshfdi,
+// __fixunshfti, __floatsihf, __floatdihf, __floattihf, __floatunsihf,
+// __floatundihf, __floatuntihf, __floatdibf, __floatundibf; the x87 ones
+// __addxf3, __subxf3, __mulxf3, __divxf3, __fixxfsi, __floatsixf,
+// __floatunsixf, __truncxfsf2, __truncxfdf2), the __sync_* entry points
+// (fetch_and_{add,sub,and,or,xor,nand,max,min,umax,umin},
+// lock_test_and_set and val_compare_and_swap, sizes 1, 2, 4, 8 and 16),
+// LLVM's own runtime names (__llvm_deoptimize and the
+// __llvm_mem{cpy,move,set}_element_unordered_atomic_{1,2,4,8,16} functions)
+// and compiler-rt's safe-stack __safestack_unsafe_stack_ptr. Sorted in byte
+// order, for binary search.
+static const char *const cLibraryRuntimeNames[] = {
+    "__chkstk",
+    "__memcpy_chk",
+    "__memmove_chk",
+    "__memset_chk",
+    "__security_check_cookie",
+    "__security_cookie",
+    "__stack_chk_fail",
+    "__stack_chk_guard",
+};
+
+static bool isCLibraryName(StringRef name) {
+  auto less = [](StringRef a, StringRef b) { return a < b; };
+  assert(std::is_sorted(std::begin(cLibraryRuntimeNames),
+                        std::end(cLibraryRuntimeNames), less) &&
+         "the C library's names must be sorted");
+  return name.ends_with("_finite") ||
+         std::binary_search(std::begin(cLibraryRuntimeNames),
+                            std::end(cLibraryRuntimeNames), name, less);
+}
+
+// N4: plan 5.14.2's ten names, sorted in byte order, for binary search.
+static const char *const setjmpFamilyNames[] = {
+    "__longjmp_chk", "__sigsetjmp", "_longjmp", "_setjmp",    "_setjmp3",
+    "_setjmpex",     "longjmp",     "setjmp",   "siglongjmp", "sigsetjmp"};
+
+llvm::DenseSet<StringRef>
+getCompilerRuntimeNames(ArrayRef<const char *> runtimeLibcalls) {
+  llvm::DenseSet<StringRef> names;
+  for (const char *libcall : runtimeLibcalls) {
+    // The names are RuntimeLibcalls' static strings.
+    StringRef name(libcall);
+    if (name.starts_with("__") && !isAtomicLibraryName(name) &&
+        !isCLibraryName(name))
+      names.insert(name);
+  }
+  return names;
+}
+
+bool isCompilerRuntimeName(StringRef name, const Ctx &ctx) {
+  return ctx.compilerRuntimeNames.contains(name);
+}
+
+bool isAtomicLibraryName(StringRef name) {
+  return name.starts_with("__atomic_");
+}
+
+bool isSetjmpFamilyName(StringRef name) {
+  auto less = [](StringRef a, StringRef b) { return a < b; };
+  assert(std::is_sorted(std::begin(setjmpFamilyNames),
+                        std::end(setjmpFamilyNames), less) &&
+         "the setjmp family must be sorted");
+  return std::binary_search(std::begin(setjmpFamilyNames),
+                            std::end(setjmpFamilyNames), name, less);
+}
+
+bool mayBindNatively(StringRef name, const Ctx &ctx) {
+  // libatomic.so.1 is the lock path of a native Linux build (user decisions
+  // R4/R5 (5)); the Windows triples have no such library.
+  if (isAtomicLibraryName(name))
+    return !ctx.arg.target.isOSWindows();
+  return !isCompilerRuntimeName(name, ctx) && !cli::isToolchainName(name) &&
+         !isSetjmpFamilyName(name);
+}
+
+bool isHelperName(StringRef name, const Ctx &ctx) {
+  return isCompilerRuntimeName(name, ctx) || isAtomicLibraryName(name) ||
+         cli::isToolchainName(name);
+}
+
+std::string getNameClassLine(StringRef name, const Ctx &ctx) {
+  if (isAtomicLibraryName(name))
+    return ctx.arg.target.isOSWindows()
+               ? "\n>>> an atomic operation (libatomic's interface)"
+               : "\n>>> an atomic operation: link with -latomic, as a native "
+                 "build does";
+  if (cli::isToolchainName(name))
+    return "\n>>> a toolchain helper: link the toolchain's helper archive "
+           "clang_rt.builtins; if it is linked, the object needs a newer "
+           "toolchain";
+  if (isCompilerRuntimeName(name, ctx))
+    return "\n>>> a compiler runtime helper: link the toolchain's helper "
+           "archive clang_rt.builtins";
+  return "";
+}
+
+std::string getSetjmpFamilyText(StringRef name, StringRef file) {
+  return (file + ": '" + name + "' cannot be bound to a native library: " +
+          "setjmp and longjmp are lowered by the compiler")
+      .str();
 }
 
 //===----------------------------------------------------------------------===//

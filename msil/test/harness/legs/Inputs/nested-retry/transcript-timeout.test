@@ -1,0 +1,3 @@
+# Fails at its last command, whose output has the transcript status line
+# [timeout]: timeout-only.
+# RUN: %python -c "import sys; print('some output'); print('[timeout]'); sys.exit(1)"

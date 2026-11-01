@@ -1,0 +1,3 @@
+# Fails at its last command with msil-verify.py's timeout message:
+# timeout-only.
+# RUN: %python -c "import sys; sys.stderr.write('ilverify did not finish within 60 s\n'); sys.exit(1)"

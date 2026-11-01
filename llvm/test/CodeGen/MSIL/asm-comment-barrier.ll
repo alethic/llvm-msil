@@ -1,21 +1,28 @@
 ; Comment-only inline asm barriers (the section 12 rows of 2026-10-26 'M22.b
 ; extended (Rust-found defects 2 and 4)' item 2 and 'M22.e extended
 ; (Rust-found defects 1-4, tests)'; ImplementationPlan.md M12.a (3) and
-; decision D36 as amended for M12; asm-operands.ll has M12's empty asm).
+; decision D36 as amended for M12 and M24; asm-operands.ll has M12's empty
+; asm).
 ; Rust's zmij (serde_json's float formatter) writes asm!("/*{0}*/",
 ; inout(reg) x) as an optimization barrier, IR
 ;   asm sideeffect alignstack inteldialect "/*${0:k}*/",
 ;       "=&r,0,~{dirflag},~{fpsr},~{flags},~{memory}"
 ; An inline asm whose template holds nothing but whitespace and '/* ... */'
 ; comments is accepted like M12's empty barrier asm: the D36 compiler fence
-; (MEMBARRIER, printed as '//MEMBARRIER'), each output tied to an input
-; (early clobber or not) becomes that input's value, so the value passes
-; through, and memory operations do not move across it; one with no
+; (since M24 "call void '__msil_compiler_barrier'()", the call of the trailer
+; definition that whole-program text defines once, after every other method,
+; as '.method assembly static void '__msil_compiler_barrier'() cil managed
+; noinlining' with the body 'ret'; plan 5.14.4 T2 and T6), each output tied
+; to an input (early clobber or not) becomes that input's value, so the value
+; passes through, and memory operations do not move across it; one with no
 ; operands at all, only clobbers, is the fence too. So comment.ll, whose
 ; templates are comments ('$' operand references, newlines and tabs
 ; included), gives exactly the IL of empty.ll, the same functions with
-; empty templates, at -O0 and -O2 on both x86_64 MSIL triples, with no
-; diagnostic, and the output assembles.
+; empty templates, at -O0 and -O2 on both x86_64 MSIL triples and on
+; aarch64-unknown-linux-gnu-msil, with no diagnostic, and the output
+; assembles. The CIL objects of the two are equal byte for byte, and each has
+; the barrier as an UNDEFINED FUNCTION symbol and no definition of it (5.14.4
+; T1).
 ;
 ; errors.ll: every other inline asm keeps 'inline assembly is not supported
 ; for MSIL', naming its function, whose body is deleted: an untied output
@@ -26,7 +33,7 @@
 ; 12 row of 2026-10-27 'Inline asm acceptance as built': MSILPrepareIR's
 ; isBlankAsmString accepts whitespace and complete '/* ... */' comments
 ; only). Nothing crashes, and the IL, which keeps the function after them,
-; assembles.
+; assembles, with no barrier definition: no function in it calls one.
 
 ; RUN: split-file %s %t
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/comment.ll \
@@ -49,12 +56,46 @@
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/empty.ll \
 ; RUN:   -o %t/empty.win.o0.il 2>&1 | count 0
 ; RUN: diff %t/empty.win.o0.il %t/comment.win.o0.il
-; RUN: FileCheck %s --check-prefixes=CHECK,O2 --implicit-check-not="{{^ +call}}" --implicit-check-not=localloc \
-; RUN:   --input-file=%t/comment.lnx.o2.il
-; RUN: FileCheck %s --check-prefixes=CHECK,O0 --implicit-check-not="{{^ +call}}" --implicit-check-not=localloc \
-; RUN:   --input-file=%t/comment.win.o0.il
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/comment.ll \
+; RUN:   -o %t/comment.a64.o2.il 2>&1 | count 0
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/empty.ll \
+; RUN:   -o %t/empty.a64.o2.il 2>&1 | count 0
+; RUN: diff %t/empty.a64.o2.il %t/comment.a64.o2.il
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/comment.ll \
+; RUN:   -o %t/comment.a64.o0.il 2>&1 | count 0
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -O0 -asm-verbose=false -verify-machineinstrs < %t/empty.ll \
+; RUN:   -o %t/empty.a64.o0.il 2>&1 | count 0
+; RUN: diff %t/empty.a64.o0.il %t/comment.a64.o0.il
+; DEFINE: %{check} = FileCheck %s --implicit-check-not="{{^ +call}}" --implicit-check-not=localloc \
+; DEFINE:   --implicit-check-not=MEMBARRIER --implicit-check-not="'__msil_compiler_barrier'() cil"
+; RUN: %{check} --check-prefixes=CHECK,O2 --input-file=%t/comment.lnx.o2.il
+; RUN: %{check} --check-prefixes=CHECK,O0 --input-file=%t/comment.win.o0.il
+; RUN: %{check} --check-prefixes=CHECK,O2 --input-file=%t/comment.a64.o2.il
+; RUN: %{check} --check-prefixes=CHECK,O0 --input-file=%t/comment.lnx.o0.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/comment.lnx.o2.dll %t/comment.lnx.o2.il %}
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/comment.win.o0.dll %t/comment.win.o0.il %}
+; RUN: %if ilasm %{ %ilasm-verify -output=%t/comment.a64.o2.dll %t/comment.a64.o2.il %}
+
+; The CIL objects.
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/comment.ll \
+; RUN:   -o %t/comment.lnx.o2.o 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/empty.ll \
+; RUN:   -o %t/empty.lnx.o2.o 2>&1 | count 0
+; RUN: cmp %t/empty.lnx.o2.o %t/comment.lnx.o2.o
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -filetype=obj -verify-machineinstrs < %t/comment.ll \
+; RUN:   -o %t/comment.win.o0.o 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -filetype=obj -verify-machineinstrs < %t/empty.ll \
+; RUN:   -o %t/empty.win.o0.o 2>&1 | count 0
+; RUN: cmp %t/empty.win.o0.o %t/comment.win.o0.o
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/comment.ll \
+; RUN:   -o %t/comment.a64.o2.o 2>&1 | count 0
+; RUN: llc -mtriple=aarch64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/empty.ll \
+; RUN:   -o %t/empty.a64.o2.o 2>&1 | count 0
+; RUN: cmp %t/empty.a64.o2.o %t/comment.a64.o2.o
+; DEFINE: %{obj} = FileCheck %s --check-prefix=OBJ --implicit-check-not=__msil_compiler_barrier
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/comment.lnx.o2.o | %{obj} %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/comment.win.o0.o | %{obj} %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/comment.a64.o2.o | %{obj} %}
 
 ; DEFINE: %{diag} = FileCheck %s --check-prefix=ERR --implicit-check-not="LLVM ERROR" \
 ; DEFINE:   --implicit-check-not="PLEASE submit" --implicit-check-not=error: --implicit-check-not=warning:
@@ -66,14 +107,15 @@
 ; RUN:   | %{diag}
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/errors.ll \
 ; RUN:   > %t/errors.lnx.il
-; RUN: FileCheck %s --check-prefix=ERR-IL --input-file=%t/errors.lnx.il --implicit-check-not=".method "
+; RUN: FileCheck %s --check-prefix=ERR-IL --input-file=%t/errors.lnx.il --implicit-check-not=".method " \
+; RUN:   --implicit-check-not=__msil_compiler_barrier
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/errors.dll %t/errors.lnx.il %}
 
 ; The value passes through: Rust's barrier returns its argument.
 ; CHECK-LABEL: {{^}}.method public static int32 'barrier'(int32) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 ; CHECK-NEXT:  {{^}}} // end of method 'barrier'{{$}}
@@ -88,7 +130,7 @@
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; O2-NEXT:     {{^}}  starg.s 0{{$}}
 ; O0-NEXT:     {{^}}  stloc.0{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; O2-NEXT:     {{^}}  ldarg.0{{$}}
 ; O0-NEXT:     {{^}}  ldloc.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.3{{$}}
@@ -99,7 +141,7 @@
 ; CHECK-LABEL: {{^}}.method public static native int 'barrier_ws'(native int) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 
@@ -107,7 +149,7 @@
 ; CHECK-LABEL: {{^}}.method public static native int 'barrier_ptr'(native int) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 1{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
 
@@ -118,7 +160,7 @@
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.1{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  ldc.i4.2{{$}}
 ; CHECK-NEXT:  {{^}}  stind.i4{{$}}
@@ -128,12 +170,26 @@
 ; CHECK-LABEL: {{^}}.method public static native int 'barrier_two'(int32, native int) cil managed{{$}}
 ; CHECK-NEXT:  {{^\{$}}
 ; CHECK-NEXT:  {{^}}  .maxstack 2{{$}}
-; CHECK-NEXT:  {{^[[:blank:]]+//MEMBARRIER$}}
+; CHECK-NEXT:  {{^}}  call void '__msil_compiler_barrier'(){{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.0{{$}}
 ; CHECK-NEXT:  {{^}}  conv.i{{$}}
 ; CHECK-NEXT:  {{^}}  ldarg.1{{$}}
 ; CHECK-NEXT:  {{^}}  add{{$}}
 ; CHECK-NEXT:  {{^}}  ret{{$}}
+
+; The barrier's one definition ends the module.
+; CHECK-LABEL: {{^}}.method assembly static void '__msil_compiler_barrier'() cil managed noinlining{{$}}
+; CHECK-NEXT:  {{^\{$}}
+; CHECK-NEXT:  {{^}}  .maxstack 0{{$}}
+; CHECK-NEXT:  {{^}}  ret{{$}}
+; CHECK-NEXT:  {{^}}} // end of method '__msil_compiler_barrier'{{$}}
+; CHECK-NOT:   {{.}}
+
+; OBJ:      {{^}}LinkInfo v1.0 triple={{.*}}
+; OBJ-NEXT: {{^}}Symbol 0 FUNCTION GLOBAL DEFAULT 'barrier' method=0x06000001{{$}}
+; OBJ:      {{^}}Symbol 5 FUNCTION GLOBAL DEFAULT 'barrier_two' method=0x06000006{{$}}
+; OBJ-NEXT: {{^}}Symbol 6 FUNCTION GLOBAL DEFAULT UNDEFINED '__msil_compiler_barrier'{{$}}
+; OBJ-NOT:  {{.}}
 
 ; ERR: {{^}}error: {{.*}}in function asm_comment_untied {{.*}}: inline assembly is not supported for MSIL{{$}}
 ; ERR: {{^}}error: {{.*}}in function asm_comment_untied_input {{.*}}: inline assembly is not supported for MSIL{{$}}

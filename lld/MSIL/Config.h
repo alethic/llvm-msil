@@ -170,6 +170,12 @@ struct Ctx {
   // The definitions of the native libraries (plan 5.10.8).
   NativeIndex nativeIndex;
 
+  // The compiler-runtime names of the codegen triple (plan 5.14.2 N1,
+  // isCompilerRuntimeName), which never bind to a native library: the driver
+  // computes them once per link from the triple's RuntimeLibcalls set
+  // (getCompilerRuntimeNames) as soon as the triple is known.
+  llvm::DenseSet<llvm::StringRef> compilerRuntimeNames;
+
   // The reference assemblies (plan 5.11.2): --reference files and
   // directories and the positional .NET assemblies without the toolchain's
   // symbol table, in command-line order. Never null; Ctx::reset() makes a

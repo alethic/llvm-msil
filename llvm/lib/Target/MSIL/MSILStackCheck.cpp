@@ -86,8 +86,8 @@ static unsigned getStackPeakExtra(const MachineInstr &MI) {
 
 /// Returns true if \p MI prints no CIL opcode and therefore does not touch the
 /// evaluation stack: debug instructions, labels, CFI, the other meta
-/// instructions (KILL, IMPLICIT_DEF, LIFETIME_*, MEMBARRIER, ...) and the
-/// ARGUMENT pseudos, which MSILExplicitLocals normally erases.
+/// instructions (KILL, IMPLICIT_DEF, LIFETIME_*, ...) and the ARGUMENT
+/// pseudos, which MSILExplicitLocals normally erases.
 static bool printsNoCIL(const MachineInstr &MI) {
   return MI.isDebugInstr() || MI.isPosition() || MI.isMetaInstruction() ||
          MSIL::isArgument(MI.getOpcode());

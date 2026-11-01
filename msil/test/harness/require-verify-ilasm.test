@@ -5,5 +5,8 @@
 # 2. The control is require-verify.test, whose run with every tool present
 # passes.
 
-# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_require_verify=1 --param msil_ilasm= %S/Inputs/nested-ok > %t.log 2>&1
+# Each nested run below whose probe fails (a missing or broken tool) passes
+# --param msil_probe_cache= (empty), so it neither reads the parent's probe
+# cache nor replaces it with its own probes (plan 5.17.10; probe-cache.test).
+# RUN: %{harness_check} exits 2 %{harness_lit} --param msil_probe_cache= --param msil_require_verify=1 --param msil_ilasm= %S/Inputs/nested-ok > %t.log 2>&1
 # RUN: %{harness_check} contains %t.log "fatal: .*msil_require_verify" "(?i)\bilasm\b"

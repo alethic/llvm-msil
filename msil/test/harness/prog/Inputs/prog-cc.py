@@ -30,6 +30,20 @@ stand-ins read these markers from it:
                            (--det): the text, and under a PE link the image
     prog-error: compile M  compiling it fails with the message M
     prog-error: link M     linking it fails with 'msil-ld: error: M'
+    prog-native: N         a native compile (the native oracle's) adds N
+                           more, so the native program's status differs
+    prog-stdout: TEXT      the program (MSIL and native) writes the line
+                           TEXT to stdout
+    prog-stdout-nonl: TEXT the program writes TEXT to stdout, without a
+                           newline (the stdout markers in source order)
+    prog-netfx: N          the MSIL program adds N when it runs on the .NET
+                           Framework (System.Environment.Version.Major 4)
+    prog-stderr: TEXT      the MSIL program writes the line TEXT to stderr
+                           (in link order, before it returns or throws)
+    prog-throw: TYPE MSG   the MSIL program throws [mscorlib]TYPE (a class
+                           with a .ctor(string)) with the message MSG
+                           instead of returning (the loud failures of plan
+                           5.17.4)
 
 A file named start.c is the E7 oracle's msil/utils/linux-oracle/start.c: it
 must be compiled with exactly the flags of plan 5.12.8 and adds nothing.
@@ -156,6 +170,53 @@ def parse(argv):
     return o
 
 
+EXTRA_RE = re.compile(
+    r"prog-(native|netfx|stderr|throw|stdout-nonl|stdout):[ \t]*(.*?)[ \t]*$", re.M
+)
+
+
+def extras_of(src):
+    """(native delta, extras of the program) of a source: extras is a dict
+    with 'stdout' ([text, newline] pairs), 'stderr' (lines), 'throw' ([type,
+    message]) and 'netfx' (a number), or None when the source has none of
+    those markers. A native program takes only 'stdout'."""
+    with open(src, encoding="utf-8", errors="replace") as f:
+        text = f.read()
+    native, extras = 0, {}
+    for m in EXTRA_RE.finditer(text):
+        what, arg = m.group(1), m.group(2)
+        if what == "native":
+            native += int(arg)
+        elif what == "netfx":
+            extras["netfx"] = extras.get("netfx", 0) + int(arg)
+        elif what == "stderr":
+            extras.setdefault("stderr", []).append(arg)
+        elif what in ("stdout", "stdout-nonl"):
+            extras.setdefault("stdout", []).append([arg, what == "stdout"])
+        elif what == "throw":
+            parts = arg.split(None, 1)
+            if len(parts) != 2:
+                raise Fail("%s: 'prog-throw: TYPE MESSAGE' needs both" % src)
+            extras.setdefault("throw", parts)
+    return native, (extras or None)
+
+
+def merge_extras(into, extras):
+    """Add the extras of one object to those of a link (in link order)."""
+    if not extras:
+        return into
+    into = dict(into or {})
+    if "netfx" in extras:
+        into["netfx"] = into.get("netfx", 0) + extras["netfx"]
+    if "stderr" in extras:
+        into["stderr"] = into.get("stderr", []) + extras["stderr"]
+    if "stdout" in extras:
+        into["stdout"] = into.get("stdout", []) + extras["stdout"]
+    if "throw" in extras and "throw" not in into:
+        into["throw"] = extras["throw"]
+    return into
+
+
 def markers(src):
     """(value, plant object, plant il, link error) of a source, or raises
     Fail after printing a compile error."""
@@ -246,6 +307,13 @@ def compile_source(o, src):
         value, plant, plant_il, link_error = markers(src)
     except Fail:
         return 1
+    native, extras = extras_of(src)
+    if obj["kind"] == "native":
+        value += native
+        if extras and "stdout" in extras:
+            obj["extras"] = {"stdout": extras["stdout"]}
+    elif extras and obj["kind"] == "msil":
+        obj["extras"] = extras
     obj["source"] = os.path.basename(src)
     obj["value"], obj["plant"], obj["link-error"] = value, plant, link_error
     if plant_il:
@@ -275,7 +343,7 @@ def text_source(o, src, what):
     except Fail:
         return 1
     name = assembly_name(o["flags"], o["out"])
-    write_text(o["out"], il_text(name, value % 256, None))
+    write_text(o["out"], il_text(name, value % 256, None, extras=extras_of(src)[1]))
     return 0
 
 
@@ -322,9 +390,10 @@ class Linked:
     lines, a planted directory, the link errors of the sources, the
     libraries named (their records) and the objects seen."""
 
-    def __init__(self, value, lines, plant, errors, libs, objects):
+    def __init__(self, value, lines, plant, errors, libs, objects, extras=None):
         self.value, self.lines, self.plant = value, lines, plant
         self.errors, self.libs, self.objects = errors, libs, objects
+        self.extras = extras
 
 
 def total(seq, kinds, target, flavor=None, drop=()):
@@ -332,6 +401,7 @@ def total(seq, kinds, target, flavor=None, drop=()):
     'windows' or 'elf'; None: none); drop: arguments left out of the
     record."""
     value, lines, plant, errors, libs, seen = 0, [], None, [], [], []
+    extras = None
     for kind, path, data in seq:
         if kind == "arg":
             if path not in drop:
@@ -372,6 +442,7 @@ def total(seq, kinds, target, flavor=None, drop=()):
                     "%s: a %s object in a link of %s" % (path, obj.get("kind"), target)
                 )
             value += obj["value"]
+            extras = merge_extras(extras, obj.get("extras"))
             seen.append(obj)
             if obj.get("plant-il"):
                 plant = os.getcwd()
@@ -381,7 +452,7 @@ def total(seq, kinds, target, flavor=None, drop=()):
                 lines.append("object %s %s %d" % (path, obj["source"], obj["value"]))
             else:
                 lines.append("member %s %s %d" % (path, member, obj["value"]))
-    return Linked(value % 256, lines, plant, errors, libs, seen)
+    return Linked(value % 256, lines, plant, errors, libs, seen, extras)
 
 
 def check_objects(linked, shared, target, elf):
@@ -421,18 +492,55 @@ MSCORLIB = (
 )
 
 
-def il_text(name, value, plant, plant_code=False, libs=()):
+def il_quote(text):
+    return '"%s"' % text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def il_text(name, value, plant, plant_code=False, libs=(), extras=None):
     """The program 'name' that returns value; plant (a directory) goes into a
     comment, and with plant_code also into the code (a PE keeps it). libs:
     the names of the libraries whose 'value'() the program adds at run time
-    (modulo 256)."""
+    (modulo 256). extras: the stderr lines, throw and .NET Framework delta of
+    the prog-stderr, prog-throw and prog-netfx markers."""
+    extras = extras or {}
     text = "// The stand-in program of harness/prog/Inputs/prog-cc.py.\n"
     if plant:
         text += "// planted: %s\n" % plant
-    code = "  .maxstack %d\n" % (2 if libs else 1)
+    code = "  .maxstack %d\n" % (3 if extras else 2 if libs else 1)
     if plant and plant_code:
         code += '  ldstr "%s"\n  pop\n' % plant.replace("\\", "/")
+    for out_text, newline in extras.get("stdout", ()):
+        code += "  ldstr %s\n  call void [mscorlib]System.Console::%s(string)\n" % (
+            il_quote(out_text),
+            "WriteLine" if newline else "Write",
+        )
+    for line in extras.get("stderr", ()):
+        code += (
+            "  call class [mscorlib]System.IO.TextWriter [mscorlib]System.Console::get_Error()\n"
+            "  ldstr %s\n"
+            "  callvirt instance void [mscorlib]System.IO.TextWriter::WriteLine(string)\n"
+            % il_quote(line)
+        )
+    if "throw" in extras:
+        code += (
+            "  ldstr %s\n  newobj instance void [mscorlib]%s::.ctor(string)\n  throw\n"
+            % (il_quote(extras["throw"][1]), extras["throw"][0])
+        )
+        return text + (
+            MSCORLIB + ".assembly '%s' { .ver 0:0:0:0 }\n\n"
+            ".method public static int32 'main'() cil managed\n{\n"
+            "%s} // end of method 'main'\n\n"
+            ".method private hidebysig static int32 '<msil>Main'(string[] args) cil managed\n"
+            "{\n  .entrypoint\n  .maxstack 1\n  call int32 'main'()\n  ret\n"
+            "} // end of method '<msil>Main'\n" % (name, code)
+        )
     code += "  ldc.i4 %d\n" % value
+    if extras.get("netfx"):
+        code += (
+            "  call class [mscorlib]System.Version [mscorlib]System.Environment::get_Version()\n"
+            "  callvirt instance int32 [mscorlib]System.Version::get_Major()\n"
+            "  ldc.i4.4\n  ceq\n  ldc.i4 %d\n  mul\n  add\n" % extras["netfx"]
+        )
     for lib in libs:
         code += "  call int32 ['%s']'%s'::'value'()\n  add\n" % (lib, lib)
     if libs:
@@ -541,18 +649,21 @@ def msil_image(out, text, kind="-exe"):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def native_program(out, target, value, ilasm, libs=(), library=None):
+def native_program(out, target, value, ilasm, libs=(), library=None, extras=None):
     """A program with the exit status value: an EXE through ilasm for a
     Windows target (that adds the 'value'() of each of libs at run time),
     else a shell script. library: (value, interface) for a Windows DLL
-    instead."""
+    instead. extras: those of the program's sources; a native program
+    takes only their stdout text."""
+    stdout = (extras or {}).get("stdout")
+    extras = {"stdout": stdout} if stdout else None
     if "windows" in target.split("-"):
         il = out + ".il"
         name = os.path.splitext(os.path.basename(out))[0]
         if library:
             write_text(il, lib_text(name, library[0], None, library[1]))
         else:
-            write_text(il, il_text(name, value, None, libs=libs))
+            write_text(il, il_text(name, value, None, libs=libs, extras=extras))
         if not ilasm:
             raise Fail("a Windows native link needs --ilasm")
         kind = "-dll" if library else "-exe"
@@ -566,7 +677,14 @@ def native_program(out, target, value, ilasm, libs=(), library=None):
             sys.stderr.write(res.stdout.decode("utf-8", "replace"))
             raise Fail("ilasm %s failed with status %d" % (kind, res.returncode))
         return
-    write_text(out, "#!/bin/sh\nexit %d\n" % value)
+    script = "#!/bin/sh\n"
+    for out_text, newline in stdout or ():
+        script += "printf '%s%s' '%s'\n" % (
+            "%s",
+            "\\n" if newline else "",
+            out_text.replace("'", "'\\''"),
+        )
+    write_text(out, script + "exit %d\n" % value)
     os.chmod(out, 0o755)
 
 
@@ -622,7 +740,8 @@ def clang(argv, ilasm):
             value, _, _, _ = markers(sources[0])
         except Fail:
             return 1
-        native_program(o["out"], target, value % 256, ilasm)
+        native, extras = extras_of(sources[0])
+        native_program(o["out"], target, (value + native) % 256, ilasm, extras=extras)
         return 0
     if target.endswith("-msil"):
         if len(o["levels"]) != 1:
@@ -677,10 +796,11 @@ def clang(argv, ilasm):
             msil_image(o["out"], text, "-dll")
             library_record(o["out"] + ".json", "msil", target, name, linked, interface)
         elif text_link:
-            write_text(o["out"], il_text(name, linked.value, linked.plant))
+            text = il_text(name, linked.value, linked.plant, extras=linked.extras)
+            write_text(o["out"], text)
         else:
             libs = [lib["name"] for lib in linked.libs]
-            text = il_text(name, linked.value, linked.plant, True, libs)
+            text = il_text(name, linked.value, linked.plant, True, libs, linked.extras)
             msil_image(o["out"], text)
         write_record(o["out"] + ".inputs", lines)
         return 0
@@ -748,10 +868,10 @@ def native_link(o, target, seq, ilasm):
         library_record(out, "elf", target, name, linked, False)
     elif windows:
         libs = [lib["name"] for lib in linked.libs]
-        native_program(out, target, linked.value, ilasm, libs)
+        native_program(out, target, linked.value, ilasm, libs, extras=linked.extras)
     else:
         value = (linked.value + sum(lib["value"] for lib in linked.libs)) % 256
-        native_program(out, target, value, ilasm)
+        native_program(out, target, value, ilasm, extras=linked.extras)
     write_record(out + ".inputs", linked.lines)
     return 0
 
@@ -810,6 +930,9 @@ def llc(argv):
         obj.update({"plant": plant, "link-error": link_error})
         if plant_il:
             obj["plant-il"] = True
+        extras = extras_of(sources[0])[1]
+        if extras:
+            obj["extras"] = extras
         write_text(out, json.dumps(obj, sort_keys=True) + "\n")
         return 0
     return text_source(o, sources[0], "llc")
@@ -853,7 +976,7 @@ def ld_lld(argv):
     linked = total(seq, ("native",), E7_TARGET, "elf")
     check_objects(linked, False, E7_TARGET, True)
     value = (linked.value + sum(lib["value"] for lib in linked.libs)) % 256
-    native_program(out, E7_TARGET, value, None)
+    native_program(out, E7_TARGET, value, None, extras=linked.extras)
     write_record(out + ".inputs", linked.lines)
     return 0
 

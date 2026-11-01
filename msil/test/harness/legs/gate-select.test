@@ -1,0 +1,84 @@
+# gate-select.py (plan 5.17.5 and 5.17.7, M24) selects the change-dependent
+# steps of a milestone gate. 'harness [--base REV]' prints 'harness: run' and
+# the changed harness files, sorted, or 'harness: skip'; 'expected-dirs
+# [--base REV]' prints each directory under msil/test (outside Inputs/ and
+# Output/) that holds an added or changed .c, .ll, .test or .expected file.
+# The change set is 'git diff --name-only <base>' (default HEAD) plus 'git
+# status --porcelain --untracked-files=all'. Harness files: msil/utils/**
+# except msil/utils/corpus/manifest.json and msil/utils/upstream-hooks.txt;
+# msil/test/lit.cfg.py and msil/test/lit.site.cfg.py.in; every lit.local.cfg
+# and .py file under msil/test; msil/test/harness/**.
+# (1) --self-test passes every case.
+# (2) In a scratch repository with one commit (Inputs/git-scratch.py, which
+# also runs gate-select.py with --repo): (a) no change: 'harness: skip' and no
+# directory. (b) Changes outside the harness (the two excluded msil/utils
+# files, an LLVM source, a test, a text file under msil/test): skip, and
+# expected-dirs names the test's directory alone. (c) Harness files changed,
+# staged and untracked (under msil/utils, lit.cfg.py, lit.site.cfg.py.in, a
+# lit.local.cfg, a .py file under an Inputs/ directory, a new file under
+# msil/test/harness) and a test of each kind, also under Inputs/ and Output/:
+# 'harness: run' with exactly the harness files, and the directories of the
+# tests outside Inputs/ and Output/. (d) After a commit of all of it: skip
+# against HEAD, and the lists of (c) with --base HEAD~1. (e) A deleted
+# harness file: run, naming it; a deleted test: no directory.
+# (3) A --base that git does not know and a --repo that is no repository exit
+# 1 with git's message; usage errors exit 2.
+# REQUIRES: msil-git
+
+# RUN: rm -rf %t && mkdir -p %t
+
+# (1)
+# RUN: %python %S/../../../utils/ci/gate-select.py --self-test > %t/1.log
+# RUN: %{harness_check} contains %t/1.log "\Agate-select: self-test: (\d+) of \1 cases passed\n\Z"
+
+# (2a)
+# RUN: %python %S/Inputs/git-scratch.py init %t/repo msil/utils/ci/lit-legs.ps1 msil/utils/corpus/manifest.json msil/utils/upstream-hooks.txt msil/test/lit.cfg.py msil/test/lit.site.cfg.py.in msil/test/M1/lit.local.cfg msil/test/M1/03-control/loops.c msil/test/M1/03-control/old.c msil/test/M2/Inputs/helper.py msil/test/harness/a.test llvm/lib/x.cpp
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo harness > %t/2a.log
+# RUN: %{harness_check} contains %t/2a.log "\Aharness: skip\n\Z"
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo expected-dirs > %t/2a-dirs.log
+# RUN: %{harness_check} equals %t/2a-dirs.log
+
+# (2b)
+# RUN: %python %S/Inputs/git-scratch.py change %t/repo msil/utils/corpus/manifest.json msil/utils/upstream-hooks.txt llvm/lib/x.cpp msil/test/M1/03-control/loops.c msil/test/M1/04-text/notes.txt
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo harness > %t/2b.log
+# RUN: %{harness_check} contains %t/2b.log "\Aharness: skip\n\Z"
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo expected-dirs > %t/2b-dirs.log
+# RUN: %{harness_check} contains %t/2b-dirs.log "\Amsil/test/M1/03-control\n\Z"
+
+# (2c)
+# RUN: %python %S/Inputs/git-scratch.py change %t/repo msil/utils/ci/lit-legs.ps1 msil/test/lit.cfg.py msil/test/lit.site.cfg.py.in msil/test/M2/Inputs/helper.py msil/test/M3/lit.local.cfg msil/test/harness/sub/new.test msil/test/M3/01-a/t.c msil/test/M3/02-b/t.ll msil/test/M3/03-c/t.test msil/test/M3/04-d/t.expected msil/test/M3/05-e/Inputs/in.c msil/test/M3/06-f/Output/out.test msil/test/M3/07-g/t.h
+# RUN: %python %S/Inputs/git-scratch.py stage %t/repo msil/test/M2/Inputs/helper.py msil/test/M3/01-a/t.c
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo harness > %t/2c.log
+# RUN: %{harness_check} contains %t/2c.log "\Aharness: run\nmsil/test/M2/Inputs/helper\.py\nmsil/test/M3/lit\.local\.cfg\nmsil/test/harness/sub/new\.test\nmsil/test/lit\.cfg\.py\nmsil/test/lit\.site\.cfg\.py\.in\nmsil/utils/ci/lit-legs\.ps1\n\Z"
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo expected-dirs > %t/2c-dirs.log
+# RUN: %{harness_check} contains %t/2c-dirs.log "\Amsil/test/M1/03-control\nmsil/test/M3/01-a\nmsil/test/M3/02-b\nmsil/test/M3/03-c\nmsil/test/M3/04-d\nmsil/test/harness/sub\n\Z"
+
+# (2d)
+# RUN: %python %S/Inputs/git-scratch.py commit %t/repo
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo harness > %t/2d.log
+# RUN: %{harness_check} contains %t/2d.log "\Aharness: skip\n\Z"
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo expected-dirs > %t/2d-dirs.log
+# RUN: %{harness_check} equals %t/2d-dirs.log
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo harness --base HEAD~1 > %t/2d-base.log
+# RUN: diff %t/2c.log %t/2d-base.log
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo expected-dirs --base HEAD~1 > %t/2d-base-dirs.log
+# RUN: diff %t/2c-dirs.log %t/2d-base-dirs.log
+
+# (2e)
+# RUN: %python %S/Inputs/git-scratch.py delete %t/repo msil/test/harness/a.test msil/test/M1/03-control/old.c
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo harness > %t/2e.log
+# RUN: %{harness_check} contains %t/2e.log "\Aharness: run\nmsil/test/harness/a\.test\n\Z"
+# RUN: %python %S/Inputs/git-scratch.py select %t/repo expected-dirs > %t/2e-dirs.log
+# RUN: %{harness_check} equals %t/2e-dirs.log
+
+# (3)
+# RUN: %{harness_check} exits 1 %python %S/Inputs/git-scratch.py select %t/repo harness --base no-such-rev > %t/3a.log 2>&1
+# RUN: %{harness_check} contains %t/3a.log "^gate-select: git diff \S.* exited [1-9]\d*: .*no-such-rev"
+# RUN: mkdir -p %t/not-a-repo
+# RUN: %{harness_check} exits 1 %python %S/Inputs/git-scratch.py select %t/not-a-repo expected-dirs > %t/3b.log 2>&1
+# RUN: %{harness_check} contains %t/3b.log "^gate-select: git \S.* exited [1-9]\d*: "
+# RUN: %{harness_check} lacks %t/3b.log "^msil/"
+# RUN: %{harness_check} exits 2 %python %S/../../../utils/ci/gate-select.py bogus > %t/3c.log 2>&1
+# RUN: %{harness_check} contains %t/3c.log "^gate-select: argument mode: invalid choice: 'bogus'"
+# RUN: %{harness_check} exits 2 %python %S/../../../utils/ci/gate-select.py > %t/3d.log 2>&1
+# RUN: %{harness_check} contains %t/3d.log "^gate-select: the following arguments are required: mode$"

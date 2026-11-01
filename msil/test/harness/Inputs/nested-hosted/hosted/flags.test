@@ -1,0 +1,9 @@
+# Run only in a nested lit by ../../../hosted-mode.test: prints the
+# substitutions and features that hosted mode sets (plan 5.17.3), in the
+# hosted directory of lit.local.cfg. ../plain/flags.test prints the same in
+# a directory without the marker.
+# RUN: echo "hosted dir cflags: [%{msil_cflags}]"
+# RUN: echo "hosted dir oracle flags: [%{msil_oracle_flags}]"
+# RUN: echo "hosted dir hosted cflags: [%{msil_hosted_cflags}]"
+# RUN: %if msil-hosted %{ echo hosted dir feature msil-hosted %}
+# RUN: %if msil-linux-hosted-oracle %{ echo hosted dir feature msil-linux-hosted-oracle %}

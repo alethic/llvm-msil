@@ -18,9 +18,11 @@
 
 #include "MSILUtilities.h"
 #include "MCTargetDesc/MSILMCTargetDesc.h"
+#include "MSILAsmPrinter.h"
 #include "MSILMachineFunctionInfo.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/CLI/TrailerDefs.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
@@ -377,4 +379,30 @@ MSIL::getLinkedImport(const Module &M, StringRef Name, const Function *F) {
                         Entry->getString().empty() ? Name : Entry->getString()};
   }
   return std::nullopt;
+}
+
+const cli::TrailerDefInfo *MSIL::getOfferedTrailerDef(const Module &M,
+                                                      StringRef Name) {
+  const cli::TrailerDefInfo *D = cli::findTrailerDef(Name);
+  if (!D)
+    return nullptr;
+  auto Defines = [&](const Function *F) {
+    return F && !F->isDeclarationForLinker();
+  };
+  if (Defines(getFunctionByILName(M, Name)))
+    return nullptr;
+  // msil-ld's linked text is an executable, as its '<trailer>' input decides
+  // for every link that is not -shared: msil-ld rejects -shared with
+  // --lto-emit-asm, and LTO may have dropped a main that is not the entry
+  // (--entry, which reaches the printer as the module flag msil-entry). Other
+  // whole-program text is an executable when it defines main or wmain (plan
+  // 5.14.4 T6).
+  bool IsExecutable = isLinkedModule(M) || Defines(M.getFunction("main")) ||
+                      Defines(M.getFunction("wmain"));
+  return cli::isOfferedIn(*D, M.getTargetTriple(), IsExecutable) ? D : nullptr;
+}
+
+bool MSIL::matchesTrailerDefSignature(const cli::TrailerDefInfo &D,
+                                      const Signature &S) {
+  return toMethodSig(S) == cli::getTrailerDefSignature(D);
 }

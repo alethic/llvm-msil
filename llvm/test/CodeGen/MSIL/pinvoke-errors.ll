@@ -41,13 +41,16 @@
 ;   imported function '<name>' has a parameter or result that a P/Invoke
 ;   cannot pass natively (aggregates, vectors, 128-bit integers and half are
 ;   not supported for MSIL yet)
-; Here: i128, { i64, i64 }, { double, double } and <2 x float> results of
-; called imports, and a half result, a byval parameter and an i128 parameter
-; of imports referenced only from data; the scalar import of the same module
-; still gets its P/Invoke. An sret parameter is a hidden pointer that
-; the native conventions do not pass as an ordinary first argument (AAPCS64
-; passes it in X8), so an import with one is the same error, on aarch64 as on
-; x86_64 (sret.ll).
+; Here: i128, { i64, i64 }, { double, double } and <2 x float> results and a
+; bfloat parameter of called imports, and a half result, a bfloat result, a
+; byval parameter and an i128 parameter of imports referenced only from data;
+; the scalar import of the same module still gets its P/Invoke. Since M24 a
+; bfloat is an int32 that holds its 16-bit pattern, as a half is, and the
+; bfloat imports get the same text, which names half only (M24 leaves it as
+; it is); call-errors.ll HALFIMP has the calls. An sret parameter is a
+; hidden pointer that the native conventions do not pass as an ordinary first
+; argument (AAPCS64 passes it in X8), so an import with one is the same
+; error, on aarch64 as on x86_64 (sret.ll).
 
 ; DEFINE: %{nocrash} = --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
 ; RUN: split-file %s %t
@@ -154,7 +157,7 @@
 ; The P/Invokes of msvc-math.ll are matched as a group, so they are counted.
 ; NPINVMSVC-COUNT-3: pinvokeimpl
 ; NPINVMSVC-NOT:     pinvokeimpl
-; NERRSIG-COUNT-7: {{^}}error:
+; NERRSIG-COUNT-9: {{^}}error:
 ; NERRSIG-NOT:     {{^}}error:
 
 ;--- undef.ll
@@ -398,7 +401,7 @@ define double @use_double(double %x, double %y, i32 %n, ptr %e) {
 
 ;--- sig.ll
 ; Imports with the "msil-import-module" attribute whose signatures have no
-; native P/Invoke form: four called from code, three referenced only from
+; native P/Invoke form: five called from code, four referenced only from
 ; the initializer of tbl; okfn is the scalar control.
 source_filename = "sig.c"
 
@@ -409,7 +412,12 @@ source_filename = "sig.c"
 ; SIG-DAG: {{^}}error: imported function 'hret' has a parameter or result that a P/Invoke cannot pass natively (aggregates, vectors, 128-bit integers and half are not supported for MSIL yet){{$}}
 ; SIG-DAG: {{^}}error: imported function 'takebyval' has a parameter or result that a P/Invoke cannot pass natively (aggregates, vectors, 128-bit integers and half are not supported for MSIL yet){{$}}
 ; SIG-DAG: {{^}}error: imported function 'argi128' has a parameter or result that a P/Invoke cannot pass natively (aggregates, vectors, 128-bit integers and half are not supported for MSIL yet){{$}}
+; SIG-DAG: {{^}}error: imported function 'bfarg' has a parameter or result that a P/Invoke cannot pass natively (aggregates, vectors, 128-bit integers and half are not supported for MSIL yet){{$}}
+; SIG-DAG: {{^}}error: imported function 'bfret' has a parameter or result that a P/Invoke cannot pass natively (aggregates, vectors, 128-bit integers and half are not supported for MSIL yet){{$}}
 
+; SIG-IL-LABEL: .method {{.*}}'use_bfarg'(
+; SIG-IL-SAME:  int32) cil managed{{$}}
+; SIG-IL:       {{^}}  call int32 'bfarg'(int32){{$}}
 ; SIG-IL-LABEL: .method {{.*}}'use_okfn'(
 ; SIG-IL:       {{^}}  call int32 'okfn'(int32){{$}}
 ; SIG-IL:       {{^}}.method public hidebysig static pinvokeimpl("mylib" nomangle cdecl) int32 'okfn'(int32) cil managed preservesig {}{{$}}
@@ -423,9 +431,11 @@ declare <2 x float> @vec2(float) #0
 declare half @hret(half) #0
 declare void @takebyval(ptr byval(%S)) #0
 declare i32 @argi128(i128) #0
+declare i32 @bfarg(bfloat) #0
+declare bfloat @bfret(bfloat) #0
 declare i32 @okfn(i32) #0
 
-@tbl = global [3 x ptr] [ptr @hret, ptr @takebyval, ptr @argi128], align 8
+@tbl = global [4 x ptr] [ptr @hret, ptr @takebyval, ptr @argi128, ptr @bfret], align 8
 
 define i64 @use_imp128(i64 %x) {
   %r = call i128 @imp128(i64 %x)
@@ -449,6 +459,11 @@ define float @use_vec2(float %x) {
   %r = call <2 x float> @vec2(float %x)
   %e = extractelement <2 x float> %r, i64 0
   ret float %e
+}
+
+define i32 @use_bfarg(bfloat %x) {
+  %r = call i32 @bfarg(bfloat %x)
+  ret i32 %r
 }
 
 define i32 @use_okfn(i32 %x) {

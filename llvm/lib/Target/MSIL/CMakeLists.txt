@@ -30,6 +30,7 @@ add_llvm_target(MSILCodeGen
   MSILNullifyDebugValueLists.cpp
   MSILOptimizeLiveIntervals.cpp
   MSILOptimizeReturned.cpp
+  MSILPreExpand.cpp
   MSILPrepareIR.cpp
   MSILRegColoring.cpp
   MSILRegNumbering.cpp
@@ -43,6 +44,7 @@ add_llvm_target(MSILCodeGen
   MSILTargetMachine.cpp
   MSILTargetObjectFile.cpp
   MSILTargetTransformInfo.cpp
+  MSILTrailerTextSink.cpp
   MSILUtilities.cpp
 
   DEPENDS

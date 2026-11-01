@@ -1,0 +1,48 @@
+# The loud-failure composite %{msil_prog_loud_<L>} (plan 5.17.4, M24): a
+# construct the toolchain cannot see before its feature's milestone throws or
+# fails fast at run time, and its test runs, per level, the build,
+# %msil_verify, %msil_jitall, then each run of the leg (main, every
+# msil_also_run entry, Framework) with msil-run.py --stderr-out <file>
+# --expect %{msil_expect}, each followed by FileCheck %s --check-prefix=LOUD
+# --input-file <file>; it has no native-oracle leg and no O3 or O6 step, and
+# its expected files are hand-written for both OSes under
+# %{msil_expected_rule}. msil-steps.py names the checks run-check,
+# <tag>-check and netfx-check, and a check after a skipped run says which
+# file it did not check.
+# (1) A nested lit with -a of prog/Inputs/nested-loud (msil-prog.py with the
+# stand-ins of prog/Inputs/prog-cc.py, whose MSIL program writes the
+# prog-stderr text to stderr and then throws the prog-throw exception) under
+# the native oracle, the Framework run, msil_also_run=8 and msil_equiv=1, so
+# that a composite that ran a native, O3 or O4 step would show it:
+# loud-throw.c passes, with the steps in the plan's order and each check on
+# its own run's file; loud-wrong-check.c, whose check line names a message no
+# run prints, fails at the check after the main run, and msil-steps stops
+# there with status 1; loud-wrong-transcript.c, whose hand-written file names
+# another exception, fails at the main run before its check; loud-netfx-skip.c
+# skips the Framework run (%{msil_netfx_skip}) and its check.
+# (2) update-expected.py: a loud test is its rule's ('rule: <file>
+# (<reason>)'), and a loud test without a rule that names the OS is a test
+# file error, because it has no native oracle.
+# REQUIRES: system-windows, msil-netfx, msil-cil-dump
+
+# (1)
+# RUN: not %{harness_lit} -a --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local --param msil_native_oracle=required --param msil_run_netfx=1 --param msil_also_run=8 --param msil_equiv=1 %S/prog/Inputs/nested-loud > %t.1.log 2>&1
+# RUN: %{harness_check} contains %t.1.log "^PASS: MSIL :: harness/prog/Inputs/nested-loud/loud-throw\.c " "^PASS: MSIL :: harness/prog/Inputs/nested-loud/loud-netfx-skip\.c " "^FAIL: MSIL :: harness/prog/Inputs/nested-loud/loud-wrong-check\.c " "^FAIL: MSIL :: harness/prog/Inputs/nested-loud/loud-wrong-transcript\.c "
+# RUN: %{harness_check} contains %t.1.log "^# \| msil-steps: verify: .*loud-throw\.c\.tmp\.O0\.d\Wprog\.exe'?\n(?:# \| .*\n)*?# \| msil-steps: jitall: .*loud-throw\.c\.tmp\.O0\.d\Wprog\.exe'?\n(?:# \| .*\n)*?# \| msil-steps: run: \S*python\S* \S*msil-run\.py'? .*--stderr-out \S*loud-throw\.c\.tmp\.O0\.err'? --expect \S*nested-loud\Wloud-throw'? .*\n(?:# \| .*\n)*?# \| msil-steps: run-check: \S*[Ff]ile[Cc]heck\S* \S*nested-loud\Wloud-throw\.c'? --check-prefix=LOUD --input-file \S*loud-throw\.c\.tmp\.O0\.err'?\n(?:# \| .*\n)*?# \| msil-steps: also-net8-jitall: .*\n(?:# \| .*\n)*?# \| msil-steps: also-net8-run: .*--stderr-out \S*loud-throw\.c\.tmp\.O0\.also-net8\.err'? --expect \S*nested-loud\Wloud-throw'? .*\n(?:# \| .*\n)*?# \| msil-steps: also-net8-check: \S*[Ff]ile[Cc]heck\S* \S*nested-loud\Wloud-throw\.c'? --check-prefix=LOUD --input-file \S*loud-throw\.c\.tmp\.O0\.also-net8\.err'?\n(?:# \| .*\n)*?# \| msil-steps: netfx-run: .*--netfx --stderr-out \S*loud-throw\.c\.tmp\.O0\.netfx\.err'? --expect \S*nested-loud\Wloud-throw'? .*\n(?:# \| .*\n)*?# \| msil-steps: netfx-check: \S*[Ff]ile[Cc]heck\S* \S*nested-loud\Wloud-throw\.c'? --check-prefix=LOUD --input-file \S*loud-throw\.c\.tmp\.O0\.netfx\.err'?$"
+# RUN: %{harness_check} lacks %t.1.log "msil-steps: native-" "msil-steps: O[346]:" "msil-steps: roundtrip" "--mode native"
+# RUN: %{harness_check} contains %t.1.log "loud-wrong-check\.c:\d+:\d+: error: LOUD: expected string not found in input\n(?:# \| .*\n)*?# \| msil-steps: run-check failed \(exit status 1\)\n# \x60-+\n# error: command failed with exit status: 1$"
+# RUN: %{harness_check} lacks %t.1.log "msil-steps: also-net8-jitall: .*loud-wrong-check" "msil-steps: netfx-run: .*loud-wrong-check"
+# RUN: %{harness_check} contains %t.1.log "^# \| msil-run: output of \S*loud-wrong-transcript\.c\.tmp\.O0\.d\Wprog\.exe does not match \S*nested-loud\Wloud-wrong-transcript\.expected\n(?:# \| .*\n)*?# \| -\[unhandled exception: System\.NotSupportedException\]\n# \| \+\[unhandled exception: System\.InvalidOperationException\]\n(?:# \| .*\n)*?# \| msil-steps: run failed \(exit status 1\)$"
+# RUN: %{harness_check} lacks %t.1.log "msil-steps: run-check: .*loud-wrong-transcript"
+# RUN: %{harness_check} contains %t.1.log "^# \| msil-steps: netfx-run: .*--netfx --skip-netfx 'the attribute that the Framework lacks' --stderr-out \S*loud-netfx-skip\.c\.tmp\.O0\.netfx\.err'? " "^# \| msil-run: netfx run skipped: the attribute that the Framework lacks$" "^# \| msil-steps: netfx-check: skipped: \S*loud-netfx-skip\.c\.tmp\.O0\.netfx\.err is the --stderr-out of the skipped step netfx-run$"
+
+# (2)
+# RUN: rm -rf %t.ue && mkdir -p %t.ue
+# RUN: cat %S/prog/Inputs/nested-loud/loud-throw.c > %t.ue/loud-throw.c
+# RUN: cat %S/prog/Inputs/nested-loud/loud-throw.expected > %t.ue/loud-throw.expected
+# RUN: grep -v "msil_expected_rule" %S/prog/Inputs/nested-loud/loud-throw.c > %t.ue/loud-norule.c
+# RUN: cat %S/prog/Inputs/nested-loud/loud-throw.expected > %t.ue/loud-norule.expected
+# RUN: %{harness_update_expected} --rtlib none --check %t.ue/loud-throw.c > %t.2a.log 2>&1
+# RUN: %{harness_check} contains %t.2a.log "^rule: \S*loud-throw\.expected \(a loud failure \(plan 5\.17\.4\)\)$"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --rtlib none --check %t.ue/loud-norule.c > %t.2b.log 2>&1
+# RUN: %{harness_check} contains %t.2b.log "^update-expected: \S*loud-norule\.c: a %\{msil_prog_loud_<L>\} test has no native oracle; its windows expected file is hand-written under a %\{msil_expected_rule\} that names windows \(plan 5\.17\.4\)$" "^FAIL \(test file\): \S*loud-norule\.c$"

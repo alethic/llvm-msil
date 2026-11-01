@@ -18,6 +18,7 @@
 #include "LTO.h"
 #include "NativeLibraries.h"
 #include "TokenMap.h"
+#include "TrailerDefFile.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/Strings.h"
 #include "llvm/ADT/STLExtras.h"
@@ -25,6 +26,7 @@
 #include "llvm/BinaryFormat/MSILLink.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CLI/Signature.h"
+#include "llvm/CLI/TrailerDefs.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -91,6 +93,19 @@ void SymbolTable::addFile(InputFile *file, StringRef symName) {
       message(toString(file));
     managedLibraries.push_back(f);
     ctx.loadedFiles.push_back(f);
+    return;
+  }
+
+  // The trailer definitions (plan 5.14.4 T5): the driver adds the file,
+  // which adds its lazy symbols, and each reference that extracts a row
+  // (Symbol::extract, which names it) defines that row. The file stays lazy,
+  // because Symbol::extract loads a lazy file only once.
+  if (auto *f = dyn_cast<TrailerDefFile>(file)) {
+    f->lazy = true;
+    if (symName.empty())
+      f->parseLazy();
+    else
+      f->extract(symName);
     return;
   }
 
@@ -401,13 +416,13 @@ findReferencingDefinitions(BitcodeFile &file, StringRef irName) {
 }
 
 // The methods and segments of the CIL objects whose token sites or
-// relocations name \p sym, as "<file>:(<name>)", in load order: only live
-// ones if \p liveOnly, and LTO objects only if \p includeLTO.
-static SmallVector<std::string, 0>
-getObjectReferences(const Symbol *sym, bool liveOnly, bool includeLTO) {
-  SmallVector<std::string, 0> refs;
+// relocations name \p sym, in load order: only live ones if \p liveOnly, and
+// LTO objects only if \p includeLTO.
+static SmallVector<const InputChunk *, 0>
+getReferencingChunks(const Symbol *sym, bool liveOnly, bool includeLTO) {
+  SmallVector<const InputChunk *, 0> chunks;
   if (!sym)
-    return refs;
+    return chunks;
   for (ObjFile *f : ctx.objectFiles) {
     if (f->isLTO && !includeLTO)
       continue;
@@ -418,7 +433,7 @@ getObjectReferences(const Symbol *sym, bool liveOnly, bool includeLTO) {
       if (any_of(m->sites, [&](const TokenSite &site) {
             return tokens.lookup(site.token).sym == sym;
           }))
-        refs.push_back(toString(m));
+        chunks.push_back(m);
     }
     for (InputSegment *seg : f->segments()) {
       if (seg->discarded || (liveOnly && !seg->live))
@@ -428,9 +443,18 @@ getObjectReferences(const Symbol *sym, bool liveOnly, bool includeLTO) {
                    (r.Type == MSILLink::RelocType::Diff &&
                     f->getSymbol(r.Symbol2) == sym);
           }))
-        refs.push_back(toString(seg));
+        chunks.push_back(seg);
     }
   }
+  return chunks;
+}
+
+// The references of getReferencingChunks(), as "<file>:(<name>)".
+static SmallVector<std::string, 0>
+getObjectReferences(const Symbol *sym, bool liveOnly, bool includeLTO) {
+  SmallVector<std::string, 0> refs;
+  for (const InputChunk *c : getReferencingChunks(sym, liveOnly, includeLTO))
+    refs.push_back(toString(c));
   return refs;
 }
 
@@ -463,19 +487,21 @@ void SymbolTable::reportUnresolved(std::string msg, ArrayRef<Reference> refs,
   error(msg);
 }
 
-// The first line of the report of an unresolved symbol (plan 5.9.14).
+// The first line of the report of an unresolved symbol (plan 5.9.14), with
+// the line of plan 5.14.2 for a name of classes N1-N3 (getNameClassLine).
 static std::string getUnresolvedMessage(const Symbol &sym) {
   if (auto *u = dyn_cast<Undefined>(&sym); u && u->discarded)
     return "relocation refers to a symbol in a discarded section: " +
            toString(sym) + "\n>>> defined in " + toString(sym.file);
+  std::string classLine = getNameClassLine(sym.getName(), ctx);
   switch (sym.visibility()) {
   case STV_HIDDEN:
   case STV_INTERNAL:
-    return "undefined hidden symbol: " + toString(sym);
+    return "undefined hidden symbol: " + toString(sym) + classLine;
   case STV_PROTECTED:
-    return "undefined protected symbol: " + toString(sym);
+    return "undefined protected symbol: " + toString(sym) + classLine;
   default:
-    return "undefined symbol: " + toString(sym);
+    return "undefined symbol: " + toString(sym) + classLine;
   }
 }
 
@@ -510,7 +536,33 @@ void SymbolTable::reportUnresolved(std::string msg, const Symbol *sym,
 }
 
 void SymbolTable::reportUndefined(const Symbol *sym, bool liveOnly) {
+  // A setjmp-family name (plan 5.14.2 N4) is an error of each input that
+  // refers to it.
+  auto *u = dyn_cast<Undefined>(sym);
+  if (!(u && u->discarded) && isSetjmpFamilyName(sym->getName())) {
+    reportSetjmpFamily(sym->getName(), liveOnly);
+    return;
+  }
   reportUnresolved(getUnresolvedMessage(*sym), sym, liveOnly);
+}
+
+void SymbolTable::reportSetjmpFamily(StringRef name, bool liveOnly) {
+  Symbol *sym = find(name);
+  ArrayRef<Reference> refs = sym ? getReferences(sym) : ArrayRef<Reference>();
+  SmallVector<std::string, 2> files;
+  auto add = [&](std::string file) {
+    if (!is_contained(files, file))
+      files.push_back(std::move(file));
+  };
+  for (const Reference &ref : refs)
+    add(toString(ref.file));
+  for (const InputChunk *c :
+       getReferencingChunks(sym, liveOnly, /*includeLTO=*/refs.empty()))
+    add(toString(c->file));
+  if (files.empty())
+    add("ld-temp.o");
+  for (const std::string &file : files)
+    error(getSetjmpFamilyText(name, file));
 }
 
 void SymbolTable::reportReference(std::string msg, StringRef name) {
@@ -535,8 +587,11 @@ std::string SymbolTable::getReferencingFile(StringRef name) {
 // name in the native libraries, in link order (plan 5.10.10). A definition
 // without a type takes the kind of the reference, and a reference without a
 // type (-u) takes a function: it is a function reference, which passes over
-// the data of COFF import libraries and DLLs.
+// the data of COFF import libraries and DLLs. A name that no native library
+// may define (plan 5.14.2, mayBindNatively) stays undefined.
 static void bindNative(Symbol &sym) {
+  if (!mayBindNatively(sym.getName(), ctx))
+    return;
   SmallVector<const NativeExport *, 2> rejected;
   const NativeExport *e = ctx.nativeIndex.lookup(
       sym.getName(), rejected, /*isFunctionReference=*/!sym.isData());
@@ -555,7 +610,8 @@ static void bindNative(Symbol &sym) {
 // Step 2 of plan 5.9.6 for the symbols of CIL objects and LTO objects, which
 // carry import attributes: an explicit module binds unchecked (plan 5.10.7);
 // otherwise the native libraries are searched by the import name, else by
-// the symbol name.
+// the symbol name, unless no native library may define the symbol or import
+// name (plan 5.14.2, mayBindNatively).
 void SymbolTable::bindObjectSymbol(Symbol &sym) {
   auto it = importInfo.find(&sym);
   ImportInfo *info = it == importInfo.end() ? nullptr : &it->second;
@@ -579,6 +635,8 @@ void SymbolTable::bindObjectSymbol(Symbol &sym) {
 
   StringRef lookupName =
       info && !info->name.empty() ? info->name : sym.getName();
+  if (!mayBindNatively(sym.getName(), ctx) || !mayBindNatively(lookupName, ctx))
+    return;
   SmallVector<const NativeExport *, 2> rejected;
   const NativeExport *e = ctx.nativeIndex.lookup(
       lookupName, rejected, /*isFunctionReference=*/!sym.isData());
@@ -603,9 +661,10 @@ void SymbolTable::bindObjectSymbol(Symbol &sym) {
 // a definition that late binding passed over, which the writer reports for a
 // live reference (plan 5.10.14's "defined only in native object code"). A
 // symbol with an explicit import module binds to that module unchecked (plan
-// 5.10.7).
+// 5.10.7), and a name that no native library may define (plan 5.14.2,
+// mayBindNatively) is not looked up: it stays undefined.
 bool SymbolTable::rejectObjectDefinition(Symbol &sym) {
-  if (!getImportModule(&sym).empty())
+  if (!getImportModule(&sym).empty() || !mayBindNatively(sym.getName(), ctx))
     return false;
   const NativeExport *e = ctx.nativeIndex.findObjectDefinition(sym.getName());
   if (!e)
@@ -655,9 +714,10 @@ const ManagedExport *SymbolTable::findManagedExport(StringRef name) const {
 }
 
 // Step 1 of plan 5.9.6 (plan 5.9.15, exports-multiasm 10.2): the first
-// library in command-line order that exports the symbol's name.
+// library in command-line order that exports the symbol's name. No library
+// supplies a toolchain name (plan 5.14.2 N3).
 bool SymbolTable::bindManagedSymbol(Symbol &sym) {
-  if (managedLibraries.empty())
+  if (managedLibraries.empty() || cli::isToolchainName(sym.getName()))
     return false;
   // An explicit import module stays native (plan 5.10.7); an import name
   // applies to step 2 only.
@@ -903,7 +963,7 @@ void SymbolTable::bindLateSymbols() {
         // refuses its machine code, and the import-annotation pass reports
         // a reference that the merged module keeps. Code generation would
         // make a weak one null, so a referenced weak symbol is reported here.
-        if (sym->isWeak())
+        if (sym->isWeak() && mayBindNatively(sym->getName(), ctx))
           if (const NativeExport *e =
                   ctx.nativeIndex.findObjectDefinition(sym->getName())) {
             ArrayRef<Reference> symRefs = getReferences(sym);

@@ -1,0 +1,117 @@
+## Signature mismatches of helper names that a bitcode input defines
+## (ImplementationPlan.md 5.14.2 N-1; 5.9.8's LTO path; the section 12 row
+## of 2026-10-28 'Plan 5.9.8 amended (helper signatures)'). When the call and
+## the definition are both bitcode, the mismatch is inside the merged module,
+## where MSILFixFunctionBitcasts applies 5.9.8's classifyCall table under the
+## module flag msil-lto so that the object and LTO paths agree, with 5.9.8's
+## texts minus the ' in <file>' parts (the merged module has no files). For
+## an N1, N2 or N3 name the result is therefore N-1's error, as
+## helper-mismatch.test pins it for objects, never an adapter and a warning,
+## and no image or text is written:
+##   function signature mismatch: <name> (a toolchain or compiler runtime helper)
+##   >>> defined as <IL signature>
+##   >>> called as <IL signature>
+## fp-helpers F2's __floattidf (N1), __atomic_load_4 without its memory order
+## (N2) and __msil_foo with a native int (N3), with LTO writing an image and
+## with --lto-emit-asm. An ordinary name keeps 5.9.8's warning and adapter
+## (the control).
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llvm-as def.ll -o def.bc
+# RUN: llvm-as call.ll -o call.bc
+# RUN: llvm-as plain-def.ll -o plain-def.bc
+# RUN: llvm-as plain-call.ll -o plain-call.bc
+
+# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not=warning: --implicit-check-not=adapt
+
+# RUN: rm -f x.exe
+# RUN: not msil-ld call.bc def.bc -o x.exe > image.txt 2>&1
+# RUN: not ls x.exe
+# RUN: rm -f x.il
+# RUN: not msil-ld --lto-emit-asm call.bc def.bc -o x.il > text.txt 2>&1
+# RUN: not ls x.il
+# RUN: %{err} --check-prefix=HELPER -DNAME=__floattidf "-DDEF=float64(native int)" \
+# RUN:   "-DCALL=float64(native int, native int)" --input-file=image.txt
+# RUN: %{err} --check-prefix=HELPER -DNAME=__atomic_load_4 "-DDEF=int32(native int, int32)" \
+# RUN:   "-DCALL=int32(native int)" --input-file=image.txt
+# RUN: %{err} --check-prefix=HELPER -DNAME=__msil_foo "-DDEF=int32(int32)" "-DCALL=int32(native int)" \
+# RUN:   --input-file=image.txt
+# RUN: %{err} --check-prefix=HELPER -DNAME=__floattidf "-DDEF=float64(native int)" \
+# RUN:   "-DCALL=float64(native int, native int)" --input-file=text.txt
+# RUN: %{err} --check-prefix=HELPER -DNAME=__atomic_load_4 "-DDEF=int32(native int, int32)" \
+# RUN:   "-DCALL=int32(native int)" --input-file=text.txt
+# RUN: %{err} --check-prefix=HELPER -DNAME=__msil_foo "-DDEF=int32(int32)" "-DCALL=int32(native int)" \
+# RUN:   --input-file=text.txt
+# HELPER:      {{^}}msil-ld: error: function signature mismatch: [[NAME]] (a toolchain or compiler runtime helper){{$}}
+# HELPER-NEXT: {{^}}>>> defined as [[DEF]]{{$}}
+# HELPER-NEXT: {{^}}>>> called as [[CALL]]{{$}}
+
+## The control: an ordinary name is adapted with a warning.
+# RUN: msil-ld plain-call.bc plain-def.bc -o plain.exe 2>&1 | FileCheck %s --check-prefix=PLAIN \
+# RUN:   --implicit-check-not=error:
+# PLAIN:      {{^}}msil-ld: warning: function signature mismatch: plain{{$}}
+# PLAIN-NEXT: {{^}}>>> defined as int32(int32){{$}}
+# PLAIN-NEXT: {{^}}>>> called as int32(int32, int32){{$}}
+# PLAIN-NEXT: {{^}}>>> adapter: {{.+}}
+
+#--- def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; compiler-rt's Win64 __floattidf (the __int128 by pointer), an
+;; '__atomic_*' shim and an '__msil_' name, as bitcode. noinline keeps the
+;; calls.
+define double @__floattidf(ptr %a) noinline {
+  %lo = load i64, ptr %a, align 8
+  %r = sitofp i64 %lo to double
+  ret double %r
+}
+
+define i32 @__atomic_load_4(ptr %p, i32 %order) noinline {
+  %v = load volatile i32, ptr %p
+  ret i32 %v
+}
+
+define i32 @__msil_foo(i32 %x) noinline {
+  ret i32 %x
+}
+
+#--- call.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@v = global i32 7
+
+declare double @__floattidf(i64, i64)
+declare i32 @__atomic_load_4(ptr)
+declare i32 @__msil_foo(i64)
+
+define i32 @main() {
+  %d = call double @__floattidf(i64 42, i64 0)
+  %i = fptosi double %d to i32
+  %a = call i32 @__atomic_load_4(ptr @v)
+  %w = sext i32 %a to i64
+  %b = call i32 @__msil_foo(i64 %w)
+  %s = add i32 %i, %b
+  ret i32 %s
+}
+
+#--- plain-def.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @plain(i32 %a) noinline {
+  ret i32 %a
+}
+
+#--- plain-call.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @plain(i32, i32)
+
+define i32 @main() {
+  %r = call i32 @plain(i32 1, i32 2)
+  ret i32 %r
+}

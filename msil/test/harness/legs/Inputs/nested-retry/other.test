@@ -1,0 +1,2 @@
+# Fails without a timeout marker: not timeout-only.
+# RUN: %python -c "import sys; sys.stderr.write('msil-run: output of prog.exe does not match prog.expected\n'); sys.exit(1)"

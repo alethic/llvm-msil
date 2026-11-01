@@ -58,7 +58,7 @@
 # CHECK:       body:
 # CHECK-NOT:   ARGUMENT_
 # CHECK:       {{^ +}}[[C:%[0-9]+]]:i32 = CONST_I32 7,
-# CHECK-NEXT:  DROP_I32 killed [[C]],
+# CHECK-NEXT:  DROP_I32 [[C]],
 # CHECK-NEXT:  [[A:%[0-9]+]]:i32 = ARG_GET_I32 0,
 # CHECK-NEXT:  RETURN [[A]],
 # CHECK-NOT:   {{LOCAL_|ARG_SET|ARGUMENT_}}
@@ -78,12 +78,13 @@ body: |
 ...
 
 # Ported from llvm/test/CodeGen/WebAssembly/explicit-locals.mir: when a DROP is
-# inserted for a dead def, the def is no longer marked dead (the DROP uses it)
-# and the DROP's operand is marked killed.
+# inserted for a dead def, the def is no longer marked dead (the DROP uses it).
+# The DROP's operand carries no kill flag: like WebAssembly's, the pass adds no
+# kill flags to virtual registers.
 # CHECK-LABEL: name: drop_test{{$}}
 # CHECK:       bb.1:
 # CHECK-NOT:   dead %{{[0-9]+}}
-# CHECK:       DROP_I32 killed %{{[0-9]+}}
+# CHECK:       DROP_I32 %{{[0-9]+}}
 ---
 name:            drop_test
 liveins:

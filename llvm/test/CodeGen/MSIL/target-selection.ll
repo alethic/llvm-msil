@@ -158,6 +158,44 @@
 ; RUN: %if ilasm %{ llc -mtriple=x86_64-unknown-linux-gnu-msil -exception-model=dwarf < %t/ehmodel.ll \
 ; RUN:   -o %t/ehmodel.il && %ilasm-verify -output=%t/ehmodel.dll %t/ehmodel.il %}
 
+; The CIL object path (-filetype=obj) gets no exception model either (plan
+; section 12, U2 row (1) for M24.f): MSILAsmPrinter emits the objects too, so
+; neither a real model in the flag nor llc's -exception-model adds anything
+; to an object, and nothing records the model: each object is byte-identical
+; to the object of ehmodel.ll, which has no flag, on the same triple, and llc
+; prints nothing.
+; DEFINE: %{ehobj} = llc -verify-machineinstrs -filetype=obj
+; RUN: %{ehobj} -mtriple=x86_64-unknown-linux-gnu-msil < %t/ehmodel.ll -o %t/ehmodel.lnx.o 2>&1 | count 0
+; RUN: %{ehobj} -mtriple=x86_64-unknown-linux-gnu-msil < %t/ehdwarf.ll -o %t/ehdwarf.lnx.o 2>&1 | count 0
+; RUN: cmp %t/ehmodel.lnx.o %t/ehdwarf.lnx.o
+; RUN: %{ehobj} -mtriple=x86_64-unknown-linux-gnu-msil < %t/ehsjlj.ll -o %t/ehsjlj.lnx.o 2>&1 | count 0
+; RUN: cmp %t/ehmodel.lnx.o %t/ehsjlj.lnx.o
+; RUN: %{ehobj} -mtriple=x86_64-unknown-linux-gnu-msil -exception-model=dwarf < %t/ehmodel.ll \
+; RUN:   -o %t/ehopt-dwarf.lnx.o 2>&1 | count 0
+; RUN: cmp %t/ehmodel.lnx.o %t/ehopt-dwarf.lnx.o
+; RUN: %{ehobj} -mtriple=x86_64-unknown-linux-gnu-msil -exception-model=sjlj < %t/ehmodel.ll \
+; RUN:   -o %t/ehopt-sjlj.lnx.o 2>&1 | count 0
+; RUN: cmp %t/ehmodel.lnx.o %t/ehopt-sjlj.lnx.o
+; RUN: %{ehobj} -mtriple=x86_64-unknown-linux-gnu-msil -exception-model=arm < %t/ehmodel.ll \
+; RUN:   -o %t/ehopt-arm.lnx.o 2>&1 | count 0
+; RUN: cmp %t/ehmodel.lnx.o %t/ehopt-arm.lnx.o
+; RUN: %{ehobj} -mtriple=x86_64-w64-windows-gnu-msil < %t/ehmodel.ll -o %t/ehmodel.gnu.o 2>&1 | count 0
+; RUN: %{ehobj} -mtriple=x86_64-w64-windows-gnu-msil < %t/ehdwarf.ll -o %t/ehdwarf.gnu.o 2>&1 | count 0
+; RUN: cmp %t/ehmodel.gnu.o %t/ehdwarf.gnu.o
+; RUN: %{ehobj} -mtriple=x86_64-w64-windows-gnu-msil -exception-model=wineh < %t/ehmodel.ll \
+; RUN:   -o %t/ehopt-wineh.gnu.o 2>&1 | count 0
+; RUN: cmp %t/ehmodel.gnu.o %t/ehopt-wineh.gnu.o
+; RUN: %{ehobj} -mtriple=aarch64-unknown-linux-gnu-msil < %t/ehmodel.ll -o %t/ehmodel.a64.o 2>&1 | count 0
+; RUN: %{ehobj} -mtriple=aarch64-unknown-linux-gnu-msil < %t/eharm.ll -o %t/eharm.a64.o 2>&1 | count 0
+; RUN: cmp %t/ehmodel.a64.o %t/eharm.a64.o
+; Each object defines the method and nothing else.
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/ehdwarf.lnx.o | FileCheck %s --check-prefix=EHOBJ %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/ehdwarf.gnu.o | FileCheck %s --check-prefix=EHOBJ %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/eharm.a64.o | FileCheck %s --check-prefix=EHOBJ %}
+; EHOBJ:      {{^}}LinkInfo v1.0 triple={{.*}}
+; EHOBJ-NEXT: {{^}}Symbol 0 FUNCTION GLOBAL DEFAULT 'may_unwind' method=0x06000001{{$}}
+; EHOBJ-NOT:  {{.}}
+
 ;--- attrs.ll
 ; Declarations with the attributes clang emits for x86_64 and aarch64.
 source_filename = "selection.c"

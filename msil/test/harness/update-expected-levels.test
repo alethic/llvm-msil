@@ -1,0 +1,82 @@
+# update-expected.py --levels L[,L...] (plan 5.17.5, M24): every test is
+# built and run at each level, in the order given, and --levels excludes
+# --opt. The stand-in compiler Inputs/levels-cc.py does at each level what
+# its --at for that level says: it copies a stand-in native program, a .NET
+# Framework executable assembled with 'ilasm -exe' that runs directly on
+# Windows, as a native program would (Inputs/fake-native-44.il exits with
+# 44, Inputs/exit-255.il with 255 and Inputs/fake-native-300.il with 300,
+# outside 0..255), or a file that is no program, or it fails as a compile
+# does; it also fails at a level it has no --at for, so every run below
+# shows which levels it built.
+# (1) The same transcript at -O0 and -O2: writing gives 'wrote
+#     <stem>.expected' and --check 'ok: <test>'. --check with another
+#     transcript at -O2 fails with one 'MISMATCH: <test>' line and the diff
+#     of that level alone, whose second file is 'native (windows, -O2)'.
+# (2) Writing with different transcripts at -O0 and -O2 fails with
+#     'MISMATCH: <test> (the native transcripts at -O0 and -O2 differ;
+#     nothing written)' and their diff, and writes nothing.
+# (3) A failure at -O2, after -O0 built and ran, names its level: 'FAIL
+#     (native compile at -O2)' after the compiler's error, 'FAIL (native run
+#     at -O2)' after msil-run.py's, and 'REFUSED: <test>: the native run at
+#     -O2 ended with [exit 300: outside 0..255]: ...' (plan D37); each fails
+#     with status 1 and writes nothing. With one level the line names none,
+#     as without --levels: under --levels O2, and at the -O0 of a run without
+#     --levels or --opt (where the stand-in fails, having no --at for -O0).
+# (4) Usage errors, with status 2 before anything is built: --opt with
+#     --levels, a level that does not exist (in --levels and in --opt), and a
+#     level that --levels names twice.
+# Windows only: the stand-in native programs are .NET Framework executables.
+# REQUIRES: system-windows, msil-triple-windows, msil-netfx
+
+# DEFINE: %{levels_cc} = %python %S/Inputs/levels-cc.py
+# RUN: rm -rf %t.d && mkdir -p %t.d
+# RUN: %ilasm -exe -output=%t.d/exit-44.exe %S/Inputs/fake-native-44.il %S/Inputs/fake-native-cc.il
+# RUN: %ilasm -exe -output=%t.d/exit-255.exe %S/Inputs/exit-255.il
+# RUN: %ilasm -exe -output=%t.d/exit-300.exe %S/Inputs/fake-native-300.il %S/Inputs/fake-native-cc.il
+# RUN: %{harness_check} write %t.d/no-program.exe "levels-cc: this file is no program"
+# RUN: %{harness_check} write %t.d/prog.c "// The stand-in compiler ignores this source." "// RUN: %%{msil_c}" "int main(void) { return 0; }"
+
+# (1)
+# RUN: %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at O2=copy:%t.d/exit-44.exe' --rtlib none --levels O0,O2 %t.d/prog.c > %t.1a.log 2>&1
+# RUN: %{harness_check} contains %t.1a.log "^wrote \S*prog\.expected$"
+# RUN: %{harness_check} equals %t.d/prog.expected "[exit 44]"
+# RUN: %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at O2=copy:%t.d/exit-44.exe' --rtlib none --check --levels O0,O2 %t.d/prog.c > %t.1b.log 2>&1
+# RUN: %{harness_check} contains %t.1b.log "^ok: \S*prog\.c$"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at O2=copy:%t.d/exit-255.exe' --rtlib none --check --levels O0,O2 %t.d/prog.c > %t.1c.log 2>&1
+# RUN: %{harness_check} contains %t.1c.log "^MISMATCH: \S*prog\.c$" "^--- \S*prog\.expected$" "^\+\+\+ native \(windows, -O2\)$" "^-\[exit 44\]$" "^\+\[exit 255\]$"
+# RUN: %{harness_check} lacks %t.1c.log "native \(windows, -O0\)" "^ok: "
+# RUN: %{harness_check} equals %t.d/prog.expected "[exit 44]"
+
+# (2)
+# RUN: rm %t.d/prog.expected
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at O2=copy:%t.d/exit-255.exe' --rtlib none --levels O0,O2 %t.d/prog.c > %t.2.log 2>&1
+# RUN: %{harness_check} contains %t.2.log "^MISMATCH: \S*prog\.c \(the native transcripts at -O0 and -O2 differ; nothing written\)$" "^--- native \(windows, -O0\)$" "^\+\+\+ native \(windows, -O2\)$" "^-\[exit 44\]$" "^\+\[exit 255\]$"
+# RUN: %{harness_check} lacks %t.2.log "^wrote "
+# RUN: %{harness_check} missing %t.d/prog.expected
+
+# (3)
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at "O2=fail:cannot compile at -O2"' --rtlib none --levels O0,O2 %t.d/prog.c > %t.3a.log 2>&1
+# RUN: %{harness_check} contains %t.3a.log "^levels-cc: error: cannot compile at -O2$" "^update-expected: the native compile failed \(exit status 1\)$" "^FAIL \(native compile at -O2\): \S*prog\.c$"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at O2=copy:%t.d/no-program.exe' --rtlib none --levels O0,O2 %t.d/prog.c > %t.3b.log 2>&1
+# RUN: %{harness_check} contains %t.3b.log "^msil-run: error: cannot run .*prog\.exe: " "^FAIL \(native run at -O2\): \S*prog\.c$"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at O2=copy:%t.d/exit-300.exe' --rtlib none --levels O0,O2 %t.d/prog.c > %t.3c.log 2>&1
+# RUN: %{harness_check} contains %t.3c.log "^REFUSED: \S*prog\.c: the native run at -O2 ended with \[exit 300: outside 0\.\.255\]: its exit status is outside 0\.\.255; Linux would truncate it \(plan D37\)$"
+# RUN: %{harness_check} lacks %t.3c.log "^levels-cc: error: " "^(FAIL|MISMATCH|MISSING)\b"
+# RUN: %{harness_check} missing %t.d/prog.expected
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang '%{levels_cc} --at "O2=fail:cannot compile at -O2"' --rtlib none --levels O2 %t.d/prog.c > %t.3d.log 2>&1
+# RUN: %{harness_check} contains %t.3d.log "^levels-cc: error: cannot compile at -O2$" "^FAIL \(native compile\): \S*prog\.c$"
+# RUN: %{harness_check} exits 1 %{harness_update_expected} --clang '%{levels_cc} --at O2=copy:%t.d/exit-44.exe' --rtlib none %t.d/prog.c > %t.3e.log 2>&1
+# RUN: %{harness_check} contains %t.3e.log "^levels-cc: error: no --at for -O0$" "^FAIL \(native compile\): \S*prog\.c$"
+# RUN: %{harness_check} missing %t.d/prog.expected
+
+# (4) Each run stops at its usage check, before anything is built or
+# written.
+# RUN: %{harness_check} exits 2 %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at O2=copy:%t.d/exit-44.exe' --rtlib none --opt O2 --levels O0,O2 %t.d/prog.c > %t.4a.log 2>&1
+# RUN: %{harness_check} contains %t.4a.log "^update-expected\.py: error: --opt and --levels exclude each other \(--levels O0 is one level\)$"
+# RUN: %{harness_check} exits 2 %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at O2=copy:%t.d/exit-44.exe' --rtlib none --levels O0,O4 %t.d/prog.c > %t.4b.log 2>&1
+# RUN: %{harness_check} contains %t.4b.log "^update-expected\.py: error: --levels O4: use one of O0, O1, O2, O3, Os, Oz$"
+# RUN: %{harness_check} exits 2 %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at O2=copy:%t.d/exit-44.exe' --rtlib none --opt O4 %t.d/prog.c > %t.4c.log 2>&1
+# RUN: %{harness_check} contains %t.4c.log "^update-expected\.py: error: --opt O4: use one of O0, O1, O2, O3, Os, Oz$"
+# RUN: %{harness_check} exits 2 %{harness_update_expected} --clang '%{levels_cc} --at O0=copy:%t.d/exit-44.exe --at O2=copy:%t.d/exit-44.exe' --rtlib none --levels O0,-O0 %t.d/prog.c > %t.4d.log 2>&1
+# RUN: %{harness_check} contains %t.4d.log "^update-expected\.py: error: --levels O0,-O0 names -O0 twice$"
+# RUN: %{harness_check} missing %t.d/prog.expected

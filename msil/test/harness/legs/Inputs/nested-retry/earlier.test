@@ -1,0 +1,5 @@
+# A command that passes prints a timeout marker, and the last command fails
+# without one: the marker is not after the last '# executed command:' line,
+# so the test is not timeout-only.
+# RUN: echo "msil-run: dotnet did not finish within 60 s"
+# RUN: %python -c "import sys; sys.stderr.write('a failure of another kind\n'); sys.exit(1)"

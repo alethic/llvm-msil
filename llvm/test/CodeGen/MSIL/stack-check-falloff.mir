@@ -48,7 +48,7 @@ body: |
 # CHECK:       maxStack: 1{{$}}
 # CHECK:       body:
 # CHECK:       [[C:%[0-9]+]]:i32 = CONST_I32 1,
-# CHECK-NEXT:  DROP_I32 killed [[C]],
+# CHECK-NEXT:  DROP_I32 [[C]],
 # CHECK-NEXT:  {{^ +}}TRAP{{( |$)}}
 # CHECK-NOT:   {{TRAP|RETURN}}
 ---

@@ -1,0 +1,20 @@
+# Run only in a nested lit by ../../loud-failfast.test, with the WSL runner:
+# ../failfast.il on WSL .NET 8 and .NET 10 (a runtimeconfig of its own for
+# each), where msil-run.py maps the runtime's FailFast status to [failfast],
+# and a native program that ends with SIGABRT, whose status msil-run.py
+# --native keeps. It checks the transcripts and the toolchain's message in
+# the --stderr-out files, and prints the transcripts for the outer test.
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %ilasm -dll -output=%t/failfast.dll %S/../failfast.il
+# RUN: %{harness_check} write %t/net8.runtimeconfig.json '{"runtimeOptions": {"tfm": "net8.0", "rollForward": "LatestPatch", "framework": {"name": "Microsoft.NETCore.App", "version": "8.0.0"}}}'
+# RUN: %{harness_check} write %t/net10.runtimeconfig.json '{"runtimeOptions": {"tfm": "net10.0", "rollForward": "LatestPatch", "framework": {"name": "Microsoft.NETCore.App", "version": "10.0.0"}}}'
+# RUN: %msil_exec --runtimeconfig %t/net8.runtimeconfig.json --stderr-out %t/net8.err --out %t/net8.out %t/failfast.dll
+# RUN: %msil_exec --runtimeconfig %t/net10.runtimeconfig.json --stderr-out %t/net10.err --out %t/net10.out %t/failfast.dll
+# RUN: %{harness_check} write %t/abort.sh "#!/bin/sh" 'kill -ABRT $$'
+# RUN: %msil_exec --native --stderr-out %t/abort.err --out %t/abort.out %t/abort.sh
+# RUN: %{harness_check} equals %t/net8.out "[failfast]"
+# RUN: %{harness_check} equals %t/net10.out "[failfast]"
+# RUN: %{harness_check} equals %t/abort.out "[signal 6]"
+# RUN: %{harness_check} contains %t/net8.err "msil: trap: the construct needs M99 \(loud-failfast\)$"
+# RUN: %{harness_check} contains %t/net10.err "^msil: trap: the construct needs M99 \(loud-failfast\)$"
+# RUN: cat %t/net8.out %t/net10.out %t/abort.out

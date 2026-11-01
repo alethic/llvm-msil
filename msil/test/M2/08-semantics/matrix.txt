@@ -1,27 +1,62 @@
-# The link-semantics matrix (ImplementationPlan.md 5.9.16 and 5.12.7,
-# condition 5): one line per row of 5.9.16 and per variant of a row, and
-# the other tests of this directory. Inputs/check-matrix.py (run by
-# matrix-coverage.test) checks each line against its tests; its docstring
-# has the rules.
+# The link-semantics matrix (ImplementationPlan.md 5.9.16, 5.12.7,
+# condition 5, and 5.17.12): one line per row of 5.9.16 and per variant of a
+# row, and the other tests of this directory. Inputs/check-matrix.py (run by
+# matrix-coverage.test, and with --legs by the phase gates) checks each line
+# against its tests and the legs; its docstring has the rules.
 #
 # Columns, separated by '|':
 #   case        the 5.9.16 row, or <row>/<variant>
 #   tests       relative to msil/test/M2, or to the repository (llvm/...)
-#   native      transcript | link error | UB | n/a, then ': <what>'
+#   native      transcript | link error | UB | n/a, then ': <what>', then any
+#               clauses '; rule <triple>: <why>' (on that triple the test's
+#               expected file is hand-written, %{msil_expected_rule})
 #   pipelines   asm, obj, lto (obj and lto: %{msil_prog} in the legs whose
 #               msil-prog-pipeline is obj or lto)
 #   triples     linux-gnu (x86_64-unknown-linux-gnu-msil, WSL .NET 10 and the
 #               private .NET 8), windows-msvc (x86_64-pc-windows-msvc-msil,
 #               .NET 8, .NET 10 and Framework 4.8)
 #   Phase 2     transcript (the native one, at -O0 and -O2 and every level of
-#               the leg) | diag:<text> (a named diagnostic, exit status 1, at
-#               -O0 and -O2; '<...>' is a part the test matches as a
-#               pattern) | untested: <reason> | object: <what>
-#   milestones  5.9.16's 'From' column; 'P3...' marks a P3 row, whose
-#               transcript comes in phase 3 and whose test pins the Phase 2
-#               diagnostic
+#               the leg) | diag:<text> (a named diagnostic, exit status 1,
+#               checked at -O0 and at -O2; '<...>' is a part the test matches
+#               as a pattern) | untested: <reason> | object: <what>
+#   milestones  5.9.16's 'From' column. 'P3', 'P3-A' or 'P3-B' marks a P3
+#               row, whose test pins today's diagnostic: the milestone that
+#               builds its feature writes its own id in place of the label and
+#               makes the line a transcript. A line that names a milestone
+#               from M24 to M35 runs in the gate legs with 10+tc0 (the
+#               checker's gate rule) and joins their $p3Tests
+#               (check-matrix.py --p3-tests).
+#
+# Header lines ('#!' lines are not comments to the checker; each repeatable):
+#   #! rows:      the rows that need a line: 5.9.16's and those Phase 3 adds
+#   #! obj-lto:   the rows whose lines list obj and lto (over their variants)
+#   #! p3-tests:  Phase 3 feature tests outside msil/test/M3 that no line
+#                 names (repository-relative paths), for the gate legs
 #
 # case | tests | native | pipelines | triples | Phase 2 | milestones
+
+# The rows of 5.9.16: those to M23, the P3 rows, the P2-C rows (M22).
+#! rows: zoo zoo-archive zoo-defined p1-weak-alias p2-knr knr-two-arities
+#! rows: sig-mismatch p3-start-stop p4-selectany p5-tls p6-ctors p6-dtors
+#! rows: p7-flags p8-section-ctor ctor-slot-order weak-def-sig-mismatch
+#! rows: import-attrs p9-weak-common common-largest static-same-name
+#! rows: inline-comdat byval-sret-xtu knr-def-xtu main-not-first data-only-tu
+#! rows: unaligned-reloc int-ptr-adapter missing-arg-adapter type-mismatch
+#! rows: duplicate-strong undefined float-int-mismatch weak-undef-guarded
+#! rows: gc-used-retain pragma-comment-lib native-callback
+#! rows: fini-array crt-xt atexit-order variadic-def-xtu
+#! rows: p2c-bsymbolic p2c-cycle p2c-weak-def
+# The rows whose 'From' column names M20, on obj and lto.
+#! obj-lto: zoo zoo-archive zoo-defined p1-weak-alias p2-knr knr-two-arities
+#! obj-lto: sig-mismatch p3-start-stop p4-selectany p5-tls p6-ctors p6-dtors
+#! obj-lto: p8-section-ctor ctor-slot-order weak-def-sig-mismatch import-attrs
+#! obj-lto: p9-weak-common common-largest static-same-name inline-comdat
+#! obj-lto: byval-sret-xtu knr-def-xtu main-not-first data-only-tu
+#! obj-lto: unaligned-reloc int-ptr-adapter missing-arg-adapter type-mismatch
+#! obj-lto: duplicate-strong undefined float-int-mismatch weak-undef-guarded
+#! obj-lto: gc-used-retain pragma-comment-lib native-callback
+# The strict (constrained) i128 conversions run as a program.
+#! p3-tests: msil/test/M1/02-fp/strict-i128.c
 
 # The zoo (objfmt-binding-files/zoo).
 zoo | 08-semantics/zoo.test | transcript: 63 | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
@@ -75,7 +110,7 @@ weak-undef-guarded | 08-semantics/weak-undef-guarded.test | transcript | obj,lto
 # Native libraries and the C import attributes (plan 5.10).
 import-attrs | 08-semantics/import-attrs.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M20 (obj, lto)
 pragma-comment-lib | 08-semantics/pragma-comment-lib.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M15 lto, M20 obj
-native-callback | 08-semantics/native-callback.test | transcript: the sorted array | obj,lto | linux-gnu,windows-msvc | diag:native function 'qsort' (<module>) takes a C function pointer; passing functions to native code needs phase 3 thunks | M15 lto, M20 obj; the transcript from P3-B
+native-callback | 08-semantics/native-callback.test | transcript: the sorted array | obj,lto | linux-gnu,windows-msvc | diag:native function 'qsort' (<module>) takes a C function pointer; passing C functions to native code is not supported for MSIL yet | M15 lto, M20 obj; the transcript from P3-B
 
 # tests-p2 3.1's plain multi-TU cases, in 00-link.
 static-same-name | 00-link/static-same-name.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M14 lto, M20 obj
@@ -90,8 +125,9 @@ p2c-bsymbolic | 08-semantics/p2c-bsymbolic.test | transcript: -Bsymbolic native 
 p2c-cycle | 08-semantics/p2c-cycle.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M22
 p2c-weak-def | 08-semantics/p2c-weak-def.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M22
 
-# P3 rows: transcripts in phase 3; until then each test pins the Phase 2
-# diagnostic (p5-tls, p6-dtors and native-callback above are P3 rows too).
+# P3 rows: each test pins today's diagnostic until the milestone that
+# builds its feature makes the line a transcript (p5-tls, p6-dtors and
+# native-callback above are P3 rows too).
 fini-array | 08-semantics/fini-array.test | transcript: main, then the .fini_array entry at exit (glibc) | obj,lto | linux-gnu | diag:global destructors are not supported yet: p_fini in <file> | P3-A
 crt-xt | 08-semantics/crt-xt.test | transcript: main, then the .CRT$XT entry at exit (MSVC CRT) | obj,lto | windows-msvc | diag:global destructors are not supported yet: p_term in <file> | P3-A
 atexit-order | 08-semantics/atexit-order.test | transcript: the handlers in the reverse order of registration | obj,lto | linux-gnu,windows-msvc | diag:undefined symbol: atexit | P3 (5.10.10: atexit binds nowhere in Phase 2)

@@ -83,6 +83,10 @@ class MachineInstr;
 class Module;
 class TargetMachine;
 
+namespace cli {
+struct TrailerInput;
+} // end namespace cli
+
 namespace MSIL {
 /// The CIL signature of a call (\p TargetFunc null) or of the definition
 /// \p TargetFunc of the IR function type \p FTy in \p Context: the lowering
@@ -429,6 +433,12 @@ private:
   /// that calls main (decision D27), whose unsupported signatures it
   /// diagnoses.
   void emitTrailer(Module &M, ArrayRef<const Function *> CtorFns);
+
+  /// Lists in \p In the trailer definitions (plan 5.14.4 T6) that the module
+  /// references and does not define, each declared through \p Sink
+  /// (MSILTrailerTextSink.cpp).
+  void fillTrailerDefs(Module &M, MSILTrailerTextSink &Sink,
+                       cli::TrailerInput &In);
 
   /// Object mode: records the ABI descriptors of the IR calls in \p Caller
   /// (CallABIs) and warns about a call that conflicts with an earlier one of
