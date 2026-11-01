@@ -12,8 +12,18 @@
 // names a native platform and its C ABI, but asks for CIL (a .NET assembly)
 // instead of machine code. MSILTargetInfo therefore wraps the native
 // TargetInfo and keeps its data model, struct layout, va_list, target features
-// and predefined macros, with three changes:
+// and predefined macros, with these changes:
 //  * __MSIL__ is predefined,
+//  * __ELF__ is predefined where the native object format is ELF (the Linux
+//    triples), as in a native build: clang defines it only for the ELF object
+//    format, and msil-ld links these triples with ELF's rules,
+//  * no atomic wider than 8 bytes is inline or lock-free, because the CLR has
+//    no 16-byte atomic operation (such atomics take the lock path):
+//    MaxAtomicInlineWidth is capped at 64 bits, while MaxAtomicPromoteWidth
+//    stays native, so the size and alignment of _Atomic types do not change,
+//  * for the same reason __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16 is not predefined,
+//    although the native AArch64 TargetInfo defines it always and the x86-64
+//    one with cx16,
 //  * long double is IEEE double with double's size and alignment, because CIL
 //    has no extended-precision floating-point type, and
 //  * global register variables are rejected, because CIL has no machine
@@ -47,8 +57,9 @@
 namespace clang {
 namespace targets {
 
-// The native TargetInfo of an MSIL triple, with long double mapped to double
-// and __MSIL__ predefined.
+// The native TargetInfo of an MSIL triple, with long double mapped to double,
+// inline atomics capped at 8 bytes, and __MSIL__ (on ELF platforms also
+// __ELF__) predefined.
 template <typename Native>
 class LLVM_LIBRARY_VISIBILITY MSILTargetInfo final : public Native {
   // The same fields TargetInfo::adjust() sets for -mlong-double-64.
@@ -82,10 +93,28 @@ public:
     return false;
   }
 
+  // The CLR has no 16-byte atomic operation, so 16-byte atomics are never
+  // inline (aarch64, and x86-64 with cx16, claim 128 bits). The promote width
+  // stays native: it, not the inline width, sets the size and alignment of
+  // _Atomic types.
+  void setMaxAtomicWidth() override {
+    Native::setMaxAtomicWidth();
+    if (this->MaxAtomicInlineWidth > 64)
+      this->MaxAtomicInlineWidth = 64;
+  }
+
   void getTargetDefines(const LangOptions &Opts,
                         MacroBuilder &Builder) const override {
     Native::getTargetDefines(Opts, Builder);
     Builder.defineMacro("__MSIL__");
+    // InitializePredefinedMacros defines __ELF__ only for the ELF object
+    // format, which no MSIL triple has; define it as the native build does.
+    if (this->getTriple().getNativeFormatTriple().isOSBinFormatELF())
+      Builder.defineMacro("__ELF__");
+    // The native AArch64 TargetInfo defines this always and the x86-64 one
+    // with cx16, whatever the inline width: undefine it to match the cap in
+    // setMaxAtomicWidth().
+    Builder.undefineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16");
   }
 
   void adjust(DiagnosticsEngine &Diags, LangOptions &Opts,

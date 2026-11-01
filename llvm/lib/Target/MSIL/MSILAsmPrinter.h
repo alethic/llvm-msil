@@ -116,6 +116,23 @@ cli::TypeSig toTypeSig(ValType T);
 
 /// The cli::MethodSig of \p S (a static, default-convention method).
 cli::MethodSig toMethodSig(const Signature &S);
+
+/// The error text for a call of the runtime helper \p Name in text output
+/// ('clang -S', llc, msil-ld's --lto-emit-asm), which links nothing (plan
+/// 5.14.3 A9): for an '__atomic_' name (libatomic's interface, plan 5.14.2
+/// N2), that only msil-ld links the atomic operation; for a compiler-rt name
+/// of the ti (__int128) mode, such as __floattidf or __divti3, which no
+/// helper archive defines (plan 5.14.3 A5), getInt128HelperText's; for any
+/// other name, that it needs the helper archive clang_rt.builtins, which
+/// only msil-ld links. The caller decides that \p Name is a runtime helper.
+std::string getRuntimeHelperText(StringRef Name);
+
+/// The error text for the runtime helper \p Name of a 128-bit integer
+/// operation (compiler-rt's ti mode), which no helper archive defines (plan
+/// 5.14.3 A5: MSIL expands the 128-bit operations itself): that it is not
+/// supported for MSIL. ReplaceNodeResults gives it to an i128 node that would
+/// call the helper, and getRuntimeHelperText to a call of one in text output.
+std::string getInt128HelperText(StringRef Name);
 } // end namespace MSIL
 
 class LLVM_LIBRARY_VISIBILITY MSILAsmPrinter final : public AsmPrinter {

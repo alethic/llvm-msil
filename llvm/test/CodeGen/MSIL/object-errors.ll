@@ -80,7 +80,9 @@
 ; 'mysec'), and %{clean} on the WP runs keeps the error from coming back.
 ; -filetype=obj writes the object with no message; llc's assembly output and
 ; -filetype=null stay whole-program and keep their other errors, with the
-; same texts as before this milestone.
+; same texts as before this milestone, except that the runtime helper's is
+; M25's "needs the helper archive clang_rt.builtins, which only msil-ld
+; links" (5.14.3 A9, helper-archive-errors.ll).
 
 ; REQUIRES: llvm-cil-dump
 ; RUN: rm -rf %t && split-file %s %t
@@ -345,7 +347,7 @@
 ; WP-DAG: {{^}}error: external global variable 'ext_v' is not supported (phase 2 linker){{$}}
 ; WP-DAG: {{^}}error: undefined function 'ext_f' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 ; WP-DAG: {{^}}error: {{.*}}in function libcall {{.*}}: library call 'exp10' is not a Phase-1 import{{$}}
-; WP-LNX-DAG: {{^}}error: {{.*}}in function helper {{.*}}: runtime helper '__powidf2' is not available for MSIL yet (phase 3){{$}}
+; WP-LNX-DAG: {{^}}error: {{.*}}in function helper {{.*}}: runtime helper '__powidf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 
 ;--- alias.ll
 source_filename = "alias-errors.c"

@@ -10,13 +10,20 @@
 ## address, with the module it bound to. The function of the same library
 ## with a plain signature gets its P/Invoke as usual (its text is not
 ## written, since the link fails, so only the errors are checked).
-## Native long double functions get the same text (the section 12 row of
-## 2026-10-22 for 5.10.10 and 5.10.14): MSIL triples map long double to
-## double, so the IR says 'double @sqrtl(double)', but where the native long
-## double is x87 extended (x86_64 Linux, x86_64 windows-gnu) the native ABI
-## passes another value. msil-ld reports a live call that native lookup binds
-## to a name of its long double list (sqrtl in libm.so.6, strtold in
-## libc.so.6) after LTO, with '>>> referenced by' lines, and never binds it.
+## Native long double functions have a text of their own (the section 12
+## row of 2026-10-22 for 5.10.10 and 5.10.14; 5.14.3 A4; M25.d (2)): MSIL
+## triples map long double to double, so the IR says 'double @sqrtl(double)',
+## but where the native long double is wider (x86_64 and aarch64 Linux,
+## x86_64 windows-gnu) the native ABI passes another value. A call that native
+## lookup binds to a name of msil-ld's long double list (sqrtl in libm.so.6,
+## strtold in libc.so.6), which happens only when no archive member defines
+## it, is
+##   native function '<name>' (<module>) takes or returns a native 'long
+##   double', which is not supported for MSIL; the helper archive
+##   clang_rt.builtins forwards the 'long double' functions that have a
+##   'double' counterpart
+## with '>>> referenced by' lines, and it is never bound: through CIL objects,
+## an LTO image and --lto-emit-asm (the bitcode file is the referencing file).
 ## The list also names nexttoward and nexttowardf (a long double parameter)
 ## and wcstold, and a reference that only takes the address of a listed
 ## function (expl kept in a global) is reported too, naming the global. A
@@ -27,6 +34,11 @@
 ## the IR signature says (double here), on x86_64 and aarch64 Linux alike
 ## (an EM_AARCH64 shared object for the aarch64 triple); sqrtf64 and
 ## sqrtf32x (_Float64 and _Float32x are double) bind as usual.
+## Archives resolve before native libraries (5.14.2): a stand-in for the
+## helper archive's forwarder member (a hidden sqrtl that calls sqrt) defines
+## sqrtl whatever the order of the archive and libm.so.6, and only sqrt binds
+## natively; expl, which the archive does not define, stays an error with the
+## archive on the command line.
 ## On windows-msvc long double is double, and the same call binds; an
 ## explicit msil-import-module import is exempt (5.10.7: unchecked).
 
@@ -76,7 +88,8 @@
 
 ## Native long double functions: sqrtl from libm.so.6 and strtold from
 ## libc.so.6 on x86_64 Linux, sqrtl from an import library on x86_64
-## windows-gnu, are link errors.
+## windows-gnu, are link errors through --lto-emit-asm, an LTO image and CIL
+## objects.
 # RUN: yaml2obj --docnum=1 ld.yaml -o ldm.o
 # RUN: ld.lld -shared -soname libm.so.6 ldm.o -o libm.so.6
 # RUN: yaml2obj --docnum=2 ld.yaml -o ldc.o
@@ -87,21 +100,40 @@
 # RUN: llvm-as ld-gnu.ll -o ld-gnu.o
 # RUN: llvm-as ld-msvc.ll -o ld-msvc.o
 # RUN: llvm-as ld-explicit.ll -o ld-explicit.o
+# RUN: llc -filetype=obj ld-sqrtl.ll -o ld-sqrtl-cil.o
+# RUN: llc -filetype=obj ld-strtold.ll -o ld-strtold-cil.o
+# RUN: llc -filetype=obj ld-gnu.ll -o ld-gnu-cil.o
+# RUN: llc -filetype=obj ld-msvc.ll -o ld-msvc-cil.o
+# RUN: llc -filetype=obj ld-explicit.ll -o ld-explicit-cil.o
 # RUN: not msil-ld --lto-emit-asm --lto-O0 ld-sqrtl.o libc.so.6 libm.so.6 -o x.il 2>&1 \
-# RUN:   | %{err} --check-prefix=LD-SQRTL --implicit-check-not=error:
+# RUN:   | %{err} --check-prefix=LD-SQRTL -DOBJ=ld-sqrtl.o --implicit-check-not=error:
+# RUN: not msil-ld ld-sqrtl.o libc.so.6 libm.so.6 -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-SQRTL -DOBJ=ld-sqrtl.o --implicit-check-not=error:
+# RUN: not msil-ld ld-sqrtl-cil.o libc.so.6 libm.so.6 -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-SQRTL -DOBJ=ld-sqrtl-cil.o --implicit-check-not=error:
 # RUN: not msil-ld --lto-emit-asm --lto-O0 ld-strtold.o libc.so.6 libm.so.6 -o x.il 2>&1 \
-# RUN:   | %{err} --check-prefix=LD-STRTOLD --implicit-check-not=error:
+# RUN:   | %{err} --check-prefix=LD-STRTOLD -DOBJ=ld-strtold.o --implicit-check-not=error:
+# RUN: not msil-ld ld-strtold.o libc.so.6 libm.so.6 -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-STRTOLD -DOBJ=ld-strtold.o --implicit-check-not=error:
+# RUN: not msil-ld ld-strtold-cil.o libc.so.6 libm.so.6 -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-STRTOLD -DOBJ=ld-strtold-cil.o --implicit-check-not=error:
 # RUN: not msil-ld --lto-emit-asm --lto-O0 ld-gnu.o ldmath.lib -o x.il 2>&1 \
-# RUN:   | %{err} --check-prefix=LD-GNU --implicit-check-not=error:
-# LD-SQRTL:        {{^}}msil-ld: error: native function 'sqrtl' (libm.so.6) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
-# LD-SQRTL-NEXT:   {{^}}>>> referenced by ld-sqrtl.o:(main){{$}}
-# LD-STRTOLD:      {{^}}msil-ld: error: native function 'strtold' (libc.so.6) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
-# LD-STRTOLD-NEXT: {{^}}>>> referenced by ld-strtold.o:(main){{$}}
-# LD-GNU:          {{^}}msil-ld: error: native function 'sqrtl' (ldmath.dll) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
-# LD-GNU-NEXT:     {{^}}>>> referenced by ld-gnu.o:(main){{$}}
+# RUN:   | %{err} --check-prefix=LD-GNU -DOBJ=ld-gnu.o --implicit-check-not=error:
+# RUN: not msil-ld ld-gnu.o ldmath.lib -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-GNU -DOBJ=ld-gnu.o --implicit-check-not=error:
+# RUN: not msil-ld ld-gnu-cil.o ldmath.lib -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-GNU -DOBJ=ld-gnu-cil.o --implicit-check-not=error:
+# LD-SQRTL:        {{^}}msil-ld: error: native function 'sqrtl' (libm.so.6) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
+# LD-SQRTL-NEXT:   {{^}}>>> referenced by [[OBJ]]:(main){{$}}
+# LD-STRTOLD:      {{^}}msil-ld: error: native function 'strtold' (libc.so.6) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
+# LD-STRTOLD-NEXT: {{^}}>>> referenced by [[OBJ]]:(main){{$}}
+# LD-GNU:          {{^}}msil-ld: error: native function 'sqrtl' (ldmath.dll) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
+# LD-GNU-NEXT:     {{^}}>>> referenced by [[OBJ]]:(main){{$}}
 
 ## windows-msvc binds sqrtl (long double is double there), and an explicit
-## import of sqrtl binds on Linux although libm.so.6 is on the command line.
+## import of sqrtl binds on Linux although libm.so.6 is on the command line:
+## --lto-emit-asm text, and the map files' imports of an LTO image and of
+## CIL objects.
 # RUN: msil-ld --lto-emit-asm --lto-O0 ld-msvc.o ldmath.lib -o ld-msvc.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=LD-MSVC --input-file=ld-msvc.il
 # LD-MSVC-DAG: call float64 'sqrtl'(float64)
@@ -109,10 +141,26 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 ld-explicit.o libc.so.6 libm.so.6 -o ld-explicit.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=LD-EXPLICIT --input-file=ld-explicit.il
 # LD-EXPLICIT: {{^}}.method assembly hidebysig static pinvokeimpl("libm.so.6" nomangle cdecl) float64 'sqrtl'(float64) cil managed preservesig {}{{$}}
+# RUN: msil-ld ld-msvc.o ldmath.lib -o ld-msvc.exe -Map=ld-msvc.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LD-BIND -DMOD=ldmath.dll --input-file=ld-msvc.map
+# RUN: msil-ld ld-msvc-cil.o ldmath.lib -o ld-msvc-cil.exe -Map=ld-msvc-cil.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LD-BIND -DMOD=ldmath.dll --input-file=ld-msvc-cil.map
+# RUN: msil-ld ld-explicit.o libc.so.6 libm.so.6 -o ld-explicit.exe -Map=ld-explicit.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LD-BIND -DMOD=libm.so.6 --input-file=ld-explicit.map
+# RUN: msil-ld ld-explicit-cil.o libc.so.6 libm.so.6 -o ld-explicit-cil.exe -Map=ld-explicit-cil.map 2>&1 \
+# RUN:   | count 0
+# RUN: FileCheck %s --check-prefix=LD-BIND -DMOD=libm.so.6 --input-file=ld-explicit-cil.map
+# LD-BIND:      {{^}}Imports:{{$}}
+# LD-BIND-NEXT: {{^}}  Token Module!Entry Symbol{{$}}
+# LD-BIND-NEXT: {{^}}  0x{{[0-9A-F]+}} [[MOD]]!sqrtl sqrtl{{$}}
+# LD-BIND-NOT:  {{.}}
 
 ## More long double functions, the f64x and f128 names included, on x86_64
 ## and aarch64 Linux: each call is an error (8 in all), the address-only
-## reference to expl too, and the _Float64 and _Float32x controls bind.
+## reference to expl too, and the _Float64 and _Float32x controls bind;
+## --lto-emit-asm on both, an LTO image and CIL objects on x86_64 (the
+## image at --lto-O0, where the optimizer keeps the constant nexttoward
+## calls).
 # RUN: mkdir -p x64 a64
 # RUN: yaml2obj -D MACHINE=EM_X86_64 ldx.yaml -o x64/ldx.o
 # RUN: ld.lld -shared -soname libldx.so.1 x64/ldx.o -o x64/libldx.so.1
@@ -126,39 +174,57 @@
 # RUN: llvm-as ldaddr-a64.ll -o ldaddr-a64.o
 # RUN: llvm-as ldctl-x64.ll -o ldctl-x64.o
 # RUN: llvm-as ldctl-a64.ll -o ldctl-a64.o
+# RUN: llc -filetype=obj ldx-x64.ll -o ldx-x64-cil.o
+# RUN: llc -filetype=obj ldaddr-x64.ll -o ldaddr-x64-cil.o
 # RUN: not msil-ld --error-limit=0 --lto-emit-asm --lto-O0 ldx-x64.o x64/libldx.so.1 -o - > ldx-x64.txt 2>&1
 # RUN: not msil-ld --error-limit=0 --lto-emit-asm --lto-O0 ldx-a64.o a64/libldx.so.1 -o - > ldx-a64.txt 2>&1
+# RUN: not msil-ld --error-limit=0 --lto-O0 ldx-x64.o x64/libldx.so.1 -o x.exe > ldx-x64-image.txt 2>&1
+# RUN: not msil-ld --error-limit=0 ldx-x64-cil.o x64/libldx.so.1 -o x.exe > ldx-x64-cil.txt 2>&1
 # RUN: %{err} --check-prefix=LDX --implicit-check-not=pinvokeimpl --input-file=ldx-x64.txt
 # RUN: %{err} --check-prefix=LDX --implicit-check-not=pinvokeimpl --input-file=ldx-a64.txt
+# RUN: %{err} --check-prefix=LDX --input-file=ldx-x64-image.txt
+# RUN: %{err} --check-prefix=LDX --input-file=ldx-x64-cil.txt
 # RUN: FileCheck %s --check-prefix=LDX-ERRS --implicit-check-not=error: --implicit-check-not=pinvokeimpl \
 # RUN:   --input-file=ldx-x64.txt
 # RUN: FileCheck %s --check-prefix=LDX-ERRS --implicit-check-not=error: --implicit-check-not=pinvokeimpl \
 # RUN:   --input-file=ldx-a64.txt
+# RUN: FileCheck %s --check-prefix=LDX-ERRS --implicit-check-not=error: --input-file=ldx-x64-image.txt
+# RUN: FileCheck %s --check-prefix=LDX-ERRS --implicit-check-not=error: --input-file=ldx-x64-cil.txt
 # RUN: FileCheck %s --check-prefix=LDX-REFS -DOBJ=ldx-x64.o --input-file=ldx-x64.txt
 # RUN: FileCheck %s --check-prefix=LDX-ANYREF --implicit-check-not=">>>" --input-file=ldx-x64.txt
 # RUN: FileCheck %s --check-prefix=LDX-REFS -DOBJ=ldx-a64.o --input-file=ldx-a64.txt
 # RUN: FileCheck %s --check-prefix=LDX-ANYREF --implicit-check-not=">>>" --input-file=ldx-a64.txt
+# RUN: FileCheck %s --check-prefix=LDX-REFS -DOBJ=ldx-x64.o --input-file=ldx-x64-image.txt
+# RUN: FileCheck %s --check-prefix=LDX-ANYREF --implicit-check-not=">>>" --input-file=ldx-x64-image.txt
+# RUN: FileCheck %s --check-prefix=LDX-REFS -DOBJ=ldx-x64-cil.o --input-file=ldx-x64-cil.txt
+# RUN: FileCheck %s --check-prefix=LDX-ANYREF --implicit-check-not=">>>" --input-file=ldx-x64-cil.txt
 # RUN: FileCheck %s --check-prefixes=ERR-NONE,PINV-NONE --input-file=ldx-x64.txt
 # RUN: FileCheck %s --check-prefixes=ERR-NONE,PINV-NONE --input-file=ldx-a64.txt
-# LDX-DAG: {{^}}msil-ld: error: native function 'nexttoward' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
-# LDX-DAG: {{^}}msil-ld: error: native function 'nexttowardf' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
-# LDX-DAG: {{^}}msil-ld: error: native function 'wcstold' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
-# LDX-DAG: {{^}}msil-ld: error: native function 'sqrtf64x' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
-# LDX-DAG: {{^}}msil-ld: error: native function 'lgammaf64x_r' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
-# LDX-DAG: {{^}}msil-ld: error: native function 'strtof64x_l' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
-# LDX-DAG: {{^}}msil-ld: error: native function 'f32addf64x' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
-# LDX-DAG: {{^}}msil-ld: error: native function 'sqrtf128' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# RUN: FileCheck %s --check-prefix=ERR-NONE --input-file=ldx-x64-image.txt
+# RUN: FileCheck %s --check-prefix=ERR-NONE --input-file=ldx-x64-cil.txt
+# LDX-DAG: {{^}}msil-ld: error: native function 'nexttoward' (libldx.so.1) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'nexttowardf' (libldx.so.1) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'wcstold' (libldx.so.1) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'sqrtf64x' (libldx.so.1) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'lgammaf64x_r' (libldx.so.1) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'strtof64x_l' (libldx.so.1) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'f32addf64x' (libldx.so.1) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
+# LDX-DAG: {{^}}msil-ld: error: native function 'sqrtf128' (libldx.so.1) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
 ## Exactly these eight errors, each with one '>>> referenced by <file>:(main)'.
 # LDX-ERRS-COUNT-8:   {{^}}msil-ld: error: {{.+}}
 # LDX-REFS-COUNT-8:   {{^}}>>> referenced by [[OBJ]]:(main){{$}}
 # LDX-ANYREF-COUNT-8: {{^}}>>>
-## No P/Invoke anywhere in the file (ERR-NONE is above).
+## No P/Invoke anywhere in the text (ERR-NONE is above).
 # PINV-NONE-NOT: pinvokeimpl
 # RUN: not msil-ld --lto-emit-asm --lto-O0 ldaddr-x64.o x64/libldx.so.1 -o - 2>&1 \
 # RUN:   | %{err} --check-prefix=LD-ADDR -DOBJ=ldaddr-x64.o --implicit-check-not=error: --implicit-check-not=pinvokeimpl
 # RUN: not msil-ld --lto-emit-asm --lto-O0 ldaddr-a64.o a64/libldx.so.1 -o - 2>&1 \
 # RUN:   | %{err} --check-prefix=LD-ADDR -DOBJ=ldaddr-a64.o --implicit-check-not=error: --implicit-check-not=pinvokeimpl
-# LD-ADDR:      {{^}}msil-ld: error: native function 'expl' (libldx.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
+# RUN: not msil-ld ldaddr-x64.o x64/libldx.so.1 -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-ADDR -DOBJ=ldaddr-x64.o --implicit-check-not=error:
+# RUN: not msil-ld ldaddr-x64-cil.o x64/libldx.so.1 -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-ADDR -DOBJ=ldaddr-x64-cil.o --implicit-check-not=error:
+# LD-ADDR:      {{^}}msil-ld: error: native function 'expl' (libldx.so.1) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart{{$}}
 # LD-ADDR-NEXT: {{^}}>>> referenced by [[OBJ]]:(keep_expl){{$}}
 # RUN: msil-ld --lto-emit-asm --lto-O0 ldctl-x64.o x64/libldx.so.1 -o ldctl-x64.il 2>&1 | count 0
 # RUN: msil-ld --lto-emit-asm --lto-O0 ldctl-a64.o a64/libldx.so.1 -o ldctl-a64.il 2>&1 | count 0
@@ -171,6 +237,33 @@
 ## Exactly those two P/Invokes.
 # LDX-CTL2-COUNT-2: pinvokeimpl
 # LDX-CTL2-NOT:     pinvokeimpl
+
+## The helper archive's forwarder wins over libm.so.6 in either order, through
+## CIL objects and an LTO image: sqrtl is the member's method, and the only
+## import is sqrt. expl stays an error with the archive on the command line.
+# RUN: llc -filetype=obj fwd.ll -o fwd.o
+# RUN: mkdir -p rt
+# RUN: llvm-ar rcs rt/libclang_rt.builtins.a fwd.o
+# RUN: msil-ld ld-sqrtl-cil.o rt/libclang_rt.builtins.a libc.so.6 libm.so.6 -o fwd1.exe -Map=fwd1.map 2>&1 \
+# RUN:   | count 0
+# RUN: msil-ld ld-sqrtl-cil.o libc.so.6 libm.so.6 rt/libclang_rt.builtins.a -o fwd2.exe -Map=fwd2.map 2>&1 \
+# RUN:   | count 0
+# RUN: msil-ld ld-sqrtl.o rt/libclang_rt.builtins.a libc.so.6 libm.so.6 -o fwd3.exe -Map=fwd3.map 2>&1 | count 0
+# RUN: msil-ld ld-sqrtl.o libc.so.6 libm.so.6 rt/libclang_rt.builtins.a -o fwd4.exe -Map=fwd4.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LD-FWD --input-file=fwd1.map
+# RUN: FileCheck %s --check-prefix=LD-FWD --input-file=fwd2.map
+# RUN: FileCheck %s --check-prefix=LD-FWD --input-file=fwd3.map
+# RUN: FileCheck %s --check-prefix=LD-FWD --input-file=fwd4.map
+# LD-FWD:      {{^}}  DefinedFunction {{[A-Za-z]+}} rt/libclang_rt.builtins.a(fwd.o) sqrtl{{$}}
+# LD-FWD:      {{^}}  0x{{[0-9A-F]+}} <Module> rt/libclang_rt.builtins.a(fwd.o) sqrtl{{$}}
+# LD-FWD:      {{^}}Imports:{{$}}
+# LD-FWD-NEXT: {{^}}  Token Module!Entry Symbol{{$}}
+# LD-FWD-NEXT: {{^}}  0x{{[0-9A-F]+}} libm.so.6!sqrt sqrt{{$}}
+# LD-FWD-NOT:  {{.}}
+# RUN: not msil-ld ldaddr-x64-cil.o rt/libclang_rt.builtins.a x64/libldx.so.1 -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-ADDR -DOBJ=ldaddr-x64-cil.o --implicit-check-not=error:
+# RUN: not msil-ld ldaddr-x64.o rt/libclang_rt.builtins.a x64/libldx.so.1 -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=LD-ADDR -DOBJ=ldaddr-x64.o --implicit-check-not=error:
 
 #--- agg.def
 LIBRARY agg.dll
@@ -356,6 +449,19 @@ define i32 @main() {
 declare double @sqrtl(double) #0
 
 attributes #0 = { "msil-import-module"="libm.so.6" }
+
+#--- fwd.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; A stand-in for the helper archive's sqrtl forwarder: hidden, as
+;; -fvisibility=hidden compiles the archive, and it calls sqrt.
+declare double @sqrt(double)
+
+define hidden double @sqrtl(double %x) {
+  %r = call double @sqrt(double %x)
+  ret double %r
+}
 
 #--- ldx.yaml
 ## The functions of libldx.so.1 (ld.lld links it), for x86_64 and aarch64.

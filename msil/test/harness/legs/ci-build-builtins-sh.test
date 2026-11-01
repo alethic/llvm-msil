@@ -1,0 +1,47 @@
+# The builtins row of msil/utils/ci/build.sh (plan 5.14.3 A10, M25.e (4)), the
+# build step of the Linux CI job: after a passing ninja step the script runs
+# 'msil/utils/build/build-builtins.py --build-dir <dir>' as a row 'builtins'
+# of its own, whose failure fails the script (the exit criterion 'build.ps1,
+# build.sh and det-manifest.py build them'). build.sh finds build-targets.txt,
+# build-builtins.py and build-jitall.py through $MSIL_REPO, which ci-common.sh
+# derives from its own location, and ninja on PATH, so Inputs/ci-build.py
+# runs a copy of it in a scratch repository whose build-builtins.py, and a
+# ninja first on PATH, are stand-ins that exit with the status a case gives
+# them and record their arguments in <case>/calls.log (its build-jitall.py
+# exits 0): inside the WSL distribution of %{legs_wsl_distro} on Windows,
+# natively on Linux. Each case checks the rows of MSIL_CI_RESULTS
+# (ci-common.sh's ci_result) and the exit status:
+# (1) ninja and build-builtins.py pass: the ninja, builtins and jitall rows
+#     are PASS, build-builtins.py got '--build-dir <the case's build
+#     directory>', and the script exits 0;
+# (2) build-builtins.py exits 1: the row is 'build<TAB>builtins<TAB>FAIL<TAB>
+#     <seconds><TAB>build-builtins.py (exit 1)', build-builtins.py got the
+#     same argument, the jitall row still follows, and the script exits 1
+#     (ci_summary returns 1 after a FAIL row);
+# (3) ninja fails: no builtins row and no build-builtins.py run, and the
+#     script exits 1. (1) shows that the two patterns (3) lacks match a
+#     builtins row and a build-builtins.py run.
+# ci-build-builtins.test checks build.ps1 the same way.
+# REQUIRES: msil-ci-bash
+
+# DEFINE: %{builtins_row} = "^build\tbuiltins\t"
+# DEFINE: %{builtins_call} = "^build-builtins\.py "
+
+# RUN: rm -rf %t && mkdir -p %t
+
+# (1)
+# RUN: %{harness_check} exits 0 %python %S/Inputs/ci-build.py sh --distro %{legs_wsl_distro} %t/pass --ninja 0 --builtins 0 MSIL_CI_RESULTS=%t/pass/rows.tsv -- %t/pass/build > %t/pass.log
+# RUN: %{harness_check} contains %t/pass/rows.tsv "^build\tninja\tPASS\t\d+\tbuild-targets\.txt: \S.* \(exit 0\)$" "^build\tbuiltins\tPASS\t\d+\tbuild-builtins\.py \(exit 0\)$" "^build\tjitall\tPASS\t\d+\tbuild-jitall\.py \(exit 0\)$" %{builtins_row}
+# RUN: %{harness_check} lacks %t/pass/rows.tsv "\tFAIL\t"
+# RUN: %{harness_check} contains %t/pass/calls.log "^build-builtins\.py --build-dir .+/pass/build$" %{builtins_call}
+
+# (2)
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-build.py sh --distro %{legs_wsl_distro} %t/builtins-fail --ninja 0 --builtins 1 MSIL_CI_RESULTS=%t/builtins-fail/rows.tsv -- %t/builtins-fail/build > %t/builtins-fail.log
+# RUN: %{harness_check} contains %t/builtins-fail/rows.tsv "^build\tninja\tPASS\t\d+\tbuild-targets\.txt: \S.* \(exit 0\)$" "^build\tbuiltins\tFAIL\t\d+\tbuild-builtins\.py \(exit 1\)$" "^build\tjitall\tPASS\t\d+\tbuild-jitall\.py \(exit 0\)$"
+# RUN: %{harness_check} contains %t/builtins-fail/calls.log "^build-builtins\.py --build-dir .+/builtins-fail/build$"
+
+# (3)
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-build.py sh --distro %{legs_wsl_distro} %t/ninja-fail --ninja 1 --builtins 0 MSIL_CI_RESULTS=%t/ninja-fail/rows.tsv -- %t/ninja-fail/build > %t/ninja-fail.log
+# RUN: %{harness_check} contains %t/ninja-fail/rows.tsv "^build\tninja\tFAIL\t\d+\tbuild-targets\.txt: \S.* \(exit 1\)$"
+# RUN: %{harness_check} lacks %t/ninja-fail/rows.tsv %{builtins_row}
+# RUN: %{harness_check} lacks %t/ninja-fail/calls.log %{builtins_call}

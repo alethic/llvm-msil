@@ -12,15 +12,26 @@
 ; (stind.i2) of a bfloat compile with no conversion and no runtime helper at
 ; -O2 and at -O0. Until M24 the parameter was a float32, so the -O0
 ; pass-through asked for the compiler-rt pair __truncsfbf2 and __extendbfsf2,
-; which MSIL cannot call yet.
+; which whole-program text cannot call.
 ; - The extension to float32 is inline: the int32 shifted left by 16 is
 ;   stored to the frame slot and read back as a float32 (ldind.r4), then
 ;   conv.r8 for float64; __extendbfsf2 is never named.
 ; - The rounding conversions from float32 and float64 are still the
-;   compiler-rt helpers __truncsfbf2 and __truncdfbf2 (helpers.ll): in
-;   whole-program text each is Phase 1's "runtime helper '<name>' is not
-;   available for MSIL yet (phase 3)", and in an object each is a call of an
-;   UNDEFINED FUNCTION symbol, which the link has to resolve.
+;   compiler-rt helpers __truncsfbf2 and __truncdfbf2 (helpers.ll), which
+;   the helper archive clang_rt.builtins defines (5.14.3, M25): in
+;   whole-program text each is M25's "runtime helper '<name>' needs the
+;   helper archive clang_rt.builtins, which only msil-ld links", and in an
+;   object each is a call of an UNDEFINED FUNCTION symbol, which msil-ld
+;   resolves from the archive. The object IL of both x86_64 triples is
+;   pinned instruction by instruction at -O2 and at -O0 (plan section 12,
+;   the M25.c row of 2026-10-31 on bf16's quiet bit):
+;   - From float32, the helper call is followed by setting bf16's quiet bit
+;     (0x0040) when the operand is a NaN: the call's result is ORed with
+;     (x != x) << 6, as 'ldarg.0; ldarg.0; ceq; ldc.i4.0; ceq; ldc.i4.6;
+;     shl', which comes after the call at -O2 and before it at -O0. This
+;     matches native x86-64 and AArch64 code, which quiets every NaN;
+;     compiler-rt's helper alone keeps 0x7fa00000 as 0x7fa0.
+;   - From float64, it is the bare helper call.
 ; - A vector of bfloat passes as the vector of half of the same length does:
 ;   each lane is its bits in an int32, a <1 x bfloat> is one int32, and a
 ;   longer vector result goes through the hidden result pointer. vec_ident
@@ -90,12 +101,25 @@
 ; RUN:   | %{diag} --check-prefix=HELPER
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/helpers.ll \
 ; RUN:   -o %t/helpers.lnx.o 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -filetype=obj -verify-machineinstrs < %t/helpers.ll \
+; RUN:   -o %t/helpers.lnx.o0.o 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -filetype=obj -verify-machineinstrs < %t/helpers.ll \
+; RUN:   -o %t/helpers.win.o 2>&1 | count 0
 ; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -filetype=obj -verify-machineinstrs < %t/helpers.ll \
 ; RUN:   -o %t/helpers.win.o0.o 2>&1 | count 0
 ; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/helpers.lnx.o | FileCheck %s --check-prefix=HELPER-LINK %}
 ; RUN: %if llvm-cil-dump %{ llvm-cil-dump --link-info %t/helpers.win.o0.o | FileCheck %s --check-prefix=HELPER-LINK %}
+; The object IL at -O2 (HELPER-CIL-O2) and at -O0 (HELPER-CIL-O0); from_f64
+; is the same at both levels (HELPER-CIL).
+; DEFINE: %{hcil} = FileCheck %s --implicit-check-not=__extendbfsf2
 ; RUN: %if llvm-cil-dump %{ llvm-cil-dump --canonical --order=decl %t/helpers.lnx.o \
-; RUN:   | FileCheck %s --check-prefix=HELPER-CIL --implicit-check-not=__extendbfsf2 %}
+; RUN:   | %{hcil} --check-prefixes=HELPER-CIL,HELPER-CIL-O2 %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --canonical --order=decl %t/helpers.win.o \
+; RUN:   | %{hcil} --check-prefixes=HELPER-CIL,HELPER-CIL-O2 %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --canonical --order=decl %t/helpers.lnx.o0.o \
+; RUN:   | %{hcil} --check-prefixes=HELPER-CIL,HELPER-CIL-O0 %}
+; RUN: %if llvm-cil-dump %{ llvm-cil-dump --canonical --order=decl %t/helpers.win.o0.o \
+; RUN:   | %{hcil} --check-prefixes=HELPER-CIL,HELPER-CIL-O0 %}
 
 ; Imports.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/import.ll -o /dev/null 2>&1 \
@@ -415,8 +439,8 @@ attributes #0 = { noinline nounwind optnone }
 ;--- helpers.ll
 source_filename = "bf16-helpers.c"
 
-; HELPER: {{^}}error: {{.*}}in function from_f32 bfloat (float): runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function from_f64 bfloat (double): runtime helper '__truncdfbf2' is not available for MSIL yet (phase 3){{$}}
+; HELPER: {{^}}error: {{.*}}in function from_f32 bfloat (float): runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
+; HELPER: {{^}}error: {{.*}}in function from_f64 bfloat (double): runtime helper '__truncdfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 
 ; HELPER-LINK:      {{^}}LinkInfo v1.0 triple={{.*}}
 ; HELPER-LINK-NEXT: {{^}}Symbol 0 FUNCTION GLOBAL DEFAULT 'from_f32' method=0x06000001{{$}}
@@ -427,10 +451,40 @@ source_filename = "bf16-helpers.c"
 ; HELPER-LINK-NEXT: {{^}}Signature 0x06000002 'from_f64' NATIVE_INCOMPATIBLE{{$}}
 ; HELPER-LINK-NOT:  {{.}}
 
-; HELPER-CIL: {{^}}  .method 'from_f32' int32(float32) flags=0x0016 impl=0x0000{{$}}
-; HELPER-CIL: {{^ +}}L{{[0-9]+}}: call int32(float32) [msil.extern]<msil>Symbols::'__truncsfbf2'{{$}}
-; HELPER-CIL: {{^}}  .method 'from_f64' int32(float64) flags=0x0016 impl=0x0000{{$}}
-; HELPER-CIL: {{^ +}}L{{[0-9]+}}: call int32(float64) [msil.extern]<msil>Symbols::'__truncdfbf2'{{$}}
+; from_f32: the helper call, then the quiet bit, (x != x) << 6, ORed into
+; its result; at -O0 the bit is computed before the call.
+; HELPER-CIL-O2:      {{^}}  .method 'from_f32' int32(float32) flags=0x0016 impl=0x0000{{$}}
+; HELPER-CIL-O2-NEXT: {{^}}    .maxstack 3{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: ldarg.0{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: call int32(float32) [msil.extern]<msil>Symbols::'__truncsfbf2'{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: ldarg.0{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: ldarg.0{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: ceq{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: ldc.i4.0{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: ceq{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: ldc.i4.6{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: shl{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: or{{$}}
+; HELPER-CIL-O2-NEXT: {{^ +}}L{{[0-9]+}}: ret{{$}}
+; HELPER-CIL-O0:      {{^}}  .method 'from_f32' int32(float32) flags=0x0016 impl=0x0000{{$}}
+; HELPER-CIL-O0-NEXT: {{^}}    .maxstack 2{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: ldarg.0{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: ldarg.0{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: ceq{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: ldc.i4.0{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: ceq{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: ldc.i4.6{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: shl{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: ldarg.0{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: call int32(float32) [msil.extern]<msil>Symbols::'__truncsfbf2'{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: or{{$}}
+; HELPER-CIL-O0-NEXT: {{^ +}}L{{[0-9]+}}: ret{{$}}
+; from_f64: the bare helper call, with no quiet bit.
+; HELPER-CIL:         {{^}}  .method 'from_f64' int32(float64) flags=0x0016 impl=0x0000{{$}}
+; HELPER-CIL-NEXT:    {{^}}    .maxstack 1{{$}}
+; HELPER-CIL-NEXT:    {{^ +}}L{{[0-9]+}}: ldarg.0{{$}}
+; HELPER-CIL-NEXT:    {{^ +}}L{{[0-9]+}}: call int32(float64) [msil.extern]<msil>Symbols::'__truncdfbf2'{{$}}
+; HELPER-CIL-NEXT:    {{^ +}}L{{[0-9]+}}: ret{{$}}
 
 define bfloat @from_f32(float %x) {
   %r = fptrunc float %x to bfloat

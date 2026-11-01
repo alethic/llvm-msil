@@ -21,7 +21,13 @@
 #     runs the program with them beside it (msil-run.py --dep-dir), so its
 #     transcript holds both libraries' values;
 # (2) --check passes against what it wrote;
-# (3) --check of a wrong two.expected fails with status 1 and the diff.
+# (3) --check of a wrong two.expected fails with status 1 and the diff;
+# (4) a path on the command line that does not exist, a .test file or a
+#     directory, is a usage error (plan section 12, 'M25.e extended'):
+#     'update-expected.py: error: <path>: no such file or directory' after
+#     argparse's usage block, status 2, before anything is built or written,
+#     so two.test, named first, gets no two.expected; no-composite.test
+#     (which exists), named alone, is still skipped with status 0.
 # The stand-in's native program is a .NET Framework executable for a Windows
 # triple and a shell script for a Linux one, so this runs on a Windows host
 # with the .NET Framework and on a Linux host.
@@ -67,3 +73,18 @@
 # RUN: %{harness_check} write %t.d/two.expected "[exit 99]"
 # RUN: %{harness_check} exits 1 %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none --check %t.d/two.test > %t.3.log 2>&1
 # RUN: %{harness_check} contains %t.3.log "^MISMATCH: \S+two\.test$" "^--- \S+two\.expected$" "^-\[exit 99\]$" "^\+\[exit 31\]$"
+
+# (4)
+# RUN: rm -f %t.d/two.expected
+# RUN: %{harness_check} exits 2 %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none %t.d/two.test %t.d/no-such.test > %t.4a.log 2>&1
+# RUN: %{harness_check} contains %t.4a.log "^usage: update-expected\.py [\s\S]*^update-expected\.py: error: \S*no-such\.test: no such file or directory$"
+# RUN: %{harness_check} lacks %t.4a.log "^(wrote|ok|skip|FAIL|MISMATCH)\b" "^msil-prog: "
+# RUN: %{harness_check} missing %t.d/two.expected
+# RUN: %{harness_check} exits 2 %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none %t.d/two.test %t.d/no-such-dir > %t.4b.log 2>&1
+# RUN: %{harness_check} contains %t.4b.log "^usage: update-expected\.py [\s\S]*^update-expected\.py: error: \S*no-such-dir: no such file or directory$"
+# RUN: %{harness_check} lacks %t.4b.log "^(wrote|ok|skip|FAIL|MISMATCH)\b" "^msil-prog: "
+# RUN: %{harness_check} missing %t.d/two.expected
+# RUN: %{harness_update_expected} --clang '%{prog_clang}' --ar '%{prog_cc} --as ar' --split-file %{prog_split_file} --rtlib none %t.d/no-composite.test > %t.4c.log 2>&1
+# RUN: %{harness_check} contains %t.4c.log "\Askip \(no %\{msil_c\}/%\{msil_ll\}/%\{msil_prog\} RUN line\): \S+no-composite\.test\n"
+# RUN: %{harness_check} lacks %t.4c.log "error"
+# RUN: %{harness_check} missing %t.d/no-composite.expected

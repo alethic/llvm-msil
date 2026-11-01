@@ -1,0 +1,95 @@
+# __builtin_powi and __builtin_powif match native code on zero, negative, INT_MIN and INT_MAX exponents: through the helper archive's __powidf2 and __powisf2 on Linux triples, through the UCRT's pow and powf on windows-msvc triples.
+# Plan 5.14.3 A4, M25.h; fp-helpers 4.2: LLVM lowers llvm.powi to compiler-
+# rt's __powidf2 and __powisf2 (repeated squaring, then one reciprocal for a
+# negative exponent) on Linux triples, and, as for native MSVC code, to
+# pow(x, (double)n) and powf(x, (float)n) on windows-msvc triples, so the
+# two triples' transcripts differ where repeated squaring rounds differently
+# from pow, and where (float)n is not n (INT_MAX - 1 and INT_MAX become 2^31
+# in float, an even power): powi.linux.expected holds the Linux one (E7h
+# with the native compiler-rt archive, 5.17.3). Each line is one base and the
+# results of every exponent (bit patterns); bases and exponents are volatile
+# objects and the calls sit in noinline functions of their own translation
+# unit, so nothing folds and every call is a real one (an exponent's value
+# never reaches LLVM's constant expansion of powi). The program calls
+# helper-archive members on Linux triples, so it has no -S reference
+# (5.17.13).
+# On Linux triples msil-ld's --lto-emit-asm text refuses the helper calls
+# (A9), so the test does not run there with msil_link_output=il; on
+# windows-msvc triples it calls only the UCRT's pow and powf, and runs.
+# UNSUPPORTED: msil-link-output=il && msil-triple-linux
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/ops.c
+# RUN: %{msil_prog}
+#--- ops.c
+__attribute__((noinline)) double powi_d(double x, int n) { return __builtin_powi(x, n); }
+__attribute__((noinline)) float powi_f(float x, int n) { return __builtin_powif(x, n); }
+#--- main.c
+#include <limits.h>
+#include <stdint.h>
+int puts(const char *);
+double powi_d(double x, int n);
+float powi_f(float x, int n);
+
+static char line[512];
+static int len;
+static void out_s(const char *t) {
+  while (*t)
+    line[len++] = *t++;
+}
+static void out_x(uint64_t v, int digits) {
+  line[len++] = ' ';
+  for (int i = digits - 1; i >= 0; --i)
+    line[len++] = "0123456789abcdef"[(v >> (4 * i)) & 15];
+}
+static void out_nl(void) {
+  line[len] = 0;
+  puts(line);
+  len = 0;
+}
+static uint64_t b64(double d) { uint64_t u; __builtin_memcpy(&u, &d, 8); return u; }
+static uint32_t b32(float f) { uint32_t u; __builtin_memcpy(&u, &f, 4); return u; }
+
+static volatile const int exps[] = {0, 1, -1, 2, -2, 3, -3, 31, -31, 1023, -1075,
+                                    INT_MAX - 1, INT_MAX, INT_MIN + 1, INT_MIN};
+#define NEXP (int)(sizeof exps / sizeof exps[0])
+static volatile double v_zero = 0.0, v_one = 1.0;
+static volatile double dbases[] = {0.0, -0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 1.5,
+                                   3.0, 1e-300, 1.0000001, 0.0 /* inf */, 0.0 /* -inf */,
+                                   0.0 /* NaN */};
+static volatile float fbases[] = {0.0f, -0.0f, 1.0f, -1.0f, 2.0f, -2.0f, 0.5f, -0.5f, 1.5f,
+                                  3.0f, 1e-30f, 1.0001f, 0.0f /* inf */, 0.0f /* -inf */,
+                                  0.0f /* NaN */};
+#define NBASE (int)(sizeof dbases / sizeof dbases[0])
+
+int main(void) {
+  double inf = v_one / v_zero;
+  dbases[NBASE - 3] = inf;
+  dbases[NBASE - 2] = -inf;
+  dbases[NBASE - 1] = inf - inf;
+  fbases[NBASE - 3] = (float)inf;
+  fbases[NBASE - 2] = (float)-inf;
+  fbases[NBASE - 1] = (float)(inf - inf);
+  out_s("exponents:");
+  for (int e = 0; e < NEXP; ++e)
+    out_x((uint32_t)exps[e], 8);
+  out_nl();
+  for (int b = 0; b < NBASE; ++b) {
+    double x = dbases[b];
+    out_s("powi");
+    out_x(b64(x), 16);
+    out_s(":");
+    for (int e = 0; e < NEXP; ++e)
+      out_x(b64(powi_d(x, exps[e])), 16);
+    out_nl();
+  }
+  for (int b = 0; b < NBASE; ++b) {
+    float x = fbases[b];
+    out_s("powif");
+    out_x(b32(x), 8);
+    out_s(":");
+    for (int e = 0; e < NEXP; ++e)
+      out_x(b32(powi_f(x, exps[e])), 8);
+    out_nl();
+  }
+  return 0;
+}

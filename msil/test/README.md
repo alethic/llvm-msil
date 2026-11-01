@@ -30,6 +30,14 @@ composite runs its steps after the build in one Python process
 (`msil/utils/msil-steps.py`); the local runner runs the programs on .NET 10
 by default; and the standard milestone gate of Phase 3 runs the `-Quick`
 legs `net-core`, `p3-full`, `harness` and `wsl-p3`.
+Since M25 programs that call compiler-runtime helpers (`_Float16` and
+`__bf16` conversions, C `_Complex` multiplication and division,
+`__builtin_powi`, and on the Linux triple the C library's `long double`
+functions) link the triple's helper archive `clang_rt.builtins`, which
+`msil/utils/build/build-builtins.py` builds and clang passes to `msil-ld`
+(`M3/03-helpers/`), and E7h links native compiler-rt's builtins
+(`--param msil_linux_rtlib`), so that the hosted oracle gets
+compiler-rt's results too.
 It is an LLVM external
 project (`-DLLVM_EXTERNAL_PROJECTS=msil -DLLVM_EXTERNAL_MSIL_SOURCE_DIR=<repo>/msil`,
 set by `msil/utils/build/msil-configure.ps1` and `msil/cmake/caches/MSIL.cmake`),
@@ -117,12 +125,16 @@ bind) and leaves through its exit path; for the Linux triple under WSL it is
 the *E7h oracle*: clang `--target=x86_64-unknown-linux-gnu
 --sysroot=<msil_glibc_sysroot>` compiles (PIE code, the driver's default),
 and `clang -fuse-ld=lld -nostartfiles -nodefaultlibs` links glibc's own
-`crt1.o` and `crti.o`, the program, `-lm -lc` (the sysroot's `libc.so`
-script) and `crtn.o` with `-Wl,-rpath,$ORIGIN`, without crtbegin or libgcc,
-so `atexit` handlers and `.fini_array` run as natively; it runs under WSL
-as E7 does. On a Linux host (the Linux CI job, `msil_glibc_sysroot=/`) the
-hosted oracle is the host's own link. E7 stays the oracle of `M1/`, `M2/`
-and c-testsuite's libc-free tests.
+`crt1.o` and `crti.o`, the program, `-lm`, since M25 native compiler-rt's
+builtins (`--param msil_linux_rtlib`, "Parameters and features"), `-lc` (the
+sysroot's `libc.so` script) and `crtn.o` with `-Wl,-rpath,$ORIGIN`, without
+crtbegin or libgcc, so `atexit` handlers and `.fini_array` run as natively
+and a program that calls a runtime helper gets compiler-rt's results, as its
+MSIL build gets them from the helper archive; it runs under WSL as E7 does.
+On a Linux host (the Linux CI job, `msil_glibc_sysroot=/`) the hosted oracle
+is the host's own link, with the same archive after the driver's flags. E7
+stays the oracle of `M1/`, `M2/` and c-testsuite's libc-free tests, and
+keeps `libgcc_s.so.1`.
 `llvm/docs/MSIL/GettingStarted.md` section 7 has the details and the host
 setup.
 
@@ -515,9 +527,18 @@ the UCRT's `corecrt.h` for a Windows one. On a Linux triple whose native
 oracle is E7 it also needs `msil-linux-hosted-oracle` (E7h's files in the
 glibc sysroot, and `ld.lld`) under `msil_native_oracle=required`; under a
 native oracle that is not required it only loses the native oracle, with a
-note. `--param msil_require_hosted=1` (every lit leg since M24) makes a
-missing header set or hosted oracle a configuration error instead of
-UNSUPPORTED. `M3/08-atomics/barrier-spin.test` also needs `msil-csc`.
+note. Since M25, on a Linux triple whose native oracle runs (E7h, or a Linux
+host's link), it also needs native compiler-rt's builtins (feature
+`msil-linux-rtlib`, `--param msil_linux_rtlib`): without them a hosted
+directory is a configuration error under `msil_native_oracle=required`,
+whatever `msil_require_hosted` says, and otherwise loses only its native
+oracle, with a note naming the files lit tried. `--param
+msil_require_hosted=1` (every lit leg since M24) makes a missing header set
+or hosted oracle a configuration error instead of UNSUPPORTED. The MSIL
+triple's helper archive is no feature: lit notes where it is, or that it is
+missing, and a test that calls a helper then fails to link with `msil-ld`'s
+line (`M3/03-helpers/archive-contents.test` fails too).
+`M3/08-atomics/barrier-spin.test` also needs `msil-csc`.
 
 ## Directories
 
@@ -544,9 +565,10 @@ failing directory names the earliest broken capability:
 `%{msil_ll}`; the three trap tests pin their levels) and one `.test` that
 compiles a C program with `-g`. `02-fp/strict-i128.c` (M24) is a Phase 3
 feature test outside `M3/`: `M2/08-semantics/matrix.txt` lists it on a
-`#! p3-tests:` line, because its Linux oracle needs E7's `libgcc_s.so.1`
-(the compiler-rt helpers that a native build calls) until M25, and the
-legs that run Phase 3's tests take it from there ("Running the tests").
+`#! p3-tests:` line, because its Linux oracle needs the `__int128` helpers
+that a native build calls, which E7 takes from `libgcc_s.so.1` (E7h has
+them only since M25, from native compiler-rt's builtins), and the legs that
+run Phase 3's tests take it from there ("Running the tests").
 
 `M2/` (Phase 2, from M14) holds programs of several files that `msil-ld`
 links (`%{msil_prog}`), in the tiers of plan 5.12.5:
@@ -619,16 +641,20 @@ milestone that implements its feature; the numbers are plan 5.17.13's
 (`00-frames` M26, `01-tls` M31, `02-lifecycle` M29, `03-helpers` M24 and
 M25, `04-switches` M33, `05-variadics` M26, `06-callbacks` M28, `07-sjlj`
 M27, `08-atomics` M24 and M30, `09-threads` M28, `10-hosted` M24,
-`11-byval` M34, `12-combined` M35). M24 created three:
+`11-byval` M34, `12-combined` M35). M24 created three, and M25 added the
+helper tests of `03-helpers/`:
 
 | Directory | Since | Covers |
 |---|---|---|
-| `03-helpers/` | M24 | `_BitInt(N)` results and arguments across files for N = 7, 17, 33, 65 and 127 (`bitint-abi`): IR checks pin both triples' signatures after upstream merge U2's x86-64 ABI changes (no result is extended, so the caller narrows it; arguments keep their rules), and the program's `noinline` callees return and take values whose upper bits would reach its output unless each side narrows and widens as natively, at `-O0` and `-O2`, through objects and LTO; M25 adds the compiler-runtime helpers |
+| `03-helpers/` | M24, M25 | `_BitInt(N)` results and arguments across files for N = 7, 17, 33, 65 and 127 (`bitint-abi`, M24): IR checks pin both triples' signatures after upstream merge U2's x86-64 ABI changes (no result is extended, so the caller narrows it; arguments keep their rules), and the program's `noinline` callees return and take values whose upper bits would reach its output unless each side narrows and widens as natively, at `-O0` and `-O2`, through objects and LTO. Since M25 the compiler-runtime helpers of the helper archive `clang_rt.builtins`, against the hosted native oracles, which get compiler-rt's results too: `helpers` (Annex G complex products and quotients, `_Float16` arithmetic and rounding, `__bf16`, `_Float16` to and from `__int128`, `__builtin_powi` and `__int128` `__builtin_mul_overflow`), `f16-hashes` and `bf16-hashes` (the conversions on every `_Float16` or `__bf16` value, on rounding boundaries and on named cases, printed as hashes), `complex-matrix` (`__muldc3`, `__divdc3`, `__mulsc3` and `__divsc3` on named cases and on a 14^4 matrix of special operands), `powi` (`__powidf2` and `__powisf2` on the Linux triple, the UCRT's `pow` and `powf` on windows-msvc, as native code calls them, so `powi.linux.expected` holds the Linux transcript), `longdouble` (the archive's `long double` forwarders against native `long double` code, printed as `double` bits; `-fno-builtin` in `%{msil_copts}` keeps the calls), `longdouble-archive` (`REQUIRES: msil-triple-linux, msil-cil-dump`: `sqrtl`, `strtold`, `nexttoward`, `daddl`, `dsubl`, `dmull` and `ddivl` are methods of the image that call the C library's `sqrt`, `strtod`, `nextafter`, `f32xaddf64`, `f32xsubf64`, `f32xmulf64` and `f32xdivf64`, not P/Invokes of its `long double` functions, and the last four set `errno` as native `daddl` does after an overflow, an underflow to zero, a division by zero and an invalid operation, against E7h's transcript), `longdouble-coverage` (`Inputs/helper-archive.py table`, after the script's self-test: every name of `msil-ld`'s `long double` list has a forwarder in `msil/lib/builtins/msil_longdouble.c` or a line there saying it is not forwarded), `archive-contents` (`Inputs/helper-archive.py archive`, through `%msil_nm`: the archive at the path that clang names, for the leg's triple and the two default triples, holds plan 5.14.3's minimum and nothing that it keeps out) and `shared-private` (`REQUIRES: msil-cil-dump`: a `-shared` library and its program each link their own copies of the helpers they call, and the library exports none; `Inputs/cil-listing.py` reads the listings). M25's programs have no `-S` reference, and those that call helper-archive functions have no `--lto-emit-asm` text either (a helper that the program calls stops the text link at the archive's CIL member, and one that code generation creates is the runtime-helper error, plan 5.14.3 A9), so they say `UNSUPPORTED: msil-link-output=il`; `powi` and `longdouble` say `UNSUPPORTED: msil-link-output=il && msil-triple-linux`, because on windows-msvc they call only the UCRT and run with `msil_link_output=il` |
 | `08-atomics/` | M24 | D36's compiler barrier at run time (`barrier-spin`, `REQUIRES: msil-csc`): the two spin loops of a `-shared` library on a plain `int`, one with an empty `asm` memory clobber and one with `__atomic_signal_fence`, end when a C# thread of a host that `%msil_csc` compiles sets the flag (no C function reaches native code before M28, so the threads are C#'s), at `-O0` and `-O2`, on the leg's runtime, on each `msil_also_run` runtime (`%{msil_also_run_check}`) and, on Windows triples, on the .NET Framework; it FileChecks `spin() = 1`, `spin_signal_fence() = 1` and `[exit 0]` and has no `.expected` file. With the tools before M24 both loops gave up; M30 adds the atomics |
 | `10-hosted/` | M24 | the real headers with the C library functions that bind natively today: `puts` (`puts.c`, the one `%{msil_c}` test, also `main`'s implicit `return 0`), `fputs`, `fputc` and `putc` to `stdout` and `stderr` (`fputs`, whose stderr lines a FileCheck reads through `msil-run.py --stderr-out`), the standard streams as glibc's data imports and as the UCRT's `__acrt_iob_func` calls (`stdio-streams`), `errno` after `strtoll`, `strtoull`, `fopen` and `remove` (`errno`), `getenv`, `setenv` or `_putenv_s` and `unsetenv` (`getenv`), `gmtime`, `strftime`, `time` and `difftime` of fixed times (`time`) and `FILE *` I/O in the private run directory (`file-io`); M26 adds the `printf` family |
 
-`M3/` has 9 tests: one C program and eight `.test` files, whose transcripts
-are the same on Windows and under E7h (no `.linux.expected` file).
+`M3/` has 19 tests: one C program and 18 `.test` files. Their transcripts
+are the same on Windows and under E7h except `03-helpers/powi`'s, whose
+`powi.linux.expected` is the only per-OS file; `archive-contents`,
+`longdouble-coverage` and `08-atomics/barrier-spin` have no `.expected`
+file.
 
 Every directory of `M3/` is hosted (plan 5.17.3): `M3/lit.local.cfg` ends
 with the marker line
@@ -709,8 +735,51 @@ all four, `ctest-wsl` since M24); `net8` filters them out
 
 `harness/` holds the self-tests of the runner, the verifier, jitall,
 `update-expected.py`, `il-snapshot.py`, `%msil_canon`, the equivalence
-oracles and lit's configuration: 138 tests, 16 of them in `prog/`, 24 in
-`legs/`, 6 in `pipeline/`, 5 in `pipeline-obj/` and 11 in `equiv/`.
+oracles and lit's configuration: 142 tests, 78 at the top level, 16 in
+`prog/`, 26 in `legs/`, 6 in `pipeline/`, 5 in `pipeline-obj/` and 11 in
+`equiv/`.
+M25 added `linux-rtlib.test` (E7h's link with `msil-prog.py --linux-rtlib
+FILE` between `-lm` and `-lc`, for the program and for each `--shlibs`
+library; E7 and a hosted Linux host's link; a FILE that does not exist as a
+usage error; `update-expected.py --linux-rtlib auto|none|PATH`; and lit's
+`msil_linux_rtlib` in nested lits, a configuration error under
+`msil_native_oracle=required` and a note otherwise; with stand-in tools
+whose archive member adds 64 to the exit status, and partly WSL only; and
+the MSIL triple's helper archive in nested lits of `Inputs/rtlib/noarchive`,
+whose clang is a link of the built one in a private toolchain under `%t`:
+with no archive in its resource directory, lit prints its note `no helper
+archive <path> for <triple>: ... build it with 'python
+msil/utils/build/build-builtins.py' (plan 5.14.3)` and the test, whose
+program calls `__divdc3`, is a FAIL with `msil-ld`'s undefined-symbol report
+and N1's line (plan 5.14.2, `>>> a compiler runtime helper: link the
+toolchain's helper archive clang_rt.builtins`), never UNSUPPORTED, while
+with a file at plan 5.14.3 A1's place lit notes `helper archive: <path>` and
+runs nothing (`--show-tests`); Windows only, with the built clang, `msil-ld`
+and `llvm-ar`) and `build-builtins.test`
+(`build-builtins.py --self-test`, `--list` and `--list --all` against plan
+5.14.3's rules, `--check` against an empty `--out`, and its usage errors)
+and, in its fix loop, `legs/ci-build-builtins.test` and
+`legs/ci-build-builtins-sh.test`, which sit beside `ci-legs-corpus.test` and
+`ci-legs-corpus-sh.test` (`msil/utils/ci/build.ps1` and `build.sh` run from
+a scratch copy, with stand-ins for `msil-build.ps1` (for `build.sh`, ninja
+on `PATH`), `build-builtins.py` and `build-jitall.py`: the `build builtins`
+PASS and FAIL rows of `MSIL_CI_RESULTS`, the `--build-dir` argument that
+`build-builtins.py` gets, the `jitall` row and exit status 1 after a FAIL
+row, and neither a `builtins` row nor a `build-builtins.py` run after a
+failed ninja; the first requires `msil-ci-pwsh`, the second `msil-ci-bash`),
+and pinned its other changes in `det-manifest.test` (18 entries with the two
+helper archives as `<triple>/builtins/<archive>`, an edited helper source that
+changes only them, and a failed archive build that writes no manifest),
+`equiv/skip.test` (case (9): the real file's per-test lines skip O4 for
+`03-helpers/complex-matrix.test` on both default triples and for `powi.test`
+on the Linux triple only, never for `bitint-abi.test`, and no line skips O3 or
+O6 (O6 through `msil-verify.py`) for a `03-helpers` test, or O3, O4 or O6 for
+a test of another `M3/` directory),
+`linux-hosted-oracle.test` (E7h's link with the archive between `-lm` and
+`-lc`; it now also requires `msil-linux-rtlib`) and
+`prog/update-expected.test` (a path that does not exist is
+`update-expected.py: error: <path>: no such file or directory`, status 2,
+before anything is built or written).
 M24 added `hosted-mode.test` (a directory that calls
 `config.msil_enable_hosted(config)`: its `%{msil_cflags}` and
 `%{msil_oracle_flags}`, UNSUPPORTED without `msil-hosted` and fatal under
@@ -748,7 +817,8 @@ timeout in both scripts), `lit-retry.test`, `calibrate.test`,
 `-Exit` expects); `ctest-lists.test` now also covers plan 5.17.14's entry
 kinds, the expected files that the format writes and `libc.txt`. The `-sh`
 tests of `legs/` (M23's `ci-legs-corpus-sh.test` too) run `lit-legs.sh`
-with bash (the feature `msil-ci-bash`): natively on Linux, and on Windows
+(M25's `ci-build-builtins-sh.test` runs `build.sh`) with bash (the feature
+`msil-ci-bash`): natively on Linux, and on Windows
 inside the WSL distribution of `msil_wsl_distro` whenever bash runs there
 (`wsl.exe -d <distribution> --exec bash -c true`), whatever `msil_runner`
 is, so the harness leg runs them too; otherwise lit notes why and they are
@@ -953,8 +1023,11 @@ This suite depends on `lld` (which makes `msil-ld`), `llvm-ar`,
 `llvm-dlltool`, which build the inputs of `lld/test/MSIL`, and on
 `llvm-readobj`, which with `yaml2obj` and `llvm-mc` makes and inspects the
 native libraries of its native-library tests (M15). `llvm-lit` run directly
-builds nothing: build the tools first (`msil-build.ps1 -Standard` builds every
-tool the tests use).
+builds nothing: build the tools first (`msil-build.ps1 -Standard` builds
+every tool the tests use). Since M25 the tests also need the helper
+archives, which neither ninja nor a `check-msil*` target builds: run `python
+msil/utils/build/build-builtins.py` after every build, or the tests of
+`M3/03-helpers` fail to link (lit only notes a missing archive).
 
 Source paths work because `llvm-lit` maps `msil/test/lit.cfg.py` to the
 generated `build/tools/msil/test/lit.site.cfg.py`. At configuration time
@@ -1069,12 +1142,17 @@ every leg but the `-Quick` and `-Full` ones in order, with `-Exit` also the
 `-Exit` legs and the `matrix-legs` row, through the same `msil/utils/ci/`
 scripts as `msil-ci.yml`, after a `host-setup` step that installs the
 private WSL runtimes, the E7 sysroot and the glibc sysroot of E7h and the
-`hosted` leg (all idempotent, no root) and a `corpus` step (`fetch.py
---check` of all ten entries, clearing `MSIL_CORPUS_SKIP`), with a
-`determinism` step after the legs (`msil/utils/ci/det-manifest.py` in two
-work directories), and prints one summary row per step and leg;
-`msil/utils/ci/lit-legs.ps1 -List` names the legs, and each run leaves its
-lit log and xunit file in `build/lit-results/<file>.{log,xml}`.
+`hosted` leg (all idempotent, no root; since M25, after the build, it also
+builds E7h's native compiler-rt archive with the build's clang,
+`make-linux-sysroot.py --builtins --clang <build>/bin/clang.exe`, skipped
+when its stamp is current, as a milestone gate's step G0 does) and a
+`corpus` step (`fetch.py --check` of all ten entries, clearing
+`MSIL_CORPUS_SKIP`), with a `determinism` step after the legs
+(`msil/utils/ci/det-manifest.py` in two work directories, which since M25
+also builds and lists the helper archives of both default triples), and
+prints one summary row per step and leg; `msil/utils/ci/lit-legs.ps1 -List`
+names the legs, and each run leaves its lit log and xunit file in
+`build/lit-results/<file>.{log,xml}`.
 
 ## Adding a test
 
@@ -1277,6 +1355,18 @@ python msil/utils/update-expected.py --check --levels O0,O2 msil/test/M3
 `--levels O0,O2` (M24) builds and runs the native program at each level and
 writes only a transcript that is the same at both; `--hosted` makes every
 test named on the command line hosted.
+Since M25 the hosted Linux oracle of `--os linux` links native compiler-rt's
+builtins between `-lm` and `-lc`, as lit's `msil_linux_rtlib` does:
+`--linux-rtlib auto` (the default) takes
+`usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a` of
+`--linux-sysroot` on Windows (`make-linux-sysroot.py --builtins` writes it)
+and on Linux the file that clang names, `--linux-rtlib PATH` names one, and
+`--linux-rtlib none` leaves it out. When `auto` finds none, each hosted test
+of the Linux oracle fails (`FAIL (native compile)`) after a line that names
+the files it tried, and the other tests are unaffected. A path on the
+command line that does not exist is `update-expected.py: error: <path>: no
+such file or directory`, status 2, before anything is built or written
+(until M25 a missing `.test` path was a `skip` line).
 
 Since M24 a test may also set these placeholders (plan 5.17.2-5.17.4,
 5.17.9):
@@ -1336,6 +1426,7 @@ Since M24 a test may also set these placeholders (plan 5.17.2-5.17.4,
 | `msil_native_oracle` | `0` | `1`: also build natively and compare when possible; `required`: an error when it is not possible (CI). With `msil_runner=wsl` it is the E7 Linux oracle (feature `msil-linux-oracle`), for `x86_64-unknown-linux-gnu-msil` only |
 | `msil_native_rtlib` | `auto` | the compiler-rt builtins the Windows native oracle links for MSVC triples (`__udivti3`, `__fixdfti`, ...): `auto` takes the newest `clang_rt.builtins-<arch>.lib` of the Visual Studio LLVM (`%VCINSTALLDIR%Tools\Llvm\x64\lib\clang\*\lib\windows`), else of the LLVM whose `clang-cl` or `lld-link` is on `PATH`; a path names one; empty or `none` disables it. Missing under `msil_native_oracle=required`, it is a configuration error |
 | `msil_linux_sysroot` | `$MSIL_LINUX_SYSROOT`, else `C:\llvm-msil-scratch\linux-sysroot` if it exists (Windows), else `/` (Linux) | the Linux libraries of the E7 oracle, in the layout of `msil/utils/make-linux-sysroot.py`; a named directory without `usr/lib/x86_64-linux-gnu/libc.so.6` and `libm.so.6` is a configuration error; empty disables it |
+| `msil_linux_rtlib` | `auto` | M25 (plan 5.17.2, 5.17.3), feature `msil-linux-rtlib`, substitution `%{msil_linux_rtlib}`: native compiler-rt's builtins archive, which the hosted Linux oracle (E7h, or a Linux host's hosted link) links after the program's inputs and `-lm` and before `-lc` (`msil-prog.py --linux-rtlib`), so that a hosted program that calls a runtime helper gets compiler-rt's results natively, as its MSIL build gets them from the helper archive. `auto` is, on Windows, `<msil_linux_sysroot>/usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a`, which `python msil/utils/make-linux-sysroot.py --builtins` writes, and on Linux the file that `clang --target=<native triple> -rtlib=compiler-rt -print-libgcc-file-name` names, for the tree's clang and then the clang on `PATH`, the first that exists; `none` or empty disables it; a named path that does not exist is a configuration error. A hosted directory of a Linux triple whose native oracle runs needs it: without it that directory is a configuration error under `msil_native_oracle=required` and otherwise loses its native oracle, with a note. E7 keeps `libgcc_s.so.1` |
 | `msil_run_netfx` | `0` | `1`: also `ilasm -exe` and run on .NET Framework 4.8 (Windows, local runner) |
 | `msil_runner` | `local` | `wsl`: run programs in WSL (`wsl.exe -d Ubuntu`), on .NET 10 by default |
 | `msil_wsl_dotnet` | the private runtime if installed, else the distribution's `dotnet` (with a note) | with `msil_runner=wsl`: the dotnet host inside WSL that runs the programs and jitall. `private` is `$HOME/.dotnet-msil/dotnet`, which `msil/utils/msil-wsl-dotnet.sh` installs; when it is not installed that is a configuration error naming the script. An absolute WSL path names another host. Every WSL gate leg passes `private` |
@@ -1402,6 +1493,8 @@ M15), `msil-ucrt-headers` (a directory of `INCLUDE` holds `corecrt.h`; M15),
 sysroot on the Linux triple, `msil-ucrt-headers` on a Windows one; M24),
 `msil-linux-hosted-oracle` (E7h can run: the glibc sysroot also holds its
 start files and libraries, and `ld.lld` was found; M24),
+`msil-linux-rtlib` (native compiler-rt's builtins for the hosted Linux
+oracle were found, `msil_linux_rtlib`; M25),
 `msil-triple=<triple>`, and `msil-triple-windows` / `msil-triple-linux`. The
 last two follow the effective triple, not the host: the WSL runner executes a
 linux triple from Windows, so a Windows-only P/Invoke test says
@@ -1507,8 +1600,16 @@ directory: the native oracle's options), `%{msil_expected_rule}` and
 `%{msil_netfx_skip}` (default empty; "Adding a test"), the loud
 composites `%{msil_prog_loud_O0}` .. `%{msil_prog_loud_Oz}`, and
 `%msil_steps` (`msil/utils/msil-steps.py %{msil_limits}`; each
-`--step=NAME` is followed by its command line). No placeholder name is a
-substring of another (lit's `REDEFINE:` rule).
+`--step=NAME` is followed by its command line).
+Since M25: `%{msil_linux_rtlib}` (the quoted archive of `msil_linux_rtlib`,
+else `linux-rtlib-not-found`, so a test that uses it says
+`REQUIRES: msil-linux-rtlib`); `%{msil_e7_args}` ends with `--linux-rtlib`
+and that archive, or `auto` or `none` when lit found none, so
+`update-expected.py --os linux` in a test uses the same archive; and on a
+Linux triple with the archive `%msil_prog_build` passes
+`--linux-rtlib=<archive>`, which `msil-prog.py` uses only in a hosted
+native build. No placeholder name is a substring of another (lit's
+`REDEFINE:` rule).
 Everything works in lit's internal shell.
 
 ## Transcripts
@@ -1670,8 +1771,16 @@ Every line of the file:
 | `skip O4 msil/test/M2/08-semantics/p2c-bsymbolic.test` | | | library links (M22), with the same reason |
 | `skip O4 msil/test/M2/08-semantics/p2c-cycle.test` | | | library links (M22), with the same reason |
 | `skip O4 msil/test/M2/08-semantics/p2c-weak-def.test` | | | library links (M22), with the same reason |
+| `skip O4 msil/test/M3/03-helpers/bf16-hashes.test` | | | helper-archive programs (M25, plan 5.14.3 A9): `--lto-emit-asm` resolves the program's own references before code generation, as an image link does, so a helper that the program calls itself (a `_Complex` helper, a `long double` forwarder) makes `msil-ld` extract the helper archive's member, a CIL object, and stop with `<archive>(<member>): --lto-emit-asm cannot link CIL objects; link without --lto-emit-asm`, while a helper call that code generation creates after LTO (a `_Float16` or `__bf16` conversion, `__powidf2`) is `runtime helper '<name>' needs the helper archive clang_rt.builtins, which only msil-ld links`, as in `-S` and llc text; either way there is no text to compare: `programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)`. This test: the code generator's `__truncsfbf2` and `__truncdfbf2` |
+| `skip O4 msil/test/M3/03-helpers/complex-matrix.test` | | | helper-archive programs (M25), with the same reason: the program's own `__mulsc3`, `__muldc3`, `__divsc3` and `__divdc3` |
+| `skip O4 msil/test/M3/03-helpers/f16-hashes.test` | | | helper-archive programs (M25), with the same reason: the code generator's `__extendhfsf2`, `__truncsfhf2` and `__truncdfhf2` |
+| `skip O4 msil/test/M3/03-helpers/helpers.test` | | | helper-archive programs (M25), with the same reason: both kinds (the program's `_Complex` helpers, the code generator's `_Float16` and `__bf16` conversions) |
+| `skip O4 msil/test/M3/03-helpers/longdouble-archive.test` | | | helper-archive programs (M25), with the same reason: the program's `sqrtl`, `strtold`, `nexttoward`, `daddl`, `dsubl`, `dmull` and `ddivl`, the archive's forwarders on the Linux triple, the only one that runs the test |
+| `skip O4 msil/test/M3/03-helpers/shared-private.test` | | | helper-archive programs (M25), with the same reason: the program's `__muldc3` and `__divdc3` and the code generator's `_Float16` conversions; its link against a `-shared` library has no text either (`--lto-emit-asm cannot import from a .NET library`) |
+| `skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/03-helpers/longdouble.test` | | | helper-archive programs (M25), with the same reason, on the Linux triple only: there the program's `long double` calls are the archive's forwarders, while on windows-msvc it calls only the UCRT, as native code does, so O4 runs there (and the test runs with `msil_link_output=il`) |
+| `skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/03-helpers/powi.test` | | | helper-archive programs (M25), with the same reason, on the Linux triple only: there `__builtin_powi` is the code generator's `__powidf2` and `__powisf2`, while on windows-msvc it is the UCRT's `pow` and `powf`, as in native code, so O4 runs there (and the test runs with `msil_link_output=il`) |
 
-The `skip` lines are of four kinds (plan 5.12.6): 5.8.10's whole-program
+The `skip` lines are of five kinds (plan 5.12.6): 5.8.10's whole-program
 differences (under O6 too, since M21, for the two tests whose image has
 fields that the `-S` build lacks), where `-S`, llc and `--lto-emit-asm` text keep M12's alias
 forwarding methods and data aliases replaced by their aliasees, fold
@@ -1684,11 +1793,22 @@ links that `--lto-emit-asm` cannot write as one text module (prebuilt CIL
 objects or archives of them, ThinLTO and `--lto-partitions`); and, since M22,
 O4 for the tests that build `-shared` libraries or link against them, which
 have no `--lto-emit-asm` text at all (`04-shared/` as a directory, and the
-three library rows of the matrix). Under `lto` with `msil_equiv=1` these
-tests print `O4 skipped: <reason>` and run every other check (M22's gate
-shows it on `04-shared/lib-and-prog` and `08-semantics/p2c-cycle`). Only crc32.c's
-line names a triple and a level, because its difference exists only in the
-Windows triple's `-O2` build; every other line covers every triple and level.
+three library rows of the matrix); and, since M25, O4 for each test of
+`M3/03-helpers/` that calls helper-archive functions, one line per test,
+because such a program has no `--lto-emit-asm` text (plan 5.14.3 A9: a
+helper that the program calls stops the text link at the archive's CIL
+member, and one that code generation creates is the runtime-helper error).
+`bitint-abi`, which calls no helper, has no line, and no line skips O3 or O6
+there: every `03-helpers` test is a `%{msil_prog}`, and O3 and O6 run only
+for `%{msil_c}` and `%{msil_ll}` under `obj`. Under `lto` with
+`msil_equiv=1` these tests print `O4 skipped: <reason>` and run every other
+check (M22's gate shows it on `04-shared/lib-and-prog` and
+`08-semantics/p2c-cycle`). Only crc32.c's line names a triple and a level,
+because its difference exists only in the Windows triple's `-O2` build, and
+only the lines of `03-helpers/powi.test` and `longdouble.test` name a triple
+alone, the Linux one, because on windows-msvc these two call the UCRT, as
+native code does, and pass O4; every other line covers every triple and
+level.
 
 O3 allows `assembly-hash`, `ilasm-params`, `ilasm-initlocals`, `snan-quiet`,
 `pinvoke-module` and `pinvoke-access`; O4 the first four (linked text and

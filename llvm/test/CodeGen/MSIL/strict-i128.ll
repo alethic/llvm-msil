@@ -16,9 +16,11 @@
 ; __fixdfti, __fixunssfti or __fixunsdfti, nor any other __float or __fix
 ; name, is named, nothing is called and nothing is reported. Until M24 the
 ; constrained conversions were not expanded, and ReplaceNodeResults reported
-; the i128 ones with Phase 1's "runtime helper '<name>' is not available for
-; MSIL yet (phase 3)". fp-expand.ll's i128-strict.ll has the conversions from
-; half and bfloat.
+; the i128 ones with Phase 1's runtime-helper error; since M25 it reports
+; such a helper as "runtime helper '<name>' is not supported for MSIL: the
+; helper archive clang_rt.builtins has no 128-bit integer helpers"
+; (helper-archive-errors.ll). fp-expand.ll's i128-strict.ll has the
+; conversions from half and bfloat.
 ;
 ; Each body is its plain twin's: strict.ll and plain.ll define the same
 ; thirteen functions under the same names and module name, so the

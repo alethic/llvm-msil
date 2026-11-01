@@ -1,0 +1,16 @@
+sqrtl(2) 3ff6a09e667f3bcd
+strtold("0.1xyz") 3fb999999999999a end 3
+nexttoward(1, 2) 3ff0000000000001
+daddl(DBL_MAX, DBL_MAX) 7ff0000000000000 errno 34
+dsubl(-DBL_MAX, DBL_MAX) fff0000000000000 errno 34
+dmull(DBL_MAX, 2) 7ff0000000000000 errno 34
+ddivl(DBL_MAX, 0.5) 7ff0000000000000 errno 34
+ddivl(1, 0) 7ff0000000000000 errno 34
+dmull(DBL_MIN, DBL_MIN) 0000000000000000 errno 34
+ddivl(DBL_MIN, DBL_MAX) 0000000000000000 errno 34
+daddl(inf, -inf) nan errno 33
+dmull(inf, 0) nan errno 33
+ddivl(0, 0) nan errno 33
+daddl(1, 1) 4000000000000000 errno 0
+daddl(inf, 1) 7ff0000000000000 errno 0
+[exit 0]

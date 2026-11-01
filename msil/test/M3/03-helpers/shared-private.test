@@ -1,0 +1,222 @@
+# A -shared library and its program each link their own private copies of the helper-archive members they call (__muldc3, __divdc3 and the _Float16 conversions): the library exports none of them, and the program calls its own.
+# Plan 5.14.3 A7 (archive members are hidden, so a -shared output never
+# exports one, and each output has its own copy), M25.h. The library splib
+# (%{msil_shlibs}) exports functions that multiply and divide double
+# _Complex values (__muldc3 on a product's NaN recovery path, __divdc3 for
+# every quotient) and convert to and from _Float16 (__extendhfsf2,
+# __truncsfhf2, __truncdfhf2); the program does the same operations itself
+# (in noinline functions, on volatile inputs) and through the library, and
+# prints both. Then the -O2 build's library and program are listed with
+# llvm-cil-dump:
+# - the library's export class 'splib' has the API's methods and their
+#   address accessors and nothing named with '__', and its symbol table
+#   (--link-info) names no helper;
+# - the <Module> class of each image has its own __muldc3, __divdc3,
+#   __extendhfsf2, __truncsfhf2 and __truncdfhf2, with bodies;
+# - the program calls its own helpers and the library's API, and no method
+#   of splib's export class whose name starts with '__'.
+# Inputs/cil-listing.py, which prints the parts of the listings checked here
+# (and in longdouble-archive.test), runs its self-test before them.
+# Like the other %{msil_shlibs} tests it does not run with
+# msil_link_output=il (msil-prog.py refuses --shlibs there, and A9 refuses a
+# helper call in --lto-emit-asm text); the program calls helper-archive
+# members, so it has no -S reference (5.17.13).
+# REQUIRES: msil-cil-dump
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = splib=%t/splib.c
+# REDEFINE: %{msil_srcs} = %t/main.c %t/ops.c
+# RUN: %{msil_prog}
+# RUN: %python %S/Inputs/cil-listing.py --self-test | FileCheck %s --check-prefix=SELF
+# RUN: %msil_prog_build --level O2 --workdir %t.d --out %t.d/prog.exe --src %t/main.c %t/ops.c
+# RUN: %msil_cil_dump %t.d/shlib/splib.dll > %t.lib.txt
+# RUN: %msil_cil_dump %t.d/prog.exe > %t.prog.txt
+# RUN: %python %S/Inputs/cil-listing.py members %t.lib.txt splib | FileCheck %s --check-prefix=EXPORTS --implicit-check-not=__
+# RUN: cd %t.d/shlib && %msil_cil_dump --link-info splib.dll | FileCheck %s --check-prefix=LINKINFO --implicit-check-not=__
+# RUN: %python %S/Inputs/cil-listing.py methods %t.lib.txt '<Module>' __muldc3 __divdc3 __extendhfsf2 __truncsfhf2 __truncdfhf2 | FileCheck %s --check-prefix=HELPERS
+# RUN: %python %S/Inputs/cil-listing.py methods %t.prog.txt '<Module>' __muldc3 __divdc3 __extendhfsf2 __truncsfhf2 __truncdfhf2 | FileCheck %s --check-prefix=HELPERS
+# RUN: %python %S/Inputs/cil-listing.py calls %t.prog.txt | FileCheck %s --check-prefix=CALLS --implicit-check-not="splib::'__"
+# SELF-NOT: FAIL
+# SELF:     {{^}}self-test: passed{{$}}
+# EXPORTS-DAG: {{^}}method sp_cmul{{$}}
+# EXPORTS-DAG: {{^}}method sp_cdiv{{$}}
+# EXPORTS-DAG: {{^}}method sp_h2f{{$}}
+# EXPORTS-DAG: {{^}}method sp_f2h{{$}}
+# EXPORTS-DAG: {{^}}method sp_d2h{{$}}
+# LINKINFO: {{^}}ExportClass 'splib'{{$}}
+# HELPERS:      {{^}}__muldc3: body{{( calls .*)?$}}
+# HELPERS-NEXT: {{^}}__divdc3: body{{( calls .*)?$}}
+# HELPERS-NEXT: {{^}}__extendhfsf2: body{{( calls .*)?$}}
+# HELPERS-NEXT: {{^}}__truncsfhf2: body{{( calls .*)?$}}
+# HELPERS-NEXT: {{^}}__truncdfhf2: body{{( calls .*)?$}}
+# CALLS-DAG: {{^}}'<Module>'::'__muldc3'{{$}}
+# CALLS-DAG: {{^}}'<Module>'::'__divdc3'{{$}}
+# CALLS-DAG: {{^}}'<Module>'::'__extendhfsf2'{{$}}
+# CALLS-DAG: {{^}}'<Module>'::'__truncsfhf2'{{$}}
+# CALLS-DAG: {{^}}'<Module>'::'__truncdfhf2'{{$}}
+# CALLS-DAG: {{^}}[splib]splib::'sp_cmul'{{$}}
+# CALLS-DAG: {{^}}[splib]splib::'sp_cdiv'{{$}}
+# CALLS-DAG: {{^}}[splib]splib::'sp_h2f'{{$}}
+# CALLS-DAG: {{^}}[splib]splib::'sp_f2h'{{$}}
+# CALLS-DAG: {{^}}[splib]splib::'sp_d2h'{{$}}
+#--- splib.c
+#ifdef _WIN32
+#define API __declspec(dllexport)
+#else
+#define API __attribute__((visibility("default")))
+#endif
+// The API passes doubles, floats and bit patterns, so no complex or
+// _Float16 type crosses the assembly boundary; the helpers stay inside.
+API void sp_cmul(const double *a, const double *b, double *r) {
+  double _Complex x, y, z;
+  __real__ x = a[0];
+  __imag__ x = a[1];
+  __real__ y = b[0];
+  __imag__ y = b[1];
+  z = x * y;
+  r[0] = __real__ z;
+  r[1] = __imag__ z;
+}
+API void sp_cdiv(const double *a, const double *b, double *r) {
+  double _Complex x, y, z;
+  __real__ x = a[0];
+  __imag__ x = a[1];
+  __real__ y = b[0];
+  __imag__ y = b[1];
+  z = x / y;
+  r[0] = __real__ z;
+  r[1] = __imag__ z;
+}
+API float sp_h2f(unsigned short u) {
+  _Float16 h;
+  __builtin_memcpy(&h, &u, 2);
+  return (float)h;
+}
+API unsigned short sp_f2h(float f) {
+  _Float16 h = (_Float16)f;
+  unsigned short u;
+  __builtin_memcpy(&u, &h, 2);
+  return u;
+}
+API unsigned short sp_d2h(double d) {
+  _Float16 h = (_Float16)d;
+  unsigned short u;
+  __builtin_memcpy(&u, &h, 2);
+  return u;
+}
+#--- ops.h
+double _Complex cmul(double _Complex a, double _Complex b);
+double _Complex cdiv(double _Complex a, double _Complex b);
+float h2f(_Float16 h);
+_Float16 f2h(float f);
+_Float16 d2h(double d);
+#--- ops.c
+#include "ops.h"
+__attribute__((noinline)) double _Complex cmul(double _Complex a, double _Complex b) { return a * b; }
+__attribute__((noinline)) double _Complex cdiv(double _Complex a, double _Complex b) { return a / b; }
+__attribute__((noinline)) float h2f(_Float16 h) { return (float)h; }
+__attribute__((noinline)) _Float16 f2h(float f) { return (_Float16)f; }
+__attribute__((noinline)) _Float16 d2h(double d) { return (_Float16)d; }
+#--- main.c
+#include <stdint.h>
+#include "ops.h"
+#ifdef _WIN32
+#define IMPORT __declspec(dllimport)
+#else
+#define IMPORT
+#endif
+IMPORT void sp_cmul(const double *a, const double *b, double *r);
+IMPORT void sp_cdiv(const double *a, const double *b, double *r);
+IMPORT float sp_h2f(unsigned short u);
+IMPORT unsigned short sp_f2h(float f);
+IMPORT unsigned short sp_d2h(double d);
+int puts(const char *);
+
+static char line[100];
+static int len;
+static void out_s(const char *t) {
+  while (*t)
+    line[len++] = *t++;
+}
+static void out_x(uint64_t v, int digits) {
+  line[len++] = ' ';
+  for (int i = digits - 1; i >= 0; --i)
+    line[len++] = "0123456789abcdef"[(v >> (4 * i)) & 15];
+}
+static void out_nl(void) {
+  line[len] = 0;
+  puts(line);
+  len = 0;
+}
+static uint64_t b64(double d) { uint64_t u; __builtin_memcpy(&u, &d, 8); return u; }
+static uint32_t b32(float f) { uint32_t u; __builtin_memcpy(&u, &f, 4); return u; }
+static uint16_t h2u(_Float16 h) { uint16_t u; __builtin_memcpy(&u, &h, 2); return u; }
+static _Float16 u2h(uint16_t u) { _Float16 h; __builtin_memcpy(&h, &u, 2); return h; }
+
+static volatile double v_zero = 0.0, v_one = 1.0;
+// Operand pairs (re, im) x (re, im), completed at run time in main.
+static volatile double ops[4][4] = {
+    {1.5, -2.25, -2.25, 1.5}, // ordinary
+    {0, 0, 1, 1},             // (inf + NaN i) * (1 + 1i): __muldc3 recovers inf
+    {1, 1, 0, 0},             // (1 + 1i) / (0 + 0i): __divdc3 gives inf
+    {3, 4, 1e308, 1e308},     // a quotient that scales
+};
+static volatile const uint16_t halves[] = {0x0001, 0x3555, 0x7bff, 0x7e00, 0xc000};
+static volatile const float floats[] = {0x1.002p0f, 0x1.006p0f, 65520.0f, 0x1p-25f, -0.0f};
+static volatile const double doubles[] = {0x1.0020000000001p0, 0x1.ffcp15, 0x1p-24, 1e-10, -3.75};
+
+static void complex_line(const char *name, double re, double im) {
+  out_s(name);
+  out_x(b64(re), 16);
+  out_x(b64(im), 16);
+  out_nl();
+}
+
+int main(void) {
+  double inf = v_one / v_zero;
+  ops[1][0] = inf;
+  ops[1][1] = inf - inf;
+  for (int i = 0; i < 4; ++i) {
+    double a[2] = {ops[i][0], ops[i][1]}, b[2] = {ops[i][2], ops[i][3]}, r[2];
+    double _Complex x, y, z;
+    __real__ x = a[0];
+    __imag__ x = a[1];
+    __real__ y = b[0];
+    __imag__ y = b[1];
+    z = i == 1 || i == 0 ? cmul(x, y) : cdiv(x, y);
+    complex_line(i <= 1 ? "prog cmul" : "prog cdiv", __real__ z, __imag__ z);
+    if (i <= 1)
+      sp_cmul(a, b, r);
+    else
+      sp_cdiv(a, b, r);
+    complex_line(i <= 1 ? "lib  cmul" : "lib  cdiv", r[0], r[1]);
+  }
+  for (unsigned i = 0; i < sizeof halves / sizeof halves[0]; ++i) {
+    out_s("h2f");
+    out_x(halves[i], 4);
+    out_s(" prog");
+    out_x(b32(h2f(u2h(halves[i]))), 8);
+    out_s(" lib");
+    out_x(b32(sp_h2f(halves[i])), 8);
+    out_nl();
+  }
+  for (unsigned i = 0; i < sizeof floats / sizeof floats[0]; ++i) {
+    out_s("f2h");
+    out_x(b32(floats[i]), 8);
+    out_s(" prog");
+    out_x(h2u(f2h(floats[i])), 4);
+    out_s(" lib");
+    out_x(sp_f2h(floats[i]), 4);
+    out_nl();
+  }
+  for (unsigned i = 0; i < sizeof doubles / sizeof doubles[0]; ++i) {
+    out_s("d2h");
+    out_x(b64(doubles[i]), 16);
+    out_s(" prog");
+    out_x(h2u(d2h(doubles[i])), 4);
+    out_s(" lib");
+    out_x(sp_d2h(doubles[i]), 4);
+    out_nl();
+  }
+  return 0;
+}

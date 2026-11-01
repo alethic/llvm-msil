@@ -1,0 +1,205 @@
+# C Annex G complex products and quotients through the helper archive's __muldc3, __divdc3, __mulsc3 and __divsc3 match native compiler-rt on named cases and on a 14^4 matrix of special operands, in double and float.
+# Recon fp-helpers' cx/cx.c (fp-helpers 3.4, plan 5.14.3 A4, M25.h): the 20
+# named cases, printed as bit patterns, in double and (with the operands
+# converted to float, so 1e300 becomes inf and 1e-310 zero) in float; then
+# for each of the four operations one hash of the results of all 14^4 pairs
+# of the 14 operands {0, -0, 1, -1, 1.5, -2.25, 1e-310, 1e300, -1e300, inf,
+# -inf, NaN, 3, 1e-20} (38,416 results each, float operands converted from
+# those). The products and quotients sit in noinline functions of their own
+# translation unit (ops.c) and every operand comes from a volatile object,
+# so each is a real helper call (a quotient always, a product on its NaN
+# recovery path) and nothing folds, also through LTO. The NaN operand and the
+# NaN results of invalid operations come from the hardware at run time on
+# both sides. System.Numerics.Complex and libgcc differ from compiler-rt on
+# this matrix (fp-helpers F6, R19), which is why the oracle is native
+# compiler-rt (5.17.3: the Windows DLL C runtime with Visual Studio's
+# compiler-rt, E7h with the native compiler-rt archive). The program calls
+# helper-archive members, so it has no -S reference (5.17.13).
+# msil-ld's --lto-emit-asm text refuses a helper call (A9), so the test
+# does not run with msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/ops.c
+# RUN: %{msil_prog}
+#--- ops.h
+double _Complex cmul(double _Complex a, double _Complex b);
+double _Complex cdiv(double _Complex a, double _Complex b);
+float _Complex fmul(float _Complex a, float _Complex b);
+float _Complex fdiv(float _Complex a, float _Complex b);
+#--- ops.c
+#include "ops.h"
+__attribute__((noinline)) double _Complex cmul(double _Complex a, double _Complex b) { return a * b; }
+__attribute__((noinline)) double _Complex cdiv(double _Complex a, double _Complex b) { return a / b; }
+__attribute__((noinline)) float _Complex fmul(float _Complex a, float _Complex b) { return a * b; }
+__attribute__((noinline)) float _Complex fdiv(float _Complex a, float _Complex b) { return a / b; }
+#--- main.c
+#include <stdint.h>
+#include "ops.h"
+int puts(const char *);
+
+static char line[200];
+static int len;
+static void out_s(const char *t) {
+  while (*t)
+    line[len++] = *t++;
+}
+static void out_x(uint64_t v, int digits) {
+  line[len++] = ' ';
+  for (int i = digits - 1; i >= 0; --i)
+    line[len++] = "0123456789abcdef"[(v >> (4 * i)) & 15];
+}
+static void out_nl(void) {
+  line[len] = 0;
+  puts(line);
+  len = 0;
+}
+static uint64_t b64(double d) { uint64_t u; __builtin_memcpy(&u, &d, 8); return u; }
+static uint32_t b32(float f) { uint32_t u; __builtin_memcpy(&u, &f, 4); return u; }
+static double _Complex mk(double re, double im) {
+  double _Complex z;
+  __real__ z = re;
+  __imag__ z = im;
+  return z;
+}
+static float _Complex mkf(float re, float im) {
+  float _Complex z;
+  __real__ z = re;
+  __imag__ z = im;
+  return z;
+}
+
+static volatile double v_zero = 0.0, v_one = 1.0;
+// The operands, written at run time (two of them computed): volatile, so
+// every read happens at run time.
+static volatile double V[14];
+#define NCASES 20
+static volatile double cases[NCASES][4];
+static const char *const names[NCASES] = {
+    "ordinary",
+    "(inf+nan i)*(1+1i)",
+    "(nan+inf i)*(2+0i)",
+    "(inf+0i)*(0+0i)",
+    "(1e300+1e300i)^2",
+    "(0+inf i)*(0+inf i)",
+    "(inf+inf i)*(nan+nan i)",
+    "(1+1i)/(0+0i)",
+    "(1+1i)/(-0+0i)",
+    "(1+1i)/(inf+nan i)",
+    "(1+1i)/(inf+inf i)",
+    "(inf+inf i)/(1+1i)",
+    "(inf+nan i)/(1+1i)",
+    "(1e300+1e300i)/(1e300+1i)",
+    "(1e-300+1e-300i)/(1e-300+1e-300i)",
+    "(1+1i)/(1e-310+1e-310i)",
+    "(3+4i)/(1e308+1e308i)",
+    "(1e308+1e308i)/(1e-308+1e-308i)",
+    "(nan+0i)/(0+0i)",
+    "(0+0i)/(0+0i)",
+};
+
+static void set_case(int i, double a, double b, double c, double d) {
+  cases[i][0] = a;
+  cases[i][1] = b;
+  cases[i][2] = c;
+  cases[i][3] = d;
+}
+
+static void init(void) {
+  double inf = v_one / v_zero, nan = v_zero / v_zero;
+  double v[14] = {0.0, -0.0, 1.0, -1.0, 1.5, -2.25, 1e-310, 1e300, -1e300, inf, -inf, nan, 3.0, 1e-20};
+  for (int i = 0; i < 14; ++i)
+    V[i] = v[i];
+  set_case(0, 1.5, -2.25, -2.25, 1.5);
+  set_case(1, inf, nan, 1, 1);
+  set_case(2, nan, inf, 2, 0);
+  set_case(3, inf, 0, 0, 0);
+  set_case(4, 1e300, 1e300, 1e300, 1e300);
+  set_case(5, 0, inf, 0, inf);
+  set_case(6, inf, inf, nan, nan);
+  set_case(7, 1, 1, 0, 0);
+  set_case(8, 1, 1, -0.0, 0);
+  set_case(9, 1, 1, inf, nan);
+  set_case(10, 1, 1, inf, inf);
+  set_case(11, inf, inf, 1, 1);
+  set_case(12, inf, nan, 1, 1);
+  set_case(13, 1e300, 1e300, 1e300, 1);
+  set_case(14, 1e-300, 1e-300, 1e-300, 1e-300);
+  set_case(15, 1, 1, 1e-310, 1e-310);
+  set_case(16, 3, 4, 1e308, 1e308);
+  set_case(17, 1e308, 1e308, 1e-308, 1e-308);
+  set_case(18, nan, 0, 0, 0);
+  set_case(19, 0, 0, 0, 0);
+}
+
+static int is_div(const char *name) {
+  int div = 0;
+  for (const char *q = name; *q; ++q)
+    div |= *q == '/';
+  return div;
+}
+
+static void named(void) {
+  for (int i = 0; i < NCASES; ++i) {
+    double _Complex x = mk(cases[i][0], cases[i][1]), y = mk(cases[i][2], cases[i][3]);
+    double _Complex r = is_div(names[i]) ? cdiv(x, y) : cmul(x, y);
+    out_s(names[i]);
+    out_s(" =");
+    out_x(b64(__real__ r), 16);
+    out_x(b64(__imag__ r), 16);
+    out_nl();
+  }
+  for (int i = 0; i < NCASES; ++i) {
+    float _Complex x = mkf((float)cases[i][0], (float)cases[i][1]);
+    float _Complex y = mkf((float)cases[i][2], (float)cases[i][3]);
+    float _Complex r = is_div(names[i]) ? fdiv(x, y) : fmul(x, y);
+    out_s("float ");
+    out_s(names[i]);
+    out_s(" =");
+    out_x(b32(__real__ r), 8);
+    out_x(b32(__imag__ r), 8);
+    out_nl();
+  }
+}
+
+static uint64_t H;
+static void hadd(uint64_t v) {
+  H = (H ^ v) * 0x100000001b3ull;
+  H ^= H >> 29;
+}
+
+static void matrix(void) {
+  static const char *const ops[4] = {"dmul", "ddiv", "fmul", "fdiv"};
+  for (int op = 0; op < 4; ++op) {
+    H = 0xcbf29ce484222325ull;
+    for (int a = 0; a < 14; ++a)
+      for (int b = 0; b < 14; ++b)
+        for (int c = 0; c < 14; ++c)
+          for (int d = 0; d < 14; ++d) {
+            uint64_t r1, r2;
+            if (op < 2) {
+              double _Complex x = mk(V[a], V[b]), y = mk(V[c], V[d]);
+              double _Complex r = op == 0 ? cmul(x, y) : cdiv(x, y);
+              r1 = b64(__real__ r);
+              r2 = b64(__imag__ r);
+            } else {
+              float _Complex x = mkf((float)V[a], (float)V[b]), y = mkf((float)V[c], (float)V[d]);
+              float _Complex r = op == 2 ? fmul(x, y) : fdiv(x, y);
+              r1 = b32(__real__ r);
+              r2 = b32(__imag__ r);
+            }
+            hadd(r1);
+            hadd(r2);
+          }
+    out_s(ops[op]);
+    out_s(" hash");
+    out_x(H, 16);
+    out_nl();
+  }
+}
+
+int main(void) {
+  init();
+  named();
+  matrix();
+  return 0;
+}

@@ -1,0 +1,12 @@
+# Run only in a nested lit by ../../../../linux-rtlib.test: prints what
+# msil_linux_rtlib gives the hosted directory of lit.local.cfg (plan 5.17.2,
+# M25): %{msil_linux_rtlib}, the end of %{msil_e7_args} (update-expected.py's
+# E7 options), %msil_prog_build (msil-prog.py's prefix, whose --linux-rtlib
+# E7h links) and the features. ../plain/rtlib.test prints the same in a
+# directory without the marker.
+# RUN: echo "hosted dir rtlib: [%{msil_linux_rtlib}]"
+# RUN: echo "hosted dir e7 args: [%{msil_e7_args}]"
+# RUN: echo hosted dir prog: %msil_prog_build
+# RUN: %if msil-linux-rtlib %{ echo hosted dir feature msil-linux-rtlib %}
+# RUN: %if msil-native-oracle %{ echo hosted dir feature msil-native-oracle %}
+# RUN: %if msil-linux-hosted-oracle %{ echo hosted dir feature msil-linux-hosted-oracle %}

@@ -1,0 +1,177 @@
+# The sources of the MSIL helper archives clang_rt.builtins (plan 5.14.3), read
+# by msil/utils/build/build-builtins.py, which compiles them into CIL objects
+# and archives them for each MSIL triple.
+#
+# Format: one line per source,
+#   <repository-relative path>[ <triple glob>[,<triple glob>...]]
+# where no glob means every MSIL triple; '#' starts a comment. The order of the
+# lines is the order of the archive members. Every .c file of GENERIC_SOURCES
+# and BF16_SOURCES in compiler-rt/lib/builtins/CMakeLists.txt is either listed
+# or named by a line
+#   # excluded <path>: <category>: <reason>
+# whose <category> is one of
+#   int128  passes __int128 (compiler-rt's *ti* functions)
+#   fp128   binary128 tf_float, which MSIL does not have
+#   x87     x87 80-bit long double (MSIL's long double is double)
+#   hosted  needs a C library header or an operating system service
+#   atomic  atomics, which follow user decisions R4/R5 (plan 5.14.2 N-3)
+# and 'build-builtins.py --check-list' checks that after every upstream merge.
+# The native compiler-rt oracle of the Linux harness ('build-builtins.py
+# --native-oracle', E7h) adds the int128, fp128 and x87 sources back, with
+# compiler-rt's TF, x87 and x86_64 lists, and never a hosted or atomic one.
+#
+# compiler-rt's other lists are not families of these archives:
+# GENERIC_TF_SOURCES (fp128; on aarch64 they would compile with a double
+# tf_float and be wrong), x86_80_BIT_SOURCES (x87), x86_ARCH_SOURCES and the
+# architecture directories (inline assembly, .S files, variants of the generic
+# sources). Every listed source compiles with build-builtins.py's command for
+# each triple it is listed for (plan 5.14.3 A2), and members are hidden
+# (-fvisibility=hidden), so an output never exports one (A7).
+#
+# int_util.c includes <stdlib.h> on _WIN32 targets, which a freestanding
+# compile does not have, so it is listed for the Linux triples only, and so are
+# the -ftrapv helpers that call its __compilerrt_abort_impl through
+# compilerrt_abort() (absv*, addv*, mulv*, negv*, subv*): on a Windows triple
+# their link would name that missing function rather than the helper.
+
+compiler-rt/lib/builtins/absvdi2.c *-linux-*
+compiler-rt/lib/builtins/absvsi2.c *-linux-*
+# excluded compiler-rt/lib/builtins/absvti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/adddf3.c
+compiler-rt/lib/builtins/addsf3.c
+compiler-rt/lib/builtins/addvdi3.c *-linux-*
+compiler-rt/lib/builtins/addvsi3.c *-linux-*
+# excluded compiler-rt/lib/builtins/addvti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+# excluded compiler-rt/lib/builtins/apple_versioning.c: hosted: Apple OS version symbols
+compiler-rt/lib/builtins/ashldi3.c
+# excluded compiler-rt/lib/builtins/ashlti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/ashrdi3.c
+# excluded compiler-rt/lib/builtins/ashrti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/bswapdi2.c
+compiler-rt/lib/builtins/bswapsi2.c
+compiler-rt/lib/builtins/clzdi2.c
+compiler-rt/lib/builtins/clzsi2.c
+# excluded compiler-rt/lib/builtins/clzti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/cmpdi2.c
+# excluded compiler-rt/lib/builtins/cmpti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/comparedf2.c
+compiler-rt/lib/builtins/comparesf2.c
+compiler-rt/lib/builtins/ctzdi2.c
+compiler-rt/lib/builtins/ctzsi2.c
+# excluded compiler-rt/lib/builtins/ctzti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/divdc3.c
+compiler-rt/lib/builtins/divdf3.c
+compiler-rt/lib/builtins/divdi3.c
+compiler-rt/lib/builtins/divmoddi4.c
+compiler-rt/lib/builtins/divmodsi4.c
+# excluded compiler-rt/lib/builtins/divmodti4.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/divsc3.c
+compiler-rt/lib/builtins/divsf3.c
+compiler-rt/lib/builtins/divsi3.c
+# excluded compiler-rt/lib/builtins/divti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/extendsfdf2.c
+compiler-rt/lib/builtins/extendhfsf2.c
+compiler-rt/lib/builtins/extendhfdf2.c
+compiler-rt/lib/builtins/ffsdi2.c
+compiler-rt/lib/builtins/ffssi2.c
+# excluded compiler-rt/lib/builtins/ffsti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/fixdfdi.c
+compiler-rt/lib/builtins/fixdfsi.c
+# excluded compiler-rt/lib/builtins/fixdfti.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/fixsfdi.c
+compiler-rt/lib/builtins/fixsfsi.c
+# excluded compiler-rt/lib/builtins/fixsfti.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/fixunsdfdi.c
+compiler-rt/lib/builtins/fixunsdfsi.c
+# excluded compiler-rt/lib/builtins/fixunsdfti.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/fixunssfdi.c
+compiler-rt/lib/builtins/fixunssfsi.c
+# excluded compiler-rt/lib/builtins/fixunssfti.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/floatdidf.c
+compiler-rt/lib/builtins/floatdisf.c
+compiler-rt/lib/builtins/floatsidf.c
+compiler-rt/lib/builtins/floatsisf.c
+# excluded compiler-rt/lib/builtins/floattidf.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+# excluded compiler-rt/lib/builtins/floattisf.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/floatundidf.c
+compiler-rt/lib/builtins/floatundisf.c
+compiler-rt/lib/builtins/floatunsidf.c
+compiler-rt/lib/builtins/floatunsisf.c
+# excluded compiler-rt/lib/builtins/floatuntidf.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+# excluded compiler-rt/lib/builtins/floatuntisf.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/fp_mode.c
+compiler-rt/lib/builtins/int_util.c *-linux-*
+compiler-rt/lib/builtins/lshrdi3.c
+# excluded compiler-rt/lib/builtins/lshrti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/moddi3.c
+compiler-rt/lib/builtins/modsi3.c
+# excluded compiler-rt/lib/builtins/modti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/muldc3.c
+compiler-rt/lib/builtins/muldf3.c
+compiler-rt/lib/builtins/muldi3.c
+compiler-rt/lib/builtins/mulodi4.c
+compiler-rt/lib/builtins/mulosi4.c
+# excluded compiler-rt/lib/builtins/muloti4.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/mulsc3.c
+compiler-rt/lib/builtins/mulsf3.c
+# excluded compiler-rt/lib/builtins/multi3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/mulvdi3.c *-linux-*
+compiler-rt/lib/builtins/mulvsi3.c *-linux-*
+# excluded compiler-rt/lib/builtins/mulvti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/negdf2.c
+compiler-rt/lib/builtins/negdi2.c
+compiler-rt/lib/builtins/negsf2.c
+# excluded compiler-rt/lib/builtins/negti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/negvdi2.c *-linux-*
+compiler-rt/lib/builtins/negvsi2.c *-linux-*
+# excluded compiler-rt/lib/builtins/negvti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+# excluded compiler-rt/lib/builtins/os_version_check.c: hosted: Apple OS version checks
+compiler-rt/lib/builtins/paritydi2.c
+compiler-rt/lib/builtins/paritysi2.c
+# excluded compiler-rt/lib/builtins/parityti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/popcountdi2.c
+compiler-rt/lib/builtins/popcountsi2.c
+# excluded compiler-rt/lib/builtins/popcountti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/powidf2.c
+compiler-rt/lib/builtins/powisf2.c
+compiler-rt/lib/builtins/subdf3.c
+compiler-rt/lib/builtins/subsf3.c
+compiler-rt/lib/builtins/subvdi3.c *-linux-*
+compiler-rt/lib/builtins/subvsi3.c *-linux-*
+# excluded compiler-rt/lib/builtins/subvti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+# excluded compiler-rt/lib/builtins/trampoline_setup.c: hosted: writes executable trampolines (32-bit PowerPC)
+compiler-rt/lib/builtins/truncdfhf2.c
+compiler-rt/lib/builtins/truncdfsf2.c
+compiler-rt/lib/builtins/truncsfhf2.c
+compiler-rt/lib/builtins/ucmpdi2.c
+# excluded compiler-rt/lib/builtins/ucmpti2.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/udivdi3.c
+compiler-rt/lib/builtins/udivmoddi4.c
+compiler-rt/lib/builtins/udivmodsi4.c
+# excluded compiler-rt/lib/builtins/udivmodti4.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline (and the x86_64 path is inline assembly)
+compiler-rt/lib/builtins/udivsi3.c
+# excluded compiler-rt/lib/builtins/udivti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+compiler-rt/lib/builtins/umoddi3.c
+compiler-rt/lib/builtins/umodsi3.c
+# excluded compiler-rt/lib/builtins/umodti3.c: int128: passes __int128; MSIL lowers 128-bit integer operations inline
+# excluded compiler-rt/lib/builtins/emutls.c: hosted: needs <stdlib.h> and a thread library; MSIL lowers thread_local itself
+# excluded compiler-rt/lib/builtins/enable_execute_stack.c: hosted: needs <sys/mman.h> or <windows.h>
+# excluded compiler-rt/lib/builtins/eprintf.c: hosted: needs <stdio.h> (an old assert helper)
+# excluded compiler-rt/lib/builtins/atomic.c: atomic: user decisions R4/R5: the lock path of atomics is the platform's process-wide library (libatomic.so.1 on Linux triples, the MSVC STL's msvcp140_atomic_wait.dll on Windows triples), and no archive defines an __atomic_* name on a Linux triple (plan 5.14.2 N-3)
+# excluded compiler-rt/lib/builtins/atomic_flag_clear.c: atomic: Apple-only C11 atomic functions; atomics follow user decisions R4/R5
+# excluded compiler-rt/lib/builtins/atomic_flag_clear_explicit.c: atomic: Apple-only C11 atomic functions; atomics follow user decisions R4/R5
+# excluded compiler-rt/lib/builtins/atomic_flag_test_and_set.c: atomic: Apple-only C11 atomic functions; atomics follow user decisions R4/R5
+# excluded compiler-rt/lib/builtins/atomic_flag_test_and_set_explicit.c: atomic: Apple-only C11 atomic functions; atomics follow user decisions R4/R5
+# excluded compiler-rt/lib/builtins/atomic_signal_fence.c: atomic: Apple-only C11 atomic functions; atomics follow user decisions R4/R5
+# excluded compiler-rt/lib/builtins/atomic_thread_fence.c: atomic: Apple-only C11 atomic functions; atomics follow user decisions R4/R5
+# excluded compiler-rt/lib/builtins/gcc_personality_v0.c: hosted: an exception-handling personality that needs <unwind.h> and an unwinder
+# excluded compiler-rt/lib/builtins/clear_cache.c: hosted: needs <assert.h> and the OS; llvm.clear_cache lowers to nothing for MSIL
+compiler-rt/lib/builtins/extendbfsf2.c
+compiler-rt/lib/builtins/truncdfbf2.c
+# excluded compiler-rt/lib/builtins/truncxfbf2.c: x87: x87 80-bit long double, which is double on MSIL
+compiler-rt/lib/builtins/truncsfbf2.c
+# excluded compiler-rt/lib/builtins/trunctfbf2.c: fp128: binary128 tf_float, which MSIL does not have
+
+# The forwarders of the native `long double` functions (plan 5.14.3 A4), on the
+# triples of msil-ld's hasWideNativeLongDouble.
+msil/lib/builtins/msil_longdouble.c *-linux-*,x86_64-*-windows-gnu-*

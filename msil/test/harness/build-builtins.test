@@ -1,0 +1,102 @@
+# msil/utils/build/build-builtins.py (plan 5.14.3 A2, M25), the build of the
+# helper archives clang_rt.builtins, run black-box:
+# (1) its offline self-test (stand-in clang and llvm-ar in a temporary
+#     directory) exits 0 with its final line and reports its checks of
+#     --list, the archive layout and its determinism, the stamps, --check, a
+#     failed compile, the native oracle's source list and the repository's
+#     sources.txt;
+# (2) --list --all prints one '<triple> <member> <source>' line per member
+#     (a member name ending in .c.o, a '/'-separated repository-relative
+#     source)
+#     for the six --all triples and no other, and plain --list for the two
+#     default triples only; every triple has the f16 conversion
+#     extendhfsf2.c (A4). No triple lists compiler-rt's atomic.c, a source
+#     whose functions pass __int128 (A5's '*ti*': a basename with ti<digit>,
+#     ti[sdxt]f or [sdxt]fti, which is exactly compiler-rt's TI sources; the
+#     Linux triples' int_util.c has 'ti' in its name and is none of them) or
+#     a hosted source (A5: emutls.c, enable_execute_stack.c, eprintf.c,
+#     clear_cache.c, trampoline_setup.c, os_version_check.c,
+#     apple_versioning.c); msil/lib/builtins/msil_longdouble.c has members on
+#     exactly the triples for which msil-ld's hasWideNativeLongDouble holds
+#     (A4: the three Linux triples and x86_64-w64-windows-gnu-msil), never on
+#     the two windows-msvc triples. The failure paths: every pattern that a
+#     list must lack finds its line in a list that has them, written in the
+#     list's format (a backslash path or a line without a source breaks the
+#     format check, which keeps the '/'-anchored patterns from passing on a
+#     list that they cannot read), and that list lacks the four wide
+#     triples' msil_longdouble.c lines;
+# (3) --check against an empty --out exits 1, names both default triples'
+#     archives as missing, says how to build them and writes nothing. It
+#     takes this build's directory, the one above %clang's bin/, through
+#     Inputs/rtlib/build-dir-of.py (--check hashes that build's clang and
+#     llvm-ar into the stamps it compares, so it needs the real build
+#     directory);
+# (4) a usage error exits 2 with a 'build-builtins.py: error:' line and
+#     lists, runs and writes nothing: --jobs 0, --check with --list, --out
+#     with --list, a triple that is not an MSIL triple, --self-test with
+#     another option, an unknown option and a --build-dir without bin/clang.
+
+# DEFINE: %{bb} = "%python" "%S/../../utils/build/build-builtins.py"
+# DEFINE: %{bb_format} = "^(?!\S+-msil [^/\x5c ]+\.c\.o [^\x5c ]+/[^/\x5c ]+\.c$).+$"
+# DEFINE: %{bb_triples} = "^(?!(x86_64-pc-windows-msvc|aarch64-pc-windows-msvc|x86_64-unknown-linux-gnu|x86_64-unknown-linux-musl|aarch64-unknown-linux-gnu|x86_64-w64-windows-gnu)-msil ).+$"
+# DEFINE: %{bb_default} = "^(?!(x86_64-pc-windows-msvc|x86_64-unknown-linux-gnu)-msil ).+$"
+# DEFINE: %{bb_atomic} = "/atomic\.c$"
+# DEFINE: %{bb_ti} = "/[^/ ]*ti[0-9][^/ ]*\.c$" "/[^/ ]*ti[sdxt]f[^/ ]*\.c$" "/[^/ ]*[sdxt]fti[^/ ]*\.c$"
+# DEFINE: %{bb_hosted} = "/emutls\.c$" "/enable_execute_stack\.c$" "/eprintf\.c$" "/clear_cache\.c$" "/trampoline_setup\.c$" "/os_version_check\.c$" "/apple_versioning\.c$"
+# DEFINE: %{bb_ld_msvc} = "^\S+-windows-msvc-msil \S+ \S*msil_longdouble\.c$"
+# DEFINE: %{bb_ld_other} = "^(?!(x86_64-unknown-linux-gnu|x86_64-unknown-linux-musl|aarch64-unknown-linux-gnu|x86_64-w64-windows-gnu)-msil )\S+ \S+ \S*msil_longdouble\.c$"
+# DEFINE: %{bb_ld_wide} = "^x86_64-unknown-linux-gnu-msil \S+ msil/lib/builtins/msil_longdouble\.c$" "^x86_64-unknown-linux-musl-msil \S+ msil/lib/builtins/msil_longdouble\.c$" "^aarch64-unknown-linux-gnu-msil \S+ msil/lib/builtins/msil_longdouble\.c$" "^x86_64-w64-windows-gnu-msil \S+ msil/lib/builtins/msil_longdouble\.c$"
+
+# RUN: rm -rf %t && mkdir -p %t/empty
+
+# (1)
+# RUN: %{bb} --self-test > %t/self-test.log 2>&1
+# RUN: %{harness_check} contains %t/self-test.log "^build-builtins\.py --self-test: all checks passed$" "^ok: --list prints one line per member, in sources\.txt order$" "^ok: a guarded source splits into one member per MSIL_MEMBER name, in order$" "^ok: archives and stamps at <out>/<triple>/<name>$" "^ok: two output directories give byte-identical archives$"
+# RUN: %{harness_check} contains %t/self-test.log "^ok: --check passes on fresh archives$" "^ok: --check on an empty --out exits 1$" "^ok: stale stamp after a source changes$" "^ok: stale stamp after [c]lang changes$" "^ok: --check without a stamp exits 1$" "^ok: a failed compile exits 1 and names the source$"
+# RUN: %{harness_check} contains %t/self-test.log "^ok: native oracle: .*never hosted, atomic or msil/$" "^ok: the repository's sources\.txt resolves for every --all triple without duplicates$"
+
+# (2)
+# RUN: %{bb} --list --all > %t/all.txt
+# RUN: %{harness_check} contains %t/all.txt "^x86_64-pc-windows-msvc-msil extendhfsf2\.c\.o compiler-rt/lib/builtins/extendhfsf2\.c$" "^aarch64-pc-windows-msvc-msil extendhfsf2\.c\.o compiler-rt/lib/builtins/extendhfsf2\.c$" "^x86_64-unknown-linux-gnu-msil extendhfsf2\.c\.o compiler-rt/lib/builtins/extendhfsf2\.c$" "^x86_64-unknown-linux-musl-msil extendhfsf2\.c\.o compiler-rt/lib/builtins/extendhfsf2\.c$" "^aarch64-unknown-linux-gnu-msil extendhfsf2\.c\.o compiler-rt/lib/builtins/extendhfsf2\.c$" "^x86_64-w64-windows-gnu-msil extendhfsf2\.c\.o compiler-rt/lib/builtins/extendhfsf2\.c$"
+# RUN: %{harness_check} contains %t/all.txt "^x86_64-unknown-linux-gnu-msil int_util\.c\.o compiler-rt/lib/builtins/int_util\.c$" %{bb_ld_wide}
+# RUN: %{harness_check} lacks %t/all.txt %{bb_format} %{bb_triples} %{bb_atomic} %{bb_ti} %{bb_hosted} %{bb_ld_msvc} %{bb_ld_other}
+# RUN: %{bb} --list > %t/default.txt
+# RUN: %{harness_check} contains %t/default.txt "^x86_64-pc-windows-msvc-msil extendhfsf2\.c\.o compiler-rt/lib/builtins/extendhfsf2\.c$" "^x86_64-unknown-linux-gnu-msil extendhfsf2\.c\.o compiler-rt/lib/builtins/extendhfsf2\.c$" "^x86_64-unknown-linux-gnu-msil \S+ msil/lib/builtins/msil_longdouble\.c$"
+# RUN: %{harness_check} lacks %t/default.txt %{bb_format} %{bb_default} %{bb_atomic} %{bb_ti} %{bb_hosted} %{bb_ld_msvc}
+# The failure paths.
+# RUN: %{harness_check} write %t/bad-separator.txt "x86_64-unknown-linux-gnu-msil atomic.c.o compiler-rt\lib\builtins\atomic.c"
+# RUN: %{harness_check} write %t/bad-columns.txt "x86_64-unknown-linux-gnu-msil atomic.c.o"
+# RUN: %{harness_check} contains %t/bad-separator.txt %{bb_format}
+# RUN: %{harness_check} contains %t/bad-columns.txt %{bb_format}
+# RUN: %{harness_check} lacks %t/bad-separator.txt %{bb_atomic}
+# RUN: %{harness_check} write %t/bad.txt "x86_64-unknown-linux-gnu-msil atomic.c.o compiler-rt/lib/builtins/atomic.c" "x86_64-unknown-linux-gnu-msil udivmodti4.c.o compiler-rt/lib/builtins/udivmodti4.c" "x86_64-unknown-linux-gnu-msil floatuntisf.c.o compiler-rt/lib/builtins/floatuntisf.c" "x86_64-unknown-linux-gnu-msil fixunsdfti.c.o compiler-rt/lib/builtins/fixunsdfti.c" "x86_64-unknown-linux-gnu-msil emutls.c.o compiler-rt/lib/builtins/emutls.c" "x86_64-unknown-linux-gnu-msil enable_execute_stack.c.o compiler-rt/lib/builtins/enable_execute_stack.c" "x86_64-unknown-linux-gnu-msil eprintf.c.o compiler-rt/lib/builtins/eprintf.c" "x86_64-unknown-linux-gnu-msil clear_cache.c.o compiler-rt/lib/builtins/clear_cache.c" "x86_64-unknown-linux-gnu-msil trampoline_setup.c.o compiler-rt/lib/builtins/trampoline_setup.c" "x86_64-unknown-linux-gnu-msil os_version_check.c.o compiler-rt/lib/builtins/os_version_check.c" "x86_64-unknown-linux-gnu-msil apple_versioning.c.o compiler-rt/lib/builtins/apple_versioning.c" "aarch64-pc-windows-msvc-msil msil_longdouble.sqrtl.c.o msil/lib/builtins/msil_longdouble.c" "x86_64-unknown-linux-gnux32-msil adddf3.c.o compiler-rt/lib/builtins/adddf3.c"
+# RUN: %{harness_check} lacks %t/bad.txt %{bb_format}
+# RUN: %{harness_check} contains %t/bad.txt %{bb_triples} %{bb_default} %{bb_atomic} %{bb_ti} %{bb_hosted} %{bb_ld_msvc} %{bb_ld_other}
+# RUN: %{harness_check} exits 1 %{harness_check} contains %t/bad.txt %{bb_ld_wide}
+
+# (3)
+# RUN: %if clang %{ %{harness_check} exits 1 "%python" "%S/Inputs/rtlib/build-dir-of.py" %clang %{bb} --check --out %t/empty > %t/check.log 2>&1 %}
+# RUN: %if clang %{ %{harness_check} contains %t/check.log "^build-builtins\.py: x86_64-pc-windows-msvc-msil: missing: \S*build-builtins\.test\.tmp\Wempty\Wx86_64-pc-windows-msvc-msil\Wclang_rt\.builtins\.lib$" "^build-builtins\.py: x86_64-unknown-linux-gnu-msil: missing: \S*build-builtins\.test\.tmp\Wempty\Wx86_64-unknown-linux-gnu-msil\Wlibclang_rt\.builtins\.a$" "^build-builtins\.py: 2 archive\(s\) missing or stale; run 'python msil/utils/build/build-builtins\.py' to build them$" %}
+# RUN: %if clang %{ %{harness_check} lacks %t/check.log "^build-builtins\.py: error:" %}
+
+# (4)
+# RUN: %{harness_check} exits 2 %{bb} --list --jobs 0 > %t/usage-1.log 2>&1
+# RUN: %{harness_check} contains %t/usage-1.log "^build-builtins\.py: error: --jobs must be at least 1$"
+# RUN: %{harness_check} exits 2 %{bb} --check --list > %t/usage-2.log 2>&1
+# RUN: %{harness_check} contains %t/usage-2.log "^build-builtins\.py: error: --check and --list cannot be combined$"
+# RUN: %{harness_check} exits 2 %{bb} --list --out %t/out > %t/usage-3.log 2>&1
+# RUN: %{harness_check} contains %t/usage-3.log "^build-builtins\.py: error: --out goes with a build or --check$"
+# RUN: %{harness_check} exits 2 %{bb} --list --triple x86_64-unknown-linux-gnu > %t/usage-4.log 2>&1
+# RUN: %{harness_check} contains %t/usage-4.log "^build-builtins\.py: error: --triple x86_64-unknown-linux-gnu is not an MSIL triple \(<arch>-\.\.\.-msil\)$"
+# RUN: %{harness_check} exits 2 %{bb} --self-test --jobs 2 > %t/usage-5.log 2>&1
+# RUN: %{harness_check} contains %t/usage-5.log "^build-builtins\.py: error: --self-test takes no other option$"
+# RUN: %{harness_check} exits 2 %{bb} --list --frobnicate > %t/usage-6.log 2>&1
+# RUN: %{harness_check} contains %t/usage-6.log "^build-builtins\.py: error: unrecognized arguments: --frobnicate$"
+# RUN: %{harness_check} exits 2 %{bb} --check --build-dir %t/nobuild --out %t/empty > %t/usage-7.log 2>&1
+# RUN: %{harness_check} contains %t/usage-7.log "^build-builtins\.py: error: \S*build-builtins\.test\.tmp\Wnobuild\Wbin\Wclang(\.exe)? does not exist \(--build-dir \S*build-builtins\.test\.tmp\Wnobuild\)$"
+# RUN: cat %t/usage-1.log %t/usage-2.log %t/usage-3.log %t/usage-4.log %t/usage-5.log %t/usage-6.log %t/usage-7.log > %t/usage.log
+# RUN: %{harness_check} lacks %t/usage.log "^\S+-msil \S+\.c\.o " "^ok: " "^build-builtins\.py: \S+-msil: "
+# RUN: %{harness_check} missing %t/out
+# RUN: %{harness_check} missing %t/nobuild
+# RUN: %{harness_check} missing %t/empty/x86_64-pc-windows-msvc-msil
+# RUN: %{harness_check} missing %t/empty/x86_64-unknown-linux-gnu-msil

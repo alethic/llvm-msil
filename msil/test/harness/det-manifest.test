@@ -15,8 +15,20 @@
 # holding a foreign file (refused, the file kept) or only <triple>/
 # directories (emptied); a tool that does not start, refused before anything
 # is deleted.
+# M25 (plan 5.14.3 A2; section 12, 'Plan 5.12.12 amended (determinism
+# manifest)'): build also builds the helper archives clang_rt.builtins of
+# both triples with build-builtins.py (a stand-in in the self-test), and the
+# manifest lists them as <triple>/builtins/<archive> without their stamps
+# (18 entries); build-builtins.py gets --build-dir <the directory above the
+# tools' bin/> (absolute, also from relative tool paths), --out
+# <work>/builtins, both triples and --jobs. The failure paths: an edited
+# helper source changes the two helper archives and nothing else; --clang
+# and --ar outside one bin/ directory are a usage error before anything is
+# deleted; a failed helper archive build writes no manifest.
 # RUN: %python %S/../../utils/ci/det-manifest.py --self-test > %t.log 2>&1
 # RUN: %{harness_check} contains %t.log "^det-manifest: self-test passed \(0 failure\(s\)\)$" "^ok: two work directories give equal manifests$" "^ok: compare fails on a differing entry$" "^ok: a work directory inside the repository is refused$"
 # RUN: %{harness_check} contains %t.log "^ok: relative '/'-separated tool paths, run from the root, pass the archive step$" "^ok: a work directory holding a foreign file is refused, and the file survives$" "^ok: a work directory holding only <triple>/ directories is emptied and marked$" "^ok: a missing --clang is a usage error before anything is deleted$" "^ok: a missing --ar is a usage error before anything is deleted$"
 # RUN: %{harness_check} contains %t.log "^ok: relative sources and -I, .*, -fms-compatibility-version=19\.33 on every windows-msvc compile and on no linux-gnu one$"
+# RUN: %{harness_check} contains %t.log "^ok: 18 entries \(3 objects and an archive, 2 triples, 2 levels; 2 helper archives\)$" "^ok: the helper archives are listed as <triple>/builtins/<archive>, without their stamps$" "^ok: build-builtins\.py gets --build-dir <the directory above the tools' bin/>, --out <work>/builtins, both triples and --jobs$" "^ok: relative tool paths give build-builtins\.py the absolute build directory$"
+# RUN: %{harness_check} contains %t.log "^ok: build after a helper source edit$" "^ok: an edited helper source differs in the 2 helper archives only$" "^ok: --clang and --ar outside one bin/ directory are a usage error before anything is deleted$" "^ok: a failed helper archive build writes no manifest$"
 # RUN: %{harness_check} lacks %t.log "^FAIL: "

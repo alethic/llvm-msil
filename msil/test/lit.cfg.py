@@ -82,6 +82,13 @@
 # results in a cache (msil_probe_cache, see "probe cache"); and the local
 # runner runs the programs on .NET 10 by default.
 #
+# From M25 (plan 5.14.3, 5.17.2, 5.17.3): lit notes whether the MSIL
+# triple's helper archive clang_rt.builtins exists (a note, never a feature;
+# msil/utils/build/build-builtins.py builds it), and msil_linux_rtlib names
+# the native compiler-rt builtins that the hosted Linux oracle links before
+# -lc (feature msil-linux-rtlib, %{msil_linux_rtlib}, msil-prog.py
+# --linux-rtlib; see "helper archives" below).
+#
 # The native oracle (plan 5.12.6 O1, 5.12.8) is the same program built for
 # the native triple: on Windows by clang and link.exe, with the VS clang's
 # compiler-rt builtins for the i128 helpers (msil_native_rtlib); on Linux by
@@ -355,24 +362,27 @@ def tools_up_to_date(build_script, out_dir):
 # -print-file-name=include (lit's use_clang), 'dotnet --list-runtimes',
 # 'dotnet nuget locals global-packages --list', 'dotnet --list-sdks' (the
 # csc of %msil_csc), 'ilverify --version', the WSL dotnet probe, the
-# msil_wsl_ilasm probe and the compile of the E7 oracle's start.o. FILE is
-# {"version": 1, "key": {"lit_cfg_sha256": <SHA-256 of this file>},
+# msil_wsl_ilasm probe, the compile of the E7 oracle's start.o, and clang
+# -print-resource-dir and -print-libgcc-file-name for the helper archive.
+# FILE is {"version": 1, "key": {"lit_cfg_sha256": <SHA-256 of this file>},
 # "probes": {<probe>: {"key": {...}, "value": ...}}}: each probe's key holds
 # the absolute path, size and mtime of every file it depends on (the tool,
 # and the directories that change when a runtime or SDK is installed), the
 # parameters that select what it probes and the environment variables it
-# reads. A probe runs again when its key differs, when this file changed or
-# when FILE cannot be read, and FILE is then rewritten atomically (a
-# temporary file and a rename). Only a result that lets the run go on is
-# kept, so a probe that failed runs again next time. The up-to-date checks
-# of build-jitall.py and build-mdtools.py run as functions of the imported
-# scripts (a process only when a build is due), and the file lookups
-# (PEVerify, ildasm, the host ilasm, the sysroots and their features) start
-# no process, so they are made every time. The WSL dotnet probe cannot see
-# into WSL by itself: its key holds the WSL dotnet host and its runtime
-# directory as \\wsl.localhost (or \\wsl$) shows them, and it is not cached
-# without that view. lit prints 'note: probe cache: hit' when every probe
-# came from FILE, else 'note: probe cache: miss (<reason>)'.
+# reads, and under "files" whether a file exists whose presence changes the
+# answer (the helper archive; see "helper archives"). A probe runs again when
+# its key differs, when this file changed or when FILE cannot be read, and
+# FILE is then rewritten atomically (a temporary file and a rename). Only a
+# result that lets the run go on is kept, so a probe that failed runs again
+# next time. The up-to-date checks of build-jitall.py and build-mdtools.py
+# run as functions of the imported scripts (a process only when a build is
+# due), and the file lookups (PEVerify, ildasm, the host ilasm, the sysroots
+# and their features) start no process, so they are made every time. The
+# WSL dotnet probe cannot see into WSL by itself: its key holds the WSL
+# dotnet host and its runtime directory as \\wsl.localhost (or \\wsl$) shows
+# them, and it is not cached without that view. lit prints 'note: probe
+# cache: hit' when every probe came from FILE, else 'note: probe cache: miss
+# (<reason>)'.
 with open(__file__, "rb") as _f:
     LIT_CFG_SHA256 = hashlib.sha256(_f.read()).hexdigest()
 
@@ -404,7 +414,7 @@ def _retry_sharing(action):
 
 def _key_change(old, new):
     """What differs between two probe keys, for the miss note."""
-    for part in ("params", "env", "tools"):
+    for part in ("params", "env", "tools", "files"):
         o = (old or {}).get(part) or {}
         n = (new or {}).get(part) or {}
         for k in sorted(set(o) | set(n)):
@@ -2060,6 +2070,226 @@ if oracle_required or bool_param("msil_native_oracle"):
         else:
             note("native oracle: " + native_triple)
 
+
+# ---------------------------------------------------------------- helper archives
+# The helper archive clang_rt.builtins of the MSIL triple (plan 5.14.3 A1,
+# M25) is the per-target file <resource dir>/lib/<msil_triple>/
+# clang_rt.builtins.lib on *-windows-msvc* triples and
+# <resource dir>/lib/<msil_triple>/libclang_rt.builtins.a otherwise, with the
+# resource directory from 'clang -print-resource-dir';
+# msil/utils/build/build-builtins.py builds it there. The driver passes
+# msil-ld the file that 'clang --target=<msil_triple> -rtlib=compiler-rt
+# -print-libgcc-file-name' names, when it exists, and that is not always the
+# per-target file: ToolChain::getCompilerRT names the per-target file when it
+# exists, else the old layout's
+# <resource dir>/lib/<os>/[lib]clang_rt.builtins-<arch>.<ext> (a native
+# compiler-rt) when that one exists, else the per-target file again. So the
+# helper archive is there only when the per-target file exists and clang
+# names it; otherwise lit notes a missing archive, naming the per-target file
+# even when clang names another one. A missing archive is a note, never a
+# feature: a test that calls a runtime helper then fails to link with
+# msil-ld's runtime-helper line, as it must. The resource directory depends
+# on clang alone, but the file clang names depends on which of those files
+# exist, so the probe cache keeps that answer only while clang is unchanged
+# and both the per-target file and the file clang named exist, or are
+# missing, as they were when clang named it.
+def per_target_helper_archive(clang, triple):
+    """Plan 5.14.3 A1's per-target file for triple, or '' when 'clang
+    -print-resource-dir' prints nothing; through the probe cache."""
+    rc, out = cached_run(
+        "clang -print-resource-dir " + slashes(os.path.abspath(clang)),
+        {"tools": {"clang": file_stamp(clang)}},
+        [clang, "-print-resource-dir"],
+        60,
+        check=lambda out: bool(out.strip()),
+    )
+    lines = out.strip().splitlines() if rc == 0 else []
+    if not lines or not lines[-1].strip():
+        return ""
+    name = (
+        "clang_rt.builtins.lib"
+        if "-windows-msvc" in triple
+        else "libclang_rt.builtins.a"
+    )
+    return os.path.normpath(os.path.join(lines[-1].strip(), "lib", triple, name))
+
+
+def print_libgcc_file_name(clang, target, cache=True, per_target=None):
+    """The file 'clang --target=<target> -rtlib=compiler-rt
+    -print-libgcc-file-name' names, or ''. With cache, through the probe
+    cache: a kept answer holds while clang is unchanged and the file it names
+    and per_target (the per-target file, when given) exist, or are missing,
+    as they were when clang answered."""
+    cmd = [clang, "--target=" + target, "-rtlib=compiler-rt", "-print-libgcc-file-name"]
+    if cache:
+        name = "clang -print-libgcc-file-name %s %s" % (
+            target,
+            slashes(os.path.abspath(clang)),
+        )
+        key = {"tools": {"clang": file_stamp(clang)}}
+        if per_target:
+            key["files"] = {slashes(per_target): os.path.isfile(per_target)}
+        # The value is [the file clang named, whether it existed then].
+        kept = probe_cache.get(
+            name,
+            key,
+            check=lambda value: isinstance(value, list)
+            and len(value) == 2
+            and isinstance(value[0], str)
+            and os.path.isfile(value[0]) == value[1],
+        )
+        if kept is not None:
+            return kept[0]
+    rc, out = run_quietly(cmd, 60)
+    lines = out.strip().splitlines() if rc == 0 else []
+    named = os.path.normpath(lines[-1].strip()) if lines and lines[-1].strip() else ""
+    if cache and named:
+        probe_cache.put(name, key, [named, os.path.isfile(named)])
+    return named
+
+
+helper_archive = (
+    per_target_helper_archive(clang_path, msil_triple) if clang_path else ""
+)
+named_builtins = (
+    print_libgcc_file_name(clang_path, msil_triple, per_target=helper_archive)
+    if helper_archive
+    else ""
+)
+if (
+    helper_archive
+    and os.path.isfile(helper_archive)
+    and os.path.normcase(named_builtins) == os.path.normcase(helper_archive)
+):
+    note("helper archive: " + slashes(helper_archive))
+elif clang_path:
+    note(
+        "no helper archive %s for %s: a test that calls a runtime helper fails to "
+        "link with msil-ld's runtime-helper line; build it with 'python "
+        "msil/utils/build/build-builtins.py' (plan 5.14.3)"
+        % (
+            slashes(helper_archive) or "(clang -print-resource-dir failed)",
+            msil_triple,
+        )
+    )
+
+# --param msil_linux_rtlib=auto|none|PATH (plan 5.17.2, 5.17.3; M25): the
+# native compiler-rt builtins archive that the hosted Linux oracle links
+# after the program's inputs and -lm, before -lc (msil-prog.py --linux-rtlib,
+# in %msil_prog_build for Linux triples), so that a hosted program that calls
+# a runtime helper (msil/test/M3/03-helpers) gets compiler-rt's results
+# natively, as the MSIL program gets them from its helper archive (R19); E7
+# keeps libgcc_s.so.1, which agrees with compiler-rt on the integer helpers
+# M1 uses. 'auto' (the default) is, on a Windows host,
+# <msil_linux_sysroot>/usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a
+# (python msil/utils/make-linux-sysroot.py --builtins writes it), and on a
+# Linux host the file that 'clang --target=<native triple> -rtlib=compiler-rt
+# -print-libgcc-file-name' names, for the tree's clang and then the clang on
+# PATH (the CI job's), the first that exists; there it never looks in a
+# sysroot, so the archive that 'make-linux-sysroot.py --builtins --out DIR'
+# writes (DIR/usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a) needs
+# a PATH. 'none' or an empty value disables it; a PATH must exist (a
+# configuration error otherwise). Feature msil-linux-rtlib, substitution
+# %{msil_linux_rtlib}. A hosted directory of a Linux triple whose native
+# oracle runs needs it: under msil_native_oracle=required a missing archive
+# is a configuration error, otherwise the directory loses its native oracle,
+# with a note (see config.msil_enable_hosted below). On a Windows host the
+# error and the note name the file auto tried and make-linux-sysroot.py
+# --builtins; on another host they name each clang that auto asked and the
+# path it printed (or that it printed none), say that auto does not look in
+# a sysroot there, and give two remedies: compiler-rt's builtins installed
+# for that clang, or the archive that make-linux-sysroot.py --builtins --out
+# DIR writes, passed as msil_linux_rtlib=PATH.
+LINUX_RTLIB_NAME = "libclang_rt.builtins-x86_64.a"
+linux_rtlib_param = params.get("msil_linux_rtlib", "auto")
+linux_rtlib = None
+linux_rtlib_tried = []
+# On a non-Windows host: (clang, the path it printed or '') for each clang
+# that auto asked, for linux_rtlib_why().
+linux_rtlib_asked = []
+if linux_rtlib_param.lower() == "auto":
+    if is_windows:
+        if linux_libdir:
+            linux_rtlib_tried.append(os.path.join(linux_libdir, LINUX_RTLIB_NAME))
+    else:
+        # Not through the probe cache: for a native triple clang names the
+        # old layout's file (lib/linux/libclang_rt.builtins-x86_64.a, where a
+        # distribution's compiler-rt package puts it) only once it exists,
+        # which the probe key cannot see.
+        rtlib_clangs = {}
+        for c in (clang_path, lit.util.which("clang")):
+            if c:
+                rtlib_clangs.setdefault(os.path.realpath(c), c)
+        for c in rtlib_clangs.values():
+            printed = print_libgcc_file_name(c, native_triple, cache=False)
+            linux_rtlib_asked.append((c, printed))
+            if printed and printed not in linux_rtlib_tried:
+                linux_rtlib_tried.append(printed)
+    linux_rtlib = next((p for p in linux_rtlib_tried if os.path.isfile(p)), None)
+elif linux_rtlib_param.lower() not in ("", "none"):
+    if not os.path.isfile(linux_rtlib_param):
+        fatal("--param msil_linux_rtlib=%s: no such file" % linux_rtlib_param)
+    linux_rtlib = os.path.abspath(linux_rtlib_param)
+if linux_rtlib:
+    linux_rtlib = os.path.normpath(linux_rtlib)
+    features.add("msil-linux-rtlib")
+    note("linux rtlib: " + slashes(linux_rtlib))
+
+
+def linux_rtlib_why():
+    """Why there is no msil_linux_rtlib."""
+    if linux_rtlib_param.lower() in ("", "none"):
+        return "--param msil_linux_rtlib=%s disables them" % linux_rtlib_param
+    if not is_windows and linux_rtlib_asked:
+        return (
+            "msil_linux_rtlib=auto ran 'clang --target=%s -rtlib=compiler-rt "
+            "-print-libgcc-file-name': %s"
+            % (
+                native_triple,
+                ", and ".join(
+                    "%s printed %s, which does not exist" % (slashes(c), slashes(p))
+                    if p
+                    else "%s printed nothing" % slashes(c)
+                    for c, p in linux_rtlib_asked
+                ),
+            )
+        )
+    if not linux_rtlib_tried:
+        return "msil_linux_rtlib=auto has no file to try (%s)" % (
+            "no msil_linux_sysroot" if is_windows else "no clang"
+        )
+    return "msil_linux_rtlib=auto tried %s, which %s not exist" % (
+        " and ".join(slashes(p) for p in linux_rtlib_tried),
+        "does" if len(linux_rtlib_tried) == 1 else "do",
+    )
+
+
+def linux_rtlib_fix():
+    """How a non-Windows host gets msil_linux_rtlib. auto asks clang only
+    there, so make-linux-sysroot.py --builtins only makes a file for a
+    PATH."""
+    build = (
+        "build the archive with 'python msil/utils/make-linux-sysroot.py "
+        "--builtins --out DIR', which writes DIR/usr/lib/x86_64-linux-gnu/%s, "
+        "and pass that file with --param msil_linux_rtlib=PATH" % LINUX_RTLIB_NAME
+    )
+    if linux_rtlib_param.lower() in ("", "none"):
+        return (
+            "install compiler-rt's builtins for clang and use "
+            "msil_linux_rtlib=auto (on this host auto asks clang only and does "
+            "not look in a sysroot), or " + build
+        )
+    if len(linux_rtlib_asked) == 1:
+        which = "that clang"
+    else:
+        which = "one of those clangs" if linux_rtlib_asked else "clang"
+    return (
+        "on this host auto asks clang only and does not look in a sysroot: "
+        "install compiler-rt's builtins for %s, so that the path it prints "
+        "exists, or %s" % (which, build)
+    )
+
+
 # ---------------------------------------------------------------- hosted mode
 # config.msil_enable_hosted(config) (plan 5.17.3): the lit.local.cfg of a
 # hosted directory calls it with its own configuration; that exact line is
@@ -2071,7 +2301,11 @@ if oracle_required or bool_param("msil_native_oracle"):
 # msil-hosted, and on a Linux triple whose native oracle is E7 without
 # msil-linux-hosted-oracle under msil_native_oracle=required (each a
 # configuration error under msil_require_hosted=1; under a native oracle that
-# is not required the directory only loses the native oracle, with a note);
+# is not required the directory only loses the native oracle, with a note),
+# and on a Linux triple whose native oracle runs without msil_linux_rtlib
+# (M25) it is a configuration error under msil_native_oracle=required
+# (whatever msil_require_hosted says), or the directory loses its native
+# oracle, with a note;
 # (2) sets %{msil_cflags} to '-std=gnu17 -Werror=return-type -I<Inputs>
 # %{msil_hosted_cflags}', without -ffreestanding (msil_test.h stays
 # usable); (3) sets %{msil_oracle_flags} to --hosted, which selects the
@@ -2144,6 +2378,40 @@ class EnableHosted:
                 note("%s: no native oracle in this hosted directory: %s" % (where, why))
                 return
             problem = why + " (msil_native_oracle=required)"
+        elif (
+            triple_os == "linux"
+            and "msil-native-oracle" in cfg.available_features
+            and not linux_rtlib
+        ):
+            # The native compiler-rt builtins of the hosted Linux oracle
+            # (plan 5.17.2, 5.17.3; M25).
+            if oracle_required:
+                fatal(
+                    "%s is a hosted directory (plan 5.17.3) whose native oracle "
+                    "links the native compiler-rt builtins "
+                    "(msil_native_oracle=required), but %s; %s"
+                    % (
+                        where,
+                        linux_rtlib_why(),
+                        "build them with 'python msil/utils/make-linux-sysroot.py "
+                        "--builtins' or pass --param msil_linux_rtlib=PATH"
+                        if is_windows
+                        else linux_rtlib_fix(),
+                    )
+                )
+            cfg.available_features.discard("msil-native-oracle")
+            note(
+                "%s: no native oracle in this hosted directory: the hosted Linux "
+                "oracle links the native compiler-rt builtins, but %s%s"
+                % (
+                    where,
+                    linux_rtlib_why(),
+                    " (python msil/utils/make-linux-sysroot.py --builtins)"
+                    if is_windows
+                    else "; " + linux_rtlib_fix(),
+                )
+            )
+            return
         if problem is None:
             return
         if require_hosted:
@@ -2987,13 +3255,20 @@ linux_libs = " ".join(
 # the sysroot (after msil_linux_sysroot > $MSIL_LINUX_SYSROOT > the default;
 # a sysroot lit ignored counts as absent), the WSL distribution and the
 # ld.lld that decided feature msil-linux-oracle, not the script's own
-# defaults ($MSIL_BUILD_DIR, $MSIL_LINUX_SYSROOT, PATH).
+# defaults ($MSIL_BUILD_DIR, $MSIL_LINUX_SYSROOT, PATH), and the native
+# compiler-rt builtins of its hosted oracle (msil_linux_rtlib: the file lit
+# found, else the parameter's auto or none, M25).
+if linux_rtlib:
+    e7_rtlib = quote(linux_rtlib)
+else:
+    e7_rtlib = "none" if linux_rtlib_param.lower() in ("", "none") else "auto"
 e7_args = "--clang %s --linux-sysroot %s --wsl-distro %s --ld-lld %s" % (
     quote(clang),
     quote(linux_sysroot if linux_libdir else "linux-sysroot-not-found"),
     wsl_distro,
     quote(ld_lld or "ld.lld-not-found"),
 )
+e7_args += " --linux-rtlib " + e7_rtlib
 
 
 # The composites (plan 5.12.3, 5.17.10; M24): each level is its build, then
@@ -3266,6 +3541,11 @@ if e7_oracle:
     prog_tool_args["start"] = "--start=" + quote(e7_start)
     if glibc_sysroot:
         prog_tool_args["glibc-sysroot"] = "--glibc-sysroot=" + quote(glibc_sysroot)
+if triple_os == "linux" and linux_rtlib:
+    # The native compiler-rt builtins of the hosted Linux oracle (plan 5.17.3,
+    # M25): msil-prog.py links them in a hosted native build only (E7h, or
+    # the driver recipe of a Linux host) and ignores them otherwise.
+    prog_tool_args["linux-rtlib"] = "--linux-rtlib=" + quote(linux_rtlib)
 config.msil_prog_tool_args = prog_tool_args
 config.msil_prog_template = prog_template
 
@@ -3609,6 +3889,12 @@ substitutions = [
     (
         "%{msil_glibc_sysroot}",
         quote(glibc_sysroot) if glibc_sysroot else "glibc-sysroot-not-found",
+    ),
+    # The native compiler-rt builtins of the hosted Linux oracle
+    # (msil_linux_rtlib, M25).
+    (
+        "%{msil_linux_rtlib}",
+        quote(linux_rtlib) if linux_rtlib else "linux-rtlib-not-found",
     ),
     # msil-ld under msil-run.py's limits, and the tree's llvm-ar and llvm-nm.
     (

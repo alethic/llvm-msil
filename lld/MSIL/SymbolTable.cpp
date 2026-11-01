@@ -488,7 +488,9 @@ void SymbolTable::reportUnresolved(std::string msg, ArrayRef<Reference> refs,
 }
 
 // The first line of the report of an unresolved symbol (plan 5.9.14), with
-// the line of plan 5.14.2 for a name of classes N1-N3 (getNameClassLine).
+// the line of plan 5.14.2 for a name of classes N1-N3 (getNameClassLine; an
+// N1 name's line says that the helper archive does not define the name when
+// an input archive of that name takes part, plan 5.14.3 A1).
 static std::string getUnresolvedMessage(const Symbol &sym) {
   if (auto *u = dyn_cast<Undefined>(&sym); u && u->discarded)
     return "relocation refers to a symbol in a discarded section: " +

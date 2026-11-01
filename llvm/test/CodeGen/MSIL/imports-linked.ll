@@ -14,13 +14,17 @@
 ;   else from its kind-0 !msil.imports operand, and anything else is an error,
 ;   "undefined function '<name>' was not resolved by msil-ld" or
 ;   "library call '<name>' was not resolved by msil-ld". A runtime helper
-;   (a '__' name: compiler-rt's, or the __atomic_* functions that AtomicExpand
-;   calls for atomic operations) keeps its phase-3 text, "runtime helper
-;   '<name>' is not available for MSIL yet (phase 3)", even when
-;   !msil.imports lists it, and a library call whose function the module
-;   defines calls that definition. Each of these texts is a plain
-;   'error: <text>' line (LLVMContext::emitError), whether LowerCall reports
-;   it for a call or the AsmPrinter for a declaration.
+;   keeps its own text even when !msil.imports lists it (since M25, 5.14.3
+;   A9 and plan section 6 M25): a compiler-rt helper (a '__' library call,
+;   or an undefined function of class N1 or N3, such as __muldc3) gets
+;   "runtime helper '<name>' needs the helper archive clang_rt.builtins,
+;   which only msil-ld links", and an __atomic_* function that AtomicExpand
+;   calls for an atomic operation gets "runtime helper '<name>' is an atomic
+;   operation that only msil-ld links"; any other '__' name is an ordinary
+;   undefined function (helper-archive-errors.ll). A library call whose
+;   function the module defines calls that definition. Each of these texts
+;   is a plain 'error: <text>' line (LLVMContext::emitError), whether
+;   LowerCall reports it for a call or the AsmPrinter for a declaration.
 ;   Linked P/Invokes have 'assembly' access (5.10.11) and, from M18 on,
 ;   'nomangle':
 ;     .method assembly hidebysig static pinvokeimpl("<module>" [as "<entry>"] nomangle cdecl) <ret> '<name>'(<params>) cil managed preservesig {}
@@ -447,12 +451,13 @@ attributes #4 = { "msil-import-module"="libevents.so.2" "msil-import-name"="on_e
 ;   import it, linked mode does not;
 ; - the library call round, which nothing binds, and sqrt, whose only
 ;   operand is not of kind 0;
-; - __extendhfsf2, the runtime helper of fpext from half, keeps its phase-3
-;   text although !msil.imports gives it a module and an entry;
+; - __extendhfsf2, the runtime helper of fpext from half, keeps M25's
+;   helper-archive text although !msil.imports gives it a module and an
+;   entry;
 ; - __atomic_fetch_add_4 and __atomic_load_4, the helpers that AtomicExpand
-;   calls for an atomicrmw add and an atomic load of an i32 (atomics are
-;   phase 3, D36), keep the same phase-3 text and are never 'not resolved by
-;   msil-ld', __atomic_load_4 although !msil.imports lists it;
+;   calls for an atomicrmw add and an atomic load of an i32 (D36), keep M25's
+;   atomic-operation text and are never 'not resolved by msil-ld',
+;   __atomic_load_4 although !msil.imports lists it;
 ; - vimp, a natively bound variadic function, whose address is taken;
 ; - imp128 (an i128 result) and takebyval (a byval aggregate), natively bound
 ;   functions whose signatures a P/Invoke cannot pass, one called and one
@@ -480,9 +485,9 @@ declare double @llvm.sqrt.f64(double)
 ; ERR-DAG: {{^}}error: undefined function 'puts' was not resolved by msil-ld{{$}}
 ; ERR-DAG: {{^}}error: library call 'round' was not resolved by msil-ld{{$}}
 ; ERR-DAG: {{^}}error: library call 'sqrt' was not resolved by msil-ld{{$}}
-; ERR-DAG: {{^}}error: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
-; ERR-DAG: {{^}}error: runtime helper '__atomic_fetch_add_4' is not available for MSIL yet (phase 3){{$}}
-; ERR-DAG: {{^}}error: runtime helper '__atomic_load_4' is not available for MSIL yet (phase 3){{$}}
+; ERR-DAG: {{^}}error: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
+; ERR-DAG: {{^}}error: runtime helper '__atomic_fetch_add_4' is an atomic operation that only msil-ld links{{$}}
+; ERR-DAG: {{^}}error: runtime helper '__atomic_load_4' is an atomic operation that only msil-ld links{{$}}
 ; ERR-DAG: {{^}}error: native function 'vimp' (libc.so.6) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
 ; ERR-DAG: {{^}}error: native function 'imp128' (libbig.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
 ; ERR-DAG: {{^}}error: native function 'takebyval' (libbig.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}

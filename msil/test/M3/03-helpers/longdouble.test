@@ -1,0 +1,317 @@
+# The long double functions match native code: nexttoward, nexttowardf and exact functions (frexpl, ldexpl, fmodl, floorl and their kin) on any input, sqrtl and strtold on inputs whose native long double result rounds to the same double, printed as double bits.
+# Plan 5.14.3 (msil_longdouble.c), M25.h. On a Linux triple an MSIL long
+# double is a double, and the helper archive's msil_longdouble members give
+# the C library's long double names (the C library's own take an 80-bit long
+# double): sqrtl, strtold and the others forward to the double functions
+# (sqrt, strtod, ...), nexttoward and nexttowardl to nextafter, and
+# nexttowardf is the one with a body of its own (it compares in double and
+# calls nextafterf). On a windows-msvc triple long double is double natively
+# too, and the names are the UCRT's. The native Linux oracle (E7h, 5.17.3)
+# computes in 80-bit long double and the test converts each result to
+# double, so every input here has a result that the two agree on:
+#   - nexttoward and nexttowardf: their y is a double (exact in any long
+#     double), and nexttowardf's y need not be a float, so that its
+#     comparison is not a float one;
+#   - frexpl, fmodl, remainderl, remquol, modfl, logbl, copysignl, fabsl,
+#     fmaxl, fminl, floorl, ceill, truncl, roundl, rintl, nearbyintl and the
+#     integer roundings: exact, so the result is a double;
+#   - ldexpl and scalbnl: one rounding of the exact product, natively from
+#     long double to double (overflow and subnormal results included);
+#   - sqrtl and strtold: inputs whose result rounded to a 64-bit significand
+#     and then to double is the result rounded to double once, checked with
+#     exact arithmetic (sqrtl(DBL_MAX) and strtold("9007199254740993.0000000001")
+#     are counterexamples, and are not here).
+# There is no long double arithmetic, no sizeof (long double) and no
+# <float.h>: the program only passes doubles to the long double functions and
+# converts their results back. NaN results print as "nan" (their sign and
+# payload are the C library's and the processor's); inputs are volatile
+# objects, so nothing folds, and -fno-builtin (%{msil_copts}, in the MSIL and
+# the native builds) keeps every call a call, so that no function becomes an
+# instruction or an intrinsic (M3 tests are hosted, 5.17.3: their
+# %{msil_cflags} has no -ffreestanding). On a Linux triple the program calls
+# helper-archive members, so it has no -S reference (5.17.13).
+# On Linux triples msil-ld's --lto-emit-asm text refuses those calls (A9),
+# so the test does not run there with msil_link_output=il; on windows-msvc
+# triples it calls only the UCRT, and runs.
+# UNSUPPORTED: msil-link-output=il && msil-triple-linux
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_copts} = -fno-builtin
+# RUN: %{msil_prog}
+#--- main.c
+#include <math.h>
+#include <stdint.h>
+#include <stdlib.h>
+int puts(const char *);
+
+static char line[256];
+static int len;
+static void out_s(const char *t) {
+  while (*t)
+    line[len++] = *t++;
+}
+static void out_x(uint64_t v, int digits) {
+  line[len++] = ' ';
+  for (int i = digits - 1; i >= 0; --i)
+    line[len++] = "0123456789abcdef"[(v >> (4 * i)) & 15];
+}
+static void out_i(long long v) {
+  char buf[24];
+  int n = 0;
+  unsigned long long u = v < 0 ? 0ull - (unsigned long long)v : (unsigned long long)v;
+  do
+    buf[n++] = (char)('0' + u % 10);
+  while (u /= 10);
+  line[len++] = ' ';
+  if (v < 0)
+    line[len++] = '-';
+  while (n)
+    line[len++] = buf[--n];
+}
+static void out_nl(void) {
+  line[len] = 0;
+  puts(line);
+  len = 0;
+}
+static uint64_t b64(double d) { uint64_t u; __builtin_memcpy(&u, &d, 8); return u; }
+static uint32_t b32(float f) { uint32_t u; __builtin_memcpy(&u, &f, 4); return u; }
+static void out_d(double d) {
+  uint64_t u = b64(d);
+  if ((u & 0x7ff0000000000000ull) == 0x7ff0000000000000ull && (u & 0xfffffffffffffull))
+    out_s(" nan");
+  else
+    out_x(u, 16);
+}
+static void out_f(float f) {
+  uint32_t u = b32(f);
+  if ((u & 0x7f800000u) == 0x7f800000u && (u & 0x7fffffu))
+    out_s(" nan");
+  else
+    out_x(u, 8);
+}
+
+#define INF __builtin_inf()
+#define NAN_ __builtin_nan("")
+#define DMAX 0x1.fffffffffffffp1023
+#define DMIN 0x1p-1022
+#define DTRUE_MIN 0x1p-1074
+#define N(a) (int)(sizeof(a) / sizeof(a)[0])
+
+static volatile const double next_xy[][2] = {
+    {1, 2}, {1, 0}, {1, 1}, {0, 1}, {-0.0, 1}, {0, -1}, {-0.0, 0}, {0, -0.0},
+    {DMAX, INF}, {DMAX, DMAX}, {INF, 0}, {INF, INF}, {-INF, 0}, {DTRUE_MIN, 0},
+    {-DTRUE_MIN, 0}, {DMIN, 0}, {0x1.ffffffffffffep-1023, 1}, {1.5, 0x1.8000000000001p0},
+    {2, 1}, {-1, -2}, {-1, 0}, {1, NAN_}, {NAN_, 1}};
+static volatile const float nextf_x[] = {1, 1, 1, 1, 0x1.fffffep127f, 0x1.fffffep127f,
+                                         INF, 0, 0, -0.0f, 0x1p-149f, 0x1p-126f,
+                                         -1, 1, NAN_};
+static volatile const double nextf_y[] = {2, 0x1.00000004p0, 0x1.ffffffffffp-1, 1, INF, DMAX,
+                                          DMAX, 1e-300, -1e-300, 0, 0, 0,
+                                          -0x1.00000000001p0, NAN_, 1};
+
+static void next(void) {
+  for (int i = 0; i < N(next_xy); ++i) {
+    double x = next_xy[i][0], y = next_xy[i][1];
+    out_s("nexttoward");
+    out_d(x);
+    out_d(y);
+    out_s(" =");
+    out_d(nexttoward(x, y));
+    out_nl();
+  }
+  for (int i = 0; i < N(nextf_x); ++i) {
+    float x = nextf_x[i];
+    double y = nextf_y[i];
+    out_s("nexttowardf");
+    out_f(x);
+    out_d(y);
+    out_s(" =");
+    out_f(nexttowardf(x, y));
+    out_nl();
+  }
+}
+
+static volatile const double frexp_x[] = {0, -0.0, 1, -3, 0.1, 1e300, DMAX, DMIN,
+                                          DTRUE_MIN, 3 * DTRUE_MIN, -0x1.ffffffffffffep-1023};
+static volatile const double ldexp_x[] = {1, 1, 1, 1.5, 3.5, 0.75, 1.25, 1, 1, 1, -1,
+                                          DMAX, DMAX, 1e-310, INF, 0, -0.0, 1, 1};
+static volatile const int ldexp_n[] = {10, -1074, -1075, -1074, -1074, -1074, -1074, 1023, 1024,
+                                       2000, 2000, -1, 1, 60, -5, 5, 5, 0x7fffffff,
+                                       -0x7fffffff - 1};
+
+static void scale(void) {
+  for (int i = 0; i < N(frexp_x); ++i) {
+    double x = frexp_x[i];
+    int e = 12345;
+    double m = frexpl(x, &e);
+    out_s("frexpl");
+    out_d(x);
+    out_s(" =");
+    out_d(m);
+    out_i(e);
+    out_nl();
+  }
+  for (int i = 0; i < N(ldexp_x); ++i) {
+    double x = ldexp_x[i];
+    int n = ldexp_n[i];
+    out_s("ldexpl");
+    out_d(x);
+    out_i(n);
+    out_s(" =");
+    out_d(ldexpl(x, n));
+    out_nl();
+    if (i % 3 == 0) {
+      out_s("scalbnl");
+      out_d(x);
+      out_i(n);
+      out_s(" =");
+      out_d(scalbnl(x, n));
+      out_nl();
+    }
+  }
+}
+
+static volatile const double rem_xy[][2] = {
+    {5.5, 2}, {-5.5, 2}, {5.5, -2}, {5, 2}, {7, 2}, {-7, 2}, {3, 2}, {29, 3}, {-29, 3},
+    {1e300, 3}, {DMAX, DMIN}, {0.1, 0.03}, {-0.0, 1}, {DTRUE_MIN * 7, DTRUE_MIN * 2},
+    {1, INF}, {1, 0}, {INF, 1}, {NAN_, 1}};
+
+static void rem(void) {
+  for (int i = 0; i < N(rem_xy); ++i) {
+    double x = rem_xy[i][0], y = rem_xy[i][1];
+    int q = 12345;
+    double r = remquol(x, y, &q);
+    // C requires the sign and the low three bits of the quotient.
+    int qs = q < 0 ? -(int)((0u - (unsigned)q) & 7) : (int)(q & 7);
+    out_s("fmodl remainderl remquol");
+    out_d(x);
+    out_d(y);
+    out_s(" =");
+    out_d(fmodl(x, y));
+    out_d(remainderl(x, y));
+    out_d(r);
+    if (r == r && y - y == 0) // the quotient of a NaN or infinite case is the library's
+      out_i(qs);
+    out_nl();
+  }
+}
+
+static volatile const double round_x[] = {2.5, -2.5, 0.5, -0.5, 1.5, -0.0, 0.49999999999999994,
+                                          -0.49999999999999994, 0x1.fffffffffffffp51,
+                                          -0x1.fffffffffffffp51, 0x1p52, 1e300, DTRUE_MIN,
+                                          -DTRUE_MIN, 3.75, -3.75, INF, -INF, NAN_};
+
+static void rounding(void) {
+  for (int i = 0; i < N(round_x); ++i) {
+    double x = round_x[i];
+    out_s("floorl ceill truncl roundl rintl nearbyintl fabsl");
+    out_d(x);
+    out_s(" =");
+    out_d(floorl(x));
+    out_d(ceill(x));
+    out_d(truncl(x));
+    out_d(roundl(x));
+    out_d(rintl(x));
+    out_d(nearbyintl(x));
+    out_d(fabsl(x));
+    out_nl();
+  }
+  for (int i = 0; i < N(round_x); ++i) {
+    double x = round_x[i];
+    long double ip;
+    double f = modfl(x, &ip);
+    out_s("modfl logbl");
+    out_d(x);
+    out_s(" =");
+    out_d(f);
+    out_d((double)ip);
+    if (x != 0) // logb(0) is a pole error
+      out_d(logbl(x));
+    out_nl();
+  }
+  static volatile const double li_x[] = {2.5, -2.5, 3.5, -3.5, 0.49999999999999994, 1e9 + 0.5,
+                                         -1e9 - 0.5, 2147483647.25, -2147483648.0};
+  for (int i = 0; i < N(li_x); ++i) {
+    double x = li_x[i];
+    out_s("lroundl lrintl llroundl llrintl");
+    out_d(x);
+    out_s(" =");
+    out_i(lroundl(x));
+    out_i(lrintl(x));
+    out_i(llroundl(x));
+    out_i(llrintl(x));
+    out_nl();
+  }
+  static volatile const double ll_x[] = {1e15 + 0.5, -1e15 - 1.5, 0x1p62, -0x1p63};
+  for (int i = 0; i < N(ll_x); ++i) {
+    double x = ll_x[i];
+    out_s("llroundl llrintl");
+    out_d(x);
+    out_s(" =");
+    out_i(llroundl(x));
+    out_i(llrintl(x));
+    out_nl();
+  }
+}
+
+static volatile const double sign_xy[][2] = {
+    {1.5, -0.0}, {-2, 3}, {INF, -1}, {0, -INF}, {-0.0, 0}, {DTRUE_MIN, -1}, {NAN_, -1},
+    {1, NAN_}, {NAN_, 1}, {-1, 2}, {INF, -INF}, {DMAX, -DMAX}};
+
+static void sign(void) {
+  for (int i = 0; i < N(sign_xy); ++i) {
+    double x = sign_xy[i][0], y = sign_xy[i][1];
+    out_s("copysignl fmaxl fminl");
+    out_d(x);
+    out_d(y);
+    out_s(" =");
+    out_d(copysignl(x, y));
+    if (x != 0 || y != 0) { // fmax(-0, +0) may be either zero
+      out_d(fmaxl(x, y));
+      out_d(fminl(x, y));
+    }
+    out_nl();
+  }
+}
+
+static volatile const double sqrt_x[] = {0, -0.0, 1, 4, 6.25, 2.25, 2, 3, 0.5, 7, 10, 0.1,
+                                         123456789, 1e300, 1e-300, 1e-310, DTRUE_MIN,
+                                         0x1p1022, INF, -1, -INF, NAN_};
+static const char *const strs[] = {
+    "2.5", "-0.375", "1e10", "0x1.8p1", "123456789012345678", "0.1", "0.3", "1e23",
+    "3.14159265358979323846", "9007199254740993", "6.02214076e23", "-1e-5", "42.0e-1",
+    "1e-310", "2.2250738585072011e-308", "2.2250738585072014e-308", "4.9406564584124654e-324",
+    "2.4703282292062328e-324", "0x1p-1074", "0x1.fffffffffffff8p0", "1.7976931348623157e308",
+    "1e400", "1e-400", "  -0", "1.5xyz", ".5", "-.5e1", "1e", "", "abc", "inf", "-Infinity",
+    "nan"};
+
+static void sqrt_strto(void) {
+  for (int i = 0; i < N(sqrt_x); ++i) {
+    double x = sqrt_x[i];
+    out_s("sqrtl");
+    out_d(x);
+    out_s(" =");
+    out_d(sqrtl(x));
+    out_nl();
+  }
+  for (int i = 0; i < N(strs); ++i) {
+    char *end = 0;
+    double r = strtold(strs[i], &end);
+    out_s("strtold \"");
+    out_s(strs[i]);
+    out_s("\" =");
+    out_d(r);
+    out_i(end - strs[i]);
+    out_nl();
+  }
+}
+
+int main(void) {
+  next();
+  scale();
+  rem();
+  rounding();
+  sign();
+  sqrt_strto();
+  return 0;
+}

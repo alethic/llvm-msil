@@ -29,11 +29,17 @@
 #        runtimes of the WSL legs into $HOME/.dotnet-msil; the first run downloads them),
 #        linux-sysroot (msil/utils/make-linux-sysroot.py copies the E7 Linux oracle's
 #        libraries out of WSL into $env:MSIL_LINUX_SYSROOT, else
-#        C:\llvm-msil-scratch\linux-sysroot) and glibc-sysroot (M15:
-#        msil/utils/make-glibc-sysroot.sh inside WSL builds the glibc sysroot of the hosted leg
-#        and of hosted mode's E7h oracle into $env:MSIL_GLIBC_SYSROOT, else
-#        C:\llvm-msil-scratch\glibc-sysroot; it downloads only missing packages). Seconds once
-#        done; no root, no system setting.
+#        C:\llvm-msil-scratch\linux-sysroot, and, since M25 with --builtins --clang
+#        <build>\bin\clang.exe (plan 5.17.5), builds there the native compiler-rt archive that
+#        hosted mode's E7h oracle links, usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a
+#        (lit's msil_linux_rtlib=auto), through build-builtins.py --native-oracle with this
+#        build's clang; that script takes the build directory's shared lock itself and skips an
+#        archive whose stamp is current, and the stamp records clang's hash, so a build that
+#        changes clang rebuilds it) and glibc-sysroot (M15: msil/utils/make-glibc-sysroot.sh
+#        inside WSL builds the glibc sysroot of the hosted leg and of hosted mode's E7h oracle
+#        into $env:MSIL_GLIBC_SYSROOT, else C:\llvm-msil-scratch\glibc-sysroot; it downloads only
+#        missing packages). Seconds once done, a rebuilt archive included (165 members, 3 s on
+#        this host); no root, no system setting.
 #   5. corpus (M23, plan 5.12.9; a phase-exit row): python msil/utils/corpus/fetch.py --cache
 #        <-CorpusCache> --check (offline, every entry of msil/utils/corpus/manifest.json, never
 #        --skip; it writes the stamp that lit's corpus legs read), row corpus/check; with
@@ -262,8 +268,9 @@ function Get-ExpectedLegs {
   return [pscustomobject]@{ Expected = $expected; Known = @($all | ForEach-Object { $_.Name }) }
 }
 
-# Step 4: the private WSL runtimes, the E7 sysroot and the hosted leg's glibc sysroot (see the
-# header), one row each. Runs a command, echoes its output and returns @{ Rc; Lines }.
+# Step 4: the private WSL runtimes, the E7 sysroot with E7h's native compiler-rt archive and the
+# hosted leg's glibc sysroot (see the header), one row each. Runs a command, echoes its output
+# and returns @{ Rc; Lines }.
 function Invoke-SetupCommand([string]$Exe, [string[]]$Arguments) {
   $lines = [System.Collections.Generic.List[string]]::new()
   $env:WSL_UTF8 = '1'               # wsl.exe's own messages in UTF-8, not UTF-16
@@ -287,7 +294,7 @@ function ConvertTo-WslPath([string]$Path) {
 
 function Invoke-HostSetup {
   Write-Host ''
-  Write-Host "==== $(Get-Date -Format s) host-setup: private WSL runtimes, the E7 Linux sysroot, the glibc sysroot ===="
+  Write-Host "==== $(Get-Date -Format s) host-setup: private WSL runtimes, the E7 Linux sysroot with E7h's native compiler-rt archive, the glibc sysroot ===="
   $wsl = Get-Command wsl.exe -CommandType Application -ErrorAction SilentlyContinue |
     Select-Object -First 1 -ExpandProperty Source
   $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -304,10 +311,17 @@ function Invoke-HostSetup {
     Add-GateRow 'host-setup' 'wsl-dotnet' $status "$detail; msil-wsl-dotnet.sh exited $($r.Rc)" $sw.Elapsed.TotalSeconds
   }
   $sw.Restart()
+  # --builtins (M25, plan 5.17.5): E7h's native compiler-rt archive, compiled by this build's clang
+  # (build-builtins.py --native-oracle, under its own shared lock: this script holds none here).
   $r = Invoke-SetupCommand $MsilPython @((Join-Path $PSScriptRoot 'make-linux-sysroot.py'), '--out', $linuxSysroot,
-                                         '--distro', $wslDistro)
+                                         '--distro', $wslDistro, '--builtins', '--clang',
+                                         (Join-Path $BuildDir 'bin\clang.exe'))
   $summary = @($r.Lines | Where-Object { $_ -match '^make-linux-sysroot: .*file\(s\) updated$' } | Select-Object -Last 1)
-  $detail = if ($summary.Count -gt 0) { $summary[0] -replace '^make-linux-sysroot: ', '' } else { 'no summary' }
+  # Its own errors, and argparse's usage errors ('make-linux-sysroot.py: error: ...').
+  $errors = @($r.Lines | Where-Object { $_ -match '^make-linux-sysroot(\.py)?: error: ' } | Select-Object -Last 1)
+  $detail = if ($summary.Count -gt 0) { $summary[0] -replace '^make-linux-sysroot: ', '' }
+            elseif ($errors.Count -gt 0) { $errors[0] -replace '^make-linux-sysroot(\.py)?: ', '' }
+            else { 'no summary' }
   $status = if ($r.Rc -eq 0 -and $summary.Count -gt 0) { 'PASS' } else { 'FAIL' }
   Add-GateRow 'host-setup' 'linux-sysroot' $status "$detail; make-linux-sysroot.py exited $($r.Rc)" $sw.Elapsed.TotalSeconds
   $sw.Restart()

@@ -98,3 +98,32 @@ skip O4 msil/test/M2/04-shared/ -shared libraries and links against them have no
 skip O4 msil/test/M2/08-semantics/p2c-bsymbolic.test -shared libraries and links against them have no --lto-emit-asm text
 skip O4 msil/test/M2/08-semantics/p2c-cycle.test -shared libraries and links against them have no --lto-emit-asm text
 skip O4 msil/test/M2/08-semantics/p2c-weak-def.test -shared libraries and links against them have no --lto-emit-asm text
+#
+# Helper-archive programs (plan 5.14.3 A9, M25): a program that calls a K1
+# helper (a function of the helper archive clang_rt.builtins, plan 5.14.1)
+# has no --lto-emit-asm text. A helper call that code generation creates
+# after LTO is an error there ('runtime helper '<name>' needs the helper
+# archive clang_rt.builtins, which only msil-ld links'), and for a helper
+# that the bitcode calls itself msil-ld extracts the archive's CIL member and
+# stops ('<archive>(<member>): --lto-emit-asm cannot link CIL objects'). So
+# O4 is skipped for the tests of msil/test/M3/03-helpers that call one, on
+# the triples where they do: bf16-hashes, complex-matrix, f16-hashes,
+# helpers, longdouble-archive and shared-private on every triple that runs
+# them (shared-private's program also imports from its -shared library,
+# which --lto-emit-asm refuses too), and powi and longdouble on
+# x86_64-unknown-linux-gnu-msil, where powi calls __powidf2 and __powisf2
+# and longdouble the archive's long double forwarders. On
+# x86_64-pc-windows-msvc-msil powi and longdouble call the UCRT instead, as
+# native code does, so they keep O4, as bitint-abi does, which calls no
+# helper. There is no O3 or O6 line: every 03-helpers test is a
+# %{msil_prog}, and O3 and O6 run only for %{msil_c} and %{msil_ll} under
+# obj. Each later 03-helpers test that calls a K1 helper adds its own line
+# here (M32, M33); one that calls none keeps O4 (M33's 03-helpers/i128).
+skip O4 msil/test/M3/03-helpers/bf16-hashes.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)
+skip O4 msil/test/M3/03-helpers/complex-matrix.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)
+skip O4 msil/test/M3/03-helpers/f16-hashes.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)
+skip O4 msil/test/M3/03-helpers/helpers.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)
+skip O4 msil/test/M3/03-helpers/longdouble-archive.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)
+skip O4 msil/test/M3/03-helpers/shared-private.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)
+skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/03-helpers/longdouble.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)
+skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/03-helpers/powi.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)

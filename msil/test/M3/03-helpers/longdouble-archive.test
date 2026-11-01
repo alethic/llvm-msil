@@ -1,0 +1,168 @@
+# On a Linux triple sqrtl, strtold, nexttoward, daddl, dsubl, dmull and ddivl are helper-archive methods that call the C library's sqrt, strtod, nextafter, f32xaddf64, f32xsubf64, f32xmulf64 and f32xdivf64, not P/Invokes of the C library's long double functions, and daddl, dsubl, dmull and ddivl set errno as native code does.
+# Plan 5.14.3 A4 and A8 (msil_longdouble.c), M25.h, and the section 12 row
+# 'Plan 5.14.3 A4 and M25.a (3) amended'. An MSIL long double is a double,
+# while the native long double of a Linux triple is 80 bits wide, so the C
+# library's sqrtl, strtold, nexttoward and daddl cannot be called through
+# P/Invoke: the helper archive's sqrtl, strtold and nexttoward forward to
+# sqrt, strtod and nextafter (nexttowardf is the one with a body of its own,
+# which compares in double), and daddl, dsubl, dmull and ddivl (a double from
+# two long doubles) to glibc's f32xaddf64, f32xsubf64, f32xmulf64 and
+# f32xdivf64 (a double from two doubles), which round once and set errno as
+# native daddl does (C17 7.12.1; glibc's math_errhandling has MATH_ERRNO):
+# ERANGE on overflow, on a division by zero and on underflow to zero, EDOM on
+# an invalid operation. One operation in double gives the same bits and
+# leaves errno alone.
+# The program calls sqrtl, strtold and nexttoward and prints the results
+# (they equal native code's: each input is one whose native long double
+# result rounds to the same double, as in longdouble.test). Then each errno
+# case sets errno to 0, makes the call, copies errno before any other call
+# and prints the result (NaN as "nan": its sign and payload are the C
+# library's and the processor's) and errno as a number (Linux's values; the
+# test runs only on Linux triples): the overflows daddl(DBL_MAX, DBL_MAX),
+# dsubl(-DBL_MAX, DBL_MAX), dmull(DBL_MAX, 2) and ddivl(DBL_MAX, 0.5), the
+# division by zero ddivl(1, 0), the underflows to zero dmull(DBL_MIN, DBL_MIN)
+# and ddivl(DBL_MIN, DBL_MAX), the invalid operations daddl(inf, -inf),
+# dmull(inf, 0) and ddivl(0, 0), and the controls daddl(1, 1) and
+# daddl(inf, 1), which leave errno 0 (an infinite operand gives an exact
+# infinity, not an overflow). Each of the four is first called in a case that
+# sets errno, so nothing that a first call does before the C library function
+# runs (compiling a method, binding a P/Invoke) can show in a case that sets
+# none. The operands are volatile objects, so nothing folds, and the expected
+# file is E7h's (native daddl from glibc's libm, 5.17.3).
+# Then the program's -O2 build is listed with llvm-cil-dump: in <Module>
+# sqrtl, strtold, nexttoward, daddl, dsubl, dmull and ddivl have bodies that
+# call sqrt, strtod, nextafter, f32xaddf64, f32xsubf64, f32xmulf64 and
+# f32xdivf64, which are P/Invokes of the C library, and main calls all seven
+# (-fno-builtin, in %{msil_copts}, keeps sqrtl a call at -O2). The
+# windows-msvc triples have no such members (the UCRT's long double is a
+# double), so the test REQUIRES a Linux triple. The program calls
+# helper-archive members, so it has no -S reference (5.17.13) and msil-ld's
+# --lto-emit-asm text refuses it (A9).
+# REQUIRES: msil-triple-linux, msil-cil-dump
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# REDEFINE: %{msil_copts} = -fno-builtin
+# RUN: %{msil_prog}
+# RUN: %msil_prog_build --level O2 --workdir %t.dump.d --out %t.dump.d/prog.exe --src %t/main.c
+# RUN: %msil_cil_dump %t.dump.d/prog.exe > %t.dump.txt
+# RUN: %python %S/Inputs/cil-listing.py methods %t.dump.txt '<Module>' sqrtl strtold nexttoward sqrt strtod nextafter | FileCheck %s
+# RUN: %python %S/Inputs/cil-listing.py methods %t.dump.txt '<Module>' daddl dsubl dmull ddivl f32xaddf64 f32xsubf64 f32xmulf64 f32xdivf64 | FileCheck %s --check-prefix=NARROW
+# RUN: %python %S/Inputs/cil-listing.py methods %t.dump.txt '<Module>' main | FileCheck %s --check-prefix=MAIN
+# CHECK:      {{^}}sqrtl: body calls '<Module>'::'sqrt'{{$}}
+# CHECK-NEXT: {{^}}strtold: body calls '<Module>'::'strtod'{{$}}
+# CHECK-NEXT: {{^}}nexttoward: body calls '<Module>'::'nextafter'{{$}}
+# CHECK-NEXT: {{^}}sqrt: pinvoke 'lib{{[a-z]+}}.so.6' entry 'sqrt'{{$}}
+# CHECK-NEXT: {{^}}strtod: pinvoke 'lib{{[a-z]+}}.so.6' entry 'strtod'{{$}}
+# CHECK-NEXT: {{^}}nextafter: pinvoke 'lib{{[a-z]+}}.so.6' entry 'nextafter'{{$}}
+# NARROW:      {{^}}daddl: body calls '<Module>'::'f32xaddf64'{{$}}
+# NARROW-NEXT: {{^}}dsubl: body calls '<Module>'::'f32xsubf64'{{$}}
+# NARROW-NEXT: {{^}}dmull: body calls '<Module>'::'f32xmulf64'{{$}}
+# NARROW-NEXT: {{^}}ddivl: body calls '<Module>'::'f32xdivf64'{{$}}
+# NARROW-NEXT: {{^}}f32xaddf64: pinvoke 'libm.so.6' entry 'f32xaddf64'{{$}}
+# NARROW-NEXT: {{^}}f32xsubf64: pinvoke 'libm.so.6' entry 'f32xsubf64'{{$}}
+# NARROW-NEXT: {{^}}f32xmulf64: pinvoke 'libm.so.6' entry 'f32xmulf64'{{$}}
+# NARROW-NEXT: {{^}}f32xdivf64: pinvoke 'libm.so.6' entry 'f32xdivf64'{{$}}
+# MAIN-DAG: '<Module>'::'sqrtl'
+# MAIN-DAG: '<Module>'::'strtold'
+# MAIN-DAG: '<Module>'::'nexttoward'
+# MAIN-DAG: '<Module>'::'daddl'
+# MAIN-DAG: '<Module>'::'dsubl'
+# MAIN-DAG: '<Module>'::'dmull'
+# MAIN-DAG: '<Module>'::'ddivl'
+#--- main.c
+#include <errno.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdlib.h>
+int puts(const char *);
+/* C23's narrowing functions, which glibc's <math.h> declares only for C23 or
+   with __STDC_WANT_IEC_60559_BFP_EXT__. */
+double daddl(long double, long double);
+double dsubl(long double, long double);
+double dmull(long double, long double);
+double ddivl(long double, long double);
+
+static char line[100];
+static int len;
+static void out_s(const char *t) {
+  while (*t)
+    line[len++] = *t++;
+}
+static void out_x(uint64_t v) {
+  line[len++] = ' ';
+  for (int i = 15; i >= 0; --i)
+    line[len++] = "0123456789abcdef"[(v >> (4 * i)) & 15];
+}
+static void out_u(unsigned v) {
+  char buf[12];
+  int n = 0;
+  do
+    buf[n++] = (char)('0' + v % 10);
+  while (v /= 10);
+  line[len++] = ' ';
+  while (n)
+    line[len++] = buf[--n];
+}
+static void out_nl(void) {
+  line[len] = 0;
+  puts(line);
+  len = 0;
+}
+static uint64_t b64(double d) { uint64_t u; __builtin_memcpy(&u, &d, 8); return u; }
+static void out_d(double d) {
+  uint64_t u = b64(d);
+  if ((u & 0x7ff0000000000000ull) == 0x7ff0000000000000ull && (u & 0xfffffffffffffull))
+    out_s(" nan");
+  else
+    out_x(u);
+}
+
+/* errno is 0 before the call and copied right after it, before any other
+   call. */
+#define ERRNO_CASE(text, call)                                                 \
+  do {                                                                         \
+    errno = 0;                                                                 \
+    double r_ = (call);                                                        \
+    int e_ = errno;                                                            \
+    out_s(text);                                                               \
+    out_d(r_);                                                                 \
+    out_s(" errno");                                                           \
+    out_u((unsigned)e_);                                                       \
+    out_nl();                                                                  \
+  } while (0)
+
+static volatile double v_two = 2.0, v_one = 1.0, v_half = 0.5, v_zero = 0.0;
+static volatile double v_max = 0x1.fffffffffffffp1023, v_min = 0x1p-1022;
+static volatile double v_inf = __builtin_inf();
+static const char *volatile v_str = "0.1xyz";
+
+int main(void) {
+  out_s("sqrtl(2)");
+  out_x(b64(sqrtl(v_two)));
+  out_nl();
+  char *end = 0;
+  const char *s = v_str;
+  double d = strtold(s, &end);
+  out_s("strtold(\"0.1xyz\")");
+  out_x(b64(d));
+  out_s(end == s + 3 ? " end 3" : " end wrong");
+  out_nl();
+  out_s("nexttoward(1, 2)");
+  out_x(b64(nexttoward(v_one, v_two)));
+  out_nl();
+
+  ERRNO_CASE("daddl(DBL_MAX, DBL_MAX)", daddl(v_max, v_max));
+  ERRNO_CASE("dsubl(-DBL_MAX, DBL_MAX)", dsubl(-v_max, v_max));
+  ERRNO_CASE("dmull(DBL_MAX, 2)", dmull(v_max, v_two));
+  ERRNO_CASE("ddivl(DBL_MAX, 0.5)", ddivl(v_max, v_half));
+  ERRNO_CASE("ddivl(1, 0)", ddivl(v_one, v_zero));
+  ERRNO_CASE("dmull(DBL_MIN, DBL_MIN)", dmull(v_min, v_min));
+  ERRNO_CASE("ddivl(DBL_MIN, DBL_MAX)", ddivl(v_min, v_max));
+  ERRNO_CASE("daddl(inf, -inf)", daddl(v_inf, -v_inf));
+  ERRNO_CASE("dmull(inf, 0)", dmull(v_inf, v_zero));
+  ERRNO_CASE("ddivl(0, 0)", ddivl(v_zero, v_zero));
+  ERRNO_CASE("daddl(1, 1)", daddl(v_one, v_one));
+  ERRNO_CASE("daddl(inf, 1)", daddl(v_inf, v_one));
+  return 0;
+}

@@ -15,14 +15,16 @@
 ; f64 are Expand (M7.b), so a loaded half or bfloat that is extended is the
 ; 16-bit integer load (load-store.ll copies them with ldind.u2) followed by the
 ; generic conversion. For half that is the compiler-rt call __extendhfsf2,
-; also on the way to double; a library call whose name starts with '__' is an
-; error until phase 3 (decision D14), so each half function gets exactly that
-; one diagnostic, never a 'Cannot select' of an unselectable extending load or
-; a crash. For bfloat the conversion is inline since M24 (fp-helpers F2 (a)):
-; the loaded bits are shifted left by 16, stored to the frame slot as an int32
-; and read back as a float32 (BF-IL), then conv.r8 for double, so the bfloat
-; functions report nothing and call nothing (until M24 they named
-; __extendbfsf2). llc exits with 1 and the IL on stdout still assembles.
+; also on the way to double; in whole-program text a library call whose name
+; starts with '__' is an error (decision D14; since M25 the helper-archive
+; text of 5.14.3 A9, as only msil-ld links the archive that defines it), so
+; each half function gets exactly that one diagnostic, never a 'Cannot
+; select' of an unselectable extending load or a crash. For bfloat the
+; conversion is inline since M24 (fp-helpers F2 (a)): the loaded bits are
+; shifted left by 16, stored to the frame slot as an int32 and read back as a
+; float32 (BF-IL), then conv.r8 for double, so the bfloat functions report
+; nothing and call nothing (until M24 they named __extendbfsf2). llc exits
+; with 1 and the IL on stdout still assembles.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=conv.i8 \
 ; DEFINE:   --implicit-check-not=conv.u8 --implicit-check-not=ldind.i8 --implicit-check-not=ldind.u4 \
@@ -304,14 +306,14 @@ define bfloat @load_bfloat_ret(ptr %p) {
 ;--- half-ext.ll
 source_filename = "ext-loads-half.c"
 
-; ERR: error: {{.*}}in function fpext_half_to_f32 float (ptr): runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
+; ERR: error: {{.*}}in function fpext_half_to_f32 float (ptr): runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 define float @fpext_half_to_f32(ptr %p) {
   %v = load half, ptr %p
   %e = fpext half %v to float
   ret float %e
 }
 
-; ERR: error: {{.*}}in function fpext_half_to_f64 double (ptr): runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
+; ERR: error: {{.*}}in function fpext_half_to_f64 double (ptr): runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 define double @fpext_half_to_f64(ptr %p) {
   %v = load half, ptr %p
   %e = fpext half %v to double

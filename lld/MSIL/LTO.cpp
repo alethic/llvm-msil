@@ -27,7 +27,9 @@
 // LTO plan 5.14.2 N-1's error, as the objects' call-site check does. The
 // prevailing linkonce_odr copies that LTO keeps external although no regular
 // object needs them are linkonce_odr again before code generation, which
-// drops the unused ones (decision D26).
+// drops the unused ones (decision D26). A prevailing definition of a name
+// that the trailer defines in the output (plan 5.14.4) stays external, so
+// that the calls that code generation makes after LTO bind to it.
 //
 //===----------------------------------------------------------------------===//
 
@@ -816,14 +818,12 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
     }
     // The IR signature of a native `long double` function says double
     // (decision D3), but the native function takes or returns an x87 or
-    // binary128 value (plan 5.10.10).
+    // binary128 value (plan 5.10.10). The helper archive's forwarders of the
+    // functions that have a `double` counterpart are CIL objects, which
+    // --lto-emit-asm text never links.
     if (isListed(isNotPassable)) {
-      symtab->reportReference(
-          (Twine("native function '") + name + "' (" + e->Module +
-           ") takes or returns a value that a P/Invoke cannot pass natively "
-           "yet (phase 3)")
-              .str(),
-          name);
+      symtab->reportReference(getLongDoubleRejectionText(name, e->Module),
+                              name);
       continue;
     }
     out.bindings.push_back(
@@ -1179,15 +1179,22 @@ void BitcodeCompiler::add(BitcodeFile &f) {
                    sym->getFile() == &f;
     // Only the symbols that CIL objects refer to or define, the entry
     // symbol, -u symbols, NO_STRIP symbols, the definitions in a section
-    // that __start_ or __stop_ names and, under -shared, the definitions that
+    // that __start_ or __stop_ names, the definitions of the names that the
+    // trailer defines in this output and, under -shared, the definitions that
     // the library may export stay visible: every other definition is internal
     // to the merged module. irsymtab has no dllexport bit, so on Windows
     // triples the export selection applies to the LTO objects' DLLEXPORT
     // flags (plan 5.9.13). There is no --wrap (LinkerRedefined) in msil-ld.
+    // A trailer definition's name (plan 5.14.4) is one that the code
+    // generator calls after LTO (a single-thread fence becomes a call of
+    // __msil_compiler_barrier), as LTO keeps the names of RuntimeLibcalls
+    // external: the program's definition then wins over '<trailer>' in the
+    // image and in --lto-emit-asm text, as an object's does (T5).
     r.VisibleToRegularObj =
         sym->isUsedInRegularObj || sym->isNoStrip() ||
         (!objSym.getSectionName().empty() &&
          usedStartStop.contains(objSym.getSectionName())) ||
+        (r.Prevailing && findOfferedTrailerDef(sym->getName())) ||
         (ctx.arg.shared && r.Prevailing && mayBeExported(*sym));
     // The prevailing definitions that no regular object needs: the copies
     // among them that LTO keeps external may become discardable again

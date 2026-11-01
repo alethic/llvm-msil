@@ -9,6 +9,7 @@
 """Copy the Linux libraries of the E7 native oracle out of a WSL distribution.
 
     make-linux-sysroot.py [--out DIR] [--distro NAME]
+        [--builtins [--clang CLANG] [--jobs N]]
 
 The E7 oracle (plan 5.12.8, recon tests-p2 E7) builds the native twin of a
 test for x86_64-unknown-linux-gnu on Windows, without a compiler or C headers
@@ -36,8 +37,27 @@ default --param msil_linux_sysroot); a directory inside the repository is
 refused (nothing downloaded or generated is committed, plan 5.6.1). Callers in
 Git Bash set MSYS_NO_PATHCONV=1 when they pass Linux paths to other tools.
 
-Exit status: 0 on success, 1 when the libraries cannot be read or written,
-2 on a usage error.
+--builtins (plan 5.17.2, 5.17.3; M25) then builds the native compiler-rt
+builtins that the hosted Linux oracle E7h links before -lc (lit's
+msil_linux_rtlib=auto, update-expected.py --linux-rtlib auto) into the same
+directory: it runs
+
+    python msil/utils/build/build-builtins.py --build-dir <build>
+        --native-oracle DIR/usr/lib/x86_64-linux-gnu [--jobs N]
+
+which compiles them with that build's clang for x86_64-unknown-linux-gnu
+into DIR/usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a, beside its
+stamp, and skips an archive whose stamp is current. --clang CLANG names the
+build: it must be <build>/bin/clang (clang.exe on Windows), the compiler
+that build-builtins.py runs; without it no --build-dir is passed, and
+build-builtins.py takes its own default: $MSIL_BUILD_DIR when it is set and
+not empty, else <repo>/build. Each archive it writes is listed
+('make-linux-sysroot: wrote <path>') and counted in the summary;
+build-builtins.py's own lines come through. --clang and --jobs need
+--builtins, and both are checked before anything is copied.
+
+Exit status: 0 on success, 1 when the libraries cannot be read or written or
+build-builtins.py fails, 2 on a usage error (also build-builtins.py's).
 """
 
 import argparse
@@ -51,6 +71,11 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 IS_WINDOWS = os.name == "nt"
+EXE = ".exe" if IS_WINDOWS else ""
+BUILD_BUILTINS = os.path.join(HERE, "build", "build-builtins.py")
+# The native compiler-rt builtins archive of the hosted Linux oracle, as
+# build-builtins.py --native-oracle names it (plan 5.17.2).
+NATIVE_RTLIB = "libclang_rt.builtins-x86_64.a"
 DEFAULT_WINDOWS_DIR = r"C:\llvm-msil-scratch\linux-sysroot"
 LIBDIR = "usr/lib/x86_64-linux-gnu"
 LIBRARIES = ("libc.so.6", "libm.so.6", "libgcc_s.so.1", "ld-linux-x86-64.so.2")
@@ -229,6 +254,43 @@ def make_sysroot(out, distro):
     return glibc, osname, changed
 
 
+def builtins_build_dir(clang):
+    """The build directory of --clang: the parent of its bin/ directory,
+    when --clang is that build's bin/clang; raises Error otherwise."""
+    clang = os.path.abspath(clang)
+    if not os.path.isfile(clang):
+        raise Error("--clang %s: no such file" % clang)
+    build = os.path.dirname(os.path.dirname(clang))
+    own = os.path.join(build, "bin", "clang" + EXE)
+    if not (os.path.isfile(own) and os.path.samefile(clang, own)):
+        raise Error(
+            "--clang %s is not <build>/bin/clang%s of a build directory, which "
+            "build-builtins.py --build-dir runs" % (clang, EXE)
+        )
+    return build
+
+
+def native_builtins(out, build, jobs):
+    """build-builtins.py --native-oracle <out>/usr/lib/x86_64-linux-gnu:
+    (its exit status, [the archive when it changed])."""
+    libdir = os.path.join(out, *LIBDIR.split("/"))
+    archive = os.path.join(libdir, NATIVE_RTLIB)
+    before = sha256_of(archive)
+    cmd = [sys.executable, BUILD_BUILTINS]
+    if build:
+        cmd += ["--build-dir", build]
+    cmd += ["--native-oracle", libdir]
+    if jobs:
+        cmd += ["--jobs", str(jobs)]
+    sys.stdout.flush()
+    try:
+        rc = subprocess.call(cmd)
+    except OSError as e:
+        raise Error("cannot run %s: %s" % (BUILD_BUILTINS, e))
+    after = sha256_of(archive)
+    return rc, [archive] if rc == 0 and after and after != before else []
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     default_out = os.environ.get("MSIL_LINUX_SYSROOT") or (
@@ -245,9 +307,30 @@ def main(argv=None):
         default="Ubuntu",
         help="the WSL distribution to copy from (default: %(default)s)",
     )
+    ap.add_argument(
+        "--builtins",
+        action="store_true",
+        help="also build the native compiler-rt builtins of the hosted Linux "
+        "oracle (build-builtins.py --native-oracle) into the sysroot",
+    )
+    ap.add_argument(
+        "--clang",
+        help="with --builtins: <build>/bin/clang of the build that compiles them "
+        "(default: build-builtins.py's, $MSIL_BUILD_DIR when it is set and not "
+        "empty, else <repo>/build)",
+    )
+    ap.add_argument(
+        "--jobs",
+        type=int,
+        help="with --builtins: parallel compiles (build-builtins.py --jobs)",
+    )
     args = ap.parse_args(argv)
     if not args.out:
         ap.error("--out DIR is required ($MSIL_LINUX_SYSROOT is not set)")
+    if not args.builtins and (args.clang is not None or args.jobs is not None):
+        ap.error("--clang and --jobs go with --builtins")
+    if args.jobs is not None and args.jobs < 1:
+        ap.error("--jobs must be at least 1")
     out = os.path.abspath(args.out)
     if inside(out, REPO):
         sys.stderr.write(
@@ -255,6 +338,13 @@ def main(argv=None):
             "sysroot outside it (for example %s)\n" % (out, REPO, DEFAULT_WINDOWS_DIR)
         )
         return 2
+    build = None
+    if args.builtins and args.clang is not None:
+        try:
+            build = builtins_build_dir(args.clang)
+        except Error as e:
+            sys.stderr.write("make-linux-sysroot: error: %s\n" % e)
+            return 2
     try:
         glibc, osname, changed = make_sysroot(out, args.distro)
     except (Error, OSError) as e:
@@ -262,6 +352,21 @@ def main(argv=None):
         return 1
     for path in changed:
         print("make-linux-sysroot: wrote %s" % path)
+    if args.builtins:
+        try:
+            rc, wrote = native_builtins(out, build, args.jobs)
+        except Error as e:
+            sys.stderr.write("make-linux-sysroot: error: %s\n" % e)
+            return 1
+        for path in wrote:
+            print("make-linux-sysroot: wrote %s" % path)
+        changed += wrote
+        if rc != 0:
+            sys.stderr.write(
+                "make-linux-sysroot: error: build-builtins.py --native-oracle exited "
+                "with %d\n" % rc
+            )
+            return 2 if rc == 2 else 1
     print(
         "make-linux-sysroot: %s: glibc %s (%s), %d file(s) updated"
         % (out, glibc, osname, len(changed))

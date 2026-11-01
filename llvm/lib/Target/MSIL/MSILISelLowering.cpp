@@ -18,6 +18,7 @@
 
 #include "MSILISelLowering.h"
 #include "MCTargetDesc/MSILMCTargetDesc.h"
+#include "MSILAsmPrinter.h"
 #include "MSILSelectionDAGInfo.h"
 #include "MSILSubtarget.h"
 #include "MSILUtilities.h"
@@ -140,12 +141,14 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
     // f16 and bf16 are not legal types: their values are held as integers,
     // and arithmetic converts them to and from f32. Those conversions are the
     // compiler-rt helpers (__extendhfsf2, __truncsfhf2, __truncdfhf2,
-    // __truncsfbf2 and __truncdfbf2), which LowerCall diagnoses: '__' helpers
-    // are errors until phase 3 (decision D14). bf16 -> f32 is exact, and its
-    // generic expansion is inline: the 16 bits shifted left by 16, bit cast to
-    // f32 (through a stack slot, decision D16), extended for an f64 result.
-    // The generic expansion of f32 -> bf16 truncates instead of rounding, so
-    // LowerBF16Conversion calls the helpers.
+    // __truncsfbf2 and __truncdfbf2) of the helper archive clang_rt.builtins,
+    // which msil-ld links and text output reports (LowerCall, plan 5.14.3
+    // A9). bf16 -> f32 is exact, and its generic expansion is inline: the 16
+    // bits shifted left by 16, bit cast to f32 (through a stack slot,
+    // decision D16), extended for an f64 result. The generic expansion of
+    // f32 -> bf16 truncates instead of rounding, so LowerBF16Conversion calls
+    // the helpers, and after __truncsfbf2 it sets the quiet bit of a NaN, as
+    // native x86-64 code does.
     setOperationAction({ISD::FP16_TO_FP, ISD::FP_TO_FP16}, T, Expand);
     setOperationAction(ISD::BF16_TO_FP, T, Expand);
     setOperationAction(ISD::FP_TO_BF16, T, Custom);
@@ -201,7 +204,8 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // the target first, keyed on the f16 or bf16 result or operand: every
   // constrained operation on these types becomes its plain form there
   // (ReplaceNodeResults, LowerStrictFP), which then legalizes like the plain
-  // operation, into the compiler-rt conversions that LowerCall diagnoses.
+  // operation, into the compiler-rt conversions, which LowerCall diagnoses in
+  // text output.
   for (MVT T : {MVT::f16, MVT::bf16}) {
 #define DAG_INSTRUCTION(NAME, NARG, ROUND_MODE, INTRINSIC, DAGN)               \
   setOperationAction(ISD::STRICT_##DAGN, T, Custom);
@@ -276,6 +280,12 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // fall off its end, which CIL forbids. DEBUGTRAP and UBSANTRAP keep their
   // default Expand action, which makes them TRAP as well.
   setOperationAction(ISD::TRAP, MVT::Other, Legal);
+
+  // llvm.clear_cache has nothing to flush: a CIL program writes no code (the
+  // runtime keeps the code it compiles coherent), so CLEAR_CACHE expands to
+  // nothing, as on X86, instead of its default call of compiler-rt's
+  // __clear_cache, which the helper archive does not have (plan 5.14.3 A5).
+  setOperationAction(ISD::CLEAR_CACHE, MVT::Other, Expand);
 
   // Every operation that LowerOperation dispatches is Custom, because
   // SelectionDAG calls LowerOperation only for Custom actions.
@@ -360,12 +370,12 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // inline before instruction selection (setMaxDivRemBitWidthSupported
   // below), so this is a backstop for a division that SelectionDAG itself
   // builds. Such a division would call __divti3, __udivti3, __modti3 or
-  // __umodti3, and such '__' helpers are errors until phase 3 (decision D14),
-  // so it reaches ReplaceNodeResults. The helper's i128 result needs two
-  // values, so CanLowerReturn would make LowerCallTo demote it to a stack slot
-  // (a FrameIndex) even after LowerCall's diagnostic. ReplaceNodeResults
-  // reports the libcall in the type legalizer instead, before any call is
-  // built.
+  // __umodti3, which the helper archive clang_rt.builtins does not have
+  // (plan 5.14.3 A5), so it reaches ReplaceNodeResults, in every mode. The
+  // helper's i128 result needs two values, so CanLowerReturn would make
+  // LowerCallTo demote it to a stack slot (a FrameIndex) even after
+  // LowerCall's diagnostic. ReplaceNodeResults reports the libcall in the
+  // type legalizer instead, before any call is built.
   setOperationAction({ISD::SDIV, ISD::UDIV, ISD::SREM, ISD::UREM}, MVT::i128,
                      Custom);
 
@@ -400,8 +410,9 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   MaxStoresPerMemmove = MaxStoresPerMemmoveOptSize = 0;
   MaxStoresPerMemset = MaxStoresPerMemsetOptSize = 0;
 
-  // No atomics yet: AtomicExpand turns every atomic operation into a call of
-  // an __atomic_* function, which is not a Phase-1 import (decision D14).
+  // No inline atomics yet: AtomicExpand turns every atomic operation into a
+  // call of an __atomic_* function, libatomic's interface, which only
+  // msil-ld links (plan 5.14.2 N2; text output reports it, 5.14.3 A9).
   setMaxAtomicSizeInBitsSupported(0);
   // A single-thread fence calls __msil_compiler_barrier (LowerATOMIC_FENCE);
   // every other fence selects MEMORY_BARRIER (decision D36 as amended).
@@ -413,10 +424,11 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // so i128 division, the f32 and f64 <-> i128 conversions (saturating ones
   // included, and constrained ones after MSIL::relaxStrictInt128Conversions)
   // and bf16 -> i128 (expanded on the value's 16-bit pattern) call no
-  // __divti3, __fixdfti, ... helper, which would be an error until phase 3
-  // (decision D14). Still named, by the f32 step of their expansions:
-  // f16 -> i128 (__extendhfsf2), i128 -> f16 (__truncsfhf2) and
-  // i128 -> bf16 (__truncsfbf2).
+  // __divti3, __fixdfti, ... helper, which the helper archive
+  // clang_rt.builtins does not have (plan 5.14.3 A5). Still named, by the f32
+  // step of their expansions, which the archive has: f16 -> i128
+  // (__extendhfsf2), i128 -> f16 (__truncsfhf2) and i128 -> bf16
+  // (__truncsfbf2).
   setMaxDivRemBitWidthSupported(64);
   setMaxLargeFPConvertBitWidthSupported(MSIL::MaxSelectedFPConvertBits);
 }
@@ -800,8 +812,10 @@ void MSILTargetLowering::ReplaceNodeResults(SDNode *N,
 
   // i128 division and remainder, and FP -> i128 conversions (the other Custom
   // nodes with an illegal result type): report the runtime helper that the
-  // type legalizer would call, with LowerCall's text (decision D14), and go
-  // on with an undefined result.
+  // type legalizer would call, which no helper archive has (plan 5.14.3 A5:
+  // MSIL expands the 128-bit operations itself), in every mode, with the text
+  // that text output also gives a call of such a helper
+  // (MSIL::getInt128HelperText), and go on with an undefined result.
   RTLIB::Libcall LC;
   switch (N->getOpcode()) {
   case ISD::SDIV:
@@ -838,9 +852,7 @@ void MSILTargetLowering::ReplaceNodeResults(SDNode *N,
   const char *Name = getLibcallName(LC);
   DAG.getContext()->diagnose(DiagnosticInfoUnsupported(
       DAG.getMachineFunction().getFunction(),
-      Twine("runtime helper '") + (Name ? Name : "?") +
-          "' is not available for MSIL yet (phase 3)",
-      SDLoc(N).getDebugLoc()));
+      MSIL::getInt128HelperText(Name ? Name : "?"), SDLoc(N).getDebugLoc()));
   Results.push_back(DAG.getUNDEF(VT));
   // A constrained conversion also passes its input chain through.
   if (IsStrict)
@@ -1237,18 +1249,38 @@ SDValue MSILTargetLowering::LowerBF16Conversion(SDValue Op,
   // drops the low 16 bits of the f32 value (after rounding an f64 to f32
   // first) instead of rounding once to nearest; like the f16 conversions,
   // call the compiler-rt helper (__truncsfbf2, __truncdfbf2) instead, which
-  // LowerCall diagnoses.
+  // LowerCall reports in text output (plan 5.14.3 A9).
   assert(Op.getOpcode() == ISD::FP_TO_BF16 && "BF16_TO_FP is expanded");
   SDLoc DL(Op);
   SDValue Src = Op.getOperand(0);
+  EVT SrcVT = Src.getValueType();
   EVT VT = Op.getValueType();
-  RTLIB::Libcall LC = RTLIB::getFPROUND(Src.getValueType(), MVT::bf16);
-  if (LC != RTLIB::UNKNOWN_LIBCALL && getLibcallImpl(LC) != RTLIB::Unsupported)
-    return makeLibCall(DAG, LC, VT, Src, MakeLibCallOptions(), DL).first;
-  DAG.getContext()->diagnose(DiagnosticInfoUnsupported(
-      DAG.getMachineFunction().getFunction(),
-      "bf16 conversions are not supported for MSIL", DL.getDebugLoc()));
-  return DAG.getUNDEF(VT);
+  RTLIB::Libcall LC = RTLIB::getFPROUND(SrcVT, MVT::bf16);
+  if (LC == RTLIB::UNKNOWN_LIBCALL ||
+      getLibcallImpl(LC) == RTLIB::Unsupported) {
+    DAG.getContext()->diagnose(DiagnosticInfoUnsupported(
+        DAG.getMachineFunction().getFunction(),
+        "bf16 conversions are not supported for MSIL", DL.getDebugLoc()));
+    return DAG.getUNDEF(VT);
+  }
+  SDValue Res = makeLibCall(DAG, LC, VT, Src, MakeLibCallOptions(), DL).first;
+  // Native x86-64 code rounds f32 -> bf16 inline (expandFP_ROUND), quieting
+  // every NaN. __truncsfbf2 rounds every other value alike and quiets a NaN
+  // too, except a signaling NaN whose low 16 bits are zero, which it copies
+  // (7fa00000 gives 7fa0, natively 7fe0). Setting bf16's quiet bit (bit 6)
+  // when the operand is a NaN, the only value unequal to itself, makes the
+  // results equal on every float. __truncdfbf2, which native code calls as
+  // well, quiets every NaN. In text output LowerCall reports the call and
+  // returns UNDEF, which needs no quiet bit.
+  if (SrcVT != MVT::f32 || Res.isUndef())
+    return Res;
+  SDValue IsNaN = DAG.getSetCC(
+      DL, getSetCCResultType(DAG.getDataLayout(), *DAG.getContext(), SrcVT),
+      Src, Src, ISD::SETUNE);
+  SDValue QuietBit =
+      DAG.getNode(ISD::SHL, DL, VT, DAG.getZExtOrTrunc(IsNaN, DL, VT),
+                  DAG.getShiftAmountConstant(6, VT, DL));
+  return DAG.getNode(ISD::OR, DL, VT, Res, QuietBit);
 }
 
 SDValue MSILTargetLowering::LowerATOMIC_FENCE(SDValue Op,

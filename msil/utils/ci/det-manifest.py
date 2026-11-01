@@ -42,15 +42,30 @@ directory) must be outside the repository; build empties it first, but only
 if build made it (it holds the marker file .det-manifest-work), it is empty,
 or it holds nothing but <triple>/ directories (those of an earlier run), and
 refuses any other directory. build then writes the marker into it; a
-temporary work directory is removed afterwards. The manifest --out holds one
-line per object and archive, sorted by path:
+temporary work directory is removed afterwards.
+
+build then builds the helper archives clang_rt.builtins of both triples
+(plan 5.14.3 A2; section 12, 'Plan 5.12.12 amended (determinism manifest)',
+M25) with msil/utils/build/build-builtins.py --build-dir <build> --out
+<work>/builtins --triple <triple> (both) --jobs N, where <build> is the
+build directory whose bin/ holds --clang and --ar (both must be in that one
+bin/ directory: build-builtins.py runs <build>/bin/clang and
+<build>/bin/llvm-ar), so the archives are compiled by the same clang at
+build-builtins.py's own fixed flags (-O2; --levels does not apply) into
+<work>/builtins/<triple>/<archive>, named as plan 5.14.3 A1 names it
+(clang_rt.builtins.lib for windows-msvc, libclang_rt.builtins.a for
+linux-gnu). The archives' stamps (<archive>.stamp, which hold the
+SHA-256 of the host's binaries) are not listed. The manifest --out holds
+one line per object and archive, sorted by path:
 
   <sha256>  <triple>/<level>/<name>
+  <sha256>  <triple>/builtins/<archive>
 
-build exits 1 if a compile or the archiver fails (the manifest is not
-written then) and 2 on a usage error (a work directory inside the
-repository or holding files build did not write, a tool that does not
-start, an unknown level, no C file).
+build exits 1 if a compile, the archiver or build-builtins.py fails (the
+manifest is not written then) and 2 on a usage error (a work directory
+inside the repository or holding files build did not write, a tool that
+does not start, --clang and --ar not in one bin/ directory, an unknown
+level, no C file).
 
 compare reads two manifests, lists every entry that only one of them has
 ('only in <file>: <path>') and every entry whose hashes differ ('differs:
@@ -67,21 +82,28 @@ host checks the determinism of its own links (the det legs).
 --self-test (offline; a temporary directory outside the repository, removed
 afterwards) builds a small tree of C files twice with stand-ins for clang
 and llvm-ar that write the hash of their command line and input bytes, and
-checks: two work directories give equal manifests; the stand-in sees
-relative source paths, -fdebug-compilation-dir=. and both triples at every
-level, with -fms-compatibility-version=19.33 on every windows-msvc compile
-and no -fms-compatibility-version on a linux-gnu one; an edited source
-differs in exactly its two objects per level and the archives; compare
-reports one-sided entries without failing, fails on no common entry and on
-a differing entry, and refuses a malformed line; a build
-run from the root with relative, '/'-separated tool paths (the form
-msil-ci.yml passed before M23's fix loop) gives the stand-ins absolute paths
-(they refuse a relative one) and passes the archive step; build refuses a
-work directory inside the repository, and one that holds a foreign file
-(which survives); a directory of <triple>/ directories is emptied and
-marked; a tool that does not start is a usage error before anything is
-deleted; a failed compile writes no manifest. Python 3 standard library
-only.
+for build-builtins.py, which writes each triple's archive from the hash of
+the triple and a stand-in sources.txt, and a stamp that names the work
+directory; it checks: two work directories give equal manifests; the
+stand-in sees relative source paths, -fdebug-compilation-dir=. and both
+triples at every level, with -fms-compatibility-version=19.33 on every
+windows-msvc compile and no -fms-compatibility-version on a linux-gnu one;
+the helper archives are listed as <triple>/builtins/<archive> and their
+stamps are not; build-builtins.py gets the directory above the tools' bin/
+as --build-dir, <work>/builtins as --out, both triples and --jobs; an
+edited source differs in exactly its two objects per level and the
+archives, and an edited helper source in the two helper archives only;
+compare reports one-sided entries without failing, fails on no common entry
+and on a differing entry, and refuses a malformed line; a build run from the
+root with relative, '/'-separated tool paths (the form msil-ci.yml passed
+before M23's fix loop) gives the stand-ins absolute paths (they refuse a
+relative one), passes the archive step and gives build-builtins.py the
+absolute build directory; build refuses a work directory inside the
+repository, and one that holds a foreign file (which survives); a directory
+of <triple>/ directories is emptied and marked; a tool that does not start,
+and tools outside one bin/ directory, are usage errors before anything is
+deleted; a failed compile and a failed helper archive build write no
+manifest. Python 3 standard library only.
 """
 
 import argparse
@@ -104,6 +126,11 @@ CFLAGS = ("-std=gnu17", "-ffreestanding", "-Werror=return-type")
 # on the host's MSVC (see the module docstring).
 MSVC_PIN = "-fms-compatibility-version=19.33"
 ARCHIVE = "libm1.a"
+# The helper archives (plan 5.14.3 A2): build-builtins.py writes them into
+# <work>/BUILTINS_DIR/<triple>/, listed as <triple>/BUILTINS_DIR/<archive>.
+BUILD_BUILTINS = os.path.join(REPO, "msil", "utils", "build", "build-builtins.py")
+BUILTINS_DIR = "builtins"
+STAMP_SUFFIX = ".stamp"
 # Written into every work directory build makes; build empties a directory
 # that holds it.
 WORK_MARKER = ".det-manifest-work"
@@ -146,6 +173,31 @@ def resolve_tool(path, option, root):
         last = out.strip().splitlines()[-1] if out.strip() else "no output"
         raise UsageError("%s %s does not start ('--version' exited %d: %s)" % (option, path, rc, last))
     return cmd
+
+
+def tool_path(cmd):
+    """The file a resolved tool command runs: its last word, looked up on
+    PATH when it is a bare name."""
+    path = cmd[-1]
+    if not has_directory(path):
+        path = shutil.which(path) or path
+    return os.path.abspath(path)
+
+
+def builtins_build_dir(clang, ar):
+    """build-builtins.py's --build-dir: the parent of the one bin/ directory
+    that holds both resolved tools."""
+    clang_path, ar_path = tool_path(clang), tool_path(ar)
+    bindir = os.path.dirname(clang_path)
+    if os.path.normcase(os.path.basename(bindir)) != "bin" or os.path.normcase(
+        os.path.dirname(ar_path)
+    ) != os.path.normcase(bindir):
+        raise UsageError(
+            "--clang %s and --ar %s are not in one bin/ directory of a build; build-builtins.py "
+            "builds the helper archives with <build>/bin/clang and <build>/bin/llvm-ar of "
+            "--build-dir <build>" % (clang_path, ar_path)
+        )
+    return os.path.dirname(bindir)
 
 
 def check_work(work):
@@ -239,9 +291,12 @@ def build(args):
     work = os.path.abspath(args.work) if args.work else None
     if work and (inside(work, REPO) or inside(work, root)):
         raise UsageError("--work %s is inside the repository; use a directory outside it" % work)
-    # Both tools must start before anything in the work directory is touched.
+    # Both tools must start, and the helper archives' build directory must be
+    # known, before anything in the work directory is touched.
     clang = resolve_tool(args.clang, "--clang", root)
     ar = resolve_tool(args.ar, "--ar", root)
+    build_dir = builtins_build_dir(clang, ar)
+    builtins_script = getattr(args, "builtins_script", None) or BUILD_BUILTINS
     if work:
         check_work(work)
         if os.path.isdir(work):
@@ -287,6 +342,10 @@ def build(args):
                     return 1
                 for f in objects + [ARCHIVE]:
                     lines.append("%s  %s/%s/%s" % (sha256_file(os.path.join(d, f)), triple, level, f))
+        helpers = build_helper_archives(builtins_script, build_dir, work, root, args.jobs)
+        if helpers is None:
+            return 1
+        lines += helpers
         lines.sort(key=lambda x: x.split("  ", 1)[1])
         out_path = os.path.abspath(args.out)
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -295,11 +354,13 @@ def build(args):
             f.write("".join(x + "\n" for x in lines))
         os.replace(tmp, out_path)
         print(
-            "det-manifest: wrote %s: %d objects and %d archives (%d C files, %s, %s)"
+            "det-manifest: wrote %s: %d objects, %d archives and %d helper archives "
+            "(%d C files, %s, %s)"
             % (
                 out_path,
-                len(lines) - len(TRIPLES) * len(levels),
+                len(lines) - len(TRIPLES) * len(levels) - len(helpers),
                 len(TRIPLES) * len(levels),
+                len(helpers),
                 len(sources),
                 " and ".join(TRIPLES),
                 ",".join(levels),
@@ -309,6 +370,44 @@ def build(args):
     finally:
         if temp:
             shutil.rmtree(temp, ignore_errors=True)
+
+
+def build_helper_archives(script, build_dir, work, root, jobs):
+    """Runs build-builtins.py for both triples into <work>/builtins; returns
+    the manifest lines of the archives (not of their stamps), or None after
+    a failure, which it reports."""
+    out_dir = os.path.join(work, BUILTINS_DIR)
+    cmd = tool(script) + ["--build-dir", build_dir, "--out", out_dir]
+    for triple in TRIPLES:
+        cmd += ["--triple", triple]
+    cmd += ["--jobs", str(jobs)]
+    rc, out = run(cmd, root)
+    sys.stdout.write(out)
+    if rc != 0:
+        print("det-manifest: FAILED (exit %d): %s" % (rc, " ".join(cmd)))
+        print("det-manifest: the helper archives did not build; no manifest written")
+        return None
+    lines = []
+    for triple in TRIPLES:
+        d = os.path.join(out_dir, triple)
+        try:
+            names = sorted(
+                f
+                for f in os.listdir(d)
+                if not f.endswith(STAMP_SUFFIX) and os.path.isfile(os.path.join(d, f))
+            )
+        except OSError:
+            names = []
+        if len(names) != 1:
+            print(
+                "det-manifest: build-builtins.py wrote %s for %s in %s, not one archive; "
+                "no manifest written" % (", ".join(names) or "nothing", triple, d)
+            )
+            return None
+        lines.append(
+            "%s  %s/%s/%s" % (sha256_file(os.path.join(d, names[0])), triple, BUILTINS_DIR, names[0])
+        )
+    return lines
 
 
 def read_manifest(path):
@@ -390,6 +489,37 @@ for m in args[2:]:
 open(args[1], "wb").write(h.digest())
 '''
 
+# Writes each --triple's archive (named as clang names it) from the hash of
+# the triple and the root's msil/lib/builtins/sources.txt, and a stamp that
+# names --out, so a listed stamp would differ between work directories.
+STAND_IN_BUILTINS = r'''import hashlib, os, sys
+args = sys.argv[1:]
+log = os.environ.get("DET_SELFTEST_BUILTINS_LOG")
+if log:
+    with open(log, "a", encoding="utf-8") as f:
+        f.write("\t".join(args) + "\n")
+build_dir = args[args.index("--build-dir") + 1]
+out = args[args.index("--out") + 1]
+triples = [args[i + 1] for i, a in enumerate(args) if a == "--triple"]
+if not os.path.isabs(build_dir) or not os.path.isdir(os.path.join(build_dir, "bin")):
+    print("stand-in build-builtins.py: error: --build-dir " + build_dir + " has no bin/")
+    sys.exit(2)
+with open(os.path.join("msil", "lib", "builtins", "sources.txt"), "rb") as f:
+    data = f.read()
+if b"#error" in data:
+    print("stand-in build-builtins.py: error: #error in sources.txt")
+    sys.exit(1)
+for t in triples:
+    name = "clang_rt.builtins.lib" if "-windows-msvc" in t else "libclang_rt.builtins.a"
+    d = os.path.join(out, t)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, name), "wb") as f:
+        f.write(hashlib.sha256(t.encode() + b"\0" + data).digest())
+    with open(os.path.join(d, name + ".stamp"), "w", encoding="utf-8") as f:
+        f.write("a stamp of the build in " + out + "\n")
+    print("stand-in build-builtins.py: " + t + ": " + os.path.join(d, name))
+'''
+
 
 def self_test():
     failures = []
@@ -417,18 +547,37 @@ def self_test():
             with open(p, "w", encoding="utf-8", newline="\n") as f:
                 f.write(text)
         os.makedirs(os.path.join(root, "msil", "test", "Inputs"))
-        cc = os.path.join(tmp, "cc.py")
-        ar = os.path.join(tmp, "ar.py")
-        with open(cc, "w", encoding="utf-8") as f:
-            f.write(STAND_IN_CC)
-        with open(ar, "w", encoding="utf-8") as f:
-            f.write(STAND_IN_AR)
+        sources_txt = os.path.join(root, "msil", "lib", "builtins", "sources.txt")
+        os.makedirs(os.path.dirname(sources_txt))
+        sources_text = "compiler-rt/lib/builtins/muldc3.c\n"
+        with open(sources_txt, "w", encoding="utf-8", newline="\n") as f:
+            f.write(sources_text)
+        # The tools sit in a build's bin/ directory, as the callers' do; build
+        # gives build-builtins.py its parent as --build-dir.
+        tools = os.path.join(tmp, "tools")
+        os.makedirs(os.path.join(tools, "bin"))
+        cc = os.path.join(tools, "bin", "cc.py")
+        ar = os.path.join(tools, "bin", "ar.py")
+        bb = os.path.join(tmp, "build-builtins.py")
+        for path, text in ((cc, STAND_IN_CC), (ar, STAND_IN_AR), (bb, STAND_IN_BUILTINS)):
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
         log = os.path.join(tmp, "cc.log")
+        bb_log = os.path.join(tmp, "builtins.log")
         os.environ["DET_SELFTEST_LOG"] = log
+        os.environ["DET_SELFTEST_BUILTINS_LOG"] = bb_log
 
         def do_build(work, out, levels="O0,O2", clang=cc, archiver=ar):
             ns = argparse.Namespace(
-                clang=clang, ar=archiver, out=out, work=work, levels=levels, tests=m1, root=root, jobs=4
+                clang=clang,
+                ar=archiver,
+                out=out,
+                work=work,
+                levels=levels,
+                tests=m1,
+                root=root,
+                jobs=4,
+                builtins_script=bb,
             )
             try:
                 return build(ns)
@@ -441,7 +590,10 @@ def self_test():
         check(do_build(os.path.join(tmp, "work-a"), a) == 0, "build in work-a")
         check(do_build(os.path.join(tmp, "work b"), b) == 0, "build in 'work b'")
         ea, eb = read_manifest(a), read_manifest(b)
-        check(len(ea) == 2 * 2 * 4, "16 entries (3 objects and an archive, 2 triples, 2 levels)")
+        check(
+            len(ea) == 2 * 2 * 4 + 2,
+            "18 entries (3 objects and an archive, 2 triples, 2 levels; 2 helper archives)",
+        )
         check(ea == eb, "two work directories give equal manifests")
         check(compare(a, b) == 0, "compare of equal manifests exits 0")
         names = sorted(ea)
@@ -450,6 +602,36 @@ def self_test():
             and "x86_64-unknown-linux-gnu-msil/O2/libm1.a" in names
             and not any("skip" in n for n in names),
             "entry names <triple>/<level>/<dir>__<file>.o and libm1.a; Inputs/ left out",
+        )
+        helpers = sorted(
+            [
+                "x86_64-pc-windows-msvc-msil/builtins/clang_rt.builtins.lib",
+                "x86_64-unknown-linux-gnu-msil/builtins/libclang_rt.builtins.a",
+            ]
+        )
+        check(
+            sorted(n for n in names if "/%s/" % BUILTINS_DIR in n) == helpers
+            and not any(n.endswith(STAMP_SUFFIX) for n in names),
+            "the helper archives are listed as <triple>/builtins/<archive>, without their stamps",
+        )
+
+        def builtins_runs():
+            with open(bb_log, encoding="utf-8") as f:
+                return [line.split("\t") for line in f.read().splitlines()]
+
+        def value(words, name):
+            return words[words.index(name) + 1] if name in words else None
+
+        runs = builtins_runs()
+        check(
+            len(runs) == 2
+            and all(value(w, "--build-dir") == tools for w in runs)
+            and value(runs[0], "--out") == os.path.join(tmp, "work-a", BUILTINS_DIR)
+            and value(runs[1], "--out") == os.path.join(tmp, "work b", BUILTINS_DIR)
+            and all([w[i + 1] for i, x in enumerate(w) if x == "--triple"] == list(TRIPLES) for w in runs)
+            and all(value(w, "--jobs") == "4" for w in runs),
+            "build-builtins.py gets --build-dir <the directory above the tools' bin/>, "
+            "--out <work>/builtins, both triples and --jobs",
         )
         with open(log, encoding="utf-8") as f:
             cmds = f.read().splitlines()
@@ -500,6 +682,20 @@ def self_test():
             and read_manifest(r) == ec,
             "relative '/'-separated tool paths, run from the root, pass the archive step",
         )
+        given = value(builtins_runs()[-1], "--build-dir") or ""
+        check(
+            os.path.normcase(given) == os.path.normcase(os.path.join(root, "build")),
+            "relative tool paths give build-builtins.py the absolute build directory",
+        )
+        with open(sources_txt, "a", encoding="utf-8", newline="\n") as f:
+            f.write("# edited\n")
+        h = os.path.join(tmp, "h.txt")
+        check(do_build(os.path.join(tmp, "work-a"), h) == 0, "build after a helper source edit")
+        eh = read_manifest(h)
+        check(
+            sorted(p for p in ec if ec[p] != eh.get(p)) == helpers and sorted(eh) == sorted(ec),
+            "an edited helper source differs in the 2 helper archives only",
+        )
         d = os.path.join(tmp, "d.txt")
         with open(d, "w", encoding="utf-8") as f:
             f.write("".join("%s  %s\n" % (h, p) for p, h in sorted(ea.items()) if "/O0/" in p))
@@ -545,8 +741,20 @@ def self_test():
         check(do_build(old, os.path.join(tmp, "m.txt"), archiver=missing) == 2
               and os.path.isfile(mine) and os.path.isfile(obj),
               "a missing --ar is a usage error before anything is deleted")
+        lone = os.path.join(tmp, "cc.py")
+        shutil.copy(cc, lone)
+        check(do_build(old, os.path.join(tmp, "m.txt"), clang=lone) == 2
+              and os.path.isfile(mine) and os.path.isfile(obj),
+              "--clang and --ar outside one bin/ directory are a usage error before anything is deleted")
         check(do_build(old, os.path.join(tmp, "m.txt"), "O0") == 0 and not os.path.exists(mine),
               "a directory build made (marked) is emptied")
+        with open(sources_txt, "a", encoding="utf-8", newline="\n") as f:
+            f.write("#error broken\n")
+        hf = os.path.join(tmp, "hf.txt")
+        check(do_build(os.path.join(tmp, "work-hf"), hf) == 1 and not os.path.exists(hf),
+              "a failed helper archive build writes no manifest")
+        with open(sources_txt, "w", encoding="utf-8", newline="\n") as f:
+            f.write(sources_text)
         with open(os.path.join(m1, "01-b", "one.c"), "w", encoding="utf-8") as f:
             f.write("#error broken\n")
         f_out = os.path.join(tmp, "f.txt")
@@ -556,6 +764,7 @@ def self_test():
               "an unknown level is a usage error")
     finally:
         os.environ.pop("DET_SELFTEST_LOG", None)
+        os.environ.pop("DET_SELFTEST_BUILTINS_LOG", None)
         shutil.rmtree(tmp, ignore_errors=True)
     print("det-manifest: self-test %s (%d failure(s))" % ("passed" if not failures else "FAILED", len(failures)))
     return 1 if failures else 0
@@ -571,7 +780,7 @@ def main(argv):
     )
     p.add_argument("--self-test", action="store_true", help="run the offline self-test")
     sub = p.add_subparsers(dest="command")
-    b = sub.add_parser("build", help="compile msil/test/M1 and write a manifest")
+    b = sub.add_parser("build", help="compile msil/test/M1, build the helper archives and write a manifest")
     b.add_argument("--clang", required=True, help="the tree's clang (a path is made absolute; it must start)")
     b.add_argument("--ar", required=True, help="the tree's llvm-ar (a path is made absolute; it must start)")
     b.add_argument("--out", required=True, help="the manifest to write")
@@ -583,6 +792,7 @@ def main(argv):
     b.add_argument("--levels", default="O0,O2", help="comma list (default O0,O2)")
     b.add_argument("--tests", help="the C files' directory (default msil/test/M1)")
     b.add_argument("--root", help=argparse.SUPPRESS)
+    b.add_argument("--builtins-script", help=argparse.SUPPRESS)
     b.add_argument("--jobs", type=int, default=os.cpu_count() or 1, help="parallel compiles")
     c = sub.add_parser("compare", help="compare two manifests")
     c.add_argument("a")

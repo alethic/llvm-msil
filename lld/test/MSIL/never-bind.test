@@ -55,8 +55,11 @@
 ##   --lto-emit-asm text through the merged module's (the import annotation).
 ## Through CIL objects (llc -filetype=obj), LTO with an image (the reference
 ## that code generation creates after LTO names '<output>.lto.o') and
-## --lto-emit-asm. In whole-program text the fpext of half stays the
-## backend's helper error, D14's text, which M25 rewords.
+## --lto-emit-asm. In whole-program text, which links no CIL object, the
+## fpext of half is the backend's helper error, A9's text (5.14.3; M25):
+##   runtime helper '<name>' needs the helper archive clang_rt.builtins, which only msil-ld links
+## helper-report.test pins the report lines with the helper archive and for
+## the complex helpers.
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
@@ -133,7 +136,7 @@
 # RUN: not msil-ld half.bc libgcc_s.so.1 -o half-lto.exe 2>&1 | %{err} --check-prefix=N1 -DREF=half-lto.exe.lto.o
 # RUN: not msil-ld --lto-emit-asm half.bc libgcc_s.so.1 -o x.il 2>&1 \
 # RUN:   | %{err} --check-prefix=N1-TEXT --implicit-check-not=pinvokeimpl --implicit-check-not=libgcc_s
-# N1-TEXT: {{^}}msil-ld: error: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
+# N1-TEXT: {{^}}msil-ld: error: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 
 ## An archive member wins over the native library in either order.
 # RUN: msil-ld half.o libhelp.a libgcc_s.so.1 -o ar1.exe 2>&1 | count 0

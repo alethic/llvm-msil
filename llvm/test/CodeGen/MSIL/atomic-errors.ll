@@ -1,25 +1,24 @@
 ; Atomic loads, stores, read-modify-write operations and compare-exchanges stay
-; unsupported in Phase 1 (ImplementationPlan.md M7.a 'Atomic loads/stores stay
-; unsupported (max atomic size 0)' and decision D36, until phase 3; plan
-; section 12 rows 'fix-loop ownership: `llvm/test/CodeGen/MSIL/atomic-errors.ll`
-; -> fix-4' (M7) and '... -> M8.d' (M8); plan section 2 'Diagnostics leave
-; well-formed output'). The largest atomic size MSIL supports is 0 bits, so
-; AtomicExpand turns every atomic instruction into a call of an __atomic_*
-; library function before instruction selection: the sized helper
-; (__atomic_load_4, __atomic_store_4, __atomic_fetch_add_4,
-; __atomic_compare_exchange_4, __atomic_load_8) when the access is naturally
-; aligned, otherwise the generic __atomic_load(size, ptr, ret, order). The
-; memory order is passed as its C ABI value (seq_cst 5, release 3, acquire 2).
-; The compare-exchange helper takes the expected value, and the generic load
-; returns the loaded value, through a stack temporary, an ordinary frame object
-; since M7.b. AtomicExpand declares the helpers as functions and calls them
-; directly, so they are undefined functions of the module, and none of them is
-; a Phase-1 import (decision D14 keeps the '__' library functions, the
-; __atomic_* helpers included, errors until phase 3): the end of the module
-; reports each helper once (M8.c),
-;   undefined function '<name>' is not defined in this module and is not a
-;   Phase-1 import (puts, putchar, the C math library, msil-import-module);
-;   Phase 1 has no linker
+; unsupported in whole-program text (ImplementationPlan.md M7.a 'Atomic
+; loads/stores stay unsupported (max atomic size 0)', decision D36 and, since
+; M25, 5.14.3 A9; plan section 12 rows 'fix-loop ownership:
+; `llvm/test/CodeGen/MSIL/atomic-errors.ll` -> fix-4' (M7) and '... -> M8.d'
+; (M8); plan section 2 'Diagnostics leave well-formed output'). The largest
+; atomic size MSIL supports is 0 bits, so AtomicExpand turns every atomic
+; instruction into a call of an __atomic_* library function before instruction
+; selection: the sized helper (__atomic_load_4, __atomic_store_4,
+; __atomic_fetch_add_4, __atomic_compare_exchange_4, __atomic_load_8) when the
+; access is naturally aligned, otherwise the generic __atomic_load(size, ptr,
+; ret, order). The memory order is passed as its C ABI value (seq_cst 5, release
+; 3, acquire 2). The compare-exchange helper takes the expected value, and the
+; generic load returns the loaded value, through a stack temporary, an ordinary
+; frame object since M7.b. AtomicExpand declares the helpers as functions and
+; calls them directly, so they are undefined functions of the module, and none
+; of them is a Phase-1 import (decision D14 keeps the '__' library functions,
+; the __atomic_* helpers included, errors in whole-program text): the end of the
+; module reports each helper once (M8.c), since M25 with the atomic-operation
+; text of helper-archive-errors.ll instead of D14's 'undefined function' text,
+;   runtime helper '<name>' is an atomic operation that only msil-ld links
 ; and declares no P/Invoke for it.
 ;
 ; Every error is checked with its whole text; the errors are matched as a
@@ -76,7 +75,7 @@ source_filename = "atomic-errors.c"
 ; NERR-COUNT-6: {{^}}error:
 ; NERR-NOT:     {{^}}error:
 
-; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_load_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; ERR-DAG: {{^}}error: {{.*}}runtime helper '__atomic_load_4' is an atomic operation that only msil-ld links{{$}}
 ; IL-LABEL: .method {{.*}}'aload'(
 ; IL-SAME:  native int) cil managed{{$}}
 ; IL-NEXT:  {{^\{$}}
@@ -91,7 +90,7 @@ define i32 @aload(ptr %p) {
   ret i32 %v
 }
 
-; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_store_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; ERR-DAG: {{^}}error: {{.*}}runtime helper '__atomic_store_4' is an atomic operation that only msil-ld links{{$}}
 ; IL-LABEL: .method {{.*}}'astore'(
 ; IL-SAME:  native int, int32) cil managed{{$}}
 ; IL-NEXT:  {{^\{$}}
@@ -107,7 +106,7 @@ define void @astore(ptr %p, i32 %v) {
   ret void
 }
 
-; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_fetch_add_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; ERR-DAG: {{^}}error: {{.*}}runtime helper '__atomic_fetch_add_4' is an atomic operation that only msil-ld links{{$}}
 ; IL-LABEL: .method {{.*}}'armw'(
 ; IL-SAME:  native int, int32) cil managed{{$}}
 ; IL-NEXT:  {{^\{$}}
@@ -125,7 +124,7 @@ define i32 @armw(ptr %p, i32 %v) {
 
 ; The expected value goes to the frame temporary, whose address is the second
 ; argument; the old value is read back from it after the call.
-; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_compare_exchange_4' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; ERR-DAG: {{^}}error: {{.*}}runtime helper '__atomic_compare_exchange_4' is an atomic operation that only msil-ld links{{$}}
 ; IL-LABEL: .method {{.*}}'acas'(
 ; IL-SAME:  native int, int32, int32) cil managed{{$}}
 ; IL:       {{^}}  localloc{{$}}
@@ -164,7 +163,7 @@ define i32 @acas(ptr %p, i32 %e, i32 %n) {
 ; Under-aligned: the generic helper gets the size (native int 4), the operand,
 ; the address of the frame temporary that receives the value, and the order;
 ; the value is then read from the temporary.
-; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_load' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; ERR-DAG: {{^}}error: {{.*}}runtime helper '__atomic_load' is an atomic operation that only msil-ld links{{$}}
 ; IL-LABEL: .method {{.*}}'aload_unaligned'(
 ; IL-SAME:  native int) cil managed{{$}}
 ; IL:       {{^}}  localloc{{$}}
@@ -191,7 +190,7 @@ define i32 @aload_unaligned(ptr %p) {
   ret i32 %v
 }
 
-; ERR-DAG: {{^}}error: {{.*}}undefined function '__atomic_load_8' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; ERR-DAG: {{^}}error: {{.*}}runtime helper '__atomic_load_8' is an atomic operation that only msil-ld links{{$}}
 ; IL-LABEL: .method {{.*}}'aload_i64'(
 ; IL-SAME:  native int) cil managed{{$}}
 ; IL-NEXT:  {{^\{$}}

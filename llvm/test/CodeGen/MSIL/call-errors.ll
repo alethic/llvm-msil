@@ -25,11 +25,17 @@
 ;   calling convention, a callee named 'llvm.*' that LLVM does not know
 ;   ("unknown intrinsic '<name>' is not supported for MSIL") and an
 ;   ExternalSymbol callee that is a runtime helper, whose name starts with
-;   '__' ("runtime helper '<name>' is not available for MSIL yet (phase 3)",
-;   D14 and M8.a; fp-expand.ll has the half and bfloat conversions that
-;   still ask for one; since M24 the constrained i128 conversions ask for
-;   none, i128-divrem.ll and strict-i128.ll; libcall-policy.ll has the
-;   library calls that are imports).
+;   '__' (D14 and M8.a; since M25 "runtime helper '<name>' needs the helper
+;   archive clang_rt.builtins, which only msil-ld links", "runtime helper
+;   '<name>' is an atomic operation that only msil-ld links" for an
+;   __atomic_* helper, or "runtime helper '<name>' is not supported for
+;   MSIL: the helper archive clang_rt.builtins has no 128-bit integer
+;   helpers" for a helper with compiler-rt's ti mode, which no archive
+;   defines (W64I128), 5.14.3 A9 and A5; helper-archive-errors.ll has every
+;   class, fp-expand.ll has the half and bfloat conversions that still ask
+;   for one; since M24 the constrained i128 conversions ask for none,
+;   i128-divrem.ll and strict-i128.ll; libcall-policy.ll has the library
+;   calls that are imports).
 ; - Since M12 (Q36; section 12, 'D14/D33 note and P3-B text'), i128 division
 ;   and remainder by a variable or by any constant, and the plain conversions
 ;   between i128 and float32 or float64, ask for no runtime helper at all:
@@ -48,7 +54,8 @@
 ;   reaches such a call by default since M12, so the W64I128 part asks for
 ;   LIBCALLFP's library calls with -expand-fp-convert-bits=128 and checks
 ;   object-form text and objects, where a '__' helper is a symbol; in
-;   whole-program text the calls stay D14's runtime-helper errors.
+;   whole-program text each call stays LowerCall's runtime-helper error,
+;   since M25 the text of a ti helper that no archive defines.
 ; - A rejected call whose result needs more than one value (i128,
 ;   { i64, i64 }) is demoted to a frame slot around LowerCall (frames exist
 ;   since M7) and reported once. Since M9, MSILFixFunctionBitcasts erases
@@ -72,7 +79,9 @@
 ;   module reports "undefined function '<name>' is not defined in this module
 ;   and is not a Phase-1 import (puts, putchar, the C math library,
 ;   msil-import-module); Phase 1 has no linker" (M8.c) once per callee,
-;   however many calls and callers it has, and declares no P/Invoke for it;
+;   however many calls and callers it has, and declares no P/Invoke for it
+;   (since M25 a runtime helper of the helper archive, such as __muldc3, gets
+;   the helper-archive text instead, 5.14.3 A9);
 ;   an available_externally definition is called like a declaration. A
 ;   declaration that is never called, or whose calls were all rejected, is
 ;   not an error.
@@ -81,10 +90,11 @@
 ;   clang calls for C complex multiplication and division on
 ;   x86_64-unknown-linux-gnu-msil; i128; { i64, i64 }) has its result demoted
 ;   to a frame slot (frames exist since M7). None of these callees is an
-;   import, so each is reported once with the same text (since M9
-;   MSILFixFunctionBitcasts erases none of their calls): the errors are
-;   matched as a group and counted, and only the IL of the other functions is
-;   checked.
+;   import, so each is reported once (since M9 MSILFixFunctionBitcasts erases
+;   none of their calls), ext128 and extpair with M8.c's text and, since M25,
+;   clang's complex helpers __muldc3 and __divsc3 with the helper-archive
+;   text (class N1, 5.14.3 A9): the errors are matched as a group and
+;   counted, and only the IL of the other functions is checked.
 ; - A byval argument of an import is copied like any byval argument (since
 ;   M9, byval.ll), and the import, whose aggregate parameter a P/Invoke cannot
 ;   pass, is reported once at the end of the module with M8.c's "imported
@@ -106,7 +116,11 @@
 ; added the byval call of an import (BYVALIMP); M12.c made LIBCALL and
 ; LIBCALLFP error-free (inline i128 division and conversions) and lowered the
 ; aliases of ALIAS; M24.f added the calls of half and bfloat imports
-; (HALFIMP) and the library calls with an i128 argument (W64I128).
+; (HALFIMP) and the library calls with an i128 argument (W64I128); M25.f gave
+; the runtime-helper errors of EXTMULTI M25's helper-archive text and those of
+; W64I128, whose helpers have compiler-rt's ti mode, the text of a helper that
+; no archive defines (section 12, the row 'M25.c (1) and (2) ... amended (fix
+; loop; review r2 finding 4)' of 2026-10-31).
 
 ; DEFINE: %{diag} = FileCheck %s --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" \
 ; DEFINE:   --implicit-check-not=error: --implicit-check-not=warning:
@@ -172,8 +186,8 @@
 ; The same conversions as library calls (-expand-fp-convert-bits=128): the
 ; i128 argument by the address of a 16-aligned frame temporary on the x86-64
 ; Windows triples, as two halves on the others. Object-form text on four
-; triples at -O2 and -O0, and objects; whole-program text rejects the '__'
-; helpers (D14), builds no call and still assembles.
+; triples at -O2 and -O0, and objects; whole-program text rejects the two
+; ti helpers, which no archive defines, builds no call and still assembles.
 ; DEFINE: %{i128of} = llc -expand-fp-convert-bits=128 -msil-object-form -asm-verbose=false -verify-machineinstrs
 ; DEFINE: %{i128obj} = llc -expand-fp-convert-bits=128 -filetype=obj -verify-machineinstrs
 ; RUN: %{i128of} -mtriple=x86_64-pc-windows-msvc-msil < %t/libcall-fp-w64.ll -o %t/libcall-fp-w64.win.il 2>&1 \
@@ -647,12 +661,20 @@ define i64 @after_libcall_fp(i64 %a, i64 %b) {
 ;   (float64(native int)) and 00 01 0C 18 (float32(native int)), or
 ;   00 02 0D 18 18 and 00 02 0C 18 18.
 ; - Whole-program text of x86_64-pc-windows-msvc-msil (W64I128-ERR,
-;   W64I128-WP): each call is D14's runtime-helper error, reported once, no
-;   call is built, and the IL assembles.
+;   W64I128-WP): each call is LowerCall's runtime-helper error, reported
+;   once, no call is built, and the IL assembles. Since M25 every '__'
+;   library call but an __atomic_* one gets the helper-archive text unless
+;   its helper has compiler-rt's ti mode, as __floattidf and __floatuntisf
+;   have: then it gets "runtime helper '<name>' is not supported for MSIL:
+;   the helper archive clang_rt.builtins has no 128-bit integer helpers"
+;   (5.14.3 A9 and A5; section 12, the row 'M25.c (1) and (2) ... amended
+;   (fix loop; review r2 finding 4)' of 2026-10-31; helper-archive-errors.ll's
+;   ti.ll).
 ; An i128 result cannot be reached this way: fptosi to i128 and, with
 ; -expand-div-rem-bits=128, sdiv i128 are reported by ReplaceNodeResults
-; ('__fixdfti' and '__divti3' with the runtime-helper text) before any call
-; is built, so no function here returns an i128.
+; ('__fixdfti' and '__divti3', since M25 with the same text,
+; helper-archive-errors.ll) before any call is built, so no function here
+; returns an i128.
 
 ; W64I128-LABEL:   {{^}}.method public static float64 'sitofp128'(native int, native int) cil managed{{$}}
 ; W64I128:         {{^}}  ldc.i4.s 24{{$}}
@@ -733,8 +755,8 @@ define i64 @after_libcall_fp(i64 %a, i64 %b) {
 ; I128HALVES-OBJ-NEXT: {{^}}  MemberRef[1]: Class=0x01000001 Name='__floattidf' Signature=00 02 0D 18 18{{$}}
 ; I128HALVES-OBJ-NEXT: {{^}}  MemberRef[2]: Class=0x01000001 Name='__floatuntisf' Signature=00 02 0C 18 18{{$}}
 
-; W64I128-ERR: {{^}}error: {{.*}}in function sitofp128 {{.*}}: runtime helper '__floattidf' is not available for MSIL yet (phase 3){{$}}
-; W64I128-ERR: {{^}}error: {{.*}}in function uitofp128 {{.*}}: runtime helper '__floatuntisf' is not available for MSIL yet (phase 3){{$}}
+; W64I128-ERR: {{^}}error: {{.*}}in function sitofp128 {{.*}}: runtime helper '__floattidf' is not supported for MSIL: the helper archive clang_rt.builtins has no 128-bit integer helpers{{$}}
+; W64I128-ERR: {{^}}error: {{.*}}in function uitofp128 {{.*}}: runtime helper '__floatuntisf' is not supported for MSIL: the helper archive clang_rt.builtins has no 128-bit integer helpers{{$}}
 
 ; W64I128-WP-LABEL: .method {{.*}}'sitofp128'(
 ; W64I128-WP-NOT:   {{^}}  call
@@ -1193,12 +1215,14 @@ define i32 @f2(i32 %x) {
 ; <2 x float> (__divsc3), which clang -O2 emits for C complex multiplication
 ; and division on x86_64-unknown-linux-gnu-msil, i128 and { i64, i64 }. Each
 ; callee is called from two functions, with the result used and unused. None
-; is an import: each is reported once, in the end-of-module text, and gets no
-; P/Invoke; the errors are matched as a group and counted. Whether the calls
-; are built does not matter here; the rest of the module compiles.
-; EXTMULTI-DAG: {{^}}error: {{.*}}undefined function '__divsc3' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; is an import: each is reported once, at the end of the module (ext128 and
+; extpair with M8.c's text, the complex helpers __divsc3 and __muldc3 with
+; M25's helper-archive text), and gets no P/Invoke; the errors are matched as
+; a group and counted. Whether the calls are built does not matter here; the
+; rest of the module compiles.
+; EXTMULTI-DAG: {{^}}error: {{.*}}runtime helper '__divsc3' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 ; EXTMULTI-DAG: {{^}}error: {{.*}}undefined function 'ext128' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
-; EXTMULTI-DAG: {{^}}error: {{.*}}undefined function '__muldc3' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; EXTMULTI-DAG: {{^}}error: {{.*}}runtime helper '__muldc3' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 ; EXTMULTI-DAG: {{^}}error: {{.*}}undefined function 'extpair' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 ; NEXTMULTI-COUNT-4: {{^}}error:
 ; NEXTMULTI-NOT:     {{^}}error:

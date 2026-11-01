@@ -26,6 +26,14 @@
 ##   against the library has its own copy.
 ## - LTO with an image resolves the references that code generation creates
 ##   after LTO; --lto-emit-asm text defines the method (T6) and calls it.
+## - A program's own bitcode definition of the name, with the registry's
+##   signature void(), wins over '<trailer>' as the CIL object of the same
+##   module does, in an LTO image and in --lto-emit-asm text: the method has
+##   the program's body, not the trailer's empty one (section 12 row
+##   2026-10-31, 'M25.g extended'). msil-ld keeps a prevailing bitcode
+##   definition of an offered trailer name visible to regular objects, as it
+##   keeps the names of lto::LTO::getRuntimeLibcallSymbols, because code
+##   generation creates the calls after LTO (M25.d).
 ## - A link without a barrier has no such method and no '<trailer>' input.
 
 # REQUIRES: llvm-cil-dump
@@ -167,6 +175,35 @@
 # TEXT-NEXT: {{^}}  ret{{$}}
 # TEXT-NEXT: {{^}}} // end of method '__msil_compiler_barrier'{{$}}
 
+## A program's bitcode definition of the name and a single-thread fence: the
+## CIL object, an LTO image and --lto-emit-asm text all use the program's
+## method, and nothing comes from '<trailer>'.
+# RUN: llc -filetype=obj own.ll -o own.o
+# RUN: llvm-as own.ll -o own.bc
+# RUN: msil-ld own.o -o own.exe -Map=own.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEFINED -DIN=own.o --implicit-check-not="<trailer>" --input-file=own.map
+# RUN: llvm-cil-dump own.exe | FileCheck %s --check-prefix=DEFINED-IL \
+# RUN:   "--implicit-check-not=.method '__msil_compiler_barrier'"
+# RUN: msil-ld own.bc -o own-lto.exe -Map=own-lto.map 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=DEFINED -DIN=own-lto.exe.lto.o --implicit-check-not="<trailer>" \
+# RUN:   --input-file=own-lto.map
+# RUN: llvm-cil-dump own-lto.exe | FileCheck %s --check-prefix=DEFINED-IL \
+# RUN:   "--implicit-check-not=.method '__msil_compiler_barrier'"
+# RUN: msil-ld --lto-emit-asm own.bc -o own.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=OWN-TEXT --implicit-check-not=noinlining --implicit-check-not=pinvokeimpl \
+# RUN:   "--implicit-check-not=.method assembly static void '__msil_compiler_barrier'" --input-file=own.il
+# RUN: FileCheck %s --check-prefix=OWN-CALL --input-file=own.il
+# OWN-TEXT:      {{^}}.method {{.*}}static void '__msil_compiler_barrier'() cil managed{{$}}
+# OWN-TEXT-NOT:  {{^}}} // end of method
+# OWN-TEXT:      {{^}}  ldsfld native int 'count'{{$}}
+# OWN-TEXT-NOT:  {{^}}} // end of method
+# OWN-TEXT:      {{^}}  stind.i4{{$}}
+# OWN-TEXT-NEXT: {{^}}  ret{{$}}
+# OWN-TEXT-NEXT: {{^}}} // end of method '__msil_compiler_barrier'{{$}}
+# OWN-CALL:      {{^}}.method {{.*}}static int32 'main'() cil managed{{$}}
+# OWN-CALL-NOT:  {{^}}} // end of method
+# OWN-CALL:      {{^}}  call void '__msil_compiler_barrier'(){{$}}
+
 ## No barrier, no method and no '<trailer>' input.
 # RUN: msil-ld plain.o -o plain.exe -Map=plain.map 2>&1 | count 0
 # RUN: llvm-cil-dump plain.exe | FileCheck %s --check-prefix=PLAIN --implicit-check-not=__msil_compiler_barrier
@@ -255,6 +292,28 @@ define i32 @main() {
   fence syncscope("singlethread") seq_cst
   %v = load volatile i32, ptr @flag
   fence syncscope("singlethread") release
+  ret i32 %v
+}
+
+#--- own.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; The program defines the name with the registry's signature, void(), and
+;; has a single-thread fence, whose call code generation creates after LTO.
+@count = global i32 0
+@flag = global i32 0
+
+define void @__msil_compiler_barrier() {
+  %c = load i32, ptr @count
+  %n = add i32 %c, 1
+  store i32 %n, ptr @count
+  ret void
+}
+
+define i32 @main() {
+  fence syncscope("singlethread") seq_cst
+  %v = load volatile i32, ptr @flag
   ret i32 %v
 }
 

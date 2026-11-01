@@ -12,15 +12,19 @@
 ;   function with "msil-import-module" and "msil-import-name" is imported
 ;   from that library under that entry point.
 ; - A runtime helper, whose name starts with '__' (compiler-rt; __atomic_*
-;   helpers in atomic-errors.ll), is an error until phase 3: "runtime helper
-;   '<name>' is not available for MSIL yet (phase 3)", reported by LowerCall
-;   (or, for a helper with a two-value result, by the type legalizer with the
-;   same text). powi is __powidf2 on the Linux triple (an error) and pow of
-;   the converted exponent on windows-msvc (a P/Invoke). Since M12 (Q36) i128
-;   division and the conversions between i128 and float32 or float64 ask for
-;   no helper: ExpandIRInsts expands them inline (i128-divrem.ll), so
-;   helpers.ll's div128 and sitofp128, which named __divti3 and __floattidf
-;   until then, compile with no error and no call, and neither name appears.
+;   helpers in atomic-errors.ll), is an error in whole-program text, which no
+;   helper archive reaches (since M25, 5.14.3 A9): "runtime helper '<name>'
+;   needs the helper archive clang_rt.builtins, which only msil-ld links",
+;   reported by LowerCall (an i128 node that would need a helper is the type
+;   legalizer's "runtime helper '<name>' is not supported for MSIL: the
+;   helper archive clang_rt.builtins has no 128-bit integer helpers",
+;   helper-archive-errors.ll). powi is __powidf2 on the Linux triple (an
+;   error) and pow of the converted exponent on windows-msvc (a P/Invoke).
+;   Since M12 (Q36) i128 division and the conversions between i128 and
+;   float32 or float64 ask for no helper: ExpandIRInsts expands them inline
+;   (i128-divrem.ll), so helpers.ll's div128 and sitofp128, which named
+;   __divti3 and __floattidf until then, compile with no error and no call,
+;   and neither name appears.
 ;   Since M24 the constrained (strictfp) conversions between i128 and float32
 ;   or float64 do the same (sitofp128_strict, fptosi128_strict): slot P0
 ;   makes them plain before ExpandIRInsts runs (strict-i128.ll), so
@@ -277,7 +281,7 @@ source_filename = "libcall-helpers.c"
 
 ; HELPER: {{^}}error: {{.*}}in function lround64 {{.*}}: library call 'lround' is not a Phase-1 import{{$}}
 ; HELPER: {{^}}error: {{.*}}in function exp10_f64 {{.*}}: library call 'exp10' is not a Phase-1 import{{$}}
-; HELPER: {{^}}error: {{.*}}in function f32_to_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
+; HELPER: {{^}}error: {{.*}}in function f32_to_bf16 {{.*}}: runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 
 ; HELPER-IL-LABEL: .method {{.*}}'div128'(
 ; HELPER-IL-NOT:   {{^}}  call
@@ -373,7 +377,7 @@ declare i128 @llvm.experimental.constrained.fptosi.i128.f64(double, metadata)
 ; the converted exponent on windows-msvc.
 source_filename = "libcall-powi.c"
 
-; POWI-LNX: {{^}}error: {{.*}}in function powi_f64 {{.*}}: runtime helper '__powidf2' is not available for MSIL yet (phase 3){{$}}
+; POWI-LNX: {{^}}error: {{.*}}in function powi_f64 {{.*}}: runtime helper '__powidf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 
 ; POWI-WIN-LABEL: {{^}}.method public static float64 'powi_f64'(float64, int32) cil managed{{$}}
 ; POWI-WIN:       {{^}}  conv.r8{{$}}

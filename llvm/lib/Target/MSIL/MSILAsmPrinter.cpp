@@ -93,6 +93,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/RuntimeLibcalls.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
@@ -291,6 +292,63 @@ cli::MethodSig MSIL::toMethodSig(const MSIL::Signature &S) {
   for (MSIL::ValType T : S.Params)
     M.Params.push_back(toTypeSig(T));
   return M;
+}
+
+/// compiler-rt's machine modes, which its helper names spell out: qi, hi,
+/// si, di and ti are the 8- to 128-bit integers, hf, bf, sf, df, xf and tf
+/// half, bfloat, float, double, x87 and fp128, and sc, dc, xc and tc the
+/// complex types.
+static constexpr StringLiteral CompilerRTModes[] = {
+    "qi", "hi", "si", "di", "ti", "sf", "df", "xf",
+    "tf", "hf", "bf", "sc", "dc", "xc", "tc"};
+
+/// Whether \p Name is a compiler-rt helper name of the ti (__int128) mode,
+/// such as __floattidf, __fixunssfti, __divti3 or __muloti4, which plan
+/// 5.14.3 A5 keeps out of every helper archive. compiler-rt's names are
+/// '__<operation><modes><digit>', with an operation of lowercase letters,
+/// one or more modes and an optional digit; the modes are the longest run of
+/// them that ends the name and leaves the operation a letter, as
+/// msil/test/M3/03-helpers/Inputs/helper-archive.py (MODE_NAME_RE) parses
+/// them. No '__atomic_*' or '__msil_*' name and no complex helper (__multc3,
+/// __divxc3: modes tc and xc) has the ti mode.
+static bool hasInt128Mode(StringRef Name) {
+  if (!Name.consume_front("__"))
+    return false;
+  if (!Name.empty() && isDigit(Name.back()))
+    Name = Name.drop_back();
+  if (!all_of(Name, isLower))
+    return false;
+  bool Int128 = false;
+  while (Name.size() > 2) {
+    StringRef Mode = Name.take_back(2);
+    if (!is_contained(CompilerRTModes, Mode))
+      break;
+    Int128 |= Mode == "ti";
+    Name = Name.drop_back(2);
+  }
+  return Int128;
+}
+
+std::string MSIL::getInt128HelperText(StringRef Name) {
+  return ("runtime helper '" + Name +
+          "' is not supported for MSIL: the helper archive clang_rt.builtins "
+          "has no 128-bit integer helpers")
+      .str();
+}
+
+std::string MSIL::getRuntimeHelperText(StringRef Name) {
+  if (Name.starts_with("__atomic_"))
+    return ("runtime helper '" + Name +
+            "' is an atomic operation that only msil-ld links")
+        .str();
+  // No helper archive has compiler-rt's __int128 helpers (plan 5.14.3 A5), so
+  // msil-ld cannot link one either.
+  if (hasInt128Mode(Name))
+    return MSIL::getInt128HelperText(Name);
+  return ("runtime helper '" + Name +
+          "' needs the helper archive clang_rt.builtins, which only msil-ld "
+          "links")
+      .str();
 }
 
 /// The native functions of the data-import helper '<msil>dataimport' (plan
@@ -1068,19 +1126,118 @@ static bool isMSILLDModule(const Module &M) {
   return Flag && !Flag->isZero();
 }
 
+/// clang's C complex helpers (Annex G multiplication and division), which
+/// clang's CodeGen calls by name and RuntimeLibcalls does not list, the
+/// _Float16 ones included (clang calls them when it does not promote half
+/// arithmetic to float). The table mirrors msil-ld's complexHelperNames
+/// (lld/MSIL/NativeLibraries.cpp), so that text output and msil-ld classify
+/// the same names.
+static constexpr StringLiteral ComplexHelperNames[] = {
+    "__divdc3", "__divhc3", "__divsc3", "__divtc3", "__divxc3",
+    "__muldc3", "__mulhc3", "__mulsc3", "__multc3", "__mulxc3"};
+
+/// The C library's own entry points among the '__' names of the
+/// RuntimeLibcalls sets, which bind natively and are not compiler-runtime
+/// names: these and every name that ends in '_finite' (glibc's libm), as
+/// msil-ld's isCLibraryName (lld/MSIL/NativeLibraries.cpp) lists them, so
+/// that text output and msil-ld classify the same names.
+static constexpr StringLiteral CLibraryRuntimeNames[] = {
+    "__chkstk",
+    "__memcpy_chk",
+    "__memmove_chk",
+    "__memset_chk",
+    "__security_check_cookie",
+    "__security_cookie",
+    "__stack_chk_fail",
+    "__stack_chk_guard"};
+
+namespace {
+/// The name classes of plan 5.14.2 that text output reports as runtime
+/// helpers, which only msil-ld links (plan 5.14.3 A9).
+enum class HelperNameClass {
+  /// Any other name, the C library's '__' names included.
+  None,
+  /// N1, a compiler-runtime name: a '__' name of the RuntimeLibcalls set of
+  /// the target triple, other than N2's and the C library's, or one of
+  /// clang's complex helpers. The helper archive clang_rt.builtins defines
+  /// compiler-rt's, except those of the ti (__int128) mode (plan 5.14.3 A5).
+  CompilerRuntime,
+  /// N2, an atomic library name: '__atomic_*', libatomic's interface.
+  Atomic,
+  /// N3 that only the helper archive defines: a toolchain name ('__msil_*')
+  /// that no trailer definition has (cli::findTrailerDef).
+  ArchiveToolchain,
+};
+} // end anonymous namespace
+
+/// The class of \p Name, an undefined function or a library call, on the
+/// target triple \p TT, as msil-ld decides it for its undefined-symbol report
+/// (lld/MSIL/NativeLibraries.cpp: isCompilerRuntimeName, isAtomicLibraryName
+/// and cli::isToolchainName). N1's set is lto::LTO::getRuntimeLibcallSymbols'
+/// for \p TT: the names of the implementations that the triple's
+/// RuntimeLibcallsInfo makes available.
+static HelperNameClass classifyHelperName(StringRef Name, const Triple &TT) {
+  if (!Name.starts_with("__"))
+    return HelperNameClass::None;
+  if (Name.starts_with("__atomic_"))
+    return HelperNameClass::Atomic;
+  if (cli::isToolchainName(Name))
+    return cli::findTrailerDef(Name) ? HelperNameClass::None
+                                     : HelperNameClass::ArchiveToolchain;
+  if (is_contained(ComplexHelperNames, Name))
+    return HelperNameClass::CompilerRuntime;
+  if (Name.ends_with("_finite") || is_contained(CLibraryRuntimeNames, Name))
+    return HelperNameClass::None;
+  // getSupportedLibcallImpl finds an implementation named Name
+  // (lookupLibcallImplName) that the set makes available (isAvailable).
+  RTLIB::RuntimeLibcallsInfo Libcalls(TT);
+  return Libcalls.getSupportedLibcallImpl(Name) != RTLIB::Unsupported
+             ? HelperNameClass::CompilerRuntime
+             : HelperNameClass::None;
+}
+
+/// Reports \p Name, an undefined function or a library call of text output
+/// on the target triple \p TT, if it names a runtime helper
+/// (classifyHelperName), with the text that LowerCall gives a library call
+/// of one (MSIL::getRuntimeHelperText, plan 5.14.3 A9): text output links
+/// nothing, and only msil-ld links the helper archive clang_rt.builtins and
+/// the atomic library; a helper of compiler-rt's ti (__int128) mode, which
+/// no archive defines (plan 5.14.3 A5), is not supported for MSIL at all.
+/// Returns true if it reported \p Name.
+static bool reportRuntimeHelper(LLVMContext &Ctx, StringRef Name,
+                                const Triple &TT) {
+  switch (classifyHelperName(Name, TT)) {
+  case HelperNameClass::None:
+    return false;
+  // MSIL::getRuntimeHelperText gives the atomic text to the '__atomic_'
+  // names, which are exactly the Atomic class, and the 128-bit integer text
+  // to the ti mode's names (__floattidf, __divti3, ...), which are
+  // CompilerRuntime names.
+  case HelperNameClass::Atomic:
+  case HelperNameClass::CompilerRuntime:
+  case HelperNameClass::ArchiveToolchain:
+    Ctx.emitError(MSIL::getRuntimeHelperText(Name));
+    return true;
+  }
+  llvm_unreachable("unknown helper name class");
+}
+
 /// Reports the undefined function or library call \p Name of a standalone
-/// module, which is not a Phase-1 import of the standalone import table
-/// (decision D14, frozen): no linker resolves it. An undefined function of
-/// the module gets the same text whatever its name, the compiler-rt and
-/// __atomic_* helpers that clang and AtomicExpand declare included. In
-/// msil-ld's LTO module without msil-ld's import annotations (\p LTO: the
-/// module flag "msil-lto" without "msil-linked", as M14 wrote it) the linker
-/// has bound every symbol it could, so such a function is msil-ld's
-/// 'undefined symbol' (plan 5.9.6). A library call (\p IsLibCall) gets the
-/// text of LowerCall's library-call policy, which rejects such calls before
-/// they are built, so that is only a backstop.
-static void reportNotImported(LLVMContext &Ctx, StringRef Name, bool IsLibCall,
-                              bool LTO) {
+/// module on the target triple \p TT, which is not a Phase-1 import of the
+/// standalone import table (decision D14, frozen): no linker resolves it. A
+/// runtime helper gets reportRuntimeHelper's text (clang declares the
+/// complex helpers, and AtomicExpand the __atomic_* functions, as
+/// functions). Any other undefined function of the module gets the same
+/// text whatever its name; in msil-ld's LTO module without msil-ld's import
+/// annotations (\p LTO: the module flag "msil-lto" without "msil-linked", as
+/// M14 wrote it) the linker has bound every symbol it could, so such a
+/// function is msil-ld's 'undefined symbol' (plan 5.9.6). A library call
+/// (\p IsLibCall) gets the text of LowerCall's library-call policy, which
+/// rejects such calls before they are built, so that is only a backstop.
+static void reportNotImported(LLVMContext &Ctx, const Triple &TT,
+                              StringRef Name, bool IsLibCall, bool LTO) {
+  if (reportRuntimeHelper(Ctx, Name, TT))
+    return;
   if (!IsLibCall && LTO)
     Ctx.emitError("undefined symbol: " + Name);
   else if (!IsLibCall)
@@ -1088,9 +1245,6 @@ static void reportNotImported(LLVMContext &Ctx, StringRef Name, bool IsLibCall,
                   "' is not defined in this module and is not a Phase-1 "
                   "import (puts, putchar, the C math library, "
                   "msil-import-module); Phase 1 has no linker");
-  else if (Name.starts_with("__"))
-    Ctx.emitError("runtime helper '" + Name +
-                  "' is not available for MSIL yet (phase 3)");
   else
     Ctx.emitError("library call '" + Name + "' is not a Phase-1 import");
 }
@@ -1164,17 +1318,17 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
       // native callee is checked after native resolution, so the texts name
       // its module (plan 5.10.13, 5.10.14); LowerCall reports the calls of a
       // variadic one.
-      // AtomicExpand declares the __atomic_* helpers during code generation,
-      // after msil-ld's import analysis: like every '__' helper they wait
-      // for the phase-3 runtime library, even when !msil.imports lists one
-      // (plan 5.10.13), as in the library-call loop below and in LowerCall.
-      // A '__' declaration that msil-ld bound carries its import attributes
-      // (__errno_location) and is a P/Invoke.
-      if (Name.starts_with("__") && !MSIL::hasImportModule(F)) {
-        Ctx.emitError("runtime helper '" + Name +
-                      "' is not available for MSIL yet (phase 3)");
+      // A runtime helper (N1, N2 or an archive-only N3 name, plan 5.14.2),
+      // such as an __atomic_* function that AtomicExpand declares during
+      // code generation, after msil-ld's import analysis, is never a native
+      // function of this text, even when !msil.imports lists one: it gets
+      // reportRuntimeHelper's text (plan 5.14.3 A9, and A5 for the __int128
+      // helpers), as in the library-call loop below and in LowerCall. A '__'
+      // declaration that msil-ld bound carries its import attributes
+      // (__errno_location, or an __atomic_* function bound to libatomic.so.1)
+      // and is a P/Invoke; any other '__' name is not resolved by msil-ld.
+      if (!MSIL::hasImportModule(F) && reportRuntimeHelper(Ctx, Name, TT))
         continue;
-      }
       std::optional<MSIL::NativeImport> Import =
           MSIL::getLinkedImport(M, Name, F);
       if (!Import) {
@@ -1206,7 +1360,7 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     }
     std::optional<StringRef> Lib = MSIL::getPInvokeModule(TT, Name, F);
     if (!Lib) {
-      reportNotImported(Ctx, Name, /*IsLibCall=*/false, LTO);
+      reportNotImported(Ctx, TT, Name, /*IsLibCall=*/false, LTO);
       continue;
     }
     // Only scalars cross the boundary as the native calling convention
@@ -1247,11 +1401,8 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
       // LowerCall.
       const Function *Decl =
           Named && Named->isDeclarationForLinker() ? Named : nullptr;
-      if (Name.starts_with("__") && !MSIL::hasImportModule(Decl)) {
-        Ctx.emitError("runtime helper '" + Name +
-                      "' is not available for MSIL yet (phase 3)");
+      if (!MSIL::hasImportModule(Decl) && reportRuntimeHelper(Ctx, Name, TT))
         continue;
-      }
       std::optional<MSIL::NativeImport> Import =
           MSIL::getLinkedImport(M, Name, Decl);
       if (!Import) {
@@ -1265,7 +1416,7 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     // LowerCall builds a library call only for a Phase-1 import (D14).
     std::optional<StringRef> Lib = MSIL::getPInvokeModule(TT, Name, F);
     if (!Lib) {
-      reportNotImported(Ctx, Name, /*IsLibCall=*/true, LTO);
+      reportNotImported(Ctx, TT, Name, /*IsLibCall=*/true, LTO);
       continue;
     }
     Declare(F, Name, *Sig, *Lib, MSIL::getPInvokeEntry(Name, F));

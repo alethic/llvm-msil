@@ -1,0 +1,31 @@
+# Run only in a nested lit by ../../../linux-rtlib.test, whose clang has no
+# helper archive clang_rt.builtins in its resource directory (plan 5.14.3
+# A1, M25): a freestanding program whose complex quotient, in a noinline
+# function, calls __divdc3, a compiler runtime helper (N1, plan 5.14.2), so
+# its link fails with msil-ld's undefined-symbol report and lit reports this
+# test as FAIL, never as UNSUPPORTED (a missing archive is a note, never a
+# feature: M25.e (1)). Linked with the archive, it exits 0.
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/cdiv.c
+# RUN: %{msil_prog}
+#--- cdiv.c
+__attribute__((noinline)) double _Complex cdiv(double _Complex a,
+                                               double _Complex b) {
+  return a / b;
+}
+#--- main.c
+double _Complex cdiv(double _Complex a, double _Complex b);
+int main(void) {
+  volatile double re = 3.0, im = 4.0;
+  double _Complex a, b;
+  __real__ a = re;
+  __imag__ a = im;
+  __real__ b = 1.0;
+  __imag__ b = 2.0;
+  // (3+4i)/(1+2i) = 2.2-0.4i
+  double _Complex q = cdiv(a, b);
+  return __real__ q > 2.19 && __real__ q < 2.21 && __imag__ q > -0.41 &&
+                 __imag__ q < -0.39
+             ? 0
+             : 1;
+}

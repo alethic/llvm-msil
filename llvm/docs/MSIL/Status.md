@@ -1,8 +1,10 @@
 # MSIL backend: status of Phase 2
 
-State after milestone M24 (2026-10-30, branch `msil`, with upstream llvm-project main at
-`1838cefa99c0` merged): Phase 2 (milestones M12-M23) is complete, and M24, the first of Phase 3's
-milestones M24-M35, laid the foundations of Phase 3 (section 2, "Phase 3 foundations (M24)").
+State after milestone M25 (2026-11-01, branch `msil`, with upstream llvm-project main at
+`1838cefa99c0` merged): Phase 2 (milestones M12-M23) is complete, and of Phase 3's milestones
+M24-M35, M24 laid the foundations of Phase 3 and M25 built the helper archive
+`clang_rt.builtins`, compiler-rt's builtins as CIL objects for each MSIL triple (section 2,
+"Phase 3 foundations (M24)" and "The helper archive (M25)").
 `clang -c` compiles C to CIL objects, and `msil-ld`, an lld flavor, links them, archives of them, LLVM bitcode, native
 libraries and library assemblies into IL-only .NET images that it writes itself, binding the
 base class library against the reference assemblies it is given; `clang -S` plus `ilasm`, the
@@ -89,10 +91,17 @@ or error; the compiler barrier is a call of a small method that the output defin
 keeps a spin loop's load inside the loop; `__bf16` crosses calls as its bit pattern, and strict
 conversions between floating point and `__int128` compile; and the tests gained the hosted
 mode, `msil/test/M3`, the legs of Phase 3's milestone gates and a cheaper harness (section 2,
-"Phase 3 foundations (M24)"). How to build and use it is in
-[GettingStarted.md](GettingStarted.md); the decisions referred to as D1-D38 are in section 3 of
-[ImplementationPlan.md](ImplementationPlan.md), and its section 12 records every later
-amendment.
+"Phase 3 foundations (M24)"). M25 built compiler-rt's builtins for each MSIL triple as an
+archive of CIL objects, `clang_rt.builtins`, which the driver passes to `msil-ld`, so the
+`_Float16` and `__bf16` conversions, C `_Complex` multiplication and division, `__builtin_powi`
+and compiler-rt's 32- and 64-bit integer and soft-float helpers link and match native
+compiler-rt; where the native `long double` is wider, the archive forwards the `long double`
+functions that have a `double` counterpart, and the others are a permanent link error; the Linux
+triples define `__ELF__`, every triple caps lock-free atomics at 8 bytes, and text output names
+the archive in its helper errors (section 2, "The helper archive (M25)"). How to build and use
+it is in [GettingStarted.md](GettingStarted.md); the decisions referred to as D1-D38 are in
+section 3 of [ImplementationPlan.md](ImplementationPlan.md), and its section 12 records every
+later amendment.
 
 ## 1. Phase 2 exit criteria
 
@@ -567,7 +576,11 @@ How to link against native libraries, with examples, is in GettingStarted.md sec
   Anything else is `undefined symbol: <name>`. Since M24 the lazy input `<trailer>` comes
   between the archives and the native libraries, and four classes of names never bind to a
   native library (section 2, "Phase 3 foundations (M24)"): compiler-runtime helpers, toolchain
-  helpers (`__msil_*`), the `setjmp` family and, on the Windows triples, `__atomic_*`.
+  helpers (`__msil_*`), the `setjmp` family and, on the Windows triples, `__atomic_*`. Since M25
+  the driver passes the toolchain's helper archive `clang_rt.builtins` after the default
+  libraries, so its members resolve the compiler-runtime helpers and, on the triples whose
+  native `long double` is wider, the native `long double` functions that have a `double`
+  counterpart, before any native library (section 2, "The helper archive (M25)").
 - **Checked after LTO.** Bitcode symbol tables carry neither the import attributes nor the
   library calls that the optimizer adds (`printf` -> `puts`), so `msil-ld` binds and reports
   on the merged module after LTO, before code generation, as lld/ELF and lld/wasm report
@@ -580,9 +593,13 @@ How to link against native libraries, with examples, is in GettingStarted.md sec
   `!msil.imports` for the library functions that code generation may call; in that linked
   mode the backend takes every P/Invoke from these annotations and never consults D14
   (5.10.13). A library call that nothing bound is `library call '<name>' was not resolved by
-  msil-ld`, and a `__` runtime helper keeps its phase-3 error in that text (`--lto-emit-asm`;
-  an LTO link into an image reports a helper that code generation calls as an undefined symbol
-  of `<output>.lto.o`, with the class line of M24). A link of CIL objects (M20)
+  msil-ld`, and a runtime helper is an error of its own in that text (`--lto-emit-asm`, which
+  links no archive): since M25 `runtime helper '<name>' needs the helper archive
+  clang_rt.builtins, which only msil-ld links`, for an `__atomic_*` name `runtime helper
+  '<name>' is an atomic operation that only msil-ld links` (until M25 `runtime helper '<name>'
+  is not available for MSIL yet (phase 3)`). An LTO link into an image takes a helper that code
+  generation calls from the helper archive, or reports it as an undefined symbol of
+  `<output>.lto.o`, with the class line of M24. A link of CIL objects (M20)
   binds and reports the same way at link time, for the references of live code only (the
   module's code generator already ran when `clang -c` wrote each object), and the checks of
   native callees that M15 made on the merged module after LTO (variadic, not passable natively,
@@ -676,33 +693,46 @@ How to link against native libraries, with examples, is in GettingStarted.md sec
   Since M20 these programs link through CIL objects (`%{msil_prog}` of the default pipeline,
   and `lto` through bitcode), and `data-import-testlib`, `data-import-glibc` (Linux) and
   `data-import-msvcrt` (Windows) read and write native variables.
+- **Native `long double` functions (M25).** `long double` is `double` in MSIL (section 3), but
+  on x86_64 and aarch64 Linux (glibc and musl) and x86_64 MinGW the native one is the x87
+  80-bit or the IEEE binary128 format, which the native ABI passes in memory, in `ST(0)` or in
+  Q registers, so a P/Invoke cannot call a native function of plan 5.10.14's `long double`
+  list there (`nativeLongDoubleFunctions` in `lld/MSIL/NativeLibraries.cpp`, 174 names). The
+  list holds the C99 and C11 `<math.h>` and `<complex.h>` `l` functions (`sqrtl`, `expl`,
+  `powl`, `fabsl`, `frexpl`, `ldexpl`, `modfl`, `nanl`, `nexttowardl`, `cabsl`, ...),
+  `nexttoward` and `nexttowardf` (a `long double` parameter), `strtold`, `wcstold` and glibc's
+  `l` extensions (`sincosl`, `exp10l`, `significandl`, ...). Since M25 the helper archive
+  `clang_rt.builtins` of these triples defines 170 of the 174 names as forwarders to their
+  `double` counterparts (`sqrtl` calls `sqrt`, `strtold` calls `strtod`, `nexttoward` calls
+  `nextafter`; section 2, "The helper archive (M25)"), and archive members resolve before the
+  native libraries, so the native function is never bound and the forwarder computes exactly
+  what the C function means when `long double` is `double`. A live call of, or reference to,
+  one of the other names that native lookup binds is a permanent link error after LTO, `native
+  function 'fromfpl' (libm.so.6) takes or returns a native 'long double', which is not
+  supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions
+  that have a 'double' counterpart`, with `>>> referenced by` lines. The other names are the
+  four whose `double` counterpart has two types (`fromfpl`, `fromfpxl`, `ufromfpl` and
+  `ufromfpxl`: C23 made `fromfp` return the floating type where TS 18661-1 returned
+  `intmax_t`, and glibc 2.43 exports both), and glibc's TS 18661-3 `_Float64x` and `_Float128`
+  functions, every name in which `f64x` or `f128` is followed by the end of the name or by `_`
+  (`sqrtf64x`, `expf64x`, `strtof64x`, `strtof64x_l`, `wcstof64x`, `f32addf64x`, `sqrtf128`,
+  `strtof128`, `__isinff128`, ...): with clang, glibc's `<bits/floatn.h>` makes `_Float64x`
+  the source's `long double` (`double` in MSIL) while the native function passes the x87 or
+  binary128 value, and a P/Invoke has no form of the native `_Float128` on any triple. A link
+  without the helper archive (`-nostdlib`, or an archive not built) meets the same error for
+  every name of the list. Until M25 every name was `native function 'sqrtl' (libm.so.6) takes
+  or returns a value that a P/Invoke cannot pass natively yet (phase 3)`. Such a name is never
+  bound quietly; a declaration with an explicit `import_module` is exempt (unchecked).
+  windows-msvc (x86_64 and aarch64) and `aarch64-w64-windows-gnu`, where the native `long
+  double` is `double` too, bind them as before. For a name that stays an error, call the
+  `double` function (`sqrt` for `sqrtf64x`, `strtod` for `strtof64x`): it is the same function
+  in an MSIL program.
 - **Not done yet.**
   - Native variadic functions (`printf`, phase 3): `native function 'printf' (libc.so.6) is
     variadic; calls of native variadic functions are not supported for MSIL yet (phase 3)`.
   - Native functions that take or return a struct by value, an `__int128`, a vector or a
     `_Float16` (phase 3): `native function '<name>' (<module>) takes or returns a value that a
     P/Invoke cannot pass natively yet (phase 3)`.
-  - Native `long double` functions on x86_64 and aarch64 Linux (glibc and musl) and x86_64
-    MinGW (phase 3): `long double` is `double` in MSIL (section 3), but the native one there is
-    the x87 80-bit or the IEEE binary128 format, which the native ABI passes in memory, in
-    `ST(0)` or in Q registers. A live call of, or reference to, a function of plan 5.10.14's
-    `long double` list that native lookup binds is therefore a link error after LTO, `native
-    function 'sqrtl' (libm.so.6) takes or returns a value that a P/Invoke cannot pass natively
-    yet (phase 3)`, with `>>> referenced by` lines. The list holds the C99 and C11 `<math.h>`
-    and `<complex.h>` `l` functions (`sqrtl`, `expl`, `powl`, `fabsl`, `frexpl`, `ldexpl`,
-    `modfl`, `nanl`, `nexttowardl`, `cabsl`, ...), `nexttoward` and `nexttowardf` (a `long
-    double` parameter), `strtold`, `wcstold` and glibc's `l` extensions (`sincosl`, `exp10l`,
-    `significandl`, ...). It also covers glibc's TS 18661-3 `_Float64x` and `_Float128`
-    functions, every name in which `f64x` or `f128` is followed by the end of the name or by
-    `_` (`sqrtf64x`, `expf64x`, `strtof64x`, `strtof64x_l`, `wcstof64x`, `f32addf64x`,
-    `sqrtf128`, `strtof128`, `__isinff128`, ...): with clang, glibc's `<bits/floatn.h>` makes
-    `_Float64x` the source's `long double` (`double` in MSIL) while the native function passes
-    the x87 or binary128 value, and a P/Invoke has no form of the native `_Float128` on any
-    triple. Such a name is never bound quietly; a declaration with an explicit `import_module`
-    is exempt (unchecked). windows-msvc (x86_64 and aarch64) and `aarch64-w64-windows-gnu`,
-    where the native `long double` is `double` too, bind them. Call the `double` function
-    instead (`sqrt` for `sqrtl` or `sqrtf64x`, `strtod` for `strtold`): it is the same function
-    in an MSIL program.
   - `atexit` (M29, which intercepts it): glibc defines it only in machine code
     (`libc_nonshared.a`) and the UCRT does not export it, so it binds nowhere.
   - Native functions that take a C function pointer (M28's native-callable thunks, P3-B):
@@ -851,7 +881,11 @@ undefined data and the linker options), which `msil-ld` reads since M20.
 
 clang uses the native target's ABI, data layout and predefines and adds `__MSIL__`; `long double`
 is `double` on every MSIL triple, which differs from native on Linux and x86_64 MinGW (section 3).
-Linux MSIL triples do not define `__ELF__` (section 6, item 5).
+Since M25 (plan section 10 item 9, the user's decision R12) the Linux MSIL triples define
+`__ELF__`, as their native object format is ELF (compiler-rt's `int_lib.h` needs it), and the
+Windows ones do not; every MSIL triple caps the lock-free atomic width at 64 bits and leaves
+`__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16` undefined, with `_Atomic` layouts unchanged (section 2,
+"The helper archive (M25)"). Until M25 no MSIL triple defined `__ELF__` (section 6, item 5).
 
 Narrow results (upstream merge U2): since upstream `05c3ff5c8c06` (merged with `1838cefa99c0`)
 clang marks no `char`, `short` or `_BitInt` result `zeroext` or `signext` on the Linux MSIL
@@ -899,10 +933,14 @@ assemble them with `ilasm -arm64`; execution stays x86_64-only (D6).
 - `__bf16` (LLVM's `bfloat`, M24): a scalar parameter or result is its 16-bit pattern in an
   `int32`, as a `_Float16` is, so passing, returning, loading, storing and freezing one needs no
   conversion and no helper at any level, and the extension to `float` (and `double`) is inline;
-  the rounding conversions from `float` and `double` still call the compiler-rt helpers
-  `__truncsfbf2` and `__truncdfbf2` (section 3). A `<N x bfloat>` vector crosses calls as N
-  `int32` lanes holding the bit patterns, as a vector of `_Float16` does, with no helper
-  (`<1 x bfloat>` included).
+  the rounding conversions from `float` and `double` call the compiler-rt helpers `__truncsfbf2`
+  and `__truncdfbf2`, which since M25 come from the helper archive `clang_rt.builtins` ("The
+  helper archive (M25)" below). Since M25, after `__truncsfbf2` the code sets bf16's quiet bit
+  (0x0040) when the operand is a NaN, so every result equals native x86-64 and AArch64 code,
+  which round inline and quiet every NaN; the helper alone keeps a signaling NaN whose low 16
+  bits are zero (`7fa00000` gives `7fa0`, natively `7fe0`). `__truncdfbf2`'s result is used as
+  it is. A `<N x bfloat>` vector crosses calls as N `int32` lanes holding the bit patterns, as a
+  vector of `_Float16` does, with no helper (`<1 x bfloat>` included).
 - Control flow: branches, loops, `switch` (CIL `switch` for jump tables up to 4096 entries,
   compare chains otherwise; D35), computed `goto`, irreducible control flow, traps
   (`ldnull; throw`).
@@ -2324,14 +2362,15 @@ defects that Phase 2 left, and gives the tests and gates what Phase 3 needs:
   `isSetjmpFamilyName` and `mayBindNatively` of `lld/MSIL/NativeLibraries.h`):
   - N1, the compiler-runtime helpers: the `__` names of LLVM's runtime library calls for the
     code-generation triple (`__floattidf`, `__fixdfti`, `__divti3`, `__extendhfsf2`,
-    `__truncsfbf2`, the `__sync_*` functions, ...; not the `_Complex` helpers `__muldc3` and its
-    kin, which clang calls itself and which bind like any other name), less `__atomic_*` and the C
-    library's own entry points among them (`__chkstk`, `__memcpy_chk`, `__memmove_chk`,
-    `__memset_chk`, `__security_check_cookie`, `__security_cookie`, `__stack_chk_fail`,
-    `__stack_chk_guard` and every `*_finite` name), which keep binding natively. Until M24 a
-    link for a Linux triple could bind such a helper to the native `libgcc_s.so.1`; now it is
-    `undefined symbol: <name>` with the line `>>> a compiler runtime helper: link the
-    toolchain's helper archive clang_rt.builtins`, until M25 builds that archive.
+    `__truncsfbf2`, the `__sync_*` functions, ...; in M24 not the `_Complex` helpers `__muldc3`
+    and its kin, which clang calls itself and which bound like any other name until M25 made
+    them N1 names too), less `__atomic_*` and the C library's own entry points among them
+    (`__chkstk`, `__memcpy_chk`, `__memmove_chk`, `__memset_chk`, `__security_check_cookie`,
+    `__security_cookie`, `__stack_chk_fail`, `__stack_chk_guard` and every `*_finite` name),
+    which keep binding natively. Until M24 a link for a Linux triple could bind such a helper to
+    the native `libgcc_s.so.1`; now it is `undefined symbol: <name>` with the line `>>> a
+    compiler runtime helper: link the toolchain's helper archive clang_rt.builtins`; M25 builds
+    that archive and gives the line a second form ("The helper archive (M25)" below).
   - N2, `__atomic_*` (libatomic's interface): on the Linux triples they bind to
     `libatomic.so.1` when the link names it (`-latomic`, as a native build does), and without
     it the line is `>>> an atomic operation: link with -latomic, as a native build does`; on
@@ -2404,15 +2443,19 @@ defects that Phase 2 left, and gives the tests and gates what Phase 3 needs:
   patterns, as a vector of `_Float16` does, with no helper (`<1 x bfloat>` included). The
   extension to `float` is inline (`ldc.i4.s 16; shl`, stored to a frame slot and read back with
   `ldind.r4`; `conv.r8` for `double`). The rounding conversions from `float` and `double` still
-  call `__truncsfbf2` and `__truncdfbf2` (section 3), and a P/Invoke cannot pass a `__bf16` (an
-  object marks such a signature NATIVE_INCOMPATIBLE).
+  call `__truncsfbf2` and `__truncdfbf2` (from M25 the helper archive's). From M25, after
+  `__truncsfbf2` the code sets bf16's quiet bit (0x0040) when the operand is a NaN, so every
+  result equals native x86-64 and AArch64 code; the helper alone keeps a signaling NaN whose low
+  16 bits are zero (`7fa00000` gives `7fa0`, natively `7fe0`). `__truncdfbf2`'s result is used
+  as it is. A P/Invoke cannot pass a `__bf16` (an object marks such a signature
+  NATIVE_INCOMPATIBLE).
 - **Strict conversions of wide integers.** The constrained `sitofp`, `uitofp`, `fptosi` and
   `fptoui` between floating point and integers wider than 64 bits, scalar or vector, which
   `-ffp-model=strict` and `#pragma STDC FENV_ACCESS ON` produce, become their plain forms before
   anything else runs (`MSIL::relaxStrictInt128Conversions`), because CIL has one rounding mode
   and no floating-point exceptions; they compile in every mode to the IL of the plain forms. A
-  `_Float16` source still needs `__extendhfsf2` (section 3). `msil/test/M1/02-fp/strict-i128.c`
-  runs them against the native oracle.
+  `_Float16` source still needs `__extendhfsf2` (from M25 the helper archive's).
+  `msil/test/M1/02-fp/strict-i128.c` runs them against the native oracle.
 - **`__int128` helper calls on Win64.** On the x86_64 Windows triples each `__int128` argument
   of a compiler-rt helper call goes by pointer to a 16-byte temporary, as X86 passes it and as
   compiler-rt's Win64 helpers take it (`float64(native int)` for `__floattidf`); the aarch64
@@ -2456,7 +2499,16 @@ defects that Phase 2 left, and gives the tests and gates what Phase 3 needs:
   Whether CI's two test jobs finish within their `timeout-minutes: 330` and whether
   `det-manifest.py compare` finds the Linux and Windows manifests equal stay unknown until the
   user reports a complete run (R24; the first dispatch, on 2026-10-29, stopped at the corpus
-  cache step). GettingStarted.md section 7 has the commands.
+  cache step). Since M25 a third thing stays unknown until a dispatch (plan 5.17.17): whether
+  the clang that the Linux job installs with apt ships compiler-rt's builtins, which that job's
+  hosted native oracle now links. lit's `msil_linux_rtlib=auto` asks the tree's clang (the CI
+  build compiles no native compiler-rt) and then the clang on `PATH` for the file that
+  `-rtlib=compiler-rt -print-libgcc-file-name` names, and `lit-legs.sh`'s `net8` and `lto` legs
+  run `msil/test/M3` under `msil_native_oracle=required`, so without the archive lit stops both
+  legs with a configuration error, and the `expected` leg fails each hosted test of the Linux
+  oracle. If the user's report shows it missing, the CI work package of the milestone after the
+  report adds it to the job's setup step as a pre-approved install, never a skip.
+  GettingStarted.md section 7 has the commands.
 - **A cheaper harness** (plan 5.17.10). Each level of a composite runs its steps after the build
   in one Python process (`msil-steps.py`, whose consecutive WSL runs share one `wsl.exe`), lit
   keeps the results of its probes in a cache, `%{msil_limits}` carries the tools' limits, and
@@ -2477,12 +2529,274 @@ Tests in the tree after M24, against the Phase 2 exit (section 1): `llvm/test/Co
 with 22 suites and 440 tests (the new `CLITrailerDefsTest`; the gates' floors are 431 tests, 19
 of `CLISymbolTableTest` and 5 of `CLITrailerDefsTest`); the other suites kept their counts.
 
+### The helper archive (M25)
+
+M25 (plan section 6, M25) builds compiler-rt's builtins for each MSIL triple as an archive of
+CIL objects, the helper archive `clang_rt.builtins`, which the driver passes to `msil-ld` as a
+native link passes compiler-rt. Programs that call compiler-runtime helpers now link through
+objects and LTO and print native compiler-rt's results:
+
+- **The archive** (plan 5.14.3 A1, A2). It is the per-target file
+  `<resource-dir>/lib/<T>/clang_rt.builtins.lib` on the `*-windows-msvc-msil` triples and
+  `<resource-dir>/lib/<T>/libclang_rt.builtins.a` on the others, with the resource directory
+  that `clang -print-resource-dir` prints, in the shared build under
+  `build/lib/clang/24/lib/<T>/`; `build-builtins.py` (below) writes, checks and removes only
+  that file, and with `--out <dir>` it writes `<dir>/<T>/<that name>` instead. Once the file
+  exists, `clang --target=<T> -rtlib=compiler-rt -print-libgcc-file-name` names it. While it
+  does not, a resource directory that has the old layout's native compiler-rt, from a
+  compiler-rt build with `LLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF` (the default on Windows hosts,
+  and the layout of LLVM's Windows releases), makes clang name that file instead
+  (`<resource-dir>/lib/<os>/[lib]clang_rt.builtins-<arch>.<ext>`): the script never touches such
+  a file, and when clang still names it after a build into the resource directory, which would
+  shadow the archive, the script fails with a usage error that names it (the builds that this
+  repository configures build no compiler-rt). compiler-rt is the MSIL toolchain's runtime
+  library, and the driver passes the file that `-print-libgcc-file-name` names to `msil-ld`
+  after the default libraries, right before `-o`, when it exists; `-nostdlib` and
+  `-nodefaultlibs` drop it, `-nolibc` keeps it.
+  `msil/utils/build/build-builtins.py` builds the archive: it compiles each source that
+  `msil/lib/builtins/sources.txt` lists for the triple, from the repository root, with one fixed
+  command, `clang --target=<T> -c -O2 -std=c11 -ffreestanding -fno-builtin -fvisibility=hidden
+  -DCOMPILER_RT_HAS_FLOAT16 -Wno-c2y-extensions -I compiler-rt/lib/builtins`, plus
+  `-fms-compatibility-version=19.33` on the windows-msvc triples (clang records the MSVC version
+  it finds in such a triple, so a build inside a Visual Studio environment would differ from one
+  outside it), into one member `<stem>.c.o` per source, and writes the archive with `llvm-ar
+  rcsD` in the list's order, so two builds are byte-identical. compiler-rt's sources are not
+  changed. By default the script builds the two triples that the gates run,
+  `x86_64-pc-windows-msvc-msil` and `x86_64-unknown-linux-gnu-msil`; `--all` adds
+  `x86_64-w64-windows-gnu-msil`, `x86_64-unknown-linux-musl-msil`,
+  `aarch64-unknown-linux-gnu-msil` and `aarch64-pc-windows-msvc-msil`, which are compiled and
+  archived but never run (D6).
+- **Families and exclusions** (A3-A5). The archive holds compiler-rt's `GENERIC_SOURCES` and
+  `BF16_SOURCES` less what MSIL cannot use: of their 137 `.c` files `sources.txt` lists 88 and
+  names each of the other 49 in a line `# excluded <path>: <category>: <reason>`, and
+  `build-builtins.py --check-list` checks after every upstream merge that every `.c` file of the
+  two lists is one or the other. The members give the `_Float16` conversions (`__extendhfsf2`,
+  `__truncsfhf2`, `__truncdfhf2`, ...), the `__bf16` conversions (`__extendbfsf2`,
+  `__truncsfbf2`, `__truncdfbf2`), C `_Complex` multiplication and division with Annex G's
+  infinities and NaNs (`__mulsc3`, `__muldc3`, `__divsc3`, `__divdc3`), `__builtin_powi`
+  (`__powisf2`, `__powidf2`) and compiler-rt's 32- and 64-bit integer and soft-float helpers,
+  which cost nothing unless a program references them. The exclusions, by category: 32 `int128`
+  sources, compiler-rt's `*ti*` functions, which pass `__int128` (MSIL expands 128-bit integer
+  operations inline, and Win64 would pass the argument by pointer, unlike a legalizer libcall);
+  one `fp128` source (`trunctfbf2.c`) and one `x87` source (`truncxfbf2.c`), formats that MSIL
+  does not have; 8 `hosted` sources, which need a C library header or an operating-system
+  service (`emutls.c`, `enable_execute_stack.c`, `eprintf.c`, `clear_cache.c`,
+  `gcc_personality_v0.c`, `trampoline_setup.c`, `os_version_check.c` and `apple_versioning.c`);
+  and 7 `atomic` sources: `atomic.c`, which no helper archive ever holds, because by the user's
+  decisions R4 and R5 the lock path of atomics is the platform's process-wide library
+  (`libatomic.so.1` on the Linux triples and, from M30, a Windows shim over the MSVC STL's
+  `msvcp140_atomic_wait.dll`; plan 5.14.3 A5 and 5.14.2 N-3) and no archive defines an
+  `__atomic_*` name on a Linux triple, and the six Apple-only `atomic_flag_*` and fence sources.
+  `int_util.c` includes `<stdlib.h>` on `_WIN32`, which a freestanding compile lacks, so it and
+  the `-ftrapv` helpers that call its `__compilerrt_abort_impl` (`absv`, `addv`, `mulv`, `negv`
+  and `subv` for `si` and `di`) are listed for the Linux triples only.
+- **Members and privacy** (A7). Every member is compiled with `-fvisibility=hidden`, so a
+  `-shared` output never exports one, and each output that needs a helper links its own copy:
+  two assemblies never share a helper's state (`msil/test/M3/03-helpers/shared-private.test`).
+  Members that define C library names (the `long double` forwarders below, such as `sqrtl` and
+  `strtold`, on the triples that have them) are private in the same way: each assembly that uses
+  one has its own copy, so `&sqrtl` differs from one assembly to the next, as between modules
+  built with MSVC's static C runtime (`/MT`), whereas in a native Linux process every module
+  uses the C library's one `sqrtl`.
+  The archives have 77 members on the two windows-msvc triples (184,200 bytes on x86_64), 258 on
+  the three Linux triples (the 88 compiler-rt objects and the 170 `long double` forwarders
+  below; 583,352 bytes on x86_64 glibc) and 247 on x86_64 MinGW (77 and the 170 forwarders).
+  Building the two default triples takes about a minute with `--jobs 4` on a quiet host.
+- **The rebuild rule** (A2, A10). Next to each archive, `<archive>.stamp` holds the SHA-256 of
+  the script, of the clang and llvm-ar binaries, of `sources.txt`, of every member's source and
+  of every `.h` and `.inc` file beside them, and the command lines; `build-builtins.py` rebuilds
+  a triple whose stamp differs and does nothing otherwise, and `--check` builds nothing and
+  fails when an archive is missing or its stamp differs. Since clang and the backend shape every
+  member, the archives are rebuilt after every build: `msil/utils/ci/build.ps1` and `build.sh`
+  (the CI jobs and `run-m1-gate.ps1`) run the script after ninja as the row `builtins`, and a
+  milestone gate's step G1 runs it after `msil-build.ps1 -Standard`, then `--check` and
+  `--check-list`. A failed compile removes that triple's archive and stamp, so a link
+  fails loudly instead of using a stale archive, and the link-info record's ABI version check
+  catches an archive built before an ABI change (plan 5.8.9). The script takes the build
+  directory's shared lock, as the test runs do, so it waits while `msil-build.ps1` builds there.
+  A missing archive is a note of lit, never a feature: a test that calls a helper then fails to
+  link with `msil-ld`'s line (below).
+- **Native `long double` functions** (plan 5.10.10 and 5.10.14 as amended, R15). On the triples
+  whose native `long double` is wider (`hasWideNativeLongDouble`: the Linux triples and x86_64
+  MinGW) the archive also holds `msil/lib/builtins/msil_longdouble.c`, whose functions each sit
+  under `#if MSIL_MEMBER(<name>)` and are compiled one per member, `msil_longdouble.<name>.c.o`,
+  so that a member defines one function and references only its counterpart. It forwards 170 of
+  the 174 names of `msil-ld`'s list to the `double` function: `sqrtl` calls `sqrt`, `strtold`
+  calls `strtod`, `__finitel` calls `__finite`; `daddl`, `dsubl`, `dmull` and `ddivl` call
+  glibc's `f32xaddf64`, `f32xsubf64`, `f32xmulf64` and `f32xdivf64` (a `double` from two
+  `double`s, which `libm.so.6` exports from GLIBC_2.28, as it exports `daddl`), `dfmal` calls
+  `fma` and `dsqrtl` `sqrt`, `nexttowardl` and `nexttoward` call `nextafter`, `nexttowardf`
+  compares in `double`, and `pow10l` calls `exp10` (glibc exports `pow10` only to old
+  binaries). The four `f32x` functions round once and set `errno` as native `daddl` does
+  (C17 7.12.1; glibc's `math_errhandling` includes `MATH_ERRNO`): `ERANGE` on overflow, on
+  underflow to zero and on division by zero, `EDOM` on an invalid operation such as infinity
+  minus infinity, while one operation in `double` gives the same bits and never sets `errno`.
+  These four forward on every triple the file is built for, as `faddl` forwards to `fadd`: musl
+  and MinGW have neither `daddl` nor its counterpart, so there a call fails to link, naming the
+  counterpart, as native code fails naming `daddl`.
+  `msil/test/M3/03-helpers/longdouble-archive.test` checks the `errno` cases against E7h.
+  Archive members resolve before the native libraries, whatever the order of `-lm` and the
+  archive on the command line, so the native function is never bound. A forwarder whose
+  counterpart MSIL cannot call yet (`cexpl` and the other complex
+  functions that return a structure) links to that counterpart's own error. `fromfpl`,
+  `fromfpxl`, `ufromfpl` and `ufromfpxl` have no forwarder, because C23 changed the result type
+  of `fromfp` and its kin and glibc 2.43 exports both forms; they, the `_Float64x` and
+  `_Float128` functions, and every name of the list in a link without the archive, are the
+  permanent error `native function '<f>' (<module>) takes or returns a native 'long double',
+  which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long
+  double' functions that have a 'double' counterpart` ("Native libraries and P/Invokes (M15)"
+  above). windows-msvc binds as before. `msil/test/M3/03-helpers/longdouble-coverage.test`
+  checks that every name of the list has a forwarder or stays this error.
+- **Predefines** (plan section 10 item 9, R12). The Linux MSIL triples define `__ELF__`, as
+  their native object format is ELF (compiler-rt's `int_lib.h` needs it for its aliases), and
+  the Windows triples do not. Every MSIL triple caps `MaxAtomicInlineWidth` at 64 bits and keeps
+  the native `MaxAtomicPromoteWidth`, so `_Atomic` layouts do not change:
+  `__atomic_always_lock_free(16, 0)` is false, and a 16-byte `_Atomic` load, store or lock-free
+  query calls `__atomic_load`, `__atomic_store` or `__atomic_is_lock_free(16, ...)` (MSIL's
+  16-byte atomics take the lock path), while the lock-free macros of the types up to 8 bytes
+  stay 2. `__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16`, which the native AArch64 target always defines
+  and the x86-64 one with `cx16` (`-mcx16`, `-march=x86-64-v2`), is undefined after the native
+  predefines, `__MSIL__` and `__ELF__`; a `-D` on the command line still wins
+  (`clang/test/Preprocessor/init-msil.c`, `clang/test/CodeGen/MSIL/atomic-lock-free.c`).
+- **Runtime helpers in text output** (plan 5.10.13 as amended, A9). `clang -S` and llc link
+  nothing, so D14's frozen import table stays, and a call of a compiler-runtime helper (a `__`
+  name of LLVM's runtime library calls other than `__atomic_*` and the C library's entry points
+  among them, below, or one of the ten `_Complex` helpers that clang calls by name, `__mulhc3`,
+  `__mulsc3`, `__muldc3`, `__mulxc3`, `__multc3`, `__divhc3`, `__divsc3`, `__divdc3`, `__divxc3`
+  and `__divtc3`) or of a toolchain helper that only the archive defines (an `__msil_` name with
+  no trailer definition) is the error `runtime helper '<name>' needs the helper archive
+  clang_rt.builtins, which only msil-ld links`, in standalone and linked text alike; an
+  `__atomic_*` call is `runtime helper '<name>' is an atomic operation that only msil-ld links`.
+  clang calls `__mulhc3` and `__divhc3` for `_Float16 _Complex` products and quotients when it
+  does not promote half arithmetic to `float` (on the aarch64 triples, and on the x86_64 ones
+  with `-fexcess-precision=16`); no archive defines them, as none defines the x87 and binary128
+  helpers (`__mulxc3`, `__divxc3`, `__multc3` and `__divtc3`), and `msil-ld` never binds them to
+  a native library (`libgcc_s.so.1` exports both), so a program that calls one fails to link
+  with `msil-ld`'s undefined-symbol report (below). `msil-ld --lto-emit-asm` resolves the
+  bitcode's own references before code generation, as an image link does, so it gives the two
+  texts only for the calls that code generation creates after LTO (the `_Float16` and `__bf16`
+  conversions, `__builtin_powi`'s `__powidf2`, the atomics). A helper that the program itself
+  calls, such as the `__muldc3` of a complex product, is resolved first: with the archive on the
+  link line (the driver passes it whenever it exists) `msil-ld` extracts the member, a CIL
+  object, and stops with `msil-ld: error: <archive>(<member>): --lto-emit-asm cannot link CIL
+  objects; link without --lto-emit-asm`, and without the archive the helper gets N1's
+  undefined-symbol report. Either way there is no text: compile with `-c` and link with clang.
+  MSIL expands `__int128` division and remainder and the conversions between floating point
+  and `__int128` inline before instruction selection, so only llc options leave them to a
+  helper. The `__int128` nodes that the backend's type legalization reports (an `__int128`
+  division or remainder under `-expand-div-rem-bits=128`, a conversion from floating point to
+  `__int128` under `-expand-fp-convert-bits=128`) are `runtime helper '<name>' is not supported
+  for MSIL: the helper archive clang_rt.builtins has no 128-bit integer helpers` (`__divti3`,
+  `__fixdfti`, ...) in every output mode, objects included. In standalone and linked text the
+  same text also reports a library call, or a declared and called function, whose name is a
+  compiler-runtime helper of compiler-rt's `ti` (`__int128`) mode, which no archive defines
+  (`__floattidf`, `__floatuntisf`, `__divti3`, `__multi3`, ...): a conversion from `__int128`
+  to floating point under `-expand-fp-convert-bits=128` is such a library call, and a module
+  may declare and call one by name. In a CIL object such a call is an undefined symbol, which
+  `msil-ld` reports with N1's line (`>>> a compiler runtime helper: link the toolchain's helper
+  archive clang_rt.builtins`, or, when the archive takes part, `>>> a compiler runtime helper
+  that the toolchain's helper archive clang_rt.builtins does not define`; below). Every `is not
+  available for MSIL yet (phase 3)` helper text is gone. No other `__` name changes its text: as
+  undefined functions, the C library's entry points that the runtime library call sets list too,
+  `__memcpy_chk`, `__memmove_chk`, `__memset_chk`, `__stack_chk_fail`, `__stack_chk_guard`,
+  `__chkstk`, `__security_check_cookie`, `__security_cookie` and glibc's `__<function>_finite`
+  names, which `msil-ld` binds natively ("Phase 3 foundations (M24)" above), and `__start_x` are
+  D14's error in standalone text and `undefined function '<name>' was not resolved by msil-ld`
+  in linked text.
+  A CIL object lists each helper as an undefined function symbol for `msil-ld`, as before.
+  `llvm.clear_cache` (`__builtin___clear_cache`) lowers to nothing, as on x86: a CIL program
+  writes no machine code, and the runtime keeps the code it compiles coherent
+  (`llvm/test/CodeGen/MSIL/clear-cache.ll`).
+- **`msil-ld`'s report** (plan 5.14.2 as M25 extends it). While an input archive named
+  `clang_rt.builtins.lib` or `libclang_rt.builtins.a` takes part in the link, whether or not a
+  member of it is extracted, a compiler-runtime helper that stays undefined gets the line `>>> a
+  compiler runtime helper that the toolchain's helper archive clang_rt.builtins does not define`
+  (a `*ti*` helper that a program calls by name, say) instead of M24's `>>> a compiler runtime
+  helper: link the toolchain's helper archive clang_rt.builtins`, which an archive of another
+  name keeps. The ten `_Complex` helpers are compiler-runtime names now: they never bind to a
+  native library (until M25 they bound like any other name, to `libgcc_s.so.1` for one when the
+  link named it), and a call whose signature differs from the definition's is `function
+  signature mismatch: <name> (a toolchain or compiler runtime helper)`, never an adapter
+  (`lld/test/MSIL/helper-report.test`); `__mulhc3` and `__divhc3`, which no archive defines,
+  get the "does not define" line whenever the archive takes part. `__atomic_*` names and the
+  toolchain helpers keep M24's lines.
+- **Follow-ups of M24.** In an LTO link a program's bitcode definition of a trailer definition's
+  name (`__msil_compiler_barrier`) stays visible to the code generator's calls, so it wins over
+  `<trailer>` in the image and in `--lto-emit-asm` text, as an object's or archive member's
+  definition does; until M25 the image link failed with `undefined symbol:
+  __msil_compiler_barrier` and the text printed the trailer's empty method
+  (`lld/test/MSIL/trailer-defs.test`). `update-expected.py` reports a path on its command line
+  that does not exist, `update-expected.py: error: <path>: no such file or directory`, with
+  status 2, before it builds or writes anything (until M25 a missing `.test` path was a `skip`
+  line with status 0).
+- **The tests' native compiler-rt** (plan 5.17.2, 5.17.3; R19). A hosted test that calls a
+  helper compares with native code that gets compiler-rt's results too: on Windows the hosted
+  oracle links Visual Studio's compiler-rt builtins, as before, and the Linux triple's E7h now
+  links `-lm <archive> -lc`, where the archive is native compiler-rt's
+  `libclang_rt.builtins-x86_64.a` (lit's `--param msil_linux_rtlib=auto|none|PATH`, feature
+  `msil-linux-rtlib`, `msil-prog.py --linux-rtlib`); E7 keeps `libgcc_s.so.1`, which agrees with
+  compiler-rt on the integer helpers that `msil/test/M1` uses. `auto` is, on Windows,
+  `usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a` in the Linux sysroot, which
+  `make-linux-sysroot.py --builtins` writes with `build-builtins.py --native-oracle` (165
+  members, 203,120 bytes: the listed compiler-rt sources plus the `int128`, `fp128` and `x87`
+  ones and compiler-rt's TF, x87 and x86_64 lists, never a hosted or atomic source, for native
+  `x86_64-unknown-linux-gnu`; E7h has no libgcc), and on a Linux host the file that `clang
+  -rtlib=compiler-rt -print-libgcc-file-name` names for the native triple, asking the tree's
+  clang and then the clang on `PATH`. Without it a hosted directory of the Linux triple loses
+  its native oracle with a note, or is a configuration error under
+  `msil_native_oracle=required`. `det-manifest.py build` also builds and lists the archives of
+  both default triples (`<sha256>  <triple>/builtins/<archive>`), so the determinism row and the
+  CI's cross-host comparison cover them; the archives are freestanding, so their bytes do not
+  depend on the host's headers. `equiv-allowed.txt` skips O4, one line per test, for the
+  `msil/test/M3/03-helpers/` programs that call helper-archive functions, which have no
+  `--lto-emit-asm` text (above): `bf16-hashes`, `complex-matrix`, `f16-hashes`, `helpers`,
+  `longdouble-archive` and `shared-private` on every triple, `powi` and `longdouble` on
+  `x86_64-unknown-linux-gnu-msil` only, since on windows-msvc they call the UCRT, as native code
+  does. `bitint-abi`, which calls no helper, keeps O4, and no line skips O3 or O6, which run
+  only for `%{msil_c}` and `%{msil_ll}` (section 4).
+- **Tests.** `msil/test/M3/03-helpers` gained ten tests: `helpers` (Annex G complex products and
+  quotients, `_Float16` arithmetic and rounding, `__bf16`, `_Float16` <-> `__int128`,
+  `__builtin_powi` and `__int128` `__builtin_mul_overflow`), `f16-hashes` and `bf16-hashes` (the
+  conversions on every `_Float16` or `__bf16` value, on rounding boundaries and on named cases,
+  as hashes), `complex-matrix` (`__muldc3`, `__divdc3`, `__mulsc3` and `__divsc3` on named cases
+  and on a 14^4 matrix of special operands), `powi` (through `__powidf2` and `__powisf2` on the
+  Linux triple, through the UCRT's `pow` and `powf` on windows-msvc, as native code calls them),
+  `longdouble` (the forwarders against native `long double` code, printed as `double` bits),
+  `longdouble-archive` (on the Linux triple `sqrtl`, `strtold`, `nexttoward`, `daddl`, `dsubl`,
+  `dmull` and `ddivl` are methods of the image that call `sqrt`, `strtod`, `nextafter` and the
+  four `f32x` functions, and the last four set `errno` as native code does, against E7h's
+  transcript), `longdouble-coverage` (every name of `msil-ld`'s list is forwarded
+  or named as not forwarded), `archive-contents` (the archive at the driver's path holds A4's
+  minimum and nothing that A5 keeps out) and `shared-private` (A7). The programs among them run
+  against the hosted native oracles, and not with `msil_link_output=il`, which assembles the
+  `--lto-emit-asm` text that they do not have (`UNSUPPORTED: msil-link-output=il`), except
+  `powi` and `longdouble` on windows-msvc, where they call no helper (`UNSUPPORTED:
+  msil-link-output=il && msil-triple-linux`).
+  `llvm/test/CodeGen/MSIL/helper-archive-errors.ll` pins the three texts, `clear-cache.ll` the
+  empty `llvm.clear_cache` and `bf16-signatures.ll` the quiet bit after `__truncsfbf2` in
+  object IL; `clang/test/Driver/msil-link.c` pins the archive's place on the link line and
+  `-print-libgcc-file-name`; `lld/test/MSIL/helper-report.test` pins the report; and the
+  harness gained `linux-rtlib.test` (with lit's notes on the helper archive, and a FAIL with
+  N1's line, never UNSUPPORTED, when the archive is missing), `build-builtins.test`, and
+  `legs/ci-build-builtins.test` and `legs/ci-build-builtins-sh.test` for the `builtins` row
+  of `msil/utils/ci/build.ps1` and `build.sh`.
+
+Tests in the tree after M25: `llvm/test/CodeGen/MSIL` 144 (136 llc tests, 7 MIR tests and
+`irsymtab-linker-options.ll`; new: `helper-archive-errors.ll` and `clear-cache.ll`),
+`clang/test/CodeGen/MSIL` 24 (new: `atomic-lock-free.c`), `lld/test/MSIL` 118 (new:
+`helper-report.test`), `msil/test/M1` 144, `msil/test/M3` 19 (11 in `03-helpers`),
+`msil/test/harness` 142 (78 at the top level, `prog/` 16, `legs/` 26, `pipeline/` 6,
+`pipeline-obj/` 5 and `equiv/` 11; new: `linux-rtlib.test`, `build-builtins.test`,
+`legs/ci-build-builtins.test` and `legs/ci-build-builtins-sh.test`), and `CLITests` with
+M24's 22 suites and 440 tests.
+
 ## 3. What Phase 2 does not do
 
 Phase 2 is the linker phase; most of what it leaves out is Phase 3's (plan section 7, P3-A and
 P3-B). The middle column says what a program meets today, the last one where it is planned:
-plan section 6 splits Phase 3 into the milestones M24-M35, and the rows that M24 changed name
-theirs. The link-semantics matrix pins the Phase 2 diagnostic of each P3 row (section 1).
+plan section 6 splits Phase 3 into the milestones M24-M35, and the rows that M24 and M25
+changed name theirs. The link-semantics matrix pins the Phase 2 diagnostic of each P3 row
+(section 1).
 
 | Feature | Phase 2 | Planned |
 |---|---|---|
@@ -2492,10 +2806,10 @@ theirs. The link-semantics matrix pins the Phase 2 diagnostic of each P3 row (se
 | `thread_local` / `_Thread_local` | error: `thread-local variable @<name> is not supported for MSIL yet`, also for a `weak` declaration that nothing defines (which is not made null, unlike other weak declarations) | phase 3 (Design.md 4.4) |
 | Dynamic `alloca`, VLAs, `stacksave`/`stackrestore`, `__builtin_frame_address` | error (`... phase 3 shadow stack`) | phase 3 (Design.md 4.2) |
 | `setjmp`/`longjmp` | an error on every path since M24. On the Linux triples clang calls the C library's functions (`_setjmp`, `__sigsetjmp`, `longjmp`, ...): `-S` and llc report `undefined function '_setjmp' is not defined in this module and is not a Phase-1 import`, and `msil-ld` reports each name of the family once per referencing file, `<file>: '_setjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler` (section 2, "Phase 3 foundations (M24)"). On the Windows triples clang's `setjmp` passes the frame address, so `clang -c` and `-S` stop at `llvm.frameaddress is not supported for MSIL yet (phase 3 shadow stack)`, and `msil-ld` refuses `_setjmp`, `_setjmpex` and `longjmp` in the same way. `__builtin_setjmp`/`__builtin_longjmp` are `llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 setjmp/longjmp)` (and `longjmp`). Until M24 this row said only "error", which was wrong for the Linux object pipeline: `msil-ld` bound the functions to `libc.so.6` without a diagnostic, and simple programs ran by accident (backlog recon BL15) | M27 (Design.md 4.6) |
-| Atomics (`_Atomic`, `__atomic_*`, `__sync_*`) | error (only fences work): every atomic operation becomes a call of a function of libatomic's interface (`__atomic_load_4`, ...), which `-S` and llc report as `runtime helper '<name>' is not available for MSIL yet (phase 3)`. In a CIL object it is an undefined symbol, and since M24 `msil-ld` binds it natively only on the Linux triples, to `libatomic.so.1` when the link names it (`-latomic`, as a native build does; else `undefined symbol: <name>` with `>>> an atomic operation: link with -latomic, as a native build does`), never on the Windows triples (`>>> an atomic operation (libatomic's interface)`); `__sync_*` names are compiler-runtime helpers, which never bind natively | M30 (the native lock path) |
+| Atomics (`_Atomic`, `__atomic_*`, `__sync_*`) | error (only fences work): every atomic operation becomes a call of a function of libatomic's interface (`__atomic_load_4`, ...; since M25's lock-free cap of 8 bytes a 16-byte one is the generic `__atomic_load`, `__atomic_store`, ...), which `-S`, llc and `msil-ld --lto-emit-asm` report as `runtime helper '<name>' is an atomic operation that only msil-ld links` (until M25 `runtime helper '<name>' is not available for MSIL yet (phase 3)`). In a CIL object it is an undefined symbol, and since M24 `msil-ld` binds it natively only on the Linux triples, to `libatomic.so.1` when the link names it (`-latomic`, as a native build does; else `undefined symbol: <name>` with `>>> an atomic operation: link with -latomic, as a native build does`), never on the Windows triples (`>>> an atomic operation (libatomic's interface)`); the helper archive defines no `__atomic_*` function (compiler-rt's `atomic.c` stays out of it, R4/R5), and `__sync_*` names are compiler-runtime helpers, which never bind natively | M30 (the native lock path) |
 | Global destructors, `atexit` | error, also a destructor table (`.fini_array*`, `.CRT$XT*`) since M20 (`global destructors are not supported yet: <s> in <file>`). `atexit` binds to no native library: glibc defines it only in machine code (`symbol 'atexit' is defined only in native object code (.../libc_nonshared.a(atexit.oS)); MSIL cannot link machine code`), with a glibc sysroot that has `libc_nonshared.a`; with the E7 sysroot, whose `libc.so` script names no `libc_nonshared.a`, and on the Windows triples, whose UCRT does not export it, the link stops with `undefined symbol: atexit` (the matrix rows `p6-dtors`, `fini-array`, `crt-xt` and `atexit-order` pin these errors) | phase 3 (Design.md 4.1), which intercepts `atexit` |
-| `long double` | is `double` (8 bytes, 53-bit mantissa) on every MSIL triple, not an error. Differs from native on x86_64 Linux (glibc and musl) and x86_64 MinGW (`x86_64-w64-windows-gnu`), where it is the 80-bit x87 format in 16 bytes, and on aarch64 Linux, where it is IEEE binary128 in 16 bytes; matches native on windows-msvc (x86_64 and aarch64) and `aarch64-w64-windows-gnu`. So where it differs, a native `long double` function (`sqrtl`, `expl`, `powl`, `strtold`, `nexttoward`, ...) that `msil-ld` binds is the link error `native function '<name>' (<module>) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)` (section 2, "Native libraries and P/Invokes"); windows-msvc and `aarch64-w64-windows-gnu` bind them | permanent (Design.md 3; section 6, item 14); calls of native `long double` functions: phase 3 |
-| The compiler-rt helpers: conversions between `_Float16` and `__int128` and from `__int128` to `__bf16` (helpers `__extendhfsf2`, `__truncsfhf2`, `__truncsfbf2`), `_Float16`/`__bf16` arithmetic and the rounding conversions from `float` and `double` to `__bf16` (`__truncsfbf2`, `__truncdfbf2`), C `_Complex` multiplication and division | `-S` and llc: an error naming the runtime helper (`__extendhfsf2`, `__truncsfbf2`, ...). In a CIL object the helper is an undefined symbol, and since M24 `msil-ld` never binds it to a native library (before, a link for a Linux triple that included `libgcc_s.so.1` bound it there): `undefined symbol: <name>` with `>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins`. `_Complex` multiplication and division call helpers that clang names itself (`__muldc3`, `__divdc3`, `__mulsc3`, `__divsc3`), which are no runtime-library calls of LLVM and so no compiler-runtime names: `-S` and llc report `undefined function '__muldc3' is not defined in this module and is not a Phase-1 import ...`, and a link in which no native library defines them (none of the default libraries does) a plain `undefined symbol: __muldc3`. `__int128` division, the plain conversions and those from `__bf16` to `__int128` are inline since M12, the strict (constrained) conversions between floating point and `__int128` since M24 (they named `__fixdfti`, `__floattidf`, ... until then), and `__bf16` parameters, results and the extension to `float` need no helper since M24 (section 2) | M25: the helper archive `clang_rt.builtins` |
+| `long double` | is `double` (8 bytes, 53-bit mantissa) on every MSIL triple, not an error. Differs from native on x86_64 Linux (glibc and musl) and x86_64 MinGW (`x86_64-w64-windows-gnu`), where it is the 80-bit x87 format in 16 bytes, and on aarch64 Linux, where it is IEEE binary128 in 16 bytes; matches native on windows-msvc (x86_64 and aarch64) and `aarch64-w64-windows-gnu`. Where it differs, the helper archive `clang_rt.builtins` forwards since M25 the native `long double` functions that have a `double` counterpart (`sqrtl`, `expl`, `powl`, `strtold`, `nexttoward`, ...: 170 of `msil-ld`'s 174 names) to that counterpart, and a native binding of one of the others (`fromfpl`, `fromfpxl`, `ufromfpl`, `ufromfpxl` and every `_Float64x` and `_Float128` function), or of any of them in a link without the archive, is the permanent link error `native function '<name>' (<module>) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart` (section 2, "Native libraries and P/Invokes" and "The helper archive (M25)"; in M15-M24 every name was `... takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)`); windows-msvc and `aarch64-w64-windows-gnu` bind them | permanent (Design.md 3; section 6, item 14); native `long double` functions: forwarded in M25, the others permanent errors |
+| The compiler-rt helpers: conversions between `_Float16` and `__int128` and from `__int128` to `__bf16` (helpers `__extendhfsf2`, `__truncsfhf2`, `__truncsfbf2`), `_Float16`/`__bf16` arithmetic and the rounding conversions from `float` and `double` to `__bf16` (`__truncsfbf2`, `__truncdfbf2`), C `_Complex` multiplication and division, `__builtin_powi` | done in M25: the helper archive `clang_rt.builtins` defines them (compiler-rt's `GENERIC_SOURCES` and `BF16_SOURCES` less the `*ti*`, fp128, x87, hosted and atomic sources), and `msil-ld` links the members that a program calls into its output, through CIL objects and LTO (section 2, "The helper archive (M25)"). `-S` and llc link no archive, so there a call of such a helper is `runtime helper '<name>' needs the helper archive clang_rt.builtins, which only msil-ld links` (until M25 `runtime helper '<name>' is not available for MSIL yet (phase 3)`, and for the `_Complex` helpers `undefined function '__muldc3' is not defined in this module and is not a Phase-1 import ...`); `msil-ld --lto-emit-asm` gives that text only for a helper call that code generation creates after LTO, and a helper that the program calls itself (`__muldc3`) stops it at the archive's member, `<archive>(<member>): --lto-emit-asm cannot link CIL objects; link without --lto-emit-asm`, or, without the archive, at the undefined-symbol report below. `_Float16 _Complex` products and quotients that clang does not promote to `float` (on the aarch64 triples, or with `-fexcess-precision=16`) call `__mulhc3` and `__divhc3`, which no archive defines, so such a program fails to link. In a link without the archive (`-nostdlib`, `-nodefaultlibs`, an archive not built) a helper is `undefined symbol: <name>` with `>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins`, and one that the archive leaves out the same with `>>> a compiler runtime helper that the toolchain's helper archive clang_rt.builtins does not define`; none binds to a native library (since M24, the `_Complex` helpers since M25; before, a link for a Linux triple that included `libgcc_s.so.1` bound them there). `__int128` division, the plain conversions and those from `__bf16` to `__int128` are inline since M12, the strict (constrained) conversions between floating point and `__int128` since M24 (they named `__fixdfti`, `__floattidf`, ... until then), and `__bf16` parameters, results and the extension to `float` need no helper since M24 (section 2) | done (M25) |
 | `__float128`, `x86_fp80`, rounding-mode changes, floating-point environment access | error (CIL rounds to nearest and has no FP exceptions) | |
 | Inline and module-level assembly, other than empty `asm` statements with or without operands (section 2; in LLVM IR since M22 also templates of nothing but `/* */` comments): instructions, outputs not tied to an input, condition-flag outputs (`"=@cc<cond>"`, `"+@cc<cond>"`, tied or not), an output in memory tied to an input of another floating-point type, `asm goto`, Microsoft `__asm`, file-scope `asm` | error: clang's `inline assembly is not supported for the MSIL target '...'` (`Microsoft-style inline assembly ...`, `file-scope assembly ...`), llc's `inline assembly is not supported for MSIL` | never (Design.md 3) |
 | A section that MSIL cannot lay out: a destructor table (`.fini_array*`, `.CRT$XT*`), `.ctors`/`.dtors`, `.preinit_array*` (Linux triples), another `.CRT$X*` section (`.CRT$XI*`, `.CRT$XL*`, `.CRT$XP*`, ...), thread-local data (`.tdata`, `.tbss`); a constructor-table entry that is not a function address; `__start_`/`__stop_` on the Windows triples | error: `global destructors are not supported yet: <s> in <file>`, `section '<name>' in <file> is not supported` (`.preinit_array` too, which ld.so runs before every `.init_array` entry; `--gc-sections` keeps such segments for the report), `thread-local storage is not supported yet: <s> in <file>`, `constructor table entry at <section>+<off> in <file> is not a function address` (in `-S` and llc text `<file>` is the source file; since M21 a null entry of a `.CRT$XC*` table on the Windows triples is skipped instead, as the MSVC CRT's `_initterm` skips it, while a null `.init_array` entry stays the error). Every other section on a variable (`__attribute__((section(...)))`, `__declspec(allocate(...))`) is laid out since M20, in `-S` and llc text as in `msil-ld`'s image, and constructors registered in `.init_array` or `.CRT$XC*` run (section 2). On the Windows triples `__start_X` stays undefined, as with link.exe and lld-link, and in `-S` text it is D26's external-variable error. In M12-M19 `-S` and llc rejected every section on a variable, `global variable @<name> in section "<section>" is not supported for MSIL yet (phase 2 CIL objects)`, and before M12 they dropped it silently, so such a constructor never ran. A section on a function is ignored, and clang's own sectioned globals (`llvm.metadata`) are not affected | destructor tables: phase 3 (Design.md 4.1); `.preinit_array` (its entries run before every `.init_array` entry): a later milestone; `__start_`/`__stop_` on Windows: never (native COFF links do not define them) |
@@ -2671,8 +2985,11 @@ oracle O6: the metadata messages of PEVerify `/md` for the image that runs, with
 replaced by the row it names, must be among those for ilasm's image of the same file's `-S`
 text (on Linux, which has no PEVerify, the check is skipped with a note). Since M21 two tests
 skip O6 by a `skip O6` line of `msil/utils/equiv-allowed.txt` (section 2, "CIL object links
-and the image"), and an image bound to the .NET 8 or 10 reference pack is verified by ILVerify
-against that pack with PEVerify left out, because PEVerify cannot load such an image
+and the image"); O6 runs with O3, for `%{msil_c}` and `%{msil_ll}` only, so the `%{msil_prog}`
+programs of `msil/test/M3/03-helpers/` need no such line (those that call helper-archive
+functions skip only O4; section 2, "The helper archive (M25)"). An image bound to the
+.NET 8 or 10 reference pack is verified by ILVerify against that pack with PEVerify left out,
+because PEVerify cannot load such an image
 (`msil-verify.py --skip-peverify "bound to .NET <n> references"` prints `PEVerify skipped:
 <reason>`, and O6 is skipped with it); this happens only in the `refs-net8` and `refs-net10`
 legs (and in a lit run whose `msil_references` path names such a pack, which lit treats as
@@ -2689,7 +3006,7 @@ what ilasm makes of the compiler's own text:
 
 | Oracle | What it compares | Where it runs (since M23) |
 |---|---|---|
-| O1 | the program's transcript (stdout and exit status) against the native build of the same sources: on Windows clang with lld-link and the compiler-rt builtins, for the Linux triple the E7 oracle (built on Windows, run in WSL), on the Linux CI job the system's clang and linker; since M24 the tests of a hosted directory (`msil/test/M3`) use the hosted oracles instead, the DLL C runtime on Windows and E7h (glibc's own start files) for the Linux triple. A test may replace O1 for one OS by a hand-written expected file only under `%{msil_expected_rule}` (none does yet) | every composite (`%{msil_c}`, `%{msil_ll}`, `%{msil_prog}`) in every leg with `msil_native_oracle=required`, and `update-expected.py --check` (`expected`, `expected-linux`) |
+| O1 | the program's transcript (stdout and exit status) against the native build of the same sources: on Windows clang with lld-link and the compiler-rt builtins, for the Linux triple the E7 oracle (built on Windows, run in WSL), on the Linux CI job the system's clang and linker; since M24 the tests of a hosted directory (`msil/test/M3`) use the hosted oracles instead, the DLL C runtime on Windows and E7h (glibc's own start files) for the Linux triple; since M25 E7h also links native compiler-rt's builtins (`msil_linux_rtlib`), so a test that calls a helper of the helper archive compares with compiler-rt's results on both hosts. A test may replace O1 for one OS by a hand-written expected file only under `%{msil_expected_rule}` (none does yet) | every composite (`%{msil_c}`, `%{msil_ll}`, `%{msil_prog}`) in every leg with `msil_native_oracle=required`, and `update-expected.py --check` (`expected`, `expected-linux`) |
 | O2 | `msil-ld`'s image through ildasm, ilasm and ildasm again: the two listings equal, and the reassembled image runs (Design.md 5.5) | `roundtrip` (`11-programs`, `07-equiv` and a library under `obj`), `asm-oracle` for the `-S` route |
 | O3 | the canonical listing of a one-object link with `--no-gc-sections` against ilasm's image of the same file's `-S` (or llc) text, with the allowances of `msil/utils/equiv-allowed.txt` | `%{msil_c}` and `%{msil_ll}` under `obj` with `msil_equiv=1`: `net8`, `wsl-net10`, `refs-net48` (with `scopes`) |
 | O4 | the canonical listing of an LTO image with `--no-gc-sections` against ilasm's image of the same link's `--lto-emit-asm` text | `%{msil_prog}` under `lto` with `msil_equiv=1`: `lto`, `programs-lto`, `programs-lto-wsl` (not `lto-wsl`, whose paths `lto` covers for the Windows triple and the Linux CI job's `lto` for the Linux triple) |
@@ -2782,3 +3099,8 @@ says. Where each item went:
 | 21 | section 8 |
 | 22 | 5.4 |
 | 23 | 5.2, step 2.3, and the 7.1 table |
+
+M25 proposes no Design.md item: what it built is what Design.md already says, in section 3
+(`__ELF__` on the Linux triples, no lock-free atomics wider than 8 bytes, and the helper
+archive's forwarders of the native `long double` functions), in 5.2, step 1, and in section 8
+(the helper archive `clang_rt.builtins`, compiler-rt's builtins as CIL objects per triple).

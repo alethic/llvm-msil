@@ -95,6 +95,28 @@ test ignores it. Every other test keeps the oracles above, so E7 stays for
 msil/test/M1, msil/test/M2 and c-testsuite's libc-free.txt (whose directory
 is skipped, below).
 
+The hosted Linux oracle (E7h with --os linux on a Windows host, the host
+clang's link on a Linux host) also links the native compiler-rt builtins of
+--linux-rtlib after the program's inputs and -lm, before -lc (msil-prog.py
+--linux-rtlib; plan 5.17.2, 5.17.3, M25), as lit's msil_linux_rtlib does, so
+a hosted program that calls a runtime helper (msil/test/M3/03-helpers) gets
+compiler-rt's results, which its MSIL build gets from the helper archive;
+E7 keeps libgcc_s.so.1. 'auto' (the default) is, on a Windows host,
+<--linux-sysroot>/usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a
+(python msil/utils/make-linux-sysroot.py --builtins writes it), and on a
+Linux host the file that 'clang --target=<--target> -rtlib=compiler-rt
+-print-libgcc-file-name' names, for --clang and then the clang on PATH, the
+first that exists; there it never looks in a sysroot. When it finds none,
+every hosted test with the Linux oracle fails ('FAIL (native compile)'),
+and the other tests are unaffected. The line before that names, on a
+Windows host, the file it tried and make-linux-sysroot.py --builtins; on
+another host, each clang it asked and the path it printed (or that it
+printed none), and two remedies: compiler-rt's builtins installed for that
+clang, or the archive that 'make-linux-sysroot.py --builtins --out DIR'
+writes (DIR/usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a) passed
+as --linux-rtlib PATH. 'none' leaves the archive out; a PATH must exist (a
+usage error otherwise). --os windows ignores --linux-rtlib.
+
 Hand-written expected files (plan 5.17.4): a test with 'REDEFINE:
 %{msil_expected_rule} = <os>[,<os>]: <reason>' has a hand-written expected
 file for each OS it names. For --os's OS nothing is built, checked or
@@ -207,6 +229,10 @@ msil/test/Programs/c-testsuite/lit.local.cfg opens) is skipped as a whole.
 --clang may also be a command line (a stand-in compiler of the harness
 self-tests, written as msil-prog.py's --clang takes it).
 
+A path on the command line that does not exist is a usage error
+('update-expected.py: error: <path>: no such file or directory', status 2),
+before anything is built or written (plan section 12, 'M25.e extended').
+
 Windows: run from a VS x64 developer prompt (the Windows native link needs
 LIB; msil-env.ps1 sets it up). Exit status: 0 if everything was written or
 matched (a rule counts as a match), 1 otherwise, 2 on a usage error. As a
@@ -263,7 +289,11 @@ EXIT_RE = re.compile(r"^\[exit (\d+)\]$")
 DEFAULT_CFLAGS = "-std=gnu17 -ffreestanding -Werror=return-type"
 E7_TARGET = "x86_64-unknown-linux-gnu"
 E7_LIBS = ("libm.so.6", "libc.so.6", "libgcc_s.so.1")
+E7_LIBDIR = ("usr", "lib", "x86_64-linux-gnu")
 DEFAULT_LINUX_SYSROOT = r"C:\llvm-msil-scratch\linux-sysroot"
+# The native compiler-rt builtins of the hosted Linux oracle (plan 5.17.2,
+# 5.17.3; M25): --linux-rtlib auto's file in the E7 sysroot.
+LINUX_RTLIB_NAME = "libclang_rt.builtins-x86_64.a"
 # The glibc sysroot of the hosted tests (make-glibc-sysroot.sh), as lit's
 # msil_glibc_sysroot defaults it.
 DEFAULT_GLIBC_SYSROOT = r"C:\llvm-msil-scratch\glibc-sysroot" if os.name == "nt" else ""
@@ -373,6 +403,82 @@ def find_rtlib(arch):
         if hits:
             return os.path.normpath(max(hits, key=key))
     return None
+
+
+def print_libgcc_file_name(command, target):
+    """The file 'clang --target=<target> -rtlib=compiler-rt
+    -print-libgcc-file-name' names for the clang command, or None."""
+    cmd = [*command, "--target=" + target, "-rtlib=compiler-rt"]
+    cmd.append("-print-libgcc-file-name")
+    try:
+        res = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = res.stdout.decode("utf-8", "replace").strip().splitlines()
+    if res.returncode != 0 or not lines or not lines[-1].strip():
+        return None
+    return os.path.normpath(lines[-1].strip())
+
+
+def find_linux_rtlib(args, e7):
+    """--linux-rtlib auto (lit's msil_linux_rtlib=auto): (the archive or
+    None, the files it tried, and without E7 (command, the path it printed
+    or None) for each clang command it asked)."""
+    asked = []
+    if e7:
+        libdir = os.path.join(os.path.abspath(args.linux_sysroot), *E7_LIBDIR)
+        tried = [os.path.join(libdir, LINUX_RTLIB_NAME)]
+    else:
+        commands = [args.clang_cmd]
+        path_clang = shutil.which("clang")
+        if path_clang and not (
+            os.path.isfile(args.clang_cmd[0])
+            and os.path.realpath(args.clang_cmd[0]) == os.path.realpath(path_clang)
+        ):
+            commands.append([path_clang])
+        tried = []
+        for command in commands:
+            printed = print_libgcc_file_name(command, args.target)
+            asked.append((command, printed))
+            if printed and printed not in tried:
+                tried.append(printed)
+    found = next((p for p in tried if os.path.isfile(p)), None)
+    return found, tried, asked
+
+
+def linux_rtlib_host_why(target, asked):
+    """Why --linux-rtlib auto found no archive on a non-Windows host, where
+    it asks clang only: each clang command it asked and the path it printed,
+    and the two remedies; make-linux-sysroot.py --builtins only makes a file
+    for --linux-rtlib PATH there."""
+    return (
+        "the hosted Linux oracle links the native compiler-rt builtins, but "
+        "--linux-rtlib auto ran 'clang --target=%s -rtlib=compiler-rt "
+        "-print-libgcc-file-name': %s; on this host auto asks clang only and "
+        "does not look in a sysroot: install compiler-rt's builtins for %s, so "
+        "that the path it prints exists, or build the archive with 'python "
+        "msil/utils/make-linux-sysroot.py --builtins --out DIR', which writes "
+        "DIR/usr/lib/x86_64-linux-gnu/%s, and pass that file with --linux-rtlib "
+        "PATH (or --linux-rtlib none)"
+        % (
+            target,
+            ", and ".join(
+                "%s printed %s, which does not exist"
+                % (msil_prog.join_words(command), printed)
+                if printed
+                else "%s printed nothing" % msil_prog.join_words(command)
+                for command, printed in asked
+            ),
+            "that clang" if len(asked) == 1 else "one of those clangs",
+            LINUX_RTLIB_NAME,
+        )
+    )
 
 
 def find_ld_lld(clang, name="ld.lld"):
@@ -803,6 +909,11 @@ class Oracle:
         self.ld_lld = ld_lld
         self.libs = libs
         self.features = features
+        # The hosted Linux oracle's native compiler-rt builtins (run sets
+        # them): the archive, and why there is none ('' for --linux-rtlib
+        # none, which leaves it out).
+        self.linux_rtlib = None
+        self.linux_rtlib_why = ""
         self.start_o = None
         self.env = dict(os.environ)
         # The linkers of a preparation (prepare).
@@ -1015,6 +1126,13 @@ class Oracle:
             cmd.append("--hosted")
             if self.e7:
                 cmd.append("--glibc-sysroot=" + args.glibc_sysroot)
+            if self.osname == "linux":
+                # The native compiler-rt builtins (plan 5.17.3, M25).
+                if self.linux_rtlib_why:
+                    log.err("update-expected: %s\n" % self.linux_rtlib_why)
+                    return None
+                if self.linux_rtlib:
+                    cmd.append("--linux-rtlib=" + self.linux_rtlib)
         # lit's %msil_prog_build: %{msil_limits} --timeout-factor 10.
         cmd += ["--timeout", repr(mode.timeout), "--timeout-factor", "10"]
         cmd += ["--mem-limit-mb", str(mode.mem_limit_mb)]
@@ -1509,6 +1627,14 @@ def run(argv):
         "default: lit's msil_native_rtlib=auto search) or 'none'",
     )
     ap.add_argument(
+        "--linux-rtlib",
+        default="auto",
+        help="hosted tests with the Linux oracle: the native compiler-rt "
+        "builtins, linked before -lc: 'auto' (the default: <--linux-sysroot>/"
+        "usr/lib/x86_64-linux-gnu/%s on Windows, clang -print-libgcc-file-name "
+        "on Linux), 'none' or a path" % LINUX_RTLIB_NAME,
+    )
+    ap.add_argument(
         "--linux-sysroot",
         default=os.environ.get("MSIL_LINUX_SYSROOT") or DEFAULT_LINUX_SYSROOT,
         help="E7: the directory of make-linux-sysroot.py (default: "
@@ -1564,6 +1690,11 @@ def run(argv):
     )
     ap.add_argument("tests", nargs="+", help=".c/.ll/.test files or directories")
     args = ap.parse_args(argv)
+    # Before anything is built or written (plan section 12, 'M25.e
+    # extended'): a test path that does not exist is a usage error.
+    for path in args.tests:
+        if not os.path.exists(path):
+            ap.error("%s: no such file or directory" % path)
 
     try:
         args.clang_cmd = (
@@ -1675,6 +1806,31 @@ def run(argv):
     if e7:
         features.add("msil-wsl")
     oracle = Oracle(args, osname, e7, native_ldflags, ld_lld, libs, features)
+    if osname == "linux":
+        # The hosted Linux oracle's native compiler-rt builtins (plan 5.17.2,
+        # 5.17.3; M25), as lit's msil_linux_rtlib finds them.
+        value = args.linux_rtlib
+        if value.lower() == "auto":
+            oracle.linux_rtlib, tried, asked = find_linux_rtlib(args, e7)
+            if not oracle.linux_rtlib and not e7:
+                oracle.linux_rtlib_why = linux_rtlib_host_why(args.target, asked)
+            elif not oracle.linux_rtlib:
+                oracle.linux_rtlib_why = (
+                    "the hosted Linux oracle links the native compiler-rt builtins, "
+                    "but --linux-rtlib auto %s; build them with 'python "
+                    "msil/utils/make-linux-sysroot.py --builtins' or pass "
+                    "--linux-rtlib PATH (or --linux-rtlib none)"
+                    % (
+                        "tried %s, which %s not exist"
+                        % (" and ".join(tried), "does" if len(tried) == 1 else "do")
+                        if tried
+                        else "found no file to try"
+                    )
+                )
+        elif value.lower() not in ("", "none"):
+            if not os.path.isfile(value):
+                ap.error("--linux-rtlib %s: no such file" % value)
+            oracle.linux_rtlib = os.path.abspath(value)
     failures = 0
     with tempfile.TemporaryDirectory(prefix="msil-update-expected-") as tmp:
         if e7:

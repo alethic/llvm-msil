@@ -1,0 +1,233 @@
+# The native compiler-rt builtins of the hosted Linux oracle E7h (plan
+# 5.17.2, 5.17.3, M25; R19). E7h links no libgcc, so a hosted program that
+# calls a runtime helper takes it from the archive of msil-prog.py
+# --linux-rtlib FILE (make-linux-sysroot.py --builtins writes
+# <linux sysroot>/usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a),
+# which E7h links after the program's inputs and -lm and before -lc; E7 keeps
+# libgcc_s.so.1. update-expected.py --linux-rtlib auto|none|PATH gives its
+# hosted Linux oracle the same, and lit's msil_linux_rtlib (auto, none or a
+# path) passes the archive to the hosted directories. The builds below use
+# the stand-ins of prog/Inputs/prog-cc.py, which take E7h's link only in
+# exactly the recipe's order and record the inputs in link order; the
+# stand-in archive's member adds 64 to the program's exit status, so the
+# status shows whether the archive was linked.
+# (1) msil-prog.py E7h (--hosted with the E7 options) with --linux-rtlib FILE:
+#     the hosted compiles, and the link with FILE between -lm and -lc, pinned
+#     as linux-hosted-oracle.test pins E7h's flags; status 1+2+8+64.
+# (2) Without --linux-rtlib, and with an empty --linux-rtlib= after one (it
+#     cancels it): -lm -lc, status 11.
+# (3) E7h's shared libraries (--shlibs): each library links its own copy of
+#     FILE between -lm and -lc, as the program does (status 1 + the
+#     library's 16+64 + 64); without FILE neither link names it (status 17).
+# (4) E7 (no --hosted) is unchanged: ld.lld with the sysroot's libm.so.6,
+#     libc.so.6 and libgcc_s.so.1 and no FILE, although FILE is given.
+# (5) The driver recipe of a hosted Linux build (no E7 options, the Linux
+#     host's link): FILE after NATIVE-LDFLAGS; without --hosted no FILE.
+# (6) A FILE that does not exist is msil-prog.py's usage error (status 2,
+#     nothing built) in the builds that use it, after E7h's own checks (a
+#     missing glibc sysroot is reported instead); E7 and the driver recipe
+#     without --hosted ignore it.
+# (7) update-expected.py --os linux on a hosted test (a directory with the
+#     marker of plan 5.17.3) with a PATH writes the transcript of the program
+#     with the archive; --linux-rtlib none leaves it out, so --check fails;
+#     auto finds the archive in --linux-sysroot and --check passes; auto
+#     without an archive there fails the test (FAIL (native compile)) after a
+#     line that names the file it tried and writes nothing; a PATH that names
+#     no file is a usage error (status 2) that writes nothing.
+# (8) lit (a nested lit with -a on Inputs/rtlib/nested, a hosted directory
+#     and a plain one, for the Linux triple under the WSL runner, with the
+#     synthetic sysroots of this test): under msil_native_oracle=required a
+#     hosted directory without the archive is a configuration error (status
+#     2) for auto (the default) and for none, and an explicit path that names
+#     no file is one too; with the archive found by auto, or named by a path,
+#     the hosted directory gets it in %{msil_linux_rtlib}, %{msil_e7_args}
+#     and %msil_prog_build and the feature msil-linux-rtlib; without
+#     msil_native_oracle=required the hosted directory loses its native
+#     oracle, with a note, and the plain directory keeps it; a run of the
+#     plain directory alone needs no archive.
+# (9) lit and the MSIL triple's helper archive clang_rt.builtins (plan 5.14.3
+#     A1; M25.e (1)): nested lits with the Windows triple, the local runner,
+#     the obj pipeline at -O0 and msil_probe_cache= (empty: no probe cache is
+#     read or written), whose clang (CLANG, which lit's use_clang honors) is
+#     a hard link of %clang (a copy where the link fails) in a private
+#     toolchain under %t, so that its resource directory, lib/clang/<version>
+#     there, holds only what this test puts in it, whatever the build's
+#     holds. With no archive there, lit notes the path it tried and names
+#     build-builtins.py, and the test of Inputs/rtlib/noarchive, whose
+#     program calls __divdc3, is a FAIL with msil-ld's undefined-symbol report
+#     and N1's line (plan 5.14.2), never UNSUPPORTED (a missing archive is a
+#     note, never a feature). With a stand-in file at A1's place (lit checks
+#     only that it exists) lit notes 'helper archive: <path>'; that run lists
+#     the tests (--show-tests) and runs none.
+# (7) and (8) need WSL (the stand-in's Linux programs are shell scripts that
+# update-expected.py runs under WSL; msil_runner=wsl needs a Windows host);
+# (9) needs a Windows host and the built clang, msil-ld and llvm-ar.
+
+# DEFINE: %{rt_cc} = "%python" "%S/prog/Inputs/prog-cc.py"
+# DEFINE: %{rt_prog} = "%python" "%S/../../utils/msil-prog.py" --mode native --triple x86_64-unknown-linux-gnu-msil --clang='%{rt_cc} --as cc' --ar='%{rt_cc} --as ar' --ld-lld='%{rt_cc} --as ld-lld' --linux-sysroot=%t/e7 --start=%S/../../utils/linux-oracle/start.c --glibc-sysroot=%t/glibc
+# DEFINE: %{rt_cflags} = --cflags='-std=gnu17 -ffreestanding -Werror=return-type -I%S/../Inputs'
+# DEFINE: %{rt_hosted_cflags} = --cflags='-std=gnu17 -Werror=return-type -I%S/../Inputs --sysroot=%t/glibc'
+# DEFINE: %{rt_file} = %t/rt/libclang_rt.builtins-x86_64.a
+# DEFINE: %{rt_ue} = %{harness_update_expected} --os linux %{msil_e7_args} --clang '%{rt_cc} --as cc' --ar '%{rt_cc} --as ar' --glibc-sysroot %t/glibc
+# DEFINE: %{rt_lit} = %{harness_lit} -a --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_runner=wsl --param msil_glibc_sysroot=%t/glibc
+# DEFINE: %{rt_tc_lit} = %{harness_lit} --param msil_probe_cache= --param msil_triple=x86_64-pc-windows-msvc-msil --param msil_runner=local --param msil_linux_sysroot= --param msil_pipeline=obj --param msil_opt_levels=O0
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: mkdir -p %t/rt %t/e7/usr/lib/x86_64-linux-gnu %t/e7rt/usr/lib/x86_64-linux-gnu %t/glibc/usr/include %t/glibc/usr/lib/x86_64-linux-gnu
+# RUN: %{harness_check} write %t/e7/usr/lib/x86_64-linux-gnu/libm.so.6
+# RUN: %{harness_check} write %t/e7/usr/lib/x86_64-linux-gnu/libc.so.6
+# RUN: %{harness_check} write %t/e7/usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+# RUN: %{harness_check} write %t/e7rt/usr/lib/x86_64-linux-gnu/libm.so.6
+# RUN: %{harness_check} write %t/e7rt/usr/lib/x86_64-linux-gnu/libc.so.6
+# RUN: %{harness_check} write %t/e7rt/usr/lib/x86_64-linux-gnu/libgcc_s.so.1
+# RUN: %{harness_check} write %t/glibc/usr/include/stdio.h
+# RUN: %{harness_check} write %t/glibc/usr/lib/x86_64-linux-gnu/crt1.o
+# RUN: %{harness_check} write %t/glibc/usr/lib/x86_64-linux-gnu/crti.o
+# RUN: %{harness_check} write %t/glibc/usr/lib/x86_64-linux-gnu/crtn.o
+# RUN: %{harness_check} write %t/glibc/usr/lib/x86_64-linux-gnu/libc_nonshared.a
+# RUN: %{harness_check} write %t/glibc/usr/lib/x86_64-linux-gnu/libc.so
+# The stand-in archive: one native member (compiled as the builtins are,
+# freestanding and -fPIC), in %t/rt and, under its auto name, in %t/e7rt.
+# RUN: %{rt_cc} --as cc --target=x86_64-unknown-linux-gnu -std=gnu17 -ffreestanding -Werror=return-type -I%S/../Inputs -fPIC -O2 -c %t/rt.c -o %t/rt/rt.o
+# RUN: %{rt_cc} --as ar rcs %{rt_file} %t/rt/rt.o
+# RUN: cat %{rt_file} > %t/e7rt/usr/lib/x86_64-linux-gnu/libclang_rt.builtins-x86_64.a
+
+# (1)
+# RUN: %{rt_prog} --hosted %{rt_hosted_cflags} --linux-rtlib=%{rt_file} --level O2 --workdir %t/h1 --out %t/h1/prog.elf --src %t/main.c %t/util.c --archives='one=%t/a1.c' --native-lib='-Wl,--stand-in-native' > %t/h1.log 2>&1
+# RUN: %{harness_check} contains %t/h1.log "^msil-prog: .* --as cc --target=x86_64-unknown-linux-gnu --sysroot=\S+ -std=gnu17 -Werror=return-type -I\S+ --sysroot=\S+ -O2 -c \.\./main\.c -o obj/main\.o$" "^msil-prog: .* --as cc --target=x86_64-unknown-linux-gnu --sysroot=\S+ -std=gnu17 \S.* -O2 -c \.\./a1\.c -o ar/one/a1\.o$" "^msil-prog: .* --as ar rcs ar/one/libone\.a ar/one/a1\.o$"
+# RUN: %{harness_check} contains %t/h1.log "^msil-prog: .* --as cc --target=x86_64-unknown-linux-gnu --sysroot=(\S+) -fuse-ld=lld -nostartfiles -nodefaultlibs \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrt1\.o \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrti\.o obj/main\.o obj/util\.o -Lar/one -lone -Wl,--stand-in-native -lm \S*linux-rtlib\.test\.tmp\Wrt\Wlibclang_rt\.builtins-x86_64\.a -lc \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrtn\.o -Wl,-rpath,[$]ORIGIN -o \S*h1\Wprog\.elf$"
+# RUN: %{harness_check} contains %t/h1/prog.elf.inputs "\Aobject obj/main\.o main\.c 1\nobject obj/util\.o util\.c 2\nmember ar/one/libone\.a a1\.o 8\narg -Wl,--stand-in-native\narg -lm\nmember \S*linux-rtlib\.test\.tmp\Wrt\Wlibclang_rt\.builtins-x86_64\.a rt\.o 64\narg -lc\n\Z"
+# RUN: %{harness_check} contains %t/h1/prog.elf "\A#!/bin/sh\nexit 75\n\Z"
+# RUN: %{harness_check} lacks %t/h1.log "msil-prog: error" " --as ld-lld" "start\.o" "libgcc" "-ffreestanding" "-fno-pic"
+
+# (2)
+# RUN: %{rt_prog} --hosted %{rt_hosted_cflags} --level O2 --workdir %t/h2 --out %t/h2/prog.elf --src %t/main.c %t/util.c --archives='one=%t/a1.c' --native-lib='-Wl,--stand-in-native' > %t/h2.log 2>&1
+# RUN: %{rt_prog} --hosted %{rt_hosted_cflags} --linux-rtlib=%{rt_file} --linux-rtlib= --level O2 --workdir %t/h3 --out %t/h3/prog.elf --src %t/main.c %t/util.c --archives='one=%t/a1.c' --native-lib='-Wl,--stand-in-native' > %t/h3.log 2>&1
+# RUN: %{harness_check} contains %t/h2.log "^msil-prog: .* --as cc --target=x86_64-unknown-linux-gnu --sysroot=(\S+) -fuse-ld=lld -nostartfiles -nodefaultlibs \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrt1\.o \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrti\.o obj/main\.o obj/util\.o -Lar/one -lone -Wl,--stand-in-native -lm -lc \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrtn\.o -Wl,-rpath,[$]ORIGIN -o \S*h2\Wprog\.elf$"
+# RUN: %{harness_check} contains %t/h3.log "^msil-prog: .* --as cc --target=x86_64-unknown-linux-gnu --sysroot=(\S+) -fuse-ld=lld -nostartfiles -nodefaultlibs \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrt1\.o \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrti\.o obj/main\.o obj/util\.o -Lar/one -lone -Wl,--stand-in-native -lm -lc \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrtn\.o -Wl,-rpath,[$]ORIGIN -o \S*h3\Wprog\.elf$"
+# RUN: %{harness_check} contains %t/h2/prog.elf.inputs "^member ar/one/libone\.a a1\.o 8\narg -Wl,--stand-in-native\narg -lm\narg -lc\n\Z"
+# RUN: %{harness_check} contains %t/h2/prog.elf "\A#!/bin/sh\nexit 11\n\Z"
+# RUN: %{harness_check} contains %t/h3/prog.elf "\A#!/bin/sh\nexit 11\n\Z"
+# RUN: %{harness_check} lacks %t/h2.log "libclang_rt" "msil-prog: error"
+# RUN: %{harness_check} lacks %t/h3.log "libclang_rt" "msil-prog: error"
+
+# (3)
+# RUN: %{rt_prog} --hosted %{rt_hosted_cflags} --linux-rtlib=%{rt_file} --level O1 --workdir %t/h4 --out %t/h4/prog.elf --src %t/main.c --shlibs='s=%t/s1.c' > %t/h4.log 2>&1
+# RUN: %{harness_check} contains %t/h4.log "^msil-prog: .* --as cc --target=x86_64-unknown-linux-gnu --sysroot=(\S+) -fuse-ld=lld -shared -nostartfiles -nodefaultlibs \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrti\.o shlib-obj/s/s1\.o -lm \S*linux-rtlib\.test\.tmp\Wrt\Wlibclang_rt\.builtins-x86_64\.a -lc \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrtn\.o -Wl,-Bsymbolic -Wl,-soname,libs\.so -Wl,-rpath,[$]ORIGIN -o shlib/libs\.so$"
+# RUN: %{harness_check} contains %t/h4.log "^msil-prog: .* --as cc --target=x86_64-unknown-linux-gnu --sysroot=(\S+) -fuse-ld=lld -nostartfiles -nodefaultlibs \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrt1\.o \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrti\.o obj/main\.o shlib/libs\.so -lm \S*linux-rtlib\.test\.tmp\Wrt\Wlibclang_rt\.builtins-x86_64\.a -lc \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrtn\.o -Wl,-rpath,[$]ORIGIN -o \S*h4\Wprog\.elf$"
+# RUN: %{harness_check} contains %t/h4/shlib/libs.so.inputs "\Aobject shlib-obj/s/s1\.o s1\.c 16\narg -lm\nmember \S*libclang_rt\.builtins-x86_64\.a rt\.o 64\narg -lc\n\Z"
+# RUN: %{harness_check} contains %t/h4/prog.elf "\A#!/bin/sh\nexit 145\n\Z"
+# RUN: %{rt_prog} --hosted %{rt_hosted_cflags} --level O1 --workdir %t/h5 --out %t/h5/prog.elf --src %t/main.c --shlibs='s=%t/s1.c' > %t/h5.log 2>&1
+# RUN: %{harness_check} contains %t/h5.log " -shared -nostartfiles -nodefaultlibs \S+crti\.o shlib-obj/s/s1\.o -lm -lc \S+crtn\.o -Wl,-Bsymbolic -Wl,-soname,libs\.so -Wl,-rpath,[$]ORIGIN -o shlib/libs\.so$" " obj/main\.o shlib/libs\.so -lm -lc \S+crtn\.o -Wl,-rpath,[$]ORIGIN -o \S*h5\Wprog\.elf$"
+# RUN: %{harness_check} contains %t/h5/prog.elf "\A#!/bin/sh\nexit 17\n\Z"
+# RUN: %{harness_check} lacks %t/h5.log "libclang_rt"
+
+# (4)
+# RUN: %{rt_prog} %{rt_cflags} --linux-rtlib=%{rt_file} --level O2 --workdir %t/e1 --out %t/e1/prog.elf --src %t/main.c %t/util.c --archives='one=%t/a1.c' > %t/e1.log 2>&1
+# RUN: %{harness_check} contains %t/e1.log "^msil-prog: .* --as cc --target=x86_64-unknown-linux-gnu -fno-pic -std=gnu17 -ffreestanding \S.* -O2 -c \.\./main\.c -o obj/main\.o$" "^msil-prog: .* --as ld-lld -dynamic-linker /lib64/ld-linux-x86-64\.so\.2 --as-needed -rpath [$]ORIGIN start\.o obj/main\.o obj/util\.o -Lar/one -lone \S+e7.usr.lib.x86_64-linux-gnu.libm\.so\.6 \S+e7.usr.lib.x86_64-linux-gnu.libc\.so\.6 \S+e7.usr.lib.x86_64-linux-gnu.libgcc_s\.so\.1 -o \S*e1\Wprog\.elf$"
+# RUN: %{harness_check} contains %t/e1/prog.elf "\A#!/bin/sh\nexit 11\n\Z"
+# RUN: %{harness_check} lacks %t/e1.log "libclang_rt" "nostartfiles" "--sysroot" "msil-prog: error"
+
+# (5)
+# RUN: %{rt_prog} --hosted --ld-lld= --linux-sysroot= --start= %{rt_hosted_cflags} --native-ldflags=-lm --linux-rtlib=%{rt_file} --level O0 --workdir %t/d1 --out %t/d1/prog.exe --src %t/main.c --archives='one=%t/a1.c' --native-lib='-Wl,--stand-in-native' > %t/d1.log 2>&1
+# RUN: %{harness_check} contains %t/d1.log "^msil-prog: .* --as cc --target=x86_64-unknown-linux-gnu -fuse-ld=lld obj/main\.o -Lar/one -lone -Wl,--stand-in-native -lm \S*linux-rtlib\.test\.tmp\Wrt\Wlibclang_rt\.builtins-x86_64\.a -o \S*d1\Wprog\.exe$"
+# RUN: %{harness_check} contains %t/d1/prog.exe.inputs "^arg -lm\nmember \S*libclang_rt\.builtins-x86_64\.a rt\.o 64\n\Z"
+# RUN: %{harness_check} contains %t/d1/prog.exe "\A#!/bin/sh\nexit 73\n\Z"
+# RUN: %{rt_prog} --ld-lld= --linux-sysroot= --start= %{rt_cflags} --native-ldflags=-lm --linux-rtlib=%{rt_file} --level O0 --workdir %t/d2 --out %t/d2/prog.exe --src %t/main.c --archives='one=%t/a1.c' --native-lib='-Wl,--stand-in-native' > %t/d2.log 2>&1
+# RUN: %{harness_check} contains %t/d2.log "^msil-prog: .* --as cc --target=x86_64-unknown-linux-gnu -fuse-ld=lld obj/main\.o -Lar/one -lone -Wl,--stand-in-native -lm -o \S*d2\Wprog\.exe$"
+# RUN: %{harness_check} contains %t/d2/prog.exe "\A#!/bin/sh\nexit 9\n\Z"
+# RUN: %{harness_check} lacks %t/d2.log "libclang_rt" "nostartfiles"
+
+# (6)
+# RUN: %{harness_check} exits 2 %{rt_prog} --hosted %{rt_hosted_cflags} --linux-rtlib=%t/rt/no-such.a --level O2 --workdir %t/u1 --out %t/u1/prog.elf --src %t/main.c > %t/u1.log 2>&1
+# RUN: %{harness_check} contains %t/u1.log "^msil-prog: error: --linux-rtlib \S*linux-rtlib\.test\.tmp\Wrt\Wno-such\.a: no such file$"
+# RUN: %{harness_check} lacks %t/u1.log " --as cc "
+# RUN: %{harness_check} missing %t/u1
+# RUN: %{harness_check} exits 2 %{rt_prog} --hosted --glibc-sysroot= %{rt_hosted_cflags} --linux-rtlib=%t/rt/no-such.a --level O2 --workdir %t/u2 --out %t/u2/prog.elf --src %t/main.c > %t/u2.log 2>&1
+# RUN: %{harness_check} contains %t/u2.log "^msil-prog: error: the hosted Linux oracle \(E7h: --hosted with the E7 options\) needs --glibc-sysroot$"
+# RUN: %{harness_check} lacks %t/u2.log "no-such"
+# RUN: %{harness_check} exits 2 %{rt_prog} --hosted --ld-lld= --linux-sysroot= --start= %{rt_hosted_cflags} --native-ldflags=-lm --linux-rtlib=%t/rt/no-such.a --level O0 --workdir %t/u3 --out %t/u3/prog.exe --src %t/main.c > %t/u3.log 2>&1
+# RUN: %{harness_check} contains %t/u3.log "^msil-prog: error: --linux-rtlib \S*no-such\.a: no such file$"
+# RUN: %{harness_check} missing %t/u3
+# RUN: %{rt_prog} %{rt_cflags} --linux-rtlib=%t/rt/no-such.a --level O2 --workdir %t/i1 --out %t/i1/prog.elf --src %t/main.c > %t/i1.log 2>&1
+# RUN: %{rt_prog} --ld-lld= --linux-sysroot= --start= %{rt_cflags} --native-ldflags=-lm --linux-rtlib=%t/rt/no-such.a --level O0 --workdir %t/i2 --out %t/i2/prog.exe --src %t/main.c > %t/i2.log 2>&1
+# RUN: %{harness_check} contains %t/i1/prog.elf "\A#!/bin/sh\nexit 1\n\Z"
+# RUN: %{harness_check} contains %t/i2/prog.exe "\A#!/bin/sh\nexit 1\n\Z"
+# RUN: %{harness_check} lacks %t/i1.log "no-such" "msil-prog: error"
+# RUN: %{harness_check} lacks %t/i2.log "no-such" "msil-prog: error"
+
+# (7) The distribution and ld.lld (which E7h does not run) of
+# %{msil_e7_args}, the stand-ins and this test's sysroots after them.
+# RUN: %if system-windows && msil-linux-oracle %{ %{rt_ue} --linux-sysroot %t/e7 --linux-rtlib %{rt_file} %t/ue/hosted/h.c > %t/ue1.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/ue1.log "^wrote \S*ue\Whosted\Wh\.expected$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} equals %t/ue/hosted/h.expected "[exit 67]" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} exits 1 %{rt_ue} --linux-sysroot %t/e7rt --linux-rtlib none --check %t/ue/hosted/h.c > %t/ue2.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/ue2.log "^MISMATCH: \S*ue\Whosted\Wh\.c$" "^-\[exit 67\]$" "^\+\[exit 3\]$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{rt_ue} --linux-sysroot %t/e7rt --linux-rtlib auto --check %t/ue/hosted/h.c > %t/ue3.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/ue3.log "^ok: \S*ue\Whosted\Wh\.c$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} exits 1 %{rt_ue} --linux-sysroot %t/e7 --linux-rtlib auto %t/ue/hosted/h2.c > %t/ue4.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/ue4.log "^update-expected: the hosted Linux oracle links the native compiler-rt builtins, but --linux-rtlib auto tried \S*linux-rtlib\.test\.tmp\We7\Wusr\Wlib\Wx86_64-linux-gnu\Wlibclang_rt\.builtins-x86_64\.a, which does not exist; build them with 'python msil/utils/make-linux-sysroot\.py --builtins' or pass --linux-rtlib PATH \(or --linux-rtlib none\)$" "^FAIL \(native compile\): \S*ue\Whosted\Wh2\.c$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} missing %t/ue/hosted/h2.expected %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} exits 2 %{rt_ue} --linux-sysroot %t/e7rt --linux-rtlib %t/rt/no-such.a %t/ue/hosted/h2.c > %t/ue5.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/ue5.log "^update-expected\.py: error: --linux-rtlib \S*linux-rtlib\.test\.tmp\Wrt\Wno-such\.a: no such file$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} missing %t/ue/hosted/h2.expected %}
+
+# (8) Each run that stops with lit's status 2 passes msil_probe_cache=
+# (empty), as lit-config-errors.test does.
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} exits 2 %{rt_lit} --param msil_probe_cache= --param msil_native_oracle=required --param msil_linux_sysroot=%t/e7 %S/Inputs/rtlib/nested > %t/l1.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/l1.log "fatal: msil: harness/Inputs/rtlib/nested/hosted is a hosted directory \(plan 5\.17\.3\) whose native oracle links the native compiler-rt builtins \(msil_native_oracle=required\), but msil_linux_rtlib=auto tried \S*linux-rtlib\.test\.tmp\We7\Wusr\Wlib\Wx86_64-linux-gnu\Wlibclang_rt\.builtins-x86_64\.a, which does not exist; build them with 'python msil/utils/make-linux-sysroot\.py --builtins' or pass --param msil_linux_rtlib=PATH$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} lacks %t/l1.log "^(PASS|UNSUPPORTED|FAIL): " %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} exits 2 %{rt_lit} --param msil_probe_cache= --param msil_native_oracle=required --param msil_linux_sysroot=%t/e7rt --param msil_linux_rtlib=none %S/Inputs/rtlib/nested > %t/l2.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/l2.log "fatal: msil: harness/Inputs/rtlib/nested/hosted is a hosted directory \(plan 5\.17\.3\) whose native oracle links the native compiler-rt builtins \(msil_native_oracle=required\), but --param msil_linux_rtlib=none disables them; build them with 'python msil/utils/make-linux-sysroot\.py --builtins' or pass --param msil_linux_rtlib=PATH$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} lacks %t/l2.log "^(PASS|UNSUPPORTED|FAIL): " %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} exits 2 %{rt_lit} --param msil_probe_cache= --param msil_native_oracle=required --param msil_linux_sysroot=%t/e7rt --param msil_linux_rtlib=%t/rt/no-such.a %S/Inputs/rtlib/nested > %t/l3.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/l3.log "fatal: msil: --param msil_linux_rtlib=\S*linux-rtlib\.test\.tmp\Wrt\Wno-such\.a: no such file$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} lacks %t/l3.log "^(PASS|UNSUPPORTED|FAIL): " %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{rt_lit} --param msil_native_oracle=required --param msil_linux_sysroot=%t/e7rt %S/Inputs/rtlib/nested > %t/l4.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/l4.log "note: msil: linux rtlib: \S*linux-rtlib\.test\.tmp\We7rt\Wusr\Wlib\Wx86_64-linux-gnu\Wlibclang_rt\.builtins-x86_64\.a$" "^PASS: MSIL :: harness/Inputs/rtlib/nested/hosted/rtlib\.test " "^PASS: MSIL :: harness/Inputs/rtlib/nested/plain/rtlib\.test " %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/l4.log "^# \| hosted dir rtlib: \[\S*linux-rtlib\.test\.tmp\We7rt\Wusr\Wlib\Wx86_64-linux-gnu\Wlibclang_rt\.builtins-x86_64\.a\]$" "^# \| hosted dir e7 args: \[.* --linux-rtlib \S*e7rt\Wusr\Wlib\Wx86_64-linux-gnu\Wlibclang_rt\.builtins-x86_64\.a\]$" "^# \| hosted dir prog: .* --linux-rtlib=\S*e7rt\Wusr\Wlib\Wx86_64-linux-gnu\Wlibclang_rt\.builtins-x86_64\.a " %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/l4.log "^# \| hosted dir feature msil-linux-rtlib$" "^# \| hosted dir feature msil-native-oracle$" "^# \| hosted dir feature msil-linux-hosted-oracle$" "^# \| plain dir feature msil-linux-rtlib$" "^# \| plain dir feature msil-native-oracle$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{rt_lit} --param msil_native_oracle=required --param msil_linux_sysroot=%t/e7 --param msil_linux_rtlib=%{rt_file} %S/Inputs/rtlib/nested > %t/l5.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/l5.log "note: msil: linux rtlib: \S*linux-rtlib\.test\.tmp\Wrt\Wlibclang_rt\.builtins-x86_64\.a$" "^PASS: MSIL :: harness/Inputs/rtlib/nested/hosted/rtlib\.test " "^# \| hosted dir rtlib: \[\S*linux-rtlib\.test\.tmp\Wrt\Wlibclang_rt\.builtins-x86_64\.a\]$" "^# \| hosted dir prog: .* --linux-rtlib=\S*linux-rtlib\.test\.tmp\Wrt\Wlibclang_rt\.builtins-x86_64\.a " "^# \| hosted dir feature msil-linux-rtlib$" "^# \| hosted dir feature msil-native-oracle$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{rt_lit} --param msil_native_oracle=1 --param msil_linux_sysroot=%t/e7 %S/Inputs/rtlib/nested > %t/l6.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/l6.log "note: msil: harness/Inputs/rtlib/nested/hosted: no native oracle in this hosted directory: the hosted Linux oracle links the native compiler-rt builtins, but msil_linux_rtlib=auto tried \S*linux-rtlib\.test\.tmp\We7\Wusr\Wlib\Wx86_64-linux-gnu\Wlibclang_rt\.builtins-x86_64\.a, which does not exist \(python msil/utils/make-linux-sysroot\.py --builtins\)$" "^PASS: MSIL :: harness/Inputs/rtlib/nested/hosted/rtlib\.test " "^PASS: MSIL :: harness/Inputs/rtlib/nested/plain/rtlib\.test " "^# \| hosted dir rtlib: \[linux-rtlib-not-found\]$" "^# \| plain dir feature msil-native-oracle$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} lacks %t/l6.log "^# \| hosted dir feature msil-native-oracle$" "dir feature msil-linux-rtlib$" "fatal: " %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{rt_lit} --param msil_native_oracle=required --param msil_linux_sysroot=%t/e7 %S/Inputs/rtlib/nested/plain > %t/l7.log 2>&1 %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} contains %t/l7.log "^PASS: MSIL :: harness/Inputs/rtlib/nested/plain/rtlib\.test " "^# \| plain dir rtlib: \[linux-rtlib-not-found\]$" "^# \| plain dir e7 args: \[.* --linux-rtlib auto\]$" "^# \| plain dir feature msil-native-oracle$" %}
+# RUN: %if system-windows && msil-linux-oracle %{ %{harness_check} lacks %t/l7.log "fatal: " "dir feature msil-linux-rtlib$" %}
+
+# (9) %t/tc has no archive; %t/tc2 (a hard link of tc's clang, which is on
+# %t's volume) has a stand-in at A1's place for the Windows triple.
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ "%python" "%S/Inputs/rtlib/private-toolchain.py" %clang %t/tc > %t/tc.log %}
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ "%python" "%S/Inputs/rtlib/private-toolchain.py" %t/tc/bin/clang.exe %t/tc2 --helper-archive x86_64-pc-windows-msvc-msil > %t/tc2.log %}
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ %{harness_check} contains %t/tc.log "^resource directory: \S*linux-rtlib\.test\.tmp\Wtc\Wlib\Wclang\W\d+$" %}
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ %{harness_check} contains %t/tc2.log "^stand-in helper archive: \S*linux-rtlib\.test\.tmp\Wtc2\Wlib\Wclang\W\d+\Wlib\Wx86_64-pc-windows-msvc-msil\Wclang_rt\.builtins\.lib$" %}
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ env CLANG=%t/tc/bin/clang.exe %{harness_check} exits 1 %{rt_tc_lit} -a %S/Inputs/rtlib/noarchive > %t/n1.log 2>&1 %}
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ %{harness_check} contains %t/n1.log "note: using clang: \S*linux-rtlib\.test\.tmp\Wtc\Wbin\Wclang\.exe$" "note: msil: no helper archive \S*linux-rtlib\.test\.tmp\Wtc\Wlib\Wclang\W\d+\Wlib\Wx86_64-pc-windows-msvc-msil\Wclang_rt\.builtins\.lib for x86_64-pc-windows-msvc-msil: a test that calls a runtime helper fails to link with msil-ld's runtime-helper line; build it with 'python msil/utils/build/build-builtins\.py' \(plan 5\.14\.3\)$" "^FAIL: MSIL :: harness/Inputs/rtlib/noarchive/cdiv\.test " %}
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ %{harness_check} contains %t/n1.log "^# \| msil-prog: \S*linux-rtlib\.test\.tmp\Wtc\Wbin\Wclang\.exe --target=x86_64-pc-windows-msvc-msil .* -O0 obj/main\.o obj/cdiv\.o -o prog\.exe$" "^# \| msil-ld: error: undefined symbol: __divdc3\n# \| >>> a compiler runtime helper: link the toolchain's helper archive clang_rt\.builtins\n# \| >>> referenced by obj/cdiv\.o:\(cdiv\)$" "^# \| msil-prog: error: the link failed \(exit status 1\)$" %}
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ %{harness_check} lacks %t/n1.log "^(PASS|UNSUPPORTED|XFAIL|XPASS): " "note: msil: helper archive: " "does not define" "fatal: " %}
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ env CLANG=%t/tc2/bin/clang.exe %{rt_tc_lit} --show-tests %S/Inputs/rtlib/noarchive > %t/n2.log 2>&1 %}
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ %{harness_check} contains %t/n2.log "note: using clang: \S*linux-rtlib\.test\.tmp\Wtc2\Wbin\Wclang\.exe$" "note: msil: helper archive: \S*linux-rtlib\.test\.tmp\Wtc2\Wlib\Wclang\W\d+\Wlib\Wx86_64-pc-windows-msvc-msil\Wclang_rt\.builtins\.lib$" "^  MSIL :: harness/Inputs/rtlib/noarchive/cdiv\.test$" %}
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ %{harness_check} lacks %t/n2.log "no helper archive" "^(PASS|FAIL|UNSUPPORTED): " "fatal: " %}
+# The private toolchains hold a link or a copy of clang, which a later
+# rebuild of clang must not leave behind.
+# RUN: %if system-windows && clang && msil-ld && msil-ar %{ rm -rf %t/tc %t/tc2 %}
+
+#--- main.c
+// prog-value: 1
+#--- util.c
+// prog-value: 2
+#--- a1.c
+// prog-value: 8
+#--- s1.c
+// prog-value: 16
+#--- rt.c
+// The stand-in archive's member (a runtime helper of the native builtins).
+// prog-value: 64
+#--- ue/hosted/lit.local.cfg
+config.msil_enable_hosted(config)
+#--- ue/hosted/h.c
+// A hosted test for update-expected.py's hosted Linux oracle.
+// prog-value: 3
+#--- ue/hosted/h2.c
+// prog-value: 3

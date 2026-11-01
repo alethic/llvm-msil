@@ -1,0 +1,57 @@
+# The helper archive at the path that clang names for a triple holds plan 5.14.3's members, all HIDDEN: A4's minimum, nothing that A5 keeps out (no __atomic_*, *ti*, fp128, x87 or __clear_cache definition), and the long double forwarders, each referencing only its double counterpart, in the Linux triple's archive and not in the windows-msvc one.
+# Plan 5.14.3 A1, A2, A4, A5 and A7, M25.h. For the leg's triple (%msil_triple)
+# and for the two triples that build-builtins.py builds by default (A2:
+# x86_64-pc-windows-msvc-msil and x86_64-unknown-linux-gnu-msil), clang
+# prints the archive's path (-rtlib=compiler-rt -print-libgcc-file-name) and
+# its resource directory (-print-resource-dir), and Inputs/helper-archive.py
+# checks the archive through '%msil_nm --defined-only':
+#   A1  the path is <resource dir>/lib/<T>/clang_rt.builtins.lib on a
+#       windows-msvc triple and <resource dir>/lib/<T>/libclang_rt.builtins.a
+#       otherwise, and the file exists (the error names build-builtins.py);
+#   A2  every member is <stem>.c.o (msil_longdouble.c's members
+#       msil_longdouble.<name>.c.o), no member appears twice and no global is
+#       defined by two members;
+#   A4  the f16, bf16, complex and powi helpers, compiler-rt's 32- and 64-bit
+#       integer and soft-float helpers and the comparison functions are
+#       defined, on a Linux triple also the trapping __absv, __addv, __subv,
+#       __mulv and __negv helpers and the ELF aliases __cmpdf2 and __cmpsf2;
+#   A5  no __atomic_* definition (M30's lock-path shim msil_atomic_msvc.c
+#       will be the exception, on the Windows triples), no function of an
+#       __int128, fp128 or x87 source (a ti, tf, tc, xf or xc mode in a
+#       compiler-rt name: __floattisf, __addtf3, ...), no __clear_cache or
+#       other hosted function (__enable_execute_stack, __emutls_*, ...), and
+#       no member compiled from such a source;
+#   A4  the long double forwarders: on a Linux triple each
+#       '#if MSIL_MEMBER(<name>)' block of msil/lib/builtins/msil_longdouble.c
+#       (read through %S) is the member msil_longdouble.<name>.c.o, which
+#       defines <name> and no other global, and there is no other
+#       msil_longdouble member; on a windows-msvc triple there is no
+#       msil_longdouble member and none of those names is defined.
+# With the feature msil-cil-dump the script also reads every member's
+# link-info record ('%msil_cil_dump --link-info'), which shows what llvm-nm
+# does not (the DUMP line):
+#   A2, A7  every defined symbol that is not LOCAL is HIDDEN (A2's
+#       -fvisibility=hidden), so that a -shared output never exports one;
+#   A4  each msil_longdouble.<name>.c.o references exactly one undefined
+#       symbol, the double counterpart that <name> gives (not its source):
+#       <name> less its final 'l', 'ld' -> 'd' in the strtold and wcstold
+#       families, lgamma_r for lgammal_r, glibc's f32xaddf64, f32xsubf64,
+#       f32xmulf64 and f32xdivf64 for daddl, dsubl, dmull and ddivl (they
+#       set errno as native daddl does, which one operation in double does
+#       not; longdouble-archive.test runs them), fma for dfmal, sqrt for
+#       dsqrtl, nextafter for nexttoward and nexttowardl, nextafterf for
+#       nexttowardf, exp10 for pow10l, strfromd for strfroml, and ecvt, fcvt,
+#       gcvt, ecvt_r and fcvt_r for qecvt, qfcvt, qgcvt, qecvt_r and qfcvt_r.
+# Without the feature the llvm-nm checks still run.
+# Inputs/helper-archive.py's self-test runs in longdouble-coverage.test.
+# RUN: %clang --target=%msil_triple -rtlib=compiler-rt -print-libgcc-file-name > %t.leg.path
+# RUN: %clang --target=%msil_triple -print-resource-dir > %t.leg.rdir
+# RUN: %python %S/Inputs/helper-archive.py archive --triple %msil_triple --path-file %t.leg.path --resource-dir-file %t.leg.rdir --nm %msil_nm --forwarders %S/../../../lib/builtins/msil_longdouble.c %if msil-cil-dump %{ --cil-dump '%msil_cil_dump' %} | FileCheck %s %if msil-cil-dump %{ --check-prefixes=CHECK,DUMP %} -DTRIPLE=%msil_triple
+# RUN: %clang --target=x86_64-pc-windows-msvc-msil -rtlib=compiler-rt -print-libgcc-file-name > %t.win.path
+# RUN: %clang --target=x86_64-pc-windows-msvc-msil -print-resource-dir > %t.win.rdir
+# RUN: %python %S/Inputs/helper-archive.py archive --triple x86_64-pc-windows-msvc-msil --path-file %t.win.path --resource-dir-file %t.win.rdir --nm %msil_nm --forwarders %S/../../../lib/builtins/msil_longdouble.c %if msil-cil-dump %{ --cil-dump '%msil_cil_dump' %} | FileCheck %s %if msil-cil-dump %{ --check-prefixes=CHECK,DUMP %} -DTRIPLE=x86_64-pc-windows-msvc-msil
+# RUN: %clang --target=x86_64-unknown-linux-gnu-msil -rtlib=compiler-rt -print-libgcc-file-name > %t.linux.path
+# RUN: %clang --target=x86_64-unknown-linux-gnu-msil -print-resource-dir > %t.linux.rdir
+# RUN: %python %S/Inputs/helper-archive.py archive --triple x86_64-unknown-linux-gnu-msil --path-file %t.linux.path --resource-dir-file %t.linux.rdir --nm %msil_nm --forwarders %S/../../../lib/builtins/msil_longdouble.c %if msil-cil-dump %{ --cil-dump '%msil_cil_dump' %} | FileCheck %s %if msil-cil-dump %{ --check-prefixes=CHECK,DUMP %} -DTRIPLE=x86_64-unknown-linux-gnu-msil
+# DUMP:  {{^}}helper-archive: link-info [[TRIPLE]]: {{[1-9][0-9]*}} members, {{[1-9][0-9]*}} defined globals, all HIDDEN; {{[0-9]+}} long double forwarders, each referencing only its counterpart{{$}}
+# CHECK: {{^}}helper-archive: archive [[TRIPLE]]: {{[1-9][0-9]*}} members, {{[1-9][0-9]*}} globals: OK{{$}}

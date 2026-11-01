@@ -100,12 +100,40 @@ program link then needs -Wl,-rpath,$ORIGIN too); an ELF program adds its
 libraries' values when it is linked, and every object of an ELF link with
 libraries must be -fPIC.
 
+The hosted Linux oracle E7h (msil-prog.py --mode native --hosted with the E7
+options; plan 5.17.3, M24, M25; harness/linux-rtlib.test). Its compiles carry
+--sysroot=<G> (the glibc sysroot, from msil-prog.py and from the hosted
+%{msil_cflags}; every --sysroot= of one compile names the same directory),
+and the object records <G>. Its link is the clang driver's with exactly
+
+    --target=x86_64-unknown-linux-gnu --sysroot=<G> -fuse-ld=lld [-shared]
+    -nostartfiles -nodefaultlibs [<G>/usr/lib/x86_64-linux-gnu/crt1.o]
+    <G>/usr/lib/x86_64-linux-gnu/crti.o <objects, archives, libraries and
+    native libraries> -lm [<rtlib>] -lc <G>/usr/lib/x86_64-linux-gnu/crtn.o
+    [-Wl,-Bsymbolic -Wl,-soname,lib<name>.so] -Wl,-rpath,$ORIGIN -o <out>
+
+(crt1.o for a program only, the -Bsymbolic and -soname flags for a -shared
+library only; the start files must exist), and every object before -lm must
+have been compiled for E7h with that <G>. <rtlib>, the native compiler-rt
+builtins of msil-prog.py --linux-rtlib, is an archive of native objects for
+x86_64-unknown-linux-gnu, which the link counts like any archive (each
+library of a -shared link gets its own copy, as each ELF module links its
+own hidden copy of the helpers it calls). The record of an E7h link ends
+with 'arg -lm', the archive's 'member' lines and 'arg -lc', in link order;
+the start files, --sysroot= and the driver flags are not recorded. A
+positional input that is an archive (the --linux-rtlib FILE of the driver
+recipe of a hosted Linux build, after %{msil_native_ldflags}) is counted
+like one found through -l.
+
 Every invocation checks the arguments that msil-prog.py and the composites
 must pass (plan 5.12.4) and fails with 'prog-cc: error: <why>' (exit status
 1) when one is wrong. A compile must have %{msil_cflags} (-std=gnu17,
 -ffreestanding, -Werror=return-type and an -I directory with msil_test.h);
-with $PROG_CC_CTEST set (harness/prog/Inputs/nested-ctest), c-testsuite's
--std=gnu17 -w instead, and none of those other flags.
+a hosted compile (one with --sysroot=, the hosted %{msil_cflags} of a Linux
+triple, plan 5.17.3) has the same flags without -ffreestanding, and no
+-fno-pic (E7h links a PIE); with $PROG_CC_CTEST set
+(harness/prog/Inputs/nested-ctest), c-testsuite's -std=gnu17 -w instead,
+and none of those other flags.
 """
 
 import hashlib
@@ -144,6 +172,12 @@ def write_text(path, text):
 def is_msvc(triple):
     parts = triple.split("-")
     return "windows" in parts and (len(parts) < 4 or parts[3].startswith("msvc"))
+
+
+def norm(path):
+    """One spelling of a path, to compare paths that are written with either
+    separator."""
+    return os.path.normcase(os.path.normpath(path))
 
 
 def parse(argv):
@@ -250,7 +284,21 @@ def check_cflags(flags, what):
             if f in ("-ffreestanding", "-Werror=return-type") or f.startswith("-I"):
                 raise Fail("%s with %s, which c-testsuite's flags lack" % (what, f))
         return
-    for need in ("-std=gnu17", "-ffreestanding", "-Werror=return-type"):
+    sysroots = [f[len("--sysroot=") :] for f in flags if f.startswith("--sysroot=")]
+    needs = ["-std=gnu17", "-ffreestanding", "-Werror=return-type"]
+    if sysroots:
+        # The hosted %{msil_cflags} of a Linux triple (plan 5.17.3) and E7h's
+        # compiles: the glibc sysroot's headers instead of -ffreestanding.
+        if len({norm(s) for s in sysroots}) != 1:
+            raise Fail("%s with two different --sysroot= values: %r" % (what, sysroots))
+        if not os.path.isdir(sysroots[0]):
+            raise Fail("%s with --sysroot=%s, which is no directory" % (what, sysroots[0]))
+        if "-ffreestanding" in flags:
+            raise Fail("a hosted %s (--sysroot=) with -ffreestanding" % what)
+        if "-fno-pic" in flags:
+            raise Fail("a hosted %s (--sysroot=) with -fno-pic: E7h links a PIE" % what)
+        needs.remove("-ffreestanding")
+    for need in needs:
         if need not in flags:
             raise Fail("%s without %s (%%{msil_cflags})" % (what, need))
     includes = [f[2:] for f in flags if f.startswith("-I")]
@@ -324,6 +372,10 @@ def compile_source(o, src):
         obj["pic"] = True
     if "-fms-runtime-lib=dll" in flags:
         obj["crt"] = "dll"
+    sysroots = [f[len("--sysroot=") :] for f in flags if f.startswith("--sysroot=")]
+    if sysroots:
+        # A hosted compile (check_cflags): E7h's link checks the sysroot.
+        obj["sysroot"] = sysroots[0]
     write_text(o["out"], json.dumps(obj, sort_keys=True) + "\n")
     return 0
 
@@ -380,7 +432,12 @@ def resolve(o, names, extra_ok):
             seq.append(("library", a, read_json(a + ".json", "library record")))
         else:
             data = read_json(a, "object")
-            kind = "library" if data.get("kind") == "shlib" else "object"
+            if isinstance(data, dict) and "members" in data:
+                # An archive named by its path (the --linux-rtlib FILE of a
+                # hosted Linux build's driver recipe).
+                kind = "archive"
+            else:
+                kind = "library" if data.get("kind") == "shlib" else "object"
             seq.append((kind, a, data))
     return seq
 
@@ -806,6 +863,9 @@ def clang(argv, ilasm):
         return 0
     if "-fuse-ld=lld" not in o["flags"]:
         raise Fail("a native link without -fuse-ld=lld")
+    if "-nostartfiles" in o["flags"]:
+        # The hosted Linux oracle E7h (plan 5.17.3).
+        return e7h_link(o, target)
     if "-nodefaultlibs" in o["flags"] or "-Wl,--lto-emit-asm" in o["flags"]:
         raise Fail("an MSIL link flag in a native link")
     names = (
@@ -873,6 +933,117 @@ def native_link(o, target, seq, ilasm):
         value = (linked.value + sum(lib["value"] for lib in linked.libs)) % 256
         native_program(out, target, value, ilasm, extras=linked.extras)
     write_record(out + ".inputs", linked.lines)
+    return 0
+
+
+E7H_LIBDIR = ("usr", "lib", "x86_64-linux-gnu")
+E7H_DRIVER_FLAGS = ("-fuse-ld=lld", "-shared", "-nostartfiles", "-nodefaultlibs")
+
+
+def e7h_link(o, target):
+    """The link of the hosted Linux oracle E7h: a program, or with -shared a
+    library (see the module documentation)."""
+    raw, out = o["raw"], o["out"]
+    shared = "-shared" in raw
+    if target != E7_TARGET:
+        raise Fail(
+            "-nostartfiles in a native link for %s (E7h links %s)" % (target, E7_TARGET)
+        )
+    sysroot = None
+    if len(raw) > 1 and raw[1].startswith("--sysroot="):
+        sysroot = raw[1][len("--sysroot=") :]
+    head = ["--target=" + E7_TARGET, "--sysroot=%s" % sysroot, "-fuse-ld=lld"]
+    head += ["-shared"] if shared else []
+    head += ["-nostartfiles", "-nodefaultlibs"]
+    if sysroot is None or raw[: len(head)] != head:
+        raise Fail("not E7h's link command line: %r" % raw[: len(head)])
+    base = os.path.basename(out)
+    if shared:
+        if not (base.startswith("lib") and base.endswith(".so")):
+            raise Fail("an E7h -shared link writes -o lib<name>.so, not %r" % out)
+        tail = ["-Wl,-Bsymbolic", "-Wl,-soname,%s" % base, "-Wl,-rpath,$ORIGIN"]
+    else:
+        tail = ["-Wl,-rpath,$ORIGIN"]
+    rest = raw[len(head) :]
+    if rest[-len(tail) :] != tail:
+        raise Fail(
+            "E7h's link does not end with %s: %r" % (" ".join(tail), rest[-len(tail) :])
+        )
+    rest = rest[: -len(tail)]
+
+    def crt(name):
+        return os.path.join(sysroot, *E7H_LIBDIR, name)
+
+    def is_crt(arg, names):
+        return any(norm(arg) == norm(crt(n)) for n in names)
+
+    starts = ["crti.o"] if shared else ["crt1.o", "crti.o"]
+    for i, name in enumerate(starts):
+        if i >= len(rest) or not is_crt(rest[i], [name]):
+            raise Fail(
+                "E7h's link has no <G>/usr/lib/x86_64-linux-gnu/%s at its place: %r"
+                % (name, rest[i : i + 1])
+            )
+    if len(rest) <= len(starts) or not is_crt(rest[-1], ["crtn.o"]):
+        raise Fail(
+            "E7h's link has no <G>/usr/lib/x86_64-linux-gnu/crtn.o after -lc: %r"
+            % rest[-1:]
+        )
+    for name in starts + ["crtn.o"]:
+        if not os.path.isfile(crt(name)):
+            raise Fail("E7h's start file %s does not exist" % crt(name))
+    body = rest[len(starts) : -1]
+    if body[-1:] != ["-lc"]:
+        raise Fail("E7h's link has no -lc before crtn.o: %r" % body[-1:])
+    body = body[:-1]
+    rtlib = None
+    if body[-1:] == ["-lm"]:
+        body = body[:-1]
+    elif len(body) >= 2 and body[-2] == "-lm" and not body[-1].startswith("-"):
+        rtlib, body = body[-1], body[:-2]
+    else:
+        raise Fail(
+            "E7h's link has no '-lm [<rtlib archive>]' before -lc: %r" % body[-2:]
+        )
+    for a in body:
+        if (
+            a in ("-lm", "-lc") + E7H_DRIVER_FLAGS
+            or a.startswith(("--sysroot=", "--target="))
+            or is_crt(a, ["crt1.o", "crti.o", "crtn.o"])
+        ):
+            raise Fail("%s out of its place in E7h's link" % a)
+    inputs = {"flags": [a for a in body if a.startswith("-L")], "raw": body}
+    seq = resolve(inputs, lambda n: ["lib%s.a" % n], ())
+    linked = total(seq, ("native",), E7_TARGET, "elf")
+    check_objects(linked, shared, E7_TARGET, True)
+    for obj in linked.objects:
+        if norm(obj.get("sysroot") or "?") != norm(sysroot):
+            raise Fail(
+                "%s was not compiled for E7h (--sysroot=%s)" % (obj["source"], sysroot)
+            )
+    value, lines = linked.value, linked.lines + ["arg -lm"]
+    if rtlib is not None:
+        data = read_json(rtlib, "rtlib archive")
+        members = data.get("members") if isinstance(data, dict) else None
+        if not members:
+            raise Fail("%s, before -lc, is not an archive" % rtlib)
+        for m in members:
+            obj = m["object"]
+            if obj.get("kind") != "native" or obj.get("target") != E7_TARGET:
+                raise Fail(
+                    "%s: %s is not a native object for %s" % (rtlib, m["name"], E7_TARGET)
+                )
+            value += obj["value"]
+            lines.append("member %s %s %d" % (rtlib, m["name"], obj["value"]))
+    lines.append("arg -lc")
+    if shared:
+        name = base[len("lib") : -len(".so")]
+        record = Linked(value % 256, lines, None, [], [], [])
+        library_record(out, "elf", E7_TARGET, name, record, False)
+    else:
+        value += sum(lib["value"] for lib in linked.libs)
+        native_program(out, E7_TARGET, value % 256, None, extras=linked.extras)
+    write_record(out + ".inputs", lines)
     return 0
 
 

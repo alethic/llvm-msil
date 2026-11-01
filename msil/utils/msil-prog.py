@@ -16,8 +16,9 @@
         [--src FILE...]... [--stock-src FILE...]... [--archives=SPEC]
         [--shlibs=SPEC] [--lib=ARGS]... [--native-lib=ARGS]...
         [--ld-lld LD.LLD --linux-sysroot DIR --start START]
-        [--hosted] [--glibc-sysroot DIR] [--expected-rule=RULE]
-        [--det] [--timeout S] [--timeout-factor F] [--mem-limit-mb N]
+        [--hosted] [--glibc-sysroot DIR] [--linux-rtlib FILE]
+        [--expected-rule=RULE] [--det] [--timeout S] [--timeout-factor F]
+        [--mem-limit-mb N]
 
 This is the build step of the %{msil_prog} composites of msil/test/lit.cfg.py
 (plan 5.12.3, 5.12.4), and from M20 of %{msil_c} and %{msil_ll} under
@@ -125,7 +126,7 @@ its exit path (atexit, .fini_array, the order of both):
       CLANG --target=x86_64-unknown-linux-gnu --sysroot=<G> -fuse-ld=lld
         -nostartfiles -nodefaultlibs <G>/usr/lib/x86_64-linux-gnu/crt1.o
         <G>/usr/lib/x86_64-linux-gnu/crti.o obj/... stock/... -Lar/NAME
-        -lNAME ... NATIVE-LIB-ARGS -lm -lc
+        -lNAME ... NATIVE-LIB-ARGS -lm [LINUX-RTLIB] -lc
         <G>/usr/lib/x86_64-linux-gnu/crtn.o -Wl,-rpath,$ORIGIN -o <out>
     The program is a PIE, the driver's default, as recon tests-gates-p3's
     E10 linked it (glibc's crt1.o has only GOT-relative relocations); -lc
@@ -134,7 +135,14 @@ its exit path (atexit, .fini_array, the order of both):
     the __dso_handle that libc_nonshared.a's atexit uses and crtbegin.o
     would define, and glibc's exit runs the atexit handlers before
     .fini_array. NATIVE-LDFLAGS are not used (-lm is in the recipe), and
-    -rpath $ORIGIN serves test-built libraries as in E7;
+    -rpath $ORIGIN serves test-built libraries as in E7. LINUX-RTLIB is
+    --linux-rtlib FILE (plan 5.17.2, 5.17.3, M25; lit's msil_linux_rtlib),
+    the native compiler-rt builtins archive that make-linux-sysroot.py
+    --builtins writes (libclang_rt.builtins-x86_64.a): E7h has no libgcc,
+    so a program that calls a runtime helper (__divdc3, __extendhfsf2, ...)
+    takes it from there, after the program's inputs and -lm and before -lc,
+    and its results are compiler-rt's, as the MSIL program's helper archive
+    gives them (R19); E7 keeps libgcc_s.so.1;
   - for an MSVC triple: the DLL C runtime (/MD: vcruntime140.dll and the
     ucrtbase.dll that MSIL output binds) instead of clang's default static
     one, whose exit path differs (recon lifecycle 2.2-2.3). Every native
@@ -146,16 +154,26 @@ its exit path (atexit, .fini_array, the order of both):
     the link is the driver recipe's, with NATIVE-LDFLAGS;
   - otherwise the driver recipe unchanged: for a Linux triple without the
     E7 options that is the host's own link on a Linux host (the CI job),
-    which runs glibc's start files and exit path already; MinGW keeps its
-    C runtime.
+    which runs glibc's start files and exit path already, and takes
+    --linux-rtlib FILE after NATIVE-LDFLAGS (so before the driver's own
+    -lgcc and -lc, and the helpers are compiler-rt's, as in E7h); MinGW
+    keeps its C runtime.
+
+--linux-rtlib FILE is used only there, by a hosted native build for a Linux
+triple (E7h, or the driver recipe of a Linux host), and by the libraries of
+its --shlibs (each -shared library links its own hidden copy of the
+helpers it calls, as a native compiler-rt link does); every other build
+ignores it, so one prefix serves every triple. It must name a file where it
+is used (a usage error otherwise, after E7h's own checks).
 
 Each mode ignores the options of the other (--pipeline, --link-output, --ld,
 --llc, --ilasm, --ldflags and --lib in native mode; --native-ldflags,
---ld-lld, --linux-sysroot, --start, --hosted and --glibc-sysroot in MSIL
-mode), so one command prefix, lit's %msil_prog_build, serves both. An
-empty --ld-lld=, --linux-sysroot=, --start= or --glibc-sysroot= cancels an
-earlier one (the last of a repeated option counts), which selects the
-driver recipe after a prefix that names the E7 oracle.
+--ld-lld, --linux-sysroot, --start, --hosted, --glibc-sysroot and
+--linux-rtlib in MSIL mode), so one command prefix, lit's %msil_prog_build,
+serves both. An empty --ld-lld=, --linux-sysroot=, --start=,
+--glibc-sysroot= or --linux-rtlib= cancels an earlier one (the last of a
+repeated option counts), which selects the driver recipe after a prefix
+that names the E7 oracle.
 
 --expected-rule RULE (plan 5.17.4, M24; %{msil_expected_rule}) is empty (no
 rule, the default) or '<os>[,<os>]: <reason>', where each <os> is windows or
@@ -224,7 +242,8 @@ go into shlib-obj/NAME/ (an interface's into shlib-iface-obj/NAME/):
                --target=x86_64-unknown-linux-gnu --sysroot=<G> -fuse-ld=lld
                -shared -nostartfiles -nodefaultlibs
                <G>/usr/lib/x86_64-linux-gnu/crti.o <objects> <earlier
-               libraries> -lm -lc <G>/usr/lib/x86_64-linux-gnu/crtn.o
+               libraries> -lm [LINUX-RTLIB] -lc
+               <G>/usr/lib/x86_64-linux-gnu/crtn.o
                -Wl,-Bsymbolic -Wl,-soname,libNAME.so -Wl,-rpath,$ORIGIN -o
                shlib/libNAME.so (glibc's shared-object start files, without
                crtbeginS.o), and the program link gets shlib/libNAME.so after
@@ -232,8 +251,9 @@ go into shlib-obj/NAME/ (an interface's into shlib-iface-obj/NAME/):
   native, Linux with the driver recipe: CLANG --target=<native>
                -fuse-ld=lld -shared <objects> <earlier libraries>
                -Wl,-Bsymbolic -Wl,-soname,libNAME.so -Wl,-rpath,$ORIGIN
-               NATIVE-LDFLAGS -o shlib/libNAME.so, -fPIC compiles, no
-               interfaces, and -Wl,-rpath,$ORIGIN on the program link too.
+               NATIVE-LDFLAGS [LINUX-RTLIB, with --hosted] -o
+               shlib/libNAME.so, -fPIC compiles, no interfaces, and
+               -Wl,-rpath,$ORIGIN on the program link too.
 Without --shlibs every command is unchanged. The build directory always has
 a shlib/ directory (empty without libraries), which the composites give
 msil-verify.py, msil-jitall.py and msil-run.py as --dep-dir.
@@ -284,7 +304,8 @@ mode; il without --ilasm (unless --det); --shlibs with --link-output il (a
 link against a .NET library has no --lto-emit-asm text) or with a malformed
 SPEC (a bad name, a library or an interface named twice, an interface after
 its library or without one); in native mode --hosted with the E7 options but
-without --glibc-sysroot, or with one that lacks a file of E7h; a malformed
+without --glibc-sysroot, or with one that lacks a file of E7h; a
+--linux-rtlib that names no file, in a build that uses it; a malformed
 --expected-rule (in either mode); a --timeout-factor that is not positive.
 
 Exit status: 0 on success (and for a native build that --expected-rule
@@ -786,7 +807,8 @@ def build_shlibs_native(b, bdir, compile_one, flavor, libdir):
             # glibc's shared-object start files, without crtbeginS.o (lld
             # defines __dso_handle); -rpath $ORIGIN as in E7.
             cmd = e7h_driver(args) + ["-shared", "-nostartfiles", "-nodefaultlibs"]
-            cmd += [os.path.join(libdir, "crti.o"), *objs, *earlier, "-lm", "-lc"]
+            cmd += [os.path.join(libdir, "crti.o"), *objs, *earlier, "-lm"]
+            cmd += [*args.rtlib_words, "-lc"]
             cmd += [os.path.join(libdir, "crtn.o"), "-Wl,-Bsymbolic"]
             cmd += ["-Wl,-soname,lib%s.so" % name, "-Wl,-rpath,$ORIGIN", "-o", out]
             b.run(cmd, bdir, what, out)
@@ -807,7 +829,7 @@ def build_shlibs_native(b, bdir, compile_one, flavor, libdir):
             out = "shlib/lib%s.so" % name
             cmd += ["-Wl,-Bsymbolic", "-Wl,-soname,lib%s.so" % name]
             cmd += ["-Wl,-rpath,$ORIGIN"]
-            cmd += args.native_ldflags_words + ["-o", out]
+            cmd += args.native_ldflags_words + args.rtlib_words + ["-o", out]
             b.run(cmd, bdir, what, out)
             return out
         dll = "%s/%s.dll" % (outdir, name)
@@ -901,7 +923,9 @@ def build_native(b, bdir):
         # no libgcc; -lc is the sysroot's libc.so script.
         cmd = e7h_driver(args) + ["-nostartfiles", "-nodefaultlibs"]
         cmd += [os.path.join(libdir, n) for n in ("crt1.o", "crti.o")]
-        cmd += [*objects, *lib_args, *shlibs, *args.native_lib_words, "-lm", "-lc"]
+        cmd += [*objects, *lib_args, *shlibs, *args.native_lib_words, "-lm"]
+        # The native compiler-rt builtins (plan 5.17.3, M25), before -lc.
+        cmd += [*args.rtlib_words, "-lc"]
         cmd += [os.path.join(libdir, "crtn.o"), "-Wl,-rpath,$ORIGIN", "-o", out]
         b.run(cmd, bdir, "the E7h link", out)
     elif flavor == "e7":
@@ -920,6 +944,7 @@ def build_native(b, bdir):
     else:
         cmd = [*clang, "--target=" + native, "-fuse-ld=lld", *objects, *lib_args]
         cmd += shlibs + args.native_lib_words + args.native_ldflags_words
+        cmd += args.rtlib_words
         if shlibs and flavor == "linux":
             # The dynamic loader finds the libraries next to the program.
             cmd.append("-Wl,-rpath,$ORIGIN")
@@ -1013,6 +1038,11 @@ def parse_args(argv):
         "options, the DLL C runtime for MSVC triples",
     )
     p.add_argument("--glibc-sysroot", help="E7h: make-glibc-sysroot.sh's directory")
+    p.add_argument(
+        "--linux-rtlib",
+        help="hosted Linux oracle: the native compiler-rt builtins archive, "
+        "linked after -lm and before -lc (%%{msil_linux_rtlib})",
+    )
     p.add_argument(
         "--expected-rule",
         default="",
@@ -1156,6 +1186,19 @@ def check_args(args):
                 % (args.glibc_sysroot, ", ".join(lacking))
             )
         args.glibc_sysroot = os.path.abspath(args.glibc_sysroot)
+    # --linux-rtlib (plan 5.17.3, M25): the hosted native oracle of a Linux
+    # triple links it (E7h, or the driver recipe of a Linux host); every
+    # other build ignores it.
+    args.rtlib_words = []
+    if (
+        args.linux_rtlib
+        and args.mode == "native"
+        and args.hosted
+        and (args.e7h or triple_os(args.native) == "linux")
+    ):
+        if not os.path.isfile(args.linux_rtlib):
+            raise UsageError("--linux-rtlib %s: no such file" % args.linux_rtlib)
+        args.rtlib_words = [os.path.abspath(args.linux_rtlib)]
     if not args.srcs:
         raise UsageError("no --src")
     args.clang_cmd = program(args.clang, "--clang")

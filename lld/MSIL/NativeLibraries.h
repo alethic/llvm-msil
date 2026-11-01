@@ -163,10 +163,12 @@ bool isNativeCallbackFunction(StringRef name);
 // RuntimeLibcalls set of the codegen triple, other than N2's names and the C
 // library's own entry points that the set also lists (__memcpy_chk,
 // __stack_chk_fail, ...; NativeLibraries.cpp lists them), which keep binding
-// natively. The driver computes the set once per link
-// (getCompilerRuntimeNames, ctx.compilerRuntimeNames). Objects and archive
-// members (the helper archive clang_rt.builtins) define these names; native
-// libraries never do.
+// natively; and clang's complex helpers, which CodeGen calls by name and the
+// set lacks: __mulhc3, __mulsc3, __muldc3, __mulxc3, __multc3, __divhc3,
+// __divsc3, __divdc3, __divxc3 and __divtc3. The driver computes the set once
+// per link (getCompilerRuntimeNames, ctx.compilerRuntimeNames). Objects and
+// archive members (the helper archive clang_rt.builtins) define these names;
+// native libraries never do.
 bool isCompilerRuntimeName(StringRef name, const Ctx &ctx);
 
 // N2, an atomic library name: "__atomic_*", libatomic's interface (its sized
@@ -211,12 +213,15 @@ getCompilerRuntimeNames(ArrayRef<const char *> runtimeLibcalls);
 // The line of plan 5.14.2 that the report of the undefined symbol \p name
 // adds after its first line, before the ">>> referenced by" lines, with its
 // leading newline: for an N1 name "\n>>> a compiler runtime helper: link the
-// toolchain's helper archive clang_rt.builtins", for an N2 name "\n>>> an
-// atomic operation: link with -latomic, as a native build does" (Linux) or
-// "\n>>> an atomic operation (libatomic's interface)" (Windows), and for an
-// N3 name "\n>>> a toolchain helper: link the toolchain's helper archive
-// clang_rt.builtins; if it is linked, the object needs a newer toolchain".
-// Empty for any other name.
+// toolchain's helper archive clang_rt.builtins", or, while an input archive
+// named clang_rt.builtins.lib or libclang_rt.builtins.a (plan 5.14.3 A1)
+// takes part in the link, "\n>>> a compiler runtime helper that the
+// toolchain's helper archive clang_rt.builtins does not define"; for an N2
+// name "\n>>> an atomic operation: link with -latomic, as a native build
+// does" (Linux) or "\n>>> an atomic operation (libatomic's interface)"
+// (Windows); and for an N3 name "\n>>> a toolchain helper: link the
+// toolchain's helper archive clang_rt.builtins; if it is linked, the object
+// needs a newer toolchain". Empty for any other name.
 std::string getNameClassLine(StringRef name, const Ctx &ctx);
 
 // N4's error for \p file, an input that refers to the setjmp-family name
@@ -264,7 +269,9 @@ bool findDataImportFunctions(const llvm::Triple &tt, const NativeIndex &index,
 // f64xaddf128, __strtof128_internal). MSIL triples map `long double` to
 // `double` (decision D3), so where the native `long double` is wider
 // (hasWideNativeLongDouble) a P/Invoke cannot pass such a value (plan
-// 5.10.10, 5.10.14).
+// 5.10.10, 5.10.14): the helper archive forwards the functions that have a
+// `double` counterpart, and a native binding of any listed name is
+// getLongDoubleRejectionText's error.
 bool isNativeLongDoubleFunction(StringRef name);
 
 // Returns true if the native `long double` of the codegen triple \p tt is
@@ -272,6 +279,20 @@ bool isNativeLongDoubleFunction(StringRef name);
 // aarch64 Linux (gnu, musl) and x86_64 windows-gnu. windows-msvc and aarch64
 // windows-gnu use double.
 bool hasWideNativeLongDouble(const llvm::Triple &tt);
+
+// The 5.10.14 text for a native binding of \p name, a native `long double`
+// function (isNativeLongDoubleFunction), to the native module \p module on a
+// triple of hasWideNativeLongDouble: "native function '<name>' (<module>)
+// takes or returns a native 'long double', which is not supported for MSIL;
+// the helper archive clang_rt.builtins forwards the 'long double' functions
+// that have a 'double' counterpart". Archive members resolve before native
+// libraries (plan 5.10.10), so such a binding happens only when no member
+// defines the name: the helper archive's msil_longdouble.c forwards each
+// listed function that has a `double` counterpart (plan 5.14.3 A4), and the
+// rest stay this error. The writer (CallBinder::checkNativeReferences) and
+// LTO's import annotation report it; an explicit import (plan 5.10.7) is
+// never checked, and windows-msvc binds the functions as any other.
+std::string getLongDoubleRejectionText(StringRef name, StringRef module);
 
 // The 5.10.14 text for the native library \p path of the object format that
 // the codegen triple \p tt does not read (plan 5.10.8): "<path>: ELF file

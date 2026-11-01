@@ -16,14 +16,16 @@
 ; and stored is the generic conversion followed by a 16-bit integer store
 ; (load-store.ll copies half and bfloat with stind.i2). The conversion is a
 ; compiler-rt call (__truncsfhf2, __truncdfhf2, __truncsfbf2, __truncdfbf2),
-; and a library call whose name starts with '__' is an error until phase 3
-; (decision D14), so each function gets exactly that one diagnostic, never a
-; 'Cannot select' of an unselectable truncating store or a crash; llc exits
-; with 1 and the IL on stdout still assembles. A half or bfloat parameter, by
-; contrast, is already its 16-bit pattern in an int32 (bfloat since M24,
-; fp-helpers F2 (a); until then a bfloat parameter was a float32, which was
-; stored through a frame slot), so storing one is the int32's truncating
-; store, stind.i2, with no conversion (stores.ll).
+; and a library call whose name starts with '__' is an error in whole-program
+; text (decision D14; since M25 "runtime helper '<name>' needs the helper
+; archive clang_rt.builtins, which only msil-ld links", 5.14.3 A9), so each
+; function gets exactly that one diagnostic, never a 'Cannot select' of an
+; unselectable truncating store or a crash; llc exits with 1 and the IL on
+; stdout still assembles. A half or bfloat parameter, by contrast, is already
+; its 16-bit pattern in an int32 (bfloat since M24, fp-helpers F2 (a); until
+; then a bfloat parameter was a float32, which was stored through a frame
+; slot), so storing one is the int32's truncating store, stind.i2, with no
+; conversion (stores.ll).
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not=conv.i8 \
 ; DEFINE:   --implicit-check-not=conv.u8 --implicit-check-not=stind.i8 --implicit-check-not=localloc
@@ -267,28 +269,28 @@ define void @store_bfloat_arg(ptr %p, bfloat %v) {
 ;--- half-trunc.ll
 source_filename = "trunc-stores-half.c"
 
-; ERR: error: {{.*}}in function fptrunc_f32_to_half void (ptr, float): runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
+; ERR: error: {{.*}}in function fptrunc_f32_to_half void (ptr, float): runtime helper '__truncsfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 define void @fptrunc_f32_to_half(ptr %p, float %v) {
   %t = fptrunc float %v to half
   store half %t, ptr %p
   ret void
 }
 
-; ERR: error: {{.*}}in function fptrunc_f64_to_half void (ptr, double): runtime helper '__truncdfhf2' is not available for MSIL yet (phase 3){{$}}
+; ERR: error: {{.*}}in function fptrunc_f64_to_half void (ptr, double): runtime helper '__truncdfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 define void @fptrunc_f64_to_half(ptr %p, double %v) {
   %t = fptrunc double %v to half
   store half %t, ptr %p
   ret void
 }
 
-; ERR: error: {{.*}}in function fptrunc_f32_to_bfloat void (ptr, float): runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
+; ERR: error: {{.*}}in function fptrunc_f32_to_bfloat void (ptr, float): runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 define void @fptrunc_f32_to_bfloat(ptr %p, float %v) {
   %t = fptrunc float %v to bfloat
   store bfloat %t, ptr %p
   ret void
 }
 
-; ERR: error: {{.*}}in function fptrunc_f64_to_bfloat void (ptr, double): runtime helper '__truncdfbf2' is not available for MSIL yet (phase 3){{$}}
+; ERR: error: {{.*}}in function fptrunc_f64_to_bfloat void (ptr, double): runtime helper '__truncdfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 define void @fptrunc_f64_to_bfloat(ptr %p, double %v) {
   %t = fptrunc double %v to bfloat
   store bfloat %t, ptr %p

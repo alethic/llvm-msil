@@ -1,5 +1,5 @@
-# build.ps1 - build what the MSIL tests need, then jitall: step 2 of the MSIL CI (Windows job)
-# and of msil/utils/run-m1-gate.ps1.
+# build.ps1 - build what the MSIL tests need, then the helper archives and jitall: step 2 of the
+# MSIL CI (Windows job) and of msil/utils/run-m1-gate.ps1.
 #
 # Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
@@ -14,7 +14,11 @@
 # with 'msil/utils/build/msil-build.ps1 -Standard' (exclusive build-dir lock, -j throttled when
 # RAM is low), on a GitHub runner and on the development host alike; it reads the file itself
 # only to fail early on a malformed one and to name the targets in its row.
-# jitall (msil/utils/jitall/build-jitall.py) is then compiled offline into
+# When ninja passes, msil/utils/build/build-builtins.py --build-dir <dir> builds the helper
+# archives clang_rt.builtins of the default MSIL triples into the build's resource directory
+# (plan 5.14.3 A2, A10; M25), as its own row 'builtins', so the CI jobs and run-m1-gate.ps1 link
+# against current archives; it rebuilds only an archive whose stamp differs, and a failure is
+# a failing row. jitall (msil/utils/jitall/build-jitall.py) is then compiled offline into
 # <build>/tools/msil/jitall; it does nothing when jitall.dll is up to date.
 # Long: on the development host start it with run_in_background and wait for it.
 [CmdletBinding()]
@@ -62,6 +66,14 @@ if ($problem) {
 }
 
 if ($rc -eq 0) {
+  # The helper archives (plan 5.14.3 A10): build-builtins.py takes the build directory's shared
+  # lock, which msil-build.ps1 released when it exited.
+  $sw.Restart()
+  & $MsilPython (Join-Path $MsilRepo 'msil/utils/build/build-builtins.py') --build-dir $BuildDir
+  $brc = $LASTEXITCODE
+  Add-MsilCiResult -Step build -Name builtins -Status $(if ($brc -eq 0) { 'PASS' } else { 'FAIL' }) `
+    -Seconds $sw.Elapsed.TotalSeconds -Detail "build-builtins.py (exit $brc)"
+
   $sw.Restart()
   & $MsilPython (Join-Path $MsilRepo 'msil/utils/jitall/build-jitall.py') --build-dir $BuildDir
   $jrc = $LASTEXITCODE

@@ -29,7 +29,24 @@
 # (8) the real file skips O3 of msil/test/M1/11-programs/crc32.c on
 #     x86_64-pc-windows-msvc-msil at -O2 only: not at -O0, and not on
 #     x86_64-unknown-linux-gnu-msil at -O2 (plan 5.9.9 rule 6; the two sides
-#     are equal there).
+#     are equal there);
+# (9) the real file skips O4 of msil/test/M3/03-helpers/complex-matrix.test
+#     on both default triples, and O4 of 03-helpers/powi.test on
+#     x86_64-unknown-linux-gnu-msil only, not on x86_64-pc-windows-msvc-msil,
+#     where powi calls the UCRT as native code does (M25: a program that
+#     calls a helper-archive function has no --lto-emit-asm text, plan 5.14.3
+#     A9, so each 03-helpers test that calls one has its own O4 line; plan
+#     section 12, 'M25.e (6), M25.i (4), ...'); it never skips O4 of
+#     03-helpers/bitint-abi.test, which calls no helper, on either triple, O3
+#     or O6 of a 03-helpers test (complex-matrix.test; every 03-helpers
+#     program is a %{msil_prog}, and O3 and O6 run only for %{msil_c} and
+#     %{msil_ll} under obj), or O3, O4 or O6 of a test in another
+#     msil/test/M3 directory (08-atomics, 10-hosted). O6 is msil-verify.py's
+#     (--equiv-skip <the real file> --test <path> --md-baseline): b.exe has a
+#     metadata message that its baseline a.exe lacks (a literal field without
+#     a constant, 0x80131B17 on Field 'D'::'w'; the images of
+#     o6-md-baseline.test), so O6 fails wherever it runs; it needs ILVerify
+#     and PEVerify (without PEVerify msil-verify.py skips O6 for every test).
 
 # RUN: rm -rf %t && split-file %s %t
 
@@ -104,6 +121,40 @@
 # RUN: %{harness_check} lacks %t/8b.log "skipped"
 # RUN: %{harness_check} lacks %t/8c.log "skipped"
 
+# (9)
+# RUN: %msil_equiv --oracle O4 --test %S/../../M3/03-helpers/complex-matrix.test --triple x86_64-unknown-linux-gnu-msil --level O0 %t/none-a %t/none-b > %t/9a.log
+# RUN: %{harness_check} contains %t/9a.log "\AO4 skipped: programs that call helper-archive functions have no -S or --lto-emit-asm text \(5\.14\.3 A9\)\n\Z"
+# RUN: %msil_equiv --oracle O4 --test %S/../../M3/03-helpers/complex-matrix.test --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/9b.log
+# RUN: %{harness_check} contains %t/9b.log "\AO4 skipped: programs that call helper-archive functions have no -S or --lto-emit-asm text \(5\.14\.3 A9\)\n\Z"
+# RUN: %{harness_check} exits 2 %msil_equiv --oracle O3 --test %S/../../M3/08-atomics/barrier-spin.test %t/none-a %t/none-b > %t/9c.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --oracle O4 --test %S/../../M3/10-hosted/errno.test --triple x86_64-unknown-linux-gnu-msil --level O0 %t/none-a %t/none-b > %t/9d.log 2>&1
+# RUN: %{harness_check} contains %t/9c.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/9d.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} lacks %t/9c.log "skipped"
+# RUN: %{harness_check} lacks %t/9d.log "skipped"
+# RUN: %if msil-ilverify && msil-peverify %{ %ilasm -exe -output=%t/a.exe %t/a.il %}
+# RUN: %if msil-ilverify && msil-peverify %{ %ilasm -exe -output=%t/b.exe %t/b.il %}
+# RUN: %if msil-ilverify && msil-peverify %{ %{harness_check} exits 1 %msil_verify --equiv-skip %S/../../../utils/equiv-allowed.txt --test %S/../../M3/03-helpers/complex-matrix.test --triple x86_64-pc-windows-msvc-msil --level O2 --md-baseline %t/a.exe %t/b.exe > %t/9e.log 2>&1 %}
+# RUN: %if msil-ilverify && msil-peverify %{ %{harness_check} contains %t/9e.log "^O6: peverify /md: \[MD\]\(0x80131B17\): .* \[Field 'D'::'w'\] \(not reported for the baseline a\.exe\)$" %}
+# RUN: %if msil-ilverify && msil-peverify %{ %{harness_check} lacks %t/9e.log "skipped" %}
+# RUN: %if msil-ilverify && msil-peverify %{ %{harness_check} exits 1 %msil_verify --equiv-skip %S/../../../utils/equiv-allowed.txt --test %S/../../M3/08-atomics/barrier-spin.test --triple x86_64-pc-windows-msvc-msil --level O2 --md-baseline %t/a.exe %t/b.exe > %t/9f.log 2>&1 %}
+# RUN: %if msil-ilverify && msil-peverify %{ %{harness_check} contains %t/9f.log "^O6: peverify /md: \[MD\]\(0x80131B17\): .* \[Field 'D'::'w'\] \(not reported for the baseline a\.exe\)$" %}
+# RUN: %if msil-ilverify && msil-peverify %{ %{harness_check} lacks %t/9f.log "skipped" %}
+# RUN: %msil_equiv --oracle O4 --test %S/../../M3/03-helpers/powi.test --triple x86_64-unknown-linux-gnu-msil --level O2 %t/none-a %t/none-b > %t/9g.log
+# RUN: %{harness_check} contains %t/9g.log "\AO4 skipped: programs that call helper-archive functions have no -S or --lto-emit-asm text \(5\.14\.3 A9\)\n\Z"
+# RUN: %{harness_check} exits 2 %msil_equiv --oracle O4 --test %S/../../M3/03-helpers/powi.test --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/9h.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --oracle O4 --test %S/../../M3/03-helpers/bitint-abi.test --triple x86_64-unknown-linux-gnu-msil --level O0 %t/none-a %t/none-b > %t/9i.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --oracle O4 --test %S/../../M3/03-helpers/bitint-abi.test --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/9j.log 2>&1
+# RUN: %{harness_check} exits 2 %msil_equiv --oracle O3 --test %S/../../M3/03-helpers/complex-matrix.test --triple x86_64-pc-windows-msvc-msil --level O2 %t/none-a %t/none-b > %t/9k.log 2>&1
+# RUN: %{harness_check} contains %t/9h.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/9i.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/9j.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} contains %t/9k.log "^msil-equiv: error: \S*none-a: no such file$"
+# RUN: %{harness_check} lacks %t/9h.log "skipped"
+# RUN: %{harness_check} lacks %t/9i.log "skipped"
+# RUN: %{harness_check} lacks %t/9j.log "skipped"
+# RUN: %{harness_check} lacks %t/9k.log "skipped"
+
 #--- o3.txt
 # This test's O3 comparison is skipped.
 skip O3 msil/test/harness/equiv/skip.test the reason of the O3 line
@@ -126,3 +177,38 @@ skip O3@x86_64-pc-windows-msvc:O2 msil/test/harness/equiv/skip.test a native tri
 skip O3@x86_64-pc-windows-msvc-msil:O4 msil/test/harness/equiv/skip.test an oracle where the level goes
 #--- bad-oracle.txt
 skip O5:O2 msil/test/harness/equiv/skip.test no such oracle
+#--- a.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly prog { }
+.module prog.exe
+.class public auto ansi sealed beforefieldinit C extends [mscorlib]System.Object
+{
+  .field public static literal int32 z
+  .method public static int32 main() cil managed
+  {
+    .entrypoint
+    .maxstack 1
+    ldc.i4.0
+    ret
+  }
+}
+#--- b.il
+.assembly extern mscorlib { .publickeytoken = (B7 7A 5C 56 19 34 E0 89 ) .ver 4:0:0:0 }
+.assembly prog { }
+.module prog.exe
+.class public auto ansi sealed beforefieldinit D extends [mscorlib]System.Object
+{
+  .field public static int32 v
+  .field public static literal int32 w
+}
+.class public auto ansi sealed beforefieldinit C extends [mscorlib]System.Object
+{
+  .field public static literal int32 z
+  .method public static int32 main() cil managed
+  {
+    .entrypoint
+    .maxstack 1
+    ldc.i4.0
+    ret
+  }
+}

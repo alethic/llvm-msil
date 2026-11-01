@@ -36,14 +36,20 @@
 /// argument too.
 ///
 /// A library call, which SelectionDAG makes for an operation that it cannot
-/// expand inline, names its callee by an external symbol. There is no runtime
-/// library yet, so LowerCall applies a library-call policy to it: a call of a
+/// expand inline, names its callee by an external symbol. Text output links
+/// nothing, so LowerCall applies a library-call policy to it: a call of a
 /// function of this module, a P/Invoke, or an error. In a standalone module
 /// ('clang -S', llc) the P/Invokes are those of the standalone import table
 /// (decision D14, frozen); in msil-ld's linked text (MSIL::isLinkedModule)
 /// they are the natively bound functions that msil-ld annotated
-/// (MSIL::getLinkedImport, plan 5.10.13). In object mode
-/// (MSILTargetMachine::isObjectMode(), plan 5.8.10, 5.10.13) there is no
+/// (MSIL::getLinkedImport, plan 5.10.13). A runtime helper (a '__' name:
+/// compiler-rt's, which the helper archive clang_rt.builtins defines, or an
+/// __atomic_* function) is neither, and its error says that only msil-ld
+/// links it (plan 5.14.3 A9, MSIL::getRuntimeHelperText); for a helper of
+/// compiler-rt's ti (__int128) mode (__floattidf, __divti3, ...), which no
+/// archive defines (plan 5.14.3 A5), it says that the helper is not
+/// supported for MSIL, as ReplaceNodeResults does for an i128 node. In object
+/// mode (MSILTargetMachine::isObjectMode(), plan 5.8.10, 5.10.13) there is no
 /// policy: a library call, a compiler-rt helper included, is a direct call
 /// of the symbol, which msil-ld resolves.
 ///
@@ -70,6 +76,7 @@
 
 #include "MCTargetDesc/MSILMCTargetDesc.h"
 #include "MCTargetDesc/MSILMCTypeUtilities.h"
+#include "MSILAsmPrinter.h"
 #include "MSILISelLowering.h"
 #include "MSILMachineFunctionInfo.h"
 #include "MSILSelectionDAGInfo.h"
@@ -309,10 +316,10 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
       static_cast<const MSILTargetMachine &>(DAG.getTarget()).isObjectMode();
 
   // SelectionDAG calls a library function, named by an external symbol, for
-  // an operation that it cannot expand inline (sqrt, fmin, an i128 to
-  // floating-point conversion, ...). There is no runtime library yet, so the
-  // library-call policy applies: the standalone import table (decision D14),
-  // or in linked text msil-ld's annotations.
+  // an operation that it cannot expand inline (sqrt, fmin, an f16
+  // conversion, ...). Text output links nothing, so the library-call policy
+  // applies: the standalone import table (decision D14), or in linked text
+  // msil-ld's annotations.
   if (const auto *ES = dyn_cast<ExternalSymbolSDNode>(Callee)) {
     StringRef Name = ES->getSymbol();
     auto Mismatch = [&]() {
@@ -364,13 +371,13 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
       // msil-ld's linked text: the module and entry come from the
       // declaration's "msil-import-*" attributes, else from !msil.imports
       // (MSIL::getLinkedImport); the standalone import table is never
-      // consulted. The compiler-rt helpers wait for the phase-3 runtime
-      // library even when !msil.imports lists one; an explicit import of the
-      // declaration is used unchecked (plan 5.10.7), as in a standalone
-      // module.
+      // consulted. A runtime helper is not a native function even when
+      // !msil.imports lists one: --lto-emit-asm text links no helper archive
+      // (plan 5.14.3 A9), and no archive has the __int128 ones (A5;
+      // MSIL::getRuntimeHelperText). An explicit import of the declaration is
+      // used unchecked (plan 5.10.7), as in a standalone module.
       if (Name.starts_with("__") && !MSIL::hasImportModule(Named))
-        return RejectLinked(Twine("runtime helper '") + Name +
-                            "' is not available for MSIL yet (phase 3)");
+        return RejectLinked(MSIL::getRuntimeHelperText(Name));
       if (!MSIL::getLinkedImport(M, Name, Named))
         return RejectLinked(Twine("library call '") + Name +
                             "' was not resolved by msil-ld");
@@ -386,13 +393,14 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
     } else {
       // A standalone module: it must be a Phase-1 import of the standalone
       // import table (decision D14, frozen): puts, putchar, the C math
-      // library, or a declaration with "msil-import-module". The compiler-rt
-      // helpers (__divti3, __mulsc3, __extendhfsf2, __atomic_*, ...) wait for
-      // the phase-3 runtime library.
+      // library, or a declaration with "msil-import-module". The runtime
+      // helpers (__extendhfsf2, __truncsfbf2, __powidf2, __atomic_*, ...)
+      // are not, and only msil-ld links them (plan 5.14.3 A9), except the
+      // __int128 ones (__floattidf, __divti3, ...), which no archive has
+      // (A5): MSIL::getRuntimeHelperText says that they are not supported.
       if (!MSIL::getPInvokeModule(TT, Name, Named)) {
         if (Name.starts_with("__"))
-          return Reject(Twine("runtime helper '") + Name +
-                        "' is not available for MSIL yet (phase 3)");
+          return Reject(MSIL::getRuntimeHelperText(Name));
         return Reject(Twine("library call '") + Name +
                       "' is not a Phase-1 import");
       }

@@ -16,9 +16,10 @@
 ;   windows-msvc.)
 ; - half (f16) values are promoted, and the conversions between half and
 ;   float32 or float64 are the compiler-rt calls __extendhfsf2, __truncsfhf2
-;   and __truncdfhf2, which stay errors until phase 3 (D14): LowerCall reports
-;   "runtime helper '<name>' is not available for MSIL yet (phase 3)" and
-;   builds no call (f16 is unsupported in Phase 1).
+;   and __truncdfhf2, which are errors in whole-program text (D14): since M25
+;   LowerCall reports "runtime helper '<name>' needs the helper archive
+;   clang_rt.builtins, which only msil-ld links" (5.14.3 A9; only msil-ld
+;   links the archive that defines them) and builds no call.
 ; - Library functions with more than one result return the extra results
 ;   through memory, a frame temporary since M7: frexp and modf are imports and
 ;   are called with the address of the temporary ('frexp'(float64, native
@@ -120,7 +121,7 @@
 ; DEFINE: %{nameban} = FileCheck %s --input-file=%t/names.err --check-prefix=NAMEBAN \
 ; DEFINE:   --implicit-check-not="call '?'" --implicit-check-not=warning: \
 ; DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
-; NAMEBAN: {{^}}error: {{.*}}: runtime helper '{{[_a-z0-9]+}}' is not available for MSIL yet (phase 3){{$}}
+; NAMEBAN: {{^}}error: {{.*}}: runtime helper '{{[_a-z0-9]+}}' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 ; RUN: split-file %s %t
 
 ; Math library functions, float32 and float64.
@@ -1069,11 +1070,11 @@ declare double @llvm.trunc.f64(double)
 ; diagnostic, and the half conversion it names is matched by a pattern.
 source_filename = "fp-expand-f16.c"
 
-; F16-DAG: error: {{.*}}in function f16_round_trip {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not available for MSIL yet (phase 3)
-; F16-DAG: error: {{.*}}in function f16_add {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not available for MSIL yet (phase 3)
-; F16-DAG: error: {{.*}}in function f16_from_f64 {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not available for MSIL yet (phase 3)
-; F16-DAG: error: {{.*}}in function f16_mul_args {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not available for MSIL yet (phase 3)
-; F16-DAG: error: {{.*}}in function f16_compare {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' is not available for MSIL yet (phase 3)
+; F16-DAG: error: {{.*}}in function f16_round_trip {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' needs the helper archive clang_rt.builtins, which only msil-ld links
+; F16-DAG: error: {{.*}}in function f16_add {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' needs the helper archive clang_rt.builtins, which only msil-ld links
+; F16-DAG: error: {{.*}}in function f16_from_f64 {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' needs the helper archive clang_rt.builtins, which only msil-ld links
+; F16-DAG: error: {{.*}}in function f16_mul_args {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' needs the helper archive clang_rt.builtins, which only msil-ld links
+; F16-DAG: error: {{.*}}in function f16_compare {{.*}}: runtime helper '{{__(extendhf[sd]f|trunc[sd]fhf)2}}' needs the helper archive clang_rt.builtins, which only msil-ld links
 ; F16-NOT: error: {{.*}}in function after_f16
 ; F16-NOT: LLVM ERROR
 ; F16-NOT: PLEASE submit
@@ -1270,8 +1271,8 @@ declare { float, float } @llvm.modf.f32(float)
 ; __extendhfsf2 that the expansion starts with, which is named in the error.
 source_filename = "fp-expand-i128.c"
 
-; I128:     error: {{.*}}in function fptosi_f16_i128 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
-; I128:     error: {{.*}}in function fptoui_f16_i128 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+; I128:     error: {{.*}}in function fptosi_f16_i128 {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; I128:     error: {{.*}}in function fptoui_f16_i128 {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links
 
 ; I128-IL-LABEL: .method {{.*}}'use128'(
 ; I128-IL-SAME:  native int, native int) cil managed{{$}}
@@ -1377,8 +1378,8 @@ define i64 @after_i128(i32 %a) {
 ; conversions' errors (half only), and the plain expansions elsewhere.
 source_filename = "fp-expand-i128-strict.c"
 
-; I128S:    error: {{.*}}in function fptosi_f16_i128_strict {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
-; I128S:    error: {{.*}}in function fptoui_f16_i128_strict {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+; I128S:    error: {{.*}}in function fptosi_f16_i128_strict {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; I128S:    error: {{.*}}in function fptoui_f16_i128_strict {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links
 
 ; I128S-IL-LABEL: .method {{.*}}'use128'(
 ; I128S-IL-SAME:  native int, native int) cil managed{{$}}
@@ -1563,12 +1564,12 @@ source_filename = "fp-expand-rounding.c"
 
 ; ROUND: error: {{.*}}in function set_rounding {{.*}}: changing the floating-point rounding mode is not supported for MSIL{{$}}
 ; ROUND: error: {{.*}}in function fptrunc_round_upward {{.*}}: changing the floating-point rounding mode is not supported for MSIL{{$}}
-; ROUND: error: {{.*}}in function fptrunc_round_f16_tonearest {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
-; ROUND: error: {{.*}}in function fptrunc_round_bf16_tonearest {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
+; ROUND: error: {{.*}}in function fptrunc_round_f16_tonearest {{.*}}: runtime helper '__truncsfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
+; ROUND: error: {{.*}}in function fptrunc_round_bf16_tonearest {{.*}}: runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 ; ROUND: error: {{.*}}in function fptrunc_round_v2f32_upward {{.*}}: changing the floating-point rounding mode is not supported for MSIL{{$}}
 ; One call per element.
-; ROUND: error: {{.*}}in function fptrunc_round_v2f16_tonearest {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
-; ROUND: error: {{.*}}in function fptrunc_round_v2f16_tonearest {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
+; ROUND: error: {{.*}}in function fptrunc_round_v2f16_tonearest {{.*}}: runtime helper '__truncsfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
+; ROUND: error: {{.*}}in function fptrunc_round_v2f16_tonearest {{.*}}: runtime helper '__truncsfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 
 ; ROUND-IL-LABEL: .method {{.*}}'fptrunc_round_tonearest'(
 ; ROUND-IL-SAME:  float64) cil managed{{$}}
@@ -1696,9 +1697,9 @@ declare i32 @llvm.get.rounding()
 ; __truncsfbf2.
 source_filename = "fp-expand-bf16.c"
 
-; BF16-DAG: error: {{.*}}in function bf16_trunc_f32 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
-; BF16-DAG: error: {{.*}}in function bf16_trunc_f64 {{.*}}: runtime helper '__truncdfbf2' is not available for MSIL yet (phase 3)
-; BF16-DAG: error: {{.*}}in function bf16_add {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
+; BF16-DAG: error: {{.*}}in function bf16_trunc_f32 {{.*}}: runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; BF16-DAG: error: {{.*}}in function bf16_trunc_f64 {{.*}}: runtime helper '__truncdfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; BF16-DAG: error: {{.*}}in function bf16_add {{.*}}: runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links
 ; BF16-NOT: error: {{.*}}in function after_bf16
 ; BF16-NOT: LLVM ERROR
 ; BF16-NOT: PLEASE submit
@@ -1778,19 +1779,19 @@ define float @after_bf16(float %a, float %b) {
 ; nothing, and the bfloat fadd names __truncsfbf2.
 source_filename = "fp-expand-strict16.c"
 
-; STRICT16-DAG: error: {{.*}}in function strict_fpext_f16_f32 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fpext_f16_f64 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f32_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f64_f16 {{.*}}: runtime helper '__truncdfhf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f32_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f64_bf16 {{.*}}: runtime helper '__truncdfbf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fadd_f16 {{.*}}: runtime helper '{{__extendhfsf2|__truncsfhf2}}' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fadd_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fcmp_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fcmps_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_sitofp_i32_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_sitofp_i32_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3)
-; STRICT16-DAG: error: {{.*}}in function strict_fptosi_f16_i32 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3)
+; STRICT16-DAG: error: {{.*}}in function strict_fpext_f16_f32 {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_fpext_f16_f64 {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f32_f16 {{.*}}: runtime helper '__truncsfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f64_f16 {{.*}}: runtime helper '__truncdfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f32_bf16 {{.*}}: runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_fptrunc_f64_bf16 {{.*}}: runtime helper '__truncdfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_fadd_f16 {{.*}}: runtime helper '{{__extendhfsf2|__truncsfhf2}}' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_fadd_bf16 {{.*}}: runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_fcmp_f16 {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_fcmps_f16 {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_sitofp_i32_f16 {{.*}}: runtime helper '__truncsfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_sitofp_i32_bf16 {{.*}}: runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links
+; STRICT16-DAG: error: {{.*}}in function strict_fptosi_f16_i32 {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links
 ; STRICT16-NOT: error: {{.*}}in function after_strict16
 ; STRICT16-NOT: LLVM ERROR
 ; STRICT16-NOT: PLEASE submit

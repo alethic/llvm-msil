@@ -10,6 +10,12 @@
 // checked parts of the link lines do not depend on that. The driver never
 // passes --lto-emit-asm and never runs ilasm (5.9.13). msil-ld is matched as
 // '"<dir>msil-ld[.exe]"': no msil-ld binary, SDK or sysroot is needed.
+// The driver names the helper archive clang_rt.builtins of the resource
+// directory after the default libraries when the file exists (5.14.3 A1; the
+// archive block below), so every check that pins "-o" right after the default
+// libraries passes -resource-dir=%t/empty-res, a resource directory without
+// archives, as msil-header-search.c does: the checks do not depend on whether
+// the build has made the archives (build-builtins.py).
 
 // RUN: rm -rf %t && split-file %s %t
 
@@ -20,7 +26,7 @@
 // DEFINE:   --implicit-check-not='{{crt[0-9a-zA-Z]*\.o}}' --implicit-check-not='"-pie"' \
 // DEFINE:   --implicit-check-not='{{^ "}}'
 
-// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil \
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -resource-dir=%t/empty-res \
 // RUN:   --sysroot=%S/Inputs/debian_multiarch_tree %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=LNX --implicit-check-not=crt1.o --implicit-check-not=crti.o \
 // RUN:     --implicit-check-not=crtbegin --implicit-check-not=crtn.o --implicit-check-not=-dynamic-linker \
@@ -36,13 +42,13 @@
 
 // musl keeps libm in libc. --ucrtbase-imports belongs to windows-msvc only
 // (msil-ld rejects it on non-Windows targets, 5.9.3).
-// RUN: %clang -### --target=x86_64-unknown-linux-musl-msil %s 2>&1 \
+// RUN: %clang -### --target=x86_64-unknown-linux-musl-msil -resource-dir=%t/empty-res %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=MUSL --implicit-check-not=-lm --implicit-check-not=error: \
 // RUN:     --implicit-check-not=--ucrtbase-imports %s
 // MUSL: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-musl-msil"
 // MUSL-SAME: "-lc" "-o" "a.exe"
 
-// RUN: %clang -### --target=aarch64-unknown-linux-gnu-msil %s 2>&1 \
+// RUN: %clang -### --target=aarch64-unknown-linux-gnu-msil -resource-dir=%t/empty-res %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=A64 --implicit-check-not=error: \
 // RUN:     --implicit-check-not=--ucrtbase-imports %s
 // A64: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=aarch64-unknown-linux-gnu-msil"
@@ -57,11 +63,13 @@
 // ucrtbase.dll. The target triple has no MSVC version. No 'LTO requires
 // -fuse-ld=lld' (err_drv_lto_without_lld), no link.exe, no /DEFAULTLIB, never
 // msvcrt.lib, libcmt.lib or vcruntime.lib.
-// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -Xmicrosoft-windows-sys-root %t %s 2>&1 \
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -Xmicrosoft-windows-sys-root %t \
+// RUN:   -resource-dir=%t/empty-res %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=WIN --implicit-check-not=link.exe --implicit-check-not=lld-link \
 // RUN:     --implicit-check-not=-defaultlib --implicit-check-not=-lmsvcrt --implicit-check-not=-llibcmt \
 // RUN:     --implicit-check-not=-lvcruntime --implicit-check-not=error: %s
-// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -flto -Xmicrosoft-windows-sys-root %t %s 2>&1 \
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -flto -Xmicrosoft-windows-sys-root %t \
+// RUN:   -resource-dir=%t/empty-res %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=WIN --implicit-check-not=link.exe --implicit-check-not=lld-link \
 // RUN:     --implicit-check-not=error: %s
 // WIN: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-pc-windows-msvc-msil"
@@ -73,7 +81,7 @@
 // With LIB set and no /winsysroot-style option, its entries are the library
 // directories.
 // RUN: mkdir -p %t/libenv
-// RUN: env LIB=%t/libenv %clang -### --target=x86_64-pc-windows-msvc-msil %s 2>&1 \
+// RUN: env LIB=%t/libenv %clang -### --target=x86_64-pc-windows-msvc-msil -resource-dir=%t/empty-res %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=WIN-LIB --implicit-check-not=error: %s
 // WIN-LIB: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-pc-windows-msvc-msil"
 // WIN-LIB-SAME: "-L{{[^"]*}}libenv"
@@ -83,14 +91,15 @@
 // vcruntime import library binds memcpy and the like before
 // --ucrtbase-imports does (5.10.4), and --ucrtbase-imports appears once.
 // RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -Xmicrosoft-windows-sys-root %t %s \
-// RUN:   -lvcruntime 2>&1 | FileCheck --check-prefix=WIN-USER --implicit-check-not=error: %s
+// RUN:   -resource-dir=%t/empty-res -lvcruntime 2>&1 | FileCheck --check-prefix=WIN-USER --implicit-check-not=error: %s
 // WIN-USER: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-pc-windows-msvc-msil"
 // WIN-USER-SAME: "-lvcruntime" "-lucrt" "-lkernel32" "-loldnames" "--ucrtbase-imports" "-o" "a.exe"
 // WIN-USER-NOT: --ucrtbase-imports
 
 // clang-cl: /Fe names the output, inputs compile to CIL object '.obj' files
 // (M20; M14-M19 wrote bitcode).
-// RUN: %clang_cl -### --target=x86_64-pc-windows-msvc-msil /winsysroot %t /Fe:prog.exe -- %s 2>&1 \
+// RUN: %clang_cl -### --target=x86_64-pc-windows-msvc-msil /winsysroot %t -resource-dir=%t/empty-res \
+// RUN:   /Fe:prog.exe -- %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=CL --implicit-check-not=link.exe --implicit-check-not=error: \
 // RUN:     --implicit-check-not=-emit-llvm-bc --implicit-check-not=-flto= %s
 // CL: "-cc1" "-triple" "x86_64-pc-windows-msvc{{[0-9.]*}}-msil"
@@ -102,16 +111,16 @@
 // MinGW: msvcrt and the system libraries native MinGW programs get; a C
 // runtime the user names (-lucrt, -lmsvcr*, -lcrtdll) replaces msvcrt in
 // place (MinGW.cpp's rule).
-// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil %s 2>&1 \
+// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil -resource-dir=%t/empty-res %s 2>&1 \
 // RUN:   | FileCheck --check-prefix=MINGW --implicit-check-not=crt2.o --implicit-check-not=-lmingw32 \
 // RUN:     --implicit-check-not=-lgcc --implicit-check-not=-lmingwex --implicit-check-not=error: \
 // RUN:     --implicit-check-not=--ucrtbase-imports %s
 // MINGW: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-w64-windows-gnu-msil"
 // MINGW-SAME: "-lmsvcrt" "-ladvapi32" "-lshell32" "-luser32" "-lkernel32" "-o" "a.exe"
-// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil %s -lucrt 2>&1 \
+// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil -resource-dir=%t/empty-res %s -lucrt 2>&1 \
 // RUN:   | FileCheck --check-prefix=MINGW-UCRT --implicit-check-not=-lmsvcrt %s
 // MINGW-UCRT: "-lucrt" "-ladvapi32" "-lshell32" "-luser32" "-lkernel32" "-o" "a.exe"
-// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil %s -lmsvcr120 2>&1 \
+// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil -resource-dir=%t/empty-res %s -lmsvcr120 2>&1 \
 // RUN:   | FileCheck --check-prefix=MINGW-MSVCR --implicit-check-not=-lmsvcrt %s
 // MINGW-MSVCR: "-lmsvcr120" "-ladvapi32" "-lshell32" "-luser32" "-lkernel32" "-o" "a.exe"
 
@@ -179,6 +188,36 @@
 // MINGW-NOLIBC-PTHREAD-SAME: "{{[^"]*}}b.o" "-lpthread"
 // MINGW-NOLIBC-PTHREAD-SAME: "-o" "a.exe"
 
+// The helper archive (5.14.3 A1): the file that -print-libgcc-file-name
+// names in the resource directory, clang_rt.builtins.lib on windows-msvc and
+// libclang_rt.builtins.a elsewhere, comes after the default libraries, right
+// before "-o", when it exists (msil-header-search.c checks linux-gnu);
+// -nostdlib and -nodefaultlibs drop it with them, -nolibc keeps it.
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -Xmicrosoft-windows-sys-root %t -resource-dir=%t/res \
+// RUN:   %s 2>&1 | FileCheck --check-prefix=RT-WIN --implicit-check-not=error: %s
+// RT-WIN: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-pc-windows-msvc-msil"
+// RT-WIN-SAME: "-lucrt" "-lkernel32" "-loldnames" "--ucrtbase-imports" "{{[^"]*}}res{{/|\\\\}}lib{{/|\\\\}}x86_64-pc-windows-msvc-msil{{/|\\\\}}clang_rt.builtins.lib" "-o" "a.exe"
+// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil -resource-dir=%t/res %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=RT-MINGW --implicit-check-not=error: %s
+// RT-MINGW: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-w64-windows-gnu-msil"
+// RT-MINGW-SAME: "-lmsvcrt" "-ladvapi32" "-lshell32" "-luser32" "-lkernel32" "{{[^"]*}}res{{/|\\\\}}lib{{/|\\\\}}x86_64-w64-windows-gnu-msil{{/|\\\\}}libclang_rt.builtins.a" "-o" "a.exe"
+// RUN: %clang -### --target=x86_64-unknown-linux-musl-msil -resource-dir=%t/res %s 2>&1 \
+// RUN:   | FileCheck --check-prefix=RT-MUSL --implicit-check-not=error: %s
+// RT-MUSL: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-musl-msil"
+// RT-MUSL-SAME: "-lc" "{{[^"]*}}res{{/|\\\\}}lib{{/|\\\\}}x86_64-unknown-linux-musl-msil{{/|\\\\}}libclang_rt.builtins.a" "-o" "a.exe"
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -resource-dir=%t/res %t/b.o -nolibc 2>&1 \
+// RUN:   | FileCheck --check-prefix=RT-NOLIBC %{nolibc} --implicit-check-not=-lc --implicit-check-not=-lm %s
+// RT-NOLIBC: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-gnu-msil"
+// RT-NOLIBC-SAME: "{{[^"]*}}b.o" "{{[^"]*}}res{{/|\\\\}}lib{{/|\\\\}}x86_64-unknown-linux-gnu-msil{{/|\\\\}}libclang_rt.builtins.a" "-o" "a.exe"
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -resource-dir=%t/res -nostdlib %s -o p.exe 2>&1 \
+// RUN:   | FileCheck --check-prefix=NOSTD --implicit-check-not=clang_rt --implicit-check-not=-lc %s
+// RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -resource-dir=%t/res -nodefaultlibs %s -o p.exe 2>&1 \
+// RUN:   | FileCheck --check-prefix=NOSTD --implicit-check-not=clang_rt --implicit-check-not=-lc %s
+// RUN: %clang -### --target=x86_64-pc-windows-msvc-msil -resource-dir=%t/res -nodefaultlibs %s -o p.exe 2>&1 \
+// RUN:   | FileCheck --check-prefix=NOSTD --implicit-check-not=clang_rt --implicit-check-not=-lucrt %s
+// RUN: %clang -### --target=x86_64-w64-windows-gnu-msil -resource-dir=%t/res -nostdlib %s -o p.exe 2>&1 \
+// RUN:   | FileCheck --check-prefix=NOSTD --implicit-check-not=clang_rt --implicit-check-not=-lmsvcrt %s
+
 // The output name is used as given, without an extension added.
 // RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil %s -o prog 2>&1 \
 // RUN:   | FileCheck --check-prefix=NOEXT %s
@@ -198,7 +237,7 @@
 // SHARED-DEFAULT-SAME: "-o" "a.exe"
 // RUN: %clang -### --target=x86_64-unknown-linux-gnu-msil -shared %s %t/b.o %t/lib.dll \
 // RUN:   -L%t -lfoo -Wl,--export-class=Contoso.Zlib.Native -Wl,--reference=%t/refs -e start -u sym \
-// RUN:   -o zlib.dll 2>&1 | FileCheck --check-prefix=SHARED --implicit-check-not=error: %s
+// RUN:   -resource-dir=%t/empty-res -o zlib.dll 2>&1 | FileCheck --check-prefix=SHARED --implicit-check-not=error: %s
 // SHARED: "{{[^"]*}}msil-ld{{(\.exe)?}}" "--target=x86_64-unknown-linux-gnu-msil" "--shared"
 // SHARED-SAME: "-L{{[^"]*}}" "-u" "sym"
 // SHARED-SAME: "{{[^"]*}}.o" "{{[^"]*}}b.o" "{{[^"]*}}lib.dll" "-lfoo"
@@ -330,6 +369,11 @@
 
 //--- lib.dll
 //--- b.o
+//--- empty-res/include/stddef.h
+//--- res/lib/x86_64-pc-windows-msvc-msil/clang_rt.builtins.lib
+//--- res/lib/x86_64-w64-windows-gnu-msil/libclang_rt.builtins.a
+//--- res/lib/x86_64-unknown-linux-musl-msil/libclang_rt.builtins.a
+//--- res/lib/x86_64-unknown-linux-gnu-msil/libclang_rt.builtins.a
 //--- VC/Tools/MSVC/27.1828.18284/include/vcruntime.h
 //--- Windows Kits/10/Include/10.0.19041.0/ucrt/stdio.h
 

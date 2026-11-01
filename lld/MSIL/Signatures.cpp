@@ -113,9 +113,11 @@ void CallBinder::checkNativeReferences() {
     }
     // The IR signature of a native `long double` function says double
     // (decision D3), but the native function takes or returns an x87 or
-    // binary128 value (plan 5.10.10).
-    if (!isExplicit && wideLongDouble && isListed(isNativeLongDoubleFunction))
-      notPassable = true;
+    // binary128 value (plan 5.10.10). Late binding reaches the native
+    // libraries only when no archive member defines the name: the helper
+    // archive forwards the functions that have a `double` counterpart.
+    bool longDouble =
+        !isExplicit && wideLongDouble && isListed(isNativeLongDoubleFunction);
 
     std::string prefix =
         ("native function '" + name + "' (" + e.Module + ") ").str();
@@ -126,6 +128,8 @@ void CallBinder::checkNativeReferences() {
     if (!isExplicit && isListed(isNativeCallbackFunction))
       msg = prefix + "takes a C function pointer; " +
             "passing C functions to native code is not supported for MSIL yet";
+    else if (longDouble)
+      msg = getLongDoubleRejectionText(name, e.Module);
     else if (variadic)
       msg = prefix + "is variadic; calls of native variadic functions are not "
                      "supported for MSIL yet (phase 3)";

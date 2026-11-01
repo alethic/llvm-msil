@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# build.sh - build what the MSIL tests need, then jitall: step 2 of the MSIL CI (Linux job).
+# build.sh - build what the MSIL tests need, then the helper archives and jitall: step 2 of the
+# MSIL CI (Linux job).
 #
 # Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 # See https://llvm.org/LICENSE.txt for license information.
@@ -11,7 +12,10 @@
 # (plan 5.6.11), which build.ps1 and 'msil-build.ps1 -Standard' build on Windows: from M13 the
 # M11 set, then lld and its copies, llvm-ar and its three copies, the binary tools, CLITests
 # and LLDAsLibAllTests. One target per line; '#' starts a comment that runs to the end of the
-# line, and blank lines are skipped. jitall (msil/utils/jitall/build-jitall.py) is then
+# line, and blank lines are skipped. When ninja passes, msil/utils/build/build-builtins.py
+# --build-dir BUILD_DIR builds the helper archives clang_rt.builtins of the default MSIL
+# triples into the build's resource directory (plan 5.14.3 A2, A10; M25) as its own failing
+# row 'builtins', as build.ps1 does, and jitall (msil/utils/jitall/build-jitall.py) is
 # compiled offline into <build>/tools/msil/jitall.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/ci-common.sh"
@@ -56,6 +60,13 @@ else
 fi
 
 if ((rc == 0)); then
+  start=$SECONDS
+  brc=0
+  python3 "$MSIL_REPO/msil/utils/build/build-builtins.py" --build-dir "$build" || brc=$?
+  status=PASS
+  ((brc == 0)) || status=FAIL
+  ci_result build builtins "$status" $((SECONDS - start)) "build-builtins.py (exit $brc)"
+
   start=$SECONDS
   jrc=0
   python3 "$MSIL_REPO/msil/utils/jitall/build-jitall.py" --build-dir "$build" || jrc=$?

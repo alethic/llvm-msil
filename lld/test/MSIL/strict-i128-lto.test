@@ -8,12 +8,11 @@
 ## link that writes an image and an --lto-emit-asm link therefore report
 ## nothing, and neither output names compiler-rt's __floattisf, __floattidf,
 ## __floatuntisf, __floatuntidf, __fixsfti, __fixdfti, __fixunssfti or
-## __fixunsdfti; until M24 each conversion was the backend's error
-##   runtime helper '<name>' is not available for MSIL yet (phase 3)
-## The bitcode holds the eight conversions as clang emits them under
-## '#pragma STDC FENV_ACCESS ON' (strictfp functions and calls, round.dynamic,
-## fpexcept.strict), each in a noinline function that main calls, for
-## x86_64-unknown-linux-gnu-msil, x86_64-pc-windows-msvc-msil and
+## __fixunsdfti; until M24 each conversion was the backend's error for a
+## runtime helper. The bitcode holds the eight conversions as clang emits
+## them under '#pragma STDC FENV_ACCESS ON' (strictfp functions and calls,
+## round.dynamic, fpexcept.strict), each in a noinline function that main
+## calls, for x86_64-unknown-linux-gnu-msil, x86_64-pc-windows-msvc-msil and
 ## aarch64-unknown-linux-gnu-msil. --save-temps shows that LTO's optimizer
 ## leaves all eight to code generation (<output>.0.5.precodegen.bc).
 

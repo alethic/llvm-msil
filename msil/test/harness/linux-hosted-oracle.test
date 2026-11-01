@@ -2,8 +2,12 @@
 # msil-prog.py --mode native --hosted with the E7 options compiles with
 # --target=x86_64-unknown-linux-gnu --sysroot=<glibc sysroot> and links
 # through the clang driver with -fuse-ld=lld -nostartfiles -nodefaultlibs:
-# the sysroot's crt1.o and crti.o, the objects, -lm -lc (the sysroot's libc.so
-# script) and crtn.o, with -Wl,-rpath,$ORIGIN (M24.j's hand-over). The result
+# the sysroot's crt1.o and crti.o, the objects, -lm, the native compiler-rt
+# builtins of msil_linux_rtlib (M25, plan 5.17.2: the nested lit gets this
+# configuration's archive, so the test needs msil-linux-rtlib; without one
+# a hosted directory under msil_native_oracle=required is a configuration
+# error, linux-rtlib.test), -lc (the sysroot's libc.so script) and crtn.o,
+# with -Wl,-rpath,$ORIGIN (M24.j's and M25.e's hand-overs). The result
 # is a PIE (ELF type ET_DYN, as recon E10 linked it) that needs libc.so.6 and
 # libm.so.6, and it runs under WSL through msil-run.py --native --runner wsl,
 # as a composite's native leg runs it. A nested lit with -a runs
@@ -19,12 +23,12 @@
 # ELF type, the needed libraries and the transcript from the nested log.
 # Windows host with WSL only (on a Linux host --hosted is the host clang's
 # ordinary link, which msil-ci.yml's Linux job runs).
-# REQUIRES: system-windows, msil-linux-oracle, msil-linux-hosted-oracle, msil-glibc-sysroot
+# REQUIRES: system-windows, msil-linux-oracle, msil-linux-hosted-oracle, msil-glibc-sysroot, msil-linux-rtlib
 
-# RUN: %{harness_lit} -a --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_runner=wsl --param msil_native_oracle=required --param msil_glibc_sysroot=%{msil_glibc_sysroot} %S/Inputs/nested-e7h > %t.log 2>&1
+# RUN: %{harness_lit} -a --param msil_triple=x86_64-unknown-linux-gnu-msil --param msil_runner=wsl --param msil_native_oracle=required --param msil_glibc_sysroot=%{msil_glibc_sysroot} --param msil_linux_rtlib=%{msil_linux_rtlib} %S/Inputs/nested-e7h > %t.log 2>&1
 # RUN: %{harness_check} contains %t.log "^PASS: MSIL :: harness/Inputs/nested-e7h/e7h\.test "
 # RUN: %{harness_check} contains %t.log "^# \| msil-prog: \S*clang\S* --target=x86_64-unknown-linux-gnu --sysroot=\S+ -std=gnu17 -Werror=return-type -I\S+ --sysroot=\S+ -O2 -c \S*nested-e7h\Worder\.c -o obj/order\.o$"
-# RUN: %{harness_check} contains %t.log "^# \| msil-prog: \S*clang\S* --target=x86_64-unknown-linux-gnu --sysroot=(\S+) -fuse-ld=lld -nostartfiles -nodefaultlibs \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrt1\.o \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrti\.o obj/order\.o -lm -lc \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrtn\.o -Wl,-rpath,[$]ORIGIN -o \S*e7h\.test\.tmp\.d\Wprog\.elf$"
+# RUN: %{harness_check} contains %t.log "^# \| msil-prog: \S*clang\S* --target=x86_64-unknown-linux-gnu --sysroot=(\S+) -fuse-ld=lld -nostartfiles -nodefaultlibs \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrt1\.o \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrti\.o obj/order\.o -lm \S*libclang_rt\.builtins-x86_64\.a -lc \1\Wusr\Wlib\Wx86_64-linux-gnu\Wcrtn\.o -Wl,-rpath,[$]ORIGIN -o \S*e7h\.test\.tmp\.d\Wprog\.elf$"
 # RUN: %{harness_check} contains %t.log "^# executed command: .*msil-run\.py'? .*--runner wsl .*--native --expect \S*nested-e7h\Worder'? --out \S*e7h\.test\.tmp\.out'? \S*e7h\.test\.tmp\.d\Wprog\.elf'?$"
 # RUN: %{harness_check} contains %t.log "^# \| thread ran\n# \| main returns\n# \| atexit handler 2\n# \| atexit handler 1\n# \| fini_array entry\n# \| \[exit 3\]$"
 # RUN: %{harness_check} contains %t.log "^# \|   Type: SharedObject \(0x3\)$" "^# \| NeededLibraries \[\n# \|   libc\.so\.6\n# \|   libm\.so\.6\n# \| \]$"

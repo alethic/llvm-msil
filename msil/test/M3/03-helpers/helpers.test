@@ -1,0 +1,315 @@
+# The helper archive's runtime helpers match native compiler-rt: C Annex G complex products and quotients, _Float16 arithmetic and rounding, __bf16, _Float16 <-> __int128, powi and __int128 __builtin_mul_overflow.
+# The cases of recon helpers-switches' crt/helpers.c (plan 5.14.3 A4, M25.h)
+# plus a few rounding and overflow cases, split into a translation unit of
+# noinline operations (ops.c, one operation each) and one that feeds them
+# volatile inputs and prints the results' bit patterns with puts (main.c),
+# so no case folds at compile time at any level or through LTO:
+# - complex: __muldc3 and __mulsc3 (a product's NaN recovery), __divdc3 and
+#   __divsc3 (every quotient), with infinite, NaN, zero and huge operands;
+# - _Float16: arithmetic (__extendhfsf2, __truncsfhf2), double -> _Float16
+#   with a subnormal result and float -> _Float16 on a tie that rounds to
+#   even (__truncdfhf2, __truncsfhf2), _Float16 <-> int and <-> __int128;
+#   the __int128 -> _Float16 inputs have at most 24 significant bits (exact
+#   in float, so a conversion through float rounds once, as a direct one
+#   does) or overflow _Float16; a native Linux build converts through float
+#   (ops.c says why);
+# - __bf16 arguments and results, float and double -> __bf16 (__truncsfbf2,
+#   __truncdfbf2), __bf16 -> float, __int128 -> __bf16;
+# - powi: __powidf2 and __powisf2 on Linux triples; windows-msvc triples call
+#   the UCRT's pow and powf, as native code does (fp-helpers 4.2), and both
+#   give the same results here;
+# - __builtin_mul_overflow on __int128 (native code calls __muloti4; MSIL
+#   lowers it inline, plan 5.14.3 A5 keeps the *ti* helpers out).
+# The program calls helper-archive members, so it has no -S reference
+# (5.17.13); the transcript is native compiler-rt's (5.17.3: the Windows DLL C
+# runtime with Visual Studio's compiler-rt, E7h with the native compiler-rt
+# archive).
+# msil-ld's --lto-emit-asm text refuses a helper call (A9), so the test
+# does not run with msil_link_output=il.
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c %t/ops.c
+# RUN: %{msil_prog}
+#--- ops.h
+#include <stdint.h>
+#define NOINLINE __attribute__((noinline))
+double _Complex cmul(double _Complex a, double _Complex b);
+double _Complex cdiv(double _Complex a, double _Complex b);
+float _Complex fcmul(float _Complex a, float _Complex b);
+float _Complex fcdiv(float _Complex a, float _Complex b);
+_Float16 hadd(_Float16 a, _Float16 b);
+_Float16 hmul(_Float16 a, _Float16 b);
+_Float16 hdiv(_Float16 a, _Float16 b);
+float h2f(_Float16 h);
+double h2d(_Float16 h);
+_Float16 f2h(float f);
+_Float16 d2h(double d);
+int h2i(_Float16 h);
+_Float16 i2h(int i);
+__int128 h2i128(_Float16 h);
+unsigned __int128 h2u128(_Float16 h);
+_Float16 i1282h(__int128 i);
+_Float16 u1282h(unsigned __int128 u);
+__bf16 f2b(float f);
+__bf16 d2b(double d);
+float b2f(__bf16 b);
+__bf16 i1282b(__int128 i);
+double powi_d(double x, int n);
+float powi_f(float x, int n);
+int mulo_i128(__int128 a, __int128 b, __int128 *r);
+int mulo_u128(unsigned __int128 a, unsigned __int128 b, unsigned __int128 *r);
+#--- ops.c
+// One operation per noinline function, so each is a real runtime-helper call
+// (or, for __int128, MSIL's own lowering) at every level.
+#include "ops.h"
+NOINLINE double _Complex cmul(double _Complex a, double _Complex b) { return a * b; }
+NOINLINE double _Complex cdiv(double _Complex a, double _Complex b) { return a / b; }
+NOINLINE float _Complex fcmul(float _Complex a, float _Complex b) { return a * b; }
+NOINLINE float _Complex fcdiv(float _Complex a, float _Complex b) { return a / b; }
+NOINLINE _Float16 hadd(_Float16 a, _Float16 b) { return a + b; }
+NOINLINE _Float16 hmul(_Float16 a, _Float16 b) { return a * b; }
+NOINLINE _Float16 hdiv(_Float16 a, _Float16 b) { return a / b; }
+NOINLINE float h2f(_Float16 h) { return (float)h; }
+NOINLINE double h2d(_Float16 h) { return (double)h; }
+NOINLINE _Float16 f2h(float f) { return (_Float16)f; }
+NOINLINE _Float16 d2h(double d) { return (_Float16)d; }
+NOINLINE int h2i(_Float16 h) { return (int)h; }
+NOINLINE _Float16 i2h(int i) { return (_Float16)i; }
+NOINLINE __int128 h2i128(_Float16 h) { return (__int128)h; }
+NOINLINE unsigned __int128 h2u128(_Float16 h) { return (unsigned __int128)h; }
+// Native clang converts __int128 to _Float16 on Linux with __floattihf and
+// __floatuntihf, which libgcc has and compiler-rt (E7h's helper archive) has
+// not, so the native Linux build converts through float: that gives the same
+// result for every __int128 (below 65520 in magnitude it is exact in float,
+// from 65520 on it overflows _Float16 either way). MSIL converts through
+// float itself (fp-helpers 6), on both triples.
+#if defined(__linux__) && !defined(__MSIL__)
+#define TO_F16(x) ((_Float16)(float)(x))
+#else
+#define TO_F16(x) ((_Float16)(x))
+#endif
+NOINLINE _Float16 i1282h(__int128 i) { return TO_F16(i); }
+NOINLINE _Float16 u1282h(unsigned __int128 u) { return TO_F16(u); }
+NOINLINE __bf16 f2b(float f) { return (__bf16)f; }
+NOINLINE __bf16 d2b(double d) { return (__bf16)d; }
+NOINLINE float b2f(__bf16 b) { return (float)b; }
+NOINLINE __bf16 i1282b(__int128 i) { return (__bf16)i; }
+NOINLINE double powi_d(double x, int n) { return __builtin_powi(x, n); }
+NOINLINE float powi_f(float x, int n) { return __builtin_powif(x, n); }
+NOINLINE int mulo_i128(__int128 a, __int128 b, __int128 *r) {
+  return __builtin_mul_overflow(a, b, r);
+}
+NOINLINE int mulo_u128(unsigned __int128 a, unsigned __int128 b, unsigned __int128 *r) {
+  return __builtin_mul_overflow(a, b, r);
+}
+#--- main.c
+// Feeds ops.c volatile inputs and prints its results' bit patterns.
+#include "ops.h"
+int puts(const char *);
+
+static char line[256];
+static int len;
+static void out_s(const char *t) {
+  while (*t)
+    line[len++] = *t++;
+}
+static void out_x(uint64_t v, int digits) {
+  line[len++] = ' ';
+  for (int i = digits - 1; i >= 0; --i)
+    line[len++] = "0123456789abcdef"[(v >> (4 * i)) & 15];
+}
+static void out_d(long long v) {
+  char t[24];
+  int k = 0;
+  unsigned long long u = v < 0 ? 0 - (unsigned long long)v : (unsigned long long)v;
+  line[len++] = ' ';
+  if (v < 0)
+    line[len++] = '-';
+  do
+    t[k++] = (char)('0' + u % 10);
+  while (u /= 10);
+  while (k)
+    line[len++] = t[--k];
+}
+static void out_nl(void) {
+  line[len] = 0;
+  puts(line);
+  len = 0;
+}
+static uint64_t b64(double d) { uint64_t u; __builtin_memcpy(&u, &d, 8); return u; }
+static uint32_t b32(float f) { uint32_t u; __builtin_memcpy(&u, &f, 4); return u; }
+static uint16_t b16h(_Float16 h) { uint16_t u; __builtin_memcpy(&u, &h, 2); return u; }
+static uint16_t b16b(__bf16 h) { uint16_t u; __builtin_memcpy(&u, &h, 2); return u; }
+static void out_u128(unsigned __int128 v) {
+  out_x((uint64_t)(v >> 64), 16);
+  out_x((uint64_t)v, 16);
+}
+static void out_c(const char *name, double _Complex z) {
+  out_s(name);
+  out_x(b64(__real__ z), 16);
+  out_x(b64(__imag__ z), 16);
+  out_nl();
+}
+static void out_fc(const char *name, float _Complex z) {
+  out_s(name);
+  out_x(b32(__real__ z), 8);
+  out_x(b32(__imag__ z), 8);
+  out_nl();
+}
+static double _Complex mk(double re, double im) {
+  double _Complex z;
+  __real__ z = re;
+  __imag__ z = im;
+  return z;
+}
+static float _Complex mkf(float re, float im) {
+  float _Complex z;
+  __real__ z = re;
+  __imag__ z = im;
+  return z;
+}
+
+// Every input is a volatile object: nothing folds at compile time.
+static volatile double v_zero = 0.0, v_one = 1.0, v_d1 = 1.5, v_d2 = -2.25;
+static volatile double v_big = 1e300, v_tiny = 1.0e-7;
+static volatile float v_fzero = 0.0f, v_fone = 1.0f, v_f1 = 1.5f, v_f2 = -2.25f;
+static volatile float v_fmax = 65504.0f, v_ftwo = 2.0f;
+// 1.0009765625 + 0.00048828125: halfway between the _Float16 values 0x3c01
+// and 0x3c02.
+static volatile float v_halfway = 1.00146484375f;
+static volatile int v_e = 7;
+static volatile int64_t v_i[] = {65519, -2049, 65520};
+// INT128_MAX, INT128_MIN, a pattern and the largest unsigned __int128, as
+// high and low halves.
+static volatile uint64_t v_hi[] = {0x7fffffffffffffffull, 0x8000000000000000ull,
+                                   0x0123456789abcdefull, 0xffffffffffffffffull};
+static volatile uint64_t v_lo[] = {0xffffffffffffffffull, 0, 0xfedcba9876543210ull,
+                                   0xffffffffffffffffull};
+
+static __int128 s128(int i) {
+  return (__int128)(((unsigned __int128)v_hi[i] << 64) | v_lo[i]);
+}
+
+int main(void) {
+  double inf = v_one / v_zero, qnan = v_zero / v_zero;
+  float finf = v_fone / v_fzero, fqnan = v_fzero / v_fzero;
+  double d1 = v_d1, d2 = v_d2, one = v_one, zero = v_zero, big = v_big;
+  float f1 = v_f1, f2 = v_f2, fone = v_fone;
+
+  double _Complex a = mk(d1, d2), b = mk(d2, d1), inf_nan = mk(inf, qnan);
+  out_c("muldc3", cmul(a, b));
+  out_c("divdc3", cdiv(a, b));
+  out_c("muldc3-inf", cmul(inf_nan, mk(one, one)));
+  out_c("divdc3-zero", cdiv(mk(one, one), mk(zero, zero)));
+  out_c("divdc3-inf", cdiv(mk(one, one), inf_nan));
+  out_c("divdc3-big", cdiv(mk(big, big), mk(big, one)));
+  float _Complex fa = mkf(f1, f2), fb = mkf(f2, f1);
+  out_fc("mulsc3", fcmul(fa, fb));
+  out_fc("divsc3", fcdiv(fa, fb));
+  out_fc("mulsc3-inf", fcmul(mkf(finf, fqnan), mkf(fone, fone)));
+
+  _Float16 h1 = d2h(d1), h2 = f2h(f2), h3 = f2h(v_fmax);
+  _Float16 hs = hadd(h1, h2), hm = hmul(h1, h2), hd = hdiv(h1, h3);
+  _Float16 ho = hmul(h3, f2h(v_ftwo));
+  out_s("f16");
+  out_x(b16h(h1), 4);
+  out_x(b16h(hs), 4);
+  out_x(b16h(hm), 4);
+  out_x(b16h(hd), 4);
+  out_x(b16h(ho), 4);
+  out_nl();
+  out_s("f16->f32");
+  out_x(b32(h2f(hm)), 8);
+  out_s(" f16->f64");
+  out_x(b64(h2d(hd)), 16);
+  out_nl();
+  out_s("f64->f16");
+  out_x(b16h(d2h(v_tiny)), 4);
+  out_s(" f32->f16");
+  out_x(b16h(f2h(v_halfway)), 4);
+  out_nl();
+  out_s("f16->i32");
+  out_d(h2i(hm));
+  out_s(" i32->f16");
+  out_x(b16h(i2h(v_e)), 4);
+  out_nl();
+  __int128 big128 = (__int128)1 << (v_e * 14 + 2); // 2^100
+  out_s("f16->i128");
+  out_d((long long)h2i128(hm));
+  out_s(" i128->f16");
+  out_x(b16h(i1282h(big128)), 4);
+  out_nl();
+  // The largest finite result, a tie that rounds to even, overflow, and the
+  // largest unsigned __int128.
+  out_s("i128->f16-round");
+  out_x(b16h(i1282h(v_i[0])), 4);
+  out_x(b16h(i1282h(v_i[1])), 4);
+  out_x(b16h(i1282h(v_i[2])), 4);
+  out_x(b16h(u1282h((unsigned __int128)s128(3))), 4);
+  out_nl();
+  out_s("f16->i128-max");
+  out_d((long long)h2i128(h3));
+  out_d((long long)h2i128(f2h(-v_fmax)));
+  out_u128(h2u128(h3));
+  out_nl();
+
+  __bf16 b1 = f2b(f1), b2 = d2b(d2), b3 = f2b(v_halfway);
+  out_s("bf16");
+  out_x(b16b(b1), 4);
+  out_x(b16b(b2), 4);
+  out_x(b16b(b3), 4);
+  out_s(" f32");
+  out_x(b32(b2f(b2)), 8);
+  out_nl();
+  out_s("i128->bf16");
+  out_x(b16b(i1282b(big128)), 4);
+  out_x(b16b(i1282b(-big128)), 4);
+  out_nl();
+
+  out_s("powidf2");
+  out_x(b64(powi_d(d1, v_e)), 16);
+  out_s(" powisf2");
+  out_x(b32(powi_f(f2, -v_e)), 8);
+  out_nl();
+
+  __int128 r;
+  int o = mulo_i128(big128, (__int128)v_e << 30, &r);
+  out_s("muloti4");
+  out_d(o);
+  out_u128((unsigned __int128)r);
+  out_nl();
+  o = mulo_i128(big128, 3, &r);
+  out_s("muloti4b");
+  out_d(o);
+  out_u128((unsigned __int128)r);
+  out_nl();
+  // INT128_MIN * -1 overflows to INT128_MIN; INT128_MAX * -1 does not; a
+  // positive product that overflows, and a negative one that does not.
+  o = mulo_i128(s128(1), -v_e / 7, &r);
+  out_s("muloti4-min");
+  out_d(o);
+  out_u128((unsigned __int128)r);
+  out_nl();
+  o = mulo_i128(s128(0), -v_e / 7, &r);
+  out_s("muloti4-max");
+  out_d(o);
+  out_u128((unsigned __int128)r);
+  out_nl();
+  o = mulo_i128(s128(2), (__int128)v_e << 5, &r);
+  out_s("muloti4-big");
+  out_d(o);
+  out_u128((unsigned __int128)r);
+  out_nl();
+  o = mulo_i128(-s128(2), v_e * 9, &r);
+  out_s("muloti4-neg");
+  out_d(o);
+  out_u128((unsigned __int128)r);
+  out_nl();
+  unsigned __int128 ur;
+  o = mulo_u128((unsigned __int128)s128(3), (unsigned)v_e - 5, &ur);
+  out_s("umul128");
+  out_d(o);
+  out_u128(ur);
+  out_nl();
+  return 0;
+}

@@ -1,0 +1,20 @@
+# Every name of msil-ld's native long double table (nativeLongDoubleFunctions) has a forwarder in msil_longdouble.c or a line there saying it is not forwarded, the file forwards nothing outside the table, and no forwarder has an f64x or f128 name.
+# Plan 5.14.3 A4 ("a lit test of M25 checks that every name of that table
+# either has a forwarder or stays an error"), M25.h. Inputs/helper-archive.py
+# reads, through %S, the string literals of the table's initializer in
+# lld/MSIL/NativeLibraries.cpp, and the '#if MSIL_MEMBER(<name>)' blocks (one
+# archive member each, A2) and the '// not forwarded: <name>: <reason>' lines
+# of msil/lib/builtins/msil_longdouble.c, then prints the counts. It is an
+# error, naming the name, when a table name has neither, a name has both or
+# appears twice, a block or line names a name outside the table, a block does
+# not mention its name, a forwarder's name contains f64x or f128 (those stay
+# link errors), or a name that the plan and the recon cite (sqrtl, strtold,
+# nexttoward, nexttowardf, cabsl, ...) is not forwarded; and when the table
+# has fewer than 100 names or the files cannot be read as expected. The
+# script's self-test runs first (it also covers the archive checks of
+# archive-contents.test).
+# RUN: %python %S/Inputs/helper-archive.py --self-test | FileCheck %s --check-prefix=SELF
+# RUN: %python %S/Inputs/helper-archive.py table %S/../../../../lld/MSIL/NativeLibraries.cpp %S/../../../lib/builtins/msil_longdouble.c | FileCheck %s
+# SELF-NOT: FAIL
+# SELF:     {{^}}self-test: passed{{$}}
+# CHECK: {{^}}helper-archive: table: {{[1-9][0-9]+}} names, {{[1-9][0-9]+}} forwarded, {{[0-9]+}} not forwarded: OK{{$}}

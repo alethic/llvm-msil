@@ -1,0 +1,811 @@
+## The helper archive in msil-ld's undefined-symbol report (ImplementationPlan.md
+## 5.14.2, 5.14.3 A1, A7 and A9; M25.d (1)). A report of an undefined name of
+## class N1, N2 or N3 has one more line after its first line and before its
+## '>>> referenced by' lines (M24; never-bind.test pins them beside the
+## never-bind checks):
+## - N1, a compiler runtime helper: a '__' name of
+##   lto::LTO::getRuntimeLibcallSymbols (here __extendhfsf2) and, from M25,
+##   the C complex helpers that clang calls by name and RuntimeLibcalls lacks
+##   (__mulhc3, __mulsc3, __muldc3, __mulxc3, __multc3, __divhc3, __divsc3,
+##   __divdc3, __divxc3 and __divtc3):
+##     >>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins
+##   While an input archive named clang_rt.builtins.lib or
+##   libclang_rt.builtins.a takes part (A1's names: windows-msvc's, and the
+##   other triples', x86_64 MinGW included), whether or not a member of it is
+##   extracted, the line reads instead
+##     >>> a compiler runtime helper that the toolchain's helper archive clang_rt.builtins does not define
+##   An archive of another name (libhelp.a, help.lib) keeps the first form.
+## - N2, __atomic_load_4: on Linux triples
+##     >>> an atomic operation: link with -latomic, as a native build does
+##   and on Windows triples
+##     >>> an atomic operation (libatomic's interface)
+## - N3, __msil_example (no trailer definition offers it):
+##     >>> a toolchain helper: link the toolchain's helper archive clang_rt.builtins; if it is linked, the object needs a newer toolchain
+##   with or without the archive.
+## - Any other '__' name, __start_x, has no line.
+## Each case runs on both default triples through CIL objects, an LTO image
+## and --lto-emit-asm text. A direct call is a bitcode reference, reported
+## with the bitcode file. Links that extract a stand-in member have no text
+## run: --lto-emit-asm resolves the bitcode's own references before code
+## generation, as an image link does (A9), so with the archive on the line
+## msil-ld extracts the member, a CIL object, and stops with M20's error,
+## which one case pins on both triples; without the archive the call gets
+## N1's report. The stand-in members are hidden, as -fvisibility=hidden
+## compiles the archive's (A2).
+## Also:
+## - References that code generation creates after LTO ('<output>.lto.o'):
+##   atomicrmw's __atomic_fetch_add_4 and the fpext of half's __extendhfsf2
+##   get the same lines. In --lto-emit-asm text, which links no CIL object,
+##   they are the backend's errors (A9; T-B for an '__atomic_' name):
+##     runtime helper '<name>' needs the helper archive clang_rt.builtins, which only msil-ld links
+##     runtime helper '<name>' is an atomic operation that only msil-ld links
+## - A9 with the archive: --lto-emit-asm of a bitcode call of __divdc3, with
+##   the archive at A1's path whose member defines it, prints only
+##     <archive>(<member>): --lto-emit-asm cannot link CIL objects; link without --lto-emit-asm
+##   and writes nothing; the image link of the same inputs succeeds.
+## - The complex names never bind natively (5.14.2 N-2, M24's guard): all
+##   ten stay undefined, each with N1's line, against a libgcc_s.so.1
+##   stand-in on Linux and a libgcc_s_seh-1.dll import library on
+##   windows-msvc that export them.
+## - A call of a complex helper whose signature differs from the definition
+##   of a stand-in member or of a bitcode input is N-1's error, never 5.9.8's
+##   adapter and warning, and nothing is written:
+##     function signature mismatch: <name> (a toolchain or compiler runtime helper)
+##     >>> defined as <IL signature> in <file>
+##     >>> called as <IL signature> in <file>
+##   without the ' in <file>' parts when both are bitcode (5.9.8's LTO path).
+## - A7: a -shared library that extracts hidden members defines them in
+##   '<Module>' and exports neither. A program linked against it cannot use
+##   them: its own reference stays undefined, and with the archive it links
+##   its own copy.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj lnx.ll -o lnx.o
+# RUN: llc -filetype=obj win.ll -o win.o
+# RUN: llvm-as lnx.ll -o lnx.bc
+# RUN: llvm-as win.ll -o win.bc
+# RUN: llc -filetype=obj ext-lnx.ll -o ext-lnx.o
+# RUN: llc -filetype=obj ext-win.ll -o ext-win.o
+# RUN: llc -filetype=obj div-lnx.ll -o div-lnx.o
+# RUN: llc -filetype=obj div-win.ll -o div-win.o
+# RUN: mkdir -p res/lib/x86_64-unknown-linux-gnu-msil res/lib/x86_64-pc-windows-msvc-msil
+# RUN: llvm-ar rcs res/lib/x86_64-unknown-linux-gnu-msil/libclang_rt.builtins.a div-lnx.o
+# RUN: llvm-ar rcs res/lib/x86_64-pc-windows-msvc-msil/clang_rt.builtins.lib div-win.o
+# RUN: llvm-ar rcs libclang_rt.builtins.a ext-lnx.o
+# RUN: llvm-ar rcs clang_rt.builtins.lib ext-win.o
+# RUN: llvm-ar rcs libhelp.a ext-lnx.o
+# RUN: llvm-ar rcs help.lib ext-win.o
+
+## A1's paths under a stand-in resource directory, as the driver passes them.
+# DEFINE: %{rt-lnx} = res/lib/x86_64-unknown-linux-gnu-msil/libclang_rt.builtins.a
+# DEFINE: %{rt-win} = res/lib/x86_64-pc-windows-msvc-msil/clang_rt.builtins.lib
+
+## The five reports, in the order of main's calls, with every line pinned
+## (RPT). HF is __extendhfsf2's report, which a link that extracts its member
+## does not print; HF-LINK and N1-LINK give __extendhfsf2's and __muldc3's
+## N1 line its first form, HF-NODEF and N1-NODEF the "does not define" form;
+## N2-LNX and N2-WIN are N2's line.
+# DEFINE: %{link-lnx} = FileCheck %s --check-prefixes=RPT,HF,HF-LINK,N1-LINK,N2-LNX
+# DEFINE: %{link-win} = FileCheck %s --check-prefixes=RPT,HF,HF-LINK,N1-LINK,N2-WIN
+# DEFINE: %{nodef-lnx} = FileCheck %s --check-prefixes=RPT,HF,HF-NODEF,N1-NODEF,N2-LNX
+# DEFINE: %{nodef-win} = FileCheck %s --check-prefixes=RPT,HF,HF-NODEF,N1-NODEF,N2-WIN
+# DEFINE: %{four-link-lnx} = FileCheck %s --check-prefixes=RPT,N1-LINK,N2-LNX
+# DEFINE: %{four-link-win} = FileCheck %s --check-prefixes=RPT,N1-LINK,N2-WIN
+# DEFINE: %{four-nodef-lnx} = FileCheck %s --check-prefixes=RPT,N1-NODEF,N2-LNX
+# DEFINE: %{four-nodef-win} = FileCheck %s --check-prefixes=RPT,N1-NODEF,N2-WIN
+
+# RPT-NOT:        {{.}}
+# HF:             {{^}}msil-ld: error: undefined symbol: __extendhfsf2{{$}}
+# HF-LINK-NEXT:   {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# HF-NODEF-NEXT:  {{^}}>>> a compiler runtime helper that the toolchain's helper archive clang_rt.builtins does not define{{$}}
+# HF-NEXT:        {{^}}>>> referenced by [[REF]]:(main){{$}}
+# HF-EMPTY:
+# HF-NOT:         {{.}}
+# RPT:            {{^}}msil-ld: error: undefined symbol: __muldc3{{$}}
+# N1-LINK-NEXT:   {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# N1-NODEF-NEXT:  {{^}}>>> a compiler runtime helper that the toolchain's helper archive clang_rt.builtins does not define{{$}}
+# RPT-NEXT:       {{^}}>>> referenced by [[REF]]:(main){{$}}
+# RPT-EMPTY:
+# RPT-NEXT:       {{^}}msil-ld: error: undefined symbol: __atomic_load_4{{$}}
+# N2-LNX-NEXT:    {{^}}>>> an atomic operation: link with -latomic, as a native build does{{$}}
+# N2-WIN-NEXT:    {{^}}>>> an atomic operation (libatomic's interface){{$}}
+# RPT-NEXT:       {{^}}>>> referenced by [[REF]]:(main){{$}}
+# RPT-EMPTY:
+# RPT-NEXT:       {{^}}msil-ld: error: undefined symbol: __msil_example{{$}}
+# RPT-NEXT:       {{^}}>>> a toolchain helper: link the toolchain's helper archive clang_rt.builtins; if it is linked, the object needs a newer toolchain{{$}}
+# RPT-NEXT:       {{^}}>>> referenced by [[REF]]:(main){{$}}
+# RPT-EMPTY:
+# RPT-NEXT:       {{^}}msil-ld: error: undefined symbol: __start_x{{$}}
+# RPT-NEXT:       {{^}}>>> referenced by [[REF]]:(main){{$}}
+# RPT-NOT:        {{.}}
+
+## No archive: N1's first form for __extendhfsf2 and for __muldc3.
+# RUN: not msil-ld lnx.o -o x.exe 2>&1 | %{link-lnx} -DREF=lnx.o
+# RUN: not msil-ld lnx.bc -o x.exe 2>&1 | %{link-lnx} -DREF=lnx.bc
+# RUN: not msil-ld --lto-emit-asm lnx.bc -o x.il 2>&1 | %{link-lnx} -DREF=lnx.bc
+# RUN: not msil-ld win.o -o x.exe 2>&1 | %{link-win} -DREF=win.o
+# RUN: not msil-ld win.bc -o x.exe 2>&1 | %{link-win} -DREF=win.bc
+# RUN: not msil-ld --lto-emit-asm win.bc -o x.il 2>&1 | %{link-win} -DREF=win.bc
+
+## The archive at A1's path, whose only member defines __divdc3: nothing is
+## extracted, and both N1 lines have the "does not define" form, also in
+## --lto-emit-asm, which links no member. N2's and N3's lines do not change.
+# RUN: not msil-ld lnx.o %{rt-lnx} -o x.exe 2>&1 | %{nodef-lnx} -DREF=lnx.o
+# RUN: not msil-ld lnx.bc %{rt-lnx} -o x.exe 2>&1 | %{nodef-lnx} -DREF=lnx.bc
+# RUN: not msil-ld --lto-emit-asm lnx.bc %{rt-lnx} -o x.il 2>&1 | %{nodef-lnx} -DREF=lnx.bc
+# RUN: not msil-ld win.o %{rt-win} -o x.exe 2>&1 | %{nodef-win} -DREF=win.o
+# RUN: not msil-ld win.bc %{rt-win} -o x.exe 2>&1 | %{nodef-win} -DREF=win.bc
+# RUN: not msil-ld --lto-emit-asm win.bc %{rt-win} -o x.il 2>&1 | %{nodef-win} -DREF=win.bc
+
+## The same names in the working directory, with a member that defines
+## __extendhfsf2 and is extracted: four reports, __muldc3's with the "does
+## not define" form.
+# RUN: not msil-ld lnx.o libclang_rt.builtins.a -o x.exe 2>&1 | %{four-nodef-lnx} -DREF=lnx.o
+# RUN: not msil-ld lnx.bc libclang_rt.builtins.a -o x.exe 2>&1 | %{four-nodef-lnx} -DREF=lnx.bc
+# RUN: not msil-ld win.o clang_rt.builtins.lib -o x.exe 2>&1 | %{four-nodef-win} -DREF=win.o
+# RUN: not msil-ld win.bc clang_rt.builtins.lib -o x.exe 2>&1 | %{four-nodef-win} -DREF=win.bc
+
+## An archive of another name with the same member: N1's first form.
+# RUN: not msil-ld lnx.o libhelp.a -o x.exe 2>&1 | %{four-link-lnx} -DREF=lnx.o
+# RUN: not msil-ld lnx.bc libhelp.a -o x.exe 2>&1 | %{four-link-lnx} -DREF=lnx.bc
+# RUN: not msil-ld win.o help.lib -o x.exe 2>&1 | %{four-link-win} -DREF=win.o
+# RUN: not msil-ld win.bc help.lib -o x.exe 2>&1 | %{four-link-win} -DREF=win.bc
+
+## x86_64 MinGW names the archive libclang_rt.builtins.a too (A1).
+# RUN: llc -filetype=obj gnu.ll -o gnu.o
+# RUN: llc -filetype=obj div-gnu.ll -o div-gnu.o
+# RUN: mkdir -p res/lib/x86_64-w64-windows-gnu-msil
+# RUN: llvm-ar rcs res/lib/x86_64-w64-windows-gnu-msil/libclang_rt.builtins.a div-gnu.o
+# RUN: not msil-ld gnu.o -o x.exe 2>&1 | FileCheck %s --check-prefixes=GNU,GNU-LINK
+# RUN: not msil-ld gnu.o res/lib/x86_64-w64-windows-gnu-msil/libclang_rt.builtins.a -o x.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefixes=GNU,GNU-NODEF
+# GNU-NOT:        {{.}}
+# GNU:            {{^}}msil-ld: error: undefined symbol: __muldc3{{$}}
+# GNU-LINK-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# GNU-NODEF-NEXT: {{^}}>>> a compiler runtime helper that the toolchain's helper archive clang_rt.builtins does not define{{$}}
+# GNU-NEXT:       {{^}}>>> referenced by gnu.o:(main){{$}}
+# GNU-NOT:        {{.}}
+
+## References that code generation creates after LTO, without and with the
+## archive at A1's path.
+# RUN: llvm-as rmw-lnx.ll -o rmw-lnx.bc
+# RUN: llvm-as rmw-win.ll -o rmw-win.bc
+# RUN: not msil-ld rmw-lnx.bc -o rmw.exe 2>&1 | FileCheck %s --check-prefixes=CG,CG-LNX,CG-LINK
+# RUN: not msil-ld rmw-lnx.bc %{rt-lnx} -o rmw.exe 2>&1 | FileCheck %s --check-prefixes=CG,CG-LNX,CG-NODEF
+# RUN: not msil-ld rmw-win.bc -o rmw.exe 2>&1 | FileCheck %s --check-prefixes=CG,CG-WIN,CG-LINK
+# RUN: not msil-ld rmw-win.bc %{rt-win} -o rmw.exe 2>&1 | FileCheck %s --check-prefixes=CG,CG-WIN,CG-NODEF
+# CG-NOT:        {{.}}
+# CG:            {{^}}msil-ld: error: undefined symbol: __atomic_fetch_add_4{{$}}
+# CG-LNX-NEXT:   {{^}}>>> an atomic operation: link with -latomic, as a native build does{{$}}
+# CG-WIN-NEXT:   {{^}}>>> an atomic operation (libatomic's interface){{$}}
+# CG-NEXT:       {{^}}>>> referenced by rmw.exe.lto.o:(main){{$}}
+# CG-EMPTY:
+# CG-NEXT:       {{^}}msil-ld: error: undefined symbol: __extendhfsf2{{$}}
+# CG-LINK-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CG-NODEF-NEXT: {{^}}>>> a compiler runtime helper that the toolchain's helper archive clang_rt.builtins does not define{{$}}
+# CG-NEXT:       {{^}}>>> referenced by rmw.exe.lto.o:(main){{$}}
+# CG-NOT:        {{.}}
+
+## In --lto-emit-asm text the same calls are the backend's errors, T-A and
+## T-B, and nothing else.
+# RUN: not msil-ld --lto-emit-asm rmw-lnx.bc -o x.il > rmw-lnx.txt 2>&1
+# RUN: not msil-ld --lto-emit-asm rmw-win.bc -o x.il > rmw-win.txt 2>&1
+# RUN: FileCheck %s --check-prefix=CG-TEXT --input-file=rmw-lnx.txt
+# RUN: FileCheck %s --check-prefix=CG-TEXT --input-file=rmw-win.txt
+# RUN: FileCheck %s --check-prefix=CG-TEXT2 --input-file=rmw-lnx.txt
+# RUN: FileCheck %s --check-prefix=CG-TEXT2 --input-file=rmw-win.txt
+# CG-TEXT-DAG:   {{^}}msil-ld: error: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
+# CG-TEXT-DAG:   {{^}}msil-ld: error: runtime helper '__atomic_fetch_add_4' is an atomic operation that only msil-ld links{{$}}
+## Exactly two lines (the order of the two errors is not specified).
+# CG-TEXT2-NOT:  {{.}}
+# CG-TEXT2:      {{^}}msil-ld: error: runtime helper '{{.+}}
+# CG-TEXT2-NEXT: {{^}}msil-ld: error: runtime helper '{{.+}}
+# CG-TEXT2-NOT:  {{.}}
+
+## A9 with the archive at A1's path on the link line: --lto-emit-asm
+## resolves the bitcode's call of __divdc3 before code generation, extracts
+## the member that defines it, a CIL object, and stops with M20's error and
+## no other, writing nothing. The image link of the same inputs succeeds.
+# RUN: llvm-as divcall-lnx.ll -o divcall-lnx.bc
+# RUN: llvm-as divcall-win.ll -o divcall-win.bc
+# RUN: rm -f divcall.il
+# RUN: not msil-ld --lto-emit-asm divcall-lnx.bc %{rt-lnx} -o divcall.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=AR-TEXT -DAR=%{rt-lnx} -DMEMBER=div-lnx.o
+# RUN: not ls divcall.il
+# RUN: not msil-ld --lto-emit-asm divcall-win.bc %{rt-win} -o divcall.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=AR-TEXT -DAR=%{rt-win} -DMEMBER=div-win.o
+# RUN: not ls divcall.il
+# RUN: msil-ld divcall-lnx.bc %{rt-lnx} -o divcall-lnx.exe 2>&1 | count 0
+# RUN: msil-ld divcall-win.bc %{rt-win} -o divcall-win.exe 2>&1 | count 0
+# AR-TEXT-NOT: {{.}}
+# AR-TEXT:     {{^}}msil-ld: error: [[AR]]([[MEMBER]]): --lto-emit-asm cannot link CIL objects; link without --lto-emit-asm{{$}}
+# AR-TEXT-NOT: {{.}}
+
+## The complex names never bind natively: ten reports, each with N1's line
+## and no other error.
+# RUN: yaml2obj gcc.yaml -o gcc.o
+# RUN: ld.lld -shared -soname libgcc_s.so.1 gcc.o -o libgcc_s.so.1
+# RUN: llvm-lib /machine:x64 /def:gccw.def /out:gccw.lib
+# RUN: llc -filetype=obj cxl.ll -o cxl.o
+# RUN: llc -filetype=obj cxw.ll -o cxw.o
+# RUN: llvm-as cxl.ll -o cxl.bc
+# RUN: llvm-as cxw.ll -o cxw.bc
+# RUN: not msil-ld cxl.o libgcc_s.so.1 -o x.exe 2>&1 | FileCheck %s --check-prefix=CX -DREF=cxl.o
+# RUN: not msil-ld cxl.bc libgcc_s.so.1 -o x.exe 2>&1 | FileCheck %s --check-prefix=CX -DREF=cxl.bc
+# RUN: not msil-ld --lto-emit-asm cxl.bc libgcc_s.so.1 -o x.il 2>&1 | FileCheck %s --check-prefix=CX -DREF=cxl.bc
+# RUN: not msil-ld cxw.o gccw.lib -o x.exe 2>&1 | FileCheck %s --check-prefix=CX -DREF=cxw.o
+# RUN: not msil-ld cxw.bc gccw.lib -o x.exe 2>&1 | FileCheck %s --check-prefix=CX -DREF=cxw.bc
+# RUN: not msil-ld --lto-emit-asm cxw.bc gccw.lib -o x.il 2>&1 | FileCheck %s --check-prefix=CX -DREF=cxw.bc
+# CX-NOT:   {{.}}
+# CX:       {{^}}msil-ld: error: undefined symbol: __mulhc3{{$}}
+# CX-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CX-NEXT:  {{^}}>>> referenced by [[REF]]:(main){{$}}
+# CX-EMPTY:
+# CX-NEXT:  {{^}}msil-ld: error: undefined symbol: __mulsc3{{$}}
+# CX-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CX-NEXT:  {{^}}>>> referenced by [[REF]]:(main){{$}}
+# CX-EMPTY:
+# CX-NEXT:  {{^}}msil-ld: error: undefined symbol: __muldc3{{$}}
+# CX-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CX-NEXT:  {{^}}>>> referenced by [[REF]]:(main){{$}}
+# CX-EMPTY:
+# CX-NEXT:  {{^}}msil-ld: error: undefined symbol: __mulxc3{{$}}
+# CX-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CX-NEXT:  {{^}}>>> referenced by [[REF]]:(main){{$}}
+# CX-EMPTY:
+# CX-NEXT:  {{^}}msil-ld: error: undefined symbol: __multc3{{$}}
+# CX-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CX-NEXT:  {{^}}>>> referenced by [[REF]]:(main){{$}}
+# CX-EMPTY:
+# CX-NEXT:  {{^}}msil-ld: error: undefined symbol: __divhc3{{$}}
+# CX-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CX-NEXT:  {{^}}>>> referenced by [[REF]]:(main){{$}}
+# CX-EMPTY:
+# CX-NEXT:  {{^}}msil-ld: error: undefined symbol: __divsc3{{$}}
+# CX-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CX-NEXT:  {{^}}>>> referenced by [[REF]]:(main){{$}}
+# CX-EMPTY:
+# CX-NEXT:  {{^}}msil-ld: error: undefined symbol: __divdc3{{$}}
+# CX-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CX-NEXT:  {{^}}>>> referenced by [[REF]]:(main){{$}}
+# CX-EMPTY:
+# CX-NEXT:  {{^}}msil-ld: error: undefined symbol: __divxc3{{$}}
+# CX-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CX-NEXT:  {{^}}>>> referenced by [[REF]]:(main){{$}}
+# CX-EMPTY:
+# CX-NEXT:  {{^}}msil-ld: error: undefined symbol: __divtc3{{$}}
+# CX-NEXT:  {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# CX-NEXT:  {{^}}>>> referenced by [[REF]]:(main){{$}}
+# CX-NOT:   {{.}}
+
+## N-1: __muldc3 and __divsc3 called without their imaginary parts, against
+## a stand-in member (objects, and an LTO image whose code generation makes
+## the calls) and against bitcode definitions (an image and --lto-emit-asm).
+# RUN: llc -filetype=obj cxdef.ll -o cxdef.o
+# RUN: llc -filetype=obj cxmis.ll -o cxmis.o
+# RUN: llvm-as cxdef.ll -o cxdef.bc
+# RUN: llvm-as cxmis.ll -o cxmis.bc
+# RUN: mkdir -p cx
+# RUN: llvm-ar rcs cx/clang_rt.builtins.lib cxdef.o
+# RUN: rm -f cxmis.exe
+# RUN: not msil-ld cxmis.o cx/clang_rt.builtins.lib -o cxmis.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CXMIS "-DDEF= in cx/clang_rt.builtins.lib(cxdef.o)" "-DCALL= in cxmis.o"
+# RUN: not ls cxmis.exe
+# RUN: not msil-ld cxmis.bc cx/clang_rt.builtins.lib -o cxmis-lto.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CXMIS "-DDEF= in cx/clang_rt.builtins.lib(cxdef.o)" \
+# RUN:     "-DCALL= in cxmis-lto.exe.lto.o"
+# RUN: not ls cxmis-lto.exe
+# RUN: not msil-ld cxmis.bc cxdef.bc -o cxmis-bc.exe 2>&1 | FileCheck %s --check-prefix=CXMIS -DDEF= -DCALL=
+# RUN: not ls cxmis-bc.exe
+# RUN: not msil-ld --lto-emit-asm cxmis.bc cxdef.bc -o cxmis.il 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=CXMIS -DDEF= -DCALL=
+# RUN: not ls cxmis.il
+# CXMIS-NOT:   {{.}}
+# CXMIS:       {{^}}msil-ld: error: function signature mismatch: __muldc3 (a toolchain or compiler runtime helper){{$}}
+# CXMIS-NEXT:  {{^}}>>> defined as void(native int, float64, float64, float64, float64)[[DEF]]{{$}}
+# CXMIS-NEXT:  {{^}}>>> called as void(native int, float64, float64)[[CALL]]{{$}}
+# CXMIS-EMPTY:
+# CXMIS-NEXT:  {{^}}msil-ld: error: function signature mismatch: __divsc3 (a toolchain or compiler runtime helper){{$}}
+# CXMIS-NEXT:  {{^}}>>> defined as native int(float32, float32, float32, float32)[[DEF]]{{$}}
+# CXMIS-NEXT:  {{^}}>>> called as native int(float32, float32)[[CALL]]{{$}}
+# CXMIS-NOT:   {{.}}
+
+## A7: a -shared library that extracts the hidden members of __extendhfsf2
+## and __muldc3 exports only its own function and defines the helpers in
+## '<Module>'; objects on both triples, LTO on windows-msvc.
+# RUN: llc -filetype=obj mul-lnx.ll -o mul-lnx.o
+# RUN: llc -filetype=obj mul-win.ll -o mul-win.o
+# RUN: mkdir -p dll-lnx dll-win
+# RUN: llvm-ar rcs dll-lnx/libclang_rt.builtins.a ext-lnx.o mul-lnx.o
+# RUN: llvm-ar rcs dll-win/clang_rt.builtins.lib ext-win.o mul-win.o
+# RUN: llc -filetype=obj hl-lnx.ll -o hl-lnx.o
+# RUN: llc -filetype=obj hl-win.ll -o hl-win.o
+# RUN: llvm-as hl-win.ll -o hl-win.bc
+# RUN: msil-ld -shared hl-lnx.o dll-lnx/libclang_rt.builtins.a -o hll.dll 2>&1 | count 0
+# RUN: msil-ld -shared hl-win.o dll-win/clang_rt.builtins.lib -o hlw.dll 2>&1 | count 0
+# RUN: msil-ld -shared hl-win.bc dll-win/clang_rt.builtins.lib -o hlw-lto.dll 2>&1 | count 0
+# RUN: llvm-cil-dump hll.dll > hll.txt
+# RUN: llvm-cil-dump hlw.dll > hlw.txt
+# RUN: llvm-cil-dump hlw-lto.dll > hlw-lto.txt
+# RUN: %python %S/Inputs/shared/listing.py members hll.txt hll | FileCheck %s --check-prefix=PRIV-EXPORTS \
+# RUN:   -DCLASS=hll --implicit-check-not=__extendhfsf2 --implicit-check-not=__muldc3
+# RUN: %python %S/Inputs/shared/listing.py members hlw.txt hlw | FileCheck %s --check-prefix=PRIV-EXPORTS \
+# RUN:   -DCLASS=hlw --implicit-check-not=__extendhfsf2 --implicit-check-not=__muldc3
+# RUN: %python %S/Inputs/shared/listing.py members hlw-lto.txt hlw-lto | FileCheck %s --check-prefix=PRIV-EXPORTS \
+# RUN:   -DCLASS=hlw-lto --implicit-check-not=__extendhfsf2 --implicit-check-not=__muldc3
+# PRIV-EXPORTS: {{^}}.class '[[CLASS]]' flags=
+# PRIV-EXPORTS: {{^}}  .method 'use_helpers' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# RUN: %python %S/Inputs/shared/listing.py members hll.txt '<Module>' | FileCheck %s --check-prefix=PRIV-MODULE
+# RUN: %python %S/Inputs/shared/listing.py members hlw.txt '<Module>' | FileCheck %s --check-prefix=PRIV-MODULE
+# RUN: %python %S/Inputs/shared/listing.py members hlw-lto.txt '<Module>' | FileCheck %s --check-prefix=PRIV-MODULE
+# PRIV-MODULE: {{^}}.class '<Module>' flags=0x00000000{{$}}
+# PRIV-MODULE: {{^}}  .method '__extendhfsf2' float32(int32) flags=
+# PRIV-MODULE: {{^}}  .method '__muldc3' void(native int, float64, float64, float64, float64) flags=
+
+## A program linked against hlw.dll: without the archive its own call of
+## __extendhfsf2 is undefined (N1's first form), with it the program has its
+## own copy.
+# RUN: llc -filetype=obj hlprog.ll -o hlprog.o
+# RUN: not msil-ld hlprog.o hlw.dll -o x.exe 2>&1 | FileCheck %s --check-prefix=PRIV-UNDEF
+# PRIV-UNDEF-NOT:  {{.}}
+# PRIV-UNDEF:      {{^}}msil-ld: error: undefined symbol: __extendhfsf2{{$}}
+# PRIV-UNDEF-NEXT: {{^}}>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins{{$}}
+# PRIV-UNDEF-NEXT: {{^}}>>> referenced by hlprog.o:(main){{$}}
+# PRIV-UNDEF-NOT:  {{.}}
+# RUN: msil-ld hlprog.o hlw.dll dll-win/clang_rt.builtins.lib -o hlprog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump hlprog.exe | FileCheck %s --check-prefix=PRIV-PROG "--implicit-check-not=[hlw]hlw::'__"
+# PRIV-PROG: {{^}}assemblyref 'hlw' ver
+# PRIV-PROG: {{^}}  .method '__extendhfsf2' float32(int32) flags=
+# PRIV-PROG: {{^}}    L{{[0-9]+}}: call int32(int32) [hlw]hlw::'use_helpers'{{$}}
+# PRIV-PROG: {{^}}    L{{[0-9]+}}: call float32(int32) '<Module>'::'__extendhfsf2'{{$}}
+
+#--- lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; Calls of an f16 conversion, the double complex multiply as clang emits it
+;; for x86_64 Linux, an atomic load, an '__msil_' name and another '__' name.
+@v = global i32 7
+
+declare float @__extendhfsf2(i32)
+declare { double, double } @__muldc3(double, double, double, double)
+declare i32 @__atomic_load_4(ptr, i32)
+declare i32 @__msil_example(i32)
+declare i32 @__start_x()
+
+define i32 @main() {
+  %f = call float @__extendhfsf2(i32 15872)
+  %i = fptosi float %f to i32
+  %c = call { double, double } @__muldc3(double 1.0, double 2.0, double 3.0, double 4.0)
+  %re = extractvalue { double, double } %c, 0
+  %j = fptosi double %re to i32
+  %a = call i32 @__atomic_load_4(ptr @v, i32 5)
+  %e = call i32 @__msil_example(i32 %a)
+  %s = call i32 @__start_x()
+  %r1 = add i32 %i, %j
+  %r2 = add i32 %r1, %e
+  %r3 = add i32 %r2, %s
+  ret i32 %r3
+}
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; The same calls; Win64 returns the complex result through an sret pointer.
+@v = global i32 7
+
+declare float @__extendhfsf2(i32)
+declare void @__muldc3(ptr, double, double, double, double)
+declare i32 @__atomic_load_4(ptr, i32)
+declare i32 @__msil_example(i32)
+declare i32 @__start_x()
+
+define i32 @main() {
+  %tmp = alloca { double, double }, align 8
+  %f = call float @__extendhfsf2(i32 15872)
+  %i = fptosi float %f to i32
+  call void @__muldc3(ptr sret({ double, double }) align 8 %tmp, double 1.0, double 2.0, double 3.0, double 4.0)
+  %re = load double, ptr %tmp, align 8
+  %j = fptosi double %re to i32
+  %a = call i32 @__atomic_load_4(ptr @v, i32 5)
+  %e = call i32 @__msil_example(i32 %a)
+  %s = call i32 @__start_x()
+  %r1 = add i32 %i, %j
+  %r2 = add i32 %r1, %e
+  %r3 = add i32 %r2, %s
+  ret i32 %r3
+}
+
+#--- ext-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; A stand-in for the archive's __extendhfsf2 member.
+define hidden float @__extendhfsf2(i32 %h) {
+  %f = sitofp i32 %h to float
+  ret float %f
+}
+
+#--- ext-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; A stand-in for the archive's __extendhfsf2 member.
+define hidden float @__extendhfsf2(i32 %h) {
+  %f = sitofp i32 %h to float
+  ret float %f
+}
+
+#--- div-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; A stand-in member that defines a helper which lnx.ll does not call and
+;; divcall-lnx.ll does.
+define hidden { double, double } @__divdc3(double %a, double %b, double %c, double %d) {
+  %re = fdiv double %a, %c
+  %im = fdiv double %b, %d
+  %r0 = insertvalue { double, double } poison, double %re, 0
+  %r1 = insertvalue { double, double } %r0, double %im, 1
+  ret { double, double } %r1
+}
+
+#--- div-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; A stand-in member that defines a helper which win.ll does not call and
+;; divcall-win.ll does.
+define hidden void @__divdc3(ptr sret({ double, double }) align 8 %r, double %a, double %b, double %c, double %d) {
+  %re = fdiv double %a, %c
+  %im = fdiv double %b, %d
+  store double %re, ptr %r, align 8
+  %p = getelementptr inbounds i8, ptr %r, i64 8
+  store double %im, ptr %p, align 8
+  ret void
+}
+
+#--- div-gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+;; A stand-in member that defines a helper which nothing here calls.
+define hidden void @__divdc3(ptr sret({ double, double }) align 8 %r, double %a, double %b, double %c, double %d) {
+  %re = fdiv double %a, %c
+  %im = fdiv double %b, %d
+  store double %re, ptr %r, align 8
+  %p = getelementptr inbounds i8, ptr %r, i64 8
+  store double %im, ptr %p, align 8
+  ret void
+}
+
+#--- gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-w64-windows-gnu-msil"
+
+declare void @__muldc3(ptr, double, double, double, double)
+
+define i32 @main() {
+  %tmp = alloca { double, double }, align 8
+  call void @__muldc3(ptr sret({ double, double }) align 8 %tmp, double 1.0, double 2.0, double 3.0, double 4.0)
+  %re = load double, ptr %tmp, align 8
+  %i = fptosi double %re to i32
+  ret i32 %i
+}
+
+#--- rmw-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; Code generation calls __atomic_fetch_add_4 for the atomicrmw and
+;; __extendhfsf2 for the fpext.
+@v = global i32 7
+@g = global half 0xH3E00
+
+define i32 @main() {
+  %old = atomicrmw add ptr @v, i32 1 seq_cst
+  %h = load volatile half, ptr @g
+  %f = fpext half %h to float
+  %i = fptosi float %f to i32
+  %r = add i32 %old, %i
+  ret i32 %r
+}
+
+#--- rmw-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; Code generation calls __atomic_fetch_add_4 for the atomicrmw and
+;; __extendhfsf2 for the fpext.
+@v = global i32 7
+@g = global half 0xH3E00
+
+define i32 @main() {
+  %old = atomicrmw add ptr @v, i32 1 seq_cst
+  %h = load volatile half, ptr @g
+  %f = fpext half %h to float
+  %i = fptosi float %f to i32
+  %r = add i32 %old, %i
+  ret i32 %r
+}
+
+#--- divcall-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; A call of the helper that div-lnx.o defines.
+declare { double, double } @__divdc3(double, double, double, double)
+
+define i32 @main() {
+  %c = call { double, double } @__divdc3(double 1.0, double 2.0, double 3.0, double 4.0)
+  %re = extractvalue { double, double } %c, 0
+  %i = fptosi double %re to i32
+  ret i32 %i
+}
+
+#--- divcall-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; A call of the helper that div-win.o defines.
+declare void @__divdc3(ptr, double, double, double, double)
+
+define i32 @main() {
+  %tmp = alloca { double, double }, align 8
+  call void @__divdc3(ptr sret({ double, double }) align 8 %tmp, double 1.0, double 2.0, double 3.0, double 4.0)
+  %re = load double, ptr %tmp, align 8
+  %i = fptosi double %re to i32
+  ret i32 %i
+}
+
+#--- gcc.yaml
+## A libgcc_s.so.1 stand-in that exports the ten complex helpers (the real
+## one exports __mulhc3 and __divhc3 from GCC_12.0.0).
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x50
+Symbols:
+  - { Name: __mulhc3, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x00, Size: 8 }
+  - { Name: __mulsc3, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x08, Size: 8 }
+  - { Name: __muldc3, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: __mulxc3, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+  - { Name: __multc3, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 8 }
+  - { Name: __divhc3, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x28, Size: 8 }
+  - { Name: __divsc3, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x30, Size: 8 }
+  - { Name: __divdc3, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x38, Size: 8 }
+  - { Name: __divxc3, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x40, Size: 8 }
+  - { Name: __divtc3, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x48, Size: 8 }
+
+#--- gccw.def
+LIBRARY libgcc_s_seh-1.dll
+EXPORTS
+  __mulhc3
+  __mulsc3
+  __muldc3
+  __mulxc3
+  __multc3
+  __divhc3
+  __divsc3
+  __divdc3
+  __divxc3
+  __divtc3
+
+#--- cxl.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; The ten complex helpers as clang calls them for x86_64 Linux (float
+;; complex as <2 x float>; long double and __float128 are double on MSIL
+;; triples, so __mulxc3, __multc3, __divxc3 and __divtc3 take doubles here).
+;; __mulhc3 and __divhc3 have clang's half form, which it emits when it does
+;; not promote half arithmetic to float (as with -fexcess-precision=16):
+;; half operands and a <2 x half> result, which main reads as an i32 so that
+;; code generation adds no f16 conversion.
+declare <2 x half> @__mulhc3(half, half, half, half)
+declare <2 x float> @__mulsc3(float, float, float, float)
+declare { double, double } @__muldc3(double, double, double, double)
+declare { double, double } @__mulxc3(double, double, double, double)
+declare { double, double } @__multc3(double, double, double, double)
+declare <2 x half> @__divhc3(half, half, half, half)
+declare <2 x float> @__divsc3(float, float, float, float)
+declare { double, double } @__divdc3(double, double, double, double)
+declare { double, double } @__divxc3(double, double, double, double)
+declare { double, double } @__divtc3(double, double, double, double)
+
+define i32 @main() {
+  %m = call <2 x half> @__mulhc3(half 1.0, half 2.0, half 3.0, half 4.0)
+  %a = call <2 x float> @__mulsc3(float 1.0, float 2.0, float 3.0, float 4.0)
+  %b = call { double, double } @__muldc3(double 1.0, double 2.0, double 3.0, double 4.0)
+  %c = call { double, double } @__mulxc3(double 1.0, double 2.0, double 3.0, double 4.0)
+  %d = call { double, double } @__multc3(double 1.0, double 2.0, double 3.0, double 4.0)
+  %n = call <2 x half> @__divhc3(half 1.0, half 2.0, half 3.0, half 4.0)
+  %e = call <2 x float> @__divsc3(float 1.0, float 2.0, float 3.0, float 4.0)
+  %f = call { double, double } @__divdc3(double 1.0, double 2.0, double 3.0, double 4.0)
+  %g = call { double, double } @__divxc3(double 1.0, double 2.0, double 3.0, double 4.0)
+  %h = call { double, double } @__divtc3(double 1.0, double 2.0, double 3.0, double 4.0)
+  %mi = bitcast <2 x half> %m to i32
+  %ni = bitcast <2 x half> %n to i32
+  %a0 = extractelement <2 x float> %a, i32 0
+  %e0 = extractelement <2 x float> %e, i32 0
+  %b0 = extractvalue { double, double } %b, 0
+  %c0 = extractvalue { double, double } %c, 0
+  %d0 = extractvalue { double, double } %d, 0
+  %f0 = extractvalue { double, double } %f, 0
+  %g0 = extractvalue { double, double } %g, 0
+  %h0 = extractvalue { double, double } %h, 0
+  %ae = fadd float %a0, %e0
+  %aed = fpext float %ae to double
+  %s1 = fadd double %b0, %c0
+  %s2 = fadd double %d0, %f0
+  %s3 = fadd double %g0, %h0
+  %s4 = fadd double %s1, %s2
+  %s5 = fadd double %s3, %s4
+  %s6 = fadd double %s5, %aed
+  %fi = fptosi double %s6 to i32
+  %mn = add i32 %mi, %ni
+  %r = add i32 %fi, %mn
+  ret i32 %r
+}
+
+#--- cxw.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; The ten complex helpers as clang calls them for Win64: float complex in
+;; an i64, _Float16 complex in an i32 (clang's half form of __mulhc3 and
+;; __divhc3, with half operands, as with -fexcess-precision=16), the others
+;; through an sret pointer.
+declare i32 @__mulhc3(half, half, half, half)
+declare i64 @__mulsc3(float, float, float, float)
+declare void @__muldc3(ptr, double, double, double, double)
+declare void @__mulxc3(ptr, double, double, double, double)
+declare void @__multc3(ptr, double, double, double, double)
+declare i32 @__divhc3(half, half, half, half)
+declare i64 @__divsc3(float, float, float, float)
+declare void @__divdc3(ptr, double, double, double, double)
+declare void @__divxc3(ptr, double, double, double, double)
+declare void @__divtc3(ptr, double, double, double, double)
+
+define i32 @main() {
+  %t = alloca { double, double }, align 8
+  %m = call i32 @__mulhc3(half 1.0, half 2.0, half 3.0, half 4.0)
+  %a = call i64 @__mulsc3(float 1.0, float 2.0, float 3.0, float 4.0)
+  call void @__muldc3(ptr sret({ double, double }) align 8 %t, double 1.0, double 2.0, double 3.0, double 4.0)
+  call void @__mulxc3(ptr sret({ double, double }) align 8 %t, double 1.0, double 2.0, double 3.0, double 4.0)
+  call void @__multc3(ptr sret({ double, double }) align 8 %t, double 1.0, double 2.0, double 3.0, double 4.0)
+  %n = call i32 @__divhc3(half 1.0, half 2.0, half 3.0, half 4.0)
+  %e = call i64 @__divsc3(float 1.0, float 2.0, float 3.0, float 4.0)
+  call void @__divdc3(ptr sret({ double, double }) align 8 %t, double 1.0, double 2.0, double 3.0, double 4.0)
+  call void @__divxc3(ptr sret({ double, double }) align 8 %t, double 1.0, double 2.0, double 3.0, double 4.0)
+  call void @__divtc3(ptr sret({ double, double }) align 8 %t, double 1.0, double 2.0, double 3.0, double 4.0)
+  %re = load double, ptr %t, align 8
+  %ae = add i64 %a, %e
+  %i = trunc i64 %ae to i32
+  %j = fptosi double %re to i32
+  %mn = add i32 %m, %n
+  %ij = add i32 %i, %j
+  %r = add i32 %ij, %mn
+  ret i32 %r
+}
+
+#--- cxdef.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; Stand-ins for the Win64 __muldc3 and __divsc3; noinline keeps the calls.
+define hidden void @__muldc3(ptr sret({ double, double }) align 8 %r, double %a, double %b, double %c, double %d) noinline {
+  %re = fmul double %a, %c
+  store double %re, ptr %r, align 8
+  ret void
+}
+
+define hidden i64 @__divsc3(float %a, float %b, float %c, float %d) noinline {
+  %q = fdiv float %a, %c
+  %i = bitcast float %q to i32
+  %z = zext i32 %i to i64
+  ret i64 %z
+}
+
+#--- cxmis.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; The imaginary parts are missing.
+declare void @__muldc3(ptr, double, double)
+declare i64 @__divsc3(float, float)
+
+define i32 @main() {
+  %t = alloca { double, double }, align 8
+  call void @__muldc3(ptr sret({ double, double }) align 8 %t, double 1.0, double 3.0)
+  %q = call i64 @__divsc3(float 6.0, float 3.0)
+  %re = load double, ptr %t, align 8
+  %i = fptosi double %re to i32
+  %j = trunc i64 %q to i32
+  %r = add i32 %i, %j
+  ret i32 %r
+}
+
+#--- mul-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; A stand-in for the archive's __muldc3 member.
+define hidden { double, double } @__muldc3(double %a, double %b, double %c, double %d) {
+  %re = fmul double %a, %c
+  %im = fmul double %b, %d
+  %r0 = insertvalue { double, double } poison, double %re, 0
+  %r1 = insertvalue { double, double } %r0, double %im, 1
+  ret { double, double } %r1
+}
+
+#--- mul-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; A stand-in for the archive's __muldc3 member.
+define hidden void @__muldc3(ptr sret({ double, double }) align 8 %r, double %a, double %b, double %c, double %d) {
+  %re = fmul double %a, %c
+  %im = fmul double %b, %d
+  store double %re, ptr %r, align 8
+  %p = getelementptr inbounds i8, ptr %r, i64 8
+  store double %im, ptr %p, align 8
+  ret void
+}
+
+#--- hl-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+declare float @__extendhfsf2(i32)
+declare { double, double } @__muldc3(double, double, double, double)
+
+define i32 @use_helpers(i32 %h) {
+  %f = call float @__extendhfsf2(i32 %h)
+  %d = fpext float %f to double
+  %c = call { double, double } @__muldc3(double %d, double 0.0, double 2.0, double 0.0)
+  %re = extractvalue { double, double } %c, 0
+  %i = fptosi double %re to i32
+  ret i32 %i
+}
+
+#--- hl-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare float @__extendhfsf2(i32)
+declare void @__muldc3(ptr, double, double, double, double)
+
+define i32 @use_helpers(i32 %h) {
+  %tmp = alloca { double, double }, align 8
+  %f = call float @__extendhfsf2(i32 %h)
+  %d = fpext float %f to double
+  call void @__muldc3(ptr sret({ double, double }) align 8 %tmp, double %d, double 0.0, double 2.0, double 0.0)
+  %re = load double, ptr %tmp, align 8
+  %i = fptosi double %re to i32
+  ret i32 %i
+}
+
+#--- hlprog.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+declare i32 @use_helpers(i32)
+declare float @__extendhfsf2(i32)
+
+define i32 @main() {
+  %a = call i32 @use_helpers(i32 15872)
+  %f = call float @__extendhfsf2(i32 15360)
+  %b = fptosi float %f to i32
+  %r = add i32 %a, %b
+  ret i32 %r
+}

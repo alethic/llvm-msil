@@ -14,12 +14,14 @@
 ; strict-i128.ll checks that each body equals its plain twin's).
 ; No compiler-rt helper is asked for: no __divti3, __udivti3, __modti3,
 ; __umodti3, __fixsfti, __fixdfti, __fixunssfti, __fixunsdfti, __floattisf,
-; __floattidf, __floatuntisf or __floatuntidf, no call at all, and none of
-; Phase 1's 'runtime helper ... (phase 3)' errors. i128 results are returned
-; through the hidden result pointer (the first parameter, M7), so each method
-; has no call. llc reports nothing at -O0 and -O2 on both triples, and the
-; output assembles; the values are checked by the execution tests
-; msil/test/M1/01-int/i128-divrem.c and 02-fp/i128-fp-conv.c (M12.d).
+; __floattidf, __floatuntisf or __floatuntidf, no call at all, and no
+; runtime-helper error (helper-archive-errors.ll has the 128-bit text that
+; ReplaceNodeResults gives since M25 when -expand-div-rem-bits=128 keeps the
+; inline expansion away). i128 results are returned through the hidden result
+; pointer (the first parameter, M7), so each method has no call. llc reports
+; nothing at -O0 and -O2 on both triples, and the output assembles; the values
+; are checked by the execution tests msil/test/M1/01-int/i128-divrem.c and
+; 02-fp/i128-fp-conv.c (M12.d).
 ;
 ; helpers.ll (a split part): the expansion covers the plain conversions from
 ; and to float32 and float64, and from bfloat (fp-expand.ll's i128.ll). The
@@ -34,9 +36,10 @@
 ; and the rounding step is the call that is diagnosed. The exact f32 -> bf16
 ; step (an FP_ROUND marked exact, which turns the result's float32 copy back
 ; into bfloat) is a bitcast plus the high 16 bits since upstream
-; 5110131a330f. Each is Phase 1's 'runtime helper '<name>' is not available
-; for MSIL yet (phase 3)', once per helper and function, with no call built
-; and no crash; the IL on stdout assembles.
+; 5110131a330f. Each is LowerCall's runtime-helper error, since M25
+; "runtime helper '<name>' needs the helper archive clang_rt.builtins, which
+; only msil-ld links" (5.14.3 A9), once per helper and function, with no call
+; built and no crash; the IL on stdout assembles.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=int64 --implicit-check-not="{{^ +call}}" \
 ; DEFINE:   --implicit-check-not=__divti3 --implicit-check-not=__udivti3 --implicit-check-not=__modti3 \
@@ -238,12 +241,12 @@ declare float @llvm.experimental.constrained.uitofp.f32.i128(i128, metadata, met
 ;--- helpers.ll
 source_filename = "i128-helpers.c"
 
-; HELPER: {{^}}error: {{.*}}in function fptosi_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function fptoui_f16 {{.*}}: runtime helper '__extendhfsf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function sitofp_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function uitofp_f16 {{.*}}: runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function sitofp_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
-; HELPER: {{^}}error: {{.*}}in function uitofp_bf16 {{.*}}: runtime helper '__truncsfbf2' is not available for MSIL yet (phase 3){{$}}
+; HELPER: {{^}}error: {{.*}}in function fptosi_f16 {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
+; HELPER: {{^}}error: {{.*}}in function fptoui_f16 {{.*}}: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
+; HELPER: {{^}}error: {{.*}}in function sitofp_f16 {{.*}}: runtime helper '__truncsfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
+; HELPER: {{^}}error: {{.*}}in function uitofp_f16 {{.*}}: runtime helper '__truncsfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
+; HELPER: {{^}}error: {{.*}}in function sitofp_bf16 {{.*}}: runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
+; HELPER: {{^}}error: {{.*}}in function uitofp_bf16 {{.*}}: runtime helper '__truncsfbf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 
 ; HELPER-IL-LABEL: {{^}}.method public static void 'fptosi_f16'(native int, int32) cil managed{{$}}
 ; HELPER-IL-LABEL: {{^}}.method public static void 'fptoui_f16'(native int, int32) cil managed{{$}}

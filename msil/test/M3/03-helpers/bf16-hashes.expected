@@ -1,0 +1,49 @@
+D bf16->f32 580f3ec0d9becab4 000000010000
+D f32->bf16 sample 960ad99ff0bfe99d 0000000ff000
+D f32->bf16 sample NaN f1f6620ad8766a9a 000000001000
+D f32->bf16 midpoints ebf791eb73f73b5b 000000030000
+D f64->bf16 2b9a237d3371e719 000000030000
+S bf 0001 ->f32 00010000
+S bf 007f ->f32 007f0000
+S bf 0080 ->f32 00800000
+S bf 3f80 ->f32 3f800000
+S bf 7f7f ->f32 7f7f0000
+S bf 7f80 ->f32 7f800000
+S bf 7f81 ->f32 7f810000
+S bf 7fc0 ->f32 7fc00000
+S bf ff81 ->f32 ff810000
+S bf 8000 ->f32 80000000
+S f 7f800001 ->bf 7fc0
+S f 7fa00000 ->bf 7fe0
+S f 7fc00000 ->bf 7fc0
+S f 7fc00001 ->bf 7fc0
+S f 7fffe000 ->bf 7fff
+S f ff812345 ->bf ffc1
+S f 477ff000 ->bf 4780
+S f 477fefff ->bf 4780
+S f 477ff001 ->bf 4780
+S f 33000000 ->bf 3300
+S f 33000001 ->bf 3300
+S f 32ffffff ->bf 3300
+S f 38800000 ->bf 3880
+S f 387fe000 ->bf 3880
+S f 3f801000 ->bf 3f80
+S f 3f803000 ->bf 3f80
+S f 3f808000 ->bf 3f80
+S f 3f818000 ->bf 3f82
+S f 3f808001 ->bf 3f81
+S f 7f7fffff ->bf 7f80
+S f 00008000 ->bf 0000
+S f 80018000 ->bf 8002
+S d 7ff0000000000001 ->bf 7fc0
+S d 7ff8000000000001 ->bf 7fc0
+S d 7ff4000000000000 ->bf 7fe0
+S d 3f30040000000001 ->bf 3980
+S d 40effe0000000000 ->bf 4780
+S d 3e70000000000000 ->bf 3380
+S d 3e70000000000001 ->bf 3380
+S d 3ff0100000000000 ->bf 3f80
+S d 3ff0100000000001 ->bf 3f81
+S d 47efffffe0000000 ->bf 7f80
+S f 3f818000 ->bf through a pointer 3f82
+[exit 0]

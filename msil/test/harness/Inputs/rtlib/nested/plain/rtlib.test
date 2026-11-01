@@ -1,0 +1,10 @@
+# Run only in a nested lit by ../../../../linux-rtlib.test: prints what
+# msil_linux_rtlib gives a directory without hosted mode's marker (plan
+# 5.17.2, M25), whose native oracle stays E7, as ../hosted/rtlib.test prints
+# it in a hosted directory.
+# RUN: echo "plain dir rtlib: [%{msil_linux_rtlib}]"
+# RUN: echo "plain dir e7 args: [%{msil_e7_args}]"
+# RUN: echo plain dir prog: %msil_prog_build
+# RUN: %if msil-linux-rtlib %{ echo plain dir feature msil-linux-rtlib %}
+# RUN: %if msil-native-oracle %{ echo plain dir feature msil-native-oracle %}
+# RUN: %if msil-linux-hosted-oracle %{ echo plain dir feature msil-linux-hosted-oracle %}

@@ -54,10 +54,13 @@
 ; add and a seq_cst atomic load (__atomic_fetch_add_4, __atomic_load_4), the
 ; f16 helper __truncsfhf2 and putchar (a Phase-1 import in -S) are UNDEFINED
 ; FUNCTION symbols with '<msil>Symbols' calls, no P/Invoke and no
-; diagnostic, while the same module stays D14's error in -S. h, whose result
-; is half, has a SIGNATURES entry with NATIVE_INCOMPATIBLE (5.8.8 as the
-; section 12 row of 2026-10-25 amends it); the __truncsfhf2 MemberRef, which
-; code generation adds and no IR call names, has none.
+; diagnostic, while in -S the same module has M25's runtime-helper errors
+; (5.14.3 A9, helper-archive-errors.ll): "is an atomic operation that only
+; msil-ld links" for the two __atomic_* helpers and "needs the helper
+; archive clang_rt.builtins, which only msil-ld links" for __truncsfhf2. h,
+; whose result is half, has a SIGNATURES entry with NATIVE_INCOMPATIBLE
+; (5.8.8 as the section 12 row of 2026-10-25 amends it); the __truncsfhf2
+; MemberRef, which code generation adds and no IR call names, has none.
 ; ae.ll: calls through another function type of an available_externally
 ; function and of an extern_weak declaration, both declarations for the
 ; linker (isDeclarationForLinker; 5.8.10: an available_externally function
@@ -455,9 +458,9 @@
 ; ATOM-CANON-NOT:  .method
 ; ATOM-CANON:    L{{[0-9]+}}: call int32(int32) [msil.extern]<msil>Symbols::'putchar'
 ; ATOM-CANON-NOT:  .method
-; ATOM-S-DAG: {{^}}error: undefined function '__atomic_fetch_add_4' is not defined in this module {{.*}}
-; ATOM-S-DAG: {{^}}error: undefined function '__atomic_load_4' is not defined in this module {{.*}}
-; ATOM-S-DAG: {{^}}error: {{.*}}runtime helper '__truncsfhf2' is not available for MSIL yet (phase 3){{$}}
+; ATOM-S-DAG: {{^}}error: runtime helper '__atomic_fetch_add_4' is an atomic operation that only msil-ld links{{$}}
+; ATOM-S-DAG: {{^}}error: runtime helper '__atomic_load_4' is an atomic operation that only msil-ld links{{$}}
+; ATOM-S-DAG: {{^}}error: {{.*}}runtime helper '__truncsfhf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/ae.ll \
 ; RUN:   -o %t/ae.lnx.o 2>&1 | count 0

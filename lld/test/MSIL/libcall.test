@@ -26,8 +26,10 @@
 ## was not resolved by msil-ld', never D14's public P/Invoke of "ucrtbase" or
 ## "libm.so.6". A compiler-rt helper (a '__' name of the RuntimeLibcalls set,
 ## 5.14.2's class N1: __powidf2 for llvm.powi on Linux) never binds to a
-## native library, M24's guard (never-bind.test), so it keeps the backend's
-## helper error even when a native library defines it.
+## native library, M24's guard (never-bind.test), so it is the backend's
+## helper error even when a native library defines it. Linked text links no
+## helper archive, so the error is A9's text (5.14.3; M25):
+##   runtime helper '<name>' needs the helper archive clang_rt.builtins, which only msil-ld links
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: llvm-as main.ll -o main.o
@@ -84,9 +86,9 @@
 # PUTS:       {{^}}  ldc.i4.7{{$}}
 
 ## Linked library calls: pow binds through the native library that defines
-## it, on both triples, and is the backend's error without one; __powidf2
-## stays the backend's helper error on Linux although libhelper.so defines
-## it (no P/Invoke).
+## it, on both triples, and is the backend's error without one; __powidf2 is
+## the backend's helper error, A9's text, on Linux although libhelper.so
+## defines it (no P/Invoke).
 # RUN: cd %t/linked
 # RUN: llvm-as pow-win.ll -o pow-win.o
 # RUN: llvm-as pow-lnx.ll -o pow-lnx.o
@@ -113,7 +115,7 @@
 # RUN: not msil-ld --lto-emit-asm --lto-O0 powi-lnx.o libm.so.6 libhelper.so -o x.il 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=POWI --implicit-check-not="PLEASE submit" --implicit-check-not=pinvokeimpl \
 # RUN:     --implicit-check-not="LLVM ERROR" --implicit-check-not="Stack dump" --implicit-check-not=error:
-# POWI: {{^}}msil-ld: error: runtime helper '__powidf2' is not available for MSIL yet (phase 3){{$}}
+# POWI: {{^}}msil-ld: error: runtime helper '__powidf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 
 #--- main.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"

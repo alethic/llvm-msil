@@ -1,15 +1,19 @@
 # MSIL build helpers (Windows host)
 
 PowerShell 7 scripts that configure, build and test the llvm-msil tree on the Windows
-development host, safely shared by several agents (or people) working in one checkout and
-one build directory. They dot-source each other through `$PSScriptRoot`, so keep them
-together in this directory. Run them with `pwsh -NoProfile -File <script> ...`; from Git
-Bash use forward slashes (`pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 ...`).
+development host, safely shared by several agents (or people) working in one checkout and one
+build directory, and since M25 the Python script `build-builtins.py`, which builds the helper
+archives `clang_rt.builtins` (below). The PowerShell scripts dot-source each other through
+`$PSScriptRoot`, so keep them together in this directory. Run them with
+`pwsh -NoProfile -File <script> ...`; from Git Bash use forward slashes
+(`pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-lit.ps1 ...`).
 
 Paths: the repository root is three levels above this directory; the build directory is
-`<repo>/build` unless `MSIL_BUILD_DIR` is set (every script also takes `-BuildDir`, except
-`msil-run.ps1`, which uses `MSIL_BUILD_DIR` only). Relative test and source paths are
-relative to the repository root.
+`MSIL_BUILD_DIR` when it is set and not empty, else `<repo>/build` (every script also takes
+`-BuildDir`, except `msil-run.ps1`, which uses `MSIL_BUILD_DIR` only; `build-builtins.py`
+takes `--build-dir`, as `msil/utils/jitall/build-jitall.py` and
+`msil/utils/mdtools/build-mdtools.py` do, which follow the same rule). Relative test and source
+paths are relative to the repository root.
 
 ## Lock rules
 
@@ -21,6 +25,7 @@ file handle, so the operating system releases it the moment the holder exits or 
 |---|---|---|
 | exclusive | `msil-configure.ps1`, `msil-build.ps1` (cmake, ninja) | one writer per build directory |
 | shared | `msil-lit.ps1`, `msil-run.ps1`, `msil-gtest.ps1`, `msil-expect-error.ps1` (when the program is in the build directory) | on Windows a running `.exe` cannot be relinked, so tools never run while ninja writes |
+| shared | `build-builtins.py` (M25: a build, `--check` and `--native-oracle`; `--list`, `--check-list` and `--self-test` take none) | it runs the build's clang and `llvm-ar`; it takes the lock itself, in Python, with the same file and sharing rules (below) |
 | none | `msil-syntax.ps1`, `msil-tblgen.ps1`, `msil-env.ps1` | they write nothing into the build tree |
 | exclusive, on the private hooks tree | `msil/utils/ci/upstream-hooks.ps1` (its compile leg runs cmake and ninja there itself; `-SelfTest` takes the same lock shared) | the hooks tree has its own `.msil-build.lock`; the main build directory's lock is not involved (below) |
 
@@ -92,6 +97,16 @@ the first time). Without `-Standard` the script builds exactly the targets it is
 needs at least one, as before: after a change in `lld/MSIL` or in clang's MSIL toolchain, `lld
 clang` relinks `msil-ld` and clang.
 
+**The helper archives (M25).** They are not a ninja target, and no `msil-build.ps1` option
+builds them. After every build the build agent runs `python
+D:/llvm-msil/msil/utils/build/build-builtins.py` (below), once `msil-build.ps1` has exited and
+released its lock: every member depends on clang and the MSIL backend, and the script rebuilds
+only an archive whose clang, `llvm-ar`, sources or command lines changed (about a minute for
+both default triples with `--jobs 4` on a quiet host; seconds when every stamp is current). A
+milestone gate's step G1 runs it after `msil-build.ps1 -Standard`, then `--check` and
+`--check-list`; `msil/utils/ci/build.ps1` and `build.sh` run it after ninja as their row
+`builtins` (plan 5.14.3 A10).
+
 **The phase gate's build.** The Phase 2 exit (M23) builds exactly this list: its Build targets
 line names the 29 targets of `build-targets.txt` in the file's order (`llc`, `opt`, `clang`,
 `FileCheck`, `not`, `count`, `split-file`, `llvm-config`, `llvm-profdata`, `TargetParserTests`,
@@ -99,16 +114,68 @@ line names the 29 targets of `build-targets.txt` in the file's order (`llc`, `op
 `llvm-objdump`, `llvm-readobj`, `llvm-as`, `llvm-bcanalyzer`, `llvm-lto2`, `CLITests`,
 `LLDAsLibAllTests`, `yaml2obj`, `llvm-mc`, `llvm-cil-dump`, `llvm-cil-copy`), M17's list, to which
 M18-M23 added nothing. So gate step G1 (`msil-build.ps1 -Standard`) and the build step of
-`msil/utils/run-m1-gate.ps1` (`msil/utils/ci/build.ps1`, which also builds jitall) are the same
-build; on a tree that is current it only confirms that. The exit corpus needs no target of its
-own: `msil/utils/corpus/fetch.py` is Python, and `msil/utils/ci/det-manifest.py`, the
-determinism row, uses `clang` and `llvm-ar` from the list.
+`msil/utils/run-m1-gate.ps1` (`msil/utils/ci/build.ps1`, which also builds jitall and, since
+M25, the helper archives) are the same build; on a tree that is current it only confirms that.
+The exit corpus needs no target of its own: `msil/utils/corpus/fetch.py` is Python, and
+`msil/utils/ci/det-manifest.py`, the determinism row, uses `clang` and `llvm-ar` from the list
+(since M25 also through `build-builtins.py`, for the helper archives that it builds into its
+work directory and lists).
 
 ```powershell
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 -Standard llvm-dwarfdump
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 lld clang
 pwsh -NoProfile -File D:/llvm-msil/msil/utils/build/msil-build.ps1 llc FileCheck
+```
+
+### build-builtins.py (shared; M25)
+
+Builds the helper archive `clang_rt.builtins` of each MSIL triple (plan 5.14.3): compiler-rt's
+builtins and the toolchain's `long double` forwarders, as `msil/lib/builtins/sources.txt` lists
+them, compiled by `<build>/bin/clang` at one fixed command line and archived by
+`<build>/bin/llvm-ar` with `rcsD`, so two builds give the same bytes. The build directory is
+`--build-dir DIR`, by default `MSIL_BUILD_DIR` when it is set and not empty, else `<repo>/build`
+(the directory rule above, as in `msil-build.ps1`, `msil-lit.ps1`, `msil-run.ps1`,
+`build-jitall.py` and `build-mdtools.py`); `--self-test`, `--list` and `--check-list` use no
+build. The script writes, checks and removes only plan 5.14.3 A1's per-target file of each
+triple, `<resource dir>/lib/<triple>/clang_rt.builtins.lib` on the windows-msvc triples and
+`<resource dir>/lib/<triple>/libclang_rt.builtins.a` on the others, with the resource directory
+that `clang -print-resource-dir` prints (in the shared build
+`build/lib/clang/24/lib/<triple>/`), or `DIR/<triple>/<that name>` with `--out DIR`, for a
+private build. Once that file exists, `clang --target=<triple> -print-libgcc-file-name` names
+it, and the driver links it. While it does not, a resource directory that has the old layout's
+native compiler-rt, from a compiler-rt build with `LLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF`,
+makes clang name that file instead
+(`<resource dir>/lib/<os>/[lib]clang_rt.builtins-<arch>.<ext>`): the script never touches such
+a file, and when clang still names it after a build into the resource directory (also for an
+archive that was up to date), the script fails with a usage error that names it. It builds
+`x86_64-pc-windows-msvc-msil` and `x86_64-unknown-linux-gnu-msil` by default, the triples of
+`--triple T` (repeatable) instead, and with `--all` also the x86_64 MinGW and musl triples and
+the aarch64 Linux and windows-msvc ones; `--jobs N` sets the parallel compiles (default: one per
+processor). `<archive>.stamp` holds the SHA-256 of the script, the clang and `llvm-ar` binaries,
+`sources.txt`, every member's source and header, and the command lines, and an archive whose
+stamp matches is not rebuilt. A failed compile removes that triple's archive and stamp, so a
+link fails loudly instead of using a stale archive. The other modes: `--check` builds nothing
+and exits 1 when an archive is missing or stale; `--list` prints `<triple> <member> <source>`
+per member; `--check-list` exits 1 unless every `.c` file of compiler-rt's `GENERIC_SOURCES` and
+`BF16_SOURCES` is listed or excluded (run it after an upstream merge); `--native-oracle DIR`
+builds E7h's native compiler-rt archive `DIR/libclang_rt.builtins-x86_64.a`
+(`msil/utils/make-linux-sysroot.py --builtins` runs it); `--self-test` checks the script offline
+with stand-in tools. Exit status 0, 1 for a failed check or compile, 2 for a usage error (also a
+missing clang or `llvm-ar`, or a file that shadows a helper archive).
+
+A build, `--check` and `--native-oracle` take the build directory's shared lock, which the
+script takes itself with `msil-lock.ps1`'s file and sharing rules (without the wait for
+orphaned ninja or cmake processes): while `msil-build.ps1` holds the exclusive lock it prints a
+`waiting for <lock file> (last writer: ...)` line and waits up to 240 minutes, then fails with
+status 1. So never run it while holding that directory's exclusive lock. `--list`,
+`--check-list` and `--self-test` run no build tool and take no lock.
+
+```powershell
+python D:/llvm-msil/msil/utils/build/build-builtins.py
+python D:/llvm-msil/msil/utils/build/build-builtins.py --check
+python D:/llvm-msil/msil/utils/build/build-builtins.py --all --jobs 4
+python D:/llvm-msil/msil/utils/build/build-builtins.py --list --triple x86_64-unknown-linux-gnu-msil
 ```
 
 ### msil-lit.ps1 (shared)
@@ -138,7 +205,11 @@ The execution tests read the exit corpus from a cache outside the repository; fe
 (GettingStarted.md section 7, "The exit corpus"). The hosted tests (M15) run with `msil-lit.ps1 -LitArgs:"-sv --param
 msil_glibc_sysroot=C:/llvm-msil-scratch/glibc-sysroot" msil/test/M2/09-hosted` (the colon after
 `-LitArgs`, because the value holds a drive path; see `msil/test/README.md`), or as the `hosted`
-leg of `msil/utils/ci/lit-legs.ps1`.
+leg of `msil/utils/ci/lit-legs.ps1`. Since M25 the tests that call runtime helpers
+(`msil/test/M3/03-helpers`) need current helper archives (`build-builtins.py`, above), and a
+hosted directory of the Linux triple whose native oracle runs (every directory of
+`msil/test/M3`) needs E7h's native compiler-rt archive too
+(`python msil/utils/make-linux-sysroot.py --builtins`; `msil/test/README.md`).
 
 ### msil-run.ps1 (shared)
 

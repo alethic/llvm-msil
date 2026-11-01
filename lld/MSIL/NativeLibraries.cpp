@@ -34,6 +34,7 @@
 #include "NativeLibraries.h"
 #include "Config.h"
 #include "InputFiles.h"
+#include "SymbolTable.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Memory.h"
@@ -186,7 +187,10 @@ bool isNativeCallbackFunction(StringRef name) {
 // LLVM's own runtime names (__llvm_deoptimize and the
 // __llvm_mem{cpy,move,set}_element_unordered_atomic_{1,2,4,8,16} functions)
 // and compiler-rt's safe-stack __safestack_unsafe_stack_ptr. Sorted in byte
-// order, for binary search.
+// order, for binary search. classifyHelperName in
+// llvm/lib/Target/MSIL/MSILAsmPrinter.cpp keeps a copy of these names
+// (CLibraryRuntimeNames) and of the '_finite' suffix rule: a change here must
+// be made there too.
 static const char *const cLibraryRuntimeNames[] = {
     "__chkstk",
     "__memcpy_chk",
@@ -208,6 +212,35 @@ static bool isCLibraryName(StringRef name) {
                             std::end(cLibraryRuntimeNames), name, less);
 }
 
+// clang's complex multiply and divide helpers (C11 Annex G), which CodeGen
+// calls by name (ComplexExprEmitter::EmitBinMul and EmitBinDiv in
+// clang/lib/CodeGen/CGExprComplex.cpp) and the RuntimeLibcalls sets lack.
+// They are N1 names too (plan 5.14.2), so that no native library supplies
+// one (libgcc_s.so.1 exports __mulsc3, __muldc3, __divsc3 and __divdc3,
+// helpers-switches 2.5) and a call that differs from the definition is N-1's
+// error. The helper archive defines the float and double ones; the x87 and
+// binary128 ones are in no archive (plan 5.14.3 A5). CodeGen calls the half
+// ones, __mulhc3 and __divhc3, for _Float16 _Complex when half arithmetic is
+// not promoted to float (by default on the aarch64 MSIL triples, on the x86_64
+// ones with -fexcess-precision=16). Like the x87 and binary128 ones, they are
+// in no archive: compiler-rt has no mulhc3.c or divhc3.c. libgcc_s.so.1
+// exports both (GCC_12.0.0), so they must never bind natively. Sorted in byte
+// order, for binary search. classifyHelperName in
+// llvm/lib/Target/MSIL/MSILAsmPrinter.cpp keeps a copy of this list
+// (ComplexHelperNames): a change here must be made there too.
+static const char *const complexHelperNames[] = {
+    "__divdc3", "__divhc3", "__divsc3", "__divtc3", "__divxc3",
+    "__muldc3", "__mulhc3", "__mulsc3", "__multc3", "__mulxc3"};
+
+static bool isComplexHelperName(StringRef name) {
+  auto less = [](StringRef a, StringRef b) { return a < b; };
+  assert(std::is_sorted(std::begin(complexHelperNames),
+                        std::end(complexHelperNames), less) &&
+         "the complex helpers must be sorted");
+  return std::binary_search(std::begin(complexHelperNames),
+                            std::end(complexHelperNames), name, less);
+}
+
 // N4: plan 5.14.2's ten names, sorted in byte order, for binary search.
 static const char *const setjmpFamilyNames[] = {
     "__longjmp_chk", "__sigsetjmp", "_longjmp", "_setjmp",    "_setjmp3",
@@ -227,7 +260,7 @@ getCompilerRuntimeNames(ArrayRef<const char *> runtimeLibcalls) {
 }
 
 bool isCompilerRuntimeName(StringRef name, const Ctx &ctx) {
-  return ctx.compilerRuntimeNames.contains(name);
+  return ctx.compilerRuntimeNames.contains(name) || isComplexHelperName(name);
 }
 
 bool isAtomicLibraryName(StringRef name) {
@@ -257,6 +290,41 @@ bool isHelperName(StringRef name, const Ctx &ctx) {
          cli::isToolchainName(name);
 }
 
+// The file names of the toolchain's helper archive (plan 5.14.3 A1), which
+// the driver passes after the default libraries when it exists:
+// clang_rt.builtins.lib on the windows-msvc triples, libclang_rt.builtins.a
+// on the others.
+static bool isHelperArchivePath(StringRef path) {
+  StringRef name = sys::path::filename(path);
+  return name == "clang_rt.builtins.lib" || name == "libclang_rt.builtins.a";
+}
+
+// True if an input archive of the link is the helper archive
+// (isHelperArchivePath). The loaded files hold the archive itself when the
+// native index read it (an archive without CIL or bitcode members) and the
+// members that references extracted (a member's file names its archive); a
+// lazy bitcode member is on ctx.lazyBitcodeFiles, and a lazy CIL object is
+// on no list, so its lazy symbols name it. Asked only for a report, after
+// every input is loaded, so it keeps no state of its own.
+static bool isHelperArchiveLinked(const Ctx &ctx) {
+  auto isMember = [](const InputFile *f) {
+    return f && isHelperArchivePath(f->archiveName);
+  };
+  for (const InputFile *f : ctx.loadedFiles) {
+    if (isMember(f))
+      return true;
+    const auto *lib = dyn_cast<NativeLibraryFile>(f);
+    if (lib && lib->format == NativeLibraryFile::Archive &&
+        isHelperArchivePath(lib->getName()))
+      return true;
+  }
+  if (any_of(ctx.lazyBitcodeFiles, isMember))
+    return true;
+  return symtab && any_of(symtab->symbols(), [&](const Symbol *sym) {
+           return sym->isLazy() && isMember(sym->getFile());
+         });
+}
+
 std::string getNameClassLine(StringRef name, const Ctx &ctx) {
   if (isAtomicLibraryName(name))
     return ctx.arg.target.isOSWindows()
@@ -268,8 +336,11 @@ std::string getNameClassLine(StringRef name, const Ctx &ctx) {
            "clang_rt.builtins; if it is linked, the object needs a newer "
            "toolchain";
   if (isCompilerRuntimeName(name, ctx))
-    return "\n>>> a compiler runtime helper: link the toolchain's helper "
-           "archive clang_rt.builtins";
+    return isHelperArchiveLinked(ctx)
+               ? "\n>>> a compiler runtime helper that the toolchain's helper "
+                 "archive clang_rt.builtins does not define"
+               : "\n>>> a compiler runtime helper: link the toolchain's helper "
+                 "archive clang_rt.builtins";
   return "";
 }
 
@@ -422,6 +493,14 @@ bool hasWideNativeLongDouble(const Triple &tt) {
   if (!tt.isOSWindows())
     return true;
   return tt.getArch() == Triple::x86_64 && !tt.isWindowsMSVCEnvironment();
+}
+
+std::string getLongDoubleRejectionText(StringRef name, StringRef module) {
+  return ("native function '" + name + "' (" + module +
+          ") takes or returns a native 'long double', which is not supported "
+          "for MSIL; the helper archive clang_rt.builtins forwards the 'long "
+          "double' functions that have a 'double' counterpart")
+      .str();
 }
 
 //===----------------------------------------------------------------------===//
