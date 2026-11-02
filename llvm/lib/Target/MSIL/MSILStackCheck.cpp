@@ -182,7 +182,9 @@ static bool stackCheck(MachineFunction &MF) {
         if (Pops != NumResults)
           fail(MF, &MI, "'ret' operands do not match the method's results");
       }
-      if (MI.getOpcode() == MSIL::LOCALLOC && Depth != 1)
+      if ((MI.getOpcode() == MSIL::LOCALLOC ||
+           MI.getOpcode() == MSIL::LOCALLOC_I64) &&
+          Depth != 1)
         fail(MF, &MI, "'localloc' with a non-empty evaluation stack");
 
       // The CIL_ instructions that MSILMCInstLower::lowerImpl expands MI into

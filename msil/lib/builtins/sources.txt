@@ -175,3 +175,9 @@ compiler-rt/lib/builtins/truncsfbf2.c
 # The forwarders of the native `long double` functions (plan 5.14.3 A4), on the
 # triples of msil-ld's hasWideNativeLongDouble.
 msil/lib/builtins/msil_longdouble.c *-linux-*,x86_64-*-windows-gnu-*
+
+# The UCRT's printf and scanf families and its stdio options words (plan
+# 5.15.2, 5.14.3 A6), on the windows-msvc triples, whose C runtime exports
+# only __stdio_common_v*: for code that declares printf without <stdio.h>.
+msil/lib/builtins/msil_ucrt_stdio.c *-windows-msvc-msil
+msil/lib/builtins/msil_ucrt_stdio_options.c *-windows-msvc-msil

@@ -1,0 +1,99 @@
+# msil/utils/ci/linux-syntax-check.py (plan section 12, M26: the Linux C++
+# portability check that every gate runs from M27 on) compiles C++ files with
+# -fsyntax-only for x86_64-unknown-linux-gnu with Ubuntu 24.04's clang 18 and
+# libstdc++ 14, the pair of the Linux CI job, which neither the Windows build
+# nor the Windows CI job can stand in for (CI run 41257850076 stopped at an
+# error only that pair reports). Two TUs outside the repository (--repo names
+# an empty directory, so they take the generic flags; --build a stand-in
+# build directory with an empty compile_commands.json and an llvm-config.h
+# for the Linux overlay):
+# - nested.cpp has run 41257850076's pattern: a class nested in another,
+#   with default member initializers, held in a std::optional member of the
+#   enclosing class, whose emplace() clang 18 rejects with libstdc++ ('no
+#   matching member function for call to 'emplace'', requirement
+#   'is_constructible_v<...Pending>' not satisfied);
+# - moved.cpp is the same TU with the class moved to namespace scope (the fix
+#   of MSILTargetObjectStreamer.cpp), which compiles.
+# (1) Both together: 'FAIL: <file>' for nested.cpp with clang's error
+#     indented four spaces, 'ok: <file>' for moved.cpp, the summary '2
+#     file(s) checked, 1 failed', exit status 1: the failure path.
+# (2) moved.cpp alone: 'ok:', '1 file(s) checked, 0 failed', exit status 0.
+# The toolchain is fetched once outside the repository ('--setup-only');
+# lit's feature msil-linux-syntax-check says that 'linux-syntax-check.py
+# --check-toolchain' finds it current, so this test never downloads it.
+# REQUIRES: msil-linux-syntax-check
+
+# RUN: rm -rf %t && split-file %s %t && mkdir -p %t/repo
+
+# (1)
+# RUN: %{harness_check} exits 1 %python %S/../../utils/ci/linux-syntax-check.py --repo %t/repo --build %t/build --jobs 2 %t/nested.cpp %t/moved.cpp > %t/both.log 2>&1
+# RUN: %{harness_check} contains %t/both.log "^FAIL: \S*nested\.cpp\n    \S*nested\.cpp:\d+:\d+: error: no matching member function for call to 'emplace'$" "^    .*requirement 'is_constructible_v<[^>]*Pending>' was not satisfied" "^ok: \S*moved\.cpp$" "^linux-syntax-check: 2 file\(s\) checked, 1 failed$" "^linux-syntax-check: Ubuntu clang\sversion 18\."
+# RUN: %{harness_check} lacks %t/both.log "^ok: \S*nested\.cpp$" "^FAIL: \S*moved\.cpp$" "^skip: "
+
+# (2)
+# RUN: %{harness_check} exits 0 %python %S/../../utils/ci/linux-syntax-check.py --repo %t/repo --build %t/build --jobs 2 %t/moved.cpp > %t/moved.log 2>&1
+# RUN: %{harness_check} contains %t/moved.log "^ok: \S*moved\.cpp$" "^linux-syntax-check: 1 file\(s\) checked, 0 failed$"
+# RUN: %{harness_check} lacks %t/moved.log "^FAIL: " "error:"
+
+//--- nested.cpp
+#include <optional>
+#include <string>
+
+namespace {
+class Streamer {
+  struct Pending {
+    void *Section = nullptr;
+    std::string Name;
+    bool Public = true;
+  };
+  std::optional<Pending> Current;
+
+public:
+  void begin();
+  bool open() const { return Current.has_value(); }
+};
+} // namespace
+
+void Streamer::begin() { Current.emplace(); }
+
+bool run() {
+  Streamer S;
+  S.begin();
+  return S.open();
+}
+
+//--- moved.cpp
+#include <optional>
+#include <string>
+
+namespace {
+struct Pending {
+  void *Section = nullptr;
+  std::string Name;
+  bool Public = true;
+};
+
+class Streamer {
+  std::optional<Pending> Current;
+
+public:
+  void begin();
+  bool open() const { return Current.has_value(); }
+};
+} // namespace
+
+void Streamer::begin() { Current.emplace(); }
+
+bool run() {
+  Streamer S;
+  S.begin();
+  return S.open();
+}
+
+//--- build/compile_commands.json
+[]
+
+//--- build/include/llvm/Config/llvm-config.h
+#define LLVM_DEFAULT_TARGET_TRIPLE "x86_64-pc-windows-msvc"
+#define LLVM_HOST_TRIPLE "x86_64-pc-windows-msvc"
+/* #undef LLVM_ON_UNIX */

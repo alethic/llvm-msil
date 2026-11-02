@@ -22,6 +22,7 @@ add_lld_library(lldMSIL
   Synthetic.cpp
   TokenMap.cpp
   TrailerDefFile.cpp
+  Variadics.cpp
   Writer.cpp
 
   LINK_COMPONENTS

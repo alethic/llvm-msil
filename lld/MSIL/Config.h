@@ -75,6 +75,33 @@ struct Config {
   bool interfaceOnly;
   // -Bstatic: -l accepts static libraries only (plan 5.10.9).
   bool isStatic = false;
+  // True if the link names legacy_stdio_float_rounding (resp.
+  // iso_stdio_wide_specifiers) by -l, /DEFAULTLIB: or #pragma comment(lib),
+  // which the driver then ignores: on *-windows-msvc-msil the module
+  // initializer leaves out STANDARD_ROUNDING (0x20) (resp.
+  // LEGACY_WIDE_SPECIFIERS, 0x4 of printf's word and 0x2 of scanf's) from the
+  // UCRT stdio option bits it sets (plan 5.15.2).
+  // legacy_stdio_wide_specifiers selects the UCRT's default mode and changes
+  // no bit.
+  bool legacyStdioFloatRounding = false;
+  bool isoStdioWideSpecifiers = false;
+  // The UCRT stdio option bits that the module initializer ORs into
+  // __local_stdio_printf_options's word (resp. __local_stdio_scanf_options's)
+  // (plan 5.15.2): vcruntime's defaults, less the opt-outs above.
+  uint64_t ucrtPrintfBits() const {
+    uint64_t bits = 0x24;
+    if (legacyStdioFloatRounding)
+      bits &= ~uint64_t(0x20); // _CRT_INTERNAL_PRINTF_STANDARD_ROUNDING
+    if (isoStdioWideSpecifiers)
+      bits &= ~uint64_t(0x4); // _CRT_INTERNAL_PRINTF_LEGACY_WIDE_SPECIFIERS
+    return bits;
+  }
+  uint64_t ucrtScanfBits() const {
+    uint64_t bits = 0x2;
+    if (isoStdioWideSpecifiers)
+      bits &= ~uint64_t(0x2); // _CRT_INTERNAL_SCANF_LEGACY_WIDE_SPECIFIERS
+    return bits;
+  }
   bool ltoEmitAsm;
   // --print-bcl-table (plan 5.11.1): print the built-in [mscorlib] table and
   // exit.

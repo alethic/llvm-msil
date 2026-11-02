@@ -2,25 +2,28 @@
 ; D13, M7.b, and plan section 12, rows 'M7.b diagnostic texts amended (frame
 ; operations)' and 'M7.b diagnostic texts extended (setjmp/longjmp, eh.return,
 ; stack address)'; Design.md 4.2 puts dynamic allocas and
-; stacksave/stackrestore on a per-thread shadow stack, which needs the phase-3
-; runtime; plan section 2 'Diagnostics leave well-formed output'). Each case
+; stacksave/stackrestore on a per-thread shadow stack; M26 amended D13 with
+; 5.15.8 H0 (section 12 row of 2026-10-28) and dropped the phase numbers from
+; the frame texts; plan section 2 'Diagnostics leave well-formed output'). Each case
 ; is reported with DiagnosticInfoUnsupported and its exact text:
-;  - an alloca with a variable count (a C VLA or alloca(n)) or an alloca
-;    outside the entry block (also dynamic): 'dynamic alloca / VLA is not
-;    supported for MSIL yet (phase 3 shadow stack)';
-;  - llvm.stacksave and llvm.stackrestore in a function without a dynamic
-;    alloca: 'llvm.stacksave is not supported for MSIL yet (phase 3 shadow
-;    stack)' and 'llvm.stackrestore ...'. In a function with one (clang
-;    brackets every VLA scope with them, at -O0 too) they report nothing, so
-;    one VLA gives exactly one error at every optimization level;
-;  - llvm.frameaddress: 'llvm.frameaddress is not supported for MSIL yet (phase
-;    3 shadow stack)'; llvm.eh.dwarf.cfa (__builtin_dwarf_cfa, whose generic
-;    expansion is a frame address): 'llvm.eh.dwarf.cfa is not supported for
-;    MSIL';
+;  - a dynamic alloca (a variable count, or an alloca outside the entry
+;    block) on a CFG cycle (a VLA or alloca(n) in a loop): 'a dynamic stack
+;    allocation that can repeat within one call (a VLA or alloca in a loop) is
+;    not supported for MSIL yet', from MSILLowerDynamicAlloca (5.15.8 H0, M26),
+;    which drops the function's body; clang brackets the VLA's scope with
+;    llvm.stacksave and llvm.stackrestore, which report nothing, so one VLA in
+;    a loop gives exactly one error at every optimization level. Acyclic
+;    dynamic allocas compile since M26 (localloc with a native-int size), and
+;    the pass deletes llvm.stacksave and llvm.stackrestore in every function
+;    without a cyclic alloca, so the ISel texts 'llvm.stacksave is not
+;    supported for MSIL yet' and 'llvm.stackrestore ...' are backstops that no
+;    llc input reaches (dynamic-alloca.ll);
+;  - llvm.frameaddress: 'llvm.frameaddress is not supported for MSIL yet';
+;    llvm.eh.dwarf.cfa (__builtin_dwarf_cfa, whose generic expansion is a
+;    frame address): 'llvm.eh.dwarf.cfa is not supported for MSIL';
 ;  - llvm.stackaddress (__builtin_stack_address): 'llvm.stackaddress is not
-;    supported for MSIL yet (phase 3 shadow stack)', not LLVM's generic
-;    'llvm.stackaddress is not supported on this target.', which names no
-;    function;
+;    supported for MSIL yet', not LLVM's generic 'llvm.stackaddress is not
+;    supported on this target.', which names no function;
 ;  - llvm.returnaddress, llvm.addressofreturnaddress and llvm.sponentry:
 ;    '<intrinsic> is not supported for MSIL';
 ;  - llvm.init.trampoline and llvm.adjust.trampoline: 'trampolines are not
@@ -80,73 +83,31 @@ define void @use(ptr %p) {
   ret void
 }
 
-; ---- Dynamic allocas ----
+; ---- Dynamic allocas on a cycle ----
 
-; ERR: error: {{.*}}in function vla void (i64): dynamic alloca / VLA is not supported for MSIL yet (phase 3 shadow stack){{$}}
-define void @vla(i64 %n) {
+; for (...) { char b[n]; use(b); } as clang emits it: the scope's save and
+; restore around the alloca, inside the loop. Only the alloca is reported,
+; once; the body is dropped, so the IL checks below do not name the function.
+; ERR: error: {{.*}}in function vla_loop void (i64, i32): a dynamic stack allocation that can repeat within one call (a VLA or alloca in a loop) is not supported for MSIL yet{{$}}
+define void @vla_loop(i64 %n, i32 %k) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i.next, %loop ]
+  %s = call ptr @llvm.stacksave.p0()
   %p = alloca i8, i64 %n, align 1
   call void @use(ptr %p)
-  ret void
-}
-
-; An element count of another type and an over-aligned element.
-; ERR: error: {{.*}}in function vla_i32 void (i32): dynamic alloca / VLA is not supported for MSIL yet (phase 3 shadow stack){{$}}
-define void @vla_i32(i32 %n) {
-  %p = alloca double, i32 %n, align 16
-  call void @use(ptr %p)
-  ret void
-}
-
-; A constant-size alloca outside the entry block is dynamic too.
-; ERR: error: {{.*}}in function alloca_in_block void (i32): dynamic alloca / VLA is not supported for MSIL yet (phase 3 shadow stack){{$}}
-define void @alloca_in_block(i32 %c) {
-entry:
-  %t = icmp ne i32 %c, 0
-  br i1 %t, label %then, label %exit
-then:
-  %p = alloca i32, align 4
-  call void @use(ptr %p)
-  br label %exit
+  call void @llvm.stackrestore.p0(ptr %s)
+  %i.next = add i32 %i, 1
+  %done = icmp sge i32 %i.next, %k
+  br i1 %done, label %exit, label %loop
 exit:
   ret void
 }
 
-; clang's VLA in a block scope: stacksave, the dynamic alloca, stackrestore.
-; Only the alloca is reported, once.
-; ERR: error: {{.*}}in function vla_scope void (i64): dynamic alloca / VLA is not supported for MSIL yet (phase 3 shadow stack){{$}}
-define void @vla_scope(i64 %n) {
-  %s = call ptr @llvm.stacksave.p0()
-  %p = alloca i32, i64 %n, align 4
-  call void @use(ptr %p)
-  call void @llvm.stackrestore.p0(ptr %s)
-  ret void
-}
+; ---- Frame intrinsics ----
 
-; A static frame next to a diagnosed dynamic alloca does not get in the way.
-; ERR: error: {{.*}}in function static_and_vla void (i64): dynamic alloca / VLA is not supported for MSIL yet (phase 3 shadow stack){{$}}
-define void @static_and_vla(i64 %n) {
-  %x = alloca [16 x i8], align 8
-  call void @use(ptr %x)
-  %p = alloca i8, i64 %n, align 1
-  call void @use(ptr %p)
-  ret void
-}
-
-; ---- Stack and frame intrinsics in functions without a dynamic alloca ----
-
-; ERR: error: {{.*}}in function save_only ptr (): llvm.stacksave is not supported for MSIL yet (phase 3 shadow stack){{$}}
-define ptr @save_only() {
-  %s = call ptr @llvm.stacksave.p0()
-  ret ptr %s
-}
-
-; ERR: error: {{.*}}in function restore_only void (ptr): llvm.stackrestore is not supported for MSIL yet (phase 3 shadow stack){{$}}
-define void @restore_only(ptr %s) {
-  call void @llvm.stackrestore.p0(ptr %s)
-  ret void
-}
-
-; ERR: error: {{.*}}in function frame_address ptr (): llvm.frameaddress is not supported for MSIL yet (phase 3 shadow stack){{$}}
+; ERR: error: {{.*}}in function frame_address ptr (): llvm.frameaddress is not supported for MSIL yet{{$}}
 define ptr @frame_address() {
   %f = call ptr @llvm.frameaddress.p0(i32 0)
   ret ptr %f
@@ -154,7 +115,7 @@ define ptr @frame_address() {
 
 ; __builtin_stack_address(): the sibling of the frame address, with its own
 ; text. The dummy result is a null pointer.
-; ERR: error: {{.*}}in function stack_address ptr (): llvm.stackaddress is not supported for MSIL yet (phase 3 shadow stack){{$}}
+; ERR: error: {{.*}}in function stack_address ptr (): llvm.stackaddress is not supported for MSIL yet{{$}}
 define ptr @stack_address() {
   %s = call ptr @llvm.stackaddress.p0()
   ret ptr %s
@@ -253,13 +214,6 @@ define void @big_frame() {
 ; unreachable after the longjmp and the eh.returns is the usual 'ldnull; throw',
 ; big_frame's localloc is clamped to 2147483647 bytes, and the function after
 ; them compiles as usual.
-; IL: .method {{.*}}'vla'(native int) cil managed{{$}}
-; IL: .method {{.*}}'vla_i32'(int32) cil managed{{$}}
-; IL: .method {{.*}}'alloca_in_block'(int32) cil managed{{$}}
-; IL: .method {{.*}}'vla_scope'(native int) cil managed{{$}}
-; IL: .method {{.*}}'static_and_vla'(native int) cil managed{{$}}
-; IL: .method {{.*}}'save_only'() cil managed{{$}}
-; IL: .method {{.*}}'restore_only'(native int) cil managed{{$}}
 ; IL: .method {{.*}}'frame_address'() cil managed{{$}}
 ; IL:       .method {{.*}} native int 'stack_address'() cil managed{{$}}
 ; IL-NEXT:  {{^\{$}}

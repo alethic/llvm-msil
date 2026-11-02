@@ -1,0 +1,14 @@
+sprintf: 16 [12-ab-0.125-q-ff]
+sprintf of an empty string: 0 []
+snprintf: 28 [-1234567890123 9876543210987]
+snprintf into 6 bytes: 14 [trunc]
+byte after the NUL kept: 1
+snprintf(NULL, 0) = 26
+snprintf into 1 byte: 2 []
+vsnprintf: 15 [ 3.14|pi    |+3]
+vsnprintf into 4 bytes: 7 [123]
+vsprintf: 40 [join: 0^2=0 1^2=1 2^2=4 3^2=9 4^2=16 2.5]
+sscanf of [-77 4000000000 abcd 2.500000 word !]: 6 fields: -77 4000000000 abcd 2.500000 word !
+sscanf with a set: 2 [123] [abc456]
+sscanf of an empty string: -1
+[exit 0]

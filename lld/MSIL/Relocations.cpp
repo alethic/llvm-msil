@@ -378,9 +378,16 @@ SymbolBinder::getCanonicalPInvokeStub(const NativeFunction *sym) {
 
 uint32_t SymbolBinder::getPInvokeStub(StringRef name, StringRef module,
                                       StringRef entry, const MethodSig &sig) {
+  // A symbol's VARARG references import its va_list variant (plan 5.15.2
+  // rule 2), its other references the symbol's own entry: the key keeps
+  // them apart.
   std::string key = name.str();
   key.push_back('\0');
   key += OutputModule::getSignatureKey(sig);
+  key.push_back('\0');
+  key += module;
+  key.push_back('\0');
+  key += entry;
   auto [it, inserted] = pinvokeStubs.try_emplace(key, 0);
   if (!inserted)
     return it->second;
@@ -590,10 +597,17 @@ void SymbolBinder::printImports() const {
                     e ? e->Version.str() : std::string(),
                     native && native->format == NativeLibraryFile::ELFShared});
   };
-  for (const SymbolReference &r : references)
-    if (auto *n = dyn_cast<NativeSymbol>(r.sym))
-      add(r.sym->getName(), n->nativeExport->Module, n->nativeExport->Entry,
-          isa<NativeData>(r.sym), n->nativeExport);
+  // A function whose VARARG references bind to its va_list variant lists
+  // the variant (plan 5.15.2 rule 6: printf -> libc.so.6!vprintf).
+  for (const SymbolReference &r : references) {
+    auto *n = dyn_cast<NativeSymbol>(r.sym);
+    if (!n)
+      continue;
+    const NativeExport *e = getVaListVariant(r.sym);
+    if (!e)
+      e = n->nativeExport;
+    add(r.sym->getName(), e->Module, e->Entry, isa<NativeData>(r.sym), e);
+  }
   // The constructors' environ (addEnvironImport()), listed as a program's
   // own import of environ, whose version counts for the floor.
   if (environImport)

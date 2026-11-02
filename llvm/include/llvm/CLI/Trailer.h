@@ -138,6 +138,28 @@ struct CrossReloc {
   int64_t Addend = 0;
 };
 
+/// The UCRT's stdio option words on *-windows-msvc-msil outputs (M26, plan
+/// 5.15.2, hosted-libc H3): vcruntime sets bits of them at startup, which
+/// UCRT's inline printf and scanf functions pass to __stdio_common_v*. When
+/// the output defines __local_stdio_printf_options (resp.
+/// __local_stdio_scanf_options), the module initializer ORs PrintfBits (resp.
+/// ScanfBits) into the unsigned long long whose address the function returns.
+/// The defaults are printf's LEGACY_WIDE_SPECIFIERS | STANDARD_ROUNDING
+/// (0x24) and scanf's LEGACY_WIDE_SPECIFIERS (0x2). A link that names
+/// legacy_stdio_float_rounding clears 0x20 from PrintfBits, one that names
+/// iso_stdio_wide_specifiers clears 0x4 from PrintfBits and 0x2 from
+/// ScanfBits; legacy_stdio_wide_specifiers selects the default mode and
+/// clears nothing (msil-ld). Linked text (--lto-emit-asm) takes msil-ld's
+/// bits from the module flags "msil-ucrt-printf-bits" and
+/// "msil-ucrt-scanf-bits"; standalone whole-program text applies the defaults.
+struct StdioOptions {
+  /// The methods of the C functions __local_stdio_printf_options and
+  /// __local_stdio_scanf_options (native int()); 0 when the output does not
+  /// define one, and then its bits are not applied.
+  EntityRef PrintfOptions = 0, ScanfOptions = 0;
+  uint64_t PrintfBits = 0x24, ScanfBits = 0x2;
+};
+
 /// The class that holds a trailer method (M22): <Module>, or the class
 /// '<msil>Data' (DataClassName), whose .cctor runs phase 1 of a two-phase
 /// output, and which then also holds the data-import helpers.
@@ -243,6 +265,11 @@ struct TrailerInput {
   /// M24: the trailer definitions that the output uses, in Id order (5.14.4).
   /// Without them the trailer is M23's, byte for byte.
   std::vector<TrailerDefRequest> Defs;
+  /// M26: the UCRT's stdio option words (StdioOptions), set only on
+  /// *-windows-msvc-msil outputs that define __local_stdio_printf_options or
+  /// __local_stdio_scanf_options. Without it the trailer is M25's, byte for
+  /// byte.
+  std::optional<StdioOptions> UCRTStdio;
 };
 
 /// The entities the trailer names, and the methods it makes: the MSIL
@@ -301,19 +328,22 @@ LLVM_ABI unsigned countAddressSlots(ArrayRef<RuntimeReloc> Relocs,
 /// - '<msil>dataimport' and '<msil>init_dataimports' when there are data
 ///   imports;
 /// - <Module>::.cctor when there is an image, a function address, a data
-///   import, a library type or a constructor: allocate
-///   (AllocHGlobal(TotalSize + MaxAlign - 1)), align, store '<msil>data',
-///   cpblk the image, initblk the zero part, store the address fields, ldftn
-///   and store the '<msil>fn_' fields, call '<msil>init_dataimports', fill
-///   the address slots and run the loop (loop mode only), apply the
-///   relocations, 'ldtoken' and 'pop' each library type, apply the
-///   relocations against library exports (straight-line: '<msil>data' plus
-///   Site, the accessor's value plus Addend), call the constructors (each
-///   with its arguments, after argc and argv are built and, for a main that
-///   takes them, stored in '<msil>argc' and '<msil>argv'; a result is
-///   popped), ret. With at most RelocLoopThreshold relocations each is
-///   stored straight-line, and without libraries and constructor arguments
-///   the method is Phase 1's, instruction for instruction;
+///   import, a library type, a constructor or a UCRT stdio options function
+///   (In.UCRTStdio): allocate (AllocHGlobal(TotalSize + MaxAlign - 1)),
+///   align, store '<msil>data', cpblk the image, initblk the zero part, store
+///   the address fields, ldftn and store the '<msil>fn_' fields, call
+///   '<msil>init_dataimports', fill the address slots and run the loop (loop
+///   mode only), apply the relocations, 'ldtoken' and 'pop' each library
+///   type, apply the relocations against library exports (straight-line:
+///   '<msil>data' plus Site, the accessor's value plus Addend), OR the bits
+///   of In.UCRTStdio into the option word of each of its functions that the
+///   output defines ('call native int <f>(); dup; ldind.i8; ldc.i8 <bits>;
+///   or; stind.i8'), call the constructors (each with its arguments, after
+///   argc and argv are built and, for a main that takes them, stored in
+///   '<msil>argc' and '<msil>argv'; a result is popped), ret. With at most
+///   RelocLoopThreshold relocations each is stored straight-line, and without
+///   libraries, constructor arguments and UCRT stdio options the method is
+///   Phase 1's, instruction for instruction;
 /// - with TwoPhase, '<msil>Data'::.cctor instead runs everything up to the
 ///   relocations, and <Module>::.cctor, when it is not empty, the rest;
 /// - '<msil>Main' when In.Entry is set (decision D27), which passes main

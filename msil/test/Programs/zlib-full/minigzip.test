@@ -1,0 +1,97 @@
+# zlib 1.3.2 in full, hosted: zlib's test/minigzip.c compresses a generated 2 MiB input to the native gzip stream byte for byte and decompresses the native stream.
+# minigzip.c (unmodified, from the corpus cache) with example.test's libz.a
+# and flags. minigzip-data.py writes the input into %t (2 MiB of text,
+# random bytes, a four-letter alphabet, runs and matches up to 32 KiB back,
+# and counters, generated the same way on every host; no vendored data) and
+# its sha256 is pinned below. At -O0 and at -O2 (plan 5.12.9's levels,
+# whatever the leg's), the MSIL program is built (%msil_prog_build),
+# verified (%msil_verify) and force-JITed (%msil_jitall), and then:
+#   - 'minigzip FILE' compresses a copy of the input into FILE.gz on the
+#     leg's runtime (%msil_exec), and the hosted native build of the same
+#     sources (%{msil_oracle_flags}: E7h on Linux triples, the DLL C runtime
+#     on Windows triples) does the same; the two gzip streams must be equal
+#     byte for byte (the header's OS byte comes from the triple, so it is the
+#     same; zlib writes no time stamp through gzopen);
+#   - 'minigzip -d FILE.gz' of the native stream (of the MSIL stream without
+#     a native oracle) must restore the input byte for byte;
+#   - on the .NET Framework (msil-run-netfx) the same image compresses the
+#     input to the same stream and decompresses the native stream;
+#   - so does it on each runtime of the leg's msil_also_run (msil-also-run;
+#     for example .NET 10 with DOTNET_TieredCompilation=0, 10+tc0, in the
+#     programs and programs-hosted legs), after jitall on that runtime:
+#     lit.local.cfg's %{minigzip_also_run_<L>} runs the image with each
+#     entry's runtimeconfig.json and environment (lit.cfg.py's
+#     config.msil_also_run_cmds, which %{msil_also_run_check} is built
+#     from too), and minigzip-data.py's --also
+#     (%{minigzip_also_tags}) gives each run its directory and argument file.
+# Each run must print nothing and exit 0 (QUIET). minigzip writes its output
+# next to its input and removes the input, so each run has a directory of
+# its own and gets its file as an absolute path (the programs run from a
+# private directory that msil-run.py removes): minigzip-data.py writes each
+# path into an argument file that %{readfile:...} reads, in the form the
+# runner needs (/mnt/<drive>/... under msil-wsl, where msil-run.py runs the
+# MSIL programs and the E7h oracle inside WSL and passes their arguments
+# unchanged). The streams never pass through a transcript: minigzip-data.py
+# compares the files. That is why the test does not append
+# %{msil_also_run_check}, which runs an image with no arguments (minigzip
+# would write a gzip stream to stdout) and checks the transcript.
+# Plan 5.17.15 (M26).
+# REQUIRES: msil-corpus-zlib
+# REDEFINE: %{msil_srcs} = %{msil_corpus}/zlib-1.3.2/test/minigzip.c
+# REDEFINE: %{msil_archives} = z=%{msil_corpus}/zlib-1.3.2/adler32.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/compress.c,%{msil_corpus}/zlib-1.3.2/crc32.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/deflate.c,%{msil_corpus}/zlib-1.3.2/gzclose.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/gzlib.c,%{msil_corpus}/zlib-1.3.2/gzread.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/gzwrite.c,%{msil_corpus}/zlib-1.3.2/infback.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/inffast.c,%{msil_corpus}/zlib-1.3.2/inflate.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/inftrees.c,%{msil_corpus}/zlib-1.3.2/trees.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/uncompr.c,%{msil_corpus}/zlib-1.3.2/zutil.c
+# REDEFINE: %{msil_copts} = -I%{msil_corpus}/zlib-1.3.2 \
+# REDEFINE:   %if msil-triple-linux %{-DZ_HAVE_UNISTD_H -D_LARGEFILE64_SOURCE=1%} \
+# REDEFINE:   %else %{-D_CRT_SECURE_NO_DEPRECATE -D_CRT_NONSTDC_NO_DEPRECATE%}
+
+# RUN: rm -rf %t %t.O0.d %t.O0.native.d %t.O2.d %t.O2.native.d
+# RUN: %python %S/minigzip-data.py setup %if msil-wsl %{--wsl%} --levels O0,O2 --also=%{minigzip_also_tags} %t | FileCheck %s --check-prefix=INPUT
+# INPUT: {{^}}input: 2097152 bytes, sha256 5b714b3fd4a352402c675490e265fb3be2f289118a34d3a1596a9ce27b2e725e{{$}}
+
+# -O0.
+# RUN: %msil_prog_build --level O0 --workdir %t.O0.d --out %t.O0.d/prog.exe --src %{msil_srcs} --archives='%{msil_archives}'
+# RUN: %msil_verify %t.O0.d/prog.exe
+# RUN: %if msil-jitall %{ %msil_jitall %t.O0.d/prog.exe %}
+# RUN: %msil_exec -- %t.O0.d/prog.exe %{readfile:%t/O0/msil.arg} | FileCheck %s --check-prefix=QUIET
+# RUN: %if msil-native-oracle %{ %msil_prog_build --mode native %{msil_oracle_flags} --level O0 --workdir %t.O0.native.d --out %t.O0.native.d/prog.exe --src %{msil_srcs} --archives='%{msil_archives}' %}
+# RUN: %if msil-native-oracle %{ %msil_exec --native -- %t.O0.native.d/prog.exe %{readfile:%t/O0/native.arg} | FileCheck %s --check-prefix=QUIET %}
+# RUN: %if msil-native-oracle %{ %python %S/minigzip-data.py cmp %t/O0/native/data.gz %t/O0/msil/data.gz | FileCheck %s --check-prefix=SAME %}
+# RUN: %if msil-native-oracle %{ cp %t/O0/native/data.gz %t/O0/msil-d/data.gz %} %else %{ cp %t/O0/msil/data.gz %t/O0/msil-d/data.gz %}
+# RUN: %msil_exec -- %t.O0.d/prog.exe -d %{readfile:%t/O0/msil-d.arg} | FileCheck %s --check-prefix=QUIET
+# RUN: %python %S/minigzip-data.py cmp %t/input %t/O0/msil-d/data | FileCheck %s --check-prefix=INPUTSIZE
+# RUN: %if msil-run-netfx %{ %msil_exec --netfx -- %t.O0.d/prog.exe %{readfile:%t/O0/netfx.arg} | FileCheck %s --check-prefix=QUIET %}
+# RUN: %if msil-run-netfx %{ %python %S/minigzip-data.py cmp %t/O0/msil/data.gz %t/O0/netfx/data.gz | FileCheck %s --check-prefix=SAME %}
+# RUN: %if msil-run-netfx %{ %if msil-native-oracle %{ cp %t/O0/native/data.gz %t/O0/netfx-d/data.gz %} %else %{ cp %t/O0/msil/data.gz %t/O0/netfx-d/data.gz %} %}
+# RUN: %if msil-run-netfx %{ %msil_exec --netfx -- %t.O0.d/prog.exe -d %{readfile:%t/O0/netfx-d.arg} | FileCheck %s --check-prefix=QUIET %}
+# RUN: %if msil-run-netfx %{ %python %S/minigzip-data.py cmp %t/input %t/O0/netfx-d/data | FileCheck %s --check-prefix=INPUTSIZE %}
+# RUN: %if msil-also-run %{ %{minigzip_also_run_O0} %}
+
+# -O2.
+# RUN: %msil_prog_build --level O2 --workdir %t.O2.d --out %t.O2.d/prog.exe --src %{msil_srcs} --archives='%{msil_archives}'
+# RUN: %msil_verify %t.O2.d/prog.exe
+# RUN: %if msil-jitall %{ %msil_jitall %t.O2.d/prog.exe %}
+# RUN: %msil_exec -- %t.O2.d/prog.exe %{readfile:%t/O2/msil.arg} | FileCheck %s --check-prefix=QUIET
+# RUN: %if msil-native-oracle %{ %msil_prog_build --mode native %{msil_oracle_flags} --level O2 --workdir %t.O2.native.d --out %t.O2.native.d/prog.exe --src %{msil_srcs} --archives='%{msil_archives}' %}
+# RUN: %if msil-native-oracle %{ %msil_exec --native -- %t.O2.native.d/prog.exe %{readfile:%t/O2/native.arg} | FileCheck %s --check-prefix=QUIET %}
+# RUN: %if msil-native-oracle %{ %python %S/minigzip-data.py cmp %t/O2/native/data.gz %t/O2/msil/data.gz | FileCheck %s --check-prefix=SAME %}
+# RUN: %if msil-native-oracle %{ cp %t/O2/native/data.gz %t/O2/msil-d/data.gz %} %else %{ cp %t/O2/msil/data.gz %t/O2/msil-d/data.gz %}
+# RUN: %msil_exec -- %t.O2.d/prog.exe -d %{readfile:%t/O2/msil-d.arg} | FileCheck %s --check-prefix=QUIET
+# RUN: %python %S/minigzip-data.py cmp %t/input %t/O2/msil-d/data | FileCheck %s --check-prefix=INPUTSIZE
+# RUN: %if msil-run-netfx %{ %msil_exec --netfx -- %t.O2.d/prog.exe %{readfile:%t/O2/netfx.arg} | FileCheck %s --check-prefix=QUIET %}
+# RUN: %if msil-run-netfx %{ %python %S/minigzip-data.py cmp %t/O2/msil/data.gz %t/O2/netfx/data.gz | FileCheck %s --check-prefix=SAME %}
+# RUN: %if msil-run-netfx %{ %if msil-native-oracle %{ cp %t/O2/native/data.gz %t/O2/netfx-d/data.gz %} %else %{ cp %t/O2/msil/data.gz %t/O2/netfx-d/data.gz %} %}
+# RUN: %if msil-run-netfx %{ %msil_exec --netfx -- %t.O2.d/prog.exe -d %{readfile:%t/O2/netfx-d.arg} | FileCheck %s --check-prefix=QUIET %}
+# RUN: %if msil-run-netfx %{ %python %S/minigzip-data.py cmp %t/input %t/O2/netfx-d/data | FileCheck %s --check-prefix=INPUTSIZE %}
+# RUN: %if msil-also-run %{ %{minigzip_also_run_O2} %}
+
+# QUIET-NOT: {{.}}
+# QUIET: {{^}}[exit 0]{{$}}
+# QUIET-NOT: {{.}}
+# SAME: {{^}}same: {{[0-9]+}} bytes{{$}}
+# INPUTSIZE: {{^}}same: 2097152 bytes{{$}}

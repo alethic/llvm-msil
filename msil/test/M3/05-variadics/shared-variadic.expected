@@ -1,0 +1,7 @@
+vsum(1, 10, 2.5, {5, 6}, 20) = 44: groups 1, int 10, double 2.50, big {5, 6}, int 20
+vsum(2, ...) = 124: groups 2, int -3, double 100.50, big {-1000000000000, 1000000000007}, int 4
+vsum(1, 7, -1.5, {...}, 9) = 23: groups 1, int 7, double -1.50, big {-1000000000000, 1000000000007}, int 9
+vsum(0) = 0
+vfmt 29 [-42|3.062|lib|1099511627776|z]
+vfmt truncated 9 [trunc]
+[exit 44]

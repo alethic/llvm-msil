@@ -1,0 +1,57 @@
+# Native variadic calls that MSIL cannot make on Linux triples are named errors at -O0 and -O2: a double or a structure by value passed to a fixed-arity native, and the address of a native variadic function (until M28).
+# Plan 5.15.2: a function on the fixed-arity list has no va_list variant,
+# so its call passes the variadic arguments as P/Invoke parameters; on the
+# x86-64 System V convention the caller of a variadic function sets AL to
+# the number of vector registers used, which a P/Invoke cannot do, so a
+# floating-point variadic argument is a compile error (fp.c: ioctl with a
+# double), and a structure passed by value (byval) is one on every triple
+# (byval.c: a 40-byte structure, which SysV passes in memory). Taking the
+# address of a natively bound variadic function is msil-ld's error until
+# M28 gives it an adapter (addr.c: a pointer to glibc's printf, rule 4).
+# The compile errors come from code generation, which runs in clang -c on
+# the object path and inside msil-ld on the LTO path, so each check matches
+# the text after 'error: '. Never 'LLVM ERROR' or a crash; every build
+# stops, so nothing runs. Windows triples pass a variadic double as its 64-bit pattern
+# and structures above 8 bytes by pointer, and their C library's printf is
+# the UCRT's inline definition, so the three cases exist only on Linux
+# triples. Plan 5.15.2, 5.15.11, 5.17.13 (M26, M3/05-variadics).
+# REQUIRES: msil-triple-linux
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/fp.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=FP --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=FP --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# REDEFINE: %{msil_srcs} = %t/byval.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=BYVAL --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=BYVAL --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# REDEFINE: %{msil_srcs} = %t/addr.c
+# RUN: %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=ADDR --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# RUN: %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=ADDR --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit"
+# FP:    error: {{.*}}passing a floating-point value to native variadic function 'ioctl' is not supported for MSIL: it has no va_list variant, and .NET cannot set the vector-register count (AL) of the x86-64 System V variadic convention{{$}}
+# BYVAL: error: {{.*}}passing a structure by value to native variadic function 'ioctl' is not supported for MSIL{{$}}
+# ADDR:  error: the address of native variadic function 'printf' ({{[^)]*}}) is not supported for MSIL yet{{$}}
+#--- fp.c
+#include <sys/ioctl.h>
+
+int main(void) {
+  /* Never runs: the build stops. */
+  return ioctl(0, FIONREAD, 2.5) == -1;
+}
+#--- byval.c
+#include <sys/ioctl.h>
+
+struct forty { long long v[5]; };
+
+int main(void) {
+  struct forty s = {{1, 2, 3, 4, 5}};
+  /* Never runs: the build stops. */
+  return ioctl(0, FIONREAD, s) == -1;
+}
+#--- addr.c
+#include <stdio.h>
+
+int (*volatile pp)(const char *, ...) = printf;
+
+int main(void) {
+  /* Never runs: the link stops. */
+  return pp("%d\n", 1) < 0;
+}

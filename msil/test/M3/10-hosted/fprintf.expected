@@ -1,0 +1,16 @@
+to stdout: 7 seven 7.25
+fprintf to stdout wrote 24
+fprintf to stderr wrote 37, fflush(stderr) = 0
+log_line 1|two|3.5|4
+log_line 1|two|3.5|4
+log_line wrote 42
+fopen(wb) 1
+written 122, ftell 122, fclose 0
+fopen(rb) 1
+read back [line 1: 001 2.500000e-01]
+read back [line 2: 0004 5.000000e-01]
+read back [line 3: 00009 7.500000e-01]
+read back [big=-1125899906842624]
+read back [big=-1125899906842624]
+lines 5, fclose 0, remove 0
+[exit 0]

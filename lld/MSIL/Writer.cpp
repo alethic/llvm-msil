@@ -28,9 +28,9 @@
 //    built-in [mscorlib] table without them); with -shared, the members of
 //    the export class follow;
 // 6. the data relocations, the constructor list, the entry point, the
-//    libraries' types and the relocations against their exports, then the
-//    trailer (cli::buildTrailer, shared with -S, 5.9.10; two-phase for
-//    -shared);
+//    libraries' types and the relocations against their exports, the UCRT
+//    stdio options (5.15.2), then the trailer (cli::buildTrailer, shared with
+//    -S, 5.9.10; two-phase for -shared);
 // 7. names (colliding LOCAL members become '<name><msil><n>'), access, the
 //    '<msil>Spill<N>' classes past the per-type limits, the rows (with
 //    -shared also the export class, '<msil>Data' and '<msil>SymbolTable'),
@@ -121,6 +121,7 @@ private:
   void addSymbolTableClass();
   void addLibraryImports(TrailerInput &in);
   void addConstructors(ArrayRef<OutputConstructor> ctors, TrailerInput &in);
+  void addUCRTStdio(TrailerInput &in);
   std::optional<uint32_t> findEnvironField();
   void assignNames();
   void assignOwners();
@@ -593,6 +594,39 @@ void Writer::addConstructors(ArrayRef<OutputConstructor> ctors,
       find_if(ctors, [](const OutputConstructor &c) { return c.numArgs == 3; });
   if (it != ctors.end())
     symbols.addEnvironImport(in, out.methods[it->method].name);
+}
+
+// The UCRT's stdio option words (plan 5.15.2, hosted-libc H3): on
+// *-windows-msvc-msil outputs, each of __local_stdio_printf_options and
+// __local_stdio_scanf_options that the link defines and keeps as a
+// 'native int()' method gets vcruntime's default bits, less those of the
+// opt-outs legacy_stdio_float_rounding and iso_stdio_wide_specifiers that the
+// link names (Config::ucrtPrintfBits, ucrtScanfBits). The symbol table is
+// read after LTO, which keeps the bitcode definitions of both functions
+// (5.9.13).
+void Writer::addUCRTStdio(TrailerInput &in) {
+  if (!ctx.arg.target.isWindowsMSVCEnvironment())
+    return;
+  auto getOptionsMethod = [&](StringRef name) -> EntityRef {
+    auto *d = dyn_cast_or_null<DefinedFunction>(symtab->find(name));
+    std::optional<uint32_t> index =
+        d && d->method ? out.getMethodOf(d->method) : std::nullopt;
+    if (!index)
+      return 0;
+    const MethodSig &sig = out.methods[*index].sig;
+    if (sig.Header != SIG_DEFAULT || !sig.Params.empty() ||
+        !(sig.Return == TypeSig::get(ELEMENT_TYPE_I)))
+      return 0;
+    return out.getMethodEntity(*index);
+  };
+  StdioOptions options;
+  options.PrintfOptions = getOptionsMethod("__local_stdio_printf_options");
+  options.ScanfOptions = getOptionsMethod("__local_stdio_scanf_options");
+  if (!options.PrintfOptions && !options.ScanfOptions)
+    return;
+  options.PrintfBits = ctx.arg.ucrtPrintfBits();
+  options.ScanfBits = ctx.arg.ucrtScanfBits();
+  in.UCRTStdio = options;
 }
 
 // Plan 5.9.12: functions and address fields keep their symbol names; a LOCAL
@@ -1284,6 +1318,7 @@ void Writer::run() {
   addConstructors(ctors, in);
   in.Entry = entry;
   addLibraryImports(in);
+  addUCRTStdio(in);
   in.Defs = std::move(trailerDefs);
   if (errorCount())
     return;

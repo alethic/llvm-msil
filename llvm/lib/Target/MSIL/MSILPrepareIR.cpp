@@ -82,13 +82,12 @@
 ///   that (a CIL object's ModuleRef and ImplMap import names): its calls and
 ///   its other uses go as for a definition that lost its body, so it gets no
 ///   import stub.
-/// The errors for llvm.global_dtors, thread_local, ifuncs, module asm and
-/// variadic definitions stay, and an alias goes with the definition it
-/// aliases when that one is erased or loses its body. The prefix data,
-/// prologue data and function sanitizer metadata of a compiled definition are
-/// reported here and removed, so that its method stays for the calls that
-/// name it (whole-program mode reports them in the AsmPrinter, which skips
-/// the method).
+/// The errors for llvm.global_dtors, thread_local, ifuncs and module asm stay,
+/// and an alias goes with the definition it aliases when that one is erased
+/// or loses its body. The prefix data, prologue data and function sanitizer
+/// metadata of a compiled definition are reported here and removed, so that
+/// its method stays for the calls that name it (whole-program mode reports
+/// them in the AsmPrinter, which skips the method).
 ///
 /// Then the discardable function definitions that the program cannot reach
 /// lose their bodies, decided by reachability as GlobalDCE does
@@ -115,21 +114,24 @@
 /// by zext, inttoptr or ptrtoint where clang ties different types
 /// (lowerEmptyInlineAsm), before its checks. The checks and what follows
 /// them:
-/// - A function definition that is variadic, calls other inline assembly, has
-///   a va_arg instruction of a struct or array type (which the IR verifier
-///   rejects since upstream 74a120bff99f, so only IR that skipped
-///   verification has one), calls a target intrinsic (llvm.x86.*,
-///   llvm.aarch64.*, ...), accesses a named register, reads the thread
-///   pointer (llvm.thread.pointer), records a stack map (stackmap,
-///   patchpoint, statepoint), has deoptimization state
-///   ("deopt" operand bundles), makes a preallocated call
-///   (llvm.call.preallocated.*, "preallocated" operand bundles), uses
-///   the frame escape intrinsics (llvm.localescape, llvm.localrecover,
-///   llvm.localaddress, llvm.eh.recoverfp: clang emits them for C __finally
-///   blocks and for __except filters that read locals), uses a pointer in a
-///   non-zero address space, uses a floating-point type that CIL does not
-///   have (fp128, x86_fp80, ppc_fp128), uses a scalable vector type or a
-///   target extension type (SVE's <vscale x 4 x i32> and
+/// - A function definition that is variadic on a triple for which
+///   ExpandVariadics has no MSIL ABI (AArch64 Darwin) or has a calling
+///   convention that ExpandVariadics leaves alone, calls other inline
+///   assembly, makes a musttail call (ExpandVariadics cannot lower one, and
+///   MSIL makes no tail calls), has a va_arg instruction on a triple whose
+///   va_list is a structure (x86_64 System V, AArch64: ExpandVariadics
+///   expands va_arg only for a char * va_list, and clang lowers C's va_arg
+///   itself), calls a target intrinsic (llvm.x86.*, llvm.aarch64.*, ...),
+///   accesses a named register, reads the thread pointer
+///   (llvm.thread.pointer), records a stack map (stackmap, patchpoint,
+///   statepoint), has deoptimization state ("deopt" operand bundles), makes
+///   a preallocated call (llvm.call.preallocated.*, "preallocated" operand
+///   bundles), uses the frame escape intrinsics (llvm.localescape,
+///   llvm.localrecover, llvm.localaddress, llvm.eh.recoverfp: clang emits
+///   them for C __finally blocks and for __except filters that read locals),
+///   uses a pointer in a non-zero address space, uses a floating-point type
+///   that CIL does not have (fp128, x86_fp80, ppc_fp128), uses a scalable
+///   vector type or a target extension type (SVE's <vscale x 4 x i32> and
 ///   target("aarch64.svcount")), reads vscale (llvm.vscale, the scalable form
 ///   of llvm.experimental.get.vector.length) or reads or writes the
 ///   floating-point environment (llvm.get.fpenv, llvm.set.fpenv,
@@ -206,6 +208,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/TargetParser/Triple.h"
+#include "llvm/Transforms/IPO/ExpandVariadics.h"
 #include "llvm/Transforms/Utils/Local.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include <string>
@@ -1048,10 +1051,12 @@ static bool lowerEmptyInlineAsm(Function &F) {
   return true;
 }
 
-/// The error for a va_arg instruction, the text of MSILISelLowering.cpp's
-/// VAArgUnsupported, which reports the scalar and vector ones.
+/// The error for a va_arg instruction on a triple whose va_list is a
+/// structure, the text of MSILISelLowering.cpp's VAArgUnsupported, the
+/// backstop for a va_arg instruction that reaches instruction selection.
 static constexpr const char *VAArgUnsupported =
-    "the va_arg instruction is not supported for MSIL yet (phase 3 variadics)";
+    "the va_arg instruction is not supported for MSIL on this triple; clang "
+    "lowers C's va_arg itself";
 
 /// Reports every construct in the definition \p F that MSIL cannot compile.
 /// Returns true if there was one.
@@ -1062,11 +1067,27 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
   DiagnosticLocation FnLoc(F.getSubprogram());
   bool HasError = false;
 
-  if (F.isVarArg()) {
+  // Variadic definitions and calls are ExpandVariadics' (MSILPassConfig's
+  // slot P7). It expands the va_arg instructions of a char * va_list (the
+  // Windows triples) and assumes that layout for every va_arg, so on the
+  // other triples, whose va_list is a structure, each one is an error.
+  const Triple &TT = F.getParent()->getTargetTriple();
+  bool VAArgIsExpanded = TT.isOSWindows();
+  bool ReportedVAArg = false;
+
+  // On a triple for which ExpandVariadics has no MSIL ABI (AArch64 Darwin),
+  // and for a calling convention other than C (ExpandVariadics'
+  // isValidCallingConv: win64cc, x86_64_sysvcc, preserve_mostcc, ...), it
+  // leaves variadic definitions alone, and instruction selection could not
+  // select their va_start. Its va_arg instructions need no error of their
+  // own.
+  if (F.isVarArg() && (!hasMSILVariadicABI(TT) ||
+                       !isExpandedVariadicCallingConv(F.getCallingConv()))) {
     Ctx.diagnose(DiagnosticInfoUnsupported(
         F, "variadic function definitions are not supported for MSIL yet",
         FnLoc));
     HasError = true;
+    ReportedVAArg = true;
   }
 
   // One diagnostic per definition for address spaces: at the signature (the
@@ -1103,6 +1124,14 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
 
   for (Instruction &I : instructions(F)) {
     if (auto *CB = dyn_cast<CallBase>(&I)) {
+      // ExpandVariadics stops with a fatal error at a musttail call that
+      // forwards variable arguments, and LowerCall makes every other call an
+      // ordinary call, which musttail forbids.
+      if (const auto *CI = dyn_cast<CallInst>(CB); CI && CI->isMustTailCall()) {
+        Ctx.diagnose(DiagnosticInfoUnsupported(
+            F, "musttail calls are not supported for MSIL", I.getDebugLoc()));
+        HasError = true;
+      }
       // lowerEmptyInlineAsm has lowered every empty asm statement that MSIL
       // can keep; any other asm needs machine code.
       if (CB->isInlineAsm()) {
@@ -1240,18 +1269,16 @@ static bool diagnoseDefinition(Function &F, AddrSpaceFinder &ASFinder,
               I.getDebugLoc()));
         HasError = true;
       }
-    } else if (auto *VA = dyn_cast<VAArgInst>(&I);
-               VA &&
-               (VA->getType()->isStructTy() || VA->getType()->isArrayTy())) {
-      // The IR verifier rejects a va_arg of an aggregate type since upstream
-      // 74a120bff99f, so this branch only sees IR that skipped verification
-      // (llc -disable-verify). SelectionDAGBuilder::visitVAArg asks for the
-      // value type of a struct or array and crashes ('Unknown type!'), for
-      // native targets too. A scalar or vector va_arg reaches instruction
-      // selection, which reports it with the same text (decision D19;
-      // variadics are phase 3).
-      Ctx.diagnose(
-          DiagnosticInfoUnsupported(F, VAArgUnsupported, I.getDebugLoc()));
+    } else if (isa<VAArgInst>(I) && !VAArgIsExpanded) {
+      // Every va_arg on these triples, a scalar, a vector or (in IR that
+      // skipped the verifier, which rejects it since upstream 74a120bff99f)
+      // an aggregate one: ExpandVariadics would read the va_list structure
+      // as a char *. clang never emits the instruction for these triples.
+      // Reported once per function, at the first one.
+      if (!ReportedVAArg)
+        Ctx.diagnose(
+            DiagnosticInfoUnsupported(F, VAArgUnsupported, I.getDebugLoc()));
+      ReportedVAArg = true;
       HasError = true;
     }
     if (!ASTy && (ASTy = ASFinder.inInstruction(I)))
@@ -1568,7 +1595,10 @@ static GlobalObject *getAliasedObject(GlobalAlias &GA, APInt &Offset) {
 /// ILVerify and PEVerify reject it. When the types are equal, the forwarder
 /// and its call get the parameter and result attributes of \p Aliasee
 /// (byval, sret, zeroext, ...), so that the forwarder has its ABI; otherwise
-/// MSILFixFunctionBitcasts adapts the call, as it adapts any other.
+/// MSILFixFunctionBitcasts adapts the call, as it adapts any other. The call
+/// of a variadic forwarder passes only the fixed arguments; its function
+/// attribute MSILVariadicForwarderAttr has ExpandVariadics pass the
+/// forwarder's own va_list on to the aliasee.
 static void defineForwarder(Function &Fwd, Function &Aliasee) {
   LLVMContext &Ctx = Fwd.getContext();
   FunctionType *FTy = Fwd.getFunctionType();
@@ -1590,6 +1620,8 @@ static void defineForwarder(Function &Fwd, Function &Aliasee) {
         AttributeList::get(Ctx, AttributeSet(), AL.getRetAttrs(), ParamAttrs);
     Fwd.setAttributes(Attrs);
     Call->setAttributes(Attrs);
+    if (FTy->isVarArg())
+      Fwd.addFnAttr(MSILVariadicForwarderAttr);
   }
   ReturnInst::Create(Ctx, FTy->getReturnType()->isVoidTy() ? nullptr : Call,
                      BB);
@@ -1700,10 +1732,9 @@ static bool lowerAliases(Module &M) {
 /// \p F as a callee: an internal definition named '<msil>undef_<IL name>'
 /// whose body is llvm.trap, printed 'ldnull' and 'throw' (msil-ld's name and
 /// body for the calls of an unresolved weak function, plan 5.9.6). It has the
-/// type of \p F, without the variable arguments of a variadic one: a
-/// variadic definition is an error (decision D19), and MSILFixFunctionBitcasts
-/// turns a variadic call of a function that is not variadic into a call of
-/// all of its arguments.
+/// type of \p F, without the variable arguments of a variadic one:
+/// MSILFixFunctionBitcasts turns a variadic call of a function that is not
+/// variadic into a call of all of its arguments.
 static Function *createUndefStub(Function &F, const TargetMachine &TM) {
   Module &M = *F.getParent();
   LLVMContext &Ctx = F.getContext();

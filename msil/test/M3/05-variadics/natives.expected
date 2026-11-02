@@ -1,0 +1,5 @@
+open ok
+open without a mode ok
+_sopen ok
+sscanf 4: 12 -34 2.50 word
+[exit 0]

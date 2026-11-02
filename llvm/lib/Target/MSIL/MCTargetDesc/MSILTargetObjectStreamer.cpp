@@ -36,18 +36,25 @@ using namespace llvm;
 
 namespace {
 
+/// The method between emitMethodBegin and emitMethodEnd, with copies of its
+/// name and signature. It is declared at namespace scope, not nested in
+/// MSILTargetObjectStreamer: a nested class with default member initializers
+/// is complete only at the end of the enclosing class, and libstdc++'s
+/// std::optional instantiated there makes clang 20 and older cache
+/// is_constructible_v<PendingMethod> as false, so that Pending.emplace() does
+/// not compile.
+struct PendingMethod {
+  MCSection *Section = nullptr;
+  std::string Name;
+  MSIL::Signature Sig;
+  bool Public = true;
+  unsigned MaxStack = 0;
+  SmallVector<cli::TypeSig, 8> Locals;
+};
+
 /// The object implementation of MSILTargetStreamer.
 class MSILTargetObjectStreamer final : public MSILTargetStreamer {
-  /// The method between emitMethodBegin and emitMethodEnd, with copies of its
-  /// name and signature.
-  struct PendingMethod {
-    MCSection *Section = nullptr;
-    std::string Name;
-    MSIL::Signature Sig;
-    bool Public = true;
-    unsigned MaxStack = 0;
-    SmallVector<cli::TypeSig, 8> Locals;
-  };
+  /// The method between emitMethodBegin and emitMethodEnd.
   std::optional<PendingMethod> Pending;
   /// The number in the name of the next method section, ".text.<n>".
   unsigned NextSection = 0;
@@ -124,8 +131,7 @@ void MSILTargetObjectStreamer::reportWholeProgram(StringRef Directive) {
                            "not contain");
 }
 
-MSILTargetObjectStreamer::PendingMethod &
-MSILTargetObjectStreamer::getPending(StringRef Directive) {
+PendingMethod &MSILTargetObjectStreamer::getPending(StringRef Directive) {
   if (!Pending)
     reportFatalInternalError("MSIL: " + Directive + " outside a method");
   return *Pending;

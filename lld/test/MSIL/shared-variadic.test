@@ -1,0 +1,189 @@
+## Variadic functions exported by a -shared library (ImplementationPlan.md
+## 5.15.2 'Link time (msil-ld)' rules 1 and 3 and 'Boundaries', 5.9.15,
+## 5.14.8; M26.d; recon p3 variadics 5 and 8.2). A library's variadic
+## function is expanded like any other: its export method takes the fixed
+## parameters and one native int (the va_list), and its symbol-table entry
+## carries the Variadic flag and the ABI descriptor 'VARARG fixed=<n>'
+## (printSymbolTable: 'Function VARARG ABI '<name>' VARARG fixed=<n>').
+## A program's expanded call binds to the export directly (rule 1: VARARG on
+## both sides with equal FixedParams and IL signature): the call names the
+## library's MemberRef, with no adapter and no diagnostic, from a CIL object
+## and through LTO. A FixedParams difference and a fixed declaration calling
+## the variadic export are 5.9.8's signature mismatch with the
+## '(variadic, <n> fixed)' shape; a FIXED_ARITY call (_open, on UCRT's
+## fixed-arity list) bound to a Variadic export is 5.14.8's error. The
+## export and the program's binding are the same on the SysV triple, where
+## va_list is the 24-byte structure passed by pointer (one native int), as on
+## the Win64 triple, where it is a char*.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj lib.ll -o lib.o
+# RUN: llc -filetype=obj prog.ll -o prog.o
+# RUN: llc -filetype=obj prog-fp2.ll -o prog-fp2.o
+# RUN: llc -filetype=obj prog-fixed.ll -o prog-fixed.o
+# RUN: llc -filetype=obj prog-open.ll -o prog-open.o
+# RUN: llvm-as prog.ll -o prog.bc
+# RUN: msil-ld -shared lib.o -o lib.dll 2>&1 | count 0
+# RUN: llc -filetype=obj lib-sysv.ll -o lib-sysv.o
+# RUN: llc -filetype=obj prog-sysv.ll -o prog-sysv.o
+# RUN: llvm-as prog-sysv.ll -o prog-sysv.bc
+# RUN: msil-ld -shared lib-sysv.o -o libsysv.dll 2>&1 | count 0
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="not supported yet"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+
+## The symbol table and the export methods.
+# RUN: llvm-cil-dump --link-info lib.dll | FileCheck %s --check-prefix=TABLE
+# TABLE:      {{^}}SymbolTable v1.0 triple=x86_64-pc-windows-msvc-msil abi=1 runtime='none' datamodel=8,4,2,8{{$}}
+# TABLE-NEXT: {{^}}ExportClass 'lib'{{$}}
+# TABLE-NEXT: {{^}}Function VARARG ABI 'vsum' VARARG fixed=1{{$}}
+# TABLE-NEXT: {{^}}Function VARARG ABI '_open' VARARG fixed=2{{$}}
+# TABLE-NOT:  {{.}}
+# RUN: llvm-cil-dump lib.dll | FileCheck %s --check-prefix=CLASS
+# CLASS:     {{^}}.class 'lib' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# CLASS-DAG: {{^}}  .method '_open' int32(native int, int32, native int) flags=0x0016 impl=0x0000{{$}}
+# CLASS-DAG: {{^}}  .method 'twice' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# CLASS-DAG: {{^}}  .method 'vsum' int32(int32, native int) flags=0x0016 impl=0x0000{{$}}
+
+## A program's variadic call binds to the export directly.
+# RUN: msil-ld prog.o lib.dll -o prog.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog.exe | FileCheck %s --check-prefix=CALL --implicit-check-not=adapt_
+# RUN: msil-ld --lto-O0 prog.bc lib.dll -o prog-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog-lto.exe | FileCheck %s --check-prefix=CALL --implicit-check-not=adapt_
+# CALL: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# CALL: {{^}}    L{{[0-9]+}}: call int32(int32, native int) [lib]lib::'vsum'{{$}}
+
+## The SysV triple (va_list the 24-byte structure): the same export and the
+## same direct binding.
+# RUN: llvm-cil-dump --link-info libsysv.dll | FileCheck %s --check-prefix=TABLE-SYSV
+# TABLE-SYSV:      {{^}}SymbolTable v1.0 triple=x86_64-unknown-linux-gnu-msil abi=1 runtime='none' datamodel=8,8,4,8{{$}}
+# TABLE-SYSV-NEXT: {{^}}ExportClass 'libsysv'{{$}}
+# TABLE-SYSV-NEXT: {{^}}Function VARARG ABI 'vsum' VARARG fixed=1{{$}}
+# TABLE-SYSV-NOT:  {{.}}
+# RUN: llvm-cil-dump libsysv.dll | FileCheck %s --check-prefix=CLASS-SYSV
+# CLASS-SYSV:     {{^}}.class 'libsysv' flags=0x00000181 extends [mscorlib]System.Object{{$}}
+# CLASS-SYSV-DAG: {{^}}  .method 'twice' int32(int32) flags=0x0016 impl=0x0000{{$}}
+# CLASS-SYSV-DAG: {{^}}  .method 'vsum' int32(int32, native int) flags=0x0016 impl=0x0000{{$}}
+# RUN: msil-ld prog-sysv.o libsysv.dll -o prog-sysv.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog-sysv.exe | FileCheck %s --check-prefix=CALL-SYSV --implicit-check-not=adapt_
+# RUN: msil-ld --lto-O0 prog-sysv.bc libsysv.dll -o prog-sysv-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump prog-sysv-lto.exe | FileCheck %s --check-prefix=CALL-SYSV --implicit-check-not=adapt_
+# CALL-SYSV: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# CALL-SYSV: {{^}}    L{{[0-9]+}}: call int32(int32, native int) [libsysv]libsysv::'vsum'{{$}}
+
+## A FixedParams difference, and a fixed declaration of the variadic export.
+# RUN: not msil-ld prog-fp2.o lib.dll -o x.exe 2>&1 | %{err} --check-prefix=FP2
+# FP2:      {{^}}msil-ld: error: function signature mismatch: vsum{{$}}
+# FP2-NEXT: {{^}}>>> defined as int32(int32, native int) (variadic, 1 fixed) in lib.dll{{$}}
+# FP2-NEXT: {{^}}>>> called as int32(int32, int32, native int) (variadic, 2 fixed) in prog-fp2.o{{$}}
+# RUN: not msil-ld prog-fixed.o lib.dll -o x.exe 2>&1 | %{err} --check-prefix=FIXED
+# FIXED:      {{^}}msil-ld: error: function signature mismatch: vsum{{$}}
+# FIXED-NEXT: {{^}}>>> defined as int32(int32, native int) (variadic, 1 fixed) in lib.dll{{$}}
+# FIXED-NEXT: {{^}}>>> called as int32(int32, int32) in prog-fixed.o{{$}}
+
+## A fixed-arity call bound to a Variadic export.
+# RUN: llvm-cil-dump --link-info prog-open.o | FileCheck %s --check-prefix=REC-OPEN
+# REC-OPEN: {{^}}LinkInfo v1.1 triple=x86_64-pc-windows-msvc-msil {{.*}}{{$}}
+# REC-OPEN: {{^}}Signature 0x0A{{[0-9A-F]+}} '_open' FIXED_ARITY fixed=2{{$}}
+# RUN: not msil-ld prog-open.o lib.dll -o x.exe 2>&1 | %{err} --check-prefix=V6
+# V6: {{^}}msil-ld: error: fixed-arity call of '_open' in prog-open.o binds to the variadic definition in lib.dll, which MSIL cannot call with fixed arity{{$}}
+# RUN: not ls x.exe
+
+#--- lib.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int twice(int); int vsum(int n, ...); int _open(const char *, int, ...);
+define i32 @twice(i32 %x) {
+  %r = shl i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @vsum(i32 %n, ...) {
+  %ap = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %n
+}
+
+define i32 @_open(ptr %path, i32 %flags, ...) {
+  ret i32 %flags
+}
+
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+
+#--- prog.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 (i32, ...) @vsum(i32 3, i32 10, i32 20, i32 12)
+  ret i32 %r
+}
+
+declare i32 @vsum(i32, ...)
+
+#--- prog-fp2.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 (i32, i32, ...) @vsum(i32 2, i32 10, i32 20)
+  ret i32 %r
+}
+
+declare i32 @vsum(i32, i32, ...)
+
+#--- prog-fixed.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %r = call i32 @vsum(i32 1, i32 10)
+  ret i32 %r
+}
+
+declare i32 @vsum(i32, i32)
+
+#--- prog-open.ll
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@path = private constant [6 x i8] c"a.txt\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, i32, ...) @_open(ptr @path, i32 0)
+  ret i32 %r
+}
+
+declare i32 @_open(ptr, i32, ...)
+
+#--- lib-sysv.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; int twice(int); int vsum(int n, ...); va_list is the 24-byte structure.
+define i32 @twice(i32 %x) {
+  %r = shl i32 %x, 1
+  ret i32 %r
+}
+
+define i32 @vsum(i32 %n, ...) {
+  %ap = alloca [24 x i8], align 16
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %n
+}
+
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+
+#--- prog-sysv.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 (i32, ...) @vsum(i32 3, i32 10, i32 20, i32 12)
+  ret i32 %r
+}
+
+declare i32 @vsum(i32, ...)

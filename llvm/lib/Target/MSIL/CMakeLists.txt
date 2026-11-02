@@ -25,6 +25,7 @@ add_llvm_target(MSILCodeGen
   MSILISelLowering.cpp
   MSILISelLoweringCall.cpp
   MSILInstrInfo.cpp
+  MSILLowerDynamicAlloca.cpp
   MSILMCInstLower.cpp
   MSILMachineFunctionInfo.cpp
   MSILNullifyDebugValueLists.cpp
@@ -46,6 +47,7 @@ add_llvm_target(MSILCodeGen
   MSILTargetTransformInfo.cpp
   MSILTrailerTextSink.cpp
   MSILUtilities.cpp
+  MSILVariadics.cpp
 
   DEPENDS
   intrinsics_gen
@@ -57,6 +59,7 @@ add_llvm_target(MSILCodeGen
   CodeGen
   CodeGenTypes
   Core
+  IPO
   MC
   MSILDesc
   MSILInfo

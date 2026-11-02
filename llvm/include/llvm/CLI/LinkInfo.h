@@ -13,6 +13,7 @@
 //   libraries (llvm/CLI/SymbolTable.h);
 // - encodeLinkInfo and decodeLinkInfo, which write the canonical bytes and
 //   check the framing, the version rules and every C8 constraint;
+// - getRequiredMinorVersion, the minor version a writer gives a record;
 // - findLinkInfo, which finds the record in the Module-row custom attribute of
 //   [msil.link]'<msil>LinkInfo' (the carrier);
 // - validateLinkInfo, which checks the rules C1-C7 between the record and the
@@ -22,15 +23,19 @@
 // - printLinkInfo, the lines of llvm-cil-dump --link-info.
 //
 // The record is specified field by field in section 5.8.8 of
-// llvm/docs/MSIL/ImplementationPlan.md and versioned by its section 5.8.9; the
-// carrier is its 5.8.7, C1-C7 its 5.8.5 and the COFF view its 5.8.6.
+// llvm/docs/MSIL/ImplementationPlan.md and versioned by its sections 5.8.9
+// and 5.14.7 (the minor versions of phase 3: 5.14.8-5.14.10); the carrier is
+// its 5.8.7, C1-C7 its 5.8.5 and the COFF view its 5.8.6.
 //
 // Errors on input have the prefix "invalid link-info record: ", in the form
-// "invalid link-info record: <field> at offset <n>: <problem>", except two
+// "invalid link-info record: <field> at offset <n>: <problem>", except three
 // version messages: "invalid link-info record: version <n> is newer than this
-// toolchain supports (1)" for another major version, and "invalid link-info
+// toolchain supports (1)" for another major version, "invalid link-info
 // record: v1.<minor> uses <feature>, which this toolchain does not support"
-// for an unknown must-understand subsection kind, flag bit or enum value. The
+// for an unknown must-understand subsection kind, flag bit or enum value, and
+// the C8 error "invalid link-info record: v1.<m> record uses <item> of
+// v1.<n>" for a known item of a minor version above the header's (5.14.7
+// V4; "v1.0 record uses FIXED_ARITY of v1.1"). The
 // must-understand flags are HeaderFlags, ABIFlags, SymbolFlags, the segment
 // flags and CallFlags; FeatureFlags are not (every value is kept).
 // validateLinkInfo's messages start with "C<n>: ".
@@ -157,6 +162,11 @@ public:
   /// error code errc::not_supported, unless an error is already recorded: the
   /// version messages of 5.8.9.
   LLVM_ABI void setUnsupported(const Twine &Message);
+  /// Records "<message>" (after the "invalid <format>: " prefix) with the
+  /// error code of setError, unless an error is already recorded: a C8 error
+  /// that names no field, such as 5.14.7 V4's "v1.<m> record uses <item> of
+  /// v1.<n>".
+  LLVM_ABI void setInvalid(const Twine &Message);
   bool hasError() const { return HasError; }
   /// The recorded error ("invalid <format>: ..."), or success; clears it.
   LLVM_ABI Error takeError();
@@ -178,9 +188,19 @@ private:
 /// then R.SkippedOptional in kind order. Equal records give equal bytes. The
 /// record should satisfy C8 (decodeLinkInfo's checks); what the encoder
 /// relies on (a non-ZERO segment holds Size bytes, a DEPENDENT_LIB entry has
-/// one argument, skipped kinds are 0x40-0x7F) is asserted.
+/// one argument, skipped kinds are 0x40-0x7F) is asserted. A header minor
+/// version below getRequiredMinorVersion(R) is an internal error (5.14.7 V3):
+/// the writer must raise R.Hdr.Minor first. A record whose minor version is 0
+/// and whose items are all v1.0 items is written byte for byte as phase 2
+/// wrote it.
 LLVM_ABI void encodeLinkInfo(const MSILLink::Record &R,
                              SmallVectorImpl<uint8_t> &Out);
+
+/// The lowest minor version that covers the items of \p R (5.14.7 V3): 0, or
+/// the highest minor among the phase 3 items present. It is 1 when a
+/// SIGNATURES entry has CallFlags FixedArity (5.14.8); VarArg is a v1.0 item.
+/// The object writer sets R.Hdr.Minor from it.
+LLVM_ABI uint8_t getRequiredMinorVersion(const MSILLink::Record &R);
 
 /// Decodes a record: the magic, major version 1 (another major is the version
 /// error of 5.8.9), any minor version, the header, the subsections (kinds in
@@ -188,9 +208,12 @@ LLVM_ABI void encodeLinkInfo(const MSILLink::Record &R,
 /// 0x40-0x7F kept in SkippedOptional) and every C8 constraint of 5.8.8: flag
 /// combinations, names, index ranges, segment bounds and alignment,
 /// relocation order, sites and target kinds, selections, INIT_FINI symbols and
-/// one SIGNATURES entry per token. An unknown subsection kind below 0x40 (or
-/// above 0x7F), flag bit (of HeaderFlags, ABIFlags, SymbolFlags, the segment
-/// flags or CallFlags) or enum value is the feature error of 5.8.9. Every
+/// one SIGNATURES entry per token, FixedArity never with VarArg and never on
+/// the entry of a defined FUNCTION symbol's token (5.14.8). An unknown
+/// subsection kind below 0x40 (or above 0x7F), flag bit (of HeaderFlags,
+/// ABIFlags, SymbolFlags, the segment flags or CallFlags) or enum value is the
+/// feature error of 5.8.9; a known item of a minor version above the header's
+/// is 5.14.7 V4's C8 error ("v1.0 record uses FIXED_ARITY of v1.1"). Every
 /// FeatureFlags value is accepted and kept in the header: feature flags are
 /// codegen switches that do not change the ABI, which msil-ld ORs. Alignment
 /// fields (segments, commons, sret and byval) are at most 30 (log2) and a

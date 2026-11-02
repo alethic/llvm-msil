@@ -8232,6 +8232,21 @@ bool Sema::CheckFormatArguments(ArrayRef<const Expr *> Args,
   return false;
 }
 
+/// Returns the size in bytes of the host C library's 'long double' on MSIL
+/// triples whose native 'long double' is wider than 'double', and 0 on every
+/// other triple. 'long double' is 'double' on every MSIL triple, so the C
+/// library's %L conversions read or store the wrong number of bytes there.
+static unsigned getMSILNativeLongDoubleSize(const llvm::Triple &T) {
+  if (!T.isOSBinFormatMSIL())
+    return 0;
+  // x86_64: x87 extended precision in a 16-byte slot; AArch64 Linux: IEEE quad.
+  if (T.isOSLinux() && (T.getArch() == llvm::Triple::x86_64 || T.isAArch64()))
+    return 16;
+  if (T.getArch() == llvm::Triple::x86_64 && T.isWindowsGNUEnvironment())
+    return 16;
+  return 0;
+}
+
 namespace {
 
 class CheckFormatHandler : public analyze_format_string::FormatStringHandler {
@@ -9500,6 +9515,17 @@ bool CheckPrintfHandler::HandlePrintfSpecifier(
   if (!FS.hasStandardConversionSpecifier(S.getLangOpts()))
     HandleNonStandardConversionSpecifier(CS, startSpecifier, specifierLen);
 
+  // %L before a floating conversion makes the C library read a native
+  // 'long double', which is wider than this MSIL target's.
+  if (FSType == FormatStringType::Printf && CS.isDoubleArg() &&
+      FS.getLengthModifier().getKind() == LengthModifier::AsLongDouble) {
+    if (unsigned Size = getMSILNativeLongDoubleSize(Triple))
+      EmitFormatDiagnostic(S.PDiag(diag::warn_msil_printf_long_double) << Size,
+                           getLocationOfByte(FS.getLengthModifier().getStart()),
+                           /*IsStringLocation*/ true,
+                           getSpecifierRange(startSpecifier, specifierLen));
+  }
+
   // The remaining checks depend on the data arguments.
   if (!HasFormatArguments())
     return true;
@@ -10179,6 +10205,18 @@ bool CheckScanfHandler::HandleScanfSpecifier(
 
   if (!FS.hasStandardConversionSpecifier(S.getLangOpts()))
     HandleNonStandardConversionSpecifier(CS, startSpecifier, specifierLen);
+
+  // %L before a floating conversion makes the C library store a native
+  // 'long double', which is wider than this MSIL target's.
+  if (CS.isDoubleArg() &&
+      FS.getLengthModifier().getKind() == LengthModifier::AsLongDouble) {
+    if (unsigned Size =
+            getMSILNativeLongDoubleSize(S.Context.getTargetInfo().getTriple()))
+      EmitFormatDiagnostic(S.PDiag(diag::warn_msil_scanf_long_double) << Size,
+                           getLocationOfByte(FS.getLengthModifier().getStart()),
+                           /*IsStringLocation*/ true,
+                           getSpecifierRange(startSpecifier, specifierLen));
+  }
 
   // The remaining checks depend on the data arguments.
   if (!HasFormatArguments())

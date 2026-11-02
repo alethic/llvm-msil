@@ -1,0 +1,65 @@
+# lit-legs.ps1 stops when it cannot read $p3Tests (plan 5.17.6, M24; the
+# self-test M26 adds, plan section 12): it builds its legs with the lines of
+# 'check-matrix.py --p3-tests <repo>', and when the checker fails, or prints
+# a line that is not a repository-relative test path under msil/test, no leg
+# may run without $p3Tests (G6 runs the same checker, so a broken checker
+# must not pass a gate silently). MSIL_PYTHON is a stand-in Python
+# (Inputs/ci-legs.py python) that runs the real one on every command line
+# except check-matrix.py, which it plays as MSIL_FAKE_P3 says. Against the
+# stand-in build of Inputs/ci-legs.py, whose lit records its calls:
+# (1) The stand-in itself changes nothing: with MSIL_FAKE_P3 unset, -Describe
+# succeeds with the legs that Inputs/legs-check.py accepts, and the stand-in
+# saw the checker's command line.
+# (2) A failing checker (exit 1, a stderr and a stdout line): -Describe and
+# '-Leg harness' exit 1 with 'check-matrix.py --p3-tests exited 1, so the legs
+# cannot take $p3Tests (plan 5.17.6): <message>', where <message> is the
+# checker's stderr and stdout lines joined with '; ', print no JSON and start
+# no lit; a checker that exits 3 without output gives 'no message'.
+# (3) A printed line that is not a test path under msil/test (a path outside
+# it, or one through '..') stops the script with its own message
+# ('check-matrix.py --p3-tests printed '<line>', which is not a
+# repository-relative test path under msil/test'), and starts no lit.
+# (4) -List does not read $p3Tests: it still succeeds with a failing checker.
+# Each check pins its failure path: the planted checker is the fault, and
+# (1) is the run without it.
+# REQUIRES: msil-ci-pwsh
+
+# RUN: rm -rf %t && mkdir -p %t
+# RUN: %python %S/Inputs/ci-legs.py setup %t/build
+# RUN: %python %S/Inputs/ci-legs.py python %t/py > %t/py.txt
+# DEFINE: %{stop_py} = %t/py/python.cmd
+
+# (1)
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_PYTHON=%{stop_py} -- -Describe > %t/ok.json
+# RUN: %python %S/Inputs/legs-check.py describe ps1 %t/ok.json > %t/ok.log
+# RUN: %{harness_check} contains %t/ok.log "^legs-check: lit-legs\.ps1: \d+ legs, \d+ lit runs: OK$"
+# RUN: %{harness_check} contains %t/py/calls.log "^argv: \S*check-matrix\.py --p3-tests \S+$"
+# RUN: %{harness_check} missing %t/build/lit-calls.log
+
+# (2)
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_PYTHON=%{stop_py} MSIL_FAKE_P3=fail -- -Describe > %t/fail-describe.log
+# RUN: %python %S/Inputs/ci-legs.py error-message %t/fail-describe.log > %t/fail-describe.msg
+# RUN: %{harness_check} contains %t/fail-describe.msg "\Aerror-message: check-matrix\.py --p3-tests exited 1, so the legs cannot take [$]p3Tests \(plan 5\.17\.6\): check-matrix: error: planted failure; one stdout line\n\Z"
+# RUN: %{harness_check} lacks %t/fail-describe.log '"version": 1' '"legs"'
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_PYTHON=%{stop_py} MSIL_FAKE_P3=fail MSIL_CI_RESULTS=%t/rows-fail -- -Leg harness > %t/fail-leg.log
+# RUN: %python %S/Inputs/ci-legs.py error-message %t/fail-leg.log > %t/fail-leg.msg
+# RUN: %{harness_check} contains %t/fail-leg.msg "\Aerror-message: check-matrix\.py --p3-tests exited 1, so the legs cannot take [$]p3Tests \(plan 5\.17\.6\): check-matrix: error: planted failure; one stdout line\n\Z"
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_PYTHON=%{stop_py} MSIL_FAKE_P3=silent -- -Leg harness > %t/silent.log
+# RUN: %python %S/Inputs/ci-legs.py error-message %t/silent.log > %t/silent.msg
+# RUN: %{harness_check} contains %t/silent.msg "\Aerror-message: check-matrix\.py --p3-tests exited 3, so the legs cannot take [$]p3Tests \(plan 5\.17\.6\): no message\n\Z"
+# RUN: %{harness_check} missing %t/build/lit-calls.log
+# RUN: %{harness_check} missing %t/rows-fail
+
+# (3)
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_PYTHON=%{stop_py} MSIL_FAKE_P3=bad-path -- -Leg harness > %t/bad.log
+# RUN: %python %S/Inputs/ci-legs.py error-message %t/bad.log > %t/bad.msg
+# RUN: %{harness_check} contains %t/bad.msg "\Aerror-message: check-matrix\.py --p3-tests printed 'llvm/test/CodeGen/MSIL/call\.ll', which is not a repository-relative test path under msil/test\n\Z"
+# RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_PYTHON=%{stop_py} MSIL_FAKE_P3=dot-path -- -Describe > %t/dot.log
+# RUN: %python %S/Inputs/ci-legs.py error-message %t/dot.log > %t/dot.msg
+# RUN: %{harness_check} contains %t/dot.msg "\Aerror-message: check-matrix\.py --p3-tests printed 'msil/test/\.\./llvm/test/CodeGen/MSIL/call\.ll', which is not a repository-relative test path under msil/test\n\Z"
+# RUN: %{harness_check} missing %t/build/lit-calls.log
+
+# (4)
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_PYTHON=%{stop_py} MSIL_FAKE_P3=fail -- -List > %t/list.txt
+# RUN: %{harness_check} contains %t/list.txt "^net-core \(-Quick\)$" "^ctest-lto \(-Exit\)$"
+# RUN: %{harness_check} missing %t/build/lit-calls.log

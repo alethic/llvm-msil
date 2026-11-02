@@ -14,8 +14,9 @@
 # native oracle's transcript is the expected file); '<name> diag [<triple>]
 # <text>  # M<n> <what>' for a test whose object build stops with the named
 # diagnostic of a construct that milestone M<n> implements (no triple: every
-# triple); '<name> exclude <triple> long-double|not-portable  # <text>'
-# (UNSUPPORTED on that triple). <triple> is linux-gnu or windows-msvc.
+# triple; none is left from M26, which made 00140 a plain entry);
+# '<name> exclude <triple> long-double|not-portable  # <text>' (UNSUPPORTED
+# on that triple). <triple> is linux-gnu or windows-msvc.
 00001
 00002
 00003
@@ -149,7 +150,7 @@
 00137
 00138
 00139
-00140 diag error: variadic function definitions are not supported for MSIL yet  # M26 variadic definitions (D19): f1 is variadic; LTO at -O2 deletes it (its calls do nothing), objects keep it
+00140
 00141
 00142
 00143

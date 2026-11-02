@@ -11,7 +11,9 @@
 // 5.10.12; lld/ELF's Relocations.cpp and lld/wasm's Relocations.cpp have the
 // role for native objects): the address field of every DATA symbol that the
 // output uses, one '<msil>fn_' field per resolved method, one P/Invoke stub
-// per natively bound function and IL signature, and the native data imports
+// per natively bound function and IL signature (the VARARG references of a
+// native variadic function import its va_list variant, plan 5.15.2 rule 2),
+// and the native data imports
 // with the data-import helper (NativeLibrary when the references define it,
 // else the kernel32 or dlopen/dlsym P/Invokes), the C library's environ
 // among them when a constructor takes envp.
@@ -169,9 +171,21 @@ public:
   }
   std::optional<uint32_t> getTrailerMethod(const Symbol *sym) const;
   // The P/Invoke stub of \p name with output signature \p sig (plan
-  // 5.10.11), made on first use.
+  // 5.10.11) that imports \p entry from \p module, made on first use.
   uint32_t getPInvokeStub(StringRef name, StringRef module, StringRef entry,
                           const llvm::cli::MethodSig &sig);
+  // The va_list variant that plan 5.15.2's rule 2 bound the VARARG
+  // references of the natively bound function \p sym to
+  // (CallBinder::checkNativeReferences, bindVaListVariant): their P/Invoke
+  // stubs keep the symbol's name and import the variant's entry from its
+  // module, and --print-imports lists the variant (rule 6). Null when no
+  // VARARG reference binds natively.
+  void setVaListVariant(const Symbol *sym, const NativeExport *variant) {
+    vaListVariants[sym] = variant;
+  }
+  const NativeExport *getVaListVariant(const Symbol *sym) const {
+    return vaListVariants.lookup(sym);
+  }
   // The canonical P/Invoke stub of the natively bound function \p sym (plan
   // 5.10.11): the one of getNativeSignature(). std::nullopt if no object
   // gives a signature (CallBinder reports the function).
@@ -228,6 +242,7 @@ private:
   llvm::DenseMap<const void *, uint32_t> fnAddrFields;
   llvm::DenseMap<const Symbol *, uint32_t> trailerMethods;
   llvm::StringMap<uint32_t> pinvokeStubs;
+  llvm::DenseMap<const Symbol *, const NativeExport *> vaListVariants;
   // The functions of the data-import helper, for --print-imports.
   struct HelperFunction {
     std::string name, module, entry;

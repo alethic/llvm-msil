@@ -64,6 +64,7 @@
 #include "llvm/CLI/Handles.h"
 #include "llvm/CLI/ILBuilder.h"
 #include "llvm/CLI/ImageLayout.h"
+#include "llvm/CLI/LinkInfo.h"
 #include "llvm/CLI/Opcodes.h"
 #include "llvm/CLI/Signature.h"
 #include "llvm/CLI/Trailer.h"
@@ -455,8 +456,10 @@ const MSIL::Signature &MSILAsmPrinter::getSignature(const Function &F) {
   // gets the signature its definition would have. Narrow integers widen to
   // int32, 64-bit integers and pointers are native int (decision D2), and a
   // return of more than one value becomes a leading pointer parameter. The
-  // variable part of a variadic function is not part of the signature
-  // (variadic definitions and calls are diagnosed in Phase 1, D19).
+  // variable part of a variadic function is not part of the signature:
+  // ExpandVariadics has given every variadic function that ISel meets a
+  // va_list parameter instead, except the fixed-arity declarations
+  // (MSILPrepareVariadics), whose calls name the call's own signature.
   SmallVector<MVT, 4> Params;
   SmallVector<MVT, 1> Results;
   MSIL::computeSignatureVTs(F.getFunctionType(), &F, F, TM, Params, Results);
@@ -1316,8 +1319,10 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     if (Linked) {
       // msil-ld reports an unresolved symbol first; this is a backstop. A
       // native callee is checked after native resolution, so the texts name
-      // its module (plan 5.10.13, 5.10.14); LowerCall reports the calls of a
-      // variadic one.
+      // its module (plan 5.10.13, 5.10.14). A variadic declaration here is a
+      // backstop (plan 5.15.2): a fixed-arity one whose address the module
+      // takes, which msil-ld reports first (rule 4); its calls are library
+      // calls of the call's signature (LowerCall).
       // A runtime helper (N1, N2 or an archive-only N3 name, plan 5.14.2),
       // such as an __atomic_* function that AtomicExpand declares during
       // code generation, after msil-ld's import analysis, is never a native
@@ -1337,9 +1342,9 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
         continue;
       }
       if (F->isVarArg()) {
-        Ctx.emitError("native function '" + Name + "' (" + Import->Module +
-                      ") is variadic; calls of native variadic functions are "
-                      "not supported for MSIL yet (phase 3)");
+        Ctx.emitError("the address of native variadic function '" + Name +
+                      "' (" + Import->Module +
+                      ") is not supported for MSIL yet");
         continue;
       }
       if (!hasNativeSignature(*F)) {
@@ -1351,11 +1356,13 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
       Declare(F, Name, *Sig, Import->Module, Import->Entry);
       continue;
     }
-    // The variable arguments of a native variadic function need the calling
-    // convention support of phase 3 (decisions D14 and D19).
+    // The address of a fixed-arity declaration (MSILPrepareVariadics), whose
+    // calls are library calls of the call's signature (LowerCall): no
+    // P/Invoke of the declaration's own signature can take its variable
+    // arguments.
     if (F->isVarArg()) {
       Ctx.emitError("undefined variadic function '" + Name +
-                    "' is not supported for MSIL yet (phase 3)");
+                    "' is not supported for MSIL yet");
       continue;
     }
     std::optional<StringRef> Lib = MSIL::getPInvokeModule(TT, Name, F);
@@ -1375,6 +1382,7 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
     Declare(F, Name, *Sig, *Lib, MSIL::getPInvokeEntry(Name, F));
   }
 
+  SmallPtrSet<const Function *, 4> ReportedFixedArity;
   for (const auto &[Name, Sig] : ExtSymOrder) {
     // A library call of a method that this module defines (by IL name and
     // signature) calls that method, as a native link would resolve it.
@@ -1413,13 +1421,24 @@ void MSILAsmPrinter::emitPInvokeDeclarations(const Module &M) {
       Declare(F, Name, *Sig, Import->Module, Import->Entry);
       continue;
     }
-    // LowerCall builds a library call only for a Phase-1 import (D14).
-    std::optional<StringRef> Lib = MSIL::getPInvokeModule(TT, Name, F);
+    // LowerCall builds a library call only for a Phase-1 import (D14), or
+    // for a fixed-arity call (MSILPrepareVariadics), whose P/Invoke of the
+    // call's signature takes the declaration's module and entry: one per
+    // call-site signature for an explicit import (plan 5.15.2), and the
+    // undefined function's text, once, for any other declaration.
+    const Function *FixedArity =
+        Named && Named->isDeclarationForLinker() &&
+                Named->hasFnAttribute("msil-fixed-arity")
+            ? Named
+            : nullptr;
+    const Function *Decl = F ? F : FixedArity;
+    std::optional<StringRef> Lib = MSIL::getPInvokeModule(TT, Name, Decl);
     if (!Lib) {
-      reportNotImported(Ctx, TT, Name, /*IsLibCall=*/true, LTO);
+      if (!FixedArity || ReportedFixedArity.insert(FixedArity).second)
+        reportNotImported(Ctx, TT, Name, /*IsLibCall=*/!FixedArity, LTO);
       continue;
     }
-    Declare(F, Name, *Sig, *Lib, MSIL::getPInvokeEntry(Name, F));
+    Declare(Decl, Name, *Sig, *Lib, MSIL::getPInvokeEntry(Name, Decl));
   }
 
   // The native functions of the data-import helper (plan 5.10.12), which
@@ -1755,6 +1774,7 @@ void MSILAsmPrinter::emitTrailer(Module &M,
   }
 
   fillTrailerDefs(M, Sink, In);
+  fillTrailerUCRTStdio(M, Sink, In);
   cli::buildTrailer(In, Sink);
   emitDataSegment(Sink);
   if (EnvironImportField) {
@@ -2087,7 +2107,12 @@ MSIL::Signature MSIL::getFunctionTypeSignature(const FunctionType *FTy,
 /// value, then the values of each IR parameter. A byval parameter's alignment
 /// is that of the copy LowerCall makes (the stack alignment, else the
 /// alignment, else the type's ABI alignment, as TargetLowering decides it).
-/// VARARG is never set (decision D19).
+/// VARARG, with FixedParams the IL parameters before the va_list, if \p Attrs
+/// has the function attribute "msil-variadic" (MSILPrepareVariadics: a
+/// function that ExpandVariadics expanded, whose last IR parameter is the
+/// va_list; all IL parameters if \p FTy is still variadic); FIXED_ARITY,
+/// with FixedParams the declaration's named parameters, if \p Attrs has the
+/// call-site attribute "msil-fixed-arity"="<n>" (a fixed-arity call).
 MSILLink::SignatureInfo MSIL::getABIDescriptor(const FunctionType *FTy,
                                                const AttributeList &Attrs,
                                                bool NoPrototype,
@@ -2129,6 +2154,17 @@ MSILLink::SignatureInfo MSIL::getABIDescriptor(const FunctionType *FTy,
     MSIL::computeLegalValueVTs(Context, TM, FTy->getParamType(I), VTs);
     ILIndex += VTs.size();
   }
+  if (Attrs.hasFnAttr("msil-variadic")) {
+    SI.Flags |= MSILLink::VarArg;
+    SI.FixedParams = FTy->isVarArg() || ILIndex == 0 ? ILIndex : ILIndex - 1;
+  }
+  uint32_t NumNamed;
+  if (!Attrs.getFnAttr("msil-fixed-arity")
+           .getValueAsString()
+           .getAsInteger(10, NumNamed)) {
+    SI.Flags |= MSILLink::FixedArity;
+    SI.FixedParams = NumNamed;
+  }
   return SI;
 }
 
@@ -2166,9 +2202,16 @@ void MSILAsmPrinter::collectCallABIs(const Function &Caller) {
     if (F ? F->isIntrinsic() || !F->isDeclarationForLinker()
           : !isa_and_nonnull<GlobalAlias>(Callee))
       continue;
+    // A call of an expanded variadic function (or of an alias of one) is
+    // VARARG, as the function's own entry is.
+    AttributeList Attrs = CB->getAttributes();
+    if (const auto *Target = dyn_cast_or_null<Function>(
+            F ? F : cast<GlobalAlias>(Callee)->getAliaseeObject());
+        Target && Target->hasFnAttribute("msil-variadic"))
+      Attrs = Attrs.addFnAttribute(Caller.getContext(), "msil-variadic");
     MSILLink::SignatureInfo SI = MSIL::getABIDescriptor(
-        CB->getFunctionType(), CB->getAttributes(),
-        F && F->hasFnAttribute("no-prototype"), Caller, TM);
+        CB->getFunctionType(), Attrs, F && F->hasFnAttribute("no-prototype"),
+        Caller, TM);
     std::pair<std::string, MSIL::Signature> Key(
         MSIL::getILName(*Callee, TM).str(),
         getCallTypeSignature(CB->getFunctionType(), Caller, TM));
@@ -2586,7 +2629,9 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
   // The import stubs (plan 5.8.3): the ones that calls name, in first-use
   // order, then one address-only stub for each undefined, prototyped function
   // whose address the object takes but that it never calls, with the
-  // declaration's signature, in SYMTAB order (a variadic one is an error). A
+  // declaration's signature, in SYMTAB order (for a fixed-arity declaration
+  // its fixed parameters and a native int va_list, and VARARG: msil-ld
+  // decides, plan 5.15.2 rule 4). A
   // stub is on the "msil-import-module" module, else on 'msil.unresolved'
   // (msil-ld binds it natively under its import name), and its entry is
   // "msil-import-name", else the C name.
@@ -2616,13 +2661,16 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
         !AddressTaken.contains(F) || F->hasFnAttribute("no-prototype") ||
         CalledValues.contains(F) || CalledNames.contains(R.Symbols[I].Name))
       continue;
-    // The variable arguments of a native variadic function need the calling
-    // convention support of phase 3, as in -S (decision D19, plan 5.10.13):
-    // record v1 never sets VARARG (5.8.8), so such a function gets no stub.
-    // Its address is a FnAddr reference, which names no stub.
+    // A fixed-arity declaration (MSILPrepareVariadics) keeps its variadic
+    // type: its stub has the signature that ExpandVariadics would have given
+    // it, and its SIGNATURES entry VARARG (below), so that msil-ld binds it
+    // as the reference to a variadic function that it is.
     if (F->isVarArg()) {
-      Ctx.emitError("undefined variadic function '" + R.Symbols[I].Name +
-                    "' is not supported for MSIL yet (phase 3)");
+      MSIL::Signature Expanded = getSignature(*F);
+      unsigned PointerSizeInBits = F->getDataLayout().getPointerSizeInBits();
+      Expanded.Params.push_back(MSIL::toValType(
+          MVT::getIntegerVT(PointerSizeInBits), PointerSizeInBits));
+      AddStub(*F, internSignature(Expanded));
       continue;
     }
     AddStub(*F, getSignature(*F));
@@ -2812,12 +2860,20 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
     const ImportStub &St = Stubs[I];
     uint32_t Token =
         cli::makeToken(cli::TableId::MethodDef, MethodOrder.size() + I + 1);
-    if (I < NumCallStubs)
+    if (I < NumCallStubs) {
       AddSignature(Token, CallABIOf(MSIL::getILName(*St.F, TM), *St.Sig));
-    else
-      AddSignature(Token, MSIL::getABIDescriptor(
-                              St.F->getFunctionType(), St.F->getAttributes(),
-                              /*NoPrototype=*/false, *St.F, TM));
+      continue;
+    }
+    MSILLink::SignatureInfo SI =
+        MSIL::getABIDescriptor(St.F->getFunctionType(), St.F->getAttributes(),
+                               /*NoPrototype=*/false, *St.F, TM);
+    // The stub of a fixed-arity declaration: its IL parameters but the
+    // va_list are the fixed ones.
+    if (St.F->isVarArg()) {
+      SI.Flags |= MSILLink::VarArg;
+      SI.FixedParams = St.Sig->Params.size() - 1;
+    }
+    AddSignature(Token, std::move(SI));
   }
   for (const auto &[Row, Name, Sig] : SymbolMethodRefs)
     AddSignature(cli::makeToken(cli::TableId::MemberRef, Row),
@@ -2856,6 +2912,9 @@ void MSILAsmPrinter::emitObjectEnd(Module &M) {
   }
   if (!Fields.empty() || !Stubs.empty())
     TS.emitBlankLine();
+  // FIXED_ARITY needs minor version 1 (5.14.7 V3); a record without it stays
+  // 1.0.
+  R.Hdr.Minor = cli::getRequiredMinorVersion(R);
   TS.emitLinkInfo(getObjectModuleName(M), R);
 }
 

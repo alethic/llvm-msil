@@ -34,7 +34,9 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/KnownBits.h"
 #include "llvm/Target/TargetMachine.h"
 using namespace llvm;
 
@@ -309,17 +311,17 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   // A CopyToReg cannot take a frame index operand: LowerCopyToReg copies it
   // into a register first.
   setOperationAction(ISD::CopyToReg, MVT::Other, Custom);
-  // The static frame is the only stack in Phase 1. Dynamic allocas (VLAs),
-  // the stack saves and restores around them and the frame address need the
-  // phase-3 shadow stack; CIL has no return address, entry stack pointer or
+  // A dynamic alloca that MSILLowerDynamicAlloca left (one on no CFG cycle)
+  // is a localloc of its own (LowerDYNAMIC_STACKALLOC, plan 5.15.8 H0). That
+  // pass deletes llvm.stacksave and llvm.stackrestore, so STACKSAVE and
+  // STACKRESTORE are diagnosed only as backstops; the frame address needs
+  // the shadow stack; CIL has no return address, entry stack pointer or
   // DWARF call frame, and no executable memory for trampolines.
   // LowerOperation diagnoses each of them with its own text (plan section 12,
-  // 'M7.b diagnostic texts amended'); STACKSAVE and STACKRESTORE stay silent
-  // in a function with a dynamic alloca, whose DYNAMIC_STACKALLOC reports the
-  // error once. The legalizer would treat FRAMEADDR, RETURNADDR,
-  // ADDROFRETURNADDR, SPONENTRY and the trampolines as Custom anyway.
-  // EH_DWARF_CFA must be Custom: a Legal one is expanded into a FRAMEADDR,
-  // which would report the frame address instead.
+  // 'M7.b diagnostic texts amended', and M26's rows). The legalizer would
+  // treat FRAMEADDR, RETURNADDR, ADDROFRETURNADDR, SPONENTRY and the
+  // trampolines as Custom anyway. EH_DWARF_CFA must be Custom: a Legal one is
+  // expanded into a FRAMEADDR, which would report the frame address instead.
   setOperationAction(ISD::DYNAMIC_STACKALLOC, MVT::i64, Custom);
   setOperationAction({ISD::STACKSAVE, ISD::STACKRESTORE, ISD::INIT_TRAMPOLINE},
                      MVT::Other, Custom);
@@ -327,7 +329,7 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
                       ISD::SPONENTRY, ISD::ADJUST_TRAMPOLINE,
                       ISD::EH_DWARF_CFA},
                      MVT::i64, Custom);
-  // The stack address (phase-3 shadow stack), the setjmp/longjmp builtins
+  // The stack address (the shadow stack), the setjmp/longjmp builtins
   // (phase 3) and llvm.eh.return are diagnosed the same way, and must be
   // Custom too. The legalizer looks up the EH nodes by their first result
   // type and silently turns Legal into Expand, which drops the longjmp and
@@ -338,17 +340,20 @@ MSILTargetLowering::MSILTargetLowering(const TargetMachine &TM,
   setOperationAction({ISD::EH_SJLJ_LONGJMP, ISD::EH_SJLJ_SETUP_DISPATCH,
                       ISD::EH_RETURN, ISD::STACKADDRESS},
                      MVT::Other, Custom);
-  // A va_list parameter compiles: only variadic definitions and calls are
-  // Phase-1 errors (decision D19), and clang lowers va_arg inline for the
-  // native va_list layout of every triple (Design.md 3 and 4.7). va_end does
-  // nothing on any of those ABIs: Expand makes it its input chain. va_copy
-  // copies the va_list: a pointer load and store (Expand) where it is a
-  // char*, a cpblk of the native structure elsewhere (LowerVACOPY). Only
-  // hand-written IR has a va_arg instruction, which LowerOperation diagnoses
-  // (phase 3); the legalizer looks VAARG up on MVT::Other. A result type that
-  // the type legalizer changes asks ReplaceNodeResults first, which reports
-  // the instruction once: soft promotion (f16, bf16), scalarization and
-  // widening have no case for VAARG, and expansion would make several.
+  // A va_list parameter compiles, and ExpandVariadics lowers variadic
+  // definitions and calls before instruction selection (decision D19 as
+  // amended, plan 5.15.2); clang lowers va_arg inline for the native va_list
+  // layout of every triple (Design.md 3 and 4.7). va_end does nothing on any
+  // of those ABIs: Expand makes it its input chain. va_copy copies the
+  // va_list: a pointer load and store (Expand) where it is a char*, a cpblk
+  // of the native structure elsewhere (LowerVACOPY). MSILPrepareIR reports a
+  // va_arg instruction on the triples whose va_list is a structure, and
+  // ExpandVariadics expands it where va_list is a char*, so a VAARG node is a
+  // backstop that LowerOperation diagnoses; the legalizer looks VAARG up on
+  // MVT::Other. A result type that the type legalizer changes asks
+  // ReplaceNodeResults first, which reports the instruction once: soft
+  // promotion (f16, bf16), scalarization and widening have no case for VAARG,
+  // and expansion would make several.
   setOperationAction(ISD::VAEND, MVT::Other, Expand);
   bool VAListIsStruct = getNativeVAListStructSize(TM.getTargetTriple()) != 0;
   setOperationAction(ISD::VACOPY, MVT::Other, VAListIsStruct ? Custom : Expand);
@@ -626,9 +631,12 @@ static SDValue foldExtendOfExactRound(SDValue Src, EVT VT, const SDLoc &DL,
   return DAG.getNode(ISD::FP_EXTEND, DL, VT, In);
 }
 
-/// The error for a va_arg instruction (LowerOperation, ReplaceNodeResults).
+/// The error for a va_arg instruction (LowerOperation, ReplaceNodeResults):
+/// MSILPrepareIR's text (plan 5.15.2), for a va_arg that reaches instruction
+/// selection without that pass.
 static constexpr const char *VAArgUnsupported =
-    "the va_arg instruction is not supported for MSIL yet (phase 3 variadics)";
+    "the va_arg instruction is not supported for MSIL on this triple; clang "
+    "lowers C's va_arg itself";
 
 /// Lowers VACOPY where va_list is the native structure (Design.md 4.7): a
 /// copy of its bytes, which MSILSelectionDAGInfo makes a cpblk, as X86 and
@@ -656,27 +664,21 @@ SDValue MSILTargetLowering::LowerOperation(SDValue Op,
     return LowerFrameIndex(Op, DAG);
   case ISD::CopyToReg:
     return LowerCopyToReg(Op, DAG);
-  // Dynamic allocas, the stack saves and restores around them and the frame
-  // and stack addresses wait for the phase-3 shadow stack (decision D13). Each
-  // has its own text, and one VLA gives one error (LowerStackSaveRestore).
+  // A dynamic alloca on no CFG cycle is a localloc of its own (plan 5.15.8
+  // H0). The stack saves and restores, which MSILLowerDynamicAlloca deletes,
+  // and the frame and stack addresses wait for the shadow stack (decision
+  // D13 as amended); each has its own text.
   case ISD::DYNAMIC_STACKALLOC:
-    return LowerUnsupported(
-        Op, DAG,
-        "dynamic alloca / VLA is not supported for MSIL yet (phase 3 shadow "
-        "stack)");
+    return LowerDYNAMIC_STACKALLOC(Op, DAG);
   case ISD::STACKSAVE:
   case ISD::STACKRESTORE:
     return LowerStackSaveRestore(Op, DAG);
   case ISD::FRAMEADDR:
-    return LowerUnsupported(
-        Op, DAG,
-        "llvm.frameaddress is not supported for MSIL yet (phase 3 shadow "
-        "stack)");
+    return LowerUnsupported(Op, DAG,
+                            "llvm.frameaddress is not supported for MSIL yet");
   case ISD::STACKADDRESS:
-    return LowerUnsupported(
-        Op, DAG,
-        "llvm.stackaddress is not supported for MSIL yet (phase 3 shadow "
-        "stack)");
+    return LowerUnsupported(Op, DAG,
+                            "llvm.stackaddress is not supported for MSIL yet");
   case ISD::EH_DWARF_CFA:
     return LowerUnsupported(Op, DAG,
                             "llvm.eh.dwarf.cfa is not supported for MSIL");
@@ -709,8 +711,9 @@ SDValue MSILTargetLowering::LowerOperation(SDValue Op,
   case ISD::EH_RETURN:
     return LowerUnsupported(Op, DAG,
                             "llvm.eh.return is not supported for MSIL");
-  // va_copy of a native va_list structure. A va_arg instruction waits for
-  // phase 3: clang lowers va_arg inline, so only hand-written IR has one.
+  // va_copy of a native va_list structure. A va_arg instruction never gets
+  // here after MSILPrepareIR and ExpandVariadics: clang lowers va_arg inline,
+  // so only hand-written IR has one.
   case ISD::VACOPY:
     return LowerVACOPY(Op, DAG);
   case ISD::VAARG:
@@ -1341,21 +1344,103 @@ SDValue MSILTargetLowering::LowerUnsupported(SDValue Op, SelectionDAG &DAG,
 
 SDValue MSILTargetLowering::LowerStackSaveRestore(SDValue Op,
                                                   SelectionDAG &DAG) const {
-  // clang brackets the scope of every VLA with llvm.stacksave and
-  // llvm.stackrestore (at -O0 always). In a function with a dynamic alloca,
-  // that alloca's DYNAMIC_STACKALLOC reports the error, so one VLA gives one
-  // error. FunctionLoweringInfo::set creates the variable-sized object of
-  // every dynamic alloca before any block is selected, so this holds also
-  // when the stacksave is selected before the alloca's block.
-  if (DAG.getMachineFunction().getFrameInfo().hasVarSizedObjects())
-    return getDummyResults(Op, DAG);
-  return LowerUnsupported(
-      Op, DAG,
-      Op.getOpcode() == ISD::STACKSAVE
-          ? "llvm.stacksave is not supported for MSIL yet (phase 3 shadow "
-            "stack)"
-          : "llvm.stackrestore is not supported for MSIL yet (phase 3 shadow "
-            "stack)");
+  // MSILLowerDynamicAlloca deletes every llvm.stacksave and llvm.stackrestore
+  // of a function without a cyclic dynamic alloca, and drops the body of a
+  // function with one, so these texts are backstops for a pipeline without
+  // that pass. They report even next to an acyclic dynamic alloca: without
+  // the pass nothing has checked that the alloca is on no cycle.
+  return LowerUnsupported(Op, DAG,
+                          Op.getOpcode() == ISD::STACKSAVE
+                              ? "llvm.stacksave is not supported for MSIL yet"
+                              : "llvm.stackrestore is not supported for MSIL "
+                                "yet");
+}
+
+/// Returns the alignment that the dynamic allocas of \p MF whose alignment
+/// does not exceed the stack alignment need. SelectionDAGBuilder::visitAlloca
+/// gives their DYNAMIC_STACKALLOC an alignment operand of 0 ('the stack
+/// alignment', 16 for MSIL), so the node does not say whether 'localloc''s 8
+/// bytes suffice. FunctionLoweringInfo::set records every dynamic alloca as a
+/// variable-sized object of the frame, so the largest IR alignment among
+/// them that is at most the stack alignment decides: a function whose
+/// dynamic allocas need at most 8 gets no realignment, one with a 16-aligned
+/// one realigns all of them to 16.
+static Align getDefaultDynamicAllocaAlign(const MachineFunction &MF) {
+  const MachineFrameInfo &MFI = MF.getFrameInfo();
+  const Align StackAlign =
+      MF.getSubtarget<MSILSubtarget>().getFrameLowering()->getStackAlign();
+  Align Result(1);
+  for (int FI = 0, E = MFI.getObjectIndexEnd(); FI != E; ++FI) {
+    if (!MFI.isVariableSizedObjectIndex(FI))
+      continue;
+    const AllocaInst *AI = MFI.getObjectAllocation(FI);
+    // A variable-sized object without its alloca: assume the stack alignment.
+    if (!AI)
+      return StackAlign;
+    if (AI->getAlign() <= StackAlign)
+      Result = std::max(Result, AI->getAlign());
+  }
+  return Result;
+}
+
+SDValue MSILTargetLowering::LowerDYNAMIC_STACKALLOC(SDValue Op,
+                                                    SelectionDAG &DAG) const {
+  // An alloca on no CFG cycle runs at most once per call (the others are
+  // MSILLowerDynamicAlloca's error), so its memory can live until the method
+  // returns, like the static frame's: a localloc of its own, with a
+  // native-int size (LOCALLOC_I64; CIL 'localloc' takes a native unsigned
+  // int, plan 5.15.8 H0). CIL requires the size to be the only value on the
+  // evaluation stack: MSILRegStackify never nests the result into another
+  // instruction, and MSILStackCheck checks the depth.
+  MachineFunction &MF = DAG.getMachineFunction();
+  SDLoc DL(Op);
+  EVT VT = Op.getValueType();
+  SDValue Chain = Op.getOperand(0);
+  SDValue Size = Op.getOperand(1);
+
+  // SelectionDAGBuilder has rounded the size up to the stack alignment, as
+  // (Size + StackAlign - 1) & -StackAlign. The rounding stays: DAGCombiner
+  // merges it with a program's own rounding of the same shape
+  // (alloca((n + 15) & ~15)), so the AND cannot tell whose it is, and dropping
+  // it could allocate fewer bytes than the alloca asks for (decision D13 lets
+  // nothing rely on localloc's rounding). It costs at most StackAlign - 1
+  // bytes.
+  MaybeAlign Requested =
+      cast<ConstantSDNode>(Op.getOperand(2))->getMaybeAlignValue();
+  const Align Alignment =
+      Requested ? *Requested : getDefaultDynamicAllocaAlign(MF);
+
+  // As for the static frame (MSILFrameLowering::emitFrameBase): when the
+  // alloca needs more than localloc's alignment, allocate Alignment -
+  // LocallocAlign more bytes and align the address up, in native int
+  // (decision D2).
+  const Align LocallocAlign =
+      Subtarget->getFrameLowering()->getLocallocAlign(MF);
+  const bool Realign = Alignment > LocallocAlign;
+  if (Realign)
+    Size = DAG.getNode(
+        ISD::ADD, DL, VT, Size,
+        DAG.getConstant(Alignment.value() - LocallocAlign.value(), DL, VT));
+  else if (!DAG.isKnownNeverZero(Size))
+    // CIL 'localloc' of 0 bytes may return null (CoreCLR's does), but a
+    // zero-size alloca must still yield a valid address: allocate at least
+    // one byte, as the static frame does (MSILFrameLowering::emitFrameBase).
+    // Size | 1 is never below Size and costs at most one byte. The realigned
+    // size above is never zero, even modulo 2^64: the rounded size is a
+    // multiple of the stack alignment (16) and Alignment - LocallocAlign
+    // (Alignment - 8, Alignment >= 16) is not.
+    Size = DAG.getNode(ISD::OR, DL, VT, Size, DAG.getConstant(1, DL, VT));
+  MachineSDNode *Alloc = DAG.getMachineNode(
+      MSIL::LOCALLOC_I64, DL, DAG.getVTList(VT, MVT::Other), {Size, Chain});
+  SDValue Ptr(Alloc, 0);
+  if (Realign) {
+    Ptr = DAG.getNode(ISD::ADD, DL, VT, Ptr,
+                      DAG.getConstant(Alignment.value() - 1, DL, VT));
+    Ptr = DAG.getNode(ISD::AND, DL, VT, Ptr,
+                      DAG.getSignedConstant(
+                          -static_cast<int64_t>(Alignment.value()), DL, VT));
+  }
+  return DAG.getMergeValues({Ptr, SDValue(Alloc, 1)}, DL);
 }
 
 //===----------------------------------------------------------------------===//

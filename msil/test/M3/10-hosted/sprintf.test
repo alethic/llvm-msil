@@ -1,0 +1,89 @@
+# sprintf, snprintf, vsprintf and vsnprintf through the real <stdio.h>: results, truncation, the length query snprintf(NULL, 0, ...), and the strings read back with sscanf.
+# From M26 the printf family runs (plan 5.17.13, M3/10-hosted). On Linux
+# triples sprintf, snprintf and sscanf are glibc's native variadic functions,
+# bound to their va_list variants (vsprintf, vsnprintf, and vsscanf under
+# glibc's __isoc99_ or __isoc23_ name), and vsprintf and vsnprintf take the
+# program's own va_list; on windows-msvc triples all of them are the UCRT's
+# inline definitions over __stdio_common_vsprintf and
+# __stdio_common_vsscanf. snprintf is C99's on both (it returns the length
+# the whole text would have and writes at most n-1 characters and a NUL);
+# the UCRT's inline snprintf asks __stdio_common_vsprintf for that
+# behaviour. format_into is the program's variadic function over vsnprintf;
+# join builds one string from several vsprintf calls. The round trip
+# through sscanf reads integers, a double, a string and a character set
+# back. Plan 5.15.2, 5.17.13 (M26, M3/10-hosted).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#define _CRT_SECURE_NO_WARNINGS
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+static int format_into(char *buf, size_t n, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vsnprintf(buf, n, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static char *append(char *end, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vsprintf(end, fmt, ap);
+  va_end(ap);
+  return end + r;
+}
+
+static void show(const char *what, int n, const char *buf) {
+  printf("%s: %d [%s]\n", what, n, buf);
+}
+
+int main(void) {
+  char buf[128];
+  int n = sprintf(buf, "%d-%s-%.3f-%c-%x", 12, "ab", 0.125, 'q', 255u);
+  show("sprintf", n, buf);
+  n = sprintf(buf, "%s", "");
+  show("sprintf of an empty string", n, buf);
+
+  n = snprintf(buf, sizeof buf, "%lld %llu", -1234567890123LL, 9876543210987ull);
+  show("snprintf", n, buf);
+  memset(buf, '#', sizeof buf);
+  n = snprintf(buf, 6, "%s", "truncated text");
+  show("snprintf into 6 bytes", n, buf);
+  printf("byte after the NUL kept: %d\n", buf[6] == '#');
+  n = snprintf(NULL, 0, "%d %s %.4f", 123456, "length query", 2.0 / 3);
+  printf("snprintf(NULL, 0) = %d\n", n);
+  volatile size_t one = 1; /* not a constant: no -Wformat-truncation */
+  n = snprintf(buf, one, "%d", 42);
+  show("snprintf into 1 byte", n, buf);
+
+  n = format_into(buf, sizeof buf, "%5.2f|%-6s|%+d", 3.14159, "pi", 3);
+  show("vsnprintf", n, buf);
+  n = format_into(buf, 4, "%d", 1234567);
+  show("vsnprintf into 4 bytes", n, buf);
+
+  char *end = buf;
+  end = append(end, "%s", "join:");
+  for (int i = 0; i < 5; i++)
+    end = append(end, " %d^2=%d", i, i * i);
+  end = append(end, " %.1f", 0.25 * 10);
+  show("vsprintf", (int)(end - buf), buf);
+
+  char text[96];
+  sprintf(text, "%d %u %x %.6f %s %c", -77, 4000000000u, 0xabcdu, 2.5, "word", '!');
+  int i = 0;
+  unsigned u = 0, x = 0;
+  double d = 0;
+  char w[16] = "", c = 0;
+  n = sscanf(text, "%d %u %x %lf %15s %c", &i, &u, &x, &d, w, &c);
+  printf("sscanf of [%s]: %d fields: %d %u %x %.6f %s %c\n", text, n, i, u, x, d, w, c);
+  char digits[16] = "", rest[16] = "";
+  n = sscanf("123abc456", "%[0-9]%15s", digits, rest);
+  printf("sscanf with a set: %d [%s] [%s]\n", n, digits, rest);
+  n = sscanf("", "%d", &i);
+  printf("sscanf of an empty string: %d\n", n);
+  return 0;
+}

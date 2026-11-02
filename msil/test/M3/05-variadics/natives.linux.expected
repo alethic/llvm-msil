@@ -1,0 +1,11 @@
+open ok
+open without a mode ok
+fcntl F_GETFL & O_ACCMODE = 1
+fcntl F_DUPFD >= 10: 1
+fcntl F_GETFD of the duplicate: 0
+ioctl FIONREAD on an empty file: r=0 n=0
+dprintf 42 to fd 1 0.75
+asprintf 1-22-333 0.125 (23)
+syslog ok
+sscanf 4: 12 -34 2.50 word
+[exit 0]

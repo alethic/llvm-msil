@@ -24,7 +24,7 @@
 ; ('int main(void)' keeps its name and '<msil>Main' calls it, D27), and a K&R
 ; call with a variadic call type ('call i32 (i32, double, ...) @f(...)' for a
 ; non-variadic definition @f) becomes an ordinary fixed-arity call: no
-; variadic wrapper and no 'calls to variadic functions' error (D19 applies to
+; variadic wrapper and no variadic expansion (D19 applies to
 ; real variadic callees, varargs-call-error.ll). clang emits fixed-arity K&R
 ; calls for every MSIL triple since M9's CGCall.cpp change (section 12,
 ; 2026-10-15; clang/test/CodeGen/MSIL/no-proto-call.c), so the variadic shape
@@ -388,11 +388,12 @@ define void @test_argument() {
   ret void
 }
 
-; Invokes are treated like calls: the mismatched one invokes the wrapper of
-; test (LowerInvoke then makes both plain calls).
+; Invokes are treated like calls. LowerInvoke (slot P3, plan 5.13.6) runs
+; before FixFunctionBitcasts, so both invokes are plain calls by then, and the
+; mismatched one calls the wrapper.
 ; IR-LABEL: define void @test_invoke()
-; IR:         invoke void @call_func(ptr @has_i32_ret)
-; IR:         invoke void @has_i32_arg_bitcast()
+; IR:         call void @call_func(ptr @has_i32_ret)
+; IR:         call void @has_i32_arg_bitcast()
 ; CHECK-LABEL: .method {{.*}}'test_invoke'(
 ; CHECK:       {{^}}  ldsfld native int '<msil>fn_has_i32_ret'{{$}}
 ; CHECK-NEXT:  {{^}}  call void 'call_func'(native int){{$}}

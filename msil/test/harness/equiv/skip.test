@@ -41,7 +41,12 @@
 #     or O6 of a 03-helpers test (complex-matrix.test; every 03-helpers
 #     program is a %{msil_prog}, and O3 and O6 run only for %{msil_c} and
 #     %{msil_ll} under obj), or O3, O4 or O6 of a test in another
-#     msil/test/M3 directory (08-atomics, 10-hosted). O6 is msil-verify.py's
+#     msil/test/M3 directory (08-atomics, 10-hosted), apart from M26's O4
+#     lines for 05-variadics/ucrt-noinc.test on x86_64-pc-windows-msvc-msil
+#     (its printf family comes from the helper archive's CIL member, plan
+#     5.14.3 A9) and for 05-variadics/shared-variadic.test on every triple
+#     (a -shared library and its program; neither line is checked here). O6
+#     is msil-verify.py's
 #     (--equiv-skip <the real file> --test <path> --md-baseline): b.exe has a
 #     metadata message that its baseline a.exe lacks (a literal field without
 #     a constant, 0x80131B17 on Field 'D'::'w'; the images of

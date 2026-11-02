@@ -1,0 +1,81 @@
+# Native variadic functions of the C library: fixed-arity calls of the functions on the triple's fixed-arity list, and calls of others bound to their va_list variants.
+# Plan 5.15.2: a call of a declaration on the triple's fixed-arity list is a
+# call with the IL signature of its own arguments (FIXED_ARITY in the
+# object's record, one P/Invoke per signature), and msil-ld binds every
+# other native variadic function to its va_list variant, to which the
+# expanded call passes a native va_list. Linux triples (glibc): open with and
+# without its mode argument, fcntl with and without its argument, ioctl
+# with a pointer (all fixed-arity), and through their variants dprintf
+# (vdprintf, after fflush(stdout), so the output stays in order), sscanf
+# (glibc's header names __isoc99_sscanf or __isoc23_sscanf, whose variants
+# are __isoc99_vsscanf and __isoc23_vsscanf), asprintf (vasprintf) and
+# syslog with a double (vsyslog: a variant takes doubles in the buffer, only
+# fixed-arity calls refuse them on SysV). windows-msvc (the UCRT):
+# _open with and without its mode argument and _sopen (fixed-arity), and the
+# UCRT's inline sscanf over __stdio_common_vsscanf. The program's files live
+# in the private run directory (msil-run.py). The recon's natives.c
+# (recon/p3/variadics-files/natives.c), extended. Plan 5.15.2, 5.17.13 (M26,
+# M3/05-variadics).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/natives.c
+# RUN: %{msil_prog}
+#--- natives.c
+#define _GNU_SOURCE
+#define _CRT_SECURE_NO_WARNINGS
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#ifdef _WIN32
+#include <io.h>
+#include <share.h>
+#include <sys/stat.h>
+#define OPEN _open
+#define MODE (_S_IREAD | _S_IWRITE)
+#define CLOSE _close
+#else
+#include <sys/ioctl.h>
+#include <syslog.h>
+#include <unistd.h>
+#define OPEN open
+#define MODE 0644
+#define CLOSE close
+#endif
+
+int main(void) {
+  int fd = OPEN("va-natives.tmp", O_CREAT | O_WRONLY | O_TRUNC, MODE);
+  printf("open %s\n", fd >= 0 ? "ok" : "failed");
+  int rd = OPEN("va-natives.tmp", O_RDONLY);
+  printf("open without a mode %s\n", rd >= 0 ? "ok" : "failed");
+#ifdef _WIN32
+  int sh = _sopen("va-natives.tmp", _O_RDONLY, _SH_DENYNO, _S_IREAD);
+  printf("_sopen %s\n", sh >= 0 ? "ok" : "failed");
+  CLOSE(sh);
+#else
+  int fl = fcntl(fd, F_GETFL);
+  printf("fcntl F_GETFL & O_ACCMODE = %d\n", fl & O_ACCMODE);
+  int fd2 = fcntl(fd, F_DUPFD, 10);
+  printf("fcntl F_DUPFD >= 10: %d\n", fd2 >= 10);
+  printf("fcntl F_GETFD of the duplicate: %d\n", fcntl(fd2, F_GETFD) & FD_CLOEXEC);
+  int n = -1, r = ioctl(rd, FIONREAD, &n);
+  printf("ioctl FIONREAD on an empty file: r=%d n=%d\n", r, n);
+  fflush(stdout);
+  dprintf(1, "dprintf %d %s %.2f\n", 42, "to fd 1", 0.75);
+  char *s = NULL;
+  int len = asprintf(&s, "asprintf %d-%d-%d %.3f", 1, 22, 333, 1.0 / 8);
+  printf("%s (%d)\n", s ? s : "(null)", len);
+  free(s);
+  openlog("va-natives", LOG_PID, LOG_USER);
+  syslog(LOG_DEBUG, "va-natives %d %s %f", 42, "x", 2.5);
+  closelog();
+  puts("syslog ok");
+  CLOSE(fd2);
+#endif
+  int a = 0, b = 0;
+  double d = 0;
+  char word[16] = "";
+  int got = sscanf("12 -34 2.5 word", "%d %d %lf %15s", &a, &b, &d, word);
+  printf("sscanf %d: %d %d %.2f %s\n", got, a, b, d, word);
+  CLOSE(rd);
+  CLOSE(fd);
+  return 0;
+}

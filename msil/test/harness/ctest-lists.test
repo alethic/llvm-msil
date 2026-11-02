@@ -1,6 +1,7 @@
 # The lists of msil/test/Programs/c-testsuite and their format (plan 5.12.9,
-# 5.17.14; M23, M24): a malformed or stale list must stop lit, never turn
-# into fewer tests, and every entry kind must build its test as specified.
+# 5.17.14; M23, M24, M26): a malformed, stale or missing list must stop lit,
+# never turn into fewer tests, and every entry kind must build its test as
+# specified.
 # (1) Inputs/ctest-lists.py unit calls msil_ctest_format directly (python
 #     -B: no __pycache__ in the source tree): a list with every entry kind
 #     ('<name>', '<name> native <triple>  # <reason>', '<name> diag
@@ -18,16 +19,19 @@
 #     with a fake cache (Inputs/make-fake-corpus.py, then
 #     Inputs/ctest-lists.py setup writes the tree free1.c, free2.c and
 #     calls.c, libc-free.txt and libc.txt): the consistent lists load and
-#     yield one test per name, libc.txt's as libc/<name>; without libc.txt
-#     (optional until M26) only libc-free.txt's tests; a listed test without
+#     yield one test per name, libc.txt's as libc/<name>, so the two lists
+#     partition the tree; a missing libc.txt (required from M26) is a
+#     configuration error that names its path and yields no test, also in
+#     a configuration without hosted mode (the check comes first, so the
+#     hosted error cannot hide it); a listed test without
 #     its .c.expected (either list), a name the tree lacks or a test the
 #     rule puts into a list that lacks it (either list), a libc.txt name the
 #     rule does not match, a libc.txt rule that differs from libc-free.txt's,
 #     a name listed twice and a ListError are each a configuration error
 #     (lit's exit status 2) that names it. A libc.txt also needs hosted mode
 #     and %{msil_hosted_cflags} (Inputs/nested-ctest's msil_ctest_drop takes
-#     them away, as a lit.cfg.py without M24's hosted mode would lack them),
-#     while a tree without libc.txt loads without them. A 'native <triple>'
+#     them away, as a lit.cfg.py without M24's hosted mode would lack them).
+#     A 'native <triple>'
 #     entry needs the native oracle: the setup case 'native' adds natwin
 #     (native windows-msvc) and natlin (native linux-gnu) to libc-free.txt,
 #     and a nested run (-a) of the one for the configured triple alone
@@ -45,7 +49,8 @@
 #       and the MSIL and native runs compare with %t/<name>.expected, which
 #       the format wrote from <name>.c.expected (free1: a line; nonl: no
 #       final newline, so the file has msil-run.py's '[no newline at end of
-#       output]' line; crlf: CRLF folded to LF) and '[exit 0]'; out1, whose
+#       output]' line; crlf: CRLF folded to LF; 00140, the plain entry that
+#       M26 made of its diag entry, a line) and '[exit 0]'; out1, whose
 #       program prints nothing, fails with the diff of its text;
 #     - nat1 (native windows-msvc): before %{msil_prog}, msil-prog.py
 #       --mode native at the first level into %t.expected.d and msil-run.py
@@ -66,6 +71,19 @@
 #       expected file through --mode native --hosted.
 #     Under msil_pipeline=lto the plain entries pass and the diag entries
 #     are UNSUPPORTED (they require msil-prog-pipeline=obj).
+# (4) The repository's lists as M26 leaves them (Inputs/ctest-lists.py
+#     lists): both parse under one rule; libc-free.txt's 150 entries are all
+#     plain, 00140 among them; libc.txt has 70 ('# count: 70'), disjoint from
+#     them; the only diag entry left is libc.txt's 00189 on linux-gnu,
+#     naming M28 (the 2026-11-01 amendment of the M26 exit target);
+#     libc.txt's only modifiers are that one, 00204's 'exclude linux-gnu
+#     long-double', 00214's 'exclude windows-msvc not-portable' and 00212's,
+#     00216's and 00218's 'native windows-msvc'.
+#     The failure path: copies of the lists with 00140's M24 diag entry back,
+#     with 00214's exclusion dropped, or with libc.txt's 00025 also in
+#     libc-free.txt each fail the checks they break. That the lists match
+#     the cached tree is lit.local.cfg's check, which (2) pins and the ctest
+#     legs run.
 
 # (1)
 # RUN: %python -B %S/Inputs/ctest-lists.py unit > %t.unit.log 2>&1
@@ -87,12 +105,13 @@
 # RUN: %{harness_check} contains %t.nosubst.log "fatal: msil: c-testsuite's libc\.txt needs the substitutions %\{msil_hosted_cflags\}, which lit\.cfg\.py does not define$"
 
 # RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus nolibc
-# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.nolibc.log 2>&1
-# RUN: %{harness_check} contains %t.nolibc.log "MSIL :: harness/Inputs/nested-ctest/free1$" "MSIL :: harness/Inputs/nested-ctest/free2$"
-# RUN: %{harness_check} lacks %t.nolibc.log "fatal:" "nested-ctest/calls$" "nested-ctest/libc/"
-# RUN: %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_ctest_drop=hosted --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.nolibc-nohosted.log 2>&1
-# RUN: %{harness_check} contains %t.nolibc-nohosted.log "MSIL :: harness/Inputs/nested-ctest/free1$"
-# RUN: %{harness_check} lacks %t.nolibc-nohosted.log "fatal:"
+# RUN: %{harness_check} missing %t.copy/libc.txt
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.nolibc.log 2>&1
+# RUN: %{harness_check} contains %t.nolibc.log "fatal: msil: c-testsuite: libc\.txt does not exist: \S*ctest-lists\.test\.tmp\.copy\Wlibc\.txt \(required from M26, plan 5\.17\.14: it lists the tests that libc-free\.txt's rule matches\)$"
+# RUN: %{harness_check} lacks %t.nolibc.log "nested-ctest/free1$" "nested-ctest/free2$" "nested-ctest/libc/"
+# RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_ctest_drop=hosted --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.nolibc-nohosted.log 2>&1
+# RUN: %{harness_check} contains %t.nolibc-nohosted.log "fatal: msil: c-testsuite: libc\.txt does not exist: "
+# RUN: %{harness_check} lacks %t.nolibc-nohosted.log "needs hosted mode" "nested-ctest/free1$"
 
 # RUN: %python -B %S/Inputs/ctest-lists.py setup %t.copy %t.corpus expected
 # RUN: %{harness_check} exits 2 %{harness_lit} --show-tests --param msil_linux_sysroot= --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.copy %S/Inputs/nested-ctest > %t.expected.log 2>&1
@@ -139,7 +158,7 @@
 # RUN: rm -rf %t.exec
 # RUN: %python -B %S/Inputs/ctest-lists.py setup %t.exec %t.corpus exec
 # RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} exits 1 %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O0,O2 --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.exec %S/prog/Inputs/nested-ctest > %t.exec.log 2>&1 %}
-# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/free1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/nonl " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/crlf " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/out1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/nat1 " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/nat2 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/diag1 " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/diag2 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/diag3 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/exc1 \(\d+ of 13\)\nexcluded on windows-msvc: not-portable \(bit-field layout\)$" "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/exc2 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/libc/lib1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/libc/lib2 " "^Total Discovered Tests: 13$" %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/free1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/nonl " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/crlf " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/00140 " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/out1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/nat1 " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/nat2 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/diag1 " "^FAIL: MSIL :: harness/prog/Inputs/nested-ctest/diag2 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/diag3 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/exc1 \(\d+ of 14\)\nexcluded on windows-msvc: not-portable \(bit-field layout\)$" "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/exc2 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/libc/lib1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/libc/lib2 " "^Total Discovered Tests: 14$" %}
 
 # plain entries
 # RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^# executed command: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O0 --workdir '?\S*free1\.tmp\.O0\.d'? .*$" "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -w -O0 -c \S*free1\.c -o obj/free1\.o$" "^# \| msil-steps: run: .*msil-run\.py'? --expect-os .* --expect '?\S*free1\.tmp/free1'? --out '?\S*free1\.tmp\.O0\.out'? " "^# executed command: .*msil-prog\.py'? .* '?--cflags=-std=gnu17 -w\s*'? --ldflags=.* --level O2 --workdir '?\S*free1\.tmp\.O2\.d'? .*$" "^# \| msil-steps: run: .*msil-run\.py'? --expect-os .* --expect '?\S*free1\.tmp/free1'? --out '?\S*free1\.tmp\.O2\.out'? " %}
@@ -147,6 +166,9 @@
 # RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} equals %t/../../prog/Inputs/nested-ctest/Output/free1.tmp/free1.expected "free1 ok" "[exit 0]" %}
 # RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} equals %t/../../prog/Inputs/nested-ctest/Output/nonl.tmp/nonl.expected "tail" "[no newline at end of output]" "[exit 0]" %}
 # RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} equals %t/../../prog/Inputs/nested-ctest/Output/crlf.tmp/crlf.expected "crlf ok" "[exit 0]" %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} equals %t/../../prog/Inputs/nested-ctest/Output/00140.tmp/00140.expected "00140 ok" "[exit 0]" %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^# \| msil-steps: run: .*msil-run\.py'? --expect-os .* --expect '?\S*00140\.tmp/00140'? --out '?\S*00140\.tmp\.O0\.out'? " "^# \| msil-steps: run: .*msil-run\.py'? --expect-os .* --expect '?\S*00140\.tmp/00140'? --out '?\S*00140\.tmp\.O2\.out'? " %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} lacks %t.exec.log "not .*msil-prog\.py'? .* --workdir '?\S*00140\.tmp" %}
 # RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec.log "^# \| --- \S*out1\.tmp/out1\.expected\n# \| \+\+\+ actual\n# \| @@ -1,2 \+1 @@\n# \| -out1 differs\n# \|  \[exit 0\]$" %}
 
 # native entries
@@ -166,4 +188,15 @@
 
 # lto
 # RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} exits 1 %{harness_lit} -a --param msil_runner=local --param msil_linux_sysroot= --param msil_opt_levels=O0,O2 --param msil_pipeline=lto --param msil_corpus_dir=%t.corpus --param msil_ctest_copy=%t.exec %S/prog/Inputs/nested-ctest > %t.exec-lto.log 2>&1 %}
-# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec-lto.log "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/free1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/nat1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/libc/lib1 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/diag1 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/diag2 " "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -w -O2 -flto -c \S*free1\.c -o obj/free1\.o$" %}
+# RUN: %if msil-ld && msil-ar && msil-triple-windows && msil-native-oracle %{ %{harness_check} contains %t.exec-lto.log "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/free1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/00140 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/nat1 " "^PASS: MSIL :: harness/prog/Inputs/nested-ctest/libc/lib1 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/diag1 " "^UNSUPPORTED: MSIL :: harness/prog/Inputs/nested-ctest/diag2 " "^# \| msil-prog: .*prog-cc\.py --as cc .*--target=\S+-msil -std=gnu17 -w -O2 -flto -c \S*free1\.c -o obj/free1\.o$" %}
+
+# (4)
+# RUN: %python -B %S/Inputs/ctest-lists.py lists > %t.lists.log 2>&1
+# RUN: %{harness_check} contains %t.lists.log "^ctest-lists: lists: 10 checks, 0 failed$" "^ok: libc-free\.txt parses$" "^ok: libc\.txt parses$" "^ok: one '# rule:' line in both lists$" "^ok: libc-free\.txt lists 150 tests: '# count: 150', 150 entries$" "^ok: libc\.txt lists 70 tests: '# count: 70', 70 entries$" "^ok: the lists are disjoint: in both none$" "^ok: 00140 is a plain entry of libc-free\.txt: " "^ok: the only diag entry left is libc\.txt's 00189 on linux-gnu, naming M28: \[\('libc\.txt', '00189', 'linux-gnu', 'M28'\)\]$" "^ok: every libc-free\.txt entry is plain: with a modifier none$" "^ok: libc\.txt's entries with a modifier are "
+# RUN: %{harness_check} lacks %t.lists.log "^FAIL: "
+# RUN: %{harness_check} exits 1 %python -B %S/Inputs/ctest-lists.py lists --plant diag-00140 > %t.lists-diag.log 2>&1
+# RUN: %{harness_check} contains %t.lists-diag.log "^FAIL: 00140 is a plain entry of libc-free\.txt: \[Entry\(name='00140', kind='diag', " "^FAIL: the only diag entry left is libc\.txt's 00189 on linux-gnu, naming M28: \[\('libc-free\.txt', '00140', None, 'M26'\), \('libc\.txt', '00189', 'linux-gnu', 'M28'\)\]$" "^ctest-lists: lists: 10 checks, 3 failed$"
+# RUN: %{harness_check} exits 1 %python -B %S/Inputs/ctest-lists.py lists --plant plain-00214 > %t.lists-214.log 2>&1
+# RUN: %{harness_check} contains %t.lists-214.log "^FAIL: libc\.txt's entries with a modifier are .*\[\('00189', \('diag', 'linux-gnu', None\)\), \('00204', \('exclude', 'linux-gnu', 'long-double'\)\), \('00212', \('native', 'windows-msvc', None\)\), \('00216', " "^ctest-lists: lists: 10 checks, 1 failed$"
+# RUN: %{harness_check} exits 1 %python -B %S/Inputs/ctest-lists.py lists --plant libc-free-calls > %t.lists-calls.log 2>&1
+# RUN: %{harness_check} contains %t.lists-calls.log "^FAIL: the lists are disjoint: in both \['00025'\]$" "^FAIL: libc-free\.txt lists 150 tests: '# count: 151', 151 entries$" "^ctest-lists: lists: 10 checks, 2 failed$"

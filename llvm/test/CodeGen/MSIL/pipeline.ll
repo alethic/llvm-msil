@@ -1,12 +1,16 @@
 ; The legacy codegen pipeline of MSILPassConfig (ImplementationPlan.md 5.3,
 ; recon passes-frame.md 4.2) was fixed in M2 (decision D33); M11 removed the
 ; second invoke lowering (section 12 rows of 2026-10-20, recon
-; m11/eh-passes.md). This test pins the order of the MSIL passes and of the
-; generic passes next to them, at -O0 and -O2 on both execution triples:
-; - IR: MSILPrepareIR runs first of the target's IR passes, then
-;   AddMissingPrototypes, FixFunctionBitcasts and (-O2 only here)
-;   OptimizeReturned, then LowerInvoke, UnreachableBlockElim and
-;   IndirectBrExpand ahead of the generic IR passes;
+; m11/eh-passes.md), and M26 fixed the IR slots of 5.13.6 (P-4). This test
+; pins the order of the MSIL passes and of the generic passes next to them, at
+; -O0 and -O2 on the three triples:
+; - IR (5.13.6): MSILPrepareIR (P1) runs first of the target's IR passes, then
+;   AddMissingPrototypes (P2), LowerInvoke (P3), UnreachableBlockElim (P4),
+;   FixFunctionBitcasts (P5), PrepareVariadics (P6), ExpandVariadics (P7),
+;   LowerDynamicAlloca (P9), (-O2 only here) OptimizeReturned (P12) and
+;   IndirectBrExpand (P13), ahead of the generic IR passes (P14). P6, P7 and
+;   P9 run at every optimization level (P-1). P8 (M27), P10 (M31) and P11
+;   (M28) do not exist yet; their milestones add their lines here;
 ; - exceptions: the exception model is always None (decision D8), and
 ;   MSILPassConfig::addPassesToHandleExceptions adds nothing, so LowerInvoke
 ;   runs exactly once, in addIRPasses, and UnreachableBlockElim exactly twice:
@@ -32,19 +36,19 @@
 ;   frame layout analysis), and no other MSIL pass runs between it and the
 ;   MSIL AsmPrinter.
 ;
-; Every output line that names an MSIL pass, 'Lower invoke and unwind' or
-; 'Remove unreachable blocks from the CFG' must be matched
-; (--implicit-check-not=MSIL and the two EH strings; the 'Pass Arguments' line
-; spells these passes in lower case, -msil-*, -lowerinvoke and
-; -unreachableblockelim, which the case-sensitive strings do not match), so
-; each MSIL pass runs exactly once, LowerInvoke once and UnreachableBlockElim
-; twice, and the -O2-only passes are absent at -O0. The checks are ordered but
-; not adjacent: when M3-M9 replace the stub passes, those gain required
-; analyses (LiveIntervals, MachineDominatorTree, ...) that the pass manager
-; schedules in between. -verify-machineinstrs is left out because it inserts
-; machine verifier passes (EXPENSIVE_CHECKS builds insert them anyway, and the
-; ordered checks skip them). The module has no function definitions, which
-; would reach the M2 lowering stubs.
+; Every output line that names an MSIL pass, 'Lower invoke and unwind',
+; 'Remove unreachable blocks from the CFG' or 'Expand variadic functions' must
+; be matched (--implicit-check-not=MSIL and the three strings; the 'Pass
+; Arguments' line spells these passes in lower case, -msil-*, -lowerinvoke,
+; -unreachableblockelim and -expand-variadics, which the case-sensitive
+; strings do not match), so each MSIL pass and ExpandVariadics run exactly
+; once, LowerInvoke once and UnreachableBlockElim twice, and the -O2-only
+; passes are absent at -O0. The checks are ordered but not adjacent: passes
+; gain required analyses (LiveIntervals, MachineDominatorTree, ...) that the
+; pass manager schedules in between. -verify-machineinstrs is left out
+; because it inserts machine verifier passes (EXPENSIVE_CHECKS builds insert
+; them anyway, and the ordered checks skip them). The module has no function
+; definitions; pipeline-knr-variadic.ll checks what the order does to code.
 
 ; DEFINE: %{check} = FileCheck %s --implicit-check-not=MSIL \
 ; DEFINE:   --implicit-check-not="Register Allocator" \
@@ -63,7 +67,8 @@
 ; DEFINE:   --implicit-check-not="SJLJ Exception Handling preparation" \
 ; DEFINE:   --implicit-check-not="Windows exception handling preparation" \
 ; DEFINE:   --implicit-check-not="Lower invoke and unwind" \
-; DEFINE:   --implicit-check-not="Remove unreachable blocks from the CFG"
+; DEFINE:   --implicit-check-not="Remove unreachable blocks from the CFG" \
+; DEFINE:   --implicit-check-not="Expand variadic functions"
 
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -O0 -debug-pass=Structure < %s -o /dev/null 2>&1 \
 ; RUN:   | %{check} --check-prefixes=CHECK,O0
@@ -80,11 +85,14 @@
 ; CHECK:       Expand IR instructions
 ; CHECK:       MSIL Prepare IR
 ; CHECK:       Add prototypes to prototypes-less functions
-; CHECK:       MSIL Fix Function Bitcasts
-; O0-NOT:      MSIL Optimize Returned
-; O2:          MSIL Optimize Returned
 ; CHECK:       Lower invoke and unwind, for unwindless code generators
 ; CHECK:       Remove unreachable blocks from the CFG
+; CHECK:       MSIL Fix Function Bitcasts
+; CHECK:       MSIL Prepare Variadic Calls
+; CHECK:       Expand variadic functions
+; CHECK:       MSIL Lower Dynamic Allocas
+; O0-NOT:      MSIL Optimize Returned
+; O2:          MSIL Optimize Returned
 ; CHECK:       Expand indirectbr instructions
 ; CHECK:       Shadow Stack GC Lowering
 ; CHECK:       Remove unreachable blocks from the CFG

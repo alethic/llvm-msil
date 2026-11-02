@@ -116,7 +116,8 @@ static void fail(const SDLoc &DL, SelectionDAG &DAG, const Twine &Msg) {
 /// (MSILAsmPrinter::getSignature), so that a direct call of it is valid.
 static bool matchesSignature(const Function &F,
                              const TargetLowering::CallLoweringInfo &CLI) {
-  // A variadic method gets no parameter for the variable arguments.
+  // A variadic method gets no parameter for the variable arguments (only a
+  // fixed-arity declaration is still variadic here; getFixedArityCallee).
   if (F.isVarArg())
     return false;
   SmallVector<MVT, 4> Params;
@@ -130,6 +131,21 @@ static bool matchesSignature(const Function &F,
          equal(Results, map_range(CLI.Ins, [](const ISD::InputArg &In) {
                  return In.VT;
                }));
+}
+
+/// The variadic declaration that the fixed-arity call (MSILPrepareVariadics:
+/// the call-site attribute "msil-fixed-arity") of \p CLI calls directly, or
+/// null. Such a call has the non-variadic type of its arguments, which the
+/// declaration's method cannot have.
+static const Function *
+getFixedArityCallee(const TargetLowering::CallLoweringInfo &CLI) {
+  if (!CLI.CB || !CLI.CB->getAttributes().hasFnAttr("msil-fixed-arity"))
+    return nullptr;
+  const auto *F = dyn_cast<Function>(CLI.CB->getCalledOperand());
+  if (!F || !F->isVarArg() || !F->isDeclarationForLinker() ||
+      CLI.CB->getFunctionType()->isVarArg())
+    return nullptr;
+  return F;
 }
 
 /// Returns the CIL signature of a call with the lowered arguments and results
@@ -215,9 +231,10 @@ SDValue MSILTargetLowering::LowerFormalArguments(
   // here, so the diagnostic appears once per function.
   if (!callingConvSupported(CallConv))
     fail(DL, DAG, "calling convention is not supported for MSIL");
-  // MSILPrepareIR has already diagnosed every variadic definition and deleted
-  // its body; this is a backstop. The signature gets no extra parameter for
-  // the variable arguments (computeSignatureVTs adds none either).
+  // ExpandVariadics has given every variadic definition of the C calling
+  // convention a va_list parameter instead; this is a backstop. The
+  // signature gets no extra parameter for the variable arguments
+  // (computeSignatureVTs adds none either).
   if (IsVarArg)
     fail(DL, DAG, "variadic functions are not supported for MSIL yet");
 
@@ -315,12 +332,22 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   bool ObjectMode =
       static_cast<const MSILTargetMachine &>(DAG.getTarget()).isObjectMode();
 
-  // SelectionDAG calls a library function, named by an external symbol, for
-  // an operation that it cannot expand inline (sqrt, fmin, an f16
-  // conversion, ...). Text output links nothing, so the library-call policy
-  // applies: the standalone import table (decision D14), or in linked text
-  // msil-ld's annotations.
-  if (const auto *ES = dyn_cast<ExternalSymbolSDNode>(Callee)) {
+  // A fixed-arity call of a variadic declaration in whole-program text: a
+  // library call of the declaration's IL name with the call's signature, so
+  // that each call-site signature gets a P/Invoke of its own, with the
+  // declaration's module and entry (MSILAsmPrinter::emitPInvokeDeclarations,
+  // which reports a declaration that is not imported). An object names the
+  // declaration with the call's signature anyway (rule R3).
+  const Function *FixedArity = ObjectMode ? nullptr : getFixedArityCallee(CLI);
+  if (FixedArity) {
+    LibCallee = MF.createExternalSymbolName(
+        MSIL::getILName(*FixedArity, DAG.getTarget()));
+  } else if (const auto *ES = dyn_cast<ExternalSymbolSDNode>(Callee)) {
+    // SelectionDAG calls a library function, named by an external symbol,
+    // for an operation that it cannot expand inline (sqrt, fmin, an f16
+    // conversion, ...). Text output links nothing, so the library-call
+    // policy applies: the standalone import table (decision D14), or in
+    // linked text msil-ld's annotations.
     StringRef Name = ES->getSymbol();
     auto Mismatch = [&]() {
       return Reject(Twine("library call '") + Name +
@@ -430,14 +457,15 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   if (CLI.IsPatchPoint)
     return Reject("patchpoints are not supported for MSIL");
   if (CLI.CB && CLI.CB->isMustTailCall())
-    return Reject("musttail calls are not supported for MSIL yet");
+    return Reject("musttail calls are not supported for MSIL");
 
   // A function as the callee, without an offset (isOffsetFoldingLegal never
   // folds one into a function's address), is a direct call of its method.
   // Any other callee is an address: a value in a register, a global
   // variable's address, or a function's address plus an offset, called with
   // 'calli'.
-  if (const auto *GA = dyn_cast<GlobalAddressSDNode>(Callee)) {
+  if (const auto *GA = dyn_cast<GlobalAddressSDNode>(Callee);
+      GA && !FixedArity) {
     if (GA->getOffset() == 0) {
       F = dyn_cast<Function>(GA->getGlobal());
       // In object mode an alias of a function (MSILPrepareIR has checked
@@ -508,21 +536,23 @@ SDValue MSILTargetLowering::LowerCall(CallLoweringInfo &CLI,
   }
 
   if (CLI.IsVarArg) {
+    // A backstop: ExpandVariadics expands every variadic call of the C
+    // calling convention, and MSILPrepareVariadics makes the calls of a
+    // fixed-arity declaration non-variadic.
     // In linked text an undefined callee is native code that msil-ld bound,
     // or unresolved, and the native-callee checks happen at link time, after
-    // native resolution (plan 5.10.13): the texts of 5.10.14, as the module
+    // native resolution (plan 5.10.13): plain link-error texts, as the module
     // trailer gives them for the references that are not calls
-    // (MSILAsmPrinter::emitPInvokeDeclarations). No call is built, so the
-    // trailer never sees this one.
+    // (MSILAsmPrinter::emitPInvokeDeclarations). A bound native variadic
+    // callee whose call ExpandVariadics left variadic gets plan 5.15.2's
+    // backstop text. No call is built, so the trailer never sees this one.
     if (F && F->isDeclarationForLinker() && MSIL::isLinkedModule(M)) {
       StringRef Name = MSIL::getILName(*F, DAG.getTarget());
       if (std::optional<MSIL::NativeImport> Import =
               MSIL::getLinkedImport(M, Name, F))
-        return RejectLinked(Twine("native function '") + Name + "' (" +
-                            Import->Module +
-                            ") is variadic; calls of native variadic "
-                            "functions are not supported for MSIL yet "
-                            "(phase 3)");
+        return RejectLinked(Twine("call of native variadic function '") + Name +
+                            "' (" + Import->Module +
+                            ") was not expanded for MSIL");
       return RejectLinked(Twine("undefined function '") + Name +
                           "' was not resolved by msil-ld");
     }

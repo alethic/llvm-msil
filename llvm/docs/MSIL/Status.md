@@ -1,10 +1,12 @@
 # MSIL backend: status of Phase 2
 
-State after milestone M25 (2026-11-01, branch `msil`, with upstream llvm-project main at
+State after milestone M26 (2026-11-01, branch `msil`, with upstream llvm-project main at
 `1838cefa99c0` merged): Phase 2 (milestones M12-M23) is complete, and of Phase 3's milestones
-M24-M35, M24 laid the foundations of Phase 3 and M25 built the helper archive
-`clang_rt.builtins`, compiler-rt's builtins as CIL objects for each MSIL triple (section 2,
-"Phase 3 foundations (M24)" and "The helper archive (M25)").
+M24-M35, M24 laid the foundations of Phase 3, M25 built the helper archive
+`clang_rt.builtins`, compiler-rt's builtins as CIL objects for each MSIL triple, and M26 made
+variadic functions and the dynamic allocas outside loops work (section 2, "Phase 3 foundations
+(M24)", "The helper archive (M25)" and "Variadic functions and acyclic dynamic allocas
+(M26)").
 `clang -c` compiles C to CIL objects, and `msil-ld`, an lld flavor, links them, archives of them, LLVM bitcode, native
 libraries and library assemblies into IL-only .NET images that it writes itself, binding the
 base class library against the reference assemblies it is given; `clang -S` plus `ilasm`, the
@@ -98,7 +100,15 @@ and compiler-rt's 32- and 64-bit integer and soft-float helpers link and match n
 compiler-rt; where the native `long double` is wider, the archive forwards the `long double`
 functions that have a `double` counterpart, and the others are a permanent link error; the Linux
 triples define `__ELF__`, every triple caps lock-free atomics at 8 bytes, and text output names
-the archive in its helper errors (section 2, "The helper archive (M25)"). How to build and use
+the archive in its helper errors (section 2, "The helper archive (M25)"). M26 made C variadic
+functions work: definitions and calls take a `va_list` with the native layout over a buffer in
+the caller's frame, `msil-ld` binds a call of a native variadic function such as `printf` to its
+`va_list` variant (`vprintf`), the few native functions without one are called with fixed
+arity per call site (link-info record v1.1), and on windows-msvc the UCRT's `printf` family
+comes from the helper archive or the UCRT's inline functions, with the C runtime's stdio option
+bits set at start-up; clang warns about `%L` where the native `long double` is wider, and a VLA
+or `alloca` outside loops is a `localloc` in the middle of its function (section 2, "Variadic
+functions and acyclic dynamic allocas (M26)"). How to build and use
 it is in [GettingStarted.md](GettingStarted.md); the decisions referred to as D1-D38 are in
 section 3 of [ImplementationPlan.md](ImplementationPlan.md), and its section 12 records every
 later amendment.
@@ -118,7 +128,7 @@ in GettingStarted.md section 7.
 | Q29 item | How Phase 2 meets it |
 |---|---|
 | Nine programs of several files (zlib `Z_SOLO`, tinf with zlib, Monocypher, CoreMark, LZ4, BLAKE2, TweetNaCl, KISS FFT, jsmn), built with static archives, at `-O0` and `-O2` on both triples and every runtime | `msil/test/Programs/<name>/<name>.test` builds each program with `%{msil_prog}` from the sources of the pinned exit corpus (below) and the support archive, and its transcript must equal the native build's at `-O0` and `-O2`: through CIL objects (legs `programs` and `programs-wsl`) and through LTO (`programs-lto` and `programs-lto-wsl`, both with the equivalence oracle O4), on `x86_64-pc-windows-msvc-msil` (.NET 8, .NET 10 through `msil_also_run`, .NET Framework 4.8; the Windows native oracle) and on `x86_64-unknown-linux-gnu-msil` (WSL .NET 10 and, through `msil_also_run`, the private WSL .NET 8; the E7 oracle). Every image is verified (D21) and force-JIT-compiled on each runtime. All nine transcripts end `[exit 0]` (each driver returns its error count, clamped to 255, except jsmn's, which has no self-check and returns 0), and each program has one `.expected` file for both oracles, TweetNaCl included. `msil/test/Programs/det/<name>.test` builds each program twice from two directories and compares the objects, archives and image byte for byte (legs `det` and `det-wsl`) |
-| c-testsuite's 150 libc-free tests | `msil/test/Programs/c-testsuite/`: one lit test per name of `libc-free.txt`, the 150 of the pinned tree's 220 tests whose source calls no C library function by the recon's rule (recomputed from the cache on every lit run), built through CIL objects at `-O0` and `-O2` against the native build on `x86_64-pc-windows-msvc-msil` and .NET 8 (leg `ctest`; no leg runs them for `x86_64-unknown-linux-gnu-msil`, section 3): 149 exit 0 with no output, as natively; `00140`, whose variadic definition is a Phase 3 construct (P3-B), is the one `diag` entry and pins `variadic function definitions are not supported for MSIL yet` (LTO deletes the unused definition at `-O2`, objects keep it) |
+| c-testsuite's 150 libc-free tests | `msil/test/Programs/c-testsuite/`: one lit test per name of `libc-free.txt`, the 150 of the pinned tree's 220 tests whose source calls no C library function by the recon's rule (recomputed from the cache on every lit run), built through CIL objects at `-O0` and `-O2` against the native build on `x86_64-pc-windows-msvc-msil` and .NET 8 (leg `ctest`; no leg runs them for `x86_64-unknown-linux-gnu-msil`, section 3): 149 exit 0 with no output, as natively; `00140`, whose variadic definition is a Phase 3 construct (P3-B), was the one `diag` entry until M26 and pinned `variadic function definitions are not supported for MSIL yet` (LTO deletes the unused definition at `-O2`, objects keep it); since M26 it is a plain entry, and `libc.txt`'s 70 tests run hosted beside the 150 (below) |
 | The link-semantics matrix: the zoo and the probes p1-p9 against native transcripts | the 55 lines of `msil/test/M2/08-semantics/matrix.txt` (below): one per row and variant of plan 5.9.16, with the rows that live in `00-link/` and `llvm/test/CodeGen/MSIL` and the P3 rows, and one per other test of `08-semantics` (`narrow-arg-mismatch`, `narrow-result-mismatch`, `section-bracket` and the two variants of `initarray-args`); `matrix-coverage.test` checks the list against the tests (`Inputs/check-matrix.py`). Every case prints its native transcript or stops with its named diagnostic on the pipelines and triples its line lists (objects and LTO for all but `section-bracket`, objects only, and `p7-flags`, an object check) and on five runtimes; none ends in a JIT-time exception, none is XFAIL, and no row is `untested` |
 | Phase 1's tests through the object pipeline | objects are the default test pipeline since M23 (plan Q31): every test of `msil/test/M1` compiles with `clang -c` (an IR test with `llc -filetype=obj`) and runs `msil-ld`'s image, in `net8` (.NET 8, and through `msil_also_run` .NET 10 and .NET 8 with `DOTNET_TieredCompilation=0`; .NET Framework 4.8; the native oracle; the equivalence oracles O3 and O6), `more-levels` (`-O1`, `-O3`, `-Os`, `-Oz`) and `wsl-net10` (WSL .NET 10, and through `msil_also_run` WSL .NET 8 and .NET 10 with `DOTNET_TieredCompilation=0`); `asm-oracle`, `modern-ilasm` and `wsl-ilasm` keep `-S` and ilasm, and `roundtrip` takes `msil-ld`'s images through ildasm and ilasm (O2) |
 
@@ -183,6 +193,28 @@ that implements the construct; `exclude <triple> long-double|not-portable`), and
 The other 149 passed on their first run, at `-O0` and `-O2` on Windows .NET 8, and a sample
 (`00001`-`00009` and `00140`) in WSL. With 8 workers the directory took about 18 minutes on the
 loaded development host.
+
+Since M26 (plan 5.17.14) `00140` is a plain entry, no `diag` entry is left in `libc-free.txt`,
+and the second list, `libc.txt`, holds the 70 tests that call the C library (68 of them
+`printf`), under the same `# rule:` line and `# count: 70`; `lit.local.cfg` requires it (`msil: c-testsuite: libc.txt does
+not exist: <path> ...` is a configuration error) and recomputes both lists from the cached tree,
+so together they cover all 220 tests. Its tests are hosted (the triple's real headers, the hosted
+native oracle) and are named `MSIL :: Programs/c-testsuite/libc/<name>`. Three are compared with
+the native oracle's transcript on windows-msvc, because their `.c.expected` assumes LP64 or GCC's
+layouts (`00212`, `00216` and `00218`, entries `native windows-msvc`), one is a `diag` entry on
+linux-gnu, and two are excluded, reported UNSUPPORTED with their reason, never XFAIL:
+
+| Test | Triple | Entry | Why |
+|---|---|---|---|
+| `00204` | linux-gnu | `exclude linux-gnu long-double` | `long double` is the 8-byte `double` on MSIL (section 3), so glibc's `vprintf` reads its `%Lf` arguments as 80-bit values; clang's `%L` warning (section 2, M26) names the case |
+| `00214` | windows-msvc | `exclude windows-msvc not-portable` | it declares `typedef unsigned long size_t`, which is not LLP64-clean; no native Windows build compiles it either |
+| `00189` | linux-gnu | `diag linux-gnu the address of native variadic function 'fprintf' (libc.so.6) is not supported for MSIL yet  # M28 ...` | it takes the address of `fprintf` and calls it through the pointer; the address of a natively bound variadic function is `msil-ld`'s link-time error (plan 5.15.2 rule 4) until M28's address adapter, which turns the entry into a plain one; on windows-msvc it is a plain entry |
+
+M26's target is 137 of the 140 (test, triple) pairs of `libc.txt`, 134 against `.c.expected` and
+3 against the native transcript, the other 3 being the 2 exclusions and the `diag` entry of
+`00189` on linux-gnu (plan section 12, "M26 exit target amended"); `00207`, a VLA, runs at `-O0`
+through M26's acyclic dynamic allocas. The `ctest` and `ctest-wsl` legs run both lists, and the
+`-Exit` leg `ctest-lto` runs them through LTO.
 
 ### The link-semantics matrix
 
@@ -256,7 +288,7 @@ What each case links is in section 2, "The link-semantics matrix".
 | `fini-array` (P3) | `main`, then the `.fini_array` entry at exit (glibc) | `global destructors are not supported yet: p_fini in <file>` | obj, lto | linux-gnu |
 | `crt-xt` (P3) | `main`, then the `.CRT$XT` entry at exit (MSVC CRT) | `global destructors are not supported yet: p_term in <file>` | obj, lto | windows-msvc |
 | `atexit-order` (P3) | the handlers in the reverse order of registration | `undefined symbol: atexit` | obj, lto | linux-gnu, windows-msvc |
-| `variadic-def-xtu` (P3) | 42 | `variadic function definitions are not supported for MSIL yet` | obj, lto | linux-gnu, windows-msvc |
+| `variadic-def-xtu` (P3; transcript since M26) | 42 | `variadic function definitions are not supported for MSIL yet` (until M26; since M26 the native transcript) | obj, lto | linux-gnu, windows-msvc |
 
 The P3 rows cover everything plan 5.9.16 leaves to Phase 3: thread-local data (`p5-tls`),
 destructors (`p6-dtors`, and the destructor tables `.fini_array` and `.CRT$XT*` of `fini-array`
@@ -267,7 +299,9 @@ by` line on both triples), function
 pointers passed to native code (`native-callback`) and a variadic definition called from
 another object (`variadic-def-xtu`: `clang -c` reports the definition under `obj`, and a caller
 alone gets `calls to variadic functions are not supported for MSIL yet`; `msil-ld`'s LTO reports
-the definition under `lto`). The three cases whose native build has undefined behaviour,
+the definition under `lto`; M26 made it the first P3 row to print its transcript, with the
+milestone in its `From` column, on both pipelines and triples). The three cases whose native build
+has undefined behaviour,
 `weak-def-sig-mismatch/double`, `float-int-mismatch` and `type-mismatch`, and the Windows half of
 `initarray-args` stop with their named diagnostics on both pipelines. Measured while M23 was
 built, through private lit roots, of the 53 tests (the 52 of `msil/test/M2` that `matrix.txt`
@@ -486,9 +520,9 @@ GettingStarted.md section 3 ("Programs of several files").
   `--why-extract`, `--reproduce`, `--trace` and `-y` work as in lld. The same inputs give the
   same output byte for byte (the `det` leg).
 - **What `msil-ld` does not do yet.**
-  - Call native variadic functions, native functions with aggregate parameters or results, and
-    native functions that take C function pointers (Phase 3): "Native libraries and P/Invokes"
-    below.
+  - Call native functions with aggregate parameters or results, and native functions that take
+    C function pointers (Phase 3): "Native libraries and P/Invokes" below. Native variadic
+    functions bind since M26.
   - `-r`, which is never supported. Native data, entry points other than `main` and
     `--gc-sections` came with M20, reference assemblies (`--reference`) with M21, and `-shared`
     and the .NET libraries that this toolchain builds with M22 ("Libraries and
@@ -728,8 +762,10 @@ How to link against native libraries, with examples, is in GettingStarted.md sec
   `double` function (`sqrt` for `sqrtf64x`, `strtod` for `strtof64x`): it is the same function
   in an MSIL program.
 - **Not done yet.**
-  - Native variadic functions (`printf`, phase 3): `native function 'printf' (libc.so.6) is
+  - Native variadic functions (`printf`) until M26: `native function 'printf' (libc.so.6) is
     variadic; calls of native variadic functions are not supported for MSIL yet (phase 3)`.
+    Since M26 such a call binds to the function's `va_list` variant, or with fixed arity, and
+    the text is retired ("Variadic functions and acyclic dynamic allocas (M26)" below).
   - Native functions that take or return a struct by value, an `__int128`, a vector or a
     `_Float16` (phase 3): `native function '<name>' (<module>) takes or returns a value that a
     P/Invoke cannot pass natively yet (phase 3)`.
@@ -834,7 +870,7 @@ natively as DLLs on Windows and as `-Bsymbolic` shared objects for the E7 oracle
 | `fini-array` (M23, P3) | a function's address in a `used` slot of `.fini_array` (Linux triples), a destructor registered without `__attribute__((destructor))` | `main`'s line, then the entry's at exit (glibc; the E7 oracle's `_start` runs no `.fini_array`, so no `.expected` file records it) | `global destructors are not supported yet: p_fini in <file>` (the object, or the LTO object), until phase 3 |
 | `crt-xt` (M23, P3) | a function's address in a `.CRT$XTU` slot (Windows triples, `#pragma section` and `__declspec(allocate)`), a terminator | `main`'s line, then the terminator's at exit (MSVC CRT) | `global destructors are not supported yet: p_term in <file>`, until phase 3 |
 | `atexit-order` (M23, P3) | handlers registered with `atexit` in `main` | the handlers in the reverse order of registration | `undefined symbol: atexit` with `>>> referenced by <file>:(main)`, on both triples: glibc defines `atexit` only in `libc_nonshared.a` and the UCRT does not export it (phase 3 intercepts it) |
-| `variadic-def-xtu` (M23, P3) | a variadic function defined in one object and called from another | 42 | through objects `clang -c` stops at the definition with `variadic function definitions are not supported for MSIL yet` (the caller alone gets `calls to variadic functions are not supported for MSIL yet`); through LTO `msil-ld` reports the definition; until phase 3 |
+| `variadic-def-xtu` (M23, P3) | a variadic function defined in one object and called from another | 42 | through objects `clang -c` stops at the definition with `variadic function definitions are not supported for MSIL yet` (the caller alone gets `calls to variadic functions are not supported for MSIL yet`); through LTO `msil-ld` reports the definition; until M26, which prints 42 through objects and LTO on both triples (`transcript: 42`, milestone M26) |
 
 On the object path the diagnostics are `msil-ld`'s, whose `>>> referenced by
 <file>:(<function>)` and `>>> defined in <file>` lines name the objects; the adapter warnings
@@ -1425,8 +1461,8 @@ plan 5.8 is the contract.
   calls with one IL signature that pass their arguments differently (a `byval` struct or an
   `sret` result in one, a plain pointer in the other) give the warning `calls to '<f>' pass
   incompatible arguments; the object records the first call's layout`. Thread-local
-  variables, `llvm.global_dtors`, ifuncs, module `asm` and variadic functions stay the errors
-  of section 3. Object mode adds three errors: `alias '<a>' must
+  variables, `llvm.global_dtors`, ifuncs and module `asm` stay the errors of section 3, as
+  variadic functions did until M26. Object mode adds three errors: `alias '<a>' must
   point to a definition plus a constant offset for MSIL`, `comdat '<c>' uses selection kind
   '<k>', which MSIL does not support` (`largest`, `exactmatch`, `samesize`), and `symbol
   '<name>' starts with '<msil>', which MSIL reserves for the names it generates`.
@@ -1532,8 +1568,10 @@ section 3 ("Programs of several files"); plan 5.9 is the contract.
   `conv.i4`), and a result that one side has and the other does not, get an adapter
   `'<msil>adapt_<name>_<n>'` (one per definition, call signature and call flags) and a
   warning; integer against floating point, `float` against `double`, an `sret` result on one
-  side only and differing `byval` parameters are errors, and a variadic side is `variadic
-  functions are not supported yet: <f>`. The texts are wasm-ld's:
+  side only and differing `byval` parameters are errors, and a variadic side was `variadic
+  functions are not supported yet: <f>` until M26 (since M26 equal variadic sides bind and
+  others are `function signature mismatch`, "Variadic functions and acyclic dynamic allocas
+  (M26)" below). The texts are wasm-ld's:
 
   ```text
   msil-ld: warning: function signature mismatch: add
@@ -1647,7 +1685,9 @@ section 3 ("Programs of several files"); plan 5.9 is the contract.
   `msil-ld` for every object, LTO's in-memory objects included, with `>>> referenced by` lines,
   and report: a function of
   the callback list (`qsort`, `signal`, `pthread_create`, ...; explicit `import_module`
-  exempt), a variadic call or definition, a value that a P/Invoke cannot pass natively (an
+  exempt), a variadic call or definition (until M26; since M26 the variadic rules of "Variadic
+  functions and acyclic dynamic allocas (M26)" below), a value that a P/Invoke cannot pass natively
+  (an
   `sret` result, a `byval` parameter, the record's NATIVE_INCOMPATIBLE flag, the native `long
   double` functions on Linux and MinGW), and a prototype-less function used only by address
   (`the signature of prototype-less function '<f>' cannot be derived: its address is used, but
@@ -2797,25 +2837,275 @@ Tests in the tree after M25: `llvm/test/CodeGen/MSIL` 144 (136 llc tests, 7 MIR 
 `legs/ci-build-builtins.test` and `legs/ci-build-builtins-sh.test`), and `CLITests` with
 M24's 22 suites and 440 tests.
 
+### Variadic functions and acyclic dynamic allocas (M26)
+
+M26 (plan section 6, M26) implements plan contract 5.15.2, variadic functions, and H0 of 5.15.8,
+the dynamic allocas that lie on no loop (D19 and D13 as plan section 12's rows of 2026-10-28
+amend them). The canonical IR pipeline (plan 5.13.6) gained its slots P6 (`MSILPrepareVariadics`),
+P7 (upstream's ExpandVariadics) and P9 (`MSILLowerDynamicAlloca`), and moved LowerInvoke and
+UnreachableBlockElim up to P3-P4, without changing the IL of a program that uses neither feature
+(`il-snapshot.py --compare` of `msil/test/M1` and `llvm/test/CodeGen/MSIL` against HEAD's IL):
+
+- **The model.** ExpandVariadics, in its `Lowering` mode with three MSIL ABIs that M26 adds to the
+  upstream file (`MSILSysV64`, `MSILAAPCS64` and `MSILCharPtr`, a `hook` block of
+  `msil/utils/upstream-hooks.txt`), turns every variadic definition into a function of its fixed
+  parameters plus one `va_list` parameter, whose method takes `(<fixed>, native int)`, and every
+  variadic call into a call that passes a `va_list` over a packed buffer in the caller's static
+  frame (aligned to at least 16; no shadow stack). The `va_list` has the native layout of the
+  triple, so it crosses every boundary unconverted, to native `v*` functions and back, and
+  `va_copy` copies it (`va_end` does nothing). The CLR's `vararg` convention is never used (it
+  throws on .NET 8 and .NET 10 on Linux). A K&R call of a variadic function whose arguments
+  cover its fixed parameters becomes a variadic call of the function's own type; any other K&R
+  call of it (fewer arguments, another return type, or a fixed argument that no bitcast or
+  pointer cast converts) is the error `mismatched call signature`.
+
+  | Triples | `va_list` | Initial state | Variadic slots |
+  |---|---|---|---|
+  | x86_64 linux-gnu, linux-musl (System V) | `[1 x {i32, i32, ptr, ptr}]`, 24 bytes, passed by pointer | `gp_offset` 48 and `fp_offset` 176 (registers used up), `overflow_arg_area` the buffer, `reg_save_area` null | 8 bytes, or the type's alignment when that exceeds 8 (16, 32 or more), where clang's `va_arg` reads it; aggregates up to 16 bytes as clang coerces them, larger ones copied by value, and an unnamed aggregate aligned above 8 always `byval` with its alignment (clang on these MSIL triples; `clang/test/CodeGen/MSIL/variadic-overaligned.c`) |
+  | aarch64 linux (AAPCS64) | `{ptr, ptr, ptr, i32, i32}`, 32 bytes, passed by pointer | `__stack` the buffer, `__gr_top` and `__vr_top` null, both offsets 0 | 8 or 16 bytes; composites above 16 bytes arrive as pointers |
+  | x86_64 windows-msvc, windows-gnu (Win64) | `char *` | the buffer | 8 bytes; a value of a size other than 1, 2, 4 or 8 bytes by pointer |
+  | aarch64 windows-msvc | `char *` | the buffer | 8 bytes; a value above 16 bytes by pointer |
+
+  The AArch64 rows follow the ABI documents and stay unverified until an ARM64 runtime exists;
+  the System V and Win64 rows run on every runtime of the two execution triples.
+- **Native functions without a `va_list` variant** are called with fixed arity: each call of a
+  declaration on the fixed-arity list of the triple's C runtime becomes a call with the IL
+  signature of its own arguments, one P/Invoke per call-site signature. The lists hold the
+  exported variadic functions that have no variant: glibc 25 (`open`, `open64`, `openat`,
+  `openat64`, `fcntl`, `fcntl64`, `ioctl`, `mremap`, `semctl`, `ulimit`, `sem_open`, `mq_open`,
+  `prctl`, `ptrace`, `syscall`, `execl`, `execle`, `execlp`, `error`, `error_at_line`,
+  `argp_error`, `argp_failure`, `strfmon`, `strfmon_l` and `__asprintf`), musl the 20 of them
+  that musl exports (unverified: linux-musl is not an execution triple), the UCRT 30 (its 20
+  exports `_open`, `_sopen`, `_wopen`, `_wsopen` and the `_exec*`, `_wexec*`, `_spawn*` and
+  `_wspawn*` functions, and the POSIX names of 10 of them that its headers declare variadic and
+  `oldnames.lib` maps to them: `open`, `sopen`, `execl`, `execle`, `execlp`, `execlpe`, `spawnl`,
+  `spawnle`, `spawnlp` and `spawnlpe`; zlib's `gz_open` calls `open`) and `msvcrt.dll` (windows-gnu) the 62 of its 126 that have no variant (the `scanf`
+  family among them); `clone` and `makecontext`, which take callbacks, are on no list. A variadic
+  declaration with an explicit import (`import_module`) counts as listed, because `msil-ld`
+  never renames an explicit import's entry: in `clang -S` and llc text too it gets one P/Invoke
+  per call-site signature, where D14's standalone table refuses other variadic callees. On the
+  Windows triples every `double` variadic argument is passed as its 64-bit pattern, where the
+  callee's `va_arg` reads it (`msvcrt.dll`'s `sprintf` in `05-variadics/winfp.test`). On the
+  System V triples a floating-point variadic argument cannot be passed, because a P/Invoke cannot
+  set the vector-register count in `AL`, and a structure passed by value cannot be passed on any
+  triple; both are compile errors (below). AAPCS64 Linux passes them unchanged (unverified).
+- **Link-info record v1.1** (plan 5.14.7, 5.14.8). The SIGNATURES entry of an expanded
+  definition, and every reference to it, set VARARG with FixedParams, the number of IL parameters
+  before the `va_list` (a hidden `sret` counts); a fixed-arity call site sets the call flag
+  FIXED_ARITY (0x10; `"msil-fixed-arity"="<n>"` in the IR), new in record version 1.1. The
+  backend writes minor version 1 only into a record that uses FIXED_ARITY, so every other record
+  stays version 1.0 byte for byte, and a reader rejects a 1.0 record that uses it, `invalid
+  link-info record: v1.0 record uses FIXED_ARITY of v1.1`. The toolchain ABI version stays 1, and
+  `llvm-cil-dump --link-info` prints both items (`VARARG fixed=<n>`, `FIXED_ARITY fixed=<n>`). In
+  object mode the address-only reference of an undefined variadic function, which M19 refused,
+  now carries VARARG, and `msil-ld` decides (rule 4 below).
+- **`msil-ld`'s rules** (plan 5.15.2, "Link time"):
+  1. A VARARG reference binds directly to a VARARG definition (object, LTO object, archive
+     member, or the export of a `-shared` library, whose symbol table carries the Variadic flag)
+     with equal FixedParams and IL signature. Different FixedParams, or VARARG on one side only,
+     is `function signature mismatch: <f>` with `>>> defined as <sig> (variadic, <n> fixed) in
+     <file>`; the text `variadic functions are not supported yet: <f>` is retired.
+  2. A VARARG reference bound natively becomes a P/Invoke of the function's `va_list` variant,
+     with the expanded signature: glibc's `printf` is `pinvokeimpl("libc.so.6" as "vprintf"
+     nomangle cdecl) int32 'printf'(native int, native int)`. The variant is looked up in the
+     native libraries only, so a program's own `vprintf` never captures `printf`. The tables
+     (`lld/MSIL/Variadics.cpp`) have 44 variants for glibc (the `printf`, `scanf` and wide
+     families, `dprintf`, `asprintf`, the `__isoc99_` and `__isoc23_` `scanf` functions, the
+     `_chk` entries, `syslog`, `err`, `errx`, `warn`, `warnx`, `obstack_printf`), 21 for musl
+     (glibc's without the `__isoc*` and `_chk` names; unverified) and 64 for `msvcrt.dll`; the
+     UCRT has none, because its `printf` family is inline C in its headers (below). Without a
+     table entry the link fails with `native function '<f>' (<module>) is variadic and has
+     neither a va_list variant nor an entry in the fixed-arity list` (`clone`, say, or `printf`
+     in a windows-gnu link against the UCRT, `-lucrt`), and with a variant that no native library
+     defines, `native function '<f>' (<module>) is variadic, and its va_list variant '<vf>' is
+     not defined by the native libraries`. The text `native function '<f>' (<module>) is
+     variadic; calls of native variadic functions are not supported for MSIL yet (phase 3)` is
+     retired.
+  3. A FIXED_ARITY reference binds natively with one stub per IL signature and no variant
+     (unchecked for an explicit import, which keeps its module and entry). Bound to an MSIL
+     variadic definition or export it is `fixed-arity call of '<name>' in <file> binds to the
+     variadic definition in <file2>, which MSIL cannot call with fixed arity`.
+  4. The address of a natively bound variadic function (a pointer to glibc's `printf`) is `the
+     address of native variadic function '<f>' (<module>) is not supported for MSIL yet`, until
+     M28 gives it an adapter.
+  5. The C runtime of the link follows the triple: glibc on every Linux triple but musl and
+     Android, musl, the UCRT on windows-msvc, and `msvcrt.dll` on windows-gnu, or the UCRT when
+     the link's C runtime is `ucrt` or `ucrtbase` (plan 5.9.15).
+  6. `--print-imports` names the variant, `printf -> libc.so.6!vprintf [function, GLIBC_2.2.5]`,
+     and `--lto-emit-asm` text prints the bound declaration `as "vprintf"`.
+- **Compile-time errors.** MSILPrepareIR no longer reports variadic definitions. It reports
+  every `musttail` call, `musttail calls are not supported for MSIL`, and on the System V and
+  AAPCS64 triples every IR `va_arg` instruction, once per function, `the va_arg instruction is not
+  supported for MSIL on this triple; clang lowers C's va_arg itself` (on the `char *` triples
+  ExpandVariadics expands an IR `va_arg`); `MSILPrepareVariadics` reports `passing a
+  floating-point value to native variadic function '<f>' is not supported for MSIL: it has no
+  va_list variant, and .NET cannot set the vector-register count (AL) of the x86-64 System V
+  variadic convention` and `passing a structure by value to native variadic function '<f>' is not
+  supported for MSIL`. The old diagnostics stay as backstops, without `(phase 3)`, for the two
+  kinds of declaration that remain variadic, prototype-less and fixed-arity ones, for the
+  AArch64 Darwin triples, for which ExpandVariadics has no MSIL ABI, and for a variadic
+  definition or call of a calling convention other than C (`win64cc`, `x86_64_sysvcc`,
+  `preserve_mostcc`, ...), which ExpandVariadics leaves alone: `calls to variadic functions are
+  not supported for MSIL yet`, `variadic functions are not supported for MSIL yet`, `variadic
+  function definitions are not supported for MSIL yet`, `undefined variadic function '<f>' is
+  not supported for MSIL yet` and, in linked text, `call of native variadic function '<f>'
+  (<module>) was not expanded for MSIL`, while the address of a native variadic function gets
+  rule 4's text (`05-variadics/native-errors.test`, `llvm/test/CodeGen/MSIL/variadic-errors.ll`;
+  plan section 12, row 'M26 texts amended (linked-mode variadic backstops)').
+- **The UCRT's `printf` family** (windows-msvc; plan 5.15.2, hosted-libc recon 5.1-5.3). The UCRT
+  exports no `printf`: its `<stdio.h>` defines the family as inline functions over
+  `__stdio_common_vfprintf` and its kin, which take a `va_list`, so a program that includes it
+  compiles them as ordinary variadic definitions. For code that declares `printf` itself, the
+  windows-msvc helper archives gained 33 members: `msil_ucrt_stdio.c`, one member per function
+  (`printf`, `fprintf`, `sprintf`, `snprintf`, `scanf`, `fscanf`, `sscanf`, their `v` and wide
+  forms, `_snprintf`, `_vsnprintf`, `_scprintf`, `_vscprintf`, `_snwprintf` and `_vsnwprintf`),
+  written from the UCRT's documented entry points with the options word that UCRT 10.0.26100's
+  header passes for each, and `msil_ucrt_stdio_options.c`, which defines
+  `__local_stdio_printf_options` and `__local_stdio_scanf_options` for programs that include no
+  `<stdio.h>`. Every definition is weak, so a member never collides with the inline copies of
+  another object (`05-variadics/ucrt-noinc.test`).
+- **The stdio option bits** (hosted-libc H3). The native C runtime's start-up ORs default bits
+  into the options words of `__local_stdio_printf_options` and `__local_stdio_scanf_options`
+  before any C code runs; without them the UCRT rounds exactly representable halves away from
+  zero (`%.0f` of 0.5 and 2.5 gives 1 and 3, natively 0 and 2). When the link defines either
+  function, the module initializer now does `*__local_stdio_printf_options() |= 0x24`
+  (`LEGACY_WIDE_SPECIFIERS | STANDARD_ROUNDING`) and `*__local_stdio_scanf_options() |= 0x2`,
+  after the cross-assembly relocations and before the constructors, in `msil-ld`'s images
+  (`llvm/lib/CLI/TrailerStdio.cpp`) and in whole-program text alike. As natively, a link that
+  names `legacy_stdio_float_rounding` clears the printf bit 0x20, and one that names
+  `iso_stdio_wide_specifiers` (`_CRT_STDIO_ISO_WIDE_SPECIFIERS`) clears the printf bit 0x4 and
+  the scanf bit 0x2, whether by `-l`, `/DEFAULTLIB:` or `#pragma comment(lib)`, with or without
+  `.lib`; `legacy_stdio_wide_specifiers` names the UCRT's default mode and changes no bit.
+  `msil-ld` ignores these four libraries, `legacy_stdio_definitions` included, with the
+  `--verbose` notes `ignoring C runtime library '-l<name>'` and `ignoring C runtime library
+  request '<name>' from <file>`. `msil-ld`'s linked text (`--lto-emit-asm`) gets the link's bits
+  through the module flags `msil-ucrt-printf-bits` and `msil-ucrt-scanf-bits`, so that its
+  initializer matches the image's; standalone whole-program text has no link and keeps the
+  default bits. In LTO links on windows-msvc the bitcode definitions of both functions are
+  visible to regular objects, so LTO neither internalizes them nor folds reads of the words to
+  constants (plan 5.9.13 as amended; `05-variadics/ucrt-rounding.test`,
+  `lld/test/MSIL/ucrt-stdio-options.test`).
+- **`%L` formats** (R15). On the MSIL triples whose native `long double` is wider than MSIL's
+  8-byte `double` (x86_64 linux-gnu and linux-musl, x86_64 windows-gnu, aarch64 linux), clang's
+  format checker reports an `L` length modifier before a floating conversion, in group `Format`
+  (`-Wformat`): for the `printf` family the warning `the 'L' length modifier makes the C library
+  read a 16-byte native 'long double', but 'long double' is an 8-byte 'double' on this MSIL
+  target`, and for the `scanf` family `the 'L' length modifier makes the C library store a
+  16-byte native 'long double' into an 8-byte 'double' on this MSIL target`, an error by default
+  (`-Wno-error=format` makes it a warning). Both fire for `va_list` formats too; windows-msvc and
+  `aarch64-w64-windows-gnu`, whose native `long double` is `double`, get neither
+  (`clang/test/Sema/msil-long-double-format.c`).
+- **Dynamic allocas outside loops** (H0). A dynamic alloca (a VLA, or `alloca` with a run-time
+  size) whose block lies on no cycle of its function's CFG stays an alloca, and instruction
+  selection makes it a `localloc` in the middle of the method, after the static frame's
+  `localloc` at entry, with a native-int size (the record `LOCALLOC_I64`; the 32-bit `LOCALLOC`
+  would truncate). An alignment above the assumed 8 bytes (D13) over-allocates `align - 8` bytes
+  and masks the address up; the size keeps the DAG's rounding up to 16 bytes, which DAGCombiner
+  merges with a program's own rounding of the same shape (`alloca((n + 15) & ~15)`), and a size
+  that may be zero allocates at least one byte, so a zero-size VLA or `alloca(0)` has a valid,
+  non-null address (CIL's `localloc` of 0 bytes may return null). In functions without
+  a cyclic dynamic alloca, `llvm.stacksave` and `llvm.stackrestore` (clang brackets every VLA
+  scope with them at `-O0`) are deleted, since a `localloc` lives until its method returns, as
+  the frame does. A dynamic alloca on a cycle (a VLA declared in a loop, `alloca` in a loop) is
+  the error `a dynamic stack allocation that can repeat within one call (a VLA or alloca in a
+  loop) is not supported for MSIL yet`, once per function, until M32's shadow stack. The other
+  frame texts lose their phase: `llvm.stacksave is not supported for MSIL yet` and its
+  `llvm.stackrestore` twin (backstops that the pass leaves nothing to reach), `llvm.frameaddress
+  is not supported for MSIL yet` and `llvm.stackaddress is not supported for MSIL yet`; `dynamic
+  alloca / VLA ...` is retired (`msil/test/M3/00-frames/`,
+  `llvm/test/CodeGen/MSIL/dynamic-alloca.ll` and `dynamic-alloca-error.ll`).
+- **Boundaries** (plan 5.15.2). A C variadic function called through a pointer by native code
+  or by another assembly (a program calling a `-shared` library's variadic function through a
+  pointer, or the reverse) fails fast on every runtime from M28, which gives such pointers their
+  trap thunks; until then native code meets the callback gap of section 3. Direct calls across
+  assemblies bind (rule 1), and a C# caller of an exported variadic function builds a native
+  `va_list` for its last parameter. A native `va_list` with a live `reg_save_area`, such as the
+  one glibc hands to a callback, is read correctly (`05-variadics/regs.test`). Stock-clang System
+  V bitcode with indirect K&R calls gets the stock-bitcode warning (plan 5.9.13). A call of a C
+  library variadic function through a prototype-less declaration (`int printf();`, legal through
+  C17 and undefined behaviour for a variadic function, C17 6.5.2.2p6) is not variadic in IR:
+  `MSILFixFunctionBitcasts` makes it an ordinary call of the call's own signature, which no
+  rule of plan 5.15.2 covers (its link-time rules see only variadic, fixed-arity and address
+  references). On x86_64-unknown-linux-gnu-msil `msil-ld` binds it as a fixed-arity P/Invoke
+  of `printf` itself (`--print-imports`: `printf -> libc.so.6!printf`, not `vprintf`), so on the
+  System V triples a floating-point argument depends on whatever `AL` holds, since a P/Invoke
+  cannot set the vector-register count; on windows-msvc the link fails with `function signature
+  mismatch: printf` against the helper archive's variadic member (`only the definition is
+  variadic`). clang warns at the source (`-Wincompatible-library-redeclaration`,
+  `-Wdeprecated-non-prototype`); declare C library functions with their prototypes (include the
+  header).
+- **Follow-ups.** In a `-shared` LTO link a prevailing definition that may be exported stays
+  visible to regular objects, but on the Windows triples a COMDAT copy that is not `dllexport`
+  (the UCRT's inline `sprintf`) is never an export candidate, as for a CIL object, so the link
+  drops the unused copies (plan section 12, row 'M26.d extended (M24 leftover: unused inline COMDAT
+  copies in `-shared` LTO links)'); `msil-ld`'s import analysis under
+  `--lto-emit-asm` skips the functions that D26 drops, so it no longer reports `undefined symbol:
+  __stdio_common_vsprintf` for a copy that the backend drops (row 'M26.d extended (M24 leftover:
+  the import analysis and D26's drop under `--lto-emit-asm`)'); and M24's `-O0` LTO
+  link of a program that calls the UCRT's `sprintf` compiles it (`lto-o0-discardable.test`). The
+  CI run on M24's commit found three defects that M26 fixed: the Linux job's clang 18 with
+  libstdc++ 14 rejected `MSILTargetObjectStreamer.cpp` (a struct with default member
+  initializers nested in its class, now at namespace scope; `msil/utils/ci/linux-syntax-check.py`
+  checks changed C++ files with that toolchain in WSL, a step of every milestone gate from M26),
+  two `lld/test/MSIL` tests named a file `com4`, a reserved device name on Windows, and
+  `msil-env.ps1` entered one hard-coded Visual Studio edition under lit (it now trusts a loaded
+  x64 developer environment, else takes the newest Visual Studio with the x64 C++ tools that
+  vswhere finds). The Linux CI job also installs `libclang-rt-18-dev`, so its hosted native
+  oracle finds compiler-rt's builtins.
+- **Tests.** `msil/test/M3/05-variadics` holds eight split-file programs: `va` (definitions and
+  calls, `va_copy`, structures and `__int128` in `...`, an `sret` result, `va_list`s handed to
+  the C library), `regs` (Linux), `natives` (the fixed-arity list and the variants), `winfp`
+  (Windows), `ucrt-noinc`, `ucrt-rounding`, `native-errors` and `shared-variadic` (a `-shared`
+  library's variadic exports called directly by the program, an over-aligned structure among the
+  arguments and a `va_list` handed on to `vsnprintf`); `00-frames` holds `vla.c` and
+  `alloca.c`; `10-hosted` gained `printf`, `fprintf` and `sprintf`. The matrix row
+  `variadic-def-xtu` is `transcript: 42` (section 1). `msil/test/Programs/zlib-full` builds zlib
+  1.3.2 in full as a hosted program (all 15 library files in `libz.a`, gzip file I/O and the
+  variadic `gzprintf` included): `example` against the native transcript, the same under glibc's
+  `-D_FORTIFY_SOURCE=2` on the Linux triple (`fortify`), and `minigzip` on a generated 2 MiB
+  input, whose gzip stream must equal the native one byte for byte, and whose `-d` of the native
+  stream must restore the input; `Programs/det/zlib-full.test` builds it twice. c-testsuite gained
+  `libc.txt` (section 1). The new legs are `programs-hosted` and `programs-hosted-wsl`
+  (`-Quick`, the hosted programs at `-O2`) and `ctest-lto` (`-Exit`), and the `programs` legs
+  take the hosted programs, with `msil_also_run=10,10+tc0` (GettingStarted.md section 7).
+  FileCheck tests: `variadic-def.ll`, `variadic-call.ll`, `variadic-fixed-arity.ll`,
+  `variadic-errors.ll`, `pipeline-knr-variadic.ll`, `ucrt-stdio-options.ll` and `dynamic-alloca.ll`
+  in `llvm/test/CodeGen/MSIL`, `llvm/test/Transforms/ExpandVariadics/msil-abi.ll`, the Sema test
+  above, `clang/test/CodeGen/MSIL/variadic-overaligned.c` (an unnamed aggregate aligned above 8
+  passed `byval` with its alignment off Windows), and in `lld/test/MSIL` `obj-variadic.test`, `shared-variadic.test`,
+  `ucrt-stdio-options.test`, `variadic-tables.test` and a rewritten `native-variadic.test`; the
+  tests that pinned a retired text pin the new one.
+
+Tests in the tree after M26: `llvm/test/CodeGen/MSIL` 151 (143 llc tests, 7 MIR tests and
+`irsymtab-linker-options.ll`), `llvm/test/Transforms/ExpandVariadics/msil-abi.ll`,
+`clang/test/Sema/msil-long-double-format.c`, `clang/test/CodeGen/MSIL` 25 (new:
+`variadic-overaligned.c`), `lld/test/MSIL` 122, `msil/test/M3` 32 (two in
+`00-frames`, eight in `05-variadics`, ten in `10-hosted`), `msil/test/Programs` 243 lit tests (the
+nine programs, the three of `zlib-full`, ten `det` tests and `check-recipe.test`, and c-testsuite's
+220), `msil/test/harness` 145 (80 at the top level, `legs/` 27; new: `gtest-vsenv.test`,
+`linux-syntax-check.test` and `legs/p3-tests-stop.test`), and `CLITests` with 454 tests (15 new
+cases of `CLILinkInfoTest`, `CLICallAdapterTest` and `CLITrailerTest`, one retired; the gates'
+floors add 5, 3 and 2 of them).
+
 ## 3. What Phase 2 does not do
 
 Phase 2 is the linker phase; most of what it leaves out is Phase 3's (plan section 7, P3-A and
 P3-B). The middle column says what a program meets today, the last one where it is planned:
-plan section 6 splits Phase 3 into the milestones M24-M35, and the rows that M24 and M25
-changed name theirs. The link-semantics matrix pins the Phase 2 diagnostic of each P3 row
-(section 1).
+plan section 6 splits Phase 3 into the milestones M24-M35, and the rows that M24, M25 and M26
+changed name theirs. The link-semantics matrix pins the Phase 2 diagnostic of each P3 row whose
+milestone has not come (section 1).
 
 | Feature | Phase 2 | Planned |
 |---|---|---|
 | Any other external function (`malloc`, `strlen`, `exit`, ...) or external variable (`environ`, `stderr`, ...) that no file of the program defines | `-S` and llc: `... is not a Phase-1 import` and `external global variable ... (phase 2 linker)`; in a CIL object (M19) both are undefined symbols. `msil-ld` binds such functions to the native libraries of the link (M15, section 2) and imports such variables (M20; in M15-M19 `importing native data symbol '<name>' (<module>) is not supported yet`); a symbol that nothing defines is `undefined symbol: <name>`, and a `weak` declaration that nothing defines is null instead (section 2) | linked programs: done (functions M15, variables M20); `-S` and llc compile one module and keep the errors |
-| Variadic functions: definitions and calls | error; in a program that `msil-ld` links, a call of a native variadic function (`printf`) is `native function 'printf' (<module>) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3)`. The matrix row `variadic-def-xtu` (a definition called from another object) and c-testsuite's `00140` pin the definition's error | phase 3 (Design.md 4.7) |
-| The `va_arg` instruction in LLVM IR (other front ends, hand-written IR; clang expands C's `va_arg` itself) | error: `the va_arg instruction is not supported for MSIL yet (phase 3 variadics)`. One of a struct or array type is invalid IR on every target since upstream 74a120bff99f (merged at 1838cefa99c0): the IR verifier rejects it with `va_arg with an aggregate type is not supported` (clang: `invalid LLVM IR input: ...`; llc: then `input module cannot be verified`). Only in IR that skipped the verifier (`llc -disable-verify`) does it reach the backend, which reports it with the text above before instruction selection, which crashed on it (as it does natively), and gives its function no method (M12) | phase 3 (Design.md 4.7) |
+| Variadic functions: definitions and calls | done in M26 (section 2, "Variadic functions and acyclic dynamic allocas (M26)"): definitions and calls over a native-layout `va_list`, native variadic functions through their `va_list` variants or with fixed arity per call site, the UCRT's `printf` family on windows-msvc. What stays an error: a floating-point variadic argument or a structure by value passed to a fixed-arity native function (the first on the System V triples only), a native variadic function with neither a variant nor a list entry, the address of a native variadic function (until M28), a `musttail` call, and the backstops for prototype-less and fixed-arity declarations, for the AArch64 Darwin triples and for calling conventions other than C. A C variadic function called through a pointer by native code or by another assembly fails fast from M28. Until M26 every definition and call was an error, and a call of a native variadic function (`printf`) was `native function 'printf' (<module>) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3)` | done (M26), Design.md 4.7; native addresses M28 |
+| The `va_arg` instruction in LLVM IR (other front ends, hand-written IR; clang expands C's `va_arg` itself) | since M26 expanded on the `char *` triples (Windows) and, on the System V and AAPCS64 triples, the error `the va_arg instruction is not supported for MSIL on this triple; clang lowers C's va_arg itself` (until M26 on every triple `the va_arg instruction is not supported for MSIL yet (phase 3 variadics)`). One of a struct or array type is invalid IR on every target since upstream 74a120bff99f (merged at 1838cefa99c0): the IR verifier rejects it with `va_arg with an aggregate type is not supported` (clang: `invalid LLVM IR input: ...`; llc: then `input module cannot be verified`). Only in IR that skipped the verifier (`llc -disable-verify`) does it reach the backend, which reports it with the text above before instruction selection, which crashed on it (as it does natively), and gives its function no method (M12) | phase 3 (Design.md 4.7) |
 | `thread_local` / `_Thread_local` | error: `thread-local variable @<name> is not supported for MSIL yet`, also for a `weak` declaration that nothing defines (which is not made null, unlike other weak declarations) | phase 3 (Design.md 4.4) |
-| Dynamic `alloca`, VLAs, `stacksave`/`stackrestore`, `__builtin_frame_address` | error (`... phase 3 shadow stack`) | phase 3 (Design.md 4.2) |
-| `setjmp`/`longjmp` | an error on every path since M24. On the Linux triples clang calls the C library's functions (`_setjmp`, `__sigsetjmp`, `longjmp`, ...): `-S` and llc report `undefined function '_setjmp' is not defined in this module and is not a Phase-1 import`, and `msil-ld` reports each name of the family once per referencing file, `<file>: '_setjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler` (section 2, "Phase 3 foundations (M24)"). On the Windows triples clang's `setjmp` passes the frame address, so `clang -c` and `-S` stop at `llvm.frameaddress is not supported for MSIL yet (phase 3 shadow stack)`, and `msil-ld` refuses `_setjmp`, `_setjmpex` and `longjmp` in the same way. `__builtin_setjmp`/`__builtin_longjmp` are `llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 setjmp/longjmp)` (and `longjmp`). Until M24 this row said only "error", which was wrong for the Linux object pipeline: `msil-ld` bound the functions to `libc.so.6` without a diagnostic, and simple programs ran by accident (backlog recon BL15) | M27 (Design.md 4.6) |
+| Dynamic `alloca`, VLAs, `stacksave`/`stackrestore`, `__builtin_frame_address` | since M26 a dynamic alloca on no loop of its function is a `localloc` in the middle of the method, and `stacksave`/`stackrestore` in such functions are deleted; one in a loop is `a dynamic stack allocation that can repeat within one call (a VLA or alloca in a loop) is not supported for MSIL yet`, and `__builtin_frame_address` is `llvm.frameaddress is not supported for MSIL yet` (section 2, M26). Until M26 every one was an error (`... phase 3 shadow stack`) | acyclic: done (M26); in loops and `__builtin_frame_address(0)`: M32's shadow stack (Design.md 4.2) |
+| `setjmp`/`longjmp` | an error on every path since M24. On the Linux triples clang calls the C library's functions (`_setjmp`, `__sigsetjmp`, `longjmp`, ...): `-S` and llc report `undefined function '_setjmp' is not defined in this module and is not a Phase-1 import`, and `msil-ld` reports each name of the family once per referencing file, `<file>: '_setjmp' cannot be bound to a native library: setjmp and longjmp are lowered by the compiler` (section 2, "Phase 3 foundations (M24)"). On the Windows triples clang's `setjmp` passes the frame address, so `clang -c` and `-S` stop at `llvm.frameaddress is not supported for MSIL yet` (until M26 with ` (phase 3 shadow stack)`), and `msil-ld` refuses `_setjmp`, `_setjmpex` and `longjmp` in the same way. `__builtin_setjmp`/`__builtin_longjmp` are `llvm.eh.sjlj.setjmp is not supported for MSIL yet (phase 3 setjmp/longjmp)` (and `longjmp`). Until M24 this row said only "error", which was wrong for the Linux object pipeline: `msil-ld` bound the functions to `libc.so.6` without a diagnostic, and simple programs ran by accident (backlog recon BL15) | M27 (Design.md 4.6) |
 | Atomics (`_Atomic`, `__atomic_*`, `__sync_*`) | error (only fences work): every atomic operation becomes a call of a function of libatomic's interface (`__atomic_load_4`, ...; since M25's lock-free cap of 8 bytes a 16-byte one is the generic `__atomic_load`, `__atomic_store`, ...), which `-S`, llc and `msil-ld --lto-emit-asm` report as `runtime helper '<name>' is an atomic operation that only msil-ld links` (until M25 `runtime helper '<name>' is not available for MSIL yet (phase 3)`). In a CIL object it is an undefined symbol, and since M24 `msil-ld` binds it natively only on the Linux triples, to `libatomic.so.1` when the link names it (`-latomic`, as a native build does; else `undefined symbol: <name>` with `>>> an atomic operation: link with -latomic, as a native build does`), never on the Windows triples (`>>> an atomic operation (libatomic's interface)`); the helper archive defines no `__atomic_*` function (compiler-rt's `atomic.c` stays out of it, R4/R5), and `__sync_*` names are compiler-runtime helpers, which never bind natively | M30 (the native lock path) |
 | Global destructors, `atexit` | error, also a destructor table (`.fini_array*`, `.CRT$XT*`) since M20 (`global destructors are not supported yet: <s> in <file>`). `atexit` binds to no native library: glibc defines it only in machine code (`symbol 'atexit' is defined only in native object code (.../libc_nonshared.a(atexit.oS)); MSIL cannot link machine code`), with a glibc sysroot that has `libc_nonshared.a`; with the E7 sysroot, whose `libc.so` script names no `libc_nonshared.a`, and on the Windows triples, whose UCRT does not export it, the link stops with `undefined symbol: atexit` (the matrix rows `p6-dtors`, `fini-array`, `crt-xt` and `atexit-order` pin these errors) | phase 3 (Design.md 4.1), which intercepts `atexit` |
-| `long double` | is `double` (8 bytes, 53-bit mantissa) on every MSIL triple, not an error. Differs from native on x86_64 Linux (glibc and musl) and x86_64 MinGW (`x86_64-w64-windows-gnu`), where it is the 80-bit x87 format in 16 bytes, and on aarch64 Linux, where it is IEEE binary128 in 16 bytes; matches native on windows-msvc (x86_64 and aarch64) and `aarch64-w64-windows-gnu`. Where it differs, the helper archive `clang_rt.builtins` forwards since M25 the native `long double` functions that have a `double` counterpart (`sqrtl`, `expl`, `powl`, `strtold`, `nexttoward`, ...: 170 of `msil-ld`'s 174 names) to that counterpart, and a native binding of one of the others (`fromfpl`, `fromfpxl`, `ufromfpl`, `ufromfpxl` and every `_Float64x` and `_Float128` function), or of any of them in a link without the archive, is the permanent link error `native function '<name>' (<module>) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart` (section 2, "Native libraries and P/Invokes" and "The helper archive (M25)"; in M15-M24 every name was `... takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)`); windows-msvc and `aarch64-w64-windows-gnu` bind them | permanent (Design.md 3; section 6, item 14); native `long double` functions: forwarded in M25, the others permanent errors |
+| `long double` | is `double` (8 bytes, 53-bit mantissa) on every MSIL triple, not an error. Differs from native on x86_64 Linux (glibc and musl) and x86_64 MinGW (`x86_64-w64-windows-gnu`), where it is the 80-bit x87 format in 16 bytes, and on aarch64 Linux, where it is IEEE binary128 in 16 bytes; matches native on windows-msvc (x86_64 and aarch64) and `aarch64-w64-windows-gnu`. Where it differs, the helper archive `clang_rt.builtins` forwards since M25 the native `long double` functions that have a `double` counterpart (`sqrtl`, `expl`, `powl`, `strtold`, `nexttoward`, ...: 170 of `msil-ld`'s 174 names) to that counterpart, and a native binding of one of the others (`fromfpl`, `fromfpxl`, `ufromfpl`, `ufromfpxl` and every `_Float64x` and `_Float128` function), or of any of them in a link without the archive, is the permanent link error `native function '<name>' (<module>) takes or returns a native 'long double', which is not supported for MSIL; the helper archive clang_rt.builtins forwards the 'long double' functions that have a 'double' counterpart` (section 2, "Native libraries and P/Invokes" and "The helper archive (M25)"; in M15-M24 every name was `... takes or returns a value that a P/Invoke cannot pass natively yet (phase 3)`); windows-msvc and `aarch64-w64-windows-gnu` bind them. Since M26 an `L` length modifier before a floating conversion of a `printf` format is a clang warning on the triples where `long double` differs, and of a `scanf` format an error (section 2, M26), and c-testsuite's `00204`, which prints `%Lf`, is excluded on linux-gnu (section 1) | permanent (Design.md 3; section 6, item 14); native `long double` functions: forwarded in M25, the others permanent errors |
 | The compiler-rt helpers: conversions between `_Float16` and `__int128` and from `__int128` to `__bf16` (helpers `__extendhfsf2`, `__truncsfhf2`, `__truncsfbf2`), `_Float16`/`__bf16` arithmetic and the rounding conversions from `float` and `double` to `__bf16` (`__truncsfbf2`, `__truncdfbf2`), C `_Complex` multiplication and division, `__builtin_powi` | done in M25: the helper archive `clang_rt.builtins` defines them (compiler-rt's `GENERIC_SOURCES` and `BF16_SOURCES` less the `*ti*`, fp128, x87, hosted and atomic sources), and `msil-ld` links the members that a program calls into its output, through CIL objects and LTO (section 2, "The helper archive (M25)"). `-S` and llc link no archive, so there a call of such a helper is `runtime helper '<name>' needs the helper archive clang_rt.builtins, which only msil-ld links` (until M25 `runtime helper '<name>' is not available for MSIL yet (phase 3)`, and for the `_Complex` helpers `undefined function '__muldc3' is not defined in this module and is not a Phase-1 import ...`); `msil-ld --lto-emit-asm` gives that text only for a helper call that code generation creates after LTO, and a helper that the program calls itself (`__muldc3`) stops it at the archive's member, `<archive>(<member>): --lto-emit-asm cannot link CIL objects; link without --lto-emit-asm`, or, without the archive, at the undefined-symbol report below. `_Float16 _Complex` products and quotients that clang does not promote to `float` (on the aarch64 triples, or with `-fexcess-precision=16`) call `__mulhc3` and `__divhc3`, which no archive defines, so such a program fails to link. In a link without the archive (`-nostdlib`, `-nodefaultlibs`, an archive not built) a helper is `undefined symbol: <name>` with `>>> a compiler runtime helper: link the toolchain's helper archive clang_rt.builtins`, and one that the archive leaves out the same with `>>> a compiler runtime helper that the toolchain's helper archive clang_rt.builtins does not define`; none binds to a native library (since M24, the `_Complex` helpers since M25; before, a link for a Linux triple that included `libgcc_s.so.1` bound them there). `__int128` division, the plain conversions and those from `__bf16` to `__int128` are inline since M12, the strict (constrained) conversions between floating point and `__int128` since M24 (they named `__fixdfti`, `__floattidf`, ... until then), and `__bf16` parameters, results and the extension to `float` need no helper since M24 (section 2) | done (M25) |
 | `__float128`, `x86_fp80`, rounding-mode changes, floating-point environment access | error (CIL rounds to nearest and has no FP exceptions) | |
 | Inline and module-level assembly, other than empty `asm` statements with or without operands (section 2; in LLVM IR since M22 also templates of nothing but `/* */` comments): instructions, outputs not tied to an input, condition-flag outputs (`"=@cc<cond>"`, `"+@cc<cond>"`, tied or not), an output in memory tied to an input of another floating-point type, `asm goto`, Microsoft `__asm`, file-scope `asm` | error: clang's `inline assembly is not supported for the MSIL target '...'` (`Microsoft-style inline assembly ...`, `file-scope assembly ...`), llc's `inline assembly is not supported for MSIL` | never (Design.md 3) |
@@ -3111,3 +3401,15 @@ M25 proposes no Design.md item: what it built is what Design.md already says, in
 (`__ELF__` on the Linux triples, no lock-free atomics wider than 8 bytes, and the helper
 archive's forwarders of the native `long double` functions), in 5.2, step 1, and in section 8
 (the helper archive `clang_rt.builtins`, compiler-rt's builtins as CIL objects per triple).
+
+M26 proposed one item, 24, for 4.7 ("Calling native variadic functions"), where what it built
+goes beyond what Design.md says: a variadic declaration with an explicit import
+(`import_module`) is called with fixed arity like a function of the built-in list, because
+`msil-ld` never renames an explicit import's entry; a structure passed by value to a
+fixed-arity native is a compile-time error on every triple, as a floating-point value is on
+SysV; and on windows-msvc the module initializer ORs the native C runtime's default bits into the
+UCRT's stdio options words (`__local_stdio_printf_options`, `__local_stdio_scanf_options`) when the
+program defines them, before its constructors run, as the native start-up does, honouring the
+`legacy_stdio_float_rounding` and `iso_stdio_wide_specifiers` opt-outs (section 2, M26). It
+was applied to [Design.md](Design.md) 4.7 (items 1 and 2 of "Calling native variadic
+functions") on 2026-11-02, with the user's approval.

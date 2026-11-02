@@ -43,6 +43,24 @@ calibrate-label.test a build whose lit plays a scenario.
         excluded (lit's 'Excluded', xunit <skipped>) and not counted.
     ci-legs.py ps1 BUILD [VAR=VALUE...] -- [ARG...]
         pwsh -NoProfile -File lit-legs.ps1 -BuildDir BUILD ARG...
+    ci-legs.py python DIR
+        Make DIR/python.cmd (Windows) or DIR/python (elsewhere): a Python 3
+        for MSIL_PYTHON (p3-tests-stop.test) that runs this Python on every
+        command line, except that when its first argument is a file named
+        check-matrix.py and $MSIL_FAKE_P3 is set, it plays that checker
+        instead: 'fail' writes 'check-matrix: error: planted failure' to
+        stderr and 'one stdout line' to stdout and exits 1; 'bad-path'
+        prints the line 'llvm/test/CodeGen/MSIL/call.ll' and exits 0;
+        'dot-path' prints 'msil/test/../llvm/test/CodeGen/MSIL/call.ll' and
+        exits 0; 'silent' prints nothing and exits 3. It appends each
+        command line it receives ('argv: <a> <b> ...') to DIR/calls.log.
+    ci-legs.py error-message LOG
+        Print 'error-message: <text>' for each error that pwsh reported in
+        LOG (the output of 'ci-legs.py ps1') in its concise view
+        ('Exception: <script>:<line>', 'Line |', the source line, the '~'
+        marker and the message, wrapped at the console width over lines
+        that start with '     | '): the message lines joined with one space,
+        so a check can match the whole text. Exits 1 when LOG holds none.
     ci-legs.py sh [--distro D] BUILD [VAR=VALUE...] -- [ARG...]
         bash lit-legs.sh ARG... BUILD: inside the WSL distribution D (default
         Ubuntu) on Windows, with every absolute Windows path among BUILD, the
@@ -210,6 +228,79 @@ if crashed:
 sys.exit(1 if failed else 0)
 """
 
+# The stand-in Python of 'ci-legs.py python' (MSIL_PYTHON for lit-legs.ps1).
+STAND_IN_PYTHON = r"""import os, subprocess, sys
+here = os.path.dirname(os.path.abspath(__file__))
+args = sys.argv[1:]
+with open(os.path.join(here, "calls.log"), "a", encoding="utf-8", newline="\n") as f:
+    f.write("argv: %s\n" % " ".join(args))
+mode = os.environ.get("MSIL_FAKE_P3", "")
+if mode and args and os.path.basename(args[0]) == "check-matrix.py":
+    if mode == "fail":
+        sys.stderr.write("check-matrix: error: planted failure\n")
+        print("one stdout line")
+        sys.exit(1)
+    if mode == "bad-path":
+        print("llvm/test/CodeGen/MSIL/call.ll")
+        sys.exit(0)
+    if mode == "dot-path":
+        print("msil/test/../llvm/test/CodeGen/MSIL/call.ll")
+        sys.exit(0)
+    if mode == "silent":
+        sys.exit(3)
+    sys.stderr.write("stand-in python: unknown MSIL_FAKE_P3 %r\n" % mode)
+    sys.exit(2)
+sys.exit(subprocess.call([sys.executable] + args))
+"""
+
+
+def python_stand_in(directory):
+    directory = os.path.abspath(directory)
+    os.makedirs(directory, exist_ok=True)
+    script = os.path.join(directory, "stand-in-python.py")
+    with open(script, "w", encoding="utf-8", newline="\n") as f:
+        f.write(STAND_IN_PYTHON)
+    if os.name == "nt":
+        path = os.path.join(directory, "python.cmd")
+        with open(path, "w", encoding="utf-8", newline="\r\n") as f:
+            f.write(
+                '@echo off\n"%s" "%s" %%*\nexit /b %%ERRORLEVEL%%\n'
+                % (sys.executable, script)
+            )
+    else:
+        path = os.path.join(directory, "python")
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write('#!/bin/sh\nexec "%s" "%s" "$@"\n' % (sys.executable, script))
+        os.chmod(path, 0o755)
+    print(path.replace("\\", "/"))
+    return 0
+
+
+def error_messages(log):
+    """The messages of pwsh's concise error view in log (see 'error-message')."""
+    with open(log, encoding="utf-8", errors="replace") as f:
+        lines = f.read().replace("\r", "").split("\n")
+    found = []
+    i = 0
+    while i < len(lines):
+        if not re.match(r"^\s*\|\s*~+\s*$", lines[i]):
+            i += 1
+            continue
+        i += 1
+        parts = []
+        while i < len(lines):
+            m = re.match(r"^\s+\| ?(.*)$", lines[i])
+            if not m:
+                break
+            parts.append(m.group(1).strip())
+            i += 1
+        if parts:
+            found.append(" ".join(p for p in parts if p))
+    for text in found:
+        print("error-message: %s" % text)
+    return 0 if found else 1
+
+
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 DRIVE_RE = re.compile(r"^([A-Za-z]):[\\/](.*)$")
 
@@ -335,6 +426,10 @@ def main(argv):
         return setup(argv[1])
     if len(argv) >= 2 and argv[0] == "scenario":
         return scenario(argv[1], argv[2:])
+    if len(argv) == 2 and argv[0] == "python":
+        return python_stand_in(argv[1])
+    if len(argv) == 2 and argv[0] == "error-message":
+        return error_messages(argv[1])
     try:
         if len(argv) >= 2 and argv[0] == "ps1":
             pairs, args = split(argv[2:])
@@ -351,7 +446,8 @@ def main(argv):
     except ValueError as e:
         return usage(str(e))
     return usage(
-        "usage: setup BUILD | scenario BUILD [--no-xunit] NAME=OUTCOME... | "
+        "usage: setup BUILD | scenario BUILD [--no-xunit] NAME=OUTCOME... | python DIR | "
+        "error-message LOG | "
         "ps1 BUILD [VAR=VALUE...] -- [ARG...] | "
         "sh [--distro D] BUILD [VAR=VALUE...] -- [ARG...]"
     )

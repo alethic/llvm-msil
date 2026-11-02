@@ -1,0 +1,91 @@
+# c-testsuite's tests that call the C library (plan 5.12.9, 5.17.14): the
+# tests of tests/single-exec in the corpus tree c-testsuite-5c7275656d75
+# (msil/utils/corpus/manifest.json) whose source matches libc-free.txt's rule
+# below somewhere (the recon's, tests-gates-p3 Appendix A: 70 of the 220
+# tests; 68 call printf, 00025 strlen and 00040 calloc). Each runs hosted
+# (lit names 'MSIL :: Programs/c-testsuite/libc/<name>'; %{msil_cflags} is
+# -std=gnu17 -w %{msil_hosted_cflags}, %{msil_oracle_flags} --hosted) and
+# must print what its <name>.c.expected holds and exit 0, unless its entry
+# says otherwise. lit.local.cfg requires this file from M26, recomputes the
+# list from the cached tree with the rule (the same as libc-free.txt's) and
+# stops on any difference.
+# rule: \b(printf|fprintf|sprintf|snprintf|vprintf|malloc|calloc|realloc|free|strlen|strcmp|strncmp|strcpy|strncpy|strcat|memcmp|exit|abort|atoi|strtol|qsort|bsearch|getchar|fopen|setjmp|longjmp|va_start|alloca|assert)\s*\(
+# count: 70
+# One test per line, with at most one modifier (msil_ctest_format.py has the
+# grammar, the same as libc-free.txt's): '<name>';
+# '<name> native <triple>  # <reason>' (on that triple the native oracle's
+# transcript is the expected file); '<name> diag [<triple>] <text>  # M<n>
+# <what>' (00189 on linux-gnu is the one left from M26, until M28);
+# '<name> exclude <triple> long-double|not-portable  # <text>' (UNSUPPORTED
+# on that triple with its text; Status.md lists each). <triple> is
+# linux-gnu or windows-msvc.
+00025
+00040
+00056
+00125
+00131
+00132
+00154
+00156
+00157
+00158
+00159
+00160
+00161
+00163
+00164
+00165
+00166
+00167
+00168
+00169
+00170
+00171
+00172
+00173
+00174
+00175
+00176
+00177
+00178
+00179
+00180
+00181
+00182
+00183
+00184
+00185
+00186
+00187
+00188
+00189 diag linux-gnu the address of native variadic function 'fprintf' (libc.so.6) is not supported for MSIL yet  # M28 the address adapter of native variadic functions (5.15.3)
+00190
+00191
+00192
+00193
+00194
+00195
+00196
+00197
+00198
+00199
+00200
+00201
+00202
+00203
+00204 exclude linux-gnu long-double  # 'long double' is the 8-byte 'double' here (Design.md 3), so glibc's vprintf reads its %Lf arguments as 80-bit ones
+00205
+00206
+00207
+00208
+00210
+00211
+00212 native windows-msvc  # .c.expected assumes LP64; the type sizes of LLP64 differ
+00213
+00214 exclude windows-msvc not-portable  # 'typedef unsigned long size_t' is not LLP64-clean; no native Windows build compiles it either
+00215
+00216 native windows-msvc  # .c.expected assumes GCC's bit-field and empty-struct layout
+00217
+00218 native windows-msvc  # .c.expected assumes GCC's layout of an 8-bit enum bit-field
+00219
+00220

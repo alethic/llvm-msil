@@ -8,12 +8,14 @@
 #ifndef LLVM_TRANSFORMS_IPO_EXPANDVARIADICS_H
 #define LLVM_TRANSFORMS_IPO_EXPANDVARIADICS_H
 
+#include "llvm/IR/CallingConv.h"
 #include "llvm/IR/PassManager.h"
 
 namespace llvm {
 
 class Module;
 class ModulePass;
+class Triple;
 
 enum class ExpandVariadicsMode {
   Unspecified, // Use the implementation defaults
@@ -33,6 +35,20 @@ public:
 };
 
 LLVM_ABI ModulePass *createExpandVariadicsPass(ExpandVariadicsMode);
+
+/// Whether ExpandVariadics gives the MSIL triple \p T an MSIL VariadicABIInfo,
+/// so MSIL's IR preparation can report the variadic definitions it would leave
+/// alone.
+LLVM_ABI bool hasMSILVariadicABI(const Triple &T);
+
+/// Whether ExpandVariadics expands variadic functions and calls of the calling
+/// convention \p CC (C and SPIR_FUNC).
+LLVM_ABI bool isExpandedVariadicCallingConv(CallingConv::ID CC);
+
+/// The function attribute of a variadic forwarder that MSIL's IR preparation
+/// leaves under the name of a whole-program alias of a variadic function: the
+/// lowering passes the forwarder's va_list on to the aliasee.
+inline constexpr char MSILVariadicForwarderAttr[] = "msil-variadic-forwarder";
 
 } // end namespace llvm
 

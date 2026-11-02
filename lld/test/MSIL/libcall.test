@@ -14,8 +14,9 @@
 ## libcall-archive-bitcode.test: main calls printf("foo\n"), which LTO's
 ## optimizer turns into puts("foo") only when puts.o is a regular input; with
 ## puts.o lazy, the call stays a variadic call of printf, which msvcrt.lib
-## binds natively and which is an error until phase 3 (5.10.14's native
-## variadic text). msvcrt.lib also binds puts, so a dropped
+## binds natively and which is 5.15.2's error on windows-msvc, whose C
+## runtime (UCRT) has no va_list variants and no printf on its fixed-arity
+## list (rule 2). msvcrt.lib also binds puts, so a dropped
 ## setBitcodeLibFuncs would rewrite the call and link it silently as a
 ## P/Invoke of puts.
 ## Library calls in linked text (5.10.13; M15.a item 5, M15.b item 2): a
@@ -75,10 +76,10 @@
 # RUN: FileCheck %s --check-prefix=PUTS --implicit-check-not=pinvokeimpl --implicit-check-not=printf \
 # RUN:   --input-file=puts.il
 
-## The native variadic text of 5.10.14, naming msvcrt.dll, which binds
-## printf: in linked text never D19's standalone call-site error, and with
+## The native variadic text of 5.15.2 rule 2, naming msvcrt.dll, which
+## binds printf: in linked text never a standalone call-site error, and with
 ## no '<unknown>:0:0: in function ...' prefix (5.9.14).
-# VARARG: {{^}}msil-ld: error: native function 'printf' (msvcrt.dll) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
+# VARARG: {{^}}msil-ld: error: native function 'printf' (msvcrt.dll) is variadic and has neither a va_list variant nor an entry in the fixed-arity list{{$}}
 
 # PUTS-LABEL: {{^}}.method public static int32 'main'() cil managed{{$}}
 # PUTS:       call int32 'puts'(native int)

@@ -2,9 +2,9 @@
 # tagged Exit to the default set (the untagged legs), as --full adds the Full
 # legs; the Quick leg (hosted) runs only when --leg names it. --list marks a
 # tagged leg with its switch ('name (--full)', 'name (--exit)'); the Quick leg
-# has no switch and none. No leg is tagged Exit at M24, so the checks read the
-# legs from --describe each time and hold for every leg a later milestone
-# tags. Against the stand-in build of Inputs/ci-legs.py, whose lit passes,
+# has no switch and none. M24 tagged no leg Exit and M26 tags ctest-lto, so
+# the checks read the legs from --describe each time, hold for every leg a
+# later milestone tags, and require ctest-lto among the Exit legs. Against the stand-in build of Inputs/ci-legs.py, whose lit passes,
 # inside WSL from Windows (the WSL legs) and natively on Linux,
 # Inputs/legs-check.py checks:
 # (1) --list and --describe name the same legs in the same order, each listed
@@ -25,7 +25,8 @@
 # RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build -- --list > %t/list.txt
 # RUN: %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build -- --describe > %t/describe.json
 # RUN: %python %S/Inputs/legs-check.py tags sh %t/list.txt %t/describe.json > %t/1.log
-# RUN: %{harness_check} contains %t/1.log "^legs-check: \d+ legs, the list's tags are the JSON's \(.*untagged \d+\); Exit legs: \S.*$"
+# RUN: %{harness_check} contains %t/1.log "^legs-check: \d+ legs, the list's tags are the JSON's \(.*untagged \d+\); Exit legs: (\S+, )*ctest-lto(, \S+)*$"
+# RUN: %{harness_check} contains %t/list.txt "^ctest-lto \(--exit\)$"
 # RUN: %{harness_check} contains %t/list.txt "^hosted$"
 # RUN: %{harness_check} missing %t/build/lit-calls.log
 
@@ -35,7 +36,7 @@
 # RUN: %{harness_check} contains %t/2-default.log "^legs-check: \d+ rows, the legs of the default set; Exit legs among them: none$"
 # RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py sh --distro %{legs_wsl_distro} %t/build MSIL_CI_RESULTS=%t/rows-exit -- --exit > %t/exit.log
 # RUN: %python %S/Inputs/legs-check.py rows sh %t/describe.json %t/rows-exit --exit > %t/2-exit.log
-# RUN: %{harness_check} contains %t/2-exit.log "^legs-check: \d+ rows, the legs of exit; Exit legs among them: \S.*$"
+# RUN: %{harness_check} contains %t/2-exit.log "^legs-check: \d+ rows, the legs of exit; Exit legs among them: (\S+, )*ctest-lto(, \S+)*$"
 # RUN: %{harness_check} lacks %t/rows-exit "^lit-legs\thosted\t"
 
 # (3)

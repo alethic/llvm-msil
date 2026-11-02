@@ -115,8 +115,10 @@ void llvm::MSIL::computeSignatureVTs(const FunctionType *Ty,
     Params.push_back(PtrVT);
   }
 
-  // Variadic functions are not supported yet, so a variadic signature has no
-  // extra parameter for the variable arguments.
+  // A variadic signature has no extra parameter for the variable arguments:
+  // ExpandVariadics gives every expanded function an explicit va_list
+  // parameter, and a fixed-arity declaration's calls have their own
+  // non-variadic types (MSILPrepareVariadics).
   for (auto *Param : Ty->params())
     computeLegalValueVTs(ContextFunc, TM, Param, Params);
 }

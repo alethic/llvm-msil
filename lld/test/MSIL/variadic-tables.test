@@ -1,0 +1,243 @@
+## The C runtime tables of variadic functions (ImplementationPlan.md 5.15.2
+## 'Lowering in the backend' tables and 'Link time (msil-ld)' rules 2, 3, 5
+## and 6; M26.c, M26.d; recon p3 variadics 2.4). A program calls every
+## function of a C runtime's va_list variant table and of its fixed-arity
+## list, through a variadic declaration, and links against a native stand-in
+## that defines each function and each variant. --print-imports lists every
+## call, sorted by symbol: a variadic function binds the P/Invoke of its C
+## name to its va_list variant ('printf -> libc.so.6!vprintf'), a
+## fixed-arity one binds to itself. The linked text's P/Invokes take the
+## va_list (native int) for the variadic functions, as 'as "<variant>"', and
+## the call's fixed arguments for the fixed-arity ones. Runtimes
+## (getCRuntime):
+## - Glibc, x86_64-unknown-linux-gnu-msil: the 44 variant pairs and the 25
+##   fixed-arity names;
+## - Musl, x86_64-unknown-linux-musl-msil: the Glibc pairs without the
+##   __isoc* and _chk names (21);
+## - Msvcrt, x86_64-pc-windows-gnu-msil: the 64 variant pairs and the 62
+##   fixed-arity names;
+## - UCRT, x86_64-pc-windows-msvc-msil: no variants (its printf family is
+##   inline C) and the 30 fixed-arity names: its 20 variadic exports and the
+##   POSIX names of 10 of them (execl, execle, execlp, execlpe, open, sopen,
+##   spawnl, spawnle, spawnlp, spawnlpe), which the UCRT headers declare as
+##   variadic and oldnames.lib maps to the underscore exports (plan section
+##   12, '5.15.2's fixed-arity list amended (UCRT)'); the stand-in ucrt.def
+##   exports all 30.
+## clone and makecontext, on no list, are native-variadic.test's.
+## gen.py holds the lists (sorted, no name on both, as the backend asserts)
+## and writes each runtime's program, native stand-in and expectations.
+## Both link paths: CIL objects from llc, and bitcode through
+## --lto-emit-asm. The backend (MSILVariadics.cpp) and msil-ld
+## (lld/MSIL/Variadics.cpp) each keep a copy of the lists: an object call is
+## FIXED_ARITY only by the backend's copy, and the linked text's by
+## msil-ld's, so the two paths check every listed name in both copies.
+
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: %python gen.py
+# RUN: yaml2obj glibc.yaml -o glibc-lib.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script glibc.map glibc-lib.o -o libc.so.6
+# RUN: mkdir musl
+# RUN: yaml2obj musl.yaml -o musl/libc.o
+# RUN: ld.lld -shared -soname libc.so musl/libc.o -o musl/libc.so
+# RUN: llvm-lib /machine:x64 /def:msvcrt.def /out:msvcrt.lib
+# RUN: llvm-lib /machine:x64 /def:ucrt.def /out:ucrt.lib
+
+# RUN: llc -filetype=obj glibc.ll -o glibc.o
+# RUN: msil-ld --print-imports glibc.o libc.so.6 -o glibc.exe > glibc-obj.txt 2>&1
+# RUN: FileCheck glibc.chk --match-full-lines --input-file=glibc-obj.txt
+# RUN: llvm-as glibc.ll -o glibc.bc
+# RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports glibc.bc libc.so.6 -o glibc.il > glibc-lto.txt 2>&1
+# RUN: FileCheck glibc.chk --match-full-lines --input-file=glibc-lto.txt
+# RUN: FileCheck glibc-il.chk --input-file=glibc.il
+
+# RUN: llc -filetype=obj musl.ll -o musl.o
+# RUN: msil-ld --print-imports musl.o musl/libc.so -o musl.exe > musl-obj.txt 2>&1
+# RUN: FileCheck musl.chk --match-full-lines --input-file=musl-obj.txt
+# RUN: llvm-as musl.ll -o musl.bc
+# RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports musl.bc musl/libc.so -o musl.il > musl-lto.txt 2>&1
+# RUN: FileCheck musl.chk --match-full-lines --input-file=musl-lto.txt
+# RUN: FileCheck musl-il.chk --input-file=musl.il
+
+# RUN: llc -filetype=obj msvcrt.ll -o msvcrt.o
+# RUN: msil-ld --print-imports msvcrt.o msvcrt.lib -o msvcrt.exe > msvcrt-obj.txt 2>&1
+# RUN: FileCheck msvcrt.chk --match-full-lines --input-file=msvcrt-obj.txt
+# RUN: llvm-as msvcrt.ll -o msvcrt.bc
+# RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports msvcrt.bc msvcrt.lib -o msvcrt.il > msvcrt-lto.txt 2>&1
+# RUN: FileCheck msvcrt.chk --match-full-lines --input-file=msvcrt-lto.txt
+# RUN: FileCheck msvcrt-il.chk --input-file=msvcrt.il
+
+# RUN: llc -filetype=obj ucrt.ll -o ucrt.o
+# RUN: msil-ld --print-imports ucrt.o ucrt.lib -o ucrt.exe > ucrt-obj.txt 2>&1
+# RUN: FileCheck ucrt.chk --match-full-lines --input-file=ucrt-obj.txt
+# RUN: llvm-as ucrt.ll -o ucrt.bc
+# RUN: msil-ld --lto-emit-asm --lto-O0 --print-imports ucrt.bc ucrt.lib -o ucrt.il > ucrt-lto.txt 2>&1
+# RUN: FileCheck ucrt.chk --match-full-lines --input-file=ucrt-lto.txt
+# RUN: FileCheck ucrt-il.chk --input-file=ucrt.il
+
+#--- gen.py
+"""Generate variadic-tables.test's inputs and expectations.
+
+For each C runtime: <rt>.ll, a program that calls every function of the
+runtime's two tables with (ptr null, i32 1) through a variadic declaration;
+the native stand-in that defines each function and each va_list variant
+(<rt>.yaml with its version script, or <rt>.def); <rt>.chk, the expected
+--print-imports output (sorted by symbol); and <rt>-il.chk, the imports of
+the linked text.
+"""
+
+GLIBC_VARIANTS = """
+__asprintf_chk:__vasprintf_chk __dprintf_chk:__vdprintf_chk
+__fprintf_chk:__vfprintf_chk __fwprintf_chk:__vfwprintf_chk
+__isoc23_fscanf:__isoc23_vfscanf __isoc23_fwscanf:__isoc23_vfwscanf
+__isoc23_scanf:__isoc23_vscanf __isoc23_sscanf:__isoc23_vsscanf
+__isoc23_swscanf:__isoc23_vswscanf __isoc23_wscanf:__isoc23_vwscanf
+__isoc99_fscanf:__isoc99_vfscanf __isoc99_fwscanf:__isoc99_vfwscanf
+__isoc99_scanf:__isoc99_vscanf __isoc99_sscanf:__isoc99_vsscanf
+__isoc99_swscanf:__isoc99_vswscanf __isoc99_wscanf:__isoc99_vwscanf
+__obstack_printf_chk:__obstack_vprintf_chk __printf_chk:__vprintf_chk
+__snprintf_chk:__vsnprintf_chk __sprintf_chk:__vsprintf_chk
+__swprintf_chk:__vswprintf_chk __syslog_chk:__vsyslog_chk
+__wprintf_chk:__vwprintf_chk asprintf:vasprintf dprintf:vdprintf err:verr
+errx:verrx fprintf:vfprintf fscanf:vfscanf fwprintf:vfwprintf
+fwscanf:vfwscanf obstack_printf:obstack_vprintf printf:vprintf scanf:vscanf
+snprintf:vsnprintf sprintf:vsprintf sscanf:vsscanf swprintf:vswprintf
+swscanf:vswscanf syslog:vsyslog warn:vwarn warnx:vwarnx wprintf:vwprintf
+wscanf:vwscanf
+""".split()
+GLIBC_FIXED = """
+__asprintf argp_error argp_failure error error_at_line execl execle execlp
+fcntl fcntl64 ioctl mq_open mremap open open64 openat openat64 prctl ptrace
+sem_open semctl strfmon strfmon_l syscall ulimit
+""".split()
+UCRT_FIXED = """
+_execl _execle _execlp _execlpe _open _sopen _spawnl _spawnle _spawnlp
+_spawnlpe _wexecl _wexecle _wexeclp _wexeclpe _wopen _wsopen _wspawnl
+_wspawnle _wspawnlp _wspawnlpe execl execle execlp execlpe open sopen spawnl
+spawnle spawnlp spawnlpe
+""".split()
+MSVCRT_VARIANTS = """
+_cprintf:_vcprintf _cprintf_l:_vcprintf_l _cprintf_p:_vcprintf_p
+_cprintf_p_l:_vcprintf_p_l _cprintf_s:_vcprintf_s _cprintf_s_l:_vcprintf_s_l
+_cwprintf:_vcwprintf _cwprintf_l:_vcwprintf_l _cwprintf_p:_vcwprintf_p
+_cwprintf_p_l:_vcwprintf_p_l _cwprintf_s:_vcwprintf_s
+_cwprintf_s_l:_vcwprintf_s_l _fprintf_l:_vfprintf_l _fprintf_p:_vfprintf_p
+_fprintf_p_l:_vfprintf_p_l _fprintf_s_l:_vfprintf_s_l
+_fwprintf_l:_vfwprintf_l _fwprintf_p:_vfwprintf_p
+_fwprintf_p_l:_vfwprintf_p_l _fwprintf_s_l:_vfwprintf_s_l
+_printf_l:_vprintf_l _printf_p:_vprintf_p _printf_p_l:_vprintf_p_l
+_printf_s_l:_vprintf_s_l _scprintf:_vscprintf _scprintf_l:_vscprintf_l
+_scprintf_p_l:_vscprintf_p_l _scwprintf:_vscwprintf
+_scwprintf_l:_vscwprintf_l _scwprintf_p_l:_vscwprintf_p_l
+_snprintf:_vsnprintf _snprintf_c:_vsnprintf_c _snprintf_c_l:_vsnprintf_c_l
+_snprintf_l:_vsnprintf_l _snprintf_s:_vsnprintf_s
+_snprintf_s_l:_vsnprintf_s_l _snwprintf:_vsnwprintf
+_snwprintf_l:_vsnwprintf_l _snwprintf_s:_vsnwprintf_s
+_snwprintf_s_l:_vsnwprintf_s_l _sprintf_l:_vsprintf_l
+_sprintf_p_l:_vsprintf_p_l _sprintf_s_l:_vsprintf_s_l _swprintf:_vswprintf
+_swprintf_c:_vswprintf_c _swprintf_c_l:_vswprintf_c_l
+_swprintf_p_l:_vswprintf_p_l _swprintf_s_l:_vswprintf_s_l
+_wprintf_l:_vwprintf_l _wprintf_p:_vwprintf_p _wprintf_p_l:_vwprintf_p_l
+_wprintf_s_l:_vwprintf_s_l fprintf:vfprintf fprintf_s:vfprintf_s
+fwprintf:vfwprintf fwprintf_s:vfwprintf_s printf:vprintf printf_s:vprintf_s
+sprintf:vsprintf sprintf_s:vsprintf_s swprintf:vswprintf
+swprintf_s:vswprintf_s wprintf:vwprintf wprintf_s:vwprintf_s
+""".split()
+MSVCRT_FIXED = """
+_CrtDbgReport _CrtDbgReportW _cscanf _cscanf_l _cscanf_s _cscanf_s_l
+_cwscanf _cwscanf_l _cwscanf_s _cwscanf_s_l _execl _execle _execlp _execlpe
+_fscanf_l _fscanf_s_l _fwscanf_l _fwscanf_s_l _open _scanf_l _scanf_s_l
+_snscanf _snscanf_l _snscanf_s _snscanf_s_l _snwscanf _snwscanf_l
+_snwscanf_s _snwscanf_s_l _sopen _spawnl _spawnle _spawnlp _spawnlpe
+_sscanf_l _sscanf_s_l _swscanf_l _swscanf_s_l _wexecl _wexecle _wexeclp
+_wexeclpe _wopen _wscanf_l _wscanf_s_l _wsopen _wspawnl _wspawnle _wspawnlp
+_wspawnlpe fscanf fscanf_s fwscanf fwscanf_s scanf scanf_s sscanf sscanf_s
+swscanf swscanf_s wscanf wscanf_s
+""".split()
+
+LNX_DL = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+WIN_DL = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+DIRECTIVE = "CHE" + "CK"
+
+
+def pairs(items):
+    return [tuple(i.split(":")) for i in items]
+
+
+def check_lists(variants, fixed):
+    names = [v for v, _ in variants]
+    assert names == sorted(names), "variant list not sorted"
+    assert fixed == sorted(fixed), "fixed-arity list not sorted"
+    assert not set(names) & set(fixed), "a name on both lists"
+
+
+GLIBC = pairs(GLIBC_VARIANTS)
+MUSL = [(v, e) for v, e in GLIBC
+        if not v.startswith("__isoc") and not v.endswith("_chk")]
+MSVCRT = pairs(MSVCRT_VARIANTS)
+assert (len(GLIBC), len(GLIBC_FIXED), len(MUSL)) == (44, 25, 21)
+assert (len(MSVCRT), len(MSVCRT_FIXED), len(UCRT_FIXED)) == (64, 62, 30)
+check_lists(GLIBC, GLIBC_FIXED)
+check_lists(MSVCRT, MSVCRT_FIXED)
+check_lists([], UCRT_FIXED)
+
+# name, triple, datalayout, module, version (None: COFF), variants, fixed
+RUNTIMES = [
+    ("glibc", "x86_64-unknown-linux-gnu-msil", LNX_DL, "libc.so.6", "GLIBC_2.2.5",
+     GLIBC, GLIBC_FIXED),
+    ("musl", "x86_64-unknown-linux-musl-msil", LNX_DL, "libc.so", "-", MUSL, []),
+    ("msvcrt", "x86_64-pc-windows-gnu-msil", WIN_DL, "msvcrt.dll", None,
+     MSVCRT, MSVCRT_FIXED),
+    ("ucrt", "x86_64-pc-windows-msvc-msil", WIN_DL, "ucrtbase.dll", None,
+     [], UCRT_FIXED),
+]
+
+
+def write(path, lines):
+    with open(path, "w", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+for rt, triple, dl, module, version, variants, fixed in RUNTIMES:
+    entries = sorted(variants + [(f, f) for f in fixed])
+    called = [n for n, _ in entries]
+    natives = sorted(set(called) | {e for _, e in entries})
+
+    ll = ['target datalayout = "%s"' % dl, 'target triple = "%s"' % triple, "",
+          "define i32 @main() {"]
+    ll += ["  %%c%d = call i32 (ptr, ...) @%s(ptr null, i32 1)" % (i, n)
+           for i, n in enumerate(called)]
+    ll += ["  ret i32 0", "}", ""]
+    ll += ["declare i32 @%s(ptr, ...)" % n for n in called]
+    write(rt + ".ll", ll)
+
+    if version is None:
+        write(rt + ".def", ["LIBRARY " + module, "EXPORTS"] + ["  " + n for n in natives])
+    else:
+        y = ["--- !ELF", "FileHeader:", "  Class:   ELFCLASS64", "  Data:    ELFDATA2LSB",
+             "  Type:    ET_REL", "  Machine: EM_X86_64", "Sections:", "  - Name:  .text",
+             "    Type:  SHT_PROGBITS", "    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]",
+             "    Size:  0x%x" % (8 * len(natives)), "Symbols:"]
+        y += ["  - { Name: %s, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, "
+              "Value: 0x%x, Size: 8 }" % (n, 8 * i) for i, n in enumerate(natives)]
+        write(rt + ".yaml", y)
+        if version != "-":
+            write(rt + ".map", ["%s { global: *; };" % version])
+
+    ver = "-" if version is None else version
+    rows = ["%s -> %s!%s [function, %s]" % (n, module, e, ver) for n, e in entries]
+    chk = ["%s-NOT: {{.+}}" % DIRECTIVE, "%s: %s" % (DIRECTIVE, rows[0])]
+    chk += ["%s-NEXT: %s" % (DIRECTIVE, r) for r in rows[1:]]
+    if version is not None:
+        chk.append("%s-NEXT: %s: version floor %s" % (DIRECTIVE, module, version))
+    chk.append("%s-NOT: {{.+}}" % DIRECTIVE)
+    write(rt + ".chk", chk)
+
+    il = []
+    for n, e in entries:
+        if n == e:
+            il.append('%s-DAG: pinvokeimpl("%s" nomangle cdecl) int32 \'%s\'(native int, int32)'
+                      % (DIRECTIVE, module, n))
+        else:
+            il.append('%s-DAG: pinvokeimpl("%s" as "%s" nomangle cdecl) int32 \'%s\'(native int, native int)'
+                      % (DIRECTIVE, module, e, n))
+    write(rt + "-il.chk", il)

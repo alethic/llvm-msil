@@ -1,0 +1,559 @@
+## C variadic functions across CIL objects (ImplementationPlan.md 5.15.2
+## 'Link time (msil-ld)' rules 1 and 3, 5.14.8, 5.9.8's row 'VARARG on
+## either side' as the section 12 row of 2026-10-28 amends it; M26.b, M26.d;
+## recon p3 variadics 5 and 8.2). The backend expands a variadic definition
+## to its fixed parameters plus one va_list parameter (IL: native int) and
+## every call of it to pass a va_list; the definition's SIGNATURES entry and
+## every reference set VARARG with FixedParams, the number of IL parameters
+## before the va_list (a hidden sret counts). msil-ld:
+## - binds a VARARG reference to a VARARG definition with equal FixedParams
+##   and IL signature directly, with no adapter and no diagnostic: across
+##   objects, from an archive member, through the address of the function,
+##   with an sret result (FixedParams 2 on both sides), on the SysV and the
+##   Win64 (char*) triple, and through LTO (bitcode with bitcode, bitcode
+##   with a CIL object, either way round);
+## - calls through an alias and a weak alias of a variadic definition, from
+##   the definition's own module and from another one, are the expanded calls
+##   (int32, native int) of the definition with no diagnostic, in the object
+##   link and at --lto-O0, on both triples (review r2 finding 1);
+## - reports a different FixedParams, and VARARG on one side only (a fixed
+##   declaration calling a variadic definition, a variadic declaration
+##   calling a fixed definition, a K&R call of a variadic definition), as
+##     function signature mismatch: <s>
+##     >>> defined as <sig>[ (variadic, <n> fixed)] in <file>
+##     >>> called as <sig>[ (variadic, <n> fixed)] in <file>
+##     >>> <reason>
+##   an error, exit status 1, no output, where the reason is 'the call passes
+##   <n> fixed argument(s) before the variadic ones, but the definition takes
+##   <m> fixed parameter(s)', 'only the definition is variadic' or 'only the
+##   call is variadic';
+## - reports equal FixedParams with a different IL signature (a long first
+##   parameter against an int one, from llc -O0 and -O2 objects) the same way,
+##   with the reason 'the IL signatures of a variadic call and definition must
+##   match exactly';
+## - in an LTO link, where the IR linker joins a K&R call with the variadic
+##   definition, a call whose arguments cannot be cast to the definition's
+##   fixed parameters (int f(); f(2.5); against int f(int n, ...)) is the
+##   backend's 'mismatched call signature' error (in function main), exit
+##   status 1, no output and no crash, in an executable link at --lto-O0
+##   and --lto-O2, a -shared link, and on the Win64 (char*) triple;
+## - a FIXED_ARITY reference (a call of open, on glibc's fixed-arity list,
+##   5.14.8) bound to an MSIL VARARG definition is
+##     fixed-arity call of '<name>' in <file> binds to the variadic
+##     definition in <file2>, which MSIL cannot call with fixed arity
+##   and bound to a non-variadic definition it is an ordinary call checked by
+##   5.9.8: direct when the signatures agree, adapted with a warning when the
+##   call passes an extra argument.
+## The retired Phase 2 text for VARARG in Signatures never appears.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: llc -filetype=obj vdef.ll -o vdef.o
+# RUN: llc -filetype=obj vcall.ll -o vcall.o
+# RUN: llc -filetype=obj vcall-fp2.ll -o vcall-fp2.o
+# RUN: llc -filetype=obj vcall-fixed.ll -o vcall-fixed.o
+# RUN: llc -O0 -filetype=obj vcall-sig.ll -o vcall-sig-o0.o
+# RUN: llc -O2 -filetype=obj vcall-sig.ll -o vcall-sig-o2.o
+# RUN: llc -filetype=obj fdef.ll -o fdef.o
+# RUN: llc -filetype=obj fcall-va.ll -o fcall-va.o
+# RUN: llc -filetype=obj knr.ll -o knr.o
+# RUN: llc -filetype=obj vaddr.ll -o vaddr.o
+# RUN: llc -filetype=obj open-def.ll -o open-def.o
+# RUN: llc -filetype=obj open-fixed.ll -o open-fixed.o
+# RUN: llc -filetype=obj open-call.ll -o open-call.o
+# RUN: llc -filetype=obj open-call3.ll -o open-call3.o
+# RUN: llc -filetype=obj vdef-win.ll -o vdef-win.o
+# RUN: llc -filetype=obj vcall-win.ll -o vcall-win.o
+# RUN: llvm-as vdef.ll -o vdef.bc
+# RUN: llvm-as vcall.ll -o vcall.bc
+# RUN: llvm-as knr-fp.ll -o knr-fp.bc
+# RUN: llvm-as vdef-win.ll -o vdef-win.bc
+# RUN: llvm-as knr-fp-win.ll -o knr-fp-win.bc
+# RUN: llvm-ar rcs libv.a vdef.o
+# RUN: llc -filetype=obj alias-def.ll -o alias-def.o
+# RUN: llc -filetype=obj alias-call.ll -o alias-call.o
+# RUN: llc -filetype=obj alias-def-win.ll -o alias-def-win.o
+# RUN: llc -filetype=obj alias-call-win.ll -o alias-call-win.o
+# RUN: llvm-as alias-def.ll -o alias-def.bc
+# RUN: llvm-as alias-call.ll -o alias-call.bc
+# RUN: llvm-as alias-def-win.ll -o alias-def-win.bc
+# RUN: llvm-as alias-call-win.ll -o alias-call-win.bc
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="not supported yet"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# DEFINE: %{direct} = FileCheck %s --check-prefix=DIRECT --implicit-check-not=adapt_ --implicit-check-not=pinvokeimpl
+
+## The records: VARARG with FixedParams on the definitions' entries and on
+## the references (sret counted); both objects stay v1.0.
+# RUN: llvm-cil-dump --link-info vdef.o | FileCheck %s --check-prefix=REC-DEF
+# REC-DEF:     {{^}}LinkInfo v1.0 triple=x86_64-unknown-linux-gnu-msil {{.*}}{{$}}
+# REC-DEF-DAG: {{^}}Signature 0x06{{[0-9A-F]+}} 'vsum' VARARG fixed=1{{$}}
+# REC-DEF-DAG: {{^}}Signature 0x06{{[0-9A-F]+}} 'mk' {{(.* )?}}VARARG fixed=2{{( .*)?$}}
+# RUN: llvm-cil-dump --link-info vcall.o | FileCheck %s --check-prefix=REC-CALL
+# REC-CALL:     {{^}}LinkInfo v1.0 triple=x86_64-unknown-linux-gnu-msil {{.*}}{{$}}
+# REC-CALL-DAG: {{^}}Signature 0x0A{{[0-9A-F]+}} 'vsum' VARARG fixed=1{{$}}
+# REC-CALL-DAG: {{^}}Signature 0x0A{{[0-9A-F]+}} 'mk' {{(.* )?}}VARARG fixed=2{{( .*)?$}}
+
+## Equal VARARG sides bind directly: objects, an archive member, LTO.
+# RUN: msil-ld vcall.o vdef.o -o obj.exe 2>&1 | count 0
+# RUN: llvm-cil-dump obj.exe | %{direct}
+# RUN: msil-ld vcall.o libv.a -o ar.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ar.exe | %{direct}
+# RUN: msil-ld --lto-O0 vdef.bc vcall.bc -o lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lto.exe | %{direct}
+# RUN: msil-ld --lto-O0 vdef.o vcall.bc -o mixed1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump mixed1.exe | %{direct}
+# RUN: msil-ld --lto-O0 vcall.o vdef.bc -o mixed2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump mixed2.exe | %{direct}
+# DIRECT:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# DIRECT-DAG:  {{^}}    L{{[0-9]+}}: call void(native int, int32, native int) '<Module>'::'mk'{{$}}
+# DIRECT-DAG:  {{^}}    L{{[0-9]+}}: call int32(int32, native int) '<Module>'::'vsum'{{$}}
+# DIRECT:      {{^}}  .method 'mk' void(native int, int32, native int) flags=0x00{{[0-9A-F]+}} impl=0x0000{{$}}
+# DIRECT:      {{^}}  .method 'vsum' int32(int32, native int) flags=0x00{{[0-9A-F]+}} impl=0x0000{{$}}
+
+## Whole-program text through LTO: the expanded definition and its call.
+# RUN: msil-ld --lto-emit-asm --lto-O0 vdef.bc vcall.bc -o lto.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=TEXT --input-file=lto.il
+# TEXT-DAG: call int32 'vsum'(int32, native int)
+# TEXT-DAG: call void 'mk'(native int, int32, native int)
+# TEXT-DAG: {{^}}.method {{.*}}static int32 'vsum'(int32, native int) cil managed
+# TEXT-DAG: {{^}}.method {{.*}}static void 'mk'(native int, int32, native int) cil managed
+
+## Windows (a char* va_list): the same shape.
+# RUN: msil-ld vcall-win.o vdef-win.o -o win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump win.exe | FileCheck %s --check-prefix=WIN --implicit-check-not=adapt_
+# WIN: {{^}}    L{{[0-9]+}}: call int32(int32, native int) '<Module>'::'vsum'{{$}}
+# WIN: {{^}}  .method 'vsum' int32(int32, native int) flags=0x0016 impl=0x0000{{$}}
+
+## Calls through the alias 'sum' and the weak alias 'wsum' of the variadic
+## definition 'impl': from 'local' in impl's own module and from 'main' in
+## another, as objects and as bitcode at --lto-O0, on both triples. Each call
+## is the expanded call of the definition, and no forwarder or call keeps an
+## unexpanded signature.
+# DEFINE: %{alias} = FileCheck %s --check-prefix=ALIAS %{crash} --implicit-check-not=adapt_ \
+# DEFINE:   --implicit-check-not=pinvokeimpl --implicit-check-not="int32(int32) " \
+# DEFINE:   --implicit-check-not="int32(int32, int32"
+# RUN: msil-ld alias-call.o alias-def.o -o alias-obj.exe 2>&1 | count 0
+# RUN: llvm-cil-dump alias-obj.exe | %{alias}
+# RUN: msil-ld --lto-O0 alias-def.bc alias-call.bc -o alias-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump alias-lto.exe | %{alias}
+# RUN: msil-ld alias-call-win.o alias-def-win.o -o alias-obj-win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump alias-obj-win.exe | %{alias}
+# RUN: msil-ld --lto-O0 alias-def-win.bc alias-call-win.bc -o alias-lto-win.exe 2>&1 | count 0
+# RUN: llvm-cil-dump alias-lto-win.exe | %{alias}
+# ALIAS-LABEL: {{^}}  .method 'impl' int32(int32, native int) flags=0x00{{[0-9A-F]+}} impl=0x0000{{$}}
+# ALIAS-LABEL: {{^}}  .method 'local' int32() flags=0x00{{[0-9A-F]+}} impl=0x0000{{$}}
+# ALIAS:       {{^}}    L{{[0-9]+}}: call int32(int32, native int) '<Module>'::'{{impl|sum|wsum}}'{{$}}
+# ALIAS:       {{^}}    L{{[0-9]+}}: call int32(int32, native int) '<Module>'::'{{impl|sum|wsum}}'{{$}}
+# ALIAS:       {{^}}    L{{[0-9]+}}: call void(int32) '<Module>'::'sink'{{$}}
+# ALIAS-LABEL: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# ALIAS:       {{^}}    L{{[0-9]+}}: call int32(int32, native int) '<Module>'::'{{impl|sum|wsum}}'{{$}}
+# ALIAS:       {{^}}    L{{[0-9]+}}: call int32(int32, native int) '<Module>'::'{{impl|sum|wsum}}'{{$}}
+# ALIAS:       {{^}}    L{{[0-9]+}}: call int32() '<Module>'::'local'{{$}}
+
+## The address of a variadic function defined in another object: the
+## address field takes the expanded method's address.
+# RUN: msil-ld vaddr.o vdef.o -o addr.exe 2>&1 | count 0
+# RUN: llvm-cil-dump addr.exe > addr.txt
+# RUN: %python %S/Inputs/cctor.py addr.txt | FileCheck %s --check-prefix=ADDR
+# ADDR: {{^}}field <msil>fn_vsum = &vsum{{$}}
+
+## A FixedParams difference: both sides variadic.
+# RUN: not msil-ld vcall-fp2.o vdef.o -o x.exe 2>&1 | %{err} --check-prefix=FP2
+# FP2:      {{^}}msil-ld: error: function signature mismatch: vsum{{$}}
+# FP2-NEXT: {{^}}>>> defined as int32(int32, native int) (variadic, 1 fixed) in vdef.o{{$}}
+# FP2-NEXT: {{^}}>>> called as int32(int32, int32, native int) (variadic, 2 fixed) in vcall-fp2.o{{$}}
+# FP2-NEXT: {{^}}>>> the call passes 2 fixed arguments before the variadic ones, but the definition takes 1 fixed parameter{{$}}
+
+## Equal FixedParams, another IL signature: never adapted.
+# RUN: not msil-ld vcall-sig-o0.o vdef.o -o x.exe 2>&1 | %{err} --check-prefix=SIG -DOBJ=vcall-sig-o0.o
+# RUN: not msil-ld vcall-sig-o2.o vdef.o -o x.exe 2>&1 | %{err} --check-prefix=SIG -DOBJ=vcall-sig-o2.o
+# SIG:      {{^}}msil-ld: error: function signature mismatch: vsum{{$}}
+# SIG-NEXT: {{^}}>>> defined as int32(int32, native int) (variadic, 1 fixed) in vdef.o{{$}}
+# SIG-NEXT: {{^}}>>> called as int32(native int, native int) (variadic, 1 fixed) in [[OBJ]]{{$}}
+# SIG-NEXT: {{^}}>>> the IL signatures of a variadic call and definition must match exactly{{$}}
+
+## VARARG on one side only: the definition, then the call.
+# RUN: not msil-ld vcall-fixed.o vdef.o -o x.exe 2>&1 | %{err} --check-prefix=DEF-ONLY
+# DEF-ONLY:      {{^}}msil-ld: error: function signature mismatch: vsum{{$}}
+# DEF-ONLY-NEXT: {{^}}>>> defined as int32(int32, native int) (variadic, 1 fixed) in vdef.o{{$}}
+# DEF-ONLY-NEXT: {{^}}>>> called as int32(int32, int32) in vcall-fixed.o{{$}}
+# DEF-ONLY-NEXT: {{^}}>>> only the definition is variadic{{$}}
+# RUN: not msil-ld fcall-va.o fdef.o -o x.exe 2>&1 | %{err} --check-prefix=CALL-ONLY
+# CALL-ONLY:      {{^}}msil-ld: error: function signature mismatch: add2{{$}}
+# CALL-ONLY-NEXT: {{^}}>>> defined as int32(int32, int32) in fdef.o{{$}}
+# CALL-ONLY-NEXT: {{^}}>>> called as int32(int32, native int) (variadic, 1 fixed) in fcall-va.o{{$}}
+# CALL-ONLY-NEXT: {{^}}>>> only the call is variadic{{$}}
+
+## A K&R call of a variadic definition (C undefined behaviour): no adapter.
+# RUN: not msil-ld knr.o vdef.o -o x.exe 2>&1 | %{err} --check-prefix=KNR
+# KNR:      {{^}}msil-ld: error: function signature mismatch: vsum{{$}}
+# KNR-NEXT: {{^}}>>> defined as int32(int32, native int) (variadic, 1 fixed) in vdef.o{{$}}
+# KNR-NEXT: {{^}}>>> called as int32(int32, int32, int32, int32){{.*}} in knr.o{{$}}
+# KNR-NEXT: {{^}}>>> only the definition is variadic{{$}}
+# RUN: not ls x.exe
+
+## The same K&R declaration in bitcode, called with an argument that cannot
+## be cast to the fixed parameter (int vsum(); vsum(2.5);): the IR linker
+## joins the call with the definition, and the backend reports the call.
+# RUN: not msil-ld --lto-O0 vdef.bc knr-fp.bc -o x.exe 2>&1 | %{err} --check-prefix=KNR-LTO
+# RUN: not ls x.exe
+# RUN: not msil-ld --lto-O2 vdef.bc knr-fp.bc -o x.exe 2>&1 | %{err} --check-prefix=KNR-LTO
+# RUN: not ls x.exe
+# RUN: not msil-ld -shared --lto-O2 vdef.bc knr-fp.bc -o x.dll 2>&1 | %{err} --check-prefix=KNR-LTO
+# RUN: not ls x.dll
+# RUN: not msil-ld --lto-O2 vdef-win.bc knr-fp-win.bc -o x.exe 2>&1 | %{err} --check-prefix=KNR-LTO
+# RUN: not ls x.exe
+# KNR-LTO: {{^}}msil-ld: error: {{.*}}in function main i32 (): mismatched call signature{{$}}
+
+## FIXED_ARITY: open-call.o calls open with fixed arity (glibc's list).
+# RUN: llvm-cil-dump --link-info open-call.o | FileCheck %s --check-prefix=REC-OPEN
+# REC-OPEN: {{^}}LinkInfo v1.1 triple=x86_64-unknown-linux-gnu-msil {{.*}}{{$}}
+# REC-OPEN: {{^}}Signature 0x0A{{[0-9A-F]+}} 'open' FIXED_ARITY fixed=2{{$}}
+## Bound to an MSIL VARARG definition: 5.14.8's error.
+# RUN: not msil-ld open-call.o open-def.o -o x.exe 2>&1 | %{err} --check-prefix=V6
+# V6: {{^}}msil-ld: error: fixed-arity call of 'open' in open-call.o binds to the variadic definition in open-def.o, which MSIL cannot call with fixed arity{{$}}
+# RUN: not ls x.exe
+## Bound to a non-variadic definition: an ordinary call.
+# RUN: msil-ld open-call.o open-fixed.o -o open.exe 2>&1 | count 0
+# RUN: llvm-cil-dump open.exe | FileCheck %s --check-prefix=OPEN --implicit-check-not=adapt_ --implicit-check-not=pinvokeimpl
+# OPEN: {{^}}    L{{[0-9]+}}: call int32(native int, int32) '<Module>'::'open'{{$}}
+# OPEN: {{^}}  .method 'open' int32(native int, int32) flags=0x0016 impl=0x0000{{$}}
+# RUN: msil-ld open-call3.o open-fixed.o -o open3.exe > open3.txt 2>&1
+# RUN: FileCheck %s --check-prefix=OPEN3 %{crash} --implicit-check-not=error: --input-file=open3.txt
+# OPEN3:      {{^}}msil-ld: warning: function signature mismatch: open{{$}}
+# OPEN3-NEXT: {{^}}>>> defined as int32(native int, int32) in open-fixed.o{{$}}
+# OPEN3-NEXT: {{^}}>>> called as int32(native int, int32, int32){{.*}} in open-call3.o{{$}}
+# OPEN3-NEXT: {{^}}>>> adapter: {{.+}}
+# OPEN3-NOT:  warning:
+# RUN: llvm-cil-dump open3.exe | FileCheck %s --check-prefix=OPEN3-IMG
+# OPEN3-IMG: {{^}}  .method '<msil>adapt_open_0' int32(native int, int32, int32) flags=0x0013 impl=0x0000{{$}}
+
+#--- vdef.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+%struct.S = type { i32, i32, i32 }
+
+;; int vsum(int n, ...); struct S mk(int n, ...);
+define i32 @vsum(i32 %n, ...) noinline {
+  %ap = alloca [24 x i8], align 16
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %n
+}
+
+define void @mk(ptr sret(%struct.S) align 4 %out, i32 %n, ...) noinline {
+  %ap = alloca [24 x i8], align 16
+  call void @llvm.va_start.p0(ptr %ap)
+  store i32 %n, ptr %out, align 4
+  call void @llvm.va_end.p0(ptr %ap)
+  ret void
+}
+
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+
+#--- vcall.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+%struct.S = type { i32, i32, i32 }
+
+define i32 @main() {
+  %s = alloca %struct.S, align 4
+  %a = call i32 (i32, ...) @vsum(i32 3, i32 10, i32 20, i32 12)
+  call void (ptr, i32, ...) @mk(ptr sret(%struct.S) align 4 %s, i32 1, i32 5)
+  %v = load i32, ptr %s, align 4
+  %r = add i32 %a, %v
+  ret i32 %r
+}
+
+declare i32 @vsum(i32, ...)
+declare void @mk(ptr sret(%struct.S) align 4, i32, ...)
+
+#--- vcall-fp2.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; int vsum(int n, int first, ...);
+define i32 @main() {
+  %a = call i32 (i32, i32, ...) @vsum(i32 2, i32 10, i32 20)
+  ret i32 %a
+}
+
+declare i32 @vsum(i32, i32, ...)
+
+#--- vcall-fixed.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; int vsum(int n, int x);
+define i32 @main() {
+  %a = call i32 @vsum(i32 1, i32 10)
+  ret i32 %a
+}
+
+declare i32 @vsum(i32, i32)
+
+#--- vcall-sig.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; int vsum(long n, ...); against int vsum(int n, ...);
+define i32 @main() {
+  %a = call i32 (i64, ...) @vsum(i64 3, i32 10, i32 20, i32 12)
+  ret i32 %a
+}
+
+declare i32 @vsum(i64, ...)
+
+#--- fdef.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @add2(i32 %a, i32 %b) noinline {
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+
+#--- fcall-va.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; int add2(int a, ...);
+define i32 @main() {
+  %a = call i32 (i32, ...) @add2(i32 1, i32 2)
+  ret i32 %a
+}
+
+declare i32 @add2(i32, ...)
+
+#--- knr.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; int vsum(); vsum(3, 10, 20, 12);
+define i32 @main() {
+  %a = call i32 @vsum(i32 3, i32 10, i32 20, i32 12)
+  ret i32 %a
+}
+
+declare i32 @vsum(...) #0
+
+attributes #0 = { "no-prototype" }
+
+#--- knr-fp.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; int vsum(); vsum(2.5); as clang emits it.
+define i32 @main() {
+  %a = call i32 @vsum(double 2.500000e+00)
+  ret i32 %a
+}
+
+declare i32 @vsum(...) #0
+
+attributes #0 = { "no-prototype" }
+
+#--- knr-fp-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int vsum(); vsum(2.5); as clang emits it.
+define i32 @main() {
+  %a = call i32 @vsum(double 2.500000e+00)
+  ret i32 %a
+}
+
+declare i32 @vsum(...) #0
+
+attributes #0 = { "no-prototype" }
+
+#--- vaddr.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@fp = global ptr @vsum
+
+define i32 @main() {
+  %f = load ptr, ptr @fp
+  %c = icmp eq ptr %f, null
+  %r = zext i1 %c to i32
+  ret i32 %r
+}
+
+declare i32 @vsum(i32, ...)
+
+#--- open-def.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; A program's own variadic open (an MSIL definition, VARARG).
+define i32 @open(ptr %path, i32 %flags, ...) noinline {
+  ret i32 %flags
+}
+
+#--- open-fixed.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; A program's own non-variadic open.
+define i32 @open(ptr %path, i32 %flags) noinline {
+  ret i32 %flags
+}
+
+#--- open-call.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@path = private constant [6 x i8] c"a.txt\00"
+
+define i32 @main() {
+  %a = call i32 (ptr, i32, ...) @open(ptr @path, i32 0)
+  ret i32 %a
+}
+
+declare i32 @open(ptr, i32, ...)
+
+#--- open-call3.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@path = private constant [6 x i8] c"a.txt\00"
+
+define i32 @main() {
+  %a = call i32 (ptr, i32, ...) @open(ptr @path, i32 65, i32 420)
+  ret i32 %a
+}
+
+declare i32 @open(ptr, i32, ...)
+
+#--- vdef-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @vsum(i32 %n, ...) noinline {
+  %ap = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %n
+}
+
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+
+#--- vcall-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+define i32 @main() {
+  %a = call i32 (i32, ...) @vsum(i32 3, i32 10, i32 20, i32 12)
+  ret i32 %a
+}
+
+declare i32 @vsum(i32, ...)
+
+#--- alias-def.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; int impl(int n, ...);
+;; extern int sum(int n, ...) __attribute__((alias("impl")));
+;; extern int wsum(int n, ...) __attribute__((weak, alias("impl")));
+;; int local(void) { int r = sum(5, 10) + wsum(6, 20, 30); sink(r); return r; }
+@sum = alias i32 (i32, ...), ptr @impl
+@wsum = weak alias i32 (i32, ...), ptr @impl
+
+define i32 @impl(i32 %n, ...) noinline {
+  %ap = alloca [24 x i8], align 16
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %n
+}
+
+define void @sink(i32 %x) noinline {
+  ret void
+}
+
+define i32 @local() noinline {
+  %a = call i32 (i32, ...) @sum(i32 5, i32 10)
+  %b = call i32 (i32, ...) @wsum(i32 6, i32 20, i32 30)
+  %r = add i32 %a, %b
+  call void @sink(i32 %r)
+  ret i32 %r
+}
+
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+
+#--- alias-call.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; main calls the alias and the weak alias of impl from another module.
+define i32 @main() {
+  %a = call i32 (i32, ...) @sum(i32 2, i32 10, i32 20)
+  %b = call i32 (i32, ...) @wsum(i32 1, i32 12)
+  %c = call i32 @local()
+  %ab = add i32 %a, %b
+  %r = add i32 %ab, %c
+  ret i32 %r
+}
+
+declare i32 @sum(i32, ...)
+declare i32 @wsum(i32, ...)
+declare i32 @local()
+
+#--- alias-def-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int impl(int n, ...);
+;; extern int sum(int n, ...) __attribute__((alias("impl")));
+;; extern int wsum(int n, ...) __attribute__((weak, alias("impl")));
+;; int local(void) { int r = sum(5, 10) + wsum(6, 20, 30); sink(r); return r; }
+@sum = alias i32 (i32, ...), ptr @impl
+@wsum = weak alias i32 (i32, ...), ptr @impl
+
+define i32 @impl(i32 %n, ...) noinline {
+  %ap = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %n
+}
+
+define void @sink(i32 %x) noinline {
+  ret void
+}
+
+define i32 @local() noinline {
+  %a = call i32 (i32, ...) @sum(i32 5, i32 10)
+  %b = call i32 (i32, ...) @wsum(i32 6, i32 20, i32 30)
+  %r = add i32 %a, %b
+  call void @sink(i32 %r)
+  ret i32 %r
+}
+
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+
+#--- alias-call-win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; main calls the alias and the weak alias of impl from another module.
+define i32 @main() {
+  %a = call i32 (i32, ...) @sum(i32 2, i32 10, i32 20)
+  %b = call i32 (i32, ...) @wsum(i32 1, i32 12)
+  %c = call i32 @local()
+  %ab = add i32 %a, %b
+  %r = add i32 %ab, %c
+  ret i32 %r
+}
+
+declare i32 @sum(i32, ...)
+declare i32 @wsum(i32, ...)
+declare i32 @local()

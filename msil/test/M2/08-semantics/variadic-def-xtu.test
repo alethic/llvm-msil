@@ -1,25 +1,20 @@
-# Matrix P3 row variadic definition across objects: a variadic function defined in one object and called from another is a named diagnostic until phase 3.
+# Matrix row variadic-def-xtu: a variadic function defined in one object and called from another prints its native transcript (M26).
 # sum.c defines int sum(int n, ...) with <stdarg.h>; main.c calls it
 # through its prototype (judge-c-fidelity 6.5: a call to a variadic
-# definition; natively 42). Variadic definitions and calls are P3-B (D19,
-# Design.md 4.7): on the object path 'clang -c' of sum.c, the first source,
-# already stops with the variadic-definition diagnostic of code generation,
-# and nothing is linked; main.c alone stops with the variadic-call
-# diagnostic (clang -c, checked at -O2). On the LTO path both TUs compile to
-# bitcode, and code generation inside msil-ld reports the definition, which
-# msil-ld prints; exit status 1 at -O0 and -O2, never a JIT-time exception.
-# A transcript comes with P3-B. Plan 5.9.16 (P3 rows), M23.c.
+# definition; natively 42). From M26 ExpandVariadics with the MSIL ABIs
+# (plan 5.15.2) gives the definition the IL signature (int32, native int),
+# its fixed parameter plus a native-layout va_list, and each call passes a
+# va_list over a buffer in the caller's frame; the definition's SIGNATURES
+# entry and the call's reference both carry VARARG with FixedParams 1, so
+# msil-ld binds them directly (link-time rule 1). The same holds for the
+# other cases: avg takes doubles, vsum is a fixed-arity function of sum.c
+# that takes a va_list, which main.c's own variadic forwarder hands it
+# across the objects, and sum is also called through a pointer and from a
+# loop. Through objects and through LTO, at every level of the leg, on both
+# triples. Plan 5.9.16 (P3 rows), 5.15.2, 5.17.12 item 5 (M26).
 # RUN: rm -rf %t && split-file %s %t
 # REDEFINE: %{msil_srcs} = %t/sum.c %t/main.c
-# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat --implicit-check-not="msil-ld:" %}
-# RUN: %if msil-prog-pipeline=obj %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=OBJ --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat --implicit-check-not="msil-ld:" %}
-# RUN: %if msil-prog-pipeline=obj %{ not %clang_msil %{msil_cflags} -O2 -c %t/main.c -o %t.main.o 2>&1 | FileCheck %s --check-prefix=OBJ-CALL --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" %}
-# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O0} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
-# RUN: %if msil-prog-pipeline=lto %{ %{msil_prog_fail_O2} 2>&1 | FileCheck %s --check-prefix=LTO --implicit-check-not="LLVM ERROR" --implicit-check-not="PLEASE submit" --implicit-check-not=InvalidProgram --implicit-check-not=MissingMethod --implicit-check-not=TypeLoad --implicit-check-not=EntryPointNotFound --implicit-check-not=BadImageFormat %}
-# OBJ:      {{^}}{{.*}}sum.c:3:5: error: variadic function definitions are not supported for MSIL yet{{$}}
-# OBJ-CALL: {{^}}{{.*}}main.c:5:5: error: calls to variadic functions are not supported for MSIL yet{{$}}
-# LTO:      {{^}}msil-ld: error: {{.*}}in function sum {{.*}}: variadic function definitions are not supported for MSIL yet{{$}}
-# LTO:      clang: error: {{.*}}command failed with exit code 1 (use -v to see invocation)
+# RUN: %{msil_prog}
 #--- sum.c
 #include <stdarg.h>
 
@@ -32,12 +27,52 @@ int sum(int n, ...) {
   va_end(ap);
   return s;
 }
+
+double avg(int n, ...) {
+  va_list ap;
+  double s = 0;
+  va_start(ap, n);
+  for (int i = 0; i < n; ++i)
+    s += va_arg(ap, double);
+  va_end(ap);
+  return n ? s / n : 0;
+}
+
+int vsum(int n, va_list ap) {
+  int s = 0;
+  while (n--)
+    s += va_arg(ap, int);
+  return s;
+}
 #--- main.c
+#include <stdarg.h>
+
 #include "msil_test.h"
 
 int sum(int n, ...);
+double avg(int n, ...);
+int vsum(int n, va_list ap);
+
+static int forward(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  int r = vsum(n, ap);
+  va_end(ap);
+  return r;
+}
+
+int (*volatile sum_ptr)(int, ...) = sum;
 
 int main(void) {
   put_kv("sum(3, 10, 20, 12)", sum(3, 10, 20, 12));
+  put_kv("sum(0)", sum(0));
+  put_kv("sum of ten", sum(10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+  put_kv("avg(4, ...) * 100", (long long)(avg(4, 1.5, 2.25, -0.75, 8.0) * 100));
+  put_kv("forward(5, ...)", forward(5, 100, 200, 300, 400, 500));
+  put_kv("through a pointer", sum_ptr(2, 40, 2));
+  int loop = 0;
+  for (int i = 0; i < 20; ++i)
+    loop += sum(2, i, -1);
+  put_kv("in a loop", loop);
   return 0;
 }

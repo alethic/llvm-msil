@@ -42,6 +42,7 @@
 #include "SymbolTable.h"
 #include "Symbols.h"
 #include "TrailerDefFile.h"
+#include "Variadics.h"
 #include "lld/Common/CommonLinkerContext.h"
 #include "lld/Common/ErrorHandler.h"
 #include "lld/Common/Strings.h"
@@ -58,7 +59,10 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/GlobalAlias.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instruction.h"
+#include "llvm/IR/Instructions.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Metadata.h"
@@ -146,6 +150,30 @@ struct DiscardableCopies {
 };
 } // namespace lld::msil
 
+// The names that the code generator may call (RuntimeLibcalls of the codegen
+// triple), whose definitions MSILLinkHooksPass::restoreDiscardableCopies
+// keeps external.
+static StringSet<> getCodegenNames() {
+  StringSet<> names;
+  for (const char *name : lto::LTO::getRuntimeLibcallSymbols(ctx.arg.target))
+    names.insert(name);
+  return names;
+}
+
+// True if MSILLinkHooksPass::restoreDiscardableCopies makes the definition
+// \p f linkonce_odr again: a prevailing weak_odr definition that no regular
+// object needs (\p discardable, BitcodeCompiler::add's record) and that is
+// not one of \p codegenNames (getCodegenNames), in a link that gives LTO one
+// module (no ThinLTO module, --lto-partitions=1).
+static bool isRestoredDiscardableCopy(const Function &f,
+                                      const DiscardableCopies *discardable,
+                                      const StringSet<> &codegenNames) {
+  return discardable && !discardable->anyThinLTOModule &&
+         ctx.arg.ltoPartitions == 1 && !f.isDeclaration() &&
+         f.hasWeakODRLinkage() && discardable->irNames.contains(f.getName()) &&
+         !codegenNames.contains(f.getName());
+}
+
 namespace {
 /// What the import annotation decided for the merged module (plan 5.10.13).
 /// The analysis runs in lto::Config::PreCodeGenModuleHook, which reports the
@@ -153,11 +181,17 @@ namespace {
 /// error, so that the backend's backstop does not report them again;
 /// MSILLinkHooksPass applies the result to the module.
 struct ImportAnnotation {
-  /// A declaration bound natively: its IR name, module and entry.
+  /// A declaration bound natively: its IR name, module and entry. A variadic
+  /// declaration that code generation expands, bound to its va_list variant
+  /// (plan 5.15.2 rule 2), also has its symbol: it gets "msil-import-name"
+  /// only, and its module goes to a kind-0 operand of !msil.imports, because
+  /// MSILPrepareVariadics takes a declaration with "msil-import-module" for
+  /// an explicit import, which it calls with fixed arity.
   struct Binding {
     std::string irName;
     std::string module;
     std::string entry;
+    std::string variantSymbol = {};
   };
   std::vector<Binding> bindings;
   /// /alternatename: a declaration (IR name) whose uses go to a definition
@@ -182,6 +216,13 @@ struct ImportAnnotation {
   StringMap<PrintedImport> codegenRows;
 };
 
+/// The UCRT stdio option bits of a link (Config::ucrtPrintfBits,
+/// ucrtScanfBits).
+struct UCRTStdioBits {
+  uint64_t printfBits;
+  uint64_t scanfBits;
+};
+
 /// msil-ld's hooks in LTO's code generator (plan 5.9.13), a legacy pass that
 /// lto::Config::PreCodeGenPassesHook adds ahead of the MSIL backend's passes.
 /// It sets module flags of the merged module: "msil-assembly-name" (MDString,
@@ -201,22 +242,27 @@ struct ImportAnnotation {
 /// builds D27's '<msil>Main' (plan 5.9.3), and a given
 /// --msil-reloc-loop-threshold=<n> is the module flag
 /// "msil-reloc-loop-threshold" (i32 <n>, Override), so that the text applies
-/// its data relocations as the PE of the same link does (plan 5.9.10). After
-/// code generation it prints --print-imports. Before it sets the flags, it
-/// makes the prevailing linkonce_odr copies that LTO keeps external although
-/// no regular object needs them linkonce_odr again (restoreDiscardableCopies),
-/// so that the backend drops the unused ones (decision D26).
+/// its data relocations as the PE of the same link does (plan 5.9.10). On
+/// *-windows-msvc-msil it sets the UCRT stdio option bits of the link as the
+/// module flags "msil-ucrt-printf-bits" and "msil-ucrt-scanf-bits" (i64,
+/// Override; plan 5.15.2). After code generation it prints --print-imports.
+/// Before it sets the flags, it makes the prevailing linkonce_odr copies that
+/// LTO keeps external although no regular object needs them linkonce_odr
+/// again (restoreDiscardableCopies), so that the backend drops the unused ones
+/// (decision D26).
 class MSILLinkHooksPass final : public ModulePass {
 public:
   static char ID;
 
   MSILLinkHooksPass(std::string assemblyName, std::string entry,
                     std::optional<uint32_t> relocLoopThreshold,
+                    std::optional<UCRTStdioBits> ucrtStdioBits,
                     std::shared_ptr<const ImportAnnotation> imports,
                     std::shared_ptr<const DiscardableCopies> discardable)
       : ModulePass(ID), assemblyName(std::move(assemblyName)),
         entry(std::move(entry)), relocLoopThreshold(relocLoopThreshold),
-        imports(std::move(imports)), discardable(std::move(discardable)) {}
+        ucrtStdioBits(ucrtStdioBits), imports(std::move(imports)),
+        discardable(std::move(discardable)) {}
 
   StringRef getPassName() const override { return "msil-ld link hooks"; }
 
@@ -242,6 +288,16 @@ public:
     if (relocLoopThreshold)
       m.setModuleFlag(Module::Override, "msil-reloc-loop-threshold",
                       *relocLoopThreshold);
+    // Without the flags the AsmPrinter's module initializer ORs vcruntime's
+    // default UCRT stdio option bits (plan 5.15.2).
+    if (ucrtStdioBits) {
+      m.setModuleFlag(Module::Override, "msil-ucrt-printf-bits",
+                      ConstantInt::get(Type::getInt64Ty(context),
+                                       ucrtStdioBits->printfBits));
+      m.setModuleFlag(Module::Override, "msil-ucrt-scanf-bits",
+                      ConstantInt::get(Type::getInt64Ty(context),
+                                       ucrtStdioBits->scanfBits));
+    }
     if (imports)
       annotate(m);
     return true;
@@ -300,13 +356,9 @@ private:
     if (!discardable || discardable->anyThinLTOModule ||
         ctx.arg.ltoPartitions != 1)
       return;
-    StringSet<> codegenNames;
-    for (const char *name : lto::LTO::getRuntimeLibcallSymbols(ctx.arg.target))
-      codegenNames.insert(name);
+    StringSet<> codegenNames = getCodegenNames();
     for (Function &f : m.functions())
-      if (!f.isDeclaration() && f.hasWeakODRLinkage() &&
-          discardable->irNames.contains(f.getName()) &&
-          !codegenNames.contains(f.getName()))
+      if (isRestoredDiscardableCopy(f, discardable.get(), codegenNames))
         f.setLinkage(GlobalValue::LinkOnceODRLinkage);
   }
 
@@ -332,11 +384,20 @@ private:
       f.removeDeadConstantUsers();
     }
 
+    // A va_list variant binding (rule 6): the entry as "msil-import-name",
+    // which ExpandVariadics' replacement declaration keeps, and the symbol,
+    // module and entry as a kind-0 operand of !msil.imports, from which
+    // MSIL::getLinkedImport takes the import of a declaration without
+    // "msil-import-module".
+    std::vector<std::array<std::string, 3>> variants;
     for (const ImportAnnotation::Binding &b : imports->bindings) {
       Function *f = m.getFunction(b.irName);
       if (!f)
         continue;
-      f->addFnAttr("msil-import-module", b.module);
+      if (b.variantSymbol.empty())
+        f->addFnAttr("msil-import-module", b.module);
+      else
+        variants.push_back({b.variantSymbol, b.module, b.entry});
       f->addFnAttr("msil-import-name", b.entry);
       if (f->hasExternalWeakLinkage())
         f->setLinkage(GlobalValue::ExternalLinkage);
@@ -356,7 +417,8 @@ private:
       decl->eraseFromParent();
     }
 
-    if (imports->libcalls.empty() && imports->dataImports.empty())
+    if (imports->libcalls.empty() && imports->dataImports.empty() &&
+        variants.empty())
       return;
     NamedMDNode *md = m.getOrInsertNamedMetadata("msil.imports");
     Type *i32 = Type::getInt32Ty(context);
@@ -369,6 +431,8 @@ private:
     };
     for (const std::array<std::string, 3> &op : imports->libcalls)
       addOperand(op, 0);
+    for (const std::array<std::string, 3> &op : variants)
+      addOperand(op, 0);
     for (const std::array<std::string, 3> &op : imports->dataImports)
       addOperand(op, 1);
   }
@@ -379,6 +443,8 @@ private:
   /// --lto-emit-asm: the value of --msil-reloc-loop-threshold when it is
   /// given.
   std::optional<uint32_t> relocLoopThreshold;
+  /// *-windows-msvc-msil: the UCRT stdio option bits of the link.
+  std::optional<UCRTStdioBits> ucrtStdioBits;
   std::shared_ptr<const ImportAnnotation> imports;
   std::shared_ptr<const DiscardableCopies> discardable;
 };
@@ -432,27 +498,40 @@ static bool isHiddenSectionBoundaryReference(const GlobalValue &gv,
   return name.starts_with("__start_") || name.starts_with("__stop_");
 }
 
-// True if the output refers to \p gv: a use in a function or variable that
-// the output defines, directly or through constants. An available_externally
-// function or variable is not part of the output (code generation emits
-// none, its symbol is undefined: plan 5.8.10, and MSILLinkHooksPass drops its
-// body or initializer), so the uses in it are not references. A constant
-// that nothing uses counts as a reference, as Value::use_empty() counts it.
-static bool hasLiveUses(const GlobalValue &gv) {
-  SmallPtrSet<const User *, 8> visited;
-  SmallVector<const User *, 8> worklist(gv.users());
+// The function definitions whose bodies code generation never compiles, so
+// that the uses in them are no references: the ones that MSILPrepareIR
+// drops as unreferenced discardable functions (findDroppedFunctions). The
+// available_externally functions are never part of the output either.
+using DroppedFunctions = SmallPtrSet<const Function *, 16>;
+
+// True if the user \p u of a global value is a reference of the output: a
+// use in a function or variable that the output defines, directly or through
+// constants. An available_externally function or variable is not part of
+// the output (code generation emits none, its symbol is undefined: plan
+// 5.8.10, and MSILLinkHooksPass drops its body or initializer), and the
+// backend drops the bodies of \p dropped, so the uses in them are not
+// references. A constant that nothing uses counts as a reference, as
+// Value::use_empty() counts it. \p visited holds the users already seen.
+static bool isLiveUser(const User *start, const DroppedFunctions *dropped,
+                       SmallPtrSetImpl<const User *> &visited) {
+  auto isGone = [&](const Function *f) {
+    return f->hasAvailableExternallyLinkage() ||
+           (dropped && dropped->contains(f));
+  };
+  SmallVector<const User *, 8> worklist = {start};
   while (!worklist.empty()) {
     const User *u = worklist.pop_back_val();
     if (!visited.insert(u).second)
       continue;
     if (const auto *inst = dyn_cast<Instruction>(u)) {
       const Function *f = inst->getFunction();
-      if (!f || !f->hasAvailableExternallyLinkage())
+      if (!f || !isGone(f))
         return true;
       continue;
     }
     if (const auto *g = dyn_cast<GlobalValue>(u)) {
-      if (!g->hasAvailableExternallyLinkage())
+      const auto *f = dyn_cast<Function>(g);
+      if (f ? !isGone(f) : !g->hasAvailableExternallyLinkage())
         return true;
       continue;
     }
@@ -461,6 +540,149 @@ static bool hasLiveUses(const GlobalValue &gv) {
     append_range(worklist, u->users());
   }
   return false;
+}
+
+// True if the output refers to \p gv (isLiveUser).
+static bool hasLiveUses(const GlobalValue &gv,
+                        const DroppedFunctions *dropped = nullptr) {
+  SmallPtrSet<const User *, 8> visited;
+  return any_of(gv.users(),
+                [&](const User *u) { return isLiveUser(u, dropped, visited); });
+}
+
+// True if the output takes the address of the function \p f: a reference
+// (isLiveUser) other than the callee of a call.
+static bool hasLiveAddressUse(const Function &f,
+                              const DroppedFunctions *dropped) {
+  SmallPtrSet<const User *, 8> visited;
+  return any_of(f.uses(), [&](const Use &u) {
+    const auto *call = dyn_cast<CallBase>(u.getUser());
+    if (call && call->isCallee(&u))
+      return false;
+    return isLiveUser(u.getUser(), dropped, visited);
+  });
+}
+
+// MSILPrepareIR's isUsedOutside on the merged module as the backend will see
+// it: true if something other than the body of a function of \p bodies uses
+// \p v, directly or through constants. The bodies and initializers of the
+// available_externally functions and variables, which MSILLinkHooksPass
+// drops before code generation, use nothing.
+static bool isUsedOutside(const Value &v,
+                          const SmallPtrSetImpl<const Function *> &bodies,
+                          SmallPtrSetImpl<const Constant *> &visited) {
+  for (const User *u : v.users()) {
+    if (const auto *inst = dyn_cast<Instruction>(u)) {
+      const Function *f = inst->getFunction();
+      if (!bodies.contains(f) && !f->hasAvailableExternallyLinkage())
+        return true;
+      continue;
+    }
+    if (const auto *g = dyn_cast<Function>(u)) {
+      if (g->hasAvailableExternallyLinkage())
+        continue;
+      if (!bodies.contains(g) || !g->hasPersonalityFn() ||
+          g->getPersonalityFn() != &v)
+        return true;
+      continue;
+    }
+    if (const auto *gv = dyn_cast<GlobalVariable>(u);
+        gv && gv->hasAvailableExternallyLinkage())
+      continue;
+    const auto *c = dyn_cast<Constant>(u);
+    if (!c || isa<GlobalValue>(c))
+      return true;
+    if (visited.insert(c).second && isUsedOutside(*c, bodies, visited))
+      return true;
+  }
+  return false;
+}
+
+// MSILPrepareIR's collectReferencedFunctions: adds to \p refs the functions
+// that the body of \p f refers to, directly or through constants (not
+// through the initializers of global variables), and its personality
+// function.
+static void
+collectReferencedFunctions(const Function &f,
+                           SmallVectorImpl<const Function *> &refs) {
+  SmallPtrSet<const Constant *, 16> visited;
+  SmallVector<const Constant *, 16> worklist;
+  auto add = [&](const Value *v) {
+    if (const auto *c = dyn_cast<Constant>(v); c && visited.insert(c).second)
+      worklist.push_back(c);
+  };
+  for (const Instruction &inst : instructions(f))
+    for (const Use &op : inst.operands())
+      add(op.get());
+  if (f.hasPersonalityFn())
+    add(f.getPersonalityFn());
+  while (!worklist.empty()) {
+    const Constant *c = worklist.pop_back_val();
+    if (const auto *g = dyn_cast<Function>(c))
+      refs.push_back(g);
+    else if (!isa<GlobalValue>(c))
+      for (const Use &op : c->operands())
+        add(op.get());
+  }
+}
+
+// The function definitions of the merged module \p m whose bodies the
+// backend drops as unreferenced discardable functions (decision D26:
+// MSILPrepareIR's dropUnreferencedDiscardableFunctions, by the same
+// reachability over the same candidates, on the module that msil-ld's
+// MSILLinkHooksPass hands it): the linkonce and linkonce_odr definitions,
+// the weak_odr copies that restoreDiscardableCopies makes linkonce_odr again
+// (isRestoredDiscardableCopy with \p discardable), the local definitions in
+// a comdat (the module has the flag msil-lto), and the local definitions
+// that their bodies refer to, directly or through other candidates; a
+// candidate is live when something other than a candidate's body uses it
+// or a live candidate's body refers to it, and the others are dropped. The
+// import analysis runs before code generation, so it must not count the
+// references in those bodies (section 12 row 'M26.d extended (M24 leftover:
+// the import analysis and D26's drop under --lto-emit-asm)').
+static DroppedFunctions
+findDroppedFunctions(const Module &m, const DiscardableCopies *discardable) {
+  StringSet<> codegenNames = getCodegenNames();
+  SmallPtrSet<const Function *, 16> candidates;
+  SmallVector<const Function *, 16> order;
+  for (const Function &f : m)
+    if (!f.isDeclaration() &&
+        (f.hasLinkOnceLinkage() || (f.hasLocalLinkage() && f.hasComdat()) ||
+         isRestoredDiscardableCopy(f, discardable, codegenNames))) {
+      candidates.insert(&f);
+      order.push_back(&f);
+    }
+  for (unsigned i = 0; i != order.size(); ++i) {
+    SmallVector<const Function *, 8> refs;
+    collectReferencedFunctions(*order[i], refs);
+    for (const Function *g : refs)
+      if (!g->isDeclaration() && g->hasLocalLinkage() &&
+          candidates.insert(g).second)
+        order.push_back(g);
+  }
+
+  SmallPtrSet<const Function *, 16> live;
+  SmallVector<const Function *, 16> worklist;
+  for (const Function *f : order) {
+    SmallPtrSet<const Constant *, 8> visited;
+    if (isUsedOutside(*f, candidates, visited)) {
+      live.insert(f);
+      worklist.push_back(f);
+    }
+  }
+  while (!worklist.empty()) {
+    SmallVector<const Function *, 8> refs;
+    collectReferencedFunctions(*worklist.pop_back_val(), refs);
+    for (const Function *g : refs)
+      if (candidates.contains(g) && live.insert(g).second)
+        worklist.push_back(g);
+  }
+
+  DroppedFunctions dropped;
+  for (const Function *f : order)
+    if (!live.contains(f))
+      dropped.insert(f);
+  return dropped;
 }
 
 // True if the unbound declaration \p gv, whose linker name is \p name, keeps
@@ -622,10 +844,10 @@ static const Function *findEnvpConstructor(const Module &m) {
 
 // True if \p m refers to a declaration of the C library's environ, which the
 // import analysis binds natively or reports.
-static bool refersToEnviron(const Module &m) {
-  return any_of(m.globals(), [](const GlobalVariable &gv) {
+static bool refersToEnviron(const Module &m, const DroppedFunctions &dropped) {
+  return any_of(m.globals(), [&](const GlobalVariable &gv) {
     return gv.isDeclarationForLinker() && getSymbolName(gv) == "environ" &&
-           hasLiveUses(gv);
+           hasLiveUses(gv, &dropped);
   });
 }
 
@@ -636,8 +858,34 @@ static bool refersToEnviron(const Module &m) {
 // plan 5.9.14 and 5.10.14 with ">>> referenced by" lines. An
 // available_externally function or variable is a declaration here: the
 // output does not define it (plan 5.8.10), and MSILLinkHooksPass drops its
-// body or initializer.
-static void annotateImports(const Module &m, ImportAnnotation &out) {
+// body or initializer. Neither are the bodies of the discardable functions
+// that the backend drops (findDroppedFunctions, with \p discardable). The
+// variadic declarations that code generation expands (plan 5.15.2) bind to
+// their va_list variants (rule 2, bindVaListVariant); the triple's
+// fixed-arity natives, which MSILPrepareVariadics calls with fixed arity,
+// and explicit imports bind as any function (rule 3); and the address of a
+// natively bound variadic function is rule 4's error.
+static void annotateImports(const Module &m, ImportAnnotation &out,
+                            const DiscardableCopies *discardable) {
+  DroppedFunctions dropped = findDroppedFunctions(m, discardable);
+  // A variadic declaration with a prototype, and one that code generation
+  // expands (ExpandVariadics, plan 5.15.2): not on the fixed-arity list of
+  // the triple's C runtime, which the backend applies without the C runtime
+  // identity of the link (getCRuntime with none), nor fixed-arity by its
+  // attribute; with the conditions of ExpandVariadics' lowering (not naked,
+  // the C calling convention).
+  CRuntime tripleRuntime = getCRuntime(ctx.arg.target, StringRef());
+  auto isVariadic = [](const Function &f) {
+    return f.isVarArg() && !f.isIntrinsic() &&
+           !f.hasFnAttribute("no-prototype");
+  };
+  auto isExpanded = [&](const Function &f, StringRef name) {
+    return isVariadic(f) && !f.hasFnAttribute(Attribute::Naked) &&
+           !f.hasFnAttribute("msil-fixed-arity") &&
+           (f.getCallingConv() == CallingConv::C ||
+            f.getCallingConv() == CallingConv::SPIR_FUNC) &&
+           !isFixedArityFunction(name, tripleRuntime);
+  };
   auto getRow = [](StringRef symbol, StringRef module, StringRef entry,
                    bool isData, const NativeExport *e) -> PrintedImport {
     auto *native = e ? dyn_cast_or_null<NativeLibraryFile>(e->File) : nullptr;
@@ -733,17 +981,20 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
     // defines it in the module (plan 5.14.4 T6).
     if (findOfferedTrailerDef(name))
       continue;
-    bool isUsed = hasLiveUses(f);
+    bool isUsed = hasLiveUses(f, &dropped);
 
     // An explicit import module is used as it is, unchecked (plan 5.10.7),
-    // and exempt from the callback and `long double` checks.
+    // and exempt from the callback and `long double` checks. A variadic one
+    // is called with fixed arity (rule 3), and its address is rule 4's error.
     StringRef module =
         f.getFnAttribute("msil-import-module").getValueAsString();
     StringRef importName =
         f.getFnAttribute("msil-import-name").getValueAsString();
     if (!module.empty()) {
       StringRef entry = importName.empty() ? StringRef(name) : importName;
-      if (isUsed)
+      if (isUsed && isVariadic(f) && hasLiveAddressUse(f, &dropped))
+        symtab->reportReference(getVariadicAddressText(name, module), name);
+      else if (isUsed)
         record(name, module, entry, /*isData=*/false, nullptr);
       else
         recordCodegen(name, module, entry, nullptr);
@@ -773,12 +1024,14 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
     // A declaration that nothing refers to is neither reported nor checked,
     // but the code generator may still call it as a library function, with
     // its attributes, so it is bound quietly when a native library defines it
-    // as a function, unless it is on the callback list or a P/Invoke cannot
-    // pass its `long double`.
+    // as a function, unless it is on the callback list, a P/Invoke cannot
+    // pass its `long double`, or it is a variadic function that code
+    // generation would expand (never a library call).
     if (!isUsed) {
       if (e &&
           (e->Kind == NativeKind::Function || e->Kind == NativeKind::NoType) &&
-          !isListed(isNativeCallbackFunction) && !isListed(isNotPassable)) {
+          !isListed(isNativeCallbackFunction) && !isListed(isNotPassable) &&
+          !isExpanded(f, name)) {
         out.bindings.push_back(
             {f.getName().str(), e->Module.str(), e->Entry.str()});
         recordCodegen(name, e->Module, e->Entry, e);
@@ -826,8 +1079,31 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
                               name);
       continue;
     }
-    out.bindings.push_back(
-        {f.getName().str(), e->Module.str(), e->Entry.str()});
+    // Plan 5.15.2 rule 4: the address of a native variadic function needs
+    // M28's adapter.
+    if (isVariadic(f) && hasLiveAddressUse(f, &dropped)) {
+      symtab->reportReference(getVariadicAddressText(name, e->Module), name);
+      continue;
+    }
+    // Rule 2: an expanded declaration binds to its va_list variant, as
+    // msil-import-name (rule 6), so that the AsmPrinter's P/Invoke keeps the
+    // name and imports the variant ('as "vprintf"'). Its module goes to
+    // !msil.imports, not to "msil-import-module", which would make it an
+    // explicit import that the backend calls with fixed arity
+    // (ImportAnnotation::Binding).
+    if (isExpanded(f, name)) {
+      VaListVariantBinding b = bindVaListVariant(name, *e, ctx);
+      if (!b.Variant) {
+        symtab->reportReference(std::move(b.Error), name);
+        continue;
+      }
+      e = b.Variant;
+      out.bindings.push_back(
+          {f.getName().str(), e->Module.str(), e->Entry.str(), name});
+    } else {
+      out.bindings.push_back(
+          {f.getName().str(), e->Module.str(), e->Entry.str()});
+    }
     record(name, e->Module, e->Entry, /*isData=*/false, e);
   }
 
@@ -836,7 +1112,7 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
   // is, unchecked (plan 5.10.7).
   for (const GlobalVariable &gv : m.globals()) {
     if (!gv.isDeclarationForLinker() || gv.getName().starts_with("llvm.") ||
-        !hasLiveUses(gv))
+        !hasLiveUses(gv, &dropped))
       continue;
     std::string name = getSymbolName(gv);
     if (isSectionBoundary(m, name))
@@ -903,7 +1179,7 @@ static void annotateImports(const Module &m, ImportAnnotation &out) {
   // reads, with the data-import helper below. Without such a definition the
   // link is the PE link's error, and no output is written.
   if (const Function *ctor = findEnvpConstructor(m);
-      ctor && !refersToEnviron(m)) {
+      ctor && !refersToEnviron(m, dropped)) {
     SmallVector<const NativeExport *, 2> rejected;
     const NativeExport *e = ctx.nativeIndex.lookup(
         "environ", rejected, /*isFunctionReference=*/false);
@@ -1049,10 +1325,10 @@ createConfig(std::shared_ptr<const DiscardableCopies> discardable) {
   std::shared_ptr<ImportAnnotation> imports;
   if (ctx.arg.ltoEmitAsm) {
     imports = std::make_shared<ImportAnnotation>();
-    c.PreCodeGenModuleHook = [imports](unsigned, const Module &m) {
+    c.PreCodeGenModuleHook = [imports, discardable](unsigned, const Module &m) {
       size_t errorsBefore = errorCount();
       *imports = ImportAnnotation();
-      annotateImports(m, *imports);
+      annotateImports(m, *imports, discardable.get());
       if (errorCount() == errorsBefore)
         return true;
       // Code generation, and with it MSILLinkHooksPass::doFinalization, does
@@ -1080,12 +1356,24 @@ createConfig(std::shared_ptr<const DiscardableCopies> discardable) {
   std::optional<uint32_t> relocLoopThreshold;
   if (ctx.arg.ltoEmitAsm && ctx.arg.msilRelocLoopThresholdGiven)
     relocLoopThreshold = ctx.arg.msilRelocLoopThreshold;
+  // The UCRT stdio option bits that the module initializer ORs in (plan
+  // 5.15.2) reach the AsmPrinter as the module flags msil-ucrt-printf-bits
+  // and msil-ucrt-scanf-bits, so that the whole-program text sets the bits
+  // that the PE writer sets (O4). The opt-outs come from -l and from every
+  // input's embedded requests, which the driver records as it loads the
+  // inputs, all before compileBitcodeFiles creates this configuration. The
+  // backend reads the flags on windows-msvc only.
+  std::optional<UCRTStdioBits> ucrtStdioBits;
+  if (ctx.arg.target.isWindowsMSVCEnvironment())
+    ucrtStdioBits =
+        UCRTStdioBits{ctx.arg.ucrtPrintfBits(), ctx.arg.ucrtScanfBits()};
   // The copies that the pass may make discardable again are BitcodeCompiler's
   // record of the link, complete once every bitcode input is added.
   c.PreCodeGenPassesHook = [name = getAssemblyName(), entry, relocLoopThreshold,
-                            imports, discardable](legacy::PassManager &pm) {
-    pm.add(new MSILLinkHooksPass(name, entry, relocLoopThreshold, imports,
-                                 discardable));
+                            ucrtStdioBits, imports,
+                            discardable](legacy::PassManager &pm) {
+    pm.add(new MSILLinkHooksPass(name, entry, relocLoopThreshold, ucrtStdioBits,
+                                 imports, discardable));
   };
 
   if (ctx.arg.saveTemps)
@@ -1153,11 +1441,54 @@ BitcodeCompiler::BitcodeCompiler()
 
 BitcodeCompiler::~BitcodeCompiler() = default;
 
+// The IR names of the dllexport definitions of the bitcode input \p obj.
+// irsymtab has no dllexport bit (it writes /EXPORT: linker options only for
+// the COFF object format), so the modules are read lazily: their global
+// values with their DLL storage classes, without function bodies. A module
+// that cannot be read gives none (LTO reports it).
+static StringSet<> getDLLExportNames(const lto::InputFile &obj) {
+  StringSet<> names;
+  Expected<std::vector<BitcodeModule>> mods =
+      getBitcodeModuleList(obj.getFileBuffer());
+  if (!mods) {
+    consumeError(mods.takeError());
+    return names;
+  }
+  for (BitcodeModule &bm : *mods) {
+    LLVMContext context;
+    Expected<std::unique_ptr<Module>> m =
+        bm.getLazyModule(context, /*ShouldLazyLoadMetadata=*/true,
+                         /*IsImporting=*/false);
+    if (!m) {
+      consumeError(m.takeError());
+      continue;
+    }
+    for (const GlobalValue &gv : (*m)->global_values())
+      if (gv.hasDLLExportStorageClass() && !gv.isDeclaration())
+        names.insert(gv.getName());
+  }
+  return names;
+}
+
+// The UCRT's inline functions that return the address of its printf and
+// scanf options words (plan 5.15.2, 'Startup options').
+static bool isUCRTStdioOptionsFunction(StringRef name) {
+  return name == "__local_stdio_printf_options" ||
+         name == "__local_stdio_scanf_options";
+}
+
 void BitcodeCompiler::add(BitcodeFile &f) {
   lto::InputFile &obj = *f.obj;
   unsigned symNum = 0;
   ArrayRef<Symbol *> syms = f.getSymbols();
   std::vector<lto::SymbolResolution> resols(syms.size());
+  // The IR names of the file's dllexport definitions, read on first use.
+  std::optional<StringSet<>> dllExports;
+  auto isDLLExport = [&](StringRef irName) {
+    if (!dllExports)
+      dllExports = getDLLExportNames(obj);
+    return dllExports->contains(irName);
+  };
 
   // Provide a resolution to the LTO API for each symbol.
   for (const lto::InputFile::Symbol &objSym : obj.symbols()) {
@@ -1190,12 +1521,31 @@ void BitcodeCompiler::add(BitcodeFile &f) {
     // __msil_compiler_barrier), as LTO keeps the names of RuntimeLibcalls
     // external: the program's definition then wins over '<trailer>' in the
     // image and in --lto-emit-asm text, as an object's does (T5).
+    // On Windows triples a definition in a COMDAT that is not dllexport
+    // (the inline functions and selectany variables of headers, such as the
+    // UCRT's sprintf) is never an export candidate, as Exports.cpp's
+    // selection decides for CIL objects (section 12 rows 'Q22 as
+    // implemented' and 'M26.d extended (M24 leftover: unused inline COMDAT
+    // copies in -shared LTO links)'), so that LTO and the backend drop the
+    // unused copies. On windows-msvc links the definitions of
+    // __local_stdio_printf_options and __local_stdio_scanf_options (the
+    // UCRT's inline functions, which only bitcode defines and calls) stay
+    // too, so that msil-ld's startup options find them and the optimizer
+    // cannot fold the reads of the options words (plan 5.9.13 as amended for
+    // M26, 5.15.2's startup options); they stay COMDAT copies, which -shared
+    // never exports.
+    bool exportCandidate =
+        ctx.arg.shared && r.Prevailing && mayBeExported(*sym) &&
+        !(ctx.arg.target.isOSWindows() && objSym.getComdatIndex() >= 0 &&
+          !isDLLExport(objSym.getIRName()));
     r.VisibleToRegularObj =
         sym->isUsedInRegularObj || sym->isNoStrip() ||
         (!objSym.getSectionName().empty() &&
          usedStartStop.contains(objSym.getSectionName())) ||
         (r.Prevailing && findOfferedTrailerDef(sym->getName())) ||
-        (ctx.arg.shared && r.Prevailing && mayBeExported(*sym));
+        exportCandidate ||
+        (r.Prevailing && ctx.arg.target.isWindowsMSVCEnvironment() &&
+         isUCRTStdioOptionsFunction(sym->getName()));
     // The prevailing definitions that no regular object needs: the copies
     // among them that LTO keeps external may become discardable again
     // (MSILLinkHooksPass::restoreDiscardableCopies).
@@ -1254,7 +1604,7 @@ SmallVector<InputFile *, 0> BitcodeCompiler::compile() {
   // reports them before LTO runs. Like lld's writers, msil-ld writes no
   // output after an error (msil-ld's import analysis reports unresolved
   // references and skips code generation; the backend reports errors found
-  // during code generation, such as calls of native variadic functions), and
+  // during code generation, such as a VLA in a loop), and
   // the runs of LLD_IN_TEST that print nothing do not write standard output.
   if (ctx.arg.ltoEmitAsm) {
     assert(maxTasks == 1 && "ThinLTO and LTO partitions need CIL objects");

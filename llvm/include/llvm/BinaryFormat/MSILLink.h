@@ -16,7 +16,8 @@
 // are in llvm/CLI/LinkInfo.h.
 //
 // The record is specified field by field in section 5.8.8 of
-// llvm/docs/MSIL/ImplementationPlan.md, and versioned by its section 5.8.9.
+// llvm/docs/MSIL/ImplementationPlan.md, and versioned by its sections 5.8.9
+// and 5.14.7; the minor versions of phase 3 are its 5.14.8-5.14.10.
 // The comments below name the 5.8.8 table that each declaration implements
 // and the rule it follows. The layout follows WebAssembly's "linking" section
 // (llvm/BinaryFormat/Wasm.h) and the ELF gABI.
@@ -44,8 +45,12 @@ inline constexpr char Magic[4] = {'M', 'S', 'L', 'K'};
 
 /// Header table, fields Major and Minor. A reader refuses another major
 /// version; a minor version only adds subsection kinds, flag bits and enum
-/// values within major 1 (5.8.9).
-inline constexpr uint8_t MajorVersion = 1, MinorVersion = 0;
+/// values within major 1 (5.8.9). MinorVersion is the highest minor version
+/// this toolchain understands (5.14.7 V3): 1 adds CallFlags FixedArity.
+/// Writers write the lowest minor version that covers the items of their
+/// record (cli::getRequiredMinorVersion, llvm/CLI/LinkInfo.h), so a record
+/// without a phase 3 item stays v1.0.
+inline constexpr uint8_t MajorVersion = 1, MinorVersion = 1;
 
 /// Header table, field ABIVersion: the version of the internal calling
 /// convention (aggregates passed indirectly, sret first, phase 3's variadic
@@ -196,19 +201,33 @@ enum class ComdatMemberKind : uint8_t { FunctionSymbol = 0, Segment = 1 };
 /// INIT_FINI, field Kind: an llvm.global_ctors or an llvm.global_dtors entry.
 enum class InitKind : uint8_t { Init = 0, Fini = 1 };
 
-/// SIGNATURES, field CallFlags (C7): NoPrototype, VarArg, Sret and
-/// NativeIncompatible. Phase 2 writers never set VarArg. NativeIncompatible is
+/// SIGNATURES, field CallFlags (C7): NoPrototype, VarArg, Sret,
+/// NativeIncompatible and, from v1.1, FixedArity.
+///
+/// VarArg marks a variadic function expanded over a va_list: its IL signature
+/// is its fixed parameters followed by the native int va_list, and
+/// SignatureInfo::FixedParams counts the IL parameters before the va_list (a
+/// hidden sret pointer included). NativeIncompatible is
 /// set on the entry of a definition or reference whose IR function type has a
 /// non-void result, or a parameter, that is not a native scalar (an integer of
 /// at most 64 bits, a pointer, float or double): a result returned through a
 /// hidden pointer such as { i64, i64 }, integers wider than 64 bits, vectors,
 /// half, bfloat and aggregates. msil-ld refuses to bind such a symbol to a
 /// native function (P/Invoke) until phase 3.
+///
+/// FixedArity (v1.1, 5.14.8) marks the entry of an undefined function's
+/// method MemberRef on '<msil>Symbols', or of an import stub, whose variadic
+/// call the backend rewrote into a non-variadic call with the call-site
+/// signature, because the callee is on the triple's fixed-arity list;
+/// SignatureInfo::FixedParams is the declaration's number of named
+/// parameters. Constraints (C8): FixedArity never with VarArg, never on a
+/// definition's entry, and only in a record of minor version 1 or later.
 enum CallFlags : uint32_t {
   NoPrototype = 0x1,
   VarArg = 0x2,
   Sret = 0x4,
-  NativeIncompatible = 0x8
+  NativeIncompatible = 0x8,
+  FixedArity = 0x10
 };
 
 /// LINKER_OPTIONS, field Kind: an llvm.dependent-libraries entry (one string)
@@ -224,8 +243,10 @@ enum HeaderFlags : uint32_t { HasDebugInfo = 0x1 };
 /// not; Phase 2 defines none of either. PointerSize, LongSize, WCharSize and
 /// LongDoubleSize are the DataModel, set by setDataModel(). ABIVersion, the
 /// ABIFlags and the DataModel must be equal across all inputs of a link.
+/// Minor defaults to 0: a writer raises it to cli::getRequiredMinorVersion of
+/// its record (5.14.7 V3).
 struct Header {
-  uint8_t Major = MajorVersion, Minor = MinorVersion;
+  uint8_t Major = MajorVersion, Minor = 0;
   uint32_t Flags = 0;
   std::string Triple;
   uint32_t ABIVersion = ToolchainABIVersion;
@@ -310,9 +331,10 @@ struct ByvalParam {
 };
 
 /// SIGNATURES: the call-site flags of one MethodDef or method MemberRef
-/// (C7). FixedParams is present for VarArg only, SretSize and SretAlignLog2 for
-/// Sret only. A token without an entry is prototyped, not variadic, has no
-/// sret or byval parameter and passes only native scalars.
+/// (C7). FixedParams is present for VarArg or FixedArity (5.14.8), SretSize
+/// and SretAlignLog2 for Sret only. A token without an entry is prototyped,
+/// not variadic, has no sret or byval parameter and passes only native
+/// scalars.
 struct SignatureInfo {
   uint32_t Token;
   uint32_t Flags = 0;

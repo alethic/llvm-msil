@@ -37,8 +37,9 @@ template <typename E> constexpr uint64_t val(E V) {
   return static_cast<uint64_t>(V);
 }
 
-// 5.8.8 Header: Magic "MSLK" (4D 53 4C 4B), Major 1, Minor 0, and the
-// toolchain ABI version 1 (5.8.9: it changes only with a section 12 row).
+// 5.8.8 Header: Magic "MSLK" (4D 53 4C 4B), Major 1, Minor 1 (M26, plan
+// 5.14.7 V3 and 5.14.11, made the minor version 1: CallFlags FixedArity), and
+// the toolchain ABI version 1 (5.8.9: it changes only with a section 12 row).
 TEST(CLIMSILLinkTest, MagicAndVersions) {
   static_assert(sizeof(Magic) == 4, "the magic is four bytes, no NUL");
   const uint8_t Expected[4] = {0x4D, 0x53, 0x4C, 0x4B};
@@ -53,7 +54,7 @@ TEST(CLIMSILLinkTest, MagicAndVersions) {
       std::is_same_v<std::remove_cv_t<decltype(MinorVersion)>, uint8_t>,
       "Minor is a u8");
   EXPECT_EQ(MajorVersion, 1u);
-  EXPECT_EQ(MinorVersion, 0u);
+  EXPECT_EQ(MinorVersion, 1u);
   EXPECT_EQ(ToolchainABIVersion, 1u);
 }
 
@@ -224,6 +225,7 @@ TEST(CLIMSILLinkTest, RecordEnums) {
   EXPECT_EQ(val(VarArg), 0x2u);
   EXPECT_EQ(val(Sret), 0x4u);
   EXPECT_EQ(val(NativeIncompatible), 0x8u);
+  EXPECT_EQ(val(FixedArity), 0x10u);
 
   static_assert(
       std::is_same_v<std::underlying_type_t<LinkerOptionKind>, uint8_t>,

@@ -276,7 +276,8 @@ SpecEncoder encodeSpec(const Record &R) {
       P.mark("signature " + std::to_string(&S - R.Signatures.data()));
       P.u32(S.Token);
       P.uleb(S.Flags);
-      if (S.Flags & VarArg)
+      // FixedParams: VARARG (v1.0) or FIXED_ARITY (v1.1; 5.14.8).
+      if (S.Flags & (VarArg | FixedArity))
         P.uleb(S.FixedParams);
       if (S.Flags & Sret) {
         P.uleb(S.SretSize);
@@ -997,9 +998,11 @@ TEST(CLILinkInfoTest, UnknownFlagsAndEnumValues) {
       {"init kind 2",
        [](Record &R) { R.Inits[0].Kind = static_cast<InitKind>(2); },
        {"init kind 2"}},
-      {"call flag 0x10",
-       [](Record &R) { R.Signatures[0].Flags |= 0x10; },
-       {"call flag", "0x10"}},
+      // 0x10 is FIXED_ARITY (v1.1) and 0x20 is reserved for AGGREGATE (v1.3;
+      // 5.14.7): 0x40 stays unknown.
+      {"call flag 0x40",
+       [](Record &R) { R.Signatures[0].Flags |= 0x40; },
+       {"call flag", "0x40"}},
       {"linker option kind 2",
        [](Record &R) {
          R.LinkerOptions[0].Kind = static_cast<LinkerOptionKind>(2);
@@ -1411,6 +1414,156 @@ TEST(CLILinkInfoTest, C8ComdatsInitsAndSignatures) {
        {"0x06000001", "entry 0"}},
   };
   expectC8Errors(Cases);
+}
+
+//===----------------------------------------------------------------------===//
+// Record v1.1: FIXED_ARITY (5.14.7, 5.14.8; M26)
+//===----------------------------------------------------------------------===//
+
+// baseRecord plus a FIXED_ARITY reference: the MemberRef of an undefined
+// function whose call MSILPrepareVariadics rewrote, with two named parameters.
+Record fixedArityRecord() {
+  Record R = baseRecord();
+  R.Hdr.Minor = 1;
+  SignatureInfo S = sig(memberRef(1), FixedArity);
+  S.FixedParams = 2;
+  R.Signatures.push_back(S);
+  return R;
+}
+
+// V3: the highest minor this toolchain understands, and the default minor of
+// a header that no writer has raised.
+TEST(CLILinkInfoTest, FixedArityVersionConstants) {
+  EXPECT_EQ(static_cast<unsigned>(MSILLink::MajorVersion), 1u);
+  EXPECT_EQ(static_cast<unsigned>(MSILLink::MinorVersion), 1u);
+  EXPECT_EQ(static_cast<unsigned>(MSILLink::Header().Minor), 0u);
+  EXPECT_EQ(static_cast<unsigned>(Record().Hdr.Minor), 0u);
+  EXPECT_EQ(static_cast<uint32_t>(FixedArity), 0x10u);
+}
+
+// V3: 0 for a record without a Phase 3 item (VARARG is a v1.0 item), 1 with
+// FIXED_ARITY on any entry; the header's own minor does not count.
+TEST(CLILinkInfoTest, RequiredMinorVersion) {
+  auto Req = [](const Record &R) {
+    return static_cast<unsigned>(getRequiredMinorVersion(R));
+  };
+  EXPECT_EQ(Req(Record()), 0u);
+  EXPECT_EQ(Req(baseRecord()), 0u);
+  EXPECT_EQ(Req(fullRecord()), 0u);
+  Record VarArgOnly = baseRecord();
+  SignatureInfo V = sig(memberRef(1), VarArg);
+  V.FixedParams = 1;
+  VarArgOnly.Signatures.push_back(V);
+  EXPECT_EQ(Req(VarArgOnly), 0u);
+  EXPECT_EQ(Req(fixedArityRecord()), 1u);
+  Record Raised = baseRecord();
+  Raised.Hdr.Minor = 3;
+  EXPECT_EQ(Req(Raised), 0u);
+  Record First = fixedArityRecord();
+  First.Hdr.Minor = 0;
+  std::swap(First.Signatures.front(), First.Signatures.back());
+  EXPECT_EQ(Req(First), 1u);
+}
+
+// The v1.1 entry: Token, Flags 0x10, then FixedParams (5.14.8: present for
+// VARARG or FIXED_ARITY), then the byval count.
+TEST(CLILinkInfoTest, FixedArityRoundTrips) {
+  Record R = fixedArityRecord();
+  SpecEncoder E = encodeSpec(R);
+  ASSERT_GT(E.Out.size(), 5u);
+  EXPECT_EQ(E.Out[5], 1u); // Minor
+  const uint8_t Entry[] = {0x01, 0x00, 0x00, 0x0A, 0x10, 0x02, 0x00};
+  EXPECT_EQ(ArrayRef<uint8_t>(E.Out).slice(E.at("signature 1"), sizeof(Entry)),
+            ArrayRef<uint8_t>(Entry));
+  ByteVec Bytes = encodeLib(R);
+  EXPECT_EQ(Bytes, E.Out);
+  Record D = decodeOK(Bytes);
+  expectSameRecord(D, R);
+  ASSERT_EQ(D.Signatures.size(), 2u);
+  EXPECT_EQ(D.Signatures[1].Flags, static_cast<uint32_t>(FixedArity));
+  EXPECT_EQ(D.Signatures[1].FixedParams, 2u);
+  EXPECT_EQ(encodeLib(D), Bytes);
+
+  // FixedParams 0 (no named parameter), and an import stub: a MethodDef that
+  // no symbol defines.
+  Record Z = fixedArityRecord();
+  Z.Signatures[1].FixedParams = 0;
+  SignatureInfo Stub = sig(method(7), FixedArity);
+  Stub.FixedParams = 1;
+  Z.Signatures.push_back(Stub);
+  EXPECT_EQ(encodeLib(Z), encodeSpec(Z).Out);
+  expectSameRecord(decodeOK(encodeLib(Z)), Z);
+
+  // A later minor carries FIXED_ARITY too (V4: readers mix minors).
+  Record L = fixedArityRecord();
+  L.Hdr.Minor = 3;
+  Record DL = decodeOK(encodeSpec(L).Out);
+  EXPECT_EQ(DL.Hdr.Minor, 3);
+  expectSameRecord(DL, L);
+}
+
+// V4: an item whose minor exceeds the header's is a C8 error with its own
+// text, not 5.8.9's unknown-feature message.
+TEST(CLILinkInfoTest, FixedArityInAV10Record) {
+  Record R = fixedArityRecord();
+  R.Hdr.Minor = 0;
+  std::string Msg = decodeError(encodeSpec(R).Out);
+  EXPECT_THAT(Msg, StartsWith(RecordPrefix));
+  EXPECT_THAT(Msg, HasSubstr("v1.0 record uses FIXED_ARITY of v1.1"));
+  EXPECT_FALSE(StringRef(Msg).ends_with(FeatureSuffix)) << Msg;
+  EXPECT_FALSE(StringRef(Msg).contains('\n')) << Msg;
+}
+
+// C8 (5.14.8): FIXED_ARITY never with VARARG, and never on a definition's
+// entry (the method of a defined FUNCTION symbol).
+TEST(CLILinkInfoTest, C8FixedArity) {
+  C8Case Cases[] = {
+      {"FIXED_ARITY with VARARG",
+       [](Record &R) {
+         R.Hdr.Minor = 1;
+         SignatureInfo S = sig(memberRef(1), FixedArity | VarArg);
+         S.FixedParams = 1;
+         R.Signatures.push_back(S);
+       },
+       "signature 1",
+       {"FIXED_ARITY", "VARARG"}},
+      {"FIXED_ARITY on a definition",
+       [](Record &R) {
+         R.Hdr.Minor = 1;
+         R.Signatures[0].Flags = FixedArity;
+         R.Signatures[0].FixedParams = 1;
+       },
+       "signature 0",
+       {"FIXED_ARITY"}},
+  };
+  expectC8Errors(Cases);
+  // Refused under a later minor too.
+  Record R = fixedArityRecord();
+  R.Hdr.Minor = 3;
+  R.Signatures[1].Flags |= VarArg;
+  SpecEncoder E = encodeSpec(R);
+  expectRecordError(decodeError(E.Out), E.at("signature 1"),
+                    {"FIXED_ARITY", "VARARG"});
+}
+
+// A record without FIXED_ARITY stays v1.0, byte for byte as Phase 2 wrote it.
+TEST(CLILinkInfoTest, RecordsWithoutFixedArityStayV10) {
+  for (const Record &R : {baseRecord(), fullRecord()}) {
+    ByteVec Bytes = encodeLib(R);
+    EXPECT_EQ(Bytes, encodeSpec(R).Out);
+    ASSERT_GT(Bytes.size(), 5u);
+    EXPECT_EQ(Bytes[4], 1u);
+    EXPECT_EQ(Bytes[5], 0u);
+    EXPECT_EQ(decodeOK(Bytes).Hdr.Minor, 0);
+    EXPECT_THAT(headerLine(R), StartsWith("LinkInfo v1.0 "));
+  }
+  // Dropping the FIXED_ARITY entry and taking the required minor gives
+  // baseRecord's bytes again.
+  Record R = fixedArityRecord();
+  R.Signatures.pop_back();
+  R.Hdr.Minor = getRequiredMinorVersion(R);
+  EXPECT_EQ(R.Hdr.Minor, 0);
+  EXPECT_EQ(encodeLib(R), encodeLib(baseRecord()));
 }
 
 //===----------------------------------------------------------------------===//
@@ -2651,6 +2804,31 @@ TEST(CLILinkInfoTest, PrintsEntityNamesWithAReader) {
   Got = printLines(R);
   ASSERT_EQ(Got.size(), 2u);
   EXPECT_EQ(Got[1], "Signature 0x0A000002 NO_PROTOTYPE byval=1:12:4");
+}
+
+// 5.14.8: ` FIXED_ARITY fixed=<n>` where ` VARARG fixed=<n>` is printed, on a
+// v1.1 header line.
+TEST(CLILinkInfoTest, PrintsFixedArity) {
+  Record R = fixedArityRecord();
+  SignatureInfo V = sig(memberRef(2), VarArg);
+  V.FixedParams = 1;
+  R.Signatures.push_back(V);
+  std::vector<std::string> Got = printLines(R);
+  ASSERT_FALSE(Got.empty());
+  EXPECT_EQ(Got[0], "LinkInfo v1.1 triple=x86_64-unknown-linux-gnu-msil abi=1 "
+                    "abiflags=0x0 features=0x0 datamodel=8,8,4,8");
+  expectLinesInOrder(Got, {"Signature 0x06000001 NO_PROTOTYPE",
+                           "Signature 0x0A000001 FIXED_ARITY fixed=2",
+                           "Signature 0x0A000002 VARARG fixed=1",
+                           "LinkerOption DEPENDENT_LIB 'm'"});
+  for (const std::string &L : Got)
+    EXPECT_FALSE(StringRef(L).contains("VARARG") &&
+                 StringRef(L).contains("FIXED_ARITY"))
+        << L;
+  // FixedParams 0 is printed too.
+  R.Signatures[1].FixedParams = 0;
+  expectLinesInOrder(printLines(R),
+                     {"Signature 0x0A000001 FIXED_ARITY fixed=0"});
 }
 
 } // namespace

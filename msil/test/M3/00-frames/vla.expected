@@ -1,0 +1,26 @@
+squares(1)=0
+squares(10)=285
+squares(1000)=332833500
+squares(30000)=8999550005000
+matrix(5, 3)=4013072
+matrix(17, 40)=164834880
+cells(3)=3348
+cells(100)=122406
+aligned64(5)=100010
+aligned64(200)=101468
+aligned256(9)=100033
+aligned256(1000)=103006
+several(1)=2
+several(25)=-250
+nested(4, 0)=55
+nested(6, 5)=348
+param(3, 4)=181603
+param(9, 13)=7865209
+recurse(0)=0
+recurse(40)=241080
+big(200000)=3
+wide_size(7)=253
+wide_size(4000)=1538641
+empty(0)=1
+released=6000
+[exit 0]

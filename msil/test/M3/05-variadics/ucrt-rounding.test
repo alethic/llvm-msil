@@ -1,0 +1,44 @@
+# The UCRT's printf options: the module initializer sets the default bits of the per-program options words (standard rounding, legacy wide specifiers), so %.Nf, %e and %g round exactly representable halves as native code does.
+# UCRT's <stdio.h> defines __local_stdio_printf_options and
+# __local_stdio_scanf_options as inline functions returning one options word
+# per program, which every inline printf and scanf call reads; the native
+# CRT start-up ORs in the default bits (0x24: LEGACY_WIDE_SPECIFIERS |
+# STANDARD_ROUNDING; scanf 0x2) before any C code runs, and MSIL programs
+# have no CRT start-up, so the toolchain does it in the module initializer
+# when the program defines the two functions (plan 5.15.2 'Startup options',
+# hosted-libc recon 5.3, probes/crtw.c). Without it the UCRT rounds halves
+# away from zero: %.0f of 0.5 and 2.5 gives 1 and 3 instead of 0 and 2. The
+# first line prints both words on windows-msvc triples only (they exist only
+# in the UCRT, so the Linux transcript, .linux.expected, lacks it); the
+# rounding lines go through printf, sprintf, snprintf and fprintf, the
+# UCRT's inline functions on windows-msvc and glibc's (through their va_list
+# variants) on Linux triples, whose rounding is the standard one. The
+# program includes <stdio.h> and calls no helper-archive member, so it has
+# --lto-emit-asm text: the gate also runs it with msil_pipeline=lto and O4,
+# where the bits must survive LTO (msil-ld keeps both definitions visible on
+# windows-msvc links) and the linked text's initializer must equal the
+# image's. Plan 5.15.2, 5.17.13 (M26, M3/05-variadics).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/rounding.c
+# RUN: %{msil_prog}
+#--- rounding.c
+#define _CRT_SECURE_NO_WARNINGS
+#include <stdio.h>
+
+int main(void) {
+#ifdef _WIN32
+  printf("printf options 0x%llx, scanf options 0x%llx\n",
+         *__local_stdio_printf_options(), *__local_stdio_scanf_options());
+#endif
+  printf("%%.0f: %.0f %.0f %.0f %.0f %.0f %.0f\n", 0.5, 1.5, 2.5, 3.5, -0.5, -2.5);
+  printf("%%.1f: %.1f %.1f %.1f\n", 0.25, 0.75, 1.25);
+  printf("%%.2f: %.2f %.2f %.2f\n", 0.125, 0.375, 123456789.125);
+  printf("%%e and %%g: %.0e %.1e %.1g %.2g\n", 2.5, 0.125, 2.5, 0.125);
+  char b[96];
+  int n = sprintf(b, "%.0f|%.1f|%.2f", 2.5, 0.25, 0.125);
+  printf("sprintf %d [%s]\n", n, b);
+  n = snprintf(b, sizeof b, "%.0f|%.1f|%.2f", 0.5, 0.75, 0.375);
+  printf("snprintf %d [%s]\n", n, b);
+  fprintf(stdout, "fprintf %.0f %.0f\n", 4.5, 5.5);
+  return 0;
+}

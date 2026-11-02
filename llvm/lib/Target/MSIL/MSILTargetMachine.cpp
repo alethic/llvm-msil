@@ -38,6 +38,7 @@
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Target/TargetOptions.h"
+#include "llvm/Transforms/IPO/ExpandVariadics.h"
 #include "llvm/Transforms/Utils.h"
 #include <optional>
 
@@ -58,6 +59,8 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeMSILTarget() {
   initializeMSILPrepareIRLegacyPass(PR);
   initializeMSILAddMissingPrototypesLegacyPass(PR);
   initializeMSILFixFunctionBitcastsLegacyPass(PR);
+  initializeMSILPrepareVariadicsLegacyPass(PR);
+  initializeMSILLowerDynamicAllocaLegacyPass(PR);
   initializeMSILOptimizeReturnedLegacyPass(PR);
   initializeMSILDAGToDAGISelLegacyPass(PR);
   initializeMSILArgumentMoveLegacyPass(PR);
@@ -280,42 +283,73 @@ FunctionPass *MSILPassConfig::createTargetRegisterAllocator(bool) {
 //===----------------------------------------------------------------------===//
 
 void MSILPassConfig::addIRPasses() {
-  // Diagnose the IR that MSIL cannot compile, and neutralize it so that no
+  // The canonical IR pass order (plan 5.13.6). Each slot is fixed; a pass that
+  // a later milestone adds goes into its slot and nowhere else:
+  //   P0  hooks in MSILPrepareIRLegacy::doInitialization, the one place where
+  //       MSIL code runs before ExpandIRInsts
+  //   P1  MSILPrepareIR
+  //   P2  MSILAddMissingPrototypes
+  //   P3  LowerInvoke
+  //   P4  UnreachableBlockElim
+  //   P5  MSILFixFunctionBitcasts
+  //   P6  MSILPrepareVariadics
+  //   P7  ExpandVariadics (Lowering mode, MSIL ABIs)
+  //   P8  MSILLowerSjLj (reserved, M27)
+  //   P9  MSILLowerDynamicAlloca
+  //   P10 MSILLowerThreadLocal (reserved, M31)
+  //   P11 MSILLowerIndirectCalls (reserved, M28)
+  //   P12 MSILOptimizeReturned (-O1 and above)
+  //   P13 IndirectBrExpand
+  //   P14 TargetPassConfig::addIRPasses
+  // The passes of P6-P11 run at every optimization level.
+
+  // P1: diagnose the IR that MSIL cannot compile, and neutralize it so that no
   // later pass meets it. This runs first.
   addPass(createMSILPrepareIRLegacyPass());
 
-  // Add signatures to prototype-less function declarations.
+  // P2: add signatures to prototype-less function declarations.
   addPass(createMSILAddMissingPrototypesLegacyPass());
 
-  // Fix function bitcasts, as CIL requires caller and callee signatures to
-  // match.
-  addPass(createMSILFixFunctionBitcastsLegacyPass());
-
-  // Optimize "returned" function attributes.
-  if (getOptLevel() != CodeGenOptLevel::None)
-    addPass(createMSILOptimizeReturnedLegacyPass());
-
-  // There is no exception model: lower invokes into calls and delete the
-  // unreachable landing pads, here, after the MSIL IR passes above and before
-  // IndirectBrExpand and the generic IR passes that
-  // TargetPassConfig::addIRPasses adds; addPassesToHandleExceptions adds
-  // nothing.
+  // P3, P4: there is no exception model: lower invokes into calls and delete
+  // the unreachable landing pads, before the MSIL passes below see the calls;
+  // addPassesToHandleExceptions adds nothing.
   addPass(createLowerInvokePass());
   addPass(createUnreachableBlockEliminationPass());
 
-  // Expand indirectbr instructions to switches: CIL cannot take the address
-  // of a label.
+  // P5: fix function bitcasts, as CIL requires caller and callee signatures to
+  // match.
+  addPass(createMSILFixFunctionBitcastsLegacyPass());
+
+  // P6: mark the variadic functions that P7 expands, and turn calls of the
+  // C runtime's fixed-arity natives into calls with one signature per call
+  // site.
+  addPass(createMSILPrepareVariadicsLegacyPass());
+
+  // P7: lower variadic definitions and calls over a native-layout va_list.
+  addPass(createExpandVariadicsPass(ExpandVariadicsMode::Lowering));
+
+  // P9: keep each dynamic alloca that lies on no CFG cycle for a mid-function
+  // localloc, and diagnose the others.
+  addPass(createMSILLowerDynamicAllocaLegacyPass());
+
+  // P12: optimize "returned" function attributes.
+  if (getOptLevel() != CodeGenOptLevel::None)
+    addPass(createMSILOptimizeReturnedLegacyPass());
+
+  // P13: expand indirectbr instructions to switches: CIL cannot take the
+  // address of a label.
   addPass(createIndirectBrExpandPass(getOptLevel()));
 
+  // P14.
   TargetPassConfig::addIRPasses();
 }
 
 void MSILPassConfig::addPassesToHandleExceptions() {
   // The exception model is always None (decision D8), and addIRPasses has
   // already lowered every invoke into a call and removed the landing pads
-  // that became unreachable, after the MSIL IR passes and before
-  // IndirectBrExpand and the generic IR passes that
-  // TargetPassConfig::addIRPasses adds.
+  // that became unreachable (slots P3 and P4), after MSILPrepareIR and
+  // MSILAddMissingPrototypes and before the other MSIL IR passes and the
+  // generic IR passes that TargetPassConfig::addIRPasses adds.
   // TargetPassConfig would add LowerInvoke and UnreachableBlockElim a second
   // time, after CodeGenPrepare.
   assert(none_of(NativeExceptionModels,

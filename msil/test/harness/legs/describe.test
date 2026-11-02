@@ -12,16 +12,36 @@
 # $p3Tests is what 'check-matrix.py --p3-tests' prints (M24.o's
 # strict-i128.c): p3-full and wsl-p3's run 1 carry every one of those paths,
 # and the --filter-out of net-core and of wsl-p3's run 2 ($p3Out) matches
-# exactly those tests' full lit names, metacharacters escaped. (2) What
-# -Describe shows is what the runs pass: -Leg net-core, p3-full and wsl-p3
-# pass exactly the paths, params and lit arguments of their runs, and
-# -Run 2 runs wsl-p3's second run alone, in a row named 'wsl-p3 (run 2)'.
+# exactly those tests' full lit names, metacharacters escaped. The M26 rows
+# (plan 5.17.6): $checkMsil (net8 and net-core) holds
+# clang/test/Sema/msil-long-double-format.c and
+# llvm/test/Transforms/ExpandVariadics/msil-abi.ll; the hosted programs are
+# the directories of msil/test/Programs/{zlib-full,lua,sqlite} that exist
+# (zlib-full from M26); programs-hosted and programs-hosted-wsl (Quick) run
+# exactly them under obj at -O2 with msil_also_run=10+tc0 (Windows: .NET
+# 10, the Framework, native oracle required; WSL: .NET 10 with E7h);
+# programs and programs-lto run the nine programs and the hosted ones with
+# msil_also_run=10,10+tc0, programs-wsl and programs-lto-wsl with 8,10+tc0
+# and E7h; det and det-wsl run msil/test/Programs/det, which holds each
+# hosted program's det test, det-wsl with msil_glibc_sysroot; ctest,
+# ctest-wsl and ctest-lto run the whole c-testsuite directory, unfiltered,
+# with both of its lists, and ctest-lto (tag Exit) runs it under lto on
+# .NET 10 against the native oracle, prog_pipeline lto. (2) What -Describe
+# shows is what the runs pass: -Leg net-core, p3-full, wsl-p3, and (M26)
+# programs-hosted, programs-hosted-wsl and ctest-lto pass exactly the
+# paths, params and lit arguments of their runs, and -Run 2 runs wsl-p3's
+# second run alone, in a row named 'wsl-p3 (run 2)'.
 # (3) -Leg wsl-p3 -Run 3, -Run without exactly one -Leg, and -Run 0 are usage
 # errors that run nothing. (4) The corpus parameters print as the environment
 # resolves them, and the NuGet tools as @nuget:<rid>/<tool>. (5) The failure
 # path of Inputs/legs-check.py: each planted fault (a $p3Tests path missing
 # from wsl-p3's run 1, wsl-p3's run 2 without $p3Out, a lit run without
-# msil_require_hosted=1, an lto run whose prog_pipeline is obj) is reported.
+# msil_require_hosted=1, an lto run whose prog_pipeline is obj) is reported;
+# and so is each M26 fault: programs-lto without its hosted program,
+# ctest-lto without its tag Exit, $checkMsil without msil-abi.ll,
+# programs-wsl's msil_also_run without 10+tc0, ctest filtering out
+# libc.txt's tests, programs-hosted without msil_opt_levels=O2, and det-wsl
+# without msil_glibc_sysroot.
 # describe-sh.test checks lit-legs.sh --describe.
 # REQUIRES: msil-ci-pwsh
 
@@ -32,7 +52,9 @@
 # RUN: %python %S/Inputs/ci-legs.py ps1 %t/build -- -Describe > %t/describe.json
 # RUN: %{harness_check} missing %t/build/lit-calls.log
 # RUN: %python %S/Inputs/legs-check.py describe ps1 %t/describe.json > %t/1.log
-# RUN: %{harness_check} contains %t/1.log "^legs-check: lit-legs\.ps1: \d+ legs, \d+ lit runs: OK$" "^legs-check: [$]p3Tests: msil/test/M1/02-fp/strict-i128\.c( |$)"
+# RUN: %{harness_check} contains %t/1.log "^legs-check: lit-legs\.ps1: \d+ legs, \d+ lit runs: OK$" "^legs-check: [$]p3Tests: (\S+ )*msil/test/M1/02-fp/strict-i128\.c( |$)" "^legs-check: hosted programs: msil/test/Programs/zlib-full( |$)"
+# RUN: %{harness_check} contains %t/describe.json '"name": "programs-hosted",\s*"tag": "Quick"' '"name": "programs-hosted-wsl",\s*"tag": "Quick"' '"name": "ctest-lto",\s*"tag": "Exit"' '"clang/test/Sema/msil-long-double-format\.c",\s*"llvm/test/Transforms/ExpandVariadics/msil-abi\.ll"'
+
 
 # (2)
 # RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-2a -- -Leg net-core > %t/2a.log
@@ -53,6 +75,19 @@
 # RUN: %{harness_check} contains %t/2d-calls.log "^legs-check: wsl-p3: 1 lit invocations pass the paths, params and lit arguments of runs 2$"
 # RUN: %{harness_check} contains %t/rows-2d "^lit-legs\twsl-p3 \(run 2\)\tPASS\t"
 # RUN: %{harness_check} lacks %t/rows-2d "\trun 1: "
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-2e -- -Leg programs-hosted > %t/2e.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json programs-hosted %t/build/lit-calls.log > %t/2e-calls.log
+# RUN: %{harness_check} contains %t/2e-calls.log "^legs-check: programs-hosted: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-2e -- -Leg programs-hosted-wsl > %t/2f.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json programs-hosted-wsl %t/build/lit-calls.log > %t/2f-calls.log
+# RUN: %{harness_check} contains %t/2f-calls.log "^legs-check: programs-hosted-wsl: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: rm -f %t/build/lit-calls.log
+# RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-2e -- -Leg ctest-lto > %t/2g.log
+# RUN: %python %S/Inputs/legs-check.py calls %t/describe.json ctest-lto %t/build/lit-calls.log > %t/2g-calls.log
+# RUN: %{harness_check} contains %t/2g-calls.log "^legs-check: ctest-lto: 1 lit invocations pass the paths, params and lit arguments of runs 1$"
+# RUN: %{harness_check} contains %t/rows-2e "\Alit-legs\tprograms-hosted\tPASS\t.*\nlit-legs\tprograms-hosted-wsl\tPASS\t.*\nlit-legs\tctest-lto\tPASS\t.*\n\Z"
 
 # (3)
 # RUN: rm -f %t/build/lit-calls.log
@@ -76,10 +111,24 @@
 
 # (5)
 # RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant drop-p3-path > %t/5a.log
-# RUN: %{harness_check} contains %t/5a.log "^legs-check: error: wsl-p3 run 1: paths \['msil/test/M3'\], lit \[\]; not msil/test/M3 and [$]p3Tests "
+# RUN: %{harness_check} contains %t/5a.log "^legs-check: error: wsl-p3 run 1: paths \['msil/test/M3'(, '[^']+')*\], lit \[\]; not msil/test/M3 and [$]p3Tests \["
 # RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant keep-p3 > %t/5b.log
 # RUN: %{harness_check} contains %t/5b.log "^legs-check: error: wsl-p3 run 2: lit \[\], not one --filter-out \([$]p3Out\)$"
 # RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant no-hosted > %t/5c.log
 # RUN: %{harness_check} contains %t/5c.log "^legs-check: error: harness run 1: params lack msil_require_hosted=1$"
 # RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant wrong-prog-pipeline > %t/5d.log
 # RUN: %{harness_check} contains %t/5d.log "^legs-check: error: lto run 1: prog_pipeline 'obj', not 'lto'$"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant drop-hosted > %t/5e.log
+# RUN: %{harness_check} contains %t/5e.log "^legs-check: error: programs-lto: paths \[[^]]*'msil/test/Programs/jsmn'\], lit \[\]; not the nine programs and the hosted programs \['msil/test/Programs/zlib-full'"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant ctest-lto-untagged > %t/5f.log
+# RUN: %{harness_check} contains %t/5f.log "^legs-check: error: ctest-lto: tag '', kind 'lit', 1 runs; not 'Exit', lit, 1$"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant check-msil > %t/5g.log
+# RUN: %{harness_check} contains %t/5g.log "^legs-check: error: net8: paths lack llvm/test/Transforms/ExpandVariadics/msil-abi\.ll \([$]checkMsil, M26\)$" "^legs-check: error: net-core: paths lack llvm/test/Transforms/ExpandVariadics/msil-abi\.ll "
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant no-tc0 > %t/5h.log
+# RUN: %{harness_check} contains %t/5h.log "^legs-check: error: programs-wsl: params msil_also_run='8', not '8,10\+tc0'$"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant ctest-libc-out > %t/5i.log
+# RUN: %{harness_check} contains %t/5i.log "^legs-check: error: ctest: paths \['msil/test/Programs/c-testsuite'\], lit \['--filter-out=MSIL :: Programs/c-testsuite/libc/'\]; not the whole c-testsuite directory with both lists$"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant hosted-levels > %t/5j.log
+# RUN: %{harness_check} contains %t/5j.log "^legs-check: error: programs-hosted: params \{(?![^}]*msil_opt_levels)[^}]*\}, not \{[^}]*'msil_opt_levels': 'O2'"
+# RUN: not %python %S/Inputs/legs-check.py describe ps1 %t/describe.json --plant det-glibc > %t/5k.log
+# RUN: %{harness_check} contains %t/5k.log "^legs-check: error: det-wsl: no msil_glibc_sysroot \(the hosted programs' det tests\)$"

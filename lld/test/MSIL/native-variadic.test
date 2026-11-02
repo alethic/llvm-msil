@@ -1,39 +1,240 @@
-## Native variadic functions (ImplementationPlan.md 5.10.13 'In linked and
-## object mode the Phase-1 compile-time checks for native callees ... become
-## link-time checks after native resolution', 5.10.14; M15.b item 3; recon p2
-## native-imports 6). A P/Invoke cannot pass C variadic arguments, so a
-## natively bound variadic function is the backend's error
-##   native function '<name>' (<module>) is variadic; calls of native
-##   variadic functions are not supported for MSIL yet (phase 3)
-## naming the module it bound to (libc.so.6 on glibc, msvcrt.dll, whose
-## printf is exported, on Windows), for an address-only reference and for a
-## call alike: in linked text the call gets 5.10.14's text, not D19's
-## standalone call-site error, and no '<unknown>:0:0: in function ...'
-## prefix (5.9.14: the prefix is 'msil-ld: error: '). No P/Invoke is
-## written and msil-ld exits with 1, never with a run-time failure. Each
-## link reports exactly one error.
+## Native variadic functions (ImplementationPlan.md 5.15.2 'Link time
+## (msil-ld)' rules 2-6, 5.14.8, 5.10.7, 5.10.11; M26.d; recon p3 variadics
+## 2.4, 4 and 8.2). The backend expands every call of an undefined variadic
+## function over a native-layout va_list (ExpandVariadics): the reference
+## carries VARARG with FixedParams, and its IL signature is the fixed
+## parameters followed by one native int. msil-ld binds such a reference
+## natively to the function's va_list variant, found in the native index
+## only:
+## - the P/Invoke keeps the C name and gets the variant as its entry, with the
+##   expanded signature: 'pinvokeimpl("libc.so.6" as "vprintf" nomangle
+##   cdecl) int32 'printf'(native int, native int)' in linked text, entry
+##   'vprintf' in the image, through a CIL object, an LTO image and
+##   --lto-emit-asm text alike; --print-imports shows
+##   'printf -> libc.so.6!vprintf [function, <version>]' (rule 6);
+## - the C runtime of the link (rule 5): linux-gnu Glibc (printf -> vprintf),
+##   windows-gnu Msvcrt (printf -> vprintf in msvcrt.dll), windows-msvc UCRT,
+##   which has no variants, and windows-gnu whose C runtime identity (the
+##   first -l named ucrt, ...) is ucrt: UCRT too;
+## - a natively bound VARARG reference without a variant in the table is
+##     native function '<f>' (<module>) is variadic and has neither a va_list
+##     variant nor an entry in the fixed-arity list
+##   (a library's own variadic function, clone, printf on UCRT); one whose
+##   variant no native library defines is
+##     native function '<f>' (<module>) is variadic, and its va_list variant
+##     '<vf>' is not defined by the native libraries
+##   also when the program defines a function of the variant's name itself:
+##   a program's own MSIL vsprintf never captures sprintf, and a program's own
+##   vprintf leaves printf bound to the native vprintf (rule 2). msil-ld never
+##   falls back to a fixed-arity P/Invoke for an expanded call;
+## - a function on the triple's fixed-arity list (open on glibc, scanf in
+##   msvcrt.dll) is called with fixed arity per call site (FIXED_ARITY,
+##   5.14.8): one P/Invoke per IL signature, entry the C name, no variant
+##   (rule 3);
+## - a variadic declaration with an explicit import module is fixed-arity too
+##   (5.10.7 and M26.c's 'Explicit imports'): one stub per call-site
+##   signature, bound unchecked although no native library defines it;
+## - the address of a natively bound variadic function is, until M28,
+##     the address of native variadic function '<f>' (<module>) is not
+##     supported for MSIL yet
+##   (rule 4).
+## Every error is the only one of its link, has no phase number and leaves no
+## output; the retired Phase 2 texts (VARARG in Signatures, native variadic
+## calls) never appear.
 
+# REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
-# RUN: yaml2obj --docnum=1 %S/Inputs/native/glibc.yaml -o libc.o
-# RUN: ld.lld -shared -soname libc.so.6 --version-script %S/Inputs/native/glibc-libc.map libc.o -o libc.so.6
-# RUN: llvm-lib /machine:x64 /def:%S/Inputs/native/msvcrt.def /out:msvcrt.lib
-# RUN: llvm-as addr-lnx.ll -o addr-lnx.o
-# RUN: llvm-as addr-win.ll -o addr-win.o
-# RUN: llvm-as call-lnx.ll -o call-lnx.o
-# RUN: llvm-as call-win.ll -o call-win.o
+# RUN: mkdir -p wlib
+# RUN: yaml2obj --docnum=1 libs.yaml -o libc.o
+# RUN: ld.lld -shared -soname libc.so.6 --version-script c.map libc.o -o libc.so.6
+# RUN: yaml2obj --docnum=2 libs.yaml -o libv.o
+# RUN: ld.lld -shared -soname libv.so.1 libv.o -o libv.so.1
+# RUN: llvm-lib /machine:x64 /def:msvcrt.def /out:msvcrt.lib
+# RUN: llvm-lib /machine:x64 /def:ucrt.def /out:wlib/ucrt.lib
+# RUN: llc -filetype=obj call-lnx.ll -o call-lnx.o
+# RUN: llc -filetype=obj call-gnu.ll -o call-gnu.o
+# RUN: llc -filetype=obj call-msvc.ll -o call-msvc.o
+# RUN: llc -filetype=obj open-lnx.ll -o open-lnx.o
+# RUN: llc -filetype=obj clone-lnx.ll -o clone-lnx.o
+# RUN: llc -filetype=obj vlog-lnx.ll -o vlog-lnx.o
+# RUN: llc -filetype=obj sprintf-lnx.ll -o sprintf-lnx.o
+# RUN: llc -filetype=obj own-vsprintf.ll -o own-vsprintf.o
+# RUN: llc -filetype=obj own-vprintf.ll -o own-vprintf.o
+# RUN: llc -filetype=obj scanf-gnu.ll -o scanf-gnu.o
+# RUN: llc -filetype=obj snprintf-gnu.ll -o snprintf-gnu.o
+# RUN: llc -filetype=obj addr-lnx.ll -o addr-lnx.o
+# RUN: llc -filetype=obj addr-gnu.ll -o addr-gnu.o
+# RUN: llc -filetype=obj ext-import.ll -o ext-import.o
+# RUN: llvm-as call-lnx.ll -o call-lnx.bc
+# RUN: llvm-as call-gnu.ll -o call-gnu.bc
+# RUN: llvm-as call-msvc.ll -o call-msvc.bc
+# RUN: llvm-as open-lnx.ll -o open-lnx.bc
+# RUN: llvm-as vlog-lnx.ll -o vlog-lnx.bc
+# RUN: llvm-as sprintf-lnx.ll -o sprintf-lnx.bc
+# RUN: llvm-as addr-lnx.ll -o addr-lnx.bc
+# RUN: llvm-as addr-gnu.ll -o addr-gnu.bc
+# RUN: llvm-as ext-import.ll -o ext-import.bc
 
-# DEFINE: %{err} = FileCheck %s --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
-# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="undefined symbol" --implicit-check-not=error:
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR" --implicit-check-not="not supported yet" \
+# DEFINE:   --implicit-check-not="(phase 3)"
+# DEFINE: %{err} = FileCheck %s %{crash} --implicit-check-not=error: --implicit-check-not=warning:
 
-# RUN: not msil-ld --lto-emit-asm --lto-O0 addr-lnx.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=ADDR-LNX
-# RUN: not msil-ld --lto-emit-asm --lto-O0 addr-win.o msvcrt.lib -o x.il 2>&1 | %{err} --check-prefix=ADDR-WIN
-# ADDR-LNX: {{^}}msil-ld: error: native function 'printf' (libc.so.6) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
-# ADDR-WIN: {{^}}msil-ld: error: native function 'printf' (msvcrt.dll) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
+## The objects record what msil-ld decides on: printf's MemberRef is VARARG
+## with one fixed parameter, a record v1.0 item; open's two call sites are
+## FIXED_ARITY with two named parameters, so that object is v1.1 (5.14.7 V3).
+# RUN: llvm-cil-dump --link-info call-lnx.o | FileCheck %s --check-prefix=REC-VA
+# REC-VA:     {{^}}LinkInfo v1.0 triple=x86_64-unknown-linux-gnu-msil {{.*}}{{$}}
+# REC-VA:     {{^}}Signature 0x0A{{[0-9A-F]+}} 'printf' VARARG fixed=1{{$}}
+# RUN: llvm-cil-dump --link-info open-lnx.o | FileCheck %s --check-prefix=REC-FA
+# REC-FA:       {{^}}LinkInfo v1.1 triple=x86_64-unknown-linux-gnu-msil {{.*}}{{$}}
+# REC-FA-COUNT-2: {{^}}Signature 0x0A{{[0-9A-F]+}} 'open' FIXED_ARITY fixed=2{{$}}
+# REC-FA-NOT:   VARARG
 
-# RUN: not msil-ld --lto-emit-asm --lto-O0 call-lnx.o libc.so.6 -o x.il 2>&1 | %{err} --check-prefix=CALL-LNX
-# RUN: not msil-ld --lto-emit-asm --lto-O0 call-win.o msvcrt.lib -o x.il 2>&1 | %{err} --check-prefix=CALL-WIN
-# CALL-LNX: {{^}}msil-ld: error: native function 'printf' (libc.so.6) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
-# CALL-WIN: {{^}}msil-ld: error: native function 'printf' (msvcrt.dll) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
+## glibc: printf binds as vprintf, through a CIL object, an LTO image and
+## --lto-emit-asm text; --print-imports names the variant.
+# RUN: msil-ld call-lnx.o libc.so.6 --print-imports -o lnx.exe > lnx.txt 2>&1
+# RUN: FileCheck %s --check-prefix=PI-LNX --match-full-lines %{crash} --input-file=lnx.txt
+# RUN: llvm-cil-dump lnx.exe | FileCheck %s --check-prefix=IMG -DMOD=libc.so.6 --implicit-check-not=pinvokeimpl
+# RUN: msil-ld --lto-O0 call-lnx.bc libc.so.6 --print-imports -o lnx-lto.exe > lnx-lto.txt 2>&1
+# RUN: FileCheck %s --check-prefix=PI-LNX --match-full-lines %{crash} --input-file=lnx-lto.txt
+# RUN: llvm-cil-dump lnx-lto.exe | FileCheck %s --check-prefix=IMG -DMOD=libc.so.6 --implicit-check-not=pinvokeimpl
+# RUN: msil-ld --lto-emit-asm --lto-O0 call-lnx.bc libc.so.6 --print-imports -o lnx.il > lnx-il.txt 2>&1
+# RUN: FileCheck %s --check-prefix=PI-LNX --match-full-lines %{crash} --input-file=lnx-il.txt
+# RUN: FileCheck %s --check-prefix=TXT -DMOD=libc.so.6 --input-file=lnx.il
+# RUN: FileCheck %s --check-prefix=ONE --input-file=lnx.il
+# PI-LNX:      printf -> libc.so.6!vprintf [function, GLIBC_2.2.5]
+# PI-LNX-NEXT: libc.so.6: version floor GLIBC_2.2.5
+# PI-LNX-NOT:  {{.+}}
+# IMG:      {{^}}moduleref '[[MOD]]'{{$}}
+# IMG:      {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# IMG:      {{^}}    L{{[0-9]+}}: call int32(native int, native int) '<Module>'::'printf'{{$}}
+# IMG:      {{^}}  .method 'printf' int32(native int, native int) flags=0x2093 impl=0x0080{{$}}
+# IMG-NEXT: {{^}}    .pinvokeimpl '[[MOD]]' entry 'vprintf' flags=0x0201{{$}}
+# TXT-DAG:  call int32 'printf'(native int, native int)
+# TXT-DAG:  {{^}}.method assembly hidebysig static pinvokeimpl("[[MOD]]" as "vprintf" nomangle cdecl) int32 'printf'(native int, native int) cil managed preservesig {}{{$}}
+# ONE-COUNT-1: pinvokeimpl
+# ONE-NOT:     pinvokeimpl
+
+## windows-gnu: msvcrt.dll's printf binds as vprintf (Msvcrt's table).
+# RUN: msil-ld call-gnu.o msvcrt.lib --print-imports -o gnu.exe > gnu.txt 2>&1
+# RUN: FileCheck %s --check-prefix=PI-GNU --match-full-lines %{crash} --input-file=gnu.txt
+# RUN: llvm-cil-dump gnu.exe | FileCheck %s --check-prefix=IMG -DMOD=msvcrt.dll --implicit-check-not=pinvokeimpl
+# RUN: msil-ld --lto-emit-asm --lto-O0 call-gnu.bc msvcrt.lib -o gnu.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=TXT -DMOD=msvcrt.dll --input-file=gnu.il
+# RUN: FileCheck %s --check-prefix=ONE --input-file=gnu.il
+# PI-GNU:      printf -> msvcrt.dll!vprintf [function, -]
+# PI-GNU-NOT:  {{.+}}
+
+## windows-msvc: the C runtime is UCRT, which has no va_list variants, so
+## msvcrt.dll's printf (which also exports vprintf) is the 'neither' error;
+## so is windows-gnu's when the C runtime identity is ucrt (rule 5).
+# RUN: not msil-ld call-msvc.o msvcrt.lib -o x.exe 2>&1 | %{err} --check-prefix=NEITHER -DF=printf -DMOD=msvcrt.dll
+# RUN: not msil-ld --lto-O0 call-msvc.bc msvcrt.lib -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=NEITHER -DF=printf -DMOD=msvcrt.dll
+# RUN: not msil-ld --lto-emit-asm --lto-O0 call-msvc.bc msvcrt.lib -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=NEITHER -DF=printf -DMOD=msvcrt.dll
+# RUN: not msil-ld call-gnu.o -L wlib -lucrt -o x.exe 2>&1 | %{err} --check-prefix=NEITHER -DF=printf -DMOD=ucrtbase.dll
+# RUN: not msil-ld --lto-emit-asm --lto-O0 call-gnu.bc -L wlib -lucrt -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=NEITHER -DF=printf -DMOD=ucrtbase.dll
+# RUN: not ls x.exe
+# RUN: not ls x.il
+# NEITHER: {{^}}msil-ld: error: native function '[[F]]' ([[MOD]]) is variadic and has neither a va_list variant nor an entry in the fixed-arity list{{$}}
+
+## A native library's own variadic function, and glibc's clone, which is on
+## no list: the 'neither' error, never a fixed-arity P/Invoke.
+# RUN: not msil-ld vlog-lnx.o libv.so.1 -o x.exe 2>&1 | %{err} --check-prefix=NEITHER -DF=vlog -DMOD=libv.so.1
+# RUN: not msil-ld --lto-emit-asm --lto-O0 vlog-lnx.bc libv.so.1 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=NEITHER -DF=vlog -DMOD=libv.so.1
+# RUN: not msil-ld clone-lnx.o libc.so.6 -o x.exe 2>&1 | %{err} --check-prefix=NEITHER -DF=clone -DMOD=libc.so.6
+
+## A variant that the native libraries do not define: libc.so.6 has sprintf
+## but no vsprintf, msvcrt.dll _snprintf but no _vsnprintf. The program's
+## own vsprintf (an MSIL definition) does not capture the binding.
+# RUN: not msil-ld sprintf-lnx.o libc.so.6 -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=NOVARIANT -DF=sprintf -DMOD=libc.so.6 -DVF=vsprintf
+# RUN: not msil-ld --lto-emit-asm --lto-O0 sprintf-lnx.bc libc.so.6 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=NOVARIANT -DF=sprintf -DMOD=libc.so.6 -DVF=vsprintf
+# RUN: not msil-ld sprintf-lnx.o own-vsprintf.o libc.so.6 -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=NOVARIANT -DF=sprintf -DMOD=libc.so.6 -DVF=vsprintf
+# RUN: not msil-ld snprintf-gnu.o msvcrt.lib -o x.exe 2>&1 \
+# RUN:   | %{err} --check-prefix=NOVARIANT -DF=_snprintf -DMOD=msvcrt.dll -DVF=_vsnprintf
+# RUN: not ls x.exe
+# RUN: not ls x.il
+# NOVARIANT: {{^}}msil-ld: error: native function '[[F]]' ([[MOD]]) is variadic, and its va_list variant '[[VF]]' is not defined by the native libraries{{$}}
+
+## A program that defines its own vprintf and calls it and printf: its
+## vprintf is its own method, printf still binds to libc.so.6's vprintf.
+# RUN: msil-ld own-vprintf.o libc.so.6 --print-imports -o own.exe > own.txt 2>&1
+# RUN: FileCheck %s --check-prefix=PI-LNX --match-full-lines %{crash} --input-file=own.txt
+# RUN: llvm-cil-dump own.exe | FileCheck %s --check-prefix=OWN
+# OWN:      {{^}}    L{{[0-9]+}}: call int32(native int, native int) '<Module>'::'printf'{{$}}
+# OWN:      {{^}}    L{{[0-9]+}}: call int32(native int, native int) '<Module>'::'vprintf'{{$}}
+# OWN:      {{^}}  .method 'printf' int32(native int, native int) flags=0x2093 impl=0x0080{{$}}
+# OWN-NEXT: {{^}}    .pinvokeimpl 'libc.so.6' entry 'vprintf' flags=0x0201{{$}}
+# OWN-NEXT: {{^}}  .method 'vprintf' int32(native int, native int) flags=0x0016 impl=0x0000{{$}}
+
+## The fixed-arity list: open's two call signatures are two P/Invokes of
+## open, entry 'open', in the image and in linked text; --print-imports has
+## one line for the symbol.
+# RUN: msil-ld open-lnx.o libc.so.6 --print-imports -o open.exe > open.txt 2>&1
+# RUN: FileCheck %s --check-prefix=PI-OPEN --match-full-lines %{crash} --input-file=open.txt
+# RUN: llvm-cil-dump open.exe | FileCheck %s --check-prefix=OPEN --implicit-check-not=vopen
+# RUN: msil-ld --lto-emit-asm --lto-O0 open-lnx.bc libc.so.6 --print-imports -o open.il > open-il.txt 2>&1
+# RUN: FileCheck %s --check-prefix=PI-OPEN --match-full-lines %{crash} --input-file=open-il.txt
+# RUN: FileCheck %s --check-prefix=OPEN-TXT --implicit-check-not=vopen --input-file=open.il
+# PI-OPEN:      open -> libc.so.6!open [function, GLIBC_2.2.5]
+# PI-OPEN-NEXT: libc.so.6: version floor GLIBC_2.2.5
+# PI-OPEN-NOT:  {{.+}}
+# OPEN-DAG: {{^}}    L{{[0-9]+}}: call int32(native int, int32) '<Module>'::'open'{{$}}
+# OPEN-DAG: {{^}}    L{{[0-9]+}}: call int32(native int, int32, int32) '<Module>'::'open'{{$}}
+# OPEN-DAG: {{^}}  .method 'open' int32(native int, int32) flags=0x2093 impl=0x0080{{$}}
+# OPEN-DAG: {{^}}  .method 'open' int32(native int, int32, int32) flags=0x2093 impl=0x0080{{$}}
+# OPEN-DAG: {{^}}    .pinvokeimpl 'libc.so.6' entry 'open' flags=0x0201{{$}}
+# OPEN-TXT-DAG: call int32 'open'(native int, int32)
+# OPEN-TXT-DAG: call int32 'open'(native int, int32, int32)
+# OPEN-TXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'open'(native int, int32) cil managed preservesig {}{{$}}
+# OPEN-TXT-DAG: {{^}}.method assembly hidebysig static pinvokeimpl("libc.so.6" nomangle cdecl) int32 'open'(native int, int32, int32) cil managed preservesig {}{{$}}
+
+## msvcrt.dll's scanf has no variant and is on Msvcrt's fixed-arity list.
+# RUN: msil-ld scanf-gnu.o msvcrt.lib --print-imports -o scanf.exe > scanf.txt 2>&1
+# RUN: FileCheck %s --check-prefix=PI-SCANF --match-full-lines %{crash} --input-file=scanf.txt
+# RUN: llvm-cil-dump scanf.exe | FileCheck %s --check-prefix=SCANF
+# PI-SCANF:     scanf -> msvcrt.dll!scanf [function, -]
+# PI-SCANF-NOT: {{.+}}
+# SCANF:      {{^}}  .method 'scanf' int32(native int, native int) flags=0x2093 impl=0x0080{{$}}
+# SCANF-NEXT: {{^}}    .pinvokeimpl 'msvcrt.dll' entry 'scanf' flags=0x0201{{$}}
+
+## An explicit import of a variadic function: FIXED_ARITY stubs, one per
+## call-site signature, bound unchecked (no native library defines
+## ext_setopt).
+# RUN: llvm-cil-dump --link-info ext-import.o | FileCheck %s --check-prefix=REC-EXT
+# REC-EXT:         {{^}}LinkInfo v1.1 triple=x86_64-unknown-linux-gnu-msil {{.*}}{{$}}
+# REC-EXT-COUNT-2: {{^}}Signature 0x06{{[0-9A-F]+}} 'ext_setopt' FIXED_ARITY fixed=2{{$}}
+# RUN: msil-ld ext-import.o -o ext.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ext.exe | FileCheck %s --check-prefix=EXT
+# RUN: msil-ld --lto-O0 ext-import.bc -o ext-lto.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ext-lto.exe | FileCheck %s --check-prefix=EXT
+# RUN: msil-ld --lto-emit-asm --lto-O0 ext-import.bc -o ext.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=EXT-TXT --input-file=ext.il
+# EXT-DAG: {{^}}moduleref 'libext.so.1'{{$}}
+# EXT-DAG: {{^}}  .method 'ext_setopt' int32(native int, int32, int32) flags=0x2093 impl=0x0080{{$}}
+# EXT-DAG: {{^}}  .method 'ext_setopt' int32(native int, int32, native int) flags=0x2093 impl=0x0080{{$}}
+# EXT-DAG: {{^}}    .pinvokeimpl 'libext.so.1' entry 'ext_setopt' flags=0x0201{{$}}
+# EXT-TXT-DAG: {{^}}.method {{.*}}pinvokeimpl("libext.so.1" nomangle cdecl) int32 'ext_setopt'(native int, int32, int32) cil managed preservesig {}{{$}}
+# EXT-TXT-DAG: {{^}}.method {{.*}}pinvokeimpl("libext.so.1" nomangle cdecl) int32 'ext_setopt'(native int, int32, native int) cil managed preservesig {}{{$}}
+
+## The address of a natively bound variadic function, until M28.
+# RUN: not msil-ld addr-lnx.o libc.so.6 -o x.exe 2>&1 | %{err} --check-prefix=ADDR -DF=printf -DMOD=libc.so.6
+# RUN: not msil-ld --lto-O0 addr-lnx.bc libc.so.6 -o x.exe 2>&1 | %{err} --check-prefix=ADDR -DF=printf -DMOD=libc.so.6
+# RUN: not msil-ld --lto-emit-asm --lto-O0 addr-lnx.bc libc.so.6 -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=ADDR -DF=printf -DMOD=libc.so.6
+# RUN: not msil-ld addr-gnu.o msvcrt.lib -o x.exe 2>&1 | %{err} --check-prefix=ADDR -DF=printf -DMOD=msvcrt.dll
+# RUN: not msil-ld --lto-emit-asm --lto-O0 addr-gnu.bc msvcrt.lib -o x.il 2>&1 \
+# RUN:   | %{err} --check-prefix=ADDR -DF=printf -DMOD=msvcrt.dll
+# RUN: not ls x.exe
+# RUN: not ls x.il
+# ADDR: {{^}}msil-ld: error: the address of native variadic function '[[F]]' ([[MOD]]) is not supported for MSIL yet{{$}}
 
 ## A prototype-less function whose address is used but which is never called
 ## directly (5.10.13: in linked mode the Phase-1 check becomes a link-time
@@ -41,7 +242,8 @@
 ## the module the function bound to): its IL signature cannot be derived,
 ## so the link fails although libfoo.so.1 defines foo. Another bitcode input
 ## that defines foo with a prototype gives the signature, and the link
-## succeeds without a P/Invoke.
+## succeeds without a P/Invoke. A prototype-less declaration stays variadic
+## in IR (ExpandVariadics ignores it, 5.15.2), so this is unchanged by M26.
 # RUN: yaml2obj %S/Inputs/native/libfoo.yaml -o libfoo.so.1
 # RUN: llvm-as noproto.ll -o noproto.o
 # RUN: llvm-as noproto-def.ll -o noproto-def.o
@@ -51,6 +253,208 @@
 # RUN: msil-ld --lto-emit-asm --lto-O0 noproto.o noproto-def.o libfoo.so.1 -o noproto-def.il 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=NOPROTO-DEF --implicit-check-not=pinvokeimpl --input-file=noproto-def.il
 # NOPROTO-DEF: {{^}}.method {{.*}}static int32 'foo'(int32) cil managed{{$}}
+
+#--- libs.yaml
+## 1: a glibc-like libc.so.6: printf with its variant vprintf, sprintf
+## without vsprintf, open (fixed-arity list) and clone (on no list).
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x40
+Symbols:
+  - { Name: printf,  Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x00, Size: 8 }
+  - { Name: vprintf, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x08, Size: 8 }
+  - { Name: sprintf, Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x10, Size: 8 }
+  - { Name: open,    Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x18, Size: 8 }
+  - { Name: clone,   Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x20, Size: 8 }
+## 2: libv.so.1, a library with its own variadic function vlog.
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_REL
+  Machine: EM_X86_64
+Sections:
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+    Size:  0x10
+Symbols:
+  - { Name: vlog,    Type: STT_FUNC, Section: .text, Binding: STB_GLOBAL, Value: 0x00, Size: 8 }
+
+#--- c.map
+GLIBC_2.2.5 { global: *; };
+
+#--- msvcrt.def
+LIBRARY msvcrt.dll
+EXPORTS
+  printf
+  vprintf
+  scanf
+  _snprintf
+
+#--- ucrt.def
+LIBRARY ucrtbase.dll
+EXPORTS
+  printf
+  vprintf
+
+#--- call-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@fmt = private constant [4 x i8] c"%d\0A\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, ...) @printf(ptr @fmt, i32 42)
+  ret i32 0
+}
+
+declare i32 @printf(ptr, ...)
+
+#--- call-gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-gnu-msil"
+
+@fmt = private constant [4 x i8] c"%d\0A\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, ...) @printf(ptr @fmt, i32 42)
+  ret i32 0
+}
+
+declare i32 @printf(ptr, ...)
+
+#--- call-msvc.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@fmt = private constant [4 x i8] c"%d\0A\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, ...) @printf(ptr @fmt, i32 42)
+  ret i32 0
+}
+
+declare i32 @printf(ptr, ...)
+
+#--- open-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; open(path, O_RDONLY) and open(path, O_WRONLY | O_CREAT, 0644).
+@path = private constant [6 x i8] c"a.txt\00"
+
+define i32 @main() {
+  %a = call i32 (ptr, i32, ...) @open(ptr @path, i32 0)
+  %b = call i32 (ptr, i32, ...) @open(ptr @path, i32 65, i32 420)
+  %s = add i32 %a, %b
+  ret i32 %s
+}
+
+declare i32 @open(ptr, i32, ...)
+
+#--- clone-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+define i32 @main() {
+  %r = call i32 (ptr, ptr, i32, ptr, ...) @clone(ptr null, ptr null, i32 17, ptr null)
+  ret i32 %r
+}
+
+declare i32 @clone(ptr, ptr, i32, ptr, ...)
+
+#--- vlog-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@fmt = private constant [4 x i8] c"%d\0A\00"
+
+define i32 @main() {
+  call void (ptr, ...) @vlog(ptr @fmt, i32 1)
+  ret i32 0
+}
+
+declare void @vlog(ptr, ...)
+
+#--- sprintf-lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@buf = global [16 x i8] zeroinitializer, align 1
+@fmt = private constant [3 x i8] c"%d\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, ptr, ...) @sprintf(ptr @buf, ptr @fmt, i32 7)
+  ret i32 %r
+}
+
+declare i32 @sprintf(ptr, ptr, ...)
+
+#--- own-vsprintf.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+;; The program's own vsprintf, kept alive by a reference.
+@keep = global ptr @vsprintf
+
+define i32 @vsprintf(ptr %buf, ptr %fmt, ptr %ap) {
+  ret i32 0
+}
+
+#--- own-vprintf.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+@fmt = private constant [4 x i8] c"%d\0A\00"
+
+define i32 @vprintf(ptr %fmt, ptr %ap) noinline {
+  ret i32 3
+}
+
+define i32 @main() {
+  %a = call i32 (ptr, ...) @printf(ptr @fmt, i32 42)
+  %b = call i32 @vprintf(ptr @fmt, ptr null)
+  ret i32 %b
+}
+
+declare i32 @printf(ptr, ...)
+
+#--- scanf-gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-gnu-msil"
+
+@x = global i32 0, align 4
+@fmt = private constant [3 x i8] c"%d\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, ...) @scanf(ptr @fmt, ptr @x)
+  ret i32 %r
+}
+
+declare i32 @scanf(ptr, ...)
+
+#--- snprintf-gnu.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-gnu-msil"
+
+@buf = global [16 x i8] zeroinitializer, align 1
+@fmt = private constant [3 x i8] c"%d\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, i64, ptr, ...) @_snprintf(ptr @buf, i64 16, ptr @fmt, i32 7)
+  ret i32 %r
+}
+
+declare i32 @_snprintf(ptr, i64, ptr, ...)
 
 #--- addr-lnx.ll
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
@@ -67,9 +471,9 @@ define i32 @main() {
 
 declare i32 @printf(ptr, ...)
 
-#--- addr-win.ll
+#--- addr-gnu.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-pc-windows-msvc-msil"
+target triple = "x86_64-pc-windows-gnu-msil"
 
 @fp = global ptr @printf
 
@@ -82,31 +486,23 @@ define i32 @main() {
 
 declare i32 @printf(ptr, ...)
 
-#--- call-lnx.ll
+#--- ext-import.ll
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu-msil"
 
-@fmt = private constant [4 x i8] c"%d\0A\00"
+;; int ext_setopt(void *h, int opt, ...) __attribute__((import_module("libext.so.1")));
+@name = private constant [2 x i8] c"n\00"
 
 define i32 @main() {
-  %r = call i32 (ptr, ...) @printf(ptr @fmt, i32 42)
-  ret i32 0
+  %a = call i32 (ptr, i32, ...) @ext_setopt(ptr null, i32 1, i32 5)
+  %b = call i32 (ptr, i32, ...) @ext_setopt(ptr null, i32 2, ptr @name)
+  %s = add i32 %a, %b
+  ret i32 %s
 }
 
-declare i32 @printf(ptr, ...)
+declare i32 @ext_setopt(ptr, i32, ...) #0
 
-#--- call-win.ll
-target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-pc-windows-msvc-msil"
-
-@fmt = private constant [4 x i8] c"%d\0A\00"
-
-define i32 @main() {
-  %r = call i32 (ptr, ...) @printf(ptr @fmt, i32 42)
-  ret i32 0
-}
-
-declare i32 @printf(ptr, ...)
+attributes #0 = { "msil-import-module"="libext.so.1" }
 
 #--- noproto.ll
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"

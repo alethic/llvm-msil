@@ -1,0 +1,16 @@
+simple(1)=5
+simple(100)=11254
+simple(150000)=19123528
+in_branch(10, 1)=45
+in_branch(10, 0)=-45
+in_branch(500, 3)=374250
+aligned(1)=11000026
+aligned(77)=11027500
+aligned(4096)=12566731
+with_locals(1)=45
+with_locals(300)=179400344
+recurse(0)=360
+recurse(60)=309340
+empty_aligned(0)=1
+released=12000
+[exit 0]

@@ -111,12 +111,12 @@
 # RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-i -- -Leg wsl-p3 > %t/i.log
 # RUN: %{harness_check} contains %t/rows-i "^lit-legs\twsl-p3\tPASS\t\d+\tretried after timeout: MSIL :: M3/x\.c \(\S+/lit-results/wsl-p3-retry-run1-MSIL_M3_x\.c\.log\); run 1: failed 1, passed 1; lit exit 1; run 2: passed 2; lit exit 0$"
 # RUN: %{harness_check} contains %t/build/lit-results/wsl-p3-retry-run1-MSIL_M3_x.c.params.rsp "^--param=msil_runner=wsl$" "^--param=msil_also_run=10\+tc0$" '^--filter=\^MSIL :: M3/x\\\.c\$$'
-# RUN: %{harness_check} contains %t/build/lit-calls.log '^arg: @\S+/wsl-p3-retry-run1-MSIL_M3_x\.c\.params\.rsp\n(rsp: .*\n)+arg: \S+[/\\]msil[/\\]test[/\\]M3\narg: \S+[/\\]strict-i128\.c$'
+# RUN: %{harness_check} contains %t/build/lit-calls.log '^arg: @\S+/wsl-p3-retry-run1-MSIL_M3_x\.c\.params\.rsp\n(rsp: .*\n)+arg: \S+[/\\]msil[/\\]test[/\\]M3\n(arg: \S+\.(c|test)\n)*arg: \S+[/\\]strict-i128\.c$'
 # RUN: rm -f %t/build/lit-calls.log
 # RUN: %python %S/Inputs/ci-legs.py scenario %t/build 'MSIL :: M3/x.c=timeout,pass' 'MSIL :: M2/08-semantics/y.test=pass'
 # RUN: %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-i1 -- -Leg wsl-p3 -Run 1 > %t/i1.log
 # RUN: %{harness_check} contains %t/rows-i1 "^lit-legs\twsl-p3 \(run 1\)\tPASS\t\d+\tretried after timeout: MSIL :: M3/x\.c \(\S+/lit-results/wsl-p3-retry-run1-MSIL_M3_x\.c\.log\); run 1: failed 1; lit exit 1$"
-# RUN: %{harness_check} lacks %t/build/lit-calls.log "08-semantics"
+# RUN: %{harness_check} lacks %t/build/lit-calls.log '^arg: \S+[/\\]08-semantics$' '^arg: \S+[/\\]11-programs$'
 
 # (j)
 # RUN: rm -f %t/build/lit-calls.log

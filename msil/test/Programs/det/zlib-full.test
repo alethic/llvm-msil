@@ -1,0 +1,30 @@
+# Two builds of the hosted zlib-full program give identical objects, archives and image.
+# %{msil_det} builds the program of ../zlib-full/example.test (zlib's
+# test/example.c with all 15 library files in libz.a) twice at -O2, in two
+# directories from relative paths, and compares every CIL object (bitcode
+# under lto), the archive that llvm-ar writes and msil-ld's image byte for
+# byte (plan 5.12.4, 5.17.15; M26). ../zlib-full is a hosted directory (plan
+# 5.17.3) and det/ is not, so this test sets hosted mode's %{msil_cflags}
+# itself (no -ffreestanding; the triple's C headers through
+# %{msil_hosted_cflags}) and requires the feature msil-hosted;
+# check-recipe.py fails when the REQUIRES and REDEFINE lines here differ from
+# that test's by anything but those two lines, so both build the same
+# program, and when the %{msil_cflags} line differs from hosted mode's value
+# in msil/test/lit.cfg.py.
+# REQUIRES: msil-corpus-zlib
+# REQUIRES: msil-hosted
+# REDEFINE: %{msil_cflags} = -std=gnu17 -Werror=return-type -I%msil_inputs %{msil_hosted_cflags}
+# REDEFINE: %{msil_srcs} = %{msil_corpus}/zlib-1.3.2/test/example.c
+# REDEFINE: %{msil_archives} = z=%{msil_corpus}/zlib-1.3.2/adler32.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/compress.c,%{msil_corpus}/zlib-1.3.2/crc32.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/deflate.c,%{msil_corpus}/zlib-1.3.2/gzclose.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/gzlib.c,%{msil_corpus}/zlib-1.3.2/gzread.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/gzwrite.c,%{msil_corpus}/zlib-1.3.2/infback.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/inffast.c,%{msil_corpus}/zlib-1.3.2/inflate.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/inftrees.c,%{msil_corpus}/zlib-1.3.2/trees.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/uncompr.c,%{msil_corpus}/zlib-1.3.2/zutil.c
+# REDEFINE: %{msil_copts} = -I%{msil_corpus}/zlib-1.3.2 \
+# REDEFINE:   %if msil-triple-linux %{-DZ_HAVE_UNISTD_H -D_LARGEFILE64_SOURCE=1%} \
+# REDEFINE:   %else %{-D_CRT_SECURE_NO_DEPRECATE -D_CRT_NONSTDC_NO_DEPRECATE%}
+# RUN: %python %S/check-recipe.py %s %S/../zlib-full/example.test
+# RUN: %{msil_det}

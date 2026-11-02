@@ -56,7 +56,8 @@ public:
   /// 'localloc' returns. ECMA-335 promises none, and a constant-size
   /// localloc of 32 bytes or less is only 8-byte aligned on .NET Framework
   /// 4.8 and in .NET 8 tiered code (decision D13), so a frame that needs
-  /// more is over-allocated and aligned up.
+  /// more is over-allocated and aligned up, and so is a dynamic alloca
+  /// (MSILTargetLowering::LowerDYNAMIC_STACKALLOC, plan 5.15.8 H0).
   Align getLocallocAlign(const MachineFunction &MF) const;
 
 protected:

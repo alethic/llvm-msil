@@ -849,9 +849,12 @@ static bool regStackify(MachineFunction &MF, bool Optimize,
 
         // CIL: 'localloc' requires an evaluation stack that holds nothing but
         // its size operand (ECMA-335 III.3.47; otherwise the JIT throws
-        // InvalidProgramException). Keep every LOCALLOC a tree root by never
-        // nesting its result into a user; the result goes through a local.
-        if (DefI->getOpcode() == MSIL::LOCALLOC)
+        // InvalidProgramException). Keep every LOCALLOC and LOCALLOC_I64 (a
+        // dynamic alloca's, in the middle of the function) a tree root by
+        // never nesting its result into a user; the result goes through a
+        // local.
+        if (DefI->getOpcode() == MSIL::LOCALLOC ||
+            DefI->getOpcode() == MSIL::LOCALLOC_I64)
           continue;
 
         MachineOperand *Def =

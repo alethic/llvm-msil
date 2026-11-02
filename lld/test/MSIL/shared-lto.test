@@ -16,8 +16,12 @@
 ##   (inl), a selectany variable (sel) and an MSVC string literal ('??_C@')
 ##   stay out of the export class and the symbol table, while the plain
 ##   definition and a weak definition outside a COMDAT group (w) are
-##   exported; --lto-O0 keeps all of them, so inl stays in <Module> and sel
-##   and the literal in '<msil>Data';
+##   exported; a COMDAT definition without dllexport is not even an export
+##   candidate on windows-msvc-msil (row 2026-10-31 'M26.d extended (M24
+##   leftover: unused inline COMDAT copies in -shared LTO links)'), so LTO
+##   internalizes inl, which plain still calls: --lto-O0 keeps it as an
+##   assembly-visible method of <Module> (flags 0x0013), and sel and the
+##   literal stay in '<msil>Data';
 ## - --exclude-libs applies to bitcode archive members: with libx.a(xm.bc)
 ##   and liby.a(ym.bc), --exclude-libs=ALL exports only api, the definition
 ##   outside the archives, and --exclude-libs=libx.a exports liby.a's y_fn
@@ -88,7 +92,7 @@
 # CD-NEXT: {{^}}  .method 'plain' int32() flags=0x0016 impl=0x0000{{$}}
 # CD-NOT:  {{.}}
 # RUN: %{listing} members cd.txt '<Module>' | FileCheck %s --check-prefix=CD-MODULE
-# CD-MODULE: {{^}}  .method 'inl' int32() flags=0x0016 impl=0x0000{{$}}
+# CD-MODULE: {{^}}  .method 'inl' int32() flags=0x0013 impl=0x0000{{$}}
 # RUN: %{listing} members cd.txt '<msil>Data' | FileCheck %s --check-prefix=CD-DATA
 # CD-DATA-DAG: {{^}}  .field '??_C@_05CJBACGMB@hello?$AA@' native int flags=0x0033{{$}}
 # CD-DATA-DAG: {{^}}  .field 'sel' native int flags=0x0033{{$}}

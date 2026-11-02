@@ -1,0 +1,119 @@
+# A program calls the variadic exports of a -shared library: an int, a double, an over-aligned 16-byte struct and an int read by the library's va_arg, and a va_list that the library hands to vsnprintf.
+# The library valib (%{msil_shlibs}, linked with -shared; natively valib.dll
+# with valib.lib on Windows, libvalib.so on Linux) exports two C variadic
+# functions, which the program calls directly across the assembly boundary
+# (plan 5.15.2: direct calls across assemblies bind, the caller packing its
+# arguments into the callee's argument buffer):
+# - vsum(n, ...) reads n groups of an int, a double, a struct big
+#   (aligned(16), two long longs) and another int, records each value and
+#   returns their sum, so a wrong slot, alignment or size of the struct in
+#   the buffer shows in the values and in the sum (the first call is
+#   vsum(1, 10, 2.5, {5, 6}, 20), 44);
+# - vfmt(buf, n, fmt, ...) passes its va_list to the C library's vsnprintf
+#   (glibc's on Linux triples, the UCRT's inline vsnprintf over
+#   __stdio_common_vsprintf on windows-msvc triples), so native code reads
+#   the arguments that the program packed for the library.
+# Only direct calls: a call through a pointer from another assembly is
+# 5.15.2's boundary (it fails fast from M28). Every run gets the library
+# beside the program through %{msil_prog}'s --dep-dir (without it the
+# program stops with a TypeInitializationException), on every runtime the
+# leg runs. Like the other %{msil_shlibs} tests it does not run with
+# msil_link_output=il (msil-prog.py refuses --shlibs there). Plan 5.15.2,
+# 5.17.13 (M26, M3/05-variadics).
+# UNSUPPORTED: msil-link-output=il
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_shlibs} = valib=%t/valib.c
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- valib.h
+#include <stddef.h>
+#ifdef _WIN32
+#ifdef VALIB_BUILD
+#define API __declspec(dllexport)
+#else
+#define API __declspec(dllimport)
+#endif
+#else
+#define API __attribute__((visibility("default")))
+#endif
+
+struct __attribute__((aligned(16))) big {
+  long long a, b;
+};
+
+/* What vsum read last, field by field. */
+struct seen {
+  int groups, i1, i2;
+  double d;
+  long long a, b;
+};
+
+API int vsum(int n, ...);
+API int vfmt(char *buf, size_t size, const char *fmt, ...);
+API struct seen *last_seen(void);
+#--- valib.c
+#define VALIB_BUILD
+#include <stdarg.h>
+#include <stdio.h>
+
+#include "valib.h"
+
+static struct seen seen;
+
+API int vsum(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  long long s = n;
+  seen.groups = n;
+  for (int g = 0; g < n; ++g) {
+    seen.i1 = va_arg(ap, int);
+    seen.d = va_arg(ap, double);
+    struct big b = va_arg(ap, struct big);
+    seen.a = b.a;
+    seen.b = b.b;
+    seen.i2 = va_arg(ap, int);
+    s += seen.i1 + (long long)seen.d + b.a + b.b + seen.i2;
+  }
+  va_end(ap);
+  return (int)s;
+}
+
+API int vfmt(char *buf, size_t size, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vsnprintf(buf, size, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+API struct seen *last_seen(void) { return &seen; }
+#--- main.c
+#include <stdio.h>
+
+#include "valib.h"
+
+static void show(const char *what, int r) {
+  struct seen *s = last_seen();
+  printf("%s = %d: groups %d, int %d, double %.2f, big {%lld, %lld}, int %d\n",
+         what, r, s->groups, s->i1, s->d, s->a, s->b, s->i2);
+}
+
+int main(void) {
+  struct big b = {5, 6};
+  int r = vsum(1, 10, 2.5, b, 20);
+  show("vsum(1, 10, 2.5, {5, 6}, 20)", r);
+  struct big c = {-1000000000000LL, 1000000000007LL};
+  r = vsum(2, 1, 0.75, b, 2, -3, 100.5, c, 4);
+  show("vsum(2, ...)", r);
+  r = vsum(1, 7, -1.5, c, 9);
+  show("vsum(1, 7, -1.5, {...}, 9)", r);
+  r = vsum(0);
+  printf("vsum(0) = %d\n", r);
+  char buf[64];
+  r = vfmt(buf, sizeof buf, "%d|%.3f|%s|%lld|%c", -42, 3.0625, "lib", 1LL << 40,
+           'z');
+  printf("vfmt %d [%s]\n", r, buf);
+  r = vfmt(buf, 6, "%s", "truncated");
+  printf("vfmt truncated %d [%s]\n", r, buf);
+  return vsum(1, 10, 2.5, b, 20);
+}

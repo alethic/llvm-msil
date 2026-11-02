@@ -3130,6 +3130,10 @@ for _major, _tc0 in also_run:
             make_exec_cmd(_rc, _env),
         )
     )
+# The same list on config: one (tag, jitall command, exec command) tuple per
+# msil_also_run entry, in the parameter's order, empty without msil_also_run.
+# msil/test/Programs/zlib-full/lit.local.cfg builds minigzip's runs from it.
+config.msil_also_run_cmds = also_run_cmds
 
 # %{msil_also_run_check} (see "more runtimes"; plan 5.12.3): the runs of
 # msil_also_run for a test with explicit RUN lines.

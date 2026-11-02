@@ -1,23 +1,30 @@
 ## -O0 LTO links compile no unused copy of a header's inline function
 ## (ImplementationPlan.md decision D26 as Phase 2 amends it: whole-program
 ## output drops the unreferenced discardable functions; the section 12 row of
-## 2026-10-30 'M24.c extended (fix loop)'). The UCRT's <stdio.h> defines
-## inline functions in every module that includes it, and clang -O0 emits
-## them as linkonce_odr definitions in COMDATs, the variadic sprintf and
-## _snprintf among them. LTO keeps the prevailing copies of the C library
-## functions that code generation may call (lto::InputFile::Symbol::isLibcall:
-## sprintf and vsprintf) as weak_odr definitions and makes the others
-## internal, each staying in its COMDAT. With a module summary, which clang
-## -flto writes, LTO's liveness analysis first removes the copies that
-## neither the program nor those library functions use (_snprintf and
-## _vsnprintf here); the -O0 pipeline deletes nothing. A program that calls
-## none of them compiles none of them: no
-##   variadic function definitions are not supported for MSIL yet
-## error for sprintf or _snprintf, no method and no P/Invoke. Before the fix
-## a -O0 LTO link of a windows-msvc program that includes <stdio.h> failed
-## with that error for sprintf (msil/test/M3/10-hosted on the Windows lto
-## legs). An unreferenced function that is not such a copy stays at -O0
+## 2026-10-30 'M24.c extended (fix loop)'; for -shared links and the import
+## analysis, M26.d's rows). The UCRT's <stdio.h> defines inline functions in
+## every module that includes it, and clang -O0 emits them as linkonce_odr
+## definitions in COMDATs, the variadic sprintf and _snprintf among them. LTO
+## keeps the prevailing copies of the C library functions that code
+## generation may call (lto::InputFile::Symbol::isLibcall: sprintf and
+## vsprintf) as weak_odr definitions and makes the others internal, each
+## staying in its COMDAT. With a module summary, which clang -flto writes,
+## LTO's liveness analysis first removes the copies that neither the program
+## nor those library functions use (_snprintf and _vsnprintf here); the -O0
+## pipeline deletes nothing. A program that calls none of them compiles none
+## of them: no method and no P/Invoke for sprintf or _snprintf. An
+## unreferenced function that is not such a copy stays at -O0
 ## (lto-options.test, whole-archive.test).
+## On windows-msvc msil-ld makes the bitcode definitions of
+## __local_stdio_printf_options and __local_stdio_scanf_options visible to
+## regular objects (VisibleToRegularObj; the section 12 row of 2026-10-28
+## amending 5.9.13), so LTO keeps the definition and the --lto-emit-asm text
+## has its method although nothing in the program calls it. In the image,
+## --gc-sections removes that unused copy, and the module initializer of
+## 5.15.2's UCRT stdio options (H3), which applies the options bits only to
+## a method the link keeps, then has nothing to set: harmless, as nothing
+## reads that options word. A program that calls them keeps them live, and
+## they get their bits (calls.ll here, ucrt-stdio-options.test).
 ## - prog.ll: those definitions as clang -flto emits them for
 ##   x86_64-pc-windows-msvc-msil at -O0 (stdio.ll, reduced to sprintf,
 ##   vsprintf, _snprintf and _vsnprintf with the helpers they call:
@@ -28,11 +35,17 @@
 ##   with the module flag ThinLTO = 0); nosum.bc has none (llvm-as), so LTO
 ##   hands every copy to code generation. --lto-O0 links each without a
 ##   diagnostic, to an image and to --lto-emit-asm text, and no output has a
-##   method of any of them or an import of __stdio_common_vsprintf.
-## - calls.ll: the same module with a main that calls sprintf. sprintf is
-##   compiled and keeps decision D19's error, which is the only one: the
-##   copies that main does not use are still dropped. M26 implements variadic
-##   definitions (plan 5.15.2) and changes this check.
+##   method of the printf family or an import of __stdio_common_vsprintf. A
+##   -shared link drops the unused copies too (none is dllexport), and the
+##   import analysis skips what D26 drops: without the import library,
+##   --lto-emit-asm of prog.bc reports no 'undefined symbol:
+##   __stdio_common_vsprintf', and --print-imports lists nothing.
+## - calls.ll: the same module with a main that calls sprintf. With variadic
+##   definitions (5.15.2) the link succeeds: sprintf, an expanded definition
+##   (the buffer, the format and the va_list), _vsprintf_l, _vsnprintf_l,
+##   __local_stdio_printf_options and the P/Invoke of __stdio_common_vsprintf
+##   are linked; the copies that main does not use (vsprintf, _snprintf,
+##   _vsnprintf) are still dropped.
 
 # RUN: rm -rf %t && split-file %s %t && cd %t
 # RUN: cat stdio.ll main.ll > prog.ll
@@ -45,33 +58,69 @@
 
 # DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
 # DEFINE:   --implicit-check-not="LLVM ERROR"
-# DEFINE: %{gone} = FileCheck %s --implicit-check-not=sprintf --implicit-check-not=snprintf \
-# DEFINE:   "--implicit-check-not='__local_stdio_printf_options'"
-# DEFINE: %{called} = FileCheck %s --check-prefix=CALLED %{crash} --implicit-check-not=error: \
-# DEFINE:   --implicit-check-not=warning:
+# DEFINE: %{gone} = FileCheck %s --implicit-check-not=sprintf --implicit-check-not=snprintf
+# DEFINE: %{quiet} = FileCheck %s --check-prefix=QUIET --allow-empty
 
 ## A main that calls none of them: no diagnostic (a failing link shows its
-## errors here), and only main's method.
-# RUN: msil-ld --lto-O0 prog.bc ucrt.lib -o prog.exe 2>&1 | FileCheck %s --check-prefix=QUIET --allow-empty
-# RUN: msil-ld --lto-O0 nosum.bc ucrt.lib -o nosum.exe 2>&1 | FileCheck %s --check-prefix=QUIET --allow-empty
-# RUN: %if llvm-cil-dump %{ llvm-cil-dump prog.exe | %{gone} --check-prefix=IMAGE %}
-# RUN: %if llvm-cil-dump %{ llvm-cil-dump nosum.exe | %{gone} --check-prefix=IMAGE %}
+## errors here). The image has main's method and, after --gc-sections, not
+## the options function's; the --lto-emit-asm text has both.
+# RUN: msil-ld --lto-O0 prog.bc ucrt.lib -o prog.exe 2>&1 | %{quiet}
+# RUN: msil-ld --lto-O0 nosum.bc ucrt.lib -o nosum.exe 2>&1 | %{quiet}
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump prog.exe | %{gone} --check-prefix=IMAGE \
+# RUN:   --implicit-check-not=__local_stdio_printf_options %}
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump nosum.exe | %{gone} --check-prefix=IMAGE \
+# RUN:   --implicit-check-not=__local_stdio_printf_options %}
 # IMAGE: {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
-# RUN: msil-ld --lto-O0 --lto-emit-asm prog.bc ucrt.lib -o prog.il 2>&1 \
-# RUN:   | FileCheck %s --check-prefix=QUIET --allow-empty
-# RUN: msil-ld --lto-O0 --lto-emit-asm nosum.bc ucrt.lib -o nosum.il 2>&1 \
-# RUN:   | FileCheck %s --check-prefix=QUIET --allow-empty
+# RUN: msil-ld --lto-O0 --lto-emit-asm prog.bc ucrt.lib -o prog.il 2>&1 | %{quiet}
+# RUN: msil-ld --lto-O0 --lto-emit-asm nosum.bc ucrt.lib -o nosum.il 2>&1 | %{quiet}
 # RUN: %{gone} --check-prefix=TEXT --implicit-check-not=pinvokeimpl --input-file=prog.il
 # RUN: %{gone} --check-prefix=TEXT --implicit-check-not=pinvokeimpl --input-file=nosum.il
-# TEXT: {{^}}.method public static int32 'main'() cil managed{{$}}
+# TEXT-DAG: {{^}}.method {{.*}}static native int '__local_stdio_printf_options'() cil managed{{$}}
+# TEXT-DAG: {{^}}.method public static int32 'main'() cil managed{{$}}
 # QUIET-NOT: {{.}}
 
-## A main that calls sprintf: sprintf's error, and no other.
-# RUN: not msil-ld --lto-O0 calls.bc ucrt.lib -o x.exe 2>&1 | %{called}
-# RUN: not msil-ld --lto-O0 calls-nosum.bc ucrt.lib -o x.exe 2>&1 | %{called}
-# RUN: not msil-ld --lto-O0 --lto-emit-asm calls.bc ucrt.lib -o x.il 2>&1 | %{called}
-# RUN: not msil-ld --lto-O0 --lto-emit-asm calls-nosum.bc ucrt.lib -o x.il 2>&1 | %{called}
-# CALLED: {{^}}msil-ld: error: {{.*}}in function sprintf i32 (ptr, ptr, ...): variadic function definitions are not supported for MSIL yet{{$}}
+## -shared: the unused copies are dropped as well.
+# RUN: msil-ld -shared --lto-O0 prog.bc ucrt.lib -o prog.dll 2>&1 | %{quiet}
+# RUN: msil-ld -shared --lto-O0 nosum.bc ucrt.lib -o nosum.dll 2>&1 | %{quiet}
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump prog.dll | %{gone} --check-prefix=SHARED %}
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump nosum.dll | %{gone} --check-prefix=SHARED %}
+# SHARED: {{^}}  .method 'main' int32() flags=
+
+## The import analysis skips the dropped copies: no import library needed,
+## no import listed.
+# RUN: msil-ld --lto-O0 --lto-emit-asm prog.bc -o noimp.il 2>&1 | count 0
+# RUN: msil-ld --lto-O0 --lto-emit-asm --print-imports prog.bc -o noimp-pi.il 2>&1 | count 0
+# RUN: msil-ld --lto-O0 --lto-emit-asm --print-imports prog.bc ucrt.lib -o imp-pi.il 2>&1 | count 0
+# RUN: %{gone} --check-prefix=TEXT --implicit-check-not=pinvokeimpl --input-file=noimp.il
+
+## A main that calls sprintf: links without a diagnostic.
+# RUN: msil-ld --lto-O0 calls.bc ucrt.lib -o calls.exe 2>&1 | %{quiet}
+# RUN: msil-ld --lto-O0 calls-nosum.bc ucrt.lib -o calls-nosum.exe 2>&1 | %{quiet}
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump calls.exe | FileCheck %s --check-prefix=CALLED %{crash} %}
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump calls-nosum.exe | FileCheck %s --check-prefix=CALLED %{crash} %}
+# CALLED-DAG: {{^}}  .method '__local_stdio_printf_options' native int() flags=
+# CALLED-DAG: {{^}}  .method '_vsnprintf_l' int32(native int, native int, native int, native int, native int) flags=
+# CALLED-DAG: {{^}}  .method '_vsprintf_l' int32(native int, native int, native int, native int) flags=
+# CALLED-DAG: {{^}}    L{{[0-9]+}}: call int32(native int, native int, native int) '<Module>'::'sprintf'{{$}}
+# CALLED-DAG: {{^}}  .method 'sprintf' int32(native int, native int, native int) flags=
+# CALLED-DAG: {{^}}    .pinvokeimpl 'api-ms-win-crt-stdio-l1-1-0.dll' entry '__stdio_common_vsprintf' flags=0x0201{{$}}
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump calls.exe | FileCheck %s --check-prefix=CALLED-GONE %}
+# RUN: %if llvm-cil-dump %{ llvm-cil-dump calls-nosum.exe | FileCheck %s --check-prefix=CALLED-GONE %}
+# CALLED-GONE-NOT: {{^}}  .method '{{vsprintf|_snprintf|_vsnprintf}}'
+# CALLED-GONE:     {{^}}  .method 'main' int32() flags=0x0016 impl=0x0000{{$}}
+# CALLED-GONE-NOT: {{^}}  .method '{{vsprintf|_snprintf|_vsnprintf}}'
+# RUN: msil-ld --lto-O0 --lto-emit-asm calls.bc ucrt.lib -o calls.il 2>&1 | %{quiet}
+# RUN: msil-ld --lto-O0 --lto-emit-asm calls-nosum.bc ucrt.lib -o calls-nosum.il 2>&1 | %{quiet}
+# RUN: FileCheck %s --check-prefix=CALLED-TEXT --input-file=calls.il
+# RUN: FileCheck %s --check-prefix=CALLED-TEXT --input-file=calls-nosum.il
+# CALLED-TEXT-DAG: call int32 'sprintf'(native int, native int, native int)
+# CALLED-TEXT-DAG: {{^}}.method {{.*}}static int32 'sprintf'(native int, native int, native int) cil managed{{$}}
+# CALLED-TEXT-DAG: {{^}}.method {{.*}}pinvokeimpl("api-ms-win-crt-stdio-l1-1-0.dll" nomangle cdecl) int32 '__stdio_common_vsprintf'(native int, native int, native int, native int, native int, native int) cil managed preservesig {}{{$}}
+# RUN: FileCheck %s --check-prefix=CALLED-TEXT-GONE --input-file=calls.il
+# RUN: FileCheck %s --check-prefix=CALLED-TEXT-GONE --input-file=calls-nosum.il
+# CALLED-TEXT-GONE-NOT: {{^}}.method {{.*}} '{{vsprintf|_snprintf|_vsnprintf}}'(
+# CALLED-TEXT-GONE:     {{^}}.method public static int32 'main'() cil managed{{$}}
+# CALLED-TEXT-GONE-NOT: {{^}}.method {{.*}} '{{vsprintf|_snprintf|_vsnprintf}}'(
 
 #--- stdio.ll
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"

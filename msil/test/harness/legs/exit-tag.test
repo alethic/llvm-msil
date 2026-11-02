@@ -2,10 +2,11 @@
 # Exit to the legs that a run takes: the default set (the untagged legs), the
 # Wsl legs with -Wsl, and the Exit legs, where an Exit leg whose name ends in
 # -wsl also needs -Wsl; a Quick leg runs only when -Leg names it. -List marks a
-# tagged leg with its switch ('name (-Exit)'). No leg is tagged Exit at M24
-# (ctest-lto, gc-churn and stress come with M26, M28 and M30), so the checks
+# tagged leg with its switch ('name (-Exit)'). M24 tagged no leg Exit; M26
+# tags ctest-lto, and gc-churn and stress come with M28 and M30, so the checks
 # read the legs from -Describe each time and hold for every leg a later
-# milestone tags. Against the stand-in build of Inputs/ci-legs.py, whose lit
+# milestone tags, and they require ctest-lto among the Exit legs (an Exit leg
+# that runs without -Wsl). Against the stand-in build of Inputs/ci-legs.py, whose lit
 # passes, Inputs/legs-check.py checks:
 # (1) -List and -Describe name the same legs in the same order, each listed
 # with the switch of its tag.
@@ -28,7 +29,8 @@
 # RUN: %python %S/Inputs/ci-legs.py ps1 %t/build -- -List > %t/list.txt
 # RUN: %python %S/Inputs/ci-legs.py ps1 %t/build -- -Describe > %t/describe.json
 # RUN: %python %S/Inputs/legs-check.py tags ps1 %t/list.txt %t/describe.json > %t/1.log
-# RUN: %{harness_check} contains %t/1.log "^legs-check: \d+ legs, the list's tags are the JSON's \(.*untagged \d+\); Exit legs: \S.*$"
+# RUN: %{harness_check} contains %t/1.log "^legs-check: \d+ legs, the list's tags are the JSON's \(.*untagged \d+\); Exit legs: (\S+, )*ctest-lto(, \S+)*$"
+# RUN: %{harness_check} contains %t/list.txt "^ctest-lto \(-Exit\)$"
 # RUN: %{harness_check} missing %t/build/lit-calls.log
 
 # (2)
@@ -37,13 +39,13 @@
 # RUN: %{harness_check} contains %t/2-default.log "^legs-check: \d+ rows, the legs of the default set; Exit legs among them: none$"
 # RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-exit -- -Exit > %t/exit.log
 # RUN: %python %S/Inputs/legs-check.py rows ps1 %t/describe.json %t/rows-exit --exit > %t/2-exit.log
-# RUN: %{harness_check} contains %t/2-exit.log "^legs-check: \d+ rows, the legs of exit; Exit legs among them: \S.*$"
+# RUN: %{harness_check} contains %t/2-exit.log "^legs-check: \d+ rows, the legs of exit; Exit legs among them: (\S+, )*ctest-lto(, \S+)*$"
 # RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-wsl -- -Wsl > %t/wsl.log
 # RUN: %python %S/Inputs/legs-check.py rows ps1 %t/describe.json %t/rows-wsl --wsl > %t/2-wsl.log
 # RUN: %{harness_check} contains %t/2-wsl.log "^legs-check: \d+ rows, the legs of wsl; Exit legs among them: none$"
 # RUN: %{harness_check} exits 1 %python %S/Inputs/ci-legs.py ps1 %t/build MSIL_CI_RESULTS=%t/rows-wsl-exit -- -Wsl -Exit > %t/wsl-exit.log
 # RUN: %python %S/Inputs/legs-check.py rows ps1 %t/describe.json %t/rows-wsl-exit --wsl --exit > %t/2-wsl-exit.log
-# RUN: %{harness_check} contains %t/2-wsl-exit.log "^legs-check: \d+ rows, the legs of wsl exit; Exit legs among them: \S.*$"
+# RUN: %{harness_check} contains %t/2-wsl-exit.log "^legs-check: \d+ rows, the legs of wsl exit; Exit legs among them: (\S+, )*ctest-lto(, \S+)*$"
 # RUN: %{harness_check} lacks %t/rows-wsl-exit "^lit-legs\t(net-core|p3-full|harness|wsl-p3|scale|wsl-quick)\t"
 
 # (3)

@@ -1,7 +1,11 @@
 # check-recipe.py, which keeps each det test on its program test's recipe.
 # Equal directives pass (zlib.test against ../zlib/zlib.test); a det test
 # against another program's test fails and names both files; a file without
-# a redefinition (this one) fails. Plan 5.12.9 (M23).
+# a redefinition (this one) fails. Plan 5.12.9 (M23). A det test against a
+# program test in a hosted directory passes with hosted mode's two lines
+# (zlib-full.test against ../zlib-full/example.test) and fails without them,
+# naming each missing line (plan 5.17.3, 5.17.5; M26). The script reads only
+# the test files and lit.cfg.py, so these cases need no corpus.
 # RUN: %python %S/check-recipe.py %S/zlib.test %S/../zlib/zlib.test | FileCheck --check-prefix=SAME %s
 # SAME: check-recipe.py: 4 directives agree
 # RUN: not %python %S/check-recipe.py %S/zlib.test %S/../tinf/tinf.test | FileCheck --check-prefix=DIFF %s
@@ -10,3 +14,10 @@
 # DIFF: -DZ_SOLO -DNDEBUG -Werror=implicit-function-declaration -w
 # RUN: not %python %S/check-recipe.py %s %S/../zlib/zlib.test | FileCheck --check-prefix=NONE %s
 # NONE: check-recipe.py: {{.*}}check-recipe.test has no {{REDEFINE}}: line
+# RUN: %python %S/check-recipe.py %S/zlib-full.test %S/../zlib-full/example.test | FileCheck --check-prefix=HOSTED %s
+# HOSTED: check-recipe.py: 4 directives agree, and {{.*}}zlib-full.test adds hosted mode's 2 (plan 5.17.3)
+# RUN: not %python %S/check-recipe.py %S/zlib.test %S/../zlib-full/example.test | FileCheck --check-prefix=NOHOSTED %s
+# NOHOSTED: check-recipe.py: the directives of {{.*}}zlib.test differ from {{.*}}example.test's:
+# NOHOSTED: {{.*}}example.test is in a hosted directory (plan 5.17.3), so {{.*}}zlib.test also has these lines, each on its own:
+# NOHOSTED-NEXT: {{^    REQUIRES}}: msil-hosted (missing)
+# NOHOSTED-NEXT: {{^    REDEFINE}}: %{msil_cflags} = {{.*}} %{msil_hosted_cflags} (missing)

@@ -1,0 +1,730 @@
+## The UCRT stdio options (ImplementationPlan.md 5.15.2 'The UCRT printf
+## family and stdio options (windows-msvc)', hosted-libc H3; 5.9.13's
+## Resolutions bullet as the section 12 row of 2026-10-28 amends it; M26.d,
+## M26.f). On x86_64-pc-windows-msvc-msil, when the link defines
+## __local_stdio_printf_options (resp. __local_stdio_scanf_options), the
+## module initializer ORs the options bits into the word that function
+## returns, after the relocations and before the constructors, per defined
+## function
+##   call native int <f>(); dup; ldind.i8; ldc.i8 <bits>; or; stind.i8
+## with PrintfBits 0x24 (LEGACY_WIDE_SPECIFIERS | STANDARD_ROUNDING) and
+## ScanfBits 0x2 by default (the UCRT's legacy wide-specifier mode, the
+## default). A link that names legacy_stdio_float_rounding clears 0x20 from
+## PrintfBits; one that names iso_stdio_wide_specifiers (the opt-out of
+## _CRT_STDIO_ISO_WIDE_SPECIFIERS) clears 0x4 from PrintfBits and 0x2 from
+## ScanfBits; legacy_stdio_wide_specifiers selects the default mode and,
+## like legacy_stdio_definitions, changes nothing (section 12 row '5.15.2's
+## startup options corrected (wide specifiers)'). The four names, given by
+## -l, by an embedded /DEFAULTLIB: request or by #pragma comment(lib) (which
+## clang writes as '/DEFAULTLIB:<name>.lib'), with or without .lib, are C
+## runtime libraries that msil-ld ignores: it never searches for them (no
+## such file exists here), and --verbose notes
+##   ignoring C runtime library '-l<name>'
+##   ignoring C runtime library request '<name>' from <file>
+## Opts.py (below) prints the initializer's calls in IL order, the options
+## pattern as 'options <f> |= 0x<bits>'. Cases:
+## - an object that defines both functions as COMDAT copies (as every TU
+##   that includes <stdio.h> does), one that defines only the printf one,
+##   one that defines neither, and the same definitions on linux-gnu, where
+##   nothing is applied;
+## - an LTO link of bitcode whose only definitions and calls of both
+##   functions are noinline linkonce_odr (as <stdio.h>'s inline functions):
+##   msil-ld keeps both definitions visible to regular objects, so they stay
+##   global definitions of the LTO object (map file), their reads are not
+##   folded (a helper still calls them), and the image applies the bits as
+##   the object link does; --lto-emit-asm text defines them and its
+##   initializer applies the same bits as the image, the link's C runtime
+##   names included (msil-ld passes them to the backend as module flags,
+##   section 12 row '5.15.2's startup options amended (linked text)'); the
+##   same bitcode on x86_64-unknown-linux-gnu-msil gets no visibility
+##   exception, so LTO internalizes both functions (they are not global
+##   symbols of the link) and nothing is applied;
+## - archive members as the toolchain's helper archive holds them
+##   (msil_ucrt_stdio.c, msil_ucrt_stdio_options.c; every definition weak):
+##   a program that declares printf without <stdio.h> extracts the printf
+##   member and, through it, the options member, and the printf bits apply
+##   (under the default --gc-sections the unused __local_stdio_scanf_options
+##   is removed and gets none; with --no-gc-sections both get theirs); a link
+##   that mixes the member's weak printf with another object's COMDAT printf
+##   and __local_stdio_printf_options (as every TU that includes <stdio.h>
+##   and calls printf defines them) links without a diagnostic in either
+##   order, with one method of each name and the printf bits applied once.
+
+# REQUIRES: llvm-cil-dump
+# RUN: rm -rf %t && split-file %s %t && cd %t
+# RUN: cat win.ll body.ll > both.ll
+# RUN: cat lnx.ll body.ll > both-lnx.ll
+# RUN: cat win.ll body.ll req-fr.ll > fr.ll
+# RUN: cat win.ll body.ll req-ws.ll > ws.ll
+# RUN: cat win.ll body.ll req-defs.ll > defs.ll
+# RUN: cat win.ll body.ll req-ws-pragma.ll > ws-pragma.ll
+# RUN: cat win.ll body.ll req-iso.ll > iso.ll
+# RUN: cat win.ll body.ll req-iso-pragma.ll > iso-pragma.ll
+# RUN: cat win.ll lto-body.ll > lto.ll
+# RUN: cat win.ll lto-body.ll req-iso-pragma.ll > lto-iso.ll
+# RUN: cat lnx.ll lto-body.ll > lto-lnx.ll
+# RUN: llc -filetype=obj both.ll -o both.o
+# RUN: llc -filetype=obj both-lnx.ll -o both-lnx.o
+# RUN: llc -filetype=obj fr.ll -o fr.o
+# RUN: llc -filetype=obj ws.ll -o ws.o
+# RUN: llc -filetype=obj defs.ll -o defs.o
+# RUN: llc -filetype=obj ws-pragma.ll -o ws-pragma.o
+# RUN: llc -filetype=obj iso.ll -o iso.o
+# RUN: llc -filetype=obj iso-pragma.ll -o iso-pragma.o
+# RUN: llc -filetype=obj pf.ll -o pf.o
+# RUN: llc -filetype=obj none.ll -o none.o
+
+# DEFINE: %{crash} = --implicit-check-not="PLEASE submit" --implicit-check-not="Stack dump" \
+# DEFINE:   --implicit-check-not="LLVM ERROR"
+# DEFINE: %{opts} = %python opts.py
+
+## Both functions defined: the default bits, before the constructor.
+# RUN: msil-ld both.o -o both.exe 2>&1 | count 0
+# RUN: llvm-cil-dump both.exe > both.txt
+# RUN: %{opts} both.txt | FileCheck %s --check-prefix=DEFAULT
+# DEFAULT-DAG: {{^}}options __local_stdio_printf_options |= 0x24{{$}}
+# DEFAULT-DAG: {{^}}options __local_stdio_scanf_options |= 0x2{{$}}
+# DEFAULT:     {{^}}call ctor{{$}}
+# DEFAULT-NOT: {{.}}
+## The pattern itself, in the listing.
+# RUN: FileCheck %s --check-prefix=PATTERN --input-file=both.txt
+# PATTERN:      {{^}}  .method '.cctor' void() flags=0x1891 impl=0x0000{{$}}
+# PATTERN:      {{^}}    L{{[0-9]+}}: call native int() '<Module>'::'__local_stdio_printf_options'{{$}}
+# PATTERN-NEXT: {{^}}    L{{[0-9]+}}: dup{{$}}
+# PATTERN-NEXT: {{^}}    L{{[0-9]+}}: ldind.i8{{$}}
+# PATTERN-NEXT: {{^}}    L{{[0-9]+}}: ldc.i8 36{{$}}
+# PATTERN-NEXT: {{^}}    L{{[0-9]+}}: or{{$}}
+# PATTERN-NEXT: {{^}}    L{{[0-9]+}}: stind.i8{{$}}
+
+## Only the printf function: only its bits. Neither: nothing. linux-gnu:
+## nothing.
+# RUN: msil-ld pf.o -o pf.exe 2>&1 | count 0
+# RUN: llvm-cil-dump pf.exe > pf.txt
+# RUN: %{opts} pf.txt | FileCheck %s --check-prefix=PF
+# PF:     {{^}}options __local_stdio_printf_options |= 0x24{{$}}
+# PF-NOT: {{.}}
+# RUN: msil-ld none.o -o none.exe 2>&1 | count 0
+# RUN: llvm-cil-dump none.exe > none.txt
+# RUN: %{opts} none.txt | FileCheck %s --check-prefix=NONE --allow-empty
+# NONE-NOT: options
+# RUN: msil-ld both-lnx.o -o lnx.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lnx.exe > lnx.txt
+# RUN: %{opts} lnx.txt | FileCheck %s --check-prefix=LNX
+# LNX-NOT: options
+# LNX:     {{^}}call ctor{{$}}
+# LNX-NOT: options
+
+## -l: legacy_stdio_float_rounding clears STANDARD_ROUNDING (0x20).
+# RUN: msil-ld both.o -llegacy_stdio_float_rounding -o fr-l.exe 2>&1 | count 0
+# RUN: llvm-cil-dump fr-l.exe > fr-l.txt
+# RUN: %{opts} fr-l.txt | FileCheck %s --check-prefix=FR
+# FR-DAG: {{^}}options __local_stdio_printf_options |= 0x4{{$}}
+# FR-DAG: {{^}}options __local_stdio_scanf_options |= 0x2{{$}}
+# FR:     {{^}}call ctor{{$}}
+# RUN: msil-ld --verbose both.o -llegacy_stdio_float_rounding -o fr-v.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=FR-MSG %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# FR-MSG: {{^}}msil-ld: ignoring C runtime library '-llegacy_stdio_float_rounding'{{$}}
+
+## -l: legacy_stdio_wide_specifiers selects the default mode: the default
+## bits.
+# RUN: msil-ld both.o -llegacy_stdio_wide_specifiers -o ws-l.exe 2>&1 | count 0
+# RUN: llvm-cil-dump ws-l.exe > ws-l.txt
+# RUN: %{opts} ws-l.txt | FileCheck %s --check-prefix=DEFAULT
+# RUN: msil-ld --verbose both.o -llegacy_stdio_wide_specifiers -o ws-v.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=WS-MSG %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# WS-MSG: {{^}}msil-ld: ignoring C runtime library '-llegacy_stdio_wide_specifiers'{{$}}
+
+## -l: iso_stdio_wide_specifiers clears LEGACY_WIDE_SPECIFIERS (printf 0x4,
+## scanf 0x2), with or without .lib.
+# RUN: msil-ld both.o -liso_stdio_wide_specifiers -o iso-l.exe 2>&1 | count 0
+# RUN: llvm-cil-dump iso-l.exe > iso-l.txt
+# RUN: %{opts} iso-l.txt | FileCheck %s --check-prefix=ISO
+# ISO-DAG: {{^}}options __local_stdio_printf_options |= 0x20{{$}}
+# ISO-DAG: {{^}}options __local_stdio_scanf_options |= 0x0{{$}}
+# ISO:     {{^}}call ctor{{$}}
+# ISO-NOT: {{.}}
+# RUN: msil-ld --verbose both.o -liso_stdio_wide_specifiers -o iso-v.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ISO-MSG %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# ISO-MSG: {{^}}msil-ld: ignoring C runtime library '-liso_stdio_wide_specifiers'{{$}}
+# RUN: msil-ld --verbose both.o -liso_stdio_wide_specifiers.lib -o iso-lib.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ISO-LIB-MSG %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# ISO-LIB-MSG: {{^}}msil-ld: ignoring C runtime library '-liso_stdio_wide_specifiers.lib'{{$}}
+# RUN: llvm-cil-dump iso-lib.exe > iso-lib.txt
+# RUN: %{opts} iso-lib.txt | FileCheck %s --check-prefix=ISO
+
+## iso_stdio_wide_specifiers with legacy_stdio_float_rounding: no printf or
+## scanf bit is left (printf 0x24 less 0x20 and 0x4, scanf 0x2 less 0x2), in
+## either order. legacy_stdio_wide_specifiers with it leaves the float
+## rounding bits (printf 0x4, scanf 0x2).
+# RUN: msil-ld both.o -liso_stdio_wide_specifiers -llegacy_stdio_float_rounding -o fw.exe 2>&1 | count 0
+# RUN: llvm-cil-dump fw.exe > fw.txt
+# RUN: %{opts} fw.txt | FileCheck %s --check-prefix=FW
+# RUN: msil-ld both.o -llegacy_stdio_float_rounding -liso_stdio_wide_specifiers -o wf.exe 2>&1 | count 0
+# RUN: llvm-cil-dump wf.exe > wf.txt
+# RUN: %{opts} wf.txt | FileCheck %s --check-prefix=FW
+# FW-DAG: {{^}}options __local_stdio_printf_options |= 0x0{{$}}
+# FW-DAG: {{^}}options __local_stdio_scanf_options |= 0x0{{$}}
+# FW:     {{^}}call ctor{{$}}
+# FW-NOT: {{.}}
+# RUN: msil-ld both.o -llegacy_stdio_wide_specifiers -llegacy_stdio_float_rounding -o lw.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lw.exe > lw.txt
+# RUN: %{opts} lw.txt | FileCheck %s --check-prefix=FR
+
+## -l: legacy_stdio_definitions is ignored and changes nothing.
+# RUN: msil-ld --verbose both.o -llegacy_stdio_definitions -o defs-l.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=DEFS-MSG %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# DEFS-MSG: {{^}}msil-ld: ignoring C runtime library '-llegacy_stdio_definitions'{{$}}
+# RUN: llvm-cil-dump defs-l.exe > defs-l.txt
+# RUN: %{opts} defs-l.txt | FileCheck %s --check-prefix=DEFAULT
+
+## Embedded requests, /DEFAULTLIB: (any case, '-defaultlib:', with or
+## without .lib) and #pragma comment(lib) ('/DEFAULTLIB:<name>.lib'): the
+## same bits, and the existing note for an ignored C runtime library
+## request.
+# RUN: msil-ld --verbose fr.o -o fr.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=FR-REQ %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# FR-REQ: {{^}}msil-ld: ignoring C runtime library request 'legacy_stdio_float_rounding.lib' from fr.o{{$}}
+# RUN: llvm-cil-dump fr.exe > fr.txt
+# RUN: %{opts} fr.txt | FileCheck %s --check-prefix=FR
+# RUN: msil-ld --verbose ws.o -o ws.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=WS-REQ %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# WS-REQ: {{^}}msil-ld: ignoring C runtime library request 'legacy_stdio_wide_specifiers' from ws.o{{$}}
+# RUN: llvm-cil-dump ws.exe > ws.txt
+# RUN: %{opts} ws.txt | FileCheck %s --check-prefix=DEFAULT
+# RUN: msil-ld --verbose ws-pragma.o -o ws-pragma.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=WS-PRAGMA %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# WS-PRAGMA: {{^}}msil-ld: ignoring C runtime library request 'legacy_stdio_wide_specifiers.lib' from ws-pragma.o{{$}}
+# RUN: llvm-cil-dump ws-pragma.exe > ws-pragma.txt
+# RUN: %{opts} ws-pragma.txt | FileCheck %s --check-prefix=DEFAULT
+# RUN: msil-ld --verbose iso.o -o iso.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ISO-REQ %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# ISO-REQ: {{^}}msil-ld: ignoring C runtime library request 'iso_stdio_wide_specifiers' from iso.o{{$}}
+# RUN: llvm-cil-dump iso.exe > iso.txt
+# RUN: %{opts} iso.txt | FileCheck %s --check-prefix=ISO
+# RUN: msil-ld --verbose iso-pragma.o -o iso-pragma.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=ISO-PRAGMA %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# ISO-PRAGMA: {{^}}msil-ld: ignoring C runtime library request 'iso_stdio_wide_specifiers.lib' from iso-pragma.o{{$}}
+# RUN: llvm-cil-dump iso-pragma.exe > iso-pragma.txt
+# RUN: %{opts} iso-pragma.txt | FileCheck %s --check-prefix=ISO
+# RUN: msil-ld --verbose defs.o -o defs.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=DEFS-REQ %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# DEFS-REQ: {{^}}msil-ld: ignoring C runtime library request 'LEGACY_STDIO_DEFINITIONS.LIB' from defs.o{{$}}
+# RUN: llvm-cil-dump defs.exe > defs.txt
+# RUN: %{opts} defs.txt | FileCheck %s --check-prefix=DEFAULT
+
+## LTO at -O2: bitcode only, both functions noinline linkonce_odr, called
+## only from noinline linkonce_odr helpers.
+# RUN: llvm-as lto.ll -o lto.bc
+# RUN: msil-ld --lto-O2 lto.bc -Map=lto.map -o lto.exe 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LTO-MAP --input-file=lto.map
+# LTO-MAP:     {{^}}Symbols:{{$}}
+# LTO-MAP-DAG: {{^ *}}DefinedFunction{{[[:space:]]+}}{{Global|Weak}}{{[[:space:]]+}}lto.exe.lto.o{{[[:space:]]+}}__local_stdio_printf_options{{$}}
+# LTO-MAP-DAG: {{^ *}}DefinedFunction{{[[:space:]]+}}{{Global|Weak}}{{[[:space:]]+}}lto.exe.lto.o{{[[:space:]]+}}__local_stdio_scanf_options{{$}}
+# LTO-MAP:     {{^}}Methods:{{$}}
+# RUN: llvm-cil-dump lto.exe > lto.txt
+# RUN: %{opts} lto.txt | FileCheck %s --check-prefix=LTO-OPTS
+# LTO-OPTS-DAG: {{^}}options __local_stdio_printf_options |= 0x24{{$}}
+# LTO-OPTS-DAG: {{^}}options __local_stdio_scanf_options |= 0x2{{$}}
+## The initializer's call and the helper's call of each: the options word
+## is read at run time, not folded to the zero it starts with.
+# RUN: FileCheck %s --check-prefix=LTO-READS --input-file=lto.txt
+# RUN: FileCheck %s --check-prefix=LTO-READS-S --input-file=lto.txt
+# LTO-READS-COUNT-2:   call native int() '<Module>'::'__local_stdio_printf_options'{{$}}
+# LTO-READS-S-COUNT-2: call native int() '<Module>'::'__local_stdio_scanf_options'{{$}}
+## The bits follow the link's C runtime names under LTO too: by -l, and by
+## a #pragma comment(lib) request in the bitcode.
+# RUN: msil-ld --lto-O2 lto.bc -llegacy_stdio_float_rounding -o lto-fr.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lto-fr.exe > lto-fr.txt
+# RUN: %{opts} lto-fr.txt | FileCheck %s --check-prefix=LTO-FR
+# LTO-FR-DAG: {{^}}options __local_stdio_printf_options |= 0x4{{$}}
+# LTO-FR-DAG: {{^}}options __local_stdio_scanf_options |= 0x2{{$}}
+# RUN: msil-ld --lto-O2 lto.bc -liso_stdio_wide_specifiers -o lto-iso-l.exe 2>&1 | count 0
+# RUN: llvm-cil-dump lto-iso-l.exe > lto-iso-l.txt
+# RUN: %{opts} lto-iso-l.txt | FileCheck %s --check-prefix=LTO-ISO
+# LTO-ISO-DAG: {{^}}options __local_stdio_printf_options |= 0x20{{$}}
+# LTO-ISO-DAG: {{^}}options __local_stdio_scanf_options |= 0x0{{$}}
+# RUN: llvm-as lto-iso.ll -o lto-iso.bc
+# RUN: msil-ld --verbose --lto-O2 lto-iso.bc -o lto-iso.exe 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LTO-ISO-REQ %{crash} --implicit-check-not=error: --implicit-check-not=warning:
+# LTO-ISO-REQ: {{^}}msil-ld: ignoring C runtime library request 'iso_stdio_wide_specifiers.lib' from lto-iso.bc{{$}}
+# RUN: llvm-cil-dump lto-iso.exe > lto-iso.txt
+# RUN: %{opts} lto-iso.txt | FileCheck %s --check-prefix=LTO-ISO
+## Linked text: the definitions survive LTO, and the initializer ORs exactly
+## the bits that the image's does, both halves in order: by default (36 and
+## 2), with -llegacy_stdio_float_rounding (4 and 2), and with
+## -liso_stdio_wide_specifiers or the bitcode's #pragma comment(lib) request
+## for it (32 and 0).
+# RUN: msil-ld --lto-emit-asm --lto-O2 lto.bc -o lto.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LTO-TEXT --input-file=lto.il
+# LTO-TEXT-DAG:  {{^}}.method {{.*}}static native int '__local_stdio_printf_options'() cil managed
+# LTO-TEXT-DAG:  {{^}}.method {{.*}}static native int '__local_stdio_scanf_options'() cil managed
+# RUN: FileCheck %s --check-prefix=LTO-BITS -DPF=36 -DSF=2 --input-file=lto.il
+# RUN: msil-ld --lto-emit-asm --lto-O2 lto.bc -llegacy_stdio_float_rounding -o lto-fr.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LTO-BITS -DPF=4 -DSF=2 --input-file=lto-fr.il
+# RUN: msil-ld --lto-emit-asm --lto-O2 lto.bc -liso_stdio_wide_specifiers -o lto-iso-l.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LTO-BITS -DPF=32 -DSF=0 --input-file=lto-iso-l.il
+# RUN: msil-ld --lto-emit-asm --lto-O2 lto-iso.bc -o lto-iso.il 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LTO-BITS -DPF=32 -DSF=0 --input-file=lto-iso.il
+# LTO-BITS:      {{^}}.method private hidebysig specialname rtspecialname static void .cctor() cil managed{{$}}
+# LTO-BITS-NOT:  call native int '__local_stdio_
+# LTO-BITS:      {{^}}  call native int '__local_stdio_printf_options'(){{$}}
+# LTO-BITS-NEXT: {{^}}  dup{{$}}
+# LTO-BITS-NEXT: {{^}}  ldind.i8{{$}}
+# LTO-BITS-NEXT: {{^}}  ldc.i8 [[PF]]{{$}}
+# LTO-BITS-NEXT: {{^}}  or{{$}}
+# LTO-BITS-NEXT: {{^}}  stind.i8{{$}}
+# LTO-BITS-NEXT: {{^}}  call native int '__local_stdio_scanf_options'(){{$}}
+# LTO-BITS-NEXT: {{^}}  dup{{$}}
+# LTO-BITS-NEXT: {{^}}  ldind.i8{{$}}
+# LTO-BITS-NEXT: {{^}}  ldc.i8 [[SF]]{{$}}
+# LTO-BITS-NEXT: {{^}}  or{{$}}
+# LTO-BITS-NEXT: {{^}}  stind.i8{{$}}
+# LTO-BITS-NOT:  call native int '__local_stdio_
+# LTO-BITS:      {{^[}]}} // end of method '.cctor'{{$}}
+
+## linux-gnu: the visibility exception is windows-msvc's only, so LTO
+## internalizes both functions (no global symbol of the link names them)
+## and the image applies nothing.
+# RUN: llvm-as lto-lnx.ll -o lto-lnx.bc
+# RUN: msil-ld --lto-O2 lto-lnx.bc -Map=lto-lnx.map -o lto-lnx.exe 2>&1 | count 0
+# RUN: FileCheck %s --check-prefix=LTO-LNX-MAP --input-file=lto-lnx.map
+# LTO-LNX-MAP:     {{^}}Symbols:{{$}}
+# LTO-LNX-MAP-NOT: __local_stdio_
+# LTO-LNX-MAP:     {{^ *}}DefinedFunction{{[[:space:]]+}}Global{{[[:space:]]+}}lto-lnx.exe.lto.o{{[[:space:]]+}}main{{$}}
+# LTO-LNX-MAP-NOT: __local_stdio_
+# LTO-LNX-MAP:     {{^}}Image:
+# RUN: llvm-cil-dump lto-lnx.exe > lto-lnx.txt
+# RUN: %{opts} lto-lnx.txt | FileCheck %s --check-prefix=LTO-LNX-OPTS --allow-empty
+# LTO-LNX-OPTS-NOT: options
+
+## The helper archive's members: printf declared without <stdio.h>.
+# RUN: llc -filetype=obj ucrt-stdio.ll -o ucrt-stdio.o
+# RUN: llc -filetype=obj ucrt-opts.ll -o ucrt-opts.o
+# RUN: llvm-ar rcs libucrt-stdio.a ucrt-stdio.o ucrt-opts.o
+# RUN: llvm-lib /machine:x64 /def:ucrt.def /out:ucrt.lib
+# RUN: llc -filetype=obj noinc.ll -o noinc.o
+# RUN: llc -filetype=obj mix.ll -o mix.o
+# RUN: llc -filetype=obj comdat.ll -o comdat.o
+# RUN: msil-ld noinc.o libucrt-stdio.a ucrt.lib -o noinc.exe 2>&1 | count 0
+# RUN: llvm-cil-dump noinc.exe > noinc.txt
+## Only printf is referenced (by the printf member), so the default
+## --gc-sections removes the options member's __local_stdio_scanf_options,
+## and the initializer applies bits only to the function the link keeps.
+# RUN: %{opts} noinc.txt | FileCheck %s --check-prefix=NOINC-OPTS
+# NOINC-OPTS-NOT: __local_stdio_scanf_options
+# NOINC-OPTS:     {{^}}options __local_stdio_printf_options |= 0x24{{$}}
+# NOINC-OPTS-NOT: __local_stdio_scanf_options
+## With --no-gc-sections the link keeps both definitions, and both get their
+## bits.
+# RUN: msil-ld --no-gc-sections noinc.o libucrt-stdio.a ucrt.lib -o noinc-nogc.exe 2>&1 | count 0
+# RUN: llvm-cil-dump noinc-nogc.exe > noinc-nogc.txt
+# RUN: %{opts} noinc-nogc.txt | FileCheck %s --check-prefix=NOINC-NOGC
+# NOINC-NOGC-DAG: {{^}}options __local_stdio_printf_options |= 0x24{{$}}
+# NOINC-NOGC-DAG: {{^}}options __local_stdio_scanf_options |= 0x2{{$}}
+# RUN: FileCheck %s --check-prefix=NOINC --input-file=noinc.txt
+# NOINC-DAG: {{^}}    L{{[0-9]+}}: call int32(native int, native int) '<Module>'::'printf'{{$}}
+# NOINC-DAG: {{^}}  .method 'printf' int32(native int, native int) flags=0x00{{[0-9A-F]+}} impl=0x0000{{$}}
+# NOINC-DAG: {{^}}    .pinvokeimpl 'api-ms-win-crt-stdio-l1-1-0.dll' entry '__stdio_common_vfprintf' flags=0x0201{{$}}
+
+## The member's weak printf with another object's COMDAT printf and
+## __local_stdio_printf_options, in both orders. Mix.o calls printf, sprintf
+## (only the member defines it) and comdat.o's use_printf, so the printf
+## member is extracted in both orders.
+# RUN: msil-ld mix.o libucrt-stdio.a comdat.o ucrt.lib -o mix1.exe 2>&1 | count 0
+# RUN: llvm-cil-dump mix1.exe > mix1.txt
+# RUN: FileCheck %s --check-prefix=MIX-PRINTF --input-file=mix1.txt
+# RUN: FileCheck %s --check-prefix=MIX-SPRINTF --input-file=mix1.txt
+# RUN: FileCheck %s --check-prefix=MIX-OPTFN --input-file=mix1.txt
+# RUN: %{opts} mix1.txt | FileCheck %s --check-prefix=MIX-ONCE
+# RUN: msil-ld comdat.o mix.o libucrt-stdio.a ucrt.lib -o mix2.exe 2>&1 | count 0
+# RUN: llvm-cil-dump mix2.exe > mix2.txt
+# RUN: FileCheck %s --check-prefix=MIX-PRINTF --input-file=mix2.txt
+# RUN: FileCheck %s --check-prefix=MIX-SPRINTF --input-file=mix2.txt
+# RUN: FileCheck %s --check-prefix=MIX-OPTFN --input-file=mix2.txt
+# RUN: %{opts} mix2.txt | FileCheck %s --check-prefix=MIX-ONCE
+# MIX-PRINTF-COUNT-1:  {{^}}  .method 'printf' int32(native int, native int) flags=
+# MIX-PRINTF-NOT:      {{^}}  .method 'printf'
+# MIX-SPRINTF-COUNT-1: {{^}}  .method 'sprintf' int32(native int, native int, native int) flags=
+# MIX-SPRINTF-NOT:     {{^}}  .method 'sprintf'
+# MIX-OPTFN-COUNT-1:   {{^}}  .method '__local_stdio_printf_options' native int() flags=
+# MIX-OPTFN-NOT:       {{^}}  .method '__local_stdio_printf_options'
+# MIX-ONCE-COUNT-1:    {{^}}options __local_stdio_printf_options |= 0x24{{$}}
+# MIX-ONCE-NOT:        __local_stdio_printf_options
+## In the second order comdat.o defines __local_stdio_printf_options before
+## the archive is searched, so the options member is never extracted and the
+## link defines no __local_stdio_scanf_options.
+# RUN: %{opts} mix2.txt | FileCheck %s --check-prefix=MIX2
+# RUN: FileCheck %s --check-prefix=MIX2-NOFN --input-file=mix2.txt
+# MIX2-NOT:      __local_stdio_scanf_options
+# MIX2:          {{^}}options __local_stdio_printf_options |= 0x24{{$}}
+# MIX2-NOT:      __local_stdio_scanf_options
+# MIX2-NOFN-NOT: '__local_stdio_scanf_options'
+
+#--- opts.py
+"""Summarize the module initializer of an llvm-cil-dump listing.
+
+Usage: opts.py <listing>
+
+Prints one line per call that '<Module>::.cctor' makes, in IL order
+('call <method>'), except that the UCRT stdio options pattern of plan
+5.15.2 (H3),
+  call native int() '<Module>'::'<f>'
+  dup
+  ldind.i8
+  <a constant: ldc.i8, or an ldc.i4 form, optionally converted>
+  or
+  stind.i8
+prints as 'options <f> |= 0x<bits>'. Calls of Marshal::AllocHGlobal are
+left out. A missing '.cctor' prints 'no .cctor'.
+"""
+
+import re
+import sys
+
+OPERAND = re.compile(r"^    L\d+: (\S+)(?: (.*))?$")
+MEMBER = re.compile(r"'<Module>'::'((?:[^'\\]|\\.)*)'$")
+
+
+def constant(op, arg):
+    if op in ("ldc.i8", "ldc.i4", "ldc.i4.s"):
+        return int(arg, 0)
+    if op == "ldc.i4.m1":
+        return -1
+    if op.startswith("ldc.i4."):
+        return int(op[len("ldc.i4."):])
+    return None
+
+
+def main():
+    body, inside = [], False
+    for line in open(sys.argv[1], encoding="utf-8").read().splitlines():
+        if line.startswith("  .method '.cctor' "):
+            inside = True
+            continue
+        if inside:
+            if not line.startswith("    "):
+                break
+            m = OPERAND.match(line)
+            if m:
+                body.append((m.group(1), m.group(2) or ""))
+    if not inside:
+        print("no .cctor")
+        return
+
+    def op_at(k):
+        return body[k] if k < len(body) else ("", "")
+
+    out, i = [], 0
+    while i < len(body):
+        op, arg = body[i]
+        if op != "call":
+            i += 1
+            continue
+        m = MEMBER.search(arg)
+        name = m.group(1) if m else arg
+        if op_at(i + 1)[0] == "dup" and op_at(i + 2)[0] == "ldind.i8":
+            bits = constant(*op_at(i + 3))
+            k = i + 4
+            while op_at(k)[0].startswith("conv."):
+                k += 1
+            if bits is not None and op_at(k)[0] == "or" and op_at(k + 1)[0] == "stind.i8":
+                out.append("options %s |= 0x%x" % (name, bits))
+                i = k + 2
+                continue
+        if "AllocHGlobal" not in arg:
+            out.append("call " + name)
+        i += 1
+    print("\n".join(out))
+
+
+if __name__ == "__main__":
+    main()
+
+#--- win.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+#--- lnx.ll
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu-msil"
+
+#--- body.ll
+
+;; What every TU that includes UCRT's <stdio.h> defines: the two options
+;; functions as COMDAT inline functions, each over its own static word.
+$__local_stdio_printf_options = comdat any
+$__local_stdio_scanf_options = comdat any
+
+@__local_stdio_printf_options._OptionsStorage = internal global i64 0, align 8
+@__local_stdio_scanf_options._OptionsStorage = internal global i64 0, align 8
+@seen = global i64 0, align 8
+@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @ctor, ptr null }]
+
+define linkonce_odr ptr @__local_stdio_printf_options() #0 comdat {
+  ret ptr @__local_stdio_printf_options._OptionsStorage
+}
+
+define linkonce_odr ptr @__local_stdio_scanf_options() #0 comdat {
+  ret ptr @__local_stdio_scanf_options._OptionsStorage
+}
+
+;; A constructor that reads the printf options word.
+define internal void @ctor() {
+  %p = call ptr @__local_stdio_printf_options()
+  %v = load i64, ptr %p, align 8
+  store i64 %v, ptr @seen, align 8
+  ret void
+}
+
+define i32 @main() {
+  %p = call ptr @__local_stdio_printf_options()
+  %v = load i64, ptr %p, align 8
+  %q = call ptr @__local_stdio_scanf_options()
+  %w = load i64, ptr %q, align 8
+  %s = or i64 %v, %w
+  %r = trunc i64 %s to i32
+  ret i32 %r
+}
+
+attributes #0 = { noinline nounwind }
+
+#--- req-fr.ll
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/DEFAULTLIB:legacy_stdio_float_rounding.lib"}
+
+#--- req-ws.ll
+
+!llvm.linker.options = !{!0}
+!0 = !{!"-defaultlib:legacy_stdio_wide_specifiers"}
+
+#--- req-ws-pragma.ll
+
+;; #pragma comment(lib, "legacy_stdio_wide_specifiers"), as clang writes it.
+!llvm.linker.options = !{!0}
+!0 = !{!"/DEFAULTLIB:legacy_stdio_wide_specifiers.lib"}
+
+#--- req-iso.ll
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/DEFAULTLIB:iso_stdio_wide_specifiers"}
+
+#--- req-iso-pragma.ll
+
+;; #pragma comment(lib, "iso_stdio_wide_specifiers"), as clang writes it.
+!llvm.linker.options = !{!0}
+!0 = !{!"/DEFAULTLIB:iso_stdio_wide_specifiers.lib"}
+
+#--- req-defs.ll
+
+!llvm.linker.options = !{!0}
+!0 = !{!"/DEFAULTLIB:LEGACY_STDIO_DEFINITIONS.LIB"}
+
+#--- pf.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+$__local_stdio_printf_options = comdat any
+
+@__local_stdio_printf_options._OptionsStorage = internal global i64 0, align 8
+
+define linkonce_odr ptr @__local_stdio_printf_options() #0 comdat {
+  ret ptr @__local_stdio_printf_options._OptionsStorage
+}
+
+define i32 @main() {
+  %p = call ptr @__local_stdio_printf_options()
+  %v = load i64, ptr %p, align 8
+  %r = trunc i64 %v to i32
+  ret i32 %r
+}
+
+attributes #0 = { noinline nounwind }
+
+#--- none.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@word = global i64 0, align 8
+
+define i32 @main() {
+  %v = load i64, ptr @word, align 8
+  %r = trunc i64 %v to i32
+  ret i32 %r
+}
+
+#--- lto-body.ll
+
+;; <stdio.h>'s inline functions as clang -flto emits them: the options
+;; functions and their callers (here two small stand-ins of the UCRT's
+;; _vfprintf_l and _vfscanf_l) are noinline linkonce_odr, each in its COMDAT.
+$__local_stdio_printf_options = comdat any
+$__local_stdio_scanf_options = comdat any
+$printf_opts = comdat any
+$scanf_opts = comdat any
+
+@__local_stdio_printf_options._OptionsStorage = internal global i64 0, align 8
+@__local_stdio_scanf_options._OptionsStorage = internal global i64 0, align 8
+
+define linkonce_odr ptr @__local_stdio_printf_options() #0 comdat {
+  ret ptr @__local_stdio_printf_options._OptionsStorage
+}
+
+define linkonce_odr ptr @__local_stdio_scanf_options() #0 comdat {
+  ret ptr @__local_stdio_scanf_options._OptionsStorage
+}
+
+define linkonce_odr i64 @printf_opts() #0 comdat {
+  %p = call ptr @__local_stdio_printf_options()
+  %v = load i64, ptr %p, align 8
+  ret i64 %v
+}
+
+define linkonce_odr i64 @scanf_opts() #0 comdat {
+  %p = call ptr @__local_stdio_scanf_options()
+  %v = load i64, ptr %p, align 8
+  ret i64 %v
+}
+
+define i32 @main() {
+  %a = call i64 @printf_opts()
+  %b = call i64 @scanf_opts()
+  %s = or i64 %a, %b
+  %r = trunc i64 %s to i32
+  ret i32 %r
+}
+
+attributes #0 = { noinline nounwind }
+
+#--- ucrt-stdio.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; A stand-in of the helper archive's msil_ucrt_stdio.c member: weak
+;; definitions of printf and sprintf over the UCRT's documented entry
+;; points, with the options word of __local_stdio_printf_options.
+define weak i32 @printf(ptr %fmt, ...) {
+  %ap = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  %va = load ptr, ptr %ap, align 8
+  %o = call ptr @__local_stdio_printf_options()
+  %opts = load i64, ptr %o, align 8
+  %out = call ptr @__acrt_iob_func(i32 1)
+  %r = call i32 @__stdio_common_vfprintf(i64 %opts, ptr %out, ptr %fmt, ptr null, ptr %va)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %r
+}
+
+define weak i32 @sprintf(ptr %buf, ptr %fmt, ...) {
+  %ap = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  %va = load ptr, ptr %ap, align 8
+  %o = call ptr @__local_stdio_printf_options()
+  %opts = load i64, ptr %o, align 8
+  %r = call i32 @__stdio_common_vsprintf(i64 %opts, ptr %buf, i64 -1, ptr %fmt, ptr null, ptr %va)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %r
+}
+
+declare ptr @__local_stdio_printf_options()
+declare ptr @__acrt_iob_func(i32)
+declare i32 @__stdio_common_vfprintf(i64, ptr, ptr, ptr, ptr)
+declare i32 @__stdio_common_vsprintf(i64, ptr, i64, ptr, ptr, ptr)
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+
+#--- ucrt-opts.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; A stand-in of msil_ucrt_stdio_options.c: weak definitions, each over its
+;; own static word.
+@printf_word = internal global i64 0, align 8
+@scanf_word = internal global i64 0, align 8
+
+define weak ptr @__local_stdio_printf_options() {
+  ret ptr @printf_word
+}
+
+define weak ptr @__local_stdio_scanf_options() {
+  ret ptr @scanf_word
+}
+
+#--- ucrt.def
+LIBRARY api-ms-win-crt-stdio-l1-1-0.dll
+EXPORTS
+  __acrt_iob_func
+  __stdio_common_vfprintf
+  __stdio_common_vsprintf
+
+#--- noinc.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; int printf(const char *, ...); without <stdio.h>.
+@fmt = private constant [4 x i8] c"%d\0A\00"
+
+define i32 @main() {
+  %r = call i32 (ptr, ...) @printf(ptr @fmt, i32 42)
+  ret i32 0
+}
+
+declare i32 @printf(ptr, ...)
+
+#--- mix.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+@fmt = private constant [4 x i8] c"%d\0A\00"
+@buf = global [16 x i8] zeroinitializer, align 1
+
+define i32 @main() {
+  %r = call i32 (ptr, ...) @printf(ptr @fmt, i32 42)
+  %n = call i32 (ptr, ptr, ...) @sprintf(ptr @buf, ptr @fmt, i32 7)
+  %s = call i32 @use_printf()
+  ret i32 %s
+}
+
+declare i32 @printf(ptr, ...)
+declare i32 @sprintf(ptr, ptr, ...)
+declare i32 @use_printf()
+
+#--- comdat.ll
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc-msil"
+
+;; A TU that includes <stdio.h> and calls printf: the inline printf and
+;; __local_stdio_printf_options as COMDAT copies.
+$printf = comdat any
+$__local_stdio_printf_options = comdat any
+
+@__local_stdio_printf_options._OptionsStorage = internal global i64 0, align 8
+@fmt = private constant [4 x i8] c"%d\0A\00"
+
+define linkonce_odr i32 @printf(ptr %fmt, ...) #0 comdat {
+  %ap = alloca ptr, align 8
+  call void @llvm.va_start.p0(ptr %ap)
+  %va = load ptr, ptr %ap, align 8
+  %o = call ptr @__local_stdio_printf_options()
+  %opts = load i64, ptr %o, align 8
+  %out = call ptr @__acrt_iob_func(i32 1)
+  %r = call i32 @__stdio_common_vfprintf(i64 %opts, ptr %out, ptr %fmt, ptr null, ptr %va)
+  call void @llvm.va_end.p0(ptr %ap)
+  ret i32 %r
+}
+
+define linkonce_odr ptr @__local_stdio_printf_options() #0 comdat {
+  ret ptr @__local_stdio_printf_options._OptionsStorage
+}
+
+define i32 @use_printf() {
+  %r = call i32 (ptr, ...) @printf(ptr @fmt, i32 7)
+  ret i32 %r
+}
+
+declare ptr @__acrt_iob_func(i32)
+declare i32 @__stdio_common_vfprintf(i64, ptr, ptr, ptr, ptr)
+declare void @llvm.va_start.p0(ptr)
+declare void @llvm.va_end.p0(ptr)
+
+attributes #0 = { noinline nounwind }

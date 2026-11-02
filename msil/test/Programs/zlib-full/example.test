@@ -1,0 +1,37 @@
+# zlib 1.3.2 in full, hosted: zlib's own test/example.c against libz.a (gzip file I/O, gzprintf, compress, deflate, inflate).
+# example.c (unmodified, from the corpus cache) prints the zlib version and
+# zlibCompileFlags() (the sizes of uInt, uLong, voidpf and z_off_t, so the
+# Windows and Linux transcripts differ, natively too), then runs zlib's API
+# tests: compress and uncompress, the gzip file functions on foo.gz in the
+# private run directory (gzopen, gzputc, gzputs, the variadic gzprintf, which
+# formats through vsnprintf, gzseek, gzgets, gzungetc, gzread), deflate and
+# inflate in small steps, large buffers, Z_FULL_FLUSH, inflateSync, and a
+# preset dictionary, and prints the result of most of them through printf;
+# a failing test exits 1. libz.a holds all 15 library files (adler32, compress,
+# crc32, deflate, gzclose, gzlib, gzread, gzwrite, infback, inffast,
+# inflate, inftrees, trees, uncompr, zutil), so the link extracts the members
+# the program needs. The directory is hosted (lit.local.cfg): the real C
+# headers of the triple and the host C library, no ../shim and no
+# ../support. The flags are those of the hosted-libc recon (section 1.2):
+# -D_CRT_SECURE_NO_DEPRECATE -D_CRT_NONSTDC_NO_DEPRECATE on Windows triples,
+# -DZ_HAVE_UNISTD_H -D_LARGEFILE64_SOURCE=1 on Linux triples. Built from the
+# corpus cache (%{msil_corpus}, filled by msil/utils/corpus/fetch.py) as a
+# multi-TU program with a static archive, at every level of the leg, and
+# compared with the hosted native build of the same sources; the transcript
+# ends [exit 0]. Plan 5.17.15 (M26).
+# ../det/zlib-full.test repeats the REQUIRES and REDEFINE lines for
+# %{msil_det}, and fortify.test shares this test's expected files.
+# REQUIRES: msil-corpus-zlib
+# REDEFINE: %{msil_srcs} = %{msil_corpus}/zlib-1.3.2/test/example.c
+# REDEFINE: %{msil_archives} = z=%{msil_corpus}/zlib-1.3.2/adler32.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/compress.c,%{msil_corpus}/zlib-1.3.2/crc32.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/deflate.c,%{msil_corpus}/zlib-1.3.2/gzclose.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/gzlib.c,%{msil_corpus}/zlib-1.3.2/gzread.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/gzwrite.c,%{msil_corpus}/zlib-1.3.2/infback.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/inffast.c,%{msil_corpus}/zlib-1.3.2/inflate.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/inftrees.c,%{msil_corpus}/zlib-1.3.2/trees.c, \
+# REDEFINE:   %{msil_corpus}/zlib-1.3.2/uncompr.c,%{msil_corpus}/zlib-1.3.2/zutil.c
+# REDEFINE: %{msil_copts} = -I%{msil_corpus}/zlib-1.3.2 \
+# REDEFINE:   %if msil-triple-linux %{-DZ_HAVE_UNISTD_H -D_LARGEFILE64_SOURCE=1%} \
+# REDEFINE:   %else %{-D_CRT_SECURE_NO_DEPRECATE -D_CRT_NONSTDC_NO_DEPRECATE%}
+# RUN: %{msil_prog}

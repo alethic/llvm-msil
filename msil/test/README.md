@@ -38,6 +38,12 @@ functions) link the triple's helper archive `clang_rt.builtins`, which
 (`M3/03-helpers/`), and E7h links native compiler-rt's builtins
 (`--param msil_linux_rtlib`), so that the hosted oracle gets
 compiler-rt's results too.
+Since M26 tests use variadic functions, `va_list` and the C library's
+`printf` and `scanf` families (`M3/05-variadics/`, the `printf` tests of
+`M3/10-hosted/`), and VLAs and `alloca` outside loops (`M3/00-frames/`);
+`Programs/zlib-full/` builds zlib in full as a hosted program, c-testsuite
+runs its second list, `libc.txt`, hosted, and the legs `programs-hosted`,
+`programs-hosted-wsl` and `ctest-lto` are new.
 It is an LLVM external
 project (`-DLLVM_EXTERNAL_PROJECTS=msil -DLLVM_EXTERNAL_MSIL_SOURCE_DIR=<repo>/msil`,
 set by `msil/utils/build/msil-configure.ps1` and `msil/cmake/caches/MSIL.cmake`),
@@ -641,20 +647,25 @@ milestone that implements its feature; the numbers are plan 5.17.13's
 (`00-frames` M26, `01-tls` M31, `02-lifecycle` M29, `03-helpers` M24 and
 M25, `04-switches` M33, `05-variadics` M26, `06-callbacks` M28, `07-sjlj`
 M27, `08-atomics` M24 and M30, `09-threads` M28, `10-hosted` M24,
-`11-byval` M34, `12-combined` M35). M24 created three, and M25 added the
-helper tests of `03-helpers/`:
+`11-byval` M34, `12-combined` M35). M24 created three, M25 added the
+helper tests of `03-helpers/`, and M26 created `00-frames/` and
+`05-variadics/`:
 
 | Directory | Since | Covers |
 |---|---|---|
+| `00-frames/` | M26 | dynamic allocas on no loop (plan 5.15.8 H0), each a `localloc` in the middle of its method with a native-int size: `vla.c` (one- and two-dimensional VLAs, of structures, over-aligned ones, several in one function, in nested blocks, passed to callees, `sizeof` at run time, in recursive functions, and their release when the function returns) and `alloca.c` (memory that outlives the block that allocated it, over-aligned `__builtin_alloca_with_align`, allocas beside address-taken locals, buffers handed to callees, and release at return, with 4000 calls of 32 KiB from a loop of the caller). Both are `%{msil_c}` programs, and every function with a VLA or `alloca` is `noinline` and has it outside its loops; an allocation in a loop is a compile error until M32, which `llvm/test/CodeGen/MSIL/dynamic-alloca-error.ll` pins |
 | `03-helpers/` | M24, M25 | `_BitInt(N)` results and arguments across files for N = 7, 17, 33, 65 and 127 (`bitint-abi`, M24): IR checks pin both triples' signatures after upstream merge U2's x86-64 ABI changes (no result is extended, so the caller narrows it; arguments keep their rules), and the program's `noinline` callees return and take values whose upper bits would reach its output unless each side narrows and widens as natively, at `-O0` and `-O2`, through objects and LTO. Since M25 the compiler-runtime helpers of the helper archive `clang_rt.builtins`, against the hosted native oracles, which get compiler-rt's results too: `helpers` (Annex G complex products and quotients, `_Float16` arithmetic and rounding, `__bf16`, `_Float16` to and from `__int128`, `__builtin_powi` and `__int128` `__builtin_mul_overflow`), `f16-hashes` and `bf16-hashes` (the conversions on every `_Float16` or `__bf16` value, on rounding boundaries and on named cases, printed as hashes), `complex-matrix` (`__muldc3`, `__divdc3`, `__mulsc3` and `__divsc3` on named cases and on a 14^4 matrix of special operands), `powi` (`__powidf2` and `__powisf2` on the Linux triple, the UCRT's `pow` and `powf` on windows-msvc, as native code calls them, so `powi.linux.expected` holds the Linux transcript), `longdouble` (the archive's `long double` forwarders against native `long double` code, printed as `double` bits; `-fno-builtin` in `%{msil_copts}` keeps the calls), `longdouble-archive` (`REQUIRES: msil-triple-linux, msil-cil-dump`: `sqrtl`, `strtold`, `nexttoward`, `daddl`, `dsubl`, `dmull` and `ddivl` are methods of the image that call the C library's `sqrt`, `strtod`, `nextafter`, `f32xaddf64`, `f32xsubf64`, `f32xmulf64` and `f32xdivf64`, not P/Invokes of its `long double` functions, and the last four set `errno` as native `daddl` does after an overflow, an underflow to zero, a division by zero and an invalid operation, against E7h's transcript), `longdouble-coverage` (`Inputs/helper-archive.py table`, after the script's self-test: every name of `msil-ld`'s `long double` list has a forwarder in `msil/lib/builtins/msil_longdouble.c` or a line there saying it is not forwarded), `archive-contents` (`Inputs/helper-archive.py archive`, through `%msil_nm`: the archive at the path that clang names, for the leg's triple and the two default triples, holds plan 5.14.3's minimum and nothing that it keeps out) and `shared-private` (`REQUIRES: msil-cil-dump`: a `-shared` library and its program each link their own copies of the helpers they call, and the library exports none; `Inputs/cil-listing.py` reads the listings). M25's programs have no `-S` reference, and those that call helper-archive functions have no `--lto-emit-asm` text either (a helper that the program calls stops the text link at the archive's CIL member, and one that code generation creates is the runtime-helper error, plan 5.14.3 A9), so they say `UNSUPPORTED: msil-link-output=il`; `powi` and `longdouble` say `UNSUPPORTED: msil-link-output=il && msil-triple-linux`, because on windows-msvc they call only the UCRT and run with `msil_link_output=il` |
+| `05-variadics/` | M26 | variadic functions (plan 5.15.2), split-file `.test` programs: `va` (the recon's `va.c`, extended: definitions and calls, `va_list`, `va_copy`, structures and `__int128` in `...`, a variadic function returning a structure through `sret`, a call in a loop and through a structure field, `va_list`s handed to `vsnprintf`), `regs` (`REQUIRES` the Linux triple: a System V `va_list` with arguments in the register save area, built as native `va_start` leaves it, read by compiled `va_arg`), `natives` (fixed-arity calls of `open`, `fcntl` and `ioctl`, and `dprintf`, `sscanf`, `asprintf` and `syslog` through their `va_list` variants on Linux; the UCRT's inline functions on windows-msvc; `natives.linux.expected`), `winfp` (Windows triple only: `msvcrt.dll`'s `sprintf` as an explicit import, called with fixed arity per call site and each `double` as its 64-bit pattern), `ucrt-noinc` (the `printf` and `scanf` families declared without `<stdio.h>`: on windows-msvc each of the helper archive's 32 members of `msil_ucrt_stdio.c`, with outputs that tell the option words apart and `#pragma comment(lib, "legacy_stdio_definitions")` ignored; glibc's standard narrow functions through their `va_list` variants on Linux; `ucrt-noinc.linux.expected`), `ucrt-rounding` (the stdio option bits: `%.0f` of 0.5 and 2.5 and other exact halves through `printf`, `sprintf`, `snprintf` and `fprintf`, and the options words on windows-msvc; `ucrt-rounding.linux.expected`), `native-errors` (Linux: a `double` or a structure by value passed to a fixed-arity native, and the address of glibc's `printf`, each a named error at `-O0` and `-O2` on both pipelines, FileChecked, never `LLVM ERROR`) and `shared-variadic` (a `-shared` library, `valib` through `%{msil_shlibs}`, whose variadic exports `vsum` and `vfmt` the program calls directly on both triples: an `int`, a `double`, a 16-aligned structure and an `int` per group read by the library's `va_arg`, and a `va_list` passed on to the C library's `vsnprintf`; `UNSUPPORTED: msil-link-output=il`, and an O4 `skip` line like the other `-shared` tests). `ucrt-noinc` says `UNSUPPORTED: msil-link-output=il && msil-triple-windows`: on windows-msvc it links the helper archive's CIL member, so `msil-ld`'s `--lto-emit-asm` text stops with `--lto-emit-asm cannot link CIL objects` (plan 5.14.3 A9), and `equiv-allowed.txt` skips its O4 there; on the Linux triple it links no helper member and runs with `msil_link_output=il` and O4 |
 | `08-atomics/` | M24 | D36's compiler barrier at run time (`barrier-spin`, `REQUIRES: msil-csc`): the two spin loops of a `-shared` library on a plain `int`, one with an empty `asm` memory clobber and one with `__atomic_signal_fence`, end when a C# thread of a host that `%msil_csc` compiles sets the flag (no C function reaches native code before M28, so the threads are C#'s), at `-O0` and `-O2`, on the leg's runtime, on each `msil_also_run` runtime (`%{msil_also_run_check}`) and, on Windows triples, on the .NET Framework; it FileChecks `spin() = 1`, `spin_signal_fence() = 1` and `[exit 0]` and has no `.expected` file. With the tools before M24 both loops gave up; M30 adds the atomics |
-| `10-hosted/` | M24 | the real headers with the C library functions that bind natively today: `puts` (`puts.c`, the one `%{msil_c}` test, also `main`'s implicit `return 0`), `fputs`, `fputc` and `putc` to `stdout` and `stderr` (`fputs`, whose stderr lines a FileCheck reads through `msil-run.py --stderr-out`), the standard streams as glibc's data imports and as the UCRT's `__acrt_iob_func` calls (`stdio-streams`), `errno` after `strtoll`, `strtoull`, `fopen` and `remove` (`errno`), `getenv`, `setenv` or `_putenv_s` and `unsetenv` (`getenv`), `gmtime`, `strftime`, `time` and `difftime` of fixed times (`time`) and `FILE *` I/O in the private run directory (`file-io`); M26 adds the `printf` family |
+| `10-hosted/` | M24 | the real headers with the C library functions that bind natively today: `puts` (`puts.c`, the one `%{msil_c}` test, also `main`'s implicit `return 0`), `fputs`, `fputc` and `putc` to `stdout` and `stderr` (`fputs`, whose stderr lines a FileCheck reads through `msil-run.py --stderr-out`), the standard streams as glibc's data imports and as the UCRT's `__acrt_iob_func` calls (`stdio-streams`), `errno` after `strtoll`, `strtoull`, `fopen` and `remove` (`errno`), `getenv`, `setenv` or `_putenv_s` and `unsetenv` (`getenv`), `gmtime`, `strftime`, `time` and `difftime` of fixed times (`time`) and `FILE *` I/O in the private run directory (`file-io`). Since M26 the `printf` family (glibc's through its `va_list` variants on the Linux triple, the UCRT's inline functions on windows-msvc): `printf` (conversions, flags, widths, precisions, length modifiers, `*` arguments, many arguments and the result), `fprintf` (`fprintf` and `vfprintf` to `stdout`, to a file read back with `fgets`, and through the program's own variadic wrapper with a `va_copy`) and `sprintf` (`sprintf`, `snprintf` with truncation and `snprintf(NULL, 0, ...)`, `vsprintf`, `vsnprintf`, and the strings read back with `sscanf`) |
 
-`M3/` has 19 tests: one C program and 18 `.test` files. Their transcripts
-are the same on Windows and under E7h except `03-helpers/powi`'s, whose
-`powi.linux.expected` is the only per-OS file; `archive-contents`,
-`longdouble-coverage` and `08-atomics/barrier-spin` have no `.expected`
-file.
+`M3/` has 32 tests: three C programs and 29 `.test` files. Their
+transcripts are the same on Windows and under E7h except those of
+`03-helpers/powi`, `05-variadics/natives`, `05-variadics/ucrt-noinc` and
+`05-variadics/ucrt-rounding`,
+which have a `.linux.expected` file; `archive-contents`,
+`longdouble-coverage`, `05-variadics/native-errors` and
+`08-atomics/barrier-spin` have no `.expected` file.
 
 Every directory of `M3/` is hosted (plan 5.17.3): `M3/lit.local.cfg` ends
 with the marker line
@@ -724,20 +735,42 @@ tests.
 | `support/` | the support archive of every program (`sup_arena.c`, `sup_malloc.c`, `sup_memcmp.c`, `sup_memcpy.c`, `sup_memset.c`, `sup_strlen.c`, `sup_out.c`, with `sup.h` and `gen.h`): an arena allocator, the C library functions that a freestanding MSIL build lacks (defined only under `__MSIL__`; the native build uses the C library's) and output through `puts` |
 | `shim/` | `assert.h`, `math.h`, `stdio.h`, `stdlib.h` and `string.h`, which both builds use instead of a C library's headers (`-isystem`) |
 | `zlib/`, `tinf/`, `monocypher/`, `coremark/`, `lz4/`, `blake2/`, `tweetnacl/`, `kissfft/`, `jsmn/` | one program each: its driver(s) (CoreMark also `core_portme.{h,c}`), `<name>.test` and `<name>.expected`. The test `REQUIRES: msil-corpus-<name>` (tinf also `msil-corpus-zlib`), `REDEFINE`s `%{msil_srcs}` (the drivers), `%{msil_archives}` (one archive per library of the program, from `%{msil_corpus}/<name>-<ref>/...`, and `sup` from `support/`) and `%{msil_copts}` (the include directories, the program's defines, `-Werror=implicit-function-declaration -w`), and runs `%{msil_prog}`. Every path is written `%S/../<dir>/...`, so `det/` can repeat the lines verbatim. The drivers return their error count, clamped to 255 (jsmn's has no self-check and returns 0), so every transcript ends `[exit 0]`; there is no `.linux.expected` file, because the Windows and E7 oracles agree |
-| `det/` | `<name>.test` for each program: the program's `REQUIRES:` and `REDEFINE:` lines, `check-recipe.py`, which fails when they differ from the program's test (continuation lines joined as lit joins them), then `%{msil_det}`; `check-recipe.test` is its self-test |
-| `c-testsuite/` | c-testsuite's libc-free tests in a lit test format of the directory's own (`msil_ctest_format.py`, plan 5.12.9 and, since M24, 5.17.14): `libc-free.txt` lists them under the header lines `# rule:` (the recon's regular expression of C library calls) and `# count: 150`, and `libc.txt`, from M26, will list the other tests of the tree under the same rule. `lit.local.cfg` recomputes the lists from the cached tree and stops on a difference, a malformed line or a listed test without its `.c.expected`. Each entry is a lit test `MSIL :: Programs/c-testsuite/<name>` whose script is `ctest.template`: `%{msil_prog}` on `tests/single-exec/<name>.c` with `%{msil_cflags}` redefined to `%{msil_ctest_cflags}` (`-std=gnu17 -w`: no `-ffreestanding`, because several tests rely on `main`'s implicit `return 0`) and `%{msil_expect}` to `%t/<name>`, the expected file that the format writes from `<name>.c.expected` and `[exit 0]`. An entry is `<name>`; `<name> native <triple>  # <reason>` (on that triple the native oracle's transcript is the expected file); `<name> diag [<triple>] <text>  # M<n> <what>` (a construct that milestone `M<n>` implements: `%{msil_prog_fail_<L>}` at each level of `msil_opt_levels` into `FileCheck diag.check -DDIAG=<text>` with the `LLVM ERROR` and `PLEASE submit` implicit-check-nots, under `msil-prog-pipeline=obj` only, because an LTO link may delete the construct first); or `<name> exclude <triple> long-double\|not-portable  # <text>` (UNSUPPORTED on that triple). `<triple>` is `linux-gnu` or `windows-msvc`, and a modifier applies on that triple only. The one `diag` entry is `00140` (a variadic definition, M26), whose unused definition LTO deletes at `-O2` |
+| `zlib-full/` | M26 (plan 5.17.15): zlib 1.3.2 in full as a hosted program, the first of the Phase 3 exit corpus. Its `lit.local.cfg` ends with `config.msil_enable_hosted(config)`, so the tests use the triple's real headers and C library instead of `shim/` and `support/` and the hosted native oracle. `libz.a` holds all 15 library files from `%{msil_corpus}/zlib-1.3.2` (gzip file I/O, `compress`, `uncompress` and the variadic `gzprintf` included), with the hosted-libc recon's flags per triple; `example.test` runs zlib's `test/example.c` through `%{msil_prog}` (`example.expected` and `example.linux.expected`, because `zlibCompileFlags()` prints the type sizes); `fortify.test` (Linux triple) adds glibc's `-D_FORTIFY_SOURCE=2`, whose `printf` family are variadic definitions in the header; `minigzip.test` runs `test/minigzip.c` at `-O0` and `-O2` on a 2 MiB input that `minigzip-data.py` generates into `%t` (its SHA-256 pinned), compares the gzip stream with the hosted native build's byte for byte, decompresses the native stream back to the input, and repeats both on the .NET Framework and on each runtime of the leg's `msil_also_run` (`%{minigzip_also_run_<L>}` of `zlib-full/lit.local.cfg`, built from `config.msil_also_run_cmds` of `msil/test/lit.cfg.py`); no binary data goes through a transcript. All three `REQUIRES: msil-corpus-zlib` |
+| `det/` | `<name>.test` for each program: the program's `REQUIRES:` and `REDEFINE:` lines, `check-recipe.py`, which fails when they differ from the program's test (continuation lines joined as lit joins them), then `%{msil_det}`; `check-recipe.test` is its self-test. `zlib-full.test` (M26) builds `zlib-full/example.test`'s program twice; since `det/` is not hosted, it sets hosted mode's `%{msil_cflags}` itself and `REQUIRES: msil-hosted`, and `check-recipe.py` accepts exactly that difference |
+| `c-testsuite/` | c-testsuite's libc-free tests in a lit test format of the directory's own (`msil_ctest_format.py`, plan 5.12.9 and, since M24, 5.17.14): `libc-free.txt` lists them under the header lines `# rule:` (the recon's regular expression of C library calls) and `# count: 150`, and `libc.txt` (M26, required since: a missing file is a configuration error) the other 70 tests of the tree under the same rule and `# count: 70`. `lit.local.cfg` recomputes the lists from the cached tree and stops on a difference, a malformed line or a listed test without its `.c.expected`. Each entry is a lit test `MSIL :: Programs/c-testsuite/<name>` whose script is `ctest.template`: `%{msil_prog}` on `tests/single-exec/<name>.c` with `%{msil_cflags}` redefined to `%{msil_ctest_cflags}` (`-std=gnu17 -w`: no `-ffreestanding`, because several tests rely on `main`'s implicit `return 0`) and `%{msil_expect}` to `%t/<name>`, the expected file that the format writes from `<name>.c.expected` and `[exit 0]`. An entry is `<name>`; `<name> native <triple>  # <reason>` (on that triple the native oracle's transcript is the expected file); `<name> diag [<triple>] <text>  # M<n> <what>` (a construct that milestone `M<n>` implements: `%{msil_prog_fail_<L>}` at each level of `msil_opt_levels` into `FileCheck diag.check -DDIAG=<text>` with the `LLVM ERROR` and `PLEASE submit` implicit-check-nots, under `msil-prog-pipeline=obj` only, because an LTO link may delete the construct first); or `<name> exclude <triple> long-double\|not-portable  # <text>` (UNSUPPORTED on that triple). `<triple>` is `linux-gnu` or `windows-msvc`, and a modifier applies on that triple only. `libc.txt`'s tests run hosted, under a copy of the configuration that `config.msil_enable_hosted` makes hosted (`%{msil_cflags}` is `-std=gnu17 -w %{msil_hosted_cflags}`, `%{msil_oracle_flags}` `--hosted`), as `MSIL :: Programs/c-testsuite/libc/<name>`. M24's one `diag` entry, `00140` (a variadic definition), is a plain entry since M26, and no `diag` entry is left in `libc-free.txt`; `libc.txt`'s modifiers are `00212`, `00216` and `00218 native windows-msvc` (their `.c.expected` assumes LP64 or GCC's layouts), `00204 exclude linux-gnu long-double`, `00214 exclude windows-msvc not-portable` and `00189 diag linux-gnu` (the address of `fprintf`, called through the pointer: plan 5.15.2 rule 4's link-time error until M28's address adapter makes it a plain entry), so M26's target is 137 of its 140 (test, triple) pairs (Status.md section 1, "c-testsuite") |
 
-`Programs/` has 169 lit tests: the nine programs, their nine `det` tests,
-`det/check-recipe.test` and the 150 tests of c-testsuite. The corpus legs run
+`Programs/` has 243 lit tests: the nine programs, the three of `zlib-full/`,
+the ten `det` tests, `det/check-recipe.test` and the 220 tests of
+c-testsuite (150 in `libc-free.txt`, 70 in `libc.txt`). The corpus legs run
 them (`programs`, `programs-lto`, `ctest` and `det`, and the WSL twins of
-all four, `ctest-wsl` since M24); `net8` filters them out
-(`--filter-out=MSIL :: Programs/`).
+all four, `ctest-wsl` since M24; since M26 also `ctest-lto`, and the hosted
+programs in `programs-hosted` and `programs-hosted-wsl`); `net8` filters
+them out (`--filter-out=MSIL :: Programs/`).
 
 `harness/` holds the self-tests of the runner, the verifier, jitall,
 `update-expected.py`, `il-snapshot.py`, `%msil_canon`, the equivalence
-oracles and lit's configuration: 142 tests, 78 at the top level, 16 in
-`prog/`, 26 in `legs/`, 6 in `pipeline/`, 5 in `pipeline-obj/` and 11 in
+oracles and lit's configuration: 145 tests, 80 at the top level, 16 in
+`prog/`, 27 in `legs/`, 6 in `pipeline/`, 5 in `pipeline-obj/` and 11 in
 `equiv/`.
+M26 added `gtest-vsenv.test` (`msil-env.ps1` under lit trusts the x64
+developer environment that lit passes on and writes no
+`msil-vsenv-x64.json` into a fresh `TEMP`, while the same case with every
+`cl.exe` directory removed from `PATH` enters the developer shell and
+writes it; Windows, in a developer environment), `linux-syntax-check.test`
+(`msil/utils/ci/linux-syntax-check.py`, the `-fsyntax-only` check with
+Ubuntu 24.04's clang 18 and libstdc++ 14 that the Linux CI job builds with:
+a TU with a nested class held in a `std::optional` fails as CI run
+41257850076 did and its fix passes; `REQUIRES: msil-linux-syntax-check`,
+the toolchain fetched beforehand with `--setup-only`) and
+`legs/p3-tests-stop.test` (`lit-legs.ps1` stops, starting no lit, when
+`check-matrix.py --p3-tests` fails or prints a line that is not a test path
+under `msil/test`, while `-List` does not read it), and extended
+`ctest-lists.test` (a missing `libc.txt` is a configuration error, `00140`
+a plain entry, and case (4): the repository's lists as M26 leaves them,
+with their failure paths) and `legs/describe.test`, `describe-sh.test`,
+`exit-tag.test` and `exit-tag-sh.test` (M26's legs and `$checkMsil` paths
+below, `-Leg` of each new leg passing exactly what `-Describe` shows, and a
+planted fault for each).
 M25 added `linux-rtlib.test` (E7h's link with `msil-prog.py --linux-rtlib
 FILE` between `-lm` and `-lc`, for the program and for each `--shlibs`
 library; E7 and a hosted Linux host's link; a FILE that does not exist as a
@@ -774,7 +807,10 @@ changes only them, and a failed archive build that writes no manifest),
 `03-helpers/complex-matrix.test` on both default triples and for `powi.test`
 on the Linux triple only, never for `bitint-abi.test`, and no line skips O3 or
 O6 (O6 through `msil-verify.py`) for a `03-helpers` test, or O3, O4 or O6 for
-a test of another `M3/` directory),
+a test of another `M3/` directory, which it checks on
+`08-atomics/barrier-spin.test`; since M26 `05-variadics/ucrt-noinc.test` has
+an O4 line for windows-msvc and `05-variadics/shared-variadic.test` one for
+every triple, below),
 `linux-hosted-oracle.test` (E7h's link with the archive between `-lm` and
 `-lc`; it now also requires `msil-linux-rtlib`) and
 `prog/update-expected.test` (a path that does not exist is
@@ -1064,8 +1100,10 @@ since M24, `M3/` through LTO with O4 and `msil_also_run=10`), `det`
 (`M2/06-det` and `Programs/det`), the reference legs `refs-net48`,
 `refs-net8` (with `M2/04-shared` and the library rows of the matrix, and
 `msil_also_run=10`) and `refs-net10`, and the corpus legs `programs`,
-`programs-lto` (with O4) and `ctest` (on .NET 10 since M24, with
-`msil_also_run=8`); with `-Wsl`, for the Linux triple on the private WSL
+`programs-lto` (with O4; both with the hosted programs and
+`msil_also_run=10,10+tc0` since M26) and `ctest` (on .NET 10 since M24, with
+`msil_also_run=8`; since M26 with both of c-testsuite's lists); with `-Wsl`, for the Linux triple on
+the private WSL
 runtimes with the E7 oracle required (E7h, with `msil_glibc_sysroot`, for
 the hosted tests): `wsl-net10` (M1, M2, M3 and the harness through objects,
 with `msil_equiv=1` and `msil_also_run=8,10+tc0`), `wsl-ilasm` (the Linux
@@ -1073,11 +1111,22 @@ ilasm), `lto-wsl` (`M1/11-programs`, `M2/00-link`, `01-archive`, `02-lto`,
 `03-native`, `04-shared`, `05-refs`, `07-equiv` and `08-semantics`, and
 `M3/`, through LTO with `msil_also_run=8`, without O4, which `lto` runs over
 these paths; M24 added `01-archive`, `03-native`, `04-shared`, `05-refs`,
-`07-equiv` and `M3/`), `programs-wsl`, `programs-lto-wsl` (with O4),
+`07-equiv` and `M3/`), `programs-wsl`, `programs-lto-wsl` (with O4; both
+with the hosted programs and `msil_also_run=8,10+tc0` since M26),
 `ctest-wsl` (M24: c-testsuite for the Linux triple, with
-`msil_also_run=8`), `det-wsl` and the optional `hosted` leg
-(`M2/09-hosted` with `msil_glibc_sysroot` given, M15). `-Quick` legs run
-only when `-Leg` names them. The standard milestone gate of Phase 3 (plan
+`msil_also_run=8`), `det-wsl` (since M26 with `msil_glibc_sysroot`, for the
+hosted programs' `det` tests) and the optional `hosted` leg
+(`M2/09-hosted` with `msil_glibc_sysroot` given, M15). The hosted programs
+(`$hostedPrograms`, plan 5.17.15) are the directories of
+`Programs/zlib-full` (M26), `lua` (M27) and `sqlite` (M30) that exist; the
+`-Quick` legs `programs-hosted` (Windows: under objects at `-O2` on .NET 10,
+`msil_also_run=10+tc0` and the .NET Framework, the native oracle required)
+and `programs-hosted-wsl` (the Linux triple on WSL .NET 10 with E7h and
+`msil_also_run=10+tc0`) run them alone, as an exit check of a milestone's
+gate. Since M26 `net8` and `net-core` also run
+`clang/test/Sema/msil-long-double-format.c` and
+`llvm/test/Transforms/ExpandVariadics/msil-abi.ll` (`$checkMsil`).
+`-Quick` legs run only when `-Leg` names them. The standard milestone gate of Phase 3 (plan
 5.17.7; GettingStarted.md section 7) runs four of them: `net-core` (G3:
 `net8`'s paths without `Programs/`, `harness/`, `M3/`, `spill-limits.test`
 and the Phase 3 feature tests outside `M3/`, through objects on .NET 10 and
@@ -1096,8 +1145,10 @@ are the paths that `M2/08-semantics/Inputs/check-matrix.py --p3-tests`
 prints from the `#! p3-tests:` lines of `matrix.txt` (M24:
 `M1/02-fp/strict-i128.c`). `-Full` adds `all-levels`, `lto-m1` and
 `encoder-parity`, and `-Exit` (M24) the legs of the post-commit run and the
-Phase 3 exit gate: none in M24 (M26 adds `ctest-lto`, M28 `gc-churn` and
-`gc-churn-wsl`, M30 `stress` and `stress-wsl`). Six legs are not lit runs:
+Phase 3 exit gate: none in M24; M26 added the first, `ctest-lto`
+(c-testsuite, both lists, through LTO on .NET 10 against the native
+oracle), and M28 adds `gc-churn` and `gc-churn-wsl`, M30 `stress` and
+`stress-wsl`. Six legs are not lit runs:
 `expected` (`update-expected.py --check --levels O0,O2` of `M1/`, `M2/` and
 `M3/`, the Windows oracle, the DLL C runtime's in `M3/`), `expected-linux`
 (the same with `--os linux`, the E7 oracle, E7h in `M3/`), `utc`,
@@ -1327,8 +1378,8 @@ int helper(void) { return 100; }
   `REDEFINE:` lines exactly. Write its `.expected` file with
   `update-expected.py --corpus-dir <cache> msil/test/Programs/<name>`. A
   c-testsuite test that a construct of a later milestone stops gets a `diag`
-  line in `libc-free.txt` whose comment names that milestone (`# M26 ...`,
-  plan 5.17.14); any other failure of one is a compiler or linker bug, never
+  line in its list whose comment names that milestone (`# M28 ...`, plan
+  5.17.14; none is left after M26); any other failure of one is a compiler or linker bug, never
   a reason to drop it from the list.
 
 A test of a Phase 3 feature that runs a program goes in `M3/<NN-area>/`
@@ -1771,6 +1822,8 @@ Every line of the file:
 | `skip O4 msil/test/M2/08-semantics/p2c-bsymbolic.test` | | | library links (M22), with the same reason |
 | `skip O4 msil/test/M2/08-semantics/p2c-cycle.test` | | | library links (M22), with the same reason |
 | `skip O4 msil/test/M2/08-semantics/p2c-weak-def.test` | | | library links (M22), with the same reason |
+| `skip O4 msil/test/M3/05-variadics/shared-variadic.test` | | | library links (M22), with the same reason: M26's program against a `-shared` library with variadic exports |
+| `skip O4 msil/test/M3/05-variadics/shared-variadic.test` | | | library links (M22), with the same reason: M26's program against a `-shared` library with variadic exports |
 | `skip O4 msil/test/M3/03-helpers/bf16-hashes.test` | | | helper-archive programs (M25, plan 5.14.3 A9): `--lto-emit-asm` resolves the program's own references before code generation, as an image link does, so a helper that the program calls itself (a `_Complex` helper, a `long double` forwarder) makes `msil-ld` extract the helper archive's member, a CIL object, and stop with `<archive>(<member>): --lto-emit-asm cannot link CIL objects; link without --lto-emit-asm`, while a helper call that code generation creates after LTO (a `_Float16` or `__bf16` conversion, `__powidf2`) is `runtime helper '<name>' needs the helper archive clang_rt.builtins, which only msil-ld links`, as in `-S` and llc text; either way there is no text to compare: `programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)`. This test: the code generator's `__truncsfbf2` and `__truncdfbf2` |
 | `skip O4 msil/test/M3/03-helpers/complex-matrix.test` | | | helper-archive programs (M25), with the same reason: the program's own `__mulsc3`, `__muldc3`, `__divsc3` and `__divdc3` |
 | `skip O4 msil/test/M3/03-helpers/f16-hashes.test` | | | helper-archive programs (M25), with the same reason: the code generator's `__extendhfsf2`, `__truncsfhf2` and `__truncdfhf2` |
@@ -1779,6 +1832,7 @@ Every line of the file:
 | `skip O4 msil/test/M3/03-helpers/shared-private.test` | | | helper-archive programs (M25), with the same reason: the program's `__muldc3` and `__divdc3` and the code generator's `_Float16` conversions; its link against a `-shared` library has no text either (`--lto-emit-asm cannot import from a .NET library`) |
 | `skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/03-helpers/longdouble.test` | | | helper-archive programs (M25), with the same reason, on the Linux triple only: there the program's `long double` calls are the archive's forwarders, while on windows-msvc it calls only the UCRT, as native code does, so O4 runs there (and the test runs with `msil_link_output=il`) |
 | `skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/03-helpers/powi.test` | | | helper-archive programs (M25), with the same reason, on the Linux triple only: there `__builtin_powi` is the code generator's `__powidf2` and `__powisf2`, while on windows-msvc it is the UCRT's `pow` and `powf`, as in native code, so O4 runs there (and the test runs with `msil_link_output=il`) |
+| `skip O4@x86_64-pc-windows-msvc-msil msil/test/M3/05-variadics/ucrt-noinc.test` | | | the UCRT's `printf` family as helper-archive members (M26, plan 5.15.2): the `printf` and `scanf` families, declared without `<stdio.h>`, come from the helper archive's 32 CIL members built from `msil_ucrt_stdio.c`, so the composite's `--also-il` link stops with `'--lto-emit-asm cannot link CIL objects'` and there is no text to compare (plan 5.14.3 A9); on the Linux triple the test links no helper member and runs O4 |
 
 The `skip` lines are of five kinds (plan 5.12.6): 5.8.10's whole-program
 differences (under O6 too, since M21, for the two tests whose image has
@@ -1792,12 +1846,15 @@ text, O4 against `--lto-emit-asm` text); spill classes under O4; and O4 for
 links that `--lto-emit-asm` cannot write as one text module (prebuilt CIL
 objects or archives of them, ThinLTO and `--lto-partitions`); and, since M22,
 O4 for the tests that build `-shared` libraries or link against them, which
-have no `--lto-emit-asm` text at all (`04-shared/` as a directory, and the
-three library rows of the matrix); and, since M25, O4 for each test of
+have no `--lto-emit-asm` text at all (`04-shared/` as a directory, the
+three library rows of the matrix and, since M26, `M3/05-variadics/shared-variadic.test`); and, since M25, O4 for each test of
 `M3/03-helpers/` that calls helper-archive functions, one line per test,
 because such a program has no `--lto-emit-asm` text (plan 5.14.3 A9: a
 helper that the program calls stops the text link at the archive's CIL
-member, and one that code generation creates is the runtime-helper error).
+member, and one that code generation creates is the runtime-helper error);
+and, since M26, O4 on windows-msvc for `M3/05-variadics/ucrt-noinc.test`,
+whose `printf` family, declared without `<stdio.h>`, comes from the helper
+archive's CIL member `msil_ucrt_stdio.c` (plan 5.15.2), for the same reason.
 `bitint-abi`, which calls no helper, has no line, and no line skips O3 or O6
 there: every `03-helpers` test is a `%{msil_prog}`, and O3 and O6 run only
 for `%{msil_c}` and `%{msil_ll}` under `obj`. Under `lto` with
@@ -1807,8 +1864,9 @@ check (M22's gate shows it on `04-shared/lib-and-prog` and
 because its difference exists only in the Windows triple's `-O2` build, and
 only the lines of `03-helpers/powi.test` and `longdouble.test` name a triple
 alone, the Linux one, because on windows-msvc these two call the UCRT, as
-native code does, and pass O4; every other line covers every triple and
-level.
+native code does, and pass O4, and `05-variadics/ucrt-noinc.test`'s the
+Windows one, where the helper archive defines the `printf` family; every
+other line covers every triple and level.
 
 O3 allows `assembly-hash`, `ilasm-params`, `ilasm-initlocals`, `snan-quiet`,
 `pinvoke-module` and `pinvoke-access`; O4 the first four (linked text and

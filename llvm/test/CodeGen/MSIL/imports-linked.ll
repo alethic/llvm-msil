@@ -33,12 +33,17 @@
 ;   ordinal entry '#9', a DLL name with its suffix, an ELF DT_SONAME). The
 ;   D11 byte order mark also covers the !msil.imports strings. A natively
 ;   bound function whose signature a P/Invoke cannot pass is one of 5.10.14's
-;   'native function '<name>' (<module>) ...' errors: variadic, or a value
-;   that a P/Invoke cannot pass natively (here an i128 result and a byval
-;   aggregate parameter). An unbound extern_weak declaration keeps M12's
-;   null-plus-trap lowering ('<msil>undef_<name>', 5.9.6 step 3), also when
-;   D14 lists its name (puts): its address is 0 and its direct calls call the
-;   trap stub, with no P/Invoke and no not-resolved error.
+;   'native function '<name>' (<module>) ...' errors: a value that a P/Invoke
+;   cannot pass natively (here an i128 result and a byval aggregate
+;   parameter). A call of a natively bound variadic function is no error
+;   since M26: it is expanded and bound to the entry msil-ld chose, its
+;   va_list variant (variadic-call.ll). Its address is still an error, 5.15.2
+;   link-time rule 4's 'the address of native variadic function '<name>'
+;   (<module>) is not supported for MSIL yet' (vimp; until M28's adapter).
+;   An unbound extern_weak declaration keeps M12's null-plus-trap lowering
+;   ('<msil>undef_<name>', 5.9.6 step 3), also when D14 lists its name
+;   (puts): its address is 0 and its direct calls call the trap stub, with no
+;   P/Invoke and no not-resolved error.
 ; - Standalone (clang -S, llc). A module without "msil-linked", one with only
 ;   M14's "msil-lto", and one whose "msil-linked" is not 1 print D14's
 ;   P/Invokes ('public'; "libc" and "libm.so.6" on linux-gnu, "ucrtbase" on
@@ -488,7 +493,7 @@ declare double @llvm.sqrt.f64(double)
 ; ERR-DAG: {{^}}error: runtime helper '__extendhfsf2' needs the helper archive clang_rt.builtins, which only msil-ld links{{$}}
 ; ERR-DAG: {{^}}error: runtime helper '__atomic_fetch_add_4' is an atomic operation that only msil-ld links{{$}}
 ; ERR-DAG: {{^}}error: runtime helper '__atomic_load_4' is an atomic operation that only msil-ld links{{$}}
-; ERR-DAG: {{^}}error: native function 'vimp' (libc.so.6) is variadic; calls of native variadic functions are not supported for MSIL yet (phase 3){{$}}
+; ERR-DAG: {{^}}error: the address of native variadic function 'vimp' (libc.so.6) is not supported for MSIL yet{{$}}
 ; ERR-DAG: {{^}}error: native function 'imp128' (libbig.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
 ; ERR-DAG: {{^}}error: native function 'takebyval' (libbig.so.1) takes or returns a value that a P/Invoke cannot pass natively yet (phase 3){{$}}
 ; EBAN: {{^}}error:

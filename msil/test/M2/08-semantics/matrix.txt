@@ -46,7 +46,8 @@
 #! rows: gc-used-retain pragma-comment-lib native-callback
 #! rows: fini-array crt-xt atexit-order variadic-def-xtu
 #! rows: p2c-bsymbolic p2c-cycle p2c-weak-def
-# The rows whose 'From' column names M20, on obj and lto.
+# The rows whose 'From' column names M20, and the P3 rows a Phase 3
+# milestone flipped (plan 5.17.12 item 5), on obj and lto.
 #! obj-lto: zoo zoo-archive zoo-defined p1-weak-alias p2-knr knr-two-arities
 #! obj-lto: sig-mismatch p3-start-stop p4-selectany p5-tls p6-ctors p6-dtors
 #! obj-lto: p8-section-ctor ctor-slot-order weak-def-sig-mismatch import-attrs
@@ -55,6 +56,7 @@
 #! obj-lto: unaligned-reloc int-ptr-adapter missing-arg-adapter type-mismatch
 #! obj-lto: duplicate-strong undefined float-int-mismatch weak-undef-guarded
 #! obj-lto: gc-used-retain pragma-comment-lib native-callback
+#! obj-lto: variadic-def-xtu
 # The strict (constrained) i128 conversions run as a program.
 #! p3-tests: msil/test/M1/02-fp/strict-i128.c
 
@@ -125,10 +127,13 @@ p2c-bsymbolic | 08-semantics/p2c-bsymbolic.test | transcript: -Bsymbolic native 
 p2c-cycle | 08-semantics/p2c-cycle.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M22
 p2c-weak-def | 08-semantics/p2c-weak-def.test | transcript | obj,lto | linux-gnu,windows-msvc | transcript | M22
 
+# Flipped P3 rows (plan 5.17.12 item 5): the milestone that built the
+# feature wrote its id and made the line a transcript.
+variadic-def-xtu | 08-semantics/variadic-def-xtu.test | transcript: 42 | obj,lto | linux-gnu,windows-msvc | transcript | M26
+
 # P3 rows: each test pins today's diagnostic until the milestone that
 # builds its feature makes the line a transcript (p5-tls, p6-dtors and
 # native-callback above are P3 rows too).
 fini-array | 08-semantics/fini-array.test | transcript: main, then the .fini_array entry at exit (glibc) | obj,lto | linux-gnu | diag:global destructors are not supported yet: p_fini in <file> | P3-A
 crt-xt | 08-semantics/crt-xt.test | transcript: main, then the .CRT$XT entry at exit (MSVC CRT) | obj,lto | windows-msvc | diag:global destructors are not supported yet: p_term in <file> | P3-A
 atexit-order | 08-semantics/atexit-order.test | transcript: the handlers in the reverse order of registration | obj,lto | linux-gnu,windows-msvc | diag:undefined symbol: atexit | P3 (5.10.10: atexit binds nowhere in Phase 2)
-variadic-def-xtu | 08-semantics/variadic-def-xtu.test | transcript: 42 | obj,lto | linux-gnu,windows-msvc | diag:variadic function definitions are not supported for MSIL yet | P3-B (D19)

@@ -56,6 +56,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
@@ -127,6 +128,14 @@ public:
   };
   virtual VAArgSlotInfo slotInfo(const DataLayout &DL, Type *Parameter) = 0;
 
+  // The slot of the variadic argument ArgNo of the call CB, whose value has
+  // the type Parameter (decoded from byval or byref). By default the type
+  // alone decides; an ABI may also read the call site's attributes.
+  virtual VAArgSlotInfo slotInfo(const DataLayout &DL, Type *Parameter,
+                                 const CallBase &CB, unsigned ArgNo) {
+    return slotInfo(DL, Parameter);
+  }
+
   // Targets implemented so far all have the same trivial lowering for these
   bool vaEndIsNop() { return true; }
   bool vaCopyIsMemcpy() { return true; }
@@ -166,8 +175,7 @@ public:
   bool rewriteABI() { return Mode == ExpandVariadicsMode::Lowering; }
 
   template <typename T> bool isValidCallingConv(T *F) {
-    return F->getCallingConv() == CallingConv::C ||
-           F->getCallingConv() == CallingConv::SPIR_FUNC;
+    return isExpandedVariadicCallingConv(F->getCallingConv());
   }
 
   bool runOnModule(Module &M) override;
@@ -186,6 +194,8 @@ public:
 
   bool expandCall(Module &M, IRBuilder<> &Builder, CallBase *CB, FunctionType *,
                   Function *NF);
+
+  bool expandVariadicForwarder(Module &M, IRBuilder<> &Builder, Function &F);
 
   // The intrinsic functions va_copy and va_end are removed unconditionally.
   // They correspond to a memcpy and a no-op on all implemented targets.
@@ -412,6 +422,19 @@ bool ExpandVariadics::runOnModule(Module &M) {
         if (auto *VA = dyn_cast<VAArgInst>(&I)) {
           Changed |= expandVAArgInst(Builder, DL, VA);
         } else if (CallBase *CB = dyn_cast<CallBase>(&I)) {
+          // MSIL: a direct call of a GlobalAlias (or of another constant that
+          // is not a Function, such as a weak alias that the linker may
+          // replace) has no Function whose users runOnFunction walks, and
+          // isIndirectCall is false for it. It is expanded as an indirect
+          // call is, since every variadic definition it may reach takes the
+          // va_list.
+          if (TT.isOSBinFormatMSIL() && !CB->getCalledFunction() &&
+              isa<Constant>(CB->getCalledOperand()) &&
+              CB->getFunctionType()->isVarArg()) {
+            Changed |= expandCall(M, Builder, CB, CB->getFunctionType(),
+                                  /*NF=*/nullptr);
+            continue;
+          }
           if (CB->isIndirectCall()) {
             FunctionType *FTy = CB->getFunctionType();
             if (FTy->isVarArg())
@@ -422,6 +445,61 @@ bool ExpandVariadics::runOnModule(Module &M) {
     }
   }
 
+  // MSIL: the variadic forwarders that MSILPrepareIR leaves under the names
+  // of whole-program function aliases forward their own va_list, now that
+  // every definition takes one.
+  for (Function &F : M)
+    if (F.hasFnAttribute(MSILVariadicForwarderAttr))
+      Changed |= expandVariadicForwarder(M, Builder, F);
+
+  return Changed;
+}
+
+// MSIL: \p F is a forwarder that MSILPrepareIR left under the name of a
+// whole-program alias of a variadic function (MSILVariadicForwarderAttr): its
+// body calls the aliasee with its fixed arguments only, and expandCall left
+// that call alone. Once both are expanded, the call passes the va_list that F
+// receives on to the aliasee, which reads the variadic arguments of F's
+// caller from it; an empty va_list of its own would lose them. A forwarder or
+// an aliasee that was not expanded gets the plain expansion of the call.
+bool ExpandVariadics::expandVariadicForwarder(Module &M, IRBuilder<> &Builder,
+                                              Function &F) {
+  F.removeFnAttr(MSILVariadicForwarderAttr);
+  SmallVector<CallInst *, 1> Calls;
+  for (Instruction &I : instructions(F))
+    if (auto *CI = dyn_cast<CallInst>(&I);
+        CI && CI->getFunctionType()->isVarArg())
+      Calls.push_back(CI);
+
+  bool Changed = false;
+  for (CallInst *CI : Calls) {
+    FunctionType *FTy = CI->getFunctionType();
+    auto *Callee = dyn_cast<Function>(CI->getCalledOperand());
+    Type *VaListParamTy = ABI->vaListParameterType(M);
+    if (F.isVarArg() || F.arg_size() != FTy->getNumParams() + 1 ||
+        F.getArg(F.arg_size() - 1)->getType() != VaListParamTy ||
+        CI->arg_size() != FTy->getNumParams() || !Callee ||
+        Callee->getFunctionType() != inlinableVariadicFunctionType(M, FTy)) {
+      Changed |= expandCall(M, Builder, CI, FTy, /*NF=*/nullptr);
+      continue;
+    }
+    SmallVector<Value *, 8> Args(CI->args());
+    Args.push_back(F.getArg(F.arg_size() - 1));
+    SmallVector<OperandBundleDef, 1> OpBundles;
+    CI->getOperandBundlesAsDefs(OpBundles);
+    CallInst *NewCI = CallInst::Create(Callee->getFunctionType(), Callee, Args,
+                                       OpBundles, "", CI->getIterator());
+    // The call has no variadic arguments, so its attributes fit.
+    NewCI->setAttributes(CI->getAttributes());
+    NewCI->setCallingConv(CI->getCallingConv());
+    NewCI->setTailCallKind(CI->getTailCallKind());
+    NewCI->takeName(CI);
+    NewCI->setDebugLoc(CI->getDebugLoc());
+    NewCI->copyProfileAndDebugMetadata(*CI);
+    CI->replaceAllUsesWith(NewCI);
+    CI->eraseFromParent();
+    Changed = true;
+  }
   return Changed;
 }
 
@@ -492,11 +570,14 @@ bool ExpandVariadics::runOnFunction(Module &M, IRBuilder<> &Builder,
   // The external function is the replacement for the original
   ExternallyAccessible->setLinkage(OriginalFunction->getLinkage());
   ExternallyAccessible->setVisibility(OriginalFunction->getVisibility());
+  ExternallyAccessible->setDLLStorageClass(
+      OriginalFunction->getDLLStorageClass());
   ExternallyAccessible->setComdat(OriginalFunction->getComdat());
   ExternallyAccessible->takeName(OriginalFunction);
 
   // Annotate the internal one as internal
   InternalOnly->setVisibility(GlobalValue::DefaultVisibility);
+  InternalOnly->setDLLStorageClass(GlobalValue::DefaultStorageClass);
   InternalOnly->setLinkage(GlobalValue::InternalLinkage);
 
   // The original is unused and obsolete
@@ -648,6 +729,12 @@ bool ExpandVariadics::expandCall(Module &M, IRBuilder<> &Builder, CallBase *CB,
   if (ABI->ignoreFunction(CB->getCalledFunction()))
     return Changed;
 
+  // MSIL: the call of a variadic alias forwarder forwards its va_list
+  // instead, once both functions take one (expandVariadicForwarder).
+  if (rewriteABI() &&
+      CB->getFunction()->hasFnAttribute(MSILVariadicForwarderAttr))
+    return Changed;
+
   if (!expansionApplicableToFunctionCall(CB)) {
     if (rewriteABI())
       report_fatal_error("Cannot lower callbase instruction");
@@ -696,7 +783,8 @@ bool ExpandVariadics::expandCall(Module &M, IRBuilder<> &Builder, CallBase *CB,
     // The value to copy from when initialising the frame alloca
     Value *SourceValue = ArgVal;
 
-    VariadicABIInfo::VAArgSlotInfo SlotInfo = ABI->slotInfo(DL, UnderlyingType);
+    VariadicABIInfo::VAArgSlotInfo SlotInfo =
+        ABI->slotInfo(DL, UnderlyingType, *CB, I);
 
     if (SlotInfo.Indirect) {
       // The va_arg lowering loads through a pointer. Set up an alloca to aim
@@ -1123,7 +1211,183 @@ struct Wasm final : public VariadicABIInfo {
   }
 };
 
+// The MSIL triples (llvm/docs/MSIL/Design.md section 4.7) compile to .NET
+// IL, where no CLR variadic convention works on every runtime, so variadic
+// definitions and calls are lowered here. The va_list keeps the native layout
+// of the triple, so that it crosses to and from native v* functions
+// unconverted, and the argument buffer holds the variadic arguments as the
+// native convention puts them on the stack. Every MSIL ABI leaves alone the
+// declarations that the MSIL backend calls with one signature per call site:
+// prototype-less ones and the fixed-arity ones that MSILPrepareVariadics
+// marked.
+} // namespace
+
+static bool ignoreMSILFunction(const Function *F) {
+  return F && (F->hasFnAttribute("no-prototype") ||
+               F->hasFnAttribute("msil-fixed-arity"));
+}
+
+namespace {
+// x86_64 System V: va_list is [1 x {i32 gp_offset, i32 fp_offset,
+// ptr overflow_arg_area, ptr reg_save_area}], passed by address. The buffer
+// is the overflow area: 8-byte slots, every value by value (clang passes
+// larger aggregates byval, which the pass copies). A slot is aligned as
+// clang's va_arg reads the overflow area: to the C alignment of the type when
+// that exceeds 8, which may be 32 or more. That is the IR type's ABI
+// alignment, or for a byval argument the call site's alignment when it is
+// larger (on MSIL triples clang passes every variadic aggregate aligned above
+// 8 byval with its alignment). gp_offset 48 and fp_offset 176 say that the
+// registers are used up, so va_arg reads every argument from the buffer.
+struct MSILSysV64 final : public VariadicABIInfo {
+  bool enableForTarget() override { return true; }
+  bool vaListPassedInSSARegister() override { return false; }
+
+  Type *vaListType(LLVMContext &Ctx) override {
+    Type *I32 = Type::getInt32Ty(Ctx);
+    Type *Ptr = PointerType::getUnqual(Ctx);
+    return ArrayType::get(StructType::get(Ctx, {I32, I32, Ptr, Ptr}), 1);
+  }
+
+  Type *vaListParameterType(Module &M) override {
+    return PointerType::getUnqual(M.getContext());
+  }
+
+  Value *initializeVaList(Module &M, LLVMContext &Ctx, IRBuilder<> &Builder,
+                          AllocaInst *VaList, Value *Buffer) override {
+    Type *I8 = Builder.getInt8Ty();
+    Builder.CreateStore(Builder.getInt32(48), VaList);
+    Builder.CreateStore(Builder.getInt32(176),
+                        Builder.CreateConstInBoundsGEP1_64(I8, VaList, 4));
+    Builder.CreateStore(Buffer,
+                        Builder.CreateConstInBoundsGEP1_64(I8, VaList, 8));
+    Builder.CreateStore(ConstantPointerNull::get(PointerType::getUnqual(Ctx)),
+                        Builder.CreateConstInBoundsGEP1_64(I8, VaList, 16));
+    return VaList;
+  }
+
+  VAArgSlotInfo slotInfo(const DataLayout &DL, Type *Parameter) override {
+    return {std::max(Align(8), DL.getABITypeAlign(Parameter)), false};
+  }
+
+  VAArgSlotInfo slotInfo(const DataLayout &DL, Type *Parameter,
+                         const CallBase &CB, unsigned ArgNo) override {
+    VAArgSlotInfo Info = slotInfo(DL, Parameter);
+    if (CB.paramHasAttr(ArgNo, Attribute::ByVal))
+      if (MaybeAlign A = CB.getParamAlign(ArgNo))
+        Info.DataAlign = std::max(Info.DataAlign, *A);
+    return Info;
+  }
+
+  bool ignoreFunction(const Function *F) override {
+    return ignoreMSILFunction(F);
+  }
+};
+
+// AArch64 AAPCS64 (Linux): va_list is {ptr __stack, ptr __gr_top,
+// ptr __vr_top, i32 __gr_offs, i32 __vr_offs}, passed by address. The buffer
+// is the stack area: 8-byte slots, 16-byte aligned for a type aligned above
+// 8 (clang passes composites above 16 bytes by reference already). Offsets
+// of 0 say that the registers are used up.
+struct MSILAAPCS64 final : public VariadicABIInfo {
+  bool enableForTarget() override { return true; }
+  bool vaListPassedInSSARegister() override { return false; }
+
+  Type *vaListType(LLVMContext &Ctx) override {
+    Type *I32 = Type::getInt32Ty(Ctx);
+    Type *Ptr = PointerType::getUnqual(Ctx);
+    return StructType::get(Ctx, {Ptr, Ptr, Ptr, I32, I32});
+  }
+
+  Type *vaListParameterType(Module &M) override {
+    return PointerType::getUnqual(M.getContext());
+  }
+
+  Value *initializeVaList(Module &M, LLVMContext &Ctx, IRBuilder<> &Builder,
+                          AllocaInst *VaList, Value *Buffer) override {
+    Type *I8 = Builder.getInt8Ty();
+    Value *Null = ConstantPointerNull::get(PointerType::getUnqual(Ctx));
+    Builder.CreateStore(Buffer, VaList);
+    Builder.CreateStore(Null,
+                        Builder.CreateConstInBoundsGEP1_64(I8, VaList, 8));
+    Builder.CreateStore(Null,
+                        Builder.CreateConstInBoundsGEP1_64(I8, VaList, 16));
+    Builder.CreateStore(Builder.getInt32(0),
+                        Builder.CreateConstInBoundsGEP1_64(I8, VaList, 24));
+    Builder.CreateStore(Builder.getInt32(0),
+                        Builder.CreateConstInBoundsGEP1_64(I8, VaList, 28));
+    return VaList;
+  }
+
+  VAArgSlotInfo slotInfo(const DataLayout &DL, Type *Parameter) override {
+    Align A = DL.getABITypeAlign(Parameter) > Align(8) ? Align(16) : Align(8);
+    return {A, false};
+  }
+
+  bool ignoreFunction(const Function *F) override {
+    return ignoreMSILFunction(F);
+  }
+};
+
+// Windows (x86_64 and AArch64): va_list is a char * into 8-byte slots,
+// passed in an SSA register. On x86_64 a value whose size is not 1, 2, 4 or
+// 8 bytes goes by pointer to a copy of the caller's; on AArch64 one above 16
+// bytes does.
+struct MSILCharPtr final : public VariadicABIInfo {
+  const uint64_t MaxDirectSize;
+  const bool PowerOf2Only;
+
+  MSILCharPtr(uint64_t MaxDirectSize, bool PowerOf2Only)
+      : MaxDirectSize(MaxDirectSize), PowerOf2Only(PowerOf2Only) {}
+
+  bool enableForTarget() override { return true; }
+  bool vaListPassedInSSARegister() override { return true; }
+
+  Type *vaListType(LLVMContext &Ctx) override {
+    return PointerType::getUnqual(Ctx);
+  }
+
+  Type *vaListParameterType(Module &M) override {
+    return PointerType::getUnqual(M.getContext());
+  }
+
+  Value *initializeVaList(Module &M, LLVMContext &Ctx, IRBuilder<> &Builder,
+                          AllocaInst * /*va_list*/, Value *Buffer) override {
+    return Buffer;
+  }
+
+  VAArgSlotInfo slotInfo(const DataLayout &DL, Type *Parameter) override {
+    uint64_t Size = DL.getTypeAllocSize(Parameter).getFixedValue();
+    bool Indirect =
+        Size > MaxDirectSize || (PowerOf2Only && !isPowerOf2_64(Size));
+    return {Align(8), Indirect};
+  }
+
+  bool ignoreFunction(const Function *F) override {
+    return ignoreMSILFunction(F);
+  }
+};
+
+} // namespace
+
+static std::unique_ptr<VariadicABIInfo> createMSILABIInfo(const Triple &T) {
+  if (T.isOSWindows())
+    return std::make_unique<MSILCharPtr>(T.isAArch64() ? 16 : 8,
+                                         /*PowerOf2Only=*/!T.isAArch64());
+  if (T.getArch() == Triple::x86_64)
+    return std::make_unique<MSILSysV64>();
+  if (T.isAArch64() && !T.isOSDarwin())
+    return std::make_unique<MSILAAPCS64>();
+  return {};
+}
+
+namespace {
+
 std::unique_ptr<VariadicABIInfo> VariadicABIInfo::create(const Triple &T) {
+  // An MSIL triple keeps the architecture of its native triple, so it is told
+  // apart by its object format first.
+  if (T.isOSBinFormatMSIL())
+    return createMSILABIInfo(T);
+
   switch (T.getArch()) {
   case Triple::amdgpu:
   case Triple::r600: {
@@ -1151,6 +1415,20 @@ std::unique_ptr<VariadicABIInfo> VariadicABIInfo::create(const Triple &T) {
 }
 
 } // namespace
+
+namespace llvm {
+// Whether the pass lowers variadic functions for the MSIL triple T, that is
+// whether VariadicABIInfo::create gives T an MSIL ABI. The MSIL backend's
+// MSILPrepareIR calls it and reports a variadic definition on any other
+// MSIL triple, so that the two cannot disagree.
+bool hasMSILVariadicABI(const Triple &T) {
+  return T.isOSBinFormatMSIL() && createMSILABIInfo(T) != nullptr;
+}
+
+bool isExpandedVariadicCallingConv(CallingConv::ID CC) {
+  return CC == CallingConv::C || CC == CallingConv::SPIR_FUNC;
+}
+} // namespace llvm
 
 char ExpandVariadics::ID = 0;
 

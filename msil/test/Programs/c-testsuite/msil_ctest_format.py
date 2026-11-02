@@ -9,8 +9,8 @@
 5.17.14).
 
 Two lists name the tests of the cached tree's tests/single-exec:
-libc-free.txt the tests that call no C library function, and libc.txt (from
-M26; optional before) the others. Both have the header lines
+libc-free.txt the tests that call no C library function, and libc.txt
+(required from M26) the others. Both have the header lines
 '# rule: <regex>' (the same regular expression in both) and
 '# count: <n>', other '#' comment lines, and one entry per test, read with
 one grammar (TestList):

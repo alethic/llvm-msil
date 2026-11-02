@@ -756,10 +756,35 @@ void LinkerDriver::addLibrary(StringRef name) {
   addFile(saver().save(*path));
 }
 
+// The UCRT's stdio option libraries (plan 5.15.2), named with or without .lib
+// or .obj (MSVC ships legacy_stdio_float_rounding.obj): the out-of-line
+// printf family legacy_stdio_definitions, which the helper archive's
+// msil_ucrt_stdio.c replaces; the opt-outs legacy_stdio_float_rounding and
+// iso_stdio_wide_specifiers of the stdio option bits that the module
+// initializer sets; and legacy_stdio_wide_specifiers, which selects the
+// UCRT's default mode and changes no bit. The stem in lower case, or "" for
+// another name; a leading ':' (-l:<file>) is ignored.
+static std::string getLegacyStdioLibrary(StringRef name) {
+  name.consume_front(":");
+  StringRef stem = path::filename(name);
+  if (stem.ends_with_insensitive(".lib") || stem.ends_with_insensitive(".obj"))
+    stem = stem.drop_back(4);
+  std::string lower = stem.lower();
+  if (lower == "legacy_stdio_definitions" ||
+      lower == "legacy_stdio_float_rounding" ||
+      lower == "legacy_stdio_wide_specifiers" ||
+      lower == "iso_stdio_wide_specifiers")
+    return lower;
+  return "";
+}
+
 // The MSVC C and C++ runtime libraries, which embedded requests name (the
 // clang driver passes --dependent-lib=libcmt on windows-msvc) and msil-ld
-// ignores, because the default libraries supply the C runtime (plan 5.10.6).
+// ignores, because the default libraries and the helper archive supply the C
+// runtime (plan 5.10.6), and the UCRT's stdio option libraries.
 static bool isMSVCRuntimeLibrary(StringRef name) {
+  if (!getLegacyStdioLibrary(name).empty())
+    return true;
   StringRef stem = path::filename(name);
   if (stem.ends_with_insensitive(".lib"))
     stem = stem.drop_back(4);
@@ -769,6 +794,24 @@ static bool isMSVCRuntimeLibrary(StringRef name) {
               "vcruntimed", "msvcprt", "msvcprtd", "libcpmt", "libcpmtd"},
              true)
       .Default(false);
+}
+
+// Records the stdio opt-out that the ignored C runtime library \p name names
+// (Config::legacyStdioFloatRounding, isoStdioWideSpecifiers);
+// legacy_stdio_wide_specifiers names the default mode and records nothing.
+static void recordStdioOptOut(StringRef name) {
+  std::string stem = getLegacyStdioLibrary(name);
+  if (stem == "legacy_stdio_float_rounding")
+    ctx.arg.legacyStdioFloatRounding = true;
+  else if (stem == "iso_stdio_wide_specifiers")
+    ctx.arg.isoStdioWideSpecifiers = true;
+}
+
+// Ignores the embedded request of \p f for the C runtime library \p name,
+// spelled as the request spells it, with a --verbose note.
+static void ignoreCRuntimeRequest(StringRef name, const InputFile &f) {
+  recordStdioOptOut(name);
+  log("ignoring C runtime library request '" + name + "' from " + toString(&f));
 }
 
 // Adds the library that an embedded request of \p f names (\p name as the
@@ -866,8 +909,7 @@ void LinkerDriver::addLinkerOptions(InputFile &f) {
   // lld/ELF/InputFiles.cpp:380-395 (addDependentLibrary).
   for (StringRef spec : dependentLibraries) {
     if (isMSVCRuntimeLibrary(spec)) {
-      log("ignoring C runtime library request '" + spec + "' from " +
-          toString(&f));
+      ignoreCRuntimeRequest(spec, f);
       continue;
     }
     std::optional<std::string> path = searchLibraryBaseName(spec);
@@ -885,16 +927,14 @@ void LinkerDriver::addLinkerOptions(InputFile &f) {
       StringRef name = opt.drop_front(2);
       if (isMSVCRuntimeLibrary(name.starts_with(":") ? name.drop_front(1)
                                                      : name)) {
-        log("ignoring C runtime library request '" + name + "' from " +
-            toString(&f));
+        ignoreCRuntimeRequest(name, f);
         continue;
       }
       addRequestedLibrary(name, searchLibrary(name), f);
     } else if (consumePrefix(opt, {"/defaultlib:", "-defaultlib:"}, value) &&
                !value.empty()) {
       if (isMSVCRuntimeLibrary(value)) {
-        log("ignoring C runtime library request '" + value + "' from " +
-            toString(&f));
+        ignoreCRuntimeRequest(value, f);
         continue;
       }
       // lld-link: a name without an extension gets .lib, and an absolute path
@@ -981,9 +1021,18 @@ void LinkerDriver::applyAlternateNames() {
 void LinkerDriver::createFiles(opt::InputArgList &args) {
   for (auto *arg : args) {
     switch (arg->getOption().getID()) {
-    case OPT_library:
-      addLibrary(arg->getValue());
+    case OPT_library: {
+      // The UCRT's stdio option libraries: msil-ld supplies what they would
+      // (plan 5.15.2).
+      StringRef name = arg->getValue();
+      if (!getLegacyStdioLibrary(name).empty()) {
+        recordStdioOptOut(name);
+        log("ignoring C runtime library '-l" + name + "'");
+        break;
+      }
+      addLibrary(name);
       break;
+    }
     case OPT_INPUT:
       addFile(arg->getValue());
       break;

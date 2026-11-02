@@ -65,8 +65,11 @@ CallShape CallShape::get(const MethodSig &Sig,
 }
 
 bool CallShape::isVarArg() const {
-  return (Flags & MSILLink::VarArg) ||
-         (Sig.Header & SIG_KIND_MASK) == SIG_VARARG ||
+  return (Flags & MSILLink::VarArg) || isCLRVarArg();
+}
+
+bool CallShape::isCLRVarArg() const {
+  return (Sig.Header & SIG_KIND_MASK) == SIG_VARARG ||
          Sig.RequiredParamCount < Sig.Params.size();
 }
 
@@ -120,9 +123,24 @@ CallMatch cli::classifyCall(const CallShape &Call, const CallShape &Def) {
     return M;
   };
 
-  // P3-B's variadic buffer.
-  if (Call.isVarArg() || Def.isVarArg())
-    return Fail("variadic functions are not supported yet");
+  // Variadic functions (plan 5.15.2): ExpandVariadics passes the variadic
+  // arguments in a va_list after FixedParams IL parameters, so a variadic
+  // call binds only to a variadic definition that reads the same va_list.
+  // The CLR's vararg convention is never used.
+  if (Call.isCLRVarArg() || Def.isCLRVarArg())
+    return Fail(Twine(Def.isCLRVarArg() ? "the definition" : "the call") +
+                " uses the CLR's vararg calling convention, which MSIL does "
+                "not support");
+  bool CallVarArg = Call.Flags & MSILLink::VarArg;
+  bool DefVarArg = Def.Flags & MSILLink::VarArg;
+  if (CallVarArg != DefVarArg)
+    return Fail(Twine("only the ") + (DefVarArg ? "definition" : "call") +
+                " is variadic");
+  if (DefVarArg && Call.FixedParams != Def.FixedParams)
+    return Fail("the call passes " +
+                plural(Call.FixedParams, "fixed argument") +
+                " before the variadic ones, but the definition takes " +
+                plural(Def.FixedParams, "fixed parameter"));
 
   // The ABI descriptors: where the native callee finds aggregates.
   bool CallSret = Call.Flags & MSILLink::Sret;
@@ -133,6 +151,15 @@ CallMatch cli::classifyCall(const CallShape &Call, const CallShape &Def) {
   if (!isSameByval(Call.Byval, Def.Byval))
     return Fail("the aggregates passed by value (byval) differ in position, "
                 "size or alignment");
+
+  // The callee reads the va_list at IL parameter FixedParams, so a variadic
+  // call is never adapted.
+  if (DefVarArg) {
+    if (Call.Sig == Def.Sig)
+      return M;
+    return Fail("the IL signatures of a variadic call and definition must "
+                "match exactly");
+  }
 
   // Value types, typed pointers and generic instances (P3 and later) bind
   // only by an exact match until FeatureIdeas 3 is decided; so do calling
@@ -283,4 +310,6 @@ void cli::buildAdapter(const CallMatch &M, const MethodSig &CallSig,
 
 void cli::printCallShape(raw_ostream &OS, const CallShape &S) {
   printMethodSig(OS, S.Sig, nullptr);
+  if (S.Flags & MSILLink::VarArg)
+    OS << " (variadic, " << S.FixedParams << " fixed)";
 }

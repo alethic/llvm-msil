@@ -23,7 +23,8 @@
 ; definition that uses a global: functions that use a diagnosed symbol are
 ; available_externally, which is never code-generated but still has to be
 ; rewritten, and the resolver an ifunc needs is a variadic definition, which
-; loses its body. Leaf definitions compile since M3, direct calls since M4, and
+; lost its body until M26 and compiles since (5.15.2), so the ifunc parts
+; report the ifunc only. Leaf definitions compile since M3, direct calls since M4, and
 ; globals and function addresses since M8. A call of a definition that lost
 ; its body is erased (call-errors.ll), and every other use of its address
 ; becomes poison (deleted-addr.ll).
@@ -44,14 +45,16 @@
 ; ALIAS-IR-NEXT: %v = load i32, ptr @msil_alias_target
 
 ; IFunc (D26), called by a function.
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/ifunc.ll 2>&1 | %{nocrash} --check-prefix=IFUNC
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/ifunc.ll 2>&1 | %{nocrash} --check-prefix=IFUNC
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/ifunc.ll 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=IFUNC --implicit-check-not=error: --implicit-check-not=variadic
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/ifunc.ll 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=IFUNC --implicit-check-not=error: --implicit-check-not=variadic
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/ifunc.ll -o - 2>%t/ifunc.err \
 ; RUN:   | FileCheck %s --check-prefix=IFUNC-IR --implicit-check-not=msil_ifunc_sym
-; RUN: FileCheck %s --check-prefix=IFUNC --input-file=%t/ifunc.err
-; IFUNC-DAG: error: {{.*}}msil_ifunc_sym
-; IFUNC-DAG: error: {{.*(msil_ifunc_resolver.*variadic function definitions are not supported for MSIL yet|variadic function definitions are not supported for MSIL yet.*msil_ifunc_resolver)}}
-; IFUNC-IR: declare ptr @msil_ifunc_resolver(...)
+; RUN: FileCheck %s --check-prefix=IFUNC --input-file=%t/ifunc.err --implicit-check-not=error: \
+; RUN:   --implicit-check-not=variadic
+; IFUNC: error: {{.*}}msil_ifunc_sym
+; IFUNC-IR: define ptr @msil_ifunc_resolver(...)
 ; IFUNC-IR: define available_externally i32 @msil_ifunc_user()
 ; IFUNC-IR-NEXT: %r = call i32 poison()
 
@@ -77,15 +80,17 @@
 ; RUN:   | %{nocrash} --check-prefix=EMPTY-DTORS --implicit-check-not=error:
 ; EMPTY-DTORS: .assembly 'empty-dtors'
 
-; Variadic definition (D19), called by another definition. A variadic
-; declaration alone is not an error.
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/variadic.ll 2>&1 | %{nocrash} --check-prefix=VA
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/variadic.ll 2>&1 | %{nocrash} --check-prefix=VA
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/variadic.ll -o - 2>%t/variadic.err \
+; A variadic definition, called by another definition, and a variadic
+; declaration: no error since M26 (5.15.2; D19's definition error remains
+; only for a triple without an MSIL variadic ABI and a calling convention
+; other than C, variadic-errors.ll), and MSILPrepareIR keeps the definition's
+; body.
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/variadic.ll -o /dev/null 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/variadic.ll -o /dev/null 2>&1 | count 0
+; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/variadic.ll -o - 2>%t/variadic.err \
 ; RUN:   | FileCheck %s --check-prefix=VA-IR
-; RUN: FileCheck %s --check-prefix=VA --input-file=%t/variadic.err --implicit-check-not=msil_va_decl
-; VA: error: {{.*(msil_va_def.*variadic function definitions are not supported for MSIL yet|variadic function definitions are not supported for MSIL yet.*msil_va_def)}}
-; VA-IR: declare i32 @msil_va_def(i32, ...)
+; RUN: count 0 < %t/variadic.err
+; VA-IR: define i32 @msil_va_def(i32 %n, ...)
 ; VA-IR: define available_externally i32 @msil_va_caller()
 
 ; Module-level inline asm (D26), diagnosed by the AsmPrinter; it must not
@@ -188,15 +193,17 @@
 ; NOCFI-ALIAS-IR: @msil_nocfi_alias_target = global i32 7
 ; NOCFI-ALIAS-IR: @msil_nocfi_alias_ref = global ptr poison
 
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/nocfi-ifunc.ll 2>&1 | %{nocrash} --check-prefix=NOCFI-IFUNC
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/nocfi-ifunc.ll 2>&1 | %{nocrash} --check-prefix=NOCFI-IFUNC
+; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/nocfi-ifunc.ll 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=NOCFI-IFUNC --implicit-check-not=error: --implicit-check-not=variadic
+; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/nocfi-ifunc.ll 2>&1 \
+; RUN:   | %{nocrash} --check-prefix=NOCFI-IFUNC --implicit-check-not=error: --implicit-check-not=variadic
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -stop-after=msil-prepare-ir < %t/nocfi-ifunc.ll -o - 2>%t/nocfi-ifunc.err \
 ; RUN:   | FileCheck %s --check-prefix=NOCFI-IFUNC-IR --implicit-check-not=msil_nocfi_ifunc_sym
-; RUN: FileCheck %s --check-prefix=NOCFI-IFUNC --input-file=%t/nocfi-ifunc.err
-; NOCFI-IFUNC-DAG: error: {{.*}}msil_nocfi_ifunc_sym
-; NOCFI-IFUNC-DAG: error: {{.*(msil_nocfi_ifunc_resolver.*variadic function definitions are not supported for MSIL yet|variadic function definitions are not supported for MSIL yet.*msil_nocfi_ifunc_resolver)}}
+; RUN: FileCheck %s --check-prefix=NOCFI-IFUNC --input-file=%t/nocfi-ifunc.err --implicit-check-not=error: \
+; RUN:   --implicit-check-not=variadic
+; NOCFI-IFUNC: error: {{.*}}msil_nocfi_ifunc_sym
 ; NOCFI-IFUNC-IR: @msil_nocfi_ifunc_ref = global ptr poison
-; NOCFI-IFUNC-IR: declare ptr @msil_nocfi_ifunc_resolver(...)
+; NOCFI-IFUNC-IR: define ptr @msil_nocfi_ifunc_resolver(...)
 
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/dsole-global.ll 2>&1 | %{nocrash} --check-prefix=DSOLE-GLOBAL
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/dsole-global.ll 2>&1 | %{nocrash} --check-prefix=DSOLE-GLOBAL

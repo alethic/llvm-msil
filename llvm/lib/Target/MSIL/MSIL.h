@@ -36,6 +36,8 @@ class PassRegistry;
 ModulePass *createMSILPrepareIRLegacyPass();
 ModulePass *createMSILAddMissingPrototypesLegacyPass();
 ModulePass *createMSILFixFunctionBitcastsLegacyPass();
+ModulePass *createMSILPrepareVariadicsLegacyPass();
+ModulePass *createMSILLowerDynamicAllocaLegacyPass();
 
 /// MSILFixFunctionBitcasts' "msil-lto" branch (cli::classifyCall's table,
 /// plan 5.9.8) before LTO optimization, so that no optimization folds a
@@ -78,10 +80,12 @@ void initializeMSILCleanCodeAfterTrapLegacyPass(PassRegistry &);
 void initializeMSILDAGToDAGISelLegacyPass(PassRegistry &);
 void initializeMSILExplicitLocalsLegacyPass(PassRegistry &);
 void initializeMSILFixFunctionBitcastsLegacyPass(PassRegistry &);
+void initializeMSILLowerDynamicAllocaLegacyPass(PassRegistry &);
 void initializeMSILNullifyDebugValueListsLegacyPass(PassRegistry &);
 void initializeMSILOptimizeLiveIntervalsLegacyPass(PassRegistry &);
 void initializeMSILOptimizeReturnedLegacyPass(PassRegistry &);
 void initializeMSILPrepareIRLegacyPass(PassRegistry &);
+void initializeMSILPrepareVariadicsLegacyPass(PassRegistry &);
 void initializeMSILRegColoringLegacyPass(PassRegistry &);
 void initializeMSILRegNumberingLegacyPass(PassRegistry &);
 void initializeMSILRegStackifyLegacyPass(PassRegistry &);

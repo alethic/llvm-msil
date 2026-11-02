@@ -3248,6 +3248,24 @@ void X86_64ABIInfo::computeInfo(CGFunctionInfo &FI) const {
        it != ie; ++it, ++ArgNo) {
     bool IsNamedArg = ArgNo < NumRequiredArgs;
 
+    // MSIL (llvm/docs/MSIL/Design.md): ExpandVariadics lays each variadic
+    // argument out at the alignment of its IR type, or of its byval
+    // attribute, while va_arg reads it at the C alignment of its type. A
+    // variadic aggregate aligned above 8, which would be coerced to
+    // 8-aligned scalars, is passed byval with its alignment instead.
+    if (!IsNamedArg && !IsRegCall &&
+        getTarget().getTriple().isOSBinFormatMSIL() &&
+        !getTarget().getTriple().isOSWindows() &&
+        isAggregateTypeForABI(it->type) &&
+        !getRecordArgABI(it->type, getCXXABI())) {
+      CharUnits Align = getContext().getTypeAlignInChars(it->type);
+      if (Align > CharUnits::fromQuantity(8)) {
+        it->info = ABIArgInfo::getIndirect(
+            Align, getDataLayout().getAllocaAddrSpace());
+        continue;
+      }
+    }
+
     if (IsRegCall && it->type->isStructureOrClassType())
       it->info = classifyRegCallStructType(it->type, NeededInt, NeededSSE,
                                            MaxVectorWidth);

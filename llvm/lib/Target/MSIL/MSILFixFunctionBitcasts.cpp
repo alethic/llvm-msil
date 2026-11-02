@@ -36,9 +36,16 @@
 ///   of the call's arguments (X86_64TargetCodeGenInfo::isNoProtoCallVariadic).
 ///   In C it works like a non-variadic call, so the call becomes one, and it
 ///   gets a wrapper only if its type still differs from the callee's.
-/// - Calls of variadic functions keep their callee, so that
-///   MSILTargetLowering::LowerCall diagnoses them in the caller (decision D19)
-///   instead of in a wrapper.
+/// - Calls of variadic functions keep their callee and get no wrapper:
+///   ExpandVariadics expands them over a va_list (or MSILPrepareVariadics
+///   makes them fixed-arity calls). A K&R call of a variadic function, one
+///   with another type whose arguments cover the fixed parameters, becomes a
+///   variadic call of the function's own type (makeKnRCallsVariadic), which
+///   is what C makes of a call of a variadic function through an
+///   unprototyped declaration; a direct call of another type that does not
+///   cover them, in every mode, is an error and is erased, since
+///   ExpandVariadics cannot expand it; a prototype-less declaration's calls
+///   are left as they are.
 /// - Every call whose type differs from its callee's gets a wrapper, also when
 ///   the arguments are only trivially castable (i64 vs ptr): LowerCall accepts
 ///   a direct call only if its type is the callee's.
@@ -64,7 +71,7 @@
 ///   symbol of the object, and a weak one must stay overridable (plan 5.8.3
 ///   R1).
 /// Calls of definitions keep their wrappers, and calls of truly variadic
-/// functions are left to LowerCall's error (decision D19). The pass asks for
+/// functions are left to ExpandVariadics, as above. The pass asks for
 /// the mode when it runs, through the TargetPassConfig
 /// (CodeGenTargetMachineImpl adds the IR passes before it creates the
 /// streamer that decides the mode); without one (opt) it keeps the
@@ -132,12 +139,14 @@
 #include "MSILTargetMachine.h"
 #include "MSILUtilities.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/CLI/CallAdapter.h"
 #include "llvm/CLI/CallMismatchDiagnostic.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/IR/AttributeMask.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
@@ -731,6 +740,62 @@ static void makeKnRCallsNonVariadic(Function &F) {
   }
 }
 
+/// Makes every direct call of a variadic function F of \p M (not an
+/// intrinsic, not a prototype-less declaration) whose type differs from F's,
+/// and whose arguments cover F's fixed parameters (each of the parameter's
+/// type, or one that a bitcast or a no-op pointer cast makes it), a call of
+/// F's own variadic type (a K&R call, see the file comment), so that
+/// ExpandVariadics expands it, or MSILPrepareVariadics rewrites it for a
+/// fixed-arity declaration. Any other direct call of another type (fewer
+/// arguments than F's fixed parameters, another return type, or a fixed
+/// argument that no such cast converts) would reach ExpandVariadics with a
+/// type that it cannot expand, in every mode (an object's call of an
+/// undefined F included, since the pass expands the calls of declarations
+/// too): it is LowerCall's 'mismatched call signature' error here, in module
+/// order, and the call is erased, its result poison (section 2's rule).
+static void makeKnRCallsVariadic(Module &M) {
+  for (Function &Caller : M) {
+    for (Instruction &I : make_early_inc_range(instructions(Caller))) {
+      auto *CB = dyn_cast<CallBase>(&I);
+      if (!CB)
+        continue;
+      auto *F = dyn_cast<Function>(CB->getCalledOperand());
+      // Swift calling conventions: see fixFunctionBitcasts.
+      if (!F || !F->isVarArg() || F->isIntrinsic() ||
+          F->hasFnAttribute("no-prototype") ||
+          F->getCallingConv() == CallingConv::Swift ||
+          F->getCallingConv() == CallingConv::SwiftTail)
+        continue;
+      FunctionType *FTy = F->getFunctionType();
+      if (CB->getFunctionType() == FTy)
+        continue;
+      const DataLayout &DL = M.getDataLayout();
+      bool Castable =
+          CB->getFunctionType()->getReturnType() == FTy->getReturnType() &&
+          CB->arg_size() >= FTy->getNumParams();
+      for (unsigned I = 0, E = FTy->getNumParams(); I != E && Castable; ++I)
+        Castable = CastInst::isBitOrNoopPointerCastable(
+            CB->getArgOperand(I)->getType(), FTy->getParamType(I), DL);
+      if (!Castable) {
+        M.getContext().diagnose(DiagnosticInfoUnsupported(
+            Caller, "mismatched call signature", CB->getDebugLoc()));
+        if (!CB->getType()->isVoidTy())
+          CB->replaceAllUsesWith(PoisonValue::get(CB->getType()));
+        CB->eraseFromParent();
+        continue;
+      }
+      for (unsigned I = 0, E = FTy->getNumParams(); I != E; ++I) {
+        Value *Arg = CB->getArgOperand(I);
+        if (Arg->getType() != FTy->getParamType(I))
+          CB->setArgOperand(
+              I, CastInst::CreateBitOrPointerCast(Arg, FTy->getParamType(I), "",
+                                                  CB->getIterator()));
+      }
+      CB->mutateFunctionType(FTy);
+    }
+  }
+}
+
 /// \p TM is the target machine of the pass's TargetPassConfig, or null (opt):
 /// "msil-lto"'s table needs it for the CIL signatures. \p PostLinkLTO is the
 /// run before LTO optimization (MSILFixFunctionBitcastsLTOPass, see the file
@@ -743,6 +808,11 @@ static bool fixFunctionBitcasts(Module &M, bool ObjectMode,
 
   SmallVector<std::pair<CallBase *, Function *>, 0> Uses;
 
+  // K&R calls of variadic functions (see the file comment); before LTO
+  // optimization the code generation run decides on them.
+  if (!PostLinkLTO)
+    makeKnRCallsVariadic(M);
+
   // Collect all the places that need wrappers.
   for (Function &F : M) {
     // Skip to fix when the function is swiftcc or swifttailcc because these
@@ -751,13 +821,13 @@ static bool fixFunctionBitcasts(Module &M, bool ObjectMode,
     if (F.getCallingConv() == CallingConv::Swift ||
         F.getCallingConv() == CallingConv::SwiftTail)
       continue;
-    // Calls of variadic functions are not supported yet. Leave them to
-    // MSILTargetLowering::LowerCall, which diagnoses them in the caller.
-    // Object mode keeps prototype-less declarations variadic, and their K&R
-    // calls become fixed-arity calls.
+    // Calls of variadic functions get no wrapper: ExpandVariadics expands
+    // them, so a K&R call has become a variadic call above. Object mode
+    // keeps prototype-less declarations variadic, and their K&R calls become
+    // fixed-arity calls.
     if (F.isVarArg()) {
-      if (ObjectMode && F.isDeclarationForLinker() &&
-          F.hasFnAttribute("no-prototype"))
+      if (F.hasFnAttribute("no-prototype") && ObjectMode &&
+          F.isDeclarationForLinker())
         makeKnRCallsNonVariadic(F);
       continue;
     }

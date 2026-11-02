@@ -1,0 +1,30 @@
+# msil-env.ps1 trusts the x64 developer environment that lit passes on (plan
+# section 12, M26; CI run 41257850076's failure of gtest.test): lit drops
+# VSCMD_ARG_TGT_ARCH and gives each run a fresh TEMP, but passes PATH,
+# INCLUDE, LIB and VSINSTALLDIR on, so a script that dot-sources
+# msil-env.ps1 under lit must see the x64 cl.exe on PATH and use the loaded
+# environment, not enter Visual Studio again (which on CI imported the
+# DevShell module of a Visual Studio that the runner does not have). The
+# evidence is TEMP: entering the developer shell caches what it changed in
+# %TEMP%\msil-vsenv-x64.json, and trusting the loaded one writes nothing.
+# (1) A passing msil-gtest.ps1 case (the fake program of gtest.test) with
+# TEMP and TMP set to an empty directory passes, and that directory holds no
+# msil-vsenv-x64.json afterwards.
+# (2) The failure path: the same case with every directory that holds a
+# cl.exe removed from PATH is not a loaded environment, so msil-env.ps1
+# enters the developer shell of the Visual Studio root (VSINSTALLDIR, else
+# vswhere's) and writes msil-vsenv-x64.json into that TEMP; the case still
+# passes. msil-ucrt-headers (INCLUDE names the UCRT headers) means lit runs
+# in a developer environment, which (1) needs and (2) re-enters.
+# REQUIRES: system-windows, msil-netfx, pwsh, msil-ucrt-headers
+
+# RUN: rm -rf %t.vsenv %t.novsenv %t.build && mkdir -p %t.vsenv %t.novsenv
+# RUN: %ilasm -exe -output=%t.fake.exe %S/Inputs/fake-program.il
+
+# (1)
+# RUN: env TEMP=%t.vsenv TMP=%t.vsenv FAKE_PROGRAM_OUTPUT=%S/Inputs/fake-output/gtest-passed-3.txt FAKE_PROGRAM_STATUS=0 %{harness_check} exits 0 %{harness_gtest} -BuildDir %t.build -Exe %t.fake.exe -Filter "MSILFake.*" -NoSkip -MinTests 3
+# RUN: %{harness_check} missing %t.vsenv/msil-vsenv-x64.json
+
+# (2)
+# RUN: env TEMP=%t.novsenv TMP=%t.novsenv FAKE_PROGRAM_OUTPUT=%S/Inputs/fake-output/gtest-passed-3.txt FAKE_PROGRAM_STATUS=0 %{harness_check} exits 0 pwsh -NoProfile -NonInteractive -Command "$env:PATH = @($env:PATH -split ';' | Where-Object { $_ -and -not (Test-Path -LiteralPath (Join-Path $_ 'cl.exe')) }) -join ';'; if (Get-Command cl.exe -ErrorAction SilentlyContinue) { exit 9 }; & '%S/../../utils/build/msil-gtest.ps1' -BuildDir '%t.build' -Exe '%t.fake.exe' -Filter 'MSILFake.*' -NoSkip -MinTests 3; exit $LASTEXITCODE"
+# RUN: %{harness_check} contains %t.novsenv/msil-vsenv-x64.json "\"vars\""

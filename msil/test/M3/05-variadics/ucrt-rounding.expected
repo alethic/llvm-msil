@@ -1,0 +1,9 @@
+printf options 0x24, scanf options 0x2
+%.0f: 0 2 2 4 -0 -2
+%.1f: 0.2 0.8 1.2
+%.2f: 0.12 0.38 123456789.12
+%e and %g: 2e+00 1.2e-01 2 0.12
+sprintf 10 [2|0.2|0.12]
+snprintf 10 [0|0.8|0.38]
+fprintf 4 6
+[exit 0]

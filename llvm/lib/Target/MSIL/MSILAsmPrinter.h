@@ -101,7 +101,10 @@ Signature getFunctionTypeSignature(const FunctionType *FTy,
 /// or definition of the IR function type \p FTy with the attributes
 /// \p Attrs: NO_PROTOTYPE if \p NoPrototype; SRET with the size and alignment
 /// of the returned aggregate for an sret first parameter (IL parameter 0);
-/// and the IL parameter index, size and alignment of each byval parameter.
+/// the IL parameter index, size and alignment of each byval parameter;
+/// VARARG for the function attribute "msil-variadic" and FIXED_ARITY for the
+/// call-site attribute "msil-fixed-arity"="<n>" (MSILPrepareVariadics), each
+/// with its FixedParams.
 /// The object writer records it, and MSILFixFunctionBitcasts compares it
 /// under "msil-lto" (cli::classifyCall).
 MSILLink::SignatureInfo getABIDescriptor(const FunctionType *FTy,
@@ -456,6 +459,16 @@ private:
   /// (MSILTrailerTextSink.cpp).
   void fillTrailerDefs(Module &M, MSILTrailerTextSink &Sink,
                        cli::TrailerInput &In);
+
+  /// On *-windows-msvc-msil, sets In.UCRTStdio when the module defines
+  /// __local_stdio_printf_options or __local_stdio_scanf_options (the UCRT's
+  /// <stdio.h> inline functions), each defined one's method declared through
+  /// \p Sink, so that the module initializer sets the options word as
+  /// msil-ld's does for a link: with the bits of the module flags
+  /// "msil-ucrt-printf-bits" and "msil-ucrt-scanf-bits" that msil-ld sets in
+  /// linked text, else the default bits (MSILTrailerTextSink.cpp).
+  void fillTrailerUCRTStdio(Module &M, MSILTrailerTextSink &Sink,
+                            cli::TrailerInput &In);
 
   /// Object mode: records the ABI descriptors of the IR calls in \p Caller
   /// (CallABIs) and warns about a call that conflicts with an earlier one of

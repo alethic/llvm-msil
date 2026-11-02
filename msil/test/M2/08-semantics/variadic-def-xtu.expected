@@ -1,0 +1,8 @@
+sum(3, 10, 20, 12)=42
+sum(0)=0
+sum of ten=55
+avg(4, ...) * 100=275
+forward(5, ...)=1500
+through a pointer=42
+in a loop=170
+[exit 0]

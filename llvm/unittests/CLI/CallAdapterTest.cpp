@@ -17,9 +17,11 @@
 //   discards is popped, int32 versus native int results are converted;
 // - integer versus floating point and float32 versus float64, in a
 //   parameter or the result, are errors; so are SRET on one side only, BYVAL
-//   at different positions or with another size or alignment, VARARG on
-//   either side ('variadic functions are not supported yet') and any
-//   difference in a signature with a value type or a typed pointer.
+//   at different positions or with another size or alignment, and any
+//   difference in a signature with a value type or a typed pointer;
+// - VARARG (M26, 5.15.2): equal sides (FixedParams and IL signature) are
+//   direct, every other combination with VARARG is an error; FIXED_ARITY
+//   (5.14.8) is an ordinary call.
 // Each adapter that buildAdapter emits is evaluated symbolically: what the
 // callee receives, what the adapter returns, that the stack is empty at
 // 'ret', and its .maxstack (computed by ILBuilder). printCallShape gives the
@@ -53,6 +55,7 @@ using namespace llvm::cli;
 namespace {
 
 using Strings = std::vector<std::string>;
+using testing::HasSubstr;
 
 TypeSig tVoid() { return TypeSig(); }
 TypeSig tI4() { return TypeSig::get(ELEMENT_TYPE_I4); }
@@ -564,18 +567,92 @@ TEST(CLICallAdapterTest, ByvalDifferencesAreErrors) {
   EXPECT_EQ(kind(S, S, &At1, &At1), CallMatchKind::Direct);
 }
 
-TEST(CLICallAdapterTest, VarargIsNotSupportedYet) {
-  MethodSig S = sig(tI4(), {tI4(), tI4()});
+// VARARG (5.15.2 link-time rule 1, M26): an expanded variadic definition
+// takes (<fixed>, native int). Equal VARARG sides (the same FixedParams and
+// IL signature) bind directly; every other combination with VARARG is an
+// error whose detail msil-ld turns into '(variadic, <n> fixed)'. The Phase 2
+// 'not supported yet' text is retired.
+void expectVarargError(const MethodSig &Call, const MethodSig &Def,
+                       const MSILLink::SignatureInfo *CallInfo,
+                       const MSILLink::SignatureInfo *DefInfo) {
+  CallMatch M = match(Call, Def, CallInfo, DefInfo);
+  EXPECT_EQ(M.Kind, CallMatchKind::Error);
+  EXPECT_FALSE(M.Detail.empty()) << "an error without a reason";
+  EXPECT_THAT(M.Detail, testing::Not(HasSubstr("not supported yet")));
+}
+
+TEST(CLICallAdapterTest, EqualVarargSidesAreDirect) {
+  MethodSig S = sig(tI4(), {tI4(), tNI()});
   MSILLink::SignatureInfo VarArg = flagsInfo(MSILLink::VarArg, 1);
   EXPECT_TRUE(CallShape::get(S, &VarArg).isVarArg());
   EXPECT_FALSE(CallShape::get(S, nullptr).isVarArg());
-  for (auto [C, D] : {std::pair{&VarArg, (MSILLink::SignatureInfo *)nullptr},
-                      std::pair{(MSILLink::SignatureInfo *)nullptr, &VarArg},
-                      std::pair{&VarArg, &VarArg}}) {
-    CallMatch M = match(S, S, C, D);
-    EXPECT_EQ(M.Kind, CallMatchKind::Error);
-    EXPECT_EQ(M.Detail, "variadic functions are not supported yet");
-  }
+  CallMatch M = match(S, S, &VarArg, &VarArg);
+  EXPECT_EQ(M.Kind, CallMatchKind::Direct) << M.Detail;
+  // No named parameter: the va_list is the only IL parameter.
+  MethodSig None = sig(tVoid(), {tNI()});
+  MSILLink::SignatureInfo VarArg0 = flagsInfo(MSILLink::VarArg, 0);
+  EXPECT_EQ(kind(None, None, &VarArg0, &VarArg0), CallMatchKind::Direct);
+  // A hidden sret counts as a fixed IL parameter; SRET agrees on both sides.
+  MethodSig Sret = sig(tVoid(), {tNI(), tI4(), tNI()});
+  MSILLink::SignatureInfo SretVarArg = sretInfo(24, 3);
+  SretVarArg.Flags |= MSILLink::VarArg;
+  SretVarArg.FixedParams = 2;
+  EXPECT_EQ(kind(Sret, Sret, &SretVarArg, &SretVarArg), CallMatchKind::Direct);
+}
+
+TEST(CLICallAdapterTest, VarargFixedParamsDifferIsAnError) {
+  MethodSig S = sig(tI4(), {tI4(), tNI(), tNI()});
+  MSILLink::SignatureInfo One = flagsInfo(MSILLink::VarArg, 1);
+  MSILLink::SignatureInfo Two = flagsInfo(MSILLink::VarArg, 2);
+  expectVarargError(S, S, &One, &Two);
+  expectVarargError(S, S, &Two, &One);
+}
+
+TEST(CLICallAdapterTest, VarargOnOneSideIsAnError) {
+  MethodSig S = sig(tI4(), {tI4(), tNI()});
+  MSILLink::SignatureInfo VarArg = flagsInfo(MSILLink::VarArg, 1);
+  MSILLink::SignatureInfo NoProto = flagsInfo(MSILLink::NoPrototype);
+  MSILLink::SignatureInfo Fixed = flagsInfo(MSILLink::FixedArity, 1);
+  expectVarargError(S, S, &VarArg, nullptr);
+  expectVarargError(S, S, nullptr, &VarArg);
+  expectVarargError(S, S, &NoProto, &VarArg);
+  expectVarargError(S, S, &VarArg, &NoProto);
+  // A fixed-arity call of a variadic definition (msil-ld reports 5.14.8's
+  // own text before it asks classifyCall).
+  expectVarargError(S, S, &Fixed, &VarArg);
+}
+
+TEST(CLICallAdapterTest, VarargWithAnotherILSignatureIsAnError) {
+  MSILLink::SignatureInfo VarArg = flagsInfo(MSILLink::VarArg, 1);
+  // Differences that a non-variadic call adapts are errors here: conv.i,
+  // an extra or a missing argument, a discarded result.
+  expectVarargError(sig(tI4(), {tNI(), tNI()}), sig(tI4(), {tI4(), tNI()}),
+                    &VarArg, &VarArg);
+  expectVarargError(sig(tI4(), {tI4(), tNI(), tI4()}),
+                    sig(tI4(), {tI4(), tNI()}), &VarArg, &VarArg);
+  expectVarargError(sig(tI4(), {tI4()}), sig(tI4(), {tI4(), tNI()}), &VarArg,
+                    &VarArg);
+  expectVarargError(sig(tVoid(), {tI4(), tNI()}), sig(tI4(), {tI4(), tNI()}),
+                    &VarArg, &VarArg);
+  // And so are the errors of non-variadic calls.
+  expectVarargError(sig(tR8(), {tR8(), tNI()}), sig(tI4(), {tR8(), tNI()}),
+                    &VarArg, &VarArg);
+}
+
+// FIXED_ARITY (5.14.8) is an ordinary call for classifyCall: direct when the
+// signatures agree, adapted or refused by the non-variadic table otherwise.
+TEST(CLICallAdapterTest, FixedArityIsAnOrdinaryCall) {
+  MSILLink::SignatureInfo Fixed = flagsInfo(MSILLink::FixedArity, 2);
+  MethodSig S = sig(tI4(), {tNI(), tI4(), tI4()});
+  EXPECT_FALSE(CallShape::get(S, &Fixed).isVarArg());
+  EXPECT_EQ(kind(S, S, &Fixed, nullptr), CallMatchKind::Direct);
+  EXPECT_EQ(kind(S, S, &Fixed, &Fixed), CallMatchKind::Direct);
+  // An extra trailing argument is dropped, as for any call.
+  EXPECT_EQ(kind(S, sig(tI4(), {tNI(), tI4()}), &Fixed, nullptr),
+            CallMatchKind::Adapter);
+  // Integer versus floating point stays an error.
+  expectError(sig(tI4(), {tNI(), tR8()}), sig(tI4(), {tNI(), tI4()}), &Fixed,
+              nullptr);
 }
 
 TEST(CLICallAdapterTest, ValueTypesAndTypedPointersMatchExactly) {

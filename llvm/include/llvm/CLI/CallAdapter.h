@@ -13,7 +13,8 @@
 // that x86-64 C tolerates natively go through an adapter (with a warning);
 // the rest are errors. msil-ld applies it to the call sites of CIL objects,
 // and MSILFixFunctionBitcasts to the calls of an LTO module (module flag
-// "msil-lto"), so the object and LTO paths agree.
+// "msil-lto"), so the object and LTO paths agree. Variadic functions, expanded
+// over a va_list (plan 5.15.2), bind only to each other, by an exact match.
 //
 //===----------------------------------------------------------------------===//
 
@@ -58,8 +59,9 @@ struct CallShape {
   MethodSig Sig;
   ValueClass Result = ValueClass::Void;
   SmallVector<ValueClass, 4> Params;
-  /// MSILLink::CallFlags: NoPrototype, VarArg, Sret, NativeIncompatible
-  /// (classifyCall ignores NoPrototype and NativeIncompatible).
+  /// MSILLink::CallFlags: NoPrototype, VarArg, Sret, NativeIncompatible,
+  /// FixedArity (classifyCall ignores NoPrototype, NativeIncompatible and
+  /// FixedArity).
   uint32_t Flags = 0;
   uint32_t FixedParams = 0;
   uint64_t SretSize = 0;
@@ -75,6 +77,10 @@ struct CallShape {
   /// VARARG in the descriptor, or a vararg calling convention or SENTINEL in
   /// the signature.
   LLVM_ABI bool isVarArg() const;
+
+  /// A vararg calling convention or SENTINEL in the signature: the CLR's
+  /// vararg convention, which MSIL never uses (plan 5.15.2).
+  LLVM_ABI bool isCLRVarArg() const;
 };
 
 /// What a call needs (5.9.8): the token names the definition (Direct), an
@@ -106,16 +112,22 @@ struct CallMatch {
   ValueClass CallResult = ValueClass::Void;
   /// Adapter: what it does, for '>>> adapter: <Detail>' (for example 'drops
   /// 1 extra argument'). Error: why the call cannot be adapted, for
-  /// '>>> <Detail>' (a variadic side gives 'variadic functions are not
-  /// supported yet'). Empty for Direct.
+  /// '>>> <Detail>' (for example 'only the definition is variadic'). Empty
+  /// for Direct.
   std::string Detail;
 };
 
 /// 5.9.8's table, and only it, over the shapes of a call \p Call and of the
 /// definition \p Def it binds to (in order of precedence):
-/// - VARARG on either side: error;
+/// - the CLR's vararg calling convention on either side: error;
+/// - VARARG on one side only, or on both with different FixedParams: error
+///   (msil-ld prints each variadic side as printCallShape does, with
+///   '(variadic, <n> fixed)');
 /// - SRET on one side only, or BYVAL parameters at different positions or
 ///   with different sizes or alignments: error;
+/// - VARARG on both sides: equal IL signatures are Direct, else error (the
+///   callee reads its variadic arguments from the va_list, so nothing can be
+///   adapted);
 /// - a type of class Other in either signature, or another calling
 ///   convention: an exact match (signature and descriptor) is Direct, else
 ///   error;
@@ -128,6 +140,9 @@ struct CallMatch {
 ///   result of int32 versus native int (conv.i4 / conv.i): adapter;
 /// - no difference: direct.
 /// NO_PROTOTYPE takes no part: it is why a C call may differ at all.
+/// FIXED_ARITY takes no part either: such a call is an ordinary call here, and
+/// msil-ld reports one bound to a variadic definition before it asks (plan
+/// 5.14.8).
 LLVM_ABI CallMatch classifyCall(const CallShape &Call, const CallShape &Def);
 
 /// Emits the body of the adapter that \p M describes (an Adapter or Direct
@@ -140,7 +155,9 @@ LLVM_ABI void buildAdapter(const CallMatch &M, const MethodSig &CallSig,
 
 /// Prints the IL signature of \p S as the 'defined as' and 'called as' lines
 /// of 5.9.8's text spell it: canonical listing v1, 'int32(int32, native
-/// int)'.
+/// int)', followed for a VARARG descriptor by ' (variadic, <n> fixed)' with
+/// n = FixedParams (plan 5.15.2): 'int32(native int, native int) (variadic,
+/// 1 fixed)'.
 LLVM_ABI void printCallShape(raw_ostream &OS, const CallShape &S);
 
 } // namespace cli

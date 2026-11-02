@@ -1,0 +1,27 @@
+hi 1 two
+%.0f of 0.5, 2.5 and -2.5: 0 2 -2
+%.1f of 0.25: 0.2, %.2f of 0.125: 0.12
+sprintf 25 [00042|ab  |1.234e+03|beef]
+snprintf 16 [a trunc]
+vsnprintf 27 [-5 6.50 seven 1099511627776]
+sscanf 3: 17 31 word
+snprintf truncated 8 [abcd_###]
+snprintf exact 5 [1234_###]
+vsnprintf truncated 7 [xyz-_###]
+vsprintf 9 [-77|q|end_##]
+fprintf to stdout: 8 eight
+fprintf wrote 27
+vfprintf to stdout: 0.500
+vfprintf wrote 26
+vprintf: 4000000000 big
+vprintf wrote 24
+vsscanf 2: -3 255
+scanf on empty stdin -1, x 5
+vscanf on empty stdin -1, x 5
+fprintf to the file wrote 21
+fclose 0
+fscanf 2: 11 22
+vfscanf 1: 51
+fclose 0, remove 0
+done
+[exit 0]

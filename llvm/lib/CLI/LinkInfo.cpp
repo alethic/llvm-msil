@@ -24,6 +24,7 @@
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
@@ -163,6 +164,13 @@ void RecordReader::setUnsupported(const Twine &Msg) {
   if (HasError)
     return;
   HasError = Unsupported = true;
+  Message = Msg.str();
+}
+
+void RecordReader::setInvalid(const Twine &Msg) {
+  if (HasError)
+    return;
+  HasError = true;
   Message = Msg.str();
 }
 
@@ -320,12 +328,36 @@ static_assert(KnownSymbolFlags == 0xFFF,
 static constexpr uint64_t KnownSegmentFlags =
     MSILLink::SegStrings | MSILLink::SegTLS | MSILLink::SegRetain |
     MSILLink::SegZero | MSILLink::SegReadOnly;
-static constexpr uint64_t KnownCallFlags = MSILLink::NoPrototype |
-                                           MSILLink::VarArg | MSILLink::Sret |
-                                           MSILLink::NativeIncompatible;
-static_assert(KnownCallFlags == 0xF,
-              "v1.0's CallFlags are NO_PROTOTYPE, VARARG, SRET and "
-              "NATIVE_INCOMPATIBLE (5.8.8)");
+static constexpr uint64_t KnownCallFlags =
+    MSILLink::NoPrototype | MSILLink::VarArg | MSILLink::Sret |
+    MSILLink::NativeIncompatible | MSILLink::FixedArity;
+static_assert(KnownCallFlags == 0x1F,
+              "the CallFlags are v1.0's NO_PROTOTYPE, VARARG, SRET and "
+              "NATIVE_INCOMPATIBLE (5.8.8) and v1.1's FIXED_ARITY (5.14.8)");
+
+namespace {
+/// A must-understand item that a minor version of major 1 added (5.14.7):
+/// its bit, its name in messages and listings, and that minor version.
+struct MinorItem {
+  uint32_t Bit;
+  const char *Name;
+  uint8_t Minor;
+};
+} // namespace
+
+/// The CallFlags that phase 3's minor versions add (5.14.7's table).
+static constexpr MinorItem CallFlagMinorItems[] = {
+    {MSILLink::FixedArity, "FIXED_ARITY", 1}};
+static_assert(MSILLink::MinorVersion == 1,
+              "every item of a minor version this toolchain understands is in "
+              "a table of minor items (5.14.7)");
+
+/// The CallFlags whose SIGNATURES entry has a FixedParams field: VARARG and
+/// FIXED_ARITY (5.14.8).
+static bool hasFixedParams(uint32_t CallFlags) {
+  return CallFlags & (MSILLink::VarArg | MSILLink::FixedArity);
+}
+
 /// The largest log2 alignment (5.8.8, SEGMENTS) and the size limit of a
 /// segment.
 static constexpr unsigned MaxAlignLog2 = 30;
@@ -478,9 +510,25 @@ static bool hasPlacement(const MSILLink::Symbol &S) {
 // encodeLinkInfo
 //===----------------------------------------------------------------------===//
 
+uint8_t cli::getRequiredMinorVersion(const Record &R) {
+  uint8_t Minor = 0;
+  for (const MSILLink::SignatureInfo &S : R.Signatures)
+    for (const MinorItem &I : CallFlagMinorItems)
+      if (S.Flags & I.Bit)
+        Minor = std::max(Minor, I.Minor);
+  return Minor;
+}
+
 void cli::encodeLinkInfo(const Record &R, SmallVectorImpl<uint8_t> &Out) {
-  RecordWriter W(Out);
   const MSILLink::Header &H = R.Hdr;
+  // 5.14.7 V3: the writer sets the header's minor version from the record's
+  // items; a lower one would make every reader refuse the record (V4).
+  if (uint8_t Required = getRequiredMinorVersion(R); H.Minor < Required)
+    reportFatalInternalError("link-info record: header minor version " +
+                             Twine(unsigned(H.Minor)) + " is below the v1." +
+                             Twine(unsigned(Required)) +
+                             " that the record's items require");
+  RecordWriter W(Out);
   W.writeBytes(arrayRefFromStringRef(
       StringRef(MSILLink::Magic, sizeof(MSILLink::Magic))));
   W.writeU8(H.Major);
@@ -601,7 +649,7 @@ void cli::encodeLinkInfo(const Record &R, SmallVectorImpl<uint8_t> &Out) {
     for (const MSILLink::SignatureInfo &S : R.Signatures) {
       W.writeU32(S.Token);
       W.writeULEB(S.Flags);
-      if (S.Flags & MSILLink::VarArg)
+      if (hasFixedParams(S.Flags))
         W.writeULEB(S.FixedParams);
       if (S.Flags & MSILLink::Sret) {
         W.writeULEB(S.SretSize);
@@ -708,6 +756,7 @@ private:
   void checkRelocs();
   void checkComdats();
   void checkInits();
+  void checkSignatures();
 
   std::string symbolText(uint32_t I) const {
     return "symbol " + std::to_string(I) + " " + quoted(R.Symbols[I].Name);
@@ -717,7 +766,7 @@ private:
   Record R;
   /// The offset of each entry, for messages.
   std::vector<uint64_t> SymbolOffsets, SegmentOffsets, RelocOffsets,
-      ComdatOffsets, InitOffsets;
+      ComdatOffsets, InitOffsets, SignatureOffsets;
 };
 
 } // namespace
@@ -1007,6 +1056,7 @@ void LinkInfoDecoder::inits(RecordReader &P) {
 void LinkInfoDecoder::signatures(RecordReader &P) {
   uint32_t N = readCount(P, "SIGNATURES count");
   R.Signatures.reserve(N);
+  SignatureOffsets.reserve(N);
   DenseMap<uint32_t, uint32_t> Tokens;
   for (uint32_t I = 0; I < N && !P.hasError(); ++I) {
     const uint64_t Off = P.getOffset();
@@ -1019,6 +1069,16 @@ void LinkInfoDecoder::signatures(RecordReader &P) {
     if (Flags & ~KnownCallFlags)
       return unsupported(P, "call flags " + hex(Flags & ~KnownCallFlags, 0) +
                                 " (" + F + " at offset " + Twine(Off) + ")");
+    // C8 (5.14.7 V4): an item of a minor version above the header's.
+    for (const MinorItem &Item : CallFlagMinorItems)
+      if ((Flags & Item.Bit) && Item.Minor > R.Hdr.Minor)
+        return P.setInvalid("v1." + Twine(unsigned(R.Hdr.Minor)) +
+                            " record uses " + Item.Name + " of v1." +
+                            Twine(unsigned(Item.Minor)));
+    // C8 (5.14.8): a call is either variadic or a fixed-arity call of a
+    // variadic function, never both.
+    if ((Flags & MSILLink::FixedArity) && (Flags & MSILLink::VarArg))
+      return P.setError(F, Off, "FIXED_ARITY with VARARG");
     auto [It, New] = Tokens.try_emplace(S.Token, I);
     if (!New)
       return P.setError(F, Off,
@@ -1026,7 +1086,7 @@ void LinkInfoDecoder::signatures(RecordReader &P) {
                             " already has SIGNATURES entry " +
                             Twine(It->second));
     S.Flags = static_cast<uint32_t>(Flags);
-    if (S.Flags & MSILLink::VarArg)
+    if (hasFixedParams(S.Flags))
       S.FixedParams = P.readULEB32(F + " fixed parameters");
     if (S.Flags & MSILLink::Sret) {
       S.SretSize = P.readULEB(F + " sret size");
@@ -1043,6 +1103,7 @@ void LinkInfoDecoder::signatures(RecordReader &P) {
       S.Byval.push_back(B);
     }
     R.Signatures.push_back(std::move(S));
+    SignatureOffsets.push_back(Off);
   }
 }
 
@@ -1248,6 +1309,26 @@ void LinkInfoDecoder::checkInits() {
   }
 }
 
+void LinkInfoDecoder::checkSignatures() {
+  // C8 (5.14.8): FIXED_ARITY never on a definition's entry. A defined
+  // non-alias FUNCTION symbol's token is its MethodDef; import stubs, which
+  // may carry FIXED_ARITY, are no SYMTAB definitions.
+  DenseMap<uint32_t, uint32_t> Definitions;
+  for (uint32_t I = 0, E = R.Symbols.size(); I != E; ++I)
+    if (!isData(R.Symbols[I]) && hasToken(R.Symbols[I]))
+      Definitions.try_emplace(R.Symbols[I].Token, I);
+  for (uint32_t I = 0, E = R.Signatures.size(); I != E && !Rd.hasError(); ++I) {
+    const MSILLink::SignatureInfo &S = R.Signatures[I];
+    if (!(S.Flags & MSILLink::FixedArity))
+      continue;
+    auto It = Definitions.find(S.Token);
+    if (It != Definitions.end())
+      Rd.setError("signature " + Twine(I), SignatureOffsets[I],
+                  "FIXED_ARITY on token " + hex(S.Token) +
+                      ", the definition of " + symbolText(It->second));
+  }
+}
+
 Expected<Record> LinkInfoDecoder::decode() {
   header();
   if (Rd.hasError())
@@ -1315,6 +1396,7 @@ Expected<Record> LinkInfoDecoder::decode() {
   checkRelocs();
   checkComdats();
   checkInits();
+  checkSignatures();
   if (Rd.hasError())
     return Rd.takeError();
   return std::move(R);
@@ -2011,8 +2093,11 @@ void cli::printLinkInfo(const Record &R, const MetadataReader *MD,
       }
     if (S.Flags & MSILLink::NoPrototype)
       OS << " NO_PROTOTYPE";
+    // 5.14.8: VARARG and FIXED_ARITY never appear together.
     if (S.Flags & MSILLink::VarArg)
       OS << " VARARG fixed=" << S.FixedParams;
+    if (S.Flags & MSILLink::FixedArity)
+      OS << " FIXED_ARITY fixed=" << S.FixedParams;
     if (S.Flags & MSILLink::Sret) {
       OS << " SRET size=" << S.SretSize << " align=";
       printAlign(OS, S.SretAlignLog2);

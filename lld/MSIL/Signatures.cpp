@@ -22,6 +22,7 @@
 #include "Symbols.h"
 #include "Synthetic.h"
 #include "TokenMap.h"
+#include "Variadics.h"
 #include "lld/Common/ErrorHandler.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
@@ -51,6 +52,22 @@ static std::string getDescriptorKey(const MSILLink::SignatureInfo *info) {
   for (const MSILLink::ByvalParam &b : info->Byval)
     os << ';' << b.Param << ',' << b.Size << ',' << unsigned(b.AlignLog2);
   return key;
+}
+
+// True if the fixed-arity call \p call (FIXED_ARITY: a native on the
+// triple's list, or an explicit import, called with the call site's
+// signature) binds to the expanded variadic definition \p def (VARARG):
+// plan 5.14.8's error, which classifyCall leaves to msil-ld.
+static bool isFixedArityToVariadic(const CallShape &call,
+                                   const CallShape &def) {
+  return (call.Flags & MSILLink::FixedArity) && (def.Flags & MSILLink::VarArg);
+}
+
+// The key of plan 5.14.8's diagnostic, one per definition \p def (an
+// output method's index, or a library and an export's name) and calling
+// object \p f.
+static std::string getFixedArityKey(const Twine &def, const ObjFile &f) {
+  return ("<fixed-arity>" + def + Twine('\0') + toString(&f)).str();
 }
 
 static std::string printShape(const CallShape &shape) {
@@ -97,20 +114,36 @@ void CallBinder::checkNativeReferences() {
       return isInList(name) || isInList(lookupName) || isInList(e.Entry);
     };
 
-    bool hasCall = false, variadic = false, notPassable = false;
+    // The call sides: an expanded call (VARARG: its fixed arguments and a
+    // va_list), a fixed-arity call of a native on the triple's list or of an
+    // explicit import (FIXED_ARITY), and the CLR's vararg convention, which
+    // MSIL never uses. The declared prototype (an import stub) also tells
+    // whether the function is variadic, for its address (plan 5.15.2).
+    bool hasCall = false, hasAddress = false, vaListCall = false,
+         clrVarArg = false, variadic = false, notPassable = false;
+    auto addShape = [&](const MethodSig &sig,
+                        const MSILLink::SignatureInfo *info, bool isCall) {
+      CallShape shape = CallShape::get(sig, info);
+      bool isVaList = shape.Flags & MSILLink::VarArg;
+      clrVarArg |= shape.isCLRVarArg();
+      variadic |= shape.isVarArg() || (shape.Flags & MSILLink::FixedArity);
+      vaListCall |= isCall && isVaList;
+      notPassable |= isNotPassable(info);
+    };
     for (const SymbolReference *r : refsOf[sym]) {
+      if (r->kind == SymbolReference::Address) {
+        hasAddress = true;
+        continue;
+      }
       if (r->kind != SymbolReference::Call || !r->signature)
         continue;
       hasCall = true;
-      variadic |= CallShape::get(*r->signature, r->signatureInfo).isVarArg();
-      notPassable |= isNotPassable(r->signatureInfo);
+      addShape(*r->signature, r->signatureInfo, /*isCall=*/true);
     }
     std::optional<NativeSignature> declared = symbols.getNativeSignature(sym);
-    if (declared) {
-      variadic |= CallShape::get(*declared->signature, declared->signatureInfo)
-                      .isVarArg();
-      notPassable |= isNotPassable(declared->signatureInfo);
-    }
+    if (declared)
+      addShape(*declared->signature, declared->signatureInfo,
+               /*isCall=*/false);
     // The IR signature of a native `long double` function says double
     // (decision D3), but the native function takes or returns an x87 or
     // binary128 value (plan 5.10.10). Late binding reaches the native
@@ -130,19 +163,33 @@ void CallBinder::checkNativeReferences() {
             "passing C functions to native code is not supported for MSIL yet";
     else if (longDouble)
       msg = getLongDoubleRejectionText(name, e.Module);
-    else if (variadic)
-      msg = prefix + "is variadic; calls of native variadic functions are not "
-                     "supported for MSIL yet (phase 3)";
-    else if (notPassable)
+    // Plan 5.15.2 rule 4: the address of a native variadic function needs
+    // M28's adapter (getFixedArityAdapter).
+    else if (variadic && hasAddress)
+      msg = getVariadicAddressText(name, e.Module);
+    // The CLR's vararg convention has no native counterpart (plan 5.15.2).
+    else if (clrVarArg)
+      msg = getNoVaListVariantText(name, e.Module);
+    // Rule 2: the expanded calls bind to the function's va_list variant;
+    // the fixed-arity calls bind to the function itself (rule 3).
+    else if (vaListCall) {
+      VaListVariantBinding b = bindVaListVariant(name, e, ctx);
+      if (b.Variant)
+        symbols.setVaListVariant(sym, b.Variant);
+      else
+        msg = std::move(b.Error);
+    }
+    if (msg.empty() && notPassable) {
       msg = prefix + "takes or returns a value that a P/Invoke cannot pass "
                      "natively yet (phase 3)";
-    else if (!hasCall && !declared)
+    } else if (msg.empty() && !hasCall && !declared) {
       // Phase 1's text, which M19.b (2a) moved to msil-ld: no object gives
       // the signature of its P/Invoke stub.
       msg = ("the signature of prototype-less function '" + name +
              "' cannot be derived: its address is used, but it is never "
              "called directly; declare it with a prototype")
                 .str();
+    }
     if (!msg.empty())
       symtab->reportUnresolved(std::move(msg), sym, /*liveOnly=*/true);
   }
@@ -159,13 +206,11 @@ static void reportMismatch(const Symbol &sym, const CallShape &call,
       ("\n>>> defined as " + printShape(def) + " in " + defFile +
        "\n>>> called as " + printShape(call) + " in " + toString(&f))
           .str();
-  // A variadic side is 5.9.14's Phase 3 text (P3-B), the others wasm-ld's
-  // reportFunctionSignatureMismatch shape.
-  std::string msg =
-      call.isVarArg() || def.isVarArg()
-          ? "variadic functions are not supported yet: " + toString(sym) + where
-          : "function signature mismatch: " + toString(sym) + where + "\n>>> " +
-                (isAdapter ? "adapter: " : "") + match.Detail;
+  // wasm-ld's reportFunctionSignatureMismatch shape. A variadic side is
+  // one too (plan 5.15.2 rule 1): printCallShape prints its shape as
+  // '<sig> (variadic, <n> fixed)', and a variadic call is never adapted.
+  std::string msg = "function signature mismatch: " + toString(sym) + where +
+                    "\n>>> " + (isAdapter ? "adapter: " : "") + match.Detail;
   if (isAdapter)
     warn(msg);
   else
@@ -227,6 +272,15 @@ std::optional<uint32_t> CallBinder::bindCall(ObjFile &f, const TokenTarget &t) {
     CallShape call = CallShape::get(callSig, t.signatureInfo);
     CallShape defShape =
         CallShape::get(out.methods[*def].sig, d->method->signatureInfo);
+    // Plan 5.14.8: a fixed-arity call cannot pass its variadic arguments to
+    // an expanded definition (classifyCall would report 'only the
+    // definition is variadic').
+    if (isFixedArityToVariadic(call, defShape)) {
+      if (reported.insert(getFixedArityKey(Twine(*def), f)).second)
+        error(getFixedArityToVariadicText(sym->getName(), toString(&f),
+                                          toString(d->method->file)));
+      return std::nullopt;
+    }
     CallMatch match = classifyCall(call, defShape);
     if (match.Kind == CallMatchKind::Direct)
       return def;
@@ -276,11 +330,17 @@ std::optional<uint32_t> CallBinder::bindCall(ObjFile &f, const TokenTarget &t) {
   }
 
   // A natively bound function: its P/Invoke stub for the call's signature.
+  // An expanded call (VARARG) imports the function's va_list variant (plan
+  // 5.15.2 rule 2, which checkNativeReferences applied); a fixed-arity call
+  // imports the function itself (rule 3).
   if (auto *n = dyn_cast<NativeFunction>(sym)) {
     if (!t.signature)
       return std::nullopt;
-    const NativeExport &e = *n->nativeExport;
-    return symbols.getPInvokeStub(sym->getName(), e.Module, e.Entry,
+    const NativeExport *e = n->nativeExport;
+    if (t.signatureInfo && (t.signatureInfo->Flags & MSILLink::VarArg))
+      if (const NativeExport *variant = symbols.getVaListVariant(sym))
+        e = variant;
+    return symbols.getPInvokeStub(sym->getName(), e->Module, e->Entry,
                                   out.mapSig(f, *t.signature));
   }
 
@@ -356,6 +416,15 @@ OutRef CallBinder::bindManaged(ObjFile &f, const TokenTarget &t) {
   MethodSig callSig = out.mapSig(f, *t.signature);
   CallShape call = CallShape::get(callSig, t.signatureInfo);
   CallShape defShape = CallShape::get(*defSig, e.getSignatureInfo());
+  // Plan 5.14.8: a fixed-arity call of a Variadic export.
+  if (isFixedArityToVariadic(call, defShape)) {
+    std::string key =
+        getFixedArityKey(toString(&lib) + Twine('\0') + e.Name, f);
+    if (reported.insert(key).second)
+      error(getFixedArityToVariadicText(managed->getName(), toString(&f),
+                                        toString(&lib)));
+    return OutRef();
+  }
   CallMatch match = classifyCall(call, defShape);
   if (match.Kind == CallMatchKind::Direct)
     return OutRef::token(*ref);

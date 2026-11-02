@@ -24,15 +24,39 @@ describe-sh.test, exit-tag.test and exit-tag-sh.test.
         every one of those paths, and the --filter-out of net-core and of
         wsl-p3's run 2 matches exactly those tests' full lit names (and, for
         net-core, still every Programs, harness, M3 and spill-limits test).
+        The M26 rows of lit-legs.ps1 (5.17.6): $checkMsil (net8's and
+        net-core's paths) holds clang/test/Sema/msil-long-double-format.c
+        and llvm/test/Transforms/ExpandVariadics/msil-abi.ll; the hosted
+        programs are the directories of msil/test/Programs/{zlib-full,lua,
+        sqlite} that exist (at least one); programs-hosted and
+        programs-hosted-wsl (Quick) run exactly them under obj at -O2 with
+        msil_also_run=10+tc0, on .NET 10 and the Framework against the
+        native oracle, and on WSL .NET 10 with E7h; programs and
+        programs-lto run the nine programs and the hosted ones with
+        msil_also_run=10,10+tc0, programs-wsl and programs-lto-wsl with
+        8,10+tc0 and E7h; det and det-wsl run msil/test/Programs/det, which
+        holds each hosted program's det test, det-wsl with
+        msil_glibc_sysroot; ctest, ctest-wsl and ctest-lto (Exit, under lto
+        on .NET 10 against the native oracle) run the whole c-testsuite
+        directory, without a lit filter, and it holds both lists.
         For lit-legs.sh: none of the Quick or WSL legs of lit-legs.ps1,
-        msil_glibc_sysroot on every lit run, M3 in lto, .NET 10 in ctest.
+        msil_glibc_sysroot on every lit run, M3 in lto, .NET 10 in ctest;
+        from M26 check_msil's two paths in net8, the hosted programs in
+        programs and programs-lto with msil_also_run=10,10+tc0, and
+        ctest-lto (Exit) as lit-legs.ps1's.
         --plant changes the JSON first, so that the check must fail (the
         failure path): drop-p3-path (wsl-p3's run 1 loses its last path),
         keep-p3 (wsl-p3's run 2 loses its --filter-out), no-hosted (harness,
         for lit-legs.sh net8, loses msil_require_hosted), wrong-prog-pipeline
         (lto's run says prog_pipeline obj); for lit-legs.sh also no-glibc
         (net8 loses msil_glibc_sysroot) and wsl-leg (a copy of ctest named
-        ctest-wsl joins the legs).
+        ctest-wsl joins the legs). The M26 faults, for both scripts:
+        drop-hosted (programs-lto loses its last path, a hosted program),
+        ctest-lto-untagged (ctest-lto loses its tag Exit), check-msil (net8
+        and net-core lose msil-abi.ll); for lit-legs.ps1 also no-tc0
+        (programs-wsl's msil_also_run is 8), ctest-libc-out (ctest filters
+        out libc.txt's tests), hosted-levels (programs-hosted loses
+        msil_opt_levels) and det-glibc (det-wsl loses msil_glibc_sysroot).
     legs-check.py tags ps1|sh LIST DESCRIBE [--plant LEG=TAG]
         LIST (-List, --list) and DESCRIBE name the same legs in the same
         order, and each LIST line is 'name' or 'name (<switch>)' for the
@@ -89,10 +113,48 @@ SWITCH = {
     "ps1": {"": "", "Wsl": "-Wsl", "Quick": "-Quick", "Full": "-Full", "Exit": "-Exit"},
     "sh": {"": "", "Quick": "", "Full": "--full", "Exit": "--exit"},
 }
+M26_FAULTS = ("drop-hosted", "ctest-lto-untagged", "check-msil")
 FAULTS = {
-    "ps1": ("drop-p3-path", "keep-p3", "no-hosted", "wrong-prog-pipeline"),
-    "sh": ("no-hosted", "wrong-prog-pipeline", "no-glibc", "wsl-leg"),
+    "ps1": ("drop-p3-path", "keep-p3", "no-hosted", "wrong-prog-pipeline")
+    + M26_FAULTS
+    + ("no-tc0", "ctest-libc-out", "hosted-levels", "det-glibc"),
+    "sh": ("no-hosted", "wrong-prog-pipeline", "no-glibc", "wsl-leg") + M26_FAULTS,
 }
+# The nine exit-corpus programs (5.12.11) and the hosted ones of Phase 3
+# (5.17.15: zlib-full from M26, lua from M27, sqlite from M30), as the legs
+# list them: the hosted ones only when their directory exists.
+CORPUS_PROGRAMS = [
+    "msil/test/Programs/" + p
+    for p in (
+        "zlib",
+        "tinf",
+        "monocypher",
+        "coremark",
+        "lz4",
+        "blake2",
+        "tweetnacl",
+        "kissfft",
+        "jsmn",
+    )
+]
+HOSTED_NAMES = ("zlib-full", "lua", "sqlite")
+# check-msil's paths that M26 adds ($checkMsil, check_msil).
+M26_CHECK_MSIL = (
+    "clang/test/Sema/msil-long-double-format.c",
+    "llvm/test/Transforms/ExpandVariadics/msil-abi.ll",
+)
+CTEST = "msil/test/Programs/c-testsuite"
+# The corpus parameters (Get-CorpusParams, corpus_params): msil_require_corpus=1
+# always, the other two as the environment sets them.
+CORPUS_PARAMS = ("msil_require_corpus", "msil_corpus_dir", "msil_corpus_skip")
+
+
+def hosted_programs():
+    return [
+        "msil/test/Programs/" + n
+        for n in HOSTED_NAMES
+        if os.path.isdir(os.path.join(REPO, "msil", "test", "Programs", n))
+    ]
 
 
 class Usage(Exception):
@@ -467,6 +529,192 @@ def check_ps1_rows(data, p3, problems):
     for name in ("expected", "expected-linux"):
         if legs[name]["kind"] != "expected":
             problems.append("%s: kind %r" % (name, legs[name]["kind"]))
+    check_ps1_m26_rows(legs, problems)
+
+
+def expect_corpus_params(where, run, want, problems, any_value=()):
+    """run's params, without the msil_require_* and the corpus parameters,
+    are exactly want plus the keys any_value (with any non-empty value), and
+    msil_require_corpus is 1 (Get-CorpusParams, corpus_params)."""
+    params = {
+        k: v
+        for k, v in run["params"].items()
+        if k not in REQUIRES and k not in CORPUS_PARAMS
+    }
+    got = {k: v for k, v in params.items() if k not in any_value}
+    if got != want:
+        problems.append(
+            "%s: params %s, not %s (plus %s, the msil_require_* and the corpus "
+            "parameters)" % (where, got, want, ", ".join(any_value) or "nothing")
+        )
+    for k in any_value:
+        if not params.get(k):
+            problems.append("%s: no %s" % (where, k))
+    if run["params"].get("msil_require_corpus") != "1":
+        problems.append("%s: params lack msil_require_corpus=1 (a corpus leg)" % where)
+
+
+def check_check_msil(legs, names, problems):
+    for name in names:
+        if name not in legs or not legs[name]["runs"]:
+            continue
+        paths = legs[name]["runs"][0]["paths"]
+        for p in M26_CHECK_MSIL:
+            if p not in paths:
+                problems.append("%s: paths lack %s ($checkMsil, M26)" % (name, p))
+
+
+def check_programs(legs, specs, hosted, problems):
+    """specs: (leg, the msil_also_run it passes, the params it must have)."""
+    for name, also, want in specs:
+        if name not in legs or len(legs[name]["runs"]) != 1:
+            problems.append("%s: not one lit run" % name)
+            continue
+        run = legs[name]["runs"][0]
+        if run["paths"] != CORPUS_PROGRAMS + hosted or run["lit"]:
+            problems.append(
+                "%s: paths %r, lit %r; not the nine programs and the hosted programs %r"
+                % (name, run["paths"], run["lit"], hosted)
+            )
+        expect_params(
+            name, run, dict(want, msil_also_run=also), problems, exact=False
+        )
+
+
+def check_ctest_dirs(legs, names, problems):
+    """Both lists run: each leg runs the whole directory, unfiltered, and the
+    directory holds libc-free.txt and libc.txt (required from M26)."""
+    for name in names:
+        if name not in legs or len(legs[name]["runs"]) != 1:
+            problems.append("%s: not one lit run" % name)
+            continue
+        run = legs[name]["runs"][0]
+        if run["paths"] != [CTEST] or run["lit"]:
+            problems.append(
+                "%s: paths %r, lit %r; not the whole c-testsuite directory with both "
+                "lists" % (name, run["paths"], run["lit"])
+            )
+    for lst in ("libc-free.txt", "libc.txt"):
+        if not os.path.isfile(os.path.join(REPO, CTEST, lst)):
+            problems.append("%s/%s does not exist" % (CTEST, lst))
+
+
+def check_ctest_lto(legs, problems):
+    leg = legs.get("ctest-lto")
+    if not leg:
+        problems.append("legs missing: ctest-lto")
+        return
+    if leg["tag"] != "Exit" or leg["kind"] != "lit" or len(leg["runs"]) != 1:
+        problems.append(
+            "ctest-lto: tag %r, kind %r, %d runs; not 'Exit', lit, 1"
+            % (leg["tag"], leg["kind"], len(leg["runs"]))
+        )
+        return
+    run = leg["runs"][0]
+    extra = ("msil_glibc_sysroot",) if run["triple"].endswith("-linux-gnu-msil") else ()
+    expect_corpus_params(
+        "ctest-lto",
+        run,
+        {
+            "msil_pipeline": "lto",
+            "msil_dotnet_runtime": "10",
+            "msil_native_oracle": "required",
+        },
+        problems,
+        any_value=extra,
+    )
+    if run["prog_pipeline"] != "lto":
+        problems.append("ctest-lto: prog_pipeline %r, not 'lto'" % run["prog_pipeline"])
+
+
+def check_ps1_m26_rows(legs, problems):
+    hosted = hosted_programs()
+    if not hosted:
+        problems.append(
+            "no hosted program directory exists (msil/test/Programs/zlib-full from M26)"
+        )
+    check_check_msil(legs, ("net8", "net-core"), problems)
+    win = {"msil_native_oracle": "required", "msil_run_netfx": "1"}
+    wsl = {
+        "msil_runner": "wsl",
+        "msil_triple": "x86_64-unknown-linux-gnu-msil",
+        "msil_dotnet_runtime": "10",
+        "msil_native_oracle": "required",
+    }
+    check_programs(
+        legs,
+        [
+            ("programs", "10,10+tc0", dict(win, msil_pipeline="obj")),
+            ("programs-lto", "10,10+tc0", dict(win, msil_pipeline="lto", msil_equiv="1")),
+            ("programs-wsl", "8,10+tc0", dict(wsl, msil_pipeline="obj")),
+            ("programs-lto-wsl", "8,10+tc0", dict(wsl, msil_pipeline="lto", msil_equiv="1")),
+        ],
+        hosted,
+        problems,
+    )
+    for name in ("programs-wsl", "programs-lto-wsl"):
+        runs = legs.get(name, {}).get("runs") or [{"params": {}}]
+        for key in ("msil_linux_sysroot", "msil_glibc_sysroot"):
+            if not runs[0]["params"].get(key):
+                problems.append("%s: no %s ($e7h)" % (name, key))
+    for name in ("det", "det-wsl"):
+        runs = legs.get(name, {}).get("runs") or []
+        if len(runs) != 1 or "msil/test/Programs/det" not in runs[0]["paths"]:
+            problems.append("%s: not one run with msil/test/Programs/det" % name)
+    for p in hosted:
+        det_test = "msil/test/Programs/det/%s.test" % p.rsplit("/", 1)[1]
+        if not os.path.isfile(os.path.join(REPO, det_test)):
+            problems.append(
+                "%s has no det test %s (the det legs run msil/test/Programs/det)"
+                % (p, det_test)
+            )
+    runs = legs.get("det-wsl", {}).get("runs") or [{"params": {}}]
+    if not runs[0]["params"].get("msil_glibc_sysroot"):
+        problems.append("det-wsl: no msil_glibc_sysroot (the hosted programs' det tests)")
+    check_ctest_dirs(legs, ("ctest", "ctest-wsl", "ctest-lto"), problems)
+    check_ctest_lto(legs, problems)
+    for name, want, any_value in (
+        (
+            "programs-hosted",
+            {
+                "msil_pipeline": "obj",
+                "msil_opt_levels": "O2",
+                "msil_dotnet_runtime": "10",
+                "msil_native_oracle": "required",
+                "msil_run_netfx": "1",
+                "msil_also_run": "10+tc0",
+            },
+            (),
+        ),
+        (
+            "programs-hosted-wsl",
+            dict(
+                wsl,
+                msil_pipeline="obj",
+                msil_opt_levels="O2",
+                msil_wsl_dotnet="private",
+                msil_also_run="10+tc0",
+            ),
+            ("msil_linux_sysroot", "msil_glibc_sysroot"),
+        ),
+    ):
+        leg = legs.get(name)
+        if not leg:
+            problems.append("legs missing: %s" % name)
+            continue
+        if leg["tag"] != "Quick" or leg["kind"] != "lit" or len(leg["runs"]) != 1:
+            problems.append(
+                "%s: tag %r, kind %r, %d runs; not 'Quick', lit, 1"
+                % (name, leg["tag"], leg["kind"], len(leg["runs"]))
+            )
+            continue
+        run = leg["runs"][0]
+        if run["paths"] != hosted or run["lit"]:
+            problems.append(
+                "%s: paths %r, lit %r; not the hosted programs %r"
+                % (name, run["paths"], run["lit"], hosted)
+            )
+        expect_corpus_params(name, run, want, problems, any_value=any_value)
 
 
 def check_sh_rows(data, problems):
@@ -482,6 +730,7 @@ def check_sh_rows(data, problems):
                 "scale",
                 "ctest-wsl",
                 "wsl-quick",
+                "programs-hosted",
             )
             or name.endswith("-wsl")
             or name.startswith("wsl-")
@@ -505,6 +754,28 @@ def check_sh_rows(data, problems):
         )
     if legs.get("expected", {}).get("kind") != "expected":
         problems.append("expected: not kind expected")
+    # M26 (5.17.6): check_msil, the hosted programs, both lists, ctest-lto.
+    hosted = hosted_programs()
+    if not hosted:
+        problems.append(
+            "no hosted program directory exists (msil/test/Programs/zlib-full from M26)"
+        )
+    check_check_msil(legs, ("net8",), problems)
+    check_programs(
+        legs,
+        [
+            ("programs", "10,10+tc0", {"msil_pipeline": "obj", "msil_native_oracle": "required"}),
+            (
+                "programs-lto",
+                "10,10+tc0",
+                {"msil_pipeline": "lto", "msil_native_oracle": "required", "msil_equiv": "1"},
+            ),
+        ],
+        hosted,
+        problems,
+    )
+    check_ctest_dirs(legs, ("ctest", "ctest-lto"), problems)
+    check_ctest_lto(legs, problems)
 
 
 def plant_fault(script, data, fault):
@@ -531,7 +802,27 @@ def plant_fault(script, data, fault):
             copy = json.loads(json.dumps(legs["ctest"]))
             copy["name"] = "ctest-wsl"
             data["legs"].append(copy)
-    except (KeyError, IndexError) as e:
+        elif fault == "drop-hosted":
+            legs["programs-lto"]["runs"][0]["paths"].pop()
+        elif fault == "ctest-lto-untagged":
+            legs["ctest-lto"]["tag"] = ""
+        elif fault == "check-msil":
+            for name in ("net8", "net-core"):
+                if name in legs:
+                    legs[name]["runs"][0]["paths"].remove(M26_CHECK_MSIL[1])
+        elif fault == "no-tc0":
+            run = legs["programs-wsl"]["runs"][0]
+            run["params"]["msil_also_run"] = "8"
+            run["also_run"] = ["8"]
+        elif fault == "ctest-libc-out":
+            legs["ctest"]["runs"][0]["lit"] = [
+                "--filter-out=MSIL :: Programs/c-testsuite/libc/"
+            ]
+        elif fault == "hosted-levels":
+            del legs["programs-hosted"]["runs"][0]["params"]["msil_opt_levels"]
+        elif fault == "det-glibc":
+            del legs["det-wsl"]["runs"][0]["params"]["msil_glibc_sysroot"]
+    except (KeyError, IndexError, ValueError) as e:
         raise Usage("--plant %s: the JSON has no %s to change" % (fault, e))
 
 
@@ -558,6 +849,7 @@ def cmd_describe(script, path, plant):
         )
         if p3:
             print("legs-check: $p3Tests: %s" % " ".join(p3))
+        print("legs-check: hosted programs: %s" % " ".join(hosted_programs()))
     return problems
 
 

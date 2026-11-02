@@ -1,0 +1,424 @@
+# The printf and scanf families declared by the program itself, without <stdio.h>: each of the helper archive's 32 UCRT members on windows-msvc, glibc's standard functions through their va_list variants on Linux triples.
+# The UCRT exports no printf: its <stdio.h> defines the family as inline
+# functions over __stdio_common_vfprintf and the rest, and native code that
+# declares printf itself links legacy_stdio_definitions.lib, machine code
+# that msil-ld cannot link (hosted-libc recon 5.2; probes/noinc.c). On
+# windows-msvc triples msil-ld takes them from the helper archive's members
+# of msil_ucrt_stdio.c, and __local_stdio_printf_options and
+# __local_stdio_scanf_options, which no object here defines, from
+# msil_ucrt_stdio_options.c; the module initializer then sets the default
+# option bits in that member's words (plan 5.15.2, 'Startup options'), so
+# the %.0f, %.1f and %.2f lines show the UCRT's standard rounding (0 and 2,
+# 0.2, 0.12), as the native program does, not the legacy rounding (1 and 3,
+# 0.3, 0.13) of options left 0. The C99 snprintf returns the full length.
+# The program names legacy_stdio_definitions through '#pragma comment(lib)'
+# on Windows triples, as native code that declares printf itself must
+# (lld-link: 'undefined symbol: printf' without it); msil-ld ignores that
+# request, as it ignores the other C runtime libraries (plan 5.15.2). On
+# Linux triples the calls are native variadic calls bound to their va_list
+# variants (vprintf, vfprintf, vsprintf, vsnprintf, __isoc99_vsscanf or
+# __isoc23_vsscanf, ...), the program's own v-forms pass its va_list, and
+# stdout is a native data import.
+# Every one of the 32 members runs on windows-msvc triples, with outputs
+# that tell the option words of plan 5.15.2 apart (a buffer filled with '#'
+# is printed with a NUL as '_', so a terminator or its absence shows):
+# - _snprintf, _vsnprintf, _snwprintf and _vsnwprintf (bit 1, legacy null
+#   termination): -1 and no terminator on truncation, and the count with no
+#   terminator when the text fits exactly; snprintf and vsnprintf (bit 2,
+#   standard snprintf behavior) terminate and return the full length; ISO
+#   swprintf and vswprintf (neither bit) terminate and return -1. The UCRT
+#   (10.0.26100) shows each combination of the two bits differently on
+#   these inputs (-2 with neither, which the members turn into -1).
+# - _scprintf and _vscprintf (bit 2) print their counts. With no buffer the
+#   UCRT returns the same count with or without bit 2, so these lines check
+#   the members and their arguments, not that bit.
+# - sprintf and vsprintf format into buffers; printf, fprintf, vfprintf,
+#   vprintf, wprintf, fwprintf, vwprintf and vfwprintf write to stdout
+#   (__acrt_iob_func(1), declared by hand), and their counts are printed.
+# - sscanf, vsscanf, swscanf and vswscanf read fixed strings; fscanf,
+#   vfscanf, fwscanf and vfwscanf read, in turn, one file that the program
+#   writes in its private run directory and then removes; scanf, vscanf,
+#   wscanf and vwscanf read the harness's stdin, which is always empty
+#   (msil-run.py and update-expected.py give programs no input), so each
+#   returns EOF and leaves its argument alone: a call through the member to
+#   the UCRT's stdin, not a conversion.
+# Linux triples run the standard narrow functions only (no wide stream or
+# Microsoft form: glibc's wchar_t is 4 bytes and its streams take a single
+# orientation), hence ucrt-noinc.linux.expected. Plan 5.15.2, 5.17.13 (M26,
+# M3/05-variadics).
+# On windows-msvc triples the program links the helper archive's CIL
+# members, so msil-ld's --lto-emit-asm text refuses it ('--lto-emit-asm
+# cannot link CIL objects'): the test does not run there with
+# msil_link_output=il, and equiv-allowed.txt skips its O4 there (plan 5.14.3
+# A9).
+# UNSUPPORTED: msil-link-output=il && msil-triple-windows
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/noinc.c
+# RUN: %{msil_prog}
+#--- noinc.c
+/* No <stdio.h>: the declarations the program writes itself. */
+#include <stdarg.h>
+#include <stddef.h>
+
+#ifdef _WIN32
+#pragma comment(lib, "legacy_stdio_definitions")
+#endif
+
+typedef struct msil_test_file FILE;
+
+int printf(const char *, ...);
+int fprintf(FILE *, const char *, ...);
+int sprintf(char *, const char *, ...);
+int snprintf(char *, size_t, const char *, ...);
+int vprintf(const char *, va_list);
+int vfprintf(FILE *, const char *, va_list);
+int vsprintf(char *, const char *, va_list);
+int vsnprintf(char *, size_t, const char *, va_list);
+int scanf(const char *, ...);
+int fscanf(FILE *, const char *, ...);
+int sscanf(const char *, const char *, ...);
+int vscanf(const char *, va_list);
+int vfscanf(FILE *, const char *, va_list);
+int vsscanf(const char *, const char *, va_list);
+int puts(const char *);
+FILE *fopen(const char *, const char *);
+int fclose(FILE *);
+int remove(const char *);
+
+#ifdef _WIN32
+/* What <stdio.h> makes of stdout on the UCRT. */
+FILE *__acrt_iob_func(unsigned);
+#define STDOUT (__acrt_iob_func(1))
+
+int _snprintf(char *, size_t, const char *, ...);
+int _vsnprintf(char *, size_t, const char *, va_list);
+int _scprintf(const char *, ...);
+int _vscprintf(const char *, va_list);
+int wprintf(const wchar_t *, ...);
+int fwprintf(FILE *, const wchar_t *, ...);
+int swprintf(wchar_t *, size_t, const wchar_t *, ...);
+int _snwprintf(wchar_t *, size_t, const wchar_t *, ...);
+int vwprintf(const wchar_t *, va_list);
+int vfwprintf(FILE *, const wchar_t *, va_list);
+int vswprintf(wchar_t *, size_t, const wchar_t *, va_list);
+int _vsnwprintf(wchar_t *, size_t, const wchar_t *, va_list);
+int wscanf(const wchar_t *, ...);
+int fwscanf(FILE *, const wchar_t *, ...);
+int swscanf(const wchar_t *, const wchar_t *, ...);
+int vwscanf(const wchar_t *, va_list);
+int vfwscanf(FILE *, const wchar_t *, va_list);
+int vswscanf(const wchar_t *, const wchar_t *, va_list);
+#else
+extern FILE *stdout;
+#define STDOUT stdout
+#endif
+
+#define TMP "ucrt-noinc.tmp"
+
+static int my_format(char *b, size_t n, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vsnprintf(b, n, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vsprintf(char *b, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vsprintf(b, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vprintf(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vprintf(fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vfprintf(FILE *f, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vfprintf(f, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vscanf(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vscanf(fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vfscanf(FILE *f, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vfscanf(f, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vsscanf(const char *s, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vsscanf(s, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+/* Fills a buffer with '#', which no output below contains. */
+static void fill(char *b, int n) {
+  for (int i = 0; i < n; ++i)
+    b[i] = '#';
+}
+
+/* Prints a call's result and the first n bytes of its buffer, a NUL as
+   '_', so that a terminator, or its absence, shows. */
+static void show(const char *what, int r, const char *b, int n) {
+  char line[64];
+  int i = 0;
+  for (; i < n && i < 63; ++i)
+    line[i] = b[i] ? b[i] : '_';
+  line[i] = 0;
+  printf("%s %d [%s]\n", what, r, line);
+}
+
+#ifdef _WIN32
+static int my_vsnprintf_ms(char *b, size_t n, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = _vsnprintf(b, n, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vscprintf(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = _vscprintf(fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vwprintf(const wchar_t *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vwprintf(fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vfwprintf(FILE *f, const wchar_t *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vfwprintf(f, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vswprintf(wchar_t *b, size_t n, const wchar_t *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vswprintf(b, n, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vsnwprintf(wchar_t *b, size_t n, const wchar_t *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = _vsnwprintf(b, n, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vwscanf(const wchar_t *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vwscanf(fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vfwscanf(FILE *f, const wchar_t *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vfwscanf(f, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static int my_vswscanf(const wchar_t *s, const wchar_t *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vswscanf(s, fmt, ap);
+  va_end(ap);
+  return r;
+}
+
+static void wfill(wchar_t *b, int n) {
+  for (int i = 0; i < n; ++i)
+    b[i] = L'#';
+}
+
+/* show for a wide buffer of ASCII text. */
+static void wshow(const char *what, int r, const wchar_t *b, int n) {
+  char line[64];
+  int i = 0;
+  for (; i < n && i < 63; ++i)
+    line[i] = b[i] ? (char)b[i] : '_';
+  line[i] = 0;
+  printf("%s %d [%s]\n", what, r, line);
+}
+
+/* The six Microsoft forms and the wide forms (windows-msvc triples). */
+static void microsoft_and_wide(void) {
+  char b[16];
+  wchar_t w[16];
+  int n;
+  /* _snprintf and _vsnprintf: -1 on truncation with no terminator, and the
+     count with no terminator when the text fits exactly (bit 1), where
+     snprintf and vsnprintf terminate and return the full length (bit 2). */
+  fill(b, sizeof b);
+  show("_snprintf truncated", _snprintf(b, 5, "%s", "abcdefgh"), b, 8);
+  fill(b, sizeof b);
+  show("_snprintf exact", _snprintf(b, 5, "%d", 12345), b, 8);
+  fill(b, sizeof b);
+  show("_snprintf fits", _snprintf(b, 5, "%d", 42), b, 8);
+  fill(b, sizeof b);
+  show("_vsnprintf truncated", my_vsnprintf_ms(b, 5, "%s-%d", "xyz", 789), b,
+       8);
+  fill(b, sizeof b);
+  show("_vsnprintf exact", my_vsnprintf_ms(b, 5, "%s%d", "ab", 345), b, 8);
+  /* _scprintf and _vscprintf count without a buffer (bit 2). */
+  printf("_scprintf %d\n", _scprintf("%d-%s|%5.1f", 123, "xyz", 2.25));
+  printf("_vscprintf %d\n", my_vscprintf("%lld %s", -1LL << 40, "long"));
+  /* ISO swprintf and vswprintf, with neither bit. */
+  wfill(w, 16);
+  wshow("swprintf truncated", swprintf(w, 5, L"%ls", L"abcdefgh"), w, 8);
+  wfill(w, 16);
+  wshow("swprintf exact", swprintf(w, 5, L"%d", 12345), w, 8);
+  wfill(w, 16);
+  wshow("swprintf fits", swprintf(w, 16, L"%d %ls", 17, L"wide"), w, 10);
+  wfill(w, 16);
+  wshow("vswprintf truncated", my_vswprintf(w, 5, L"%d%ls", 1234, L"zz"), w,
+        8);
+  wfill(w, 16);
+  wshow("vswprintf fits", my_vswprintf(w, 16, L"%x|%ls", 0xbeefu, L"w"), w,
+        10);
+  /* _snwprintf and _vsnwprintf: the legacy forms (bit 1). */
+  wfill(w, 16);
+  wshow("_snwprintf truncated", _snwprintf(w, 5, L"%ls", L"abcdefgh"), w, 8);
+  wfill(w, 16);
+  wshow("_snwprintf exact", _snwprintf(w, 5, L"%d", 54321), w, 8);
+  wfill(w, 16);
+  wshow("_vsnwprintf truncated",
+        my_vsnwprintf(w, 5, L"%ls%d", L"qrs", 987), w, 8);
+  wfill(w, 16);
+  wshow("_vsnwprintf fits", my_vsnwprintf(w, 8, L"%d", -12), w, 8);
+  /* Wide output to stdout. */
+  n = wprintf(L"wprintf %d %ls\n", 3, L"wide");
+  printf("wprintf wrote %d\n", n);
+  n = fwprintf(STDOUT, L"fwprintf %d %ls\n", 4, L"wide");
+  printf("fwprintf wrote %d\n", n);
+  n = my_vwprintf(L"vwprintf %d %ls\n", 5, L"wide");
+  printf("vwprintf wrote %d\n", n);
+  n = my_vfwprintf(STDOUT, L"vfwprintf %d %ls\n", 6, L"wide");
+  printf("vfwprintf wrote %d\n", n);
+  /* Wide input from fixed strings. */
+  int x = 0, y = 0;
+  wchar_t t[8] = L"";
+  n = swscanf(L"21 0x2a wword", L"%d %x %7ls", &x, &y, t);
+  wshow("swscanf", n, t, 5);
+  printf("swscanf values %d %d\n", x, y);
+  x = y = 0;
+  n = my_vswscanf(L"-8 077", L"%d %o", &x, &y);
+  printf("vswscanf %d: %d %d\n", n, x, y);
+}
+#endif
+
+int main(void) {
+  char b[64];
+  printf("hi %d %s\n", 1, "two");
+  printf("%%.0f of 0.5, 2.5 and -2.5: %.0f %.0f %.0f\n", 0.5, 2.5, -2.5);
+  printf("%%.1f of 0.25: %.1f, %%.2f of 0.125: %.2f\n", 0.25, 0.125);
+  int n = sprintf(b, "%05d|%-4s|%.3e|%x", 42, "ab", 1234.5, 0xbeefu);
+  printf("sprintf %d [%s]\n", n, b);
+  n = snprintf(b, 8, "%s", "a truncated text");
+  printf("snprintf %d [%s]\n", n, b);
+  n = my_format(b, sizeof b, "%d %.2f %s %lld", -5, 6.5, "seven", 1LL << 40);
+  printf("vsnprintf %d [%s]\n", n, b);
+  int x = 0, y = 0;
+  char w[8] = "";
+  n = sscanf("17 0x1f word", "%d %x %7s", &x, &y, w);
+  printf("sscanf %d: %d %d %s\n", n, x, y, w);
+
+  /* The rest of the standard narrow family, on every triple. */
+  fill(b, 16);
+  show("snprintf truncated", snprintf(b, 5, "%s", "abcdefgh"), b, 8);
+  fill(b, 16);
+  show("snprintf exact", snprintf(b, 5, "%d", 12345), b, 8);
+  fill(b, 16);
+  show("vsnprintf truncated", my_format(b, 5, "%s-%d", "xyz", 789), b, 8);
+  fill(b, 16);
+  show("vsprintf", my_vsprintf(b, "%d|%c|%s", -77, 'q', "end"), b, 12);
+  n = fprintf(STDOUT, "fprintf to stdout: %d %s\n", 8, "eight");
+  printf("fprintf wrote %d\n", n);
+  n = my_vfprintf(STDOUT, "vfprintf to stdout: %.3f\n", 0.5);
+  printf("vfprintf wrote %d\n", n);
+  n = my_vprintf("vprintf: %u %s\n", 4000000000u, "big");
+  printf("vprintf wrote %d\n", n);
+  x = y = 0;
+  n = my_vsscanf("-3 ff rest", "%d %x", &x, &y);
+  printf("vsscanf %d: %d %d\n", n, x, y);
+  /* stdin is empty: the harness runs every program with no input. */
+  x = 5;
+  n = scanf("%d", &x);
+  printf("scanf on empty stdin %d, x %d\n", n, x);
+  n = my_vscanf("%d", &x);
+  printf("vscanf on empty stdin %d, x %d\n", n, x);
+
+  /* fscanf and vfscanf (and the wide forms) on a file of the private run
+     directory. */
+  FILE *f = fopen(TMP, "w");
+  if (!f)
+    return 1;
+  n = fprintf(f, "11 22 hex 0x33 44 55\n");
+  printf("fprintf to the file wrote %d\n", n);
+  printf("fclose %d\n", fclose(f));
+  f = fopen(TMP, "r");
+  if (!f)
+    return 2;
+  x = y = 0;
+  n = fscanf(f, "%d %d", &x, &y);
+  printf("fscanf %d: %d %d\n", n, x, y);
+  x = 0;
+  n = my_vfscanf(f, " hex %x", &x);
+  printf("vfscanf %d: %d\n", n, x);
+#ifdef _WIN32
+  x = 0;
+  n = fwscanf(f, L"%d", &x);
+  printf("fwscanf %d: %d\n", n, x);
+  x = 0;
+  n = my_vfwscanf(f, L"%d", &x);
+  printf("vfwscanf %d: %d\n", n, x);
+#endif
+  n = fclose(f);
+  printf("fclose %d, remove %d\n", n, remove(TMP));
+
+#ifdef _WIN32
+  microsoft_and_wide();
+  x = 5;
+  n = wscanf(L"%d", &x);
+  printf("wscanf on empty stdin %d, x %d\n", n, x);
+  n = my_vwscanf(L"%d", &x);
+  printf("vwscanf on empty stdin %d, x %d\n", n, x);
+#endif
+  puts("done");
+  return 0;
+}

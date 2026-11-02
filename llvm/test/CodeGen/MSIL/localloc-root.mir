@@ -9,6 +9,9 @@
 # stack-check-errors.mir); chaining it after RegStackify and ExplicitLocals
 # proves that the shapes below satisfy it.
 #
+# The same rules cover LOCALLOC_I64 (M26: the localloc of a dynamic alloca,
+# whose size is a native int; 5.15.8 H0), which prints the same 'localloc'.
+#
 # RS checks the MIR after RegStackify alone (a stackified def and its user carry
 # an implicit VALUE_STACK def and use, a LOCALLOC never does); EL checks the
 # RegStackify, ExplicitLocals and MSILStackCheck chain; IL prints the
@@ -66,6 +69,40 @@ body: |
     %0:i32 = ARGUMENT_I32 0, implicit $arguments
     %1:i32 = CONST_I32 7, implicit-def dead $arguments
     %2:i64 = LOCALLOC %0, implicit-def dead $arguments
+    CALL &msil_sink, %1, %2, implicit-def dead $arguments
+    RETURN implicit-def dead $arguments
+...
+
+# The same with LOCALLOC_I64 and a native-int size: the localloc result is
+# not stackified, the localloc runs at depth 1 (its size alone on the stack)
+# and the constant is pushed after it.
+# RS-LABEL:  name: second_operand_i64{{$}}
+# RS:        body:
+# RS:        {{^ +}}%2:i64 = LOCALLOC_I64 %0, implicit-def dead $arguments{{$}}
+# RS-NEXT:   {{^ +}}%1:i32 = CONST_I32 7, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# RS-NEXT:   {{^ +}}CALL &msil_sink, %1, %2, implicit-def dead $arguments, implicit-def $value_stack, implicit $value_stack{{$}}
+# EL-LABEL:  name: second_operand_i64{{$}}
+# EL:        maxStack: 2{{$}}
+# EL:        body:
+# EL:        [[N:%[0-9]+]]:i64 = ARG_GET_I64 0,
+# EL-NEXT:   [[P:%[0-9]+]]:i64 = LOCALLOC_I64 [[N]],
+# EL-NEXT:   LOCAL_SET_I64 0, [[P]],
+# EL-NEXT:   [[C:%[0-9]+]]:i32 = CONST_I32 7,
+# EL-NEXT:   [[L:%[0-9]+]]:i64 = LOCAL_GET_I64 0,
+# EL-NEXT:   CALL &msil_sink, [[C]], [[L]],
+# EL-NEXT:   RETURN implicit-def dead $arguments
+---
+name:            second_operand_i64
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i64 ]
+  results: [ ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i64 = ARGUMENT_I64 0, implicit $arguments
+    %1:i32 = CONST_I32 7, implicit-def dead $arguments
+    %2:i64 = LOCALLOC_I64 %0, implicit-def dead $arguments
     CALL &msil_sink, %1, %2, implicit-def dead $arguments
     RETURN implicit-def dead $arguments
 ...
@@ -144,10 +181,30 @@ body: |
 # IL-NEXT:  {{^}}  ldloc.0{{$}}
 # IL-NEXT:  {{^}}  ret{{$}}
 # IL-NEXT:  {{^}}} // end of method 'localloc_il'{{$}}
+# LOCALLOC_I64 as the second operand of an add: the localloc runs right
+# after its size, its result is stored (to a local or the dead argument's
+# slot) and read back after the constant.
+# IL-LABEL: .method {{.*}}'localloc_i64_il'(
+# IL-SAME:  native int) cil managed{{$}}
+# IL-NEXT:  {{^\{$}}
+# IL-NEXT:  {{^}}  .maxstack 2{{$}}
+# IL:       {{^}}  ldarg.0{{$}}
+# IL-NEXT:  {{^}}  localloc{{$}}
+# IL-NEXT:  {{^  (stloc\.0|starg\.s 0)$}}
+# IL-NEXT:  {{^}}  ldc.i4.7{{$}}
+# IL-NEXT:  {{^}}  conv.i{{$}}
+# IL-NEXT:  {{^  (ldloc\.0|ldarg\.0)$}}
+# IL-NEXT:  {{^}}  add{{$}}
+# IL-NEXT:  {{^}}  ret{{$}}
+# IL-NEXT:  {{^}}} // end of method 'localloc_i64_il'{{$}}
 --- |
   source_filename = "localloc-root.c"
 
   define ptr @localloc_il(i32 %n) {
+    ret ptr null
+  }
+
+  define ptr @localloc_i64_il(i64 %n) {
     ret ptr null
   }
 ...
@@ -163,4 +220,19 @@ body: |
     %0:i32 = ARGUMENT_I32 0, implicit $arguments
     %1:i64 = LOCALLOC %0, implicit-def dead $arguments
     RETURN %1, implicit-def dead $arguments
+...
+---
+name:            localloc_i64_il
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i64 ]
+  results: [ i64 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i64 = ARGUMENT_I64 0, implicit $arguments
+    %1:i64 = CONST_I64 7, implicit-def dead $arguments
+    %2:i64 = LOCALLOC_I64 %0, implicit-def dead $arguments
+    %3:i64 = ADD_I64 %1, %2, implicit-def dead $arguments
+    RETURN %3, implicit-def dead $arguments
 ...

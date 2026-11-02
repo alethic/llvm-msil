@@ -20,8 +20,8 @@
 # legs (the NuGet ilasm is this job's only ilasm, so asm-oracle covers it); this job has no WSL
 # legs. M23 gate step 12 and M24 gate step 26 check 'lit-legs.sh --list' inside WSL, and
 # run-m1-gate.ps1's ci-sh row compares it with the list below, where a '--full:' description
-# marks a --full leg and an '--exit:' one an --exit leg (none in M24; plan 5.17.6 gives the later
-# ones, M28's gc-churn among them).
+# marks a --full leg and an '--exit:' one an --exit leg (M26's ctest-lto is the first; plan 5.17.6
+# gives the later ones, M28's gc-churn among them).
 # Legs, in order:
 #   net8         llc/clang FileCheck tests (lld/test/MSIL, the clang driver tests, the
 #                llvm-cil-dump and llvm-cil-copy tests, llvm/test/MC/MSIL) and msil/test (M1, M2,
@@ -54,15 +54,19 @@
 #   roundtrip    msil/test/M1/11-programs, msil/test/M2/07-equiv and
 #                msil/test/M2/04-shared/roundtrip-library.test under obj, msil_roundtrip=1: O2
 #                on msil-ld's outputs through ildasm -> ilasm, then run (Design.md 5.5)
-#   programs     the nine exit-corpus programs (msil/test/Programs/<name>) under obj, -O0 and
-#                -O2, on .NET 8 and, msil_also_run=10, .NET 10, native oracle required (corpus
-#                leg)
+#   programs     the nine exit-corpus programs (msil/test/Programs/<name>) and the hosted ones
+#                whose directory exists (zlib-full from M26, lua from M27, sqlite from M30)
+#                under obj, -O0 and -O2, on .NET 8 and, msil_also_run=10,10+tc0, .NET 10 with
+#                and (from M26) without tiered compilation, native oracle required (corpus leg)
 #   programs-lto  the same under lto, with msil_equiv=1 (O4) (corpus leg)
-#   ctest        msil/test/Programs/c-testsuite (the 150 libc-free tests) under obj on .NET 10
-#                and, msil_also_run=8, .NET 8 (M24; M23: .NET 8 alone), native oracle required
-#                (corpus leg; lit-legs.ps1's ctest also runs the .NET Framework 4.8); while
-#                $MSIL_CORPUS_SKIP names c-testsuite it prints 'ctest: skipped (c-testsuite is in
-#                MSIL_CORPUS_SKIP)', runs no lit and is reported as SKIP, not PASS
+#   ctest        msil/test/Programs/c-testsuite (both lists from M26: libc-free.txt's 150 tests
+#                and libc.txt's 70, 220 in all) under obj on .NET 10 and, msil_also_run=8, .NET
+#                8 (M24; M23: .NET 8 alone), native oracle required (corpus leg; lit-legs.ps1's
+#                ctest also runs the .NET Framework 4.8); while $MSIL_CORPUS_SKIP names
+#                c-testsuite it prints 'ctest: skipped (c-testsuite is in MSIL_CORPUS_SKIP)',
+#                runs no lit and is reported as SKIP, not PASS
+#   ctest-lto    --exit: msil/test/Programs/c-testsuite, both lists, under lto on .NET 10, native
+#                oracle required (M26; corpus leg; skipped like ctest)
 #   hosted       optional, runs only when named with --leg hosted (plan Q16, 5.12.11):
 #                msil/test/M2/09-hosted, the hosted compile-only tests, with the glibc sysroot
 #                of every leg here, so a sysroot without usr/include/stdio.h is a configuration
@@ -85,7 +89,7 @@
 # Removed in M23, and --leg <name> fails naming the leg that covers it: net10, net8-tc0 and
 # net10-tc0 (net8's msil_also_run entries), obj (net8; objects are the default pipeline).
 #
-# The corpus legs (programs, programs-lto, ctest, det) need the exit corpus that
+# The corpus legs (programs, programs-lto, ctest, ctest-lto, det) need the exit corpus that
 # msil/utils/corpus/fetch.py downloads into a cache outside the checkout (msil-ci.yml's corpus
 # steps): they pass msil_corpus_dir=$MSIL_CORPUS_CACHE (when it is set; else lit's default,
 # ~/.cache/msil-corpus), msil_corpus_skip=$MSIL_CORPUS_SKIP and msil_require_corpus=1, so a
@@ -169,7 +173,9 @@ check_msil=("$MSIL_REPO/llvm/test/CodeGen/MSIL" "$MSIL_REPO/clang/test/CodeGen/M
   "$MSIL_REPO/clang/test/Driver/msil-link.c" "$MSIL_REPO/clang/test/Driver/msil-lto.c"
   "$MSIL_REPO/clang/test/Driver/msil-header-search.c" "$MSIL_REPO/clang/test/Driver/msil-object.c"
   "$MSIL_REPO/clang/test/Driver/msil-shared.c" "$MSIL_REPO/lld/test/MSIL" "$MSIL_REPO/llvm/test/tools/llvm-cil-dump"
-  "$MSIL_REPO/llvm/test/tools/llvm-cil-copy" "$MSIL_REPO/llvm/test/MC/MSIL" "$MSIL_REPO/msil/test")
+  "$MSIL_REPO/llvm/test/tools/llvm-cil-copy" "$MSIL_REPO/llvm/test/MC/MSIL"
+  "$MSIL_REPO/clang/test/Sema/msil-long-double-format.c"
+  "$MSIL_REPO/llvm/test/Transforms/ExpandVariadics/msil-abi.ll" "$MSIL_REPO/msil/test")
 m1=("$MSIL_REPO/msil/test/M1")
 m2=("$MSIL_REPO/msil/test/M2")
 m3=("$MSIL_REPO/msil/test/M3")
@@ -191,6 +197,12 @@ corpus_programs=()
 for p in zlib tinf monocypher coremark lz4 blake2 tweetnacl kissfft jsmn; do
   corpus_programs+=("$MSIL_REPO/msil/test/Programs/$p")
 done
+# The hosted programs (plan 5.17.6, 5.17.15: zlib-full from M26, lua from M27, sqlite from M30),
+# those whose directory exists; lit-legs.ps1's $hostedPrograms is the same list.
+hosted_programs=()
+for p in zlib-full lua sqlite; do
+  [[ ! -d $MSIL_REPO/msil/test/Programs/$p ]] || hosted_programs+=("$MSIL_REPO/msil/test/Programs/$p")
+done
 det=("$MSIL_REPO/msil/test/M2/06-det" "$MSIL_REPO/msil/test/Programs/det")
 ctest=("$MSIL_REPO/msil/test/Programs/c-testsuite")
 # The glibc sysroot of every lit leg and of the expected leg (plan 5.17.6: / on the CI runner).
@@ -199,7 +211,8 @@ glibc_sysroot=${MSIL_GLIBC_SYSROOT:-/}
 # name:kind (kind: lit, expected, utc, upstream; a 'full' suffix marks --full legs, an 'exit'
 # suffix --exit legs, an 'optional' suffix legs that run only when --leg names them)
 legs=(net8:lit more-levels:lit asm-oracle:lit lto:lit det:lit refs-net48:lit refs-net8:lit
-  refs-net10:lit roundtrip:lit programs:lit programs-lto:lit ctest:lit hosted:lit:optional
+  refs-net10:lit roundtrip:lit programs:lit programs-lto:lit ctest:lit ctest-lto:lit:exit
+  hosted:lit:optional
   expected:expected utc:utc all-levels:lit:full lto-m1:lit:full upstream:upstream:full)
 
 # The legs that M23 removed, and the leg that runs their tests and runtimes now.
@@ -246,8 +259,8 @@ leg_paths() {
     refs-net48 | refs-net10) printf '%s\n' "${refs[@]}" ;;
     refs-net8) printf '%s\n' "${refs_net8[@]}" ;;
     roundtrip) printf '%s\n' "${roundtrip[@]}" ;;
-    programs | programs-lto) printf '%s\n' "${corpus_programs[@]}" ;;
-    ctest) printf '%s\n' "${ctest[@]}" ;;
+    programs | programs-lto) printf '%s\n' "${corpus_programs[@]}" "${hosted_programs[@]}" ;;
+    ctest | ctest-lto) printf '%s\n' "${ctest[@]}" ;;
     hosted) echo "$MSIL_REPO/msil/test/M2/09-hosted" ;;
     all-levels) echo "$MSIL_REPO/msil/test" ;;
   esac
@@ -277,17 +290,21 @@ leg_params() {
     roundtrip) printf '%s\n' msil_pipeline=obj msil_roundtrip=1 ;;
     programs)
       printf '%s\n' msil_pipeline=obj msil_dotnet_runtime=8 msil_native_oracle=required \
-        msil_also_run=10
+        msil_also_run=10,10+tc0
       corpus_params
       ;;
     programs-lto)
       printf '%s\n' msil_pipeline=lto msil_dotnet_runtime=8 msil_native_oracle=required \
-        msil_equiv=1 msil_also_run=10
+        msil_equiv=1 msil_also_run=10,10+tc0
       corpus_params
       ;;
     ctest)
       printf '%s\n' msil_pipeline=obj msil_dotnet_runtime=10 msil_native_oracle=required \
         msil_also_run=8
+      corpus_params
+      ;;
+    ctest-lto)
+      printf '%s\n' msil_pipeline=lto msil_dotnet_runtime=10 msil_native_oracle=required
       corpus_params
       ;;
     all-levels) echo msil_opt_levels=O0,O1,O2,O3,Os,Oz ;;
@@ -593,9 +610,11 @@ for l in "${legs[@]}"; do
     continue
   fi
   # c-testsuite is left out while MSIL_CORPUS_SKIP names it (M23's CI did, plan section 10 item 11;
-  # since R23 only a local opt-out does): the ctest leg is then a SKIP row, not a pass.
-  if [[ $name == ctest && " $(corpus_skip | tr '\n' ' ') " == *" c-testsuite "* ]]; then
-    echo "ctest: skipped (c-testsuite is in MSIL_CORPUS_SKIP)"
+  # since R23 only a local opt-out does): the ctest and ctest-lto legs are then SKIP rows, not
+  # passes.
+  if [[ ($name == ctest || $name == ctest-lto) &&
+        " $(corpus_skip | tr '\n' ' ') " == *" c-testsuite "* ]]; then
+    echo "$name: skipped (c-testsuite is in MSIL_CORPUS_SKIP)"
     ci_result lit-legs "$name" SKIP 0 "c-testsuite is in MSIL_CORPUS_SKIP (plan section 10 item 11); no lit run"
     continue
   fi

@@ -166,10 +166,16 @@ jobs:
           sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /usr/share/swift
           df -h /
 
+      # libclang-rt-18-dev holds compiler-rt's builtins archive
+      # (libclang_rt.builtins-x86_64.a), which lit's msil_linux_rtlib=auto
+      # finds through 'clang --rtlib=compiler-rt -print-libgcc-file-name' for
+      # the hosted native oracle (plan 5.17.2): Ubuntu ships it only as a
+      # Recommends of libclang-common-18-dev, which --no-install-recommends
+      # leaves out.
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build clang lld
+          sudo apt-get install -y --no-install-recommends ninja-build clang lld libclang-rt-18-dev
 
       - name: Set up .NET
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0

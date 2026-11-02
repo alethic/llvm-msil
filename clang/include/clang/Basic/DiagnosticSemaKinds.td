@@ -10866,6 +10866,14 @@ def warn_printf_narg_not_supported : Warning<
 def warn_scanf_scanlist_incomplete : Warning<
   "no closing ']' for '%%[' in scanf format string">,
   InGroup<Format>;
+def warn_msil_printf_long_double : Warning<
+  "the 'L' length modifier makes the C library read a %0-byte native "
+  "'long double', but 'long double' is an 8-byte 'double' on this MSIL target">,
+  InGroup<Format>;
+def warn_msil_scanf_long_double : Warning<
+  "the 'L' length modifier makes the C library store a %0-byte native "
+  "'long double' into an 8-byte 'double' on this MSIL target">,
+  InGroup<Format>, DefaultError;
 def warn_format_bool_as_character : Warning<
   "using '%0' format specifier, but argument has boolean value">,
   InGroup<Format>;

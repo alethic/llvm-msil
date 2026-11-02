@@ -18,7 +18,7 @@
 
 # REQUIRES: llvm-cil-dump
 # RUN: rm -rf %t && split-file %s %t && cd %t
-# RUN: llc -filetype=obj com4.ll -o com4.o
+# RUN: llc -filetype=obj cmn4.ll -o cmn4.o
 # RUN: llc -filetype=obj com16.ll -o com16.o
 # RUN: llc -filetype=obj weakdef.ll -o weakdef.o
 # RUN: llc -filetype=obj usew.ll -o usew.o
@@ -30,12 +30,12 @@
 
 ## Two commons: 16 bytes in the zero part, in both orders; the trailer
 ## allocates 16 + 15 bytes and clears them.
-# RUN: msil-ld --warn-common com4.o com16.o -o c1.exe 2>&1 | %{warn} --check-prefix=MULTIPLE
+# RUN: msil-ld --warn-common cmn4.o com16.o -o c1.exe 2>&1 | %{warn} --check-prefix=MULTIPLE
 # RUN: llvm-cil-dump c1.exe | FileCheck %s --check-prefix=LARGEST --implicit-check-not="'<msil>image'"
-# RUN: msil-ld --warn-common com16.o com4.o -o c2.exe 2>&1 | %{warn} --check-prefix=MULTIPLE
+# RUN: msil-ld --warn-common com16.o cmn4.o -o c2.exe 2>&1 | %{warn} --check-prefix=MULTIPLE
 # RUN: llvm-cil-dump c2.exe | FileCheck %s --check-prefix=LARGEST --implicit-check-not="'<msil>image'"
-# RUN: msil-ld com4.o com16.o -o c3.exe 2>&1 | count 0
-# RUN: msil-ld com4.o com16.o -o c4.exe -Map=c4.map 2>&1 | count 0
+# RUN: msil-ld cmn4.o com16.o -o c3.exe 2>&1 | count 0
+# RUN: msil-ld cmn4.o com16.o -o c4.exe -Map=c4.map 2>&1 | count 0
 # RUN: FileCheck %s --check-prefix=MAP --input-file=c4.map
 
 # MULTIPLE: {{^}}msil-ld: warning: multiple common of c{{$}}
@@ -94,7 +94,7 @@
 # DEFINED-NEXT: {{^}}      05 00 00 00{{$}}
 # DEFINED-NEXT: {{^}}  .field 'cx' native int flags=0x0036{{$}}
 
-#--- com4.ll
+#--- cmn4.ll
 target triple = "x86_64-unknown-linux-gnu-msil"
 
 @c = common global [4 x i8] zeroinitializer, align 1

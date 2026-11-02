@@ -14,14 +14,18 @@
 ; runs on both triples at -O2 and at least once at -O0 (the parts with
 ; two-value results on both triples).
 ;
-; - LowerCall rejects a call of a variadic function ('calls to variadic
-;   functions are not supported for MSIL yet', D19; varargs-call-error.ll has
-;   more, and K&R calls are fixed-arity, function-bitcasts.ll), a direct call
+; - Since M26 (5.15.2) a call of a variadic function is expanded
+;   (ExpandVariadics: the variadic arguments go into a buffer in the caller's
+;   frame, and the callee's signature ends in a native int va_list pointer;
+;   varargs-call-error.ll and variadic-call.ll have more, and K&R calls are
+;   fixed-arity, function-bitcasts.ll): the VARIADIC, VMULTI and INVOKE parts
+;   build the calls, and their undefined callees get D14's error below, so
+;   their IL is not assembled. LowerCall rejects a direct call
 ;   whose call-site type still differs from the callee's after
 ;   MSILFixFunctionBitcasts ('mismatched call signature'; since M9 only
 ;   struct-typed mismatches, which the copied pass does not wrap; the others
 ;   call wrappers, function-bitcasts.ll), a nest or inalloca argument (byval
-;   arguments are copied since M9, byval.ll), a musttail call, an unsupported
+;   arguments are copied since M9, byval.ll), an unsupported
 ;   calling convention, a callee named 'llvm.*' that LLVM does not know
 ;   ("unknown intrinsic '<name>' is not supported for MSIL") and an
 ;   ExternalSymbol callee that is a runtime helper, whose name starts with
@@ -65,6 +69,9 @@
 ;   checks therefore reject a call or calli only at the start of an
 ;   instruction ('{{^}}  call'), which the 'call' inside 'localloc' does not
 ;   match.
+; - MSILPrepareIR reports a musttail call ('musttail calls are not supported
+;   for MSIL', 5.15.2, M26; LowerCall keeps the same text as a backstop) and
+;   deletes the caller's body, so the caller has no method (MUSTTAIL).
 ; - A call of a definition whose body MSILPrepareIR deleted after a diagnostic
 ;   (here inline assembly) is erased too, so the only error is the real one.
 ;   The same holds for invokes, which share a landing pad with a PHI.
@@ -126,7 +133,7 @@
 ; DEFINE:   --implicit-check-not=error: --implicit-check-not=warning:
 ; RUN: split-file %s %t
 
-; Variadic callee.
+; Variadic callee (expanded calls; D14's error for the undefined callee).
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/variadic.ll -o /dev/null 2>&1 \
 ; RUN:   | %{diag} --check-prefix=VARIADIC
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/variadic.ll -o /dev/null 2>&1 \
@@ -139,7 +146,6 @@
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/variadic.ll \
 ; RUN:   > %t/variadic.win.il
 ; RUN: FileCheck %s --check-prefix=VARIADIC-IL --input-file=%t/variadic.win.il
-; RUN: %if ilasm %{ %ilasm-verify -output=%t/variadic.dll %t/variadic.win.il %}
 
 ; Variadic callees whose result needs two values.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/variadic-multi.ll -o /dev/null 2>&1 \
@@ -156,7 +162,6 @@
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/variadic-multi.ll \
 ; RUN:   > %t/variadic-multi.win.il
 ; RUN: FileCheck %s --check-prefix=VMULTI-IL --input-file=%t/variadic-multi.win.il
-; RUN: %if ilasm %{ %ilasm-verify -output=%t/variadic-multi.dll %t/variadic-multi.win.il %}
 
 ; i128 division and remainder: inline since M12, so no diagnostic and no call.
 ; RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/libcall.ll \
@@ -322,7 +327,8 @@
 ; RUN: FileCheck %s --check-prefix=DIAGCALLEE-IL --input-file=%t/diagnosed-callee.win.il
 ; RUN: %if ilasm %{ %ilasm-verify -output=%t/diagnosed-callee.dll %t/diagnosed-callee.win.il %}
 
-; Invokes of a variadic callee and of a callee whose body MSILPrepareIR deleted.
+; Invokes of a variadic callee and of a callee whose body MSILPrepareIR deleted
+; (LowerInvoke, slot P3, makes them calls before ExpandVariadics).
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/invoke.ll -o /dev/null 2>&1 \
 ; RUN:   | %{diag} --check-prefix=INVOKE
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/invoke.ll -o /dev/null 2>&1 \
@@ -337,7 +343,6 @@
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/invoke.ll \
 ; RUN:   > %t/invoke.win.il
 ; RUN: FileCheck %s --check-prefix=INVOKE-IL --input-file=%t/invoke.win.il
-; RUN: %if ilasm %{ %ilasm-verify -output=%t/invoke.dll %t/invoke.win.il %}
 
 ; Callers of two lowered aliases and of a diagnosed ifunc.
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/alias-callers.ll -o /dev/null 2>&1 \
@@ -445,16 +450,16 @@
 
 ;--- variadic.ll
 ; A variadic callee, called with and without variadic arguments, then a
-; function that compiles normally.
-; VARIADIC:     error: {{.*}}call_variadic{{.*}}calls to variadic functions are not supported for MSIL yet
-; VARIADIC:     error: {{.*}}call_variadic_fixed_only{{.*}}calls to variadic functions are not supported for MSIL yet
+; function that compiles normally. Both calls are built with the expanded
+; signature; vf is reported once, as an undefined function.
+; VARIADIC:     {{^}}error: {{.*}}undefined function 'vf' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 
 ; VARIADIC-IL-LABEL: .method {{.*}}'call_variadic'(
-; VARIADIC-IL-NOT:   {{^}}  call
+; VARIADIC-IL:       {{^}}  call int32 'vf'(int32, native int){{$}}
 ; VARIADIC-IL:       {{^}}  ret{{$}}
 ; VARIADIC-IL-NEXT:  {{^}}} // end of method 'call_variadic'{{$}}
 ; VARIADIC-IL-LABEL: .method {{.*}}'call_variadic_fixed_only'(
-; VARIADIC-IL-NOT:   {{^}}  call
+; VARIADIC-IL:       {{^}}  call int32 'vf'(int32, native int){{$}}
 ; VARIADIC-IL:       {{^}}  ret{{$}}
 ; VARIADIC-IL-NEXT:  {{^}}} // end of method 'call_variadic_fixed_only'{{$}}
 ; VARIADIC-IL-LABEL: .method {{.*}}'after_variadic'(
@@ -483,19 +488,20 @@ define i32 @after_variadic(i32 %a, i32 %b) {
 
 ;--- variadic-multi.ll
 ; Calls of variadic functions returning i128 and { i64, i64 }; the callers
-; return one half, so their own result is a single value. Each call is
-; reported once and nothing is left to crash later.
-; VMULTI:       error: {{.*}}call_variadic_i128{{.*}}calls to variadic functions are not supported for MSIL yet
-; VMULTI:       error: {{.*}}call_variadic_pair{{.*}}calls to variadic functions are not supported for MSIL yet
+; return one half, so their own result is a single value. Each call is built
+; with the va_list pointer as its last argument, nothing crashes, and each
+; undefined callee is reported once (in any order).
+; VMULTI-DAG:   {{^}}error: {{.*}}undefined function 'vf128' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
+; VMULTI-DAG:   {{^}}error: {{.*}}undefined function 'vfpair' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 
 ; VMULTI-IL-LABEL: .method {{.*}}'call_variadic_i128'(
 ; VMULTI-IL-SAME:  int32) cil managed{{$}}
-; VMULTI-IL-NOT:   {{^}}  call
+; VMULTI-IL:       {{^}}  call {{.*}}'vf128'({{.*}}native int){{$}}
 ; VMULTI-IL:       {{^}}  ret{{$}}
 ; VMULTI-IL-NEXT:  {{^}}} // end of method 'call_variadic_i128'{{$}}
 ; VMULTI-IL-LABEL: .method {{.*}}'call_variadic_pair'(
 ; VMULTI-IL-SAME:  int32) cil managed{{$}}
-; VMULTI-IL-NOT:   {{^}}  call
+; VMULTI-IL:       {{^}}  call {{.*}}'vfpair'({{.*}}native int){{$}}
 ; VMULTI-IL:       {{^}}  ret{{$}}
 ; VMULTI-IL-NEXT:  {{^}}} // end of method 'call_variadic_pair'{{$}}
 ; VMULTI-IL-LABEL: .method {{.*}}'after_variadic_multi'(
@@ -864,14 +870,12 @@ define i32 @after_arg_attrs(i32 %a, i32 %b) {
 }
 
 ;--- musttail.ll
-; A musttail call (CIL 'tail.' is not used in Phase 1).
-; MUSTTAIL:     error: {{.*}}call_musttail{{.*}}musttail calls are not supported for MSIL yet
+; A musttail call (CIL 'tail.' is not used). MSILPrepareIR reports it and
+; deletes call_musttail's body, so call_musttail has no method.
+; MUSTTAIL:     {{^}}error: {{.*}}in function call_musttail i32 (i32): musttail calls are not supported for MSIL{{$}}
 
 ; MUSTTAIL-IL:       {{^}}.method public static int32 'callee'(int32) cil managed{{$}}
-; MUSTTAIL-IL-LABEL: .method {{.*}}'call_musttail'(
-; MUSTTAIL-IL-NOT:   {{^}}  call
-; MUSTTAIL-IL:       {{^}}  ret{{$}}
-; MUSTTAIL-IL-NEXT:  {{^}}} // end of method 'call_musttail'{{$}}
+; MUSTTAIL-IL-NOT:   'call_musttail'
 ; MUSTTAIL-IL-LABEL: .method {{.*}}'after_musttail'(
 ; MUSTTAIL-IL:       {{^}}  ldarg.0{{$}}
 ; MUSTTAIL-IL-NEXT:  {{^}}  ldarg.1{{$}}
@@ -1020,17 +1024,23 @@ define i32 @after_diagnosed_callee(i32 %a, i32 %b) {
 ; A function with a personality invokes a variadic function whose result
 ; needs two values, a definition whose body MSILPrepareIR deletes (inline
 ; assembly), and the variadic function again; all three share one landing
-; pad, which has a PHI. The errors are the inline assembly and the two
-; variadic calls, nothing crashes, and the rest of the module compiles.
+; pad, which has a PHI. LowerInvoke (P3) turns the invokes into calls before
+; ExpandVariadics (P7) expands the two variadic ones. The errors are the
+; inline assembly and, at the end of the module, the undefined variadic
+; callee, once; nothing crashes, the call of has_asm is erased, and the rest
+; of the module compiles.
 ; INVOKE:       error: {{.*}}has_asm{{.*}}inline assembly is not supported for MSIL
-; INVOKE:       error: {{.*}}invokes{{.*}}calls to variadic functions are not supported for MSIL yet
-; INVOKE:       error: {{.*}}invokes{{.*}}calls to variadic functions are not supported for MSIL yet
+; INVOKE:       {{^}}error: {{.*}}undefined function 'vi' is not defined in this module and is not a Phase-1 import (puts, putchar, the C math library, msil-import-module); Phase 1 has no linker{{$}}
 
 ; INVOKE-IL-LABEL: .method {{.*}}'invokes'(
 ; INVOKE-IL-SAME:  int32) cil managed{{$}}
-; INVOKE-IL-NOT:   {{^}}  call
+; INVOKE-IL-NOT:   'has_asm'
+; INVOKE-IL:       {{^}}  call {{.*}}'vi'({{.*}}native int){{$}}
+; INVOKE-IL-NOT:   'has_asm'
+; INVOKE-IL:       {{^}}  call {{.*}}'vi'({{.*}}native int){{$}}
+; INVOKE-IL-NOT:   'has_asm'
 ; INVOKE-IL:       {{^}}  ret{{$}}
-; INVOKE-IL-NEXT:  {{^}}} // end of method 'invokes'{{$}}
+; INVOKE-IL:       {{^}}} // end of method 'invokes'{{$}}
 ; INVOKE-IL-LABEL: .method {{.*}}'after_invoke'(
 ; INVOKE-IL:       {{^}}  ldarg.0{{$}}
 ; INVOKE-IL-NEXT:  {{^}}  ldarg.1{{$}}

@@ -121,11 +121,13 @@ private:
   /// Copies a frame index into a register through a COPY_I64, because a
   /// CopyToReg cannot take a frame index operand.
   SDValue LowerCopyToReg(SDValue Op, SelectionDAG &DAG) const;
-  /// Diagnoses STACKSAVE and STACKRESTORE, except in a function with a
-  /// dynamic alloca, whose DYNAMIC_STACKALLOC already reports the error: there
-  /// they return their dummy results silently, so that one VLA gives one
-  /// error.
+  /// Diagnoses STACKSAVE and STACKRESTORE, which MSILLowerDynamicAlloca
+  /// deletes (a backstop).
   SDValue LowerStackSaveRestore(SDValue Op, SelectionDAG &DAG) const;
+  /// Lowers the DYNAMIC_STACKALLOC of a dynamic alloca on no CFG cycle to a
+  /// LOCALLOC_I64 of its size, over-allocated and aligned up when the alloca
+  /// needs more than MSILFrameLowering::getLocallocAlign() (plan 5.15.8 H0).
+  SDValue LowerDYNAMIC_STACKALLOC(SDValue Op, SelectionDAG &DAG) const;
   /// Wraps the address of a global variable in MSILISD::DATA_ADDR (its
   /// address field plus the offset, decision D12) and the address of a
   /// function in MSILISD::FUNC_ADDR (its address field, which the module

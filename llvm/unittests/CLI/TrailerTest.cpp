@@ -31,7 +31,11 @@
 //   nothing else, in every shape above and in a two-phase library; a
 //   TrailerInput with only Defs emits only the definitions; and
 //   TrailerMethod::ImplFlags defaults to 0 (IL, managed), the value of every
-//   method that the builder emitted before M24 (S2).
+//   method that the builder emitted before M24 (S2);
+// - the UCRT stdio options (5.15.2, M26): with TrailerInput::UCRTStdio set,
+//   per defined option function 'call <f>; dup; ldind.i8; ldc.i8 <bits>; or;
+//   stind.i8' after the relocations and before the constructors; unset (the
+//   default), every output stays as it was.
 // A small CIL interpreter runs the recorded methods on a simulated heap: it
 // checks every store against the alignment it is allowed to assume (the
 // natural one, or that of an 'unaligned.' prefix), that the data block is
@@ -2435,6 +2439,154 @@ TEST(CLITrailerTest, OnlyDefinitionsEmitOnlyThem) {
   // which the sinks pair by name (5.9.10, as for '<msil>dataimport').
   EXPECT_EQ(M.Name, P.Sink.get(Ref).Name);
   EXPECT_TRUE(M.Sig == P.Sink.get(Ref).Sig);
+}
+
+//===----------------------------------------------------------------------===//
+// UCRT stdio options (5.15.2 'Startup options', hl H3; M26)
+//===----------------------------------------------------------------------===//
+
+// The module initializer's part per defined option function, after the
+// relocations and before the constructors:
+//   call native int <f>(); dup; ldind.i8; ldc.i8 <bits>; or; stind.i8
+Lines stdioPart(StringRef Fn, uint64_t Bits) {
+  return {("call " + Fn).str(),
+          "dup",
+          "ldind.i8",
+          "ldc.i8 " + std::to_string(Bits),
+          "or",
+          "stind.i8"};
+}
+
+// Runs '.cctor' with the option functions returning pointers to two words
+// that start as PrintfInit and ScanfInit; returns the words afterwards.
+std::pair<uint64_t, uint64_t> runStdio(Program &P, uint64_t PrintfInit,
+                                       uint64_t ScanfInit,
+                                       std::vector<std::string> *Calls) {
+  Interp VM(P.Sink);
+  uint64_t PW = VM.Mem.alloc(8, 0, 0), SW = VM.Mem.alloc(8, 0, 0);
+  EXPECT_TRUE(VM.Mem.write(PW, 8, PrintfInit));
+  EXPECT_TRUE(VM.Mem.write(SW, 8, ScanfInit));
+  VM.OnCall = [&](const RecordingSink::Entity &E, std::vector<Value> &Args) {
+    if (Calls)
+      Calls->push_back(E.Name);
+    EXPECT_TRUE(Args.empty()) << E.Name;
+    if (E.Name == "__local_stdio_printf_options")
+      return Value::ni(PW);
+    if (E.Name == "__local_stdio_scanf_options")
+      return Value::ni(SW);
+    return Value::i4(0);
+  };
+  Interp::Outcome O = VM.run(".cctor");
+  EXPECT_EQ(VM.Failure, "");
+  EXPECT_FALSE(O.Threw) << O.Message;
+  uint64_t P8 = 0, S8 = 0;
+  EXPECT_TRUE(VM.Mem.read(PW, 8, P8));
+  EXPECT_TRUE(VM.Mem.read(SW, 8, S8));
+  return {P8, S8};
+}
+
+TEST(CLITrailerTest, StdioOptionsDefaults) {
+  StdioOptions D;
+  EXPECT_EQ(D.PrintfOptions, 0u);
+  EXPECT_EQ(D.ScanfOptions, 0u);
+  EXPECT_EQ(D.PrintfBits, 0x24u); // LEGACY_WIDE_SPECIFIERS | STANDARD_ROUNDING
+  EXPECT_EQ(D.ScanfBits, 0x2u);
+  // Unset by default (S2): every earlier output stays as it was.
+  EXPECT_FALSE(TrailerInput().UCRTStdio.has_value());
+  Program A, B;
+  makeModuleInitializer(A);
+  makeModuleInitializer(B);
+  B.In.UCRTStdio = std::nullopt;
+  A.build();
+  B.build();
+  EXPECT_EQ(A.Sink.render(".cctor"), lines(ModuleInitializerCctor));
+  EXPECT_EQ(B.Sink.render(".cctor"), lines(ModuleInitializerCctor));
+}
+
+// Both functions defined: printf's part, then scanf's, after the relocations
+// and before the constructors; each word gets its bits or-ed in.
+TEST(CLITrailerTest, StdioOptionsBetweenRelocationsAndConstructors) {
+  Program P;
+  makeModuleInitializer(P);
+  EntityRef POpt =
+      P.Sink.method("__local_stdio_printf_options", sig(tNI(), {}));
+  EntityRef SOpt = P.Sink.method("__local_stdio_scanf_options", sig(tNI(), {}));
+  EntityRef Ctor = P.Sink.method("ctor", sig(TypeSig(), {}));
+  P.In.Ctors = {{Ctor, false}};
+  StdioOptions S;
+  S.PrintfOptions = POpt;
+  S.ScanfOptions = SOpt;
+  P.In.UCRTStdio = S;
+  P.build();
+  Lines Expected = lines(ModuleInitializerCctor);
+  Lines Part = stdioPart("__local_stdio_printf_options", 0x24);
+  Lines Scanf = stdioPart("__local_stdio_scanf_options", 2);
+  Part.insert(Part.end(), Scanf.begin(), Scanf.end());
+  Part.push_back("call ctor");
+  Expected.insert(Expected.end() - 1, Part.begin(), Part.end());
+  EXPECT_EQ(P.Sink.render(".cctor"), Expected);
+  // The data block is still right, and the words keep their other bits.
+  {
+    Interp VM(P.Sink);
+    uint64_t PW = VM.Mem.alloc(8, 0, 0), SW = VM.Mem.alloc(8, 0, 0);
+    VM.OnCall = [&](const RecordingSink::Entity &E, std::vector<Value> &) {
+      if (E.Name == "__local_stdio_printf_options")
+        return Value::ni(PW);
+      if (E.Name == "__local_stdio_scanf_options")
+        return Value::ni(SW);
+      return Value::i4(0);
+    };
+    runAndCheckData(P, VM);
+  }
+  std::vector<std::string> Calls;
+  auto [PWord, SWord] = runStdio(P, 0x1, 0x8, &Calls);
+  EXPECT_EQ(PWord, 0x25u);
+  EXPECT_EQ(SWord, 0xAu);
+  EXPECT_EQ(Calls,
+            (std::vector<std::string>{"__local_stdio_printf_options",
+                                      "__local_stdio_scanf_options", "ctor"}));
+}
+
+// Only the defined function gets its part, with the bits the input gives
+// (a link that names legacy_stdio_float_rounding clears 0x20); without
+// relocations and constructors the part is the whole initializer.
+TEST(CLITrailerTest, StdioOptionsPerDefinedFunction) {
+  {
+    SCOPED_TRACE("printf only, legacy_stdio_float_rounding");
+    Program P;
+    EntityRef POpt =
+        P.Sink.method("__local_stdio_printf_options", sig(tNI(), {}));
+    StdioOptions S;
+    S.PrintfOptions = POpt;
+    S.PrintfBits = 0x4;
+    P.In.UCRTStdio = S;
+    P.build();
+    Lines Expected = stdioPart("__local_stdio_printf_options", 4);
+    Expected.push_back("ret");
+    EXPECT_EQ(P.Sink.render(".cctor"), Expected);
+    auto [PWord, SWord] = runStdio(P, 0x20, 0x0, nullptr);
+    EXPECT_EQ(PWord, 0x24u);
+    EXPECT_EQ(SWord, 0x0u);
+  }
+  {
+    SCOPED_TRACE("scanf only, with constructors");
+    Program P;
+    EntityRef SOpt =
+        P.Sink.method("__local_stdio_scanf_options", sig(tNI(), {}));
+    EntityRef C1 = P.Sink.method("c1", sig(tI4(), {}));
+    P.In.Ctors = {{C1, true}};
+    StdioOptions S;
+    S.ScanfOptions = SOpt;
+    P.In.UCRTStdio = S;
+    P.build();
+    Lines Expected = stdioPart("__local_stdio_scanf_options", 2);
+    Expected.insert(Expected.end(), {"call c1", "pop", "ret"});
+    EXPECT_EQ(P.Sink.render(".cctor"), Expected);
+    EXPECT_FALSE(P.Sink.hasEntity(Kind::DataField));
+    auto [PWord, SWord] = runStdio(P, 0x0, 0x0, nullptr);
+    EXPECT_EQ(PWord, 0x0u);
+    EXPECT_EQ(SWord, 0x2u);
+  }
 }
 
 } // namespace

@@ -23,8 +23,8 @@
 # composite on further .NET runtimes against the same expected file. Tags: none (the default set),
 # -Wsl, -Quick (runs only when -Leg names it), -Full and, from M24, -Exit (the legs that
 # 'lit-legs.ps1 -Exit' adds: every post-commit run and the Phase 3 exit gate run them, plan
-# 5.17.11; an -Exit leg whose name ends in '-wsl' also needs -Wsl). M24 tags no leg -Exit: M26
-# adds ctest-lto, M28 gc-churn and gc-churn-wsl, M30 stress and stress-wsl.
+# 5.17.11; an -Exit leg whose name ends in '-wsl' also needs -Wsl). M26 adds the first, ctest-lto;
+# M28 adds gc-churn and gc-churn-wsl, M30 stress and stress-wsl.
 #
 # Gate steps. The standard milestone gate of Phase 3 (plan 5.17.7) runs '-Leg net-core' (G3),
 # '-Leg p3-full' (G3b), '-Leg harness' (G3c, only when 'python msil/utils/ci/gate-select.py
@@ -46,7 +46,9 @@
 # gate (plan section 12, row 'Q32 amended').
 #   net8           every MSIL FileCheck directory (llvm/test/CodeGen/MSIL, clang/test/CodeGen/MSIL,
 #                  the clang driver tests, lld/test/MSIL, llvm/test/MC/MSIL, the llvm-cil-dump and
-#                  llvm-cil-copy tests) and msil/test (M1, M2, M3 and the harness; msil/test/Programs
+#                  llvm-cil-copy tests, and from M26 clang/test/Sema/msil-long-double-format.c and
+#                  llvm/test/Transforms/ExpandVariadics/msil-abi.ll) and msil/test (M1, M2, M3
+#                  and the harness; msil/test/Programs
 #                  is filtered out: the corpus legs run it) under obj on .NET 8 (tiered) and on the
 #                  .NET Framework 4.8, -O0 and -O2, native oracle required (with the VS clang's
 #                  compiler-rt builtins), msil_equiv=1 (O3 on the --no-gc-sections equivalence link
@@ -106,16 +108,24 @@
 #   refs-net10     the refs-net48 paths with msil_references=net10 (the newest 10.x pack) on .NET
 #                  10                                                               (2.5, 4.5)
 #   programs       the nine exit-corpus programs (msil/test/Programs/<name>: zlib, tinf,
-#                  monocypher, coremark, lz4, blake2, tweetnacl, kissfft, jsmn) under obj, -O0 and
-#                  -O2, on .NET 8 and the .NET Framework 4.8, msil_also_run=10, native oracle
-#                  required (corpus leg)                                            (2, 4.5)
+#                  monocypher, coremark, lz4, blake2, tweetnacl, kissfft, jsmn) and, as they
+#                  appear, the hosted programs of $hostedPrograms (zlib-full from M26, lua from
+#                  M27, sqlite from M30; plan 5.17.6, 5.17.15) under obj, -O0 and -O2, on .NET 8
+#                  and the .NET Framework 4.8, msil_also_run=10,10+tc0 (.NET 10, and from M26
+#                  .NET 10 with DOTNET_TieredCompilation=0), native oracle required (corpus leg)
+#                                                                                   (2, 4.5)
 #   programs-lto   the same under lto, with msil_equiv=1 (O4) (corpus leg)          (4, 6.5)
-#   ctest          msil/test/Programs/c-testsuite: c-testsuite's 150 libc-free tests (and their
-#                  diag entries) under obj, -O0 and -O2, on .NET 10 (M23: .NET 8), the .NET
-#                  Framework 4.8 and, msil_also_run=8, .NET 8, native oracle required (corpus
-#                  leg). While $env:MSIL_CORPUS_SKIP names c-testsuite the leg prints
-#                  'ctest: skipped (c-testsuite is in MSIL_CORPUS_SKIP)', runs no lit and is
-#                  reported as SKIP, not PASS                                        (9, 18)
+#   ctest          msil/test/Programs/c-testsuite: c-testsuite's two lists (plan 5.17.14; from
+#                  M26 all 220 tests: libc-free.txt's 150 and libc.txt's 70, the hosted ones
+#                  that call the C library, 'Programs/c-testsuite/libc/<name>') under obj, -O0
+#                  and -O2, on .NET 10 (M23: .NET 8), the .NET Framework 4.8 and,
+#                  msil_also_run=8, .NET 8, native oracle required (corpus leg). While
+#                  $env:MSIL_CORPUS_SKIP names c-testsuite the leg prints 'ctest: skipped
+#                  (c-testsuite is in MSIL_CORPUS_SKIP)', runs no lit and is reported as SKIP,
+#                  not PASS                                                          (9, 18)
+#   ctest-lto      -Exit (M26; plan 5.17.6): msil/test/Programs/c-testsuite, both lists, under
+#                  lto on .NET 10, native oracle required (corpus leg; skipped like ctest while
+#                  $env:MSIL_CORPUS_SKIP names c-testsuite)
 #   wsl-net10      -Wsl: msil/test/M1, msil/test/M2, msil/test/M3 and msil/test/harness on
 #                  x86_64-unknown-linux-gnu-msil under obj, WSL .NET 10, E7 Linux oracle required
 #                  (E7h, with msil_glibc_sysroot, for the hosted tests), msil_equiv=1 (O3; O6 and
@@ -137,15 +147,17 @@
 #                  01-archive, 03-native, 04-shared, 05-refs, 07-equiv and M3: plan 5.17.6, bl T10)
 #                  under lto, WSL .NET 10, E7 (E7h) required with msil_glibc_sysroot,
 #                  msil_also_run=8; O4 over these paths runs in lto               (9, 6)
-#   programs-wsl   -Wsl: the nine programs under obj, WSL .NET 10, E7 required, msil_also_run=8
-#                  (corpus leg)                                                     (3, 2)
+#   programs-wsl   -Wsl: the nine programs and the hosted ones under obj, WSL .NET 10, E7 (E7h)
+#                  required with msil_glibc_sysroot, msil_also_run=8,10+tc0 (from M26) (corpus
+#                  leg)                                                             (3, 2)
 #   programs-lto-wsl  -Wsl: the same under lto, with msil_equiv=1 (O4) (corpus leg)  (3.5, 2)
 #   ctest-wsl      -Wsl (M24; plan 5.17.6, bl T10): msil/test/Programs/c-testsuite for
 #                  x86_64-unknown-linux-gnu-msil under obj, WSL .NET 10 and, msil_also_run=8, WSL
 #                  .NET 8, E7 (E7h) required with msil_glibc_sysroot (corpus leg; skipped like
 #                  ctest while $env:MSIL_CORPUS_SKIP names c-testsuite)
-#   det-wsl        -Wsl: msil/test/M2/06-det and msil/test/Programs/det for the Linux triple
-#                  (corpus leg)                                                     (1, 0.5)
+#   det-wsl        -Wsl: msil/test/M2/06-det and msil/test/Programs/det for the Linux triple,
+#                  with msil_glibc_sysroot for the hosted programs' det tests (from M26) (corpus
+#                  leg)                                                             (1, 0.5)
 #   hosted         -Wsl, optional (plan Q16, 5.12.11): msil/test/M2/09-hosted, the hosted
 #                  compile-only tests (glibc headers and libc.so, UCRT headers), with
 #                  msil_glibc_sysroot given: $env:MSIL_GLIBC_SYSROOT, else
@@ -174,6 +186,15 @@
 #   scale          -Quick (M24): msil/test/M2/00-link/spill-limits.test at the real CLR limits
 #                  (msil_scale_tests=1) under obj on .NET 10, for the gates of milestones that
 #                  change the trailer, the spill classes or a type's member limit
+#   programs-hosted  -Quick (M26; plan 5.17.6, 5.17.15): the hosted programs of $hostedPrograms
+#                  that exist (zlib-full from M26, lua from M27, sqlite from M30) under obj at
+#                  -O2 (msil_opt_levels=O2) on .NET 10, .NET 10 with DOTNET_TieredCompilation=0
+#                  (msil_also_run=10+tc0) and the .NET Framework 4.8, native oracle required (the
+#                  DLL CRT oracle of hosted mode; corpus leg): an exit check of the gates of M26,
+#                  M27, M28 and M30
+#   programs-hosted-wsl  -Quick (M26): the same programs for x86_64-unknown-linux-gnu-msil on
+#                  WSL .NET 10 and, msil_also_run=10+tc0, with DOTNET_TieredCompilation=0, E7h
+#                  required with msil_glibc_sysroot (zlib-full's fortify test included)
 #   wsl-quick      -Quick: msil/test/M1/11-programs, msil/test/harness and msil/test/M2 on WSL .NET
 #                  10, E7 required (plan 5.12.10 G4, the WSL step of the Phase 2 milestone gates;
 #                  Phase 3's G4 is wsl-p3)
@@ -314,7 +335,9 @@ $script:Describing = $false
 $checkMsil = @('llvm/test/CodeGen/MSIL', 'clang/test/CodeGen/MSIL', 'clang/test/Preprocessor/init-msil.c',
                'clang/test/Driver/msil-toolchain.c', 'clang/test/Driver/msil-link.c',
                'clang/test/Driver/msil-lto.c', 'clang/test/Driver/msil-header-search.c',
-               'clang/test/Driver/msil-object.c', 'clang/test/Driver/msil-shared.c', 'lld/test/MSIL',
+               'clang/test/Driver/msil-object.c', 'clang/test/Driver/msil-shared.c',
+               'clang/test/Sema/msil-long-double-format.c',
+               'llvm/test/Transforms/ExpandVariadics/msil-abi.ll', 'lld/test/MSIL',
                'llvm/test/tools/llvm-cil-dump', 'llvm/test/tools/llvm-cil-copy', 'llvm/test/MC/MSIL',
                'msil/test')
 $m1 = @('msil/test/M1')
@@ -341,6 +364,12 @@ $ltoWsl = $programs + @('msil/test/M2/00-link', 'msil/test/M2/01-archive', 'msil
 # lit-legs.sh has the same lists.
 $corpusPrograms = @('zlib', 'tinf', 'monocypher', 'coremark', 'lz4', 'blake2', 'tweetnacl', 'kissfft',
                     'jsmn') | ForEach-Object { "msil/test/Programs/$_" }
+# The hosted programs of Phase 3 (plan 5.17.15: zlib-full from M26, lua from M27, sqlite from M30)
+# that exist: programs-hosted and programs-hosted-wsl run them at -O2, and the programs legs run
+# them with the nine (their det tests are in msil/test/Programs/det); lit-legs.sh has the same
+# list.
+$hostedPrograms = @(@('zlib-full', 'lua', 'sqlite') | ForEach-Object { "msil/test/Programs/$_" } |
+                    Where-Object { Test-Path -LiteralPath (Join-Path $MsilRepo $_) -PathType Container })
 $det = @('msil/test/M2/06-det', 'msil/test/Programs/det')
 $ctest = @('msil/test/Programs/c-testsuite')
 # net8 runs msil/test without its corpus tests, which the corpus legs run.
@@ -423,14 +452,20 @@ $legs = @(
      Params = { 'msil_pipeline=obj', 'msil_references=net8', 'msil_dotnet_runtime=8', 'msil_also_run=10' } }
   @{ Name = 'refs-net10'; Paths = { $refs }
      Params = { 'msil_pipeline=obj', 'msil_references=net10', 'msil_dotnet_runtime=10' } }
-  @{ Name = 'programs'; Paths = { $corpusPrograms }
-     Params = { @('msil_pipeline=obj') + $winRun + @('msil_also_run=10') + @(Get-CorpusParams) } }
-  @{ Name = 'programs-lto'; Paths = { $corpusPrograms }
-     Params = { @('msil_pipeline=lto') + $winRun + @('msil_equiv=1', 'msil_also_run=10') +
+  # The programs legs take the hosted programs as they appear, with msil_also_run's 10+tc0 (plan
+  # 5.17.6; M26).
+  @{ Name = 'programs'; Paths = { $corpusPrograms + $hostedPrograms }
+     Params = { @('msil_pipeline=obj') + $winRun + @('msil_also_run=10,10+tc0') + @(Get-CorpusParams) } }
+  @{ Name = 'programs-lto'; Paths = { $corpusPrograms + $hostedPrograms }
+     Params = { @('msil_pipeline=lto') + $winRun + @('msil_equiv=1', 'msil_also_run=10,10+tc0') +
                 @(Get-CorpusParams) } }
   @{ Name = 'ctest'; Paths = { $ctest }; CorpusEntry = 'c-testsuite'
      Params = { @('msil_pipeline=obj', 'msil_dotnet_runtime=10', 'msil_native_oracle=required',
                   'msil_run_netfx=1', 'msil_also_run=8') + @(Get-CorpusParams) } }
+  # c-testsuite's two lists under LTO (plan 5.17.6; M26): the post-commit runs and the phase gate.
+  @{ Name = 'ctest-lto'; Paths = { $ctest }; Tag = 'Exit'; CorpusEntry = 'c-testsuite'
+     Params = { @('msil_pipeline=lto', 'msil_dotnet_runtime=10', 'msil_native_oracle=required') +
+                @(Get-CorpusParams) } }
   @{ Name = 'wsl-net10'; Paths = { $m1 + $m2 + $m3 + @('msil/test/harness') }; Tag = 'Wsl'
      Params = { @('msil_pipeline=obj') + $wslRuntime + $e7h + @('msil_equiv=1', 'msil_also_run=8,10+tc0') } }
   @{ Name = 'wsl-ilasm'; Paths = { $programs }; Tag = 'Wsl'
@@ -442,16 +477,19 @@ $legs = @(
   # rows there run under LTO on the Linux triple only here; M24 widened it ($ltoWsl).
   @{ Name = 'lto-wsl'; Tag = 'Wsl'; Paths = { $ltoWsl }
      Params = { @('msil_pipeline=lto') + $wslRuntime + $e7h + @('msil_also_run=8') } }
-  @{ Name = 'programs-wsl'; Paths = { $corpusPrograms }; Tag = 'Wsl'
-     Params = { @('msil_pipeline=obj') + $wslRuntime + $e7 + @('msil_also_run=8') + @(Get-CorpusParams) } }
+  @{ Name = 'programs-wsl'; Paths = { $corpusPrograms + $hostedPrograms }; Tag = 'Wsl'
+     Params = { @('msil_pipeline=obj') + $wslRuntime + $e7h + @('msil_also_run=8,10+tc0') +
+                @(Get-CorpusParams) } }
   # O4 on the Linux triple's LTO links of the programs (section 12, '5.12.11 amended (O4 for the
   # Linux triple's programs)').
-  @{ Name = 'programs-lto-wsl'; Paths = { $corpusPrograms }; Tag = 'Wsl'
-     Params = { @('msil_pipeline=lto') + $wslRuntime + $e7 + @('msil_equiv=1', 'msil_also_run=8') +
+  @{ Name = 'programs-lto-wsl'; Paths = { $corpusPrograms + $hostedPrograms }; Tag = 'Wsl'
+     Params = { @('msil_pipeline=lto') + $wslRuntime + $e7h + @('msil_equiv=1', 'msil_also_run=8,10+tc0') +
                 @(Get-CorpusParams) } }
   @{ Name = 'ctest-wsl'; Paths = { $ctest }; Tag = 'Wsl'; CorpusEntry = 'c-testsuite'
      Params = { @('msil_pipeline=obj') + $wslRuntime + $e7h + @('msil_also_run=8') + @(Get-CorpusParams) } }
-  @{ Name = 'det-wsl'; Paths = { $det }; Tag = 'Wsl'; Params = { $wslRuntime + @(Get-CorpusParams) } }
+  # det-wsl builds the hosted programs' det tests with the glibc sysroot's headers (plan 5.17.6).
+  @{ Name = 'det-wsl'; Paths = { $det }; Tag = 'Wsl'
+     Params = { $wslRuntime + @("msil_glibc_sysroot=$($glibcSysroot.Replace('\', '/'))") + @(Get-CorpusParams) } }
   @{ Name = 'hosted'; Paths = { 'msil/test/M2/09-hosted' }; Tag = 'Wsl'
      Params = { "msil_glibc_sysroot=$($glibcSysroot.Replace('\', '/'))" } }
   @{ Name = 'net-core'; Tag = 'Quick'; Paths = { $checkMsil }
@@ -474,6 +512,15 @@ $legs = @(
      ) }
   @{ Name = 'scale'; Tag = 'Quick'; Paths = { 'msil/test/M2/00-link/spill-limits.test' }
      Params = { 'msil_pipeline=obj', 'msil_dotnet_runtime=10', 'msil_scale_tests=1' } }
+  # The hosted programs at -O2 (plan 5.17.6, 5.17.15; M26): the exit checks of the gates of M26,
+  # M27, M28 and M30.
+  @{ Name = 'programs-hosted'; Tag = 'Quick'; Paths = { $hostedPrograms }
+     Params = { @('msil_pipeline=obj', 'msil_opt_levels=O2', 'msil_dotnet_runtime=10',
+                  'msil_native_oracle=required', 'msil_run_netfx=1', 'msil_also_run=10+tc0') +
+                @(Get-CorpusParams) } }
+  @{ Name = 'programs-hosted-wsl'; Tag = 'Quick'; Paths = { $hostedPrograms }
+     Params = { @('msil_pipeline=obj', 'msil_opt_levels=O2') + $wslRuntime + $e7h +
+                @('msil_also_run=10+tc0') + @(Get-CorpusParams) } }
   @{ Name = 'wsl-quick'; Tag = 'Quick'; Params = { @('msil_pipeline=obj') + $wslRuntime + $e7 }
      Paths = { 'msil/test/M1/11-programs', 'msil/test/harness', 'msil/test/M2' } }
   @{ Name = 'all-levels'; Paths = { 'msil/test' }; Tag = 'Full'

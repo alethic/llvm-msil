@@ -19,10 +19,14 @@
 ; stored in on_error, get '<msil>fn_free' and '<msil>fn_abort' in module
 ; order, which the .cctor sets with 'ldftn' after the address field of
 ; on_error, and which the code and the relocation load ('ldftn' appears
-; nowhere else). A variadic function cannot be a
-; P/Invoke (D14, D19; Design.md 4.7): an import with "msil-import-module" that
-; is variadic is an error naming it when its address is used (its calls are
-; already errors of LowerCall, call-errors.ll), also without a declaration.
+; nowhere else). A variadic import with "msil-import-module" counts as a
+; fixed-arity native since M26 (5.15.2 'Explicit imports'; D19 and D14 as
+; the section 12 row of 2026-10-28 amends them): each of its calls is a
+; P/Invoke with the call site's signature (variadic-fixed-arity.ll). Its
+; address, which no call site gives a signature, is still an error naming it
+; and saying that it is variadic, from the backstops that remain for the
+; declarations the pass leaves variadic, with no phase number and no
+; P/Invoke (VARDATA, VARCODE).
 ; An undefined function that is only a global constructor is an error too:
 ; the .cctor would call a method that does not exist. On the Windows triples a
 ; math function that the C runtime DLL does not export (D14 as amended in plan
@@ -75,15 +79,15 @@
 
 ; DEFINE: %{diag} = FileCheck %s %{nocrash} --implicit-check-not=error: --implicit-check-not=warning:
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/variadic-data.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=VARDATA
+; RUN:   | %{diag} --implicit-check-not=phase --check-prefix=VARDATA
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -verify-machineinstrs < %t/variadic-data.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=VARDATA
+; RUN:   | %{diag} --implicit-check-not=phase --check-prefix=VARDATA
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -asm-verbose=false -verify-machineinstrs < %t/variadic-data.ll \
 ; RUN:   | FileCheck %s --check-prefix=NODECL
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -verify-machineinstrs < %t/variadic-code.ll -o /dev/null 2>&1 \
-; RUN:   | %{diag} --check-prefix=VARCODE
+; RUN:   | %{diag} --implicit-check-not=phase --check-prefix=VARCODE
 ; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -O0 -verify-machineinstrs < %t/variadic-code.ll -o /dev/null \
-; RUN:   2>&1 | %{diag} --check-prefix=VARCODE
+; RUN:   2>&1 | %{diag} --implicit-check-not=phase --check-prefix=VARCODE
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -asm-verbose=false -verify-machineinstrs < %t/variadic-code.ll \
 ; RUN:   | FileCheck %s --check-prefix=NODECL
 
@@ -243,6 +247,7 @@ define i32 @say(ptr %s) {
 source_filename = "variadic-data.c"
 
 ; VARDATA: {{^}}error: {{.*(vimp.*variadic|variadic.*vimp)}}
+; VARDATA-NOT: phase
 ; NODECL-NOT: pinvokeimpl
 
 declare i32 @vimp(ptr, ...) #0
@@ -256,6 +261,7 @@ attributes #0 = { "msil-import-module"="libc" }
 source_filename = "variadic-code.c"
 
 ; VARCODE: {{^}}error: {{.*(vimp.*variadic|variadic.*vimp)}}
+; VARCODE-NOT: phase
 
 declare i32 @vimp(ptr, ...) #0
 

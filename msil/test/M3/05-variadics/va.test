@@ -1,0 +1,289 @@
+# Variadic functions defined in C and called from C, va_list, va_copy, structs, over-aligned structs and __int128 in '...', and va_lists handed to the C library's v-functions.
+# The program of the variadics recon (recon/p3/variadics-files/va.c), with
+# three changes: the global pointer to the C library's printf is gone (its
+# address is a link error until M28 on Linux triples, plan 5.15.2 link-time
+# rule 4), the 'u' value fits an unsigned long of 32 bits (windows-msvc), and
+# it adds __int128 arguments, two over-aligned structures each after an int
+# (one of two longs aligned to 16, which SysV coerces to two integers, and
+# one of three longs aligned to 32, which SysV classifies MEMORY and passes
+# byval), a variadic function returning a structure
+# through a hidden sret pointer (FixedParams counts it), va_copy of a va_list
+# handed twice to vsnprintf, a call in a loop and an indirect call through a
+# structure field. ExpandVariadics with the MSIL ABIs (plan 5.15.2) turns
+# each definition into its fixed parameters plus one va_list and each call
+# into a call passing a native-layout va_list over a buffer in the caller's
+# frame: on Linux triples a SysV va_list whose gp_offset and fp_offset say
+# 'registers used up', so clang's inline va_arg reads every argument from the
+# overflow area (8-byte slots, rounded up to the type's alignment for
+# __int128 and the structures aligned to 16 and 32, structures above 16
+# bytes copied by value), on windows-msvc a char* to 8-byte slots
+# (structures that are not 1, 2, 4 or 8 bytes, the over-aligned ones among
+# them, and __int128, by pointer). The same va_list goes unconverted to the C
+# library's vprintf and vsnprintf (glibc's on Linux triples; the UCRT's
+# inline definitions over __stdio_common_vfprintf and
+# __stdio_common_vsprintf on windows-msvc), so the native code reads the
+# buffer the MSIL code built. printf, snprintf and fprintf are the C
+# library's: on Linux triples native variadic calls bound to their va_list
+# variants (vprintf, vsnprintf, vfprintf), on windows-msvc the UCRT's inline
+# variadic definitions, compiled like the program's own. Plan 5.15.2, 5.17.13
+# (M26, M3/05-variadics).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/va.c
+# RUN: %{msil_prog}
+#--- va.c
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+
+struct foo { int i, j, k; char *p; float v; };   /* 32 bytes: SysV MEMORY, Win64 by pointer */
+struct pt { double x, y; };                       /* 16 bytes: SysV SSE+SSE */
+struct small { short a; char b; };                /* 4 bytes: Win64 by value */
+typedef struct { long long a, b; } pair;          /* 16 bytes: SysV INTEGER+INTEGER */
+typedef struct { char c[3]; } odd3;               /* 3 bytes: Win64 by pointer (not a power of 2) */
+struct big { unsigned long long a, b, c, d; };    /* 32 bytes: returned through sret on both ABIs */
+
+/* c-testsuite 00140: a variadic definition that never calls va_start. */
+int f1(struct foo f, struct foo *p, int n, ...) {
+  if (f.i != p->i)
+    return 0;
+  return p->j + n;
+}
+
+static int sum(int n, ...) {
+  va_list ap;
+  int s = 0;
+  va_start(ap, n);
+  for (int i = 0; i < n; i++)
+    s += va_arg(ap, int);
+  va_end(ap);
+  return s;
+}
+
+static double avg(int n, ...) {
+  va_list ap;
+  double s = 0;
+  va_start(ap, n);
+  for (int i = 0; i < n; i++)
+    s += va_arg(ap, double);
+  va_end(ap);
+  return n ? s / n : 0;
+}
+
+/* Unsigned accumulators: their arithmetic wraps without undefined behavior. */
+static unsigned long long mixed(const char *kinds, ...) {
+  va_list ap;
+  unsigned long long acc = 0;
+  va_start(ap, kinds);
+  for (const char *k = kinds; *k; k++) {
+    switch (*k) {
+    case 'i': acc = acc * 7 + va_arg(ap, int); break;
+    case 'u': acc = acc * 7 + va_arg(ap, unsigned long); break;
+    case 'z': acc = acc * 7 + (long long)va_arg(ap, size_t); break;
+    case 'l': acc = acc * 7 + va_arg(ap, long long); break;
+    case 'd': acc = acc * 7 + (long long)(va_arg(ap, double) * 16); break;
+    case 'c': acc = acc * 7 + va_arg(ap, int); break;            /* char promoted */
+    case 'f': acc = acc * 7 + (long long)(va_arg(ap, double) * 16); break; /* float promoted */
+    case 'p': acc = acc * 7 + (long long)strlen(va_arg(ap, const char *)); break;
+    case 's': { struct small s = va_arg(ap, struct small); acc = acc * 7 + s.a * 3 + s.b; break; }
+    case 'P': { struct pt s = va_arg(ap, struct pt); acc = acc * 7 + (long long)((s.x - s.y) * 16); break; }
+    case 'F': { struct foo s = va_arg(ap, struct foo); acc = acc * 7 + s.i + s.j + s.k + (long long)strlen(s.p) + (long long)(s.v * 4); break; }
+    case 'q': { pair s = va_arg(ap, pair); acc = acc * 7 + s.a - s.b; break; }
+    case 'o': { odd3 s = va_arg(ap, odd3); acc = acc * 7 + s.c[0] + s.c[1] + s.c[2]; break; }
+    case 'I': {
+      __int128 v = va_arg(ap, __int128);
+      acc = acc * 7 + (long long)(v >> 64) * 1000 + (long long)(v & 0xffff);
+      break;
+    }
+    }
+  }
+  va_end(ap);
+  return acc;
+}
+
+/* __int128 arguments around ints and doubles, so their slots must be
+   aligned (SysV) or passed by pointer (Win64). */
+__attribute__((noinline)) static unsigned long long wide(int n, ...) {
+  va_list ap;
+  unsigned long long acc = 0;
+  va_start(ap, n);
+  for (int i = 0; i < n; i++) {
+    int tag = va_arg(ap, int);
+    __int128 v = va_arg(ap, __int128);
+    double d = va_arg(ap, double);
+    unsigned long long lo = (unsigned long long)v;
+    long long hi = (long long)(v >> 64);
+    acc = acc * 31 + tag + (long long)(lo % 1000003) + hi + (long long)(d * 8);
+  }
+  va_end(ap);
+  return acc;
+}
+
+/* Over-aligned structures after an int: the slot of each must be aligned
+   as the callee's va_arg expects (SysV) or hold a pointer (Win64). */
+struct __attribute__((aligned(16))) al16 { long a, b; };
+struct __attribute__((aligned(32))) al32 { long a, b, c; };
+__attribute__((noinline)) static long get16(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  int x = va_arg(ap, int);
+  struct al16 p = va_arg(ap, struct al16);
+  va_end(ap);
+  return x * 1000 + p.a * 10 + p.b;
+}
+__attribute__((noinline)) static long get32(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  int x = va_arg(ap, int);
+  struct al32 r = va_arg(ap, struct al32);
+  va_end(ap);
+  return x * 1000 + r.a * 100 + r.b * 10 + r.c;
+}
+
+/* A variadic function returning a 32-byte structure: the hidden sret
+   pointer is a fixed parameter before the va_list. */
+__attribute__((noinline)) static struct big mkbig(int n, ...) {
+  va_list ap;
+  struct big b = {0, 0, 0, 0};
+  va_start(ap, n);
+  for (int i = 0; i < n; i++) {
+    unsigned long long v = (unsigned long long)va_arg(ap, long long);
+    b.a += v;
+    b.b = b.b * 3 + v;
+    b.c ^= v << i;
+    b.d = v;
+  }
+  va_end(ap);
+  return b;
+}
+
+/* A va_list-taking function, a forwarder, va_copy, va_list by pointer. */
+static int vsum(int n, va_list ap) {
+  int s = 0;
+  while (n--)
+    s += va_arg(ap, int);
+  return s;
+}
+static int forward(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  int r = vsum(n, ap);
+  va_end(ap);
+  return r;
+}
+static int twice(int n, ...) {
+  va_list ap, cp;
+  va_start(ap, n);
+  va_copy(cp, ap);
+  int a = vsum(n, ap);
+  int b = vsum(n, cp);
+  va_end(cp);
+  va_end(ap);
+  return a * 1000 + b;
+}
+static int eat(va_list *ap) { return va_arg(*ap, int); }
+static int by_pointer(int n, ...) {
+  va_list ap;
+  va_start(ap, n);
+  int s = 0;
+  for (int i = 0; i < n; i++)
+    s = s * 10 + eat(&ap);
+  va_end(ap);
+  return s;
+}
+/* Two va_start in one function. */
+static int restart(int n, ...) {
+  va_list ap;
+  int a = 0, b = 0;
+  va_start(ap, n);
+  for (int i = 0; i < n; i++) a += va_arg(ap, int);
+  va_end(ap);
+  va_start(ap, n);
+  for (int i = 0; i < n; i++) b = b * 2 + va_arg(ap, int);
+  va_end(ap);
+  return a * 100 + b;
+}
+static int rec(int depth, ...) {
+  va_list ap;
+  va_start(ap, depth);
+  int v = va_arg(ap, int);
+  va_end(ap);
+  return depth ? v + rec(depth - 1, v * 2) : v;
+}
+static int none(int n, ...) { return n; }
+
+/* Our variadic functions forwarding to the C library's v-functions. */
+static int my_printf(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vprintf(fmt, ap);
+  va_end(ap);
+  return r;
+}
+static int my_snprintf(char *b, size_t n, const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  int r = vsnprintf(b, n, fmt, ap);
+  va_end(ap);
+  return r;
+}
+/* The same arguments formatted twice through a va_copy. */
+static int my_snprintf2(char *b1, char *b2, size_t n, const char *fmt, ...) {
+  va_list ap, cp;
+  va_start(ap, fmt);
+  va_copy(cp, ap);
+  int r1 = vsnprintf(b1, n, fmt, ap);
+  int r2 = vsnprintf(b2, n, fmt, cp);
+  va_end(cp);
+  va_end(ap);
+  return r1 * 1000 + r2;
+}
+
+int (*vp)(int, ...) = sum;
+struct ops { int (*fn)(int, ...); int bias; };
+static struct ops table[2] = {{sum, 1}, {none, 2}};
+
+int main(void) {
+  struct foo f;
+  char buf[200], buf2[200];
+  f.i = f.j = 1;
+  f.k = 5; f.p = "abc"; f.v = 2.5f;
+  struct small sm = {300, 7};
+  struct pt pt = {9.5, 1.25};
+  pair pr = {1LL << 40, 3};
+  odd3 o3 = {{1, 2, 3}};
+  __int128 big1 = ((__int128)5 << 70) | 9;
+
+  printf("f1 %d %d\n", f1(f, &f, 2), f1(f, &f, 2, 1, f, &f));
+  printf("sum %d %d %d\n", sum(0), sum(3, 10, 20, 12), sum(10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+  printf("avg %.4f %.4f\n", avg(3, 1.0, 2.0, 4.5), avg(10, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.5));
+  printf("mixed %llu\n", mixed("iuzldcfpsPFqoIi", -4, 4000000000UL, (size_t)77, -(1LL << 50), 3.75, 'x',
+                               1.5f, "hello", sm, pt, f, pr, o3, big1, 42));
+  printf("wide %llu\n", wide(3, 1, (__int128)-7, 0.5, 2, ((__int128)3 << 64) + 12345, -1.25, 3,
+                             (__int128)0x123456789abcdefLL * 1000, 64.0));
+  struct al16 a16 = {4, 5};
+  struct al32 a32 = {1, 2, 3};
+  printf("aligned %ld %ld\n", get16(1, 7, a16), get32(1, 7, a32));
+  struct big b = mkbig(4, 10LL, -3LL, 1LL << 40, 7LL);
+  printf("mkbig %llu %llu %llu %llu\n", b.a, b.b, b.c, b.d);
+  printf("forward %d twice %d by_pointer %d restart %d\n", forward(4, 1, 2, 3, 4), twice(3, 5, 6, 7),
+         by_pointer(4, 1, 2, 3, 4), restart(4, 1, 0, 1, 1));
+  printf("rec %d none %d vp %d\n", rec(5, 1), none(9), vp(4, 1, 1, 1, 1));
+  int loop = 0;
+  for (int i = 0; i < 50; i++)
+    loop += sum(3, i, i * i, -1) + table[i & 1].fn(2, i, 1) * table[i & 1].bias;
+  printf("loop %d\n", loop);
+  my_printf("my_printf %d %s %.3f %c %lld %u\n", -17, "str", 3.14159, 'Q', 1LL << 33, 4000000000u);
+  my_snprintf(buf, sizeof buf, "%08.3f|%-5d|%5s|%x", -2.5, 42, "ab", 0xbeef);
+  printf("my_snprintf [%s]\n", buf);
+  int r = my_snprintf2(buf, buf2, sizeof buf, "%d %.2f %s %lld %d %.1f %d %d %d %d", 1, 2.25, "three",
+                       -4LL, 5, 6.5, 7, 8, 9, 10);
+  printf("my_snprintf2 %d [%s] [%s]\n", r, buf, buf2);
+  snprintf(buf, sizeof buf, "%g %g %g %g %g %g %g %g %g %g", 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5);
+  printf("snprintf [%s]\n", buf);
+  printf("many %d %f %d %f %d %f %d %f %d %f %d %f %d %f %d %f %d %f %d %f\n", 1, 0.5, 2, 1.5, 3, 2.5, 4,
+         3.5, 5, 4.5, 6, 5.5, 7, 6.5, 8, 7.5, 9, 8.5, 10, 9.5);
+  fprintf(stdout, "fprintf %s %d\n", "done", 1);
+  fflush(stdout);
+  return 0;
+}

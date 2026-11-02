@@ -27,6 +27,9 @@
 #include "llvm/CLI/ILBuilder.h"
 #include "llvm/CLI/Opcodes.h"
 #include "llvm/CLI/TrailerDefs.h"
+#include "llvm/IR/Constants.h"
+#include "llvm/IR/Metadata.h"
+#include "llvm/IR/Module.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCExpr.h"
 #include "llvm/MC/MCInst.h"
@@ -252,4 +255,44 @@ void MSILAsmPrinter::fillTrailerDefs(Module &M, MSILTrailerTextSink &Sink,
     In.Defs.push_back(
         {D.Id, Sink.declareHelper(D.Name, cli::getTrailerDefSignature(D))});
   }
+}
+
+void MSILAsmPrinter::fillTrailerUCRTStdio(Module &M, MSILTrailerTextSink &Sink,
+                                          cli::TrailerInput &In) {
+  // The UCRT's <stdio.h> defines both functions inline (COMDAT) in every TU
+  // that includes it, each returning the address of its own options word,
+  // which the printf and scanf functions pass to __stdio_common_v*. The
+  // module initializer sets the option bits there, as msil-ld's does for a
+  // link (plan 5.15.2, hl H3). In msil-ld's linked text (--lto-emit-asm) the
+  // bits are the link's, which msil-ld passes as the module flags
+  // "msil-ucrt-printf-bits" and "msil-ucrt-scanf-bits", so that the text and
+  // the PE agree; standalone whole-program text has neither flag and keeps
+  // the default bits. A flag that is not an integer constant counts as
+  // absent. A definition of another signature is not the UCRT's and is left
+  // alone.
+  if (!TM.getTargetTriple().isWindowsMSVCEnvironment())
+    return;
+  cli::StdioOptions Options;
+  auto ReadBits = [&](StringRef Flag, uint64_t &Bits) {
+    if (const auto *C =
+            mdconst::dyn_extract_or_null<ConstantInt>(M.getModuleFlag(Flag)))
+      Bits = C->getLimitedValue();
+  };
+  ReadBits("msil-ucrt-printf-bits", Options.PrintfBits);
+  ReadBits("msil-ucrt-scanf-bits", Options.ScanfBits);
+  auto Lookup = [&](StringRef Name) -> cli::EntityRef {
+    const Function *F = MSIL::getFunctionByILName(M, Name);
+    if (!F || F->isIntrinsic() || F->isDeclarationForLinker())
+      return 0;
+    const MSIL::Signature &Sig = getSignature(*F);
+    if (!Sig.Params.empty() || Sig.Results.size() != 1 ||
+        Sig.Results[0] != MSIL::ValType::NativeInt)
+      return 0;
+    return Sink.add(MSILMCInstLower::createMethodRef(
+        *F, MSIL::getILName(*F, TM), Sig, OutContext));
+  };
+  Options.PrintfOptions = Lookup("__local_stdio_printf_options");
+  Options.ScanfOptions = Lookup("__local_stdio_scanf_options");
+  if (Options.PrintfOptions || Options.ScanfOptions)
+    In.UCRTStdio = Options;
 }

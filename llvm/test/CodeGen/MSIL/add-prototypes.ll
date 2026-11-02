@@ -56,8 +56,9 @@
 ;   declaration with no use at all (func_not_called) and one that is called
 ;   directly and whose address is also taken (foo) are not errors (main.ll).
 ; - dead-users.ll: the address of a declaration only in the body of a
-;   definition that MSILPrepareIR diagnoses and deletes (a variadic definition
-;   and one with inline assembly). Deleting the body leaves the ConstantExprs
+;   definition that MSILPrepareIR diagnoses and deletes (one with a musttail
+;   call, since M26 variadic definitions compile, and one with inline
+;   assembly). Deleting the body leaves the ConstantExprs
 ;   on the declaration (ptrtoint, getelementptr) as dead constant users, which
 ;   are not address uses (section 12 'M9.b amended (prototype-less functions
 ;   whose address is used)': 'dead constant users do not count'). The only
@@ -453,19 +454,20 @@ declare i32 @puts(...) #0
 attributes #0 = { "no-prototype" }
 
 ;--- dead-users.ll
-; puts's address is only in the body of the variadic vdef, putchar's only in
-; the operand of asmdef's inline assembly. MSILPrepareIR reports both
+; puts's address is only in an argument of mtdef's musttail call, putchar's
+; only in the operand of asmdef's inline assembly. MSILPrepareIR reports both
 ; definitions and deletes their bodies, which leaves the ptrtoint and
 ; getelementptr ConstantExprs on puts and putchar with no users. Those dead
 ; constant users must not count as address uses: the only errors are
 ; MSILPrepareIR's two, and neither declaration gets 'the signature of
 ; prototype-less function ... cannot be derived'.
-; DEADCU:    {{^}}error: {{.*}}in function vdef i64 (i32, ...): variadic function definitions are not supported for MSIL yet{{$}}
+; DEADCU:    {{^}}error: {{.*}}in function mtdef i64 (i64): musttail calls are not supported for MSIL{{$}}
 ; DEADCU:    {{^}}error: {{.*}}in function asmdef i64 (i32): inline assembly is not supported for MSIL{{$}}
 source_filename = "dead-users.c"
 
-define i64 @vdef(i32 %n, ...) {
-  ret i64 ptrtoint (ptr @puts to i64)
+define i64 @mtdef(i64 %n) {
+  %r = musttail call i64 @mtdef(i64 ptrtoint (ptr @puts to i64))
+  ret i64 %r
 }
 
 define i64 @asmdef(i32 %n) {
@@ -485,8 +487,8 @@ attributes #0 = { "no-prototype" }
 ;--- badproto.ll
 ; Hand-written "no-prototype" declarations that clang never emits: np1 is not
 ; variadic, np2 has a parameter before the '...' that is not sret. Each is one
-; error, in module order. np2 is never called: a call of it would add
-; LowerCall's 'calls to variadic functions' error.
+; error, in module order. np2 is never called, so nothing else is reported
+; for it.
 ; BADPROTO:  {{^}}error: functions with 'no-prototype' attribute must take varargs: np1{{$}}
 ; BADPROTO:  {{^}}error: functions with 'no-prototype' attribute should not have params: np2{{$}}
 source_filename = "badproto.c"

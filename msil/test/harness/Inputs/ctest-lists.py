@@ -16,6 +16,22 @@ msil_ctest_format from the source tree, which must get no __pycache__.
         small tree in a temporary directory outside the repository:
         'ok: <what>' or 'FAIL: <what>' per check, then 'ctest-lists: <n>
         checks, <f> failed'; exit 1 on a failure.
+    ctest-lists.py lists [--plant FAULT]
+        The repository's lists as M26 leaves them (plan 5.17.14): both
+        parse, under one '# rule:' line; libc-free.txt has 150 entries, all
+        plain, 00140 among them; libc.txt has 70 ('# count: 70'), disjoint
+        from libc-free.txt's; the only diag entry of either list is
+        libc.txt's 00189 on linux-gnu, naming M28 (the 2026-11-01 amendment
+        of the M26 exit target); and libc.txt's only entries with a modifier
+        are that one, 00204 exclude linux-gnu long-double, 00214 exclude
+        windows-msvc not-portable, and 00212, 00216 and 00218 native
+        windows-msvc. The lists are read from copies
+        in a temporary directory, which --plant FAULT changes first so that
+        a check must fail (the failure path): diag-00140 (00140's M24 diag
+        entry back in libc-free.txt), plain-00214 (00214 without its
+        exclusion), libc-free-calls (libc-free.txt also names libc.txt's
+        00025). Prints 'ok: <what>' or 'FAIL: <what>' per check, then
+        'ctest-lists: lists: <n> checks, <f> failed'; exit 1 on a failure.
     ctest-lists.py setup COPY CORPUS [CASE]
         Copy msil/test/Programs/c-testsuite without its lists to COPY
         (emptied first), and write the tree of the copy's lit.local.cfg
@@ -24,7 +40,7 @@ msil_ctest_format from the source tree, which must get no __pycache__.
         calls.c calls printf, each with a .c.expected file. COPY/libc-free.txt
         lists free1 and free2 and COPY/libc.txt lists calls, both under the
         rule RULE. CASE then changes one thing:
-          nolibc         no libc.txt (optional until M26)
+          nolibc         no libc.txt (a configuration error from M26)
           expected       free2.c.expected is missing
           libc-expected  calls.c.expected is missing
           absent         libc-free.txt also names ghost, which the tree lacks
@@ -105,6 +121,15 @@ EXEC = {
     ),
     # exclude on linux-gnu: a plain test on windows-msvc
     "exc2": ("free", "exclude linux-gnu long-double  # 80-bit long double", PLAIN, ""),
+    # 00140, a plain entry from M26 (plan 5.17.14; until then a diag entry
+    # for its variadic definition): built, run and compared like free1
+    "00140": (
+        "free",
+        "",
+        "// prog-stdout: 00140 ok\nint f1(char *p, ...) { return p != 0; }\n"
+        + PLAIN,
+        "00140 ok\n",
+    ),
     # libc.txt (the rule matches printf(): hosted settings
     "lib1": (
         "libc",
@@ -392,6 +417,148 @@ def unit():
     return 0 if all(results) else 1
 
 
+# The repository's lists at M26 (plan 5.17.14).
+LIBC_FREE_COUNT = 150
+LIBC_COUNT = 70
+LIBC_MODIFIED = {
+    "00189": ("diag", "linux-gnu", None),
+    "00204": ("exclude", "linux-gnu", "long-double"),
+    "00212": ("native", "windows-msvc", None),
+    "00214": ("exclude", "windows-msvc", "not-portable"),
+    "00216": ("native", "windows-msvc", None),
+    "00218": ("native", "windows-msvc", None),
+}
+# The one diag entry M26 leaves (the 2026-11-01 amendment of its exit target):
+# (list, name, triple, the milestone its comment names).
+DIAG_LEFT = [("libc.txt", "00189", "linux-gnu", "M28")]
+M24_00140 = (
+    "00140 diag error: variadic function definitions are not supported for MSIL "
+    "yet  # M26 variadic definitions (D19)"
+)
+LIST_FAULTS = ("diag-00140", "plain-00214", "libc-free-calls")
+
+
+def plant_list(tmp, fault):
+    """Change the copies of the lists in tmp for --plant FAULT."""
+    free = os.path.join(tmp, "libc-free.txt")
+    libc = os.path.join(tmp, "libc.txt")
+
+    def edit(path, pattern, repl, count_delta=0):
+        with open(path, encoding="utf-8", newline="") as f:
+            text = f.read()
+        text, n = re.subn(pattern, repl, text, count=1, flags=re.M)
+        if n != 1:
+            raise SystemExit(
+                "ctest-lists.py: --plant %s: %s has no line %r" % (fault, path, pattern)
+            )
+        if count_delta:
+            text = re.sub(
+                r"^# count: (\d+)$",
+                lambda m: "# count: %d" % (int(m.group(1)) + count_delta),
+                text,
+                count=1,
+                flags=re.M,
+            )
+        write(path, text)
+
+    if fault == "diag-00140":
+        edit(free, r"^00140\r?$", M24_00140)
+    elif fault == "plain-00214":
+        edit(libc, r"^00214 [^\r\n]*", "00214")
+    elif fault == "libc-free-calls":
+        edit(free, r"^00001\r?$", "00001\n00025", count_delta=1)
+
+
+def lists(plant):
+    if plant is not None and plant not in LIST_FAULTS:
+        raise SystemExit(
+            "ctest-lists.py: --plant %s: one of %s" % (plant, ", ".join(LIST_FAULTS))
+        )
+    fmt = load_format()
+    results = []
+
+    def check(cond, what):
+        results.append(bool(cond))
+        print("%s: %s" % ("ok" if cond else "FAIL", what))
+
+    tmp = tempfile.mkdtemp(prefix="msil-ctest-real-")
+    try:
+        for name in ("libc-free.txt", "libc.txt"):
+            shutil.copyfile(os.path.join(CTEST, name), os.path.join(tmp, name))
+        if plant:
+            plant_list(tmp, plant)
+        parsed = {}
+        for name in ("libc-free.txt", "libc.txt"):
+            try:
+                parsed[name] = fmt.TestList(os.path.join(tmp, name))
+                check(True, "%s parses" % name)
+            except fmt.ListError as e:
+                check(False, "%s parses: %s" % (name, e))
+        if len(parsed) == 2:
+            free, libc = parsed["libc-free.txt"], parsed["libc.txt"]
+            check(
+                free.rule_text == libc.rule_text,
+                "one '# rule:' line in both lists"
+                + (
+                    ""
+                    if free.rule_text == libc.rule_text
+                    else ": %r and %r" % (free.rule_text, libc.rule_text)
+                ),
+            )
+            check(
+                free.count == LIBC_FREE_COUNT and len(free.names()) == LIBC_FREE_COUNT,
+                "libc-free.txt lists %d tests: '# count: %s', %d entries"
+                % (LIBC_FREE_COUNT, free.count, len(free.names())),
+            )
+            check(
+                libc.count == LIBC_COUNT and len(libc.names()) == LIBC_COUNT,
+                "libc.txt lists %d tests: '# count: %s', %d entries"
+                % (LIBC_COUNT, libc.count, len(libc.names())),
+            )
+            both = sorted(set(free.names()) & set(libc.names()))
+            check(not both, "the lists are disjoint: in both %s" % (both or "none"))
+            e140 = [e for e in free.entries if e.name == "00140"]
+            check(
+                e140 == [fmt.Entry("00140", None, None, None, None)],
+                "00140 is a plain entry of libc-free.txt: %r" % (e140,),
+            )
+            diag = [
+                (n, e.name, e.triple, (e.comment or "").split(" ", 1)[0])
+                for n, l in sorted(parsed.items())
+                for e in l.entries
+                if e.kind == "diag"
+            ]
+            check(
+                diag == DIAG_LEFT,
+                "the only diag entry left is libc.txt's 00189 on linux-gnu, "
+                "naming M28: %r" % (diag,),
+            )
+            mod_free = [e.name for e in free.entries if e.kind is not None]
+            check(
+                not mod_free,
+                "every libc-free.txt entry is plain: with a modifier %s"
+                % (mod_free or "none"),
+            )
+            mod_libc = {
+                e.name: (e.kind, e.triple, e.text if e.kind == "exclude" else None)
+                for e in libc.entries
+                if e.kind is not None
+            }
+            check(
+                mod_libc == LIBC_MODIFIED,
+                "libc.txt's entries with a modifier are 00189's diag linux-gnu, "
+                "00204's and 00214's exclusions and 00212's, 00216's and 00218's "
+                "native windows-msvc: %r"
+                % (sorted(mod_libc.items()),),
+            )
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print(
+        "ctest-lists: lists: %d checks, %d failed" % (len(results), results.count(False))
+    )
+    return 0 if all(results) else 1
+
+
 def tree_name(copy):
     with open(os.path.join(copy, "lit.local.cfg"), encoding="utf-8") as f:
         for line in f:
@@ -489,9 +656,13 @@ def setup(copy, corpus, case):
 def main(argv):
     if argv == ["unit"]:
         return unit()
+    if argv == ["lists"] or (len(argv) == 3 and argv[:2] == ["lists", "--plant"]):
+        return lists(argv[2] if len(argv) == 3 else None)
     if len(argv) in (3, 4) and argv[0] == "setup":
         return setup(argv[1], argv[2], argv[3] if len(argv) == 4 else None)
-    sys.stderr.write("usage: ctest-lists.py unit | setup COPY CORPUS [CASE]\n")
+    sys.stderr.write(
+        "usage: ctest-lists.py unit | lists [--plant FAULT] | setup COPY CORPUS [CASE]\n"
+    )
     return 2
 
 

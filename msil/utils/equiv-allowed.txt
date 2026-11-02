@@ -98,6 +98,7 @@ skip O4 msil/test/M2/04-shared/ -shared libraries and links against them have no
 skip O4 msil/test/M2/08-semantics/p2c-bsymbolic.test -shared libraries and links against them have no --lto-emit-asm text
 skip O4 msil/test/M2/08-semantics/p2c-cycle.test -shared libraries and links against them have no --lto-emit-asm text
 skip O4 msil/test/M2/08-semantics/p2c-weak-def.test -shared libraries and links against them have no --lto-emit-asm text
+skip O4 msil/test/M3/05-variadics/shared-variadic.test -shared libraries and links against them have no --lto-emit-asm text
 #
 # Helper-archive programs (plan 5.14.3 A9, M25): a program that calls a K1
 # helper (a function of the helper archive clang_rt.builtins, plan 5.14.1)
@@ -127,3 +128,14 @@ skip O4 msil/test/M3/03-helpers/longdouble-archive.test programs that call helpe
 skip O4 msil/test/M3/03-helpers/shared-private.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)
 skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/03-helpers/longdouble.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)
 skip O4@x86_64-unknown-linux-gnu-msil msil/test/M3/03-helpers/powi.test programs that call helper-archive functions have no -S or --lto-emit-asm text (5.14.3 A9)
+#
+# The UCRT's printf family as helper-archive members (plan 5.15.2, M26): on
+# x86_64-pc-windows-msvc-msil a program that declares printf and the rest
+# itself, without <stdio.h>, links them from the archive's CIL member
+# msil_ucrt_stdio.c (and the options functions from
+# msil_ucrt_stdio_options.c), so the composite's --also-il link stops with
+# '--lto-emit-asm cannot link CIL objects' and there is no text to compare
+# (plan 5.14.3 A9). On the Linux triple the same calls bind glibc's va_list
+# variants and keep O4. ucrt-rounding includes <stdio.h>, whose inline
+# definitions need no member, and keeps O4 on both triples.
+skip O4@x86_64-pc-windows-msvc-msil msil/test/M3/05-variadics/ucrt-noinc.test prebuilt CIL objects: the printf and scanf families, declared without <stdio.h>, come from the helper archive's CIL members of msil_ucrt_stdio.c, so the composite's --also-il link stops with '--lto-emit-asm cannot link CIL objects' and there is no text to compare (plan 5.14.3 A9)

@@ -34,8 +34,11 @@
 //   '<msil>undef_<name>' (ldnull, throw) with the call's signature;
 // - a call of a natively bound function calls its P/Invoke stub, after the
 //   link-time checks that plan 5.10.13 moves out of code generation
-//   (5.10.14's variadic, non-passable and callback texts, and Phase 1's
-//   prototype-less text, M19.b (2a)).
+//   (5.10.14's non-passable and callback texts, Phase 1's prototype-less
+//   text, M19.b (2a)), and a VARARG call binds the P/Invoke to the
+//   function's va_list variant (5.15.2 rule 2);
+// - a FIXED_ARITY call bound to a variadic definition or export is 5.14.8's
+//   error (5.15.2 rule 3).
 //
 //===----------------------------------------------------------------------===//
 
@@ -64,11 +67,13 @@ public:
 
   // The checks of plan 5.10.14 for every reference that native lookup bound
   // (SymbolBinder::getReferences), one error per symbol: the callback list
-  // for calls and addresses (explicit imports exempt), variadic calls,
-  // values a P/Invoke cannot pass (SRET, BYVAL, NATIVE_INCOMPATIBLE, and the
-  // `long double` functions where the native type is wider; explicit
-  // imports exempt from the last), and a prototype-less function used only
-  // by address.
+  // for calls and addresses (explicit imports exempt), the address of a
+  // variadic function (5.15.2 rule 4), a VARARG call's va_list variant
+  // (rule 2: bound with SymbolBinder::setVaListVariant, or its error), a
+  // CLR vararg call, values a P/Invoke cannot pass (SRET, BYVAL,
+  // NATIVE_INCOMPATIBLE, and the `long double` functions where the native
+  // type is wider; explicit imports exempt from the last), and a
+  // prototype-less function used only by address.
   void checkNativeReferences();
 
   // The output method that the Method token \p t of \p f calls: the

@@ -19,7 +19,9 @@
 #   ret-ops.mir         'ret' at the right depth whose operands do not match
 #                       the method's results (one value on the stack, none
 #                       named by the RETURN);
-#   localloc-depth.mir  'localloc' with something beneath its size.
+#   localloc-depth.mir  'localloc' with something beneath its size
+#                       (localloc-i64-depth.mir: the same for LOCALLOC_I64,
+#                       M26's localloc of a native-int size).
 # After the last instruction of each block it checks
 #   block-end.mir       a value left on the stack at the end of a block.
 # These are internal errors (report fatal), so the tests use 'not --crash'
@@ -86,6 +88,12 @@
 # RUN:   | FileCheck %s --check-prefix=LOCALLOC
 # LOCALLOC: LLVM ERROR: MSIL stack check failed in 'localloc_depth': 'localloc' with a non-empty evaluation stack: {{.*}}LOCALLOC
 
+# RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/localloc-i64-depth.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LOCALLOC-I64
+# RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/localloc-i64-depth.mir 2>&1 \
+# RUN:   | FileCheck %s --check-prefix=LOCALLOC-I64
+# LOCALLOC-I64: LLVM ERROR: MSIL stack check failed in 'localloc_i64_depth': 'localloc' with a non-empty evaluation stack: {{.*}}= LOCALLOC_I64 %
+
 # RUN: not --crash llc -mtriple=x86_64-unknown-linux-gnu-msil %{check} %t/block-end.mir 2>&1 \
 # RUN:   | FileCheck %s --check-prefix=END
 # RUN: not --crash llc -mtriple=x86_64-pc-windows-msvc-msil %{check} %t/block-end.mir 2>&1 \
@@ -101,6 +109,8 @@
 # RUN:   -verify-machineinstrs %t/balanced.mir -o - | FileCheck %s --check-prefix=OK
 # OK-LABEL: name: balanced{{$}}
 # OK:       maxStack: 1{{$}}
+# OK-LABEL: name: balanced_i64{{$}}
+# OK:       maxStack: 1{{$}}
 # RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/multi-push.mir -o /dev/null
 # RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/underflow.mir -o /dev/null
 # RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/order.mir -o /dev/null
@@ -109,6 +119,7 @@
 # RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/ret-two.mir -o /dev/null
 # RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/ret-ops.mir -o /dev/null
 # RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/localloc-depth.mir -o /dev/null
+# RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/localloc-i64-depth.mir -o /dev/null
 # RUN: llc -mtriple=x86_64-unknown-linux-gnu-msil -run-pass=none -verify-machineinstrs %t/block-end.mir -o /dev/null
 
 #--- multi-push.mir
@@ -240,6 +251,24 @@ body: |
     RETURN %1, implicit-def dead $arguments
 ...
 
+#--- localloc-i64-depth.mir
+# The same with LOCALLOC_I64: the native-int argument read for the KILL stays
+# on the stack, under the size, so the localloc runs at depth 2.
+---
+name:            localloc_i64_depth
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i64 ]
+  results: [ i64 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i64 = ARGUMENT_I64 0, implicit $arguments
+    KILL %0
+    %1:i64 = LOCALLOC_I64 %0, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+
 #--- block-end.mir
 # The argument read for the KILL is still on the stack when the first block
 # branches to the second.
@@ -273,5 +302,18 @@ body: |
     liveins: $arguments
     %0:i32 = ARGUMENT_I32 0, implicit $arguments
     %1:i64 = LOCALLOC %0, implicit-def dead $arguments
+    RETURN %1, implicit-def dead $arguments
+...
+---
+name:            balanced_i64
+tracksRegLiveness: true
+machineFunctionInfo:
+  params:  [ i64 ]
+  results: [ i64 ]
+body: |
+  bb.0:
+    liveins: $arguments
+    %0:i64 = ARGUMENT_I64 0, implicit $arguments
+    %1:i64 = LOCALLOC_I64 %0, implicit-def dead $arguments
     RETURN %1, implicit-def dead $arguments
 ...

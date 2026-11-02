@@ -1,0 +1,70 @@
+# fprintf and vfprintf through the real <stdio.h>: to stdout, to a file in the private run directory read back with fgets, and through the program's own variadic wrapper over vfprintf.
+# From M26 the printf family runs (plan 5.17.13, M3/10-hosted). On Linux
+# triples fprintf and vfprintf are glibc's: fprintf a native variadic call
+# bound to its va_list variant vfprintf, and the stream a native data import
+# (stdout) or a FILE * that fopen returned; on windows-msvc triples both are
+# the UCRT's inline definitions over __stdio_common_vfprintf, and stdout is
+# __acrt_iob_func(1). log_line is a variadic function of the program that
+# hands its va_list to vfprintf twice, the second time through a va_copy, so
+# the native code reads the same buffer twice. The file is written in binary
+# mode ("wb"), so the counts are equal on both triples, and fprintf's
+# results are printed. stderr receives one line, which no transcript
+# compares (msil-run.py records stdout), and fflush(stderr) succeeds. Plan
+# 5.15.2, 5.17.13 (M26, M3/10-hosted).
+# RUN: rm -rf %t && split-file %s %t
+# REDEFINE: %{msil_srcs} = %t/main.c
+# RUN: %{msil_prog}
+#--- main.c
+#define _CRT_SECURE_NO_WARNINGS
+#include <stdarg.h>
+#include <stdio.h>
+#include <string.h>
+
+#define NAME "m3-fprintf.tmp"
+
+static int log_line(FILE *f, const char *fmt, ...) {
+  va_list ap, cp;
+  va_start(ap, fmt);
+  va_copy(cp, ap);
+  int a = vfprintf(f, fmt, ap);
+  int b = vfprintf(f, fmt, cp);
+  va_end(cp);
+  va_end(ap);
+  return a == b ? a + b : -1;
+}
+
+int main(void) {
+  int n = fprintf(stdout, "to stdout: %d %s %.2f\n", 7, "seven", 7.25);
+  printf("fprintf to stdout wrote %d\n", n);
+  n = fprintf(stderr, "to stderr: %d (not in the transcript)\n", 8);
+  printf("fprintf to stderr wrote %d, fflush(stderr) = %d\n", n, fflush(stderr));
+  n = log_line(stdout, "log_line %d|%s|%.1f|%c\n", 1, "two", 3.5, '4');
+  printf("log_line wrote %d\n", n);
+
+  FILE *f = fopen(NAME, "wb");
+  printf("fopen(wb) %d\n", f != NULL);
+  if (!f)
+    return 1;
+  int total = 0;
+  for (int i = 1; i <= 3; i++)
+    total += fprintf(f, "line %d: %0*d %e\n", i, i + 2, i * i, i / 4.0);
+  total += log_line(f, "%s=%lld\n", "big", -(1LL << 50));
+  int pos = (int)ftell(f);
+  int closed = fclose(f);
+  printf("written %d, ftell %d, fclose %d\n", total, pos, closed);
+
+  f = fopen(NAME, "rb");
+  printf("fopen(rb) %d\n", f != NULL);
+  if (!f)
+    return 2;
+  char line[128];
+  int lines = 0;
+  while (fgets(line, sizeof line, f)) {
+    line[strcspn(line, "\n")] = 0;
+    printf("read back [%s]\n", line);
+    lines++;
+  }
+  closed = fclose(f);
+  printf("lines %d, fclose %d, remove %d\n", lines, closed, remove(NAME));
+  return 0;
+}

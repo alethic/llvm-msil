@@ -14,10 +14,11 @@
 //   entry's value in TSFlags bits 18-3 and its text as the mnemonic, one
 //   operand that follows the entry's OperandKind, and the control-flow flags
 //   of its FlowControl. Every MI-level record that carries a CIL value names
-//   the opcode of its CIL text (recon mc-streamer E1: 175 records), and the
-//   records that MSILMCInstLower expands into several CIL_ instructions
-//   carry none. The shortest forms that MSIL::buildLdcI4 and
-//   MSIL::buildVarInst choose are cli::ILBuilder's (Q26, 5.7.5).
+//   the opcode of its CIL text (recon mc-streamer E1: 175 records; 176 with
+//   M26's LOCALLOC_I64), and the records that MSILMCInstLower expands into
+//   several CIL_ instructions carry none. The shortest forms that
+//   MSIL::buildLdcI4 and MSIL::buildVarInst choose are cli::ILBuilder's (Q26,
+//   5.7.5).
 // - MSILBCLMembers: the BCLMembers.def X-macro, the cli:: table built from it,
 //   and printBCLMemberRef, which prints Phase 1's [mscorlib] text and the
 //   object form's [msil.bcl] text (5.11.7, 5.8.4).
@@ -436,7 +437,7 @@ TEST_F(MSILCILRecords, MILevelRecordsNameTheirOpcode) {
     EXPECT_EQ(Value,
               MSIL::getCILOpcodeValue(MII->get(MSIL::getMCOpcodeForCIL(*Op))));
   }
-  EXPECT_EQ(175u, WithValue);
+  EXPECT_EQ(176u, WithValue);
 }
 
 // The records that MSILMCInstLower expands into several CIL_ instructions

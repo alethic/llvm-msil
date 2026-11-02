@@ -115,8 +115,13 @@ if(TARGET clang AND LLVM_EXTERNAL_CLANG_SOURCE_DIR)
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-object.c
     # -shared, clang-cl /LD and /LDd link library assemblies (M22).
     ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Driver/msil-shared.c
+    # The format checker's 'L' length modifier on MSIL triples (M26).
+    ${LLVM_EXTERNAL_CLANG_SOURCE_DIR}/test/Sema/msil-long-double-format.c
     )
 endif()
+# ExpandVariadics with the MSIL ABIs (M26): opt's test of the upstream pass.
+list(APPEND _msil_lit_paths
+  ${LLVM_MAIN_SRC_DIR}/test/Transforms/ExpandVariadics/msil-abi.ll)
 # msil-ld's tests (M13, M14): the lld flavor msil.
 if(TARGET lld AND LLVM_EXTERNAL_LLD_SOURCE_DIR)
   list(APPEND _msil_lit_paths ${LLVM_EXTERNAL_LLD_SOURCE_DIR}/test/MSIL)

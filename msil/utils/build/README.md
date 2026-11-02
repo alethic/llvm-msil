@@ -43,11 +43,25 @@ with the agent's turn**, whole process tree included. Never run `ninja check-llv
 
 ### msil-env.ps1
 
-Dot-source it: `. D:/llvm-msil/msil/utils/build/msil-env.ps1`. Enters the VS 2026 x64
-developer environment (cached in `%TEMP%\msil-vsenv-x64.json`, about 0.1 s after the first
-5 s; delete the file after a Visual Studio update) and sets `$MsilRepo`, `$MsilBuild`
-(`MSIL_BUILD_DIR`), `$MsilPython` (`MSIL_PYTHON`, always with forward slashes because CMake
-pastes it into `lit.site.cfg.py`), `$MsilLlvmBin`, `$MsilIlasm` and `$MsilIldasm`. The
+Dot-source it: `. D:/llvm-msil/msil/utils/build/msil-env.ps1`. Puts a Visual Studio x64
+developer environment into the session. Which Visual Studio (since M26): an x64 developer
+environment that is already loaded is used as it is (a developer prompt, CI's msvc-dev-cmd, or a
+parent script that dot-sourced this one), recognized by the first `cl.exe` on `PATH` lying under
+`\bin\Host<arch>\x64\`, or by `VSCMD_ARG_TGT_ARCH=x64` with a `cl.exe` on `PATH`; lit passes
+`PATH`, `INCLUDE`, `LIB` and `VSINSTALLDIR` on to its tests but drops `VSCMD_ARG_TGT_ARCH` and
+replaces `TEMP`, so under lit the `PATH` test is the one that holds. Otherwise the script enters
+the developer shell of the Visual Studio in `VSINSTALLDIR`, else of the newest installation with
+the x64 C++ tools that vswhere finds (`vswhere -latest -products * -requires
+Microsoft.VisualStudio.Component.VC.Tools.x86.x64`: any edition and version, Visual Studio 2026
+Professional on the development host, 2022 Enterprise on CI's Windows runner), and stops with a
+message only when it must enter one and finds none; until M26 it entered one hard-coded edition
+at its default path. Entering costs about 5 s, so the variables it changes are cached in
+`%TEMP%\msil-vsenv-x64.json` and re-applied in about 0.1 s afterwards; delete the file after a
+Visual Studio update. It sets `$MsilRepo`, `$MsilBuild` (`MSIL_BUILD_DIR`), `$MsilPython`
+(`MSIL_PYTHON`, always with forward slashes because CMake pastes it into `lit.site.cfg.py`),
+`$MsilVsRoot` (that Visual Studio's root, `''` when a trusted environment names none and vswhere
+finds none), `$MsilLlvmBin` (its bundled LLVM tools, `<root>\VC\Tools\Llvm\x64\bin`, `''`
+without a root), `$MsilIlasm` and `$MsilIldasm`. The
 developer environment's `LIB` and `INCLUDE` matter beyond the build since M15: clang passes
 each `LIB` directory to `msil-ld`, which binds the windows-msvc default libraries (`ucrt.lib`,
 `kernel32.lib`, `oldnames.lib`) from there, and lit's `msil-ucrt-headers` feature looks for

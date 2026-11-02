@@ -12,11 +12,13 @@
 // the methods that the MSIL AsmPrinter wrote in Phase 1, instruction for
 // instruction (with M18's shortest forms), so -S text does not change. The
 // trailer definitions that the output uses come last, from their rows'
-// emitters (5.14.4, TrailerDefs.cpp).
+// emitters (5.14.4, TrailerDefs.cpp). The parts of Phase 3's concerns live in
+// their own files (TrailerParts.h).
 //
 //===----------------------------------------------------------------------===//
 
 #include "llvm/CLI/Trailer.h"
+#include "TrailerParts.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Twine.h"
@@ -556,9 +558,9 @@ struct SharedArgs {
 } // end anonymous namespace
 
 /// Phase 2 of the initialization (5.9.10, 5.9.15), appended to \p M: the
-/// libraries, the relocations against their exports and the constructors.
-/// With \p Shared, argc and argv are stored in its fields once they are
-/// built.
+/// libraries, the relocations against their exports, the UCRT stdio options
+/// (M26) and the constructors. With \p Shared, argc and argv are stored in
+/// its fields once they are built.
 static void emitPhase2(const TrailerInput &In, TrailerMethod &M,
                        TrailerSink &Sink, SharedArgs *Shared) {
   ILBuilder &B = M.Body;
@@ -595,6 +597,10 @@ static void emitPhase2(const TrailerInput &In, TrailerMethod &M,
       }
     }
   }
+
+  // vcruntime's stdio option bits, which the native CRT startup sets before
+  // any C initializer runs (TrailerStdio.cpp).
+  emitUCRTStdioOptions(In, M);
 
   // The constructors last, in run order: the data they may touch is in
   // place. Each is called directly, with argc, argv and envp as far as it
@@ -737,8 +743,8 @@ void cli::buildTrailer(const TrailerInput &In, TrailerSink &Sink) {
     buildInitDataImports(In.DataImports, Helper, Phase1Owner, Sink);
   }
   bool HasPhase1 = In.Image || !In.FnAddrFields.empty() || InitImports;
-  bool HasPhase2 =
-      !In.LibraryTypes.empty() || !In.CrossRelocs.empty() || !In.Ctors.empty();
+  bool HasPhase2 = !In.LibraryTypes.empty() || !In.CrossRelocs.empty() ||
+                   needsUCRTStdioOptions(In) || !In.Ctors.empty();
   SharedArgs Shared;
   if (In.TwoPhase) {
     if (HasPhase1) {

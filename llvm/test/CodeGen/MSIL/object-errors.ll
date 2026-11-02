@@ -38,27 +38,22 @@
 ;   (resp. 'import name ...') with -filetype=obj and with -msil-object-form
 ;   (long-import-module.ll, long-import-name.ll, long-import-name-mod.ll), and
 ;   a 1,023-byte module compiles (import-module-1023.ll).
-; Kept from Phase 1 (D19 and D26): a call of a variadic function (p7.c's
-; ext_var("x", 4), 5.9.16 row p7-flags), a variadic definition, a
-; thread_local variable, a non-empty llvm.global_dtors, an ifunc and module
-; asm; and O7's identifier limit of 1,023 bytes (Q27) on a defined function
-; (long-name.ll), a called undefined function (long-callee.ll), a defined
-; variable (long-global.ll) and a called alias (long-alias.ll). Also kept,
-; with -S's texts: a constructor that takes arguments ('global constructor
-; '<c>' takes arguments, which MSIL does not pass', ctor-args.ll), and the
+; Kept from Phase 1 (D26): a thread_local variable, a non-empty
+; llvm.global_dtors, an ifunc and module asm (since M26 a variadic call,
+; p7.c's ext_var("x", 4), a variadic definition and a variadic function
+; referenced only by address compile in object mode, variadic-def.ll and
+; variadic-call.ll; their texts remain for the cases M26 does not expand and
+; for whole-program mode, variadic-errors.ll); and O7's identifier limit of 1,023 bytes (Q27) on a
+; defined function (long-name.ll), a called undefined function
+; (long-callee.ll), a defined variable (long-global.ll) and a called alias
+; (long-alias.ll). Also kept, with -S's texts: a constructor that takes
+; arguments ('global constructor '<c>' takes arguments, which MSIL does not
+; pass', ctor-args.ll), and the
 ; initializers that MSILDataSegment cannot express as a relocation in object
 ; mode either (5.8.8 DATA_RELOCS: FNADDR has addend 0, DIFF names DATA
 ; symbols): 'MSIL: function address + offset in initializer of '<g>''
 ; (reloc-fnoff.ll) and 'MSIL: symbol difference across non-data symbols in
 ; initializer of '<g>'' (reloc-fndiff.ll).
-; An undefined, prototyped variadic function that the object references only
-; by address (D19; 5.8.8 'No VARARG'; section 12, 2026-10-25, 'Plan 5.10.13
-; clarified for object mode'): 'undefined variadic function '<f>' is not
-; supported for MSIL yet (phase 3)', with no import stub, whether the address
-; is taken in a data initializer (vaddr-data.ll) or in code (vaddr-code.ll),
-; and also for a declaration with "msil-import-module" and
-; "msil-import-name" (vaddr-import.ll). An unprototyped declaration used only
-; by its address stays accepted (object-calls.ll addr.ll, object-imports.ll).
 ; A global or function that the backend diagnoses gives exactly that one
 ; error, never a follow-on error of the object writer about the row the
 ; diagnosed symbol does not get (section 2: the visible result is the
@@ -66,9 +61,9 @@
 ; data (prefix.ll), a name or a section name that is not valid UTF-8
 ; (utf8-name.ll, utf8-section.ll; 5.8.8 'str'), O7's identifier and import
 ; string limits (never also the writer's 'cannot write CLI metadata'), and
-; every other error above except the D19 and D26 errors kept from Phase 1
-; (variadic call and definition, thread_local, llvm.global_dtors, ifunc and
-; module asm, matched under %{nocrash}): each is matched under %{clean},
+; every other error above except the D26 errors kept from Phase 1
+; (thread_local, llvm.global_dtors, ifunc and module asm, matched under
+; %{nocrash}): each is matched under %{clean},
 ; which admits no second error or warning.
 ; accepted.ll: what object mode accepts and whole-program mode diagnoses: an
 ; external variable (D26), an undefined function outside the D14 table, a
@@ -101,20 +96,6 @@
 ; RUN:   -o %t/alias-kind.o 2>&1 | FileCheck %s %{clean} --check-prefix=ALIAS-KIND
 ; ALIAS-KIND-DAG: {{^}}error: {{.*}}alias 'data_of_fn' must point to a definition plus a constant offset for MSIL{{$}}
 ; ALIAS-KIND-DAG: {{^}}error: {{.*}}alias 'fn_of_data' must point to a definition plus a constant offset for MSIL{{$}}
-
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/vaddr-data.ll \
-; RUN:   -o %t/vaddr-data.o 2>&1 | FileCheck %s %{clean} --check-prefix=VADDR -DFN=printf
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -filetype=obj -verify-machineinstrs < %t/vaddr-data.ll \
-; RUN:   -o %t/vaddr-data.o 2>&1 | FileCheck %s %{clean} --check-prefix=VADDR -DFN=printf
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/vaddr-code.ll \
-; RUN:   -o %t/vaddr-code.o 2>&1 | FileCheck %s %{clean} --check-prefix=VADDR -DFN=printf
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -filetype=obj -O0 -verify-machineinstrs < %t/vaddr-code.ll \
-; RUN:   -o %t/vaddr-code.o 2>&1 | FileCheck %s %{clean} --check-prefix=VADDR -DFN=printf
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/vaddr-import.ll \
-; RUN:   -o %t/vaddr-import.o 2>&1 | FileCheck %s %{clean} --check-prefix=VADDR -DFN=my_printf
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -filetype=obj -verify-machineinstrs < %t/vaddr-import.ll \
-; RUN:   -o %t/vaddr-import.o 2>&1 | FileCheck %s %{clean} --check-prefix=VADDR -DFN=my_printf
-; VADDR: {{^}}error: undefined variadic function '[[FN]]' is not supported for MSIL yet (phase 3){{$}}
 
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/big-align.ll \
 ; RUN:   -o %t/big-align.o 2>&1 | FileCheck %s %{clean} --check-prefix=BIGALIGN
@@ -155,18 +136,6 @@
 ; RUN:   -o %t/reserved.o 2>&1 | FileCheck %s %{clean} --check-prefix=RESERVED
 ; RESERVED-DAG: {{^}}error: {{.*}}<msil>fbad{{.*$}}
 ; RESERVED-DAG: {{^}}error: {{.*}}<msil>gbad{{.*$}}
-
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/varcall.ll \
-; RUN:   -o %t/varcall.o 2>&1 | FileCheck %s %{nocrash} --check-prefix=VARCALL
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -filetype=obj -O0 -verify-machineinstrs < %t/varcall.ll \
-; RUN:   -o %t/varcall.o 2>&1 | FileCheck %s %{nocrash} --check-prefix=VARCALL
-; VARCALL: {{^}}error: {{.*}}use_var{{.*}}calls to variadic functions are not supported for MSIL yet{{$}}
-
-; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/vardef.ll \
-; RUN:   -o %t/vardef.o 2>&1 | FileCheck %s %{nocrash} --check-prefix=VARDEF
-; RUN: not llc -mtriple=x86_64-pc-windows-msvc-msil -filetype=obj -verify-machineinstrs < %t/vardef.ll \
-; RUN:   -o %t/vardef.o 2>&1 | FileCheck %s %{nocrash} --check-prefix=VARDEF
-; VARDEF: {{^}}error: {{.*(vdef.*variadic function definitions are not supported for MSIL yet|variadic function definitions are not supported for MSIL yet.*vdef)}}
 
 ; RUN: not llc -mtriple=x86_64-unknown-linux-gnu-msil -filetype=obj -verify-machineinstrs < %t/tls.ll \
 ; RUN:   -o %t/tls.o 2>&1 | FileCheck %s %{nocrash} --check-prefix=TLS
@@ -378,33 +347,6 @@ define ptr @use_fn_alias() {
   ret ptr @fn_of_data
 }
 
-;--- vaddr-data.ll
-source_filename = "vaddr-data.c"
-
-@pp = global ptr @printf, align 8
-
-declare i32 @printf(ptr noundef, ...)
-
-;--- vaddr-code.ll
-source_filename = "vaddr-code.c"
-
-declare i32 @printf(ptr noundef, ...)
-
-define ptr @get_printf() {
-  ret ptr @printf
-}
-
-;--- vaddr-import.ll
-source_filename = "vaddr-import.c"
-
-declare i32 @my_printf(ptr noundef, ...) #0
-
-define ptr @get_my_printf() {
-  ret ptr @my_printf
-}
-
-attributes #0 = { "msil-import-module"="libc" "msil-import-name"="printf" }
-
 ;--- big-align.ll
 source_filename = "big-align.c"
 
@@ -468,25 +410,6 @@ source_filename = "reserved.c"
 
 define i32 @"<msil>fbad"() {
   ret i32 0
-}
-
-;--- varcall.ll
-source_filename = "p7.c"
-
-@.str = private unnamed_addr constant [2 x i8] c"x\00", align 1
-
-declare i32 @ext_var(ptr noundef, ...)
-
-define i32 @use_var() {
-  %r = call i32 (ptr, ...) @ext_var(ptr noundef @.str, i32 noundef 4)
-  ret i32 %r
-}
-
-;--- vardef.ll
-source_filename = "vardef.c"
-
-define i32 @vdef(i32 %n, ...) {
-  ret i32 %n
 }
 
 ;--- tls.ll
