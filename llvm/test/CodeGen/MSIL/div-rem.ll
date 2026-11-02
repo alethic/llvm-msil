@@ -7,10 +7,10 @@
 ; to 64 bits (RyuJIT does the magic-number division itself), so division by a
 ; constant, including a signed division by a power of two, stays one div or rem
 ; with no multiply-high sequence; only the unsigned power-of-two cases become a
-; shift or a mask, as on every target. i128 division and remainder by a power
-; of two, and exact i128 division by any constant, expand inline (i128.ll);
-; every other i128 division or remainder needs a runtime helper and is an error
-; (call-errors.ll).
+; shift or a mask, as on every target. i128 division and remainder expand
+; inline in IR before instruction selection, by a power of two into shifts,
+; adds and masks (i128.ll) and by anything else into the generic expansion,
+; with no helper call (i128-divrem.ll; since M12).
 ;
 ; Every function is one operation on arguments and at most one constant, so
 ; the CIL is the same at -O0 and -O2.

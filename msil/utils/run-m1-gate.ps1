@@ -21,7 +21,8 @@
 #   1. msil/utils/ci/configure.ps1   msil-configure.ps1 -Experimental MSIL (the only step that
 #                                    differs from CI, which configures with -C MSIL.cmake)
 #   2. msil/utils/ci/build.ps1       msil-build.ps1 -Standard: the targets of
-#                                    msil/utils/ci/build-targets.txt (plan 5.6.11), jitall
+#                                    msil/utils/ci/build-targets.txt (plan 5.6.11), the helper
+#                                    archives (build-builtins.py, M25), jitall
 #   3. msil/utils/ci/unit-tests.ps1  TargetParserTests, MCTests, MSILTests, CLITests
 #                                    (no skipped tests)                          (~1 min)
 #   4. host-setup (not with -NoWsl; M12, plan 5.12.8 and the gates' step G0), idempotent: three

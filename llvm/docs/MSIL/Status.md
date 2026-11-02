@@ -2600,8 +2600,8 @@ objects and LTO and print native compiler-rt's results:
   uses the C library's one `sqrtl`.
   The archives have 77 members on the two windows-msvc triples (184,200 bytes on x86_64), 258 on
   the three Linux triples (the 88 compiler-rt objects and the 170 `long double` forwarders
-  below; 583,352 bytes on x86_64 glibc) and 247 on x86_64 MinGW (77 and the 170 forwarders).
-  Building the two default triples takes about a minute with `--jobs 4` on a quiet host.
+  below; 583,472 bytes on x86_64 glibc) and 247 on x86_64 MinGW (77 and the 170 forwarders).
+  Building the two default triples takes about 15 seconds with `--jobs 4` (M25's gate step).
 - **The rebuild rule** (A2, A10). Next to each archive, `<archive>.stamp` holds the SHA-256 of
   the script, of the clang and llvm-ar binaries, of `sources.txt`, of every member's source and
   of every `.h` and `.inc` file beside them, and the command lines; `build-builtins.py` rebuilds
@@ -2635,6 +2635,11 @@ objects and LTO and print native compiler-rt's results:
   and MinGW have neither `daddl` nor its counterpart, so there a call fails to link, naming the
   counterpart, as native code fails naming `daddl`.
   `msil/test/M3/03-helpers/longdouble-archive.test` checks the `errno` cases against E7h.
+  `qecvt` and `qfcvt` return the static buffers of `ecvt` and `fcvt`, which glibc keeps apart
+  from their own, so a `qecvt` call overwrites the string that an earlier `ecvt` call returned
+  (and `qfcvt` that of `fcvt`), where natively both stay; and `qecvt`, `qfcvt`, `qgcvt`,
+  `qecvt_r` and `qfcvt_r` give at most 17 digits, as their `double` counterparts do, where
+  native glibc gives up to 21 digits of the same value.
   Archive members resolve before the native libraries, whatever the order of `-lm` and the
   archive on the command line, so the native function is never bound. A forwarder whose
   counterpart MSIL cannot call yet (`cexpl` and the other complex
@@ -2713,7 +2718,9 @@ objects and LTO and print native compiler-rt's results:
   compiler runtime helper that the toolchain's helper archive clang_rt.builtins does not define`
   (a `*ti*` helper that a program calls by name, say) instead of M24's `>>> a compiler runtime
   helper: link the toolchain's helper archive clang_rt.builtins`, which an archive of another
-  name keeps. The ten `_Complex` helpers are compiler-runtime names now: they never bind to a
+  name keeps. The first form also appears when the program itself defines every name that the
+  archive's CIL members define, since then no member is extracted and none stays lazy, and
+  `msil-ld` keeps no trace of the archive. The ten `_Complex` helpers are compiler-runtime names now: they never bind to a
   native library (until M25 they bound like any other name, to `libgcc_s.so.1` for one when the
   link named it), and a call whose signature differs from the definition's is `function
   signature mismatch: <name> (a toolchain or compiler runtime helper)`, never an adapter

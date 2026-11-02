@@ -101,7 +101,7 @@ clang` relinks `msil-ld` and clang.
 builds them. After every build the build agent runs `python
 D:/llvm-msil/msil/utils/build/build-builtins.py` (below), once `msil-build.ps1` has exited and
 released its lock: every member depends on clang and the MSIL backend, and the script rebuilds
-only an archive whose clang, `llvm-ar`, sources or command lines changed (about a minute for
+only an archive whose clang, `llvm-ar`, sources or command lines changed (about 15 seconds for
 both default triples with `--jobs 4` on a quiet host; seconds when every stamp is current). A
 milestone gate's step G1 runs it after `msil-build.ps1 -Standard`, then `--check` and
 `--check-list`; `msil/utils/ci/build.ps1` and `build.sh` run it after ninja as their row

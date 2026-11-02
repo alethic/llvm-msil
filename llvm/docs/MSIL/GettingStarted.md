@@ -146,7 +146,7 @@ usage error that names it. By default the script builds the two triples that the
 (repeatable) names others, and `--all` adds the x86_64 MinGW and musl triples and the aarch64
 Linux and windows-msvc ones. Every member depends on clang and the backend, so run it after
 every build: a stamp beside each archive makes it rebuild only an archive whose clang, sources
-or command changed (about a minute for the two default triples with `--jobs 4` on a quiet host,
+or command changed (about 15 seconds for the two default triples with `--jobs 4` on a quiet host,
 nothing when all are current), and `--check` builds nothing and exits 1 when an archive is
 missing or stale. `--list` prints each triple's members, `--check-list` checks `sources.txt`
 against compiler-rt's `CMakeLists.txt` (after an upstream merge), `--build-dir <dir>` names the
